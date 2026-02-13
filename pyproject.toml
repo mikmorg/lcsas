@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "lcsas"
@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Linux Cold Storage Archival Suite — orchestrates Rustic, Xorriso, and DVDisaster for petabyte-scale optical archival"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 authors = [{name = "LCSAS Dev"}]
 
 [project.scripts]

@@ -1,0 +1,257 @@
+"""Complex cross-table queries for the LCSAS catalog."""
+
+from __future__ import annotations
+
+import sqlite3
+
+from lcsas.db.models import Pack, Volume
+
+
+def _row_to_pack(row: sqlite3.Row) -> Pack:
+    return Pack(
+        pack_id=row["pack_id"],
+        sha256=row["sha256"],
+        size_bytes=row["size_bytes"],
+        repo_id=row["repo_id"],
+        is_pruned=bool(row["is_pruned"]),
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_volume(row: sqlite3.Row) -> Volume:
+    return Volume(
+        volume_id=row["volume_id"],
+        label=row["label"],
+        uuid=row["uuid"],
+        media_type=row["media_type"],
+        capacity_bytes=row["capacity_bytes"],
+        used_bytes=row["used_bytes"],
+        location=row["location"],
+        status=row["status"],
+        created_at=row["created_at"],
+        closed_at=row["closed_at"],
+    )
+
+
+def get_unarchived_packs(
+    conn: sqlite3.Connection,
+    repo_id: str | None = None,
+) -> list[Pack]:
+    """Return packs not yet assigned to any volume (and not pruned).
+
+    These are packs sitting on the Local Mirror that need to be burned.
+    """
+    if repo_id:
+        rows = conn.execute(
+            """SELECT p.* FROM packs p
+               WHERE p.is_pruned = 0
+                 AND p.repo_id = ?
+                 AND p.pack_id NOT IN (SELECT pack_id FROM volume_packs)
+               ORDER BY p.created_at""",
+            (repo_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT p.* FROM packs p
+               WHERE p.is_pruned = 0
+                 AND p.pack_id NOT IN (SELECT pack_id FROM volume_packs)
+               ORDER BY p.created_at"""
+        ).fetchall()
+    return [_row_to_pack(r) for r in rows]
+
+
+def get_total_unarchived_bytes(
+    conn: sqlite3.Connection,
+    repo_id: str | None = None,
+) -> int:
+    """Return total bytes of unarchived, non-pruned packs."""
+    if repo_id:
+        row = conn.execute(
+            """SELECT COALESCE(SUM(p.size_bytes), 0) as total
+               FROM packs p
+               WHERE p.is_pruned = 0
+                 AND p.repo_id = ?
+                 AND p.pack_id NOT IN (SELECT pack_id FROM volume_packs)""",
+            (repo_id,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """SELECT COALESCE(SUM(p.size_bytes), 0) as total
+               FROM packs p
+               WHERE p.is_pruned = 0
+                 AND p.pack_id NOT IN (SELECT pack_id FROM volume_packs)"""
+        ).fetchone()
+    return row["total"]  # type: ignore[index]
+
+
+def get_packs_for_volume(
+    conn: sqlite3.Connection,
+    volume_id: int,
+) -> list[Pack]:
+    """Return all packs on a specific volume."""
+    rows = conn.execute(
+        """SELECT p.* FROM packs p
+           JOIN volume_packs vp ON p.pack_id = vp.pack_id
+           WHERE vp.volume_id = ?
+           ORDER BY p.sha256""",
+        (volume_id,),
+    ).fetchall()
+    return [_row_to_pack(r) for r in rows]
+
+
+def get_volumes_for_pack(
+    conn: sqlite3.Connection,
+    pack_id: int,
+) -> list[Volume]:
+    """Return all volumes containing a specific pack (redundancy check)."""
+    rows = conn.execute(
+        """SELECT v.* FROM volumes v
+           JOIN volume_packs vp ON v.volume_id = vp.volume_id
+           WHERE vp.pack_id = ?
+           ORDER BY v.label""",
+        (pack_id,),
+    ).fetchall()
+    return [_row_to_volume(r) for r in rows]
+
+
+def get_pick_list(
+    conn: sqlite3.Connection,
+    pack_sha256_list: list[str],
+) -> dict[str, list[Pack]]:
+    """Generate a restore 'pick list': map volume labels to needed packs.
+
+    Given a list of required pack SHA-256 hashes (from a restore dry-run),
+    returns a dict of {volume_label: [Pack, ...]} telling the user which
+    discs to retrieve.
+
+    Prefers non-DEPRECATED/DESTROYED volumes. If a pack exists on multiple
+    volumes, picks the first valid one.
+    """
+    if not pack_sha256_list:
+        return {}
+
+    placeholders = ",".join("?" for _ in pack_sha256_list)
+    rows = conn.execute(
+        f"""SELECT p.*, v.volume_id, v.label as vol_label, v.status as vol_status
+            FROM packs p
+            JOIN volume_packs vp ON p.pack_id = vp.pack_id
+            JOIN volumes v ON vp.volume_id = v.volume_id
+            WHERE p.sha256 IN ({placeholders})
+              AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+            ORDER BY v.label""",
+        pack_sha256_list,
+    ).fetchall()
+
+    # Deduplicate: each pack assigned to one volume only
+    seen_packs: set[str] = set()
+    result: dict[str, list[Pack]] = {}
+
+    for row in rows:
+        pack = _row_to_pack(row)
+        if pack.sha256 in seen_packs:
+            continue
+        seen_packs.add(pack.sha256)
+        vol_label = row["vol_label"]
+        result.setdefault(vol_label, []).append(pack)
+
+    return result
+
+
+def get_missing_packs(
+    conn: sqlite3.Connection,
+    pack_sha256_list: list[str],
+) -> list[str]:
+    """Return SHA-256 hashes from the input list that have no volume assignment."""
+    if not pack_sha256_list:
+        return []
+
+    placeholders = ",".join("?" for _ in pack_sha256_list)
+    rows = conn.execute(
+        f"""SELECT p.sha256 FROM packs p
+            WHERE p.sha256 IN ({placeholders})
+              AND p.pack_id NOT IN (SELECT pack_id FROM volume_packs)""",
+        pack_sha256_list,
+    ).fetchall()
+    archived = {r["sha256"] for r in conn.execute(
+        f"SELECT sha256 FROM packs WHERE sha256 IN ({placeholders})",
+        pack_sha256_list,
+    ).fetchall()}
+
+    # Packs not even in the DB
+    missing = [h for h in pack_sha256_list if h not in archived]
+
+    # Packs in DB but not on any volume
+    for row in rows:
+        if row["sha256"] not in missing:
+            missing.append(row["sha256"])
+
+    return missing
+
+
+def get_packs_only_on_volumes(
+    conn: sqlite3.Connection,
+    volume_ids: list[int],
+) -> list[Pack]:
+    """Return active (non-pruned) packs that exist on the given volumes.
+
+    Used during consolidation to identify which packs from source volumes
+    should be migrated to a new target volume.
+    """
+    if not volume_ids:
+        return []
+
+    placeholders = ",".join("?" for _ in volume_ids)
+    rows = conn.execute(
+        f"""SELECT DISTINCT p.* FROM packs p
+            JOIN volume_packs vp ON p.pack_id = vp.pack_id
+            WHERE vp.volume_id IN ({placeholders})
+              AND p.is_pruned = 0
+            ORDER BY p.sha256""",
+        volume_ids,
+    ).fetchall()
+    return [_row_to_pack(r) for r in rows]
+
+
+def get_redundancy_report(
+    conn: sqlite3.Connection,
+    min_copies: int = 2,
+) -> list[Pack]:
+    """Return non-pruned packs with fewer than min_copies volume assignments.
+
+    Useful for ensuring every pack is stored on at least N volumes.
+    """
+    rows = conn.execute(
+        """SELECT p.*, COUNT(vp.volume_id) as copy_count
+           FROM packs p
+           LEFT JOIN volume_packs vp ON p.pack_id = vp.pack_id
+           LEFT JOIN volumes v ON vp.volume_id = v.volume_id
+               AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+           WHERE p.is_pruned = 0
+           GROUP BY p.pack_id
+           HAVING copy_count < ?
+           ORDER BY copy_count, p.sha256""",
+        (min_copies,),
+    ).fetchall()
+    return [_row_to_pack(r) for r in rows]
+
+
+def get_archive_status_summary(
+    conn: sqlite3.Connection,
+) -> dict[str, int]:
+    """Return a summary of archive status: total packs, archived, unarchived, pruned."""
+    row = conn.execute(
+        """SELECT
+               COUNT(*) as total,
+               SUM(CASE WHEN is_pruned = 1 THEN 1 ELSE 0 END) as pruned,
+               SUM(CASE WHEN is_pruned = 0 AND pack_id IN
+                   (SELECT pack_id FROM volume_packs) THEN 1 ELSE 0 END) as archived,
+               SUM(CASE WHEN is_pruned = 0 AND pack_id NOT IN
+                   (SELECT pack_id FROM volume_packs) THEN 1 ELSE 0 END) as unarchived
+           FROM packs"""
+    ).fetchone()
+    return {
+        "total": row["total"],  # type: ignore[index]
+        "pruned": row["pruned"] or 0,  # type: ignore[index]
+        "archived": row["archived"] or 0,  # type: ignore[index]
+        "unarchived": row["unarchived"] or 0,  # type: ignore[index]
+    }
