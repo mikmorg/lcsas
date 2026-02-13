@@ -47,19 +47,43 @@ def list_files_recursive(path: Path) -> list[Path]:
 
 
 def copy_tree(src: Path, dst: Path) -> None:
-    """Copy an entire directory tree. Overwrites dst if it exists."""
+    """Copy an entire directory tree. Overwrites dst if it exists.
+
+    Handles read-only source files/dirs (e.g. from restic repos).
+    """
     if dst.exists():
+        _make_writable(dst)
         shutil.rmtree(dst)
     shutil.copytree(str(src), str(dst))
 
 
+def _make_writable(path: Path) -> None:
+    """Recursively ensure all files and dirs under path are writable."""
+    for dirpath, dirnames, filenames in os.walk(path):
+        dp = Path(dirpath)
+        dp.chmod(dp.stat().st_mode | 0o700)
+        for fname in filenames:
+            fp = dp / fname
+            fp.chmod(fp.stat().st_mode | 0o600)
+
+
 def copy_file(src: Path, dst: Path) -> None:
-    """Copy a single file, creating parent directories as needed."""
+    """Copy a single file, creating parent directories as needed.
+
+    Removes any existing read-only destination file first.
+    """
     ensure_dir(dst.parent)
+    if dst.exists():
+        dst.chmod(0o644)
+        dst.unlink()
     shutil.copy2(str(src), str(dst))
 
 
 def safe_remove_tree(path: Path) -> None:
-    """Remove a directory tree if it exists. No error if missing."""
+    """Remove a directory tree if it exists. No error if missing.
+
+    Handles read-only files/dirs by making them writable first.
+    """
     if path.exists():
+        _make_writable(path)
         shutil.rmtree(path)

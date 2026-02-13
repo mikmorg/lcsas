@@ -197,6 +197,9 @@ def init_restic_repos() -> dict[str, Path]:
 
         if (repo_path / "config").exists():
             warn(f"{repo_name} repo already initialized — reinitializing")
+            # restic creates read-only files; fix perms before removing
+            subprocess.run(["chmod", "-R", "u+rwX", str(repo_path)],
+                           capture_output=True)
             shutil.rmtree(repo_path)
 
         result = run([
@@ -334,7 +337,11 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
 
     mt = MediaType.TEST_SMALL
     has_dvdisaster = tool_available("dvdisaster")
-    skip_ecc = not has_dvdisaster
+    # dvdisaster RS03 pads ISOs to minimum optical disc size (~350 MB+),
+    # making it impractical for TEST_SMALL (10 MB). Skip ECC for test media.
+    skip_ecc = mt.is_test or not has_dvdisaster
+    if mt.is_test and has_dvdisaster:
+        info("Skipping ECC for test media (dvdisaster minimum image exceeds test capacity)")
 
     # Build config with repo definitions
     repo_configs = {
@@ -455,6 +462,7 @@ def verify_isos(iso_files: list[Path]) -> bool:
         # Check if volume_info.json is in the ISO
         result = run([
             "xorriso", "-indev", str(iso_path),
+            "-osirrox", "on",
             "-extract", "/volume_info.json", str(mount_point / "volume_info.json"),
         ])
         if result.returncode == 0 and (mount_point / "volume_info.json").exists():
@@ -470,6 +478,7 @@ def verify_isos(iso_files: list[Path]) -> bool:
         # Check if catalog.db is in the ISO
         result = run([
             "xorriso", "-indev", str(iso_path),
+            "-osirrox", "on",
             "-extract", "/catalog.db", str(mount_point / "catalog.db"),
         ])
         if result.returncode == 0 and (mount_point / "catalog.db").exists():
@@ -528,7 +537,7 @@ def verify_catalog(conn: sqlite3.Connection) -> None:
     repos = list_repos(conn)
     info(f"Repositories:     {len(repos)}")
     for repo in repos:
-        info(f"  {repo.repo_id}: {repo.display_name} ({repo.mirror_path})")
+        info(f"  {repo.repo_id}: {repo.name} ({repo.mirror_path})")
 
 
 # ── Phase 9: Restore Test ────────────────────────────────────────────────────
