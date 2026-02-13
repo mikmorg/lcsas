@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from lcsas.db.volumes import (
@@ -119,7 +121,7 @@ class TestVolumesCRUD:
             memory_db, label="DUP", uuid=generate_uuid(),
             media_type="BD25", capacity_bytes=25_000_000_000,
         )
-        with pytest.raises(Exception):
+        with pytest.raises(sqlite3.IntegrityError):
             create_volume(
                 memory_db, label="DUP", uuid=generate_uuid(),
                 media_type="BD25", capacity_bytes=25_000_000_000,

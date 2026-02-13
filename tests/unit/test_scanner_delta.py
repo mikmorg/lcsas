@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 from lcsas.db.packs import register_pack
 from lcsas.db.repos import register_repo
 from lcsas.db.volume_packs import bulk_link_packs
@@ -20,7 +16,7 @@ class TestScanner:
         """The tmp_mirror fixture uses two-level hash dirs."""
         packs = scan_mirror_packs(tmp_mirror)
         assert len(packs) == 10
-        for sha, size in packs.items():
+        for _sha, size in packs.items():
             assert size > 0
 
     def test_scan_flat_layout(self, tmp_path):

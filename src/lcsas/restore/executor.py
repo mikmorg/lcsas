@@ -5,8 +5,6 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from lcsas.db.models import Pack
-from lcsas.restore.planner import PickList
 from lcsas.rustic.wrapper import RusticRunner
 from lcsas.utils.fs import copy_file, ensure_dir
 

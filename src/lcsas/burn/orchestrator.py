@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from lcsas.binpack.algorithm import first_fit_decreasing
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig
 from lcsas.db.models import Pack, Volume
-from lcsas.db.packs import get_pack_by_sha256
 from lcsas.db.queries import get_unarchived_packs
 from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import (
@@ -23,7 +22,6 @@ from lcsas.db.volumes import (
 )
 from lcsas.ecc.dvdisaster import DVDisasterRunner
 from lcsas.iso.xorriso import XorrisoRunner
-from lcsas.rustic.wrapper import RusticRunner
 from lcsas.staging.builder import StagingBuilder
 from lcsas.staging.metadata import HolographicInjector
 from lcsas.utils.fs import ensure_dir, safe_remove_tree

@@ -81,7 +81,8 @@ def get_total_unarchived_bytes(
                WHERE p.is_pruned = 0
                  AND p.pack_id NOT IN (SELECT pack_id FROM volume_packs)"""
         ).fetchone()
-    return row["total"]  # type: ignore[index]
+    assert row is not None
+    return int(row[0])
 
 
 def get_packs_for_volume(
@@ -249,9 +250,10 @@ def get_archive_status_summary(
                    (SELECT pack_id FROM volume_packs) THEN 1 ELSE 0 END) as unarchived
            FROM packs"""
     ).fetchone()
+    assert row is not None
     return {
-        "total": row["total"],  # type: ignore[index]
-        "pruned": row["pruned"] or 0,  # type: ignore[index]
-        "archived": row["archived"] or 0,  # type: ignore[index]
-        "unarchived": row["unarchived"] or 0,  # type: ignore[index]
+        "total": int(row[0]),
+        "pruned": int(row[1] or 0),
+        "archived": int(row[2] or 0),
+        "unarchived": int(row[3] or 0),
     }

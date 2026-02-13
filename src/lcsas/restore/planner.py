@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from lcsas.db.models import Pack, Volume
+from lcsas.db.models import Pack
 from lcsas.db.queries import get_missing_packs, get_pick_list
 
 

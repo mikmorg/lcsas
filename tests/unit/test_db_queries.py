@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from lcsas.db.queries import (
     get_archive_status_summary,
     get_missing_packs,
@@ -31,9 +29,9 @@ class TestUnarchived:
         unarchived = get_unarchived_packs(populated_db, repo_id="repo_family")
         # Packs 15-20 with repo cycling: 15=family, 18=family
         family_packs = {p.sha256 for p in unarchived}
-        assert "pack_0016_hash" in family_packs  # 16 % 3 == 1 -> work... let me check
-        # (i-1) % 3: 14%3=2=friend, 15%3=0=family, 16%3=1=work, 17%3=2=friend, 18%3=0=family, 19%3=1=work
-        # So family among 15-20: pack_0016 (idx 15, 15%3=0=family), pack_0019 (idx 18, 18%3=0=family)
+        # (i-1) % 3: 14%3=2=friend, 15%3=0=family, 16%3=1=work,
+        # 17%3=2=friend, 18%3=0=family, 19%3=1=work
+        # Family among 15-20: pack_0016 (idx 15), pack_0019 (idx 18)
         assert "pack_0016_hash" in family_packs
         assert "pack_0019_hash" in family_packs
 

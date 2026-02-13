@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 from pathlib import Path
@@ -32,10 +33,8 @@ def dir_size_bytes(path: Path) -> int:
     for dirpath, _dirnames, filenames in os.walk(path):
         for fname in filenames:
             fp = os.path.join(dirpath, fname)
-            try:
+            with contextlib.suppress(OSError):
                 total += os.path.getsize(fp)
-            except OSError:
-                pass
     return total
 
 
@@ -59,7 +58,7 @@ def copy_tree(src: Path, dst: Path) -> None:
 
 def _make_writable(path: Path) -> None:
     """Recursively ensure all files and dirs under path are writable."""
-    for dirpath, dirnames, filenames in os.walk(path):
+    for dirpath, _dirnames, filenames in os.walk(path):
         dp = Path(dirpath)
         dp.chmod(dp.stat().st_mode | 0o700)
         for fname in filenames:

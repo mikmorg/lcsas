@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from lcsas.config.media import MediaType
-from lcsas.db.models import Pack, Volume
+from lcsas.db.models import Pack
 from lcsas.db.queries import get_packs_only_on_volumes
-from lcsas.db.volumes import get_volume_by_id, list_volumes, update_status
+from lcsas.db.volumes import get_volume_by_id, update_status
 
 
 @dataclass

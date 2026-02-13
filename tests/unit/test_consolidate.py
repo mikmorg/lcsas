@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from lcsas.config.media import MediaType
 from lcsas.consolidate.merger import VolumeMerger
 from lcsas.db.packs import mark_pruned, register_pack

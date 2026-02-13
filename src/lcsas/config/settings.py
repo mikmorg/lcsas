@@ -102,8 +102,11 @@ def load_config(config_path: Path) -> LCSASConfig:
     media_str = defaults.get("media_type", "BD25")
     try:
         media_type = MediaType[media_str]
-    except KeyError:
-        raise ValueError(f"Unknown media type '{media_str}'. Valid: {[m.name for m in MediaType]}")
+    except KeyError as err:
+        valid = [m.name for m in MediaType]
+        raise ValueError(
+            f"Unknown media type '{media_str}'. Valid: {valid}"
+        ) from err
 
     return LCSASConfig(
         mirror_base_path=resolve(paths.get("mirror_base", "/mnt/mirror")),

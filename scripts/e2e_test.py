@@ -28,12 +28,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -297,8 +295,8 @@ def scan_and_register(conn: sqlite3.Connection, repos: dict[str, Path]) -> int:
     """
     banner("Phase 5: Scanning & Registering Packs")
 
-    from lcsas.packs.scanner import scan_mirror_packs
     from lcsas.packs.delta import DeltaAnalyzer
+    from lcsas.packs.scanner import scan_mirror_packs
 
     total_packs = 0
     for repo_name, repo_path in repos.items():
@@ -311,7 +309,8 @@ def scan_and_register(conn: sqlite3.Connection, repos: dict[str, Path]) -> int:
         info(f"{repo_name}: registered {len(new_packs)} new packs")
 
         unarchived = delta.get_unarchived()
-        info(f"{repo_name}: {len(unarchived)} unarchived packs ({delta.get_total_unarchived_bytes():,} bytes)")
+        unarchived_bytes = delta.get_total_unarchived_bytes()
+        info(f"{repo_name}: {len(unarchived)} unarchived packs ({unarchived_bytes:,} bytes)")
 
     return total_packs
 
@@ -328,12 +327,12 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
     """
     banner("Phase 6: Burn Pipeline (ISO-only)")
 
+    from lcsas.burn.orchestrator import BurnOrchestrator
     from lcsas.config.media import MediaType
     from lcsas.config.settings import LCSASConfig, RepositoryConfig
-    from lcsas.burn.orchestrator import BurnOrchestrator
-    from lcsas.iso.xorriso import SubprocessXorrisoRunner
-    from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.db.queries import get_total_unarchived_bytes, get_unarchived_packs
+    from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+    from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
     mt = MediaType.TEST_SMALL
     has_dvdisaster = tool_available("dvdisaster")
@@ -375,7 +374,7 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
     if dvdisaster is None:
         class NoOpDVDisaster:
             def augment_iso(self, iso_path, redundancy_pct=15):
-                warn(f"  Skipping ECC augmentation (dvdisaster not available)")
+                warn("  Skipping ECC augmentation (dvdisaster not available)")
             def verify_iso(self, iso_path):
                 return True
             def repair_iso(self, iso_path):
@@ -396,7 +395,10 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
             break
 
         volume_num += 1
-        info(f"Volume {volume_num}: {len(unarchived)} unarchived packs ({total_bytes:,} bytes remaining)")
+        info(
+            f"Volume {volume_num}: {len(unarchived)} unarchived packs"
+            f" ({total_bytes:,} bytes remaining)"
+        )
 
         try:
             manifest = orchestrator.prepare(media_type=mt)
@@ -457,7 +459,7 @@ def verify_isos(iso_files: list[Path]) -> bool:
             file_count = result.stdout.count("\n")
             info(f"  Contains {file_count} file entries")
         else:
-            warn(f"  Could not list ISO contents")
+            warn("  Could not list ISO contents")
 
         # Check if volume_info.json is in the ISO
         result = run([
@@ -472,7 +474,7 @@ def verify_isos(iso_files: list[Path]) -> bool:
             info(f"  Media type: {vol_info.get('media_type', 'N/A')}")
             (mount_point / "volume_info.json").unlink()
         else:
-            warn(f"  Could not extract volume_info.json")
+            warn("  Could not extract volume_info.json")
             all_ok = False
 
         # Check if catalog.db is in the ISO
@@ -486,7 +488,7 @@ def verify_isos(iso_files: list[Path]) -> bool:
             info(f"  Catalog found: {cat_size:,} bytes")
             (mount_point / "catalog.db").unlink()
         else:
-            warn(f"  Catalog not found in ISO")
+            warn("  Catalog not found in ISO")
 
         # Check data/ directory
         result = run([
@@ -494,10 +496,11 @@ def verify_isos(iso_files: list[Path]) -> bool:
             "-find", "/data", "-type", "f",
         ])
         if result.returncode == 0:
-            pack_count = len([l for l in result.stdout.strip().splitlines() if l.startswith("'")])
+            lines = result.stdout.strip().splitlines()
+            pack_count = len([ln for ln in lines if ln.startswith("'")])
             info(f"  Pack files in data/: {pack_count}")
         else:
-            warn(f"  Could not list data/ contents")
+            warn("  Could not list data/ contents")
 
         # Check metadata/ directory
         result = run([
@@ -505,10 +508,10 @@ def verify_isos(iso_files: list[Path]) -> bool:
             "-find", "/metadata", "-type", "d",
         ])
         if result.returncode == 0:
-            dirs = [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
+            dirs = [ln.strip() for ln in result.stdout.strip().splitlines() if ln.strip()]
             info(f"  Metadata directories: {len(dirs)}")
         else:
-            warn(f"  Could not list metadata/ contents")
+            warn("  Could not list metadata/ contents")
 
     return all_ok
 
@@ -520,8 +523,8 @@ def verify_catalog(conn: sqlite3.Connection) -> None:
     banner("Phase 8: Catalog Summary")
 
     from lcsas.db.queries import get_archive_status_summary
-    from lcsas.db.volumes import list_volumes
     from lcsas.db.repos import list_repos
+    from lcsas.db.volumes import list_volumes
 
     summary = get_archive_status_summary(conn)
     info(f"Total packs:      {summary['total']}")

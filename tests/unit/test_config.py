@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from lcsas.config.media import MediaType
-from lcsas.config.settings import LCSASConfig, load_config, default_config
+from lcsas.config.settings import LCSASConfig, default_config, load_config
 
 
 class TestMediaType:

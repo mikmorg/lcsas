@@ -12,7 +12,6 @@ from pathlib import Path
 from lcsas.db.models import Volume
 from lcsas.utils.fs import copy_file, copy_tree, ensure_dir
 
-
 # Repository subdirectories that constitute "hot" metadata
 _METADATA_DIRS = ["index", "snapshots", "keys"]
 _METADATA_FILES = ["config"]

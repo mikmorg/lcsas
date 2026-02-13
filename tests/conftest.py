@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
 
 import pytest
 
 from lcsas.config.media import MediaType
-from lcsas.config.settings import LCSASConfig, RepositoryConfig, default_config
+from lcsas.config.settings import default_config
 from lcsas.db.connection import get_memory_connection
 from lcsas.db.packs import register_pack
 from lcsas.db.repos import register_repo
@@ -16,7 +15,6 @@ from lcsas.db.schema import create_all
 from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import create_volume
 from lcsas.utils.labels import generate_uuid
-
 
 # ---------------------------------------------------------------------------
 # Markers for conditional test skipping
@@ -73,7 +71,7 @@ def populated_db(memory_db):
 
     # Create volumes
     vols = []
-    for i, (label, media, status) in enumerate([
+    for _i, (label, media, status) in enumerate([
         ("LCSAS_BD_2026_001", "BD25", "VERIFIED"),
         ("LCSAS_BD_2026_002", "BD25", "VERIFIED"),
         ("LCSAS_BD_2026_003", "BD25", "VERIFIED"),

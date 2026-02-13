@@ -221,9 +221,8 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_repo_list(args)
     elif args.command == "status":
         return cmd_status(args)
-    elif args.command == "db":
-        if args.db_command == "export":
-            return cmd_db_export(args)
+    elif args.command == "db" and args.db_command == "export":
+        return cmd_db_export(args)
 
     # Commands requiring more infrastructure (burn, restore, consolidate, verify)
     # will be wired up once all dependencies exist

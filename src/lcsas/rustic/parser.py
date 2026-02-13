@@ -63,7 +63,7 @@ def parse_snapshots_output(output: str) -> list[SnapshotInfo]:
         if not isinstance(item, dict):
             continue
         snapshots.append(SnapshotInfo(
-            snapshot_id=item.get("id", item.get("short_id", "")),
+            snapshot_id=item.get("id", item.get("short_id", "")) or "",
             timestamp=item.get("time", ""),
             hostname=item.get("hostname", ""),
             paths=item.get("paths", []),
@@ -90,7 +90,7 @@ def parse_restore_plan_output(
         packs = data.get("packs", data.get("pack_ids", []))
         return RestorePlan(
             snapshot_id=snapshot_id,
-            required_pack_hashes=packs,
+            required_pack_hashes=packs if isinstance(packs, list) else [],
             total_size_bytes=data.get("total_size", 0),
             file_count=data.get("file_count", 0),
         )

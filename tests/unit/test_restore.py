@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
 from lcsas.db.packs import register_pack
-from lcsas.db.repos import register_repo
 from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import create_volume
 from lcsas.restore.planner import RestorePlanner

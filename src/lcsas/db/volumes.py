@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from lcsas.db.models import Volume
 
@@ -83,7 +83,7 @@ def update_status(
 
 def mark_closed(conn: sqlite3.Connection, volume_id: int) -> None:
     """Set the closed_at timestamp on a volume (finalization)."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     conn.execute(
         "UPDATE volumes SET closed_at = ? WHERE volume_id = ?",
         (now, volume_id),

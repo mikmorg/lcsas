@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def generate_volume_label(
@@ -16,7 +16,7 @@ def generate_volume_label(
     Format: {PREFIX}_{MEDIA}_{YYYY}_{SEQ:03d}
     Example: LCSAS_BD_2026_001
     """
-    year = datetime.now(timezone.utc).strftime("%Y")
+    year = datetime.now(UTC).strftime("%Y")
     media_short = media_type.replace("MDISC", "MD").replace("BDXL", "BX")
     return f"{prefix}_{media_short}_{year}_{seq_num:03d}"
 
