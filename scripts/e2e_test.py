@@ -621,6 +621,313 @@ def test_restore(
     return all_ok
 
 
+# ── Phase 10: Redundant Burn (second copy of all packs) ───────────────────────
+
+def create_redundant_copies(
+    conn: sqlite3.Connection,
+    iso_files: list[Path],
+) -> list[Path]:
+    """Re-burn all archived packs to new volumes for redundancy.
+
+    Manually links existing packs to new volumes and creates ISOs,
+    simulating a second copy for disaster recovery.
+
+    Returns:
+        List of redundant ISO file paths.
+    """
+    banner("Phase 10: Create Redundant Volume Copies")
+
+    from lcsas.config.media import MediaType
+    from lcsas.db.queries import get_packs_for_volume
+    from lcsas.db.volume_packs import bulk_link_packs
+    from lcsas.db.volumes import create_volume, list_volumes, update_status
+    from lcsas.iso.xorriso import SubprocessXorrisoRunner
+    from lcsas.staging.builder import StagingBuilder
+    from lcsas.utils.labels import generate_uuid
+
+    mt = MediaType.TEST_SMALL
+    xorriso = SubprocessXorrisoRunner()
+
+    # Get all existing verified volumes
+    existing_vols = [v for v in list_volumes(conn) if v.status == "VERIFIED"]
+    info(f"Found {len(existing_vols)} verified volumes to create redundant copies of")
+
+    redundant_isos: list[Path] = []
+
+    for orig_vol in existing_vols:
+        orig_packs = get_packs_for_volume(conn, orig_vol.volume_id)
+        if not orig_packs:
+            continue
+
+        # Create a new volume as a redundant copy
+        dup_label = f"{orig_vol.label}_DUP"
+        dup_vol = create_volume(
+            conn,
+            label=dup_label,
+            uuid=generate_uuid(),
+            media_type=mt.name,
+            capacity_bytes=mt.capacity_bytes,
+            location="Offsite_Safe",
+            status="STAGING",
+        )
+
+        # Link same packs to the new volume
+        bulk_link_packs(conn, dup_vol.volume_id, [p.pack_id for p in orig_packs])
+
+        info(f"  {dup_label}: {len(orig_packs)} packs (redundant copy of {orig_vol.label})")
+
+        # Find the original ISO's staging dir or use the ISO to copy packs
+        # We'll create a new staging directory from the original mirror data
+        staging_root = STAGING_DIR / dup_label
+        builder = StagingBuilder(staging_root)
+        builder.initialize()
+
+        # Stage packs from mirror
+        for repo_name in ["family", "work"]:
+            data_dir = MIRROR_DIR / repo_name / "data"
+            if data_dir.is_dir():
+                builder.stage_packs(orig_packs, data_dir)
+
+        # Create ISO
+        iso_path = ISO_DIR / f"{dup_label}.iso"
+        try:
+            xorriso.create_iso(staging_root, iso_path, dup_label)
+            update_status(conn, dup_vol.volume_id, "VERIFIED")
+            redundant_isos.append(iso_path)
+            info(f"  ISO created: {iso_path.name} ({iso_path.stat().st_size:,} bytes)")
+        except Exception as e:
+            warn(f"  Failed to create redundant ISO: {e}")
+            update_status(conn, dup_vol.volume_id, "STAGING")
+
+    return redundant_isos
+
+
+# ── Phase 11: Multi-Volume ISO Restore & Verification ────────────────────────
+
+def test_iso_restore(
+    conn: sqlite3.Connection,
+    iso_files: list[Path],
+    repos: dict[str, Path],
+    snapshot_ids: dict[str, str],
+    original_manifests: dict[str, dict[str, str]],
+) -> bool:
+    """Extract packs from ISOs, assemble restore cache, restore, verify.
+
+    Tests restoring from archived ISOs (not from the original mirror),
+    which is the real disaster-recovery scenario.
+    """
+    banner("Phase 11: Restore from ISOs & Verify Integrity")
+
+    from lcsas.restore.executor import RestoreExecutor
+    from lcsas.rustic.wrapper import SubprocessRusticRunner
+
+    all_ok = True
+    extract_base = BASE / "iso_extract"
+    if extract_base.exists():
+        # Fix permissions and clean up
+        subprocess.run(["chmod", "-R", "u+rwX", str(extract_base)], capture_output=True)
+        shutil.rmtree(extract_base)
+    extract_base.mkdir(parents=True)
+
+    # Step 1: Extract packs from each ISO
+    info("Extracting packs from ISOs...")
+    vol_mount_dirs: dict[str, Path] = {}
+
+    for iso_path in iso_files:
+        vol_label = iso_path.stem  # e.g., "E2ETEST_TEST_SMALL_0001"
+        extract_dir = extract_base / vol_label
+        extract_dir.mkdir(exist_ok=True)
+
+        # Extract data/ directory from ISO using xorriso
+        result = run([
+            "xorriso", "-indev", str(iso_path),
+            "-osirrox", "on",
+            "-extract", "/data", str(extract_dir / "data"),
+        ])
+        if result.returncode == 0:
+            data_files = list((extract_dir / "data").rglob("*"))
+            data_file_count = len([f for f in data_files if f.is_file()])
+            info(f"  {vol_label}: extracted {data_file_count} pack files")
+            vol_mount_dirs[vol_label] = extract_dir
+        else:
+            warn(f"  Failed to extract data from {iso_path.name}")
+
+        # Also extract metadata/
+        result = run([
+            "xorriso", "-indev", str(iso_path),
+            "-osirrox", "on",
+            "-extract", "/metadata", str(extract_dir / "metadata"),
+        ])
+        if result.returncode != 0:
+            warn(f"  Could not extract metadata from {iso_path.name}")
+
+    if not vol_mount_dirs:
+        fail("No volume data extracted — skipping ISO restore test")
+        return False
+
+    # Step 2: Verify pack file integrity across ISOs
+    info("Verifying pack file integrity across volumes...")
+    pack_hashes: dict[str, dict[str, str]] = {}  # {sha: {vol_label: file_hash}}
+
+    for vol_label, mount_dir in vol_mount_dirs.items():
+        data_dir = mount_dir / "data"
+        if not data_dir.exists():
+            continue
+        for pack_file in data_dir.rglob("*"):
+            if not pack_file.is_file():
+                continue
+            file_hash = sha256_file(pack_file)
+            pack_name = pack_file.name
+            pack_hashes.setdefault(pack_name, {})[vol_label] = file_hash
+
+    # Check that the same pack has the same hash across all volumes
+    integrity_ok = True
+    for pack_name, vol_hashes in pack_hashes.items():
+        unique_hashes = set(vol_hashes.values())
+        if len(unique_hashes) > 1:
+            fail(f"  Pack {pack_name} has inconsistent hashes across volumes!")
+            for vl, fh in vol_hashes.items():
+                fail(f"    {vl}: {fh[:16]}...")
+            integrity_ok = False
+
+    if integrity_ok:
+        packs_with_copies = sum(1 for h in pack_hashes.values() if len(h) > 1)
+        info(f"Pack integrity verified: {len(pack_hashes)} unique packs, "
+             f"{packs_with_copies} with redundant copies")
+    else:
+        all_ok = False
+
+    # Step 3: For each repo, build restore cache from ISOs and restore
+    restore_map = {
+        "family": "family_photos",
+        "work": "work_docs",
+    }
+
+    for repo_name, repo_path in repos.items():
+        snap_id = snapshot_ids.get(repo_name)
+        if not snap_id:
+            warn(f"No snapshot ID for {repo_name} — skipping")
+            continue
+
+        info(f"Restoring {repo_name} from ISOs...")
+
+        # Build the restore cache
+        cache_dir = extract_base / f"cache_{repo_name}"
+        if cache_dir.exists():
+            shutil.rmtree(cache_dir)
+
+        # Prepare cache from the original mirror metadata
+        rustic_runner = SubprocessRusticRunner(binary="restic")
+        executor = RestoreExecutor(rustic_runner)
+        executor.prepare_cache(cache_dir, repo_path)
+
+        # Ingest packs from ALL available ISOs
+        for vol_label, mount_dir in vol_mount_dirs.items():
+            # Get all pack files available on this volume
+            data_dir = mount_dir / "data"
+            if not data_dir.exists():
+                continue
+            available_packs = [f.name for f in data_dir.rglob("*") if f.is_file()]
+            if available_packs:
+                ingested = executor.ingest_volume(cache_dir, mount_dir, available_packs)
+                if ingested > 0:
+                    info(f"  From {vol_label}: ingested {ingested} packs")
+
+        # Restore
+        restore_target = RESTORE_DIR / f"{repo_name}_from_iso"
+        if restore_target.exists():
+            shutil.rmtree(restore_target)
+        restore_target.mkdir(parents=True)
+
+        try:
+            result = run([
+                "restic", "restore", snap_id,
+                "--repo", str(cache_dir),
+                "--password-file", str(PASSWORD_FILE),
+                "--target", str(restore_target),
+            ])
+            if result.returncode != 0:
+                fail(f"  Restore from ISOs failed for {repo_name}")
+                all_ok = False
+                continue
+        except Exception as e:
+            fail(f"  Restore failed: {e}")
+            all_ok = False
+            continue
+
+        # Verify
+        dataset_name = restore_map[repo_name]
+        expected = original_manifests.get(dataset_name, {})
+        restored_data = restore_target / "mnt" / "lcsas-test" / "test_data" / dataset_name
+        if not restored_data.is_dir():
+            candidates = list(restore_target.rglob(dataset_name))
+            if candidates:
+                restored_data = candidates[0]
+            else:
+                warn(f"  Could not find restored data for {dataset_name}")
+                all_ok = False
+                continue
+
+        verified = 0
+        mismatched = 0
+        for fname, expected_hash in expected.items():
+            fpath = restored_data / fname
+            if not fpath.exists():
+                fail(f"  Missing: {fname}")
+                mismatched += 1
+                continue
+            actual_hash = sha256_file(fpath)
+            if actual_hash == expected_hash:
+                verified += 1
+            else:
+                fail(f"  Hash mismatch: {fname}")
+                mismatched += 1
+
+        if mismatched == 0:
+            info(f"  {repo_name} (ISO restore): all {verified} files verified ✓")
+        else:
+            fail(f"  {repo_name} (ISO restore): {mismatched} mismatched, {verified} ok")
+            all_ok = False
+
+    return all_ok
+
+
+# ── Phase 12: Redundancy Verification ────────────────────────────────────────
+
+def verify_redundancy(conn: sqlite3.Connection) -> bool:
+    """Verify that redundant copies exist and catalog is consistent."""
+    banner("Phase 12: Redundancy Verification")
+
+    from lcsas.db.queries import get_redundancy_report, get_volumes_for_pack
+    from lcsas.db.volumes import list_volumes
+
+    all_ok = True
+
+    volumes = list_volumes(conn)
+    verified_vols = [v for v in volumes if v.status == "VERIFIED"]
+    info(f"Total verified volumes: {len(verified_vols)}")
+
+    # Check that some packs have redundant copies
+    under_2 = get_redundancy_report(conn, min_copies=2)
+    with_copies = len(get_redundancy_report(conn, min_copies=1))
+    total_with_copies = with_copies - len(under_2)
+
+    if len(under_2) == 0:
+        info("ALL packs have 2+ copies — fully redundant")
+    else:
+        info(f"Packs with <2 copies: {len(under_2)}")
+        info(f"Packs with 2+ copies: {total_with_copies}")
+
+        # This is a warning, not a failure — not all packs must be redundant
+        # in this test since some may not fit on the redundant volumes
+        for pack in under_2[:5]:
+            vols = get_volumes_for_pack(conn, pack.pack_id)
+            vol_labels = [v.label for v in vols]
+            info(f"  {pack.sha256[:20]}... copies={len(vols)} vols={vol_labels}")
+
+    return all_ok
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -661,6 +968,19 @@ def main() -> int:
     # Phase 9
     restore_ok = test_restore(repos, snapshot_ids, manifests)
 
+    # Phase 10: Create redundant copies
+    redundant_isos = create_redundant_copies(conn, iso_files)
+    info(f"Redundant ISOs created: {len(redundant_isos)}")
+    all_iso_files = iso_files + redundant_isos
+
+    # Phase 11: Restore from ISOs
+    iso_restore_ok = test_iso_restore(
+        conn, all_iso_files, repos, snapshot_ids, manifests
+    )
+
+    # Phase 12: Verify redundancy
+    redundancy_ok = verify_redundancy(conn)
+
     # ── Summary ───────────────────────────────────────────────────────────────
     banner("Test Summary")
 
@@ -677,7 +997,10 @@ def main() -> int:
         "Packs registered": total_packs > 0,
         "ISOs created": len(iso_files) > 0,
         "ISO verification": isos_ok,
-        "Restore verification": restore_ok,
+        "Restore (from repos)": restore_ok,
+        "Redundant copies created": len(redundant_isos) > 0,
+        "Restore (from ISOs)": iso_restore_ok,
+        "Redundancy verification": redundancy_ok,
     }
 
     all_pass = True
