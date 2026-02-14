@@ -9,6 +9,7 @@ Petabyte-scale, offline-first archival system for Linux. Orchestrates **Rustic**
 - **Holographic Indexing** — every disc carries a complete SQLite catalog of the entire archive
 - **Local Mirror Strategy** — permanent hot tier enables instant consolidation without retrieving offsite media
 - **Bit-Rot Immunity** — DVDisaster RS03 error correction wraps every ISO image
+- **Self-Contained Disaster Recovery** — meta-volume bundles portable tools + source so any disc set plus a key file restores without system dependencies
 
 ## Quick Start
 
@@ -43,6 +44,7 @@ src/lcsas/
 ├── burn/         # Burn orchestrator (full pipeline)
 ├── restore/      # Restore planner and executor
 ├── consolidate/  # Volume merger / consolidation
+├── meta/         # Meta-volume builder (disaster recovery toolkit)
 └── utils/        # Hashing, filesystem helpers, label generation
 ```
 
@@ -395,6 +397,111 @@ rustic restore abc123def456 \
 | Store offsite copy | Monthly | Carry discs to safe deposit / relative's house |
 | LCSAS status | Anytime | Verify all packs archived, check redundancy per location |
 | Restore | When needed | Pick list → mount discs → cache assembly → Rustic restore |
+
+## Disaster Recovery (Meta-Volume)
+
+LCSAS archive discs are encrypted and deduplicated — restoring from them requires `restic`, `xorriso`, Python, and the LCSAS source code. If your archival machine is lost, those tools may not be available on the recovery machine.
+
+The **meta-volume** solves this by bundling *everything* needed for restore onto a single supplementary disc burned alongside your data volumes at each storage location. The **only** thing not included is your encryption key file, which must be stored separately.
+
+### What's on a Meta-Volume
+
+| Path | Contents |
+|------|----------|
+| `tools/bin/` | Portable Linux x86_64 binaries: `restic`, `xorriso`, `python3` |
+| `tools/lib/` | All required shared libraries (discovered via `ldd`) |
+| `lcsas/src/` | Complete LCSAS source code (zero pip dependencies) |
+| `docs/` | Architecture documentation |
+| `restore.sh` | Automated bash restore script |
+| `README_RESTORE.md` | Human-readable step-by-step recovery instructions |
+| `volume_info.json` | Machine-readable volume metadata |
+
+### Building a Meta-Volume
+
+```bash
+# Build the meta-volume contents into a staging directory
+lcsas meta build --output /mnt/staging/meta
+
+# Optionally specify the project root (auto-detected by default)
+lcsas meta build --output /mnt/staging/meta --project-root /opt/lcsas
+```
+
+The output directory can then be mastered to ISO and burned alongside your data volumes at each storage location.
+
+### Restoring from Discs Only
+
+In a disaster scenario, you have:
+1. The data-volume ISOs (or physical discs)
+2. The meta-volume ISO (or physical disc)
+3. Your encryption key file (stored separately, e.g. in a safe)
+
+No system-installed `restic`, `xorriso`, or LCSAS is required.
+
+```bash
+# 1. Mount or copy the meta-volume to local disk
+cp -r /media/meta-disc /tmp/lcsas-meta
+cd /tmp/lcsas-meta
+
+# 2. Copy data-volume ISOs to a directory
+mkdir /tmp/isos
+cp /media/disc1/*.iso /tmp/isos/
+cp /media/disc2/*.iso /tmp/isos/
+# ... or mount each disc and copy the ISO files
+
+# 3. Run the bootstrap restore script
+./restore.sh \
+  --key ~/safe/family.key \
+  --isos /tmp/isos/ \
+  --target ~/restored/
+```
+
+The restore script:
+1. Extracts all ISOs using the bundled `xorriso`
+2. Discovers repositories from disc metadata
+3. Assembles a restore cache with two-level pack layout
+4. Runs `restic restore` using the bundled `restic` binary
+5. Cleans up temporary files
+
+#### Restore Options
+
+| Option | Required | Description |
+|--------|----------|-------------|
+| `--key FILE` | Yes | Path to your encryption key file |
+| `--isos DIR` | Yes | Directory containing `.iso` files |
+| `--target DIR` | Yes | Where to restore files |
+| `--repo NAME` | No | Restore only this repository (default: all) |
+| `--snapshot ID` | No | Specific snapshot to restore (default: latest) |
+| `--work-dir DIR` | No | Temporary work directory (default: auto) |
+
+#### Advanced: Using LCSAS CLI Instead
+
+The meta-volume also includes the full LCSAS source code, so you can use the
+standard CLI for more control:
+
+```bash
+# Set up the bundled Python environment
+export LD_LIBRARY_PATH=/tmp/lcsas-meta/tools/lib:$LD_LIBRARY_PATH
+export PATH=/tmp/lcsas-meta/tools/bin:$PATH
+export PYTHONPATH=/tmp/lcsas-meta/lcsas/src
+
+# Use the full LCSAS restore workflow
+python3 -m lcsas restore plan <snapshot-id>
+python3 -m lcsas restore exec <snapshot-id> /target \
+  --password-file ~/safe/family.key
+```
+
+### Operational Recommendation
+
+Rebuild and burn an updated meta-volume whenever you upgrade LCSAS or system tools. Include one meta-volume at **every** storage location so that any single location's discs plus the key file are sufficient for full recovery.
+
+```bash
+# Typical burn cycle: data volumes + meta-volume
+lcsas stage --media MDISC100
+lcsas meta build --output /mnt/staging/meta
+# Master meta/ to ISO, then burn both data and meta ISOs
+lcsas burn --session latest --location Home_Shelf
+lcsas burn --session latest --location Offsite_Safe
+```
 
 ## Testing
 
