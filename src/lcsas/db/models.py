@@ -66,3 +66,45 @@ class VolumePack:
 
     volume_id: int
     pack_id: int
+
+
+@dataclass(frozen=True)
+class Location:
+    """A physical storage location (e.g. Home_Shelf, Offsite_Safe)."""
+
+    name: str
+    created_at: str
+    description: str
+
+
+@dataclass(frozen=True)
+class VolumeCopy:
+    """A physical copy of a volume at a specific location."""
+
+    id: int
+    volume_id: int
+    location: str
+    status: str
+    burn_date: str
+    notes: str
+
+
+@dataclass(frozen=True)
+class BurnSession:
+    """A staging session grouping volumes for burning."""
+
+    session_id: str
+    created_at: str
+    media_type: str
+    status: str
+    staging_dir: str
+
+
+@dataclass(frozen=True)
+class SessionVolume:
+    """Association between a session and a volume with its ISO path."""
+
+    session_id: str
+    volume_id: int
+    iso_path: str
+    iso_sha256: str

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 # ---------------------------------------------------------------------------
 # DDL Statements
@@ -80,6 +80,52 @@ CREATE TABLE IF NOT EXISTS snapshots (
 );
 """
 
+SQL_CREATE_LOCATIONS = """
+CREATE TABLE IF NOT EXISTS locations (
+    name        TEXT PRIMARY KEY,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    description TEXT DEFAULT ''
+);
+"""
+
+SQL_CREATE_VOLUME_COPIES = """
+CREATE TABLE IF NOT EXISTS volume_copies (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    volume_id   INTEGER NOT NULL,
+    location    TEXT    NOT NULL,
+    status      TEXT    NOT NULL DEFAULT 'ACTIVE'
+                CHECK (status IN ('ACTIVE', 'DEPRECATED', 'DESTROYED')),
+    burn_date   TEXT    NOT NULL,
+    notes       TEXT    DEFAULT '',
+    FOREIGN KEY (volume_id) REFERENCES volumes (volume_id),
+    FOREIGN KEY (location) REFERENCES locations (name),
+    UNIQUE(volume_id, location)
+);
+"""
+
+SQL_CREATE_BURN_SESSIONS = """
+CREATE TABLE IF NOT EXISTS burn_sessions (
+    session_id  TEXT PRIMARY KEY,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    media_type  TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'STAGED'
+                CHECK (status IN ('STAGED', 'PARTIAL', 'COMPLETE', 'CLEANED')),
+    staging_dir TEXT NOT NULL
+);
+"""
+
+SQL_CREATE_SESSION_VOLUMES = """
+CREATE TABLE IF NOT EXISTS session_volumes (
+    session_id  TEXT    NOT NULL,
+    volume_id   INTEGER NOT NULL,
+    iso_path    TEXT    NOT NULL,
+    iso_sha256  TEXT    DEFAULT '',
+    PRIMARY KEY (session_id, volume_id),
+    FOREIGN KEY (session_id) REFERENCES burn_sessions (session_id),
+    FOREIGN KEY (volume_id) REFERENCES volumes (volume_id)
+);
+"""
+
 # ---------------------------------------------------------------------------
 # Indices
 # ---------------------------------------------------------------------------
@@ -92,6 +138,9 @@ SQL_CREATE_INDICES = [
     "CREATE INDEX IF NOT EXISTS idx_volume_packs_volume_id ON volume_packs (volume_id);",
     "CREATE INDEX IF NOT EXISTS idx_volumes_status ON volumes (status);",
     "CREATE INDEX IF NOT EXISTS idx_snapshots_repo_id ON snapshots (repo_id);",
+    "CREATE INDEX IF NOT EXISTS idx_volume_copies_volume_id ON volume_copies (volume_id);",
+    "CREATE INDEX IF NOT EXISTS idx_volume_copies_location ON volume_copies (location);",
+    "CREATE INDEX IF NOT EXISTS idx_session_volumes_session ON session_volumes (session_id);",
 ]
 
 
@@ -105,6 +154,10 @@ def create_all(conn: sqlite3.Connection) -> None:
     cursor.execute(SQL_CREATE_PACKS)
     cursor.execute(SQL_CREATE_VOLUME_PACKS)
     cursor.execute(SQL_CREATE_SNAPSHOTS)
+    cursor.execute(SQL_CREATE_LOCATIONS)
+    cursor.execute(SQL_CREATE_VOLUME_COPIES)
+    cursor.execute(SQL_CREATE_BURN_SESSIONS)
+    cursor.execute(SQL_CREATE_SESSION_VOLUMES)
 
     for idx_sql in SQL_CREATE_INDICES:
         cursor.execute(idx_sql)

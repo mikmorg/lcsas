@@ -52,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("status", help="Show archive status summary.")
 
     # --- burn ---
-    burn_p = subparsers.add_parser("burn", help="Prepare and execute a burn cycle.")
+    burn_p = subparsers.add_parser("burn", help="Burn staged ISOs to disc.")
     burn_p.add_argument("--media", type=str, default=None,
                         help="Media type (BD25, MDISC100, TEST_TINY, etc.).")
     burn_p.add_argument("--repo", type=str, default=None, nargs="*",
@@ -61,6 +61,68 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Create ISO file at this path without burning to disc.")
     burn_p.add_argument("--skip-ecc", action="store_true",
                         help="Skip DVDisaster ECC augmentation.")
+    burn_p.add_argument("--session", type=str, default=None,
+                        help="Burn a previously staged session (ID or 'latest').")
+    burn_p.add_argument("--location", type=str, default=None,
+                        help="Physical location tag for this copy.")
+    burn_p.add_argument("--device", type=str, default=None,
+                        help="Optical device path (overrides config).")
+
+    # --- stage ---
+    stage_p = subparsers.add_parser("stage", help="Stage ISOs for deferred burning.")
+    stage_p.add_argument("--media", type=str, default=None,
+                         help="Media type (BD25, MDISC100, TEST_TINY, etc.).")
+    stage_p.add_argument("--for-location", type=str, default=None,
+                         help="Stage only packs missing at this location.")
+    stage_p.add_argument("--repo", type=str, default=None, nargs="*",
+                         help="Specific repository IDs to stage.")
+    stage_p.add_argument("--skip-ecc", action="store_true",
+                         help="Skip DVDisaster ECC augmentation.")
+    stage_p.add_argument("--clean", action="store_true",
+                         help="Clean up staged ISOs for a session.")
+    stage_p.add_argument("--session", type=str, default=None,
+                         help="Session ID (for --clean).")
+
+    # --- burn-iso ---
+    burniso_p = subparsers.add_parser("burn-iso",
+                                      help="Burn a single ISO file (standalone).")
+    burniso_p.add_argument("iso_path", type=Path, help="Path to .iso file.")
+    burniso_p.add_argument("--device", type=str, default="/dev/sr0",
+                           help="Optical device path.")
+    burniso_p.add_argument("--verify", action="store_true", default=True,
+                           help="Verify after burning.")
+
+    # --- location ---
+    loc_p = subparsers.add_parser("location", help="Manage physical storage locations.")
+    loc_sub = loc_p.add_subparsers(dest="location_command")
+
+    loc_sub.add_parser("list", help="List all locations and their status.")
+
+    loc_add_p = loc_sub.add_parser("add", help="Register a new storage location.")
+    loc_add_p.add_argument("name", help="Location name (e.g. Offsite_Safe).")
+    loc_add_p.add_argument("--description", type=str, default="",
+                           help="Optional description.")
+
+    loc_status_p = loc_sub.add_parser("status",
+                                      help="Show packs present/missing at a location.")
+    loc_status_p.add_argument("name", help="Location name.")
+
+    loc_move_p = loc_sub.add_parser("move",
+                                    help="Record a disc moving between locations.")
+    loc_move_p.add_argument("volume_label",
+                            help="Volume label (e.g. ARCHIVE_MDISC100_0001).")
+    loc_move_p.add_argument("--from", dest="from_location", required=True,
+                            help="Source location.")
+    loc_move_p.add_argument("--to", dest="to_location", required=True,
+                            help="Destination location.")
+
+    # --- catalog ---
+    cat_p = subparsers.add_parser("catalog", help="Catalog management.")
+    cat_sub = cat_p.add_subparsers(dest="catalog_command")
+    cat_import_p = cat_sub.add_parser("import-receipts",
+                                      help="Import burn receipts from remote burns.")
+    cat_import_p.add_argument("receipt_files", nargs="+",
+                              help="Receipt JSON files.")
 
     # --- restore ---
     restore_p = subparsers.add_parser("restore", help="Plan or execute a restore.")
@@ -210,6 +272,210 @@ def cmd_db_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stage(args: argparse.Namespace) -> int:
+    """Stage ISOs for deferred burning."""
+    from lcsas.burn.orchestrator import BurnOrchestrator
+    from lcsas.config.media import MediaType
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import get_connection
+    from lcsas.db.schema import create_all
+    from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+    from lcsas.iso.xorriso import SubprocessXorrisoRunner
+
+    config = load_config(args.config) if args.config else None
+    if config is None:
+        print("Error: --config is required for stage.", file=sys.stderr)
+        return 1
+
+    conn = get_connection(args.db or config.db_path)
+    create_all(conn)
+
+    orch = BurnOrchestrator(
+        config, conn, SubprocessXorrisoRunner(), SubprocessDVDisasterRunner(),
+    )
+
+    if args.clean:
+        session_ref = args.session or "latest"
+        orch.clean_session(session_ref)
+        print(f"Cleaned session: {session_ref}")
+        conn.close()
+        return 0
+
+    media_type = None
+    if args.media:
+        media_type = MediaType[args.media]
+
+    result = orch.stage(
+        media_type=media_type,
+        for_location=args.for_location,
+        repo_ids=args.repo,
+        skip_ecc=args.skip_ecc,
+    )
+
+    print(f"Session: {result.session_id}")
+    print(f"Staged {len(result.manifests)} volume(s):")
+    for m in result.manifests:
+        iso_size = m.iso_path.stat().st_size if m.iso_path and m.iso_path.exists() else 0
+        print(f"  {m.iso_path}  ({iso_size / 1e9:.1f} GB, {len(m.selected_packs)} packs)")
+    print(f"Manifest: {result.staging_dir / 'session.json'}")
+    conn.close()
+    return 0
+
+
+def cmd_burn_session(args: argparse.Namespace) -> int:
+    """Burn a staged session to disc."""
+    from lcsas.burn.orchestrator import BurnOrchestrator
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import get_connection
+    from lcsas.db.schema import create_all
+    from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+    from lcsas.iso.xorriso import SubprocessXorrisoRunner
+
+    config = load_config(args.config) if args.config else None
+    if config is None:
+        print("Error: --config is required for burn.", file=sys.stderr)
+        return 1
+
+    conn = get_connection(args.db or config.db_path)
+    create_all(conn)
+
+    orch = BurnOrchestrator(
+        config, conn, SubprocessXorrisoRunner(), SubprocessDVDisasterRunner(),
+    )
+
+    location = args.location or config.default_location
+    receipts = orch.burn_session(
+        session_ref=args.session,
+        location=location,
+        device=args.device,
+    )
+
+    print(f"Burned {len(receipts)} volume(s) to {location}:")
+    for r in receipts:
+        print(f"  {r.volume_label} → {r.pack_count} packs")
+    conn.close()
+    return 0
+
+
+def cmd_location(args: argparse.Namespace) -> int:
+    """Handle location subcommands."""
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import get_connection
+    from lcsas.db.schema import create_all
+
+    config = load_config(args.config) if args.config else None
+    if config is None:
+        print("Error: --config is required for location.", file=sys.stderr)
+        return 1
+
+    conn = get_connection(args.db or config.db_path)
+    create_all(conn)
+
+    if args.location_command == "list":
+        from lcsas.db.locations import list_locations
+        from lcsas.db.queries import get_location_summary
+
+        locations = list_locations(conn)
+        if not locations:
+            print("No locations registered.")
+            conn.close()
+            return 0
+
+        summaries = get_location_summary(conn)
+        summary_map = {s["location"]: s for s in summaries}
+
+        for loc in locations:
+            s = summary_map.get(loc.name, {"volumes": 0, "packs": 0, "missing": 0})
+            status = "all current" if s["missing"] == 0 else f"{s['missing']} packs behind"
+            print(f"  {loc.name:<20} {s['volumes']} volumes, {s['packs']} packs, {status}")
+
+    elif args.location_command == "add":
+        from lcsas.db.locations import create_location
+        create_location(conn, args.name, args.description)
+        print(f"Added location: {args.name}")
+
+    elif args.location_command == "status":
+        from lcsas.db.queries import get_packs_missing_at_location, get_packs_at_location
+
+        at_loc = get_packs_at_location(conn, args.name)
+        missing = get_packs_missing_at_location(conn, args.name)
+
+        print(f"Location: {args.name}")
+        print(f"  Packs archived here: {len(at_loc)}")
+        print(f"  Packs missing: {len(missing)}")
+        if missing:
+            # Group by repo
+            by_repo: dict[str, list] = {}
+            for p in missing:
+                repo = p.repo_id or "unknown"
+                by_repo.setdefault(repo, []).append(p)
+            for repo, packs in sorted(by_repo.items()):
+                total_size = sum(p.size_bytes for p in packs)
+                print(f"    repo={repo}: {len(packs)} packs ({total_size / 1e9:.1f} GB)")
+
+    elif args.location_command == "move":
+        from lcsas.db.volume_copies import move_volume_copy
+        from lcsas.db.volumes import get_volume_by_label
+
+        vol = get_volume_by_label(conn, args.volume_label)
+        if vol is None:
+            print(f"Error: Volume '{args.volume_label}' not found.", file=sys.stderr)
+            conn.close()
+            return 1
+        move_volume_copy(conn, vol.volume_id, args.from_location, args.to_location)
+        print(f"Moved {args.volume_label}: {args.from_location} → {args.to_location}")
+
+    else:
+        print("Usage: lcsas location {list|add|status|move}", file=sys.stderr)
+        conn.close()
+        return 1
+
+    conn.close()
+    return 0
+
+
+def cmd_catalog_import(args: argparse.Namespace) -> int:
+    """Import burn receipts from remote burns."""
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import get_connection
+    from lcsas.db.locations import ensure_location
+    from lcsas.db.schema import create_all
+    from lcsas.db.volume_copies import add_volume_copy
+    from lcsas.db.volumes import get_volume_by_label
+
+    config = load_config(args.config) if args.config else None
+    if config is None:
+        print("Error: --config is required for catalog.", file=sys.stderr)
+        return 1
+
+    conn = get_connection(args.db or config.db_path)
+    create_all(conn)
+
+    imported = 0
+    for receipt_file in args.receipt_files:
+        with open(receipt_file) as f:
+            receipt = json.load(f)
+
+        vol = get_volume_by_label(conn, receipt["volume_label"])
+        if vol is None:
+            print(f"Warning: Volume '{receipt['volume_label']}' not found, skipping.",
+                  file=sys.stderr)
+            continue
+
+        ensure_location(conn, receipt["location"])
+        add_volume_copy(
+            conn,
+            volume_id=vol.volume_id,
+            location=receipt["location"],
+            burn_date=receipt.get("burn_date", ""),
+        )
+        imported += 1
+
+    print(f"Imported {imported} receipt(s).")
+    conn.close()
+    return 0
+
+
 def dispatch(args: argparse.Namespace) -> int:
     """Route parsed args to the appropriate command handler."""
     if args.command == "init":
@@ -223,8 +489,21 @@ def dispatch(args: argparse.Namespace) -> int:
         return cmd_status(args)
     elif args.command == "db" and args.db_command == "export":
         return cmd_db_export(args)
+    elif args.command == "stage":
+        return cmd_stage(args)
+    elif args.command == "burn":
+        if args.session:
+            return cmd_burn_session(args)
+        # Legacy burn (prepare + execute single volume)
+        print(f"Command 'burn' without --session not yet implemented.", file=sys.stderr)
+        return 1
+    elif args.command == "location":
+        return cmd_location(args)
+    elif args.command == "catalog":
+        if args.catalog_command == "import-receipts":
+            return cmd_catalog_import(args)
 
-    # Commands requiring more infrastructure (burn, restore, consolidate, verify)
+    # Commands requiring more infrastructure (restore, consolidate, verify)
     # will be wired up once all dependencies exist
     print(f"Command '{args.command}' not yet implemented.", file=sys.stderr)
     return 1
