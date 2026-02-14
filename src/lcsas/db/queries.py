@@ -222,7 +222,7 @@ def get_redundancy_report(
     Useful for ensuring every pack is stored on at least N volumes.
     """
     rows = conn.execute(
-        """SELECT p.*, COUNT(vp.volume_id) as copy_count
+        """SELECT p.*, COUNT(v.volume_id) as copy_count
            FROM packs p
            LEFT JOIN volume_packs vp ON p.pack_id = vp.pack_id
            LEFT JOIN volumes v ON vp.volume_id = v.volume_id
