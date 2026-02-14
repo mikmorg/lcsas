@@ -197,7 +197,10 @@ class BurnOrchestrator:
         bulk_link_packs(self._conn, volume.volume_id, pack_ids)
         update_used_bytes(self._conn, volume.volume_id, total_bytes)
 
-        # Inject catalog AFTER DB updates so it includes this volume
+        # Inject catalog AFTER DB updates so it includes this volume.
+        # Checkpoint WAL first so all committed data is in the main .db file
+        # (copy_file won't capture unflushed WAL data).
+        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         injector.inject_catalog(self._config.db_path)
 
         # Write volume info
@@ -388,7 +391,9 @@ class BurnOrchestrator:
             bulk_link_packs(self._conn, volume.volume_id, pack_ids)
             update_used_bytes(self._conn, volume.volume_id, total_bytes)
 
-            # Inject catalog AFTER DB updates
+            # Inject catalog AFTER DB updates.
+            # Checkpoint WAL to flush all data to the main .db file.
+            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             injector.inject_catalog(self._config.db_path)
             vol = get_volume_by_id(self._conn, volume.volume_id)
             injector.write_volume_info(vol)
