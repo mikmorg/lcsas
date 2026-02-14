@@ -471,7 +471,7 @@ class TestCrossLocationCacheAssembly:
 
         # Every pack must be in the cache with correct content
         for sha in ALL_SHAS:
-            cached = cache / "data" / sha
+            cached = cache / "data" / sha[:2] / sha
             assert cached.exists(), f"{sha} missing from restore cache"
             assert cached.read_bytes() == _pack_content(sha), (
                 f"{sha} content mismatch in cache"
@@ -501,7 +501,7 @@ class TestCrossLocationCacheAssembly:
             executor.ingest_volume(cache, volume_dirs[label], shas)
 
         for sha in ALL_SHAS:
-            cached = cache / "data" / sha
+            cached = cache / "data" / sha[:2] / sha
             assert cached.exists(), f"{sha} missing from offsite-only cache"
             assert cached.read_bytes() == _pack_content(sha)
 
@@ -689,8 +689,8 @@ class TestCrossLocationIntegrity:
         cache_off.mkdir()
         executor.ingest_volume(cache_off, volume_dirs["OFF_002"], [sha])
 
-        home_bytes = (cache_home / "data" / sha).read_bytes()
-        off_bytes = (cache_off / "data" / sha).read_bytes()
+        home_bytes = (cache_home / "data" / sha[:2] / sha).read_bytes()
+        off_bytes = (cache_off / "data" / sha[:2] / sha).read_bytes()
         assert home_bytes == off_bytes == _pack_content(sha)
 
 

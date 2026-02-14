@@ -362,7 +362,7 @@ class TestRestoreFromAnyCombination:
 
             # Verify ALL packs are in the cache
             for sha in self.ALL_SHAS:
-                cached_file = cache_dir / "data" / sha
+                cached_file = cache_dir / "data" / sha[:2] / sha
                 assert cached_file.exists(), (
                     f"Pack {sha} missing from cache after ingesting {combo}"
                 )
@@ -433,8 +433,8 @@ class TestMultiVolumeIngest:
 
         assert n1 == 1
         assert n2 == 1
-        assert (cache / "data" / "sha_pack1").read_bytes() == b"data1"
-        assert (cache / "data" / "sha_pack2").read_bytes() == b"data2"
+        assert (cache / "data" / "sh" / "sha_pack1").read_bytes() == b"data1"
+        assert (cache / "data" / "sh" / "sha_pack2").read_bytes() == b"data2"
 
     def test_ingest_overlapping_packs_first_wins(self, tmp_path):
         """If pack exists on both volumes, first ingest wins (skip)."""
@@ -457,7 +457,7 @@ class TestMultiVolumeIngest:
 
         assert n1 == 1
         assert n2 == 0  # Already cached
-        assert (cache / "data" / "common_pack").read_bytes() == b"from_vol_a"
+        assert (cache / "data" / "co" / "common_pack").read_bytes() == b"from_vol_a"
 
     def test_partial_volume_ingest(self, tmp_path):
         """Volume only has some of the requested packs."""
@@ -506,9 +506,9 @@ class TestMultiVolumeIngest:
         # Verify cache structure
         assert (cache / "index" / "data.json").exists()
         assert (cache / "config").exists()
-        assert (cache / "data" / "pack_a").read_bytes() == b"aaaa"
-        assert (cache / "data" / "pack_b").read_bytes() == b"bbbb"
-        assert (cache / "data" / "pack_c").read_bytes() == b"cccc"
+        assert (cache / "data" / "pa" / "pack_a").read_bytes() == b"aaaa"
+        assert (cache / "data" / "pa" / "pack_b").read_bytes() == b"bbbb"
+        assert (cache / "data" / "pa" / "pack_c").read_bytes() == b"cccc"
 
         # Execute restore
         pw = tmp_path / "pw.txt"
@@ -557,7 +557,7 @@ class TestCrossRepoRestore:
 
         # Verify only photo packs are requested (doc packs not needed)
         for sha in photo_shas:
-            assert (cache / "data" / sha).exists()
+            assert (cache / "data" / sha[:2] / sha).exists()
 
     def test_restore_docs_only_from_mixed_volume(self, redundant_db, volume_dirs, tmp_path):
         """Only request doc packs."""
@@ -581,7 +581,7 @@ class TestCrossRepoRestore:
             executor.ingest_volume(cache, volume_dirs[label], shas)
 
         for sha in doc_shas:
-            assert (cache / "data" / sha).exists()
+            assert (cache / "data" / sha[:2] / sha).exists()
 
     def test_restore_both_repos_simultaneously(self, redundant_db, volume_dirs, tmp_path):
         """Request all packs from both repos at once."""
@@ -608,7 +608,7 @@ class TestCrossRepoRestore:
             executor.ingest_volume(cache, volume_dirs[label], shas)
 
         for sha in all_shas:
-            cached = cache / "data" / sha
+            cached = cache / "data" / sha[:2] / sha
             assert cached.exists(), f"{sha} missing from cache"
             assert cached.read_bytes() == _pack_content(sha)
 
@@ -667,7 +667,7 @@ class TestDataIntegrityVerification:
 
         # Ingest from VOL_A
         executor.ingest_volume(cache, volume_dirs["VOL_A"], [sha])
-        cached = (cache / "data" / sha).read_bytes()
+        cached = (cache / "data" / sha[:2] / sha).read_bytes()
         source_a = (volume_dirs["VOL_A"] / "data" / sha).read_bytes()
         source_b = (volume_dirs["VOL_B"] / "data" / sha).read_bytes()
 

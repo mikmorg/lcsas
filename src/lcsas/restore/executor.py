@@ -66,14 +66,22 @@ class RestoreExecutor:
         ingested = 0
 
         for sha256 in required_packs:
-            dst = cache_data / sha256
+            # Place packs in two-level layout (data/<prefix>/<hash>)
+            # which restic 0.14+ expects for local repositories.
+            if len(sha256) >= 2:
+                prefix_dir = cache_data / sha256[:2]
+                ensure_dir(prefix_dir)
+                dst = prefix_dir / sha256
+            else:
+                dst = cache_data / sha256
+
             if dst.exists():
                 continue
 
-            # Try flat layout
+            # Try flat layout on the source volume
             src = data_dir / sha256
             if not src.is_file() and len(sha256) >= 2:
-                # Two-level layout
+                # Two-level layout on source
                 src = data_dir / sha256[:2] / sha256
 
             if src.is_file():

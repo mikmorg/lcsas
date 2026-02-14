@@ -155,6 +155,26 @@ def build_parser() -> argparse.ArgumentParser:
     db_sub = db_p.add_subparsers(dest="db_command")
     db_sub.add_parser("export", help="Export catalog summary as JSON.")
 
+    # --- meta ---
+    meta_p = subparsers.add_parser(
+        "meta",
+        help="Build a self-contained rescue volume (tools + source).",
+    )
+    meta_sub = meta_p.add_subparsers(dest="meta_command")
+
+    meta_build = meta_sub.add_parser(
+        "build",
+        help="Build a meta-volume directory with all restore tools.",
+    )
+    meta_build.add_argument(
+        "--output", "-o", type=Path, required=True,
+        help="Output directory for the meta-volume.",
+    )
+    meta_build.add_argument(
+        "--project-root", type=Path, default=None,
+        help="LCSAS project root (default: auto-detect).",
+    )
+
     return parser
 
 
@@ -476,6 +496,33 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_meta_build(args: argparse.Namespace) -> int:
+    """Build a self-contained meta-volume with all restore tools."""
+    from lcsas.meta.builder import MetaVolumeBuilder
+
+    output = args.output.resolve()
+    builder = MetaVolumeBuilder(
+        output_dir=output,
+        project_root=args.project_root,
+    )
+
+    print(f"Building meta-volume in {output} ...")
+    try:
+        builder.build()
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        print("Ensure restic, xorriso, and python3 are installed.", file=sys.stderr)
+        return 1
+
+    print(f"Meta-volume built successfully at {output}")
+    print("Contents:")
+    print("  tools/          Portable restic, xorriso, python3 + libraries")
+    print("  lcsas/          LCSAS source code")
+    print("  restore.sh      Bootstrap restore script")
+    print("  README_RESTORE.md  Restore instructions")
+    return 0
+
+
 def dispatch(args: argparse.Namespace) -> int:
     """Route parsed args to the appropriate command handler."""
     if args.command == "init":
@@ -502,6 +549,9 @@ def dispatch(args: argparse.Namespace) -> int:
     elif args.command == "catalog":
         if args.catalog_command == "import-receipts":
             return cmd_catalog_import(args)
+    elif args.command == "meta":
+        if args.meta_command == "build":
+            return cmd_meta_build(args)
 
     # Commands requiring more infrastructure (restore, consolidate, verify)
     # will be wired up once all dependencies exist

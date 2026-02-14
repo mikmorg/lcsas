@@ -129,8 +129,8 @@ class TestIngestVolume:
 
         count = executor.ingest_volume(cache, mount, [shas[0], shas[1]])
         assert count == 2
-        assert (cache / "data" / shas[0]).exists()
-        assert (cache / "data" / shas[1]).exists()
+        assert (cache / "data" / shas[0][:2] / shas[0]).exists()
+        assert (cache / "data" / shas[1][:2] / shas[1]).exists()
 
     def test_two_level_layout_ingest(self, executor, tmp_path):
         """Ingest packs from two-level hash-prefix layout."""
@@ -155,13 +155,15 @@ class TestIngestVolume:
         mount, shas = self._setup_volume(tmp_path, layout="flat")
         cache = tmp_path / "cache"
         (cache / "data").mkdir(parents=True)
-        # Pre-populate cache with sha1
-        (cache / "data" / shas[0]).write_bytes(b"already_here")
+        # Pre-populate cache with sha1 in two-level layout
+        prefix = cache / "data" / shas[0][:2]
+        prefix.mkdir(parents=True)
+        (prefix / shas[0]).write_bytes(b"already_here")
 
         count = executor.ingest_volume(cache, mount, [shas[0], shas[1]])
         assert count == 1  # only sha2 ingested
         # sha1 should NOT be overwritten
-        assert (cache / "data" / shas[0]).read_bytes() == b"already_here"
+        assert (cache / "data" / shas[0][:2] / shas[0]).read_bytes() == b"already_here"
 
     def test_mixed_found_and_missing(self, executor, tmp_path):
         """Returns correct count when some packs found, some not."""

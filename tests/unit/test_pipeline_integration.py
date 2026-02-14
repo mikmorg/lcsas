@@ -454,7 +454,7 @@ class TestFullPipelineRestore:
 
             # Verify ALL packs present and correct
             for sha in all_shas:
-                cached = cache_dir / "data" / sha
+                cached = cache_dir / "data" / sha[:2] / sha
                 assert cached.exists(), (
                     f"Pack {sha} missing from cache (combo={combo})"
                 )
