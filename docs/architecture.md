@@ -169,7 +169,11 @@ verified, self-describing cold storage volumes.
 ```
 LCSAS_BD_2026_003/
 ├── data/                          # Pack files (hardlinked from mirror)
-│   ├── aabbccdd...                # Flat layout (SHA-256 hash as filename)
+│   ├── aa/                        # Two-level layout (first 2 hex chars)
+│   │   ├── aabbccdd...            # Full SHA-256 hash as filename
+│   │   └── ...
+│   ├── bb/
+│   │   └── ...
 │   └── ...
 ├── metadata/
 │   ├── family/                    # Per-repo metadata

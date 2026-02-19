@@ -85,6 +85,20 @@ dd if=/dev/urandom bs=64 count=1 2>/dev/null | base64 > /root/keys/personal.key
 chmod 600 /root/keys/*.key
 ```
 
+### Key Backup (Critical)
+
+**Your encryption keys are the single point of total failure.** If the keys are
+lost, all archived data is permanently unrecoverable — no matter how many disc
+copies exist. Back up keys to at least two of the following:
+
+- **Paper key** — `base64` the key file, print it, laminate, store in a safe
+- **Separate USB drive** — store in a fire-rated safe or safe deposit box
+- **Cryptosteel / Coldcard** — metal seed backup resistant to fire and flood
+- **Trusted family member** — sealed envelope at a relative's home
+
+Keys must **never** be stored on the same media as the archive data. The
+meta-volume intentionally excludes key files.
+
 ### 3. Initialize Rustic Repositories (Local Mirrors)
 
 LCSAS uses Rustic to create deduplicated, encrypted local mirrors. Each mirror is a permanent hot tier that persists on your server.
@@ -489,6 +503,20 @@ python3 -m lcsas restore plan <snapshot-id>
 python3 -m lcsas restore exec <snapshot-id> /target \
   --password-file ~/safe/family.key
 ```
+
+### Platform Limitations
+
+The meta-volume bundles **Linux x86_64 ELF binaries** and their shared
+libraries. It will only work on recovery machines that are:
+
+- **Architecture:** x86_64 (AMD64)
+- **OS:** Linux with compatible glibc (glibc-family libs like `libc.so`,
+  `libpthread.so`, `libm.so` are NOT bundled — they must be on the host)
+- **Kernel:** 3.x+ (any modern Linux)
+
+For ARM64, RISC-V, or non-Linux recovery, you would need to install `restic`,
+`xorriso`, and Python from the target platform's package manager, then use the
+bundled LCSAS source code directly.
 
 ### Operational Recommendation
 

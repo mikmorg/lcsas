@@ -259,54 +259,6 @@ def get_archive_status_summary(
     }
 
 
-# ---------------------------------------------------------------------------
-# Location-aware queries
-# ---------------------------------------------------------------------------
-
-
-def get_packs_at_location(
-    conn: sqlite3.Connection,
-    location: str,
-) -> set[int]:
-    """Return set of pack_ids that have at least one ACTIVE copy at location."""
-    rows = conn.execute(
-        """SELECT DISTINCT vp.pack_id
-           FROM volume_packs vp
-           JOIN volume_copies vc ON vc.volume_id = vp.volume_id
-           WHERE vc.location = ?
-             AND vc.status = 'ACTIVE'""",
-        (location,),
-    ).fetchall()
-    return {row["pack_id"] for row in rows}
-
-
-def get_packs_missing_at_location(
-    conn: sqlite3.Connection,
-    location: str,
-) -> list[Pack]:
-    """Return non-pruned packs that have at least one volume assignment
-    but no ACTIVE copy at the specified location.
-
-    This identifies packs that need to be burned for a particular location
-    to bring it up to date.
-    """
-    rows = conn.execute(
-        """SELECT p.* FROM packs p
-           WHERE p.is_pruned = 0
-             AND p.pack_id IN (SELECT pack_id FROM volume_packs)
-             AND p.pack_id NOT IN (
-                 SELECT DISTINCT vp.pack_id
-                 FROM volume_packs vp
-                 JOIN volume_copies vc ON vc.volume_id = vp.volume_id
-                 WHERE vc.location = ?
-                   AND vc.status = 'ACTIVE'
-             )
-           ORDER BY p.created_at""",
-        (location,),
-    ).fetchall()
-    return [_row_to_pack(r) for r in rows]
-
-
 def get_unarchived_or_missing_at_location(
     conn: sqlite3.Connection,
     location: str,
@@ -329,38 +281,6 @@ def get_unarchived_or_missing_at_location(
         (location,),
     ).fetchall()
     return [_row_to_pack(r) for r in rows]
-
-
-def get_location_summary(
-    conn: sqlite3.Connection,
-) -> list[dict[str, object]]:
-    """Summary of each location: volume count, pack count, packs behind."""
-    total_packs_row = conn.execute(
-        "SELECT COUNT(*) FROM packs WHERE is_pruned = 0"
-    ).fetchone()
-    total_packs = int(total_packs_row[0]) if total_packs_row else 0
-
-    rows = conn.execute(
-        """SELECT
-               vc.location,
-               COUNT(DISTINCT vc.volume_id) AS volume_count,
-               COUNT(DISTINCT vp.pack_id) AS pack_count
-           FROM volume_copies vc
-           JOIN volume_packs vp ON vp.volume_id = vc.volume_id
-           WHERE vc.status = 'ACTIVE'
-           GROUP BY vc.location
-           ORDER BY vc.location"""
-    ).fetchall()
-
-    return [
-        {
-            "location": r["location"],
-            "volumes": int(r["volume_count"]),
-            "packs": int(r["pack_count"]),
-            "missing": total_packs - int(r["pack_count"]),
-        }
-        for r in rows
-    ]
 
 
 # ---------------------------------------------------------------------------
