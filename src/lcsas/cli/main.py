@@ -48,6 +48,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     repo_sub.add_parser("list", help="List registered repositories.")
 
+    # --- scan ---
+    scan_p = subparsers.add_parser(
+        "scan",
+        help="Scan mirrors for new packs and register them in the catalog.",
+    )
+    scan_p.add_argument(
+        "--repo", type=str, default=None, nargs="*",
+        help="Specific repository names to scan (default: all).",
+    )
+
     # --- status ---
     subparsers.add_parser("status", help="Show archive status summary.")
 
@@ -234,6 +244,55 @@ def cmd_repo_list(args: argparse.Namespace) -> int:
 
     for repo in repos:
         print(f"  {repo.name:<20} {repo.repo_id}  {repo.mirror_path}")
+    return 0
+
+
+def cmd_scan(args: argparse.Namespace) -> int:
+    """Scan mirrors for new packs and register them in the catalog."""
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import get_connection
+    from lcsas.db.queries import get_archive_status_summary
+    from lcsas.db.schema import create_all
+    from lcsas.packs.delta import DeltaAnalyzer
+    from lcsas.packs.scanner import scan_mirror_packs
+
+    config = load_config(args.config)
+    conn = get_connection(config.db_path if args.db is None else args.db)
+    create_all(conn)
+
+    repo_filter = set(args.repo) if args.repo else None
+    total_new = 0
+    total_scanned = 0
+
+    for repo_name, repo_cfg in config.repositories.items():
+        if repo_filter and repo_name not in repo_filter:
+            continue
+
+        mirror_path = repo_cfg.mirror_path
+        packs_on_disk = scan_mirror_packs(mirror_path)
+        total_scanned += len(packs_on_disk)
+
+        analyzer = DeltaAnalyzer(conn, packs_on_disk, repo_name)
+        new_packs = analyzer.register_new_packs()
+        unarchived = analyzer.get_unarchived()
+        unarchived_bytes = analyzer.get_total_unarchived_bytes()
+
+        total_new += len(new_packs)
+
+        print(f"  {repo_name}:")
+        print(f"    Packs on disk:  {len(packs_on_disk)}")
+        print(f"    Newly registered: {len(new_packs)}")
+        print(f"    Unarchived:     {len(unarchived)} ({unarchived_bytes:,} bytes)")
+
+    summary = get_archive_status_summary(conn)
+    conn.close()
+
+    print(f"\nTotal scanned: {total_scanned} packs across "
+          f"{len(config.repositories)} repos")
+    print(f"New packs registered: {total_new}")
+    print(f"Archive: {summary['total']} total, "
+          f"{summary['archived']} archived, "
+          f"{summary['unarchived']} unarchived")
     return 0
 
 
@@ -532,6 +591,8 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_repo_add(args)
         elif args.repo_command == "list":
             return cmd_repo_list(args)
+    elif args.command == "scan":
+        return cmd_scan(args)
     elif args.command == "status":
         return cmd_status(args)
     elif args.command == "db" and args.db_command == "export":
