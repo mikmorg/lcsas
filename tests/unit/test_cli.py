@@ -44,10 +44,11 @@ class TestCLIParsing:
         assert args.skip_ecc is True
 
     def test_restore_plan(self):
-        args = self.parser.parse_args(["restore", "plan", "snap123"])
+        args = self.parser.parse_args(["restore", "plan", "snap123", "--repo", "family"])
         assert args.command == "restore"
         assert args.restore_command == "plan"
         assert args.snapshot_id == "snap123"
+        assert args.repo == "family"
 
     def test_consolidate(self):
         args = self.parser.parse_args([

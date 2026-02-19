@@ -140,14 +140,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     plan_p = restore_sub.add_parser("plan", help="Generate a restore pick list.")
     plan_p.add_argument("snapshot_id", help="Rustic snapshot ID to restore.")
+    plan_p.add_argument("--repo", type=str, required=True,
+                        help="Repository name containing the snapshot.")
 
     exec_p = restore_sub.add_parser("exec", help="Execute a restore.")
     exec_p.add_argument("snapshot_id", help="Rustic snapshot ID to restore.")
     exec_p.add_argument("target_path", type=Path, help="Target directory for restored files.")
+    exec_p.add_argument("--repo", type=str, required=True,
+                        help="Repository name containing the snapshot.")
     exec_p.add_argument("--password-file", type=Path, required=True,
                         help="Path to the repository password file.")
     exec_p.add_argument("--cache-dir", type=Path, default=None,
                         help="Directory for the restore cache.")
+    exec_p.add_argument("--volume-dir", type=Path, default=None,
+                        help="Directory containing extracted volume data "
+                             "(skips interactive disc prompts).")
 
     # --- consolidate ---
     cons_p = subparsers.add_parser("consolidate", help="Merge volumes into a larger one.")
@@ -582,6 +589,183 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_restore_plan(args: argparse.Namespace) -> int:
+    """Generate a restore pick list for a snapshot."""
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import get_connection
+    from lcsas.db.schema import create_all
+    from lcsas.restore.planner import RestorePlanner
+    from lcsas.rustic.wrapper import SubprocessRusticRunner
+
+    config = load_config(args.config)
+    conn = get_connection(config.db_path if args.db is None else args.db)
+    create_all(conn)
+
+    # Resolve repo config
+    repo_name = args.repo
+    if repo_name not in config.repositories:
+        print(f"Error: repository '{repo_name}' not found in config.",
+              file=sys.stderr)
+        print(f"  Available: {', '.join(config.repositories.keys())}",
+              file=sys.stderr)
+        conn.close()
+        return 1
+
+    repo_cfg = config.repositories[repo_name]
+
+    # Get required pack hashes via rustic dry-run
+    runner = SubprocessRusticRunner()
+    plan = runner.restore_dry_run(
+        snapshot_id=args.snapshot_id,
+        repo_path=repo_cfg.mirror_path,
+        password_file=repo_cfg.password_file,
+    )
+
+    # Generate pick list
+    planner = RestorePlanner(conn)
+    pick_list = planner.generate_pick_list(plan.required_pack_hashes)
+    conn.close()
+
+    # Display results
+    print(f"Restore Pick List for snapshot {args.snapshot_id}")
+    print(f"  Repository: {repo_name}")
+    print(f"  Required packs: {len(plan.required_pack_hashes)}")
+    print()
+
+    if pick_list.volumes:
+        for label, packs in sorted(pick_list.volumes.items()):
+            total = sum(p.size_bytes for p in packs)
+            print(f"  {label:<30} {len(packs):>4} packs  "
+                  f"({total / (1024 * 1024):.1f} MB)")
+        print()
+        print(f"  Total: {pick_list.total_packs} packs across "
+              f"{len(pick_list.volumes)} volumes "
+              f"({pick_list.total_bytes / (1024 * 1024):.1f} MB)")
+
+    if pick_list.missing_packs:
+        print(f"\n  WARNING: {len(pick_list.missing_packs)} packs not found "
+              f"in any volume!")
+        for sha in pick_list.missing_packs[:10]:
+            print(f"    {sha}")
+        if len(pick_list.missing_packs) > 10:
+            print(f"    ... and {len(pick_list.missing_packs) - 10} more")
+
+    return 0
+
+
+def cmd_restore_exec(args: argparse.Namespace) -> int:
+    """Execute a restore operation."""
+    import tempfile
+
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import get_connection
+    from lcsas.db.schema import create_all
+    from lcsas.restore.executor import RestoreExecutor
+    from lcsas.restore.planner import RestorePlanner
+    from lcsas.rustic.wrapper import SubprocessRusticRunner
+    from lcsas.utils.fs import ensure_dir
+
+    config = load_config(args.config)
+    conn = get_connection(config.db_path if args.db is None else args.db)
+    create_all(conn)
+
+    repo_name = args.repo
+    if repo_name not in config.repositories:
+        print(f"Error: repository '{repo_name}' not found in config.",
+              file=sys.stderr)
+        conn.close()
+        return 1
+
+    repo_cfg = config.repositories[repo_name]
+    runner = SubprocessRusticRunner()
+
+    # Get required pack hashes
+    plan = runner.restore_dry_run(
+        snapshot_id=args.snapshot_id,
+        repo_path=repo_cfg.mirror_path,
+        password_file=args.password_file,
+    )
+
+    # Generate pick list
+    planner = RestorePlanner(conn)
+    pick_list = planner.generate_pick_list(plan.required_pack_hashes)
+    conn.close()
+
+    if pick_list.missing_packs:
+        print(f"Error: {len(pick_list.missing_packs)} required packs not "
+              f"found in any volume.", file=sys.stderr)
+        return 1
+
+    # Set up cache directory
+    cache_dir = args.cache_dir
+    cleanup_cache = False
+    if cache_dir is None:
+        cache_dir = Path(tempfile.mkdtemp(prefix="lcsas-restore-"))
+        cleanup_cache = True
+    ensure_dir(cache_dir)
+
+    executor = RestoreExecutor(runner)
+
+    # Prepare cache with metadata from the repo mirror
+    metadata_source = repo_cfg.mirror_path
+    executor.prepare_cache(cache_dir, metadata_source)
+
+    print(f"Restore cache: {cache_dir}")
+    print(f"Need packs from {len(pick_list.volumes)} volumes")
+
+    # Ingest packs from volumes
+    if args.volume_dir:
+        # Non-interactive: all volume data is pre-extracted in one directory
+        vol_dir = args.volume_dir
+        for label, packs in pick_list.volumes.items():
+            pack_hashes = [p.sha256 for p in packs]
+            # Try label-named subdirectory first, then the dir itself
+            vol_path = vol_dir / label
+            if not vol_path.is_dir():
+                vol_path = vol_dir
+            ingested = executor.ingest_volume(cache_dir, vol_path, pack_hashes)
+            print(f"  {label}: ingested {ingested} packs")
+    else:
+        # Interactive: prompt user to mount each volume
+        for label, packs in sorted(pick_list.volumes.items()):
+            pack_hashes = [p.sha256 for p in packs]
+            while True:
+                mount_path = input(
+                    f"\nMount volume '{label}' and enter mount path "
+                    f"(or 'skip' to skip): "
+                ).strip()
+                if mount_path.lower() == "skip":
+                    print(f"  Skipping {label}")
+                    break
+                vol_path = Path(mount_path)
+                if not vol_path.is_dir():
+                    print(f"  '{mount_path}' is not a directory, try again.")
+                    continue
+                ingested = executor.ingest_volume(
+                    cache_dir, vol_path, pack_hashes,
+                )
+                print(f"  Ingested {ingested} packs from {label}")
+                break
+
+    # Execute restore
+    target = args.target_path.resolve()
+    print(f"\nRestoring snapshot {args.snapshot_id} → {target}")
+    executor.execute_restore(
+        cache_dir=cache_dir,
+        snapshot_id=args.snapshot_id,
+        target_path=target,
+        password_file=args.password_file,
+    )
+    print("Restore complete!")
+
+    # Cleanup temporary cache
+    if cleanup_cache:
+        from lcsas.utils.fs import safe_remove_tree
+        safe_remove_tree(cache_dir)
+
+    return 0
+
+
 def dispatch(args: argparse.Namespace) -> int:
     """Route parsed args to the appropriate command handler."""
     if args.command == "init":
@@ -610,12 +794,17 @@ def dispatch(args: argparse.Namespace) -> int:
     elif args.command == "catalog":
         if args.catalog_command == "import-receipts":
             return cmd_catalog_import(args)
+    elif args.command == "restore":
+        if args.restore_command == "plan":
+            return cmd_restore_plan(args)
+        elif args.restore_command == "exec":
+            return cmd_restore_exec(args)
     elif args.command == "meta":
         if args.meta_command == "build":
             return cmd_meta_build(args)
 
-    # Commands requiring more infrastructure (restore, consolidate, verify)
-    # will be wired up once all dependencies exist
+    # Commands requiring more infrastructure (consolidate, verify)
+    # will be wired up in later phases
     print(f"Command '{args.command}' not yet implemented.", file=sys.stderr)
     return 1
 
