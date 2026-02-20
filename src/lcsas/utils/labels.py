@@ -13,17 +13,31 @@ def generate_volume_label(
 ) -> str:
     """Generate a human-readable volume label.
 
-    Format: {PREFIX}_{MEDIA}_{YYYY}_{SEQ:03d}
-    Example: LCSAS_BD_2026_001
+    Format: {PREFIX}_{MEDIA}_{YYYY}_{SEQ:04d}
+    Example: LCSAS_BD_2026_0001
+
+    Sequence numbers use 4 digits (up to 9999) and grow automatically
+    beyond that if needed.
     """
     year = datetime.now(UTC).strftime("%Y")
     media_short = media_type.replace("MDISC", "MD").replace("BDXL", "BX")
-    return f"{prefix}_{media_short}_{year}_{seq_num:03d}"
+    width = max(4, len(str(seq_num)))
+    return f"{prefix}_{media_short}_{year}_{seq_num:0{width}d}"
 
 
 def generate_uuid() -> str:
     """Generate a new UUID v4 string for volume identification."""
     return str(uuid.uuid4())
+
+
+def generate_session_id() -> str:
+    """Generate a collision-safe session ID.
+
+    Format: ISO timestamp (microseconds) + short UUID suffix.
+    """
+    ts = datetime.now(UTC).isoformat(timespec="microseconds")
+    short_uuid = uuid.uuid4().hex[:8]
+    return f"{ts}-{short_uuid}"
 
 
 def next_seq_num(existing_labels: list[str], prefix: str = "LCSAS") -> int:

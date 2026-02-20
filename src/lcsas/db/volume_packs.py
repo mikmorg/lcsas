@@ -22,13 +22,16 @@ def bulk_link_packs(
     conn: sqlite3.Connection,
     volume_id: int,
     pack_ids: list[int],
+    *,
+    commit: bool = True,
 ) -> None:
     """Link multiple packs to a volume in a single transaction."""
     conn.executemany(
         "INSERT OR IGNORE INTO volume_packs (volume_id, pack_id) VALUES (?, ?)",
         [(volume_id, pid) for pid in pack_ids],
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def unlink_pack_from_volume(

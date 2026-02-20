@@ -32,6 +32,8 @@ def create_session(
     media_type: str,
     staging_dir: str,
     session_id: str | None = None,
+    *,
+    commit: bool = True,
 ) -> BurnSession:
     """Create a new burn session."""
     if session_id is None:
@@ -41,7 +43,8 @@ def create_session(
            VALUES (?, ?, ?)""",
         (session_id, media_type, staging_dir),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return get_session(conn, session_id)
 
 
@@ -111,6 +114,8 @@ def add_session_volume(
     volume_id: int,
     iso_path: str,
     iso_sha256: str = "",
+    *,
+    commit: bool = True,
 ) -> SessionVolume:
     """Link a volume to a session with its ISO path."""
     conn.execute(
@@ -118,7 +123,8 @@ def add_session_volume(
            VALUES (?, ?, ?, ?)""",
         (session_id, volume_id, iso_path, iso_sha256),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return SessionVolume(
         session_id=session_id,
         volume_id=volume_id,

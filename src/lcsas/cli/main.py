@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import traceback
 from pathlib import Path
 
 from lcsas import __version__
@@ -27,6 +28,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--db", type=Path, default=None,
         help="Path to SQLite archive catalog (overrides config).",
+    )
+    parser.add_argument(
+        "--verbose", "-v", action="store_true", default=False,
+        help="Show full tracebacks on errors.",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -164,8 +169,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Target media type for consolidated volume.")
 
     # --- verify ---
-    verify_p = subparsers.add_parser("verify", help="Verify a volume.")
+    verify_p = subparsers.add_parser("verify", help="Verify a volume's ISO or disc.")
     verify_p.add_argument("volume_label", help="Label of the volume to verify.")
+    verify_p.add_argument("--iso", type=Path, default=None,
+                          help="Path to the ISO file (auto-detected from session if omitted).")
+    verify_p.add_argument("--disc", action="store_true", default=False,
+                          help="Verify a burned disc instead of an ISO file.")
+    verify_p.add_argument("--device", default="/dev/sr0",
+                          help="Optical drive device (default: /dev/sr0).")
 
     # --- db ---
     db_p = subparsers.add_parser("db", help="Database operations.")
@@ -202,8 +213,10 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     db_path = args.db_path
     conn = get_connection(db_path)
-    create_all(conn)
-    conn.close()
+    try:
+        create_all(conn)
+    finally:
+        conn.close()
     print(f"Initialized LCSAS database at {db_path}")
     return 0
 
@@ -217,17 +230,19 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
 
     db_path = args.db or Path("archive.db")
     conn = get_connection(db_path)
-    create_all(conn)
+    try:
+        create_all(conn)
 
-    repo_id = generate_uuid()
-    register_repo(
-        conn,
-        repo_id=repo_id,
-        name=args.name,
-        mirror_path=str(args.mirror_path.resolve()),
-        encryption_key_id="",
-    )
-    conn.close()
+        repo_id = generate_uuid()
+        register_repo(
+            conn,
+            repo_id=repo_id,
+            name=args.name,
+            mirror_path=str(args.mirror_path.resolve()),
+            encryption_key_id="",
+        )
+    finally:
+        conn.close()
     print(f"Registered repository '{args.name}' (id: {repo_id})")
     return 0
 
@@ -240,10 +255,11 @@ def cmd_repo_list(args: argparse.Namespace) -> int:
 
     db_path = args.db or Path("archive.db")
     conn = get_connection(db_path)
-    create_all(conn)
-
-    repos = list_repos(conn)
-    conn.close()
+    try:
+        create_all(conn)
+        repos = list_repos(conn)
+    finally:
+        conn.close()
 
     if not repos:
         print("No repositories registered.")
@@ -265,34 +281,43 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
     config = load_config(args.config)
     conn = get_connection(config.db_path if args.db is None else args.db)
-    create_all(conn)
+    try:
+        create_all(conn)
 
-    repo_filter = set(args.repo) if args.repo else None
-    total_new = 0
-    total_scanned = 0
+        repo_filter = set(args.repo) if args.repo else None
+        total_new = 0
+        total_scanned = 0
 
-    for repo_name, repo_cfg in config.repositories.items():
-        if repo_filter and repo_name not in repo_filter:
-            continue
+        # Warn about unknown repo names
+        if repo_filter:
+            unknown = repo_filter - set(config.repositories.keys())
+            for name in sorted(unknown):
+                print(f"Warning: repository '{name}' not found in config, skipping.",
+                      file=sys.stderr)
 
-        mirror_path = repo_cfg.mirror_path
-        packs_on_disk = scan_mirror_packs(mirror_path)
-        total_scanned += len(packs_on_disk)
+        for repo_name, repo_cfg in config.repositories.items():
+            if repo_filter and repo_name not in repo_filter:
+                continue
 
-        analyzer = DeltaAnalyzer(conn, packs_on_disk, repo_name)
-        new_packs = analyzer.register_new_packs()
-        unarchived = analyzer.get_unarchived()
-        unarchived_bytes = analyzer.get_total_unarchived_bytes()
+            mirror_path = repo_cfg.mirror_path
+            packs_on_disk = scan_mirror_packs(mirror_path)
+            total_scanned += len(packs_on_disk)
 
-        total_new += len(new_packs)
+            analyzer = DeltaAnalyzer(conn, packs_on_disk, repo_name)
+            new_packs = analyzer.register_new_packs()
+            unarchived = analyzer.get_unarchived()
+            unarchived_bytes = analyzer.get_total_unarchived_bytes()
 
-        print(f"  {repo_name}:")
-        print(f"    Packs on disk:  {len(packs_on_disk)}")
-        print(f"    Newly registered: {len(new_packs)}")
-        print(f"    Unarchived:     {len(unarchived)} ({unarchived_bytes:,} bytes)")
+            total_new += len(new_packs)
 
-    summary = get_archive_status_summary(conn)
-    conn.close()
+            print(f"  {repo_name}:")
+            print(f"    Packs on disk:  {len(packs_on_disk)}")
+            print(f"    Newly registered: {len(new_packs)}")
+            print(f"    Unarchived:     {len(unarchived)} ({unarchived_bytes:,} bytes)")
+
+        summary = get_archive_status_summary(conn)
+    finally:
+        conn.close()
 
     print(f"\nTotal scanned: {total_scanned} packs across "
           f"{len(config.repositories)} repos")
@@ -312,11 +337,13 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     db_path = args.db or Path("archive.db")
     conn = get_connection(db_path)
-    create_all(conn)
+    try:
+        create_all(conn)
 
-    summary = get_archive_status_summary(conn)
-    volumes = list_volumes(conn)
-    conn.close()
+        summary = get_archive_status_summary(conn)
+        volumes = list_volumes(conn)
+    finally:
+        conn.close()
 
     print(f"Packs: {summary['total']} total, "
           f"{summary['archived']} archived, "
@@ -338,21 +365,23 @@ def cmd_db_export(args: argparse.Namespace) -> int:
 
     db_path = args.db or Path("archive.db")
     conn = get_connection(db_path)
-    create_all(conn)
+    try:
+        create_all(conn)
 
-    export = {
-        "status": get_archive_status_summary(conn),
-        "volumes": [
-            {"label": v.label, "media_type": v.media_type,
-             "status": v.status, "location": v.location}
-            for v in list_volumes(conn)
-        ],
-        "repositories": [
-            {"repo_id": r.repo_id, "name": r.name, "mirror_path": r.mirror_path}
-            for r in list_repos(conn)
-        ],
-    }
-    conn.close()
+        export = {
+            "status": get_archive_status_summary(conn),
+            "volumes": [
+                {"label": v.label, "media_type": v.media_type,
+                 "status": v.status, "location": v.location}
+                for v in list_volumes(conn)
+            ],
+            "repositories": [
+                {"repo_id": r.repo_id, "name": r.name, "mirror_path": r.mirror_path}
+                for r in list_repos(conn)
+            ],
+        }
+    finally:
+        conn.close()
 
     print(json.dumps(export, indent=2))
     return 0
@@ -374,37 +403,44 @@ def cmd_stage(args: argparse.Namespace) -> int:
         return 1
 
     conn = get_connection(args.db or config.db_path)
-    create_all(conn)
+    try:
+        create_all(conn)
 
-    orch = BurnOrchestrator(
-        config, conn, SubprocessXorrisoRunner(), SubprocessDVDisasterRunner(),
-    )
+        orch = BurnOrchestrator(
+            config, conn, SubprocessXorrisoRunner(), SubprocessDVDisasterRunner(),
+        )
 
-    if args.clean:
-        session_ref = args.session or "latest"
-        orch.clean_session(session_ref)
-        print(f"Cleaned session: {session_ref}")
+        if args.clean:
+            session_ref = args.session or "latest"
+            orch.clean_session(session_ref)
+            print(f"Cleaned session: {session_ref}")
+            return 0
+
+        media_type = None
+        if args.media:
+            try:
+                media_type = MediaType[args.media]
+            except KeyError:
+                valid = ", ".join(m.name for m in MediaType)
+                print(f"Error: Unknown media type '{args.media}'. "
+                      f"Valid types: {valid}", file=sys.stderr)
+                return 1
+
+        result = orch.stage(
+            media_type=media_type,
+            for_location=args.for_location,
+            repo_ids=args.repo,
+            skip_ecc=args.skip_ecc,
+        )
+
+        print(f"Session: {result.session_id}")
+        print(f"Staged {len(result.manifests)} volume(s):")
+        for m in result.manifests:
+            iso_size = m.iso_path.stat().st_size if m.iso_path and m.iso_path.exists() else 0
+            print(f"  {m.iso_path}  ({iso_size / 1e9:.1f} GB, {len(m.selected_packs)} packs)")
+        print(f"Manifest: {result.staging_dir / 'session.json'}")
+    finally:
         conn.close()
-        return 0
-
-    media_type = None
-    if args.media:
-        media_type = MediaType[args.media]
-
-    result = orch.stage(
-        media_type=media_type,
-        for_location=args.for_location,
-        repo_ids=args.repo,
-        skip_ecc=args.skip_ecc,
-    )
-
-    print(f"Session: {result.session_id}")
-    print(f"Staged {len(result.manifests)} volume(s):")
-    for m in result.manifests:
-        iso_size = m.iso_path.stat().st_size if m.iso_path and m.iso_path.exists() else 0
-        print(f"  {m.iso_path}  ({iso_size / 1e9:.1f} GB, {len(m.selected_packs)} packs)")
-    print(f"Manifest: {result.staging_dir / 'session.json'}")
-    conn.close()
     return 0
 
 
@@ -423,23 +459,107 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
         return 1
 
     conn = get_connection(args.db or config.db_path)
-    create_all(conn)
+    try:
+        create_all(conn)
 
-    orch = BurnOrchestrator(
-        config, conn, SubprocessXorrisoRunner(), SubprocessDVDisasterRunner(),
-    )
+        orch = BurnOrchestrator(
+            config, conn, SubprocessXorrisoRunner(), SubprocessDVDisasterRunner(),
+        )
 
-    location = args.location or config.default_location
-    receipts = orch.burn_session(
-        session_ref=args.session,
-        location=location,
-        device=args.device,
-    )
+        location = args.location or config.default_location
+        receipts = orch.burn_session(
+            session_ref=args.session,
+            location=location,
+            device=args.device,
+        )
+    finally:
+        conn.close()
 
     print(f"Burned {len(receipts)} volume(s) to {location}:")
     for r in receipts:
         print(f"  {r.volume_label} → {r.pack_count} packs")
-    conn.close()
+    return 0
+
+
+def cmd_burn_legacy(args: argparse.Namespace) -> int:
+    """Legacy burn: stage + burn in a single command."""
+    from lcsas.burn.orchestrator import BurnOrchestrator
+    from lcsas.config.media import MediaType
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import get_connection
+    from lcsas.db.schema import create_all
+    from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+    from lcsas.iso.xorriso import SubprocessXorrisoRunner
+
+    config = load_config(args.config)
+    conn = get_connection(config.db_path if args.db is None else args.db)
+    try:
+        create_all(conn)
+
+        media_type = None
+        if args.media:
+            try:
+                media_type = MediaType[args.media]
+            except KeyError:
+                valid = ", ".join(m.name for m in MediaType)
+                print(f"Error: Unknown media type '{args.media}'. "
+                      f"Valid types: {valid}", file=sys.stderr)
+                return 1
+
+        orch = BurnOrchestrator(
+            config, conn, SubprocessXorrisoRunner(), SubprocessDVDisasterRunner(),
+        )
+
+        # Stage first
+        result = orch.stage(
+            media_type=media_type,
+            for_location=args.location,
+            repo_ids=args.repo,
+            skip_ecc=args.skip_ecc,
+        )
+        print(f"Session: {result.session_id}")
+        print(f"Staged {len(result.manifests)} volume(s)")
+
+        # Then burn
+        location = args.location or "default"
+        device = args.device or config.device
+        receipts = orch.burn_session(
+            session_ref=result.session_id,
+            location=location,
+            device=device,
+        )
+    finally:
+        conn.close()
+
+    print(f"Burned {len(receipts)} volume(s) to {location}:")
+    for r in receipts:
+        print(f"  {r.volume_label} → {r.pack_count} packs")
+    return 0
+
+
+def cmd_burn_iso(args: argparse.Namespace) -> int:
+    """Burn a single ISO file to optical media (standalone)."""
+    from lcsas.iso.xorriso import SubprocessXorrisoRunner
+
+    iso_path = args.iso_path
+    if not iso_path.exists():
+        print(f"Error: ISO file not found: {iso_path}", file=sys.stderr)
+        return 1
+
+    runner = SubprocessXorrisoRunner()
+    device = args.device
+
+    print(f"Burning {iso_path} to {device} ...")
+    runner.burn_iso(iso_path, device=device)
+    print("Burn complete.")
+
+    if args.verify:
+        print(f"Verifying disc on {device} ...")
+        ok = runner.verify_disc(device=device)
+        print(f"  Verify: {'PASS' if ok else 'FAIL'}")
+        if not ok:
+            return 1
+
     return 0
 
 
@@ -455,68 +575,66 @@ def cmd_location(args: argparse.Namespace) -> int:
         return 1
 
     conn = get_connection(args.db or config.db_path)
-    create_all(conn)
+    try:
+        create_all(conn)
 
-    if args.location_command == "list":
-        from lcsas.db.locations import list_locations
-        from lcsas.db.queries import get_location_summary
+        if args.location_command == "list":
+            from lcsas.db.locations import list_locations
+            from lcsas.db.queries import get_location_summary
 
-        locations = list_locations(conn)
-        if not locations:
-            print("No locations registered.")
-            conn.close()
-            return 0
+            locations = list_locations(conn)
+            if not locations:
+                print("No locations registered.")
+                return 0
 
-        summaries = get_location_summary(conn)
-        summary_map = {s["location"]: s for s in summaries}
+            summaries = get_location_summary(conn)
+            summary_map = {s["location"]: s for s in summaries}
 
-        for loc in locations:
-            s = summary_map.get(loc.name, {"volumes": 0, "packs": 0, "missing": 0})
-            status = "all current" if s["missing"] == 0 else f"{s['missing']} packs behind"
-            print(f"  {loc.name:<20} {s['volumes']} volumes, {s['packs']} packs, {status}")
+            for loc in locations:
+                s = summary_map.get(loc.name, {"volumes": 0, "packs": 0, "missing": 0})
+                status = "all current" if s["missing"] == 0 else f"{s['missing']} packs behind"
+                print(f"  {loc.name:<20} {s['volumes']} volumes, {s['packs']} packs, {status}")
 
-    elif args.location_command == "add":
-        from lcsas.db.locations import create_location
-        create_location(conn, args.name, args.description)
-        print(f"Added location: {args.name}")
+        elif args.location_command == "add":
+            from lcsas.db.locations import create_location
+            create_location(conn, args.name, args.description)
+            print(f"Added location: {args.name}")
 
-    elif args.location_command == "status":
-        from lcsas.db.queries import get_packs_missing_at_location, get_packs_at_location
+        elif args.location_command == "status":
+            from lcsas.db.queries import get_packs_missing_at_location, get_packs_at_location
 
-        at_loc = get_packs_at_location(conn, args.name)
-        missing = get_packs_missing_at_location(conn, args.name)
+            at_loc = get_packs_at_location(conn, args.name)
+            missing = get_packs_missing_at_location(conn, args.name)
 
-        print(f"Location: {args.name}")
-        print(f"  Packs archived here: {len(at_loc)}")
-        print(f"  Packs missing: {len(missing)}")
-        if missing:
-            # Group by repo
-            by_repo: dict[str, list] = {}
-            for p in missing:
-                repo = p.repo_id or "unknown"
-                by_repo.setdefault(repo, []).append(p)
-            for repo, packs in sorted(by_repo.items()):
-                total_size = sum(p.size_bytes for p in packs)
-                print(f"    repo={repo}: {len(packs)} packs ({total_size / 1e9:.1f} GB)")
+            print(f"Location: {args.name}")
+            print(f"  Packs archived here: {len(at_loc)}")
+            print(f"  Packs missing: {len(missing)}")
+            if missing:
+                # Group by repo
+                by_repo: dict[str, list] = {}
+                for p in missing:
+                    repo = p.repo_id or "unknown"
+                    by_repo.setdefault(repo, []).append(p)
+                for repo, packs in sorted(by_repo.items()):
+                    total_size = sum(p.size_bytes for p in packs)
+                    print(f"    repo={repo}: {len(packs)} packs ({total_size / 1e9:.1f} GB)")
 
-    elif args.location_command == "move":
-        from lcsas.db.volume_copies import move_volume_copy
-        from lcsas.db.volumes import get_volume_by_label
+        elif args.location_command == "move":
+            from lcsas.db.volume_copies import move_volume_copy
+            from lcsas.db.volumes import get_volume_by_label
 
-        vol = get_volume_by_label(conn, args.volume_label)
-        if vol is None:
-            print(f"Error: Volume '{args.volume_label}' not found.", file=sys.stderr)
-            conn.close()
+            vol = get_volume_by_label(conn, args.volume_label)
+            if vol is None:
+                print(f"Error: Volume '{args.volume_label}' not found.", file=sys.stderr)
+                return 1
+            move_volume_copy(conn, vol.volume_id, args.from_location, args.to_location)
+            print(f"Moved {args.volume_label}: {args.from_location} → {args.to_location}")
+
+        else:
+            print("Usage: lcsas location {list|add|status|move}", file=sys.stderr)
             return 1
-        move_volume_copy(conn, vol.volume_id, args.from_location, args.to_location)
-        print(f"Moved {args.volume_label}: {args.from_location} → {args.to_location}")
-
-    else:
-        print("Usage: lcsas location {list|add|status|move}", file=sys.stderr)
+    finally:
         conn.close()
-        return 1
-
-    conn.close()
     return 0
 
 
@@ -535,31 +653,142 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
         return 1
 
     conn = get_connection(args.db or config.db_path)
-    create_all(conn)
+    try:
+        create_all(conn)
 
-    imported = 0
-    for receipt_file in args.receipt_files:
-        with open(receipt_file) as f:
-            receipt = json.load(f)
+        imported = 0
+        for receipt_file in args.receipt_files:
+            with open(receipt_file) as f:
+                receipt = json.load(f)
 
-        vol = get_volume_by_label(conn, receipt["volume_label"])
-        if vol is None:
-            print(f"Warning: Volume '{receipt['volume_label']}' not found, skipping.",
-                  file=sys.stderr)
-            continue
+            # Validate required receipt fields
+            missing = [k for k in ("volume_label", "location") if k not in receipt]
+            if missing:
+                print(f"Warning: Receipt '{receipt_file}' missing keys: "
+                      f"{', '.join(missing)}, skipping.", file=sys.stderr)
+                continue
 
-        ensure_location(conn, receipt["location"])
-        add_volume_copy(
-            conn,
-            volume_id=vol.volume_id,
-            location=receipt["location"],
-            burn_date=receipt.get("burn_date", ""),
-        )
-        imported += 1
+            vol = get_volume_by_label(conn, receipt["volume_label"])
+            if vol is None:
+                print(f"Warning: Volume '{receipt['volume_label']}' not found, skipping.",
+                      file=sys.stderr)
+                continue
+
+            ensure_location(conn, receipt["location"])
+            add_volume_copy(
+                conn,
+                volume_id=vol.volume_id,
+                location=receipt["location"],
+                burn_date=receipt.get("burn_date", ""),
+            )
+            imported += 1
+    finally:
+        conn.close()
 
     print(f"Imported {imported} receipt(s).")
-    conn.close()
     return 0
+
+
+def cmd_consolidate(args: argparse.Namespace) -> int:
+    """Plan and display volume consolidation."""
+    from lcsas.config.media import MediaType
+    from lcsas.config.settings import load_config
+    from lcsas.consolidate.merger import VolumeMerger
+    from lcsas.db.connection import get_connection
+    from lcsas.db.schema import create_all
+
+    config = load_config(args.config) if args.config else None
+    db_path = args.db or (config.db_path if config else Path("archive.db"))
+    conn = get_connection(db_path)
+    try:
+        create_all(conn)
+
+        try:
+            media_type = MediaType[args.target_media]
+        except KeyError:
+            valid = ", ".join(m.name for m in MediaType)
+            print(f"Error: Unknown media type '{args.target_media}'. "
+                  f"Valid types: {valid}", file=sys.stderr)
+            return 1
+
+        merger = VolumeMerger(conn)
+        plan = merger.plan_consolidation(args.volume_ids, media_type)
+    finally:
+        conn.close()
+
+    print("Consolidation Plan:")
+    print(f"  Source volumes: {', '.join(plan.source_labels)}")
+    print(f"  Active packs:  {len(plan.active_packs)}")
+    print(f"  Total size:    {plan.total_active_bytes / 1e9:.1f} GB")
+    print(f"  Target media:  {plan.target_media_type.name}")
+    print(f"  Volumes needed: {plan.volumes_needed}")
+    print()
+    print("To execute: stage the active packs onto new volumes,")
+    print("then burn and deprecate the source volumes.")
+    return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    """Verify a volume's ISO image or burned disc."""
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import get_connection
+    from lcsas.db.schema import create_all
+    from lcsas.db.volumes import get_volume_by_label
+
+    config = load_config(args.config) if args.config else None
+    db_path = args.db or (config.db_path if config else Path("archive.db"))
+    conn = get_connection(db_path)
+    try:
+        create_all(conn)
+
+        vol = get_volume_by_label(conn, args.volume_label)
+        if vol is None:
+            print(f"Error: Volume '{args.volume_label}' not found.",
+                  file=sys.stderr)
+            return 1
+
+        # Find ISO path from session_volumes if not explicitly provided
+        iso_path = args.iso
+        if iso_path is None and not args.disc:
+            row = conn.execute(
+                "SELECT iso_path FROM session_volumes WHERE volume_id = ? "
+                "ORDER BY rowid DESC LIMIT 1",
+                (vol.volume_id,),
+            ).fetchone()
+            if row and row["iso_path"]:
+                iso_path = Path(row["iso_path"])
+            else:
+                print("Error: No ISO path found for this volume. "
+                      "Use --iso to specify one, or --disc to verify a burned disc.",
+                      file=sys.stderr)
+                return 1
+    finally:
+        conn.close()
+
+    passed = True
+
+    if args.disc:
+        from lcsas.iso.xorriso import SubprocessXorrisoRunner
+        runner = SubprocessXorrisoRunner()
+        print(f"Verifying disc on {args.device} ...")
+        ok = runner.verify_disc(device=args.device)
+        print(f"  Disc verify: {'PASS' if ok else 'FAIL'}")
+        if not ok:
+            passed = False
+    else:
+        if not iso_path.exists():
+            print(f"Error: ISO file not found: {iso_path}", file=sys.stderr)
+            return 1
+
+        from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+        dvd_runner = SubprocessDVDisasterRunner()
+        print(f"Verifying ISO: {iso_path}")
+        ok = dvd_runner.verify_iso(iso_path)
+        print(f"  ECC verify: {'PASS' if ok else 'FAIL'}")
+        if not ok:
+            passed = False
+
+    return 0 if passed else 1
 
 
 def cmd_meta_build(args: argparse.Namespace) -> int:
@@ -599,32 +828,33 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
 
     config = load_config(args.config)
     conn = get_connection(config.db_path if args.db is None else args.db)
-    create_all(conn)
+    try:
+        create_all(conn)
 
-    # Resolve repo config
-    repo_name = args.repo
-    if repo_name not in config.repositories:
-        print(f"Error: repository '{repo_name}' not found in config.",
-              file=sys.stderr)
-        print(f"  Available: {', '.join(config.repositories.keys())}",
-              file=sys.stderr)
+        # Resolve repo config
+        repo_name = args.repo
+        if repo_name not in config.repositories:
+            print(f"Error: repository '{repo_name}' not found in config.",
+                  file=sys.stderr)
+            print(f"  Available: {', '.join(config.repositories.keys())}",
+                  file=sys.stderr)
+            return 1
+
+        repo_cfg = config.repositories[repo_name]
+
+        # Get required pack hashes via rustic dry-run
+        runner = SubprocessRusticRunner()
+        plan = runner.restore_dry_run(
+            snapshot_id=args.snapshot_id,
+            repo_path=repo_cfg.mirror_path,
+            password_file=repo_cfg.password_file,
+        )
+
+        # Generate pick list
+        planner = RestorePlanner(conn)
+        pick_list = planner.generate_pick_list(plan.required_pack_hashes)
+    finally:
         conn.close()
-        return 1
-
-    repo_cfg = config.repositories[repo_name]
-
-    # Get required pack hashes via rustic dry-run
-    runner = SubprocessRusticRunner()
-    plan = runner.restore_dry_run(
-        snapshot_id=args.snapshot_id,
-        repo_path=repo_cfg.mirror_path,
-        password_file=repo_cfg.password_file,
-    )
-
-    # Generate pick list
-    planner = RestorePlanner(conn)
-    pick_list = planner.generate_pick_list(plan.required_pack_hashes)
-    conn.close()
 
     # Display results
     print(f"Restore Pick List for snapshot {args.snapshot_id}")
@@ -667,29 +897,30 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
 
     config = load_config(args.config)
     conn = get_connection(config.db_path if args.db is None else args.db)
-    create_all(conn)
+    try:
+        create_all(conn)
 
-    repo_name = args.repo
-    if repo_name not in config.repositories:
-        print(f"Error: repository '{repo_name}' not found in config.",
-              file=sys.stderr)
+        repo_name = args.repo
+        if repo_name not in config.repositories:
+            print(f"Error: repository '{repo_name}' not found in config.",
+                  file=sys.stderr)
+            return 1
+
+        repo_cfg = config.repositories[repo_name]
+        runner = SubprocessRusticRunner()
+
+        # Get required pack hashes
+        plan = runner.restore_dry_run(
+            snapshot_id=args.snapshot_id,
+            repo_path=repo_cfg.mirror_path,
+            password_file=args.password_file,
+        )
+
+        # Generate pick list
+        planner = RestorePlanner(conn)
+        pick_list = planner.generate_pick_list(plan.required_pack_hashes)
+    finally:
         conn.close()
-        return 1
-
-    repo_cfg = config.repositories[repo_name]
-    runner = SubprocessRusticRunner()
-
-    # Get required pack hashes
-    plan = runner.restore_dry_run(
-        snapshot_id=args.snapshot_id,
-        repo_path=repo_cfg.mirror_path,
-        password_file=args.password_file,
-    )
-
-    # Generate pick list
-    planner = RestorePlanner(conn)
-    pick_list = planner.generate_pick_list(plan.required_pack_hashes)
-    conn.close()
 
     if pick_list.missing_packs:
         print(f"Error: {len(pick_list.missing_packs)} required packs not "
@@ -704,64 +935,65 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         cleanup_cache = True
     ensure_dir(cache_dir)
 
-    executor = RestoreExecutor(runner)
+    try:
+        executor = RestoreExecutor(runner)
 
-    # Prepare cache with metadata from the repo mirror
-    metadata_source = repo_cfg.mirror_path
-    executor.prepare_cache(cache_dir, metadata_source)
+        # Prepare cache with metadata from the repo mirror
+        metadata_source = repo_cfg.mirror_path
+        executor.prepare_cache(cache_dir, metadata_source)
 
-    print(f"Restore cache: {cache_dir}")
-    print(f"Need packs from {len(pick_list.volumes)} volumes")
+        print(f"Restore cache: {cache_dir}")
+        print(f"Need packs from {len(pick_list.volumes)} volumes")
 
-    # Ingest packs from volumes
-    if args.volume_dir:
-        # Non-interactive: all volume data is pre-extracted in one directory
-        vol_dir = args.volume_dir
-        for label, packs in pick_list.volumes.items():
-            pack_hashes = [p.sha256 for p in packs]
-            # Try label-named subdirectory first, then the dir itself
-            vol_path = vol_dir / label
-            if not vol_path.is_dir():
-                vol_path = vol_dir
-            ingested = executor.ingest_volume(cache_dir, vol_path, pack_hashes)
-            print(f"  {label}: ingested {ingested} packs")
-    else:
-        # Interactive: prompt user to mount each volume
-        for label, packs in sorted(pick_list.volumes.items()):
-            pack_hashes = [p.sha256 for p in packs]
-            while True:
-                mount_path = input(
-                    f"\nMount volume '{label}' and enter mount path "
-                    f"(or 'skip' to skip): "
-                ).strip()
-                if mount_path.lower() == "skip":
-                    print(f"  Skipping {label}")
-                    break
-                vol_path = Path(mount_path)
+        # Ingest packs from volumes
+        if args.volume_dir:
+            # Non-interactive: all volume data is pre-extracted in one directory
+            vol_dir = args.volume_dir
+            for label, packs in pick_list.volumes.items():
+                pack_hashes = [p.sha256 for p in packs]
+                # Try label-named subdirectory first, then the dir itself
+                vol_path = vol_dir / label
                 if not vol_path.is_dir():
-                    print(f"  '{mount_path}' is not a directory, try again.")
-                    continue
-                ingested = executor.ingest_volume(
-                    cache_dir, vol_path, pack_hashes,
-                )
-                print(f"  Ingested {ingested} packs from {label}")
-                break
+                    vol_path = vol_dir
+                ingested = executor.ingest_volume(cache_dir, vol_path, pack_hashes)
+                print(f"  {label}: ingested {ingested} packs")
+        else:
+            # Interactive: prompt user to mount each volume
+            for label, packs in sorted(pick_list.volumes.items()):
+                pack_hashes = [p.sha256 for p in packs]
+                while True:
+                    mount_path = input(
+                        f"\nMount volume '{label}' and enter mount path "
+                        f"(or 'skip' to skip): "
+                    ).strip()
+                    if mount_path.lower() == "skip":
+                        print(f"  Skipping {label}")
+                        break
+                    vol_path = Path(mount_path)
+                    if not vol_path.is_dir():
+                        print(f"  '{mount_path}' is not a directory, try again.")
+                        continue
+                    ingested = executor.ingest_volume(
+                        cache_dir, vol_path, pack_hashes,
+                    )
+                    print(f"  Ingested {ingested} packs from {label}")
+                    break
 
-    # Execute restore
-    target = args.target_path.resolve()
-    print(f"\nRestoring snapshot {args.snapshot_id} → {target}")
-    executor.execute_restore(
-        cache_dir=cache_dir,
-        snapshot_id=args.snapshot_id,
-        target_path=target,
-        password_file=args.password_file,
-    )
-    print("Restore complete!")
-
-    # Cleanup temporary cache
-    if cleanup_cache:
-        from lcsas.utils.fs import safe_remove_tree
-        safe_remove_tree(cache_dir)
+        # Execute restore
+        target = args.target_path.resolve()
+        print(f"\nRestoring snapshot {args.snapshot_id} → {target}")
+        executor.execute_restore(
+            cache_dir=cache_dir,
+            snapshot_id=args.snapshot_id,
+            target_path=target,
+            password_file=args.password_file,
+        )
+        print("Restore complete!")
+    finally:
+        # Cleanup temporary cache
+        if cleanup_cache:
+            from lcsas.utils.fs import safe_remove_tree
+            safe_remove_tree(cache_dir)
 
     return 0
 
@@ -786,9 +1018,10 @@ def dispatch(args: argparse.Namespace) -> int:
     elif args.command == "burn":
         if args.session:
             return cmd_burn_session(args)
-        # Legacy burn (prepare + execute single volume)
-        print(f"Command 'burn' without --session not yet implemented.", file=sys.stderr)
-        return 1
+        # Legacy burn: stage + burn in one shot
+        return cmd_burn_legacy(args)
+    elif args.command == "burn-iso":
+        return cmd_burn_iso(args)
     elif args.command == "location":
         return cmd_location(args)
     elif args.command == "catalog":
@@ -802,9 +1035,11 @@ def dispatch(args: argparse.Namespace) -> int:
     elif args.command == "meta":
         if args.meta_command == "build":
             return cmd_meta_build(args)
+    elif args.command == "verify":
+        return cmd_verify(args)
+    elif args.command == "consolidate":
+        return cmd_consolidate(args)
 
-    # Commands requiring more infrastructure (consolidate, verify)
-    # will be wired up in later phases
     print(f"Command '{args.command}' not yet implemented.", file=sys.stderr)
     return 1
 
@@ -822,6 +1057,8 @@ def main(argv: list[str] | None = None) -> int:
         return dispatch(args)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
+        if getattr(args, "verbose", False):
+            traceback.print_exc()
         return 1
 
 

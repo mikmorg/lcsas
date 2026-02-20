@@ -27,17 +27,16 @@ def register_pack(
     """Insert a new pack and return the created Pack object.
 
     If a pack with the same sha256 already exists, returns the existing one.
+    Uses INSERT OR IGNORE to avoid TOCTOU races.
     """
-    existing = get_pack_by_sha256(conn, sha256)
-    if existing is not None:
-        return existing
-
-    cursor = conn.execute(
-        "INSERT INTO packs (sha256, size_bytes, repo_id) VALUES (?, ?, ?)",
+    conn.execute(
+        "INSERT OR IGNORE INTO packs (sha256, size_bytes, repo_id) VALUES (?, ?, ?)",
         (sha256, size_bytes, repo_id),
     )
     conn.commit()
-    return get_pack_by_id(conn, cursor.lastrowid)  # type: ignore[arg-type]
+    result = get_pack_by_sha256(conn, sha256)
+    assert result is not None, f"Pack {sha256} should exist after INSERT OR IGNORE"
+    return result
 
 
 def get_pack_by_id(conn: sqlite3.Connection, pack_id: int) -> Pack:
@@ -72,16 +71,31 @@ def bulk_register(
 ) -> list[Pack]:
     """Register multiple packs in a single transaction.
 
+    Uses INSERT OR IGNORE + executemany for efficient bulk insertion
+    without TOCTOU races.
+
     Args:
         packs: List of (sha256, size_bytes, repo_id) tuples.
 
     Returns:
         List of Pack objects (existing or newly created).
     """
-    results: list[Pack] = []
-    for sha256, size_bytes, repo_id in packs:
-        results.append(register_pack(conn, sha256, size_bytes, repo_id))
-    return results
+    if not packs:
+        return []
+    conn.executemany(
+        "INSERT OR IGNORE INTO packs (sha256, size_bytes, repo_id) VALUES (?, ?, ?)",
+        packs,
+    )
+    conn.commit()
+    # Fetch all by sha256 in one query
+    sha_list = [p[0] for p in packs]
+    placeholders = ",".join("?" * len(sha_list))
+    rows = conn.execute(
+        f"SELECT * FROM packs WHERE sha256 IN ({placeholders})",
+        sha_list,
+    ).fetchall()
+    pack_map = {r["sha256"]: _row_to_pack(r) for r in rows}
+    return [pack_map[sha] for sha in sha_list]
 
 
 def list_packs(

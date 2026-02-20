@@ -31,6 +31,8 @@ def create_volume(
     capacity_bytes: int,
     location: str = "Home_Shelf",
     status: str = "STAGING",
+    *,
+    commit: bool = True,
 ) -> Volume:
     """Insert a new volume and return the created Volume object."""
     cursor = conn.execute(
@@ -38,7 +40,8 @@ def create_volume(
            VALUES (?, ?, ?, ?, ?, ?)""",
         (label, uuid, media_type, capacity_bytes, location, status),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return get_volume_by_id(conn, cursor.lastrowid)  # type: ignore[arg-type]
 
 
@@ -72,36 +75,45 @@ def update_status(
     conn: sqlite3.Connection,
     volume_id: int,
     status: str,
+    *,
+    commit: bool = True,
 ) -> None:
     """Update the status of a volume."""
     conn.execute(
         "UPDATE volumes SET status = ? WHERE volume_id = ?",
         (status, volume_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
-def mark_closed(conn: sqlite3.Connection, volume_id: int) -> None:
+def mark_closed(
+    conn: sqlite3.Connection, volume_id: int, *, commit: bool = True,
+) -> None:
     """Set the closed_at timestamp on a volume (finalization)."""
     now = datetime.now(UTC).isoformat()
     conn.execute(
         "UPDATE volumes SET closed_at = ? WHERE volume_id = ?",
         (now, volume_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def update_used_bytes(
     conn: sqlite3.Connection,
     volume_id: int,
     used_bytes: int,
+    *,
+    commit: bool = True,
 ) -> None:
     """Update the used_bytes counter on a volume."""
     conn.execute(
         "UPDATE volumes SET used_bytes = ? WHERE volume_id = ?",
         (used_bytes, volume_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def list_volumes(

@@ -43,7 +43,7 @@ from lcsas.staging.builder import StagingBuilder
 from lcsas.staging.metadata import HolographicInjector
 from lcsas.utils.fs import ensure_dir, safe_remove_tree
 from lcsas.utils.hashing import sha256_file
-from lcsas.utils.labels import generate_uuid, generate_volume_label, next_seq_num
+from lcsas.utils.labels import generate_session_id, generate_uuid, generate_volume_label, next_seq_num
 
 
 @dataclass
@@ -181,7 +181,7 @@ class BurnOrchestrator:
         injector = HolographicInjector(staging_root)
         injector.inject_metadata(mirror_paths)
 
-        # 6. Register volume in DB
+        # 6. Register volume in DB (atomic transaction)
         volume = create_volume(
             self._conn,
             label=vol_label,
@@ -190,12 +190,14 @@ class BurnOrchestrator:
             capacity_bytes=mt.capacity_bytes,
             location=self._config.default_location,
             status="STAGING",
+            commit=False,
         )
 
         # Link packs to volume
         pack_ids = [p.pack_id for p in selected_packs]
-        bulk_link_packs(self._conn, volume.volume_id, pack_ids)
-        update_used_bytes(self._conn, volume.volume_id, total_bytes)
+        bulk_link_packs(self._conn, volume.volume_id, pack_ids, commit=False)
+        update_used_bytes(self._conn, volume.volume_id, total_bytes, commit=False)
+        self._conn.commit()
 
         # Inject catalog AFTER DB updates so it includes this volume.
         # Checkpoint WAL first so all committed data is in the main .db file
@@ -261,11 +263,13 @@ class BurnOrchestrator:
             if not skip_burn:
                 self._xorriso.burn_iso(iso_path, self._config.optical_device)
 
-            # Finalize
-            update_status(self._conn, manifest.volume_id, "VERIFIED")
-            mark_closed(self._conn, manifest.volume_id)
+            # Finalize (atomic: status + close)
+            update_status(self._conn, manifest.volume_id, "VERIFIED", commit=False)
+            mark_closed(self._conn, manifest.volume_id, commit=False)
+            self._conn.commit()
 
         except Exception:
+            self._conn.rollback()
             update_status(self._conn, manifest.volume_id, "STAGING")
             raise
 
@@ -337,7 +341,7 @@ class BurnOrchestrator:
         volume_plans = self._multi_bin_pack(packs_to_stage, mt)
 
         # 3. Create session
-        session_id = datetime.now(UTC).isoformat(timespec="microseconds")
+        session_id = generate_session_id()
         session_dir = self._config.staging_path / session_id.replace(":", "-")
         ensure_dir(session_dir)
 
@@ -376,7 +380,7 @@ class BurnOrchestrator:
             injector = HolographicInjector(staging_root)
             injector.inject_metadata(mirror_paths)
 
-            # Register volume in DB
+            # Register volume in DB (atomic per-volume transaction)
             volume = create_volume(
                 self._conn,
                 label=vol_label,
@@ -385,11 +389,13 @@ class BurnOrchestrator:
                 capacity_bytes=mt.capacity_bytes,
                 location=self._config.default_location,
                 status="STAGING",
+                commit=False,
             )
 
             pack_ids = [p.pack_id for p in selected_packs]
-            bulk_link_packs(self._conn, volume.volume_id, pack_ids)
-            update_used_bytes(self._conn, volume.volume_id, total_bytes)
+            bulk_link_packs(self._conn, volume.volume_id, pack_ids, commit=False)
+            update_used_bytes(self._conn, volume.volume_id, total_bytes, commit=False)
+            self._conn.commit()
 
             # Inject catalog AFTER DB updates.
             # Checkpoint WAL to flush all data to the main .db file.
@@ -420,7 +426,9 @@ class BurnOrchestrator:
                 volume_id=volume.volume_id,
                 iso_path=str(iso_path),
                 iso_sha256=iso_hash,
+                commit=False,
             )
+            self._conn.commit()
 
             manifest = BurnManifest(
                 volume_label=vol_label,
@@ -478,23 +486,26 @@ class BurnOrchestrator:
             vol = get_volume_by_id(self._conn, sv.volume_id)
 
             # Update status
-            update_status(self._conn, sv.volume_id, "BURNING")
+            update_status(self._conn, sv.volume_id, "BURNING", commit=False)
+            self._conn.commit()
 
             try:
                 # Burn
                 if not skip_burn:
                     self._xorriso.burn_iso(iso_path, device)
 
-                # Finalize volume status
-                update_status(self._conn, sv.volume_id, "VERIFIED")
-                mark_closed(self._conn, sv.volume_id)
+                # Finalize volume status (atomic: status + close + copy)
+                update_status(self._conn, sv.volume_id, "VERIFIED", commit=False)
+                mark_closed(self._conn, sv.volume_id, commit=False)
 
                 # Record copy at location
                 add_volume_copy(
                     self._conn,
                     volume_id=sv.volume_id,
                     location=location,
+                    commit=False,
                 )
+                self._conn.commit()
 
                 # Build receipt
                 from lcsas.db.volume_packs import get_pack_ids_for_volume
@@ -515,6 +526,7 @@ class BurnOrchestrator:
                 receipts.append(receipt)
 
             except Exception:
+                self._conn.rollback()
                 update_status(self._conn, sv.volume_id, "STAGING")
                 raise
 

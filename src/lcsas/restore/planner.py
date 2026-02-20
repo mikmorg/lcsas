@@ -54,10 +54,3 @@ class RestorePlanner:
             total_packs=total_packs,
             total_bytes=total_bytes,
         )
-
-    def plan_restore(
-        self,
-        required_pack_hashes: list[str],
-    ) -> PickList:
-        """Convenience wrapper for generate_pick_list."""
-        return self.generate_pick_list(required_pack_hashes)

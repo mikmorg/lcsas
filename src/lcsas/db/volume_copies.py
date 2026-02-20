@@ -25,6 +25,8 @@ def add_volume_copy(
     location: str,
     burn_date: str | None = None,
     notes: str = "",
+    *,
+    commit: bool = True,
 ) -> VolumeCopy:
     """Record a physical copy of a volume at a location."""
     if burn_date is None:
@@ -34,7 +36,8 @@ def add_volume_copy(
            VALUES (?, ?, ?, ?)""",
         (volume_id, location, burn_date, notes),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return get_volume_copy(conn, cursor.lastrowid)
 
 

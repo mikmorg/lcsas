@@ -112,7 +112,7 @@ class TestLabels:
     def test_generate_volume_label(self):
         label = generate_volume_label("LCSAS", "BD25", 1)
         assert label.startswith("LCSAS_")
-        assert label.endswith("_001")
+        assert label.endswith("_0001")
 
     def test_generate_uuid_format(self):
         uid = generate_uuid()
