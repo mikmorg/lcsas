@@ -52,7 +52,13 @@ class SubprocessXorrisoRunner:
         output_iso: Path,
         volume_label: str,
     ) -> Path:
-        """Create an ISO 9660 image with Rock Ridge and Joliet extensions."""
+        """Create an ISO 9660 image with Rock Ridge and Joliet extensions.
+
+        Writes to a temporary ``.iso.tmp`` file first, then renames to
+        the final path on success.  If the subprocess fails the partial
+        temp file is removed.
+        """
+        tmp_iso = output_iso.with_suffix(".iso.tmp")
         cmd = [
             self._binary,
             "-as", "mkisofs",
@@ -61,10 +67,16 @@ class SubprocessXorrisoRunner:
             "-joliet-long",          # Long Joliet names
             "-iso-level", "3",       # Support files > 4 GB
             "-V", volume_label,      # Volume label
-            "-o", str(output_iso),   # Output ISO file
+            "-o", str(tmp_iso),      # Temp output ISO file
             str(source_dir),         # Source directory
         ]
-        subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
+            os.rename(tmp_iso, output_iso)
+        except Exception:
+            if tmp_iso.exists():
+                tmp_iso.unlink()
+            raise
         return output_iso
 
     def burn_iso(

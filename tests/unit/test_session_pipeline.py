@@ -728,8 +728,9 @@ class TestISOContentValidation:
 
     def test_multi_volume_iso_all_packs_covered(self, tmp_path):
         """When staging produces multiple volumes, all packs are in ISOs."""
-        # Use TEST_TINY with larger packs to force multi-volume
-        config = _make_config(tmp_path, num_repos=1, media=MediaType.TEST_TINY)
+        # Use TEST_SMALL with packs sized to force multi-volume but
+        # stay under media capacity including ISO filesystem overhead.
+        config = _make_config(tmp_path, num_repos=1, media=MediaType.TEST_SMALL)
         conn = get_memory_connection()
         create_all(conn)
 
@@ -737,8 +738,8 @@ class TestISOContentValidation:
             register_repo(conn, name, name.title(),
                           str(config.repositories[name].mirror_path))
 
-        # Create packs that require 2+ volumes
-        packs = _seed_packs(conn, config, num_packs=3, pack_size=400_000)
+        # Create packs that require 2+ volumes on TEST_SMALL (10 MB, 10% ECC = 9 MB usable)
+        packs = _seed_packs(conn, config, num_packs=5, pack_size=2_000_000)
 
         xorriso = SubprocessXorrisoRunner()
         dvdisaster = MagicMock()

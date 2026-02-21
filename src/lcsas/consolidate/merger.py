@@ -31,8 +31,13 @@ class VolumeMerger:
     Source volumes are then marked as DEPRECATED.
     """
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        metadata_reserve_bytes: int = 104_857_600,
+    ) -> None:
         self._conn = conn
+        self._metadata_reserve_bytes = metadata_reserve_bytes
 
     def plan_consolidation(
         self,
@@ -63,7 +68,7 @@ class VolumeMerger:
         volumes_needed = estimate_volumes_needed(
             total_bytes,
             target_media_type.capacity_bytes,
-            reserved=104_857_600,  # 100 MB metadata
+            reserved=self._metadata_reserve_bytes,
             ecc_overhead_pct=target_media_type.ecc_overhead_pct,
         )
 

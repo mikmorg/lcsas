@@ -165,64 +165,18 @@ class BurnOrchestrator:
         )
         vol_uuid = generate_uuid()
 
-        # 4. Build staging directory
+        # 4-7. Stage, register, inject metadata
         staging_root = self._config.staging_path / vol_label
-        builder = StagingBuilder(staging_root)
-        builder.initialize()
-
-        # Stage packs — search across all repo mirror data dirs
-        mirror_paths = self._get_mirror_paths()
-        for _repo_id, mirror_path in mirror_paths.items():
-            data_dir = mirror_path / "data"
-            if data_dir.is_dir():
-                builder.stage_packs(selected_packs, data_dir)
-
-        # 5. Inject holographic metadata
-        injector = HolographicInjector(staging_root)
-        injector.inject_metadata(mirror_paths)
-
-        # 6. Register volume in DB (atomic transaction)
-        volume = create_volume(
-            self._conn,
-            label=vol_label,
-            uuid=vol_uuid,
-            media_type=mt.name,
-            capacity_bytes=mt.capacity_bytes,
-            location=self._config.default_location,
-            status="STAGING",
-            commit=False,
-        )
-
-        # Link packs to volume
-        pack_ids = [p.pack_id for p in selected_packs]
-        bulk_link_packs(self._conn, volume.volume_id, pack_ids, commit=False)
-        update_used_bytes(self._conn, volume.volume_id, total_bytes, commit=False)
-        self._conn.commit()
-
-        # Inject catalog AFTER DB updates so it includes this volume.
-        # Checkpoint WAL first so all committed data is in the main .db file
-        # (copy_file won't capture unflushed WAL data).
-        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        injector.inject_catalog(self._config.db_path)
-
-        # Write volume info
-        vol = get_volume_by_id(self._conn, volume.volume_id)
-        injector.write_volume_info(vol, packs=selected_packs)
-        injector.write_restore_instructions()
-        injector.write_start_here(self._config)
-        injector.write_key_info(self._config)
-        injector.write_config_summary(self._config)
-        injector.write_disc_care()
-
-        return BurnManifest(
-            volume_label=vol_label,
-            volume_uuid=vol_uuid,
-            volume_id=volume.volume_id,
-            media_type=mt,
+        manifest = self._stage_single_volume(
             selected_packs=selected_packs,
-            total_data_bytes=total_bytes,
-            staging_path=staging_root,
+            total_bytes=total_bytes,
+            media_type=mt,
+            vol_label=vol_label,
+            vol_uuid=vol_uuid,
+            staging_root=staging_root,
         )
+
+        return manifest
 
     def execute(
         self,
@@ -293,6 +247,113 @@ class BurnOrchestrator:
         safe_remove_tree(manifest.staging_path)
         if manifest.iso_path and manifest.iso_path.exists():
             manifest.iso_path.unlink()
+
+    def _stage_single_volume(
+        self,
+        selected_packs: list[Pack],
+        total_bytes: int,
+        media_type: MediaType,
+        vol_label: str,
+        vol_uuid: str,
+        staging_root: Path,
+        iso_output: Path | None = None,
+        skip_ecc: bool = False,
+    ) -> BurnManifest:
+        """Build staging dir, register volume, inject metadata, optionally create ISO.
+
+        This is the shared core of :meth:`prepare` (iso_output=None) and
+        :meth:`stage` (iso_output set).  Returns a :class:`BurnManifest`
+        describing the result.
+
+        Args:
+            selected_packs: Packs to include on this volume.
+            total_bytes: Sum of pack sizes.
+            media_type: Target media.
+            vol_label: Generated volume label.
+            vol_uuid: Generated volume UUID.
+            staging_root: Directory to stage files into.
+            iso_output: If set, create an ISO at this path (+ optional ECC).
+            skip_ecc: Skip DVDisaster ECC augmentation.
+
+        Returns:
+            BurnManifest describing the staged volume.
+        """
+        # 1. Build staging directory
+        builder = StagingBuilder(staging_root)
+        builder.initialize()
+
+        mirror_paths = self._get_mirror_paths()
+        for _repo_id, mirror_path in mirror_paths.items():
+            data_dir = mirror_path / "data"
+            if data_dir.is_dir():
+                builder.stage_packs(selected_packs, data_dir)
+
+        # 2. Inject holographic metadata
+        injector = HolographicInjector(staging_root)
+        injector.inject_metadata(mirror_paths)
+
+        # 3. Register volume in DB (atomic transaction)
+        volume = create_volume(
+            self._conn,
+            label=vol_label,
+            uuid=vol_uuid,
+            media_type=media_type.name,
+            capacity_bytes=media_type.capacity_bytes,
+            location=self._config.default_location,
+            status="STAGING",
+            commit=False,
+        )
+
+        pack_ids = [p.pack_id for p in selected_packs]
+        bulk_link_packs(self._conn, volume.volume_id, pack_ids, commit=False)
+        update_used_bytes(self._conn, volume.volume_id, total_bytes, commit=False)
+        self._conn.commit()
+
+        # 4. Inject catalog AFTER DB updates.
+        #    Checkpoint WAL so all committed data is in the main .db file.
+        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        injector.inject_catalog(self._config.db_path)
+
+        # 5. Write volume info files
+        vol = get_volume_by_id(self._conn, volume.volume_id)
+        injector.write_volume_info(vol, packs=selected_packs)
+        injector.write_restore_instructions()
+        injector.write_start_here(self._config)
+        injector.write_key_info(self._config)
+        injector.write_config_summary(self._config)
+        injector.write_disc_care()
+
+        # 6. Optionally create ISO + ECC
+        iso_path: Path | None = None
+        if iso_output is not None:
+            self._xorriso.create_iso(staging_root, iso_output, vol_label)
+            iso_path = iso_output
+
+            if not skip_ecc:
+                self._dvdisaster.augment_iso(
+                    iso_path, self._config.default_ecc_redundancy_pct,
+                )
+
+            # 7. Validate ISO size against media capacity  [O4]
+            if iso_path.exists():
+                iso_size = iso_path.stat().st_size
+                if iso_size > media_type.capacity_bytes:
+                    raise ValueError(
+                        f"ISO {iso_path.name} is {iso_size:,} bytes, exceeds "
+                        f"{media_type.name} capacity of "
+                        f"{media_type.capacity_bytes:,} bytes"
+                    )
+
+        return BurnManifest(
+            volume_label=vol_label,
+            volume_uuid=vol_uuid,
+            volume_id=volume.volume_id,
+            media_type=media_type,
+            selected_packs=selected_packs,
+            total_data_bytes=total_bytes,
+            staging_path=staging_root,
+            iso_path=iso_path,
+        )
 
     def _get_mirror_paths(self) -> dict[str, Path]:
         """Build a dict of {repo_id: mirror_path} from config."""
@@ -393,88 +454,40 @@ class BurnOrchestrator:
             )
             vol_uuid = generate_uuid()
 
-            # Build staging directory
             staging_root = session_dir / vol_label
-            builder = StagingBuilder(staging_root)
-            builder.initialize()
-
-            mirror_paths = self._get_mirror_paths()
-            for _repo_id, mirror_path in mirror_paths.items():
-                data_dir = mirror_path / "data"
-                if data_dir.is_dir():
-                    builder.stage_packs(selected_packs, data_dir)
-
-            # Inject holographic metadata
-            injector = HolographicInjector(staging_root)
-            injector.inject_metadata(mirror_paths)
-
-            # Register volume in DB (atomic per-volume transaction)
-            volume = create_volume(
-                self._conn,
-                label=vol_label,
-                uuid=vol_uuid,
-                media_type=mt.name,
-                capacity_bytes=mt.capacity_bytes,
-                location=self._config.default_location,
-                status="STAGING",
-                commit=False,
-            )
-
-            pack_ids = [p.pack_id for p in selected_packs]
-            bulk_link_packs(self._conn, volume.volume_id, pack_ids, commit=False)
-            update_used_bytes(self._conn, volume.volume_id, total_bytes, commit=False)
-            self._conn.commit()
-
-            # Inject catalog AFTER DB updates.
-            # Checkpoint WAL to flush all data to the main .db file.
-            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            injector.inject_catalog(self._config.db_path)
-            vol = get_volume_by_id(self._conn, volume.volume_id)
-            injector.write_volume_info(vol, packs=selected_packs)
-            injector.write_restore_instructions()
-            injector.write_start_here(self._config)
-            injector.write_key_info(self._config)
-            injector.write_config_summary(self._config)
-            injector.write_disc_care()
-
-            # Create ISO
             iso_path = session_dir / f"{vol_label}.iso"
-            self._xorriso.create_iso(staging_root, iso_path, vol_label)
 
-            # Apply ECC
-            if not skip_ecc:
-                self._dvdisaster.augment_iso(
-                    iso_path, self._config.default_ecc_redundancy_pct,
-                )
+            # Stage, register, inject metadata, create ISO + ECC
+            manifest = self._stage_single_volume(
+                selected_packs=selected_packs,
+                total_bytes=total_bytes,
+                media_type=mt,
+                vol_label=vol_label,
+                vol_uuid=vol_uuid,
+                staging_root=staging_root,
+                iso_output=iso_path,
+                skip_ecc=skip_ecc,
+            )
 
             # Compute ISO hash
             iso_hash = ""
-            if iso_path.exists():
-                iso_hash = sha256_file(iso_path)
+            if manifest.iso_path and manifest.iso_path.exists():
+                iso_hash = sha256_file(manifest.iso_path)
 
             # Register in session
             add_session_volume(
                 self._conn,
                 session_id=session_id,
-                volume_id=volume.volume_id,
-                iso_path=str(iso_path),
+                volume_id=manifest.volume_id,
+                iso_path=str(manifest.iso_path or iso_path),
                 iso_sha256=iso_hash,
                 commit=False,
             )
             self._conn.commit()
 
-            manifest = BurnManifest(
-                volume_label=vol_label,
-                volume_uuid=vol_uuid,
-                volume_id=volume.volume_id,
-                media_type=mt,
-                selected_packs=selected_packs,
-                total_data_bytes=total_bytes,
-                staging_path=staging_root,
-                iso_path=iso_path,
-            )
             manifests.append(manifest)
-            iso_paths.append(iso_path)
+            if manifest.iso_path:
+                iso_paths.append(manifest.iso_path)
 
         # Write session manifest JSON
         self._write_session_manifest(session_id, session_dir, manifests)

@@ -872,7 +872,8 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
                          f"Valid types: {valid}")
             return 1
 
-        merger = VolumeMerger(conn)
+        reserve = config.metadata_reserve_bytes if config else 104_857_600
+        merger = VolumeMerger(conn, metadata_reserve_bytes=reserve)
         plan = merger.plan_consolidation(args.volume_ids, media_type)
     finally:
         conn.close()
