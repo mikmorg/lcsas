@@ -13,12 +13,12 @@ from lcsas.rustic.wrapper import SubprocessRusticRunner
 
 @pytest.fixture
 def runner():
-    return SubprocessRusticRunner(rustic_binary="restic")
+    return SubprocessRusticRunner()
 
 
 @pytest.fixture
 def custom_runner():
-    return SubprocessRusticRunner(rustic_binary="/usr/local/bin/custom_restic")
+    return SubprocessRusticRunner(rustic_binary="/usr/local/bin/custom_rustic")
 
 
 REPO = Path("/tmp/test_repo")
@@ -38,7 +38,7 @@ class TestRun:
 
         mock_run.assert_called_once()
         cmd = mock_run.call_args[0][0]
-        assert cmd == ["restic", "-r", str(REPO), "--password-file", str(PW), "snapshots", "--json"]
+        assert cmd == ["rustic", "-r", str(REPO), "--password-file", str(PW), "snapshots", "--json"]
 
     @patch("lcsas.rustic.wrapper.subprocess.run")
     def test_custom_binary(self, mock_run, custom_runner):
@@ -49,13 +49,13 @@ class TestRun:
         custom_runner._run(["init"], REPO, PW)
 
         cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "/usr/local/bin/custom_restic"
+        assert cmd[0] == "/usr/local/bin/custom_rustic"
 
     @patch("lcsas.rustic.wrapper.subprocess.run")
     def test_check_raises_on_failure(self, mock_run, runner):
         """CalledProcessError propagates when check=True."""
         mock_run.side_effect = subprocess.CalledProcessError(
-            1, "restic", stderr="fatal: unable to open repo"
+            1, "rustic", stderr="fatal: unable to open repo"
         )
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
             runner._run(["init"], REPO, PW, check=True)

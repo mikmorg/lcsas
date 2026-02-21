@@ -4,11 +4,11 @@ LCSAS End-to-End Integration Test
 ==================================
 
 This script exercises the full LCSAS pipeline against a real filesystem
-(the /mnt/lcsas-test logical volume) using restic + xorriso + dvdisaster.
+(the /mnt/lcsas-test logical volume) using rustic + xorriso + dvdisaster.
 
 Phases:
   1. Generate synthetic test data
-  2. Initialize two restic repositories (family, work)
+  2. Initialize two rustic repositories (family, work)
   3. Back up test data into both repos
   4. Initialize the LCSAS catalog
   5. Scan + register packs from both repos
@@ -19,7 +19,7 @@ Phases:
 
 Prerequisites:
   - /mnt/lcsas-test mounted (run scripts/setup_test_lv.sh first)
-  - restic, xorriso on PATH
+  - rustic, xorriso on PATH
   - dvdisaster on PATH (optional — ECC steps skipped if missing)
   - lcsas installed in the active venv
 """
@@ -120,7 +120,7 @@ def preflight() -> bool:
             d.mkdir(parents=True, exist_ok=True)
             info(f"Created {d}")
 
-    for tool in ["restic", "xorriso"]:
+    for tool in ["rustic", "xorriso"]:
         if tool_available(tool):
             info(f"{tool} found: {shutil.which(tool)}")
         else:
@@ -174,15 +174,15 @@ def generate_test_data() -> dict[str, dict[str, str]]:
     return manifests
 
 
-# ── Phase 2: Initialize Restic Repositories ──────────────────────────────────
+# ── Phase 2: Initialize Rustic Repositories ──────────────────────────────────
 
-def init_restic_repos() -> dict[str, Path]:
-    """Initialize two restic repos (family, work) in the mirror directory.
+def init_rustic_repos() -> dict[str, Path]:
+    """Initialize two rustic repos (family, work) in the mirror directory.
 
     Returns:
         Dict of {repo_name: repo_path}
     """
-    banner("Phase 2: Initializing Restic Repositories")
+    banner("Phase 2: Initializing Rustic Repositories")
 
     # Create password file
     PASSWORD_FILE.write_text("test-password-do-not-use\n")
@@ -195,13 +195,13 @@ def init_restic_repos() -> dict[str, Path]:
 
         if (repo_path / "config").exists():
             warn(f"{repo_name} repo already initialized — reinitializing")
-            # restic creates read-only files; fix perms before removing
+            # rustic creates read-only files; fix perms before removing
             subprocess.run(["chmod", "-R", "u+rwX", str(repo_path)],
                            capture_output=True)
             shutil.rmtree(repo_path)
 
         result = run([
-            "restic", "init",
+            "rustic", "init",
             "--repo", str(repo_path),
             "--password-file", str(PASSWORD_FILE),
         ])
@@ -217,12 +217,12 @@ def init_restic_repos() -> dict[str, Path]:
 # ── Phase 3: Back Up Test Data ────────────────────────────────────────────────
 
 def backup_data(repos: dict[str, Path]) -> dict[str, str]:
-    """Back up test data into the restic repos.
+    """Back up test data into the rustic repos.
 
     Returns:
         Dict of {repo_name: snapshot_id}
     """
-    banner("Phase 3: Backing Up Test Data into Restic Repos")
+    banner("Phase 3: Backing Up Test Data into Rustic Repos")
 
     snapshot_ids: dict[str, str] = {}
     data_map = {
@@ -233,7 +233,7 @@ def backup_data(repos: dict[str, Path]) -> dict[str, str]:
     for repo_name, repo_path in repos.items():
         source = data_map[repo_name]
         result = run([
-            "restic", "backup",
+            "rustic", "backup",
             "--repo", str(repo_path),
             "--password-file", str(PASSWORD_FILE),
             "--json",
@@ -288,7 +288,7 @@ def init_catalog() -> sqlite3.Connection:
 # ── Phase 5: Scan + Register Packs ───────────────────────────────────────────
 
 def scan_and_register(conn: sqlite3.Connection, repos: dict[str, Path]) -> int:
-    """Scan both restic repos and register their packs in the catalog.
+    """Scan both rustic repos and register their packs in the catalog.
 
     Returns:
         Total number of packs registered.
@@ -550,7 +550,7 @@ def test_restore(
     snapshot_ids: dict[str, str],
     original_manifests: dict[str, dict[str, str]],
 ) -> bool:
-    """Restore from restic repos and verify file integrity against originals."""
+    """Restore from rustic repos and verify file integrity against originals."""
     banner("Phase 9: Restore & Verify Data Integrity")
 
     all_ok = True
@@ -572,7 +572,7 @@ def test_restore(
 
         info(f"Restoring {repo_name} (snapshot {snap_id[:12]}...)")
         result = run([
-            "restic", "restore", snap_id,
+            "rustic", "restore", snap_id,
             "--repo", str(repo_path),
             "--password-file", str(PASSWORD_FILE),
             "--target", str(restore_target),
@@ -588,7 +588,7 @@ def test_restore(
         # Find the restored data directory
         restored_data = restore_target / "mnt" / "lcsas-test" / "test_data" / dataset_name
         if not restored_data.is_dir():
-            # Try alternative path (restic restores with full path)
+            # Try alternative path (rustic restores with full path)
             candidates = list(restore_target.rglob(dataset_name))
             if candidates:
                 restored_data = candidates[0]
@@ -817,7 +817,7 @@ def test_iso_restore(
             shutil.rmtree(cache_dir)
 
         # Prepare cache from the original mirror metadata
-        rustic_runner = SubprocessRusticRunner(binary="restic")
+        rustic_runner = SubprocessRusticRunner(binary="rustic")
         executor = RestoreExecutor(rustic_runner)
         executor.prepare_cache(cache_dir, repo_path)
 
@@ -841,7 +841,7 @@ def test_iso_restore(
 
         try:
             result = run([
-                "restic", "restore", snap_id,
+                "rustic", "restore", snap_id,
                 "--repo", str(cache_dir),
                 "--password-file", str(PASSWORD_FILE),
                 "--target", str(restore_target),
@@ -943,7 +943,7 @@ def main() -> int:
     manifests = generate_test_data()
 
     # Phase 2
-    repos = init_restic_repos()
+    repos = init_rustic_repos()
 
     # Phase 3
     snapshot_ids = backup_data(repos)
@@ -992,7 +992,7 @@ def main() -> int:
 
     results = {
         "Test data generation": True,
-        "Restic repos initialized": bool(repos),
+        "Rustic repos initialized": bool(repos),
         "Backups completed": bool(snapshot_ids),
         "Packs registered": total_packs > 0,
         "ISOs created": len(iso_files) > 0,

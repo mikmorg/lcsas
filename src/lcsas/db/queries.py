@@ -118,6 +118,7 @@ def get_volumes_for_pack(
 def get_pick_list(
     conn: sqlite3.Connection,
     pack_sha256_list: list[str],
+    preferred_location: str = "",
 ) -> dict[str, list[Pack]]:
     """Generate a restore 'pick list': map volume labels to needed packs.
 
@@ -126,22 +127,49 @@ def get_pick_list(
     discs to retrieve.
 
     Prefers non-DEPRECATED/DESTROYED volumes. If a pack exists on multiple
-    volumes, picks the first valid one.
+    volumes, prefers volumes at *preferred_location* (if specified) to
+    minimise disc-swapping across locations. Falls back to alphabetical
+    order.
+
+    Args:
+        conn: DB connection.
+        pack_sha256_list: SHA-256 hashes of required packs.
+        preferred_location: Optional storage location to prefer (e.g.
+            ``"Home_Shelf"``).  Volumes at this location are chosen
+            over volumes elsewhere when both carry the same pack.
     """
     if not pack_sha256_list:
         return {}
 
     placeholders = ",".join("?" for _ in pack_sha256_list)
-    rows = conn.execute(
-        f"""SELECT p.*, v.volume_id, v.label as vol_label, v.status as vol_status
-            FROM packs p
-            JOIN volume_packs vp ON p.pack_id = vp.pack_id
-            JOIN volumes v ON vp.volume_id = v.volume_id
-            WHERE p.sha256 IN ({placeholders})
-              AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
-            ORDER BY v.label""",
-        pack_sha256_list,
-    ).fetchall()
+
+    # Order by: preferred location first (desc so 1 sorts before 0),
+    # then alphabetically by label for deterministic tie-breaking.
+    if preferred_location:
+        rows = conn.execute(
+            f"""SELECT p.*, v.volume_id, v.label as vol_label,
+                       v.status as vol_status, v.location as vol_location
+                FROM packs p
+                JOIN volume_packs vp ON p.pack_id = vp.pack_id
+                JOIN volumes v ON vp.volume_id = v.volume_id
+                WHERE p.sha256 IN ({placeholders})
+                  AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+                ORDER BY (CASE WHEN v.location = ? THEN 0 ELSE 1 END),
+                         v.label""",
+            [*pack_sha256_list, preferred_location],
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"""SELECT p.*, v.volume_id, v.label as vol_label,
+                       v.status as vol_status
+                FROM packs p
+                JOIN volume_packs vp ON p.pack_id = vp.pack_id
+                JOIN volumes v ON vp.volume_id = v.volume_id
+                WHERE p.sha256 IN ({placeholders})
+                  AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+                ORDER BY v.label""",
+            pack_sha256_list,
+        ).fetchall()
 
     # Deduplicate: each pack assigned to one volume only
     seen_packs: set[str] = set()

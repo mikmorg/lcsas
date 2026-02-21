@@ -126,7 +126,7 @@ class ToolBundler:
 
         output_dir/
         ├── bin/
-        │   ├── restic
+        │   ├── rustic
         │   ├── xorriso
         │   └── python3
         └── lib/

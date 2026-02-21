@@ -196,3 +196,50 @@ class TestExecuteRestore:
             password_file=pw_file,
             target_path=target,
         )
+
+
+# =========================================================================
+# verify_iso() — ECC integration
+# =========================================================================
+
+
+class TestVerifyISO:
+    def test_no_ecc_runner_returns_true(self, executor, tmp_path):
+        """Without an ECC runner, verify_iso always returns True."""
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"fake iso")
+        assert executor.verify_iso(iso) is True
+
+    def test_ecc_verify_passes(self, mock_rustic, tmp_path):
+        """ECC verify_iso returns True when ECC passes."""
+        ecc = MagicMock()
+        ecc.verify_iso.return_value = True
+        ex = RestoreExecutor(mock_rustic, ecc_runner=ecc)
+
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"fake iso")
+        assert ex.verify_iso(iso) is True
+        ecc.verify_iso.assert_called_once_with(iso)
+
+    def test_ecc_verify_fails_repair_succeeds(self, mock_rustic, tmp_path):
+        """When ECC verify fails but repair succeeds, returns True."""
+        ecc = MagicMock()
+        ecc.verify_iso.return_value = False
+        ecc.repair_iso.return_value = True
+        ex = RestoreExecutor(mock_rustic, ecc_runner=ecc)
+
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"fake iso")
+        assert ex.verify_iso(iso) is True
+        ecc.repair_iso.assert_called_once_with(iso)
+
+    def test_ecc_verify_and_repair_both_fail(self, mock_rustic, tmp_path):
+        """When both ECC verify and repair fail, returns False."""
+        ecc = MagicMock()
+        ecc.verify_iso.return_value = False
+        ecc.repair_iso.return_value = False
+        ex = RestoreExecutor(mock_rustic, ecc_runner=ecc)
+
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"fake iso")
+        assert ex.verify_iso(iso) is False

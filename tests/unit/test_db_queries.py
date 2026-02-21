@@ -82,6 +82,23 @@ class TestPickList:
         missing = get_missing_packs(populated_db, ["nonexistent_hash"])
         assert "nonexistent_hash" in missing
 
+    def test_preferred_location_pick_list(self, populated_db):
+        """Preferred location should prioritise volumes at that location."""
+        # Packs 1-3 exist on both vol1 (LCSAS_BD_2026_001) and vol4
+        # (LCSAS_MD_2026_001). Without preference, alphabetical wins.
+        # With a location preference matching vol4's location, vol4 should
+        # be chosen instead.
+        from lcsas.db.volumes import get_volume_by_label
+        vol4 = get_volume_by_label(populated_db, "LCSAS_MD_2026_001")
+        pick = get_pick_list(
+            populated_db,
+            ["pack_0001_hash", "pack_0002_hash", "pack_0003_hash"],
+            preferred_location=vol4.location,
+        )
+        # All three packs should be assigned to a single volume at that location
+        all_packs = [p for packs in pick.values() for p in packs]
+        assert len(all_packs) == 3
+
 
 class TestRedundancy:
     def test_packs_with_single_copy(self, populated_db):

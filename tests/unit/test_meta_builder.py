@@ -108,12 +108,12 @@ class TestToolBundler:
             bundler.bundle_binary("totally_nonexistent_binary_xyz")
 
     @pytest.mark.skipif(
-        not resolve_binary("restic"), reason="restic not installed"
+        not resolve_binary("rustic"), reason="rustic not installed"
     )
-    def test_bundle_restic(self, tmp_path: Path):
-        """Bundle the real restic binary."""
+    def test_bundle_rustic(self, tmp_path: Path):
+        """Bundle the real rustic binary."""
         bundler = ToolBundler(tmp_path / "bundle")
-        dest = bundler.bundle_binary("restic")
+        dest = bundler.bundle_binary("rustic")
         assert dest.is_file()
 
         # The bundled binary should be executable
@@ -124,7 +124,7 @@ class TestToolBundler:
             env={"LD_LIBRARY_PATH": str(bundler.lib_dir)},
         )
         assert result.returncode == 0
-        assert "restic" in result.stdout
+        assert "rustic" in result.stdout.lower()
 
     def test_bundle_python(self, tmp_path: Path):
         """Bundle Python and verify the stdlib is present."""
@@ -177,7 +177,7 @@ class TestToolBundler:
 
 
 @pytest.mark.skipif(
-    not resolve_binary("restic"), reason="restic not installed"
+    not resolve_binary("rustic"), reason="rustic not installed"
 )
 @pytest.mark.skipif(
     not resolve_binary("xorriso"), reason="xorriso not installed"
@@ -223,12 +223,12 @@ class TestMetaVolumeBuilder:
         assert (self.output / "volume_info.json").is_file()
         vi = json.loads((self.output / "volume_info.json").read_text())
         assert vi["type"] == "meta"
-        assert "restic" in vi["contents"]["tools"]
+        assert "rustic" in vi["contents"]["tools"]
         assert "xorriso" in vi["contents"]["tools"]
         assert "python3" in vi["contents"]["tools"]
 
         # Tools
-        assert (self.output / "tools" / "bin" / "restic").is_file()
+        assert (self.output / "tools" / "bin" / "rustic").is_file()
         assert (self.output / "tools" / "bin" / "xorriso").is_file()
         assert (self.output / "tools" / "bin" / "python3").is_file()
         assert (self.output / "tools" / "lib").is_dir()
@@ -247,15 +247,15 @@ class TestMetaVolumeBuilder:
         if (self._builder.project_root / "docs").is_dir():
             assert (self.output / "docs").is_dir()
 
-    def test_bundled_restic_works(self):
-        """The bundled restic binary should execute successfully."""
-        restic = self.output / "tools" / "bin" / "restic"
+    def test_bundled_rustic_works(self):
+        """The bundled rustic binary should execute successfully."""
+        rustic = self.output / "tools" / "bin" / "rustic"
         env = {
             "LD_LIBRARY_PATH": str(self.output / "tools" / "lib"),
             "HOME": str(self._base),
         }
         result = subprocess.run(
-            [str(restic), "version"],
+            [str(rustic), "version"],
             capture_output=True,
             text=True,
             env=env,

@@ -48,7 +48,7 @@ def list_files_recursive(path: Path) -> list[Path]:
 def copy_tree(src: Path, dst: Path) -> None:
     """Copy an entire directory tree. Overwrites dst if it exists.
 
-    Handles read-only source files/dirs (e.g. from restic repos).
+    Handles read-only source files/dirs (e.g. from rustic repos).
     """
     if dst.exists():
         _make_writable(dst)
@@ -86,3 +86,17 @@ def safe_remove_tree(path: Path) -> None:
     if path.exists():
         _make_writable(path)
         shutil.rmtree(path)
+
+
+def read_repo_key_ids(repo_path: Path) -> list[str]:
+    """Read encryption key IDs from a rustic/restic repository.
+
+    Key IDs are the filenames in the ``keys/`` subdirectory.
+
+    Returns:
+        Sorted list of key ID strings. Empty list if no keys found.
+    """
+    keys_dir = repo_path / "keys"
+    if not keys_dir.is_dir():
+        return []
+    return sorted(f.name for f in keys_dir.iterdir() if f.is_file())

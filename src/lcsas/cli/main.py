@@ -255,6 +255,7 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
     from lcsas.db.connection import get_connection
     from lcsas.db.repos import register_repo
     from lcsas.db.schema import create_all
+    from lcsas.utils.fs import read_repo_key_ids
     from lcsas.utils.labels import generate_uuid
 
     db_path = args.db or Path("archive.db")
@@ -263,12 +264,18 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
         create_all(conn)
 
         repo_id = generate_uuid()
+        mirror = args.mirror_path.resolve()
+
+        # Auto-detect the encryption key ID from the repo's keys/ dir
+        key_ids = read_repo_key_ids(mirror)
+        encryption_key_id = key_ids[0] if key_ids else ""
+
         register_repo(
             conn,
             repo_id=repo_id,
             name=args.name,
-            mirror_path=str(args.mirror_path.resolve()),
-            encryption_key_id="",
+            mirror_path=str(mirror),
+            encryption_key_id=encryption_key_id,
         )
     finally:
         conn.close()
@@ -958,12 +965,12 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
         builder.build()
     except FileNotFoundError as e:
         logger.error(f"{e}")
-        logger.error("Ensure restic, xorriso, and python3 are installed.")
+        logger.error("Ensure rustic, xorriso, and python3 are installed.")
         return 1
 
     logger.info(f"Meta-volume built successfully at {output}")
     logger.info("Contents:")
-    logger.info("  tools/          Portable restic, xorriso, python3 + libraries")
+    logger.info("  tools/          Portable rustic, xorriso, python3 + libraries")
     logger.info("  lcsas/          LCSAS source code")
     logger.info("  restore.sh      Bootstrap restore script")
     logger.info("  README_RESTORE.md  Restore instructions")

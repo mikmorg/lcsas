@@ -414,7 +414,7 @@ rustic restore abc123def456 \
 
 ## Disaster Recovery (Meta-Volume)
 
-LCSAS archive discs are encrypted and deduplicated — restoring from them requires `restic`, `xorriso`, Python, and the LCSAS source code. If your archival machine is lost, those tools may not be available on the recovery machine.
+LCSAS archive discs are encrypted and deduplicated — restoring from them requires `rustic`, `xorriso`, Python, and the LCSAS source code. If your archival machine is lost, those tools may not be available on the recovery machine.
 
 The **meta-volume** solves this by bundling *everything* needed for restore onto a single supplementary disc burned alongside your data volumes at each storage location. The **only** thing not included is your encryption key file, which must be stored separately.
 
@@ -422,7 +422,7 @@ The **meta-volume** solves this by bundling *everything* needed for restore onto
 
 | Path | Contents |
 |------|----------|
-| `tools/bin/` | Portable Linux x86_64 binaries: `restic`, `xorriso`, `python3` |
+| `tools/bin/` | Portable Linux x86_64 binaries: `rustic`, `xorriso`, `python3` |
 | `tools/lib/` | All required shared libraries (discovered via `ldd`) |
 | `lcsas/src/` | Complete LCSAS source code (zero pip dependencies) |
 | `docs/` | Architecture documentation |
@@ -449,7 +449,7 @@ In a disaster scenario, you have:
 2. The meta-volume ISO (or physical disc)
 3. Your encryption key file (stored separately, e.g. in a safe)
 
-No system-installed `restic`, `xorriso`, or LCSAS is required.
+No system-installed `rustic`, `xorriso`, or LCSAS is required.
 
 ```bash
 # 1. Mount or copy the meta-volume to local disk
@@ -473,7 +473,7 @@ The restore script:
 1. Extracts all ISOs using the bundled `xorriso`
 2. Discovers repositories from disc metadata
 3. Assembles a restore cache with two-level pack layout
-4. Runs `restic restore` using the bundled `restic` binary
+4. Runs `rustic restore` using the bundled `rustic` binary
 5. Cleans up temporary files
 
 #### Restore Options
@@ -514,7 +514,7 @@ libraries. It will only work on recovery machines that are:
   `libpthread.so`, `libm.so` are NOT bundled — they must be on the host)
 - **Kernel:** 3.x+ (any modern Linux)
 
-For ARM64, RISC-V, or non-Linux recovery, you would need to install `restic`,
+For ARM64, RISC-V, or non-Linux recovery, you would need to install `rustic`,
 `xorriso`, and Python from the target platform's package manager, then use the
 bundled LCSAS source code directly.
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Protocol
 
 from lcsas.log import get_logger
 from lcsas.rustic.wrapper import RusticRunner
@@ -13,6 +14,13 @@ from lcsas.utils.hashing import sha256_file
 logger = get_logger()
 
 
+class ECCRunner(Protocol):
+    """Optional ECC verification interface."""
+
+    def verify_iso(self, iso_path: Path) -> bool: ...
+    def repair_iso(self, iso_path: Path) -> bool: ...
+
+
 class PackCorruptionError(Exception):
     """Raised when a pack file fails SHA-256 verification after copy."""
 
@@ -20,8 +28,36 @@ class PackCorruptionError(Exception):
 class RestoreExecutor:
     """Executes a restore operation by assembling packs into a cache."""
 
-    def __init__(self, rustic_runner: RusticRunner) -> None:
+    def __init__(
+        self,
+        rustic_runner: RusticRunner,
+        ecc_runner: ECCRunner | None = None,
+    ) -> None:
         self._rustic = rustic_runner
+        self._ecc = ecc_runner
+
+    def verify_iso(self, iso_path: Path) -> bool:
+        """Verify an ISO's ECC data using the configured ECC runner.
+
+        Returns True if ECC is valid or no ECC runner is configured.
+        Attempts automatic repair if verification fails.
+        """
+        if self._ecc is None:
+            logger.debug("No ECC runner configured — skipping ISO verification")
+            return True
+
+        logger.info(f"Verifying ECC on {iso_path.name}")
+        if self._ecc.verify_iso(iso_path):
+            logger.info(f"ECC verification passed: {iso_path.name}")
+            return True
+
+        logger.warning(f"ECC verification failed for {iso_path.name}, attempting repair")
+        if self._ecc.repair_iso(iso_path):
+            logger.info(f"ECC repair succeeded: {iso_path.name}")
+            return True
+
+        logger.error(f"ECC repair failed for {iso_path.name}")
+        return False
 
     def prepare_cache(
         self,
@@ -81,7 +117,7 @@ class RestoreExecutor:
 
         for sha256 in required_packs:
             # Place packs in two-level layout (data/<prefix>/<hash>)
-            # which restic 0.14+ expects for local repositories.
+            # which rustic/restic 0.14+ expects for local repositories.
             if len(sha256) >= 2:
                 prefix_dir = cache_data / sha256[:2]
                 ensure_dir(prefix_dir)

@@ -45,7 +45,7 @@ from lcsas.utils.labels import generate_uuid
 
 
 def _create_fake_mirror(base: Path, repo_name: str, pack_specs: list[tuple[str, int]]) -> Path:
-    """Create a fake restic-style mirror directory with pack files.
+    """Create a fake rustic-style mirror directory with pack files.
 
     Args:
         base: Parent directory for the mirror.

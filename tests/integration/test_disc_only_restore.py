@@ -10,7 +10,7 @@ purpose of LCSAS has been critically missed.
 
 Scenario
 --------
-  1. Create two restic repositories (``family``, ``work``).
+  1. Create two rustic repositories (``family``, ``work``).
   2. Back up initial data into both repos (snapshot S1).
   3. Scan packs → burn to ISOs (Disc 1 etc.).
   4. ADD new files to ``family``, MODIFY files in ``work``.
@@ -19,10 +19,10 @@ Scenario
   7. **DELETE everything** except the ISOs and ``key.txt``.
   8. Extract ISOs with ``xorriso``.
   9. Reconstruct each repo cache from on-disc metadata + packs.
- 10. ``restic restore latest`` from the reconstructed cache.
+ 10. ``rustic restore latest`` from the reconstructed cache.
  11. Verify every restored file matches the originals.
 
-Requires: ``restic`` and ``xorriso`` on PATH.
+Requires: ``rustic`` and ``xorriso`` on PATH.
 """
 
 from __future__ import annotations
@@ -52,15 +52,15 @@ from lcsas.restore.executor import RestoreExecutor
 # Skip conditions
 # ---------------------------------------------------------------------------
 
-requires_restic = pytest.mark.skipif(
-    not shutil.which("restic"),
-    reason="restic not installed",
+requires_rustic = pytest.mark.skipif(
+    not shutil.which("rustic"),
+    reason="rustic not installed",
 )
 requires_xorriso = pytest.mark.skipif(
     not shutil.which("xorriso"),
     reason="xorriso not installed",
 )
-pytestmark = [requires_restic, requires_xorriso]
+pytestmark = [requires_rustic, requires_xorriso]
 
 # ---------------------------------------------------------------------------
 # Deterministic test data
@@ -98,15 +98,15 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _restic(args: list[str], repo: Path, password_file: Path,
+def _rustic(args: list[str], repo: Path, password_file: Path,
             tmpdir: Path | None = None) -> subprocess.CompletedProcess:
-    """Run a restic command.
+    """Run a rustic command.
 
-    If *tmpdir* is provided it is passed as TMPDIR so that restic writes
+    If *tmpdir* is provided it is passed as TMPDIR so that rustic writes
     its temporary pack files there instead of the system /tmp (which may
     be a small partition).
     """
-    cmd = ["restic", "-r", str(repo), "--password-file", str(password_file), *args]
+    cmd = ["rustic", "-r", str(repo), "--password-file", str(password_file), *args]
     env = None
     if tmpdir is not None:
         env = {**os.environ, "TMPDIR": str(tmpdir)}
@@ -119,8 +119,8 @@ def _restic(args: list[str], repo: Path, password_file: Path,
     return result
 
 
-def _restic_snapshot_id(result: subprocess.CompletedProcess) -> str:
-    """Extract snapshot_id from ``restic backup --json`` output."""
+def _rustic_snapshot_id(result: subprocess.CompletedProcess) -> str:
+    """Extract snapshot_id from ``rustic backup --json`` output."""
     for line in reversed(result.stdout.strip().splitlines()):
         try:
             obj = json.loads(line)
@@ -128,7 +128,7 @@ def _restic_snapshot_id(result: subprocess.CompletedProcess) -> str:
                 return obj["snapshot_id"]
         except json.JSONDecodeError:
             continue
-    raise RuntimeError("Could not parse snapshot_id from restic output")
+    raise RuntimeError("Could not parse snapshot_id from rustic output")
 
 
 # ---------------------------------------------------------------------------
@@ -224,21 +224,21 @@ class TestDiscOnlyRestore:
             _generate_files(work_src, self.rng, NUM_INITIAL_FILES, "wrk")
         )
 
-        # ── Step 3: Init restic repos (the "local mirrors") ────────
+        # ── Step 3: Init rustic repos (the "local mirrors") ────────
         family_repo = self.mirror / "family"
         work_repo = self.mirror / "work"
 
-        _restic(["init"], family_repo, self.key_file, tmpdir=self.tmp)
-        _restic(["init"], work_repo, self.key_file, tmpdir=self.tmp)
+        _rustic(["init"], family_repo, self.key_file, tmpdir=self.tmp)
+        _rustic(["init"], work_repo, self.key_file, tmpdir=self.tmp)
 
         # ── Step 4: Initial backup ──────────────────────────────────
-        r = _restic(["backup", "--json", str(family_src)],
+        r = _rustic(["backup", "--json", str(family_src)],
                      family_repo, self.key_file, tmpdir=self.tmp)
-        self.snap_family_1 = _restic_snapshot_id(r)
+        self.snap_family_1 = _rustic_snapshot_id(r)
 
-        r = _restic(["backup", "--json", str(work_src)],
+        r = _rustic(["backup", "--json", str(work_src)],
                      work_repo, self.key_file, tmpdir=self.tmp)
-        self.snap_work_1 = _restic_snapshot_id(r)
+        self.snap_work_1 = _rustic_snapshot_id(r)
 
         # ── Step 5: Init LCSAS catalog & register repos ──────────────
         conn = get_connection(self.db_path)
@@ -267,13 +267,13 @@ class TestDiscOnlyRestore:
             self.work_manifest[f.name] = hashlib.sha256(new_data).hexdigest()
 
         # ── Step 8: Incremental backup ──────────────────────────────
-        r = _restic(["backup", "--json", str(family_src)],
+        r = _rustic(["backup", "--json", str(family_src)],
                      family_repo, self.key_file, tmpdir=self.tmp)
-        self.snap_family_2 = _restic_snapshot_id(r)
+        self.snap_family_2 = _rustic_snapshot_id(r)
 
-        r = _restic(["backup", "--json", str(work_src)],
+        r = _rustic(["backup", "--json", str(work_src)],
                      work_repo, self.key_file, tmpdir=self.tmp)
-        self.snap_work_2 = _restic_snapshot_id(r)
+        self.snap_work_2 = _rustic_snapshot_id(r)
 
         # ── Step 9: Scan + register + burn round 2 ──────────────────
         self._scan_and_register(conn, {"family": family_repo,
@@ -443,11 +443,11 @@ class TestDiscOnlyRestore:
         return dest
 
     def _build_restore_cache(self, repo_id: str) -> Path:
-        """Build a restic restore cache for one repo using ONLY disc data.
+        """Build a rustic restore cache for one repo using ONLY disc data.
 
         Uses the metadata from the LAST disc (most up-to-date) and
         packs from ALL discs.  Places packs in the two-level
-        ``data/<prefix>/<hash>`` layout that restic expects.
+        ``data/<prefix>/<hash>`` layout that rustic expects.
         """
         cache = self.restore_dir / f"cache_{repo_id}"
 
@@ -579,9 +579,9 @@ class TestDiscOnlyRestore:
         target = self.restore_dir / "family_output"
         target.mkdir(parents=True)
 
-        # Restore latest snapshot using restic against the disc-only cache
+        # Restore latest snapshot using rustic against the disc-only cache
         result = subprocess.run(
-            ["restic", "restore", "latest",
+            ["rustic", "restore", "latest",
              "-r", str(cache),
              "--password-file", str(self.key_file),
              "--no-cache",
@@ -589,12 +589,12 @@ class TestDiscOnlyRestore:
             capture_output=True, text=True,
         )
         assert result.returncode == 0, (
-            f"restic restore failed (rc={result.returncode}):\n"
+            f"rustic restore failed (rc={result.returncode}):\n"
             f"stdout: {result.stdout}\n"
             f"stderr: {result.stderr}"
         )
 
-        # Find the restored files (restic restores full path tree)
+        # Find the restored files (rustic restores full path tree)
         restored_files = self._find_restored_files(target)
 
         # Verify every file from the final manifest (initial + incremental)
@@ -619,7 +619,7 @@ class TestDiscOnlyRestore:
         target.mkdir(parents=True)
 
         result = subprocess.run(
-            ["restic", "restore", "latest",
+            ["rustic", "restore", "latest",
              "-r", str(cache),
              "--password-file", str(self.key_file),
              "--no-cache",
@@ -627,7 +627,7 @@ class TestDiscOnlyRestore:
             capture_output=True, text=True,
         )
         assert result.returncode == 0, (
-            f"restic restore failed (rc={result.returncode}):\n"
+            f"rustic restore failed (rc={result.returncode}):\n"
             f"stdout: {result.stdout}\n"
             f"stderr: {result.stderr}"
         )
@@ -653,7 +653,7 @@ class TestDiscOnlyRestore:
         target_fam = self.restore_dir / "family_inc_check"
         target_fam.mkdir(parents=True)
         result = subprocess.run(
-            ["restic", "restore", "latest",
+            ["rustic", "restore", "latest",
              "-r", str(cache_fam),
              "--password-file", str(self.key_file),
              "--no-cache",
@@ -661,7 +661,7 @@ class TestDiscOnlyRestore:
             capture_output=True, text=True,
         )
         assert result.returncode == 0, (
-            f"restic restore failed:\nstderr: {result.stderr}"
+            f"rustic restore failed:\nstderr: {result.stderr}"
         )
         restored_fam = self._find_restored_files(target_fam)
 
@@ -677,7 +677,7 @@ class TestDiscOnlyRestore:
         target_wrk = self.restore_dir / "work_inc_check"
         target_wrk.mkdir(parents=True)
         result = subprocess.run(
-            ["restic", "restore", "latest",
+            ["rustic", "restore", "latest",
              "-r", str(cache_wrk),
              "--password-file", str(self.key_file),
              "--no-cache",
@@ -685,7 +685,7 @@ class TestDiscOnlyRestore:
             capture_output=True, text=True,
         )
         assert result.returncode == 0, (
-            f"restic restore failed:\nstderr: {result.stderr}"
+            f"rustic restore failed:\nstderr: {result.stderr}"
         )
         restored_wrk = self._find_restored_files(target_wrk)
 

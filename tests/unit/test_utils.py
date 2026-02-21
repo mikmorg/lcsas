@@ -9,6 +9,7 @@ from lcsas.utils.fs import (
     ensure_dir,
     hardlink_or_copy,
     list_files_recursive,
+    read_repo_key_ids,
     safe_remove_tree,
 )
 from lcsas.utils.hashing import sha256_bytes, sha256_file
@@ -106,6 +107,26 @@ class TestFilesystem:
 
     def test_safe_remove_tree_nonexistent(self, tmp_path):
         safe_remove_tree(tmp_path / "nope")  # should not raise
+
+    def test_read_repo_key_ids(self, tmp_path):
+        """Reads key file names from keys/ directory."""
+        repo = tmp_path / "repo"
+        keys = repo / "keys"
+        keys.mkdir(parents=True)
+        (keys / "abc123def456").write_text("key-data")
+        (keys / "zzz999aaa000").write_text("key-data-2")
+
+        result = read_repo_key_ids(repo)
+        assert result == ["abc123def456", "zzz999aaa000"]
+
+    def test_read_repo_key_ids_no_keys_dir(self, tmp_path):
+        """Returns empty list when keys/ doesn't exist."""
+        assert read_repo_key_ids(tmp_path / "nope") == []
+
+    def test_read_repo_key_ids_empty(self, tmp_path):
+        """Returns empty list when keys/ is empty."""
+        (tmp_path / "keys").mkdir()
+        assert read_repo_key_ids(tmp_path) == []
 
 
 class TestLabels:

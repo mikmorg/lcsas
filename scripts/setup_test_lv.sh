@@ -66,11 +66,11 @@ chown -R "${TEST_USER}:${TEST_USER}" "${MOUNT_POINT}"
 
 # ── 5. Install required tools ────────────────────────────────────────────────
 
-info "Installing required packages (restic, xorriso, dvdisaster)"
+info "Installing required packages (rustic, xorriso, dvdisaster)"
 apt-get update -qq
-apt-get install -y -qq restic xorriso dvdisaster 2>/dev/null || {
+apt-get install -y -qq rustic xorriso dvdisaster 2>/dev/null || {
     warn "Some packages may not be available. Checking individually..."
-    for pkg in restic xorriso; do
+    for pkg in rustic xorriso; do
         apt-get install -y -qq "$pkg" 2>/dev/null || warn "Failed to install $pkg"
     done
     # dvdisaster may not be in repos — optional
@@ -97,7 +97,7 @@ echo "    DB:       ${MOUNT_POINT}/db"
 echo "    Test data: ${MOUNT_POINT}/test_data"
 echo ""
 echo "  Tools:"
-echo "    restic:     $(which restic 2>/dev/null || echo 'NOT FOUND')"
+echo "    rustic:     $(which rustic 2>/dev/null || echo 'NOT FOUND')"
 echo "    xorriso:    $(which xorriso 2>/dev/null || echo 'NOT FOUND')"
 echo "    dvdisaster: $(which dvdisaster 2>/dev/null || echo 'NOT FOUND')"
 echo ""

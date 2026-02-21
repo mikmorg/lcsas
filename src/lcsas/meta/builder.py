@@ -3,7 +3,7 @@
 A meta-volume contains everything needed to restore data from LCSAS
 archive discs, minus only the encryption key file:
 
-* Portable copies of ``restic``, ``xorriso``, and ``python3``
+* Portable copies of ``rustic``, ``xorriso``, and ``python3``
   with all required shared libraries.
 * The full LCSAS source code.
 * A ``restore.sh`` bootstrap script that orchestrates the restore
@@ -25,7 +25,8 @@ from lcsas.meta.bundler import ToolBundler
 
 # ── Constants ────────────────────────────────────────────────────────
 
-_REQUIRED_TOOLS = ("restic", "xorriso")
+_REQUIRED_TOOLS = ("rustic", "xorriso")
+_OPTIONAL_TOOLS = ("dvdisaster",)
 
 # Directories / files to copy from the LCSAS source tree.
 _SOURCE_ITEMS = ("src",)
@@ -55,7 +56,7 @@ TOOLS="$SCRIPT_DIR/tools"
 # ── Configure bundled tools ──────────────────────────────────────
 export LD_LIBRARY_PATH="${TOOLS}/lib:${LD_LIBRARY_PATH:-}"
 XORRISO="${TOOLS}/bin/xorriso"
-RESTIC="${TOOLS}/bin/restic"
+RUSTIC="${TOOLS}/bin/rustic"
 
 # ── Usage ────────────────────────────────────────────────────────
 usage() {
@@ -107,7 +108,7 @@ done
 [[ ! -d "$ISO_DIR" ]]  && { echo "ERROR: ISO directory not found: $ISO_DIR"; exit 1; }
 
 # ── Verify bundled tools ─────────────────────────────────────────
-for tool in "$XORRISO" "$RESTIC"; do
+for tool in "$XORRISO" "$RUSTIC"; do
     if [[ ! -x "$tool" ]]; then
         echo "ERROR: Bundled tool missing or not executable: $tool"
         echo "       This meta-volume may be damaged."
@@ -201,7 +202,7 @@ fi
 echo ""
 
 # ═════════════════════════════════════════════════════════════════
-#  Step 3: Build restore caches and run restic restore
+# Step 3: Build restore caches and run rustic restore
 # ═════════════════════════════════════════════════════════════════
 echo "--- Step 3: Restoring ---"
 
@@ -227,6 +228,7 @@ for repo in "${REPOS[@]}"; do
 
     # ── Copy packs from ALL volumes (two-level layout) ────────
     PACK_COUNT=0
+    PACK_ERRORS=0
     for vol_dir in "$EXTRACT_DIR"/*/; do
         data_dir="$vol_dir/data"
         [[ ! -d "$data_dir" ]] && continue
@@ -238,18 +240,30 @@ for repo in "${REPOS[@]}"; do
             dst="$CACHE_DIR/data/$prefix/$sha"
             if [[ ! -f "$dst" ]]; then
                 cp "$pack" "$dst"
-                PACK_COUNT=$((PACK_COUNT + 1))
+                # Verify SHA-256 of copied pack matches its filename
+                actual_sha="$(sha256sum "$dst" | cut -d' ' -f1)"
+                if [[ "$actual_sha" != "$sha" ]]; then
+                    echo "    ✗ SHA-256 MISMATCH: $sha (got $actual_sha)"
+                    rm -f "$dst"
+                    PACK_ERRORS=$((PACK_ERRORS + 1))
+                else
+                    PACK_COUNT=$((PACK_COUNT + 1))
+                fi
             fi
         done
     done
+    if [[ $PACK_ERRORS -gt 0 ]]; then
+        echo "    WARNING: $PACK_ERRORS packs failed SHA-256 verification"
+        echo "    Some data discs may be damaged — try redundant copies"
+    fi
     echo "    Ingested $PACK_COUNT packs from $ISO_COUNT volumes"
 
-    # ── restic restore ────────────────────────────────────────
+    # ── rustic restore ────────────────────────────────────────
     REPO_TARGET="$TARGET/$repo"
     mkdir -p "$REPO_TARGET"
 
-    echo "    Running: restic restore $SNAPSHOT → $REPO_TARGET"
-    if "$RESTIC" restore "$SNAPSHOT" \
+    echo "    Running: rustic restore $SNAPSHOT → $REPO_TARGET"
+    if "$RUSTIC" restore "$SNAPSHOT" \
          -r "$CACHE_DIR" \
          --password-file "$KEY_FILE" \
          --no-cache \
@@ -289,7 +303,7 @@ The **only** thing you must provide is your **encryption key file**.
 
 | Path | Description |
 |---|---|
-| `tools/` | Portable Linux x86_64 binaries: restic, xorriso, Python 3 |
+| `tools/` | Portable Linux x86_64 binaries: rustic, xorriso, Python 3 |
 | `lcsas/` | LCSAS source code (Python, no external dependencies) |
 | `docs/` | Architecture documentation |
 | `restore.sh` | Automated restore script |
@@ -372,7 +386,7 @@ Without the key file, the encrypted backup data cannot be decrypted.
 
 ## About LCSAS
 
-Linux Cold Storage Archival Suite orchestrates restic-compatible backup
+Linux Cold Storage Archival Suite orchestrates Rustic (restic-compatible) backup
 repositories onto optical media (Blu-ray, M-DISC) and tape (LTO) for
 long-term archival storage. Every data disc is self-describing ("holographic"),
 carrying full repository metadata so that any disc can bootstrap a restore
@@ -395,7 +409,7 @@ class MetaVolumeBuilder:
 
         output_dir/
         ├── tools/
-        │   ├── bin/          restic, xorriso, python3
+        │   ├── bin/          rustic, xorriso, python3
         │   └── lib/          shared libs + python stdlib
         ├── lcsas/
         │   └── src/lcsas/    LCSAS Python package
@@ -452,12 +466,20 @@ class MetaVolumeBuilder:
     # ── Tool bundling ────────────────────────────────────────────
 
     def _bundle_tools(self) -> None:
-        """Bundle restic, xorriso, and Python with shared libs."""
+        """Bundle rustic, xorriso, and Python with shared libs.
+
+        Also bundles optional tools (dvdisaster) if available on PATH.
+        """
         tools_dir = self._output / "tools"
         bundler = ToolBundler(tools_dir)
 
         for tool in _REQUIRED_TOOLS:
             bundler.bundle_binary(tool)
+
+        for tool in _OPTIONAL_TOOLS:
+            import shutil as _shutil
+            if _shutil.which(tool):
+                bundler.bundle_binary(tool)
 
         bundler.bundle_python()
 
@@ -519,6 +541,13 @@ class MetaVolumeBuilder:
 
     def _write_volume_info(self) -> None:
         """Write self-describing volume metadata."""
+        # Determine which optional tools were actually bundled
+        tools_bin = self._output / "tools" / "bin"
+        bundled_tools = list(_REQUIRED_TOOLS) + ["python3"]
+        for tool in _OPTIONAL_TOOLS:
+            if (tools_bin / tool).exists():
+                bundled_tools.append(tool)
+
         info = {
             "type": "meta",
             "description": "LCSAS rescue volume — tools + source for disaster recovery",
@@ -526,7 +555,7 @@ class MetaVolumeBuilder:
             "platform": f"linux-{os.uname().machine}",
             "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
             "contents": {
-                "tools": list(_REQUIRED_TOOLS) + ["python3"],
+                "tools": bundled_tools,
                 "lcsas_source": True,
                 "restore_script": "restore.sh",
                 "documentation": True,

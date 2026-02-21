@@ -57,7 +57,7 @@ Tier 2 — COLD        Optical media / LTO tape (permanent archive)
 
 ### Rustic Repository Anatomy
 
-A Rustic/restic repository contains:
+A Rustic repository contains:
 
 ```
 repo/
@@ -228,11 +228,23 @@ LCSAS_BD_2026_003/
 
 ### Disaster Recovery (No Catalog)
 
-If the central catalog is lost:
-1. Insert any LCSAS volume
-2. Read `catalog.db` from the volume → bootstrap a new catalog
-3. Insert remaining volumes → merge their catalogs
-4. Full catalog is reconstructed without any external dependency
+Each disc's ``catalog.db`` is a **cumulative snapshot** — the catalog
+injected onto volume N contains all records from volumes 1 through N
+(injected *after* the DB commit for volume N itself).  This means:
+
+* **The highest-numbered disc's catalog is always the most complete.**
+* No catalog merging is required — simply adopt the newest ``catalog.db``
+  as the authoritative master.
+
+Recovery procedure:
+
+1. Insert any LCSAS volume (ideally the highest-numbered one available)
+2. Copy ``catalog.db`` from the volume to a local path
+3. This catalog already knows every volume and pack created up to and
+   including that volume — no additional merge step is needed
+4. If you only have older volumes, the catalog will be missing records
+   for volumes produced *after* that disc was burned, but all prior
+   data is fully described
 
 ---
 

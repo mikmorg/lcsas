@@ -7,10 +7,10 @@ constructs a meta-volume, then deletes everything except:
   3. The key file
 
 It then runs the meta-volume's ``restore.sh`` using ONLY the bundled
-tools — no system-installed restic, xorriso, or Python — and verifies
+tools — no system-installed rustic, xorriso, or Python — and verifies
 that every file is restored byte-for-byte.
 
-Requires: ``restic`` and ``xorriso`` on PATH (for initial setup only).
+Requires: ``rustic`` and ``xorriso`` on PATH (for initial setup only).
 """
 
 from __future__ import annotations
@@ -37,13 +37,13 @@ from lcsas.packs.scanner import scan_mirror_packs
 
 # ── Skip conditions ──────────────────────────────────────────────
 
-requires_restic = pytest.mark.skipif(
-    not shutil.which("restic"), reason="restic not installed"
+requires_rustic = pytest.mark.skipif(
+    not shutil.which("rustic"), reason="rustic not installed"
 )
 requires_xorriso = pytest.mark.skipif(
     not shutil.which("xorriso"), reason="xorriso not installed"
 )
-pytestmark = [requires_restic, requires_xorriso]
+pytestmark = [requires_rustic, requires_xorriso]
 
 # ── Deterministic data ──────────────────────────────────────────
 
@@ -73,22 +73,22 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _restic(
+def _rustic(
     args: list[str],
     repo: Path,
     pw: Path,
     tmpdir: Path | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run restic with optional TMPDIR override.
+    """Run rustic with optional TMPDIR override.
 
-    If *tmpdir* is provided it is passed as TMPDIR so that restic writes
+    If *tmpdir* is provided it is passed as TMPDIR so that rustic writes
     its temporary pack files there instead of the (possibly tiny) /tmp.
     """
     env = None
     if tmpdir is not None:
         env = {**os.environ, "TMPDIR": str(tmpdir)}
     result = subprocess.run(
-        ["restic", "-r", str(repo), "--password-file", str(pw), *args],
+        ["rustic", "-r", str(repo), "--password-file", str(pw), *args],
         capture_output=True, text=True, check=True, env=env,
     )
     return result
@@ -156,10 +156,10 @@ class TestMetaVolumeRestore:
         src_dir = tmp_path / "original"
         self.manifest = _generate_files(src_dir, self.rng, NUM_FILES, "mv")
 
-        # ── Init restic repo & backup ────────────────────────────
+        # ── Init rustic repo & backup ────────────────────────────
         repo = mirror / "photos"
-        _restic(["init"], repo, key_file, tmpdir=tmp_path)
-        _restic(["backup", "--json", str(src_dir)], repo, key_file, tmpdir=tmp_path)
+        _rustic(["init"], repo, key_file, tmpdir=tmp_path)
+        _rustic(["backup", "--json", str(src_dir)], repo, key_file, tmpdir=tmp_path)
 
         # ── Init LCSAS catalog ───────────────────────────────────
         conn = get_connection(db_path)
@@ -259,7 +259,7 @@ class TestMetaVolumeRestore:
 
     def test_meta_volume_has_all_tools(self):
         """Meta-volume contains all required tools."""
-        assert (self.meta_dir / "tools" / "bin" / "restic").is_file()
+        assert (self.meta_dir / "tools" / "bin" / "rustic").is_file()
         assert (self.meta_dir / "tools" / "bin" / "xorriso").is_file()
         assert (self.meta_dir / "tools" / "bin" / "python3").is_file()
         assert (self.meta_dir / "restore.sh").is_file()
@@ -277,7 +277,7 @@ class TestMetaVolumeRestore:
     def test_restore_sh_executes(self):
         """restore.sh restores data using ONLY bundled tools."""
         # Run restore.sh with a pristine environment — no system tools.
-        # The script uses absolute paths to its bundled restic/xorriso,
+        # The script uses absolute paths to its bundled rustic/xorriso,
         # so we only need basic shell utilities on PATH.
         env = {
             "PATH": "/usr/bin:/bin",   # basic shell commands only

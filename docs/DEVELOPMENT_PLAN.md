@@ -53,7 +53,7 @@ Add tests covering all three functions if not already present.
 
 Shows flat `data/aabbccdd...` layout, but production code (`ingest_volume`
 in `executor.py`) now uses two-level `data/<prefix>/<sha>` layout matching
-restic 0.14+ DefaultLayout.
+rustic 0.14+ DefaultLayout.
 
 **Fix:** Update the architecture doc to reflect the two-level layout.
 
@@ -150,7 +150,7 @@ single most critical missing feature — a backup tool must be able to restore.
 | 3.1 Implement `cmd_restore_plan()` | Accept snapshot ID + optional `--repo`. Call `rustic restore --dry-run` to get required pack hashes. Call `RestorePlanner.generate_pick_list()`. Format and print pick list (volumes, pack counts, sizes, missing packs). | Unit tests with mocked RusticRunner: correct output formatting, handles missing packs, handles `--repo` filter. ≥4 tests. |
 | 3.2 Implement `cmd_restore_exec()` | Accept snapshot ID + `--target` + `--password-file` + optional `--repo`. Call planner to get pick list. For each volume: prompt user to mount/specify path → call `RestoreExecutor.ingest_volume()`. After all volumes ingested → call `RestoreExecutor.execute_restore()`. | Unit tests with mocked executor: correct orchestration sequence, handles already-cached packs, error on missing volumes. ≥5 tests. |
 | 3.3 Wire both to `dispatch()` | Add routing for `restore plan` and `restore exec`. | CLI dispatch tests: both subcommands route correctly. |
-| 3.4 Integration test | End-to-end: create repo → backup files → stage → create ISOs → restore plan → restore exec → verify byte-for-byte match. | 1 integration test (may take 30-60s with real restic). |
+| 3.4 Integration test | End-to-end: create repo → backup files → stage → create ISOs → restore plan → restore exec → verify byte-for-byte match. | 1 integration test (may take 30-60s with real rustic). |
 
 **Exit criteria:** Full restore workflow works from CLI. ≥12 new tests.
 

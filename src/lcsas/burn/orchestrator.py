@@ -207,7 +207,8 @@ class BurnOrchestrator:
 
         # Write volume info
         vol = get_volume_by_id(self._conn, volume.volume_id)
-        injector.write_volume_info(vol)
+        injector.write_volume_info(vol, packs=selected_packs)
+        injector.write_restore_instructions()
 
         return BurnManifest(
             volume_label=vol_label,
@@ -425,7 +426,8 @@ class BurnOrchestrator:
             self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             injector.inject_catalog(self._config.db_path)
             vol = get_volume_by_id(self._conn, volume.volume_id)
-            injector.write_volume_info(vol)
+            injector.write_volume_info(vol, packs=selected_packs)
+            injector.write_restore_instructions()
 
             # Create ISO
             iso_path = session_dir / f"{vol_label}.iso"
