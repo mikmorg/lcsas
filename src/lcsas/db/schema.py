@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 # ---------------------------------------------------------------------------
 # DDL Statements
@@ -92,13 +92,16 @@ CREATE TABLE IF NOT EXISTS locations (
 
 SQL_CREATE_VOLUME_COPIES = """
 CREATE TABLE IF NOT EXISTS volume_copies (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    volume_id   INTEGER NOT NULL,
-    location    TEXT    NOT NULL,
-    status      TEXT    NOT NULL DEFAULT 'ACTIVE'
-                CHECK (status IN ('ACTIVE', 'DEPRECATED', 'DESTROYED')),
-    burn_date   TEXT    NOT NULL,
-    notes       TEXT    DEFAULT '',
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    volume_id       INTEGER NOT NULL,
+    location        TEXT    NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'ACTIVE'
+                    CHECK (status IN ('ACTIVE', 'DEPRECATED', 'DESTROYED')),
+    burn_date       TEXT    NOT NULL,
+    notes           TEXT    DEFAULT '',
+    iso_sha256      TEXT,
+    last_verified_at DATETIME,
+    media_serial    TEXT    NOT NULL DEFAULT '',
     FOREIGN KEY (volume_id) REFERENCES volumes (volume_id),
     FOREIGN KEY (location) REFERENCES locations (name),
     UNIQUE(volume_id, location)
@@ -128,6 +131,21 @@ CREATE TABLE IF NOT EXISTS session_volumes (
 );
 """
 
+SQL_CREATE_VOLUME_EVENTS = """
+CREATE TABLE IF NOT EXISTS volume_events (
+    event_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    volume_id   INTEGER NOT NULL,
+    event_type  TEXT NOT NULL CHECK(event_type IN (
+        'VERIFY_PASS', 'VERIFY_FAIL', 'ECC_REPAIR',
+        'LOCATION_MOVE', 'CONDITION_CHECK', 'NOTE')),
+    event_date  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    location    TEXT,
+    detail      TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (volume_id) REFERENCES volumes (volume_id),
+    FOREIGN KEY (location)  REFERENCES locations (name)
+);
+"""
+
 # ---------------------------------------------------------------------------
 # Indices
 # ---------------------------------------------------------------------------
@@ -143,6 +161,8 @@ SQL_CREATE_INDICES = [
     "CREATE INDEX IF NOT EXISTS idx_volume_copies_volume_id ON volume_copies (volume_id);",
     "CREATE INDEX IF NOT EXISTS idx_volume_copies_location ON volume_copies (location);",
     "CREATE INDEX IF NOT EXISTS idx_session_volumes_session ON session_volumes (session_id);",
+    "CREATE INDEX IF NOT EXISTS idx_volume_events_volume ON volume_events (volume_id);",
+    "CREATE INDEX IF NOT EXISTS idx_volume_events_type ON volume_events (event_type);",
 ]
 
 
@@ -160,6 +180,7 @@ def create_all(conn: sqlite3.Connection) -> None:
     cursor.execute(SQL_CREATE_VOLUME_COPIES)
     cursor.execute(SQL_CREATE_BURN_SESSIONS)
     cursor.execute(SQL_CREATE_SESSION_VOLUMES)
+    cursor.execute(SQL_CREATE_VOLUME_EVENTS)
 
     for idx_sql in SQL_CREATE_INDICES:
         cursor.execute(idx_sql)
@@ -192,24 +213,46 @@ def migrate(conn: sqlite3.Connection) -> int:
 
     # v2 → v3: add verified_at column, created_at on repos
     if current < 3:
-        # Add verified_at to volumes (if missing)
         cols = {r[1] for r in cursor.execute("PRAGMA table_info(volumes)").fetchall()}
         if "verified_at" not in cols:
             cursor.execute("ALTER TABLE volumes ADD COLUMN verified_at DATETIME")
-        # Add created_at to repositories (if missing)
         cols = {r[1] for r in cursor.execute("PRAGMA table_info(repositories)").fetchall()}
         if "created_at" not in cols:
             cursor.execute(
                 "ALTER TABLE repositories ADD COLUMN "
                 "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
             )
-        # Drop redundant indexes (safe if they don't exist)
         for idx in ("idx_packs_sha256", "idx_volume_packs_volume_id"):
             cursor.execute(f"DROP INDEX IF EXISTS {idx}")
-
         cursor.execute(
             "INSERT INTO schema_version (version) VALUES (?)",
             (3,),
+        )
+
+    # v3 → v4: volume_events table, volume_copies extra columns
+    if current < 4:
+        # Create volume_events table (idempotent)
+        cursor.executescript(SQL_CREATE_VOLUME_EVENTS)
+        for idx_sql in (
+            "CREATE INDEX IF NOT EXISTS idx_volume_events_volume ON volume_events (volume_id);",
+            "CREATE INDEX IF NOT EXISTS idx_volume_events_type ON volume_events (event_type);",
+        ):
+            cursor.execute(idx_sql)
+
+        # Add columns to volume_copies (if missing)
+        cols = {r[1] for r in cursor.execute("PRAGMA table_info(volume_copies)").fetchall()}
+        if "iso_sha256" not in cols:
+            cursor.execute("ALTER TABLE volume_copies ADD COLUMN iso_sha256 TEXT")
+        if "last_verified_at" not in cols:
+            cursor.execute("ALTER TABLE volume_copies ADD COLUMN last_verified_at DATETIME")
+        if "media_serial" not in cols:
+            cursor.execute(
+                "ALTER TABLE volume_copies ADD COLUMN media_serial TEXT NOT NULL DEFAULT ''"
+            )
+
+        cursor.execute(
+            "INSERT INTO schema_version (version) VALUES (?)",
+            (4,),
         )
 
     conn.commit()

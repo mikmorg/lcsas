@@ -89,6 +89,9 @@ class VolumeCopy:
     status: str
     burn_date: str
     notes: str
+    iso_sha256: str | None
+    last_verified_at: str | None
+    media_serial: str
 
 
 @dataclass(frozen=True)
@@ -110,3 +113,15 @@ class SessionVolume:
     volume_id: int
     iso_path: str
     iso_sha256: str | None
+
+
+@dataclass(frozen=True)
+class VolumeEvent:
+    """A lifecycle event for a volume (verification, ECC repair, etc.)."""
+
+    event_id: int
+    volume_id: int
+    event_type: str
+    event_date: str
+    location: str | None
+    detail: str

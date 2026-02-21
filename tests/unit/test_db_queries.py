@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from lcsas.db.queries import (
     get_archive_status_summary,
     get_missing_packs,
@@ -9,10 +11,13 @@ from lcsas.db.queries import (
     get_packs_only_on_volumes,
     get_pick_list,
     get_redundancy_report,
+    get_snapshots_by_path,
+    get_snapshots_by_tag,
     get_total_unarchived_bytes,
     get_unarchived_packs,
     get_volumes_for_pack,
 )
+from lcsas.db.snapshots import upsert_snapshot
 
 
 class TestUnarchived:
@@ -140,3 +145,152 @@ class TestStatusSummary:
         assert summary["archived"] == 14
         assert summary["unarchived"] == 6
         assert summary["pruned"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Snapshot JSON helpers (get_snapshots_by_path, get_snapshots_by_tag)
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotsByPath:
+    """Tests for get_snapshots_by_path using json_each()."""
+
+    def test_exact_path_match(self, memory_db):
+        upsert_snapshot(
+            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
+            paths=json.dumps(["/home/user/docs", "/home/user/photos"]),
+        )
+        upsert_snapshot(
+            memory_db, "snap2", "_test", "host1", "2025-01-02T00:00:00",
+            paths=json.dumps(["/var/log"]),
+        )
+        results = get_snapshots_by_path(memory_db, "/home/user/docs")
+        assert len(results) == 1
+        assert results[0].snapshot_id == "snap1"
+
+    def test_wildcard_path(self, memory_db):
+        upsert_snapshot(
+            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
+            paths=json.dumps(["/home/user/docs"]),
+        )
+        upsert_snapshot(
+            memory_db, "snap2", "_test", "host1", "2025-01-02T00:00:00",
+            paths=json.dumps(["/home/admin/docs"]),
+        )
+        upsert_snapshot(
+            memory_db, "snap3", "_test", "host1", "2025-01-03T00:00:00",
+            paths=json.dumps(["/var/log"]),
+        )
+        results = get_snapshots_by_path(memory_db, "/home/%/docs")
+        ids = {s.snapshot_id for s in results}
+        assert ids == {"snap1", "snap2"}
+
+    def test_no_match(self, memory_db):
+        upsert_snapshot(
+            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
+            paths=json.dumps(["/home/user/docs"]),
+        )
+        results = get_snapshots_by_path(memory_db, "/nonexistent")
+        assert results == []
+
+    def test_filter_by_repo(self, memory_db):
+        from lcsas.db.repos import register_repo
+        register_repo(memory_db, "repo_b", "B", "/b")
+        upsert_snapshot(
+            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
+            paths=json.dumps(["/shared/data"]),
+        )
+        upsert_snapshot(
+            memory_db, "snap2", "repo_b", "host2", "2025-01-02T00:00:00",
+            paths=json.dumps(["/shared/data"]),
+        )
+        results = get_snapshots_by_path(memory_db, "/shared/data", repo_id="repo_b")
+        assert len(results) == 1
+        assert results[0].snapshot_id == "snap2"
+
+    def test_ordered_newest_first(self, memory_db):
+        for i in range(1, 4):
+            upsert_snapshot(
+                memory_db, f"snap{i}", "_test", "host1",
+                f"2025-01-0{i}T00:00:00",
+                paths=json.dumps(["/data"]),
+            )
+        results = get_snapshots_by_path(memory_db, "/data")
+        assert [s.snapshot_id for s in results] == ["snap3", "snap2", "snap1"]
+
+    def test_empty_paths_not_matched(self, memory_db):
+        upsert_snapshot(
+            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
+            paths="[]",
+        )
+        results = get_snapshots_by_path(memory_db, "%")
+        assert results == []
+
+
+class TestSnapshotsByTag:
+    """Tests for get_snapshots_by_tag using json_each()."""
+
+    def test_exact_tag_match(self, memory_db):
+        upsert_snapshot(
+            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
+            tags=json.dumps(["daily", "important"]),
+        )
+        upsert_snapshot(
+            memory_db, "snap2", "_test", "host1", "2025-01-02T00:00:00",
+            tags=json.dumps(["weekly"]),
+        )
+        results = get_snapshots_by_tag(memory_db, "important")
+        assert len(results) == 1
+        assert results[0].snapshot_id == "snap1"
+
+    def test_no_match(self, memory_db):
+        upsert_snapshot(
+            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
+            tags=json.dumps(["daily"]),
+        )
+        results = get_snapshots_by_tag(memory_db, "monthly")
+        assert results == []
+
+    def test_filter_by_repo(self, memory_db):
+        from lcsas.db.repos import register_repo
+        register_repo(memory_db, "repo_b", "B", "/b")
+        upsert_snapshot(
+            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
+            tags=json.dumps(["backup"]),
+        )
+        upsert_snapshot(
+            memory_db, "snap2", "repo_b", "host2", "2025-01-02T00:00:00",
+            tags=json.dumps(["backup"]),
+        )
+        results = get_snapshots_by_tag(memory_db, "backup", repo_id="repo_b")
+        assert len(results) == 1
+        assert results[0].snapshot_id == "snap2"
+
+    def test_multiple_snapshots_same_tag(self, memory_db):
+        for i in range(1, 4):
+            upsert_snapshot(
+                memory_db, f"snap{i}", "_test", "host1",
+                f"2025-01-0{i}T00:00:00",
+                tags=json.dumps(["common"]),
+            )
+        results = get_snapshots_by_tag(memory_db, "common")
+        assert len(results) == 3
+        # Newest first
+        assert results[0].snapshot_id == "snap3"
+
+    def test_empty_tags_not_matched(self, memory_db):
+        upsert_snapshot(
+            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
+            tags="[]",
+        )
+        results = get_snapshots_by_tag(memory_db, "anything")
+        assert results == []
+
+    def test_partial_tag_no_match(self, memory_db):
+        """Tag match is exact, not LIKE."""
+        upsert_snapshot(
+            memory_db, "snap1", "_test", "host1", "2025-01-01T00:00:00",
+            tags=json.dumps(["daily-backup"]),
+        )
+        results = get_snapshots_by_tag(memory_db, "daily")
+        assert results == []

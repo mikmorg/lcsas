@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from lcsas.db.models import Pack, Volume
+from lcsas.db.models import Pack, Snapshot, Volume
 
 
 def _row_to_pack(row: sqlite3.Row) -> Pack:
@@ -404,3 +404,87 @@ def get_location_summary(
         }
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Snapshot JSON helpers  (requires SQLite 3.9+ for json_each)
+# ---------------------------------------------------------------------------
+
+def _row_to_snapshot(row: sqlite3.Row) -> Snapshot:
+    return Snapshot(
+        snapshot_id=row["snapshot_id"],
+        repo_id=row["repo_id"],
+        hostname=row["hostname"],
+        timestamp=row["timestamp"],
+        paths=row["paths"],
+        tags=row["tags"],
+        description=row["description"],
+    )
+
+
+def get_snapshots_by_path(
+    conn: sqlite3.Connection,
+    path_pattern: str,
+    repo_id: str | None = None,
+) -> list[Snapshot]:
+    """Return snapshots containing a path matching *path_pattern*.
+
+    Uses SQLite ``json_each()`` to search the JSON array stored in
+    ``snapshots.paths``.  The *path_pattern* supports SQL LIKE wildcards
+    (``%`` and ``_``).
+    """
+    if repo_id:
+        rows = conn.execute(
+            """SELECT s.* FROM snapshots s
+               WHERE s.repo_id = ?
+                 AND EXISTS (
+                     SELECT 1 FROM json_each(s.paths)
+                     WHERE value LIKE ?
+                 )
+               ORDER BY s.timestamp DESC""",
+            (repo_id, path_pattern),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT s.* FROM snapshots s
+               WHERE EXISTS (
+                   SELECT 1 FROM json_each(s.paths)
+                   WHERE value LIKE ?
+               )
+               ORDER BY s.timestamp DESC""",
+            (path_pattern,),
+        ).fetchall()
+    return [_row_to_snapshot(r) for r in rows]
+
+
+def get_snapshots_by_tag(
+    conn: sqlite3.Connection,
+    tag: str,
+    repo_id: str | None = None,
+) -> list[Snapshot]:
+    """Return snapshots that contain the exact *tag*.
+
+    Uses SQLite ``json_each()`` on the ``snapshots.tags`` JSON array.
+    """
+    if repo_id:
+        rows = conn.execute(
+            """SELECT s.* FROM snapshots s
+               WHERE s.repo_id = ?
+                 AND EXISTS (
+                     SELECT 1 FROM json_each(s.tags)
+                     WHERE value = ?
+                 )
+               ORDER BY s.timestamp DESC""",
+            (repo_id, tag),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT s.* FROM snapshots s
+               WHERE EXISTS (
+                   SELECT 1 FROM json_each(s.tags)
+                   WHERE value = ?
+               )
+               ORDER BY s.timestamp DESC""",
+            (tag,),
+        ).fetchall()
+    return [_row_to_snapshot(r) for r in rows]

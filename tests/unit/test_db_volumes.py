@@ -57,7 +57,29 @@ class TestVolumesCRUD:
             memory_db, label="VOL_S", uuid=generate_uuid(),
             media_type="BD25", capacity_bytes=25_000_000_000,
         )
+        # Step through valid transitions: STAGING → BURNING → BURNED → VERIFIED
+        update_status(memory_db, vol.volume_id, "BURNING")
+        update_status(memory_db, vol.volume_id, "BURNED")
         update_status(memory_db, vol.volume_id, "VERIFIED")
+        updated = get_volume_by_id(memory_db, vol.volume_id)
+        assert updated.status == "VERIFIED"
+
+    def test_update_status_invalid_transition(self, memory_db):
+        """Skipping states is rejected by transition enforcement."""
+        vol = create_volume(
+            memory_db, label="VOL_TRANS", uuid=generate_uuid(),
+            media_type="BD25", capacity_bytes=25_000_000_000,
+        )
+        with pytest.raises(ValueError, match="Invalid status transition"):
+            update_status(memory_db, vol.volume_id, "VERIFIED")
+
+    def test_update_status_force(self, memory_db):
+        """force=True bypasses transition enforcement."""
+        vol = create_volume(
+            memory_db, label="VOL_FORCE", uuid=generate_uuid(),
+            media_type="BD25", capacity_bytes=25_000_000_000,
+        )
+        update_status(memory_db, vol.volume_id, "VERIFIED", force=True)
         updated = get_volume_by_id(memory_db, vol.volume_id)
         assert updated.status == "VERIFIED"
 

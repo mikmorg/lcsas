@@ -2,10 +2,24 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import UTC, datetime
 
 from lcsas.db.models import Volume
+
+logger = logging.getLogger(__name__)
+
+# Valid status transitions. Each key maps to the set of statuses
+# that a volume is allowed to transition *to* from that state.
+VALID_TRANSITIONS: dict[str, set[str]] = {
+    "STAGING":    {"BURNING", "DEPRECATED", "DESTROYED"},
+    "BURNING":    {"BURNED", "VERIFIED", "STAGING", "DESTROYED"},  # VERIFIED = immediate verify
+    "BURNED":     {"VERIFIED", "STAGING", "DESTROYED"},            # STAGING = re-burn
+    "VERIFIED":   {"DEPRECATED", "DESTROYED"},
+    "DEPRECATED": {"DESTROYED"},
+    "DESTROYED":  set(),
+}
 
 
 def _row_to_volume(row: sqlite3.Row) -> Volume:
@@ -83,11 +97,27 @@ def update_status(
     status: str,
     *,
     commit: bool = True,
+    force: bool = False,
 ) -> None:
     """Update the status of a volume.
 
+    Enforces valid state transitions unless *force* is ``True``.
     Automatically sets ``verified_at`` when status transitions to VERIFIED.
     """
+    if not force:
+        current = get_volume_by_id(conn, volume_id).status
+        allowed = VALID_TRANSITIONS.get(current, set())
+        if status not in allowed:
+            raise ValueError(
+                f"Invalid status transition for volume {volume_id}: "
+                f"{current} → {status} (allowed: {sorted(allowed)})"
+            )
+    elif force:
+        logger.warning(
+            "Forced status change for volume %d → %s (bypassing transition rules)",
+            volume_id, status,
+        )
+
     if status == "VERIFIED":
         now = datetime.now(UTC).isoformat()
         conn.execute(

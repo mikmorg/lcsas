@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
 
 from lcsas.binpack.algorithm import estimate_volumes_needed, first_fit_decreasing
@@ -105,12 +103,12 @@ class TestConfigEdgeCases:
 
 class TestDbEdgeCases:
     def test_update_status_invalid(self, memory_db):
-        """Invalid status violates CHECK constraint."""
+        """Invalid status is caught by transition enforcement."""
         vol = create_volume(
             memory_db, label="TEST_V", uuid=generate_uuid(),
             media_type="BD25", capacity_bytes=25_000_000_000,
         )
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises(ValueError):
             update_status(memory_db, vol.volume_id, "INVALID_STATUS")
 
     def test_update_used_bytes_exceeds_capacity(self, memory_db):

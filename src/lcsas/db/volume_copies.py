@@ -9,6 +9,19 @@ from lcsas.db.models import VolumeCopy
 
 
 def _row_to_copy(row: sqlite3.Row) -> VolumeCopy:
+    # iso_sha256, last_verified_at, media_serial may be absent on v3 catalogs
+    try:
+        iso_sha256 = row["iso_sha256"]
+    except (IndexError, KeyError):
+        iso_sha256 = None
+    try:
+        last_verified_at = row["last_verified_at"]
+    except (IndexError, KeyError):
+        last_verified_at = None
+    try:
+        media_serial = row["media_serial"]
+    except (IndexError, KeyError):
+        media_serial = ""
     return VolumeCopy(
         id=row["id"],
         volume_id=row["volume_id"],
@@ -16,6 +29,9 @@ def _row_to_copy(row: sqlite3.Row) -> VolumeCopy:
         status=row["status"],
         burn_date=row["burn_date"],
         notes=row["notes"],
+        iso_sha256=iso_sha256,
+        last_verified_at=last_verified_at,
+        media_serial=media_serial,
     )
 
 
@@ -26,15 +42,18 @@ def add_volume_copy(
     burn_date: str | None = None,
     notes: str = "",
     *,
+    iso_sha256: str | None = None,
+    media_serial: str = "",
     commit: bool = True,
 ) -> VolumeCopy:
     """Record a physical copy of a volume at a location."""
     if burn_date is None:
         burn_date = datetime.now(UTC).isoformat()
     cursor = conn.execute(
-        """INSERT INTO volume_copies (volume_id, location, burn_date, notes)
-           VALUES (?, ?, ?, ?)""",
-        (volume_id, location, burn_date, notes),
+        """INSERT INTO volume_copies
+               (volume_id, location, burn_date, notes, iso_sha256, media_serial)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (volume_id, location, burn_date, notes, iso_sha256, media_serial),
     )
     if commit:
         conn.commit()
@@ -137,3 +156,21 @@ def destroy_copy(
         (volume_id, location),
     )
     conn.commit()
+
+
+def update_copy_verified(
+    conn: sqlite3.Connection,
+    volume_id: int,
+    location: str,
+    *,
+    commit: bool = True,
+) -> None:
+    """Record that a copy was verified now."""
+    now = datetime.now(UTC).isoformat()
+    conn.execute(
+        """UPDATE volume_copies SET last_verified_at = ?
+           WHERE volume_id = ? AND location = ? AND status = 'ACTIVE'""",
+        (now, volume_id, location),
+    )
+    if commit:
+        conn.commit()

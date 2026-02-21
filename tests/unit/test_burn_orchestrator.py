@@ -191,7 +191,7 @@ class TestPrepare:
         m1 = orch.prepare()
         # Mark volume as verified so packs become "archived"
         from lcsas.db.volumes import update_status
-        update_status(conn, m1.volume_id, "VERIFIED")
+        update_status(conn, m1.volume_id, "VERIFIED", force=True)
 
         # Add more packs
         data_dir = orch_env["config"].repositories["family"].mirror_path / "data"

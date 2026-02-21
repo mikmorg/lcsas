@@ -518,18 +518,24 @@ class BurnOrchestrator:
             iso_path = Path(sv.iso_path)
             vol = get_volume_by_id(self._conn, sv.volume_id)
 
-            # Update status
-            update_status(self._conn, sv.volume_id, "BURNING", commit=False)
-            self._conn.commit()
+            # For multi-location re-burns, skip status transitions if
+            # the volume is already VERIFIED (just add another copy).
+            is_reburn = vol.status == "VERIFIED"
+
+            if not is_reburn:
+                # Update status
+                update_status(self._conn, sv.volume_id, "BURNING", commit=False)
+                self._conn.commit()
 
             try:
                 # Burn
                 if not skip_burn:
                     self._xorriso.burn_iso(iso_path, device)
 
-                # Finalize volume status (atomic: status + close + copy)
-                update_status(self._conn, sv.volume_id, "VERIFIED", commit=False)
-                mark_closed(self._conn, sv.volume_id, commit=False)
+                if not is_reburn:
+                    # Finalize volume status (atomic: status + close + copy)
+                    update_status(self._conn, sv.volume_id, "VERIFIED", commit=False)
+                    mark_closed(self._conn, sv.volume_id, commit=False)
 
                 # Record copy at location
                 add_volume_copy(
