@@ -61,14 +61,22 @@ _ZSTD_MAGIC = b"\x28\xB5\x2F\xFD"
 try:
     import zstandard as _zstd  # type: ignore[import-untyped]
 
-    def _decompress_zstd(data: bytes) -> bytes:
-        return _zstd.ZstdDecompressor().decompress(data)
+    def _decompress_zstd(data: bytes, max_output_size: int = 0) -> bytes:
+        dctx = _zstd.ZstdDecompressor()
+        if max_output_size > 0:
+            return dctx.decompress(data, max_output_size=max_output_size)
+        # Try without limit first; if that fails (no content size in
+        # the frame header), fall back with a generous cap.
+        try:
+            return dctx.decompress(data)
+        except _zstd.ZstdError:
+            return dctx.decompress(data, max_output_size=len(data) * 20)
 
     _HAS_ZSTD = True
 except ImportError:
     _HAS_ZSTD = False
 
-    def _decompress_zstd(data: bytes) -> bytes:  # type: ignore[misc]
+    def _decompress_zstd(data: bytes, max_output_size: int = 0) -> bytes:  # type: ignore[misc]
         raise RuntimeError(
             "This repository uses zstd compression but the 'zstandard' "
             "Python package is not installed.  Install it with:\n"
@@ -208,7 +216,8 @@ def _load_master_key(key_file: Path, password: bytes) -> MasterKey:
     p = key_doc.get("p", 1)
 
     derived = hashlib.scrypt(
-        password, salt=salt, n=n, r=r, p=p, dklen=64
+        password, salt=salt, n=n, r=r, p=p, dklen=64,
+        maxmem=max(128 * r * (n + p + 2) * 2, 2**25),  # ≥32 MB
     )
 
     # Split derived key into AES encryption key + Poly1305 MAC keys
@@ -403,8 +412,29 @@ class PurePythonRestorer:
         return _decrypt_authenticated(mk.encrypt, mk.mac_k, mk.mac_r, encrypted)
 
     def _decrypt_file(self, path: Path) -> bytes:
-        """Read and decrypt a repository file."""
-        return self._decrypt(path.read_bytes())
+        """Read, decrypt, and (if needed) decompress a repository file.
+
+        Restic repository format v2 prepends a compression-type byte
+        after decryption:
+          - ``\\x00``  → uncompressed (strip the prefix)
+          - ``\\x01``  → zstd-compressed (strip the prefix, decompress)
+          - ``\\x02``  → zstd-compressed (strip the prefix, decompress)
+          - ``{``       → v1 repo, raw JSON, no prefix
+
+        After the prefix byte the data is either raw JSON or a
+        zstd frame (magic ``\\x28\\xB5\\x2F\\xFD``).
+        """
+        data = self._decrypt(path.read_bytes())
+
+        # Repo v2: first byte is a compression-type indicator
+        if len(data) > 5 and data[1:5] == _ZSTD_MAGIC:
+            # Byte 0 is compression type (1 or 2), rest is zstd frame
+            data = _decompress_zstd(data[1:])
+        elif len(data) > 1 and data[0:1] in (b"\x00", b"\x01", b"\x02"):
+            # Compression type present but no zstd magic → just strip
+            data = data[1:]
+
+        return data
 
     def _load_index(self) -> None:
         """Read and decrypt all index files → build blob location map."""
@@ -544,9 +574,12 @@ class PurePythonRestorer:
 
         plaintext = self._decrypt(encrypted)
 
-        # Handle zstd compression
+        # Handle zstd compression.  In restic repo v2, compressed
+        # pack blobs start directly with the zstd frame (no type
+        # prefix byte, unlike standalone files like index/snapshots).
         if plaintext[:4] == _ZSTD_MAGIC:
-            plaintext = _decompress_zstd(plaintext)
+            max_out = loc.uncompressed_length or (len(plaintext) * 20)
+            plaintext = _decompress_zstd(plaintext, max_output_size=max_out)
 
         # Verify content hash
         actual_hash = hashlib.sha256(plaintext).hexdigest()

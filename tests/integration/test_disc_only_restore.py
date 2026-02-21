@@ -440,6 +440,13 @@ class TestDiscOnlyRestore:
             capture_output=True, text=True, check=True,
         )
 
+        # Fix ISO read-only permissions so pytest tmp_path can clean up
+        for root, dirs, files in os.walk(dest):
+            for d in dirs:
+                os.chmod(os.path.join(root, d), 0o755)
+            for f in files:
+                os.chmod(os.path.join(root, f), 0o644)
+
         return dest
 
     def _build_restore_cache(self, repo_id: str) -> Path:
