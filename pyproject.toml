@@ -30,7 +30,8 @@ testpaths = ["tests"]
 markers = [
     "integration: marks tests requiring external tools (deselect with '-m \"not integration\"')",
 ]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short --basetemp=/var/tmp/pytest-lcsas"
+tmp_path_retention_policy = "none"
 
 [tool.ruff]
 target-version = "py312"

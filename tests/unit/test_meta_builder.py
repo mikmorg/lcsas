@@ -151,21 +151,14 @@ class TestToolBundler:
         sqlite_sos = list(dynload.glob("_sqlite3*"))
         assert len(sqlite_sos) >= 1
 
-    def test_bundled_python_executes(self, tmp_path: Path):
-        """The bundled Python should actually run."""
-        bundler = ToolBundler(tmp_path / "bundle")
-        py = bundler.bundle_python()
-
-        import sys
-        version = f"python{sys.version_info.major}.{sys.version_info.minor}"
-
+        # ── verify bundled Python actually runs ──────────────────
         env = {
             "LD_LIBRARY_PATH": str(bundler.lib_dir),
             "PYTHONHOME": str(bundler.root),
             "HOME": str(tmp_path),
         }
         result = subprocess.run(
-            [str(py), "-c", "import sqlite3; print('ok')"],
+            [str(dest), "-c", "import sqlite3; print('ok')"],
             capture_output=True,
             text=True,
             env=env,
@@ -175,19 +168,9 @@ class TestToolBundler:
         )
         assert result.stdout.strip() == "ok"
 
-    def test_skips_test_suites_in_stdlib(self, tmp_path: Path):
-        """The bundled stdlib should NOT contain test suites (saves ~30 MB)."""
-        bundler = ToolBundler(tmp_path / "bundle")
-        bundler.bundle_python()
-
-        import sys
-        version = f"python{sys.version_info.major}.{sys.version_info.minor}"
-        stdlib = bundler.lib_dir / version
-
-        # Top-level test/ directory should be excluded
-        assert not (stdlib / "test").exists()
-        # tkinter should be excluded
-        assert not (stdlib / "tkinter").exists()
+        # ── verify test suites are stripped from stdlib ───────────
+        assert not (stdlib / "test").exists(), "stdlib test/ should be excluded"
+        assert not (stdlib / "tkinter").exists(), "tkinter should be excluded"
 
 
 # ── MetaVolumeBuilder ───────────────────────────────────────────
@@ -200,61 +183,76 @@ class TestToolBundler:
     not resolve_binary("xorriso"), reason="xorriso not installed"
 )
 class TestMetaVolumeBuilder:
-    def test_build_creates_directory_structure(self, tmp_path: Path):
-        """Build a meta-volume and verify all expected components."""
-        output = tmp_path / "meta"
+    """Tests for the full meta-volume build.
+
+    The build is expensive (~200 MB of bundled tools), so a single
+    class-scoped fixture is shared across all tests instead of
+    rebuilding per-test.
+    """
+
+    @pytest.fixture(autouse=True, scope="class")
+    def _build_meta(self, tmp_path_factory):
+        """Build the meta-volume once for all tests in this class."""
+        base = tmp_path_factory.mktemp("meta_builder")
+        output = base / "meta"
         builder = MetaVolumeBuilder(output)
         builder.build()
+        # Store on the class so test methods can access them
+        TestMetaVolumeBuilder._output = output
+        TestMetaVolumeBuilder._builder = builder
+        TestMetaVolumeBuilder._base = base
+        yield
+        # Eager cleanup — avoid retaining ~200 MB in pytest tmp dir
+        import shutil
+        shutil.rmtree(str(base), ignore_errors=True)
 
+    @property
+    def output(self) -> Path:
+        return self._output
+
+    def test_build_creates_directory_structure(self):
+        """Build a meta-volume and verify all expected components."""
         # Restore script
-        assert (output / "restore.sh").is_file()
-        assert os.access(str(output / "restore.sh"), os.X_OK)
+        assert (self.output / "restore.sh").is_file()
+        assert os.access(str(self.output / "restore.sh"), os.X_OK)
 
         # README
-        assert (output / "README_RESTORE.md").is_file()
+        assert (self.output / "README_RESTORE.md").is_file()
 
         # Volume info
-        assert (output / "volume_info.json").is_file()
-        vi = json.loads((output / "volume_info.json").read_text())
+        assert (self.output / "volume_info.json").is_file()
+        vi = json.loads((self.output / "volume_info.json").read_text())
         assert vi["type"] == "meta"
         assert "restic" in vi["contents"]["tools"]
         assert "xorriso" in vi["contents"]["tools"]
         assert "python3" in vi["contents"]["tools"]
 
         # Tools
-        assert (output / "tools" / "bin" / "restic").is_file()
-        assert (output / "tools" / "bin" / "xorriso").is_file()
-        assert (output / "tools" / "bin" / "python3").is_file()
-        assert (output / "tools" / "lib").is_dir()
+        assert (self.output / "tools" / "bin" / "restic").is_file()
+        assert (self.output / "tools" / "bin" / "xorriso").is_file()
+        assert (self.output / "tools" / "bin" / "python3").is_file()
+        assert (self.output / "tools" / "lib").is_dir()
 
         # LCSAS source
-        assert (output / "lcsas" / "src" / "lcsas" / "__init__.py").is_file()
-        assert (output / "lcsas" / "src" / "lcsas" / "meta" / "builder.py").is_file()
+        assert (self.output / "lcsas" / "src" / "lcsas" / "__init__.py").is_file()
+        assert (self.output / "lcsas" / "src" / "lcsas" / "meta" / "builder.py").is_file()
 
-    def test_build_bundles_documentation(self, tmp_path: Path):
+    def test_build_bundles_documentation(self):
         """Docs and README should be included."""
-        output = tmp_path / "meta"
-        builder = MetaVolumeBuilder(output)
-        builder.build()
-
         # Project README
-        if (builder.project_root / "README.md").is_file():
-            assert (output / "README.md").is_file()
+        if (self._builder.project_root / "README.md").is_file():
+            assert (self.output / "README.md").is_file()
 
         # Architecture docs
-        if (builder.project_root / "docs").is_dir():
-            assert (output / "docs").is_dir()
+        if (self._builder.project_root / "docs").is_dir():
+            assert (self.output / "docs").is_dir()
 
-    def test_bundled_restic_works(self, tmp_path: Path):
+    def test_bundled_restic_works(self):
         """The bundled restic binary should execute successfully."""
-        output = tmp_path / "meta"
-        builder = MetaVolumeBuilder(output)
-        builder.build()
-
-        restic = output / "tools" / "bin" / "restic"
+        restic = self.output / "tools" / "bin" / "restic"
         env = {
-            "LD_LIBRARY_PATH": str(output / "tools" / "lib"),
-            "HOME": str(tmp_path),
+            "LD_LIBRARY_PATH": str(self.output / "tools" / "lib"),
+            "HOME": str(self._base),
         }
         result = subprocess.run(
             [str(restic), "version"],
@@ -264,16 +262,12 @@ class TestMetaVolumeBuilder:
         )
         assert result.returncode == 0
 
-    def test_bundled_xorriso_works(self, tmp_path: Path):
+    def test_bundled_xorriso_works(self):
         """The bundled xorriso binary should execute successfully."""
-        output = tmp_path / "meta"
-        builder = MetaVolumeBuilder(output)
-        builder.build()
-
-        xorriso = output / "tools" / "bin" / "xorriso"
+        xorriso = self.output / "tools" / "bin" / "xorriso"
         env = {
-            "LD_LIBRARY_PATH": str(output / "tools" / "lib"),
-            "HOME": str(tmp_path),
+            "LD_LIBRARY_PATH": str(self.output / "tools" / "lib"),
+            "HOME": str(self._base),
         }
         result = subprocess.run(
             [str(xorriso), "--version"],
@@ -283,14 +277,10 @@ class TestMetaVolumeBuilder:
         )
         assert result.returncode == 0
 
-    def test_restore_script_is_valid_bash(self, tmp_path: Path):
+    def test_restore_script_is_valid_bash(self):
         """The generated restore.sh should pass bash syntax check."""
-        output = tmp_path / "meta"
-        builder = MetaVolumeBuilder(output)
-        builder.build()
-
         result = subprocess.run(
-            ["bash", "-n", str(output / "restore.sh")],
+            ["bash", "-n", str(self.output / "restore.sh")],
             capture_output=True,
             text=True,
         )
@@ -298,14 +288,10 @@ class TestMetaVolumeBuilder:
             f"restore.sh has syntax errors:\n{result.stderr}"
         )
 
-    def test_restore_script_shows_help(self, tmp_path: Path):
+    def test_restore_script_shows_help(self):
         """restore.sh --help should work."""
-        output = tmp_path / "meta"
-        builder = MetaVolumeBuilder(output)
-        builder.build()
-
         result = subprocess.run(
-            ["bash", str(output / "restore.sh"), "--help"],
+            ["bash", str(self.output / "restore.sh"), "--help"],
             capture_output=True,
             text=True,
         )
@@ -313,13 +299,9 @@ class TestMetaVolumeBuilder:
         assert "--key" in result.stdout
         assert "--isos" in result.stdout
 
-    def test_no_pycache_in_source(self, tmp_path: Path):
+    def test_no_pycache_in_source(self):
         """Bundled LCSAS source should not contain __pycache__."""
-        output = tmp_path / "meta"
-        builder = MetaVolumeBuilder(output)
-        builder.build()
-
-        pycache_dirs = list((output / "lcsas").rglob("__pycache__"))
+        pycache_dirs = list((self.output / "lcsas").rglob("__pycache__"))
         assert len(pycache_dirs) == 0, (
             f"Found __pycache__ in bundled source: {pycache_dirs}"
         )

@@ -231,6 +231,7 @@ class ToolBundler:
                     "ensurepip",    # pip bootstrap (not needed)
                     "distutils",    # deprecated packaging
                     "lib2to3",      # Python 2→3 converter
+                    "config-*",     # build artifacts (~25 MB)
                     "*.pyc",        # recompiled on import
                     "__pycache__",
                 ),

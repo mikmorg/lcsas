@@ -73,11 +73,25 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _restic(args: list[str], repo: Path, pw: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(
+def _restic(
+    args: list[str],
+    repo: Path,
+    pw: Path,
+    tmpdir: Path | None = None,
+) -> subprocess.CompletedProcess:
+    """Run restic with optional TMPDIR override.
+
+    If *tmpdir* is provided it is passed as TMPDIR so that restic writes
+    its temporary pack files there instead of the (possibly tiny) /tmp.
+    """
+    env = None
+    if tmpdir is not None:
+        env = {**os.environ, "TMPDIR": str(tmpdir)}
+    result = subprocess.run(
         ["restic", "-r", str(repo), "--password-file", str(pw), *args],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, env=env,
     )
+    return result
 
 
 # ── Stubs for burn pipeline ─────────────────────────────────────
@@ -144,8 +158,8 @@ class TestMetaVolumeRestore:
 
         # ── Init restic repo & backup ────────────────────────────
         repo = mirror / "photos"
-        _restic(["init"], repo, key_file)
-        _restic(["backup", "--json", str(src_dir)], repo, key_file)
+        _restic(["init"], repo, key_file, tmpdir=tmp_path)
+        _restic(["backup", "--json", str(src_dir)], repo, key_file, tmpdir=tmp_path)
 
         # ── Init LCSAS catalog ───────────────────────────────────
         conn = get_connection(db_path)
