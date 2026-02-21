@@ -98,10 +98,25 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _restic(args: list[str], repo: Path, password_file: Path) -> subprocess.CompletedProcess:
-    """Run a restic command."""
+def _restic(args: list[str], repo: Path, password_file: Path,
+            tmpdir: Path | None = None) -> subprocess.CompletedProcess:
+    """Run a restic command.
+
+    If *tmpdir* is provided it is passed as TMPDIR so that restic writes
+    its temporary pack files there instead of the system /tmp (which may
+    be a small partition).
+    """
     cmd = ["restic", "-r", str(repo), "--password-file", str(password_file), *args]
-    return subprocess.run(cmd, capture_output=True, text=True, check=True)
+    env = None
+    if tmpdir is not None:
+        env = {**os.environ, "TMPDIR": str(tmpdir)}
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            result.returncode, cmd,
+            output=result.stdout, stderr=result.stderr,
+        )
+    return result
 
 
 def _restic_snapshot_id(result: subprocess.CompletedProcess) -> str:
@@ -213,16 +228,16 @@ class TestDiscOnlyRestore:
         family_repo = self.mirror / "family"
         work_repo = self.mirror / "work"
 
-        _restic(["init"], family_repo, self.key_file)
-        _restic(["init"], work_repo, self.key_file)
+        _restic(["init"], family_repo, self.key_file, tmpdir=self.tmp)
+        _restic(["init"], work_repo, self.key_file, tmpdir=self.tmp)
 
         # ── Step 4: Initial backup ──────────────────────────────────
         r = _restic(["backup", "--json", str(family_src)],
-                     family_repo, self.key_file)
+                     family_repo, self.key_file, tmpdir=self.tmp)
         self.snap_family_1 = _restic_snapshot_id(r)
 
         r = _restic(["backup", "--json", str(work_src)],
-                     work_repo, self.key_file)
+                     work_repo, self.key_file, tmpdir=self.tmp)
         self.snap_work_1 = _restic_snapshot_id(r)
 
         # ── Step 5: Init LCSAS catalog & register repos ──────────────
@@ -253,11 +268,11 @@ class TestDiscOnlyRestore:
 
         # ── Step 8: Incremental backup ──────────────────────────────
         r = _restic(["backup", "--json", str(family_src)],
-                     family_repo, self.key_file)
+                     family_repo, self.key_file, tmpdir=self.tmp)
         self.snap_family_2 = _restic_snapshot_id(r)
 
         r = _restic(["backup", "--json", str(work_src)],
-                     work_repo, self.key_file)
+                     work_repo, self.key_file, tmpdir=self.tmp)
         self.snap_work_2 = _restic_snapshot_id(r)
 
         # ── Step 9: Scan + register + burn round 2 ──────────────────
