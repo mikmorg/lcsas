@@ -111,7 +111,7 @@ class TestHolographicInjector:
             volume_id=1, label="TEST_001", uuid="test-uuid-123",
             media_type="TEST_TINY", capacity_bytes=1048576,
             used_bytes=0, location="Home", status="STAGING",
-            created_at="2026-01-01", closed_at=None,
+            created_at="2026-01-01", closed_at=None, verified_at=None,
         )
 
         injector = HolographicInjector(staging_root)
@@ -133,7 +133,7 @@ class TestHolographicInjector:
             volume_id=1, label="TEST_001", uuid="test-uuid-123",
             media_type="TEST_TINY", capacity_bytes=1048576,
             used_bytes=3000, location="Home", status="STAGING",
-            created_at="2026-01-01", closed_at=None,
+            created_at="2026-01-01", closed_at=None, verified_at=None,
         )
         packs = [
             Pack(pack_id=1, sha256="aaa111", size_bytes=1000,
@@ -160,7 +160,7 @@ class TestHolographicInjector:
             volume_id=1, label="TEST_001", uuid="u",
             media_type="TEST_TINY", capacity_bytes=1048576,
             used_bytes=0, location="Home", status="STAGING",
-            created_at="2026-01-01", closed_at=None,
+            created_at="2026-01-01", closed_at=None, verified_at=None,
         )
 
         injector = HolographicInjector(staging_root)

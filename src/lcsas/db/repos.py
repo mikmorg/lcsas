@@ -8,11 +8,17 @@ from lcsas.db.models import Repository
 
 
 def _row_to_repo(row: sqlite3.Row) -> Repository:
+    # created_at may be absent on catalogs from schema v2
+    try:
+        created_at = row["created_at"]
+    except (IndexError, KeyError):
+        created_at = ""
     return Repository(
         repo_id=row["repo_id"],
         name=row["name"],
         mirror_path=row["mirror_path"],
         encryption_key_id=row["encryption_key_id"],
+        created_at=created_at,
     )
 
 

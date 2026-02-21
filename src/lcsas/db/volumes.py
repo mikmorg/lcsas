@@ -9,6 +9,11 @@ from lcsas.db.models import Volume
 
 
 def _row_to_volume(row: sqlite3.Row) -> Volume:
+    # verified_at may be absent on catalogs from schema v2
+    try:
+        verified_at = row["verified_at"]
+    except (IndexError, KeyError):
+        verified_at = None
     return Volume(
         volume_id=row["volume_id"],
         label=row["label"],
@@ -20,6 +25,7 @@ def _row_to_volume(row: sqlite3.Row) -> Volume:
         status=row["status"],
         created_at=row["created_at"],
         closed_at=row["closed_at"],
+        verified_at=verified_at,
     )
 
 
@@ -78,11 +84,21 @@ def update_status(
     *,
     commit: bool = True,
 ) -> None:
-    """Update the status of a volume."""
-    conn.execute(
-        "UPDATE volumes SET status = ? WHERE volume_id = ?",
-        (status, volume_id),
-    )
+    """Update the status of a volume.
+
+    Automatically sets ``verified_at`` when status transitions to VERIFIED.
+    """
+    if status == "VERIFIED":
+        now = datetime.now(UTC).isoformat()
+        conn.execute(
+            "UPDATE volumes SET status = ?, verified_at = ? WHERE volume_id = ?",
+            (status, now, volume_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE volumes SET status = ? WHERE volume_id = ?",
+            (status, volume_id),
+        )
     if commit:
         conn.commit()
 

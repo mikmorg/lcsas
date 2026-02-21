@@ -10,7 +10,7 @@ from lcsas.db.models import Snapshot
 def upsert_snapshot(
     conn: sqlite3.Connection,
     snapshot_id: str,
-    repo_id: str | None,
+    repo_id: str,
     hostname: str = "",
     timestamp: str = "",
     paths: str = "[]",

@@ -839,8 +839,9 @@ class TestSnapshotDB:
         from lcsas.db.snapshots import get_snapshot, upsert_snapshot
 
         conn = _mem_conn()
-        upsert_snapshot(conn, "s1", None, "h1", "t1", description="v1")
-        upsert_snapshot(conn, "s1", None, "h2", "t2", description="v2")
+        register_repo(conn, "_test", "Test", "/test", "")
+        upsert_snapshot(conn, "s1", "_test", "h1", "t1", description="v1")
+        upsert_snapshot(conn, "s1", "_test", "h2", "t2", description="v2")
 
         snap = get_snapshot(conn, "s1")
         assert snap is not None
@@ -852,10 +853,11 @@ class TestSnapshotDB:
         from lcsas.db.snapshots import bulk_upsert_snapshots, list_snapshots
 
         conn = _mem_conn()
+        register_repo(conn, "_test", "Test", "/test", "")
         snaps = [
-            Snapshot("s1", None, "h1", "t1", "[]", "[]", ""),
-            Snapshot("s2", None, "h2", "t2", "[]", "[]", ""),
-            Snapshot("s3", None, "h3", "t3", "[]", "[]", ""),
+            Snapshot("s1", "_test", "h1", "t1", "[]", "[]", ""),
+            Snapshot("s2", "_test", "h2", "t2", "[]", "[]", ""),
+            Snapshot("s3", "_test", "h3", "t3", "[]", "[]", ""),
         ]
         count = bulk_upsert_snapshots(conn, snaps)
         assert count == 3

@@ -42,15 +42,16 @@ class TestGetRepo:
 
 
 class TestListRepos:
-    def test_list_empty(self, memory_db):
+    def test_list_includes_default(self, memory_db):
         repos = list_repos(memory_db)
-        assert repos == []
+        assert len(repos) == 1
+        assert repos[0].repo_id == "_test"
 
     def test_list_multiple(self, memory_db):
         register_repo(memory_db, "b", "Beta", "/b")
         register_repo(memory_db, "a", "Alpha", "/a")
         repos = list_repos(memory_db)
-        assert len(repos) == 2
+        assert len(repos) == 3
         # Should be ordered by name
         assert repos[0].name == "Alpha"
         assert repos[1].name == "Beta"
@@ -67,4 +68,6 @@ class TestDeleteRepo:
         """Deleting non-existent repo doesn't raise."""
         delete_repo(memory_db, "doesnt_exist")
         repos = list_repos(memory_db)
-        assert repos == []
+        # Only the fixture's _test repo should remain
+        assert len(repos) == 1
+        assert repos[0].repo_id == "_test"

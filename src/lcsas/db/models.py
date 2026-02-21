@@ -23,6 +23,7 @@ class Volume:
     status: str
     created_at: str
     closed_at: str | None
+    verified_at: str | None
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,7 @@ class Pack:
     pack_id: int
     sha256: str
     size_bytes: int
-    repo_id: str | None
+    repo_id: str
     is_pruned: bool
     created_at: str
 
@@ -45,6 +46,7 @@ class Repository:
     name: str
     mirror_path: str
     encryption_key_id: str
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -52,7 +54,7 @@ class Snapshot:
     """A point-in-time backup snapshot."""
 
     snapshot_id: str
-    repo_id: str | None
+    repo_id: str
     hostname: str
     timestamp: str
     paths: str      # JSON array
@@ -107,4 +109,4 @@ class SessionVolume:
     session_id: str
     volume_id: int
     iso_path: str
-    iso_sha256: str
+    iso_sha256: str | None

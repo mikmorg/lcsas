@@ -113,7 +113,7 @@ def add_session_volume(
     session_id: str,
     volume_id: int,
     iso_path: str,
-    iso_sha256: str = "",
+    iso_sha256: str | None = None,
     *,
     commit: bool = True,
 ) -> SessionVolume:

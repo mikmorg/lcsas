@@ -40,27 +40,27 @@ class TestScanner:
 class TestDeltaAnalyzer:
     def test_register_new_packs(self, memory_db):
         scanner_result = {"hash_a": 100, "hash_b": 200, "hash_c": 300}
-        delta = DeltaAnalyzer(memory_db, scanner_result)
+        delta = DeltaAnalyzer(memory_db, scanner_result, repo_id="_test")
         new = delta.register_new_packs()
         assert len(new) == 3
 
     def test_register_skips_existing(self, memory_db):
-        register_pack(memory_db, sha256="existing", size_bytes=500)
+        register_pack(memory_db, sha256="existing", size_bytes=500, repo_id="_test")
         scanner_result = {"existing": 500, "new_one": 100}
-        delta = DeltaAnalyzer(memory_db, scanner_result)
+        delta = DeltaAnalyzer(memory_db, scanner_result, repo_id="_test")
         new = delta.register_new_packs()
         assert len(new) == 1
         assert new[0].sha256 == "new_one"
 
     def test_get_unarchived(self, memory_db):
-        register_pack(memory_db, sha256="unarch_1", size_bytes=100)
-        register_pack(memory_db, sha256="unarch_2", size_bytes=200)
+        register_pack(memory_db, sha256="unarch_1", size_bytes=100, repo_id="_test")
+        register_pack(memory_db, sha256="unarch_2", size_bytes=200, repo_id="_test")
         delta = DeltaAnalyzer(memory_db, {})
         unarchived = delta.get_unarchived()
         assert len(unarchived) == 2
 
     def test_archived_packs_excluded(self, memory_db):
-        p = register_pack(memory_db, sha256="archived", size_bytes=100)
+        p = register_pack(memory_db, sha256="archived", size_bytes=100, repo_id="_test")
         vol = create_volume(
             memory_db, label="V1", uuid=generate_uuid(),
             media_type="BD25", capacity_bytes=25_000_000_000,
@@ -72,13 +72,13 @@ class TestDeltaAnalyzer:
         assert len(unarchived) == 0
 
     def test_total_unarchived_bytes(self, memory_db):
-        register_pack(memory_db, sha256="u1", size_bytes=100)
-        register_pack(memory_db, sha256="u2", size_bytes=300)
+        register_pack(memory_db, sha256="u1", size_bytes=100, repo_id="_test")
+        register_pack(memory_db, sha256="u2", size_bytes=300, repo_id="_test")
         delta = DeltaAnalyzer(memory_db, {})
         assert delta.get_total_unarchived_bytes() == 400
 
     def test_needs_burn(self, memory_db):
-        register_pack(memory_db, sha256="x1", size_bytes=600_000)
+        register_pack(memory_db, sha256="x1", size_bytes=600_000, repo_id="_test")
         delta = DeltaAnalyzer(memory_db, {})
         assert delta.needs_burn(1_000_000) is False
         assert delta.needs_burn(500_000) is True

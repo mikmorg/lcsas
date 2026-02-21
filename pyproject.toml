@@ -10,6 +10,9 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [{name = "LCSAS Dev"}]
+dependencies = [
+    "zstandard>=0.22",
+]
 
 [project.scripts]
 lcsas = "lcsas.cli.main:main"

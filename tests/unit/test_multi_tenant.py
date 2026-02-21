@@ -121,7 +121,7 @@ class TestRepoIsolation:
         repos = list_repos(multi_tenant_db)
         names = {r.name for r in repos}
         assert names == {"Alpha Repo", "Beta Repo", "Gamma Repo",
-                         "Delta Repo", "Epsilon Repo"}
+                         "Delta Repo", "Epsilon Repo", "Test"}
 
     def test_repo_retrieval_by_id(self, multi_tenant_db):
         repo = get_repo(multi_tenant_db, "gamma")
@@ -131,7 +131,7 @@ class TestRepoIsolation:
     def test_deleting_repo_does_not_affect_others(self, multi_tenant_db):
         delete_repo(multi_tenant_db, "epsilon")
         repos = list_repos(multi_tenant_db)
-        assert len(repos) == 4
+        assert len(repos) == 5
         ids = {r.repo_id for r in repos}
         assert "epsilon" not in ids
         # Other repos intact

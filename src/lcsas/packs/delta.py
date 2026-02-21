@@ -30,9 +30,18 @@ class DeltaAnalyzer:
 
         Uses bulk_register() for efficient batch insertion (2 queries
         instead of 2N). Returns list of newly registered Pack objects.
+
+        Raises ValueError if no repo_id was provided at construction
+        time, since packs require a repository association.
         """
         if not self._scanner_result:
             return []
+
+        if self._repo_id is None:
+            raise ValueError(
+                "DeltaAnalyzer.register_new_packs() requires a repo_id; "
+                "pass repo_id to the constructor"
+            )
 
         all_tuples = [
             (sha256, size_bytes, self._repo_id)

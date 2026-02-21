@@ -19,6 +19,11 @@ def _row_to_pack(row: sqlite3.Row) -> Pack:
 
 
 def _row_to_volume(row: sqlite3.Row) -> Volume:
+    # verified_at may be absent on catalogs from schema v2
+    try:
+        verified_at = row["verified_at"]
+    except (IndexError, KeyError):
+        verified_at = None
     return Volume(
         volume_id=row["volume_id"],
         label=row["label"],
@@ -30,6 +35,7 @@ def _row_to_volume(row: sqlite3.Row) -> Volume:
         status=row["status"],
         created_at=row["created_at"],
         closed_at=row["closed_at"],
+        verified_at=verified_at,
     )
 
 
@@ -46,7 +52,9 @@ def get_unarchived_packs(
             """SELECT p.* FROM packs p
                WHERE p.is_pruned = 0
                  AND p.repo_id = ?
-                 AND p.pack_id NOT IN (SELECT pack_id FROM volume_packs)
+                 AND NOT EXISTS (
+                     SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
+                 )
                ORDER BY p.created_at""",
             (repo_id,),
         ).fetchall()
@@ -54,7 +62,9 @@ def get_unarchived_packs(
         rows = conn.execute(
             """SELECT p.* FROM packs p
                WHERE p.is_pruned = 0
-                 AND p.pack_id NOT IN (SELECT pack_id FROM volume_packs)
+                 AND NOT EXISTS (
+                     SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
+                 )
                ORDER BY p.created_at"""
         ).fetchall()
     return [_row_to_pack(r) for r in rows]
@@ -71,7 +81,9 @@ def get_total_unarchived_bytes(
                FROM packs p
                WHERE p.is_pruned = 0
                  AND p.repo_id = ?
-                 AND p.pack_id NOT IN (SELECT pack_id FROM volume_packs)""",
+                 AND NOT EXISTS (
+                     SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
+                 )""",
             (repo_id,),
         ).fetchone()
     else:
@@ -79,7 +91,9 @@ def get_total_unarchived_bytes(
             """SELECT COALESCE(SUM(p.size_bytes), 0) as total
                FROM packs p
                WHERE p.is_pruned = 0
-                 AND p.pack_id NOT IN (SELECT pack_id FROM volume_packs)"""
+                 AND NOT EXISTS (
+                     SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
+                 )"""
         ).fetchone()
     assert row is not None
     return int(row[0])
@@ -198,7 +212,9 @@ def get_missing_packs(
     rows = conn.execute(
         f"""SELECT p.sha256 FROM packs p
             WHERE p.sha256 IN ({placeholders})
-              AND p.pack_id NOT IN (SELECT pack_id FROM volume_packs)""",
+              AND NOT EXISTS (
+                  SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
+              )""",
         pack_sha256_list,
     ).fetchall()
     archived = {r["sha256"] for r in conn.execute(
@@ -272,10 +288,12 @@ def get_archive_status_summary(
         """SELECT
                COUNT(*) as total,
                SUM(CASE WHEN is_pruned = 1 THEN 1 ELSE 0 END) as pruned,
-               SUM(CASE WHEN is_pruned = 0 AND pack_id IN
-                   (SELECT pack_id FROM volume_packs) THEN 1 ELSE 0 END) as archived,
-               SUM(CASE WHEN is_pruned = 0 AND pack_id NOT IN
-                   (SELECT pack_id FROM volume_packs) THEN 1 ELSE 0 END) as unarchived
+               SUM(CASE WHEN is_pruned = 0 AND EXISTS (
+                   SELECT 1 FROM volume_packs vp WHERE vp.pack_id = packs.pack_id
+               ) THEN 1 ELSE 0 END) as archived,
+               SUM(CASE WHEN is_pruned = 0 AND NOT EXISTS (
+                   SELECT 1 FROM volume_packs vp WHERE vp.pack_id = packs.pack_id
+               ) THEN 1 ELSE 0 END) as unarchived
            FROM packs"""
     ).fetchone()
     assert row is not None

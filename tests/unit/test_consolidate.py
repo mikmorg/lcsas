@@ -26,7 +26,7 @@ class TestVolumeMerger:
             for j in range(5):
                 p = register_pack(
                     memory_db, sha256=f"cons_{i}_{j}_hash",
-                    size_bytes=10_000,
+                    size_bytes=10_000, repo_id="_test",
                 )
                 packs.append(p)
                 all_packs.append(p)
@@ -49,8 +49,8 @@ class TestVolumeMerger:
             media_type="BD25", capacity_bytes=25_000_000_000,
             status="VERIFIED",
         )
-        p_active = register_pack(memory_db, sha256="active_pack", size_bytes=100)
-        p_dead = register_pack(memory_db, sha256="dead_pack", size_bytes=200)
+        p_active = register_pack(memory_db, sha256="active_pack", size_bytes=100, repo_id="_test")
+        p_dead = register_pack(memory_db, sha256="dead_pack", size_bytes=200, repo_id="_test")
         mark_pruned(memory_db, p_dead.pack_id)
 
         bulk_link_packs(memory_db, vol.volume_id, [p_active.pack_id, p_dead.pack_id])

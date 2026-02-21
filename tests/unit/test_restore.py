@@ -17,8 +17,8 @@ class TestRestorePlanner:
             media_type="BD25", capacity_bytes=25_000_000_000,
             status="VERIFIED",
         )
-        p1 = register_pack(memory_db, sha256="restore_pack_1", size_bytes=1000)
-        p2 = register_pack(memory_db, sha256="restore_pack_2", size_bytes=2000)
+        p1 = register_pack(memory_db, sha256="restore_pack_1", size_bytes=1000, repo_id="_test")
+        p2 = register_pack(memory_db, sha256="restore_pack_2", size_bytes=2000, repo_id="_test")
         bulk_link_packs(memory_db, vol.volume_id, [p1.pack_id, p2.pack_id])
 
         planner = RestorePlanner(memory_db)
@@ -48,8 +48,8 @@ class TestRestorePlanner:
             media_type="BD25", capacity_bytes=25_000_000_000,
             status="VERIFIED",
         )
-        p1 = register_pack(memory_db, sha256="on_va", size_bytes=500)
-        p2 = register_pack(memory_db, sha256="on_vb", size_bytes=600)
+        p1 = register_pack(memory_db, sha256="on_va", size_bytes=500, repo_id="_test")
+        p2 = register_pack(memory_db, sha256="on_vb", size_bytes=600, repo_id="_test")
         bulk_link_packs(memory_db, vol1.volume_id, [p1.pack_id])
         bulk_link_packs(memory_db, vol2.volume_id, [p2.pack_id])
 
@@ -71,7 +71,7 @@ class TestRestorePlanner:
             media_type="BD25", capacity_bytes=25_000_000_000,
             status="DEPRECATED",
         )
-        p = register_pack(memory_db, sha256="old_pack", size_bytes=100)
+        p = register_pack(memory_db, sha256="old_pack", size_bytes=100, repo_id="_test")
         bulk_link_packs(memory_db, vol.volume_id, [p.pack_id])
 
         planner = RestorePlanner(memory_db)

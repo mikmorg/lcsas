@@ -42,9 +42,14 @@ requires_dvdisaster = pytest.mark.skipif(
 
 @pytest.fixture
 def memory_db():
-    """In-memory SQLite connection with schema initialized."""
+    """In-memory SQLite connection with schema initialized.
+
+    Registers a default '_test' repo so that ``register_pack()`` calls
+    in tests always have a valid repo_id foreign key.
+    """
     conn = get_memory_connection()
     create_all(conn)
+    register_repo(conn, "_test", "Test", "/test")
     yield conn
     conn.close()
 

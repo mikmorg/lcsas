@@ -551,7 +551,7 @@ class BurnOrchestrator:
                     location=location,
                     device=device,
                     burn_date=datetime.now(UTC).isoformat(),
-                    iso_sha256=sv.iso_sha256,
+                    iso_sha256=sv.iso_sha256 or "",
                     verify_passed=True,
                     pack_count=len(pack_ids),
                     pack_ids=pack_ids,

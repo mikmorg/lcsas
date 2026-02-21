@@ -22,7 +22,7 @@ def register_pack(
     conn: sqlite3.Connection,
     sha256: str,
     size_bytes: int,
-    repo_id: str | None = None,
+    repo_id: str,
 ) -> Pack:
     """Insert a new pack and return the created Pack object.
 
@@ -67,7 +67,7 @@ def mark_pruned(conn: sqlite3.Connection, pack_id: int) -> None:
 
 def bulk_register(
     conn: sqlite3.Connection,
-    packs: list[tuple[str, int, str | None]],
+    packs: list[tuple[str, int, str]],
 ) -> list[Pack]:
     """Register multiple packs in a single transaction.
 

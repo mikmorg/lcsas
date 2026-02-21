@@ -17,7 +17,7 @@ from lcsas.db.repos import register_repo
 
 class TestPacksCRUD:
     def test_register_and_fetch(self, memory_db):
-        pack = register_pack(memory_db, sha256="abc123", size_bytes=1000)
+        pack = register_pack(memory_db, sha256="abc123", size_bytes=1000, repo_id="_test")
         assert pack.sha256 == "abc123"
         assert pack.size_bytes == 1000
         assert pack.is_pruned is False
@@ -28,13 +28,13 @@ class TestPacksCRUD:
         assert pack.repo_id == "r1"
 
     def test_register_duplicate_returns_existing(self, memory_db):
-        p1 = register_pack(memory_db, sha256="dup_hash", size_bytes=500)
-        p2 = register_pack(memory_db, sha256="dup_hash", size_bytes=999)
+        p1 = register_pack(memory_db, sha256="dup_hash", size_bytes=500, repo_id="_test")
+        p2 = register_pack(memory_db, sha256="dup_hash", size_bytes=999, repo_id="_test")
         assert p1.pack_id == p2.pack_id
         assert p2.size_bytes == 500  # original value preserved
 
     def test_get_by_sha256(self, memory_db):
-        register_pack(memory_db, sha256="find_me", size_bytes=300)
+        register_pack(memory_db, sha256="find_me", size_bytes=300, repo_id="_test")
         found = get_pack_by_sha256(memory_db, "find_me")
         assert found is not None
         assert found.sha256 == "find_me"
@@ -47,7 +47,7 @@ class TestPacksCRUD:
             get_pack_by_id(memory_db, 9999)
 
     def test_mark_pruned(self, memory_db):
-        pack = register_pack(memory_db, sha256="prune_me", size_bytes=100)
+        pack = register_pack(memory_db, sha256="prune_me", size_bytes=100, repo_id="_test")
         assert pack.is_pruned is False
         mark_pruned(memory_db, pack.pack_id)
         updated = get_pack_by_id(memory_db, pack.pack_id)
@@ -55,17 +55,17 @@ class TestPacksCRUD:
 
     def test_bulk_register(self, memory_db):
         data = [
-            ("bulk_1", 100, None),
-            ("bulk_2", 200, None),
-            ("bulk_3", 300, None),
+            ("bulk_1", 100, "_test"),
+            ("bulk_2", 200, "_test"),
+            ("bulk_3", 300, "_test"),
         ]
         packs = bulk_register(memory_db, data)
         assert len(packs) == 3
         assert packs[0].sha256 == "bulk_1"
 
     def test_list_packs_excludes_pruned_by_default(self, memory_db):
-        register_pack(memory_db, sha256="active", size_bytes=100)
-        p = register_pack(memory_db, sha256="dead", size_bytes=100)
+        register_pack(memory_db, sha256="active", size_bytes=100, repo_id="_test")
+        p = register_pack(memory_db, sha256="dead", size_bytes=100, repo_id="_test")
         mark_pruned(memory_db, p.pack_id)
 
         visible = list_packs(memory_db)
@@ -73,8 +73,8 @@ class TestPacksCRUD:
         assert visible[0].sha256 == "active"
 
     def test_list_packs_include_pruned(self, memory_db):
-        register_pack(memory_db, sha256="a1", size_bytes=100)
-        p = register_pack(memory_db, sha256="a2", size_bytes=100)
+        register_pack(memory_db, sha256="a1", size_bytes=100, repo_id="_test")
+        p = register_pack(memory_db, sha256="a2", size_bytes=100, repo_id="_test")
         mark_pruned(memory_db, p.pack_id)
 
         all_packs = list_packs(memory_db, include_pruned=True)

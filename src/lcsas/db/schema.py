@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 # ---------------------------------------------------------------------------
 # DDL Statements
@@ -24,15 +24,16 @@ CREATE TABLE IF NOT EXISTS volumes (
     uuid        TEXT UNIQUE NOT NULL,
     media_type  TEXT NOT NULL,
     capacity_bytes INTEGER NOT NULL,
-    used_bytes  INTEGER DEFAULT 0,
-    location    TEXT DEFAULT 'Home_Shelf',
-    status      TEXT DEFAULT 'STAGING'
+    used_bytes  INTEGER NOT NULL DEFAULT 0,
+    location    TEXT NOT NULL DEFAULT 'Home_Shelf',
+    status      TEXT NOT NULL DEFAULT 'STAGING'
                 CHECK (status IN (
                     'STAGING', 'BURNING', 'BURNED',
                     'VERIFIED', 'DEPRECATED', 'DESTROYED'
                 )),
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    closed_at   DATETIME
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    closed_at   DATETIME,
+    verified_at DATETIME
 );
 """
 
@@ -41,7 +42,8 @@ CREATE TABLE IF NOT EXISTS repositories (
     repo_id          TEXT PRIMARY KEY,
     name             TEXT NOT NULL,
     mirror_path      TEXT NOT NULL,
-    encryption_key_id TEXT DEFAULT ''
+    encryption_key_id TEXT NOT NULL DEFAULT '',
+    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -50,9 +52,9 @@ CREATE TABLE IF NOT EXISTS packs (
     pack_id     INTEGER PRIMARY KEY AUTOINCREMENT,
     sha256      TEXT UNIQUE NOT NULL,
     size_bytes  INTEGER NOT NULL,
-    repo_id     TEXT,
-    is_pruned   INTEGER DEFAULT 0,
-    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    repo_id     TEXT NOT NULL,
+    is_pruned   INTEGER NOT NULL DEFAULT 0,
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (repo_id) REFERENCES repositories (repo_id)
 );
 """
@@ -70,12 +72,12 @@ CREATE TABLE IF NOT EXISTS volume_packs (
 SQL_CREATE_SNAPSHOTS = """
 CREATE TABLE IF NOT EXISTS snapshots (
     snapshot_id TEXT PRIMARY KEY,
-    repo_id     TEXT,
-    hostname    TEXT DEFAULT '',
+    repo_id     TEXT NOT NULL,
+    hostname    TEXT NOT NULL DEFAULT '',
     timestamp   DATETIME,
-    paths       TEXT DEFAULT '[]',
-    tags        TEXT DEFAULT '[]',
-    description TEXT DEFAULT '',
+    paths       TEXT NOT NULL DEFAULT '[]',
+    tags        TEXT NOT NULL DEFAULT '[]',
+    description TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (repo_id) REFERENCES repositories (repo_id)
 );
 """
@@ -119,7 +121,7 @@ CREATE TABLE IF NOT EXISTS session_volumes (
     session_id  TEXT    NOT NULL,
     volume_id   INTEGER NOT NULL,
     iso_path    TEXT    NOT NULL,
-    iso_sha256  TEXT    DEFAULT '',
+    iso_sha256  TEXT,
     PRIMARY KEY (session_id, volume_id),
     FOREIGN KEY (session_id) REFERENCES burn_sessions (session_id),
     FOREIGN KEY (volume_id) REFERENCES volumes (volume_id)
@@ -131,11 +133,11 @@ CREATE TABLE IF NOT EXISTS session_volumes (
 # ---------------------------------------------------------------------------
 
 SQL_CREATE_INDICES = [
-    "CREATE INDEX IF NOT EXISTS idx_packs_sha256 ON packs (sha256);",
+    # packs.sha256 UNIQUE already creates an implicit index — no idx_packs_sha256 needed.
     "CREATE INDEX IF NOT EXISTS idx_packs_repo_id ON packs (repo_id);",
     "CREATE INDEX IF NOT EXISTS idx_packs_is_pruned ON packs (is_pruned);",
+    # volume_packs PK (volume_id, pack_id) already indexes volume_id — only pack_id needs one.
     "CREATE INDEX IF NOT EXISTS idx_volume_packs_pack_id ON volume_packs (pack_id);",
-    "CREATE INDEX IF NOT EXISTS idx_volume_packs_volume_id ON volume_packs (volume_id);",
     "CREATE INDEX IF NOT EXISTS idx_volumes_status ON volumes (status);",
     "CREATE INDEX IF NOT EXISTS idx_snapshots_repo_id ON snapshots (repo_id);",
     "CREATE INDEX IF NOT EXISTS idx_volume_copies_volume_id ON volume_copies (volume_id);",
@@ -171,6 +173,47 @@ def create_all(conn: sqlite3.Connection) -> None:
         )
 
     conn.commit()
+
+
+def migrate(conn: sqlite3.Connection) -> int:
+    """Apply any pending schema migrations.  Returns the new version.
+
+    This is safe to call on freshly-created databases (``create_all``
+    already writes the latest version — nothing to migrate).  It is
+    also safe to call on read-only catalog snapshots embedded on discs;
+    ``ALTER TABLE … ADD COLUMN`` uses ``IF NOT EXISTS``-style safety
+    via a column-existence check first.
+    """
+    current = get_schema_version(conn)
+    if current >= CURRENT_SCHEMA_VERSION:
+        return current
+
+    cursor = conn.cursor()
+
+    # v2 → v3: add verified_at column, created_at on repos
+    if current < 3:
+        # Add verified_at to volumes (if missing)
+        cols = {r[1] for r in cursor.execute("PRAGMA table_info(volumes)").fetchall()}
+        if "verified_at" not in cols:
+            cursor.execute("ALTER TABLE volumes ADD COLUMN verified_at DATETIME")
+        # Add created_at to repositories (if missing)
+        cols = {r[1] for r in cursor.execute("PRAGMA table_info(repositories)").fetchall()}
+        if "created_at" not in cols:
+            cursor.execute(
+                "ALTER TABLE repositories ADD COLUMN "
+                "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            )
+        # Drop redundant indexes (safe if they don't exist)
+        for idx in ("idx_packs_sha256", "idx_volume_packs_volume_id"):
+            cursor.execute(f"DROP INDEX IF EXISTS {idx}")
+
+        cursor.execute(
+            "INSERT INTO schema_version (version) VALUES (?)",
+            (3,),
+        )
+
+    conn.commit()
+    return CURRENT_SCHEMA_VERSION
 
 
 def get_schema_version(conn: sqlite3.Connection) -> int:
