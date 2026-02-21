@@ -33,6 +33,37 @@ _SOURCE_ITEMS = ("src",)
 _DOC_ITEMS = ("docs", "README.md", "pyproject.toml")
 
 
+def _get_tool_version(tool_path: Path) -> str:
+    """Run *tool_path* with common version flags and return the version string.
+
+    Tries ``--version``, then ``version`` (rustic uses bare ``version``).
+    Returns ``"unknown"`` if all attempts fail.
+    """
+    import subprocess
+
+    for args in ([str(tool_path), "--version"], [str(tool_path), "version"]):
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env={
+                    **os.environ,
+                    "LD_LIBRARY_PATH": str(tool_path.parent.parent / "lib")
+                    + ":" + os.environ.get("LD_LIBRARY_PATH", ""),
+                },
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                # Return first non-empty line
+                for line in result.stdout.strip().splitlines():
+                    if line.strip():
+                        return line.strip()
+        except (subprocess.TimeoutExpired, OSError):
+            continue
+    return "unknown"
+
+
 # ── Restore script (pure bash — no Python needed for basic restore) ─
 
 RESTORE_SCRIPT = r'''#!/usr/bin/env bash
@@ -47,6 +78,16 @@ RESTORE_SCRIPT = r'''#!/usr/bin/env bash
 #  Usage:
 #    ./restore.sh --key KEY_FILE --isos ISO_DIR --target TARGET_DIR \
 #                 [--repo REPO] [--snapshot ID] [--work-dir DIR]
+#
+#  ISO extraction cascade:
+#    1. mount -o loop  (kernel-native, needs root)
+#    2. 7z x           (widely available, no root)
+#    3. bundled xorriso (fallback)
+#
+#  Rustic binary cascade:
+#    1. bundled rustic         (dynamically linked)
+#    2. bundled rustic-static  (statically linked, no glibc dependency)
+#    3. system rustic          (if installed on host)
 # ═══════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -55,8 +96,64 @@ TOOLS="$SCRIPT_DIR/tools"
 
 # ── Configure bundled tools ──────────────────────────────────────
 export LD_LIBRARY_PATH="${TOOLS}/lib:${LD_LIBRARY_PATH:-}"
-XORRISO="${TOOLS}/bin/xorriso"
-RUSTIC="${TOOLS}/bin/rustic"
+
+# ── Resolve rustic binary (cascade) ─────────────────────────────
+RUSTIC=""
+if [[ -x "${TOOLS}/bin/rustic" ]] && "${TOOLS}/bin/rustic" version &>/dev/null; then
+    RUSTIC="${TOOLS}/bin/rustic"
+elif [[ -x "${TOOLS}/bin/rustic-static" ]]; then
+    RUSTIC="${TOOLS}/bin/rustic-static"
+elif command -v rustic &>/dev/null; then
+    RUSTIC="$(command -v rustic)"
+elif command -v restic &>/dev/null; then
+    RUSTIC="$(command -v restic)"
+fi
+
+# ── ISO extraction function (cascade) ───────────────────────────
+extract_iso() {
+    local iso="$1" dest="$2"
+    mkdir -p "$dest"
+
+    # Method 1: kernel mount (fastest, needs root)
+    if [[ $EUID -eq 0 ]] || command -v sudo &>/dev/null; then
+        local mnt
+        mnt="$(mktemp -d -t lcsas-mnt-XXXXXX)"
+        if mount -o loop,ro "$iso" "$mnt" 2>/dev/null || \
+           sudo mount -o loop,ro "$iso" "$mnt" 2>/dev/null; then
+            cp -a "$mnt"/. "$dest"/
+            umount "$mnt" 2>/dev/null || sudo umount "$mnt" 2>/dev/null || true
+            rmdir "$mnt" 2>/dev/null || true
+            return 0
+        fi
+        rmdir "$mnt" 2>/dev/null || true
+    fi
+
+    # Method 2: 7z (no root needed, widely available)
+    if command -v 7z &>/dev/null; then
+        if 7z x -o"$dest" "$iso" &>/dev/null; then
+            return 0
+        fi
+    fi
+
+    # Method 3: bundled xorriso (fallback)
+    if [[ -x "${TOOLS}/bin/xorriso" ]]; then
+        if "${TOOLS}/bin/xorriso" -indev "$iso" -osirrox on -extract / "$dest" 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    # Method 4: system xorriso
+    if command -v xorriso &>/dev/null; then
+        if xorriso -indev "$iso" -osirrox on -extract / "$dest" 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    echo "ERROR: Cannot extract ISO: $iso"
+    echo "       Tried: mount, 7z, xorriso — all failed."
+    echo "       Install one of: p7zip-full, xorriso, or run as root."
+    return 1
+}
 
 # ── Usage ────────────────────────────────────────────────────────
 usage() {
@@ -107,14 +204,15 @@ done
 [[ ! -f "$KEY_FILE" ]] && { echo "ERROR: Key file not found: $KEY_FILE"; exit 1; }
 [[ ! -d "$ISO_DIR" ]]  && { echo "ERROR: ISO directory not found: $ISO_DIR"; exit 1; }
 
-# ── Verify bundled tools ─────────────────────────────────────────
-for tool in "$XORRISO" "$RUSTIC"; do
-    if [[ ! -x "$tool" ]]; then
-        echo "ERROR: Bundled tool missing or not executable: $tool"
-        echo "       This meta-volume may be damaged."
-        exit 1
-    fi
-done
+# ── Verify rustic is available ───────────────────────────────────
+if [[ -z "$RUSTIC" ]]; then
+    echo "ERROR: No rustic (or restic) binary found."
+    echo "       Bundled tools may be incompatible with this system."
+    echo "       Install rustic (https://rustic.cli.rs/) or"
+    echo "       restic (https://restic.net/) and try again."
+    exit 1
+fi
+echo "  Using: $RUSTIC"
 
 # ── Create work directory ────────────────────────────────────────
 CLEANUP_WORK=0
@@ -146,8 +244,7 @@ for iso in "$ISO_DIR"/*.iso; do
     label="$(basename "$iso" .iso)"
     echo "  [$label]"
     dest="$EXTRACT_DIR/$label"
-    mkdir -p "$dest"
-    "$XORRISO" -indev "$iso" -osirrox on -extract / "$dest" 2>/dev/null
+    extract_iso "$iso" "$dest"
     ISO_COUNT=$((ISO_COUNT + 1))
 done
 
@@ -305,10 +402,10 @@ The **only** thing you must provide is your **encryption key file**.
 |---|---|
 | `tools/` | Portable Linux x86_64 binaries: rustic, xorriso, Python 3 |
 | `lcsas/` | LCSAS source code (Python, no external dependencies) |
-| `docs/` | Architecture documentation |
+| `docs/` | Architecture documentation + restic format specification |
 | `restore.sh` | Automated restore script |
 | `README_RESTORE.md` | This file |
-| `volume_info.json` | Machine-readable volume metadata |
+| `volume_info.json` | Machine-readable volume metadata (includes tool versions) |
 
 ## Quick Start
 
@@ -337,6 +434,10 @@ sudo mount -o loop meta.iso /mnt/meta
              --target /path/to/restore/output/
 ```
 
+The script automatically finds the best available tools:
+- **ISO extraction:** tries kernel mount, then 7z, then bundled xorriso
+- **Decryption:** tries bundled rustic, then rustic-static, then system rustic/restic
+
 ### 3. Verify
 
 Your restored files are organized by repository under the target directory.
@@ -364,16 +465,32 @@ Restore only the "family" repository:
 ./restore.sh --key ~/secret.key --isos ./discs/ --target ~/restored/ --repo family
 ```
 
-## Using the LCSAS CLI (Advanced)
+## If the Bundled Tools Don't Work
 
-The bundled Python and LCSAS source enable advanced catalog queries:
+The bundled tools are Linux x86_64 binaries.  If they don't run on your
+system (wrong architecture, incompatible libraries), you have options:
 
+1. **Try rustic-static** — a statically-linked binary may be included
+   at `tools/bin/rustic-static` (no shared library dependencies).
+
+2. **Install rustic yourself** — https://rustic.cli.rs/ (or the
+   compatible `restic` at https://restic.net/).
+
+3. **Use the LCSAS Python CLI** (advanced):
 ```bash
 export LD_LIBRARY_PATH="$(pwd)/tools/lib:${LD_LIBRARY_PATH:-}"
 export PYTHONHOME="$(pwd)/tools"
 export PYTHONPATH="$(pwd)/lcsas/src"
 ./tools/bin/python3 -m lcsas --help
 ```
+
+4. **Read the format specification** — `docs/RESTIC_FORMAT_SPEC.md`
+   documents the restic repository format in detail.  A programmer can
+   use this to write a decoder in any language.
+
+5. **Run in a virtual machine** — x86_64 Linux can be emulated on any
+   platform using QEMU, VirtualBox, or similar.  Install a basic Linux
+   distribution (e.g. Ubuntu) in the VM and use these tools there.
 
 ## What Is NOT on This Volume
 
@@ -392,7 +509,8 @@ long-term archival storage. Every data disc is self-describing ("holographic"),
 carrying full repository metadata so that any disc can bootstrap a restore
 independently.
 
-See `docs/architecture.md` for the complete system architecture.
+See `docs/architecture.md` for the complete system architecture, and
+`docs/RESTIC_FORMAT_SPEC.md` for the data format specification.
 '''
 
 
@@ -423,14 +541,19 @@ class MetaVolumeBuilder:
         self,
         output_dir: Path,
         project_root: Path | None = None,
+        static_rustic_path: Path | None = None,
     ) -> None:
         """
         Args:
             output_dir: Where to build the meta-volume directory tree.
             project_root: Root of the LCSAS project (containing ``src/``).
                 If *None*, auto-detected from this module's location.
+            static_rustic_path: Optional path to a statically-linked
+                (musl) rustic binary.  Bundled as ``tools/bin/rustic-static``
+                to provide a glibc-independent fallback.
         """
         self._output = output_dir
+        self._static_rustic_path = static_rustic_path
 
         if project_root is None:
             # meta/ → lcsas/ → src/ → (project root)
@@ -468,7 +591,8 @@ class MetaVolumeBuilder:
     def _bundle_tools(self) -> None:
         """Bundle rustic, xorriso, and Python with shared libs.
 
-        Also bundles optional tools (dvdisaster) if available on PATH.
+        Also bundles optional tools (dvdisaster) if available on PATH,
+        and a statically-linked rustic binary if provided.
         """
         tools_dir = self._output / "tools"
         bundler = ToolBundler(tools_dir)
@@ -482,6 +606,17 @@ class MetaVolumeBuilder:
                 bundler.bundle_binary(tool)
 
         bundler.bundle_python()
+
+        # Bundle static rustic binary (glibc-independent fallback)
+        if self._static_rustic_path is not None:
+            src = Path(self._static_rustic_path).resolve()
+            if not src.is_file():
+                raise FileNotFoundError(
+                    f"Static rustic binary not found: {src}"
+                )
+            dst = bundler.bin_dir / "rustic-static"
+            shutil.copy2(str(src), str(dst))
+            os.chmod(str(dst), 0o755)
 
     # ── Source bundling ──────────────────────────────────────────
 
@@ -547,6 +682,21 @@ class MetaVolumeBuilder:
         for tool in _OPTIONAL_TOOLS:
             if (tools_bin / tool).exists():
                 bundled_tools.append(tool)
+        if (tools_bin / "rustic-static").exists():
+            bundled_tools.append("rustic-static")
+
+        # Collect tool versions
+        tool_versions = {
+            "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        }
+        for tool_name in ("rustic", "xorriso", "dvdisaster"):
+            tool_path = tools_bin / tool_name
+            if tool_path.exists():
+                tool_versions[tool_name] = _get_tool_version(tool_path)
+        if (tools_bin / "rustic-static").exists():
+            tool_versions["rustic-static"] = _get_tool_version(
+                tools_bin / "rustic-static"
+            )
 
         info = {
             "type": "meta",
@@ -554,6 +704,7 @@ class MetaVolumeBuilder:
             "created_at": datetime.now(UTC).isoformat(),
             "platform": f"linux-{os.uname().machine}",
             "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            "tool_versions": tool_versions,
             "contents": {
                 "tools": bundled_tools,
                 "lcsas_source": True,

@@ -227,6 +227,13 @@ class TestMetaVolumeBuilder:
         assert "xorriso" in vi["contents"]["tools"]
         assert "python3" in vi["contents"]["tools"]
 
+        # Tool versions should be recorded
+        assert "tool_versions" in vi["contents"]
+        tv = vi["contents"]["tool_versions"]
+        assert "python" in tv
+        assert "rustic" in tv
+        assert "xorriso" in tv
+
         # Tools
         assert (self.output / "tools" / "bin" / "rustic").is_file()
         assert (self.output / "tools" / "bin" / "xorriso").is_file()
@@ -246,6 +253,15 @@ class TestMetaVolumeBuilder:
         # Architecture docs
         if (self._builder.project_root / "docs").is_dir():
             assert (self.output / "docs").is_dir()
+
+    def test_restic_format_spec_bundled(self):
+        """The restic format specification must be on every meta-volume."""
+        spec = self.output / "docs" / "RESTIC_FORMAT_SPEC.md"
+        assert spec.is_file(), "RESTIC_FORMAT_SPEC.md not bundled"
+        content = spec.read_text()
+        assert "AES-256-CTR" in content
+        assert "scrypt" in content
+        assert "Pack File Format" in content
 
     def test_bundled_rustic_works(self):
         """The bundled rustic binary should execute successfully."""
@@ -298,6 +314,16 @@ class TestMetaVolumeBuilder:
         assert result.returncode == 0
         assert "--key" in result.stdout
         assert "--isos" in result.stdout
+
+    def test_restore_script_has_cascades(self):
+        """restore.sh should contain cascading extraction and rustic resolution."""
+        content = (self.output / "restore.sh").read_text()
+        # ISO extraction cascade
+        assert "extract_iso" in content, "Missing extract_iso cascade function"
+        assert "mount -o loop" in content, "Missing mount fallback"
+        assert "7z x" in content, "Missing 7z fallback"
+        # Rustic resolution cascade
+        assert "rustic-static" in content, "Missing static rustic fallback"
 
     def test_no_pycache_in_source(self):
         """Bundled LCSAS source should not contain __pycache__."""

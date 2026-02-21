@@ -278,6 +278,28 @@ which discs are overdue for integrity checks.
 
 ---
 
+### Phase 11: 50-Year Survivability Hardening
+
+**Goal:** Ensure the archive remains restorable by a non-technical user
+over a 50-year term, even if the original archivist is deceased.
+Full audit: see `docs/SURVIVABILITY.md`.
+
+| Task | Details | Tests |
+|---|---|---|
+| 11.1 Eliminate xorriso from restore.sh | Use kernel `mount -o loop` as primary ISO extraction, `7z x` as fallback, bundled xorriso as last resort. Removes one ELF dependency from the critical restore path. | ≥2 tests: bash syntax check, help output. |
+| 11.2 Static musl rustic support | Add `static_rustic_path` to MetaVolumeBuilder. Bundle as `tools/bin/rustic-static`. Update restore.sh to try dynamic rustic first, fall back to static. | ≥3 tests: builder accepts path, fallback logic in script. |
+| 11.3 Record tool versions on disc | Run `--version` for all bundled tools during meta-volume build. Write to `volume_info.json` under `tool_versions`. | ≥2 tests: version recorded, graceful fallback. |
+| 11.4 Bundle restic format spec | Create `docs/RESTIC_FORMAT_SPEC.md` documenting the restic repository format (directory layout, encryption, pack binary format, key derivation). Include on every meta-volume via `_bundle_docs()`. | N/A (documentation). |
+| 11.5 Human documentation on disc | Add `START_HERE.txt` to every disc. Add config fields: `archive_owner`, `archive_description`, `key_storage_hints`, `technical_contact`. Fix placeholder URL. | ≥4 tests. |
+| 11.6 Key-to-repo mapping | Write `KEY_INFO.txt` on each disc listing repos, descriptions, and key requirements. | ≥2 tests. |
+| 11.7 Pure-Python restore fallback | Implement `restore/restic_fallback.py` — minimal pure-Python restic decrypt/restore. Vendored AES-CTR, no C extensions. | ≥8 tests. |
+
+**Exit criteria:** restore.sh has layered fallback (dynamic → static →
+python), format spec on disc, all human docs present. See
+`docs/SURVIVABILITY.md` §6 for tracking.
+
+---
+
 ## 5. Phase Dependencies
 
 ```
@@ -291,9 +313,10 @@ Phase 7 (snapshot persistence) ✅ done
 Phase 8 (prune sync)           requires Phase 2 ✅
 Phase 9 (verification tracking) requires Phase 4 ✅
 Phase 10 (dry-run + config)    ✅ done
+Phase 11 (survivability)       independent — see docs/SURVIVABILITY.md
 ```
 
-Remaining work: Phases 8 and 9 only.
+Remaining work: Phases 8, 9, and 11.
 
 ---
 
@@ -312,8 +335,9 @@ Remaining work: Phases 8 and 9 only.
 | Phase 8 (prune sync) | pending | +6 est. |
 | Phase 9 (verification tracking) | pending | +8 est. |
 | Phase 10 (dry-run + config) | ✅ | ~561 |
+| Phase 11 (survivability) | in progress | +20 est. |
 
-**Current:** 561 tests passing. **Target:** ~575 after phases 8–9.
+**Current:** 561 tests passing. **Target:** ~595 after phases 8–9, 11.
 
 ---
 
