@@ -191,7 +191,7 @@ format (directory structure, key file JSON + scrypt KDF, AES-256-CTR
 encryption, pack binary format, index JSON, snapshot JSON).  Bundle on
 every meta-volume.  Long-term: implement pure-Python restore fallback.
 
-### 2.7 No pure-Python restore fallback — P2 ❌
+### 2.7 No pure-Python restore fallback — P2 ✅
 
 **Current state:** If both `rustic` and `rustic-static` fail to
 execute, there is no way to decrypt and restore data without finding a
@@ -202,6 +202,16 @@ pure-Python implementation that can parse key files, derive the master
 key (scrypt + AES-256-CTR), decrypt pack files, reconstruct files from
 blobs.  Uses vendored pure-Python AES (no C extensions).  Long-term
 effort (~500-1000 lines).
+
+**Resolution:** Implemented `PurePythonRestorer` in
+`src/lcsas/restore/restic_fallback.py` (~450 lines) with companion
+`_aes_pure.py` (~220 lines).  Self-contained crypto stack: AES-256-CTR
+(pure Python), Poly1305-AES MAC, scrypt (stdlib `hashlib.scrypt`),
+SHA-256 (stdlib).  Supports key derivation, index parsing, snapshot
+resolution, recursive tree traversal, file extraction, symlinks,
+metadata restoration.  Optional zstd via `zstandard` package.  39 tests
+including NIST AES vectors, RFC 8439 Poly1305 vector, and full
+end-to-end restore of a synthetic repository.
 
 ---
 
@@ -304,7 +314,7 @@ advice.  Included on both data and meta volumes.
 | 2.4 | Eliminate xorriso from restore.sh | P1 | ✅ Done (mount → 7z → xorriso cascade) |
 | 2.5 | dvdisaster RS03 format docs | P2 | ✅ Done |
 | 2.6 | Restic format spec on disc | P0 | ✅ Done (docs/RESTIC_FORMAT_SPEC.md) |
-| 2.7 | Pure-Python restore fallback | P2 | ❌ Not started |
+| 2.7 | Pure-Python restore fallback | P2 | ✅ Done |
 | 3.1 | Key loss warning on disc | P0 | ✅ Done (via 1.1) |
 | 3.2 | Multi-repo key mapping | P1 | ✅ Done (via 1.5) |
 | 3.3 | Config backup to disc | P2 | ✅ Done |
