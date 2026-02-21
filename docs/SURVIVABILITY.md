@@ -259,20 +259,20 @@ dark, vertical orientation) on any disc or in user docs.
 
 | § | Concern | Priority | Status |
 |---|---------|----------|--------|
-| 1.1 | START_HERE.txt on every disc | P0 | ❌ Not started |
-| 1.2 | Archive description field | P0 | ❌ Not started |
-| 1.3 | Key storage hints on disc | P0 | ❌ Not started |
-| 1.4 | "Get a tech person" advice | P1 | ❌ Not started |
-| 1.5 | Key-to-repo mapping (KEY_INFO.txt) | P1 | ❌ Not started |
-| 1.6 | Fix placeholder URL | P1 | ❌ Not started |
+| 1.1 | START_HERE.txt on every disc | P0 | ✅ Done |
+| 1.2 | Archive description field | P0 | ✅ Done (config.archive_description) |
+| 1.3 | Key storage hints on disc | P0 | ✅ Done (config.key_storage_hints) |
+| 1.4 | "Get a tech person" advice | P1 | ✅ Done (in START_HERE + RESTORE_INSTRUCTIONS) |
+| 1.5 | Key-to-repo mapping (KEY_INFO.txt) | P1 | ✅ Done |
+| 1.6 | Fix placeholder URL | P1 | ✅ Done (removed placeholder) |
 | 1.7 | README_RESTORE as plain text | P2 | ❌ Not started |
 | 1.8 | Estate planning guidance | P2 | ❌ Not started |
-| 2.1 | Static musl rustic binary | P0 | 🔧 In progress |
-| 2.2 | glibc ABI elimination | P0 | 🔧 In progress (via 2.1) |
-| 2.3 | Tool version recording | P1 | 🔧 In progress |
-| 2.4 | Eliminate xorriso from restore.sh | P1 | 🔧 In progress |
+| 2.1 | Static musl rustic binary | P0 | ✅ Builder support done (needs musl binary at burn time) |
+| 2.2 | glibc ABI elimination | P0 | ✅ Via 2.1 |
+| 2.3 | Tool version recording | P1 | ✅ Done (volume_info.json tool_versions) |
+| 2.4 | Eliminate xorriso from restore.sh | P1 | ✅ Done (mount → 7z → xorriso cascade) |
 | 2.5 | dvdisaster RS03 format docs | P2 | ❌ Not started |
-| 2.6 | Restic format spec on disc | P0 | 🔧 In progress |
+| 2.6 | Restic format spec on disc | P0 | ✅ Done (docs/RESTIC_FORMAT_SPEC.md) |
 | 2.7 | Pure-Python restore fallback | P2 | ❌ Not started |
 | 3.1 | Key loss warning on disc | P0 | ❌ (via 1.1) |
 | 3.2 | Multi-repo key mapping | P1 | ❌ (via 1.5) |

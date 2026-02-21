@@ -331,3 +331,11 @@ class TestMetaVolumeBuilder:
         assert len(pycache_dirs) == 0, (
             f"Found __pycache__ in bundled source: {pycache_dirs}"
         )
+
+    def test_start_here_generated(self):
+        """Meta-volume should have a START_HERE.txt file."""
+        path = self.output / "START_HERE.txt"
+        assert path.is_file(), "START_HERE.txt not generated on meta-volume"
+        content = path.read_text()
+        assert "START HERE" in content
+        assert "ENCRYPTION KEY" in content.upper() or "encryption key" in content.lower()

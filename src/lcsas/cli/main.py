@@ -954,10 +954,20 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
     """Build a self-contained meta-volume with all restore tools."""
     from lcsas.meta.builder import MetaVolumeBuilder
 
+    # Load config for survivability fields (START_HERE.txt, KEY_INFO.txt)
+    config = None
+    if hasattr(args, "config") and args.config:
+        from lcsas.config.settings import load_config
+        try:
+            config = load_config(args.config)
+        except Exception as e:
+            logger.warning(f"Could not load config for START_HERE.txt: {e}")
+
     output = args.output.resolve()
     builder = MetaVolumeBuilder(
         output_dir=output,
         project_root=args.project_root,
+        config=config,
     )
 
     logger.info(f"Building meta-volume in {output} ...")
@@ -974,6 +984,7 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
     logger.info("  lcsas/          LCSAS source code")
     logger.info("  restore.sh      Bootstrap restore script")
     logger.info("  README_RESTORE.md  Restore instructions")
+    logger.info("  START_HERE.txt  Plain-language guide for non-technical users")
     return 0
 
 

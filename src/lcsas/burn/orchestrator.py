@@ -209,6 +209,8 @@ class BurnOrchestrator:
         vol = get_volume_by_id(self._conn, volume.volume_id)
         injector.write_volume_info(vol, packs=selected_packs)
         injector.write_restore_instructions()
+        injector.write_start_here(self._config)
+        injector.write_key_info(self._config)
 
         return BurnManifest(
             volume_label=vol_label,
@@ -428,6 +430,8 @@ class BurnOrchestrator:
             vol = get_volume_by_id(self._conn, volume.volume_id)
             injector.write_volume_info(vol, packs=selected_packs)
             injector.write_restore_instructions()
+            injector.write_start_here(self._config)
+            injector.write_key_info(self._config)
 
             # Create ISO
             iso_path = session_dir / f"{vol_label}.iso"

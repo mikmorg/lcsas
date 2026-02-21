@@ -39,6 +39,14 @@ class LCSASConfig:
     # Repository definitions (populated from config file)
     repositories: dict[str, RepositoryConfig] = field(default_factory=dict)
 
+    # ── Survivability / human documentation fields ───────────────
+    # These appear on START_HERE.txt on every disc to help a non-
+    # technical person understand the archive after the archivist's death.
+    archive_owner: str = ""
+    archive_description: str = ""
+    key_storage_hints: str = ""
+    technical_contact: str = ""
+
 
 @dataclass(frozen=True)
 class RepositoryConfig:
@@ -67,6 +75,12 @@ def load_config(config_path: Path) -> LCSASConfig:
         optical_device = "/dev/sr0"
         label_prefix = "LCSAS"
         metadata_reserve_mb = 100
+
+        [survivability]
+        archive_owner = "John Doe"
+        archive_description = "Family photos, videos, and documents 2000-2025"
+        key_storage_hints = "Paper copy in the home safe; USB copy in safe deposit box #1234"
+        technical_contact = "Jane Doe (jane@example.com) or any Linux-savvy IT professional"
 
         [repos.family]
         mirror_path = "/mnt/mirror/family"
@@ -108,6 +122,9 @@ def load_config(config_path: Path) -> LCSASConfig:
             f"Unknown media type '{media_str}'. Valid: {valid}"
         ) from err
 
+    # Survivability fields
+    survive = raw.get("survivability", {})
+
     return LCSASConfig(
         mirror_base_path=resolve(paths.get("mirror_base", "/mnt/mirror")),
         staging_path=resolve(paths.get("staging", "/mnt/staging")),
@@ -119,6 +136,10 @@ def load_config(config_path: Path) -> LCSASConfig:
         label_prefix=defaults.get("label_prefix", "LCSAS"),
         metadata_reserve_bytes=defaults.get("metadata_reserve_mb", 100) * 1_048_576,
         repositories=repos,
+        archive_owner=survive.get("archive_owner", ""),
+        archive_description=survive.get("archive_description", ""),
+        key_storage_hints=survive.get("key_storage_hints", ""),
+        technical_contact=survive.get("technical_contact", ""),
     )
 
 

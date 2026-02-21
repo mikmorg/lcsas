@@ -100,6 +100,44 @@ class TestLoadConfig:
         assert cfg.repositories["family"].password_file == Path("/root/keys/family.key")
         assert cfg.repositories["work"].password_file is None
 
+    def test_load_survivability_fields(self, tmp_path):
+        config_toml = textwrap.dedent("""\
+        [paths]
+        mirror_base = "/mnt/mirror"
+        staging = "/mnt/staging"
+        database = "/var/lib/lcsas/archive.db"
+
+        [survivability]
+        archive_owner = "Jane Doe"
+        archive_description = "Family photos 2000-2025"
+        key_storage_hints = "In the home safe"
+        technical_contact = "Bob (bob@example.com)"
+        """)
+        config_file = tmp_path / "lcsas.toml"
+        config_file.write_text(config_toml)
+
+        cfg = load_config(config_file)
+        assert cfg.archive_owner == "Jane Doe"
+        assert cfg.archive_description == "Family photos 2000-2025"
+        assert cfg.key_storage_hints == "In the home safe"
+        assert cfg.technical_contact == "Bob (bob@example.com)"
+
+    def test_survivability_fields_default_empty(self, tmp_path):
+        config_toml = textwrap.dedent("""\
+        [paths]
+        mirror_base = "/mnt/mirror"
+        staging = "/mnt/staging"
+        database = "/var/lib/lcsas/archive.db"
+        """)
+        config_file = tmp_path / "lcsas.toml"
+        config_file.write_text(config_toml)
+
+        cfg = load_config(config_file)
+        assert cfg.archive_owner == ""
+        assert cfg.archive_description == ""
+        assert cfg.key_storage_hints == ""
+        assert cfg.technical_contact == ""
+
     def test_invalid_media_type(self, tmp_path):
         config_file = tmp_path / "bad.toml"
         config_file.write_text('[defaults]\nmedia_type = "FLOPPY"\n')

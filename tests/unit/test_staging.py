@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
+from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.db.models import Pack, Volume
 from lcsas.staging.builder import StagingBuilder
 from lcsas.staging.metadata import HolographicInjector
@@ -180,3 +182,131 @@ class TestHolographicInjector:
         assert "LCSAS Data Volume" in txt
         assert "encryption key file" in txt
         assert "rustic" in txt
+
+    def test_restore_instructions_no_placeholder_url(self, tmp_path):
+        """RESTORE_INSTRUCTIONS.txt must not contain placeholder URLs."""
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+
+        injector = HolographicInjector(staging_root)
+        injector.write_restore_instructions()
+
+        txt = (staging_root / "RESTORE_INSTRUCTIONS.txt").read_text()
+        assert "your-org" not in txt
+        assert "github.com/your-org" not in txt
+
+    def test_restore_instructions_get_help_advice(self, tmp_path):
+        """RESTORE_INSTRUCTIONS.txt should tell users to seek professional help."""
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+
+        injector = HolographicInjector(staging_root)
+        injector.write_restore_instructions()
+
+        txt = (staging_root / "RESTORE_INSTRUCTIONS.txt").read_text()
+        assert "computer professional" in txt
+
+    def test_write_start_here_with_config(self, tmp_path):
+        """START_HERE.txt generated from config survivability fields."""
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+
+        config = LCSASConfig(
+            mirror_base_path=tmp_path / "mirror",
+            staging_path=tmp_path / "staging",
+            db_path=tmp_path / "db.db",
+            archive_owner="John Smith",
+            archive_description="Family photos and videos 2000-2025",
+            key_storage_hints="Paper copy in the home safe",
+            technical_contact="Jane Smith (jane@example.com)",
+            repositories={
+                "family": RepositoryConfig(
+                    name="family",
+                    mirror_path=tmp_path / "mirror" / "family",
+                    password_file=Path("/keys/family.key"),
+                ),
+            },
+        )
+
+        injector = HolographicInjector(staging_root)
+        injector.write_start_here(config)
+
+        txt = (staging_root / "START_HERE.txt").read_text()
+        assert "John Smith" in txt
+        assert "Family photos and videos 2000-2025" in txt
+        assert "Paper copy in the home safe" in txt
+        assert "Jane Smith" in txt
+        assert "START HERE" in txt
+        assert "ENCRYPTION KEY" in txt
+        assert "family" in txt  # repo name
+
+    def test_write_start_here_defaults(self, tmp_path):
+        """START_HERE.txt uses reasonable defaults when config fields are empty."""
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+
+        config = LCSASConfig(
+            mirror_base_path=tmp_path / "mirror",
+            staging_path=tmp_path / "staging",
+            db_path=tmp_path / "db.db",
+        )
+
+        injector = HolographicInjector(staging_root)
+        injector.write_start_here(config)
+
+        txt = (staging_root / "START_HERE.txt").read_text()
+        assert "START HERE" in txt
+        assert "ENCRYPTION KEY" in txt
+        assert "computer professional" in txt
+
+    def test_write_key_info_with_repos(self, tmp_path):
+        """KEY_INFO.txt lists repos and key file names."""
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+
+        config = LCSASConfig(
+            mirror_base_path=tmp_path / "mirror",
+            staging_path=tmp_path / "staging",
+            db_path=tmp_path / "db.db",
+            key_storage_hints="In the safe deposit box",
+            repositories={
+                "family": RepositoryConfig(
+                    name="family",
+                    mirror_path=tmp_path / "mirror" / "family",
+                    password_file=Path("/keys/family.key"),
+                    encryption_key_id="key-001",
+                ),
+                "work": RepositoryConfig(
+                    name="work",
+                    mirror_path=tmp_path / "mirror" / "work",
+                ),
+            },
+        )
+
+        injector = HolographicInjector(staging_root)
+        injector.write_key_info(config)
+
+        txt = (staging_root / "KEY_INFO.txt").read_text()
+        assert "family" in txt
+        assert "work" in txt
+        assert "key-001" in txt
+        assert "family.key" in txt
+        assert "safe deposit box" in txt
+
+    def test_write_key_info_no_repos(self, tmp_path):
+        """KEY_INFO.txt handles empty repositories gracefully."""
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+
+        config = LCSASConfig(
+            mirror_base_path=tmp_path / "mirror",
+            staging_path=tmp_path / "staging",
+            db_path=tmp_path / "db.db",
+        )
+
+        injector = HolographicInjector(staging_root)
+        injector.write_key_info(config)
+
+        txt = (staging_root / "KEY_INFO.txt").read_text()
+        assert "KEY INFORMATION" in txt
+        assert "No repositories" in txt

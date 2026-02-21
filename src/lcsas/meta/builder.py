@@ -21,6 +21,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from lcsas.config.settings import LCSASConfig
 from lcsas.meta.bundler import ToolBundler
 
 # ── Constants ────────────────────────────────────────────────────────
@@ -542,6 +543,7 @@ class MetaVolumeBuilder:
         output_dir: Path,
         project_root: Path | None = None,
         static_rustic_path: Path | None = None,
+        config: LCSASConfig | None = None,
     ) -> None:
         """
         Args:
@@ -551,9 +553,13 @@ class MetaVolumeBuilder:
             static_rustic_path: Optional path to a statically-linked
                 (musl) rustic binary.  Bundled as ``tools/bin/rustic-static``
                 to provide a glibc-independent fallback.
+            config: Optional LCSAS configuration.  When provided,
+                START_HERE.txt and KEY_INFO.txt are generated on the
+                meta-volume using the survivability fields.
         """
         self._output = output_dir
         self._static_rustic_path = static_rustic_path
+        self._config = config
 
         if project_root is None:
             # meta/ → lcsas/ → src/ → (project root)
@@ -583,6 +589,7 @@ class MetaVolumeBuilder:
         self._write_restore_script()
         self._write_readme()
         self._write_volume_info()
+        self._write_start_here()
 
         return self._output
 
@@ -719,3 +726,43 @@ class MetaVolumeBuilder:
         info_path = self._output / "volume_info.json"
         with open(info_path, "w") as f:
             json.dump(info, f, indent=2)
+
+    def _write_start_here(self) -> None:
+        """Write START_HERE.txt to the meta-volume.
+
+        Uses the LCSASConfig survivability fields if a config was
+        provided; otherwise writes a generic version.
+        """
+        from lcsas.staging.metadata import HolographicInjector
+
+        if self._config is not None:
+            # Use the full START_HERE generator from HolographicInjector
+            injector = HolographicInjector(self._output)
+            injector.write_start_here(self._config)
+            injector.write_key_info(self._config)
+        else:
+            # Write a minimal START_HERE.txt without config context
+            text = """\
+╔══════════════════════════════════════════════════════════╗
+║                    START HERE                           ║
+╚══════════════════════════════════════════════════════════╝
+
+This is the LCSAS META-VOLUME — it contains all the tools needed
+to restore data from the LCSAS archive discs.
+
+TO RESTORE YOUR FILES:
+
+  1. You need the encryption key file (NOT on any disc for security)
+  2. You need the data-volume discs (ISO files or optical discs)
+  3. Run:  ./restore.sh --key <keyfile> --isos <iso_dir> --target <output>
+
+See README_RESTORE.md for detailed instructions.
+
+IMPORTANT: If this is confusing, take ALL the discs plus the
+encryption key to a computer professional.  Any Linux system
+administrator or IT professional should be able to follow the
+instructions in README_RESTORE.md.
+
+WARNING: WITHOUT THE ENCRYPTION KEY, THE DATA CANNOT BE RECOVERED.
+"""
+            (self._output / "START_HERE.txt").write_text(text)
