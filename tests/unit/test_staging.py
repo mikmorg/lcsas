@@ -310,3 +310,76 @@ class TestHolographicInjector:
         txt = (staging_root / "KEY_INFO.txt").read_text()
         assert "KEY INFORMATION" in txt
         assert "No repositories" in txt
+
+    def test_write_config_summary_with_repos(self, tmp_path):
+        """CONFIG_SUMMARY.txt includes config fields and repo names."""
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+
+        config = LCSASConfig(
+            mirror_base_path=tmp_path / "mirror",
+            staging_path=tmp_path / "staging",
+            db_path=tmp_path / "db.db",
+            archive_owner="Alice Smith",
+            archive_description="Family archive 2000-2025",
+            technical_contact="bob@example.com",
+            repositories={
+                "photos": RepositoryConfig(
+                    name="photos",
+                    mirror_path=tmp_path / "mirror" / "photos",
+                    password_file=Path("/keys/photos.key"),
+                    encryption_key_id="KEY-ABC",
+                ),
+            },
+        )
+
+        injector = HolographicInjector(staging_root)
+        injector.write_config_summary(config)
+
+        txt = (staging_root / "CONFIG_SUMMARY.txt").read_text()
+        assert "CONFIGURATION SUMMARY" in txt
+        assert "Alice Smith" in txt
+        assert "Family archive 2000-2025" in txt
+        assert "bob@example.com" in txt
+        assert "photos" in txt
+        assert "KEY-ABC" in txt
+        # Filesystem paths should NOT appear
+        assert str(tmp_path) not in txt
+        assert "Filesystem paths are omitted" in txt
+
+    def test_write_config_summary_minimal(self, tmp_path):
+        """CONFIG_SUMMARY.txt handles empty config gracefully."""
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+
+        config = LCSASConfig(
+            mirror_base_path=tmp_path / "mirror",
+            staging_path=tmp_path / "staging",
+            db_path=tmp_path / "db.db",
+        )
+
+        injector = HolographicInjector(staging_root)
+        injector.write_config_summary(config)
+
+        txt = (staging_root / "CONFIG_SUMMARY.txt").read_text()
+        assert "CONFIGURATION SUMMARY" in txt
+        assert "Media type:" in txt
+        assert "Filesystem paths are omitted" in txt
+
+    def test_write_disc_care(self, tmp_path):
+        """DISC_CARE.txt contains storage guidance."""
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+
+        injector = HolographicInjector(staging_root)
+        injector.write_disc_care()
+
+        txt = (staging_root / "DISC_CARE.txt").read_text()
+        assert "DISC CARE" in txt
+        assert "HANDLING" in txt
+        assert "STORAGE" in txt
+        assert "ENVIRONMENT" in txt
+        assert "15-25" in txt  # temperature range
+        assert "M-DISC" in txt
+        assert "PERIODIC VERIFICATION" in txt
+        assert "DRIVE AVAILABILITY" in txt

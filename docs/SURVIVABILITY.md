@@ -85,7 +85,7 @@ and which key file it needs.  Derive from config.
 
 **Fix:** Replace with real URL or remove.
 
-### 1.7 Markdown format for README_RESTORE — P2 ❌
+### 1.7 Markdown format for README_RESTORE — P2 ✅
 
 **Current state:** `README_RESTORE.md` uses Markdown (headers, tables,
 code blocks).  Viewed as raw text on a basic system, it's harder to
@@ -93,13 +93,24 @@ read than plain text.
 
 **Fix:** Convert to `.txt` or keep both formats.
 
-### 1.8 No disc labeling / estate planning guidance — P2 ❌
+**Resolution:** `MetaVolumeBuilder._write_readme_txt()` writes a
+plain-text `README_RESTORE.txt` alongside the Markdown version.
+Uses `_strip_markdown()` to convert headings to UPPERCASE with
+underlines, strip bold/italic/inline-code formatting, and convert
+tables to aligned text.
+
+### 1.8 No disc labeling / estate planning guidance — P2 ✅
 
 **Current state:** No documentation tells the archivist to physically
 label discs, maintain a paper manifest, or include a "letter to heirs"
 in the disc binder.
 
 **Fix:** Add `docs/ESTATE_PLANNING.md` with printable templates.
+
+**Resolution:** Created `docs/ESTATE_PLANNING.md` with a printable
+checklist, letter-to-heirs template, disc labeling conventions,
+periodic verification schedule, and config examples.  Bundled on
+meta-volume automatically via `_DOC_ITEMS`.
 
 ---
 
@@ -153,7 +164,7 @@ xorriso in the restore path.
 primary method, `7z x` as fallback, bundled `xorriso` as last resort.
 ISO 9660 is kernel-native on every Linux — no userspace tool needed.
 
-### 2.5 dvdisaster is abandoned — P2 ❌
+### 2.5 dvdisaster is abandoned — P2 ✅
 
 **Current state:** Last release 2020.  RS03 ECC format is specific to
 dvdisaster.  If ECC repair is needed in 50 years, the format would need
@@ -161,6 +172,12 @@ reverse-engineering unless the bundled binary still works.
 
 **Fix:** Bundle the RS03 format documentation on the meta-volume.
 Long-term: consider a pure-Python RS03 decoder.
+
+**Resolution:** Created `docs/DVDISASTER_RS03_FORMAT.md` — covers
+RS03 binary layout (header, CRC sectors, parity sectors), GF(2^8)
+arithmetic (primitive polynomial 0x11D), Reed-Solomon interleaving,
+verify/repair/augment operations, and re-implementation guidance
+with reference libraries.  Bundled via `_DOC_ITEMS`.
 
 ### 2.6 No restic format specification on disc — P0 🔧 (in progress)
 
@@ -208,13 +225,20 @@ repos on disc.
 **Fix:** `KEY_INFO.txt` (§1.5) and enhance `restore.sh` to accept
 per-repo keys.
 
-### 3.3 Config file not backed up to disc — P2 ❌
+### 3.3 Config file not backed up to disc — P2 ✅
 
 **Current state:** `config.toml` contains repo-to-key-file mappings
 and archive configuration but is never written to any disc.
 
 **Fix:** Include a sanitized config summary (without filesystem paths)
 on each disc.
+
+**Resolution:** `HolographicInjector.write_config_summary()` writes
+`CONFIG_SUMMARY.txt` with media type, ECC redundancy, label prefix,
+survivability fields, and repo names + key IDs.  Filesystem paths
+are intentionally omitted (host-specific, useless on a standalone
+disc).  Called from both orchestrator paths and the meta-volume
+builder.
 
 ---
 
@@ -230,12 +254,19 @@ universally supported.  Good choice.
 Pack files named by SHA-256 hex (64 lowercase hex chars).  Volume
 labels use `[A-Z0-9_]`.  Both are valid on all OSes.
 
-### 4.3 No media storage guidance on disc — P3 ❌
+### 4.3 No media storage guidance on disc — P3 ✅
 
 **Current state:** No guidance about storage conditions (cool,
 dark, vertical orientation) on any disc or in user docs.
 
 **Fix:** Add to `START_HERE.txt` or `DISC_CARE.txt`.
+
+**Resolution:** `HolographicInjector.write_disc_care()` writes a
+standalone `DISC_CARE.txt` covering handling, storage (vertical,
+binder sleeves), environment (15–25 °C, 30–50 % RH, dark),
+media longevity (M-DISC 1000+ yr, BD-R HTL 50–100 yr, DVD-R
+10–50 yr), periodic verification schedule, and drive availability
+advice.  Included on both data and meta volumes.
 
 ---
 
@@ -265,16 +296,16 @@ dark, vertical orientation) on any disc or in user docs.
 | 1.4 | "Get a tech person" advice | P1 | ✅ Done (in START_HERE + RESTORE_INSTRUCTIONS) |
 | 1.5 | Key-to-repo mapping (KEY_INFO.txt) | P1 | ✅ Done |
 | 1.6 | Fix placeholder URL | P1 | ✅ Done (removed placeholder) |
-| 1.7 | README_RESTORE as plain text | P2 | ❌ Not started |
-| 1.8 | Estate planning guidance | P2 | ❌ Not started |
+| 1.7 | README_RESTORE as plain text | P2 | ✅ Done |
+| 1.8 | Estate planning guidance | P2 | ✅ Done |
 | 2.1 | Static musl rustic binary | P0 | ✅ Builder support done (needs musl binary at burn time) |
 | 2.2 | glibc ABI elimination | P0 | ✅ Via 2.1 |
 | 2.3 | Tool version recording | P1 | ✅ Done (volume_info.json tool_versions) |
 | 2.4 | Eliminate xorriso from restore.sh | P1 | ✅ Done (mount → 7z → xorriso cascade) |
-| 2.5 | dvdisaster RS03 format docs | P2 | ❌ Not started |
+| 2.5 | dvdisaster RS03 format docs | P2 | ✅ Done |
 | 2.6 | Restic format spec on disc | P0 | ✅ Done (docs/RESTIC_FORMAT_SPEC.md) |
 | 2.7 | Pure-Python restore fallback | P2 | ❌ Not started |
-| 3.1 | Key loss warning on disc | P0 | ❌ (via 1.1) |
-| 3.2 | Multi-repo key mapping | P1 | ❌ (via 1.5) |
-| 3.3 | Config backup to disc | P2 | ❌ Not started |
-| 4.3 | Media storage guidance | P3 | ❌ Not started |
+| 3.1 | Key loss warning on disc | P0 | ✅ Done (via 1.1) |
+| 3.2 | Multi-repo key mapping | P1 | ✅ Done (via 1.5) |
+| 3.3 | Config backup to disc | P2 | ✅ Done |
+| 4.3 | Media storage guidance | P3 | ✅ Done |

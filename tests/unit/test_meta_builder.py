@@ -339,3 +339,22 @@ class TestMetaVolumeBuilder:
         content = path.read_text()
         assert "START HERE" in content
         assert "ENCRYPTION KEY" in content.upper() or "encryption key" in content.lower()
+
+    def test_readme_restore_txt_generated(self):
+        """Meta-volume should have a plain-text README_RESTORE.txt."""
+        path = self.output / "README_RESTORE.txt"
+        assert path.is_file(), "README_RESTORE.txt not generated on meta-volume"
+        content = path.read_text()
+        # Should not contain Markdown formatting artifacts
+        assert "## " not in content
+        assert "**" not in content
+        # Should have content from the Markdown version
+        assert len(content) > 100
+
+    def test_disc_care_txt_generated(self):
+        """Meta-volume should have a DISC_CARE.txt file."""
+        path = self.output / "DISC_CARE.txt"
+        assert path.is_file(), "DISC_CARE.txt not generated on meta-volume"
+        content = path.read_text()
+        assert "DISC CARE" in content
+        assert "M-DISC" in content

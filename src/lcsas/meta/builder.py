@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 from datetime import UTC, datetime
@@ -32,6 +33,55 @@ _OPTIONAL_TOOLS = ("dvdisaster",)
 # Directories / files to copy from the LCSAS source tree.
 _SOURCE_ITEMS = ("src",)
 _DOC_ITEMS = ("docs", "README.md", "pyproject.toml")
+
+
+def _strip_markdown(text: str) -> str:
+    """Best-effort conversion of Markdown to plain text.
+
+    Strips ``#`` headings, ``**bold**``, ``*italic*``, ```code fences```,
+    ``| table |`` pipes, and ``> blockquotes`` while preserving structure.
+    """
+    lines: list[str] = []
+    in_code_block = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        # Toggle code fences
+        if stripped.startswith("```"):
+            in_code_block = not in_code_block
+            if in_code_block:
+                lines.append("")  # blank line before code
+            else:
+                lines.append("")  # blank line after code
+            continue
+        if in_code_block:
+            lines.append(line)
+            continue
+        # Headings → plain uppercase text
+        if stripped.startswith("#"):
+            heading = stripped.lstrip("#").strip()
+            lines.append("")
+            lines.append(heading.upper())
+            lines.append("-" * len(heading))
+            continue
+        # Blockquotes
+        if stripped.startswith(">"):
+            lines.append("  " + stripped.lstrip("> ").strip())
+            continue
+        # Table rows — keep but remove leading/trailing pipes
+        if stripped.startswith("|") and stripped.endswith("|"):
+            # Skip separator rows like |---|---|
+            if re.match(r"^\|[\s\-:|]+\|$", stripped):
+                continue
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            lines.append("  " + "  |  ".join(cells))
+            continue
+        # Inline formatting
+        cleaned = line
+        cleaned = re.sub(r"\*\*(.+?)\*\*", r"\1", cleaned)  # **bold**
+        cleaned = re.sub(r"\*(.+?)\*", r"\1", cleaned)       # *italic*
+        cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)       # `code`
+        lines.append(cleaned)
+    return "\n".join(lines) + "\n"
 
 
 def _get_tool_version(tool_path: Path) -> str:
@@ -588,6 +638,7 @@ class MetaVolumeBuilder:
         self._bundle_docs()
         self._write_restore_script()
         self._write_readme()
+        self._write_readme_txt()
         self._write_volume_info()
         self._write_start_here()
 
@@ -681,6 +732,15 @@ class MetaVolumeBuilder:
         readme_path = self._output / "README_RESTORE.md"
         readme_path.write_text(README_RESTORE)
 
+    def _write_readme_txt(self) -> None:
+        """Write a plain-text version of README_RESTORE.
+
+        Markdown is hard to read on bare terminals.  This converts
+        the Markdown to best-effort plain text by stripping formatting.
+        """
+        txt = _strip_markdown(README_RESTORE)
+        (self._output / "README_RESTORE.txt").write_text(txt)
+
     def _write_volume_info(self) -> None:
         """Write self-describing volume metadata."""
         # Determine which optional tools were actually bundled
@@ -740,8 +800,12 @@ class MetaVolumeBuilder:
             injector = HolographicInjector(self._output)
             injector.write_start_here(self._config)
             injector.write_key_info(self._config)
+            injector.write_config_summary(self._config)
+            injector.write_disc_care()
         else:
             # Write a minimal START_HERE.txt without config context
+            injector = HolographicInjector(self._output)
+            injector.write_disc_care()
             text = """\
 ╔══════════════════════════════════════════════════════════╗
 ║                    START HERE                           ║

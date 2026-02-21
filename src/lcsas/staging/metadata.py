@@ -171,6 +171,9 @@ DISC CONTENTS
   catalog.db       Archive catalog (SQLite — cumulative as of this volume)
   volume_info.json Machine-readable volume identity and manifest
   START_HERE.txt   Plain-language description of this archive
+  KEY_INFO.txt     Which encryption key(s) are needed for each repository
+  CONFIG_SUMMARY.txt  Archive configuration snapshot
+  DISC_CARE.txt    Storage and handling guidance for optical media
   RESTORE_INSTRUCTIONS.txt  This file
 
 For the encryption/pack file format specification, see
@@ -315,3 +318,138 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
 
         path = self._root / "KEY_INFO.txt"
         path.write_text("\n".join(lines))
+
+    def write_config_summary(self, config: LCSASConfig) -> None:
+        """Write a sanitized config summary to the staging root.
+
+        Includes repository names, media type, and survivability fields
+        but strips filesystem paths (which are host-specific and useless
+        on a standalone disc).
+
+        Args:
+            config: LCSAS configuration.
+        """
+        lines = [
+            "LCSAS CONFIGURATION SUMMARY",
+            "===========================",
+            "",
+            f"Media type:      {config.default_media_type.name}",
+            f"ECC redundancy:  {config.default_ecc_redundancy_pct}%",
+            f"Label prefix:    {config.label_prefix}",
+            "",
+        ]
+
+        if config.archive_owner:
+            lines.append(f"Archive owner:       {config.archive_owner}")
+        if config.archive_description:
+            lines.append(f"Archive description: {config.archive_description}")
+        if config.technical_contact:
+            lines.append(f"Technical contact:   {config.technical_contact}")
+        if config.archive_owner or config.archive_description:
+            lines.append("")
+
+        if config.repositories:
+            lines.append("REPOSITORIES")
+            lines.append("------------")
+            for name, repo in sorted(config.repositories.items()):
+                lines.append(f"  {name}")
+                if repo.encryption_key_id:
+                    lines.append(f"    Key ID: {repo.encryption_key_id}")
+            lines.append("")
+
+        lines.append("NOTE: Filesystem paths are omitted because they are")
+        lines.append("specific to the original system and not useful for")
+        lines.append("restoration. See RESTORE_INSTRUCTIONS.txt instead.")
+        lines.append("")
+
+        path = self._root / "CONFIG_SUMMARY.txt"
+        path.write_text("\n".join(lines))
+
+    def write_disc_care(self) -> None:
+        """Write DISC_CARE.txt with media storage guidance.
+
+        This standalone file provides detailed disc care instructions
+        beyond the brief summary in START_HERE.txt.
+        """
+        text = """\
+DISC CARE & STORAGE GUIDE
+=========================
+
+These discs contain irreplaceable backup data.  Proper storage
+significantly extends their readable life.
+
+HANDLING
+--------
+
+  - Hold discs by the edges or the center hole only.
+  - NEVER touch the shiny data surface (bottom of disc).
+  - Do not bend, flex, or stack heavy objects on discs.
+  - Do not write on the label side with a ballpoint pen
+    (pressure can damage the data layer).  Use only soft
+    felt-tip markers designed for optical media.
+
+STORAGE
+-------
+
+  - Store discs VERTICALLY (like books on a shelf), not
+    stacked flat.  Flat stacking puts pressure on surfaces.
+  - Use a quality disc binder with individual sleeves, or
+    standard jewel cases.
+  - Avoid paper or cardboard sleeves for long-term storage
+    (they can scratch and trap moisture).
+
+ENVIRONMENT
+-----------
+
+  - Temperature: 15-25 C (60-77 F) ideal.  Avoid extremes.
+  - Humidity: 30-50% relative humidity.  Too dry causes
+    brittleness; too humid encourages mold and corrosion.
+  - Light: Store in a DARK place.  UV light degrades organic
+    dyes used in recordable Blu-ray and DVD media.
+  - Avoid: attics (heat), basements (moisture), garages
+    (temperature swings), direct sunlight, near windows.
+
+MEDIA LONGEVITY
+---------------
+
+  - M-DISC (Millenniata): Rated for 1000+ years.  Uses an
+    inorganic data layer that does not degrade like organic
+    dye.  Best choice for archival.
+  - Standard BD-R HTL: ~50-100 years with proper storage.
+  - Standard BD-R LTH: ~10-30 years (organic dye, less stable).
+  - DVD+R / DVD-R: ~10-50 years depending on dye quality.
+
+  M-DISC is strongly recommended for archival purposes.
+
+PERIODIC VERIFICATION
+---------------------
+
+  Even with proper storage, verify discs periodically:
+
+  - Every 2-5 years: spot-check a few discs
+  - Every 5-10 years: full verify of all discs
+  - If ANY disc shows read errors, consider re-burning ALL
+    data to fresh media (media in the same batch may be
+    degrading similarly)
+
+  Use the LCSAS verify command:
+
+    lcsas verify --isos /path/to/disc/images/
+
+  Or use dvdisaster to check ECC integrity:
+
+    dvdisaster -i /dev/sr0 -t
+
+DRIVE AVAILABILITY
+------------------
+
+  As optical drives disappear from consumer hardware:
+
+  - Keep at least one USB Blu-ray drive in your disc binder
+    or storage location.
+  - USB external BD drives are widely available and affordable.
+  - Standard USB interface ensures future compatibility.
+  - Internal SATA BD drives with a USB-SATA adapter also work.
+"""
+        path = self._root / "DISC_CARE.txt"
+        path.write_text(text)
