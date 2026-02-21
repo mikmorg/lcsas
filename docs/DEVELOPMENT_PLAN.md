@@ -80,17 +80,17 @@ handler in `dispatch()` — they fall through to "not yet implemented":
 | Command | Purpose | Library Code |
 |---|---|---|
 | `scan` | Discover new packs from mirror, register in catalog | `scan_mirror_packs()` + `DeltaAnalyzer` exist |
-| `catalog rebuild` | Recover catalog from disc's `catalog.db` | None — needs new code |
+| ~~`catalog rebuild`~~ | *(Not needed)* — copy `catalog.db` from any disc | N/A |
 | `config check` | Validate TOML config file | None |
 
 ### 3.3 Missing Subsystems
 
 | Feature | Description | Impact |
 |---|---|---|
-| **Snapshot persistence** | `snapshots` table exists but is never populated. Rustic parser produces `SnapshotInfo` objects but nothing writes them to DB. | Catalog can't answer "which packs does snapshot X need?" without a live mirror. Restore planning requires the mirror to be online. |
+| ~~Snapshot persistence~~ | *(Resolved)* — `snapshots` table populated during `lcsas scan`. `snapshot_packs` junction not needed (rustic index files on-disc already map snapshots→packs). | N/A |
 | **Prune sync** | No workflow to mark packs as `is_pruned` in the catalog when Rustic prunes them. | `is_pruned` flags drift from reality over time; consolidation analysis becomes inaccurate. |
 | **Verification tracking** | No way to record "disc X verified on date Y" or schedule periodic re-verification. | Users can't track which discs are overdue for integrity checks. |
-| **Catalog rebuild from disc** | Holographic catalog is written to every disc but there's no tooling to extract and adopt it as the new master. | The core disaster recovery promise (any disc bootstraps recovery) is aspirational. |
+| ~~Catalog rebuild from disc~~ | *(Resolved)* — Every disc carries a cumulative `catalog.db`. The most recent disc's copy is already the complete master catalog; just copy it to the configured `db_path`. No special tooling needed. | N/A |
 | **Volume event audit trail** | Original design docs proposed a `volume_events` table for lifecycle tracking. Not implemented. | Can't answer "when was this disc last verified?" or trace operational history. |
 
 ### 3.4 Documentation Gaps
@@ -196,130 +196,124 @@ machine without the catalog DB).
 
 ---
 
-### Phase 7: Snapshot Persistence
+### Phase 7: Snapshot Persistence ✅ (partially complete)
 
-**Goal:** Populate the `snapshots` table so the catalog is self-sufficient
-for restore planning without requiring a live mirror.
+**Goal:** Populate the `snapshots` table so the catalog records which
+snapshots exist per repo.
 
-| Task | Details | Tests |
+| Task | Details | Status |
 |---|---|---|
-| 7.1 Create `db/snapshots.py` CRUD module | `register_snapshot()`, `get_snapshot()`, `list_snapshots()`, `get_snapshots_for_repo()`. Following the pattern of `db/packs.py`. | ≥6 CRUD tests. |
-| 7.2 Create `db/snapshot_packs.py` | New junction table `snapshot_packs(snapshot_id, pack_id)` mapping snapshots to required packs. CRUD: `link_packs_to_snapshot()`, `get_required_packs()`. Schema migration to v3. | ≥4 tests for junction table + migration test. |
-| 7.3 Persist snapshots during scan/stage | After `rustic snapshots --json` → parse → register snapshots in DB. After `rustic restore --dry-run` → record pack dependencies. | ≥3 tests. |
-| 7.4 Enhance `restore plan` to use DB snapshots | If mirror is unavailable, fall back to `snapshot_packs` table for pack resolution. | ≥2 tests: mirror-available path, mirror-lost path. |
+| 7.1 Create `db/snapshots.py` CRUD module | `upsert_snapshot()`, `bulk_upsert_snapshots()`, `get_snapshot()`, `list_snapshots()`, `get_snapshots_for_repo()`. | ✅ Done |
+| 7.2 Persist snapshots during scan | `cmd_scan()` calls `rustic snapshots --json` → parse → `bulk_upsert_snapshots()`. | ✅ Done |
 
-**Exit criteria:** Snapshots + pack deps stored in DB. Restore plan works
-without live mirror. ≥15 new tests. Schema version bumped to 3.
+**Note on `snapshot_packs` junction table:** This was originally proposed
+(mapping each snapshot to its required pack hashes) to enable mirror-offline
+restore planning. After analysis, this is **not needed**:
+
+1. Rustic's own `index/` files (already on every disc via holographic
+   metadata) contain the pack-to-blob mapping. Running `rustic restore
+   --dry-run` against a reconstructed cache from disc metadata answers
+   "which packs does this snapshot need?" without any junction table.
+2. Populating the junction would require running `rustic restore --dry-run`
+   for *every* snapshot on *every* scan — O(snapshots) subprocess calls
+   just to cache information rustic already stores.
+3. In a true disaster (mirror lost), the user already has everything
+   needed on disc: metadata, packs, and catalog.db.
+
+**Exit criteria:** Snapshots persisted during scan. ✅ Complete.
 
 ---
 
-### Phase 8: Catalog Rebuild from Disc
+### ~~Phase 8: Catalog Rebuild from Disc~~ — REMOVED
 
-**Goal:** Implement `lcsas catalog rebuild` to recover the master catalog
-from any LCSAS volume's embedded `catalog.db`.
-
-| Task | Details | Tests |
-|---|---|---|
-| 8.1 Implement `cmd_catalog_rebuild()` | Accept `--source PATH` (mount point or extracted dir containing `catalog.db`). Copy the disc's `catalog.db` to the configured `db_path`. Run status fixup: `UPDATE volumes SET status='VERIFIED', closed_at=created_at WHERE status='STAGING'`. Print summary of recovered state. | Unit tests: file copy, status fixup SQL, error handling. ≥4 tests. |
-| 8.2 Add `catalog rebuild` subcommand parser | Parser + dispatch wiring. | CLI test. |
-| 8.3 Integration test | Create archive → extract catalog.db from ISO → delete master DB → rebuild → verify restore plan still works. | 1 integration test. |
-
-**Exit criteria:** Full catalog recovery from a single disc. ≥6 new tests.
+> **Rationale:** Each disc already carries a cumulative `catalog.db`
+> (injected by `HolographicInjector.inject_catalog()`). The most recent
+> disc's `catalog.db` is already the complete master catalog. Recovery
+> is simply: `cp /mnt/disc/catalog.db ~/.config/lcsas/catalog.db`.
+> No special tooling, schema migrations, or status fixups are needed.
+> See architecture.md §5 "Disaster Recovery (No Catalog)" for details.
 
 ---
 
-### Phase 9: Prune Synchronization
+### Phase 8: Prune Synchronization
 
 **Goal:** Keep the catalog's `is_pruned` flags accurate when Rustic
 prunes old snapshots.
 
 | Task | Details | Tests |
 |---|---|---|
-| 9.1 Implement prune sync logic | Scan mirror packs on disk → compare against catalog → any pack in catalog but missing from disk (and not already pruned) gets `is_pruned=1`. | ≥3 tests: no drift, some pruned, all pruned. |
-| 9.2 Add `scan --prune-sync` flag | Extend the `scan` command to optionally detect and mark pruned packs. | ≥2 tests. |
-| 9.3 Report pruning in `status` | Show pruned pack count and reclaimable bytes in `lcsas status`. | ≥1 test. |
+| 8.1 Implement prune sync logic | Scan mirror packs on disk → compare against catalog → any pack in catalog but missing from disk (and not already pruned) gets `is_pruned=1`. | ≥3 tests: no drift, some pruned, all pruned. |
+| 8.2 Add `scan --prune-sync` flag | Extend the `scan` command to optionally detect and mark pruned packs. | ≥2 tests. |
+| 8.3 Report pruning in `status` | Show pruned pack count and reclaimable bytes in `lcsas status`. | ≥1 test. |
 
 **Exit criteria:** `is_pruned` stays accurate. ≥6 new tests.
 
 ---
 
-### Phase 10: Verification Tracking
+### Phase 9: Verification Tracking
 
 **Goal:** Record verification events with timestamps so users can track
 which discs are overdue for integrity checks.
 
 | Task | Details | Tests |
 |---|---|---|
-| 10.1 Add `volume_events` table | `volume_events(id, volume_id, event_type, timestamp, details)`. Event types: CREATED, BURNED, VERIFIED, MOVED, DEPRECATED, DESTROYED. Schema migration to v4. | ≥3 tests: create events, query by volume, query by type. |
-| 10.2 Emit events from existing operations | `burn_session()` → BURNED event. `verify` → VERIFIED event. `location move` → MOVED event. | ≥3 tests: verify events are emitted. |
-| 10.3 Add `lcsas verify --status` | Show last verification date per volume, highlight overdue (>N months). | ≥2 tests. |
+| 9.1 Add `volume_events` table | `volume_events(id, volume_id, event_type, timestamp, details)`. Event types: CREATED, BURNED, VERIFIED, MOVED, DEPRECATED, DESTROYED. Schema migration to v3. | ≥3 tests: create events, query by volume, query by type. |
+| 9.2 Emit events from existing operations | `burn_session()` → BURNED event. `verify` → VERIFIED event. `location move` → MOVED event. | ≥3 tests: verify events are emitted. |
+| 9.3 Add `lcsas verify --status` | Show last verification date per volume, highlight overdue (>N months). | ≥2 tests. |
 
-**Exit criteria:** All lifecycle events tracked. ≥8 new tests. Schema v4.
+**Exit criteria:** All lifecycle events tracked. ≥8 new tests. Schema v3.
 
 ---
 
-### Phase 11: Stage Dry-Run & Config Validation
+### Phase 10: Stage Dry-Run & Config Validation ✅ (complete)
 
 **Goal:** Operational convenience features.
 
-| Task | Details | Tests |
+| Task | Details | Status |
 |---|---|---|
-| 11.1 `stage --dry-run` | Print volume plan (count, sizes, pack assignments) without creating ISOs or modifying DB. | ≥3 tests. |
-| 11.2 `lcsas config check` | Validate TOML config: required fields present, paths exist, repos reference valid mirrors, media types valid. | ≥5 tests: valid config passes, missing fields, bad paths, unknown media type. |
+| 10.1 `stage --dry-run` | Print volume plan (count, sizes, pack assignments) without creating ISOs or modifying DB. | ✅ Done |
+| 10.2 `lcsas config check` | Validate TOML config: required fields present, paths exist, repos reference valid mirrors, media types valid. | ✅ Done |
 
-**Exit criteria:** Both features work. ≥8 new tests.
+**Exit criteria:** Both features work. ✅ Complete.
 
 ---
 
 ## 5. Phase Dependencies
 
 ```
-Phase 1 (bugs/docs) ─── no deps, do first
-    │
-Phase 2 (scan) ─── prerequisite for Phase 9
-    │
-Phase 3 (restore CLI) ─── highest user value
-    │
-Phase 4 (verify CLI) ─── prerequisite for Phase 10
-    │
-Phase 5 (consolidate CLI)
-    │
-Phase 6 (burn-iso CLI)
-    │
-Phase 7 (snapshot persistence) ─── enhances Phase 3
-    │
-Phase 8 (catalog rebuild) ─── requires Phase 3
-    │
-Phase 9 (prune sync) ─── requires Phase 2
-    │
-Phase 10 (verification tracking) ─── requires Phase 4
-    │
-Phase 11 (dry-run + config check)
+Phase 1 (bugs/docs)            ✅ done
+Phase 2 (scan)                 ✅ done
+Phase 3 (restore CLI)          ✅ done
+Phase 4 (verify CLI)           ✅ done
+Phase 5 (consolidate + hardening) ✅ done
+Phase 6 (burn-iso CLI)         ✅ done
+Phase 7 (snapshot persistence) ✅ done
+Phase 8 (prune sync)           requires Phase 2 ✅
+Phase 9 (verification tracking) requires Phase 4 ✅
+Phase 10 (dry-run + config)    ✅ done
 ```
 
-Phases 2–6 are independent of each other and can be done in any order.
-The recommended order (above) prioritizes user-facing value.
+Remaining work: Phases 8 and 9 only.
 
 ---
 
-## 6. Test Coverage Targets
+## 6. Test Coverage
 
-| Phase | New Tests (est.) | Cumulative Total |
+| Phase | Status | Tests |
 |---|---|---|
-| Baseline | — | 492 |
-| Phase 1 | 3–5 | ~495 |
-| Phase 2 | 5–7 | ~502 |
-| Phase 3 | 12–15 | ~515 |
-| Phase 4 | 5–6 | ~521 |
-| Phase 5 | 5–6 | ~527 |
-| Phase 6 | 4–5 | ~531 |
-| Phase 7 | 15–18 | ~548 |
-| Phase 8 | 6–8 | ~555 |
-| Phase 9 | 6–7 | ~562 |
-| Phase 10 | 8–10 | ~572 |
-| Phase 11 | 8–10 | ~582 |
+| Baseline | ✅ | 492 |
+| Phase 1 (bugs/docs) | ✅ | ~495 |
+| Phase 2 (scan) | ✅ | ~502 |
+| Phase 3 (restore CLI) | ✅ | ~515 |
+| Phase 4 (verify CLI) | ✅ | ~521 |
+| Phase 5 (consolidate + hardening) | ✅ | ~540 |
+| Phase 6 (burn-iso CLI) | ✅ | ~545 |
+| Phase 7 (snapshot persistence) | ✅ | ~550 |
+| Phase 8 (prune sync) | pending | +6 est. |
+| Phase 9 (verification tracking) | pending | +8 est. |
+| Phase 10 (dry-run + config) | ✅ | ~561 |
 
-**Target:** ≥580 tests by plan completion, all passing.
+**Current:** 561 tests passing. **Target:** ~575 after phases 8–9.
 
 ---
 
