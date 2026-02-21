@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 from lcsas.db.models import Pack
-from lcsas.db.packs import get_pack_by_sha256, register_pack
+from lcsas.db.packs import bulk_register
 from lcsas.db.queries import get_total_unarchived_bytes, get_unarchived_packs
 
 
@@ -28,17 +28,31 @@ class DeltaAnalyzer:
     def register_new_packs(self) -> list[Pack]:
         """Register packs found on disk but not yet in the database.
 
-        Returns list of newly registered Pack objects.
+        Uses bulk_register() for efficient batch insertion (2 queries
+        instead of 2N). Returns list of newly registered Pack objects.
         """
-        new_packs: list[Pack] = []
-        for sha256, size_bytes in self._scanner_result.items():
-            existing = get_pack_by_sha256(self._conn, sha256)
-            if existing is None:
-                pack = register_pack(
-                    self._conn, sha256, size_bytes, self._repo_id
-                )
-                new_packs.append(pack)
-        return new_packs
+        if not self._scanner_result:
+            return []
+
+        all_tuples = [
+            (sha256, size_bytes, self._repo_id)
+            for sha256, size_bytes in self._scanner_result.items()
+        ]
+
+        # Filter out already-known packs with a single query
+        sha_list = [t[0] for t in all_tuples]
+        placeholders = ",".join("?" * len(sha_list))
+        existing_rows = self._conn.execute(
+            f"SELECT sha256 FROM packs WHERE sha256 IN ({placeholders})",
+            sha_list,
+        ).fetchall()
+        existing_shas = {row["sha256"] for row in existing_rows}
+
+        new_tuples = [t for t in all_tuples if t[0] not in existing_shas]
+        if not new_tuples:
+            return []
+
+        return bulk_register(self._conn, new_tuples)
 
     def get_unarchived(self) -> list[Pack]:
         """Return packs in the DB not yet assigned to any volume."""

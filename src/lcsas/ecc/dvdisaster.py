@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Protocol
@@ -30,8 +31,18 @@ class DVDisasterRunner(Protocol):
 class SubprocessDVDisasterRunner:
     """Real DVDisaster implementation using subprocess."""
 
-    def __init__(self, dvdisaster_binary: str = "dvdisaster") -> None:
+    def __init__(
+        self,
+        dvdisaster_binary: str = "dvdisaster",
+        tmpdir: Path | None = None,
+    ) -> None:
         self._binary = dvdisaster_binary
+        self._tmpdir = tmpdir
+
+    def _env(self) -> dict[str, str] | None:
+        if self._tmpdir is None:
+            return None
+        return {**os.environ, "TMPDIR": str(self._tmpdir)}
 
     def augment_iso(
         self,
@@ -50,7 +61,7 @@ class SubprocessDVDisasterRunner:
             "-n", str(redundancy_pct),
             "-c",
         ]
-        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
 
     def verify_iso(
         self,
@@ -63,7 +74,7 @@ class SubprocessDVDisasterRunner:
             "-t",
         ]
         result = subprocess.run(
-            cmd, capture_output=True, text=True, check=False
+            cmd, capture_output=True, text=True, check=False, env=self._env()
         )
         return result.returncode == 0
 
@@ -78,6 +89,6 @@ class SubprocessDVDisasterRunner:
             "-f",
         ]
         result = subprocess.run(
-            cmd, capture_output=True, text=True, check=False
+            cmd, capture_output=True, text=True, check=False, env=self._env()
         )
         return result.returncode == 0

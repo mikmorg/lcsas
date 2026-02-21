@@ -450,7 +450,7 @@ class TestFullPipelineRestore:
             for label in combo:
                 vol_dir = vol_dirs[label]
                 vol_shas = list(vol_contents[label])
-                executor.ingest_volume(cache_dir, vol_dir, vol_shas)
+                executor.ingest_volume(cache_dir, vol_dir, vol_shas, verify=False)
 
             # Verify ALL packs present and correct
             for sha in all_shas:

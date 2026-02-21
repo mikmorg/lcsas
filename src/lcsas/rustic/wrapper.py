@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Protocol
@@ -60,8 +61,18 @@ class RusticRunner(Protocol):
 class SubprocessRusticRunner:
     """Real Rustic implementation using subprocess calls."""
 
-    def __init__(self, rustic_binary: str = "rustic") -> None:
+    def __init__(
+        self,
+        rustic_binary: str = "rustic",
+        tmpdir: Path | None = None,
+    ) -> None:
         self._binary = rustic_binary
+        self._tmpdir = tmpdir
+
+    def _env(self) -> dict[str, str] | None:
+        if self._tmpdir is None:
+            return None
+        return {**os.environ, "TMPDIR": str(self._tmpdir)}
 
     def _run(
         self,
@@ -81,6 +92,7 @@ class SubprocessRusticRunner:
             capture_output=True,
             text=True,
             check=check,
+            env=self._env(),
         )
 
     def init_repo(

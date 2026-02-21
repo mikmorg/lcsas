@@ -5,8 +5,16 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from lcsas.log import get_logger
 from lcsas.rustic.wrapper import RusticRunner
 from lcsas.utils.fs import copy_file, ensure_dir
+from lcsas.utils.hashing import sha256_file
+
+logger = get_logger()
+
+
+class PackCorruptionError(Exception):
+    """Raised when a pack file fails SHA-256 verification after copy."""
 
 
 class RestoreExecutor:
@@ -49,6 +57,8 @@ class RestoreExecutor:
         cache_dir: Path,
         volume_mount: Path,
         required_packs: list[str],
+        *,
+        verify: bool = True,
     ) -> int:
         """Copy needed packs from a mounted volume into the restore cache.
 
@@ -56,9 +66,13 @@ class RestoreExecutor:
             cache_dir: The local restore cache directory.
             volume_mount: Path where the disc is mounted.
             required_packs: SHA-256 hashes of packs to copy from this volume.
+            verify: If True (default), verify SHA-256 of copied packs.
 
         Returns:
             Number of packs successfully ingested.
+
+        Raises:
+            PackCorruptionError: When a copied pack fails hash verification.
         """
         data_dir = volume_mount / "data"
         cache_data = cache_dir / "data"
@@ -86,6 +100,19 @@ class RestoreExecutor:
 
             if src.is_file():
                 copy_file(src, dst)
+
+                if verify:
+                    actual = sha256_file(dst)
+                    if actual != sha256:
+                        dst.unlink()
+                        raise PackCorruptionError(
+                            f"Pack {sha256} failed integrity check: "
+                            f"expected {sha256}, got {actual}"
+                        )
+                    logger.debug(
+                        f"Verified pack {sha256} ({dst.stat().st_size} bytes)"
+                    )
+
                 ingested += 1
 
         return ingested

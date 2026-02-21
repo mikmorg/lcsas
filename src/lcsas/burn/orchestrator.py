@@ -311,6 +311,7 @@ class BurnOrchestrator:
         for_location: str | None = None,
         repo_ids: list[str] | None = None,
         skip_ecc: bool = False,
+        dry_run: bool = False,
     ) -> StageResult:
         """Stage all unarchived packs into ISOs, creating a burn session.
 
@@ -322,10 +323,14 @@ class BurnOrchestrator:
             for_location: If set, stage only packs missing at this location.
             repo_ids: Optional filter to specific repositories.
             skip_ecc: If True, skip ECC augmentation of ISOs.
+            dry_run: If True, compute the plan but skip all side effects.
 
         Returns:
             StageResult with session ID, manifests, and ISO paths.
         """
+        from lcsas.log import get_logger
+        logger = get_logger()
+
         mt = media_type or self._config.default_media_type
 
         # 1. Gather packs to stage
@@ -339,6 +344,24 @@ class BurnOrchestrator:
 
         # 2. Bin-pack into multiple volumes
         volume_plans = self._multi_bin_pack(packs_to_stage, mt)
+
+        # --- Dry-run: report the plan without side effects ---
+        if dry_run:
+            total_bytes = sum(b for _, b in volume_plans)
+            logger.info(f"[DRY RUN] {len(volume_plans)} volume(s) planned "
+                        f"on {mt.name}")
+            for i, (packs, vol_bytes) in enumerate(volume_plans, 1):
+                fill_pct = (vol_bytes / mt.capacity_bytes) * 100
+                logger.info(f"  Volume {i}: {len(packs)} packs, "
+                            f"{vol_bytes:,} bytes ({fill_pct:.1f}% fill)")
+            logger.info(f"  Total data: {total_bytes:,} bytes")
+            return StageResult(
+                session_id="dry-run",
+                media_type=mt,
+                staging_dir=Path("/dev/null"),
+                manifests=[],
+                iso_paths=[],
+            )
 
         # 3. Create session
         session_id = generate_session_id()

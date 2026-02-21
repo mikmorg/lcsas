@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Protocol
@@ -32,8 +33,18 @@ class XorrisoRunner(Protocol):
 class SubprocessXorrisoRunner:
     """Real Xorriso implementation using subprocess."""
 
-    def __init__(self, xorriso_binary: str = "xorriso") -> None:
+    def __init__(
+        self,
+        xorriso_binary: str = "xorriso",
+        tmpdir: Path | None = None,
+    ) -> None:
         self._binary = xorriso_binary
+        self._tmpdir = tmpdir
+
+    def _env(self) -> dict[str, str] | None:
+        if self._tmpdir is None:
+            return None
+        return {**os.environ, "TMPDIR": str(self._tmpdir)}
 
     def create_iso(
         self,
@@ -53,7 +64,7 @@ class SubprocessXorrisoRunner:
             "-o", str(output_iso),   # Output ISO file
             str(source_dir),         # Source directory
         ]
-        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
         return output_iso
 
     def burn_iso(
@@ -71,7 +82,7 @@ class SubprocessXorrisoRunner:
             "fs=64m",
             str(iso_path),
         ]
-        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
 
     def verify_disc(
         self,
@@ -84,6 +95,6 @@ class SubprocessXorrisoRunner:
             "-check_media",
         ]
         result = subprocess.run(
-            cmd, capture_output=True, text=True, check=False
+            cmd, capture_output=True, text=True, check=False, env=self._env()
         )
         return result.returncode == 0

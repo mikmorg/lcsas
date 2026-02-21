@@ -9,6 +9,9 @@ import traceback
 from pathlib import Path
 
 from lcsas import __version__
+from lcsas.log import get_logger, setup_logging
+
+logger = get_logger()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,6 +65,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--repo", type=str, default=None, nargs="*",
         help="Specific repository names to scan (default: all).",
     )
+    scan_p.add_argument(
+        "--no-snapshots", action="store_true", default=False,
+        help="Skip snapshot listing (faster if rustic is slow).",
+    )
 
     # --- status ---
     subparsers.add_parser("status", help="Show archive status summary.")
@@ -82,6 +89,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Physical location tag for this copy.")
     burn_p.add_argument("--device", type=str, default=None,
                         help="Optical device path (overrides config).")
+    burn_p.add_argument("--dry-run", "-n", action="store_true", default=False,
+                        help="Show burn plan without making changes.")
 
     # --- stage ---
     stage_p = subparsers.add_parser("stage", help="Stage ISOs for deferred burning.")
@@ -97,6 +106,8 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Clean up staged ISOs for a session.")
     stage_p.add_argument("--session", type=str, default=None,
                          help="Session ID (for --clean).")
+    stage_p.add_argument("--dry-run", "-n", action="store_true", default=False,
+                         help="Show staging plan without creating ISOs or DB rows.")
 
     # --- burn-iso ---
     burniso_p = subparsers.add_parser("burn-iso",
@@ -106,6 +117,17 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Optical device path.")
     burniso_p.add_argument("--verify", action="store_true", default=True,
                            help="Verify after burning.")
+
+    # --- staging ---
+    staging_p = subparsers.add_parser("staging", help="Staging directory management.")
+    staging_sub = staging_p.add_subparsers(dest="staging_command")
+    staging_clean_p = staging_sub.add_parser(
+        "clean", help="Remove orphaned staging directories.",
+    )
+    staging_clean_p.add_argument(
+        "--force", action="store_true", default=False,
+        help="Skip confirmation prompt.",
+    )
 
     # --- location ---
     loc_p = subparsers.add_parser("location", help="Manage physical storage locations.")
@@ -160,6 +182,8 @@ def build_parser() -> argparse.ArgumentParser:
     exec_p.add_argument("--volume-dir", type=Path, default=None,
                         help="Directory containing extracted volume data "
                              "(skips interactive disc prompts).")
+    exec_p.add_argument("--skip-verify", action="store_true", default=False,
+                        help="Skip SHA-256 verification of ingested packs.")
 
     # --- consolidate ---
     cons_p = subparsers.add_parser("consolidate", help="Merge volumes into a larger one.")
@@ -182,6 +206,11 @@ def build_parser() -> argparse.ArgumentParser:
     db_p = subparsers.add_parser("db", help="Database operations.")
     db_sub = db_p.add_subparsers(dest="db_command")
     db_sub.add_parser("export", help="Export catalog summary as JSON.")
+
+    # --- config ---
+    config_p = subparsers.add_parser("config", help="Configuration management.")
+    config_sub = config_p.add_subparsers(dest="config_command")
+    config_sub.add_parser("check", help="Validate TOML config file.")
 
     # --- meta ---
     meta_p = subparsers.add_parser(
@@ -217,7 +246,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         create_all(conn)
     finally:
         conn.close()
-    print(f"Initialized LCSAS database at {db_path}")
+    logger.info(f"Initialized LCSAS database at {db_path}")
     return 0
 
 
@@ -243,7 +272,7 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
         )
     finally:
         conn.close()
-    print(f"Registered repository '{args.name}' (id: {repo_id})")
+    logger.info(f"Registered repository '{args.name}' (id: {repo_id})")
     return 0
 
 
@@ -262,26 +291,27 @@ def cmd_repo_list(args: argparse.Namespace) -> int:
         conn.close()
 
     if not repos:
-        print("No repositories registered.")
+        logger.info("No repositories registered.")
         return 0
 
     for repo in repos:
-        print(f"  {repo.name:<20} {repo.repo_id}  {repo.mirror_path}")
+        logger.info(f"  {repo.name:<20} {repo.repo_id}  {repo.mirror_path}")
     return 0
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
     """Scan mirrors for new packs and register them in the catalog."""
+    import json as _json
+
     from lcsas.config.settings import load_config
-    from lcsas.db.connection import get_connection
+    from lcsas.db.connection import locked_connection
     from lcsas.db.queries import get_archive_status_summary
     from lcsas.db.schema import create_all
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
 
     config = load_config(args.config)
-    conn = get_connection(config.db_path if args.db is None else args.db)
-    try:
+    with locked_connection(config.db_path if args.db is None else args.db) as conn:
         create_all(conn)
 
         repo_filter = set(args.repo) if args.repo else None
@@ -292,8 +322,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         if repo_filter:
             unknown = repo_filter - set(config.repositories.keys())
             for name in sorted(unknown):
-                print(f"Warning: repository '{name}' not found in config, skipping.",
-                      file=sys.stderr)
+                logger.warning(f"repository '{name}' not found in config, skipping.")
 
         for repo_name, repo_cfg in config.repositories.items():
             if repo_filter and repo_name not in repo_filter:
@@ -310,21 +339,65 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
             total_new += len(new_packs)
 
-            print(f"  {repo_name}:")
-            print(f"    Packs on disk:  {len(packs_on_disk)}")
-            print(f"    Newly registered: {len(new_packs)}")
-            print(f"    Unarchived:     {len(unarchived)} ({unarchived_bytes:,} bytes)")
+            logger.info(f"  {repo_name}:")
+            logger.info(f"    Packs on disk:  {len(packs_on_disk)}")
+            logger.info(f"    Newly registered: {len(new_packs)}")
+            logger.info(f"    Unarchived:     {len(unarchived)} ({unarchived_bytes:,} bytes)")
+
+        # Persist snapshots (unless --no-snapshots)
+        if not getattr(args, "no_snapshots", False):
+            from lcsas.db.models import Snapshot
+            from lcsas.db.repos import list_repos
+            from lcsas.db.snapshots import bulk_upsert_snapshots
+            from lcsas.rustic.wrapper import SubprocessRusticRunner
+
+            runner = SubprocessRusticRunner(tmpdir=config.staging_path)
+            repos_db = {r.name: r.repo_id for r in list_repos(conn)}
+            total_snaps = 0
+
+            for repo_name, repo_cfg in config.repositories.items():
+                if repo_filter and repo_name not in repo_filter:
+                    continue
+                if repo_cfg.password_file is None:
+                    continue
+                try:
+                    snap_infos = runner.snapshots(
+                        repo_path=repo_cfg.mirror_path,
+                        password_file=repo_cfg.password_file,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"  {repo_name}: snapshot listing failed: {exc}"
+                    )
+                    continue
+
+                repo_id = repos_db.get(repo_name)
+                db_snaps = [
+                    Snapshot(
+                        snapshot_id=si.snapshot_id,
+                        repo_id=repo_id,
+                        hostname=si.hostname,
+                        timestamp=si.timestamp,
+                        paths=_json.dumps(si.paths),
+                        tags=_json.dumps(si.tags),
+                        description="",
+                    )
+                    for si in snap_infos
+                ]
+                count = bulk_upsert_snapshots(conn, db_snaps)
+                total_snaps += count
+
+            if total_snaps:
+                logger.info(f"  Snapshots persisted: {total_snaps}")
 
         summary = get_archive_status_summary(conn)
-    finally:
-        conn.close()
 
-    print(f"\nTotal scanned: {total_scanned} packs across "
-          f"{len(config.repositories)} repos")
-    print(f"New packs registered: {total_new}")
-    print(f"Archive: {summary['total']} total, "
-          f"{summary['archived']} archived, "
-          f"{summary['unarchived']} unarchived")
+    logger.info(f"\nTotal scanned: {total_scanned} packs across "
+               f"{len(config.repositories)} repos")
+    logger.info(f"New packs registered: {total_new}")
+    logger.info(f"Archive: {summary['total']} total, "
+               f"{summary['archived']} archived, "
+               f"{summary['unarchived']} unarchived")
     return 0
 
 
@@ -345,13 +418,13 @@ def cmd_status(args: argparse.Namespace) -> int:
     finally:
         conn.close()
 
-    print(f"Packs: {summary['total']} total, "
-          f"{summary['archived']} archived, "
-          f"{summary['unarchived']} unarchived, "
-          f"{summary['pruned']} pruned")
-    print(f"Volumes: {len(volumes)} total")
+    logger.info(f"Packs: {summary['total']} total, "
+               f"{summary['archived']} archived, "
+               f"{summary['unarchived']} unarchived, "
+               f"{summary['pruned']} pruned")
+    logger.info(f"Volumes: {len(volumes)} total")
     for v in volumes:
-        print(f"  {v.label:<25} {v.media_type:<10} {v.status:<10} {v.location}")
+        logger.info(f"  {v.label:<25} {v.media_type:<10} {v.status:<10} {v.location}")
     return 0
 
 
@@ -383,7 +456,65 @@ def cmd_db_export(args: argparse.Namespace) -> int:
     finally:
         conn.close()
 
-    print(json.dumps(export, indent=2))
+    logger.info(json.dumps(export, indent=2))
+    return 0
+
+
+def cmd_config_check(args: argparse.Namespace) -> int:
+    """Validate a TOML configuration file."""
+    from lcsas.config.settings import load_config, validate_config
+
+    if args.config is None:
+        logger.error("--config is required for config check.")
+        return 1
+
+    config = load_config(args.config)
+    errors = validate_config(config)
+
+    if not errors:
+        logger.info("Configuration is valid.")
+        return 0
+
+    for err in errors:
+        logger.error(f"  {err}")
+    return 1
+
+
+def cmd_staging_clean(args: argparse.Namespace) -> int:
+    """Detect and remove orphaned staging directories."""
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import get_connection
+    from lcsas.db.schema import create_all
+    from lcsas.staging.cleanup import clean_orphaned_staging, detect_orphaned_staging
+
+    if args.config is None:
+        logger.error("--config is required for staging clean.")
+        return 1
+
+    config = load_config(args.config)
+    conn = get_connection(config.db_path if args.db is None else args.db)
+    try:
+        create_all(conn)
+        orphans = detect_orphaned_staging(config, conn)
+    finally:
+        conn.close()
+
+    if not orphans:
+        logger.info("No orphaned staging directories found.")
+        return 0
+
+    logger.info(f"Found {len(orphans)} orphaned staging directory(ies):")
+    for p in orphans:
+        logger.info(f"  {p}")
+
+    if not args.force:
+        confirm = input("Remove these directories? [y/N] ").strip().lower()
+        if confirm != "y":
+            logger.info("Aborted.")
+            return 0
+
+    removed = clean_orphaned_staging(orphans)
+    logger.info(f"Removed {removed} orphaned staging directory(ies).")
     return 0
 
 
@@ -392,92 +523,111 @@ def cmd_stage(args: argparse.Namespace) -> int:
     from lcsas.burn.orchestrator import BurnOrchestrator
     from lcsas.config.media import MediaType
     from lcsas.config.settings import load_config
-    from lcsas.db.connection import get_connection
+    from lcsas.db.connection import locked_connection
     from lcsas.db.schema import create_all
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
+    from lcsas.utils.shutdown import ShutdownManager
 
     config = load_config(args.config) if args.config else None
     if config is None:
-        print("Error: --config is required for stage.", file=sys.stderr)
+        logger.error("--config is required for stage.")
         return 1
 
-    conn = get_connection(args.db or config.db_path)
+    shutdown = ShutdownManager()
+    shutdown.install()
+
     try:
-        create_all(conn)
+        with locked_connection(args.db or config.db_path) as conn:
+            create_all(conn)
 
-        orch = BurnOrchestrator(
-            config, conn, SubprocessXorrisoRunner(), SubprocessDVDisasterRunner(),
-        )
+            orch = BurnOrchestrator(
+                config, conn,
+                SubprocessXorrisoRunner(tmpdir=config.staging_path),
+                SubprocessDVDisasterRunner(tmpdir=config.staging_path),
+            )
 
-        if args.clean:
-            session_ref = args.session or "latest"
-            orch.clean_session(session_ref)
-            print(f"Cleaned session: {session_ref}")
-            return 0
+            if args.clean:
+                session_ref = args.session or "latest"
+                orch.clean_session(session_ref)
+                logger.info(f"Cleaned session: {session_ref}")
+                return 0
 
-        media_type = None
-        if args.media:
-            try:
-                media_type = MediaType[args.media]
-            except KeyError:
-                valid = ", ".join(m.name for m in MediaType)
-                print(f"Error: Unknown media type '{args.media}'. "
-                      f"Valid types: {valid}", file=sys.stderr)
-                return 1
+            media_type = None
+            if args.media:
+                try:
+                    media_type = MediaType[args.media]
+                except KeyError:
+                    valid = ", ".join(m.name for m in MediaType)
+                    logger.error(f"Unknown media type '{args.media}'. "
+                                 f"Valid types: {valid}")
+                    return 1
 
-        result = orch.stage(
-            media_type=media_type,
-            for_location=args.for_location,
-            repo_ids=args.repo,
-            skip_ecc=args.skip_ecc,
-        )
+            result = orch.stage(
+                media_type=media_type,
+                for_location=args.for_location,
+                repo_ids=args.repo,
+                skip_ecc=args.skip_ecc,
+                dry_run=getattr(args, "dry_run", False),
+            )
 
-        print(f"Session: {result.session_id}")
-        print(f"Staged {len(result.manifests)} volume(s):")
-        for m in result.manifests:
-            iso_size = m.iso_path.stat().st_size if m.iso_path and m.iso_path.exists() else 0
-            print(f"  {m.iso_path}  ({iso_size / 1e9:.1f} GB, {len(m.selected_packs)} packs)")
-        print(f"Manifest: {result.staging_dir / 'session.json'}")
+            if getattr(args, "dry_run", False):
+                return 0
+
+            logger.info(f"Session: {result.session_id}")
+            logger.info(f"Staged {len(result.manifests)} volume(s):")
+            for m in result.manifests:
+                iso_size = m.iso_path.stat().st_size if m.iso_path and m.iso_path.exists() else 0
+                logger.info(f"  {m.iso_path}  ({iso_size / 1e9:.1f} GB, {len(m.selected_packs)} packs)")
+            logger.info(f"Manifest: {result.staging_dir / 'session.json'}")
+        return 0
     finally:
-        conn.close()
-    return 0
+        shutdown.uninstall()
 
 
 def cmd_burn_session(args: argparse.Namespace) -> int:
     """Burn a staged session to disc."""
     from lcsas.burn.orchestrator import BurnOrchestrator
     from lcsas.config.settings import load_config
-    from lcsas.db.connection import get_connection
+    from lcsas.db.connection import locked_connection
     from lcsas.db.schema import create_all
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
     config = load_config(args.config) if args.config else None
     if config is None:
-        print("Error: --config is required for burn.", file=sys.stderr)
+        logger.error("--config is required for burn.")
         return 1
 
-    conn = get_connection(args.db or config.db_path)
-    try:
+    with locked_connection(args.db or config.db_path) as conn:
         create_all(conn)
 
         orch = BurnOrchestrator(
-            config, conn, SubprocessXorrisoRunner(), SubprocessDVDisasterRunner(),
+            config, conn,
+            SubprocessXorrisoRunner(tmpdir=config.staging_path),
+            SubprocessDVDisasterRunner(tmpdir=config.staging_path),
         )
 
         location = args.location or config.default_location
+
+        if getattr(args, "dry_run", False):
+            from lcsas.db.sessions import get_session_volumes, resolve_session_id
+            sid = resolve_session_id(conn, args.session or "latest")
+            vols = get_session_volumes(conn, sid)
+            logger.info(f"[DRY RUN] Session {sid}: {len(vols)} volume(s)")
+            for v in vols:
+                logger.info(f"  {v['volume_label']}  status={v['status']}")
+            return 0
+
         receipts = orch.burn_session(
             session_ref=args.session,
             location=location,
             device=args.device,
         )
-    finally:
-        conn.close()
 
-    print(f"Burned {len(receipts)} volume(s) to {location}:")
+    logger.info(f"Burned {len(receipts)} volume(s) to {location}:")
     for r in receipts:
-        print(f"  {r.volume_label} → {r.pack_count} packs")
+        logger.info(f"  {r.volume_label} → {r.pack_count} packs")
     return 0
 
 
@@ -486,14 +636,13 @@ def cmd_burn_legacy(args: argparse.Namespace) -> int:
     from lcsas.burn.orchestrator import BurnOrchestrator
     from lcsas.config.media import MediaType
     from lcsas.config.settings import load_config
-    from lcsas.db.connection import get_connection
+    from lcsas.db.connection import locked_connection
     from lcsas.db.schema import create_all
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
     config = load_config(args.config)
-    conn = get_connection(config.db_path if args.db is None else args.db)
-    try:
+    with locked_connection(config.db_path if args.db is None else args.db) as conn:
         create_all(conn)
 
         media_type = None
@@ -502,12 +651,14 @@ def cmd_burn_legacy(args: argparse.Namespace) -> int:
                 media_type = MediaType[args.media]
             except KeyError:
                 valid = ", ".join(m.name for m in MediaType)
-                print(f"Error: Unknown media type '{args.media}'. "
-                      f"Valid types: {valid}", file=sys.stderr)
+                logger.error(f"Unknown media type '{args.media}'. "
+                             f"Valid types: {valid}")
                 return 1
 
         orch = BurnOrchestrator(
-            config, conn, SubprocessXorrisoRunner(), SubprocessDVDisasterRunner(),
+            config, conn,
+            SubprocessXorrisoRunner(tmpdir=config.staging_path),
+            SubprocessDVDisasterRunner(tmpdir=config.staging_path),
         )
 
         # Stage first
@@ -516,24 +667,26 @@ def cmd_burn_legacy(args: argparse.Namespace) -> int:
             for_location=args.location,
             repo_ids=args.repo,
             skip_ecc=args.skip_ecc,
+            dry_run=getattr(args, "dry_run", False),
         )
-        print(f"Session: {result.session_id}")
-        print(f"Staged {len(result.manifests)} volume(s)")
+        logger.info(f"Session: {result.session_id}")
+        logger.info(f"Staged {len(result.manifests)} volume(s)")
+
+        if getattr(args, "dry_run", False):
+            return 0
 
         # Then burn
         location = args.location or "default"
-        device = args.device or config.device
+        device = args.device or config.optical_device
         receipts = orch.burn_session(
             session_ref=result.session_id,
             location=location,
             device=device,
         )
-    finally:
-        conn.close()
 
-    print(f"Burned {len(receipts)} volume(s) to {location}:")
+    logger.info(f"Burned {len(receipts)} volume(s) to {location}:")
     for r in receipts:
-        print(f"  {r.volume_label} → {r.pack_count} packs")
+        logger.info(f"  {r.volume_label} → {r.pack_count} packs")
     return 0
 
 
@@ -543,20 +696,20 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
 
     iso_path = args.iso_path
     if not iso_path.exists():
-        print(f"Error: ISO file not found: {iso_path}", file=sys.stderr)
+        logger.error(f"ISO file not found: {iso_path}")
         return 1
 
     runner = SubprocessXorrisoRunner()
     device = args.device
 
-    print(f"Burning {iso_path} to {device} ...")
+    logger.info(f"Burning {iso_path} to {device} ...")
     runner.burn_iso(iso_path, device=device)
-    print("Burn complete.")
+    logger.info("Burn complete.")
 
     if args.verify:
-        print(f"Verifying disc on {device} ...")
+        logger.info(f"Verifying disc on {device} ...")
         ok = runner.verify_disc(device=device)
-        print(f"  Verify: {'PASS' if ok else 'FAIL'}")
+        logger.info(f"  Verify: {'PASS' if ok else 'FAIL'}")
         if not ok:
             return 1
 
@@ -568,10 +721,11 @@ def cmd_location(args: argparse.Namespace) -> int:
     from lcsas.config.settings import load_config
     from lcsas.db.connection import get_connection
     from lcsas.db.schema import create_all
+    from lcsas.utils.labels import sanitize_name
 
     config = load_config(args.config) if args.config else None
     if config is None:
-        print("Error: --config is required for location.", file=sys.stderr)
+        logger.error("--config is required for location.")
         return 1
 
     conn = get_connection(args.db or config.db_path)
@@ -584,7 +738,7 @@ def cmd_location(args: argparse.Namespace) -> int:
 
             locations = list_locations(conn)
             if not locations:
-                print("No locations registered.")
+                logger.info("No locations registered.")
                 return 0
 
             summaries = get_location_summary(conn)
@@ -593,12 +747,13 @@ def cmd_location(args: argparse.Namespace) -> int:
             for loc in locations:
                 s = summary_map.get(loc.name, {"volumes": 0, "packs": 0, "missing": 0})
                 status = "all current" if s["missing"] == 0 else f"{s['missing']} packs behind"
-                print(f"  {loc.name:<20} {s['volumes']} volumes, {s['packs']} packs, {status}")
+                logger.info(f"  {loc.name:<20} {s['volumes']} volumes, {s['packs']} packs, {status}")
 
         elif args.location_command == "add":
             from lcsas.db.locations import create_location
-            create_location(conn, args.name, args.description)
-            print(f"Added location: {args.name}")
+            name = sanitize_name(args.name, "location name")
+            create_location(conn, name, args.description)
+            logger.info(f"Added location: {name}")
 
         elif args.location_command == "status":
             from lcsas.db.queries import get_packs_missing_at_location, get_packs_at_location
@@ -606,9 +761,9 @@ def cmd_location(args: argparse.Namespace) -> int:
             at_loc = get_packs_at_location(conn, args.name)
             missing = get_packs_missing_at_location(conn, args.name)
 
-            print(f"Location: {args.name}")
-            print(f"  Packs archived here: {len(at_loc)}")
-            print(f"  Packs missing: {len(missing)}")
+            logger.info(f"Location: {args.name}")
+            logger.info(f"  Packs archived here: {len(at_loc)}")
+            logger.info(f"  Packs missing: {len(missing)}")
             if missing:
                 # Group by repo
                 by_repo: dict[str, list] = {}
@@ -617,7 +772,7 @@ def cmd_location(args: argparse.Namespace) -> int:
                     by_repo.setdefault(repo, []).append(p)
                 for repo, packs in sorted(by_repo.items()):
                     total_size = sum(p.size_bytes for p in packs)
-                    print(f"    repo={repo}: {len(packs)} packs ({total_size / 1e9:.1f} GB)")
+                    logger.info(f"    repo={repo}: {len(packs)} packs ({total_size / 1e9:.1f} GB)")
 
         elif args.location_command == "move":
             from lcsas.db.volume_copies import move_volume_copy
@@ -625,13 +780,13 @@ def cmd_location(args: argparse.Namespace) -> int:
 
             vol = get_volume_by_label(conn, args.volume_label)
             if vol is None:
-                print(f"Error: Volume '{args.volume_label}' not found.", file=sys.stderr)
+                logger.error(f"Volume '{args.volume_label}' not found.")
                 return 1
             move_volume_copy(conn, vol.volume_id, args.from_location, args.to_location)
-            print(f"Moved {args.volume_label}: {args.from_location} → {args.to_location}")
+            logger.info(f"Moved {args.volume_label}: {args.from_location} → {args.to_location}")
 
         else:
-            print("Usage: lcsas location {list|add|status|move}", file=sys.stderr)
+            logger.error("Usage: lcsas location {list|add|status|move}")
             return 1
     finally:
         conn.close()
@@ -649,7 +804,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
     config = load_config(args.config) if args.config else None
     if config is None:
-        print("Error: --config is required for catalog.", file=sys.stderr)
+        logger.error("--config is required for catalog.")
         return 1
 
     conn = get_connection(args.db or config.db_path)
@@ -664,14 +819,13 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             # Validate required receipt fields
             missing = [k for k in ("volume_label", "location") if k not in receipt]
             if missing:
-                print(f"Warning: Receipt '{receipt_file}' missing keys: "
-                      f"{', '.join(missing)}, skipping.", file=sys.stderr)
+                logger.warning(f"Receipt '{receipt_file}' missing keys: "
+                               f"{', '.join(missing)}, skipping.")
                 continue
 
             vol = get_volume_by_label(conn, receipt["volume_label"])
             if vol is None:
-                print(f"Warning: Volume '{receipt['volume_label']}' not found, skipping.",
-                      file=sys.stderr)
+                logger.warning(f"Volume '{receipt['volume_label']}' not found, skipping.")
                 continue
 
             ensure_location(conn, receipt["location"])
@@ -685,7 +839,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     finally:
         conn.close()
 
-    print(f"Imported {imported} receipt(s).")
+    logger.info(f"Imported {imported} receipt(s).")
     return 0
 
 
@@ -707,8 +861,8 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             media_type = MediaType[args.target_media]
         except KeyError:
             valid = ", ".join(m.name for m in MediaType)
-            print(f"Error: Unknown media type '{args.target_media}'. "
-                  f"Valid types: {valid}", file=sys.stderr)
+            logger.error(f"Unknown media type '{args.target_media}'. "
+                         f"Valid types: {valid}")
             return 1
 
         merger = VolumeMerger(conn)
@@ -716,15 +870,15 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
     finally:
         conn.close()
 
-    print("Consolidation Plan:")
-    print(f"  Source volumes: {', '.join(plan.source_labels)}")
-    print(f"  Active packs:  {len(plan.active_packs)}")
-    print(f"  Total size:    {plan.total_active_bytes / 1e9:.1f} GB")
-    print(f"  Target media:  {plan.target_media_type.name}")
-    print(f"  Volumes needed: {plan.volumes_needed}")
-    print()
-    print("To execute: stage the active packs onto new volumes,")
-    print("then burn and deprecate the source volumes.")
+    logger.info("Consolidation Plan:")
+    logger.info(f"  Source volumes: {', '.join(plan.source_labels)}")
+    logger.info(f"  Active packs:  {len(plan.active_packs)}")
+    logger.info(f"  Total size:    {plan.total_active_bytes / 1e9:.1f} GB")
+    logger.info(f"  Target media:  {plan.target_media_type.name}")
+    logger.info(f"  Volumes needed: {plan.volumes_needed}")
+    logger.info("")
+    logger.info("To execute: stage the active packs onto new volumes,")
+    logger.info("then burn and deprecate the source volumes.")
     return 0
 
 
@@ -743,8 +897,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
         vol = get_volume_by_label(conn, args.volume_label)
         if vol is None:
-            print(f"Error: Volume '{args.volume_label}' not found.",
-                  file=sys.stderr)
+            logger.error(f"Volume '{args.volume_label}' not found.")
             return 1
 
         # Find ISO path from session_volumes if not explicitly provided
@@ -758,9 +911,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
             if row and row["iso_path"]:
                 iso_path = Path(row["iso_path"])
             else:
-                print("Error: No ISO path found for this volume. "
-                      "Use --iso to specify one, or --disc to verify a burned disc.",
-                      file=sys.stderr)
+                logger.error("No ISO path found for this volume. "
+                             "Use --iso to specify one, or --disc to verify a burned disc.")
                 return 1
     finally:
         conn.close()
@@ -770,21 +922,21 @@ def cmd_verify(args: argparse.Namespace) -> int:
     if args.disc:
         from lcsas.iso.xorriso import SubprocessXorrisoRunner
         runner = SubprocessXorrisoRunner()
-        print(f"Verifying disc on {args.device} ...")
+        logger.info(f"Verifying disc on {args.device} ...")
         ok = runner.verify_disc(device=args.device)
-        print(f"  Disc verify: {'PASS' if ok else 'FAIL'}")
+        logger.info(f"  Disc verify: {'PASS' if ok else 'FAIL'}")
         if not ok:
             passed = False
     else:
         if not iso_path.exists():
-            print(f"Error: ISO file not found: {iso_path}", file=sys.stderr)
+            logger.error(f"ISO file not found: {iso_path}")
             return 1
 
         from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
         dvd_runner = SubprocessDVDisasterRunner()
-        print(f"Verifying ISO: {iso_path}")
+        logger.info(f"Verifying ISO: {iso_path}")
         ok = dvd_runner.verify_iso(iso_path)
-        print(f"  ECC verify: {'PASS' if ok else 'FAIL'}")
+        logger.info(f"  ECC verify: {'PASS' if ok else 'FAIL'}")
         if not ok:
             passed = False
 
@@ -801,20 +953,20 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
         project_root=args.project_root,
     )
 
-    print(f"Building meta-volume in {output} ...")
+    logger.info(f"Building meta-volume in {output} ...")
     try:
         builder.build()
     except FileNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        print("Ensure restic, xorriso, and python3 are installed.", file=sys.stderr)
+        logger.error(f"{e}")
+        logger.error("Ensure restic, xorriso, and python3 are installed.")
         return 1
 
-    print(f"Meta-volume built successfully at {output}")
-    print("Contents:")
-    print("  tools/          Portable restic, xorriso, python3 + libraries")
-    print("  lcsas/          LCSAS source code")
-    print("  restore.sh      Bootstrap restore script")
-    print("  README_RESTORE.md  Restore instructions")
+    logger.info(f"Meta-volume built successfully at {output}")
+    logger.info("Contents:")
+    logger.info("  tools/          Portable restic, xorriso, python3 + libraries")
+    logger.info("  lcsas/          LCSAS source code")
+    logger.info("  restore.sh      Bootstrap restore script")
+    logger.info("  README_RESTORE.md  Restore instructions")
     return 0
 
 
@@ -834,16 +986,14 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
         # Resolve repo config
         repo_name = args.repo
         if repo_name not in config.repositories:
-            print(f"Error: repository '{repo_name}' not found in config.",
-                  file=sys.stderr)
-            print(f"  Available: {', '.join(config.repositories.keys())}",
-                  file=sys.stderr)
+            logger.error(f"repository '{repo_name}' not found in config.")
+            logger.error(f"  Available: {', '.join(config.repositories.keys())}")
             return 1
 
         repo_cfg = config.repositories[repo_name]
 
         # Get required pack hashes via rustic dry-run
-        runner = SubprocessRusticRunner()
+        runner = SubprocessRusticRunner(tmpdir=config.staging_path)
         plan = runner.restore_dry_run(
             snapshot_id=args.snapshot_id,
             repo_path=repo_cfg.mirror_path,
@@ -857,28 +1007,28 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
         conn.close()
 
     # Display results
-    print(f"Restore Pick List for snapshot {args.snapshot_id}")
-    print(f"  Repository: {repo_name}")
-    print(f"  Required packs: {len(plan.required_pack_hashes)}")
-    print()
+    logger.info(f"Restore Pick List for snapshot {args.snapshot_id}")
+    logger.info(f"  Repository: {repo_name}")
+    logger.info(f"  Required packs: {len(plan.required_pack_hashes)}")
+    logger.info("")
 
     if pick_list.volumes:
         for label, packs in sorted(pick_list.volumes.items()):
             total = sum(p.size_bytes for p in packs)
-            print(f"  {label:<30} {len(packs):>4} packs  "
-                  f"({total / (1024 * 1024):.1f} MB)")
-        print()
-        print(f"  Total: {pick_list.total_packs} packs across "
-              f"{len(pick_list.volumes)} volumes "
-              f"({pick_list.total_bytes / (1024 * 1024):.1f} MB)")
+            logger.info(f"  {label:<30} {len(packs):>4} packs  "
+                       f"({total / (1024 * 1024):.1f} MB)")
+        logger.info("")
+        logger.info(f"  Total: {pick_list.total_packs} packs across "
+                   f"{len(pick_list.volumes)} volumes "
+                   f"({pick_list.total_bytes / (1024 * 1024):.1f} MB)")
 
     if pick_list.missing_packs:
-        print(f"\n  WARNING: {len(pick_list.missing_packs)} packs not found "
-              f"in any volume!")
+        logger.warning(f"\n  WARNING: {len(pick_list.missing_packs)} packs not found "
+                       f"in any volume!")
         for sha in pick_list.missing_packs[:10]:
-            print(f"    {sha}")
+            logger.info(f"    {sha}")
         if len(pick_list.missing_packs) > 10:
-            print(f"    ... and {len(pick_list.missing_packs) - 10} more")
+            logger.info(f"    ... and {len(pick_list.missing_packs) - 10} more")
 
     return 0
 
@@ -893,7 +1043,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
     from lcsas.restore.executor import RestoreExecutor
     from lcsas.restore.planner import RestorePlanner
     from lcsas.rustic.wrapper import SubprocessRusticRunner
-    from lcsas.utils.fs import ensure_dir
+    from lcsas.utils.fs import ensure_dir, safe_remove_tree
 
     config = load_config(args.config)
     conn = get_connection(config.db_path if args.db is None else args.db)
@@ -902,12 +1052,11 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
 
         repo_name = args.repo
         if repo_name not in config.repositories:
-            print(f"Error: repository '{repo_name}' not found in config.",
-                  file=sys.stderr)
+            logger.error(f"repository '{repo_name}' not found in config.")
             return 1
 
         repo_cfg = config.repositories[repo_name]
-        runner = SubprocessRusticRunner()
+        runner = SubprocessRusticRunner(tmpdir=config.staging_path)
 
         # Get required pack hashes
         plan = runner.restore_dry_run(
@@ -923,17 +1072,25 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         conn.close()
 
     if pick_list.missing_packs:
-        print(f"Error: {len(pick_list.missing_packs)} required packs not "
-              f"found in any volume.", file=sys.stderr)
+        logger.error(f"{len(pick_list.missing_packs)} required packs not "
+                     f"found in any volume.")
         return 1
 
     # Set up cache directory
     cache_dir = args.cache_dir
     cleanup_cache = False
     if cache_dir is None:
-        cache_dir = Path(tempfile.mkdtemp(prefix="lcsas-restore-"))
+        cache_dir = Path(tempfile.mkdtemp(
+            prefix="lcsas-restore-", dir=str(config.staging_path),
+        ))
         cleanup_cache = True
     ensure_dir(cache_dir)
+
+    from lcsas.utils.shutdown import ShutdownManager
+    shutdown = ShutdownManager()
+    if cleanup_cache:
+        shutdown.register(lambda: safe_remove_tree(cache_dir))
+    shutdown.install()
 
     try:
         executor = RestoreExecutor(runner)
@@ -942,8 +1099,8 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         metadata_source = repo_cfg.mirror_path
         executor.prepare_cache(cache_dir, metadata_source)
 
-        print(f"Restore cache: {cache_dir}")
-        print(f"Need packs from {len(pick_list.volumes)} volumes")
+        logger.info(f"Restore cache: {cache_dir}")
+        logger.info(f"Need packs from {len(pick_list.volumes)} volumes")
 
         # Ingest packs from volumes
         if args.volume_dir:
@@ -955,8 +1112,11 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                 vol_path = vol_dir / label
                 if not vol_path.is_dir():
                     vol_path = vol_dir
-                ingested = executor.ingest_volume(cache_dir, vol_path, pack_hashes)
-                print(f"  {label}: ingested {ingested} packs")
+                ingested = executor.ingest_volume(
+                    cache_dir, vol_path, pack_hashes,
+                    verify=not args.skip_verify,
+                )
+                logger.info(f"  {label}: ingested {ingested} packs")
         else:
             # Interactive: prompt user to mount each volume
             for label, packs in sorted(pick_list.volumes.items()):
@@ -967,33 +1127,34 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                         f"(or 'skip' to skip): "
                     ).strip()
                     if mount_path.lower() == "skip":
-                        print(f"  Skipping {label}")
+                        logger.info(f"  Skipping {label}")
                         break
                     vol_path = Path(mount_path)
                     if not vol_path.is_dir():
-                        print(f"  '{mount_path}' is not a directory, try again.")
+                        logger.info(f"  '{mount_path}' is not a directory, try again.")
                         continue
                     ingested = executor.ingest_volume(
                         cache_dir, vol_path, pack_hashes,
+                        verify=not args.skip_verify,
                     )
-                    print(f"  Ingested {ingested} packs from {label}")
+                    logger.info(f"  Ingested {ingested} packs from {label}")
                     break
 
         # Execute restore
         target = args.target_path.resolve()
-        print(f"\nRestoring snapshot {args.snapshot_id} → {target}")
+        logger.info(f"\nRestoring snapshot {args.snapshot_id} → {target}")
         executor.execute_restore(
             cache_dir=cache_dir,
             snapshot_id=args.snapshot_id,
             target_path=target,
             password_file=args.password_file,
         )
-        print("Restore complete!")
+        logger.info("Restore complete!")
     finally:
         # Cleanup temporary cache
         if cleanup_cache:
-            from lcsas.utils.fs import safe_remove_tree
             safe_remove_tree(cache_dir)
+        shutdown.uninstall()
 
     return 0
 
@@ -1013,6 +1174,9 @@ def dispatch(args: argparse.Namespace) -> int:
         return cmd_status(args)
     elif args.command == "db" and args.db_command == "export":
         return cmd_db_export(args)
+    elif args.command == "config":
+        if args.config_command == "check":
+            return cmd_config_check(args)
     elif args.command == "stage":
         return cmd_stage(args)
     elif args.command == "burn":
@@ -1022,6 +1186,9 @@ def dispatch(args: argparse.Namespace) -> int:
         return cmd_burn_legacy(args)
     elif args.command == "burn-iso":
         return cmd_burn_iso(args)
+    elif args.command == "staging":
+        if args.staging_command == "clean":
+            return cmd_staging_clean(args)
     elif args.command == "location":
         return cmd_location(args)
     elif args.command == "catalog":
@@ -1040,7 +1207,7 @@ def dispatch(args: argparse.Namespace) -> int:
     elif args.command == "consolidate":
         return cmd_consolidate(args)
 
-    print(f"Command '{args.command}' not yet implemented.", file=sys.stderr)
+    logger.error(f"Command '{args.command}' not yet implemented.")
     return 1
 
 
@@ -1049,6 +1216,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    setup_logging(verbose=getattr(args, "verbose", False))
+
     if not args.command:
         parser.print_help()
         return 0
@@ -1056,7 +1225,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return dispatch(args)
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        logger.error(f"{e}")
         if getattr(args, "verbose", False):
             traceback.print_exc()
         return 1

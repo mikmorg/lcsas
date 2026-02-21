@@ -357,7 +357,7 @@ class TestRestoreFromAnyCombination:
                 vol_dir = volume_dirs[label]
                 # Determine which of ALL_SHAS this volume has
                 vol_shas = list(self.VOL_CONTENTS[label])
-                ingested = executor.ingest_volume(cache_dir, vol_dir, vol_shas)
+                ingested = executor.ingest_volume(cache_dir, vol_dir, vol_shas, verify=False)
                 total_ingested += ingested
 
             # Verify ALL packs are in the cache
@@ -428,8 +428,8 @@ class TestMultiVolumeIngest:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        n1 = executor.ingest_volume(cache, vol_a, ["sha_pack1"])
-        n2 = executor.ingest_volume(cache, vol_b, ["sha_pack2"])
+        n1 = executor.ingest_volume(cache, vol_a, ["sha_pack1"], verify=False)
+        n2 = executor.ingest_volume(cache, vol_b, ["sha_pack2"], verify=False)
 
         assert n1 == 1
         assert n2 == 1
@@ -452,8 +452,8 @@ class TestMultiVolumeIngest:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        n1 = executor.ingest_volume(cache, vol_a, ["common_pack"])
-        n2 = executor.ingest_volume(cache, vol_b, ["common_pack"])
+        n1 = executor.ingest_volume(cache, vol_a, ["common_pack"], verify=False)
+        n2 = executor.ingest_volume(cache, vol_b, ["common_pack"], verify=False)
 
         assert n1 == 1
         assert n2 == 0  # Already cached
@@ -471,7 +471,7 @@ class TestMultiVolumeIngest:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        n = executor.ingest_volume(cache, vol, ["exists", "missing1", "missing2"])
+        n = executor.ingest_volume(cache, vol, ["exists", "missing1", "missing2"], verify=False)
         assert n == 1
 
     def test_full_restore_workflow(self, tmp_path):
@@ -500,8 +500,8 @@ class TestMultiVolumeIngest:
         # Full workflow
         cache = tmp_path / "cache"
         executor.prepare_cache(cache, meta)
-        executor.ingest_volume(cache, vol1, ["pack_a", "pack_b"])
-        executor.ingest_volume(cache, vol2, ["pack_c"])
+        executor.ingest_volume(cache, vol1, ["pack_a", "pack_b"], verify=False)
+        executor.ingest_volume(cache, vol2, ["pack_c"], verify=False)
 
         # Verify cache structure
         assert (cache / "index" / "data.json").exists()
@@ -553,7 +553,7 @@ class TestCrossRepoRestore:
 
         for label, packs in pick.volumes.items():
             shas = [p.sha256 for p in packs]
-            executor.ingest_volume(cache, volume_dirs[label], shas)
+            executor.ingest_volume(cache, volume_dirs[label], shas, verify=False)
 
         # Verify only photo packs are requested (doc packs not needed)
         for sha in photo_shas:
@@ -578,7 +578,7 @@ class TestCrossRepoRestore:
 
         for label, packs in pick.volumes.items():
             shas = [p.sha256 for p in packs]
-            executor.ingest_volume(cache, volume_dirs[label], shas)
+            executor.ingest_volume(cache, volume_dirs[label], shas, verify=False)
 
         for sha in doc_shas:
             assert (cache / "data" / sha[:2] / sha).exists()
@@ -605,7 +605,7 @@ class TestCrossRepoRestore:
 
         for label, packs in pick.volumes.items():
             shas = [p.sha256 for p in packs]
-            executor.ingest_volume(cache, volume_dirs[label], shas)
+            executor.ingest_volume(cache, volume_dirs[label], shas, verify=False)
 
         for sha in all_shas:
             cached = cache / "data" / sha[:2] / sha
@@ -666,7 +666,7 @@ class TestDataIntegrityVerification:
         sha = "d02_hash"  # On VOL_A and VOL_B
 
         # Ingest from VOL_A
-        executor.ingest_volume(cache, volume_dirs["VOL_A"], [sha])
+        executor.ingest_volume(cache, volume_dirs["VOL_A"], [sha], verify=False)
         cached = (cache / "data" / sha[:2] / sha).read_bytes()
         source_a = (volume_dirs["VOL_A"] / "data" / sha).read_bytes()
         source_b = (volume_dirs["VOL_B"] / "data" / sha).read_bytes()

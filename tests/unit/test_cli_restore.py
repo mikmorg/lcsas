@@ -53,6 +53,7 @@ def _make_args(**kwargs):
         "command": "restore",
         "repo": "family",
         "snapshot_id": "abc123",
+        "skip_verify": True,
     }
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
@@ -174,9 +175,9 @@ class TestCmdRestorePlan:
             result = cmd_restore_plan(args)
 
         assert result == 1
-        err = capsys.readouterr().err
-        assert "nonexistent" in err
-        assert "not found" in err
+        out = capsys.readouterr().out
+        assert "nonexistent" in out
+        assert "not found" in out
 
     def test_plan_shows_missing_packs(self, capsys):
         """restore plan warns about packs not found in any volume."""
@@ -293,8 +294,8 @@ class TestCmdRestoreExec:
             result = cmd_restore_exec(args)
 
         assert result == 1
-        err = capsys.readouterr().err
-        assert "not found" in err
+        out = capsys.readouterr().out
+        assert "not found" in out
 
     def test_exec_fails_on_missing_packs(self, capsys):
         """restore exec aborts if packs are missing from catalog."""
@@ -337,8 +338,8 @@ class TestCmdRestoreExec:
             result = cmd_restore_exec(args)
 
         assert result == 1
-        err = capsys.readouterr().err
-        assert "not found in any volume" in err
+        out = capsys.readouterr().out
+        assert "not found in any volume" in out
 
     def test_exec_volume_dir_ingests_packs(self, tmp_path, capsys):
         """restore exec with --volume-dir ingests packs and calls restore."""

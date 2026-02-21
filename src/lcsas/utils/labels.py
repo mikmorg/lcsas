@@ -1,9 +1,48 @@
-"""Volume label and UUID generation utilities."""
+"""Volume label, UUID generation, and input sanitization utilities."""
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
+
+_MAX_NAME_LENGTH = 128
+_UNSAFE_PATTERN = re.compile(r'[/\\]|\.\.|[\x00]')
+
+
+def sanitize_name(value: str, field: str = "name") -> str:
+    """Sanitize a user-provided name for use in filenames or DB fields.
+
+    Rejects:
+      - Null bytes
+      - Path separators (``/``, ``\\``)
+      - Parent-directory traversals (``..``)
+      - Empty strings
+      - Strings exceeding 128 characters
+
+    Args:
+        value: The raw user input.
+        field: Field name for error messages (e.g. ``"location"``).
+
+    Returns:
+        The stripped, validated string.
+
+    Raises:
+        ValueError: If the value is invalid.
+    """
+    value = value.strip()
+    if not value:
+        raise ValueError(f"{field} must not be empty.")
+    if len(value) > _MAX_NAME_LENGTH:
+        raise ValueError(
+            f"{field} exceeds maximum length of {_MAX_NAME_LENGTH} characters."
+        )
+    if _UNSAFE_PATTERN.search(value):
+        raise ValueError(
+            f"{field} contains unsafe characters "
+            f"(path separators, '..', or null bytes): {value!r}"
+        )
+    return value
 
 
 def generate_volume_label(

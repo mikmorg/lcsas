@@ -127,7 +127,7 @@ class TestIngestVolume:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        count = executor.ingest_volume(cache, mount, [shas[0], shas[1]])
+        count = executor.ingest_volume(cache, mount, [shas[0], shas[1]], verify=False)
         assert count == 2
         assert (cache / "data" / shas[0][:2] / shas[0]).exists()
         assert (cache / "data" / shas[1][:2] / shas[1]).exists()
@@ -138,7 +138,7 @@ class TestIngestVolume:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        count = executor.ingest_volume(cache, mount, [shas[0], shas[1]])
+        count = executor.ingest_volume(cache, mount, [shas[0], shas[1]], verify=False)
         assert count == 2
 
     def test_missing_pack_not_counted(self, executor, tmp_path):
@@ -147,7 +147,7 @@ class TestIngestVolume:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        count = executor.ingest_volume(cache, mount, [shas[2]])  # sha3 doesn't exist
+        count = executor.ingest_volume(cache, mount, [shas[2]], verify=False)  # sha3 doesn't exist
         assert count == 0
 
     def test_already_cached_skipped(self, executor, tmp_path):
@@ -160,7 +160,7 @@ class TestIngestVolume:
         prefix.mkdir(parents=True)
         (prefix / shas[0]).write_bytes(b"already_here")
 
-        count = executor.ingest_volume(cache, mount, [shas[0], shas[1]])
+        count = executor.ingest_volume(cache, mount, [shas[0], shas[1]], verify=False)
         assert count == 1  # only sha2 ingested
         # sha1 should NOT be overwritten
         assert (cache / "data" / shas[0][:2] / shas[0]).read_bytes() == b"already_here"
@@ -171,7 +171,7 @@ class TestIngestVolume:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        count = executor.ingest_volume(cache, mount, [shas[0], shas[2]])
+        count = executor.ingest_volume(cache, mount, [shas[0], shas[2]], verify=False)
         assert count == 1  # sha1 found, sha3 missing
 
 

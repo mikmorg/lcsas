@@ -111,5 +111,5 @@ class TestCmdDispatchEdges:
         # Use a non-existent DB path that will fail
         result = main(["--db", "/nonexistent/path/db.sqlite", "status"])
         assert result == 1
-        err = capsys.readouterr().err
-        assert "Error:" in err
+        out = capsys.readouterr().out
+        assert "unable to open database file" in out

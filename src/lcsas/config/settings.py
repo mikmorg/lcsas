@@ -135,3 +135,85 @@ def default_config(
         db_path=db_path,
         default_media_type=media_type,
     )
+
+
+def validate_config(config: LCSASConfig) -> list[str]:
+    """Validate an ``LCSASConfig`` and return a list of error strings.
+
+    Returns an empty list when the configuration is valid.
+    """
+    errors: list[str] = []
+
+    # mirror_base_path
+    if not config.mirror_base_path.exists():
+        errors.append(
+            f"mirror_base_path does not exist: {config.mirror_base_path}"
+        )
+    elif not config.mirror_base_path.is_dir():
+        errors.append(
+            f"mirror_base_path is not a directory: {config.mirror_base_path}"
+        )
+
+    # staging_path
+    if not config.staging_path.exists():
+        errors.append(
+            f"staging_path does not exist: {config.staging_path}"
+        )
+    elif not config.staging_path.is_dir():
+        errors.append(
+            f"staging_path is not a directory: {config.staging_path}"
+        )
+    elif not _is_writable(config.staging_path):
+        errors.append(
+            f"staging_path is not writable: {config.staging_path}"
+        )
+
+    # db_path parent
+    db_parent = config.db_path.parent
+    if not db_parent.exists():
+        errors.append(
+            f"db_path parent directory does not exist: {db_parent}"
+        )
+    elif not _is_writable(db_parent):
+        errors.append(
+            f"db_path parent directory is not writable: {db_parent}"
+        )
+
+    # ecc_redundancy_pct
+    if not 0 <= config.default_ecc_redundancy_pct <= 100:
+        errors.append(
+            f"default_ecc_redundancy_pct out of range (0-100): "
+            f"{config.default_ecc_redundancy_pct}"
+        )
+
+    # metadata_reserve_bytes (must be positive)
+    if config.metadata_reserve_bytes <= 0:
+        errors.append(
+            f"metadata_reserve_bytes must be positive: "
+            f"{config.metadata_reserve_bytes}"
+        )
+
+    # Per-repo checks
+    for name, repo in config.repositories.items():
+        if not repo.mirror_path.exists():
+            errors.append(
+                f"repo '{name}': mirror_path does not exist: {repo.mirror_path}"
+            )
+        elif not repo.mirror_path.is_dir():
+            errors.append(
+                f"repo '{name}': mirror_path is not a directory: "
+                f"{repo.mirror_path}"
+            )
+        if repo.password_file is not None and not repo.password_file.exists():
+            errors.append(
+                f"repo '{name}': password_file does not exist: "
+                f"{repo.password_file}"
+            )
+
+    return errors
+
+
+def _is_writable(path: Path) -> bool:
+    """Check if a path is writable using os.access."""
+    import os
+    return os.access(path, os.W_OK)

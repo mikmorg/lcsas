@@ -467,7 +467,7 @@ class TestCrossLocationCacheAssembly:
 
         for label, packs in pick.volumes.items():
             shas = [p.sha256 for p in packs]
-            executor.ingest_volume(cache, volume_dirs[label], shas)
+            executor.ingest_volume(cache, volume_dirs[label], shas, verify=False)
 
         # Every pack must be in the cache with correct content
         for sha in ALL_SHAS:
@@ -498,7 +498,7 @@ class TestCrossLocationCacheAssembly:
 
         for label, packs in pick.volumes.items():
             shas = [p.sha256 for p in packs]
-            executor.ingest_volume(cache, volume_dirs[label], shas)
+            executor.ingest_volume(cache, volume_dirs[label], shas, verify=False)
 
         for sha in ALL_SHAS:
             cached = cache / "data" / sha[:2] / sha
@@ -525,7 +525,7 @@ class TestCrossLocationCacheAssembly:
 
         for label, packs in pick.volumes.items():
             shas = [p.sha256 for p in packs]
-            executor.ingest_volume(cache, volume_dirs[label], shas)
+            executor.ingest_volume(cache, volume_dirs[label], shas, verify=False)
 
         pw = tmp_path / "pw.txt"
         pw.write_text("test")
@@ -683,11 +683,11 @@ class TestCrossLocationIntegrity:
 
         cache_home = tmp_path / "cache_home"
         cache_home.mkdir()
-        executor.ingest_volume(cache_home, volume_dirs["HOME_001"], [sha])
+        executor.ingest_volume(cache_home, volume_dirs["HOME_001"], [sha], verify=False)
 
         cache_off = tmp_path / "cache_off"
         cache_off.mkdir()
-        executor.ingest_volume(cache_off, volume_dirs["OFF_002"], [sha])
+        executor.ingest_volume(cache_off, volume_dirs["OFF_002"], [sha], verify=False)
 
         home_bytes = (cache_home / "data" / sha[:2] / sha).read_bytes()
         off_bytes = (cache_off / "data" / sha[:2] / sha).read_bytes()
