@@ -95,8 +95,8 @@ class TestDeltaAnalyzer:
 
     def test_detect_pruned_finds_missing(self, memory_db):
         """Packs in DB but not on mirror are detected as pruned."""
-        p1 = register_pack(memory_db, sha256="keep_me", size_bytes=100, repo_id="_test")
-        p2 = register_pack(memory_db, sha256="prune_me", size_bytes=200, repo_id="_test")
+        register_pack(memory_db, sha256="keep_me", size_bytes=100, repo_id="_test")
+        register_pack(memory_db, sha256="prune_me", size_bytes=200, repo_id="_test")
 
         # Mirror only has keep_me
         scanner_result = {"keep_me": 100}
@@ -129,7 +129,7 @@ class TestBulkMarkPruned:
         from lcsas.db.packs import bulk_mark_pruned, get_pack_by_sha256
         p1 = register_pack(memory_db, sha256="bp1", size_bytes=100, repo_id="_test")
         p2 = register_pack(memory_db, sha256="bp2", size_bytes=200, repo_id="_test")
-        p3 = register_pack(memory_db, sha256="bp3", size_bytes=300, repo_id="_test")
+        _p3 = register_pack(memory_db, sha256="bp3", size_bytes=300, repo_id="_test")
 
         count = bulk_mark_pruned(memory_db, [p1.pack_id, p2.pack_id])
         assert count == 2

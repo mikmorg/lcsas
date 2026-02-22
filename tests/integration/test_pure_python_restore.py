@@ -40,6 +40,31 @@ from lcsas.restore.restic_fallback import PurePythonRestorer
 # ── Skip conditions ──────────────────────────────────────────────
 
 _RESTIC_BIN = shutil.which("rustic") or shutil.which("restic") or ""
+# rustic uses positional <destination>; restic uses --target <destination>
+_RESTIC_IS_RUSTIC = os.path.basename(_RESTIC_BIN).startswith("rustic") if _RESTIC_BIN else False
+
+
+def _restore_cmd(
+    binary: str,
+    snapshot: str,
+    target: Path,
+    repo: Path,
+    password_file: Path,
+    extra_flags: list[str] | None = None,
+) -> list[str]:
+    """Build a rustic/restic restore command handling their different syntaxes.
+
+    rustic: restore <snapshot> <destination> [flags]
+    restic: restore <snapshot> [flags] --target <destination>
+    """
+    flags = extra_flags or []
+    if os.path.basename(binary).startswith("rustic"):
+        return [binary, "restore", snapshot, str(target),
+                "-r", str(repo), "--password-file", str(password_file), *flags]
+    return [binary, "restore", snapshot,
+            "-r", str(repo), "--password-file", str(password_file), *flags,
+            "--target", str(target)]
+
 
 requires_restic_binary = pytest.mark.skipif(
     not _RESTIC_BIN,
@@ -411,7 +436,7 @@ class TestPurePythonFallbackRestore:
             data_dir = vol_dir / "data"
             if not data_dir.is_dir():
                 continue
-            for pack_file in data_dir.iterdir():
+            for pack_file in data_dir.rglob("*"):
                 if not pack_file.is_file():
                     continue
                 sha = pack_file.name
@@ -567,11 +592,10 @@ class TestPurePythonFallbackRestore:
         rustic_target = self.restore_dir / "family_rustic"
         rustic_target.mkdir(parents=True)
         result = subprocess.run(
-            [_RESTIC_BIN, "restore", "latest",
-             "-r", str(cache),
-             "--password-file", str(self.key_file),
-             "--no-cache",
-             "--target", str(rustic_target)],
+            _restore_cmd(
+                _RESTIC_BIN, "latest", rustic_target,
+                cache, self.key_file, ["--no-cache"]
+            ),
             capture_output=True, text=True,
         )
         assert result.returncode == 0, (
@@ -621,12 +645,11 @@ class TestPurePythonFallbackRestore:
                 shutil.move(str(pf), str(flat_path))
 
         # Remove empty prefix directories
+        import contextlib
         for d in list(data_dir.iterdir()):
             if d.is_dir():
-                try:
+                with contextlib.suppress(OSError):
                     d.rmdir()
-                except OSError:
-                    pass
 
         target = self.restore_dir / "family_flat"
         restorer = PurePythonRestorer(
@@ -683,12 +706,14 @@ class TestPurePythonFallbackRestore:
         cache = self.restore_dir / "executor_cache"
         executor.prepare_cache(cache, metadata_src)
 
-        # Collect all pack SHA-256s from disc data/ directories
+        # Collect all pack SHA-256s from disc data/ directories (two-level layout)
         all_packs: list[str] = []
         for vol_dir in extracted_vols:
             data_dir = vol_dir / "data"
             if data_dir.is_dir():
-                all_packs.extend(f.name for f in data_dir.iterdir() if f.is_file())
+                all_packs.extend(
+                    f.name for f in data_dir.rglob("*") if f.is_file()
+                )
 
         # Ingest from each volume
         for vol_dir in extracted_vols:

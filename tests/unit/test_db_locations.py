@@ -58,6 +58,7 @@ class TestLocationCRUD:
         assert list_locations(conn) == []
 
     def test_duplicate_raises(self, conn):
+        import sqlite3 as _sqlite3
         create_location(conn, "Home_Shelf")
-        with pytest.raises(Exception):
+        with pytest.raises(_sqlite3.IntegrityError):
             create_location(conn, "Home_Shelf")

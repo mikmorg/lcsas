@@ -8,6 +8,7 @@ Supports two modes:
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -18,17 +19,16 @@ from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig
 from lcsas.db.locations import ensure_location
 from lcsas.db.models import Pack, Volume
-from lcsas.db.queries import get_unarchived_packs, get_unarchived_or_missing_at_location
-from lcsas.db.volume_events import add_event
+from lcsas.db.queries import get_unarchived_or_missing_at_location, get_unarchived_packs
 from lcsas.db.sessions import (
     add_session_volume,
     create_session,
     get_session_volumes,
     resolve_session_id,
-    update_iso_sha256,
     update_session_status,
 )
 from lcsas.db.volume_copies import add_volume_copy
+from lcsas.db.volume_events import add_event
 from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import (
     create_volume,
@@ -44,7 +44,14 @@ from lcsas.staging.builder import StagingBuilder
 from lcsas.staging.metadata import HolographicInjector
 from lcsas.utils.fs import ensure_dir, safe_remove_tree
 from lcsas.utils.hashing import sha256_file
-from lcsas.utils.labels import generate_session_id, generate_uuid, generate_volume_label, next_seq_num
+from lcsas.utils.labels import (
+    generate_session_id,
+    generate_uuid,
+    generate_volume_label,
+    next_seq_num,
+)
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -442,7 +449,7 @@ class BurnOrchestrator:
         session_dir = self._config.staging_path / session_id.replace(":", "-")
         ensure_dir(session_dir)
 
-        session = create_session(
+        create_session(
             self._conn,
             media_type=mt.name,
             staging_dir=str(session_dir),
@@ -705,7 +712,7 @@ class BurnOrchestrator:
                     p for p in remaining_packs if p.size_bytes > usable
                 ]
                 if oversized:
-                    logger.warning(
+                    _logger.warning(
                         "%d pack(s) exceed %s usable capacity (%s bytes) "
                         "and cannot be archived: %s",
                         len(oversized),

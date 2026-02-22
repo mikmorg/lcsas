@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import fcntl
 import sqlite3
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator
 
 
 def get_connection(db_path: Path | str) -> sqlite3.Connection:
@@ -44,7 +44,7 @@ def locked_connection(
     """
     lock_path = Path(str(db_path) + ".lock")
     lock_path.touch(exist_ok=True)
-    lock_fd = open(lock_path, "r")  # noqa: SIM115
+    lock_fd = open(lock_path)  # noqa: SIM115
     try:
         flag = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
         fcntl.flock(lock_fd, flag)

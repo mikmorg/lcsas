@@ -65,7 +65,11 @@ def _strip_markdown(text: str) -> str:
             continue
         # Blockquotes
         if stripped.startswith(">"):
-            lines.append("  " + stripped.lstrip("> ").strip())
+            bq = stripped.lstrip("> ").strip()
+            bq = re.sub(r"\*\*(.+?)\*\*", r"\1", bq)
+            bq = re.sub(r"\*(.+?)\*", r"\1", bq)
+            bq = re.sub(r"`([^`]+)`", r"\1", bq)
+            lines.append("  " + bq)
             continue
         # Table rows — keep but remove leading/trailing pipes
         if stripped.startswith("|") and stripped.endswith("|"):
@@ -73,7 +77,14 @@ def _strip_markdown(text: str) -> str:
             if re.match(r"^\|[\s\-:|]+\|$", stripped):
                 continue
             cells = [c.strip() for c in stripped.strip("|").split("|")]
-            lines.append("  " + "  |  ".join(cells))
+            # Strip inline formatting from each cell
+            clean_cells = []
+            for cell in cells:
+                cell = re.sub(r"\*\*(.+?)\*\*", r"\1", cell)
+                cell = re.sub(r"\*(.+?)\*", r"\1", cell)
+                cell = re.sub(r"`([^`]+)`", r"\1", cell)
+                clean_cells.append(cell)
+            lines.append("  " + "  |  ".join(clean_cells))
             continue
         # Inline formatting
         cleaned = line
@@ -380,7 +391,10 @@ for repo in "${REPOS[@]}"; do
     for vol_dir in "$EXTRACT_DIR"/*/; do
         data_dir="$vol_dir/data"
         [[ ! -d "$data_dir" ]] && continue
-        for pack in "$data_dir"/*; do
+        # Discs use two-level layout: data/<prefix>/<sha256>
+        for prefix_dir in "$data_dir"/*/; do
+            [[ ! -d "$prefix_dir" ]] && continue
+            for pack in "$prefix_dir"/*; do
             [[ ! -f "$pack" ]] && continue
             sha="$(basename "$pack")"
             prefix="${sha:0:2}"
@@ -398,6 +412,7 @@ for repo in "${REPOS[@]}"; do
                     PACK_COUNT=$((PACK_COUNT + 1))
                 fi
             fi
+            done
         done
     done
     if [[ $PACK_ERRORS -gt 0 ]]; then
@@ -411,11 +426,21 @@ for repo in "${REPOS[@]}"; do
     mkdir -p "$REPO_TARGET"
 
     echo "    Running: rustic restore $SNAPSHOT → $REPO_TARGET"
-    if "$RUSTIC" restore "$SNAPSHOT" \
-         -r "$CACHE_DIR" \
-         --password-file "$KEY_FILE" \
-         --no-cache \
-         --target "$REPO_TARGET" 2>&1; then
+    # rustic uses positional <destination>; restic uses --target <destination>
+    RUSTIC_BIN_NAME="$(basename "$RUSTIC")"
+    if [[ "$RUSTIC_BIN_NAME" == rustic* ]]; then
+        RESTORE_CMD=("$RUSTIC" restore "$SNAPSHOT" "$REPO_TARGET"
+            -r "$CACHE_DIR"
+            --password-file "$KEY_FILE"
+            --no-cache)
+    else
+        RESTORE_CMD=("$RUSTIC" restore "$SNAPSHOT"
+            -r "$CACHE_DIR"
+            --password-file "$KEY_FILE"
+            --no-cache
+            --target "$REPO_TARGET")
+    fi
+    if "${RESTORE_CMD[@]}" 2>&1; then
         echo "    ✓ Restore succeeded"
     else
         echo "    ✗ Restore FAILED for $repo"
@@ -770,10 +795,13 @@ class MetaVolumeBuilder:
             "description": "LCSAS rescue volume — tools + source for disaster recovery",
             "created_at": datetime.now(UTC).isoformat(),
             "platform": f"linux-{os.uname().machine}",
-            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-            "tool_versions": tool_versions,
+            "python_version": (
+                f"{sys.version_info.major}.{sys.version_info.minor}"
+                f".{sys.version_info.micro}"
+            ),
             "contents": {
                 "tools": bundled_tools,
+                "tool_versions": tool_versions,
                 "lcsas_source": True,
                 "restore_script": "restore.sh",
                 "documentation": True,

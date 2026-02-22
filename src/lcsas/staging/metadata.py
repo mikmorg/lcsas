@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import json
 import textwrap
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from lcsas.config.settings import LCSASConfig
 from lcsas.db.models import Pack, Volume

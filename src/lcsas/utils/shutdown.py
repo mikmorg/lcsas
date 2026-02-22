@@ -46,11 +46,10 @@ class ShutdownManager:
 
     def run_cleanups(self) -> None:
         """Execute registered callbacks in reverse order (LIFO)."""
+        import contextlib
         for cb in reversed(self._callbacks):
-            try:
+            with contextlib.suppress(Exception):
                 cb()
-            except Exception:
-                pass  # Best-effort cleanup
 
     def _handler(self, signum: int, frame: object) -> None:
         """Signal handler: run cleanups then re-raise."""

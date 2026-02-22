@@ -76,37 +76,37 @@ def _validate_toml_keys(raw: dict) -> None:
     import logging
     _logger = logging.getLogger("lcsas")
 
-    KNOWN_SECTIONS = {"paths", "defaults", "repos", "survivability"}
-    KNOWN_PATHS = {"mirror_base", "staging", "database"}
-    KNOWN_DEFAULTS = {
+    known_sections = {"paths", "defaults", "repos", "survivability"}
+    known_paths = {"mirror_base", "staging", "database"}
+    known_defaults = {
         "media_type", "ecc_redundancy_pct", "location",
         "optical_device", "label_prefix", "metadata_reserve_mb",
     }
-    KNOWN_SURVIVE = {
+    known_survive = {
         "archive_owner", "archive_description",
         "key_storage_hints", "technical_contact",
     }
-    KNOWN_REPO_KEYS = {"mirror_path", "password_file", "encryption_key_id"}
+    known_repo_keys = {"mirror_path", "password_file", "encryption_key_id"}
 
-    unknown_sections = set(raw.keys()) - KNOWN_SECTIONS
+    unknown_sections = set(raw.keys()) - known_sections
     if unknown_sections:
         _logger.warning("Unknown config sections: %s (typo?)", sorted(unknown_sections))
 
-    unknown_paths = set(raw.get("paths", {}).keys()) - KNOWN_PATHS
+    unknown_paths = set(raw.get("paths", {}).keys()) - known_paths
     if unknown_paths:
         _logger.warning("Unknown [paths] keys: %s (typo?)", sorted(unknown_paths))
 
-    unknown_defaults = set(raw.get("defaults", {}).keys()) - KNOWN_DEFAULTS
+    unknown_defaults = set(raw.get("defaults", {}).keys()) - known_defaults
     if unknown_defaults:
         _logger.warning("Unknown [defaults] keys: %s (typo?)", sorted(unknown_defaults))
 
-    unknown_survive = set(raw.get("survivability", {}).keys()) - KNOWN_SURVIVE
+    unknown_survive = set(raw.get("survivability", {}).keys()) - known_survive
     if unknown_survive:
         _logger.warning("Unknown [survivability] keys: %s (typo?)", sorted(unknown_survive))
 
     for repo_name, repo_cfg in raw.get("repos", {}).items():
         if isinstance(repo_cfg, dict):
-            unknown_repo = set(repo_cfg.keys()) - KNOWN_REPO_KEYS
+            unknown_repo = set(repo_cfg.keys()) - known_repo_keys
             if unknown_repo:
                 _logger.warning(
                     "Unknown [repos.%s] keys: %s (typo?)",

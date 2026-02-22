@@ -105,7 +105,7 @@ class RestorePlanner:
         total_packs = 0
         total_bytes = 0
 
-        for sha256, info in raw.items():
+        for _sha256, info in raw.items():
             label = info["primary_label"]
             source = PackSource(
                 pack=info["pack"],

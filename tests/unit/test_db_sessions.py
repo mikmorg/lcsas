@@ -86,7 +86,7 @@ class TestSessionCRUD:
 
     def test_list_sessions_filtered(self, conn):
         create_session(conn, "TEST_TINY", "/tmp/s1", session_id="s1")
-        s2 = create_session(conn, "TEST_TINY", "/tmp/s2", session_id="s2")
+        create_session(conn, "TEST_TINY", "/tmp/s2", session_id="s2")
         update_session_status(conn, "s2", "COMPLETE")
 
         staged = list_sessions(conn, status_filter="STAGED")

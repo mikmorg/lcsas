@@ -42,11 +42,11 @@ import base64
 import hashlib
 import json
 import os
-import struct
 import sys
 from dataclasses import dataclass, field
+from datetime import UTC
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any
 
 from lcsas.restore._aes_pure import (
     aes_ctr,
@@ -186,7 +186,7 @@ def _constant_time_eq(a: bytes, b: bytes) -> bool:
     if len(a) != len(b):
         return False
     result = 0
-    for x, y in zip(a, b):
+    for x, y in zip(a, b, strict=False):
         result |= x ^ y
     return result == 0
 
@@ -702,10 +702,9 @@ class PurePythonRestorer:
         config_path = self.repo_path / "config"
         config_doc = {}
         if config_path.is_file():
-            try:
+            import contextlib
+            with contextlib.suppress(Exception):
                 config_doc = json.loads(self._decrypt_file(config_path))
-            except Exception:
-                pass
 
         assert self._snapshots is not None
         assert self._blob_index is not None
@@ -737,14 +736,14 @@ def _parse_timestamp(ts: str) -> float:
         ts = ts + ".000000"
 
     # Python 3.7+ datetime.fromisoformat
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     try:
-        dt = datetime.fromisoformat(ts).replace(tzinfo=timezone.utc)
+        dt = datetime.fromisoformat(ts).replace(tzinfo=UTC)
     except ValueError:
         # Last resort: basic parse
         dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f").replace(
-            tzinfo=timezone.utc
+            tzinfo=UTC
         )
     return dt.timestamp()
 

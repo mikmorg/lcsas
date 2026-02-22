@@ -679,7 +679,10 @@ def cmd_stage(args: argparse.Namespace) -> int:
             logger.info(f"Staged {len(result.manifests)} volume(s):")
             for m in result.manifests:
                 iso_size = m.iso_path.stat().st_size if m.iso_path and m.iso_path.exists() else 0
-                logger.info(f"  {m.iso_path}  ({iso_size / 1e9:.1f} GB, {len(m.selected_packs)} packs)")
+                logger.info(
+                    "  %s  (%.1f GB, %d packs)",
+                    m.iso_path, iso_size / 1e9, len(m.selected_packs),
+                )
             logger.info(f"Manifest: {result.staging_dir / 'session.json'}")
         return 0
     finally:
@@ -846,8 +849,14 @@ def cmd_location(args: argparse.Namespace) -> int:
 
             for loc in locations:
                 s = summary_map.get(loc.name, {"volumes": 0, "packs": 0, "missing": 0})
-                status = "all current" if s["missing"] == 0 else f"{s['missing']} packs behind"
-                logger.info(f"  {loc.name:<20} {s['volumes']} volumes, {s['packs']} packs, {status}")
+                status = (
+                    "all current" if s["missing"] == 0
+                    else f"{s['missing']} packs behind"
+                )
+                logger.info(
+                    "  %-20s %d volumes, %d packs, %s",
+                    loc.name, s["volumes"], s["packs"], status,
+                )
 
         elif args.location_command == "add":
             from lcsas.db.locations import create_location
@@ -856,7 +865,7 @@ def cmd_location(args: argparse.Namespace) -> int:
             logger.info(f"Added location: {name}")
 
         elif args.location_command == "status":
-            from lcsas.db.queries import get_packs_missing_at_location, get_packs_at_location
+            from lcsas.db.queries import get_packs_at_location, get_packs_missing_at_location
 
             at_loc = get_packs_at_location(conn, args.name)
             missing = get_packs_missing_at_location(conn, args.name)
@@ -1026,7 +1035,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import create_all
     from lcsas.db.volume_events import add_event
-    from lcsas.db.volumes import get_volume_by_label, list_volumes, update_status
+    from lcsas.db.volumes import get_volume_by_label, update_status
 
     config = load_config(args.config) if args.config else None
     db_path = args.db or (config.db_path if config else Path("archive.db"))

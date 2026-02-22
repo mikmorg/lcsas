@@ -309,7 +309,6 @@ class TestIngestCollectFailures:
 
     def test_mixed_good_and_corrupt(self, executor, tmp_path):
         """Mix of good (verify=False) and corrupt packs."""
-        from hashlib import sha256 as hashlib_sha256
         mount = tmp_path / "volume" / "data"
         mount.mkdir(parents=True)
 

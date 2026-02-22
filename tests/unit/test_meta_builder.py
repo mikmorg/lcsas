@@ -4,21 +4,18 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
+from lcsas.meta.builder import MetaVolumeBuilder
 from lcsas.meta.bundler import (
     ToolBundler,
     get_python_paths,
     get_shared_libs,
     resolve_binary,
 )
-from lcsas.meta.builder import MetaVolumeBuilder
-
 
 # ── resolve_binary ───────────────────────────────────────────────
 
@@ -64,7 +61,7 @@ class TestGetSharedLibs:
         lib_names = {lib.name for lib in libs}
         for name in lib_names:
             assert not name.startswith("libc.so"), f"libc should not be bundled: {name}"
-            assert not name.startswith("ld-linux"), f"ld-linux should not be bundled"
+            assert not name.startswith("ld-linux"), "ld-linux should not be bundled"
 
 
 # ── get_python_paths ─────────────────────────────────────────────
@@ -118,10 +115,10 @@ class TestToolBundler:
 
         # The bundled binary should be executable
         result = subprocess.run(
-            [str(dest), "version"],
+            [str(dest), "--version"],
             capture_output=True,
             text=True,
-            env={"LD_LIBRARY_PATH": str(bundler.lib_dir)},
+            env={"LD_LIBRARY_PATH": str(bundler.lib_dir), "HOME": str(tmp_path)},
         )
         assert result.returncode == 0
         assert "rustic" in result.stdout.lower()
@@ -271,7 +268,7 @@ class TestMetaVolumeBuilder:
             "HOME": str(self._base),
         }
         result = subprocess.run(
-            [str(rustic), "version"],
+            [str(rustic), "--version"],
             capture_output=True,
             text=True,
             env=env,

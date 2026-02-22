@@ -21,7 +21,6 @@ import base64
 import hashlib
 import json
 import os
-import struct
 from pathlib import Path
 
 import pytest
@@ -32,11 +31,9 @@ from lcsas.restore._aes_pure import (
     key_schedule,
 )
 from lcsas.restore.restic_fallback import (
-    BlobLocation,
     IntegrityError,
     MasterKey,
     PurePythonRestorer,
-    SnapshotMeta,
     _clamp_r,
     _constant_time_eq,
     _decrypt_authenticated,
@@ -543,12 +540,11 @@ class TestFlatLayout:
                 pf.rename(flat_path)
 
         # Remove empty prefix directories
+        import contextlib
         for d in data_dir.iterdir():
             if d.is_dir():
-                try:
+                with contextlib.suppress(OSError):
                     d.rmdir()
-                except OSError:
-                    pass
 
         # Restore should still work
         target = tmp_path / "restored"
@@ -569,8 +565,6 @@ class TestSymlinkRestore:
         # We need to modify the repo to include a symlink.
         # The simplest approach: create a new tree with a symlink node,
         # add it to a new pack, update the index, and create a new snapshot.
-
-        mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
 
         # File content
         file_content = b"Link target content\n"
@@ -648,8 +642,6 @@ class TestHardlinkRestore:
     def test_hardlinks_share_inode(self, tmp_path):
         """Two file nodes with same inode+links>1 become hardlinks."""
         repo = _build_test_repo(tmp_path)
-
-        mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
 
         file_content = b"Shared hardlink content\n"
         file_id = hashlib.sha256(file_content).hexdigest()

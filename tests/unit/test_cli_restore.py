@@ -18,7 +18,6 @@ from lcsas.db.volumes import create_volume
 from lcsas.rustic.types import RestorePlan
 from lcsas.utils.labels import generate_uuid
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -346,7 +345,7 @@ class TestCmdRestoreExec:
         conn = get_memory_connection()
         create_all(conn)
         hashes = ["aa" * 32, "bb" * 32]
-        packs = _setup_db_with_packs(conn, "family", hashes, "VOL_001")
+        _setup_db_with_packs(conn, "family", hashes, "VOL_001")
 
         # Create fake volume directory with pack files
         vol_dir = tmp_path / "volumes" / "VOL_001" / "data"

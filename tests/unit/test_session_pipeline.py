@@ -17,14 +17,12 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from lcsas.binpack.algorithm import first_fit_decreasing
-from lcsas.burn.orchestrator import BurnOrchestrator, BurnReceipt, StageResult
+from lcsas.burn.orchestrator import BurnOrchestrator, StageResult
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.db.connection import get_memory_connection
@@ -33,17 +31,13 @@ from lcsas.db.packs import register_pack
 from lcsas.db.queries import (
     get_archive_status_summary,
     get_location_summary,
-    get_packs_at_location,
-    get_packs_missing_at_location,
-    get_unarchived_or_missing_at_location,
-    get_unarchived_packs,
 )
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.sessions import get_session, get_session_volumes, list_sessions
 from lcsas.db.volume_copies import add_volume_copy, get_copies_for_volume
 from lcsas.db.volume_packs import get_pack_ids_for_volume
-from lcsas.db.volumes import get_volume_by_id, list_volumes
+from lcsas.db.volumes import get_volume_by_id
 from lcsas.iso.xorriso import SubprocessXorrisoRunner
 from lcsas.utils.hashing import sha256_file
 
@@ -301,7 +295,7 @@ class TestStageForLocation:
         for name in config.repositories:
             register_repo(conn, name, name.title(),
                           str(config.repositories[name].mirror_path))
-        packs = _seed_packs(conn, config, num_packs=5, pack_size=50)
+        _seed_packs(conn, config, num_packs=5, pack_size=50)
 
         create_location(conn, "Home_Shelf")
         create_location(conn, "Offsite_Safe")
@@ -443,7 +437,7 @@ class TestBurnSession:
         orch.burn_session(result.session_id, "New_Location", skip_burn=True)
 
         locs = list_locations(conn)
-        loc_names = {l.name for l in locs}
+        loc_names = {loc.name for loc in locs}
         assert "New_Location" in loc_names
 
     def test_burn_session_verify_pass_records_event(self, env):
@@ -550,13 +544,13 @@ class TestMultiVolumePipeline:
         assert len(result.manifests) >= 2
 
         # Burn copy 1
-        receipts1 = orch.burn_session(result.session_id, "Home_Shelf",
-                                      skip_burn=True)
-        assert len(receipts1) >= 2
+        r1 = orch.burn_session(result.session_id, "Home_Shelf",
+                               skip_burn=True)
+        assert len(r1) >= 2
 
         # Burn copy 2
-        receipts2 = orch.burn_session(result.session_id, "Offsite_Safe",
-                                      skip_burn=True)
+        orch.burn_session(result.session_id, "Offsite_Safe",
+                          skip_burn=True)
 
         # Every pack should have 2 copies
         for m in result.manifests:
@@ -729,7 +723,7 @@ class TestISOContentValidation:
             for pack in manifest.selected_packs:
                 # Find original pack file
                 original_path = None
-                for repo_name, repo_cfg in config.repositories.items():
+                for _repo_name, repo_cfg in config.repositories.items():
                     candidate = repo_cfg.mirror_path / "data" / pack.sha256
                     if candidate.exists():
                         original_path = candidate
@@ -857,12 +851,12 @@ class TestISOContentValidation:
         assert len(result.iso_paths) >= 1
 
         # Burn copy 1
-        receipts1 = orch.burn_session(result.session_id, "Home_Shelf",
-                                      skip_burn=True)
+        orch.burn_session(result.session_id, "Home_Shelf",
+                          skip_burn=True)
 
         # Burn copy 2
-        receipts2 = orch.burn_session(result.session_id, "Offsite_Safe",
-                                      skip_burn=True)
+        orch.burn_session(result.session_id, "Offsite_Safe",
+                          skip_burn=True)
 
         # Verify all packs archived
         summary = get_archive_status_summary(conn)
@@ -918,8 +912,8 @@ class TestSessionManifestAndReceipts:
         """Burn receipts have the required fields."""
         orch = env["orch"]
         result = orch.stage(skip_ecc=True)
-        receipts = orch.burn_session(result.session_id, "Home_Shelf",
-                                     skip_burn=True)
+        orch.burn_session(result.session_id, "Home_Shelf",
+                          skip_burn=True)
 
         receipts_dir = result.staging_dir / "receipts"
         for rf in receipts_dir.glob("*.json"):

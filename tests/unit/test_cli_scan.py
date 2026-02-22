@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 
 from lcsas.cli.main import build_parser, main
-from lcsas.config.settings import LCSASConfig, RepositoryConfig, default_config
 from lcsas.db.connection import get_connection
 from lcsas.db.packs import list_packs
 from lcsas.db.repos import register_repo

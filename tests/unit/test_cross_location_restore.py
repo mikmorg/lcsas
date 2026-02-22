@@ -36,7 +36,6 @@ from lcsas.db.packs import get_pack_by_sha256, register_pack
 from lcsas.db.queries import (
     get_location_summary,
     get_packs_at_location,
-    get_packs_for_volume,
     get_packs_missing_at_location,
     get_pick_list,
     get_redundancy_report,

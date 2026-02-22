@@ -120,15 +120,33 @@ def _rustic(args: list[str], repo: Path, password_file: Path,
 
 
 def _rustic_snapshot_id(result: subprocess.CompletedProcess) -> str:
-    """Extract snapshot_id from ``rustic backup --json`` output."""
-    for line in reversed(result.stdout.strip().splitlines()):
+    """Extract snapshot ID from ``rustic``/``restic`` ``backup --json`` output.
+
+    Handles two formats:
+    - rustic: single pretty-printed JSON object with an ``"id"`` field.
+    - restic: JSON lines where the summary line contains ``"snapshot_id"``.
+    """
+    stdout = result.stdout.strip()
+    # Rustic format: the entire stdout is a single JSON object
+    try:
+        obj = json.loads(stdout)
+        if "id" in obj:
+            return obj["id"]
+        if "snapshot_id" in obj:
+            return obj["snapshot_id"]
+    except json.JSONDecodeError:
+        pass
+    # Restic format: JSON lines — last object has "snapshot_id"
+    for line in reversed(stdout.splitlines()):
         try:
             obj = json.loads(line)
             if "snapshot_id" in obj:
                 return obj["snapshot_id"]
+            if "id" in obj:
+                return obj["id"]
         except json.JSONDecodeError:
             continue
-    raise RuntimeError("Could not parse snapshot_id from rustic output")
+    raise RuntimeError("Could not parse snapshot_id from rustic/restic output")
 
 
 # ---------------------------------------------------------------------------
@@ -476,7 +494,7 @@ class TestDiscOnlyRestore:
             data_dir = vol_dir / "data"
             if not data_dir.is_dir():
                 continue
-            for pack_file in data_dir.iterdir():
+            for pack_file in data_dir.rglob("*"):
                 if not pack_file.is_file():
                     continue
                 sha = pack_file.name
@@ -588,11 +606,10 @@ class TestDiscOnlyRestore:
 
         # Restore latest snapshot using rustic against the disc-only cache
         result = subprocess.run(
-            ["rustic", "restore", "latest",
+            ["rustic", "restore", "latest", str(target),
              "-r", str(cache),
              "--password-file", str(self.key_file),
-             "--no-cache",
-             "--target", str(target)],
+             "--no-cache"],
             capture_output=True, text=True,
         )
         assert result.returncode == 0, (
@@ -626,11 +643,10 @@ class TestDiscOnlyRestore:
         target.mkdir(parents=True)
 
         result = subprocess.run(
-            ["rustic", "restore", "latest",
+            ["rustic", "restore", "latest", str(target),
              "-r", str(cache),
              "--password-file", str(self.key_file),
-             "--no-cache",
-             "--target", str(target)],
+             "--no-cache"],
             capture_output=True, text=True,
         )
         assert result.returncode == 0, (
@@ -660,11 +676,10 @@ class TestDiscOnlyRestore:
         target_fam = self.restore_dir / "family_inc_check"
         target_fam.mkdir(parents=True)
         result = subprocess.run(
-            ["rustic", "restore", "latest",
+            ["rustic", "restore", "latest", str(target_fam),
              "-r", str(cache_fam),
              "--password-file", str(self.key_file),
-             "--no-cache",
-             "--target", str(target_fam)],
+             "--no-cache"],
             capture_output=True, text=True,
         )
         assert result.returncode == 0, (
@@ -684,11 +699,10 @@ class TestDiscOnlyRestore:
         target_wrk = self.restore_dir / "work_inc_check"
         target_wrk.mkdir(parents=True)
         result = subprocess.run(
-            ["rustic", "restore", "latest",
+            ["rustic", "restore", "latest", str(target_wrk),
              "-r", str(cache_wrk),
              "--password-file", str(self.key_file),
-             "--no-cache",
-             "--target", str(target_wrk)],
+             "--no-cache"],
             capture_output=True, text=True,
         )
         assert result.returncode == 0, (
@@ -757,7 +771,7 @@ class TestDiscOnlyRestore:
             data_dir = vol_dir / "data"
             if data_dir.is_dir():
                 packs_per_disc[iso.stem] = {
-                    f.name for f in data_dir.iterdir() if f.is_file()
+                    f.name for f in data_dir.rglob("*") if f.is_file()
                 }
 
         # At least 2 discs should have packs

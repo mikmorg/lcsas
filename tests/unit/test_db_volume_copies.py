@@ -55,8 +55,9 @@ class TestVolumeCopyCRUD:
         assert locations == {"Home_Shelf", "Offsite_Safe"}
 
     def test_duplicate_location_raises(self, conn, volume):
+        import sqlite3 as _sqlite3
         add_volume_copy(conn, volume.volume_id, "Home_Shelf")
-        with pytest.raises(Exception):
+        with pytest.raises(_sqlite3.IntegrityError):
             add_volume_copy(conn, volume.volume_id, "Home_Shelf")
 
     def test_get_copies_at_location(self, conn):
