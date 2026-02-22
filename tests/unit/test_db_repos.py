@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 from lcsas.db.repos import delete_repo, get_repo, list_repos, register_repo
+from lcsas.db.snapshots import delete_snapshots_for_repo, upsert_snapshot
 
 
 class TestRegisterRepo:
@@ -71,3 +72,30 @@ class TestDeleteRepo:
         # Only the fixture's _test repo should remain
         assert len(repos) == 1
         assert repos[0].repo_id == "_test"
+
+
+class TestDeleteSnapshotsForRepo:
+    def test_deletes_matching_snapshots(self, memory_db):
+        register_repo(memory_db, "snap_repo", "Snap Repo", "/snap")
+        upsert_snapshot(memory_db, snapshot_id="s1", repo_id="snap_repo",
+                        hostname="h", timestamp="2026-01-01T00:00:00Z",
+                        paths="/data", tags="", description="")
+        upsert_snapshot(memory_db, snapshot_id="s2", repo_id="snap_repo",
+                        hostname="h", timestamp="2026-01-02T00:00:00Z",
+                        paths="/data", tags="", description="")
+        count = delete_snapshots_for_repo(memory_db, "snap_repo")
+        assert count == 2
+
+    def test_does_not_delete_other_repos(self, memory_db):
+        register_repo(memory_db, "r_a", "A", "/a")
+        register_repo(memory_db, "r_b", "B", "/b")
+        upsert_snapshot(memory_db, snapshot_id="sa", repo_id="r_a",
+                        hostname="h", timestamp="2026-01-01T00:00:00Z",
+                        paths="/a", tags="", description="")
+        upsert_snapshot(memory_db, snapshot_id="sb", repo_id="r_b",
+                        hostname="h", timestamp="2026-01-01T00:00:00Z",
+                        paths="/b", tags="", description="")
+        count = delete_snapshots_for_repo(memory_db, "r_a")
+        assert count == 1
+        from lcsas.db.snapshots import get_snapshot
+        assert get_snapshot(memory_db, "sb") is not None

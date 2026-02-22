@@ -58,6 +58,62 @@ class RepositoryConfig:
     encryption_key_id: str = ""
 
 
+def _xdg_db_path() -> str:
+    """Return XDG-compliant default database path.
+
+    Uses ``$XDG_DATA_HOME/lcsas/archive.db``, falling back to
+    ``~/.local/share/lcsas/archive.db``.
+    """
+    import os
+    xdg = os.environ.get("XDG_DATA_HOME", "")
+    if xdg:
+        return str(Path(xdg) / "lcsas" / "archive.db")
+    return str(Path.home() / ".local" / "share" / "lcsas" / "archive.db")
+
+
+def _validate_toml_keys(raw: dict) -> None:
+    """Warn about unknown TOML sections or keys (likely typos)."""
+    import logging
+    _logger = logging.getLogger("lcsas")
+
+    KNOWN_SECTIONS = {"paths", "defaults", "repos", "survivability"}
+    KNOWN_PATHS = {"mirror_base", "staging", "database"}
+    KNOWN_DEFAULTS = {
+        "media_type", "ecc_redundancy_pct", "location",
+        "optical_device", "label_prefix", "metadata_reserve_mb",
+    }
+    KNOWN_SURVIVE = {
+        "archive_owner", "archive_description",
+        "key_storage_hints", "technical_contact",
+    }
+    KNOWN_REPO_KEYS = {"mirror_path", "password_file", "encryption_key_id"}
+
+    unknown_sections = set(raw.keys()) - KNOWN_SECTIONS
+    if unknown_sections:
+        _logger.warning("Unknown config sections: %s (typo?)", sorted(unknown_sections))
+
+    unknown_paths = set(raw.get("paths", {}).keys()) - KNOWN_PATHS
+    if unknown_paths:
+        _logger.warning("Unknown [paths] keys: %s (typo?)", sorted(unknown_paths))
+
+    unknown_defaults = set(raw.get("defaults", {}).keys()) - KNOWN_DEFAULTS
+    if unknown_defaults:
+        _logger.warning("Unknown [defaults] keys: %s (typo?)", sorted(unknown_defaults))
+
+    unknown_survive = set(raw.get("survivability", {}).keys()) - KNOWN_SURVIVE
+    if unknown_survive:
+        _logger.warning("Unknown [survivability] keys: %s (typo?)", sorted(unknown_survive))
+
+    for repo_name, repo_cfg in raw.get("repos", {}).items():
+        if isinstance(repo_cfg, dict):
+            unknown_repo = set(repo_cfg.keys()) - KNOWN_REPO_KEYS
+            if unknown_repo:
+                _logger.warning(
+                    "Unknown [repos.%s] keys: %s (typo?)",
+                    repo_name, sorted(unknown_repo),
+                )
+
+
 def load_config(config_path: Path) -> LCSASConfig:
     """Load LCSAS configuration from a TOML file.
 
@@ -66,7 +122,7 @@ def load_config(config_path: Path) -> LCSASConfig:
         [paths]
         mirror_base = "/mnt/mirror"
         staging = "/mnt/staging"
-        database = "/var/lib/lcsas/archive.db"
+        database = "~/.local/share/lcsas/archive.db"
 
         [defaults]
         media_type = "BD25"
@@ -95,6 +151,9 @@ def load_config(config_path: Path) -> LCSASConfig:
 
     with open(config_path, "rb") as f:
         raw = tomllib.load(f)
+
+    # Validate known sections and keys
+    _validate_toml_keys(raw)
 
     paths = raw.get("paths", {})
     defaults = raw.get("defaults", {})
@@ -128,7 +187,7 @@ def load_config(config_path: Path) -> LCSASConfig:
     return LCSASConfig(
         mirror_base_path=resolve(paths.get("mirror_base", "/mnt/mirror")),
         staging_path=resolve(paths.get("staging", "/mnt/staging")),
-        db_path=resolve(paths.get("database", "/var/lib/lcsas/archive.db")),
+        db_path=resolve(paths.get("database", _xdg_db_path())),
         default_media_type=media_type,
         default_ecc_redundancy_pct=defaults.get("ecc_redundancy_pct", 15),
         default_location=defaults.get("location", "Home_Shelf"),

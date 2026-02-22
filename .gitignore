@@ -43,3 +43,4 @@ Thumbs.db
 
 # Ruff
 .ruff_cache/
+archive.db.lock

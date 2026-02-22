@@ -56,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     repo_sub.add_parser("list", help="List registered repositories.")
 
+    repo_rm = repo_sub.add_parser("remove", help="Remove a repository.")
+    repo_rm.add_argument("repo_id", help="Repository ID to remove.")
+    repo_rm.add_argument("--force", action="store_true",
+                         help="Force removal even if packs exist (marks them pruned).")
+
     # --- scan ---
     scan_p = subparsers.add_parser(
         "scan",
@@ -195,6 +200,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Volume IDs to consolidate.")
     cons_p.add_argument("--target-media", type=str, default="MDISC100",
                         help="Target media type for consolidated volume.")
+    cons_p.add_argument("--execute", action="store_true", default=False,
+                        help="Stage active packs and deprecate source volumes.")
 
     # --- verify ---
     verify_p = subparsers.add_parser("verify", help="Verify a volume's ISO or disc.")
@@ -256,6 +263,8 @@ def cmd_init(args: argparse.Namespace) -> int:
     from lcsas.db.schema import create_all
 
     db_path = args.db_path
+    # Ensure parent directory exists (XDG paths may not exist yet)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection(db_path)
     try:
         create_all(conn)
@@ -267,15 +276,14 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_repo_add(args: argparse.Namespace) -> int:
     """Register a new repository."""
-    from lcsas.db.connection import get_connection
+    from lcsas.db.connection import locked_connection
     from lcsas.db.repos import register_repo
     from lcsas.db.schema import create_all
     from lcsas.utils.fs import read_repo_key_ids
     from lcsas.utils.labels import generate_uuid
 
     db_path = args.db or Path("archive.db")
-    conn = get_connection(db_path)
-    try:
+    with locked_connection(db_path) as conn:
         create_all(conn)
 
         repo_id = generate_uuid()
@@ -292,8 +300,6 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
             mirror_path=str(mirror),
             encryption_key_id=encryption_key_id,
         )
-    finally:
-        conn.close()
     logger.info(f"Registered repository '{args.name}' (id: {repo_id})")
     return 0
 
@@ -318,6 +324,66 @@ def cmd_repo_list(args: argparse.Namespace) -> int:
 
     for repo in repos:
         logger.info(f"  {repo.name:<20} {repo.repo_id}  {repo.mirror_path}")
+    return 0
+
+
+def cmd_repo_remove(args: argparse.Namespace) -> int:
+    """Remove a repository from the catalog."""
+    from lcsas.db.connection import locked_connection
+    from lcsas.db.packs import bulk_mark_pruned, list_packs
+    from lcsas.db.repos import delete_repo, get_repo
+    from lcsas.db.schema import create_all
+    from lcsas.db.snapshots import delete_snapshots_for_repo
+    from lcsas.db.volume_packs import get_volume_ids_for_pack
+
+    db_path = args.db or Path("archive.db")
+    with locked_connection(db_path) as conn:
+        create_all(conn)
+
+        try:
+            repo = get_repo(conn, args.repo_id)
+        except ValueError:
+            logger.error(f"Repository '{args.repo_id}' not found.")
+            return 1
+
+        # Check for active (non-pruned) packs
+        active_packs = list_packs(conn, repo_id=repo.repo_id, include_pruned=False)
+
+        # Check if any active packs are on active volumes
+        packs_on_volumes = []
+        for p in active_packs:
+            vols = get_volume_ids_for_pack(conn, p.pack_id)
+            if vols:
+                packs_on_volumes.append(p)
+
+        if packs_on_volumes and not args.force:
+            logger.error(
+                f"Repository '{repo.name}' has {len(packs_on_volumes)} "
+                f"pack(s) on active volumes. Use --force to remove anyway."
+            )
+            return 1
+
+        if active_packs and not args.force:
+            logger.error(
+                f"Repository '{repo.name}' has {len(active_packs)} "
+                f"active pack(s). Use --force to mark them pruned and remove."
+            )
+            return 1
+
+        # Force mode: mark all packs as pruned
+        if active_packs:
+            pack_ids = [p.pack_id for p in active_packs]
+            pruned = bulk_mark_pruned(conn, pack_ids)
+            logger.info(f"Marked {pruned} pack(s) as pruned.")
+
+        # Delete snapshots, then the repo itself
+        snap_count = delete_snapshots_for_repo(conn, repo.repo_id)
+        delete_repo(conn, repo.repo_id)
+
+    logger.info(
+        f"Removed repository '{repo.name}' "
+        f"({snap_count} snapshot(s) deleted)."
+    )
     return 0
 
 
@@ -754,7 +820,7 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
 def cmd_location(args: argparse.Namespace) -> int:
     """Handle location subcommands."""
     from lcsas.config.settings import load_config
-    from lcsas.db.connection import get_connection
+    from lcsas.db.connection import locked_connection
     from lcsas.db.schema import create_all
     from lcsas.utils.labels import sanitize_name
 
@@ -763,8 +829,7 @@ def cmd_location(args: argparse.Namespace) -> int:
         logger.error("--config is required for location.")
         return 1
 
-    conn = get_connection(args.db or config.db_path)
-    try:
+    with locked_connection(args.db or config.db_path) as conn:
         create_all(conn)
 
         if args.location_command == "list":
@@ -823,15 +888,13 @@ def cmd_location(args: argparse.Namespace) -> int:
         else:
             logger.error("Usage: lcsas location {list|add|status|move}")
             return 1
-    finally:
-        conn.close()
     return 0
 
 
 def cmd_catalog_import(args: argparse.Namespace) -> int:
     """Import burn receipts from remote burns."""
     from lcsas.config.settings import load_config
-    from lcsas.db.connection import get_connection
+    from lcsas.db.connection import locked_connection
     from lcsas.db.locations import ensure_location
     from lcsas.db.schema import create_all
     from lcsas.db.volume_copies import add_volume_copy
@@ -842,8 +905,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
         logger.error("--config is required for catalog.")
         return 1
 
-    conn = get_connection(args.db or config.db_path)
-    try:
+    with locked_connection(args.db or config.db_path) as conn:
         create_all(conn)
 
         imported = 0
@@ -871,25 +933,22 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                 burn_date=receipt.get("burn_date", ""),
             )
             imported += 1
-    finally:
-        conn.close()
 
     logger.info(f"Imported {imported} receipt(s).")
     return 0
 
 
 def cmd_consolidate(args: argparse.Namespace) -> int:
-    """Plan and display volume consolidation."""
+    """Plan and optionally execute volume consolidation."""
     from lcsas.config.media import MediaType
     from lcsas.config.settings import load_config
     from lcsas.consolidate.merger import VolumeMerger
-    from lcsas.db.connection import get_connection
+    from lcsas.db.connection import locked_connection
     from lcsas.db.schema import create_all
 
     config = load_config(args.config) if args.config else None
     db_path = args.db or (config.db_path if config else Path("archive.db"))
-    conn = get_connection(db_path)
-    try:
+    with locked_connection(db_path) as conn:
         create_all(conn)
 
         try:
@@ -903,18 +962,55 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
         reserve = config.metadata_reserve_bytes if config else 104_857_600
         merger = VolumeMerger(conn, metadata_reserve_bytes=reserve)
         plan = merger.plan_consolidation(args.volume_ids, media_type)
-    finally:
-        conn.close()
 
-    logger.info("Consolidation Plan:")
-    logger.info(f"  Source volumes: {', '.join(plan.source_labels)}")
-    logger.info(f"  Active packs:  {len(plan.active_packs)}")
-    logger.info(f"  Total size:    {plan.total_active_bytes / 1e9:.1f} GB")
-    logger.info(f"  Target media:  {plan.target_media_type.name}")
-    logger.info(f"  Volumes needed: {plan.volumes_needed}")
-    logger.info("")
-    logger.info("To execute: stage the active packs onto new volumes,")
-    logger.info("then burn and deprecate the source volumes.")
+        logger.info("Consolidation Plan:")
+        logger.info(f"  Source volumes: {', '.join(plan.source_labels)}")
+        logger.info(f"  Active packs:  {len(plan.active_packs)}")
+        logger.info(f"  Total size:    {plan.total_active_bytes / 1e9:.1f} GB")
+        logger.info(f"  Target media:  {plan.target_media_type.name}")
+        logger.info(f"  Volumes needed: {plan.volumes_needed}")
+
+        if not args.execute:
+            logger.info("")
+            logger.info("To execute: add --execute to stage, burn, and deprecate.")
+            return 0
+
+        if config is None:
+            logger.error("--config is required for --execute.")
+            return 1
+
+        # Execute: stage the active packs via the burn orchestrator
+        from lcsas.burn.orchestrator import BurnOrchestrator
+        from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+        from lcsas.iso.xorriso import SubprocessXorrisoRunner
+        from lcsas.utils.shutdown import ShutdownManager
+
+        shutdown = ShutdownManager()
+        shutdown.install()
+
+        orch = BurnOrchestrator(
+            config, conn,
+            SubprocessXorrisoRunner(tmpdir=config.staging_path),
+            SubprocessDVDisasterRunner(),
+            shutdown=shutdown,
+        )
+
+        # Stage only the active packs from the consolidation plan
+        pack_shas = [p.sha256 for p in plan.active_packs]
+        session = orch.stage(
+            media_type=media_type,
+            pack_sha256s=pack_shas,
+        )
+
+        logger.info(f"Staged {len(session.volumes)} volume(s).")
+
+        # Deprecate source volumes
+        merger.deprecate_sources(plan.source_volume_ids)
+        logger.info(
+            f"Deprecated {len(plan.source_volume_ids)} source volume(s): "
+            f"{', '.join(plan.source_labels)}"
+        )
+
     return 0
 
 
@@ -927,15 +1023,14 @@ def cmd_verify(args: argparse.Namespace) -> int:
     - Batch: --all to verify all BURNED/VERIFIED volumes
     """
     from lcsas.config.settings import load_config
-    from lcsas.db.connection import get_connection
+    from lcsas.db.connection import locked_connection
     from lcsas.db.schema import create_all
     from lcsas.db.volume_events import add_event
     from lcsas.db.volumes import get_volume_by_label, list_volumes, update_status
 
     config = load_config(args.config) if args.config else None
     db_path = args.db or (config.db_path if config else Path("archive.db"))
-    conn = get_connection(db_path)
-    try:
+    with locked_connection(db_path) as conn:
         create_all(conn)
 
         # --- Batch mode: verify --all ---
@@ -1021,8 +1116,6 @@ def cmd_verify(args: argparse.Namespace) -> int:
             logger.info(f"Volume {vol.label}: promoted BURNED → VERIFIED")
 
         return 0 if passed else 1
-    finally:
-        conn.close()
 
 
 def _verify_all(conn, args, config) -> int:
@@ -1478,6 +1571,8 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_repo_add(args)
         elif args.repo_command == "list":
             return cmd_repo_list(args)
+        elif args.repo_command == "remove":
+            return cmd_repo_remove(args)
     elif args.command == "scan":
         return cmd_scan(args)
     elif args.command == "status":

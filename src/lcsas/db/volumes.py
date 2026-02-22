@@ -112,6 +112,15 @@ def update_status(
                 f"Invalid status transition for volume {volume_id}: "
                 f"{current} → {status} (allowed: {sorted(allowed)})"
             )
+        # Safety check: refuse DEPRECATED if packs would become unreplicated
+        if status == "DEPRECATED":
+            at_risk = check_deprecation_safe(conn, volume_id)
+            if at_risk:
+                raise ValueError(
+                    f"Cannot deprecate volume {volume_id}: "
+                    f"{len(at_risk)} pack(s) would become unreplicated. "
+                    f"Use force=True to override."
+                )
     elif force:
         logger.warning(
             "Forced status change for volume %d → %s (bypassing transition rules)",
@@ -184,3 +193,30 @@ def delete_volume(conn: sqlite3.Connection, volume_id: int) -> None:
     conn.execute("DELETE FROM volume_packs WHERE volume_id = ?", (volume_id,))
     conn.execute("DELETE FROM volumes WHERE volume_id = ?", (volume_id,))
     conn.commit()
+
+
+def check_deprecation_safe(
+    conn: sqlite3.Connection,
+    volume_id: int,
+) -> list[str]:
+    """Return pack SHA-256s that would become unreplicated if this volume is deprecated.
+
+    A pack is "at risk" if it exists on this volume but on NO other volume
+    with an ACTIVE status (BURNED, VERIFIED, or CLOSED).
+    """
+    rows = conn.execute(
+        """SELECT p.sha256
+           FROM volume_packs vp
+           JOIN packs p ON p.pack_id = vp.pack_id
+           WHERE vp.volume_id = ?
+             AND p.is_pruned = 0
+             AND NOT EXISTS (
+                 SELECT 1 FROM volume_packs vp2
+                 JOIN volumes v2 ON v2.volume_id = vp2.volume_id
+                 WHERE vp2.pack_id = vp.pack_id
+                   AND vp2.volume_id != ?
+                   AND v2.status IN ('BURNED', 'VERIFIED', 'CLOSED')
+             )""",
+        (volume_id, volume_id),
+    ).fetchall()
+    return [r[0] for r in rows]

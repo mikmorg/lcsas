@@ -143,3 +143,58 @@ class TestLoadConfig:
         config_file.write_text('[defaults]\nmedia_type = "FLOPPY"\n')
         with pytest.raises(ValueError, match="Unknown media type"):
             load_config(config_file)
+
+
+class TestTomlKeyValidation:
+    """Tests for unknown TOML key warnings."""
+
+    def test_unknown_section_warns(self, tmp_path, caplog):
+        import logging
+        config_file = tmp_path / "unk.toml"
+        config_file.write_text('[paths]\n[zebra_section]\nfoo = 1\n')
+        with caplog.at_level(logging.WARNING, logger="lcsas"):
+            load_config(config_file)
+        assert "Unknown config sections" in caplog.text
+        assert "zebra_section" in caplog.text
+
+    def test_unknown_defaults_key_warns(self, tmp_path, caplog):
+        import logging
+        config_file = tmp_path / "unk2.toml"
+        config_file.write_text('[defaults]\ntypo_key = "val"\n')
+        with caplog.at_level(logging.WARNING, logger="lcsas"):
+            load_config(config_file)
+        assert "Unknown [defaults] keys" in caplog.text
+        assert "typo_key" in caplog.text
+
+    def test_valid_config_no_warnings(self, tmp_path, caplog):
+        import logging
+        config_file = tmp_path / "good.toml"
+        config_file.write_text(textwrap.dedent("""\
+            [paths]
+            mirror_base = "/mnt/mirror"
+            staging = "/mnt/staging"
+            database = "/tmp/test.db"
+
+            [defaults]
+            media_type = "BD25"
+        """))
+        with caplog.at_level(logging.WARNING, logger="lcsas"):
+            load_config(config_file)
+        assert "typo" not in caplog.text
+        assert "Unknown" not in caplog.text
+
+
+class TestXdgDbPath:
+    """Test XDG-compliant default database path."""
+
+    def test_xdg_data_home_used(self, tmp_path, monkeypatch):
+        from lcsas.config.settings import _xdg_db_path
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg_data"))
+        result = _xdg_db_path()
+        assert result == str(tmp_path / "xdg_data" / "lcsas" / "archive.db")
+
+    def test_fallback_to_home(self, monkeypatch):
+        from lcsas.config.settings import _xdg_db_path
+        monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+        result = _xdg_db_path()
+        assert ".local/share/lcsas/archive.db" in result

@@ -130,3 +130,12 @@ def get_snapshot(
         tags=row[5],
         description=row[6],
     )
+
+
+def delete_snapshots_for_repo(conn: sqlite3.Connection, repo_id: str) -> int:
+    """Delete all snapshots belonging to *repo_id*. Returns count deleted."""
+    cur = conn.execute(
+        "DELETE FROM snapshots WHERE repo_id = ?", (repo_id,)
+    )
+    conn.commit()
+    return cur.rowcount

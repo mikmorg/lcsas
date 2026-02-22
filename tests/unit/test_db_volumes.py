@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 from lcsas.db.volumes import (
+    check_deprecation_safe,
     create_volume,
     delete_volume,
     get_volume_by_id,
@@ -148,3 +149,86 @@ class TestVolumesCRUD:
                 memory_db, label="DUP", uuid=generate_uuid(),
                 media_type="BD25", capacity_bytes=25_000_000_000,
             )
+
+
+class TestDeprecationSafety:
+    """Tests for check_deprecation_safe()."""
+
+    def test_safe_when_pack_on_other_volume(self, memory_db):
+        """Pack on two volumes → deprecating one is safe."""
+        from lcsas.db.packs import register_pack
+        from lcsas.db.volume_packs import bulk_link_packs
+
+        v1 = create_volume(memory_db, label="V1", uuid=generate_uuid(),
+                           media_type="BD25", capacity_bytes=25_000_000_000)
+        v2 = create_volume(memory_db, label="V2", uuid=generate_uuid(),
+                           media_type="BD25", capacity_bytes=25_000_000_000)
+        # Advance both to BURNED
+        update_status(memory_db, v1.volume_id, "BURNING")
+        update_status(memory_db, v1.volume_id, "BURNED")
+        update_status(memory_db, v2.volume_id, "BURNING")
+        update_status(memory_db, v2.volume_id, "BURNED")
+
+        p = register_pack(memory_db, sha256="deadbeef" * 8, size_bytes=1000,
+                          repo_id="_test")
+        bulk_link_packs(memory_db, v1.volume_id, [p.pack_id])
+        bulk_link_packs(memory_db, v2.volume_id, [p.pack_id])
+
+        at_risk = check_deprecation_safe(memory_db, v1.volume_id)
+        assert at_risk == []
+
+    def test_unsafe_when_only_copy(self, memory_db):
+        """Pack on one volume only → deprecation is unsafe."""
+        from lcsas.db.packs import register_pack
+        from lcsas.db.volume_packs import bulk_link_packs
+
+        v1 = create_volume(memory_db, label="ONLY", uuid=generate_uuid(),
+                           media_type="BD25", capacity_bytes=25_000_000_000)
+        update_status(memory_db, v1.volume_id, "BURNING")
+        update_status(memory_db, v1.volume_id, "BURNED")
+
+        sha = "abcd1234" * 8
+        p = register_pack(memory_db, sha256=sha, size_bytes=500,
+                          repo_id="_test")
+        bulk_link_packs(memory_db, v1.volume_id, [p.pack_id])
+
+        at_risk = check_deprecation_safe(memory_db, v1.volume_id)
+        assert sha in at_risk
+
+    def test_update_status_blocks_unsafe_deprecation(self, memory_db):
+        """update_status raises ValueError when deprecation is unsafe."""
+        from lcsas.db.packs import register_pack
+        from lcsas.db.volume_packs import bulk_link_packs
+
+        v1 = create_volume(memory_db, label="BLOCK", uuid=generate_uuid(),
+                           media_type="BD25", capacity_bytes=25_000_000_000)
+        update_status(memory_db, v1.volume_id, "BURNING")
+        update_status(memory_db, v1.volume_id, "BURNED")
+        update_status(memory_db, v1.volume_id, "VERIFIED")
+
+        sha = "babe0000" * 8
+        p = register_pack(memory_db, sha256=sha, size_bytes=300,
+                          repo_id="_test")
+        bulk_link_packs(memory_db, v1.volume_id, [p.pack_id])
+
+        with pytest.raises(ValueError, match="unreplicated"):
+            update_status(memory_db, v1.volume_id, "DEPRECATED")
+
+    def test_force_overrides_safety_check(self, memory_db):
+        """force=True bypasses deprecation safety."""
+        from lcsas.db.packs import register_pack
+        from lcsas.db.volume_packs import bulk_link_packs
+
+        v1 = create_volume(memory_db, label="FORCE_D", uuid=generate_uuid(),
+                           media_type="BD25", capacity_bytes=25_000_000_000)
+        update_status(memory_db, v1.volume_id, "BURNING")
+        update_status(memory_db, v1.volume_id, "BURNED")
+        update_status(memory_db, v1.volume_id, "VERIFIED")
+
+        p = register_pack(memory_db, sha256="f00d0000" * 8, size_bytes=300,
+                          repo_id="_test")
+        bulk_link_packs(memory_db, v1.volume_id, [p.pack_id])
+
+        update_status(memory_db, v1.volume_id, "DEPRECATED", force=True)
+        vol = get_volume_by_label(memory_db, "FORCE_D")
+        assert vol.status == "DEPRECATED"

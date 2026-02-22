@@ -377,6 +377,7 @@ class BurnOrchestrator:
         media_type: MediaType | None = None,
         for_location: str | None = None,
         repo_ids: list[str] | None = None,
+        pack_sha256s: list[str] | None = None,
         skip_ecc: bool = False,
         dry_run: bool = False,
     ) -> StageResult:
@@ -389,6 +390,7 @@ class BurnOrchestrator:
             media_type: Target media type (defaults to config).
             for_location: If set, stage only packs missing at this location.
             repo_ids: Optional filter to specific repositories.
+            pack_sha256s: If set, stage only packs with these SHA-256 hashes.
             skip_ecc: If True, skip ECC augmentation of ISOs.
             dry_run: If True, compute the plan but skip all side effects.
 
@@ -405,6 +407,11 @@ class BurnOrchestrator:
             for_location=for_location,
             repo_ids=repo_ids,
         )
+
+        # Apply explicit pack filter (used by consolidate --execute)
+        if pack_sha256s is not None:
+            allowed = set(pack_sha256s)
+            packs_to_stage = [p for p in packs_to_stage if p.sha256 in allowed]
 
         if not packs_to_stage:
             raise ValueError("No packs need staging.")
