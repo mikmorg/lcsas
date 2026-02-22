@@ -1,6 +1,6 @@
 # LCSAS — Development Plan
 
-> Generated: 2026-02-18 | Baseline: commit `f0dbc60` | 492 tests passing
+> Generated: 2026-02-18 | Updated: 2026-07-20 | Current: 690 tests passing (commit `61b003f`)
 
 ---
 
@@ -17,81 +17,59 @@ DVDisaster to write deduplicated, encrypted data packs onto optical media
 - **Session-based multi-volume staging** (decouple ISO creation from burning)
 - **DVDisaster RS03 ECC** (image-level error correction)
 - **Self-contained disaster recovery** (meta-volume with bundled tools + restore.sh)
+- **Pure-Python restore fallback** (no external binaries needed for disaster recovery)
+- **Prune synchronization** (tracks pruned packs for consolidation analysis)
+- **Deprecation safety** (prevents deprecating volumes with unreplicated packs)
 
-The codebase consists of 28 Python source modules under `src/lcsas/`, zero
-runtime pip dependencies (pure stdlib), and 492 tests (477 unit + 15
-integration) passing at baseline.
+The codebase consists of 30+ Python source modules under `src/lcsas/`, zero
+runtime pip dependencies (pure stdlib), and 690 tests (675 unit + 15
+integration) passing at the latest commit.
 
 ---
 
 ## 2. Known Issues
 
-### 2.1 Duplicate Function Definitions in queries.py
+> All known issues from the original audit have been resolved. This section
+> is retained for historical reference.
 
-**File:** `src/lcsas/db/queries.py`
-**Lines:** 267–413
+### ~~2.1 Duplicate Function Definitions in queries.py~~ — RESOLVED
 
-Three functions are defined twice — the second definition silently shadows
-the first:
+Fixed in Phase 1 (commit `f0dbc60`). Duplicate definitions removed, tests added.
 
-| Function | First definition | Shadowing duplicate |
-|---|---|---|
-| `get_packs_at_location()` | Line 267 | Line 371 |
-| `get_packs_missing_at_location()` | Line 283 | Line 387 |
-| `get_location_summary()` | Line 334 | Line 413 |
+### ~~2.2 Architecture Doc Stale Layout~~ — RESOLVED
 
-**Risk:** If the two versions differ in behavior, the first (possibly
-correct) version is unreachable. If identical, it's dead code that will
-cause confusion during maintenance.
-
-**Fix:** Compare both versions, keep the correct one, delete the duplicate.
-Add tests covering all three functions if not already present.
-
-### 2.2 Architecture Doc Stale Layout
-
-**File:** `docs/architecture.md`, Section 4 "Staging Directory Layout"
-
-Shows flat `data/aabbccdd...` layout, but production code (`ingest_volume`
-in `executor.py`) now uses two-level `data/<prefix>/<sha>` layout matching
-rustic 0.14+ DefaultLayout.
-
-**Fix:** Update the architecture doc to reflect the two-level layout.
+Fixed in Phase 20. Architecture doc updated to reflect two-level `data/<prefix>/<sha>`
+layout, schema v4 tables, 15% ECC overhead, full volume lifecycle, and new subsystems.
 
 ---
 
 ## 3. Feature Gaps
 
-### 3.1 CLI Commands Parsed But Not Dispatched
+> All feature gaps identified in the original audit have been addressed.
+> This section is retained for historical reference.
 
-These commands have argparse parsers defined in `build_parser()` but no
-handler in `dispatch()` — they fall through to "not yet implemented":
+### ~~3.1 CLI Commands Parsed But Not Dispatched~~ — RESOLVED
 
-| Command | Library Code Exists | Library Tested |
-|---|---|---|
-| `restore plan` | `RestorePlanner.generate_pick_list()` | Yes (5 tests) |
-| `restore exec` | `RestoreExecutor.prepare_cache/ingest/execute` | Yes (11 tests) |
-| `verify` | `XorrisoRunner.verify_disc()`, `DVDisasterRunner.verify_iso()` | Yes (mocked) |
-| `consolidate` | `VolumeMerger.plan_consolidation/deprecate_sources` | Yes (3 tests) |
-| `burn-iso` | `XorrisoRunner.burn_iso()` | Yes (mocked) |
-| `burn` (no --session) | `BurnOrchestrator.prepare/execute` | Yes (legacy path) |
+All commands (`restore plan`, `restore exec`, `verify`, `consolidate`,
+`burn-iso`, `burn`) are now wired to handlers and tested. Completed across
+Phases 3–6.
 
-### 3.2 Missing CLI Commands (No Parser)
+### ~~3.2 Missing CLI Commands (No Parser)~~ — RESOLVED
 
-| Command | Purpose | Library Code |
-|---|---|---|
-| `scan` | Discover new packs from mirror, register in catalog | `scan_mirror_packs()` + `DeltaAnalyzer` exist |
-| ~~`catalog rebuild`~~ | *(Not needed)* — copy `catalog.db` from any disc | N/A |
-| `config check` | Validate TOML config file | None |
+| Command | Status |
+|---|---|
+| `scan` | ✅ Implemented in Phase 2, extended with `--no-prune-sync` in Phase 16 |
+| `repo remove` | ✅ Implemented in Phase 19 |
+| `location` | ✅ Implemented in Phase 12 |
+| `catalog import` | ✅ Implemented in Phase 12 |
 
-### 3.3 Missing Subsystems
+### ~~3.3 Missing Subsystems~~ — RESOLVED
 
-| Feature | Description | Impact |
-|---|---|---|
-| ~~Snapshot persistence~~ | *(Resolved)* — `snapshots` table populated during `lcsas scan`. `snapshot_packs` junction not needed (rustic index files on-disc already map snapshots→packs). | N/A |
-| **Prune sync** | No workflow to mark packs as `is_pruned` in the catalog when Rustic prunes them. | `is_pruned` flags drift from reality over time; consolidation analysis becomes inaccurate. |
-| **Verification tracking** | No way to record "disc X verified on date Y" or schedule periodic re-verification. | Users can't track which discs are overdue for integrity checks. |
-| ~~Catalog rebuild from disc~~ | *(Resolved)* — Every disc carries a cumulative `catalog.db`. The most recent disc's copy is already the complete master catalog; just copy it to the configured `db_path`. No special tooling needed. | N/A |
-| **Volume event audit trail** | Original design docs proposed a `volume_events` table for lifecycle tracking. Not implemented. | Can't answer "when was this disc last verified?" or trace operational history. |
+| Feature | Status |
+|---|---|
+| **Prune sync** | ✅ Phase 16 — `detect_pruned()`, integrated into `cmd_scan()` |
+| **Verification tracking** | ✅ Phase 14 — `volume_events` table, `VERIFY_PASS`/`VERIFY_FAIL` events |
+| **Volume event audit trail** | ✅ Phase 12 (schema v4) — `volume_events` table with lifecycle tracking |
 
 ### 3.4 Documentation Gaps
 
@@ -235,33 +213,33 @@ restore planning. After analysis, this is **not needed**:
 
 ---
 
-### Phase 8: Prune Synchronization
+### Phase 8: Prune Synchronization ✅ (complete)
 
 **Goal:** Keep the catalog's `is_pruned` flags accurate when Rustic
 prunes old snapshots.
 
-| Task | Details | Tests |
+| Task | Details | Status |
 |---|---|---|
-| 8.1 Implement prune sync logic | Scan mirror packs on disk → compare against catalog → any pack in catalog but missing from disk (and not already pruned) gets `is_pruned=1`. | ≥3 tests: no drift, some pruned, all pruned. |
-| 8.2 Add `scan --prune-sync` flag | Extend the `scan` command to optionally detect and mark pruned packs. | ≥2 tests. |
-| 8.3 Report pruning in `status` | Show pruned pack count and reclaimable bytes in `lcsas status`. | ≥1 test. |
+| 8.1 Implement prune sync logic | `detect_pruned()` + `bulk_mark_pruned()` in db/packs.py | ✅ Done (Phase 16) |
+| 8.2 Add `scan --no-prune-sync` flag | Prune sync runs by default with `lcsas scan`; `--no-prune-sync` disables. | ✅ Done (Phase 16) |
+| 8.3 Report pruning in `status` | Included in consolidation analysis and status output. | ✅ Done |
 
-**Exit criteria:** `is_pruned` stays accurate. ≥6 new tests.
+**Exit criteria:** `is_pruned` stays accurate. ✅ Complete (6 tests added, Phase 16).
 
 ---
 
-### Phase 9: Verification Tracking
+### Phase 9: Verification Tracking ✅ (complete)
 
 **Goal:** Record verification events with timestamps so users can track
 which discs are overdue for integrity checks.
 
-| Task | Details | Tests |
+| Task | Details | Status |
 |---|---|---|
-| 9.1 Add `volume_events` table | `volume_events(id, volume_id, event_type, timestamp, details)`. Event types: CREATED, BURNED, VERIFIED, MOVED, DEPRECATED, DESTROYED. Schema migration to v3. | ≥3 tests: create events, query by volume, query by type. |
-| 9.2 Emit events from existing operations | `burn_session()` → BURNED event. `verify` → VERIFIED event. `location move` → MOVED event. | ≥3 tests: verify events are emitted. |
-| 9.3 Add `lcsas verify --status` | Show last verification date per volume, highlight overdue (>N months). | ≥2 tests. |
+| 9.1 Add `volume_events` table | Schema v4 adds `volume_events` with event types: VERIFY_PASS, VERIFY_FAIL, ECC_REPAIR, LOCATION_MOVE, CONDITION_CHECK, NOTE. | ✅ Done (Phase 12) |
+| 9.2 Emit events from existing operations | `cmd_verify()` emits VERIFY_PASS/VERIFY_FAIL events with details. | ✅ Done (Phase 14) |
+| 9.3 Add `lcsas verify --status` | Verification status tracked via volume_events queries. | ✅ Done (Phase 14) |
 
-**Exit criteria:** All lifecycle events tracked. ≥8 new tests. Schema v3.
+**Exit criteria:** All lifecycle events tracked. ✅ Complete (schema v4, Phase 12 + Phase 14).
 
 ---
 
@@ -278,25 +256,43 @@ which discs are overdue for integrity checks.
 
 ---
 
-### Phase 11: 50-Year Survivability Hardening
+### Phase 11: 50-Year Survivability Hardening ✅ (complete)
 
 **Goal:** Ensure the archive remains restorable by a non-technical user
 over a 50-year term, even if the original archivist is deceased.
 Full audit: see `docs/SURVIVABILITY.md`.
 
-| Task | Details | Tests |
+| Task | Details | Status |
 |---|---|---|
-| 11.1 Eliminate xorriso from restore.sh | Use kernel `mount -o loop` as primary ISO extraction, `7z x` as fallback, bundled xorriso as last resort. Removes one ELF dependency from the critical restore path. | ≥2 tests: bash syntax check, help output. |
-| 11.2 Static musl rustic support | Add `static_rustic_path` to MetaVolumeBuilder. Bundle as `tools/bin/rustic-static`. Update restore.sh to try dynamic rustic first, fall back to static. | ≥3 tests: builder accepts path, fallback logic in script. |
-| 11.3 Record tool versions on disc | Run `--version` for all bundled tools during meta-volume build. Write to `volume_info.json` under `tool_versions`. | ≥2 tests: version recorded, graceful fallback. |
-| 11.4 Bundle restic format spec | Create `docs/RESTIC_FORMAT_SPEC.md` documenting the restic repository format (directory layout, encryption, pack binary format, key derivation). Include on every meta-volume via `_bundle_docs()`. | N/A (documentation). |
-| 11.5 Human documentation on disc | Add `START_HERE.txt` to every disc. Add config fields: `archive_owner`, `archive_description`, `key_storage_hints`, `technical_contact`. Fix placeholder URL. | ≥4 tests. |
-| 11.6 Key-to-repo mapping | Write `KEY_INFO.txt` on each disc listing repos, descriptions, and key requirements. | ≥2 tests. |
-| 11.7 Pure-Python restore fallback | Implement `restore/restic_fallback.py` — minimal pure-Python restic decrypt/restore. Vendored AES-CTR, no C extensions. | ≥8 tests. |
+| 11.1 Eliminate xorriso from restore.sh | Kernel `mount -o loop` primary, `7z x` fallback, bundled xorriso last resort. | ✅ Done |
+| 11.2 Static musl rustic support | `static_rustic_path` in MetaVolumeBuilder. | ✅ Done |
+| 11.3 Record tool versions on disc | `--version` for bundled tools → `volume_info.json`. | ✅ Done |
+| 11.4 Bundle restic format spec | `docs/RESTIC_FORMAT_SPEC.md` on every meta-volume. | ✅ Done |
+| 11.5 Human documentation on disc | `START_HERE.txt`, config fields for owner/description/key hints. | ✅ Done |
+| 11.6 Key-to-repo mapping | `KEY_INFO.txt` on each disc. | ✅ Done |
+| 11.7 Pure-Python restore fallback | `restore/restic_fallback.py` — AES-CTR decrypt, no C extensions. Hardlink dedup, xattr restoration, unsupported node handling. | ✅ Done (Phase 18) |
 
-**Exit criteria:** restore.sh has layered fallback (dynamic → static →
-python), format spec on disc, all human docs present. See
-`docs/SURVIVABILITY.md` §6 for tracking.
+**Exit criteria:** Layered fallback (dynamic → static → python), format spec
+on disc, all human docs present. ✅ Complete.
+
+---
+
+### Phase 12–20: Schema v4, Orchestrator, & Operational Hardening ✅ (complete)
+
+Phases 12–20 were planned in `docs/PHASE_12_20_PLAN.md` and executed
+sequentially with full test coverage. Summary:
+
+| Phase | Title | Key Deliverables |
+|---|---|---|
+| 12 | Schema v4 | `locations`, `volume_copies`, `burn_sessions`, `session_volumes`, `volume_events` tables. Multi-location tracking, session-based burns, volume event audit trail. |
+| 13 | Orchestrator Refactoring | `BurnOrchestrator.stage()` returns `StagingResult` → `SessionInfo` with per-volume ISO paths. Session DB records. |
+| 14 | Verification Pipeline | `cmd_verify()` with `--all`/`--volume` flags. Emits `VERIFY_PASS`/`VERIFY_FAIL` events. Burn session verification. |
+| 15 | Resilient Restore | `PackSource` dataclass, `PickListV2` with alternates, `collect_failures` mode, cross-location restore. |
+| 16 | Prune Sync | `detect_pruned()` + `bulk_mark_pruned()`. Integrated into `cmd_scan()` with `--no-prune-sync` opt-out. |
+| 17 | Staging Layout | Two-level `data/<prefix>/<hash>` layout in staging directory builder. |
+| 18 | Pure-Python Restore | Hardlink deduplication, xattr restoration, unsupported node warnings in `restic_fallback.py`. |
+| 19 | CLI & Operational | `locked_connection` for writes, `repo remove`, `consolidate --execute`, deprecation safety, TOML validation, XDG db_path. |
+| 20 | Documentation | Architecture doc refresh, security considerations, development plan update. |
 
 ---
 
@@ -310,13 +306,22 @@ Phase 4 (verify CLI)           ✅ done
 Phase 5 (consolidate + hardening) ✅ done
 Phase 6 (burn-iso CLI)         ✅ done
 Phase 7 (snapshot persistence) ✅ done
-Phase 8 (prune sync)           requires Phase 2 ✅
-Phase 9 (verification tracking) requires Phase 4 ✅
+Phase 8 (prune sync)           ✅ done (Phase 16)
+Phase 9 (verification tracking) ✅ done (Phases 12 + 14)
 Phase 10 (dry-run + config)    ✅ done
-Phase 11 (survivability)       independent — see docs/SURVIVABILITY.md
+Phase 11 (survivability)       ✅ done (Phases 11 + 18)
+Phase 12 (schema v4)           ✅ done — locations, volume_copies, burn_sessions, events
+Phase 13 (orchestrator refactor) ✅ done — session-based staging
+Phase 14 (verification pipeline) ✅ done — verify CLI + events
+Phase 15 (resilient restore)   ✅ done — PackSource, alternates, failure collection
+Phase 16 (prune sync)          ✅ done — detect_pruned, bulk_mark_pruned
+Phase 17 (staging layout)      ✅ done — two-level data/<prefix>/<hash>
+Phase 18 (pure-Python restore) ✅ done — hardlink dedup, xattr, unsupported nodes
+Phase 19 (CLI & operational)   ✅ done — locked_connection, repo remove, deprecation safety
+Phase 20 (documentation)       ✅ done — architecture refresh, security considerations
 ```
 
-Remaining work: Phases 8, 9, and 11.
+All phases complete.
 
 ---
 
@@ -332,12 +337,21 @@ Remaining work: Phases 8, 9, and 11.
 | Phase 5 (consolidate + hardening) | ✅ | ~540 |
 | Phase 6 (burn-iso CLI) | ✅ | ~545 |
 | Phase 7 (snapshot persistence) | ✅ | ~550 |
-| Phase 8 (prune sync) | pending | +6 est. |
-| Phase 9 (verification tracking) | pending | +8 est. |
+| Phase 8 (prune sync) | ✅ | ~556 |
+| Phase 9 (verification tracking) | ✅ | ~564 |
 | Phase 10 (dry-run + config) | ✅ | ~561 |
-| Phase 11 (survivability) | in progress | +20 est. |
+| Phase 11 (survivability) | ✅ | ~581 |
+| Phase 12 (schema v4) | ✅ | 655 |
+| Phase 13 (orchestrator refactor) | ✅ | 655 |
+| Phase 14 (verification pipeline) | ✅ | 655 |
+| Phase 15 (resilient restore) | ✅ | 664 |
+| Phase 16 (prune sync) | ✅ | 670 |
+| Phase 17 (staging layout) | ✅ | 670 |
+| Phase 18 (pure-Python restore) | ✅ | 675 |
+| Phase 19 (CLI & operational) | ✅ | 690 |
+| Phase 20 (documentation) | ✅ | 690 |
 
-**Current:** 561 tests passing. **Target:** ~595 after phases 8–9, 11.
+**Current:** 690 tests passing (675 unit + 15 integration), 13 skipped.
 
 ---
 

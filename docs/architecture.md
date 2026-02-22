@@ -41,13 +41,13 @@ Tier 2 — COLD        Optical media / LTO tape (permanent archive)
 
 | Media | Capacity | ECC Overhead | Usable | Type |
 |-------|----------|-------------|--------|------|
-| BD-R 25 GB | 25 GB | 20% | 20 GB | Optical |
-| BD-R 50 GB | 50 GB | 20% | 40 GB | Optical |
-| BDXL 100 GB | 100 GB | 20% | 80 GB | Optical |
-| M-DISC 25 GB | 25 GB | 20% | 20 GB | Optical |
-| M-DISC 100 GB | 100 GB | 20% | 80 GB | Optical |
-| LTO-8 | 12 TB | 5% | 11.4 TB | Tape |
-| LTO-9 | 18 TB | 5% | 17.1 TB | Tape |
+| BD-R 25 GB | 25 GB | 15% | ~21 GB | Optical |
+| BD-R 50 GB | 50 GB | 15% | ~42 GB | Optical |
+| BDXL 100 GB | 100 GB | 15% | ~85 GB | Optical |
+| M-DISC 25 GB | 25 GB | 15% | ~21 GB | Optical |
+| M-DISC 100 GB | 100 GB | 15% | ~85 GB | Optical |
+| LTO-8 | 12 TB | 0% | 12 TB | Tape |
+| LTO-9 | 18 TB | 0% | 18 TB | Tape |
 | TEST_TINY | 1 MB | 0% | 1 MB | Test |
 | TEST_SMALL | 10 MB | 10% | 9 MB | Test |
 
@@ -88,33 +88,36 @@ schema_version (version INTEGER)
 
 -- Physical media volumes
 volumes (
-    volume_id    INTEGER PRIMARY KEY,
-    label        TEXT UNIQUE,        -- e.g. LCSAS_BD_2026_001
-    uuid         TEXT UNIQUE,
-    media_type   TEXT,               -- BD25, MDISC100, LTO8, etc.
-    capacity     INTEGER,            -- Raw capacity in bytes
+    volume_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    label        TEXT UNIQUE NOT NULL,
+    uuid         TEXT UNIQUE NOT NULL,
+    media_type   TEXT NOT NULL,      -- BD25, MDISC100, LTO8, etc.
+    capacity_bytes INTEGER NOT NULL, -- Raw capacity in bytes
     used_bytes   INTEGER DEFAULT 0,
-    location     TEXT,               -- Physical storage location
-    status       TEXT,               -- STAGING → BURNED → VERIFIED → DEPRECATED
-    created_at   TEXT,
-    closed_at    TEXT
+    location     TEXT DEFAULT 'Home_Shelf',
+    status       TEXT,               -- STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED
+    created_at   DATETIME,
+    closed_at    DATETIME,
+    verified_at  DATETIME
 )
 
 -- Logical repositories (multi-tenant)
 repositories (
-    repo_id      TEXT PRIMARY KEY,   -- Short identifier: "family", "work"
-    display_name TEXT,
-    mirror_path  TEXT                -- Path on NAS mirror
+    repo_id          TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    mirror_path      TEXT NOT NULL,
+    encryption_key_id TEXT DEFAULT '',
+    created_at       DATETIME
 )
 
 -- Individual pack files
 packs (
-    pack_id      INTEGER PRIMARY KEY,
-    sha256       TEXT UNIQUE,
-    size_bytes   INTEGER,
+    pack_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    sha256       TEXT UNIQUE NOT NULL,
+    size_bytes   INTEGER NOT NULL,
     repo_id      TEXT REFERENCES repositories,
-    is_pruned    BOOLEAN DEFAULT 0,
-    created_at   TEXT
+    is_pruned    INTEGER DEFAULT 0,
+    created_at   DATETIME
 )
 
 -- Many-to-many: which packs are on which volumes
@@ -124,23 +127,86 @@ volume_packs (
     PRIMARY KEY (volume_id, pack_id)
 )
 
--- Snapshot records (informational)
+-- Snapshot records
 snapshots (
     snapshot_id  TEXT PRIMARY KEY,
     repo_id      TEXT REFERENCES repositories,
     hostname     TEXT,
+    timestamp    DATETIME,
     paths        TEXT,               -- JSON array
     tags         TEXT,               -- JSON array
-    created_at   TEXT
+    description  TEXT
+)
+
+-- Named physical storage locations
+locations (
+    name         TEXT PRIMARY KEY,
+    created_at   DATETIME,
+    description  TEXT
+)
+
+-- Per-location copies of a volume (multi-copy tracking)
+volume_copies (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    volume_id    INTEGER REFERENCES volumes,
+    location     TEXT REFERENCES locations,
+    status       TEXT,               -- ACTIVE | DEPRECATED | DESTROYED
+    burn_date    TEXT,
+    notes        TEXT,
+    iso_sha256   TEXT,
+    last_verified_at DATETIME,
+    media_serial TEXT,
+    UNIQUE(volume_id, location)
+)
+
+-- Burn session batching
+burn_sessions (
+    session_id   TEXT PRIMARY KEY,
+    created_at   DATETIME,
+    media_type   TEXT NOT NULL,
+    status       TEXT,               -- STAGED | PARTIAL | COMPLETE | CLEANED
+    staging_dir  TEXT NOT NULL
+)
+
+-- Volumes within a burn session
+session_volumes (
+    session_id   TEXT REFERENCES burn_sessions,
+    volume_id    INTEGER REFERENCES volumes,
+    iso_path     TEXT NOT NULL,
+    iso_sha256   TEXT,
+    PRIMARY KEY (session_id, volume_id)
+)
+
+-- Lifecycle event audit trail
+volume_events (
+    event_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    volume_id    INTEGER REFERENCES volumes,
+    event_type   TEXT,               -- VERIFY_PASS, VERIFY_FAIL, ECC_REPAIR, LOCATION_MOVE, etc.
+    event_date   DATETIME,
+    location     TEXT REFERENCES locations,
+    detail       TEXT
 )
 ```
 
 ### Volume Lifecycle States
 
 ```
-STAGING → BURNED → VERIFIED → (active use)
-                              → DEPRECATED (after consolidation)
+STAGING → BURNING → BURNED → VERIFIED → (active use)
+                                        → DEPRECATED → DESTROYED
 ```
+
+Valid transitions:
+| From | To |
+|------|-----|
+| STAGING | BURNING, DEPRECATED, DESTROYED |
+| BURNING | BURNED, VERIFIED, STAGING (re-stage), DESTROYED |
+| BURNED | VERIFIED, STAGING (re-burn), DESTROYED |
+| VERIFIED | DEPRECATED, DESTROYED |
+| DEPRECATED | DESTROYED |
+
+Transitioning to DEPRECATED is blocked if the volume contains packs that
+exist on no other active volume (unless `force=True`), preventing accidental
+data loss.
 
 ---
 
@@ -278,7 +344,7 @@ Each repository maintains its own encryption independently:
 ### Error Correction
 
 - **RS03** (dvdisaster) augments the ISO with Reed-Solomon parity data
-- Typical overhead: 20% for optical, 5% for tape
+- Typical overhead: 15% for optical, 0% for tape (tape has built-in ECC)
 - Enables recovery from surface scratches, partial media degradation
 - Can be verified offline: `dvdisaster --verify`
 
@@ -296,7 +362,106 @@ Each repository maintains its own encryption independently:
 
 ---
 
-## 9. Module Architecture
+## 8.5 Security Considerations
+
+### Catalog Encryption Tradeoff
+
+The SQLite catalog database is **intentionally unencrypted** and embedded on
+every disc as `catalog.db`. This is a deliberate design decision enabling
+**self-describing recovery** — any single disc can bootstrap the entire archive
+without needing the encryption key, external tools, or prior knowledge.
+
+**What is exposed in the catalog:**
+
+- File paths and directory names (from snapshot metadata)
+- Hostnames that produced each backup
+- Snapshot timestamps
+- Repository identifiers and mirror paths
+- Volume labels, locations, and pack SHA-256 hashes
+
+**What remains encrypted:**
+
+- All pack file contents (encrypted by Rustic/restic before LCSAS handles them)
+- File contents, directory trees, and blob data within packs
+- Encryption keys (stored on-disc in per-repo `keys/` directories, themselves
+  requiring the repository password to unlock)
+
+**Implication:** An attacker with physical access to a disc can learn *what*
+was backed up (file paths, timestamps, hostnames) but cannot read *any* file
+contents without the repository password.
+
+**For highly sensitive archives**, consider:
+
+- Using opaque repository names (e.g., `repo_a` instead of `medical_records`)
+- A future metadata-scrubbed catalog variant that strips paths and hostnames
+  (not yet implemented)
+- Physical security of stored media
+
+---
+
+## 8.6 Multi-Location Tracking
+
+Volumes can be burned in multiple copies, each stored at a different physical
+location. The `locations` table names storage sites, and `volume_copies`
+tracks per-location copies with independent status, verification timestamps,
+and ISO checksums.
+
+```
+lcsas location "Safe_Deposit_Box" --description "Bank vault, Box 42"
+```
+
+During a burn session with `--copies 2 --locations Home_Shelf Safe_Deposit_Box`,
+each copy is tracked independently. The `redundancy_report` query shows packs
+across all active copies at all locations.
+
+---
+
+## 8.7 Session-Based Burns
+
+Multi-volume staging is managed through **burn sessions** rather than
+individual volume operations:
+
+1. `cmd_burn()` creates a `burn_session` record with a UUID
+2. The `BurnOrchestrator` stages all packs, bin-packs them into volumes,
+   creates ISOs, and optionally applies ECC
+3. Each generated volume is linked via `session_volumes` with its ISO path
+   and SHA-256
+4. Sessions progress through states: `STAGED → PARTIAL → COMPLETE → CLEANED`
+
+This decouples ISO preparation from physical burning — ISOs can be created
+on one machine and burned on another via `lcsas burn-iso`.
+
+---
+
+## 8.8 Resilient Restore
+
+The restore pipeline handles degraded scenarios gracefully:
+
+- **Multiple pack sources**: The pick list includes alternate volumes for each
+  pack (`PackSource` dataclass with volume + location + priority)
+- **Failure collection**: `ingest_volume()` can operate in `collect_failures`
+  mode, recording which packs failed from a volume without aborting
+- **Cross-location restore**: Packs can be sourced from any location where
+  a copy exists; the planner minimizes disc swaps across locations
+- **Pure-Python fallback**: If Rustic/restic is unavailable, a built-in
+  Python implementation (`restic_fallback.py`) can decrypt and restore files
+  using only stdlib (AES-CTR, scrypt, zstd decompression)
+
+---
+
+## 8.9 Prune Synchronization
+
+When Rustic's `forget`/`prune` cycle removes old snapshots, pack files
+disappear from the mirror. LCSAS detects this during `scan`:
+
+1. `detect_pruned()` compares catalog packs against mirror contents
+2. Any pack present in the catalog but absent from the mirror (and not
+   already marked pruned) gets `is_pruned = 1`
+3. This runs automatically with `lcsas scan` (disable with `--no-prune-sync`)
+4. Accurate prune flags feed into consolidation analysis — identifying
+   volumes where a high percentage of packs are dead
+
+
 
 ```
 lcsas/
@@ -310,8 +475,10 @@ lcsas/
 ├── ecc/             # DVDisaster wrapper (Protocol) — RS03 ECC
 ├── staging/         # Staging directory builder, holographic metadata
 ├── burn/            # Burn orchestrator (pipeline conductor)
-├── restore/         # Pick-list planner, restore executor
+├── restore/         # Pick-list planner, restore executor, pure-Python fallback
 ├── consolidate/     # Volume merger, deprecation
+├── meta/            # Meta-volume builder (bundled tools, docs, restore.sh)
+├── log/             # Logging configuration
 └── cli/             # argparse CLI with subcommands
 ```
 
@@ -324,6 +491,8 @@ lcsas/
 | **Pure parsers** | JSON parsing functions are separated from subprocess invocation for independent testing |
 | **Hardlink staging** | Packs are hardlinked (not copied) from mirror for zero-cost staging on same filesystem |
 | **WAL mode** | SQLite uses WAL journal for safe concurrent reads |
+| **Locked connections** | Write operations use `locked_connection()` context manager for exclusive DB access |
+| **XDG paths** | Default database path follows XDG Base Directory specification (`~/.local/share/lcsas/archive.db`) |
 
 ---
 
@@ -333,14 +502,20 @@ lcsas/
 lcsas init          [--db-path PATH]              Initialize catalog database
 lcsas repo add      NAME MIRROR_PATH [--pw-file]  Register a repository
 lcsas repo list                                    List registered repositories
+lcsas repo remove   REPO_ID [--force]              Remove a repository and its packs
+lcsas scan          [--repo REPO] [--no-prune-sync] Discover new packs, mark pruned
 lcsas status        [--repo REPO]                  Show archive status summary
 lcsas burn          [--media TYPE] [--dry-run]     Run the burn pipeline
                     [--iso-only PATH] [--skip-ecc]
                     [--device DEV]
+lcsas burn-iso      ISO_PATH [--device DEV]        Burn a pre-built ISO to disc
 lcsas restore plan  SNAPSHOT_ID [--repo REPO]      Generate restore pick list
 lcsas restore exec  SNAPSHOT_ID --target DIR       Execute restore from volumes
 lcsas consolidate   VOL_IDS... --target-media TYPE Plan/execute consolidation
+                    [--execute]                     Stage packs & deprecate sources
+lcsas location      NAME [--description DESC]      Register a storage location
 lcsas verify        [--volume LABEL]               Verify volume integrity
+lcsas catalog import SOURCE_PATH                   Import catalog from disc
 lcsas db export     [--output FILE]                Export catalog as JSON
 ```
 
