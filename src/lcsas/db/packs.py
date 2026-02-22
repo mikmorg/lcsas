@@ -65,6 +65,23 @@ def mark_pruned(conn: sqlite3.Connection, pack_id: int) -> None:
     conn.commit()
 
 
+def bulk_mark_pruned(conn: sqlite3.Connection, pack_ids: list[int]) -> int:
+    """Mark multiple packs as pruned in a single transaction.
+
+    Returns the number of packs updated.
+    """
+    if not pack_ids:
+        return 0
+    placeholders = ",".join("?" * len(pack_ids))
+    cur = conn.execute(
+        f"UPDATE packs SET is_pruned = 1 WHERE pack_id IN ({placeholders})"
+        " AND is_pruned = 0",
+        pack_ids,
+    )
+    conn.commit()
+    return cur.rowcount
+
+
 def bulk_register(
     conn: sqlite3.Connection,
     packs: list[tuple[str, int, str]],

@@ -69,6 +69,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-snapshots", action="store_true", default=False,
         help="Skip snapshot listing (faster if rustic is slow).",
     )
+    scan_p.add_argument(
+        "--no-prune-sync", action="store_true", default=False,
+        help="Don't mark packs as pruned when absent from mirror.",
+    )
 
     # --- status ---
     subparsers.add_parser("status", help="Show archive status summary.")
@@ -356,6 +360,19 @@ def cmd_scan(args: argparse.Namespace) -> int:
             unarchived_bytes = analyzer.get_total_unarchived_bytes()
 
             total_new += len(new_packs)
+
+            # Prune sync: detect packs removed by rustic prune
+            if not getattr(args, "no_prune_sync", False):
+                pruned = analyzer.detect_pruned()
+                if pruned:
+                    from lcsas.db.packs import bulk_mark_pruned
+                    pruned_ids = [p.pack_id for p in pruned]
+                    pruned_bytes = sum(p.size_bytes for p in pruned)
+                    marked = bulk_mark_pruned(conn, pruned_ids)
+                    logger.info(
+                        f"    Pruned packs:   {marked} "
+                        f"({pruned_bytes:,} bytes)"
+                    )
 
             logger.info(f"  {repo_name}:")
             logger.info(f"    Packs on disk:  {len(packs_on_disk)}")

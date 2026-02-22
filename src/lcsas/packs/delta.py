@@ -74,3 +74,20 @@ class DeltaAnalyzer:
     def needs_burn(self, usable_capacity: int) -> bool:
         """Whether unarchived data exceeds the given media capacity."""
         return self.get_total_unarchived_bytes() >= usable_capacity
+
+    def detect_pruned(self) -> list[Pack]:
+        """Find packs in the DB that are no longer present on the mirror.
+
+        Returns active (non-pruned) packs whose SHA-256 is absent from
+        the scanner_result.  These are packs that rustic has pruned from
+        the local mirror but are still tracked as active in the catalog.
+        """
+        if not self._scanner_result:
+            # No scanner data — cannot detect pruned packs
+            return []
+
+        from lcsas.db.packs import list_packs
+
+        all_active = list_packs(self._conn, repo_id=self._repo_id, include_pruned=False)
+        mirror_hashes = set(self._scanner_result.keys())
+        return [p for p in all_active if p.sha256 not in mirror_hashes]

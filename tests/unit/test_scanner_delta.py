@@ -92,3 +92,60 @@ class TestDeltaAnalyzer:
         delta_fam = DeltaAnalyzer(memory_db, {}, repo_id="rfam")
         assert len(delta_fam.get_unarchived()) == 1
         assert delta_fam.get_total_unarchived_bytes() == 100
+
+    def test_detect_pruned_finds_missing(self, memory_db):
+        """Packs in DB but not on mirror are detected as pruned."""
+        p1 = register_pack(memory_db, sha256="keep_me", size_bytes=100, repo_id="_test")
+        p2 = register_pack(memory_db, sha256="prune_me", size_bytes=200, repo_id="_test")
+
+        # Mirror only has keep_me
+        scanner_result = {"keep_me": 100}
+        delta = DeltaAnalyzer(memory_db, scanner_result, repo_id="_test")
+        pruned = delta.detect_pruned()
+
+        assert len(pruned) == 1
+        assert pruned[0].sha256 == "prune_me"
+
+    def test_detect_pruned_empty_scanner(self, memory_db):
+        """Empty scanner result means no prune detection possible."""
+        register_pack(memory_db, sha256="some_p", size_bytes=50, repo_id="_test")
+        delta = DeltaAnalyzer(memory_db, {}, repo_id="_test")
+        assert delta.detect_pruned() == []
+
+    def test_detect_pruned_ignores_already_pruned(self, memory_db):
+        """Already-pruned packs are not returned again."""
+        from lcsas.db.packs import mark_pruned
+        p = register_pack(memory_db, sha256="old_pruned", size_bytes=300, repo_id="_test")
+        mark_pruned(memory_db, p.pack_id)
+
+        scanner_result = {"something_else": 500}
+        delta = DeltaAnalyzer(memory_db, scanner_result, repo_id="_test")
+        pruned = delta.detect_pruned()
+        assert len(pruned) == 0
+
+
+class TestBulkMarkPruned:
+    def test_bulk_mark_pruned(self, memory_db):
+        from lcsas.db.packs import bulk_mark_pruned, get_pack_by_sha256
+        p1 = register_pack(memory_db, sha256="bp1", size_bytes=100, repo_id="_test")
+        p2 = register_pack(memory_db, sha256="bp2", size_bytes=200, repo_id="_test")
+        p3 = register_pack(memory_db, sha256="bp3", size_bytes=300, repo_id="_test")
+
+        count = bulk_mark_pruned(memory_db, [p1.pack_id, p2.pack_id])
+        assert count == 2
+
+        assert get_pack_by_sha256(memory_db, "bp1").is_pruned is True
+        assert get_pack_by_sha256(memory_db, "bp2").is_pruned is True
+        assert get_pack_by_sha256(memory_db, "bp3").is_pruned is False
+
+    def test_bulk_mark_empty(self, memory_db):
+        from lcsas.db.packs import bulk_mark_pruned
+        assert bulk_mark_pruned(memory_db, []) == 0
+
+    def test_bulk_mark_idempotent(self, memory_db):
+        from lcsas.db.packs import bulk_mark_pruned, mark_pruned
+        p = register_pack(memory_db, sha256="already", size_bytes=100, repo_id="_test")
+        mark_pruned(memory_db, p.pack_id)
+
+        count = bulk_mark_pruned(memory_db, [p.pack_id])
+        assert count == 0  # already pruned, no change
