@@ -194,13 +194,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- verify ---
     verify_p = subparsers.add_parser("verify", help="Verify a volume's ISO or disc.")
-    verify_p.add_argument("volume_label", help="Label of the volume to verify.")
+    verify_p.add_argument("volume_label", nargs="?", default=None,
+                          help="Label of the volume to verify (omit with --all).")
     verify_p.add_argument("--iso", type=Path, default=None,
                           help="Path to the ISO file (auto-detected from session if omitted).")
     verify_p.add_argument("--disc", action="store_true", default=False,
                           help="Verify a burned disc instead of an ISO file.")
     verify_p.add_argument("--device", default="/dev/sr0",
                           help="Optical drive device (default: /dev/sr0).")
+    verify_p.add_argument("--mark-verified", action="store_true", default=False,
+                          help="Manually mark the volume as verified (remote workflow).")
+    verify_p.add_argument("--mark-failed", action="store_true", default=False,
+                          help="Record a verification failure without checking media.")
+    verify_p.add_argument("--detail", default="",
+                          help="Detail text for --mark-verified/--mark-failed event.")
+    verify_p.add_argument("--all", action="store_true", default=False, dest="verify_all",
+                          help="Verify all BURNED/VERIFIED volumes (batch mode).")
+    verify_p.add_argument("--location", default=None,
+                          help="Filter --all to volumes at this location.")
 
     # --- db ---
     db_p = subparsers.add_parser("db", help="Database operations.")
@@ -891,11 +902,18 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    """Verify a volume's ISO image or burned disc."""
+    """Verify a volume's ISO image or burned disc.
+
+    Supports three modes:
+    - Physical/ISO verification: check media integrity (default)
+    - Manual marking: --mark-verified / --mark-failed for remote workflows
+    - Batch: --all to verify all BURNED/VERIFIED volumes
+    """
     from lcsas.config.settings import load_config
     from lcsas.db.connection import get_connection
     from lcsas.db.schema import create_all
-    from lcsas.db.volumes import get_volume_by_label
+    from lcsas.db.volume_events import add_event
+    from lcsas.db.volumes import get_volume_by_label, list_volumes, update_status
 
     config = load_config(args.config) if args.config else None
     db_path = args.db or (config.db_path if config else Path("archive.db"))
@@ -903,11 +921,40 @@ def cmd_verify(args: argparse.Namespace) -> int:
     try:
         create_all(conn)
 
+        # --- Batch mode: verify --all ---
+        if args.verify_all:
+            return _verify_all(conn, args, config)
+
+        # --- Single volume mode ---
+        if not args.volume_label:
+            logger.error("Volume label required (or use --all for batch mode).")
+            return 1
+
         vol = get_volume_by_label(conn, args.volume_label)
         if vol is None:
             logger.error(f"Volume '{args.volume_label}' not found.")
             return 1
 
+        # --- Manual marking (remote verification workflow) ---
+        if args.mark_verified:
+            if vol.status == "BURNED":
+                update_status(conn, vol.volume_id, "VERIFIED")
+            add_event(
+                conn, vol.volume_id, "VERIFY_PASS",
+                detail=args.detail or "Manual verification (remote)",
+            )
+            logger.info(f"Volume {vol.label}: marked VERIFIED")
+            return 0
+
+        if args.mark_failed:
+            add_event(
+                conn, vol.volume_id, "VERIFY_FAIL",
+                detail=args.detail or "Manual failure report",
+            )
+            logger.info(f"Volume {vol.label}: VERIFY_FAIL event recorded")
+            return 0
+
+        # --- Physical verification ---
         # Find ISO path from session_volumes if not explicitly provided
         iso_path = args.iso
         if iso_path is None and not args.disc:
@@ -922,33 +969,108 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 logger.error("No ISO path found for this volume. "
                              "Use --iso to specify one, or --disc to verify a burned disc.")
                 return 1
+
+        passed = True
+
+        if args.disc:
+            from lcsas.iso.xorriso import SubprocessXorrisoRunner
+            runner = SubprocessXorrisoRunner()
+            logger.info(f"Verifying disc on {args.device} ...")
+            ok = runner.verify_disc(device=args.device)
+            logger.info(f"  Disc verify: {'PASS' if ok else 'FAIL'}")
+            if not ok:
+                passed = False
+        else:
+            if not iso_path.exists():
+                logger.error(f"ISO file not found: {iso_path}")
+                return 1
+
+            from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+            dvd_runner = SubprocessDVDisasterRunner()
+            logger.info(f"Verifying ISO: {iso_path}")
+            ok = dvd_runner.verify_iso(iso_path)
+            logger.info(f"  ECC verify: {'PASS' if ok else 'FAIL'}")
+            if not ok:
+                passed = False
+
+        # Record event
+        event_type = "VERIFY_PASS" if passed else "VERIFY_FAIL"
+        detail = args.detail or ("Disc verify" if args.disc else f"ISO verify: {iso_path}")
+        add_event(conn, vol.volume_id, event_type, detail=detail)
+
+        # If verification passed on a BURNED volume, promote to VERIFIED
+        if passed and vol.status == "BURNED":
+            update_status(conn, vol.volume_id, "VERIFIED")
+            logger.info(f"Volume {vol.label}: promoted BURNED → VERIFIED")
+
+        return 0 if passed else 1
     finally:
         conn.close()
 
-    passed = True
 
-    if args.disc:
-        from lcsas.iso.xorriso import SubprocessXorrisoRunner
-        runner = SubprocessXorrisoRunner()
-        logger.info(f"Verifying disc on {args.device} ...")
-        ok = runner.verify_disc(device=args.device)
-        logger.info(f"  Disc verify: {'PASS' if ok else 'FAIL'}")
-        if not ok:
-            passed = False
-    else:
+def _verify_all(conn, args, config) -> int:
+    """Batch-verify all BURNED/VERIFIED volumes, optionally at a location."""
+    from lcsas.db.volume_copies import get_copies_for_volume
+    from lcsas.db.volume_events import add_event
+    from lcsas.db.volumes import list_volumes, update_status
+
+    vols_burned = list_volumes(conn, status_filter="BURNED")
+    vols_verified = list_volumes(conn, status_filter="VERIFIED")
+    candidates = vols_burned + vols_verified
+
+    if args.location:
+        # Filter to volumes with a copy at the given location
+        filtered = []
+        for vol in candidates:
+            copies = get_copies_for_volume(conn, vol.volume_id)
+            if any(c.location == args.location for c in copies):
+                filtered.append(vol)
+        candidates = filtered
+
+    if not candidates:
+        logger.info("No volumes to verify.")
+        return 0
+
+    logger.info(f"Verifying {len(candidates)} volume(s)...")
+    passed_count = 0
+    failed_count = 0
+
+    for vol in candidates:
+        # Try to find the ISO path
+        row = conn.execute(
+            "SELECT iso_path FROM session_volumes WHERE volume_id = ? "
+            "ORDER BY rowid DESC LIMIT 1",
+            (vol.volume_id,),
+        ).fetchone()
+
+        if not row or not row["iso_path"]:
+            logger.info(f"  {vol.label}: no ISO path — skipped")
+            continue
+
+        iso_path = Path(row["iso_path"])
         if not iso_path.exists():
-            logger.error(f"ISO file not found: {iso_path}")
-            return 1
+            logger.info(f"  {vol.label}: ISO not found ({iso_path}) — skipped")
+            continue
 
         from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
         dvd_runner = SubprocessDVDisasterRunner()
-        logger.info(f"Verifying ISO: {iso_path}")
         ok = dvd_runner.verify_iso(iso_path)
-        logger.info(f"  ECC verify: {'PASS' if ok else 'FAIL'}")
-        if not ok:
-            passed = False
 
-    return 0 if passed else 1
+        event_type = "VERIFY_PASS" if ok else "VERIFY_FAIL"
+        add_event(conn, vol.volume_id, event_type, detail=f"Batch ISO verify: {iso_path}")
+
+        if ok:
+            passed_count += 1
+            if vol.status == "BURNED":
+                update_status(conn, vol.volume_id, "VERIFIED")
+            logger.info(f"  {vol.label}: PASS")
+        else:
+            failed_count += 1
+            logger.info(f"  {vol.label}: FAIL")
+
+    logger.info(f"Verification complete: {passed_count} passed, {failed_count} failed, "
+                f"{len(candidates) - passed_count - failed_count} skipped")
+    return 1 if failed_count > 0 else 0
 
 
 def cmd_meta_build(args: argparse.Namespace) -> int:

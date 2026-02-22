@@ -449,6 +449,60 @@ class TestCmdVerify:
         assert result == 0
         mock_verify.assert_called_once()
 
+    def test_verify_mark_verified(self, tmp_path, capsys):
+        """--mark-verified records VERIFY_PASS event and promotes BURNED."""
+        db = tmp_path / "test.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_MV", "u1", "BD25", 25e9, "Home", "BURNED")
+        conn.close()
+
+        result = main(["--db", str(db), "verify", "VOL_MV",
+                        "--mark-verified", "--detail", "Verified on remote machine"])
+        assert result == 0
+
+        conn = get_connection(db)
+        from lcsas.db.volumes import get_volume_by_label
+        vol = get_volume_by_label(conn, "VOL_MV")
+        assert vol.status == "VERIFIED"
+
+        from lcsas.db.volume_events import get_events_for_volume
+        events = get_events_for_volume(conn, vol.volume_id, "VERIFY_PASS")
+        assert len(events) == 1
+        assert "remote" in events[0].detail.lower()
+        conn.close()
+
+    def test_verify_mark_failed(self, tmp_path, capsys):
+        """--mark-failed records VERIFY_FAIL event."""
+        db = tmp_path / "test.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_MF", "u1", "BD25", 25e9, "Home", "VERIFIED")
+        conn.close()
+
+        result = main(["--db", str(db), "verify", "VOL_MF",
+                        "--mark-failed", "--detail", "Sector errors at offset 0x400"])
+        assert result == 0
+
+        conn = get_connection(db)
+        from lcsas.db.volumes import get_volume_by_label
+        vol = get_volume_by_label(conn, "VOL_MF")
+        from lcsas.db.volume_events import get_events_for_volume
+        events = get_events_for_volume(conn, vol.volume_id, "VERIFY_FAIL")
+        assert len(events) == 1
+        assert "Sector errors" in events[0].detail
+        conn.close()
+
+    def test_verify_no_label_no_all_returns_error(self, tmp_path, capsys):
+        """Omitting volume label without --all returns error."""
+        db = tmp_path / "test.db"
+        conn = get_connection(db)
+        create_all(conn)
+        conn.close()
+
+        result = main(["--db", str(db), "verify"])
+        assert result == 1
+
 
 # ===================================================================
 # cmd_consolidate (mock-based)

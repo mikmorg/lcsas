@@ -446,6 +446,56 @@ class TestBurnSession:
         loc_names = {l.name for l in locs}
         assert "New_Location" in loc_names
 
+    def test_burn_session_verify_pass_records_event(self, env):
+        """When burn+verify passes, a VERIFY_PASS event is recorded."""
+        from lcsas.db.volume_events import get_events_for_volume
+        conn = env["conn"]
+        orch = env["orch"]
+        xorriso = env["xorriso"]
+
+        result = orch.stage(skip_ecc=True)
+
+        # Mock physical burn and verification to succeed
+        xorriso.burn_iso = MagicMock()
+        xorriso.verify_disc = MagicMock(return_value=True)
+
+        receipts = orch.burn_session(result.session_id, "Home_Shelf",
+                                     skip_burn=False)
+
+        for receipt in receipts:
+            assert receipt.verify_passed is True
+            vol = get_volume_by_id(conn, receipt.volume_id)
+            assert vol.status == "VERIFIED"
+
+            events = get_events_for_volume(conn, receipt.volume_id, "VERIFY_PASS")
+            assert len(events) >= 1
+            assert "Post-burn read-back" in events[0].detail
+
+    def test_burn_session_verify_fail_stays_burned(self, env):
+        """When verify fails, volume stays BURNED and event is recorded."""
+        from lcsas.db.volume_events import get_events_for_volume
+        conn = env["conn"]
+        orch = env["orch"]
+        xorriso = env["xorriso"]
+
+        result = orch.stage(skip_ecc=True)
+
+        # Mock physical burn to succeed but verification to fail
+        xorriso.burn_iso = MagicMock()
+        xorriso.verify_disc = MagicMock(return_value=False)
+
+        receipts = orch.burn_session(result.session_id, "Home_Shelf",
+                                     skip_burn=False)
+
+        for receipt in receipts:
+            assert receipt.verify_passed is False
+            vol = get_volume_by_id(conn, receipt.volume_id)
+            assert vol.status == "BURNED"
+
+            events = get_events_for_volume(conn, receipt.volume_id, "VERIFY_FAIL")
+            assert len(events) >= 1
+            assert "failed" in events[0].detail.lower()
+
 
 # =========================================================================
 # Clean Session Tests

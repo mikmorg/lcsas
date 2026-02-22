@@ -19,6 +19,7 @@ from lcsas.config.settings import LCSASConfig
 from lcsas.db.locations import ensure_location
 from lcsas.db.models import Pack, Volume
 from lcsas.db.queries import get_unarchived_packs, get_unarchived_or_missing_at_location
+from lcsas.db.volume_events import add_event
 from lcsas.db.sessions import (
     add_session_volume,
     create_session,
@@ -545,10 +546,33 @@ class BurnOrchestrator:
                 if not skip_burn:
                     self._xorriso.burn_iso(iso_path, device)
 
+                # Post-burn verification  [S1]
+                verify_passed = True
+                if not skip_burn:
+                    verify_ok = self._xorriso.verify_disc(device)
+                    if verify_ok:
+                        add_event(
+                            self._conn, sv.volume_id, "VERIFY_PASS",
+                            location=location, detail="Post-burn read-back",
+                            commit=False,
+                        )
+                    else:
+                        add_event(
+                            self._conn, sv.volume_id, "VERIFY_FAIL",
+                            location=location,
+                            detail="Post-burn read-back failed",
+                            commit=False,
+                        )
+                        verify_passed = False
+
                 if not is_reburn:
-                    # Finalize volume status (atomic: status + close + copy)
-                    update_status(self._conn, sv.volume_id, "VERIFIED", commit=False)
-                    mark_closed(self._conn, sv.volume_id, commit=False)
+                    if verify_passed:
+                        # Finalize volume status (atomic: status + close + copy)
+                        update_status(self._conn, sv.volume_id, "VERIFIED", commit=False)
+                        mark_closed(self._conn, sv.volume_id, commit=False)
+                    else:
+                        # Stay at BURNED — user must investigate / re-burn
+                        update_status(self._conn, sv.volume_id, "BURNED", commit=False)
 
                 # Record copy at location
                 add_volume_copy(
@@ -571,7 +595,7 @@ class BurnOrchestrator:
                     device=device,
                     burn_date=datetime.now(UTC).isoformat(),
                     iso_sha256=sv.iso_sha256 or "",
-                    verify_passed=True,
+                    verify_passed=verify_passed,
                     pack_count=len(pack_ids),
                     pack_ids=pack_ids,
                 )
@@ -579,7 +603,8 @@ class BurnOrchestrator:
 
             except Exception:
                 self._conn.rollback()
-                update_status(self._conn, sv.volume_id, "STAGING")
+                if not is_reburn:
+                    update_status(self._conn, sv.volume_id, "STAGING")
                 raise
 
         # Update session status
