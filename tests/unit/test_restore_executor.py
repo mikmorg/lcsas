@@ -243,3 +243,91 @@ class TestVerifyISO:
         iso = tmp_path / "test.iso"
         iso.write_bytes(b"fake iso")
         assert ex.verify_iso(iso) is False
+
+
+# =========================================================================
+# collect_failures mode
+# =========================================================================
+
+class TestIngestCollectFailures:
+    """Tests for ingest_volume with collect_failures=True."""
+
+    def test_collect_failures_returns_tuple(self, executor, tmp_path):
+        """collect_failures=True returns (int, list) instead of int."""
+        mount = tmp_path / "volume" / "data"
+        mount.mkdir(parents=True)
+        sha = "a" * 64
+        (mount / sha).write_bytes(b"pack_data")
+
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        result = executor.ingest_volume(
+            cache, tmp_path / "volume", [sha],
+            verify=False, collect_failures=True,
+        )
+        assert isinstance(result, tuple)
+        assert result == (1, [])
+
+    def test_corrupt_pack_collected_not_raised(self, executor, tmp_path):
+        """Corrupt pack is added to failed list, not raised."""
+        mount = tmp_path / "volume" / "data"
+        mount.mkdir(parents=True)
+        # Use a sha that won't match the content
+        fake_sha = "deadbeef" * 8  # 64 chars
+        (mount / fake_sha).write_bytes(b"corrupt_data")
+
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        ingested, failed = executor.ingest_volume(
+            cache, tmp_path / "volume", [fake_sha],
+            verify=True, collect_failures=True,
+        )
+        assert ingested == 0
+        assert fake_sha in failed
+        # The corrupt file should have been removed
+        assert not (cache / "data" / fake_sha[:2] / fake_sha).exists()
+
+    def test_corrupt_pack_raises_without_collect(self, executor, tmp_path):
+        """Without collect_failures, corrupt pack raises PackCorruptionError."""
+        from lcsas.restore.executor import PackCorruptionError
+
+        mount = tmp_path / "volume" / "data"
+        mount.mkdir(parents=True)
+        fake_sha = "deadbeef" * 8
+        (mount / fake_sha).write_bytes(b"corrupt_data")
+
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        with pytest.raises(PackCorruptionError):
+            executor.ingest_volume(
+                cache, tmp_path / "volume", [fake_sha],
+                verify=True, collect_failures=False,
+            )
+
+    def test_mixed_good_and_corrupt(self, executor, tmp_path):
+        """Mix of good (verify=False) and corrupt packs."""
+        from hashlib import sha256 as hashlib_sha256
+        mount = tmp_path / "volume" / "data"
+        mount.mkdir(parents=True)
+
+        # Good pack (content matches sha — use verify=False for simplicity)
+        good_sha = "a" * 64
+        (mount / good_sha).write_bytes(b"good_data")
+
+        # Corrupt pack
+        bad_sha = "deadbeef" * 8
+        (mount / bad_sha).write_bytes(b"bad_data")
+
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        # With verify=False, both succeed
+        ingested, failed = executor.ingest_volume(
+            cache, tmp_path / "volume", [good_sha, bad_sha],
+            verify=False, collect_failures=True,
+        )
+        assert ingested == 2
+        assert failed == []

@@ -95,7 +95,8 @@ class RestoreExecutor:
         required_packs: list[str],
         *,
         verify: bool = True,
-    ) -> int:
+        collect_failures: bool = False,
+    ) -> int | tuple[int, list[str]]:
         """Copy needed packs from a mounted volume into the restore cache.
 
         Args:
@@ -103,17 +104,22 @@ class RestoreExecutor:
             volume_mount: Path where the disc is mounted.
             required_packs: SHA-256 hashes of packs to copy from this volume.
             verify: If True (default), verify SHA-256 of copied packs.
+            collect_failures: If True, return failed pack hashes instead of
+                raising PackCorruptionError.  Returns (ingested, failed_list).
 
         Returns:
-            Number of packs successfully ingested.
+            Number of packs successfully ingested (if collect_failures=False),
+            or (ingested_count, failed_sha256_list) if collect_failures=True.
 
         Raises:
-            PackCorruptionError: When a copied pack fails hash verification.
+            PackCorruptionError: When a copied pack fails hash verification
+                and collect_failures is False.
         """
         data_dir = volume_mount / "data"
         cache_data = cache_dir / "data"
         ensure_dir(cache_data)
         ingested = 0
+        failed: list[str] = []
 
         for sha256 in required_packs:
             # Place packs in two-level layout (data/<prefix>/<hash>)
@@ -141,6 +147,13 @@ class RestoreExecutor:
                     actual = sha256_file(dst)
                     if actual != sha256:
                         dst.unlink()
+                        if collect_failures:
+                            logger.warning(
+                                f"Pack {sha256} corrupt on this volume "
+                                f"(expected {sha256}, got {actual})"
+                            )
+                            failed.append(sha256)
+                            continue
                         raise PackCorruptionError(
                             f"Pack {sha256} failed integrity check: "
                             f"expected {sha256}, got {actual}"
@@ -151,6 +164,8 @@ class RestoreExecutor:
 
                 ingested += 1
 
+        if collect_failures:
+            return ingested, failed
         return ingested
 
     def execute_restore(

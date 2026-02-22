@@ -200,6 +200,68 @@ def get_pick_list(
     return result
 
 
+def get_pick_list_with_alternates(
+    conn: sqlite3.Connection,
+    pack_sha256_list: list[str],
+    preferred_location: str = "",
+) -> dict[str, dict]:
+    """Generate a pick list with alternate volumes for each pack.
+
+    Returns a dict keyed by pack SHA-256:
+        {sha256: {"pack": Pack, "primary_label": str,
+                  "primary_volume_id": int, "alternates": [str, ...]}}
+
+    The primary volume is chosen by: preferred location first, then
+    VERIFIED before BURNED, then alphabetical label.  Alternates are
+    the remaining volumes that also hold the pack.
+    """
+    if not pack_sha256_list:
+        return {}
+
+    placeholders = ",".join("?" for _ in pack_sha256_list)
+
+    params: list = list(pack_sha256_list)
+    location_order = ""
+    if preferred_location:
+        location_order = "(CASE WHEN v.location = ? THEN 0 ELSE 1 END),"
+        params.append(preferred_location)
+
+    rows = conn.execute(
+        f"""SELECT p.*, v.volume_id, v.label AS vol_label,
+                   v.status AS vol_status, v.location AS vol_location
+            FROM packs p
+            JOIN volume_packs vp ON p.pack_id = vp.pack_id
+            JOIN volumes v ON vp.volume_id = v.volume_id
+            WHERE p.sha256 IN ({placeholders})
+              AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+            ORDER BY {location_order}
+                     (CASE WHEN v.status = 'VERIFIED' THEN 0
+                           WHEN v.status = 'BURNED' THEN 1
+                           ELSE 2 END),
+                     v.label""",
+        params,
+    ).fetchall()
+
+    # Group by pack sha256: first row = primary, rest = alternates
+    result: dict[str, dict] = {}
+    for row in rows:
+        pack = _row_to_pack(row)
+        vol_label = row["vol_label"]
+        vol_id = row["volume_id"]
+
+        if pack.sha256 not in result:
+            result[pack.sha256] = {
+                "pack": pack,
+                "primary_label": vol_label,
+                "primary_volume_id": vol_id,
+                "alternates": [],
+            }
+        else:
+            result[pack.sha256]["alternates"].append(vol_label)
+
+    return result
+
+
 def get_missing_packs(
     conn: sqlite3.Connection,
     pack_sha256_list: list[str],

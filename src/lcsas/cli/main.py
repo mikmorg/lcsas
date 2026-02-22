@@ -1206,9 +1206,9 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
             password_file=args.password_file,
         )
 
-        # Generate pick list
+        # Generate pick list with alternates for resilient restore
         planner = RestorePlanner(conn)
-        pick_list = planner.generate_pick_list(plan.required_pack_hashes)
+        pick_list = planner.generate_pick_list_v2(plan.required_pack_hashes)
     finally:
         conn.close()
 
@@ -1216,6 +1216,13 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         logger.error(f"{len(pick_list.missing_packs)} required packs not "
                      f"found in any volume.")
         return 1
+
+    # Build alternates lookup: sha256 -> [alt_labels]
+    alternates_map: dict[str, list[str]] = {}
+    for sources in pick_list.volumes.values():
+        for src in sources:
+            if src.alternates:
+                alternates_map[src.pack.sha256] = list(src.alternates)
 
     # Set up cache directory
     cache_dir = args.cache_dir
@@ -1243,25 +1250,48 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         logger.info(f"Restore cache: {cache_dir}")
         logger.info(f"Need packs from {len(pick_list.volumes)} volumes")
 
+        all_failed: list[str] = []  # packs that failed on primary volume
+
         # Ingest packs from volumes
         if args.volume_dir:
             # Non-interactive: all volume data is pre-extracted in one directory
             vol_dir = args.volume_dir
-            for label, packs in pick_list.volumes.items():
-                pack_hashes = [p.sha256 for p in packs]
-                # Try label-named subdirectory first, then the dir itself
+            for label, sources in pick_list.volumes.items():
+                pack_hashes = [s.pack.sha256 for s in sources]
                 vol_path = vol_dir / label
                 if not vol_path.is_dir():
                     vol_path = vol_dir
-                ingested = executor.ingest_volume(
+                ingested, failed = executor.ingest_volume(
                     cache_dir, vol_path, pack_hashes,
                     verify=not args.skip_verify,
+                    collect_failures=True,
                 )
                 logger.info(f"  {label}: ingested {ingested} packs")
+                if failed:
+                    logger.warning(
+                        f"  {label}: {len(failed)} packs failed verification"
+                    )
+                    all_failed.extend(failed)
+
+            # Retry failed packs from alternate volumes
+            if all_failed:
+                logger.info(f"\nRetrying {len(all_failed)} failed packs "
+                            f"from alternate volumes...")
+                still_failed = _retry_from_alternates_batch(
+                    executor, cache_dir, vol_dir,
+                    all_failed, alternates_map,
+                    verify=not args.skip_verify,
+                )
+                if still_failed:
+                    from lcsas.restore.executor import PackCorruptionError
+                    raise PackCorruptionError(
+                        f"{len(still_failed)} packs could not be recovered "
+                        f"from any volume: {still_failed[:5]}"
+                    )
         else:
             # Interactive: prompt user to mount each volume
-            for label, packs in sorted(pick_list.volumes.items()):
-                pack_hashes = [p.sha256 for p in packs]
+            for label, sources in sorted(pick_list.volumes.items()):
+                pack_hashes = [s.pack.sha256 for s in sources]
                 while True:
                     mount_path = input(
                         f"\nMount volume '{label}' and enter mount path "
@@ -1274,12 +1304,32 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     if not vol_path.is_dir():
                         logger.info(f"  '{mount_path}' is not a directory, try again.")
                         continue
-                    ingested = executor.ingest_volume(
+                    ingested, failed = executor.ingest_volume(
                         cache_dir, vol_path, pack_hashes,
                         verify=not args.skip_verify,
+                        collect_failures=True,
                     )
                     logger.info(f"  Ingested {ingested} packs from {label}")
+                    if failed:
+                        logger.warning(
+                            f"  {len(failed)} packs failed verification"
+                        )
+                        all_failed.extend(failed)
                     break
+
+            # Interactive retry for failed packs
+            if all_failed:
+                still_failed = _retry_from_alternates_interactive(
+                    executor, cache_dir,
+                    all_failed, alternates_map,
+                    verify=not args.skip_verify,
+                )
+                if still_failed:
+                    from lcsas.restore.executor import PackCorruptionError
+                    raise PackCorruptionError(
+                        f"{len(still_failed)} packs could not be recovered "
+                        f"from any volume: {still_failed[:5]}"
+                    )
 
         # Execute restore
         target = args.target_path.resolve()
@@ -1298,6 +1348,108 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         shutdown.uninstall()
 
     return 0
+
+
+def _retry_from_alternates_batch(
+    executor,
+    cache_dir: Path,
+    vol_dir: Path,
+    failed_packs: list[str],
+    alternates_map: dict[str, list[str]],
+    *,
+    verify: bool = True,
+) -> list[str]:
+    """Retry failed packs from alternate volumes (batch/non-interactive).
+
+    Returns list of packs that could not be recovered.
+    """
+    remaining = list(failed_packs)
+
+    # Group by alternate volume to minimise disc access
+    for alt_label in _collect_alt_labels(remaining, alternates_map):
+        packs_on_alt = [
+            sha for sha in remaining
+            if alt_label in alternates_map.get(sha, [])
+        ]
+        if not packs_on_alt:
+            continue
+
+        vol_path = vol_dir / alt_label
+        if not vol_path.is_dir():
+            vol_path = vol_dir
+            if not vol_path.is_dir():
+                continue
+
+        ingested, still_bad = executor.ingest_volume(
+            cache_dir, vol_path, packs_on_alt,
+            verify=verify, collect_failures=True,
+        )
+        if ingested:
+            logger.info(f"  Recovered {ingested} packs from {alt_label}")
+        remaining = [sha for sha in remaining if sha in still_bad
+                     or sha not in packs_on_alt]
+
+    return remaining
+
+
+def _retry_from_alternates_interactive(
+    executor,
+    cache_dir: Path,
+    failed_packs: list[str],
+    alternates_map: dict[str, list[str]],
+    *,
+    verify: bool = True,
+) -> list[str]:
+    """Retry failed packs from alternate volumes (interactive).
+
+    Prompts user to mount alternate volumes. Returns unrecoverable packs.
+    """
+    remaining = list(failed_packs)
+
+    for alt_label in _collect_alt_labels(remaining, alternates_map):
+        packs_on_alt = [
+            sha for sha in remaining
+            if alt_label in alternates_map.get(sha, [])
+        ]
+        if not packs_on_alt:
+            continue
+
+        logger.info(f"\n{len(packs_on_alt)} failed packs may be on "
+                     f"alternate volume '{alt_label}'")
+        mount_path = input(
+            f"Mount '{alt_label}' and enter path (or 'skip'): "
+        ).strip()
+        if mount_path.lower() == "skip":
+            continue
+        vol_path = Path(mount_path)
+        if not vol_path.is_dir():
+            logger.info(f"  '{mount_path}' not a directory, skipping")
+            continue
+
+        ingested, still_bad = executor.ingest_volume(
+            cache_dir, vol_path, packs_on_alt,
+            verify=verify, collect_failures=True,
+        )
+        if ingested:
+            logger.info(f"  Recovered {ingested} packs from {alt_label}")
+        remaining = [sha for sha in remaining if sha in still_bad
+                     or sha not in packs_on_alt]
+
+    return remaining
+
+
+def _collect_alt_labels(
+    packs: list[str], alternates_map: dict[str, list[str]]
+) -> list[str]:
+    """Collect unique alternate labels covering the given packs."""
+    seen: set[str] = set()
+    labels: list[str] = []
+    for sha in packs:
+        for alt in alternates_map.get(sha, []):
+            if alt not in seen:
+                seen.add(alt)
+                labels.append(alt)
+    return labels
 
 
 def dispatch(args: argparse.Namespace) -> int:
