@@ -40,8 +40,9 @@ class TestStagingBuilder:
         staged = builder.stage_packs(packs, mirror_data)
 
         assert staged == 2
-        assert (staging_root / "data" / "aaa").exists()
-        assert (staging_root / "data" / "bbb").exists()
+        # Two-level layout on staging: data/<prefix>/<hash>
+        assert (staging_root / "data" / "aa" / "aaa").exists()
+        assert (staging_root / "data" / "bb" / "bbb").exists()
 
     def test_stage_packs_two_level_layout(self, tmp_path):
         # Create mirror with two-level layout

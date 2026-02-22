@@ -127,7 +127,8 @@ class TestStagingEdgeCases:
 
         count = builder.stage_packs([self._make_pack(sha)], mirror_data)
         assert count == 1
-        assert (builder.data_dir / sha).exists()
+        # Two-level layout: data/<prefix>/<hash>
+        assert (builder.data_dir / sha[:2] / sha).exists()
 
     def test_cleanup(self, tmp_path):
         """Cleanup removes entire staging tree."""

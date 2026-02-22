@@ -66,7 +66,14 @@ class StagingBuilder:
             if src is None:
                 continue
 
-            dst = self._data_dir / pack.sha256
+            # Two-level layout: data/<prefix>/<hash>
+            if len(pack.sha256) >= 2:
+                prefix_dir = self._data_dir / pack.sha256[:2]
+                ensure_dir(prefix_dir)
+                dst = prefix_dir / pack.sha256
+            else:
+                dst = self._data_dir / pack.sha256
+
             if not dst.exists():
                 hardlink_or_copy(src, dst)
             staged += 1
@@ -76,18 +83,18 @@ class StagingBuilder:
     def _find_pack_file(self, data_dir: Path, sha256: str) -> Path | None:
         """Locate a pack file in the mirror data directory.
 
-        Checks flat layout first, then two-level hash-prefix layout.
+        Checks two-level hash-prefix layout first, then flat.
         """
-        # Flat: data/abcdef1234...
-        flat = data_dir / sha256
-        if flat.is_file():
-            return flat
-
         # Two-level: data/ab/abcdef1234...
         if len(sha256) >= 2:
             prefixed = data_dir / sha256[:2] / sha256
             if prefixed.is_file():
                 return prefixed
+
+        # Flat: data/abcdef1234...
+        flat = data_dir / sha256
+        if flat.is_file():
+            return flat
 
         return None
 

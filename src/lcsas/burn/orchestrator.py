@@ -693,6 +693,19 @@ class BurnOrchestrator:
 
             if not selected_items:
                 # None of the remaining packs fit — they're all too large
+                usable = media_type.usable_bytes - self._config.metadata_reserve_bytes
+                oversized = [
+                    p for p in remaining_packs if p.size_bytes > usable
+                ]
+                if oversized:
+                    logger.warning(
+                        "%d pack(s) exceed %s usable capacity (%s bytes) "
+                        "and cannot be archived: %s",
+                        len(oversized),
+                        media_type.name,
+                        usable,
+                        ", ".join(p.sha256[:12] for p in oversized[:10]),
+                    )
                 raise ValueError(
                     f"Cannot fit remaining packs into {media_type.name} "
                     f"(usable={media_type.usable_bytes}, "

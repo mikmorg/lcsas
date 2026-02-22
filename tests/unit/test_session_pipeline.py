@@ -738,8 +738,11 @@ class TestISOContentValidation:
                 if original_path is None:
                     continue  # Pack was in a repo we didn't create file for
 
-                # Find extracted pack file
-                extracted_path = extracted_data / pack.sha256
+                # Find extracted pack file (two-level layout)
+                if len(pack.sha256) >= 2:
+                    extracted_path = extracted_data / pack.sha256[:2] / pack.sha256
+                else:
+                    extracted_path = extracted_data / pack.sha256
                 assert extracted_path.exists(), \
                     f"Pack {pack.sha256} missing from ISO extraction"
 
@@ -813,8 +816,14 @@ class TestISOContentValidation:
 
             data_dir = extract_dir / "data"
             if data_dir.is_dir():
-                for f in data_dir.iterdir():
-                    all_extracted_packs.add(f.name)
+                # Two-level layout: data/<prefix>/<hash>
+                for prefix_dir in data_dir.iterdir():
+                    if prefix_dir.is_dir():
+                        for f in prefix_dir.iterdir():
+                            all_extracted_packs.add(f.name)
+                    elif prefix_dir.is_file():
+                        # Flat layout fallback
+                        all_extracted_packs.add(prefix_dir.name)
 
         # Every pack should appear exactly once across all ISOs
         expected_shas = {p.sha256 for p in packs}
