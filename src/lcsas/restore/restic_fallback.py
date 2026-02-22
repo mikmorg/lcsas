@@ -598,13 +598,39 @@ class PurePythonRestorer:
         tree_data = self._read_blob(tree_id)
         tree_doc = json.loads(tree_data)
 
+        # Track hardlink targets: inode → first_path
+        hardlink_map: dict[int, Path] = {}
+
         for node in tree_doc.get("nodes", []):
             name = node["name"]
             node_type = node.get("type", "file")
             node_path = target_dir / name
 
             if node_type == "file":
+                inode = node.get("inode", 0)
+                links = node.get("links", 1)
+
+                # Hardlink deduplication: if inode already restored, link it
+                if inode and links > 1 and inode in hardlink_map:
+                    src = hardlink_map[inode]
+                    try:
+                        node_path.parent.mkdir(parents=True, exist_ok=True)
+                        os.link(src, node_path)
+                        continue
+                    except OSError:
+                        # Cross-device or permission issue — fall through
+                        # to normal restore
+                        _log(
+                            f"Hardlink {node_path} → {src} failed, "
+                            f"copying instead"
+                        )
+
                 self._restore_file(node, node_path)
+
+                # Register as hardlink source for future occurrences
+                if inode and links > 1:
+                    hardlink_map[inode] = node_path
+
             elif node_type == "dir":
                 node_path.mkdir(parents=True, exist_ok=True)
                 if "subtree" in node:
@@ -616,8 +642,10 @@ class PurePythonRestorer:
                 if node_path.is_symlink() or node_path.exists():
                     node_path.unlink()
                 node_path.symlink_to(link_target)
-            # Skip device nodes, fifos, sockets — they're rarely
-            # relevant for archival restoration.
+            else:
+                _log(
+                    f"Skipping unsupported node type {node_type!r}: {name}"
+                )
 
     def _restore_file(self, node: dict[str, Any], path: Path) -> None:
         """Extract a file from its content blobs."""
@@ -632,7 +660,7 @@ class PurePythonRestorer:
         self._apply_metadata(node, path)
 
     def _apply_metadata(self, node: dict[str, Any], path: Path) -> None:
-        """Best-effort metadata restoration (permissions, timestamps)."""
+        """Best-effort metadata restoration (permissions, timestamps, xattrs)."""
         try:
             if "mode" in node and not path.is_symlink():
                 os.chmod(path, node["mode"] & 0o7777)
@@ -649,6 +677,21 @@ class PurePythonRestorer:
                 os.utime(path, (at, mt), follow_symlinks=False)
         except (OSError, ValueError):
             pass
+
+        # Extended attributes (restic stores as list of {name, value})
+        for xa in node.get("extended_attributes", []):
+            try:
+                xa_name = xa.get("name", "")
+                xa_value = base64.b64decode(xa.get("value", ""))
+                if xa_name and hasattr(os, "setxattr"):
+                    os.setxattr(
+                        str(path), xa_name, xa_value,
+                        follow_symlinks=False,
+                    )
+            except OSError:
+                _log(
+                    f"Could not set xattr {xa.get('name')} on {path}"
+                )
 
     # ── Diagnostic / Info ────────────────────────────────────────
 

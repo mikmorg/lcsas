@@ -638,3 +638,389 @@ class TestSymlinkRestore:
         assert (target / "target.txt").read_text() == "Link target content\n"
         assert (target / "link.txt").is_symlink()
         assert os.readlink(str(target / "link.txt")) == "target.txt"
+
+
+# ── Hardlink Deduplication Test ──────────────────────────────────
+
+class TestHardlinkRestore:
+    """Test hardlink deduplication during tree restore."""
+
+    def test_hardlinks_share_inode(self, tmp_path):
+        """Two file nodes with same inode+links>1 become hardlinks."""
+        repo = _build_test_repo(tmp_path)
+
+        mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
+
+        file_content = b"Shared hardlink content\n"
+        file_id = hashlib.sha256(file_content).hexdigest()
+
+        # Root tree: two files with shared inode
+        root_tree = json.dumps({
+            "nodes": [
+                {
+                    "name": "original.txt",
+                    "type": "file",
+                    "mode": 0o644,
+                    "inode": 999999,
+                    "links": 2,
+                    "content": [file_id],
+                },
+                {
+                    "name": "hardlink.txt",
+                    "type": "file",
+                    "mode": 0o644,
+                    "inode": 999999,
+                    "links": 2,
+                    "content": [file_id],
+                },
+            ],
+        }).encode()
+        root_tree_id = hashlib.sha256(root_tree).hexdigest()
+
+        # Build pack
+        pack_data = bytearray()
+        blobs_info = []
+        for content, blob_id, btype in [
+            (file_content, file_id, "data"),
+            (root_tree, root_tree_id, "tree"),
+        ]:
+            enc = _encrypt_with_master(content)
+            offset = len(pack_data)
+            pack_data.extend(enc)
+            blobs_info.append({
+                "id": blob_id, "type": btype,
+                "offset": offset, "length": len(enc),
+            })
+
+        pack_id = hashlib.sha256(bytes(pack_data)).hexdigest()
+        pack_dir = repo / "data" / pack_id[:2]
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        (pack_dir / pack_id).write_bytes(bytes(pack_data))
+
+        # Index + snapshot
+        new_index = json.dumps({"packs": [{"id": pack_id, "blobs": blobs_info}]}).encode()
+        idx_id = hashlib.sha256(new_index).hexdigest()
+        (repo / "index" / idx_id).write_bytes(_encrypt_with_master(new_index))
+
+        snap_doc = json.dumps({
+            "time": "2026-03-01T10:00:00Z",
+            "tree": root_tree_id,
+            "paths": ["/test"],
+            "hostname": "testhost",
+        }).encode()
+        snap_id = hashlib.sha256(snap_doc).hexdigest()
+        (repo / "snapshots" / snap_id).write_bytes(_encrypt_with_master(snap_doc))
+
+        # Restore
+        target = tmp_path / "restored_hardlink"
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer.restore(target=target)
+
+        orig = target / "original.txt"
+        link = target / "hardlink.txt"
+
+        assert orig.read_text() == "Shared hardlink content\n"
+        assert link.read_text() == "Shared hardlink content\n"
+
+        # Both files share the same inode (hardlinked)
+        assert orig.stat().st_ino == link.stat().st_ino
+
+    def test_single_link_no_hardlink(self, tmp_path):
+        """Files with links=1 or no inode are not hardlinked."""
+        repo = _build_test_repo(tmp_path)
+
+        file_content = b"Not a hardlink\n"
+        file_id = hashlib.sha256(file_content).hexdigest()
+
+        root_tree = json.dumps({
+            "nodes": [
+                {
+                    "name": "file_a.txt",
+                    "type": "file",
+                    "mode": 0o644,
+                    "inode": 12345,
+                    "links": 1,
+                    "content": [file_id],
+                },
+                {
+                    "name": "file_b.txt",
+                    "type": "file",
+                    "mode": 0o644,
+                    "inode": 12345,
+                    "links": 1,
+                    "content": [file_id],
+                },
+            ],
+        }).encode()
+        root_tree_id = hashlib.sha256(root_tree).hexdigest()
+
+        pack_data = bytearray()
+        blobs_info = []
+        for content, blob_id, btype in [
+            (file_content, file_id, "data"),
+            (root_tree, root_tree_id, "tree"),
+        ]:
+            enc = _encrypt_with_master(content)
+            offset = len(pack_data)
+            pack_data.extend(enc)
+            blobs_info.append({
+                "id": blob_id, "type": btype,
+                "offset": offset, "length": len(enc),
+            })
+
+        pack_id = hashlib.sha256(bytes(pack_data)).hexdigest()
+        pack_dir = repo / "data" / pack_id[:2]
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        (pack_dir / pack_id).write_bytes(bytes(pack_data))
+
+        new_index = json.dumps({"packs": [{"id": pack_id, "blobs": blobs_info}]}).encode()
+        idx_id = hashlib.sha256(new_index).hexdigest()
+        (repo / "index" / idx_id).write_bytes(_encrypt_with_master(new_index))
+
+        snap_doc = json.dumps({
+            "time": "2026-03-02T10:00:00Z",
+            "tree": root_tree_id,
+            "paths": ["/test"],
+            "hostname": "testhost",
+        }).encode()
+        snap_id = hashlib.sha256(snap_doc).hexdigest()
+        (repo / "snapshots" / snap_id).write_bytes(_encrypt_with_master(snap_doc))
+
+        target = tmp_path / "restored_no_hardlink"
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer.restore(target=target)
+
+        a = target / "file_a.txt"
+        b = target / "file_b.txt"
+        assert a.read_text() == "Not a hardlink\n"
+        assert b.read_text() == "Not a hardlink\n"
+
+        # Different inodes — not hardlinked
+        assert a.stat().st_ino != b.stat().st_ino
+
+
+# ── Unsupported Node Type Test ───────────────────────────────────
+
+class TestUnsupportedNodeType:
+    """Test that unsupported node types are skipped with a warning."""
+
+    def test_device_node_skipped(self, tmp_path, capsys):
+        """Device nodes are skipped gracefully, other files still restored."""
+        repo = _build_test_repo(tmp_path)
+
+        file_content = b"Good file\n"
+        file_id = hashlib.sha256(file_content).hexdigest()
+
+        root_tree = json.dumps({
+            "nodes": [
+                {
+                    "name": "good.txt",
+                    "type": "file",
+                    "mode": 0o644,
+                    "content": [file_id],
+                },
+                {
+                    "name": "mydevice",
+                    "type": "dev",
+                },
+                {
+                    "name": "myfifo",
+                    "type": "fifo",
+                },
+            ],
+        }).encode()
+        root_tree_id = hashlib.sha256(root_tree).hexdigest()
+
+        pack_data = bytearray()
+        blobs_info = []
+        for content, blob_id, btype in [
+            (file_content, file_id, "data"),
+            (root_tree, root_tree_id, "tree"),
+        ]:
+            enc = _encrypt_with_master(content)
+            offset = len(pack_data)
+            pack_data.extend(enc)
+            blobs_info.append({
+                "id": blob_id, "type": btype,
+                "offset": offset, "length": len(enc),
+            })
+
+        pack_id = hashlib.sha256(bytes(pack_data)).hexdigest()
+        pack_dir = repo / "data" / pack_id[:2]
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        (pack_dir / pack_id).write_bytes(bytes(pack_data))
+
+        new_index = json.dumps({"packs": [{"id": pack_id, "blobs": blobs_info}]}).encode()
+        idx_id = hashlib.sha256(new_index).hexdigest()
+        (repo / "index" / idx_id).write_bytes(_encrypt_with_master(new_index))
+
+        snap_doc = json.dumps({
+            "time": "2026-03-03T10:00:00Z",
+            "tree": root_tree_id,
+            "paths": ["/test"],
+            "hostname": "testhost",
+        }).encode()
+        snap_id = hashlib.sha256(snap_doc).hexdigest()
+        (repo / "snapshots" / snap_id).write_bytes(_encrypt_with_master(snap_doc))
+
+        target = tmp_path / "restored_unsupported"
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer.restore(target=target)
+
+        # Good file was restored
+        assert (target / "good.txt").read_text() == "Good file\n"
+        # Unsupported nodes not created
+        assert not (target / "mydevice").exists()
+        assert not (target / "myfifo").exists()
+
+        # Warning printed to stderr
+        captured = capsys.readouterr()
+        assert "Skipping unsupported node type 'dev': mydevice" in captured.err
+        assert "Skipping unsupported node type 'fifo': myfifo" in captured.err
+
+
+# ── Extended Attributes Test ─────────────────────────────────────
+
+class TestXattrRestore:
+    """Test extended attribute restoration."""
+
+    @pytest.mark.skipif(
+        not hasattr(os, "setxattr"),
+        reason="xattr support unavailable on this platform",
+    )
+    def test_xattr_applied(self, tmp_path):
+        """Extended attributes from tree nodes are applied to restored files."""
+        repo = _build_test_repo(tmp_path)
+
+        file_content = b"File with xattrs\n"
+        file_id = hashlib.sha256(file_content).hexdigest()
+
+        xattr_value = b"custom-value-123"
+
+        root_tree = json.dumps({
+            "nodes": [
+                {
+                    "name": "tagged.txt",
+                    "type": "file",
+                    "mode": 0o644,
+                    "content": [file_id],
+                    "extended_attributes": [
+                        {
+                            "name": "user.test_attr",
+                            "value": base64.b64encode(xattr_value).decode(),
+                        },
+                    ],
+                },
+            ],
+        }).encode()
+        root_tree_id = hashlib.sha256(root_tree).hexdigest()
+
+        pack_data = bytearray()
+        blobs_info = []
+        for content, blob_id, btype in [
+            (file_content, file_id, "data"),
+            (root_tree, root_tree_id, "tree"),
+        ]:
+            enc = _encrypt_with_master(content)
+            offset = len(pack_data)
+            pack_data.extend(enc)
+            blobs_info.append({
+                "id": blob_id, "type": btype,
+                "offset": offset, "length": len(enc),
+            })
+
+        pack_id = hashlib.sha256(bytes(pack_data)).hexdigest()
+        pack_dir = repo / "data" / pack_id[:2]
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        (pack_dir / pack_id).write_bytes(bytes(pack_data))
+
+        new_index = json.dumps({"packs": [{"id": pack_id, "blobs": blobs_info}]}).encode()
+        idx_id = hashlib.sha256(new_index).hexdigest()
+        (repo / "index" / idx_id).write_bytes(_encrypt_with_master(new_index))
+
+        snap_doc = json.dumps({
+            "time": "2026-03-04T10:00:00Z",
+            "tree": root_tree_id,
+            "paths": ["/test"],
+            "hostname": "testhost",
+        }).encode()
+        snap_id = hashlib.sha256(snap_doc).hexdigest()
+        (repo / "snapshots" / snap_id).write_bytes(_encrypt_with_master(snap_doc))
+
+        target = tmp_path / "restored_xattr"
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer.restore(target=target)
+
+        tagged = target / "tagged.txt"
+        assert tagged.read_text() == "File with xattrs\n"
+
+        # Verify xattr was set
+        actual = os.getxattr(str(tagged), "user.test_attr")
+        assert actual == xattr_value
+
+    def test_xattr_no_crash_without_support(self, tmp_path, monkeypatch):
+        """xattr code path is graceful when os.setxattr is unavailable."""
+        repo = _build_test_repo(tmp_path)
+
+        file_content = b"No xattr support\n"
+        file_id = hashlib.sha256(file_content).hexdigest()
+
+        root_tree = json.dumps({
+            "nodes": [
+                {
+                    "name": "noattr.txt",
+                    "type": "file",
+                    "mode": 0o644,
+                    "content": [file_id],
+                    "extended_attributes": [
+                        {
+                            "name": "user.missing",
+                            "value": base64.b64encode(b"val").decode(),
+                        },
+                    ],
+                },
+            ],
+        }).encode()
+        root_tree_id = hashlib.sha256(root_tree).hexdigest()
+
+        pack_data = bytearray()
+        blobs_info = []
+        for content, blob_id, btype in [
+            (file_content, file_id, "data"),
+            (root_tree, root_tree_id, "tree"),
+        ]:
+            enc = _encrypt_with_master(content)
+            offset = len(pack_data)
+            pack_data.extend(enc)
+            blobs_info.append({
+                "id": blob_id, "type": btype,
+                "offset": offset, "length": len(enc),
+            })
+
+        pack_id = hashlib.sha256(bytes(pack_data)).hexdigest()
+        pack_dir = repo / "data" / pack_id[:2]
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        (pack_dir / pack_id).write_bytes(bytes(pack_data))
+
+        new_index = json.dumps({"packs": [{"id": pack_id, "blobs": blobs_info}]}).encode()
+        idx_id = hashlib.sha256(new_index).hexdigest()
+        (repo / "index" / idx_id).write_bytes(_encrypt_with_master(new_index))
+
+        snap_doc = json.dumps({
+            "time": "2026-03-05T10:00:00Z",
+            "tree": root_tree_id,
+            "paths": ["/test"],
+            "hostname": "testhost",
+        }).encode()
+        snap_id = hashlib.sha256(snap_doc).hexdigest()
+        (repo / "snapshots" / snap_id).write_bytes(_encrypt_with_master(snap_doc))
+
+        # Remove setxattr to simulate platform without support
+        monkeypatch.delattr(os, "setxattr", raising=False)
+
+        target = tmp_path / "restored_no_xattr"
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer.restore(target=target)
+
+        # File restored successfully despite no xattr support
+        assert (target / "noattr.txt").read_text() == "No xattr support\n"
