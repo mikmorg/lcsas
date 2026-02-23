@@ -1450,6 +1450,28 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                         f"from any volume: {still_failed[:5]}"
                     )
 
+        # ── Post-ingest completeness check ──────────────────────────
+        # Verify every required pack was actually ingested before
+        # running rustic, which would fail with an opaque error.
+        all_required = plan.required_pack_hashes
+        missing = RestoreExecutor.verify_cache_completeness(
+            cache_dir, all_required,
+        )
+        if missing:
+            logger.error(
+                f"\n{len(missing)} of {len(all_required)} required packs "
+                f"missing from cache after ingestion."
+            )
+            for sha in missing[:10]:
+                logger.error(f"  missing: {sha}")
+            if len(missing) > 10:
+                logger.error(f"  ... and {len(missing) - 10} more")
+            logger.error(
+                "\nRestore cannot proceed — mount the missing volumes "
+                "and retry, or check for damaged discs."
+            )
+            return 1
+
         # Execute restore
         target = args.target_path.resolve()
         logger.info(f"\nRestoring snapshot {args.snapshot_id} → {target}")

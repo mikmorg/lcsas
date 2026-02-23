@@ -355,3 +355,34 @@ class TestMetaVolumeBuilder:
         content = path.read_text()
         assert "DISC CARE" in content
         assert "M-DISC" in content
+
+    def test_standalone_restorer_bundled(self):
+        """standalone_restorer.py must be present at the meta-volume root."""
+        sr = self.output / "standalone_restorer.py"
+        assert sr.is_file(), "standalone_restorer.py not bundled on meta-volume"
+        content = sr.read_text()
+        # Should contain the CLI entry point
+        assert "def _cli_main" in content
+        assert "PurePythonRestorer" in content
+        # Should be executable
+        assert os.access(str(sr), os.X_OK)
+
+    def test_restore_script_has_python_fallback(self):
+        """restore.sh should reference the Python fallback path."""
+        content = (self.output / "restore.sh").read_text()
+        assert "USE_PYTHON_FALLBACK" in content, (
+            "restore.sh missing Python fallback flag"
+        )
+        assert "standalone_restorer.py" in content, (
+            "restore.sh missing standalone_restorer.py reference"
+        )
+        assert "PYTHON" in content, (
+            "restore.sh missing Python binary resolution"
+        )
+
+    def test_restore_script_has_pack_count_check(self):
+        """restore.sh should check pack count before restore."""
+        content = (self.output / "restore.sh").read_text()
+        assert "ACTUAL_PACKS" in content, (
+            "restore.sh missing post-ingest pack count check"
+        )

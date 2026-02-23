@@ -330,3 +330,59 @@ class TestIngestCollectFailures:
         )
         assert ingested == 2
         assert failed == []
+
+
+# =========================================================================
+# verify_cache_completeness()
+# =========================================================================
+
+class TestVerifyCacheCompleteness:
+    """Tests for the static verify_cache_completeness method."""
+
+    def test_all_present_returns_empty(self, tmp_path):
+        """Returns empty list when every required pack exists."""
+        cache = tmp_path / "cache"
+        data = cache / "data"
+        sha1 = "a" * 64
+        sha2 = "b" * 64
+        for sha in (sha1, sha2):
+            d = data / sha[:2]
+            d.mkdir(parents=True, exist_ok=True)
+            (d / sha).write_bytes(b"pack")
+
+        missing = RestoreExecutor.verify_cache_completeness(
+            cache, [sha1, sha2],
+        )
+        assert missing == []
+
+    def test_missing_packs_returned(self, tmp_path):
+        """Returns the SHA-256 hashes of missing packs."""
+        cache = tmp_path / "cache"
+        data = cache / "data"
+        present = "a" * 64
+        absent = "b" * 64
+        d = data / present[:2]
+        d.mkdir(parents=True)
+        (d / present).write_bytes(b"pack")
+
+        missing = RestoreExecutor.verify_cache_completeness(
+            cache, [present, absent],
+        )
+        assert missing == [absent]
+
+    def test_empty_required_returns_empty(self, tmp_path):
+        """No required packs → nothing missing."""
+        cache = tmp_path / "cache"
+        (cache / "data").mkdir(parents=True)
+        assert RestoreExecutor.verify_cache_completeness(cache, []) == []
+
+    def test_all_missing(self, tmp_path):
+        """Everything missing when data/ is empty."""
+        cache = tmp_path / "cache"
+        (cache / "data").mkdir(parents=True)
+        sha1 = "a" * 64
+        sha2 = "b" * 64
+        missing = RestoreExecutor.verify_cache_completeness(
+            cache, [sha1, sha2],
+        )
+        assert set(missing) == {sha1, sha2}

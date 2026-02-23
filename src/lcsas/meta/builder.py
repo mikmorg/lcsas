@@ -171,6 +171,21 @@ elif command -v restic &>/dev/null; then
     RUSTIC="$(command -v restic)"
 fi
 
+# ── Resolve Python + standalone restorer (fallback) ─────────────
+PYTHON=""
+STANDALONE=""
+if [[ -x "${TOOLS}/bin/python3" ]]; then
+    PYTHON="${TOOLS}/bin/python3"
+elif command -v python3 &>/dev/null; then
+    PYTHON="$(command -v python3)"
+fi
+
+# Look for standalone_restorer.py shipped on meta-volume, then
+# inside any extracted data disc (it's placed on every disc).
+if [[ -f "$SCRIPT_DIR/standalone_restorer.py" ]]; then
+    STANDALONE="$SCRIPT_DIR/standalone_restorer.py"
+fi
+
 # ── ISO extraction function (cascade) ───────────────────────────
 extract_iso() {
     local iso="$1" dest="$2"
@@ -266,15 +281,27 @@ done
 [[ ! -f "$KEY_FILE" ]] && { echo "ERROR: Key file not found: $KEY_FILE"; exit 1; }
 [[ ! -d "$ISO_DIR" ]]  && { echo "ERROR: ISO directory not found: $ISO_DIR"; exit 1; }
 
-# ── Verify rustic is available ───────────────────────────────────
+# ── Verify at least one restore method is available ─────────────
+USE_PYTHON_FALLBACK=0
 if [[ -z "$RUSTIC" ]]; then
-    echo "ERROR: No rustic (or restic) binary found."
-    echo "       Bundled tools may be incompatible with this system."
-    echo "       Install rustic (https://rustic.cli.rs/) or"
-    echo "       restic (https://restic.net/) and try again."
-    exit 1
+    if [[ -n "$PYTHON" ]] && [[ -n "$STANDALONE" ]]; then
+        echo "  WARNING: No rustic/restic binary found."
+        echo "  Falling back to pure-Python restorer (slower but functional)."
+        echo "  Using: $PYTHON $STANDALONE"
+        USE_PYTHON_FALLBACK=1
+    else
+        echo "ERROR: No rustic (or restic) binary found, and no Python"
+        echo "       fallback available."
+        echo "       Bundled tools may be incompatible with this system."
+        echo "       Install rustic (https://rustic.cli.rs/) or"
+        echo "       restic (https://restic.net/) and try again."
+        echo "       Alternatively, install Python 3.10+ and ensure"
+        echo "       standalone_restorer.py is available."
+        exit 1
+    fi
+else
+    echo "  Using: $RUSTIC"
 fi
-echo "  Using: $RUSTIC"
 
 # ── Create work directory ────────────────────────────────────────
 CLEANUP_WORK=0
@@ -421,33 +448,86 @@ for repo in "${REPOS[@]}"; do
     fi
     echo "    Ingested $PACK_COUNT packs from $ISO_COUNT volumes"
 
-    # ── rustic restore ────────────────────────────────────────
+    # ── Verify all required packs were ingested ───────────────
+    # Count index entries to estimate expected pack count
+    EXPECTED_PACKS=0
+    if [[ -d "$CACHE_DIR/index" ]]; then
+        EXPECTED_PACKS=$(find "$CACHE_DIR/index" -type f | wc -l)
+    fi
+    ACTUAL_PACKS=$(find "$CACHE_DIR/data" -type f 2>/dev/null | wc -l)
+    if [[ $ACTUAL_PACKS -eq 0 ]]; then
+        echo "    ERROR: No packs found in cache — cannot restore $repo"
+        echo "    Check that the data discs are correct for this repository."
+        exit 1
+    fi
+    echo "    Cache has $ACTUAL_PACKS data packs"
+
+    # ── Restore: rustic/restic or Python fallback ─────────────
     REPO_TARGET="$TARGET/$repo"
     mkdir -p "$REPO_TARGET"
 
-    echo "    Running: rustic restore $SNAPSHOT → $REPO_TARGET"
-    # rustic uses positional <destination>; restic uses --target <destination>
-    RUSTIC_BIN_NAME="$(basename "$RUSTIC")"
-    if [[ "$RUSTIC_BIN_NAME" == rustic* ]]; then
-        RESTORE_CMD=("$RUSTIC" restore "$SNAPSHOT" "$REPO_TARGET"
-            -r "$CACHE_DIR"
-            --password-file "$KEY_FILE"
-            --no-cache)
+    if [[ "$USE_PYTHON_FALLBACK" -eq 1 ]]; then
+        # ── Pure-Python restore via standalone_restorer.py ─────
+        # Find standalone_restorer.py — meta-volume copy (already resolved)
+        # or search extracted data discs for a copy
+        SR="$STANDALONE"
+        if [[ -z "$SR" ]]; then
+            for vol_dir_sr in "$EXTRACT_DIR"/*/; do
+                if [[ -f "$vol_dir_sr/standalone_restorer.py" ]]; then
+                    SR="$vol_dir_sr/standalone_restorer.py"
+                    break
+                fi
+            done
+        fi
+        if [[ -z "$SR" ]]; then
+            echo "    ERROR: standalone_restorer.py not found on any disc."
+            exit 1
+        fi
+
+        echo "    Running: python3 standalone_restorer.py → $REPO_TARGET"
+
+        # Set up PYTHONPATH for bundled zstandard support
+        if [[ -d "${TOOLS}/lib/python" ]]; then
+            export PYTHONPATH="${TOOLS}/lib/python:${PYTHONPATH:-}"
+        fi
+        if "$PYTHON" "$SR" \
+                --repo "$CACHE_DIR" \
+                --password-file "$KEY_FILE" \
+                --target "$REPO_TARGET" 2>&1; then
+            echo "    ✓ Restore succeeded (Python fallback)"
+        else
+            echo "    ✗ Restore FAILED for $repo (Python fallback)"
+            echo ""
+            echo "  If the error mentions missing packs, you may need"
+            echo "  additional data discs for this repository."
+            exit 1
+        fi
     else
-        RESTORE_CMD=("$RUSTIC" restore "$SNAPSHOT"
-            -r "$CACHE_DIR"
-            --password-file "$KEY_FILE"
-            --no-cache
-            --target "$REPO_TARGET")
-    fi
-    if "${RESTORE_CMD[@]}" 2>&1; then
-        echo "    ✓ Restore succeeded"
-    else
-        echo "    ✗ Restore FAILED for $repo"
-        echo ""
-        echo "  If the error mentions missing packs, you may need"
-        echo "  additional data discs for this repository."
-        exit 1
+        # ── Native rustic/restic restore (preferred) ──────────
+        echo "    Running: rustic restore $SNAPSHOT → $REPO_TARGET"
+        # rustic uses positional <destination>; restic uses --target <destination>
+        RUSTIC_BIN_NAME="$(basename "$RUSTIC")"
+        if [[ "$RUSTIC_BIN_NAME" == rustic* ]]; then
+            RESTORE_CMD=("$RUSTIC" restore "$SNAPSHOT" "$REPO_TARGET"
+                -r "$CACHE_DIR"
+                --password-file "$KEY_FILE"
+                --no-cache)
+        else
+            RESTORE_CMD=("$RUSTIC" restore "$SNAPSHOT"
+                -r "$CACHE_DIR"
+                --password-file "$KEY_FILE"
+                --no-cache
+                --target "$REPO_TARGET")
+        fi
+        if "${RESTORE_CMD[@]}" 2>&1; then
+            echo "    ✓ Restore succeeded"
+        else
+            echo "    ✗ Restore FAILED for $repo"
+            echo ""
+            echo "  If the error mentions missing packs, you may need"
+            echo "  additional data discs for this repository."
+            exit 1
+        fi
     fi
 done
 
@@ -661,6 +741,7 @@ class MetaVolumeBuilder:
         self._bundle_tools()
         self._bundle_source()
         self._bundle_docs()
+        self._bundle_standalone_restorer()
         self._write_restore_script()
         self._write_readme()
         self._write_readme_txt()
@@ -750,6 +831,20 @@ class MetaVolumeBuilder:
                 shutil.copy2(str(src), str(dst))
 
     # ── Script / doc generation ──────────────────────────────────
+
+    def _bundle_standalone_restorer(self) -> None:
+        """Place standalone_restorer.py at the meta-volume root.
+
+        This provides a pure-Python restore path when no rustic/restic
+        binary is available.  The script is auto-generated from the
+        LCSAS source modules and has zero external dependencies
+        (except optional ``zstandard`` for zstd-compressed repos).
+        """
+        from lcsas.restore.standalone_builder import build_standalone
+
+        restorer_path = self._output / "standalone_restorer.py"
+        restorer_path.write_text(build_standalone())
+        os.chmod(str(restorer_path), 0o755)
 
     def _write_restore_script(self) -> None:
         """Write the bootstrap restore.sh script."""

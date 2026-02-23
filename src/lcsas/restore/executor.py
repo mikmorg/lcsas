@@ -185,3 +185,31 @@ class RestoreExecutor:
             password_file=password_file,
             target_path=target_path,
         )
+
+    @staticmethod
+    def verify_cache_completeness(
+        cache_dir: Path,
+        required_packs: list[str],
+    ) -> list[str]:
+        """Check that every required pack is present in the cache.
+
+        Walks ``cache_dir/data/`` looking for each SHA-256 hash in the
+        two-level layout (``data/<prefix>/<sha256>``).
+
+        Args:
+            cache_dir: The assembled restore cache directory.
+            required_packs: SHA-256 hashes of every pack the restore needs.
+
+        Returns:
+            List of missing SHA-256 hashes (empty if complete).
+        """
+        data_dir = cache_dir / "data"
+        missing: list[str] = []
+        for sha256 in required_packs:
+            if len(sha256) >= 2:
+                path = data_dir / sha256[:2] / sha256
+            else:
+                path = data_dir / sha256
+            if not path.is_file():
+                missing.append(sha256)
+        return missing
