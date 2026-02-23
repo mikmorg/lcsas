@@ -246,6 +246,73 @@ class ToolBundler:
 
         return python_dest
 
+    # ── Python package bundling ──────────────────────────────────
+
+    def bundle_python_package(self, package_name: str) -> Path | None:
+        """Bundle an installed Python package into the meta-volume.
+
+        Copies the package directory (including C extensions and their
+        shared libs) into the bundled Python's ``lib/pythonX.Y/``
+        directory so that it is importable by the bundled interpreter.
+
+        Args:
+            package_name: Top-level package name (e.g. ``"zstandard"``).
+
+        Returns:
+            Path to the bundled package directory, or *None* if the
+            package is not installed on the build system.
+        """
+        # Locate the installed package
+        pkg_dir = self._find_installed_package(package_name)
+        if pkg_dir is None:
+            return None
+
+        # Determine destination within bundled stdlib
+        version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+        dest_parent = self._lib_dir / version
+        dest_parent.mkdir(parents=True, exist_ok=True)
+        dest = dest_parent / pkg_dir.name
+
+        if not dest.exists():
+            shutil.copytree(
+                str(pkg_dir),
+                str(dest),
+                ignore=shutil.ignore_patterns(
+                    "__pycache__",
+                    "*.pyc",
+                    "tests",
+                    "test",
+                ),
+            )
+
+        # Bundle shared libs for any C extensions in the package
+        for so_file in dest.rglob("*.so"):
+            self._copy_shared_libs(so_file)
+
+        return dest
+
+    @staticmethod
+    def _find_installed_package(package_name: str) -> Path | None:
+        """Find the install location of a Python package.
+
+        Returns the directory of the top-level package, or *None* if
+        not installed.
+        """
+        try:
+            mod = __import__(package_name)
+        except ImportError:
+            return None
+
+        # Use the module's __path__ or __file__ to locate the package
+        if hasattr(mod, "__path__") and mod.__path__:
+            pkg_path = Path(mod.__path__[0])
+            if pkg_path.is_dir():
+                return pkg_path
+        elif hasattr(mod, "__file__") and mod.__file__:
+            return Path(mod.__file__).parent
+
+        return None
+
     # ── Internals ────────────────────────────────────────────────
 
     def _copy_shared_libs(self, binary: Path) -> None:

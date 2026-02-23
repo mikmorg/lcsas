@@ -13,6 +13,7 @@ from pathlib import Path
 
 from lcsas.config.settings import LCSASConfig
 from lcsas.db.models import Pack, Volume
+from lcsas.restore.standalone_builder import build_standalone
 from lcsas.utils.fs import copy_file, copy_tree, ensure_dir
 
 # Repository subdirectories that constitute "hot" metadata
@@ -96,6 +97,18 @@ class HolographicInjector:
         with open(info_path, "w") as f:
             json.dump(info, f, indent=2)
 
+    def write_standalone_restorer(self) -> None:
+        """Write a self-contained pure-Python restorer to the staging root.
+
+        This file is generated from ``_aes_pure.py`` and
+        ``restic_fallback.py`` and has zero dependencies on the
+        ``lcsas`` package.  It provides a last-resort restore path
+        that works with nothing but Python 3.10+ stdlib.
+        """
+        text = build_standalone()
+        path = self._root / "standalone_restorer.py"
+        path.write_text(text)
+
     def write_restore_instructions(self) -> None:
         """Write a human-readable RESTORE_INSTRUCTIONS.txt to the staging root.
 
@@ -134,6 +147,21 @@ If you have the LCSAS meta-volume disc:
     ./restore.sh --key /path/to/keyfile \\
                  --isos /path/to/iso-directory \\
                  --target /path/to/output
+
+HOW TO RESTORE (pure Python — no native binaries needed)
+---------------------------------------------------------
+
+If no rustic/restic binary works (wrong architecture, missing libs):
+
+  1. Extract ISOs as described below.
+  2. Assemble a cache directory (copy metadata + packs — see manual steps).
+  3. Run the standalone restorer included on this disc:
+
+       python3 standalone_restorer.py --repo /tmp/cache \\
+           --password-file /path/to/keyfile --target /path/to/output
+
+  This script requires only Python 3.10+ standard library.
+  For zstd-compressed repositories, also install: pip install zstandard
 
 HOW TO RESTORE (manual)
 ------------------------
@@ -174,6 +202,7 @@ DISC CONTENTS
   KEY_INFO.txt     Which encryption key(s) are needed for each repository
   CONFIG_SUMMARY.txt  Archive configuration snapshot
   DISC_CARE.txt    Storage and handling guidance for optical media
+  standalone_restorer.py  Pure-Python restore script (no binaries needed)
   RESTORE_INSTRUCTIONS.txt  This file
 
 For the encryption/pack file format specification, see

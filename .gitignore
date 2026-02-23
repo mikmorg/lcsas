@@ -33,6 +33,8 @@ coverage.xml
 *.ecc
 *.db
 !tests/fixtures/*.db
+lcsas-test/
+!tests/fixtures/*.db
 
 # OS
 .DS_Store

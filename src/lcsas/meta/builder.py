@@ -675,7 +675,8 @@ class MetaVolumeBuilder:
         """Bundle rustic, xorriso, and Python with shared libs.
 
         Also bundles optional tools (dvdisaster) if available on PATH,
-        and a statically-linked rustic binary if provided.
+        a statically-linked rustic binary if provided, and the
+        ``zstandard`` Python package for zstd-compressed repo support.
         """
         tools_dir = self._output / "tools"
         bundler = ToolBundler(tools_dir)
@@ -689,6 +690,10 @@ class MetaVolumeBuilder:
                 bundler.bundle_binary(tool)
 
         bundler.bundle_python()
+
+        # Bundle zstandard for pure-Python fallback restore of
+        # zstd-compressed repos (rustic v2 default).
+        bundler.bundle_python_package("zstandard")
 
         # Bundle static rustic binary (glibc-independent fallback)
         if self._static_rustic_path is not None:

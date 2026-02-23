@@ -326,6 +326,7 @@ class BurnOrchestrator:
         vol = get_volume_by_id(self._conn, volume.volume_id)
         injector.write_volume_info(vol, packs=selected_packs)
         injector.write_restore_instructions()
+        injector.write_standalone_restorer()
         injector.write_start_here(self._config)
         injector.write_key_info(self._config)
         injector.write_config_summary(self._config)
