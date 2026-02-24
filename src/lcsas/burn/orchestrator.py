@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -445,7 +446,21 @@ class BurnOrchestrator:
                 iso_paths=[],
             )
 
-        # 3. Create session
+        # 3. Disk space pre-flight check
+        total_data_bytes = sum(b for _, b in volume_plans)
+        # Allow ~2x headroom for ISOs + ECC overhead
+        required_bytes = total_data_bytes * 2
+        staging_usage = shutil.disk_usage(self._config.staging_path)
+        if staging_usage.free < required_bytes:
+            avail_gb = staging_usage.free / 1e9
+            need_gb = required_bytes / 1e9
+            raise OSError(
+                f"Insufficient disk space for staging: "
+                f"{avail_gb:.1f} GB available, ~{need_gb:.1f} GB needed "
+                f"(at {self._config.staging_path})"
+            )
+
+        # 4. Create session
         session_id = generate_session_id()
         session_dir = self._config.staging_path / session_id.replace(":", "-")
         ensure_dir(session_dir)
@@ -457,7 +472,7 @@ class BurnOrchestrator:
             session_id=session_id,
         )
 
-        # 4. Build staging dirs, create ISOs, apply ECC for each volume
+        # 5. Build staging dirs, create ISOs, apply ECC for each volume
         manifests: list[BurnManifest] = []
         iso_paths: list[Path] = []
 
@@ -620,6 +635,9 @@ class BurnOrchestrator:
                 self._conn.rollback()
                 if not is_reburn:
                     update_status(self._conn, sv.volume_id, "STAGING")
+                # If at least one volume was burned, mark session PARTIAL
+                if receipts:
+                    update_session_status(self._conn, session_id, "PARTIAL")
                 raise
 
         # Update session status

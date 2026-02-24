@@ -202,7 +202,7 @@ def check_deprecation_safe(
     """Return pack SHA-256s that would become unreplicated if this volume is deprecated.
 
     A pack is "at risk" if it exists on this volume but on NO other volume
-    with an ACTIVE status (BURNED, VERIFIED, or CLOSED).
+    with an ACTIVE status (BURNED or VERIFIED).
     """
     rows = conn.execute(
         """SELECT p.sha256
@@ -215,7 +215,7 @@ def check_deprecation_safe(
                  JOIN volumes v2 ON v2.volume_id = vp2.volume_id
                  WHERE vp2.pack_id = vp.pack_id
                    AND vp2.volume_id != ?
-                   AND v2.status IN ('BURNED', 'VERIFIED', 'CLOSED')
+                   AND v2.status IN ('BURNED', 'VERIFIED')
              )""",
         (volume_id, volume_id),
     ).fetchall()

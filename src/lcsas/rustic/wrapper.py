@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from pathlib import Path
 from typing import Protocol
 
 from lcsas.rustic.types import BackupResult, PruneResult, RestorePlan, SnapshotInfo
+
+_logger = logging.getLogger(__name__)
 
 
 class RusticRunner(Protocol):
@@ -81,19 +84,41 @@ class SubprocessRusticRunner:
         password_file: Path,
         check: bool = True,
     ) -> subprocess.CompletedProcess[str]:
+        from lcsas.log import mask_password_path
+
         cmd = [
             self._binary,
             "-r", str(repo_path),
             "--password-file", str(password_file),
             *args,
         ]
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=check,
-            env=self._env(),
-        )
+        try:
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=check,
+                env=self._env(),
+            )
+        except subprocess.CalledProcessError as exc:
+            self._log_subprocess_error(exc)
+            # Re-create with password path masked so it doesn't leak
+            # into higher-level log messages / tracebacks.
+            masked_cmd = [
+                mask_password_path(c) if c == str(password_file) else c
+                for c in exc.cmd
+            ]
+            raise subprocess.CalledProcessError(
+                exc.returncode, masked_cmd,
+                output=exc.output, stderr=exc.stderr,
+            ) from exc
+
+    @staticmethod
+    def _log_subprocess_error(exc: subprocess.CalledProcessError) -> None:
+        """Log stderr from a failed subprocess call."""
+        if exc.stderr:
+            for line in exc.stderr.strip().splitlines():
+                _logger.error("  rustic: %s", line)
 
     def init_repo(
         self,

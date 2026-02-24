@@ -5,38 +5,8 @@ from __future__ import annotations
 import sqlite3
 
 from lcsas.db.models import Pack, Snapshot, Volume
-
-
-def _row_to_pack(row: sqlite3.Row) -> Pack:
-    return Pack(
-        pack_id=row["pack_id"],
-        sha256=row["sha256"],
-        size_bytes=row["size_bytes"],
-        repo_id=row["repo_id"],
-        is_pruned=bool(row["is_pruned"]),
-        created_at=row["created_at"],
-    )
-
-
-def _row_to_volume(row: sqlite3.Row) -> Volume:
-    # verified_at may be absent on catalogs from schema v2
-    try:
-        verified_at = row["verified_at"]
-    except (IndexError, KeyError):
-        verified_at = None
-    return Volume(
-        volume_id=row["volume_id"],
-        label=row["label"],
-        uuid=row["uuid"],
-        media_type=row["media_type"],
-        capacity_bytes=row["capacity_bytes"],
-        used_bytes=row["used_bytes"],
-        location=row["location"],
-        status=row["status"],
-        created_at=row["created_at"],
-        closed_at=row["closed_at"],
-        verified_at=verified_at,
-    )
+from lcsas.db.packs import _row_to_pack
+from lcsas.db.volumes import _row_to_volume
 
 
 def get_unarchived_packs(

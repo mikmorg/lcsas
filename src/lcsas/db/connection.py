@@ -13,9 +13,14 @@ def get_connection(db_path: Path | str) -> sqlite3.Connection:
     """Open a connection to the archive catalog database.
 
     Enables WAL mode, foreign keys, busy_timeout, and uses Row factory
-    for dict-like access to query results.
+    for dict-like access to query results.  Sets the file to owner-only
+    permissions (0600) on first creation.
     """
+    db = Path(db_path)
+    is_new = not db.exists()
     conn = sqlite3.connect(str(db_path))
+    if is_new and db.exists():
+        db.chmod(0o600)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")

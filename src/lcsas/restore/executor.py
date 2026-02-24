@@ -121,7 +121,11 @@ class RestoreExecutor:
         ingested = 0
         failed: list[str] = []
 
-        for sha256 in required_packs:
+        for i, sha256 in enumerate(required_packs, 1):
+            if i % 50 == 0 or i == len(required_packs):
+                logger.info(
+                    "Ingesting packs: %d/%d", i, len(required_packs),
+                )
             # Place packs in two-level layout (data/<prefix>/<hash>)
             # which rustic/restic 0.14+ expects for local repositories.
             if len(sha256) >= 2:

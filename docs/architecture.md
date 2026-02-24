@@ -573,7 +573,7 @@ lcsas consolidate   VOL_IDS... --target-media TYPE Plan/execute consolidation
                     [--execute]                     Stage packs & deprecate sources
 lcsas location      NAME [--description DESC]      Register a storage location
 lcsas verify        [--volume LABEL]               Verify volume integrity
-lcsas catalog import SOURCE_PATH                   Import catalog from disc
+lcsas catalog import-receipts RECEIPT_FILES...     Import burn receipts
 lcsas db export     [--output FILE]                Export catalog as JSON
 ```
 

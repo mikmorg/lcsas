@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from pathlib import Path
 from typing import Protocol
+
+_logger = logging.getLogger(__name__)
 
 
 class XorrisoRunner(Protocol):
@@ -73,6 +76,13 @@ class SubprocessXorrisoRunner:
         try:
             subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
             os.rename(tmp_iso, output_iso)
+        except subprocess.CalledProcessError as exc:
+            if exc.stderr:
+                for line in exc.stderr.strip().splitlines():
+                    _logger.error("  xorriso: %s", line)
+            if tmp_iso.exists():
+                tmp_iso.unlink()
+            raise
         except Exception:
             if tmp_iso.exists():
                 tmp_iso.unlink()
@@ -94,7 +104,13 @@ class SubprocessXorrisoRunner:
             "fs=64m",
             str(iso_path),
         ]
-        subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
+        except subprocess.CalledProcessError as exc:
+            if exc.stderr:
+                for line in exc.stderr.strip().splitlines():
+                    _logger.error("  xorriso: %s", line)
+            raise
 
     def verify_disc(
         self,

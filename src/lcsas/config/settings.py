@@ -168,7 +168,7 @@ def load_config(config_path: Path) -> LCSASConfig:
         repos[repo_name] = RepositoryConfig(
             name=repo_name,
             mirror_path=resolve(repo_cfg["mirror_path"]),
-            password_file=Path(pw_file) if pw_file else None,
+            password_file=resolve(pw_file) if pw_file else None,
             encryption_key_id=repo_cfg.get("encryption_key_id", ""),
         )
 

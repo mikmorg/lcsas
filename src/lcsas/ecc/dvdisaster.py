@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from pathlib import Path
 from typing import Protocol
+
+_logger = logging.getLogger(__name__)
 
 
 class DVDisasterRunner(Protocol):
@@ -61,7 +64,13 @@ class SubprocessDVDisasterRunner:
             "-n", str(redundancy_pct),
             "-c",
         ]
-        subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
+        except subprocess.CalledProcessError as exc:
+            if exc.stderr:
+                for line in exc.stderr.strip().splitlines():
+                    _logger.error("  dvdisaster: %s", line)
+            raise
 
     def verify_iso(
         self,
