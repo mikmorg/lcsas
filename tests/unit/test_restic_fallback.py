@@ -521,6 +521,92 @@ class TestPurePythonRestorer:
             PurePythonRestorer(repo)
 
 
+# ── Permission Restoration Test ──────────────────────────────────
+
+class TestPermissionRestore:
+    """Test that file and directory permissions are correctly restored."""
+
+    def test_executable_permission_restored(self, tmp_path):
+        """A file with mode 0o755 should be restored with that permission."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
+        _make_key_file(mk, PASSWORD, repo)
+
+        # File with 0o755 (executable)
+        script_content = b"#!/bin/bash\necho hello\n"
+        script_id = hashlib.sha256(script_content).hexdigest()
+
+        root_tree = json.dumps({
+            "nodes": [{
+                "name": "run.sh",
+                "type": "file",
+                "mode": 0o755,
+                "mtime": "2026-01-01T00:00:00.000000000Z",
+                "atime": "2026-01-01T00:00:00.000000000Z",
+                "ctime": "2026-01-01T00:00:00.000000000Z",
+                "uid": 1000, "gid": 1000,
+                "size": len(script_content),
+                "content": [script_id],
+            }],
+        }).encode()
+        root_tree_id = hashlib.sha256(root_tree).hexdigest()
+
+        blobs_info: list[dict] = []
+        pack_data = bytearray()
+        for content, blob_id, btype in [
+            (script_content, script_id, "data"),
+            (root_tree, root_tree_id, "tree"),
+        ]:
+            enc = _encrypt_with_master(content)
+            blobs_info.append({
+                "id": blob_id, "type": btype,
+                "offset": len(pack_data), "length": len(enc),
+            })
+            pack_data.extend(enc)
+
+        pack_id = hashlib.sha256(bytes(pack_data)).hexdigest()
+        data_dir = repo / "data" / pack_id[:2]
+        data_dir.mkdir(parents=True)
+        (data_dir / pack_id).write_bytes(bytes(pack_data))
+
+        idx_doc = json.dumps({"packs": [{"id": pack_id, "blobs": blobs_info}]}).encode()
+        idx_dir = repo / "index"
+        idx_dir.mkdir()
+        idx_id = hashlib.sha256(idx_doc).hexdigest()
+        (idx_dir / idx_id).write_bytes(_encrypt_with_master(idx_doc))
+
+        snap_doc = json.dumps({
+            "time": "2026-01-01T00:00:00.000000000Z",
+            "tree": root_tree_id,
+            "paths": ["/test"],
+            "hostname": "testhost",
+            "username": "test",
+        }).encode()
+        snap_dir = repo / "snapshots"
+        snap_dir.mkdir()
+        snap_id = hashlib.sha256(snap_doc).hexdigest()
+        (snap_dir / snap_id).write_bytes(_encrypt_with_master(snap_doc))
+
+        config_doc = json.dumps({"version": 2, "id": "perm-test"}).encode()
+        (repo / "config").write_bytes(_encrypt_with_master(config_doc))
+
+        # Restore
+        target = tmp_path / "restored"
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer.restore(target=target)
+
+        run_sh = target / "run.sh"
+        assert run_sh.is_file()
+        assert run_sh.read_bytes() == script_content
+        mode = run_sh.stat().st_mode & 0o7777
+        # Must have at least owner-execute bit set
+        assert mode & 0o100, f"Expected executable mode, got {oct(mode)}"
+        # Full mode check (owner bits match; group/other depend on umask)
+        assert mode & 0o700 == 0o755 & 0o700, f"Owner bits wrong: {oct(mode)}"
+
+
 # ── Flat Layout Test ─────────────────────────────────────────────
 
 class TestFlatLayout:

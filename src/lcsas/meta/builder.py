@@ -314,6 +314,15 @@ fi
 EXTRACT_DIR="$WORK_DIR/extracted"
 mkdir -p "$EXTRACT_DIR" "$TARGET"
 
+# ── Trap handler — clean up temp directory on exit/interrupt ─────
+_cleanup() {
+    if [[ "$CLEANUP_WORK" -eq 1 ]] && [[ -n "$WORK_DIR" ]] && [[ -d "$WORK_DIR" ]]; then
+        chmod -R u+w "$WORK_DIR" 2>/dev/null || true
+        rm -rf "$WORK_DIR"
+    fi
+}
+trap _cleanup EXIT
+
 echo "═══════════════════════════════════════════════════"
 echo "  LCSAS Disc-Only Restore"
 echo "═══════════════════════════════════════════════════"
@@ -537,11 +546,7 @@ echo "  Restore complete!"
 echo "  Output directory: $TARGET"
 echo "═══════════════════════════════════════════════════"
 
-# ── Cleanup ──────────────────────────────────────────────────────
-if [[ "$CLEANUP_WORK" -eq 1 ]]; then
-    chmod -R u+w "$WORK_DIR" 2>/dev/null || true
-    rm -rf "$WORK_DIR"
-fi
+# ── Cleanup is handled by the EXIT trap (see _cleanup above) ────
 '''
 
 
@@ -592,7 +597,8 @@ sudo mount -o loop meta.iso /mnt/meta
 
 The script automatically finds the best available tools:
 - **ISO extraction:** tries kernel mount, then 7z, then bundled xorriso
-- **Decryption:** tries bundled rustic, then rustic-static, then system rustic/restic
+- **Decryption:** tries bundled rustic, then rustic-static, then system rustic/restic,
+  then pure-Python fallback (standalone_restorer.py)
 
 ### 3. Verify
 
@@ -647,6 +653,20 @@ export PYTHONPATH="$(pwd)/lcsas/src"
 5. **Run in a virtual machine** — x86_64 Linux can be emulated on any
    platform using QEMU, VirtualBox, or similar.  Install a basic Linux
    distribution (e.g. Ubuntu) in the VM and use these tools there.
+
+## Notes
+
+- **Pure-Python fallback:** If no rustic/restic binary works on your system,
+  `restore.sh` will automatically fall back to `standalone_restorer.py` which
+  requires only Python 3.10+ (no compiled extensions).  This is slower (~1 MB/s)
+  but functional.  For zstd-compressed repositories (rustic v2 default), the
+  `zstandard` Python package is bundled in `tools/lib/python/`.  The fallback
+  requires ~2 GB of RAM for large repositories.
+
+- **Re-running after failure:** If a restore is interrupted (power loss, Ctrl+C,
+  disk full), simply re-run the restore command.  Temporary files are cleaned up
+  automatically.  If using `--work-dir`, delete that directory first to ensure a
+  clean state.  Do **not** rely on a partially-restored target directory.
 
 ## What Is NOT on This Volume
 

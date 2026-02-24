@@ -174,6 +174,19 @@ class TestIngestVolume:
         count = executor.ingest_volume(cache, mount, [shas[0], shas[2]], verify=False)
         assert count == 1  # sha1 found, sha3 missing
 
+    def test_duplicate_required_packs(self, executor, tmp_path):
+        """Duplicate SHA-256 entries should not double-count ingested packs."""
+        mount, shas = self._setup_volume(tmp_path, layout="flat")
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        # Pass sha1 twice
+        count = executor.ingest_volume(
+            cache, mount, [shas[0], shas[0]], verify=False,
+        )
+        # First copy ingested; second skipped (already exists)
+        assert count == 1
+
 
 # =========================================================================
 # execute_restore()
@@ -386,3 +399,27 @@ class TestVerifyCacheCompleteness:
             cache, [sha1, sha2],
         )
         assert set(missing) == {sha1, sha2}
+
+    def test_no_data_dir(self, tmp_path):
+        """All packs missing when data/ directory doesn't exist at all."""
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        # Deliberately do NOT create cache/data/
+        sha = "a" * 64
+        missing = RestoreExecutor.verify_cache_completeness(cache, [sha])
+        assert missing == [sha]
+
+    def test_duplicate_required_packs_handled(self, tmp_path):
+        """Duplicate SHA-256 entries don't cause errors."""
+        cache = tmp_path / "cache"
+        data = cache / "data"
+        sha = "a" * 64
+        d = data / sha[:2]
+        d.mkdir(parents=True)
+        (d / sha).write_bytes(b"pack")
+
+        # Pass the same hash twice
+        missing = RestoreExecutor.verify_cache_completeness(
+            cache, [sha, sha],
+        )
+        assert missing == []
