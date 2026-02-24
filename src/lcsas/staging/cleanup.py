@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 
 from lcsas.config.settings import LCSASConfig
 from lcsas.utils.fs import safe_remove_tree
+
+# Session directories use iso-timestamp with colons→dashes + UUID suffix,
+# e.g. 2026-02-23T10-30-00.123456+00-00-a1b2c3d4
+_SESSION_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}")
 
 
 def detect_orphaned_staging(
@@ -31,7 +36,12 @@ def detect_orphaned_staging(
 
     orphans: list[Path] = []
     for child in sorted(staging_root.iterdir()):
-        if child.is_dir() and child.resolve() not in active_dirs:
+        if not child.is_dir():
+            continue
+        # Only flag directories matching LCSAS session naming convention
+        if not _SESSION_DIR_RE.match(child.name):
+            continue
+        if child.resolve() not in active_dirs:
             orphans.append(child)
 
     return orphans

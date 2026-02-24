@@ -664,8 +664,8 @@ class PurePythonRestorer:
         try:
             if "mode" in node and not path.is_symlink():
                 os.chmod(path, node["mode"] & 0o7777)
-        except OSError:
-            pass
+        except OSError as exc:
+            _log(f"Could not set permissions on {path}: {exc}")
 
         try:
             mtime = node.get("mtime")
@@ -675,8 +675,8 @@ class PurePythonRestorer:
                 mt = _parse_timestamp(mtime)
                 at = _parse_timestamp(atime) if atime else mt
                 os.utime(path, (at, mt), follow_symlinks=False)
-        except (OSError, ValueError):
-            pass
+        except (OSError, ValueError) as exc:
+            _log(f"Could not set timestamps on {path}: {exc}")
 
         # Extended attributes (restic stores as list of {name, value})
         for xa in node.get("extended_attributes", []):

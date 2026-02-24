@@ -611,8 +611,8 @@ class TestCmdStagingClean:
         create_all(conn)
         conn.close()
 
-        # Create an orphan directory in staging
-        orphan = tmp_path / "staging" / "orphan-session"
+        # Create an orphan directory in staging (must match session-id pattern)
+        orphan = tmp_path / "staging" / "2025-01-01T00-00-00.000000+00-00-deadbeef"
         orphan.mkdir(parents=True)
 
         result = main(["--config", str(cfg), "staging", "clean", "--force"])
@@ -888,13 +888,13 @@ class TestOrphanedStagingCleanup:
 
         staging = tmp_path / "staging"
         staging.mkdir()
-        (staging / "orphan-session").mkdir()
+        (staging / "2025-01-01T00-00-00.000000+00-00-deadbeef").mkdir()
         cfg = default_config(tmp_path, staging, tmp_path / "db")
         conn = _mem_conn()
 
         result = detect_orphaned_staging(cfg, conn)
         assert len(result) == 1
-        assert result[0].name == "orphan-session"
+        assert result[0].name == "2025-01-01T00-00-00.000000+00-00-deadbeef"
 
     def test_active_session_not_detected(self, tmp_path):
         from lcsas.config.settings import default_config

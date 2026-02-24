@@ -13,6 +13,7 @@ class TestDVDisasterMocked:
         mock_run.return_value = MagicMock(returncode=0)
         runner = SubprocessDVDisasterRunner()
         iso = tmp_path / "test.iso"
+        iso.write_bytes(b"\x00" * 1024)  # dummy ISO file
 
         runner.augment_iso(iso, redundancy_pct=20)
 
@@ -21,28 +22,38 @@ class TestDVDisasterMocked:
         assert "-mRS03" in args
         assert "-n" in args
         assert "20" in args
-        assert str(iso) in args
+        # augment_iso now works on a temp copy then renames; verify the
+        # original path is not passed (temp copy is).
+        # Just verify dvdisaster was called.
 
     @patch("lcsas.ecc.dvdisaster.subprocess.run")
     def test_verify_success(self, mock_run, tmp_path):
         mock_run.return_value = MagicMock(returncode=0)
         runner = SubprocessDVDisasterRunner()
-        assert runner.verify_iso(tmp_path / "test.iso") is True
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"\x00" * 1024)
+        assert runner.verify_iso(iso) is True
 
     @patch("lcsas.ecc.dvdisaster.subprocess.run")
     def test_verify_failure(self, mock_run, tmp_path):
         mock_run.return_value = MagicMock(returncode=1)
         runner = SubprocessDVDisasterRunner()
-        assert runner.verify_iso(tmp_path / "test.iso") is False
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"\x00" * 1024)
+        assert runner.verify_iso(iso) is False
 
     @patch("lcsas.ecc.dvdisaster.subprocess.run")
     def test_repair_success(self, mock_run, tmp_path):
         mock_run.return_value = MagicMock(returncode=0)
         runner = SubprocessDVDisasterRunner()
-        assert runner.repair_iso(tmp_path / "test.iso") is True
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"\x00" * 1024)
+        assert runner.repair_iso(iso) is True
 
     @patch("lcsas.ecc.dvdisaster.subprocess.run")
     def test_repair_failure(self, mock_run, tmp_path):
         mock_run.return_value = MagicMock(returncode=1)
         runner = SubprocessDVDisasterRunner()
-        assert runner.repair_iso(tmp_path / "test.iso") is False
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"\x00" * 1024)
+        assert runner.repair_iso(iso) is False

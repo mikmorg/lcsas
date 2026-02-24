@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from lcsas.db.models import Pack
 from lcsas.utils.fs import ensure_dir, hardlink_or_copy, safe_remove_tree
+
+_logger = logging.getLogger(__name__)
 
 
 class StagingBuilder:
@@ -60,10 +63,12 @@ class StagingBuilder:
         """
         ensure_dir(self._data_dir)
         staged = 0
+        missing: list[str] = []
 
         for pack in packs:
             src = self._find_pack_file(mirror_data_dir, pack.sha256)
             if src is None:
+                missing.append(pack.sha256[:12])
                 continue
 
             # Two-level layout: data/<prefix>/<hash>
@@ -77,6 +82,13 @@ class StagingBuilder:
             if not dst.exists():
                 hardlink_or_copy(src, dst)
             staged += 1
+
+        if missing:
+            _logger.warning(
+                "stage_packs: %d pack(s) not found in %s: %s",
+                len(missing), mirror_data_dir,
+                ", ".join(missing[:5]) + ("..." if len(missing) > 5 else ""),
+            )
 
         return staged
 

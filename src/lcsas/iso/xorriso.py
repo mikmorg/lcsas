@@ -57,6 +57,8 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
         the final path on success.  If the subprocess fails the partial
         temp file is removed.
         """
+        if not source_dir.is_dir():
+            raise FileNotFoundError(f"Source directory not found: {source_dir}")
         tmp_iso = output_iso.with_suffix(".iso.tmp")
         cmd = [
             self._binary,

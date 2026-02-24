@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 
 from lcsas.db.models import Pack
 from lcsas.db.packs import bulk_register
 from lcsas.db.queries import get_total_unarchived_bytes, get_unarchived_packs
+
+_logger = logging.getLogger(__name__)
 
 
 class DeltaAnalyzer:
@@ -84,6 +87,10 @@ class DeltaAnalyzer:
         """
         if not self._scanner_result:
             # No scanner data — cannot detect pruned packs
+            _logger.warning(
+                "Mirror scan returned no packs — skipping prune detection "
+                "(is the mirror path correct?)"
+            )
             return []
 
         from lcsas.db.packs import list_packs

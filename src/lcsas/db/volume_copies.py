@@ -46,13 +46,21 @@ def add_volume_copy(
     media_serial: str = "",
     commit: bool = True,
 ) -> VolumeCopy:
-    """Record a physical copy of a volume at a location."""
+    """Record a physical copy of a volume at a location.
+
+    If a copy already exists at this location (re-burn), the burn_date
+    and notes are updated in-place.
+    """
     if burn_date is None:
         burn_date = datetime.now(UTC).isoformat()
     cursor = conn.execute(
         """INSERT INTO volume_copies
                (volume_id, location, burn_date, notes, iso_sha256, media_serial)
-           VALUES (?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(volume_id, location) DO UPDATE SET
+               burn_date = excluded.burn_date,
+               notes     = excluded.notes,
+               status    = 'ACTIVE'""",
         (volume_id, location, burn_date, notes, iso_sha256, media_serial),
     )
     if commit:

@@ -276,6 +276,30 @@ def _resolve_db_path(
     return Path("archive.db")
 
 
+def _resolve_repo_names_to_ids(
+    conn: object,
+    names: list[str] | None,
+) -> list[str] | None:
+    """Map user-facing repo *names* to DB repo_ids (UUIDs).
+
+    Returns ``None`` when *names* is ``None`` (no filter).  Logs a
+    warning for names that don't map to any registered repository.
+    """
+    if names is None:
+        return None
+    from lcsas.db.repos import list_repos
+
+    name_to_id = {r.name: r.repo_id for r in list_repos(conn)}
+    ids: list[str] = []
+    for n in names:
+        rid = name_to_id.get(n)
+        if rid is None:
+            logger.warning(f"repository '{n}' not registered in DB, skipping.")
+        else:
+            ids.append(rid)
+    return ids or None
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     """Initialize the LCSAS database."""
     from lcsas.db.connection import get_connection
@@ -395,7 +419,19 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
             pruned = bulk_mark_pruned(conn, pack_ids)
             logger.info(f"Marked {pruned} pack(s) as pruned.")
 
-        # Delete snapshots, then the repo itself
+        # Delete packs (including pruned), snapshots, then the repo itself.
+        # Packs must be removed before the repo to satisfy FK constraints.
+        all_packs = list_packs(conn, repo_id=repo.repo_id, include_pruned=True)
+        if all_packs:
+            all_pack_ids = [p.pack_id for p in all_packs]
+            # Remove volume_packs links first (FK on pack_id)
+            for pid in all_pack_ids:
+                conn.execute(
+                    "DELETE FROM volume_packs WHERE pack_id = ?", (pid,)
+                )
+            conn.execute(
+                "DELETE FROM packs WHERE repo_id = ?", (repo.repo_id,)
+            )
         snap_count = delete_snapshots_for_repo(conn, repo.repo_id)
         delete_repo(conn, repo.repo_id)
 
@@ -413,6 +449,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
     from lcsas.db.queries import get_archive_status_summary
+    from lcsas.db.repos import list_repos
     from lcsas.db.schema import create_all
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
@@ -420,6 +457,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     with locked_connection(config.db_path if args.db is None else args.db) as conn:
         create_all(conn)
+
+        # Map config repo names → DB repo_ids (UUIDs)
+        repos_db = {r.name: r.repo_id for r in list_repos(conn)}
 
         repo_filter = set(args.repo) if args.repo else None
         total_new = 0
@@ -435,11 +475,19 @@ def cmd_scan(args: argparse.Namespace) -> int:
             if repo_filter and repo_name not in repo_filter:
                 continue
 
+            db_repo_id = repos_db.get(repo_name)
+            if db_repo_id is None:
+                logger.warning(
+                    f"repository '{repo_name}' not registered in DB "
+                    f"(run 'repo add' first), skipping."
+                )
+                continue
+
             mirror_path = repo_cfg.mirror_path
             packs_on_disk = scan_mirror_packs(mirror_path)
             total_scanned += len(packs_on_disk)
 
-            analyzer = DeltaAnalyzer(conn, packs_on_disk, repo_name)
+            analyzer = DeltaAnalyzer(conn, packs_on_disk, db_repo_id)
             new_packs = analyzer.register_new_packs()
             unarchived = analyzer.get_unarchived()
             unarchived_bytes = analyzer.get_total_unarchived_bytes()
@@ -467,12 +515,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
         # Persist snapshots (unless --no-snapshots)
         if not getattr(args, "no_snapshots", False):
             from lcsas.db.models import Snapshot
-            from lcsas.db.repos import list_repos
             from lcsas.db.snapshots import bulk_upsert_snapshots
             from lcsas.rustic.wrapper import SubprocessRusticRunner
 
             runner = SubprocessRusticRunner(tmpdir=config.staging_path)
-            repos_db = {r.name: r.repo_id for r in list_repos(conn)}
             total_snaps = 0
 
             for repo_name, repo_cfg in config.repositories.items():
@@ -480,6 +526,14 @@ def cmd_scan(args: argparse.Namespace) -> int:
                     continue
                 if repo_cfg.password_file is None:
                     continue
+
+                repo_id = repos_db.get(repo_name)
+                if repo_id is None:
+                    logger.warning(
+                        f"  {repo_name}: not registered in DB, skipping snapshots"
+                    )
+                    continue
+
                 try:
                     snap_infos = runner.snapshots(
                         repo_path=repo_cfg.mirror_path,
@@ -490,8 +544,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
                         f"  {repo_name}: snapshot listing failed: {exc}"
                     )
                     continue
-
-                repo_id = repos_db.get(repo_name)
                 db_snaps = [
                     Snapshot(
                         snapshot_id=si.snapshot_id,
@@ -683,10 +735,12 @@ def cmd_stage(args: argparse.Namespace) -> int:
                                  f"Valid types: {valid}")
                     return 1
 
+            repo_ids = _resolve_repo_names_to_ids(conn, args.repo)
+
             result = orch.stage(
                 media_type=media_type,
                 for_location=args.for_location,
-                repo_ids=args.repo,
+                repo_ids=repo_ids,
                 skip_ecc=args.skip_ecc,
                 dry_run=getattr(args, "dry_run", False),
             )
@@ -735,11 +789,13 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
 
         if getattr(args, "dry_run", False):
             from lcsas.db.sessions import get_session_volumes, resolve_session_id
+            from lcsas.db.volumes import get_volume_by_id
             sid = resolve_session_id(conn, args.session or "latest")
             vols = get_session_volumes(conn, sid)
             logger.info(f"[DRY RUN] Session {sid}: {len(vols)} volume(s)")
-            for v in vols:
-                logger.info(f"  {v['volume_label']}  status={v['status']}")
+            for sv in vols:
+                vol = get_volume_by_id(conn, sv.volume_id)
+                logger.info(f"  {vol.label}  status={vol.status}")
             return 0
 
         receipts = orch.burn_session(
@@ -784,11 +840,14 @@ def cmd_burn_legacy(args: argparse.Namespace) -> int:
             SubprocessDVDisasterRunner(tmpdir=config.staging_path),
         )
 
+        # Resolve repo names→ids
+        repo_ids = _resolve_repo_names_to_ids(conn, args.repo)
+
         # Stage first
         result = orch.stage(
             media_type=media_type,
             for_location=args.location,
-            repo_ids=args.repo,
+            repo_ids=repo_ids,
             skip_ecc=args.skip_ecc,
             dry_run=getattr(args, "dry_run", False),
         )
@@ -1020,7 +1079,6 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             config, conn,
             SubprocessXorrisoRunner(tmpdir=config.staging_path),
             SubprocessDVDisasterRunner(),
-            shutdown=shutdown,
         )
 
         # Stage only the active packs from the consolidation plan
@@ -1030,13 +1088,13 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             pack_sha256s=pack_shas,
         )
 
-        logger.info(f"Staged {len(session.volumes)} volume(s).")
-
-        # Deprecate source volumes
-        merger.deprecate_sources(plan.source_volume_ids)
+        logger.info(f"Staged {len(session.manifests)} volume(s).")
         logger.info(
-            f"Deprecated {len(plan.source_volume_ids)} source volume(s): "
-            f"{', '.join(plan.source_labels)}"
+            "Consolidation staged.  Next steps:\n"
+            "  1. burn session %s\n"
+            "  2. verify the new volumes\n"
+            "  3. then deprecate sources with: consolidate --deprecate",
+            session.session_id,
         )
 
     return 0
@@ -1173,6 +1231,9 @@ def _verify_all(conn, args, config) -> int:
     passed_count = 0
     failed_count = 0
 
+    from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+    dvd_runner = SubprocessDVDisasterRunner()
+
     for vol in candidates:
         # Try to find the ISO path
         row = conn.execute(
@@ -1190,10 +1251,7 @@ def _verify_all(conn, args, config) -> int:
             logger.info(f"  {vol.label}: ISO not found ({iso_path}) — skipped")
             continue
 
-        from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
-        dvd_runner = SubprocessDVDisasterRunner()
         ok = dvd_runner.verify_iso(iso_path)
-
         event_type = "VERIFY_PASS" if ok else "VERIFY_FAIL"
         add_event(conn, vol.volume_id, event_type, detail=f"Batch ISO verify: {iso_path}")
 

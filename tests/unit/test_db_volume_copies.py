@@ -54,11 +54,16 @@ class TestVolumeCopyCRUD:
         locations = {c.location for c in copies}
         assert locations == {"Home_Shelf", "Offsite_Safe"}
 
-    def test_duplicate_location_raises(self, conn, volume):
-        import sqlite3 as _sqlite3
-        add_volume_copy(conn, volume.volume_id, "Home_Shelf")
-        with pytest.raises(_sqlite3.IntegrityError):
-            add_volume_copy(conn, volume.volume_id, "Home_Shelf")
+    def test_duplicate_location_upserts(self, conn, volume):
+        """Re-burning at the same location updates instead of raising."""
+        add_volume_copy(conn, volume.volume_id, "Home_Shelf",
+                        notes="first burn")
+        add_volume_copy(conn, volume.volume_id, "Home_Shelf",
+                        notes="re-burn")
+        # Should be UPSERT (same row), not a new row
+        copies = get_copies_for_volume(conn, volume.volume_id)
+        assert len(copies) == 1
+        assert copies[0].notes == "re-burn"
 
     def test_get_copies_at_location(self, conn):
         v1 = create_volume(conn, "V1", generate_uuid(), "TEST_TINY", 1000000)

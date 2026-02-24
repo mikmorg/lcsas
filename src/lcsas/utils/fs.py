@@ -48,12 +48,21 @@ def list_files_recursive(path: Path) -> list[Path]:
 def copy_tree(src: Path, dst: Path) -> None:
     """Copy an entire directory tree. Overwrites dst if it exists.
 
+    Uses a temp directory + rename to avoid losing the destination if
+    the copy fails midway (e.g. disk full).
+
     Handles read-only source files/dirs (e.g. from rustic repos).
     """
+    tmp_dst = dst.with_name(dst.name + ".copy_tmp")
+    if tmp_dst.exists():
+        _make_writable(tmp_dst)
+        shutil.rmtree(tmp_dst)
+    shutil.copytree(str(src), str(tmp_dst))
+    # Success — swap atomically
     if dst.exists():
         _make_writable(dst)
         shutil.rmtree(dst)
-    shutil.copytree(str(src), str(dst))
+    tmp_dst.rename(dst)
 
 
 def _make_writable(path: Path) -> None:

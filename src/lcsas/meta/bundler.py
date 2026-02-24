@@ -10,12 +10,15 @@ Only Linux x86_64 is supported (same architecture as the build host).
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
 import sys
 import sysconfig
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 # ── glibc-family libraries that must NOT be bundled ──────────────────
 # Mixing bundled glibc with the host's dynamic linker causes crashes.
@@ -66,6 +69,10 @@ def get_shared_libs(binary: Path) -> list[Path]:
             check=True,
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
+        _logger.warning(
+            "ldd failed for %s — shared libraries will not be bundled",
+            binary,
+        )
         return []
 
     libs: list[Path] = []

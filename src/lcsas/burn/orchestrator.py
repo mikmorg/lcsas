@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import sqlite3
 from dataclasses import dataclass, field
@@ -560,6 +561,11 @@ class BurnOrchestrator:
 
         for sv in session_vols:
             iso_path = Path(sv.iso_path)
+            if not skip_burn and not iso_path.exists():
+                raise FileNotFoundError(
+                    f"ISO file missing for volume {sv.volume_id}: {iso_path}. "
+                    f"Was the staging directory cleaned prematurely?"
+                )
             vol = get_volume_by_id(self._conn, sv.volume_id)
 
             # For multi-location re-burns, skip status transitions if
@@ -787,6 +793,8 @@ class BurnOrchestrator:
         manifest_path = session_dir / "session.json"
         with open(manifest_path, "w") as f:
             json.dump(manifest_data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
         return manifest_path
 
     def _write_receipts(
@@ -821,6 +829,8 @@ class BurnOrchestrator:
                     f,
                     indent=2,
                 )
+                f.flush()
+                os.fsync(f.fileno())
             paths.append(receipt_path)
 
         return paths

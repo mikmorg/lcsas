@@ -449,6 +449,10 @@ class TestBurnSession:
 
         result = orch.stage(skip_ecc=True)
 
+        # Create dummy ISO files (create_iso was mocked so no real files exist)
+        for iso_path in result.iso_paths:
+            iso_path.write_bytes(b"\x00" * 1024)
+
         # Mock physical burn and verification to succeed
         xorriso.burn_iso = MagicMock()
         xorriso.verify_disc = MagicMock(return_value=True)
@@ -473,6 +477,10 @@ class TestBurnSession:
         xorriso = env["xorriso"]
 
         result = orch.stage(skip_ecc=True)
+
+        # Create dummy ISO files (create_iso was mocked so no real files exist)
+        for iso_path in result.iso_paths:
+            iso_path.write_bytes(b"\x00" * 1024)
 
         # Mock physical burn to succeed but verification to fail
         xorriso.burn_iso = MagicMock()

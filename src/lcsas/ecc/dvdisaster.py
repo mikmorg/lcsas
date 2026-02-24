@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Protocol
@@ -49,20 +50,34 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
     ) -> None:
         """Augment an ISO image with RS03 error correction data.
 
-        The ECC data is appended directly to the ISO file, consuming
-        additional space proportional to redundancy_pct.
+        Operates on a temporary copy to avoid corrupting the ISO if the
+        process is interrupted.  On success the augmented copy replaces
+        the original atomically via ``os.rename``.
         """
-        cmd = [
-            self._binary,
-            "-i", str(iso_path),
-            "-mRS03",
-            "-n", str(redundancy_pct),
-            "-c",
-        ]
+        if not iso_path.exists():
+            raise FileNotFoundError(f"ISO file not found: {iso_path}")
+
+        tmp = iso_path.with_suffix(".iso.ecc.tmp")
         try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
-        except subprocess.CalledProcessError as exc:
-            self._log_stderr("dvdisaster", exc)
+            shutil.copy2(str(iso_path), str(tmp))
+            cmd = [
+                self._binary,
+                "-i", str(tmp),
+                "-mRS03",
+                "-n", str(redundancy_pct),
+                "-c",
+            ]
+            try:
+                subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
+            except subprocess.CalledProcessError as exc:
+                self._log_stderr("dvdisaster", exc)
+                raise
+            # Atomic replace on success
+            import os
+            os.rename(tmp, iso_path)
+        except BaseException:
+            if tmp.exists():
+                tmp.unlink()
             raise
 
     def verify_iso(
@@ -70,6 +85,8 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
         iso_path: Path,
     ) -> bool:
         """Verify the ECC integrity of an ISO image."""
+        if not iso_path.exists():
+            raise FileNotFoundError(f"ISO file not found: {iso_path}")
         cmd = [
             self._binary,
             "-i", str(iso_path),
@@ -85,6 +102,8 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
         iso_path: Path,
     ) -> bool:
         """Attempt to repair a damaged ISO using its embedded ECC data."""
+        if not iso_path.exists():
+            raise FileNotFoundError(f"ISO file not found: {iso_path}")
         cmd = [
             self._binary,
             "-i", str(iso_path),
