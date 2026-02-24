@@ -35,6 +35,14 @@ _SOURCE_ITEMS = ("src",)
 _DOC_ITEMS = ("docs", "README.md", "pyproject.toml")
 
 
+def _write_and_sync(path: Path, content: str) -> None:
+    """Write *content* to *path* and fsync to disk."""
+    with open(path, "w") as f:
+        f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+
+
 def _strip_markdown(text: str) -> str:
     """Best-effort conversion of Markdown to plain text.
 
@@ -758,6 +766,10 @@ class MetaVolumeBuilder:
         """
         self._output.mkdir(parents=True, exist_ok=True)
 
+        # Mark incomplete until all steps succeed
+        incomplete_marker = self._output / ".incomplete"
+        incomplete_marker.write_text("Meta-volume build in progress\n")
+
         self._bundle_tools()
         self._bundle_source()
         self._bundle_docs()
@@ -767,6 +779,9 @@ class MetaVolumeBuilder:
         self._write_readme_txt()
         self._write_volume_info()
         self._write_start_here()
+
+        # Build complete — remove the marker
+        incomplete_marker.unlink(missing_ok=True)
 
         return self._output
 
@@ -863,19 +878,19 @@ class MetaVolumeBuilder:
         from lcsas.restore.standalone_builder import build_standalone
 
         restorer_path = self._output / "standalone_restorer.py"
-        restorer_path.write_text(build_standalone())
+        _write_and_sync(restorer_path, build_standalone())
         os.chmod(str(restorer_path), 0o755)
 
     def _write_restore_script(self) -> None:
         """Write the bootstrap restore.sh script."""
         script_path = self._output / "restore.sh"
-        script_path.write_text(RESTORE_SCRIPT)
+        _write_and_sync(script_path, RESTORE_SCRIPT)
         os.chmod(str(script_path), 0o755)
 
     def _write_readme(self) -> None:
         """Write the human-readable restore instructions."""
         readme_path = self._output / "README_RESTORE.md"
-        readme_path.write_text(README_RESTORE)
+        _write_and_sync(readme_path, README_RESTORE)
 
     def _write_readme_txt(self) -> None:
         """Write a plain-text version of README_RESTORE.
@@ -884,7 +899,7 @@ class MetaVolumeBuilder:
         the Markdown to best-effort plain text by stripping formatting.
         """
         txt = _strip_markdown(README_RESTORE)
-        (self._output / "README_RESTORE.txt").write_text(txt)
+        _write_and_sync(self._output / "README_RESTORE.txt", txt)
 
     def _write_volume_info(self) -> None:
         """Write self-describing volume metadata."""
@@ -934,6 +949,8 @@ class MetaVolumeBuilder:
         info_path = self._output / "volume_info.json"
         with open(info_path, "w") as f:
             json.dump(info, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
 
     def _write_start_here(self) -> None:
         """Write START_HERE.txt to the meta-volume.
@@ -977,4 +994,4 @@ instructions in README_RESTORE.md.
 
 WARNING: WITHOUT THE ENCRYPTION KEY, THE DATA CANNOT BE RECOVERED.
 """
-            (self._output / "START_HERE.txt").write_text(text)
+            _write_and_sync(self._output / "START_HERE.txt", text)

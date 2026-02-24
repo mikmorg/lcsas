@@ -346,14 +346,18 @@ class BurnOrchestrator:
                 )
 
             # 7. Validate ISO size against media capacity  [O4]
-            if iso_path.exists():
-                iso_size = iso_path.stat().st_size
-                if iso_size > media_type.capacity_bytes:
-                    raise ValueError(
-                        f"ISO {iso_path.name} is {iso_size:,} bytes, exceeds "
-                        f"{media_type.name} capacity of "
-                        f"{media_type.capacity_bytes:,} bytes"
-                    )
+            if not iso_path.exists():
+                raise FileNotFoundError(
+                    f"ISO not created by xorriso: {iso_path}. "
+                    f"Check xorriso output for errors."
+                )
+            iso_size = iso_path.stat().st_size
+            if iso_size > media_type.capacity_bytes:
+                raise ValueError(
+                    f"ISO {iso_path.name} is {iso_size:,} bytes, exceeds "
+                    f"{media_type.name} capacity of "
+                    f"{media_type.capacity_bytes:,} bytes"
+                )
 
         return BurnManifest(
             volume_label=vol_label,
@@ -449,8 +453,11 @@ class BurnOrchestrator:
 
         # 3. Disk space pre-flight check
         total_data_bytes = sum(b for _, b in volume_plans)
-        # Allow ~2x headroom for ISOs + ECC overhead
-        required_bytes = total_data_bytes * 2
+        # Headroom: ISO filesystem overhead (~5%) + ECC overhead +
+        # the staging directory copy.  Use actual ECC percentage.
+        ecc_pct = self._config.default_ecc_redundancy_pct
+        overhead_factor = 1.05 * (1 + ecc_pct / 100) + 1  # ISO+ECC + staging copy
+        required_bytes = int(total_data_bytes * overhead_factor)
         staging_usage = shutil.disk_usage(self._config.staging_path)
         if staging_usage.free < required_bytes:
             avail_gb = staging_usage.free / 1e9

@@ -297,7 +297,12 @@ def _resolve_repo_names_to_ids(
             logger.warning(f"repository '{n}' not registered in DB, skipping.")
         else:
             ids.append(rid)
-    return ids or None
+    if not ids:
+        raise ValueError(
+            f"None of the specified repositories exist in the DB: "
+            f"{', '.join(names)}"
+        )
+    return ids
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -525,6 +530,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 if repo_filter and repo_name not in repo_filter:
                     continue
                 if repo_cfg.password_file is None:
+                    logger.debug(
+                        f"  {repo_name}: no password_file configured, "
+                        f"skipping snapshot listing"
+                    )
                     continue
 
                 repo_id = repos_db.get(repo_name)
@@ -1078,7 +1087,7 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
         orch = BurnOrchestrator(
             config, conn,
             SubprocessXorrisoRunner(tmpdir=config.staging_path),
-            SubprocessDVDisasterRunner(),
+            SubprocessDVDisasterRunner(tmpdir=config.staging_path),
         )
 
         # Stage only the active packs from the consolidation plan
@@ -1266,7 +1275,12 @@ def _verify_all(conn, args, config) -> int:
 
     logger.info(f"Verification complete: {passed_count} passed, {failed_count} failed, "
                 f"{len(candidates) - passed_count - failed_count} skipped")
-    return 1 if failed_count > 0 else 0
+    if failed_count > 0:
+        return 1
+    if passed_count == 0:
+        logger.warning("No volumes were actually verified (all skipped).")
+        return 1
+    return 0
 
 
 def cmd_meta_build(args: argparse.Namespace) -> int:

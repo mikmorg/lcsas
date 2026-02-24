@@ -42,6 +42,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import sys
 from dataclasses import dataclass, field
 from datetime import UTC
@@ -70,7 +71,9 @@ try:
         try:
             return dctx.decompress(data)
         except _zstd.ZstdError:
-            return dctx.decompress(data, max_output_size=len(data) * 20)
+            # Generous fallback for highly-compressible data (e.g.
+            # sparse database backups with long runs of zeros).
+            return dctx.decompress(data, max_output_size=max(len(data) * 100, 64 * 1024 * 1024))
 
     _HAS_ZSTD = True
 except ImportError:
@@ -640,7 +643,10 @@ class PurePythonRestorer:
             elif node_type == "symlink":
                 link_target = node.get("linktarget", "")
                 if node_path.is_symlink() or node_path.exists():
-                    node_path.unlink()
+                    if node_path.is_dir() and not node_path.is_symlink():
+                        shutil.rmtree(node_path)
+                    else:
+                        node_path.unlink()
                 node_path.symlink_to(link_target)
             else:
                 _log(

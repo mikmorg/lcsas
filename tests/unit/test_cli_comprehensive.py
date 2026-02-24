@@ -503,6 +503,28 @@ class TestCmdVerify:
         result = main(["--db", str(db), "verify"])
         assert result == 1
 
+    def test_verify_all_skipped_returns_error(self, tmp_path, capsys):
+        """When --all runs but all ISOs are cleaned, return 1 (not success)."""
+        from lcsas.db.sessions import add_session_volume, create_session
+
+        db = tmp_path / "test.db"
+        conn = get_connection(db)
+        create_all(conn)
+        vol = create_volume(conn, "VOL_SKIP", "u1", "BD25", 25e9,
+                            "Home", "VERIFIED")
+        # Register session volume pointing to a nonexistent ISO
+        create_session(conn, media_type="BD25", staging_dir="/tmp",
+                       session_id="sess1")
+        add_session_volume(conn, "sess1", vol.volume_id,
+                           iso_path="/nonexistent/path.iso",
+                           iso_sha256="")
+        conn.close()
+
+        result = main(["--db", str(db), "verify", "--all"])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "skipped" in out.lower() or "No volumes" in out
+
 
 # ===================================================================
 # cmd_consolidate (mock-based)
@@ -992,3 +1014,49 @@ class TestSnapshotDB:
 
         conn = _mem_conn()
         assert get_snapshot(conn, "nonexistent") is None
+
+
+# ---------------------------------------------------------------------------
+# _resolve_repo_names_to_ids — CRITICAL safety tests
+# ---------------------------------------------------------------------------
+
+
+class TestResolveRepoNamesToIds:
+    """Ensure typo'd repo names raise instead of silently matching all repos."""
+
+    def test_none_input_returns_none(self):
+        from lcsas.cli.main import _resolve_repo_names_to_ids
+
+        conn = _mem_conn()
+        assert _resolve_repo_names_to_ids(conn, None) is None
+
+    def test_valid_names_return_ids(self):
+        from lcsas.cli.main import _resolve_repo_names_to_ids
+
+        conn = _mem_conn()
+        register_repo(conn, "family", "Family", "/mnt/mirror/family")
+        register_repo(conn, "work", "Work", "/mnt/mirror/work")
+
+        ids = _resolve_repo_names_to_ids(conn, ["Family"])
+        assert ids is not None
+        assert len(ids) == 1
+
+    def test_all_invalid_names_raises(self):
+        from lcsas.cli.main import _resolve_repo_names_to_ids
+
+        conn = _mem_conn()
+        register_repo(conn, "family", "Family", "/mnt/mirror/family")
+
+        with pytest.raises(ValueError, match="None of the specified repositories"):
+            _resolve_repo_names_to_ids(conn, ["typo_name", "bogus"])
+
+    def test_partial_valid_returns_valid_only(self):
+        from lcsas.cli.main import _resolve_repo_names_to_ids
+
+        conn = _mem_conn()
+        register_repo(conn, "family", "Family", "/mnt/mirror/family")
+        register_repo(conn, "work", "Work", "/mnt/mirror/work")
+
+        ids = _resolve_repo_names_to_ids(conn, ["Family", "nonexistent"])
+        assert ids is not None
+        assert len(ids) == 1

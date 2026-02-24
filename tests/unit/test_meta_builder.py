@@ -386,3 +386,9 @@ class TestMetaVolumeBuilder:
         assert "ACTUAL_PACKS" in content, (
             "restore.sh missing post-ingest pack count check"
         )
+
+    def test_no_incomplete_marker_after_build(self):
+        """After a successful build, .incomplete marker must be removed."""
+        assert not (self.output / ".incomplete").exists(), (
+            ".incomplete marker still present after successful build"
+        )

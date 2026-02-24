@@ -127,6 +127,11 @@ def env(tmp_path):
     packs = _seed_packs(conn, config, num_packs=5, pack_size=50)
 
     xorriso = MagicMock()
+    # create_iso must produce a real file so the ISO-existence check passes
+    def _fake_create_iso(source_dir, output_iso, volume_label):
+        Path(output_iso).write_bytes(b"\x00" * 1024)
+        return Path(output_iso)
+    xorriso.create_iso.side_effect = _fake_create_iso
     dvdisaster = MagicMock()
 
     orch = BurnOrchestrator(config, conn, xorriso, dvdisaster)
@@ -159,6 +164,11 @@ def multi_vol_env(tmp_path):
     packs = _seed_packs(conn, config, num_packs=3, pack_size=400_000)
 
     xorriso = MagicMock()
+    # create_iso must produce a real file so the ISO-existence check passes
+    def _fake_create_iso(source_dir, output_iso, volume_label):
+        Path(output_iso).write_bytes(b"\x00" * 1024)
+        return Path(output_iso)
+    xorriso.create_iso.side_effect = _fake_create_iso
     dvdisaster = MagicMock()
     orch = BurnOrchestrator(config, conn, xorriso, dvdisaster)
 
@@ -302,6 +312,10 @@ class TestStageForLocation:
 
         # Manually stage and burn first 3 packs to both locations
         xorriso = MagicMock()
+        def _fake_create_iso(source_dir, output_iso, volume_label):
+            Path(output_iso).write_bytes(b"\x00" * 1024)
+            return Path(output_iso)
+        xorriso.create_iso.side_effect = _fake_create_iso
         dvdisaster = MagicMock()
         orch = BurnOrchestrator(config, conn, xorriso, dvdisaster)
 
@@ -597,6 +611,35 @@ class TestMultiVolumePipeline:
         sessions = list_sessions(conn)
         assert len(sessions) == 2
         assert sessions[0].session_id != sessions[1].session_id
+
+
+# =========================================================================
+# ISO Creation Safety Tests
+# =========================================================================
+
+
+class TestISOCreationSafety:
+    """Verify that staging detects when xorriso fails to create an ISO."""
+
+    def test_stage_raises_when_xorriso_creates_no_file(self, tmp_path):
+        """If xorriso mock doesn't create an ISO file, stage must raise."""
+        config = _make_config(tmp_path, num_repos=1)
+        conn = get_memory_connection()
+        create_all(conn)
+
+        for name in config.repositories:
+            register_repo(conn, name, name.title(),
+                          str(config.repositories[name].mirror_path))
+        _seed_packs(conn, config, num_packs=2, pack_size=50)
+
+        # xorriso mock does NOT create the file — simulates silent failure
+        xorriso = MagicMock()
+        xorriso.create_iso.return_value = None
+        dvdisaster = MagicMock()
+        orch = BurnOrchestrator(config, conn, xorriso, dvdisaster)
+
+        with pytest.raises(FileNotFoundError, match="ISO not created by xorriso"):
+            orch.stage(skip_ecc=True)
 
 
 # =========================================================================
