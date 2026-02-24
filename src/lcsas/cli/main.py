@@ -257,6 +257,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# ---------------------------------------------------------------------------
+# Helper — DB path resolution
+# ---------------------------------------------------------------------------
+
+def _resolve_db_path(
+    args: argparse.Namespace,
+    config: object | None = None,
+) -> Path:
+    """Resolve the database path from CLI args, config, or default.
+
+    Priority: ``--db`` flag > config.db_path > ``archive.db`` (cwd).
+    """
+    if getattr(args, "db", None):
+        return args.db
+    if config is not None and hasattr(config, "db_path"):
+        return config.db_path  # type: ignore[return-value]
+    return Path("archive.db")
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     """Initialize the LCSAS database."""
     from lcsas.db.connection import get_connection
@@ -282,7 +301,7 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
     from lcsas.utils.fs import read_repo_key_ids
     from lcsas.utils.labels import generate_uuid
 
-    db_path = args.db or Path("archive.db")
+    db_path = _resolve_db_path(args)
     with locked_connection(db_path) as conn:
         create_all(conn)
 
@@ -310,7 +329,7 @@ def cmd_repo_list(args: argparse.Namespace) -> int:
     from lcsas.db.repos import list_repos
     from lcsas.db.schema import create_all
 
-    db_path = args.db or Path("archive.db")
+    db_path = _resolve_db_path(args)
     conn = get_connection(db_path)
     try:
         create_all(conn)
@@ -336,7 +355,7 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
     from lcsas.db.snapshots import delete_snapshots_for_repo
     from lcsas.db.volume_packs import get_volume_ids_for_pack
 
-    db_path = args.db or Path("archive.db")
+    db_path = _resolve_db_path(args)
     with locked_connection(db_path) as conn:
         create_all(conn)
 
@@ -509,7 +528,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     from lcsas.db.schema import create_all
     from lcsas.db.volumes import list_volumes
 
-    db_path = args.db or Path("archive.db")
+    db_path = _resolve_db_path(args)
     conn = get_connection(db_path)
     try:
         create_all(conn)
@@ -537,7 +556,7 @@ def cmd_db_export(args: argparse.Namespace) -> int:
     from lcsas.db.schema import create_all
     from lcsas.db.volumes import list_volumes
 
-    db_path = args.db or Path("archive.db")
+    db_path = _resolve_db_path(args)
     conn = get_connection(db_path)
     try:
         create_all(conn)
@@ -956,7 +975,7 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
     from lcsas.db.schema import create_all
 
     config = load_config(args.config) if args.config else None
-    db_path = args.db or (config.db_path if config else Path("archive.db"))
+    db_path = _resolve_db_path(args, config)
     with locked_connection(db_path) as conn:
         create_all(conn)
 
@@ -1038,7 +1057,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     from lcsas.db.volumes import get_volume_by_label, update_status
 
     config = load_config(args.config) if args.config else None
-    db_path = args.db or (config.db_path if config else Path("archive.db"))
+    db_path = _resolve_db_path(args, config)
     with locked_connection(db_path) as conn:
         create_all(conn)
 

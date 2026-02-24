@@ -8,6 +8,8 @@ import subprocess
 from pathlib import Path
 from typing import Protocol
 
+from lcsas.utils.subprocess import SubprocessRunnerBase
+
 _logger = logging.getLogger(__name__)
 
 
@@ -33,7 +35,7 @@ class XorrisoRunner(Protocol):
     ) -> bool: ...
 
 
-class SubprocessXorrisoRunner:
+class SubprocessXorrisoRunner(SubprocessRunnerBase):
     """Real Xorriso implementation using subprocess."""
 
     def __init__(
@@ -41,13 +43,7 @@ class SubprocessXorrisoRunner:
         xorriso_binary: str = "xorriso",
         tmpdir: Path | None = None,
     ) -> None:
-        self._binary = xorriso_binary
-        self._tmpdir = tmpdir
-
-    def _env(self) -> dict[str, str] | None:
-        if self._tmpdir is None:
-            return None
-        return {**os.environ, "TMPDIR": str(self._tmpdir)}
+        super().__init__(xorriso_binary, tmpdir)
 
     def create_iso(
         self,
@@ -77,9 +73,7 @@ class SubprocessXorrisoRunner:
             subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
             os.rename(tmp_iso, output_iso)
         except subprocess.CalledProcessError as exc:
-            if exc.stderr:
-                for line in exc.stderr.strip().splitlines():
-                    _logger.error("  xorriso: %s", line)
+            self._log_stderr("xorriso", exc)
             if tmp_iso.exists():
                 tmp_iso.unlink()
             raise
@@ -107,9 +101,7 @@ class SubprocessXorrisoRunner:
         try:
             subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
         except subprocess.CalledProcessError as exc:
-            if exc.stderr:
-                for line in exc.stderr.strip().splitlines():
-                    _logger.error("  xorriso: %s", line)
+            self._log_stderr("xorriso", exc)
             raise
 
     def verify_disc(

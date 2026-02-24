@@ -156,21 +156,3 @@ def destroy_copy(
         (volume_id, location),
     )
     conn.commit()
-
-
-def update_copy_verified(
-    conn: sqlite3.Connection,
-    volume_id: int,
-    location: str,
-    *,
-    commit: bool = True,
-) -> None:
-    """Record that a copy was verified now."""
-    now = datetime.now(UTC).isoformat()
-    conn.execute(
-        """UPDATE volume_copies SET last_verified_at = ?
-           WHERE volume_id = ? AND location = ? AND status = 'ACTIVE'""",
-        (now, volume_id, location),
-    )
-    if commit:
-        conn.commit()

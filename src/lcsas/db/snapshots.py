@@ -7,6 +7,19 @@ import sqlite3
 from lcsas.db.models import Snapshot
 
 
+def _row_to_snapshot(row: sqlite3.Row) -> Snapshot:
+    """Convert a sqlite3.Row to a Snapshot model."""
+    return Snapshot(
+        snapshot_id=row["snapshot_id"],
+        repo_id=row["repo_id"],
+        hostname=row["hostname"],
+        timestamp=row["timestamp"],
+        paths=row["paths"],
+        tags=row["tags"],
+        description=row["description"],
+    )
+
+
 def upsert_snapshot(
     conn: sqlite3.Connection,
     snapshot_id: str,
@@ -85,28 +98,15 @@ def list_snapshots(
     """List all snapshots, optionally filtered by repo_id."""
     if repo_id is not None:
         rows = conn.execute(
-            "SELECT snapshot_id, repo_id, hostname, timestamp, paths, tags, "
-            "description FROM snapshots WHERE repo_id = ? ORDER BY timestamp",
+            "SELECT * FROM snapshots WHERE repo_id = ? ORDER BY timestamp",
             (repo_id,),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT snapshot_id, repo_id, hostname, timestamp, paths, tags, "
-            "description FROM snapshots ORDER BY timestamp",
+            "SELECT * FROM snapshots ORDER BY timestamp",
         ).fetchall()
 
-    return [
-        Snapshot(
-            snapshot_id=r[0],
-            repo_id=r[1],
-            hostname=r[2],
-            timestamp=r[3],
-            paths=r[4],
-            tags=r[5],
-            description=r[6],
-        )
-        for r in rows
-    ]
+    return [_row_to_snapshot(r) for r in rows]
 
 
 def get_snapshot(
@@ -115,21 +115,12 @@ def get_snapshot(
 ) -> Snapshot | None:
     """Return a single snapshot by ID, or None if not found."""
     row = conn.execute(
-        "SELECT snapshot_id, repo_id, hostname, timestamp, paths, tags, "
-        "description FROM snapshots WHERE snapshot_id = ?",
+        "SELECT * FROM snapshots WHERE snapshot_id = ?",
         (snapshot_id,),
     ).fetchone()
     if row is None:
         return None
-    return Snapshot(
-        snapshot_id=row[0],
-        repo_id=row[1],
-        hostname=row[2],
-        timestamp=row[3],
-        paths=row[4],
-        tags=row[5],
-        description=row[6],
-    )
+    return _row_to_snapshot(row)
 
 
 def delete_snapshots_for_repo(conn: sqlite3.Connection, repo_id: str) -> int:

@@ -6,6 +6,7 @@ import sqlite3
 
 from lcsas.db.models import Pack, Snapshot, Volume
 from lcsas.db.packs import _row_to_pack
+from lcsas.db.snapshots import _row_to_snapshot
 from lcsas.db.volumes import _row_to_volume
 
 
@@ -441,17 +442,6 @@ def get_location_summary(
 # ---------------------------------------------------------------------------
 # Snapshot JSON helpers  (requires SQLite 3.9+ for json_each)
 # ---------------------------------------------------------------------------
-
-def _row_to_snapshot(row: sqlite3.Row) -> Snapshot:
-    return Snapshot(
-        snapshot_id=row["snapshot_id"],
-        repo_id=row["repo_id"],
-        hostname=row["hostname"],
-        timestamp=row["timestamp"],
-        paths=row["paths"],
-        tags=row["tags"],
-        description=row["description"],
-    )
 
 
 def get_snapshots_by_path(
