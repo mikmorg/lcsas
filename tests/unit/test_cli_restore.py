@@ -47,7 +47,7 @@ def _setup_db_with_packs(
 def _make_args(**kwargs):
     """Build a namespace mimicking parsed CLI args."""
     defaults = {
-        "config": None,
+        "config": Path("config.toml"),  # non-None; load_config is mocked in tests
         "db": None,
         "command": "restore",
         "repo": "family",

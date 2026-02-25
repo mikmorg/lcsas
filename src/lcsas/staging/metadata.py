@@ -94,7 +94,7 @@ class HolographicInjector:
             info["sha256_manifest"] = sorted(p.sha256 for p in packs)
 
         info_path = self._root / "volume_info.json"
-        with open(info_path, "w") as f:
+        with open(info_path, "w", encoding="utf-8") as f:
             json.dump(info, f, indent=2)
 
     def write_standalone_restorer(self) -> None:

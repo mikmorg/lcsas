@@ -209,7 +209,7 @@ def _load_master_key(key_file: Path, password: bytes) -> MasterKey:
     Raises:
         IntegrityError: Wrong password or corrupted key file.
     """
-    with open(key_file) as f:
+    with open(key_file, encoding="utf-8") as f:
         key_doc = json.load(f)
 
     # Derive key-encryption key via scrypt

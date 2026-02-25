@@ -459,6 +459,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
 
+    if args.config is None:
+        logger.error("--config is required for scan.")
+        return 1
     config = load_config(args.config)
     with locked_connection(config.db_path if args.db is None else args.db) as conn:
         create_all(conn)
@@ -829,6 +832,9 @@ def cmd_burn_legacy(args: argparse.Namespace) -> int:
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
+    if args.config is None:
+        logger.error("--config is required for burn.")
+        return 1
     config = load_config(args.config)
     with locked_connection(config.db_path if args.db is None else args.db) as conn:
         create_all(conn)
@@ -1006,7 +1012,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
         imported = 0
         for receipt_file in args.receipt_files:
-            with open(receipt_file) as f:
+            with open(receipt_file, encoding="utf-8") as f:
                 receipt = json.load(f)
 
             # Validate required receipt fields
@@ -1329,6 +1335,9 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
     from lcsas.restore.planner import RestorePlanner
     from lcsas.rustic.wrapper import SubprocessRusticRunner
 
+    if args.config is None:
+        logger.error("--config is required for restore plan.")
+        return 1
     config = load_config(args.config)
     conn = get_connection(config.db_path if args.db is None else args.db)
     try:
@@ -1396,6 +1405,9 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
     from lcsas.rustic.wrapper import SubprocessRusticRunner
     from lcsas.utils.fs import ensure_dir, safe_remove_tree
 
+    if args.config is None:
+        logger.error("--config is required for restore exec.")
+        return 1
     config = load_config(args.config)
     conn = get_connection(config.db_path if args.db is None else args.db)
     try:
@@ -1500,6 +1512,14 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     )
         else:
             # Interactive: prompt user to mount each volume
+            import sys
+            if not sys.stdin.isatty():
+                logger.error(
+                    "Interactive restore requires a TTY. "
+                    "Use --volume-dir to specify a directory of pre-extracted "
+                    "volume data for non-interactive (scripted) restores."
+                )
+                return 1
             for label, sources in sorted(pick_list.volumes.items()):
                 pack_hashes = [s.pack.sha256 for s in sources]
                 while True:
@@ -1695,6 +1715,9 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_repo_list(args)
         elif args.repo_command == "remove":
             return cmd_repo_remove(args)
+        else:
+            logger.error("Usage: lcsas repo {add,list,remove}")
+            return 1
     elif args.command == "scan":
         return cmd_scan(args)
     elif args.command == "status":
@@ -1704,6 +1727,9 @@ def dispatch(args: argparse.Namespace) -> int:
     elif args.command == "config":
         if args.config_command == "check":
             return cmd_config_check(args)
+        else:
+            logger.error("Usage: lcsas config {check}")
+            return 1
     elif args.command == "stage":
         return cmd_stage(args)
     elif args.command == "burn":
@@ -1716,19 +1742,31 @@ def dispatch(args: argparse.Namespace) -> int:
     elif args.command == "staging":
         if args.staging_command == "clean":
             return cmd_staging_clean(args)
+        else:
+            logger.error("Usage: lcsas staging {clean}")
+            return 1
     elif args.command == "location":
         return cmd_location(args)
     elif args.command == "catalog":
         if args.catalog_command == "import-receipts":
             return cmd_catalog_import(args)
+        else:
+            logger.error("Usage: lcsas catalog {import-receipts}")
+            return 1
     elif args.command == "restore":
         if args.restore_command == "plan":
             return cmd_restore_plan(args)
         elif args.restore_command == "exec":
             return cmd_restore_exec(args)
+        else:
+            logger.error("Usage: lcsas restore {plan,exec}")
+            return 1
     elif args.command == "meta":
         if args.meta_command == "build":
             return cmd_meta_build(args)
+        else:
+            logger.error("Usage: lcsas meta {build}")
+            return 1
     elif args.command == "verify":
         return cmd_verify(args)
     elif args.command == "consolidate":

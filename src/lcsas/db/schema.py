@@ -163,6 +163,7 @@ SQL_CREATE_INDICES = [
     "CREATE INDEX IF NOT EXISTS idx_session_volumes_session ON session_volumes (session_id);",
     "CREATE INDEX IF NOT EXISTS idx_volume_events_volume ON volume_events (volume_id);",
     "CREATE INDEX IF NOT EXISTS idx_volume_events_type ON volume_events (event_type);",
+    "CREATE INDEX IF NOT EXISTS idx_volume_events_date ON volume_events (event_date);",
 ]
 
 

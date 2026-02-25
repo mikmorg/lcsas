@@ -9,6 +9,9 @@ from lcsas.db.packs import _row_to_pack
 from lcsas.db.snapshots import _row_to_snapshot
 from lcsas.db.volumes import _row_to_volume
 
+# Conservative batch limit – stays below SQLite's 999-variable limit on old builds.
+_SQLITE_BATCH = 900
+
 
 def get_unarchived_packs(
     conn: sqlite3.Connection,
@@ -66,7 +69,8 @@ def get_total_unarchived_bytes(
                      SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
                  )"""
         ).fetchone()
-    assert row is not None
+    if row is None:
+        raise RuntimeError("get_total_unarchived_bytes: aggregate query returned no row")
     return int(row[0])
 
 
@@ -126,47 +130,49 @@ def get_pick_list(
     if not pack_sha256_list:
         return {}
 
-    placeholders = ",".join("?" for _ in pack_sha256_list)
-
-    # Order by: preferred location first (desc so 1 sorts before 0),
-    # then alphabetically by label for deterministic tie-breaking.
-    if preferred_location:
-        rows = conn.execute(
-            f"""SELECT p.*, v.volume_id, v.label as vol_label,
-                       v.status as vol_status, v.location as vol_location
-                FROM packs p
-                JOIN volume_packs vp ON p.pack_id = vp.pack_id
-                JOIN volumes v ON vp.volume_id = v.volume_id
-                WHERE p.sha256 IN ({placeholders})
-                  AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
-                ORDER BY (CASE WHEN v.location = ? THEN 0 ELSE 1 END),
-                         v.label""",
-            [*pack_sha256_list, preferred_location],
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            f"""SELECT p.*, v.volume_id, v.label as vol_label,
-                       v.status as vol_status
-                FROM packs p
-                JOIN volume_packs vp ON p.pack_id = vp.pack_id
-                JOIN volumes v ON vp.volume_id = v.volume_id
-                WHERE p.sha256 IN ({placeholders})
-                  AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
-                ORDER BY v.label""",
-            pack_sha256_list,
-        ).fetchall()
-
-    # Deduplicate: each pack assigned to one volume only
+    # Deduplicate: each pack assigned to one volume only.
+    # Process in batches to avoid SQLite variable limit.
     seen_packs: set[str] = set()
     result: dict[str, list[Pack]] = {}
 
-    for row in rows:
-        pack = _row_to_pack(row)
-        if pack.sha256 in seen_packs:
-            continue
-        seen_packs.add(pack.sha256)
-        vol_label = row["vol_label"]
-        result.setdefault(vol_label, []).append(pack)
+    for batch_start in range(0, len(pack_sha256_list), _SQLITE_BATCH):
+        batch = pack_sha256_list[batch_start : batch_start + _SQLITE_BATCH]
+        placeholders = ",".join("?" for _ in batch)
+
+        # Order by: preferred location first, then alphabetically.
+        if preferred_location:
+            rows = conn.execute(
+                f"""SELECT p.*, v.volume_id, v.label as vol_label,
+                           v.status as vol_status, v.location as vol_location
+                    FROM packs p
+                    JOIN volume_packs vp ON p.pack_id = vp.pack_id
+                    JOIN volumes v ON vp.volume_id = v.volume_id
+                    WHERE p.sha256 IN ({placeholders})
+                      AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+                    ORDER BY (CASE WHEN v.location = ? THEN 0 ELSE 1 END),
+                             v.label""",
+                [*batch, preferred_location],
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"""SELECT p.*, v.volume_id, v.label as vol_label,
+                           v.status as vol_status
+                    FROM packs p
+                    JOIN volume_packs vp ON p.pack_id = vp.pack_id
+                    JOIN volumes v ON vp.volume_id = v.volume_id
+                    WHERE p.sha256 IN ({placeholders})
+                      AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+                    ORDER BY v.label""",
+                batch,
+            ).fetchall()
+
+        for row in rows:
+            pack = _row_to_pack(row)
+            if pack.sha256 in seen_packs:
+                continue
+            seen_packs.add(pack.sha256)
+            vol_label = row["vol_label"]
+            result.setdefault(vol_label, []).append(pack)
 
     return result
 
@@ -189,46 +195,50 @@ def get_pick_list_with_alternates(
     if not pack_sha256_list:
         return {}
 
-    placeholders = ",".join("?" for _ in pack_sha256_list)
-
-    params: list = list(pack_sha256_list)
-    location_order = ""
-    if preferred_location:
-        location_order = "(CASE WHEN v.location = ? THEN 0 ELSE 1 END),"
-        params.append(preferred_location)
-
-    rows = conn.execute(
-        f"""SELECT p.*, v.volume_id, v.label AS vol_label,
-                   v.status AS vol_status, v.location AS vol_location
-            FROM packs p
-            JOIN volume_packs vp ON p.pack_id = vp.pack_id
-            JOIN volumes v ON vp.volume_id = v.volume_id
-            WHERE p.sha256 IN ({placeholders})
-              AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
-            ORDER BY {location_order}
-                     (CASE WHEN v.status = 'VERIFIED' THEN 0
-                           WHEN v.status = 'BURNED' THEN 1
-                           ELSE 2 END),
-                     v.label""",
-        params,
-    ).fetchall()
-
-    # Group by pack sha256: first row = primary, rest = alternates
+    # Group by pack sha256: first row = primary, rest = alternates.
+    # Process in batches to avoid SQLite variable limit.
     result: dict[str, dict] = {}
-    for row in rows:
-        pack = _row_to_pack(row)
-        vol_label = row["vol_label"]
-        vol_id = row["volume_id"]
 
-        if pack.sha256 not in result:
-            result[pack.sha256] = {
-                "pack": pack,
-                "primary_label": vol_label,
-                "primary_volume_id": vol_id,
-                "alternates": [],
-            }
-        else:
-            result[pack.sha256]["alternates"].append(vol_label)
+    for batch_start in range(0, len(pack_sha256_list), _SQLITE_BATCH):
+        batch = pack_sha256_list[batch_start : batch_start + _SQLITE_BATCH]
+        placeholders = ",".join("?" for _ in batch)
+
+        params: list = list(batch)
+        location_order = ""
+        if preferred_location:
+            location_order = "(CASE WHEN v.location = ? THEN 0 ELSE 1 END),"
+            params.append(preferred_location)
+
+        rows = conn.execute(
+            f"""SELECT p.*, v.volume_id, v.label AS vol_label,
+                       v.status AS vol_status, v.location AS vol_location
+                FROM packs p
+                JOIN volume_packs vp ON p.pack_id = vp.pack_id
+                JOIN volumes v ON vp.volume_id = v.volume_id
+                WHERE p.sha256 IN ({placeholders})
+                  AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+                ORDER BY {location_order}
+                         (CASE WHEN v.status = 'VERIFIED' THEN 0
+                               WHEN v.status = 'BURNED' THEN 1
+                               ELSE 2 END),
+                         v.label""",
+            params,
+        ).fetchall()
+
+        for row in rows:
+            pack = _row_to_pack(row)
+            vol_label = row["vol_label"]
+            vol_id = row["volume_id"]
+
+            if pack.sha256 not in result:
+                result[pack.sha256] = {
+                    "pack": pack,
+                    "primary_label": vol_label,
+                    "primary_volume_id": vol_id,
+                    "alternates": [],
+                }
+            else:
+                result[pack.sha256]["alternates"].append(vol_label)
 
     return result
 
@@ -241,27 +251,35 @@ def get_missing_packs(
     if not pack_sha256_list:
         return []
 
-    placeholders = ",".join("?" for _ in pack_sha256_list)
-    rows = conn.execute(
-        f"""SELECT p.sha256 FROM packs p
-            WHERE p.sha256 IN ({placeholders})
-              AND NOT EXISTS (
-                  SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
-              )""",
-        pack_sha256_list,
-    ).fetchall()
-    archived = {r["sha256"] for r in conn.execute(
-        f"SELECT sha256 FROM packs WHERE sha256 IN ({placeholders})",
-        pack_sha256_list,
-    ).fetchall()}
+    # Process in batches to avoid SQLite variable limit.
+    missing: list[str] = []
 
-    # Packs not even in the DB
-    missing = [h for h in pack_sha256_list if h not in archived]
+    for batch_start in range(0, len(pack_sha256_list), _SQLITE_BATCH):
+        batch = pack_sha256_list[batch_start : batch_start + _SQLITE_BATCH]
+        placeholders = ",".join("?" for _ in batch)
 
-    # Packs in DB but not on any volume
-    for row in rows:
-        if row["sha256"] not in missing:
-            missing.append(row["sha256"])
+        unassigned_rows = conn.execute(
+            f"""SELECT p.sha256 FROM packs p
+                WHERE p.sha256 IN ({placeholders})
+                  AND NOT EXISTS (
+                      SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
+                  )""",
+            batch,
+        ).fetchall()
+        archived = {r["sha256"] for r in conn.execute(
+            f"SELECT sha256 FROM packs WHERE sha256 IN ({placeholders})",
+            batch,
+        ).fetchall()}
+
+        # Packs not even in the DB
+        for h in batch:
+            if h not in archived:
+                missing.append(h)
+
+        # Packs in DB but not on any volume
+        for row in unassigned_rows:
+            if row["sha256"] not in missing:
+                missing.append(row["sha256"])
 
     return missing
 
@@ -278,16 +296,23 @@ def get_packs_only_on_volumes(
     if not volume_ids:
         return []
 
-    placeholders = ",".join("?" for _ in volume_ids)
-    rows = conn.execute(
-        f"""SELECT DISTINCT p.* FROM packs p
-            JOIN volume_packs vp ON p.pack_id = vp.pack_id
-            WHERE vp.volume_id IN ({placeholders})
-              AND p.is_pruned = 0
-            ORDER BY p.sha256""",
-        volume_ids,
-    ).fetchall()
-    return [_row_to_pack(r) for r in rows]
+    # Process in batches to avoid SQLite variable limit.
+    pack_map: dict[int, Pack] = {}
+    for batch_start in range(0, len(volume_ids), _SQLITE_BATCH):
+        batch = volume_ids[batch_start : batch_start + _SQLITE_BATCH]
+        placeholders = ",".join("?" for _ in batch)
+        rows = conn.execute(
+            f"""SELECT DISTINCT p.* FROM packs p
+                JOIN volume_packs vp ON p.pack_id = vp.pack_id
+                WHERE vp.volume_id IN ({placeholders})
+                  AND p.is_pruned = 0
+                ORDER BY p.sha256""",
+            batch,
+        ).fetchall()
+        for r in rows:
+            p = _row_to_pack(r)
+            pack_map[p.pack_id] = p
+    return sorted(pack_map.values(), key=lambda p: p.sha256)
 
 
 def get_redundancy_report(
@@ -329,7 +354,8 @@ def get_archive_status_summary(
                ) THEN 1 ELSE 0 END) as unarchived
            FROM packs"""
     ).fetchone()
-    assert row is not None
+    if row is None:
+        raise RuntimeError("get_archive_status_summary: aggregate query returned no row")
     return {
         "total": int(row[0]),
         "pruned": int(row[1] or 0),

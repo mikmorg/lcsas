@@ -48,31 +48,37 @@ def list_files_recursive(path: Path) -> list[Path]:
 def copy_tree(src: Path, dst: Path) -> None:
     """Copy an entire directory tree. Overwrites dst if it exists.
 
-    Uses a temp directory + rename to avoid losing the destination if
-    the copy fails midway (e.g. disk full).
+    Uses a three-step sequence (copy → rename old → rename new) so that
+    dst is never absent, even in the unlikely event of a crash mid-swap.
 
     Handles read-only source files/dirs (e.g. from rustic repos).
     """
     tmp_dst = dst.with_name(dst.name + ".copy_tmp")
+    old_dst = dst.with_name(dst.name + ".copy_old")
     if tmp_dst.exists():
         _make_writable(tmp_dst)
         shutil.rmtree(tmp_dst)
     shutil.copytree(str(src), str(tmp_dst))
-    # Success — swap atomically
+    # Swap: rename dst → .copy_old, then tmp → dst, then delete .copy_old
     if dst.exists():
         _make_writable(dst)
-        shutil.rmtree(dst)
+        dst.rename(old_dst)
     tmp_dst.rename(dst)
+    if old_dst.exists():
+        shutil.rmtree(old_dst)
 
 
 def _make_writable(path: Path) -> None:
     """Recursively ensure all files and dirs under path are writable."""
     for dirpath, _dirnames, filenames in os.walk(path):
         dp = Path(dirpath)
-        dp.chmod(dp.stat().st_mode | 0o700)
+        with contextlib.suppress(OSError):
+            dp.chmod(dp.stat().st_mode | 0o700)
         for fname in filenames:
             fp = dp / fname
-            fp.chmod(fp.stat().st_mode | 0o600)
+            with contextlib.suppress(OSError):
+                if not fp.is_symlink():
+                    fp.chmod(fp.stat().st_mode | 0o600)
 
 
 def copy_file(src: Path, dst: Path) -> None:

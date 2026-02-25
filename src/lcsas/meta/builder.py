@@ -37,7 +37,7 @@ _DOC_ITEMS = ("docs", "README.md", "pyproject.toml")
 
 def _write_and_sync(path: Path, content: str) -> None:
     """Write *content* to *path* and fsync to disk."""
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(content)
         f.flush()
         os.fsync(f.fileno())
@@ -947,7 +947,7 @@ class MetaVolumeBuilder:
             },
         }
         info_path = self._output / "volume_info.json"
-        with open(info_path, "w") as f:
+        with open(info_path, "w", encoding="utf-8") as f:
             json.dump(info, f, indent=2)
             f.flush()
             os.fsync(f.fileno())

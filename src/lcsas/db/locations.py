@@ -44,11 +44,13 @@ def ensure_location(
     name: str,
     description: str = "",
 ) -> Location:
-    """Get or create a location."""
-    try:
-        return get_location(conn, name)
-    except ValueError:
-        return create_location(conn, name, description)
+    """Get or create a location (race-safe via INSERT OR IGNORE)."""
+    conn.execute(
+        "INSERT OR IGNORE INTO locations (name, description) VALUES (?, ?)",
+        (name, description),
+    )
+    conn.commit()
+    return get_location(conn, name)
 
 
 def list_locations(conn: sqlite3.Connection) -> list[Location]:

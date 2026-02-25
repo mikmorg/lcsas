@@ -58,9 +58,11 @@ def add_volume_copy(
                (volume_id, location, burn_date, notes, iso_sha256, media_serial)
            VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(volume_id, location) DO UPDATE SET
-               burn_date = excluded.burn_date,
-               notes     = excluded.notes,
-               status    = 'ACTIVE'""",
+               burn_date    = excluded.burn_date,
+               notes        = excluded.notes,
+               status       = 'ACTIVE',
+               iso_sha256   = excluded.iso_sha256,
+               media_serial = excluded.media_serial""",
         (volume_id, location, burn_date, notes, iso_sha256, media_serial),
     )
     if commit:
@@ -124,13 +126,19 @@ def move_volume_copy(
 ) -> None:
     """Record a physical disc moving from one location to another."""
     now = datetime.now(UTC).isoformat()
-    result = conn.execute(
-        """UPDATE volume_copies
-           SET location = ?,
-               notes = COALESCE(notes, '') || 'Moved from ' || ? || ' on ' || ? || char(10)
-           WHERE volume_id = ? AND location = ? AND status = 'ACTIVE'""",
-        (to_location, from_location, now, volume_id, from_location),
-    )
+    try:
+        result = conn.execute(
+            """UPDATE volume_copies
+               SET location = ?,
+                   notes = COALESCE(notes, '') || 'Moved from ' || ? || ' on ' || ? || char(10)
+               WHERE volume_id = ? AND location = ? AND status = 'ACTIVE'""",
+            (to_location, from_location, now, volume_id, from_location),
+        )
+    except sqlite3.IntegrityError:
+        raise ValueError(
+            f"A copy of volume {volume_id} already exists at '{to_location}'. "
+            f"The disc cannot be moved there without first removing the existing copy."
+        ) from None
     if result.rowcount == 0:
         raise ValueError(
             f"No active copy of volume {volume_id} at '{from_location}'"

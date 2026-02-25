@@ -6,6 +6,10 @@ import sqlite3
 
 from lcsas.db.models import Pack
 
+# Conservative batch size to stay well below SQLite's SQLITE_MAX_VARIABLE_NUMBER
+# (999 on old builds, 32 766 on newer). Using 900 gives headroom for extra params.
+_SQLITE_BATCH = 900
+
 
 def _row_to_pack(row: sqlite3.Row) -> Pack:
     return Pack(
@@ -35,7 +39,11 @@ def register_pack(
     )
     conn.commit()
     result = get_pack_by_sha256(conn, sha256)
-    assert result is not None, f"Pack {sha256} should exist after INSERT OR IGNORE"
+    if result is None:
+        raise RuntimeError(
+            f"Pack {sha256} should exist after INSERT OR IGNORE but was not found. "
+            "This indicates a database integrity issue."
+        )
     return result
 
 
@@ -72,14 +80,18 @@ def bulk_mark_pruned(conn: sqlite3.Connection, pack_ids: list[int]) -> int:
     """
     if not pack_ids:
         return 0
-    placeholders = ",".join("?" * len(pack_ids))
-    cur = conn.execute(
-        f"UPDATE packs SET is_pruned = 1 WHERE pack_id IN ({placeholders})"
-        " AND is_pruned = 0",
-        pack_ids,
-    )
+    updated = 0
+    for i in range(0, len(pack_ids), _SQLITE_BATCH):
+        batch = pack_ids[i : i + _SQLITE_BATCH]
+        placeholders = ",".join("?" * len(batch))
+        cur = conn.execute(
+            f"UPDATE packs SET is_pruned = 1 WHERE pack_id IN ({placeholders})"
+            " AND is_pruned = 0",
+            batch,
+        )
+        updated += cur.rowcount
     conn.commit()
-    return cur.rowcount
+    return updated
 
 
 def bulk_register(
@@ -104,14 +116,18 @@ def bulk_register(
         packs,
     )
     conn.commit()
-    # Fetch all by sha256 in one query
+    # Fetch all by sha256 in batches to avoid SQLite variable limit
     sha_list = [p[0] for p in packs]
-    placeholders = ",".join("?" * len(sha_list))
-    rows = conn.execute(
-        f"SELECT * FROM packs WHERE sha256 IN ({placeholders})",
-        sha_list,
-    ).fetchall()
-    pack_map = {r["sha256"]: _row_to_pack(r) for r in rows}
+    pack_map: dict[str, Pack] = {}
+    for i in range(0, len(sha_list), _SQLITE_BATCH):
+        batch = sha_list[i : i + _SQLITE_BATCH]
+        ph = ",".join("?" * len(batch))
+        rows = conn.execute(
+            f"SELECT * FROM packs WHERE sha256 IN ({ph})",
+            batch,
+        ).fetchall()
+        for r in rows:
+            pack_map[r["sha256"]] = _row_to_pack(r)
     return [pack_map[sha] for sha in sha_list]
 
 

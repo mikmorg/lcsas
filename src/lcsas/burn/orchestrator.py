@@ -798,7 +798,7 @@ class BurnOrchestrator:
             ],
         }
         manifest_path = session_dir / "session.json"
-        with open(manifest_path, "w") as f:
+        with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(manifest_data, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
@@ -819,7 +819,7 @@ class BurnOrchestrator:
             receipt_path = receipts_dir / (
                 f"{receipt.volume_label}_{location}.json"
             )
-            with open(receipt_path, "w") as f:
+            with open(receipt_path, "w", encoding="utf-8") as f:
                 json.dump(
                     {
                         "volume_label": receipt.volume_label,

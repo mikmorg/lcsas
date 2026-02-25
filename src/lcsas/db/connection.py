@@ -49,7 +49,7 @@ def locked_connection(
     """
     lock_path = Path(str(db_path) + ".lock")
     lock_path.touch(exist_ok=True)
-    lock_fd = open(lock_path, "a")  # noqa: SIM115
+    lock_fd = open(lock_path, "a", encoding="utf-8")  # noqa: SIM115
     try:
         flag = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
         fcntl.flock(lock_fd, flag)

@@ -51,14 +51,18 @@ class DeltaAnalyzer:
             for sha256, size_bytes in self._scanner_result.items()
         ]
 
-        # Filter out already-known packs with a single query
+        # Filter out already-known packs in batches to avoid SQLite variable limit
+        _batch = 900
         sha_list = [t[0] for t in all_tuples]
-        placeholders = ",".join("?" * len(sha_list))
-        existing_rows = self._conn.execute(
-            f"SELECT sha256 FROM packs WHERE sha256 IN ({placeholders})",
-            sha_list,
-        ).fetchall()
-        existing_shas = {row["sha256"] for row in existing_rows}
+        existing_shas: set[str] = set()
+        for i in range(0, len(sha_list), _batch):
+            batch = sha_list[i : i + _batch]
+            placeholders = ",".join("?" * len(batch))
+            rows = self._conn.execute(
+                f"SELECT sha256 FROM packs WHERE sha256 IN ({placeholders})",
+                batch,
+            ).fetchall()
+            existing_shas.update(row["sha256"] for row in rows)
 
         new_tuples = [t for t in all_tuples if t[0] not in existing_shas]
         if not new_tuples:

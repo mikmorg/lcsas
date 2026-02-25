@@ -53,7 +53,7 @@ def resolve_binary(name: str) -> Path | None:
     found = shutil.which(name)
     if found is None:
         return None
-    return Path(os.path.realpath(found))
+    return Path(found).resolve()
 
 
 def get_shared_libs(binary: Path) -> list[Path]:
@@ -83,11 +83,11 @@ def get_shared_libs(binary: Path) -> list[Path]:
             if idx + 1 < len(parts) and parts[idx + 1] not in ("not", "("):
                 lib_path = Path(parts[idx + 1])
                 if lib_path.is_file() and _should_bundle_lib(lib_path.name):
-                    libs.append(Path(os.path.realpath(str(lib_path))))
+                    libs.append(lib_path.resolve())
         elif len(parts) >= 1 and parts[0].startswith("/"):
             lib_path = Path(parts[0])
             if lib_path.is_file() and _should_bundle_lib(lib_path.name):
-                libs.append(Path(os.path.realpath(str(lib_path))))
+                libs.append(lib_path.resolve())
 
     return libs
 
@@ -101,7 +101,7 @@ def get_python_paths() -> tuple[Path, Path]:
     Raises:
         FileNotFoundError: If the stdlib directory cannot be located.
     """
-    real_exe = Path(os.path.realpath(sys.executable))
+    real_exe = Path(sys.executable).resolve()
     version = f"python{sys.version_info.major}.{sys.version_info.minor}"
     base = Path(sys.base_prefix)
 
@@ -185,10 +185,9 @@ class ToolBundler:
         Raises:
             FileNotFoundError: If the binary cannot be found.
         """
-        if binary_path is None:
-            binary_path = resolve_binary(name)
-        else:
-            binary_path = Path(os.path.realpath(str(binary_path)))
+        binary_path = (
+            resolve_binary(name) if binary_path is None else Path(binary_path).resolve()
+        )
 
         if binary_path is None or not binary_path.is_file():
             raise FileNotFoundError(f"Binary not found: {name}")
