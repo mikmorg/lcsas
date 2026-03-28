@@ -7,8 +7,11 @@ They can be tested independently with fixture JSON strings.
 from __future__ import annotations
 
 import json
+import logging
 
 from lcsas.rustic.types import BackupResult, PruneResult, RestorePlan, SnapshotInfo
+
+_logger = logging.getLogger(__name__)
 
 
 def parse_backup_output(output: str) -> BackupResult:
@@ -45,6 +48,11 @@ def parse_backup_output(output: str) -> BackupResult:
                 )
 
     # Fallback: couldn't parse structured output
+    _logger.warning(
+        "parse_backup_output: could not extract snapshot_id from %d line(s) "
+        "of output — rustic output format may have changed",
+        len(output.strip().splitlines()),
+    )
     return BackupResult(snapshot_id="unknown")
 
 
@@ -53,6 +61,10 @@ def parse_snapshots_output(output: str) -> list[SnapshotInfo]:
     try:
         data = json.loads(output)
     except json.JSONDecodeError:
+        _logger.warning(
+            "parse_snapshots_output: failed to parse JSON — "
+            "rustic output format may have changed"
+        )
         return []
 
     if not isinstance(data, list):
@@ -84,6 +96,11 @@ def parse_restore_plan_output(
     try:
         data = json.loads(output)
     except json.JSONDecodeError:
+        _logger.warning(
+            "parse_restore_plan_output: failed to parse JSON for snapshot %s — "
+            "rustic output format may have changed",
+            snapshot_id,
+        )
         return RestorePlan(snapshot_id=snapshot_id)
 
     if isinstance(data, dict):
@@ -103,6 +120,10 @@ def parse_prune_output(output: str) -> PruneResult:
     try:
         data = json.loads(output)
     except json.JSONDecodeError:
+        _logger.warning(
+            "parse_prune_output: failed to parse JSON — "
+            "rustic output format may have changed"
+        )
         return PruneResult()
 
     if isinstance(data, dict):

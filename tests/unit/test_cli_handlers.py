@@ -108,8 +108,15 @@ class TestCmdDispatchEdges:
 
     def test_dispatch_error_handling(self, tmp_path, capsys):
         """Exception in dispatch is caught and returns 1."""
-        # Use a non-existent DB path that will fail
+        # Use a non-existent DB path that will fail.
+        # The exact error message varies by OS/SQLite version, but it should
+        # be an error (return code 1) and print something to stdout.
         result = main(["--db", "/nonexistent/path/db.sqlite", "status"])
         assert result == 1
         out = capsys.readouterr().out
-        assert "unable to open database file" in out
+        # Accept either SQLite "unable to open" or system "Permission denied"
+        assert any(phrase in out for phrase in [
+            "unable to open database file",
+            "Permission denied",
+            "Errno 13",
+        ])

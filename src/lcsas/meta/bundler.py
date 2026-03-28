@@ -297,15 +297,27 @@ class ToolBundler:
 
         return dest
 
+    # Packages that are safe to bundle into the meta-volume.
+    _BUNDLEABLE_PACKAGES: frozenset[str] = frozenset({"zstandard"})
+
     @staticmethod
     def _find_installed_package(package_name: str) -> Path | None:
         """Find the install location of a Python package.
 
+        Only packages in ``_BUNDLEABLE_PACKAGES`` are permitted to
+        prevent arbitrary code execution via an untrusted package name.
+
         Returns the directory of the top-level package, or *None* if
         not installed.
         """
+        if package_name not in ToolBundler._BUNDLEABLE_PACKAGES:
+            raise ValueError(
+                f"Package '{package_name}' is not in the allowed bundle list. "
+                f"Permitted packages: {sorted(ToolBundler._BUNDLEABLE_PACKAGES)}"
+            )
+        import importlib
         try:
-            mod = __import__(package_name)
+            mod = importlib.import_module(package_name)
         except ImportError:
             return None
 

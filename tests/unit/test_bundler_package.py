@@ -16,20 +16,29 @@ class TestFindInstalledPackage:
     """Tests for ``ToolBundler._find_installed_package``."""
 
     def test_finds_known_package(self):
-        """Should locate a package that exists (pytest)."""
-        result = ToolBundler._find_installed_package("pytest")
+        """Should locate zstandard if installed, otherwise skip."""
+        pytest.importorskip("zstandard", reason="zstandard not installed")
+        result = ToolBundler._find_installed_package("zstandard")
         assert result is not None
         assert result.is_dir()
-        assert result.name == "pytest" or "pytest" in result.name
 
-    def test_returns_none_for_missing_package(self):
-        result = ToolBundler._find_installed_package("nonexistent_fake_pkg_12345")
+    def test_returns_none_for_missing_whitelisted_package(self):
+        """A whitelisted package that is not installed returns None."""
+        import importlib
+
+        with patch.object(importlib, "import_module", side_effect=ImportError("no")):
+            result = ToolBundler._find_installed_package("zstandard")
         assert result is None
 
-    def test_returns_none_when_import_fails(self):
-        with patch("builtins.__import__", side_effect=ImportError("no")):
-            result = ToolBundler._find_installed_package("os")
-            assert result is None
+    def test_raises_for_non_whitelisted_package(self):
+        """Packages outside the allowed list raise ValueError."""
+        with pytest.raises(ValueError, match="not in the allowed bundle list"):
+            ToolBundler._find_installed_package("nonexistent_fake_pkg_12345")
+
+    def test_raises_for_arbitrary_package(self):
+        """Even installed packages outside the allowlist are rejected."""
+        with pytest.raises(ValueError, match="not in the allowed bundle list"):
+            ToolBundler._find_installed_package("os")
 
 
 # ── bundle_python_package tests ────────────────────────────────────
@@ -44,7 +53,10 @@ class TestBundlePythonPackage:
         return ToolBundler(tmp_path / "meta")
 
     def test_returns_none_for_missing_package(self, bundler):
-        result = bundler.bundle_python_package("nonexistent_fake_pkg_12345")
+        """bundle_python_package with an uninstalled whitelisted pkg returns None."""
+        import importlib
+        with patch.object(importlib, "import_module", side_effect=ImportError("no")):
+            result = bundler.bundle_python_package("zstandard")
         assert result is None
 
     def test_bundles_real_package(self, bundler, tmp_path):

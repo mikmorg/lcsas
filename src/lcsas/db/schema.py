@@ -223,8 +223,8 @@ def migrate(conn: sqlite3.Connection) -> int:
                 "ALTER TABLE repositories ADD COLUMN "
                 "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
             )
-        for idx in ("idx_packs_sha256", "idx_volume_packs_volume_id"):
-            cursor.execute(f"DROP INDEX IF EXISTS {idx}")
+        cursor.execute("DROP INDEX IF EXISTS idx_packs_sha256")
+        cursor.execute("DROP INDEX IF EXISTS idx_volume_packs_volume_id")
         cursor.execute(
             "INSERT INTO schema_version (version) VALUES (?)",
             (3,),

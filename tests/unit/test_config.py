@@ -198,3 +198,77 @@ class TestXdgDbPath:
         monkeypatch.delenv("XDG_DATA_HOME", raising=False)
         result = _xdg_db_path()
         assert ".local/share/lcsas/archive.db" in result
+
+
+class TestNegativeConfig:
+    """Tests for invalid/incomplete configuration scenarios."""
+
+    def test_invalid_media_type_raises(self, tmp_path):
+        """Unknown media_type value should raise ValueError, not silently default."""
+        config_file = tmp_path / "bad.toml"
+        config_file.write_text(textwrap.dedent("""\
+            [paths]
+            mirror_base = "/mnt/mirror"
+            staging = "/mnt/staging"
+            database = "/tmp/test.db"
+
+            [defaults]
+            media_type = "BLUERAY_TYPO"
+        """))
+        with pytest.raises(ValueError, match="Unknown media type"):
+            load_config(config_file)
+
+    def test_missing_mirror_path_warns(self, tmp_path, caplog):
+        """A repo mirror_path that doesn't exist emits a warning."""
+        import logging
+        config_file = tmp_path / "warn.toml"
+        config_file.write_text(textwrap.dedent(f"""\
+            [paths]
+            mirror_base = "{tmp_path}"
+            staging = "{tmp_path}"
+            database = "{tmp_path / 'test.db'}"
+
+            [repos.missing_mirror]
+            mirror_path = "/absolute/nonexistent/mirror/path/12345"
+        """))
+        with caplog.at_level(logging.WARNING, logger="lcsas"):
+            load_config(config_file)
+        assert "mirror_path does not exist" in caplog.text
+
+    def test_missing_password_file_warns(self, tmp_path, caplog):
+        """A password_file that doesn't exist emits a warning."""
+        import logging
+        mirror = tmp_path / "mirror"
+        mirror.mkdir()
+        config_file = tmp_path / "warn.toml"
+        config_file.write_text(textwrap.dedent(f"""\
+            [paths]
+            mirror_base = "{tmp_path}"
+            staging = "{tmp_path}"
+            database = "{tmp_path / 'test.db'}"
+
+            [repos.family]
+            mirror_path = "{mirror}"
+            password_file = "{tmp_path / 'nonexistent.key'}"
+        """))
+        with caplog.at_level(logging.WARNING, logger="lcsas"):
+            load_config(config_file)
+        assert "password_file does not exist" in caplog.text
+
+    def test_malformed_toml_raises(self, tmp_path):
+        """Syntactically invalid TOML raises an error on load."""
+        import tomllib
+        config_file = tmp_path / "bad.toml"
+        config_file.write_bytes(b"[unclosed\nkey = value\n")
+        with pytest.raises((tomllib.TOMLDecodeError, Exception)):
+            load_config(config_file)
+
+    def test_missing_required_mirror_path_key(self, tmp_path):
+        """A repo block without mirror_path should raise KeyError."""
+        config_file = tmp_path / "bad.toml"
+        config_file.write_text(textwrap.dedent("""\
+            [repos.no_mirror]
+            password_file = "/tmp/key.txt"
+        """))
+        with pytest.raises(KeyError):
+            load_config(config_file)

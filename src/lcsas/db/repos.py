@@ -56,6 +56,19 @@ def list_repos(conn: sqlite3.Connection) -> list[Repository]:
 
 
 def delete_repo(conn: sqlite3.Connection, repo_id: str) -> None:
-    """Delete a repository from the catalog."""
+    """Delete a repository from the catalog.
+
+    Raises:
+        ValueError: If the repository has associated packs.  Delete or
+            reassign them first, or use the *force* parameter.
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) FROM packs WHERE repo_id = ?", (repo_id,)
+    ).fetchone()
+    if row and row[0] > 0:
+        raise ValueError(
+            f"Repository '{repo_id}' has {row[0]} associated pack(s). "
+            "Remove all packs before deleting the repository."
+        )
     conn.execute("DELETE FROM repositories WHERE repo_id = ?", (repo_id,))
     conn.commit()

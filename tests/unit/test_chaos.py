@@ -18,7 +18,6 @@ Test categories:
 from __future__ import annotations
 
 import base64
-import copy
 import hashlib
 import json
 import os
@@ -389,7 +388,7 @@ class TestMalformedRepo:
         (repo / "snapshots").mkdir()  # empty
 
         restorer = PurePythonRestorer(repo, pw)
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             restorer.restore(target=tmp_path / "out")
 
     def test_missing_config_is_ok(self, tmp_path):

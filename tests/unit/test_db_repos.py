@@ -6,6 +6,7 @@ import sqlite3
 
 import pytest
 
+from lcsas.db.packs import register_pack
 from lcsas.db.repos import delete_repo, get_repo, list_repos, register_repo
 from lcsas.db.snapshots import delete_snapshots_for_repo, upsert_snapshot
 
@@ -72,6 +73,13 @@ class TestDeleteRepo:
         # Only the fixture's _test repo should remain
         assert len(repos) == 1
         assert repos[0].repo_id == "_test"
+
+    def test_delete_repo_with_packs_raises(self, memory_db):
+        """Deleting a repo that owns packs raises ValueError."""
+        register_repo(memory_db, "has_packs", "Has Packs", "/packs")
+        register_pack(memory_db, sha256="a" * 64, size_bytes=100, repo_id="has_packs")
+        with pytest.raises(ValueError, match="associated pack"):
+            delete_repo(memory_db, "has_packs")
 
 
 class TestDeleteSnapshotsForRepo:

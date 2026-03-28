@@ -85,6 +85,35 @@ class VolumeMerger:
         self,
         source_volume_ids: list[int],
     ) -> None:
-        """Mark source volumes as DEPRECATED after successful consolidation."""
+        """Mark source volumes as DEPRECATED after successful consolidation.
+
+        This is the second step of a two-phase consolidation.  Call
+        :meth:`mark_sources_consolidating` *before* starting the burn so
+        that a crash leaves volumes in a recognisable recovery state rather
+        than silently ACTIVE.
+        """
         for vid in source_volume_ids:
             update_status(self._conn, vid, "DEPRECATED")
+
+    def mark_sources_consolidating(
+        self,
+        source_volume_ids: list[int],
+    ) -> None:
+        """Transition source volumes to CONSOLIDATING before the burn starts.
+
+        Marking volumes CONSOLIDATING before the burn provides a recovery
+        marker: if the process crashes, operators can inspect the catalog
+        and either re-run the burn (transition back to VERIFIED) or
+        complete the deprecation manually, rather than finding volumes
+        silently stuck as ACTIVE with no indication of intent.
+        """
+        for vid in source_volume_ids:
+            update_status(self._conn, vid, "CONSOLIDATING")
+
+    def abort_consolidation(
+        self,
+        source_volume_ids: list[int],
+    ) -> None:
+        """Revert CONSOLIDATING volumes back to VERIFIED on burn failure."""
+        for vid in source_volume_ids:
+            update_status(self._conn, vid, "VERIFIED")

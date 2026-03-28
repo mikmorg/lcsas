@@ -10,6 +10,7 @@ from lcsas.log import get_logger
 from lcsas.rustic.wrapper import RusticRunner
 from lcsas.utils.fs import copy_file, ensure_dir
 from lcsas.utils.hashing import sha256_file
+from lcsas.utils.pack_layout import METADATA_SUBDIRS, find_pack_file, pack_dest_path
 
 logger = get_logger()
 
@@ -77,7 +78,7 @@ class RestoreExecutor:
         ensure_dir(cache_dir)
         ensure_dir(cache_dir / "data")
 
-        for subdir in ["index", "snapshots", "keys"]:
+        for subdir in METADATA_SUBDIRS:
             src = metadata_source / subdir
             dst = cache_dir / subdir
             if src.is_dir() and not dst.exists():
@@ -126,25 +127,17 @@ class RestoreExecutor:
                 logger.info(
                     "Ingesting packs: %d/%d", i, len(required_packs),
                 )
-            # Place packs in two-level layout (data/<prefix>/<hash>)
-            # which rustic/restic 0.14+ expects for local repositories.
-            if len(sha256) >= 2:
-                prefix_dir = cache_data / sha256[:2]
-                ensure_dir(prefix_dir)
-                dst = prefix_dir / sha256
-            else:
-                dst = cache_data / sha256
+            # Place packs in two-level layout via shared helper
+            dst = pack_dest_path(cache_data, sha256)
+            ensure_dir(dst.parent)
 
             if dst.exists():
                 continue
 
-            # Try flat layout on the source volume
-            src = data_dir / sha256
-            if not src.is_file() and len(sha256) >= 2:
-                # Two-level layout on source
-                src = data_dir / sha256[:2] / sha256
+            # Locate pack on the source volume (flat or two-level)
+            src = find_pack_file(data_dir, sha256)
 
-            if src.is_file():
+            if src is not None:
                 copy_file(src, dst)
 
                 if verify:
@@ -210,10 +203,7 @@ class RestoreExecutor:
         data_dir = cache_dir / "data"
         missing: list[str] = []
         for sha256 in required_packs:
-            if len(sha256) >= 2:
-                path = data_dir / sha256[:2] / sha256
-            else:
-                path = data_dir / sha256
+            path = data_dir / sha256[:2] / sha256 if len(sha256) >= 2 else data_dir / sha256
             if not path.is_file():
                 missing.append(sha256)
         return missing

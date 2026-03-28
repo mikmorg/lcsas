@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 
 from lcsas.db.models import Pack, Snapshot, Volume
 from lcsas.db.packs import _row_to_pack
 from lcsas.db.snapshots import _row_to_snapshot
 from lcsas.db.volumes import _row_to_volume
+
+_logger = logging.getLogger(__name__)
 
 # Conservative batch limit – stays below SQLite's 999-variable limit on old builds.
 _SQLITE_BATCH = 900
@@ -129,6 +132,20 @@ def get_pick_list(
     """
     if not pack_sha256_list:
         return {}
+
+    if preferred_location:
+        # Warn if the preferred location doesn't exist in the DB so the
+        # user gets feedback rather than silently falling back to any volume.
+        row = conn.execute(
+            "SELECT 1 FROM locations WHERE name = ? LIMIT 1",
+            (preferred_location,),
+        ).fetchone()
+        if row is None:
+            _logger.warning(
+                "get_pick_list: preferred_location '%s' not found in catalog — "
+                "falling back to alphabetical volume order",
+                preferred_location,
+            )
 
     # Deduplicate: each pack assigned to one volume only.
     # Process in batches to avoid SQLite variable limit.

@@ -7,8 +7,21 @@ from pathlib import Path
 
 from lcsas.db.models import Pack
 from lcsas.utils.fs import ensure_dir, hardlink_or_copy, safe_remove_tree
+from lcsas.utils.pack_layout import find_pack_file, pack_dest_path
 
 _logger = logging.getLogger(__name__)
+
+
+class MissingPacksError(Exception):
+    """Raised when one or more required packs are not found in the mirror."""
+
+    def __init__(self, missing: list[str]) -> None:
+        super().__init__(
+            f"{len(missing)} pack(s) not found in mirror: "
+            + ", ".join(missing[:5])
+            + ("..." if len(missing) > 5 else "")
+        )
+        self.missing = missing
 
 
 class StagingBuilder:
@@ -66,29 +79,20 @@ class StagingBuilder:
         missing: list[str] = []
 
         for pack in packs:
-            src = self._find_pack_file(mirror_data_dir, pack.sha256)
+            src = find_pack_file(mirror_data_dir, pack.sha256)
             if src is None:
                 missing.append(pack.sha256[:12])
                 continue
 
-            # Two-level layout: data/<prefix>/<hash>
-            if len(pack.sha256) >= 2:
-                prefix_dir = self._data_dir / pack.sha256[:2]
-                ensure_dir(prefix_dir)
-                dst = prefix_dir / pack.sha256
-            else:
-                dst = self._data_dir / pack.sha256
+            dst = pack_dest_path(self._data_dir, pack.sha256)
+            ensure_dir(dst.parent)
 
             if not dst.exists():
                 hardlink_or_copy(src, dst)
             staged += 1
 
         if missing:
-            _logger.warning(
-                "stage_packs: %d pack(s) not found in %s: %s",
-                len(missing), mirror_data_dir,
-                ", ".join(missing[:5]) + ("..." if len(missing) > 5 else ""),
-            )
+            raise MissingPacksError(missing)
 
         return staged
 
@@ -97,18 +101,7 @@ class StagingBuilder:
 
         Checks two-level hash-prefix layout first, then flat.
         """
-        # Two-level: data/ab/abcdef1234...
-        if len(sha256) >= 2:
-            prefixed = data_dir / sha256[:2] / sha256
-            if prefixed.is_file():
-                return prefixed
-
-        # Flat: data/abcdef1234...
-        flat = data_dir / sha256
-        if flat.is_file():
-            return flat
-
-        return None
+        return find_pack_file(data_dir, sha256)
 
     def cleanup(self) -> None:
         """Remove the entire staging directory tree."""

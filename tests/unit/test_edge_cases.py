@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from lcsas.binpack.algorithm import estimate_volumes_needed, first_fit_decreasing
@@ -174,6 +176,7 @@ class TestScannerEdgeCases:
         assert sha in result
         assert result[sha] == 0
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Symlinks not standard on Windows")
     def test_symlinked_pack_included(self, tmp_path):
         """Symlinked pack files are followed and included."""
         data_dir = tmp_path / "data"

@@ -19,8 +19,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 from lcsas.restore._aes_pure import (
     aes_ctr,
     aes_encrypt_block,
@@ -197,7 +195,8 @@ class TestStandaloneSubprocess:
             f"stderr: {result.stderr}"
         )
         restored = target / "standalone_test.txt"
-        assert restored.is_file(), f"Expected file not found. Dir contents: {list(target.rglob('*'))}"
+        contents = list(target.rglob('*'))
+        assert restored.is_file(), f"Expected file not found. Dir contents: {contents}"
         assert restored.read_bytes() == b"Standalone subprocess test data!\n"
 
     def test_list_snapshots_via_subprocess(self, tmp_path):

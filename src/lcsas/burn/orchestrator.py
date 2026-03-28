@@ -293,10 +293,20 @@ class BurnOrchestrator:
         builder.initialize()
 
         mirror_paths = self._get_mirror_paths()
-        for _repo_id, mirror_path in mirror_paths.items():
+        # Group packs by repo so we look for each pack only in its own mirror.
+        # This avoids MissingPacksError when multiple repos share a volume.
+        from collections import defaultdict
+        packs_by_repo: dict[str, list] = defaultdict(list)
+        for p in selected_packs:
+            packs_by_repo[p.repo_id].append(p)
+
+        for repo_id, repo_packs in packs_by_repo.items():
+            mirror_path = mirror_paths.get(repo_id)
+            if mirror_path is None:
+                continue
             data_dir = mirror_path / "data"
             if data_dir.is_dir():
-                builder.stage_packs(selected_packs, data_dir)
+                builder.stage_packs(repo_packs, data_dir)
 
         # 2. Inject holographic metadata
         injector = HolographicInjector(staging_root)

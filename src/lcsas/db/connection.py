@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import os
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -15,12 +16,19 @@ def get_connection(db_path: Path | str) -> sqlite3.Connection:
     Enables WAL mode, foreign keys, busy_timeout, and uses Row factory
     for dict-like access to query results.  Sets the file to owner-only
     permissions (0600) on first creation.
+
+    Database files are created with owner-only permissions atomically
+    by using ``os.open()`` with ``O_CREAT | O_EXCL`` so the file is
+    never world-readable even for an instant.
     """
     db = Path(db_path)
-    is_new = not db.exists()
+    db.parent.mkdir(parents=True, exist_ok=True)
+    # Atomically create the file with restricted permissions so there is
+    # no window where it is readable by other users (TOCTOU-safe).
+    if not db.exists():
+        fd = os.open(str(db), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
     conn = sqlite3.connect(str(db_path))
-    if is_new and db.exists():
-        db.chmod(0o600)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")

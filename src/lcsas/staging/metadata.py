@@ -15,9 +15,10 @@ from lcsas.config.settings import LCSASConfig
 from lcsas.db.models import Pack, Volume
 from lcsas.restore.standalone_builder import build_standalone
 from lcsas.utils.fs import copy_file, copy_tree, ensure_dir
+from lcsas.utils.pack_layout import METADATA_SUBDIRS
 
 # Repository subdirectories that constitute "hot" metadata
-_METADATA_DIRS = ["index", "snapshots", "keys"]
+_METADATA_DIRS = list(METADATA_SUBDIRS)
 _METADATA_FILES = ["config"]
 
 

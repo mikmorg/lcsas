@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.db.models import Pack, Volume
-from lcsas.staging.builder import StagingBuilder
+from lcsas.staging.builder import MissingPacksError, StagingBuilder
 from lcsas.staging.metadata import HolographicInjector
 
 
@@ -58,7 +60,7 @@ class TestStagingBuilder:
         staged = builder.stage_packs(packs, mirror_data)
         assert staged == 1
 
-    def test_stage_missing_pack_skipped(self, tmp_path):
+    def test_stage_missing_pack_raises(self, tmp_path):
         mirror_data = tmp_path / "mirror" / "data"
         mirror_data.mkdir(parents=True)
 
@@ -67,8 +69,8 @@ class TestStagingBuilder:
         builder.initialize()
 
         packs = [self._make_pack("nonexistent")]
-        staged = builder.stage_packs(packs, mirror_data)
-        assert staged == 0
+        with pytest.raises(MissingPacksError, match="nonexistent"):
+            builder.stage_packs(packs, mirror_data)
 
     def test_cleanup(self, tmp_path):
         staging_root = tmp_path / "staging"

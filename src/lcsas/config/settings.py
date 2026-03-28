@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from lcsas.config.media import MediaType
+
+_logger = logging.getLogger("lcsas")
 
 
 @dataclass(frozen=True)
@@ -64,17 +69,14 @@ def _xdg_db_path() -> str:
     Uses ``$XDG_DATA_HOME/lcsas/archive.db``, falling back to
     ``~/.local/share/lcsas/archive.db``.
     """
-    import os
     xdg = os.environ.get("XDG_DATA_HOME", "")
     if xdg:
         return str(Path(xdg) / "lcsas" / "archive.db")
     return str(Path.home() / ".local" / "share" / "lcsas" / "archive.db")
 
 
-def _validate_toml_keys(raw: dict) -> None:
+def _validate_toml_keys(raw: dict[str, Any]) -> None:
     """Warn about unknown TOML sections or keys (likely typos)."""
-    import logging
-    _logger = logging.getLogger("lcsas")
 
     known_sections = {"paths", "defaults", "repos", "survivability"}
     known_paths = {"mirror_base", "staging", "database"}
@@ -114,7 +116,7 @@ def _validate_toml_keys(raw: dict) -> None:
                 )
 
 
-def load_config(config_path: Path) -> LCSASConfig:
+def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
     """Load LCSAS configuration from a TOML file.
 
     Example TOML structure::
@@ -171,6 +173,29 @@ def load_config(config_path: Path) -> LCSASConfig:
             password_file=resolve(pw_file) if pw_file else None,
             encryption_key_id=repo_cfg.get("encryption_key_id", ""),
         )
+
+    # Warn early about missing mirror paths; scan/burn will silently produce
+    # no work if the mirror is absent, which is very hard to diagnose later.
+    for repo_name, repo_cfg in repos.items():
+        try:
+            mirror_exists = repo_cfg.mirror_path.exists()
+        except OSError:
+            mirror_exists = True  # Can't check — don't warn about access errors
+        if not mirror_exists:
+            _logger.warning(
+                "Config: repo '%s' mirror_path does not exist: %s",
+                repo_name, repo_cfg.mirror_path,
+            )
+        if repo_cfg.password_file is not None:
+            try:
+                pw_exists = repo_cfg.password_file.exists()
+            except OSError:
+                pw_exists = True  # Can't check — don't warn
+            if not pw_exists:
+                _logger.warning(
+                    "Config: repo '%s' password_file does not exist: %s",
+                    repo_name, repo_cfg.password_file,
+                )
 
     media_str = defaults.get("media_type", "BD25")
     try:
@@ -295,5 +320,4 @@ def validate_config(config: LCSASConfig) -> list[str]:
 
 def _is_writable(path: Path) -> bool:
     """Check if a path is writable using os.access."""
-    import os
     return os.access(path, os.W_OK)

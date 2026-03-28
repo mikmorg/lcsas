@@ -1403,7 +1403,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
     from lcsas.restore.executor import RestoreExecutor
     from lcsas.restore.planner import RestorePlanner
     from lcsas.rustic.wrapper import SubprocessRusticRunner
-    from lcsas.utils.fs import ensure_dir, safe_remove_tree
+    from lcsas.utils.fs import ensure_dir
 
     if args.config is None:
         logger.error("--config is required for restore exec.")
@@ -1447,19 +1447,21 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                 alternates_map[src.pack.sha256] = list(src.alternates)
 
     # Set up cache directory
-    cache_dir = args.cache_dir
-    cleanup_cache = False
-    if cache_dir is None:
-        cache_dir = Path(tempfile.mkdtemp(
-            prefix="lcsas-restore-", dir=str(config.staging_path),
-        ))
-        cleanup_cache = True
+    _tmp_dir: tempfile.TemporaryDirectory[str] | None = None
+    if args.cache_dir is None:
+        config.staging_path.mkdir(parents=True, exist_ok=True)
+        _tmp_dir = tempfile.TemporaryDirectory(
+            prefix="lcsas-restore-", dir=str(config.staging_path)
+        )
+        cache_dir = Path(_tmp_dir.name)
+    else:
+        cache_dir = args.cache_dir
     ensure_dir(cache_dir)
 
     from lcsas.utils.shutdown import ShutdownManager
     shutdown = ShutdownManager()
-    if cleanup_cache:
-        shutdown.register(lambda: safe_remove_tree(cache_dir))
+    if _tmp_dir is not None:
+        shutdown.register(_tmp_dir.cleanup)
     shutdown.install()
 
     try:
@@ -1595,8 +1597,8 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         logger.info("Restore complete!")
     finally:
         # Cleanup temporary cache
-        if cleanup_cache:
-            safe_remove_tree(cache_dir)
+        if _tmp_dir is not None:
+            _tmp_dir.cleanup()
         shutdown.uninstall()
 
     return 0
