@@ -1630,6 +1630,10 @@ def _retry_from_alternates_batch(
 
         vol_path = vol_dir / alt_label
         if not vol_path.is_dir():
+            logger.warning(
+                "Alternate volume directory not found: %s — skipping %s",
+                vol_path, alt_label,
+            )
             vol_path = vol_dir
             if not vol_path.is_dir():
                 continue

@@ -199,7 +199,7 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
 
     media_str = defaults.get("media_type", "BD25")
     try:
-        media_type = MediaType[media_str]
+        media_type = MediaType[media_str.upper()]
     except KeyError as err:
         valid = [m.name for m in MediaType]
         raise ValueError(

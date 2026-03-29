@@ -33,6 +33,12 @@ def get_connection(db_path: Path | str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.execute("PRAGMA busy_timeout=30000;")
+    result = conn.execute("PRAGMA quick_check(1);").fetchone()
+    if result is not None and result[0] != "ok":
+        raise RuntimeError(
+            f"Database integrity check failed for '{db_path}': {result[0]}. "
+            "The database may be corrupted. Restore from backup before continuing."
+        )
     return conn
 
 

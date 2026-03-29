@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
+_logger = logging.getLogger(__name__)
+
 
 def first_fit_decreasing(
     items: list[tuple[str, int]],
@@ -26,6 +30,16 @@ def first_fit_decreasing(
 
     # Sort by size descending
     sorted_items = sorted(items, key=lambda x: x[1], reverse=True)
+
+    # Warn if the largest item already exceeds usable capacity — it will never
+    # fit on any single volume and will always land in `remaining`.
+    if sorted_items and sorted_items[0][1] > usable:
+        item_id, item_size = sorted_items[0]
+        _logger.warning(
+            "Pack '%s' (%d bytes) exceeds usable capacity (%d bytes). "
+            "It cannot fit on a single volume and will be skipped.",
+            item_id, item_size, usable,
+        )
 
     selected: list[tuple[str, int]] = []
     remaining: list[tuple[str, int]] = []

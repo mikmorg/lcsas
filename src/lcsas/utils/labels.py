@@ -45,6 +45,9 @@ def sanitize_name(value: str, field: str = "name") -> str:
     return value
 
 
+_ISO9660_LABEL_MAX_LEN = 32
+
+
 def generate_volume_label(
     prefix: str = "LCSAS",
     media_type: str = "BD",
@@ -57,11 +60,22 @@ def generate_volume_label(
 
     Sequence numbers use 4 digits (up to 9999) and grow automatically
     beyond that if needed.
+
+    Raises:
+        ValueError: If the generated label exceeds the ISO 9660 maximum of
+            32 characters.
     """
     year = datetime.now(UTC).strftime("%Y")
     media_short = media_type.replace("MDISC", "MD").replace("BDXL", "BX")
     width = max(4, len(str(seq_num)))
-    return f"{prefix}_{media_short}_{year}_{seq_num:0{width}d}"
+    label = f"{prefix}_{media_short}_{year}_{seq_num:0{width}d}"
+    if len(label) > _ISO9660_LABEL_MAX_LEN:
+        raise ValueError(
+            f"Generated volume label '{label}' exceeds ISO 9660 maximum "
+            f"of {_ISO9660_LABEL_MAX_LEN} characters ({len(label)} chars). "
+            f"Shorten label_prefix or use a shorter media type name."
+        )
+    return label
 
 
 def generate_uuid() -> str:

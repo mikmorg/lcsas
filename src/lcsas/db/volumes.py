@@ -113,15 +113,29 @@ def update_status(
                 f"Invalid status transition for volume {volume_id}: "
                 f"{current} → {status} (allowed: {sorted(allowed)})"
             )
-        # Safety check: refuse DEPRECATED if packs would become unreplicated
+        # Safety check: refuse DEPRECATED if packs would become unreplicated.
+        # Use an immediate write lock so no other writer can remove a copy
+        # between the safety check and the UPDATE (TOCTOU guard).
         if status == "DEPRECATED":
-            at_risk = check_deprecation_safe(conn, volume_id)
-            if at_risk:
-                raise ValueError(
-                    f"Cannot deprecate volume {volume_id}: "
-                    f"{len(at_risk)} pack(s) would become unreplicated. "
-                    f"Use force=True to override."
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                at_risk = check_deprecation_safe(conn, volume_id)
+                if at_risk:
+                    conn.rollback()
+                    raise ValueError(
+                        f"Cannot deprecate volume {volume_id}: "
+                        f"{len(at_risk)} pack(s) would become unreplicated. "
+                        f"Use force=True to override."
+                    )
+                conn.execute(
+                    "UPDATE volumes SET status = ? WHERE volume_id = ?",
+                    (status, volume_id),
                 )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            return
     elif force:
         logger.warning(
             "Forced status change for volume %d → %s (bypassing transition rules)",

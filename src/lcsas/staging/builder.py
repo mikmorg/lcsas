@@ -84,6 +84,13 @@ class StagingBuilder:
                 missing.append(pack.sha256[:12])
                 continue
 
+            if src.is_symlink():
+                _logger.warning(
+                    "Skipping symlink pack file (possible path injection): %s", src
+                )
+                missing.append(pack.sha256[:12])
+                continue
+
             dst = pack_dest_path(self._data_dir, pack.sha256)
             ensure_dir(dst.parent)
 

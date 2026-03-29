@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,19 @@ class SubprocessRunnerBase:
     def __init__(self, binary: str, tmpdir: Path | None = None) -> None:
         self._binary = binary
         self._tmpdir = tmpdir
+
+    def check_binary(self) -> None:
+        """Raise RuntimeError if the binary is not found on PATH.
+
+        Call this as a preflight check before any heavy operation so the
+        user gets a clear message immediately rather than deep inside a
+        pipeline.
+        """
+        if shutil.which(self._binary) is None:
+            raise RuntimeError(
+                f"Required tool '{self._binary}' not found on PATH. "
+                f"Install it before continuing."
+            )
 
     def _env(self) -> dict[str, str] | None:
         if self._tmpdir is None:

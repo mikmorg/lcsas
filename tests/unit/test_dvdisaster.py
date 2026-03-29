@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
 
 
@@ -57,3 +59,18 @@ class TestDVDisasterMocked:
         iso = tmp_path / "test.iso"
         iso.write_bytes(b"\x00" * 1024)
         assert runner.repair_iso(iso) is False
+
+    def test_check_binary_raises_when_not_on_path(self):
+        """check_binary raises RuntimeError when dvdisaster is not on PATH."""
+        runner = SubprocessDVDisasterRunner()
+        with (
+            patch("shutil.which", return_value=None),
+            pytest.raises(RuntimeError, match="dvdisaster"),
+        ):
+            runner.check_binary()
+
+    def test_check_binary_passes_when_on_path(self):
+        """check_binary succeeds silently when dvdisaster exists on PATH."""
+        runner = SubprocessDVDisasterRunner()
+        with patch("shutil.which", return_value="/usr/bin/dvdisaster"):
+            runner.check_binary()  # should not raise

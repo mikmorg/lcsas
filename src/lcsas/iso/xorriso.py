@@ -105,6 +105,11 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
         except subprocess.CalledProcessError as exc:
             self._log_stderr("xorriso", exc)
             raise
+        except FileNotFoundError:
+            raise RuntimeError(
+                f"Required tool '{self._binary}' not found on PATH. "
+                f"Install xorriso before burning."
+            ) from None
 
     def verify_disc(
         self,

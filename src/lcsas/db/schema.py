@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 # ---------------------------------------------------------------------------
 # DDL Statements
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS volumes (
     status      TEXT NOT NULL DEFAULT 'STAGING'
                 CHECK (status IN (
                     'STAGING', 'BURNING', 'BURNED',
-                    'VERIFIED', 'DEPRECATED', 'DESTROYED'
+                    'VERIFIED', 'CONSOLIDATING', 'DEPRECATED', 'DESTROYED'
                 )),
     created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     closed_at   DATETIME,
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS volume_packs (
     volume_id   INTEGER NOT NULL,
     pack_id     INTEGER NOT NULL,
     PRIMARY KEY (volume_id, pack_id),
-    FOREIGN KEY (volume_id) REFERENCES volumes (volume_id),
+    FOREIGN KEY (volume_id) REFERENCES volumes (volume_id) ON DELETE CASCADE,
     FOREIGN KEY (pack_id)   REFERENCES packs (pack_id)
 );
 """
@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS volume_copies (
     iso_sha256      TEXT,
     last_verified_at DATETIME,
     media_serial    TEXT    NOT NULL DEFAULT '',
-    FOREIGN KEY (volume_id) REFERENCES volumes (volume_id),
+    FOREIGN KEY (volume_id) REFERENCES volumes (volume_id) ON DELETE CASCADE,
     FOREIGN KEY (location) REFERENCES locations (name),
     UNIQUE(volume_id, location)
 );
@@ -141,7 +141,7 @@ CREATE TABLE IF NOT EXISTS volume_events (
     event_date  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     location    TEXT,
     detail      TEXT NOT NULL DEFAULT '',
-    FOREIGN KEY (volume_id) REFERENCES volumes (volume_id),
+    FOREIGN KEY (volume_id) REFERENCES volumes (volume_id) ON DELETE CASCADE,
     FOREIGN KEY (location)  REFERENCES locations (name)
 );
 """
@@ -255,6 +255,42 @@ def migrate(conn: sqlite3.Connection) -> int:
             "INSERT INTO schema_version (version) VALUES (?)",
             (4,),
         )
+
+    # v4 → v5: widen volumes.status CHECK to include CONSOLIDATING.
+    # SQLite cannot alter CHECK constraints — must recreate the table.
+    # We disable FK enforcement during the swap to avoid spurious violations.
+    # PRAGMA foreign_keys must be set outside any active transaction.
+    if current < 5:
+        conn.commit()  # ensure no active transaction when setting FK pragma
+        conn.execute("PRAGMA foreign_keys=OFF")
+        cursor.execute("ALTER TABLE volumes RENAME TO volumes_old")
+        cursor.execute(
+            """CREATE TABLE volumes (
+                volume_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+                label       TEXT UNIQUE NOT NULL,
+                uuid        TEXT UNIQUE NOT NULL,
+                media_type  TEXT NOT NULL,
+                capacity_bytes INTEGER NOT NULL,
+                used_bytes  INTEGER NOT NULL DEFAULT 0,
+                location    TEXT NOT NULL DEFAULT 'Home_Shelf',
+                status      TEXT NOT NULL DEFAULT 'STAGING'
+                            CHECK (status IN (
+                                'STAGING', 'BURNING', 'BURNED',
+                                'VERIFIED', 'CONSOLIDATING', 'DEPRECATED', 'DESTROYED'
+                            )),
+                created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                closed_at   DATETIME,
+                verified_at DATETIME
+            )"""
+        )
+        cursor.execute("INSERT INTO volumes SELECT * FROM volumes_old")
+        cursor.execute("DROP TABLE volumes_old")
+        cursor.execute(
+            "INSERT INTO schema_version (version) VALUES (?)",
+            (5,),
+        )
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=ON")
 
     conn.commit()
     return CURRENT_SCHEMA_VERSION

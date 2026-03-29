@@ -108,3 +108,34 @@ class TestXorrisoMocked:
 
         assert not output.exists()
         assert not output.with_suffix(".iso.tmp").exists()
+
+    def test_burn_iso_missing_binary_raises_runtime_error(self, tmp_path):
+        """burn_iso raises RuntimeError with helpful message when xorriso not found."""
+        import pytest
+
+        runner = SubprocessXorrisoRunner()
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"ISO")
+
+        with (
+            patch("lcsas.iso.xorriso.subprocess.run", side_effect=FileNotFoundError()),
+            pytest.raises(RuntimeError, match="xorriso"),
+        ):
+            runner.burn_iso(iso, "/dev/sr0")
+
+    def test_check_binary_raises_when_not_on_path(self):
+        """check_binary raises RuntimeError when the tool is not on PATH."""
+        import pytest
+
+        runner = SubprocessXorrisoRunner()
+        with (
+            patch("shutil.which", return_value=None),
+            pytest.raises(RuntimeError, match="xorriso"),
+        ):
+            runner.check_binary()
+
+    def test_check_binary_passes_when_on_path(self):
+        """check_binary succeeds silently when the tool exists."""
+        runner = SubprocessXorrisoRunner()
+        with patch("shutil.which", return_value="/usr/bin/xorriso"):
+            runner.check_binary()  # should not raise

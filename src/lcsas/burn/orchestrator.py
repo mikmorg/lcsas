@@ -206,6 +206,13 @@ class BurnOrchestrator:
         Returns:
             The finalized Volume object.
         """
+        # Preflight: verify required binaries exist before committing state changes
+        from lcsas.utils.subprocess import SubprocessRunnerBase
+        if isinstance(self._xorriso, SubprocessRunnerBase):
+            self._xorriso.check_binary()
+        if not skip_ecc and isinstance(self._dvdisaster, SubprocessRunnerBase):
+            self._dvdisaster.check_binary()
+
         # Update status
         update_status(self._conn, manifest.volume_id, "BURNING")
 

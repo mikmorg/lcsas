@@ -72,6 +72,28 @@ class TestStagingBuilder:
         with pytest.raises(MissingPacksError, match="nonexistent"):
             builder.stage_packs(packs, mirror_data)
 
+    def test_symlink_pack_treated_as_missing(self, tmp_path):
+        """Symlink pack files are rejected to prevent path injection attacks."""
+        mirror_data = tmp_path / "mirror" / "data"
+        mirror_data.mkdir(parents=True)
+
+        # Create a real file and a symlink pointing somewhere else
+        target = tmp_path / "outside_mirror_file.bin"
+        target.write_bytes(b"secret_content")
+        symlink = mirror_data / "aabbcc"
+        symlink.symlink_to(target)
+
+        staging_root = tmp_path / "staging"
+        builder = StagingBuilder(staging_root)
+        builder.initialize()
+
+        packs = [self._make_pack("aabbcc")]
+        with pytest.raises(MissingPacksError, match="aabbcc"):
+            builder.stage_packs(packs, mirror_data)
+
+        # Destination should not have been created
+        assert not (staging_root / "data" / "aa" / "aabbcc").exists()
+
     def test_cleanup(self, tmp_path):
         staging_root = tmp_path / "staging"
         builder = StagingBuilder(staging_root)

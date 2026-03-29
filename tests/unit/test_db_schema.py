@@ -194,3 +194,81 @@ class TestMigrateV3ToV4:
         assert "idx_volume_events_volume" in indexes
         assert "idx_volume_events_type" in indexes
         conn.close()
+
+
+class TestMigrateV4ToV5:
+    """Test the v4 → v5 migration (CONSOLIDATING status in volumes CHECK)."""
+
+    def _make_v4_db(self):
+        """Create a minimal v4 database with data in volume_copies and volume_events."""
+        from lcsas.db.schema import SQL_CREATE_VOLUME_EVENTS
+        conn = get_memory_connection()
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(
+            """CREATE TABLE schema_version (
+                version INTEGER NOT NULL,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        conn.execute("INSERT INTO schema_version (version) VALUES (4)")
+        # v4 volumes table — no CONSOLIDATING in CHECK
+        conn.execute(
+            """CREATE TABLE volumes (
+                volume_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                label TEXT UNIQUE NOT NULL,
+                uuid TEXT UNIQUE NOT NULL,
+                media_type TEXT NOT NULL,
+                capacity_bytes INTEGER NOT NULL,
+                used_bytes INTEGER NOT NULL DEFAULT 0,
+                location TEXT NOT NULL DEFAULT 'Home_Shelf',
+                status TEXT NOT NULL DEFAULT 'STAGING',
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                closed_at DATETIME,
+                verified_at DATETIME
+            )"""
+        )
+        conn.execute(
+            """CREATE TABLE locations (
+                name TEXT PRIMARY KEY,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                description TEXT DEFAULT ''
+            )"""
+        )
+        conn.executescript(SQL_CREATE_VOLUME_EVENTS)
+        conn.commit()
+        return conn
+
+    def test_migrate_adds_consolidating_status(self):
+        conn = self._make_v4_db()
+        assert get_schema_version(conn) == 4
+        migrate(conn)
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+
+        # CONSOLIDATING should now be a valid status
+        conn.execute(
+            "INSERT INTO volumes (label, uuid, media_type, capacity_bytes, status) "
+            "VALUES ('V1', 'uuid1', 'BD25', 25000000000, 'CONSOLIDATING')"
+        )
+        row = conn.execute("SELECT status FROM volumes WHERE label='V1'").fetchone()
+        assert row[0] == "CONSOLIDATING"
+        conn.close()
+
+    def test_migrate_v4_preserves_existing_data(self):
+        conn = self._make_v4_db()
+        conn.execute(
+            "INSERT INTO volumes (label, uuid, media_type, capacity_bytes, status) "
+            "VALUES ('EXISTING', 'uuid2', 'BD25', 25000000000, 'VERIFIED')"
+        )
+        conn.commit()
+        migrate(conn)
+        row = conn.execute("SELECT label, status FROM volumes WHERE label='EXISTING'").fetchone()
+        assert row[0] == "EXISTING"
+        assert row[1] == "VERIFIED"
+        conn.close()
+
+    def test_migrate_idempotent_from_v4(self):
+        conn = self._make_v4_db()
+        migrate(conn)
+        migrate(conn)
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+        conn.close()

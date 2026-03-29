@@ -73,3 +73,91 @@ class TestVolumeMerger:
 
         updated = get_volume_by_id(memory_db, vol.volume_id)
         assert updated.status == "DEPRECATED"
+
+    def test_mark_sources_consolidating(self, memory_db):
+        """mark_sources_consolidating transitions VERIFIED → CONSOLIDATING."""
+        vol = create_volume(
+            memory_db, label="CONS_SRC", uuid=generate_uuid(),
+            media_type="BD25", capacity_bytes=25_000_000_000,
+            status="VERIFIED",
+        )
+        merger = VolumeMerger(memory_db)
+        merger.mark_sources_consolidating([vol.volume_id])
+
+        updated = get_volume_by_id(memory_db, vol.volume_id)
+        assert updated.status == "CONSOLIDATING"
+
+    def test_abort_consolidation(self, memory_db):
+        """abort_consolidation reverts CONSOLIDATING → VERIFIED (crash recovery)."""
+        vol = create_volume(
+            memory_db, label="CONS_ABORT", uuid=generate_uuid(),
+            media_type="BD25", capacity_bytes=25_000_000_000,
+            status="VERIFIED",
+        )
+        merger = VolumeMerger(memory_db)
+        merger.mark_sources_consolidating([vol.volume_id])
+        merger.abort_consolidation([vol.volume_id])
+
+        updated = get_volume_by_id(memory_db, vol.volume_id)
+        assert updated.status == "VERIFIED"
+
+    def test_mark_consolidating_then_deprecate(self, memory_db):
+        """Full happy path: VERIFIED → CONSOLIDATING → DEPRECATED."""
+        vol = create_volume(
+            memory_db, label="FULL_CONS", uuid=generate_uuid(),
+            media_type="BD25", capacity_bytes=25_000_000_000,
+            status="VERIFIED",
+        )
+        # Stage a pack onto another VERIFIED volume so deprecation is safe
+        vol2 = create_volume(
+            memory_db, label="SAFE_COPY", uuid=generate_uuid(),
+            media_type="MDISC100", capacity_bytes=100_000_000_000,
+            status="VERIFIED",
+        )
+        p = register_pack(memory_db, sha256="full_cons_pack", size_bytes=100, repo_id="_test")
+        bulk_link_packs(memory_db, vol.volume_id, [p.pack_id])
+        bulk_link_packs(memory_db, vol2.volume_id, [p.pack_id])
+
+        merger = VolumeMerger(memory_db)
+        merger.mark_sources_consolidating([vol.volume_id])
+        merger.deprecate_sources([vol.volume_id])
+
+        updated = get_volume_by_id(memory_db, vol.volume_id)
+        assert updated.status == "DEPRECATED"
+
+    def test_mark_consolidating_multiple_volumes(self, memory_db):
+        """mark_sources_consolidating handles multiple volumes at once."""
+        vols = []
+        for i in range(3):
+            v = create_volume(
+                memory_db, label=f"MULTI_CONS_{i}", uuid=generate_uuid(),
+                media_type="BD25", capacity_bytes=25_000_000_000,
+                status="VERIFIED",
+            )
+            vols.append(v)
+
+        merger = VolumeMerger(memory_db)
+        merger.mark_sources_consolidating([v.volume_id for v in vols])
+
+        for v in vols:
+            updated = get_volume_by_id(memory_db, v.volume_id)
+            assert updated.status == "CONSOLIDATING"
+
+    def test_abort_consolidation_multiple_volumes(self, memory_db):
+        """abort_consolidation reverts all CONSOLIDATING volumes back to VERIFIED."""
+        vols = []
+        for i in range(3):
+            v = create_volume(
+                memory_db, label=f"ABORT_MULTI_{i}", uuid=generate_uuid(),
+                media_type="BD25", capacity_bytes=25_000_000_000,
+                status="VERIFIED",
+            )
+            vols.append(v)
+
+        merger = VolumeMerger(memory_db)
+        merger.mark_sources_consolidating([v.volume_id for v in vols])
+        merger.abort_consolidation([v.volume_id for v in vols])
+
+        for v in vols:
+            updated = get_volume_by_id(memory_db, v.volume_id)
+            assert updated.status == "VERIFIED"

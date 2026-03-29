@@ -425,3 +425,72 @@ class TestCmdRestoreExec:
         args = parser.parse_args(["restore", "plan", "snap1", "--repo", "fam"])
         assert args.command == "restore"
         assert args.restore_command == "plan"
+
+
+# ---------------------------------------------------------------------------
+# _retry_from_alternates_batch helper tests
+# ---------------------------------------------------------------------------
+
+
+class TestRetryFromAlternatesBatch:
+    """Unit tests for the _retry_from_alternates_batch helper."""
+
+    def test_missing_dir_emits_warning(self, tmp_path, caplog):
+        """When an alternate volume directory does not exist, a warning is logged."""
+        import logging
+
+        from lcsas.cli.main import _retry_from_alternates_batch
+
+        vol_dir = tmp_path / "volumes"
+        vol_dir.mkdir()
+        # Note: vol_dir / "ALT_VOL" does NOT exist
+
+        mock_executor = MagicMock()
+        # When falling back to vol_dir, ingest returns (0 ingested, all failed)
+        mock_executor.ingest_volume.return_value = (0, ["deadbeef" * 8])
+        alternates_map = {"deadbeef" * 8: ["ALT_VOL"]}
+        failed_packs = ["deadbeef" * 8]
+
+        with caplog.at_level(logging.WARNING, logger="lcsas"):
+            result = _retry_from_alternates_batch(
+                mock_executor,
+                tmp_path / "cache",
+                vol_dir,
+                failed_packs,
+                alternates_map,
+            )
+
+        # The pack should remain unrecovered
+        assert "deadbeef" * 8 in result
+        # A warning should have been emitted about the missing directory
+        assert any("ALT_VOL" in r.message for r in caplog.records)
+
+    def test_no_warning_when_dir_exists(self, tmp_path, caplog):
+        """No missing-dir warning when the alternate volume directory exists."""
+        import logging
+
+        from lcsas.cli.main import _retry_from_alternates_batch
+
+        vol_dir = tmp_path / "volumes"
+        alt_dir = vol_dir / "ALT_VOL"
+        alt_dir.mkdir(parents=True)
+
+        mock_executor = MagicMock()
+        mock_executor.ingest_volume.return_value = (0, ["deadbeef" * 8])
+        alternates_map = {"deadbeef" * 8: ["ALT_VOL"]}
+        failed_packs = ["deadbeef" * 8]
+
+        with caplog.at_level(logging.WARNING, logger="lcsas"):
+            _retry_from_alternates_batch(
+                mock_executor,
+                tmp_path / "cache",
+                vol_dir,
+                failed_packs,
+                alternates_map,
+            )
+
+        missing_warnings = [
+            r for r in caplog.records
+            if "not found" in r.message.lower() and "ALT_VOL" in r.message
+        ]
+        assert not missing_warnings

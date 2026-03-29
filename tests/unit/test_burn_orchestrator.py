@@ -440,3 +440,51 @@ class TestGetMirrorPaths:
         paths = orch._get_mirror_paths()
         assert "default" in paths
         assert paths["default"] == tmp_path / "mirror"
+
+
+# =========================================================================
+# Preflight binary checks
+# =========================================================================
+
+
+class TestPreflightChecks:
+    """execute() raises RuntimeError before touching state if a tool is missing."""
+
+    def _prepare(self, orch_env):
+        return orch_env["orch"].prepare()
+
+    def test_execute_fails_if_xorriso_missing(self, orch_env):
+        """execute() raises RuntimeError when xorriso not on PATH (before DB update)."""
+        from lcsas.utils.subprocess import SubprocessRunnerBase
+        orch = orch_env["orch"]
+        conn = orch_env["conn"]
+        manifest = self._prepare(orch_env)
+
+        # Replace mock with real runner whose binary check will fail
+        real_xorriso = SubprocessRunnerBase.__new__(SubprocessRunnerBase)
+        real_xorriso._binary = "xorriso_not_on_path_____"
+        orch._xorriso = real_xorriso
+
+        with pytest.raises(RuntimeError, match="xorriso_not_on_path"):
+            orch.execute(manifest, skip_burn=True, skip_ecc=True)
+
+        # Volume status must still be STAGING (no state change)
+        vol = get_volume_by_id(conn, manifest.volume_id)
+        assert vol.status == "STAGING"
+
+    def test_execute_fails_if_dvdisaster_missing(self, orch_env):
+        """execute() raises RuntimeError when dvdisaster not on PATH (before DB update)."""
+        from lcsas.utils.subprocess import SubprocessRunnerBase
+        orch = orch_env["orch"]
+        conn = orch_env["conn"]
+        manifest = self._prepare(orch_env)
+
+        real_dvd = SubprocessRunnerBase.__new__(SubprocessRunnerBase)
+        real_dvd._binary = "dvdisaster_not_on_path_____"
+        orch._dvdisaster = real_dvd
+
+        with pytest.raises(RuntimeError, match="dvdisaster_not_on_path"):
+            orch.execute(manifest, skip_burn=True, skip_ecc=False)
+
+        vol = get_volume_by_id(conn, manifest.volume_id)
+        assert vol.status == "STAGING"
