@@ -67,6 +67,7 @@ def add_volume_copy(
     )
     if commit:
         conn.commit()
+    assert cursor.lastrowid is not None, "INSERT did not return a row ID"
     return get_volume_copy(conn, cursor.lastrowid)
 
 

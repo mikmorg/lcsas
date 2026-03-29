@@ -10,6 +10,7 @@ import json
 import textwrap
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from lcsas.config.settings import LCSASConfig
 from lcsas.db.models import Pack, Volume
@@ -77,7 +78,7 @@ class HolographicInjector:
                 ``total_bytes``, ``repositories``, and
                 ``sha256_manifest``.
         """
-        info: dict = {
+        info: dict[str, Any] = {
             "uuid": volume.uuid,
             "label": volume.label,
             "media_type": volume.media_type,

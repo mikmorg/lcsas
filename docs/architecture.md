@@ -535,6 +535,12 @@ The `restore.sh` script on each meta-volume attempts tools in this order:
 5. **Pure-Python fallback** — `standalone_restorer.py` / `restic_fallback.py`
    using only Python stdlib (AES-CTR, scrypt, zstd via bundled zstandard)
 
+> **Platform note:** The bundled rustic binary on the meta-volume is an
+> x86_64/glibc ELF binary (steps 1–2 above).  On ARM64 or musl-libc systems
+> the cascade skips directly to step 3 (system rustic/restic) or step 5
+> (pure-Python fallback), which works on any Python 3.9+ interpreter.
+> `standalone_restorer.py` on every data disc has **no platform dependency**.
+
 ### JSON Compatibility
 
 Both tools produce structurally compatible JSON output. The `rustic/parser.py`

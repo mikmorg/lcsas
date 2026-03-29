@@ -60,7 +60,7 @@ from lcsas.restore._aes_pure import (
 _ZSTD_MAGIC = b"\x28\xB5\x2F\xFD"
 
 try:
-    import zstandard as _zstd  # type: ignore[import-untyped]
+    import zstandard as _zstd
 
     def _decompress_zstd(data: bytes, max_output_size: int = 0) -> bytes:
         dctx = _zstd.ZstdDecompressor()
@@ -79,7 +79,7 @@ try:
 except ImportError:
     _HAS_ZSTD = False
 
-    def _decompress_zstd(data: bytes, max_output_size: int = 0) -> bytes:  # type: ignore[misc]
+    def _decompress_zstd(data: bytes, max_output_size: int = 0) -> bytes:  # noqa: F811
         raise RuntimeError(
             "This repository uses zstd compression but the 'zstandard' "
             "Python package is not installed.  Install it with:\n"

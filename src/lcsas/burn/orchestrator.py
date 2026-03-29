@@ -303,7 +303,7 @@ class BurnOrchestrator:
         # Group packs by repo so we look for each pack only in its own mirror.
         # This avoids MissingPacksError when multiple repos share a volume.
         from collections import defaultdict
-        packs_by_repo: dict[str, list] = defaultdict(list)
+        packs_by_repo: dict[str, list[Pack]] = defaultdict(list)
         for p in selected_packs:
             packs_by_repo[p.repo_id].append(p)
 

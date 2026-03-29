@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 import traceback
 from pathlib import Path
+from typing import Any
 
 from lcsas import __version__
 from lcsas.log import get_logger, setup_logging
@@ -312,14 +314,14 @@ def _resolve_db_path(
     Priority: ``--db`` flag > config.db_path > ``archive.db`` (cwd).
     """
     if getattr(args, "db", None):
-        return args.db
+        return Path(args.db)
     if config is not None and hasattr(config, "db_path"):
-        return config.db_path  # type: ignore[return-value]
+        return Path(config.db_path)
     return Path("archive.db")
 
 
 def _resolve_repo_names_to_ids(
-    conn: object,
+    conn: sqlite3.Connection,
     names: list[str] | None,
 ) -> list[str] | None:
     """Map user-facing repo *names* to DB repo_ids (UUIDs).
@@ -1010,7 +1012,7 @@ def cmd_location(args: argparse.Namespace) -> int:
             logger.info(f"  Packs missing: {len(missing)}")
             if missing:
                 # Group by repo
-                by_repo: dict[str, list] = {}
+                by_repo: dict[str, list[Any]] = {}
                 for p in missing:
                     repo = p.repo_id or "unknown"
                     by_repo.setdefault(repo, []).append(p)
@@ -1261,7 +1263,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         return 0 if passed else 1
 
 
-def _verify_all(conn, args, config) -> int:
+def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any) -> int:
     """Batch-verify all BURNED/VERIFIED volumes, optionally at a location."""
     from lcsas.db.volume_copies import get_copies_for_volume
     from lcsas.db.volume_events import add_event
@@ -1393,6 +1395,11 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
             return 1
 
         repo_cfg = config.repositories[repo_name]
+        if repo_cfg.password_file is None:
+            logger.error(
+                "Repository '%s' has no password_file configured.", repo_name
+            )
+            return 1
 
         # Get required pack hashes via rustic dry-run
         runner = SubprocessRusticRunner(tmpdir=config.staging_path)
@@ -1527,7 +1534,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                 vol_path = vol_dir / label
                 if not vol_path.is_dir():
                     vol_path = vol_dir
-                ingested, failed = executor.ingest_volume(
+                ingested, failed = executor.ingest_volume(  # type: ignore[misc]
                     cache_dir, vol_path, pack_hashes,
                     verify=not args.skip_verify,
                     collect_failures=True,
@@ -1578,7 +1585,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     if not vol_path.is_dir():
                         logger.info(f"  '{mount_path}' is not a directory, try again.")
                         continue
-                    ingested, failed = executor.ingest_volume(
+                    ingested, failed = executor.ingest_volume(  # type: ignore[misc]
                         cache_dir, vol_path, pack_hashes,
                         verify=not args.skip_verify,
                         collect_failures=True,
@@ -1985,7 +1992,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
 
 
 def _retry_from_alternates_batch(
-    executor,
+    executor: Any,
     cache_dir: Path,
     vol_dir: Path,
     failed_packs: list[str],
@@ -2031,7 +2038,7 @@ def _retry_from_alternates_batch(
 
 
 def _retry_from_alternates_interactive(
-    executor,
+    executor: Any,
     cache_dir: Path,
     failed_packs: list[str],
     alternates_map: dict[str, list[str]],

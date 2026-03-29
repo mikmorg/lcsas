@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from typing import TextIO
 
 
-class _StdoutHandler(logging.StreamHandler):
+class _StdoutHandler(logging.StreamHandler[TextIO]):
     """Handler that always writes to the *current* ``sys.stdout``.
 
     Unlike ``StreamHandler(sys.stdout)`` which captures the stream
@@ -20,11 +21,11 @@ class _StdoutHandler(logging.StreamHandler):
         super().__init__()
 
     @property
-    def stream(self):  # type: ignore[override]
+    def stream(self) -> TextIO:
         return sys.stdout
 
     @stream.setter
-    def stream(self, _value):  # type: ignore[override]
+    def stream(self, _value: TextIO) -> None:
         pass  # ignore attempts to set the stream
 
 

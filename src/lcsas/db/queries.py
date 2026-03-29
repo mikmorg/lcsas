@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from typing import Any
 
 from lcsas.db.models import Pack, Snapshot, Volume
 from lcsas.db.packs import _row_to_pack
@@ -198,7 +199,7 @@ def get_pick_list_with_alternates(
     conn: sqlite3.Connection,
     pack_sha256_list: list[str],
     preferred_location: str = "",
-) -> dict[str, dict]:
+) -> dict[str, dict[str, Any]]:
     """Generate a pick list with alternate volumes for each pack.
 
     Returns a dict keyed by pack SHA-256:
@@ -214,13 +215,13 @@ def get_pick_list_with_alternates(
 
     # Group by pack sha256: first row = primary, rest = alternates.
     # Process in batches to avoid SQLite variable limit.
-    result: dict[str, dict] = {}
+    result: dict[str, dict[str, Any]] = {}
 
     for batch_start in range(0, len(pack_sha256_list), _SQLITE_BATCH):
         batch = pack_sha256_list[batch_start : batch_start + _SQLITE_BATCH]
         placeholders = ",".join("?" for _ in batch)
 
-        params: list = list(batch)
+        params: list[Any] = list(batch)
         location_order = ""
         if preferred_location:
             location_order = "(CASE WHEN v.location = ? THEN 0 ELSE 1 END),"
@@ -454,7 +455,7 @@ def get_packs_missing_at_location(
 
 def get_location_summary(
     conn: sqlite3.Connection,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Summary of each location: volume count, pack count, packs behind."""
     total_archived = conn.execute(
         """SELECT COUNT(DISTINCT pack_id) FROM volume_packs"""

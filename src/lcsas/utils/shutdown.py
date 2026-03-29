@@ -4,6 +4,13 @@ from __future__ import annotations
 
 import signal
 from collections.abc import Callable
+from types import FrameType
+from typing import Any
+
+# Type alias matching signal.getsignal() / signal.signal() return type.
+_SignalHandler = (
+    Callable[[int, FrameType | None], Any] | int | signal.Handlers | None
+)
 
 
 class ShutdownManager:
@@ -21,8 +28,8 @@ class ShutdownManager:
     def __init__(self) -> None:
         self._callbacks: list[Callable[[], None]] = []
         self._shutting_down = False
-        self._prev_sigterm = signal.SIG_DFL
-        self._prev_sigint = signal.SIG_DFL
+        self._prev_sigterm: _SignalHandler = signal.SIG_DFL
+        self._prev_sigint: _SignalHandler = signal.SIG_DFL
 
     @property
     def shutting_down(self) -> bool:

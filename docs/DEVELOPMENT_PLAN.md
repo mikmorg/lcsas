@@ -1,6 +1,6 @@
 # LCSAS — Development Plan
 
-> Generated: 2026-02-18 | Updated: 2026-07-20 | Current: 690 tests passing (commit `61b003f`)
+> Generated: 2026-02-18 | Updated: 2026-03-29 | Current: 853 tests passing (commit `a9adebc`)
 
 ---
 
@@ -22,7 +22,7 @@ DVDisaster to write deduplicated, encrypted data packs onto optical media
 - **Deprecation safety** (prevents deprecating volumes with unreplicated packs)
 
 The codebase consists of 30+ Python source modules under `src/lcsas/`, zero
-runtime pip dependencies (pure stdlib), and 690 tests (675 unit + 15
+runtime pip dependencies (pure stdlib), and 853 tests (838 unit + 15
 integration) passing at the latest commit.
 
 ---
@@ -351,7 +351,7 @@ All phases complete.
 | Phase 19 (CLI & operational) | ✅ | 690 |
 | Phase 20 (documentation) | ✅ | 690 |
 
-**Current:** 690 tests passing (675 unit + 15 integration), 13 skipped.
+**Current:** 853 tests passing (838 unit + 15 integration), 13 skipped.
 
 ---
 
