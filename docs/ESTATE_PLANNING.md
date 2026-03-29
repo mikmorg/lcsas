@@ -78,7 +78,11 @@ To access the files on these discs:
 3. Insert the META disc into a computer running Linux.  Open the
    file called START_HERE.txt — it has step-by-step instructions.
 
-4. If you are not comfortable doing this yourself, take ALL the discs
+4. For a complete walkthrough (including how to get Linux if you
+   don't have it), see RECOVERY_GUIDE.md on the META disc, or the
+   printed copy in this binder.
+
+5. If you are not comfortable doing this yourself, take ALL the discs
    AND the encryption key to a computer professional.  The instructions
    are on the discs — they don't need to know this system.
 
@@ -142,4 +146,8 @@ The **meta-volume** additionally contains:
 | `README_RESTORE.txt` | Same content, plain text |
 | `tools/` | Portable Linux binaries (rustic, xorriso, python3) |
 | `lcsas/` | Full LCSAS source code |
-| `docs/` | Architecture docs, format specifications |
+| `docs/` | Architecture docs, format specifications, recovery guide |
+
+> **Print and include** `docs/RECOVERY_GUIDE.md` in your disc binder.
+> It covers all restore scenarios step by step, including how to get
+> Linux and what to do if something goes wrong.
