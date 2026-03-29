@@ -75,31 +75,35 @@ class StagingBuilder:
             Number of packs successfully staged.
         """
         ensure_dir(self._data_dir)
-        staged = 0
-        missing: list[str] = []
 
+        # Pass 1: verify all packs are locatable before staging anything.
+        # This prevents orphaned hardlinks if some packs are missing.
+        missing: list[str] = []
+        sources: dict[str, Path] = {}
         for pack in packs:
             src = find_pack_file(mirror_data_dir, pack.sha256)
             if src is None:
                 missing.append(pack.sha256[:12])
-                continue
-
-            if src.is_symlink():
+            elif src.is_symlink():
                 _logger.warning(
-                    "Skipping symlink pack file (possible path injection): %s", src
+                    "Symlink pack file rejected (possible path injection): %s", src
                 )
                 missing.append(pack.sha256[:12])
-                continue
-
-            dst = pack_dest_path(self._data_dir, pack.sha256)
-            ensure_dir(dst.parent)
-
-            if not dst.exists():
-                hardlink_or_copy(src, dst)
-            staged += 1
+            else:
+                sources[pack.sha256] = src
 
         if missing:
             raise MissingPacksError(missing)
+
+        # Pass 2: stage all packs (all are confirmed available).
+        staged = 0
+        for pack in packs:
+            src = sources[pack.sha256]
+            dst = pack_dest_path(self._data_dir, pack.sha256)
+            ensure_dir(dst.parent)
+            if not dst.exists():
+                hardlink_or_copy(src, dst)
+            staged += 1
 
         return staged
 

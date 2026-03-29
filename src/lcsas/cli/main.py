@@ -194,6 +194,48 @@ def build_parser() -> argparse.ArgumentParser:
     exec_p.add_argument("--skip-verify", action="store_true", default=False,
                         help="Skip SHA-256 verification of ingested packs.")
 
+    # restore from-disc — disc-only restore without config or mirror
+    fromdisc_p = restore_sub.add_parser(
+        "from-disc",
+        help="Restore directly from optical discs — no config file or mirror needed.",
+    )
+    fromdisc_p.add_argument(
+        "disc", type=Path,
+        help="Path to a mounted or extracted LCSAS disc (must contain catalog.db).",
+    )
+    fromdisc_p.add_argument(
+        "target_path", type=Path,
+        help="Directory to restore files into.",
+    )
+    fromdisc_p.add_argument(
+        "--password-file", type=Path, required=True,
+        help="Path to the repository encryption key / password file.",
+    )
+    fromdisc_p.add_argument(
+        "--repo", type=str, default=None,
+        help="Repository name to restore (auto-selected if only one repo on disc).",
+    )
+    fromdisc_p.add_argument(
+        "--snapshot", type=str, default="latest",
+        help="Snapshot ID to restore (default: latest).",
+    )
+    fromdisc_p.add_argument(
+        "--volume-dir", type=Path, default=None,
+        help="Directory containing all pre-extracted disc volumes for batch restore.",
+    )
+    fromdisc_p.add_argument(
+        "--catalog", type=Path, default=None,
+        help="Explicit path to catalog.db (default: <disc>/catalog.db).",
+    )
+    fromdisc_p.add_argument(
+        "--cache-dir", type=Path, default=None,
+        help="Reuse an existing restore cache directory instead of a temp dir.",
+    )
+    fromdisc_p.add_argument(
+        "--skip-verify", action="store_true", default=False,
+        help="Skip SHA-256 verification of ingested packs.",
+    )
+
     # --- consolidate ---
     cons_p = subparsers.add_parser("consolidate", help="Merge volumes into a larger one.")
     cons_p.add_argument("volume_ids", type=int, nargs="+",
@@ -1604,6 +1646,344 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_restore_from_disc(args: argparse.Namespace) -> int:
+    """Restore from optical discs without a config file or mirror.
+
+    Reads ``catalog.db`` and repository metadata directly from a mounted
+    or extracted disc.  No ``--config``, local mirror, or original
+    database required — everything needed is embedded on each disc.
+
+    Typical usage::
+
+        lcsas restore from-disc /mnt/disc1 ~/restored/ \\
+            --password-file ~/secret.key
+
+    For batch (scripted) restores with pre-extracted discs::
+
+        lcsas restore from-disc /tmp/disc1 ~/restored/ \\
+            --password-file ~/secret.key \\
+            --volume-dir /tmp/extracted_discs/
+    """
+    import shutil
+    import sys
+    import tempfile
+
+    from lcsas.db.connection import get_connection
+    from lcsas.restore.executor import PackCorruptionError, RestoreExecutor
+    from lcsas.restore.planner import RestorePlanner
+    from lcsas.rustic.wrapper import SubprocessRusticRunner
+    from lcsas.utils.fs import ensure_dir
+
+    disc_path = args.disc
+    if not disc_path.is_dir():
+        logger.error("Disc path '%s' is not a directory.", disc_path)
+        return 1
+
+    # Locate catalog.db on the disc
+    catalog_path = args.catalog if args.catalog else disc_path / "catalog.db"
+    if not catalog_path.is_file():
+        logger.error(
+            "No catalog.db found at '%s'.\n"
+            "Each LCSAS disc contains a catalog.db.  "
+            "If this disc is damaged, try another disc from the same archive.",
+            catalog_path,
+        )
+        return 1
+
+    # Use a temp directory for scratch files; keeps any --cache-dir separate.
+    tmp_dir_obj = tempfile.TemporaryDirectory(prefix="lcsas-fromdisc-")
+    try:
+        tmp_dir = Path(tmp_dir_obj.name)
+
+        # Copy catalog.db to temp to avoid locking a mounted disc/ISO.
+        tmp_catalog = tmp_dir / "catalog.db"
+        shutil.copy2(str(catalog_path), str(tmp_catalog))
+
+        disc_conn = get_connection(tmp_catalog)
+        try:
+            repo_rows = disc_conn.execute(
+                "SELECT repo_id, name, mirror_path FROM repositories"
+            ).fetchall()
+        finally:
+            disc_conn.close()
+
+        if not repo_rows:
+            logger.error(
+                "Disc catalog contains no repositories.\n"
+                "This may not be a valid LCSAS disc."
+            )
+            return 1
+
+        # Select the repository to restore
+        if args.repo:
+            repo_row = next((r for r in repo_rows if r["name"] == args.repo), None)
+            if repo_row is None:
+                names = [r["name"] for r in repo_rows]
+                logger.error(
+                    "Repository '%s' not found in disc catalog.  Available: %s",
+                    args.repo, ", ".join(names),
+                )
+                return 1
+        elif len(repo_rows) == 1:
+            repo_row = repo_rows[0]
+            logger.info("Repository: %s", repo_row["name"])
+        else:
+            logger.error(
+                "Multiple repositories found in disc catalog — "
+                "use --repo NAME to select one.\nAvailable: %s",
+                ", ".join(r["name"] for r in repo_rows),
+            )
+            return 1
+
+        repo_name = repo_row["name"]
+
+        # Locate metadata on the disc (written as metadata/<repo_name>/).
+        disc_meta = disc_path / "metadata" / repo_name
+        if not disc_meta.is_dir():
+            logger.error(
+                "Metadata for repository '%s' not found on disc.\n"
+                "Expected at: %s\n"
+                "This disc may be damaged or from a different archive.",
+                repo_name, disc_meta,
+            )
+            return 1
+
+        logger.info("Found metadata for '%s' on disc.", repo_name)
+
+        # Build restore cache and populate it with disc metadata.
+        cache_dir = args.cache_dir if args.cache_dir else (tmp_dir / "cache")
+        ensure_dir(cache_dir)
+
+        runner = SubprocessRusticRunner(tmpdir=tmp_dir)
+        executor = RestoreExecutor(runner)
+
+        logger.info("Copying repository metadata from disc to cache...")
+        executor.prepare_cache(cache_dir, disc_meta)
+
+        # Run rustic dry-run against the cache to determine required packs.
+        logger.info(
+            "Determining required packs for snapshot '%s'...", args.snapshot
+        )
+        try:
+            plan = runner.restore_dry_run(
+                snapshot_id=args.snapshot,
+                repo_path=cache_dir,
+                password_file=args.password_file,
+            )
+        except FileNotFoundError:
+            logger.error(
+                "rustic/restic binary not found.\n"
+                "Install rustic (https://rustic.cli.rs/) or "
+                "restic (https://restic.net/),\n"
+                "or use the standalone restorer bundled on the disc:\n"
+                "  python3 %s/standalone_restorer.py "
+                "--password-file %s --target %s",
+                disc_path, args.password_file, args.target_path,
+            )
+            return 1
+        except Exception as exc:
+            logger.error(
+                "Failed to determine required packs: %s\n"
+                "Verify the password file is correct and disc metadata is intact.",
+                exc,
+            )
+            return 1
+
+        logger.info(
+            "Snapshot '%s' requires %d pack file(s).",
+            args.snapshot, len(plan.required_pack_hashes),
+        )
+
+        # Look up which disc has which pack via the disc's catalog.
+        disc_conn = get_connection(tmp_catalog)
+        try:
+            planner = RestorePlanner(disc_conn)
+            pick_list = planner.generate_pick_list_v2(plan.required_pack_hashes)
+        finally:
+            disc_conn.close()
+
+        if pick_list.missing_packs:
+            logger.warning(
+                "%d required pack(s) not found in disc catalog — "
+                "they may be on unlisted discs.",
+                len(pick_list.missing_packs),
+            )
+
+        # Build alternates lookup for resilient pack collection.
+        alternates_map: dict[str, list[str]] = {}
+        for sources in pick_list.volumes.values():
+            for src in sources:
+                if src.alternates:
+                    alternates_map[src.pack.sha256] = list(src.alternates)
+
+        all_failed: list[str] = []
+
+        if args.volume_dir:
+            # Batch mode: all discs pre-extracted into a directory tree.
+            vol_dir = args.volume_dir
+
+            # Always try the initial --disc path first.
+            ingested, failed = executor.ingest_volume(  # type: ignore[misc]
+                cache_dir, disc_path, plan.required_pack_hashes,
+                verify=not args.skip_verify, collect_failures=True,
+            )
+            if ingested:
+                logger.info("  Initial disc: ingested %d pack(s).", ingested)
+            all_failed.extend(failed)
+
+            for label, vol_sources in pick_list.volumes.items():
+                pack_hashes = [s.pack.sha256 for s in vol_sources]
+                vol_path = vol_dir / label
+                if not vol_path.is_dir():
+                    logger.warning(
+                        "Volume directory not found: %s — skipping", vol_path
+                    )
+                    vol_path = vol_dir
+                ingested, failed = executor.ingest_volume(  # type: ignore[misc]
+                    cache_dir, vol_path, pack_hashes,
+                    verify=not args.skip_verify, collect_failures=True,
+                )
+                if ingested:
+                    logger.info("  %s: ingested %d pack(s).", label, ingested)
+                if failed:
+                    logger.warning(
+                        "  %s: %d pack(s) failed verification.", label, len(failed)
+                    )
+                    all_failed.extend(failed)
+
+            if all_failed:
+                still_failed = _retry_from_alternates_batch(
+                    executor, cache_dir, vol_dir,
+                    all_failed, alternates_map,
+                    verify=not args.skip_verify,
+                )
+                if still_failed:
+                    raise PackCorruptionError(
+                        f"{len(still_failed)} packs could not be recovered "
+                        f"from any disc: {still_failed[:5]}"
+                    )
+
+        else:
+            # Interactive mode: prompt user to mount each disc.
+            if not sys.stdin.isatty():
+                logger.error(
+                    "Interactive restore requires a TTY.\n"
+                    "Use --volume-dir with a directory of extracted discs "
+                    "for non-interactive (scripted) restores."
+                )
+                return 1
+
+            # First: ingest from the initial disc provided by the user.
+            logger.info("\nIngesting packs from initial disc...")
+            ingested, failed = executor.ingest_volume(  # type: ignore[misc]
+                cache_dir, disc_path, plan.required_pack_hashes,
+                verify=not args.skip_verify, collect_failures=True,
+            )
+            logger.info("  Ingested %d pack(s) from initial disc.", ingested)
+            all_failed.extend(failed)
+
+            # Determine which volumes are still needed.
+            still_missing = RestoreExecutor.verify_cache_completeness(
+                cache_dir, plan.required_pack_hashes
+            )
+            if still_missing:
+                missing_set = set(still_missing)
+                for label, vol_sources in sorted(pick_list.volumes.items()):
+                    pack_hashes = [
+                        s.pack.sha256 for s in vol_sources
+                        if s.pack.sha256 in missing_set
+                    ]
+                    if not pack_hashes:
+                        continue
+                    logger.info(
+                        "\nNeed %d pack(s) from disc '%s'.",
+                        len(pack_hashes), label,
+                    )
+                    while True:
+                        mount_path = input(
+                            f"Mount disc '{label}' and enter its path "
+                            "(or 'skip'): "
+                        ).strip()
+                        if mount_path.lower() == "skip":
+                            logger.info("  Skipping %s", label)
+                            break
+                        vol_path = Path(mount_path)
+                        if not vol_path.is_dir():
+                            logger.info(
+                                "  '%s' is not a directory — try again.", mount_path
+                            )
+                            continue
+                        ingested, v_failed = executor.ingest_volume(  # type: ignore[misc]
+                            cache_dir, vol_path, pack_hashes,
+                            verify=not args.skip_verify, collect_failures=True,
+                        )
+                        logger.info(
+                            "  Ingested %d pack(s) from %s", ingested, label
+                        )
+                        if v_failed:
+                            logger.warning(
+                                "  %d pack(s) failed verification", len(v_failed)
+                            )
+                            all_failed.extend(v_failed)
+                        break
+
+            if all_failed:
+                still_failed = _retry_from_alternates_interactive(
+                    executor, cache_dir,
+                    all_failed, alternates_map,
+                    verify=not args.skip_verify,
+                )
+                if still_failed:
+                    raise PackCorruptionError(
+                        f"{len(still_failed)} packs could not be recovered "
+                        f"from any disc: {still_failed[:5]}"
+                    )
+
+        # Completeness check before running rustic.
+        all_required = plan.required_pack_hashes
+        missing = RestoreExecutor.verify_cache_completeness(cache_dir, all_required)
+        if missing:
+            logger.error(
+                "\n%d of %d required pack(s) missing from cache.",
+                len(missing), len(all_required),
+            )
+            for sha in missing[:10]:
+                logger.error("  missing: %s", sha)
+            if len(missing) > 10:
+                logger.error("  ... and %d more", len(missing) - 10)
+            logger.error(
+                "\nRestore cannot proceed — mount the missing discs and retry,\n"
+                "or check for damaged discs."
+            )
+            return 1
+
+        # Execute restore.
+        target = args.target_path.resolve()
+        logger.info("\nRestoring snapshot '%s' \u2192 %s", args.snapshot, target)
+        try:
+            executor.execute_restore(
+                cache_dir=cache_dir,
+                snapshot_id=args.snapshot,
+                target_path=target,
+                password_file=args.password_file,
+            )
+        except FileNotFoundError:
+            logger.error(
+                "rustic/restic binary not found.\n"
+                "Use standalone_restorer.py bundled on the disc as a fallback:\n"
+                "  python3 %s/standalone_restorer.py "
+                "--password-file %s --target %s",
+                disc_path, args.password_file, target,
+            )
+            return 1
+
+        logger.info("Restore complete!")
+        return 0
+
+    finally:
+        tmp_dir_obj.cleanup()
+
+
 def _retry_from_alternates_batch(
     executor,
     cache_dir: Path,
@@ -1764,8 +2144,10 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_restore_plan(args)
         elif args.restore_command == "exec":
             return cmd_restore_exec(args)
+        elif args.restore_command == "from-disc":
+            return cmd_restore_from_disc(args)
         else:
-            logger.error("Usage: lcsas restore {plan,exec}")
+            logger.error("Usage: lcsas restore {plan,exec,from-disc}")
             return 1
     elif args.command == "meta":
         if args.meta_command == "build":

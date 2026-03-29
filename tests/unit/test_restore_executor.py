@@ -83,6 +83,38 @@ class TestPrepareCache:
         assert not (cache / "snapshots").exists()
         assert not (cache / "keys").exists()
 
+    def test_missing_subdir_logs_warning(self, executor, tmp_path, caplog):
+        """Missing metadata directories emit a warning-level log."""
+        import logging
+        cache = tmp_path / "cache"
+        source = tmp_path / "empty_metadata"
+        source.mkdir()
+
+        with caplog.at_level(logging.WARNING):
+            executor.prepare_cache(cache, source)
+
+        warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        # Should warn about at least one missing metadata directory
+        assert any("missing" in m.lower() or "Metadata" in m for m in warning_messages), \
+            f"No metadata warning in: {warning_messages}"
+
+    def test_missing_config_emits_warning(self, executor, tmp_path, caplog):
+        """Missing repository config emits a warning-level log."""
+        import logging
+        cache = tmp_path / "cache"
+        source = tmp_path / "meta_no_config"
+        source.mkdir()
+        # Create all metadata subdirs but no config file
+        for subdir in ("index", "snapshots", "keys"):
+            (source / subdir).mkdir()
+
+        with caplog.at_level(logging.WARNING):
+            executor.prepare_cache(cache, source)
+
+        warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("config" in m.lower() for m in warning_messages), \
+            f"No config warning in: {warning_messages}"
+
     def test_missing_config_skipped(self, executor, tmp_path):
         """Missing config file doesn't cause errors."""
         cache = tmp_path / "cache"
@@ -97,6 +129,7 @@ class TestPrepareCache:
 # =========================================================================
 # ingest_volume()
 # =========================================================================
+
 
 
 class TestIngestVolume:
@@ -222,6 +255,17 @@ class TestVerifyISO:
         iso = tmp_path / "test.iso"
         iso.write_bytes(b"fake iso")
         assert executor.verify_iso(iso) is True
+
+    def test_no_ecc_runner_logs_info_not_debug(self, executor, tmp_path, caplog):
+        """Without an ECC runner, verify_iso logs at INFO level (not DEBUG)."""
+        import logging
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"fake iso")
+        with caplog.at_level(logging.DEBUG):
+            executor.verify_iso(iso)
+        info_msgs = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert any("not verified" in r.message.lower() or "ECC" in r.message for r in info_msgs), \
+            f"Expected INFO log about ECC skip, got: {[r.message for r in caplog.records]}"
 
     def test_ecc_verify_passes(self, mock_rustic, tmp_path):
         """ECC verify_iso returns True when ECC passes."""

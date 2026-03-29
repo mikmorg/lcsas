@@ -31,6 +31,7 @@ def get_connection(db_path: Path | str) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA wal_autocheckpoint=1000;")  # explicit: checkpoint every 1000 pages
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.execute("PRAGMA busy_timeout=30000;")
     result = conn.execute("PRAGMA quick_check(1);").fetchone()
@@ -62,7 +63,8 @@ def locked_connection(
         If *True* (default), use ``LOCK_EX``; otherwise ``LOCK_SH``.
     """
     lock_path = Path(str(db_path) + ".lock")
-    lock_path.touch(exist_ok=True)
+    # open("a") creates the file if absent and is inherently atomic —
+    # no separate touch() needed, which avoided a TOCTOU window.
     lock_fd = open(lock_path, "a", encoding="utf-8")  # noqa: SIM115
     try:
         flag = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH

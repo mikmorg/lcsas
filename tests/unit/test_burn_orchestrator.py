@@ -488,3 +488,133 @@ class TestPreflightChecks:
 
         vol = get_volume_by_id(conn, manifest.volume_id)
         assert vol.status == "STAGING"
+
+
+# =========================================================================
+# BurnOrchestrator.stage() — multi-volume session staging
+# =========================================================================
+
+
+class TestStage:
+    """Unit tests for the session-based stage() method."""
+
+    def test_stage_dry_run_no_side_effects(self, orch_env):
+        """dry_run=True returns a plan with no DB writes or file system changes."""
+        orch = orch_env["orch"]
+        xorriso = orch_env["xorriso"]
+        dvdisaster = orch_env["dvdisaster"]
+
+        result = orch.stage(dry_run=True)
+
+        assert result.session_id == "dry-run"
+        assert result.manifests == []
+        assert result.iso_paths == []
+        # No ISO creation or ECC calls in dry-run
+        xorriso.create_iso.assert_not_called()
+        dvdisaster.augment_iso.assert_not_called()
+
+    def test_stage_dry_run_returns_stage_result(self, orch_env):
+        """dry_run=True returns a StageResult even without executing."""
+        from lcsas.burn.orchestrator import StageResult
+        orch = orch_env["orch"]
+        result = orch.stage(dry_run=True)
+        assert isinstance(result, StageResult)
+        assert result.session_id == "dry-run"
+
+    def test_stage_no_packs_raises(self, tmp_path):
+        """stage() raises ValueError when there are no unarchived packs."""
+        config = _make_config(tmp_path)
+        conn = get_memory_connection()
+        create_all(conn)
+
+        # No packs registered at all — stage() should find nothing to stage.
+        orch = BurnOrchestrator(config, conn, MagicMock(), MagicMock())
+        with pytest.raises(ValueError, match="No packs need staging"):
+            orch.stage()
+
+    def test_stage_creates_session_and_volumes(self, orch_env):
+        """stage() with real packs creates a session and staged volumes."""
+        from lcsas.db.sessions import get_session_volumes
+
+        orch = orch_env["orch"]
+
+        def fake_create_iso(source_dir, output_iso, volume_label):
+            output_iso.write_bytes(b"fake-iso-data")
+
+        orch_env["xorriso"].create_iso.side_effect = fake_create_iso
+
+        result = orch.stage(skip_ecc=True)
+
+        assert result.session_id != "dry-run"
+        assert len(result.manifests) >= 1
+        # Session recorded in DB
+        session_vols = get_session_volumes(orch_env["conn"], result.session_id)
+        assert len(session_vols) >= 1
+
+    def test_stage_with_repo_filter(self, orch_env):
+        """stage() with repo_ids filter only stages packs from that repo."""
+        orch = orch_env["orch"]
+
+        def fake_create_iso(source_dir, output_iso, volume_label):
+            output_iso.write_bytes(b"fake-iso-data")
+
+        orch_env["xorriso"].create_iso.side_effect = fake_create_iso
+        result = orch.stage(repo_ids=["family"], skip_ecc=True)
+        assert len(result.manifests) >= 1
+
+    def test_stage_insufficient_disk_space_raises(self, orch_env):
+        """stage() raises OSError when staging directory has insufficient space."""
+        import unittest.mock
+
+        orch = orch_env["orch"]
+        with unittest.mock.patch("shutil.disk_usage") as mock_usage:
+            mock_usage.return_value = unittest.mock.MagicMock(free=0)
+            with pytest.raises(OSError, match="Insufficient disk space"):
+                orch.stage(skip_ecc=True)
+
+
+# =========================================================================
+# BurnOrchestrator.burn_session()
+# =========================================================================
+
+
+class TestBurnSession:
+    """Unit tests for the session-based burn_session() method."""
+
+    def _create_staged_session(self, orch_env):
+        """Stage packs and return the session ID."""
+        orch = orch_env["orch"]
+
+        def fake_create_iso(source_dir, output_iso, volume_label):
+            output_iso.write_bytes(b"fake-iso-data")
+
+        orch_env["xorriso"].create_iso.side_effect = fake_create_iso
+        result = orch.stage(skip_ecc=True)
+        return result.session_id
+
+    def test_burn_session_skip_burn_succeeds(self, orch_env):
+        """burn_session(skip_burn=True) records volume copies without burning."""
+        from lcsas.db.volume_copies import get_copies_for_volume
+
+        session_id = self._create_staged_session(orch_env)
+        orch = orch_env["orch"]
+        conn = orch_env["conn"]
+
+        receipts = orch.burn_session(
+            session_ref=session_id,
+            location="Home_Shelf",
+            skip_burn=True,
+        )
+
+        assert len(receipts) >= 1
+        for receipt in receipts:
+            copies = get_copies_for_volume(conn, receipt.volume_id)
+            assert any(c.location == "Home_Shelf" for c in copies)
+
+    def test_burn_session_latest_resolves(self, orch_env):
+        """burn_session('latest') finds the most recent session."""
+        self._create_staged_session(orch_env)
+        orch = orch_env["orch"]
+        receipts = orch.burn_session(session_ref="latest", skip_burn=True)
+        assert isinstance(receipts, list)
+

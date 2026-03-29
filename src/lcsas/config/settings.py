@@ -209,6 +209,19 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
     # Survivability fields
     survive = raw.get("survivability", {})
 
+    if "mirror_base" not in paths:
+        _logger.warning(
+            "Config: 'paths.mirror_base' not set in '%s'; "
+            "defaulting to /mnt/mirror — set this explicitly to avoid surprises.",
+            config_path,
+        )
+    if "staging" not in paths:
+        _logger.warning(
+            "Config: 'paths.staging' not set in '%s'; "
+            "defaulting to /mnt/staging — set this explicitly to avoid surprises.",
+            config_path,
+        )
+
     return LCSASConfig(
         mirror_base_path=resolve(paths.get("mirror_base", "/mnt/mirror")),
         staging_path=resolve(paths.get("staging", "/mnt/staging")),

@@ -44,7 +44,10 @@ class RestoreExecutor:
         Attempts automatic repair if verification fails.
         """
         if self._ecc is None:
-            logger.debug("No ECC runner configured — skipping ISO verification")
+            logger.info(
+                "No ECC runner configured — disc integrity not verified for %s",
+                iso_path.name,
+            )
             return True
 
         logger.info(f"Verifying ECC on {iso_path.name}")
@@ -83,11 +86,22 @@ class RestoreExecutor:
             dst = cache_dir / subdir
             if src.is_dir() and not dst.exists():
                 shutil.copytree(str(src), str(dst))
+            elif not src.is_dir() and not dst.exists():
+                logger.warning(
+                    "Metadata directory missing from source — "
+                    "restore may fail: '%s' (expected at %s)",
+                    subdir, src,
+                )
 
         config_src = metadata_source / "config"
         config_dst = cache_dir / "config"
         if config_src.is_file() and not config_dst.exists():
             copy_file(config_src, config_dst)
+        elif not config_src.is_file() and not config_dst.exists():
+            logger.warning(
+                "Repository config missing from metadata source — "
+                "restore may fail (expected at %s)", config_src,
+            )
 
     def ingest_volume(
         self,

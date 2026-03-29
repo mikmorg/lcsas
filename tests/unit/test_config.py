@@ -272,3 +272,48 @@ class TestNegativeConfig:
         """))
         with pytest.raises(KeyError):
             load_config(config_file)
+
+    def test_missing_mirror_base_warns(self, tmp_path, caplog):
+        """Omitting paths.mirror_base emits a warning about defaulting."""
+        import logging
+
+        config_file = tmp_path / "no_mirror_base.toml"
+        config_file.write_text(textwrap.dedent(f"""\
+            [paths]
+            staging = "{tmp_path}"
+            database = "{tmp_path / 'test.db'}"
+        """))
+        with caplog.at_level(logging.WARNING, logger="lcsas"):
+            load_config(config_file)
+        assert "mirror_base" in caplog.text
+        assert "not set" in caplog.text
+
+    def test_missing_staging_warns(self, tmp_path, caplog):
+        """Omitting paths.staging emits a warning about defaulting."""
+        import logging
+
+        config_file = tmp_path / "no_staging.toml"
+        config_file.write_text(textwrap.dedent(f"""\
+            [paths]
+            mirror_base = "{tmp_path}"
+            database = "{tmp_path / 'test.db'}"
+        """))
+        with caplog.at_level(logging.WARNING, logger="lcsas"):
+            load_config(config_file)
+        assert "staging" in caplog.text
+        assert "not set" in caplog.text
+
+    def test_explicit_paths_no_default_warnings(self, tmp_path, caplog):
+        """When both mirror_base and staging are set, no default warnings emitted."""
+        import logging
+
+        config_file = tmp_path / "full.toml"
+        config_file.write_text(textwrap.dedent(f"""\
+            [paths]
+            mirror_base = "{tmp_path}"
+            staging = "{tmp_path}"
+            database = "{tmp_path / 'test.db'}"
+        """))
+        with caplog.at_level(logging.WARNING, logger="lcsas"):
+            load_config(config_file)
+        assert "not set" not in caplog.text

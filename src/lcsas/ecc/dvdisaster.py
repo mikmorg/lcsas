@@ -57,6 +57,16 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
         if not iso_path.exists():
             raise FileNotFoundError(f"ISO file not found: {iso_path}")
 
+        # Pre-flight: verify there is enough free space for the temp copy.
+        iso_size = iso_path.stat().st_size
+        disk_free = shutil.disk_usage(iso_path.parent).free
+        # Need one full copy of the ISO plus a 1 MiB safety margin.
+        if disk_free < iso_size + 1_048_576:
+            raise OSError(
+                f"Insufficient disk space to create ECC temp copy of '{iso_path.name}': "
+                f"{disk_free:,} bytes free, {iso_size + 1_048_576:,} bytes needed."
+            )
+
         tmp = iso_path.with_suffix(".iso.ecc.tmp")
         try:
             shutil.copy2(str(iso_path), str(tmp))
