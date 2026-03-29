@@ -811,16 +811,30 @@ class MetaVolumeBuilder:
         # zstd-compressed repos (rustic v2 default).
         bundler.bundle_python_package("zstandard")
 
-        # Bundle static rustic binary (glibc-independent fallback)
+        # Bundle static rustic binary (glibc-independent fallback).
+        # If an explicit path was provided, use it.  Otherwise,
+        # auto-detect: if the bundled rustic is already statically
+        # linked, copy it as rustic-static too.
+        static_src: Path | None = None
         if self._static_rustic_path is not None:
-            src = Path(self._static_rustic_path).resolve()
-            if not src.is_file():
+            static_src = Path(self._static_rustic_path).resolve()
+            if not static_src.is_file():
                 raise FileNotFoundError(
-                    f"Static rustic binary not found: {src}"
+                    f"Static rustic binary not found: {static_src}"
                 )
+        elif (bundler.bin_dir / "rustic").is_file():
+            # Auto-detect: check if the bundled rustic has no shared deps
+            from lcsas.meta.bundler import get_shared_libs
+
+            bundled_rustic = bundler.bin_dir / "rustic"
+            if not get_shared_libs(bundled_rustic):
+                static_src = bundled_rustic
+
+        if static_src is not None:
             dst = bundler.bin_dir / "rustic-static"
-            shutil.copy2(str(src), str(dst))
-            os.chmod(str(dst), 0o755)
+            if not dst.exists():
+                shutil.copy2(str(static_src), str(dst))
+                os.chmod(str(dst), 0o755)
 
     # ── Source bundling ──────────────────────────────────────────
 
