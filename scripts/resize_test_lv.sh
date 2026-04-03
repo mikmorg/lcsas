@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Resize lcsas-test LV to use all available VG free space
+# Resize lcsas-data LV to use all available VG free space
 # Run as: sudo bash scripts/resize_test_lv.sh
 # =============================================================================
 set -euo pipefail
 
 VG_NAME="mikmorg-7510-vg"
-LV_NAME="lcsas-test"
-MOUNT_POINT="/mnt/lcsas-test"
+LV_NAME="lcsas-data"
+MOUNT_POINT="/mnt/lcsas-data"
 LV_PATH="/dev/${VG_NAME}/${LV_NAME}"
 
 GREEN='\033[0;32m'
@@ -45,4 +45,4 @@ lvs "${VG_NAME}/${LV_NAME}" -o lv_size --noheadings --units g
 info "New filesystem usage:"
 df -h "${MOUNT_POINT}"
 
-info "Done! lcsas-test is now ready for E2E testing."
+info "Done! lcsas-data is now ready for E2E testing."

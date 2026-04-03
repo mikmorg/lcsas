@@ -8,8 +8,8 @@
 set -euo pipefail
 
 VG_NAME="mikmorg-7510-vg"
-LV_NAME="lcsas-test"
-MOUNT_POINT="/mnt/lcsas-test"
+LV_NAME="lcsas-data"
+MOUNT_POINT="/mnt/lcsas-data"
 
 GREEN='\033[0;32m'
 NC='\033[0m'

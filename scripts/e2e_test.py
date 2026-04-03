@@ -4,7 +4,7 @@ LCSAS End-to-End Integration Test
 ==================================
 
 This script exercises the full LCSAS pipeline against a real filesystem
-(the /mnt/lcsas-test logical volume) using rustic + xorriso + dvdisaster.
+(the /mnt/lcsas-data logical volume) using rustic + xorriso + dvdisaster.
 
 Phases:
   1. Generate synthetic test data
@@ -18,7 +18,7 @@ Phases:
   9. Report summary
 
 Prerequisites:
-  - /mnt/lcsas-test mounted (run scripts/setup_test_lv.sh first)
+  - /mnt/lcsas-data mounted (run scripts/setup_test_lv.sh first)
   - rustic, xorriso on PATH
   - dvdisaster on PATH (optional — ECC steps skipped if missing)
   - lcsas installed in the active venv
@@ -36,7 +36,7 @@ from pathlib import Path
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-BASE = Path("/mnt/lcsas-test")
+BASE = Path("/mnt/lcsas-data")
 MIRROR_DIR = BASE / "mirror"
 STAGING_DIR = BASE / "staging"
 ISO_DIR = BASE / "iso_output"
@@ -586,7 +586,7 @@ def test_restore(
         dataset_name = restore_map[repo_name]
         expected = original_manifests.get(dataset_name, {})
         # Find the restored data directory
-        restored_data = restore_target / "mnt" / "lcsas-test" / "test_data" / dataset_name
+        restored_data = restore_target / "mnt" / "lcsas-data" / "test_data" / dataset_name
         if not restored_data.is_dir():
             # Try alternative path (rustic restores with full path)
             candidates = list(restore_target.rglob(dataset_name))
@@ -858,7 +858,7 @@ def test_iso_restore(
         # Verify
         dataset_name = restore_map[repo_name]
         expected = original_manifests.get(dataset_name, {})
-        restored_data = restore_target / "mnt" / "lcsas-test" / "test_data" / dataset_name
+        restored_data = restore_target / "mnt" / "lcsas-data" / "test_data" / dataset_name
         if not restored_data.is_dir():
             candidates = list(restore_target.rglob(dataset_name))
             if candidates:

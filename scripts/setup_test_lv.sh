@@ -11,9 +11,9 @@
 set -euo pipefail
 
 VG_NAME="mikmorg-7510-vg"
-LV_NAME="lcsas-test"
+LV_NAME="lcsas-data"
 LV_SIZE="10G"
-MOUNT_POINT="/mnt/lcsas-test"
+MOUNT_POINT="/mnt/lcsas-data"
 TEST_USER="${SUDO_USER:-mikmorg}"
 
 # Colors
@@ -42,7 +42,7 @@ if blkid "${LV_PATH}" | grep -q ext4; then
     warn "LV already formatted as ext4 — skipping"
 else
     info "Formatting ${LV_PATH} as ext4"
-    mkfs.ext4 -L lcsas-test "${LV_PATH}"
+    mkfs.ext4 -L lcsas-data "${LV_PATH}"
 fi
 
 # ── 3. Mount ──────────────────────────────────────────────────────────────────
