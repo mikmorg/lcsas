@@ -5,9 +5,34 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import re
 from pathlib import Path
 
 _logger = logging.getLogger(__name__)
+
+# Pack filenames in Rustic repos are 64-char lowercase hex (SHA-256).
+_PACK_NAME_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _register_pack(
+    packs: dict[str, int],
+    name: str,
+    size: int,
+    parent: Path,
+) -> None:
+    """Validate and register a candidate pack file entry."""
+    if not _PACK_NAME_RE.match(name):
+        _logger.debug(
+            "Skipping non-pack file in data dir: %s/%s", parent, name
+        )
+        return
+    if size == 0:
+        _logger.warning(
+            "Pack file %s/%s has zero bytes — skipping (possibly incomplete write).",
+            parent, name,
+        )
+        return
+    packs[name] = size
 
 
 def scan_mirror_packs(mirror_path: Path) -> dict[str, int]:
@@ -38,7 +63,7 @@ def scan_mirror_packs(mirror_path: Path) -> dict[str, int]:
         with contextlib.suppress(OSError):
             if entry.is_file() and not entry.name.startswith("."):
                 # Flat layout: data/abcdef1234...
-                packs[entry.name] = entry.stat().st_size
+                _register_pack(packs, entry.name, entry.stat().st_size, data_dir)
             elif entry.is_dir():
                 # Two-level layout: data/ab/abcdef1234...
                 subdir = Path(entry.path)
@@ -50,6 +75,9 @@ def scan_mirror_packs(mirror_path: Path) -> dict[str, int]:
                 for sub_entry in sub_entries:
                     if sub_entry.is_file() and not sub_entry.name.startswith("."):
                         with contextlib.suppress(OSError):
-                            packs[sub_entry.name] = sub_entry.stat().st_size
+                            _register_pack(
+                                packs, sub_entry.name,
+                                sub_entry.stat().st_size, subdir,
+                            )
 
     return packs

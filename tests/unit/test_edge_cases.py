@@ -167,14 +167,13 @@ class TestScannerEdgeCases:
         assert result == {}
 
     def test_zero_byte_pack(self, tmp_path):
-        """Zero-byte pack file is recorded with size 0."""
+        """Zero-byte pack files are skipped (likely incomplete writes)."""
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         sha = "0" * 64
         (data_dir / sha).write_bytes(b"")
         result = scan_mirror_packs(tmp_path)
-        assert sha in result
-        assert result[sha] == 0
+        assert sha not in result  # zero-byte packs are skipped
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Symlinks not standard on Windows")
     def test_symlinked_pack_included(self, tmp_path):
@@ -183,7 +182,7 @@ class TestScannerEdgeCases:
         data_dir.mkdir()
         real = tmp_path / "real_pack"
         real.write_bytes(b"x" * 50)
-        sha = "s" * 64
+        sha = "a" * 64  # valid 64-char hex filename
         (data_dir / sha).symlink_to(real)
 
         result = scan_mirror_packs(tmp_path)

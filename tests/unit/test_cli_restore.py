@@ -113,8 +113,9 @@ class TestRestoreParser:
 
 
 class TestCmdRestorePlan:
-    def test_plan_displays_pick_list(self, tmp_path, capsys):
-        """restore plan prints volumes and pack counts."""
+    def test_plan_displays_pick_list(self, tmp_path, caplog):
+        """restore plan logs volumes and pack counts."""
+        import logging
         conn = get_memory_connection()
         create_all(conn)
         hashes = ["aa" * 32, "bb" * 32, "cc" * 32]
@@ -146,17 +147,19 @@ class TestCmdRestorePlan:
             patch("lcsas.db.connection.get_connection", return_value=conn),
             patch("lcsas.db.schema.create_all"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+            caplog.at_level(logging.INFO),
         ):
             result = cmd_restore_plan(args)
 
         assert result == 0
-        out = capsys.readouterr().out
-        assert "ARCHIVE_001" in out
-        assert "3 packs" in out
-        assert "family" in out
+        all_msgs = " ".join(r.message for r in caplog.records)
+        assert "ARCHIVE_001" in all_msgs
+        assert "3 packs" in all_msgs
+        assert "family" in all_msgs
 
-    def test_plan_unknown_repo(self, capsys):
-        """restore plan with unknown repo prints error."""
+    def test_plan_unknown_repo(self, caplog):
+        """restore plan with unknown repo logs error."""
+        import logging
         mock_config = MagicMock()
         mock_config.db_path = Path(":memory:")
         mock_config.repositories = {"family": MagicMock()}
@@ -170,16 +173,18 @@ class TestCmdRestorePlan:
             patch("lcsas.config.settings.load_config", return_value=mock_config),
             patch("lcsas.db.connection.get_connection", return_value=conn),
             patch("lcsas.db.schema.create_all"),
+            caplog.at_level(logging.ERROR),
         ):
             result = cmd_restore_plan(args)
 
         assert result == 1
-        out = capsys.readouterr().out
-        assert "nonexistent" in out
-        assert "not found" in out
+        all_msgs = " ".join(r.message for r in caplog.records)
+        assert "nonexistent" in all_msgs
+        assert "not found" in all_msgs
 
-    def test_plan_shows_missing_packs(self, capsys):
-        """restore plan warns about packs not found in any volume."""
+    def test_plan_shows_missing_packs(self, caplog):
+        """restore plan errors and returns 1 when packs are not found in any volume."""
+        import logging
         conn = get_memory_connection()
         create_all(conn)
         # Register only 1 pack but require 2
@@ -215,16 +220,19 @@ class TestCmdRestorePlan:
             patch("lcsas.db.connection.get_connection", return_value=conn),
             patch("lcsas.db.schema.create_all"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+            caplog.at_level(logging.ERROR),
         ):
             result = cmd_restore_plan(args)
 
-        assert result == 0
-        out = capsys.readouterr().out
-        assert "WARNING" in out
-        assert "1 packs not found" in out
+        # Missing packs must block restore — return 1, not 0
+        assert result == 1
+        all_msgs = " ".join(r.message for r in caplog.records)
+        assert "not found" in all_msgs
+        assert any(r.levelno >= logging.ERROR for r in caplog.records)
 
-    def test_plan_no_packs_needed(self, capsys):
-        """restore plan with no required packs prints summary."""
+    def test_plan_no_packs_needed(self, caplog):
+        """restore plan with no required packs logs summary."""
+        import logging
         conn = get_memory_connection()
         create_all(conn)
         register_repo(conn, "family", "family", "/mnt/mirror/family", "")
@@ -253,12 +261,13 @@ class TestCmdRestorePlan:
             patch("lcsas.db.connection.get_connection", return_value=conn),
             patch("lcsas.db.schema.create_all"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+            caplog.at_level(logging.INFO),
         ):
             result = cmd_restore_plan(args)
 
         assert result == 0
-        out = capsys.readouterr().out
-        assert "Required packs: 0" in out
+        all_msgs = " ".join(r.message for r in caplog.records)
+        assert "Required packs: 0" in all_msgs
 
 
 # ---------------------------------------------------------------------------
@@ -267,8 +276,9 @@ class TestCmdRestorePlan:
 
 
 class TestCmdRestoreExec:
-    def test_exec_unknown_repo(self, capsys):
-        """restore exec with unknown repo prints error."""
+    def test_exec_unknown_repo(self, caplog):
+        """restore exec with unknown repo logs error."""
+        import logging
         mock_config = MagicMock()
         mock_config.db_path = Path(":memory:")
         mock_config.repositories = {}
@@ -289,15 +299,17 @@ class TestCmdRestoreExec:
             patch("lcsas.config.settings.load_config", return_value=mock_config),
             patch("lcsas.db.connection.get_connection", return_value=conn),
             patch("lcsas.db.schema.create_all"),
+            caplog.at_level(logging.ERROR),
         ):
             result = cmd_restore_exec(args)
 
         assert result == 1
-        out = capsys.readouterr().out
-        assert "not found" in out
+        all_msgs = " ".join(r.message for r in caplog.records)
+        assert "not found" in all_msgs
 
-    def test_exec_fails_on_missing_packs(self, capsys):
+    def test_exec_fails_on_missing_packs(self, tmp_path, caplog):
         """restore exec aborts if packs are missing from catalog."""
+        import logging
         conn = get_memory_connection()
         create_all(conn)
         register_repo(conn, "family", "family", "/mnt/mirror/family", "")
@@ -307,12 +319,15 @@ class TestCmdRestoreExec:
             required_pack_hashes=["xx" * 32],  # not in any volume
         )
 
+        key_file = tmp_path / "key"
+        key_file.write_bytes(b"secret")
+
         mock_config = MagicMock()
         mock_config.db_path = Path(":memory:")
         mock_config.repositories = {
             "family": MagicMock(
                 mirror_path=Path("/mnt/mirror/family"),
-                password_file=Path("/tmp/key"),
+                password_file=key_file,
             ),
         }
 
@@ -323,7 +338,7 @@ class TestCmdRestoreExec:
             restore_command="exec",
             repo="family",
             target_path=Path("/tmp/out"),
-            password_file=Path("/tmp/key"),
+            password_file=key_file,
             cache_dir=None,
             volume_dir=None,
         )
@@ -333,15 +348,17 @@ class TestCmdRestoreExec:
             patch("lcsas.db.connection.get_connection", return_value=conn),
             patch("lcsas.db.schema.create_all"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+            caplog.at_level(logging.ERROR),
         ):
             result = cmd_restore_exec(args)
 
         assert result == 1
-        out = capsys.readouterr().out
-        assert "not found in any volume" in out
+        all_msgs = " ".join(r.message for r in caplog.records)
+        assert "not found in any volume" in all_msgs
 
-    def test_exec_volume_dir_ingests_packs(self, tmp_path, capsys):
+    def test_exec_volume_dir_ingests_packs(self, tmp_path, caplog):
         """restore exec with --volume-dir ingests packs and calls restore."""
+        import logging
         conn = get_memory_connection()
         create_all(conn)
         hashes = ["aa" * 32, "bb" * 32]
@@ -364,12 +381,15 @@ class TestCmdRestoreExec:
             required_pack_hashes=hashes,
         )
 
+        key_file = tmp_path / "key"
+        key_file.write_bytes(b"secret")
+
         mock_config = MagicMock()
         mock_config.db_path = Path(":memory:")
         mock_config.repositories = {
             "family": MagicMock(
                 mirror_path=mirror_path,
-                password_file=Path("/tmp/key"),
+                password_file=key_file,
             ),
         }
 
@@ -384,7 +404,7 @@ class TestCmdRestoreExec:
             repo="family",
             snapshot_id="snap1",
             target_path=target_dir,
-            password_file=Path("/tmp/key"),
+            password_file=key_file,
             cache_dir=cache_dir,
             volume_dir=tmp_path / "volumes",
         )
@@ -394,13 +414,14 @@ class TestCmdRestoreExec:
             patch("lcsas.db.connection.get_connection", return_value=conn),
             patch("lcsas.db.schema.create_all"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+            caplog.at_level(logging.INFO),
         ):
             result = cmd_restore_exec(args)
 
         assert result == 0
-        out = capsys.readouterr().out
-        assert "ingested 2 packs" in out
-        assert "Restore complete!" in out
+        all_msgs = " ".join(r.message for r in caplog.records)
+        assert "ingested 2 packs" in all_msgs
+        assert "Restore complete" in all_msgs
 
         # Verify rustic restore was called
         mock_runner.restore.assert_called_once()

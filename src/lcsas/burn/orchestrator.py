@@ -148,11 +148,27 @@ class BurnOrchestrator:
 
         # 2. Bin-pack
         items = [(p.sha256, p.size_bytes) for p in all_unarchived]
-        selected_items, _remaining = first_fit_decreasing(
+        selected_items, remaining_items = first_fit_decreasing(
             items,
             capacity=mt.usable_bytes,
             reserved=self._config.metadata_reserve_bytes,
         )
+
+        # Detect packs that can never fit on any single volume of this media type.
+        usable = mt.usable_bytes - self._config.metadata_reserve_bytes
+        oversized = [
+            p for p in all_unarchived
+            if p.size_bytes > usable and any(sha == p.sha256 for sha, _ in remaining_items)
+        ]
+        if oversized:
+            details = ", ".join(
+                f"{p.sha256[:12]} ({p.size_bytes:,} bytes)" for p in oversized
+            )
+            raise ValueError(
+                f"{len(oversized)} pack(s) exceed {mt.name} usable capacity "
+                f"({usable:,} bytes) and can never be archived on this media type: "
+                f"{details}. Consider using a larger media type (e.g. LTO8)."
+            )
 
         if not selected_items:
             raise ValueError(
@@ -206,12 +222,14 @@ class BurnOrchestrator:
         Returns:
             The finalized Volume object.
         """
-        # Preflight: verify required binaries exist before committing state changes
-        from lcsas.utils.subprocess import SubprocessRunnerBase
+        # Preflight: verify required binaries exist and meet minimum versions.
+        from lcsas.utils.subprocess import SubprocessRunnerBase, check_binary_version
         if isinstance(self._xorriso, SubprocessRunnerBase):
-            self._xorriso.check_binary()
+            # xorriso 1.4.0+ required for reliable ISO-9660 level 3 support.
+            check_binary_version(self._xorriso._binary, min_version=(1, 4, 0))
         if not skip_ecc and isinstance(self._dvdisaster, SubprocessRunnerBase):
-            self._dvdisaster.check_binary()
+            # dvdisaster 0.79+ required for RS03 augmentation mode.
+            check_binary_version(self._dvdisaster._binary, min_version=(0, 79, 0))
 
         # Update status
         update_status(self._conn, manifest.volume_id, "BURNING")
@@ -219,12 +237,24 @@ class BurnOrchestrator:
         iso_path = iso_output or (self._config.staging_path / f"{manifest.volume_label}.iso")
         ensure_dir(iso_path.parent)
 
+        # Pre-flight: verify the staging directory will fit in the media.
+        from lcsas.utils.fs import dir_size_bytes
+        estimated_bytes = dir_size_bytes(manifest.staging_path)
+        media_capacity = manifest.media_type.capacity_bytes
+        if estimated_bytes > media_capacity:
+            raise ValueError(
+                f"Staging directory for {manifest.volume_label} is too large: "
+                f"{estimated_bytes:,} bytes > {media_capacity:,} bytes capacity "
+                f"({manifest.media_type.name}). Reduce pack count or use larger media."
+            )
+
         try:
             # Create ISO
             self._xorriso.create_iso(
                 manifest.staging_path,
                 iso_path,
                 manifest.volume_label,
+                expected_bytes=estimated_bytes,
             )
             manifest.iso_path = iso_path
 
@@ -336,10 +366,27 @@ class BurnOrchestrator:
         update_used_bytes(self._conn, volume.volume_id, total_bytes, commit=False)
         self._conn.commit()
 
-        # 4. Inject catalog AFTER DB updates.
-        #    Checkpoint WAL so all committed data is in the main .db file.
-        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        injector.inject_catalog(self._config.db_path)
+        # 4. Inject catalog AFTER DB commit.
+        #    Checkpoint WAL so all committed data is in the main .db file,
+        #    then copy it to staging.  If this fails, roll back the volume
+        #    registration so DB and disc catalog remain in sync.
+        try:
+            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            injector.inject_catalog(self._config.db_path)
+        except Exception as exc:
+            _logger.error(
+                "Catalog injection into staging failed; rolling back volume "
+                "registration for %s: %s",
+                vol_label, exc,
+            )
+            self._conn.execute(
+                "DELETE FROM volumes WHERE volume_id = ?", (volume.volume_id,)
+            )
+            self._conn.commit()
+            raise RuntimeError(
+                f"Failed to inject catalog into staging for volume {vol_label}. "
+                f"Volume registration has been rolled back."
+            ) from exc
 
         # 5. Write volume info files
         vol = get_volume_by_id(self._conn, volume.volume_id)
@@ -354,7 +401,16 @@ class BurnOrchestrator:
         # 6. Optionally create ISO + ECC
         iso_path: Path | None = None
         if iso_output is not None:
-            self._xorriso.create_iso(staging_root, iso_output, vol_label)
+            # Pre-flight: verify staging dir fits in the target media.
+            from lcsas.utils.fs import dir_size_bytes
+            estimated_bytes = dir_size_bytes(staging_root)
+            if estimated_bytes > media_type.capacity_bytes:
+                raise ValueError(
+                    f"Staging directory for {vol_label} is too large: "
+                    f"{estimated_bytes:,} bytes > {media_type.capacity_bytes:,} bytes "
+                    f"capacity ({media_type.name}). Reduce pack count or use larger media."
+                )
+            self._xorriso.create_iso(staging_root, iso_output, vol_label, expected_bytes=estimated_bytes)
             iso_path = iso_output
 
             if not skip_ecc:
@@ -643,6 +699,11 @@ class BurnOrchestrator:
                 )
                 self._conn.commit()
 
+                # Remove ISO after successful verified burn to free staging space.
+                if verify_passed and not skip_burn and iso_path.exists():
+                    iso_path.unlink()
+                    _logger.debug("Deleted ISO after successful burn: %s", iso_path)
+
                 # Build receipt
                 from lcsas.db.volume_packs import get_pack_ids_for_volume
                 pack_ids = get_pack_ids_for_volume(self._conn, sv.volume_id)
@@ -755,19 +816,31 @@ class BurnOrchestrator:
             )
 
             if not selected_items:
-                # None of the remaining packs fit — they're all too large
+                # None of the remaining packs fit — they're all too large.
                 usable = media_type.usable_bytes - self._config.metadata_reserve_bytes
                 oversized = [
                     p for p in remaining_packs if p.size_bytes > usable
                 ]
                 if oversized:
-                    _logger.warning(
-                        "%d pack(s) exceed %s usable capacity (%s bytes) "
-                        "and cannot be archived: %s",
+                    _logger.error(
+                        "%d pack(s) exceed %s usable capacity (%d bytes) "
+                        "and can never be archived on this media type: %s",
                         len(oversized),
                         media_type.name,
                         usable,
-                        ", ".join(p.sha256[:12] for p in oversized[:10]),
+                        ", ".join(
+                            f"{p.sha256[:12]} ({p.size_bytes:,} B)"
+                            for p in oversized[:10]
+                        ),
+                    )
+                    details = ", ".join(
+                        f"{p.sha256[:12]} ({p.size_bytes:,} bytes)" for p in oversized
+                    )
+                    raise ValueError(
+                        f"{len(oversized)} pack(s) exceed {media_type.name} usable "
+                        f"capacity ({usable:,} bytes) and can never be archived on "
+                        f"this media type: {details}. "
+                        f"Consider using a larger media type (e.g. LTO8)."
                     )
                 raise ValueError(
                     f"Cannot fit remaining packs into {media_type.name} "

@@ -107,21 +107,21 @@ def pipeline_env(tmp_path):
     db_path = tmp_path / "catalog.db"
     staging.mkdir()
 
-    # Define packs per repo
+    # Define packs per repo — filenames must be 64-char lowercase hex (SHA-256 format).
     family_packs = [
-        ("fam_pack_001_sha256hash", 5000),
-        ("fam_pack_002_sha256hash", 8000),
-        ("fam_pack_003_sha256hash", 3000),
-        ("fam_pack_004_sha256hash", 6000),
+        ("aa" * 32, 5000),
+        ("ab" * 32, 8000),
+        ("ac" * 32, 3000),
+        ("ad" * 32, 6000),
     ]
     work_packs = [
-        ("wrk_pack_001_sha256hash", 4000),
-        ("wrk_pack_002_sha256hash", 7000),
-        ("wrk_pack_003_sha256hash", 2000),
+        ("ba" * 32, 4000),
+        ("bb" * 32, 7000),
+        ("bc" * 32, 2000),
     ]
     archive_packs = [
-        ("arc_pack_001_sha256hash", 9000),
-        ("arc_pack_002_sha256hash", 1000),
+        ("ca" * 32, 9000),
+        ("cb" * 32, 1000),
     ]
 
     # Create mirrors

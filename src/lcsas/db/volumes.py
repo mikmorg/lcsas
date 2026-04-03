@@ -142,6 +142,9 @@ def update_status(
             volume_id, status,
         )
 
+    # Fetch current status for the audit event before we change it.
+    current_for_audit = get_volume_by_id(conn, volume_id).status
+
     if status == "VERIFIED":
         now = datetime.now(UTC).isoformat()
         conn.execute(
@@ -153,6 +156,15 @@ def update_status(
             "UPDATE volumes SET status = ? WHERE volume_id = ?",
             (status, volume_id),
         )
+
+    # Audit trail: record every status transition as a NOTE event.
+    from lcsas.db.volume_events import add_event
+    add_event(
+        conn, volume_id, "NOTE",
+        detail=f"Status changed: {current_for_audit} → {status}",
+        commit=False,
+    )
+
     if commit:
         conn.commit()
 

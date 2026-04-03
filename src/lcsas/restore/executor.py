@@ -159,9 +159,11 @@ class RestoreExecutor:
                     if actual != sha256:
                         dst.unlink()
                         if collect_failures:
-                            logger.warning(
-                                f"Pack {sha256} corrupt on this volume "
-                                f"(expected {sha256}, got {actual})"
+                            logger.error(
+                                "Pack %s is CORRUPT on this volume "
+                                "(SHA-256 mismatch: got %s). "
+                                "Will try alternate volumes if available.",
+                                sha256, actual,
                             )
                             failed.append(sha256)
                             continue

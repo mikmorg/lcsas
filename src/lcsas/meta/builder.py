@@ -727,6 +727,8 @@ class MetaVolumeBuilder:
         project_root: Path | None = None,
         static_rustic_path: Path | None = None,
         config: LCSASConfig | None = None,
+        bootable: bool = False,
+        alpine_dir: Path | None = None,
     ) -> None:
         """
         Args:
@@ -739,10 +741,18 @@ class MetaVolumeBuilder:
             config: Optional LCSAS configuration.  When provided,
                 START_HERE.txt and KEY_INFO.txt are generated on the
                 meta-volume using the survivability fields.
+            bootable: If True, include Alpine Linux live boot environment
+                so the meta-volume can be booted directly.  Requires
+                *alpine_dir* with pre-built Alpine artifacts.
+            alpine_dir: Directory containing ``vmlinuz``, ``initramfs``,
+                and ``rootfs.squashfs`` (output of ``build_rootfs.sh``).
+                Required when *bootable* is True.
         """
         self._output = output_dir
         self._static_rustic_path = static_rustic_path
         self._config = config
+        self._bootable = bootable
+        self._alpine_dir = alpine_dir
 
         if project_root is None:
             # meta/ → lcsas/ → src/ → (project root)
@@ -780,10 +790,56 @@ class MetaVolumeBuilder:
         self._write_volume_info()
         self._write_start_here()
 
+        if self._bootable:
+            self._install_live_boot()
+
         # Build complete — remove the marker
         incomplete_marker.unlink(missing_ok=True)
 
         return self._output
+
+    # ── Live boot environment ───────────────────────────────────
+
+    def _install_live_boot(self) -> None:
+        """Install Alpine Linux live boot environment into the meta-volume.
+
+        Copies kernel, initramfs, squashfs, boot configs, and the
+        TUI restore wizard from the Alpine build artifacts and the
+        ``live/`` package directory.
+        """
+        if self._alpine_dir is None:
+            raise ValueError(
+                "bootable=True requires alpine_dir with pre-built "
+                "Alpine artifacts (vmlinuz, initramfs, rootfs.squashfs)"
+            )
+        alpine = self._alpine_dir
+        for name in ("vmlinuz", "initramfs", "rootfs.squashfs"):
+            if not (alpine / name).is_file():
+                raise FileNotFoundError(
+                    f"Alpine artifact not found: {alpine / name}"
+                )
+
+        from lcsas.meta.bootable import BootableISOBuilder
+
+        # BootableISOBuilder._install_boot_files / _install_isolinux /
+        # _install_efi handle the heavy lifting.  We create a temporary
+        # builder just to use its helpers for staging.
+        bib = BootableISOBuilder(
+            staging_dir=self._output,
+            alpine_dir=alpine,
+            output_iso=Path("/dev/null"),  # not used here
+        )
+        bib._install_boot_files()
+        bib._install_isolinux()
+        bib._install_efi()
+
+        # Copy the TUI restore wizard into the meta-volume
+        live_dir = Path(__file__).parent / "live"
+        wizard_src = live_dir / "restore_wizard.py"
+        if wizard_src.is_file():
+            dst = self._output / "restore_wizard.py"
+            shutil.copy2(str(wizard_src), str(dst))
+            os.chmod(str(dst), 0o755)
 
     # ── Tool bundling ────────────────────────────────────────────
 

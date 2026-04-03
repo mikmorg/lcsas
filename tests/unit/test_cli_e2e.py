@@ -26,6 +26,7 @@ def _write_config(tmp_path: Path, mirror: Path, db: Path) -> Path:
 
         [defaults]
         media_type = "TEST_TINY"
+        metadata_reserve_mb = 0
 
         [repos.test_repo]
         mirror_path = "{mirror}"

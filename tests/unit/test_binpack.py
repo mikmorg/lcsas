@@ -69,12 +69,12 @@ class TestFirstFitDecreasing:
         assert selected == []
         assert remaining == [("a", 1)]
 
-    def test_oversized_item_emits_warning(self, caplog):
-        """When the largest item exceeds usable capacity, a warning is logged."""
+    def test_oversized_item_emits_error(self, caplog):
+        """When the largest item exceeds usable capacity, an ERROR is logged."""
         import logging
 
         items = [("huge_pack", 2_000_000), ("small", 100)]
-        with caplog.at_level(logging.WARNING, logger="lcsas.binpack.algorithm"):
+        with caplog.at_level(logging.ERROR, logger="lcsas.binpack.algorithm"):
             selected, remaining = first_fit_decreasing(items, capacity=1_000_000)
 
         # Only the oversized pack ends up in remaining; small fits
@@ -83,7 +83,7 @@ class TestFirstFitDecreasing:
         assert "huge_pack" in remaining_ids
         assert "small" in selected_ids
         assert any("huge_pack" in r.message for r in caplog.records)
-        assert any("cannot fit" in r.message.lower() for r in caplog.records)
+        assert any(r.levelno == logging.ERROR for r in caplog.records)
 
 
 class TestEstimateVolumes:

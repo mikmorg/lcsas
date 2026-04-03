@@ -47,6 +47,7 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
         self,
         iso_path: Path,
         redundancy_pct: int = 15,
+        timeout: int = 7200,
     ) -> None:
         """Augment an ISO image with RS03 error correction data.
 
@@ -78,7 +79,12 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
                 "-c",
             ]
             try:
-                subprocess.run(cmd, capture_output=True, text=True, check=True, env=self._env())
+                subprocess.run(
+                    cmd, capture_output=True, text=True, check=True,
+                    env=self._env(), timeout=timeout,
+                )
+            except subprocess.TimeoutExpired as exc:
+                self._handle_timeout("dvdisaster", "ECC augmentation", exc)
             except subprocess.CalledProcessError as exc:
                 self._log_stderr("dvdisaster", exc)
                 raise
@@ -93,6 +99,7 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
     def verify_iso(
         self,
         iso_path: Path,
+        timeout: int = 3600,
     ) -> bool:
         """Verify the ECC integrity of an ISO image."""
         if not iso_path.exists():
@@ -102,14 +109,19 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
             "-i", str(iso_path),
             "-t",
         ]
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, check=False, env=self._env()
-        )
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=False,
+                env=self._env(), timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self._handle_timeout("dvdisaster", "ECC verification", exc)
         return result.returncode == 0
 
     def repair_iso(
         self,
         iso_path: Path,
+        timeout: int = 3600,
     ) -> bool:
         """Attempt to repair a damaged ISO using its embedded ECC data."""
         if not iso_path.exists():
@@ -119,7 +131,11 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
             "-i", str(iso_path),
             "-f",
         ]
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, check=False, env=self._env()
-        )
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=False,
+                env=self._env(), timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self._handle_timeout("dvdisaster", "ECC repair", exc)
         return result.returncode == 0

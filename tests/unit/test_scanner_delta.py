@@ -23,7 +23,9 @@ class TestScanner:
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         for i in range(5):
-            (data_dir / f"flatpack_{i:064x}").write_bytes(b"x" * 50)
+            # Use a valid 64-char hex filename (padded with zeros on the left).
+            name = f"{i:064x}"
+            (data_dir / name).write_bytes(b"x" * 50)
         packs = scan_mirror_packs(tmp_path)
         assert len(packs) == 5
 

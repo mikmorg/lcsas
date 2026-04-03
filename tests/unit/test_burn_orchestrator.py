@@ -154,7 +154,7 @@ class TestPrepare:
         config.db_path.write_bytes(b"x")
 
         orch = BurnOrchestrator(config, conn, MagicMock(), MagicMock())
-        with pytest.raises(ValueError, match="No packs fit"):
+        with pytest.raises(ValueError, match="exceed.*usable capacity"):
             orch.prepare()
 
     def test_prepare_with_repo_filter(self, tmp_path):
@@ -448,13 +448,14 @@ class TestGetMirrorPaths:
 
 
 class TestPreflightChecks:
-    """execute() raises RuntimeError before touching state if a tool is missing."""
+    """execute() raises BinaryError before touching state if a tool is missing."""
 
     def _prepare(self, orch_env):
         return orch_env["orch"].prepare()
 
     def test_execute_fails_if_xorriso_missing(self, orch_env):
-        """execute() raises RuntimeError when xorriso not on PATH (before DB update)."""
+        """execute() raises BinaryError when xorriso not on PATH (before DB update)."""
+        from lcsas.exceptions import BinaryError
         from lcsas.utils.subprocess import SubprocessRunnerBase
         orch = orch_env["orch"]
         conn = orch_env["conn"]
@@ -465,7 +466,7 @@ class TestPreflightChecks:
         real_xorriso._binary = "xorriso_not_on_path_____"
         orch._xorriso = real_xorriso
 
-        with pytest.raises(RuntimeError, match="xorriso_not_on_path"):
+        with pytest.raises(BinaryError, match="xorriso_not_on_path"):
             orch.execute(manifest, skip_burn=True, skip_ecc=True)
 
         # Volume status must still be STAGING (no state change)
@@ -473,7 +474,8 @@ class TestPreflightChecks:
         assert vol.status == "STAGING"
 
     def test_execute_fails_if_dvdisaster_missing(self, orch_env):
-        """execute() raises RuntimeError when dvdisaster not on PATH (before DB update)."""
+        """execute() raises BinaryError when dvdisaster not on PATH (before DB update)."""
+        from lcsas.exceptions import BinaryError
         from lcsas.utils.subprocess import SubprocessRunnerBase
         orch = orch_env["orch"]
         conn = orch_env["conn"]
@@ -483,7 +485,7 @@ class TestPreflightChecks:
         real_dvd._binary = "dvdisaster_not_on_path_____"
         orch._dvdisaster = real_dvd
 
-        with pytest.raises(RuntimeError, match="dvdisaster_not_on_path"):
+        with pytest.raises(BinaryError, match="dvdisaster_not_on_path"):
             orch.execute(manifest, skip_burn=True, skip_ecc=False)
 
         vol = get_volume_by_id(conn, manifest.volume_id)
@@ -538,7 +540,7 @@ class TestStage:
 
         orch = orch_env["orch"]
 
-        def fake_create_iso(source_dir, output_iso, volume_label):
+        def fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
             output_iso.write_bytes(b"fake-iso-data")
 
         orch_env["xorriso"].create_iso.side_effect = fake_create_iso
@@ -555,7 +557,7 @@ class TestStage:
         """stage() with repo_ids filter only stages packs from that repo."""
         orch = orch_env["orch"]
 
-        def fake_create_iso(source_dir, output_iso, volume_label):
+        def fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
             output_iso.write_bytes(b"fake-iso-data")
 
         orch_env["xorriso"].create_iso.side_effect = fake_create_iso
@@ -585,7 +587,7 @@ class TestBurnSession:
         """Stage packs and return the session ID."""
         orch = orch_env["orch"]
 
-        def fake_create_iso(source_dir, output_iso, volume_label):
+        def fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
             output_iso.write_bytes(b"fake-iso-data")
 
         orch_env["xorriso"].create_iso.side_effect = fake_create_iso

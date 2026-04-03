@@ -28,17 +28,21 @@ def first_fit_decreasing(
     if usable <= 0:
         return [], list(items)
 
-    # Sort by size descending
-    sorted_items = sorted(items, key=lambda x: x[1], reverse=True)
+    # Sort by size descending, then by identifier ascending as tiebreaker
+    # to ensure deterministic output across runs.
+    sorted_items = sorted(items, key=lambda x: (-x[1], x[0]))
 
-    # Warn if the largest item already exceeds usable capacity — it will never
-    # fit on any single volume and will always land in `remaining`.
-    if sorted_items and sorted_items[0][1] > usable:
+    # Log an error if any item exceeds usable capacity — it will never fit on
+    # any single volume and will always land in `remaining`.  Callers should
+    # treat oversized items in `remaining` as a fatal configuration error.
+    oversized_count = sum(1 for _, sz in sorted_items if sz > usable)
+    if oversized_count:
         item_id, item_size = sorted_items[0]
-        _logger.warning(
-            "Pack '%s' (%d bytes) exceeds usable capacity (%d bytes). "
-            "It cannot fit on a single volume and will be skipped.",
-            item_id, item_size, usable,
+        _logger.error(
+            "%d item(s) exceed usable capacity (%d bytes); largest: '%s' (%d bytes). "
+            "These items will always land in `remaining` and can never be archived "
+            "on this media type.",
+            oversized_count, usable, item_id, item_size,
         )
 
     selected: list[tuple[str, int]] = []

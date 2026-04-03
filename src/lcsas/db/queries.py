@@ -265,25 +265,28 @@ def get_missing_packs(
     conn: sqlite3.Connection,
     pack_sha256_list: list[str],
 ) -> list[str]:
-    """Return SHA-256 hashes from the input list that have no volume assignment."""
+    """Return SHA-256 hashes from the input list that have no accessible volume.
+
+    A pack is considered missing if:
+    - It is not in the catalog at all, or
+    - It has no volume assignment, or
+    - All of its volumes are DEPRECATED or DESTROYED (physically gone).
+
+    Packs that exist only on DEPRECATED/DESTROYED volumes are included here
+    so callers treat them as unrestorable from normal storage.  Use
+    :func:`get_deprecated_only_packs` to identify which deprecated discs
+    might still be physically recoverable.
+    """
     if not pack_sha256_list:
         return []
 
-    # Process in batches to avoid SQLite variable limit.
     missing: list[str] = []
 
     for batch_start in range(0, len(pack_sha256_list), _SQLITE_BATCH):
         batch = pack_sha256_list[batch_start : batch_start + _SQLITE_BATCH]
         placeholders = ",".join("?" for _ in batch)
 
-        unassigned_rows = conn.execute(
-            f"""SELECT p.sha256 FROM packs p
-                WHERE p.sha256 IN ({placeholders})
-                  AND NOT EXISTS (
-                      SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
-                  )""",
-            batch,
-        ).fetchall()
+        # Packs that exist in the catalog
         archived = {r["sha256"] for r in conn.execute(
             f"SELECT sha256 FROM packs WHERE sha256 IN ({placeholders})",
             batch,
@@ -294,12 +297,70 @@ def get_missing_packs(
             if h not in archived:
                 missing.append(h)
 
-        # Packs in DB but not on any volume
-        for row in unassigned_rows:
+        # Packs in DB but with no active (non-DEPRECATED/DESTROYED) volume
+        no_active_volume = conn.execute(
+            f"""SELECT p.sha256 FROM packs p
+                WHERE p.sha256 IN ({placeholders})
+                  AND NOT EXISTS (
+                      SELECT 1 FROM volume_packs vp
+                      JOIN volumes v ON v.volume_id = vp.volume_id
+                      WHERE vp.pack_id = p.pack_id
+                        AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+                  )""",
+            batch,
+        ).fetchall()
+        for row in no_active_volume:
             if row["sha256"] not in missing:
                 missing.append(row["sha256"])
 
     return missing
+
+
+def get_deprecated_only_packs(
+    conn: sqlite3.Connection,
+    pack_sha256_list: list[str],
+) -> dict[str, list[str]]:
+    """Return deprecated/destroyed volume labels that hold packs from the list.
+
+    These are packs that cannot be restored from active storage, but whose
+    physical discs *may* still be retrievable if the operator has kept them.
+
+    Returns:
+        ``{volume_label: [sha256, ...]}`` — deprecated/destroyed volumes
+        mapped to the packs they hold that are required for the restore.
+        Only includes packs that have NO active-volume copy.
+    """
+    if not pack_sha256_list:
+        return {}
+
+    result: dict[str, list[str]] = {}
+
+    for batch_start in range(0, len(pack_sha256_list), _SQLITE_BATCH):
+        batch = pack_sha256_list[batch_start : batch_start + _SQLITE_BATCH]
+        placeholders = ",".join("?" for _ in batch)
+
+        rows = conn.execute(
+            f"""SELECT p.sha256, v.label AS vol_label, v.status AS vol_status
+                FROM packs p
+                JOIN volume_packs vp ON vp.pack_id = p.pack_id
+                JOIN volumes v ON v.volume_id = vp.volume_id
+                WHERE p.sha256 IN ({placeholders})
+                  AND v.status IN ('DEPRECATED', 'DESTROYED')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM volume_packs vp2
+                      JOIN volumes v2 ON v2.volume_id = vp2.volume_id
+                      WHERE vp2.pack_id = p.pack_id
+                        AND v2.status NOT IN ('DEPRECATED', 'DESTROYED')
+                  )
+                ORDER BY v.label""",
+            batch,
+        ).fetchall()
+
+        for row in rows:
+            label = row["vol_label"]
+            result.setdefault(label, []).append(row["sha256"])
+
+    return result
 
 
 def get_packs_only_on_volumes(

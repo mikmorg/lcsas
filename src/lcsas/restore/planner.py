@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from lcsas.db.models import Pack
 from lcsas.db.queries import (
+    get_deprecated_only_packs,
     get_missing_packs,
     get_pick_list,
     get_pick_list_with_alternates,
@@ -31,9 +32,12 @@ class PickList:
     """
 
     volumes: dict[str, list[Pack]]   # {volume_label: [Pack, ...]}
-    missing_packs: list[str]         # SHA-256 hashes with no known volume
+    missing_packs: list[str]         # SHA-256 hashes with no known active volume
     total_packs: int = 0
     total_bytes: int = 0
+    # Packs only on DEPRECATED/DESTROYED volumes — may still be physically recoverable.
+    # {volume_label: [sha256, ...]}
+    deprecated_disc_labels: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,9 @@ class PickListV2:
     missing_packs: list[str]
     total_packs: int = 0
     total_bytes: int = 0
+    # Packs only on DEPRECATED/DESTROYED volumes — may still be physically recoverable.
+    # {volume_label: [sha256, ...]}
+    deprecated_disc_labels: dict[str, list[str]] = field(default_factory=dict)
 
 
 class RestorePlanner:
@@ -70,6 +77,7 @@ class RestorePlanner:
 
         volumes = get_pick_list(self._conn, required_pack_hashes)
         missing = get_missing_packs(self._conn, required_pack_hashes)
+        deprecated = get_deprecated_only_packs(self._conn, required_pack_hashes)
 
         total_packs = sum(len(packs) for packs in volumes.values())
         total_bytes = sum(
@@ -81,6 +89,7 @@ class RestorePlanner:
             missing_packs=missing,
             total_packs=total_packs,
             total_bytes=total_bytes,
+            deprecated_disc_labels=deprecated,
         )
 
     def generate_pick_list_v2(
@@ -100,6 +109,7 @@ class RestorePlanner:
             self._conn, required_pack_hashes, preferred_location,
         )
         missing = get_missing_packs(self._conn, required_pack_hashes)
+        deprecated = get_deprecated_only_packs(self._conn, required_pack_hashes)
 
         volumes: dict[str, list[PackSource]] = {}
         total_packs = 0
@@ -122,4 +132,5 @@ class RestorePlanner:
             missing_packs=missing,
             total_packs=total_packs,
             total_bytes=total_bytes,
+            deprecated_disc_labels=deprecated,
         )

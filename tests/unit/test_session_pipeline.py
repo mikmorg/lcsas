@@ -128,7 +128,7 @@ def env(tmp_path):
 
     xorriso = MagicMock()
     # create_iso must produce a real file so the ISO-existence check passes
-    def _fake_create_iso(source_dir, output_iso, volume_label):
+    def _fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
         Path(output_iso).write_bytes(b"\x00" * 1024)
         return Path(output_iso)
     xorriso.create_iso.side_effect = _fake_create_iso
@@ -165,7 +165,7 @@ def multi_vol_env(tmp_path):
 
     xorriso = MagicMock()
     # create_iso must produce a real file so the ISO-existence check passes
-    def _fake_create_iso(source_dir, output_iso, volume_label):
+    def _fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
         Path(output_iso).write_bytes(b"\x00" * 1024)
         return Path(output_iso)
     xorriso.create_iso.side_effect = _fake_create_iso
@@ -312,7 +312,7 @@ class TestStageForLocation:
 
         # Manually stage and burn first 3 packs to both locations
         xorriso = MagicMock()
-        def _fake_create_iso(source_dir, output_iso, volume_label):
+        def _fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
             Path(output_iso).write_bytes(b"\x00" * 1024)
             return Path(output_iso)
         xorriso.create_iso.side_effect = _fake_create_iso

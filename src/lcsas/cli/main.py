@@ -16,6 +16,31 @@ from lcsas.log import get_logger, setup_logging
 logger = get_logger()
 
 
+def _validate_config_or_exit(config: object, skip_staging: bool = False) -> bool:
+    """Run validate_config() and log all errors.  Returns False if invalid.
+
+    Pass ``skip_staging=True`` for commands (scan, restore) that do not
+    write to the staging area and therefore do not need it to exist.
+    """
+    from lcsas.config.settings import LCSASConfig, validate_config
+
+    if not isinstance(config, LCSASConfig):
+        return True  # callers that pass non-config objects skip validation
+
+    errors = validate_config(config)
+    if skip_staging:
+        errors = [e for e in errors if "staging_path" not in e]
+    if errors:
+        logger.error(
+            "Configuration has %d error(s) — fix before running this command:",
+            len(errors),
+        )
+        for err in errors:
+            logger.error("  %s", err)
+        return False
+    return True
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with all subcommands."""
     parser = argparse.ArgumentParser(
@@ -172,6 +197,33 @@ def build_parser() -> argparse.ArgumentParser:
     cat_import_p.add_argument("receipt_files", nargs="+",
                               help="Receipt JSON files.")
 
+    cat_validate_p = cat_sub.add_parser(
+        "validate",
+        help="Cross-check a mounted disc's data files against its embedded catalog.",
+    )
+    cat_validate_p.add_argument(
+        "disc",
+        type=Path,
+        help="Path to a mounted LCSAS disc (must contain catalog.db and data/).",
+    )
+
+    cat_rebuild_p = cat_sub.add_parser(
+        "rebuild",
+        help="Rebuild master catalog by merging disc-embedded holographic catalogs.",
+    )
+    cat_rebuild_p.add_argument(
+        "disc_dirs",
+        nargs="+",
+        type=Path,
+        help="Paths to mounted LCSAS discs (each must contain catalog.db).",
+    )
+    cat_rebuild_p.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="Path for the rebuilt master catalog (created or merged into).",
+    )
+
     # --- restore ---
     restore_p = subparsers.add_parser("restore", help="Plan or execute a restore.")
     restore_sub = restore_p.add_subparsers(dest="restore_command")
@@ -272,6 +324,15 @@ def build_parser() -> argparse.ArgumentParser:
     db_p = subparsers.add_parser("db", help="Database operations.")
     db_sub = db_p.add_subparsers(dest="db_command")
     db_sub.add_parser("export", help="Export catalog summary as JSON.")
+
+    # --- session ---
+    session_p = subparsers.add_parser("session", help="Manage burn sessions.")
+    session_sub = session_p.add_subparsers(dest="session_command")
+    sess_list_p = session_sub.add_parser("list", help="List all burn sessions.")
+    sess_list_p.add_argument(
+        "--status", type=str, default=None,
+        help="Filter by status (STAGED, COMPLETE, PARTIAL, ABORTED).",
+    )
 
     # --- config ---
     config_p = subparsers.add_parser("config", help="Configuration management.")
@@ -507,6 +568,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
         logger.error("--config is required for scan.")
         return 1
     config = load_config(args.config)
+    if not _validate_config_or_exit(config, skip_staging=True):
+        return 1
     with locked_connection(config.db_path if args.db is None else args.db) as conn:
         create_all(conn)
 
@@ -569,6 +632,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
             from lcsas.db.models import Snapshot
             from lcsas.db.snapshots import bulk_upsert_snapshots
             from lcsas.rustic.wrapper import SubprocessRusticRunner
+            from lcsas.utils.subprocess import check_binary_version
+
+            check_binary_version("rustic", min_version=(0, 9, 0))
 
             runner = SubprocessRusticRunner(tmpdir=config.staging_path)
             total_snaps = 0
@@ -761,6 +827,8 @@ def cmd_stage(args: argparse.Namespace) -> int:
     if config is None:
         logger.error("--config is required for stage.")
         return 1
+    if not _validate_config_or_exit(config):
+        return 1
 
     shutdown = ShutdownManager()
     shutdown.install()
@@ -831,6 +899,8 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
     if config is None:
         logger.error("--config is required for burn.")
         return 1
+    if not _validate_config_or_exit(config):
+        return 1
 
     with locked_connection(args.db or config.db_path) as conn:
         create_all(conn)
@@ -854,10 +924,21 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
                 logger.info(f"  {vol.label}  status={vol.status}")
             return 0
 
+        device = args.device or config.optical_device
+        if not getattr(args, "skip_burn", False):
+            import os
+            if not os.path.exists(device):
+                logger.error(
+                    "Optical device '%s' not found.\n"
+                    "Insert a disc or specify the correct device with --device.",
+                    device,
+                )
+                return 1
+
         receipts = orch.burn_session(
             session_ref=args.session,
             location=location,
-            device=args.device,
+            device=device,
         )
 
     logger.info(f"Burned {len(receipts)} volume(s) to {location}:")
@@ -880,6 +961,8 @@ def cmd_burn_legacy(args: argparse.Namespace) -> int:
         logger.error("--config is required for burn.")
         return 1
     config = load_config(args.config)
+    if not _validate_config_or_exit(config):
+        return 1
     with locked_connection(config.db_path if args.db is None else args.db) as conn:
         create_all(conn)
 
@@ -1081,6 +1164,91 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             imported += 1
 
     logger.info(f"Imported {imported} receipt(s).")
+    return 0
+
+
+def cmd_catalog_validate(args: argparse.Namespace) -> int:
+    """Cross-check a mounted disc's data files against its embedded catalog."""
+    from lcsas.db.verify import validate_disc
+
+    disc_path = args.disc
+    if not disc_path.is_dir():
+        logger.error("Disc path does not exist or is not a directory: %s", disc_path)
+        return 1
+
+    logger.info("Validating disc at: %s", disc_path)
+    try:
+        result = validate_disc(disc_path)
+    except (FileNotFoundError, ValueError) as exc:
+        logger.error("%s", exc)
+        return 1
+
+    logger.info("Volume label   : %s", result.volume_label or "(unknown)")
+    logger.info("Catalog packs  : %d", result.catalog_pack_count)
+    logger.info("Disc packs     : %d", result.disc_pack_count)
+
+    if result.missing_from_disc:
+        logger.error(
+            "%d pack(s) in catalog but MISSING from disc:",
+            len(result.missing_from_disc),
+        )
+        for sha in result.missing_from_disc:
+            logger.error("  MISSING: %s", sha)
+
+    if result.orphaned_on_disc:
+        logger.warning(
+            "%d pack file(s) on disc but NOT in catalog (orphaned):",
+            len(result.orphaned_on_disc),
+        )
+        for sha in result.orphaned_on_disc:
+            logger.warning("  ORPHAN : %s", sha)
+
+    if result.ok:
+        logger.info("Catalog validation PASSED — disc and catalog are in sync.")
+        return 0
+    else:
+        logger.error(
+            "Catalog validation FAILED — %d missing, %d orphaned.",
+            len(result.missing_from_disc),
+            len(result.orphaned_on_disc),
+        )
+        return 1
+
+
+def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
+    """Rebuild master catalog by merging disc-embedded holographic catalogs."""
+    from lcsas.db.rebuild import rebuild_catalog
+
+    disc_dirs = [Path(d) for d in args.disc_dirs]
+    output_db = args.output
+
+    # Basic sanity checks
+    bad = [str(d) for d in disc_dirs if not d.is_dir()]
+    if bad:
+        for b in bad:
+            logger.error("Not a directory (disc not mounted?): %s", b)
+        return 1
+
+    logger.info(
+        "Rebuilding catalog from %d disc(s) → %s", len(disc_dirs), output_db
+    )
+    result = rebuild_catalog(disc_dirs, output_db)
+
+    logger.info("Discs processed  : %d", result.discs_processed)
+    if result.discs_skipped:
+        logger.warning("Discs skipped    : %d (see errors above)", result.discs_skipped)
+    logger.info("Repositories     : %d new", result.repositories_merged)
+    logger.info("Volumes          : %d new", result.volumes_merged)
+    logger.info("Packs            : %d new", result.packs_merged)
+    logger.info("Snapshots        : %d new", result.snapshots_merged)
+
+    if result.errors:
+        logger.error("Rebuild completed with %d error(s):", len(result.errors))
+        for err in result.errors:
+            logger.error("  %s", err)
+        return 1
+
+    logger.info("Catalog rebuild complete: %s", output_db)
     return 0
 
 
@@ -1383,6 +1551,8 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
         logger.error("--config is required for restore plan.")
         return 1
     config = load_config(args.config)
+    if not _validate_config_or_exit(config, skip_staging=True):
+        return 1
     conn = get_connection(config.db_path if args.db is None else args.db)
     try:
         create_all(conn)
@@ -1402,6 +1572,13 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
             return 1
 
         # Get required pack hashes via rustic dry-run
+        from lcsas.utils.subprocess import check_binary_version
+        try:
+            check_binary_version("rustic", min_version=(0, 9, 0))
+        except RuntimeError as exc:
+            logger.error("%s", exc)
+            return 1
+
         runner = SubprocessRusticRunner(tmpdir=config.staging_path)
         plan = runner.restore_dry_run(
             snapshot_id=args.snapshot_id,
@@ -1431,13 +1608,39 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
                    f"{len(pick_list.volumes)} volumes "
                    f"({pick_list.total_bytes / (1024 * 1024):.1f} MB)")
 
+    if pick_list.deprecated_disc_labels:
+        logger.warning(
+            "\n  WARNING: %d pack(s) are only available on DEPRECATED or "
+            "DESTROYED volumes. These discs may still be physically "
+            "retrievable if you have kept them.",
+            sum(len(v) for v in pick_list.deprecated_disc_labels.values()),
+        )
+        for label, hashes in sorted(pick_list.deprecated_disc_labels.items()):
+            logger.warning(
+                "    %s  (%d pack(s))", label, len(hashes)
+            )
+        logger.warning(
+            "  If you can locate these discs, mount them and re-run restore."
+        )
+
     if pick_list.missing_packs:
-        logger.warning(f"\n  WARNING: {len(pick_list.missing_packs)} packs not found "
-                       f"in any volume!")
+        logger.error(
+            "\n  ERROR: %d pack(s) required for this snapshot are not found in "
+            "any archived volume. Restore is impossible without these packs.",
+            len(pick_list.missing_packs),
+        )
         for sha in pick_list.missing_packs[:10]:
-            logger.info(f"    {sha}")
+            logger.error(f"    missing: {sha}")
         if len(pick_list.missing_packs) > 10:
-            logger.info(f"    ... and {len(pick_list.missing_packs) - 10} more")
+            logger.error(
+                "    ... and %d more missing packs",
+                len(pick_list.missing_packs) - 10,
+            )
+        logger.error(
+            "  If discs are physically present but not yet scanned, run "
+            "`lcsas catalog validate --disc /mnt/disc` to check each disc."
+        )
+        return 1
 
     return 0
 
@@ -1458,6 +1661,8 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         logger.error("--config is required for restore exec.")
         return 1
     config = load_config(args.config)
+    if not _validate_config_or_exit(config, skip_staging=True):
+        return 1
     conn = get_connection(config.db_path if args.db is None else args.db)
     try:
         create_all(conn)
@@ -1468,6 +1673,24 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
             return 1
 
         repo_cfg = config.repositories[repo_name]
+
+        # Early validation: password file must exist before we attempt rustic.
+        if not args.password_file.exists():
+            logger.error(
+                "Password file not found: %s\n"
+                "Provide the correct path with --password-file.",
+                args.password_file,
+            )
+            return 1
+
+        from lcsas.exceptions import BinaryError
+        from lcsas.utils.subprocess import check_binary_version
+        try:
+            check_binary_version("rustic", min_version=(0, 9, 0))
+        except BinaryError as exc:
+            logger.error("%s", exc)
+            return 1
+
         runner = SubprocessRusticRunner(tmpdir=config.staging_path)
 
         # Get required pack hashes
@@ -1482,6 +1705,13 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         pick_list = planner.generate_pick_list_v2(plan.required_pack_hashes)
     finally:
         conn.close()
+
+    if pick_list.deprecated_disc_labels:
+        logger.warning(
+            "%d pack(s) are only on DEPRECATED/DESTROYED volumes: %s",
+            sum(len(v) for v in pick_list.deprecated_disc_labels.values()),
+            ", ".join(sorted(pick_list.deprecated_disc_labels)),
+        )
 
     if pick_list.missing_packs:
         logger.error(f"{len(pick_list.missing_packs)} required packs not "
@@ -1686,6 +1916,15 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
         logger.error("Disc path '%s' is not a directory.", disc_path)
         return 1
 
+    # Early validation: password file must exist.
+    if not args.password_file.exists():
+        logger.error(
+            "Password file not found: %s\n"
+            "Provide the correct path with --password-file.",
+            args.password_file,
+        )
+        return 1
+
     # Locate catalog.db on the disc
     catalog_path = args.catalog if args.catalog else disc_path / "catalog.db"
     if not catalog_path.is_file():
@@ -1761,19 +2000,91 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
         cache_dir = args.cache_dir if args.cache_dir else (tmp_dir / "cache")
         ensure_dir(cache_dir)
 
+        from lcsas.exceptions import BinaryError
+        from lcsas.utils.subprocess import check_binary_version
+
+        rustic_available = True
+        try:
+            check_binary_version("rustic", min_version=(0, 9, 0))
+        except BinaryError:
+            rustic_available = False
+
         runner = SubprocessRusticRunner(tmpdir=tmp_dir)
         executor = RestoreExecutor(runner)
 
         logger.info("Copying repository metadata from disc to cache...")
         executor.prepare_cache(cache_dir, disc_meta)
 
+        if not rustic_available:
+            # Auto-fallback: use the pure-Python restorer bundled with LCSAS.
+            # This requires all packs to be accessible — link the disc data dir
+            # into the cache so PurePythonRestorer can find them.
+            from lcsas.restore.restic_fallback import PurePythonRestorer
+
+            data_link = cache_dir / "data"
+            disc_data = disc_path / "data"
+            if not data_link.exists() and disc_data.is_dir():
+                data_link.symlink_to(disc_data)
+
+            logger.warning(
+                "rustic binary not found — falling back to pure-Python restorer.\n"
+                "  This is ~100x slower and only reads packs from the mounted disc.\n"
+                "  For multi-disc snapshots, mount all discs and copy their data/ "
+                "directories into %s/data/ before running.",
+                cache_dir,
+            )
+            target = args.target_path.resolve()
+            snap_arg = None if args.snapshot == "latest" else args.snapshot
+            try:
+                meta = PurePythonRestorer(
+                    repo_path=cache_dir,
+                    password_file=args.password_file,
+                ).restore(target=target, snapshot_id=snap_arg)
+            except Exception as exc:
+                logger.error("Pure-Python restore failed: %s", exc)
+                return 1
+            logger.info(
+                "Restore complete (pure-Python fallback). Snapshot: %s, "
+                "hostname: %s",
+                meta.snapshot_id, meta.hostname,
+            )
+            return 0
+
+        # Resolve "latest" to an actual snapshot ID so dry-run gets an
+        # explicit ID that rustic/restic can handle without ambiguity.
+        snapshot_id = args.snapshot
+        if snapshot_id == "latest":
+            try:
+                snap_list = runner.snapshots(
+                    repo_path=cache_dir,
+                    password_file=args.password_file,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Could not list snapshots to resolve 'latest': %s", exc
+                )
+                return 1
+            if not snap_list:
+                logger.error(
+                    "No snapshots found in repository '%s' on this disc.",
+                    repo_name,
+                )
+                return 1
+            # SnapshotInfo.timestamp is an ISO-8601 string; lexicographic sort is safe.
+            snap_list.sort(key=lambda s: s.timestamp)
+            snapshot_id = snap_list[-1].snapshot_id
+            logger.info(
+                "Resolved 'latest' to snapshot %s (%s)",
+                snapshot_id, snap_list[-1].timestamp,
+            )
+
         # Run rustic dry-run against the cache to determine required packs.
         logger.info(
-            "Determining required packs for snapshot '%s'...", args.snapshot
+            "Determining required packs for snapshot '%s'...", snapshot_id
         )
         try:
             plan = runner.restore_dry_run(
-                snapshot_id=args.snapshot,
+                snapshot_id=snapshot_id,
                 repo_path=cache_dir,
                 password_file=args.password_file,
             )
@@ -1798,7 +2109,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
 
         logger.info(
             "Snapshot '%s' requires %d pack file(s).",
-            args.snapshot, len(plan.required_pack_hashes),
+            snapshot_id, len(plan.required_pack_hashes),
         )
 
         # Look up which disc has which pack via the disc's catalog.
@@ -1810,11 +2121,17 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
             disc_conn.close()
 
         if pick_list.missing_packs:
-            logger.warning(
-                "%d required pack(s) not found in disc catalog — "
-                "they may be on unlisted discs.",
+            logger.error(
+                "%d required pack(s) not found in the disc catalog. "
+                "Restore will likely fail. If these packs are on other discs "
+                "not yet mounted, add them via --disc-dir and re-run. "
+                "Missing hashes: %s%s",
                 len(pick_list.missing_packs),
+                ", ".join(pick_list.missing_packs[:5]),
+                f" ... and {len(pick_list.missing_packs) - 5} more"
+                if len(pick_list.missing_packs) > 5 else "",
             )
+            return 1
 
         # Build alternates lookup for resilient pack collection.
         alternates_map: dict[str, list[str]] = {}
@@ -1966,11 +2283,11 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
 
         # Execute restore.
         target = args.target_path.resolve()
-        logger.info("\nRestoring snapshot '%s' \u2192 %s", args.snapshot, target)
+        logger.info("\nRestoring snapshot '%s' \u2192 %s", snapshot_id, target)
         try:
             executor.execute_restore(
                 cache_dir=cache_dir,
-                snapshot_id=args.snapshot,
+                snapshot_id=snapshot_id,
                 target_path=target,
                 password_file=args.password_file,
             )
@@ -2143,8 +2460,18 @@ def dispatch(args: argparse.Namespace) -> int:
     elif args.command == "catalog":
         if args.catalog_command == "import-receipts":
             return cmd_catalog_import(args)
+        elif args.catalog_command == "validate":
+            return cmd_catalog_validate(args)
+        elif args.catalog_command == "rebuild":
+            return cmd_catalog_rebuild(args)
         else:
-            logger.error("Usage: lcsas catalog {import-receipts}")
+            logger.error("Usage: lcsas catalog {import-receipts|validate|rebuild}")
+            return 1
+    elif args.command == "session":
+        if args.session_command == "list":
+            return cmd_session_list(args)
+        else:
+            logger.error("Usage: lcsas session {list}")
             return 1
     elif args.command == "restore":
         if args.restore_command == "plan":
@@ -2171,6 +2498,44 @@ def dispatch(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_session_list(args: argparse.Namespace) -> int:
+    """List burn sessions stored in the catalog."""
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import get_connection
+    from lcsas.db.sessions import get_session_volumes, list_sessions
+
+    config = load_config(args.config)
+    conn = get_connection(config.db_path)
+    try:
+        sessions = list_sessions(conn, status_filter=args.status)
+    finally:
+        conn.close()
+
+    if not sessions:
+        logger.info("No sessions found%s.", f" with status={args.status}" if args.status else "")
+        return 0
+
+    logger.info("%-36s  %-10s  %-10s  %s", "SESSION ID", "STATUS", "MEDIA", "CREATED")
+    logger.info("-" * 80)
+
+    conn = get_connection(config.db_path)
+    try:
+        for s in sessions:
+            vols = get_session_volumes(conn, s.session_id)
+            vol_labels = ", ".join(sv.volume_id and str(sv.volume_id) or "?" for sv in vols)
+            logger.info(
+                "%-36s  %-10s  %-10s  %s",
+                s.session_id, s.status, s.media_type,
+                s.created_at[:19] if s.created_at else "",
+            )
+            if vols:
+                logger.info("  volumes(%d): %s", len(vols), vol_labels)
+    finally:
+        conn.close()
+
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
     parser = build_parser()
@@ -2185,9 +2550,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return dispatch(args)
     except Exception as e:
-        logger.error(f"{e}")
-        if getattr(args, "verbose", False):
-            traceback.print_exc()
+        from lcsas.exceptions import LcsasError
+        if isinstance(e, LcsasError):
+            logger.error("%s", e)
+            if e.recovery_hint:
+                logger.error("Hint: %s", e.recovery_hint)
+        else:
+            logger.error("Unexpected error: %s", e)
+            if getattr(args, "verbose", False):
+                traceback.print_exc()
+            else:
+                logger.error("Run with --verbose for a full traceback.")
         return 1
 
 

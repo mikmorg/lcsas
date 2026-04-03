@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import contextlib
+import errno
+import logging
 import os
 import shutil
 from pathlib import Path
+
+_logger = logging.getLogger(__name__)
 
 
 def ensure_dir(path: Path) -> Path:
@@ -15,15 +19,25 @@ def ensure_dir(path: Path) -> Path:
 
 
 def hardlink_or_copy(src: Path, dst: Path) -> None:
-    """Create a hardlink from src to dst. Falls back to copy if cross-device.
+    """Create a hardlink from src to dst. Falls back to copy only on EXDEV.
 
-    Creates parent directories of dst if needed.
+    Creates parent directories of dst if needed.  Only cross-device link
+    errors (EXDEV) trigger the copy fallback; all other OSErrors are
+    re-raised so callers are not silently surprised by doubled disk usage
+    or permission failures.
     """
     ensure_dir(dst.parent)
     try:
         os.link(src, dst)
-    except OSError:
-        # Cross-device link — fall back to copy
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            _logger.warning(
+                "hardlink %s -> %s failed (errno %d: %s); will NOT fall back to copy",
+                src, dst, exc.errno, exc.strerror,
+            )
+            raise
+        # Cross-device link — fall back to copy (expected and safe)
+        _logger.debug("hardlink cross-device, copying %s -> %s", src, dst)
         shutil.copy2(str(src), str(dst))
 
 

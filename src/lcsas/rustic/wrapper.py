@@ -77,6 +77,7 @@ class SubprocessRusticRunner(SubprocessRunnerBase):
         repo_path: Path,
         password_file: Path,
         check: bool = True,
+        timeout: int = 3600,
     ) -> subprocess.CompletedProcess[str]:
         from lcsas.log import mask_password_path
 
@@ -93,7 +94,12 @@ class SubprocessRusticRunner(SubprocessRunnerBase):
                 text=True,
                 check=check,
                 env=self._env(),
+                timeout=timeout,
             )
+        except subprocess.TimeoutExpired as exc:
+            operation = args[0] if args else "unknown"
+            self._handle_timeout("rustic", operation, exc)
+            raise  # unreachable — _handle_timeout always raises
         except subprocess.CalledProcessError as exc:
             self._log_stderr("rustic", exc)
             # Re-create with password path masked so it doesn't leak
@@ -155,7 +161,7 @@ class SubprocessRusticRunner(SubprocessRunnerBase):
         target_path: Path,
     ) -> None:
         args = ["restore", snapshot_id, str(target_path)]
-        self._run(args, repo_path, password_file)
+        self._run(args, repo_path, password_file, timeout=21600)  # 6 hours
 
     def prune_dry_run(
         self,

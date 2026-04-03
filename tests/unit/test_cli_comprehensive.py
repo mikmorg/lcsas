@@ -57,6 +57,7 @@ database = "{db}"
 
 [defaults]
 media_type = "TEST_TINY"
+metadata_reserve_mb = 0
 {extra}
 """)
     return cfg

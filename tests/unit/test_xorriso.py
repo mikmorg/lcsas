@@ -9,17 +9,22 @@ from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
 
 class TestXorrisoMocked:
-    @patch("lcsas.iso.xorriso.subprocess.run")
-    def test_create_iso_args(self, mock_run, tmp_path):
+    @patch("lcsas.iso.xorriso.subprocess.Popen")
+    def test_create_iso_args(self, mock_popen, tmp_path):
         """create_iso writes to .iso.tmp then renames to final path."""
-        def _create_tmp(cmd, **kwargs):
-            """Simulate xorriso creating the output file."""
-            # The -o arg is the temp path (.iso.tmp)
+        captured_cmd = []
+
+        def _popen_factory(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            # Simulate xorriso writing the temp output file
             idx = cmd.index("-o")
             Path(cmd[idx + 1]).write_bytes(b"ISO")
-            return MagicMock(returncode=0)
+            mock_proc = MagicMock()
+            mock_proc.communicate.return_value = ("", "")
+            mock_proc.returncode = 0
+            return mock_proc
 
-        mock_run.side_effect = _create_tmp
+        mock_popen.side_effect = _popen_factory
         runner = SubprocessXorrisoRunner()
 
         source = tmp_path / "source"
@@ -28,8 +33,8 @@ class TestXorrisoMocked:
 
         runner.create_iso(source, output, "TEST_VOL")
 
-        mock_run.assert_called_once()
-        args = mock_run.call_args[0][0]
+        mock_popen.assert_called_once()
+        args = captured_cmd
         assert "xorriso" in args[0]
         assert "-as" in args
         assert "mkisofs" in args
@@ -65,17 +70,20 @@ class TestXorrisoMocked:
         runner = SubprocessXorrisoRunner()
         assert runner.verify_disc("/dev/sr0") is False
 
-    @patch("lcsas.iso.xorriso.subprocess.run")
-    def test_create_iso_cleans_tmp_on_failure(self, mock_run, tmp_path):
+    @patch("lcsas.iso.xorriso.subprocess.Popen")
+    def test_create_iso_cleans_tmp_on_failure(self, mock_popen, tmp_path):
         """On subprocess failure, the .iso.tmp file is removed."""
         import subprocess as _sp
 
-        def _create_and_fail(cmd, **kwargs):
+        def _popen_factory(cmd, **kwargs):
             idx = cmd.index("-o")
             Path(cmd[idx + 1]).write_bytes(b"PARTIAL")
-            raise _sp.CalledProcessError(1, "xorriso")
+            mock_proc = MagicMock()
+            mock_proc.communicate.return_value = ("", "xorriso: some error")
+            mock_proc.returncode = 1
+            return mock_proc
 
-        mock_run.side_effect = _create_and_fail
+        mock_popen.side_effect = _popen_factory
         runner = SubprocessXorrisoRunner()
 
         source = tmp_path / "source"
@@ -90,12 +98,18 @@ class TestXorrisoMocked:
         assert not output.exists()
         assert not output.with_suffix(".iso.tmp").exists()
 
-    @patch("lcsas.iso.xorriso.subprocess.run")
-    def test_create_iso_no_tmp_file_on_early_failure(self, mock_run, tmp_path):
+    @patch("lcsas.iso.xorriso.subprocess.Popen")
+    def test_create_iso_no_tmp_file_on_early_failure(self, mock_popen, tmp_path):
         """If subprocess fails before writing the file, no cleanup error."""
         import subprocess as _sp
 
-        mock_run.side_effect = _sp.CalledProcessError(1, "xorriso")
+        def _popen_factory(cmd, **kwargs):
+            mock_proc = MagicMock()
+            mock_proc.communicate.return_value = ("", "")
+            mock_proc.returncode = 1
+            return mock_proc
+
+        mock_popen.side_effect = _popen_factory
         runner = SubprocessXorrisoRunner()
 
         source = tmp_path / "source"

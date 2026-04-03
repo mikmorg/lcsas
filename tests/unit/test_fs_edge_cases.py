@@ -18,15 +18,31 @@ from lcsas.utils.fs import (
 
 class TestHardlinkOrCopyCrossDevice:
     def test_cross_device_fallback(self, tmp_path):
-        """When os.link raises OSError, falls back to shutil.copy2."""
+        """When os.link raises EXDEV, falls back to shutil.copy2."""
+        import errno as _errno
         src = tmp_path / "src.txt"
         dst = tmp_path / "sub" / "dst.txt"
         src.write_text("hello cross-device")
 
-        with patch("lcsas.utils.fs.os.link", side_effect=OSError("cross-device")):
+        exdev_err = OSError(_errno.EXDEV, "Cross-device link")
+        with patch("lcsas.utils.fs.os.link", side_effect=exdev_err):
             hardlink_or_copy(src, dst)
 
         assert dst.read_text() == "hello cross-device"
+
+    def test_non_exdev_oserror_is_reraised(self, tmp_path):
+        """When os.link raises a non-EXDEV OSError, it is re-raised (not silently copied)."""
+        import errno as _errno
+        import pytest
+        src = tmp_path / "src.txt"
+        dst = tmp_path / "dst.txt"
+        src.write_text("content")
+
+        perm_err = OSError(_errno.EPERM, "Operation not permitted")
+        with patch("lcsas.utils.fs.os.link", side_effect=perm_err):
+            with pytest.raises(OSError) as exc_info:
+                hardlink_or_copy(src, dst)
+        assert exc_info.value.errno == _errno.EPERM
 
     def test_creates_parent_dirs(self, tmp_path):
         """Creates parent directories for destination."""

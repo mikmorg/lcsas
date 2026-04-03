@@ -304,12 +304,39 @@ def validate_config(config: LCSASConfig) -> list[str]:
             f"{config.default_ecc_redundancy_pct}"
         )
 
-    # metadata_reserve_bytes (must be positive)
-    if config.metadata_reserve_bytes <= 0:
+    # metadata_reserve_bytes (must be non-negative; zero is allowed but risky)
+    if config.metadata_reserve_bytes < 0:
         errors.append(
-            f"metadata_reserve_bytes must be positive: "
+            f"metadata_reserve_bytes must not be negative: "
             f"{config.metadata_reserve_bytes}"
         )
+    elif config.metadata_reserve_bytes >= config.default_media_type.usable_bytes:
+        errors.append(
+            f"metadata_reserve_bytes ({config.metadata_reserve_bytes:,}) must be "
+            f"less than the usable capacity of the configured media type "
+            f"({config.default_media_type.name}: "
+            f"{config.default_media_type.usable_bytes:,} bytes)"
+        )
+
+    # label_prefix must be non-empty and use only ISO 9660-safe characters.
+    import re as _re
+    if not config.label_prefix:
+        errors.append("label_prefix must not be empty")
+    elif not _re.fullmatch(r"[A-Z0-9_]+", config.label_prefix):
+        errors.append(
+            f"label_prefix '{config.label_prefix}' contains characters not "
+            f"allowed in ISO 9660 volume identifiers. Use only A-Z, 0-9, and '_'."
+        )
+    else:
+        # Pre-validate that the prefix won't produce labels exceeding 32 chars.
+        # Format: PREFIX_MEDIA_YYYY_NNNN — minimum overhead is _XX_2026_0001 = 13
+        _min_overhead = len("_XX_2026_0001")
+        if len(config.label_prefix) + _min_overhead > 32:
+            errors.append(
+                f"label_prefix '{config.label_prefix}' is too long "
+                f"({len(config.label_prefix)} chars); generated volume labels would "
+                f"exceed the ISO 9660 32-character limit. Use a shorter prefix."
+            )
 
     # Per-repo checks
     for name, repo in config.repositories.items():

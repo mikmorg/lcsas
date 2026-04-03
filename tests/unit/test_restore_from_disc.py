@@ -279,11 +279,15 @@ class TestFromDiscBatchMode:
 
         target = tmp_path / "restored"
 
+        key_file = tmp_path / "secret.key"
+        key_file.write_bytes(b"password")
+
         args = _make_disc_args(
             disc=disc,
             target_path=target,
             volume_dir=vol_dir,
             skip_verify=True,
+            password_file=key_file,
         )
         with (
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
@@ -353,11 +357,15 @@ class TestFromDiscBatchMode:
         mock_executor.prepare_cache.return_value = None
         mock_executor.ingest_volume.return_value = (len(pack_hashes), [])
 
+        key_file = tmp_path / "secret.key"
+        key_file.write_bytes(b"password")
+
         args = _make_disc_args(
             disc=disc,
             repo=None,  # no explicit --repo
             volume_dir=vol_dir,
             skip_verify=True,
+            password_file=key_file,
         )
         with (
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
@@ -388,11 +396,15 @@ class TestFromDiscBatchMode:
         mock_executor.prepare_cache.return_value = None
         mock_executor.ingest_volume.return_value = (len(pack_hashes), [])
 
+        key_file = tmp_path / "secret.key"
+        key_file.write_bytes(b"password")
+
         args = _make_disc_args(
             disc=disc,
             catalog=custom_catalog,
             volume_dir=vol_dir,
             skip_verify=True,
+            password_file=key_file,
         )
         with (
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),

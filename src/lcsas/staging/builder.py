@@ -67,43 +67,81 @@ class StagingBuilder:
         Handles both flat (data/HASH) and two-level (data/ab/abcdef...)
         mirror layouts by searching for the pack file.
 
+        Uses a single pass: each pack is located, validated, and hardlinked
+        atomically before moving to the next one.  This eliminates the race
+        window that exists in a two-pass approach where a pack could be
+        deleted between verification and staging.
+
         Args:
             packs: List of Pack objects to stage.
             mirror_data_dir: Path to the mirror's data/ directory.
 
         Returns:
             Number of packs successfully staged.
+
+        Raises:
+            MissingPacksError: If any pack cannot be found, is a symlink, or
+                its destination has zero size after staging.
         """
         ensure_dir(self._data_dir)
 
-        # Pass 1: verify all packs are locatable before staging anything.
-        # This prevents orphaned hardlinks if some packs are missing.
         missing: list[str] = []
-        sources: dict[str, Path] = {}
-        for pack in packs:
+        staged = 0
+        total = len(packs)
+
+        for i, pack in enumerate(packs, 1):
+            short = pack.sha256[:12]
+
+            # Locate the pack file immediately before using it.
             src = find_pack_file(mirror_data_dir, pack.sha256)
             if src is None:
-                missing.append(pack.sha256[:12])
-            elif src.is_symlink():
-                _logger.warning(
-                    "Symlink pack file rejected (possible path injection): %s", src
+                _logger.error("Pack %s not found in mirror (pack %d/%d)", short, i, total)
+                missing.append(short)
+                continue
+            if src.is_symlink():
+                _logger.error(
+                    "Pack %s is a symlink — rejected (possible path injection): %s",
+                    short, src,
                 )
-                missing.append(pack.sha256[:12])
-            else:
-                sources[pack.sha256] = src
+                missing.append(short)
+                continue
+
+            dst = pack_dest_path(self._data_dir, pack.sha256)
+            ensure_dir(dst.parent)
+
+            if dst.exists():
+                # Already staged (re-run after partial failure).
+                staged += 1
+                _logger.debug("Pack %s already staged, skipping (%d/%d)", short, i, total)
+                continue
+
+            try:
+                hardlink_or_copy(src, dst)
+            except OSError as exc:
+                _logger.error(
+                    "Failed to stage pack %s (%s -> %s): %s",
+                    short, src, dst, exc,
+                )
+                missing.append(short)
+                continue
+
+            # Verify the destination is non-empty (guards against silent failures).
+            dst_size = dst.stat().st_size if dst.exists() else 0
+            if dst_size == 0:
+                _logger.error(
+                    "Pack %s staged to %s but file is empty (expected %d bytes)",
+                    short, dst, pack.size_bytes,
+                )
+                missing.append(short)
+                dst.unlink(missing_ok=True)
+                continue
+
+            staged += 1
+            if i % 100 == 0 or i == total:
+                _logger.info("Staging packs: %d/%d complete", i, total)
 
         if missing:
             raise MissingPacksError(missing)
-
-        # Pass 2: stage all packs (all are confirmed available).
-        staged = 0
-        for pack in packs:
-            src = sources[pack.sha256]
-            dst = pack_dest_path(self._data_dir, pack.sha256)
-            ensure_dir(dst.parent)
-            if not dst.exists():
-                hardlink_or_copy(src, dst)
-            staged += 1
 
         return staged
 
