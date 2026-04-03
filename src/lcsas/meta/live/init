@@ -1,0 +1,102 @@
+#!/bin/sh
+# ═══════════════════════════════════════════════════════════════════
+#  LCSAS Recovery — init script for live boot
+#
+#  This script runs early in the boot process (from initramfs) to:
+#    1. Mount the boot disc (BD-R / DVD / USB)
+#    2. Mount rootfs.squashfs as the root filesystem
+#    3. Set up an overlay (tmpfs) for writable layer
+#    4. Pivot into the real root and exec /sbin/init
+#
+#  Kernel command line options:
+#    quiet          — suppress boot messages
+#    loglevel=N     — kernel log verbosity
+#    lcsas.shell    — drop to debug shell before pivot
+# ═══════════════════════════════════════════════════════════════════
+
+# Basic setup
+/bin/busybox mount -t proc proc /proc
+/bin/busybox mount -t sysfs sysfs /sys
+/bin/busybox mount -t devtmpfs devtmpfs /dev
+
+# Load essential modules for optical + USB media
+for mod in loop squashfs isofs sr_mod cdrom usb-storage \
+           xhci-hcd xhci-pci ehci-hcd ehci-pci uhci-hcd \
+           ohci-hcd ohci-pci ata_generic ahci ata_piix; do
+    modprobe "$mod" 2>/dev/null || true
+done
+
+# Wait for devices to settle
+sleep 2
+
+# ── Find and mount the boot disc ────────────────────────────────
+BOOT_MEDIA=""
+BOOT_MNT="/mnt/boot-media"
+mkdir -p "$BOOT_MNT"
+
+echo "Searching for LCSAS boot media..."
+
+# Try optical drives first, then USB/other block devices
+for dev in /dev/sr0 /dev/sr1 /dev/cdrom \
+           /dev/sd[a-z] /dev/sd[a-z][0-9]; do
+    [ -b "$dev" ] || continue
+    if mount -t iso9660 -o ro "$dev" "$BOOT_MNT" 2>/dev/null; then
+        # Check if this is our boot disc (has rootfs.squashfs)
+        if [ -f "$BOOT_MNT/boot/rootfs.squashfs" ]; then
+            BOOT_MEDIA="$dev"
+            echo "Found LCSAS boot media on $dev"
+            break
+        fi
+        umount "$BOOT_MNT" 2>/dev/null
+    fi
+done
+
+if [ -z "$BOOT_MEDIA" ]; then
+    echo "ERROR: LCSAS boot media not found!"
+    echo "Ensure the LCSAS meta disc is in the drive."
+    echo "Dropping to emergency shell..."
+    exec /bin/sh
+fi
+
+# ── Mount squashfs root ──────────────────────────────────────────
+SQFS_MNT="/mnt/squashfs"
+OVERLAY_UPPER="/mnt/overlay-upper"
+OVERLAY_WORK="/mnt/overlay-work"
+NEWROOT="/mnt/newroot"
+
+mkdir -p "$SQFS_MNT" "$OVERLAY_UPPER" "$OVERLAY_WORK" "$NEWROOT"
+
+# Mount the squashfs image (read-only)
+mount -t squashfs -o ro,loop "$BOOT_MNT/boot/rootfs.squashfs" "$SQFS_MNT"
+
+# Create overlayfs: squashfs (lower/ro) + tmpfs (upper/rw)
+mount -t tmpfs tmpfs "$OVERLAY_UPPER"
+mkdir -p "$OVERLAY_UPPER/upper" "$OVERLAY_UPPER/work"
+
+mount -t overlay overlay \
+    -o "lowerdir=$SQFS_MNT,upperdir=$OVERLAY_UPPER/upper,workdir=$OVERLAY_UPPER/work" \
+    "$NEWROOT"
+
+# ── Make disc contents available in new root ─────────────────────
+# Bind-mount the boot media so LCSAS tools and restore scripts
+# on the disc are accessible from the live environment.
+mkdir -p "$NEWROOT/cdrom"
+mount --bind "$BOOT_MNT" "$NEWROOT/cdrom"
+
+# Move virtual filesystems into newroot
+mkdir -p "$NEWROOT/proc" "$NEWROOT/sys" "$NEWROOT/dev"
+mount --move /proc "$NEWROOT/proc"
+mount --move /sys "$NEWROOT/sys"
+mount --move /dev "$NEWROOT/dev"
+
+# ── Optional debug shell ─────────────────────────────────────────
+if grep -q "lcsas.shell" /proc/cmdline 2>/dev/null; then
+    echo ""
+    echo "Debug shell requested (lcsas.shell on cmdline)."
+    echo "Type 'exit' to continue boot."
+    exec /bin/sh
+fi
+
+# ── Pivot into real root ─────────────────────────────────────────
+echo "Pivoting to live root filesystem..."
+exec switch_root "$NEWROOT" /sbin/init
