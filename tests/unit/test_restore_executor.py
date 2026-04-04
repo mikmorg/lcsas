@@ -68,8 +68,8 @@ class TestPrepareCache:
         executor.prepare_cache(cache, metadata_source)
         assert (cache / "index" / "data.json").read_text() == "MODIFIED"
 
-    def test_missing_subdir_skipped(self, executor, tmp_path):
-        """Missing source subdirectories don't cause errors."""
+    def test_missing_subdir_raises(self, executor, tmp_path):
+        """Missing source subdirectories raise FileNotFoundError with a clear message."""
         cache = tmp_path / "cache"
         source = tmp_path / "partial_metadata"
         source.mkdir()
@@ -77,30 +77,20 @@ class TestPrepareCache:
         (source / "index").mkdir()
         (source / "index" / "data.json").write_text("{}")
 
-        executor.prepare_cache(cache, source)
+        with pytest.raises(FileNotFoundError, match="snapshots"):
+            executor.prepare_cache(cache, source)
 
-        assert (cache / "index").is_dir()
-        assert not (cache / "snapshots").exists()
-        assert not (cache / "keys").exists()
-
-    def test_missing_subdir_logs_warning(self, executor, tmp_path, caplog):
-        """Missing metadata directories emit a warning-level log."""
-        import logging
+    def test_missing_all_subdirs_raises(self, executor, tmp_path):
+        """Completely missing metadata raises FileNotFoundError."""
         cache = tmp_path / "cache"
         source = tmp_path / "empty_metadata"
         source.mkdir()
 
-        with caplog.at_level(logging.WARNING):
+        with pytest.raises(FileNotFoundError, match="every disc"):
             executor.prepare_cache(cache, source)
 
-        warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-        # Should warn about at least one missing metadata directory
-        assert any("missing" in m.lower() or "Metadata" in m for m in warning_messages), \
-            f"No metadata warning in: {warning_messages}"
-
-    def test_missing_config_emits_warning(self, executor, tmp_path, caplog):
-        """Missing repository config emits a warning-level log."""
-        import logging
+    def test_missing_config_raises(self, executor, tmp_path):
+        """Missing repository config raises FileNotFoundError with a clear message."""
         cache = tmp_path / "cache"
         source = tmp_path / "meta_no_config"
         source.mkdir()
@@ -108,22 +98,8 @@ class TestPrepareCache:
         for subdir in ("index", "snapshots", "keys"):
             (source / subdir).mkdir()
 
-        with caplog.at_level(logging.WARNING):
+        with pytest.raises(FileNotFoundError, match="config"):
             executor.prepare_cache(cache, source)
-
-        warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any("config" in m.lower() for m in warning_messages), \
-            f"No config warning in: {warning_messages}"
-
-    def test_missing_config_skipped(self, executor, tmp_path):
-        """Missing config file doesn't cause errors."""
-        cache = tmp_path / "cache"
-        source = tmp_path / "no_config"
-        source.mkdir()
-
-        executor.prepare_cache(cache, source)
-
-        assert not (cache / "config").exists()
 
 
 # =========================================================================
@@ -160,8 +136,8 @@ class TestIngestVolume:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        count = executor.ingest_volume(cache, mount, [shas[0], shas[1]], verify=False)
-        assert count == 2
+        result = executor.ingest_volume(cache, mount, [shas[0], shas[1]], verify=False)
+        assert result.ingested == 2
         assert (cache / "data" / shas[0][:2] / shas[0]).exists()
         assert (cache / "data" / shas[1][:2] / shas[1]).exists()
 
@@ -171,8 +147,8 @@ class TestIngestVolume:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        count = executor.ingest_volume(cache, mount, [shas[0], shas[1]], verify=False)
-        assert count == 2
+        result = executor.ingest_volume(cache, mount, [shas[0], shas[1]], verify=False)
+        assert result.ingested == 2
 
     def test_missing_pack_not_counted(self, executor, tmp_path):
         """Pack not on volume is not counted."""
@@ -180,8 +156,8 @@ class TestIngestVolume:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        count = executor.ingest_volume(cache, mount, [shas[2]], verify=False)  # sha3 doesn't exist
-        assert count == 0
+        result = executor.ingest_volume(cache, mount, [shas[2]], verify=False)  # sha3 doesn't exist
+        assert result.ingested == 0
 
     def test_already_cached_skipped(self, executor, tmp_path):
         """Pack already in cache is skipped (not re-copied)."""
@@ -193,8 +169,8 @@ class TestIngestVolume:
         prefix.mkdir(parents=True)
         (prefix / shas[0]).write_bytes(b"already_here")
 
-        count = executor.ingest_volume(cache, mount, [shas[0], shas[1]], verify=False)
-        assert count == 1  # only sha2 ingested
+        result = executor.ingest_volume(cache, mount, [shas[0], shas[1]], verify=False)
+        assert result.ingested == 1  # only sha2 ingested
         # sha1 should NOT be overwritten
         assert (cache / "data" / shas[0][:2] / shas[0]).read_bytes() == b"already_here"
 
@@ -204,8 +180,8 @@ class TestIngestVolume:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        count = executor.ingest_volume(cache, mount, [shas[0], shas[2]], verify=False)
-        assert count == 1  # sha1 found, sha3 missing
+        result = executor.ingest_volume(cache, mount, [shas[0], shas[2]], verify=False)
+        assert result.ingested == 1  # sha1 found, sha3 missing
 
     def test_duplicate_required_packs(self, executor, tmp_path):
         """Duplicate SHA-256 entries should not double-count ingested packs."""
@@ -214,11 +190,11 @@ class TestIngestVolume:
         cache.mkdir()
 
         # Pass sha1 twice
-        count = executor.ingest_volume(
+        result = executor.ingest_volume(
             cache, mount, [shas[0], shas[0]], verify=False,
         )
         # First copy ingested; second skipped (already exists)
-        assert count == 1
+        assert result.ingested == 1
 
 
 # =========================================================================
@@ -309,8 +285,10 @@ class TestVerifyISO:
 class TestIngestCollectFailures:
     """Tests for ingest_volume with collect_failures=True."""
 
-    def test_collect_failures_returns_tuple(self, executor, tmp_path):
-        """collect_failures=True returns (int, list) instead of int."""
+    def test_collect_failures_returns_result(self, executor, tmp_path):
+        """collect_failures=True returns an IngestionResult."""
+        from lcsas.restore.executor import IngestionResult
+
         mount = tmp_path / "volume" / "data"
         mount.mkdir(parents=True)
         sha = "a" * 64
@@ -323,8 +301,9 @@ class TestIngestCollectFailures:
             cache, tmp_path / "volume", [sha],
             verify=False, collect_failures=True,
         )
-        assert isinstance(result, tuple)
-        assert result == (1, [])
+        assert isinstance(result, IngestionResult)
+        assert result.ingested == 1
+        assert result.failed == []
 
     def test_corrupt_pack_collected_not_raised(self, executor, tmp_path):
         """Corrupt pack is added to failed list, not raised."""
@@ -337,12 +316,12 @@ class TestIngestCollectFailures:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        ingested, failed = executor.ingest_volume(
+        result = executor.ingest_volume(
             cache, tmp_path / "volume", [fake_sha],
             verify=True, collect_failures=True,
         )
-        assert ingested == 0
-        assert fake_sha in failed
+        assert result.ingested == 0
+        assert fake_sha in result.failed
         # The corrupt file should have been removed
         assert not (cache / "data" / fake_sha[:2] / fake_sha).exists()
 
@@ -381,12 +360,12 @@ class TestIngestCollectFailures:
         cache.mkdir()
 
         # With verify=False, both succeed
-        ingested, failed = executor.ingest_volume(
+        result = executor.ingest_volume(
             cache, tmp_path / "volume", [good_sha, bad_sha],
             verify=False, collect_failures=True,
         )
-        assert ingested == 2
-        assert failed == []
+        assert result.ingested == 2
+        assert result.failed == []
 
 
 # =========================================================================

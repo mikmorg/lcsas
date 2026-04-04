@@ -227,6 +227,16 @@ class BurnOrchestrator:
         if isinstance(self._xorriso, SubprocessRunnerBase):
             # xorriso 1.4.0+ required for reliable ISO-9660 level 3 support.
             check_binary_version(self._xorriso._binary, min_version=(1, 4, 0))
+        # Tape media (LTO) has built-in ECC — DVDisaster augmentation is
+        # not applicable and must be skipped automatically.
+        if manifest.media_type.is_tape:
+            skip_ecc = True
+            _logger.info(
+                "Tape media detected (%s) — skipping DVDisaster ECC augmentation "
+                "(LTO tape has built-in error correction).",
+                manifest.media_type.name,
+            )
+
         if not skip_ecc and isinstance(self._dvdisaster, SubprocessRunnerBase):
             # dvdisaster 0.79+ required for RS03 augmentation mode.
             check_binary_version(self._dvdisaster._binary, min_version=(0, 79, 0))
@@ -264,6 +274,17 @@ class BurnOrchestrator:
                     iso_path,
                     self._config.default_ecc_redundancy_pct,
                 )
+
+            # Post-ECC size validation: the augmented ISO must fit on the media.
+            if iso_path.exists():
+                iso_size = iso_path.stat().st_size
+                if iso_size > manifest.media_type.capacity_bytes:
+                    raise ValueError(
+                        f"ISO {iso_path.name} is {iso_size:,} bytes after ECC, "
+                        f"exceeding {manifest.media_type.name} capacity of "
+                        f"{manifest.media_type.capacity_bytes:,} bytes. "
+                        "Increase metadata_reserve_bytes or use larger media."
+                    )
 
             # Burn to disc
             if not skip_burn:
@@ -393,6 +414,8 @@ class BurnOrchestrator:
         injector.write_volume_info(vol, packs=selected_packs)
         injector.write_restore_instructions()
         injector.write_standalone_restorer()
+        if not media_type.is_test:
+            injector.write_lcsas_source()
         injector.write_start_here(self._config)
         injector.write_key_info(self._config)
         injector.write_config_summary(self._config)
@@ -413,9 +436,14 @@ class BurnOrchestrator:
             self._xorriso.create_iso(staging_root, iso_output, vol_label, expected_bytes=estimated_bytes)
             iso_path = iso_output
 
-            if not skip_ecc:
+            if not skip_ecc and not media_type.is_tape:
                 self._dvdisaster.augment_iso(
                     iso_path, self._config.default_ecc_redundancy_pct,
+                )
+            elif media_type.is_tape and not skip_ecc:
+                _logger.info(
+                    "Tape media (%s) — skipping DVDisaster ECC augmentation.",
+                    media_type.name,
                 )
 
             # 7. Validate ISO size against media capacity  [O4]

@@ -1,4 +1,4 @@
-"""Tests for the 'lcsas restore from-disc' CLI command."""
+"""Tests for the 'lcsas restore standalone' CLI command."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import create_volume
+from lcsas.restore.executor import IngestionResult
 from lcsas.rustic.types import RestorePlan
 from lcsas.utils.labels import generate_uuid
 
@@ -22,10 +23,10 @@ from lcsas.utils.labels import generate_uuid
 
 
 def _make_disc_args(**kwargs) -> argparse.Namespace:
-    """Build a Namespace mimicking parsed 'restore from-disc' args."""
+    """Build a Namespace mimicking parsed 'restore standalone' args."""
     defaults = {
         "command": "restore",
-        "restore_command": "from-disc",
+        "restore_command": "standalone",
         "disc": Path("/mnt/disc1"),
         "target_path": Path("/tmp/restored"),
         "password_file": Path("/home/user/secret.key"),
@@ -81,15 +82,15 @@ def _write_catalog_with_packs(
 
 class TestFromDiscParser:
     def test_from_disc_subcommand_registered(self):
-        """Parser accepts 'restore from-disc' without error."""
+        """Parser accepts 'restore standalone' without error."""
         parser = build_parser()
         args = parser.parse_args([
-            "restore", "from-disc",
+            "restore", "standalone",
             "/mnt/disc1", "/tmp/out",
             "--password-file", "/home/user/secret.key",
         ])
         assert args.command == "restore"
-        assert args.restore_command == "from-disc"
+        assert args.restore_command == "standalone"
         assert args.disc == Path("/mnt/disc1")
         assert args.target_path == Path("/tmp/out")
         assert args.password_file == Path("/home/user/secret.key")
@@ -98,7 +99,7 @@ class TestFromDiscParser:
         """--snapshot defaults to 'latest'."""
         parser = build_parser()
         args = parser.parse_args([
-            "restore", "from-disc",
+            "restore", "standalone",
             "/mnt/disc1", "/tmp/out",
             "--password-file", "/home/user/secret.key",
         ])
@@ -108,7 +109,7 @@ class TestFromDiscParser:
         """All optional flags are accepted."""
         parser = build_parser()
         args = parser.parse_args([
-            "restore", "from-disc",
+            "restore", "standalone",
             "/mnt/disc1", "/tmp/out",
             "--password-file", "/home/user/secret.key",
             "--repo", "family",
@@ -234,7 +235,7 @@ class TestFromDiscValidation:
         mock_runner.restore_dry_run.return_value = mock_plan
         mock_executor = MagicMock()
         mock_executor.prepare_cache.return_value = None
-        mock_executor.ingest_volume.return_value = (0, [])
+        mock_executor.ingest_volume.return_value = IngestionResult(0, [])
         mock_executor.verify_cache_completeness = MagicMock(return_value=pack_hashes)
 
         args = _make_disc_args(disc=disc, volume_dir=None, skip_verify=True)
@@ -275,7 +276,7 @@ class TestFromDiscBatchMode:
         mock_runner.restore_dry_run.return_value = mock_plan
         mock_executor = MagicMock()
         mock_executor.prepare_cache.return_value = None
-        mock_executor.ingest_volume.return_value = (len(pack_hashes), [])
+        mock_executor.ingest_volume.return_value = IngestionResult(len(pack_hashes), [])
 
         target = tmp_path / "restored"
 
@@ -318,7 +319,7 @@ class TestFromDiscBatchMode:
         mock_runner.restore_dry_run.return_value = mock_plan
         mock_executor = MagicMock()
         mock_executor.prepare_cache.return_value = None
-        mock_executor.ingest_volume.return_value = (0, [])
+        mock_executor.ingest_volume.return_value = IngestionResult(0, [])
 
         args = _make_disc_args(
             disc=disc,
@@ -355,7 +356,7 @@ class TestFromDiscBatchMode:
         mock_runner.restore_dry_run.return_value = mock_plan
         mock_executor = MagicMock()
         mock_executor.prepare_cache.return_value = None
-        mock_executor.ingest_volume.return_value = (len(pack_hashes), [])
+        mock_executor.ingest_volume.return_value = IngestionResult(len(pack_hashes), [])
 
         key_file = tmp_path / "secret.key"
         key_file.write_bytes(b"password")
@@ -394,7 +395,7 @@ class TestFromDiscBatchMode:
         mock_runner.restore_dry_run.return_value = mock_plan
         mock_executor = MagicMock()
         mock_executor.prepare_cache.return_value = None
-        mock_executor.ingest_volume.return_value = (len(pack_hashes), [])
+        mock_executor.ingest_volume.return_value = IngestionResult(len(pack_hashes), [])
 
         key_file = tmp_path / "secret.key"
         key_file.write_bytes(b"password")

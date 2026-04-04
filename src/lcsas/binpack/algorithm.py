@@ -35,14 +35,20 @@ def first_fit_decreasing(
     # Log an error if any item exceeds usable capacity — it will never fit on
     # any single volume and will always land in `remaining`.  Callers should
     # treat oversized items in `remaining` as a fatal configuration error.
-    oversized_count = sum(1 for _, sz in sorted_items if sz > usable)
-    if oversized_count:
-        item_id, item_size = sorted_items[0]
+    oversized = [(iid, sz) for iid, sz in sorted_items if sz > usable]
+    if oversized:
+        oversized_count = len(oversized)
+        largest_id, largest_size = max(oversized, key=lambda x: x[1])
+        detail = ", ".join(
+            f"'{iid}' ({sz:,} bytes)" for iid, sz in oversized[:5]
+        )
+        if oversized_count > 5:
+            detail += f" ... and {oversized_count - 5} more"
         _logger.error(
-            "%d item(s) exceed usable capacity (%d bytes); largest: '%s' (%d bytes). "
-            "These items will always land in `remaining` and can never be archived "
-            "on this media type.",
-            oversized_count, usable, item_id, item_size,
+            "%d item(s) exceed usable capacity (%d bytes) and can never be "
+            "archived on this media type. Largest: '%s' (%d bytes). "
+            "All oversized items: %s",
+            oversized_count, usable, largest_id, largest_size, detail,
         )
 
     selected: list[tuple[str, int]] = []

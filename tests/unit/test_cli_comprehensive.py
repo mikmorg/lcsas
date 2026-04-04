@@ -835,8 +835,8 @@ class TestPackCorruptionError:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        count = executor.ingest_volume(cache, tmp_path / "volume", [actual_hash], verify=True)
-        assert count == 1
+        result = executor.ingest_volume(cache, tmp_path / "volume", [actual_hash], verify=True)
+        assert result.ingested == 1
 
     def test_bad_hash_raises_and_deletes(self, tmp_path):
         from lcsas.restore.executor import PackCorruptionError, RestoreExecutor
@@ -873,10 +873,10 @@ class TestPackCorruptionError:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        count = executor.ingest_volume(
+        result = executor.ingest_volume(
             cache, tmp_path / "volume", [fake_sha], verify=False,
         )
-        assert count == 1
+        assert result.ingested == 1
 
 
 class TestMaskPasswordPath:

@@ -453,12 +453,12 @@ class TestExecutorCorruptionHandling:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        ingested, failed = executor.ingest_volume(
+        result = executor.ingest_volume(
             cache, tmp_path / "vol", [fake_sha],
             verify=True, collect_failures=True,
         )
-        assert ingested == 0
-        assert fake_sha in failed
+        assert result.ingested == 0
+        assert fake_sha in result.failed
 
     def test_good_pack_passes_verification(self, tmp_path):
         """A pack whose content matches its SHA-256 filename."""
@@ -474,11 +474,11 @@ class TestExecutorCorruptionHandling:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        count = executor.ingest_volume(
+        result = executor.ingest_volume(
             cache, tmp_path / "vol", [real_sha],
             verify=True, collect_failures=False,
         )
-        assert count == 1
+        assert result.ingested == 1
 
 
 # ═════════════════════════════════════════════════════════════════

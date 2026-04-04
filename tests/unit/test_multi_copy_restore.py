@@ -357,8 +357,8 @@ class TestRestoreFromAnyCombination:
                 vol_dir = volume_dirs[label]
                 # Determine which of ALL_SHAS this volume has
                 vol_shas = list(self.VOL_CONTENTS[label])
-                ingested = executor.ingest_volume(cache_dir, vol_dir, vol_shas, verify=False)
-                total_ingested += ingested
+                result = executor.ingest_volume(cache_dir, vol_dir, vol_shas, verify=False)
+                total_ingested += result.ingested
 
             # Verify ALL packs are in the cache
             for sha in self.ALL_SHAS:
@@ -428,11 +428,11 @@ class TestMultiVolumeIngest:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        n1 = executor.ingest_volume(cache, vol_a, ["sha_pack1"], verify=False)
-        n2 = executor.ingest_volume(cache, vol_b, ["sha_pack2"], verify=False)
+        r1 = executor.ingest_volume(cache, vol_a, ["sha_pack1"], verify=False)
+        r2 = executor.ingest_volume(cache, vol_b, ["sha_pack2"], verify=False)
 
-        assert n1 == 1
-        assert n2 == 1
+        assert r1.ingested == 1
+        assert r2.ingested == 1
         assert (cache / "data" / "sh" / "sha_pack1").read_bytes() == b"data1"
         assert (cache / "data" / "sh" / "sha_pack2").read_bytes() == b"data2"
 
@@ -452,11 +452,11 @@ class TestMultiVolumeIngest:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        n1 = executor.ingest_volume(cache, vol_a, ["common_pack"], verify=False)
-        n2 = executor.ingest_volume(cache, vol_b, ["common_pack"], verify=False)
+        r1 = executor.ingest_volume(cache, vol_a, ["common_pack"], verify=False)
+        r2 = executor.ingest_volume(cache, vol_b, ["common_pack"], verify=False)
 
-        assert n1 == 1
-        assert n2 == 0  # Already cached
+        assert r1.ingested == 1
+        assert r2.ingested == 0  # Already cached
         assert (cache / "data" / "co" / "common_pack").read_bytes() == b"from_vol_a"
 
     def test_partial_volume_ingest(self, tmp_path):
@@ -471,8 +471,8 @@ class TestMultiVolumeIngest:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        n = executor.ingest_volume(cache, vol, ["exists", "missing1", "missing2"], verify=False)
-        assert n == 1
+        r = executor.ingest_volume(cache, vol, ["exists", "missing1", "missing2"], verify=False)
+        assert r.ingested == 1
 
     def test_full_restore_workflow(self, tmp_path):
         """End-to-end: prepare_cache → ingest from 2 volumes → execute_restore."""

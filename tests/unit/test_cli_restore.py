@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from lcsas.cli.main import build_parser, cmd_restore_exec, cmd_restore_plan
+from lcsas.restore.executor import IngestionResult
 from lcsas.db.connection import get_memory_connection
 from lcsas.db.models import Pack
 from lcsas.db.packs import register_pack
@@ -468,7 +469,7 @@ class TestRetryFromAlternatesBatch:
 
         mock_executor = MagicMock()
         # When falling back to vol_dir, ingest returns (0 ingested, all failed)
-        mock_executor.ingest_volume.return_value = (0, ["deadbeef" * 8])
+        mock_executor.ingest_volume.return_value = IngestionResult(0, ["deadbeef" * 8])
         alternates_map = {"deadbeef" * 8: ["ALT_VOL"]}
         failed_packs = ["deadbeef" * 8]
 
@@ -497,7 +498,7 @@ class TestRetryFromAlternatesBatch:
         alt_dir.mkdir(parents=True)
 
         mock_executor = MagicMock()
-        mock_executor.ingest_volume.return_value = (0, ["deadbeef" * 8])
+        mock_executor.ingest_volume.return_value = IngestionResult(0, ["deadbeef" * 8])
         alternates_map = {"deadbeef" * 8: ["ALT_VOL"]}
         failed_packs = ["deadbeef" * 8]
 

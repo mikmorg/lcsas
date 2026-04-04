@@ -233,7 +233,16 @@ def build_parser() -> argparse.ArgumentParser:
     plan_p.add_argument("--repo", type=str, required=True,
                         help="Repository name containing the snapshot.")
 
-    exec_p = restore_sub.add_parser("exec", help="Execute a restore.")
+    exec_p = restore_sub.add_parser(
+        "exec",
+        help="Execute a restore (requires live mirrors and config file).",
+        description=(
+            "Restore a snapshot using the live rustic mirror and LCSAS config. "
+            "Requires --repo and --password-file. "
+            "For offline disc-only restore (no mirrors or config needed), "
+            "use: lcsas restore standalone"
+        ),
+    )
     exec_p.add_argument("snapshot_id", help="Rustic snapshot ID to restore.")
     exec_p.add_argument("target_path", type=Path, help="Target directory for restored files.")
     exec_p.add_argument("--repo", type=str, required=True,
@@ -248,10 +257,16 @@ def build_parser() -> argparse.ArgumentParser:
     exec_p.add_argument("--skip-verify", action="store_true", default=False,
                         help="Skip SHA-256 verification of ingested packs.")
 
-    # restore from-disc — disc-only restore without config or mirror
+    # restore standalone — disc-only restore without config or mirror
     fromdisc_p = restore_sub.add_parser(
-        "from-disc",
-        help="Restore directly from optical discs — no config file or mirror needed.",
+        "standalone",
+        help="Restore directly from disc — no config file or mirror needed.",
+        description=(
+            "Restore from a mounted or extracted LCSAS disc without any config "
+            "file or live mirror. Works offline from any disc that contains "
+            "catalog.db and the repository metadata. "
+            "Falls back to pure-Python restore if rustic is not available."
+        ),
     )
     fromdisc_p.add_argument(
         "disc", type=Path,
@@ -1764,17 +1779,17 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                 vol_path = vol_dir / label
                 if not vol_path.is_dir():
                     vol_path = vol_dir
-                ingested, failed = executor.ingest_volume(  # type: ignore[misc]
+                result = executor.ingest_volume(
                     cache_dir, vol_path, pack_hashes,
                     verify=not args.skip_verify,
                     collect_failures=True,
                 )
-                logger.info(f"  {label}: ingested {ingested} packs")
-                if failed:
+                logger.info(f"  {label}: ingested {result.ingested} packs")
+                if result.failed:
                     logger.warning(
-                        f"  {label}: {len(failed)} packs failed verification"
+                        f"  {label}: {len(result.failed)} packs failed verification"
                     )
-                    all_failed.extend(failed)
+                    all_failed.extend(result.failed)
 
             # Retry failed packs from alternate volumes
             if all_failed:
@@ -1815,17 +1830,17 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     if not vol_path.is_dir():
                         logger.info(f"  '{mount_path}' is not a directory, try again.")
                         continue
-                    ingested, failed = executor.ingest_volume(  # type: ignore[misc]
+                    result = executor.ingest_volume(
                         cache_dir, vol_path, pack_hashes,
                         verify=not args.skip_verify,
                         collect_failures=True,
                     )
-                    logger.info(f"  Ingested {ingested} packs from {label}")
-                    if failed:
+                    logger.info(f"  Ingested {result.ingested} packs from {label}")
+                    if result.failed:
                         logger.warning(
-                            f"  {len(failed)} packs failed verification"
+                            f"  {len(result.failed)} packs failed verification"
                         )
-                        all_failed.extend(failed)
+                        all_failed.extend(result.failed)
                     break
 
             # Interactive retry for failed packs
@@ -1892,12 +1907,12 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
 
     Typical usage::
 
-        lcsas restore from-disc /mnt/disc1 ~/restored/ \\
+        lcsas restore standalone /mnt/disc1 ~/restored/ \\
             --password-file ~/secret.key
 
     For batch (scripted) restores with pre-extracted discs::
 
-        lcsas restore from-disc /tmp/disc1 ~/restored/ \\
+        lcsas restore standalone /tmp/disc1 ~/restored/ \\
             --password-file ~/secret.key \\
             --volume-dir /tmp/extracted_discs/
     """
@@ -2017,14 +2032,29 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
 
         if not rustic_available:
             # Auto-fallback: use the pure-Python restorer bundled with LCSAS.
-            # This requires all packs to be accessible — link the disc data dir
-            # into the cache so PurePythonRestorer can find them.
+            # Link the disc data dir into the cache so PurePythonRestorer can
+            # find the pack files without copying gigabytes.
             from lcsas.restore.restic_fallback import PurePythonRestorer
 
             data_link = cache_dir / "data"
             disc_data = disc_path / "data"
+            # If a stale symlink exists (e.g. resumed on a different system),
+            # remove it so we can re-link to the current disc.
+            if data_link.is_symlink() and not data_link.exists():
+                logger.warning(
+                    "Stale data symlink detected (%s → %s). Re-linking to current disc.",
+                    data_link, data_link.resolve(),
+                )
+                data_link.unlink()
             if not data_link.exists() and disc_data.is_dir():
                 data_link.symlink_to(disc_data)
+            elif not disc_data.is_dir():
+                logger.error(
+                    "Disc data directory not found at '%s'. "
+                    "Ensure the disc is mounted and the path is correct.",
+                    disc_data,
+                )
+                return 1
 
             logger.warning(
                 "rustic binary not found — falling back to pure-Python restorer.\n"
@@ -2121,15 +2151,28 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
             disc_conn.close()
 
         if pick_list.missing_packs:
+            missing_preview = ", ".join(pick_list.missing_packs[:5])
+            overflow = (
+                f" ... and {len(pick_list.missing_packs) - 5} more"
+                if len(pick_list.missing_packs) > 5 else ""
+            )
+            deprecated_hint = ""
+            if pick_list.deprecated_disc_labels:
+                disc_list = ", ".join(sorted(pick_list.deprecated_disc_labels))
+                deprecated_hint = (
+                    f"\n  These pack(s) were last seen on DEPRECATED disc(s): "
+                    f"{disc_list}. "
+                    "If you still have those physical discs, mount them and re-run."
+                )
             logger.error(
                 "%d required pack(s) not found in the disc catalog. "
-                "Restore will likely fail. If these packs are on other discs "
-                "not yet mounted, add them via --disc-dir and re-run. "
-                "Missing hashes: %s%s",
+                "If these packs are on other discs not yet mounted, "
+                "add them via --disc-dir and re-run.%s\n"
+                "  Missing hashes: %s%s",
                 len(pick_list.missing_packs),
-                ", ".join(pick_list.missing_packs[:5]),
-                f" ... and {len(pick_list.missing_packs) - 5} more"
-                if len(pick_list.missing_packs) > 5 else "",
+                deprecated_hint,
+                missing_preview,
+                overflow,
             )
             return 1
 
@@ -2147,13 +2190,13 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
             vol_dir = args.volume_dir
 
             # Always try the initial --disc path first.
-            ingested, failed = executor.ingest_volume(  # type: ignore[misc]
+            result = executor.ingest_volume(
                 cache_dir, disc_path, plan.required_pack_hashes,
                 verify=not args.skip_verify, collect_failures=True,
             )
-            if ingested:
-                logger.info("  Initial disc: ingested %d pack(s).", ingested)
-            all_failed.extend(failed)
+            if result.ingested:
+                logger.info("  Initial disc: ingested %d pack(s).", result.ingested)
+            all_failed.extend(result.failed)
 
             for label, vol_sources in pick_list.volumes.items():
                 pack_hashes = [s.pack.sha256 for s in vol_sources]
@@ -2163,17 +2206,17 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                         "Volume directory not found: %s — skipping", vol_path
                     )
                     vol_path = vol_dir
-                ingested, failed = executor.ingest_volume(  # type: ignore[misc]
+                result = executor.ingest_volume(
                     cache_dir, vol_path, pack_hashes,
                     verify=not args.skip_verify, collect_failures=True,
                 )
-                if ingested:
-                    logger.info("  %s: ingested %d pack(s).", label, ingested)
-                if failed:
+                if result.ingested:
+                    logger.info("  %s: ingested %d pack(s).", label, result.ingested)
+                if result.failed:
                     logger.warning(
-                        "  %s: %d pack(s) failed verification.", label, len(failed)
+                        "  %s: %d pack(s) failed verification.", label, len(result.failed)
                     )
-                    all_failed.extend(failed)
+                    all_failed.extend(result.failed)
 
             if all_failed:
                 still_failed = _retry_from_alternates_batch(
@@ -2199,12 +2242,12 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
 
             # First: ingest from the initial disc provided by the user.
             logger.info("\nIngesting packs from initial disc...")
-            ingested, failed = executor.ingest_volume(  # type: ignore[misc]
+            result = executor.ingest_volume(
                 cache_dir, disc_path, plan.required_pack_hashes,
                 verify=not args.skip_verify, collect_failures=True,
             )
-            logger.info("  Ingested %d pack(s) from initial disc.", ingested)
-            all_failed.extend(failed)
+            logger.info("  Ingested %d pack(s) from initial disc.", result.ingested)
+            all_failed.extend(result.failed)
 
             # Determine which volumes are still needed.
             still_missing = RestoreExecutor.verify_cache_completeness(
@@ -2237,18 +2280,18 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                                 "  '%s' is not a directory — try again.", mount_path
                             )
                             continue
-                        ingested, v_failed = executor.ingest_volume(  # type: ignore[misc]
+                        result = executor.ingest_volume(
                             cache_dir, vol_path, pack_hashes,
                             verify=not args.skip_verify, collect_failures=True,
                         )
                         logger.info(
-                            "  Ingested %d pack(s) from %s", ingested, label
+                            "  Ingested %d pack(s) from %s", result.ingested, label
                         )
-                        if v_failed:
+                        if result.failed:
                             logger.warning(
-                                "  %d pack(s) failed verification", len(v_failed)
+                                "  %d pack(s) failed verification", len(result.failed)
                             )
-                            all_failed.extend(v_failed)
+                            all_failed.extend(result.failed)
                         break
 
             if all_failed:
@@ -2342,13 +2385,13 @@ def _retry_from_alternates_batch(
             if not vol_path.is_dir():
                 continue
 
-        ingested, still_bad = executor.ingest_volume(
+        result = executor.ingest_volume(
             cache_dir, vol_path, packs_on_alt,
             verify=verify, collect_failures=True,
         )
-        if ingested:
-            logger.info(f"  Recovered {ingested} packs from {alt_label}")
-        remaining = [sha for sha in remaining if sha in still_bad
+        if result.ingested:
+            logger.info(f"  Recovered {result.ingested} packs from {alt_label}")
+        remaining = [sha for sha in remaining if sha in result.failed
                      or sha not in packs_on_alt]
 
     return remaining
@@ -2388,13 +2431,13 @@ def _retry_from_alternates_interactive(
             logger.info(f"  '{mount_path}' not a directory, skipping")
             continue
 
-        ingested, still_bad = executor.ingest_volume(
+        result = executor.ingest_volume(
             cache_dir, vol_path, packs_on_alt,
             verify=verify, collect_failures=True,
         )
-        if ingested:
-            logger.info(f"  Recovered {ingested} packs from {alt_label}")
-        remaining = [sha for sha in remaining if sha in still_bad
+        if result.ingested:
+            logger.info(f"  Recovered {result.ingested} packs from {alt_label}")
+        remaining = [sha for sha in remaining if sha in result.failed
                      or sha not in packs_on_alt]
 
     return remaining
@@ -2478,10 +2521,10 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_restore_plan(args)
         elif args.restore_command == "exec":
             return cmd_restore_exec(args)
-        elif args.restore_command == "from-disc":
+        elif args.restore_command in ("standalone", "from-disc"):
             return cmd_restore_from_disc(args)
         else:
-            logger.error("Usage: lcsas restore {plan,exec,from-disc}")
+            logger.error("Usage: lcsas restore {plan,exec,standalone}")
             return 1
     elif args.command == "meta":
         if args.meta_command == "build":

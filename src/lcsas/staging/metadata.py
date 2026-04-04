@@ -7,6 +7,7 @@ and the archive catalog, enabling recovery from any single disc.
 from __future__ import annotations
 
 import json
+import shutil
 import textwrap
 from collections.abc import Sequence
 from pathlib import Path
@@ -98,6 +99,33 @@ class HolographicInjector:
         info_path = self._root / "volume_info.json"
         with open(info_path, "w", encoding="utf-8") as f:
             json.dump(info, f, indent=2)
+
+    def write_lcsas_source(self) -> None:
+        """Copy the LCSAS restore subpackage source onto the disc.
+
+        Bundles ``src/lcsas/restore/`` and ``src/lcsas/utils/`` so that
+        a technically capable person can inspect, patch, or re-run the
+        restore logic without any pre-installed packages.  If the source
+        tree is not found at install time (e.g. editable install moved)
+        this step is skipped with a warning rather than failing the burn.
+        """
+        # Locate the installed lcsas package source.
+        lcsas_pkg = Path(__file__).parent.parent  # src/lcsas/
+        dst_root = self._root / "lcsas_src"
+
+        for subpkg in ("restore", "utils", "db"):
+            src = lcsas_pkg / subpkg
+            if src.is_dir():
+                dst = dst_root / subpkg
+                if not dst.exists():
+                    shutil.copytree(str(src), str(dst))
+            else:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "LCSAS source subpackage not found at %s — "
+                    "source will not be bundled on this disc.",
+                    src,
+                )
 
     def write_standalone_restorer(self) -> None:
         """Write a self-contained pure-Python restorer to the staging root.

@@ -51,6 +51,14 @@ class MediaType(Enum):
         return self.name.startswith(("BD", "MDISC"))
 
     @property
+    def is_tape(self) -> bool:
+        """Whether this media type is tape (LTO).
+
+        Tape has built-in ECC; DVDisaster augmentation must be skipped.
+        """
+        return self.name.startswith("LTO")
+
+    @property
     def is_test(self) -> bool:
         """Whether this is a testing-only media type."""
         return self.name.startswith("TEST")

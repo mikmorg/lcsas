@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -24,6 +25,14 @@ class ECCRunner(Protocol):
 
 class PackCorruptionError(Exception):
     """Raised when a pack file fails SHA-256 verification after copy."""
+
+
+@dataclass
+class IngestionResult:
+    """Result of a single-volume pack ingestion."""
+
+    ingested: int
+    failed: list[str] = field(default_factory=list)
 
 
 class RestoreExecutor:
@@ -81,26 +90,33 @@ class RestoreExecutor:
         ensure_dir(cache_dir)
         ensure_dir(cache_dir / "data")
 
+        missing_dirs: list[str] = []
         for subdir in METADATA_SUBDIRS:
             src = metadata_source / subdir
             dst = cache_dir / subdir
             if src.is_dir() and not dst.exists():
                 shutil.copytree(str(src), str(dst))
             elif not src.is_dir() and not dst.exists():
-                logger.warning(
-                    "Metadata directory missing from source — "
-                    "restore may fail: '%s' (expected at %s)",
-                    subdir, src,
-                )
+                missing_dirs.append(subdir)
+
+        if missing_dirs:
+            raise FileNotFoundError(
+                f"Required metadata missing from source '{metadata_source}': "
+                f"{', '.join(missing_dirs)}. "
+                "Each directory (index/, snapshots/, keys/) must be present. "
+                "Try another disc — every disc in this archive contains a full "
+                "copy of the repository metadata."
+            )
 
         config_src = metadata_source / "config"
         config_dst = cache_dir / "config"
         if config_src.is_file() and not config_dst.exists():
             copy_file(config_src, config_dst)
         elif not config_src.is_file() and not config_dst.exists():
-            logger.warning(
-                "Repository config missing from metadata source — "
-                "restore may fail (expected at %s)", config_src,
+            raise FileNotFoundError(
+                f"Repository config file missing from metadata source "
+                f"(expected at {config_src}). "
+                "Try another disc — every disc contains a copy of the config."
             )
 
     def ingest_volume(
@@ -111,7 +127,7 @@ class RestoreExecutor:
         *,
         verify: bool = True,
         collect_failures: bool = False,
-    ) -> int | tuple[int, list[str]]:
+    ) -> IngestionResult:
         """Copy needed packs from a mounted volume into the restore cache.
 
         Args:
@@ -119,12 +135,11 @@ class RestoreExecutor:
             volume_mount: Path where the disc is mounted.
             required_packs: SHA-256 hashes of packs to copy from this volume.
             verify: If True (default), verify SHA-256 of copied packs.
-            collect_failures: If True, return failed pack hashes instead of
-                raising PackCorruptionError.  Returns (ingested, failed_list).
+            collect_failures: If True, collect corrupt/missing pack hashes in
+                IngestionResult.failed instead of raising PackCorruptionError.
 
         Returns:
-            Number of packs successfully ingested (if collect_failures=False),
-            or (ingested_count, failed_sha256_list) if collect_failures=True.
+            IngestionResult with ingested count and (optionally) failed hashes.
 
         Raises:
             PackCorruptionError: When a copied pack fails hash verification
@@ -177,9 +192,7 @@ class RestoreExecutor:
 
                 ingested += 1
 
-        if collect_failures:
-            return ingested, failed
-        return ingested
+        return IngestionResult(ingested=ingested, failed=failed)
 
     def execute_restore(
         self,
@@ -219,7 +232,7 @@ class RestoreExecutor:
         data_dir = cache_dir / "data"
         missing: list[str] = []
         for sha256 in required_packs:
-            path = data_dir / sha256[:2] / sha256 if len(sha256) >= 2 else data_dir / sha256
+            path = data_dir / sha256[:2] / sha256
             if not path.is_file():
                 missing.append(sha256)
         return missing

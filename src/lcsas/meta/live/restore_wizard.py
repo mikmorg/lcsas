@@ -166,12 +166,15 @@ def find_block_devices() -> list[dict[str, str]]:
 
 
 def find_key_files(search_dirs: list[str] | None = None) -> list[Path]:
-    """Scan mounted volumes for ``*.key`` files.
+    """Scan mounted volumes for encryption key files.
 
-    Also looks for files matching common key patterns:
-    ``*.key``, ``*.pem``, ``*key*``.
+    Recursively walks ``search_dirs`` looking for ``*.key`` and ``*.pem``
+    files.  The default search roots cover all common Linux USB/optical
+    mount points.
     """
     if search_dirs is None:
+        # Walk /mnt and /media recursively to catch any sub-mount point
+        # (e.g. /mnt/usb, /mnt/keys, /run/media/<user>/<label>).
         search_dirs = ["/mnt", "/media", "/run/media", "/tmp"]
 
     key_files: list[Path] = []
@@ -179,7 +182,7 @@ def find_key_files(search_dirs: list[str] | None = None) -> list[Path]:
         base_path = Path(base)
         if not base_path.is_dir():
             continue
-        for pattern in ("**/*.key",):
+        for pattern in ("**/*.key", "**/*.pem"):
             for f in base_path.glob(pattern):
                 if f.is_file() and f.stat().st_size > 0:
                     key_files.append(f)
@@ -605,6 +608,39 @@ class RestoreWizard:
 
     # ── Screen 6: Select Repository ──────────────────────────────
 
+    def _validate_disc_catalog(self, iso_path: str, extract_dir: str) -> list[str]:
+        """Check that pack files listed in volume_info.json exist on the disc.
+
+        Returns a list of warning strings (empty if all is well).
+        """
+        warnings: list[str] = []
+        vol_info = os.path.join(extract_dir, "volume_info.json")
+        if not os.path.isfile(vol_info):
+            return warnings
+        try:
+            with open(vol_info) as f:
+                info = json.load(f)
+            manifest = info.get("sha256_manifest", [])
+            if not manifest:
+                return warnings
+            data_dir = os.path.join(extract_dir, "data")
+            missing = 0
+            for sha256 in manifest:
+                prefix = sha256[:2]
+                pack_path = os.path.join(data_dir, prefix, sha256)
+                flat_path = os.path.join(data_dir, sha256)
+                if not os.path.isfile(pack_path) and not os.path.isfile(flat_path):
+                    missing += 1
+            if missing:
+                warnings.append(
+                    f"{os.path.basename(iso_path)}: {missing}/{len(manifest)} "
+                    "pack(s) listed in catalog are missing from disc data. "
+                    "This disc may be incomplete or partially corrupt."
+                )
+        except (json.JSONDecodeError, OSError):
+            pass
+        return warnings
+
     def screen_select_repo(self) -> str:
         """Let user pick which repo to restore (or all)."""
         # Extract ISOs and scan for repos
@@ -612,6 +648,8 @@ class RestoreWizard:
 
         # Use restore.sh's ISO extraction if available, else manual scan
         repos: list[str] = []
+        catalog_warnings: list[str] = []
+        xorriso_error: str = ""
         for iso_path in self.ripped_isos:
             extract_dir = os.path.join(
                 self.iso_dir, f"extracted_{Path(iso_path).stem}")
@@ -631,16 +669,33 @@ class RestoreWizard:
                             repo_name = line.split("/")[2]
                             if repo_name not in repos:
                                 repos.append(repo_name)
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                pass
+                else:
+                    xorriso_error = (result.stderr or result.stdout or "").strip()
+            except FileNotFoundError:
+                xorriso_error = "xorriso not found — cannot scan ISO for repositories"
+            except subprocess.TimeoutExpired:
+                xorriso_error = f"xorriso timed out reading {os.path.basename(iso_path)}"
+
+            catalog_warnings.extend(
+                self._validate_disc_catalog(iso_path, extract_dir)
+            )
+
+        if catalog_warnings:
+            msgbox(
+                "WARNING: Disc catalog inconsistency detected:\n\n"
+                + "\n".join(f"  • {w}" for w in catalog_warnings)
+                + "\n\nYou may still attempt restore — some data may be missing.",
+                height=min(20, len(catalog_warnings) + 8), width=72,
+            )
 
         if not repos:
-            # Can't determine repos — let user specify or use default
+            # Can't determine repos — show why (if known) then let user specify.
+            detail = f"\n\nReason: {xorriso_error}" if xorriso_error else ""
             rc, repo = inputbox(
-                "Could not auto-detect repositories.\n\n"
-                "Enter a repository name, or leave blank to "
-                "restore all:",
-                height=12, width=60,
+                "Could not auto-detect repositories from the disc(s)."
+                + detail
+                + "\n\nEnter a repository name, or leave blank to restore all:",
+                height=14, width=70,
             )
             if rc != 0:
                 return "back"
@@ -804,10 +859,27 @@ class RestoreWizard:
 def main() -> int:
     """Entry point for the restore wizard."""
     if not _dialog_available():
-        print("ERROR: 'dialog' is not installed.", file=sys.stderr)
-        print("Install it with: apk add dialog", file=sys.stderr)
-        print("Falling back to restore.sh (if available).", file=sys.stderr)
-        return 1
+        print("WARNING: 'dialog' is not installed — falling back to restore.sh.",
+              file=sys.stderr)
+        # Search for restore.sh next to this script or in common disc locations.
+        restore_sh_candidates = [
+            Path(__file__).parent.parent.parent / "restore.sh",
+            Path("/mnt/disc/restore.sh"),
+            Path("/restore.sh"),
+        ]
+        restore_sh = next((p for p in restore_sh_candidates if p.is_file()), None)
+        if restore_sh is None:
+            print(
+                "ERROR: restore.sh not found. Try:\n"
+                "  1. Mount the LCSAS meta disc and run /mnt/disc/restore.sh\n"
+                "  2. Install dialog: apk add dialog  (then re-run this script)\n"
+                "  3. Run standalone_restorer.py directly for a fully manual restore.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"Running: {restore_sh}", file=sys.stderr)
+        os.execv(str(restore_sh), [str(restore_sh)])
+        return 1  # unreachable; execv replaces the process
 
     wizard = RestoreWizard()
     wizard.run()
