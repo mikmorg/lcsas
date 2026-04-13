@@ -216,6 +216,8 @@ class RestoreExecutor:
     def verify_cache_completeness(
         cache_dir: Path,
         required_packs: list[str],
+        *,
+        verify_hashes: bool = False,
     ) -> list[str]:
         """Check that every required pack is present in the cache.
 
@@ -225,9 +227,11 @@ class RestoreExecutor:
         Args:
             cache_dir: The assembled restore cache directory.
             required_packs: SHA-256 hashes of every pack the restore needs.
+            verify_hashes: If True, re-verify the SHA-256 of each cached
+                pack — catches corruption after ingest.
 
         Returns:
-            List of missing SHA-256 hashes (empty if complete).
+            List of missing or corrupted SHA-256 hashes (empty if complete).
         """
         data_dir = cache_dir / "data"
         missing: list[str] = []
@@ -235,4 +239,12 @@ class RestoreExecutor:
             path = data_dir / sha256[:2] / sha256
             if not path.is_file():
                 missing.append(sha256)
+            elif verify_hashes:
+                actual = sha256_file(path)
+                if actual != sha256:
+                    logger.error(
+                        "Pack %s is CORRUPT in cache (SHA-256 mismatch: got %s)",
+                        sha256, actual,
+                    )
+                    missing.append(sha256)
         return missing

@@ -362,3 +362,238 @@ def test_finalize_reports_missing_packs_by_disc(tmp_path, capsys):
     assert rc == 1
     err = capsys.readouterr().err
     assert "LCSAS_CD_2026_0002" in err
+
+
+# ---------------------------------------------------------------------------
+# finalize — integrity verification (improvement 1)
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_detects_corrupted_pack_in_cache(tmp_path, capsys):
+    """A pack that was truncated/corrupted after ingest should be caught."""
+    blob = b"good-data-here"
+    sha = _sha(blob)
+    cache = _bootstrap(
+        tmp_path,
+        [(sha, len(blob), "LCSAS_CD_2026_0001")],
+        disc_blobs={sha: blob},
+    )
+    helper.main(
+        [
+            "ingest",
+            "--mount", str(tmp_path / "boot_disc"),
+            "--cache", str(cache),
+            "--disc-label", "LCSAS_CD_2026_0001",
+        ]
+    )
+    # Corrupt the cached pack after ingest.
+    pack_path = cache / "data" / sha[:2] / sha
+    assert pack_path.is_file()
+    pack_path.write_bytes(b"corrupted!")
+
+    rc = helper.main(["finalize", "--cache", str(cache)])
+    assert rc == 1  # recoverable — primary disc still available
+    err = capsys.readouterr().err
+    assert "CORRUPTED" in err
+    # The corrupted file should be removed.
+    assert not pack_path.is_file()
+
+
+def test_finalize_skips_integrity_check_when_disabled(tmp_path, capsys):
+    """--no-verify-integrity should skip SHA-256 re-check."""
+    blob = b"data"
+    sha = _sha(blob)
+    cache = _bootstrap(
+        tmp_path,
+        [(sha, len(blob), "LCSAS_CD_2026_0001")],
+        disc_blobs={sha: blob},
+    )
+    helper.main(
+        [
+            "ingest",
+            "--mount", str(tmp_path / "boot_disc"),
+            "--cache", str(cache),
+            "--disc-label", "LCSAS_CD_2026_0001",
+        ]
+    )
+    # Corrupt the pack — finalize should NOT catch it with --no-verify.
+    pack_path = cache / "data" / sha[:2] / sha
+    pack_path.write_bytes(b"bad")
+
+    rc = helper.main(["finalize", "--cache", str(cache), "--no-verify-integrity"])
+    assert rc == 0  # passes because it only checks existence
+
+
+# ---------------------------------------------------------------------------
+# state file (improvement 2)
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_writes_state_file(tmp_path):
+    blob = b"state-test"
+    sha = _sha(blob)
+    cache = _bootstrap(
+        tmp_path,
+        [(sha, len(blob), "LCSAS_CD_2026_0001")],
+        disc_blobs={sha: blob},
+    )
+    helper.main(
+        [
+            "ingest",
+            "--mount", str(tmp_path / "boot_disc"),
+            "--cache", str(cache),
+            "--disc-label", "LCSAS_CD_2026_0001",
+        ]
+    )
+    state_path = cache / "restore-state.json"
+    assert state_path.is_file()
+    state = json.loads(state_path.read_text())
+    assert state["phase"] == "ingest"
+    assert "LCSAS_CD_2026_0001" in state["volumes_completed"]
+    assert state["packs_ingested"] >= 1
+    assert state["packs_total"] == 1
+    assert "started_at" in state
+    assert "last_updated" in state
+
+
+def test_state_file_accumulates_across_discs(tmp_path):
+    blob_a = b"aa"
+    blob_b = b"bb"
+    sha_a, sha_b = _sha(blob_a), _sha(blob_b)
+    cache = _bootstrap(
+        tmp_path,
+        [
+            (sha_a, len(blob_a), "LCSAS_CD_2026_0001"),
+            (sha_b, len(blob_b), "LCSAS_CD_2026_0002"),
+        ],
+        disc_blobs={sha_a: blob_a},
+    )
+    # Ingest disc 1
+    helper.main(
+        [
+            "ingest",
+            "--mount", str(tmp_path / "boot_disc"),
+            "--cache", str(cache),
+            "--disc-label", "LCSAS_CD_2026_0001",
+        ]
+    )
+    state = json.loads((cache / "restore-state.json").read_text())
+    assert state["volumes_completed"] == ["LCSAS_CD_2026_0001"]
+
+    # Ingest disc 2
+    disc2 = tmp_path / "disc2"
+    disc2.mkdir()
+    _seed_disc(disc2, {sha_b: blob_b})
+    helper.main(
+        [
+            "ingest",
+            "--mount", str(disc2),
+            "--cache", str(cache),
+            "--disc-label", "LCSAS_CD_2026_0002",
+        ]
+    )
+    state = json.loads((cache / "restore-state.json").read_text())
+    assert state["volumes_completed"] == [
+        "LCSAS_CD_2026_0001", "LCSAS_CD_2026_0002",
+    ]
+    assert state["packs_ingested"] == 2
+
+
+def test_state_records_corrupt_packs(tmp_path):
+    blob = b"good"
+    sha = _sha(blob)
+    cache = _bootstrap(
+        tmp_path,
+        [(sha, len(blob), "LCSAS_CD_2026_0001")],
+        disc_blobs={},
+    )
+    bad_disc = tmp_path / "bad_disc"
+    bad_disc.mkdir()
+    _seed_disc(bad_disc, {sha: b"corrupt"})
+
+    helper.main(
+        [
+            "ingest",
+            "--mount", str(bad_disc),
+            "--cache", str(cache),
+            "--disc-label", "LCSAS_CD_2026_0001",
+        ]
+    )
+    state = json.loads((cache / "restore-state.json").read_text())
+    assert sha in state.get("corrupt_packs", {})
+    assert state["corrupt_packs"][sha] == "LCSAS_CD_2026_0001"
+
+
+# ---------------------------------------------------------------------------
+# recoverable vs unrecoverable (improvement 3)
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_recoverable_when_alternates_exist(tmp_path, capsys):
+    """Missing pack with an alternate disc → exit 1 (recoverable)."""
+    blob = b"recoverable"
+    sha = _sha(blob)
+    cache = _bootstrap(
+        tmp_path,
+        [
+            (sha, len(blob), "LCSAS_CD_2026_0001"),
+            (sha, len(blob), "LCSAS_CD_2026_0002"),  # alternate
+        ],
+        disc_blobs={},  # don't ingest anything
+    )
+    rc = helper.main(["finalize", "--cache", str(cache), "--no-verify-integrity"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "RECOVERABLE" in err
+
+
+def test_finalize_unrecoverable_when_no_alternates(tmp_path, capsys):
+    """Missing pack with no alternates and corrupt primary → exit 3."""
+    blob = b"doomed"
+    sha = _sha(blob)
+    cache = _bootstrap(
+        tmp_path,
+        [(sha, len(blob), "LCSAS_CD_2026_0001")],
+        disc_blobs={},
+    )
+    # Simulate that the primary disc was already tried and corrupted.
+    helper._write_state(cache, {
+        "corrupt_packs": {sha: "LCSAS_CD_2026_0001"},
+    })
+
+    rc = helper.main(["finalize", "--cache", str(cache), "--no-verify-integrity"])
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "UNRECOVERABLE" in err
+    assert "cannot complete" in err
+
+
+# ---------------------------------------------------------------------------
+# disc verification (improvement 5)
+# ---------------------------------------------------------------------------
+
+
+def test_verify_disc_passes_on_matching_label(tmp_path):
+    mount = tmp_path / "disc"
+    mount.mkdir()
+    (mount / "volume_info.json").write_text(
+        json.dumps({"label": "LCSAS_CD_2026_0001"})
+    )
+    assert helper.verify_disc(mount, "LCSAS_CD_2026_0001") is True
+
+
+def test_verify_disc_fails_on_mismatched_label(tmp_path, capsys):
+    mount = tmp_path / "disc"
+    mount.mkdir()
+    (mount / "volume_info.json").write_text(
+        json.dumps({"label": "LCSAS_CD_2026_0099"})
+    )
+    assert helper.verify_disc(mount, "LCSAS_CD_2026_0001") is False
+    err = capsys.readouterr().err
+    assert "mismatch" in err
+
+
+def test_verify_disc_passes_when_no_volume_info(tmp_path):
+    mount = tmp_path / "disc"
+    mount.mkdir()
+    assert helper.verify_disc(mount, "LCSAS_CD_2026_0001") is True

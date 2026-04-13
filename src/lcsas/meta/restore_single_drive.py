@@ -44,6 +44,7 @@ import json
 import shutil
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 METADATA_SUBDIRS = ("index", "snapshots", "keys")
@@ -71,6 +72,22 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _read_state(cache: Path) -> dict[str, object]:
+    path = cache / "restore-state.json"
+    if path.is_file():
+        return json.loads(path.read_text())
+    return {}
+
+
+def _write_state(cache: Path, updates: dict[str, object]) -> None:
+    state = _read_state(cache)
+    state.update(updates)
+    state["last_updated"] = datetime.now(timezone.utc).isoformat()
+    if "started_at" not in state:
+        state["started_at"] = state["last_updated"]
+    (cache / "restore-state.json").write_text(json.dumps(state, indent=2))
 
 
 def _list_repos(conn: sqlite3.Connection) -> list[tuple[str, str]]:
@@ -217,10 +234,46 @@ def _load_pick_list(cache: Path) -> dict:
     return json.loads(path.read_text())
 
 
+def verify_disc(mount: Path, expected_label: str) -> bool:
+    """Quick pre-check: parse volume_info.json and verify the label matches.
+
+    Returns True if verification passes or no volume_info.json exists.
+    Prints a warning and returns False on mismatch.
+    """
+    info_path = mount / "volume_info.json"
+    if not info_path.is_file():
+        return True
+    try:
+        info = json.loads(info_path.read_text())
+        actual = info.get("label", "")
+        if actual and actual != expected_label:
+            print(
+                f"  WARNING: disc label mismatch — volume_info.json says "
+                f"'{actual}', expected '{expected_label}'",
+                file=sys.stderr,
+            )
+            return False
+    except (json.JSONDecodeError, OSError) as exc:
+        print(
+            f"  WARNING: could not read volume_info.json: {exc}",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 def phase_ingest(args: argparse.Namespace) -> int:
     cache = Path(args.cache)
     mount = Path(args.mount)
     disc_label = args.disc_label
+
+    if getattr(args, "verify_disc", False):
+        if not verify_disc(mount, disc_label):
+            print(
+                f"  {disc_label}: disc verification failed — skipping ingest",
+                file=sys.stderr,
+            )
+            return 2
 
     pick_list = _load_pick_list(cache)
 
@@ -266,6 +319,30 @@ def phase_ingest(args: argparse.Namespace) -> int:
         ingested += 1
 
     print(f"  {disc_label}: ingested {ingested} packs", file=sys.stderr)
+
+    # Update persistent state so interrupted restores have context.
+    state = _read_state(cache)
+    completed = list(state.get("volumes_completed", []))
+    if disc_label not in completed:
+        completed.append(disc_label)
+    corrupt_map: dict[str, str] = dict(state.get("corrupt_packs", {}))
+    for sha in corrupt:
+        corrupt_map[sha] = disc_label
+
+    # Count total packs in cache.
+    data_dst = cache / "data"
+    cached_count = sum(1 for d in data_dst.iterdir() if d.is_dir()
+                       for _ in d.iterdir()) if data_dst.is_dir() else 0
+
+    _write_state(cache, {
+        "phase": "ingest",
+        "repo": pick_list.get("repo", ""),
+        "volumes_completed": completed,
+        "packs_ingested": cached_count,
+        "packs_total": pick_list.get("total_packs", 0),
+        "corrupt_packs": corrupt_map,
+    })
+
     if corrupt:
         print(
             f"  WARNING: {len(corrupt)} pack(s) failed SHA-256 verification "
@@ -281,39 +358,114 @@ def phase_finalize(args: argparse.Namespace) -> int:
     cache = Path(args.cache)
     pick_list = _load_pick_list(cache)
     data_dir = cache / "data"
+    verify = getattr(args, "verify_integrity", True)
+
     missing: list[str] = []
+    corrupted: list[str] = []
+    checked = 0
+
     for entry in pick_list["volumes"]:
         for sha256 in entry["packs"]:
-            if not pack_dest_path(data_dir, sha256).is_file():
+            path = pack_dest_path(data_dir, sha256)
+            if not path.is_file():
                 missing.append(sha256)
+                continue
+            if verify:
+                checked += 1
+                actual = sha256_file(path)
+                if actual != sha256:
+                    corrupted.append(sha256)
 
-    if missing:
-        alternates: dict = pick_list.get("alternates", {})
+    if verify and checked > 0:
         print(
-            f"ERROR: {len(missing)} pack(s) still missing from cache.",
+            f"  integrity: verified {checked} pack(s)",
             file=sys.stderr,
         )
-        # Bucket by the disc the user should insert next.
-        next_discs: dict[str, int] = {}
-        for sha in missing:
-            alt_labels = alternates.get(sha, [])
-            # Fall back to the primary assignment if no alternates listed.
-            for entry in pick_list["volumes"]:
-                if sha in entry["packs"]:
-                    alt_labels = [entry["label"], *alt_labels]
-                    break
-            if alt_labels:
-                next_discs[alt_labels[0]] = next_discs.get(alt_labels[0], 0) + 1
-        for label, count in sorted(next_discs.items()):
-            print(f"  need {count} pack(s) from {label}", file=sys.stderr)
-        return 1
+
+    if corrupted:
+        print(
+            f"  CORRUPTED: {len(corrupted)} pack(s) in cache failed "
+            f"SHA-256 verification — removing them.",
+            file=sys.stderr,
+        )
+        for sha256 in corrupted:
+            path = pack_dest_path(data_dir, sha256)
+            path.unlink(missing_ok=True)
+        # Corrupted packs are now missing; add to the missing list.
+        missing.extend(corrupted)
+
+    if not missing:
+        _write_state(cache, {
+            "phase": "complete",
+            "packs_ingested": pick_list["total_packs"],
+            "packs_total": pick_list["total_packs"],
+        })
+        print(
+            f"  cache complete: {pick_list['total_packs']} packs, "
+            f"{pick_list['total_bytes']} bytes",
+            file=sys.stderr,
+        )
+        return 0
+
+    # Classify missing packs as recoverable or unrecoverable.
+    alternates: dict[str, list[str]] = pick_list.get("alternates", {})
+    state = _read_state(cache)
+    corrupt_map: dict[str, str] = dict(state.get("corrupt_packs", {}))
+
+    recoverable: dict[str, int] = {}  # label → count
+    unrecoverable: list[str] = []
+
+    for sha in missing:
+        # Find all possible sources for this pack.
+        sources: list[str] = []
+        for entry in pick_list["volumes"]:
+            if sha in entry["packs"]:
+                sources.append(entry["label"])
+                break
+        sources.extend(alternates.get(sha, []))
+        # Filter out sources we already know are corrupt for this pack.
+        viable = [s for s in sources
+                  if corrupt_map.get(sha) != s]
+        if viable:
+            recoverable[viable[0]] = recoverable.get(viable[0], 0) + 1
+        else:
+            unrecoverable.append(sha)
 
     print(
-        f"  cache complete: {pick_list['total_packs']} packs, "
-        f"{pick_list['total_bytes']} bytes",
+        f"ERROR: {len(missing)} pack(s) still missing from cache.",
         file=sys.stderr,
     )
-    return 0
+
+    if recoverable:
+        print("", file=sys.stderr)
+        print(
+            f"  RECOVERABLE: {sum(recoverable.values())} pack(s) available "
+            f"on alternate discs:",
+            file=sys.stderr,
+        )
+        for label, count in sorted(recoverable.items()):
+            print(f"    need {count} pack(s) from {label}", file=sys.stderr)
+
+    if unrecoverable:
+        print("", file=sys.stderr)
+        print(
+            f"  UNRECOVERABLE: {len(unrecoverable)} pack(s) have NO remaining "
+            f"alternates.",
+            file=sys.stderr,
+        )
+        print(
+            "  The restore cannot complete with the available media.",
+            file=sys.stderr,
+        )
+        print(
+            "  Contact your backup administrator.",
+            file=sys.stderr,
+        )
+
+    _write_state(cache, {"phase": "finalize_incomplete"})
+
+    # Exit code 3 = unrecoverable; 1 = recoverable (retry).
+    return 3 if unrecoverable else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -340,11 +492,26 @@ def main(argv: list[str] | None = None) -> int:
     ip.add_argument("--cache", required=True, help="Restore cache directory")
     ip.add_argument("--disc-label", required=True, help="Label of the disc now in the drive")
 
+    ip.add_argument(
+        "--verify-disc", action="store_true", default=False,
+        help="Verify volume_info.json on disc before ingesting",
+    )
+
     fp = sub.add_parser(
         "finalize",
         help="Verify cache completeness against pick list",
     )
     fp.add_argument("--cache", required=True, help="Restore cache directory")
+    fp.add_argument(
+        "--verify-integrity", action="store_true", default=True,
+        dest="verify_integrity",
+        help="Re-verify SHA-256 of cached packs (default: on)",
+    )
+    fp.add_argument(
+        "--no-verify-integrity", action="store_false",
+        dest="verify_integrity",
+        help="Skip SHA-256 re-verification (faster)",
+    )
 
     args = p.parse_args(argv)
     if args.phase == "bootstrap":

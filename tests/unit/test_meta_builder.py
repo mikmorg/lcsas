@@ -407,7 +407,7 @@ class TestMetaVolumeBuilder:
     def test_restore_script_single_drive_default(self):
         """restore.sh must drive single-drive mode and emit the disc-swap prompt."""
         content = (self.output / "restore.sh").read_text()
-        assert "PLEASE INSERT DISC:" in content
+        assert "INSERT DISC:" in content
         assert "restore_single_drive.py" in content
         assert 'MODE="single-drive"' in content
         assert "RESTORE COMPLETE" in content
@@ -423,7 +423,7 @@ class TestSingleDriveBitsStandalone:
 
     def test_restore_script_constant_has_single_drive_dispatch(self):
         from lcsas.meta.builder import RESTORE_SCRIPT
-        assert "PLEASE INSERT DISC:" in RESTORE_SCRIPT
+        assert "INSERT DISC:" in RESTORE_SCRIPT
         assert 'MODE="single-drive"' in RESTORE_SCRIPT
         assert "restore_single_drive.py" in RESTORE_SCRIPT
         assert "RESTORE COMPLETE" in RESTORE_SCRIPT

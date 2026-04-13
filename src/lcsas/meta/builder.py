@@ -404,6 +404,31 @@ if [[ "$MODE" == "single-drive" ]]; then
             _sudo blkid -o value -s LABEL "$DRIVE" 2>/dev/null || true
         fi
     }
+    DISC_IDX=0
+    DISC_TOTAL=0
+    PACKS_CACHED=0
+    set_title() {
+        # Set terminal title bar — visible even when minimized.
+        printf '\\033]0;LCSAS: %s\\007' "$1" 2>/dev/null || true
+    }
+    reset_title() {
+        printf '\\033]0;%s\\007' "LCSAS restore" 2>/dev/null || true
+    }
+    show_prompt_block() {
+        local want="$1"
+        local pct=0
+        if [[ "$PACKS_TOTAL" -gt 0 ]]; then
+            pct=$(( PACKS_CACHED * 100 / PACKS_TOTAL ))
+        fi
+        echo ""
+        echo "╔═══════════════════════════════════════════════════╗"
+        printf '║  INSERT DISC: %-36s ║\\n' "$want"
+        printf '║  Drive: %-41s ║\\n' "$DRIVE"
+        printf '║  Progress: %d/%d packs (%d%%)%-22s ║\\n' "$PACKS_CACHED" "$PACKS_TOTAL" "$pct" ""
+        printf '║  Discs remaining: %d of %d%-24s ║\\n' "$(( DISC_TOTAL - DISC_IDX ))" "$DISC_TOTAL" ""
+        echo "╚═��══════════��══════════════════════════════════════╝"
+        set_title "insert $want ($pct%)"
+    }
     prompt_insert() {
         local want="$1"
         # If the wanted disc is already mounted, skip the swap prompt.
@@ -417,11 +442,19 @@ if [[ "$MODE" == "single-drive" ]]; then
         while :; do
             umount_drive
             eject_drive
-            echo ""
-            echo "PLEASE INSERT DISC: $want"
-            read -r -p "Press Enter once the disc is loaded (or type 'skip' to abort): " reply
+            show_prompt_block "$want"
+            local reply=""
+            # Re-prompt every 60s so the disc label stays visible.
+            while :; do
+                if read -r -t 60 -p "Press Enter once loaded (or 'skip' to abort): " reply 2>/dev/null; then
+                    break
+                fi
+                # Timeout — reprint the prompt block.
+                show_prompt_block "$want"
+            done
             if [[ "$reply" == "skip" ]]; then
                 echo "ERROR: aborted by operator"
+                reset_title
                 exit 1
             fi
             if ! mount_drive; then
@@ -495,28 +528,73 @@ with open(sys.argv[1]) as f:
     print(json.load(f)["repo"])
 ' "$CACHE_DIR/pick-list.json"
     )"
+    PACKS_TOTAL="$(
+        "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    print(json.load(f).get("total_packs", 0))
+' "$CACHE_DIR/pick-list.json"
+    )"
     echo "  Repository: $RESOLVED_REPO"
     echo "  Discs needed: ${#VOLUMES[@]}"
+    echo "  Total packs:  $PACKS_TOTAL"
     for v in "${VOLUMES[@]}"; do echo "    • $v"; done
+
+    # Check for resumed state.
+    if [[ -f "$CACHE_DIR/restore-state.json" ]]; then
+        PACKS_CACHED="$(
+            "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    s = json.load(f)
+print(s.get("packs_ingested", 0))
+' "$CACHE_DIR/restore-state.json"
+        )"
+        echo ""
+        echo "  Resuming: $PACKS_CACHED/$PACKS_TOTAL packs already cached"
+    fi
 
     # Phase 2 — ingest, one disc at a time. prompt_insert is a no-op if
     # the wanted disc is already the one in the drive.
     echo ""
     echo "--- Phase 2: Ingest ---"
+    DISC_TOTAL=${#VOLUMES[@]}
+    DISC_IDX=0
     for label in "${VOLUMES[@]}"; do
+        DISC_IDX=$((DISC_IDX + 1))
         prompt_insert "$label"
         "$PYTHON" "$HELPER" ingest --mount "$MNT" --cache "$CACHE_DIR" --disc-label "$label" || {
             echo "  WARNING: ingest phase reported issues for $label"
         }
+        # Update progress from state file.
+        if [[ -f "$CACHE_DIR/restore-state.json" ]]; then
+            PACKS_CACHED="$(
+                "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    s = json.load(f)
+print(s.get("packs_ingested", 0))
+' "$CACHE_DIR/restore-state.json"
+            )"
+        fi
     done
 
     umount_drive
     eject_drive
+    reset_title
 
-    # Phase 3 — verify completeness.
+    # Phase 3 — verify completeness and integrity.
     echo ""
     echo "--- Phase 3: Finalize ---"
-    if ! "$PYTHON" "$HELPER" finalize --cache "$CACHE_DIR"; then
+    "$PYTHON" "$HELPER" finalize --cache "$CACHE_DIR" --verify-integrity
+    FINALIZE_RC=$?
+    if [[ $FINALIZE_RC -eq 3 ]]; then
+        echo ""
+        echo "FATAL: some packs have no remaining alternate discs."
+        echo "       This restore cannot complete with the available media."
+        echo "       Contact your backup administrator."
+        exit 3
+    elif [[ $FINALIZE_RC -ne 0 ]]; then
         echo ""
         echo "ERROR: cache is incomplete. Re-run restore.sh with the missing"
         echo "       discs available and the helper will pick up where it left off."
@@ -551,6 +629,7 @@ with open(sys.argv[1]) as f:
         fi
     fi
 
+    reset_title
     echo ""
     echo "═══════════════════════════════════════════════════"
     echo "  RESTORE COMPLETE"
@@ -836,7 +915,7 @@ The script will:
 
 1. Read the catalog from the disc currently in the drive.
 2. Print the list of discs you will need and in what order.
-3. Prompt `PLEASE INSERT DISC: <label>` for each one, wait for you to
+3. Prompt `INSERT DISC: <label>` for each one, wait for you to
    swap, and ingest only the packs it needs.
 4. Run rustic against the assembled cache and write the files into
    `~/restored/REPO_NAME/`.
