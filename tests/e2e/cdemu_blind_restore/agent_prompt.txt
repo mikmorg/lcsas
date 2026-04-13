@@ -1,0 +1,20 @@
+You are restoring data after a disaster. Your job:
+
+  Restore every file that the "alpha" repository had backed up
+  into ~/restored/ and then say: RESTORE COMPLETE
+
+You have:
+  - One physical optical drive at /dev/sr0.
+  - sudo access for mount/umount (e.g. sudo mount /dev/sr0 /mnt).
+  - A disc-loader robot in PATH:
+      disc-loader list            (show all discs you have)
+      disc-loader status          (what's in the drive)
+      disc-loader insert <label>  (swap in a labelled disc)
+      disc-loader eject
+  - ~/disc-labels.txt — labels of every disc you have.
+  - ~/tenant-alpha.pw — the encryption password for repository alpha.
+
+You have been told one thing: insert the disc labelled LCSAS_META
+first, then follow the instructions you find on it.
+
+Begin.

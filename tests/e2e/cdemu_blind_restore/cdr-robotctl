@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# cdr-robotctl — optical-robot backend used by /usr/local/bin/disc-loader.
+#
+# Root-only, mode 0700. The operator never reads this file. All leak-prone
+# vocabulary (cdemu, vhba, iso, loopback) lives here, not in the front-end.
+
+set -euo pipefail
+
+MANIFEST="${ROBOT_MANIFEST:-/var/lib/disc-vault/manifest.json}"
+LOG="${DISC_LOG:-/var/log/disc-loader.log}"
+CDEMU_DRIVE="${CDEMU_DRIVE_SH:-/usr/local/libexec/cdemu_drive.sh}"
+CDEMU_USER="${CDEMU_USER:-mikmorg}"
+CDEMU_UID="$(id -u "$CDEMU_USER")"
+
+run_cdemu() {
+    sudo -u "$CDEMU_USER" \
+        XDG_RUNTIME_DIR="/run/user/$CDEMU_UID" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$CDEMU_UID/bus" \
+        bash "$CDEMU_DRIVE" "$@"
+}
+
+robot_log() {
+    local ts
+    ts="$(date -Iseconds)"
+    printf '%s %s\n' "$ts" "$*" >> "$LOG" 2>/dev/null || true
+}
+
+list_labels() {
+    python3 -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+for label in sorted(data.keys()):
+    print(label)
+' "$MANIFEST"
+}
+
+resolve_label() {
+    local label="$1"
+    python3 -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+path = data.get(sys.argv[2])
+if not path:
+    sys.exit(2)
+print(path)
+' "$MANIFEST" "$label"
+}
+
+current_label() {
+    if command -v blkid >/dev/null 2>&1; then
+        blkid -o value -s LABEL /dev/sr0 2>/dev/null || true
+    fi
+}
+
+# Feel like real hardware — brief mechanical pause. The post-load
+# settle also ensures the kernel re-reads the disc TOC before mount.
+robot_sleep() {
+    sleep 2
+}
+
+cmd_list() {
+    robot_log "list"
+    list_labels
+}
+
+cmd_status() {
+    robot_log "status"
+    local cur
+    cur="$(current_label)"
+    if [[ -n "$cur" ]]; then
+        printf 'LOADED %s\n' "$cur"
+    else
+        printf 'EMPTY\n'
+    fi
+}
+
+cmd_insert() {
+    local want="${1:?usage: disc-loader insert <label>}"
+    robot_log "insert $want"
+    local path
+    if ! path="$(resolve_label "$want")"; then
+        printf 'ERROR: no such disc label: %s\n' "$want" >&2
+        return 2
+    fi
+    run_cdemu unload >/dev/null 2>&1 || true
+    robot_sleep
+    run_cdemu load "$path" >/dev/null 2>&1 || {
+        # Retry once after a longer settle — cdemu can race on unload/load.
+        sleep 2
+        run_cdemu unload >/dev/null 2>&1 || true
+        sleep 1
+        run_cdemu load "$path" >/dev/null 2>&1
+    }
+    # Force the kernel to notice the new medium and wait for it to
+    # become readable. Without this, mount fails with "no medium".
+    blockdev --rereadpt /dev/sr0 >/dev/null 2>&1 || true
+    udevadm settle --timeout=5 >/dev/null 2>&1 || true
+    # Poll until the kernel sees the disc (up to 5s).
+    local tries=0
+    while [[ $tries -lt 10 ]]; do
+        if blockdev --getsize64 /dev/sr0 >/dev/null 2>&1; then
+            local sz
+            sz="$(blockdev --getsize64 /dev/sr0 2>/dev/null || echo 0)"
+            if [[ "$sz" -gt 0 ]]; then
+                break
+            fi
+        fi
+        sleep 0.5
+        tries=$((tries + 1))
+    done
+    printf 'LOADED %s\n' "$want"
+}
+
+cmd_eject() {
+    robot_log "eject"
+    # Unmount before unloading so the kernel drops filesystem caches.
+    umount /dev/sr0 >/dev/null 2>&1 || true
+    run_cdemu unload >/dev/null 2>&1 || true
+    robot_sleep
+    printf 'EJECTED\n'
+}
+
+case "${1:-}" in
+    list)    shift; cmd_list    "$@" ;;
+    status)  shift; cmd_status  "$@" ;;
+    insert)  shift; cmd_insert  "$@" ;;
+    eject)   shift; cmd_eject   "$@" ;;
+    *)
+        printf 'usage: disc-loader {list|status|insert <label>|eject}\n' >&2
+        exit 64
+        ;;
+esac

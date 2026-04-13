@@ -187,7 +187,7 @@ class BurnOrchestrator:
         ]
         seq = next_seq_num(existing_labels, self._config.label_prefix)
         vol_label = generate_volume_label(
-            self._config.label_prefix, mt.name, seq
+            self._config.label_prefix, mt.label_name, seq
         )
         vol_uuid = generate_uuid()
 
@@ -590,7 +590,7 @@ class BurnOrchestrator:
 
         for i, (selected_packs, total_bytes) in enumerate(volume_plans):
             vol_label = generate_volume_label(
-                self._config.label_prefix, mt.name, seq + i,
+                self._config.label_prefix, mt.label_name, seq + i,
             )
             vol_uuid = generate_uuid()
 

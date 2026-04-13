@@ -392,3 +392,65 @@ class TestMetaVolumeBuilder:
         assert not (self.output / ".incomplete").exists(), (
             ".incomplete marker still present after successful build"
         )
+
+    def test_single_drive_helper_bundled(self):
+        """tools/restore_single_drive.py must be present and executable."""
+        helper = self.output / "tools" / "restore_single_drive.py"
+        assert helper.is_file(), "restore_single_drive.py not bundled in tools/"
+        assert os.access(str(helper), os.X_OK)
+        content = helper.read_text()
+        # Sanity: subcommand names the bash wrapper depends on.
+        assert "bootstrap" in content
+        assert "ingest" in content
+        assert "finalize" in content
+
+    def test_restore_script_single_drive_default(self):
+        """restore.sh must drive single-drive mode and emit the disc-swap prompt."""
+        content = (self.output / "restore.sh").read_text()
+        assert "PLEASE INSERT DISC:" in content
+        assert "restore_single_drive.py" in content
+        assert 'MODE="single-drive"' in content
+        assert "RESTORE COMPLETE" in content
+
+
+# ── Lightweight tests for the single-drive bits (no rustic required) ──
+
+
+class TestSingleDriveBitsStandalone:
+    """Validate single-drive helper bundling and restore.sh content
+    without invoking the full meta-volume build (which needs rustic).
+    """
+
+    def test_restore_script_constant_has_single_drive_dispatch(self):
+        from lcsas.meta.builder import RESTORE_SCRIPT
+        assert "PLEASE INSERT DISC:" in RESTORE_SCRIPT
+        assert 'MODE="single-drive"' in RESTORE_SCRIPT
+        assert "restore_single_drive.py" in RESTORE_SCRIPT
+        assert "RESTORE COMPLETE" in RESTORE_SCRIPT
+        # Both modes still supported
+        assert "--isos" in RESTORE_SCRIPT
+        assert "--drive" in RESTORE_SCRIPT
+
+    def test_restore_script_passes_bash_syntax(self, tmp_path):
+        from lcsas.meta.builder import RESTORE_SCRIPT
+        script = tmp_path / "restore.sh"
+        script.write_text(RESTORE_SCRIPT)
+        result = subprocess.run(
+            ["bash", "-n", str(script)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+    def test_bundle_restore_helper_writes_file(self, tmp_path):
+        from lcsas.meta.builder import MetaVolumeBuilder
+        b = MetaVolumeBuilder(tmp_path / "meta")
+        (tmp_path / "meta").mkdir()
+        b._bundle_restore_helper()
+        dst = tmp_path / "meta" / "tools" / "restore_single_drive.py"
+        assert dst.is_file()
+        assert os.access(str(dst), os.X_OK)
+        content = dst.read_text()
+        assert "phase_bootstrap" in content
+        assert "phase_ingest" in content
+        assert "phase_finalize" in content

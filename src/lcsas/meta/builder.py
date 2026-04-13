@@ -67,6 +67,9 @@ def _strip_markdown(text: str) -> str:
         # Headings → plain uppercase text
         if stripped.startswith("#"):
             heading = stripped.lstrip("#").strip()
+            heading = re.sub(r"\*\*(.+?)\*\*", r"\1", heading)
+            heading = re.sub(r"\*(.+?)\*", r"\1", heading)
+            heading = re.sub(r"`([^`]+)`", r"\1", heading)
             lines.append("")
             lines.append(heading.upper())
             lines.append("-" * len(heading))
@@ -142,17 +145,23 @@ RESTORE_SCRIPT = r'''#!/usr/bin/env bash
 #
 #  Restores data from LCSAS archive volumes using ONLY:
 #    1. This meta-volume  (tools + source)
-#    2. The data-volume ISOs
+#    2. The data-volume discs (or ISOs)
 #    3. Your encryption key file
 #
-#  Usage:
-#    ./restore.sh --key KEY_FILE --isos ISO_DIR --target TARGET_DIR \
-#                 [--repo REPO] [--snapshot ID] [--work-dir DIR]
+#  Two modes:
+#    Single-drive (DEFAULT) — models the disaster scenario: you own one
+#      optical drive and a stack of archive discs. Script prompts for
+#      each disc by label, reads it in place, and ingests only the
+#      packs needed for the target repository.
 #
-#  ISO extraction cascade:
-#    1. mount -o loop  (kernel-native, needs root)
-#    2. 7z x           (widely available, no root)
-#    3. bundled xorriso (fallback)
+#        ./restore.sh --key KEY_FILE --target TARGET [--repo REPO]
+#                     [--drive /dev/sr0] [--snapshot ID]
+#
+#    Directory (opt-in, legacy) — you already have every ISO on disk.
+#      Script extracts them all and runs the classic flow.
+#
+#        ./restore.sh --key KEY_FILE --isos ISO_DIR --target TARGET
+#                     [--repo REPO] [--snapshot ID]
 #
 #  Rustic binary cascade:
 #    1. bundled rustic         (dynamically linked)
@@ -243,21 +252,31 @@ extract_iso() {
 # ── Usage ────────────────────────────────────────────────────────
 usage() {
     cat <<EOF
-LCSAS Disc-Only Restore
+LCSAS Disaster Recovery Restore
 
-Required:
-  --key FILE        Path to the encryption key file
-  --isos DIR        Directory containing LCSAS .iso files
-  --target DIR      Directory to restore files into
+Single-drive mode (DEFAULT):
+  ./restore.sh --key KEY_FILE --target TARGET [--repo NAME]
+               [--drive /dev/sr0] [--snapshot ID]
 
-Optional:
-  --repo NAME       Restore only this repository (default: all)
+  Insert any LCSAS archive disc into the drive. The script reads
+  the catalog, tells you which discs to insert next, and restores
+  the repository onto disk. Only one disc is mounted at a time.
+
+Directory mode (opt-in, legacy):
+  ./restore.sh --key KEY_FILE --isos ISO_DIR --target TARGET
+               [--repo NAME] [--snapshot ID]
+
+  Use when every data-volume ISO is already on disk.
+
+Options:
+  --key FILE        (required) Path to the encryption key file
+  --target DIR      (required) Where to restore files
+  --repo NAME       Repository (a.k.a. tenant) to restore
   --snapshot ID     Snapshot to restore (default: latest)
-  --work-dir DIR    Working directory for temporary files (default: auto)
+  --drive DEV       Optical drive in single-drive mode (default: /dev/sr0)
+  --isos DIR        Opt-in: directory of data-volume ISOs (legacy mode)
+  --work-dir DIR    Temp directory (default: auto)
   -h, --help        Show this help
-
-Example:
-  ./restore.sh --key ~/secret.key --isos /media/discs/ --target ~/restored/
 EOF
 }
 
@@ -268,6 +287,7 @@ TARGET=""
 REPO=""
 SNAPSHOT="latest"
 WORK_DIR=""
+DRIVE="/dev/sr0"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -275,7 +295,8 @@ while [[ $# -gt 0 ]]; do
         --isos)     ISO_DIR="$2";   shift 2 ;;
         --target)   TARGET="$2";    shift 2 ;;
         --repo)     REPO="$2";      shift 2 ;;
-        --snapshot) SNAPSHOT="$2";   shift 2 ;;
+        --snapshot) SNAPSHOT="$2";  shift 2 ;;
+        --drive)    DRIVE="$2";     shift 2 ;;
         --work-dir) WORK_DIR="$2";  shift 2 ;;
         -h|--help)  usage; exit 0  ;;
         *)          echo "ERROR: Unknown option: $1"; usage; exit 1 ;;
@@ -283,11 +304,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -z "$KEY_FILE" ]] && { echo "ERROR: --key is required";    usage; exit 1; }
-[[ -z "$ISO_DIR" ]]  && { echo "ERROR: --isos is required";   usage; exit 1; }
 [[ -z "$TARGET" ]]   && { echo "ERROR: --target is required"; usage; exit 1; }
-
 [[ ! -f "$KEY_FILE" ]] && { echo "ERROR: Key file not found: $KEY_FILE"; exit 1; }
-[[ ! -d "$ISO_DIR" ]]  && { echo "ERROR: ISO directory not found: $ISO_DIR"; exit 1; }
+
+# Mode selection: --isos present → directory mode; else single-drive.
+MODE="single-drive"
+if [[ -n "$ISO_DIR" ]]; then
+    MODE="directory"
+    [[ ! -d "$ISO_DIR" ]] && { echo "ERROR: ISO directory not found: $ISO_DIR"; exit 1; }
+fi
 
 # ── Verify at least one restore method is available ─────────────
 USE_PYTHON_FALLBACK=0
@@ -332,13 +357,207 @@ _cleanup() {
 trap _cleanup EXIT
 
 echo "═══════════════════════════════════════════════════"
-echo "  LCSAS Disc-Only Restore"
+echo "  LCSAS Disaster Recovery Restore  ($MODE mode)"
 echo "═══════════════════════════════════════════════════"
 echo "  Key:       $KEY_FILE"
-echo "  ISOs:      $ISO_DIR"
+if [[ "$MODE" == "single-drive" ]]; then
+    echo "  Drive:     $DRIVE"
+else
+    echo "  ISOs:      $ISO_DIR"
+fi
 echo "  Target:    $TARGET"
 echo "  Work dir:  $WORK_DIR"
 echo ""
+
+# ═════════════════════════════════════════════════════════════════
+#  Single-drive mode — handle entirely here, then exit.
+# ═════════════════════════════════════════════════════════════════
+if [[ "$MODE" == "single-drive" ]]; then
+    if [[ -z "$PYTHON" ]]; then
+        echo "ERROR: no python3 available — single-drive mode needs"
+        echo "       tools/bin/python3 (bundled) or a system python3."
+        exit 1
+    fi
+    HELPER="$TOOLS/restore_single_drive.py"
+    if [[ ! -f "$HELPER" ]]; then
+        echo "ERROR: single-drive helper not found at $HELPER"
+        exit 1
+    fi
+
+    MNT="$WORK_DIR/mnt"
+    mkdir -p "$MNT"
+
+    _sudo() {
+        if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi
+    }
+    mount_drive() {
+        _sudo mount -o ro "$DRIVE" "$MNT"
+    }
+    umount_drive() {
+        _sudo umount "$MNT" 2>/dev/null || true
+    }
+    eject_drive() {
+        if command -v eject &>/dev/null; then eject "$DRIVE" &>/dev/null || true; fi
+    }
+    disc_label() {
+        if command -v blkid &>/dev/null; then
+            _sudo blkid -o value -s LABEL "$DRIVE" 2>/dev/null || true
+        fi
+    }
+    prompt_insert() {
+        local want="$1"
+        # If the wanted disc is already mounted, skip the swap prompt.
+        if [[ -n "$want" ]] && mountpoint -q "$MNT" 2>/dev/null; then
+            local cur
+            cur="$(disc_label)"
+            if [[ "$cur" == "$want" ]]; then
+                return 0
+            fi
+        fi
+        while :; do
+            umount_drive
+            eject_drive
+            echo ""
+            echo "PLEASE INSERT DISC: $want"
+            read -r -p "Press Enter once the disc is loaded (or type 'skip' to abort): " reply
+            if [[ "$reply" == "skip" ]]; then
+                echo "ERROR: aborted by operator"
+                exit 1
+            fi
+            if ! mount_drive; then
+                echo "WRONG DISC: drive not readable — try again."
+                continue
+            fi
+            local got
+            got="$(disc_label)"
+            if [[ -n "$want" ]] && [[ -n "$got" ]] && [[ "$got" != "$want" ]]; then
+                echo "WRONG DISC: expected $want, got $got"
+                continue
+            fi
+            return 0
+        done
+    }
+
+    CACHE_DIR="$WORK_DIR/cache"
+    mkdir -p "$CACHE_DIR"
+
+    # Phase 1 — bootstrap. Prefer the catalog bundled on the meta
+    # disc itself (always the final, post-burn catalog). Fall back to
+    # mounting an archive disc when no bundled catalog is present.
+    echo ""
+    echo "--- Phase 1: Bootstrap ---"
+    BOOTSTRAP_MNT="$MNT"
+    if [[ -f "$SCRIPT_DIR/catalog.db" ]]; then
+        CATALOG="$SCRIPT_DIR/catalog.db"
+        BOOTSTRAP_MNT="$SCRIPT_DIR/metadata"
+        echo "  Using bundled catalog: $CATALOG"
+    else
+        echo "  (no bundled catalog — insert any LCSAS archive disc)"
+        prompt_insert ""
+        CATALOG="$MNT/catalog.db"
+        if [[ ! -f "$CATALOG" ]]; then
+            echo "ERROR: $CATALOG not found — this does not look like an"
+            echo "       LCSAS archive disc."
+            umount_drive
+            exit 1
+        fi
+    fi
+
+    BOOTSTRAP_ARGS=(--catalog "$CATALOG" --mount "$BOOTSTRAP_MNT" --cache "$CACHE_DIR")
+    [[ -n "$REPO" ]] && BOOTSTRAP_ARGS+=(--repo "$REPO")
+    if ! "$PYTHON" "$HELPER" bootstrap "${BOOTSTRAP_ARGS[@]}" > "$WORK_DIR/pick-list.json"; then
+        rc=$?
+        if [[ $rc -eq 2 ]]; then
+            echo ""
+            echo "Re-run with: ./restore.sh --key $KEY_FILE --target $TARGET --repo NAME"
+            umount_drive
+            exit 2
+        fi
+        echo "ERROR: bootstrap failed (exit $rc)"
+        umount_drive
+        exit 1
+    fi
+
+    # Extract the ordered list of volume labels from the pick list.
+    mapfile -t VOLUMES < <(
+        "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+for v in data["volumes"]:
+    print(v["label"])
+' "$CACHE_DIR/pick-list.json"
+    )
+    RESOLVED_REPO="$(
+        "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    print(json.load(f)["repo"])
+' "$CACHE_DIR/pick-list.json"
+    )"
+    echo "  Repository: $RESOLVED_REPO"
+    echo "  Discs needed: ${#VOLUMES[@]}"
+    for v in "${VOLUMES[@]}"; do echo "    • $v"; done
+
+    # Phase 2 — ingest, one disc at a time. prompt_insert is a no-op if
+    # the wanted disc is already the one in the drive.
+    echo ""
+    echo "--- Phase 2: Ingest ---"
+    for label in "${VOLUMES[@]}"; do
+        prompt_insert "$label"
+        "$PYTHON" "$HELPER" ingest --mount "$MNT" --cache "$CACHE_DIR" --disc-label "$label" || {
+            echo "  WARNING: ingest phase reported issues for $label"
+        }
+    done
+
+    umount_drive
+    eject_drive
+
+    # Phase 3 — verify completeness.
+    echo ""
+    echo "--- Phase 3: Finalize ---"
+    if ! "$PYTHON" "$HELPER" finalize --cache "$CACHE_DIR"; then
+        echo ""
+        echo "ERROR: cache is incomplete. Re-run restore.sh with the missing"
+        echo "       discs available and the helper will pick up where it left off."
+        exit 1
+    fi
+
+    # Phase 4 — run rustic restore against the assembled cache.
+    echo ""
+    echo "--- Phase 4: rustic restore ---"
+    REPO_TARGET="$TARGET/$RESOLVED_REPO"
+    mkdir -p "$REPO_TARGET"
+
+    if [[ "$USE_PYTHON_FALLBACK" -eq 1 ]]; then
+        SR="$STANDALONE"
+        if [[ -z "$SR" ]]; then
+            echo "ERROR: standalone_restorer.py not found and no rustic available."
+            exit 1
+        fi
+        if [[ -d "${TOOLS}/lib/python" ]]; then
+            export PYTHONPATH="${TOOLS}/lib/python:${PYTHONPATH:-}"
+        fi
+        "$PYTHON" "$SR" --repo "$CACHE_DIR" --password-file "$KEY_FILE" --target "$REPO_TARGET"
+    else
+        RUSTIC_BIN_NAME="$(basename "$RUSTIC")"
+        if [[ "$RUSTIC_BIN_NAME" == rustic* ]]; then
+            "$RUSTIC" restore "$SNAPSHOT" "$REPO_TARGET" \
+                -r "$CACHE_DIR" --password-file "$KEY_FILE" --no-cache
+        else
+            "$RUSTIC" restore "$SNAPSHOT" \
+                -r "$CACHE_DIR" --password-file "$KEY_FILE" --no-cache \
+                --target "$REPO_TARGET"
+        fi
+    fi
+
+    echo ""
+    echo "═══════════════════════════════════════════════════"
+    echo "  RESTORE COMPLETE"
+    echo "  Output: $REPO_TARGET"
+    echo "═══════════════════════════════════════════════════"
+    exit 0
+fi
 
 # ═════════════════════════════════════════════════════════════════
 #  Step 1: Extract all ISOs
@@ -576,64 +795,82 @@ The **only** thing you must provide is your **encryption key file**.
 | `README_RESTORE.md` | This file |
 | `volume_info.json` | Machine-readable volume metadata (includes tool versions) |
 
-## Quick Start
+## Terminology
 
-### 1. Mount This Volume
+A **repository** (sometimes called a **tenant**) is one encrypted backup
+dataset. Archives may hold several repositories side by side. Pass the
+repository name to `--repo`.
 
-Physical disc:
+## Single-Drive Mode (DEFAULT)
+
+This is the disaster scenario: you own one optical drive and a stack of
+archive discs. You do **not** need to rip every disc up front — the
+script walks you through the restore one disc at a time.
+
+### 1. Copy the meta-volume to local disk
+
 ```
 sudo mount /dev/sr0 /mnt/meta
+cp -r /mnt/meta /tmp/lcsas-meta
+cd /tmp/lcsas-meta
+sudo umount /mnt/meta
 ```
 
-ISO file:
-```
-sudo mount -o loop meta.iso /mnt/meta
-```
+### 2. Insert **any** archive disc
 
-> **Tip:** If binaries fail to execute, remount with exec permissions:
-> `sudo mount -o remount,exec /mnt/meta`
-> Or copy the meta-volume to local disk first:
-> `cp -r /mnt/meta /tmp/lcsas-meta && cd /tmp/lcsas-meta`
+Every LCSAS data disc is holographic: it carries the full catalog, so
+any one of them can bootstrap the restore.
 
-### 2. Run the Restore
+### 3. Run the restore
 
 ```bash
-./restore.sh --key /path/to/your/keyfile.txt \\
-             --isos /path/to/iso/directory/ \\
-             --target /path/to/restore/output/
+./restore.sh --key /path/to/keyfile.txt \\
+             --target ~/restored/ \\
+             --repo REPO_NAME
 ```
 
-The script automatically finds the best available tools:
-- **ISO extraction:** tries kernel mount, then 7z, then bundled xorriso
-- **Decryption:** tries bundled rustic, then rustic-static, then system rustic/restic,
-  then pure-Python fallback (standalone_restorer.py)
+(Omit `--repo` to see the list of repositories stored in the archive,
+then re-run with a choice.)
 
-### 3. Verify
+The script will:
 
-Your restored files are organized by repository under the target directory.
+1. Read the catalog from the disc currently in the drive.
+2. Print the list of discs you will need and in what order.
+3. Prompt `PLEASE INSERT DISC: <label>` for each one, wait for you to
+   swap, and ingest only the packs it needs.
+4. Run rustic against the assembled cache and write the files into
+   `~/restored/REPO_NAME/`.
+
+If a disc is unreadable mid-restore you can stop and re-run the same
+command later — the cache under the work directory persists unless
+you pass `--work-dir`.
+
+## Directory Mode (opt-in, legacy)
+
+If you already have every data-volume ISO on disk (e.g. pre-rsynced to
+a NAS), use directory mode:
+
+```bash
+./restore.sh --key /path/to/keyfile.txt \\
+             --isos /path/to/iso/directory/ \\
+             --target ~/restored/
+```
+
+This extracts every ISO up front and copies every pack into the cache
+before restoring. Faster when disks are cheap; wrong for the
+single-drive disaster scenario.
 
 ## Restore Options
 
 | Option | Description |
 |---|---|
 | `--key FILE` | **(required)** Path to your encryption key file |
-| `--isos DIR` | **(required)** Directory containing `.iso` files |
 | `--target DIR` | **(required)** Where to restore files |
-| `--repo NAME` | Restore only one repository (default: all) |
+| `--repo NAME` | Repository (tenant) to restore |
 | `--snapshot ID` | Restore a specific snapshot (default: latest) |
+| `--drive DEV` | Optical drive in single-drive mode (default: `/dev/sr0`) |
+| `--isos DIR` | Opt-in: directory of data-volume ISOs (legacy mode) |
 | `--work-dir DIR` | Temporary work directory (default: auto) |
-
-### Examples
-
-Restore everything:
-```bash
-./restore.sh --key ~/secret.key --isos ./discs/ --target ~/restored/
-```
-
-Restore only the "family" repository:
-```bash
-./restore.sh --key ~/secret.key --isos ./discs/ --target ~/restored/ --repo family
-```
 
 ## If the Bundled Tools Don't Work
 
@@ -729,6 +966,7 @@ class MetaVolumeBuilder:
         config: LCSASConfig | None = None,
         bootable: bool = False,
         alpine_dir: Path | None = None,
+        catalog_db_path: Path | None = None,
     ) -> None:
         """
         Args:
@@ -753,6 +991,7 @@ class MetaVolumeBuilder:
         self._config = config
         self._bootable = bootable
         self._alpine_dir = alpine_dir
+        self._catalog_db_path = catalog_db_path
 
         if project_root is None:
             # meta/ → lcsas/ → src/ → (project root)
@@ -784,6 +1023,8 @@ class MetaVolumeBuilder:
         self._bundle_source()
         self._bundle_docs()
         self._bundle_standalone_restorer()
+        self._bundle_restore_helper()
+        self._bundle_catalog()
         self._write_restore_script()
         self._write_readme()
         self._write_readme_txt()
@@ -951,6 +1192,71 @@ class MetaVolumeBuilder:
         _write_and_sync(restorer_path, build_standalone())
         os.chmod(str(restorer_path), 0o755)
 
+    def _bundle_restore_helper(self) -> None:
+        """Copy restore_single_drive.py into the meta-volume tools/ dir.
+
+        The helper is a stdlib-only Python driver for the single-drive
+        disc-swap restore flow. ``restore.sh`` shells out to it for the
+        bootstrap, ingest, and finalize phases.
+        """
+        src = Path(__file__).parent / "restore_single_drive.py"
+        if not src.is_file():
+            raise FileNotFoundError(
+                f"restore_single_drive.py missing from source tree: {src}"
+            )
+        tools_dir = self._output / "tools"
+        tools_dir.mkdir(parents=True, exist_ok=True)
+        dst = tools_dir / "restore_single_drive.py"
+        shutil.copy2(str(src), str(dst))
+        os.chmod(str(dst), 0o755)
+
+    def _bundle_catalog(self) -> None:
+        """Copy the master catalog.db + per-repo metadata onto the meta volume.
+
+        Bundling the *final* catalog (post-burn) means single-drive
+        restore can read a complete pick list without first mounting
+        an archive disc whose own catalog might pre-date later burns.
+        We also copy each repository's rustic metadata (config, keys,
+        index, snapshots) so the bootstrap phase can seed the cache
+        without needing an archive disc mounted at that point.
+        """
+        if self._catalog_db_path is None:
+            return
+        src = Path(self._catalog_db_path)
+        if not src.is_file():
+            return
+
+        dst = self._output / "catalog.db"
+        shutil.copy2(str(src), str(dst))
+        os.chmod(str(dst), 0o644)
+
+        import sqlite3
+        conn = sqlite3.connect(
+            f"file:{src}?mode=ro&immutable=1", uri=True
+        )
+        try:
+            rows = conn.execute(
+                "SELECT repo_id, mirror_path FROM repositories"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        meta_root = self._output / "metadata"
+        meta_root.mkdir(parents=True, exist_ok=True)
+        for repo_id, mirror_path in rows:
+            mp = Path(mirror_path)
+            if not mp.is_dir():
+                continue
+            dst_repo = meta_root / repo_id
+            dst_repo.mkdir(parents=True, exist_ok=True)
+            for sub in ("config", "keys", "index", "snapshots"):
+                s = mp / sub
+                d = dst_repo / sub
+                if s.is_file() and not d.exists():
+                    shutil.copy2(str(s), str(d))
+                elif s.is_dir() and not d.exists():
+                    shutil.copytree(str(s), str(d))
+
     def _write_restore_script(self) -> None:
         """Write the bootstrap restore.sh script."""
         script_path = self._output / "restore.sh"
@@ -1049,11 +1355,18 @@ class MetaVolumeBuilder:
 This is the LCSAS META-VOLUME — it contains all the tools needed
 to restore data from the LCSAS archive discs.
 
-TO RESTORE YOUR FILES:
+TO RESTORE YOUR FILES (single-drive mode — recommended):
 
   1. You need the encryption key file (NOT on any disc for security)
-  2. You need the data-volume discs (ISO files or optical discs)
-  3. Run:  ./restore.sh --key <keyfile> --isos <iso_dir> --target <output>
+  2. You need the archive discs (any one bootstraps; the script will
+     tell you which others to insert).
+  3. Insert any archive disc into the drive.
+  4. Run:  ./restore.sh --key <keyfile> --target <output> --repo <name>
+     The script will prompt for each disc swap.
+
+Legacy: if every disc has already been copied to ISO files on disk,
+you may use directory mode instead:
+     ./restore.sh --key <keyfile> --isos <iso_dir> --target <output>
 
 See README_RESTORE.md for detailed instructions.
 

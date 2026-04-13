@@ -1530,10 +1530,19 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
             logger.warning(f"Could not load config for START_HERE.txt: {e}")
 
     output = args.output.resolve()
+    db_path: Path | None = None
+    try:
+        db_path = _resolve_db_path(args, config)
+        if not db_path.is_file():
+            db_path = None
+    except Exception:
+        db_path = None
+
     builder = MetaVolumeBuilder(
         output_dir=output,
         project_root=args.project_root,
         config=config,
+        catalog_db_path=db_path,
     )
 
     logger.info(f"Building meta-volume in {output} ...")
