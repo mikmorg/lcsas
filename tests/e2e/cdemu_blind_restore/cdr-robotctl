@@ -60,6 +60,35 @@ robot_sleep() {
     sleep 2
 }
 
+# ── cdemu settle-time notes ──────────────────────────────────────
+#
+# After cdemu loads a new ISO, the kernel does NOT immediately
+# invalidate its ISO9660 filesystem caches for /dev/sr0. Without
+# explicit prodding, `mount` may still see the *previous* disc's
+# directory tree — a silent, devastating cache-coherence bug.
+#
+# The sequence in cmd_insert that forces recognition is:
+#
+#   1. `run_cdemu unload` + robot_sleep   — ensures the prior image
+#      is fully released before loading the new one.
+#   2. `run_cdemu load <iso>`             — loads the new image.
+#      Retry once on failure (cdemu can race on rapid unload/load).
+#   3. `blockdev --rereadpt /dev/sr0`     — forces the kernel to
+#      re-read the partition table / disc TOC.
+#   4. `udevadm settle --timeout=5`       — waits for udev to
+#      finish processing the device-change event.
+#   5. Poll `blockdev --getsize64` for up to 5s — waits until the
+#      kernel reports a non-zero device size, meaning the new medium
+#      is recognized and readable.
+#
+# Without steps 3–5, mount succeeds but shows stale files from the
+# previous disc. This was the root cause of the agent thrashing on
+# disc swaps during initial blind-restore testing (200+ inserts for
+# 11 discs). Real hardware drives signal media change via SCSI
+# sense codes, but cdemu's vhba module does not always trigger the
+# same kernel path, so we force it.
+# ─────────────────────────────────────────────────────────────────
+
 cmd_list() {
     robot_log "list"
     list_labels

@@ -9,6 +9,16 @@ HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 RUN_DIR="${RUN_DIR:-/tmp/lcsas-blind-run-$(date +%s)}"
 mkdir -p "$RUN_DIR"
 
+# Prevent overlapping runs — only one blind-restore at a time.
+LOCKFILE="/tmp/lcsas-blind-restore.lock"
+exec 9>"$LOCKFILE"
+if ! flock -n 9; then
+    echo "ERROR: another blind-restore run is already in progress." >&2
+    echo "       Lock held by: $(cat "$LOCKFILE" 2>/dev/null || echo unknown)" >&2
+    exit 1
+fi
+echo "PID $$ started $(date -Iseconds)" >&9
+
 cp "$HERE/agent_prompt.txt" "$RUN_DIR/prompt.txt"
 
 # Clean stale state inside the agent's playground so each run starts
