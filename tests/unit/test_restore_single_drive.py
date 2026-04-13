@@ -8,7 +8,6 @@ finalize) via the in-process ``main()`` entry point.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import sqlite3
@@ -18,12 +17,12 @@ import pytest
 
 from lcsas.meta import restore_single_drive as helper
 
-
 REPO_ID = "11111111-1111-1111-1111-111111111111"
 REPO_NAME = "alpha"
 
 
-def _make_catalog(db_path: Path, packs: list[tuple[str, int, str]]) -> None:
+def _make_catalog(db_path: Path, packs: list[tuple[str, int, str]], *,
+                   created_at: str = "2026-01-01T00:00:00") -> None:
     """Create a minimal catalog with one repo and *packs*.
 
     Each pack tuple is (sha256, size, volume_label). Multiple rows for
@@ -36,7 +35,8 @@ def _make_catalog(db_path: Path, packs: list[tuple[str, int, str]]) -> None:
         CREATE TABLE volumes (
             volume_id INTEGER PRIMARY KEY AUTOINCREMENT,
             label TEXT UNIQUE,
-            status TEXT
+            status TEXT,
+            created_at TEXT
         );
         CREATE TABLE packs (
             pack_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,8 +72,8 @@ def _make_catalog(db_path: Path, packs: list[tuple[str, int, str]]) -> None:
         if label in vol_ids:
             continue
         cur = conn.execute(
-            "INSERT INTO volumes(label, status) VALUES (?, 'BURNED')",
-            (label,),
+            "INSERT INTO volumes(label, status, created_at) VALUES (?, 'BURNED', ?)",
+            (label, created_at),
         )
         vol_ids[label] = cur.lastrowid
 
@@ -597,3 +597,251 @@ def test_verify_disc_passes_when_no_volume_info(tmp_path):
     mount = tmp_path / "disc"
     mount.mkdir()
     assert helper.verify_disc(mount, "LCSAS_CD_2026_0001") is True
+
+
+# ---------------------------------------------------------------------------
+# catalog_freshness (organic upgrade support)
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_includes_catalog_freshness(tmp_path, capsys):
+    """pick-list.json should contain catalog_freshness from MAX(created_at)."""
+    blob = b"fresh"
+    sha = _sha(blob)
+    catalog = tmp_path / "catalog.db"
+    _make_catalog(
+        catalog,
+        [(sha, len(blob), "LCSAS_CD_2026_0001")],
+        created_at="2026-04-10T12:00:00",
+    )
+    mount = tmp_path / "disc"
+    mount.mkdir()
+    _seed_disc(mount, {sha: blob})
+    cache = tmp_path / "cache"
+
+    rc = helper.main([
+        "bootstrap",
+        "--catalog", str(catalog),
+        "--mount", str(mount),
+        "--cache", str(cache),
+        "--repo", REPO_NAME,
+    ])
+    assert rc == 0
+    pick_list = json.loads((cache / "pick-list.json").read_text())
+    assert pick_list["catalog_freshness"] == "2026-04-10T12:00:00"
+
+    out = json.loads(capsys.readouterr().out)
+    assert out["catalog_freshness"] == "2026-04-10T12:00:00"
+
+
+def test_catalog_freshness_picks_max_across_volumes(tmp_path, capsys):
+    """Freshness should be the MAX across all volumes, not the first."""
+    blob_a = b"a"
+    blob_b = b"b"
+    sha_a, sha_b = _sha(blob_a), _sha(blob_b)
+
+    catalog = tmp_path / "catalog.db"
+    # Build catalog manually so we can set different created_at per volume.
+    conn = sqlite3.connect(catalog)
+    conn.executescript("""
+        CREATE TABLE repositories (repo_id TEXT PRIMARY KEY, name TEXT);
+        CREATE TABLE volumes (
+            volume_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT UNIQUE, status TEXT, created_at TEXT
+        );
+        CREATE TABLE packs (
+            pack_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sha256 TEXT UNIQUE, size_bytes INTEGER, repo_id TEXT,
+            is_pruned INTEGER DEFAULT 0
+        );
+        CREATE TABLE volume_packs (
+            volume_id INTEGER, pack_id INTEGER,
+            PRIMARY KEY (volume_id, pack_id)
+        );
+    """)
+    conn.execute(
+        "INSERT INTO repositories(repo_id, name) VALUES (?, ?)",
+        (REPO_ID, REPO_NAME),
+    )
+    conn.execute(
+        "INSERT INTO volumes(label, status, created_at) VALUES (?, 'BURNED', ?)",
+        ("LCSAS_CD_2026_0001", "2026-01-01T00:00:00"),
+    )
+    conn.execute(
+        "INSERT INTO volumes(label, status, created_at) VALUES (?, 'BURNED', ?)",
+        ("LCSAS_CD_2026_0002", "2026-04-12T18:30:00"),
+    )
+    conn.execute(
+        "INSERT INTO packs(sha256, size_bytes, repo_id) VALUES (?, ?, ?)",
+        (sha_a, len(blob_a), REPO_ID),
+    )
+    conn.execute(
+        "INSERT INTO packs(sha256, size_bytes, repo_id) VALUES (?, ?, ?)",
+        (sha_b, len(blob_b), REPO_ID),
+    )
+    conn.execute(
+        "INSERT INTO volume_packs(volume_id, pack_id) VALUES (1, 1)",
+    )
+    conn.execute(
+        "INSERT INTO volume_packs(volume_id, pack_id) VALUES (2, 2)",
+    )
+    conn.commit()
+    conn.close()
+
+    mount = tmp_path / "disc"
+    mount.mkdir()
+    _seed_disc(mount, {sha_a: blob_a})
+    cache = tmp_path / "cache"
+
+    helper.main([
+        "bootstrap",
+        "--catalog", str(catalog),
+        "--mount", str(mount),
+        "--cache", str(cache),
+        "--repo", REPO_NAME,
+    ])
+    pick_list = json.loads((cache / "pick-list.json").read_text())
+    assert pick_list["catalog_freshness"] == "2026-04-12T18:30:00"
+
+
+# ---------------------------------------------------------------------------
+# --reseed (re-bootstrap with validate-then-delete)
+# ---------------------------------------------------------------------------
+
+
+def test_reseed_clears_and_reseeds_metadata(tmp_path, capsys):
+    """--reseed should clear stale metadata and re-seed from new disc."""
+    blob = b"original"
+    sha = _sha(blob)
+
+    # Initial bootstrap.
+    catalog_v1 = tmp_path / "catalog_v1.db"
+    _make_catalog(
+        catalog_v1,
+        [(sha, len(blob), "LCSAS_CD_2026_0001")],
+        created_at="2026-01-01T00:00:00",
+    )
+    mount1 = tmp_path / "disc1"
+    mount1.mkdir()
+    _seed_disc(mount1, {sha: blob})
+    cache = tmp_path / "cache"
+
+    helper.main([
+        "bootstrap",
+        "--catalog", str(catalog_v1),
+        "--mount", str(mount1),
+        "--cache", str(cache),
+        "--repo", REPO_NAME,
+    ])
+    assert (cache / "index" / "marker").read_text() == "index"
+
+    # Now reseed with a new catalog from a different disc.
+    blob2 = b"newer"
+    sha2 = _sha(blob2)
+    catalog_v2 = tmp_path / "catalog_v2.db"
+    _make_catalog(
+        catalog_v2,
+        [
+            (sha, len(blob), "LCSAS_CD_2026_0001"),
+            (sha2, len(blob2), "LCSAS_CD_2026_0002"),
+        ],
+        created_at="2026-04-12T00:00:00",
+    )
+    mount2 = tmp_path / "disc2"
+    mount2.mkdir()
+    # Seed with different metadata content to verify it gets re-copied.
+    meta_root = mount2 / "metadata" / REPO_ID
+    for sub in ("index", "snapshots", "keys"):
+        (meta_root / sub).mkdir(parents=True)
+        (meta_root / sub / "marker").write_text(f"v2-{sub}")
+    (meta_root / "config").write_text("v2-config")
+    data_root = mount2 / "data"
+    prefix_dir = data_root / sha2[:2]
+    prefix_dir.mkdir(parents=True, exist_ok=True)
+    (prefix_dir / sha2).write_bytes(blob2)
+
+    rc = helper.main([
+        "bootstrap",
+        "--catalog", str(catalog_v2),
+        "--mount", str(mount2),
+        "--cache", str(cache),
+        "--repo", REPO_NAME,
+        "--reseed",
+    ])
+    assert rc == 0
+
+    # Metadata should be from v2.
+    assert (cache / "index" / "marker").read_text() == "v2-index"
+    assert (cache / "config").read_text() == "v2-config"
+
+    # Pick list should now include both packs.
+    pick_list = json.loads((cache / "pick-list.json").read_text())
+    assert pick_list["total_packs"] == 2
+    assert pick_list["catalog_freshness"] == "2026-04-12T00:00:00"
+
+
+def test_reseed_fails_gracefully_on_missing_repo(tmp_path, capsys):
+    """--reseed with a catalog that doesn't contain the repo should fail
+    and leave existing metadata intact."""
+    blob = b"keepme"
+    sha = _sha(blob)
+
+    # Initial bootstrap.
+    catalog_v1 = tmp_path / "catalog_v1.db"
+    _make_catalog(
+        catalog_v1,
+        [(sha, len(blob), "LCSAS_CD_2026_0001")],
+    )
+    mount = tmp_path / "disc"
+    mount.mkdir()
+    _seed_disc(mount, {sha: blob})
+    cache = tmp_path / "cache"
+
+    helper.main([
+        "bootstrap",
+        "--catalog", str(catalog_v1),
+        "--mount", str(mount),
+        "--cache", str(cache),
+        "--repo", REPO_NAME,
+    ])
+    original_index = (cache / "index" / "marker").read_text()
+
+    # Reseed with a catalog that has a different repo (not "alpha").
+    bad_catalog = tmp_path / "bad_catalog.db"
+    conn = sqlite3.connect(bad_catalog)
+    conn.executescript("""
+        CREATE TABLE repositories (repo_id TEXT PRIMARY KEY, name TEXT);
+        CREATE TABLE volumes (
+            volume_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT UNIQUE, status TEXT, created_at TEXT
+        );
+        CREATE TABLE packs (
+            pack_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sha256 TEXT UNIQUE, size_bytes INTEGER, repo_id TEXT,
+            is_pruned INTEGER DEFAULT 0
+        );
+        CREATE TABLE volume_packs (
+            volume_id INTEGER, pack_id INTEGER,
+            PRIMARY KEY (volume_id, pack_id)
+        );
+    """)
+    conn.execute(
+        "INSERT INTO repositories(repo_id, name) VALUES ('other-id', 'other-repo')",
+    )
+    conn.commit()
+    conn.close()
+
+    rc = helper.main([
+        "bootstrap",
+        "--catalog", str(bad_catalog),
+        "--mount", str(mount),
+        "--cache", str(cache),
+        "--repo", REPO_NAME,
+        "--reseed",
+    ])
+    assert rc == 1  # failed validation
+
+    # Original metadata should be untouched.
+    assert (cache / "index" / "marker").read_text() == original_index
+    err = capsys.readouterr().err
+    assert "repo not found" in err

@@ -166,16 +166,12 @@ def _init_rustic_repo(name: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _run_burn_pipeline() -> list[Path]:
+def _init_burn_db():
+    """Create the catalog DB and register repos. Returns the connection."""
     sys.path.insert(0, str(REPO_ROOT / "src"))
-    from lcsas.burn.orchestrator import BurnOrchestrator
-    from lcsas.config.media import MediaType
-    from lcsas.config.settings import LCSASConfig, RepositoryConfig
     from lcsas.db.connection import get_connection
-    from lcsas.db.queries import get_unarchived_packs
     from lcsas.db.repos import register_repo
     from lcsas.db.schema import create_all
-    from lcsas.iso.xorriso import SubprocessXorrisoRunner
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
 
@@ -194,6 +190,16 @@ def _run_burn_pipeline() -> list[Path]:
         delta = DeltaAnalyzer(conn, scanned, repo_id=name)
         delta.register_new_packs()
     conn.commit()
+    return conn
+
+
+def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    from lcsas.burn.orchestrator import BurnOrchestrator
+    from lcsas.config.media import MediaType
+    from lcsas.config.settings import LCSASConfig, RepositoryConfig
+    from lcsas.db.queries import get_unarchived_packs
+    from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
     repos = {
         name: RepositoryConfig(
@@ -229,7 +235,10 @@ def _run_burn_pipeline() -> list[Path]:
 
     ISO_OUT.mkdir(parents=True, exist_ok=True)
     iso_files: list[Path] = []
+    count = 0
     while get_unarchived_packs(conn):
+        if max_volumes is not None and count >= max_volumes:
+            break
         try:
             manifest = orchestrator.prepare(media_type=MediaType.TEST_CD)
         except ValueError as exc:
@@ -242,8 +251,8 @@ def _run_burn_pipeline() -> list[Path]:
         size = iso_path.stat().st_size
         print(f"    → {iso_path.name} ({size:,} bytes)")
         iso_files.append(iso_path)
+        count += 1
 
-    conn.close()
     return iso_files
 
 
@@ -568,13 +577,21 @@ def main() -> int:
     _init_rustic_repo("alpha")
     _init_rustic_repo("bravo")
 
-    banner("4. LCSAS burn → ISOs (TEST_CD)")
-    iso_files = _run_burn_pipeline()
-    print(f"  burned {len(iso_files)} data ISOs")
+    banner("4a. LCSAS burn — first batch")
+    conn = _init_burn_db()
+    iso_files_batch1 = _run_burn_pipeline(conn, max_volumes=6)
+    print(f"  burned {len(iso_files_batch1)} data ISOs (batch 1)")
 
-    banner("5. build production meta disc")
+    banner("5. build production meta disc (no catalog)")
     meta_iso = _build_meta_iso()
     print(f"  meta ISO: {meta_iso}")
+
+    banner("4b. LCSAS burn — remaining volumes")
+    iso_files_batch2 = _run_burn_pipeline(conn)
+    print(f"  burned {len(iso_files_batch2)} data ISOs (batch 2)")
+    conn.close()
+    iso_files = iso_files_batch1 + iso_files_batch2
+    print(f"  total: {len(iso_files)} data ISOs")
 
     banner("6. vault ISOs")
     mapping = _vault_isos(iso_files, meta_iso)

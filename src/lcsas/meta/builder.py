@@ -400,12 +400,27 @@ if [[ "$MODE" == "single-drive" ]]; then
         if command -v eject &>/dev/null; then eject "$DRIVE" &>/dev/null || true; fi
     }
     disc_label() {
+        # Try blkid first (needs root on some systems).
         if command -v blkid &>/dev/null; then
-            _sudo blkid -o value -s LABEL "$DRIVE" 2>/dev/null || true
+            local lbl
+            lbl="$(_sudo blkid -o value -s LABEL "$DRIVE" 2>/dev/null || true)"
+            if [[ -n "$lbl" ]]; then
+                echo "$lbl"
+                return
+            fi
+        fi
+        # Fallback: read volume_info.json from the mounted disc.
+        if mountpoint -q "$MNT" 2>/dev/null && [[ -f "$MNT/volume_info.json" ]]; then
+            "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    print(json.load(f).get("label", ""))
+' "$MNT/volume_info.json" 2>/dev/null || true
         fi
     }
     DISC_IDX=0
     DISC_TOTAL=0
+    PACKS_TOTAL=0
     PACKS_CACHED=0
     set_title() {
         # Set terminal title bar — visible even when minimized.
@@ -453,9 +468,9 @@ if [[ "$MODE" == "single-drive" ]]; then
                 show_prompt_block "$want"
             done
             if [[ "$reply" == "skip" ]]; then
-                echo "ERROR: aborted by operator"
+                echo "  Skipping $want — finalize will report any missing packs."
                 reset_title
-                exit 1
+                return 1
             fi
             if ! mount_drive; then
                 echo "WRONG DISC: drive not readable — try again."
@@ -474,27 +489,29 @@ if [[ "$MODE" == "single-drive" ]]; then
     CACHE_DIR="$WORK_DIR/cache"
     mkdir -p "$CACHE_DIR"
 
-    # Phase 1 — bootstrap. Prefer the catalog bundled on the meta
-    # disc itself (always the final, post-burn catalog). Fall back to
-    # mounting an archive disc when no bundled catalog is present.
+    # Phase 1 — bootstrap. The meta disc carries Rustic metadata
+    # (keys, config) but NO catalog — it would always be stale.
+    # The operator inserts any data disc and we bootstrap from its
+    # catalog. If a later disc has a fresher catalog, we upgrade
+    # organically during Phase 2.
     echo ""
     echo "--- Phase 1: Bootstrap ---"
-    BOOTSTRAP_MNT="$MNT"
-    if [[ -f "$SCRIPT_DIR/catalog.db" ]]; then
-        CATALOG="$SCRIPT_DIR/catalog.db"
-        BOOTSTRAP_MNT="$SCRIPT_DIR/metadata"
-        echo "  Using bundled catalog: $CATALOG"
-    else
-        echo "  (no bundled catalog — insert any LCSAS archive disc)"
-        prompt_insert ""
-        CATALOG="$MNT/catalog.db"
-        if [[ ! -f "$CATALOG" ]]; then
-            echo "ERROR: $CATALOG not found — this does not look like an"
-            echo "       LCSAS archive disc."
-            umount_drive
-            exit 1
-        fi
+    # Seed keys/config from meta disc if available (they don't go stale).
+    BOOTSTRAP_META=""
+    if [[ -d "$SCRIPT_DIR/metadata" ]]; then
+        BOOTSTRAP_META="$SCRIPT_DIR/metadata"
     fi
+    echo "  Insert any LCSAS archive disc to begin."
+    echo "  (Tip: the highest-numbered disc has the freshest catalog.)"
+    prompt_insert ""
+    CATALOG="$MNT/catalog.db"
+    if [[ ! -f "$CATALOG" ]]; then
+        echo "ERROR: $CATALOG not found — this does not look like an"
+        echo "       LCSAS archive disc."
+        umount_drive
+        exit 1
+    fi
+    BOOTSTRAP_MNT="$MNT"
 
     BOOTSTRAP_ARGS=(--catalog "$CATALOG" --mount "$BOOTSTRAP_MNT" --cache "$CACHE_DIR")
     [[ -n "$REPO" ]] && BOOTSTRAP_ARGS+=(--repo "$REPO")
@@ -535,6 +552,13 @@ with open(sys.argv[1]) as f:
     print(json.load(f).get("total_packs", 0))
 ' "$CACHE_DIR/pick-list.json"
     )"
+    CATALOG_FRESH="$(
+        "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    print(json.load(f).get("catalog_freshness", ""))
+' "$CACHE_DIR/pick-list.json"
+    )"
     echo "  Repository: $RESOLVED_REPO"
     echo "  Discs needed: ${#VOLUMES[@]}"
     echo "  Total packs:  $PACKS_TOTAL"
@@ -555,14 +579,68 @@ print(s.get("packs_ingested", 0))
     fi
 
     # Phase 2 — ingest, one disc at a time. prompt_insert is a no-op if
-    # the wanted disc is already the one in the drive.
+    # the wanted disc is already the one in the drive. Uses an index-based
+    # while loop so that organic catalog upgrades (which may extend VOLUMES)
+    # take effect mid-iteration.
     echo ""
     echo "--- Phase 2: Ingest ---"
     DISC_TOTAL=${#VOLUMES[@]}
-    DISC_IDX=0
-    for label in "${VOLUMES[@]}"; do
-        DISC_IDX=$((DISC_IDX + 1))
-        prompt_insert "$label"
+    IDX=0
+    while [[ $IDX -lt ${#VOLUMES[@]} ]]; do
+        label="${VOLUMES[$IDX]}"
+        IDX=$((IDX + 1))
+        DISC_IDX=$IDX
+        if ! prompt_insert "$label"; then
+            echo "  Skipped disc $label"
+            continue
+        fi
+
+        # ── Organic catalog upgrade ──
+        # If this data disc has a fresher catalog than the one we
+        # bootstrapped from, re-bootstrap to get an updated pick list.
+        # This handles the common case where the meta disc was burned
+        # before the last data discs and its catalog is stale.
+        DISC_CATALOG="$MNT/catalog.db"
+        if [[ -f "$DISC_CATALOG" ]]; then
+            DISC_FRESH="$("$PYTHON" -c "
+import sqlite3, sys
+c = sqlite3.connect(f'file:{sys.argv[1]}?mode=ro&immutable=1', uri=True)
+print(c.execute('SELECT MAX(created_at) FROM volumes').fetchone()[0] or '')
+c.close()
+" "$DISC_CATALOG")"
+            if [[ "$DISC_FRESH" > "$CATALOG_FRESH" ]]; then
+                echo "  Fresher catalog on $label — upgrading pick list..."
+                if "$PYTHON" "$HELPER" bootstrap \
+                    --catalog "$DISC_CATALOG" --mount "$MNT" \
+                    --cache "$CACHE_DIR" --repo "$RESOLVED_REPO" \
+                    --reseed \
+                    > /dev/null 2>"$WORK_DIR/upgrade-err.txt"; then
+                    # Success — re-read state from upgraded pick list.
+                    mapfile -t VOLUMES < <(
+                        "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+for v in data["volumes"]:
+    print(v["label"])
+' "$CACHE_DIR/pick-list.json"
+                    )
+                    CATALOG_FRESH="$DISC_FRESH"
+                    PACKS_TOTAL="$(
+                        "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    print(json.load(f).get("total_packs", 0))
+' "$CACHE_DIR/pick-list.json"
+                    )"
+                    DISC_TOTAL=${#VOLUMES[@]}
+                else
+                    echo "  WARNING: catalog upgrade failed, continuing with existing catalog"
+                    cat "$WORK_DIR/upgrade-err.txt" 2>/dev/null || true
+                fi
+            fi
+        fi
+
         "$PYTHON" "$HELPER" ingest --mount "$MNT" --cache "$CACHE_DIR" --disc-label "$label" || {
             echo "  WARNING: ingest phase reported issues for $label"
         }
@@ -856,6 +934,451 @@ echo "════════════════════════�
 '''
 
 
+RESTORE_AUTO_SCRIPT = r'''#!/usr/bin/env bash
+# ═══════════════════════════════════════════════════════════════════
+#  LCSAS Non-Interactive Restore — automated disc-swap restore
+#
+#  Drives the same bootstrap → ingest → finalize → rustic pipeline
+#  as restore.sh but without interactive prompts.  Designed for:
+#    • Scripted / automated restore environments
+#    • AI agent-driven restores
+#    • CI/CD test harnesses
+#
+#  Disc loading is delegated to a user-supplied command via --disc-cmd.
+#  The command is called as:  $DISC_CMD insert <LABEL>
+#                              $DISC_CMD eject
+#
+#  If --disc-cmd is omitted, the script assumes the operator will
+#  load discs externally and waits for the drive to become readable.
+#
+#  Usage:
+#    ./restore-auto.sh --key KEY_FILE --target TARGET --repo NAME \
+#                      [--drive /dev/sr0] [--disc-cmd CMD] \
+#                      [--snapshot ID] [--work-dir DIR]
+# ═══════════════════════════════════════════════════════════════════
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOOLS="$SCRIPT_DIR/tools"
+
+# ── Configure bundled tools ──────────────────────────────────────
+export LD_LIBRARY_PATH="${TOOLS}/lib:${LD_LIBRARY_PATH:-}"
+
+# ── Resolve rustic binary (cascade) ─────────────────────────────
+RUSTIC=""
+if [[ -x "${TOOLS}/bin/rustic" ]] && "${TOOLS}/bin/rustic" version &>/dev/null; then
+    RUSTIC="${TOOLS}/bin/rustic"
+elif [[ -x "${TOOLS}/bin/rustic-static" ]]; then
+    RUSTIC="${TOOLS}/bin/rustic-static"
+elif command -v rustic &>/dev/null; then
+    RUSTIC="$(command -v rustic)"
+elif command -v restic &>/dev/null; then
+    RUSTIC="$(command -v restic)"
+fi
+
+# ── Resolve Python + standalone restorer (fallback) ─────────────
+PYTHON=""
+STANDALONE=""
+if [[ -x "${TOOLS}/bin/python3" ]]; then
+    PYTHON="${TOOLS}/bin/python3"
+elif command -v python3 &>/dev/null; then
+    PYTHON="$(command -v python3)"
+fi
+if [[ -f "$SCRIPT_DIR/standalone_restorer.py" ]]; then
+    STANDALONE="$SCRIPT_DIR/standalone_restorer.py"
+fi
+
+# ── Usage ────────────────────────────────────────────────────────
+usage() {
+    cat <<EOF
+LCSAS Non-Interactive Restore (automated disc-swap)
+
+Usage:
+  ./restore-auto.sh --key KEY_FILE --target TARGET --repo NAME \\
+                    [--drive /dev/sr0] [--disc-cmd CMD] \\
+                    [--snapshot ID] [--work-dir DIR]
+
+Options:
+  --key FILE        (required) Path to the encryption key file
+  --target DIR      (required) Where to restore files
+  --repo NAME       (required) Repository (tenant) to restore
+  --snapshot ID     Snapshot to restore (default: latest)
+  --drive DEV       Optical drive device (default: /dev/sr0)
+  --disc-cmd CMD    Command to load/eject discs. Called as:
+                      CMD insert LABEL   — load a disc by label
+                      CMD eject          — eject current disc
+                    If omitted, discs must be loaded externally.
+  --work-dir DIR    Temp directory (default: auto)
+  -h, --help        Show this help
+EOF
+}
+
+# ── Parse arguments ──────────────────────────────────────────────
+KEY_FILE=""
+TARGET=""
+REPO=""
+SNAPSHOT="latest"
+WORK_DIR=""
+DRIVE="/dev/sr0"
+DISC_CMD=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --key)      KEY_FILE="$2";  shift 2 ;;
+        --target)   TARGET="$2";    shift 2 ;;
+        --repo)     REPO="$2";      shift 2 ;;
+        --snapshot) SNAPSHOT="$2";  shift 2 ;;
+        --drive)    DRIVE="$2";     shift 2 ;;
+        --disc-cmd) DISC_CMD="$2";  shift 2 ;;
+        --work-dir) WORK_DIR="$2";  shift 2 ;;
+        -h|--help)  usage; exit 0  ;;
+        *)          echo "ERROR: Unknown option: $1"; usage; exit 1 ;;
+    esac
+done
+
+[[ -z "$KEY_FILE" ]] && { echo "ERROR: --key is required";    usage; exit 1; }
+[[ -z "$TARGET" ]]   && { echo "ERROR: --target is required"; usage; exit 1; }
+[[ -z "$REPO" ]]     && { echo "ERROR: --repo is required";   usage; exit 1; }
+[[ ! -f "$KEY_FILE" ]] && { echo "ERROR: Key file not found: $KEY_FILE"; exit 1; }
+
+# ── Python required for non-interactive mode ─────────────────────
+if [[ -z "$PYTHON" ]]; then
+    echo "ERROR: no python3 available — needed for disc-swap helper."
+    exit 1
+fi
+HELPER="$TOOLS/restore_single_drive.py"
+if [[ ! -f "$HELPER" ]]; then
+    echo "ERROR: restore_single_drive.py not found at $HELPER"
+    exit 1
+fi
+
+# ── Verify at least one restore method is available ──────────────
+USE_PYTHON_FALLBACK=0
+if [[ -z "$RUSTIC" ]]; then
+    if [[ -n "$PYTHON" ]] && [[ -n "$STANDALONE" ]]; then
+        echo "  WARNING: No rustic/restic binary found."
+        echo "  Falling back to pure-Python restorer (slower)."
+        USE_PYTHON_FALLBACK=1
+    else
+        echo "ERROR: No rustic/restic binary and no Python fallback."
+        exit 1
+    fi
+fi
+
+# ── Create work directory ────────────────────────────────────────
+CLEANUP_WORK=0
+if [[ -z "$WORK_DIR" ]]; then
+    WORK_DIR="$(mktemp -d -t lcsas-restore-XXXXXX)"
+    CLEANUP_WORK=1
+else
+    mkdir -p "$WORK_DIR"
+fi
+mkdir -p "$TARGET"
+
+_cleanup() {
+    umount_drive 2>/dev/null || true
+    if [[ "$CLEANUP_WORK" -eq 1 ]] && [[ -n "$WORK_DIR" ]] && [[ -d "$WORK_DIR" ]]; then
+        chmod -R u+w "$WORK_DIR" 2>/dev/null || true
+        rm -rf "$WORK_DIR"
+    fi
+}
+trap _cleanup EXIT
+
+# ── Drive helpers ────────────────────────────────────────────────
+MNT="$WORK_DIR/mnt"
+mkdir -p "$MNT"
+
+_sudo() {
+    if [[ $EUID -eq 0 ]]; then "$@"; else sudo "$@"; fi
+}
+mount_drive() {
+    _sudo mount -o ro "$DRIVE" "$MNT"
+}
+umount_drive() {
+    _sudo umount "$MNT" 2>/dev/null || true
+}
+disc_label() {
+    # Try blkid first (needs root on some systems).
+    if command -v blkid &>/dev/null; then
+        local lbl
+        lbl="$(_sudo blkid -o value -s LABEL "$DRIVE" 2>/dev/null || true)"
+        if [[ -n "$lbl" ]]; then
+            echo "$lbl"
+            return
+        fi
+    fi
+    # Fallback: read volume_info.json from the mounted disc.
+    if mountpoint -q "$MNT" 2>/dev/null && [[ -f "$MNT/volume_info.json" ]]; then
+        "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    print(json.load(f).get("label", ""))
+' "$MNT/volume_info.json" 2>/dev/null || true
+    fi
+}
+
+load_disc() {
+    local label="$1"
+    # If the wanted disc is already mounted, skip.
+    if mountpoint -q "$MNT" 2>/dev/null; then
+        local cur
+        cur="$(disc_label)"
+        if [[ "$cur" == "$label" ]]; then
+            return 0
+        fi
+    fi
+    umount_drive
+    if [[ -n "$DISC_CMD" ]]; then
+        $DISC_CMD insert "$label"
+    fi
+    # Wait for the drive to become readable (up to 30s).
+    local attempts=0
+    while ! mount_drive 2>/dev/null; do
+        attempts=$((attempts + 1))
+        if [[ $attempts -ge 15 ]]; then
+            echo "ERROR: drive not readable after 30s — expected $label"
+            return 1
+        fi
+        sleep 2
+    done
+    # Verify label if possible.
+    local got
+    got="$(disc_label)"
+    if [[ -n "$got" ]] && [[ "$got" != "$label" ]]; then
+        echo "WARNING: expected disc $label, got $got"
+    fi
+    return 0
+}
+
+eject_disc() {
+    umount_drive
+    if [[ -n "$DISC_CMD" ]]; then
+        $DISC_CMD eject 2>/dev/null || true
+    elif command -v eject &>/dev/null; then
+        eject "$DRIVE" &>/dev/null || true
+    fi
+}
+
+# ═════════════════════════════════════════════════════════════════
+echo "═══════════════════════════════════════════════════"
+echo "  LCSAS Non-Interactive Restore"
+echo "═══════════════════════════════════════════════════"
+echo "  Key:       $KEY_FILE"
+echo "  Drive:     $DRIVE"
+echo "  Target:    $TARGET"
+echo "  Repo:      $REPO"
+echo "  Disc cmd:  ${DISC_CMD:-<manual>}"
+echo "  Work dir:  $WORK_DIR"
+echo ""
+
+CACHE_DIR="$WORK_DIR/cache"
+mkdir -p "$CACHE_DIR"
+
+# ── Seed keys/config from meta disc if available ─────────────────
+if [[ -d "$SCRIPT_DIR/metadata" ]]; then
+    echo "  Seeding repo metadata from meta disc..."
+fi
+
+# ═════════════════════════════════════════════════════════════════
+#  Phase 1 — Bootstrap
+# ═════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Phase 1: Bootstrap ---"
+echo "  Need any data disc to read the catalog."
+
+# Try to find the highest-numbered disc by reading volume_info.json
+# from whatever disc is loaded. If no disc is loaded, request the
+# first disc alphabetically (the caller/disc-cmd handles it).
+FIRST_DISC="${FIRST_DISC:-}"
+
+# If FIRST_DISC is set from env, load and mount it.
+if [[ -n "$FIRST_DISC" ]] && ! mountpoint -q "$MNT" 2>/dev/null; then
+    echo "  Loading $FIRST_DISC (from FIRST_DISC env)..."
+    load_disc "$FIRST_DISC"
+fi
+
+# Try whatever disc is already in the drive.
+if [[ -z "$FIRST_DISC" ]]; then
+    if mount_drive 2>/dev/null; then
+        if [[ -f "$MNT/catalog.db" ]]; then
+            FIRST_DISC="$(disc_label)"
+            echo "  Using disc already in drive: $FIRST_DISC"
+        else
+            umount_drive
+        fi
+    fi
+fi
+
+# Auto-discover the highest-numbered data disc from disc-cmd.
+if [[ -z "$FIRST_DISC" ]] && [[ -n "$DISC_CMD" ]]; then
+    echo "  No disc loaded — discovering available data discs..."
+    # Get the last LCSAS_CD_* label (highest-numbered = freshest catalog).
+    FIRST_DISC="$($DISC_CMD list 2>/dev/null | grep '^LCSAS_CD_' | sort | tail -1 || true)"
+    if [[ -n "$FIRST_DISC" ]]; then
+        echo "  Auto-selected: $FIRST_DISC"
+        load_disc "$FIRST_DISC"
+    fi
+fi
+
+if [[ -z "$FIRST_DISC" ]] && ! mountpoint -q "$MNT" 2>/dev/null; then
+    echo "ERROR: no disc loaded. Either:"
+    echo "  - Set FIRST_DISC=<label> and have that disc in the drive"
+    echo "  - Use --disc-cmd to provide a disc loading command"
+    exit 1
+fi
+
+CATALOG="$MNT/catalog.db"
+if [[ ! -f "$CATALOG" ]]; then
+    echo "ERROR: $CATALOG not found — not an LCSAS data disc."
+    exit 1
+fi
+
+BOOTSTRAP_ARGS=(--catalog "$CATALOG" --mount "$MNT" --cache "$CACHE_DIR" --repo "$REPO")
+if ! "$PYTHON" "$HELPER" bootstrap "${BOOTSTRAP_ARGS[@]}" > "$WORK_DIR/pick-list.json"; then
+    rc=$?
+    echo "ERROR: bootstrap failed (exit $rc)"
+    exit 1
+fi
+
+# Extract volume list and state from pick list.
+mapfile -t VOLUMES < <(
+    "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+for v in data["volumes"]:
+    print(v["label"])
+' "$CACHE_DIR/pick-list.json"
+)
+PACKS_TOTAL="$(
+    "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    print(json.load(f).get("total_packs", 0))
+' "$CACHE_DIR/pick-list.json"
+)"
+CATALOG_FRESH="$(
+    "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    print(json.load(f).get("catalog_freshness", ""))
+' "$CACHE_DIR/pick-list.json"
+)"
+echo "  Repository: $REPO"
+echo "  Discs needed: ${#VOLUMES[@]}"
+echo "  Total packs:  $PACKS_TOTAL"
+for v in "${VOLUMES[@]}"; do echo "    - $v"; done
+
+# ═════════════════════════════════════════════════════════════════
+#  Phase 2 — Ingest
+# ═════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Phase 2: Ingest ---"
+IDX=0
+while [[ $IDX -lt ${#VOLUMES[@]} ]]; do
+    label="${VOLUMES[$IDX]}"
+    IDX=$((IDX + 1))
+    echo "  [$IDX/${#VOLUMES[@]}] Loading $label..."
+    if ! load_disc "$label"; then
+        echo "  WARNING: could not load $label — skipping"
+        continue
+    fi
+
+    # ── Organic catalog upgrade ──
+    DISC_CATALOG="$MNT/catalog.db"
+    if [[ -f "$DISC_CATALOG" ]]; then
+        DISC_FRESH="$("$PYTHON" -c "
+import sqlite3, sys
+c = sqlite3.connect(f'file:{sys.argv[1]}?mode=ro&immutable=1', uri=True)
+print(c.execute('SELECT MAX(created_at) FROM volumes').fetchone()[0] or '')
+c.close()
+" "$DISC_CATALOG")"
+        if [[ "$DISC_FRESH" > "$CATALOG_FRESH" ]]; then
+            echo "  Fresher catalog on $label — upgrading pick list..."
+            if "$PYTHON" "$HELPER" bootstrap \
+                --catalog "$DISC_CATALOG" --mount "$MNT" \
+                --cache "$CACHE_DIR" --repo "$REPO" \
+                --reseed \
+                > /dev/null 2>"$WORK_DIR/upgrade-err.txt"; then
+                mapfile -t VOLUMES < <(
+                    "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+for v in data["volumes"]:
+    print(v["label"])
+' "$CACHE_DIR/pick-list.json"
+                )
+                CATALOG_FRESH="$DISC_FRESH"
+                PACKS_TOTAL="$(
+                    "$PYTHON" -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    print(json.load(f).get("total_packs", 0))
+' "$CACHE_DIR/pick-list.json"
+                )"
+                echo "  Upgraded — now ${#VOLUMES[@]} discs, $PACKS_TOTAL packs"
+            else
+                echo "  WARNING: catalog upgrade failed, continuing"
+            fi
+        fi
+    fi
+
+    "$PYTHON" "$HELPER" ingest --mount "$MNT" --cache "$CACHE_DIR" --disc-label "$label" || {
+        echo "  WARNING: ingest issues for $label"
+    }
+done
+umount_drive
+eject_disc
+
+# ═════════════════════════════════════════════════════════════════
+#  Phase 3 — Finalize
+# ═════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Phase 3: Finalize ---"
+"$PYTHON" "$HELPER" finalize --cache "$CACHE_DIR" --verify-integrity
+FINALIZE_RC=$?
+if [[ $FINALIZE_RC -eq 3 ]]; then
+    echo "FATAL: unrecoverable missing packs."
+    exit 3
+elif [[ $FINALIZE_RC -ne 0 ]]; then
+    echo "ERROR: cache incomplete — re-run with missing discs."
+    exit 1
+fi
+
+# ═════════════════════════════════════════════════════════════════
+#  Phase 4 — Rustic restore
+# ═════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Phase 4: Restore ---"
+REPO_TARGET="$TARGET/$REPO"
+mkdir -p "$REPO_TARGET"
+
+if [[ "$USE_PYTHON_FALLBACK" -eq 1 ]]; then
+    if [[ -d "${TOOLS}/lib/python" ]]; then
+        export PYTHONPATH="${TOOLS}/lib/python:${PYTHONPATH:-}"
+    fi
+    "$PYTHON" "$STANDALONE" --repo "$CACHE_DIR" --password-file "$KEY_FILE" --target "$REPO_TARGET"
+else
+    RUSTIC_BIN_NAME="$(basename "$RUSTIC")"
+    if [[ "$RUSTIC_BIN_NAME" == rustic* ]]; then
+        "$RUSTIC" restore "$SNAPSHOT" "$REPO_TARGET" \
+            -r "$CACHE_DIR" --password-file "$KEY_FILE" --no-cache
+    else
+        "$RUSTIC" restore "$SNAPSHOT" \
+            -r "$CACHE_DIR" --password-file "$KEY_FILE" --no-cache \
+            --target "$REPO_TARGET"
+    fi
+fi
+
+echo ""
+echo "═══════════════════════════════════════════════════"
+echo "  RESTORE COMPLETE"
+echo "  Output: $REPO_TARGET"
+echo "═══════════════════════════════════════════════════"
+'''
+
+
 README_RESTORE = '''\
 # LCSAS Disaster Recovery — Restore from Discs
 
@@ -870,7 +1393,8 @@ The **only** thing you must provide is your **encryption key file**.
 | `tools/` | Portable Linux x86_64 binaries: rustic, xorriso, Python 3 |
 | `lcsas/` | LCSAS source code (Python, no external dependencies) |
 | `docs/` | Architecture documentation + restic format specification |
-| `restore.sh` | Automated restore script |
+| `restore.sh` | Interactive restore script (prompts for disc swaps) |
+| `restore-auto.sh` | Non-interactive restore script (for scripted/automated use) |
 | `README_RESTORE.md` | This file |
 | `volume_info.json` | Machine-readable volume metadata (includes tool versions) |
 
@@ -898,7 +1422,10 @@ sudo umount /mnt/meta
 ### 2. Insert **any** archive disc
 
 Every LCSAS data disc is holographic: it carries the full catalog, so
-any one of them can bootstrap the restore.
+any one of them can bootstrap the restore. Higher-numbered discs have
+fresher catalogs (they know about more volumes), so starting with the
+highest-numbered disc minimises the chance of needing a catalog upgrade
+mid-restore — but any disc will work.
 
 ### 3. Run the restore
 
@@ -917,12 +1444,46 @@ The script will:
 2. Print the list of discs you will need and in what order.
 3. Prompt `INSERT DISC: <label>` for each one, wait for you to
    swap, and ingest only the packs it needs.
-4. Run rustic against the assembled cache and write the files into
+4. If a later disc has a fresher catalog, silently upgrade the
+   pick list so newly-discovered volumes are included.
+5. Run rustic against the assembled cache and write the files into
    `~/restored/REPO_NAME/`.
 
 If a disc is unreadable mid-restore you can stop and re-run the same
 command later — the cache under the work directory persists unless
 you pass `--work-dir`.
+
+## Non-Interactive Mode (automated / scripted)
+
+Use ``restore-auto.sh`` when you want a fully automated restore without
+interactive prompts — for example, in scripted environments, CI/CD
+pipelines, or AI-agent-driven restores.
+
+```bash
+./restore-auto.sh --key /path/to/keyfile.txt \\
+                  --target ~/restored/ \\
+                  --repo REPO_NAME \\
+                  --disc-cmd "disc-loader"
+```
+
+The ``--disc-cmd`` option specifies a command that loads discs by label.
+The script calls it as ``CMD insert LABEL`` to load a disc and
+``CMD eject`` to eject. If omitted, you must load discs externally
+before the script expects them.
+
+The script runs the same four phases as ``restore.sh`` (bootstrap,
+ingest, finalize, rustic restore) but never calls ``read`` or waits
+for keyboard input.
+
+| Option | Description |
+|---|---|
+| ``--key FILE`` | **(required)** Encryption key file |
+| ``--target DIR`` | **(required)** Restore destination |
+| ``--repo NAME`` | **(required)** Repository to restore |
+| ``--disc-cmd CMD`` | Command to load/eject discs programmatically |
+| ``--drive DEV`` | Optical drive (default: ``/dev/sr0``) |
+| ``--snapshot ID`` | Snapshot to restore (default: latest) |
+| ``--work-dir DIR`` | Temp directory (default: auto) |
 
 ## Directory Mode (opt-in, legacy)
 
@@ -1103,8 +1664,9 @@ class MetaVolumeBuilder:
         self._bundle_docs()
         self._bundle_standalone_restorer()
         self._bundle_restore_helper()
-        self._bundle_catalog()
+        self._bundle_metadata()
         self._write_restore_script()
+        self._write_restore_auto_script()
         self._write_readme()
         self._write_readme_txt()
         self._write_volume_info()
@@ -1289,25 +1851,23 @@ class MetaVolumeBuilder:
         shutil.copy2(str(src), str(dst))
         os.chmod(str(dst), 0o755)
 
-    def _bundle_catalog(self) -> None:
-        """Copy the master catalog.db + per-repo metadata onto the meta volume.
+    def _bundle_metadata(self) -> None:
+        """Copy per-repo Rustic metadata (keys, config, index, snapshots) onto the meta volume.
 
-        Bundling the *final* catalog (post-burn) means single-drive
-        restore can read a complete pick list without first mounting
-        an archive disc whose own catalog might pre-date later burns.
-        We also copy each repository's rustic metadata (config, keys,
-        index, snapshots) so the bootstrap phase can seed the cache
-        without needing an archive disc mounted at that point.
+        The meta disc does NOT carry a catalog.db — it would always be
+        stale (pre-dating data discs burned after the meta disc).
+        Instead, the restore script bootstraps from the catalog on the
+        first data disc the operator inserts, and upgrades organically
+        when it encounters a fresher catalog on a later disc.
+
+        We do bundle Rustic metadata (keys, config, index, snapshots)
+        because keys are needed to decrypt packs and don't go stale.
         """
         if self._catalog_db_path is None:
             return
         src = Path(self._catalog_db_path)
         if not src.is_file():
             return
-
-        dst = self._output / "catalog.db"
-        shutil.copy2(str(src), str(dst))
-        os.chmod(str(dst), 0o644)
 
         import sqlite3
         conn = sqlite3.connect(
@@ -1340,6 +1900,12 @@ class MetaVolumeBuilder:
         """Write the bootstrap restore.sh script."""
         script_path = self._output / "restore.sh"
         _write_and_sync(script_path, RESTORE_SCRIPT)
+        os.chmod(str(script_path), 0o755)
+
+    def _write_restore_auto_script(self) -> None:
+        """Write the non-interactive restore-auto.sh script."""
+        script_path = self._output / "restore-auto.sh"
+        _write_and_sync(script_path, RESTORE_AUTO_SCRIPT)
         os.chmod(str(script_path), 0o755)
 
     def _write_readme(self) -> None:
@@ -1394,6 +1960,7 @@ class MetaVolumeBuilder:
                 "tool_versions": tool_versions,
                 "lcsas_source": True,
                 "restore_script": "restore.sh",
+                "restore_auto_script": "restore-auto.sh",
                 "documentation": True,
             },
             "requires": {
@@ -1442,6 +2009,10 @@ TO RESTORE YOUR FILES (single-drive mode — recommended):
   3. Insert any archive disc into the drive.
   4. Run:  ./restore.sh --key <keyfile> --target <output> --repo <name>
      The script will prompt for each disc swap.
+
+For automated / scripted restores (no interactive prompts):
+     ./restore-auto.sh --key <keyfile> --target <output> --repo <name> \
+                       --disc-cmd "your-disc-loader-command"
 
 Legacy: if every disc has already been copied to ISO files on disk,
 you may use directory mode instead:

@@ -190,9 +190,22 @@ def _seed_metadata(mount: Path, cache: Path, repo_id: str) -> None:
         shutil.copy2(src / "config", cache / "config")
 
 
+def _catalog_freshness(conn: sqlite3.Connection) -> str:
+    """Return MAX(created_at) from volumes as an ISO 8601 timestamp.
+
+    This is monotonically increasing — a catalog from a later burn
+    session always has a later max created_at. Used to detect when
+    a data disc carries a fresher catalog than the one we bootstrapped
+    from.
+    """
+    row = conn.execute("SELECT MAX(created_at) FROM volumes").fetchone()
+    return (row[0] or "") if row else ""
+
+
 def phase_bootstrap(args: argparse.Namespace) -> int:
     cache = Path(args.cache)
     cache.mkdir(parents=True, exist_ok=True)
+    reseed = getattr(args, "reseed", False)
     conn = sqlite3.connect(
         f"file:{args.catalog}?mode=ro&immutable=1", uri=True
     )
@@ -208,10 +221,31 @@ def phase_bootstrap(args: argparse.Namespace) -> int:
             print("Re-run with --repo NAME", file=sys.stderr)
             return 2
 
+        if reseed:
+            # Validate the new catalog before destroying anything.
+            try:
+                _resolve_repo(conn, args.repo)
+            except SystemExit:
+                print(
+                    "ERROR: repo not found in new catalog — keeping "
+                    "existing metadata",
+                    file=sys.stderr,
+                )
+                return 1
+            # Clear stale metadata so _seed_metadata copies fresh versions.
+            for sub in (*METADATA_SUBDIRS, "config"):
+                p = cache / sub
+                if p.exists():
+                    if p.is_dir():
+                        shutil.rmtree(p)
+                    else:
+                        p.unlink()
+
         repo_id = _resolve_repo(conn, args.repo)
         pick_list = _build_pick_list(conn, repo_id)
         pick_list["repo"] = args.repo
         pick_list["repo_id"] = repo_id
+        pick_list["catalog_freshness"] = _catalog_freshness(conn)
 
         _seed_metadata(Path(args.mount), cache, repo_id)
 
@@ -483,6 +517,10 @@ def main(argv: list[str] | None = None) -> int:
     bp.add_argument("--mount", required=True, help="Mount point of currently-loaded disc")
     bp.add_argument("--cache", required=True, help="Restore cache directory to populate")
     bp.add_argument("--repo", default=None, help="Repository name to restore")
+    bp.add_argument(
+        "--reseed", action="store_true", default=False,
+        help="Re-bootstrap: validate new catalog, clear stale metadata, re-seed",
+    )
 
     ip = sub.add_parser(
         "ingest",

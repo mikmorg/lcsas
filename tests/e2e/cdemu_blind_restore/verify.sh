@@ -3,7 +3,7 @@
 #
 # Usage: verify.sh <run_dir>
 #
-# Exit 0 iff all seven success criteria from PLAN.md hold.
+# Exit 0 iff all nine success criteria from PLAN.md hold.
 
 set -uo pipefail
 
@@ -132,6 +132,21 @@ check "no excessive thrashing (actual=$ACTUAL, needed=$NEEDED)" \
 # 7. Agent's transcript includes the production "RESTORE COMPLETE" string.
 check "RESTORE COMPLETE printed" \
     "grep -q 'RESTORE COMPLETE' '$TRANSCRIPT'"
+
+# -----------------------------------------------------------------------
+# 8. Meta disc carries no catalog.db (organic upgrade design).
+# The meta disc should only carry Rustic metadata (keys, config, etc.),
+# not a catalog.db. The agent bootstraps from a data disc's catalog.
+META_ISO="$FIXTURE/iso_out/LCSAS_META.iso"
+META_MNT=$(mktemp -d)
+sudo mount -o ro,loop "$META_ISO" "$META_MNT" 2>/dev/null
+HAS_CATALOG=$([[ -f "$META_MNT/catalog.db" ]] && echo yes || echo no)
+HAS_METADATA=$([[ -d "$META_MNT/metadata" ]] && echo yes || echo no)
+sudo umount "$META_MNT" 2>/dev/null; rmdir "$META_MNT" 2>/dev/null
+check "meta disc has no catalog.db" \
+    "[[ '$HAS_CATALOG' == 'no' ]]"
+check "meta disc has metadata/" \
+    "[[ '$HAS_METADATA' == 'yes' ]]"
 
 echo
 echo "$PASS passed, $FAIL failed"
