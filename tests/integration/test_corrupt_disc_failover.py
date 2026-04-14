@@ -102,7 +102,7 @@ class _NoOpDVDisaster:
 
 
 class _TestXorrisoRunner:
-    def create_iso(self, source_dir: Path, output_iso: Path, volume_label: str) -> Path:
+    def create_iso(self, source_dir: Path, output_iso: Path, volume_label: str, **_kw) -> Path:
         subprocess.run(
             ["xorriso", "-as", "mkisofs", "-r", "-J", "-joliet-long",
              "-iso-level", "3", "-V", volume_label,

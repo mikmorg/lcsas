@@ -172,7 +172,7 @@ class _NoOpDVDisaster:
 class _TestXorrisoRunner:
     """Real ISO creation, but no physical burns."""
 
-    def create_iso(self, source_dir: Path, output_iso: Path, volume_label: str) -> Path:
+    def create_iso(self, source_dir: Path, output_iso: Path, volume_label: str, **_kw) -> Path:
         cmd = [
             "xorriso",
             "-as", "mkisofs",
