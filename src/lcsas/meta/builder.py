@@ -440,7 +440,8 @@ with open(sys.argv[1]) as f:
         printf '║  INSERT DISC: %-36s ║\\n' "$want"
         printf '║  Drive: %-41s ║\\n' "$DRIVE"
         printf '║  Progress: %d/%d packs (%d%%)%-22s ║\\n' "$PACKS_CACHED" "$PACKS_TOTAL" "$pct" ""
-        printf '║  Discs remaining: %d of %d%-24s ║\\n' "$(( DISC_TOTAL - DISC_IDX ))" "$DISC_TOTAL" ""
+        local remain=$(( DISC_TOTAL - DISC_IDX ))
+        printf '║  Discs remaining: %d of %d%-24s ║\\n' "$remain" "$DISC_TOTAL" ""
         echo "╚═��══════════��══════════════════════════════════════╝"
         set_title "insert $want ($pct%)"
     }
@@ -461,7 +462,8 @@ with open(sys.argv[1]) as f:
             local reply=""
             # Re-prompt every 60s so the disc label stays visible.
             while :; do
-                if read -r -t 60 -p "Press Enter once loaded (or 'skip' to abort): " reply 2>/dev/null; then
+                local pmsg="Press Enter once loaded (or 'skip' to abort): "
+                if read -r -t 60 -p "$pmsg" reply 2>/dev/null; then
                     break
                 fi
                 # Timeout — reprint the prompt block.

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import errno
-import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,7 +10,6 @@ import pytest
 
 from lcsas.staging.builder import MissingPacksError, StagingBuilder
 from lcsas.utils.fs import hardlink_or_copy
-
 
 # ---------------------------------------------------------------------------
 # Staging builder — disk-full and permission failures

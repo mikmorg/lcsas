@@ -433,7 +433,10 @@ class BurnOrchestrator:
                     f"{estimated_bytes:,} bytes > {media_type.capacity_bytes:,} bytes "
                     f"capacity ({media_type.name}). Reduce pack count or use larger media."
                 )
-            self._xorriso.create_iso(staging_root, iso_output, vol_label, expected_bytes=estimated_bytes)
+            self._xorriso.create_iso(
+                staging_root, iso_output, vol_label,
+                expected_bytes=estimated_bytes,
+            )
             iso_path = iso_output
 
             if not skip_ecc and not media_type.is_tape:

@@ -44,7 +44,7 @@ import json
 import shutil
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 METADATA_SUBDIRS = ("index", "snapshots", "keys")
@@ -84,7 +84,7 @@ def _read_state(cache: Path) -> dict[str, object]:
 def _write_state(cache: Path, updates: dict[str, object]) -> None:
     state = _read_state(cache)
     state.update(updates)
-    state["last_updated"] = datetime.now(timezone.utc).isoformat()
+    state["last_updated"] = datetime.now(UTC).isoformat()
     if "started_at" not in state:
         state["started_at"] = state["last_updated"]
     (cache / "restore-state.json").write_text(json.dumps(state, indent=2))
@@ -301,13 +301,12 @@ def phase_ingest(args: argparse.Namespace) -> int:
     mount = Path(args.mount)
     disc_label = args.disc_label
 
-    if getattr(args, "verify_disc", False):
-        if not verify_disc(mount, disc_label):
-            print(
-                f"  {disc_label}: disc verification failed — skipping ingest",
-                file=sys.stderr,
-            )
-            return 2
+    if getattr(args, "verify_disc", False) and not verify_disc(mount, disc_label):
+        print(
+            f"  {disc_label}: disc verification failed — skipping ingest",
+            file=sys.stderr,
+        )
+        return 2
 
     pick_list = _load_pick_list(cache)
 

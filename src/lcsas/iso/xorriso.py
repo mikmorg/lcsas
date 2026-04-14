@@ -161,10 +161,10 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
             )
             try:
                 stdout, stderr = proc.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as exc:
                 proc.kill()
                 proc.communicate()
-                raise subprocess.TimeoutExpired(cmd, timeout)
+                raise subprocess.TimeoutExpired(cmd, timeout) from exc
             finally:
                 stop_event.set()
                 progress_thread.join(timeout=2)

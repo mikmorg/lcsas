@@ -12,7 +12,6 @@ from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
 from lcsas.iso.xorriso import SubprocessXorrisoRunner
 from lcsas.rustic.wrapper import SubprocessRusticRunner
 
-
 REPO = Path("/tmp/test_repo")
 PW = Path("/tmp/password.txt")
 

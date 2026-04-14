@@ -8,7 +8,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from lcsas.cli.main import build_parser, cmd_restore_exec, cmd_restore_plan
-from lcsas.restore.executor import IngestionResult
 from lcsas.db.connection import get_memory_connection
 from lcsas.db.models import Pack
 from lcsas.db.packs import register_pack
@@ -16,6 +15,7 @@ from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import create_volume
+from lcsas.restore.executor import IngestionResult
 from lcsas.rustic.types import RestorePlan
 from lcsas.utils.labels import generate_uuid
 

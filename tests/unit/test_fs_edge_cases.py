@@ -33,15 +33,17 @@ class TestHardlinkOrCopyCrossDevice:
     def test_non_exdev_oserror_is_reraised(self, tmp_path):
         """When os.link raises a non-EXDEV OSError, it is re-raised (not silently copied)."""
         import errno as _errno
+
         import pytest
+
         src = tmp_path / "src.txt"
         dst = tmp_path / "dst.txt"
         src.write_text("content")
 
         perm_err = OSError(_errno.EPERM, "Operation not permitted")
-        with patch("lcsas.utils.fs.os.link", side_effect=perm_err):
-            with pytest.raises(OSError) as exc_info:
-                hardlink_or_copy(src, dst)
+        with patch("lcsas.utils.fs.os.link", side_effect=perm_err), \
+             pytest.raises(OSError) as exc_info:
+            hardlink_or_copy(src, dst)
         assert exc_info.value.errno == _errno.EPERM
 
     def test_creates_parent_dirs(self, tmp_path):

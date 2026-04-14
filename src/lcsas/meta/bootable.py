@@ -24,10 +24,10 @@ Boot structure added to the meta-volume::
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
-import struct
 import subprocess
 from pathlib import Path
 
@@ -179,13 +179,6 @@ class BootableISOBuilder:
         in the ISO filesystem for systems that can read ISO 9660
         directly.
         """
-        # Find GRUB EFI binary
-        search_dirs = [
-            Path("/usr/lib/grub/x86_64-efi"),
-            Path("/usr/share/grub"),
-            Path("/usr/lib64/grub/x86_64-efi"),
-        ]
-
         # Option 1: Pre-built BOOTX64.EFI (e.g. from grub-efi package)
         bootx64 = self._find_file("BOOTX64.EFI", [
             Path("/usr/lib/grub/x86_64-efi"),
@@ -352,12 +345,11 @@ class BootableISOBuilder:
                 "Failed to mount EFI image — UEFI boot may not work. "
                 "Install mtools for rootless EFI image creation."
             )
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 subprocess.run(
-                    ["umount", str(mnt)], capture_output=True, check=False
+                    ["umount", str(mnt)],
+                    capture_output=True, check=False,
                 )
-            except FileNotFoundError:
-                pass
         finally:
             mnt.rmdir()
 

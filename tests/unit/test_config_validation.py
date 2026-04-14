@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import stat
 from pathlib import Path
 
-import pytest
-
-from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig, validate_config
 
 

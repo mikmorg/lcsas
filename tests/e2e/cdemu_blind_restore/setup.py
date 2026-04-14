@@ -26,6 +26,7 @@ Responsibilities (see PLAN.md § setup.py responsibilities):
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -426,7 +427,7 @@ def _create_agent_user(labels: list[str]) -> None:
     os.chmod(alpha_pw_dst, 0o600)
 
     labels_file = AGENT_HOME / "disc-labels.txt"
-    lines = ["LCSAS_META", *sorted(l for l in labels if l != "LCSAS_META")]
+    lines = ["LCSAS_META", *sorted(lbl for lbl in labels if lbl != "LCSAS_META")]
     labels_file.write_text("\n".join(lines) + "\n")
 
     uid = pwd.getpwnam(AGENT_USER).pw_uid
@@ -518,10 +519,8 @@ def _lock_fixture_dir() -> None:
                 ["umount", str(src)],
                 check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-            try:
+            with contextlib.suppress(Exception):
                 src.rename(dst)
-            except Exception:
-                pass
             target = dst if dst.exists() else src
             os.chown(target, 0, 0)
             os.chmod(target, 0o700)
@@ -532,13 +531,11 @@ def _lock_fixture_dir() -> None:
     ):
         if not leak.exists():
             continue
-        try:
+        with contextlib.suppress(Exception):
             subprocess.run(
                 ["umount", str(leak)],
                 check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-        except Exception:
-            pass
         try:
             if leak.is_dir():
                 os.chown(leak, 0, 0)
@@ -623,7 +620,7 @@ def main() -> int:
     print(f"  data ISOs:   {len(iso_files)}")
     print(f"  alpha discs: {len(alpha_labels)}")
     print(f"  agent home:  {AGENT_HOME}")
-    print(f"  run with:    ./tests/e2e/cdemu_blind_restore/run.sh")
+    print("  run with:    ./tests/e2e/cdemu_blind_restore/run.sh")
     return 0
 
 

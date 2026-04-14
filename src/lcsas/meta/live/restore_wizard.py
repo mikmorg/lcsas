@@ -21,13 +21,11 @@ rather than reimplementing restore logic.
 
 from __future__ import annotations
 
-import glob
 import json
 import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -462,10 +460,11 @@ class RestoreWizard:
                 return "back"
 
             if selection == "done":
-                if not self.ripped_isos:
-                    if not yesno("No discs have been loaded.\n\n"
-                                 "Continue anyway?"):
-                        continue
+                if not self.ripped_isos and not yesno(
+                    "No discs have been loaded.\n\n"
+                    "Continue anyway?"
+                ):
+                    continue
                 return "next"
 
             elif selection == "read":
@@ -582,7 +581,7 @@ class RestoreWizard:
 
         # If user selected an unmounted device, mount it
         if selection.startswith("/dev/"):
-            mnt = f"/mnt/restore-target"
+            mnt = "/mnt/restore-target"
             if mount_device(selection, mnt):
                 selection = mnt
             else:
