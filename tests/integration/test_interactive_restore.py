@@ -370,7 +370,9 @@ class TestInteractiveRestore:
     # ── PTY driver ───────────────────────────────────────────────
 
     def _drive_restore(
-        self, bootstrap_oldest: bool = False,
+        self,
+        bootstrap_oldest: bool = False,
+        on_prompt: None | callable = None,
     ) -> tuple[int, str]:
         """Spawn restore.sh under a PTY, respond to disc-swap prompts.
 
@@ -378,6 +380,15 @@ class TestInteractiveRestore:
 
         When *bootstrap_oldest* is True the Phase 1 empty-label prompt
         is answered with the oldest data disc instead of the freshest.
+
+        *on_prompt*, if provided, is called as ``on_prompt(label, n)``
+        for every disc-swap prompt (n starts at 1).  Return values:
+
+        * ``None`` — default behaviour (load the correct disc).
+        * ``"skip"`` — type ``skip`` to skip the disc.
+        * ``"detach"`` — detach the loop device then press Enter
+          (simulates an empty / unreadable drive).
+        * A ``Path`` — load that ISO instead of the requested one.
         """
         loop_dev = self._find_free_loop()
         # Don't pre-attach — Phase 1 unmounts/ejects before prompting,
@@ -406,7 +417,9 @@ class TestInteractiveRestore:
             os._exit(127)  # noqa: SLF001
 
         try:
-            return self._pty_loop(pid, fd, loop_dev, bootstrap_oldest)
+            return self._pty_loop(
+                pid, fd, loop_dev, bootstrap_oldest, on_prompt,
+            )
         finally:
             # Ensure child is dead.
             with contextlib.suppress(ProcessLookupError):
@@ -421,6 +434,7 @@ class TestInteractiveRestore:
     def _pty_loop(
         self, pid: int, fd: int, loop_dev: str,
         bootstrap_oldest: bool = False,
+        on_prompt: None | callable = None,
     ) -> tuple[int, str]:
         # Labels are UPPER_ALPHA + digits + underscores.  Must NOT
         # match the ║ box-drawing character that follows the %-36s field.
@@ -438,6 +452,7 @@ class TestInteractiveRestore:
         buf = b""
         output_chunks: list[bytes] = []
         deadline = time.monotonic() + RESTORE_TIMEOUT
+        prompt_idx = 0
 
         while time.monotonic() < deadline:
             remaining = deadline - time.monotonic()
@@ -471,14 +486,28 @@ class TestInteractiveRestore:
                     if not want:
                         want = bootstrap_iso.stem
 
-                    iso = iso_by_label.get(want)
-                    if iso is None:
-                        os.write(fd, b"skip\n")
-                        continue
+                    prompt_idx += 1
+                    action = on_prompt(want, prompt_idx) if on_prompt else None
 
-                    self._swap_loop(loop_dev, iso)
-                    time.sleep(0.1)
-                    os.write(fd, b"\n")
+                    if action == "skip":
+                        os.write(fd, b"skip\n")
+                    elif action == "detach":
+                        self._detach_loop(loop_dev)
+                        time.sleep(0.1)
+                        os.write(fd, b"\n")
+                    elif isinstance(action, Path):
+                        self._swap_loop(loop_dev, action)
+                        time.sleep(0.1)
+                        os.write(fd, b"\n")
+                    else:
+                        # Default: load the requested disc.
+                        iso = iso_by_label.get(want)
+                        if iso is None:
+                            os.write(fd, b"skip\n")
+                        else:
+                            self._swap_loop(loop_dev, iso)
+                            time.sleep(0.1)
+                            os.write(fd, b"\n")
 
             # Check if child exited.
             try:
@@ -599,4 +628,79 @@ class TestInteractiveRestore:
             f"Expected catalog upgrade message in output:\n{output[-2000:]}"
         )
 
+        self._assert_files_restored()
+
+    def test_wrong_disc_reprompts(self):
+        """Loading the wrong disc triggers WRONG DISC and a re-prompt."""
+        self._reset_restore_state()
+        data_isos = sorted(
+            iso for iso in self.all_isos if "META" not in iso.stem
+        )
+        triggered = [False]
+
+        def on_prompt(label: str, n: int):
+            # On the first Phase 2 prompt, load a different disc.
+            if n == 2 and not triggered[0]:
+                triggered[0] = True
+                wrong = next(
+                    iso for iso in data_isos if iso.stem != label
+                )
+                return wrong
+            return None
+
+        rc, output = self._drive_restore(on_prompt=on_prompt)
+
+        assert rc == 0, (
+            f"restore.sh failed (rc={rc}):\n{output}"
+        )
+        assert "WRONG DISC:" in output, (
+            f"Expected 'WRONG DISC:' in output:\n{output[-2000:]}"
+        )
+        assert "RESTORE COMPLETE" in output
+        self._assert_files_restored()
+
+    def test_skip_disc_reports_incomplete(self):
+        """Skipping a disc causes restore to exit non-zero."""
+        self._reset_restore_state()
+        skipped = [False]
+
+        def on_prompt(label: str, n: int):
+            # Skip the first Phase 2 disc.
+            if n == 2 and not skipped[0]:
+                skipped[0] = True
+                return "skip"
+            return None
+
+        rc, output = self._drive_restore(on_prompt=on_prompt)
+
+        assert rc != 0, (
+            f"Expected non-zero exit after skip, got rc={rc}"
+        )
+        assert "RESTORE COMPLETE" not in output
+        assert "Skipping" in output or "missing" in output.lower(), (
+            f"Expected skip/missing message in output:\n{output[-2000:]}"
+        )
+
+    def test_unreadable_drive_reprompts(self):
+        """Empty drive triggers re-prompt, restore succeeds after retry."""
+        self._reset_restore_state()
+        triggered = [False]
+
+        def on_prompt(label: str, n: int):
+            # On the first Phase 2 prompt, detach the loop device
+            # so mount fails (simulates empty / unreadable drive).
+            if n == 2 and not triggered[0]:
+                triggered[0] = True
+                return "detach"
+            return None
+
+        rc, output = self._drive_restore(on_prompt=on_prompt)
+
+        assert rc == 0, (
+            f"restore.sh failed (rc={rc}):\n{output}"
+        )
+        assert "WRONG DISC" in output, (
+            f"Expected 'WRONG DISC' in output:\n{output[-2000:]}"
+        )
+        assert "RESTORE COMPLETE" in output
         self._assert_files_restored()
