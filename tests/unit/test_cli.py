@@ -36,8 +36,7 @@ class TestCLIParsing:
 
     def test_burn_with_options(self):
         args = self.parser.parse_args([
-            "burn", "--media", "TEST_TINY",
-            "--iso-only", "/tmp/test.iso", "--skip-ecc"
+            "burn", "--media", "TEST_TINY", "--skip-ecc"
         ])
         assert args.command == "burn"
         assert args.media == "TEST_TINY"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 import traceback
@@ -115,8 +116,6 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Media type (BD25, MDISC100, TEST_TINY, etc.).")
     burn_p.add_argument("--repo", type=str, default=None, nargs="*",
                         help="Specific repository IDs to burn.")
-    burn_p.add_argument("--iso-only", type=Path, default=None,
-                        help="Create ISO file at this path without burning to disc.")
     burn_p.add_argument("--skip-ecc", action="store_true",
                         help="Skip DVDisaster ECC augmentation.")
     burn_p.add_argument("--session", type=str, default=None,
@@ -146,13 +145,31 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Show staging plan without creating ISOs or DB rows.")
 
     # --- burn-iso ---
-    burniso_p = subparsers.add_parser("burn-iso",
-                                      help="Burn a single ISO file (standalone).")
+    burniso_p = subparsers.add_parser(
+        "burn-iso",
+        help="Burn a single ISO file (standalone, no DB access required).",
+        description=(
+            "Burn a single ISO to disc. Useful for split-machine workflows: "
+            "stage on one machine, transfer ISOs to a faster burner, then "
+            "import the emitted receipts back with 'catalog import-receipts'."
+        ),
+    )
     burniso_p.add_argument("iso_path", type=Path, help="Path to .iso file.")
     burniso_p.add_argument("--device", type=str, default="/dev/sr0",
                            help="Optical device path.")
     burniso_p.add_argument("--verify", action="store_true", default=True,
                            help="Verify after burning.")
+    burniso_p.add_argument("--emit-receipt", type=Path, default=None,
+                           help="Write a burn receipt JSON to this path "
+                                "(file or directory) for later catalog import.")
+    burniso_p.add_argument("--label", type=str, default=None,
+                           help="Volume label for the receipt. Defaults to the "
+                                "ISO's parent directory name.")
+    burniso_p.add_argument("--location", type=str, default=None,
+                           help="Location tag for the receipt "
+                                "(required with --emit-receipt).")
+    burniso_p.add_argument("--session", type=str, default="",
+                           help="Optional session ID to record in the receipt.")
 
     # --- staging ---
     staging_p = subparsers.add_parser("staging", help="Staging directory management.")
@@ -1031,6 +1048,8 @@ def cmd_burn_legacy(args: argparse.Namespace) -> int:
 
 def cmd_burn_iso(args: argparse.Namespace) -> int:
     """Burn a single ISO file to optical media (standalone)."""
+    from datetime import UTC, datetime
+
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
     iso_path = args.iso_path
@@ -1038,19 +1057,55 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
         logger.error(f"ISO file not found: {iso_path}")
         return 1
 
+    emit_receipt = getattr(args, "emit_receipt", None)
+    if emit_receipt is not None and not args.location:
+        logger.error("--location is required when --emit-receipt is given.")
+        return 1
+
     runner = SubprocessXorrisoRunner()
     device = args.device
+
+    # Hash before burn — cheap insurance against the file changing under us.
+    iso_sha256 = ""
+    if emit_receipt is not None:
+        from lcsas.utils.hashing import sha256_file
+        iso_sha256 = sha256_file(iso_path)
 
     logger.info(f"Burning {iso_path} to {device} ...")
     runner.burn_iso(iso_path, device=device)
     logger.info("Burn complete.")
 
+    verify_passed = True
     if args.verify:
         logger.info(f"Verifying disc on {device} ...")
-        ok = runner.verify_disc(device=device)
-        logger.info(f"  Verify: {'PASS' if ok else 'FAIL'}")
-        if not ok:
-            return 1
+        verify_passed = runner.verify_disc(device=device)
+        logger.info(f"  Verify: {'PASS' if verify_passed else 'FAIL'}")
+
+    if emit_receipt is not None:
+        label = args.label or iso_path.parent.name
+        receipt = {
+            "volume_label": label,
+            "session_id": args.session,
+            "location": args.location,
+            "device": device,
+            "burn_date": datetime.now(UTC).isoformat(),
+            "iso_sha256": iso_sha256,
+            "verify_passed": verify_passed,
+        }
+        # Accept either a directory (auto-name) or a full file path.
+        if emit_receipt.is_dir():
+            out_path = emit_receipt / f"{label}_{args.location}.json"
+        else:
+            emit_receipt.parent.mkdir(parents=True, exist_ok=True)
+            out_path = emit_receipt
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(receipt, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        logger.info(f"Receipt written: {out_path}")
+
+    if args.verify and not verify_passed:
+        return 1
 
     return 0
 
@@ -1136,13 +1191,20 @@ def cmd_location(args: argparse.Namespace) -> int:
 
 
 def cmd_catalog_import(args: argparse.Namespace) -> int:
-    """Import burn receipts from remote burns."""
+    """Import burn receipts from remote burns.
+
+    Also transitions volume status for receipts of STAGING volumes:
+      - verify_passed=true  → STAGING → BURNING → VERIFIED (+ mark_closed)
+      - verify_passed=false → STAGING → BURNING → BURNED
+    Already-VERIFIED volumes (re-burn to a new location) just get a copy added.
+    """
     from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
     from lcsas.db.locations import ensure_location
     from lcsas.db.schema import create_all
     from lcsas.db.volume_copies import add_volume_copy
-    from lcsas.db.volumes import get_volume_by_label
+    from lcsas.db.volume_events import add_event
+    from lcsas.db.volumes import get_volume_by_label, mark_closed, update_status
 
     config = load_config(args.config) if args.config else None
     if config is None:
@@ -1170,12 +1232,38 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                 continue
 
             ensure_location(conn, receipt["location"])
+
+            # Advance status if this is the first burn (STAGING); otherwise
+            # just add a copy (handles re-burns to additional locations).
+            verify_passed = bool(receipt.get("verify_passed", False))
+            if vol.status == "STAGING":
+                update_status(conn, vol.volume_id, "BURNING", commit=False)
+                if verify_passed:
+                    update_status(conn, vol.volume_id, "VERIFIED", commit=False)
+                    mark_closed(conn, vol.volume_id, commit=False)
+                    add_event(
+                        conn, vol.volume_id, "VERIFY_PASS",
+                        location=receipt["location"],
+                        detail=f"Offline burn receipt: {Path(receipt_file).name}",
+                        commit=False,
+                    )
+                else:
+                    update_status(conn, vol.volume_id, "BURNED", commit=False)
+                    add_event(
+                        conn, vol.volume_id, "VERIFY_FAIL",
+                        location=receipt["location"],
+                        detail=f"Offline burn receipt: {Path(receipt_file).name}",
+                        commit=False,
+                    )
+
             add_volume_copy(
                 conn,
                 volume_id=vol.volume_id,
                 location=receipt["location"],
                 burn_date=receipt.get("burn_date", ""),
+                commit=False,
             )
+            conn.commit()
             imported += 1
 
     logger.info(f"Imported {imported} receipt(s).")

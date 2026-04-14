@@ -320,6 +320,88 @@ class TestCmdBurnIso:
         assert result == 0
         mock_burn.assert_called_once()
 
+    def test_burn_iso_emit_receipt_requires_location(self, tmp_path, capsys):
+        """--emit-receipt without --location is rejected."""
+        iso = tmp_path / "VOL_001" / "test.iso"
+        iso.parent.mkdir()
+        iso.write_bytes(b"\0" * 100)
+
+        result = main(["burn-iso", str(iso),
+                       "--emit-receipt", str(tmp_path / "r")])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "--location" in out
+
+    def test_burn_iso_emits_receipt_with_label_inferred(self, tmp_path, capsys):
+        """--emit-receipt produces a JSON file with parent-dir label."""
+        iso = tmp_path / "ARCHIVE_TEST_0001" / "vol.iso"
+        iso.parent.mkdir()
+        iso.write_bytes(b"x" * 200)
+        out_dir = tmp_path / "receipts"
+        out_dir.mkdir()
+
+        with (
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.burn_iso"),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
+                  return_value=True),
+        ):
+            result = main(["burn-iso", str(iso),
+                           "--emit-receipt", str(out_dir),
+                           "--location", "Offsite_Safe"])
+
+        assert result == 0
+        receipt_path = out_dir / "ARCHIVE_TEST_0001_Offsite_Safe.json"
+        assert receipt_path.exists()
+        data = json.loads(receipt_path.read_text())
+        assert data["volume_label"] == "ARCHIVE_TEST_0001"
+        assert data["location"] == "Offsite_Safe"
+        assert data["verify_passed"] is True
+        assert len(data["iso_sha256"]) == 64
+
+    def test_burn_iso_emits_receipt_with_explicit_label(self, tmp_path, capsys):
+        """--label overrides parent-dir inference."""
+        iso = tmp_path / "renamed.iso"
+        iso.write_bytes(b"x" * 200)
+        out_file = tmp_path / "r.json"
+
+        with (
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.burn_iso"),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
+                  return_value=True),
+        ):
+            result = main(["burn-iso", str(iso),
+                           "--emit-receipt", str(out_file),
+                           "--label", "EXPLICIT_LABEL",
+                           "--location", "Home"])
+
+        assert result == 0
+        data = json.loads(out_file.read_text())
+        assert data["volume_label"] == "EXPLICIT_LABEL"
+
+    def test_burn_iso_receipt_records_verify_failure(self, tmp_path, capsys):
+        """verify_passed=False is recorded when verify_disc returns False."""
+        iso = tmp_path / "VOL_002" / "v.iso"
+        iso.parent.mkdir()
+        iso.write_bytes(b"x" * 50)
+        out_dir = tmp_path / "r"
+        out_dir.mkdir()
+
+        with (
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.burn_iso"),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
+                  return_value=False),
+        ):
+            result = main(["burn-iso", str(iso),
+                           "--emit-receipt", str(out_dir),
+                           "--location", "Test"])
+
+        # Returns 1 because verify failed, but receipt is still written.
+        assert result == 1
+        receipt_path = out_dir / "VOL_002_Test.json"
+        assert receipt_path.exists()
+        data = json.loads(receipt_path.read_text())
+        assert data["verify_passed"] is False
+
 
 # ===================================================================
 # cmd_location
@@ -416,6 +498,96 @@ class TestCmdCatalogImport:
         result = main(["--config", str(cfg), "catalog", "import-receipts",
                         str(receipt)])
         assert result == 0
+
+    def test_import_transitions_staging_to_verified(self, tmp_path, capsys):
+        """Receipt with verify_passed=true promotes STAGING → VERIFIED and closes."""
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_100", "u1", "TEST_TINY", 1000, "Home", "STAGING")
+        conn.close()
+
+        receipt = tmp_path / "r.json"
+        receipt.write_text(json.dumps({
+            "volume_label": "VOL_100",
+            "location": "Home",
+            "verify_passed": True,
+            "burn_date": "2026-04-14T12:00:00+00:00",
+        }))
+
+        result = main(["--config", str(cfg), "catalog", "import-receipts",
+                       str(receipt)])
+        assert result == 0
+
+        conn = get_connection(db)
+        from lcsas.db.volumes import get_volume_by_label
+        vol = get_volume_by_label(conn, "VOL_100")
+        assert vol.status == "VERIFIED"
+        assert vol.closed_at is not None
+        from lcsas.db.volume_events import get_events_for_volume
+        events = get_events_for_volume(conn, vol.volume_id, "VERIFY_PASS")
+        assert len(events) == 1
+        conn.close()
+
+    def test_import_transitions_staging_to_burned_on_verify_fail(self, tmp_path):
+        """Receipt with verify_passed=false promotes STAGING → BURNED (not VERIFIED)."""
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_101", "u2", "TEST_TINY", 1000, "Home", "STAGING")
+        conn.close()
+
+        receipt = tmp_path / "r.json"
+        receipt.write_text(json.dumps({
+            "volume_label": "VOL_101",
+            "location": "Home",
+            "verify_passed": False,
+        }))
+
+        result = main(["--config", str(cfg), "catalog", "import-receipts",
+                       str(receipt)])
+        assert result == 0
+
+        conn = get_connection(db)
+        from lcsas.db.volumes import get_volume_by_label
+        vol = get_volume_by_label(conn, "VOL_101")
+        assert vol.status == "BURNED"
+        assert vol.closed_at is None  # not closed on failure
+        from lcsas.db.volume_events import get_events_for_volume
+        events = get_events_for_volume(conn, vol.volume_id, "VERIFY_FAIL")
+        assert len(events) == 1
+        conn.close()
+
+    def test_import_reburn_only_adds_copy(self, tmp_path):
+        """Already-VERIFIED volume: no status change, just a new copy."""
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_102", "u3", "TEST_TINY", 1000, "Home", "VERIFIED")
+        conn.close()
+
+        receipt = tmp_path / "r.json"
+        receipt.write_text(json.dumps({
+            "volume_label": "VOL_102",
+            "location": "Offsite",
+            "verify_passed": True,
+        }))
+
+        result = main(["--config", str(cfg), "catalog", "import-receipts",
+                       str(receipt)])
+        assert result == 0
+
+        conn = get_connection(db)
+        from lcsas.db.volume_copies import get_copies_for_volume
+        from lcsas.db.volumes import get_volume_by_label
+        vol = get_volume_by_label(conn, "VOL_102")
+        assert vol.status == "VERIFIED"
+        copies = get_copies_for_volume(conn, vol.volume_id)
+        assert any(c.location == "Offsite" for c in copies)
+        conn.close()
 
 
 # ===================================================================
