@@ -93,58 +93,88 @@ def validate_disc(disc_path: Path) -> CatalogValidationResult:
 
     result = CatalogValidationResult(disc_path=disc_path)
 
+    # --- Walk disc data/ directory first (ground truth) ---
+    _logger.info("Scanning disc data directory: %s", data_dir)
+    disc_hashes = _collect_disc_packs(data_dir)
+    result.disc_pack_count = len(disc_hashes)
+
     # --- Read catalog ---
-    conn = sqlite3.connect(f"file:{catalog_db}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"file:{catalog_db}?mode=ro", uri=True, timeout=10)
     try:
         conn.row_factory = sqlite3.Row
 
-        # Try to infer the volume label from the catalog.  The disc holds a
-        # holographic copy of the full catalog, so there may be multiple
-        # volumes; we use the first VERIFIED/BURNED volume as the "owner".
-        try:
-            row = conn.execute(
-                "SELECT label FROM volumes WHERE status IN ('VERIFIED', 'BURNED') "
-                "ORDER BY created_at LIMIT 1"
-            ).fetchone()
-            if row:
-                result.volume_label = row["label"]
-        except sqlite3.OperationalError:
-            pass
+        # Try to read volume_info.json to get the label; fallback to catalog query
+        volume_info_path = disc_path / "volume_info.json"
+        if volume_info_path.is_file():
+            try:
+                import json
+                with open(volume_info_path, encoding="utf-8") as f:
+                    info = json.load(f)
+                    result.volume_label = info.get("label", "")
+                    # If volume_info has sha256_manifest, use it as the expected set
+                    if "sha256_manifest" in info:
+                        catalog_hashes: set[str] = set(info["sha256_manifest"])
+                    else:
+                        catalog_hashes = set()
+            except (IOError, ValueError) as e:
+                _logger.warning("Could not read volume_info.json: %s; falling back to catalog", e)
+                catalog_hashes = set()
+        else:
+            catalog_hashes = set()
 
-        # Collect catalog pack hashes: any pack assigned to any volume.
-        # (The holographic catalog is complete, so all volumes are present.)
-        # We need only the packs that *should* physically be on this disc.
-        # Heuristic: packs whose two-level prefix directory exists on disc.
-        # Simpler and more correct: use all pack files actually present on
-        # disc as the "ground truth" set, and compare against ALL catalog packs.
-        # But the real question is: "are all catalogue packs for this disc present?"
-        # We use volume_packs to find which packs belong to volumes whose data
-        # was meant to be on this disc (any VERIFIED/BURNED/STAGING volume).
-        try:
-            rows = conn.execute(
-                """
-                SELECT p.sha256
-                FROM packs p
-                JOIN volume_packs vp ON vp.pack_id = p.pack_id
-                JOIN volumes v ON v.volume_id = vp.volume_id
-                WHERE v.status IN ('VERIFIED', 'BURNED', 'STAGING', 'BURNING')
-                """
-            ).fetchall()
-            catalog_hashes: set[str] = {r["sha256"] for r in rows}
-        except sqlite3.OperationalError as exc:
-            raise ValueError(
-                f"Could not read pack catalog from {catalog_db}: {exc}"
-            ) from exc
+        # If volume_info didn't provide packs, query the catalog using disc packs as filter
+        if not catalog_hashes:
+            # Use disc packs as ground truth: find volumes that contain any of these packs
+            if disc_hashes:
+                placeholders = ",".join("?" * len(disc_hashes))
+                try:
+                    rows = conn.execute(
+                        f"""
+                        SELECT DISTINCT v.volume_id, v.label, v.status
+                        FROM volumes v
+                        JOIN volume_packs vp ON vp.volume_id = v.volume_id
+                        JOIN packs p ON p.pack_id = vp.pack_id
+                        WHERE p.sha256 IN ({placeholders})
+                        AND v.status IN ('VERIFIED', 'BURNED', 'STAGING', 'BURNING')
+                        """,
+                        sorted(disc_hashes),
+                    ).fetchall()
+                    if rows:
+                        # Get the first volume's label
+                        result.volume_label = rows[0]["label"]
+                        # Collect all packs from all volumes found on this disc
+                        volume_ids = [r["volume_id"] for r in rows]
+                        vol_placeholders = ",".join("?" * len(volume_ids))
+                        pack_rows = conn.execute(
+                            f"""
+                            SELECT p.sha256
+                            FROM packs p
+                            JOIN volume_packs vp ON vp.pack_id = p.pack_id
+                            WHERE vp.volume_id IN ({vol_placeholders})
+                            """,
+                            volume_ids,
+                        ).fetchall()
+                        catalog_hashes = {r["sha256"] for r in pack_rows}
+                except sqlite3.OperationalError as exc:
+                    raise ValueError(
+                        f"Could not read pack catalog from {catalog_db}: {exc}"
+                    ) from exc
+
+        # If still no packs found in catalog, check if disc is truly empty
+        if not catalog_hashes:
+            if not disc_hashes:
+                # Empty disc with no packs in catalog is consistent
+                catalog_hashes = set()
+            # Otherwise disc has orphaned packs (handled below as orphaned_on_disc)
+
+    except sqlite3.OperationalError as exc:
+        raise ValueError(
+            f"Could not read catalog from {catalog_db}: {exc}"
+        ) from exc
     finally:
         conn.close()
 
-    # --- Walk disc data/ directory ---
-    _logger.info("Scanning disc data directory: %s", data_dir)
-    disc_hashes = _collect_disc_packs(data_dir)
-
     result.catalog_pack_count = len(catalog_hashes)
-    result.disc_pack_count = len(disc_hashes)
-
     result.missing_from_disc = sorted(catalog_hashes - disc_hashes)
     result.orphaned_on_disc = sorted(disc_hashes - catalog_hashes)
 

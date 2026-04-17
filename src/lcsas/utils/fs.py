@@ -96,15 +96,24 @@ def _make_writable(path: Path) -> None:
 
 
 def copy_file(src: Path, dst: Path) -> None:
-    """Copy a single file, creating parent directories as needed.
+    """Copy a single file atomically, creating parent directories as needed.
 
-    Removes any existing read-only destination file first.
+    Uses a temp-file-then-rename pattern to guarantee dst is never absent
+    during the operation, even if a crash occurs mid-copy.
     """
     ensure_dir(dst.parent)
-    if dst.exists():
-        dst.chmod(0o644)
-        dst.unlink()
-    shutil.copy2(str(src), str(dst))
+    tmp_dst = dst.with_suffix(dst.suffix + ".copy_tmp")
+
+    # Clean up any leftover temp file from a prior failed copy
+    if tmp_dst.exists():
+        tmp_dst.chmod(0o644)
+        tmp_dst.unlink()
+
+    # Copy to temp file
+    shutil.copy2(str(src), str(tmp_dst))
+
+    # Atomic rename: this is guaranteed atomic on same-fs by POSIX
+    os.rename(str(tmp_dst), str(dst))
 
 
 def safe_remove_tree(path: Path) -> None:
