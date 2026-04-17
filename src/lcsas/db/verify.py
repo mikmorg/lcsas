@@ -50,9 +50,10 @@ def _collect_disc_packs(data_dir: Path) -> set[str]:
         if not entry.is_file():
             continue
         name = entry.name
-        # A valid SHA-256 is 64 lowercase hex characters.
-        if len(name) == 64 and all(c in "0123456789abcdef" for c in name):
-            found.add(name)
+        # A valid SHA-256 is 64 hex characters (case-insensitive).
+        # Normalize to lowercase for consistency.
+        if len(name) == 64 and all(c in "0123456789abcdefABCDEF" for c in name):
+            found.add(name.lower())
         else:
             _logger.debug("Skipping non-pack file on disc: %s", entry)
 
@@ -168,8 +169,10 @@ def validate_disc(disc_path: Path) -> CatalogValidationResult:
             # Otherwise disc has orphaned packs (handled below as orphaned_on_disc)
 
     except sqlite3.OperationalError as exc:
+        # Could be locked (another process), corrupted, or permissions
         raise ValueError(
-            f"Could not read catalog from {catalog_db}: {exc}"
+            f"Could not read catalog from {catalog_db} — database may be locked "
+            f"or inaccessible: {exc}"
         ) from exc
     finally:
         conn.close()

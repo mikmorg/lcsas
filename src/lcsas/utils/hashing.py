@@ -24,20 +24,28 @@ def sha256_file(path: Path | str) -> str:
     h = hashlib.sha256()
     total = 0
     next_log = _PROGRESS_INTERVAL
-    with open(path, "rb") as f:
-        while True:
-            chunk = f.read(_HASH_BUFFER_SIZE)
-            if not chunk:
-                break
-            h.update(chunk)
-            total += len(chunk)
-            if total >= next_log:
-                _logger.info(
-                    "Hashing %s: %.1f GB processed...",
-                    Path(path).name, total / 1e9,
-                )
-                next_log += _PROGRESS_INTERVAL
-    return h.hexdigest()
+    try:
+        with open(path, "rb") as f:
+            while True:
+                try:
+                    chunk = f.read(_HASH_BUFFER_SIZE)
+                except OSError as exc:
+                    raise OSError(
+                        f"I/O error reading {path} at byte offset {total}: {exc}"
+                    ) from exc
+                if not chunk:
+                    break
+                h.update(chunk)
+                total += len(chunk)
+                if total >= next_log:
+                    _logger.info(
+                        "Hashing %s: %.1f GB processed...",
+                        Path(path).name, total / 1e9,
+                    )
+                    next_log += _PROGRESS_INTERVAL
+        return h.hexdigest()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"File not found: {path}") from None
 
 
 def sha256_bytes(data: bytes) -> str:
