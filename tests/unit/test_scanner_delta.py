@@ -38,6 +38,74 @@ class TestScanner:
         packs = scan_mirror_packs(tmp_path)
         assert packs == {}
 
+    def test_scan_permission_denied_on_data_dir(self, tmp_path):
+        """Scan logs warning and returns empty dict when data_dir is not readable."""
+        from unittest.mock import patch
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        # Mock os.scandir to raise PermissionError
+        with patch("lcsas.packs.scanner.os.scandir") as mock_scandir:
+            mock_scandir.side_effect = PermissionError("Permission denied")
+            packs = scan_mirror_packs(tmp_path)
+        assert packs == {}
+
+    def test_scan_permission_denied_on_subdir(self, tmp_path):
+        """Scan logs warning and skips inaccessible subdirectory in two-level layout."""
+        from unittest.mock import patch, MagicMock
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        subdir = data_dir / "ab"
+        subdir.mkdir()
+        # Create a valid pack file in the subdir
+        (subdir / ("ab" + "c" * 62)).write_bytes(b"x" * 100)
+
+        with patch("lcsas.packs.scanner.os.scandir") as mock_scandir:
+            # First call returns the subdir entry, second call raises PermissionError
+            def scandir_side_effect(path):
+                if path == data_dir:
+                    entry = MagicMock()
+                    entry.is_file.return_value = False
+                    entry.is_dir.return_value = True
+                    entry.name = "ab"
+                    entry.path = str(subdir)
+                    return [entry]
+                else:
+                    raise PermissionError("Permission denied")
+            mock_scandir.side_effect = scandir_side_effect
+            packs = scan_mirror_packs(tmp_path)
+        # Should return empty dict since subdir couldn't be accessed
+        assert packs == {}
+
+    def test_scan_oserror_on_pack_stat(self, tmp_path):
+        """Scan logs warning and skips pack files that can't be stat'd."""
+        from unittest.mock import patch, MagicMock
+        data_dir = tmp_path / "data"
+        data_dir.mkdir()
+        subdir = data_dir / "ab"
+        subdir.mkdir()
+
+        with patch("lcsas.packs.scanner.os.scandir") as mock_scandir:
+            def scandir_side_effect(path):
+                if path == data_dir:
+                    entry = MagicMock()
+                    entry.is_file.return_value = False
+                    entry.is_dir.return_value = True
+                    entry.name = "ab"
+                    entry.path = str(subdir)
+                    return [entry]
+                else:
+                    # Subdir scanning succeeds but pack stat fails
+                    sub_entry = MagicMock()
+                    sub_entry.is_file.return_value = True
+                    sub_entry.name = "ab" + "c" * 62
+                    sub_entry.path = str(subdir / sub_entry.name)
+                    sub_entry.stat.side_effect = OSError("Can't stat")
+                    return [sub_entry]
+            mock_scandir.side_effect = scandir_side_effect
+            packs = scan_mirror_packs(tmp_path)
+        # Should return empty dict since pack stat failed
+        assert packs == {}
+
 
 class TestDeltaAnalyzer:
     def test_register_new_packs(self, memory_db):
