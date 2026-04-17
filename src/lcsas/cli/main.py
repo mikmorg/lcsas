@@ -555,6 +555,25 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
             )
             return 1
 
+        # Confirmation prompt when using --force
+        if args.force:
+            all_packs = list_packs(conn, repo_id=repo.repo_id, include_pruned=True)
+            logger.warning("")
+            logger.warning(
+                "This will DELETE from the catalog: %d pack(s) and %d snapshot(s).",
+                len(all_packs), len(list(conn.execute(
+                    "SELECT COUNT(*) as cnt FROM snapshots WHERE repo_id = ?",
+                    (repo.repo_id,)).fetchall())[0])
+            )
+            try:
+                response = input("Type 'yes' to confirm deletion, or anything else to cancel: ").strip()
+                if response.lower() != "yes":
+                    logger.info("Removal canceled.")
+                    return 0
+            except EOFError:
+                logger.error("No terminal available for confirmation (redirected input).")
+                return 1
+
         # Force mode: mark all packs as pruned
         if active_packs:
             pack_ids = [p.pack_id for p in active_packs]
@@ -891,7 +910,11 @@ def cmd_stage(args: argparse.Namespace) -> int:
                                  f"Valid types: {valid}")
                     return 1
 
-            repo_ids = _resolve_repo_names_to_ids(conn, args.repo)
+            try:
+                repo_ids = _resolve_repo_names_to_ids(conn, args.repo)
+            except ValueError as e:
+                logger.error(str(e))
+                return 1
 
             result = orch.stage(
                 media_type=media_type,
@@ -1015,7 +1038,11 @@ def cmd_burn_legacy(args: argparse.Namespace) -> int:
         )
 
         # Resolve repo names→ids
-        repo_ids = _resolve_repo_names_to_ids(conn, args.repo)
+        try:
+            repo_ids = _resolve_repo_names_to_ids(conn, args.repo)
+        except ValueError as e:
+            logger.error(str(e))
+            return 1
 
         # Stage first
         result = orch.stage(
@@ -1216,8 +1243,12 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
         imported = 0
         for receipt_file in args.receipt_files:
-            with open(receipt_file, encoding="utf-8") as f:
-                receipt = json.load(f)
+            try:
+                with open(receipt_file, encoding="utf-8") as f:
+                    receipt = json.load(f)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"Failed to read receipt '{receipt_file}': {e}, skipping.")
+                continue
 
             # Validate required receipt fields
             missing = [k for k in ("volume_label", "location") if k not in receipt]
@@ -1394,6 +1425,22 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
 
         if config is None:
             logger.error("--config is required for --execute.")
+            return 1
+
+        # Confirmation prompt before executing irreversible staging
+        logger.warning("")
+        logger.warning(
+            "This will stage %d packs across %d volume(s) — an irreversible catalog change.",
+            len(plan.active_packs), plan.volumes_needed,
+        )
+        try:
+            response = input("Are you sure you want to proceed? Type 'yes' to confirm: ").strip()
+            if response.lower() != "yes":
+                logger.info("Consolidation canceled.")
+                return 0
+        except EOFError:
+            logger.error("No terminal available for confirmation (redirected input).")
+            logger.error("Run interactively or use lcsas restore instead.")
             return 1
 
         # Execute: stage the active packs via the burn orchestrator
