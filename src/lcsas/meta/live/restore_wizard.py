@@ -276,13 +276,21 @@ def rip_disc_to_iso(device: str, output_path: str) -> bool:
     except (subprocess.CalledProcessError, ValueError, FileNotFoundError):
         return False
 
-    # Use dd with progress
-    result = subprocess.run(
-        ["dd", f"if={device}", f"of={output_path}",
-         "bs=2048", "status=progress"],
-        capture_output=True, text=True,
-    )
-    return result.returncode == 0
+    # Use dd with progress (timeout = 1 hour for large discs)
+    try:
+        result = subprocess.run(
+            ["dd", f"if={device}", f"of={output_path}",
+             "bs=2048", "status=progress"],
+            capture_output=True, text=True,
+            timeout=3600,
+        )
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        _logger.error(
+            "dd operation timed out after 3600 seconds on device %s. "
+            "The device may be defective or unresponsive.", device
+        )
+        return False
 
 
 # ── Wizard Screens ───────────────────────────────────────────────
@@ -752,6 +760,7 @@ class RestoreWizard:
         infobox("Starting restore...\n\nThis may take a while.",
                 height=5, width=50)
 
+        process = None
         try:
             with open(self.restore_log, "w") as log:
                 process = subprocess.Popen(
@@ -763,24 +772,21 @@ class RestoreWizard:
 
             # Show the log file in a tailbox
             tailbox(self.restore_log, height=22, width=78)
+        finally:
+            # Ensure process is waited on, even if tailbox() raises
+            if process is not None:
+                process.wait()
 
-            # Wait for process to complete
-            process.wait()
-
-            if process.returncode == 0:
-                return "next"
-            else:
-                msgbox(
-                    f"Restore exited with code {process.returncode}.\n\n"
-                    f"Check the log for details:\n"
-                    f"  {self.restore_log}\n\n"
-                    "You can retry or exit to a shell for manual recovery.",
-                    height=12, width=65,
-                )
-                return "back"
-
-        except OSError as e:
-            msgbox(f"Failed to start restore:\n\n{e}")
+        if process.returncode == 0:
+            return "next"
+        else:
+            msgbox(
+                f"Restore exited with code {process.returncode}.\n\n"
+                f"Check the log for details:\n"
+                f"  {self.restore_log}\n\n"
+                "You can retry or exit to a shell for manual recovery.",
+                height=12, width=65,
+            )
             return "back"
 
     def _build_restore_command(self) -> list[str]:

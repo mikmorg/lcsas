@@ -26,6 +26,11 @@ def first_fit_decreasing(
     """
     usable = capacity - reserved
     if usable <= 0:
+        _logger.error(
+            "No usable capacity: capacity=%d bytes, reserved=%d bytes (usable=%d). "
+            "Cannot archive any packs on this media type.",
+            capacity, reserved, usable,
+        )
         return [], list(items)
 
     # Sort by size descending, then by identifier ascending as tiebreaker
