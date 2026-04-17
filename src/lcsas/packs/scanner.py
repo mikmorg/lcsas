@@ -60,7 +60,7 @@ def scan_mirror_packs(mirror_path: Path) -> dict[str, int]:
         return packs
 
     for entry in top_entries:
-        with contextlib.suppress(OSError):
+        try:
             if entry.is_file() and not entry.name.startswith("."):
                 # Flat layout: data/abcdef1234...
                 _register_pack(packs, entry.name, entry.stat().st_size, data_dir)
@@ -74,10 +74,14 @@ def scan_mirror_packs(mirror_path: Path) -> dict[str, int]:
                     continue
                 for sub_entry in sub_entries:
                     if sub_entry.is_file() and not sub_entry.name.startswith("."):
-                        with contextlib.suppress(OSError):
+                        try:
                             _register_pack(
                                 packs, sub_entry.name,
                                 sub_entry.stat().st_size, subdir,
                             )
+                        except OSError as exc:
+                            _logger.warning("Cannot access pack file %s: %s", sub_entry.path, exc)
+        except OSError as exc:
+            _logger.warning("Cannot process entry %s: %s", entry.path, exc)
 
     return packs

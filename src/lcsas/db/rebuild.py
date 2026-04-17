@@ -181,8 +181,10 @@ def _merge_one_disc(
         # 7. volume_copies — keyed on (volume_id, location)
         cur = target.execute(
             f"""
-            INSERT OR IGNORE INTO volume_copies (volume_id, location, burn_date)
-            SELECT v.volume_id, svc.location, svc.burn_date
+            INSERT OR IGNORE INTO volume_copies
+                (volume_id, location, status, burn_date, notes, iso_sha256, last_verified_at, media_serial)
+            SELECT v.volume_id, svc.location, svc.status, svc.burn_date, svc.notes,
+                   svc.iso_sha256, svc.last_verified_at, svc.media_serial
             FROM {alias}.volume_copies svc
             JOIN {alias}.volumes sv ON sv.volume_id = svc.volume_id
             JOIN volumes v ON v.uuid = sv.uuid

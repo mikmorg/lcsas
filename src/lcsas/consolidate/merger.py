@@ -93,7 +93,8 @@ class VolumeMerger:
         than silently ACTIVE.
         """
         for vid in source_volume_ids:
-            update_status(self._conn, vid, "DEPRECATED")
+            update_status(self._conn, vid, "DEPRECATED", commit=False)
+        self._conn.commit()
 
     def mark_sources_consolidating(
         self,
@@ -108,7 +109,8 @@ class VolumeMerger:
         silently stuck as ACTIVE with no indication of intent.
         """
         for vid in source_volume_ids:
-            update_status(self._conn, vid, "CONSOLIDATING")
+            update_status(self._conn, vid, "CONSOLIDATING", commit=False)
+        self._conn.commit()
 
     def abort_consolidation(
         self,
@@ -116,4 +118,5 @@ class VolumeMerger:
     ) -> None:
         """Revert CONSOLIDATING volumes back to VERIFIED on burn failure."""
         for vid in source_volume_ids:
-            update_status(self._conn, vid, "VERIFIED")
+            update_status(self._conn, vid, "VERIFIED", commit=False)
+        self._conn.commit()
