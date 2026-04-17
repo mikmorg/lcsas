@@ -62,8 +62,10 @@ def list_files_recursive(path: Path) -> list[Path]:
 def copy_tree(src: Path, dst: Path) -> None:
     """Copy an entire directory tree. Overwrites dst if it exists.
 
-    Uses a three-step sequence (copy → rename old → rename new) so that
-    dst is never absent, even in the unlikely event of a crash mid-swap.
+    Uses a three-step sequence (copy to temp → move old to backup → move temp
+    to dst → delete backup). A crash between the move steps can leave dst absent
+    and backup (.copy_old) present; callers should detect and recover from
+    leftover .copy_old directories at startup.
 
     Handles read-only source files/dirs (e.g. from rustic repos).
     """
@@ -73,7 +75,8 @@ def copy_tree(src: Path, dst: Path) -> None:
         _make_writable(tmp_dst)
         shutil.rmtree(tmp_dst)
     shutil.copytree(str(src), str(tmp_dst))
-    # Swap: rename dst → .copy_old, then tmp → dst, then delete .copy_old
+    # Swap: rename dst → .copy_old, then tmp → dst, then delete .copy_old.
+    # Crash window: dst is absent between the first and second rename.
     if dst.exists():
         _make_writable(dst)
         dst.rename(old_dst)

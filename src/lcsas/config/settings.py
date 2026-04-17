@@ -355,6 +355,26 @@ def validate_config(config: LCSASConfig) -> list[str]:
                 f"{repo.password_file}"
             )
 
+    # Check for critical path overlaps that could cause data loss during cleanup.
+    # Specifically: staging_path and mirror_base_path must be separate
+    # (cleanup routines would destroy mirrors if staging is a subdir of mirror).
+    try:
+        staging_real = config.staging_path.resolve()
+        mirror_real = config.mirror_base_path.resolve()
+        if staging_real == mirror_real:
+            errors.append(
+                f"staging_path and mirror_base_path cannot be identical: {staging_real}"
+            )
+        elif staging_real in mirror_real.parents or mirror_real in staging_real.parents:
+            errors.append(
+                f"staging_path and mirror_base_path cannot overlap: "
+                f"{staging_real} vs {mirror_real} "
+                f"(staging cleanup would affect mirrors)"
+            )
+    except (OSError, RuntimeError):
+        # Path resolution failed (e.g., due to symlink issues)
+        pass
+
     return errors
 
 

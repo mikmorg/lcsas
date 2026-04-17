@@ -157,8 +157,8 @@ def build_parser() -> argparse.ArgumentParser:
     burniso_p.add_argument("iso_path", type=Path, help="Path to .iso file.")
     burniso_p.add_argument("--device", type=str, default="/dev/sr0",
                            help="Optical device path.")
-    burniso_p.add_argument("--verify", action="store_true", default=True,
-                           help="Verify after burning.")
+    burniso_p.add_argument("--verify", action=argparse.BooleanOptionalAction, default=True,
+                           help="Verify after burning (use --no-verify to skip).")
     burniso_p.add_argument("--emit-receipt", type=Path, default=None,
                            help="Write a burn receipt JSON to this path "
                                 "(file or directory) for later catalog import.")
