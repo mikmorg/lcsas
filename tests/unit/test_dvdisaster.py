@@ -128,3 +128,48 @@ class TestDVDisasterMocked:
 
         # Temp file must be cleaned up on failure
         assert not iso.with_suffix(".iso.ecc.tmp").exists()
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_augment_timeout_raises(self, mock_run, tmp_path):
+        """augment_iso raises RuntimeError when dvdisaster times out."""
+        import subprocess as sp
+        mock_run.side_effect = sp.TimeoutExpired("dvdisaster", 7200)
+        runner = SubprocessDVDisasterRunner()
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"\x00" * 1024)
+
+        with (
+            patch(
+                "lcsas.ecc.dvdisaster.shutil.disk_usage",
+                return_value=MagicMock(free=1_073_741_824),
+            ),
+            pytest.raises(RuntimeError, match="timed out"),
+        ):
+            runner.augment_iso(iso, timeout=1)
+
+        # Temp file must be cleaned up on timeout
+        assert not iso.with_suffix(".iso.ecc.tmp").exists()
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_verify_timeout_raises(self, mock_run, tmp_path):
+        """verify_iso raises RuntimeError when dvdisaster times out."""
+        import subprocess as sp
+        mock_run.side_effect = sp.TimeoutExpired("dvdisaster", 3600)
+        runner = SubprocessDVDisasterRunner()
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"\x00" * 1024)
+
+        with pytest.raises(RuntimeError, match="timed out"):
+            runner.verify_iso(iso, timeout=1)
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_repair_timeout_raises(self, mock_run, tmp_path):
+        """repair_iso raises RuntimeError when dvdisaster times out."""
+        import subprocess as sp
+        mock_run.side_effect = sp.TimeoutExpired("dvdisaster", 3600)
+        runner = SubprocessDVDisasterRunner()
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"\x00" * 1024)
+
+        with pytest.raises(RuntimeError, match="timed out"):
+            runner.repair_iso(iso, timeout=1)
