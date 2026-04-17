@@ -51,12 +51,21 @@ class TestXorrisoMocked:
         mock_run.return_value = MagicMock(returncode=0)
         runner = SubprocessXorrisoRunner()
         iso = tmp_path / "test.iso"
+        iso.write_bytes(b"fake ISO")
         runner.burn_iso(iso, "/dev/sr0")
 
         args = mock_run.call_args[0][0]
         assert "cdrecord" in args
         assert "dev=/dev/sr0" in args
         assert str(iso) in args
+
+    def test_burn_iso_missing_iso_raises(self, tmp_path):
+        """burn_iso raises FileNotFoundError when ISO does not exist."""
+        import pytest
+        runner = SubprocessXorrisoRunner()
+        iso = tmp_path / "nonexistent.iso"
+        with pytest.raises(FileNotFoundError, match="ISO file not found"):
+            runner.burn_iso(iso, "/dev/sr0")
 
     @patch("lcsas.iso.xorriso.subprocess.run")
     def test_verify_success(self, mock_run):

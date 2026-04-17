@@ -70,6 +70,7 @@ class XorrisoRunner(Protocol):
         volume_label: str,
         bios_boot: bool = True,
         uefi_boot: bool = True,
+        timeout: int = 7200,
     ) -> Path: ...
 
     def burn_iso(
@@ -199,6 +200,7 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
         volume_label: str,
         bios_boot: bool = True,
         uefi_boot: bool = True,
+        timeout: int = 7200,
     ) -> Path:
         """Create a bootable ISO with El Torito records for BIOS and/or UEFI.
 
@@ -249,7 +251,7 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
         try:
             subprocess.run(
                 cmd, capture_output=True, text=True, check=True,
-                env=self._env(), timeout=7200,
+                env=self._env(), timeout=timeout,
             )
             os.rename(tmp_iso, output_iso)
         except subprocess.TimeoutExpired as exc:
@@ -274,6 +276,8 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
         timeout: int = 14400,
     ) -> None:
         """Burn an ISO image to optical media using DAO mode."""
+        if not iso_path.is_file():
+            raise FileNotFoundError(f"ISO file not found: {iso_path}")
         cmd = [
             self._binary,
             "-as", "cdrecord",
