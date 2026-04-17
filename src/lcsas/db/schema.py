@@ -285,6 +285,10 @@ def migrate(conn: sqlite3.Connection) -> int:
         )
         cursor.execute("INSERT INTO volumes SELECT * FROM volumes_old")
         cursor.execute("DROP TABLE volumes_old")
+        # Recreate the status index (v5 migration dropped the old one)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_volumes_status ON volumes (status);"
+        )
         cursor.execute(
             "INSERT INTO schema_version (version) VALUES (?)",
             (5,),

@@ -53,7 +53,7 @@ def add_volume_copy(
     """
     if burn_date is None:
         burn_date = datetime.now(UTC).isoformat()
-    cursor = conn.execute(
+    conn.execute(
         """INSERT INTO volume_copies
                (volume_id, location, burn_date, notes, iso_sha256, media_serial)
            VALUES (?, ?, ?, ?, ?, ?)
@@ -67,8 +67,16 @@ def add_volume_copy(
     )
     if commit:
         conn.commit()
-    assert cursor.lastrowid is not None, "INSERT did not return a row ID"
-    return get_volume_copy(conn, cursor.lastrowid)
+    # Fetch by (volume_id, location) instead of lastrowid (unreliable after UPSERT on SQLite < 3.35)
+    row = conn.execute(
+        "SELECT * FROM volume_copies WHERE volume_id = ? AND location = ? AND status = 'ACTIVE'",
+        (volume_id, location),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError(
+            f"Failed to insert/update volume copy for volume {volume_id} at {location}"
+        )
+    return _row_to_copy(row)
 
 
 def get_volume_copy(conn: sqlite3.Connection, copy_id: int) -> VolumeCopy:

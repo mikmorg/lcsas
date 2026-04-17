@@ -9,6 +9,19 @@ from pathlib import Path
 
 _logger = logging.getLogger(__name__)
 
+# SQLite 3.33.0 introduced UPDATE...FROM syntax (Sept 2020)
+_MIN_SQLITE_VERSION = (3, 33, 0)
+
+
+def _check_sqlite_version() -> tuple[int, int, int]:
+    """Return the SQLite version as a (major, minor, patch) tuple."""
+    version_str = sqlite3.sqlite_version
+    parts = version_str.split(".")
+    try:
+        return (int(parts[0]), int(parts[1]), int(parts[2]))
+    except (IndexError, ValueError):
+        return (int(parts[0]), int(parts[1]), 0)
+
 
 @dataclass
 class RebuildResult:
@@ -98,37 +111,43 @@ def _merge_one_disc(
         #       > DEPRECATED > DESTROYED (worst)
         # If the source has a higher-quality status than the existing row,
         # update the existing row to the source's status.
-        target.execute(
+        #
+        # Note: Implemented as explicit loop for SQLite < 3.33 compatibility
+        # (UPDATE...FROM was added in SQLite 3.33.0).
+        for row in target.execute(
             f"""
-            UPDATE volumes
-               SET status = src_v.status
-              FROM {alias}.volumes src_v
-             WHERE volumes.uuid = src_v.uuid
-               AND (
-                   CASE volumes.status
-                       WHEN 'VERIFIED'      THEN 6
-                       WHEN 'BURNED'        THEN 5
-                       WHEN 'CONSOLIDATING' THEN 4
-                       WHEN 'BURNING'       THEN 3
-                       WHEN 'STAGING'       THEN 2
-                       WHEN 'DEPRECATED'    THEN 1
-                       WHEN 'DESTROYED'     THEN 0
-                       ELSE 0
-                   END
-               ) < (
-                   CASE src_v.status
-                       WHEN 'VERIFIED'      THEN 6
-                       WHEN 'BURNED'        THEN 5
-                       WHEN 'CONSOLIDATING' THEN 4
-                       WHEN 'BURNING'       THEN 3
-                       WHEN 'STAGING'       THEN 2
-                       WHEN 'DEPRECATED'    THEN 1
-                       WHEN 'DESTROYED'     THEN 0
-                       ELSE 0
-                   END
-               )
+            SELECT volumes.volume_id, src_v.status
+            FROM volumes
+            JOIN {alias}.volumes src_v ON src_v.uuid = volumes.uuid
+            WHERE (
+                CASE volumes.status
+                    WHEN 'VERIFIED'      THEN 6
+                    WHEN 'BURNED'        THEN 5
+                    WHEN 'CONSOLIDATING' THEN 4
+                    WHEN 'BURNING'       THEN 3
+                    WHEN 'STAGING'       THEN 2
+                    WHEN 'DEPRECATED'    THEN 1
+                    WHEN 'DESTROYED'     THEN 0
+                    ELSE 0
+                END
+            ) < (
+                CASE src_v.status
+                    WHEN 'VERIFIED'      THEN 6
+                    WHEN 'BURNED'        THEN 5
+                    WHEN 'CONSOLIDATING' THEN 4
+                    WHEN 'BURNING'       THEN 3
+                    WHEN 'STAGING'       THEN 2
+                    WHEN 'DEPRECATED'    THEN 1
+                    WHEN 'DESTROYED'     THEN 0
+                    ELSE 0
+                END
+            )
             """
-        )
+        ):
+            target.execute(
+                "UPDATE volumes SET status = ? WHERE volume_id = ?",
+                (row[1], row[0]),
+            )
 
         # 5. snapshots — keyed on snapshot_id
         cur = target.execute(

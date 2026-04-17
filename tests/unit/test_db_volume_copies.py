@@ -56,14 +56,19 @@ class TestVolumeCopyCRUD:
 
     def test_duplicate_location_upserts(self, conn, volume):
         """Re-burning at the same location updates instead of raising."""
-        add_volume_copy(conn, volume.volume_id, "Home_Shelf",
-                        notes="first burn")
-        add_volume_copy(conn, volume.volume_id, "Home_Shelf",
-                        notes="re-burn")
+        copy1 = add_volume_copy(conn, volume.volume_id, "Home_Shelf",
+                                notes="first burn")
+        copy2 = add_volume_copy(conn, volume.volume_id, "Home_Shelf",
+                                notes="re-burn")
         # Should be UPSERT (same row), not a new row
         copies = get_copies_for_volume(conn, volume.volume_id)
         assert len(copies) == 1
         assert copies[0].notes == "re-burn"
+        # Verify return value is correct on UPSERT (not dependent on lastrowid)
+        assert copy2.volume_id == volume.volume_id
+        assert copy2.location == "Home_Shelf"
+        assert copy2.notes == "re-burn"
+        assert copy2.status == "ACTIVE"
 
     def test_get_copies_at_location(self, conn):
         v1 = create_volume(conn, "V1", generate_uuid(), "TEST_TINY", 1000000)

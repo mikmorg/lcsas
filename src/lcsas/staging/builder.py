@@ -110,10 +110,22 @@ class StagingBuilder:
             ensure_dir(dst.parent)
 
             if dst.exists():
-                # Already staged (re-run after partial failure).
-                staged += 1
-                _logger.debug("Pack %s already staged, skipping (%d/%d)", short, i, total)
-                continue
+                # Verify existing staged file is not zero-byte or corrupt
+                # (guards against partial stages from prior failed runs)
+                dst_size = dst.stat().st_size if dst.exists() else 0
+                if dst_size == 0:
+                    _logger.warning(
+                        "Pack %s was partially staged (zero-byte file). "
+                        "Re-staging from source.",
+                        short,
+                    )
+                    dst.unlink(missing_ok=True)
+                    # Fall through to re-stage from source
+                else:
+                    # Existing file has content; assume it's valid
+                    staged += 1
+                    _logger.debug("Pack %s already staged, skipping (%d/%d)", short, i, total)
+                    continue
 
             try:
                 hardlink_or_copy(src, dst)

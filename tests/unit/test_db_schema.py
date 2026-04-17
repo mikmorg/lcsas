@@ -272,3 +272,21 @@ class TestMigrateV4ToV5:
         migrate(conn)
         assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
         conn.close()
+
+    def test_migrate_v4_to_v5_recreates_status_index(self):
+        """Verify v5 migration recreates idx_volumes_status after table recreation."""
+        conn = self._make_v4_db()
+        # v4 DB might not have all indices; verify status index exists after migration
+        migrate(conn)
+
+        # Check that the status index exists
+        indexes = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+        }
+        assert "idx_volumes_status" in indexes, (
+            "idx_volumes_status not found after v4→v5 migration. "
+            "Status-filtered queries will degrade to full table scans."
+        )
+        conn.close()

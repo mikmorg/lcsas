@@ -359,6 +359,28 @@ class TestExecute:
         vol = orch.execute(manifest, skip_burn=True, skip_ecc=True)
         assert vol.status == "VERIFIED"
 
+    def test_execute_iso_unlink_failure_doesnt_rollback_burn(self, orch_env):
+        """ISO unlink failure should not revert VERIFIED status (disc is safe)."""
+        from unittest.mock import patch
+        orch = orch_env["orch"]
+        conn = orch_env["conn"]
+        manifest = self._prepare(orch_env)
+
+        # Create a mock ISO file
+        manifest.iso_path = Path(manifest.staging_path) / "test.iso"
+        manifest.iso_path.write_bytes(b"ISO DATA")
+
+        # Patch iso_path.unlink() to raise OSError
+        with patch.object(Path, "unlink", side_effect=OSError("Permission denied")):
+            vol = orch.execute(manifest, skip_burn=True, skip_ecc=True)
+
+        # Volume should still be VERIFIED (burn succeeded, ISO cleanup failed)
+        assert vol.status == "VERIFIED"
+
+        # Verify DB also shows VERIFIED
+        db_vol = get_volume_by_id(conn, manifest.volume_id)
+        assert db_vol.status == "VERIFIED"
+
 
 # =========================================================================
 # BurnOrchestrator.abort()

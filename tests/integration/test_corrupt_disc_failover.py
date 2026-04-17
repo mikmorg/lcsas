@@ -306,15 +306,15 @@ class TestCorruptDiscFailover:
         total_ingested = 0
         all_failed: list[str] = []
         for vol_dir in sorted(self.copy_corrupt.iterdir()):
-            ingested, failed = executor.ingest_volume(
+            result = executor.ingest_volume(
                 cache_dir=cache,
                 volume_mount=vol_dir,
                 required_packs=self.all_pack_shas,
                 verify=True,
                 collect_failures=True,
             )
-            total_ingested += ingested
-            all_failed.extend(failed)
+            total_ingested += result.ingested
+            all_failed.extend(result.failed)
 
         # At least some corrupted packs should have been detected
         assert len(all_failed) > 0, "No corrupted packs detected!"
@@ -348,20 +348,20 @@ class TestCorruptDiscFailover:
         # Phase 1: Ingest from corrupted copy
         failed_packs: list[str] = []
         for vol_dir in sorted(self.copy_corrupt.iterdir()):
-            ingested, failed = executor.ingest_volume(
+            result = executor.ingest_volume(
                 cache_dir=cache,
                 volume_mount=vol_dir,
                 required_packs=self.all_pack_shas,
                 verify=True,
                 collect_failures=True,
             )
-            failed_packs.extend(failed)
+            failed_packs.extend(result.failed)
 
         assert len(failed_packs) > 0, "Expected some failed packs"
 
         # Phase 2: Re-ingest ONLY the failed packs from clean copy
         for vol_dir in sorted(self.copy_clean.iterdir()):
-            recovered, still_failed = executor.ingest_volume(
+            result = executor.ingest_volume(
                 cache_dir=cache,
                 volume_mount=vol_dir,
                 required_packs=failed_packs,

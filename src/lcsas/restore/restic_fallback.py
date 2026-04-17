@@ -607,7 +607,16 @@ class PurePythonRestorer:
         for node in tree_doc.get("nodes", []):
             name = node["name"]
             node_type = node.get("type", "file")
-            node_path = target_dir / name
+            # Sanitize node name to prevent path traversal (e.g., "../../../etc/passwd")
+            # Use only the basename to strip any directory components
+            safe_name = Path(name).name
+            if not safe_name or safe_name != name:
+                _log(
+                    f"Skipping node with suspicious name: {name!r} "
+                    f"(contains directory components or empty)"
+                )
+                continue
+            node_path = target_dir / safe_name
 
             if node_type == "file":
                 inode = node.get("inode", 0)
@@ -642,6 +651,22 @@ class PurePythonRestorer:
                 self._apply_metadata(node, node_path)
             elif node_type == "symlink":
                 link_target = node.get("linktarget", "")
+                # Validate symlink target: only allow relative links to stay within target_dir
+                if Path(link_target).is_absolute():
+                    _log(
+                        f"Skipping symlink {node_path.name} with absolute target "
+                        f"(security: {link_target!r})"
+                    )
+                    continue
+                # Resolve the symlink target relative to the node's parent directory
+                resolved = (node_path.parent / link_target).resolve()
+                if not str(resolved).startswith(str(target_dir.resolve())):
+                    _log(
+                        f"Skipping symlink {node_path.name} with out-of-bounds target "
+                        f"(would escape to {resolved})"
+                    )
+                    continue
+                # Target is valid; create the symlink
                 if node_path.is_symlink() or node_path.exists():
                     if node_path.is_dir() and not node_path.is_symlink():
                         shutil.rmtree(node_path)

@@ -161,7 +161,24 @@ class RestoreExecutor:
             ensure_dir(dst.parent)
 
             if dst.exists():
-                continue
+                # Re-verify existing file if verification is enabled
+                # (guards against zero-byte or corrupt files from prior aborted runs)
+                if verify:
+                    actual = sha256_file(dst)
+                    if actual != sha256:
+                        logger.warning(
+                            "Cached pack %s is CORRUPT (SHA-256 mismatch: got %s). "
+                            "Removing and will re-ingest from volume.",
+                            sha256, actual,
+                        )
+                        dst.unlink()
+                        # Fall through to re-copy from source
+                    else:
+                        # Cached file is valid; skip (don't re-ingest)
+                        continue
+                else:
+                    # No verification; trust the cached file and skip
+                    continue
 
             # Locate pack on the source volume (flat or two-level)
             src = find_pack_file(data_dir, sha256)

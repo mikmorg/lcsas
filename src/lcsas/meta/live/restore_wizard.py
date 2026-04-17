@@ -645,7 +645,7 @@ class RestoreWizard:
         # Extract ISOs and scan for repos
         infobox("Scanning ISOs for backup repositories...", height=3, width=50)
 
-        # Use restore.sh's ISO extraction if available, else manual scan
+        # Scan for repositories by reading /metadata/ directory from disc
         repos: list[str] = []
         catalog_warnings: list[str] = []
         xorriso_error: str = ""
@@ -654,20 +654,21 @@ class RestoreWizard:
                 self.iso_dir, f"extracted_{Path(iso_path).stem}")
             os.makedirs(extract_dir, exist_ok=True)
 
-            # Try to extract just the packs/ directory list
+            # Extract /metadata/ directory to discover repos
             try:
                 result = subprocess.run(
                     ["xorriso", "-indev", iso_path,
-                     "-find", "/packs", "-maxdepth", "1", "-type", "d"],
+                     "-find", "/metadata", "-maxdepth", "1", "-type", "d"],
                     capture_output=True, text=True, timeout=30,
                 )
                 if result.returncode == 0:
                     for line in result.stdout.splitlines():
                         line = line.strip().strip("'")
-                        if line.startswith("/packs/") and line != "/packs/":
-                            repo_name = line.split("/")[2]
-                            if repo_name not in repos:
-                                repos.append(repo_name)
+                        # /metadata/ is the root; subdirs are /metadata/repo_id
+                        if line.startswith("/metadata/") and line != "/metadata/":
+                            repo_id = line.split("/")[2]
+                            if repo_id not in repos:
+                                repos.append(repo_id)
                 else:
                     xorriso_error = (result.stderr or result.stdout or "").strip()
             except FileNotFoundError:

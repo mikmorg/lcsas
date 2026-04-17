@@ -720,6 +720,17 @@ class BurnOrchestrator:
                     else:
                         # Stay at BURNED — user must investigate / re-burn
                         update_status(self._conn, sv.volume_id, "BURNED", commit=False)
+                else:
+                    # Re-burn case: update status based on verify result
+                    if not verify_passed:
+                        # Verify failed on re-burn; revert VERIFIED→BURNED
+                        update_status(self._conn, sv.volume_id, "BURNED", commit=False)
+                        add_event(
+                            self._conn, sv.volume_id, "VERIFY_FAIL_REBURN",
+                            location=location,
+                            detail="Post-burn read-back failed on re-burn attempt",
+                            commit=False,
+                        )
 
                 # Record copy at location
                 add_volume_copy(
@@ -730,12 +741,7 @@ class BurnOrchestrator:
                 )
                 self._conn.commit()
 
-                # Remove ISO after successful verified burn to free staging space.
-                if verify_passed and not skip_burn and iso_path.exists():
-                    iso_path.unlink()
-                    _logger.debug("Deleted ISO after successful burn: %s", iso_path)
-
-                # Build receipt
+                # Build receipt (before ISO cleanup, in case unlink fails)
                 from lcsas.db.volume_packs import get_pack_ids_for_volume
                 pack_ids = get_pack_ids_for_volume(self._conn, sv.volume_id)
 
@@ -753,6 +759,9 @@ class BurnOrchestrator:
                 )
                 receipts.append(receipt)
 
+                # ISO cleanup moved outside main try block (see below)
+                # to prevent unlink failures from rolling back the burn.
+
             except Exception:
                 self._conn.rollback()
                 if not is_reburn:
@@ -761,6 +770,19 @@ class BurnOrchestrator:
                 if receipts:
                     update_session_status(self._conn, session_id, "PARTIAL")
                 raise
+
+            # Remove ISO after successful verified burn to free staging space.
+            # This is outside the main try/except to avoid rolling back verified burns
+            # if the ISO file deletion fails (e.g., permission error, stale NFS handle).
+            if verify_passed and not skip_burn and iso_path.exists():
+                try:
+                    iso_path.unlink()
+                    _logger.debug("Deleted ISO after successful burn: %s", iso_path)
+                except OSError as exc:
+                    _logger.warning(
+                        "Failed to delete ISO after burn (disc is safe): %s — %s",
+                        iso_path, exc,
+                    )
 
         # Update session status
         update_session_status(self._conn, session_id, "COMPLETE")
