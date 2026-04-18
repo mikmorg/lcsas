@@ -60,20 +60,20 @@ from lcsas.restore._aes_pure import (
 _ZSTD_MAGIC = b"\x28\xB5\x2F\xFD"
 
 try:
-    import zstandard as _zstd
+    import zstandard as _zstd  # type: ignore[import-not-found]
 
     def _decompress_zstd(data: bytes, max_output_size: int = 0) -> bytes:
         dctx = _zstd.ZstdDecompressor()
         if max_output_size > 0:
-            return dctx.decompress(data, max_output_size=max_output_size)
+            return dctx.decompress(data, max_output_size=max_output_size)  # type: ignore[no-any-return]
         # Try without limit first; if that fails (no content size in
         # the frame header), fall back with a generous cap.
         try:
-            return dctx.decompress(data)
+            return dctx.decompress(data)  # type: ignore[no-any-return]
         except _zstd.ZstdError:
             # Generous fallback for highly-compressible data (e.g.
             # sparse database backups with long runs of zeros).
-            return dctx.decompress(data, max_output_size=max(len(data) * 100, 64 * 1024 * 1024))
+            return dctx.decompress(data, max_output_size=max(len(data) * 100, 64 * 1024 * 1024))  # type: ignore[no-any-return]
 
     _HAS_ZSTD = True
 except ImportError:

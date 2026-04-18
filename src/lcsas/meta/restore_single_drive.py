@@ -46,6 +46,7 @@ import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 METADATA_SUBDIRS = ("index", "snapshots", "keys")
 _LIVE_VOLUME_STATUSES = ("STAGING", "BURNING", "BURNED", "VERIFIED")
@@ -77,7 +78,7 @@ def sha256_file(path: Path) -> str:
 def _read_state(cache: Path) -> dict[str, object]:
     path = cache / "restore-state.json"
     if path.is_file():
-        return json.loads(path.read_text())
+        return json.loads(path.read_text())  # type: ignore[no-any-return]
     return {}
 
 
@@ -104,10 +105,10 @@ def _resolve_repo(conn: sqlite3.Connection, repo_name: str) -> str:
             f"ERROR: repository '{repo_name}' not found in catalog. "
             f"Available: {avail}"
         )
-    return row[0]
+    return row[0]  # type: ignore[no-any-return]
 
 
-def _build_pick_list(conn: sqlite3.Connection, repo_id: str) -> dict:
+def _build_pick_list(conn: sqlite3.Connection, repo_id: str) -> dict[str, Any]:
     """Group every live pack for *repo_id* under its primary volume.
 
     A pack may live on multiple discs. We assign it to the
@@ -136,7 +137,7 @@ def _build_pick_list(conn: sqlite3.Connection, repo_id: str) -> dict:
         pack_labels.setdefault(sha256, []).append(label)
         pack_sizes[sha256] = size
 
-    volumes: dict[str, dict] = {}
+    volumes: dict[str, dict[str, Any]] = {}
     for sha256, labels in pack_labels.items():
         primary = labels[0]
         entry = volumes.setdefault(
@@ -257,7 +258,7 @@ def phase_bootstrap(args: argparse.Namespace) -> int:
     return 0
 
 
-def _load_pick_list(cache: Path) -> dict:
+def _load_pick_list(cache: Path) -> dict[str, Any]:
     path = cache / "pick-list.json"
     if not path.is_file():
         print(
@@ -265,7 +266,7 @@ def _load_pick_list(cache: Path) -> dict:
             file=sys.stderr,
         )
         raise SystemExit(1)
-    return json.loads(path.read_text())
+    return json.loads(path.read_text())  # type: ignore[no-any-return]
 
 
 def verify_disc(mount: Path, expected_label: str) -> bool:
@@ -316,7 +317,7 @@ def phase_ingest(args: argparse.Namespace) -> int:
             wanted_primary = entry["packs"]
             break
 
-    alternates: dict = pick_list.get("alternates", {})
+    alternates: dict[str, list[str]] = pick_list.get("alternates", {})
     wanted_alt: list[str] = [
         sha for sha, alt_labels in alternates.items() if disc_label in alt_labels
     ]
@@ -355,10 +356,10 @@ def phase_ingest(args: argparse.Namespace) -> int:
 
     # Update persistent state so interrupted restores have context.
     state = _read_state(cache)
-    completed = list(state.get("volumes_completed", []))
+    completed = list(state.get("volumes_completed", []))  # type: ignore[call-overload]
     if disc_label not in completed:
         completed.append(disc_label)
-    corrupt_map: dict[str, str] = dict(state.get("corrupt_packs", {}))
+    corrupt_map: dict[str, str] = dict(state.get("corrupt_packs", {}))  # type: ignore[call-overload]
     for sha in corrupt:
         corrupt_map[sha] = disc_label
 
@@ -443,7 +444,7 @@ def phase_finalize(args: argparse.Namespace) -> int:
     # Classify missing packs as recoverable or unrecoverable.
     alternates: dict[str, list[str]] = pick_list.get("alternates", {})
     state = _read_state(cache)
-    corrupt_map: dict[str, str] = dict(state.get("corrupt_packs", {}))
+    corrupt_map: dict[str, str] = dict(state.get("corrupt_packs", {}))  # type: ignore[call-overload]
 
     recoverable: dict[str, int] = {}  # label → count
     unrecoverable: list[str] = []
