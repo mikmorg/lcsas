@@ -1,8 +1,8 @@
 """Unit tests for db/verify.py — disc validation."""
 
-from pathlib import Path
 import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -110,8 +110,13 @@ class TestValidateDisc:
 
         # Create a minimal valid catalog.db
         conn = sqlite3.connect(str(disc / "catalog.db"))
-        conn.execute("CREATE TABLE packs (pack_id INTEGER PRIMARY KEY, sha256 TEXT UNIQUE)")
-        conn.execute("CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY, label TEXT, status TEXT)")
+        conn.execute(
+            "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY, sha256 TEXT UNIQUE)"
+        )
+        conn.execute(
+            "CREATE TABLE volumes "
+            "(volume_id INTEGER PRIMARY KEY, label TEXT, status TEXT)"
+        )
         conn.execute("CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER)")
         conn.commit()
         conn.close()

@@ -31,7 +31,7 @@ class TestIngestionResult:
         # But this SHOULD work: result.ingested, result.failed
         try:
             _a, _b = result  # This should raise TypeError
-            assert False, "IngestionResult should not be iterable"
+            raise AssertionError("IngestionResult should not be iterable")
         except TypeError as e:
             assert "iterable" in str(e).lower()
 

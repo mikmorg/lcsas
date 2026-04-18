@@ -2,15 +2,8 @@
 
 from __future__ import annotations
 
-import sqlite3
-import tempfile
-from pathlib import Path
-
-import pytest
-
 from lcsas.db import rebuild, schema
 from lcsas.db.connection import get_connection
-from lcsas.db.models import Repository, Volume, Pack
 
 
 class TestRebuildMerge:
@@ -168,7 +161,7 @@ class TestRebuildMerge:
         source_conn.close()
 
         # Merge
-        result = rebuild._merge_one_disc(target_conn, source_db)
+        rebuild._merge_one_disc(target_conn, source_db)
 
         # Pack should not be duplicated (INSERT OR IGNORE)
         count = target_conn.execute(
@@ -289,9 +282,11 @@ class TestRebuildMerge:
 
         # Add snapshots to source
         source_conn.execute(
-            "INSERT INTO snapshots (snapshot_id, repo_id, hostname, timestamp, paths, tags, description) "
+            "INSERT INTO snapshots "
+            "(snapshot_id, repo_id, hostname, timestamp, paths, tags, description) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            ("snap-001", "repo1", "myhost", "2026-01-01T00:00:00", '[\"/\"]', "[]", "Snapshot 1"),
+            ("snap-001", "repo1", "myhost", "2026-01-01T00:00:00",
+             '[\"/\"]', "[]", "Snapshot 1"),
         )
         source_conn.commit()
         source_conn.close()
@@ -345,8 +340,12 @@ class TestRebuildMerge:
             ("a" * 64, 5000, "repo1"),
         )
         # Get auto-incremented IDs
-        src_vol_id = source_conn.execute("SELECT volume_id FROM volumes WHERE uuid = ?", ("uuid-001",)).fetchone()[0]
-        src_pack_id = source_conn.execute("SELECT pack_id FROM packs WHERE sha256 = ?", ("a" * 64,)).fetchone()[0]
+        src_vol_id = source_conn.execute(
+            "SELECT volume_id FROM volumes WHERE uuid = ?", ("uuid-001",)
+        ).fetchone()[0]
+        src_pack_id = source_conn.execute(
+            "SELECT pack_id FROM packs WHERE sha256 = ?", ("a" * 64,)
+        ).fetchone()[0]
 
         # Link pack to volume
         source_conn.execute(
@@ -399,13 +398,18 @@ class TestRebuildMerge:
             "VALUES (?, ?, ?, ?, ?)",
             ("VOL001", "uuid-001", "BD25", 25000000000, "VERIFIED"),
         )
-        src_vol_id = source_conn.execute("SELECT volume_id FROM volumes WHERE uuid = ?", ("uuid-001",)).fetchone()[0]
+        src_vol_id = source_conn.execute(
+            "SELECT volume_id FROM volumes WHERE uuid = ?", ("uuid-001",)
+        ).fetchone()[0]
 
         # Add volume_copy with all fields
         source_conn.execute(
-            "INSERT INTO volume_copies (volume_id, location, status, burn_date, notes, iso_sha256, last_verified_at, media_serial) "
+            "INSERT INTO volume_copies "
+            "(volume_id, location, status, burn_date, notes, iso_sha256, "
+            "last_verified_at, media_serial) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (src_vol_id, "LOC1", "ACTIVE", "2026-01-15", "Test copy", "b" * 64, "2026-02-01T12:00:00", "SERIAL123"),
+            (src_vol_id, "LOC1", "ACTIVE", "2026-01-15", "Test copy",
+             "b" * 64, "2026-02-01T12:00:00", "SERIAL123"),
         )
         source_conn.commit()
         source_conn.close()

@@ -7,6 +7,7 @@ and the archive catalog, enabling recovery from any single disc.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import textwrap
 from collections.abc import Sequence
@@ -99,6 +100,8 @@ class HolographicInjector:
         info_path = self._root / "volume_info.json"
         with open(info_path, "w", encoding="utf-8") as f:
             json.dump(info, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
 
     def write_lcsas_source(self) -> None:
         """Copy the LCSAS restore subpackage source onto the disc.
@@ -118,7 +121,7 @@ class HolographicInjector:
             if src.is_dir():
                 dst = dst_root / subpkg
                 if not dst.exists():
-                    shutil.copytree(str(src), str(dst))
+                    shutil.copytree(str(src), str(dst), symlinks=True)
             else:
                 import logging
                 logging.getLogger(__name__).warning(
@@ -137,7 +140,10 @@ class HolographicInjector:
         """
         text = build_standalone()
         path = self._root / "standalone_restorer.py"
-        path.write_text(text)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
 
     def write_restore_instructions(self) -> None:
         """Write a human-readable RESTORE_INSTRUCTIONS.txt to the staging root.
@@ -239,7 +245,10 @@ For the encryption/pack file format specification, see
 docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
 """
         path = self._root / "RESTORE_INSTRUCTIONS.txt"
-        path.write_text(text)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
 
     def write_start_here(self, config: LCSASConfig) -> None:
         """Write a plain-language START_HERE.txt to the staging root.
@@ -331,7 +340,10 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
         """)
 
         path = self._root / "START_HERE.txt"
-        path.write_text(text)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
 
     def write_key_info(self, config: LCSASConfig) -> None:
         """Write KEY_INFO.txt mapping repositories to their key requirements.
@@ -376,7 +388,10 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
         lines.append("")
 
         path = self._root / "KEY_INFO.txt"
-        path.write_text("\n".join(lines))
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+            f.flush()
+            os.fsync(f.fileno())
 
     def write_config_summary(self, config: LCSASConfig) -> None:
         """Write a sanitized config summary to the staging root.
@@ -422,7 +437,10 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
         lines.append("")
 
         path = self._root / "CONFIG_SUMMARY.txt"
-        path.write_text("\n".join(lines))
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+            f.flush()
+            os.fsync(f.fileno())
 
     def write_disc_care(self) -> None:
         """Write DISC_CARE.txt with media storage guidance.
@@ -511,4 +529,7 @@ DRIVE AVAILABILITY
   - Internal SATA BD drives with a USB-SATA adapter also work.
 """
         path = self._root / "DISC_CARE.txt"
-        path.write_text(text)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())

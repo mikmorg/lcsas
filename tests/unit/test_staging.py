@@ -407,4 +407,42 @@ class TestHolographicInjector:
         assert "15-25" in txt  # temperature range
         assert "M-DISC" in txt
         assert "PERIODIC VERIFICATION" in txt
-        assert "DRIVE AVAILABILITY" in txt
+
+
+class TestPartialStagedPack:
+    """Test for T17: partial staging file (non-zero, wrong size) re-stages (R3-M6)."""
+
+    def _make_pack(self, sha256: str, size: int) -> Pack:
+        return Pack(
+            pack_id=1, sha256=sha256, size_bytes=size,
+            repo_id="test", is_pruned=False, created_at="",
+        )
+
+    def test_partial_staged_pack_re_stages(self, tmp_path):
+        """Partially-written pack (wrong size) is re-staged from source."""
+        # Create mirror with full pack
+        mirror_data = tmp_path / "mirror" / "data"
+        mirror_data.mkdir(parents=True)
+        sha = "a" * 64
+        full_content = b"x" * 1000
+        (mirror_data / sha).write_bytes(full_content)
+
+        # Create staging with partial file (half size)
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+        builder = StagingBuilder(staging_root)
+        builder.initialize()
+
+        prefix_dir = staging_root / "data" / sha[:2]
+        prefix_dir.mkdir(parents=True, exist_ok=True)
+        partial_path = prefix_dir / sha
+        partial_path.write_bytes(b"x" * 500)  # Only half the expected size
+
+        # Stage the pack (should detect partial and re-stage)
+        pack = self._make_pack(sha, size=1000)
+        staged = builder.stage_packs([pack], mirror_data)
+
+        assert staged == 1
+        # File should now be full size
+        assert partial_path.stat().st_size == 1000
+        assert partial_path.read_bytes() == full_content

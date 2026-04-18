@@ -7,6 +7,7 @@ from pathlib import Path
 
 from lcsas.db.models import Pack
 from lcsas.utils.fs import ensure_dir, hardlink_or_copy, safe_remove_tree
+from lcsas.utils.hashing import sha256_file
 from lcsas.utils.pack_layout import find_pack_file, pack_dest_path
 
 _logger = logging.getLogger(__name__)
@@ -110,22 +111,46 @@ class StagingBuilder:
             ensure_dir(dst.parent)
 
             if dst.exists():
-                # Verify existing staged file is not zero-byte or corrupt
+                # Verify existing staged file matches expected size
                 # (guards against partial stages from prior failed runs)
                 dst_size = dst.stat().st_size if dst.exists() else 0
-                if dst_size == 0:
+                if dst_size == pack.size_bytes:
+                    # For small files, verify hash to catch corruption from bit-flips
+                    _hash_threshold = 500_000_000  # 500 MB
+                    if dst_size <= _hash_threshold:
+                        dst_hash = sha256_file(dst)
+                        if dst_hash == pack.sha256:
+                            # File is valid
+                            staged += 1
+                            _logger.debug(
+                                "Pack %s already staged, skipping (%d/%d)", short, i, total
+                            )
+                            continue
+                        else:
+                            # Hash mismatch; re-stage
+                            _logger.warning(
+                                "Pack %s hash mismatch (expected %s, got %s). "
+                                "Re-staging from source.",
+                                short, pack.sha256, dst_hash,
+                            )
+                            dst.unlink(missing_ok=True)
+                    else:
+                        # Large file; skip expensive hash check, just verify size
+                        staged += 1
+                        _logger.debug(
+                            "Pack %s already staged (large file, size verified), "
+                            "skipping (%d/%d)",
+                            short, i, total,
+                        )
+                        continue
+                else:
                     _logger.warning(
-                        "Pack %s was partially staged (zero-byte file). "
+                        "Pack %s partially staged (expected %d bytes, got %d). "
                         "Re-staging from source.",
-                        short,
+                        short, pack.size_bytes, dst_size,
                     )
                     dst.unlink(missing_ok=True)
                     # Fall through to re-stage from source
-                else:
-                    # Existing file has content; assume it's valid
-                    staged += 1
-                    _logger.debug("Pack %s already staged, skipping (%d/%d)", short, i, total)
-                    continue
 
             try:
                 hardlink_or_copy(src, dst)

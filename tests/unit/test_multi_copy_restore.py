@@ -471,8 +471,14 @@ class TestMultiVolumeIngest:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        r = executor.ingest_volume(cache, vol, ["exists", "missing1", "missing2"], verify=False)
+        # Use collect_failures=True to record missing packs instead of raising
+        r = executor.ingest_volume(
+            cache, vol, ["exists", "missing1", "missing2"],
+            verify=False, collect_failures=True,
+        )
         assert r.ingested == 1
+        assert "missing1" in r.failed
+        assert "missing2" in r.failed
 
     def test_full_restore_workflow(self, tmp_path):
         """End-to-end: prepare_cache → ingest from 2 volumes → execute_restore."""

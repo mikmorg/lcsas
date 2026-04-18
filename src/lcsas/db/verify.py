@@ -117,56 +117,53 @@ def validate_disc(disc_path: Path) -> CatalogValidationResult:
                         catalog_hashes: set[str] = set(info["sha256_manifest"])
                     else:
                         catalog_hashes = set()
-            except (IOError, ValueError) as e:
+            except (OSError, ValueError) as e:
                 _logger.warning("Could not read volume_info.json: %s; falling back to catalog", e)
                 catalog_hashes = set()
         else:
             catalog_hashes = set()
 
         # If volume_info didn't provide packs, query the catalog using disc packs as filter
-        if not catalog_hashes:
-            # Use disc packs as ground truth: find volumes that contain any of these packs
-            if disc_hashes:
-                placeholders = ",".join("?" * len(disc_hashes))
-                try:
-                    rows = conn.execute(
+        if not catalog_hashes and disc_hashes:
+            placeholders = ",".join("?" * len(disc_hashes))
+            try:
+                rows = conn.execute(
+                    f"""
+                    SELECT DISTINCT v.volume_id, v.label, v.status
+                    FROM volumes v
+                    JOIN volume_packs vp ON vp.volume_id = v.volume_id
+                    JOIN packs p ON p.pack_id = vp.pack_id
+                    WHERE p.sha256 IN ({placeholders})
+                    AND v.status IN ('VERIFIED', 'BURNED', 'STAGING', 'BURNING')
+                    """,
+                    sorted(disc_hashes),
+                ).fetchall()
+                if rows:
+                    # Get the first volume's label
+                    result.volume_label = rows[0]["label"]
+                    # Collect all packs from all volumes found on this disc
+                    volume_ids = [r["volume_id"] for r in rows]
+                    vol_placeholders = ",".join("?" * len(volume_ids))
+                    pack_rows = conn.execute(
                         f"""
-                        SELECT DISTINCT v.volume_id, v.label, v.status
-                        FROM volumes v
-                        JOIN volume_packs vp ON vp.volume_id = v.volume_id
-                        JOIN packs p ON p.pack_id = vp.pack_id
-                        WHERE p.sha256 IN ({placeholders})
-                        AND v.status IN ('VERIFIED', 'BURNED', 'STAGING', 'BURNING')
+                        SELECT p.sha256
+                        FROM packs p
+                        JOIN volume_packs vp ON vp.pack_id = p.pack_id
+                        WHERE vp.volume_id IN ({vol_placeholders})
                         """,
-                        sorted(disc_hashes),
+                        volume_ids,
                     ).fetchall()
-                    if rows:
-                        # Get the first volume's label
-                        result.volume_label = rows[0]["label"]
-                        # Collect all packs from all volumes found on this disc
-                        volume_ids = [r["volume_id"] for r in rows]
-                        vol_placeholders = ",".join("?" * len(volume_ids))
-                        pack_rows = conn.execute(
-                            f"""
-                            SELECT p.sha256
-                            FROM packs p
-                            JOIN volume_packs vp ON vp.pack_id = p.pack_id
-                            WHERE vp.volume_id IN ({vol_placeholders})
-                            """,
-                            volume_ids,
-                        ).fetchall()
-                        catalog_hashes = {r["sha256"] for r in pack_rows}
-                except sqlite3.OperationalError as exc:
-                    raise ValueError(
-                        f"Could not read pack catalog from {catalog_db}: {exc}"
-                    ) from exc
+                    catalog_hashes = {r["sha256"] for r in pack_rows}
+            except sqlite3.OperationalError as exc:
+                raise ValueError(
+                    f"Could not read pack catalog from {catalog_db}: {exc}"
+                ) from exc
 
         # If still no packs found in catalog, check if disc is truly empty
-        if not catalog_hashes:
-            if not disc_hashes:
-                # Empty disc with no packs in catalog is consistent
-                catalog_hashes = set()
-            # Otherwise disc has orphaned packs (handled below as orphaned_on_disc)
+        if not catalog_hashes and not disc_hashes:
+            # Empty disc with no packs in catalog is consistent
+            catalog_hashes = set()
+        # Otherwise disc has orphaned packs (handled below as orphaned_on_disc)
 
     except sqlite3.OperationalError as exc:
         # Could be locked (another process), corrupted, or permissions

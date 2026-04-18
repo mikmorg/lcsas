@@ -329,7 +329,9 @@ def build_parser() -> argparse.ArgumentParser:
     cons_p.add_argument("--target-media", type=str, default="MDISC100",
                         help="Target media type for consolidated volume.")
     cons_p.add_argument("--execute", action="store_true", default=False,
-                        help="Stage active packs and deprecate source volumes.")
+                        help="Stage active packs (without deprecating source volumes).")
+    cons_p.add_argument("--deprecate", action="store_true", default=False,
+                        help="Mark source volumes as DEPRECATED (run after --execute succeeds).")
 
     # --- verify ---
     verify_p = subparsers.add_parser("verify", help="Verify a volume's ISO or disc.")
@@ -558,15 +560,18 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
         # Confirmation prompt when using --force
         if args.force:
             all_packs = list_packs(conn, repo_id=repo.repo_id, include_pruned=True)
+            snap_count = conn.execute(
+                "SELECT COUNT(*) FROM snapshots WHERE repo_id = ?",
+                (repo.repo_id,),
+            ).fetchone()[0]
             logger.warning("")
             logger.warning(
                 "This will DELETE from the catalog: %d pack(s) and %d snapshot(s).",
-                len(all_packs), len(list(conn.execute(
-                    "SELECT COUNT(*) as cnt FROM snapshots WHERE repo_id = ?",
-                    (repo.repo_id,)).fetchall())[0])
+                len(all_packs), snap_count,
             )
             try:
-                response = input("Type 'yes' to confirm deletion, or anything else to cancel: ").strip()
+                prompt = "Type 'yes' to confirm deletion, or anything else to cancel: "
+                response = input(prompt).strip()
                 if response.lower() != "yes":
                     logger.info("Removal canceled.")
                     return 0
@@ -682,10 +687,15 @@ def cmd_scan(args: argparse.Namespace) -> int:
         if not getattr(args, "no_snapshots", False):
             from lcsas.db.models import Snapshot
             from lcsas.db.snapshots import bulk_upsert_snapshots
+            from lcsas.exceptions import BinaryError
             from lcsas.rustic.wrapper import SubprocessRusticRunner
             from lcsas.utils.subprocess import check_binary_version
 
-            check_binary_version("rustic", min_version=(0, 9, 0))
+            try:
+                check_binary_version("rustic", min_version=(0, 9, 0))
+            except BinaryError as exc:
+                logger.error("%s", exc)
+                return 1
 
             runner = SubprocessRusticRunner(tmpdir=config.staging_path)
             total_snaps = 0
@@ -1059,7 +1069,7 @@ def cmd_burn_legacy(args: argparse.Namespace) -> int:
             return 0
 
         # Then burn
-        location = args.location or "default"
+        location = args.location or config.default_location
         device = args.device or config.optical_device
         receipts = orch.burn_session(
             session_ref=result.session_id,
@@ -1418,9 +1428,21 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
         logger.info(f"  Target media:  {plan.target_media_type.name}")
         logger.info(f"  Volumes needed: {plan.volumes_needed}")
 
+        # Handle --deprecate flag (separate from --execute)
+        if args.deprecate:
+            if args.execute:
+                logger.error("--deprecate and --execute are mutually exclusive.")
+                return 1
+            # Mark source volumes as DEPRECATED after consolidation succeeds
+            merger.deprecate_sources(args.volume_ids)
+            logger.info("Marked %d source volume(s) as DEPRECATED", len(args.volume_ids))
+            return 0
+
         if not args.execute:
             logger.info("")
-            logger.info("To execute: add --execute to stage, burn, and deprecate.")
+            logger.info("To execute: add --execute to stage and burn.")
+            logger.info("Then verify the new volumes and run: consolidate --deprecate %s",
+                       " ".join(str(v) for v in args.volume_ids))
             return 0
 
         if config is None:
@@ -1458,20 +1480,31 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             SubprocessDVDisasterRunner(tmpdir=config.staging_path),
         )
 
+        # Mark source volumes as CONSOLIDATING before staging (atomic marker)
+        merger.mark_sources_consolidating(args.volume_ids)
+        logger.info("Marked %d source volume(s) as CONSOLIDATING", len(args.volume_ids))
+
         # Stage only the active packs from the consolidation plan
         pack_shas = [p.sha256 for p in plan.active_packs]
-        session = orch.stage(
-            media_type=media_type,
-            pack_sha256s=pack_shas,
-        )
+        try:
+            session = orch.stage(
+                media_type=media_type,
+                pack_sha256s=pack_shas,
+            )
+        except Exception:
+            # If staging fails, abort consolidation to revert source volumes to VERIFIED
+            merger.abort_consolidation(args.volume_ids)
+            logger.error("Staging failed. Reverted source volumes to VERIFIED.", exc_info=True)
+            raise
 
         logger.info(f"Staged {len(session.manifests)} volume(s).")
         logger.info(
             "Consolidation staged.  Next steps:\n"
             "  1. burn session %s\n"
             "  2. verify the new volumes\n"
-            "  3. then deprecate sources with: consolidate --deprecate",
+            "  3. then deprecate sources with: consolidate --deprecate %s",
             session.session_id,
+            " ".join(args.volume_ids),
         )
 
     return 0
@@ -1514,11 +1547,22 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if args.mark_verified:
             if vol.status == "BURNED":
                 update_status(conn, vol.volume_id, "VERIFIED")
+                logger.info(f"Volume {vol.label}: status BURNED → VERIFIED")
+            elif vol.status == "STAGING":
+                update_status(conn, vol.volume_id, "VERIFIED", force=True)
+                logger.info(
+                    f"Volume {vol.label}: status STAGING → VERIFIED (split-machine workflow)"
+                )
+            else:
+                logger.error(
+                    f"Cannot mark volume {vol.label} VERIFIED: status is {vol.status} "
+                    f"(only BURNED or STAGING allowed)"
+                )
+                return 1
             add_event(
                 conn, vol.volume_id, "VERIFY_PASS",
                 detail=args.detail or "Manual verification (remote)",
             )
-            logger.info(f"Volume {vol.label}: marked VERIFIED")
             return 0
 
         if args.mark_failed:
@@ -2098,7 +2142,13 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
     # Use a temp directory for scratch files; keeps any --cache-dir separate.
     tmp_dir_obj = tempfile.TemporaryDirectory(prefix="lcsas-fromdisc-")
     try:
+        from lcsas.utils.shutdown import ShutdownManager
         tmp_dir = Path(tmp_dir_obj.name)
+
+        # Register cleanup on SIGINT/KeyboardInterrupt
+        shutdown = ShutdownManager()
+        shutdown.register(tmp_dir_obj.cleanup)
+        shutdown.install()
 
         # Copy catalog.db to temp to avoid locking a mounted disc/ISO.
         tmp_catalog = tmp_dir / "catalog.db"
@@ -2184,7 +2234,9 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
             disc_data = disc_path / "data"
             # If a stale symlink exists (e.g. resumed on a different system),
             # remove it so we can re-link to the current disc.
-            if data_link.is_symlink() and not data_link.exists():
+            if (data_link.is_symlink() and
+                    (not data_link.exists() or
+                     data_link.resolve() != disc_data.resolve())):
                 logger.warning(
                     "Stale data symlink detected (%s → %s). Re-linking to current disc.",
                     data_link, data_link.resolve(),
@@ -2492,6 +2544,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
         return 0
 
     finally:
+        shutdown.uninstall()
         tmp_dir_obj.cleanup()
 
 
@@ -2535,8 +2588,8 @@ def _retry_from_alternates_batch(
         )
         if result.ingested:
             logger.info(f"  Recovered {result.ingested} packs from {alt_label}")
-        remaining = [sha for sha in remaining if sha in result.failed
-                     or sha not in packs_on_alt]
+        recovered = set(packs_on_alt) - set(result.failed)
+        remaining = [sha for sha in remaining if sha not in recovered]
 
     return remaining
 
@@ -2581,8 +2634,8 @@ def _retry_from_alternates_interactive(
         )
         if result.ingested:
             logger.info(f"  Recovered {result.ingested} packs from {alt_label}")
-        remaining = [sha for sha in remaining if sha in result.failed
-                     or sha not in packs_on_alt]
+        recovered = set(packs_on_alt) - set(result.failed)
+        remaining = [sha for sha in remaining if sha not in recovered]
 
     return remaining
 
@@ -2691,22 +2744,22 @@ def cmd_session_list(args: argparse.Namespace) -> int:
     from lcsas.db.connection import get_connection
     from lcsas.db.sessions import get_session_volumes, list_sessions
 
+    if args.config is None:
+        logger.error("--config is required for session list.")
+        return 1
     config = load_config(args.config)
     conn = get_connection(config.db_path)
     try:
         sessions = list_sessions(conn, status_filter=args.status)
-    finally:
-        conn.close()
 
-    if not sessions:
-        logger.info("No sessions found%s.", f" with status={args.status}" if args.status else "")
-        return 0
+        if not sessions:
+            status_filter = f" with status={args.status}" if args.status else ""
+            logger.info("No sessions found%s.", status_filter)
+            return 0
 
-    logger.info("%-36s  %-10s  %-10s  %s", "SESSION ID", "STATUS", "MEDIA", "CREATED")
-    logger.info("-" * 80)
+        logger.info("%-36s  %-10s  %-10s  %s", "SESSION ID", "STATUS", "MEDIA", "CREATED")
+        logger.info("-" * 80)
 
-    conn = get_connection(config.db_path)
-    try:
         for s in sessions:
             vols = get_session_volumes(conn, s.session_id)
             vol_labels = ", ".join(sv.volume_id and str(sv.volume_id) or "?" for sv in vols)

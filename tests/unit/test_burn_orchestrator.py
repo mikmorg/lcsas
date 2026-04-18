@@ -642,3 +642,71 @@ class TestBurnSession:
         receipts = orch.burn_session(session_ref="latest", skip_burn=True)
         assert isinstance(receipts, list)
 
+    def test_burn_session_reburn_skips_status_transitions(self, orch_env):
+        """Re-burn case: when volume is VERIFIED, skip status→BURNING transition."""
+        from lcsas.db.volumes import update_status
+
+        session_id = self._create_staged_session(orch_env)
+        orch = orch_env["orch"]
+        conn = orch_env["conn"]
+        xorriso = orch_env["xorriso"]
+
+        # Get the volume from the session
+        from lcsas.db.sessions import get_session_volumes
+        vols = get_session_volumes(conn, session_id)
+        volume_id = vols[0].volume_id
+
+        # Mark it as VERIFIED (simulate a prior burn)
+        update_status(conn, volume_id, "VERIFIED", force=True)
+
+        # Mock xorriso methods
+        xorriso.verify_disc.return_value = True
+        xorriso.burn_iso.return_value = None
+
+        # Burn again (re-burn to different location)
+        receipts = orch.burn_session(
+            session_ref=session_id,
+            location="Remote_Archive",
+            skip_burn=False,
+        )
+
+        # Should succeed and still be VERIFIED (not transitioned to BURNING)
+        assert len(receipts) >= 1
+        vol_after = get_volume_by_id(conn, volume_id)
+        assert vol_after.status == "VERIFIED"
+
+    def test_burn_session_verify_fail_on_reburn_records_event(self, orch_env):
+        """Re-burn with verify failure records VERIFY_FAIL_REBURN event."""
+        from lcsas.db.volume_events import get_events_for_volume
+        from lcsas.db.volumes import update_status
+
+        session_id = self._create_staged_session(orch_env)
+        orch = orch_env["orch"]
+        conn = orch_env["conn"]
+        xorriso = orch_env["xorriso"]
+
+        # Get volume and mark as VERIFIED (simulating a prior successful burn)
+        from lcsas.db.sessions import get_session_volumes
+        vols = get_session_volumes(conn, session_id)
+        volume_id = vols[0].volume_id
+        update_status(conn, volume_id, "VERIFIED", force=True)
+
+        # Mock: burn succeeds, but verify fails
+        xorriso.verify_disc.return_value = False
+        xorriso.burn_iso.return_value = None
+
+        # Burn again to a different location (re-burn)
+        receipts = orch.burn_session(
+            session_ref=session_id,
+            location="Remote_Archive",
+            skip_burn=False,
+        )
+
+        # VERIFY_FAIL_REBURN event should be recorded
+        events = get_events_for_volume(conn, volume_id)
+        event_types = {e.event_type for e in events}
+        assert "VERIFY_FAIL_REBURN" in event_types
+
+        # Verify receipt indicates failure
+        assert any(not r.verify_passed for r in receipts)
+

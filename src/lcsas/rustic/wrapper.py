@@ -108,10 +108,14 @@ class SubprocessRusticRunner(SubprocessRunnerBase):
                 mask_password_path(c) if c == str(password_file) else c
                 for c in exc.cmd
             ]
+            masked_stderr = (
+                exc.stderr.replace(str(password_file), "***")
+                if exc.stderr else exc.stderr
+            )
             raise subprocess.CalledProcessError(
                 exc.returncode, masked_cmd,
-                output=exc.output, stderr=exc.stderr,
-            ) from exc
+                output=exc.output, stderr=masked_stderr,
+            ) from None
 
     def init_repo(
         self,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sqlite3
 from datetime import UTC, datetime
@@ -114,14 +115,15 @@ def update_status(
                 f"{current} → {status} (allowed: {sorted(allowed)})"
             )
         # Safety check: refuse DEPRECATED if packs would become unreplicated.
-        # Use an immediate write lock so no other writer can remove a copy
-        # between the safety check and the UPDATE (TOCTOU guard).
+        # Use a savepoint for write-lock protection (nests safely in outer transactions).
         if status == "DEPRECATED":
-            conn.execute("BEGIN IMMEDIATE")
+            # Fetch current status for the audit event before we change it
+            current_status = get_volume_by_id(conn, volume_id).status
+            conn.execute("SAVEPOINT deprecate_check")
             try:
                 at_risk = check_deprecation_safe(conn, volume_id)
                 if at_risk:
-                    conn.rollback()
+                    conn.execute("ROLLBACK TO deprecate_check")
                     raise ValueError(
                         f"Cannot deprecate volume {volume_id}: "
                         f"{len(at_risk)} pack(s) would become unreplicated. "
@@ -131,9 +133,19 @@ def update_status(
                     "UPDATE volumes SET status = ? WHERE volume_id = ?",
                     (status, volume_id),
                 )
-                conn.commit()
+                conn.execute("RELEASE deprecate_check")
+                # Audit trail: record deprecation as a NOTE event
+                from lcsas.db.volume_events import add_event
+                add_event(
+                    conn, volume_id, "NOTE",
+                    detail=f"Status changed: {current_status} → {status}",
+                    commit=False,
+                )
+                if commit:
+                    conn.commit()
             except Exception:
-                conn.rollback()
+                with contextlib.suppress(Exception):
+                    conn.execute("ROLLBACK TO deprecate_check")
                 raise
             return
     elif force:

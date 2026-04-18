@@ -177,8 +177,18 @@ class RestoreExecutor:
                         # Cached file is valid; skip (don't re-ingest)
                         continue
                 else:
-                    # No verification; trust the cached file and skip
-                    continue
+                    # No verification; at least check for zero-byte files
+                    if dst.stat().st_size == 0:
+                        logger.warning(
+                            "Cached pack %s is zero-byte (partial copy). "
+                            "Removing and will re-ingest from volume.",
+                            sha256,
+                        )
+                        dst.unlink(missing_ok=True)
+                        # Fall through to re-copy from source
+                    else:
+                        # File exists and is non-zero; assume valid
+                        continue
 
             # Locate pack on the source volume (flat or two-level)
             src = find_pack_file(data_dir, sha256)
@@ -189,7 +199,7 @@ class RestoreExecutor:
                 if verify:
                     actual = sha256_file(dst)
                     if actual != sha256:
-                        dst.unlink()
+                        dst.unlink(missing_ok=True)
                         if collect_failures:
                             logger.error(
                                 "Pack %s is CORRUPT on this volume "
@@ -208,6 +218,19 @@ class RestoreExecutor:
                     )
 
                 ingested += 1
+            else:
+                # Pack not found on this volume — record failure for retry
+                if collect_failures:
+                    logger.warning(
+                        "Pack %s not found on this volume (%s). "
+                        "Will try alternate volumes if available.",
+                        sha256, data_dir,
+                    )
+                    failed.append(sha256)
+                else:
+                    raise PackCorruptionError(
+                        f"Pack {sha256} not found on volume {data_dir}"
+                    )
 
         return IngestionResult(ingested=ingested, failed=failed)
 

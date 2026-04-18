@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 
 from lcsas.db.models import Pack
+
+_logger = logging.getLogger(__name__)
 
 # Conservative batch size to stay well below SQLite's SQLITE_MAX_VARIABLE_NUMBER
 # (999 on old builds, 32 766 on newer). Using 900 gives headroom for extra params.
@@ -111,6 +114,10 @@ def bulk_register(
     """
     if not packs:
         return []
+
+    # Build a map of sha256 -> expected size for mismatch detection
+    expected_sizes = {p[0]: p[1] for p in packs}
+
     conn.executemany(
         "INSERT OR IGNORE INTO packs (sha256, size_bytes, repo_id) VALUES (?, ?, ?)",
         packs,
@@ -128,6 +135,14 @@ def bulk_register(
         ).fetchall()
         for r in rows:
             pack_map[r["sha256"]] = _row_to_pack(r)
+            # Detect size mismatch (INSERT OR IGNORE skipped this pack)
+            if (r["sha256"] in expected_sizes and
+                    r["size_bytes"] != expected_sizes[r["sha256"]]):
+                _logger.warning(
+                    "Pack %s has size mismatch (DB has %d bytes, found %d bytes). "
+                    "Catalog will use existing size.",
+                    r["sha256"][:16], r["size_bytes"], expected_sizes[r["sha256"]],
+                )
     return [pack_map[sha] for sha in sha_list]
 
 

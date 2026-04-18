@@ -146,7 +146,10 @@ class TestStagingBuilderFilesystemFailures:
 
     def test_already_staged_pack_skipped(self, tmp_path):
         """Packs already present in staging are counted as staged (resume support)."""
-        sha = "e" * 64
+        from lcsas.utils.hashing import sha256_bytes
+        # Use actual SHA-256 of 1024 zero bytes
+        content = b"\x00" * 1024
+        sha = sha256_bytes(content)
         data_dir = self._make_pack(tmp_path, sha)
         pack = self._make_db_pack(sha)
 
@@ -157,7 +160,7 @@ class TestStagingBuilderFilesystemFailures:
         # Pre-stage the pack
         dst = staging_root / "data" / sha[:2] / sha
         dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_bytes(b"\x00" * 1024)
+        dst.write_bytes(content)
 
         # Should succeed without calling os.link at all
         with patch("lcsas.utils.fs.os.link") as mock_link:

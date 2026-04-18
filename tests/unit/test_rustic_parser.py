@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from lcsas.rustic.parser import (
     parse_backup_output,
     parse_prune_output,
@@ -38,12 +40,14 @@ class TestParseBackup:
         assert result.snapshot_id == "final_snap"
 
     def test_parse_unparseable(self):
-        result = parse_backup_output("not json at all")
-        assert result.snapshot_id == "unknown"
+        import pytest
+        with pytest.raises(ValueError, match="Could not extract snapshot_id"):
+            parse_backup_output("not json at all")
 
     def test_parse_empty(self):
-        result = parse_backup_output("")
-        assert result.snapshot_id == "unknown"
+        import pytest
+        with pytest.raises(ValueError, match="Could not extract snapshot_id"):
+            parse_backup_output("")
 
 
 class TestParseSnapshots:
@@ -84,8 +88,8 @@ class TestParseRestorePlan:
         assert result.required_pack_hashes == []
 
     def test_parse_invalid(self):
-        result = parse_restore_plan_output("snap_z", "nope")
-        assert result.required_pack_hashes == []
+        with pytest.raises(ValueError, match="failed to parse JSON"):
+            parse_restore_plan_output("snap_z", "nope")
 
 
 class TestParsePrune:

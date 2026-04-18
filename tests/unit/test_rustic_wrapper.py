@@ -180,3 +180,25 @@ class TestPruneDryRun:
         assert "--json" in cmd
         assert result.packs_to_delete == ["p1"]
         assert result.space_freed_bytes == 65536
+
+
+class TestPasswordPathMasking:
+    """Tests for password-path masking in exceptions (R3-H6)."""
+
+    @patch("lcsas.rustic.wrapper.subprocess.run")
+    def test_exception_masks_password_path_in_stderr(self, mock_run, runner):
+        """Password path should be masked in stderr of the raised exception."""
+        pw_file = Path("/very/secret/password/file.txt")
+        exc = subprocess.CalledProcessError(
+            1, ["rustic", "-r", str(REPO), "--password-file", str(pw_file), "init"],
+            stderr=f"fatal error with password file {pw_file}",
+        )
+        mock_run.side_effect = exc
+
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            runner._run(["init"], REPO, pw_file, check=True)
+
+        # The password path should be masked in stderr
+        if exc_info.value.stderr:
+            assert str(pw_file) not in exc_info.value.stderr
+            assert "***" in exc_info.value.stderr

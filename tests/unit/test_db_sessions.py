@@ -49,6 +49,16 @@ class TestSessionCRUD:
     def test_get_latest(self, conn):
         create_session(conn, "TEST_TINY", "/tmp/s1", session_id="2026-01-01T00:00:00")
         create_session(conn, "TEST_TINY", "/tmp/s2", session_id="2026-02-01T00:00:00")
+        # Manually set different created_at timestamps to ensure deterministic order
+        conn.execute(
+            "UPDATE burn_sessions SET created_at = ? WHERE session_id = ?",
+            ("2026-01-01T00:00:00", "2026-01-01T00:00:00"),
+        )
+        conn.execute(
+            "UPDATE burn_sessions SET created_at = ? WHERE session_id = ?",
+            ("2026-02-01T00:00:00", "2026-02-01T00:00:00"),
+        )
+        conn.commit()
 
         latest = get_latest_session(conn)
         assert latest.session_id == "2026-02-01T00:00:00"

@@ -151,13 +151,17 @@ class TestIngestVolume:
         assert result.ingested == 2
 
     def test_missing_pack_not_counted(self, executor, tmp_path):
-        """Pack not on volume is not counted."""
+        """Pack not on volume is reported as failed (not counted as ingested)."""
         mount, shas = self._setup_volume(tmp_path, layout="flat")
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        result = executor.ingest_volume(cache, mount, [shas[2]], verify=False)  # sha3 doesn't exist
+        # Pass collect_failures=True so missing pack is added to failed list
+        result = executor.ingest_volume(
+            cache, mount, [shas[2]], verify=False, collect_failures=True
+        )  # sha3 doesn't exist
         assert result.ingested == 0
+        assert shas[2] in result.failed
 
     def test_already_cached_skipped(self, executor, tmp_path):
         """Pack already in cache is skipped (not re-copied)."""
@@ -180,7 +184,9 @@ class TestIngestVolume:
         cache = tmp_path / "cache"
         cache.mkdir()
 
-        result = executor.ingest_volume(cache, mount, [shas[0], shas[2]], verify=False)
+        result = executor.ingest_volume(
+            cache, mount, [shas[0], shas[2]], verify=False, collect_failures=True
+        )
         assert result.ingested == 1  # sha1 found, sha3 missing
 
     def test_duplicate_required_packs(self, executor, tmp_path):

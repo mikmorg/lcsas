@@ -1233,3 +1233,4 @@ class TestResolveRepoNamesToIds:
         ids = _resolve_repo_names_to_ids(conn, ["Family", "nonexistent"])
         assert ids is not None
         assert len(ids) == 1
+

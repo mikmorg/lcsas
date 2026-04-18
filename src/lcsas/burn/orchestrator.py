@@ -22,6 +22,7 @@ from lcsas.config.settings import LCSASConfig
 from lcsas.db.locations import ensure_location
 from lcsas.db.models import Pack, Volume
 from lcsas.db.queries import get_unarchived_or_missing_at_location, get_unarchived_packs
+from lcsas.db.repos import list_repos
 from lcsas.db.sessions import (
     add_session_volume,
     create_session,
@@ -34,6 +35,7 @@ from lcsas.db.volume_events import add_event
 from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import (
     create_volume,
+    delete_volume,
     get_volume_by_id,
     list_volumes,
     mark_closed,
@@ -289,16 +291,27 @@ class BurnOrchestrator:
             # Burn to disc
             if not skip_burn:
                 self._xorriso.burn_iso(iso_path, self._config.optical_device)
+                # Verify disc before marking VERIFIED
+                verify_ok = self._xorriso.verify_disc(self._config.optical_device)
+                if not verify_ok:
+                    raise ValueError("Post-burn verification failed")
 
             # Finalize (atomic: status + close)
             update_status(self._conn, manifest.volume_id, "VERIFIED", commit=False)
             mark_closed(self._conn, manifest.volume_id, commit=False)
             self._conn.commit()
 
-        except Exception:
-            self._conn.rollback()
-            update_status(self._conn, manifest.volume_id, "STAGING")
-            raise
+        except Exception as original_exc:
+            try:
+                self._conn.rollback()
+                update_status(self._conn, manifest.volume_id, "STAGING")
+            except Exception as cleanup_exc:
+                _logger.error(
+                    "Error during exception cleanup: %s",
+                    cleanup_exc,
+                    exc_info=True,
+                )
+            raise original_exc
 
         return get_volume_by_id(self._conn, manifest.volume_id)
 
@@ -400,10 +413,7 @@ class BurnOrchestrator:
                 "registration for %s: %s",
                 vol_label, exc,
             )
-            self._conn.execute(
-                "DELETE FROM volumes WHERE volume_id = ?", (volume.volume_id,)
-            )
-            self._conn.commit()
+            delete_volume(self._conn, volume.volume_id)
             raise RuntimeError(
                 f"Failed to inject catalog into staging for volume {vol_label}. "
                 f"Volume registration has been rolled back."
@@ -475,12 +485,12 @@ class BurnOrchestrator:
         )
 
     def _get_mirror_paths(self) -> dict[str, Path]:
-        """Build a dict of {repo_id: mirror_path} from config."""
+        """Build a dict of {repo_id: mirror_path} from database repositories."""
         paths: dict[str, Path] = {}
-        for repo_name, repo_cfg in self._config.repositories.items():
-            paths[repo_name] = repo_cfg.mirror_path
+        for repo in list_repos(self._conn):
+            paths[repo.repo_id] = Path(repo.mirror_path)
 
-        # If no repos configured, use mirror_base_path as a single repo
+        # Fallback: if no repos in DB, use mirror_base_path as "default"
         if not paths:
             paths["default"] = self._config.mirror_base_path
 
@@ -721,10 +731,9 @@ class BurnOrchestrator:
                         # Stay at BURNED — user must investigate / re-burn
                         update_status(self._conn, sv.volume_id, "BURNED", commit=False)
                 else:
-                    # Re-burn case: update status based on verify result
+                    # Re-burn case: volume stays VERIFIED (it passed before)
+                    # Record the verify failure for this location's copy
                     if not verify_passed:
-                        # Verify failed on re-burn; revert VERIFIED→BURNED
-                        update_status(self._conn, sv.volume_id, "BURNED", commit=False)
                         add_event(
                             self._conn, sv.volume_id, "VERIFY_FAIL_REBURN",
                             location=location,
@@ -762,14 +771,22 @@ class BurnOrchestrator:
                 # ISO cleanup moved outside main try block (see below)
                 # to prevent unlink failures from rolling back the burn.
 
-            except Exception:
-                self._conn.rollback()
-                if not is_reburn:
-                    update_status(self._conn, sv.volume_id, "STAGING")
+            except Exception as original_exc:
+                try:
+                    self._conn.rollback()
+                    if not is_reburn:
+                        update_status(self._conn, sv.volume_id, "STAGING")
+                except Exception as cleanup_exc:
+                    _logger.error(
+                        "Error during exception cleanup: %s",
+                        cleanup_exc,
+                        exc_info=True,
+                    )
+                    raise original_exc from cleanup_exc
                 # If at least one volume was burned, mark session PARTIAL
                 if receipts:
                     update_session_status(self._conn, session_id, "PARTIAL")
-                raise
+                raise original_exc
 
             # Remove ISO after successful verified burn to free staging space.
             # This is outside the main try/except to avoid rolling back verified burns

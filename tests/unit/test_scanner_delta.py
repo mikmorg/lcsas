@@ -51,7 +51,7 @@ class TestScanner:
 
     def test_scan_permission_denied_on_subdir(self, tmp_path):
         """Scan logs warning and skips inaccessible subdirectory in two-level layout."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         subdir = data_dir / "ab"
@@ -78,7 +78,7 @@ class TestScanner:
 
     def test_scan_oserror_on_pack_stat(self, tmp_path):
         """Scan logs warning and skips pack files that can't be stat'd."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         subdir = data_dir / "ab"

@@ -23,6 +23,7 @@ def _row_to_event(row: sqlite3.Row) -> VolumeEvent:
 VALID_EVENT_TYPES = frozenset({
     "VERIFY_PASS",
     "VERIFY_FAIL",
+    "VERIFY_FAIL_REBURN",
     "ECC_REPAIR",
     "LOCATION_MOVE",
     "CONDITION_CHECK",
@@ -47,8 +48,8 @@ def add_event(
     volume_id:
         The volume this event pertains to.
     event_type:
-        One of VERIFY_PASS, VERIFY_FAIL, ECC_REPAIR, LOCATION_MOVE,
-        CONDITION_CHECK, NOTE.
+        One of VERIFY_PASS, VERIFY_FAIL, VERIFY_FAIL_REBURN, ECC_REPAIR,
+        LOCATION_MOVE, CONDITION_CHECK, NOTE.
     location:
         Optional storage location associated with this event.
     detail:

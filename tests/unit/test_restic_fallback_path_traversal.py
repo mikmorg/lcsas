@@ -3,8 +3,6 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 class TestPathTraversalProtection:
     """Test that _restore_tree sanitizes node names and symlink targets."""
@@ -15,11 +13,10 @@ class TestPathTraversalProtection:
         from lcsas.restore.restic_fallback import PurePythonRestorer
 
         restorer = MagicMock(spec=PurePythonRestorer)
-        restorer._read_blob = MagicMock(return_value=b'{"nodes":[{"name":"../../../etc/passwd","type":"file"}]}')
+        blob_data = b'{"nodes":[{"name":"../../../etc/passwd","type":"file"}]}'
+        restorer._read_blob = MagicMock(return_value=blob_data)
 
-        target_dir = Path("/restore/target")
-
-        # Patch _restore_tree method to test the sanitization logic
+        # Test the sanitization logic
         import json
 
         tree_data = restorer._read_blob("tree-id")
@@ -34,12 +31,8 @@ class TestPathTraversalProtection:
 
     def test_reject_absolute_symlink_target(self, tmp_path):
         """Symlink targets that are absolute should be rejected."""
-        from lcsas.restore.restic_fallback import PurePythonRestorer
-
         target_dir = tmp_path / "target"
         target_dir.mkdir()
-
-        restorer = MagicMock(spec=PurePythonRestorer)
 
         # Simulate absolute symlink target
         link_target = "/etc/passwd"

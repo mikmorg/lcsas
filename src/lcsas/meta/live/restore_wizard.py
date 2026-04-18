@@ -286,10 +286,6 @@ def rip_disc_to_iso(device: str, output_path: str) -> bool:
         )
         return result.returncode == 0
     except subprocess.TimeoutExpired:
-        _logger.error(
-            "dd operation timed out after 3600 seconds on device %s. "
-            "The device may be defective or unresponsive.", device
-        )
         return False
 
 

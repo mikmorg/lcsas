@@ -56,8 +56,8 @@ class TestVolumeCopyCRUD:
 
     def test_duplicate_location_upserts(self, conn, volume):
         """Re-burning at the same location updates instead of raising."""
-        copy1 = add_volume_copy(conn, volume.volume_id, "Home_Shelf",
-                                notes="first burn")
+        add_volume_copy(conn, volume.volume_id, "Home_Shelf",
+                        notes="first burn")
         copy2 = add_volume_copy(conn, volume.volume_id, "Home_Shelf",
                                 notes="re-burn")
         # Should be UPSERT (same row), not a new row

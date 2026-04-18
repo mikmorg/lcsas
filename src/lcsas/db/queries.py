@@ -529,7 +529,8 @@ def get_location_summary(
                COUNT(DISTINCT vp.pack_id) AS pack_count
            FROM volume_copies vc
            JOIN volume_packs vp ON vp.volume_id = vc.volume_id
-           WHERE vc.status = 'ACTIVE'
+           JOIN volumes v ON v.volume_id = vc.volume_id
+           WHERE vc.status = 'ACTIVE' AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
            GROUP BY vc.location
            ORDER BY vc.location"""
     ).fetchall()

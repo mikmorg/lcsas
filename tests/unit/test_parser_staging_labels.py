@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from lcsas.db.models import Pack
 from lcsas.rustic.parser import (
     parse_backup_output,
@@ -19,13 +21,13 @@ from lcsas.utils.labels import generate_volume_label, next_seq_num
 
 class TestParserEdgeCases:
     def test_backup_no_snapshot_id_field(self):
-        """Dict without any snapshot ID field returns 'unknown'."""
-        result = parse_backup_output('{"status": "ok"}')
-        assert result.snapshot_id == "unknown"
+        """Dict without any snapshot ID field raises ValueError."""
+        with pytest.raises(ValueError, match="Could not extract snapshot_id"):
+            parse_backup_output('{"status": "ok"}')
 
     def test_backup_empty_output(self):
-        result = parse_backup_output("")
-        assert result.snapshot_id == "unknown"
+        with pytest.raises(ValueError, match="Could not extract snapshot_id"):
+            parse_backup_output("")
 
     def test_backup_multiline_with_summary_last(self):
         """Parser searches lines in reverse to find the summary."""
@@ -65,9 +67,8 @@ class TestParserEdgeCases:
         assert result.required_pack_hashes == []
 
     def test_restore_plan_invalid_json(self):
-        result = parse_restore_plan_output("snap1", "bad json")
-        assert result.snapshot_id == "snap1"
-        assert result.required_pack_hashes == []
+        with pytest.raises(ValueError, match="failed to parse JSON"):
+            parse_restore_plan_output("snap1", "bad json")
 
     def test_restore_plan_packs_not_list(self):
         """When packs value is not a list, falls back to empty list."""

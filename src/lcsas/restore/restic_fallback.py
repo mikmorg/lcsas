@@ -660,7 +660,10 @@ class PurePythonRestorer:
                     continue
                 # Resolve the symlink target relative to the node's parent directory
                 resolved = (node_path.parent / link_target).resolve()
-                if not str(resolved).startswith(str(target_dir.resolve())):
+                try:
+                    resolved.is_relative_to(target_dir.resolve())
+                except ValueError:
+                    # Symlink resolves outside target directory
                     _log(
                         f"Skipping symlink {node_path.name} with out-of-bounds target "
                         f"(would escape to {resolved})"

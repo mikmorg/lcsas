@@ -329,8 +329,8 @@ def validate_config(config: LCSASConfig) -> list[str]:
         )
     else:
         # Pre-validate that the prefix won't produce labels exceeding 32 chars.
-        # Format: PREFIX_MEDIA_YYYY_NNNN — minimum overhead is _XX_2026_0001 = 13
-        _min_overhead = len("_XX_2026_0001")
+        # Format: PREFIX_MEDIA_YYYY_NNNN — overhead is _BD25_2026_0001 = 15 (BD25 is most common)
+        _min_overhead = len("_BD25_2026_0001")
         if len(config.label_prefix) + _min_overhead > 32:
             errors.append(
                 f"label_prefix '{config.label_prefix}' is too long "

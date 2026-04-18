@@ -48,12 +48,10 @@ def parse_backup_output(output: str) -> BackupResult:
                 )
 
     # Fallback: couldn't parse structured output
-    _logger.warning(
-        "parse_backup_output: could not extract snapshot_id from %d line(s) "
-        "of output — rustic output format may have changed",
-        len(output.strip().splitlines()),
+    raise ValueError(
+        f"Could not extract snapshot_id from {len(output.strip().splitlines())} "
+        "line(s) of rustic output — output format may have changed or rustic failed"
     )
-    return BackupResult(snapshot_id="unknown")
 
 
 def parse_snapshots_output(output: str) -> list[SnapshotInfo]:
@@ -95,13 +93,11 @@ def parse_restore_plan_output(
     """
     try:
         data = json.loads(output)
-    except json.JSONDecodeError:
-        _logger.warning(
-            "parse_restore_plan_output: failed to parse JSON for snapshot %s — "
-            "rustic output format may have changed",
-            snapshot_id,
-        )
-        return RestorePlan(snapshot_id=snapshot_id)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"parse_restore_plan_output: failed to parse JSON for snapshot {snapshot_id} — "
+            f"rustic output format may have changed: {exc}"
+        ) from exc
 
     if isinstance(data, dict):
         packs = data.get("packs", data.get("pack_ids", []))

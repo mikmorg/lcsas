@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
 
 from lcsas.db.models import BurnSession, SessionVolume
 from lcsas.utils.labels import generate_session_id
@@ -63,7 +62,7 @@ def get_session(conn: sqlite3.Connection, session_id: str) -> BurnSession:
 def get_latest_session(conn: sqlite3.Connection) -> BurnSession:
     """Get the most recently created session."""
     row = conn.execute(
-        "SELECT * FROM burn_sessions ORDER BY session_id DESC LIMIT 1"
+        "SELECT * FROM burn_sessions ORDER BY created_at DESC LIMIT 1"
     ).fetchone()
     if row is None:
         raise ValueError("No sessions exist")
@@ -163,8 +162,7 @@ def update_iso_sha256(
 
 def delete_session(conn: sqlite3.Connection, session_id: str) -> None:
     """Delete a session and its session_volumes entries (atomic)."""
-    conn.execute("BEGIN")
-    try:
+    with conn:
         conn.execute(
             "DELETE FROM session_volumes WHERE session_id = ?",
             (session_id,),
@@ -173,7 +171,3 @@ def delete_session(conn: sqlite3.Connection, session_id: str) -> None:
             "DELETE FROM burn_sessions WHERE session_id = ?",
             (session_id,),
         )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise

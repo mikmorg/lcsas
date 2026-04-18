@@ -232,3 +232,29 @@ class TestDeprecationSafety:
         update_status(memory_db, v1.volume_id, "DEPRECATED", force=True)
         vol = get_volume_by_label(memory_db, "FORCE_D")
         assert vol.status == "DEPRECATED"
+
+
+    def test_deprecate_inside_outer_transaction(self, memory_db):
+        """update_status(DEPRECATED) works inside outer transaction (T20/R3-H2)."""
+        from lcsas.db.packs import register_pack
+        from lcsas.db.volume_packs import bulk_link_packs
+
+        v1 = create_volume(memory_db, label="TXN_TEST", uuid=generate_uuid(),
+                           media_type="BD25", capacity_bytes=25_000_000_000)
+        update_status(memory_db, v1.volume_id, "BURNING")
+        update_status(memory_db, v1.volume_id, "BURNED")
+        update_status(memory_db, v1.volume_id, "VERIFIED")
+
+        p = register_pack(memory_db, sha256="dead0000" * 8, size_bytes=300,
+                          repo_id="_test")
+        bulk_link_packs(memory_db, v1.volume_id, [p.pack_id])
+
+        # Start an outer transaction
+        with memory_db:
+            # Call deprecate inside the transaction - should not raise
+            # "cannot start a transaction within a transaction"
+            update_status(memory_db, v1.volume_id, "DEPRECATED", force=True)
+            vol = get_volume_by_id(memory_db, v1.volume_id)
+            assert vol.status == "DEPRECATED"
+        # Transaction committed successfully
+

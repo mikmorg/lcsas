@@ -89,16 +89,19 @@ class DeltaAnalyzer:
         the scanner_result.  These are packs that rustic has pruned from
         the local mirror but are still tracked as active in the catalog.
         """
-        if not self._scanner_result:
-            # No scanner data — cannot detect pruned packs
-            _logger.warning(
-                "Mirror scan returned no packs — skipping prune detection "
-                "(is the mirror path correct?)"
-            )
-            return []
-
         from lcsas.db.packs import list_packs
 
         all_active = list_packs(self._conn, repo_id=self._repo_id, include_pruned=False)
+
+        if not self._scanner_result:
+            # No scanner data — cannot detect pruned packs
+            if all_active:
+                _logger.warning(
+                    "Mirror scan returned no packs but DB has %d active pack(s) for this repo — "
+                    "skipping prune detection (is the mirror path correct? permission error?)",
+                    len(all_active),
+                )
+            return []
+
         mirror_hashes = set(self._scanner_result.keys())
         return [p for p in all_active if p.sha256 not in mirror_hashes]

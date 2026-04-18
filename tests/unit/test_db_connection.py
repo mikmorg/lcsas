@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import threading
 
@@ -165,11 +166,8 @@ class TestLockedConnection:
         # Create a file that causes an error during PRAGMA/quick_check
         db.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
 
-        try:
+        with contextlib.suppress(sqlite3.DatabaseError, RuntimeError):
             get_connection(db)
-        except (sqlite3.DatabaseError, RuntimeError):
-            # Error is expected; connection should be closed
-            pass
 
         # If connection wasn't closed, a subsequent attempt would fail to open
         # This test primarily validates the error handling code path works
