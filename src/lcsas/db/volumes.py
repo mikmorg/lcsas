@@ -8,8 +8,8 @@ import sqlite3
 from datetime import UTC, datetime
 
 from lcsas.constants import (
-    STATUS_BURNING,
     STATUS_BURNED,
+    STATUS_BURNING,
     STATUS_CONSOLIDATING,
     STATUS_DEPRECATED,
     STATUS_DESTROYED,
