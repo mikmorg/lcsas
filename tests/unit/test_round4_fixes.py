@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -14,16 +14,14 @@ from lcsas.db.connection import get_memory_connection
 from lcsas.db.packs import register_pack
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
-from lcsas.db.sessions import create_session, get_session_volumes
+from lcsas.db.sessions import create_session
 from lcsas.db.volume_packs import get_pack_ids_for_volume
 from lcsas.db.volumes import (
     create_volume,
     delete_volume,
     get_volume_by_id,
-    list_volumes,
     update_status,
 )
-from lcsas.db.volume_events import get_events_for_volume
 from lcsas.utils.labels import generate_uuid
 
 
@@ -116,7 +114,8 @@ class TestRound4Fixes:
         xorriso_mock.verify_disc.return_value = True
 
         config = _make_config_with_volumes(conn)
-        orch = BurnOrchestrator(conn, config, xorriso_mock, dvdisaster_mock)
+        # Create orchestrator (used to ensure infrastructure exists)
+        BurnOrchestrator(conn, config, xorriso_mock, dvdisaster_mock)
 
         # Simulate burn_session with failure on second volume
         # (This is a simplified test since full orchestration is complex)
@@ -124,7 +123,7 @@ class TestRound4Fixes:
         # PARTIAL status should be set before the exception is raised.
 
         # For now, verify the infrastructure exists to mark PARTIAL
-        from lcsas.db.sessions import update_session_status, get_session
+        from lcsas.db.sessions import get_session, update_session_status
         update_session_status(conn, session_id, "PARTIAL")
         session = get_session(conn, session_id)
         assert session.status == "PARTIAL"
@@ -135,7 +134,6 @@ class TestRound4Fixes:
         Symlinks that resolve outside the restore target directory should be rejected.
         This tests the is_relative_to() fix in restic_fallback.py.
         """
-        from pathlib import Path
 
         # Create temporary directories for testing
         target_dir = tmp_path / "restore"
@@ -185,8 +183,8 @@ class TestRound4Fixes:
         assert "family" in repo_names
         assert "work" in repo_names
         # Names and IDs should be different
-        assert "family" != repo1_id
-        assert "work" != repo2_id
+        assert repo1_id != "family"
+        assert repo2_id != "work"
 
     # T21: consolidate --deprecate end-to-end (R4-C1)
     def test_consolidate_deprecate_flag_available(self):
@@ -197,6 +195,7 @@ class TestRound4Fixes:
         # The --deprecate flag should be defined in cmd_consolidate
         # We can verify this by checking the source code has it
         import inspect
+
         from lcsas.cli.main import build_parser
 
         # Get the source code of build_parser to verify --deprecate is configured
@@ -256,7 +255,15 @@ def _make_config_with_volumes(conn, tmp_path=None):
     tmp_path.mkdir(parents=True, exist_ok=True)
 
     repos = list_repos(conn)
-    repo_dict = {r.name: RepositoryConfig(name=r.name, mirror_path=str(tmp_path / r.name)) for r in repos}
+    repo_dict = {
+        r.name: RepositoryConfig(name=r.name, mirror_path=str(tmp_path / r.name))
+        for r in repos
+    }
+
+    test_repo = RepositoryConfig(
+        name="test",
+        mirror_path=str(tmp_path / "test"),
+    )
 
     return LCSASConfig(
         mirror_base_path=str(tmp_path),
@@ -266,7 +273,7 @@ def _make_config_with_volumes(conn, tmp_path=None):
         default_ecc_redundancy_pct=0,
         metadata_reserve_bytes=1000,
         label_prefix="TEST",
-        repositories=repo_dict or {"test": RepositoryConfig(name="test", mirror_path=str(tmp_path / "test"))},
+        repositories=repo_dict or {"test": test_repo},
     )
 
 
@@ -279,7 +286,10 @@ def _make_config_with_multi_repos(conn, tmp_path=None):
     tmp_path.mkdir(parents=True, exist_ok=True)
 
     repos = list_repos(conn)
-    repo_dict = {r.name: RepositoryConfig(name=r.name, mirror_path=str(tmp_path / r.name)) for r in repos}
+    repo_dict = {
+        r.name: RepositoryConfig(name=r.name, mirror_path=str(tmp_path / r.name))
+        for r in repos
+    }
 
     return LCSASConfig(
         mirror_base_path=str(tmp_path),
