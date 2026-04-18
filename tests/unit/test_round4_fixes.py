@@ -10,6 +10,7 @@ import pytest
 from lcsas.burn.orchestrator import BurnOrchestrator
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
+from lcsas.constants import STATUS_CONSOLIDATING, STATUS_VERIFIED
 from lcsas.db.connection import get_memory_connection
 from lcsas.db.packs import register_pack
 from lcsas.db.repos import register_repo
@@ -113,8 +114,7 @@ class TestRound4Fixes:
         xorriso_mock.burn_iso.side_effect = [None, RuntimeError("Burn failed")]
         xorriso_mock.verify_disc.return_value = True
 
-        config = _make_config_with_volumes(conn)
-        # Create orchestrator (used to ensure infrastructure exists)
+        config = _make_config_with_repos(conn)
         BurnOrchestrator(conn, config, xorriso_mock, dvdisaster_mock)
 
         # Simulate burn_session with failure on second volume
@@ -218,8 +218,8 @@ class TestRound4Fixes:
             conn, "VOL_MERGE_2", generate_uuid(), "TEST_TINY", 100000
         ).volume_id
 
-        update_status(conn, vol1_id, "VERIFIED", force=True)
-        update_status(conn, vol2_id, "VERIFIED", force=True)
+        update_status(conn, vol1_id, STATUS_VERIFIED, force=True)
+        update_status(conn, vol2_id, STATUS_VERIFIED, force=True)
 
         # Create merger
         merger = VolumeMerger(conn)
@@ -230,8 +230,8 @@ class TestRound4Fixes:
         # Verify they're in CONSOLIDATING state
         vol1_check = get_volume_by_id(conn, vol1_id)
         vol2_check = get_volume_by_id(conn, vol2_id)
-        assert vol1_check.status == "CONSOLIDATING"
-        assert vol2_check.status == "CONSOLIDATING"
+        assert vol1_check.status == STATUS_CONSOLIDATING
+        assert vol2_check.status == STATUS_CONSOLIDATING
 
         # Abort consolidation
         merger.abort_consolidation([vol1_id, vol2_id])
@@ -239,19 +239,23 @@ class TestRound4Fixes:
         # Verify they're back in VERIFIED state
         vol1_final = get_volume_by_id(conn, vol1_id)
         vol2_final = get_volume_by_id(conn, vol2_id)
-        assert vol1_final.status == "VERIFIED"
-        assert vol2_final.status == "VERIFIED"
+        assert vol1_final.status == STATUS_VERIFIED
+        assert vol2_final.status == STATUS_VERIFIED
 
 
 # ─── Helper Functions ──────────────────────────────────────────────────
 
 
-def _make_config_with_volumes(conn, tmp_path=None):
-    """Create a minimal config with volumes in the database."""
+def _make_config_with_repos(conn, tmp_path=None, add_fallback_repo=True):
+    """Create config with repos registered in the database.
+
+    If add_fallback_repo=True, adds a 'test' repo if none are registered.
+    Otherwise uses exactly the repos found in the database.
+    """
     from lcsas.db.repos import list_repos
 
     if tmp_path is None:
-        tmp_path = Path("/tmp/test_burn")
+        tmp_path = Path("/tmp/test_lcsas")
     tmp_path.mkdir(parents=True, exist_ok=True)
 
     repos = list_repos(conn)
@@ -260,36 +264,11 @@ def _make_config_with_volumes(conn, tmp_path=None):
         for r in repos
     }
 
-    test_repo = RepositoryConfig(
-        name="test",
-        mirror_path=str(tmp_path / "test"),
-    )
-
-    return LCSASConfig(
-        mirror_base_path=str(tmp_path),
-        staging_path=str(tmp_path / "staging"),
-        db_path=str(tmp_path / "archive.db"),
-        default_media_type=MediaType.TEST_TINY,
-        default_ecc_redundancy_pct=0,
-        metadata_reserve_bytes=1000,
-        label_prefix="TEST",
-        repositories=repo_dict or {"test": test_repo},
-    )
-
-
-def _make_config_with_multi_repos(conn, tmp_path=None):
-    """Create a config with multiple repos already registered."""
-    from lcsas.db.repos import list_repos
-
-    if tmp_path is None:
-        tmp_path = Path("/tmp/test_multi_repo")
-    tmp_path.mkdir(parents=True, exist_ok=True)
-
-    repos = list_repos(conn)
-    repo_dict = {
-        r.name: RepositoryConfig(name=r.name, mirror_path=str(tmp_path / r.name))
-        for r in repos
-    }
+    if add_fallback_repo:
+        repo_dict.setdefault("test", RepositoryConfig(
+            name="test",
+            mirror_path=str(tmp_path / "test"),
+        ))
 
     return LCSASConfig(
         mirror_base_path=str(tmp_path),

@@ -363,7 +363,7 @@ def phase_ingest(args: argparse.Namespace) -> int:
     for sha in corrupt:
         corrupt_map[sha] = disc_label
 
-    # Count total packs in cache.
+    # Count cumulative packs in cache (needed for progress tracking across multiple discs).
     data_dst = cache / "data"
     cached_count = sum(1 for d in data_dst.iterdir() if d.is_dir()
                        for _ in d.iterdir()) if data_dst.is_dir() else 0

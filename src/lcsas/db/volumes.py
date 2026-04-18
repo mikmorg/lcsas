@@ -115,8 +115,10 @@ def update_status(
     Enforces valid state transitions unless *force* is ``True``.
     Automatically sets ``verified_at`` when status transitions to VERIFIED.
     """
+    volume = get_volume_by_id(conn, volume_id)
+    current = volume.status
+
     if not force:
-        current = get_volume_by_id(conn, volume_id).status
         allowed = VALID_TRANSITIONS.get(current, set())
         if status not in allowed:
             raise ValueError(
@@ -126,8 +128,6 @@ def update_status(
         # Safety check: refuse DEPRECATED if packs would become unreplicated.
         # Use a savepoint for write-lock protection (nests safely in outer transactions).
         if status == "DEPRECATED":
-            # Fetch current status for the audit event before we change it
-            current_status = get_volume_by_id(conn, volume_id).status
             conn.execute("SAVEPOINT deprecate_check")
             try:
                 at_risk = check_deprecation_safe(conn, volume_id)
@@ -143,11 +143,10 @@ def update_status(
                     (status, volume_id),
                 )
                 conn.execute("RELEASE deprecate_check")
-                # Audit trail: record deprecation as a NOTE event
                 from lcsas.db.volume_events import add_event
                 add_event(
                     conn, volume_id, "NOTE",
-                    detail=f"Status changed: {current_status} → {status}",
+                    detail=f"Status changed: {current} → {status}",
                     commit=False,
                 )
                 if commit:
@@ -157,14 +156,11 @@ def update_status(
                     conn.execute("ROLLBACK TO deprecate_check")
                 raise
             return
-    elif force:
+    else:
         logger.warning(
             "Forced status change for volume %d → %s (bypassing transition rules)",
             volume_id, status,
         )
-
-    # Fetch current status for the audit event before we change it.
-    current_for_audit = get_volume_by_id(conn, volume_id).status
 
     if status == "VERIFIED":
         now = datetime.now(UTC).isoformat()
@@ -178,11 +174,10 @@ def update_status(
             (status, volume_id),
         )
 
-    # Audit trail: record every status transition as a NOTE event.
     from lcsas.db.volume_events import add_event
     add_event(
         conn, volume_id, "NOTE",
-        detail=f"Status changed: {current_for_audit} → {status}",
+        detail=f"Status changed: {current} → {status}",
         commit=False,
     )
 
