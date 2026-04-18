@@ -7,6 +7,15 @@ import logging
 import sqlite3
 from datetime import UTC, datetime
 
+from lcsas.constants import (
+    STATUS_BURNING,
+    STATUS_BURNED,
+    STATUS_CONSOLIDATING,
+    STATUS_DEPRECATED,
+    STATUS_DESTROYED,
+    STATUS_STAGING,
+    STATUS_VERIFIED,
+)
 from lcsas.db.models import Volume
 
 logger = logging.getLogger(__name__)
@@ -14,13 +23,13 @@ logger = logging.getLogger(__name__)
 # Valid status transitions. Each key maps to the set of statuses
 # that a volume is allowed to transition *to* from that state.
 VALID_TRANSITIONS: dict[str, set[str]] = {
-    "STAGING":         {"BURNING", "DEPRECATED", "DESTROYED"},
-    "BURNING":         {"BURNED", "VERIFIED", "STAGING", "DESTROYED"},  # VERIFIED = fast-path
-    "BURNED":          {"VERIFIED", "STAGING", "DESTROYED"},            # STAGING = re-burn
-    "VERIFIED":        {"DEPRECATED", "DESTROYED", "CONSOLIDATING"},
-    "CONSOLIDATING":   {"DEPRECATED", "VERIFIED"},  # DEPRECATED=success; VERIFIED=abort
-    "DEPRECATED":      {"DESTROYED"},
-    "DESTROYED":       set(),
+    STATUS_STAGING:         {STATUS_BURNING, STATUS_DEPRECATED, STATUS_DESTROYED},
+    STATUS_BURNING:         {STATUS_BURNED, STATUS_VERIFIED, STATUS_STAGING, STATUS_DESTROYED},
+    STATUS_BURNED:          {STATUS_VERIFIED, STATUS_STAGING, STATUS_DESTROYED},
+    STATUS_VERIFIED:        {STATUS_DEPRECATED, STATUS_DESTROYED, STATUS_CONSOLIDATING},
+    STATUS_CONSOLIDATING:   {STATUS_DEPRECATED, STATUS_VERIFIED},
+    STATUS_DEPRECATED:      {STATUS_DESTROYED},
+    STATUS_DESTROYED:       set(),
 }
 
 
