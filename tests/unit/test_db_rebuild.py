@@ -263,3 +263,170 @@ class TestRebuildMerge:
 
         assert result.discs_skipped == 1
         assert len(result.errors) == 1
+
+    def test_merge_snapshots(self, tmp_path):
+        """Test step 5: snapshots are merged correctly."""
+        target_db = tmp_path / "target.db"
+        target_conn = get_connection(target_db)
+        schema.create_all(target_conn)
+
+        source_db = tmp_path / "source.db"
+        source_conn = get_connection(source_db)
+        schema.create_all(source_conn)
+
+        # Create repo first
+        target_conn.execute(
+            "INSERT INTO repositories (repo_id, name, mirror_path) VALUES (?, ?, ?)",
+            ("repo1", "Test", "/mnt/mirror"),
+        )
+        target_conn.commit()
+
+        source_conn.execute(
+            "INSERT INTO repositories (repo_id, name, mirror_path) VALUES (?, ?, ?)",
+            ("repo1", "Test", "/mnt/mirror"),
+        )
+        source_conn.commit()
+
+        # Add snapshots to source
+        source_conn.execute(
+            "INSERT INTO snapshots (snapshot_id, repo_id, hostname, timestamp, paths, tags, description) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("snap-001", "repo1", "myhost", "2026-01-01T00:00:00", '[\"/\"]', "[]", "Snapshot 1"),
+        )
+        source_conn.commit()
+        source_conn.close()
+
+        # Merge
+        result = rebuild._merge_one_disc(target_conn, source_db)
+
+        # Verify snapshot was merged
+        assert result["snapshots"] == 1
+        snap = target_conn.execute(
+            "SELECT snapshot_id, hostname FROM snapshots WHERE snapshot_id = ?",
+            ("snap-001",),
+        ).fetchone()
+        assert snap is not None
+        assert snap[0] == "snap-001"
+        assert snap[1] == "myhost"
+
+        target_conn.close()
+
+    def test_merge_volume_packs_with_id_translation(self, tmp_path):
+        """Test step 6: volume_packs with ID translation across DBs."""
+        target_db = tmp_path / "target.db"
+        target_conn = get_connection(target_db)
+        schema.create_all(target_conn)
+
+        source_db = tmp_path / "source.db"
+        source_conn = get_connection(source_db)
+        schema.create_all(source_conn)
+
+        # Setup repos in both
+        target_conn.execute(
+            "INSERT INTO repositories (repo_id, name, mirror_path) VALUES (?, ?, ?)",
+            ("repo1", "Test", "/mnt/mirror"),
+        )
+        target_conn.commit()
+
+        source_conn.execute(
+            "INSERT INTO repositories (repo_id, name, mirror_path) VALUES (?, ?, ?)",
+            ("repo1", "Test", "/mnt/mirror"),
+        )
+        source_conn.commit()
+
+        # Add volume with pack in source
+        source_conn.execute(
+            "INSERT INTO volumes (label, uuid, media_type, capacity_bytes, status) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("VOL001", "uuid-001", "BD25", 25000000000, "VERIFIED"),
+        )
+        source_conn.execute(
+            "INSERT INTO packs (sha256, size_bytes, repo_id) VALUES (?, ?, ?)",
+            ("a" * 64, 5000, "repo1"),
+        )
+        # Get auto-incremented IDs
+        src_vol_id = source_conn.execute("SELECT volume_id FROM volumes WHERE uuid = ?", ("uuid-001",)).fetchone()[0]
+        src_pack_id = source_conn.execute("SELECT pack_id FROM packs WHERE sha256 = ?", ("a" * 64,)).fetchone()[0]
+
+        # Link pack to volume
+        source_conn.execute(
+            "INSERT INTO volume_packs (volume_id, pack_id) VALUES (?, ?)",
+            (src_vol_id, src_pack_id),
+        )
+        source_conn.commit()
+        source_conn.close()
+
+        # Merge
+        result = rebuild._merge_one_disc(target_conn, source_db)
+
+        # Verify volume_packs was created with correct ID translation
+        assert result["volume_packs"] == 1
+        vp = target_conn.execute(
+            """SELECT vp.volume_id, vp.pack_id, v.uuid, p.sha256
+               FROM volume_packs vp
+               JOIN volumes v ON v.volume_id = vp.volume_id
+               JOIN packs p ON p.pack_id = vp.pack_id""",
+        ).fetchone()
+        assert vp is not None
+        assert vp[2] == "uuid-001"  # Volume UUID
+        assert vp[3] == "a" * 64  # Pack SHA-256
+
+        target_conn.close()
+
+    def test_merge_volume_copies_preserves_all_fields(self, tmp_path):
+        """Test step 7: volume_copies with all fields preserved."""
+        target_db = tmp_path / "target.db"
+        target_conn = get_connection(target_db)
+        schema.create_all(target_conn)
+
+        source_db = tmp_path / "source.db"
+        source_conn = get_connection(source_db)
+        schema.create_all(source_conn)
+
+        # Setup
+        target_conn.execute(
+            "INSERT INTO locations (name, description) VALUES (?, ?)",
+            ("LOC1", "Location 1"),
+        )
+        target_conn.commit()
+
+        source_conn.execute(
+            "INSERT INTO locations (name, description) VALUES (?, ?)",
+            ("LOC1", "Location 1"),
+        )
+        source_conn.execute(
+            "INSERT INTO volumes (label, uuid, media_type, capacity_bytes, status) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("VOL001", "uuid-001", "BD25", 25000000000, "VERIFIED"),
+        )
+        src_vol_id = source_conn.execute("SELECT volume_id FROM volumes WHERE uuid = ?", ("uuid-001",)).fetchone()[0]
+
+        # Add volume_copy with all fields
+        source_conn.execute(
+            "INSERT INTO volume_copies (volume_id, location, status, burn_date, notes, iso_sha256, last_verified_at, media_serial) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (src_vol_id, "LOC1", "ACTIVE", "2026-01-15", "Test copy", "b" * 64, "2026-02-01T12:00:00", "SERIAL123"),
+        )
+        source_conn.commit()
+        source_conn.close()
+
+        # Merge
+        result = rebuild._merge_one_disc(target_conn, source_db)
+
+        # Verify volume_copies with all fields
+        assert result["volume_copies"] == 1
+        vc = target_conn.execute(
+            "SELECT location, status, burn_date, notes, iso_sha256, last_verified_at, media_serial "
+            "FROM volume_copies WHERE location = ?",
+            ("LOC1",),
+        ).fetchone()
+        assert vc is not None
+        assert vc[0] == "LOC1"
+        assert vc[1] == "ACTIVE"
+        assert vc[2] == "2026-01-15"
+        assert vc[3] == "Test copy"
+        assert vc[4] == "b" * 64
+        assert vc[5] == "2026-02-01T12:00:00"
+        assert vc[6] == "SERIAL123"
+
+        target_conn.close()
