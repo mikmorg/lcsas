@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from lcsas.db.connection import get_memory_connection
 from lcsas.db.locations import (
     create_location,
     delete_location,
@@ -12,15 +11,6 @@ from lcsas.db.locations import (
     get_location,
     list_locations,
 )
-from lcsas.db.schema import create_all
-
-
-@pytest.fixture
-def conn():
-    c = get_memory_connection()
-    create_all(c)
-    yield c
-    c.close()
 
 
 class TestLocationCRUD:

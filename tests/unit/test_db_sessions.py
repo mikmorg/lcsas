@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from lcsas.db.connection import get_memory_connection
-from lcsas.db.schema import create_all
 from lcsas.db.sessions import (
     add_session_volume,
     create_session,
@@ -20,14 +18,6 @@ from lcsas.db.sessions import (
 )
 from lcsas.db.volumes import create_volume
 from lcsas.utils.labels import generate_uuid
-
-
-@pytest.fixture
-def conn():
-    c = get_memory_connection()
-    create_all(c)
-    yield c
-    c.close()
 
 
 class TestSessionCRUD:
