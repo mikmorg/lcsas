@@ -147,6 +147,108 @@ class TestStatusSummary:
         assert summary["pruned"] == 0
 
 
+class TestBatchBoundary:
+    """Test batch processing with >900 items to exercise multiple loop iterations."""
+
+    def test_pick_list_large_batch(self, memory_db):
+        """Test get_pick_list with >900 pack SHAs (crosses batch boundary)."""
+        from pathlib import Path
+        from lcsas.db.packs import register_pack
+        from lcsas.db.repos import register_repo
+        from lcsas.db.volumes import create_volume
+        from lcsas.db.volume_packs import bulk_link_packs
+        from lcsas.utils.labels import generate_uuid
+
+        # Create repo and volume
+        repo = register_repo(
+            memory_db, repo_id=generate_uuid(), name="test_repo",
+            mirror_path="/tmp/mirror",
+        )
+        vol = create_volume(
+            memory_db, label="VOL1", uuid=generate_uuid(),
+            media_type="BD25", capacity_bytes=25_000_000_000,
+        )
+
+        # Register >900 packs and assign to volume
+        num_packs = 950
+        pack_ids = []
+        pack_shas = []
+        for i in range(num_packs):
+            sha = f"{i:064d}"  # Zero-padded decimal as SHA
+            pack = register_pack(memory_db, sha256=sha, size_bytes=1000, repo_id=repo.repo_id)
+            pack_ids.append(pack.pack_id)
+            pack_shas.append(sha)
+
+        # Link all packs to volume
+        bulk_link_packs(memory_db, vol.volume_id, pack_ids)
+
+        # Query should handle >900 SHAs correctly across batch boundaries
+        pick_list = get_pick_list(memory_db, pack_shas)
+        all_packs = [p for packs in pick_list.values() for p in packs]
+        assert len(all_packs) == num_packs
+
+    def test_missing_packs_large_batch(self, memory_db):
+        """Test get_missing_packs with >900 items (crosses batch boundary)."""
+        from lcsas.db.packs import register_pack
+        from lcsas.db.repos import register_repo
+        from lcsas.utils.labels import generate_uuid
+
+        # Register repo and create >900 nonexistent hashes + a few real ones
+        repo = register_repo(
+            memory_db, repo_id=generate_uuid(), name="test_repo",
+            mirror_path="/tmp/mirror",
+        )
+        real_shas = []
+        for i in range(5):
+            sha = f"{i:064d}"
+            pack = register_pack(memory_db, sha256=sha, size_bytes=1000, repo_id=repo.repo_id)
+            real_shas.append(pack.sha256)
+
+        # Add 950 nonexistent hashes
+        all_shas = list(real_shas)
+        for i in range(100, 1050):
+            all_shas.append(f"nonexistent_{i:04d}_{i:056d}")
+
+        # Query: all nonexistent should be in missing, real ones too (no volume assignments)
+        missing = get_missing_packs(memory_db, all_shas)
+        assert len(missing) == len(all_shas)  # All are missing (no volumes)
+
+    def test_packs_only_on_volumes_large_batch(self, memory_db):
+        """Test get_packs_only_on_volumes with >900 volume IDs."""
+        from lcsas.db.packs import register_pack
+        from lcsas.db.repos import register_repo
+        from lcsas.db.volumes import create_volume
+        from lcsas.db.volume_packs import bulk_link_packs
+        from lcsas.utils.labels import generate_uuid
+
+        repo = register_repo(
+            memory_db, repo_id=generate_uuid(), name="test_repo",
+            mirror_path="/tmp/mirror",
+        )
+
+        # Create >900 volumes and assign the same pack to each
+        num_volumes = 950
+        volume_ids = []
+        for i in range(num_volumes):
+            vol = create_volume(
+                memory_db, label=f"VOL{i:04d}", uuid=generate_uuid(),
+                media_type="BD25", capacity_bytes=25_000_000_000,
+            )
+            volume_ids.append(vol.volume_id)
+
+        # Register one pack
+        pack = register_pack(memory_db, sha256="a" * 64, size_bytes=1000, repo_id=repo.repo_id)
+
+        # Link to all volumes
+        for vid in volume_ids:
+            bulk_link_packs(memory_db, vid, [pack.pack_id])
+
+        # Query should return the pack when searching across >900 volumes
+        packs = get_packs_only_on_volumes(memory_db, volume_ids)
+        assert len(packs) == 1
+        assert packs[0].sha256 == "a" * 64
+
+
 # ---------------------------------------------------------------------------
 # Snapshot JSON helpers (get_snapshots_by_path, get_snapshots_by_tag)
 # ---------------------------------------------------------------------------
