@@ -7,20 +7,40 @@ binary from this file alone.  Each section includes a test vector.
 
 REFERENCES
 
+  Every spec referenced below is also bundled in plain text under
+  recovery/specs/ on every recovery medium.  See recovery/specs/README.txt
+  for the full inventory and the mapping from spec -> implementation.
+
   FIPS 180-4   Secure Hash Standard (SHA-2 family)
+               recovery/specs/fips180-4.txt   (also .pdf)
                https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf
   FIPS 197     Advanced Encryption Standard (AES)
+               recovery/specs/fips197.txt     (also .pdf)
                https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.197.pdf
   RFC 8439     ChaCha20 and Poly1305 for IETF Protocols (§2.5 Poly1305)
+               recovery/specs/rfc8439.txt
                https://www.rfc-editor.org/rfc/rfc8439
   RFC 7914     scrypt Password-Based KDF
+               recovery/specs/rfc7914.txt
                https://www.rfc-editor.org/rfc/rfc7914
   RFC 4648     The Base16, Base32, and Base64 Data Encodings
+               recovery/specs/rfc4648.txt
                https://www.rfc-editor.org/rfc/rfc4648
   RFC 2104     HMAC: Keyed-Hashing for Message Authentication
+               recovery/specs/rfc2104.txt
                https://www.rfc-editor.org/rfc/rfc2104
   RFC 8018     PKCS #5: Password-Based Cryptography Specification v2.1
+               recovery/specs/rfc8018.txt
                https://www.rfc-editor.org/rfc/rfc8018
+  RFC 8259     JSON (JavaScript Object Notation)
+               recovery/specs/rfc8259.txt
+               https://www.rfc-editor.org/rfc/rfc8259
+  RFC 8878     zstd Compression Format
+               recovery/specs/rfc8878.txt
+               https://www.rfc-editor.org/rfc/rfc8878
+  ECMA-119     ISO 9660 Volume and File Structure
+               recovery/specs/ecma-119.txt    (also .pdf)
+               https://ecma-international.org/publications-and-standards/standards/ecma-119/
 
 THE LCSAS CIPHER STACK
 

@@ -206,6 +206,10 @@ test-e2e: $(BUILD)/lcsas-restore
 	@echo "==> end-to-end synthetic repo"
 	python3 tests/test_e2e.py
 
+test-bare-path: $(BUILD)/lcsas-restore
+	@echo "==> bare-path Python-free recovery"
+	@sh tests/test_bare_path.sh
+
 # ── Cross-compilation targets ─────────────────────────────────────
 #
 # Override CC explicitly for clarity.  Each target builds host-arch's
@@ -304,4 +308,4 @@ manifest:
 	    > MANIFEST.sha256
 	@echo "wrote MANIFEST.sha256 (top-level, $(shell wc -l < MANIFEST.sha256) entries)"
 
-.PHONY: all all-arches test test-e2e clean manifest repro-check zig-aarch64 zig-riscv64
+.PHONY: all all-arches test test-e2e test-bare-path clean manifest repro-check zig-aarch64 zig-riscv64

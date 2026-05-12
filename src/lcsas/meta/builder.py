@@ -1956,10 +1956,37 @@ class MetaVolumeBuilder:
                     shutil.copytree(str(s), str(d))
 
     def _write_restore_script(self) -> None:
-        """Write the bootstrap restore.sh script."""
+        """Install the meta-volume's top-level ``restore.sh``.
+
+        Behavior:
+
+        * If the C89 recovery toolchain bundle is available (the new
+          POSIX-sh driver in ``recovery/scripts/restore.sh``), copy
+          *that* in as ``/restore.sh``.  This is Python-free for tiers
+          1-4 and only touches Python at tier 5 (LCSAS_ALLOW_PYTHON_TIER).
+        * Otherwise, fall back to the legacy bash heredoc
+          (``RESTORE_SCRIPT``), which carries a hard Python dependency
+          from earlier days and is kept only for compatibility with
+          discs that predate the recovery/ tree.
+
+        The legacy script is *also* written, as ``restore_legacy.sh``,
+        so it remains accessible as a manual third option if needed.
+        """
         script_path = self._output / "restore.sh"
-        _write_and_sync(script_path, RESTORE_SCRIPT)
-        os.chmod(str(script_path), 0o755)
+        new_driver = self._output / "recovery" / "scripts" / "restore.sh"
+        if new_driver.is_file():
+            shutil.copy2(str(new_driver), str(script_path))
+            os.chmod(str(script_path), 0o755)
+            # Stash the legacy bash driver alongside for compatibility /
+            # for users who specifically want it.  Off the bare path.
+            legacy = self._output / "restore_legacy.sh"
+            _write_and_sync(legacy, RESTORE_SCRIPT)
+            os.chmod(str(legacy), 0o755)
+        else:
+            # No recovery/ tree was bundled (e.g. older builds).  Fall
+            # back to the historical bash driver.
+            _write_and_sync(script_path, RESTORE_SCRIPT)
+            os.chmod(str(script_path), 0o755)
 
     def _write_restore_auto_script(self) -> None:
         """Write the non-interactive restore-auto.sh script."""

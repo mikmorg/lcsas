@@ -50,15 +50,36 @@ DECISION FLOW
 
 CASCADE DETAILS
 
-The restore.sh script tries these in order:
+The restore.sh script tries these in order.  Tiers 1-4 share NO
+Python dependency; the BARE MINIMUM recovery path ends after tier 4.
 
-  1. bin/<arch>/lcsas-restore   -- prebuilt binary (fastest)
-  2. bin/<arch>/rustic-static   -- vendored rustic (cross-check)
-  3. make build/lcsas-restore   -- rebuild from source
-  4. standalone_restorer.py     -- pure Python (last resort)
+  Tier 1.  bin/<arch>/lcsas-restore    prebuilt static C89 binary
+                                       (fastest; depends only on
+                                       musl libc + kernel)
 
-If all four fail, you have a hardware/environment problem.  See
-"PHYSICAL RECOVERY" below.
+  Tier 2.  bin/<arch>/rustic-static    vendored Rust binary
+                                       (cross-check against tier 1)
+
+  Tier 3.  make build/lcsas-restore    rebuild lcsas-restore from
+                                       src/ (needs cc + POSIX make;
+                                       try cc, gcc, clang, tcc, pcc)
+
+  Tier 4.  cargo build --release       rebuild rustic from vendored
+                                       Rust source (only if cargo is
+                                       available)
+  ─────────────────────────────────────────────────────────────────
+  ^^ BARE MINIMUM PATH (zero Python).  If your future system has a
+     POSIX shell and any C compiler, the data is recoverable.
+  ─────────────────────────────────────────────────────────────────
+
+  Tier 5.  standalone_restorer.py      pure-Python LAST RESORT
+                                       (only invoked if every C/Rust
+                                       option failed; skip entirely
+                                       with LCSAS_ALLOW_PYTHON_TIER=0)
+
+If all five fail, you have a hardware/environment problem.  See
+"PHYSICAL RECOVERY" below.  See docs/TIERS.txt for the full design
+rationale.
 
 LIST AVAILABLE SNAPSHOTS
 
