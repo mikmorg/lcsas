@@ -10,6 +10,7 @@
 #include "hex.h"
 #include "io.h"
 #include "json_q.h"
+#include "zstd_dec.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -320,11 +321,28 @@ decrypt_repo_file(const char *path, const lcsas_master_key *mk, size_t *out_len)
         return NULL;
     }
     if (needs_zstd) {
-        fprintf(stderr,
-                "ERROR: zstd-compressed repo file at %s; phase-1 MVP cannot decode.\n",
-                path);
+        long dsz = lcsas_zstd_decode(p, plen, NULL, 0);
+        unsigned char *out;
+        long got;
+        if (dsz <= 0 || dsz > (long)(256 * 1024 * 1024)) {
+            fprintf(stderr,
+                    "ERROR: zstd frame at %s reports invalid size %ld\n",
+                    path, dsz);
+            free(pt);
+            return NULL;
+        }
+        out = (unsigned char *)malloc((size_t)dsz + 1);
+        if (!out) { free(pt); return NULL; }
+        got = lcsas_zstd_decode(p, plen, out, (size_t)dsz);
+        if (got < 0) {
+            fprintf(stderr, "ERROR: zstd decompression failed for %s\n", path);
+            free(out); free(pt);
+            return NULL;
+        }
+        out[got] = '\0';
+        *out_len = (size_t)got;
         free(pt);
-        return NULL;
+        return out;
     }
 
     /* Copy (so we can free pt's original head). */
@@ -716,10 +734,31 @@ lcsas_repo_read_blob(const char *repo_path,
     if (pt_len >= 4
             && pt[0] == ZSTD_MAGIC[0] && pt[1] == ZSTD_MAGIC[1]
             && pt[2] == ZSTD_MAGIC[2] && pt[3] == ZSTD_MAGIC[3]) {
-        fprintf(stderr,
-                "ERROR: zstd-compressed blob; phase-1 MVP cannot decode.\n");
+        long dsz;
+        unsigned char *dec;
+        long got;
+
+        if (loc->uncompressed_length > 0) {
+            dsz = (long)loc->uncompressed_length;
+        } else {
+            dsz = lcsas_zstd_decode(pt, pt_len, NULL, 0);
+        }
+        if (dsz <= 0 || dsz > (long)(256 * 1024 * 1024)) {
+            fprintf(stderr, "ERROR: bad zstd blob size %ld\n", dsz);
+            free(pt);
+            return -1;
+        }
+        dec = (unsigned char *)malloc((size_t)dsz);
+        if (!dec) { free(pt); return -1; }
+        got = lcsas_zstd_decode(pt, pt_len, dec, (size_t)dsz);
+        if (got < 0) {
+            fprintf(stderr, "ERROR: zstd blob decompression failed\n");
+            free(dec); free(pt);
+            return -1;
+        }
         free(pt);
-        return -2;
+        pt = dec;
+        pt_len = (size_t)got;
     }
 
     lcsas_sha256(pt, pt_len, digest);

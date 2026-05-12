@@ -14,6 +14,7 @@
 #include "repo.h"
 #include "tree.h"
 #include "io.h"
+#include "catalog.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,11 +26,15 @@ usage(const char *argv0)
     fprintf(stderr,
         "usage: %s --repo DIR --password-file FILE --target DIR\n"
         "           [--snapshot ID|latest] [--list-snapshots] [--verbose]\n"
+        "           [--catalog FILE]\n"
         "\n"
-        "Restore a restic-format repository.  Phase 1 MVP: requires an\n"
-        "assembled repository tree under --repo (with subdirs keys/,\n"
-        "index/, snapshots/, data/).  Use scripts/restore.sh to assemble\n"
-        "an on-disc LCSAS repo into a temporary tree first.\n",
+        "Restore a restic-format repository.  --repo must point to an\n"
+        "assembled tree (with subdirs keys/, index/, snapshots/, data/).\n"
+        "Use scripts/restore.sh to assemble an on-disc LCSAS repo first.\n"
+        "\n"
+        "--catalog opens the on-disc SQLite catalog (catalog.db) for\n"
+        "informational logging; future versions will use it to prompt\n"
+        "for disc swaps during multi-volume recovery.\n",
         argv0);
 }
 
@@ -55,6 +60,7 @@ main(int argc, char **argv)
     const char *pwfile = NULL;
     const char *target = NULL;
     const char *snapshot_arg = NULL;
+    const char *catalog_path = NULL;
     int list_only = 0;
     int verbose = 0;
     int i;
@@ -64,6 +70,7 @@ main(int argc, char **argv)
     lcsas_master_key mk;
     lcsas_blob_index ix;
     lcsas_snapshot_list snaps;
+    lcsas_catalog *catalog = NULL;
     long sidx;
     int rc = 1;
     char keys_dir[4096];
@@ -74,6 +81,7 @@ main(int argc, char **argv)
         else if (parse_arg("--password-file", argc, argv, &i, &pwfile) > 0) matched = 1;
         else if (parse_arg("--target",   argc, argv, &i, &target) > 0) matched = 1;
         else if (parse_arg("--snapshot", argc, argv, &i, &snapshot_arg) > 0) matched = 1;
+        else if (parse_arg("--catalog",  argc, argv, &i, &catalog_path) > 0) matched = 1;
         else if (strcmp(argv[i], "--list-snapshots") == 0) {
             list_only = 1; matched = 1;
         } else if (strcmp(argv[i], "--verbose") == 0
@@ -98,6 +106,16 @@ main(int argc, char **argv)
     if (!list_only && !target) {
         usage(argv[0]);
         return 2;
+    }
+
+    if (catalog_path) {
+        catalog = lcsas_catalog_open(catalog_path);
+        if (!catalog) {
+            fprintf(stderr, "WARN: cannot open catalog %s; continuing\n",
+                    catalog_path);
+        } else if (verbose) {
+            lcsas_catalog_describe(catalog);
+        }
     }
 
     if (lcsas_read_file(pwfile, &pw, &pw_len) != 0) {
@@ -180,6 +198,7 @@ main(int argc, char **argv)
 out:
     lcsas_blob_index_free(&ix);
     lcsas_snapshot_list_free(&snaps);
+    if (catalog) lcsas_catalog_close(catalog);
     free(pw);
     return rc;
 }

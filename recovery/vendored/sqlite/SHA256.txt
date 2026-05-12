@@ -1,0 +1,2 @@
+c01235302fe80da901fb70c7622c39147e29d9f29b7f6eb746b23517f320c90d  /home/user/lcsas/recovery/vendored/sqlite/sqlite3.c
+d088aa96aa70db50f02acc5c86eca61a5d17556e4c363b9c06079239bf7f87b1  /home/user/lcsas/recovery/vendored/sqlite/sqlite3.h

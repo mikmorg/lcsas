@@ -1,0 +1,55 @@
+# Files included in the LCSAS recovery initramfs (cpio archive).
+#
+# Format: each non-blank, non-comment line is one of:
+#   "f SRC DST MODE"  -- regular file
+#   "d DIR MODE"      -- directory
+#   "s LINK TARGET"   -- symlink
+#
+# Architectures: build_initramfs.sh interpolates {{ARCH}} which is set
+# to x86_64, aarch64, or riscv64.
+#
+# This manifest is the source of truth for what ends up in /init's
+# environment.  Builds are deterministic: changing this file changes
+# the cpio hash; not changing it produces a byte-identical initramfs.
+
+# ── Directories ──
+d /bin           0755
+d /dev           0755
+d /etc           0755
+d /lib           0755
+d /mnt           0755
+d /proc          0755
+d /run           0755
+d /sys           0755
+d /tmp           1777
+d /usr           0755
+d /usr/bin       0755
+
+# ── Init (PID 1) ──
+f bin/{{ARCH}}/lcsas-init       /init                              0755
+
+# ── BusyBox + symlinks ──
+f bin/{{ARCH}}/busybox          /bin/busybox                       0755
+s /bin/sh        /bin/busybox
+s /bin/cat       /bin/busybox
+s /bin/ls        /bin/busybox
+s /bin/mount     /bin/busybox
+s /bin/umount    /bin/busybox
+s /bin/echo      /bin/busybox
+s /bin/grep      /bin/busybox
+s /bin/sed       /bin/busybox
+s /bin/awk       /bin/busybox
+s /bin/sleep     /bin/busybox
+s /bin/uname     /bin/busybox
+s /bin/mkdir     /bin/busybox
+s /bin/cp        /bin/busybox
+s /bin/dd        /bin/busybox
+s /bin/find      /bin/busybox
+
+# ── lcsas-restore + helpers ──
+f bin/{{ARCH}}/lcsas-restore    /bin/lcsas-restore                 0755
+f bin/{{ARCH}}/lcsas-iso9660    /bin/lcsas-iso9660                 0755
+
+# ── /etc minimal config ──
+f scripts/initramfs/passwd      /etc/passwd                        0644
+f scripts/initramfs/group       /etc/group                         0644

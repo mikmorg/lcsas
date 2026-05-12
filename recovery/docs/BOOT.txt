@@ -1,0 +1,81 @@
+LCSAS RECOVERY TOOLCHAIN -- BOOT STACK
+========================================
+
+OVERVIEW
+
+The recovery medium is bootable on both legacy BIOS and modern UEFI
+systems, for all three target architectures (x86_64, aarch64, riscv64).
+This document describes the boot stack and the files involved.
+
+DECISION FLOW
+
+  Q: BIOS (Legacy) or UEFI firmware?
+     BIOS  -> isolinux.bin loads /boot/isolinux/isolinux.cfg.
+     UEFI  -> BOOT<arch>.EFI loads /EFI/BOOT/grub.cfg.
+
+  Both paths converge on the same four boot menu entries:
+
+     1. Linux 6.6 LTS (recovery)        [default, 10s timeout]
+     2. FreeBSD 13.4 (alternate)
+     3. Drop to BusyBox shell
+     4. Run lcsas-restore directly
+
+  Choosing 1 or 4 loads:
+
+     - /boot/linux/vmlinuz             Linux 6.6 LTS kernel
+     - /boot/initramfs.cpio.gz         initial ramdisk
+
+  Choosing 2 loads:
+
+     - /boot/freebsd/loader.bin        (BIOS path)
+     - /boot/freebsd/loader.efi        (UEFI path)
+     - /boot/freebsd/kernel            kernel image
+     - /boot/freebsd/loader.conf       loader configuration
+
+  Both Linux and FreeBSD options exec lcsas-init as PID 1, which then
+  hands off to recovery/scripts/restore.sh.
+
+INITRAMFS CONTENTS
+
+The Linux initramfs (boot/initramfs.cpio.gz) is built from
+boot/initramfs/manifest.txt by boot/initramfs/build_initramfs.sh.
+It contains:
+
+  /init                  -> lcsas-init (PID 1; mounts /proc, /sys, /dev,
+                            then execs restore.sh)
+  /bin/busybox           -> BusyBox static (single binary)
+  /bin/sh, /bin/cat, ... -> symlinks to /bin/busybox
+  /bin/lcsas-restore     -> the C89 recovery binary
+  /bin/lcsas-iso9660     -> standalone ISO 9660 reader
+  /etc/passwd, /etc/group -> minimal user database
+
+The cpio archive is built with --reproducible and gzip -n, so two
+builds with the same SOURCE_DATE_EPOCH yield byte-identical files.
+
+REBUILDING THE BOOT STACK
+
+This is deferred to a build host with the appropriate toolchains:
+
+  1. Build the kernel (per kernel_config.<arch>.txt instructions).
+  2. Cross-compile the recovery binaries:
+       make CC=<cross>-gcc bin/<arch>/lcsas-restore
+  3. Generate the initramfs:
+       bash boot/initramfs/build_initramfs.sh <arch> \\
+            boot/initramfs-<arch>.cpio.gz
+  4. Build the FreeBSD kernel (per freebsd/kernel_config.txt).
+  5. Produce a bootable ISO:
+       lcsas meta build --output meta/ --recovery-boot
+       (orchestrator wires together the staging tree + boot/)
+
+  Each step is independent and reproducible.
+
+WHAT IS NOT BUNDLED
+
+The recovery medium does not bundle:
+
+  - A C compiler (the binaries are prebuilt for three arches; if the
+    user has any C compiler at hand, they can rebuild from src/).
+  - Network drivers / utilities (offline recovery only -- attack
+    surface and binary size minimisation).
+  - X11 / Wayland (no graphical environment is required).
+  - Editors beyond vi (provided by BusyBox).

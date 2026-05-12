@@ -60,15 +60,24 @@ PHASE STATUS
     - POSIX-sh driver scripts.
     - Plain-text docs.
 
-  Phase 2 (Hardening): NOT STARTED
-    - SQLite catalog support.
-    - zstd decompression (vendored).
-    - ISO9660 reader.
-    - C89 init for live-boot environment.
-    - Reproducible-build verification.
-    - Integration test against rustic-generated repos.
+  Phase 2 (Hardening): COMPLETE
+    - zstd 1.5.6 vendored; restic v2 (compressed) repos restore round-trip.
+    - SQLite 3.46.0 vendored; on-disc catalog query module (catalog.c).
+    - lcsas-iso9660 mini-reader (no kernel mount-loop needed).
+    - lcsas-init C89 init for the live-boot initramfs.
+    - Reproducible-build verification (make repro-check).
+    - End-to-end integration test against a Python-built synthetic
+      restic repo, covering both v1 and v2 layouts.
 
-  Phase 3 (Multi-arch + FreeBSD): NOT STARTED
-    - aarch64 + riscv64 cross-compilation.
-    - FreeBSD-native build.
-    - Boot stack regression tests.
+  Phase 3 (Multi-arch + FreeBSD): SOURCE COMPLETE
+    - Cross-compile Makefile targets for aarch64 / riscv64 (using
+      musl-cross or zig cc).
+    - Linux 6.6 LTS kernel configs for all three arches.
+    - FreeBSD 13.4 kernel config and bootloader configuration.
+    - Boot menus (isolinux.cfg / grub.cfg) wired for all four boot
+      paths: Linux primary, FreeBSD alternate, shell, direct restore.
+    - Initramfs assembly script + manifest (reproducible cpio.gz).
+
+    Runtime validation on real hardware (BD-R burn + boot test) is
+    deferred to the build host environment with cross-compilers,
+    QEMU, and physical media.  See docs/BOOT.txt.

@@ -1609,6 +1609,8 @@ class MetaVolumeBuilder:
         bootable: bool = False,
         alpine_dir: Path | None = None,
         catalog_db_path: Path | None = None,
+        recovery_dir: Path | None = None,
+        bundle_recovery_toolchain: bool = True,
     ) -> None:
         """
         Args:
@@ -1634,12 +1636,18 @@ class MetaVolumeBuilder:
         self._bootable = bootable
         self._alpine_dir = alpine_dir
         self._catalog_db_path = catalog_db_path
+        self._bundle_recovery_toolchain = bundle_recovery_toolchain
 
         if project_root is None:
             # meta/ → lcsas/ → src/ → (project root)
             self._project_root = Path(__file__).resolve().parents[3]
         else:
             self._project_root = project_root.resolve()
+
+        if recovery_dir is None:
+            self._recovery_dir = self._project_root / "recovery"
+        else:
+            self._recovery_dir = recovery_dir.resolve()
 
     @property
     def output_dir(self) -> Path:
@@ -1667,6 +1675,8 @@ class MetaVolumeBuilder:
         self._bundle_standalone_restorer()
         self._bundle_restore_helper()
         self._bundle_metadata()
+        if self._bundle_recovery_toolchain:
+            self._bundle_recovery_toolchain_artifacts()
         self._write_restore_script()
         self._write_restore_auto_script()
         self._write_readme()
@@ -1852,6 +1862,53 @@ class MetaVolumeBuilder:
         dst = tools_dir / "restore_single_drive.py"
         shutil.copy2(str(src), str(dst))
         os.chmod(str(dst), 0o755)
+
+    def _bundle_recovery_toolchain_artifacts(self) -> None:
+        """Bundle the C89 + POSIX-sh recovery toolchain onto the meta-volume.
+
+        Layout produced under ``output_dir/recovery/``::
+
+            recovery/
+            ├── bin/<arch>/lcsas-restore       (if built)
+            ├── bin/<arch>/lcsas-iso9660       (if built)
+            ├── bin/<arch>/lcsas-init          (if built)
+            ├── src/                            C source
+            ├── vendored/                       sqlite + zstd amalgamation
+            ├── scripts/                        POSIX-sh drivers
+            ├── docs/                           plain-text docs
+            ├── boot/                           kernel/loader configs
+            ├── Makefile
+            └── VERSION
+
+        Missing per-arch binaries are silently skipped; the recovery
+        cascade rebuilds from source when the prebuilt binary is absent.
+        See ``recovery/scripts/restore.sh``.
+        """
+        src = self._recovery_dir
+        if not src.is_dir():
+            return  # not a fatal error: recovery toolchain is optional
+
+        dst = self._output / "recovery"
+        if dst.exists():
+            shutil.rmtree(str(dst))
+        shutil.copytree(
+            str(src),
+            str(dst),
+            ignore=shutil.ignore_patterns(
+                "build", "build-*", "__pycache__", "*.pyc",
+                "*.o", "*.a",
+            ),
+        )
+
+        # Mirror the new POSIX restore.sh at the meta-volume root so
+        # existing automation that looks for /restore.sh finds the new
+        # driver too.  (The legacy bash heredoc is still written by
+        # _write_restore_script for backward compat.)
+        new_restore = dst / "scripts" / "restore.sh"
+        if new_restore.is_file():
+            top_link = self._output / "restore_c89.sh"
+            shutil.copy2(str(new_restore), str(top_link))
+            os.chmod(str(top_link), 0o755)
 
     def _bundle_metadata(self) -> None:
         """Copy per-repo Rustic metadata (keys, config, index, snapshots) onto the meta volume.
