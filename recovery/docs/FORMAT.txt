@@ -1,0 +1,176 @@
+LCSAS RECOVERY TOOLCHAIN -- ON-DISC FORMAT
+============================================
+
+This document describes the on-disc data formats relevant to recovery.
+It is derived from docs/RESTIC_FORMAT_SPEC.md and the LCSAS source.
+
+REPOSITORY LAYOUT (restic format)
+
+  repo/
+    config                       encrypted; JSON; { "version": 1|2, "id": ... }
+    keys/<keyid>                 each is an encrypted master-key file
+    index/<indexid>              encrypted; JSON; { "packs": [...], "supersedes": [...] }
+    snapshots/<snapid>           encrypted; JSON; { "tree": ..., "time": ..., "paths": [...] }
+    data/<XX>/<packid>           pack files (two-level layout)
+    data/<packid>                pack files (flat layout, LCSAS variant)
+
+  Encrypted files use the AEAD format: IV(16) || ct || MAC(16).
+  After decryption (and optional v2 prefix stripping), the result is
+  raw JSON.
+
+KEY FILE
+
+  JSON object:
+    {
+      "hostname": "...",
+      "username": "...",
+      "kdf": "scrypt",
+      "N":     32768,
+      "r":     8,
+      "p":     1,
+      "salt":  "<base64>",
+      "data":  "<base64>"
+    }
+
+  - The "salt" field is the scrypt salt (typically 32 random bytes).
+  - The "data" field is the AEAD-encrypted master key (JSON form):
+       { "encrypt": "<b64 32 bytes>",
+         "mac": { "k": "<b64 16 bytes>", "r": "<b64 16 bytes>" } }
+    encrypted under the key-encryption-key (KEK) derived from scrypt.
+
+REPO V1 vs V2
+
+  Repo version 1: encrypted blobs decrypt directly to JSON / raw data.
+  Repo version 2: a leading compression-type byte is prepended after
+  decryption:
+    0x00 -> uncompressed (strip the byte)
+    0x01 -> zstd-compressed (strip; decompress remainder)
+    0x02 -> zstd-compressed (strip; decompress remainder)
+
+  For repository files (config, index, snapshots), the type byte is
+  ALWAYS present in v2 (even when uncompressed: the byte is 0x00).
+
+  For pack-blob inline data in v2 repos, the leading byte is OMITTED
+  if compressed: the zstd frame starts directly at the blob's offset.
+  The implementation detects compression by checking the zstd magic
+  number (28 B5 2F FD) at the start of decrypted data.
+
+ZSTD MAGIC NUMBER
+
+  Bytes:    28 b5 2f fd
+
+PACK FILE FORMAT
+
+  Layout (bytes, left-to-right, low-to-high offset):
+
+    [ encrypted blob 0 ][ encrypted blob 1 ]...[ encrypted blob N-1 ]
+    [ encrypted header ][ header_length (u32 LE) ]
+
+  The trailing u32 LE specifies the length of the encrypted header.
+  Subtract from file size to find header start.  The header is itself
+  AEAD-encrypted; once decrypted, it is a packed binary structure:
+
+    For each blob in the pack (37 bytes each):
+      type        u8     (0=data, 1=tree, 2=padding)
+      length      u32 LE
+      id          32 bytes (SHA-256 of plaintext)
+
+  The decrypted header is the sequence of these 37-byte entries.
+
+  This is the format used by restic >= 0.10 ("packed format").
+
+PACK FILE DISCOVERY
+
+  Pack files are stored under data/, either:
+    - Two-level: data/<XX>/<packid>  where XX is the first 2 hex chars
+    - Flat:      data/<packid>
+
+  Both layouts are supported.  Try two-level first.
+
+LCSAS CATALOG
+
+  In addition to the restic repository, LCSAS maintains a SQLite
+  catalog at /catalog.db on every disc.  Phase 1 MVP does not use the
+  catalog; phase 2 will add it.  Schema is documented in
+  src/lcsas/db/schema.py (version 5).
+
+VOLUME LAYOUT (LCSAS disc)
+
+  /catalog.db                          SQLite catalog
+  /repos/<repo_id>/                    one full restic repository per
+                                        co-burned repo
+    keys/, index/, snapshots/, data/
+  /recovery/                           this toolchain
+    bin/<arch>/lcsas-restore
+    src/, Makefile
+    scripts/restore.sh, ...
+    docs/FORMAT.txt, BUILD.txt, RECOVER.txt, CRYPTO.txt
+  /standalone_restorer.py              pure-Python fallback (tier 4)
+  /MANIFEST.sha256                     SHA-256 of every file on disc
+  /SURVIVABILITY.md                    survivability invariants
+
+SNAPSHOT FILE
+
+  JSON:
+    {
+      "time":     "2026-01-15T10:30:00.000Z",
+      "tree":     "<64 hex chars>",
+      "paths":    ["/home/alice"],
+      "hostname": "machine.example.com",
+      "username": "alice",
+      "tags":     [...]
+    }
+
+TREE BLOB
+
+  Plaintext JSON:
+    {
+      "nodes": [
+        {
+          "name":    "subdir-or-file-name",   /* must be a plain basename */
+          "type":    "file" | "dir" | "symlink" | ...,
+          "mode":    33188,
+          "mtime":   "2026-01-15T10:30:00.123456789Z",
+          "uid":     1000,
+          "gid":     1000,
+
+          /* For "file" */
+          "size":    42,
+          "content": ["<blob_id_hex>", "<blob_id_hex>", ...],
+          "inode":   17654321,
+          "links":   1,
+
+          /* For "dir" */
+          "subtree": "<blob_id_hex>",
+
+          /* For "symlink" */
+          "linktarget": "../somewhere",
+
+          /* Optional */
+          "extended_attributes": [{"name": "...", "value": "<base64>"}]
+        },
+        ...
+      ]
+    }
+
+  Tree blobs are normal blobs (SHA-256 of plaintext = ID, present in
+  the index, located in a pack file like any other blob).
+
+PATH SAFETY
+
+  When materializing a tree:
+   - REJECT any "name" that contains "/" or ".." or NUL bytes.
+   - REJECT symlinks whose "linktarget" is absolute or whose lexically-
+     resolved target escapes the restore root.
+
+  See src/lcsas-restore/path.c.
+
+CHECKSUMS
+
+  Every blob is verified by SHA-256.  Every pack header is verified by
+  Poly1305-AES.  Every encrypted file is verified by Poly1305-AES.
+  Tampering with any single byte produces a verification failure that
+  aborts the restore with a non-zero exit code.
+
+  At the disc level, dvdisaster RS03 ECC provides additional integrity
+  + repair beyond the cryptographic checks.

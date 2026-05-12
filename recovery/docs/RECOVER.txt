@@ -1,0 +1,138 @@
+LCSAS RECOVERY TOOLCHAIN -- MANUAL RECOVERY PROCEDURE
+=======================================================
+
+PURPOSE
+
+This document describes how to restore files from an LCSAS optical or
+tape archive using only the tools bundled on the recovery medium.  It
+assumes nothing about the recovery environment beyond a working
+POSIX-like OS with shell access.
+
+PREREQUISITES
+
+You will need:
+  - The LCSAS recovery medium (BD-R / DVD / LTO).
+  - The repository password (set when the archive was created).
+  - A target directory with enough free space for the restored files.
+
+DECISION FLOW
+
+  Q: Do you have a working OS?
+     NO  -> Boot the recovery medium directly.  See BOOT.txt.
+     YES -> Continue.
+
+  Q: Can you mount the recovery medium as an ISO9660 filesystem?
+     NO  -> See "PHYSICAL RECOVERY" below.
+     YES -> mount it read-only:
+
+         mount -o loop,ro /dev/sr0 /mnt/recovery       (block device)
+       OR
+         mount -o loop,ro path-to-iso.iso /mnt/recovery (ISO file)
+
+  Q: Does /mnt/recovery contain bin/<arch>/lcsas-restore for your arch?
+     YES -> primary path:
+
+         sh /mnt/recovery/scripts/restore.sh /mnt/recovery /tmp/restored
+
+       This prompts for the password and writes restored files under
+       /tmp/restored.  The script auto-detects architecture and falls
+       back through the cascade if the primary binary is missing.
+
+     NO  -> rebuild from source:
+
+         cp -r /mnt/recovery/src /tmp/lcsas-build
+         cp /mnt/recovery/Makefile /tmp/lcsas-build/
+         cd /tmp/lcsas-build && make
+         /tmp/lcsas-build/build/lcsas-restore \
+             --repo /mnt/recovery/repo \
+             --password-file /tmp/pwfile \
+             --target /tmp/restored
+
+CASCADE DETAILS
+
+The restore.sh script tries these in order:
+
+  1. bin/<arch>/lcsas-restore   -- prebuilt binary (fastest)
+  2. bin/<arch>/rustic-static   -- vendored rustic (cross-check)
+  3. make build/lcsas-restore   -- rebuild from source
+  4. standalone_restorer.py     -- pure Python (last resort)
+
+If all four fail, you have a hardware/environment problem.  See
+"PHYSICAL RECOVERY" below.
+
+LIST AVAILABLE SNAPSHOTS
+
+  /mnt/recovery/bin/<arch>/lcsas-restore \
+      --repo /mnt/recovery/repo \
+      --password-file /tmp/pw \
+      --list-snapshots
+
+Output:
+
+  ID        TIME                          PATH
+  a1b2c3d4  2026-01-15T10:30:00.000Z      /home/alice
+  e5f6g7h8  2026-02-12T08:15:00.000Z      /home/alice
+
+RESTORE A SPECIFIC SNAPSHOT
+
+  /mnt/recovery/bin/<arch>/lcsas-restore \
+      --repo /mnt/recovery/repo \
+      --password-file /tmp/pw \
+      --target /tmp/restored \
+      --snapshot a1b2c3d4
+
+The argument may be an exact ID or a unique prefix.
+
+VERIFY YOUR RESTORE
+
+Every blob is verified against its SHA-256 hash during restore.  If
+any blob fails verification, lcsas-restore exits non-zero with a
+message identifying the bad blob.  Re-run the restore against a
+different disc copy (LCSAS maintains multiple copies of each volume).
+
+PHYSICAL RECOVERY (CORRUPT MEDIUM)
+
+If the disc returns I/O errors:
+
+  1. Use ddrescue to make a best-effort copy:
+         ddrescue /dev/sr0 /tmp/disc.iso /tmp/disc.log
+     Repeat passes if /tmp/disc.log shows recovered sectors.
+
+  2. The disc is augmented with DVDisaster RS03 ECC.  If you have
+     dvdisaster installed:
+         dvdisaster -i /tmp/disc.iso -f
+     This restores up to ~30% of unreadable sectors.
+
+  3. After ECC repair, mount the recovered ISO and continue with the
+     normal cascade above.
+
+PASSWORD RECOVERY
+
+There is no password recovery path.  The password directly seeds the
+scrypt KDF that derives the master key encryption key.  If you have
+lost the password, the data is cryptographically unrecoverable.
+
+If multiple key files exist under repo/keys/, lcsas-restore tries each
+in turn; you only need ONE valid password.
+
+DISC MIRRORING
+
+If you have multiple copies of an LCSAS volume (as is the default),
+they are bit-identical.  Any single working copy is sufficient.  To
+verify which disc you are using:
+
+  cat /mnt/recovery/volume_label.txt    # human-readable label
+  sha256sum /mnt/recovery/MANIFEST.sha256
+
+SUPPORT
+
+This is offline, after-the-fact recovery.  There is no support phone
+number, no vendor.  The instructions in this file, the C source under
+src/, and the documents under docs/ are everything you need.
+
+EXIT CODES
+
+  lcsas-restore exits:
+    0 -- success
+    1 -- runtime error (bad password, missing file, integrity failure)
+    2 -- usage error
