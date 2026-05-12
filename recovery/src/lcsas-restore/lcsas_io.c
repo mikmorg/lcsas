@@ -4,13 +4,11 @@
  * Strict C89 + POSIX.1-2001.  Requires `unistd.h` for read/write/lseek
  * and `sys/stat.h` for `mkdir` / `fstat`.
  */
-#include "io.h"
+#include "lcsas_io.h"
+#include "posix_compat.h"
 
 #include <errno.h>
-#include <fcntl.h>
 #include <stdlib.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 int
 lcsas_pread_exact(int fd, void *buf, size_t len, long long off)
@@ -57,7 +55,10 @@ lcsas_read_file(const char *path, unsigned char **buf, size_t *len_out)
     size_t total;
     ssize_t n;
 
-    fd = open(path, O_RDONLY);
+    /* O_BINARY is required on Windows: open() defaults to text mode
+     * there, which corrupts binary reads with \r\n translation.  On
+     * POSIX, O_BINARY is defined to 0 in posix_compat.h. */
+    fd = open(path, O_RDONLY | O_BINARY);
     if (fd < 0) return -1;
     if (fstat(fd, &st) < 0) { close(fd); return -1; }
     if (st.st_size < 0) { close(fd); return -1; }
@@ -90,7 +91,9 @@ lcsas_read_file(const char *path, unsigned char **buf, size_t *len_out)
 int
 lcsas_create_file(const char *path)
 {
-    return open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    /* O_BINARY no-op on POSIX; on Windows it prevents \r\n translation
+     * that would corrupt restored binary files. */
+    return open(path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0600);
 }
 
 int

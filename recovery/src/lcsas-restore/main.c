@@ -13,7 +13,7 @@
  */
 #include "repo.h"
 #include "tree.h"
-#include "io.h"
+#include "lcsas_io.h"
 #include "catalog.h"
 
 #include <stdio.h>

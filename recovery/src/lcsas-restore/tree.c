@@ -12,15 +12,14 @@
 #include "tree.h"
 #include "path.h"
 #include "json_q.h"
-#include "io.h"
+#include "lcsas_io.h"
 #include "hex.h"
+#include "posix_compat.h"
 
-#include <fcntl.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 static int
 restore_file_node(const char *repo_path,

@@ -31,7 +31,7 @@ VENDOR    = vendored
 # Hand-written modules in dependency order.
 SRC = \
 	$(SRCDIR)/arena.c \
-	$(SRCDIR)/io.c \
+	$(SRCDIR)/lcsas_io.c \
 	$(SRCDIR)/b64.c \
 	$(SRCDIR)/hex.c \
 	$(SRCDIR)/sha256.c \
@@ -44,7 +44,7 @@ SRC = \
 
 OBJ = \
 	$(BUILD)/arena.o \
-	$(BUILD)/io.o \
+	$(BUILD)/lcsas_io.o \
 	$(BUILD)/b64.o \
 	$(BUILD)/hex.o \
 	$(BUILD)/sha256.o \
@@ -74,15 +74,21 @@ TEST_BINS = \
 	$(BUILD)/test_catalog \
 	$(BUILD)/test_zstd
 
-all: $(BUILD)/lcsas-restore $(BUILD)/lcsas-iso9660 $(BUILD)/lcsas-init
+# Binary extension is overridden by the Windows cross-build target.
+BIN_EXT ?=
+
+all: $(BUILD)/lcsas-restore$(BIN_EXT) $(BUILD)/lcsas-iso9660$(BIN_EXT) $(BUILD)/lcsas-init$(BIN_EXT)
 
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/lcsas-restore: $(BUILD) $(OBJ) $(BUILD)/main.o
+# When BIN_EXT is empty (host build) these rules ARE the rules for the
+# extensionless target names referenced by tests.  When BIN_EXT=.exe
+# (windows target) the resulting binaries are *.exe.
+$(BUILD)/lcsas-restore$(BIN_EXT): $(BUILD) $(OBJ) $(BUILD)/main.o
 	$(CC) $(CFLAGS) $(LDFLAGS) $(OBJ) $(BUILD)/main.o -o $@
 
-$(BUILD)/lcsas-iso9660: $(BUILD) $(BUILD)/iso9660.o $(BUILD)/iso9660_main.o
+$(BUILD)/lcsas-iso9660$(BIN_EXT): $(BUILD) $(BUILD)/iso9660.o $(BUILD)/iso9660_main.o
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/iso9660.o $(BUILD)/iso9660_main.o -o $@
 
 $(BUILD)/iso9660.o: src/lcsas-iso9660/iso9660.c src/lcsas-iso9660/iso9660.h $(BUILD)
@@ -91,7 +97,7 @@ $(BUILD)/iso9660.o: src/lcsas-iso9660/iso9660.c src/lcsas-iso9660/iso9660.h $(BU
 $(BUILD)/iso9660_main.o: src/lcsas-iso9660/main.c src/lcsas-iso9660/iso9660.h $(BUILD)
 	$(CC) $(CFLAGS) -c src/lcsas-iso9660/main.c -o $@
 
-$(BUILD)/lcsas-init: $(BUILD) src/lcsas-init/init.c
+$(BUILD)/lcsas-init$(BIN_EXT): $(BUILD) src/lcsas-init/init.c
 	$(CC) $(CFLAGS) -c src/lcsas-init/init.c -o $(BUILD)/init.o
 	$(CC) $(CFLAGS) $(LDFLAGS) $(BUILD)/init.o -o $@
 
@@ -111,8 +117,8 @@ $(BUILD)/libcrypto.a: $(BUILD) $(OBJ)
 $(BUILD)/arena.o: $(SRCDIR)/arena.c $(SRCDIR)/arena.h $(BUILD)
 	$(CC) $(CFLAGS) -c $(SRCDIR)/arena.c -o $@
 
-$(BUILD)/io.o: $(SRCDIR)/io.c $(SRCDIR)/io.h $(BUILD)
-	$(CC) $(CFLAGS) -c $(SRCDIR)/io.c -o $@
+$(BUILD)/lcsas_io.o: $(SRCDIR)/lcsas_io.c $(SRCDIR)/lcsas_io.h $(SRCDIR)/posix_compat.h $(BUILD)
+	$(CC) $(CFLAGS) -c $(SRCDIR)/lcsas_io.c -o $@
 
 $(BUILD)/b64.o: $(SRCDIR)/b64.c $(SRCDIR)/b64.h $(BUILD)
 	$(CC) $(CFLAGS) -c $(SRCDIR)/b64.c -o $@
@@ -210,6 +216,10 @@ test-bare-path: $(BUILD)/lcsas-restore
 	@echo "==> bare-path Python-free recovery"
 	@sh tests/test_bare_path.sh
 
+test-windows: bin/x86_64-windows/lcsas-restore.exe
+	@echo "==> Windows binary e2e via wine"
+	@sh tests/test_e2e_windows.sh
+
 # ── Cross-compilation targets ─────────────────────────────────────
 #
 # Override CC explicitly for clarity.  Each target builds host-arch's
@@ -248,6 +258,33 @@ bin/riscv64/lcsas-restore:
 	cp build/riscv64/lcsas-init    bin/riscv64/
 
 all-arches: bin/x86_64/lcsas-restore bin/aarch64/lcsas-restore bin/riscv64/lcsas-restore
+
+# Cross-compile for Windows via zig cc (ships its own MinGW headers).
+# Produces a PE32+ binary that runs on Windows 7+ without Visual C++
+# redistributables or admin privileges.
+ZIG_CC = python3 -m ziglang cc
+
+bin/x86_64-windows/lcsas-restore.exe:
+	rm -rf build/x86_64-windows
+	$(MAKE) BUILD=build/x86_64-windows \
+	        CC="$(ZIG_CC) -target x86_64-windows-gnu" \
+	        VENDOR_CFLAGS="-std=gnu99 -O2 -DNDEBUG -Wno-deprecated-declarations -Wno-unused-function" \
+	        BIN_EXT=.exe \
+	        build/x86_64-windows/lcsas-restore.exe
+	mkdir -p bin/x86_64-windows
+	cp build/x86_64-windows/lcsas-restore.exe bin/x86_64-windows/
+
+bin/aarch64-windows/lcsas-restore.exe:
+	rm -rf build/aarch64-windows
+	$(MAKE) BUILD=build/aarch64-windows \
+	        CC="$(ZIG_CC) -target aarch64-windows-gnu" \
+	        VENDOR_CFLAGS="-std=gnu99 -O2 -DNDEBUG -Wno-deprecated-declarations -Wno-unused-function" \
+	        BIN_EXT=.exe \
+	        build/aarch64-windows/lcsas-restore.exe
+	mkdir -p bin/aarch64-windows
+	cp build/aarch64-windows/lcsas-restore.exe bin/aarch64-windows/
+
+windows: bin/x86_64-windows/lcsas-restore.exe
 
 # Cross-compile with zig cc (single binary, deterministic).  Requires:
 #   apt-get install zig   OR   pip install ziglang
@@ -308,4 +345,4 @@ manifest:
 	    > MANIFEST.sha256
 	@echo "wrote MANIFEST.sha256 (top-level, $(shell wc -l < MANIFEST.sha256) entries)"
 
-.PHONY: all all-arches test test-e2e test-bare-path clean manifest repro-check zig-aarch64 zig-riscv64
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows clean manifest repro-check zig-aarch64 zig-riscv64

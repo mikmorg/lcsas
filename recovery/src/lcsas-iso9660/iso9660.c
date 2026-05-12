@@ -14,14 +14,12 @@
  * a ";1" version suffix that we strip on lookup.
  */
 #include "iso9660.h"
+#include "../lcsas-restore/posix_compat.h"
 
 #include <ctype.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 struct lcsas_iso {
     int fd;

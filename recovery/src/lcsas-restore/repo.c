@@ -8,18 +8,16 @@
 #include "scrypt.h"
 #include "b64.h"
 #include "hex.h"
-#include "io.h"
+#include "lcsas_io.h"
 #include "json_q.h"
 #include "zstd_dec.h"
 
-#include <dirent.h>
+#include "posix_compat.h"
+
 #include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 /* zstd magic; if we see this in plaintext we cannot proceed yet. */
 static const unsigned char ZSTD_MAGIC[4] = { 0x28, 0xB5, 0x2F, 0xFD };
@@ -402,15 +400,27 @@ lcsas_repo_load_index(const char *repo_path,
     char index_dir[4096];
     DIR *d;
     struct dirent *e;
-    char names[2048][72];   /* up to 2048 index files */
+    /* Big arrays moved to the heap so we don't overflow Windows'
+     * 1 MB default thread stack.  Pass-2 also uses 32768 tokens
+     * (~1.3 MB) which alone would blow the stack. */
+    char (*names)[72] = NULL;
     size_t ncount = 0;
-
-    /* superseded set: collected during first pass. */
-    char super_set[8192][72];
+    char (*super_set)[72] = NULL;
     size_t super_count = 0;
+    lcsas_json_tok *pass1_toks = NULL;
+    lcsas_json_tok *pass2_toks = NULL;
 
     size_t i;
     int rc = -1;
+
+    /* calloc (zero-init) because the tok walks below tolerate looking
+     * one token past the last-parsed entry; on Windows uninitialized
+     * heap is genuinely random and was causing intermittent failures. */
+    names      = (char (*)[72])calloc(2048, 72);
+    super_set  = (char (*)[72])calloc(8192, 72);
+    pass1_toks = (lcsas_json_tok *)calloc(16384, sizeof(lcsas_json_tok));
+    pass2_toks = (lcsas_json_tok *)calloc(32768, sizeof(lcsas_json_tok));
+    if (!names || !super_set || !pass1_toks || !pass2_toks) goto out;
 
     snprintf(index_dir, sizeof index_dir, "%s/index", repo_path);
     d = opendir(index_dir);
@@ -427,7 +437,7 @@ lcsas_repo_load_index(const char *repo_path,
         char path[4096];
         unsigned char *plain;
         size_t plen;
-        lcsas_json_tok toks[16384];
+        lcsas_json_tok *toks = pass1_toks;
         long ntoks;
         long sup_arr;
 
@@ -467,7 +477,7 @@ lcsas_repo_load_index(const char *repo_path,
         char path[4096];
         unsigned char *plain;
         size_t plen;
-        lcsas_json_tok toks[32768];
+        lcsas_json_tok *toks = pass2_toks;
         long ntoks;
         long packs_arr;
         int superseded = 0;
@@ -531,6 +541,10 @@ lcsas_repo_load_index(const char *repo_path,
     rc = 0;
 
 out:
+    free(names);
+    free(super_set);
+    free(pass1_toks);
+    free(pass2_toks);
     return rc;
 }
 
@@ -714,7 +728,7 @@ lcsas_repo_read_blob(const char *repo_path,
         }
     }
 
-    fd = open(path, O_RDONLY);
+    fd = open(path, O_RDONLY | O_BINARY);
     if (fd < 0) return -1;
     enc = (unsigned char *)malloc((size_t)loc->length);
     if (!enc) { close(fd); return -1; }

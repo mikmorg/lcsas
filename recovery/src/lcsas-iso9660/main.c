@@ -10,12 +10,11 @@
  * `mount -o loop` is not available.
  */
 #include "iso9660.h"
+#include "../lcsas-restore/posix_compat.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include <errno.h>
 
 static int
