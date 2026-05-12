@@ -1910,6 +1910,14 @@ class MetaVolumeBuilder:
             shutil.copy2(str(new_restore), str(top_link))
             os.chmod(str(top_link), 0o755)
 
+        # Surface restore.bat at the meta-volume root so Windows users
+        # who plug in the disc see "restore.bat" in File Explorer and
+        # can double-click it without descending into recovery/scripts/.
+        new_bat = dst / "scripts" / "restore.bat"
+        if new_bat.is_file():
+            top_bat = self._output / "restore.bat"
+            shutil.copy2(str(new_bat), str(top_bat))
+
     def _bundle_metadata(self) -> None:
         """Copy per-repo Rustic metadata (keys, config, index, snapshots) onto the meta volume.
 
@@ -2084,33 +2092,60 @@ class MetaVolumeBuilder:
 ║                    START HERE                           ║
 ╚══════════════════════════════════════════════════════════╝
 
-This is the LCSAS META-VOLUME — it contains all the tools needed
-to restore data from the LCSAS archive discs.
+This is the LCSAS META-VOLUME — it contains everything needed
+to recover the files on the LCSAS archive discs.
 
-TO RESTORE YOUR FILES (single-drive mode — recommended):
+╔══ Pick the section for your operating system ═══════════╗
 
-  1. You need the encryption key file (NOT on any disc for security)
-  2. You need the archive discs (any one bootstraps; the script will
-     tell you which others to insert).
-  3. Insert any archive disc into the drive.
-  4. Run:  ./restore.sh --key <keyfile> --target <output> --repo <name>
-     The script will prompt for each disc swap.
+  >>> Windows 10 or 11 <<<
+       Double-click  restore.bat  in this folder.
+       (See recovery/docs/RECOVER_WINDOWS.txt for details.)
 
-For automated / scripted restores (no interactive prompts):
-     ./restore-auto.sh --key <keyfile> --target <output> --repo <name> \
-                       --disc-cmd "your-disc-loader-command"
+  >>> macOS or Linux <<<
+       Open a Terminal, then run:
+           sh restore.sh ~/restored
+       (See recovery/docs/RECOVER.txt for details.)
 
-Legacy: if every disc has already been copied to ISO files on disk,
-you may use directory mode instead:
-     ./restore.sh --key <keyfile> --isos <iso_dir> --target <output>
+  >>> No working computer at all <<<
+       Boot directly from the disc.  Most computers boot from
+       optical media if you press F12 or F2 at power-on.
+       (See recovery/docs/BOOT.txt for details.)
 
-See README_RESTORE.md for detailed instructions.
+╚══════════════════════════════════════════════════════════╝
 
-IMPORTANT: If this is confusing, take ALL the discs plus the
-encryption key to a computer professional.  Any Linux system
-administrator or IT professional should be able to follow the
-instructions in README_RESTORE.md.
+WHAT YOU NEED
 
-WARNING: WITHOUT THE ENCRYPTION KEY, THE DATA CANNOT BE RECOVERED.
+  * The password for this archive (the original owner should
+    have written it down separately from the discs).
+  * Enough free disk space on your computer for the restored
+    files.  Typical archives are 10 GB to several TB.
+  * A USB Blu-ray reader (or any optical drive that can read
+    the disc format used by this archive).
+
+WHAT HAPPENS IF YOU LOSE THE PASSWORD
+
+  The data is unrecoverable.  This is by design — the password
+  is the only key to the encryption.  There is no back door,
+  no Anthropic / vendor recovery service, no master key held
+  anywhere.
+
+INHERITED A WHOLE STACK OF DISCS?
+
+  Look at the disc labels.  ONE of them will be labelled
+  LCSAS_META (or similar) — that is THIS disc.  Start with it.
+  The recovery process will tell you which numbered data disc
+  to insert next.
+
+NEED HELP?
+
+  Take all the discs plus the password to any computer
+  professional.  Any Linux system administrator or IT
+  professional should be able to follow the instructions in
+  recovery/docs/RECOVER.txt.
+
+  The full source code is in recovery/src/, so a sufficiently
+  motivated future implementer can rebuild the tooling from
+  scratch even if every prebuilt binary on the disc has gone
+  unusable.
 """
             _write_and_sync(self._output / "START_HERE.txt", text)

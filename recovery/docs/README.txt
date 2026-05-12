@@ -19,13 +19,14 @@ QUICK START
 
 DOCUMENTATION
 
-  BUILD.txt    -- compilation and cross-compilation
-  RECOVER.txt  -- step-by-step manual recovery
-  TIERS.txt    -- recovery tier hierarchy + Python-free guarantee
-  BOOT.txt     -- bootable-medium boot stack
-  FORMAT.txt   -- on-disc data formats (restic + LCSAS)
-  CRYPTO.txt   -- cryptographic primitives with test vectors
-  ../specs/    -- bundled reference specs (FIPS, RFCs, ECMA)
+  BUILD.txt           -- compilation and cross-compilation
+  RECOVER.txt         -- macOS / Linux manual recovery walkthrough
+  RECOVER_WINDOWS.txt -- Windows recovery walkthrough
+  TIERS.txt           -- recovery tier hierarchy + Python-free guarantee
+  BOOT.txt            -- bootable-medium boot stack
+  FORMAT.txt          -- on-disc data formats (restic + LCSAS)
+  CRYPTO.txt          -- cryptographic primitives with test vectors
+  ../specs/           -- bundled reference specs (FIPS, RFCs, ECMA)
 
 SOURCE LAYOUT
 

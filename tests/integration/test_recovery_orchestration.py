@@ -91,8 +91,48 @@ def test_meta_builder_bundles_recovery_toolchain(tmp_path):
     assert (output / "recovery" / "Makefile").is_file()
     assert (output / "recovery" / "src" / "lcsas-restore" / "main.c").is_file()
     assert (output / "recovery" / "scripts" / "restore.sh").is_file()
+    assert (output / "recovery" / "scripts" / "restore.bat").is_file()
+    # restore.bat must also be surfaced at the meta-volume root for
+    # Windows users who don't descend into subfolders.
+    assert (output / "restore.bat").is_file()
     # build/ should be excluded
     assert not (output / "recovery" / "build").exists()
+
+
+def test_recovery_builder_supports_windows_arches():
+    """RecoveryBuilder advertises x86_64-windows and aarch64-windows."""
+    from lcsas.recovery import RecoveryBuilder
+
+    rb = RecoveryBuilder(RECOVERY_DIR)
+    assert "x86_64-windows" in rb.SUPPORTED_ARCHES
+    assert "aarch64-windows" in rb.SUPPORTED_ARCHES
+    assert "x86_64-windows" in rb._WINDOWS_ARCHES
+
+
+@pytest.mark.skipif(
+    not __import__("shutil").which("python3"),
+    reason="ziglang module / python3 required for windows cross-build",
+)
+def test_recovery_builder_cross_builds_windows():
+    """End-to-end: cross-compile the Windows .exe via RecoveryBuilder."""
+    import importlib.util
+    if importlib.util.find_spec("ziglang") is None:
+        pytest.skip("ziglang not installed")
+
+    from lcsas.recovery import RecoveryBuilder
+
+    rb = RecoveryBuilder(RECOVERY_DIR)
+    # Remove any stale artifact so we know this run produced it.
+    stale = RECOVERY_DIR / "bin" / "x86_64-windows" / "lcsas-restore.exe"
+    if stale.exists():
+        stale.unlink()
+
+    a = rb.cross_build("x86_64-windows", verbose=False)
+    assert a.arch == "x86_64-windows"
+    assert a.lcsas_restore.is_file()
+    assert a.lcsas_restore.name == "lcsas-restore.exe"
+    # Windows binary isn't expected to ship lcsas-init (Linux PID 1 only).
+    assert a.lcsas_init is None
 
 
 def test_bootable_builder_rejects_both_modes():

@@ -1,0 +1,22 @@
+# Force CRLF line endings on Windows-only files.  Without this, files
+# checked out on Linux/macOS would have LF endings; CMD on Windows
+# typically tolerates LF but some older or stricter Windows tools
+# reject scripts with LF line endings.
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Force LF on POSIX-only scripts.
+*.sh    text eol=lf
+
+# Force LF on C source; reproducible builds depend on it.
+*.c     text eol=lf
+*.h     text eol=lf
+
+# Treat vendored binary blobs as binary even if they look textual.
+vendored/**/*.c        text eol=lf
+vendored/**/*.h        text eol=lf
+vendored/**/SHA256.txt text eol=lf
+
+# Spec PDFs / TXTs are binary-preserved.
+specs/*.pdf  binary
+specs/*.txt  text eol=lf

@@ -50,7 +50,13 @@ class RecoveryBuilder:
         Makefile, src/, vendored/, etc.).
     """
 
-    SUPPORTED_ARCHES = ("x86_64", "aarch64", "riscv64")
+    SUPPORTED_ARCHES = (
+        "x86_64", "aarch64", "riscv64",
+        "x86_64-windows", "aarch64-windows",
+    )
+
+    # Arches that target Windows -- binaries get .exe suffix, build via zig cc.
+    _WINDOWS_ARCHES = ("x86_64-windows", "aarch64-windows")
 
     def __init__(self, recovery_dir: Path) -> None:
         self._dir = recovery_dir.resolve()
@@ -94,18 +100,56 @@ class RecoveryBuilder:
                     verbose: bool = False) -> RecoveryArtifacts:
         """Cross-compile lcsas-restore for ``arch``.
 
-        ``cc`` defaults to the conventional musl cross-compiler name
-        (e.g. ``aarch64-linux-musl-gcc``).  Caller is responsible for
-        ensuring the compiler exists.
+        For Linux arches (x86_64, aarch64, riscv64), ``cc`` defaults to
+        ``<arch>-linux-musl-gcc``; the binary is statically linked.
+
+        For Windows arches (x86_64-windows, aarch64-windows), the
+        Makefile's dedicated ``windows`` target is invoked (which
+        shells out to ``zig cc -target <arch>-windows-gnu``); the
+        binary has a ``.exe`` suffix and lcsas-init is not produced
+        (it's a Linux-only PID 1).
         """
         if arch not in self.SUPPORTED_ARCHES:
             raise ValueError(f"unsupported arch: {arch}")
+
+        is_windows = arch in self._WINDOWS_ARCHES
+
+        env = os.environ.copy()
+        env.setdefault("SOURCE_DATE_EPOCH", "1735689600")
+
+        if is_windows:
+            # The Makefile already encodes the zig cc invocation; we
+            # just trigger the right target.
+            target = f"bin/{arch}/lcsas-restore.exe"
+            out = subprocess.run(
+                ["make", "-C", str(self._dir), target],
+                env=env, capture_output=not verbose, text=True, check=False,
+            )
+            if out.returncode != 0:
+                raise RuntimeError(
+                    f"cross-build {arch} failed (rc={out.returncode}):\n"
+                    f"{out.stderr if not verbose else ''}"
+                )
+            bin_dir = self._dir / "bin" / arch
+            exe = bin_dir / "lcsas-restore.exe"
+            if not exe.is_file():
+                raise RuntimeError(f"expected {exe} not produced")
+            return RecoveryArtifacts(
+                arch=arch,
+                lcsas_restore=exe,
+                # iso9660 / init not currently cross-built for Windows;
+                # they're either unused on Windows (init) or
+                # functionally redundant (iso9660 -- Windows can mount
+                # ISOs natively).
+                lcsas_iso9660=None,
+                lcsas_init=None,
+            )
+
+        # ── Linux cross-compile path ─────────────────────────────────
         cc = cc or f"{arch}-linux-musl-gcc"
         if shutil.which(cc) is None:
             raise FileNotFoundError(f"cross compiler not on PATH: {cc}")
 
-        env = os.environ.copy()
-        env.setdefault("SOURCE_DATE_EPOCH", "1735689600")
         out = subprocess.run(
             ["make", "-C", str(self._dir), "clean"],
             env=env, check=False, capture_output=True, text=True,
