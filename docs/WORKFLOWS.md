@@ -58,8 +58,9 @@ the code path or required setup.
   (assembled ISO on staging SSD/HDD), COLD (burned disc).
 - **Multi-copy** — exactly 1 location vs. N locations holding copies of the
   same volume; exercises `volume_copies` rows and `location move`.
-- **ECC** — DVDisaster RS03 augmentation enabled (BD-R, M-Disc) vs.
-  bypassed via the `--skip-ecc` flag.
+- **ECC** — Always enabled for production media (BD-R, M-Disc, BDXL — 15%
+  RS03 overhead). The test-only `TEST_TINY` media is implicitly skipped
+  (`MediaType.ecc_overhead_pct == 0`). There is no user-facing toggle.
 - **Live distro** — yes (recovery booted from USB / meta-volume) vs. no
   (workflow runs under the host OS).
 - **Recovery tier** — `1` prebuilt static `lcsas-restore`, `2` vendored

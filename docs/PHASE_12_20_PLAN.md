@@ -100,9 +100,10 @@ into a single private method:
 def _stage_single_volume(
     self, packs: list[Pack], media_type: MediaType,
     location: str, session_id: str | None,
-    skip_ecc: bool, iso_output: Path | None,
+    iso_output: Path | None,
 ) -> tuple[Volume, Path]:
     """Create staging dir, write packs, inject metadata, create ISO.
+    ECC is applied automatically for media with ecc_overhead_pct > 0.
     Returns (volume, iso_path)."""
 ```
 

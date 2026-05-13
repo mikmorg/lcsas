@@ -118,8 +118,6 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Media type (BD25, MDISC100, TEST_TINY, etc.).")
     burn_p.add_argument("--repo", type=str, default=None, nargs="*",
                         help="Specific repository IDs to burn.")
-    burn_p.add_argument("--skip-ecc", action="store_true",
-                        help="Skip DVDisaster ECC augmentation.")
     burn_p.add_argument("--session", type=str, default=None,
                         help="Burn a previously staged session (ID or 'latest').")
     burn_p.add_argument("--location", type=str, default=None,
@@ -143,8 +141,6 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Stage only packs missing at this location.")
     stage_p.add_argument("--repo", type=str, default=None, nargs="*",
                          help="Specific repository IDs to stage.")
-    stage_p.add_argument("--skip-ecc", action="store_true",
-                         help="Skip DVDisaster ECC augmentation.")
     stage_p.add_argument("--clean", action="store_true",
                          help="Clean up staged ISOs for a session.")
     stage_p.add_argument("--session", type=str, default=None,
@@ -969,7 +965,6 @@ def cmd_stage(args: argparse.Namespace) -> int:
                 media_type=media_type,
                 for_location=args.for_location,
                 repo_ids=repo_ids,
-                skip_ecc=args.skip_ecc,
                 dry_run=getattr(args, "dry_run", False),
             )
 
@@ -1123,7 +1118,6 @@ def cmd_burn_legacy(args: argparse.Namespace) -> int:
             media_type=media_type,
             for_location=args.location,
             repo_ids=repo_ids,
-            skip_ecc=args.skip_ecc,
             dry_run=getattr(args, "dry_run", False),
         )
         logger.info(f"Session: {result.session_id}")

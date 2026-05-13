@@ -323,8 +323,8 @@ existing copies at the target.
   see step 4.
 - Optical drive count — irrelevant to selection, relevant to burn-loop
   pacing (one drive = serialized burns).
-- ECC — `--skip-ecc` skips DVDisaster augmentation but does not change
-  pack selection.
+- ECC — always on for production media; implicitly skipped for TEST_*.
+  Has no effect on pack selection.
 - Recovery tier — sync targets Tier 2 only.
 
 **Test coverage:**

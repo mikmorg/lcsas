@@ -247,7 +247,7 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
             break
         iso_path = ISO_OUT / f"{manifest.volume_label}.iso"
         orchestrator.execute(
-            manifest, iso_output=iso_path, skip_burn=True, skip_ecc=True,
+            manifest, iso_output=iso_path, skip_burn=True,
         )
         size = iso_path.stat().st_size
         print(f"    → {iso_path.name} ({size:,} bytes)")
