@@ -25,6 +25,23 @@ class TestCLIParsing:
         assert args.repo_command == "add"
         assert args.name == "family"
 
+    def test_repo_add_rejects_key_file_flag(self, capsys):
+        """The historical ``--key-file`` flag was silently ignored — the
+        real encryption key is auto-detected from ``mirror_path/keys/``.
+        After its removal (#37) argparse must reject it as unknown so
+        operators are not misled into thinking it controls key
+        selection.
+        """
+        with pytest.raises(SystemExit) as excinfo:
+            self.parser.parse_args([
+                "repo", "add", "--key-file", "/tmp/some.key",
+                "family", "/mnt/mirror/fam",
+            ])
+        assert excinfo.value.code != 0
+        err = capsys.readouterr().err
+        assert "unrecognized arguments" in err
+        assert "--key-file" in err
+
     def test_repo_list(self):
         args = self.parser.parse_args(["repo", "list"])
         assert args.command == "repo"

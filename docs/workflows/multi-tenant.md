@@ -37,14 +37,14 @@ encryption key ID from the mirror's `keys/` directory.
 
 **Steps:**
 
-1. `lcsas repo add <name> <mirror_path> [--key-file PATH]` — generate
-   UUID, scan `keys/` for the first key filename, INSERT into
-   `repositories`. (`src/lcsas/cli/main.py:464`)
+1. `lcsas repo add <name> <mirror_path>` — generate UUID, scan
+   `keys/` for the first key filename, INSERT into `repositories`.
+   (`src/lcsas/cli/main.py:464`)
 2. `register_repo()` writes `repo_id`, `name`, absolute `mirror_path`,
    and `encryption_key_id`. (`src/lcsas/db/repos.py:25`)
-3. `--key-file` is parsed but **not** persisted — only the
-   auto-detected key ID is written. The password file is supplied via
-   TOML config. (`src/lcsas/cli/main.py:82`, `src/lcsas/utils/fs.py:132`)
+3. The encryption key ID is auto-detected from `mirror_path/keys/`.
+   The password file is supplied via TOML config.
+   (`src/lcsas/utils/fs.py:132`)
 
 **Expected outcome:** New row with fresh UUID and absolute mirror path;
 log line `Registered repository '<name>' (id: <uuid>)`. Subsequent
@@ -69,8 +69,6 @@ log line `Registered repository '<name>' (id: <uuid>)`. Subsequent
 - Gaps:
   - No CLI-level test asserts `encryption_key_id` is populated from a
     real `keys/` layout.
-  - `--key-file` is accepted but silently ignored; no test documents
-    this.
   - No test rejects/warns when `mirror_path` has no `keys/` — the
     empty `encryption_key_id` silently breaks later `KEY_INFO.txt`.
 
