@@ -43,11 +43,6 @@ class MediaType(Enum):
         return int(self._capacity_bytes * (100 - self._ecc_overhead_pct) / 100)
 
     @property
-    def is_optical(self) -> bool:
-        """Whether this media type is optical (BD-R / M-Disc)."""
-        return self.name.startswith(("BD", "MDISC"))
-
-    @property
     def is_test(self) -> bool:
         """Whether this is a testing-only media type."""
         return self.name.startswith("TEST")
