@@ -81,8 +81,6 @@ def build_parser() -> argparse.ArgumentParser:
     repo_add = repo_sub.add_parser("add", help="Register a new repository.")
     repo_add.add_argument("name", help="Repository name (e.g., 'family').")
     repo_add.add_argument("mirror_path", type=Path, help="Path to the local mirror.")
-    repo_add.add_argument("--key-file", type=Path, default=None,
-                          help="Path to the encryption key file.")
 
     repo_sub.add_parser("list", help="List registered repositories.")
 
