@@ -123,7 +123,13 @@ def build_parser() -> argparse.ArgumentParser:
     burn_p.add_argument("--session", type=str, default=None,
                         help="Burn a previously staged session (ID or 'latest').")
     burn_p.add_argument("--location", type=str, default=None,
-                        help="Physical location tag for this copy.")
+                        help="Physical location tag for this copy. Must "
+                             "already be registered (use `lcsas location "
+                             "add` first or pass --create-location).")
+    burn_p.add_argument("--create-location", action="store_true", default=False,
+                        help="Create the --location row if it does not "
+                             "already exist (otherwise unknown names are "
+                             "rejected to guard against typos).")
     burn_p.add_argument("--device", type=str, default=None,
                         help="Optical device path (overrides config).")
     burn_p.add_argument("--dry-run", "-n", action="store_true", default=False,
@@ -1047,6 +1053,18 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
         )
 
         location = args.location or config.default_location
+        # Issue #19: reject unknown --location names rather than silently
+        # auto-creating a phantom row. Users opt into creation with
+        # --create-location (or by pre-registering via `location add`).
+        from lcsas.db.locations import UnknownLocationError, resolve_location
+        try:
+            resolve_location(
+                conn, location,
+                create=getattr(args, "create_location", False),
+            )
+        except UnknownLocationError as exc:
+            logger.error(str(exc))
+            return 1
 
         if getattr(args, "dry_run", False):
             from lcsas.db.sessions import get_session_volumes, resolve_session_id
@@ -1124,6 +1142,19 @@ def cmd_burn_legacy(args: argparse.Namespace) -> int:
             logger.error(str(e))
             return 1
 
+        # Issue #19: validate --location before any staging work so a
+        # typo aborts cleanly without leaving a half-staged session.
+        location = args.location or config.default_location
+        from lcsas.db.locations import UnknownLocationError, resolve_location
+        try:
+            resolve_location(
+                conn, location,
+                create=getattr(args, "create_location", False),
+            )
+        except UnknownLocationError as exc:
+            logger.error(str(exc))
+            return 1
+
         # Stage first
         result = orch.stage(
             media_type=media_type,
@@ -1139,7 +1170,6 @@ def cmd_burn_legacy(args: argparse.Namespace) -> int:
             return 0
 
         # Then burn
-        location = args.location or config.default_location
         device = args.device or config.optical_device
         receipts = orch.burn_session(
             session_ref=result.session_id,

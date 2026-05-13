@@ -249,8 +249,10 @@ created; the disc retains its `burn_date`, `iso_sha256`, and
 by staging and burning *only* the packs that location is missing.
 
 **Prerequisites:**
-- The target location is already registered (or will be auto-created on
-  burn via `ensure_location`, `src/lcsas/burn/orchestrator.py:679`).
+- The target location is already registered (`lcsas location add`). As of
+  issue #19, `lcsas burn --location <name>` rejects unknown names rather
+  than silently registering them; pass `--create-location` to opt into
+  creation during burn.
 - The catalog contains the full set of packs (i.e. `lcsas scan` has run
   against the live mirrors).
 - Enough free disk under `config.staging_path` to hold the delta ISOs
@@ -445,12 +447,17 @@ operating LCSAS in a multi-location production setup:
    mirror. For long-rotation off-site copies, run `--for-location`
    *before* `rustic forget --prune`.
 
-7. **Location auto-creation on burn is silent.**
-   `burn_session` calls `ensure_location(self._conn, location)`
-   (`src/lcsas/burn/orchestrator.py:679`), so a typo in
-   `lcsas burn --location Offsite_Safre` will silently register a new
-   location rather than failing. Operators should pre-create locations
-   with `lcsas location add` to make typos visible.
+7. **`lcsas burn --location` rejects unknown names (fixed in #19).**
+   The CLI resolves `--location` via
+   `resolve_location(conn, name, create=args.create_location)`
+   (`src/lcsas/db/locations.py`). Unknown names abort with a
+   "did you mean …?" hint computed by `difflib.get_close_matches`, so
+   a typo in `lcsas burn --location Offsite_Safre` no longer mints a
+   phantom row. Operators who actually want a new location pass
+   `--create-location` (or pre-register with `lcsas location add`).
+   `burn_session()` still calls `ensure_location` defensively for
+   non-CLI callers, but in the CLI path the row is guaranteed to exist
+   by then.
 
 8. **`get_location_summary` ignores `DEPRECATED`/`DESTROYED` volumes**
    (`src/lcsas/db/queries.py:533`), so a location whose discs have all
