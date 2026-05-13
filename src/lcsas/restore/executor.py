@@ -5,13 +5,17 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
+from lcsas.exceptions import RestoreError
 from lcsas.log import get_logger
 from lcsas.rustic.wrapper import RusticRunner
 from lcsas.utils.fs import copy_file, ensure_dir
 from lcsas.utils.hashing import sha256_file
 from lcsas.utils.pack_layout import METADATA_SUBDIRS, find_pack_file, pack_dest_path
+
+if TYPE_CHECKING:
+    from lcsas.config.media import MediaType
 
 logger = get_logger()
 
@@ -127,6 +131,8 @@ class RestoreExecutor:
         *,
         verify: bool = True,
         collect_failures: bool = False,
+        iso_path: Path | None = None,
+        media_type: MediaType | None = None,
     ) -> IngestionResult:
         """Copy needed packs from a mounted volume into the restore cache.
 
@@ -137,6 +143,15 @@ class RestoreExecutor:
             verify: If True (default), verify SHA-256 of copied packs.
             collect_failures: If True, collect corrupt/missing pack hashes in
                 IngestionResult.failed instead of raising PackCorruptionError.
+            iso_path: Optional path to the underlying ISO file backing this
+                mount.  When supplied along with a configured ECC runner, the
+                ISO's DVDisaster RS03 ECC is verified (and repaired if needed)
+                before any pack is read — recovers transparently from bit-rot
+                that lies within the recovery margin.
+            media_type: Optional media type of the volume.  Tape media (LTO)
+                bypasses ECC entirely because tape has its own built-in error
+                correction — mirrors the burn-side predicate in
+                ``burn/orchestrator.py:234-240``.
 
         Returns:
             IngestionResult with ingested count and (optionally) failed hashes.
@@ -144,7 +159,39 @@ class RestoreExecutor:
         Raises:
             PackCorruptionError: When a copied pack fails hash verification
                 and collect_failures is False.
+            RestoreError: When the ISO's ECC is unrecoverably damaged
+                (both verify and repair fail) — points the operator at
+                an alternate copy from a different location.
         """
+        # ── ECC verify-or-repair on the mounted ISO ─────────────────
+        # Issue #20: invoke the injected ECC runner before reading any
+        # pack so bit-rot within the RS03 recovery margin is transparently
+        # healed.  Guards (no-op cases):
+        #   * ``self._ecc is None`` — test-only path.
+        #   * ``iso_path is None`` — caller has no ISO handle (e.g.
+        #     reading from a pre-extracted directory in tests).
+        #   * tape media — LTO has built-in ECC; mirror the burn-side
+        #     skip at ``burn/orchestrator.py:234-240``.
+        if (
+            self._ecc is not None
+            and iso_path is not None
+            and (media_type is None or not media_type.is_tape)
+            and not self.verify_iso(iso_path)
+        ):
+            raise RestoreError(
+                f"ECC verification and repair both failed for "
+                f"'{iso_path.name}'. The disc is damaged beyond "
+                f"DVDisaster RS03's recovery margin.",
+                recovery_hint=(
+                    "Try an alternate copy of this volume from a "
+                    "different location (off-site / cold-vault). "
+                    "Every volume in this archive is typically burned "
+                    "to multiple discs across locations — run "
+                    "`lcsas catalog locations <volume_label>` to list "
+                    "them."
+                ),
+            )
+
         data_dir = volume_mount / "data"
         cache_data = cache_dir / "data"
         ensure_dir(cache_data)
