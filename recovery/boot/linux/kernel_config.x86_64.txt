@@ -1,0 +1,62 @@
+# Required Linux kernel options for the LCSAS recovery initramfs on x86_64.
+# This is the documented intent; the actual .config used to build vmlinuz
+# is bundled as boot/linux/config-x86_64 when present.
+#
+# To rebuild the kernel:
+#   1. wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.<N>.tar.xz
+#   2. tar xJf linux-6.6.<N>.tar.xz
+#   3. cd linux-6.6.<N>
+#   4. cp /path/to/recovery/boot/linux/config-x86_64 .config
+#   5. make olddefconfig
+#   6. make -j$(nproc)
+#   7. cp arch/x86/boot/bzImage /path/to/recovery/boot/linux/vmlinuz-x86_64
+
+# ── Filesystems ──
+CONFIG_BLK_DEV_LOOP=y           # loop devices for ISO mount
+CONFIG_ISO9660_FS=y             # ISO9660 (the recovery medium's FS)
+CONFIG_JOLIET=y                 # long names if present
+CONFIG_UDF_FS=y                 # for UDF-formatted Blu-ray
+CONFIG_TMPFS=y
+CONFIG_DEVTMPFS=y               # required by /init
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_SQUASHFS=y               # in case the rootfs is squashed
+CONFIG_OVERLAY_FS=y             # for read-only root with writable upper
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+
+# ── Block / CD-ROM ──
+CONFIG_BLOCK=y
+CONFIG_CDROM=y
+CONFIG_BLK_DEV_SR=y             # SCSI CD-ROM
+CONFIG_SCSI=y
+CONFIG_BLK_DEV_SD=y
+CONFIG_ATA=y
+CONFIG_SATA_AHCI=y
+
+# ── USB (for USB-CD and USB rootfs) ──
+CONFIG_USB=y
+CONFIG_USB_EHCI_HCD=y
+CONFIG_USB_OHCI_HCD=y
+CONFIG_USB_XHCI_HCD=y
+CONFIG_USB_STORAGE=y
+
+# ── Initial ramfs ──
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_RD_GZIP=y
+CONFIG_RD_BZIP2=y
+CONFIG_RD_LZ4=y
+CONFIG_RD_ZSTD=y
+
+# ── Console / TTY ──
+CONFIG_TTY=y
+CONFIG_VT=y
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+
+# ── Crypto (kernel-side, for dm-crypt if ever needed) ──
+CONFIG_CRYPTO=y
+
+# ── Net (off by design: recovery is offline) ──
+# Networking is deliberately disabled to reduce attack surface and
+# kernel size.
+# CONFIG_NET is not set

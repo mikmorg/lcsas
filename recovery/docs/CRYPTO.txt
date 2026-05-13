@@ -1,0 +1,215 @@
+LCSAS RECOVERY TOOLCHAIN -- CRYPTOGRAPHIC PRIMITIVES
+======================================================
+
+This document specifies every cryptographic primitive used in LCSAS
+recovery, with enough detail that an implementer could reconstruct the
+binary from this file alone.  Each section includes a test vector.
+
+REFERENCES
+
+  Every spec referenced below is also bundled in plain text under
+  recovery/specs/ on every recovery medium.  See recovery/specs/README.txt
+  for the full inventory and the mapping from spec -> implementation.
+
+  FIPS 180-4   Secure Hash Standard (SHA-2 family)
+               recovery/specs/fips180-4.txt   (also .pdf)
+               https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf
+  FIPS 197     Advanced Encryption Standard (AES)
+               recovery/specs/fips197.txt     (also .pdf)
+               https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.197.pdf
+  RFC 8439     ChaCha20 and Poly1305 for IETF Protocols (§2.5 Poly1305)
+               recovery/specs/rfc8439.txt
+               https://www.rfc-editor.org/rfc/rfc8439
+  RFC 7914     scrypt Password-Based KDF
+               recovery/specs/rfc7914.txt
+               https://www.rfc-editor.org/rfc/rfc7914
+  RFC 4648     The Base16, Base32, and Base64 Data Encodings
+               recovery/specs/rfc4648.txt
+               https://www.rfc-editor.org/rfc/rfc4648
+  RFC 2104     HMAC: Keyed-Hashing for Message Authentication
+               recovery/specs/rfc2104.txt
+               https://www.rfc-editor.org/rfc/rfc2104
+  RFC 8018     PKCS #5: Password-Based Cryptography Specification v2.1
+               recovery/specs/rfc8018.txt
+               https://www.rfc-editor.org/rfc/rfc8018
+  RFC 8259     JSON (JavaScript Object Notation)
+               recovery/specs/rfc8259.txt
+               https://www.rfc-editor.org/rfc/rfc8259
+  RFC 8878     zstd Compression Format
+               recovery/specs/rfc8878.txt
+               https://www.rfc-editor.org/rfc/rfc8878
+  ECMA-119     ISO 9660 Volume and File Structure
+               recovery/specs/ecma-119.txt    (also .pdf)
+               https://ecma-international.org/publications-and-standards/standards/ecma-119/
+
+THE LCSAS CIPHER STACK
+
+  password
+     |  scrypt(N=32768, r=8, p=1, dklen=64)
+     v
+  derived 64 bytes = kek_encrypt(32) || kek_mac_k(16) || kek_mac_r(16)
+     |  decrypt key file via Poly1305-AES + AES-256-CTR
+     v
+  master_key = master_encrypt(32) || master_mac_k(16) || master_mac_r(16)
+     |  decrypt blob via Poly1305-AES + AES-256-CTR
+     v
+  plaintext  (zstd-decompressed if v2)
+     |  SHA-256
+     v
+  verify against blob_id
+
+SHA-256
+
+  Input:  message of any byte length
+  Output: 32 bytes
+
+  Algorithm: FIPS 180-4 §6.2.  Initial hash values H0..H7 are the
+  first 32 bits of the fractional parts of the square roots of the
+  first 8 primes (2, 3, 5, 7, 11, 13, 17, 19).  Round constants K0..K63
+  are the first 32 bits of the cube roots of the first 64 primes.
+
+  Test vector: SHA-256("abc") =
+      ba7816bf 8f01cfea 414140de 5dae2223
+      b00361a3 96177a9c b410ff61 f20015ad
+
+AES-256
+
+  Key:        32 bytes
+  Block:      16 bytes
+  Rounds:     14
+  Round keys: 15 x 16 bytes = 240 bytes
+
+  Key schedule: FIPS 197 §5.2 with Nk=8, Nr=14.  The "extra" S-box
+  application (SubWord without RotWord) is applied when i mod Nk == 4.
+
+  Cipher: FIPS 197 §5.1.  SubBytes -> ShiftRows -> MixColumns -> AddRoundKey
+  repeated for rounds 1..Nr-1.  Final round omits MixColumns.
+
+  S-box and Rcon: FIPS 197 Figures 7 and 11.
+
+  Test vector: FIPS 197 §C.3
+    key = 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+    pt  = 00112233445566778899aabbccddeeff
+    ct  = 8ea2b7ca516745bfeafc49904b496089
+
+AES-128
+
+  Same construction with Nk=4, Nr=10.  Used only as the inner cipher
+  for Poly1305-AES key derivation (s = AES_k(nonce)).
+
+  Test vector: FIPS 197 §C.1
+    key = 000102030405060708090a0b0c0d0e0f
+    pt  = 00112233445566778899aabbccddeeff
+    ct  = 69c4e0d86a7b0430d8cdb78070b4c55a
+
+AES-256-CTR
+
+  Mode: NIST SP 800-38A §6.5.  The IV is treated as a 128-bit
+  big-endian counter; for each block, the counter is encrypted and
+  XOR'd with the plaintext; the counter is then incremented.
+
+  IMPORTANT: the counter is incremented at byte 15 first (the
+  least-significant byte), with carry propagating toward byte 0.
+
+  Test vector: NIST SP 800-38A §F.5.5
+
+POLY1305-AES MAC
+
+  Note: This is the *original* Bernstein Poly1305 as published in
+  "The Poly1305-AES message-authentication code" (FSE 2005), where
+  the s value is computed as s = AES-128-ECB(mac_k, nonce).  This is
+  NOT the RFC 8439 ChaCha20-Poly1305 construction.
+
+  Inputs:
+    r      16 bytes (mac_r)
+    s      16 bytes (computed by caller as AES-128-ECB(mac_k, iv))
+    msg    arbitrary bytes
+
+  Step 1: clamp r
+    r = r AND 0x0FFFFFFC0FFFFFFC0FFFFFFC0FFFFFFF  (as a 128-bit LE int)
+
+  Step 2: h = 0
+  Step 3: for each 16-byte block of msg (last may be shorter):
+            n = LE(block) | (1 << (8 * blocklen))    (append 0x01 byte then pad)
+            h = ((h + n) * r) mod (2^130 - 5)
+  Step 4: tag = (h + s) mod 2^128, packed as 16 LE bytes.
+
+  RFC 8439 §2.5.2 test vector (with s supplied directly):
+    r   = 85d6be7857556d337f4452fe42d506a8
+    s   = 0103808afb0db2fd4abff6af4149f51b
+    msg = "Cryptographic Forum Research Group" (34 bytes ASCII)
+    tag = a8061dc1305136c6c22b8baf0c0127a9
+
+RESTIC AUTHENTICATED ENCRYPTION
+
+  Input ciphertext layout:
+    IV (16 bytes) || ciphertext (n bytes) || MAC (16 bytes)
+  Total length = n + 32 bytes.
+
+  Decryption:
+    s = AES-128-ECB(mac_k, IV)
+    if Poly1305(mac_r, s, ciphertext) != MAC:  ABORT (integrity fail)
+    plaintext = AES-256-CTR(encrypt_key, IV, ciphertext)
+
+HMAC-SHA-256
+
+  RFC 2104.  Key is zero-padded or hashed to 64 bytes.  ipad = 0x36,
+  opad = 0x5C.
+
+    HMAC(k, m) = SHA256( (k XOR opad) || SHA256( (k XOR ipad) || m ) )
+
+PBKDF2-HMAC-SHA-256
+
+  RFC 8018 §5.2 with PRF = HMAC-SHA-256.
+
+    DK = T_1 || T_2 || ... || T_L
+    where L = ceil(dklen / 32) and
+      T_i = F(P, S, c, i)
+      F(P, S, c, i) = U_1 XOR U_2 XOR ... XOR U_c
+        U_1 = HMAC(P, S || INT(i))     INT(i) = 4-byte big-endian
+        U_j = HMAC(P, U_{j-1})
+
+  Used as inner PRF for scrypt.
+
+SCRYPT
+
+  RFC 7914 §6.  Parameters used by restic: N=32768, r=8, p=1.
+
+  Step 1: B[0..p-1] = PBKDF2-HMAC-SHA-256(pw, salt, 1, p * 128 * r)
+  Step 2: for i = 0..p-1: B[i] = scryptROMix(B[i], r, N)
+  Step 3: DK = PBKDF2-HMAC-SHA-256(pw, B, 1, dklen)
+
+  scryptROMix uses scryptBlockMix which uses Salsa20/8.  See RFC 7914
+  §3-§5 for the full chain.
+
+  Memory cost: 128 * r * N bytes = 32 MiB at restic defaults.
+
+  Test vector (RFC 7914 §11, vector 1):
+    pw   = (empty)
+    salt = (empty)
+    N=16, r=1, p=1, dklen=64
+    DK = 77d6576238657b203b19ca42c18a0497
+         f16b4844e3074ae8dfdffa3fede21442
+         fcd0069ded0948f8326a753a0fc81f17
+         e8d3e0fb2e0d3628cf35e20c38d18906
+
+KEY DERIVATION CHAIN (LCSAS / restic)
+
+  1. User provides password (UTF-8 bytes, trailing newline stripped).
+  2. Read key file as JSON; decode "salt" (base64), read N/r/p (default
+     N=32768, r=8, p=1).
+  3. scrypt(password, salt, N, r, p, dklen=64) -> derived 64 bytes.
+  4. kek_encrypt = derived[0..32], kek_mac_k = derived[32..48],
+     kek_mac_r = derived[48..64].
+  5. Decode "data" field (base64) and decrypt via restic AEAD using kek.
+  6. Parse master_json -> extract "encrypt"/base64, "mac"/"k"/base64,
+     "mac"/"r"/base64.
+  7. master_encrypt (32) + master_mac_k (16) + master_mac_r (16) is
+     the data-key triple used to decrypt all blobs.
+
+BLOB INTEGRITY
+
+  Each blob has a SHA-256-derived ID.  After decryption (and
+  optional zstd decompression in v2 repos), the implementation
+  computes SHA-256 of the plaintext and verifies it equals the
+  blob's claimed ID.  If not, ABORT.

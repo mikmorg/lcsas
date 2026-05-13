@@ -1,0 +1,46 @@
+# Linux 6.6 LTS kernel config for aarch64 (arm64).  Same intent as the
+# x86_64 config (see kernel_config.x86_64.txt) plus aarch64-specific
+# bits.
+
+CONFIG_ARM64=y
+CONFIG_64BIT=y
+
+# Cross-compile:
+#   make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
+#   cp /path/to/this-file .config
+#   make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+#   make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
+#   cp arch/arm64/boot/Image /path/to/recovery/boot/linux/vmlinuz-aarch64
+
+# Standard filesystems (same as x86_64).
+CONFIG_ISO9660_FS=y
+CONFIG_JOLIET=y
+CONFIG_UDF_FS=y
+CONFIG_BLK_DEV_LOOP=y
+CONFIG_TMPFS=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_OVERLAY_FS=y
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_RD_GZIP=y
+CONFIG_RD_ZSTD=y
+CONFIG_TTY=y
+CONFIG_VT=y
+CONFIG_SERIAL_PL011=y           # most ARM SoCs
+CONFIG_SERIAL_PL011_CONSOLE=y
+CONFIG_USB=y
+CONFIG_USB_XHCI_HCD=y
+CONFIG_USB_STORAGE=y
+
+# Pi 5 / VisionFive 2 share PCIe + NVMe paths via:
+CONFIG_PCI=y
+CONFIG_NVME_CORE=y
+CONFIG_BLK_DEV_NVME=y
+
+# Optical media (USB BD-R drives most common on aarch64 desktops).
+CONFIG_CDROM=y
+CONFIG_BLK_DEV_SR=y
+CONFIG_SCSI=y
+
+# Networking is deliberately disabled.
+# CONFIG_NET is not set

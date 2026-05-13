@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -391,6 +392,54 @@ def build_parser() -> argparse.ArgumentParser:
     meta_build.add_argument(
         "--project-root", type=Path, default=None,
         help="LCSAS project root (default: auto-detect).",
+    )
+
+    # ── recovery ────────────────────────────────────────────────
+    recovery_p = subparsers.add_parser(
+        "recovery",
+        help="Build / verify the C89 + POSIX-sh recovery toolchain.",
+    )
+    recovery_sub = recovery_p.add_subparsers(dest="recovery_command")
+
+    rb = recovery_sub.add_parser(
+        "build",
+        help="Build the recovery binaries for host or cross-target arch.",
+    )
+    rb.add_argument(
+        "--arch", choices=("host", "x86_64", "aarch64", "riscv64"),
+        default="host",
+        help="Target architecture (default: host).",
+    )
+    rb.add_argument(
+        "--cc", type=str, default=None,
+        help="Override C compiler (default: cc for host, "
+             "<arch>-linux-musl-gcc for cross).",
+    )
+    rb.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Show full build output.",
+    )
+
+    rt = recovery_sub.add_parser(
+        "test", help="Run the recovery toolchain unit-test suite.",
+    )
+    rt.add_argument(
+        "--verbose", "-v", action="store_true",
+        help="Show full test output.",
+    )
+
+    rm = recovery_sub.add_parser(
+        "manifest",
+        help="Compute SHA-256 of every file in recovery/ -> MANIFEST.sha256.",
+    )
+    rm.add_argument(
+        "--output", "-o", type=Path, default=None,
+        help="Output manifest path (default: recovery/MANIFEST.sha256).",
+    )
+
+    rv = recovery_sub.add_parser(
+        "verify",
+        help="Verify reproducible build: builds twice, byte-compares output.",
     )
 
     return parser
@@ -1695,6 +1744,62 @@ def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any)
     return 0
 
 
+def cmd_recovery(args: argparse.Namespace) -> int:
+    """Dispatcher for `lcsas recovery {build,test,manifest,verify}`."""
+    from lcsas.recovery import RecoveryBuilder
+
+    project_root = Path(__file__).resolve().parents[3]
+    recovery_dir = project_root / "recovery"
+    if not recovery_dir.is_dir():
+        logger.error("recovery/ tree not found at %s", recovery_dir)
+        return 1
+
+    rb = RecoveryBuilder(recovery_dir)
+    sub = getattr(args, "recovery_command", None)
+
+    if sub == "build":
+        verbose = bool(getattr(args, "verbose", False))
+        try:
+            if args.arch == "host":
+                a = rb.build_host(verbose=verbose)
+            else:
+                a = rb.cross_build(args.arch, cc=args.cc, verbose=verbose)
+        except (FileNotFoundError, RuntimeError) as exc:
+            logger.error("recovery build failed: %s", exc)
+            return 1
+        print(f"built {a.arch}: {a.lcsas_restore}")
+        if a.lcsas_iso9660:
+            print(f"  + {a.lcsas_iso9660}")
+        if a.lcsas_init:
+            print(f"  + {a.lcsas_init}")
+        return 0
+
+    if sub == "test":
+        verbose = bool(getattr(args, "verbose", False))
+        ok = rb.run_tests(verbose=verbose)
+        if not ok:
+            logger.error("recovery tests FAILED")
+            return 1
+        print("recovery tests: OK")
+        return 0
+
+    if sub == "manifest":
+        path = rb.write_manifest(getattr(args, "output", None))
+        line_count = sum(1 for _ in path.open())
+        print(f"wrote {path} ({line_count} files)")
+        return 0
+
+    if sub == "verify":
+        out = subprocess.run(
+            ["make", "-C", str(recovery_dir), "repro-check"],
+            check=False,
+        )
+        return out.returncode
+
+    logger.error("Usage: lcsas recovery {build,test,manifest,verify}")
+    return 1
+
+
 def cmd_meta_build(args: argparse.Namespace) -> int:
     """Build a self-contained meta-volume with all restore tools."""
     from lcsas.meta.builder import MetaVolumeBuilder
@@ -2729,6 +2834,8 @@ def dispatch(args: argparse.Namespace) -> int:
         else:
             logger.error("Usage: lcsas meta {build}")
             return 1
+    elif args.command == "recovery":
+        return cmd_recovery(args)
     elif args.command == "verify":
         return cmd_verify(args)
     elif args.command == "consolidate":

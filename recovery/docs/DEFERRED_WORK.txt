@@ -1,0 +1,220 @@
+LCSAS RECOVERY -- DEFERRED WORK (post catalog-hint MVP)
+=========================================================
+
+STATUS: parking lot for future iterations.
+
+The catalog-driven prompt-hint path (catalog.db -> disc_locator ->
+volume label in the swap prompt) is implemented and verified end-to-
+end in tests/test_multidisc.py::case_catalog_prompt_label.  This
+file documents three follow-ups deliberately deferred from that
+work.
+
+────────────────────────────────────────────────────────────────────
+1. disc_index.txt sidecar  (resilience-only redundancy)
+────────────────────────────────────────────────────────────────────
+
+WHY DEFERRED
+
+  catalog.db is bundled on every data disc and the C reader queries
+  it directly.  The disc_index.txt sidecar from the original three-
+  source design (MULTI_DISC_DESIGN.txt section "PACK -> VOLUME MAP
+  SOURCES") would have been a *redundant* plain-text fallback for
+  the unlikely case that SQLite cannot open the catalog (e.g.
+  corrupted .db file with otherwise intact disc).  The recovery
+  binary statically links the SQLite amalgamation, so the surface
+  area for "sqlite refuses to open" is small.
+
+WHEN TO PRIORITIZE
+
+  If field evidence shows catalog.db corruption events.  Until
+  then, every kilobyte we don't burn extends archive longevity.
+
+DESIGN SKETCH (if/when needed)
+
+  At burn time, in src/lcsas/burn/orchestrator.py after the catalog
+  is written to staging:
+
+      from lcsas.db.packs import list_packs
+      from lcsas.db.volume_packs import get_volume_ids_for_pack
+      from lcsas.db.volumes import get_volume_by_id
+
+      lines = []
+      for pack in list_packs(conn):
+          for vid in get_volume_ids_for_pack(conn, pack.pack_id):
+              vol = get_volume_by_id(conn, vid)
+              lines.append(f"{pack.sha256}  {vol.label}  {vol.uuid}")
+      (staging_root / "disc_index.txt").write_text("\\n".join(lines))
+
+  C-side reader in src/lcsas-restore/disc_index.{c,h} parsing one
+  line at a time (no SQLite needed); plugs into disc_locator as a
+  tertiary lookup after the catalog miss.
+
+  Schema is grep-able: `grep <hex>  disc_index.txt`.
+
+EFFORT ESTIMATE
+
+  Python writer: 30 lines, ~30 min.
+  C reader + locator wire-in: ~150 lines, ~half a day.
+  Test (parallel to test_multidisc.case_catalog_prompt_label): ~50
+  lines, ~1 hour.
+
+────────────────────────────────────────────────────────────────────
+2. .lcsas_volume_info  (currently-mounted-disc identification)
+────────────────────────────────────────────────────────────────────
+
+WHY DEFERRED
+
+  Today's flow: the user is told which disc to insert; they insert
+  it; the locator re-scans pack files and finds them.  We do NOT
+  verify "the disc actually now mounted is the one we asked for" --
+  we just check whether the missing pack appeared.  In practice
+  that's robust: hash collisions are impossible, so finding the
+  pack proves the right disc is there.
+
+  `volume_info.json` IS written to every staging root today (see
+  staging/metadata.py::write_volume_info) -- it just doesn't have
+  a dot prefix and isn't yet consulted by the recovery binary.
+  Using the existing `volume_info.json` (no rename, no new sidecar
+  needed) would be the natural way to ship this.
+
+WHEN TO PRIORITIZE
+
+  When auto-mount detection (item 3 below) lands: the auto-mount
+  watcher could read volume_info.json on a new mount to print
+  "[lcsas-restore] mounted vol-042 (Family Photos vol 3/8)" so
+  the user gets immediate feedback.
+
+DESIGN SKETCH
+
+  In disc_locator.c:scan_paths(), when a new search path appears,
+  open `<path>/volume_info.json` (or the .lcsas-prefixed version),
+  parse the `label` / `uuid` fields via json_q.c, and emit a
+  one-line "[lcsas-restore] mounted vol-XXX" diagnostic.
+
+  When prompting, cross-check: if the catalog says we want vol-042
+  and the currently-mounted disc claims to be vol-041, print
+  "(currently inserted: vol-041 -- still need vol-042)".
+
+EFFORT ESTIMATE
+
+  C parser using existing json_q: ~80 lines.
+  Locator integration: ~30 lines.
+  Test: ~60 lines.
+  Total ~half a day.
+
+────────────────────────────────────────────────────────────────────
+3. Auto-mount detection  (eliminate the Enter press)
+────────────────────────────────────────────────────────────────────
+
+WHY DEFERRED
+
+  Today the user inserts a disc, the OS auto-mounts it (modern
+  desktop Linux/macOS do this), and the user presses Enter.  The
+  locator then re-scans known + standard mount-point parents and
+  picks up the new disc.
+
+  "Just notice the new mount and skip the Enter" is delightful
+  UX but it requires either:
+    - inotify on /media/$USER and /Volumes (Linux/macOS only);
+    - dbus integration with udisks2 / DiskArbitration (much heavier);
+    - polling /proc/mounts (cheap but ugly).
+
+  The Enter press costs the user ~1 second per swap.  For an
+  archive spanning 50 discs that's <1 minute total.  Worth
+  doing eventually, not urgent.
+
+DESIGN SKETCH
+
+  Add a Linux-only inotify watch in disc_locator.c, gated on
+  --auto-mount=on (CLI flag from main.c).  When the locator is
+  about to print a prompt:
+
+      if (auto_mount) {
+          int ifd = inotify_init1(IN_NONBLOCK);
+          inotify_add_watch(ifd, "/media", IN_CREATE);
+          if (getenv("USER")) {
+              snprintf(buf, sizeof buf, "/media/%s", getenv("USER"));
+              inotify_add_watch(ifd, buf, IN_CREATE);
+          }
+          /* If a new dir appears within the prompt's read timeout,
+           * re-scan and skip the Enter. */
+      }
+
+  The read_response() loop becomes a `poll()` over {stdin, ifd}
+  with a 1-second timeout, looping until either fires.  On ifd:
+  re-scan; if found, return immediately.
+
+  macOS uses kevent() with EVFILT_VNODE.  Windows has
+  WM_DEVICECHANGE but pulling in user32.lib for a console app is
+  ugly; defer Windows.
+
+  Disabled by default (--auto-mount=off in --interactive=auto
+  mode) so non-tty environments don't waste cycles.
+
+EFFORT ESTIMATE
+
+  Linux inotify path: ~120 lines + test (~80 lines).
+  macOS kevent path: ~100 lines.
+  Windows: punt to a polling /proc/mounts-equivalent loop on
+  the C side; ~30 lines.
+  Total ~1-1.5 days.
+
+OPEN QUESTION
+
+  Should auto-mount also handle MOUNT removal (user ejects)?
+  Probably yes for clean diagnostics: "[lcsas-restore] /media/X
+  unmounted; you may insert the next disc."  Trivial addition.
+
+────────────────────────────────────────────────────────────────────
+4. Snapshot-aware pick list  (avoid prompting for unused discs)
+────────────────────────────────────────────────────────────────────
+
+WHY DEFERRED
+
+  Today we resolve missing packs reactively: when the binary needs
+  pack X, it prompts for whichever disc holds X.  If the user is
+  restoring only a single snapshot, many burned discs may not be
+  touched -- but we have no upfront answer to "which discs do I
+  need for snapshot S?"
+
+  meta/restore_single_drive.py already does this for the Python
+  workflow.  Porting the logic to the C path would let
+  lcsas-restore print upfront: "this restore needs vols
+  001, 003, 007 -- have them ready."
+
+DESIGN SKETCH
+
+  At restore start (right after loading the snapshot list), walk
+  the snapshot's tree once with the locator's "fail fast +
+  collect missing" mode set.  Collect the set of pack_ids
+  referenced.  Query the catalog for {pack_id -> volume_label},
+  group by volume, print:
+
+      [lcsas-restore] snapshot needs 3 volumes:
+        vol-001 (BD25, VERIFIED)
+        vol-003 (BD25, VERIFIED)
+        vol-007 (BD25, VERIFIED)
+
+  Then begin the actual restore; the prompts during restore will
+  ask for these volumes one by one in the order they're needed.
+
+EFFORT ESTIMATE
+
+  ~200 lines in tree.c + main.c, ~half a day.
+
+────────────────────────────────────────────────────────────────────
+PRIORITY ORDER FOR RESUMING
+────────────────────────────────────────────────────────────────────
+
+  P1: Snapshot-aware pick list (item 4) -- biggest UX impact;
+      reuses existing catalog data; no new on-disc format.
+
+  P2: Auto-mount detection (item 3) -- nice quality-of-life win
+      but only Linux/macOS, doesn't help bare-metal initramfs
+      bootflow (which doesn't have an auto-mount daemon at all).
+
+  P3: .lcsas_volume_info wire-up (item 2) -- low effort, low
+      payoff; useful once auto-mount lands.
+
+  P4: disc_index.txt sidecar (item 1) -- pure defence in depth;
+      defer indefinitely unless field evidence demands it.

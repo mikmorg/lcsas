@@ -1609,6 +1609,8 @@ class MetaVolumeBuilder:
         bootable: bool = False,
         alpine_dir: Path | None = None,
         catalog_db_path: Path | None = None,
+        recovery_dir: Path | None = None,
+        bundle_recovery_toolchain: bool = True,
     ) -> None:
         """
         Args:
@@ -1634,12 +1636,18 @@ class MetaVolumeBuilder:
         self._bootable = bootable
         self._alpine_dir = alpine_dir
         self._catalog_db_path = catalog_db_path
+        self._bundle_recovery_toolchain = bundle_recovery_toolchain
 
         if project_root is None:
             # meta/ → lcsas/ → src/ → (project root)
             self._project_root = Path(__file__).resolve().parents[3]
         else:
             self._project_root = project_root.resolve()
+
+        if recovery_dir is None:
+            self._recovery_dir = self._project_root / "recovery"
+        else:
+            self._recovery_dir = recovery_dir.resolve()
 
     @property
     def output_dir(self) -> Path:
@@ -1667,6 +1675,8 @@ class MetaVolumeBuilder:
         self._bundle_standalone_restorer()
         self._bundle_restore_helper()
         self._bundle_metadata()
+        if self._bundle_recovery_toolchain:
+            self._bundle_recovery_toolchain_artifacts()
         self._write_restore_script()
         self._write_restore_auto_script()
         self._write_readme()
@@ -1853,6 +1863,61 @@ class MetaVolumeBuilder:
         shutil.copy2(str(src), str(dst))
         os.chmod(str(dst), 0o755)
 
+    def _bundle_recovery_toolchain_artifacts(self) -> None:
+        """Bundle the C89 + POSIX-sh recovery toolchain onto the meta-volume.
+
+        Layout produced under ``output_dir/recovery/``::
+
+            recovery/
+            ├── bin/<arch>/lcsas-restore       (if built)
+            ├── bin/<arch>/lcsas-iso9660       (if built)
+            ├── bin/<arch>/lcsas-init          (if built)
+            ├── src/                            C source
+            ├── vendored/                       sqlite + zstd amalgamation
+            ├── scripts/                        POSIX-sh drivers
+            ├── docs/                           plain-text docs
+            ├── boot/                           kernel/loader configs
+            ├── Makefile
+            └── VERSION
+
+        Missing per-arch binaries are silently skipped; the recovery
+        cascade rebuilds from source when the prebuilt binary is absent.
+        See ``recovery/scripts/restore.sh``.
+        """
+        src = self._recovery_dir
+        if not src.is_dir():
+            return  # not a fatal error: recovery toolchain is optional
+
+        dst = self._output / "recovery"
+        if dst.exists():
+            shutil.rmtree(str(dst))
+        shutil.copytree(
+            str(src),
+            str(dst),
+            ignore=shutil.ignore_patterns(
+                "build", "build-*", "__pycache__", "*.pyc",
+                "*.o", "*.a",
+            ),
+        )
+
+        # Mirror the new POSIX restore.sh at the meta-volume root so
+        # existing automation that looks for /restore.sh finds the new
+        # driver too.  (The legacy bash heredoc is still written by
+        # _write_restore_script for backward compat.)
+        new_restore = dst / "scripts" / "restore.sh"
+        if new_restore.is_file():
+            top_link = self._output / "restore_c89.sh"
+            shutil.copy2(str(new_restore), str(top_link))
+            os.chmod(str(top_link), 0o755)
+
+        # Surface restore.bat at the meta-volume root so Windows users
+        # who plug in the disc see "restore.bat" in File Explorer and
+        # can double-click it without descending into recovery/scripts/.
+        new_bat = dst / "scripts" / "restore.bat"
+        if new_bat.is_file():
+            top_bat = self._output / "restore.bat"
+            shutil.copy2(str(new_bat), str(top_bat))
+
     def _bundle_metadata(self) -> None:
         """Copy per-repo Rustic metadata (keys, config, index, snapshots) onto the meta volume.
 
@@ -1899,10 +1964,37 @@ class MetaVolumeBuilder:
                     shutil.copytree(str(s), str(d))
 
     def _write_restore_script(self) -> None:
-        """Write the bootstrap restore.sh script."""
+        """Install the meta-volume's top-level ``restore.sh``.
+
+        Behavior:
+
+        * If the C89 recovery toolchain bundle is available (the new
+          POSIX-sh driver in ``recovery/scripts/restore.sh``), copy
+          *that* in as ``/restore.sh``.  This is Python-free for tiers
+          1-4 and only touches Python at tier 5 (LCSAS_ALLOW_PYTHON_TIER).
+        * Otherwise, fall back to the legacy bash heredoc
+          (``RESTORE_SCRIPT``), which carries a hard Python dependency
+          from earlier days and is kept only for compatibility with
+          discs that predate the recovery/ tree.
+
+        The legacy script is *also* written, as ``restore_legacy.sh``,
+        so it remains accessible as a manual third option if needed.
+        """
         script_path = self._output / "restore.sh"
-        _write_and_sync(script_path, RESTORE_SCRIPT)
-        os.chmod(str(script_path), 0o755)
+        new_driver = self._output / "recovery" / "scripts" / "restore.sh"
+        if new_driver.is_file():
+            shutil.copy2(str(new_driver), str(script_path))
+            os.chmod(str(script_path), 0o755)
+            # Stash the legacy bash driver alongside for compatibility /
+            # for users who specifically want it.  Off the bare path.
+            legacy = self._output / "restore_legacy.sh"
+            _write_and_sync(legacy, RESTORE_SCRIPT)
+            os.chmod(str(legacy), 0o755)
+        else:
+            # No recovery/ tree was bundled (e.g. older builds).  Fall
+            # back to the historical bash driver.
+            _write_and_sync(script_path, RESTORE_SCRIPT)
+            os.chmod(str(script_path), 0o755)
 
     def _write_restore_auto_script(self) -> None:
         """Write the non-interactive restore-auto.sh script."""
@@ -2000,33 +2092,60 @@ class MetaVolumeBuilder:
 ║                    START HERE                           ║
 ╚══════════════════════════════════════════════════════════╝
 
-This is the LCSAS META-VOLUME — it contains all the tools needed
-to restore data from the LCSAS archive discs.
+This is the LCSAS META-VOLUME — it contains everything needed
+to recover the files on the LCSAS archive discs.
 
-TO RESTORE YOUR FILES (single-drive mode — recommended):
+╔══ Pick the section for your operating system ═══════════╗
 
-  1. You need the encryption key file (NOT on any disc for security)
-  2. You need the archive discs (any one bootstraps; the script will
-     tell you which others to insert).
-  3. Insert any archive disc into the drive.
-  4. Run:  ./restore.sh --key <keyfile> --target <output> --repo <name>
-     The script will prompt for each disc swap.
+  >>> Windows 10 or 11 <<<
+       Double-click  restore.bat  in this folder.
+       (See recovery/docs/RECOVER_WINDOWS.txt for details.)
 
-For automated / scripted restores (no interactive prompts):
-     ./restore-auto.sh --key <keyfile> --target <output> --repo <name> \
-                       --disc-cmd "your-disc-loader-command"
+  >>> macOS or Linux <<<
+       Open a Terminal, then run:
+           sh restore.sh ~/restored
+       (See recovery/docs/RECOVER.txt for details.)
 
-Legacy: if every disc has already been copied to ISO files on disk,
-you may use directory mode instead:
-     ./restore.sh --key <keyfile> --isos <iso_dir> --target <output>
+  >>> No working computer at all <<<
+       Boot directly from the disc.  Most computers boot from
+       optical media if you press F12 or F2 at power-on.
+       (See recovery/docs/BOOT.txt for details.)
 
-See README_RESTORE.md for detailed instructions.
+╚══════════════════════════════════════════════════════════╝
 
-IMPORTANT: If this is confusing, take ALL the discs plus the
-encryption key to a computer professional.  Any Linux system
-administrator or IT professional should be able to follow the
-instructions in README_RESTORE.md.
+WHAT YOU NEED
 
-WARNING: WITHOUT THE ENCRYPTION KEY, THE DATA CANNOT BE RECOVERED.
+  * The password for this archive (the original owner should
+    have written it down separately from the discs).
+  * Enough free disk space on your computer for the restored
+    files.  Typical archives are 10 GB to several TB.
+  * A USB Blu-ray reader (or any optical drive that can read
+    the disc format used by this archive).
+
+WHAT HAPPENS IF YOU LOSE THE PASSWORD
+
+  The data is unrecoverable.  This is by design — the password
+  is the only key to the encryption.  There is no back door,
+  no Anthropic / vendor recovery service, no master key held
+  anywhere.
+
+INHERITED A WHOLE STACK OF DISCS?
+
+  Look at the disc labels.  ONE of them will be labelled
+  LCSAS_META (or similar) — that is THIS disc.  Start with it.
+  The recovery process will tell you which numbered data disc
+  to insert next.
+
+NEED HELP?
+
+  Take all the discs plus the password to any computer
+  professional.  Any Linux system administrator or IT
+  professional should be able to follow the instructions in
+  recovery/docs/RECOVER.txt.
+
+  The full source code is in recovery/src/, so a sufficiently
+  motivated future implementer can rebuild the tooling from
+  scratch even if every prebuilt binary on the disc has gone
+  unusable.
 """
             _write_and_sync(self._output / "START_HERE.txt", text)

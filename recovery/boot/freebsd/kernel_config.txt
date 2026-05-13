@@ -1,0 +1,52 @@
+# FreeBSD 13.4-RELEASE kernel config for LCSAS recovery.
+#
+# Build process (on a FreeBSD build host):
+#
+#   1. fetch https://download.freebsd.org/releases/amd64/13.4-RELEASE/...src
+#   2. tar xJf src.txz -C /usr/src
+#   3. cp /path/to/this-file /usr/src/sys/amd64/conf/LCSAS_RECOVERY
+#   4. cd /usr/src && make buildkernel KERNCONF=LCSAS_RECOVERY
+#   5. cp /usr/obj/usr/src/amd64.amd64/sys/LCSAS_RECOVERY/kernel \
+#         /path/to/recovery/boot/freebsd/kernel-x86_64
+#
+# Build flags below pin the recovery profile.
+
+include GENERIC
+ident LCSAS_RECOVERY
+
+# Read-only recovery; no need for write-heavy subsystems.
+options ROOTDEVNAME=\"cd9660:cd0\"
+options ISO9660_FS
+options UDF_FS
+options TMPFS
+options DEVFS
+
+# Networking deliberately disabled.
+nooptions INET
+nooptions INET6
+nodevice em
+nodevice igb
+nodevice re
+
+# Standard storage drivers.
+device ata
+device ahci
+device scbus
+device da
+device cd
+
+# USB.
+device usb
+device ehci
+device ohci
+device xhci
+device umass
+
+# Serial console.
+device uart
+options EARLY_PRINTF
+
+# Disable bloat.
+nooptions WITNESS
+nooptions DDB
+nooptions INVARIANTS

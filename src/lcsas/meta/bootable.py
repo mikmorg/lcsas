@@ -54,10 +54,12 @@ class BootableISOBuilder:
     def __init__(
         self,
         staging_dir: Path,
-        alpine_dir: Path,
-        output_iso: Path,
+        alpine_dir: Path | None = None,
+        output_iso: Path | None = None,
         volume_label: str = "LCSAS_META",
         xorriso_binary: str = "xorriso",
+        recovery_boot_dir: Path | None = None,
+        recovery_arch: str = "x86_64",
     ) -> None:
         """
         Args:
@@ -65,12 +67,32 @@ class BootableISOBuilder:
                 :class:`MetaVolumeBuilder`).
             alpine_dir: Directory containing ``vmlinuz``, ``initramfs``,
                 and ``rootfs.squashfs`` (output of ``build_rootfs.sh``).
+                Mutually exclusive with ``recovery_boot_dir``.
             output_iso: Path for the final ``.iso`` file.
             volume_label: ISO 9660 volume label.
             xorriso_binary: Path or name of the ``xorriso`` binary.
+            recovery_boot_dir: Alternative to ``alpine_dir``.  Points at
+                a ``recovery/boot/`` tree (Linux LTS + FreeBSD configs +
+                initramfs).  When set, the bootable ISO uses the C89
+                recovery toolchain's boot stack instead of Alpine.
+            recovery_arch: Target architecture for ``recovery_boot_dir``
+                (x86_64, aarch64, or riscv64).
         """
+        if alpine_dir is None and recovery_boot_dir is None:
+            raise ValueError(
+                "must specify either alpine_dir or recovery_boot_dir"
+            )
+        if alpine_dir is not None and recovery_boot_dir is not None:
+            raise ValueError(
+                "alpine_dir and recovery_boot_dir are mutually exclusive"
+            )
+        if output_iso is None:
+            raise ValueError("output_iso is required")
+
         self._staging = staging_dir
         self._alpine = alpine_dir
+        self._recovery_boot = recovery_boot_dir
+        self._recovery_arch = recovery_arch
         self._output = output_iso
         self._label = volume_label
         self._xorriso = xorriso_binary
@@ -97,6 +119,23 @@ class BootableISOBuilder:
             raise FileNotFoundError(
                 f"Staging directory not found: {self._staging}"
             )
+        if self._recovery_boot is not None:
+            # recovery/boot/ layout
+            arch = self._recovery_arch
+            required = [
+                self._recovery_boot / "linux" / f"vmlinuz-{arch}",
+                self._recovery_boot / f"initramfs-{arch}.cpio.gz",
+            ]
+            for p in required:
+                if not p.is_file():
+                    raise FileNotFoundError(
+                        f"Recovery boot artifact not found: {p}\n"
+                        f"Build with: make CC=<cross> bin/{arch}/lcsas-restore "
+                        f"&& bash boot/initramfs/build_initramfs.sh {arch} {p}"
+                    )
+            return
+
+        assert self._alpine is not None
         for name in ("vmlinuz", "initramfs", "rootfs.squashfs"):
             path = self._alpine / name
             if not path.is_file():
@@ -111,6 +150,33 @@ class BootableISOBuilder:
         boot_dir = self._staging / "boot"
         boot_dir.mkdir(parents=True, exist_ok=True)
 
+        if self._recovery_boot is not None:
+            # New C89 recovery boot stack.
+            arch = self._recovery_arch
+            kernel_src = self._recovery_boot / "linux" / f"vmlinuz-{arch}"
+            init_src = self._recovery_boot / f"initramfs-{arch}.cpio.gz"
+            shutil.copy2(str(kernel_src), str(boot_dir / "vmlinuz"))
+            shutil.copy2(str(init_src), str(boot_dir / "initramfs.cpio.gz"))
+            # FreeBSD alternate kernel if present.
+            fbsd_kernel = self._recovery_boot / "freebsd" / f"kernel-{arch}"
+            if fbsd_kernel.is_file():
+                fbsd_dir = self._staging / "boot" / "freebsd"
+                fbsd_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(fbsd_kernel), str(fbsd_dir / "kernel"))
+                loader_conf = self._recovery_boot / "freebsd" / "loader.conf"
+                if loader_conf.is_file():
+                    shutil.copy2(str(loader_conf), str(fbsd_dir / "loader.conf"))
+
+            grub_dir = boot_dir / "grub"
+            grub_dir.mkdir(parents=True, exist_ok=True)
+            recovery_grub = self._recovery_boot.parent / "boot" / "efi" / "grub.cfg"
+            if recovery_grub.is_file():
+                shutil.copy2(str(recovery_grub), str(grub_dir / "grub.cfg"))
+            else:
+                self._write_default_grub_cfg(grub_dir / "grub.cfg")
+            return
+
+        assert self._alpine is not None
         for name in ("vmlinuz", "initramfs", "rootfs.squashfs"):
             src = self._alpine / name
             dst = boot_dir / name

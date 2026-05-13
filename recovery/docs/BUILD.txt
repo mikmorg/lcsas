@@ -1,0 +1,120 @@
+LCSAS RECOVERY TOOLCHAIN -- BUILD INSTRUCTIONS
+================================================
+
+OVERVIEW
+
+This directory tree contains the C89 + POSIX-sh recovery toolchain for
+LCSAS.  It is designed to be rebuildable from source on any UNIX-like
+system with a C compiler, for a 50-year survivability window.
+
+The output binary lcsas-restore reads a restic-format repository (keys,
+index, snapshots, data) and writes plaintext files to a target
+directory.
+
+REQUIREMENTS
+
+Minimum to rebuild from source:
+  - Any ISO C89 compiler with `unsigned long long` (universally
+    supported since 1999): cc, gcc, clang, tcc, pcc, etc.
+  - POSIX make (BSD make, GNU make, pdpmake -- all work).
+  - POSIX libc with <unistd.h>, <fcntl.h>, <dirent.h>, <sys/stat.h>.
+
+No build-time dependencies beyond a C compiler.  No autotools.  No
+package manager.
+
+QUICK BUILD
+
+  make                       # builds build/lcsas-restore on host arch
+  make test                  # runs FIPS/RFC unit test vectors
+  make clean                 # removes build/
+
+CROSS-COMPILATION
+
+Override CC to target another architecture:
+
+  make CC=aarch64-linux-musl-gcc bin/aarch64/lcsas-restore
+  make CC=riscv64-linux-musl-gcc bin/riscv64/lcsas-restore
+  make CC=x86_64-linux-musl-gcc  bin/x86_64/lcsas-restore
+
+The recommended cross-compiler is `zig cc` (single binary, vendored
+musl libc, deterministic output):
+
+  zig cc -target aarch64-linux-musl ...
+  zig cc -target riscv64-linux-musl ...
+  zig cc -target x86_64-linux-musl ...
+
+STATIC LINKAGE
+
+For a fully self-contained binary that runs on a bare kernel + libc:
+
+  make CC=musl-gcc LDFLAGS=-static
+
+The binary will be ~200-400 KB depending on architecture.
+
+STANDARD-CONFORMANCE NOTES
+
+The source is written to ISO C89, with one well-known extension:
+`unsigned long long` (a C99 feature universally supported by every C
+compiler shipped since 2000).  This is used in poly1305.c and scrypt.c
+for 64-bit accumulators.  A strict-C89-only build would require manual
+64-bit arithmetic via paired `unsigned long`s and is left as a future
+exercise.
+
+The compiler is invoked with:
+
+  -std=c89 -pedantic -Wall -Wextra -Wshadow -Wno-long-long
+
+This emits warnings if any C99 feature beyond `long long` slips in.
+
+REPRODUCIBLE BUILDS
+
+For byte-identical output across builds:
+
+  SOURCE_DATE_EPOCH=1735689600 \
+      make CFLAGS='-std=c89 -pedantic -O2 -ffile-prefix-map=$(PWD)=. \
+                    -Wno-builtin-macro-redefined -D__DATE__="redacted" \
+                    -D__TIME__="redacted" -frandom-seed=0'
+
+The Makefile uses `ar -D` for deterministic archives.
+
+TESTING
+
+  make test
+
+runs nine unit-test suites against canonical test vectors:
+
+  test_sha256    FIPS 180-2 Appendix B
+  test_aes       FIPS 197 Appendices C.1 / C.3 + NIST SP 800-38A F.5.5
+  test_poly1305  RFC 8439 §2.5.2 + self-consistency
+  test_pbkdf2    HMAC-SHA-256 vectors (RFC 6070 family)
+  test_scrypt    RFC 7914 §11 vectors 1 and 2
+  test_b64       RFC 4648 base64 decode
+  test_hex       hex encode + constant-time compare
+  test_path      path traversal safety
+  test_json      JSON tokenizer + accessors
+
+All must pass.  An integration test against rustic-generated repos is
+deferred to Phase 2 (requires the rustic binary on PATH; see
+tests/integration/test_pure_python_restore.py for the fixture pattern).
+
+VENDORED DEPENDENCIES
+
+Phase 1 MVP has ZERO vendored third-party C source.  Everything in
+src/lcsas-restore/ is hand-written from primary specs (FIPS 180-4,
+FIPS 197, RFC 7914, RFC 8439, RFC 4648).
+
+Phase 2 will add:
+
+  vendored/sqlite/   sqlite-amalgamation 3.46.0 (SQLite catalog support)
+  vendored/zstd/     zstd 1.5.6 decompress-only amalgamation
+                     (restic v2 repos with compression)
+
+These third-party sources build under their own native flags (typically
+-std=gnu99) as separate translation units; only LCSAS-authored code is
+strict C89.
+
+FORMAT DOCUMENTATION
+
+See FORMAT.txt for the restic on-disc format and the holographic
+catalog layout.  See CRYPTO.txt for the cryptographic primitives with
+test vectors in formula form.

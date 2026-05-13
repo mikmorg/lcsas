@@ -1,0 +1,577 @@
+LCSAS RECOVERY -- WINDOWS RECOVERY PATH (PLAN)
+================================================
+
+GOAL
+
+Provide a recovery workflow on a stock Windows 10/11 laptop that
+requires NO additional installation (no WSL, no Python, no Cygwin,
+no admin rights for the common case).
+
+Target user: an average inheritor with a Windows laptop, a USB BD
+reader, the meta-volume disc, and the password.  No technical
+expertise beyond "double-click an icon" and "type a password".
+
+TARGET PATFORMS (in priority order)
+  1. Windows 10 1709 (Oct 2017) and later on x86_64
+       Out-of-the-box: ships UCRT (Universal C Runtime) in the OS.
+       This is the realistic support floor.
+  2. Windows 11 on ARM64 (Snapdragon X / Surface Pro X)
+       Same UCRT story; aarch64-windows binary not yet runtime-tested.
+  3. Windows 7 SP1 / 8 / 8.1 with KB2999226 installed
+       KB2999226 (Sep 2015) backports UCRT to these older systems.
+       Most patched 7/8 machines have it; unpatched ones won't.
+       BEST-EFFORT: not actively tested in CI.
+
+  REJECTED platforms:
+    Windows XP / Vista / unpatched 7  -- UCRT is not available.
+    Workaround for these: a separate msvcrt-linked binary (see
+    "Phase W5 -- legacy msvcrt build" below).
+
+────────────────────────────────────────────────────────────────────
+PART 1 -- SOURCE PORTABILITY (lcsas-restore.exe)
+────────────────────────────────────────────────────────────────────
+
+CROSS-COMPILER
+
+Use `zig cc` with `-target x86_64-windows-gnu`.  Rationale:
+
+  * Single binary download (~50 MB).  Stable releases.  Bundles its
+    own MinGW-w64 headers; no separate toolchain install.
+  * Deterministic output.  Already part of recovery/Makefile (for
+    aarch64/riscv64 Linux targets).
+  * Adding a Windows target is one more Makefile entry.
+
+Alternative (documented in BUILD.txt as a fallback path):
+  * `x86_64-w64-mingw32-gcc` from a standard MinGW-w64 install.
+
+PORTABILITY CHANGES TO C SOURCE
+
+The hand-written code is mostly portable already (sha256, aes,
+poly1305, scrypt, pbkdf2, b64, hex, json_q, path).  The Windows
+delta is concentrated in the I/O wrappers.
+
+Create a single header `src/lcsas-restore/posix_compat.h`:
+
+    #ifndef LCSAS_POSIX_COMPAT_H
+    #define LCSAS_POSIX_COMPAT_H
+
+    #ifdef _WIN32
+        #include <io.h>            /* open, close, read, write, lseek */
+        #include <direct.h>        /* _mkdir */
+        #include <fcntl.h>
+        #include <sys/stat.h>
+        #include <sys/types.h>
+
+        /* mkdir is one-arg on Windows; drop the mode. */
+        static int posix_mkdir(const char *p, int mode) {
+            (void)mode; return _mkdir(p);
+        }
+        #define mkdir(p, m)  posix_mkdir((p), (m))
+
+        /* Windows uses backslash; we always pass forward slashes
+         * which the runtime accepts.  No path translation needed. */
+
+        /* No symlink support without privileges.  Provide a stub
+         * that errors out; tree.c handles this gracefully. */
+        static int symlink(const char *target, const char *link) {
+            (void)target; (void)link;
+            errno = EPERM;
+            return -1;
+        }
+
+        /* chmod is a no-op on Windows. */
+        #define chmod(p, m)  ((void)(p), (void)(m), 0)
+
+        /* fsync, fdatasync: best-effort via _commit. */
+        #define fsync(fd)    _commit(fd)
+
+        /* ssize_t is not in MinGW's standard headers in all configs. */
+        #ifndef _SSIZE_T_DEFINED
+        typedef long long ssize_t;
+        #define _SSIZE_T_DEFINED
+        #endif
+
+    #else
+        #include <unistd.h>
+        #include <fcntl.h>
+        #include <sys/stat.h>
+        #include <dirent.h>
+    #endif
+
+    #endif
+
+Source files to update:
+  * io.c        -- replace direct unistd/sys-stat includes with
+                   #include "posix_compat.h"
+  * repo.c      -- same
+  * tree.c      -- same; also handle symlink() returning -1 with
+                   EPERM (log warning instead of error)
+  * iso9660.c   -- already pure POSIX I/O; same treatment
+
+DIRENT.H
+
+MinGW-w64 ships its own <dirent.h> that supports opendir / readdir
+/ closedir with the POSIX struct layout.  No changes needed for
+repo.c's directory walks.
+
+UTF-8 / WIDE-CHAR PATHS
+
+MinGW's POSIX shims operate on MBCS / current-codepage strings, not
+UTF-8 by default.  For Windows 10 1903+, the application manifest
+can opt into UTF-8 for the entire process:
+
+  https://learn.microsoft.com/en-us/windows/apps/design/globalizing/
+       use-utf8-code-page
+
+Embed an app manifest that sets `<activeCodePage>UTF8</activeCodePage>`.
+This lets our existing UTF-8-handling code (e.g. JSON-decoded paths)
+just work with `open()` / `mkdir()` on Windows ≥10 1903.
+
+For older Windows: document in RECOVER_WINDOWS.txt that non-ASCII
+filenames may be mangled.
+
+64-BIT FILE OFFSETS
+
+MinGW's `lseek` is 32-bit; we need `_lseeki64`.  Add to posix_compat.h:
+
+    #ifdef _WIN32
+    #define lseek(fd, off, whence)  _lseeki64((fd), (off), (whence))
+    typedef long long off_t;
+    #endif
+
+This matters: pack files routinely exceed 4 GiB; without
+_lseeki64 they'd silently truncate.
+
+────────────────────────────────────────────────────────────────────
+PART 2 -- BUILD SYSTEM
+────────────────────────────────────────────────────────────────────
+
+MAKEFILE TARGETS
+
+Add to recovery/Makefile:
+
+    bin/x86_64-windows/lcsas-restore.exe: ARCH=x86_64-windows
+    bin/x86_64-windows/lcsas-restore.exe:
+        $(MAKE) clean
+        $(MAKE) BUILD=build/win64 \
+                CC="python3 -m ziglang cc -target x86_64-windows-gnu" \
+                CFLAGS_EXTRA="-D_WIN32_WINNT=0x0601 -municode" \
+                LDFLAGS="-static -lws2_32"
+        mkdir -p bin/x86_64-windows
+        cp build/win64/lcsas-restore.exe bin/x86_64-windows/
+
+    bin/aarch64-windows/lcsas-restore.exe: ARCH=aarch64-windows
+    bin/aarch64-windows/lcsas-restore.exe:
+        $(MAKE) clean
+        $(MAKE) BUILD=build/winarm64 \
+                CC="python3 -m ziglang cc -target aarch64-windows-gnu" \
+                LDFLAGS="-static"
+        mkdir -p bin/aarch64-windows
+        cp build/winarm64/lcsas-restore.exe bin/aarch64-windows/
+
+EXE EXTENSION
+
+Update the existing rule `$(BUILD)/lcsas-restore` to emit a `.exe`
+suffix on Windows targets:
+
+    BIN_EXT =
+    ifeq ($(findstring windows,$(CC)),windows)
+        BIN_EXT = .exe
+    endif
+
+    $(BUILD)/lcsas-restore$(BIN_EXT): ...
+
+REPRODUCIBILITY
+
+zig cc honours SOURCE_DATE_EPOCH and `-Wl,--no-insert-timestamp`.
+Add to Windows LDFLAGS:
+
+    LDFLAGS = -static -Wl,--no-insert-timestamp
+
+────────────────────────────────────────────────────────────────────
+PART 3 -- DRIVER SCRIPT (restore.bat / restore.cmd)
+────────────────────────────────────────────────────────────────────
+
+Windows users cannot run POSIX-sh natively (no /bin/sh, no
+bash.exe by default in stock Windows).  We need a CMD-compatible
+driver script: `recovery/scripts/restore.bat`.
+
+The .bat must replicate the cascade (tiers 1, 2, 3-skip, 4-skip,
+5):
+
+    @echo off
+    setlocal enabledelayedexpansion
+
+    REM Detect arch (PROCESSOR_ARCHITECTURE).
+    if /i "%PROCESSOR_ARCHITECTURE%"=="AMD64" set ARCH=x86_64-windows
+    if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" set ARCH=aarch64-windows
+
+    REM Discover RECOVERY root.
+    set SCRIPT_DIR=%~dp0
+    if exist "%SCRIPT_DIR%..\bin" set RECOVERY=%SCRIPT_DIR%..
+    if exist "%SCRIPT_DIR%recovery\bin" set RECOVERY=%SCRIPT_DIR%recovery
+
+    REM Tier 1: prebuilt lcsas-restore.exe.
+    set BIN=%RECOVERY%\bin\%ARCH%\lcsas-restore.exe
+    if exist "%BIN%" goto :do_restore
+
+    REM Tier 2: rustic-static.exe.
+    set BIN=%RECOVERY%\bin\%ARCH%\rustic-static.exe
+    if exist "%BIN%" goto :do_rustic
+
+    REM Tier 3 (rebuild) and tier 4 (cargo) are not supported on
+    REM Windows without an installed toolchain; skip silently.
+
+    REM Tier 5: Python fallback (only if py + standalone_restorer.py).
+    where py >nul 2>nul && (
+        if exist "%RECOVERY%\..\standalone_restorer.py" (
+            set BIN=py
+            goto :do_python
+        )
+    )
+
+    echo ERROR: no recovery method available on this Windows machine.
+    echo Looked for:
+    echo   %RECOVERY%\bin\%ARCH%\lcsas-restore.exe
+    echo   %RECOVERY%\bin\%ARCH%\rustic-static.exe
+    echo See %RECOVERY%\docs\RECOVER_WINDOWS.txt for manual options.
+    pause
+    exit /b 1
+
+    :do_restore
+    set /p TARGET=Restore target folder [C:\Users\%USERNAME%\Documents\restored]:
+    if "!TARGET!"=="" set TARGET=C:\Users\%USERNAME%\Documents\restored
+    mkdir "!TARGET!" 2>nul
+    set /p PASSWORD=Password:
+    > "%TEMP%\lcsas-pw.txt" echo !PASSWORD!
+    "%BIN%" --repo "%RECOVERY%\repo" --password-file "%TEMP%\lcsas-pw.txt" --target "!TARGET!" --snapshot latest
+    del "%TEMP%\lcsas-pw.txt"
+    pause
+    exit /b %ERRORLEVEL%
+
+    :do_rustic
+    REM analogous, rustic CLI args
+    ...
+
+    :do_python
+    REM analogous, py + standalone_restorer.py
+    ...
+
+DESIGN NOTES
+
+* `pause` at the end so the console doesn't auto-close when the
+  user double-clicks the .bat (otherwise they see nothing).
+* `set /p` to prompt for path + password.  Password is visible
+  while typing (CMD has no `read -s` equivalent without PowerShell).
+  For privacy, document a PowerShell alternative.
+* Password file is written to %TEMP% and deleted after; not ideal
+  but acceptable for the common case.
+* The .bat MUST be CRLF line endings; commit with `* text eol=crlf`
+  in .gitattributes for *.bat files.
+
+────────────────────────────────────────────────────────────────────
+PART 4 -- DOCUMENTATION
+────────────────────────────────────────────────────────────────────
+
+NEW FILES
+
+  recovery/docs/RECOVER_WINDOWS.txt
+    Step-by-step Windows recovery walkthrough.  Includes:
+    * Plug in USB BD reader, insert disc.
+    * Find the disc drive letter (usually D: or E:).
+    * Open File Explorer to the disc.
+    * Double-click restore.bat.
+    * Enter password when prompted.
+    * Where files end up.
+    * Troubleshooting: SmartScreen, "Windows protected your PC",
+      antivirus quarantine, long-path issues.
+
+  recovery/docs/START_HERE.txt   (existing -- needs Windows section)
+    Add: "If you are on Windows, double-click restore.bat (or read
+         RECOVER_WINDOWS.txt for details)."
+
+  recovery/docs/RECOVER.txt      (existing -- expand)
+    Add a Windows-specific section mirroring the Linux/macOS steps.
+
+────────────────────────────────────────────────────────────────────
+PART 5 -- TESTING
+────────────────────────────────────────────────────────────────────
+
+ON THE LINUX HOST (CI / local)
+
+  1. Cross-build:
+        make bin/x86_64-windows/lcsas-restore.exe
+
+  2. Smoke test under Wine:
+        apt-get install -y wine64
+        wine bin/x86_64-windows/lcsas-restore.exe --help
+        # Should print usage to stderr, exit 2.
+
+  3. End-to-end via Wine:
+        # Build synthetic restic repo with tests/test_e2e.py
+        # then run lcsas-restore.exe under Wine against it.
+        wine bin/x86_64-windows/lcsas-restore.exe \
+             --repo /tmp/synthetic --password-file /tmp/pw \
+             --target /tmp/out --snapshot latest
+        diff -r /tmp/expected /tmp/out
+
+  Add Makefile target: `make test-windows-wine`.
+
+ON A REAL WINDOWS VM (manual, recurring)
+
+  Document a manual checklist for periodic verification:
+
+    [ ] Fresh Windows 10/11 VM, no admin elevation.
+    [ ] Insert ISO of meta-volume.
+    [ ] File Explorer shows START_HERE.txt at root.
+    [ ] Double-click restore.bat -> SmartScreen warning -> "Run anyway".
+    [ ] Password prompt appears.
+    [ ] Recovery completes; files in Documents\restored.
+    [ ] Byte-equal verification against source.
+
+────────────────────────────────────────────────────────────────────
+PART 6 -- INTEGRATION WITH PYTHON ORCHESTRATOR
+────────────────────────────────────────────────────────────────────
+
+src/lcsas/recovery/build.py
+
+  Add to SUPPORTED_ARCHES:
+      ("x86_64", "aarch64", "riscv64",
+       "x86_64-windows", "aarch64-windows")
+
+  Add to cross_build():
+      if arch.endswith("-windows"):
+          base = arch.removesuffix("-windows")
+          cc = cc or f"python3 -m ziglang cc -target {base}-windows-gnu"
+          # binary has .exe suffix
+
+src/lcsas/meta/builder.py
+
+  Update _bundle_recovery_toolchain_artifacts() to also copy
+  bin/x86_64-windows/lcsas-restore.exe + restore.bat to the meta-
+  volume.
+
+src/lcsas/cli/main.py
+
+  `lcsas recovery build --arch x86_64-windows` already plumbs through
+  if cross_build() supports the new arch tag.
+
+────────────────────────────────────────────────────────────────────
+PART 7 -- KNOWN LIMITATIONS / NON-GOALS
+────────────────────────────────────────────────────────────────────
+
+OUT OF SCOPE for the Windows recovery path:
+
+  * Symlink restoration.  Windows symlinks require SeCreateSymbolic
+    LinkPrivilege; we don't try to acquire it.  Symlinks become a
+    text file containing the target path (a marker the user can
+    inspect manually).
+  * Owner/group/UID/GID restoration.  Windows doesn't have these.
+  * Extended attributes.  Windows alternate-data-streams are not
+    populated.
+  * Hardlinks across volumes.  Windows hardlinks need same-volume
+    semantics; we silently copy instead.
+  * UEFI boot from disc on Windows hardware.  Windows boot loader
+    cannot chain to ISO9660 directly; this is a meta-volume-only
+    issue.  Workaround: user boots a Linux live USB if they need
+    to boot from disc.
+
+NON-GOALS
+
+  * A native GUI launcher.  Phase 5+; .bat console UX is the
+    common-case answer.
+  * Codesigning the .exe.  Authenticode certificates expire every
+    1-3 years and cost money; long-term archival is incompatible
+    with cert-rotation.  SmartScreen will show a warning; documented.
+  * Anti-virus whitelisting.  Same reasoning.
+
+────────────────────────────────────────────────────────────────────
+PHASING
+────────────────────────────────────────────────────────────────────
+
+Phase W1 -- portability + cross-build (1-2 days):
+  * posix_compat.h
+  * Source-file conditional includes (io.c, repo.c, tree.c, iso9660.c)
+  * Makefile bin/x86_64-windows target via zig cc
+  * Wine smoke test target
+  * verify: lcsas-restore.exe --help works under Wine
+  * verify: e2e test runs the .exe under Wine and passes
+
+Phase W2 -- driver script + docs (1 day):
+  * restore.bat
+  * RECOVER_WINDOWS.txt
+  * START_HERE.txt update
+  * .gitattributes for CRLF .bat files
+
+Phase W3 -- orchestrator integration (1 day):
+  * Update RecoveryBuilder for Windows targets
+  * Update _bundle_recovery_toolchain_artifacts
+  * Update Python integration tests
+
+Phase W4 -- aarch64-windows + manual real-VM checklist (deferred):
+  * Cross-build aarch64-windows .exe
+  * Document the manual Windows-VM verification protocol
+
+────────────────────────────────────────────────────────────────────
+PHASE W5 -- LEGACY MSVCRT BUILD  (planned; not yet started)
+────────────────────────────────────────────────────────────────────
+
+PROBLEM
+
+Our current bin/x86_64-windows/lcsas-restore.exe is built with
+`zig cc -target x86_64-windows-gnu`, which links against UCRT (the
+Universal C Runtime, api-ms-win-crt-*.dll family).  UCRT requires:
+
+  * Windows 10 1709 (Oct 2017) or later, OR
+  * Windows 7 SP1 / 8 / 8.1 with Windows Update KB2999226.
+
+This excludes:
+
+  * Windows XP / Vista entirely (no UCRT, ever).
+  * Unpatched Windows 7 / 8 / 8.1 (KB2999226 missing).
+
+For an inheritor in 2040 dusting off a 2010-era Windows 7 box with
+no internet to download Windows Updates, the .exe simply won't load.
+
+GOAL
+
+Produce a SECOND, parallel binary that links only against the
+ancient msvcrt.dll which has shipped in every Windows release since
+Windows 95.  This binary has fewer features (no UCRT goodies) and
+slightly different behaviour, but runs on every 32/64-bit Windows
+from XP onward.
+
+Layout on the meta-volume:
+
+  recovery/
+    bin/
+      x86_64-windows/      lcsas-restore.exe       (UCRT, modern)
+      x86_64-windows-msvcrt/ lcsas-restore.exe    (msvcrt, legacy)
+      aarch64-windows/     lcsas-restore.exe       (UCRT, ARM64)
+
+restore.bat probes for both, preferring the modern UCRT build but
+falling back to the msvcrt one when UCRT is unavailable.
+
+IMPLEMENTATION
+
+OPTION 1: Use mingw-w64 with explicit msvcrt selection.
+  zig cc cannot target msvcrt.  We need a real mingw-w64 toolchain.
+  On the build host (Ubuntu/Debian):
+      apt-get install gcc-mingw-w64-x86-64
+      apt-get install gcc-mingw-w64-i686
+  Then:
+      x86_64-w64-mingw32-gcc -static \
+          -D__USE_MINGW_ANSI_STDIO=0 \
+          src/lcsas-restore/*.c vendored/zstd/zstddeclib.c \
+          vendored/sqlite/sqlite3.c \
+          -o bin/x86_64-windows-msvcrt/lcsas-restore.exe
+  The Debian/Ubuntu mingw-w64 packages currently default to UCRT
+  too (in recent versions); to force msvcrt explicitly, install
+  the `mingw-w64-x86-64-dev` headers and link with -lmsvcrt and
+  -nostdlib explicitly, OR use the older mingw-w64 9.x packages.
+
+OPTION 2: Build a 32-bit i686-windows binary alongside the 64-bit
+  one.  The 32-bit binary auto-selects msvcrt.dll on older Windows
+  for ABI reasons (the 64-bit UCRT split happened in 2015).
+  Trade-off: 32-bit binary cannot mmap >4 GB files; for typical
+  recovery workflows this doesn't matter (we never mmap whole packs).
+
+OPTION 3: Static-link a UCRT-compatible CRT into the .exe itself.
+  Tools like `crt-static-msvcrt` or the EnterpriseWDK approach can
+  produce a standalone binary with no DLL dependencies beyond
+  kernel32.  This is the cleanest but most invasive option.
+
+PROBABLE PATH: Option 1 + Option 2.  Ship two msvcrt binaries
+(i686 + x86_64) alongside the UCRT one.  ~3 MB extra per disc.
+
+POSIX_COMPAT.H CHANGES REQUIRED
+
+  * MinGW's older msvcrt headers diverge from UCRT in a few places:
+    - _lseeki64 vs lseek64 naming
+    - _stat64 vs _stat32i64 vs _wstat64 default for stat()
+    - some printf size-specifiers are not supported by msvcrt
+      (the `z` length modifier, `j`, `t`).
+  * We'd add an `#if defined(__USE_MINGW_ANSI_STDIO) && ...` block
+    that strips offending format strings.
+  * No expected changes to crypto / parsing code (all pure
+    computation).
+
+TESTING
+
+  * Same Wine harness, but configured to use older Wine builds that
+    emulate Win XP / 7 era kernel:
+        WINEDLLOVERRIDES="ucrtbase=" wine bin/.../lcsas-restore.exe
+    forces UCRT to fail-to-load, exposing whether our cascade
+    correctly drops to the msvcrt binary.
+  * Manual: real Windows 7 SP1 VM (still legally licensable through
+    Microsoft Volume Licensing).
+
+DRIVER SCRIPT CHANGES
+
+restore.bat cascade after Phase W5:
+
+    Tier 1a.  bin\%ARCH%\lcsas-restore.exe              (UCRT)
+              -> If load fails with 0xc0000135 (DLL not found):
+    Tier 1b.  bin\%ARCH%-msvcrt\lcsas-restore.exe       (legacy)
+    Tier 1c.  bin\i686-windows-msvcrt\lcsas-restore.exe (32-bit fallback)
+
+The 0xc0000135 detection in CMD is awkward (errorlevel doesn't
+distinguish "binary didn't load" from "binary returned 1");
+restore.bat would shell-out to `where` and `dumpbin` if available,
+otherwise just try-each-in-sequence.
+
+ROADMAP
+
+  Step 1.  Add a real mingw-w64 toolchain to the build environment.
+  Step 2.  Add `make windows-msvcrt` target invoking it.
+  Step 3.  Verify Wine-with-UCRT-disabled can run the msvcrt build.
+  Step 4.  Update restore.bat with the tiered cascade.
+  Step 5.  Update docs/RECOVER_WINDOWS.txt "ON OLDER WINDOWS"
+           section to list this as Option A instead of "no good
+           option exists".
+
+EFFORT ESTIMATE
+
+  Step 1 (toolchain install)              0.5 day
+  Step 2 (Makefile target + posix_compat) 1 day
+  Step 3 (Wine harness w/ UCRT off)       0.5 day
+  Step 4 (restore.bat update)             0.5 day
+  Step 5 (docs)                           0.5 day
+  ────────────────────────────────────────────────
+                                          ~3 days
+
+NOT BLOCKING
+
+This is genuinely a Phase 4 deferral.  Anyone running Windows 7
+SP1 today almost certainly has KB2999226.  Windows XP / Vista
+hardware is rare in 2026 and rarer in 2040.  But the cost is small
+relative to the survivability win.
+
+────────────────────────────────────────────────────────────────────
+PHASE W6 -- MULTI-DISC SWAP UX                       (planned; #4)
+────────────────────────────────────────────────────────────────────
+
+See recovery/docs/MULTI_DISC_DESIGN.txt for the full design.  This
+is the highest-impact UX work outstanding on the recovery path,
+applicable to ALL platforms (not just Windows) but particularly
+important on Windows where the file manager idiom for "swap disc"
+is well-understood by users.
+
+────────────────────────────────────────────────────────────────────
+SUCCESS CRITERIA
+────────────────────────────────────────────────────────────────────
+
+A Windows 10/11 user, given the meta-volume disc and the password,
+can recover their files by:
+
+  1. Plugging in a USB BD reader.
+  2. Inserting the disc.
+  3. Opening File Explorer to the disc.
+  4. Double-clicking restore.bat.
+  5. Typing the password.
+  6. Waiting.
+
+No additional installation, no admin rights, no terminal expertise.
+
+Verified by Wine-based automated test in CI; manually re-verified
+on a real Windows 10/11 VM at each major release.

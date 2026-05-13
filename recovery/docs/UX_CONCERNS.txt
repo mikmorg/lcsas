@@ -1,0 +1,206 @@
+LCSAS RECOVERY -- COMMON-CASE / UX CONCERNS LOG
+=================================================
+
+This file tracks every known concern that affects an AVERAGE USER
+restoring an archive in 2030-2050.  Each item has a STATUS, a brief
+description, and a mitigation strategy.
+
+These are distinct from the 50-year survivability concerns covered
+by docs/TIERS.txt + recovery/specs/.  The toolchain is engineered to
+survive software-ecosystem decay; this log tracks the *current-decade*
+user-experience gaps where survivability ≠ recoverability.
+
+STATUS legend:
+  OPEN       not yet addressed; on the work plan
+  IN PROGRESS being worked on now
+  CLOSED     resolved by a specific commit
+  DEFERRED   accepted as a known limitation for now
+  WONTFIX    intentionally not addressed (with rationale)
+
+────────────────────────────────────────────────────────────────────
+ID 001 -- Windows users have no recovery path
+────────────────────────────────────────────────────────────────────
+STATUS: OPEN (planning -- see WINDOWS_RECOVERY_PLAN.txt)
+IMPACT: HIGH.  Windows is ~70% of the laptop market.  A user with a
+        Windows-only laptop who inherits the discs cannot run any
+        of the prebuilt binaries; they would need to install WSL2,
+        install a Linux distro, mount the disc inside WSL, and run
+        the shell driver -- a multi-hour learning curve.
+
+MITIGATION (planned):
+  * Cross-build lcsas-restore.exe for x86_64-windows via zig cc.
+  * Ship recovery/bin/x86_64-windows/lcsas-restore.exe on the meta-
+    volume.
+  * Ship recovery/scripts/restore.bat as a CMD-compatible driver
+    that mirrors restore.sh.
+  * Document the Windows workflow in docs/RECOVER_WINDOWS.txt and
+    in START_HERE.txt.
+
+────────────────────────────────────────────────────────────────────
+ID 002 -- /restore.sh is one file among many at disc root
+────────────────────────────────────────────────────────────────────
+STATUS: OPEN
+IMPACT: MEDIUM.  Inheritor opens disc in file explorer, sees
+        15-20 files (README, README_RESTORE, restore.sh,
+        restore-auto.sh, restore_legacy.sh, restore_c89.sh,
+        standalone_restorer.py, tools/, lcsas/, ...).  Picking
+        the right one is non-obvious.
+
+MITIGATION:
+  * Place a single START_HERE.txt at the disc root with a 1-page
+    walkthrough (already partially exists -- needs improvement).
+  * Rename restore.sh to restore.command on Mac-friendly discs
+    (the .command extension makes Finder treat it as runnable).
+  * Reduce the number of *.sh files at disc root.  Move legacy/
+    auto/c89 variants under scripts/.
+
+────────────────────────────────────────────────────────────────────
+ID 003 -- No GUI launcher
+────────────────────────────────────────────────────────────────────
+STATUS: DEFERRED
+IMPACT: MEDIUM.  Average user in 2040 may have never used a
+        terminal.  A double-clickable launcher (.app on macOS,
+        .exe with prompt on Windows) lowers the barrier.
+
+MITIGATION (proposed, deferred):
+  * Phase 5: a thin GUI launcher that wraps the binary.  Constraint:
+    must not add a heavy GUI framework dependency (no Qt/Tk/Electron).
+    Likely path: a 200-LOC C app using native APIs (Win32, Cocoa
+    NSAlert, GTK only if X11 is acceptable for Linux).
+  * Until then: rely on terminal walkthrough in START_HERE.txt.
+
+────────────────────────────────────────────────────────────────────
+ID 004 -- macOS Gatekeeper / Linux execstack refuses unsigned binary
+────────────────────────────────────────────────────────────────────
+STATUS: OPEN
+IMPACT: MEDIUM.  On a fresh macOS, copying an unsigned executable
+        from a disc and running it triggers "could not be opened
+        because it is from an unidentified developer".  Users must
+        right-click -> Open or run xattr -d com.apple.quarantine.
+        Linux distros with execstack=noexec on /media will outright
+        refuse to execute the on-disc binary.
+
+MITIGATION:
+  * Document the macOS quarantine bypass in START_HERE.txt:
+        xattr -d com.apple.quarantine /Volumes/<DISC>/restore.command
+        sh /Volumes/<DISC>/restore.command
+  * Document the Linux execstack issue + workaround:
+        cp /media/<user>/<DISC>/recovery/bin/<arch>/lcsas-restore /tmp/
+        chmod +x /tmp/lcsas-restore
+        /tmp/lcsas-restore --repo ... --target ~/restored
+  * Long term: codesign the macOS binary with an Apple Developer ID;
+    sign the Windows .exe with Authenticode.  Both certificates
+    expire on 1-3 year cycles, so this is current-decade only.
+
+────────────────────────────────────────────────────────────────────
+ID 005 -- Multi-disc swap prompts are unclear
+────────────────────────────────────────────────────────────────────
+STATUS: OPEN
+IMPACT: HIGH.  When lcsas-restore needs a pack on a different
+        volume, it currently prints "pack not found: <sha>" and
+        exits non-zero.  The user has no idea which physical disc
+        to insert next.
+
+MITIGATION:
+  * Implement: when a pack is missing on the mounted disc,
+    consult the on-disc catalog (or a new plain-text disc_index.txt
+    we should write at burn time) and print:
+        ==> Please insert disc:  vol-042  "Family Photos 2027 (3/8)"
+        ==> Catalog says it contains pack: aa11b2c3...
+        ==> Press ENTER when ready (q to abort).
+  * Wait for ENTER, re-scan the data/ directory, continue.
+  * Add a test that simulates a missing pack and verifies the
+    prompt + retry loop.
+
+────────────────────────────────────────────────────────────────────
+ID 006 -- Password loss = unrecoverable
+────────────────────────────────────────────────────────────────────
+STATUS: WONTFIX-CRYPTOGRAPHIC
+IMPACT: HIGHEST.  No password = no key derivation = no decryption.
+        This is the actual #1 failure mode in real-world archive
+        inheritance: the original owner died without telling
+        anyone the password.
+
+MITIGATION (organizational, not technical):
+  * START_HERE.txt should instruct archive owners to write the
+    password down and store it physically separate from the discs
+    (safe deposit box, with a lawyer, in an estate planning
+    document, or in a Sharmir-secret-shared multi-person scheme).
+  * Add a paper-printable "Recovery Card" template under
+    docs/RECOVERY_CARD.txt that the owner fills in and stores
+    with the discs' physical records.
+  * Optionally: support a secondary password (escrow) at archive
+    creation time.  Phase 5+.
+  * No technical mitigation possible from the inheritor side.
+
+────────────────────────────────────────────────────────────────────
+ID 007 -- Optical drives are increasingly rare on modern hardware
+────────────────────────────────────────────────────────────────────
+STATUS: DEFERRED (out of our scope)
+IMPACT: MEDIUM.  By 2030 most laptops have no internal optical
+        drive.  Inheritors must procure a USB BD reader (~$40,
+        widely available today; uncertain for 2050).
+
+MITIGATION:
+  * Document the hardware requirement explicitly in START_HERE.txt.
+  * Recommend (in archive-creation guidance) that owners also keep
+    a USB BD reader physically next to the disc collection.
+  * No code-level mitigation possible.
+
+────────────────────────────────────────────────────────────────────
+ID 008 -- "Which disc do I start with" is undocumented
+────────────────────────────────────────────────────────────────────
+STATUS: OPEN
+IMPACT: MEDIUM.  In a 50-disc archive, only one (the meta-volume)
+        is bootable / contains the toolchain.  The others are
+        data-only.  Picking the wrong one wastes time.
+
+MITIGATION:
+  * Print clear "META" vs "DATA" labels on each disc (already done
+    on disc labels; needs to be also on the disc's filesystem volume
+    label so it shows up in the file explorer).
+  * Have START_HERE.txt unambiguously say "look for the disc labelled
+    LCSAS_META first".
+
+────────────────────────────────────────────────────────────────────
+ID 009 -- No verification step before destructive write
+────────────────────────────────────────────────────────────────────
+STATUS: OPEN
+IMPACT: LOW.  lcsas-restore writes restored files directly into
+        --target.  If --target already has data, files are
+        overwritten without prompt.
+
+MITIGATION:
+  * Add --verify-only flag: decrypt + hash-check every blob but
+    never write to disk.  Print summary.
+  * Make restore.sh refuse to write into a non-empty target dir
+    without --force.
+
+────────────────────────────────────────────────────────────────────
+ID 010 -- Disc-creation date and original-archive context are opaque
+────────────────────────────────────────────────────────────────────
+STATUS: OPEN
+IMPACT: LOW.  The inheritor sees a pile of discs and cannot tell
+        when they were burned, by whom, with what software version,
+        or for what purpose ("photos? business records? both?").
+
+MITIGATION:
+  * volume_info.json is already written by meta/builder.py but is
+    JSON.  Also write a plain-text /VOLUME_INFO.txt with:
+        Burned:    2027-04-15
+        By:        Alice Example <alice@example.com>
+        Software:  LCSAS 1.0.0-mvp1
+        Contains:  /home/alice  (snapshots 2027-04-15 onward)
+        Of:        47 discs in this archive
+        Total:     ~3.1 TiB original data
+  * Make this file the first thing referenced from START_HERE.txt.
+
+────────────────────────────────────────────────────────────────────
+
+PRIORITISATION
+
+  P0 (do this first):  001, 005
+  P1 (next):           002, 008, 010
+  P2 (when time):      004, 009
+  P3 (long-term):      003
+  WONTFIX:             006 (cryptographic), 007 (hardware)

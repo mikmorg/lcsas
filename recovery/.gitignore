@@ -1,0 +1,9 @@
+bin/*/lcsas-restore
+bin/*/lcsas-init
+bin/*/busybox
+dist/
+*.o
+*.a
+build/
+__pycache__/
+*.pyc

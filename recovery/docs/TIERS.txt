@@ -1,0 +1,115 @@
+LCSAS RECOVERY -- TIER STRUCTURE
+=================================
+
+WHY TIERS?
+
+The recovery cascade is layered so that if any single component fails
+(binary won't run, source won't compile, language interpreter is
+missing, etc.), the next tier still gets you to the same outcome:
+plaintext files on disk.
+
+Tiers 1-4 are the BARE MINIMUM PATH.  They share zero dependencies
+beyond a POSIX shell and a C compiler.  If your future system has
+those two things and one working CPU, the data is recoverable.
+
+Tier 5 is the OPTIONAL OVERFLOW.  It only runs if every C-based
+option failed AND the user has not opted out via
+LCSAS_ALLOW_PYTHON_TIER=0.
+
+THE TIERS
+
+  ┌────┬─────────────────────────────┬────────────────────────────┐
+  │ #  │ Implementation               │ Runtime dependencies        │
+  ├────┼─────────────────────────────┼────────────────────────────┤
+  │ 1  │ Prebuilt lcsas-restore       │ kernel + libc (static)      │
+  │    │ bin/<arch>/lcsas-restore     │ (musl baked in)             │
+  ├────┼─────────────────────────────┼────────────────────────────┤
+  │ 2  │ Vendored rustic-static       │ kernel + libc (static)      │
+  │    │ bin/<arch>/rustic-static     │                             │
+  ├────┼─────────────────────────────┼────────────────────────────┤
+  │ 3  │ Rebuild lcsas-restore from  │ POSIX sh + ANY C compiler   │
+  │    │ src/ (Makefile + cc/gcc/    │ (cc, gcc, clang, tcc, pcc)  │
+  │    │ clang/tcc/pcc)              │                             │
+  ├────┼─────────────────────────────┼────────────────────────────┤
+  │ 4  │ Build rustic from vendored   │ cargo + Rust stdlib         │
+  │    │ Rust source (if shipped)     │                             │
+  ╞════╪═════════════════════════════╪════════════════════════════╡
+  │ B  │   BARE MINIMUM PATH ENDS HERE                             │
+  ╞════╪═════════════════════════════╪════════════════════════════╡
+  │ 5  │ Pure-Python standalone_      │ python3 (>=3.6)             │
+  │    │ restorer.py                  │ stdlib only (no pip needed) │
+  └────┴─────────────────────────────┴────────────────────────────┘
+
+DESIGN INVARIANT
+
+The bare-minimum path (tiers 1-4) is verified Python-free by
+``tests/test_bare_path.sh``:
+
+  1. Statically inspect ``scripts/restore.sh`` -- the slice from
+     "Tier 1:" to "BARE-MINIMUM PATH ENDS HERE" must contain no
+     ``python`` or ``.py`` reference (in executable code; comments
+     are skipped).
+
+  2. Build a synthetic restic repo.  Strip every python interpreter
+     from PATH by prepending a shim directory that exits 127 for
+     anything named ``python*``.  Set ``LCSAS_ALLOW_PYTHON_TIER=0``.
+     Invoke ``scripts/restore.sh``.  Verify recovery succeeds.
+
+  Run as: ``make test-bare-path``
+
+OPTING OUT OF TIER 5
+
+If you want a hard guarantee that the recovery never touches Python:
+
+  LCSAS_ALLOW_PYTHON_TIER=0 sh /restore.sh /mnt/recovery /tmp/restored
+
+restore.sh will refuse to try tier 5 even if python3 and
+standalone_restorer.py are both present.
+
+WHY PYTHON IS NOT ON THE BARE PATH
+
+Python is a healthy ecosystem today, but at a 50-year horizon:
+
+  * The CPython interpreter has fully replaced its parser, garbage
+    collector, ABI, and standard library multiple times in 30 years.
+    Source written today may not parse under a hypothetical Python
+    of 2076.
+  * Python's stdlib provides scrypt and HMAC -- but only since
+    Python 3.6; that single ecosystem version pin is itself a risk.
+  * The interpreter binary on the recovery medium depends on
+    glibc / musl + dozens of optional shared libraries (ssl, expat,
+    libffi, etc.).  Static-link is possible but uncommon.
+
+C89 + POSIX sh have neither of those properties.  C89 has been
+backwards-compatible for 35 years.  POSIX shell has been stable for
+40 years.  The crypto primitives are spec-compliant per FIPS and IETF
+documents that have not changed since they were published.
+
+So: Python stays bundled as a redundant overflow path, BUT no part
+of the workflow that we expect to actually run in 2076 requires it.
+
+DEPENDENCY CHAIN AT A GLANCE
+
+  Tier 1: musl libc -> CPU
+  Tier 2: musl libc -> CPU
+  Tier 3: POSIX sh -> C compiler -> POSIX make -> libc -> CPU
+  Tier 4: cargo -> Rust stdlib -> libc -> CPU
+  Tier 5: python3 -> libc -> CPU
+
+  The deepest reasonable bare-minimum chain is tier 3: 5 dependencies,
+  each individually replaceable.
+
+INVOCATION
+
+  # Auto-discover recovery root from script location:
+  sh /restore.sh /tmp/restored
+
+  # Explicit:
+  sh /restore.sh /mnt/recovery /tmp/restored latest
+
+  # Skip Python tier:
+  LCSAS_ALLOW_PYTHON_TIER=0 sh /restore.sh /mnt/recovery /tmp/restored
+
+  # Non-interactive (password from env or file):
+  LCSAS_PASSWORD='secret' sh /restore.sh /mnt/recovery /tmp/restored
+  LCSAS_PWFILE=/path/pw    sh /restore.sh /mnt/recovery /tmp/restored
