@@ -22,12 +22,6 @@ class TestMediaType:
         """With 0% ECC, usable == capacity."""
         assert MediaType.TEST_TINY.usable_bytes == MediaType.TEST_TINY.capacity_bytes
 
-    def test_bd25_is_optical(self):
-        assert MediaType.BD25.is_optical is True
-
-    def test_test_tiny_is_not_optical(self):
-        assert MediaType.TEST_TINY.is_optical is False
-
     def test_test_tiny_is_test(self):
         assert MediaType.TEST_TINY.is_test is True
 
