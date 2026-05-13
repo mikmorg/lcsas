@@ -261,6 +261,7 @@ class TestFromDiscBatchMode:
         """Batch restore with all packs available returns exit code 0."""
         disc = tmp_path / "disc"
         disc.mkdir()
+        (disc / "data").mkdir()
         pack_hashes = _write_catalog_with_packs(
             disc / "catalog.db", repo_name="family"
         )
@@ -291,6 +292,7 @@ class TestFromDiscBatchMode:
             password_file=key_file,
         )
         with (
+            patch("lcsas.utils.subprocess.check_binary_version", return_value="1.0.0"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
             patch("lcsas.restore.executor.RestoreExecutor", return_value=mock_executor),
             patch("lcsas.restore.executor.RestoreExecutor.verify_cache_completeness",
@@ -304,6 +306,7 @@ class TestFromDiscBatchMode:
         """Batch restore with permanently missing packs returns exit code 1."""
         disc = tmp_path / "disc"
         disc.mkdir()
+        (disc / "data").mkdir()
         pack_hashes = _write_catalog_with_packs(
             disc / "catalog.db", repo_name="family"
         )
@@ -312,6 +315,9 @@ class TestFromDiscBatchMode:
 
         vol_dir = tmp_path / "vols"
         vol_dir.mkdir()
+
+        key_file = tmp_path / "secret.key"
+        key_file.write_bytes(b"password")
 
         mock_plan = MagicMock(spec=RestorePlan)
         mock_plan.required_pack_hashes = pack_hashes
@@ -326,8 +332,10 @@ class TestFromDiscBatchMode:
             target_path=tmp_path / "restored",
             volume_dir=vol_dir,
             skip_verify=True,
+            password_file=key_file,
         )
         with (
+            patch("lcsas.utils.subprocess.check_binary_version", return_value="1.0.0"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
             patch("lcsas.restore.executor.RestoreExecutor", return_value=mock_executor),
             patch("lcsas.restore.executor.RestoreExecutor.verify_cache_completeness",
@@ -341,6 +349,7 @@ class TestFromDiscBatchMode:
         """Single repo in catalog is auto-selected without --repo flag."""
         disc = tmp_path / "disc"
         disc.mkdir()
+        (disc / "data").mkdir()
         pack_hashes = _write_catalog_with_packs(
             disc / "catalog.db", repo_name="family"
         )
@@ -369,6 +378,7 @@ class TestFromDiscBatchMode:
             password_file=key_file,
         )
         with (
+            patch("lcsas.utils.subprocess.check_binary_version", return_value="1.0.0"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
             patch("lcsas.restore.executor.RestoreExecutor", return_value=mock_executor),
             patch("lcsas.restore.executor.RestoreExecutor.verify_cache_completeness",
@@ -381,6 +391,7 @@ class TestFromDiscBatchMode:
         """--catalog overrides default catalog.db location on disc."""
         disc = tmp_path / "disc"
         disc.mkdir()
+        (disc / "data").mkdir()
         custom_catalog = tmp_path / "custom_catalog.db"
         pack_hashes = _write_catalog_with_packs(custom_catalog, repo_name="family")
         meta = disc / "metadata" / "family"
@@ -408,6 +419,7 @@ class TestFromDiscBatchMode:
             password_file=key_file,
         )
         with (
+            patch("lcsas.utils.subprocess.check_binary_version", return_value="1.0.0"),
             patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
             patch("lcsas.restore.executor.RestoreExecutor", return_value=mock_executor),
             patch("lcsas.restore.executor.RestoreExecutor.verify_cache_completeness",
