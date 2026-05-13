@@ -409,3 +409,237 @@ class TestCmdCatalogValidate:
         out = capsys.readouterr().out
         assert "does not exist" in out or "not a directory" in out
         assert str(missing) in out
+
+
+# ---------------------------------------------------------------------------
+# cmd_catalog_rebuild
+# ---------------------------------------------------------------------------
+
+
+def _build_fake_disc_for_rebuild(
+    disc_path,
+    *,
+    repo_id,
+    repo_name,
+    volume_label,
+    volume_uuid,
+    pack_hashes,
+):
+    """Build a minimal fake mounted-disc directory holding a holographic catalog.
+
+    Writes ``<disc_path>/catalog.db`` containing a single repository, a single
+    volume, and a row for each SHA in *pack_hashes* linked to that volume.
+    No on-disc ``data/`` files are required for catalog rebuild — rebuild
+    only consults ``catalog.db``.
+    """
+    import sqlite3
+
+    from lcsas.db.packs import register_pack
+    from lcsas.db.repos import register_repo
+    from lcsas.db.schema import create_all
+    from lcsas.db.volume_packs import bulk_link_packs
+    from lcsas.db.volumes import create_volume
+
+    disc_path.mkdir(parents=True, exist_ok=True)
+    catalog_db = disc_path / "catalog.db"
+
+    conn = sqlite3.connect(str(catalog_db))
+    conn.row_factory = sqlite3.Row
+    try:
+        create_all(conn)
+        register_repo(conn, repo_id, repo_name, f"/mnt/mirror/{repo_name}", "")
+        packs = [register_pack(conn, sha, 1024, repo_id) for sha in pack_hashes]
+        vol = create_volume(
+            conn,
+            volume_label,
+            volume_uuid,
+            "TEST_TINY",
+            1_000_000,
+            "Home_Shelf",
+            "VERIFIED",
+        )
+        bulk_link_packs(conn, vol.volume_id, [p.pack_id for p in packs])
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _master_catalog_counts(db_path):
+    """Return a dict of row counts for the key catalog tables."""
+    from lcsas.db.connection import get_connection
+
+    conn = get_connection(db_path)
+    try:
+        return {
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in (
+                "repositories",
+                "volumes",
+                "packs",
+                "volume_packs",
+            )
+        }
+    finally:
+        conn.close()
+
+
+class TestCmdCatalogRebuild:
+    def test_catalog_rebuild_happy_path(self, tmp_path, capsys):
+        """rebuild from two disc dirs produces a master catalog with the union."""
+        disc1 = tmp_path / "disc1"
+        disc2 = tmp_path / "disc2"
+
+        _build_fake_disc_for_rebuild(
+            disc1,
+            repo_id="family",
+            repo_name="family",
+            volume_label="VOL_001",
+            volume_uuid="uuid-volume-1",
+            pack_hashes=["aa" * 32, "bb" * 32],
+        )
+        _build_fake_disc_for_rebuild(
+            disc2,
+            repo_id="work",
+            repo_name="work",
+            volume_label="VOL_002",
+            volume_uuid="uuid-volume-2",
+            pack_hashes=["cc" * 32, "dd" * 32],
+        )
+
+        out_db = tmp_path / "master.db"
+        result = main([
+            "catalog", "rebuild",
+            "--output", str(out_db),
+            str(disc1), str(disc2),
+        ])
+        assert result == 0
+
+        out = capsys.readouterr().out
+        assert "Catalog rebuild complete" in out
+        assert str(out_db) in out
+        assert "Discs processed  : 2" in out
+
+        counts = _master_catalog_counts(str(out_db))
+        assert counts["repositories"] == 2  # family + work
+        assert counts["volumes"] == 2       # VOL_001 + VOL_002
+        assert counts["packs"] == 4         # 2 + 2 distinct shas
+        assert counts["volume_packs"] == 4  # 2 links per volume
+
+    def test_catalog_rebuild_idempotent(self, tmp_path, capsys):
+        """Running rebuild twice over the same discs is a no-op on the 2nd pass."""
+        disc1 = tmp_path / "disc1"
+        disc2 = tmp_path / "disc2"
+        _build_fake_disc_for_rebuild(
+            disc1,
+            repo_id="family",
+            repo_name="family",
+            volume_label="VOL_001",
+            volume_uuid="uuid-volume-1",
+            pack_hashes=["aa" * 32, "bb" * 32],
+        )
+        _build_fake_disc_for_rebuild(
+            disc2,
+            repo_id="work",
+            repo_name="work",
+            volume_label="VOL_002",
+            volume_uuid="uuid-volume-2",
+            pack_hashes=["cc" * 32, "dd" * 32],
+        )
+        out_db = tmp_path / "master.db"
+
+        # First pass
+        first = main([
+            "catalog", "rebuild",
+            "--output", str(out_db),
+            str(disc1), str(disc2),
+        ])
+        assert first == 0
+        first_counts = _master_catalog_counts(str(out_db))
+        capsys.readouterr()  # clear
+
+        # Second pass over the same inputs — natural-key conflicts hit
+        # INSERT OR IGNORE, so the master catalog should be unchanged.
+        second = main([
+            "catalog", "rebuild",
+            "--output", str(out_db),
+            str(disc1), str(disc2),
+        ])
+        assert second == 0
+        second_counts = _master_catalog_counts(str(out_db))
+
+        assert first_counts == second_counts
+        # Counts come from the happy-path expectation.
+        assert second_counts == {
+            "repositories": 2,
+            "volumes": 2,
+            "packs": 4,
+            "volume_packs": 4,
+        }
+
+        out = capsys.readouterr().out
+        # On the second pass nothing new should be merged.
+        assert "Repositories     : 0 new" in out
+        assert "Volumes          : 0 new" in out
+        assert "Packs            : 0 new" in out
+
+    def test_catalog_rebuild_unknown_dir_errors(self, tmp_path, capsys):
+        """A non-existent disc dir trips the sanity check and exits non-zero."""
+        missing = tmp_path / "no-such-disc"
+        assert not missing.exists()
+        out_db = tmp_path / "master.db"
+
+        result = main([
+            "catalog", "rebuild",
+            "--output", str(out_db),
+            str(missing),
+        ])
+        assert result != 0
+
+        out = capsys.readouterr().out
+        assert "Not a directory" in out
+        assert str(missing) in out
+        # The handler bails BEFORE creating the master DB.
+        assert not out_db.exists()
+
+    def test_catalog_rebuild_partial_failure(self, tmp_path, capsys):
+        """One valid disc + one disc missing catalog.db -> non-zero, but the
+        valid disc is still merged into the master catalog."""
+        good = tmp_path / "good_disc"
+        bad = tmp_path / "bad_disc"
+
+        _build_fake_disc_for_rebuild(
+            good,
+            repo_id="family",
+            repo_name="family",
+            volume_label="VOL_001",
+            volume_uuid="uuid-volume-1",
+            pack_hashes=["aa" * 32, "bb" * 32],
+        )
+        # `bad` exists as a directory (so it survives the is_dir() sanity
+        # check) but contains no catalog.db — rebuild_catalog records an
+        # error for it and continues.
+        bad.mkdir()
+
+        out_db = tmp_path / "master.db"
+        result = main([
+            "catalog", "rebuild",
+            "--output", str(out_db),
+            str(good), str(bad),
+        ])
+        # rebuild_catalog appends to result.errors -> handler returns 1.
+        assert result != 0
+
+        out = capsys.readouterr().out
+        # The good disc was still processed.
+        assert "Discs processed  : 1" in out
+        assert "Discs skipped    : 1" in out
+        # The error mentioning the bad disc is reported.
+        assert "No catalog.db" in out
+        assert str(bad) in out
+
+        # The good disc's contents made it into the master catalog.
+        counts = _master_catalog_counts(str(out_db))
+        assert counts["repositories"] == 1
+        assert counts["volumes"] == 1
+        assert counts["packs"] == 2
+        assert counts["volume_packs"] == 2
