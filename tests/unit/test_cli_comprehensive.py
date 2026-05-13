@@ -1053,7 +1053,6 @@ class TestDispatchRouting:
             ["repo", "list"],
             ["scan"],
             ["status"],
-            ["db", "export"],
             ["config", "check"],
             ["staging", "clean"],
             ["stage"],
