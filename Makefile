@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-all coverage clean blind-restore blind-restore-teardown
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-all coverage clean blind-restore blind-restore-teardown
 
 dev:
 	pip install -e ".[dev]"
@@ -18,8 +18,10 @@ test-unit:
 test-integration:
 	pytest tests/integration/ -v -m integration
 
-test-all:
-	pytest tests/ -v
+test-e2e:
+	pytest tests/e2e -v
+
+test-all: test-unit test-integration test-e2e
 
 coverage:
 	pytest tests/ --cov=lcsas --cov-report=html --cov-report=term-missing
