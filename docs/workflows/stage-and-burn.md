@@ -31,7 +31,6 @@ volumes remain referenceable.
 
 - [Pipeline overview](#pipeline-overview)
 - [`lcsas stage` — plan and stage volumes only](#lcsas-stage--plan-and-stage-volumes-only)
-- [`lcsas burn` — full pipeline (legacy stage + burn)](#lcsas-burn--full-pipeline-legacy-stage--burn)
 - [`lcsas burn --session <id>` — burn a previously staged session](#lcsas-burn---session-id--burn-a-previously-staged-session)
 - [`lcsas burn --dry-run` — plan + ISO build without burning](#lcsas-burn---dry-run--plan--iso-build-without-burning)
 - [`lcsas stage --dry-run` — plan-only (no side effects)](#lcsas-stage---dry-run--plan-only-no-side-effects)
@@ -204,83 +203,6 @@ labels (`<prefix>_<media_label>_<seq>`) generated via
 
 ---
 
-## `lcsas burn` — full pipeline (legacy stage + burn)
-
-**Purpose:** One-shot "do everything": stage all unarchived packs, build ISOs
-+ ECC, and burn to optical media in a single command. This is the legacy
-path (`cmd_burn_legacy`, `src/lcsas/cli/main.py:1015`) invoked when `burn` is
-called **without** `--session`. Routing: `cmd` dispatch sends
-`burn --session ...` to `cmd_burn_session` and bare `burn` to
-`cmd_burn_legacy` (`src/lcsas/cli/main.py:2685-2689`).
-
-**Prerequisites:**
-
-- Everything `stage` needs, plus:
-- A writable optical disc inserted in `optical_device` (default
-  `/dev/sr0`); the device path is checked in `cmd_burn_session` but
-  `cmd_burn_legacy` relies on `xorriso burn_iso` to surface device errors
-  (`src/lcsas/burn/orchestrator.py:704`).
-- `--location <name>` (or `default_location` from config) — used to record
-  the volume copy in the catalog.
-
-**Steps:**
-
-1. `lcsas burn --config <path>` — entry point
-   (`src/lcsas/cli/main.py:114`,
-   dispatched at `src/lcsas/cli/main.py:2685-2689`).
-2. `--media <type>` — optional media override (`src/lcsas/cli/main.py:115`).
-3. `--repo <id>...` — optional repository restriction
-   (`src/lcsas/cli/main.py:117`).
-4. `--location <name>` — physical location tag for the burn
-   (`src/lcsas/cli/main.py:123`).
-5. `--device <path>` — override `optical_device`
-   (`src/lcsas/cli/main.py:125`).
-6. Internally: `orch.stage(...)` → `orch.burn_session(...)`
-   (`src/lcsas/cli/main.py:1058-1077`).
-
-**Expected outcome:** All unarchived packs are partitioned across one or
-more volumes, every ISO is mastered + ECC-augmented + burned + verified,
-each volume reaches `VERIFIED` state, a `BurnReceipt` is emitted per
-volume, and the session is `COMPLETE`. The staging ISOs are deleted after a
-successful verify (`src/lcsas/burn/orchestrator.py:791-802`).
-
-**Variant axes that apply:**
-
-- **Media type** — all supported.
-- **Multi-tenant** — yes, via `--repo` and per-repo metadata injection.
-- **OS** — Linux only (xorriso + dvdisaster + `/dev/sr*` semantics).
-- **Optical drive count** — single drive at a time; multi-drive needs
-  parallel `lcsas burn-iso` invocations on staged ISOs (see split-machine
-  workflow doc).
-- **Multi-copy** — single location per `burn` invocation; for second copies
-  use `lcsas burn --session <id> --location <other>` against the same
-  session.
-- **ECC** — always applied for production media (no user-facing toggle);
-  implicitly skipped for TEST_* media via `MediaType.ecc_overhead_pct`
-  (`src/lcsas/burn/orchestrator.py`).
-- **Recovery tier** — produces Tier 2 (COLD) media.
-
-**Test coverage:**
-
-- `tests/unit/test_session_pipeline.py::TestBurnSession*` and
-  `TestStageAndBurnEndToEnd` — full pipeline against in-process xorriso /
-  dvdisaster fakes; covers happy path, verify-fail behaviour, receipts,
-  multi-copy, and session status transitions.
-- `tests/unit/test_burn_orchestrator.py` — direct
-  `orch.prepare()`/`orch.execute()` legacy single-volume API, plus
-  `skip_burn` matrix and an assertion that ECC IS invoked on
-  production media.
-- `tests/integration/test_disc_only_restore.py` — uses real `xorriso`,
-  `dvdisaster`, and SquashFS pipelines to validate end-to-end burn + restore.
-- Gaps: no automated test covers a real `--device` lockout or removable
-  media insertion races; no test of `burn` with a hot-swapped device path.
-
-**Source refs:** `src/lcsas/cli/main.py:114-128`,
-`src/lcsas/cli/main.py:1015-1083`, `src/lcsas/burn/orchestrator.py:503-813`,
-`src/lcsas/iso/xorriso.py:272-325`, `src/lcsas/ecc/dvdisaster.py:46-97`.
-
----
-
 ## `lcsas burn --session <id>` — burn a previously staged session
 
 **Purpose:** Burn the ISOs from an existing `STAGED` (or `PARTIAL`) session
@@ -349,61 +271,41 @@ volume backward (`src/lcsas/burn/orchestrator.py:733-742`).
 ## `lcsas burn --dry-run` — plan + ISO build without burning
 
 **Purpose:** Validate the plan and current device state without writing to
-physical media. Two distinct dry-run modes depending on whether `--session`
-is set.
+physical media. `--session` is required (as with any `lcsas burn`
+invocation); the dry-run resolves the session and prints each volume label
++ status with no I/O performed and the optical device existence check
+skipped (`src/lcsas/cli/main.py:981-991`).
 
-**Mode A — `lcsas burn --session <id> --dry-run` (`cmd_burn_session` dry-run):**
-Resolves the session and prints each volume label + status; no I/O is
-performed. The optical device existence check is skipped
-(`src/lcsas/cli/main.py:981-991`).
-
-**Mode B — `lcsas burn --dry-run` (legacy, no `--session`):** Falls through
-to `cmd_burn_legacy`, which calls `orch.stage(dry_run=True)` and returns
-before invoking `burn_session`. The stage `dry_run` branch prints the
-volume plan (count, pack count per volume, byte fill, total bytes) and
-returns a sentinel `StageResult(session_id="dry-run", ...)` with no
-side effects (`src/lcsas/burn/orchestrator.py:551-566`,
-`src/lcsas/cli/main.py:1063-1069`).
+To preview the plan for a *new* set of unarchived packs before staging,
+use `lcsas stage --dry-run` instead (next section).
 
 **Prerequisites:**
 
-- For Mode A: an existing session id.
-- For Mode B: the same as `stage`'s prerequisites (config, catalog, mirror
-  scan).
+- An existing session id.
 
 **Steps:**
 
-1. Mode A — `lcsas burn --session <id> --dry-run --config <path>`
-   (`src/lcsas/cli/main.py:127`).
-2. Mode B — `lcsas burn --dry-run --media <type> --config <path>`
+1. `lcsas burn --session <id> --dry-run --config <path>`
    (`src/lcsas/cli/main.py:127`).
 
 **Expected outcome:**
 
-- Mode A: log lines like `[DRY RUN] Session <sid>: N volume(s)` followed by
+- Log lines like `[DRY RUN] Session <sid>: N volume(s)` followed by
   per-volume status. No catalog mutation, no device I/O.
-- Mode B: log lines like `[DRY RUN] N volume(s) planned on <media>`
-  followed by per-volume pack counts and percent fill. No catalog mutation,
-  no staging directory created, no session row inserted, no ISOs written.
 
 **Variant axes that apply:**
 
-- **Media type** — all (Mode B exercises the bin-pack plan for the chosen
-  media; Mode A inherits from the staged session).
+- **Media type** — inherited from the staged session.
 - **ECC** — not exercised in dry-run (no ISOs are mastered).
 - **Recovery tier** — none; planning only.
 
 **Test coverage:**
 
 - Argparse: `tests/unit/test_cli.py` covers `--dry-run` parsing.
-- Mode B `dry_run` branch is covered indirectly by orchestrator tests; the
-  CLI-level `cmd_burn_legacy --dry-run` path is partially covered through
-  CLI-comprehensive tests.
-- Gaps: no end-to-end CLI test asserts the exact dry-run log lines for
-  Mode A.
+- Gaps: no end-to-end CLI test asserts the exact dry-run log lines.
 
 **Source refs:** `src/lcsas/cli/main.py:127`,
-`src/lcsas/cli/main.py:981-991`, `src/lcsas/cli/main.py:1063-1069`,
+`src/lcsas/cli/main.py:981-991`,
 `src/lcsas/burn/orchestrator.py:551-566`.
 
 ---
@@ -442,9 +344,9 @@ location filter (`--for-location`). No ISO is produced.
 **Purpose:** Stage only the packs that are **not yet present at a specific
 physical location**, then burn them. The classic "Offsite_Safe is six
 months out of date — catch it up" workflow. Note: in the CLI the flag is
-`--for-location` on `stage` and `--location` on `burn`; `cmd_burn_legacy`
-internally passes `args.location` as `for_location` to `orch.stage`
-(`src/lcsas/cli/main.py:1060`).
+`--for-location` on `stage`; the corresponding `lcsas burn --location`
+tags the burned copies for that physical location but does not influence
+pack selection (selection is fixed at stage time).
 
 **Prerequisites:**
 
@@ -459,9 +361,8 @@ internally passes `args.location` as `for_location` to `orch.stage`
 **Steps:**
 
 1. `lcsas stage --for-location <name> --config <path>`
-   (`src/lcsas/cli/main.py:134`) or
-   `lcsas burn --location <name> --config <path>`
-   (`src/lcsas/cli/main.py:123`).
+   (`src/lcsas/cli/main.py:134`), then
+   `lcsas burn --session <id> --location <name> --config <path>`.
 2. Internally: `_gather_packs_for_staging(for_location=<name>)` calls
    `get_unarchived_or_missing_at_location` which returns the union of
    `unarchived` and `archived-but-not-at-this-location` packs
@@ -651,15 +552,15 @@ disc remains the source of truth.
 
 ## Variant-axis matrix
 
-| Axis | `stage` | `burn` (legacy) | `burn --session` | `burn --dry-run` | `burn --for-location` |
-|------|---------|-----------------|------------------|------------------|-----------------------|
-| Media type | All supported | All | Inherited from session | All (Mode B); inherited (Mode A) | All |
-| Multi-tenant | `--repo` filter; per-repo metadata injection | `--repo` filter | n/a (session already includes repo selection) | Same as parent mode | `--repo` + `--for-location` combined |
-| OS | Linux | Linux | Linux | Linux | Linux |
-| Optical drive count | n/a (no burn) | 1 (`--device`) | 1 (`--device`) | n/a | 1 (`--device`) |
-| Multi-copy | n/a | Single location per call | **Primary mechanism** — call once per location with same `--session` | n/a | Single location per call |
-| ECC | Always on for production media; implicit skip for TEST_* | Always on for production media; implicit skip for TEST_* | Already baked into staged ISOs | n/a (no ISOs created in Mode B; Mode A no-op) | Always on for production media; implicit skip for TEST_* |
-| Recovery tier | Tier 1 (WARM) only | Tier 1 → Tier 2 | Tier 1 → Tier 2 | None | Tier 1 → Tier 2 |
+| Axis | `stage` | `burn --session` | `burn --dry-run` | `stage --for-location` |
+|------|---------|------------------|------------------|------------------------|
+| Media type | All supported | Inherited from session | Inherited from session | All |
+| Multi-tenant | `--repo` filter; per-repo metadata injection | n/a (session already includes repo selection) | n/a (no-op) | `--repo` + `--for-location` combined |
+| OS | Linux | Linux | Linux | Linux |
+| Optical drive count | n/a (no burn) | 1 (`--device`) | n/a | n/a (stage only) |
+| Multi-copy | n/a | **Primary mechanism** — call once per location with same `--session` | n/a | Stage once; burn per location |
+| ECC | Always on for production media; implicit skip for TEST_* | Already baked into staged ISOs | n/a (no-op) | Always on for production media; implicit skip for TEST_* |
+| Recovery tier | Tier 1 (WARM) only | Tier 1 → Tier 2 | None | Tier 1 (WARM) only |
 
 ---
 
@@ -722,9 +623,8 @@ Primary unit tests for this pipeline:
 | Argparse: `session list` | `src/lcsas/cli/main.py` | 363-369 |
 | Handler: `cmd_stage` | `src/lcsas/cli/main.py` | 876-951 |
 | Handler: `cmd_burn_session` | `src/lcsas/cli/main.py` | 954-1012 |
-| Handler: `cmd_burn_legacy` | `src/lcsas/cli/main.py` | 1015-1083 |
-| Handler: `cmd_burn_iso` | `src/lcsas/cli/main.py` | 1086-1148 |
-| Dispatch: `burn` ↔ `--session` | `src/lcsas/cli/main.py` | 2685-2689 |
+| Handler: `cmd_burn_iso` | `src/lcsas/cli/main.py` | 1015-1077 |
+| Dispatch: `burn` → `cmd_burn_session` | `src/lcsas/cli/main.py` | 2774 |
 | `BurnOrchestrator.prepare` | `src/lcsas/burn/orchestrator.py` | 121-207 |
 | `BurnOrchestrator.execute` | `src/lcsas/burn/orchestrator.py` | 209-316 |
 | `BurnOrchestrator.abort` | `src/lcsas/burn/orchestrator.py` | 318-331 |
