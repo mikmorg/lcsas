@@ -7,6 +7,6 @@ resulting binaries match a manifest, and cross-compile for additional
 architectures.
 """
 
-from lcsas.recovery.build import RecoveryBuilder, RecoveryArtifacts
+from lcsas.recovery.build import RecoveryArtifacts, RecoveryBuilder
 
 __all__ = ["RecoveryBuilder", "RecoveryArtifacts"]
