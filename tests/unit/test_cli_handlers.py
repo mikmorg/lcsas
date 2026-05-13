@@ -285,3 +285,127 @@ class TestCmdDispatchEdges:
             conn.close()
         for expected in ("repositories", "packs", "volumes"):
             assert expected in tables, f"expected table '{expected}' in {tables}"
+
+
+# ---------------------------------------------------------------------------
+# cmd_catalog_validate
+# ---------------------------------------------------------------------------
+
+
+def _build_fake_disc(
+    disc_path,
+    catalog_hashes,
+    disc_file_hashes,
+    *,
+    volume_label="VOL_001",
+    repo_name="family",
+):
+    """Build a minimal fake mounted-disc directory at *disc_path*.
+
+    Writes a holographic catalog (``catalog.db``) that registers *repo_name*
+    and one volume whose ``volume_packs`` rows reference every SHA in
+    *catalog_hashes*, plus ``data/<hash>`` files for every SHA in
+    *disc_file_hashes*.  The two sets need not match — that mismatch is
+    exactly what ``cmd_catalog_validate`` is meant to surface.
+    """
+    import sqlite3
+
+    from lcsas.db.packs import register_pack
+    from lcsas.db.repos import register_repo
+    from lcsas.db.schema import create_all
+    from lcsas.db.volume_packs import bulk_link_packs
+    from lcsas.db.volumes import create_volume
+    from lcsas.utils.labels import generate_uuid
+
+    disc_path.mkdir(parents=True, exist_ok=True)
+    catalog_db = disc_path / "catalog.db"
+
+    conn = sqlite3.connect(str(catalog_db))
+    conn.row_factory = sqlite3.Row
+    try:
+        create_all(conn)
+        register_repo(conn, repo_name, repo_name, f"/mnt/mirror/{repo_name}", "")
+        if catalog_hashes:
+            packs = [register_pack(conn, sha, 1024, repo_name) for sha in catalog_hashes]
+            vol = create_volume(
+                conn,
+                volume_label,
+                generate_uuid(),
+                "TEST_TINY",
+                1_000_000,
+                "Home_Shelf",
+                "VERIFIED",
+            )
+            bulk_link_packs(conn, vol.volume_id, [p.pack_id for p in packs])
+        conn.commit()
+    finally:
+        conn.close()
+
+    data_dir = disc_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    for sha in disc_file_hashes:
+        (data_dir / sha).write_bytes(b"x")
+
+
+class TestCmdCatalogValidate:
+    def test_catalog_validate_happy_path(self, tmp_path, capsys):
+        """Disc with data files matching the embedded catalog exits 0."""
+        disc = tmp_path / "disc"
+        hashes = ["aa" * 32, "bb" * 32]
+        _build_fake_disc(disc, catalog_hashes=hashes, disc_file_hashes=hashes)
+
+        result = main(["catalog", "validate", str(disc)])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "Catalog validation PASSED" in out
+        assert "Catalog packs  : 2" in out
+        assert "Disc packs     : 2" in out
+
+    def test_catalog_validate_orphan_packs(self, tmp_path, capsys):
+        """Disc with pack files NOT in the catalog is reported as orphaned."""
+        disc = tmp_path / "disc"
+        catalog_hashes = ["aa" * 32]
+        # Disc has an extra file the catalog doesn't reference.
+        disc_file_hashes = ["aa" * 32, "cc" * 32]
+        _build_fake_disc(
+            disc,
+            catalog_hashes=catalog_hashes,
+            disc_file_hashes=disc_file_hashes,
+        )
+
+        result = main(["catalog", "validate", str(disc)])
+        assert result != 0
+        out = capsys.readouterr().out
+        assert "ORPHAN" in out
+        assert "cc" * 32 in out
+        assert "Catalog validation FAILED" in out
+
+    def test_catalog_validate_missing_packs(self, tmp_path, capsys):
+        """Catalog references packs that are absent on disc -> reported missing."""
+        disc = tmp_path / "disc"
+        catalog_hashes = ["aa" * 32, "bb" * 32]
+        # Only one of the two cataloged packs is on the disc.
+        disc_file_hashes = ["aa" * 32]
+        _build_fake_disc(
+            disc,
+            catalog_hashes=catalog_hashes,
+            disc_file_hashes=disc_file_hashes,
+        )
+
+        result = main(["catalog", "validate", str(disc)])
+        assert result != 0
+        out = capsys.readouterr().out
+        assert "MISSING" in out
+        assert "bb" * 32 in out
+        assert "Catalog validation FAILED" in out
+
+    def test_catalog_validate_unknown_path_errors(self, tmp_path, capsys):
+        """`catalog validate /nonexistent` exits non-zero with a clear error."""
+        missing = tmp_path / "no-such-disc"
+        assert not missing.exists()
+
+        result = main(["catalog", "validate", str(missing)])
+        assert result != 0
+        out = capsys.readouterr().out
+        assert "does not exist" in out or "not a directory" in out
+        assert str(missing) in out
