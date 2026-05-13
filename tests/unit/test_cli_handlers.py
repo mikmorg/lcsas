@@ -1,8 +1,23 @@
-"""Tests for CLI command handlers: repo add/list, status."""
+"""Tests for CLI command handlers: repo add/list/remove, status."""
 
 from __future__ import annotations
 
 from lcsas.cli.main import main
+
+
+def _get_repo_id_by_name(db_path: str, name: str) -> str:
+    """Helper: look up the UUID for a repo registered by ``name``."""
+    from lcsas.db.connection import get_connection
+    from lcsas.db.repos import list_repos
+
+    conn = get_connection(db_path)
+    try:
+        for repo in list_repos(conn):
+            if repo.name == name:
+                return repo.repo_id
+    finally:
+        conn.close()
+    raise AssertionError(f"repo '{name}' not registered")
 
 
 class TestCmdRepoAdd:
@@ -49,6 +64,150 @@ class TestCmdRepoList:
         out = capsys.readouterr().out
         assert "family" in out
         assert "work" in out
+
+
+class TestCmdRepoRemove:
+    def test_repo_remove_happy_path(self, tmp_path, capsys):
+        """repo remove deletes the row and logs a success message."""
+        db = tmp_path / "test.db"
+        main(["init", "--db-path", str(db)])
+        main(["--db", str(db), "repo", "add", "family", str(tmp_path / "mirror")])
+        repo_id = _get_repo_id_by_name(str(db), "family")
+        capsys.readouterr()  # clear
+
+        result = main(["--db", str(db), "repo", "remove", repo_id])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "Removed repository 'family'" in out
+
+        # Row is gone from the catalog.
+        from lcsas.db.connection import get_connection
+        from lcsas.db.repos import list_repos
+
+        conn = get_connection(str(db))
+        try:
+            assert [r.name for r in list_repos(conn)] == []
+        finally:
+            conn.close()
+
+    def test_repo_remove_unknown_repo_errors(self, tmp_path, capsys):
+        """repo remove with an unknown id exits non-zero with an error."""
+        db = tmp_path / "test.db"
+        main(["init", "--db-path", str(db)])
+        capsys.readouterr()  # clear
+
+        result = main(["--db", str(db), "repo", "remove", "no-such-name"])
+        assert result != 0
+        out = capsys.readouterr().out
+        assert "no-such-name" in out
+        assert "not found" in out
+
+    def test_repo_remove_rejects_active_packs_without_force(
+        self, tmp_path, capsys
+    ):
+        """repo remove refuses while active packs sit on active volumes."""
+        from lcsas.db.connection import get_connection
+        from lcsas.db.packs import register_pack
+        from lcsas.db.volume_packs import link_pack_to_volume
+        from lcsas.db.volumes import create_volume
+        from lcsas.utils.labels import generate_uuid
+
+        db = tmp_path / "test.db"
+        main(["init", "--db-path", str(db)])
+        main(["--db", str(db), "repo", "add", "family", str(tmp_path / "mirror")])
+        repo_id = _get_repo_id_by_name(str(db), "family")
+
+        # Add an active pack on a non-deprecated volume.
+        conn = get_connection(str(db))
+        try:
+            vol = create_volume(
+                conn,
+                label="V1",
+                uuid=generate_uuid(),
+                media_type="BD25",
+                capacity_bytes=25_000_000_000,
+                status="BURNED",
+            )
+            pack = register_pack(
+                conn, sha256="active_pack_1", size_bytes=4096, repo_id=repo_id
+            )
+            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+        finally:
+            conn.close()
+        capsys.readouterr()  # clear
+
+        result = main(["--db", str(db), "repo", "remove", repo_id])
+        assert result != 0
+        out = capsys.readouterr().out
+        assert "family" in out
+        assert "active volumes" in out
+        assert "--force" in out
+
+        # Repo and pack are still in the catalog.
+        conn = get_connection(str(db))
+        try:
+            from lcsas.db.packs import list_packs
+            from lcsas.db.repos import list_repos
+
+            assert "family" in [r.name for r in list_repos(conn)]
+            assert len(list_packs(conn, repo_id=repo_id, include_pruned=True)) == 1
+        finally:
+            conn.close()
+
+    def test_repo_remove_with_force_purges_packs(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """repo remove --force marks packs pruned and deletes the repo."""
+        from lcsas.db.connection import get_connection
+        from lcsas.db.packs import list_packs, register_pack
+        from lcsas.db.repos import list_repos
+        from lcsas.db.volume_packs import link_pack_to_volume
+        from lcsas.db.volumes import create_volume
+        from lcsas.utils.labels import generate_uuid
+
+        db = tmp_path / "test.db"
+        main(["init", "--db-path", str(db)])
+        main(["--db", str(db), "repo", "add", "family", str(tmp_path / "mirror")])
+        repo_id = _get_repo_id_by_name(str(db), "family")
+
+        conn = get_connection(str(db))
+        try:
+            vol = create_volume(
+                conn,
+                label="V1",
+                uuid=generate_uuid(),
+                media_type="BD25",
+                capacity_bytes=25_000_000_000,
+                status="BURNED",
+            )
+            pack = register_pack(
+                conn, sha256="force_pack_1", size_bytes=4096, repo_id=repo_id
+            )
+            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+        finally:
+            conn.close()
+
+        # --force prompts via input(); auto-confirm.
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "yes")
+        capsys.readouterr()  # clear
+
+        result = main(["--db", str(db), "repo", "remove", repo_id, "--force"])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "Removed repository 'family'" in out
+
+        # Repo gone; packs gone; volume_packs links gone.
+        conn = get_connection(str(db))
+        try:
+            assert [r.name for r in list_repos(conn)] == []
+            assert list_packs(conn, repo_id=repo_id, include_pruned=True) == []
+            row = conn.execute(
+                "SELECT COUNT(*) FROM volume_packs WHERE pack_id = ?",
+                (pack.pack_id,),
+            ).fetchone()
+            assert row[0] == 0
+        finally:
+            conn.close()
 
 
 class TestCmdStatus:
