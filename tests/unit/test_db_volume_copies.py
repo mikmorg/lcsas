@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from lcsas.db.connection import get_memory_connection
@@ -15,6 +17,7 @@ from lcsas.db.volume_copies import (
     get_copies_for_volume,
     move_volume_copy,
 )
+from lcsas.db.volume_events import get_events_for_volume
 from lcsas.db.volumes import create_volume
 from lcsas.utils.labels import generate_uuid
 
@@ -95,6 +98,29 @@ class TestVolumeCopyCRUD:
     def test_move_nonexistent_raises(self, conn, volume):
         with pytest.raises(ValueError, match="No active copy"):
             move_volume_copy(conn, volume.volume_id, "Home_Shelf", "Offsite_Safe")
+
+    def test_move_emits_location_move_event(self, conn, volume):
+        """move_volume_copy must emit exactly one LOCATION_MOVE event row
+        capturing the from and to locations (audit trail — issue #16)."""
+        add_volume_copy(conn, volume.volume_id, "Home_Shelf")
+
+        move_volume_copy(conn, volume.volume_id, "Home_Shelf", "Offsite_Safe")
+
+        move_events = get_events_for_volume(
+            conn, volume.volume_id, event_type="LOCATION_MOVE"
+        )
+        assert len(move_events) == 1
+        ev = move_events[0]
+        assert ev.volume_id == volume.volume_id
+        assert ev.event_type == "LOCATION_MOVE"
+        # The new location is recorded on the dedicated column …
+        assert ev.location == "Offsite_Safe"
+        # … and the original location is captured in detail (JSON payload).
+        payload = json.loads(ev.detail)
+        assert payload["from_location"] == "Home_Shelf"
+        assert payload["to_location"] == "Offsite_Safe"
+        # Timestamp must be populated.
+        assert ev.event_date
 
     def test_deprecate_copy(self, conn, volume):
         add_volume_copy(conn, volume.volume_id, "Home_Shelf")

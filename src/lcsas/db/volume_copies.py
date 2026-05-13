@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime
 
@@ -133,7 +134,12 @@ def move_volume_copy(
     from_location: str,
     to_location: str,
 ) -> None:
-    """Record a physical disc moving from one location to another."""
+    """Record a physical disc moving from one location to another.
+
+    Also emits a LOCATION_MOVE row in ``volume_events`` so the audit trail
+    captures every physical move (issue #16). The update and the event
+    insert share a single transaction so they commit atomically.
+    """
     now = datetime.now(UTC).isoformat()
     try:
         result = conn.execute(
@@ -152,6 +158,18 @@ def move_volume_copy(
         raise ValueError(
             f"No active copy of volume {volume_id} at '{from_location}'"
         )
+    # Audit trail: record the move as a LOCATION_MOVE event. The new location
+    # goes in the dedicated `location` column; from/to are also serialised
+    # into `detail` so the original location is recoverable from the event row
+    # alone. Same connection -> same transaction as the UPDATE above.
+    detail = json.dumps(
+        {"from_location": from_location, "to_location": to_location}
+    )
+    conn.execute(
+        """INSERT INTO volume_events (volume_id, event_type, event_date, location, detail)
+           VALUES (?, ?, ?, ?, ?)""",
+        (volume_id, "LOCATION_MOVE", now, to_location, detail),
+    )
     conn.commit()
 
 
