@@ -200,9 +200,11 @@ CASE C.  "lcsas-restore.exe is not recognized as an internal or
                    sh /mnt/d/recovery/scripts/restore.sh /mnt/d ~/restored
                (replace /mnt/d with your disc mount point inside WSL).
 
-           (c) Use the Python fallback.  Install Python from
-               python.org, then:
-                   py D:\standalone_restorer.py D:\repo C:\Users\me\restored
+           (c) Use the standalone Python restorer (manual; this is
+               NOT chained from restore.bat any more -- see "MANUAL
+               PYTHON RECOVERY" below for details).  Install Python
+               from python.org, then run:
+                   python D:\standalone_restorer.py D:\repo C:\Users\me\restored
 
 CASE D.  Recovery completes but some files appear truncated.
          File a bug report with the SHA-256 of the affected file
@@ -299,16 +301,64 @@ in order of effort:
      The Linux binary has NO UCRT dependency; it only needs glibc
      or musl, both universal on Linux.
 
-  D. Use the Python fallback.  Install Python 3 from python.org
-     (versions 3.6 through 3.12 all work), then:
-        py D:\standalone_restorer.py D:\repo C:\Users\me\restored
-     This is tier 3 of the recovery cascade and works on any
-     Windows that still runs Python 3.
+  D. Use the standalone Python restorer.  Install Python 3 from
+     python.org (versions 3.6 through 3.12 all work), then run:
+        python D:\standalone_restorer.py D:\repo C:\Users\me\restored
+     This works on any Windows that still runs Python 3.  Note that
+     restore.bat does NOT chain to this script for you any more --
+     you invoke it directly.  See "MANUAL PYTHON RECOVERY" below.
 
   E. Future: an msvcrt-linked .exe.  See recovery/docs/
      WINDOWS_RECOVERY_PLAN.txt section "Phase W5 -- legacy msvcrt
      build" for the planned long-term solution that would also run
      on Windows XP / Vista.  Not yet available.
+
+────────────────────────────────────────────────────────────────────
+MANUAL PYTHON RECOVERY (last resort, no binaries needed)
+────────────────────────────────────────────────────────────────────
+
+If both lcsas-restore.exe and rustic-static.exe are unusable on
+your host -- missing UCRT, antivirus quarantine, broken bits, wrong
+architecture -- you can still recover using the pure-Python
+standalone restorer that ships on every meta disc.
+
+restore.bat does NOT chain to this script.  Older versions did, but
+the chain required the `py` launcher to be on PATH, which is not a
+safe assumption on a stock Windows host that has never had Python
+installed.  We removed the chain so the .bat fails fast with a
+clear error instead of pretending Python recovery is automatic.
+The standalone_restorer.py file is still on the disc; you invoke
+it directly when you need it.
+
+STEP 1.  Install Python 3 from https://www.python.org if it is not
+         already on the host.  Python 3.6 through 3.12 all work.
+         Tick "Add Python to PATH" in the installer.
+
+STEP 2.  Open a Command Prompt at the meta-disc root.  For example,
+         if the disc is mounted at D::
+
+             D:
+             cd D:\
+
+STEP 3.  Run the standalone restorer.  Two positional arguments:
+         the repository directory and the output directory.
+
+             python standalone_restorer.py D:\repo C:\Users\me\restored
+
+         The script prompts for the password on stdin (visible while
+         typing -- CMD has no `read -s` equivalent).  Pass
+         --password-file C:\path\pw.txt if you prefer a password
+         file.  Run with --help for the full flag surface.
+
+STEP 4.  Wait for "Recovery complete".  Files are byte-equal to the
+         original snapshot.  Symlink, ACL, owner/group and other
+         POSIX-specific metadata are dropped on Windows (same caveats
+         as the binary path).
+
+The standalone restorer has NO external dependencies beyond the
+Python standard library; it implements AES-256 and the restic blob
+format directly.  It is slower than the C binary -- typically by a
+factor of 5-20x -- but works on any Windows that runs Python 3.
 
 ────────────────────────────────────────────────────────────────────
 PHYSICAL DISC PROBLEMS
