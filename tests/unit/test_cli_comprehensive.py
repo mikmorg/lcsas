@@ -80,6 +80,29 @@ class TestCmdInit:
         result = main(["init", "--db-path", str(db)])
         assert result == 0
 
+    def test_init_creates_nested_parent_dirs(self, tmp_path, capsys):
+        """`lcsas init --db-path` creates missing intermediate directories.
+
+        Issue #40: ``cmd_init`` calls ``mkdir(parents=True, exist_ok=True)``
+        on the DB path's parent so XDG-style or fresh-deployment paths
+        with several missing intermediate directories work without the
+        operator having to ``mkdir -p`` by hand. This test exercises the
+        ``parents=True`` branch.
+        """
+        db_path = tmp_path / "new" / "nested" / "dir" / "archive.db"
+        # Sanity: the parent chain is genuinely missing up front.
+        assert not db_path.parent.exists()
+
+        result = main(["init", "--db-path", str(db_path)])
+        assert result == 0
+
+        # Every intermediate directory must now exist.
+        assert (tmp_path / "new").is_dir()
+        assert (tmp_path / "new" / "nested").is_dir()
+        assert (tmp_path / "new" / "nested" / "dir").is_dir()
+        # And the DB file must exist at the requested path.
+        assert db_path.is_file()
+
 
 # ===================================================================
 # cmd_repo_add / cmd_repo_list
@@ -794,6 +817,97 @@ class TestCmdVerify:
         assert result == 1
         out = capsys.readouterr().out
         assert "skipped" in out.lower() or "No volumes" in out
+
+    def test_verify_all_location_filter_only_verifies_matching(
+        self, tmp_path, capsys,
+    ):
+        """`verify --all --location <name>` only verifies volumes with a
+        copy at the named location.
+
+        Issue #40: ``_verify_all`` filters candidates by checking each
+        volume's ``volume_copies`` rows for a matching ``location``. This
+        test seeds two volumes — one with a copy at location ``A``, one
+        with a copy at location ``B`` — then invokes ``verify --all
+        --location A`` and asserts:
+
+          * the ECC verifier is called for the ``A`` volume only,
+          * a ``VERIFY_PASS`` event lands on the ``A`` volume only,
+          * the ``B`` volume receives no verify event.
+        """
+        from lcsas.db.locations import ensure_location
+        from lcsas.db.sessions import add_session_volume, create_session
+        from lcsas.db.volume_copies import add_volume_copy
+        from lcsas.db.volume_events import get_events_for_volume
+
+        db = tmp_path / "test.db"
+        conn = get_connection(db)
+        create_all(conn)
+
+        # Two ISO files that exist so _verify_all doesn't short-circuit.
+        iso_a = tmp_path / "vol_a.iso"
+        iso_b = tmp_path / "vol_b.iso"
+        iso_a.write_bytes(b"\0" * 4096)
+        iso_b.write_bytes(b"\0" * 4096)
+
+        # FK from volume_copies.location → locations.name requires the
+        # locations rows to exist first.
+        ensure_location(conn, "A")
+        ensure_location(conn, "B")
+
+        vol_a = create_volume(conn, "VOL_A", "uuid-a", "BD25", 25e9,
+                              "A", "BURNED")
+        vol_b = create_volume(conn, "VOL_B", "uuid-b", "BD25", 25e9,
+                              "B", "BURNED")
+        # Volume copies pinning each volume to its location. The
+        # `--location` filter consults volume_copies, not the volume's
+        # own `location` field.
+        add_volume_copy(conn, vol_a.volume_id, "A")
+        add_volume_copy(conn, vol_b.volume_id, "B")
+
+        create_session(conn, media_type="BD25", staging_dir="/tmp",
+                       session_id="sess1")
+        add_session_volume(conn, "sess1", vol_a.volume_id,
+                           iso_path=str(iso_a), iso_sha256="")
+        add_session_volume(conn, "sess1", vol_b.volume_id,
+                           iso_path=str(iso_b), iso_sha256="")
+        conn.close()
+
+        # Track every ISO the verifier is invoked against.
+        verified_paths: list[Path] = []
+
+        def fake_verify_iso(self, iso_path, *args, **kwargs):
+            verified_paths.append(Path(iso_path))
+            return True
+
+        with patch(
+            "lcsas.ecc.dvdisaster.SubprocessDVDisasterRunner.verify_iso",
+            fake_verify_iso,
+        ):
+            result = main(
+                ["--db", str(db), "verify", "--all", "--location", "A"],
+            )
+
+        assert result == 0
+        # Only the A-located volume's ISO was verified.
+        assert verified_paths == [iso_a]
+
+        # And only the A volume got a VERIFY_PASS event.
+        conn = get_connection(db)
+        a_events = get_events_for_volume(
+            conn, vol_a.volume_id, "VERIFY_PASS",
+        )
+        b_events_pass = get_events_for_volume(
+            conn, vol_b.volume_id, "VERIFY_PASS",
+        )
+        b_events_fail = get_events_for_volume(
+            conn, vol_b.volume_id, "VERIFY_FAIL",
+        )
+        conn.close()
+
+        assert len(a_events) == 1
+        assert "Batch ISO verify" in a_events[0].detail
+        assert b_events_pass == []
+        assert b_events_fail == []
 
 
 # ===================================================================
