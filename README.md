@@ -142,6 +142,24 @@ mirror_path   = "/mnt/mirror/personal"
 password_file = "/root/keys/personal.key"
 ```
 
+#### How LCSAS Passes Keys to Rustic
+
+Each `[repos.<name>]` block declares a `password_file` path. LCSAS reads
+this path once per operation and forwards it to `rustic` via the
+`--password-file` flag for every subprocess invocation (backup, scan,
+restore, etc.). There is **no** `$LCSAS_PASSWORD` or `$RESTIC_PASSWORD`
+environment variable: key location is config-driven so the same
+`config.toml` is reproducible across machines and the CLI never accepts
+secret material on the command line or via the environment.
+
+The `password_file` value is the only supported way to tell LCSAS where
+a repo's key lives. The file itself must already exist on disk and be
+readable by the user running `lcsas` — see
+[Key Backup (Critical)](#key-backup-critical) above for how to generate,
+store, and back up the key files this field points to. Key files are
+deliberately excluded from the meta-volume, so a separate backup is
+mandatory.
+
 ### 5. Register Repositories
 
 ```bash
