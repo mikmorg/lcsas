@@ -183,9 +183,22 @@ set "META_DISC_ARG="
 if defined LCSAS_RELOCATED set "META_DISC_ARG=--meta-disc %LCSAS_RELOCATED%"
 
 REM Optional --catalog if a catalog.db is present.
+REM The meta-disc deliberately carries NO catalog.db (it would always
+REM be stale at burn time).  Scan every drive letter for catalog.db,
+REM keep whichever was most recently modified.
 set "CATALOG_ARG="
-if exist "%RECOVERY%\catalog.db" set "CATALOG_ARG=--catalog %RECOVERY%\catalog.db"
-if exist "%REPO%\catalog.db"     set "CATALOG_ARG=--catalog %REPO%\catalog.db"
+set "CATALOG_PICK="
+if exist "%RECOVERY%\catalog.db" set "CATALOG_PICK=%RECOVERY%\catalog.db"
+if exist "%REPO%\catalog.db"     set "CATALOG_PICK=%REPO%\catalog.db"
+for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
+    if exist "%%L:\catalog.db" (
+        set "CATALOG_PICK=%%L:\catalog.db"
+    )
+)
+if defined CATALOG_PICK (
+    set "CATALOG_ARG=--catalog %CATALOG_PICK%"
+    echo [lcsas-restore] using catalog %CATALOG_PICK%
+)
 
 REM ----- Tier 1: prebuilt lcsas-restore.exe -------------------------
 set "BIN=%RECOVERY%\bin\%ARCH%\lcsas-restore.exe"

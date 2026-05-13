@@ -2,7 +2,8 @@ LCSAS RECOVERY -- MULTI-DISC SWAP UX (DESIGN DOC)
 ====================================================
 
 UX CONCERN ID: 005 (recovery/docs/UX_CONCERNS.txt)
-STATUS: planned (target Phase R-multi)
+STATUS: catalog-hint MVP shipped; further work deferred.  See
+        DEFERRED_WORK.txt for the parking lot.
 PLATFORMS: all -- Linux, macOS, Windows
 PRIORITY: P0 -- the highest-impact UX gap in the current workflow
 

@@ -310,16 +310,52 @@ if [ -n "${META_DISC:-}" ]; then
     META_DISC_ARG="--meta-disc $META_DISC"
 fi
 
-# Optional --catalog if a catalog.db is present somewhere on the
-# recovery tree.  Used for human-readable volume hints in prompts.
+# Optional --catalog if a catalog.db is present somewhere reachable.
+# Used for human-readable volume hints in prompts.
+#
+# The meta-disc deliberately carries NO catalog.db (it would always be
+# stale at burn time -- see src/lcsas/meta/builder.py).  So we scan
+# every currently-mounted data disc and pick the FRESHEST catalog by
+# mtime, falling back to the recovery tree if nothing better is found.
 CATALOG_ARG=""
+catalog_pick=""
+catalog_pick_mtime=0
+catalog_consider() {
+    # Note the explicit `return 0` -- under `set -e` an implicit
+    # return after a failed test would propagate as a non-zero exit.
+    [ -f "$1" ] || return 0
+    mt="$(stat -c '%Y' "$1" 2>/dev/null \
+        || stat -f '%m' "$1" 2>/dev/null \
+        || echo 0)"
+    if [ "$mt" -gt "$catalog_pick_mtime" ] 2>/dev/null; then
+        catalog_pick="$1"
+        catalog_pick_mtime="$mt"
+    fi
+    return 0
+}
+# Local recovery-tree candidates (last resort).
 for cand in "$RECOVERY/catalog.db" "$REPO/catalog.db" \
             "$RECOVERY/../catalog.db"; do
-    if [ -f "$cand" ]; then
-        CATALOG_ARG="--catalog $cand"
-        break
-    fi
+    catalog_consider "$cand"
 done
+# Mounted discs: /Volumes/* (macOS), /media/$USER/* /media/* /mnt/* (Linux).
+if [ -d /Volumes ]; then
+    for mnt in /Volumes/*; do
+        [ -d "$mnt" ] || continue
+        catalog_consider "$mnt/catalog.db"
+    done
+fi
+for parent in "/media/$(id -un 2>/dev/null)" /media /mnt; do
+    [ -d "$parent" ] || continue
+    for mnt in "$parent"/*; do
+        [ -d "$mnt" ] || continue
+        catalog_consider "$mnt/catalog.db"
+    done
+done
+if [ -n "$catalog_pick" ]; then
+    CATALOG_ARG="--catalog $catalog_pick"
+    printf '[lcsas-restore] using catalog %s\n' "$catalog_pick" >&2
+fi
 
 # ── Tier 1: prebuilt lcsas-restore (C89, static, no Python) ───────
 
