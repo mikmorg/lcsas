@@ -175,27 +175,6 @@ class TestCmdStatusEdges:
 
 
 # ===================================================================
-# cmd_db_export — extended
-# ===================================================================
-
-class TestCmdDbExportEdges:
-    def test_export_has_all_keys(self, tmp_path, capsys):
-        db = tmp_path / "test.db"
-        conn = get_connection(db)
-        create_all(conn)
-        register_repo(conn, "r1", "work", "/mnt/work", "")
-        create_volume(conn, "V1", "u1", "BD25", 25_000_000_000, "Home", "VERIFIED")
-        conn.close()
-
-        result = main(["--db", str(db), "db", "export"])
-        assert result == 0
-        data = json.loads(capsys.readouterr().out)
-        assert data["status"]["total"] >= 0
-        assert len(data["volumes"]) == 1
-        assert data["volumes"][0]["label"] == "V1"
-
-
-# ===================================================================
 # cmd_config_check
 # ===================================================================
 

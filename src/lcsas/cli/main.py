@@ -362,11 +362,6 @@ def build_parser() -> argparse.ArgumentParser:
     verify_p.add_argument("--location", default=None,
                           help="Filter --all to volumes at this location.")
 
-    # --- db ---
-    db_p = subparsers.add_parser("db", help="Database operations.")
-    db_sub = db_p.add_subparsers(dest="db_command")
-    db_sub.add_parser("export", help="Export catalog summary as JSON.")
-
     # --- session ---
     session_p = subparsers.add_parser("session", help="Manage burn sessions.")
     session_sub = session_p.add_subparsers(dest="session_command")
@@ -856,38 +851,6 @@ def cmd_status(args: argparse.Namespace) -> int:
     logger.info(f"Volumes: {len(volumes)} total")
     for v in volumes:
         logger.info(f"  {v.label:<25} {v.media_type:<10} {v.status:<10} {v.location}")
-    return 0
-
-
-def cmd_db_export(args: argparse.Namespace) -> int:
-    """Export catalog summary as JSON."""
-    from lcsas.db.connection import get_connection
-    from lcsas.db.queries import get_archive_status_summary
-    from lcsas.db.repos import list_repos
-    from lcsas.db.schema import create_all
-    from lcsas.db.volumes import list_volumes
-
-    db_path = _resolve_db_path(args)
-    conn = get_connection(db_path)
-    try:
-        create_all(conn)
-
-        export = {
-            "status": get_archive_status_summary(conn),
-            "volumes": [
-                {"label": v.label, "media_type": v.media_type,
-                 "status": v.status, "location": v.location}
-                for v in list_volumes(conn)
-            ],
-            "repositories": [
-                {"repo_id": r.repo_id, "name": r.name, "mirror_path": r.mirror_path}
-                for r in list_repos(conn)
-            ],
-        }
-    finally:
-        conn.close()
-
-    logger.info(json.dumps(export, indent=2))
     return 0
 
 
@@ -2889,8 +2852,6 @@ def dispatch(args: argparse.Namespace) -> int:
         return cmd_scan(args)
     elif args.command == "status":
         return cmd_status(args)
-    elif args.command == "db" and args.db_command == "export":
-        return cmd_db_export(args)
     elif args.command == "config":
         if args.config_command == "check":
             return cmd_config_check(args)

@@ -7,11 +7,12 @@ commands.
 
 from __future__ import annotations
 
-import json
 import textwrap
 from pathlib import Path
 
 from lcsas.cli.main import main
+from lcsas.db.connection import get_connection
+from lcsas.db.repos import list_repos
 
 
 def _write_config(tmp_path: Path, mirror: Path, db: Path) -> Path:
@@ -35,10 +36,10 @@ def _write_config(tmp_path: Path, mirror: Path, db: Path) -> Path:
 
 
 class TestInitRepoScanPipeline:
-    """Happy-path: init → repo add → scan → status → db export."""
+    """Happy-path: init → repo add → scan → status."""
 
     def test_pipeline_init_to_scan(self, tmp_path, capsys):
-        """Full pipeline produces correct DB state, accessible via db export."""
+        """Full pipeline produces correct DB state, observable via CLI commands."""
         db = tmp_path / "archive.db"
         mirror = tmp_path / "mirror"
         mirror.mkdir()
@@ -72,17 +73,10 @@ class TestInitRepoScanPipeline:
         # 6. status reflects the registered pack
         capsys.readouterr()
         assert main(["--db", str(db), "status"]) == 0
-        assert "Packs: 1 total" in capsys.readouterr().out
-
-        # 7. db export returns machine-readable state
-        capsys.readouterr()
-        assert main(["--db", str(db), "db", "export"]) == 0
-        data = json.loads(capsys.readouterr().out)
-        assert data["status"]["total"] == 1
-        assert data["status"]["unarchived"] == 1
-        assert data["status"]["archived"] == 0
-        assert len(data["repositories"]) == 1
-        assert data["repositories"][0]["name"] == "test_repo"
+        status_out = capsys.readouterr().out
+        assert "Packs: 1 total" in status_out
+        assert "1 unarchived" in status_out
+        assert "0 archived" in status_out
 
     def test_second_scan_discovers_no_new_packs(self, tmp_path, capsys):
         """Re-scanning the same mirror does not re-register already-known packs."""
@@ -136,17 +130,21 @@ class TestRepoRemovePipeline:
         assert main(["init", "--db-path", str(db)]) == 0
         assert main(["--db", str(db), "repo", "add", "temp_repo", str(mirror)]) == 0
 
-        # Extract repo_id via db export
-        capsys.readouterr()
-        assert main(["--db", str(db), "db", "export"]) == 0
-        data = json.loads(capsys.readouterr().out)
-        repo_id = data["repositories"][0]["repo_id"]
+        # Extract repo_id directly from the catalog
+        conn = get_connection(db)
+        try:
+            repos = list_repos(conn)
+        finally:
+            conn.close()
+        assert len(repos) == 1
+        repo_id = repos[0].repo_id
 
         # Remove the repo
         assert main(["--db", str(db), "repo", "remove", repo_id]) == 0
 
-        # Repo list should now be empty
-        capsys.readouterr()
-        assert main(["--db", str(db), "db", "export"]) == 0
-        data = json.loads(capsys.readouterr().out)
-        assert data["repositories"] == []
+        # repo list should now be empty
+        conn = get_connection(db)
+        try:
+            assert list_repos(conn) == []
+        finally:
+            conn.close()
