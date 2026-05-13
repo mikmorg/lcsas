@@ -45,6 +45,15 @@ Detail files cite these axes by name (e.g. "Media type (see registry)") rather
 than redefining them. An axis applies to a workflow when changing it changes
 the code path or required setup.
 
+The matrix assumes a **single optical drive** as the canonical case. Multi-drive
+sites are supported, but the only workflows whose behavior materially changes
+between single-drive and multi-drive are the bare-metal and Windows recovery
+paths (they document a RAM-relocation pattern for the single-drive case). Those
+two detail files — `workflows/restore-bare-metal.md` and
+`workflows/restore-windows.md` — still call out drive count in their own
+"Variant axes that apply" sections. Treat drive count as a per-workflow concern
+rather than a top-level axis.
+
 - **Media type** — one of `BD25`, `BD50`, `BDXL100`, `MDISC25`, `MDISC100`,
   `TEST_TINY` (defined in `src/lcsas/config/media.py`). All types carry 15%
   ECC overhead.
@@ -52,8 +61,6 @@ the code path or required setup.
   physical volumes, each with its own encryption key.
 - **OS** — Linux host, Linux bare-metal initramfs, Windows, macOS. Determines
   which entry point (`lcsas`, `restore.sh`, `restore.bat`) is exercised.
-- **Optical drive count** — single drive (sequential burn) vs. multiple drives
-  (parallel burn / multi-copy sync).
 - **Data tier location** — HOT (Rustic mirror on NAS/local disk), WARM
   (assembled ISO on staging SSD/HDD), COLD (burned disc).
 - **Multi-copy** — exactly 1 location vs. N locations holding copies of the
