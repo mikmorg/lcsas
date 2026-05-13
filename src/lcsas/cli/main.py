@@ -433,7 +433,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output manifest path (default: recovery/MANIFEST.sha256).",
     )
 
-    rv = recovery_sub.add_parser(
+    recovery_sub.add_parser(
         "verify",
         help="Verify reproducible build: builds twice, byte-compares output.",
     )
