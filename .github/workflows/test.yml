@@ -1,0 +1,88 @@
+name: test
+
+# Run the full LCSAS test suite against REAL rustic, xorriso, and dvdisaster.
+# Issue #68 (resolves #52 item 6): "We must test all workflow paths involving
+# rustic, with real rustic". No Protocol mocks here — this CI installs the
+# actual binaries and exercises them end-to-end against the integration suite.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      # Pinned rustic release. Update in lockstep with README "Development"
+      # section so local devs and CI run identical versions.
+      RUSTIC_VERSION: "0.11.2"
+      RUSTIC_ASSET: "rustic-v0.11.2-x86_64-unknown-linux-gnu.tar.gz"
+      # SHA256 of the pinned asset, taken from the upstream-published
+      # .sha256 sidecar on the release page. Verified locally on bump.
+      RUSTIC_SHA256: "fb7b74a14418b2dd070360c9abb22607f8559bdd344a0adf1b33bc2e31f83f5f"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install rustic (pinned release tarball)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          cd "$(mktemp -d)"
+          url="https://github.com/rustic-rs/rustic/releases/download/v${RUSTIC_VERSION}/${RUSTIC_ASSET}"
+          echo "Downloading $url"
+          curl -fsSL -o rustic.tar.gz "$url"
+          # Strict SHA256 verification against the pinned hash above.
+          actual=$(sha256sum rustic.tar.gz | awk '{print $1}')
+          if [ "$RUSTIC_SHA256" != "$actual" ]; then
+            echo "SHA256 mismatch: expected=$RUSTIC_SHA256 actual=$actual" >&2
+            exit 1
+          fi
+          echo "SHA256 verified: $actual"
+          tar -xzf rustic.tar.gz
+          # Tarball layout: a single `rustic` binary at the archive root.
+          install -m 0755 rustic "$HOME/.local/bin/rustic"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify rustic installation
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          rustic --version
+
+      - name: Install xorriso and dvdisaster
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorriso dvdisaster
+          xorriso -version
+          dvdisaster --version
+
+      # NOTE: cdemu is NOT installed in CI.
+      # The cdemu-daemon / cdemu-client packages require a loadable kernel
+      # module (vhba) that is not available on GitHub-hosted runners, so the
+      # e2e blind-restore suite (`make blind-restore` / `tests/e2e/...`) is
+      # intentionally skipped here. Run that suite locally on a machine
+      # with vhba + cdemu installed. See README "Development" section.
+
+      - name: Install LCSAS (editable, with dev deps)
+        run: make dev
+
+      - name: Run unit tests
+        run: make test-unit
+
+      - name: Run integration tests
+        run: make test-integration
+
+      - name: Type-check (mypy strict)
+        run: make typecheck
+
+      - name: Lint (ruff)
+        run: make lint
