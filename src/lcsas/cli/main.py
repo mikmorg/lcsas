@@ -70,8 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- init ---
     init_p = subparsers.add_parser("init", help="Initialize LCSAS database and config.")
-    init_p.add_argument("--db-path", type=Path, default=Path("archive.db"),
-                        help="Path for the SQLite database.")
+    init_p.add_argument("--db-path", type=Path, default=None,
+                        help="Path for the SQLite database. "
+                             "Overrides --config's [paths].database when set.")
 
     # --- repo ---
     repo_p = subparsers.add_parser("repo", help="Manage backup repositories.")
@@ -494,11 +495,31 @@ def _resolve_repo_names_to_ids(
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    """Initialize the LCSAS database."""
+    """Initialize the LCSAS database.
+
+    Resolution order for the catalog DB path:
+      1. ``--db-path`` on ``init`` (when provided)
+      2. global ``--db``
+      3. ``paths.database`` from the TOML config (``--config``)
+      4. ``archive.db`` in the current working directory
+    """
     from lcsas.db.connection import get_connection
     from lcsas.db.schema import create_all
 
-    db_path = args.db_path
+    db_path: Path | None = getattr(args, "db_path", None)
+    if db_path is None and getattr(args, "db", None):
+        db_path = Path(args.db)
+    if db_path is None and getattr(args, "config", None):
+        from lcsas.config.settings import load_config
+        cfg_path = Path(args.config)
+        if not cfg_path.exists():
+            logger.error(f"--config path does not exist: {cfg_path}")
+            return 1
+        config = load_config(cfg_path)
+        db_path = Path(config.db_path)
+    if db_path is None:
+        db_path = Path("archive.db")
+
     # Ensure parent directory exists (XDG paths may not exist yet)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection(db_path)

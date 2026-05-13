@@ -19,11 +19,12 @@ Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relat
 
 **Prerequisites:**
 - A writable parent directory for the chosen DB path; missing intermediate dirs are fine — the handler calls `mkdir(parents=True, exist_ok=True)`.
-- No TOML config required — `init` does not consult `--config`.
+- Optional TOML config — when `--config` is set, `paths.database` from the config is used as the DB location.
 
 **Steps:**
-1. `lcsas init [--db-path PATH]` — create the SQLite file and run `create_all()`. (`src/lcsas/cli/main.py:447`)
-   - Parser (default `archive.db` in cwd): `src/lcsas/cli/main.py:71`.
+1. `lcsas [--config FILE] init [--db-path PATH]` — create the SQLite file and run `create_all()`. (`src/lcsas/cli/main.py:447`)
+   - Parser: `src/lcsas/cli/main.py:71`.
+   - DB path resolution order: explicit `--db-path` > global `--db` > `--config`'s `paths.database` > `archive.db` in cwd.
 2. `create_all()` issues `CREATE TABLE IF NOT EXISTS` for every table and inserts a row into `schema_version` if empty. (`src/lcsas/db/schema.py:170`)
 
 **Expected outcome:**
@@ -43,12 +44,12 @@ Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relat
 **Test coverage:**
 - Existing:
   - `tests/unit/test_cli.py::TestCLIInit::test_init_creates_db` — DB file created.
+  - `tests/unit/test_cli.py::TestCLIInit::test_init_honors_config_flag` — `--config` is honored (regression test for issue #17).
   - `tests/unit/test_cli.py::TestCLIParsing::test_init_command` — argparse wiring.
   - `tests/unit/test_cli_comprehensive.py::TestCmdInit::test_reinit_on_existing_db` — idempotent re-init.
 - Gaps:
   - No assertion that `schema_version` actually equals 5 after `init`.
   - No coverage for the `mkdir(parents=True)` branch (e.g., `--db-path /tmp/new/dir/archive.db`).
-  - No assertion that `init` ignores `--config` (would catch future drift).
 
 **Source refs:**
 - Parser: `src/lcsas/cli/main.py:71`
@@ -161,7 +162,7 @@ Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relat
 Observations from reading the source; **not** fixes.
 
 - **No `lcsas db import`.** Only `db export` is wired (`src/lcsas/cli/main.py:360`). True backups require copying the raw `.sqlite` file.
-- **`init` ignores `--config`.** `lcsas --config foo.toml init` writes to `./archive.db` (or `--db-path`), not the TOML's `paths.database` — foot-gun for first-time users (`src/lcsas/cli/main.py:452`).
+- **`init` honors `--config`.** `lcsas --config foo.toml init` writes to the TOML's `paths.database` (resolution order: `--db-path` > `--db` > `--config` > `./archive.db`) — fixed in issue #17 (`src/lcsas/cli/main.py:452`).
 - **`init` does not migrate.** `create_all` stamps `CURRENT_SCHEMA_VERSION` only when `schema_version` is empty (`src/lcsas/db/schema.py:189`); migrations happen on access via `migrate()` (`src/lcsas/db/schema.py:200`).
 - **`config check` does not validate `optical_device`** — typos surface only at burn time.
 - **`--config` is a top-level flag.** `lcsas config check --config foo.toml` fails argparse; correct form is `lcsas --config foo.toml config check`. The error message could be clearer about position.

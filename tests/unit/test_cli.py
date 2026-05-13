@@ -73,3 +73,50 @@ class TestCLIInit:
     def test_no_command_shows_help(self, capsys):
         result = main([])
         assert result == 0
+
+    def test_init_honors_config_flag(self, tmp_path, monkeypatch):
+        """`lcsas --config <path> init` must create the catalog DB at the
+        path declared in the TOML config, not the default ``archive.db``.
+
+        Regression test for issue #17.
+        """
+        # Run in an isolated cwd so any default `./archive.db` would be
+        # easy to detect (and must NOT appear).
+        workdir = tmp_path / "cwd"
+        workdir.mkdir()
+        monkeypatch.chdir(workdir)
+
+        # Custom DB location declared inside the TOML config.
+        custom_db = tmp_path / "custom" / "catalog.db"
+        mirror = tmp_path / "mirror"
+        mirror.mkdir()
+        staging = tmp_path / "staging"
+        staging.mkdir()
+
+        cfg_path = tmp_path / "lcsas.toml"
+        cfg_path.write_text(
+            f"""
+[paths]
+mirror_base = "{mirror}"
+staging = "{staging}"
+database = "{custom_db}"
+
+[defaults]
+media_type = "TEST_TINY"
+metadata_reserve_mb = 0
+"""
+        )
+
+        result = main(["--config", str(cfg_path), "init"])
+        assert result == 0
+
+        # The catalog DB must land at the path the TOML config specified.
+        assert custom_db.exists(), (
+            f"expected catalog DB at {custom_db}, not found"
+        )
+
+        # And the default location must NOT have been written.
+        assert not (workdir / "archive.db").exists(), (
+            "init silently fell back to default archive.db in cwd; "
+            "--config was ignored"
+        )
