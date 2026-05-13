@@ -85,17 +85,33 @@ class TestCmdDispatchEdges:
         result = main(["verify", "SOME_LABEL"])
         assert result == 1
 
-    def test_dispatch_error_handling(self, tmp_path, capsys):
-        """Exception in dispatch is caught and returns 1."""
-        # Use a non-existent DB path that will fail.
-        # The exact error message varies by OS/SQLite version, but it should
-        # be an error (return code 1) and print something to stdout.
-        result = main(["--db", "/nonexistent/path/db.sqlite", "status"])
-        assert result == 1
-        out = capsys.readouterr().out
-        # Accept either SQLite "unable to open" or system "Permission denied"
-        assert any(phrase in out for phrase in [
-            "unable to open database file",
-            "Permission denied",
-            "Errno 13",
-        ])
+    def test_status_auto_creates_db_at_unknown_path(self, tmp_path, capsys):
+        """`status` against a fresh DB path auto-creates the file and schema.
+
+        Regression test for the auto-init path: ``cmd_status`` defensively
+        calls ``create_all()`` and ``get_connection`` creates missing parent
+        directories, so an unused path should succeed (not error out).
+        """
+        import sqlite3
+
+        db = tmp_path / "fresh-subdir" / "archive.db"
+        assert not db.exists()
+        assert not db.parent.exists()
+
+        result = main(["--db", str(db), "status"])
+        assert result == 0
+        assert db.exists(), "status should have created the DB file"
+
+        # Verify the schema was applied (a few core tables should exist).
+        conn = sqlite3.connect(str(db))
+        try:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+        finally:
+            conn.close()
+        for expected in ("repositories", "packs", "volumes"):
+            assert expected in tables, f"expected table '{expected}' in {tables}"
