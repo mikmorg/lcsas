@@ -1,6 +1,6 @@
 # Workflows: Init & Config
 
-First-time setup and ongoing config management: create the SQLite catalog, validate a TOML config, and dump the catalog as JSON. These run before any scan/stage/burn cycle.
+First-time setup and ongoing config management: create the SQLite catalog and validate a TOML config. These run before any scan/stage/burn cycle.
 
 Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relative paths against the config file's parent dir (`src/lcsas/config/settings.py:151`).
 
@@ -8,7 +8,6 @@ Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relat
 
 - [`lcsas init`](#lcsas-init) — initialize the SQLite catalog
 - [`lcsas config check`](#lcsas-config-check) — validate the TOML config
-- [`lcsas db export`](#lcsas-db-export) — dump the catalog summary as JSON
 - [Notes & gaps](#notes--gaps) — observations from reading the source
 
 ---
@@ -114,57 +113,14 @@ Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relat
 
 ---
 
-## `lcsas db export`
-
-**Purpose:** Emit a JSON dump of top-line counts, all volumes, and all repositories to stdout.
-
-**Prerequisites:**
-- A reachable SQLite catalog at `--db` (or the config's `paths.database`, or `archive.db` in cwd). The handler calls `create_all()` defensively, so a missing-but-creatable path is initialized as a side effect (`src/lcsas/cli/main.py:797`).
-
-**Steps:**
-1. `lcsas [--db PATH | --config PATH] db export` — open the DB and emit JSON. (`src/lcsas/cli/main.py:786`)
-   - Parser: `src/lcsas/cli/main.py:358`. DB path resolution (`--db` > config > `archive.db`): `src/lcsas/cli/main.py:403`.
-2. Calls `get_archive_status_summary()`, `list_volumes()`, `list_repos()`; serializes via `json.dumps(..., indent=2)`.
-
-**Expected outcome:**
-- Stdout JSON object with keys `status`, `volumes`, `repositories`.
-- Volume entries: `label`, `media_type`, `status`, `location`. Repo entries: `repo_id`, `name`, `mirror_path`.
-- Exit 0.
-
-**Variant axes that apply:**
-- Media type: N/A — media is dumped verbatim from `volumes.media_type`.
-- Multi-tenant: each repo appears once; encryption keys are **not** included.
-- OS: pure-Python, no platform behavior.
-- Optical drive count: N/A.
-- Multi-copy: volumes appear once, but `volume_copies` rows are omitted — multi-copy state is invisible here.
-- ECC: N/A.
-- Recovery tier: Tier 0.
-
-**Test coverage:**
-- Existing:
-  - `tests/unit/test_cli.py::TestCLIParsing::test_db_export` — argparse wiring.
-  - `tests/unit/test_cli_handlers.py::TestCmdDbExport::test_db_export_json` — keys present, repos appear.
-  - `tests/unit/test_cli_comprehensive.py::TestCmdDbExportEdges::test_export_has_all_keys` — volumes round-trip.
-- Gaps:
-  - No test asserts that `volume_copies`, `sessions`, `locations`, `snapshots`, `volume_events` are intentionally excluded.
-  - No `lcsas db import` exists — one-way export only; operators must copy the SQLite file for a true backup (real gap).
-  - No JSON-schema/contract test for the export shape.
-
-**Source refs:**
-- Parser / dispatch / handler: `src/lcsas/cli/main.py:358`, `:2675`, `:786`.
-- DB path resolver: `src/lcsas/cli/main.py:403`.
-- Status summary helper: `src/lcsas/db/queries.py::get_archive_status_summary`.
-
----
-
 ## Notes & gaps
 
 Observations from reading the source; **not** fixes.
 
-- **No `lcsas db import`.** Only `db export` is wired (`src/lcsas/cli/main.py:360`). True backups require copying the raw `.sqlite` file.
+- **Catalog distribution is holographic.** The complete SQLite catalog is copied onto every burned disc by `staging/metadata.py::HolographicInjector`, so any single disc is self-describing. There is no separate JSON-export step.
+- **True backup = copy the `.sqlite` file.** There is no `db import` and no `db export` command; operators wanting an off-disc snapshot of the catalog should copy the raw SQLite file.
 - **`init` honors `--config`.** `lcsas --config foo.toml init` writes to the TOML's `paths.database` (resolution order: `--db-path` > `--db` > `--config` > `./archive.db`) — fixed in issue #17 (`src/lcsas/cli/main.py:452`).
 - **`init` does not migrate.** `create_all` stamps `CURRENT_SCHEMA_VERSION` only when `schema_version` is empty (`src/lcsas/db/schema.py:189`); migrations happen on access via `migrate()` (`src/lcsas/db/schema.py:200`).
 - **`config check` does not validate `optical_device`** — typos surface only at burn time.
 - **`--config` is a top-level flag.** `lcsas config check --config foo.toml` fails argparse; correct form is `lcsas --config foo.toml config check`. The error message could be clearer about position.
 - **Unknown TOML keys are warnings, not errors.** A typo-quiet config can load "successfully" and silently produce nothing on `scan` (`src/lcsas/config/settings.py:78`).
-- **`db export` is not a backup.** It omits packs, snapshots, sessions, locations, volume_copies, and audit trail. A rename or a true `db dump` may be warranted.

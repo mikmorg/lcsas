@@ -57,11 +57,6 @@ class TestCLIParsing:
         assert args.volume_ids == [1, 2, 3]
         assert args.target_media == "MDISC100"
 
-    def test_db_export(self):
-        args = self.parser.parse_args(["db", "export"])
-        assert args.command == "db"
-        assert args.db_command == "export"
-
 
 class TestCLIInit:
     def test_init_creates_db(self, tmp_path):

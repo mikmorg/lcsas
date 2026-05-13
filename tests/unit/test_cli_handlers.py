@@ -1,8 +1,6 @@
-"""Tests for CLI command handlers: repo add/list, status, db export."""
+"""Tests for CLI command handlers: repo add/list, status."""
 
 from __future__ import annotations
-
-import json
 
 from lcsas.cli.main import main
 
@@ -75,25 +73,6 @@ class TestCmdStatus:
         assert result == 0
         out = capsys.readouterr().out
         assert "Packs:" in out
-
-
-class TestCmdDbExport:
-    def test_db_export_json(self, tmp_path, capsys):
-        """Export produces valid JSON with expected keys."""
-        db = tmp_path / "test.db"
-        main(["init", "--db-path", str(db)])
-        main(["--db", str(db), "repo", "add", "family", "/mnt/family"])
-        capsys.readouterr()
-
-        result = main(["--db", str(db), "db", "export"])
-        assert result == 0
-        out = capsys.readouterr().out
-        data = json.loads(out)
-        assert "status" in data
-        assert "volumes" in data
-        assert "repositories" in data
-        assert len(data["repositories"]) == 1
-        assert data["repositories"][0]["name"] == "family"
 
 
 class TestCmdDispatchEdges:

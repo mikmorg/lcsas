@@ -579,7 +579,6 @@ lcsas consolidate   VOL_IDS... --target-media TYPE Plan/execute consolidation
 lcsas location      NAME [--description DESC]      Register a storage location
 lcsas verify        [--volume LABEL]               Verify volume integrity
 lcsas catalog import-receipts RECEIPT_FILES...     Import burn receipts
-lcsas db export     [--output FILE]                Export catalog as JSON
 ```
 
 ---
