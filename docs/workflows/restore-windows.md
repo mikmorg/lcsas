@@ -23,7 +23,7 @@ Sibling docs:
 1. [Common context](#common-context)
 2. [Workflow A: Meta-disc + multi-drive (happy path)](#workflow-a-meta-disc--multi-drive-happy-path)
 3. [Workflow B: Single-drive variant (RAM staging + disc swap)](#workflow-b-single-drive-variant-ram-staging--disc-swap)
-4. [Workflow C: Pure-Python fallback (Tier 5; e.g. Windows 7 without UCRT)](#workflow-c-pure-python-fallback-tier-5-eg-windows-7-without-ucrt)
+4. [Workflow C: Pure-Python fallback (Tier 3; e.g. Windows 7 without UCRT)](#workflow-c-pure-python-fallback-tier-3-eg-windows-7-without-ucrt)
 5. [Path / drive-letter handling differences from Linux](#path--drive-letter-handling-differences-from-linux)
 6. [Test coverage and gaps](#test-coverage-and-gaps)
 7. [Consolidated source refs](#consolidated-source-refs)
@@ -35,15 +35,13 @@ plus the prebuilt binary `recovery/bin/x86_64-windows/lcsas-restore.exe`
 (see `recovery/docs/RECOVER_WINDOWS.txt` for the user-facing walkthrough
 and `recovery/docs/WINDOWS_RECOVERY_PLAN.txt` for the design rationale).
 
-The orchestrator replicates the POSIX cascade with two practical
-amputations:
+The orchestrator replicates the POSIX cascade:
 
 | Tier | What runs                                              | Status on Windows |
 |------|--------------------------------------------------------|-------------------|
 | 1    | `bin\<arch>\lcsas-restore.exe`                         | Primary           |
 | 2    | `bin\<arch>\rustic-static.exe` (cross-check)           | Secondary         |
-| 3, 4 | Rebuild from source (`make`)                           | **Skipped**: stock Windows has no C compiler / POSIX make (`recovery/scripts/restore.bat:14`-`16`). |
-| 5    | `py standalone_restorer.py` (pure-Python fallback)     | Gated on `py` launcher + `LCSAS_ALLOW_PYTHON_TIER!=0` (`recovery/scripts/restore.bat:241`-`265`). |
+| 3    | `py standalone_restorer.py` (pure-Python fallback)     | Gated on `py` launcher + `LCSAS_ALLOW_PYTHON_TIER!=0` (`recovery/scripts/restore.bat:237`-`261`). |
 
 Architecture detection maps `PROCESSOR_ARCHITECTURE` (`AMD64`/`x86`/
 `ARM64`) and `PROCESSOR_ARCHITEW6432` to `x86_64-windows` or
@@ -147,9 +145,8 @@ every exit path.
   drive-letter sweep at `recovery/scripts/restore.bat:167`-`178` picks
   them all up automatically. For 1 drive see [Workflow B](#workflow-b-single-drive-variant-ram-staging--disc-swap).
 - **Recovery tier:** Tier 1 first; falls back to Tier 2 (bundled
-  rustic) on non-zero exit; never tries Tier 3/4 on stock Windows.
-  Tier 5 (Python) gated on `py` launcher being on `PATH`
-  (`recovery/scripts/restore.bat:241`-`265`).
+  rustic) on non-zero exit. Tier 3 (Python) gated on `py` launcher
+  being on `PATH` (`recovery/scripts/restore.bat:237`-`261`).
 
 **Test coverage:** Linux-host Wine end-to-end test at
 `recovery/tests/test_e2e_windows.sh` exercises Tier 1 only (it invokes
@@ -263,7 +260,7 @@ correctly survives a meta-disc eject after relocation; no test for
 `recovery/src/lcsas-restore/main.c:1`-`32`,
 `recovery/docs/RECOVER_WINDOWS.txt:54`-`58`.
 
-## Workflow C: Pure-Python fallback (Tier 5; e.g. Windows 7 without UCRT)
+## Workflow C: Pure-Python fallback (Tier 3; e.g. Windows 7 without UCRT)
 
 **Purpose:** Recover when `lcsas-restore.exe` cannot load (older
 Windows missing UCRT) or refuses to run (antivirus quarantine, broken
@@ -274,8 +271,8 @@ prerequisite is having Python 3 on the host.
 
 - Any Windows that still runs Python 3.6 – 3.12
   (`recovery/docs/RECOVER_WINDOWS.txt:302`-`306`).
-- Python launcher `py` is on `PATH`. The script gates Tier 5 on
-  `where py` succeeding (`recovery/scripts/restore.bat:244`-`245`).
+- Python launcher `py` is on `PATH`. The script gates Tier 3 on
+  `where py` succeeding (`recovery/scripts/restore.bat:240`-`241`).
 - `standalone_restorer.py` is present either at `%RECOVERY%\` or at
   `%RECOVERY%\..\` (`recovery/scripts/restore.bat:247`-`250`).
 - `LCSAS_ALLOW_PYTHON_TIER` is not set to `0`
@@ -289,19 +286,19 @@ prerequisite is having Python 3 on the host.
 2. Run `restore.bat` exactly as in Workflow A. If Tier 1
    (`lcsas-restore.exe`) is missing or exits non-zero AND Tier 2
    (`rustic-static.exe`) is also missing or exits non-zero, the script
-   reaches Tier 5 (`recovery/scripts/restore.bat:204`-`239`).
-3. Tier 5 runs `py "%PYREST%" "%REPO%" "%TARGET%" --password-file "%PWFILE%"`
-   (`recovery/scripts/restore.bat:252`-`254`). The temp password file
-   is deleted on success (`recovery/scripts/restore.bat:256`-`265`)
+   reaches Tier 3 (`recovery/scripts/restore.bat:200`-`235`).
+3. Tier 3 runs `py "%PYREST%" "%REPO%" "%TARGET%" --password-file "%PWFILE%"`
+   (`recovery/scripts/restore.bat:248`-`250`). The temp password file
+   is deleted on success (`recovery/scripts/restore.bat:252`-`261`)
    and on the catch-all `:no_python` branch
-   (`recovery/scripts/restore.bat:267`-`281`).
-4. If Tier 5 succeeds the script prints
+   (`recovery/scripts/restore.bat:263`-`277`).
+4. If Tier 3 succeeds the script prints
    "Recovery complete (via Python fallback)."
-   (`recovery/scripts/restore.bat:259`-`265`).
-5. If Tier 5 is unavailable (no `py`, no
+   (`recovery/scripts/restore.bat:255`-`261`).
+5. If Tier 3 is unavailable (no `py`, no
    `standalone_restorer.py`, or `LCSAS_ALLOW_PYTHON_TIER=0`) the
    script falls into `:no_python`, prints what it looked for, and
-   exits 1 (`recovery/scripts/restore.bat:267`-`281`).
+   exits 1 (`recovery/scripts/restore.bat:263`-`277`).
 6. Manual invocation alternative (for users who want to skip the .bat
    entirely):
    `py D:\standalone_restorer.py D:\repo C:\Users\me\restored`
@@ -320,11 +317,9 @@ still apply.
   hosts that never received KB2999226 (UCRT)
   (`recovery/docs/RECOVER_WINDOWS.txt:279`-`306`).
 - **Optical drive count:** Single-drive variant (Workflow B) and Tier
-  5 compose: the script relocates first, then falls through tiers in
+  3 compose: the script relocates first, then falls through tiers in
   order, so a single-drive Windows 7 host can still recover.
-- **Recovery tier:** Tier 5 is the explicit subject here; Tiers 3-4
-  remain skipped because there is no `make`/C compiler on stock
-  Windows (`recovery/scripts/restore.bat:14`-`16`).
+- **Recovery tier:** Tier 3 is the explicit subject here.
 
 **Test coverage:** None. `recovery/tests/test_e2e_windows.sh` only
 exercises the .exe under Wine; the Python fallback is exercised on
@@ -333,7 +328,7 @@ documented at `recovery/docs/WINDOWS_RECOVERY_PLAN.txt:415`-`548` is
 the long-term plan to give XP/Vista a native binary path, but it is
 not yet implemented.
 
-**Source refs:** `recovery/scripts/restore.bat:18`-`20`, `:241`-`281`,
+**Source refs:** `recovery/scripts/restore.bat:18`-`20`, `:237`-`277`,
 `recovery/docs/RECOVER_WINDOWS.txt:279`-`311`,
 `recovery/docs/WINDOWS_RECOVERY_PLAN.txt:415`-`548`.
 
@@ -408,7 +403,7 @@ Windows workflow inherits. Source refs in parentheses.
 - **No automated test of `restore.bat` itself.** The Wine test
   invokes the .exe directly; the entire .bat cascade (architecture
   detection, repo discovery, RAM relocation, drive sweep, tier
-  fall-through, Tier 5 Python path) is verified only by code review
+  fall-through, Tier 3 Python path) is verified only by code review
   and manual real-Windows runs
   (`recovery/docs/WINDOWS_RECOVERY_PLAN.txt:320`-`331`).
 - **No automated test of the single-drive RAM relocation

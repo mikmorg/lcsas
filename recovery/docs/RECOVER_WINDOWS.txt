@@ -302,7 +302,7 @@ in order of effort:
   D. Use the Python fallback.  Install Python 3 from python.org
      (versions 3.6 through 3.12 all work), then:
         py D:\standalone_restorer.py D:\repo C:\Users\me\restored
-     This is tier 5 of the recovery cascade and works on any
+     This is tier 3 of the recovery cascade and works on any
      Windows that still runs Python 3.
 
   E. Future: an msvcrt-linked .exe.  See recovery/docs/

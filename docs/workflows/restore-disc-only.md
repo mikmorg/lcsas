@@ -1,6 +1,6 @@
-# Disc-Only Pure-Python Restore (Tier 5)
+# Disc-Only Pure-Python Restore (Tier 3)
 
-> Recovery tier 5 — the fallback of last resort. A single LCSAS data disc,
+> Recovery tier 3 — the fallback of last resort. A single LCSAS data disc,
 > a Python 3.10+ interpreter, the encryption key, and **nothing else**.
 > No meta-disc. No network. No `rustic`/`restic` binary. No installed
 > `lcsas` package. No cross-disc reconstruction.
@@ -24,7 +24,7 @@ Sibling recovery tiers (more capable, prefer them when available):
 
 ## Table of contents
 
-1. [When to use Tier 5](#when-to-use-tier-5)
+1. [When to use Tier 3](#when-to-use-tier-3)
 2. [What every data disc contains](#what-every-data-disc-contains)
 3. [Workflow A — Mount a single data disc anywhere Python runs](#workflow-a--mount-a-single-data-disc-anywhere-python-runs)
 4. [Workflow B — Run `standalone_restorer.py` from the disc](#workflow-b--run-standalone_restorerpy-from-the-disc)
@@ -32,20 +32,20 @@ Sibling recovery tiers (more capable, prefer them when available):
 6. [Workflow D — Use the holographic SQLite catalog](#workflow-d--use-the-holographic-sqlite-catalog)
 7. [Workflow E — AES-256-CTR + Poly1305 + zstd decrypt path](#workflow-e--aes-256-ctr--poly1305--zstd-decrypt-path)
 8. [Workflow F — Recover a single file vs a full snapshot](#workflow-f--recover-a-single-file-vs-a-full-snapshot)
-9. [Hard limits of Tier 5](#hard-limits-of-tier-5)
+9. [Hard limits of Tier 3](#hard-limits-of-tier-3)
 10. [Test coverage matrix](#test-coverage-matrix)
 11. [Consolidated source refs](#consolidated-source-refs)
 
 ---
 
-## When to use Tier 5
+## When to use Tier 3
 
-Use this path **only** if all higher tiers are unreachable. Tier 5
+Use this path **only** if all higher tiers are unreachable. Tier 3
 operates at ~1 MB/s
 (`src/lcsas/restore/restic_fallback.py:10`) and **cannot** stitch packs
 together across multiple discs (`src/lcsas/restore/restic_fallback.py:539`).
 
-Pick Tier 5 when, and only when:
+Pick Tier 3 when, and only when:
 
 - No working `rustic` or `restic` binary is available for the host
   architecture (`src/lcsas/cli/main.py:2216`).
@@ -71,7 +71,7 @@ The `HolographicInjector` ensures every disc is self-describing
 `HolographicInjector.write_*` runs during the burn pipeline, the root
 of each ISO contains:
 
-| Path on disc | Source | Purpose for Tier 5 |
+| Path on disc | Source | Purpose for Tier 3 |
 | --- | --- | --- |
 | `data/` | hardlinked packs (`staging/builder.py`) | The encrypted restic pack files. Flat layout, one file per SHA-256 (`src/lcsas/restore/restic_fallback.py:549`). |
 | `metadata/<repo>/index/` | mirror copy (`src/lcsas/staging/metadata.py:50`) | Encrypted blob → pack offset map. |
@@ -129,7 +129,7 @@ readable from the chosen host.
 **Variant axes that apply:**
 
 - OS: Linux, macOS, Windows, BSDs — anywhere CPython 3.10+ runs.
-- Recovery tier: always 5.
+- Recovery tier: always 3.
 
 **Test coverage:**
 
@@ -227,7 +227,7 @@ effort (`src/lcsas/restore/restic_fallback.py:599`–`728`).
 **Variant axes that apply:**
 
 - OS: any Python-capable host (Linux/macOS/Windows/BSD).
-- Recovery tier: 5.
+- Recovery tier: 3.
 - Compression: uncompressed restic v1, zstd v2 (auto-detected by magic
   bytes — `src/lcsas/restore/restic_fallback.py:433`–`440`,
   `src/lcsas/restore/restic_fallback.py:583`–`586`).
@@ -325,7 +325,7 @@ identifying the snapshot ID and hostname
 **Variant axes that apply:**
 
 - OS: Linux/macOS/Windows wherever LCSAS imports.
-- Recovery tier: 5 (auto-degrades from 4 if rustic missing).
+- Recovery tier: 3 (auto-degrades from 2 if rustic missing).
 - Mode: interactive (single disc + prompts) or batch
   (`--volume-dir`)
   (`src/lcsas/cli/main.py:2384`,
@@ -438,7 +438,7 @@ physical volumes you must fetch to complete a snapshot.
 **Variant axes that apply:**
 
 - OS: any SQLite-capable host.
-- Recovery tier: 5 (also useful at tiers 3 and 4 for planning).
+- Recovery tier: 3 (also useful at tiers 1 and 2 for planning).
 
 **Test coverage:**
 
@@ -554,7 +554,7 @@ read + verify), `src/lcsas/restore/_aes_pure.py`,
 
 ## Workflow F — Recover a single file vs a full snapshot
 
-**Purpose:** Match the recovery scope to the urgency. Tier 5 supports
+**Purpose:** Match the recovery scope to the urgency. Tier 3 supports
 both, but the pure-Python tree traversal is recursive — there is no
 built-in "extract one path" flag.
 
@@ -608,7 +608,7 @@ guarantees as a full restore (SHA-256 verified per blob).
 **Variant axes that apply:**
 
 - OS: any Python-capable host.
-- Recovery tier: 5.
+- Recovery tier: 3.
 - Scope: full snapshot (supported directly) or single-file (manual
   via Python API).
 
@@ -623,7 +623,7 @@ guarantees as a full restore (SHA-256 verified per blob).
   `src/lcsas/restore/restic_fallback.py:516`–`535` (covered indirectly
   by the restore tests).
 - Gap: no test or CLI flag for a single-file extraction. This is
-  intentional — Tier 5 is "get everything back, slowly".
+  intentional — Tier 3 is "get everything back, slowly".
 
 **Source refs:**
 `src/lcsas/restore/restic_fallback.py:344`–`728`,
@@ -632,7 +632,7 @@ guarantees as a full restore (SHA-256 verified per blob).
 
 ---
 
-## Hard limits of Tier 5
+## Hard limits of Tier 3
 
 This path deliberately trades capability for portability. It **cannot**:
 
@@ -654,7 +654,7 @@ This path deliberately trades capability for portability. It **cannot**:
 - **Re-encrypt or rotate keys.** No write path through the master key
   exists.
 - **Verify ECC.** Read errors on a degraded disc must be repaired with
-  `dvdisaster` *before* Tier 5 starts, because the restorer reads
+  `dvdisaster` *before* Tier 3 starts, because the restorer reads
   pack bytes verbatim and verifies SHA-256 afterwards — a flipped bit
   surfaces as `IntegrityError` (`src/lcsas/restore/restic_fallback.py:587`).
 - **Run fast.** Expect ~1 MB/s on modern hardware
@@ -667,8 +667,8 @@ This path deliberately trades capability for portability. It **cannot**:
 - **Skip a damaged blob and continue.** A SHA-256 mismatch aborts the
   current restore (`src/lcsas/restore/restic_fallback.py:587`–`593`).
 
-If you need cross-disc reconstruction or pack repair, escalate to Tier
-3/4 (`docs/workflows/restore-host-linux.md`,
+If you need cross-disc reconstruction or pack repair, escalate to
+Tier 1 or Tier 2 (`docs/workflows/restore-host-linux.md`,
 `docs/workflows/meta-volume.md`) — both still leverage the same
 holographic catalog this tier relies on.
 

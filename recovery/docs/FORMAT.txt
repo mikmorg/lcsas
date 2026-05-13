@@ -105,7 +105,7 @@ VOLUME LAYOUT (LCSAS disc)
     src/, Makefile
     scripts/restore.sh, ...
     docs/FORMAT.txt, BUILD.txt, RECOVER.txt, CRYPTO.txt
-  /standalone_restorer.py              pure-Python fallback (tier 4)
+  /standalone_restorer.py              pure-Python fallback (tier 3)
   /MANIFEST.sha256                     SHA-256 of every file on disc
   /SURVIVABILITY.md                    survivability invariants
 

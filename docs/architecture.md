@@ -506,8 +506,9 @@ and restored by the other without conversion.
 ### Decision
 
 **Rustic is the primary tool** for all LCSAS write-path operations (backup,
-prune, forget). Restic serves as a **fallback in the restore cascade** (tier 4
-of 5), available only when rustic binaries are unavailable.
+prune, forget). The vendored static `rustic-static` binary serves as a
+**fallback in the restore cascade** (tier 2 of 3), with the pure-Python
+restorer as the final tier 3 fallback.
 
 ### Rationale
 

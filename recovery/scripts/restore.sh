@@ -1,18 +1,16 @@
 #!/bin/sh
 # restore.sh -- POSIX-sh driver for the LCSAS recovery cascade.
 #
-# Bare-minimum recovery is C89 + POSIX sh ONLY.  Python is NOT on the
-# bare path; it lives on a separate tier (5) that is only reached when
-# every C-based option has failed.
+# Bare-minimum recovery is prebuilt static binaries + POSIX sh ONLY.
+# Python is NOT on the bare path; it lives on a separate tier (3) that
+# is only reached when every C-based option has failed.
 #
-# Cascade (bare-minimum path = tiers 1-4):
+# Cascade (bare-minimum path = tiers 1-2):
 #
 #   Tier 1.  bin/<arch>/lcsas-restore        prebuilt static C89 binary
 #   Tier 2.  bin/<arch>/rustic-static        vendored Rust binary (cross-check)
-#   Tier 3.  Rebuild lcsas-restore from src/ (any C compiler; POSIX make)
-#   Tier 4.  rustic-built-from-vendored-rust (requires cargo, deferred)
-#   ----- Bare minimum stops here.  None of the above need Python. -----
-#   Tier 5.  python3 standalone_restorer.py  (only if all above failed)
+#   ----- Bare minimum stops here.  Neither of the above needs Python. -----
+#   Tier 3.  python3 standalone_restorer.py  (only if all above failed)
 #
 # The script can be invoked two ways:
 #
@@ -379,47 +377,12 @@ if [ -x "$RUSTIC_BIN" ]; then
                      restore "$SNAP" "$TARGET"
 fi
 
-# ── Tier 3: rebuild lcsas-restore from C source (no Python) ───────
-
-if [ -d "$RECOVERY/src" ] && [ -f "$RECOVERY/Makefile" ]; then
-    CC=""
-    for cand in cc gcc clang tcc pcc; do
-        if command -v "$cand" >/dev/null 2>&1; then CC="$cand"; break; fi
-    done
-    if [ -n "$CC" ]; then
-        printf '[tier 3] rebuilding lcsas-restore from source with %s\n' \
-               "$CC" >&2
-        ( cd "$RECOVERY" && make CC="$CC" -j2 build/lcsas-restore )
-        BUILT="$RECOVERY/build/lcsas-restore"
-        if [ -x "$BUILT" ]; then
-            [ -n "${META_DISC:-}" ] && cd / 2>/dev/null || true
-            exec "$BUILT" --repo "$REPO" --password-file "$PWFILE" \
-                          --target "$TARGET" --snapshot "$SNAP" \
-                          $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG
-        fi
-    fi
-fi
-
-# ── Tier 4: rebuild rustic from vendored Rust source ──────────────
-# Only reached if no C compiler is available.  Rust toolchain has heavy
-# requirements; we attempt it as a last C-free option.
-
-if [ -d "$RECOVERY/../vendored/rustic" ] && command -v cargo >/dev/null 2>&1; then
-    printf '[tier 4] building rustic from vendored source (cargo)\n' >&2
-    ( cd "$RECOVERY/../vendored/rustic" && cargo build --release --offline )
-    BUILT="$RECOVERY/../vendored/rustic/target/release/rustic"
-    if [ -x "$BUILT" ]; then
-        exec "$BUILT" --repository "$REPO" --password-file "$PWFILE" \
-                     restore "$SNAP" "$TARGET"
-    fi
-fi
-
 # ─────────────────────────────────────────────────────────────────
-# BARE-MINIMUM PATH ENDS HERE.  Everything above is C/Rust + POSIX sh,
-# with NO Python dependency at any step.
+# BARE-MINIMUM PATH ENDS HERE.  Everything above is statically-linked
+# C/Rust + POSIX sh, with NO Python dependency at any step.
 # ─────────────────────────────────────────────────────────────────
 
-# ── Tier 5: Python fallback (LAST RESORT, off the bare path) ─────
+# ── Tier 3: Python fallback (LAST RESORT, off the bare path) ─────
 
 if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
     PYBIN=""
@@ -433,7 +396,7 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         if [ -f "$cand" ]; then PYREST="$cand"; break; fi
     done
     if [ -n "$PYBIN" ] && [ -n "$PYREST" ]; then
-        printf '[tier 5] falling back to Python (%s + %s)\n' \
+        printf '[tier 3] falling back to Python (%s + %s)\n' \
                "$PYBIN" "$PYREST" >&2
         exec "$PYBIN" "$PYREST" "$REPO" "$TARGET" --password-file "$PWFILE"
     fi
@@ -442,13 +405,11 @@ fi
 cat >&2 <<EOF
 ERROR: no recovery method available.
 
-The bare-minimum recovery path (tiers 1-4) needs ONE of:
+The bare-minimum recovery path (tiers 1-2) needs ONE of:
   * a prebuilt $RESTORE_BIN
   * a prebuilt $RUSTIC_BIN
-  * a C compiler (cc, gcc, clang, tcc, or pcc) to rebuild from source
-  * a cargo toolchain to rebuild rustic from vendored source
 
-The optional Python tier (tier 5) needs python3 and standalone_restorer.py.
+The optional Python tier (tier 3) needs python3 and standalone_restorer.py.
 
 See $RECOVERY/docs/RECOVER.txt for manual recovery instructions.
 EOF

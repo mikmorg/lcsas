@@ -42,13 +42,13 @@ Windows recovery hosts.  The `recovery/` tree fixes this by:
 3. Publishing a **SHA256 manifest** (`recovery/MANIFEST.sha256`)
    that ships on every meta-disc, so an operator restoring 20 years
    from now can verify that the prebuilt they trust hasn't bit-rotted.
-4. Documenting a **fallback cascade** (Tier 1 → 2 → 3 → 4) so the
+4. Documenting a **fallback cascade** (Tier 1 → 2 → 3) so the
    live-restore wizard can degrade gracefully from "prebuilt binary
-   on disc" to "compile from vendored source on a foreign host" to
-   "rebuild rustic from upstream" — without ever requiring network.
+   on disc" to "vendored rustic-static" to "pure-Python last
+   resort" — without ever requiring network.
 
 The cascade is documented at `recovery/docs/TIERS.txt` and summarised
-in [the Tier cascade](#the-tier-1234-fallback-cascade) section
+in [the Tier cascade](#the-tier-123-fallback-cascade) section
 below.
 
 ## Table of contents
@@ -61,7 +61,7 @@ below.
 - [`lcsas recovery manifest` — produce SHA256 manifest](#lcsas-recovery-manifest--produce-sha256-manifest)
 - [`lcsas recovery verify` — verify manifest against artefacts](#lcsas-recovery-verify--verify-manifest-against-artefacts)
 - [Reproducible build verification](#reproducible-build-verification)
-- [The Tier 1→2→3→4 fallback cascade](#the-tier-1234-fallback-cascade)
+- [The Tier 1→2→3 fallback cascade](#the-tier-123-fallback-cascade)
 - [Architecture detection (`detect_arch.sh`)](#architecture-detection-detect_archsh)
 - [Cross-cutting variant matrix](#cross-cutting-variant-matrix)
 - [Test coverage summary](#test-coverage-summary)
@@ -82,13 +82,11 @@ recovery/
 │   ├── riscv64-linux/recover
 │   └── x86_64-windows/recover.exe
 ├── scripts/
-│   ├── detect_arch.sh             # arch detection for live-restore
-│   ├── rebuild.sh                 # Tier 3 fallback: rebuild C from source
-│   └── rebuild_rustic.sh          # Tier 4 fallback: rebuild rustic
+│   └── detect_arch.sh             # arch detection for live-restore
 ├── tests/
 │   └── recover_smoke.sh           # round-trip test on a known pack
 └── docs/
-    ├── TIERS.txt                  # the 4-tier cascade
+    ├── TIERS.txt                  # the 3-tier cascade
     └── BUILD.txt                  # toolchain prerequisites
 ```
 
@@ -182,11 +180,11 @@ This is what a release engineer runs before cutting a meta-disc.
 
 ## `lcsas recovery build --target <arch>` — single-target build
 
-**Purpose:** Rebuild exactly one target — typically used (a) in CI
-to fan out one job per arch and (b) by a recovery operator at
-**Tier 3** of the cascade, when the prebuilt binary on the meta-disc
-is missing or won't run and the operator has a working toolchain
-for one arch only.
+**Purpose:** Rebuild exactly one target — typically used in CI to
+fan out one job per arch. Recovery operators do not rebuild from
+source at recovery time: if the prebuilt binary on the meta-disc
+will not run, the cascade falls straight through to Tier 3
+(pure-Python).
 
 **Prerequisites:** The single musl or mingw toolchain matching the
 chosen `--target`.  Valid values: `x86_64-linux`, `aarch64-linux`,
@@ -217,8 +215,9 @@ chosen `--target`.  Valid values: `x86_64-linux`, `aarch64-linux`,
 **Variant axes that apply:**
 
 - Target architecture: **one**.
-- Recovery tier: when invoked by hand at Tier 3, this is the
-  workflow the operator runs.
+- Recovery tier: produces a **Tier 1** prebuilt artefact for a
+  single target. There is no on-host rebuild tier in the recovery
+  cascade itself.
 - Reproducibility: yes — same flags as the all-targets build.
 
 **Test coverage:**
@@ -232,8 +231,7 @@ chosen `--target`.  Valid values: `x86_64-linux`, `aarch64-linux`,
 
 **Source refs:** `src/lcsas/cli/main.py:LINE` **[gap]**,
 `src/lcsas/recovery/build.py:LINE` **[gap]**,
-`recovery/Makefile:LINE` **[gap]**,
-`recovery/scripts/rebuild.sh:LINE` **[gap]**.
+`recovery/Makefile:LINE` **[gap]**.
 
 ---
 
@@ -274,8 +272,7 @@ tested; exit 1 with the smoke script's diff output otherwise.
 
 - Target architecture: **host arch only** by default; cross-arch
   testing requires QEMU and is out of scope for the smoke script.
-- Recovery tier: validates **Tier 1** (prebuilt) and **Tier 3**
-  (rebuild-from-source) when run after `recovery build --target`.
+- Recovery tier: validates **Tier 1** (prebuilt).
 - Reproducibility: not applicable (this tests behaviour, not bytes).
 
 **Test coverage:**
@@ -466,7 +463,7 @@ against either build's manifest using the other build's artefacts.
 
 ---
 
-## The Tier 1→2→3→4 fallback cascade
+## The Tier 1→2→3 fallback cascade
 
 **Purpose:** Define how the live-restore wizard chooses *which*
 recovery binary to run when an operator boots the meta-disc on
@@ -476,12 +473,11 @@ the first that succeeds.  The full text of the cascade is intended
 to ship verbatim on the meta-disc at
 `recovery/docs/TIERS.txt` (**[gap]**).
 
-| Tier | Source                          | What runs                                                 | Cost                |
-|------|---------------------------------|-----------------------------------------------------------|---------------------|
-| 1    | `recovery/prebuilt/<arch>/`     | The static C `recover` binary shipped on the meta-disc    | seconds             |
-| 2    | Vendored `recovery/src/` C tree | Same logic, but linked against the host's libc            | minutes (needs gcc) |
-| 3    | `recovery/scripts/rebuild.sh`   | Rebuild the C reader from `recovery/src/` for this host   | minutes             |
-| 4    | `recovery/scripts/rebuild_rustic.sh` | Rebuild upstream rustic from vendored source         | tens of minutes     |
+| Tier | Source                                        | What runs                                                 | Cost                |
+|------|-----------------------------------------------|-----------------------------------------------------------|---------------------|
+| 1    | `recovery/prebuilt/<arch>/`                   | The static C `recover` binary shipped on the meta-disc    | seconds             |
+| 2    | `recovery/bin/<arch>/rustic-static`           | Vendored static Rust `rustic` cross-check                 | seconds             |
+| 3    | `src/lcsas/restore/restic_fallback.py`        | Pure-Python AES/zstd restorer (last resort)               | minutes (slow)      |
 
 **Steps (live-restore wizard chooses a tier):**
 
@@ -491,57 +487,48 @@ to ship verbatim on the meta-disc at
 2. **Tier 1** — wizard checks for
    `recovery/prebuilt/<arch>/recover`; if present and
    `lcsas recovery verify` agrees, it runs that.  This is the
-   common path and the only path that does not require a host
-   compiler.
-3. **Tier 2** — if no prebuilt for the detected arch exists (e.g.
-   the operator booted on hardware not in the prebuilt matrix),
-   the wizard greps the prebuilt tree for *any* binary that the
-   host happens to run (e.g. an x86_64 prebuilt under qemu-user).
-   This tier is opportunistic and may fail silently.
-4. **Tier 3** — wizard runs `recovery/scripts/rebuild.sh`
-   (`recovery/scripts/rebuild.sh:LINE` — **[gap]**), which
-   shells out to whatever C compiler is on `$PATH`, links
-   against the host libc (not musl — Tier 3 is the "host
-   toolchain is whatever it is" tier), and produces a fresh
-   `recover` binary in a scratch directory.
-5. **Tier 4** — wizard runs
-   `recovery/scripts/rebuild_rustic.sh` (**[gap]**), which
-   rebuilds the upstream Rust `rustic` from vendored source.
-   This is the "last resort" tier; it requires `cargo` on the
-   host and takes tens of minutes.  It exists so that an
-   operator with **only Rust** can still recover, because every
-   prior tier requires a C toolchain.
+   common path and the only path that does not require any
+   interpreter beyond the kernel + static libc baked into the
+   binary.
+3. **Tier 2** — wizard falls back to the vendored
+   `rustic-static` binary for the same arch.  Same kernel + libc
+   dependencies as Tier 1; this exists as a cross-check against
+   the C reader.
+4. **Tier 3** — wizard hands off to the pure-Python restorer
+   (`src/lcsas/restore/restic_fallback.py`).  Requires a working
+   Python 3 interpreter on the host; gated by
+   `LCSAS_ALLOW_PYTHON_TIER` (default 1).  This is the absolute
+   last line of defence — no rebuild-from-source tier sits
+   between the static binaries and Python, because anyone with a
+   C/Rust toolchain can already run the static binaries shipped
+   on the disc.
 
 **Expected outcome:** The first tier that succeeds yields a working
-binary the wizard uses to extract packs.  If all four fail, the
-pure-Python fallback (`src/lcsas/restore/restic_fallback.py`) is
-invoked — that path is documented elsewhere and is the absolute
-last line of defence (`CLAUDE.md:71`).
+restore. If all three fail the operator has a hardware or
+environment problem (`recovery/docs/RECOVER.txt`).
 
 **Variant axes that apply:**
 
 - Target architecture: cascade is invoked **per arch detected by
   the host**.
 - Recovery tier: this section *is* the tier definition.
-- Reproducibility: only **Tier 1** is reproducible; Tier 3 and 4
-  produce a binary that is by construction host-specific.
+- Reproducibility: only **Tier 1** is reproducible.
 
 **Test coverage:**
 
 - Tier 1 (prebuilt happy path): **[gap]**.
-- Tier 2 (cross-arch opportunistic run): **[gap]**.
-- Tier 3 (rebuild C from source): **[gap]**.
-- Tier 4 (rebuild rustic from upstream): **[gap]**.
+- Tier 2 (vendored rustic-static): **[gap]**.
+- Tier 3 (pure-Python fallback): covered by
+  `tests/unit/test_restic_fallback.py` and
+  `tests/integration/test_pure_python_restore.py`.
 - A planned integration test at
   `tests/integration/test_recovery_orchestration.py` is **[gap]**
-  and should exercise Tiers 1 and 3 at minimum (Tier 2 requires
-  qemu-user, Tier 4 requires cargo).
+  and should exercise Tier 1 end-to-end.
 
 **Source refs:** `recovery/docs/TIERS.txt` **[gap]**,
 `recovery/scripts/detect_arch.sh` **[gap]**,
-`recovery/scripts/rebuild.sh` **[gap]**,
-`src/lcsas/restore/restic_fallback.py` (analog: pure-Python last
-resort).
+`src/lcsas/restore/restic_fallback.py` (Tier 3 pure-Python
+restorer).
 
 ---
 
@@ -567,7 +554,7 @@ coreutils-isms.
    - `Linux  riscv64` → `riscv64-linux`
    - `MINGW*`, `MSYS*`, `CYGWIN*` with `x86_64` → `x86_64-windows`
 3. Unknown pairs exit non-zero with a diagnostic on stderr so the
-   wizard can fall through to Tier 2.
+   wizard can fall through to the next tier.
 
 **Expected outcome:** A single target-triple line on stdout and
 exit 0; or exit non-zero with a diagnostic.
@@ -576,8 +563,7 @@ exit 0; or exit non-zero with a diagnostic.
 
 - Target architecture: this is **the** dispatcher — every arch
   the toolchain supports must be recognised here.
-- Recovery tier: invoked at Tier 1 selection time; also invoked
-  by Tier 3 to pick the right `CC`.
+- Recovery tier: invoked at Tier 1 selection time.
 - Reproducibility: pure shell — output is deterministic given
   the input.
 
@@ -604,12 +590,12 @@ as follows:
 | Workflow                              | Arch axis     | Tier axis    | Reproducibility |
 |---------------------------------------|---------------|--------------|-----------------|
 | `lcsas recovery build`                | all 4         | produces T1  | yes             |
-| `lcsas recovery build --target`       | one           | T3 op tool   | yes             |
-| `lcsas recovery test`                 | host arch     | T1/T3 gate   | n/a (behaviour) |
+| `lcsas recovery build --target`       | one           | produces T1  | yes             |
+| `lcsas recovery test`                 | host arch     | T1 gate      | n/a (behaviour) |
 | `lcsas recovery manifest`             | all artefacts | produces T1  | yes             |
 | `lcsas recovery verify`               | all artefacts | T1 gate      | indirect        |
 | Reproducible build verification       | all 4         | makes T1 safe| yes (the test)  |
-| Tier cascade                          | per host      | T1→T2→T3→T4  | only T1         |
+| Tier cascade                          | per host      | T1→T2→T3     | only T1         |
 | `detect_arch.sh`                      | dispatcher    | feeds all    | yes (pure sh)   |
 
 ---
@@ -620,12 +606,12 @@ Per-architecture coverage status against the planned integration
 test `tests/integration/test_recovery_orchestration.py`
 (**[gap]** — file does not exist):
 
-| Architecture     | Prebuilt build | Reproducibility | Smoke test | Tier 3 rebuild |
-|------------------|----------------|-----------------|------------|----------------|
-| x86_64-linux     | **[gap]**      | **[gap]**       | **[gap]**  | **[gap]**      |
-| aarch64-linux    | **[gap]**      | **[gap]**       | **[gap]**  | **[gap]**      |
-| riscv64-linux    | **[gap]**      | **[gap]**       | **[gap]**  | **[gap]**      |
-| x86_64-windows   | **[gap]**      | **[gap]**       | **[gap]**  | n/a            |
+| Architecture     | Prebuilt build | Reproducibility | Smoke test |
+|------------------|----------------|-----------------|------------|
+| x86_64-linux     | **[gap]**      | **[gap]**       | **[gap]**  |
+| aarch64-linux    | **[gap]**      | **[gap]**       | **[gap]**  |
+| riscv64-linux    | **[gap]**      | **[gap]**       | **[gap]**  |
+| x86_64-windows   | **[gap]**      | **[gap]**       | **[gap]**  |
 
 Every cell is a gap because the feature is not yet implemented.
 The minimum viable test set, in priority order:
@@ -656,8 +642,6 @@ The minimum viable test set, in priority order:
   `verify_manifest`).
 - `recovery/Makefile` — per-arch build rules.
 - `recovery/scripts/detect_arch.sh` — host detection.
-- `recovery/scripts/rebuild.sh` — Tier 3 fallback.
-- `recovery/scripts/rebuild_rustic.sh` — Tier 4 fallback.
 - `recovery/MANIFEST.sha256` — canonical artefact hashes.
 - `recovery/docs/TIERS.txt` — cascade doc.
 - `recovery/docs/BUILD.txt` — toolchain prerequisites.
@@ -677,7 +661,7 @@ The minimum viable test set, in priority order:
   (the bit the recovery toolchain replaces with a verifiable,
   multi-arch story).
 - `src/lcsas/restore/restic_fallback.py` — pure-Python last-resort
-  fallback, the floor below Tier 4.
+  fallback (Tier 3 of the cascade).
 - `Makefile:15`, `Makefile:18` — test target conventions
   (`test-unit`, `test-integration`) that the recovery tests must
   slot into.
