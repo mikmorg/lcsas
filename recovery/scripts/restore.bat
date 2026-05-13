@@ -6,14 +6,17 @@ REM Run this file by double-clicking it in File Explorer, or by typing
 REM `restore.bat` from a CMD or PowerShell prompt at the disc root.
 REM
 REM This is the Windows equivalent of recovery/scripts/restore.sh.  The
-REM tier order matches the POSIX driver:
+REM tier order is:
 REM
 REM   Tier 1.  bin\<arch>\lcsas-restore.exe   (prebuilt, static)
 REM   Tier 2.  bin\<arch>\rustic-static.exe   (vendored cross-check)
 REM
-REM Tier 3 (Python fallback) is attempted if `py` (the Python launcher)
-REM is on PATH and standalone_restorer.py is available.  Set the env
-REM var LCSAS_ALLOW_PYTHON_TIER=0 to forbid it.
+REM If both tiers are missing or fail, the script exits non-zero with a
+REM clear error including a manual-recovery hint.  The pure-Python
+REM standalone restorer ships on the disc but is NOT orchestrated from
+REM this .bat (it would depend on a Python install that is not
+REM guaranteed on headless-recovery Windows hosts); see
+REM recovery/docs/RECOVER_WINDOWS.txt for the manual invocation.
 REM ====================================================================
 
 setlocal enabledelayedexpansion
@@ -231,36 +234,9 @@ if exist "%BIN%" (
         pause
         exit /b 0
     )
-    echo [tier 2] failed with exit code !RC!; trying tier 3...
+    echo [tier 2] failed with exit code !RC!.
 )
 
-REM ----- Tier 3: Python fallback (optional) -------------------------
-if /i "%LCSAS_ALLOW_PYTHON_TIER%"=="0" goto :no_python
-
-where py >nul 2>nul
-if errorlevel 1 goto :no_python
-
-set "PYREST="
-if exist "%RECOVERY%\standalone_restorer.py" set "PYREST=%RECOVERY%\standalone_restorer.py"
-if "%PYREST%"=="" if exist "%RECOVERY%\..\standalone_restorer.py" set "PYREST=%RECOVERY%\..\standalone_restorer.py"
-if "%PYREST%"=="" goto :no_python
-
-echo.
-echo [tier 3] falling back to py %PYREST%
-py "%PYREST%" "%REPO%" "%TARGET%" --password-file "%PWFILE%"
-set "RC=!ERRORLEVEL!"
-del "%PWFILE%" 2>nul
-if !RC! equ 0 (
-    echo.
-    echo ============================================================
-    echo  Recovery complete (via Python fallback).
-    echo  Files restored to: %TARGET%
-    echo ============================================================
-    pause
-    exit /b 0
-)
-
-:no_python
 del "%PWFILE%" 2>nul
 echo.
 echo ============================================================
@@ -269,9 +245,11 @@ echo.
 echo  Looked for:
 echo    %RECOVERY%\bin\%ARCH%\lcsas-restore.exe
 echo    %RECOVERY%\bin\%ARCH%\rustic-static.exe
-echo    Python (py) + standalone_restorer.py
 echo.
-echo  See %RECOVERY%\docs\RECOVER_WINDOWS.txt for manual options.
+echo  A manual recovery path using the on-disc standalone restorer
+echo  (requires a Python 3 install on this host) is described in
+echo  %RECOVERY%\docs\RECOVER_WINDOWS.txt -- this .bat does not
+echo  launch it for you.
 echo ============================================================
 pause
 exit /b 1
