@@ -47,3 +47,6 @@ Thumbs.db
 .ruff_cache/
 archive.db.lock
 lcsas-test
+
+# Claude Code worker worktrees (local scratch only)
+.claude/worktrees/
