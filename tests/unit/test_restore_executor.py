@@ -533,30 +533,6 @@ class TestIngestVolumeInvokesECC:
         )
         assert result.ingested == 1
 
-    def test_tape_media_skips_ecc(self, mock_rustic, tmp_path):
-        """Tape media (LTO) must bypass ECC — tape has built-in error correction."""
-        from lcsas.config.media import MediaType
-
-        fake_ecc = _FakeEccRunner(verify_result=True)
-        ex = RestoreExecutor(mock_rustic, ecc_runner=fake_ecc)
-
-        mount, iso_path, sha1 = self._setup_volume_and_iso(tmp_path)
-        cache = tmp_path / "cache"
-        cache.mkdir()
-
-        result = ex.ingest_volume(
-            cache, mount, [sha1],
-            verify=False,
-            iso_path=iso_path,
-            media_type=MediaType.LTO8,
-        )
-        assert result.ingested == 1
-        assert fake_ecc.verify_calls == [], (
-            "ECC verify_iso must NOT be called for tape media; "
-            f"got verify_calls={fake_ecc.verify_calls}"
-        )
-        assert fake_ecc.repair_calls == []
-
     def test_ecc_repair_attempted_on_verify_failure(self, mock_rustic, tmp_path):
         """If verify fails, repair is attempted; if repair succeeds, ingest proceeds."""
         from lcsas.config.media import MediaType

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Volume:
-    """A physical media volume (disc, tape, etc.)."""
+    """A physical media volume (optical disc)."""
 
     volume_id: int
     label: str

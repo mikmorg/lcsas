@@ -529,7 +529,7 @@ Final acceptance:
 - **S3 (catalog merge):** Skipped — the holographic design (latest disc has
   cumulative catalog) makes this unnecessary in practice.
 - **O1 (subprocess timeouts):** Ignored per request.
-- **O2 (LTO tape I/O):** Future work, not addressed in this plan.
+- **O2 (LTO tape I/O):** Dropped; LTO support was removed in #27.
 - **S1 remote verification:** Implemented via `--mark-verified` / `--mark-failed`
   CLI flags (Phase 14.2), allowing verification on a different machine and manual
   status import.

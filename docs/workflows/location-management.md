@@ -1,7 +1,7 @@
 # Location Management & Multi-Copy Sync
 
 LCSAS treats *physical location* as a first-class catalog dimension. Every burned
-disc (or LTO cartridge) is tagged with the location it lives at — home safe,
+disc is tagged with the location it lives at — home safe,
 bank deposit box, off-site colocation, "in transit" — and the catalog tracks
 each `(volume, location)` pair as an independent **volume copy**. This lets the
 same logical volume exist at N places, and lets LCSAS reason about which

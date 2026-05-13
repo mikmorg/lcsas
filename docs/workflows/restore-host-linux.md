@@ -317,7 +317,7 @@ physical media accessible to the host.
 every required pack; ingestion logs `ingested N packs` per volume.
 
 **Variant axes that apply:**
-- *Media type*: BD-25, M-DISC, LTO, or test images — once mounted, all
+- *Media type*: BD-25, M-DISC, or test images — once mounted, all
   look like a directory tree.
 - *Optical drive count*: with one drive use the interactive prompt and
   swap discs between volumes; with N drives mount all simultaneously

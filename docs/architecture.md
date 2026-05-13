@@ -13,9 +13,9 @@
 ## 1. Mission Statement
 
 LCSAS orchestrates the archival of **Rustic** (restic-compatible) repository data
-onto cold storage media — primarily optical (Blu-ray, M-DISC) and tape (LTO) —
-producing self-describing, error-corrected, verifiable volumes that can be
-restored independently without access to any central server or catalog.
+onto cold optical storage media (Blu-ray, M-DISC) — producing self-describing,
+error-corrected, verifiable volumes that can be restored independently without
+access to any central server or catalog.
 
 ### Core Design Tenets
 
@@ -24,7 +24,7 @@ restored independently without access to any central server or catalog.
 | **Content-addressable** | Every pack file is identified by its SHA-256 hash; deduplication and verification are intrinsic |
 | **Holographic metadata** | Each volume carries everything needed to restore from it alone: index files, snapshot manifests, encryption keys, and a catalog snapshot |
 | **Multi-tenant** | Multiple Rustic repositories (family, work, friends, etc.) share volumes; the catalog tracks per-repo ownership |
-| **Immutable media** | Write-once optical and WORM tape guarantee bitrot resistance; ECC (RS03 via dvdisaster) adds a second defence layer |
+| **Immutable media** | Write-once optical media guarantees bitrot resistance; ECC (RS03 via dvdisaster) adds a second defence layer |
 | **Decentralized** | No server dependency; the SQLite catalog is replicated onto every volume and can be rebuilt from any set of volumes |
 
 ---
@@ -34,7 +34,7 @@ restored independently without access to any central server or catalog.
 ```
 Tier 0 — HOT         NAS / local disk (Rustic mirrors, active repos)
 Tier 1 — WARM        Staging area on fast SSD/HDD (temporary, pre-burn)
-Tier 2 — COLD        Optical media / LTO tape (permanent archive)
+Tier 2 — COLD        Optical media (permanent archive)
 ```
 
 ### Supported Media Types
@@ -46,8 +46,6 @@ Tier 2 — COLD        Optical media / LTO tape (permanent archive)
 | BDXL 100 GB | 100 GB | 15% | ~85 GB | Optical |
 | M-DISC 25 GB | 25 GB | 15% | ~21 GB | Optical |
 | M-DISC 100 GB | 100 GB | 15% | ~85 GB | Optical |
-| LTO-8 | 12 TB | 0% | 12 TB | Tape |
-| LTO-9 | 18 TB | 0% | 18 TB | Tape |
 | TEST_TINY | 1 MB | 0% | 1 MB | Test |
 | TEST_SMALL | 10 MB | 10% | 9 MB | Test |
 
@@ -91,7 +89,7 @@ volumes (
     volume_id    INTEGER PRIMARY KEY AUTOINCREMENT,
     label        TEXT UNIQUE NOT NULL,
     uuid         TEXT UNIQUE NOT NULL,
-    media_type   TEXT NOT NULL,      -- BD25, MDISC100, LTO8, etc.
+    media_type   TEXT NOT NULL,      -- BD25, MDISC100, BDXL100, etc.
     capacity_bytes INTEGER NOT NULL, -- Raw capacity in bytes
     used_bytes   INTEGER DEFAULT 0,
     location     TEXT DEFAULT 'Home_Shelf',
@@ -344,7 +342,7 @@ Each repository maintains its own encryption independently:
 ### Error Correction
 
 - **RS03** (dvdisaster) augments the ISO with Reed-Solomon parity data
-- Typical overhead: 15% for optical, 0% for tape (tape has built-in ECC)
+- Typical overhead: 15% for optical media
 - Enables recovery from surface scratches, partial media degradation
 - Can be verified offline: `dvdisaster --verify`
 
@@ -622,7 +620,6 @@ make coverage           # With coverage report
 Examples:
 - `LCSAS_BD_2026_001` — First Blu-ray volume of 2026
 - `LCSAS_MD_2026_003` — Third M-DISC volume
-- `LCSAS_LTO_2026_001` — First LTO tape
 
 The sequence number is global across all media types for a given prefix,
 monotonically increasing, ensuring no label collisions.

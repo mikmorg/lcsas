@@ -8,7 +8,7 @@
 
 LCSAS (Linux Cold Storage Archival Suite) orchestrates Rustic, Xorriso, and
 DVDisaster to write deduplicated, encrypted data packs onto optical media
-(BD-R, M-Disc) and LTO tape. It provides:
+(BD-R, M-Disc). It provides:
 
 - **CDC-based infinite incrementalism** via Rustic (zero-cost renames/moves)
 - **Multi-tenant encryption isolation** (per-repo keys, shared physical media)
@@ -371,7 +371,6 @@ These items are acknowledged but deferred beyond this plan:
 
 | Item | Rationale |
 |---|---|
-| LTO tape I/O wrapper | Requires tape hardware; schema already supports LTO media types |
 | Cloud tier (S3/rclone) | Architectural extension; current design could accommodate |
 | Multi-session optical writing | Adds complexity; current whole-disc model is simpler and sufficient |
 | Cross-platform meta-volume | Would require static binaries or multi-arch builds |

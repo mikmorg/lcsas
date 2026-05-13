@@ -104,11 +104,10 @@ airgapped sites, and split-machine "stage here, burn there" pipelines.
 **Variant axes that apply:**
 
 - **Media type:** Mostly transparent — `xorriso -as cdrecord -dao`
-  drives BD-R, BD-RE, M-DISC, and DVD identically. Tape (LTO) is **not**
-  supported by `burn-iso`; the LTO path runs through `lcsas burn` and
-  has its own block-device tooling. The ECC layer is already baked into
-  the ISO at staging time (`src/lcsas/burn/orchestrator.py:452-461`)
-  so no media-specific behaviour is needed here.
+  drives BD-R, BD-RE, M-DISC, and DVD identically. The ECC layer is
+  already baked into the ISO at staging time
+  (`src/lcsas/burn/orchestrator.py`) so no media-specific behaviour
+  is needed here.
 - **Optical drive count:** The command is single-drive; multi-drive
   burning is achieved by running multiple `burn-iso` invocations in
   parallel against distinct `--device` paths, each emitting its own
@@ -268,7 +267,7 @@ its long-term-storage location (B).
   parallel against distinct devices and locations; each gets its own
   receipt.
 - **ECC:** Applied on A at staging time; B is unaware of it.
-- **Media type:** Optical only (LTO does not flow through `burn-iso`).
+- **Media type:** Optical only.
 - **Recovery tier:** N/A.
 
 **OS** does not vary behaviour here as long as xorriso is available on
