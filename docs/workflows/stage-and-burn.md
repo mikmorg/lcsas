@@ -509,10 +509,8 @@ The orchestrator's media handling rules:
 - **Source bundle skip for test media** —
   `if not media_type.is_test: injector.write_lcsas_source()`
   (`src/lcsas/burn/orchestrator.py:427-428`). Test discs stay small.
-- **Label suffix** — `MediaType.label_name` (`src/lcsas/config/media.py:69`)
-  is what appears in the disc label. `TEST_CD` deliberately reports as
-  `CD` so it looks like real production media to a blind-restore agent
-  (`src/lcsas/config/media.py:77-79`).
+- **Label suffix** — `MediaType.label_name` (`src/lcsas/config/media.py:66`)
+  is what appears in the disc label. It defaults to the enum member name.
 - **Bin-pack capacity** — `usable_bytes` is `capacity_bytes × (100 −
   ecc_overhead_pct) / 100` (`src/lcsas/config/media.py:46-49`).
 - **Hard reject on oversize packs** — A pack larger than `usable_bytes −
@@ -537,9 +535,7 @@ The orchestrator's media handling rules:
 
 | Media        | `capacity_bytes` | `ecc_overhead_pct` | ECC step | Source bundle | Notes |
 |--------------|------------------|--------------------|----------|---------------|-------|
-| `TEST_TINY`  | 1,048,576        | 0  | Skipped (per `is_test` defaults in tests) | **Skipped** (`is_test`) | 1 MB; fastest unit tests. (`src/lcsas/config/media.py:26`) |
-| `TEST_SMALL` | 10,485,760       | 10 | Conditional (`skip_ecc` honoured) | **Skipped** (`is_test`) | 10 MB; pipeline smoke tests. (`src/lcsas/config/media.py:27`) |
-| `TEST_CD`    | 104,857,600      | 10 | Conditional (`skip_ecc` honoured) | **Skipped** (`is_test`) | 100 MB; renders as `CD` in labels; blind-restore acceptance. (`src/lcsas/config/media.py:28-30`) |
+| `TEST_TINY`  | 1,048,576        | 0  | Skipped (per `is_test` defaults in tests) | **Skipped** (`is_test`) | 1 MB; canonical test media — fastest unit tests, multi-volume pipeline smoke tests, blind-restore acceptance. (`src/lcsas/config/media.py:26`) |
 
 ### ECC-skip behaviour, explicitly
 
@@ -567,9 +563,7 @@ minimum).
 | `BDXL100`   | No automated coverage. |
 | `MDISC25`   | No automated coverage. |
 | `MDISC100`  | No automated coverage. |
-| `TEST_TINY` | Heavy coverage in `test_session_pipeline.py`, `test_burn_orchestrator.py`, `test_staging.py`, `test_binpack.py`. |
-| `TEST_SMALL`| Coverage in `test_session_pipeline.py` (multi-volume, multi-tenant). |
-| `TEST_CD`   | `test_config.py` (label rendering); end-to-end coverage via `tests/integration/test_disc_only_restore.py`. |
+| `TEST_TINY` | Heavy coverage in `test_session_pipeline.py` (including multi-volume, multi-tenant), `test_burn_orchestrator.py`, `test_staging.py`, `test_binpack.py`, `test_config.py`; end-to-end coverage via `tests/integration/test_disc_only_restore.py`. |
 
 ---
 
@@ -681,7 +675,7 @@ Primary unit tests for this pipeline:
   pack-sha256 filter), burn_session (happy path, latest resolution,
   multi-location, verify-pass/fail event recording, receipt JSON shape,
   session status transitions, ISO cleanup), clean_session, repeated
-  re-burn semantics (12 references to `TEST_TINY` / `TEST_SMALL`).
+  re-burn semantics (12+ references to `TEST_TINY`).
 - `tests/unit/test_staging.py` — `StagingBuilder.stage_packs` hardlink +
   copy fallback paths, missing-pack detection, partial-stage retry, hash
   verification of staged packs.
@@ -695,7 +689,7 @@ Primary unit tests for this pipeline:
   audit trail.
 - `tests/unit/test_parser_staging_labels.py` — disc label generation.
 - `tests/integration/test_disc_only_restore.py` — real `xorriso` +
-  `dvdisaster` + restore round-trip on `TEST_CD`.
+  `dvdisaster` + restore round-trip on `TEST_TINY`.
 
 ### Coverage gaps
 

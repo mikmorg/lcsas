@@ -55,7 +55,7 @@ pytestmark = [
 
 RNG_SEED = 20260413
 NUM_FILES = 40
-FILE_SIZE_RANGE = (200_000, 500_000)  # ~14 MB total → forces multi-disc on TEST_SMALL
+FILE_SIZE_RANGE = (12_000, 30_000)  # ~840 KB total → forces multi-disc on TEST_TINY
 
 # Total timeout for the restore subprocess (seconds).
 RESTORE_TIMEOUT = 300
@@ -149,13 +149,13 @@ class TestInteractiveRestore:
         # ── Rustic init + backup ─────────────────────────────────
         repo = mirror / "photos"
         _rustic(["init"], repo, key_file, tmpdir=tmp_path)
-        # Force small packs so the data spans multiple discs.
+        # Force small packs so the data spans multiple discs on TEST_TINY (1 MB).
         _rustic(
             ["config",
-             "--set-datapack-size", "1MiB",
-             "--set-datapack-size-limit", "2MiB",
-             "--set-treepack-size", "512KiB",
-             "--set-treepack-size-limit", "1MiB"],
+             "--set-datapack-size", "256KiB",
+             "--set-datapack-size-limit", "512KiB",
+             "--set-treepack-size", "128KiB",
+             "--set-treepack-size-limit", "256KiB"],
             repo, key_file, tmpdir=tmp_path,
         )
         _rustic(
@@ -173,7 +173,7 @@ class TestInteractiveRestore:
 
         from lcsas.db.queries import get_unarchived_packs
 
-        mt = MediaType.TEST_SMALL
+        mt = MediaType.TEST_TINY
         repo_configs = {
             "photos": RepositoryConfig(
                 name="photos", mirror_path=repo, password_file=key_file,
@@ -186,7 +186,7 @@ class TestInteractiveRestore:
             default_media_type=mt,
             default_ecc_redundancy_pct=0,
             label_prefix="ITEST",
-            metadata_reserve_bytes=1_500_000,
+            metadata_reserve_bytes=150_000,
             repositories=repo_configs,
         )
 

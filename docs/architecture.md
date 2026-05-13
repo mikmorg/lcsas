@@ -47,7 +47,6 @@ Tier 2 — COLD        Optical media (permanent archive)
 | M-DISC 25 GB | 25 GB | 15% | ~21 GB | Optical |
 | M-DISC 100 GB | 100 GB | 15% | ~85 GB | Optical |
 | TEST_TINY | 1 MB | 0% | 1 MB | Test |
-| TEST_SMALL | 10 MB | 10% | 9 MB | Test |
 
 ---
 
@@ -591,8 +590,7 @@ lcsas db export     [--output FILE]                Export catalog as JSON
 
 | Type | Capacity | ECC | Purpose |
 |------|----------|-----|---------|
-| `TEST_TINY` | 1 MB | 0% | Unit tests — fast, fits in RAM |
-| `TEST_SMALL` | 10 MB | 10% | Integration tests — exercises ECC path |
+| `TEST_TINY` | 1 MB | 0% | Unit + integration tests — fast, fits in RAM |
 
 ### Test Categories
 

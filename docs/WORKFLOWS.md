@@ -46,9 +46,8 @@ than redefining them. An axis applies to a workflow when changing it changes
 the code path or required setup.
 
 - **Media type** — one of `BD25`, `BD50`, `BDXL100`, `MDISC25`, `MDISC100`,
-  `TEST_TINY`, `TEST_SMALL`, `TEST_CD` (defined in
-  `src/lcsas/config/media.py`). Optical types carry 15% ECC overhead;
-  `TEST_CD` labels render as `CD` on disc.
+  `TEST_TINY` (defined in `src/lcsas/config/media.py`). All types carry 15%
+  ECC overhead.
 - **Multi-tenant** — single registered repo vs. multiple repos sharing
   physical volumes, each with its own encryption key.
 - **OS** — Linux host, Linux bare-metal initramfs, Windows, macOS. Determines

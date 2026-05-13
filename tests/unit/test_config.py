@@ -22,11 +22,6 @@ class TestMediaType:
         """With 0% ECC, usable == capacity."""
         assert MediaType.TEST_TINY.usable_bytes == MediaType.TEST_TINY.capacity_bytes
 
-    def test_test_small_usable_with_ecc(self):
-        """10% ECC overhead reduces usable bytes."""
-        expected = int(10_485_760 * 90 / 100)
-        assert MediaType.TEST_SMALL.usable_bytes == expected
-
     def test_bd25_is_optical(self):
         assert MediaType.BD25.is_optical is True
 
@@ -51,16 +46,10 @@ class TestMediaType:
         assert MediaType["BD25"] is MediaType.BD25
         assert MediaType["TEST_TINY"] is MediaType.TEST_TINY
 
-    def test_test_cd_capacity_and_label_name(self):
-        assert MediaType.TEST_CD.capacity_bytes == 104_857_600
-        assert MediaType.TEST_CD.is_test is True
-        # Renders as "CD" in volume labels so it looks like real media
-        # to operators reading the disc label.
-        assert MediaType.TEST_CD.label_name == "CD"
-
     def test_label_name_defaults_to_enum_name(self):
         assert MediaType.BD25.label_name == "BD25"
         assert MediaType.BD50.label_name == "BD50"
+        assert MediaType.TEST_TINY.label_name == "TEST_TINY"
 
 
 class TestDefaultConfig:

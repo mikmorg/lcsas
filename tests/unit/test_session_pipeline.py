@@ -657,7 +657,7 @@ class TestISOContentValidation:
 
     def _make_real_orch(self, tmp_path, num_packs=3, pack_size=1024):
         """Create an orchestrator with real xorriso (mocked dvdisaster)."""
-        config = _make_config(tmp_path, num_repos=2, media=MediaType.TEST_SMALL)
+        config = _make_config(tmp_path, num_repos=2, media=MediaType.TEST_TINY)
         conn = get_memory_connection()
         create_all(conn)
 
@@ -822,13 +822,13 @@ class TestISOContentValidation:
 
             assert vi["label"] == manifest.volume_label
             assert vi["uuid"] == manifest.volume_uuid
-            assert vi["media_type"] == "TEST_SMALL"
+            assert vi["media_type"] == "TEST_TINY"
 
     def test_multi_volume_iso_all_packs_covered(self, tmp_path):
         """When staging produces multiple volumes, all packs are in ISOs."""
-        # Use TEST_SMALL with packs sized to force multi-volume but
-        # stay under media capacity including ISO filesystem overhead.
-        config = _make_config(tmp_path, num_repos=1, media=MediaType.TEST_SMALL)
+        # Use TEST_TINY (1 MB, 0% ECC) with packs sized to force multi-volume
+        # but stay under media capacity including ISO filesystem overhead.
+        config = _make_config(tmp_path, num_repos=1, media=MediaType.TEST_TINY)
         conn = get_memory_connection()
         create_all(conn)
 
@@ -836,8 +836,9 @@ class TestISOContentValidation:
             register_repo(conn, name, name.title(),
                           str(config.repositories[name].mirror_path))
 
-        # Create packs that require 2+ volumes on TEST_SMALL (10 MB, 10% ECC = 9 MB usable)
-        packs = _seed_packs(conn, config, num_packs=5, pack_size=2_000_000)
+        # Create packs that require 2+ volumes on TEST_TINY (~1 MB usable).
+        # 5 packs × 300 KB = 1.5 MB → splits across at least 2 volumes.
+        packs = _seed_packs(conn, config, num_packs=5, pack_size=300_000)
 
         xorriso = SubprocessXorrisoRunner()
         dvdisaster = MagicMock()
