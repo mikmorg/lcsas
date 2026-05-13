@@ -554,6 +554,34 @@ and how the code responds today.
 - **Recovery:** Repair the file, or re-export it on B if the
   filesystem there is intact.
 
+### Standalone `burn-iso` receipts cannot register pack membership
+
+- **Symptom:** Importing a `burn-iso` receipt on host A does not, by
+  itself, populate the `volume_packs` rows for the volume. The
+  session-based burn path on A produces receipts that carry `pack_ids`
+  (see `BurnReceipt` in
+  `src/lcsas/burn/orchestrator.py:86-99`), but the standalone
+  `cmd_burn_iso` path emits a receipt **without** `pack_ids` —
+  `cmd_burn_iso` does not have catalog access on the burner host and
+  therefore cannot resolve the staged ISO's contents to integer pack
+  ids.
+- **Behaviour on import:** `catalog import-receipts` persists the
+  receipt's `pack_ids` list verbatim into the
+  `BURN_RECEIPT_IMPORTED` audit event's `detail` (an empty list for
+  standalone `burn-iso` receipts). The catalog does **not** insert
+  `volume_packs` rows from this list — pack membership is owned by the
+  session-stage path and by `lcsas scan`.
+- **Recovery:** Pack membership for portable-burn volumes must already
+  be present in the catalog at the time `lcsas stage` ran on A. If you
+  imported a `burn-iso` receipt for a volume that was never staged
+  through the session pipeline (e.g. an ISO produced out-of-band), run
+  `lcsas scan` against the mirror or backfill `volume_packs` rows
+  manually. This is the explicitly deferred half of issue #18 — the
+  fix in that issue persists provenance (`iso_sha256`, `session_id`,
+  `device`, `pack_ids` verbatim) but does **not** expand `burn-iso` to
+  track pack membership, which would require giving the burner host
+  catalog access and was judged the higher-risk option.
+
 ### Burner host loses power immediately after write
 
 - **Behaviour:** The receipt write uses `flush()` + `fsync()`
@@ -570,27 +598,17 @@ The following are intentional or accidental gaps in the portable burn
 workflow as currently implemented. None of them block the workflow,
 but operators should be aware:
 
-- **ISO SHA-256 is recorded in the receipt but discarded on import.**
-  `cmd_catalog_import` does not pass `iso_sha256` to `add_volume_copy`
-  even though the `volume_copies` table has a column for it
-  (`src/lcsas/db/volume_copies.py:13-16, 38-79`;
-  `src/lcsas/cli/main.py:1300-1306`). This means a remote-burned
-  copy's ISO hash is never persisted in the canonical catalog, so
-  later "does this disc match the bytes we shipped?" queries cannot be
-  answered from the catalog alone.
-- **`session_id` in the receipt is not used.** It is written by
-  `cmd_burn_iso` (`src/lcsas/cli/main.py:1125`) but
-  `cmd_catalog_import` does not correlate it with the `sessions`
-  table.
-- **`device` in the receipt is not used.** Useful audit data but not
-  persisted on import.
-- **`pack_ids` is not emitted by `cmd_burn_iso`.** The session-mode
-  receipt (`BurnReceipt` in
-  `src/lcsas/burn/orchestrator.py:86-99`) carries `pack_count` and
-  `pack_ids`, but the standalone `burn-iso` receipt does not. As a
-  result, a portable-workflow receipt cannot independently re-derive
-  which packs were on the disc — that information must already be in
-  the master catalog under the same volume label.
+- **ISO SHA-256, `session_id`, `device`, and `pack_ids` are persisted on
+  import via a `BURN_RECEIPT_IMPORTED` audit event (issue #18).** The
+  importer now both passes `iso_sha256` through to `add_volume_copy`
+  and emits a `volume_events` row of type `BURN_RECEIPT_IMPORTED` whose
+  `detail` is a JSON blob containing all four provenance fields. If a
+  prior `BURN_RECEIPT_IMPORTED` event for the same volume recorded a
+  different `iso_sha256`, the incoming receipt is **rejected** with a
+  non-zero exit code and no spurious event row is written. `pack_ids`
+  is still **not emitted by standalone `burn-iso`** — see "Standalone
+  `burn-iso` receipts cannot register pack membership" under Failure
+  modes for the rationale.
 - **No "dry-run" / preview for `import-receipts`.** Operators cannot
   preview which receipts would be skipped, which volumes would
   transition, or which copies would be refreshed before committing.

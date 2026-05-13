@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 # ---------------------------------------------------------------------------
 # DDL Statements
@@ -137,7 +137,8 @@ CREATE TABLE IF NOT EXISTS volume_events (
     volume_id   INTEGER NOT NULL,
     event_type  TEXT NOT NULL CHECK(event_type IN (
         'VERIFY_PASS', 'VERIFY_FAIL', 'VERIFY_FAIL_REBURN', 'ECC_REPAIR',
-        'LOCATION_MOVE', 'CONDITION_CHECK', 'NOTE')),
+        'LOCATION_MOVE', 'CONDITION_CHECK', 'NOTE',
+        'BURN_RECEIPT_IMPORTED')),
     event_date  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     location    TEXT,
     detail      TEXT NOT NULL DEFAULT '',
@@ -292,6 +293,34 @@ def migrate(conn: sqlite3.Connection) -> int:
         cursor.execute(
             "INSERT INTO schema_version (version) VALUES (?)",
             (5,),
+        )
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=ON")
+
+    # v5 → v6: widen volume_events.event_type CHECK to include
+    # 'BURN_RECEIPT_IMPORTED'. SQLite cannot alter CHECK constraints —
+    # the table must be recreated. No data shape changes.
+    if current < 6:
+        conn.commit()  # ensure no active transaction when toggling FK pragma
+        conn.execute("PRAGMA foreign_keys=OFF")
+        cursor.execute("ALTER TABLE volume_events RENAME TO volume_events_old")
+        cursor.executescript(SQL_CREATE_VOLUME_EVENTS)
+        cursor.execute(
+            "INSERT INTO volume_events "
+            "(event_id, volume_id, event_type, event_date, location, detail) "
+            "SELECT event_id, volume_id, event_type, event_date, location, detail "
+            "FROM volume_events_old"
+        )
+        cursor.execute("DROP TABLE volume_events_old")
+        for idx_sql in (
+            "CREATE INDEX IF NOT EXISTS idx_volume_events_volume ON volume_events (volume_id);",
+            "CREATE INDEX IF NOT EXISTS idx_volume_events_type ON volume_events (event_type);",
+            "CREATE INDEX IF NOT EXISTS idx_volume_events_date ON volume_events (event_date);",
+        ):
+            cursor.execute(idx_sql)
+        cursor.execute(
+            "INSERT INTO schema_version (version) VALUES (?)",
+            (6,),
         )
         conn.commit()
         conn.execute("PRAGMA foreign_keys=ON")

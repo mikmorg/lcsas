@@ -28,6 +28,7 @@ VALID_EVENT_TYPES = frozenset({
     "LOCATION_MOVE",
     "CONDITION_CHECK",
     "NOTE",
+    "BURN_RECEIPT_IMPORTED",
 })
 
 
@@ -49,7 +50,7 @@ def add_event(
         The volume this event pertains to.
     event_type:
         One of VERIFY_PASS, VERIFY_FAIL, VERIFY_FAIL_REBURN, ECC_REPAIR,
-        LOCATION_MOVE, CONDITION_CHECK, NOTE.
+        LOCATION_MOVE, CONDITION_CHECK, NOTE, BURN_RECEIPT_IMPORTED.
     location:
         Optional storage location associated with this event.
     detail:
