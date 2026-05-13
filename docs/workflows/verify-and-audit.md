@@ -160,7 +160,6 @@ For the meaning of status strings (`STAGING`, `BURNING`, `BURNED`, `VERIFIED`, `
 **Variant axes that apply:**
 - **Media type:** Reads files from a mount point; works for any media that presents a filesystem.
 - **Multi-tenant:** A single disc can contain packs from multiple repositories — the SQL fallback query joins `volume_packs` so all tenants on the disc are validated in one pass.
-- **Optical drive count:** N/A (the disc must already be mounted).
 - **Multi-copy:** Validate one copy at a time by re-mounting each.
 - **ECC:** Independent of the ECC layer — this is a filesystem-level check, not a sector-level check. Useful when ECC reports OK but you suspect a write-side regression.
 - **Recovery tier:** Tier-2; this is exactly what you run on a recovery host before trusting a disc's contents.
@@ -203,7 +202,6 @@ For the meaning of status strings (`STAGING`, `BURNING`, `BURNED`, `VERIFIED`, `
 **Variant axes that apply:**
 - **Media type:** Listed per-volume in the `media_type` column. No media-specific behaviour beyond column width.
 - **Multi-tenant:** The output is volume-centric, not repository-centric — multi-tenant deployments will see every tenant's volumes interleaved. To filter by tenant, use SQL directly against `volume_packs JOIN packs JOIN repositories`.
-- **Optical drive count:** N/A.
 - **Multi-copy:** The `location` column shows a single location per volume row. Volumes with multiple copies (`volume_copies` table) are still listed once; the displayed location comes from the volume row itself, not from `volume_copies` — so this command **underreports multi-copy state**. (See "Gaps".)
 - **ECC:** N/A.
 - **Recovery tier:** Catalog-only; no media is touched.
@@ -243,7 +241,6 @@ For the meaning of status strings (`STAGING`, `BURNING`, `BURNED`, `VERIFIED`, `
 **Variant axes that apply:**
 - **Media type:** `media_type` is displayed per session (one column). Sessions are media-typed at creation in `create_session` (`src/lcsas/db/sessions.py:30-48`).
 - **Multi-tenant:** Sessions are tenant-blind — a single staging run can pack volumes from multiple repos.
-- **Optical drive count:** N/A.
 - **Multi-copy:** Sessions are not copy-aware. A session lists its volumes once, regardless of how many physical copies were burned later (copies live in `volume_copies`, written by the burn orchestrator).
 - **ECC:** N/A.
 - **Recovery tier:** Catalog-only.
@@ -364,7 +361,6 @@ The codebase does **not** distinguish a separate cadence for BD-R vs. M-Disc —
 **Variant axes that apply:**
 - **Media type:** Events are media-agnostic.
 - **Multi-tenant:** Events are tied to a `volume_id`, not a repository. A single event "covers" every tenant whose packs are on that volume.
-- **Optical drive count:** N/A.
 - **Multi-copy:** `volume_events.location` lets you tag *which* copy an event applies to (e.g. "VERIFY_PASS at SafeDeposit_NYC"). This is the canonical way to distinguish per-copy verification state. (See `tests/unit/test_db_volume_events.py::TestAddEvent::test_with_location`, `tests/unit/test_db_volume_events.py:32-42`.)
 - **ECC:** `ECC_REPAIR` is its own event type, intended for the future workflow where DVDisaster actually repairs sectors rather than just reporting them — at present there is no CLI command that emits this event automatically.
 - **Recovery tier:** Tier-2 / catalog-only.

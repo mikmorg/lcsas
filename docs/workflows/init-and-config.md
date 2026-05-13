@@ -35,7 +35,6 @@ Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relat
 - Media type: N/A.
 - Multi-tenant: N/A — repos are registered later via `lcsas repo add`.
 - OS: Linux/macOS expected to behave identically; untested on Windows (XDG paths in defaults — `src/lcsas/config/settings.py:66`).
-- Optical drive count: N/A.
 - Multi-copy: N/A.
 - ECC: N/A.
 - Recovery tier: Tier 0 (catalog only).
@@ -89,7 +88,6 @@ Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relat
 - Media type: `defaults.media_type` gates `metadata_reserve_bytes` against `usable_bytes`; test media (`TEST_TINY`) accepted (`src/lcsas/config/media.py:26`).
 - Multi-tenant: each `[repos.<name>]` block validated independently; one error per failing repo.
 - OS: filesystem semantics of `Path.resolve()` and `os.access(..., W_OK)` matter; read-only mounts trip `staging_path is not writable`.
-- Optical drive count: N/A — `optical_device` is parsed but **not** validated (typos surface only at burn time).
 - Multi-copy: N/A.
 - ECC: `default_ecc_redundancy_pct` range-checked only.
 - Recovery tier: Tier 0.
