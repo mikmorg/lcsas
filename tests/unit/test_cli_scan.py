@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
+
+import pytest
 
 from lcsas.cli.main import build_parser, main
 from lcsas.db.connection import get_connection
@@ -74,6 +77,9 @@ class TestScanParser:
         assert "scan" in out.lower()
 
 
+@pytest.mark.skipif(
+    not shutil.which("rustic"), reason="rustic binary not installed"
+)
 class TestCmdScan:
     def test_scan_discovers_new_packs(self, tmp_path, capsys):
         """Scan finds packs on disk and registers them in the catalog."""

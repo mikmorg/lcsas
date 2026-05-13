@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from lcsas.cli.main import build_parser, cmd_restore_exec, cmd_restore_plan
 from lcsas.db.connection import get_memory_connection
@@ -114,6 +117,9 @@ class TestRestoreParser:
 
 
 class TestCmdRestorePlan:
+    @pytest.mark.skipif(
+        not shutil.which("rustic"), reason="rustic binary not installed"
+    )
     def test_plan_displays_pick_list(self, tmp_path, caplog):
         """restore plan logs volumes and pack counts."""
         import logging
@@ -183,6 +189,9 @@ class TestCmdRestorePlan:
         assert "nonexistent" in all_msgs
         assert "not found" in all_msgs
 
+    @pytest.mark.skipif(
+        not shutil.which("rustic"), reason="rustic binary not installed"
+    )
     def test_plan_shows_missing_packs(self, caplog):
         """restore plan errors and returns 1 when packs are not found in any volume."""
         import logging
@@ -231,6 +240,9 @@ class TestCmdRestorePlan:
         assert "not found" in all_msgs
         assert any(r.levelno >= logging.ERROR for r in caplog.records)
 
+    @pytest.mark.skipif(
+        not shutil.which("rustic"), reason="rustic binary not installed"
+    )
     def test_plan_no_packs_needed(self, caplog):
         """restore plan with no required packs logs summary."""
         import logging
@@ -308,6 +320,9 @@ class TestCmdRestoreExec:
         all_msgs = " ".join(r.message for r in caplog.records)
         assert "not found" in all_msgs
 
+    @pytest.mark.skipif(
+        not shutil.which("rustic"), reason="rustic binary not installed"
+    )
     def test_exec_fails_on_missing_packs(self, tmp_path, caplog):
         """restore exec aborts if packs are missing from catalog."""
         import logging
@@ -357,6 +372,9 @@ class TestCmdRestoreExec:
         all_msgs = " ".join(r.message for r in caplog.records)
         assert "not found in any volume" in all_msgs
 
+    @pytest.mark.skipif(
+        not shutil.which("rustic"), reason="rustic binary not installed"
+    )
     def test_exec_volume_dir_ingests_packs(self, tmp_path, caplog):
         """restore exec with --volume-dir ingests packs and calls restore."""
         import logging
