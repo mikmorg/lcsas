@@ -42,13 +42,19 @@ def aead_encrypt(encrypt_key: bytes, mac_k: bytes, mac_r: bytes,
 
 def build_repo(repo_dir: Path, password: str,
                files: dict[str, bytes],
-               v2: bool = False) -> str:
+               v2: bool = False,
+               split_packs: int = 1) -> str:
     """Build a synthetic restic repo (v1 by default) containing the given files.
 
     With v2=True, blob plaintexts are zstd-compressed before encryption
     (matching real restic v2 inline-blob layout: raw zstd frame, no
     type prefix).  Repository files (index/snapshots/config) get the
     v2 type-prefix byte and may also be compressed.
+
+    With split_packs >= 2, data blobs are partitioned into that many
+    pack files (round-robin).  The tree blob always goes in the last
+    pack.  This is used by test_multidisc.py to simulate an archive
+    that spans multiple physical discs.
 
     Returns the snapshot ID (hex).
     """
@@ -137,33 +143,55 @@ def build_repo(repo_dir: Path, password: str,
     pack_blobs.append(("tree", tree_plain, tree_encrypted, tree_id,
                        len(tree_plain)))
 
-    # Lay out the pack: encrypted blobs concatenated, then encrypted
-    # header, then u32 LE header length.
-    pack_body = b""
-    blob_entries_for_index = []
-    header_entries = b""
-    for btype, plain, enc, blob_id, ulen in pack_blobs:
-        offset = len(pack_body)
-        length = len(enc)
-        pack_body += enc
-        entry = {
-            "id": blob_id.hex(),
-            "type": btype,
-            "offset": offset,
-            "length": length,
-        }
-        if v2:
-            entry["uncompressed_length"] = ulen
-        blob_entries_for_index.append(entry)
-        type_byte = b"\x00" if btype == "data" else b"\x01"
-        header_entries += type_byte + struct.pack("<I", length) + blob_id
+    # Partition the blobs into split_packs groups (round-robin for data
+    # blobs; the tree blob always lands in the last pack).
+    if split_packs < 1:
+        split_packs = 1
+    pack_groups = [[] for _ in range(split_packs)]
+    data_idx = 0
+    tree_entry = None
+    for entry in pack_blobs:
+        if entry[0] == "tree":
+            tree_entry = entry
+            continue
+        pack_groups[data_idx % split_packs].append(entry)
+        data_idx += 1
+    if tree_entry is not None:
+        pack_groups[-1].append(tree_entry)
 
-    header_enc = aead_encrypt(master_encrypt, master_mac_k, master_mac_r,
-                              header_entries)
-    full_pack = pack_body + header_enc + struct.pack("<I", len(header_enc))
-    pack_id = hashlib.sha256(full_pack).hexdigest()
-    # Flat layout (data/<id>).
-    (repo_dir / "data" / pack_id).write_bytes(full_pack)
+    # Each pack is laid out as:
+    #   encrypted blobs concatenated, then encrypted header,
+    #   then u32 LE header length.
+    packs_for_index = []
+    for group in pack_groups:
+        if not group:
+            continue
+        pack_body = b""
+        blob_entries_for_index = []
+        header_entries = b""
+        for btype, plain, enc, blob_id, ulen in group:
+            offset = len(pack_body)
+            length = len(enc)
+            pack_body += enc
+            entry = {
+                "id": blob_id.hex(),
+                "type": btype,
+                "offset": offset,
+                "length": length,
+            }
+            if v2:
+                entry["uncompressed_length"] = ulen
+            blob_entries_for_index.append(entry)
+            type_byte = b"\x00" if btype == "data" else b"\x01"
+            header_entries += type_byte + struct.pack("<I", length) + blob_id
+
+        header_enc = aead_encrypt(master_encrypt, master_mac_k, master_mac_r,
+                                  header_entries)
+        full_pack = pack_body + header_enc + struct.pack("<I", len(header_enc))
+        pack_id = hashlib.sha256(full_pack).hexdigest()
+        # Flat layout (data/<id>).
+        (repo_dir / "data" / pack_id).write_bytes(full_pack)
+        packs_for_index.append({"id": pack_id, "blobs": blob_entries_for_index})
 
     def _encode_repo_file(plain: bytes) -> bytes:
         """Encode a top-level repo file (index/snapshot/config).
@@ -179,11 +207,9 @@ def build_repo(repo_dir: Path, password: str,
                             b"\x02" + comp)
 
     # ── Index ──
-    index_doc = {
-        "packs": [
-            {"id": pack_id, "blobs": blob_entries_for_index}
-        ]
-    }
+    # Reference every pack we wrote; with split_packs=1 this is a
+    # single-entry list, matching the previous behaviour.
+    index_doc = {"packs": packs_for_index}
     index_plain = json.dumps(index_doc).encode()
     index_enc = _encode_repo_file(index_plain)
     index_id = hashlib.sha256(index_enc).hexdigest()

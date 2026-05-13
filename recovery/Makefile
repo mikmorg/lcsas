@@ -58,6 +58,7 @@ OBJ = \
 	$(BUILD)/zstddeclib.o \
 	$(BUILD)/catalog.o \
 	$(BUILD)/sqlite3.o \
+	$(BUILD)/disc_locator.o \
 	$(BUILD)/repo.o \
 	$(BUILD)/tree.o
 
@@ -156,6 +157,9 @@ $(BUILD)/zstddeclib.o: $(VENDOR)/zstd/zstddeclib.c $(VENDOR)/zstd/zstd.h $(BUILD
 
 $(BUILD)/catalog.o: $(SRCDIR)/catalog.c $(SRCDIR)/catalog.h $(VENDOR)/sqlite/sqlite3.h $(BUILD)
 	$(CC) $(CFLAGS) -c $(SRCDIR)/catalog.c -o $@
+
+$(BUILD)/disc_locator.o: $(SRCDIR)/disc_locator.c $(SRCDIR)/disc_locator.h $(SRCDIR)/catalog.h $(BUILD)
+	$(CC) $(CFLAGS) -c $(SRCDIR)/disc_locator.c -o $@
 
 # Vendored sqlite amalgamation.  Build with -DSQLITE_OMIT_LOAD_EXTENSION to
 # keep the binary smaller and avoid dlsym/dlopen.  Read-only use only.

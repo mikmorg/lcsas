@@ -157,3 +157,28 @@ EXIT CODES
     0 -- success
     1 -- runtime error (bad password, missing file, integrity failure)
     2 -- usage error
+
+IF YOU HAVE ONLY ONE OPTICAL DRIVE
+
+You do NOT need two Blu-ray drives.  restore.sh detects that it is
+running from a read-only mount (the meta-disc), copies itself plus
+the binary tree to a writable directory (/tmp by default), and
+re-executes from there.  After this relocation, no file handles
+remain on the meta-disc, so when the binary prompts for a data
+disc you can eject the meta-disc and insert the data disc into
+the same drive.
+
+The prompt explicitly tells you when to swap:
+
+  +----------------------------------------------------------+
+  | Pack ... is required for the next file.                  |
+  | ...                                                      |
+  | Single-drive recovery: if your machine has only ONE      |
+  | optical drive, eject the RECOVERY disc first, then       |
+  | insert the disc named above into the SAME drive.         |
+  | Insert the right disc and press ENTER to retry.          |
+  +----------------------------------------------------------+
+
+Set LCSAS_NO_RELOCATE=1 to suppress the relocation step (only
+useful when running the script from a writable checkout for
+development).

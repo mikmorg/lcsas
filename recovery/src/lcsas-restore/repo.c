@@ -12,6 +12,7 @@
 #include "json_q.h"
 #include "zstd_dec.h"
 
+#include "disc_locator.h"
 #include "posix_compat.h"
 
 #include <errno.h>
@@ -702,6 +703,7 @@ int
 lcsas_repo_read_blob(const char *repo_path,
                      const lcsas_master_key *mk,
                      const lcsas_blob_loc *loc,
+                     struct lcsas_disc_locator *extra_locator,
                      unsigned char **out, size_t *out_len)
 {
     char path[4096];
@@ -713,19 +715,34 @@ lcsas_repo_read_blob(const char *repo_path,
     unsigned char digest[32];
     struct stat st;
     int rc = -1;
+    int found = 0;
 
     lcsas_hex_encode(loc->pack_id, 32, hex);
     hex[64] = '\0';
 
-    /* Try two-level layout: data/<XX>/<id> */
+    /* Try two-level layout: data/<XX>/<id> in the primary repo. */
     snprintf(path, sizeof path, "%s/data/%c%c/%s", repo_path, hex[0], hex[1], hex);
-    if (stat(path, &st) != 0) {
-        /* Fall back to flat layout: data/<id> */
+    if (stat(path, &st) == 0) {
+        found = 1;
+    } else {
+        /* Flat layout: data/<id> */
         snprintf(path, sizeof path, "%s/data/%s", repo_path, hex);
-        if (stat(path, &st) != 0) {
-            fprintf(stderr, "pack not found: %s\n", hex);
-            return -1;
+        if (stat(path, &st) == 0) found = 1;
+    }
+
+    /* Fall through to the disc locator if the primary repo doesn't
+     * have it.  The locator may scan additional mount points and may
+     * prompt the user interactively. */
+    if (!found && extra_locator != NULL) {
+        if (lcsas_disc_locate_pack(extra_locator, loc->pack_id,
+                                   path, sizeof path) == 0) {
+            found = 1;
         }
+    }
+
+    if (!found) {
+        fprintf(stderr, "pack not found: %s\n", hex);
+        return -1;
     }
 
     fd = open(path, O_RDONLY | O_BINARY);

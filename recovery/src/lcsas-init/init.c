@@ -122,6 +122,16 @@ main(int argc, char **argv)
 
     /* ── Hand off to restore.sh. ── */
     if (file_exists("/mnt/recovery/scripts/restore.sh")) {
+        /* Tell restore.sh exactly where the meta-disc is mounted so
+         * its relocate-to-RAM block records the right exclusion path
+         * for the locator -- essential for single-drive recovery. */
+        setenv("LCSAS_META_DISC", "/mnt", 1);
+        /* cwd is the initramfs root.  Make doubly sure we are NOT
+         * inside /mnt before exec, so the new process cannot pin
+         * the disc by inheriting a cwd there. */
+        if (chdir("/") != 0) {
+            /* Non-fatal; PID 1's cwd should already be "/". */
+        }
         log_msg("handing off to /mnt/recovery/scripts/restore.sh");
         execl("/bin/busybox", "busybox", "sh",
               "/mnt/recovery/scripts/restore.sh",

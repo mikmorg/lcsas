@@ -3,9 +3,21 @@ LCSAS RECOVERY ON WINDOWS -- STEP BY STEP
 
 WHO THIS IS FOR
 
-You are running Windows 10 or 11 (or later).  You have inherited a
-collection of LCSAS recovery discs and you want to read the files on
-them.  You have the password for the archive.
+You are running Windows 10 (version 1709 / October 2017 or later)
+or Windows 11.  You have inherited a collection of LCSAS recovery
+discs and you want to read the files on them.  You have the
+password for the archive.
+
+WHY 1709?
+
+  Our prebuilt lcsas-restore.exe imports the Windows Universal C
+  Runtime (UCRT, the api-ms-win-crt-*.dll family).  UCRT ships in
+  the OS starting with Windows 10 1709.  Windows 7 SP1 / 8 / 8.1
+  also have it IF Windows Update KB2999226 (Sep 2015) was installed;
+  most patched systems do.
+
+  Windows XP / Vista / unpatched 7-8 cannot run the bundled binary.
+  For those systems, see "ON OLDER WINDOWS" below.
 
 You do NOT need:
 
@@ -38,6 +50,40 @@ QUICK START (90 SECONDS)
      in the folder you chose.
 
 If you have multiple discs, the script will tell you when to swap.
+
+You do NOT need two Blu-ray drives.  Before the prompt, restore.bat
+copies itself and the binary tree from the meta-disc into %TEMP%
+and re-launches from there.  After that copy, no file handles
+remain on the meta-disc, so you can eject the recovery disc and
+insert each data disc into the same drive when prompted.
+
+────────────────────────────────────────────────────────────────────
+VERIFY THE BINARY BEFORE RUNNING IT (recommended for paranoid users)
+────────────────────────────────────────────────────────────────────
+
+Every file on the disc has a SHA-256 hash recorded in
+recovery\MANIFEST.sha256.  Before double-clicking restore.bat, you
+can verify both the script and the binary against the manifest
+using Windows' built-in certutil tool.  No third-party software
+required.
+
+  STEP 1.  Open a Command Prompt and change to the disc.
+
+      D:                              (or whichever drive letter)
+      cd D:\
+
+  STEP 2.  Compute the SHA-256 of restore.bat and lcsas-restore.exe.
+
+      certutil -hashfile restore.bat SHA256
+      certutil -hashfile recovery\bin\x86_64-windows\lcsas-restore.exe SHA256
+
+  STEP 3.  Look up the expected hash in recovery\MANIFEST.sha256:
+
+      findstr /C:"restore.bat" recovery\MANIFEST.sha256
+      findstr /C:"lcsas-restore.exe" recovery\MANIFEST.sha256
+
+  The two values for each file must match.  If they do not, the
+  disc has been tampered with or is corrupted -- do not run.
 
 ────────────────────────────────────────────────────────────────────
 SMARTSCREEN WARNING ("Windows protected your PC")
@@ -228,6 +274,41 @@ Example:
         --password-file C:\path\pw.txt ^
         --target C:\Users\me\restored ^
         --verbose
+
+────────────────────────────────────────────────────────────────────
+ON OLDER WINDOWS (XP / Vista / unpatched 7-8)
+────────────────────────────────────────────────────────────────────
+
+If lcsas-restore.exe fails to launch with an error mentioning a
+missing api-ms-win-crt-*.dll, your Windows lacks UCRT.  Options
+in order of effort:
+
+  A. Install Windows Update KB2999226 (Sep 2015) on Windows 7/8/8.1.
+     This adds UCRT.  Most patched systems already have it; if
+     yours doesn't, run Windows Update and let it apply pending
+     updates.
+
+  B. Move the discs to a Windows 10 or 11 machine.  No installation
+     of LCSAS is needed; just plug in the BD reader and double-click
+     restore.bat on the newer machine.
+
+  C. Use a Linux/macOS machine instead.  Boot a Linux live USB
+     (Ubuntu, Mint, Debian -- any modern distro will do), insert
+     the disc, and run:
+        sh /media/<user>/<DISC>/restore.sh ~/restored
+     The Linux binary has NO UCRT dependency; it only needs glibc
+     or musl, both universal on Linux.
+
+  D. Use the Python fallback.  Install Python 3 from python.org
+     (versions 3.6 through 3.12 all work), then:
+        py D:\standalone_restorer.py D:\repo C:\Users\me\restored
+     This is tier 5 of the recovery cascade and works on any
+     Windows that still runs Python 3.
+
+  E. Future: an msvcrt-linked .exe.  See recovery/docs/
+     WINDOWS_RECOVERY_PLAN.txt section "Phase W5 -- legacy msvcrt
+     build" for the planned long-term solution that would also run
+     on Windows XP / Vista.  Not yet available.
 
 ────────────────────────────────────────────────────────────────────
 PHYSICAL DISC PROBLEMS

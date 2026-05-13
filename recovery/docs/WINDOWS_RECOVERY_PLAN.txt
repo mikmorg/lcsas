@@ -12,9 +12,20 @@ reader, the meta-volume disc, and the password.  No technical
 expertise beyond "double-click an icon" and "type a password".
 
 TARGET PATFORMS (in priority order)
-  1. Windows 10/11 on x86_64 (>95% of Windows market)
-  2. Windows 11 on ARM64 (laptops with Snapdragon X / Surface Pro X)
-  3. Older Windows back to Windows 7 SP1 (best-effort; no testing)
+  1. Windows 10 1709 (Oct 2017) and later on x86_64
+       Out-of-the-box: ships UCRT (Universal C Runtime) in the OS.
+       This is the realistic support floor.
+  2. Windows 11 on ARM64 (Snapdragon X / Surface Pro X)
+       Same UCRT story; aarch64-windows binary not yet runtime-tested.
+  3. Windows 7 SP1 / 8 / 8.1 with KB2999226 installed
+       KB2999226 (Sep 2015) backports UCRT to these older systems.
+       Most patched 7/8 machines have it; unpatched ones won't.
+       BEST-EFFORT: not actively tested in CI.
+
+  REJECTED platforms:
+    Windows XP / Vista / unpatched 7  -- UCRT is not available.
+    Workaround for these: a separate msvcrt-linked binary (see
+    "Phase W5 -- legacy msvcrt build" below).
 
 ────────────────────────────────────────────────────────────────────
 PART 1 -- SOURCE PORTABILITY (lcsas-restore.exe)
@@ -400,6 +411,151 @@ Phase W3 -- orchestrator integration (1 day):
 Phase W4 -- aarch64-windows + manual real-VM checklist (deferred):
   * Cross-build aarch64-windows .exe
   * Document the manual Windows-VM verification protocol
+
+────────────────────────────────────────────────────────────────────
+PHASE W5 -- LEGACY MSVCRT BUILD  (planned; not yet started)
+────────────────────────────────────────────────────────────────────
+
+PROBLEM
+
+Our current bin/x86_64-windows/lcsas-restore.exe is built with
+`zig cc -target x86_64-windows-gnu`, which links against UCRT (the
+Universal C Runtime, api-ms-win-crt-*.dll family).  UCRT requires:
+
+  * Windows 10 1709 (Oct 2017) or later, OR
+  * Windows 7 SP1 / 8 / 8.1 with Windows Update KB2999226.
+
+This excludes:
+
+  * Windows XP / Vista entirely (no UCRT, ever).
+  * Unpatched Windows 7 / 8 / 8.1 (KB2999226 missing).
+
+For an inheritor in 2040 dusting off a 2010-era Windows 7 box with
+no internet to download Windows Updates, the .exe simply won't load.
+
+GOAL
+
+Produce a SECOND, parallel binary that links only against the
+ancient msvcrt.dll which has shipped in every Windows release since
+Windows 95.  This binary has fewer features (no UCRT goodies) and
+slightly different behaviour, but runs on every 32/64-bit Windows
+from XP onward.
+
+Layout on the meta-volume:
+
+  recovery/
+    bin/
+      x86_64-windows/      lcsas-restore.exe       (UCRT, modern)
+      x86_64-windows-msvcrt/ lcsas-restore.exe    (msvcrt, legacy)
+      aarch64-windows/     lcsas-restore.exe       (UCRT, ARM64)
+
+restore.bat probes for both, preferring the modern UCRT build but
+falling back to the msvcrt one when UCRT is unavailable.
+
+IMPLEMENTATION
+
+OPTION 1: Use mingw-w64 with explicit msvcrt selection.
+  zig cc cannot target msvcrt.  We need a real mingw-w64 toolchain.
+  On the build host (Ubuntu/Debian):
+      apt-get install gcc-mingw-w64-x86-64
+      apt-get install gcc-mingw-w64-i686
+  Then:
+      x86_64-w64-mingw32-gcc -static \
+          -D__USE_MINGW_ANSI_STDIO=0 \
+          src/lcsas-restore/*.c vendored/zstd/zstddeclib.c \
+          vendored/sqlite/sqlite3.c \
+          -o bin/x86_64-windows-msvcrt/lcsas-restore.exe
+  The Debian/Ubuntu mingw-w64 packages currently default to UCRT
+  too (in recent versions); to force msvcrt explicitly, install
+  the `mingw-w64-x86-64-dev` headers and link with -lmsvcrt and
+  -nostdlib explicitly, OR use the older mingw-w64 9.x packages.
+
+OPTION 2: Build a 32-bit i686-windows binary alongside the 64-bit
+  one.  The 32-bit binary auto-selects msvcrt.dll on older Windows
+  for ABI reasons (the 64-bit UCRT split happened in 2015).
+  Trade-off: 32-bit binary cannot mmap >4 GB files; for typical
+  recovery workflows this doesn't matter (we never mmap whole packs).
+
+OPTION 3: Static-link a UCRT-compatible CRT into the .exe itself.
+  Tools like `crt-static-msvcrt` or the EnterpriseWDK approach can
+  produce a standalone binary with no DLL dependencies beyond
+  kernel32.  This is the cleanest but most invasive option.
+
+PROBABLE PATH: Option 1 + Option 2.  Ship two msvcrt binaries
+(i686 + x86_64) alongside the UCRT one.  ~3 MB extra per disc.
+
+POSIX_COMPAT.H CHANGES REQUIRED
+
+  * MinGW's older msvcrt headers diverge from UCRT in a few places:
+    - _lseeki64 vs lseek64 naming
+    - _stat64 vs _stat32i64 vs _wstat64 default for stat()
+    - some printf size-specifiers are not supported by msvcrt
+      (the `z` length modifier, `j`, `t`).
+  * We'd add an `#if defined(__USE_MINGW_ANSI_STDIO) && ...` block
+    that strips offending format strings.
+  * No expected changes to crypto / parsing code (all pure
+    computation).
+
+TESTING
+
+  * Same Wine harness, but configured to use older Wine builds that
+    emulate Win XP / 7 era kernel:
+        WINEDLLOVERRIDES="ucrtbase=" wine bin/.../lcsas-restore.exe
+    forces UCRT to fail-to-load, exposing whether our cascade
+    correctly drops to the msvcrt binary.
+  * Manual: real Windows 7 SP1 VM (still legally licensable through
+    Microsoft Volume Licensing).
+
+DRIVER SCRIPT CHANGES
+
+restore.bat cascade after Phase W5:
+
+    Tier 1a.  bin\%ARCH%\lcsas-restore.exe              (UCRT)
+              -> If load fails with 0xc0000135 (DLL not found):
+    Tier 1b.  bin\%ARCH%-msvcrt\lcsas-restore.exe       (legacy)
+    Tier 1c.  bin\i686-windows-msvcrt\lcsas-restore.exe (32-bit fallback)
+
+The 0xc0000135 detection in CMD is awkward (errorlevel doesn't
+distinguish "binary didn't load" from "binary returned 1");
+restore.bat would shell-out to `where` and `dumpbin` if available,
+otherwise just try-each-in-sequence.
+
+ROADMAP
+
+  Step 1.  Add a real mingw-w64 toolchain to the build environment.
+  Step 2.  Add `make windows-msvcrt` target invoking it.
+  Step 3.  Verify Wine-with-UCRT-disabled can run the msvcrt build.
+  Step 4.  Update restore.bat with the tiered cascade.
+  Step 5.  Update docs/RECOVER_WINDOWS.txt "ON OLDER WINDOWS"
+           section to list this as Option A instead of "no good
+           option exists".
+
+EFFORT ESTIMATE
+
+  Step 1 (toolchain install)              0.5 day
+  Step 2 (Makefile target + posix_compat) 1 day
+  Step 3 (Wine harness w/ UCRT off)       0.5 day
+  Step 4 (restore.bat update)             0.5 day
+  Step 5 (docs)                           0.5 day
+  ────────────────────────────────────────────────
+                                          ~3 days
+
+NOT BLOCKING
+
+This is genuinely a Phase 4 deferral.  Anyone running Windows 7
+SP1 today almost certainly has KB2999226.  Windows XP / Vista
+hardware is rare in 2026 and rarer in 2040.  But the cost is small
+relative to the survivability win.
+
+────────────────────────────────────────────────────────────────────
+PHASE W6 -- MULTI-DISC SWAP UX                       (planned; #4)
+────────────────────────────────────────────────────────────────────
+
+See recovery/docs/MULTI_DISC_DESIGN.txt for the full design.  This
+is the highest-impact UX work outstanding on the recovery path,
+applicable to ALL platforms (not just Windows) but particularly
+important on Windows where the file manager idiom for "swap disc"
+is well-understood by users.
 
 ────────────────────────────────────────────────────────────────────
 SUCCESS CRITERIA

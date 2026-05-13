@@ -28,7 +28,8 @@ restore_file_node(const char *repo_path,
                   const char *src,
                   const lcsas_json_tok *toks,
                   long node_idx,
-                  const char *target_path)
+                  const char *target_path,
+                  struct lcsas_disc_locator *locator)
 {
     long content_idx = lcsas_json_obj_get(src, toks, node_idx, "content");
     int fd;
@@ -67,7 +68,8 @@ restore_file_node(const char *repo_path,
                         src + toks[t].start);
                 rc = -1; break;
             }
-            if (lcsas_repo_read_blob(repo_path, mk, loc, &blob, &blob_len) != 0) {
+            if (lcsas_repo_read_blob(repo_path, mk, loc, locator,
+                                     &blob, &blob_len) != 0) {
                 rc = -1; break;
             }
             if (lcsas_write_exact(fd, blob, blob_len) != 0) {
@@ -88,7 +90,8 @@ lcsas_tree_restore(const char *repo_path,
                    const lcsas_blob_index *ix,
                    const char *tree_id_hex,
                    const char *target_dir,
-                   const char *target_root)
+                   const char *target_root,
+                   struct lcsas_disc_locator *locator)
 {
     unsigned char tree_id[32];
     const lcsas_blob_loc *loc;
@@ -107,7 +110,8 @@ lcsas_tree_restore(const char *repo_path,
         fprintf(stderr, "tree blob not found: %s\n", tree_id_hex);
         return -1;
     }
-    if (lcsas_repo_read_blob(repo_path, mk, loc, &blob, &blob_len) != 0) {
+    if (lcsas_repo_read_blob(repo_path, mk, loc, locator,
+                             &blob, &blob_len) != 0) {
         return -1;
     }
 
@@ -171,7 +175,8 @@ lcsas_tree_restore(const char *repo_path,
 
             if (strcmp(type_buf, "file") == 0) {
                 if (restore_file_node(repo_path, mk, ix,
-                                      (char *)blob, toks, t, node_path) != 0) {
+                                      (char *)blob, toks, t, node_path,
+                                      locator) != 0) {
                     fprintf(stderr, "file restore failed: %s\n", node_path);
                     goto out;
                 }
@@ -184,7 +189,8 @@ lcsas_tree_restore(const char *repo_path,
                     memcpy(sub_hex, (char *)blob + toks[subtree_i].start, 64);
                     sub_hex[64] = '\0';
                     if (lcsas_tree_restore(repo_path, mk, ix, sub_hex,
-                                           node_path, target_root) != 0) {
+                                           node_path, target_root,
+                                           locator) != 0) {
                         goto out;
                     }
                 }

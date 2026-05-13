@@ -129,13 +129,17 @@ long lcsas_snapshot_find(const lcsas_snapshot_list *l, const char *id);
  * Read, decrypt, and verify a blob.  Returns malloc'd buffer in *out
  * (caller frees) and length in *out_len.  Returns 0 on success.
  *
- * If the blob is zstd-compressed (data starts with zstd magic), this
- * function currently returns -2 -- Phase 1 MVP does not include zstd
- * decompression.  Phase 2 will vendor the official zstd amalgamation.
+ * `repo_path` is searched first (back-compat single-disc behaviour).
+ * Then if `extra_locator` is non-NULL, it provides additional pack
+ * search paths and optional interactive prompting.
+ *
+ * Zstd-compressed blobs are decompressed transparently.
  */
+struct lcsas_disc_locator;
 int lcsas_repo_read_blob(const char *repo_path,
                          const lcsas_master_key *mk,
                          const lcsas_blob_loc *loc,
+                         struct lcsas_disc_locator *extra_locator,
                          unsigned char **out, size_t *out_len);
 
 #endif
