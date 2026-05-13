@@ -169,7 +169,7 @@ class BurnOrchestrator:
             raise ValueError(
                 f"{len(oversized)} pack(s) exceed {mt.name} usable capacity "
                 f"({usable:,} bytes) and can never be archived on this media type: "
-                f"{details}. Consider using a larger media type (e.g. LTO8)."
+                f"{details}. Consider using a larger media type (e.g. BDXL100)."
             )
 
         if not selected_items:
@@ -229,16 +229,6 @@ class BurnOrchestrator:
         if isinstance(self._xorriso, SubprocessRunnerBase):
             # xorriso 1.4.0+ required for reliable ISO-9660 level 3 support.
             check_binary_version(self._xorriso._binary, min_version=(1, 4, 0))
-        # Tape media (LTO) has built-in ECC — DVDisaster augmentation is
-        # not applicable and must be skipped automatically.
-        if manifest.media_type.is_tape:
-            skip_ecc = True
-            _logger.info(
-                "Tape media detected (%s) — skipping DVDisaster ECC augmentation "
-                "(LTO tape has built-in error correction).",
-                manifest.media_type.name,
-            )
-
         if not skip_ecc and isinstance(self._dvdisaster, SubprocessRunnerBase):
             # dvdisaster 0.79+ required for RS03 augmentation mode.
             check_binary_version(self._dvdisaster._binary, min_version=(0, 79, 0))
@@ -449,14 +439,9 @@ class BurnOrchestrator:
             )
             iso_path = iso_output
 
-            if not skip_ecc and not media_type.is_tape:
+            if not skip_ecc:
                 self._dvdisaster.augment_iso(
                     iso_path, self._config.default_ecc_redundancy_pct,
-                )
-            elif media_type.is_tape and not skip_ecc:
-                _logger.info(
-                    "Tape media (%s) — skipping DVDisaster ECC augmentation.",
-                    media_type.name,
                 )
 
             # 7. Validate ISO size against media capacity  [O4]
@@ -910,7 +895,7 @@ class BurnOrchestrator:
                         f"{len(oversized)} pack(s) exceed {media_type.name} usable "
                         f"capacity ({usable:,} bytes) and can never be archived on "
                         f"this media type: {details}. "
-                        f"Consider using a larger media type (e.g. LTO8)."
+                        f"Consider using a larger media type (e.g. BDXL100)."
                     )
                 raise ValueError(
                     f"Cannot fit remaining packs into {media_type.name} "

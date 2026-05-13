@@ -46,8 +46,8 @@ than redefining them. An axis applies to a workflow when changing it changes
 the code path or required setup.
 
 - **Media type** — one of `BD25`, `BD50`, `BDXL100`, `MDISC25`, `MDISC100`,
-  `LTO8`, `LTO9`, `TEST_TINY` (defined in `src/lcsas/config/media.py`).
-  Optical types carry 15% ECC overhead; LTO carries 0%.
+  `TEST_TINY` (defined in `src/lcsas/config/media.py`). All types carry 15%
+  ECC overhead.
 - **Multi-tenant** — single registered repo vs. multiple repos sharing
   physical volumes, each with its own encryption key.
 - **OS** — Linux host, Linux bare-metal initramfs, Windows, macOS. Determines
@@ -55,11 +55,11 @@ the code path or required setup.
 - **Optical drive count** — single drive (sequential burn) vs. multiple drives
   (parallel burn / multi-copy sync).
 - **Data tier location** — HOT (Rustic mirror on NAS/local disk), WARM
-  (assembled ISO on staging SSD/HDD), COLD (burned disc or tape).
+  (assembled ISO on staging SSD/HDD), COLD (burned disc).
 - **Multi-copy** — exactly 1 location vs. N locations holding copies of the
   same volume; exercises `volume_copies` rows and `location move`.
-- **ECC** — DVDisaster RS03 augmentation enabled (BD-R, M-Disc) vs. skipped
-  (LTO, since tape provides its own ECC).
+- **ECC** — DVDisaster RS03 augmentation enabled (BD-R, M-Disc) vs.
+  bypassed via the `--skip-ecc` flag.
 - **Live distro** — yes (recovery booted from USB / meta-volume) vs. no
   (workflow runs under the host OS).
 - **Recovery tier** — `1` prebuilt static `lcsas-restore`, `2` vendored
@@ -76,7 +76,7 @@ Each detail file ends with a "Test coverage" table using these tokens:
 - `[partial]` — code path is exercised but the variant axis is not, or
   assertions are incomplete.
 - `[gap]` — no test exists; manual validation only.
-- `[N/A]` — variant does not apply to this workflow (e.g. ECC on LTO).
+- `[N/A]` — variant does not apply to this workflow.
 
 ## How to validate a workflow
 

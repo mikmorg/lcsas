@@ -2,7 +2,7 @@
 
 The Stage & Burn pipeline is the heart of LCSAS: the workflow that turns
 unarchived pack files in the Rustic mirror into permanent, self-describing
-optical or tape volumes. It is also the highest-traffic surface of the tool —
+optical volumes. It is also the highest-traffic surface of the tool —
 every routine archival cycle runs through these two commands, and almost every
 "variant axis" (media type, multi-tenant, multi-copy, ECC on/off, etc.)
 crosses through them.
@@ -14,11 +14,10 @@ The pipeline is implemented as a single orchestrator
 (`src/lcsas/staging/builder.py:61`), injects the **holographic catalog** —
 SQLite catalog + per-repo Rustic metadata — onto every disc
 (`src/lcsas/staging/metadata.py:35`), masters an ISO via xorriso
-(`src/lcsas/iso/xorriso.py:98`), and (for optical media only) augments it with
+(`src/lcsas/iso/xorriso.py:98`), and augments it with
 DVDisaster RS03 ECC (`src/lcsas/ecc/dvdisaster.py:46`). `burn_session()` then
 streams each ISO to the optical device, reads the disc back to verify, and
-records a copy in the catalog. Tape media (LTO8/LTO9) skips ECC because the
-LTO drive provides its own correction.
+records a copy in the catalog.
 
 A burn **session** is the unit of resumability. Staging emits a session record
 with status `STAGED`, plus one row per volume with the volume in `STAGING`
@@ -132,7 +131,7 @@ machines, or when staging in advance for an unattended burn.
 - Initialised catalog (`lcsas init`).
 - Registered repositories (`lcsas repo add`) and a recent `lcsas scan` so the
   catalog reflects current mirror state.
-- `xorriso ≥ 1.4.0` and (for non-tape, non-`--skip-ecc`) `dvdisaster ≥ 0.79`
+- `xorriso ≥ 1.4.0` and (when `--skip-ecc` is not passed) `dvdisaster ≥ 0.79`
   on `PATH`. Version checks happen lazily inside `BurnOrchestrator.execute`,
   but the same binaries are invoked by `stage` for ISO + ECC.
 - `staging_path` filesystem with enough free space; pre-flight requires
@@ -150,8 +149,8 @@ machines, or when staging in advance for an unattended burn.
 4. `--for-location <name>` — stage packs missing at that location only;
    routes through `get_unarchived_or_missing_at_location`
    (`src/lcsas/burn/orchestrator.py:848-851`).
-5. `--skip-ecc` — bypass DVDisaster augmentation (forced on for tape; see
-   per-media section) (`src/lcsas/cli/main.py:138`).
+5. `--skip-ecc` — bypass DVDisaster augmentation
+   (`src/lcsas/cli/main.py:138`).
 6. `--dry-run` / `-n` — compute the bin-pack plan and report it, then exit
    without touching staging, the catalog, or the disc
    (`src/lcsas/burn/orchestrator.py:551-566`).
@@ -162,22 +161,20 @@ machines, or when staging in advance for an unattended burn.
 
 **Expected outcome:** A new burn session in `STAGED` state, with one volume
 per disc in `STAGING` state, an ISO file per volume in the session staging
-directory, ECC applied (for optical media), a `session.json` manifest, and
+directory, ECC applied (unless `--skip-ecc`), a `session.json` manifest, and
 log output listing each ISO path and size. Volumes are reserved with unique
 labels (`<prefix>_<media_label>_<seq>`) generated via
 `generate_volume_label` (`src/lcsas/burn/orchestrator.py:601-606`).
 
 **Variant axes that apply:**
 
-- **Media type** — all production and TEST_* media supported; LTO forces
-  `skip_ecc=True` inside `_stage_single_volume`
-  (`src/lcsas/burn/orchestrator.py:452-460`).
+- **Media type** — all production and TEST_* media supported.
 - **Multi-tenant** — packs from multiple repos co-mingle on one volume;
   metadata is injected per-repo under `metadata/<repo_id>/`.
 - **Optical drive count** — not relevant (no burn here).
 - **Multi-copy** — irrelevant for `stage`; the resulting session can later
   be burned to multiple locations.
-- **ECC** — `--skip-ecc` honoured; tape always skips.
+- **ECC** — `--skip-ecc` honoured.
 - **Recovery tier** — staging only writes to Tier 1 (WARM staging SSD/HDD).
 
 **Test coverage:**
@@ -248,7 +245,7 @@ successful verify (`src/lcsas/burn/orchestrator.py:791-802`).
 
 **Variant axes that apply:**
 
-- **Media type** — all supported; tape forces `skip_ecc=True`.
+- **Media type** — all supported.
 - **Multi-tenant** — yes, via `--repo` and per-repo metadata injection.
 - **OS** — Linux only (xorriso + dvdisaster + `/dev/sr*` semantics).
 - **Optical drive count** — single drive at a time; multi-drive needs
@@ -257,8 +254,8 @@ successful verify (`src/lcsas/burn/orchestrator.py:791-802`).
 - **Multi-copy** — single location per `burn` invocation; for second copies
   use `lcsas burn --session <id> --location <other>` against the same
   session.
-- **ECC** — `--skip-ecc` honoured; tape always skips
-  (`src/lcsas/burn/orchestrator.py:452-460`).
+- **ECC** — `--skip-ecc` honoured
+  (`src/lcsas/burn/orchestrator.py`).
 - **Recovery tier** — produces Tier 2 (COLD) media.
 
 **Test coverage:**
@@ -426,8 +423,7 @@ committing to a full stage.
 staging directories, no catalog mutation.
 
 **Variant axes that apply:** Media type (all), repo filter (`--repo`),
-location filter (`--for-location`). Tape vs optical does not matter — no
-ISO is produced.
+location filter (`--for-location`). No ISO is produced.
 
 **Test coverage:** `tests/unit/test_session_pipeline.py` exercises the
 `stage(dry_run=True)` branch; argparse tested in `tests/unit/test_cli.py`.
@@ -480,7 +476,7 @@ transparently (re-burning a `VERIFIED` volume only adds a new
 **Variant axes that apply:**
 
 - **Multi-copy** — primary use case.
-- **Media type** — all; tape still skips ECC.
+- **Media type** — all.
 - **Multi-tenant** — combine `--for-location` with `--repo` to restrict
   further (`src/lcsas/burn/orchestrator.py:862-863`).
 
@@ -510,19 +506,13 @@ with a list of valid types (`src/lcsas/cli/main.py:913-921`,
 
 The orchestrator's media handling rules:
 
-- **ECC skip for tape** — `MediaType.is_tape` (`LTO8`, `LTO9`) forces
-  `skip_ecc=True` regardless of `--skip-ecc`. In `execute()` this is logged
-  and applied at `src/lcsas/burn/orchestrator.py:234-240`. In
-  `_stage_single_volume()` the equivalent guard sits at
-  `src/lcsas/burn/orchestrator.py:452-460`.
 - **Source bundle skip for test media** —
   `if not media_type.is_test: injector.write_lcsas_source()`
   (`src/lcsas/burn/orchestrator.py:427-428`). Test discs stay small.
 - **Label suffix** — `MediaType.label_name` (`src/lcsas/config/media.py:66`)
   is what appears in the disc label. It defaults to the enum member name.
 - **Bin-pack capacity** — `usable_bytes` is `capacity_bytes × (100 −
-  ecc_overhead_pct) / 100`. For LTO (`ecc_overhead_pct=0`) this is the full
-  raw capacity (`src/lcsas/config/media.py:46-49`).
+  ecc_overhead_pct) / 100` (`src/lcsas/config/media.py:46-49`).
 - **Hard reject on oversize packs** — A pack larger than `usable_bytes −
   metadata_reserve_bytes` raises `ValueError` from `_multi_bin_pack`
   before any side effects (`src/lcsas/burn/orchestrator.py:888-919`).
@@ -540,8 +530,6 @@ The orchestrator's media handling rules:
 | `BDXL100`  | 100,103,356,416   | 15 | ~85.09 GB | RS03 augment | Triple-layer BDXL. (`src/lcsas/config/media.py:19`) |
 | `MDISC25`  | 25,025,314,816    | 15 | ~21.27 GB | RS03 augment | Same geometry as `BD25`; longevity-rated. (`src/lcsas/config/media.py:20`) |
 | `MDISC100` | 100,103,356,416   | 15 | ~85.09 GB | RS03 augment | Same geometry as `BDXL100`; longevity-rated. (`src/lcsas/config/media.py:21`) |
-| `LTO8`     | 12,000,000,000,000 | 0 | 12 TB    | **Skipped** (tape) | LTO has built-in error correction. (`src/lcsas/config/media.py:22`) |
-| `LTO9`     | 18,000,000,000,000 | 0 | 18 TB    | **Skipped** (tape) | LTO has built-in error correction. (`src/lcsas/config/media.py:23`) |
 
 ### Test media
 
@@ -551,14 +539,9 @@ The orchestrator's media handling rules:
 
 ### ECC-skip behaviour, explicitly
 
-The DVDisaster step is **skipped** when **any** of these are true:
-
-1. `--skip-ecc` was passed on the CLI (passed to `orch.stage(skip_ecc=...)`
-   and `orch.execute(skip_ecc=...)`).
-2. The media's `is_tape` property is `True` (i.e. `LTO8`, `LTO9`). This
-   override is unconditional and logged
-   (`src/lcsas/burn/orchestrator.py:234-240`,
-   `src/lcsas/burn/orchestrator.py:456-460`).
+The DVDisaster step is **skipped** only when `--skip-ecc` is passed on the
+CLI (and forwarded to `orch.stage(skip_ecc=...)` and
+`orch.execute(skip_ecc=...)`).
 
 Otherwise, `dvdisaster -mRS03 -n <default_ecc_redundancy_pct> -c` is run on
 the ISO via a temp copy + atomic rename
@@ -580,8 +563,6 @@ minimum).
 | `BDXL100`   | No automated coverage. |
 | `MDISC25`   | No automated coverage. |
 | `MDISC100`  | No automated coverage. |
-| `LTO8`      | **No automated coverage** — critically, the `is_tape` ECC-skip branch is not covered by any test. |
-| `LTO9`      | **No automated coverage** — same as `LTO8`. |
 | `TEST_TINY` | Heavy coverage in `test_session_pipeline.py` (including multi-volume, multi-tenant), `test_burn_orchestrator.py`, `test_staging.py`, `test_binpack.py`, `test_config.py`; end-to-end coverage via `tests/integration/test_disc_only_restore.py`. |
 
 ---
@@ -669,12 +650,12 @@ disc remains the source of truth.
 
 | Axis | `stage` | `burn` (legacy) | `burn --session` | `burn --dry-run` | `burn --for-location` |
 |------|---------|-----------------|------------------|------------------|-----------------------|
-| Media type | All 10 types; tape forces `skip_ecc` | All 10; tape forces `skip_ecc` | Inherited from session | All (Mode B); inherited (Mode A) | All; tape forces `skip_ecc` |
+| Media type | All supported | All | Inherited from session | All (Mode B); inherited (Mode A) | All |
 | Multi-tenant | `--repo` filter; per-repo metadata injection | `--repo` filter | n/a (session already includes repo selection) | Same as parent mode | `--repo` + `--for-location` combined |
 | OS | Linux | Linux | Linux | Linux | Linux |
 | Optical drive count | n/a (no burn) | 1 (`--device`) | 1 (`--device`) | n/a | 1 (`--device`) |
 | Multi-copy | n/a | Single location per call | **Primary mechanism** — call once per location with same `--session` | n/a | Single location per call |
-| ECC | `--skip-ecc` honoured; tape always skips | `--skip-ecc` honoured; tape always skips | Already baked into staged ISOs | n/a (no ISOs created in Mode B; Mode A no-op) | `--skip-ecc` honoured; tape always skips |
+| ECC | `--skip-ecc` honoured | `--skip-ecc` honoured | Already baked into staged ISOs | n/a (no ISOs created in Mode B; Mode A no-op) | `--skip-ecc` honoured |
 | Recovery tier | Tier 1 (WARM) only | Tier 1 → Tier 2 | Tier 1 → Tier 2 | None | Tier 1 → Tier 2 |
 
 ---
@@ -712,22 +693,18 @@ Primary unit tests for this pipeline:
 
 ### Coverage gaps
 
-1. **LTO8 / LTO9** — no test exercises the `media_type.is_tape` branches.
-   The unconditional ECC-skip in
-   `src/lcsas/burn/orchestrator.py:234-240` and `:456-460` is currently
-   covered only by manual review.
-2. **BD25 / BD50 / BDXL100 / MDISC25 / MDISC100** — no test asserts the
+1. **BD25 / BD50 / BDXL100 / MDISC25 / MDISC100** — no test asserts the
    media-specific capacity is honoured; coverage is implicit via the
    generic `usable_bytes` math.
-3. **`stage --dry-run` exact log lines** — the dry-run branch returns the
+2. **`stage --dry-run` exact log lines** — the dry-run branch returns the
    sentinel `StageResult` but no CLI-level test captures the human-facing
    output.
-4. **Cross-drive parallel burn** — no test fixture instantiates two
+3. **Cross-drive parallel burn** — no test fixture instantiates two
    `XorrisoRunner` fakes binding to different `/dev/srN` paths.
-5. **Re-stage of a `PARTIAL` session** — no test asserts the "discard then
+4. **Re-stage of a `PARTIAL` session** — no test asserts the "discard then
    re-stage" recovery path is correct when the partial session contains
    already-`VERIFIED` volumes.
-6. **Test media + real DVDisaster** — `is_test` media types don't carry an
+5. **Test media + real DVDisaster** — `is_test` media types don't carry an
    in-code rule forcing `skip_ecc`; if an operator runs `lcsas stage
    --media TEST_TINY` against a real `dvdisaster` binary, behaviour is
    undefined (RS03 typically fails on sub-MB ISOs).
@@ -762,11 +739,8 @@ Primary unit tests for this pipeline:
 | `SubprocessXorrisoRunner.burn_iso` | `src/lcsas/iso/xorriso.py` | 272-305 |
 | `SubprocessXorrisoRunner.verify_disc` | `src/lcsas/iso/xorriso.py` | 307-325 |
 | `SubprocessDVDisasterRunner.augment_iso` | `src/lcsas/ecc/dvdisaster.py` | 46-97 |
-| `MediaType` enum | `src/lcsas/config/media.py` | 8-79 |
-| `MediaType.is_tape` (ECC-skip predicate) | `src/lcsas/config/media.py` | 56-62 |
+| `MediaType` enum | `src/lcsas/config/media.py` | 8-70 |
 | `MediaType.usable_bytes` | `src/lcsas/config/media.py` | 46-49 |
-| ECC-skip enforcement (execute) | `src/lcsas/burn/orchestrator.py` | 234-240 |
-| ECC-skip enforcement (stage) | `src/lcsas/burn/orchestrator.py` | 452-460 |
 | Re-burn (already-`VERIFIED`) semantics | `src/lcsas/burn/orchestrator.py` | 692-742 |
 | Session status: PARTIAL | `src/lcsas/burn/orchestrator.py` | 786-789 |
 | Session status: COMPLETE | `src/lcsas/burn/orchestrator.py` | 805 |

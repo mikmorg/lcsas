@@ -27,20 +27,20 @@ Pytest writes temp files to `/var/tmp/pytest-lcsas` and cleans them up automatic
 
 ## Architecture
 
-**LCSAS** orchestrates three external tools — **Rustic** (deduplication/encryption), **Xorriso** (ISO mastering), and **DVDisaster** (RS03 ECC) — to produce petabyte-scale optical/tape cold-storage archives.
+**LCSAS** orchestrates three external tools — **Rustic** (deduplication/encryption), **Xorriso** (ISO mastering), and **DVDisaster** (RS03 ECC) — to produce petabyte-scale optical cold-storage archives.
 
 ### Storage tier model
 
 ```
 Tier 0 — HOT    NAS / local disk  (Rustic mirror repos, actively written)
 Tier 1 — WARM   Staging SSD/HDD   (assembled ISOs, temporary)
-Tier 2 — COLD   Optical / LTO     (burned discs; permanent)
+Tier 2 — COLD   Optical           (burned discs; permanent)
 ```
 
 ### Data flow (burn pipeline)
 
 1. **Scan** — `packs/scanner.py` walks the Rustic mirror and registers new pack files in the SQLite catalog (`db/`).
-2. **Bin-pack** — `binpack/algorithm.py` runs first-fit-decreasing to fill volumes to the configured media size (BD25, MDISC100, LTO8, TEST_TINY — defined in `config/media.py`).
+2. **Bin-pack** — `binpack/algorithm.py` runs first-fit-decreasing to fill volumes to the configured media size (BD25, MDISC100, BDXL100, TEST_TINY — defined in `config/media.py`).
 3. **Stage** — `staging/builder.py` hardlinks packs into a staging tree; `staging/metadata.py` (`HolographicInjector`) copies the complete SQLite catalog and per-repo Rustic metadata (index, snapshots, keys) onto every disc so any single disc is self-describing.
 4. **ISO** — `iso/xorriso.py` calls xorriso to master the staging directory into an ISO.
 5. **ECC** — `ecc/dvdisaster.py` augments the ISO with DVDisaster RS03 error correction.

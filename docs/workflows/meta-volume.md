@@ -4,7 +4,7 @@ The **meta-volume** is the *entry point* for worst-case LCSAS recovery: the
 machine that owned the archive is gone, the operating system is gone, the
 LCSAS source tree is gone, and the only artifacts left in the world are:
 
-1. One or more **data discs** (BD25 / MDISC100 / LTO — each holographic).
+1. One or more **data discs** (BD25 / MDISC100 / BDXL100 — each holographic).
 2. The **meta-disc** described in this document.
 3. The operator's **encryption key file** (deliberately *not* on any disc).
 
@@ -121,9 +121,8 @@ tree (logged contents at `src/lcsas/cli/main.py:1735-1741`), no
 
 **Variant axes that apply:**
 - **Media type:** BD25 or MDISC100 in practice — the meta payload is small
-  (a few hundred MB tools + source + docs). LTO8 is supported but uncommon
-  for a meta-disc because it requires a tape drive for the very first
-  recovery step. Defined in `src/lcsas/config/media.py`.
+  (a few hundred MB tools + source + docs). Defined in
+  `src/lcsas/config/media.py`.
 - **Optical drive count:** *biggest behavior difference.* With multiple
   drives, you can leave the meta-disc in one drive and rotate data discs
   through the other(s); with a single drive, you must self-extract the
@@ -250,8 +249,7 @@ wizard.
 the operator at the restore wizard.
 
 **Variant axes that apply:**
-- **Media type:** BD25 and MDISC100 are the practical choices; LTO has no
-  bootable form factor.
+- **Media type:** BD25 and MDISC100 are the practical choices.
 - **Optical drive count:** *single-drive is the harder case* — see next
   workflow; with multiple drives no special bootstrap is needed.
 - **Firmware:** UEFI vs BIOS — both supported, governed by the El Torito
@@ -525,7 +523,7 @@ and the same catalog policy (no `catalog.db`).
 
 | Axis | Values | Where it matters |
 |---|---|---|
-| Media type | BD25, MDISC100 (typical), LTO8 (rare for meta), TEST_TINY (CI) | `lcsas meta build` output size and mastering choice (`src/lcsas/config/media.py`). |
+| Media type | BD25, MDISC100 (typical), TEST_TINY (CI) | `lcsas meta build` output size and mastering choice (`src/lcsas/config/media.py`). |
 | Optical drive count | 1 (must self-extract before swap) vs ≥2 (meta-disc stays loaded) | **Biggest behavior difference** — see [Single-drive bootstrap](#workflow-single-drive-bootstrap-meta-disc-occupies-the-only-drive). |
 | Recovery tier | Tier-2 cold (the disc itself), Tier-1 warm (extracted copy + cache), Tier-0 ephemeral (live boot RAM) | Drives how the operator stages tools before swapping discs. |
 | Firmware | UEFI vs Legacy BIOS | Bootable variant only; both supported via El Torito hybrid (`src/lcsas/meta/bootable.py:171-216`). |

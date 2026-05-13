@@ -25,8 +25,8 @@ class TestMediaType:
     def test_bd25_is_optical(self):
         assert MediaType.BD25.is_optical is True
 
-    def test_lto8_is_not_optical(self):
-        assert MediaType.LTO8.is_optical is False
+    def test_test_tiny_is_not_optical(self):
+        assert MediaType.TEST_TINY.is_optical is False
 
     def test_test_tiny_is_test(self):
         assert MediaType.TEST_TINY.is_test is True
@@ -48,7 +48,7 @@ class TestMediaType:
 
     def test_label_name_defaults_to_enum_name(self):
         assert MediaType.BD25.label_name == "BD25"
-        assert MediaType.LTO8.label_name == "LTO8"
+        assert MediaType.BD50.label_name == "BD50"
         assert MediaType.TEST_TINY.label_name == "TEST_TINY"
 
 
