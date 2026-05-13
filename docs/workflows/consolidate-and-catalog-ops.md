@@ -108,7 +108,7 @@ packs will require, without touching any state.
 
 **Variant axes that apply:**
 - **Media type** — `--target-media` accepts any `MediaType` enum
-  member (`BD25`, `MDISC100`, `LTO8`, `TEST_TINY` —
+  member (`BD25`, `MDISC100`, `BDXL100`, `TEST_TINY` —
   `src/lcsas/config/media.py`).  Bigger targets mean fewer
   output volumes; ECC overhead is media-specific.
 - **Multi-tenant** — packs from multiple repos can be in the same
@@ -385,7 +385,7 @@ orphaned pack files (catalog drift, partial restores).
 
 **Variant axes that apply:**
 - **Media type** — works on any disc; the two-level pack layout is
-  the convention for large media (MDISC100, LTO8).
+  the convention for large media (MDISC100, BDXL100).
 - **Multi-tenant** — the embedded `catalog.db` contains every repo
   the disc carries; the query filters by which packs are present, so
   multi-repo discs are handled transparently.

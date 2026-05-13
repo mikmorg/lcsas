@@ -19,8 +19,6 @@ class MediaType(Enum):
     BDXL100 = (100_103_356_416, 15)    # 100 GB BDXL
     MDISC25 = (25_025_314_816, 15)     # 25 GB M-Disc BD-R
     MDISC100 = (100_103_356_416, 15)   # 100 GB M-Disc BDXL
-    LTO8 = (12_000_000_000_000, 0)     # 12 TB LTO-8 (no ECC overhead — tape has its own)
-    LTO9 = (18_000_000_000_000, 0)     # 18 TB LTO-9
 
     # Testing media (tiny volumes for automated tests)
     TEST_TINY = (1_048_576, 0)         # 1 MB — fast unit tests
@@ -52,14 +50,6 @@ class MediaType(Enum):
     def is_optical(self) -> bool:
         """Whether this media type is optical (BD-R / M-Disc)."""
         return self.name.startswith(("BD", "MDISC"))
-
-    @property
-    def is_tape(self) -> bool:
-        """Whether this media type is tape (LTO).
-
-        Tape has built-in ECC; DVDisaster augmentation must be skipped.
-        """
-        return self.name.startswith("LTO")
 
     @property
     def is_test(self) -> bool:

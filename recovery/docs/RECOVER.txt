@@ -3,15 +3,15 @@ LCSAS RECOVERY TOOLCHAIN -- MANUAL RECOVERY PROCEDURE
 
 PURPOSE
 
-This document describes how to restore files from an LCSAS optical or
-tape archive using only the tools bundled on the recovery medium.  It
+This document describes how to restore files from an LCSAS optical
+archive using only the tools bundled on the recovery medium.  It
 assumes nothing about the recovery environment beyond a working
 POSIX-like OS with shell access.
 
 PREREQUISITES
 
 You will need:
-  - The LCSAS recovery medium (BD-R / DVD / LTO).
+  - The LCSAS recovery medium (BD-R / DVD).
   - The repository password (set when the archive was created).
   - A target directory with enough free space for the restored files.
 

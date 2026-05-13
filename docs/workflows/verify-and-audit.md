@@ -62,7 +62,7 @@ For the meaning of status strings (`STAGING`, `BURNING`, `BURNED`, `VERIFIED`, `
 - Exit code `0` on pass, `1` on fail or argument error.
 
 **Variant axes that apply:**
-- **Media type:** ISO-mode verification is media-agnostic (it just reads the staged file). `--disc` mode reads physical media and is therefore sensitive to drive capability — Blu-ray media (BD25, MDISC100) needs a BD-capable drive at `--device`; the LTO8 path has no equivalent here (tape verification is out of scope). DVDisaster RS03 ECC applies to any ISO regardless of target media, so the same verification machinery is exercised for TEST_TINY images during development.
+- **Media type:** ISO-mode verification is media-agnostic (it just reads the staged file). `--disc` mode reads physical media and is therefore sensitive to drive capability — Blu-ray media (BD25, MDISC100) needs a BD-capable drive at `--device`. DVDisaster RS03 ECC applies to any ISO regardless of target media, so the same verification machinery is exercised for TEST_TINY images during development.
 - **Multi-tenant:** This command operates on a single physical volume; the underlying disc may carry packs from multiple Rustic repositories. Verification is at the *pack-hash* layer (and the ECC layer), not the repository layer, so it is multi-tenancy-blind by design — a single `VERIFY_PASS` covers every tenant's packs on the disc.
 - **Optical drive count:** Single-drive sites must serialize `--disc` runs (one drive, one disc at a time). Multi-drive sites can run several `lcsas verify` processes in parallel as long as each names a distinct `--device`; the catalog write path uses `locked_connection` so concurrent event writes are serialized at the SQLite level (`src/lcsas/cli/main.py:1529`).
 - **Multi-copy:** This command verifies *one* copy at a time. To re-verify every physical copy of one volume you must run it once per copy with the appropriate `--device` and `--detail` describing which copy was checked. Copies are tracked in `volume_copies`; `verify` does not iterate them automatically. (See "Gaps" below.)
@@ -112,7 +112,7 @@ For the meaning of status strings (`STAGING`, `BURNING`, `BURNED`, `VERIFIED`, `
 - `BURNED` volumes that passed are now `VERIFIED`.
 
 **Variant axes that apply:**
-- **Media type:** ECC verification only, so this works equally well for BD25 / MDISC100 / TEST_TINY ISOs. LTO8 volumes that lack an ECC ISO will be silently skipped — no failure recorded.
+- **Media type:** ECC verification only, so this works equally well for BD25 / MDISC100 / TEST_TINY ISOs.
 - **Multi-tenant:** Repository-blind, like the single form. A single sweep covers every tenant's data simultaneously.
 - **Optical drive count:** No drive involvement — batch mode operates entirely on staged ISO files. The optical-drive count constraint is moved to `--disc` mode (single form). This means batch can run on any host that can mount the staging directory.
 - **Multi-copy:** Operates on the volume, not the physical copies. If a volume has three copies on three different shelves, `--all` checks the *ISO* (one image) once — it does *not* iterate copies. Use `--location` to restrict the sweep to volumes that exist at one site.
@@ -158,7 +158,7 @@ For the meaning of status strings (`STAGING`, `BURNING`, `BURNED`, `VERIFIED`, `
 - No mutation of the master catalog (this command is read-only against the disc's *own* embedded DB; it does *not* write a `volume_events` row — see "Gaps").
 
 **Variant axes that apply:**
-- **Media type:** Reads files from a mount point; works for any media that presents a filesystem. LTO8 needs `ltfs` mounted first.
+- **Media type:** Reads files from a mount point; works for any media that presents a filesystem.
 - **Multi-tenant:** A single disc can contain packs from multiple repositories — the SQL fallback query joins `volume_packs` so all tenants on the disc are validated in one pass.
 - **Optical drive count:** N/A (the disc must already be mounted).
 - **Multi-copy:** Validate one copy at a time by re-mounting each.

@@ -1567,8 +1567,8 @@ Without the key file, the encrypted backup data cannot be decrypted.
 ## About LCSAS
 
 Linux Cold Storage Archival Suite orchestrates Rustic (restic-compatible) backup
-repositories onto optical media (Blu-ray, M-DISC) and tape (LTO) for
-long-term archival storage. Every data disc is self-describing ("holographic"),
+repositories onto optical media (Blu-ray, M-DISC) for long-term archival
+storage. Every data disc is self-describing ("holographic"),
 carrying full repository metadata so that any disc can bootstrap a restore
 independently.
 

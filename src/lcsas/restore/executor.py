@@ -148,10 +148,9 @@ class RestoreExecutor:
                 ISO's DVDisaster RS03 ECC is verified (and repaired if needed)
                 before any pack is read — recovers transparently from bit-rot
                 that lies within the recovery margin.
-            media_type: Optional media type of the volume.  Tape media (LTO)
-                bypasses ECC entirely because tape has its own built-in error
-                correction — mirrors the burn-side predicate in
-                ``burn/orchestrator.py:234-240``.
+            media_type: Optional media type of the volume.  Currently used
+                only for diagnostics; ECC verify is always attempted when an
+                ECC runner and ``iso_path`` are supplied.
 
         Returns:
             IngestionResult with ingested count and (optionally) failed hashes.
@@ -170,12 +169,9 @@ class RestoreExecutor:
         #   * ``self._ecc is None`` — test-only path.
         #   * ``iso_path is None`` — caller has no ISO handle (e.g.
         #     reading from a pre-extracted directory in tests).
-        #   * tape media — LTO has built-in ECC; mirror the burn-side
-        #     skip at ``burn/orchestrator.py:234-240``.
         if (
             self._ecc is not None
             and iso_path is not None
-            and (media_type is None or not media_type.is_tape)
             and not self.verify_iso(iso_path)
         ):
             raise RestoreError(
