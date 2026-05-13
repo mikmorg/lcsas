@@ -146,10 +146,10 @@ password_file = "/root/keys/personal.key"
 
 ```bash
 lcsas --config /etc/lcsas/config.toml \
-  repo add family /mnt/mirror/family --key-file /root/keys/family.key
+  repo add family /mnt/mirror/family
 
 lcsas --config /etc/lcsas/config.toml \
-  repo add personal /mnt/mirror/personal --key-file /root/keys/personal.key
+  repo add personal /mnt/mirror/personal
 
 # Verify
 lcsas --config /etc/lcsas/config.toml repo list
@@ -533,7 +533,7 @@ lcsas burn --session latest --location Offsite_Safe
 
 ## Testing
 
-Uses `TEST_TINY` (1 MB) and `TEST_SMALL` (10 MB) media types for fast pipeline tests without optical hardware. Integration tests auto-skip when external tools are not installed.
+Uses the `TEST_TINY` (1 MB) media type for fast pipeline tests without optical hardware. Integration tests auto-skip when external tools are not installed.
 
 ```bash
 make test-unit         # Pure Python, no external deps

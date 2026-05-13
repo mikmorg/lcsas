@@ -70,11 +70,16 @@ def clean_root() -> None:
 
 
 def generate_source() -> dict[str, str]:
-    """Create a handful of random files and return {relpath: sha256}."""
+    """Create a handful of random files and return {relpath: sha256}.
+
+    Sized for TEST_TINY media (1 MB) — each file is ~100 KB so several
+    packs are produced, exercising the multi-disc swap loop without any
+    individual pack exceeding the volume capacity.
+    """
     manifest: dict[str, str] = {}
     for i in range(40):
         name = f"file_{i:02d}.bin"
-        blob = os.urandom(1_000_000)  # 1 MB each → ~40 MB total
+        blob = os.urandom(100_000)  # 100 KB each → ~4 MB total
         (SRC_DIR / name).write_bytes(blob)
         manifest[name] = hashlib.sha256(blob).hexdigest()
     print(f"  generated {len(manifest)} files in {SRC_DIR}")
@@ -89,10 +94,10 @@ def init_rustic_and_backup() -> None:
            "RUSTIC_PASSWORD_FILE": str(PW_FILE)}
     sh(["rustic", "init"], env=env)
     sh(["rustic", "config",
-        "--set-datapack-size", "2MiB",
-        "--set-datapack-size-limit", "3MiB",
-        "--set-treepack-size", "1MiB",
-        "--set-treepack-size-limit", "2MiB"], env=env)
+        "--set-datapack-size", "200KiB",
+        "--set-datapack-size-limit", "300KiB",
+        "--set-treepack-size", "100KiB",
+        "--set-treepack-size-limit", "200KiB"], env=env)
     sh(["rustic", "backup", str(SRC_DIR)], env=env)
 
 
@@ -131,7 +136,7 @@ def run_lcsas_burn() -> list[Path]:
         mirror_base_path=MIRROR_DIR.parent,
         staging_path=STAGING_DIR,
         db_path=DB_PATH,
-        default_media_type=MediaType.TEST_SMALL,
+        default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         label_prefix="LCSAS",
         metadata_reserve_bytes=500_000,
@@ -162,7 +167,7 @@ def run_lcsas_burn() -> list[Path]:
         vol_n += 1
         print(f"  preparing volume {vol_n}...")
         try:
-            manifest = orchestrator.prepare(media_type=MediaType.TEST_SMALL)
+            manifest = orchestrator.prepare(media_type=MediaType.TEST_TINY)
         except ValueError as e:
             print(f"  prepare stopped: {e}")
             break

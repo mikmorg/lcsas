@@ -46,12 +46,13 @@ TEST_DATA_DIR = BASE / "test_data"
 DB_PATH = DB_DIR / "archive_master.db"
 PASSWORD_FILE = DB_DIR / "test_password.txt"
 
-# Use TEST_SMALL media type — 10 MB capacity, 10% ECC overhead
-MEDIA_TYPE = "TEST_SMALL"
+# Use TEST_TINY media type — 1 MB capacity, no ECC overhead
+MEDIA_TYPE = "TEST_TINY"
 
-# Number of test files per "dataset" directory
+# Number of test files per "dataset" directory.
+# Sizes are kept small so each rustic pack fits inside TEST_TINY (1 MB).
 NUM_FILES = 30
-FILE_SIZE_RANGE = (1024, 50_000)  # 1 KB to 50 KB
+FILE_SIZE_RANGE = (1024, 20_000)  # 1 KB to 20 KB
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -211,6 +212,21 @@ def init_rustic_repos() -> dict[str, Path]:
             fail(f"Failed to initialize {repo_name}")
             sys.exit(1)
 
+        # Constrain pack sizes so each pack fits within TEST_TINY's 1 MB
+        # capacity (rustic's 4 MiB default would exceed it).
+        result = run([
+            "rustic", "config",
+            "--repo", str(repo_path),
+            "--password-file", str(PASSWORD_FILE),
+            "--set-datapack-size", "256KiB",
+            "--set-datapack-size-limit", "512KiB",
+            "--set-treepack-size", "128KiB",
+            "--set-treepack-size-limit", "256KiB",
+        ])
+        if result.returncode != 0:
+            fail(f"Failed to configure pack sizes for {repo_name}")
+            sys.exit(1)
+
     return repos
 
 
@@ -334,10 +350,10 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
-    mt = MediaType.TEST_SMALL
+    mt = MediaType.TEST_TINY
     has_dvdisaster = tool_available("dvdisaster")
     # dvdisaster RS03 pads ISOs to minimum optical disc size (~350 MB+),
-    # making it impractical for TEST_SMALL (10 MB). Skip ECC for test media.
+    # making it impractical for TEST_TINY (1 MB). Skip ECC for test media.
     skip_ecc = mt.is_test or not has_dvdisaster
     if mt.is_test and has_dvdisaster:
         info("Skipping ECC for test media (dvdisaster minimum image exceeds test capacity)")
@@ -645,7 +661,7 @@ def create_redundant_copies(
     from lcsas.staging.builder import StagingBuilder
     from lcsas.utils.labels import generate_uuid
 
-    mt = MediaType.TEST_SMALL
+    mt = MediaType.TEST_TINY
     xorriso = SubprocessXorrisoRunner()
 
     # Get all existing verified volumes
@@ -734,7 +750,7 @@ def test_iso_restore(
     vol_mount_dirs: dict[str, Path] = {}
 
     for iso_path in iso_files:
-        vol_label = iso_path.stem  # e.g., "E2ETEST_TEST_SMALL_0001"
+        vol_label = iso_path.stem  # e.g., "E2ETEST_TEST_TINY_0001"
         extract_dir = extract_base / vol_label
         extract_dir.mkdir(exist_ok=True)
 
