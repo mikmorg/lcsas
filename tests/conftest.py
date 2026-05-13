@@ -19,6 +19,15 @@ from lcsas.utils.labels import generate_uuid
 # ---------------------------------------------------------------------------
 # Markers for conditional test skipping
 # ---------------------------------------------------------------------------
+#
+# Two equivalent ways to gate a test on an external tool:
+#
+#   1. Apply the skipif object directly:    @requires_rustic
+#   2. Use the marker name:                 @pytest.mark.requires_rustic
+#
+# Form (2) is wired into skip behaviour via ``pytest_collection_modifyitems``
+# below, and is the preferred form for new tests because the marker also
+# shows up in ``pytest --markers`` and pytest's ``-m`` filtering.
 
 requires_rustic = pytest.mark.skipif(
     not shutil.which("rustic"),
@@ -34,6 +43,25 @@ requires_dvdisaster = pytest.mark.skipif(
     not shutil.which("dvdisaster"),
     reason="dvdisaster not installed",
 )
+
+# Map of marker name → (binary name, skip reason). Tests carrying any of
+# these markers via ``@pytest.mark.<name>`` are skipped when the binary
+# is absent from PATH.
+_REQUIRED_BINARIES = {
+    "requires_rustic": ("rustic", "rustic not installed"),
+    "requires_xorriso": ("xorriso", "xorriso not installed"),
+    "requires_dvdisaster": ("dvdisaster", "dvdisaster not installed"),
+    "requires_cdemu": ("cdemu", "cdemu not installed"),
+}
+
+
+def pytest_collection_modifyitems(config, items):  # type: ignore[no-untyped-def]
+    """Auto-skip tests whose ``requires_*`` marker's binary is absent."""
+    for item in items:
+        for marker_name, (binary, reason) in _REQUIRED_BINARIES.items():
+            if marker_name in item.keywords and not shutil.which(binary):
+                item.add_marker(pytest.mark.skip(reason=reason))
+                break
 
 
 # ---------------------------------------------------------------------------

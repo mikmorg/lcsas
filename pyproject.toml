@@ -33,6 +33,10 @@ where = ["src"]
 testpaths = ["tests"]
 markers = [
     "integration: marks tests requiring external tools (deselect with '-m \"not integration\"')",
+    "requires_rustic: test needs the rustic binary on PATH",
+    "requires_xorriso: test needs the xorriso binary on PATH",
+    "requires_dvdisaster: test needs the dvdisaster binary on PATH",
+    "requires_cdemu: test needs the cdemu binary on PATH (and usually root)",
 ]
 addopts = "-v --tb=short --basetemp=/var/tmp/pytest-lcsas"
 tmp_path_retention_policy = "none"
