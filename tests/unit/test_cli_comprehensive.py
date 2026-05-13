@@ -589,6 +589,124 @@ class TestCmdCatalogImport:
         assert any(c.location == "Offsite" for c in copies)
         conn.close()
 
+    def test_import_persists_receipt_provenance(self, tmp_path):
+        """Issue #18: imported receipts must persist iso_sha256, session_id,
+        device, and pack_ids — currently silently dropped.
+        """
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_PROV", "uuid-prov", "TEST_TINY", 1000,
+                      "Home", "STAGING")
+        conn.close()
+
+        iso_hash = "a" * 64
+        session_id = "sess-2026-04-14"
+        device = "/dev/sr2"
+        pack_ids = [11, 22, 33]
+
+        receipt = tmp_path / "prov.json"
+        receipt.write_text(json.dumps({
+            "volume_label": "VOL_PROV",
+            "location": "Vault_A",
+            "session_id": session_id,
+            "device": device,
+            "burn_date": "2026-04-14T13:00:00+00:00",
+            "iso_sha256": iso_hash,
+            "verify_passed": True,
+            "pack_ids": pack_ids,
+        }))
+
+        result = main(["--config", str(cfg), "catalog", "import-receipts",
+                       str(receipt)])
+        assert result == 0
+
+        conn = get_connection(db)
+        from lcsas.db.volume_events import get_events_for_volume
+        from lcsas.db.volumes import get_volume_by_label
+
+        vol = get_volume_by_label(conn, "VOL_PROV")
+        events = get_events_for_volume(
+            conn, vol.volume_id, "BURN_RECEIPT_IMPORTED"
+        )
+        assert len(events) == 1, (
+            "expected exactly one BURN_RECEIPT_IMPORTED event row "
+            "carrying the receipt provenance"
+        )
+        ev = events[0]
+        # All four provenance fields must be recoverable from the event detail
+        detail = json.loads(ev.detail)
+        assert detail["iso_sha256"] == iso_hash
+        assert detail["session_id"] == session_id
+        assert detail["device"] == device
+        assert detail["pack_ids"] == pack_ids
+        conn.close()
+
+    def test_import_rejects_hash_mismatch(self, tmp_path):
+        """Issue #18: if a prior receipt persisted an iso_sha256 for a volume,
+        a second receipt with a different iso_sha256 for the same volume must
+        be rejected and must not write a spurious event row.
+        """
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_HASH", "uuid-hash", "TEST_TINY", 1000,
+                      "Home", "STAGING")
+        conn.close()
+
+        good_hash = "b" * 64
+        bad_hash = "c" * 64
+
+        r1 = tmp_path / "r1.json"
+        r1.write_text(json.dumps({
+            "volume_label": "VOL_HASH",
+            "location": "Vault_A",
+            "session_id": "s1",
+            "device": "/dev/sr0",
+            "burn_date": "2026-04-14T14:00:00+00:00",
+            "iso_sha256": good_hash,
+            "verify_passed": True,
+            "pack_ids": [],
+        }))
+        rc1 = main(["--config", str(cfg), "catalog", "import-receipts",
+                    str(r1)])
+        assert rc1 == 0
+
+        # Second receipt: same volume, *different* iso_sha256 — must reject.
+        r2 = tmp_path / "r2.json"
+        r2.write_text(json.dumps({
+            "volume_label": "VOL_HASH",
+            "location": "Vault_B",
+            "session_id": "s1",
+            "device": "/dev/sr1",
+            "burn_date": "2026-04-14T15:00:00+00:00",
+            "iso_sha256": bad_hash,
+            "verify_passed": True,
+            "pack_ids": [],
+        }))
+        rc2 = main(["--config", str(cfg), "catalog", "import-receipts",
+                    str(r2)])
+        assert rc2 != 0, "hash-mismatch receipt must cause non-zero exit"
+
+        # And no second BURN_RECEIPT_IMPORTED event should have been written
+        # for the rejected receipt.
+        conn = get_connection(db)
+        from lcsas.db.volume_events import get_events_for_volume
+        from lcsas.db.volumes import get_volume_by_label
+        vol = get_volume_by_label(conn, "VOL_HASH")
+        events = get_events_for_volume(
+            conn, vol.volume_id, "BURN_RECEIPT_IMPORTED"
+        )
+        assert len(events) == 1, (
+            "rejected receipt must not have written a second event row"
+        )
+        # The surviving event must reflect the ORIGINAL good hash.
+        detail = json.loads(events[0].detail)
+        assert detail["iso_sha256"] == good_hash
+        conn.close()
+
 
 # ===================================================================
 # cmd_verify (mock-based)

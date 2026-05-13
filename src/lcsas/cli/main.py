@@ -1310,7 +1310,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     from lcsas.db.locations import ensure_location
     from lcsas.db.schema import create_all
     from lcsas.db.volume_copies import add_volume_copy
-    from lcsas.db.volume_events import add_event
+    from lcsas.db.volume_events import add_event, get_events_for_volume
     from lcsas.db.volumes import get_volume_by_label, mark_closed, update_status
 
     config = load_config(args.config) if args.config else None
@@ -1318,6 +1318,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
         logger.error("--config is required for catalog.")
         return 1
 
+    rejected = 0
     with locked_connection(args.db or config.db_path) as conn:
         create_all(conn)
 
@@ -1340,6 +1341,38 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             vol = get_volume_by_label(conn, receipt["volume_label"])
             if vol is None:
                 logger.warning(f"Volume '{receipt['volume_label']}' not found, skipping.")
+                continue
+
+            # Issue #18: receipt-vs-prior-receipt hash check. If a previous
+            # BURN_RECEIPT_IMPORTED event for this volume recorded an
+            # iso_sha256, the new receipt's iso_sha256 must match. Mismatch
+            # means the receipt is for a different physical ISO (swapped /
+            # tampered / re-mastered) — reject without writing anything.
+            receipt_hash = receipt.get("iso_sha256") or ""
+            hash_mismatch = False
+            if receipt_hash:
+                prior_events = get_events_for_volume(
+                    conn, vol.volume_id, "BURN_RECEIPT_IMPORTED"
+                )
+                for prior in prior_events:
+                    try:
+                        prior_detail = (
+                            json.loads(prior.detail) if prior.detail else {}
+                        )
+                    except json.JSONDecodeError:
+                        continue
+                    prior_hash = prior_detail.get("iso_sha256") or ""
+                    if prior_hash and prior_hash != receipt_hash:
+                        logger.error(
+                            f"Receipt '{receipt_file}' iso_sha256 "
+                            f"{receipt_hash} does not match previously "
+                            f"recorded hash {prior_hash} for volume "
+                            f"'{receipt['volume_label']}'; rejecting."
+                        )
+                        hash_mismatch = True
+                        break
+            if hash_mismatch:
+                rejected += 1
                 continue
 
             ensure_location(conn, receipt["location"])
@@ -1372,12 +1405,40 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                 volume_id=vol.volume_id,
                 location=receipt["location"],
                 burn_date=receipt.get("burn_date", ""),
+                iso_sha256=receipt_hash or None,
+                commit=False,
+            )
+
+            # Issue #18: persist receipt provenance (iso_sha256, session_id,
+            # device, pack_ids) on the canonical catalog as a
+            # BURN_RECEIPT_IMPORTED audit event. Captures all four fields
+            # from the receipt JSON so later "which device burned this?"
+            # and "does the disc hash match the recorded one?" queries can
+            # be answered from the catalog alone.
+            provenance = {
+                "iso_sha256": receipt_hash,
+                "session_id": receipt.get("session_id") or "",
+                "device": receipt.get("device") or "",
+                # pack_ids is emitted by the session-based burn path but NOT
+                # by standalone `burn-iso` (documented limitation — see
+                # docs/workflows/burn-iso-portable.md). Persist verbatim so
+                # whichever path produced the receipt is preserved.
+                "pack_ids": list(receipt.get("pack_ids") or []),
+                "receipt_file": Path(receipt_file).name,
+            }
+            add_event(
+                conn, vol.volume_id, "BURN_RECEIPT_IMPORTED",
+                location=receipt["location"],
+                detail=json.dumps(provenance),
                 commit=False,
             )
             conn.commit()
             imported += 1
 
     logger.info(f"Imported {imported} receipt(s).")
+    if rejected:
+        logger.error(f"Rejected {rejected} receipt(s) due to iso_sha256 mismatch.")
+        return 1
     return 0
 
 
