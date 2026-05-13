@@ -116,8 +116,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Media type (BD25, MDISC100, TEST_TINY, etc.).")
     burn_p.add_argument("--repo", type=str, default=None, nargs="*",
                         help="Specific repository IDs to burn.")
-    burn_p.add_argument("--session", type=str, default=None,
-                        help="Burn a previously staged session (ID or 'latest').")
+    burn_p.add_argument("--session", type=str, required=True,
+                        help="Burn a previously staged session (ID or 'latest'). "
+                             "Required; use `lcsas stage` first to create a session.")
     burn_p.add_argument("--location", type=str, default=None,
                         help="Physical location tag for this copy. Must "
                              "already be registered (use `lcsas location "
@@ -1046,88 +1047,6 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
 
         receipts = orch.burn_session(
             session_ref=args.session,
-            location=location,
-            device=device,
-        )
-
-    logger.info(f"Burned {len(receipts)} volume(s) to {location}:")
-    for r in receipts:
-        logger.info(f"  {r.volume_label} → {r.pack_count} packs")
-    return 0
-
-
-def cmd_burn_legacy(args: argparse.Namespace) -> int:
-    """Legacy burn: stage + burn in a single command."""
-    from lcsas.burn.orchestrator import BurnOrchestrator
-    from lcsas.config.media import MediaType
-    from lcsas.config.settings import load_config
-    from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import create_all
-    from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
-    from lcsas.iso.xorriso import SubprocessXorrisoRunner
-
-    if args.config is None:
-        logger.error("--config is required for burn.")
-        return 1
-    config = load_config(args.config)
-    if not _validate_config_or_exit(config):
-        return 1
-    with locked_connection(config.db_path if args.db is None else args.db) as conn:
-        create_all(conn)
-
-        media_type = None
-        if args.media:
-            try:
-                media_type = MediaType[args.media]
-            except KeyError:
-                valid = ", ".join(m.name for m in MediaType)
-                logger.error(f"Unknown media type '{args.media}'. "
-                             f"Valid types: {valid}")
-                return 1
-
-        orch = BurnOrchestrator(
-            config, conn,
-            SubprocessXorrisoRunner(tmpdir=config.staging_path),
-            SubprocessDVDisasterRunner(tmpdir=config.staging_path),
-        )
-
-        # Resolve repo names→ids
-        try:
-            repo_ids = _resolve_repo_names_to_ids(conn, args.repo)
-        except ValueError as e:
-            logger.error(str(e))
-            return 1
-
-        # Issue #19: validate --location before any staging work so a
-        # typo aborts cleanly without leaving a half-staged session.
-        location = args.location or config.default_location
-        from lcsas.db.locations import UnknownLocationError, resolve_location
-        try:
-            resolve_location(
-                conn, location,
-                create=getattr(args, "create_location", False),
-            )
-        except UnknownLocationError as exc:
-            logger.error(str(exc))
-            return 1
-
-        # Stage first
-        result = orch.stage(
-            media_type=media_type,
-            for_location=args.location,
-            repo_ids=repo_ids,
-            dry_run=getattr(args, "dry_run", False),
-        )
-        logger.info(f"Session: {result.session_id}")
-        logger.info(f"Staged {len(result.manifests)} volume(s)")
-
-        if getattr(args, "dry_run", False):
-            return 0
-
-        # Then burn
-        device = args.device or config.optical_device
-        receipts = orch.burn_session(
-            session_ref=result.session_id,
             location=location,
             device=device,
         )
@@ -2853,10 +2772,7 @@ def dispatch(args: argparse.Namespace) -> int:
     elif args.command == "stage":
         return cmd_stage(args)
     elif args.command == "burn":
-        if args.session:
-            return cmd_burn_session(args)
-        # Legacy burn: stage + burn in one shot
-        return cmd_burn_legacy(args)
+        return cmd_burn_session(args)
     elif args.command == "burn-iso":
         return cmd_burn_iso(args)
     elif args.command == "staging":

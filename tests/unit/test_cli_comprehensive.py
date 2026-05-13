@@ -1057,7 +1057,6 @@ class TestDispatchRouting:
             ["staging", "clean"],
             ["stage"],
             ["burn", "--session", "latest"],
-            ["burn"],
             ["burn-iso", "/tmp/t.iso"],
             ["location", "list"],
             ["location", "add", "Home"],
@@ -1082,7 +1081,7 @@ class TestDispatchRouting:
 
     def test_dry_run_short_flag_on_burn(self):
         parser = build_parser()
-        args = parser.parse_args(["burn", "-n"])
+        args = parser.parse_args(["burn", "--session", "latest", "-n"])
         assert args.dry_run is True
 
     def test_skip_verify_flag(self):

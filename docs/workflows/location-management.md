@@ -261,16 +261,12 @@ by staging and burning *only* the packs that location is missing.
 
 **Steps:**
 
-1. **Two equivalent entry points exist:**
-   - `lcsas stage --for-location <name>` — explicit flag
-     (`src/lcsas/cli/main.py:134`). `cmd_stage` passes
-     `for_location=args.for_location` into `BurnOrchestrator.stage()`
-     (`src/lcsas/cli/main.py:931`).
-   - `lcsas burn --location <name>` (legacy single-shot) — when
-     `--location` is supplied, `cmd_burn_legacy` re-uses it as the
-     staging filter via `for_location=args.location`
-     (`src/lcsas/cli/main.py:1060`). The same `--location` then tags
-     the burned copies (`src/lcsas/cli/main.py:1072`).
+1. **Entry point:** `lcsas stage --for-location <name>` — explicit flag
+   (`src/lcsas/cli/main.py:134`). `cmd_stage` passes
+   `for_location=args.for_location` into `BurnOrchestrator.stage()`
+   (`src/lcsas/cli/main.py:931`). Burn the resulting session with
+   `lcsas burn --session <id> --location <name>` to tag the burned copies
+   for that location.
 
 2. `BurnOrchestrator.stage()` receives `for_location` and routes pack
    selection through `_gather_packs_for_staging`
@@ -339,13 +335,12 @@ existing copies at the target.
     spread across locations.
   - `tests/unit/test_location_queries.py` — exhaustive coverage of
     `get_unarchived_or_missing_at_location`.
-- Gap: no integration test covers an end-to-end `burn --location` (legacy
-  combined path) where `--location` is simultaneously the staging filter
-  and the copy tag.
+- Gap: no integration test covers an end-to-end
+  `stage --for-location` → `burn --session --location` pair where the
+  staging filter and copy tag share a name.
 
 **Source refs:**
-- `src/lcsas/cli/main.py:134`, `src/lcsas/cli/main.py:931`,
-  `src/lcsas/cli/main.py:1060`
+- `src/lcsas/cli/main.py:134`, `src/lcsas/cli/main.py:931`
 - `src/lcsas/burn/orchestrator.py:503` (`stage`),
   `src/lcsas/burn/orchestrator.py:656` (`burn_session`),
   `src/lcsas/burn/orchestrator.py:838` (`_gather_packs_for_staging`)

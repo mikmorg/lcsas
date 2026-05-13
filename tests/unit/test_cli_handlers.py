@@ -76,10 +76,21 @@ class TestCmdStatus:
 
 
 class TestCmdDispatchEdges:
-    def test_unimplemented_command(self, capsys):
-        """Unimplemented commands return 1."""
-        result = main(["burn"])
-        assert result == 1
+    def test_burn_requires_session(self, capsys):
+        """`lcsas burn` without `--session` fails fast via argparse.
+
+        Regression test for #60: the legacy stage+burn handler was
+        removed, so `--session` is now required and argparse should
+        reject the bare `burn` invocation with a non-zero exit code and
+        a message referencing `--session`.
+        """
+        import pytest
+
+        with pytest.raises(SystemExit) as excinfo:
+            main(["burn"])
+        assert excinfo.value.code != 0
+        err = capsys.readouterr().err
+        assert "--session" in err
 
     def test_verify_not_implemented(self, capsys):
         result = main(["verify", "SOME_LABEL"])
