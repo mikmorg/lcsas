@@ -1881,8 +1881,9 @@ class MetaVolumeBuilder:
             └── VERSION
 
         Missing per-arch binaries are silently skipped; the recovery
-        cascade rebuilds from source when the prebuilt binary is absent.
-        See ``recovery/scripts/restore.sh``.
+        cascade falls through to the vendored ``rustic-static`` (tier 2)
+        and ultimately the pure-Python fallback (tier 3) when the
+        prebuilt binary is absent.  See ``recovery/scripts/restore.sh``.
         """
         src = self._recovery_dir
         if not src.is_dir():
@@ -1971,7 +1972,7 @@ class MetaVolumeBuilder:
         * If the C89 recovery toolchain bundle is available (the new
           POSIX-sh driver in ``recovery/scripts/restore.sh``), copy
           *that* in as ``/restore.sh``.  This is Python-free for tiers
-          1-4 and only touches Python at tier 5 (LCSAS_ALLOW_PYTHON_TIER).
+          1-2 and only touches Python at tier 3 (LCSAS_ALLOW_PYTHON_TIER).
         * Otherwise, fall back to the legacy bash heredoc
           (``RESTORE_SCRIPT``), which carries a hard Python dependency
           from earlier days and is kept only for compatibility with

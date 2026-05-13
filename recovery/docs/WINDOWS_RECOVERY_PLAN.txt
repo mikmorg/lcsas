@@ -219,10 +219,7 @@ The .bat must replicate the cascade (tiers 1, 2, 3-skip, 4-skip,
     set BIN=%RECOVERY%\bin\%ARCH%\rustic-static.exe
     if exist "%BIN%" goto :do_rustic
 
-    REM Tier 3 (rebuild) and tier 4 (cargo) are not supported on
-    REM Windows without an installed toolchain; skip silently.
-
-    REM Tier 5: Python fallback (only if py + standalone_restorer.py).
+    REM Tier 3: Python fallback (only if py + standalone_restorer.py).
     where py >nul 2>nul && (
         if exist "%RECOVERY%\..\standalone_restorer.py" (
             set BIN=py

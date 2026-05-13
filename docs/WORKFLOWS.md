@@ -33,7 +33,7 @@ multi-tenant, recovery-toolchain) are called out as such in their detail files.
 | restore-host-linux | [workflows/restore-host-linux.md](workflows/restore-host-linux.md) | Restore from a running Linux host with `lcsas restore`. |
 | restore-bare-metal | [workflows/restore-bare-metal.md](workflows/restore-bare-metal.md) | initramfs + live-USB recovery from cold start. |
 | restore-windows | [workflows/restore-windows.md](workflows/restore-windows.md) | `restore.bat` end-to-end from a Windows host. |
-| restore-disc-only | [workflows/restore-disc-only.md](workflows/restore-disc-only.md) | Tier-5 pure-Python single-disc restore. |
+| restore-disc-only | [workflows/restore-disc-only.md](workflows/restore-disc-only.md) | Tier-3 pure-Python single-disc restore. |
 | recovery-toolchain | [workflows/recovery-toolchain.md](workflows/recovery-toolchain.md) | `recovery build/test/manifest/verify`, cross-arch. |
 | meta-volume | [workflows/meta-volume.md](workflows/meta-volume.md) | Bootable disaster-recovery disc with bundled binaries + source. |
 | consolidate-and-catalog-ops | [workflows/consolidate-and-catalog-ops.md](workflows/consolidate-and-catalog-ops.md) | `consolidate` plus `catalog validate/rebuild`. |
@@ -63,9 +63,8 @@ the code path or required setup.
 - **Live distro** — yes (recovery booted from USB / meta-volume) vs. no
   (workflow runs under the host OS).
 - **Recovery tier** — `1` prebuilt static `lcsas-restore`, `2` vendored
-  `rustic-static`, `3` rebuild `lcsas-restore` from C source, `4` rebuild
-  `rustic` from vendored Rust source, `5` pure-Python `standalone_restorer.py`.
-  Full definitions in `recovery/docs/TIERS.txt`; tiers 1–4 are the
+  `rustic-static`, `3` pure-Python `standalone_restorer.py`.
+  Full definitions in `recovery/docs/TIERS.txt`; tiers 1–2 are the
   bare-minimum path and must remain Python-free.
 
 ## Status legend

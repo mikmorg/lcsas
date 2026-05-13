@@ -4,7 +4,7 @@ This document covers the *house-on-fire* recovery path: the inheritor (or the or
 
 This is the worst credible failure mode the toolchain is designed to survive. Every step has been audited so that an inheritor in 2045 with a stack of BD-R discs, a USB Blu-ray drive, and any x86_64 PC can recover the data without acquiring or trusting any third-party software. Sibling docs cover gentler scenarios: `docs/workflows/restore-host-linux.md` (working Linux host), `docs/workflows/restore-windows.md` (working Windows host), `docs/workflows/restore-disc-only.md` (single-disc spot recovery), `docs/workflows/recovery-toolchain.md` (binary cascade architecture), and `docs/workflows/meta-volume.md` (how the meta-disc is built).
 
-The bare-metal path uses tiers 1–4 of the C/Rust cascade defined in `recovery/scripts/restore.sh:8`–`recovery/scripts/restore.sh:16`. Tier 5 (Python) is reachable from a booted live env if every C and Rust option failed, but the canonical bare-metal recovery never executes a Python interpreter.
+The bare-metal path uses tiers 1–2 of the C/Rust cascade defined in `recovery/scripts/restore.sh:8`–`recovery/scripts/restore.sh:12`. Tier 3 (Python) is reachable from a booted live env if every C and Rust option failed, but the canonical bare-metal recovery never executes a Python interpreter.
 
 ## Table of contents
 
@@ -39,7 +39,7 @@ The bare-metal path uses tiers 1–4 of the C/Rust cascade defined in `recovery/
    - Probes `/dev/sr0`–`/dev/sr3`, `/dev/cdrom`, `/dev/dvd` for an ISO 9660 (and then UDF) filesystem and mounts the first hit read-only at `/mnt` (`recovery/src/lcsas-init/init.c:55`–`recovery/src/lcsas-init/init.c:78`).
    - On failure, drops to a BusyBox shell so a savvy user can mount the disc manually (`recovery/src/lcsas-init/init.c:115`–`recovery/src/lcsas-init/init.c:121`).
 5. If `/mnt/recovery/scripts/restore.sh` exists, `lcsas-init` sets `LCSAS_META_DISC=/mnt` (the *exclusion path* hint for single-drive relocation), `chdir("/")` to avoid pinning the disc through the `exec` barrier, and then `execl`s BusyBox sh on `restore.sh` with `/mnt/recovery` as RECOVERY_ROOT and `/tmp/restored` as TARGET (`recovery/src/lcsas-init/init.c:124`–`recovery/src/lcsas-init/init.c:143`).
-6. `restore.sh` performs its own single-drive relocation check (see the dedicated section below) and then runs through tiers 1–4, exec'ing the chosen recovery binary against `RECOVERY/repo` (`recovery/scripts/restore.sh:360`–`recovery/scripts/restore.sh:415`).
+6. `restore.sh` performs its own single-drive relocation check (see the dedicated section below) and then runs through tiers 1–2, exec'ing the chosen recovery binary against `RECOVERY/repo` (`recovery/scripts/restore.sh:360`–`recovery/scripts/restore.sh:380`).
 
 **Expected outcome:**
 - The live Linux kernel + initramfs are running entirely in RAM; the meta-disc is mounted RO at `/mnt`.
@@ -51,11 +51,11 @@ The bare-metal path uses tiers 1–4 of the C/Rust cascade defined in `recovery/
 - Media type: meta-disc is typically BD25 or MDISC100; the boot stack also works on DVD / smaller test media. Booted-from data discs (data-only volumes are *not* bootable) cannot enter this path.
 - OS: always *Linux bare-metal initramfs* (kernel 6.6 LTS per `recovery/docs/BOOT.txt:25`). FreeBSD entry exists but uses the same `lcsas-init` -> `restore.sh` handoff (`recovery/docs/BOOT.txt:35`).
 - Optical drive count: single-drive is the dominant case for modern laptops; multi-drive is desktop / dedicated recovery workstation territory. The single-drive sub-workflow has materially different UX.
-- Recovery tier: tier 1 (prebuilt `lcsas-restore`) on the common path; falls back to tier 3 (rebuild from `recovery/src/lcsas-restore/` source) if the prebuilt binary is missing or arch-mismatched. Tiers 2 and 4 (rustic) are cross-checks.
+- Recovery tier: tier 1 (prebuilt `lcsas-restore`) on the common path; tier 2 (`rustic-static`) is the cross-check. Tier 3 (pure-Python) sits below as the last resort.
 
 **Test coverage:**
 - Existing:
-  - `recovery/tests/test_bare_path.sh` — statically proves tiers 1–4 contain zero Python references, then runs the cascade under a PATH that shims out `python*` and `LCSAS_ALLOW_PYTHON_TIER=0` to prove the bare path is binary-only (`recovery/tests/test_bare_path.sh:22`–`recovery/tests/test_bare_path.sh:155`).
+  - `recovery/tests/test_bare_path.sh` — statically proves tiers 1–2 contain zero Python references, then runs the cascade under a PATH that shims out `python*` and `LCSAS_ALLOW_PYTHON_TIER=0` to prove the bare path is binary-only (`recovery/tests/test_bare_path.sh:22`–`recovery/tests/test_bare_path.sh:155`).
   - `recovery/tests/test_e2e.py::main` — builds a synthetic restic v1 repo with the Python crypto helpers and verifies `lcsas-restore` recovers it byte-for-byte (`recovery/tests/test_e2e.py:277`).
 - Gaps:
   - No automated test boots the actual `vmlinuz` + `initramfs.cpio.gz` under QEMU; `lcsas-init`'s mount logic is exercised only indirectly. The `try_discs` loop and the `LCSAS_META_DISC=/mnt` setenv handoff (`recovery/src/lcsas-init/init.c:55`, `recovery/src/lcsas-init/init.c:128`) are not unit-tested.
@@ -150,7 +150,7 @@ The bare-metal path uses tiers 1–4 of the C/Rust cascade defined in `recovery/
 - Media type: any optical media (BD25, MDISC100, DVD, test sizes).
 - OS: *Linux bare-metal initramfs* (or *Linux live USB*).
 - Optical drive count: ≥ 2 — that's what makes this the simple path.
-- Recovery tier: tier 1 (uses the in-binary `disc_locator` module).
+- Recovery tier: tier 1 (uses the in-binary `disc_locator` module). Tier 2 (`rustic-static`) takes over if Tier 1 fails; tier 3 (pure-Python) sits below as the last resort.
 
 **Test coverage:**
 - Existing:
@@ -215,7 +215,7 @@ This sub-workflow is materially different from the multi-drive case and is the *
 - Media type: meta-disc is BD25 or MDISC100; data discs same class.
 - OS: *Linux bare-metal initramfs* (typical) or *Linux live USB* (where the USB *replaces* the meta-disc role and no relocation is needed — the USB is already random-access).
 - Optical drive count: **1**. This is the defining axis.
-- Recovery tier: tier 1; tiers 3+ also benefit since the entire `bin/` tree is in RAM after relocation.
+- Recovery tier: tier 1; tier 2 also benefits since the entire `bin/` tree is in RAM after relocation.
 
 **Test coverage:**
 - Existing:
@@ -239,11 +239,11 @@ This sub-workflow is materially different from the multi-drive case and is the *
 
 ## The `restore.sh` orchestrator inside the live env
 
-**Purpose:** Drive the C-based recovery cascade. `restore.sh` is the only POSIX-shell glue on the bare-minimum path — it relocates to RAM if needed, discovers other mounted volumes, selects a catalog, builds the password-file, picks the architecture, and exec's the highest-priority recovery binary available. Tiers 1–4 are all binary; tier 5 (Python) is reachable only if explicitly allowed.
+**Purpose:** Drive the C-based recovery cascade. `restore.sh` is the only POSIX-shell glue on the bare-minimum path — it relocates to RAM if needed, discovers other mounted volumes, selects a catalog, builds the password-file, picks the architecture, and exec's the highest-priority recovery binary available. Tiers 1–2 are both static binaries; tier 3 (Python) is reachable only if explicitly allowed.
 
 **Prerequisites:**
 - A POSIX `sh` (BusyBox ash in the initramfs; any host-OS sh otherwise).
-- `RECOVERY_ROOT` containing `repo/keys/`, `repo/index/`, and `bin/<arch>/lcsas-restore` (or fallback ingredients for tier 3/4).
+- `RECOVERY_ROOT` containing `repo/keys/`, `repo/index/`, and `bin/<arch>/lcsas-restore` (or `bin/<arch>/rustic-static` for the tier 2 cross-check).
 - Password supplied via stdin prompt, `$LCSAS_PASSWORD`, or `$LCSAS_PWFILE` (`recovery/scripts/restore.sh:27`–`recovery/scripts/restore.sh:28`).
 
 **Steps:**
@@ -256,10 +256,8 @@ This sub-workflow is materially different from the multi-drive case and is the *
 7. Discover additional mounted discs and build `$PACK_SEARCH_ARGS` (`recovery/scripts/restore.sh:266`–`recovery/scripts/restore.sh:304`).
 8. Pick the freshest available `catalog.db` and build `$CATALOG_ARG` (`recovery/scripts/restore.sh:320`–`recovery/scripts/restore.sh:358`).
 9. Tier 1: if `$RECOVERY/bin/$ARCH/lcsas-restore` is executable, `chdir /` if META_DISC is set, then `exec` it with `--repo`, `--password-file`, `--target`, `--snapshot`, plus the pack-search / catalog / meta-disc args (`recovery/scripts/restore.sh:362`–`recovery/scripts/restore.sh:371`).
-10. Tier 2: vendored `rustic-static` cross-check (`recovery/scripts/restore.sh:375`–`recovery/scripts/restore.sh:380`).
-11. Tier 3: rebuild `lcsas-restore` from C source with whatever compiler is on PATH (`cc`, `gcc`, `clang`, `tcc`, `pcc` — `recovery/scripts/restore.sh:384`–`recovery/scripts/restore.sh:401`).
-12. Tier 4: rebuild `rustic` from vendored Rust source via `cargo build --release --offline` (`recovery/scripts/restore.sh:407`–`recovery/scripts/restore.sh:415`). The bare-minimum path stops here.
-13. Tier 5: Python fallback at `recovery/scripts/restore.sh:424`–`recovery/scripts/restore.sh:440`, gated by `LCSAS_ALLOW_PYTHON_TIER` (default 1).
+10. Tier 2: vendored `rustic-static` cross-check (`recovery/scripts/restore.sh:373`–`recovery/scripts/restore.sh:380`). The bare-minimum path stops here.
+11. Tier 3: Python fallback at `recovery/scripts/restore.sh:386`–`recovery/scripts/restore.sh:402`, gated by `LCSAS_ALLOW_PYTHON_TIER` (default 1).
 14. If every tier failed, print a help message naming each missing ingredient and exit 1 (`recovery/scripts/restore.sh:442`–`recovery/scripts/restore.sh:455`).
 
 **Expected outcome:**
@@ -271,15 +269,15 @@ This sub-workflow is materially different from the multi-drive case and is the *
 - Media type: any.
 - OS: *Linux bare-metal initramfs* / *Linux live USB* (this section); the same script runs on a working Linux host via `docs/workflows/restore-host-linux.md` and on macOS unchanged.
 - Optical drive count: relevant only via the relocation block at the top.
-- Recovery tier: this is the dispatcher; tiers 1–5 are all defined here.
+- Recovery tier: this is the dispatcher; tiers 1–3 are all defined here.
 
 **Test coverage:**
 - Existing:
-  - `recovery/tests/test_bare_path.sh` — proves tiers 1–4 are Python-free both statically (line slice + grep) and dynamically (PATH-shimmed run) (`recovery/tests/test_bare_path.sh:22`–`recovery/tests/test_bare_path.sh:155`).
+  - `recovery/tests/test_bare_path.sh` — proves tiers 1–2 are Python-free both statically (line slice + grep) and dynamically (PATH-shimmed run) (`recovery/tests/test_bare_path.sh:22`–`recovery/tests/test_bare_path.sh:155`).
   - `recovery/tests/test_e2e.py::main` — full tier-1 cascade against a synthetic repo (`recovery/tests/test_e2e.py:277`).
   - `recovery/tests/test_multidisc.py` — covers pack-search auto-discovery, catalog freshest-pick, and single-drive relocation.
 - Gaps:
-  - No test exercises tier 3 (rebuild from source) actually firing — the lookup happens but the `make` invocation is hard to drive deterministically in CI; tier 4 is even worse (requires `cargo`).
+  - No test exercises tier 3 (pure-Python fallback) end-to-end through `restore.sh` — the bare-path test forces it off (`LCSAS_ALLOW_PYTHON_TIER=0`) and `tests/integration/test_pure_python_restore.py` exercises the restorer directly.
   - The arch-detection branch at `recovery/scripts/restore.sh:207`–`recovery/scripts/restore.sh:219` has no negative test for unsupported architectures.
   - The `$LCSAS_PASSWORD` env path at `recovery/scripts/restore.sh:229` is rarely exercised; `LCSAS_PWFILE` is the dominant test path.
   - The freshest-catalog selector breaks if a disc has a clock-skewed mtime; no test pins this corner.
@@ -289,7 +287,7 @@ This sub-workflow is materially different from the multi-drive case and is the *
 - Relocation: `recovery/scripts/restore.sh:70`–`recovery/scripts/restore.sh:160`
 - Arg parsing: `recovery/scripts/restore.sh:167`–`recovery/scripts/restore.sh:203`
 - Password handling: `recovery/scripts/restore.sh:223`–`recovery/scripts/restore.sh:240`
-- Tier dispatch: `recovery/scripts/restore.sh:360`–`recovery/scripts/restore.sh:440`
+- Tier dispatch: `recovery/scripts/restore.sh:360`–`recovery/scripts/restore.sh:402`
 
 ---
 
@@ -338,11 +336,10 @@ Observations from reading the source while assembling this matrix; they are obse
 
 - **`lcsas-init` only probes `/dev/sr*` and `/dev/cdrom`/`/dev/dvd`.** USB sticks, NVMe drives, and HDDs are invisible to `try_discs` (`recovery/src/lcsas-init/init.c:55`–`recovery/src/lcsas-init/init.c:78`). The recovery-USB workflow therefore always drops to the BusyBox shell and the user must mount manually. A `/sys/block` walk would close this gap.
 - **The BusyBox shell fallback in `lcsas-init` is the only "manual recovery" route from the initramfs.** Once dropped to that shell there is no on-disc tutorial mounted yet — the inheritor has to know that `mount -o ro /dev/sda1 /mnt && sh /mnt/recovery/scripts/restore.sh /mnt/recovery /tmp/restored latest` is the correct incantation.
-- **`restore.sh`'s relocation copies the `bin/` tree but not `src/` or the Makefile.** If tier 1 fails and tier 3 is needed *after* the meta-disc has been ejected, the rebuild step (`recovery/scripts/restore.sh:384`) will fail because `$RECOVERY/src` (now resolved against the in-RAM copy) is empty. Either copy `src/` + `Makefile` in `relocate_to_ram` or fail loudly when tier 3 is reached post-relocation.
+- **`restore.sh`'s relocation copies the `bin/` tree but not the holographic `standalone_restorer.py`.** If tier 1 and tier 2 both fail and tier 3 is needed *after* the meta-disc has been ejected, the Python fallback lookup (`recovery/scripts/restore.sh:386`) will fail because the search paths resolve against the in-RAM copy. Either copy `standalone_restorer.py` in `relocate_to_ram` or fail loudly when tier 3 is reached post-relocation.
 - **Best-effort catalog copy is silent.** `recovery/scripts/restore.sh:104`–`recovery/scripts/restore.sh:112` redirects errors with `2>/dev/null || true`. If `/tmp` is too small or the catalog is corrupt, the user never knows; downstream prompts will lack volume-label hints.
 - **No writable scratch dir = degraded mode without abort.** `relocate_to_ram` returns 1 instead of exiting; `restore.sh` then continues from the original location (`recovery/scripts/restore.sh:84`–`recovery/scripts/restore.sh:88`, `recovery/scripts/restore.sh:156`–`recovery/scripts/restore.sh:159`). The user sees a warning but the next prompt is fatal because the meta-disc cannot be ejected. Hard-failing here might be safer than continuing.
 - **The `LCSAS_PASSWORD` env-var path is the weakest leg of the password machinery** — it's written to a temp file on disk (`recovery/scripts/restore.sh:230`) so the password is briefly persisted to the tmpfs. In a bare-metal live env that's only RAM, but on a host-OS path with `/tmp` on disk this is worth flagging.
-- **Tier 4 (cargo rebuild) is essentially aspirational on a bare-metal live env.** The initramfs ships no `cargo`, no `rustc`, no network. The code path exists for host-OS recovery only; on the bare path it's a no-op that falls through to tier 5.
 - **`restore_auto.sh` has no test of its own.** All four exit codes (0, 1, 2 from missing args, 2 from missing pwfile) are unverified by automated test. Documented behavior diverges from tested behavior here.
 - **No QEMU smoke test of the actual initramfs.** Every test in `recovery/tests/` runs against `lcsas-restore` directly or against `restore.sh` from a fixture; none boot the kernel + `cpio.gz` end-to-end. The boot stack's correctness is established by inspection of `recovery/docs/BOOT.txt` and `recovery/boot/initramfs/manifest.txt` rather than by execution.
 - **FreeBSD alternate boot entry is documented but un-exercised.** `recovery/docs/BOOT.txt:30`–`recovery/docs/BOOT.txt:36` describes the FreeBSD path; no `recovery/boot/freebsd/*` content is referenced from any test.

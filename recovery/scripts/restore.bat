@@ -11,11 +11,7 @@ REM
 REM   Tier 1.  bin\<arch>\lcsas-restore.exe   (prebuilt, static)
 REM   Tier 2.  bin\<arch>\rustic-static.exe   (vendored cross-check)
 REM
-REM Tiers 3 and 4 (rebuild from source) are not attempted on stock
-REM Windows because Windows does not ship a C compiler or POSIX make.
-REM Run them from WSL or a Linux/macOS host if you need to.
-REM
-REM Tier 5 (Python fallback) is attempted if `py` (the Python launcher)
+REM Tier 3 (Python fallback) is attempted if `py` (the Python launcher)
 REM is on PATH and standalone_restorer.py is available.  Set the env
 REM var LCSAS_ALLOW_PYTHON_TIER=0 to forbid it.
 REM ====================================================================
@@ -235,10 +231,10 @@ if exist "%BIN%" (
         pause
         exit /b 0
     )
-    echo [tier 2] failed with exit code !RC!; trying tier 5...
+    echo [tier 2] failed with exit code !RC!; trying tier 3...
 )
 
-REM ----- Tier 5: Python fallback (optional) -------------------------
+REM ----- Tier 3: Python fallback (optional) -------------------------
 if /i "%LCSAS_ALLOW_PYTHON_TIER%"=="0" goto :no_python
 
 where py >nul 2>nul
@@ -250,7 +246,7 @@ if "%PYREST%"=="" if exist "%RECOVERY%\..\standalone_restorer.py" set "PYREST=%R
 if "%PYREST%"=="" goto :no_python
 
 echo.
-echo [tier 5] falling back to py %PYREST%
+echo [tier 3] falling back to py %PYREST%
 py "%PYREST%" "%REPO%" "%TARGET%" --password-file "%PWFILE%"
 set "RC=!ERRORLEVEL!"
 del "%PWFILE%" 2>nul

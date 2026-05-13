@@ -2,7 +2,7 @@
 # test_bare_path.sh -- prove the bare recovery path needs NO Python.
 #
 # Method:
-#   1. Statically inspect restore.sh tiers 1-4 for python references.
+#   1. Statically inspect restore.sh tiers 1-2 for python references.
 #   2. Use python3 OUT-OF-BAND to build a synthetic restic repo and
 #      meta-volume layout.
 #   3. Invoke /restore.sh under a stripped PATH that has no python and
@@ -29,7 +29,7 @@ awk '
 ' "$RECOVERY/scripts/restore.sh" > "$CODE"
 
 if grep -nE 'python|\.py' "$CODE" > "$TMP/hits"; then
-    printf 'FAIL: python references in bare-path code (tiers 1-4):\n' >&2
+    printf 'FAIL: python references in bare-path code (tiers 1-2):\n' >&2
     cat "$TMP/hits" >&2
     exit 1
 fi
@@ -97,7 +97,7 @@ test_e2e.build_repo(Path('$REPO'), 'correct-horse-battery-staple',
 # binaries exit non-zero.  Any `command -v python3` will hit the shim
 # first and return success... so we go a step further: the shims
 # themselves are non-executable.  `command -v` will skip them, but to
-# be doubly safe we *also* unset PYTHONPATH and ensure tier-5 is
+# be doubly safe we *also* unset PYTHONPATH and ensure tier-3 is
 # disabled via env var.
 
 SHIM="$TMP/python-shim"
