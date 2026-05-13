@@ -254,14 +254,9 @@ class TestStage:
         with pytest.raises(ValueError, match="No packs need staging"):
             env["orch"].stage()
 
-    def test_stage_with_ecc(self, env):
-        """ECC augmentation is called when not skipped."""
-        env["orch"].stage(skip_ecc=False)
-        env["dvdisaster"].augment_iso.assert_called()
-
-    def test_stage_skip_ecc(self, env):
-        """ECC is not called when skip_ecc=True."""
-        env["orch"].stage(skip_ecc=True)
+    def test_stage_skips_ecc_for_test_media(self, env):
+        """ECC is implicitly skipped for TEST_TINY (0% ecc_overhead_pct)."""
+        env["orch"].stage()
         env["dvdisaster"].augment_iso.assert_not_called()
 
     def test_stage_xorriso_called(self, env):
@@ -320,7 +315,7 @@ class TestStageForLocation:
         orch = BurnOrchestrator(config, conn, xorriso, dvdisaster)
 
         # First: stage all packs
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
 
         # Burn to Home_Shelf
         orch.burn_session(result.session_id, "Home_Shelf", skip_burn=True)
@@ -343,7 +338,7 @@ class TestStageForLocation:
             (data_dir / sha).write_bytes(os.urandom(50))
 
         # Stage for Offsite_Safe should pick up only the 2 new unarchived packs
-        result2 = orch.stage(for_location="Offsite_Safe", skip_ecc=True)
+        result2 = orch.stage(for_location="Offsite_Safe")
         total_packs = sum(len(m.selected_packs) for m in result2.manifests)
         assert total_packs == 2
 
@@ -359,7 +354,7 @@ class TestBurnSession:
         conn = env["conn"]
         orch = env["orch"]
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
         receipts = orch.burn_session(result.session_id, "Home_Shelf",
                                      skip_burn=True)
 
@@ -382,7 +377,7 @@ class TestBurnSession:
         """'latest' resolves to the most recent session."""
         orch = env["orch"]
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
         receipts = orch.burn_session("latest", "Home_Shelf", skip_burn=True)
 
         assert receipts[0].session_id == result.session_id
@@ -392,7 +387,7 @@ class TestBurnSession:
         conn = env["conn"]
         orch = env["orch"]
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
 
         # Burn copy 1
         receipts1 = orch.burn_session(result.session_id, "Home_Shelf",
@@ -412,7 +407,7 @@ class TestBurnSession:
     def test_burn_session_creates_receipts(self, env):
         """Burn receipts are written as JSON files."""
         orch = env["orch"]
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
         receipts = orch.burn_session(result.session_id, "Home_Shelf",
                                      skip_burn=True)
 
@@ -436,7 +431,7 @@ class TestBurnSession:
         conn = env["conn"]
         orch = env["orch"]
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
         orch.burn_session(result.session_id, "Home_Shelf", skip_burn=True)
 
         session = get_session(conn, result.session_id)
@@ -447,7 +442,7 @@ class TestBurnSession:
         conn = env["conn"]
         orch = env["orch"]
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
         orch.burn_session(result.session_id, "New_Location", skip_burn=True)
 
         locs = list_locations(conn)
@@ -461,7 +456,7 @@ class TestBurnSession:
         orch = env["orch"]
         xorriso = env["xorriso"]
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
 
         # Create dummy ISO files (create_iso was mocked so no real files exist)
         for iso_path in result.iso_paths:
@@ -490,7 +485,7 @@ class TestBurnSession:
         orch = env["orch"]
         xorriso = env["xorriso"]
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
 
         # Create dummy ISO files (create_iso was mocked so no real files exist)
         for iso_path in result.iso_paths:
@@ -523,7 +518,7 @@ class TestCleanSession:
         """Clean session removes the staging directory."""
         orch = env["orch"]
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
         assert result.staging_dir.is_dir()
 
         orch.clean_session(result.session_id)
@@ -534,7 +529,7 @@ class TestCleanSession:
         conn = env["conn"]
         orch = env["orch"]
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
         orch.clean_session(result.session_id)
 
         session = get_session(conn, result.session_id)
@@ -543,7 +538,7 @@ class TestCleanSession:
     def test_clean_latest(self, env):
         """'latest' works for clean."""
         orch = env["orch"]
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
         orch.clean_session("latest")
 
         session = get_session(env["conn"], result.session_id)
@@ -562,7 +557,7 @@ class TestMultiVolumePipeline:
         orch = multi_vol_env["orch"]
 
         # Stage
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
         assert len(result.manifests) >= 2
 
         # Burn copy 1
@@ -591,7 +586,7 @@ class TestMultiVolumePipeline:
         config = env["config"]
 
         # Session 1: stage & burn all
-        r1 = orch.stage(skip_ecc=True)
+        r1 = orch.stage()
         orch.burn_session(r1.session_id, "Home_Shelf", skip_burn=True)
 
         # Add new packs
@@ -603,7 +598,7 @@ class TestMultiVolumePipeline:
             (data_dir / sha).write_bytes(os.urandom(50))
 
         # Session 2: stage only new packs
-        r2 = orch.stage(skip_ecc=True)
+        r2 = orch.stage()
         total_packs = sum(len(m.selected_packs) for m in r2.manifests)
         assert total_packs == 5  # only the 5 new ones
 
@@ -639,7 +634,7 @@ class TestISOCreationSafety:
         orch = BurnOrchestrator(config, conn, xorriso, dvdisaster)
 
         with pytest.raises(FileNotFoundError, match="ISO not created by xorriso"):
-            orch.stage(skip_ecc=True)
+            orch.stage()
 
 
 # =========================================================================
@@ -677,7 +672,7 @@ class TestISOContentValidation:
         """Stage creates a valid ISO file."""
         orch, config, conn, packs = self._make_real_orch(tmp_path)
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
 
         for iso_path in result.iso_paths:
             assert iso_path.exists()
@@ -692,7 +687,7 @@ class TestISOContentValidation:
         """ISO contains a data/ directory with pack files."""
         orch, config, conn, packs = self._make_real_orch(tmp_path)
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
 
         for iso_path in result.iso_paths:
             cmd = ["xorriso", "-indev", str(iso_path), "-ls", "/data/"]
@@ -712,7 +707,7 @@ class TestISOContentValidation:
         """ISO contains metadata/ directory."""
         orch, config, conn, packs = self._make_real_orch(tmp_path)
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
 
         for iso_path in result.iso_paths:
             cmd = ["xorriso", "-indev", str(iso_path), "-ls", "/metadata/"]
@@ -723,7 +718,7 @@ class TestISOContentValidation:
         """ISO contains catalog.db file."""
         orch, config, conn, packs = self._make_real_orch(tmp_path)
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
 
         for iso_path in result.iso_paths:
             cmd = ["xorriso", "-indev", str(iso_path),
@@ -737,7 +732,7 @@ class TestISOContentValidation:
         """ISO contains volume_info.json file."""
         orch, config, conn, packs = self._make_real_orch(tmp_path)
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
 
         for iso_path in result.iso_paths:
             cmd = ["xorriso", "-indev", str(iso_path),
@@ -751,7 +746,7 @@ class TestISOContentValidation:
         """Extract packs from ISO and verify content matches originals."""
         orch, config, conn, packs = self._make_real_orch(tmp_path)
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
 
         for i, manifest in enumerate(result.manifests):
             iso_path = result.iso_paths[i]
@@ -801,7 +796,7 @@ class TestISOContentValidation:
         """Extract volume_info.json from ISO and validate it."""
         orch, config, conn, packs = self._make_real_orch(tmp_path)
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
 
         for i, manifest in enumerate(result.manifests):
             iso_path = result.iso_paths[i]
@@ -844,7 +839,7 @@ class TestISOContentValidation:
         dvdisaster = MagicMock()
         orch = BurnOrchestrator(config, conn, xorriso, dvdisaster)
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
         assert len(result.manifests) >= 2
 
         # Extract all ISOs and collect all pack files
@@ -879,7 +874,7 @@ class TestISOContentValidation:
         """session.json accurately describes the staged ISOs."""
         orch, config, conn, packs = self._make_real_orch(tmp_path)
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
 
         manifest_path = result.staging_dir / "session.json"
         with open(manifest_path) as f:
@@ -899,7 +894,7 @@ class TestISOContentValidation:
         create_location(conn, "Offsite_Safe")
 
         # Stage
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
         assert len(result.iso_paths) >= 1
 
         # Burn copy 1
@@ -939,7 +934,7 @@ class TestISOContentValidation:
 class TestSessionManifestAndReceipts:
     def test_session_manifest_schema(self, env):
         """Session manifest has the required fields."""
-        result = env["orch"].stage(skip_ecc=True)
+        result = env["orch"].stage()
 
         manifest_path = result.staging_dir / "session.json"
         with open(manifest_path) as f:
@@ -963,7 +958,7 @@ class TestSessionManifestAndReceipts:
     def test_burn_receipt_schema(self, env):
         """Burn receipts have the required fields."""
         orch = env["orch"]
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
         orch.burn_session(result.session_id, "Home_Shelf",
                           skip_burn=True)
 
@@ -986,7 +981,7 @@ class TestSessionManifestAndReceipts:
     def test_multiple_burn_locations_separate_receipts(self, env):
         """Each location burn creates separate receipt files."""
         orch = env["orch"]
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
 
         orch.burn_session(result.session_id, "Home_Shelf", skip_burn=True)
         orch.burn_session(result.session_id, "Offsite_Safe", skip_burn=True)
@@ -1028,7 +1023,7 @@ class TestLegacyPrepareExecute:
         """Legacy execute() still creates ISO and finalizes volume."""
         orch = env["orch"]
         manifest = orch.prepare()
-        vol = orch.execute(manifest, skip_burn=True, skip_ecc=True)
+        vol = orch.execute(manifest, skip_burn=True)
 
         assert vol.status == "VERIFIED"
 

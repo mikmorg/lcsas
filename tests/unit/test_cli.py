@@ -36,11 +36,10 @@ class TestCLIParsing:
 
     def test_burn_with_options(self):
         args = self.parser.parse_args([
-            "burn", "--media", "TEST_TINY", "--skip-ecc"
+            "burn", "--media", "TEST_TINY"
         ])
         assert args.command == "burn"
         assert args.media == "TEST_TINY"
-        assert args.skip_ecc is True
 
     def test_restore_plan(self):
         args = self.parser.parse_args(["restore", "plan", "snap123", "--repo", "family"])

@@ -211,25 +211,31 @@ class BurnOrchestrator:
         manifest: BurnManifest,
         iso_output: Path | None = None,
         skip_burn: bool = False,
-        skip_ecc: bool = False,
     ) -> Volume:
         """Execute the burn: create ISO, add ECC, burn to disc.
+
+        ECC is always applied to production media (any ``MediaType`` with
+        ``ecc_overhead_pct > 0``). Test media (``TEST_TINY``, 0% overhead) is
+        implicitly skipped because RS03 has a minimum image size that the
+        1 MB test ISO cannot meet — see ``MediaType.ecc_overhead_pct`` in
+        ``src/lcsas/config/media.py``.
 
         Args:
             manifest: A BurnManifest from prepare().
             iso_output: Override path for the ISO file.
             skip_burn: If True, create ISO but don't burn to physical media.
-            skip_ecc: If True, skip DVDisaster ECC augmentation.
 
         Returns:
             The finalized Volume object.
         """
+        apply_ecc = manifest.media_type.ecc_overhead_pct > 0
+
         # Preflight: verify required binaries exist and meet minimum versions.
         from lcsas.utils.subprocess import SubprocessRunnerBase, check_binary_version
         if isinstance(self._xorriso, SubprocessRunnerBase):
             # xorriso 1.4.0+ required for reliable ISO-9660 level 3 support.
             check_binary_version(self._xorriso._binary, min_version=(1, 4, 0))
-        if not skip_ecc and isinstance(self._dvdisaster, SubprocessRunnerBase):
+        if apply_ecc and isinstance(self._dvdisaster, SubprocessRunnerBase):
             # dvdisaster 0.79+ required for RS03 augmentation mode.
             check_binary_version(self._dvdisaster._binary, min_version=(0, 79, 0))
 
@@ -261,7 +267,7 @@ class BurnOrchestrator:
             manifest.iso_path = iso_path
 
             # Add ECC
-            if not skip_ecc:
+            if apply_ecc:
                 self._dvdisaster.augment_iso(
                     iso_path,
                     self._config.default_ecc_redundancy_pct,
@@ -328,13 +334,17 @@ class BurnOrchestrator:
         vol_uuid: str,
         staging_root: Path,
         iso_output: Path | None = None,
-        skip_ecc: bool = False,
     ) -> BurnManifest:
         """Build staging dir, register volume, inject metadata, optionally create ISO.
 
         This is the shared core of :meth:`prepare` (iso_output=None) and
         :meth:`stage` (iso_output set).  Returns a :class:`BurnManifest`
         describing the result.
+
+        ECC is applied automatically whenever ``iso_output`` is set and the
+        media type carries non-zero ECC overhead (i.e. all production media).
+        Test media (``TEST_TINY``, 0% overhead) is implicitly skipped — see
+        ``MediaType.ecc_overhead_pct`` in ``src/lcsas/config/media.py``.
 
         Args:
             selected_packs: Packs to include on this volume.
@@ -343,8 +353,8 @@ class BurnOrchestrator:
             vol_label: Generated volume label.
             vol_uuid: Generated volume UUID.
             staging_root: Directory to stage files into.
-            iso_output: If set, create an ISO at this path (+ optional ECC).
-            skip_ecc: Skip DVDisaster ECC augmentation.
+            iso_output: If set, create an ISO at this path (+ ECC for
+                production media).
 
         Returns:
             BurnManifest describing the staged volume.
@@ -439,7 +449,7 @@ class BurnOrchestrator:
             )
             iso_path = iso_output
 
-            if not skip_ecc:
+            if media_type.ecc_overhead_pct > 0:
                 self._dvdisaster.augment_iso(
                     iso_path, self._config.default_ecc_redundancy_pct,
                 )
@@ -491,7 +501,6 @@ class BurnOrchestrator:
         for_location: str | None = None,
         repo_ids: list[str] | None = None,
         pack_sha256s: list[str] | None = None,
-        skip_ecc: bool = False,
         dry_run: bool = False,
     ) -> StageResult:
         """Stage all unarchived packs into ISOs, creating a burn session.
@@ -499,12 +508,17 @@ class BurnOrchestrator:
         Handles multi-volume scenarios: if data exceeds one disc, multiple
         volumes and ISOs are created within a single session.
 
+        ECC is applied automatically for production media (any ``MediaType``
+        with ``ecc_overhead_pct > 0``). Test media (``TEST_TINY``, 0%
+        overhead) is implicitly skipped because RS03 has a minimum image
+        size — see ``MediaType.ecc_overhead_pct`` in
+        ``src/lcsas/config/media.py``.
+
         Args:
             media_type: Target media type (defaults to config).
             for_location: If set, stage only packs missing at this location.
             repo_ids: Optional filter to specific repositories.
             pack_sha256s: If set, stage only packs with these SHA-256 hashes.
-            skip_ecc: If True, skip ECC augmentation of ISOs.
             dry_run: If True, compute the plan but skip all side effects.
 
         Returns:
@@ -604,7 +618,6 @@ class BurnOrchestrator:
                 vol_uuid=vol_uuid,
                 staging_root=staging_root,
                 iso_output=iso_path,
-                skip_ecc=skip_ecc,
             )
 
             # Compute ISO hash

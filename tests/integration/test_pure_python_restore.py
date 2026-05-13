@@ -351,7 +351,7 @@ class TestPurePythonFallbackRestore:
                 manifest = orchestrator.prepare(media_type=mt)
                 iso = self.iso_out / f"{manifest.volume_label}.iso"
                 orchestrator.execute(manifest, iso_output=iso,
-                                     skip_burn=True, skip_ecc=True)
+                                     skip_burn=True)
                 iso_files.append(iso)
             except ValueError:
                 break

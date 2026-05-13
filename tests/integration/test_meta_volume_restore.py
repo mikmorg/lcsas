@@ -201,7 +201,7 @@ class TestMetaVolumeRestore:
                 manifest = orchestrator.prepare(media_type=mt)
                 iso = iso_out / f"{manifest.volume_label}.iso"
                 orchestrator.execute(manifest, iso_output=iso,
-                                     skip_burn=True, skip_ecc=True)
+                                     skip_burn=True)
                 isos.append(iso)
             except ValueError:
                 break

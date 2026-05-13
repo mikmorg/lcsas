@@ -568,8 +568,8 @@ lcsas repo remove   REPO_ID [--force]              Remove a repository and its p
 lcsas scan          [--repo REPO] [--no-prune-sync] Discover new packs, mark pruned
 lcsas status        [--repo REPO]                  Show archive status summary
 lcsas burn          [--media TYPE] [--dry-run]     Run the burn pipeline
-                    [--skip-ecc] [--device DEV]
-lcsas stage         [--media TYPE] [--skip-ecc]    Stage ISOs for deferred burning
+                    [--device DEV]
+lcsas stage         [--media TYPE]                  Stage ISOs for deferred burning
 lcsas burn-iso      ISO_PATH [--device DEV]        Burn a pre-built ISO to disc
                     [--emit-receipt PATH]           (cross-machine workflow)
                     [--label LABEL --location LOC]

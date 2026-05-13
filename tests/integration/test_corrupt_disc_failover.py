@@ -230,7 +230,6 @@ class TestCorruptDiscFailover:
                     manifest,
                     iso_output=iso_path,
                     skip_burn=True,
-                    skip_ecc=True,
                 )
                 self.iso_files.append(iso_path)
             except ValueError:

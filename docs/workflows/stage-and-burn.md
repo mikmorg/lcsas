@@ -81,10 +81,11 @@ The end-to-end flow inside a single session:
      (`src/lcsas/burn/orchestrator.py:422-432`).
    - `xorriso create_iso` masters the staging tree → ISO
      (`src/lcsas/iso/xorriso.py:98`).
-   - If the media is optical and `--skip-ecc` was not passed,
-     `dvdisaster -mRS03 -n <pct>` augments the ISO in-place via a
-     temporary copy + atomic rename
-     (`src/lcsas/ecc/dvdisaster.py:46`).
+   - If the media type carries non-zero `ecc_overhead_pct` (i.e. all
+     production media), `dvdisaster -mRS03 -n <pct>` augments the ISO
+     in-place via a temporary copy + atomic rename
+     (`src/lcsas/ecc/dvdisaster.py:46`). Test media (`TEST_TINY`) is
+     implicitly skipped — see `MediaType.ecc_overhead_pct`.
    - Post-ECC validation: rejects an ISO larger than
      `media_type.capacity_bytes`
      (`src/lcsas/burn/orchestrator.py:468-474`).
@@ -131,9 +132,10 @@ machines, or when staging in advance for an unattended burn.
 - Initialised catalog (`lcsas init`).
 - Registered repositories (`lcsas repo add`) and a recent `lcsas scan` so the
   catalog reflects current mirror state.
-- `xorriso ≥ 1.4.0` and (when `--skip-ecc` is not passed) `dvdisaster ≥ 0.79`
-  on `PATH`. Version checks happen lazily inside `BurnOrchestrator.execute`,
-  but the same binaries are invoked by `stage` for ISO + ECC.
+- `xorriso ≥ 1.4.0` on `PATH`. For production media (any `MediaType`
+  with `ecc_overhead_pct > 0`), `dvdisaster ≥ 0.79` is also required.
+  Version checks happen lazily inside `BurnOrchestrator.execute`, but
+  the same binaries are invoked by `stage` for ISO + ECC.
 - `staging_path` filesystem with enough free space; pre-flight requires
   `total_data_bytes × (1.05 × (1 + ecc%/100) + 1)`
   (`src/lcsas/burn/orchestrator.py:570-583`).
@@ -149,19 +151,18 @@ machines, or when staging in advance for an unattended burn.
 4. `--for-location <name>` — stage packs missing at that location only;
    routes through `get_unarchived_or_missing_at_location`
    (`src/lcsas/burn/orchestrator.py:848-851`).
-5. `--skip-ecc` — bypass DVDisaster augmentation
-   (`src/lcsas/cli/main.py:138`).
-6. `--dry-run` / `-n` — compute the bin-pack plan and report it, then exit
+5. `--dry-run` / `-n` — compute the bin-pack plan and report it, then exit
    without touching staging, the catalog, or the disc
    (`src/lcsas/burn/orchestrator.py:551-566`).
-7. Internally: `orch.stage(...)` → `_gather_packs_for_staging` →
+6. Internally: `orch.stage(...)` → `_gather_packs_for_staging` →
    `_multi_bin_pack` → per-volume `_stage_single_volume`
    (`src/lcsas/cli/main.py:929-935`,
    `src/lcsas/burn/orchestrator.py:503`).
 
 **Expected outcome:** A new burn session in `STAGED` state, with one volume
 per disc in `STAGING` state, an ISO file per volume in the session staging
-directory, ECC applied (unless `--skip-ecc`), a `session.json` manifest, and
+directory, ECC applied for production media (TEST_TINY implicitly skipped),
+a `session.json` manifest, and
 log output listing each ISO path and size. Volumes are reserved with unique
 labels (`<prefix>_<media_label>_<seq>`) generated via
 `generate_volume_label` (`src/lcsas/burn/orchestrator.py:601-606`).
@@ -174,13 +175,14 @@ labels (`<prefix>_<media_label>_<seq>`) generated via
 - **Optical drive count** — not relevant (no burn here).
 - **Multi-copy** — irrelevant for `stage`; the resulting session can later
   be burned to multiple locations.
-- **ECC** — `--skip-ecc` honoured.
+- **ECC** — always applied for production media; implicitly skipped for
+  TEST_* media (no user-facing toggle).
 - **Recovery tier** — staging only writes to Tier 1 (WARM staging SSD/HDD).
 
 **Test coverage:**
 
 - `tests/unit/test_session_pipeline.py::TestStage*` — happy path,
-  multi-volume, skip-ecc, repo filter, `for_location`, pack hash filter,
+  multi-volume, repo filter, `for_location`, pack hash filter,
   per-repo metadata injection.
 - `tests/unit/test_binpack.py` — FFD algorithm correctness and oversize
   detection.
@@ -229,12 +231,11 @@ called **without** `--session`. Routing: `cmd` dispatch sends
 2. `--media <type>` — optional media override (`src/lcsas/cli/main.py:115`).
 3. `--repo <id>...` — optional repository restriction
    (`src/lcsas/cli/main.py:117`).
-4. `--skip-ecc` — skip ECC augmentation (`src/lcsas/cli/main.py:119`).
-5. `--location <name>` — physical location tag for the burn
+4. `--location <name>` — physical location tag for the burn
    (`src/lcsas/cli/main.py:123`).
-6. `--device <path>` — override `optical_device`
+5. `--device <path>` — override `optical_device`
    (`src/lcsas/cli/main.py:125`).
-7. Internally: `orch.stage(...)` → `orch.burn_session(...)`
+6. Internally: `orch.stage(...)` → `orch.burn_session(...)`
    (`src/lcsas/cli/main.py:1058-1077`).
 
 **Expected outcome:** All unarchived packs are partitioned across one or
@@ -254,7 +255,8 @@ successful verify (`src/lcsas/burn/orchestrator.py:791-802`).
 - **Multi-copy** — single location per `burn` invocation; for second copies
   use `lcsas burn --session <id> --location <other>` against the same
   session.
-- **ECC** — `--skip-ecc` honoured
+- **ECC** — always applied for production media (no user-facing toggle);
+  implicitly skipped for TEST_* media via `MediaType.ecc_overhead_pct`
   (`src/lcsas/burn/orchestrator.py`).
 - **Recovery tier** — produces Tier 2 (COLD) media.
 
@@ -266,7 +268,8 @@ successful verify (`src/lcsas/burn/orchestrator.py:791-802`).
   multi-copy, and session status transitions.
 - `tests/unit/test_burn_orchestrator.py` — direct
   `orch.prepare()`/`orch.execute()` legacy single-volume API, plus
-  `skip_ecc` and `skip_burn` matrices.
+  `skip_burn` matrix and an assertion that ECC IS invoked on
+  production media.
 - `tests/integration/test_disc_only_restore.py` — uses real `xorriso`,
   `dvdisaster`, and SquashFS pipelines to validate end-to-end burn + restore.
 - Gaps: no automated test covers a real `--device` lockout or removable
@@ -535,24 +538,24 @@ The orchestrator's media handling rules:
 
 | Media        | `capacity_bytes` | `ecc_overhead_pct` | ECC step | Source bundle | Notes |
 |--------------|------------------|--------------------|----------|---------------|-------|
-| `TEST_TINY`  | 1,048,576        | 0  | Skipped (per `is_test` defaults in tests) | **Skipped** (`is_test`) | 1 MB; canonical test media — fastest unit tests, multi-volume pipeline smoke tests, blind-restore acceptance. (`src/lcsas/config/media.py:26`) |
+| `TEST_TINY`  | 1,048,576        | 0  | Skipped (implicit — `ecc_overhead_pct == 0`) | **Skipped** (`is_test`) | 1 MB; canonical test media — fastest unit tests, multi-volume pipeline smoke tests, blind-restore acceptance. (`src/lcsas/config/media.py:26`) |
 
-### ECC-skip behaviour, explicitly
+### ECC behaviour, explicitly
 
-The DVDisaster step is **skipped** only when `--skip-ecc` is passed on the
-CLI (and forwarded to `orch.stage(skip_ecc=...)` and
-`orch.execute(skip_ecc=...)`).
+The DVDisaster step is **always applied** to production media (any
+`MediaType` whose `ecc_overhead_pct > 0`). There is no user-facing flag
+to bypass it — production archives without ECC cannot survive a single
+read error and were judged a vestigial misfeature (see GH-36).
 
-Otherwise, `dvdisaster -mRS03 -n <default_ecc_redundancy_pct> -c` is run on
-the ISO via a temp copy + atomic rename
-(`src/lcsas/ecc/dvdisaster.py:71-93`).
+`dvdisaster -mRS03 -n <default_ecc_redundancy_pct> -c` is run on the ISO
+via a temp copy + atomic rename (`src/lcsas/ecc/dvdisaster.py:71-93`).
 
-Tests **do not** invoke real `dvdisaster` for `is_test` media; in practice
-the test runners stub out the runner. There is no in-code rule that forces
-test media to skip ECC — that's a test-harness convention. If a user runs
-`lcsas stage --media TEST_TINY` with a real `dvdisaster` on PATH, the ECC
-step will execute (and may fail because 1 MB is below DVDisaster's RS03
-minimum).
+Test media (`TEST_TINY`, `ecc_overhead_pct == 0`) is **implicitly
+skipped**: `BurnOrchestrator.execute` and `_stage_single_volume` only
+invoke `DvdisasterRunner.augment_iso` when
+`media_type.ecc_overhead_pct > 0`. RS03 has a minimum image size that
+the 1 MB test ISO cannot meet, so the implicit skip prevents test runs
+from hitting a `dvdisaster` failure.
 
 ### Per-media test coverage gaps
 
@@ -655,7 +658,7 @@ disc remains the source of truth.
 | OS | Linux | Linux | Linux | Linux | Linux |
 | Optical drive count | n/a (no burn) | 1 (`--device`) | 1 (`--device`) | n/a | 1 (`--device`) |
 | Multi-copy | n/a | Single location per call | **Primary mechanism** — call once per location with same `--session` | n/a | Single location per call |
-| ECC | `--skip-ecc` honoured | `--skip-ecc` honoured | Already baked into staged ISOs | n/a (no ISOs created in Mode B; Mode A no-op) | `--skip-ecc` honoured |
+| ECC | Always on for production media; implicit skip for TEST_* | Always on for production media; implicit skip for TEST_* | Already baked into staged ISOs | n/a (no ISOs created in Mode B; Mode A no-op) | Always on for production media; implicit skip for TEST_* |
 | Recovery tier | Tier 1 (WARM) only | Tier 1 → Tier 2 | Tier 1 → Tier 2 | None | Tier 1 → Tier 2 |
 
 ---
@@ -667,12 +670,12 @@ Primary unit tests for this pipeline:
 - `tests/unit/test_binpack.py` — FFD correctness, oversize-item handling,
   capacity edge cases, multi-volume layout (1 reference to `TEST_TINY`).
 - `tests/unit/test_burn_orchestrator.py` — `prepare()` / `execute()` legacy
-  API, `skip_ecc` matrix, `skip_burn` matrix, custom ISO output paths,
-  oversize-pack rejection, manifest rollback (4 references to
-  `TEST_TINY`).
+  API, `skip_burn` matrix, custom ISO output paths, oversize-pack
+  rejection, manifest rollback, and an assertion that ECC IS invoked on
+  production media (4 references to `TEST_TINY`).
 - `tests/unit/test_session_pipeline.py` — the broadest coverage: stage
-  (single & multi-volume, multi-tenant, skip-ecc, `for_location`,
-  pack-sha256 filter), burn_session (happy path, latest resolution,
+  (single & multi-volume, multi-tenant, `for_location`,
+  pack-sha256 filter, implicit ECC skip on TEST_TINY), burn_session (happy path, latest resolution,
   multi-location, verify-pass/fail event recording, receipt JSON shape,
   session status transitions, ISO cleanup), clean_session, repeated
   re-burn semantics (12+ references to `TEST_TINY`).
@@ -704,10 +707,11 @@ Primary unit tests for this pipeline:
 4. **Re-stage of a `PARTIAL` session** — no test asserts the "discard then
    re-stage" recovery path is correct when the partial session contains
    already-`VERIFIED` volumes.
-5. **Test media + real DVDisaster** — `is_test` media types don't carry an
-   in-code rule forcing `skip_ecc`; if an operator runs `lcsas stage
-   --media TEST_TINY` against a real `dvdisaster` binary, behaviour is
-   undefined (RS03 typically fails on sub-MB ISOs).
+5. **Test media + real DVDisaster** — `TEST_TINY` carries
+   `ecc_overhead_pct == 0`, which the orchestrator interprets as
+   "implicitly skip ECC", so `dvdisaster` is never invoked for it.
+   Production media always invoke `dvdisaster`; there is no longer a
+   user-facing bypass flag.
 
 ### Consolidated source refs
 

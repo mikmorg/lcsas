@@ -251,31 +251,40 @@ class TestExecute:
         config.db_path.write_bytes(b"x")
         return orch.prepare()
 
-    def test_execute_skip_burn_skip_ecc(self, orch_env):
-        """ISO-only path: creates ISO, skips ECC and physical burn."""
+    def test_execute_skip_burn(self, orch_env):
+        """ISO-only path on TEST_TINY: creates ISO, no physical burn.
+
+        TEST_TINY has 0% ECC overhead so DVDisaster is implicitly skipped
+        (see MediaType.ecc_overhead_pct).
+        """
         orch = orch_env["orch"]
         xorriso = orch_env["xorriso"]
         dvdisaster = orch_env["dvdisaster"]
         manifest = self._prepare(orch_env)
 
-        vol = orch.execute(manifest, skip_burn=True, skip_ecc=True)
+        vol = orch.execute(manifest, skip_burn=True)
 
         # xorriso.create_iso called, burn_iso NOT called
         xorriso.create_iso.assert_called_once()
         xorriso.burn_iso.assert_not_called()
+        # TEST_TINY ⇒ ECC implicitly skipped
         dvdisaster.augment_iso.assert_not_called()
 
         # Volume should be VERIFIED (via status update) and closed
         assert vol.status == "VERIFIED"
         assert vol.closed_at is not None
 
-    def test_execute_with_ecc(self, orch_env):
-        """ECC augmentation is called when skip_ecc=False."""
+    def test_execute_invokes_ecc_for_production_media(self, orch_env):
+        """ECC IS invoked when media_type.ecc_overhead_pct > 0 (production)."""
         orch = orch_env["orch"]
         dvdisaster = orch_env["dvdisaster"]
         manifest = self._prepare(orch_env)
+        # Swap to a production media type with ECC overhead.
+        manifest.media_type = MediaType.BD25
 
-        orch.execute(manifest, skip_burn=True, skip_ecc=False)
+        # Override the staging-size preflight: real packs are far below the
+        # BD25 capacity so this remains a pure orchestration test.
+        orch.execute(manifest, skip_burn=True)
 
         dvdisaster.augment_iso.assert_called_once()
 
@@ -285,7 +294,7 @@ class TestExecute:
         xorriso = orch_env["xorriso"]
         manifest = self._prepare(orch_env)
 
-        orch.execute(manifest, skip_burn=False, skip_ecc=True)
+        orch.execute(manifest, skip_burn=False)
 
         xorriso.burn_iso.assert_called_once()
 
@@ -296,7 +305,7 @@ class TestExecute:
         manifest = self._prepare(orch_env)
         custom_iso = tmp_path / "custom" / "output.iso"
 
-        orch.execute(manifest, iso_output=custom_iso, skip_burn=True, skip_ecc=True)
+        orch.execute(manifest, iso_output=custom_iso, skip_burn=True)
 
         call_args = xorriso.create_iso.call_args
         assert call_args[0][1] == custom_iso
@@ -311,22 +320,24 @@ class TestExecute:
         xorriso.create_iso.side_effect = subprocess.CalledProcessError(1, "xorriso")
 
         with pytest.raises(subprocess.CalledProcessError):
-            orch.execute(manifest, skip_burn=True, skip_ecc=True)
+            orch.execute(manifest, skip_burn=True)
 
         vol = get_volume_by_id(conn, manifest.volume_id)
         assert vol.status == "STAGING"
 
     def test_execute_ecc_failure_reverts_status(self, orch_env):
-        """If dvdisaster fails, status reverts."""
+        """If dvdisaster fails on production media, status reverts."""
         orch = orch_env["orch"]
         conn = orch_env["conn"]
         dvdisaster = orch_env["dvdisaster"]
         manifest = self._prepare(orch_env)
+        # ECC only runs on production media; swap to BD25 to exercise it.
+        manifest.media_type = MediaType.BD25
 
         dvdisaster.augment_iso.side_effect = subprocess.CalledProcessError(1, "dvdisaster")
 
         with pytest.raises(subprocess.CalledProcessError):
-            orch.execute(manifest, skip_burn=True, skip_ecc=False)
+            orch.execute(manifest, skip_burn=True)
 
         vol = get_volume_by_id(conn, manifest.volume_id)
         assert vol.status == "STAGING"
@@ -341,7 +352,7 @@ class TestExecute:
         xorriso.burn_iso.side_effect = subprocess.CalledProcessError(1, "xorriso")
 
         with pytest.raises(subprocess.CalledProcessError):
-            orch.execute(manifest, skip_burn=False, skip_ecc=True)
+            orch.execute(manifest, skip_burn=False)
 
         vol = get_volume_by_id(conn, manifest.volume_id)
         assert vol.status == "STAGING"
@@ -356,7 +367,7 @@ class TestExecute:
         vol = get_volume_by_id(conn, manifest.volume_id)
         assert vol.status == "STAGING"
 
-        vol = orch.execute(manifest, skip_burn=True, skip_ecc=True)
+        vol = orch.execute(manifest, skip_burn=True)
         assert vol.status == "VERIFIED"
 
     def test_execute_iso_unlink_failure_doesnt_rollback_burn(self, orch_env):
@@ -372,7 +383,7 @@ class TestExecute:
 
         # Patch iso_path.unlink() to raise OSError
         with patch.object(Path, "unlink", side_effect=OSError("Permission denied")):
-            vol = orch.execute(manifest, skip_burn=True, skip_ecc=True)
+            vol = orch.execute(manifest, skip_burn=True)
 
         # Volume should still be VERIFIED (burn succeeded, ISO cleanup failed)
         assert vol.status == "VERIFIED"
@@ -489,26 +500,31 @@ class TestPreflightChecks:
         orch._xorriso = real_xorriso
 
         with pytest.raises(BinaryError, match="xorriso_not_on_path"):
-            orch.execute(manifest, skip_burn=True, skip_ecc=True)
+            orch.execute(manifest, skip_burn=True)
 
         # Volume status must still be STAGING (no state change)
         vol = get_volume_by_id(conn, manifest.volume_id)
         assert vol.status == "STAGING"
 
     def test_execute_fails_if_dvdisaster_missing(self, orch_env):
-        """execute() raises BinaryError when dvdisaster not on PATH (before DB update)."""
+        """execute() raises BinaryError when dvdisaster missing on production media.
+
+        ECC preflight only runs when ``media_type.ecc_overhead_pct > 0`` —
+        we swap the manifest to BD25 to exercise the preflight path.
+        """
         from lcsas.exceptions import BinaryError
         from lcsas.utils.subprocess import SubprocessRunnerBase
         orch = orch_env["orch"]
         conn = orch_env["conn"]
         manifest = self._prepare(orch_env)
+        manifest.media_type = MediaType.BD25
 
         real_dvd = SubprocessRunnerBase.__new__(SubprocessRunnerBase)
         real_dvd._binary = "dvdisaster_not_on_path_____"
         orch._dvdisaster = real_dvd
 
         with pytest.raises(BinaryError, match="dvdisaster_not_on_path"):
-            orch.execute(manifest, skip_burn=True, skip_ecc=False)
+            orch.execute(manifest, skip_burn=True)
 
         vol = get_volume_by_id(conn, manifest.volume_id)
         assert vol.status == "STAGING"
@@ -567,7 +583,7 @@ class TestStage:
 
         orch_env["xorriso"].create_iso.side_effect = fake_create_iso
 
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
 
         assert result.session_id != "dry-run"
         assert len(result.manifests) >= 1
@@ -583,7 +599,7 @@ class TestStage:
             output_iso.write_bytes(b"fake-iso-data")
 
         orch_env["xorriso"].create_iso.side_effect = fake_create_iso
-        result = orch.stage(repo_ids=["family"], skip_ecc=True)
+        result = orch.stage(repo_ids=["family"])
         assert len(result.manifests) >= 1
 
     def test_stage_insufficient_disk_space_raises(self, orch_env):
@@ -594,7 +610,7 @@ class TestStage:
         with unittest.mock.patch("shutil.disk_usage") as mock_usage:
             mock_usage.return_value = unittest.mock.MagicMock(free=0)
             with pytest.raises(OSError, match="Insufficient disk space"):
-                orch.stage(skip_ecc=True)
+                orch.stage()
 
 
 # =========================================================================
@@ -613,7 +629,7 @@ class TestBurnSession:
             output_iso.write_bytes(b"fake-iso-data")
 
         orch_env["xorriso"].create_iso.side_effect = fake_create_iso
-        result = orch.stage(skip_ecc=True)
+        result = orch.stage()
         return result.session_id
 
     def test_burn_session_skip_burn_succeeds(self, orch_env):

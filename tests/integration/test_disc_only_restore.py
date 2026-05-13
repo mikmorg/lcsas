@@ -408,7 +408,6 @@ class TestDiscOnlyRestore:
                     manifest,
                     iso_output=iso_path,
                     skip_burn=True,
-                    skip_ecc=True,
                 )
                 iso_files.append(iso_path)
             except ValueError:
