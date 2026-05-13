@@ -179,11 +179,13 @@ class RecoveryBuilder:
                 shutil.copy2(str(src), str(bin_dir / name))
                 os.chmod(str(bin_dir / name), 0o755)
 
+        iso9660_path = bin_dir / "lcsas-iso9660"
+        init_path = bin_dir / "lcsas-init"
         return RecoveryArtifacts(
             arch=arch,
             lcsas_restore=bin_dir / "lcsas-restore",
-            lcsas_iso9660=bin_dir / "lcsas-iso9660" if (bin_dir / "lcsas-iso9660").exists() else None,
-            lcsas_init=bin_dir / "lcsas-init" if (bin_dir / "lcsas-init").exists() else None,
+            lcsas_iso9660=iso9660_path if iso9660_path.exists() else None,
+            lcsas_init=init_path if init_path.exists() else None,
         )
 
     def run_tests(self, verbose: bool = False) -> bool:
