@@ -87,7 +87,7 @@ Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relat
 - Invalid: one log line per error, exit 1. All errors reported in one pass.
 
 **Variant axes that apply:**
-- Media type: `defaults.media_type` gates `metadata_reserve_bytes` against `usable_bytes`; test media (`TEST_TINY`/`TEST_SMALL`/`TEST_CD`) accepted (`src/lcsas/config/media.py:26`).
+- Media type: `defaults.media_type` gates `metadata_reserve_bytes` against `usable_bytes`; test media (`TEST_TINY`) accepted (`src/lcsas/config/media.py:26`).
 - Multi-tenant: each `[repos.<name>]` block validated independently; one error per failing repo.
 - OS: filesystem semantics of `Path.resolve()` and `os.access(..., W_OK)` matter; read-only mounts trip `staging_path is not writable`.
 - Optical drive count: N/A — `optical_device` is parsed but **not** validated (typos surface only at burn time).

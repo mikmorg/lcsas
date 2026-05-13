@@ -11,7 +11,7 @@ Responsibilities (see PLAN.md § setup.py responsibilities):
   2. Generate alpha + bravo synthetic data, SHA-256 manifests.
   3. Two rustic repos, distinct passwords, small packs for a realistic
      disc count.
-  4. LCSAS burn pipeline against TEST_CD media.
+  4. LCSAS burn pipeline against TEST_TINY media.
   5. Production meta disc + ISO.
   6. Vault the ISOs in /var/lib/disc-vault (root-only, 0700).
   7. Pre-compute expected_alpha_volumes.txt from the catalog.
@@ -63,9 +63,9 @@ AGENT_USER = "lcsas-blind"
 AGENT_HOME = Path("/home") / AGENT_USER
 
 ALPHA_FILES = 30
-ALPHA_FILE_BYTES = 20 * 1024 * 1024  # 20 MB × 30 = 600 MB
+ALPHA_FILE_BYTES = 200 * 1024  # 200 KB × 30 = 6 MB (sized for TEST_TINY)
 BRAVO_FILES = 15
-BRAVO_FILE_BYTES = 20 * 1024 * 1024  # 20 MB × 15 = 300 MB
+BRAVO_FILE_BYTES = 200 * 1024  # 200 KB × 15 = 3 MB (sized for TEST_TINY)
 
 
 def banner(msg: str) -> None:
@@ -154,10 +154,10 @@ def _init_rustic_repo(name: str) -> None:
     sh(["rustic", "init"], env=env)
     sh([
         "rustic", "config",
-        "--set-datapack-size", "4MiB",
-        "--set-datapack-size-limit", "6MiB",
-        "--set-treepack-size", "1MiB",
-        "--set-treepack-size-limit", "2MiB",
+        "--set-datapack-size", "256KiB",
+        "--set-datapack-size-limit", "512KiB",
+        "--set-treepack-size", "128KiB",
+        "--set-treepack-size-limit", "256KiB",
     ], env=env)
     sh(["rustic", "backup", str(SOURCES / name)], env=env)
 
@@ -215,10 +215,10 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
         mirror_base_path=MIRROR,
         staging_path=STAGING,
         db_path=DB_PATH,
-        default_media_type=MediaType.TEST_CD,
+        default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         label_prefix="LCSAS",
-        metadata_reserve_bytes=2_000_000,
+        metadata_reserve_bytes=150_000,
         repositories=repos,
     )
 
@@ -241,7 +241,7 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
         if max_volumes is not None and count >= max_volumes:
             break
         try:
-            manifest = orchestrator.prepare(media_type=MediaType.TEST_CD)
+            manifest = orchestrator.prepare(media_type=MediaType.TEST_TINY)
         except ValueError as exc:
             print(f"  burn stopped: {exc}", file=sys.stderr)
             break

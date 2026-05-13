@@ -24,10 +24,6 @@ class MediaType(Enum):
 
     # Testing media (tiny volumes for automated tests)
     TEST_TINY = (1_048_576, 0)         # 1 MB — fast unit tests
-    TEST_SMALL = (10_485_760, 10)      # 10 MB — pipeline smoke tests
-    TEST_CD = (104_857_600, 10)        # 100 MB — simulates a CD-ROM in
-                                       # blind-restore acceptance tests.
-                                       # Renders as "CD" in disc labels.
 
     def __init__(self, capacity_bytes: int, ecc_overhead_pct: int) -> None:
         self._capacity_bytes = capacity_bytes
@@ -70,10 +66,6 @@ class MediaType(Enum):
     def label_name(self) -> str:
         """Short media token used in volume labels.
 
-        Defaults to the enum member name. Test-only media types
-        override this so labels look like real production discs to
-        any operator (or blind agent) reading them.
+        Defaults to the enum member name.
         """
-        if self.name == "TEST_CD":
-            return "CD"
         return self.name

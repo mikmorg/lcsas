@@ -49,7 +49,6 @@ Tier 2 — COLD        Optical media / LTO tape (permanent archive)
 | LTO-8 | 12 TB | 0% | 12 TB | Tape |
 | LTO-9 | 18 TB | 0% | 18 TB | Tape |
 | TEST_TINY | 1 MB | 0% | 1 MB | Test |
-| TEST_SMALL | 10 MB | 10% | 9 MB | Test |
 
 ---
 
@@ -593,8 +592,7 @@ lcsas db export     [--output FILE]                Export catalog as JSON
 
 | Type | Capacity | ECC | Purpose |
 |------|----------|-----|---------|
-| `TEST_TINY` | 1 MB | 0% | Unit tests — fast, fits in RAM |
-| `TEST_SMALL` | 10 MB | 10% | Integration tests — exercises ECC path |
+| `TEST_TINY` | 1 MB | 0% | Unit + integration tests — fast, fits in RAM |
 
 ### Test Categories
 
