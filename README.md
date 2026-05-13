@@ -558,3 +558,89 @@ make test-unit         # Pure Python, no external deps
 make test-integration  # Requires rustic, xorriso, dvdisaster
 make coverage          # HTML coverage report
 ```
+
+## Development
+
+LCSAS shells out to three external binaries: **rustic**, **xorriso**, and **dvdisaster**. The integration test suite exercises real subprocess calls against these tools (no Protocol mocks), so you need them on your `PATH` before running `make test-integration`. CI runs the same versions documented here.
+
+### Pinned tool versions
+
+| Tool        | Version pinned in CI | Notes |
+|-------------|----------------------|-------|
+| rustic      | **v0.11.2**          | matches `.github/workflows/test.yml` |
+| xorriso     | distro-provided      | any recent version is fine |
+| dvdisaster  | distro-provided      | RS03 encoder must be present |
+| cdemu       | distro-provided      | optional, only for the e2e blind-restore suite |
+
+### Install rustic
+
+The CI workflow downloads the official release tarball from `rustic-rs/rustic` and drops the binary into `$HOME/.local/bin`. Mirror that locally:
+
+```bash
+# Linux x86_64 — same artifact CI uses
+VERSION=0.11.2
+ASSET="rustic-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+SHA256="fb7b74a14418b2dd070360c9abb22607f8559bdd344a0adf1b33bc2e31f83f5f"
+curl -fsSL -O "https://github.com/rustic-rs/rustic/releases/download/v${VERSION}/${ASSET}"
+echo "${SHA256}  ${ASSET}" | sha256sum -c -
+tar -xzf "${ASSET}"
+install -m 0755 rustic "$HOME/.local/bin/rustic"
+rustic --version
+```
+
+Alternatively, build from source with Cargo (adds a ~5 minute Rust toolchain step but works on any architecture):
+
+```bash
+cargo install --locked --version 0.11.2 rustic-backup
+```
+
+The Cargo crate is named `rustic-backup` (the `rustic` crate name is taken). It installs an executable called `rustic`.
+
+### Install xorriso
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install -y xorriso
+
+# Fedora / RHEL
+sudo dnf install -y xorriso
+
+# macOS (Homebrew)
+brew install xorriso
+```
+
+### Install dvdisaster
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install -y dvdisaster
+
+# Fedora / RHEL — not in default repos; build from source:
+#   https://dvdisaster.jcea.es/
+
+# macOS — no official Homebrew formula. Build from source or run inside a
+# Linux container/VM. The integration suite auto-skips when dvdisaster is
+# missing.
+```
+
+### Install cdemu (optional — e2e blind-restore only)
+
+The `make blind-restore` target uses cdemu to expose ISO files as virtual optical drives. It requires the **vhba** kernel module, which is not available on most CI runners (including GitHub Actions) — that's why the CI workflow does **not** run the e2e suite. To run it locally on Linux:
+
+```bash
+sudo apt-get install -y cdemu-client cdemu-daemon vhba-dkms
+sudo modprobe vhba
+sudo make blind-restore
+```
+
+On macOS / non-Linux hosts the blind-restore suite is unsupported; rely on `make test-integration` instead.
+
+### Continuous integration
+
+`.github/workflows/test.yml` runs on every push and pull request:
+
+1. Installs rustic from the pinned release tarball above
+2. `apt-get install`s xorriso + dvdisaster
+3. `make dev` → `make test-unit` → `make test-integration` → `make typecheck` → `make lint`
+
+The e2e blind-restore suite is intentionally excluded from CI (cdemu/vhba unavailable on GitHub runners). Run it locally before cutting a release.
