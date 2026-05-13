@@ -452,3 +452,160 @@ class TestVerifyCacheCompleteness:
             cache, [sha, sha],
         )
         assert missing == []
+
+
+# =========================================================================
+# ECC verify-or-repair on ingest_volume (Issue #20)
+# =========================================================================
+
+
+class _FakeEccRunner:
+    """Records every verify/repair call so tests can assert invocations."""
+
+    def __init__(self, verify_result: bool = True, repair_result: bool = True) -> None:
+        self.verify_result = verify_result
+        self.repair_result = repair_result
+        self.verify_calls: list = []
+        self.repair_calls: list = []
+
+    def verify_iso(self, iso_path):  # type: ignore[no-untyped-def]
+        self.verify_calls.append(iso_path)
+        return self.verify_result
+
+    def repair_iso(self, iso_path):  # type: ignore[no-untyped-def]
+        self.repair_calls.append(iso_path)
+        return self.repair_result
+
+
+class TestIngestVolumeInvokesECC:
+    """Issue #20 — ECC verify-or-repair must run on each mounted ISO."""
+
+    def _setup_volume_and_iso(self, tmp_path):
+        """Create a mounted-volume tree plus a fake ISO file."""
+        mount = tmp_path / "volume"
+        data_dir = mount / "data"
+        data_dir.mkdir(parents=True)
+        sha1 = "a" * 64
+        (data_dir / sha1).write_bytes(b"pack1_data")
+
+        iso_path = tmp_path / "vol.iso"
+        iso_path.write_bytes(b"fake iso bytes")
+        return mount, iso_path, sha1
+
+    def test_ecc_runner_invoked_on_ingest(self, mock_rustic, tmp_path):
+        """ECC runner's verify_iso is called once per mounted ISO before reading packs."""
+        from lcsas.config.media import MediaType
+
+        fake_ecc = _FakeEccRunner(verify_result=True)
+        ex = RestoreExecutor(mock_rustic, ecc_runner=fake_ecc)
+
+        mount, iso_path, sha1 = self._setup_volume_and_iso(tmp_path)
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        result = ex.ingest_volume(
+            cache, mount, [sha1],
+            verify=False,
+            iso_path=iso_path,
+            media_type=MediaType.BD25,
+        )
+        assert result.ingested == 1
+        assert fake_ecc.verify_calls == [iso_path], (
+            f"Expected verify_iso called once with {iso_path}, "
+            f"got verify_calls={fake_ecc.verify_calls}"
+        )
+
+    def test_no_ecc_runner_proceeds(self, mock_rustic, tmp_path):
+        """With ecc_runner=None, ingest still proceeds without raising."""
+        from lcsas.config.media import MediaType
+
+        ex = RestoreExecutor(mock_rustic, ecc_runner=None)
+        mount, iso_path, sha1 = self._setup_volume_and_iso(tmp_path)
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        # Should not raise — None ECC runner is a valid test-only path.
+        result = ex.ingest_volume(
+            cache, mount, [sha1],
+            verify=False,
+            iso_path=iso_path,
+            media_type=MediaType.BD25,
+        )
+        assert result.ingested == 1
+
+    def test_tape_media_skips_ecc(self, mock_rustic, tmp_path):
+        """Tape media (LTO) must bypass ECC — tape has built-in error correction."""
+        from lcsas.config.media import MediaType
+
+        fake_ecc = _FakeEccRunner(verify_result=True)
+        ex = RestoreExecutor(mock_rustic, ecc_runner=fake_ecc)
+
+        mount, iso_path, sha1 = self._setup_volume_and_iso(tmp_path)
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        result = ex.ingest_volume(
+            cache, mount, [sha1],
+            verify=False,
+            iso_path=iso_path,
+            media_type=MediaType.LTO8,
+        )
+        assert result.ingested == 1
+        assert fake_ecc.verify_calls == [], (
+            "ECC verify_iso must NOT be called for tape media; "
+            f"got verify_calls={fake_ecc.verify_calls}"
+        )
+        assert fake_ecc.repair_calls == []
+
+    def test_ecc_repair_attempted_on_verify_failure(self, mock_rustic, tmp_path):
+        """If verify fails, repair is attempted; if repair succeeds, ingest proceeds."""
+        from lcsas.config.media import MediaType
+
+        fake_ecc = _FakeEccRunner(verify_result=False, repair_result=True)
+        ex = RestoreExecutor(mock_rustic, ecc_runner=fake_ecc)
+
+        mount, iso_path, sha1 = self._setup_volume_and_iso(tmp_path)
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        result = ex.ingest_volume(
+            cache, mount, [sha1],
+            verify=False,
+            iso_path=iso_path,
+            media_type=MediaType.BD25,
+        )
+        assert result.ingested == 1
+        assert fake_ecc.verify_calls == [iso_path]
+        assert fake_ecc.repair_calls == [iso_path]
+
+    def test_ecc_irrecoverable_raises_restore_error(self, mock_rustic, tmp_path):
+        """When verify AND repair both fail, raise RestoreError pointing at alternates."""
+        from lcsas.config.media import MediaType
+        from lcsas.exceptions import RestoreError
+
+        fake_ecc = _FakeEccRunner(verify_result=False, repair_result=False)
+        ex = RestoreExecutor(mock_rustic, ecc_runner=fake_ecc)
+
+        mount, iso_path, sha1 = self._setup_volume_and_iso(tmp_path)
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        with pytest.raises(RestoreError) as exc_info:
+            ex.ingest_volume(
+                cache, mount, [sha1],
+                verify=False,
+                iso_path=iso_path,
+                media_type=MediaType.BD25,
+            )
+        # Recovery hint must point the user at an alternate copy from a
+        # different location (issue #20 acceptance criterion).
+        msg = str(exc_info.value) + " " + getattr(exc_info.value, "recovery_hint", "")
+        msg_lower = msg.lower()
+        assert (
+            "alternate" in msg_lower
+            or "another" in msg_lower
+            or "different" in msg_lower
+        ), (
+            f"Error should reference an alternate copy from a different "
+            f"location; got: {msg!r}"
+        )
