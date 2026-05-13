@@ -873,3 +873,121 @@ class TestCmdRecovery:
         assert excinfo.value.code != 0
         err = capsys.readouterr().err
         assert "frobnicate" in err or "invalid choice" in err
+
+
+def _write_session_config(tmp_path) -> tuple[str, str]:
+    """Create a minimal TOML config + initialized DB and return (cfg, db) paths."""
+    staging = tmp_path / "staging"
+    staging.mkdir(exist_ok=True)
+    mirror = tmp_path / "mirror"
+    mirror.mkdir(exist_ok=True)
+    db = tmp_path / "archive.db"
+    cfg = tmp_path / "lcsas.toml"
+    cfg.write_text(f"""
+[paths]
+mirror_base = "{mirror}"
+staging = "{staging}"
+database = "{db}"
+
+[defaults]
+media_type = "TEST_TINY"
+metadata_reserve_mb = 0
+""")
+    # Initialize the catalog DB so list_sessions has tables to query.
+    main(["init", "--db-path", str(db)])
+    return str(cfg), str(db)
+
+
+class TestCmdSessionList:
+    def test_session_list_empty_db(self, tmp_path, capsys):
+        """Fresh DB with no sessions: handler returns 0 and prints a friendly
+        'no sessions' message."""
+        cfg, _db = _write_session_config(tmp_path)
+        capsys.readouterr()  # clear init output
+
+        result = main(["--config", cfg, "session", "list"])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "No sessions found" in out
+
+    def test_session_list_shows_sessions(self, tmp_path, capsys):
+        """Two sessions in different statuses both appear with their IDs and statuses."""
+        from lcsas.db.connection import get_connection
+        from lcsas.db.sessions import create_session, update_session_status
+
+        cfg, db = _write_session_config(tmp_path)
+        conn = get_connection(db)
+        try:
+            s1 = create_session(conn, media_type="TEST_TINY",
+                                staging_dir="/tmp/s1", session_id="sess-staged-001")
+            s2 = create_session(conn, media_type="TEST_TINY",
+                                staging_dir="/tmp/s2", session_id="sess-complete-001")
+            # s1 stays at the default STAGED status; advance s2 to COMPLETE
+            # (schema CHECK constrains status to STAGED/PARTIAL/COMPLETE/CLEANED,
+            # so 'COMPLETE' is the closest valid analogue of the issue's "BURNED").
+            update_session_status(conn, s2.session_id, "COMPLETE")
+        finally:
+            conn.close()
+        capsys.readouterr()  # clear
+
+        result = main(["--config", cfg, "session", "list"])
+        assert result == 0
+        out = capsys.readouterr().out
+        # Both session IDs are present in the listing.
+        assert s1.session_id in out
+        assert s2.session_id in out
+        # Both statuses are visible.
+        assert "STAGED" in out
+        assert "COMPLETE" in out
+
+    def test_session_list_status_filter(self, tmp_path, capsys):
+        """--status STAGED shows only the STAGED session."""
+        from lcsas.db.connection import get_connection
+        from lcsas.db.sessions import create_session, update_session_status
+
+        cfg, db = _write_session_config(tmp_path)
+        conn = get_connection(db)
+        try:
+            staged = create_session(conn, media_type="TEST_TINY",
+                                    staging_dir="/tmp/staged",
+                                    session_id="sess-staged-only")
+            other = create_session(conn, media_type="TEST_TINY",
+                                   staging_dir="/tmp/other",
+                                   session_id="sess-complete-only")
+            update_session_status(conn, other.session_id, "COMPLETE")
+        finally:
+            conn.close()
+        capsys.readouterr()  # clear
+
+        result = main(["--config", cfg, "session", "list", "--status", "STAGED"])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert staged.session_id in out
+        assert other.session_id not in out
+
+    def test_session_list_invalid_status_errors(self, tmp_path, capsys):
+        """Passing a bogus --status value: argparse has no `choices=`, so the
+        handler accepts the filter, the DB returns no rows, and the handler
+        prints a 'No sessions found ...' notice (with the bad status echoed)
+        and exits 0. This documents the current handler contract."""
+        from lcsas.db.connection import get_connection
+        from lcsas.db.sessions import create_session
+
+        cfg, db = _write_session_config(tmp_path)
+        # Seed a real session so the empty result is unambiguously caused by
+        # the filter, not by an empty table.
+        conn = get_connection(db)
+        try:
+            create_session(conn, media_type="TEST_TINY",
+                           staging_dir="/tmp/real", session_id="sess-real-001")
+        finally:
+            conn.close()
+        capsys.readouterr()  # clear
+
+        result = main(["--config", cfg, "session", "list", "--status", "BOGUS"])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "No sessions found" in out
+        assert "BOGUS" in out
+        # The real session must NOT be listed because the filter excluded it.
+        assert "sess-real-001" not in out
