@@ -52,8 +52,17 @@ requires_xorriso = pytest.mark.skipif(
 
 
 def _make_config(tmp_path: Path, *, num_repos: int = 2,
-                 media: MediaType = MediaType.TEST_TINY) -> LCSASConfig:
-    """Build a test config with mirror repos and pack files on disk."""
+                 media: MediaType = MediaType.TEST_TINY,
+                 metadata_reserve_bytes: int = 100) -> LCSASConfig:
+    """Build a test config with mirror repos and pack files on disk.
+
+    ``metadata_reserve_bytes`` defaults to 100 (a near-zero value) for
+    tests that only exercise the bin-packing math.  Tests that actually
+    materialize an ISO via xorriso must pass a realistic value (~700 KB
+    on TEST_TINY) because the holographic catalog + per-repo Rustic
+    metadata inflate the staging directory well beyond the raw pack
+    bytes.
+    """
     mirror = tmp_path / "mirror"
     staging = tmp_path / "staging"
     db_path = tmp_path / "archive.db"
@@ -78,7 +87,7 @@ def _make_config(tmp_path: Path, *, num_repos: int = 2,
         db_path=db_path,
         default_media_type=media,
         default_ecc_redundancy_pct=0,
-        metadata_reserve_bytes=100,
+        metadata_reserve_bytes=metadata_reserve_bytes,
         label_prefix="TEST",
         repositories=repos,
     )
@@ -821,9 +830,15 @@ class TestISOContentValidation:
 
     def test_multi_volume_iso_all_packs_covered(self, tmp_path):
         """When staging produces multiple volumes, all packs are in ISOs."""
-        # Use TEST_TINY (1 MB, 0% ECC) with packs sized to force multi-volume
-        # but stay under media capacity including ISO filesystem overhead.
-        config = _make_config(tmp_path, num_repos=1, media=MediaType.TEST_TINY)
+        # Use TEST_TINY (1 MB, 0% ECC).  Reserve ~700 KB for the
+        # holographic catalog + per-repo Rustic metadata that staging
+        # injects on top of the raw pack bytes; the remaining ~350 KB
+        # of usable capacity then forces multi-volume splitting at the
+        # given pack size.
+        config = _make_config(
+            tmp_path, num_repos=1, media=MediaType.TEST_TINY,
+            metadata_reserve_bytes=700_000,
+        )
         conn = get_memory_connection()
         create_all(conn)
 
@@ -831,9 +846,9 @@ class TestISOContentValidation:
             register_repo(conn, name, name.title(),
                           str(config.repositories[name].mirror_path))
 
-        # Create packs that require 2+ volumes on TEST_TINY (~1 MB usable).
-        # 5 packs × 300 KB = 1.5 MB → splits across at least 2 volumes.
-        packs = _seed_packs(conn, config, num_packs=5, pack_size=300_000)
+        # 8 packs × 100 KB = 800 KB > 350 KB usable per volume → at
+        # least 3 volumes worth of splitting.
+        packs = _seed_packs(conn, config, num_packs=8, pack_size=100_000)
 
         xorriso = SubprocessXorrisoRunner()
         dvdisaster = MagicMock()

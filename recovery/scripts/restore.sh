@@ -175,6 +175,24 @@ RECOVERY=""
 TARGET=""
 SNAP="latest"
 
+# --help / -h short-circuit: print usage to stdout and exit 0 so this
+# script is friendly to interactive users and to test harnesses that
+# probe for a usage block.
+case "${1:-}" in
+    -h|--help)
+        cat <<EOF
+usage: $0 [RECOVERY_ROOT] TARGET_DIR [SNAPSHOT_ID|latest]
+
+  RECOVERY_ROOT (auto-detected when restore.sh is run from inside the
+  recovery tree) must contain bin/<arch>/lcsas-restore and/or src/.
+  TARGET_DIR is where to write restored files (default: /tmp/restored).
+
+  Password is read from stdin, \$LCSAS_PASSWORD env, or \$LCSAS_PWFILE.
+EOF
+        exit 0
+        ;;
+esac
+
 # Pattern 1: first arg looks like a recovery root (has bin/ or src/).
 if [ $# -ge 2 ] && [ -d "$1/bin" -o -d "$1/src" ] 2>/dev/null; then
     RECOVERY="$1"

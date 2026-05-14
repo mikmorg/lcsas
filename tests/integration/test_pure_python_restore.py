@@ -715,13 +715,17 @@ class TestPurePythonFallbackRestore:
                     f.name for f in data_dir.rglob("*") if f.is_file()
                 )
 
-        # Ingest from each volume
+        # Ingest from each volume.  In a real multi-disc recovery any
+        # single volume only holds a subset of the packs, so ask the
+        # executor to collect (not raise on) "pack not present here";
+        # the loop fills the cache by trying every volume in turn.
         for vol_dir in extracted_vols:
             executor.ingest_volume(
                 cache_dir=cache,
                 volume_mount=vol_dir,
                 required_packs=all_packs,
                 verify=True,
+                collect_failures=True,
             )
 
         # ── Now restore with PurePythonRestorer ──────────────────

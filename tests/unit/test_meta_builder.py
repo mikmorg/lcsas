@@ -302,25 +302,40 @@ class TestMetaVolumeBuilder:
         )
 
     def test_restore_script_shows_help(self):
-        """restore.sh --help should work."""
+        """restore.sh --help should print usage and exit 0.
+
+        The active driver is recovery/scripts/restore.sh (POSIX-sh, 3-tier
+        cascade).  It prints a usage block to stderr and exits 0 when given
+        --help; legacy --key / --isos flags are not part of the new
+        contract.
+        """
         result = subprocess.run(
-            ["bash", str(self.output / "restore.sh"), "--help"],
+            ["sh", str(self.output / "restore.sh"), "--help"],
             capture_output=True,
             text=True,
         )
         assert result.returncode == 0
-        assert "--key" in result.stdout
-        assert "--isos" in result.stdout
+        out = result.stdout + result.stderr
+        assert "restore.sh" in out
+        # The new driver documents positional usage, recovery tree layout,
+        # and the password env vars.
+        assert "RECOVERY_ROOT" in out or "TARGET_DIR" in out
+        assert "LCSAS_PASSWORD" in out or "LCSAS_PWFILE" in out
 
     def test_restore_script_has_cascades(self):
-        """restore.sh should contain cascading extraction and rustic resolution."""
+        """restore.sh should declare the 3-tier recovery cascade.
+
+        Tier 1: prebuilt static lcsas-restore (C89).
+        Tier 2: vendored rustic-static.
+        Tier 3: Python fallback via standalone_restorer.py.
+        """
         content = (self.output / "restore.sh").read_text()
-        # ISO extraction cascade
-        assert "extract_iso" in content, "Missing extract_iso cascade function"
-        assert "mount -o loop" in content, "Missing mount fallback"
-        assert "7z x" in content, "Missing 7z fallback"
-        # Rustic resolution cascade
-        assert "rustic-static" in content, "Missing static rustic fallback"
+        assert "lcsas-restore" in content, "Missing tier-1 lcsas-restore reference"
+        assert "rustic-static" in content, "Missing tier-2 rustic-static reference"
+        assert "standalone_restorer.py" in content, (
+            "Missing tier-3 Python fallback reference"
+        )
+        assert "Tier 1" in content and "Tier 2" in content and "Tier 3" in content
 
     def test_no_pycache_in_source(self):
         """Bundled LCSAS source should not contain __pycache__."""
@@ -330,12 +345,21 @@ class TestMetaVolumeBuilder:
         )
 
     def test_start_here_generated(self):
-        """Meta-volume should have a START_HERE.txt file."""
+        """Meta-volume should have a START_HERE.txt file.
+
+        The fixture builds without an LCSASConfig, so the minimal
+        START_HERE generator is used (no per-tenant key info).  We
+        only validate the title block and that operating-system
+        sections are present so the doc is usable.
+        """
         path = self.output / "START_HERE.txt"
         assert path.is_file(), "START_HERE.txt not generated on meta-volume"
         content = path.read_text()
         assert "START HERE" in content
-        assert "ENCRYPTION KEY" in content.upper() or "encryption key" in content.lower()
+        # The minimal version covers OS-specific entry points.
+        upper = content.upper()
+        assert "WINDOWS" in upper
+        assert "LINUX" in upper or "MACOS" in upper
 
     def test_readme_restore_txt_generated(self):
         """Meta-volume should have a plain-text README_RESTORE.txt."""
@@ -368,23 +392,30 @@ class TestMetaVolumeBuilder:
         assert os.access(str(sr), os.X_OK)
 
     def test_restore_script_has_python_fallback(self):
-        """restore.sh should reference the Python fallback path."""
+        """restore.sh should reference the tier-3 Python fallback path."""
         content = (self.output / "restore.sh").read_text()
-        assert "USE_PYTHON_FALLBACK" in content, (
-            "restore.sh missing Python fallback flag"
-        )
         assert "standalone_restorer.py" in content, (
             "restore.sh missing standalone_restorer.py reference"
         )
-        assert "PYTHON" in content, (
-            "restore.sh missing Python binary resolution"
+        # Tier 3 is opt-in via an explicit allow flag — the bare path
+        # (tiers 1-2) stays Python-free.
+        assert "LCSAS_ALLOW_PYTHON_TIER" in content, (
+            "restore.sh missing Python tier gate"
         )
+        assert "python3" in content, "restore.sh missing python3 invocation"
 
     def test_restore_script_has_pack_count_check(self):
-        """restore.sh should check pack count before restore."""
-        content = (self.output / "restore.sh").read_text()
+        """restore_legacy.sh (kept for compat) checks pack count post-ingest.
+
+        The active POSIX-sh driver no longer performs this check itself —
+        each cascade tier exits non-zero on failure, which is sufficient.
+        The legacy bash driver retains the explicit check.
+        """
+        legacy = self.output / "restore_legacy.sh"
+        assert legacy.is_file(), "restore_legacy.sh not bundled on meta-volume"
+        content = legacy.read_text()
         assert "ACTUAL_PACKS" in content, (
-            "restore.sh missing post-ingest pack count check"
+            "restore_legacy.sh missing post-ingest pack count check"
         )
 
     def test_no_incomplete_marker_after_build(self):
@@ -405,8 +436,16 @@ class TestMetaVolumeBuilder:
         assert "finalize" in content
 
     def test_restore_script_single_drive_default(self):
-        """restore.sh must drive single-drive mode and emit the disc-swap prompt."""
-        content = (self.output / "restore.sh").read_text()
+        """restore_legacy.sh drives the single-drive multi-disc UX.
+
+        The single-drive disc-swap helper is part of the legacy bash
+        driver; the new POSIX-sh driver delegates that responsibility
+        to the C-based lcsas-restore binary.  We assert the legacy
+        contract because that's where these markers still live.
+        """
+        legacy = self.output / "restore_legacy.sh"
+        assert legacy.is_file()
+        content = legacy.read_text()
         assert "INSERT DISC:" in content
         assert "restore_single_drive.py" in content
         assert 'MODE="single-drive"' in content

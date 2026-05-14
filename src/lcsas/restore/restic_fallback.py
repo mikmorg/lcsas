@@ -60,20 +60,25 @@ from lcsas.restore._aes_pure import (
 _ZSTD_MAGIC = b"\x28\xB5\x2F\xFD"
 
 try:
-    import zstandard as _zstd  # type: ignore[import-not-found]
+    # zstandard is an optional dependency; the ignores cover the case
+    # when it's not installed (and we still want mypy to pass) AND the
+    # case when it IS installed but has incomplete type stubs (some
+    # versions return Any from decompress()).  `unused-ignore` lets the
+    # ignores stay quiet whichever mypy verdict applies on this host.
+    import zstandard as _zstd  # type: ignore[import-not-found,unused-ignore]
 
     def _decompress_zstd(data: bytes, max_output_size: int = 0) -> bytes:
         dctx = _zstd.ZstdDecompressor()
         if max_output_size > 0:
-            return dctx.decompress(data, max_output_size=max_output_size)  # type: ignore[no-any-return]
+            return dctx.decompress(data, max_output_size=max_output_size)  # type: ignore[no-any-return,unused-ignore]
         # Try without limit first; if that fails (no content size in
         # the frame header), fall back with a generous cap.
         try:
-            return dctx.decompress(data)  # type: ignore[no-any-return]
+            return dctx.decompress(data)  # type: ignore[no-any-return,unused-ignore]
         except _zstd.ZstdError:
             # Generous fallback for highly-compressible data (e.g.
             # sparse database backups with long runs of zeros).
-            return dctx.decompress(data, max_output_size=max(len(data) * 100, 64 * 1024 * 1024))  # type: ignore[no-any-return]
+            return dctx.decompress(data, max_output_size=max(len(data) * 100, 64 * 1024 * 1024))  # type: ignore[no-any-return,unused-ignore]
 
     _HAS_ZSTD = True
 except ImportError:

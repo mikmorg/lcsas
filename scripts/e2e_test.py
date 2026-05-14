@@ -50,9 +50,12 @@ PASSWORD_FILE = DB_DIR / "test_password.txt"
 MEDIA_TYPE = "TEST_TINY"
 
 # Number of test files per "dataset" directory.
-# Sizes are kept small so each rustic pack fits inside TEST_TINY (1 MB).
-NUM_FILES = 30
-FILE_SIZE_RANGE = (1024, 20_000)  # 1 KB to 20 KB
+# Sizes are kept small so packs + holographic metadata fit inside TEST_TINY
+# (1 MB).  The metadata injection (SQLite catalog + per-repo Rustic index /
+# snapshots / keys) is ~700 KB for this fixture, leaving ~300 KB usable for
+# pack data per volume.  Keep total pack data under that budget.
+NUM_FILES = 8
+FILE_SIZE_RANGE = (256, 4_000)  # 256 B to 4 KB
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -256,18 +259,15 @@ def backup_data(repos: dict[str, Path]) -> dict[str, str]:
             str(source),
         ])
         if result.returncode == 0:
-            # Parse snapshot ID from JSON output
-            for line in result.stdout.strip().splitlines():
-                try:
-                    obj = json.loads(line)
-                    if "snapshot_id" in obj:
-                        snapshot_ids[repo_name] = obj["snapshot_id"]
-                        info(f"{repo_name} snapshot: {obj['snapshot_id'][:12]}...")
-                        break
-                except json.JSONDecodeError:
-                    continue
-            else:
-                warn(f"Could not parse snapshot ID for {repo_name}")
+            # rustic backup --json emits a single multi-line JSON object whose
+            # top-level "id" field is the new snapshot ID.
+            try:
+                obj = json.loads(result.stdout)
+                snap_id = obj["id"]
+                snapshot_ids[repo_name] = snap_id
+                info(f"{repo_name} snapshot: {snap_id[:12]}...")
+            except (json.JSONDecodeError, KeyError) as e:
+                warn(f"Could not parse snapshot ID for {repo_name}: {e}")
         else:
             fail(f"Backup failed for {repo_name}")
             sys.exit(1)
@@ -352,9 +352,9 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
 
     mt = MediaType.TEST_TINY
     has_dvdisaster = tool_available("dvdisaster")
-    # dvdisaster RS03 pads ISOs to minimum optical disc size (~350 MB+),
-    # making it impractical for TEST_TINY (1 MB). Skip ECC for test media.
-    skip_ecc = mt.is_test or not has_dvdisaster
+    # ECC is now always-on for production media; TEST_TINY has 0% overhead so
+    # the orchestrator implicitly skips ECC for it (see PR #36 — --skip-ecc
+    # was removed and the implicit per-media gate replaced it).
     if mt.is_test and has_dvdisaster:
         info("Skipping ECC for test media (dvdisaster minimum image exceeds test capacity)")
 
@@ -379,7 +379,7 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
         default_media_type=mt,
         default_ecc_redundancy_pct=10 if has_dvdisaster else 0,
         label_prefix="E2ETEST",
-        metadata_reserve_bytes=50_000,  # Small reserve for test media
+        metadata_reserve_bytes=750_000,  # ISO+SQLite catalog+rustic metadata ~700KB
         repositories=repo_configs,
     )
 
@@ -427,7 +427,6 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
                 manifest,
                 iso_output=iso_path,
                 skip_burn=True,
-                skip_ecc=skip_ecc,
             )
 
             iso_size = iso_path.stat().st_size
@@ -588,10 +587,10 @@ def test_restore(
 
         info(f"Restoring {repo_name} (snapshot {snap_id[:12]}...)")
         result = run([
-            "rustic", "restore", snap_id,
+            "rustic", "restore",
             "--repo", str(repo_path),
             "--password-file", str(PASSWORD_FILE),
-            "--target", str(restore_target),
+            snap_id, str(restore_target),
         ])
         if result.returncode != 0:
             fail(f"Restore failed for {repo_name}")
@@ -698,22 +697,33 @@ def create_redundant_copies(
         builder = StagingBuilder(staging_root)
         builder.initialize()
 
-        # Stage packs from mirror
-        for repo_name in ["family", "work"]:
+        # Stage each repo's packs from its own mirror data directory.
+        # stage_packs raises if it can't find every listed pack, so we have
+        # to partition by repo_id rather than passing the full pack list
+        # to every mirror.
+        packs_by_repo: dict[str, list] = {}
+        for pack in orig_packs:
+            packs_by_repo.setdefault(pack.repo_id, []).append(pack)
+        for repo_name, repo_packs in packs_by_repo.items():
             data_dir = MIRROR_DIR / repo_name / "data"
             if data_dir.is_dir():
-                builder.stage_packs(orig_packs, data_dir)
+                builder.stage_packs(repo_packs, data_dir)
 
-        # Create ISO
+        # Create ISO.  Walk the full STAGING → BURNING → BURNED → VERIFIED
+        # transition chain so the lifecycle gate accepts each step (no
+        # force=True shortcut, since the e2e test is meant to mirror real
+        # operator flow as closely as possible).
         iso_path = ISO_DIR / f"{dup_label}.iso"
         try:
             xorriso.create_iso(staging_root, iso_path, dup_label)
+            update_status(conn, dup_vol.volume_id, "BURNING")
+            update_status(conn, dup_vol.volume_id, "BURNED")
             update_status(conn, dup_vol.volume_id, "VERIFIED")
             redundant_isos.append(iso_path)
             info(f"  ISO created: {iso_path.name} ({iso_path.stat().st_size:,} bytes)")
         except Exception as e:
             warn(f"  Failed to create redundant ISO: {e}")
-            update_status(conn, dup_vol.volume_id, "STAGING")
+            # Volume is still in STAGING; nothing to roll back.
 
     return redundant_isos
 
@@ -833,7 +843,7 @@ def test_iso_restore(
             shutil.rmtree(cache_dir)
 
         # Prepare cache from the original mirror metadata
-        rustic_runner = SubprocessRusticRunner(binary="rustic")
+        rustic_runner = SubprocessRusticRunner(rustic_binary="rustic")
         executor = RestoreExecutor(rustic_runner)
         executor.prepare_cache(cache_dir, repo_path)
 
@@ -845,9 +855,9 @@ def test_iso_restore(
                 continue
             available_packs = [f.name for f in data_dir.rglob("*") if f.is_file()]
             if available_packs:
-                ingested = executor.ingest_volume(cache_dir, mount_dir, available_packs)
-                if ingested > 0:
-                    info(f"  From {vol_label}: ingested {ingested} packs")
+                result = executor.ingest_volume(cache_dir, mount_dir, available_packs)
+                if result.ingested > 0:
+                    info(f"  From {vol_label}: ingested {result.ingested} packs")
 
         # Restore
         restore_target = RESTORE_DIR / f"{repo_name}_from_iso"
@@ -857,10 +867,10 @@ def test_iso_restore(
 
         try:
             result = run([
-                "rustic", "restore", snap_id,
+                "rustic", "restore",
                 "--repo", str(cache_dir),
                 "--password-file", str(PASSWORD_FILE),
-                "--target", str(restore_target),
+                snap_id, str(restore_target),
             ])
             if result.returncode != 0:
                 fail(f"  Restore from ISOs failed for {repo_name}")
