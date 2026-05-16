@@ -31,6 +31,7 @@ multi-tenant, recovery-toolchain) are called out as such in their detail files.
 | burn-iso-portable | [workflows/burn-iso-portable.md](workflows/burn-iso-portable.md) | Standalone `burn-iso`, remote burner, `catalog import-receipts`. |
 | location-management | [workflows/location-management.md](workflows/location-management.md) | `location add/list/status/move` and multi-copy sync. |
 | restore-host-linux | [workflows/restore-host-linux.md](workflows/restore-host-linux.md) | Restore from a running Linux host with `lcsas restore`. |
+| restore-host-macos | [workflows/restore-host-macos.md](workflows/restore-host-macos.md) | Restore from a running macOS host (Apple Silicon or Intel). |
 | restore-bare-metal | [workflows/restore-bare-metal.md](workflows/restore-bare-metal.md) | initramfs + live-USB recovery from cold start. |
 | restore-windows | [workflows/restore-windows.md](workflows/restore-windows.md) | `restore.bat` end-to-end from a Windows host. |
 | restore-disc-only | [workflows/restore-disc-only.md](workflows/restore-disc-only.md) | Tier-3 pure-Python single-disc restore. |
