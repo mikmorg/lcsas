@@ -348,6 +348,7 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
     from lcsas.config.settings import LCSASConfig, RepositoryConfig
     from lcsas.db.queries import get_total_unarchived_bytes, get_unarchived_packs
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+    from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
     mt = MediaType.TEST_TINY
@@ -379,7 +380,7 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
         default_media_type=mt,
         default_ecc_redundancy_pct=10 if has_dvdisaster else 0,
         label_prefix="E2ETEST",
-        metadata_reserve_bytes=750_000,  # ISO+SQLite catalog+rustic metadata ~700KB
+        metadata_reserve_bytes=MIN_HOLOGRAPHIC_RESERVE_BYTES,
         repositories=repo_configs,
     )
 

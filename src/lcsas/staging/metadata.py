@@ -24,6 +24,17 @@ from lcsas.utils.pack_layout import METADATA_SUBDIRS
 _METADATA_DIRS = list(METADATA_SUBDIRS)
 _METADATA_FILES = ["config"]
 
+# Empirical lower-bound reserve for a single-repo fixture's holographic
+# injection on TEST_TINY-class media.  The injected payload is dominated
+# by the SQLite catalog skeleton + per-repo Rustic index/snapshots/keys
+# + ISO 9660 filesystem overhead — together that's about 650-700 KB even
+# for a 1-repo / few-packs fixture.  Production deployments don't care
+# (the LCSASConfig default of 100 MB swamps it), but test fixtures that
+# materialize an ISO on the 1 MB TEST_TINY media MUST budget at least
+# this much in ``metadata_reserve_bytes`` or the staging directory will
+# overflow capacity.  Bump if the injector grows.
+MIN_HOLOGRAPHIC_RESERVE_BYTES = 700_000
+
 
 class HolographicInjector:
     """Injects repository metadata and catalog into a staging directory."""

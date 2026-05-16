@@ -830,14 +830,14 @@ class TestISOContentValidation:
 
     def test_multi_volume_iso_all_packs_covered(self, tmp_path):
         """When staging produces multiple volumes, all packs are in ISOs."""
-        # Use TEST_TINY (1 MB, 0% ECC).  Reserve ~700 KB for the
-        # holographic catalog + per-repo Rustic metadata that staging
-        # injects on top of the raw pack bytes; the remaining ~350 KB
-        # of usable capacity then forces multi-volume splitting at the
-        # given pack size.
+        # Use TEST_TINY (1 MB, 0% ECC).  Reserve the empirical
+        # holographic-injection budget (SQLite catalog + per-repo Rustic
+        # metadata) for staging; the remaining ~350 KB of usable capacity
+        # then forces multi-volume splitting at the given pack size.
+        from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
         config = _make_config(
             tmp_path, num_repos=1, media=MediaType.TEST_TINY,
-            metadata_reserve_bytes=700_000,
+            metadata_reserve_bytes=MIN_HOLOGRAPHIC_RESERVE_BYTES,
         )
         conn = get_memory_connection()
         create_all(conn)

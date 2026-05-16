@@ -138,6 +138,21 @@ def _get_tool_version(tool_path: Path) -> str:
 
 
 # ── Restore script (pure bash — no Python needed for basic restore) ─
+#
+# Compatibility status: this bash heredoc is the LEGACY driver.  When
+# ``recovery/scripts/restore.sh`` (the POSIX-sh / 3-tier driver) is
+# available — which is normally the case — meta-builder writes it as
+# the meta-volume's primary ``/restore.sh`` and this heredoc is
+# written alongside as ``/restore_legacy.sh`` for operators who still
+# want the explicit ``--key/--isos/--target`` flag interface.
+#
+# Two integration tests pin to this legacy contract:
+#   * tests/integration/test_meta_volume_restore.py — exercises full
+#     end-to-end ISO restore via the flag-based CLI
+#   * tests/unit/test_meta_builder.py — asserts the legacy ``ACTUAL_PACKS``
+#     pack-count check and the single-drive ``INSERT DISC:`` UX
+# Before deleting this constant, retarget those tests at the new driver
+# (or delete the legacy-only ones outright).
 
 RESTORE_SCRIPT = r'''#!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════
