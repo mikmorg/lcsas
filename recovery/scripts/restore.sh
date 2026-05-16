@@ -218,21 +218,67 @@ EOF
     exit 2
 fi
 
-# ── Architecture detection ────────────────────────────────────────
+# ── Target detection (arch + OS) ──────────────────────────────────
+#
+# Picks one of the six targets bundled by the meta-builder (see
+# docs/CROSS_PLATFORM_META_RFC.md §3 and recovery/UPSTREAM.sha256):
+#
+#   x86_64-unknown-linux-musl        Linux x86_64
+#   aarch64-unknown-linux-musl       Linux ARM64
+#   armv7-unknown-linux-gnueabihf    Linux 32-bit ARM
+#   aarch64-apple-darwin             macOS Apple Silicon
+#   x86_64-apple-darwin              macOS Intel
+#   x86_64-pc-windows-gnu            Windows (POSIX driver path)
+#
+# Override with $LCSAS_TARGET if auto-detection misfires.
 
 if [ -x "$RECOVERY/scripts/detect_arch.sh" ]; then
-    ARCH="$(sh "$RECOVERY/scripts/detect_arch.sh" 2>/dev/null || uname -m)"
+    MACHINE="$(sh "$RECOVERY/scripts/detect_arch.sh" 2>/dev/null || uname -m)"
 else
-    ARCH="$(uname -m)"
+    MACHINE="$(uname -m)"
 fi
-case "$ARCH" in
-    x86_64|amd64)        ARCH=x86_64 ;;
-    aarch64|arm64)       ARCH=aarch64 ;;
-    riscv64)             ARCH=riscv64 ;;
-    *)
-        printf 'unsupported arch: %s\n' "$ARCH" >&2
-        exit 1 ;;
-esac
+OS="$(uname -s 2>/dev/null || printf 'Linux\n')"
+
+if [ -n "${LCSAS_TARGET:-}" ]; then
+    TARGET="$LCSAS_TARGET"
+else
+    case "$OS" in
+        Linux)
+            case "$MACHINE" in
+                x86_64|amd64)        TARGET="x86_64-unknown-linux-musl" ;;
+                aarch64|arm64)       TARGET="aarch64-unknown-linux-musl" ;;
+                armv7*|armv6*|arm)   TARGET="armv7-unknown-linux-gnueabihf" ;;
+                *)
+                    printf 'unsupported Linux machine: %s\n' "$MACHINE" >&2
+                    printf '(supported: x86_64, aarch64/arm64, armv7)\n' >&2
+                    exit 1 ;;
+            esac ;;
+        Darwin)
+            case "$MACHINE" in
+                arm64|aarch64)       TARGET="aarch64-apple-darwin" ;;
+                x86_64)              TARGET="x86_64-apple-darwin" ;;
+                *)
+                    printf 'unsupported macOS machine: %s\n' "$MACHINE" >&2
+                    exit 1 ;;
+            esac ;;
+        MINGW*|MSYS*|CYGWIN*|Windows*)
+            case "$MACHINE" in
+                x86_64|amd64)        TARGET="x86_64-pc-windows-gnu" ;;
+                *)
+                    printf 'unsupported Windows machine: %s\n' "$MACHINE" >&2
+                    printf '(only x86_64 is supported under POSIX-sh; use restore.bat instead)\n' >&2
+                    exit 1 ;;
+            esac ;;
+        *)
+            printf 'unsupported OS: %s\n' "$OS" >&2
+            printf '(supported: Linux, Darwin, MINGW/MSYS/CYGWIN/Windows)\n' >&2
+            exit 1 ;;
+    esac
+fi
+
+# Legacy single-axis $ARCH retained for callers reading it post-source,
+# but new code paths should use $TARGET.
+ARCH="$TARGET"
 
 # ── Password file ─────────────────────────────────────────────────
 
@@ -375,9 +421,9 @@ fi
 
 # ── Tier 1: prebuilt lcsas-restore (C89, static, no Python) ───────
 
-RESTORE_BIN="$RECOVERY/bin/$ARCH/lcsas-restore"
+RESTORE_BIN="$RECOVERY/bin/$TARGET/lcsas-restore"
 if [ -x "$RESTORE_BIN" ]; then
-    printf '[tier 1] using prebuilt lcsas-restore (%s)\n' "$ARCH" >&2
+    printf '[tier 1] using prebuilt lcsas-restore (%s)\n' "$TARGET" >&2
     # Drop cwd outside the meta-disc before exec, so the kernel does
     # not hold it through the exec barrier.
     [ -n "${META_DISC:-}" ] && cd / 2>/dev/null || true
@@ -388,9 +434,9 @@ fi
 
 # ── Tier 2: vendored rustic-static (no Python) ────────────────────
 
-RUSTIC_BIN="$RECOVERY/bin/$ARCH/rustic-static"
+RUSTIC_BIN="$RECOVERY/bin/$TARGET/rustic-static"
 if [ -x "$RUSTIC_BIN" ]; then
-    printf '[tier 2] using vendored rustic-static (%s)\n' "$ARCH" >&2
+    printf '[tier 2] using vendored rustic-static (%s)\n' "$TARGET" >&2
     exec "$RUSTIC_BIN" --repository "$REPO" --password-file "$PWFILE" \
                      restore "$SNAP" "$TARGET"
 fi
