@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-all coverage clean blind-restore blind-restore-teardown
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-all coverage clean blind-restore blind-restore-teardown fetch-recovery
 
 dev:
 	pip install -e ".[dev]"
@@ -38,3 +38,10 @@ blind-restore:
 
 blind-restore-teardown:
 	sudo tests/e2e/cdemu_blind_restore/teardown.sh
+
+# Populate ~/.cache/lcsas/recovery-binaries/ with the rustic + Python
+# tarballs pinned in recovery/UPSTREAM.sha256.  Idempotent; required
+# before `lcsas meta build` if cross-platform support is wanted.  Set
+# LCSAS_RECOVERY_CACHE to override the cache root.
+fetch-recovery:
+	sh recovery/scripts/fetch_upstream.sh
