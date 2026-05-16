@@ -109,6 +109,50 @@ def get_copies_for_volume(
     return [_row_to_copy(r) for r in rows]
 
 
+def get_iso_sha256_for_label(
+    conn: sqlite3.Connection,
+    volume_label: str,
+) -> str | None:
+    """Return the recorded ISO SHA-256 for a volume label, or None.
+
+    Phase 21.3 helper for the portable verifier.  Looks first at
+    ``volume_copies`` (one row per location, written at burn time when
+    a copy lands at a location), then falls back to the most recent
+    ``session_volumes`` row for the same volume (covers the staged-but-
+    not-yet-burned-to-a-location case).
+
+    Returns the first non-null hash found.  Returns ``None`` if the
+    volume label is unknown OR none of its records carry a hash
+    (older v3 catalogs, or copies recorded before Phase 13).
+    """
+    from lcsas.db.volumes import get_volume_by_label
+
+    vol = get_volume_by_label(conn, volume_label)
+    if vol is None:
+        return None
+
+    # Prefer volume_copies — per-location, written at burn-to-disc time.
+    for copy in get_copies_for_volume(conn, vol.volume_id, active_only=False):
+        if copy.iso_sha256:
+            return copy.iso_sha256
+
+    # Fallback: session_volumes — written at ISO mastering time.  Pick
+    # the latest session for this volume to favor the most recent burn.
+    row = conn.execute(
+        """SELECT sv.iso_sha256
+           FROM session_volumes sv
+           JOIN burn_sessions bs USING (session_id)
+           WHERE sv.volume_id = ?
+             AND sv.iso_sha256 IS NOT NULL
+           ORDER BY bs.created_at DESC
+           LIMIT 1""",
+        (vol.volume_id,),
+    ).fetchone()
+    if row and row["iso_sha256"]:
+        return str(row["iso_sha256"])
+    return None
+
+
 def get_copies_at_location(
     conn: sqlite3.Connection,
     location: str,

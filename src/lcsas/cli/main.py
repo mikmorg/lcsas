@@ -1639,11 +1639,38 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 logger.error(f"ISO file not found: {iso_path}")
                 return 1
 
+            # Phase 21.3: try DVDisaster RS03 verify first (Linux primary
+            # path; can detect AND repair).  If dvdisaster isn't available
+            # on the host (macOS, Windows, or a stripped-down Linux box),
+            # fall back to a portable SHA-256 compare against the hash
+            # recorded at burn time (detect-only).  See
+            # docs/CROSS_PLATFORM_META_RFC.md §6 Q2 for the rationale.
+            from lcsas.db.volume_copies import get_iso_sha256_for_label
             from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
-            dvd_runner = SubprocessDVDisasterRunner()
+            from lcsas.restore.executor import verify_iso_sha256
+
             logger.info(f"Verifying ISO: {iso_path}")
-            ok = dvd_runner.verify_iso(iso_path)
-            logger.info(f"  ECC verify: {'PASS' if ok else 'FAIL'}")
+            try:
+                dvd_runner = SubprocessDVDisasterRunner()
+                ok = dvd_runner.verify_iso(iso_path)
+                logger.info(f"  ECC verify: {'PASS' if ok else 'FAIL'}")
+            except (FileNotFoundError, RuntimeError) as e:
+                # dvdisaster isn't installed — fall back to SHA-256.
+                logger.info(
+                    "  dvdisaster unavailable (%s); falling back to "
+                    "portable SHA-256 verify", e.__class__.__name__,
+                )
+                expected = get_iso_sha256_for_label(conn, args.volume_label)
+                if not expected:
+                    logger.error(
+                        "  No recorded ISO SHA-256 for %s — cannot verify "
+                        "without dvdisaster.  (Catalog rows pre-dating "
+                        "Phase 13 don't carry the hash.)",
+                        args.volume_label,
+                    )
+                    return 1
+                ok = verify_iso_sha256(iso_path, expected)
+                logger.info(f"  SHA-256 verify: {'PASS' if ok else 'FAIL'}")
             if not ok:
                 passed = False
 

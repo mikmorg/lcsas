@@ -153,6 +153,7 @@ class RestoreExecutor:
         collect_failures: bool = False,
         iso_path: Path | None = None,
         media_type: MediaType | None = None,
+        expected_sha256: str | None = None,
     ) -> IngestionResult:
         """Copy needed packs from a mounted volume into the restore cache.
 
@@ -171,6 +172,12 @@ class RestoreExecutor:
             media_type: Optional media type of the volume.  Currently used
                 only for diagnostics; ECC verify is always attempted when an
                 ECC runner and ``iso_path`` are supplied.
+            expected_sha256: Optional ISO SHA-256 hash recorded at burn time
+                (Phase 21.3 — sourced from ``session_volumes.iso_sha256`` or
+                ``volume_copies.iso_sha256``).  When supplied without an ECC
+                runner, the verifier falls back to a portable SHA-256 compare
+                (detect-only; cannot repair) — covers macOS / Windows recovery
+                hosts where DVDisaster isn't bundled.
 
         Returns:
             IngestionResult with ingested count and (optionally) failed hashes.
@@ -178,26 +185,42 @@ class RestoreExecutor:
         Raises:
             PackCorruptionError: When a copied pack fails hash verification
                 and collect_failures is False.
-            RestoreError: When the ISO's ECC is unrecoverably damaged
-                (both verify and repair fail) — points the operator at
-                an alternate copy from a different location.
+            RestoreError: When ISO verification fails — either ECC verify+repair
+                both failed (Linux path) or the SHA-256 mismatched (portable
+                fallback path).  Points the operator at an alternate copy
+                from a different location either way.
         """
-        # ── ECC verify-or-repair on the mounted ISO ─────────────────
-        # Issue #20: invoke the injected ECC runner before reading any
-        # pack so bit-rot within the RS03 recovery margin is transparently
-        # healed.  Guards (no-op cases):
-        #   * ``self._ecc is None`` — test-only path.
+        # ── ISO integrity check before reading any pack ─────────────
+        # Issue #20 + Phase 21.3: verify the mounted ISO's integrity
+        # using the strongest mechanism available (ECC > SHA-256
+        # fallback) so bit-rot is caught before it propagates to a
+        # restored file.  Guards (no-op cases):
         #   * ``iso_path is None`` — caller has no ISO handle (e.g.
         #     reading from a pre-extracted directory in tests).
+        #   * No ECC runner AND no expected_sha256 — there's nothing
+        #     to compare against; ``verify_iso`` returns True with a
+        #     "not verified" log.
+        have_verifier = self._ecc is not None or expected_sha256 is not None
         if (
-            self._ecc is not None
-            and iso_path is not None
-            and not self.verify_iso(iso_path)
+            iso_path is not None
+            and have_verifier
+            and not self.verify_iso(iso_path, expected_sha256=expected_sha256)
         ):
+            if self._ecc is not None:
+                msg = (
+                    f"ECC verification and repair both failed for "
+                    f"'{iso_path.name}'. The disc is damaged beyond "
+                    f"DVDisaster RS03's recovery margin."
+                )
+            else:
+                msg = (
+                    f"ISO SHA-256 mismatch for '{iso_path.name}'. "
+                    f"The disc bytes don't match what was burned; "
+                    f"DVDisaster wasn't available on this host so no "
+                    f"repair was attempted."
+                )
             raise RestoreError(
-                f"ECC verification and repair both failed for "
-                f"'{iso_path.name}'. The disc is damaged beyond "
-                f"DVDisaster RS03's recovery margin.",
+                msg,
                 recovery_hint=(
                     "Try an alternate copy of this volume from a "
                     "different location (off-site / cold-vault). "

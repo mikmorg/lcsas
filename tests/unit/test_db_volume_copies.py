@@ -15,6 +15,7 @@ from lcsas.db.volume_copies import (
     destroy_copy,
     get_copies_at_location,
     get_copies_for_volume,
+    get_iso_sha256_for_label,
     move_volume_copy,
 )
 from lcsas.db.volume_events import get_events_for_volume
@@ -139,3 +140,78 @@ class TestVolumeCopyCRUD:
 
         all_copies = get_copies_for_volume(conn, volume.volume_id, active_only=False)
         assert all_copies[0].status == "DESTROYED"
+
+
+# ────────────────────────────────────────────────────────────────────
+#  get_iso_sha256_for_label — Phase 21.3
+# ────────────────────────────────────────────────────────────────────
+
+
+class TestGetIsoSha256ForLabel:
+    """Tests for the per-label SHA lookup used by the portable verifier."""
+
+    def test_returns_hash_from_volume_copy(self, conn, volume):
+        """volume_copies row carries the burn-time hash → return it."""
+        add_volume_copy(
+            conn, volume.volume_id, "Home_Shelf",
+            iso_sha256="a" * 64,
+        )
+        assert get_iso_sha256_for_label(conn, "TEST_001") == "a" * 64
+
+    def test_returns_none_for_unknown_label(self, conn):
+        """Unknown label → None (caller decides what to do)."""
+        assert get_iso_sha256_for_label(conn, "NOPE") is None
+
+    def test_returns_none_when_no_copy_has_hash(self, conn, volume):
+        """volume_copies row exists but iso_sha256 is NULL → None.
+
+        Models pre-Phase-13 catalogs where the column existed but
+        wasn't populated at burn time.
+        """
+        add_volume_copy(conn, volume.volume_id, "Home_Shelf", iso_sha256=None)
+        assert get_iso_sha256_for_label(conn, "TEST_001") is None
+
+    def test_first_non_null_wins_across_copies(self, conn, volume):
+        """Multiple copies — first row with a non-null hash wins."""
+        add_volume_copy(conn, volume.volume_id, "Home_Shelf", iso_sha256=None)
+        add_volume_copy(
+            conn, volume.volume_id, "Offsite_Safe",
+            iso_sha256="b" * 64,
+        )
+        assert get_iso_sha256_for_label(conn, "TEST_001") == "b" * 64
+
+    def test_falls_back_to_session_volumes(self, conn, volume):
+        """No volume_copy row at all → fall back to session_volumes
+        (which gets the hash at ISO mastering time, before any disc
+        is actually burned to a location)."""
+        from lcsas.db.sessions import add_session_volume, create_session
+
+        sess = create_session(conn, "TEST_TINY", "/tmp/staging-21-3")
+        add_session_volume(
+            conn,
+            session_id=sess.session_id,
+            volume_id=volume.volume_id,
+            iso_path="/tmp/staging-21-3/TEST_001.iso",
+            iso_sha256="c" * 64,
+        )
+        assert get_iso_sha256_for_label(conn, "TEST_001") == "c" * 64
+
+    def test_prefers_volume_copies_over_session_volumes(self, conn, volume):
+        """When both sources carry a hash, volume_copies wins (it's
+        per-location and rewritten at every re-burn)."""
+        from lcsas.db.sessions import add_session_volume, create_session
+
+        sess = create_session(conn, "TEST_TINY", "/tmp/staging-21-3b")
+        add_session_volume(
+            conn,
+            session_id=sess.session_id,
+            volume_id=volume.volume_id,
+            iso_path="/tmp/staging-21-3b/TEST_001.iso",
+            iso_sha256="c" * 64,
+        )
+        add_volume_copy(
+            conn, volume.volume_id, "Home_Shelf",
+            iso_sha256="d" * 64,
+        )
+        # volume_copies hash 'd' wins, not session_volumes 'c'.
+        assert get_iso_sha256_for_label(conn, "TEST_001") == "d" * 64

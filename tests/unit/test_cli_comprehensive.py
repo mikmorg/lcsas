@@ -910,6 +910,111 @@ class TestCmdVerify:
         assert b_events_fail == []
 
 
+class TestCmdVerifyShaFallback:
+    """Phase 21.3 — cmd_verify falls back to SHA-256 when dvdisaster
+    isn't installed on the host."""
+
+    def _seed_volume_with_iso(self, db_path, *, iso_path, iso_sha256):
+        """Helper: create a volume + session_volumes row pointing at
+        iso_path so cmd_verify's ISO mode picks it up.  Also adds a
+        volume_copies row carrying ``iso_sha256`` for the lookup
+        path Phase 21.3 wires.
+        """
+        from lcsas.db.locations import ensure_location
+        from lcsas.db.sessions import add_session_volume, create_session
+        from lcsas.db.volume_copies import add_volume_copy
+
+        conn = get_connection(db_path)
+        try:
+            create_all(conn)
+            ensure_location(conn, "Home")
+            vol = create_volume(
+                conn, "VOL_SHA", "u-sha", "BD25", 25_000_000_000,
+                "Home", "BURNED",
+            )
+            create_session(conn, media_type="BD25", staging_dir="/tmp",
+                           session_id="sess-sha")
+            add_session_volume(
+                conn, "sess-sha", vol.volume_id,
+                iso_path=str(iso_path), iso_sha256=iso_sha256,
+            )
+            add_volume_copy(
+                conn, vol.volume_id, "Home", iso_sha256=iso_sha256,
+            )
+            return vol
+        finally:
+            conn.close()
+
+    def test_dvdisaster_missing_falls_back_to_sha(self, tmp_path, capsys):
+        """When dvdisaster raises FileNotFoundError, cmd_verify resorts
+        to ``verify_iso_sha256`` against the catalog-recorded hash."""
+        from lcsas.utils.hashing import sha256_file
+
+        db = tmp_path / "test.db"
+        iso = tmp_path / "vol.iso"
+        iso.write_bytes(b"some fake iso bytes for sha test" * 50)
+        sha = sha256_file(iso)
+        self._seed_volume_with_iso(db, iso_path=iso, iso_sha256=sha)
+
+        # Make the dvdisaster runner pretend it's not installed.
+        with patch(
+            "lcsas.ecc.dvdisaster.SubprocessDVDisasterRunner.verify_iso",
+            side_effect=FileNotFoundError("dvdisaster not installed"),
+        ):
+            result = main(["--db", str(db), "verify", "VOL_SHA"])
+
+        # SHA matched the catalog → verify passes overall.
+        assert result == 0
+        out = capsys.readouterr().out
+        # The "falling back" log line must appear.
+        assert "falling back" in out.lower() or "SHA-256" in out
+
+    def test_dvdisaster_missing_with_bad_sha_fails(self, tmp_path, capsys):
+        """SHA fallback that catches actual corruption → verify fails
+        with rc=1, not silently passes."""
+        db = tmp_path / "test.db"
+        iso = tmp_path / "vol.iso"
+        iso.write_bytes(b"good bytes" * 1000)
+        # Seed a DIFFERENT hash so the SHA compare fails.
+        self._seed_volume_with_iso(db, iso_path=iso, iso_sha256="9" * 64)
+
+        with patch(
+            "lcsas.ecc.dvdisaster.SubprocessDVDisasterRunner.verify_iso",
+            side_effect=FileNotFoundError("dvdisaster not installed"),
+        ):
+            result = main(["--db", str(db), "verify", "VOL_SHA"])
+
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "FAIL" in out
+
+    def test_dvdisaster_missing_no_recorded_sha_returns_error(
+        self, tmp_path, capsys,
+    ):
+        """When dvdisaster is gone AND the catalog has no hash for this
+        volume, cmd_verify exits non-zero with an explanatory message
+        (rather than silently passing or hanging)."""
+        db = tmp_path / "test.db"
+        iso = tmp_path / "vol.iso"
+        iso.write_bytes(b"fake" * 100)
+        # Seed WITHOUT any hash — both session_volumes and volume_copies
+        # carry an empty string.
+        self._seed_volume_with_iso(db, iso_path=iso, iso_sha256="")
+
+        with patch(
+            "lcsas.ecc.dvdisaster.SubprocessDVDisasterRunner.verify_iso",
+            side_effect=FileNotFoundError("dvdisaster not installed"),
+        ):
+            result = main(["--db", str(db), "verify", "VOL_SHA"])
+
+        assert result == 1
+        out = capsys.readouterr().out
+        assert (
+            "No recorded ISO SHA-256" in out
+            or "cannot verify without dvdisaster" in out.lower()
+        )
+
+
 # ===================================================================
 # cmd_consolidate (mock-based)
 # ===================================================================
