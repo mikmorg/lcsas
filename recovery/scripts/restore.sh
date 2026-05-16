@@ -450,9 +450,20 @@ fi
 
 if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
     PYBIN=""
-    for p in python3 python; do
-        if command -v "$p" >/dev/null 2>&1; then PYBIN="$p"; break; fi
+    # Prefer the per-target bundled CPython (from python-build-standalone)
+    # over whatever happens to be on $PATH.  This keeps tier 3 working on
+    # hosts that don't have python3 packaged.
+    for cand in \
+        "$RECOVERY/bin/$TARGET/python/bin/python3" \
+        "$RECOVERY/bin/$TARGET/python/python.exe" \
+        "$RECOVERY/bin/$TARGET/python/bin/python"; do
+        if [ -x "$cand" ]; then PYBIN="$cand"; break; fi
     done
+    if [ -z "$PYBIN" ]; then
+        for p in python3 python; do
+            if command -v "$p" >/dev/null 2>&1; then PYBIN="$p"; break; fi
+        done
+    fi
     PYREST=""
     for cand in "$RECOVERY/../standalone_restorer.py" \
                 "$RECOVERY/standalone_restorer.py" \

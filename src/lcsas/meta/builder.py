@@ -1934,6 +1934,105 @@ class MetaVolumeBuilder:
             top_bat = self._output / "restore.bat"
             shutil.copy2(str(new_bat), str(top_bat))
 
+        # Phase 21.1: bundle per-target prebuilt rustic + python from the
+        # upstream cache populated by `make fetch-recovery`.  Tolerant of
+        # a missing or partial cache so single-arch developer builds
+        # keep working without the full ~600 MB download.
+        self._bundle_upstream_binaries(dst)
+
+    def _bundle_upstream_binaries(self, recovery_dst: Path) -> None:
+        """Copy cached upstream rustic + python tarball contents per target.
+
+        Reads from ``$LCSAS_RECOVERY_CACHE`` (default
+        ``~/.cache/lcsas/recovery-binaries``).  For every approved target
+        present in the cache, writes:
+
+            recovery_dst/bin/<target>/rustic-static          (from rustic/<target>/rustic)
+            recovery_dst/bin/<target>/python/                (from python/<target>/python/)
+
+        Targets with no rustic binary AND no python tree are skipped
+        silently — the recovery cascade in ``restore.sh`` handles the
+        empty case (falls through tier 2 → tier 3 → fatal).
+        """
+        cache_root_env = os.environ.get("LCSAS_RECOVERY_CACHE")
+        if cache_root_env:
+            cache_root = Path(cache_root_env)
+        else:
+            cache_root = Path.home() / ".cache" / "lcsas" / "recovery-binaries"
+
+        if not cache_root.is_dir():
+            return  # No cache → meta build still works for single-arch path.
+
+        # Approved targets per docs/CROSS_PLATFORM_META_RFC.md §3.  We
+        # iterate this list rather than `os.listdir(cache_root)` so a
+        # corrupted/extra directory in the cache can't silently extend
+        # what we ship.
+        for target in (
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-musl",
+            "armv7-unknown-linux-gnueabihf",
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-pc-windows-gnu",
+        ):
+            bin_dst = recovery_dst / "bin" / target
+            staged_any = False
+
+            # ── rustic ─────────────────────────────────────────────
+            # The fetch script extracts the tarball next to itself; the
+            # binary is named "rustic" (or "rustic.exe" on Windows).
+            rustic_cache = cache_root / "rustic" / target
+            for cand in (rustic_cache / "rustic", rustic_cache / "rustic.exe"):
+                if cand.is_file():
+                    bin_dst.mkdir(parents=True, exist_ok=True)
+                    out_name = "rustic-static.exe" if cand.suffix == ".exe" else "rustic-static"
+                    shutil.copy2(str(cand), str(bin_dst / out_name))
+                    os.chmod(str(bin_dst / out_name), 0o755)
+                    staged_any = True
+                    break
+
+            # ── python ─────────────────────────────────────────────
+            # python-build-standalone tarballs extract to a "python/"
+            # tree (Linux/macOS) or a flat install tree (Windows;
+            # python.exe sits at the top).  Copy the whole tree.
+            python_cache = cache_root / "python" / target / "python"
+            if python_cache.is_dir():
+                py_dst = bin_dst / "python"
+                bin_dst.mkdir(parents=True, exist_ok=True)
+                if py_dst.exists():
+                    shutil.rmtree(str(py_dst))
+                shutil.copytree(
+                    str(python_cache), str(py_dst), symlinks=True,
+                )
+                staged_any = True
+            else:
+                # Windows PBS tarballs extract to "python/" directly or
+                # to the target root; try both.
+                python_alt = cache_root / "python" / target
+                python_exe = python_alt / "python.exe"
+                if python_exe.is_file():
+                    py_dst = bin_dst / "python"
+                    bin_dst.mkdir(parents=True, exist_ok=True)
+                    if py_dst.exists():
+                        shutil.rmtree(str(py_dst))
+                    # Copy everything in python_alt EXCEPT the tarball.
+                    py_dst.mkdir(parents=True)
+                    for entry in python_alt.iterdir():
+                        if entry.name.endswith(".tar.gz") or entry.name == ".extracted":
+                            continue
+                        if entry.is_dir():
+                            shutil.copytree(
+                                str(entry), str(py_dst / entry.name), symlinks=True,
+                            )
+                        else:
+                            shutil.copy2(str(entry), str(py_dst / entry.name))
+                    staged_any = True
+
+            if staged_any:
+                # No-op: directory already created by the per-binary
+                # branches; documenting intent.
+                pass
+
     def _bundle_metadata(self) -> None:
         """Copy per-repo Rustic metadata (keys, config, index, snapshots) onto the meta volume.
 

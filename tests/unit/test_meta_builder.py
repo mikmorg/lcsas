@@ -493,3 +493,134 @@ class TestSingleDriveBitsStandalone:
         assert "phase_bootstrap" in content
         assert "phase_ingest" in content
         assert "phase_finalize" in content
+
+
+# ────────────────────────────────────────────────────────────────────
+#  _bundle_upstream_binaries — Phase 21.1.b
+# ────────────────────────────────────────────────────────────────────
+
+
+class TestBundleUpstreamBinaries:
+    """Tests for the per-target upstream-binary bundler.
+
+    Uses a synthetic cache directory (no real rustic / python download
+    required) to exercise the dispatch logic.
+    """
+
+    def _make_cache(self, root, target, *, with_rustic=True, with_python=True):
+        """Populate root with fake cached files for one target."""
+        if with_rustic:
+            d = root / "rustic" / target
+            d.mkdir(parents=True)
+            (d / "rustic").write_text("#!/bin/sh\necho fake rustic\n")
+            (d / "rustic").chmod(0o755)
+        if with_python:
+            d = root / "python" / target / "python" / "bin"
+            d.mkdir(parents=True)
+            (d / "python3").write_text("#!/bin/sh\necho fake python3\n")
+            (d / "python3").chmod(0o755)
+            # Add a stdlib placeholder so the tree looks real.
+            (root / "python" / target / "python" / "lib").mkdir()
+
+    def test_no_cache_dir_is_silent_skip(self, tmp_path, monkeypatch):
+        """Missing cache root → bundler returns without error or output."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "nonexistent"))
+        b = MetaVolumeBuilder(tmp_path / "meta")
+        recovery_dst = tmp_path / "meta" / "recovery"
+        recovery_dst.mkdir(parents=True)
+        # Must not raise.
+        b._bundle_upstream_binaries(recovery_dst)
+        # And must not create any bin/ subdirectory.
+        assert not (recovery_dst / "bin").exists()
+
+    def test_single_target_cached(self, tmp_path, monkeypatch):
+        """A cache holding one target produces bin/<target>/rustic-static
+        and bin/<target>/python/."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+        cache_root = tmp_path / "cache"
+        self._make_cache(cache_root, "x86_64-unknown-linux-musl")
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
+
+        recovery_dst = tmp_path / "meta" / "recovery"
+        recovery_dst.mkdir(parents=True)
+        b = MetaVolumeBuilder(tmp_path / "meta")
+        b._bundle_upstream_binaries(recovery_dst)
+
+        target_dir = recovery_dst / "bin" / "x86_64-unknown-linux-musl"
+        assert target_dir.is_dir()
+        rustic = target_dir / "rustic-static"
+        assert rustic.is_file()
+        assert os.access(str(rustic), os.X_OK)
+        py = target_dir / "python" / "bin" / "python3"
+        assert py.is_file()
+        assert os.access(str(py), os.X_OK)
+
+    def test_unknown_targets_in_cache_are_ignored(self, tmp_path, monkeypatch):
+        """Bundler iterates the *approved* target list, not the cache —
+        random extra directories don't leak into the meta volume."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+        cache_root = tmp_path / "cache"
+        # Pollute the cache with an unapproved target.
+        bogus = cache_root / "rustic" / "sparc64-unknown-linux-gnu"
+        bogus.mkdir(parents=True)
+        (bogus / "rustic").write_text("evil\n")
+        # And an approved one to ensure the bundler does run.
+        self._make_cache(cache_root, "aarch64-apple-darwin", with_python=False)
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
+
+        recovery_dst = tmp_path / "meta" / "recovery"
+        recovery_dst.mkdir(parents=True)
+        b = MetaVolumeBuilder(tmp_path / "meta")
+        b._bundle_upstream_binaries(recovery_dst)
+
+        # Approved target landed.
+        assert (recovery_dst / "bin" / "aarch64-apple-darwin" / "rustic-static").is_file()
+        # Unapproved target did NOT.
+        assert not (recovery_dst / "bin" / "sparc64-unknown-linux-gnu").exists()
+
+    def test_partial_cache_rustic_only(self, tmp_path, monkeypatch):
+        """A target with only rustic (no python) still bundles rustic
+        without creating a stray bin/<target>/python/ dir."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+        cache_root = tmp_path / "cache"
+        self._make_cache(
+            cache_root, "armv7-unknown-linux-gnueabihf",
+            with_rustic=True, with_python=False,
+        )
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
+
+        recovery_dst = tmp_path / "meta" / "recovery"
+        recovery_dst.mkdir(parents=True)
+        b = MetaVolumeBuilder(tmp_path / "meta")
+        b._bundle_upstream_binaries(recovery_dst)
+
+        target_dir = recovery_dst / "bin" / "armv7-unknown-linux-gnueabihf"
+        assert (target_dir / "rustic-static").is_file()
+        assert not (target_dir / "python").exists()
+
+    def test_all_six_targets_round_trip(self, tmp_path, monkeypatch):
+        """When the cache holds every approved target, every target's
+        bin/ subtree appears on the meta volume."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+        cache_root = tmp_path / "cache"
+        targets = [
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-musl",
+            "armv7-unknown-linux-gnueabihf",
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-pc-windows-gnu",
+        ]
+        for t in targets:
+            self._make_cache(cache_root, t)
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
+
+        recovery_dst = tmp_path / "meta" / "recovery"
+        recovery_dst.mkdir(parents=True)
+        b = MetaVolumeBuilder(tmp_path / "meta")
+        b._bundle_upstream_binaries(recovery_dst)
+
+        for t in targets:
+            assert (recovery_dst / "bin" / t / "rustic-static").is_file(), t
+            assert (recovery_dst / "bin" / t / "python" / "bin" / "python3").is_file(), t
