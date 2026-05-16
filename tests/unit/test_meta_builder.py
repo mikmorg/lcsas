@@ -675,3 +675,183 @@ class TestBundleUpstreamBinaries:
             "x86_64-apple-darwin",
         ):
             assert not (out / "recovery" / "bin" / unexpected).exists(), unexpected
+
+
+# ────────────────────────────────────────────────────────────────────
+#  _regenerate_recovery_manifest — Phase 21.4
+# ────────────────────────────────────────────────────────────────────
+
+
+class TestRegenerateRecoveryManifest:
+    """Tests for the merged-manifest step that integrates bundled
+    upstream binaries into recovery/MANIFEST.sha256 on the meta volume.
+    """
+
+    def _seed_meta_recovery(self, tmp_path, *, with_manifest=True):
+        """Build a synthetic meta-volume recovery/ subtree.
+
+        Returns (output, recovery_dst).  The source recovery/MANIFEST
+        carries one pre-existing entry so we can assert it survives.
+        """
+        out = tmp_path / "meta"
+        out.mkdir()
+        recovery_dst = out / "recovery"
+        recovery_dst.mkdir()
+        if with_manifest:
+            # Pre-existing entry (mimics a file authored by us — must
+            # survive the merge step).
+            (recovery_dst / "VERSION").write_text("1.0.0\n")
+            import hashlib
+            sha = hashlib.sha256(b"1.0.0\n").hexdigest()
+            (recovery_dst / "MANIFEST.sha256").write_text(
+                f"{sha}  ./VERSION\n"
+            )
+        return out, recovery_dst
+
+    def _add_bundled_binary(self, recovery_dst, target, rel_path, content=b"\xca\xfe"):
+        """Drop a synthetic bundled file under bin/<target>/<rel_path>."""
+        dst = recovery_dst / "bin" / target / rel_path
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(content)
+        return dst
+
+    def test_no_manifest_is_silent_skip(self, tmp_path):
+        """If recovery/MANIFEST.sha256 doesn't exist, the step is a no-op
+        rather than erroring."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        out, recovery_dst = self._seed_meta_recovery(tmp_path, with_manifest=False)
+        b = MetaVolumeBuilder(out)
+        # Must not raise; must not create a manifest out of thin air.
+        b._regenerate_recovery_manifest(recovery_dst)
+        assert not (recovery_dst / "MANIFEST.sha256").exists()
+
+    def test_existing_entries_preserved(self, tmp_path):
+        """Source-tree entries (./VERSION) survive even when there are
+        no bundled binaries to merge."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        out, recovery_dst = self._seed_meta_recovery(tmp_path)
+        b = MetaVolumeBuilder(out)
+        b._regenerate_recovery_manifest(recovery_dst)
+
+        content = (recovery_dst / "MANIFEST.sha256").read_text()
+        assert "./VERSION" in content
+
+    def test_bundled_binaries_added(self, tmp_path):
+        """After bundling a per-target file under bin/<target>/, the
+        manifest regen picks it up with the correct SHA-256."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        out, recovery_dst = self._seed_meta_recovery(tmp_path)
+        self._add_bundled_binary(
+            recovery_dst, "x86_64-unknown-linux-musl",
+            "rustic-static", content=b"fake rustic body",
+        )
+        b = MetaVolumeBuilder(out)
+        b._regenerate_recovery_manifest(recovery_dst)
+
+        import hashlib
+        expected_sha = hashlib.sha256(b"fake rustic body").hexdigest()
+        content = (recovery_dst / "MANIFEST.sha256").read_text()
+        assert (
+            f"{expected_sha}  ./bin/x86_64-unknown-linux-musl/rustic-static"
+            in content
+        )
+        # Source entry unchanged.
+        assert "./VERSION" in content
+
+    def test_idempotent(self, tmp_path):
+        """Running the regen twice with no intervening change produces
+        byte-identical output."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        out, recovery_dst = self._seed_meta_recovery(tmp_path)
+        self._add_bundled_binary(
+            recovery_dst, "aarch64-apple-darwin", "rustic-static",
+            content=b"darwin arm rustic",
+        )
+        b = MetaVolumeBuilder(out)
+        b._regenerate_recovery_manifest(recovery_dst)
+        first = (recovery_dst / "MANIFEST.sha256").read_text()
+        b._regenerate_recovery_manifest(recovery_dst)
+        second = (recovery_dst / "MANIFEST.sha256").read_text()
+        assert first == second
+
+    def test_stale_bin_entries_replaced(self, tmp_path):
+        """If MANIFEST already carries an entry under ./bin/, regen drops
+        the old one and writes the current SHA — no stale row survives.
+        """
+        import hashlib
+
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        out, recovery_dst = self._seed_meta_recovery(tmp_path)
+        # Pre-seed a stale bin entry that doesn't match what we'll bundle.
+        old_text = (recovery_dst / "MANIFEST.sha256").read_text()
+        (recovery_dst / "MANIFEST.sha256").write_text(
+            old_text +
+            "deadbeef" * 8 + "  ./bin/x86_64-unknown-linux-musl/rustic-static\n"
+        )
+
+        # Now bundle a file with DIFFERENT content.
+        self._add_bundled_binary(
+            recovery_dst, "x86_64-unknown-linux-musl",
+            "rustic-static", content=b"the real binary",
+        )
+        b = MetaVolumeBuilder(out)
+        b._regenerate_recovery_manifest(recovery_dst)
+
+        content = (recovery_dst / "MANIFEST.sha256").read_text()
+        # Stale row is gone.
+        assert "deadbeef" * 8 not in content
+        # Real SHA is present.
+        real_sha = hashlib.sha256(b"the real binary").hexdigest()
+        assert (
+            f"{real_sha}  ./bin/x86_64-unknown-linux-musl/rustic-static"
+            in content
+        )
+
+    def test_orchestration_writes_merged_manifest(self, tmp_path, monkeypatch):
+        """End-to-end: _bundle_recovery_toolchain_artifacts (the public
+        orchestrator) calls into the merger and produces a manifest
+        covering both source files AND per-target bundled binaries.
+        """
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        cache_root = tmp_path / "cache"
+        # One target with rustic + python.
+        target = "x86_64-unknown-linux-musl"
+        (cache_root / "rustic" / target).mkdir(parents=True)
+        (cache_root / "rustic" / target / "rustic").write_text("#!fake\n")
+        (cache_root / "rustic" / target / "rustic").chmod(0o755)
+        (cache_root / "python" / target / "python" / "bin").mkdir(parents=True)
+        (cache_root / "python" / target / "python" / "bin" / "python3").write_text(
+            "#!fake\n"
+        )
+        (cache_root / "python" / target / "python" / "bin" / "python3").chmod(0o755)
+
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
+
+        repo_root = Path(__file__).resolve().parents[2]
+        out = tmp_path / "meta"
+        out.mkdir()
+        b = MetaVolumeBuilder(
+            out,
+            project_root=repo_root,
+            recovery_dir=repo_root / "recovery",
+        )
+        b._bundle_recovery_toolchain_artifacts()
+
+        manifest_text = (out / "recovery" / "MANIFEST.sha256").read_text()
+        # Source entry survived (./.gitattributes is in the real
+        # recovery/ tree on every checkout).
+        assert "./.gitattributes" in manifest_text
+        # Bundled rustic entry written.
+        assert (
+            f"./bin/{target}/rustic-static" in manifest_text
+        )
+        # Bundled python tree entry written.
+        assert (
+            f"./bin/{target}/python/bin/python3" in manifest_text
+        )

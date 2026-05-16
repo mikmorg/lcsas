@@ -2033,6 +2033,75 @@ class MetaVolumeBuilder:
                 # branches; documenting intent.
                 pass
 
+        # Phase 21.4: now that all bundled upstream binaries are in
+        # place, regenerate the meta-volume's recovery/MANIFEST.sha256
+        # so the bin/<target>/ files are part of the single integrity
+        # manifest an operator can `sha256sum -c` against.
+        self._regenerate_recovery_manifest(recovery_dst)
+
+    def _regenerate_recovery_manifest(self, recovery_dst: Path) -> None:
+        """Merge bundled upstream binaries into recovery/MANIFEST.sha256.
+
+        The source-tree MANIFEST already covers files we author (C
+        source, scripts, docs, vendored sqlite/zstd, …).  This step
+        adds the per-target rustic + python tree rooted at
+        ``bin/<target>/`` so the meta-volume ships with a single
+        integrity manifest covering everything under ``recovery/``.
+
+        Idempotent: re-running rewrites the file in place; the source
+        entries are preserved, the bin/<target>/ entries are recomputed.
+
+        Skipped (silent) when ``MANIFEST.sha256`` is absent from the
+        recovery tree (some older builds didn't ship it) — there's
+        nothing to merge into.
+        """
+        import hashlib
+
+        manifest_path = recovery_dst / "MANIFEST.sha256"
+        if not manifest_path.is_file():
+            return
+
+        # Read existing entries, keep anything NOT under ./bin/ — those
+        # rows are about to be regenerated and stale ones would shadow.
+        existing_lines: list[str] = []
+        for line in manifest_path.read_text().splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                existing_lines.append(line)
+                continue
+            # Parse "<sha>  <path>".  Drop bin/* entries (they get
+            # regenerated below); keep everything else verbatim.
+            parts = stripped.split("  ", 1)
+            if len(parts) == 2 and parts[1].startswith("./bin/"):
+                continue
+            existing_lines.append(line)
+
+        # Walk every file under recovery_dst/bin/ and produce a new
+        # entry.  Sort by relative path for deterministic output —
+        # makes the manifest reviewable and SHA-stable across builds
+        # that bundle the same target set.
+        bin_root = recovery_dst / "bin"
+        bin_entries: list[str] = []
+        if bin_root.is_dir():
+            for path in sorted(bin_root.rglob("*")):
+                if not path.is_file():
+                    continue
+                # Path inside recovery/ — manifest format is "./relative/path".
+                rel = path.relative_to(recovery_dst).as_posix()
+                # Compute SHA-256 streaming so this scales to the ~30 MB
+                # python tarballs without slurping into memory.
+                h = hashlib.sha256()
+                with path.open("rb") as f:
+                    while True:
+                        chunk = f.read(65536)
+                        if not chunk:
+                            break
+                        h.update(chunk)
+                bin_entries.append(f"{h.hexdigest()}  ./{rel}")
+
+        merged = "\n".join(existing_lines + bin_entries) + "\n"
+        manifest_path.write_text(merged)
+
     def _bundle_metadata(self) -> None:
         """Copy per-repo Rustic metadata (keys, config, index, snapshots) onto the meta volume.
 
