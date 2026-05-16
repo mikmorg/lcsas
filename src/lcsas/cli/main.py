@@ -1714,8 +1714,22 @@ def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any)
     passed_count = 0
     failed_count = 0
 
+    # Phase 21.5.a: probe dvdisaster ONCE up front, not per-volume.  If
+    # it isn't installed we fall back to SHA-256 verification against
+    # the catalog-recorded hash (Phase 21.3 pattern).
+    import shutil
+
+    from lcsas.db.volume_copies import get_iso_sha256_for_label
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
-    dvd_runner = SubprocessDVDisasterRunner()
+    from lcsas.restore.executor import verify_iso_sha256
+
+    dvdisaster_available = shutil.which("dvdisaster") is not None
+    dvd_runner = SubprocessDVDisasterRunner() if dvdisaster_available else None
+    if not dvdisaster_available:
+        logger.info(
+            "  dvdisaster unavailable; falling back to portable SHA-256 "
+            "verify for all volumes (Phase 21.3 / 21.5)."
+        )
 
     for vol in candidates:
         # Try to find the ISO path
@@ -1734,9 +1748,24 @@ def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any)
             logger.info(f"  {vol.label}: ISO not found ({iso_path}) — skipped")
             continue
 
-        ok = dvd_runner.verify_iso(iso_path)
+        if dvdisaster_available:
+            assert dvd_runner is not None  # mypy hint
+            ok = dvd_runner.verify_iso(iso_path)
+            verify_kind = "Batch ISO verify"
+        else:
+            # SHA-256 fallback path.  No recorded hash → skip (don't
+            # silently pass: integrity is unknown).
+            expected = get_iso_sha256_for_label(conn, vol.label)
+            if not expected:
+                logger.info(
+                    f"  {vol.label}: no recorded SHA-256 and dvdisaster "
+                    f"unavailable — skipped"
+                )
+                continue
+            ok = verify_iso_sha256(iso_path, expected)
+            verify_kind = "Batch SHA-256 verify"
         event_type = "VERIFY_PASS" if ok else "VERIFY_FAIL"
-        add_event(conn, vol.volume_id, event_type, detail=f"Batch ISO verify: {iso_path}")
+        add_event(conn, vol.volume_id, event_type, detail=f"{verify_kind}: {iso_path}")
 
         if ok:
             passed_count += 1

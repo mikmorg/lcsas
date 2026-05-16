@@ -910,6 +910,93 @@ class TestCmdVerify:
         assert b_events_fail == []
 
 
+class TestVerifyAllShaFallback:
+    """Phase 21.5.a — `verify --all` falls back to SHA-256 when dvdisaster
+    isn't on PATH (same pattern as cmd_verify's ISO mode in Phase 21.3)."""
+
+    def _seed(self, db_path, *, iso_path, iso_sha256, label):
+        """Helper: build a one-volume catalog where _verify_all will
+        find ``iso_path`` and (optionally) a recorded ``iso_sha256``."""
+        from lcsas.db.locations import ensure_location
+        from lcsas.db.sessions import add_session_volume, create_session
+        from lcsas.db.volume_copies import add_volume_copy
+
+        conn = get_connection(db_path)
+        try:
+            create_all(conn)
+            ensure_location(conn, "Home")
+            vol = create_volume(
+                conn, label, "u-" + label, "BD25", 25_000_000_000,
+                "Home", "BURNED",
+            )
+            create_session(
+                conn, media_type="BD25", staging_dir="/tmp",
+                session_id="sess-" + label,
+            )
+            add_session_volume(
+                conn, "sess-" + label, vol.volume_id,
+                iso_path=str(iso_path), iso_sha256=iso_sha256,
+            )
+            add_volume_copy(
+                conn, vol.volume_id, "Home", iso_sha256=iso_sha256,
+            )
+            return vol
+        finally:
+            conn.close()
+
+    def test_verify_all_falls_back_when_dvdisaster_missing(
+        self, tmp_path, capsys,
+    ):
+        """`verify --all` on a host without dvdisaster verifies each
+        volume's ISO via SHA-256 instead.  No FileNotFoundError leak."""
+        from lcsas.utils.hashing import sha256_file
+
+        db = tmp_path / "test.db"
+        iso = tmp_path / "v.iso"
+        iso.write_bytes(b"some iso content for batch verify" * 100)
+        sha = sha256_file(iso)
+        self._seed(db, iso_path=iso, iso_sha256=sha, label="VOL_BATCH")
+
+        with patch(
+            "shutil.which",
+            side_effect=lambda name: None if name == "dvdisaster" else "/usr/bin/" + name,
+        ):
+            result = main(["--db", str(db), "verify", "--all"])
+
+        # SHA matched → exit 0 with PASS.
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "VOL_BATCH: PASS" in out
+        # And the "falling back" line must appear at least once.
+        assert "falling back" in out.lower() or "SHA-256" in out
+
+    def test_verify_all_skips_volumes_with_no_recorded_sha(
+        self, tmp_path, capsys,
+    ):
+        """If dvdisaster is gone AND the catalog has no hash for a
+        volume, that volume is skipped (not silently passed and not
+        crashing the rest of the batch).
+        """
+        db = tmp_path / "test.db"
+        iso = tmp_path / "v.iso"
+        iso.write_bytes(b"x" * 4096)
+        # Seed with empty hash — no SHA available for verification.
+        self._seed(db, iso_path=iso, iso_sha256="", label="VOL_NOHASH")
+
+        with patch(
+            "shutil.which",
+            side_effect=lambda name: None if name == "dvdisaster" else "/usr/bin/" + name,
+        ):
+            result = main(["--db", str(db), "verify", "--all"])
+
+        # No verifications performed → "all skipped" exit path (rc=1
+        # so operators notice).
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "skipped" in out.lower()
+        assert "no recorded SHA-256" in out or "VOL_NOHASH" in out
+
+
 class TestCmdVerifyShaFallback:
     """Phase 21.3 — cmd_verify falls back to SHA-256 when dvdisaster
     isn't installed on the host."""

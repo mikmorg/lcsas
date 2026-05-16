@@ -25,12 +25,15 @@ set -eu
 
 usage() {
     cat >&2 <<EOF
-usage: $0 [--manifest PATH] [--cache PATH] [--no-extract]
+usage: $0 [--manifest PATH] [--cache PATH] [--no-extract] [--verify-only]
 
   --manifest PATH   Path to UPSTREAM.sha256 (default: <script-dir>/../UPSTREAM.sha256)
   --cache PATH      Cache root (default: \$LCSAS_RECOVERY_CACHE or
                     ~/.cache/lcsas/recovery-binaries)
   --no-extract      Download + verify only; skip tarball extraction.
+  --verify-only     Audit the cache against the manifest.  Never downloads
+                    and never extracts.  Exits non-zero on any mismatch or
+                    missing artifact.  Used by \`make verify-recovery\`.
   -h, --help        Show this message.
 
 Idempotent: re-runs are no-ops on a warm cache.
@@ -40,11 +43,13 @@ EOF
 MANIFEST=""
 CACHE=""
 EXTRACT=1
+VERIFY_ONLY=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --manifest) MANIFEST="$2"; shift 2 ;;
         --cache)    CACHE="$2";    shift 2 ;;
         --no-extract) EXTRACT=0;   shift   ;;
+        --verify-only) VERIFY_ONLY=1; EXTRACT=0; shift ;;
         -h|--help)  usage; exit 0 ;;
         *)          printf 'unknown argument: %s\n' "$1" >&2; usage; exit 2 ;;
     esac
@@ -128,6 +133,11 @@ process_line() {
         actual_sha="$($SHA_CMD "$dest_file" | awk '{print $1}')"
         if [ "$actual_sha" = "$expected_sha" ]; then
             printf '[cached] %s\n' "$relpath" >&2
+        elif [ "$VERIFY_ONLY" -eq 1 ]; then
+            printf '[error]  SHA mismatch for %s\n         expected %s\n         got      %s\n' \
+                "$relpath" "$expected_sha" "$actual_sha" >&2
+            failures=$((failures + 1))
+            return
         else
             printf '[stale]  %s — removing and re-downloading\n' "$relpath" >&2
             rm -f "$dest_file"
@@ -135,6 +145,11 @@ process_line() {
     fi
 
     if [ ! -f "$dest_file" ]; then
+        if [ "$VERIFY_ONLY" -eq 1 ]; then
+            printf '[error]  missing from cache: %s\n' "$relpath" >&2
+            failures=$((failures + 1))
+            return
+        fi
         url="$(resolve_url "$category" "$filename")"
         printf '[fetch]  %s\n' "$url" >&2
         if ! $DL_CMD "$dest_file" "$url"; then

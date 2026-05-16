@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-all coverage clean blind-restore blind-restore-teardown fetch-recovery
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-all coverage clean blind-restore blind-restore-teardown fetch-recovery verify-recovery
 
 dev:
 	pip install -e ".[dev]"
@@ -45,3 +45,9 @@ blind-restore-teardown:
 # LCSAS_RECOVERY_CACHE to override the cache root.
 fetch-recovery:
 	sh recovery/scripts/fetch_upstream.sh
+
+# Audit the local cache without downloading.  Reports any missing or
+# corrupted entries against recovery/UPSTREAM.sha256 and exits non-zero
+# if anything is wrong.  Phase 21.5.b.
+verify-recovery:
+	sh recovery/scripts/fetch_upstream.sh --verify-only
