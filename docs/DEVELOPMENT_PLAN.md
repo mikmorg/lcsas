@@ -188,7 +188,7 @@ limitation users have hit."
 
 | Item | Status | Notes |
 |---|---|---|
-| **Cross-platform meta-volume** | Design pending | The meta-volume currently bundles x86_64 Linux ELF binaries only.  ARM64 and RISC-V hosts cannot recover from a cold start without an x86_64 helper machine.  See [`CROSS_PLATFORM_META_RFC.md`](CROSS_PLATFORM_META_RFC.md) for the design RFC. |
+| **Cross-platform meta-volume** | RFC approved 2026-05-16 — Phase 21.1 ready to start | Multi-arch prebuilt bundling for six targets (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `armv7-unknown-linux-gnueabihf`, `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-pc-windows-gnu`).  All five §6 open questions resolved.  See [`CROSS_PLATFORM_META_RFC.md`](CROSS_PLATFORM_META_RFC.md) §9 for the Phase 21.1 implementation kick-off scope. |
 | **Coverage backfill** | In progress | The largest single-handler coverage gap is `cmd_consolidate` (~110 uncovered lines, mostly interactive-prompt and error branches).  TUI modules (`restore_wizard.py`, `bootable.py`) are harder targets and may need a separate testing strategy. |
 | **Cloud tier (S3/rclone)** | Out of scope | Architectural extension; current design could accommodate.  Would extend the storage-tier model from HOT/WARM/COLD to HOT/WARM/COLD/REMOTE. |
 | **Multi-session optical writing** | Out of scope | Adds complexity; current whole-disc model is simpler and sufficient. |

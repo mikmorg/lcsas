@@ -1,8 +1,9 @@
 # Cross-Platform Meta-Volume — Design RFC
 
-**Status:** DRAFT — awaiting approval before implementation.
+**Status:** **APPROVED** (2026-05-16). All §6 open questions resolved; see
+"Decisions" lines under each question.  Implementation kick-off scope in §9.
 **Author:** Claude Opus 4.7 (drafted from a session with Michael Morgan).
-**Date:** 2026-05-16.
+**Date:** 2026-05-16 (drafted), 2026-05-16 (approved).
 **Supersedes:** PR #78 (`feat(recovery): C89 + POSIX-sh recovery toolchain`),
 which was closed unmerged because it reintroduced the 5-tier recovery
 cascade that PR #30 had deliberately collapsed to 3 tiers.
@@ -70,19 +71,31 @@ Stuff the meta-volume with prebuilt binaries for several arch/OS pairs.
 At restore time, `restore.sh` detects the host arch and picks the right
 `bin/<arch>/` subtree.
 
-**Target matrix (proposed minimum):**
+**Target matrix (verified against upstream release listings, 2026-05-16):**
 
-| Arch / OS | Rationale |
-|---|---|
-| `x86_64-linux-gnu` | Today's only target.  Most lab/server hosts. |
-| `aarch64-linux-gnu` | Apple Silicon-via-Asahi, Raspberry Pi 4/5, AWS Graviton, modern Android dev. |
-| `x86_64-darwin` | Recovery from a Mac that has not yet been replaced. |
-| `aarch64-darwin` | Apple Silicon native macOS. |
-| `x86_64-w64-mingw32` | Already partially covered via `restore.bat` + the `rustic-static` Windows binary; this just makes it explicit. |
+| Target | Rustic upstream | Python (PBS) | Rationale |
+|---|---|---|---|
+| `x86_64-unknown-linux-musl` | ✓ | ✓ | **Static** — no host glibc dependency.  Replaces today's `x86_64-linux-gnu` path. |
+| `aarch64-unknown-linux-musl` | ✓ | ✓ | **Static** — Raspberry Pi 4/5, Apple Silicon via Asahi, AWS Graviton, modern Android dev boards. |
+| `armv7-unknown-linux-gnueabihf` | ✓ | ✓ | 32-bit ARM — Raspberry Pi 1/2/3/Zero, still extremely common in homelab / preservation. |
+| `aarch64-apple-darwin` | ✓ | ✓ | Apple Silicon native macOS. |
+| `x86_64-apple-darwin` | ✓ | ✓ | Intel Mac (recovery target until they age out). |
+| `x86_64-pc-windows-gnu` | ✓ | ✓ (msvc variant) | Windows; already partially covered by `restore.bat` + the existing `rustic-static` Windows binary — this formalizes it. |
 
-**RISC-V is excluded for now** — upstream Rustic does not yet ship a
-release artifact for `riscv64gc-unknown-linux-gnu`, so we'd have to
-cross-compile ourselves.  Defer.
+**Key change vs the original DRAFT:** prefer **musl-static** over
+**glibc-dynamic** for Linux targets.  Rustic ships both flavors upstream;
+the musl-static binary has zero host-libc dependency, which is the right
+choice for cold-start recovery.
+
+**Excluded for now (decisions under §6):**
+
+- `riscv64gc-*` — no upstream rustic artifact.  Defer until upstream
+  ships.
+- `i686-*` (32-bit x86) — upstream ships it, but the cold-storage
+  recovery audience for 32-bit x86 in 2026+ is vanishingly small.
+- `*-freebsd / *-openbsd` — no upstream rustic artifact.  Defer.
+- `aarch64-pc-windows-msvc` (Windows ARM64) — no upstream rustic
+  artifact.  Defer.
 
 **Where the binaries come from:**
 
@@ -190,14 +203,21 @@ on non-x86_64 targets.
 
 ## 4. Recommendation
 
-**Option A (multi-arch prebuilt bundling)** for these targets:
-`x86_64-linux-gnu`, `aarch64-linux-gnu`, `aarch64-darwin`,
-`x86_64-darwin`, `x86_64-w64-mingw32`.  Defer RISC-V until upstream
-Rustic ships a release artifact.
+**Option A (multi-arch prebuilt bundling)** for the six targets in §3's
+table:
+
+- `x86_64-unknown-linux-musl`
+- `aarch64-unknown-linux-musl`
+- `armv7-unknown-linux-gnueabihf`
+- `aarch64-apple-darwin`
+- `x86_64-apple-darwin`
+- `x86_64-pc-windows-gnu`
 
 This is the only option that simultaneously satisfies the cold-start
-requirement, the 50-year survivability story, and the existing
-3-tier architecture.
+requirement, the 50-year survivability story, and the existing 3-tier
+architecture.  Every target is independently verified to have both an
+upstream rustic release artifact and a python-build-standalone release
+artifact, so we never have to cross-compile anything ourselves.
 
 ### Why not the others
 
@@ -262,49 +282,96 @@ tests before merge.
    Add a "Cross-platform recovery" subsection to
    `docs/workflows/meta-volume.md`.
 
-## 6. Open questions for the human
+## 6. Resolved questions
 
-These are the decision points where I'd want sign-off before doing any
-implementation work:
+All five open questions resolved 2026-05-16 after upstream-release
+verification.  Each question retains its original framing for context;
+the **Decision:** line below it is binding.
 
-1. **Is the target arch matrix above the right one?**  Specifically:
-   - Do we care about RISC-V *now* (cross-compile in CI) or wait for
-     upstream Rustic?
-   - Do we care about FreeBSD / OpenBSD?  They have very different
-     binary formats and would meaningfully expand the matrix.
-   - Should we support the older 32-bit ARM (`armv7-linux-gnueabihf`)
-     for Raspberry Pi 1/2/Zero?  Coverage is low but the hardware is
-     still in use.
+### Q1: Is the target arch matrix above the right one?
 
-2. **How do we handle xorriso on non-x86_64?**  The
-   "kernel-`mount -o loop` primary" pattern works on Linux only.  On
-   macOS we lean on `hdiutil`; on Windows we lean on
-   `Mount-DiskImage`.  Is that an acceptable degradation, or do we
-   want to cross-compile xorriso too (significantly more work)?
+Sub-questions:
+- Do we care about RISC-V *now* (cross-compile in CI) or wait for
+  upstream Rustic?
+- Do we care about FreeBSD / OpenBSD?  They have very different binary
+  formats and would meaningfully expand the matrix.
+- Should we support the older 32-bit ARM (`armv7-linux-gnueabihf`) for
+  Raspberry Pi 1/2/Zero?  Coverage is low but the hardware is still
+  in use.
 
-3. **Where does the per-target binary cache live?**  Options:
-   - In-repo under `recovery/bin/` (git-LFS recommended — total payload
-     is several hundred MB).
-   - Downloaded at meta-volume build time from a known-good cache (Git
-     release artifact, S3 bucket, etc.) — requires net access at build
-     but not at restore.
-   - Built into CI; the cache lives in GitHub Actions artifacts and
-     gets baked into meta-volume builds.
+**Decision:** Six targets, all verified to have both upstream rustic and
+python-build-standalone release artifacts: `x86_64-unknown-linux-musl`,
+`aarch64-unknown-linux-musl`, `armv7-unknown-linux-gnueabihf`,
+`aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-pc-windows-gnu`.
+**Prefer musl-static over glibc-dynamic** on Linux targets — eliminates
+host-libc compatibility risk, which matches the cold-start recovery
+story.  Skip RISC-V (no upstream), 32-bit x86 (audience effectively
+zero in 2026+), FreeBSD/OpenBSD (no upstream), Windows ARM64 (no
+upstream).  See the revised target matrix in §3.
 
-4. **Manifest format.**  Do we want the per-arch binaries listed in
-   the existing `recovery/MANIFEST.sha256`, or in a parallel
-   `recovery/UPSTREAM.sha256` that distinguishes "we built this" from
-   "we downloaded this and pinned the hash"?
+### Q2: How do we handle xorriso on non-x86_64?
 
-5. **Tier 3 (Python) on non-x86_64.**  The pure-Python fallback works
-   on any arch that has a Python 3 interpreter, but `zstandard` is C
-   extension code that may not be importable on all targets.  Do we:
-   - Bundle a CPython interpreter per arch (much larger payload), or
-   - Document that recipient must `pip install zstandard` if their
-     host's python3 doesn't have it (back to the package-manager
-     dependency we were trying to avoid), or
-   - Accept that on exotic arches tier 3 may degrade to "uncompressed
-     blobs only" (already the case in `restic_fallback.py:83`)?
+The "kernel-`mount -o loop` primary" pattern works on Linux only.  On
+macOS we lean on `hdiutil`; on Windows we lean on `Mount-DiskImage`.
+Is that an acceptable degradation, or do we want to cross-compile
+xorriso too (significantly more work)?
+
+**Decision:** Accept the degraded pattern.  No bundled xorriso outside
+`x86_64-linux-musl`.  Justifications: (a) Linux `mount -o loop` is in
+the kernel and works on every arch with zero new binaries; this is
+already Phase 11.1's primary path.  (b) macOS `hdiutil mount -nobrowse`
+is in the base OS.  (c) Windows `Mount-DiskImage` is in PowerShell on
+Win 8+.  Cross-compiling xorriso (autoconf + libburn + libisofs) is a
+significant maintenance burden for a tier already covered by host
+facilities.
+
+### Q3: Where does the per-target binary cache live?
+
+Options were: in-repo under `recovery/bin/` (git-LFS recommended;
+several hundred MB total payload), downloaded at meta-volume build
+time from a known-good cache, or baked into CI artifacts.
+
+**Decision:** Three-stage approach.  (1) `recovery/UPSTREAM.sha256`
+pins each upstream artifact's SHA-256 — version-controlled, tiny
+(~40 lines), no LFS.  (2) The meta-builder downloads the rustic +
+python tarball for each target at meta-volume build time, verifies
+against the pinned hash, and caches locally under
+`~/.cache/lcsas/recovery-binaries/v<version>/`.  (3) A `make
+fetch-recovery` target downloads everything ahead of time for
+air-gapped builds.  Rejected: in-repo git-LFS (clone bloat, friction
+for every contributor) and CI-artifacts-only (locks builds to a
+specific CI provider's retention).
+
+### Q4: Manifest format
+
+Do we want the per-arch binaries listed in the existing
+`recovery/MANIFEST.sha256`, or in a parallel `recovery/UPSTREAM.sha256`
+that distinguishes "we built this" from "we downloaded this and
+pinned the hash"?
+
+**Decision:** Two separate files.
+- `recovery/MANIFEST.sha256` — files **we author** (existing C source,
+  scripts, docs, anything we ship from this repo).
+- `recovery/UPSTREAM.sha256` — files **we trust from upstream**
+  (rustic release tarballs, python-build-standalone release tarballs).
+
+When upstream rustic releases a new version, only `UPSTREAM.sha256`
+changes; `MANIFEST.sha256` stays stable.  Security review becomes
+easier: anyone auditing what we trust from outside can read one file.
+
+### Q5: Tier 3 (Python) on non-x86_64
+
+The pure-Python fallback works on any arch that has a Python 3
+interpreter, but `zstandard` is a C extension that may not be
+importable on all targets.
+
+**Decision:** Bundle per-arch CPython from python-build-standalone for
+every target in §3's matrix.  PBS provides install_only_stripped
+builds (~25 MB compressed per arch) covering all six targets we ship.
+This eliminates the "host has no Python" failure mode entirely.  For
+arches not covered by PBS (currently none in our matrix), tier 3
+degrades to "uncompressed blobs only" — already implemented in
+`src/lcsas/restore/restic_fallback.py:83`.
 
 ## 7. Non-goals
 
@@ -334,5 +401,61 @@ implementation work:
 
 ---
 
-**Next step:** human approval of the target-arch matrix and the four
-open questions in §6 before any implementation work begins.
+## 9. Implementation kick-off
+
+The first PR's scope (call it Phase 21.1) is the smallest end-to-end
+slice that proves the design:
+
+1. **`recovery/UPSTREAM.sha256`** — new file pinning the SHA-256 of the
+   rustic v0.11.2 release artifact for every target in §3, plus the
+   python-build-standalone `install_only_stripped` archive for each
+   target.  Comments name the upstream release URL each hash comes
+   from for future audit.
+2. **`recovery/scripts/fetch_upstream.sh`** — POSIX-sh downloader.
+   For each `UPSTREAM.sha256` line, download to
+   `~/.cache/lcsas/recovery-binaries/<version>/<target>/`, verify the
+   SHA, extract.  Idempotent: re-runs are no-ops when the cache is
+   warm.  Air-gapped operators can rsync the cache directory between
+   machines.
+3. **`Makefile`** — add `fetch-recovery` target that invokes
+   `fetch_upstream.sh` once for every pinned target.
+4. **`src/lcsas/meta/builder.py`** — extend
+   `_bundle_recovery_toolchain()` to walk every cached target
+   directory and copy `bin/<target>/` into the meta volume.  Skip
+   targets whose cache directory is missing (with a warning) so
+   single-arch developer builds still work without the full fetch.
+5. **`recovery/scripts/restore.sh`** — extend the existing
+   `uname -m` arch dispatcher (currently lines 202–218) to also
+   consult `uname -s`.  Add a normalization table mapping `(machine,
+   os)` to one of the six §3 targets, with a clear failure mode for
+   unknown combinations.
+6. **Unit tests** — mock `uname -m` / `uname -s`, assert the
+   dispatcher picks the right target for every (machine, os) pair
+   in the matrix.  No cross-arch *execution* testing — that's
+   gated by SHA-256 verification against the pinned upstream.
+7. **Integration test** — build a meta-volume on CI (which is
+   `x86_64-linux-gnu`) with the full `make fetch-recovery` having
+   run.  Assert: every `bin/<target>/` subtree is present, every
+   file's SHA-256 matches the pinned manifest, the meta MANIFEST
+   has been regenerated to include the new per-target trees.
+8. **Docs refresh** — rewrite `README.md` §"Platform Limitations" to
+   describe the new supported matrix.  Add a "Cross-platform
+   recovery" subsection to `docs/workflows/meta-volume.md`.  Update
+   `docs/architecture.md` if its meta-volume section drifts.
+9. **`recovery/MANIFEST.sha256` regen** — the meta-builder must
+   merge `MANIFEST.sha256` + `UPSTREAM.sha256` into a single
+   per-meta-volume `MANIFEST.sha256` so restore-time verification
+   on the meta volume itself stays one file.
+
+Subsequent PRs (Phase 21.2, 21.3, …) add macOS-specific cascade
+nuances, a per-target `restore.bat` parity pass for Windows, and the
+Phase 11-style xorriso-free verification helpers for macOS/Windows.
+
+**Estimated PR count:** ~4 PRs.  Phase 21.1 above is the largest
+(~6-10 commits).  Phase 21.2 and beyond are progressively smaller
+slices.
+
+---
+
+**Status:** APPROVED 2026-05-16.  Ready to begin Phase 21.1
+implementation on a separate branch.
