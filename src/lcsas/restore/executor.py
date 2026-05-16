@@ -50,31 +50,51 @@ class RestoreExecutor:
         self._rustic = rustic_runner
         self._ecc = ecc_runner
 
-    def verify_iso(self, iso_path: Path) -> bool:
-        """Verify an ISO's ECC data using the configured ECC runner.
+    def verify_iso(
+        self,
+        iso_path: Path,
+        expected_sha256: str | None = None,
+    ) -> bool:
+        """Verify an ISO's integrity.
 
-        Returns True if ECC is valid or no ECC runner is configured.
-        Attempts automatic repair if verification fails.
+        Order of preference:
+        1. ECC runner if configured (DVDisaster RS03; can detect AND
+           repair bit-rot).
+        2. SHA-256 compare against ``expected_sha256`` if supplied
+           (Phase 21.2.b — portable, detect-only fallback used on
+           macOS / Windows recovery hosts where dvdisaster isn't
+           bundled).
+        3. Skip with a "not verified" log when neither is available.
+
+        Returns True if verification passed (or could not be performed
+        because no integrity source was available).  Returns False only
+        when an integrity source was attempted and reported corruption.
         """
-        if self._ecc is None:
-            logger.info(
-                "No ECC runner configured — disc integrity not verified for %s",
-                iso_path.name,
+        if self._ecc is not None:
+            logger.info(f"Verifying ECC on {iso_path.name}")
+            if self._ecc.verify_iso(iso_path):
+                logger.info(f"ECC verification passed: {iso_path.name}")
+                return True
+
+            logger.warning(
+                f"ECC verification failed for {iso_path.name}, attempting repair"
             )
-            return True
+            if self._ecc.repair_iso(iso_path):
+                logger.info(f"ECC repair succeeded: {iso_path.name}")
+                return True
 
-        logger.info(f"Verifying ECC on {iso_path.name}")
-        if self._ecc.verify_iso(iso_path):
-            logger.info(f"ECC verification passed: {iso_path.name}")
-            return True
+            logger.error(f"ECC repair failed for {iso_path.name}")
+            return False
 
-        logger.warning(f"ECC verification failed for {iso_path.name}, attempting repair")
-        if self._ecc.repair_iso(iso_path):
-            logger.info(f"ECC repair succeeded: {iso_path.name}")
-            return True
+        if expected_sha256:
+            return verify_iso_sha256(iso_path, expected_sha256)
 
-        logger.error(f"ECC repair failed for {iso_path.name}")
-        return False
+        logger.info(
+            "No ECC runner configured and no expected SHA-256 supplied — "
+            "disc integrity not verified for %s",
+            iso_path.name,
+        )
+        return True
 
     def prepare_cache(
         self,
@@ -331,3 +351,42 @@ class RestoreExecutor:
                     )
                     missing.append(sha256)
         return missing
+
+
+def verify_iso_sha256(iso_path: Path, expected_sha256: str) -> bool:
+    """Portable ISO verifier — compares SHA-256 against an expected hash.
+
+    Phase 21.2.b helper: detects corruption without needing xorriso or
+    dvdisaster on the recovery host.  Cannot repair (that's still
+    DVDisaster's job during the Linux burn flow); this is detect-only,
+    which is exactly the right shape for macOS / Windows recovery
+    hosts where neither ECC tool is bundled.
+
+    The ``expected_sha256`` value normally comes from the
+    ``session_volumes.iso_sha256`` column written at burn time
+    (``src/lcsas/db/sessions.py``) or from a per-volume receipt
+    JSON.  Case-insensitive compare so hex strings from different
+    sources match cleanly.
+    """
+    if not iso_path.is_file():
+        logger.error(f"verify_iso_sha256: file not found: {iso_path}")
+        return False
+    expected = expected_sha256.strip().lower()
+    if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+        logger.error(
+            "verify_iso_sha256: malformed expected SHA-256 %r for %s",
+            expected_sha256, iso_path.name,
+        )
+        return False
+    actual = sha256_file(iso_path).lower()
+    if actual == expected:
+        logger.info(
+            "SHA-256 verification passed: %s (no ECC runner; detect-only)",
+            iso_path.name,
+        )
+        return True
+    logger.error(
+        "SHA-256 verification FAILED for %s: expected %s, got %s",
+        iso_path.name, expected, actual,
+    )
+    return False

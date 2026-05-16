@@ -285,6 +285,96 @@ class TestVerifyISO:
 
 
 # =========================================================================
+# Phase 21.2.b — portable SHA-256 verify (xorriso-free)
+# =========================================================================
+
+
+class TestVerifyIsoSha256:
+    """Standalone verify_iso_sha256 helper — detect-only integrity check."""
+
+    def _good_iso(self, tmp_path):
+        from lcsas.utils.hashing import sha256_file
+        iso = tmp_path / "good.iso"
+        iso.write_bytes(b"this is a fake ISO" * 100)
+        return iso, sha256_file(iso)
+
+    def test_match_returns_true(self, tmp_path):
+        from lcsas.restore.executor import verify_iso_sha256
+        iso, sha = self._good_iso(tmp_path)
+        assert verify_iso_sha256(iso, sha) is True
+
+    def test_mismatch_returns_false(self, tmp_path, caplog):
+        from lcsas.restore.executor import verify_iso_sha256
+        iso, _ = self._good_iso(tmp_path)
+        bogus = "0" * 64
+        assert verify_iso_sha256(iso, bogus) is False
+        assert "FAILED" in caplog.text
+
+    def test_case_insensitive(self, tmp_path):
+        """Hex compares are case-insensitive — operators paste from
+        wherever, restore tooling shouldn't fail on uppercase A vs
+        lowercase a."""
+        from lcsas.restore.executor import verify_iso_sha256
+        iso, sha = self._good_iso(tmp_path)
+        assert verify_iso_sha256(iso, sha.upper()) is True
+
+    def test_missing_file_returns_false(self, tmp_path):
+        from lcsas.restore.executor import verify_iso_sha256
+        assert verify_iso_sha256(tmp_path / "absent.iso", "0" * 64) is False
+
+    def test_malformed_expected_hash_returns_false(self, tmp_path):
+        from lcsas.restore.executor import verify_iso_sha256
+        iso, _ = self._good_iso(tmp_path)
+        # Too short.
+        assert verify_iso_sha256(iso, "abc") is False
+        # Wrong length.
+        assert verify_iso_sha256(iso, "f" * 63) is False
+        # Contains a non-hex character.
+        assert verify_iso_sha256(iso, "g" * 64) is False
+
+
+class TestVerifyIsoFallback:
+    """verify_iso falls back to SHA-256 when no ECC runner is configured."""
+
+    def test_sha_fallback_passes(self, mock_rustic, tmp_path):
+        """No ECC + matching SHA → verify_iso returns True (via SHA path)."""
+        from lcsas.utils.hashing import sha256_file
+        ex = RestoreExecutor(mock_rustic, ecc_runner=None)
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"some fake iso bytes")
+        assert ex.verify_iso(iso, expected_sha256=sha256_file(iso)) is True
+
+    def test_sha_fallback_fails(self, mock_rustic, tmp_path):
+        """No ECC + mismatching SHA → verify_iso returns False."""
+        ex = RestoreExecutor(mock_rustic, ecc_runner=None)
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"some fake iso bytes")
+        assert ex.verify_iso(iso, expected_sha256="0" * 64) is False
+
+    def test_no_sha_no_ecc_skips_with_true(self, mock_rustic, tmp_path):
+        """No ECC + no SHA hint → verify_iso returns True (skip), matches
+        the pre-Phase-21.2 behavior so callers without a hash don't
+        regress."""
+        ex = RestoreExecutor(mock_rustic, ecc_runner=None)
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"some fake iso bytes")
+        assert ex.verify_iso(iso) is True
+
+    def test_ecc_preferred_over_sha(self, mock_rustic, tmp_path):
+        """When ECC is configured, it wins — SHA hint is ignored even
+        if the SHA wouldn't match.  ECC is the strictly stronger
+        verifier (it can also repair)."""
+        ecc = MagicMock()
+        ecc.verify_iso.return_value = True
+        ex = RestoreExecutor(mock_rustic, ecc_runner=ecc)
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"some fake iso bytes")
+        # Wrong SHA — but ECC still wins.
+        assert ex.verify_iso(iso, expected_sha256="0" * 64) is True
+        ecc.verify_iso.assert_called_once_with(iso)
+
+
+# =========================================================================
 # collect_failures mode
 # =========================================================================
 
