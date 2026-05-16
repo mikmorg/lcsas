@@ -1995,6 +1995,38 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _find_sibling_iso(vol_dir: Path, label: str) -> Path | None:
+    """Locate ``<label>.iso`` near a pre-extracted volume directory.
+
+    Phase 21.6 helper.  When operators extract a stack of LCSAS ISOs
+    into a single directory (the ``--volume-dir`` mode), the original
+    ``.iso`` files often live alongside the extracted trees:
+
+        my_recovery/
+        ├── LCSAS_BD25_2026_0001/         ← extracted contents
+        ├── LCSAS_BD25_2026_0001.iso      ← original ISO
+        ├── LCSAS_BD25_2026_0002/
+        └── LCSAS_BD25_2026_0002.iso
+
+    Or, less commonly, the ISO might sit inside the per-label tree:
+
+        my_recovery/LCSAS_BD25_2026_0001/LCSAS_BD25_2026_0001.iso
+
+    Returns the first existing candidate path, or ``None`` if no ISO
+    is reachable — in which case the caller skips the integrity check
+    (degraded but not fatal — packs still get hash-verified
+    individually during copy).
+    """
+    candidates = (
+        vol_dir / f"{label}.iso",
+        vol_dir / label / f"{label}.iso",
+    )
+    for c in candidates:
+        if c.is_file():
+            return c
+    return None
+
+
 def cmd_restore_exec(args: argparse.Namespace) -> int:
     """Execute a restore operation."""
     import tempfile
@@ -2053,6 +2085,19 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         # Generate pick list with alternates for resilient restore
         planner = RestorePlanner(conn)
         pick_list = planner.generate_pick_list_v2(plan.required_pack_hashes)
+
+        # Phase 21.6: snapshot per-volume ISO SHA-256 hashes while
+        # the catalog conn is still open so the ingest loop below
+        # can pass them to ingest_volume.  When the operator's
+        # vol_dir holds the original .iso files next to the
+        # extracted contents, ingest_volume will SHA-verify each
+        # one before reading its packs — same protection as
+        # dvdisaster on Linux, no toolchain required.
+        from lcsas.db.volume_copies import get_iso_sha256_for_label
+        iso_shas: dict[str, str | None] = {
+            label: get_iso_sha256_for_label(conn, label)
+            for label in pick_list.volumes
+        }
     finally:
         conn.close()
 
@@ -2114,10 +2159,17 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                 vol_path = vol_dir / label
                 if not vol_path.is_dir():
                     vol_path = vol_dir
+                # Phase 21.6: if a sibling <label>.iso file sits next to
+                # the extracted contents, hand it (and the recorded
+                # hash) to ingest_volume so the verify-or-die check
+                # fires before any pack is copied out.
+                iso_path = _find_sibling_iso(vol_dir, label)
                 result = executor.ingest_volume(
                     cache_dir, vol_path, pack_hashes,
                     verify=not args.skip_verify,
                     collect_failures=True,
+                    iso_path=iso_path,
+                    expected_sha256=iso_shas.get(label),
                 )
                 logger.info(f"  {label}: ingested {result.ingested} packs")
                 if result.failed:

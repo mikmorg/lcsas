@@ -910,6 +910,48 @@ class TestCmdVerify:
         assert b_events_fail == []
 
 
+class TestFindSiblingIso:
+    """Phase 21.6 — locate ``<label>.iso`` near a ``--volume-dir`` tree."""
+
+    def test_iso_next_to_extracted_dir(self, tmp_path):
+        """Common layout: extracted/ + sibling .iso file."""
+        from lcsas.cli.main import _find_sibling_iso
+
+        (tmp_path / "VOL_X").mkdir()
+        (tmp_path / "VOL_X.iso").write_bytes(b"")
+        assert _find_sibling_iso(tmp_path, "VOL_X") == tmp_path / "VOL_X.iso"
+
+    def test_iso_inside_extracted_dir(self, tmp_path):
+        """Alternate layout: ISO sits inside the per-label tree."""
+        from lcsas.cli.main import _find_sibling_iso
+
+        nested = tmp_path / "VOL_Y"
+        nested.mkdir()
+        (nested / "VOL_Y.iso").write_bytes(b"")
+        assert _find_sibling_iso(tmp_path, "VOL_Y") == nested / "VOL_Y.iso"
+
+    def test_no_iso_returns_none(self, tmp_path):
+        """Neither layout present → None, no exception."""
+        from lcsas.cli.main import _find_sibling_iso
+
+        (tmp_path / "VOL_Z").mkdir()
+        # No VOL_Z.iso anywhere.
+        assert _find_sibling_iso(tmp_path, "VOL_Z") is None
+
+    def test_prefers_top_level_over_nested(self, tmp_path):
+        """When both layouts coexist, the top-level sibling wins (it's
+        the more common arrangement on operators' machines, and the
+        function probes in that order)."""
+        from lcsas.cli.main import _find_sibling_iso
+
+        nested = tmp_path / "VOL_BOTH"
+        nested.mkdir()
+        top = tmp_path / "VOL_BOTH.iso"
+        top.write_bytes(b"top")
+        (nested / "VOL_BOTH.iso").write_bytes(b"nested")
+        assert _find_sibling_iso(tmp_path, "VOL_BOTH") == top
+
+
 class TestVerifyAllShaFallback:
     """Phase 21.5.a — `verify --all` falls back to SHA-256 when dvdisaster
     isn't on PATH (same pattern as cmd_verify's ISO mode in Phase 21.3)."""
