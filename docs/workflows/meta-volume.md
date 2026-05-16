@@ -24,6 +24,7 @@ Sibling docs: [`docs/workflows/restore-bare-metal.md`](restore-bare-metal.md),
 ## Table of Contents
 
 - [Workflow: `lcsas meta build` — produce the meta ISO](#workflow-lcsas-meta-build--produce-the-meta-iso)
+- [Cross-platform recovery (Phase 21.1)](#cross-platform-recovery-phase-211)
 - [Inventory: what lives on a meta-disc](#inventory-what-lives-on-a-meta-disc)
 - [Workflow: Boot the meta-disc directly into restore mode](#workflow-boot-the-meta-disc-directly-into-restore-mode)
 - [Workflow: Single-drive bootstrap (meta-disc occupies the only drive)](#workflow-single-drive-bootstrap-meta-disc-occupies-the-only-drive)
@@ -164,6 +165,72 @@ tree (logged contents at `src/lcsas/cli/main.py:1735-1741`), no
 - `src/lcsas/meta/builder.py:1580-2032` (`MetaVolumeBuilder`).
 - `src/lcsas/meta/bootable.py:109-169` (bootable-overlay helpers reused
   by `_install_live_boot`).
+
+---
+
+## Cross-platform recovery (Phase 21.1)
+
+The default meta-volume bundles binaries for the host architecture
+only.  Cross-platform support — the ability to recover on an ARM64
+Raspberry Pi or Apple Silicon Mac without an x86_64 helper — comes
+from two pieces:
+
+1. A pinned upstream-binary cache populated by `make fetch-recovery`,
+   which downloads SHA-256-verified `rustic` and `python-build-standalone`
+   artifacts for every approved target (`recovery/UPSTREAM.sha256`).
+2. The meta-builder's `_bundle_upstream_binaries` step
+   (`src/lcsas/meta/builder.py`), which copies each cached target's
+   binaries into `recovery/bin/<target>/` on the meta-volume.
+
+Six targets are supported as of Phase 21.1 (full RFC at
+[`docs/CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md)):
+
+| Target | Notes |
+|---|---|
+| `x86_64-unknown-linux-musl`     | Linux x86_64, static (no host glibc dep) |
+| `aarch64-unknown-linux-musl`    | Linux ARM64, static (Pi 4/5, Asahi, Graviton) |
+| `armv7-unknown-linux-gnueabihf` | Linux 32-bit ARM (Pi 1/2/3/Zero) |
+| `aarch64-apple-darwin`          | macOS Apple Silicon |
+| `x86_64-apple-darwin`           | macOS Intel |
+| `x86_64-pc-windows-gnu`         | Windows (POSIX-sh driver path) |
+
+**Workflow:**
+
+```bash
+make fetch-recovery               # one-time ~600 MB download
+lcsas meta build --output ./meta  # bundle every target with a cached binary
+```
+
+`make fetch-recovery` is idempotent — re-runs verify SHA-256 against
+the pinned manifest and short-circuit when the cache is warm.  Set
+`$LCSAS_RECOVERY_CACHE` to override the cache root
+(default: `~/.cache/lcsas/recovery-binaries/`); air-gapped operators
+can rsync the cache between hosts.
+
+**At recovery time**, `recovery/scripts/restore.sh` auto-detects
+`(uname -s, uname -m)` and picks the right `bin/<target>/` subtree.
+Override with `$LCSAS_TARGET=<target-triple>` if the auto-detection
+misfires (rare: chroot, foreign-arch emulator, custom uname output).
+See `tests/unit/test_restore_sh_dispatcher.py` for the full matrix
+of supported `(OS, machine)` pairs and the explicit rejections.
+
+**Skipping the fetch step** is supported — the meta-volume still
+builds, just with no `recovery/bin/<target>/` directories.  Single-arch
+recovery on the host architecture continues to work through the legacy
+`tools/bin/` bundling path.  The cross-platform path only kicks in
+when the cache is populated.
+
+**Source refs:**
+
+- `recovery/UPSTREAM.sha256` — pinned hashes.
+- `recovery/scripts/fetch_upstream.sh` — POSIX-sh downloader.
+- `src/lcsas/meta/builder.py:_bundle_upstream_binaries` — per-target
+  copy step (called from `_bundle_recovery_toolchain_artifacts`).
+- `recovery/scripts/restore.sh` — `(uname -s, uname -m)` → `$TARGET`
+  dispatcher, lines ~221-275.
+- `tests/unit/test_restore_sh_dispatcher.py` — 22 dispatcher tests.
+- `tests/unit/test_meta_builder.py::TestBundleUpstreamBinaries` —
+  5 bundler tests.
 
 ---
 

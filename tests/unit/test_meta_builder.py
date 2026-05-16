@@ -624,3 +624,54 @@ class TestBundleUpstreamBinaries:
         for t in targets:
             assert (recovery_dst / "bin" / t / "rustic-static").is_file(), t
             assert (recovery_dst / "bin" / t / "python" / "bin" / "python3").is_file(), t
+
+    def test_orchestration_via_bundle_recovery_toolchain_artifacts(
+        self, tmp_path, monkeypatch,
+    ):
+        """End-to-end: call the orchestrating method, not the bundler
+        helper directly, and confirm a synthetic multi-arch cache lands
+        on the meta-volume in the expected location.
+
+        This is the Phase 21.1.e integration check: proves the cache →
+        ``_bundle_recovery_toolchain_artifacts`` → ``_bundle_upstream_binaries``
+        wiring works, not just the leaf helper in isolation.
+        """
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        cache_root = tmp_path / "cache"
+        self._make_cache(cache_root, "aarch64-unknown-linux-musl")
+        self._make_cache(cache_root, "x86_64-pc-windows-gnu", with_python=False)
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
+
+        # The recovery source tree must exist for the parent method
+        # to do its main copytree work.  Use the real repo's recovery/.
+        repo_root = Path(__file__).resolve().parents[2]
+        out = tmp_path / "meta"
+        out.mkdir()
+        b = MetaVolumeBuilder(
+            out,
+            project_root=repo_root,
+            recovery_dir=repo_root / "recovery",
+        )
+        b._bundle_recovery_toolchain_artifacts()
+
+        # The recovery/ tree got copied to meta/recovery/...
+        assert (out / "recovery" / "scripts" / "restore.sh").is_file()
+        # ...AND the per-target binaries from our synthetic cache landed.
+        arm = out / "recovery" / "bin" / "aarch64-unknown-linux-musl"
+        assert arm.is_dir()
+        assert (arm / "rustic-static").is_file()
+        assert (arm / "python" / "bin" / "python3").is_file()
+        win = out / "recovery" / "bin" / "x86_64-pc-windows-gnu"
+        assert win.is_dir()
+        assert (win / "rustic-static").is_file()
+        # No python on the windows target (we asked for rustic-only).
+        assert not (win / "python").exists()
+        # And no other approved target slipped in.
+        for unexpected in (
+            "x86_64-unknown-linux-musl",
+            "armv7-unknown-linux-gnueabihf",
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+        ):
+            assert not (out / "recovery" / "bin" / unexpected).exists(), unexpected

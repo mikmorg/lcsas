@@ -522,19 +522,65 @@ python3 -m lcsas restore exec <snapshot-id> /target \
   --password-file ~/safe/family.key
 ```
 
-### Platform Limitations
+### Supported recovery platforms
 
-The meta-volume bundles **Linux x86_64 ELF binaries** and their shared
-libraries. It will only work on recovery machines that are:
+The meta-volume can carry prebuilt recovery binaries for six target
+platforms.  The supported matrix (cross-platform meta-volume work
+landed in Phase 21.1 — see [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md)):
 
-- **Architecture:** x86_64 (AMD64)
-- **OS:** Linux with compatible glibc (glibc-family libs like `libc.so`,
-  `libpthread.so`, `libm.so` are NOT bundled — they must be on the host)
-- **Kernel:** 3.x+ (any modern Linux)
+| Target | OS | Notes |
+|---|---|---|
+| `x86_64-unknown-linux-musl` | Linux x86_64 | static (musl), no host glibc dependency |
+| `aarch64-unknown-linux-musl` | Linux ARM64 | static; covers Apple Silicon-via-Asahi, Raspberry Pi 4/5, AWS Graviton |
+| `armv7-unknown-linux-gnueabihf` | Linux 32-bit ARM | Raspberry Pi 1/2/3/Zero |
+| `aarch64-apple-darwin` | macOS Apple Silicon | native |
+| `x86_64-apple-darwin` | macOS Intel | native |
+| `x86_64-pc-windows-gnu` | Windows x86_64 | recovery via `restore.bat` |
 
-For ARM64, RISC-V, or non-Linux recovery, you would need to install `rustic`,
-`xorriso`, and Python from the target platform's package manager, then use the
-bundled LCSAS source code directly.
+For each target the meta-volume bundles upstream-pinned binaries:
+
+- `rustic` (from the
+  [upstream release matrix](https://github.com/rustic-rs/rustic/releases))
+- a stripped CPython 3.12 interpreter (from
+  [python-build-standalone](https://github.com/astral-sh/python-build-standalone/releases))
+  for the tier-3 pure-Python recovery path
+
+Both are pinned by SHA-256 in [`recovery/UPSTREAM.sha256`](recovery/UPSTREAM.sha256)
+and downloaded with `make fetch-recovery` before building a meta-volume.
+The cache lives at `~/.cache/lcsas/recovery-binaries/` (override with
+`$LCSAS_RECOVERY_CACHE`) and is reused across rebuilds — the first build
+is the only one that needs network.
+
+```bash
+make fetch-recovery   # one-time: ~600 MB download (6 targets × rustic + python)
+lcsas meta build --output /mnt/staging/meta
+```
+
+If you skip `make fetch-recovery`, the meta-volume falls back to a
+single-arch build that only contains binaries for the host architecture
+(today's behavior).  Cross-arch recovery on that meta-volume requires
+the recipient to install `rustic` + `python3` from the target
+platform's package manager.
+
+### Decisions about coverage gaps
+
+Targets **not** currently bundled, and the rationale (full discussion
+in [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md) §6 Q1):
+
+- **RISC-V** — upstream rustic does not yet ship a release artifact
+  for `riscv64gc-unknown-linux-gnu`; we don't cross-compile ourselves.
+  Will be added when upstream ships.
+- **i686** (32-bit x86) — upstream ships it but the cold-storage
+  recovery audience for 32-bit x86 in 2026+ is vanishingly small.
+- **FreeBSD / OpenBSD** — no upstream rustic.  Recipient must install
+  `rustic` from ports.
+- **Windows ARM64** — no upstream rustic.  Recipient must install
+  `rustic` via winget or similar.
+
+The recovery driver (`recovery/scripts/restore.sh`) auto-detects the
+recovery host's `(uname -s, uname -m)` and selects the right
+`bin/<target>/` subtree.  Override with `$LCSAS_TARGET=<target-triple>`
+if auto-detection misfires (e.g. when running under QEMU or chroot).
 
 ### Operational Recommendation
 
