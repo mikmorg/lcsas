@@ -90,15 +90,35 @@ if "%RECOVERY%"=="" set "RECOVERY=%SCRIPT_DIR%"
 REM Normalise (remove trailing backslash).
 if "%RECOVERY:~-1%"=="\" set "RECOVERY=%RECOVERY:~0,-1%"
 
-REM ----- Detect architecture ----------------------------------------
+REM ----- Detect target (arch + OS) ----------------------------------
+REM
+REM Phase 21.1 aligned the bundled-binary path to a single rust-style
+REM target triple: bin\x86_64-pc-windows-gnu\.  The variable is named
+REM ARCH for historical reasons; treat it as the target triple.
+REM
+REM Override with LCSAS_TARGET if auto-detection misfires (e.g. running
+REM under an x86 emulator on Windows ARM64).
 set "ARCH="
-if /i "%PROCESSOR_ARCHITECTURE%"=="AMD64"   set "ARCH=x86_64-windows"
-if /i "%PROCESSOR_ARCHITECTURE%"=="x86"     set "ARCH=x86_64-windows"
-if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64"   set "ARCH=aarch64-windows"
-if /i "%PROCESSOR_ARCHITEW6432%"=="AMD64"   set "ARCH=x86_64-windows"
+if defined LCSAS_TARGET (
+    set "ARCH=%LCSAS_TARGET%"
+) else (
+    if /i "%PROCESSOR_ARCHITECTURE%"=="AMD64"   set "ARCH=x86_64-pc-windows-gnu"
+    if /i "%PROCESSOR_ARCHITECTURE%"=="x86"     set "ARCH=x86_64-pc-windows-gnu"
+    if /i "%PROCESSOR_ARCHITEW6432%"=="AMD64"   set "ARCH=x86_64-pc-windows-gnu"
+    if /i "%PROCESSOR_ARCHITECTURE%"=="ARM64" (
+        echo ERROR: Windows ARM64 is not yet supported in the bundled toolchain.
+        echo Reason: upstream rustic does not ship aarch64-pc-windows-msvc.
+        echo Workaround: install rustic via winget or build from source, then run
+        echo  rustic.exe --repository "%RECOVERY%\repo" --password-file PWFILE ^
+        echo                restore latest TARGETDIR
+        pause
+        exit /b 1
+    )
+)
 
 if "%ARCH%"=="" (
     echo ERROR: unsupported processor architecture: %PROCESSOR_ARCHITECTURE%
+    echo Supported: AMD64 / x86 ^(both map to x86_64-pc-windows-gnu^)
     pause
     exit /b 1
 )
