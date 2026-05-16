@@ -28,7 +28,7 @@ Sibling recovery tiers (more capable, prefer them when available):
 2. [What every data disc contains](#what-every-data-disc-contains)
 3. [Workflow A — Mount a single data disc anywhere Python runs](#workflow-a--mount-a-single-data-disc-anywhere-python-runs)
 4. [Workflow B — Run `standalone_restorer.py` from the disc](#workflow-b--run-standalone_restorerpy-from-the-disc)
-5. [Workflow C — `lcsas restore from-disc` (convenience wrapper)](#workflow-c--lcsas-restore-from-disc-convenience-wrapper)
+5. [Workflow C — `lcsas restore standalone` (convenience wrapper)](#workflow-c--lcsas-restore-standalone-convenience-wrapper)
 6. [Workflow D — Use the holographic SQLite catalog](#workflow-d--use-the-holographic-sqlite-catalog)
 7. [Workflow E — AES-256-CTR + Poly1305 + zstd decrypt path](#workflow-e--aes-256-ctr--poly1305--zstd-decrypt-path)
 8. [Workflow F — Recover a single file vs a full snapshot](#workflow-f--recover-a-single-file-vs-a-full-snapshot)
@@ -269,12 +269,12 @@ effort (`src/lcsas/restore/restic_fallback.py:599`–`728`).
 
 ---
 
-## Workflow C — `lcsas restore from-disc` (convenience wrapper)
+## Workflow C — `lcsas restore standalone` (convenience wrapper)
 
 **Purpose:** When LCSAS *is* installed (e.g., from the meta-volume's
 source bundle) but no working `rustic`/`restic` binary is present, the
-`lcsas restore standalone` / `from-disc` subcommand orchestrates
-Workflow B and auto-falls-back to `PurePythonRestorer`.
+`lcsas restore standalone` subcommand orchestrates Workflow B and
+auto-falls-back to `PurePythonRestorer`.
 
 **Prerequisites:**
 
@@ -639,7 +639,7 @@ This path deliberately trades capability for portability. It **cannot**:
 - **Stitch packs across multiple discs.** `PurePythonRestorer` reads
   packs from a single repository directory
   (`src/lcsas/restore/restic_fallback.py:303`–`341`). The `lcsas
-  restore from-disc` wrapper compensates by symlinking the disc's
+  restore standalone` wrapper compensates by symlinking the disc's
   `data/` into the cache and instructing the operator to merge other
   discs manually (`src/lcsas/cli/main.py:2255`–`2261`). The standalone
   script offers no such orchestration.

@@ -169,22 +169,22 @@ install), this is the simplest path:
 
 ### From a mounted disc or extracted ISO:
 
-    lcsas restore from-disc /mnt/disc ~/restored/ \
+    lcsas restore standalone /mnt/disc ~/restored/ \
         --password-file /path/to/keyfile
 
 LCSAS auto-discovers repositories from the disc's embedded catalog.
 
 ### From multiple ISOs:
 
-    lcsas restore from-disc /path/to/isos/ ~/restored/ \
+    lcsas restore standalone /mnt/disc ~/restored/ \
         --password-file /path/to/keyfile \
-        --volume-dir
+        --volume-dir /path/to/extracted-isos
 
-### Interactive mode (pick which snapshots to restore):
+### Pick a specific repo or snapshot:
 
-    lcsas restore from-disc /mnt/disc ~/restored/ \
+    lcsas restore standalone /mnt/disc ~/restored/ \
         --password-file /path/to/keyfile \
-        --interactive
+        --repo family --snapshot latest
 
 ---
 

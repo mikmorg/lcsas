@@ -24,7 +24,7 @@ multi-tenant, recovery-toolchain) are called out as such in their detail files.
 
 | Category | File | One-line description |
 |----------|------|----------------------|
-| init-and-config | [workflows/init-and-config.md](workflows/init-and-config.md) | First-time setup, TOML config validation, database export. |
+| init-and-config | [workflows/init-and-config.md](workflows/init-and-config.md) | First-time setup and TOML config validation. |
 | multi-tenant | [workflows/multi-tenant.md](workflows/multi-tenant.md) | Repo add/list/remove and per-repo encryption keys. |
 | backup-and-scan | [workflows/backup-and-scan.md](workflows/backup-and-scan.md) | Rustic backup integration and `lcsas scan` of the mirror. |
 | stage-and-burn | [workflows/stage-and-burn.md](workflows/stage-and-burn.md) | Session-based stage + burn pipeline across every media type. |
