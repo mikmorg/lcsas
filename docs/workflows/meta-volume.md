@@ -220,6 +220,32 @@ recovery on the host architecture continues to work through the legacy
 `tools/bin/` bundling path.  The cross-platform path only kicks in
 when the cache is populated.
 
+### Known gap: tier 1 (`lcsas-restore`) is not cross-bundled
+
+What Phase 21.1 actually bundles per target is **tier 2** (rustic)
+and **tier 3** (CPython).  **Tier 1** (the C89 `lcsas-restore`)
+is only present for the host arch — the bundler doesn't
+cross-compile it, and there's an arch-naming mismatch between
+`RecoveryBuilder.cross_build` (`bin/<short-arch>/`) and the
+restore.sh dispatcher (`bin/<rust-triple>/`) that breaks tier 1
+even on the host arch.
+
+Effective cascade today on non-Linux-x86_64 hosts:
+
+| Tier | Status on non-host arch |
+|---|---|
+| 1 — `lcsas-restore` (our C89 binary) | **missing** |
+| 2 — `rustic-static` (upstream) | works ✓ |
+| 3 — `standalone_restorer.py` (bundled CPython) | works ✓ |
+
+The restore still completes via tier 2; the survivability story
+just doesn't match the documented "tier 1 is primary" intent.
+Fix tracked as Phase 21.10.b — the cross-compile infrastructure
+exists in `RecoveryBuilder.cross_build` (Linux musl + Windows-gnu
+via `zig cc`), it's just not wired into the meta-builder yet.  See
+[`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q6
+for the full discussion and the Phase 21.10/21.11/21.12 sequence.
+
 **Source refs:**
 
 - `recovery/UPSTREAM.sha256` — pinned hashes.

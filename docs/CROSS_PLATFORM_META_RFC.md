@@ -373,6 +373,71 @@ arches not covered by PBS (currently none in our matrix), tier 3
 degrades to "uncompressed blobs only" — already implemented in
 `src/lcsas/restore/restic_fallback.py:83`.
 
+### Q6: Tier 1 (`lcsas-restore`) cross-compilation  (POST-FACTO)
+
+Not part of the original §6 questions — surfaced 2026-05-17 after
+Phase 21.1–21.9 shipped.  Documented here for honesty before the
+fix lands.
+
+**The gap.**  `recovery/scripts/restore.sh` declares
+`bin/<target>/lcsas-restore` (our C89 binary against vendored
+sqlite/zstd) as the **primary** recovery tool (tier 1), with
+`rustic-static` as the tier-2 fallback.  Phase 21.1.b bundled
+upstream rustic + python for every approved target, but did NOT
+cross-compile our own `lcsas-restore`.  So on any host whose arch
+isn't the build host's, the cascade skips straight to tier 2 —
+exactly inverting the survivability ranking (rustic + Python are
+moving targets; the C89 binary was meant to be the long-lived
+durable artifact).
+
+A separate naming bug compounds it: `restore.sh`'s dispatcher
+(Phase 21.1.c) probes `bin/<rust-target-triple>/lcsas-restore`,
+while `RecoveryBuilder.cross_build` (`src/lcsas/recovery/build.py:99`)
+writes to `bin/<short-arch>/lcsas-restore`.  Result: tier 1 fails
+to fire **even on the host arch** until the path conventions are
+reconciled.
+
+**Why Phase 21 ducked it.**  The §5 implementation plan took the
+shortcut: "we never have to cross-compile anything ourselves"
+because upstream rustic + python-build-standalone ship release
+matrices.  The C89 binary inherited the same shortcut by
+omission.  Phase 21 prioritized getting *any* cross-platform
+recovery story shipped, not the fully-optimal one.
+
+**What we already have.**  `RecoveryBuilder.cross_build()`
+supports three reachable targets for the C89 binary today:
+
+- `x86_64-unknown-linux-musl` — `<arch>-linux-musl-gcc` or `zig cc`
+- `aarch64-unknown-linux-musl` — same
+- `x86_64-pc-windows-gnu` — `zig cc -target x86_64-windows-gnu`
+  (Makefile already encodes this; see `recovery/docs/WINDOWS_RECOVERY_PLAN.txt`)
+
+**Still missing toolchains.**
+
+- `armv7-unknown-linux-gnueabihf` — needs adding to
+  `SUPPORTED_ARCHES` (`zig cc` covers it cleanly).
+- `aarch64-apple-darwin`, `x86_64-apple-darwin` — needs
+  [`osxcross`](https://github.com/tpoechtrager/osxcross) or an
+  Apple-licensed SDK in CI.  Real follow-up cost.
+
+**Decision** (binding the Phase 21.10 plan):
+
+1. **Phase 21.10.a** — docs honesty (this RFC update, README, and
+   relevant workflow docs).  Acknowledge the gap.  Land first so
+   operators and contributors aren't misled about today's
+   coverage.
+2. **Phase 21.10.b** — wire `cross_build` into meta-builder for
+   the 3 reachable targets (x86_64 + aarch64 Linux musl, x86_64
+   Windows-gnu).  Resolve the bin/<short-arch> vs bin/<rust-triple>
+   naming via a mapping at bundle time (cleanest: meta-builder
+   knows both conventions; cross_build stays unchanged).
+3. **Phase 21.11** (separate phase, possibly deferred) — extend
+   `SUPPORTED_ARCHES` to `armv7` (low cost, zig cc supports it).
+4. **Phase 21.12** (further deferred, real cost) — osxcross
+   integration for the two Darwin targets, gated on a CI runner
+   we can license.  Until then macOS tier-1 stays unavailable
+   and the README disclosure stands.
+
 ## 7. Non-goals
 
 - Adding source-rebuild tiers (rejected with PR #78).

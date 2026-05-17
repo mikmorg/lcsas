@@ -153,6 +153,16 @@ auto-detection.
 
 ## Gaps and known limitations
 
+- **Tier 1 (`lcsas-restore`) is unavailable on macOS today.**  The
+  recovery cascade declares the C89 `lcsas-restore` binary as the
+  primary recovery tool, but Phase 21.1 didn't cross-compile it
+  for the Darwin targets (would need osxcross or an Apple-licensed
+  SDK in CI).  On macOS the cascade currently runs:
+  tier 1 (missing) → tier 2 (`rustic-static`, works) → tier 3
+  (bundled Python, works).  Restore *succeeds* — you just lose the
+  "long-lived C89 binary" durability layer that's available on the
+  build host.  Tracked as Phase 21.12 (deferred — see
+  [`CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q6).
 - **Boot directly from the meta-disc:** Mac firmware doesn't boot ISO
   9660 on USB optical drives well.  If your Mac is fully bricked,
   recovery from this meta-disc is *not* the path — use macOS Recovery
