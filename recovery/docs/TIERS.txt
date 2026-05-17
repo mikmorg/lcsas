@@ -81,6 +81,39 @@ documents that have not changed since they were published.
 So: Python stays bundled as a redundant overflow path, BUT no part
 of the workflow that we expect to actually run in 2076 requires it.
 
+WHY TIER 1 IS THE PRIMARY (AND HOW WE COUNT DEPENDENCIES)
+
+The cascade's design intent is that tier 1 -- our own lcsas-restore
+binary built from C89 source against vendored sqlite + zstd -- is
+the PRIMARY recovery tool.  Tier 2 (upstream rustic-static) exists
+as a hedge in case our binary won't run for some reason on a
+particular host; tier 3 (Python) is an emergency overflow.
+
+"Vendored" matters here.  We distinguish two senses of "third
+party":
+
+  * VENDORED SOURCE -- we ship the C source for sqlite + zstd inside
+    recovery/vendored/, compile it ourselves alongside our own code,
+    and pin it by SHA-256 in MANIFEST.sha256 (the files-we-author
+    manifest).  The build is reproducible from those sources.  An
+    auditor can read every line that ends up in the lcsas-restore
+    binary.  Vendored source is acceptable on the bare path.
+
+  * RUNTIME DEPENDENCY -- a binary or interpreter we did not build,
+    supplied by a third party (rustic; CPython) and distributed as
+    an opaque prebuilt artefact.  Pinned upstream by SHA-256 in
+    UPSTREAM.sha256, but the source it was compiled from is whatever
+    upstream's CI did.  Runtime dependencies are explicit fallbacks
+    (tiers 2 and 3); the bare path stays clean of them.
+
+The intent: a recipient with nothing but a working CPU, a kernel,
+a libc, and the lcsas-restore binary off the meta-volume should be
+able to recover.  No `pip install`, no package manager, no upstream
+release matrix that still needs to exist in 2076.  That's why
+tier 1 deserves the cross-compile work even though Phase 21 shipped
+the tier-2 cross-bundle as a shortcut -- see
+docs/CROSS_PLATFORM_META_RFC.md §6 Q6.
+
 WHY THE REBUILD-FROM-SOURCE TIERS WERE REMOVED
 
 Earlier revisions of this cascade included two extra tiers between

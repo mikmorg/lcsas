@@ -73,7 +73,21 @@ Restore is the mirror: `restore/planner.py` generates a disc pick list; `restore
 - **Holographic catalog** — the complete SQLite catalog is burned onto every disc so recovery never requires a central server.
 - **Multi-tenancy** — multiple Rustic repos share physical volumes; each repo is encrypted with its own key; the catalog tracks per-repo ownership.
 - **Zero runtime dependencies** — the entire codebase uses only the Python standard library (`zstandard` is optional). This is intentional so the restore path works on a bare system.
-- **Meta-volume** — a separate bootable disc (`meta/`) bundles static x86_64 binaries (rustic, xorriso, python3), LCSAS source, and a `restore.sh` script so full recovery is possible with nothing pre-installed.
+- **Meta-volume** — a separate bootable disc (`meta/`) bundles per-target static binaries (rustic, xorriso, python3), LCSAS source, and a `restore.sh` script so full recovery is possible with nothing pre-installed.  Phase 21 added per-target bundling for six rust-triples (Linux x86_64/aarch64/armv7 musl, macOS arm64/x86_64, Windows x86_64-gnu).
+
+### Recovery cascade (intent + reality)
+
+The recovery tiers are documented in `recovery/docs/TIERS.txt` and dispatched by `recovery/scripts/restore.sh`:
+
+| Tier | Binary | Intent |
+|---|---|---|
+| **1 (primary)** | our C89 `lcsas-restore` built against vendored sqlite+zstd | The DURABLE path. C89 ABI-stable for 35 years. Depends only on a kernel + libc. No third-party RUNTIME dependency. |
+| 2 (fallback) | upstream `rustic-static` | Hedge in case tier 1 won't run on a given host. Pinned upstream artifact (`recovery/UPSTREAM.sha256`). |
+| 3 (last resort) | bundled CPython + `standalone_restorer.py` | Last-resort recovery if tiers 1+2 both fail. Pinned upstream CPython (`python-build-standalone`). |
+
+**Vendoring vs runtime dependency:** sqlite + zstd live as C source in `recovery/vendored/` and we compile them ourselves alongside our own code — that's not a "third party runtime dependency", it's source we ship and audit (pinned in `recovery/MANIFEST.sha256`). Rustic and CPython ARE runtime dependencies (we ship opaque prebuilt artifacts pinned in `recovery/UPSTREAM.sha256`).
+
+**Intent:** the bare path (tier 1) must work with nothing but kernel + libc + the `lcsas-restore` binary off the meta-volume. No `pip install`, no package manager, no upstream release matrix that still needs to exist decades from now. Cross-platform support for tier 1 is partial today (host arch only); the gap and fix sequence are in `docs/CROSS_PLATFORM_META_RFC.md` §6 Q6.
 
 ### Database schema
 

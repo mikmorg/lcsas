@@ -1,16 +1,34 @@
 # Recovery Toolchain Build & Manifest
 
-> **Status note.** This document specifies the planned `lcsas recovery
-> *` subcommand family, the on-disk `recovery/` build tree, and the
-> `src/lcsas/recovery/build.py` module that orchestrates them.  None
-> of these artefacts exist in the repository today — every workflow
-> in this file is marked **[gap]**.  The doc is written as a
-> precise spec so the implementation can land against it.  Source
-> refs below cite either (a) the closest existing analog (the
-> meta-volume builder in `src/lcsas/meta/`) or (b) the planned path
-> the implementation must occupy.  Lines cited at planned paths are
-> expected line numbers in the future file; reviewers should treat
-> them as anchors to be honoured by the implementing PR.
+> **Status note.** This document was originally written as a spec
+> for the unimplemented recovery toolchain.  The Phase 21 series
+> (commits `4e8582f` through `000dee2`, May 2026) shipped the bulk
+> of that spec:
+>
+> - `lcsas recovery {build,test,manifest,verify}` are live in
+>   `src/lcsas/cli/main.py`.
+> - `src/lcsas/recovery/build.py` (`RecoveryBuilder`) implements
+>   host + cross-compile builds (Linux musl + Windows-gnu via
+>   `zig cc`; macOS targets and `armv7` still pending).
+> - The on-disk `recovery/` build tree exists with C89 source,
+>   vendored sqlite/zstd, a POSIX Makefile, and per-target
+>   binary slots under `bin/<arch>/`.
+> - `recovery/UPSTREAM.sha256` pins the upstream rustic +
+>   python-build-standalone artifacts bundled per target.
+> - `lcsas meta verify <dir>` (Phase 21.8) audits a built meta
+>   volume against its merged `recovery/MANIFEST.sha256`.
+>
+> One known gap (Phase 21.10.a disclosure): tier 1
+> (`lcsas-restore`, our C89 binary) is not yet bundled per target
+> on the meta volume — Phase 21.1 only cross-bundled tier 2
+> (rustic) and tier 3 (CPython).  The cross-compile infrastructure
+> exists (`RecoveryBuilder.cross_build`); wiring it into the
+> meta-builder is Phase 21.10.b.  See
+> [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q6.
+>
+> Source refs in the body below are real file:line citations
+> against the as-shipped code, NOT the original spec's planned
+> paths.
 
 ## Why a recovery toolchain exists
 
