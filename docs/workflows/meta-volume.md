@@ -231,8 +231,8 @@ per-target rust-triple directories.  Reached today:
 |---|---|
 | `x86_64-unknown-linux-musl` | ✓ |
 | `aarch64-unknown-linux-musl` | ✓ |
+| `armv7-unknown-linux-gnueabihf` | ✓ (Phase 21.11; musleabihf-gcc or `zig cc`) |
 | `x86_64-pc-windows-gnu` | ✓ (via `zig cc`) |
-| `armv7-unknown-linux-gnueabihf` | pending — Phase 21.11 |
 | `aarch64-apple-darwin`, `x86_64-apple-darwin` | pending — Phase 21.12 (osxcross) |
 
 To populate the source `recovery/bin/<short-arch>/` tree, run:

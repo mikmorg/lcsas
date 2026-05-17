@@ -764,20 +764,23 @@ class TestBundleTier1Binaries:
         assert dst.is_file()
 
     def test_deferred_targets_skipped(self, tmp_path):
-        """armv7, macOS targets are not in the mapping → even if
-        source has analogous short-arch builds, they don't land
-        on the meta volume.  Guards against an operator dropping
-        a hand-built file into recovery/bin/<short> and being
-        surprised it shipped without the cross-compile audit
-        trail."""
+        """The macOS short-arch names AREN'T in the tier1_map — even
+        if the source recovery/bin had them, the bundler ignores
+        them by design (Phase 21.12 is the follow-up that adds
+        them when osxcross becomes available).  Guards against an
+        operator dropping a hand-built file into
+        recovery/bin/<short> and being surprised it shipped
+        without the cross-compile audit trail.
+
+        Phase 21.11 promoted ``armv7`` out of the deferred set, so
+        this test now exercises the remaining deferred targets
+        (the macOS pair) exclusively.
+        """
         from lcsas.meta.builder import MetaVolumeBuilder
 
-        # These short-arch names AREN'T in the TIER1_MAP — even
-        # if the source recovery/bin had them, the bundler ignores
-        # them by design.
         src = self._make_source_recovery(tmp_path, {
-            "armv7": "lcsas-restore",
             "aarch64-darwin": "lcsas-restore",
+            "x86_64-darwin": "lcsas-restore",
         })
         out = tmp_path / "meta"
         out.mkdir()
@@ -791,6 +794,27 @@ class TestBundleTier1Binaries:
         bin_root = recovery_dst / "bin"
         if bin_root.exists():
             assert not any(bin_root.iterdir())
+
+    def test_armv7_now_mapped(self, tmp_path):
+        """Phase 21.11 promotion guard: armv7 source → armv7-unknown-
+        linux-gnueabihf rust-triple landing on the meta volume.
+        Symmetric with test_linux_targets_mapped_and_copied but
+        ensures the new armv7 mapping specifically works."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        src = self._make_source_recovery(tmp_path, {
+            "armv7": "lcsas-restore",
+        })
+        out = tmp_path / "meta"
+        out.mkdir()
+        recovery_dst = out / "recovery"
+        recovery_dst.mkdir()
+
+        b = MetaVolumeBuilder(out, recovery_dir=src)
+        b._bundle_tier1_binaries(recovery_dst)
+
+        dst = recovery_dst / "bin" / "armv7-unknown-linux-gnueabihf" / "lcsas-restore"
+        assert dst.is_file()
 
     def test_orchestration_includes_tier1_and_manifest(self, tmp_path, monkeypatch):
         """End-to-end: _bundle_recovery_toolchain_artifacts runs

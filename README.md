@@ -569,7 +569,7 @@ The recovery cascade declares three tiers (see
 
 | Tier | Binary | Cross-platform today? |
 |---|---|---|
-| **1** (primary) | our C89 `lcsas-restore` against vendored sqlite/zstd | **Linux x86_64/aarch64 musl + Windows-gnu** (Phase 21.10.b) |
+| **1** (primary) | our C89 `lcsas-restore` against vendored sqlite/zstd | **Linux x86_64/aarch64/armv7 musl + Windows-gnu** (Phase 21.10.b + 21.11; macOS pending) |
 | 2 (fallback) | upstream `rustic-static` | All 6 targets bundled |
 | 3 (last resort) | bundled CPython + `standalone_restorer.py` | All 6 targets bundled |
 
@@ -588,20 +588,29 @@ make build-recovery   # all reachable targets via `lcsas recovery build`
 # or just one:
 lcsas recovery build --arch x86_64           # Linux musl, native
 lcsas recovery build --arch aarch64          # Linux musl, ARM64
+lcsas recovery build --arch armv7            # Linux musl, 32-bit ARM (musleabihf)
 lcsas recovery build --arch x86_64-windows   # Windows, via zig cc
 ```
 
 Then `lcsas meta build` picks them up automatically (no flags
 needed — the bundler maps short-arch → rust-triple at copy time).
 
-**Still pending — Phase 21.11 / 21.12:**
+The default cross-compiler per Linux target is the canonical
+musl-cross-make prefix (`<arch>-linux-musl-gcc` for most;
+`armv7-linux-musleabihf-gcc` for the hardfloat 32-bit ARM
+variant).  Override with `--cc` if your toolchain ships a
+different name, or to use `zig cc`:
 
-- `armv7-unknown-linux-gnueabihf` — `RecoveryBuilder.cross_build`
-  doesn't yet list `armv7`; trivial to add (`zig cc` supports it).
-  Phase 21.11.
+```bash
+lcsas recovery build --arch armv7 \
+    --cc "zig cc -target armv7-linux-musleabihf"
+```
+
+**Still pending — Phase 21.12:**
+
 - `aarch64-apple-darwin`, `x86_64-apple-darwin` — needs
   [`osxcross`](https://github.com/tpoechtrager/osxcross) or an
-  Apple-licensed SDK in CI.  Phase 21.12, deferred.
+  Apple-licensed SDK in CI.  Deferred.
 
 On those still-pending targets the cascade falls through tier 1
 (missing) → tier 2 (works) so restore succeeds; you just lose the

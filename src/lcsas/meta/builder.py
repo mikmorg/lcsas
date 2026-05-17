@@ -2078,12 +2078,11 @@ class MetaVolumeBuilder:
         """
         # rust-triple → (short_arch_dir_name, lcsas-restore_filename)
         # Targets mapped to None are deferred to a later phase:
-        #   armv7-unknown-linux-gnueabihf  → Phase 21.11 (add to cross_build SUPPORTED_ARCHES)
         #   *-apple-darwin                 → Phase 21.12 (osxcross / Apple SDK)
         tier1_map: dict[str, tuple[str, str] | None] = {
             "x86_64-unknown-linux-musl":     ("x86_64", "lcsas-restore"),
             "aarch64-unknown-linux-musl":    ("aarch64", "lcsas-restore"),
-            "armv7-unknown-linux-gnueabihf": None,
+            "armv7-unknown-linux-gnueabihf": ("armv7", "lcsas-restore"),
             "aarch64-apple-darwin":          None,
             "x86_64-apple-darwin":           None,
             "x86_64-pc-windows-gnu":         ("x86_64-windows", "lcsas-restore.exe"),

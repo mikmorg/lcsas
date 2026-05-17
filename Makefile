@@ -58,7 +58,7 @@ verify-recovery:
 # Requires zig or musl-cross toolchains on PATH.  Skip targets you
 # can't build by overriding LCSAS_RECOVERY_ARCHES.
 build-recovery:
-	@arches="$${LCSAS_RECOVERY_ARCHES:-host x86_64 aarch64 x86_64-windows}"; \
+	@arches="$${LCSAS_RECOVERY_ARCHES:-host x86_64 aarch64 armv7 x86_64-windows}"; \
 	for a in $$arches; do \
 		echo "==> lcsas recovery build --arch $$a"; \
 		lcsas recovery build --arch "$$a" || exit 1; \

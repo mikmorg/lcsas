@@ -108,6 +108,54 @@ def test_recovery_builder_supports_windows_arches():
     assert "x86_64-windows" in rb._WINDOWS_ARCHES
 
 
+def test_recovery_builder_supports_armv7():
+    """Phase 21.11: armv7 is in SUPPORTED_ARCHES and has a sensible
+    default CC (the musl-cross-make hardfloat EABI prefix)."""
+    from lcsas.recovery import RecoveryBuilder
+
+    rb = RecoveryBuilder(RECOVERY_DIR)
+    assert "armv7" in rb.SUPPORTED_ARCHES
+    # Should NOT be in the Windows arch set.
+    assert "armv7" not in rb._WINDOWS_ARCHES
+    # The per-arch default CC should reflect the hardfloat EABI naming
+    # convention (musleabihf, NOT plain musl-gcc which would fail).
+    assert rb._DEFAULT_CC["armv7"] == "armv7-linux-musleabihf-gcc"
+
+
+def test_recovery_builder_armv7_unknown_cc_raises_filenotfound():
+    """When the cross-compiler for armv7 is not on PATH (typical on
+    CI hosts), cross_build raises FileNotFoundError with the binary
+    name so operators know what to install or override with --cc."""
+    import pytest
+
+    from lcsas.recovery import RecoveryBuilder
+
+    rb = RecoveryBuilder(RECOVERY_DIR)
+    with pytest.raises(FileNotFoundError) as exc_info:
+        rb.cross_build("armv7", cc="definitely-not-a-real-compiler-xyz")
+    assert "definitely-not-a-real-compiler-xyz" in str(exc_info.value)
+
+
+def test_recovery_builder_multi_token_cc_probes_first_word():
+    """--cc 'zig cc -target X' should probe only the 'zig' binary,
+    not the full string (which would never be on PATH).  Lets
+    operators use zig cc with -target flags as the cross compiler."""
+    import pytest
+
+    from lcsas.recovery import RecoveryBuilder
+
+    rb = RecoveryBuilder(RECOVERY_DIR)
+    with pytest.raises(FileNotFoundError) as exc_info:
+        rb.cross_build(
+            "armv7",
+            cc="definitely-not-zig -target armv7-linux-musleabihf",
+        )
+    # The error names just the binary, not the full multi-token string.
+    msg = str(exc_info.value)
+    assert "definitely-not-zig" in msg
+    assert "-target" not in msg
+
+
 @pytest.mark.skipif(
     not __import__("shutil").which("python3"),
     reason="ziglang module / python3 required for windows cross-build",

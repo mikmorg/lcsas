@@ -429,9 +429,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Build the recovery binaries for host or cross-target arch.",
     )
     rb.add_argument(
-        "--arch", choices=("host", "x86_64", "aarch64", "riscv64"),
+        "--arch",
+        choices=(
+            "host",
+            # Linux musl targets (Phase 21.10.b + 21.11).
+            "x86_64", "aarch64", "armv7", "riscv64",
+            # Windows-gnu targets via `zig cc` (Phase 21.10.b).
+            "x86_64-windows", "aarch64-windows",
+        ),
         default="host",
-        help="Target architecture (default: host).",
+        help="Target architecture (default: host).  Must be one of "
+             "`RecoveryBuilder.SUPPORTED_ARCHES`.",
     )
     rb.add_argument(
         "--cc", type=str, default=None,

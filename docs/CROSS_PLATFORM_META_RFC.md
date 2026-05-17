@@ -430,10 +430,17 @@ supports three reachable targets for the C89 binary today:
    directory names and copies the binary at bundle time.  The
    meta-builder now knows both conventions; `cross_build` stays
    unchanged.  `make build-recovery` drives the cross-builds.
-3. **Phase 21.11** (separate phase, low cost) — extend
-   `SUPPORTED_ARCHES` to `armv7` (zig cc supports it).  Then add
-   the rust-triple → short-arch mapping in
-   `_bundle_tier1_binaries`.
+3. **Phase 21.11** — ✅ SHIPPED 2026-05-17.  Added `armv7` to
+   `RecoveryBuilder.SUPPORTED_ARCHES` and the
+   `_bundle_tier1_binaries` rust-triple map.  Default CC for
+   armv7 is `armv7-linux-musleabihf-gcc` (the canonical
+   hardfloat-EABI musl-cross-make prefix); operators can override
+   with `--cc "zig cc -target armv7-linux-musleabihf"` if zig is
+   preferred.  Also extended the multi-token CC support so
+   `--cc "zig cc ..."` probes only the `zig` binary on PATH.
+   Incidental: fixed the `lcsas recovery build --arch` CLI
+   choices to expose every entry in `SUPPORTED_ARCHES`
+   (previously omitted the Windows arches).
 4. **Phase 21.12** (further deferred, real cost) — osxcross
    integration for the two Darwin targets, gated on a CI runner
    we can license.  Until then macOS tier-1 stays unavailable

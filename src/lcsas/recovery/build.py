@@ -51,12 +51,23 @@ class RecoveryBuilder:
     """
 
     SUPPORTED_ARCHES = (
-        "x86_64", "aarch64", "riscv64",
+        "x86_64", "aarch64", "armv7", "riscv64",
         "x86_64-windows", "aarch64-windows",
     )
 
     # Arches that target Windows -- binaries get .exe suffix, build via zig cc.
     _WINDOWS_ARCHES = ("x86_64-windows", "aarch64-windows")
+
+    # Per-arch default cross-compiler.  Most musl-cross-make
+    # toolchains follow the <arch>-linux-musl-gcc pattern, but
+    # armv7 uses the hardfloat EABI variant (musleabihf) so the
+    # naming differs.  Operators can always override with --cc.
+    _DEFAULT_CC = {
+        "x86_64":  "x86_64-linux-musl-gcc",
+        "aarch64": "aarch64-linux-musl-gcc",
+        "armv7":   "armv7-linux-musleabihf-gcc",
+        "riscv64": "riscv64-linux-musl-gcc",
+    }
 
     def __init__(self, recovery_dir: Path) -> None:
         self._dir = recovery_dir.resolve()
@@ -100,8 +111,13 @@ class RecoveryBuilder:
                     verbose: bool = False) -> RecoveryArtifacts:
         """Cross-compile lcsas-restore for ``arch``.
 
-        For Linux arches (x86_64, aarch64, riscv64), ``cc`` defaults to
-        ``<arch>-linux-musl-gcc``; the binary is statically linked.
+        For Linux arches (x86_64, aarch64, armv7, riscv64), ``cc``
+        defaults to the canonical musl-cross-make prefix for that
+        target (``x86_64-linux-musl-gcc`` for most; armv7 uses the
+        hardfloat variant ``armv7-linux-musleabihf-gcc``).  The
+        binary is statically linked.  Override with ``--cc`` if
+        your toolchain ships a different prefix or you want to use
+        ``zig cc`` (e.g. ``--cc "zig cc -target armv7-linux-musleabihf"``).
 
         For Windows arches (x86_64-windows, aarch64-windows), the
         Makefile's dedicated ``windows`` target is invoked (which
@@ -146,9 +162,12 @@ class RecoveryBuilder:
             )
 
         # ── Linux cross-compile path ─────────────────────────────────
-        cc = cc or f"{arch}-linux-musl-gcc"
-        if shutil.which(cc) is None:
-            raise FileNotFoundError(f"cross compiler not on PATH: {cc}")
+        cc = cc or self._DEFAULT_CC.get(arch, f"{arch}-linux-musl-gcc")
+        # Honor multi-token CCs (e.g. "zig cc -target armv7-linux-musleabihf");
+        # only the first token is the binary to probe for.
+        cc_binary = cc.split()[0]
+        if shutil.which(cc_binary) is None:
+            raise FileNotFoundError(f"cross compiler not on PATH: {cc_binary}")
 
         out = subprocess.run(
             ["make", "-C", str(self._dir), "clean"],
