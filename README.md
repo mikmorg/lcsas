@@ -569,7 +569,7 @@ The recovery cascade declares three tiers (see
 
 | Tier | Binary | Cross-platform today? |
 |---|---|---|
-| **1** (primary) | our C89 `lcsas-restore` against vendored sqlite/zstd | **Linux x86_64/aarch64/armv7 musl + Windows-gnu** (Phase 21.10.b + 21.11; macOS pending) |
+| **1** (primary) | our C89 `lcsas-restore` against vendored sqlite/zstd | **All 6 approved targets** (Phase 21.10.b/.11/.12) |
 | 2 (fallback) | upstream `rustic-static` | All 6 targets bundled |
 | 3 (last resort) | bundled CPython + `standalone_restorer.py` | All 6 targets bundled |
 
@@ -590,6 +590,8 @@ lcsas recovery build --arch x86_64           # Linux musl, native
 lcsas recovery build --arch aarch64          # Linux musl, ARM64
 lcsas recovery build --arch armv7            # Linux musl, 32-bit ARM (musleabihf)
 lcsas recovery build --arch x86_64-windows   # Windows, via zig cc
+lcsas recovery build --arch x86_64-macos     # macOS Intel,    via zig cc
+lcsas recovery build --arch aarch64-macos    # macOS Apple Silicon, via zig cc
 ```
 
 Then `lcsas meta build` picks them up automatically (no flags
@@ -606,11 +608,14 @@ lcsas recovery build --arch armv7 \
     --cc "zig cc -target armv7-linux-musleabihf"
 ```
 
-**Still pending — Phase 21.12:**
-
-- `aarch64-apple-darwin`, `x86_64-apple-darwin` — needs
-  [`osxcross`](https://github.com/tpoechtrager/osxcross) or an
-  Apple-licensed SDK in CI.  Deferred.
+The Windows and macOS targets always use `zig cc` (via the
+`python3 -m ziglang cc` Python wheel — `pip install ziglang` if it
+isn't present).  Notably, the macOS targets do **not** require
+the Apple SDK: zig bundles enough libSystem definitions to link
+Mach-O executables for both Apple Silicon and Intel.  Operator
+must still notarize or codesign the binary themselves if they
+want macOS Gatekeeper to bless it; unsigned binaries still run
+via Finder's "Open anyway" path.
 
 On those still-pending targets the cascade falls through tier 1
 (missing) → tier 2 (works) so restore succeeds; you just lose the

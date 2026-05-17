@@ -441,10 +441,26 @@ supports three reachable targets for the C89 binary today:
    Incidental: fixed the `lcsas recovery build --arch` CLI
    choices to expose every entry in `SUPPORTED_ARCHES`
    (previously omitted the Windows arches).
-4. **Phase 21.12** (further deferred, real cost) — osxcross
-   integration for the two Darwin targets, gated on a CI runner
-   we can license.  Until then macOS tier-1 stays unavailable
-   and the README discloses that.
+4. **Phase 21.12** — ✅ SHIPPED 2026-05-17.  Solved without
+   osxcross: `zig cc -target <arch>-macos` bundles enough
+   libSystem definitions to link Mach-O executables for both
+   `aarch64-apple-darwin` and `x86_64-apple-darwin` without
+   needing an Apple SDK download.  Two new Makefile targets
+   (`bin/x86_64-macos/lcsas-restore`,
+   `bin/aarch64-macos/lcsas-restore`) drive zig; the
+   `RecoveryBuilder` Windows code path was generalized into
+   a "needs dedicated Makefile target" branch that handles both
+   Windows (.exe suffix) and macOS (no suffix).  The
+   `_bundle_tier1_binaries` map promotes both Darwin triples
+   from None to their short-arch macOS counterparts.  Integration
+   test (`test_recovery_builder_cross_builds_macos`) actually
+   compiles and runs the build end-to-end when ziglang is
+   installed.  No Apple licensing required; operators are
+   responsible for notarization/codesigning if they want
+   Gatekeeper to bless the binary.
+
+**All six approved targets now have tier-1 coverage.** The Phase 21
+cross-platform meta-volume RFC is fully implemented.
 
 ## 7. Non-goals
 

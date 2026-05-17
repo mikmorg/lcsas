@@ -636,6 +636,8 @@ class TestBundleUpstreamBinaries:
         ``_bundle_recovery_toolchain_artifacts`` → ``_bundle_upstream_binaries``
         wiring works, not just the leaf helper in isolation.
         """
+        import shutil as _sh
+
         from lcsas.meta.builder import MetaVolumeBuilder
 
         cache_root = tmp_path / "cache"
@@ -643,15 +645,25 @@ class TestBundleUpstreamBinaries:
         self._make_cache(cache_root, "x86_64-pc-windows-gnu", with_python=False)
         monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache_root))
 
-        # The recovery source tree must exist for the parent method
-        # to do its main copytree work.  Use the real repo's recovery/.
+        # Use a COPY of the real recovery tree as the source.  We
+        # delete its bin/ subtree first so the test sees a deterministic
+        # state — the on-disk `recovery/bin/` may carry whatever the
+        # developer or CI just cross-compiled (Phase 21.10.b–21.12),
+        # which would otherwise leak into the test as "unexpected"
+        # targets and make the assertion flaky.
         repo_root = Path(__file__).resolve().parents[2]
+        src_recovery = tmp_path / "source_recovery"
+        _sh.copytree(repo_root / "recovery", src_recovery, symlinks=True)
+        bin_root = src_recovery / "bin"
+        if bin_root.exists():
+            _sh.rmtree(bin_root)
+
         out = tmp_path / "meta"
         out.mkdir()
         b = MetaVolumeBuilder(
             out,
             project_root=repo_root,
-            recovery_dir=repo_root / "recovery",
+            recovery_dir=src_recovery,
         )
         b._bundle_recovery_toolchain_artifacts()
 
@@ -667,7 +679,9 @@ class TestBundleUpstreamBinaries:
         assert (win / "rustic-static").is_file()
         # No python on the windows target (we asked for rustic-only).
         assert not (win / "python").exists()
-        # And no other approved target slipped in.
+        # And no other approved target slipped in.  (We cleared the
+        # source bin/ above, so tier-1 bundling won't pick up any
+        # locally-built lcsas-restore for these targets either.)
         for unexpected in (
             "x86_64-unknown-linux-musl",
             "armv7-unknown-linux-gnueabihf",
@@ -763,24 +777,24 @@ class TestBundleTier1Binaries:
         dst = recovery_dst / "bin" / "x86_64-pc-windows-gnu" / "lcsas-restore.exe"
         assert dst.is_file()
 
-    def test_deferred_targets_skipped(self, tmp_path):
-        """The macOS short-arch names AREN'T in the tier1_map — even
-        if the source recovery/bin had them, the bundler ignores
-        them by design (Phase 21.12 is the follow-up that adds
-        them when osxcross becomes available).  Guards against an
-        operator dropping a hand-built file into
-        recovery/bin/<short> and being surprised it shipped
-        without the cross-compile audit trail.
+    def test_unmapped_short_arch_names_skipped(self, tmp_path):
+        """Short-arch names NOT in the tier1_map (e.g. typo, or some
+        future arch we haven't yet wired) are ignored even if the
+        source recovery/bin had them.  Guards against an operator
+        dropping a hand-built file into recovery/bin/<short> and
+        being surprised it shipped without the cross-compile audit
+        trail.
 
-        Phase 21.11 promoted ``armv7`` out of the deferred set, so
-        this test now exercises the remaining deferred targets
-        (the macOS pair) exclusively.
+        Phase 21.12 promoted both macOS arches into the map; the
+        only remaining unmapped names are typos or never-supported
+        arches.  We use ``sparc64-linux`` here as an example —
+        it's NOT in the map, so the bundler ignores it.
         """
         from lcsas.meta.builder import MetaVolumeBuilder
 
         src = self._make_source_recovery(tmp_path, {
-            "aarch64-darwin": "lcsas-restore",
-            "x86_64-darwin": "lcsas-restore",
+            "sparc64-linux": "lcsas-restore",
+            "ppc64-bsd": "lcsas-restore",
         })
         out = tmp_path / "meta"
         out.mkdir()
@@ -794,6 +808,26 @@ class TestBundleTier1Binaries:
         bin_root = recovery_dst / "bin"
         if bin_root.exists():
             assert not any(bin_root.iterdir())
+
+    def test_macos_targets_now_mapped(self, tmp_path):
+        """Phase 21.12 promotion guard: both macOS short-arch builds
+        land at the right rust-triple paths."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        src = self._make_source_recovery(tmp_path, {
+            "x86_64-macos": "lcsas-restore",
+            "aarch64-macos": "lcsas-restore",
+        })
+        out = tmp_path / "meta"
+        out.mkdir()
+        recovery_dst = out / "recovery"
+        recovery_dst.mkdir()
+
+        b = MetaVolumeBuilder(out, recovery_dir=src)
+        b._bundle_tier1_binaries(recovery_dst)
+
+        assert (recovery_dst / "bin" / "x86_64-apple-darwin" / "lcsas-restore").is_file()
+        assert (recovery_dst / "bin" / "aarch64-apple-darwin" / "lcsas-restore").is_file()
 
     def test_armv7_now_mapped(self, tmp_path):
         """Phase 21.11 promotion guard: armv7 source → armv7-unknown-

@@ -136,6 +136,58 @@ def test_recovery_builder_armv7_unknown_cc_raises_filenotfound():
     assert "definitely-not-a-real-compiler-xyz" in str(exc_info.value)
 
 
+def test_recovery_builder_supports_macos_arches():
+    """Phase 21.12: x86_64-macos and aarch64-macos are in
+    SUPPORTED_ARCHES and recognized as macOS arches (handled by
+    the dedicated zig-cc -target X-macos Makefile path)."""
+    from lcsas.recovery import RecoveryBuilder
+
+    rb = RecoveryBuilder(RECOVERY_DIR)
+    assert "x86_64-macos" in rb.SUPPORTED_ARCHES
+    assert "aarch64-macos" in rb.SUPPORTED_ARCHES
+    assert "x86_64-macos" in rb._MACOS_ARCHES
+    assert "aarch64-macos" in rb._MACOS_ARCHES
+    # macOS arches must NOT be in the Windows set (different naming
+    # convention, different output suffix).
+    assert "x86_64-macos" not in rb._WINDOWS_ARCHES
+
+
+def _ziglang_available() -> bool:
+    import importlib.util as _u
+    return _u.find_spec("ziglang") is not None
+
+
+@pytest.mark.skipif(
+    not _ziglang_available(),
+    reason="ziglang module required for macOS cross-build",
+)
+def test_recovery_builder_cross_builds_macos():
+    """End-to-end: cross-compile the macOS Mach-O binary via
+    `zig cc -target X-macos` (no Apple SDK needed).  Skipped when
+    ziglang isn't installed."""
+    from lcsas.recovery import RecoveryBuilder
+
+    rb = RecoveryBuilder(RECOVERY_DIR)
+    # Remove any stale artifact so we know this run produced it.
+    stale = RECOVERY_DIR / "bin" / "x86_64-macos" / "lcsas-restore"
+    if stale.exists():
+        stale.unlink()
+
+    a = rb.cross_build("x86_64-macos", verbose=False)
+    assert a.arch == "x86_64-macos"
+    assert a.lcsas_restore.is_file()
+    # Mach-O binaries don't get the .exe suffix.
+    assert a.lcsas_restore.name == "lcsas-restore"
+    # iso9660 + init not produced for macOS (same as Windows).
+    assert a.lcsas_iso9660 is None
+    assert a.lcsas_init is None
+    # And it really is a Mach-O binary (4-byte magic).
+    with a.lcsas_restore.open("rb") as f:
+        magic = f.read(4)
+    # x86_64 Mach-O magic is CF FA ED FE (little-endian).
+    assert magic == b"\xcf\xfa\xed\xfe", f"not Mach-O 64-bit: {magic!r}"
+
+
 def test_recovery_builder_multi_token_cc_probes_first_word():
     """--cc 'zig cc -target X' should probe only the 'zig' binary,
     not the full string (which would never be on PATH).  Lets

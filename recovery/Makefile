@@ -290,6 +290,45 @@ bin/aarch64-windows/lcsas-restore.exe:
 
 windows: bin/x86_64-windows/lcsas-restore.exe
 
+# Cross-compile for macOS via zig cc.  Zig bundles enough libSystem
+# headers + stubs to link Mach-O binaries for both Apple Silicon and
+# Intel Mac without the Apple SDK.  Output is a Mach-O executable
+# that runs on macOS 11+ (Big Sur).  Phase 21.12.
+#
+# Notes:
+#   * macOS does NOT support fully static binaries (no -static); the
+#     binary dynamically links against /usr/lib/libSystem.dylib which
+#     is guaranteed present on every Mac.
+#   * lcsas-iso9660 (ISO mastering helper) and lcsas-init (Linux PID 1)
+#     are not produced for macOS — they're either redundant on Darwin
+#     (the kernel handles ISO mounts natively) or Linux-only.
+#   * Notarization / codesigning is the operator's responsibility if
+#     they want Gatekeeper to bless the binary.  Unsigned binaries
+#     still run if the operator opens them once via Finder + "Open
+#     anyway" or unsets the quarantine attribute.
+
+bin/x86_64-macos/lcsas-restore:
+	rm -rf build/x86_64-macos
+	$(MAKE) BUILD=build/x86_64-macos \
+	        CC="$(ZIG_CC) -target x86_64-macos" \
+	        VENDOR_CFLAGS="-std=gnu99 -O2 -DNDEBUG -Wno-deprecated-declarations -Wno-unused-function" \
+	        LDFLAGS= \
+	        build/x86_64-macos/lcsas-restore
+	mkdir -p bin/x86_64-macos
+	cp build/x86_64-macos/lcsas-restore bin/x86_64-macos/
+
+bin/aarch64-macos/lcsas-restore:
+	rm -rf build/aarch64-macos
+	$(MAKE) BUILD=build/aarch64-macos \
+	        CC="$(ZIG_CC) -target aarch64-macos" \
+	        VENDOR_CFLAGS="-std=gnu99 -O2 -DNDEBUG -Wno-deprecated-declarations -Wno-unused-function" \
+	        LDFLAGS= \
+	        build/aarch64-macos/lcsas-restore
+	mkdir -p bin/aarch64-macos
+	cp build/aarch64-macos/lcsas-restore bin/aarch64-macos/
+
+macos: bin/x86_64-macos/lcsas-restore bin/aarch64-macos/lcsas-restore
+
 # Cross-compile with zig cc (single binary, deterministic).  Requires:
 #   apt-get install zig   OR   pip install ziglang
 zig-aarch64:
@@ -349,4 +388,4 @@ manifest:
 	    > MANIFEST.sha256
 	@echo "wrote MANIFEST.sha256 (top-level, $(shell wc -l < MANIFEST.sha256) entries)"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows clean manifest repro-check zig-aarch64 zig-riscv64
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64

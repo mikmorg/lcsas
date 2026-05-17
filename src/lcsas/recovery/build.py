@@ -53,10 +53,14 @@ class RecoveryBuilder:
     SUPPORTED_ARCHES = (
         "x86_64", "aarch64", "armv7", "riscv64",
         "x86_64-windows", "aarch64-windows",
+        "x86_64-macos", "aarch64-macos",
     )
 
     # Arches that target Windows -- binaries get .exe suffix, build via zig cc.
     _WINDOWS_ARCHES = ("x86_64-windows", "aarch64-windows")
+    # Arches that target macOS -- build via `zig cc -target <arch>-macos`,
+    # produce Mach-O executables, no -static (macOS forbids it).
+    _MACOS_ARCHES = ("x86_64-macos", "aarch64-macos")
 
     # Per-arch default cross-compiler.  Most musl-cross-make
     # toolchains follow the <arch>-linux-musl-gcc pattern, but
@@ -124,19 +128,31 @@ class RecoveryBuilder:
         shells out to ``zig cc -target <arch>-windows-gnu``); the
         binary has a ``.exe`` suffix and lcsas-init is not produced
         (it's a Linux-only PID 1).
+
+        For macOS arches (x86_64-macos, aarch64-macos), Phase 21.12
+        uses ``zig cc -target <arch>-macos`` (no Apple SDK required —
+        zig bundles enough libSystem definitions to link Mach-O
+        executables for both Apple Silicon and Intel).  Binary has
+        no extension; lcsas-iso9660 and lcsas-init are not produced
+        (redundant on Darwin / Linux-only respectively).
         """
         if arch not in self.SUPPORTED_ARCHES:
             raise ValueError(f"unsupported arch: {arch}")
 
         is_windows = arch in self._WINDOWS_ARCHES
+        is_macos = arch in self._MACOS_ARCHES
 
         env = os.environ.copy()
         env.setdefault("SOURCE_DATE_EPOCH", "1735689600")
 
-        if is_windows:
-            # The Makefile already encodes the zig cc invocation; we
-            # just trigger the right target.
-            target = f"bin/{arch}/lcsas-restore.exe"
+        if is_windows or is_macos:
+            # Both Windows and macOS use a dedicated Makefile target
+            # that encodes the zig cc invocation.  Windows binaries
+            # get .exe; macOS binaries don't.  Linker flags differ
+            # (macOS can't use -static); the Makefile target handles
+            # that internally.
+            exe_name = "lcsas-restore.exe" if is_windows else "lcsas-restore"
+            target = f"bin/{arch}/{exe_name}"
             out = subprocess.run(
                 ["make", "-C", str(self._dir), target],
                 env=env, capture_output=not verbose, text=True, check=False,
@@ -147,16 +163,16 @@ class RecoveryBuilder:
                     f"{out.stderr if not verbose else ''}"
                 )
             bin_dir = self._dir / "bin" / arch
-            exe = bin_dir / "lcsas-restore.exe"
+            exe = bin_dir / exe_name
             if not exe.is_file():
                 raise RuntimeError(f"expected {exe} not produced")
             return RecoveryArtifacts(
                 arch=arch,
                 lcsas_restore=exe,
-                # iso9660 / init not currently cross-built for Windows;
-                # they're either unused on Windows (init) or
-                # functionally redundant (iso9660 -- Windows can mount
-                # ISOs natively).
+                # iso9660 / init not produced for non-Linux targets:
+                #   - init is Linux PID 1 only
+                #   - iso9660 is redundant — Windows + macOS can
+                #     mount ISOs natively (Mount-DiskImage / hdiutil)
                 lcsas_iso9660=None,
                 lcsas_init=None,
             )

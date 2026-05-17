@@ -436,6 +436,8 @@ def build_parser() -> argparse.ArgumentParser:
             "x86_64", "aarch64", "armv7", "riscv64",
             # Windows-gnu targets via `zig cc` (Phase 21.10.b).
             "x86_64-windows", "aarch64-windows",
+            # macOS targets via `zig cc -target X-macos` (Phase 21.12).
+            "x86_64-macos", "aarch64-macos",
         ),
         default="host",
         help="Target architecture (default: host).  Must be one of "

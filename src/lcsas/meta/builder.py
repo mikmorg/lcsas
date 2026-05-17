@@ -2077,14 +2077,14 @@ class MetaVolumeBuilder:
         the remaining targets.
         """
         # rust-triple → (short_arch_dir_name, lcsas-restore_filename)
-        # Targets mapped to None are deferred to a later phase:
-        #   *-apple-darwin                 → Phase 21.12 (osxcross / Apple SDK)
+        # Phase 21.12 closed the last open mapping; every approved
+        # target now has a tier-1 path.
         tier1_map: dict[str, tuple[str, str] | None] = {
             "x86_64-unknown-linux-musl":     ("x86_64", "lcsas-restore"),
             "aarch64-unknown-linux-musl":    ("aarch64", "lcsas-restore"),
             "armv7-unknown-linux-gnueabihf": ("armv7", "lcsas-restore"),
-            "aarch64-apple-darwin":          None,
-            "x86_64-apple-darwin":           None,
+            "aarch64-apple-darwin":          ("aarch64-macos", "lcsas-restore"),
+            "x86_64-apple-darwin":           ("x86_64-macos", "lcsas-restore"),
             "x86_64-pc-windows-gnu":         ("x86_64-windows", "lcsas-restore.exe"),
         }
 
