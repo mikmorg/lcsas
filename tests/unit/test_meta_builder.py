@@ -678,6 +678,176 @@ class TestBundleUpstreamBinaries:
 
 
 # ────────────────────────────────────────────────────────────────────
+#  _bundle_tier1_binaries — Phase 21.10.b
+# ────────────────────────────────────────────────────────────────────
+
+
+class TestBundleTier1Binaries:
+    """Tests for the tier-1 (lcsas-restore) cross-bundle step.
+
+    Uses a synthetic source recovery/ tree (no real cross-compile
+    required) to exercise the dispatch logic.
+    """
+
+    def _make_source_recovery(self, tmp_path, builds):
+        """Synthesize a source recovery/ tree with pre-built binaries.
+
+        ``builds`` is a dict mapping short-arch name → exe_name.
+        Each entry creates ``<recovery>/bin/<short-arch>/<exe>``.
+        """
+        src = tmp_path / "source_recovery"
+        src.mkdir()
+        for short_arch, exe_name in builds.items():
+            bin_dir = src / "bin" / short_arch
+            bin_dir.mkdir(parents=True)
+            bin_path = bin_dir / exe_name
+            bin_path.write_text(f"#!/bin/sh\nfake {short_arch}\n")
+            bin_path.chmod(0o755)
+        return src
+
+    def test_no_source_bin_dir_is_silent_skip(self, tmp_path):
+        """No source `recovery/bin/` at all → no-op, no error."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        src = tmp_path / "source_recovery"
+        src.mkdir()  # No bin/ subdir.
+        out = tmp_path / "meta"
+        out.mkdir()
+        recovery_dst = out / "recovery"
+        recovery_dst.mkdir()
+
+        b = MetaVolumeBuilder(out, recovery_dir=src)
+        b._bundle_tier1_binaries(recovery_dst)
+        # No rust-triple dirs should appear under bin/.
+        assert not (recovery_dst / "bin").exists() or not any(
+            (recovery_dst / "bin").iterdir()
+        )
+
+    def test_linux_targets_mapped_and_copied(self, tmp_path):
+        """Source has x86_64 + aarch64 short-arch builds → meta volume
+        gets x86_64-unknown-linux-musl + aarch64-unknown-linux-musl
+        copies."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        src = self._make_source_recovery(tmp_path, {
+            "x86_64": "lcsas-restore",
+            "aarch64": "lcsas-restore",
+        })
+        out = tmp_path / "meta"
+        out.mkdir()
+        recovery_dst = out / "recovery"
+        recovery_dst.mkdir()
+
+        b = MetaVolumeBuilder(out, recovery_dir=src)
+        b._bundle_tier1_binaries(recovery_dst)
+
+        assert (recovery_dst / "bin" / "x86_64-unknown-linux-musl" / "lcsas-restore").is_file()
+        assert (recovery_dst / "bin" / "aarch64-unknown-linux-musl" / "lcsas-restore").is_file()
+
+    def test_windows_target_mapped_with_exe_suffix(self, tmp_path):
+        """Source has x86_64-windows/lcsas-restore.exe → meta volume
+        gets bin/x86_64-pc-windows-gnu/lcsas-restore.exe."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        src = self._make_source_recovery(tmp_path, {
+            "x86_64-windows": "lcsas-restore.exe",
+        })
+        out = tmp_path / "meta"
+        out.mkdir()
+        recovery_dst = out / "recovery"
+        recovery_dst.mkdir()
+
+        b = MetaVolumeBuilder(out, recovery_dir=src)
+        b._bundle_tier1_binaries(recovery_dst)
+
+        dst = recovery_dst / "bin" / "x86_64-pc-windows-gnu" / "lcsas-restore.exe"
+        assert dst.is_file()
+
+    def test_deferred_targets_skipped(self, tmp_path):
+        """armv7, macOS targets are not in the mapping → even if
+        source has analogous short-arch builds, they don't land
+        on the meta volume.  Guards against an operator dropping
+        a hand-built file into recovery/bin/<short> and being
+        surprised it shipped without the cross-compile audit
+        trail."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        # These short-arch names AREN'T in the TIER1_MAP — even
+        # if the source recovery/bin had them, the bundler ignores
+        # them by design.
+        src = self._make_source_recovery(tmp_path, {
+            "armv7": "lcsas-restore",
+            "aarch64-darwin": "lcsas-restore",
+        })
+        out = tmp_path / "meta"
+        out.mkdir()
+        recovery_dst = out / "recovery"
+        recovery_dst.mkdir()
+
+        b = MetaVolumeBuilder(out, recovery_dir=src)
+        b._bundle_tier1_binaries(recovery_dst)
+
+        # No rust-triple dirs populated.
+        bin_root = recovery_dst / "bin"
+        if bin_root.exists():
+            assert not any(bin_root.iterdir())
+
+    def test_orchestration_includes_tier1_and_manifest(self, tmp_path, monkeypatch):
+        """End-to-end: _bundle_recovery_toolchain_artifacts runs
+        _bundle_upstream_binaries → _bundle_tier1_binaries →
+        _regenerate_recovery_manifest in that order.  The merged
+        manifest must register the tier-1 binaries we put under
+        bin/<rust-triple>/lcsas-restore[.exe]."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        # Synthesize an upstream cache with one target + a tier-1
+        # build for the SAME target.
+        cache = tmp_path / "cache"
+        target = "x86_64-unknown-linux-musl"
+        (cache / "rustic" / target).mkdir(parents=True)
+        (cache / "rustic" / target / "rustic").write_text("#!fake\n")
+        (cache / "rustic" / target / "rustic").chmod(0o755)
+        (cache / "python" / target / "python" / "bin").mkdir(parents=True)
+        (cache / "python" / target / "python" / "bin" / "python3").write_text("#!fake\n")
+        (cache / "python" / target / "python" / "bin" / "python3").chmod(0o755)
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache))
+
+        # Use the REAL recovery/ source tree so copytree finds
+        # everything else (MANIFEST.sha256, etc.), but ALSO pre-seed
+        # a fake bin/x86_64/lcsas-restore so the tier-1 bundler has
+        # something to copy.  We do this by symlinking the real
+        # tree and adding our fake binary on top.
+        import shutil
+        real_recovery = Path(__file__).resolve().parents[2] / "recovery"
+        src_recovery = tmp_path / "source_recovery"
+        shutil.copytree(real_recovery, src_recovery, symlinks=True)
+        fake_bin_dir = src_recovery / "bin" / "x86_64"
+        fake_bin_dir.mkdir(parents=True, exist_ok=True)
+        fake_bin = fake_bin_dir / "lcsas-restore"
+        fake_bin.write_text("#!/bin/sh\nfake C89 binary\n")
+        fake_bin.chmod(0o755)
+
+        out = tmp_path / "meta"
+        out.mkdir()
+        b = MetaVolumeBuilder(
+            out,
+            project_root=real_recovery.parent,
+            recovery_dir=src_recovery,
+        )
+        b._bundle_recovery_toolchain_artifacts()
+
+        # All three tier binaries landed under the rust-triple path.
+        target_dir = out / "recovery" / "bin" / target
+        assert (target_dir / "lcsas-restore").is_file(), "tier 1 missing"
+        assert (target_dir / "rustic-static").is_file(), "tier 2 missing"
+        assert (target_dir / "python" / "bin" / "python3").is_file(), "tier 3 missing"
+
+        # And the merged manifest registers tier 1 too.
+        manifest = (out / "recovery" / "MANIFEST.sha256").read_text()
+        assert f"./bin/{target}/lcsas-restore" in manifest
+
+
+# ────────────────────────────────────────────────────────────────────
 #  _regenerate_recovery_manifest — Phase 21.4
 # ────────────────────────────────────────────────────────────────────
 

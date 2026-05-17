@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-all coverage clean blind-restore blind-restore-teardown fetch-recovery verify-recovery
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-all coverage clean blind-restore blind-restore-teardown fetch-recovery verify-recovery build-recovery
 
 dev:
 	pip install -e ".[dev]"
@@ -51,3 +51,15 @@ fetch-recovery:
 # if anything is wrong.  Phase 21.5.b.
 verify-recovery:
 	sh recovery/scripts/fetch_upstream.sh --verify-only
+
+# Cross-build the tier-1 lcsas-restore binary for every target that
+# `RecoveryBuilder.cross_build` currently reaches via `zig cc` or
+# `<arch>-linux-musl-gcc` (Phase 21.10.b).  armv7 + macOS deferred.
+# Requires zig or musl-cross toolchains on PATH.  Skip targets you
+# can't build by overriding LCSAS_RECOVERY_ARCHES.
+build-recovery:
+	@arches="$${LCSAS_RECOVERY_ARCHES:-host x86_64 aarch64 x86_64-windows}"; \
+	for a in $$arches; do \
+		echo "==> lcsas recovery build --arch $$a"; \
+		lcsas recovery build --arch "$$a" || exit 1; \
+	done

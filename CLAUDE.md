@@ -87,7 +87,7 @@ The recovery tiers are documented in `recovery/docs/TIERS.txt` and dispatched by
 
 **Vendoring vs runtime dependency:** sqlite + zstd live as C source in `recovery/vendored/` and we compile them ourselves alongside our own code — that's not a "third party runtime dependency", it's source we ship and audit (pinned in `recovery/MANIFEST.sha256`). Rustic and CPython ARE runtime dependencies (we ship opaque prebuilt artifacts pinned in `recovery/UPSTREAM.sha256`).
 
-**Intent:** the bare path (tier 1) must work with nothing but kernel + libc + the `lcsas-restore` binary off the meta-volume. No `pip install`, no package manager, no upstream release matrix that still needs to exist decades from now. Cross-platform support for tier 1 is partial today (host arch only); the gap and fix sequence are in `docs/CROSS_PLATFORM_META_RFC.md` §6 Q6.
+**Intent:** the bare path (tier 1) must work with nothing but kernel + libc + the `lcsas-restore` binary off the meta-volume. No `pip install`, no package manager, no upstream release matrix that still needs to exist decades from now. Cross-platform tier-1 coverage as of Phase 21.10.b: Linux x86_64/aarch64 musl + Windows-gnu (via `zig cc`); armv7 (Phase 21.11) and macOS (Phase 21.12) still pending. See `docs/CROSS_PLATFORM_META_RFC.md` §6 Q6.
 
 ### Database schema
 

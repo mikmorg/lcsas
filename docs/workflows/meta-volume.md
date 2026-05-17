@@ -220,31 +220,38 @@ recovery on the host architecture continues to work through the legacy
 `tools/bin/` bundling path.  The cross-platform path only kicks in
 when the cache is populated.
 
-### Known gap: tier 1 (`lcsas-restore`) is not cross-bundled
+### Tier-1 cross-bundling (Phase 21.10.b)
 
-What Phase 21.1 actually bundles per target is **tier 2** (rustic)
-and **tier 3** (CPython).  **Tier 1** (the C89 `lcsas-restore`)
-is only present for the host arch — the bundler doesn't
-cross-compile it, and there's an arch-naming mismatch between
-`RecoveryBuilder.cross_build` (`bin/<short-arch>/`) and the
-restore.sh dispatcher (`bin/<rust-triple>/`) that breaks tier 1
-even on the host arch.
+`MetaVolumeBuilder._bundle_tier1_binaries` (`src/lcsas/meta/builder.py`)
+copies cross-built `lcsas-restore` binaries from the source
+`recovery/bin/<short-arch>/` tree into the meta-volume's
+per-target rust-triple directories.  Reached today:
 
-Effective cascade today on non-Linux-x86_64 hosts:
-
-| Tier | Status on non-host arch |
+| Target | Tier-1 status |
 |---|---|
-| 1 — `lcsas-restore` (our C89 binary) | **missing** |
-| 2 — `rustic-static` (upstream) | works ✓ |
-| 3 — `standalone_restorer.py` (bundled CPython) | works ✓ |
+| `x86_64-unknown-linux-musl` | ✓ |
+| `aarch64-unknown-linux-musl` | ✓ |
+| `x86_64-pc-windows-gnu` | ✓ (via `zig cc`) |
+| `armv7-unknown-linux-gnueabihf` | pending — Phase 21.11 |
+| `aarch64-apple-darwin`, `x86_64-apple-darwin` | pending — Phase 21.12 (osxcross) |
 
-The restore still completes via tier 2; the survivability story
-just doesn't match the documented "tier 1 is primary" intent.
-Fix tracked as Phase 21.10.b — the cross-compile infrastructure
-exists in `RecoveryBuilder.cross_build` (Linux musl + Windows-gnu
-via `zig cc`), it's just not wired into the meta-builder yet.  See
+To populate the source `recovery/bin/<short-arch>/` tree, run:
+
+```bash
+make build-recovery   # all reachable targets in one shot
+# or per-target:
+lcsas recovery build --arch x86_64
+lcsas recovery build --arch aarch64
+lcsas recovery build --arch x86_64-windows
+```
+
+Then `lcsas meta build` picks them up automatically.  Targets
+without a tier-1 binary on the meta-volume fall through to tier 2
+(`rustic-static`) at recovery time — restore still completes;
+you just lose the "C89 + libc only" durability layer until
+Phase 21.11/21.12 close the remaining gaps.  See
 [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q6
-for the full discussion and the Phase 21.10/21.11/21.12 sequence.
+for the full discussion.
 
 **Source refs:**
 

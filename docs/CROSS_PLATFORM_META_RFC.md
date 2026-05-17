@@ -422,21 +422,22 @@ supports three reachable targets for the C89 binary today:
 
 **Decision** (binding the Phase 21.10 plan):
 
-1. **Phase 21.10.a** — docs honesty (this RFC update, README, and
-   relevant workflow docs).  Acknowledge the gap.  Land first so
-   operators and contributors aren't misled about today's
-   coverage.
-2. **Phase 21.10.b** — wire `cross_build` into meta-builder for
-   the 3 reachable targets (x86_64 + aarch64 Linux musl, x86_64
-   Windows-gnu).  Resolve the bin/<short-arch> vs bin/<rust-triple>
-   naming via a mapping at bundle time (cleanest: meta-builder
-   knows both conventions; cross_build stays unchanged).
-3. **Phase 21.11** (separate phase, possibly deferred) — extend
-   `SUPPORTED_ARCHES` to `armv7` (low cost, zig cc supports it).
+1. **Phase 21.10.a** — ✅ SHIPPED 2026-05-17 (commit `000dee2`).
+   Docs honesty pass: README, this RFC, meta-volume.md, and
+   restore-host-macos.md all acknowledged the gap.
+2. **Phase 21.10.b** — ✅ SHIPPED 2026-05-17.  `MetaVolumeBuilder._bundle_tier1_binaries`
+   maps the 3 reachable rust-triples to `cross_build`'s short-arch
+   directory names and copies the binary at bundle time.  The
+   meta-builder now knows both conventions; `cross_build` stays
+   unchanged.  `make build-recovery` drives the cross-builds.
+3. **Phase 21.11** (separate phase, low cost) — extend
+   `SUPPORTED_ARCHES` to `armv7` (zig cc supports it).  Then add
+   the rust-triple → short-arch mapping in
+   `_bundle_tier1_binaries`.
 4. **Phase 21.12** (further deferred, real cost) — osxcross
    integration for the two Darwin targets, gated on a CI runner
    we can license.  Until then macOS tier-1 stays unavailable
-   and the README disclosure stands.
+   and the README discloses that.
 
 ## 7. Non-goals
 

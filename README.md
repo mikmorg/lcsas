@@ -562,44 +562,50 @@ single-arch build that only contains binaries for the host architecture
 the recipient to install `rustic` + `python3` from the target
 platform's package manager.
 
-### Known gap: tier 1 (`lcsas-restore`) is host-arch-only
+### Tier 1 (`lcsas-restore`) cross-platform coverage
 
 The recovery cascade declares three tiers (see
 [`recovery/docs/TIERS.txt`](recovery/docs/TIERS.txt)):
 
 | Tier | Binary | Cross-platform today? |
 |---|---|---|
-| **1** (primary) | our C89 `lcsas-restore` against vendored sqlite/zstd | **No — host arch only** |
-| 2 (fallback) | upstream `rustic-static` | Yes — all 6 targets bundled |
-| 3 (last resort) | bundled CPython + `standalone_restorer.py` | Yes — all 6 targets bundled |
+| **1** (primary) | our C89 `lcsas-restore` against vendored sqlite/zstd | **Linux x86_64/aarch64 musl + Windows-gnu** (Phase 21.10.b) |
+| 2 (fallback) | upstream `rustic-static` | All 6 targets bundled |
+| 3 (last resort) | bundled CPython + `standalone_restorer.py` | All 6 targets bundled |
 
 The intent (see PR #30 and `recovery/docs/TIERS.txt`): tier 1 is
 the **primary** recovery tool because C89 has been ABI-stable for
 35 years and our binary depends only on a working libc.  Tier 2
 exists as a hedge in case our binary won't run for some reason.
 
-Phase 21 cross-platform bundling (Phase 21.1.b) leaned on upstream
-release matrices and **did not cross-compile `lcsas-restore`**, so
-on any host whose arch isn't the build host's, the cascade skips
-straight to tier 2.  The infrastructure to cross-compile *is*
-already in `src/lcsas/recovery/build.py` (`RecoveryBuilder.cross_build`
-supports Linux musl + Windows-gnu via `zig cc`); it just isn't
-wired into `lcsas meta build` yet.  Tracked as Phase 21.10.
+**Building tier-1 binaries for your meta-volume.**  The bundler
+copies cross-built `lcsas-restore` binaries from
+`recovery/bin/<short-arch>/` into the meta-volume's per-target
+directories.  Trigger the cross-builds yourself with:
 
-There's also a subtle naming bug: `restore.sh`'s dispatcher
-(Phase 21.1.c) probes `bin/<rust-target-triple>/lcsas-restore`
-while `cross_build` writes to `bin/<short-arch>/lcsas-restore`.
-So tier 1 currently misses **even on the host arch** until either
-the bundling step renames the directory or `cross_build` adopts
-rust-style triples.  Fix lands with Phase 21.10.
+```bash
+make build-recovery   # all reachable targets via `lcsas recovery build`
+# or just one:
+lcsas recovery build --arch x86_64           # Linux musl, native
+lcsas recovery build --arch aarch64          # Linux musl, ARM64
+lcsas recovery build --arch x86_64-windows   # Windows, via zig cc
+```
 
-**Operational implication today:** on non-host hosts, recovery
-falls through tier 1 (missing) → tier 2 (works), so restore
-*succeeds*, but you're trusting rustic's existence and
-format-compatibility for the long-term durability claim rather
-than the C89 binary.  For Linux + Windows targets this can be
-fixed without new toolchains (zig cc covers everything); for
-macOS targets it'll require osxcross or an Apple SDK CI runner.
+Then `lcsas meta build` picks them up automatically (no flags
+needed — the bundler maps short-arch → rust-triple at copy time).
+
+**Still pending — Phase 21.11 / 21.12:**
+
+- `armv7-unknown-linux-gnueabihf` — `RecoveryBuilder.cross_build`
+  doesn't yet list `armv7`; trivial to add (`zig cc` supports it).
+  Phase 21.11.
+- `aarch64-apple-darwin`, `x86_64-apple-darwin` — needs
+  [`osxcross`](https://github.com/tpoechtrager/osxcross) or an
+  Apple-licensed SDK in CI.  Phase 21.12, deferred.
+
+On those still-pending targets the cascade falls through tier 1
+(missing) → tier 2 (works) so restore succeeds; you just lose the
+"C89 binary depends only on libc + kernel" durability layer.
 
 ### Decisions about coverage gaps
 

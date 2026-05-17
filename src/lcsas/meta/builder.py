@@ -1940,6 +1940,20 @@ class MetaVolumeBuilder:
         # keep working without the full ~600 MB download.
         self._bundle_upstream_binaries(dst)
 
+        # Phase 21.10.b: bundle per-target prebuilt lcsas-restore (the
+        # tier-1 C89 binary) cross-built by `make build-recovery` or
+        # `lcsas recovery build --arch X`.  Tolerant of missing builds
+        # for the same reason as the upstream bundler.
+        self._bundle_tier1_binaries(dst)
+
+        # Phase 21.4: regenerate the meta-volume's recovery/MANIFEST.sha256
+        # so every bundled binary (tier 1 from _bundle_tier1_binaries,
+        # tier 2 + 3 from _bundle_upstream_binaries) is part of the
+        # single integrity manifest an operator can `sha256sum -c`
+        # against.  Must run after BOTH bundlers, so it stays here at
+        # the orchestrator level rather than inside either bundler.
+        self._regenerate_recovery_manifest(dst)
+
     def _bundle_upstream_binaries(self, recovery_dst: Path) -> None:
         """Copy cached upstream rustic + python tarball contents per target.
 
@@ -2033,11 +2047,64 @@ class MetaVolumeBuilder:
                 # branches; documenting intent.
                 pass
 
-        # Phase 21.4: now that all bundled upstream binaries are in
-        # place, regenerate the meta-volume's recovery/MANIFEST.sha256
-        # so the bin/<target>/ files are part of the single integrity
-        # manifest an operator can `sha256sum -c` against.
-        self._regenerate_recovery_manifest(recovery_dst)
+    def _bundle_tier1_binaries(self, recovery_dst: Path) -> None:
+        """Copy cross-built lcsas-restore binaries into per-target dirs.
+
+        ``RecoveryBuilder.cross_build`` (`src/lcsas/recovery/build.py:99`)
+        writes the C89 lcsas-restore binary to
+        ``recovery/bin/<short-arch>/lcsas-restore[.exe]`` using its
+        short-arch convention (``x86_64``, ``aarch64``,
+        ``x86_64-windows``, …).  ``recovery/scripts/restore.sh`` (the
+        Phase 21.1.c dispatcher) looks for it at
+        ``recovery/bin/<rust-triple>/lcsas-restore[.exe]`` using the
+        rust-style target triple.
+
+        Phase 21.10.b closes the naming gap at bundle time: for every
+        approved rust-triple target whose short-arch mapping has a
+        pre-built lcsas-restore in the source recovery tree, copy it
+        into the meta volume under the rust-triple path.  Targets
+        without a mapping (`armv7`, the two macOS targets) are
+        skipped silently; targets whose short-arch directory is
+        empty are also skipped (operator hasn't built that arch yet).
+
+        Operators trigger the underlying cross-builds with
+        ``lcsas recovery build --arch <short-arch>`` for each desired
+        target, or `make build-recovery` to do all reachable targets
+        in one shot.
+
+        See `docs/CROSS_PLATFORM_META_RFC.md` §6 Q6 for the gap
+        analysis and the Phase 21.11 / 21.12 follow-ups that close
+        the remaining targets.
+        """
+        # rust-triple → (short_arch_dir_name, lcsas-restore_filename)
+        # Targets mapped to None are deferred to a later phase:
+        #   armv7-unknown-linux-gnueabihf  → Phase 21.11 (add to cross_build SUPPORTED_ARCHES)
+        #   *-apple-darwin                 → Phase 21.12 (osxcross / Apple SDK)
+        tier1_map: dict[str, tuple[str, str] | None] = {
+            "x86_64-unknown-linux-musl":     ("x86_64", "lcsas-restore"),
+            "aarch64-unknown-linux-musl":    ("aarch64", "lcsas-restore"),
+            "armv7-unknown-linux-gnueabihf": None,
+            "aarch64-apple-darwin":          None,
+            "x86_64-apple-darwin":           None,
+            "x86_64-pc-windows-gnu":         ("x86_64-windows", "lcsas-restore.exe"),
+        }
+
+        src_recovery = self._recovery_dir
+        for rust_triple, mapping in tier1_map.items():
+            if mapping is None:
+                continue
+            short_arch, exe_name = mapping
+            src_bin = src_recovery / "bin" / short_arch / exe_name
+            if not src_bin.is_file():
+                continue
+            dst_bin_dir = recovery_dst / "bin" / rust_triple
+            dst_bin_dir.mkdir(parents=True, exist_ok=True)
+            dst_bin = dst_bin_dir / exe_name
+            shutil.copy2(str(src_bin), str(dst_bin))
+            # Preserve the executable bit on Unix targets (Windows
+            # binaries don't care about the +x mode, but extra +x
+            # never hurts).
+            os.chmod(str(dst_bin), 0o755)
 
     def _regenerate_recovery_manifest(self, recovery_dst: Path) -> None:
         """Merge bundled upstream binaries into recovery/MANIFEST.sha256.
