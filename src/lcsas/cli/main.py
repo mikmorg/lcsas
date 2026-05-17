@@ -274,6 +274,12 @@ def build_parser() -> argparse.ArgumentParser:
     exec_p.add_argument("--volume-dir", type=Path, default=None,
                         help="Directory containing extracted volume data "
                              "(skips interactive disc prompts).")
+    exec_p.add_argument("--iso-dir", type=Path, default=None,
+                        help="Directory holding original <label>.iso files alongside the "
+                             "mounted discs.  When supplied, each volume's ISO is "
+                             "SHA-256-verified against the catalog before its packs are "
+                             "read.  Phase 21.9 — applies to interactive restore where "
+                             "--volume-dir is not used.")
     exec_p.add_argument("--skip-verify", action="store_true", default=False,
                         help="Skip SHA-256 verification of ingested packs.")
 
@@ -2335,10 +2341,20 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     if not vol_path.is_dir():
                         logger.info(f"  '{mount_path}' is not a directory, try again.")
                         continue
+                    # Phase 21.9: when --iso-dir is supplied, probe it
+                    # for <label>.iso so the verify-or-die check fires
+                    # for the interactive path too.
+                    iso_path = (
+                        _find_sibling_iso(args.iso_dir, label)
+                        if args.iso_dir is not None
+                        else None
+                    )
                     result = executor.ingest_volume(
                         cache_dir, vol_path, pack_hashes,
                         verify=not args.skip_verify,
                         collect_failures=True,
+                        iso_path=iso_path,
+                        expected_sha256=iso_shas.get(label),
                     )
                     logger.info(f"  Ingested {result.ingested} packs from {label}")
                     if result.failed:
@@ -2354,6 +2370,8 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     executor, cache_dir,
                     all_failed, alternates_map,
                     verify=not args.skip_verify,
+                    iso_dir=args.iso_dir,
+                    iso_shas=iso_shas,
                 )
                 if still_failed:
                     from lcsas.restore.executor import PackCorruptionError
@@ -2930,10 +2948,19 @@ def _retry_from_alternates_interactive(
     alternates_map: dict[str, list[str]],
     *,
     verify: bool = True,
+    iso_dir: Path | None = None,
+    iso_shas: dict[str, str | None] | None = None,
 ) -> list[str]:
     """Retry failed packs from alternate volumes (interactive).
 
     Prompts user to mount alternate volumes. Returns unrecoverable packs.
+
+    Phase 21.9: ``iso_dir`` + ``iso_shas`` activate the same SHA-256
+    verify-or-die check that the --volume-dir batch path gets.  When
+    both are supplied, the alternate volume's <label>.iso under
+    ``iso_dir`` is hashed against the catalog-recorded SHA before its
+    packs are read.  Defaults are None for backward-compat — direct
+    callers without iso info continue to work unchanged.
     """
     remaining = list(failed_packs)
 
@@ -2957,9 +2984,15 @@ def _retry_from_alternates_interactive(
             logger.info(f"  '{mount_path}' not a directory, skipping")
             continue
 
+        alt_iso = (
+            _find_sibling_iso(iso_dir, alt_label)
+            if iso_dir is not None else None
+        )
+        alt_sha = iso_shas.get(alt_label) if iso_shas else None
         result = executor.ingest_volume(
             cache_dir, vol_path, packs_on_alt,
             verify=verify, collect_failures=True,
+            iso_path=alt_iso, expected_sha256=alt_sha,
         )
         if result.ingested:
             logger.info(f"  Recovered {result.ingested} packs from {alt_label}")

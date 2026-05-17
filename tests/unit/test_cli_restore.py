@@ -622,3 +622,119 @@ class TestRetryFromAlternatesBatch:
         kwargs = mock_executor.ingest_volume.call_args.kwargs
         assert kwargs.get("iso_path") is None
         assert kwargs.get("expected_sha256") is None
+
+
+# ---------------------------------------------------------------------------
+# _retry_from_alternates_interactive helper tests (Phase 21.9)
+# ---------------------------------------------------------------------------
+
+
+class TestRetryFromAlternatesInteractive:
+    """Phase 21.9: interactive alt-retry should also pass iso_path +
+    expected_sha256 to ingest_volume when --iso-dir is supplied."""
+
+    def test_iso_passed_when_iso_dir_and_sibling_present(
+        self, tmp_path, monkeypatch,
+    ):
+        """Operator types a mount path; iso_dir holds a sibling .iso;
+        both iso_path and expected_sha256 land on ingest_volume."""
+        from lcsas.cli.main import _retry_from_alternates_interactive
+
+        # Synthesize a real mount path the user "types in".
+        mount_path = tmp_path / "mounted_alt"
+        mount_path.mkdir()
+
+        # Sibling ISO + matching catalog SHA.
+        iso_dir = tmp_path / "isos"
+        iso_dir.mkdir()
+        sibling_iso = iso_dir / "ALT_VOL.iso"
+        sibling_iso.write_bytes(b"alt iso bytes")
+
+        monkeypatch.setattr("builtins.input", lambda _prompt="": str(mount_path))
+
+        mock_executor = MagicMock()
+        mock_executor.ingest_volume.return_value = IngestionResult(1, [])
+        alternates_map = {"deadbeef" * 8: ["ALT_VOL"]}
+        iso_shas = {"ALT_VOL": "b" * 64}
+
+        _retry_from_alternates_interactive(
+            mock_executor,
+            tmp_path / "cache",
+            ["deadbeef" * 8],
+            alternates_map,
+            iso_dir=iso_dir,
+            iso_shas=iso_shas,
+        )
+
+        kwargs = mock_executor.ingest_volume.call_args.kwargs
+        assert kwargs.get("iso_path") == sibling_iso
+        assert kwargs.get("expected_sha256") == "b" * 64
+
+    def test_iso_none_without_iso_dir(self, tmp_path, monkeypatch):
+        """No --iso-dir → iso_path is None even though iso_shas has a
+        hash (matches Phase 21.6 invariant: SHA without iso_path is
+        a no-op in the executor's verify guard)."""
+        from lcsas.cli.main import _retry_from_alternates_interactive
+
+        mount_path = tmp_path / "mounted_alt"
+        mount_path.mkdir()
+        monkeypatch.setattr("builtins.input", lambda _prompt="": str(mount_path))
+
+        mock_executor = MagicMock()
+        mock_executor.ingest_volume.return_value = IngestionResult(1, [])
+
+        _retry_from_alternates_interactive(
+            mock_executor,
+            tmp_path / "cache",
+            ["deadbeef" * 8],
+            {"deadbeef" * 8: ["ALT_VOL"]},
+            # iso_dir omitted
+            iso_shas={"ALT_VOL": "b" * 64},
+        )
+
+        kwargs = mock_executor.ingest_volume.call_args.kwargs
+        assert kwargs.get("iso_path") is None
+        assert kwargs.get("expected_sha256") == "b" * 64
+
+    def test_skip_response_doesnt_ingest(self, tmp_path, monkeypatch):
+        """User typing 'skip' bypasses ingest_volume entirely."""
+        from lcsas.cli.main import _retry_from_alternates_interactive
+
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "skip")
+        mock_executor = MagicMock()
+
+        remaining = _retry_from_alternates_interactive(
+            mock_executor,
+            tmp_path / "cache",
+            ["deadbeef" * 8],
+            {"deadbeef" * 8: ["ALT_VOL"]},
+        )
+
+        mock_executor.ingest_volume.assert_not_called()
+        # Skipped → pack stays in the unrecovered set.
+        assert "deadbeef" * 8 in remaining
+
+    def test_backward_compat_default_kwargs(self, tmp_path, monkeypatch):
+        """Phase 21.9 added two kwargs with None defaults — direct
+        callers that don't know about them must continue to work
+        with no iso_path / no expected_sha256."""
+        from lcsas.cli.main import _retry_from_alternates_interactive
+
+        mount_path = tmp_path / "mounted_alt"
+        mount_path.mkdir()
+        monkeypatch.setattr("builtins.input", lambda _prompt="": str(mount_path))
+
+        mock_executor = MagicMock()
+        mock_executor.ingest_volume.return_value = IngestionResult(0, [])
+
+        _retry_from_alternates_interactive(
+            mock_executor,
+            tmp_path / "cache",
+            ["deadbeef" * 8],
+            {"deadbeef" * 8: ["ALT_VOL"]},
+            # neither iso_dir nor iso_shas supplied
+        )
+
+        kwargs = mock_executor.ingest_volume.call_args.kwargs
+        assert kwargs.get("iso_path") is None
+        assert kwargs.get("expected_sha256") is None
