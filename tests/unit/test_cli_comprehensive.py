@@ -1227,6 +1227,139 @@ class TestCmdMetaBuild:
         assert args.output == Path("/tmp/meta")
 
 
+class TestCmdMetaVerify:
+    """Phase 21.8 — `lcsas meta verify <dir>` audits a built meta-volume
+    against its recovery/MANIFEST.sha256."""
+
+    def _make_meta(self, tmp_path, files: dict[str, bytes]):
+        """Build a synthetic meta-volume tree with a matching MANIFEST.
+
+        ``files`` maps relative paths under ``recovery/`` (e.g.
+        ``"scripts/restore.sh"``) to their byte content.  The manifest
+        is written with one line per file plus a header comment so
+        we exercise the comment-skip path too.
+        """
+        import hashlib
+
+        out = tmp_path / "meta"
+        out.mkdir()
+        recovery = out / "recovery"
+        recovery.mkdir()
+
+        lines = ["# Phase 21.4 merged manifest (test fixture)"]
+        for rel, content in sorted(files.items()):
+            path = recovery / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+            sha = hashlib.sha256(content).hexdigest()
+            lines.append(f"{sha}  ./{rel}")
+        (recovery / "MANIFEST.sha256").write_text("\n".join(lines) + "\n")
+        return out
+
+    def test_dispatcher_parses(self):
+        """`meta verify <dir>` parses correctly and exposes the output
+        path + the strict flag."""
+        parser = build_parser()
+        args = parser.parse_args(["meta", "verify", "/tmp/meta", "--strict"])
+        assert args.command == "meta"
+        assert args.meta_command == "verify"
+        assert args.output == Path("/tmp/meta")
+        assert args.strict is True
+
+    def test_passes_on_clean_meta_volume(self, tmp_path, capsys, caplog):
+        """All listed files present + correct SHA → exit 0 with PASSED."""
+        out = self._make_meta(tmp_path, {
+            "VERSION": b"21.8\n",
+            "scripts/restore.sh": b"#!/bin/sh\n",
+            "bin/x86_64-unknown-linux-musl/rustic-static": b"fake binary",
+        })
+        caplog.clear()
+
+        result = main(["meta", "verify", str(out)])
+        assert result == 0
+        assert "PASSED" in caplog.text
+        # Exactly 3 files were checked.
+        assert "3 files" in caplog.text
+
+    def test_missing_manifest_returns_error(self, tmp_path, caplog):
+        """Pointing at something that isn't a meta-volume produces a
+        clear error, not an internal stack trace."""
+        not_a_meta = tmp_path / "not-a-meta"
+        not_a_meta.mkdir()
+        caplog.clear()
+
+        result = main(["meta", "verify", str(not_a_meta)])
+        assert result == 1
+        assert "No recovery/MANIFEST.sha256" in caplog.text
+
+    def test_detects_missing_file(self, tmp_path, caplog):
+        """A file listed in the manifest but absent from disk is
+        reported and the exit code is 1."""
+        out = self._make_meta(tmp_path, {
+            "VERSION": b"21.8\n",
+            "scripts/restore.sh": b"#!/bin/sh\n",
+        })
+        # Delete one file after manifest is built.
+        (out / "recovery" / "scripts" / "restore.sh").unlink()
+        caplog.clear()
+
+        result = main(["meta", "verify", str(out)])
+        assert result == 1
+        assert "MISSING" in caplog.text
+        assert "scripts/restore.sh" in caplog.text
+        assert "1 missing" in caplog.text
+
+    def test_detects_corrupted_file(self, tmp_path, caplog):
+        """A file whose SHA changed (bit-rot, accidental edit) is
+        reported with both expected and observed hashes."""
+        out = self._make_meta(tmp_path, {
+            "VERSION": b"original\n",
+        })
+        # Corrupt the file after MANIFEST is written.
+        (out / "recovery" / "VERSION").write_bytes(b"corrupted\n")
+        caplog.clear()
+
+        result = main(["meta", "verify", str(out)])
+        assert result == 1
+        assert "MISMATCH" in caplog.text
+        assert "VERSION" in caplog.text
+        assert "1 mismatched" in caplog.text
+
+    def test_strict_flags_extras(self, tmp_path, caplog):
+        """`--strict` mode catches files present under recovery/ but
+        absent from the manifest — e.g. files that snuck in after
+        manifest generation, indicating the manifest is stale."""
+        out = self._make_meta(tmp_path, {
+            "VERSION": b"21.8\n",
+        })
+        # Drop a stowaway file.
+        (out / "recovery" / "stowaway.txt").write_bytes(b"surprise!\n")
+        caplog.clear()
+
+        result = main(["meta", "verify", str(out), "--strict"])
+        assert result == 1
+        assert "EXTRA" in caplog.text
+        assert "stowaway.txt" in caplog.text
+
+    def test_extras_ignored_without_strict(self, tmp_path, caplog):
+        """Without --strict, an extra file under recovery/ is allowed.
+
+        This is the common case: the meta-volume may legitimately
+        carry per-host scratch files that aren't part of the
+        integrity contract.
+        """
+        out = self._make_meta(tmp_path, {
+            "VERSION": b"21.8\n",
+        })
+        (out / "recovery" / "stowaway.txt").write_bytes(b"ok\n")
+        caplog.clear()
+
+        result = main(["meta", "verify", str(out)])
+        assert result == 0
+        assert "PASSED" in caplog.text
+        assert "EXTRA" not in caplog.text
+
+
 # ===================================================================
 # cmd_staging_clean
 # ===================================================================

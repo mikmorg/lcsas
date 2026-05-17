@@ -391,6 +391,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="LCSAS project root (default: auto-detect).",
     )
 
+    meta_verify = meta_sub.add_parser(
+        "verify",
+        help="Audit a built meta-volume against its recovery/MANIFEST.sha256.",
+        description=(
+            "Reads every file listed in <output>/recovery/MANIFEST.sha256 "
+            "and confirms each one's SHA-256 matches.  Reports missing "
+            "files, mismatched hashes, and (when --strict) any files "
+            "present under recovery/ that aren't listed in the manifest. "
+            "Exits 0 when the meta-volume is intact, 1 on any issue."
+        ),
+    )
+    meta_verify.add_argument(
+        "output", type=Path,
+        help="The meta-volume directory built by `lcsas meta build`.",
+    )
+    meta_verify.add_argument(
+        "--strict", action="store_true",
+        help="Also flag files present under recovery/ but absent from the manifest.",
+    )
+
     # ── recovery ────────────────────────────────────────────────
     recovery_p = subparsers.add_parser(
         "recovery",
@@ -1889,6 +1909,103 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_meta_verify(args: argparse.Namespace) -> int:
+    """Audit a built meta-volume against its recovery/MANIFEST.sha256.
+
+    Phase 21.8.  Mirrors `make verify-recovery` (which audits the
+    upstream-binary cache on the build host) but operates on the
+    output of `lcsas meta build` — useful for catching bit-rot on
+    a meta-volume directory before it's mastered into an ISO, or
+    for periodic disc-health checks on a mounted meta-disc.
+    """
+    import hashlib
+
+    out = args.output.resolve()
+    manifest_path = out / "recovery" / "MANIFEST.sha256"
+    if not manifest_path.is_file():
+        logger.error(
+            "No recovery/MANIFEST.sha256 under %s — is this really a meta-volume?",
+            out,
+        )
+        return 1
+
+    recovery_root = manifest_path.parent
+    expected: dict[str, str] = {}
+    for line in manifest_path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split("  ", 1)
+        if len(parts) != 2:
+            logger.warning("Malformed manifest line: %r", line)
+            continue
+        sha, rel = parts
+        # Manifest entries look like "./scripts/restore.sh"; normalize.
+        rel = rel[2:] if rel.startswith("./") else rel
+        expected[rel] = sha.lower()
+
+    if not expected:
+        logger.error("Manifest %s contained no entries.", manifest_path)
+        return 1
+
+    mismatched: list[tuple[str, str, str]] = []
+    missing: list[str] = []
+    checked = 0
+    for rel, want_sha in expected.items():
+        path = recovery_root / rel
+        if not path.is_file():
+            missing.append(rel)
+            continue
+        h = hashlib.sha256()
+        with path.open("rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                h.update(chunk)
+        got = h.hexdigest()
+        if got != want_sha:
+            mismatched.append((rel, want_sha, got))
+        else:
+            checked += 1
+
+    extras: list[str] = []
+    if args.strict:
+        listed = set(expected.keys())
+        for path in recovery_root.rglob("*"):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(recovery_root).as_posix()
+            if rel == "MANIFEST.sha256":
+                continue
+            if rel not in listed:
+                extras.append(rel)
+
+    for rel in sorted(missing):
+        logger.error("  MISSING  %s", rel)
+    for rel, want, got in sorted(mismatched):
+        logger.error(
+            "  MISMATCH %s\n    expected %s\n    got      %s",
+            rel, want, got,
+        )
+    for rel in sorted(extras):
+        logger.error("  EXTRA    %s  (present on disk but absent from manifest)", rel)
+
+    total_issues = len(missing) + len(mismatched) + len(extras)
+    if total_issues:
+        logger.error(
+            "Meta-volume verify FAILED: %d issue(s) (%d missing, %d mismatched, %d extra).",
+            total_issues, len(missing), len(mismatched), len(extras),
+        )
+        return 1
+
+    logger.info(
+        "Meta-volume verify PASSED: %d files match recovery/MANIFEST.sha256.",
+        checked,
+    )
+    return 0
+
+
 def cmd_restore_plan(args: argparse.Namespace) -> int:
     """Generate a restore pick list for a snapshot."""
     from lcsas.config.settings import load_config
@@ -2933,8 +3050,10 @@ def dispatch(args: argparse.Namespace) -> int:
     elif args.command == "meta":
         if args.meta_command == "build":
             return cmd_meta_build(args)
+        elif args.meta_command == "verify":
+            return cmd_meta_verify(args)
         else:
-            logger.error("Usage: lcsas meta {build}")
+            logger.error("Usage: lcsas meta {build,verify}")
             return 1
     elif args.command == "recovery":
         return cmd_recovery(args)
