@@ -2186,6 +2186,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     executor, cache_dir, vol_dir,
                     all_failed, alternates_map,
                     verify=not args.skip_verify,
+                    iso_shas=iso_shas,
                 )
                 if still_failed:
                     from lcsas.restore.executor import PackCorruptionError
@@ -2755,10 +2756,19 @@ def _retry_from_alternates_batch(
     alternates_map: dict[str, list[str]],
     *,
     verify: bool = True,
+    iso_shas: dict[str, str | None] | None = None,
 ) -> list[str]:
     """Retry failed packs from alternate volumes (batch/non-interactive).
 
     Returns list of packs that could not be recovered.
+
+    Phase 21.7: ``iso_shas`` is the same per-label SHA-256 dict
+    computed once in cmd_restore_exec from the catalog.  When
+    supplied, each alternate volume's ISO is integrity-checked
+    (against the sibling .iso file, if present) before its packs
+    are read — so a corrupt alternate that would otherwise silently
+    spread bad packs into the cache is rejected up front, with the
+    standard "try another location" recovery hint.
     """
     remaining = list(failed_packs)
 
@@ -2781,9 +2791,12 @@ def _retry_from_alternates_batch(
             if not vol_path.is_dir():
                 continue
 
+        alt_iso = _find_sibling_iso(vol_dir, alt_label)
+        alt_sha = iso_shas.get(alt_label) if iso_shas else None
         result = executor.ingest_volume(
             cache_dir, vol_path, packs_on_alt,
             verify=verify, collect_failures=True,
+            iso_path=alt_iso, expected_sha256=alt_sha,
         )
         if result.ingested:
             logger.info(f"  Recovered {result.ingested} packs from {alt_label}")

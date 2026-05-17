@@ -534,3 +534,91 @@ class TestRetryFromAlternatesBatch:
             if "not found" in r.message.lower() and "ALT_VOL" in r.message
         ]
         assert not missing_warnings
+
+    def test_iso_sha_passed_when_sibling_present(self, tmp_path):
+        """Phase 21.7: when iso_shas is supplied AND a sibling .iso
+        exists, the retry call passes both iso_path and
+        expected_sha256 to ingest_volume."""
+        from lcsas.cli.main import _retry_from_alternates_batch
+
+        vol_dir = tmp_path / "volumes"
+        alt_dir = vol_dir / "ALT_VOL"
+        alt_dir.mkdir(parents=True)
+        sibling_iso = vol_dir / "ALT_VOL.iso"
+        sibling_iso.write_bytes(b"fake iso bytes")
+
+        mock_executor = MagicMock()
+        mock_executor.ingest_volume.return_value = IngestionResult(1, [])
+        alternates_map = {"deadbeef" * 8: ["ALT_VOL"]}
+        iso_shas = {"ALT_VOL": "a" * 64}
+
+        _retry_from_alternates_batch(
+            mock_executor,
+            tmp_path / "cache",
+            vol_dir,
+            ["deadbeef" * 8],
+            alternates_map,
+            iso_shas=iso_shas,
+        )
+
+        mock_executor.ingest_volume.assert_called_once()
+        kwargs = mock_executor.ingest_volume.call_args.kwargs
+        assert kwargs.get("iso_path") == sibling_iso
+        assert kwargs.get("expected_sha256") == "a" * 64
+
+    def test_iso_sha_omitted_when_no_sibling(self, tmp_path):
+        """No sibling .iso → iso_path is None even if iso_shas has the
+        hash.  Avoids feeding a None iso_path with a non-None SHA to
+        the executor (which the verify branch would reject)."""
+        from lcsas.cli.main import _retry_from_alternates_batch
+
+        vol_dir = tmp_path / "volumes"
+        alt_dir = vol_dir / "ALT_VOL"
+        alt_dir.mkdir(parents=True)
+        # No sibling ALT_VOL.iso file.
+
+        mock_executor = MagicMock()
+        mock_executor.ingest_volume.return_value = IngestionResult(1, [])
+        alternates_map = {"deadbeef" * 8: ["ALT_VOL"]}
+        iso_shas = {"ALT_VOL": "a" * 64}
+
+        _retry_from_alternates_batch(
+            mock_executor,
+            tmp_path / "cache",
+            vol_dir,
+            ["deadbeef" * 8],
+            alternates_map,
+            iso_shas=iso_shas,
+        )
+
+        kwargs = mock_executor.ingest_volume.call_args.kwargs
+        assert kwargs.get("iso_path") is None
+        # The SHA is still passed; the executor's guard means it's a
+        # no-op without iso_path, but threading it costs nothing.
+        assert kwargs.get("expected_sha256") == "a" * 64
+
+    def test_default_iso_shas_omitted(self, tmp_path):
+        """Backward-compat: iso_shas defaults to None and the call still
+        works exactly as before Phase 21.7 — no iso_path, no SHA."""
+        from lcsas.cli.main import _retry_from_alternates_batch
+
+        vol_dir = tmp_path / "volumes"
+        alt_dir = vol_dir / "ALT_VOL"
+        alt_dir.mkdir(parents=True)
+
+        mock_executor = MagicMock()
+        mock_executor.ingest_volume.return_value = IngestionResult(0, [])
+        alternates_map = {"deadbeef" * 8: ["ALT_VOL"]}
+
+        _retry_from_alternates_batch(
+            mock_executor,
+            tmp_path / "cache",
+            vol_dir,
+            ["deadbeef" * 8],
+            alternates_map,
+            # iso_shas omitted on purpose
+        )
+
+        kwargs = mock_executor.ingest_volume.call_args.kwargs
+        assert kwargs.get("iso_path") is None
+        assert kwargs.get("expected_sha256") is None
