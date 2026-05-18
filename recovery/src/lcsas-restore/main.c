@@ -247,6 +247,23 @@ main(int argc, char **argv)
     }
     if (meta_disc) lcsas_disc_locator_set_meta(&locator, meta_disc);
 
+    /* Opt-in opportunistic pack cache.  When LCSAS_PACK_CACHE_DIR is
+     * set, the locator copies the rest of each disc's data/ subtree
+     * into the cache on every successful pack hit so subsequent
+     * packs from the same disc resolve from local storage.  Trades
+     * disk space for swap reduction; unset by default. */
+    {
+        const char *cache_env = getenv("LCSAS_PACK_CACHE_DIR");
+        if (cache_env && *cache_env) {
+            lcsas_disc_locator_set_cache_dir(&locator, cache_env);
+            if (verbose) {
+                fprintf(stderr,
+                        "[lcsas-restore] opportunistic pack cache: %s\n",
+                        cache_env);
+            }
+        }
+    }
+
     /* Determine the mount-parent list scanned on each retry to pick up
      * freshly-inserted discs.  Precedence (highest first):
      *   1. one or more --mount-parent CLI flags

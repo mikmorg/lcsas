@@ -11,8 +11,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #ifndef _WIN32
 #  include <unistd.h>      /* chdir */
+#  include <dirent.h>
 #else
 #  include <direct.h>
 #  define chdir _chdir
@@ -41,6 +43,7 @@ lcsas_disc_locator_init(lcsas_disc_locator *l,
     l->owned_catalog       = NULL;
     l->owned_catalog_path  = NULL;
     l->owned_catalog_mtime = 0;
+    l->cache_dir           = NULL;
 }
 
 void
@@ -96,6 +99,58 @@ lcsas_disc_locator_free(lcsas_disc_locator *l)
     free(l->owned_catalog_path);
     l->owned_catalog_path  = NULL;
     l->owned_catalog_mtime = 0;
+    free(l->cache_dir);
+    l->cache_dir = NULL;
+}
+
+/*
+ * Best-effort mkdir -p.  Returns 0 on success or if the directory
+ * already exists.  Used both for the cache root and per-prefix
+ * subdirs (data/<XX>/).
+ */
+static int
+mkdir_p(const char *path)
+{
+    char buf[4096];
+    size_t i, n;
+    struct stat st;
+
+    if (!path || !*path) return -1;
+    n = strlen(path);
+    if (n >= sizeof buf) return -1;
+    memcpy(buf, path, n + 1);
+
+    for (i = 1; i < n; i++) {
+        if (buf[i] != '/') continue;
+        buf[i] = '\0';
+        if (stat(buf, &st) != 0) {
+            if (mkdir(buf, 0755) != 0) {
+                buf[i] = '/';
+                /* If a race created it, that's fine; bail only on
+                 * real errors. */
+                if (stat(buf, &st) != 0) return -1;
+            }
+        }
+        buf[i] = '/';
+    }
+    if (stat(buf, &st) == 0) return 0;
+    return mkdir(buf, 0755);
+}
+
+void
+lcsas_disc_locator_set_cache_dir(lcsas_disc_locator *l,
+                                 const char *cache_dir)
+{
+    free(l->cache_dir);
+    l->cache_dir = NULL;
+    if (!cache_dir || !*cache_dir) return;
+    if (mkdir_p(cache_dir) != 0) {
+        fprintf(stderr,
+                "[lcsas-restore] cannot create cache dir %s; "
+                "auto-cache disabled\n", cache_dir);
+        return;
+    }
+    l->cache_dir = strdup(cache_dir);
 }
 
 /*
@@ -305,18 +360,119 @@ try_with_meta(lcsas_disc_locator *l, const char *p, const char *hex,
     return 1;
 }
 
+/*
+ * Copy one pack file (src → dst) using buffered I/O.  Returns 0 on
+ * success, -1 on any error.  Best-effort: callers ignore the rc
+ * because draining is opportunistic.
+ */
+static int
+copy_file(const char *src, const char *dst)
+{
+    FILE *in = fopen(src, "rb");
+    FILE *out;
+    char buf[64 * 1024];
+    size_t n;
+
+    if (!in) return -1;
+    out = fopen(dst, "wb");
+    if (!out) { fclose(in); return -1; }
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) {
+            fclose(in); fclose(out); unlink(dst);
+            return -1;
+        }
+    }
+    fclose(in);
+    fclose(out);
+    return 0;
+}
+
+/*
+ * Drain (a copy of) every pack file under `<root>/data/` into the
+ * locator's cache_dir, mirroring the two-level layout
+ * `data/<XX>/<hex>`.  Skips files that already exist in the cache
+ * (so re-drains are cheap).
+ *
+ * This is opportunistic: errors mid-drain stop the drain for that
+ * disc but don't fail the locate.  Callers gate on cache_dir being
+ * non-NULL.
+ */
+static void
+drain_disc(lcsas_disc_locator *l, const char *root)
+{
+    char data_dir[4096], prefix_dir[4096];
+    char src[4096], dst[4096], cache_prefix[4096];
+    DIR *d_root, *d_pref;
+    struct dirent *e;
+    struct stat st;
+    int rc;
+
+    if (!l->cache_dir || !root) return;
+    /* If `root` IS the cache (or under it), nothing to drain. */
+    if (path_under(root, l->cache_dir)) return;
+
+    rc = snprintf(data_dir, sizeof data_dir, "%s/data", root);
+    if (rc <= 0 || (size_t)rc >= sizeof data_dir) return;
+    if (stat(data_dir, &st) != 0) return;
+
+    d_root = opendir(data_dir);
+    if (!d_root) return;
+    while ((e = readdir(d_root)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        rc = snprintf(prefix_dir, sizeof prefix_dir,
+                      "%s/%s", data_dir, e->d_name);
+        if (rc <= 0 || (size_t)rc >= sizeof prefix_dir) continue;
+        if (stat(prefix_dir, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+
+        rc = snprintf(cache_prefix, sizeof cache_prefix,
+                      "%s/data/%s", l->cache_dir, e->d_name);
+        if (rc <= 0 || (size_t)rc >= sizeof cache_prefix) continue;
+        if (mkdir_p(cache_prefix) != 0) continue;
+
+        d_pref = opendir(prefix_dir);
+        if (!d_pref) continue;
+        while ((e = readdir(d_pref)) != NULL) {
+            if (e->d_name[0] == '.') continue;
+            rc = snprintf(src, sizeof src, "%s/%s",
+                          prefix_dir, e->d_name);
+            if (rc <= 0 || (size_t)rc >= sizeof src) continue;
+            rc = snprintf(dst, sizeof dst, "%s/%s",
+                          cache_prefix, e->d_name);
+            if (rc <= 0 || (size_t)rc >= sizeof dst) continue;
+            /* Skip if already cached. */
+            if (stat(dst, &st) == 0) continue;
+            if (stat(src, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+            (void)copy_file(src, dst);
+        }
+        closedir(d_pref);
+        /* Re-open d_root to keep iteration consistent — we replaced
+         * `e` while iterating the inner loop. */
+        rewinddir(d_root);
+    }
+    closedir(d_root);
+}
+
 static int
 scan_paths(lcsas_disc_locator *l, const char *hex,
            char *out_path, size_t cap)
 {
     size_t i;
+    /* Try the local cache first (fast path; never triggers a drain). */
+    if (l->cache_dir
+            && try_with_meta(l, l->cache_dir, hex, out_path, cap)) {
+        return 1;
+    }
     for (i = 0; i < l->n_paths; i++) {
-        if (try_with_meta(l, l->search_paths[i], hex, out_path, cap))
+        if (try_with_meta(l, l->search_paths[i], hex, out_path, cap)) {
+            drain_disc(l, l->search_paths[i]);
             return 1;
+        }
     }
     for (i = 0; i < l->n_discovered; i++) {
-        if (try_with_meta(l, l->discovered_paths[i], hex, out_path, cap))
+        if (try_with_meta(l, l->discovered_paths[i], hex, out_path, cap)) {
+            drain_disc(l, l->discovered_paths[i]);
             return 1;
+        }
     }
     return 0;
 }

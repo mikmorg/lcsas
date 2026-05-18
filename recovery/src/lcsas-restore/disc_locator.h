@@ -68,6 +68,16 @@ typedef struct {
     lcsas_catalog *owned_catalog;
     char          *owned_catalog_path;
     long long      owned_catalog_mtime;
+
+    /* Optional opt-in opportunistic pack cache.  When set (e.g. via
+     * the LCSAS_PACK_CACHE_DIR env var, plumbed from main.c), every
+     * successful pack hit on a mounted disc triggers a "drain":
+     * the rest of that disc's data/ subtree is copied into the cache
+     * so future packs from the same disc don't require another swap.
+     * Trades disk space for reduced disc thrashing.
+     *
+     * NULL = feature off (default), no draining, no extra disk use. */
+    char *cache_dir;
 } lcsas_disc_locator;
 
 /*
@@ -126,6 +136,21 @@ void lcsas_disc_locator_free(lcsas_disc_locator *l);
  */
 void lcsas_disc_locator_set_catalog_floor(lcsas_disc_locator *l,
                                           const char *catalog_path);
+
+/*
+ * Enable the opt-in opportunistic pack cache.  Set `cache_dir` to a
+ * writable directory; the locator will mkdir-p it and, on every
+ * successful pack hit found on a non-cache path, copy the rest of
+ * that disc's data/ subtree into the cache so subsequent packs from
+ * the same disc resolve from local storage.  Without this, restoring
+ * a tree whose blob references interleave packs from N discs causes
+ * O(blobs) disc swaps in the worst case; with this, O(N) swaps.
+ *
+ * Pass NULL to clear (default).  The locator owns the duplicated
+ * string and frees it in `lcsas_disc_locator_free`.
+ */
+void lcsas_disc_locator_set_cache_dir(lcsas_disc_locator *l,
+                                      const char *cache_dir);
 
 /*
  * Locate the pack file containing the given 32-byte pack_id (the

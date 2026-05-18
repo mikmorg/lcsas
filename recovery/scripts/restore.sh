@@ -352,6 +352,25 @@ LCSAS_MOUNT_DIRS_EFFECTIVE="${LCSAS_MOUNT_DIRS-$LCSAS_MOUNT_DIRS_DEFAULT}"
 # (say) /run/media/$USER/ becomes invisible to the C-side locator
 # even though the shell already found it.
 export LCSAS_MOUNT_DIRS="$LCSAS_MOUNT_DIRS_EFFECTIVE"
+
+# Opportunistic pack cache.  ON by default — without it the tier-1
+# binary asks the operator to swap discs once per blob in the worst
+# case (the v3 blind run took 16 swaps for 3 discs).  With it, the
+# rest of each disc's data/ subtree is drained into a local cache
+# on first contact; subsequent packs from the same disc resolve
+# locally and the disc-swap count drops to O(N_discs).
+#
+# Three equivalent values:
+#   LCSAS_PACK_CACHE_DIR=/abs/path   use that path (advanced)
+#   LCSAS_PACK_CACHE_DIR=auto        auto-allocate under $TMPDIR
+#   LCSAS_PACK_CACHE_DIR=            (empty) disable — disk-
+#                                    constrained operators only
+#
+# Default when UNSET: auto.  Default when explicitly empty: off.
+if [ "${LCSAS_PACK_CACHE_DIR-auto}" = "auto" ]; then
+    LCSAS_PACK_CACHE_DIR="${TMPDIR:-/tmp}/lcsas-pack-cache.$$"
+fi
+export LCSAS_PACK_CACHE_DIR
 OLD_IFS="$IFS"; IFS=":"
 for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
     IFS="$OLD_IFS"
