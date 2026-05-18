@@ -169,6 +169,10 @@ def _run_restore(recovery: Path, target_dir: Path, home: Path,
         "HOME": str(home),
         # No mounted discs in the test sandbox.
         "LCSAS_MOUNT_DIRS": "",
+        # The PR #83 discovery-gate would refuse to dispatch when no
+        # pack-search dirs are present; these tests are exercising
+        # tier dispatch + session-log, not discovery, so bypass it.
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         # Force the host triple so detect_arch never bites us.
         "LCSAS_TARGET": HOST_TARGET,
         # Don't try to relocate to RAM under pytest.
@@ -241,6 +245,7 @@ def test_session_log_skipped_when_home_unwritable(tmp_path: Path) -> None:
         **os.environ,
         "HOME": "",  # explicitly empty
         "LCSAS_MOUNT_DIRS": "",
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",  # bypass PR #83 discovery gate
         "LCSAS_TARGET": HOST_TARGET,
         "LCSAS_NO_RELOCATE": "1",
     }
