@@ -344,8 +344,14 @@ done
 # (colon-separated list), useful for tests and for unusual setups
 # (e.g. systemd-mounted /run/media/$USER/).  Default mimics the
 # /Volumes /media /mnt convention used elsewhere in the script.
-LCSAS_MOUNT_DIRS_DEFAULT="/Volumes:/media/$(id -un 2>/dev/null):/media:/mnt"
+LCSAS_MOUNT_DIRS_DEFAULT="/Volumes:/media/$(id -un 2>/dev/null):/media:/mnt:/run/media/$(id -un 2>/dev/null):/run/media"
 LCSAS_MOUNT_DIRS_EFFECTIVE="${LCSAS_MOUNT_DIRS-$LCSAS_MOUNT_DIRS_DEFAULT}"
+# Export so the tier-1 binary inherits the SAME list when it
+# re-enumerates mount parents on every "press Enter to retry".  If
+# the shell and the binary disagree here, a disc auto-mounted under
+# (say) /run/media/$USER/ becomes invisible to the C-side locator
+# even though the shell already found it.
+export LCSAS_MOUNT_DIRS="$LCSAS_MOUNT_DIRS_EFFECTIVE"
 OLD_IFS="$IFS"; IFS=":"
 for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
     IFS="$OLD_IFS"

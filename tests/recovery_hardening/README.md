@@ -31,6 +31,7 @@ make test-recovery-hardening   # this tier only
 | `test_operational_features.py` | Repeat-operator UX regressions: `disc-loader status` losing its `[meta]`/`[data]` role decoration; `restore.sh` no longer appending a session line to `~/.lcsas-restore-log` (tenant / target / snapshot / tier / disc-count, ISO-8601 UTC). |
 | `test_tier3_progress.py` | Tier-3 pure-Python restorer falling silent: no periodic `N/M files, X MB` progress line on stderr (operators can't distinguish "working" from "frozen" on a slow ~1 MB/s restore); `LCSAS_PROGRESS=0` escape hatch breaking; concatenated `standalone_restorer.py` bundle dropping the new helpers. |
 | `test_tier1_progress.py` | `lcsas-restore` going silent mid-restore (no anti-freeze signal): missing `progress: N/M blobs, X MB` stderr lines, or only emitting them after `restore complete`.  Pins the canonical format string used by log scrapers. |
+| `test_tier1_rescan.py` | Tier-1 binary (`lcsas-restore`) regressing to "stat pack-search dirs only once at startup": after a press-Enter-to-retry prompt, the binary must re-enumerate the `--mount-parent` / `$LCSAS_MOUNT_DIRS` directories so a disc auto-mounted AFTER the binary started is discovered, and must re-pick the freshest catalog so prompt label hints stay accurate. |
 
 ## Adding a new hardening test
 

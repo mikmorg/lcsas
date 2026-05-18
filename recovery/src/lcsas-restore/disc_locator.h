@@ -16,13 +16,17 @@
 #include <stdio.h>
 
 typedef struct {
-    /* NULL-terminated list of paths (each is a directory expected to
-     * contain a `data/` subdir with pack files, two-level or flat). */
+    /* Caller-provided list of paths (each is a directory expected to
+     * contain a `data/` subdir with pack files, two-level or flat).
+     * The locator BORROWS these pointers -- the caller owns the
+     * underlying strings and must keep them alive. */
     const char **search_paths;
     size_t       n_paths;
 
-    /* Optional: catalog for volume-label hints in prompts.
-     * May be NULL. */
+    /* Optional: catalog for volume-label hints in prompts.  May be
+     * NULL.  This is the CALLER's catalog handle and is borrowed --
+     * the locator may swap in a fresher one (see `owned_catalog`
+     * below) and use that for hints instead. */
     lcsas_catalog *catalog;
 
     /* Interactive behaviour.
@@ -44,6 +48,26 @@ typedef struct {
 
     /* Misses counter for diagnostics. */
     unsigned long misses;
+
+    /* Mount-parent directories (e.g. "/Volumes", "/media/$USER",
+     * "/mnt") scanned on every retry to discover newly-inserted discs.
+     * Borrowed pointers; caller owns the underlying strings. */
+    const char **mount_parents;
+    size_t       n_mount_parents;
+
+    /* Discovered subdirectories of mount_parents.  Refreshed on every
+     * retry from `refresh_discovered()`.  The locator OWNS these
+     * strings and frees them in `lcsas_disc_locator_free()`. */
+    char       **discovered_paths;
+    size_t       n_discovered;
+    size_t       cap_discovered;
+
+    /* Freshest catalog opened by the locator from a discovered mount
+     * (NULL when none beats the caller-provided one).  Locator owns
+     * this handle and closes it on free / refresh. */
+    lcsas_catalog *owned_catalog;
+    char          *owned_catalog_path;
+    long long      owned_catalog_mtime;
 } lcsas_disc_locator;
 
 /*
@@ -68,6 +92,40 @@ void lcsas_disc_locator_init(lcsas_disc_locator *l,
  */
 void lcsas_disc_locator_set_meta(lcsas_disc_locator *l,
                                  const char *meta_disc);
+
+/*
+ * Attach a list of mount-parent directories to scan on every retry.
+ * Each parent is a directory whose immediate children may be newly-
+ * inserted optical discs (e.g. "/Volumes", "/media/$USER", "/mnt").
+ * On each retry the locator opendir()s every parent, adds new
+ * children to its discovered-paths list, and also looks for a
+ * fresher catalog.db at each child's root.
+ *
+ * `mount_parents` and the strings it points to are BORROWED -- caller
+ * keeps ownership.  Pass NULL/0 to clear.
+ */
+void lcsas_disc_locator_set_mount_parents(lcsas_disc_locator *l,
+                                          const char **mount_parents,
+                                          size_t n_mount_parents);
+
+/*
+ * Release any resources owned by the locator (discovered paths,
+ * locator-opened catalog).  Safe to call on a locator initialised
+ * with lcsas_disc_locator_init().  Borrowed fields (search_paths,
+ * caller's catalog, meta_disc, mount_parents) are NOT touched.
+ */
+void lcsas_disc_locator_free(lcsas_disc_locator *l);
+
+/*
+ * Record the mtime of the caller-provided catalog so the locator
+ * never swaps in an OLDER catalog discovered on a mounted disc.  The
+ * caller passes the SQLite path it opened (typically the value of
+ * `--catalog`); the locator stat()s it and uses st_mtime as the
+ * floor.  Safe to call with a NULL/missing path -- the floor stays
+ * at 0 and any opened catalog wins.
+ */
+void lcsas_disc_locator_set_catalog_floor(lcsas_disc_locator *l,
+                                          const char *catalog_path);
 
 /*
  * Locate the pack file containing the given 32-byte pack_id (the

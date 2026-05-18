@@ -5,7 +5,8 @@
  *   lcsas-restore --repo <dir> --password-file <file> --target <dir>
  *                 [--snapshot <id|latest>] [--list-snapshots]
  *                 [--catalog <file>]
- *                 [--pack-search <dir>]  (repeatable)
+ *                 [--pack-search <dir>]   (repeatable)
+ *                 [--mount-parent <dir>]  (repeatable; see below)
  *                 [--interactive {auto|on|off}]
  *                 [--verbose]
  *
@@ -15,6 +16,11 @@
  * --pack-search adds additional mount points to scan when a pack
  * file is not in --repo/data/.  Repeatable.  See
  * recovery/docs/MULTI_DISC_DESIGN.txt.
+ *
+ * --mount-parent names directories whose children are scanned on
+ * every retry (so a disc auto-mounted AFTER the binary started is
+ * found).  Defaults: $LCSAS_MOUNT_DIRS (colon-separated) or
+ * /Volumes:/media:/mnt:/run/media.
  *
  * --interactive controls behaviour when a pack is still missing:
  *   auto (default)  prompt if stdin is a TTY, else fail fast
@@ -49,6 +55,19 @@
 #endif
 
 #define MAX_PACK_SEARCH 64
+#define MAX_MOUNT_PARENTS 32
+
+/* Default mount parents scanned on every retry when LCSAS_MOUNT_DIRS
+ * is unset.  Mirrors the restore.sh shell-side default and the
+ * design doc (MULTI_DISC_DESIGN.txt §"DRIVER SCRIPT CHANGES"). */
+static const char *DEFAULT_MOUNT_PARENTS[] = {
+    "/Volumes",
+    "/media",
+    "/mnt",
+    "/run/media"
+};
+#define N_DEFAULT_MOUNT_PARENTS \
+    (sizeof DEFAULT_MOUNT_PARENTS / sizeof DEFAULT_MOUNT_PARENTS[0])
 
 static void
 usage(const char *argv0)
@@ -58,6 +77,7 @@ usage(const char *argv0)
         "           [--snapshot ID|latest] [--list-snapshots] [--verbose]\n"
         "           [--catalog FILE]\n"
         "           [--pack-search DIR ...]\n"
+        "           [--mount-parent DIR ...]\n"
         "           [--interactive {auto|on|off}]\n"
         "           [--meta-disc DIR]\n"
         "\n"
@@ -68,6 +88,14 @@ usage(const char *argv0)
         "--pack-search adds additional mount points to scan when a pack\n"
         "file is missing from --repo/data/.  Repeatable.\n"
         "\n"
+        "--mount-parent names a directory whose children may be newly-\n"
+        "inserted optical discs (e.g. /Volumes, /media, /mnt).  On every\n"
+        "missing-pack retry the locator re-enumerates each parent so a\n"
+        "disc inserted AFTER the binary started is discovered.  Multiple\n"
+        "--mount-parent flags may be supplied.  When none are given, the\n"
+        "binary reads colon-separated $LCSAS_MOUNT_DIRS, then falls back\n"
+        "to /Volumes:/media:/mnt:/run/media.\n"
+        "\n"
         "--interactive controls behaviour on missing pack:\n"
         "    auto (default)  prompt if stdin is a TTY\n"
         "    on              always prompt + retry\n"
@@ -75,7 +103,9 @@ usage(const char *argv0)
         "\n"
         "--catalog opens the on-disc SQLite catalog (catalog.db) for\n"
         "informational logging at startup and for volume-label hints\n"
-        "in interactive disc-swap prompts.\n"
+        "in interactive disc-swap prompts.  On each retry the locator\n"
+        "also probes any newly-mounted disc for a catalog.db and uses\n"
+        "the freshest one it can open for hash->label resolution.\n"
         "\n"
         "--meta-disc names the mount point of the recovery / meta disc.\n"
         "The locator excludes that path from pack searches and drops\n"
@@ -112,6 +142,9 @@ main(int argc, char **argv)
     const char *meta_disc = NULL;
     const char *pack_search[MAX_PACK_SEARCH];
     size_t n_pack_search = 0;
+    const char *mount_parents[MAX_MOUNT_PARENTS];
+    size_t n_mount_parents = 0;
+    char *mount_parents_buf = NULL;  /* owns the splittable copy of $LCSAS_MOUNT_DIRS */
     int list_only = 0;
     int verbose = 0;
     int i;
@@ -145,6 +178,14 @@ main(int argc, char **argv)
                 return 2;
             }
             pack_search[n_pack_search++] = tmp;
+            matched = 1;
+        } else if (parse_arg("--mount-parent", argc, argv, &i, &tmp) > 0) {
+            if (n_mount_parents >= MAX_MOUNT_PARENTS) {
+                fprintf(stderr, "too many --mount-parent entries (max %d)\n",
+                        MAX_MOUNT_PARENTS);
+                return 2;
+            }
+            mount_parents[n_mount_parents++] = tmp;
             matched = 1;
         } else if (strcmp(argv[i], "--list-snapshots") == 0) {
             list_only = 1; matched = 1;
@@ -193,6 +234,11 @@ main(int argc, char **argv)
 
     lcsas_disc_locator_init(&locator, pack_search, n_pack_search,
                             catalog, interactive);
+    /* Pin the caller's catalog mtime as the floor so the locator
+     * never swaps to an OLDER catalog discovered on a mounted disc. */
+    if (catalog && catalog_path) {
+        lcsas_disc_locator_set_catalog_floor(&locator, catalog_path);
+    }
     if (!meta_disc) {
         /* Allow the env var as a fallback when scripts can't pass it
          * through (e.g. minimal initramfs sh that drops args). */
@@ -201,16 +247,55 @@ main(int argc, char **argv)
     }
     if (meta_disc) lcsas_disc_locator_set_meta(&locator, meta_disc);
 
+    /* Determine the mount-parent list scanned on each retry to pick up
+     * freshly-inserted discs.  Precedence (highest first):
+     *   1. one or more --mount-parent CLI flags
+     *   2. $LCSAS_MOUNT_DIRS colon-separated env var
+     *   3. compiled-in defaults (/Volumes, /media, /mnt, /run/media)
+     * The driver script reuses the same env var, so the C and shell
+     * sides stay in sync. */
+    if (n_mount_parents == 0) {
+        const char *env = getenv("LCSAS_MOUNT_DIRS");
+        if (env && *env) {
+            size_t len = strlen(env);
+            char *p, *next;
+            mount_parents_buf = (char *)malloc(len + 1);
+            if (mount_parents_buf) {
+                memcpy(mount_parents_buf, env, len + 1);
+                p = mount_parents_buf;
+                while (p && *p && n_mount_parents < MAX_MOUNT_PARENTS) {
+                    next = strchr(p, ':');
+                    if (next) { *next = '\0'; next++; }
+                    if (*p) mount_parents[n_mount_parents++] = p;
+                    p = next;
+                }
+            }
+        } else {
+            size_t k;
+            for (k = 0; k < N_DEFAULT_MOUNT_PARENTS
+                     && n_mount_parents < MAX_MOUNT_PARENTS; k++) {
+                mount_parents[n_mount_parents++] = DEFAULT_MOUNT_PARENTS[k];
+            }
+        }
+    }
+    lcsas_disc_locator_set_mount_parents(&locator, mount_parents,
+                                         n_mount_parents);
+
     if (verbose) {
         fprintf(stderr,
-                "[lcsas-restore] interactive=%s pack-search-dirs=%zu meta-disc=%s\n",
+                "[lcsas-restore] interactive=%s pack-search-dirs=%zu "
+                "mount-parents=%zu meta-disc=%s\n",
                 interactive ? "on" : "off", n_pack_search,
+                n_mount_parents,
                 meta_disc ? meta_disc : "(none)");
     }
 
+    lcsas_blob_index_init(&ix);
+    lcsas_snapshot_list_init(&snaps);
+
     if (lcsas_read_file(pwfile, &pw, &pw_len) != 0) {
         fprintf(stderr, "cannot read password file: %s\n", pwfile);
-        return 1;
+        goto out;
     }
     /* Strip trailing newlines / CR. */
     while (pw_len > 0 && (pw[pw_len - 1] == '\n' || pw[pw_len - 1] == '\r')) {
@@ -220,12 +305,10 @@ main(int argc, char **argv)
     snprintf(keys_dir, sizeof keys_dir, "%s/keys", repo_path);
     if (lcsas_repo_load_keys_dir(keys_dir, pw, pw_len, &mk) != 0) {
         fprintf(stderr, "ERROR: could not decrypt any key file (wrong password?)\n");
-        free(pw);
-        return 1;
+        goto out;
     }
     if (verbose) fprintf(stderr, "[lcsas-restore] master key loaded\n");
 
-    lcsas_blob_index_init(&ix);
     if (lcsas_repo_load_index(repo_path, &mk, &ix) != 0) {
         fprintf(stderr, "ERROR: index load failed\n");
         goto out;
@@ -234,7 +317,6 @@ main(int argc, char **argv)
         fprintf(stderr, "[lcsas-restore] indexed %lu blobs\n",
                 (unsigned long)ix.count);
 
-    lcsas_snapshot_list_init(&snaps);
     if (lcsas_repo_load_snapshots(repo_path, &mk, &snaps) != 0) {
         fprintf(stderr, "ERROR: snapshot load failed\n");
         goto out;
@@ -309,7 +391,9 @@ main(int argc, char **argv)
 out:
     lcsas_blob_index_free(&ix);
     lcsas_snapshot_list_free(&snaps);
+    lcsas_disc_locator_free(&locator);
     if (catalog) lcsas_catalog_close(catalog);
+    free(mount_parents_buf);
     free(pw);
     return rc;
 }
