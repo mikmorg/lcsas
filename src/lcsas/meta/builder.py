@@ -1410,8 +1410,9 @@ The **only** thing you must provide is your **encryption key file**.
 | `tools/` | Portable Linux x86_64 binaries: rustic, xorriso, Python 3 |
 | `lcsas/` | LCSAS source code (Python, no external dependencies) |
 | `docs/` | Architecture documentation + restic format specification |
-| `restore.sh` | Interactive restore script (prompts for disc swaps) |
-| `restore-auto.sh` | Non-interactive restore script (for scripted/automated use) |
+| `restore.sh` | **Interactive restore script — single-drive default. Prompts for the encryption password and for disc swaps. USE THIS.** |
+| `restore-auto.sh` | Non-interactive restore script (automation only — humans should use restore.sh) |
+| `restore_legacy.sh` | Older Bash driver kept for back-compat — superseded by `restore.sh`. |
 | `README_RESTORE.md` | This file |
 | `volume_info.json` | Machine-readable volume metadata (includes tool versions) |
 
@@ -1446,88 +1447,58 @@ mid-restore — but any disc will work.
 
 ### 3. Run the restore
 
-```bash
-./restore.sh --key /path/to/keyfile.txt \\
-             --target ~/restored/ \\
-             --repo REPO_NAME
+```sh
+sh restore.sh ~/restored/ latest
 ```
 
-(Omit `--repo` to see the list of repositories stored in the archive,
-then re-run with a choice.)
+The two positional arguments are:
+
+| Position | Meaning | Default |
+|---|---|---|
+| 1 | `TARGET_DIR` — where restored files are written | `/tmp/restored` |
+| 2 | `SNAPSHOT_ID` or the word `latest` | `latest` |
 
 The script will:
 
-1. Read the catalog from the disc currently in the drive.
-2. Print the list of discs you will need and in what order.
-3. Prompt `INSERT DISC: <label>` for each one, wait for you to
-   swap, and ingest only the packs it needs.
-4. If a later disc has a fresher catalog, silently upgrade the
-   pick list so newly-discovered volumes are included.
-5. Run rustic against the assembled cache and write the files into
-   `~/restored/REPO_NAME/`.
+1. Print `Password:` on the terminal and wait for the encryption
+   password on stdin. **Type the contents of your key file** and
+   press Enter. The password is read in the clear (POSIX-sh has
+   no silent-read); do not pipe it from `echo` — type it.
+2. Auto-detect any already-mounted archive disc and pass it to the
+   recovery binary as a pack source.
+3. `exec` the highest-priority recovery tier available
+   (`bin/<arch>/lcsas-restore` → `bin/<arch>/rustic-static` →
+   bundled CPython + `standalone_restorer.py`). Only one tier
+   runs per invocation.
+4. When a pack is missing from the disc currently in the drive,
+   the recovery binary stops and prints `INSERT DISC: LCSAS_<label>`
+   on stderr.  **Swap the disc in your optical drive and press Enter.**
+   Repeat until the binary prints `RESTORE COMPLETE` and exits 0.
 
-If a disc is unreadable mid-restore you can stop and re-run the same
-command later — the cache under the work directory persists unless
-you pass `--work-dir`.
+If a disc is unreadable or the system crashes mid-restore you can
+re-run the same command — the pack cache under the work directory
+persists across runs.
 
-## Non-Interactive Mode (automated / scripted)
-
-Use ``restore-auto.sh`` when you want a fully automated restore without
-interactive prompts — for example, in scripted environments, CI/CD
-pipelines, or AI-agent-driven restores.
-
-```bash
-./restore-auto.sh --key /path/to/keyfile.txt \\
-                  --target ~/restored/ \\
-                  --repo REPO_NAME \\
-                  --disc-cmd "disc-loader"
-```
-
-The ``--disc-cmd`` option specifies a command that loads discs by label.
-The script calls it as ``CMD insert LABEL`` to load a disc and
-``CMD eject`` to eject. If omitted, you must load discs externally
-before the script expects them.
-
-The script runs the same four phases as ``restore.sh`` (bootstrap,
-ingest, finalize, rustic restore) but never calls ``read`` or waits
-for keyboard input.
-
-| Option | Description |
-|---|---|
-| ``--key FILE`` | **(required)** Encryption key file |
-| ``--target DIR`` | **(required)** Restore destination |
-| ``--repo NAME`` | **(required)** Repository to restore |
-| ``--disc-cmd CMD`` | Command to load/eject discs programmatically |
-| ``--drive DEV`` | Optical drive (default: ``/dev/sr0``) |
-| ``--snapshot ID`` | Snapshot to restore (default: latest) |
-| ``--work-dir DIR`` | Temp directory (default: auto) |
+> **Automation / CI only.** Human operators recovering from disaster
+> must use the interactive `restore.sh` above. The non-interactive
+> driver `restore-auto.sh` exists only for scripted pipelines —
+> see Appendix A.
 
 ## Directory Mode (opt-in, legacy)
 
 If you already have every data-volume ISO on disk (e.g. pre-rsynced to
-a NAS), use directory mode:
+a NAS) you can side-load them via the legacy bash driver
+(`restore_legacy.sh`):
 
 ```bash
-./restore.sh --key /path/to/keyfile.txt \\
-             --isos /path/to/iso/directory/ \\
-             --target ~/restored/
+./restore_legacy.sh --key /path/to/keyfile.txt \\
+                    --isos /path/to/iso/directory/ \\
+                    --target ~/restored/
 ```
 
 This extracts every ISO up front and copies every pack into the cache
 before restoring. Faster when disks are cheap; wrong for the
 single-drive disaster scenario.
-
-## Restore Options
-
-| Option | Description |
-|---|---|
-| `--key FILE` | **(required)** Path to your encryption key file |
-| `--target DIR` | **(required)** Where to restore files |
-| `--repo NAME` | Repository (tenant) to restore |
-| `--snapshot ID` | Restore a specific snapshot (default: latest) |
-| `--drive DEV` | Optical drive in single-drive mode (default: `/dev/sr0`) |
-| `--isos DIR` | Opt-in: directory of data-volume ISOs (legacy mode) |
-| `--work-dir DIR` | Temporary work directory (default: auto) |
 
 ## If the Bundled Tools Don't Work
 
@@ -1566,9 +1537,10 @@ export PYTHONPATH="$(pwd)/lcsas/src"
   requires ~2 GB of RAM for large repositories.
 
 - **Re-running after failure:** If a restore is interrupted (power loss, Ctrl+C,
-  disk full), simply re-run the restore command.  Temporary files are cleaned up
-  automatically.  If using `--work-dir`, delete that directory first to ensure a
-  clean state.  Do **not** rely on a partially-restored target directory.
+  disk full), simply re-run the restore command.  The pack cache that
+  `restore.sh` builds in a temporary work directory persists across runs,
+  so a re-run picks up where the previous attempt stopped.  Do **not**
+  rely on a partially-restored target directory.
 
 ## What Is NOT on This Volume
 
@@ -1589,6 +1561,38 @@ independently.
 
 See `docs/architecture.md` for the complete system architecture, and
 `docs/RESTIC_FORMAT_SPEC.md` for the data format specification.
+
+---
+
+## Appendix A — restore-auto.sh (automation only)
+
+> Skip this section unless you are scripting LCSAS into a CI
+> pipeline, a backup-validation harness, or another fully
+> automated environment. Human operators recovering from disaster
+> should use `restore.sh` (Single-Drive Mode above).
+
+`restore-auto.sh` runs the same four phases as `restore.sh`
+(bootstrap, ingest, finalize, rustic restore) but never calls
+`read` and never waits for keyboard input.  It is the right tool
+for an environment where another process can mechanically swap
+discs and feed in the key file.
+
+```bash
+./restore-auto.sh --key /path/to/keyfile.txt \\
+                  --target ~/restored/ \\
+                  --repo REPO_NAME \\
+                  --disc-cmd "disc-loader"
+```
+
+| Option | Description |
+|---|---|
+| `--key FILE` | **(required)** Encryption key file |
+| `--target DIR` | **(required)** Restore destination |
+| `--repo NAME` | **(required)** Repository to restore |
+| `--disc-cmd CMD` | Command to load/eject discs programmatically (e.g. a robotic loader). The script calls it as `CMD insert LABEL` and `CMD eject`. |
+| `--drive DEV` | Optical drive (default: `/dev/sr0`) |
+| `--snapshot ID` | Snapshot to restore (default: latest) |
+| `--work-dir DIR` | Temp directory (default: auto) |
 '''
 
 

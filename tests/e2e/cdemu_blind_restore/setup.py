@@ -41,7 +41,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
 
-FIXTURE = Path("/mnt/lcsas-data/blind-test")
+# Keep the fixture OUT of /mnt — that path is reserved for the
+# agent's legitimate `sudo mount /dev/sr0 /mnt`, and putting our
+# ground-truth there means an inadvertent mount shadows the manifest
+# files verify.sh needs to score the run.
+FIXTURE = Path("/var/lib/lcsas-blind-test")
 SOURCES = FIXTURE / "sources"
 MIRROR = FIXTURE / "mirror"
 STAGING = FIXTURE / "staging"
@@ -94,7 +98,7 @@ def require_root() -> None:
 
 
 def require_binaries() -> None:
-    required = ["rustic", "xorriso", "cc", "claude", "cdemu"]
+    required = ["rustic", "xorriso", "cc", "claude", "cdemu", "tmux"]
     missing = [b for b in required if shutil.which(b) is None]
     if missing:
         print(f"missing required binaries: {', '.join(missing)}", file=sys.stderr)
@@ -584,6 +588,20 @@ def main() -> int:
     banner("3. init rustic repos + backup")
     _init_rustic_repo("alpha")
     _init_rustic_repo("bravo")
+
+    # Lock the source tree from the blind agent.  A physical user
+    # recovering from disaster has no copy of the pre-disaster
+    # plaintext lying around; if we leave SOURCES world-readable the
+    # agent can short-circuit the restore by `find`-ing and `cp`-ing
+    # the originals.  After backup these bytes are no longer needed
+    # by anything in the test, so chmod 0700 + chown root:root.
+    banner("3b. lock source tree (root-only)")
+    for path in SOURCES.rglob("*"):
+        os.chown(path, 0, 0)
+        os.chmod(path, 0o600 if path.is_file() else 0o700)
+    os.chown(SOURCES, 0, 0)
+    os.chmod(SOURCES, 0o700)
+    print(f"  {SOURCES} now root:root 0700 (agent cannot read)")
 
     banner("4a. LCSAS burn — first batch")
     conn = _init_burn_db()

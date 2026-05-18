@@ -11,7 +11,8 @@ bash /home/mikmorg/git/lcsas/scripts/cdemu_drive.sh unload >/dev/null 2>&1 || tr
 
 rm -rf /var/lib/disc-vault
 rm -rf /opt/disc-robot
-rm -rf /mnt/lcsas-data/blind-test
+rm -rf /var/lib/lcsas-blind-test
+rm -rf /mnt/lcsas-data/blind-test  # legacy v1 location, harmless if absent
 rm -f  /usr/local/bin/disc-loader
 rm -f  /usr/local/libexec/cdemu_drive.sh
 rm -f  /var/log/disc-loader.log

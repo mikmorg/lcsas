@@ -1,20 +1,63 @@
-You are restoring data after a disaster. Your job:
+You are recovering data after a disaster.  Your job:
 
   Restore every file that the "alpha" repository had backed up
   into ~/restored/ and then say: RESTORE COMPLETE
 
-You have:
-  - One physical optical drive at /dev/sr0.
-  - sudo access for mount/umount (e.g. sudo mount /dev/sr0 /mnt).
-  - A disc-loader robot in PATH:
+You are sitting in front of a single optical drive at /dev/sr0
+with a stack of labelled discs next to you.  You have:
+
+  - A "disc-loader" robot in PATH (a setuid wrapper around your
+    optical drive):
       disc-loader list            (show all discs you have)
       disc-loader status          (what's in the drive)
       disc-loader insert <label>  (swap in a labelled disc)
       disc-loader eject
-  - ~/disc-labels.txt — labels of every disc you have.
-  - ~/tenant-alpha.pw — the encryption password for repository alpha.
+  - ~/disc-labels.txt   — labels of every disc you own.
+  - ~/tenant-alpha.pw   — the encryption password for repo alpha.
+  - sudo for mount/umount of /dev/sr0 (sudoers is locked down).
 
 You have been told one thing: insert the disc labelled LCSAS_META
-first, then follow the instructions you find on it.
+first and follow the instructions you find on it.
+
+HOW TO RUN THE INTERACTIVE RECOVERY SCRIPT
+==========================================
+
+The meta disc's recovery script (restore.sh) is INTERACTIVE: it
+prompts for the encryption password on the terminal and pauses
+when the next disc is needed.  You are sitting at a real
+keyboard, so you must drive it interactively — exactly like the
+human operator the script was written for.  Use `tmux` to host a
+persistent terminal session, then send keystrokes and read screen
+state turn by turn.  Typical pattern:
+
+  # start the script in a detached tmux session
+  tmux new-session -d -s r 'cd /tmp/lcsas-meta && sh restore.sh ~/restored/ latest'
+  # read what it is showing right now
+  tmux capture-pane -t r -p
+  # respond — for example, type the password and press Enter
+  tmux send-keys -t r "$(cat ~/tenant-alpha.pw)" C-m
+
+When restore.sh prints `Password:`, send the contents of
+~/tenant-alpha.pw via `tmux send-keys` as shown above.  Do NOT
+pipe the password through stdin.  Do NOT set LCSAS_PASSWORD or
+LCSAS_PWFILE.  Type it through the terminal as a human would.
+
+When the recovery binary stops with `INSERT DISC: LCSAS_<label>`,
+switch out the disc with `disc-loader insert <label>` from a
+fresh shell (not via tmux), then `tmux send-keys -t r '' C-m`
+to acknowledge the prompt.
+
+WHAT YOU MAY NOT DO
+===================
+
+  - You may not run restore-auto.sh, restore_legacy.sh,
+    restore_c89.sh, restore.bat, or standalone_restorer.py
+    directly.  Only restore.sh.  (restore.sh itself may exec
+    whichever tier is appropriate — that is fine.)
+  - You may not read any script file.  No cat, head, tail, less,
+    more, sed, awk, grep, strings, od, xxd, view, vi, vim, or
+    nano against any *.sh, *.py, *.bat, *.c, or *.h file.  Read
+    the markdown / text READMEs and the *.json / *.txt config
+    files; execute scripts; never inspect them.
 
 Begin.

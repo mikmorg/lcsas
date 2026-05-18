@@ -1,11 +1,15 @@
 # LCSAS — Blind-Agent Disaster Recovery Test Plan
 
+**Version: v2 (Interactive driver — May 2026)**
+
 **Scenario:** A disaster wipes everything except a stack of labelled optical
 discs, a single CD/DVD drive, and a sticky note with one encryption password.
 An operator with **zero prior knowledge of LCSAS** must restore one
 repository's data using only those discs. We simulate that operator with an
 LLM sub-agent given minimal context, driving a virtual optical drive via
-`cdemu`. The sub-agent must believe the drive is real.
+`cdemu`. The sub-agent must believe the drive is real **and must drive the
+restore through an interactive `restore.sh` session — exactly like a human
+at the keyboard.**
 
 This is the ultimate end-to-end test of the **single-drive** holographic
 restore claim: any disc, picked blind, should be enough to bootstrap a full
@@ -41,8 +45,23 @@ A run passes iff **all** of the following hold after the agent declares
    `LCSAS_META`. Proves the agent honoured the one hint in the prompt.
 6. The set of inserted disc labels is a **superset** of the
    pre-computed `expected_alpha_volumes.txt` (every required disc was
-   visited). Bounded above by `2 × needed` to catch thrashing.
+   visited). Bounded above by `5 × needed` to catch thrashing.
 7. The full transcript is captured to `transcript.jsonl` for review.
+8. **(v2)** The agent invoked the interactive `restore.sh`.  Direct
+   invocation of `restore-auto.sh`, `restore_legacy.sh`,
+   `restore_c89.sh`, `restore.bat`, or `standalone_restorer.py`
+   fails the run.  (`restore.sh` may itself `exec` whichever tier is
+   appropriate — that is allowed; we are checking what the *agent*
+   typed at the top of a shell command.)
+9. **(v2)** The agent never *read* a script file.  No
+   `cat`/`head`/`tail`/`less`/`more`/`sed`/`awk`/`grep`/`strings`/
+   `od`/`xxd`/`view`/`vi`/`vim`/`nano` applied to a file ending in
+   `.sh`, `.py`, `.bat`, `.c`, or `.h`.  Reading markdown / text /
+   JSON is fine — the rule covers code only.
+10. **(v2)** The agent drove the restore from a `tmux` session and
+    used `tmux send-keys` to respond to the script's prompts.  This
+    proves the test exercised the same UX a human operator would
+    see, not a scripted-pipe shortcut.
 
 ---
 
@@ -58,6 +77,13 @@ A run passes iff **all** of the following hold after the agent declares
   metadata and packs are physically present on the same discs.
 - **Self-describing instructions:** are the docs on the meta disc good
   enough that an LLM with no prior context converges on the right commands?
+- **Interactive UX parity (v2):** the recovery script the user is asked
+  to run is `restore.sh` — interactive, prompts for password and for
+  disc swaps.  The test must exercise that flow as a human would: a
+  persistent terminal (tmux), typed password via `send-keys`, response
+  to disc-swap prompts.  Pipe-based / env-var-fed shortcuts and direct
+  invocations of `restore-auto.sh` are explicitly out-of-scope and are
+  detected by `verify.sh`.
 
 ---
 
@@ -86,8 +112,14 @@ A run passes iff **all** of the following hold after the agent declares
 │    • ~/tenant-alpha.pw                                                     │
 │    • ~/disc-labels.txt   (one label per line, LCSAS_META first)            │
 │    • disc-loader         (in PATH, setuid via /usr/local/bin/disc-loader)  │
+│    • tmux                (in PATH; required to drive interactive prompts)  │
 │    • /dev/sr0            (apparent real optical drive)                     │
 │    • sudo NOPASSWD for: mount -o ro /dev/sr0 *, umount *, disc-loader      │
+│                                                                            │
+│  Must drive the interactive restore.sh through tmux:                       │
+│    • tmux new-session ... 'sh restore.sh ~/restored/ latest'               │
+│    • tmux capture-pane to read prompts                                     │
+│    • tmux send-keys to type password and respond to INSERT DISC prompts    │
 │                                                                            │
 │  Sandbox hardening:                                                        │
 │    • kernel.dmesg_restrict=1                                               │

@@ -3,7 +3,7 @@
 #
 # Usage: verify.sh <run_dir>
 #
-# Exit 0 iff all nine success criteria from PLAN.md hold.
+# Exit 0 iff all twelve success criteria from PLAN.md hold.
 
 set -uo pipefail
 
@@ -14,9 +14,20 @@ if [[ -z "$RUN_DIR" ]]; then
 fi
 
 AGENT_HOME="${AGENT_HOME:-/home/lcsas-blind}"
-FIXTURE="${FIXTURE:-/mnt/lcsas-data/blind-test}"
+FIXTURE="${FIXTURE:-/var/lib/lcsas-blind-test}"
 TRANSCRIPT="$RUN_DIR/transcript.jsonl"
 DISC_LOG="$RUN_DIR/disc-loader.log"
+
+# Fail-closed fixture-presence guard.  Without these files, the
+# manifest comparisons below trivially match (comm against an empty
+# set is empty) and the run reports a false PASS.  Refuse to score.
+for f in alpha_manifest.sha256 bravo_manifest.sha256 expected_alpha_volumes.txt; do
+    if ! sudo test -s "$FIXTURE/$f"; then
+        echo "FAIL  fixture inputs missing: $FIXTURE/$f not present or empty" >&2
+        echo "      verify.sh refuses to score without the ground-truth fixture." >&2
+        exit 2
+    fi
+done
 
 PASS=0
 FAIL=0
@@ -155,6 +166,124 @@ check "meta disc has no catalog.db" \
     "[[ '$HAS_CATALOG' == 'no' ]]"
 check "meta disc has metadata/" \
     "[[ '$HAS_METADATA' == 'yes' ]]"
+
+# -----------------------------------------------------------------------
+# 9. Agent invoked the interactive restore.sh — never the auto / legacy /
+#    standalone variants directly.  (restore.sh itself may exec whichever
+#    tier is appropriate; we only forbid the agent typing those names at
+#    the top of a shell command.)
+cat > "$RUN_DIR/script_invoke_check.py" <<'PY'
+import json, re, sys
+
+# Leading invocation: optional "sudo "/"sh "/"bash "/"exec ", path-ish
+# basename ending in .sh/.py/.bat, then whitespace or EOL.
+LEADING = re.compile(
+    r'(?:^|[;&|]|\s)(?:sudo\s+)?(?:sh|bash|exec)?\s*(?:\./|/)?'
+    r'(?P<name>[A-Za-z0-9_./-]+\.(?:sh|py|bat))(?:\s|$)'
+)
+FORBIDDEN = {
+    'restore-auto.sh', 'restore_legacy.sh', 'restore_c89.sh',
+    'restore.bat', 'standalone_restorer.py',
+}
+saw_restore_sh = False
+forbidden_hits = []
+with open(sys.argv[1]) as fh:
+    for line in fh:
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        content = d.get('message', {}).get('content', [])
+        if not isinstance(content, list):
+            continue
+        for c in content:
+            if c.get('type') != 'tool_use':
+                continue
+            cmd = c.get('input', {}).get('command', '')
+            for m in LEADING.finditer(cmd):
+                base = m.group('name').rsplit('/', 1)[-1]
+                if base in FORBIDDEN:
+                    forbidden_hits.append(base)
+                if base == 'restore.sh':
+                    saw_restore_sh = True
+if forbidden_hits:
+    print('AGENT INVOKED FORBIDDEN SCRIPT(S):',
+          sorted(set(forbidden_hits)), file=sys.stderr)
+    sys.exit(1)
+if not saw_restore_sh:
+    print('AGENT NEVER INVOKED restore.sh', file=sys.stderr)
+    sys.exit(1)
+PY
+check "agent ran restore.sh (no auto/legacy/standalone)" \
+    "python3 '$RUN_DIR/script_invoke_check.py' '$TRANSCRIPT'"
+
+# -----------------------------------------------------------------------
+# 10. Agent did not read any script file (cat/head/less/sed/awk/etc. on
+#     *.sh, *.py, *.bat, *.c, *.h).  Reading READMEs and JSON metadata is
+#     allowed — we only forbid inspecting code.
+cat > "$RUN_DIR/script_read_check.py" <<'PY'
+import json, re, shlex, sys
+
+READERS = {
+    'cat', 'head', 'tail', 'less', 'more', 'sed', 'awk', 'grep',
+    'strings', 'od', 'xxd', 'view', 'nano', 'vim', 'vi',
+}
+SCRIPT_EXT = re.compile(r'\.(?:sh|py|bat|c|h)(?:$|[\s,;:])')
+
+# Split a command into top-level clauses on shell operators we care
+# about; lets us detect "cat README.md && cat restore.sh".
+CLAUSE_SPLIT = re.compile(r'\s*(?:&&|\|\||;|\||&)\s*')
+
+hits = []
+with open(sys.argv[1]) as fh:
+    for line in fh:
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        content = d.get('message', {}).get('content', [])
+        if not isinstance(content, list):
+            continue
+        for c in content:
+            if c.get('type') != 'tool_use':
+                continue
+            cmd = c.get('input', {}).get('command', '')
+            for clause in CLAUSE_SPLIT.split(cmd):
+                try:
+                    tokens = shlex.split(clause, posix=True)
+                except ValueError:
+                    tokens = clause.split()
+                if not tokens:
+                    continue
+                # Strip a leading 'sudo' (and its flags) before checking
+                # argv[0].  Stop at the first non-flag.
+                i = 0
+                if tokens[i] == 'sudo':
+                    i += 1
+                    while i < len(tokens) and tokens[i].startswith('-'):
+                        i += 1
+                if i >= len(tokens):
+                    continue
+                argv0 = tokens[i].rsplit('/', 1)[-1]
+                if argv0 not in READERS:
+                    continue
+                for tok in tokens[i + 1:]:
+                    if SCRIPT_EXT.search(tok):
+                        hits.append(f'{argv0} {tok}')
+                        break
+if hits:
+    print('AGENT READ SCRIPT FILE(S):', hits[:5], file=sys.stderr)
+    sys.exit(1)
+PY
+check "agent did not cat any script" \
+    "python3 '$RUN_DIR/script_read_check.py' '$TRANSCRIPT'"
+
+# -----------------------------------------------------------------------
+# 11. Agent drove the restore through tmux (proves human-in-chair
+#     simulation).  Requires both a `tmux ...` command and at least one
+#     `send-keys`.
+check "agent used tmux send-keys" \
+    "grep -q 'tmux ' '$TRANSCRIPT' && grep -q 'send-keys' '$TRANSCRIPT'"
 
 echo
 echo "$PASS passed, $FAIL failed"
