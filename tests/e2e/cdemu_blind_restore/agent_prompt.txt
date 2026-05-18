@@ -37,15 +37,20 @@ state turn by turn.  Typical pattern:
   # respond — for example, type the password and press Enter
   tmux send-keys -t r "$(cat ~/tenant-alpha.pw)" C-m
 
-When restore.sh prints `Password:`, send the contents of
-~/tenant-alpha.pw via `tmux send-keys` as shown above.  Do NOT
-pipe the password through stdin.  Do NOT set LCSAS_PASSWORD or
-LCSAS_PWFILE.  Type it through the terminal as a human would.
+restore.sh asks up to three things via its terminal:
 
-When the recovery binary stops with `INSERT DISC: LCSAS_<label>`,
-switch out the disc with `disc-loader insert <label>` from a
-fresh shell (not via tmux), then `tmux send-keys -t r '' C-m`
-to acknowledge the prompt.
+  1. `Repository:` — multi-tenant archives list the available
+     tenant names.  Type `alpha` (the only tenant you have the
+     password for) and press Enter.  Single-tenant archives skip
+     this.
+  2. `Password:` — type the contents of ~/tenant-alpha.pw and
+     press Enter.  Do NOT pipe the password through stdin.  Do
+     NOT set LCSAS_PASSWORD or LCSAS_PWFILE.  Type it through
+     the terminal as a human would.
+  3. `INSERT DISC: LCSAS_<label>` — the recovery binary needs
+     another disc.  Switch the disc with `disc-loader insert
+     <label>` from a fresh shell (not via tmux), then
+     `tmux send-keys -t r '' C-m` to acknowledge.
 
 WHAT YOU MAY NOT DO
 ===================

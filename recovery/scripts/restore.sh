@@ -239,6 +239,15 @@ else
 fi
 OS="$(uname -s 2>/dev/null || printf 'Linux\n')"
 
+# IMPORTANT: $TARGET above is the *user-supplied restore directory*
+# (positional arg 1 or 2).  From here on we need a separate name for
+# the per-platform rust-triple that selects which binary to dispatch
+# to under recovery/bin/.  Stuff the user's TARGET into TARGET_DIR
+# and free up TARGET to hold the triple — which the rest of the
+# script reads when computing $RESTORE_BIN / $RUSTIC_BIN paths.
+TARGET_DIR="$TARGET"
+TARGET=""
+
 if [ -n "${LCSAS_TARGET:-}" ]; then
     TARGET="$LCSAS_TARGET"
 else
@@ -276,14 +285,154 @@ else
     esac
 fi
 
-# Legacy single-axis $ARCH retained for callers reading it post-source,
-# but new code paths should use $TARGET.
+# Legacy single-axis $ARCH retained for callers reading it post-source.
 ARCH="$TARGET"
 
-# ── Password file ─────────────────────────────────────────────────
+# Cleanup hook for the temporary password file we may write below.
+PWFILE_TMP=""
+cleanup() {
+    [ -n "$PWFILE_TMP" ] && [ -f "$PWFILE_TMP" ] && rm -f "$PWFILE_TMP"
+}
+trap cleanup EXIT INT TERM
+
+# ── Repo discovery ────────────────────────────────────────────────
+#
+# A restic-format repo is a directory containing keys/ and index/
+# subdirs.  The historical layout placed it directly at
+# ${RECOVERY}/repo (used by restore_legacy.sh).  Modern LCSAS
+# archives instead carry per-tenant repos under metadata/<tenant>/
+# on every disc — the "holographic" layout where the meta disc and
+# every data disc both ship the repo metadata for every backed-up
+# tenant.  Probe both layouts, plus any currently-mounted disc.
+#
+# When multiple candidate repos are found (typical: a multi-tenant
+# archive), the LCSAS_REPO environment variable selects one by
+# tenant name.  If exactly one candidate exists we use it;
+# otherwise we list and exit with a helpful hint.
+
+REPO=""
+REPO_CANDIDATES=""
+add_repo_candidate() {
+    # $1: path to inspect.  If it looks like a restic repo (keys/ +
+    # index/), append it to REPO_CANDIDATES (newline-separated).
+    [ -d "$1/keys" ] && [ -d "$1/index" ] || return 0
+    REPO_CANDIDATES="$REPO_CANDIDATES
+$1"
+}
+
+# Direct layouts (legacy).
+add_repo_candidate "$RECOVERY/repo"
+add_repo_candidate "$RECOVERY"
+# Holographic layout — per-tenant under metadata/<name>/.
+for cand in "$RECOVERY/metadata"/*; do
+    [ -d "$cand" ] || continue
+    add_repo_candidate "$cand"
+done
+# Any currently-mounted archive disc (the same directories the
+# pack-search scan below uses).  We add the repos themselves here
+# so a user can run `sh restore.sh` immediately after mounting a
+# single data disc — no manual symlink dance required.
+#
+# The set of directories scanned is overridable via LCSAS_MOUNT_DIRS
+# (colon-separated list), useful for tests and for unusual setups
+# (e.g. systemd-mounted /run/media/$USER/).  Default mimics the
+# /Volumes /media /mnt convention used elsewhere in the script.
+LCSAS_MOUNT_DIRS_DEFAULT="/Volumes:/media/$(id -un 2>/dev/null):/media:/mnt"
+LCSAS_MOUNT_DIRS_EFFECTIVE="${LCSAS_MOUNT_DIRS-$LCSAS_MOUNT_DIRS_DEFAULT}"
+OLD_IFS="$IFS"; IFS=":"
+for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
+    IFS="$OLD_IFS"
+    [ -n "$parent" ] && [ -d "$parent" ] || continue
+    # The mount point itself may directly contain metadata/* (when
+    # /mnt is the disc root), so probe both /mnt itself and any
+    # children of /mnt.
+    for mnt in "$parent" "$parent"/*; do
+        [ -d "$mnt" ] || continue
+        for cand in "$mnt/metadata"/*; do
+            [ -d "$cand" ] || continue
+            add_repo_candidate "$cand"
+        done
+    done
+    IFS=":"
+done
+IFS="$OLD_IFS"
+
+# De-duplicate REPO_CANDIDATES preserving order, then pick one.
+REPO_CANDIDATES="$(printf '%s\n' "$REPO_CANDIDATES" \
+                  | awk 'NF && !seen[$0]++')"
+
+# Count non-empty lines (printf "\n" | wc -l returns 1 — useless).
+# `grep -c` exits 1 when nothing matches; under `set -e` that would
+# kill the script, so wrap in `|| true` and let the count fall to 0.
+REPO_COUNT="$(printf '%s\n' "$REPO_CANDIDATES" | grep -c '^.' || true)"
+case "$REPO_COUNT" in
+    0)
+        cat >&2 <<EOF
+no restic repo found.
+
+The recovery script looked for a directory with keys/ and index/
+subdirs under:
+
+  - $RECOVERY/repo
+  - $RECOVERY
+  - $RECOVERY/metadata/*/    (the holographic layout LCSAS uses)
+  - /mnt/metadata/*/         and any other currently-mounted disc
+
+If you have a data disc, insert it and mount it (typically:
+sudo mount /dev/sr0 /mnt), then re-run this script.
+EOF
+        exit 1
+        ;;
+    1)
+        REPO="$(printf '%s\n' "$REPO_CANDIDATES" | head -n 1)"
+        ;;
+    *)
+        # Multi-tenant archive.  Honour LCSAS_REPO if it matches a
+        # candidate's basename (`alpha`, `bravo`, ...); otherwise
+        # prompt the operator to pick one.
+        REPO_NAMES=""
+        for cand in $REPO_CANDIDATES; do
+            REPO_NAMES="$REPO_NAMES $(basename "$cand")"
+        done
+        REPO_NAMES="${REPO_NAMES# }"
+        if [ -n "${LCSAS_REPO:-}" ]; then
+            for cand in $REPO_CANDIDATES; do
+                base="$(basename "$cand")"
+                if [ "$base" = "$LCSAS_REPO" ]; then
+                    REPO="$cand"
+                    break
+                fi
+            done
+            if [ -z "$REPO" ]; then
+                printf 'LCSAS_REPO=%s not among available repositories: %s\n' \
+                       "$LCSAS_REPO" "$REPO_NAMES" >&2
+                exit 1
+            fi
+        else
+            printf 'Multiple repositories on this archive: %s\n' \
+                   "$REPO_NAMES" >&2
+            printf 'Repository: ' >&2
+            IFS= read -r repo_choice
+            for cand in $REPO_CANDIDATES; do
+                base="$(basename "$cand")"
+                if [ "$base" = "$repo_choice" ]; then
+                    REPO="$cand"
+                    break
+                fi
+            done
+            if [ -z "$REPO" ]; then
+                printf 'no repository named %s; choose from: %s\n' \
+                       "$repo_choice" "$REPO_NAMES" >&2
+                exit 1
+            fi
+        fi
+        ;;
+esac
+printf '[restore.sh] using repository %s\n' "$REPO" >&2
+
+# ── Password file (now that we know which repo we're decrypting) ──
 
 PWFILE="${LCSAS_PWFILE:-}"
-PWFILE_TMP=""
 if [ -z "$PWFILE" ]; then
     PWFILE_TMP="$(mktemp /tmp/lcsas-pw.XXXXXX)"
     chmod 600 "$PWFILE_TMP"
@@ -296,27 +445,8 @@ if [ -z "$PWFILE" ]; then
         printf '%s\n' "$pw" > "$PWFILE"
     fi
 fi
-cleanup() {
-    [ -n "$PWFILE_TMP" ] && [ -f "$PWFILE_TMP" ] && rm -f "$PWFILE_TMP"
-}
-trap cleanup EXIT INT TERM
 
-# ── Repo discovery ────────────────────────────────────────────────
-
-REPO=""
-for candidate in "$RECOVERY/repo" "$RECOVERY"; do
-    if [ -d "$candidate/keys" ] && [ -d "$candidate/index" ]; then
-        REPO="$candidate"
-        break
-    fi
-done
-if [ -z "$REPO" ]; then
-    printf 'no restic repo (with keys/ and index/) found under %s\n' \
-           "$RECOVERY" >&2
-    exit 1
-fi
-
-mkdir -p "$TARGET"
+mkdir -p "$TARGET_DIR"
 
 # ── Auto-discover other mounted discs for multi-disc recovery ─────
 #
@@ -428,7 +558,7 @@ if [ -x "$RESTORE_BIN" ]; then
     # not hold it through the exec barrier.
     [ -n "${META_DISC:-}" ] && cd / 2>/dev/null || true
     exec "$RESTORE_BIN" --repo "$REPO" --password-file "$PWFILE" \
-                       --target "$TARGET" --snapshot "$SNAP" \
+                       --target "$TARGET_DIR" --snapshot "$SNAP" \
                        $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG
 fi
 
@@ -438,7 +568,7 @@ RUSTIC_BIN="$RECOVERY/bin/$TARGET/rustic-static"
 if [ -x "$RUSTIC_BIN" ]; then
     printf '[tier 2] using vendored rustic-static (%s)\n' "$TARGET" >&2
     exec "$RUSTIC_BIN" --repository "$REPO" --password-file "$PWFILE" \
-                     restore "$SNAP" "$TARGET"
+                     restore "$SNAP" "$TARGET_DIR"
 fi
 
 # ─────────────────────────────────────────────────────────────────
@@ -473,7 +603,19 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
     if [ -n "$PYBIN" ] && [ -n "$PYREST" ]; then
         printf '[tier 3] falling back to Python (%s + %s)\n' \
                "$PYBIN" "$PYREST" >&2
-        exec "$PYBIN" "$PYREST" "$REPO" "$TARGET" --password-file "$PWFILE"
+        # standalone_restorer.py CLI is flag-based:
+        #   --repo DIR --password-file FILE --target DIR [--snapshot ID]
+        # See src/lcsas/restore/standalone_builder.py:_cli_main.
+        # The non-"latest" sentinel is passed straight through.
+        TIER3_SNAP_ARGS=""
+        if [ -n "$SNAP" ] && [ "$SNAP" != "latest" ]; then
+            TIER3_SNAP_ARGS="--snapshot $SNAP"
+        fi
+        exec "$PYBIN" "$PYREST" \
+             --repo "$REPO" \
+             --password-file "$PWFILE" \
+             --target "$TARGET_DIR" \
+             $TIER3_SNAP_ARGS
     fi
 fi
 

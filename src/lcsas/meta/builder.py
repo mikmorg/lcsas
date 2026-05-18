@@ -1437,15 +1437,7 @@ cd /tmp/lcsas-meta
 sudo umount /mnt/meta
 ```
 
-### 2. Insert **any** archive disc
-
-Every LCSAS data disc is holographic: it carries the full catalog, so
-any one of them can bootstrap the restore. Higher-numbered discs have
-fresher catalogs (they know about more volumes), so starting with the
-highest-numbered disc minimises the chance of needing a catalog upgrade
-mid-restore — but any disc will work.
-
-### 3. Run the restore
+### 2. Run the restore
 
 ```sh
 sh restore.sh ~/restored/ latest
@@ -1458,17 +1450,23 @@ The two positional arguments are:
 | 1 | `TARGET_DIR` — where restored files are written | `/tmp/restored` |
 | 2 | `SNAPSHOT_ID` or the word `latest` | `latest` |
 
-The script will:
+The script auto-discovers the repository metadata from the meta
+volume itself (`metadata/<tenant>/`), so you do **not** need to
+insert a data disc before starting — the script will prompt you
+for each one as the recovery binary needs it.  The script will:
 
-1. Print `Password:` on the terminal and wait for the encryption
-   password on stdin. **Type the contents of your key file** and
-   press Enter. The password is read in the clear (POSIX-sh has
-   no silent-read); do not pipe it from `echo` — type it.
-2. Auto-detect any already-mounted archive disc and pass it to the
-   recovery binary as a pack source.
+1. List the repositories on this archive.  If more than one
+   tenant is present, it prints `Repository:` and waits for you
+   to **type the tenant name** (`alpha`, `bravo`, …) and press
+   Enter.  Single-tenant archives skip this prompt.  You can
+   also set `LCSAS_REPO=<name>` in the environment to preselect.
+2. Print `Password:` and wait for the encryption password on
+   stdin.  **Type the contents of your key file** and press
+   Enter.  The password is read in the clear (POSIX-sh has no
+   silent-read); do not pipe it from `echo` — type it.
 3. `exec` the highest-priority recovery tier available
    (`bin/<arch>/lcsas-restore` → `bin/<arch>/rustic-static` →
-   bundled CPython + `standalone_restorer.py`). Only one tier
+   bundled CPython + `standalone_restorer.py`).  Only one tier
    runs per invocation.
 4. When a pack is missing from the disc currently in the drive,
    the recovery binary stops and prints `INSERT DISC: LCSAS_<label>`
@@ -1478,6 +1476,12 @@ The script will:
 If a disc is unreadable or the system crashes mid-restore you can
 re-run the same command — the pack cache under the work directory
 persists across runs.
+
+> **Tip:** if you mount a data disc at `/mnt` (or `/media/...`)
+> before starting, the recovery binary uses its on-disc catalog
+> for friendlier disc-swap prompts (it prints the disc *label*
+> rather than the pack hash) and skips re-prompting for packs
+> already on the mounted disc.
 
 > **Automation / CI only.** Human operators recovering from disaster
 > must use the interactive `restore.sh` above. The non-interactive
