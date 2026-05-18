@@ -549,26 +549,65 @@ if [ -n "$catalog_pick" ]; then
     printf '[lcsas-restore] using catalog %s\n' "$catalog_pick" >&2
 fi
 
-# ── Tier 1: prebuilt lcsas-restore (C89, static, no Python) ───────
+# ── Tier dispatch ─────────────────────────────────────────────────
+#
+# Each tier is tried in priority order.  The default behavior is to
+# `exec` the first available binary — once tier 1 starts, the shell
+# is gone and there is no fall-through if tier 1 crashes mid-restore.
+# That matches the bare-minimum recovery story: tier 1 IS the
+# recovery, and it has to work.
+#
+# Opt-in fallback (LCSAS_TIER_FALLBACK=1): run the tier as a
+# subprocess, capture exit code, and fall through to the next tier
+# on non-zero.  Useful when the operator suspects a bug in a higher
+# tier and wants the script to walk the cascade for them.  Tier 3 is
+# always `exec`'d (it's the last resort — nothing to fall back to).
 
 RESTORE_BIN="$RECOVERY/bin/$TARGET/lcsas-restore"
+RUSTIC_BIN="$RECOVERY/bin/$TARGET/rustic-static"
+FALLBACK="${LCSAS_TIER_FALLBACK:-0}"
+
+# ── Tier 1: prebuilt lcsas-restore (C89, static, no Python) ───────
+
 if [ -x "$RESTORE_BIN" ]; then
     printf '[tier 1] using prebuilt lcsas-restore (%s)\n' "$TARGET" >&2
     # Drop cwd outside the meta-disc before exec, so the kernel does
     # not hold it through the exec barrier.
     [ -n "${META_DISC:-}" ] && cd / 2>/dev/null || true
-    exec "$RESTORE_BIN" --repo "$REPO" --password-file "$PWFILE" \
+    if [ "$FALLBACK" = "1" ]; then
+        # `set -e` would kill the script on any tier-1 non-zero; the
+        # `|| true` lets us capture $? and decide whether to advance.
+        tier1_rc=0
+        "$RESTORE_BIN" --repo "$REPO" --password-file "$PWFILE" \
+                       --target "$TARGET_DIR" --snapshot "$SNAP" \
+                       $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG \
+                       || tier1_rc=$?
+        if [ $tier1_rc -eq 0 ]; then exit 0; fi
+        printf '[tier 1] exited %d, falling through to tier 2\n' \
+               $tier1_rc >&2
+    else
+        exec "$RESTORE_BIN" --repo "$REPO" --password-file "$PWFILE" \
                        --target "$TARGET_DIR" --snapshot "$SNAP" \
                        $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG
+    fi
 fi
 
 # ── Tier 2: vendored rustic-static (no Python) ────────────────────
 
-RUSTIC_BIN="$RECOVERY/bin/$TARGET/rustic-static"
 if [ -x "$RUSTIC_BIN" ]; then
     printf '[tier 2] using vendored rustic-static (%s)\n' "$TARGET" >&2
-    exec "$RUSTIC_BIN" --repository "$REPO" --password-file "$PWFILE" \
+    if [ "$FALLBACK" = "1" ]; then
+        tier2_rc=0
+        "$RUSTIC_BIN" --repository "$REPO" --password-file "$PWFILE" \
+                     restore "$SNAP" "$TARGET_DIR" \
+                     || tier2_rc=$?
+        if [ $tier2_rc -eq 0 ]; then exit 0; fi
+        printf '[tier 2] exited %d, falling through to tier 3\n' \
+               $tier2_rc >&2
+    else
+        exec "$RUSTIC_BIN" --repository "$REPO" --password-file "$PWFILE" \
                      restore "$SNAP" "$TARGET_DIR"
+    fi
 fi
 
 # ─────────────────────────────────────────────────────────────────

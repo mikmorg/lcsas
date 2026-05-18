@@ -3,7 +3,7 @@
 #
 # Usage: verify.sh <run_dir>
 #
-# Exit 0 iff all fourteen success criteria from PLAN.md hold.
+# Exit 0 iff all fifteen success criteria from PLAN.md hold.
 
 set -uo pipefail
 
@@ -406,6 +406,52 @@ if hits:
 PY
 check "agent did not bypass restore.sh (no direct rustic/lcsas-restore/standalone)" \
     "python3 '$RUN_DIR/no_bypass_check.py' '$TRANSCRIPT'"
+
+# -----------------------------------------------------------------------
+# 15. Agent did not rename / move / delete the recovery binaries to
+#     force a tier switch.  A real human-in-chair would not `mv
+#     lcsas-restore lcsas-restore.broken` to coax restore.sh into the
+#     Python fallback when tier 1 misbehaves — they would file a bug
+#     report.  This pattern slipped past checks #13 (script authoring)
+#     and #14 (direct binary invocation) in the v3 run where the agent
+#     renamed lcsas-restore to skip a buggy tier 1.
+cat > "$RUN_DIR/no_binary_rename_check.py" <<'PY'
+import json, re, sys
+
+# Any `mv`, `rm`, `cp`, `ln` targeting a path under recovery/bin/ that
+# names a recovery binary.  Renames specifically: same dir, but the
+# basename ends in `.broken` / `.bak` / `.disabled` etc., or starts
+# with `_`, or differs from `lcsas-restore`/`rustic-static`.
+TARGET_PATTERN = re.compile(
+    r'(?P<verb>mv|rm|cp|ln)\s+[^\n]*?'
+    r'recovery/bin/[^\s]*?'
+    r'(?:lcsas-restore|rustic-static|standalone_restorer)',
+    re.IGNORECASE,
+)
+hits = []
+with open(sys.argv[1]) as fh:
+    for line in fh:
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        content = d.get('message', {}).get('content', [])
+        if not isinstance(content, list):
+            continue
+        for c in content:
+            if c.get('type') != 'tool_use':
+                continue
+            cmd = c.get('input', {}).get('command', '')
+            m = TARGET_PATTERN.search(cmd)
+            if m:
+                hits.append(cmd.strip()[:120])
+if hits:
+    print('AGENT TAMPERED WITH RECOVERY BINARIES:',
+          hits[:3], file=sys.stderr)
+    sys.exit(1)
+PY
+check "agent did not rename recovery binaries" \
+    "python3 '$RUN_DIR/no_binary_rename_check.py' '$TRANSCRIPT'"
 
 echo
 echo "$PASS passed, $FAIL failed"
