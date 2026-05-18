@@ -92,6 +92,9 @@ def test_tier3_invokes_with_named_flags(tmp_path: Path) -> None:
         **os.environ,
         "PATH": f"{pybin_dir}:" + os.environ.get("PATH", ""),
         "LCSAS_MOUNT_DIRS": "",
+        # No real data discs in the fixture; bypass the discovery gate
+        # so the tier-3 dispatch logic under test actually runs.
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         # Force the script down the tier-3 path: no tier-1 or tier-2
         # binary is installed at recovery/bin/<target>/, so it falls
         # through to Python.
@@ -162,6 +165,9 @@ def test_tier3_passes_snapshot_when_not_latest(tmp_path: Path) -> None:
         **os.environ,
         "PATH": f"{pybin_dir}:" + os.environ.get("PATH", ""),
         "LCSAS_MOUNT_DIRS": "",
+        # No real data discs in the fixture; bypass the discovery gate
+        # so the tier-3 dispatch logic under test actually runs.
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     res = subprocess.run(
         ["sh", str(RESTORE_SH), str(recovery), str(target),
@@ -192,6 +198,9 @@ def test_tier3_omits_snapshot_when_latest(tmp_path: Path) -> None:
         **os.environ,
         "PATH": f"{pybin_dir}:" + os.environ.get("PATH", ""),
         "LCSAS_MOUNT_DIRS": "",
+        # No real data discs in the fixture; bypass the discovery gate
+        # so the tier-3 dispatch logic under test actually runs.
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
     }
     res = subprocess.run(
         ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],

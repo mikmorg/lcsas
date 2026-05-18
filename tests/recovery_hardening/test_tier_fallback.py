@@ -75,6 +75,9 @@ def _run(recovery: Path, target_dir: Path, env_extra: dict[str, str],
     env = {
         **os.environ,
         "LCSAS_MOUNT_DIRS": "",
+        # These tests exercise tier dispatch with stub binaries; no
+        # real data discs are mounted, so bypass the discovery gate.
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         **env_extra,
     }
     return subprocess.run(
@@ -153,6 +156,9 @@ def test_fallback_to_tier3_when_tier1_and_tier2_crash(tmp_path: Path) -> None:
         **os.environ,
         "LCSAS_MOUNT_DIRS": "",
         "LCSAS_TIER_FALLBACK": "1",
+        # Stub binaries / no real data discs in the fixture — bypass the
+        # discovery gate so this test exercises tier dispatch.
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         "PATH": f"{pybin_dir}:" + os.environ.get("PATH", ""),
     }
     res = subprocess.run(

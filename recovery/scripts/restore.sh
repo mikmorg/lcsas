@@ -183,6 +183,13 @@ case "${1:-}" in
         cat <<EOF
 usage: $0 [RECOVERY_ROOT] TARGET_DIR [SNAPSHOT_ID|latest]
 
+QUICK START:
+  1. Insert ANY data disc into your drive.
+  2. Mount it (typically: sudo mount /dev/sr0 /mnt).
+  3. Run: sh /mnt/restore.sh ~/restored/ latest
+  4. Answer the prompts (repository, password).
+  5. When asked to swap discs, do so and press Enter.
+
   RECOVERY_ROOT (auto-detected when restore.sh is run from inside the
   recovery tree) must contain bin/<arch>/lcsas-restore and/or src/.
   TARGET_DIR is where to write restored files (default: /tmp/restored).
@@ -409,17 +416,36 @@ EOF
                 exit 1
             fi
         else
-            printf 'Multiple repositories on this archive: %s\n' \
-                   "$REPO_NAMES" >&2
-            printf 'Repository: ' >&2
-            IFS= read -r repo_choice
+            printf 'Multiple repositories on this archive:\n' >&2
+            repo_idx=0
             for cand in $REPO_CANDIDATES; do
-                base="$(basename "$cand")"
-                if [ "$base" = "$repo_choice" ]; then
-                    REPO="$cand"
-                    break
-                fi
+                repo_idx=$((repo_idx + 1))
+                printf '  %d) %s\n' "$repo_idx" "$(basename "$cand")" >&2
             done
+            printf 'Choose a repository (number or name): ' >&2
+            IFS= read -r repo_choice
+            # Number form: positional-arg lookup avoids `eval` on input.
+            case "$repo_choice" in
+                ''|*[!0-9]*) ;;
+                *)
+                    # shellcheck disable=SC2086
+                    set -- $REPO_CANDIDATES
+                    if [ "$repo_choice" -ge 1 ] \
+                       && [ "$repo_choice" -le $# ]; then
+                        eval "REPO=\${$repo_choice}"
+                    fi
+                    ;;
+            esac
+            # Name form (fallback / legacy): match by basename.
+            if [ -z "$REPO" ]; then
+                for cand in $REPO_CANDIDATES; do
+                    base="$(basename "$cand")"
+                    if [ "$base" = "$repo_choice" ]; then
+                        REPO="$cand"
+                        break
+                    fi
+                done
+            fi
             if [ -z "$REPO" ]; then
                 printf 'no repository named %s; choose from: %s\n' \
                        "$repo_choice" "$REPO_NAMES" >&2
@@ -476,24 +502,42 @@ add_pack_search() {
     fi
 }
 
-# macOS / BSD: /Volumes/*
-if [ -d /Volumes ]; then
-    for mnt in /Volumes/*; do
+# Walk LCSAS_MOUNT_DIRS_EFFECTIVE (same list the repo-discovery loop
+# above honours) so tests and unusual setups can constrain the scan.
+OLD_IFS="$IFS"; IFS=":"
+for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
+    IFS="$OLD_IFS"
+    [ -n "$parent" ] && [ -d "$parent" ] || { IFS=":"; continue; }
+    for mnt in "$parent"/*; do
         [ -d "$mnt" ] || continue
         # Don't list the recovery medium itself again.
         [ "$mnt" = "$RECOVERY" ] && continue
         add_pack_search "$mnt"
     done
-fi
-# Linux: /media/$USER/*, /media/*, /mnt/*
-for parent in "/media/$(id -un 2>/dev/null)" /media /mnt; do
-    [ -d "$parent" ] || continue
-    for mnt in "$parent"/*; do
-        [ -d "$mnt" ] || continue
-        [ "$mnt" = "$RECOVERY" ] && continue
-        add_pack_search "$mnt"
-    done
+    IFS=":"
 done
+IFS="$OLD_IFS"
+
+# Hard-error when no data discs were discovered AND the resolved
+# $REPO doesn't itself carry a data/ subdir (i.e. it's not a legacy
+# self-contained repo).  Without this, the recovery binary will
+# eventually fail with a less actionable "no packs found" message
+# after the operator has already typed a password.
+if [ -z "$PACK_SEARCH_ARGS" ] && [ ! -d "$REPO/data" ] \
+   && [ "${LCSAS_ALLOW_NO_PACK_SEARCH:-0}" != "1" ]; then
+    cat >&2 <<EOF
+ERROR: no data discs detected at any of: $LCSAS_MOUNT_DIRS_EFFECTIVE
+       The recovery binary will be unable to find any packs.
+
+       Insert a data disc, mount it (typically:
+         sudo mount /dev/sr0 /mnt
+       ) and re-run this script.
+
+       To suppress this check (advanced / scripted environments)
+       set LCSAS_ALLOW_NO_PACK_SEARCH=1.
+EOF
+    exit 1
+fi
 
 # Pass the meta-disc path through so the C-side locator excludes it
 # from its own search list and drops cwd outside of it before prompts.
