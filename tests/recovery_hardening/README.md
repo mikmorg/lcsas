@@ -26,6 +26,7 @@ make test-recovery-hardening   # this tier only
 | `test_tier3_invocation.py` | `restore.sh` invoking `standalone_restorer.py` with the wrong CLI form (positional `$REPO $TARGET` instead of `--repo X --target Y --password-file Z`). Also pins `$TARGET_DIR` vs `$TARGET` semantics so the recovery binary doesn't get the arch triple as its target dir. |
 | `test_verify_self.py` | `verify.sh` failing open: missing-fixture passing silently, regex bugs that let cheats slip through, removing a check entirely. Covers all 14 production checks + the fail-closed fixture guard. |
 | `test_setup_static_guards.py` | Blind-test `setup.py` regressions: FIXTURE under `/mnt` (shadowable), missing source-tree lockdown step (lcsas-blind can `find / -path '*sources/alpha*' && cp`). |
+| `test_readme_simplification.py` | `README_RESTORE` regressing to the old 4-step `mount`/`cp -r`/`cd`/`umount` recipe (restore.sh relocates itself), the `LCSAS_NO_RELOCATE` override going undocumented, or the Ctrl+Z single-terminal disc-swap advice being removed. |
 
 ## Adding a new hardening test
 
