@@ -55,6 +55,22 @@ from lcsas.restore._aes_pure import (
     key_schedule,
 )
 
+# ── Progress reporting tunables ──────────────────────────────────
+#
+# Tier-3 restore is slow (~1 MB/s).  An operator watching a quiet
+# terminal can't tell "frozen" from "still working", so we emit a
+# periodic status line whenever EITHER threshold is reached:
+#
+#   * _PROGRESS_FILES_INTERVAL files have been restored since last emit, OR
+#   * _PROGRESS_BYTES_INTERVAL bytes have been written since last emit.
+#
+# These are module-level so tests can monkeypatch them down to fire
+# on a tiny synthetic repo.  Set environment variable LCSAS_PROGRESS=0
+# to silence progress output entirely.
+_PROGRESS_FILES_INTERVAL = 50
+_PROGRESS_BYTES_INTERVAL = 64 * 1024 * 1024  # 64 MiB
+
+
 # ── Optional zstd ────────────────────────────────────────────────
 
 _ZSTD_MAGIC = b"\x28\xB5\x2F\xFD"
@@ -344,6 +360,19 @@ class PurePythonRestorer:
         self._blob_index: dict[str, BlobLocation] | None = None
         self._snapshots: list[SnapshotMeta] | None = None
 
+        # Progress reporting state — reset at the top of every
+        # restore() call.  _progress_enabled is read from the env once
+        # at construction so the operator can silence output with
+        # LCSAS_PROGRESS=0 without re-reading the env per file.
+        self._progress_enabled: bool = (
+            os.environ.get("LCSAS_PROGRESS", "1") != "0"
+        )
+        self._progress_total_files: int = 0
+        self._progress_done_files: int = 0
+        self._progress_done_bytes: int = 0
+        self._progress_last_emit_files: int = 0
+        self._progress_last_emit_bytes: int = 0
+
     # ── Public API ───────────────────────────────────────────────
 
     def restore(
@@ -373,9 +402,25 @@ class PurePythonRestorer:
              f"({', '.join(snap.paths)})")
         _log(f"Target: {target}")
 
+        # Reset progress state for this restore call.  The pre-pass
+        # below only reads tree blobs (which are small), not data
+        # blobs, so the cost is negligible relative to the restore.
+        self._progress_done_files = 0
+        self._progress_done_bytes = 0
+        self._progress_last_emit_files = 0
+        self._progress_last_emit_bytes = 0
+        self._progress_total_files = 0
+        if self._progress_enabled:
+            self._progress_total_files = self._count_files(snap.tree)
+            _log(f"Counted {self._progress_total_files} file(s) to restore.")
+
         target.mkdir(parents=True, exist_ok=True)
         self._restore_tree(snap.tree, target)
 
+        # Force a final 100% line so the last reported count matches
+        # the total — otherwise the operator sees e.g. 47/50 and
+        # wonders if the last 3 files were skipped.
+        self._emit_progress(force=True)
         _log("Restore complete.")
         return snap
 
@@ -691,12 +736,89 @@ class PurePythonRestorer:
         path.parent.mkdir(parents=True, exist_ok=True)
         content_ids: list[str] = node.get("content", [])
 
+        bytes_written = 0
         with open(path, "wb") as f:
             for blob_id in content_ids:
                 chunk = self._read_blob(blob_id)
                 f.write(chunk)
+                bytes_written += len(chunk)
 
         self._apply_metadata(node, path)
+
+        # Update progress counters and emit a status line if either
+        # the file-count or byte-count threshold has been reached.
+        self._progress_done_files += 1
+        self._progress_done_bytes += bytes_written
+        self._emit_progress()
+
+    def _count_files(self, tree_id: str) -> int:
+        """Pre-pass: count file nodes reachable from *tree_id*.
+
+        Only tree blobs are read (which are typically a small
+        fraction of total bytes), so this is cheap even on large
+        repos.  Used to provide N/M-style progress reporting.
+        """
+        total = 0
+        # Iterative DFS to avoid recursion-depth limits on deep trees.
+        stack: list[str] = [tree_id]
+        visited: set[str] = set()
+        while stack:
+            tid = stack.pop()
+            if tid in visited:
+                continue
+            visited.add(tid)
+            try:
+                tree_data = self._read_blob(tid)
+                tree_doc = json.loads(tree_data)
+            except (KeyError, IntegrityError, json.JSONDecodeError):
+                # Corrupted or missing tree blob — give up the count;
+                # _restore_tree will surface the real error later.
+                return total
+            for node in tree_doc.get("nodes", []):
+                ntype = node.get("type", "file")
+                if ntype == "file":
+                    total += 1
+                elif ntype == "dir" and "subtree" in node:
+                    stack.append(node["subtree"])
+        return total
+
+    def _emit_progress(self, *, force: bool = False) -> None:
+        """Emit a progress line to stderr if a threshold has been hit.
+
+        No-op when ``LCSAS_PROGRESS=0`` is set in the environment.
+
+        Args:
+            force: Bypass the threshold check (used for the final
+                100% line at end of restore).
+        """
+        if not self._progress_enabled:
+            return
+
+        done_files = self._progress_done_files
+        done_bytes = self._progress_done_bytes
+        delta_files = done_files - self._progress_last_emit_files
+        delta_bytes = done_bytes - self._progress_last_emit_bytes
+        if not force and (
+            delta_files < _PROGRESS_FILES_INTERVAL
+            and delta_bytes < _PROGRESS_BYTES_INTERVAL
+        ):
+            return
+
+        # Skip the force-emit if no files have been restored yet — no
+        # point in printing "0/0 files restored, 0.0 MB" before a
+        # restore that has nothing to do.
+        if force and done_files == 0:
+            return
+
+        total = self._progress_total_files
+        mb = done_bytes / (1024 * 1024)
+        if total > 0:
+            _log(f"Progress: {done_files}/{total} files restored, {mb:.1f} MB.")
+        else:
+            _log(f"Progress: {done_files} files restored, {mb:.1f} MB.")
+
+        self._progress_last_emit_files = done_files
+        self._progress_last_emit_bytes = done_bytes
 
     def _apply_metadata(self, node: dict[str, Any], path: Path) -> None:
         """Best-effort metadata restoration (permissions, timestamps, xattrs)."""
