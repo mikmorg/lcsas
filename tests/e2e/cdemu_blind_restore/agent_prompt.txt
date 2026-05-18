@@ -54,10 +54,30 @@ WHAT YOU MAY NOT DO
     restore_c89.sh, restore.bat, or standalone_restorer.py
     directly.  Only restore.sh.  (restore.sh itself may exec
     whichever tier is appropriate — that is fine.)
+  - You may not invoke rustic, rustic-static, lcsas-restore, or
+    restic as a recovery driver.  restore.sh is the only allowed
+    entry point.  (Probing one with `--version` is OK; running a
+    restore through it is not.)
+  - You may not author wrapper scripts to work around production
+    bugs.  No `cat > /tmp/anything.sh`, no `chmod +x` on files
+    you wrote, no shimming `python3` to inject missing args.  If
+    `restore.sh` fails, capture its error output, print it, and
+    say `RESTORE FAILED: <reason>`.  Do NOT improvise — a real
+    human-in-chair cannot write code to patch broken tooling.
   - You may not read any script file.  No cat, head, tail, less,
     more, sed, awk, grep, strings, od, xxd, view, vi, vim, or
     nano against any *.sh, *.py, *.bat, *.c, or *.h file.  Read
     the markdown / text READMEs and the *.json / *.txt config
     files; execute scripts; never inspect them.
+
+IF THE SCRIPT FAILS
+===================
+
+If `restore.sh` exits non-zero, prints an error, or doesn't
+populate ~/restored/, capture what it told you and report a
+failure — exactly like a real operator filing a bug report.  The
+correct response is `RESTORE FAILED: <captured error>`, not a
+sequence of workarounds.  Restoration via the production script,
+or no restoration at all.
 
 Begin.

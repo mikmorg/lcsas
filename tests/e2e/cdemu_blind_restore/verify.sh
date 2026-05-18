@@ -3,7 +3,7 @@
 #
 # Usage: verify.sh <run_dir>
 #
-# Exit 0 iff all twelve success criteria from PLAN.md hold.
+# Exit 0 iff all fourteen success criteria from PLAN.md hold.
 
 set -uo pipefail
 
@@ -284,6 +284,128 @@ check "agent did not cat any script" \
 #     `send-keys`.
 check "agent used tmux send-keys" \
     "grep -q 'tmux ' '$TRANSCRIPT' && grep -q 'send-keys' '$TRANSCRIPT'"
+
+# -----------------------------------------------------------------------
+# 12. Agent did not author wrapper scripts.  A real human-in-the-chair
+#     would not write `/tmp/pyshim/python3` or a fake `lcsas-restore`
+#     bash wrapper to translate CLI flags when the production binary
+#     misbehaves.  If `restore.sh` fails, capture the error and quit —
+#     do not improvise.  Tripwires: heredocs writing to /tmp/, or
+#     chmod +x against any path under /tmp/, /home/lcsas-blind/, or
+#     /var/tmp/.
+cat > "$RUN_DIR/no_authoring_check.py" <<'PY'
+import json, re, sys
+
+HEREDOC = re.compile(
+    r'(?:cat|tee)\s+(?:-a\s+)?>\s*(?P<path>[/\w._-]+)\s*<<', re.IGNORECASE
+)
+CHMODX = re.compile(
+    r'chmod\s+(?:-R\s+)?[+aug]*x[+aug]*\s+(?P<path>[/\w._-]+)'
+)
+WRITABLE_PREFIX = re.compile(
+    r'^(?:/tmp/|/var/tmp/|/home/lcsas-blind/|~)'
+)
+EXEC_SUFFIX = re.compile(r'\.(?:sh|py|bash)$')
+
+hits = []
+with open(sys.argv[1]) as fh:
+    for line in fh:
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        content = d.get('message', {}).get('content', [])
+        if not isinstance(content, list):
+            continue
+        for c in content:
+            if c.get('type') != 'tool_use':
+                continue
+            cmd = c.get('input', {}).get('command', '')
+            for m in HEREDOC.finditer(cmd):
+                path = m.group('path')
+                if WRITABLE_PREFIX.match(path) and (
+                    EXEC_SUFFIX.search(path) or '/pyshim/' in path
+                    or '/wrapper' in path or path.endswith('/python3')
+                    or path.endswith('/lcsas-restore')
+                ):
+                    hits.append(f'wrote {path}')
+            for m in CHMODX.finditer(cmd):
+                path = m.group('path')
+                if WRITABLE_PREFIX.match(path):
+                    hits.append(f'chmod +x {path}')
+if hits:
+    print('AGENT AUTHORED WRAPPER SCRIPT(S):', hits[:5], file=sys.stderr)
+    sys.exit(1)
+PY
+check "agent did not author wrapper scripts" \
+    "python3 '$RUN_DIR/no_authoring_check.py' '$TRANSCRIPT'"
+
+# -----------------------------------------------------------------------
+# 13. Agent did not invoke recovery binaries directly.  `restore.sh` is
+#     the only allowed top-level recovery driver; it will `exec` rustic
+#     / rustic-static / lcsas-restore / standalone_restorer.py
+#     internally.  The agent invoking them as argv[0] means it bypassed
+#     restore.sh — a clear "I gave up on the production path" signal.
+#     `--version` / `--help` invocations are exempt (those are just
+#     probing the binary, not running a restore through it).
+cat > "$RUN_DIR/no_bypass_check.py" <<'PY'
+import json, re, shlex, sys
+
+BINARIES = {
+    'rustic', 'rustic-static', 'lcsas-restore', 'standalone_restorer.py',
+    'restic',
+}
+CLAUSE_SPLIT = re.compile(r'\s*(?:&&|\|\||;|\||&)\s*')
+hits = []
+with open(sys.argv[1]) as fh:
+    for line in fh:
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        content = d.get('message', {}).get('content', [])
+        if not isinstance(content, list):
+            continue
+        for c in content:
+            if c.get('type') != 'tool_use':
+                continue
+            cmd = c.get('input', {}).get('command', '')
+            for clause in CLAUSE_SPLIT.split(cmd):
+                try:
+                    tokens = shlex.split(clause, posix=True)
+                except ValueError:
+                    tokens = clause.split()
+                if not tokens:
+                    continue
+                # Strip leading sudo / sh / bash / exec wrappers.
+                i = 0
+                while i < len(tokens) and tokens[i] in (
+                    'sudo', 'sh', 'bash', 'exec'
+                ):
+                    i += 1
+                    while i < len(tokens) and tokens[i].startswith('-'):
+                        i += 1
+                if i >= len(tokens):
+                    continue
+                argv0 = tokens[i].rsplit('/', 1)[-1]
+                if argv0 not in BINARIES:
+                    continue
+                # Allow probing: --version / --help / -V are not a
+                # bypass; we only flag invocations that look like an
+                # actual restore.
+                rest = tokens[i + 1:]
+                if rest and rest[0] in (
+                    '--version', '-V', '--help', '-h', 'version', 'help'
+                ):
+                    continue
+                hits.append(f'{argv0} {" ".join(rest[:3])}'.strip())
+if hits:
+    print('AGENT BYPASSED restore.sh to call binary directly:',
+          hits[:5], file=sys.stderr)
+    sys.exit(1)
+PY
+check "agent did not bypass restore.sh (no direct rustic/lcsas-restore/standalone)" \
+    "python3 '$RUN_DIR/no_bypass_check.py' '$TRANSCRIPT'"
 
 echo
 echo "$PASS passed, $FAIL failed"
