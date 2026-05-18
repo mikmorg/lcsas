@@ -1,4 +1,9 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-all coverage clean blind-restore blind-restore-teardown fetch-recovery verify-recovery build-recovery
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-teardown fetch-recovery verify-recovery build-recovery
+
+# Default target: lint + typecheck + every test tier ending with the
+# recovery-hardening gate.  `make` with no args runs the full build
+# gate; CI uses the same path.
+.DEFAULT_GOAL := gate
 
 dev:
 	pip install -e ".[dev]"
@@ -21,7 +26,23 @@ test-integration:
 test-e2e:
 	pytest tests/e2e -v
 
-test-all: test-unit test-integration test-e2e
+# Recovery-hardening tests — pedantic gates that exist because every
+# bug they catch slipped through unit/integration into a real blind
+# run.  Hard-fails the build on any regression.  See
+# tests/recovery_hardening/README.md for the per-test catalogue.
+test-recovery-hardening:
+	pytest tests/recovery_hardening/ -v
+
+# Full test suite.  Recovery-hardening runs LAST: every other tier
+# (unit/integration/e2e) must succeed first; the hardening checks are
+# the final gate that says "this build is shippable."
+test-all: test-unit test-integration test-e2e test-recovery-hardening
+
+# Production build gate.  Composes lint + typecheck + the entire test
+# pyramid; the recovery-hardening tier is the final step.  Anything
+# that fails here blocks `git push`.
+gate: lint typecheck test-all
+	@echo "build gate passed."
 
 coverage:
 	pytest tests/ --cov=lcsas --cov-report=html --cov-report=term-missing

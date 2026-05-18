@@ -1,0 +1,53 @@
+# Recovery hardening tests
+
+These are the **last gate** before a build is considered shippable.
+Every test in this directory exists because a specific bug slipped
+through the unit/integration/e2e tiers and was only caught when a
+real blind-restore agent ran the production recovery path end-to-end.
+
+They are pedantic by design: many are static-analysis or stub-binary
+tests with no real e2e cost, but each one closes a concrete failure
+mode that we lived through.
+
+Run them as the final step of `make`:
+
+```
+make                       # default target == `make gate`
+make test-recovery-hardening   # this tier only
+```
+
+## Catalogue
+
+| File | Catches |
+|------|---------|
+| `test_meta_bundling_completeness.py` | Tier-1 binary for any "approved" target missing from a built meta disc (e.g. Phase 21 claimed Linux x86_64 was bundled, but the bundler silently skipped it because nobody had built it). |
+| `test_readme_invocation_parity.py` | `README_RESTORE.md` documenting the obsolete flag UX (`./restore.sh --key X --target Y`) that production `restore.sh` no longer accepts. |
+| `test_restore_discovery.py` | `restore.sh` failing to find a repo on a canonical meta-disc layout (`metadata/<tenant>/{keys,index}`); multi-tenant prompt; `LCSAS_REPO` env var honoring; legacy `/repo/` back-compat; empty-recovery error message actionability. |
+| `test_tier3_invocation.py` | `restore.sh` invoking `standalone_restorer.py` with the wrong CLI form (positional `$REPO $TARGET` instead of `--repo X --target Y --password-file Z`). Also pins `$TARGET_DIR` vs `$TARGET` semantics so the recovery binary doesn't get the arch triple as its target dir. |
+| `test_verify_self.py` | `verify.sh` failing open: missing-fixture passing silently, regex bugs that let cheats slip through, removing a check entirely. Covers all 14 production checks + the fail-closed fixture guard. |
+| `test_setup_static_guards.py` | Blind-test `setup.py` regressions: FIXTURE under `/mnt` (shadowable), missing source-tree lockdown step (lcsas-blind can `find / -path '*sources/alpha*' && cp`). |
+
+## Adding a new hardening test
+
+1. Trace the bug back to its underlying failure mode.  If you find
+   yourself writing "we should also..." while triaging, that's a
+   candidate.
+2. Name the file after the failure surface it covers, not the bug.
+   `test_tier3_invocation.py` outlives the specific tier-3-arg bug;
+   `test_tier3_arg_order_bug.py` does not.
+3. Write a docstring that explains *what failure mode this catches*
+   and *how the production code regressed*.  The catalogue above
+   reads from these.
+4. Hard-fail on any regression — no warnings, no skips except for
+   honestly-optional hosts (e.g. cross-compile toolchains a dev
+   doesn't have).  Use env vars like `LCSAS_OPTIONAL_ARCHES` for
+   the rare legitimate skip.
+5. Add a row to the catalogue table above.
+
+## Why these are the LAST step
+
+Unit tests verify functions.  Integration tests verify subsystems.
+e2e tests verify pipelines.  Hardening tests verify that **the
+production code path a real user runs** doesn't have any of the
+specific failure modes we've already paid for in pain.  If any
+hardening test fails, no other green light matters.
