@@ -593,6 +593,43 @@ if [ -n "$catalog_pick" ]; then
     printf '[lcsas-restore] using catalog %s\n' "$catalog_pick" >&2
 fi
 
+# ── Session log helper ───────────────────────────────────────────
+#
+# Append one ISO-8601 UTC line to $HOME/.lcsas-restore-log so a
+# repeat operator can see what worked last time.  Silently skipped
+# when $HOME is unset/empty or not writable -- the log is a
+# convenience, never a precondition for restore success.
+#
+# Disc count is best-effort: we count --pack-search dirs that
+# existed at start time.  The tier-1 binary may handle additional
+# swaps internally; that delta is not visible here.
+
+session_disc_count() {
+    # Count `--pack-search` flag tokens in $PACK_SEARCH_ARGS.  awk
+    # avoids `set -- $PACK_SEARCH_ARGS`, which would clobber the
+    # caller's positional parameters.
+    printf '%s\n' "$PACK_SEARCH_ARGS" \
+        | awk '{ for (i = 1; i <= NF; i++) if ($i == "--pack-search") n++ }
+               END { print n + 0 }'
+}
+
+write_session_log() {
+    # $1 = tier number (1|2|3).  All other context comes from the
+    # script's environment ($REPO, $TARGET_DIR, $SNAP, etc.).
+    _tier="$1"
+    [ -n "${HOME:-}" ] || return 0
+    [ -d "$HOME" ] || return 0
+    [ -w "$HOME" ] || return 0
+    _logfile="$HOME/.lcsas-restore-log"
+    _ts="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || true)"
+    [ -n "$_ts" ] || return 0
+    _tenant="$(basename "$REPO" 2>/dev/null || printf 'unknown')"
+    _discs="$(session_disc_count)"
+    _line="$_ts  tenant=$_tenant  target=$TARGET_DIR  snapshot=$SNAP"
+    _line="$_line  tier=$_tier  discs=$_discs"
+    printf '%s\n' "$_line" >> "$_logfile" 2>/dev/null || true
+}
+
 # ── Tier dispatch ─────────────────────────────────────────────────
 #
 # Each tier is tried in priority order.  The default behavior is to
@@ -626,10 +663,15 @@ if [ -x "$RESTORE_BIN" ]; then
                        --target "$TARGET_DIR" --snapshot "$SNAP" \
                        $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG \
                        || tier1_rc=$?
-        if [ $tier1_rc -eq 0 ]; then exit 0; fi
+        if [ $tier1_rc -eq 0 ]; then write_session_log 1; exit 0; fi
         printf '[tier 1] exited %d, falling through to tier 2\n' \
                $tier1_rc >&2
     else
+        # We're about to exec -- write the session log anticipatorily.
+        # If the binary later crashes mid-restore the log line is a
+        # slight lie, but the alternative (no log on the default code
+        # path) is worse for the second-time operator UX.
+        write_session_log 1
         exec "$RESTORE_BIN" --repo "$REPO" --password-file "$PWFILE" \
                        --target "$TARGET_DIR" --snapshot "$SNAP" \
                        $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG
@@ -645,10 +687,11 @@ if [ -x "$RUSTIC_BIN" ]; then
         "$RUSTIC_BIN" --repository "$REPO" --password-file "$PWFILE" \
                      restore "$SNAP" "$TARGET_DIR" \
                      || tier2_rc=$?
-        if [ $tier2_rc -eq 0 ]; then exit 0; fi
+        if [ $tier2_rc -eq 0 ]; then write_session_log 2; exit 0; fi
         printf '[tier 2] exited %d, falling through to tier 3\n' \
                $tier2_rc >&2
     else
+        write_session_log 2
         exec "$RUSTIC_BIN" --repository "$REPO" --password-file "$PWFILE" \
                      restore "$SNAP" "$TARGET_DIR"
     fi
@@ -694,6 +737,7 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         if [ -n "$SNAP" ] && [ "$SNAP" != "latest" ]; then
             TIER3_SNAP_ARGS="--snapshot $SNAP"
         fi
+        write_session_log 3
         exec "$PYBIN" "$PYREST" \
              --repo "$REPO" \
              --password-file "$PWFILE" \
