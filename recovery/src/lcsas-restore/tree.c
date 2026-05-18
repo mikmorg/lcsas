@@ -21,6 +21,62 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define LCSAS_PROGRESS_DEFAULT_BLOBS_PER_TICK 16ULL
+#define LCSAS_PROGRESS_DEFAULT_BYTES_PER_TICK (1024ULL * 1024ULL)
+
+void
+lcsas_progress_init(lcsas_progress *p, unsigned long long total_hint)
+{
+    if (!p) return;
+    p->enabled = 1;
+    p->total_blob_hint = total_hint;
+    p->blobs_done = 0;
+    p->bytes_done = 0;
+    p->last_tick_blobs = 0;
+    p->last_tick_bytes = 0;
+    p->blobs_per_tick = LCSAS_PROGRESS_DEFAULT_BLOBS_PER_TICK;
+    p->bytes_per_tick = LCSAS_PROGRESS_DEFAULT_BYTES_PER_TICK;
+}
+
+static void
+emit_progress_line(const lcsas_progress *p)
+{
+    /* Render bytes as integer MB to keep the format `\d+/\d+` clean
+     * for downstream regex matching (no decimal point in the number). */
+    unsigned long long mb = p->bytes_done / (1024ULL * 1024ULL);
+    fprintf(stderr,
+            "[lcsas-restore] progress: %llu/%llu blobs, %llu MB\n",
+            p->blobs_done, p->total_blob_hint, mb);
+}
+
+void
+lcsas_progress_tick(lcsas_progress *p, unsigned long long blob_len)
+{
+    unsigned long long d_blobs;
+    unsigned long long d_bytes;
+
+    if (!p || !p->enabled) return;
+    p->blobs_done++;
+    p->bytes_done += blob_len;
+
+    d_blobs = p->blobs_done - p->last_tick_blobs;
+    d_bytes = p->bytes_done - p->last_tick_bytes;
+    if (d_blobs >= p->blobs_per_tick || d_bytes >= p->bytes_per_tick) {
+        emit_progress_line(p);
+        p->last_tick_blobs = p->blobs_done;
+        p->last_tick_bytes = p->bytes_done;
+    }
+}
+
+void
+lcsas_progress_finish(const lcsas_progress *p)
+{
+    if (!p || !p->enabled) return;
+    /* Always emit a final line so the operator sees the closing count
+     * even if the last tick already fired exactly at completion. */
+    emit_progress_line(p);
+}
+
 static int
 restore_file_node(const char *repo_path,
                   const lcsas_master_key *mk,
@@ -29,7 +85,8 @@ restore_file_node(const char *repo_path,
                   const lcsas_json_tok *toks,
                   long node_idx,
                   const char *target_path,
-                  struct lcsas_disc_locator *locator)
+                  struct lcsas_disc_locator *locator,
+                  lcsas_progress *progress)
 {
     long content_idx = lcsas_json_obj_get(src, toks, node_idx, "content");
     int fd;
@@ -75,6 +132,7 @@ restore_file_node(const char *repo_path,
             if (lcsas_write_exact(fd, blob, blob_len) != 0) {
                 free(blob); rc = -1; break;
             }
+            lcsas_progress_tick(progress, (unsigned long long)blob_len);
             free(blob);
         }
         if (toks[t].start >= toks[content_idx].end) break;
@@ -91,7 +149,8 @@ lcsas_tree_restore(const char *repo_path,
                    const char *tree_id_hex,
                    const char *target_dir,
                    const char *target_root,
-                   struct lcsas_disc_locator *locator)
+                   struct lcsas_disc_locator *locator,
+                   lcsas_progress *progress)
 {
     unsigned char tree_id[32];
     const lcsas_blob_loc *loc;
@@ -176,7 +235,7 @@ lcsas_tree_restore(const char *repo_path,
             if (strcmp(type_buf, "file") == 0) {
                 if (restore_file_node(repo_path, mk, ix,
                                       (char *)blob, toks, t, node_path,
-                                      locator) != 0) {
+                                      locator, progress) != 0) {
                     fprintf(stderr, "file restore failed: %s\n", node_path);
                     goto out;
                 }
@@ -190,7 +249,7 @@ lcsas_tree_restore(const char *repo_path,
                     sub_hex[64] = '\0';
                     if (lcsas_tree_restore(repo_path, mk, ix, sub_hex,
                                            node_path, target_root,
-                                           locator) != 0) {
+                                           locator, progress) != 0) {
                         goto out;
                     }
                 }

@@ -275,11 +275,27 @@ main(int argc, char **argv)
         goto out;
     }
 
-    if (lcsas_tree_restore(repo_path, &mk, &ix,
-                           snaps.items[sidx].tree_id_hex,
-                           target, target, &locator) != 0) {
-        fprintf(stderr, "ERROR: tree restore failed\n");
-        goto out;
+    {
+        lcsas_progress progress;
+        int tree_rc;
+        /* total_blob_hint is the loaded index size -- an upper bound
+         * on what this snapshot can reference.  We surface that
+         * explicitly so the operator isn't misled by the denominator. */
+        lcsas_progress_init(&progress, (unsigned long long)ix.count);
+        fprintf(stderr,
+                "[lcsas-restore] progress: 0/%llu blobs, 0 MB"
+                " (denominator is index size, not snapshot subset)\n",
+                progress.total_blob_hint);
+
+        tree_rc = lcsas_tree_restore(repo_path, &mk, &ix,
+                                     snaps.items[sidx].tree_id_hex,
+                                     target, target, &locator,
+                                     &progress);
+        lcsas_progress_finish(&progress);
+        if (tree_rc != 0) {
+            fprintf(stderr, "ERROR: tree restore failed\n");
+            goto out;
+        }
     }
 
     fprintf(stderr, "[lcsas-restore] restore complete\n");
