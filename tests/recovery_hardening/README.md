@@ -28,6 +28,7 @@ make test-recovery-hardening   # this tier only
 | `test_verify_self.py` | `verify.sh` failing open: missing-fixture passing silently, regex bugs that let cheats slip through, removing a check entirely. Covers all 14 production checks + the fail-closed fixture guard. |
 | `test_setup_static_guards.py` | Blind-test `setup.py` regressions: FIXTURE under `/mnt` (shadowable), missing source-tree lockdown step (lcsas-blind can `find / -path '*sources/alpha*' && cp`). |
 | `test_readme_simplification.py` | `README_RESTORE` regressing to the old 4-step `mount`/`cp -r`/`cd`/`umount` recipe (restore.sh relocates itself), the `LCSAS_NO_RELOCATE` override going undocumented, or the Ctrl+Z single-terminal disc-swap advice being removed. |
+| `test_operational_features.py` | Repeat-operator UX regressions: `disc-loader status` losing its `[meta]`/`[data]` role decoration; `restore.sh` no longer appending a session line to `~/.lcsas-restore-log` (tenant / target / snapshot / tier / disc-count, ISO-8601 UTC). |
 
 ## Adding a new hardening test
 
