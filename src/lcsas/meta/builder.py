@@ -1428,20 +1428,21 @@ This is the disaster scenario: you own one optical drive and a stack of
 archive discs. You do **not** need to rip every disc up front — the
 script walks you through the restore one disc at a time.
 
-### 1. Copy the meta-volume to local disk
-
-```
-sudo mount /dev/sr0 /mnt/meta
-cp -r /mnt/meta /tmp/lcsas-meta
-cd /tmp/lcsas-meta
-sudo umount /mnt/meta
-```
-
-### 2. Run the restore
+### 1. Mount the meta-volume and run the restore
 
 ```sh
-sh restore.sh ~/restored/ latest
+sudo mount /dev/sr0 /mnt
+sh /mnt/restore.sh ~/restored/ latest
 ```
+
+`restore.sh` detects that it is running off a read-only optical disc
+and copies itself (plus the recovery binaries) into RAM automatically,
+so you can eject the meta-volume when the binary first prompts for a
+data disc — no manual `cp -r` step is needed.
+
+> **Advanced override:** set `LCSAS_NO_RELOCATE=1` in the environment
+> if you want to keep running directly off the disc (e.g. for tests,
+> or when running from a writable copy you placed yourself).
 
 The two positional arguments are:
 
@@ -1472,6 +1473,20 @@ for each one as the recovery binary needs it.  The script will:
    the recovery binary stops and prints `INSERT DISC: LCSAS_<label>`
    on stderr.  **Swap the disc in your optical drive and press Enter.**
    Repeat until the binary prints `RESTORE COMPLETE` and exits 0.
+
+> **Single-terminal operators.** You do not need tmux or a second SSH
+> session to handle disc swaps — a normal single-terminal flow works.
+> When the binary prompts to swap a disc:
+>
+>   1. Open a second terminal OR press Ctrl+Z to suspend the restore.
+>   2. Run `disc-loader insert <label>` (or eject + insert the
+>      physical disc by hand, e.g. `sudo eject /dev/sr0`).
+>   3. In the second terminal: `disc-loader status` to confirm.
+>      In the first terminal: type `fg` to resume.
+>   4. Press Enter at the restore prompt.
+>
+> If `disc-loader` is not installed on your host, the same flow works
+> with plain `sudo eject /dev/sr0` and physically swapping the disc.
 
 If a disc is unreadable or the system crashes mid-restore you can
 re-run the same command — the pack cache under the work directory
