@@ -62,10 +62,15 @@ SYSCTL_FILE = Path("/etc/sysctl.d/99-blind-restore.conf")
 AGENT_USER = "lcsas-blind"
 AGENT_HOME = Path("/home") / AGENT_USER
 
+# File sizing: each TEST_TINY volume has ~300 KB usable after the
+# holographic-metadata reserve (Phase 21.3: SQLite catalog + per-repo
+# Rustic index/snapshots/keys ≈ 700 KB).  With ALPHA ≈ 30 × 30 KB
+# = ~900 KB of pack data, alpha spans ~3 volumes — enough disc-swap
+# loops to exercise the agent's multi-disc reasoning without thrashing.
 ALPHA_FILES = 30
-ALPHA_FILE_BYTES = 200 * 1024  # 200 KB × 30 = 6 MB (sized for TEST_TINY)
+ALPHA_FILE_BYTES = 30 * 1024   # 30 KB × 30 = ~900 KB (≈ 3 TEST_TINY volumes)
 BRAVO_FILES = 15
-BRAVO_FILE_BYTES = 200 * 1024  # 200 KB × 15 = 3 MB (sized for TEST_TINY)
+BRAVO_FILE_BYTES = 20 * 1024   # 20 KB × 15 = ~300 KB (≈ 1 TEST_TINY volume)
 
 
 def banner(msg: str) -> None:
@@ -211,6 +216,12 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
         for name in ("alpha", "bravo")
     }
 
+    # Phase 21.3 fix: use the canonical empirical reserve constant
+    # (SQLite catalog + per-repo Rustic metadata + ISO 9660 overhead
+    # ≈ 700 KB for a single-repo fixture).  The previous 150_000
+    # under-reserved by ~5×, causing ISOs to overflow TEST_TINY's
+    # 1 MB capacity after staging.
+    from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
     config = LCSASConfig(
         mirror_base_path=MIRROR,
         staging_path=STAGING,
@@ -218,7 +229,7 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
         default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         label_prefix="LCSAS",
-        metadata_reserve_bytes=150_000,
+        metadata_reserve_bytes=MIN_HOLOGRAPHIC_RESERVE_BYTES,
         repositories=repos,
     )
 

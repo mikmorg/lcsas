@@ -116,15 +116,23 @@ check "first disc was LCSAS_META" \
 
 # -----------------------------------------------------------------------
 # 6. All required alpha discs were inserted; no excessive thrashing.
+# Match any LCSAS_<prefix>_ data-volume label (LCSAS_CD_, LCSAS_BD25_,
+# LCSAS_TEST_TINY_, etc.) — but never LCSAS_META, which is a meta disc
+# and not a member of the alpha pack set.
 $DISC_LOG_CAT 2>/dev/null \
-    | grep -oE 'insert LCSAS_CD_[0-9A-Z_]+' \
-    | awk '{print $2}' | sort -u > $RUN_DIR/inserted.txt
+    | grep -oE 'insert LCSAS_[A-Z0-9_]+' \
+    | awk '{print $2}' \
+    | grep -v '^LCSAS_META$' \
+    | sort -u > $RUN_DIR/inserted.txt
 sudo cat "$FIXTURE/expected_alpha_volumes.txt" | sort -u > $RUN_DIR/expected.txt
 check "all required discs inserted" \
     "[[ -z \"\$(comm -23 $RUN_DIR/expected.txt $RUN_DIR/inserted.txt)\" ]]"
 
 NEEDED=$(wc -l < $RUN_DIR/expected.txt)
-ACTUAL=$($DISC_LOG_CAT 2>/dev/null | grep -c 'insert LCSAS_CD_' || true)
+ACTUAL=$($DISC_LOG_CAT 2>/dev/null \
+    | grep -oE 'insert LCSAS_[A-Z0-9_]+' \
+    | grep -v ' LCSAS_META$' \
+    | wc -l)
 check "no excessive thrashing (actual=$ACTUAL, needed=$NEEDED)" \
     "[[ $ACTUAL -le $((NEEDED * 5)) ]]"
 
