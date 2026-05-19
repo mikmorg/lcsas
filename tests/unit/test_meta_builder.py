@@ -418,6 +418,25 @@ class TestMetaVolumeBuilder:
             "restore_legacy.sh missing post-ingest pack count check"
         )
 
+    def test_inner_restore_sh_is_redirect_stub(self):
+        """recovery/scripts/restore.sh on the meta disc must be a redirect stub.
+
+        The canonical entry point is /restore.sh at the disc root.  The inner
+        copy must exec that root script so agents who navigate into the recovery
+        tree land on the same driver, not a silent duplicate.  Closes #94.
+        """
+        inner = self.output / "recovery" / "scripts" / "restore.sh"
+        assert inner.is_file(), "recovery/scripts/restore.sh not present"
+        content = inner.read_text()
+        assert "exec" in content and "restore.sh" in content, (
+            "recovery/scripts/restore.sh must redirect to root restore.sh"
+        )
+        root = self.output / "restore.sh"
+        assert root.read_text() != content, (
+            "recovery/scripts/restore.sh must differ from root restore.sh "
+            "(should be redirect stub, not duplicate)"
+        )
+
     def test_no_incomplete_marker_after_build(self):
         """After a successful build, .incomplete marker must be removed."""
         assert not (self.output / ".incomplete").exists(), (

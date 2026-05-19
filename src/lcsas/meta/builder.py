@@ -2263,6 +2263,17 @@ class MetaVolumeBuilder:
             legacy = self._output / "restore_legacy.sh"
             _write_and_sync(legacy, RESTORE_SCRIPT)
             os.chmod(str(legacy), 0o755)
+            # Replace the inner copy with a redirect so operators (and
+            # agents) who navigate into recovery/scripts/ land on the
+            # canonical root-level entry, not a silent duplicate.
+            # "$(dirname "$0")/../../restore.sh" resolves to /mnt/restore.sh
+            # regardless of where the disc is mounted.
+            _write_and_sync(
+                new_driver,
+                "#!/bin/sh\n"
+                "exec \"$(dirname \"$0\")/../../restore.sh\" \"$@\"\n",
+            )
+            os.chmod(str(new_driver), 0o755)
         else:
             # No recovery/ tree was bundled (e.g. older builds).  Fall
             # back to the historical bash driver.
