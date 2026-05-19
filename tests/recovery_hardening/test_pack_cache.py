@@ -24,6 +24,7 @@ These tests pin three properties:
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -170,3 +171,140 @@ def test_disc_locator_header_documents_cache(tmp_path: Path) -> None:
         "disc_locator.h struct lost its cache_dir field; the C-side "
         "drain-on-locate behavior cannot work without it."
     )
+
+
+@pytest.mark.requires_rustic
+def test_cache_reduces_swap_count(tmp_path: Path) -> None:
+    """drain_disc fires during a real restore that locates packs via
+    --pack-search, and fills the cache so subsequent packs from the
+    same disc resolve locally.
+
+    The failure mode this guards: drain_disc is only reached after a
+    successful lcsas_disc_locate_pack hit — it does NOT fire on
+    discovery (refresh_discovered) alone.  A stub repo that fails at
+    key-decryption never reaches lcsas_tree_restore, so drain never
+    runs.  This test uses a real encrypted rustic repo to ensure the
+    full restore path exercises the drain.
+
+    Filesystem note: drain_disc refuses to copy when the cache
+    filesystem is <10% free.  /var/tmp (the pytest basetemp) shares
+    a partition that is typically >90% used on this VM, so the cache
+    is placed on /dev/shm (tmpfs) instead.  If /dev/shm is also tight
+    the test skips rather than asserting a false pass.
+
+    Direct swap-count measurement (i.e. asserting the count halves)
+    requires the [lcsas-restore] swap count: N log line from issue
+    #97.  This test asserts the necessary precondition: drain fires
+    and fills the cache.
+    """
+    restore_bin = _find_restore_bin()
+
+    if not shutil.which("rustic"):
+        pytest.skip("rustic not on PATH")
+
+    # Guard: skip if the tmpfs cache location is too full for drain.
+    # drain_disc refuses to copy when cache FS is <10% free; we require
+    # a comfortable margin so the test doesn't flap near the boundary.
+    shm = Path("/dev/shm")
+    if not shm.is_dir():
+        pytest.skip("/dev/shm not available on this platform")
+    if hasattr(os, "statvfs"):
+        vfs = os.statvfs(str(shm))
+        pct_free = int(vfs.f_bavail * 100 // max(vfs.f_blocks, 1))
+        if pct_free < 15:
+            pytest.skip(
+                f"/dev/shm is {100 - pct_free}% full; drain guard "
+                "would abort (needs >=15% free)"
+            )
+
+    # ── 1. Build a minimal real rustic repo. ─────────────────────
+    repo = tmp_path / "repo"
+    src = tmp_path / "src"
+    target = tmp_path / "target"
+    pwfile = tmp_path / "pw"
+
+    src.mkdir()
+    (src / "alpha.txt").write_text("alpha payload\n")
+    (src / "beta.txt").write_text("beta payload\n")
+    pwfile.write_text("test-password\n")
+
+    subprocess.run(
+        ["rustic", "-r", str(repo), "init", "--password-file", str(pwfile)],
+        capture_output=True, check=True, timeout=30,
+    )
+    subprocess.run(
+        ["rustic", "-r", str(repo), "backup", str(src),
+         "--password-file", str(pwfile)],
+        capture_output=True, check=True, timeout=30,
+    )
+
+    # ── 2. Collect the pack files written by rustic. ──────────────
+    pack_files = list((repo / "data").rglob("*"))
+    pack_files = [p for p in pack_files if p.is_file()]
+    assert pack_files, "rustic backup produced no pack files"
+
+    # ── 3. Move all packs to a fake disc tree (disc-0001).  ───────
+    #    The disc has the same data/<XX>/<hex> two-level layout used
+    #    by LCSAS-burned ISOs.  After the move the repo's data/ dir
+    #    is empty so the binary must use --pack-search to find packs.
+    disc = tmp_path / "disc-0001"
+    for pack in pack_files:
+        prefix = pack.parent.name          # two-hex-char subdirectory
+        dest_dir = disc / "data" / prefix
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(pack), str(dest_dir / pack.name))
+
+    known_pack_names = {p.name for p in pack_files}
+
+    # ── 4. Run restore with pack-search pointed at the disc.  ─────
+    #    Cache goes on /dev/shm to avoid the <10%-free drain guard.
+    cache = shm / f"lcsas-pack-cache-test-{os.getpid()}"
+    try:
+        env = {
+            **os.environ,
+            "LCSAS_PACK_CACHE_DIR": str(cache),
+            # Suppress default /Volumes:/media:/mnt:/run/media scan so
+            # a stray host-mounted disc can't perturb the result.
+            "LCSAS_MOUNT_DIRS": str(tmp_path / "no-such-parent"),
+        }
+        res = subprocess.run(
+            [
+                str(restore_bin),
+                "--repo", str(repo),
+                "--target", str(target),
+                "--password-file", str(pwfile),
+                "--pack-search", str(disc),
+                "--interactive", "off",
+            ],
+            capture_output=True, text=True, env=env, timeout=30,
+        )
+
+        # ── 5. Assertions. ────────────────────────────────────────
+        assert res.returncode == 0, (
+            f"restore failed (rc={res.returncode}); the test requires a "
+            f"successful restore to trigger drain.\nstderr:\n{res.stderr}"
+        )
+
+        assert cache.is_dir(), (
+            "LCSAS_PACK_CACHE_DIR was not created; lcsas_disc_locator_set_cache_dir "
+            "failed or the env var was not picked up."
+        )
+
+        cached = {p.name for p in cache.rglob("*") if p.is_file()
+                  and not p.name.startswith(".")}
+        assert cached, (
+            "cache dir exists but is empty after a successful restore — "
+            "drain_disc did not fire.  Possible causes: the cache filesystem "
+            "triggered the <10%-free guard, or drain_disc lost its call site "
+            "inside scan_paths."
+        )
+
+        missing = known_pack_names - cached
+        assert not missing, (
+            f"drain_disc ran but left {len(missing)} pack(s) out of the cache: "
+            f"{missing!r}.  The drain should copy the full disc data/ subtree "
+            "on the first successful pack hit."
+        )
+
+    finally:
+        shutil.rmtree(str(cache), ignore_errors=True)
