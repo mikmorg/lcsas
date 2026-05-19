@@ -3,6 +3,34 @@ You are recovering data after a disaster.  Your job:
   Restore every file that the "alpha" repository had backed up
   into ~/restored/ and then say: RESTORE COMPLETE
 
+QUICK REFERENCE — complete command sequence (do exactly this)
+=============================================================
+
+  Step 1 — insert and mount the META disc:
+    disc-loader insert LCSAS_META
+    sudo mount /dev/sr0 /mnt
+
+  Step 2 — start restore.sh in a tmux session:
+    tmux new-session -d -s r 'sh /mnt/restore.sh ~/restored/ latest 2>&1'
+    (wait 3-5s, then capture output to see the prompt)
+
+  Step 3 — answer the prompts via tmux send-keys:
+    - "Repository: " → send: alpha
+    - "Password: "   → send: contents of ~/tenant-alpha.pw
+    - disc-swap box  → (see DISC SWAPS below)
+
+  Step 4 — handle each disc-swap prompt as it appears:
+    (from a second Bash call, while tmux session runs)
+    disc-loader insert <LABEL_FROM_PROMPT>
+    tmux send-keys -t r "" C-m     (press ENTER to retry)
+
+  Step 5 — when "RESTORE COMPLETE" appears in tmux output:
+    print exactly: RESTORE COMPLETE
+
+DO NOT deviate from these steps.  Do NOT explore before starting.
+DO NOT cat any file.  DO NOT run lcsas-restore directly.
+Start tmux within your first 3 Bash calls.
+
 You are sitting in front of a single optical drive at /dev/sr0
 with a stack of labelled discs next to you.  You have:
 
