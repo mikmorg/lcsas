@@ -1,0 +1,179 @@
+LCSAS RECOVERY -- PRODUCTION READINESS CHECKLIST
+=================================================
+
+PURPOSE
+
+Verify these items before relying on an LCSAS archive in a real
+disaster.  Each item cites a concrete failure mode and a HOW OFTEN
+indicator.  Items are grouped into three phases: one-time setup,
+ongoing maintenance, and an annual drill.
+
+────────────────────────────────────────────────────────────────────
+BEFORE RELYING ON THESE DISCS  (one-time, at archive creation)
+────────────────────────────────────────────────────────────────────
+
+[ ] BINARY AUDIT — sha256sum audit of every binary in recovery/bin/
+    against recovery/MANIFEST.sha256 and recovery/UPSTREAM.sha256.
+    Why: a corrupted or substituted binary passes casual inspection
+    but fails silently when your OS is gone and you need it most.
+    How:  sha256sum -c recovery/MANIFEST.sha256
+          sha256sum -c recovery/UPSTREAM.sha256
+    HOW OFTEN: once at build time, repeat when recovery/bin/ changes.
+
+[ ] META DISC BOOT TEST — verify the meta disc boots on a spare
+    machine.  Insert the meta disc, set BIOS to boot from optical,
+    confirm the live environment reaches the shell prompt and
+    restore.sh is reachable.
+    Why: an unbooted meta disc is an untested recovery path.  The
+    live-rootfs build can silently break isolinux or grub config.
+    See recovery/docs/BOOT.txt for expected boot flow.
+    HOW OFTEN: once per meta disc build.
+
+[ ] ENCRYPTION KEY REDUNDANCY — confirm the repository password is
+    stored in at least 2 physically separate locations.  Acceptable
+    forms: a printed copy in a fireproof safe, an offsite estate
+    document, a Shamir-shared key split across trusted parties, or
+    a hardware key manager at a second site.
+    Why: see recovery/docs/CRYPTO.txt — the password directly seeds
+    the scrypt KDF; there is no password-recovery path.  A single
+    copy is a single point of failure.  offsite storage is not
+    optional for production archives.
+    HOW OFTEN: verify at archive creation; re-confirm annually.
+
+[ ] FULL TEST-RESTORE — run a test-restore of the most recent
+    snapshot to a temporary directory and verify that the file
+    count matches the original backup.
+    How:
+      mkdir -p /tmp/test-restore
+      lcsas restore exec --snapshot latest --target /tmp/test-restore
+      # or using the tier-1 binary directly:
+      /mnt/recovery/scripts/restore.sh /tmp/test-restore
+    Compare restored file count against the original source:
+      find /tmp/test-restore -type f | wc -l
+    Why: an archive that was never test-restored has never been
+    verified end-to-end.  Bit rot, wrong snapshot ID, or a
+    misconfigured encryption key only show up when you actually
+    try to read data back.
+    HOW OFTEN: once at archive creation; see monthly cadence below.
+
+────────────────────────────────────────────────────────────────────
+ONGOING MAINTENANCE  (monthly, or after each new disc set)
+────────────────────────────────────────────────────────────────────
+
+[ ] MONTHLY TEST-RESTORE — restore the most recent snapshot to a
+    scratch directory and confirm zero errors.  Use a tmpfs or
+    dedicated scratch partition large enough for a representative
+    subset of your data.
+    How:
+      mkdir -p /scratch/lcsas-test-restore
+      lcsas restore exec --snapshot latest --target /scratch/lcsas-test-restore
+    Check the exit code; lcsas-restore exits non-zero on any blob
+    integrity failure.  Discard the output when done.
+    Why: optical discs degrade.  A monthly smoke-test catches bit
+    rot, bad burns, or catalog drift before you need the data.
+    HOW OFTEN: monthly.
+
+[ ] VOLUME COUNT CHECK — confirm the volume count in the catalog
+    matches physical disc inventory.  Run:
+      lcsas status
+    Compare "volumes: N burned" against the physical discs on the
+    shelf.  Investigate any gap.
+    Why: discs can be lost, mislabelled, or destroyed without being
+    marked DESTROYED in the catalog.  A silent gap discovered during
+    an emergency restore costs time you don't have.
+    HOW OFTEN: monthly, or after each new disc set is burned.
+
+[ ] DISC READABILITY SCAN — insert each disc in a SATA or USB BD
+    drive and run a surface scan to confirm there are no read
+    errors.
+    How (Linux):
+      dd if=/dev/sr0 of=/dev/null bs=64k status=progress
+    Or use dvdisaster's read-test mode if available:
+      dvdisaster -t /dev/sr0
+    Why: optical media fails gradually.  A disc that reads cleanly
+    today may have marginal sectors that become fatal within a year.
+    The DVDisaster RS03 ECC layer can recover approximately 30% of
+    unreadable sectors, but only if the disc is caught early.
+    HOW OFTEN: monthly for discs less than 2 years old; weekly for
+    discs older than 5 years or stored in suboptimal conditions.
+
+[ ] OFFSITE COPY VERIFICATION — confirm that the offsite copy of
+    the archive (second set of discs, remote NAS mirror, or cloud
+    backup) is current.  Log the location and date checked.
+    Why: a house fire, flood, or theft destroys local copies.  The
+    offsite copy is not a bonus — it is the archive.
+    HOW OFTEN: after each new disc set; monthly for the offsite log.
+
+────────────────────────────────────────────────────────────────────
+EMERGENCY DRILL  (annually)
+────────────────────────────────────────────────────────────────────
+
+[ ] BLIND RESTORE DRILL — perform a full blind restore on an
+    air-gapped machine that has only the meta disc and data discs.
+    No network.  No prior tools installed.  Start from the BIOS.
+    Steps:
+      1. Boot the meta disc on a clean machine.
+      2. Follow recovery/docs/RECOVER.txt from step 1.
+      3. Restore one representative snapshot to local storage.
+      4. Verify file count and spot-check a handful of files.
+      5. Record the date, elapsed time, and any issues in an
+         audit_log.txt file stored alongside the physical discs.
+    Why: the automated test suite uses a software disc-loader shim;
+    it does NOT test that a human can actually boot the meta disc,
+    physically swap data discs, and recover files.  A passing CI
+    gate does not substitute for a real drill.  See also
+    recovery/docs/UX_CONCERNS.txt for known UX gaps.
+    HOW OFTEN: annually, or whenever a major recovery component
+    changes (new meta disc build, new tier-1 binary, new disc set).
+
+[ ] KEY ESCROW REVIEW — review all password escrow arrangements:
+    printed copies, estate documents, split-key holders.  Confirm
+    each arrangement is still accessible and the holders are still
+    reachable.
+    Why: escrow arrangements decay.  A key holder moves, a safe is
+    re-keyed, a printed copy degrades.  Catching this during a
+    planned review is far better than discovering it during a
+    disaster.
+    HOW OFTEN: annually.
+
+[ ] BINARY PIN REVIEW — review recovery/UPSTREAM.sha256 and
+    recovery/MANIFEST.sha256.  If upstream releases (rustic, Python)
+    have shipped security fixes since the last pin update, rebuild
+    the meta disc and update the pins.
+    Why: recovery binaries may carry CVEs.  Because the recovery
+    path runs on an air-gapped machine, automatic patching never
+    fires; only an explicit review catches stale pins.
+    How:  sha256sum -c recovery/MANIFEST.sha256
+          sha256sum -c recovery/UPSTREAM.sha256
+    HOW OFTEN: annually, or when upstream publishes a security
+    advisory affecting a pinned component.
+
+────────────────────────────────────────────────────────────────────
+QUICK REFERENCE
+────────────────────────────────────────────────────────────────────
+
+Item                            HOW OFTEN
+──────────────────────────────  ─────────────────────────────────────
+Binary audit (sha256sum)        At build time; repeat on bin/ change
+Meta disc boot test             Once per meta disc build
+Encryption key redundancy       At creation; verify annually
+Full test-restore               At creation; see monthly cadence
+Monthly test-restore            Monthly
+Volume count check              Monthly / after new disc set
+Disc readability scan           Monthly (<2 yr); weekly (>5 yr)
+Offsite copy verification       After each disc set; monthly log
+Annual blind restore drill      Annually / after major change
+Key escrow review               Annually
+Binary pin review               Annually / on CVE advisory
+
+────────────────────────────────────────────────────────────────────
+RELATED DOCUMENTS
+────────────────────────────────────────────────────────────────────
+
+  recovery/docs/RECOVER.txt            Manual restore procedure
+  recovery/docs/TIERS.txt             Recovery tier rationale
+  recovery/docs/CRYPTO.txt            Encryption design
+  recovery/docs/ENV_VARS.txt          Environment variable reference
+  recovery/docs/BOOT.txt              Meta disc boot procedure
+  recovery/MANIFEST.sha256            Hash manifest for built artifacts
+  recovery/UPSTREAM.sha256            Hash manifest for upstream binaries
