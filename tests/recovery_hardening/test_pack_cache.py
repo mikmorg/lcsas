@@ -308,3 +308,13 @@ def test_cache_reduces_swap_count(tmp_path: Path) -> None:
 
     finally:
         shutil.rmtree(str(cache), ignore_errors=True)
+
+
+def test_drain_chunk_packs_env_var_documented() -> None:
+    """Pin LCSAS_DRAIN_CHUNK_PACKS against silent removal from ENV_VARS.txt."""
+    env_vars_txt = REPO_ROOT / "recovery" / "docs" / "ENV_VARS.txt"
+    src = env_vars_txt.read_text()
+    assert "LCSAS_DRAIN_CHUNK_PACKS" in src, (
+        "recovery/docs/ENV_VARS.txt is missing the LCSAS_DRAIN_CHUNK_PACKS "
+        "entry.  Add it under BEHAVIOR KNOBS following the existing format."
+    )

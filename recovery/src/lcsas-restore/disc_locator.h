@@ -78,6 +78,15 @@ typedef struct {
      *
      * NULL = feature off (default), no draining, no extra disk use. */
     char *cache_dir;
+
+    /* Maximum number of pack files to copy per drain_disc() call.
+     * 0 = unlimited (drain the full disc in one call; default).
+     * Set via LCSAS_DRAIN_CHUNK_PACKS env var.  When > 0, drain_disc
+     * returns after copying this many packs and the next call resumes
+     * where it left off (already-cached packs are skipped via stat).
+     * Use 100-500 on slow optical drives to keep the restore
+     * interactive between drain calls. */
+    int drain_chunk_packs;
 } lcsas_disc_locator;
 
 /*
