@@ -39,6 +39,7 @@ make test-recovery-hardening   # this tier only
 | `test_multi_disc_design_header.py` | MULTI_DISC_DESIGN.txt losing its "DESIGN DOCUMENT" banner or RECOVER.txt cross-reference — operators reading the design doc would mistakenly treat unshipped UX mockups as current behavior (closes #110). |
 | `test_env_var_docs.py` | `ENV_VARS.txt` being deleted or stripped of its defaults rationale — operators can't predict restore behavior without knowing which knobs are opt-in vs opt-out (closes #89). |
 | `test_agent_prompt.py` | `agent_prompt.txt` drifting from current feature set — blind-restore agent re-derives `LCSAS_PACK_CACHE_DIR` and disc-swap interaction from scratch each run, burning budget and risking wrong behavior (closes #103). |
+| `test_readiness_checklist.py` | `READINESS_CHECKLIST.txt` being silently deleted or stripped of its monthly/annual operator drills — operators have no documented pre-flight gate before relying on the archive in a real disaster (closes #112). |
 
 ## Adding a new hardening test
 
