@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-teardown fetch-recovery verify-recovery build-recovery
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-teardown fetch-recovery verify-recovery build-recovery
 
 # Default target: lint + typecheck + every test tier ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
@@ -52,10 +52,43 @@ clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
 blind-restore:
+	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
+		echo "ERROR: make blind-restore spawns a real Claude sub-agent and" >&2; \
+		echo "       typically costs USD ~5 per run.  This target is NOT run" >&2; \
+		echo "       on every commit.  To proceed, re-invoke with:" >&2; \
+		echo "" >&2; \
+		echo "         LCSAS_BLIND_ACK_COST=1 make blind-restore" >&2; \
+		echo "" >&2; \
+		echo "       For repeated stress-testing, see make blind-restore-x5." >&2; \
+		exit 1; \
+	fi
 	sudo tests/e2e/cdemu_blind_restore/setup.py
-	RUN_DIR=/tmp/lcsas-blind-run-$$$$ tests/e2e/cdemu_blind_restore/run.sh
+	@# 45-minute wall-clock cap.  A correct run on TEST_TINY finishes
+	@# in ~15-25 min; anything beyond 45 means the agent is looping
+	@# and we'd rather burn 1× max-budget than open-ended hours.
+	timeout --foreground 2700 \
+		env RUN_DIR=/tmp/lcsas-blind-run-$$$$ \
+		tests/e2e/cdemu_blind_restore/run.sh
 	@last=$$(ls -1dt /tmp/lcsas-blind-run-* 2>/dev/null | head -1); \
 		tests/e2e/cdemu_blind_restore/verify.sh "$$last"
+
+# Stress / flakiness gate.  Runs the blind agent N times in
+# sequence; fails if any run fails.  Use before declaring a
+# product-UX change "shipped".  Cost: ~5× normal blind-restore.
+blind-restore-x5:
+	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
+		echo "ERROR: blind-restore-x5 costs USD ~25 per invocation." >&2; \
+		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
+		exit 1; \
+	fi
+	@for i in 1 2 3 4 5; do \
+		echo "=== blind-restore-x5 attempt $$i/5 ==="; \
+		$(MAKE) blind-restore || { \
+			echo "FAIL on attempt $$i" >&2; exit 1; \
+		}; \
+		$(MAKE) blind-restore-teardown; \
+	done
+	@echo "blind-restore-x5: 5/5 PASS"
 
 blind-restore-teardown:
 	sudo tests/e2e/cdemu_blind_restore/teardown.sh

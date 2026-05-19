@@ -194,7 +194,46 @@ QUICK START:
   recovery tree) must contain bin/<arch>/lcsas-restore and/or src/.
   TARGET_DIR is where to write restored files (default: /tmp/restored).
 
-  Password is read from stdin, \$LCSAS_PASSWORD env, or \$LCSAS_PWFILE.
+ENVIRONMENT VARIABLES:
+  LCSAS_PASSWORD          Encryption password (skips the Password: prompt).
+                          Mutually exclusive with LCSAS_PWFILE.
+  LCSAS_PWFILE            Path to a file whose contents are the password.
+                          Read instead of prompting; preserves any
+                          trailing newline in the file.
+  LCSAS_REPO              Repository / tenant name to restore.  Skips
+                          the multi-tenant prompt on archives with
+                          more than one repo.
+  LCSAS_TARGET            Override the auto-detected rust-triple (e.g.
+                          force x86_64-unknown-linux-musl on a host
+                          where uname -m misreports).
+  LCSAS_META_DISC         Mount point of the recovery / meta disc.
+                          Tells the tier-1 binary not to look for
+                          packs there and to chdir out before prompts.
+                          Auto-detected via mtab when omitted.
+  LCSAS_MOUNT_DIRS        Colon-separated list of directories to scan
+                          for mounted data discs (default:
+                          /Volumes:/media/<user>:/media:/mnt:/run/media/<user>).
+                          Set to '' (empty) to disable the auto-scan.
+  LCSAS_PACK_CACHE_DIR    Opportunistic pack cache.  'auto' (default
+                          when unset) → \${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>;
+                          a path → that path; '' (empty) → cache off.
+                          Trades disk space for fewer disc swaps.
+  LCSAS_TIER_FALLBACK     0 (default) → tier 1 crash aborts the run.
+                          1 → fall through to tier 2 / tier 3 on
+                          non-zero exit.  Use when you suspect a bug
+                          in a higher tier and want the script to
+                          walk the cascade for you.
+  LCSAS_ALLOW_NO_PACK_SEARCH
+                          1 → suppress the 'no data discs detected'
+                          hard-error (advanced / test environments).
+  LCSAS_NO_RELOCATE       1 → don't copy the recovery scripts into
+                          RAM before exec (testing / development).
+  LCSAS_PROGRESS          0 → silence the periodic tier-3 progress
+                          stderr lines.  Default ON.
+
+Most operators don't need any of these.  See the meta disc's
+README_RESTORE.md and TROUBLESHOOTING.md for the operator-friendly
+walkthrough.
 EOF
         exit 0
         ;;

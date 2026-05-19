@@ -15,6 +15,7 @@
 #ifndef _WIN32
 #  include <unistd.h>      /* chdir */
 #  include <dirent.h>
+#  include <sys/statvfs.h>
 #else
 #  include <direct.h>
 #  define chdir _chdir
@@ -423,6 +424,73 @@ copy_file(const char *src, const char *dst)
  * disc but don't fail the locate.  Callers gate on cache_dir being
  * non-NULL.
  */
+/*
+ * Return non-zero if the filesystem hosting `path` is below
+ * `min_free_pct` percent free.  Conservative on stat failure
+ * (returns 0 — assume OK).  Posts a one-line stderr warning on
+ * threshold crossing so the operator sees it once.
+ */
+static int
+fs_critically_full(const char *path, int min_free_pct)
+{
+#ifndef _WIN32
+    struct statvfs vfs;
+    unsigned long long free_bytes, total_bytes;
+    int pct_free;
+    if (!path || statvfs(path, &vfs) != 0) return 0;
+    free_bytes  = (unsigned long long)vfs.f_bavail * vfs.f_frsize;
+    total_bytes = (unsigned long long)vfs.f_blocks * vfs.f_frsize;
+    if (total_bytes == 0) return 0;
+    pct_free = (int)((free_bytes * 100ULL) / total_bytes);
+    return pct_free < min_free_pct;
+#else
+    (void)path; (void)min_free_pct;
+    return 0;   /* not implemented on Windows; cache off there anyway */
+#endif
+}
+
+/*
+ * Return the total bytes currently stored under the cache dir's
+ * data/ subtree.  Walks the same two-level layout drain_disc
+ * writes.  Returns 0 on stat failures.
+ */
+static unsigned long long
+cache_bytes_used(const char *cache_dir)
+{
+    char data_dir[4096], prefix_dir[4096], file_path[4096];
+    DIR *d_root, *d_pref;
+    struct dirent *e_root, *e_pref;
+    struct stat st;
+    unsigned long long total = 0;
+    int rc;
+
+    if (!cache_dir) return 0;
+    rc = snprintf(data_dir, sizeof data_dir, "%s/data", cache_dir);
+    if (rc <= 0 || (size_t)rc >= sizeof data_dir) return 0;
+    d_root = opendir(data_dir);
+    if (!d_root) return 0;
+    while ((e_root = readdir(d_root)) != NULL) {
+        if (e_root->d_name[0] == '.') continue;
+        rc = snprintf(prefix_dir, sizeof prefix_dir, "%s/%s",
+                      data_dir, e_root->d_name);
+        if (rc <= 0 || (size_t)rc >= sizeof prefix_dir) continue;
+        d_pref = opendir(prefix_dir);
+        if (!d_pref) continue;
+        while ((e_pref = readdir(d_pref)) != NULL) {
+            if (e_pref->d_name[0] == '.') continue;
+            rc = snprintf(file_path, sizeof file_path, "%s/%s",
+                          prefix_dir, e_pref->d_name);
+            if (rc <= 0 || (size_t)rc >= sizeof file_path) continue;
+            if (stat(file_path, &st) == 0 && S_ISREG(st.st_mode)) {
+                total += (unsigned long long)st.st_size;
+            }
+        }
+        closedir(d_pref);
+    }
+    closedir(d_root);
+    return total;
+}
+
 static void
 drain_disc(lcsas_disc_locator *l, const char *root)
 {
@@ -436,6 +504,40 @@ drain_disc(lcsas_disc_locator *l, const char *root)
     if (!l->cache_dir || !root) return;
     /* If `root` IS the cache (or under it), nothing to drain. */
     if (path_under(root, l->cache_dir)) return;
+
+    /* Refuse to drain when the cache's filesystem is critically
+     * full (<10% free).  Prevents the silent-ENOSPC failure mode
+     * that would abort the restore mid-flight.  One-line warning. */
+    if (fs_critically_full(l->cache_dir, 10)) {
+        static int warned = 0;
+        if (!warned) {
+            fprintf(stderr,
+                    "[lcsas-restore] WARNING: cache filesystem at %s "
+                    "is <10%% free; disabling further drains.  Set "
+                    "LCSAS_PACK_CACHE_DIR= (empty) for the rest of "
+                    "this run if disk pressure is critical.\n",
+                    l->cache_dir);
+            warned = 1;
+        }
+        return;
+    }
+
+    /* Soft warning at 1 GB total cache size.  Single-shot. */
+    {
+        static int big_warned = 0;
+        if (!big_warned) {
+            unsigned long long used = cache_bytes_used(l->cache_dir);
+            if (used > (1ULL << 30)) {   /* 1 GiB */
+                fprintf(stderr,
+                        "[lcsas-restore] WARNING: pack cache at %s "
+                        "is %.1f GB; set LCSAS_PACK_CACHE_DIR= (empty) "
+                        "to disable further drains if disk is tight.\n",
+                        l->cache_dir,
+                        (double)used / (double)(1ULL << 30));
+                big_warned = 1;
+            }
+        }
+    }
 
     rc = snprintf(data_dir, sizeof data_dir, "%s/data", root);
     if (rc <= 0 || (size_t)rc >= sizeof data_dir) return;
