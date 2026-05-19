@@ -132,6 +132,9 @@ interleaved with normal output.
       The binary re-enumerates mounted discs after each ENTER, so
       the newly mounted disc is found automatically.  You do NOT
       need to pass any path to the binary.
+      For an N-data-disc archive expect at least N swap prompts minimum
+      even with the pack cache (the cache eliminates repeat visits, not
+      first contacts).
 
   Completion:
       [lcsas-restore] restore complete
