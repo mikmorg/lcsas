@@ -73,7 +73,7 @@ requires_restic_binary = pytest.mark.skipif(
 requires_xorriso = pytest.mark.skipif(
     not shutil.which("xorriso"), reason="xorriso not installed"
 )
-pytestmark = [requires_restic_binary, requires_xorriso]
+pytestmark = [pytest.mark.integration, requires_restic_binary, requires_xorriso]
 
 # ── Deterministic test data ─────────────────────────────────────
 

@@ -39,6 +39,7 @@ from lcsas.packs.scanner import scan_mirror_packs
 # ── Skip conditions ──────────────────────────────────────────────
 
 pytestmark = [
+    pytest.mark.integration,
     pytest.mark.skipif(
         os.geteuid() != 0,
         reason="requires root (loop devices + mount)",

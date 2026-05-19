@@ -43,7 +43,7 @@ requires_rustic = pytest.mark.skipif(
 requires_xorriso = pytest.mark.skipif(
     not shutil.which("xorriso"), reason="xorriso not installed"
 )
-pytestmark = [requires_rustic, requires_xorriso]
+pytestmark = [pytest.mark.integration, requires_rustic, requires_xorriso]
 
 # ── Deterministic data ──────────────────────────────────────────
 

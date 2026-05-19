@@ -27,10 +27,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RECOVERY_DIR = PROJECT_ROOT / "recovery"
 
 
-pytestmark = pytest.mark.skipif(
-    not RECOVERY_DIR.is_dir() or shutil.which("cc") is None,
-    reason="recovery/ tree or cc compiler not available",
-)
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not RECOVERY_DIR.is_dir() or shutil.which("cc") is None,
+        reason="recovery/ tree or cc compiler not available",
+    ),
+]
 
 
 def test_recovery_builder_build_host():
