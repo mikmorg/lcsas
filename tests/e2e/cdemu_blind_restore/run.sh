@@ -47,7 +47,13 @@ disc-loader eject >/dev/null 2>&1 || true
 sudo install -m 0640 -o root -g root /dev/null "$RUN_DIR/disc-loader.log"
 sudo ln -sf "$RUN_DIR/disc-loader.log" /var/log/disc-loader.log
 
-MAX_TURNS="${MAX_TURNS:-150}"
+# Bumped 150 → 250 after run-2069918 / 2102970 hit max-turns due to
+# tier-1 mount-busy friction (catalog SQLite handle pinned /mnt,
+# preventing clean disc swaps).  The catalog-copy fix in
+# disc_locator.c removes the pin, but real operators on slow drives
+# may still want more headroom.  Override with MAX_TURNS env to
+# tighten or loosen for stress testing.
+MAX_TURNS="${MAX_TURNS:-250}"
 PROMPT="$(cat "$RUN_DIR/prompt.txt")"
 
 # Run claude as lcsas-blind. --allowed-tools is restricted to Bash so

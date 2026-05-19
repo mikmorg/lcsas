@@ -20,6 +20,9 @@
 #  define chdir _chdir
 #endif
 
+/* Forward declarations for helpers defined further below. */
+static int copy_file(const char *src, const char *dst);
+
 void
 lcsas_disc_locator_init(lcsas_disc_locator *l,
                         const char **search_paths,
@@ -212,6 +215,13 @@ push_discovered(lcsas_disc_locator *l, const char *path)
 /*
  * Consider `path` as a potentially-fresher catalog.db.  If its mtime
  * beats whatever the locator has previously opened, swap it in.
+ *
+ * To avoid pinning the underlying mount via SQLite's persistent file
+ * handle (which would block `umount /mnt` between disc swaps), we
+ * **copy the catalog into the cache dir** and open the copy.  The
+ * original is touched only during the copy.  Fallback when no cache
+ * dir is configured: open the original in-place (legacy behaviour;
+ * the operator gets the mount-busy friction).
  */
 static void
 consider_catalog(lcsas_disc_locator *l, const char *path)
@@ -219,12 +229,28 @@ consider_catalog(lcsas_disc_locator *l, const char *path)
     struct stat st;
     lcsas_catalog *cat;
     char *path_dup;
+    char open_path[4096];
 
     if (!path || !*path) return;
     if (stat(path, &st) != 0) return;
     if ((long long)st.st_mtime <= l->owned_catalog_mtime) return;
 
-    cat = lcsas_catalog_open(path);
+    if (l->cache_dir) {
+        int rc = snprintf(open_path, sizeof open_path,
+                          "%s/.locator-catalog.db", l->cache_dir);
+        if (rc <= 0 || (size_t)rc >= sizeof open_path) return;
+        /* Drop any previous copy so the file size doesn't accumulate. */
+        unlink(open_path);
+        if (copy_file(path, open_path) != 0) {
+            /* Best-effort fallback: open the original.  Will pin the
+             * mount, but better than no catalog. */
+            cat = lcsas_catalog_open(path);
+        } else {
+            cat = lcsas_catalog_open(open_path);
+        }
+    } else {
+        cat = lcsas_catalog_open(path);
+    }
     if (!cat) return;
 
     /* Successfully opened a newer catalog -- swap. */
