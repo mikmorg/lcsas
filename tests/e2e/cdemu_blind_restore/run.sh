@@ -67,12 +67,20 @@ sudo ln -sf "$RUN_DIR/disc-loader.log" /var/log/disc-loader.log
 # may still want more headroom.  Override with MAX_TURNS env to
 # tighten or loosen for stress testing.
 MAX_TURNS="${MAX_TURNS:-250}"
+# BLIND_MODEL: override the model used by the blind agent.
+# Default is whatever claude picks; set to claude-haiku-4-5-20251001
+# for faster/cheaper runs.  Must be a valid --model value.
+BLIND_MODEL="${BLIND_MODEL:-}"
 PROMPT="$(cat "$RUN_DIR/prompt.txt")"
 
 # Run claude as lcsas-blind. --allowed-tools is restricted to Bash so
 # the agent has to use the shell for everything — same posture as a
 # human at a bare terminal.
 PROMPT_FILE="$RUN_DIR/prompt.txt"
+MODEL_FLAG=""
+if [ -n "$BLIND_MODEL" ]; then
+    MODEL_FLAG="--model $BLIND_MODEL"
+fi
 sudo -u lcsas-blind -H bash -lc "
     cd ~ &&
     HOME=/home/lcsas-blind \
@@ -83,7 +91,8 @@ sudo -u lcsas-blind -H bash -lc "
         --verbose \
         --allowed-tools Bash \
         --disallowed-tools Read,Edit,Write,Glob,Grep,WebFetch,WebSearch \
-        --max-turns $MAX_TURNS
+        --max-turns $MAX_TURNS \
+        $MODEL_FLAG
 " > "$RUN_DIR/transcript.jsonl" 2> "$RUN_DIR/agent-stderr.log" \
     || echo "claude exited non-zero (see agent-stderr.log)" >&2
 
