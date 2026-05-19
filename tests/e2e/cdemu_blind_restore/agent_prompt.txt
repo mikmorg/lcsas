@@ -47,10 +47,12 @@ restore.sh asks up to three things via its terminal:
      press Enter.  Do NOT pipe the password through stdin.  Do
      NOT set LCSAS_PASSWORD or LCSAS_PWFILE.  Type it through
      the terminal as a human would.
-  3. `INSERT DISC: LCSAS_<label>` — the recovery binary needs
-     another disc.  Switch the disc with `disc-loader insert
-     <label>` from a fresh shell (not via tmux), then
-     `tmux send-keys -t r '' C-m` to acknowledge.
+  3. A disc-swap box — the recovery binary could not find a
+     required pack and prints a framed prompt containing the line
+     `Insert the right disc and press ENTER to retry.`  Switch
+     the disc with `disc-loader insert <label>` from a fresh
+     shell (not via tmux), then press ENTER in the tmux session:
+     `tmux send-keys -t r '' C-m`.
 
 WHAT YOU MAY NOT DO
 ===================
@@ -84,5 +86,64 @@ failure — exactly like a real operator filing a bug report.  The
 correct response is `RESTORE FAILED: <captured error>`, not a
 sequence of workarounds.  Restoration via the production script,
 or no restoration at all.
+
+WHAT TO EXPECT FROM LCSAS-RESTORE
+==================================
+
+lcsas-restore writes progress and status lines to stderr.  The
+tmux session merges stdout and stderr, so you will see them
+interleaved with normal output.
+
+  Progress lines (periodic):
+      [lcsas-restore] progress: N/M blobs, X MB
+      The denominator M is the full index size, so it is an
+      upper bound; the real snapshot subset may be smaller.
+      The first progress line is emitted at 0/M before any
+      disc is read.  Do NOT treat silence for up to 60 seconds
+      as a hang — slow optical drives can take that long between
+      progress lines.
+
+  Disc-swap prompt (when a pack is not on any currently mounted disc):
+      lcsas-restore prints a framed ASCII box to stderr ending with:
+          Insert the right disc and press ENTER to retry.
+          Type 'q' then ENTER to abort.
+      Use `disc-loader insert <label>` from a fresh shell to
+      load the disc, then press ENTER in the tmux session:
+          tmux send-keys -t r '' C-m
+      The binary re-enumerates mounted discs after each ENTER, so
+      the newly mounted disc is found automatically.  You do NOT
+      need to pass any path to the binary.
+
+  Completion:
+      [lcsas-restore] restore complete
+      [lcsas-restore] N disc swap(s) handled during restore
+
+  Abort:
+      If you type 'q' at the disc-swap prompt, lcsas-restore
+      exits non-zero.  treat that as RESTORE FAILED.
+
+USEFUL ENV VARS
+===============
+
+LCSAS_PACK_CACHE_DIR=auto
+    Set automatically by restore.sh when a writable /tmp exists.
+    Causes lcsas-restore to copy pack files into a local cache dir
+    as they are read from disc, so subsequent disc swaps for the
+    same packs can be served from cache.  The v3 blind run showed
+    this reduces disc swaps by 3-16x.  Do NOT unset this unless
+    debugging a cache bug.
+
+LCSAS_TIER_FALLBACK=1
+    If set, restore.sh will try tier 2 (rustic-static) if tier 1
+    (lcsas-restore) crashes.  Default OFF.  Set it if you suspect
+    a tier-1 binary bug and need to verify data is recoverable.
+
+LCSAS_REPO=<path>
+    Skip the multi-tenant selection prompt and use this repo
+    directory directly.  Useful when you already know the repo.
+
+LCSAS_ALLOW_NO_PACK_SEARCH=1
+    Bypass the hard-error when no data discs are detected on mount.
+    Use only if you've pre-staged pack files manually.
 
 Begin.
