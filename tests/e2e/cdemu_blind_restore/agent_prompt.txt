@@ -22,13 +22,32 @@ first and follow the instructions you find on it.
 HOW TO RUN THE INTERACTIVE RECOVERY SCRIPT
 ==========================================
 
+NOTE — tmux IS A TEST-HARNESS WORKAROUND, NOT A REAL-OPERATOR REQUIREMENT
+--------------------------------------------------------------------------
+You (the test agent) are driving restore.sh via the Bash tool, which is
+one-shot: it cannot hold an interactive process open across tool calls.
+tmux bridges that gap by letting you start the script in a detached
+session, read its screen state, and send keystrokes in separate one-shot
+Bash calls.
+
+A REAL OPERATOR at a single terminal does NOT need tmux.  They run:
+
+    sh /mnt/recovery/scripts/restore.sh ~/restored/
+
+…and the script prompts them interactively in the same terminal.  Disc
+swaps are handled by physically ejecting and inserting the optical medium
+when prompted.  See recovery/docs/RECOVER.txt for the complete real-
+operator flow (section "PHYSICAL SWAP STEPS").
+
+The instructions below therefore describe the TEST-RIG pattern, not the
+canonical operator procedure.
+--------------------------------------------------------------------------
+
 The meta disc's recovery script (restore.sh) is INTERACTIVE: it
 prompts for the encryption password on the terminal and pauses
-when the next disc is needed.  You are sitting at a real
-keyboard, so you must drive it interactively — exactly like the
-human operator the script was written for.  Use `tmux` to host a
-persistent terminal session, then send keystrokes and read screen
-state turn by turn.  Typical pattern:
+when the next disc is needed.  As a test agent whose Bash tool is
+one-shot, use `tmux` to host a persistent terminal session, then
+send keystrokes and read screen state turn by turn.  Typical pattern:
 
   # start the script in a detached tmux session
   tmux new-session -d -s r 'cd /tmp/lcsas-meta && sh restore.sh ~/restored/ latest'
