@@ -147,6 +147,90 @@ EXIT CODES
     1 -- runtime error (bad password, missing file, integrity failure)
     2 -- usage error
 
+MULTI-DISC RESTORE
+
+An LCSAS archive typically spans multiple optical discs: one META disc
+that carries the recovery toolchain and holographic catalog, plus
+several DATA discs that hold the encrypted pack files.  The recovery
+cascade handles swaps interactively — but the operator must know what
+to expect and what to do.
+
+WHICH DISC DO I START WITH?
+
+Always start with the META disc — the one labelled LCSAS_META.  It is
+the only disc that contains the recovery binaries (bin/<arch>/), the
+catalog, and restore.sh.
+
+  1. Insert the META disc and mount it:
+         sudo mount /dev/sr0 /mnt
+  2. Run:
+         sh /mnt/scripts/restore.sh ~/restored/
+  3. restore.sh copies itself and the binary into RAM (/tmp) so the
+     META disc can later be ejected.  You will see:
+         [lcsas-restore] copied recovery binaries to /tmp/lcsas-restore.Xxxx
+         [lcsas-restore] you may eject the recovery disc when the
+                         binary prompts for a data disc.
+  4. When the binary has loaded the index and needs a pack that lives
+     on a DATA disc it pauses and prints a prompt (see below).
+
+WHAT THE SWAP PROMPT LOOKS LIKE
+
+When lcsas-restore cannot find the next required pack on the currently
+mounted disc it prints (to stderr):
+
+  +----------------------------------------------------------+
+  | Pack ... is required for the next file.                  |
+  | ...                                                      |
+  | Single-drive recovery: if your machine has only ONE      |
+  | optical drive, eject the RECOVERY disc first, then       |
+  | insert the disc named above into the SAME drive.         |
+  | Insert the right disc and press ENTER to retry.          |
+  +----------------------------------------------------------+
+
+The catalog hint lines will name the specific DATA disc (e.g. "vol-042
+Family Photos 2027 vol 3/8") when a catalog.db is available on a
+mounted disc.  If no catalog is present the prompt shows only the pack
+hash and asks you to try each DATA disc in turn.
+
+PHYSICAL SWAP STEPS (single optical drive)
+
+  1. Note the disc label named in the prompt.
+  2. Eject the current disc:
+         eject /dev/sr0
+     (On macOS: drutil eject)
+  3. Insert the DATA disc named in the prompt.
+  4. Wait for the OS to auto-mount it (typically a few seconds).
+     If auto-mount is disabled, mount it manually:
+         sudo mount /dev/sr0 /mnt
+  5. Press ENTER at the prompt.
+  6. lcsas-restore rescans the mount directories and continues.
+     If the wrong disc was inserted it will re-prompt; eject and
+     retry with the correct disc.
+  7. Repeat for each additional DATA disc as prompted.
+
+NOTE ON THE TEST RIG vs. REAL OPERATORS
+
+Automated tests use a setuid C wrapper called disc-loader to simulate
+disc swaps without human interaction.  Real operators must perform the
+eject/insert step manually.  A passing test therefore does NOT guarantee
+that the UX is smooth for a live operator — this section exists because
+the test rig hid the gap for some time (see UX_CONCERNS.txt ID 011).
+
+REDUCING SWAP FREQUENCY WITH THE PACK CACHE
+
+By default restore.sh allocates an opportunistic pack cache under /tmp
+(LCSAS_PACK_CACHE_DIR=auto).  When lcsas-restore first reads a pack
+from a DATA disc it copies the entire data/ subtree of that disc into
+the cache.  Subsequent packs from the same disc are served from the
+local cache, not the physical medium, so each DATA disc typically needs
+to be inserted only ONCE regardless of how many packs it contributes
+to the restore.
+
+  * To use a specific directory:   export LCSAS_PACK_CACHE_DIR=/path
+  * To disable (disk-constrained):  export LCSAS_PACK_CACHE_DIR=
+  * Disk cost: roughly equal to the total size of all DATA discs that
+    are touched during the restore (worst case: the full archive).
+
 IF YOU HAVE ONLY ONE OPTICAL DRIVE
 
 You do NOT need two Blu-ray drives.  restore.sh detects that it is

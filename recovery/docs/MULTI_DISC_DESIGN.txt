@@ -1,10 +1,38 @@
+╔══════════════════════════════════════════════════════════════════╗
+║  DESIGN DOCUMENT — describes intended future UX, not current     ║
+║  behavior.  For operator instructions, see RECOVER.txt           ║
+║  (MULTI-DISC RESTORE section).                                   ║
+╚══════════════════════════════════════════════════════════════════╝
+
 LCSAS RECOVERY -- MULTI-DISC SWAP UX (DESIGN DOC)
 ====================================================
 
 UX CONCERN ID: 005 (recovery/docs/UX_CONCERNS.txt)
-STATUS: catalog-hint MVP shipped; further work deferred.  See
-        DEFERRED_WORK.txt for the parking lot.
+STATUS: Significant portions shipped; further work deferred.  See
+        DEFERRED_WORK.txt for the parking lot.  See RECOVER.txt for
+        current operator-facing procedure.
 PLATFORMS: all -- Linux, macOS, Windows
+
+────────────────────────────────────────────────────────────────────
+WHAT HAS SHIPPED (as of Phase 21)
+────────────────────────────────────────────────────────────────────
+
+  * LCSAS_PACK_CACHE_DIR reduces swap frequency — v3 blind run
+    proved 3-16× improvement; auto mode enabled by default in
+    restore.sh (LCSAS_PACK_CACHE_DIR=auto).
+  * Interactive --interactive flag and --mount-parent disc-scan
+    shipped in lcsas-restore.
+  * Catalog hint prompt (names the disc label, press ENTER + re-scan)
+    shipped.
+  * Single-drive relocation: restore.sh copies itself and the binary
+    to RAM (/tmp) before prompting, so the meta-disc can be ejected.
+  * See RECOVER.txt (MULTI-DISC RESTORE section) for the current
+    operator-facing procedure including exact prompt text and physical
+    swap steps.
+
+The sections below describe the INTENDED DESIGN including features
+still unimplemented (disc_index.txt sidecar, .lcsas_volume_info,
+inotify auto-detection, etc.).  Do not treat them as current behavior.
 PRIORITY: P0 -- the highest-impact UX gap in the current workflow
 
 ────────────────────────────────────────────────────────────────────
@@ -552,3 +580,17 @@ KNOWN LIMITATIONS
     different volume.
   - Set LCSAS_NO_RELOCATE=1 to suppress relocation (for dev/test
     workflows running the script from a writable checkout).
+
+────────────────────────────────────────────────────────────────────
+SEE ALSO
+────────────────────────────────────────────────────────────────────
+
+  RECOVER.txt           Current operator-facing procedure, including
+                        the MULTI-DISC RESTORE section with exact
+                        prompt text, physical swap steps, and the
+                        LCSAS_PACK_CACHE_DIR cache knob.
+
+  DEFERRED_WORK.txt     Features from this design that remain
+                        unimplemented (disc_index.txt sidecar,
+                        .lcsas_volume_info, inotify auto-detection,
+                        E2E interactive tests, etc.).

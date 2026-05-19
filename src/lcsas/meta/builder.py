@@ -1410,8 +1410,8 @@ The **only** thing you must provide is your **encryption key file**.
 | `tools/` | Portable Linux x86_64 binaries: rustic, xorriso, Python 3 |
 | `lcsas/` | LCSAS source code (Python, no external dependencies) |
 | `docs/` | Architecture documentation + restic format specification |
-| `restore.sh` | **Interactive restore script — single-drive default. Prompts for the encryption password and for disc swaps. USE THIS.** |
-| `restore-auto.sh` | Non-interactive restore script (automation only — humans should use restore.sh) |
+| `restore.sh` | **Start here. Prompts for password and disc swaps.** |
+| `restore-auto.sh` | Non-interactive restore (automation only; use restore.sh instead) |
 | `restore_legacy.sh` | Older Bash driver kept for back-compat — superseded by `restore.sh`. |
 | `README_RESTORE.md` | This file |
 | `volume_info.json` | Machine-readable volume metadata (includes tool versions) |
@@ -1608,7 +1608,7 @@ discs and feed in the key file.
 | `--key FILE` | **(required)** Encryption key file |
 | `--target DIR` | **(required)** Restore destination |
 | `--repo NAME` | **(required)** Repository to restore |
-| `--disc-cmd CMD` | Command to load/eject discs programmatically (e.g. a robotic loader). The script calls it as `CMD insert LABEL` and `CMD eject`. |
+| `--disc-cmd CMD` | Robotic loader command (`CMD insert LABEL` / `CMD eject`). |
 | `--drive DEV` | Optical drive (default: `/dev/sr0`) |
 | `--snapshot ID` | Snapshot to restore (default: latest) |
 | `--work-dir DIR` | Temp directory (default: auto) |

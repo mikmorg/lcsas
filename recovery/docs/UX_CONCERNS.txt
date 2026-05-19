@@ -95,7 +95,12 @@ MITIGATION:
 ────────────────────────────────────────────────────────────────────
 ID 005 -- Multi-disc swap prompts are unclear
 ────────────────────────────────────────────────────────────────────
-STATUS: OPEN
+STATUS: CLOSED
+RESOLVED BY: RECOVER.txt "MULTI-DISC RESTORE" section documents the
+             exact prompt text, physical swap steps, and pack-cache
+             knob (LCSAS_PACK_CACHE_DIR) that reduces swap frequency.
+             Static regression test added in
+             tests/recovery_hardening/test_disc_swap_docs.py.
 IMPACT: HIGH.  When lcsas-restore needs a pack on a different
         volume, it currently prints "pack not found: <sha>" and
         exits non-zero.  The user has no idea which physical disc
@@ -196,6 +201,32 @@ MITIGATION:
   * Make this file the first thing referenced from START_HERE.txt.
 
 ────────────────────────────────────────────────────────────────────
+ID 012 -- env-var defaults were undocumented
+────────────────────────────────────────────────────────────────────
+STATUS: CLOSED
+RESOLVED BY: recovery/docs/ENV_VARS.txt (closes #89).
+             Static regression test added in
+             tests/recovery_hardening/test_env_var_docs.py.
+IMPACT: MEDIUM.  LCSAS_PACK_CACHE_DIR defaulted ON (auto) and
+        LCSAS_TIER_FALLBACK defaulted OFF with no documented rationale.
+        Operators could not predict restore behavior without reading
+        restore.sh source — violating the principle that the recovery
+        path must be understandable without tooling.
+
+MITIGATION:
+  * Created ENV_VARS.txt with a full variable inventory and a
+    documented opt-in / opt-out principle:
+      "Features that only add cost or disk use are opt-in (default OFF).
+       Features that change observable behavior are also opt-in unless
+       the feature is always safe and the penalty of forgetting it is
+       data loss or silent failure, in which case it is opt-out
+       (default ON)."
+  * Every variable now has an explicit "Why this default" entry.
+  * Static test pins the file's existence and the presence of the
+    rationale so renames or stripping of the defaults column are caught
+    before merge.
+
+────────────────────────────────────────────────────────────────────
 
 PRIORITISATION
 
@@ -204,3 +235,4 @@ PRIORITISATION
   P2 (when time):      004, 009
   P3 (long-term):      003
   WONTFIX:             006 (cryptographic), 007 (hardware)
+  CLOSED:              012
