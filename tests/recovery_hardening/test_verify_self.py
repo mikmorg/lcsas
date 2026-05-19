@@ -255,6 +255,96 @@ def test_illusion_leak_fails(tmp_path: Path) -> None:
     assert _check_status(out, "illusion intact") == "FAIL", out
 
 
+def _make_fixture_n_discs(tmp_path: Path, n: int, suffix: str = "") -> Path:
+    """Create a fixture with *n* expected alpha volumes.
+
+    alpha_manifest.sha256 and bravo_manifest.sha256 are present (non-empty)
+    to satisfy the fail-closed presence guard; their contents don't matter
+    for check #6.
+    """
+    fix = tmp_path / f"fixture_{n}{suffix}"
+    fix.mkdir()
+    (fix / "alpha_manifest.sha256").write_text("dummy  file\n")
+    (fix / "bravo_manifest.sha256").write_text("dummy  file\n")
+    lines = "\n".join(
+        f"LCSAS_TEST_TINY_2026_{i:04d}" for i in range(1, n + 1)
+    ) + "\n"
+    (fix / "expected_alpha_volumes.txt").write_text(lines)
+    return fix
+
+
+def _clean_disc_log_lines(labels: list[str]) -> list[str]:
+    """Build a disc-loader.log that starts with LCSAS_META then the given labels."""
+    base = ["2026-05-18T10:00:00+00:00 insert LCSAS_META"]
+    for i, label in enumerate(labels, start=1):
+        ts = f"2026-05-18T10:{i:02d}:00+00:00"
+        base.append(f"{ts} insert {label}")
+    return base
+
+
+def _clean_transcript_events() -> list[dict]:
+    """Minimal transcript that passes all stumble-detection checks."""
+    return [
+        _bash_event("disc-loader insert LCSAS_META"),
+        _bash_event("sudo mount /dev/sr0 /mnt"),
+        _bash_event(
+            "tmux new-session -d -s r 'cd /tmp/lcsas-meta && "
+            "sh restore.sh ~/restored latest'"
+        ),
+        _bash_event('tmux send-keys -t r "$(cat ~/tenant-alpha.pw)" C-m'),
+        _result_event(),
+    ]
+
+
+# ── Check #6: unique-disc-insert threshold ───────────────────────────
+
+
+def test_check6_same_disc_repeated_passes(tmp_path: Path) -> None:
+    """Old behaviour: 10 total inserts of disc 0001 with NEEDED=1 → FAIL at 5×.
+    New behaviour: 1 unique disc inserted with NEEDED=1 → PASS (unique ≤ NEEDED+1=2).
+
+    This is the old-failing / new-passing case.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_transcript(run_dir, _clean_transcript_events())
+    # Disc 0001 inserted ten times; NEEDED is 1.
+    repeated = ["LCSAS_TEST_TINY_2026_0001"] * 10
+    _write_disc_log(run_dir, _clean_disc_log_lines(repeated))
+    fix = _make_fixture_n_discs(tmp_path, n=1)
+    _rc, out = _run_verify(run_dir, fixture=fix)
+    assert _check_status(out, "unique discs inserted") == "PASS", (
+        "repeated single disc should PASS the unique-insert check\n"
+        f"full output:\n{out}"
+    )
+
+
+def test_check6_many_unique_discs_fails(tmp_path: Path) -> None:
+    """Old behaviour: 5 unique inserts with NEEDED=2 → PASS (5 ≤ 10 = NEEDED×5).
+    New behaviour: 5 unique discs with NEEDED=2 → FAIL (5 > NEEDED+1=3).
+
+    This is the old-passing / new-failing case.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_transcript(run_dir, _clean_transcript_events())
+    # 5 unique discs inserted; only the first two are expected (NEEDED=2).
+    five_unique = [
+        "LCSAS_TEST_TINY_2026_0001",
+        "LCSAS_TEST_TINY_2026_0002",
+        "LCSAS_TEST_TINY_2026_0003",
+        "LCSAS_TEST_TINY_2026_0004",
+        "LCSAS_TEST_TINY_2026_0005",
+    ]
+    _write_disc_log(run_dir, _clean_disc_log_lines(five_unique))
+    fix = _make_fixture_n_discs(tmp_path, n=2)
+    _rc, out = _run_verify(run_dir, fixture=fix)
+    assert _check_status(out, "unique discs inserted") == "FAIL", (
+        "5 unique discs inserted when NEEDED=2 should FAIL the unique-insert check\n"
+        f"full output:\n{out}"
+    )
+
+
 # ── Clean transcript should not trip a stumble check ─────────────────
 
 

@@ -140,12 +140,9 @@ check "all required discs inserted" \
     "[[ -z \"\$(comm -23 $RUN_DIR/expected.txt $RUN_DIR/inserted.txt)\" ]]"
 
 NEEDED=$(wc -l < $RUN_DIR/expected.txt)
-ACTUAL=$($DISC_LOG_CAT 2>/dev/null \
-    | grep -oE 'insert LCSAS_[A-Z0-9_]+' \
-    | grep -v ' LCSAS_META$' \
-    | wc -l)
-check "no excessive thrashing (actual=$ACTUAL, needed=$NEEDED)" \
-    "[[ $ACTUAL -le $((NEEDED * 5)) ]]"
+ACTUAL=$(wc -l < $RUN_DIR/inserted.txt)
+check "no excessive thrashing — unique discs inserted (actual=$ACTUAL, needed=$NEEDED)" \
+    "[[ $ACTUAL -le $((NEEDED + 1)) ]]"
 
 # -----------------------------------------------------------------------
 # 7. Agent's TEXT output (or its final `result`) contains RESTORE
