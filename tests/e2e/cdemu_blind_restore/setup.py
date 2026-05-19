@@ -451,12 +451,15 @@ def _create_agent_user(labels: list[str]) -> None:
         os.chown(p, uid, gid)
 
     # Propagate claude credentials so the headless sub-agent can authenticate.
-    src_top = Path("/home/mikmorg/.claude.json")
-    if src_top.is_file():
-        dst_top = AGENT_HOME / ".claude.json"
-        shutil.copy2(src_top, dst_top)
-        os.chmod(dst_top, 0o600)
-        os.chown(dst_top, uid, gid)
+    # .claude.json holds only account metadata + feature-flag cache; auth
+    # tokens live in .credentials.json.  Write a minimal valid JSON so
+    # Claude Code starts without an "Unexpected EOF" parse error — copying
+    # mikmorg's .claude.json is fragile because that file can be empty when
+    # a claude session was interrupted mid-write.
+    dst_top = AGENT_HOME / ".claude.json"
+    dst_top.write_text("{}")
+    os.chmod(dst_top, 0o600)
+    os.chown(dst_top, uid, gid)
     src_creds = Path("/home/mikmorg/.claude/.credentials.json")
     if src_creds.is_file():
         dst_dir = AGENT_HOME / ".claude"

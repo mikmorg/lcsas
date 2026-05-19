@@ -31,6 +31,7 @@ lcsas_disc_locator_init(lcsas_disc_locator *l,
                         lcsas_catalog *catalog,
                         int interactive)
 {
+    const char *chunk_env;
     l->search_paths        = search_paths;
     l->n_paths             = n_paths;
     l->catalog             = catalog;
@@ -48,6 +49,8 @@ lcsas_disc_locator_init(lcsas_disc_locator *l,
     l->owned_catalog_path  = NULL;
     l->owned_catalog_mtime = 0;
     l->cache_dir           = NULL;
+    chunk_env = getenv("LCSAS_DRAIN_CHUNK_PACKS");
+    l->drain_chunk_packs   = chunk_env ? atoi(chunk_env) : 0;
 }
 
 void
@@ -505,6 +508,9 @@ drain_disc(lcsas_disc_locator *l, const char *root)
     struct dirent *e_root, *e_pref;
     struct stat st;
     int rc;
+    int packs_copied = 0;
+    int chunk_limit;
+    int limit_reached = 0;
 
     if (!l->cache_dir || !root) return;
     /* If `root` IS the cache (or under it), nothing to drain. */
@@ -548,9 +554,15 @@ drain_disc(lcsas_disc_locator *l, const char *root)
     if (rc <= 0 || (size_t)rc >= sizeof data_dir) return;
     if (stat(data_dir, &st) != 0) return;
 
+    fprintf(stderr,
+            "[lcsas-restore] draining disc %s to cache "
+            "(may take several minutes on optical media)...\n", root);
+
+    chunk_limit = l->drain_chunk_packs;
+
     d_root = opendir(data_dir);
     if (!d_root) return;
-    while ((e_root = readdir(d_root)) != NULL) {
+    while (!limit_reached && (e_root = readdir(d_root)) != NULL) {
         if (e_root->d_name[0] == '.') continue;
         rc = snprintf(prefix_dir, sizeof prefix_dir,
                       "%s/%s", data_dir, e_root->d_name);
@@ -575,11 +587,18 @@ drain_disc(lcsas_disc_locator *l, const char *root)
             /* Skip if already cached. */
             if (stat(dst, &st) == 0) continue;
             if (stat(src, &st) != 0 || !S_ISREG(st.st_mode)) continue;
-            (void)copy_file(src, dst);
+            if (copy_file(src, dst) == 0) {
+                packs_copied++;
+                if (chunk_limit > 0 && packs_copied >= chunk_limit) {
+                    limit_reached = 1;
+                    break;
+                }
+            }
         }
         closedir(d_pref);
     }
     closedir(d_root);
+    fprintf(stderr, "[lcsas-restore] disc drain complete.\n");
 }
 
 static int

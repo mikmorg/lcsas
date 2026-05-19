@@ -109,6 +109,25 @@ LCSAS_PACK_CACHE_DIR
             who cannot afford the cache space can explicitly set
             LCSAS_PACK_CACHE_DIR='' to turn it off.
 
+LCSAS_DRAIN_CHUNK_PACKS
+  Default:  0  (opt-in / default OFF)
+  Since:    Phase 25
+  What:     Limits how many pack files are copied per drain_disc() call.
+            0 (default) → drain the entire disc data/ subtree in one
+            call (safe, but can stall for 8-40 minutes on a slow
+            optical drive ~10 MB/s before the next pack lookup proceeds).
+            N > 0 → copy at most N packs per call, then return.  The
+            next drain_disc() call resumes automatically (already-cached
+            packs are skipped via stat, so re-entry is cheap).  Set to
+            100-500 when working with slow optical drives to keep the
+            restore interactive between drain calls.
+  Why:      Opt-IN.  Changing the default would change observable timing
+            behavior: existing scripts and operators that rely on the
+            disc being fully drained after the first pack hit would see
+            a different pattern.  Chunked draining is an explicit
+            trade-off between restore interactivity and disc-read
+            continuity; operators who want it must opt in.
+
 LCSAS_TIER_FALLBACK
   Default:  0  (opt-in / default OFF)
   Since:    Phase 24
@@ -254,6 +273,7 @@ LCSAS_TARGET                unset     opt-in      unusual host arch
 LCSAS_META_DISC             unset     opt-in      unusual mount layout
 LCSAS_MOUNT_DIRS            unset     opt-in      non-standard disc mounts
 LCSAS_PACK_CACHE_DIR        auto      opt-out     set ''  to disable cache
+LCSAS_DRAIN_CHUNK_PACKS     0         opt-in      set 100-500 for slow optical
 LCSAS_TIER_FALLBACK         0         opt-in      set 1 to walk cascade
 LCSAS_ALLOW_PYTHON_TIER     1         opt-out     set 0 to ban Python
 LCSAS_PROGRESS              unset     opt-out     set 0 to silence output
