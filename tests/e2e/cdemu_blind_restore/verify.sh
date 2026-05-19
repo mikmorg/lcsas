@@ -148,9 +148,37 @@ check "no excessive thrashing (actual=$ACTUAL, needed=$NEEDED)" \
     "[[ $ACTUAL -le $((NEEDED * 5)) ]]"
 
 # -----------------------------------------------------------------------
-# 7. Agent's transcript includes the production "RESTORE COMPLETE" string.
+# 7. Agent's TEXT output (or its final `result`) contains RESTORE
+#    COMPLETE — i.e. the agent itself declared completion.  A flat
+#    `grep -q 'RESTORE COMPLETE' "$TRANSCRIPT"` is a false positive:
+#    the meta disc's README mentions the phrase, so any `cat
+#    README_RESTORE.txt` puts it in the transcript regardless of
+#    what the agent did.  Walk the JSON and only count occurrences
+#    in assistant-text content or the final result string.
+cat > "$RUN_DIR/restore_complete_check.py" <<'PY'
+import json, sys
+hits = 0
+with open(sys.argv[1]) as fh:
+    for line in fh:
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        t = d.get('type')
+        if t == 'assistant':
+            for c in d.get('message', {}).get('content', []):
+                if c.get('type') == 'text' and 'RESTORE COMPLETE' in c.get('text', ''):
+                    hits += 1
+        elif t == 'result':
+            if 'RESTORE COMPLETE' in (d.get('result') or ''):
+                hits += 1
+if hits == 0:
+    print('agent never declared RESTORE COMPLETE in its own output',
+          file=sys.stderr)
+    sys.exit(1)
+PY
 check "RESTORE COMPLETE printed" \
-    "grep -q 'RESTORE COMPLETE' '$TRANSCRIPT'"
+    "python3 '$RUN_DIR/restore_complete_check.py' '$TRANSCRIPT'"
 
 # -----------------------------------------------------------------------
 # 8. Meta disc carries no catalog.db (organic upgrade design).

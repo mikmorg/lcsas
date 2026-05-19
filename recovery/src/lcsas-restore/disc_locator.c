@@ -403,7 +403,7 @@ drain_disc(lcsas_disc_locator *l, const char *root)
     char data_dir[4096], prefix_dir[4096];
     char src[4096], dst[4096], cache_prefix[4096];
     DIR *d_root, *d_pref;
-    struct dirent *e;
+    struct dirent *e_root, *e_pref;
     struct stat st;
     int rc;
 
@@ -417,27 +417,27 @@ drain_disc(lcsas_disc_locator *l, const char *root)
 
     d_root = opendir(data_dir);
     if (!d_root) return;
-    while ((e = readdir(d_root)) != NULL) {
-        if (e->d_name[0] == '.') continue;
+    while ((e_root = readdir(d_root)) != NULL) {
+        if (e_root->d_name[0] == '.') continue;
         rc = snprintf(prefix_dir, sizeof prefix_dir,
-                      "%s/%s", data_dir, e->d_name);
+                      "%s/%s", data_dir, e_root->d_name);
         if (rc <= 0 || (size_t)rc >= sizeof prefix_dir) continue;
         if (stat(prefix_dir, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
 
         rc = snprintf(cache_prefix, sizeof cache_prefix,
-                      "%s/data/%s", l->cache_dir, e->d_name);
+                      "%s/data/%s", l->cache_dir, e_root->d_name);
         if (rc <= 0 || (size_t)rc >= sizeof cache_prefix) continue;
         if (mkdir_p(cache_prefix) != 0) continue;
 
         d_pref = opendir(prefix_dir);
         if (!d_pref) continue;
-        while ((e = readdir(d_pref)) != NULL) {
-            if (e->d_name[0] == '.') continue;
+        while ((e_pref = readdir(d_pref)) != NULL) {
+            if (e_pref->d_name[0] == '.') continue;
             rc = snprintf(src, sizeof src, "%s/%s",
-                          prefix_dir, e->d_name);
+                          prefix_dir, e_pref->d_name);
             if (rc <= 0 || (size_t)rc >= sizeof src) continue;
             rc = snprintf(dst, sizeof dst, "%s/%s",
-                          cache_prefix, e->d_name);
+                          cache_prefix, e_pref->d_name);
             if (rc <= 0 || (size_t)rc >= sizeof dst) continue;
             /* Skip if already cached. */
             if (stat(dst, &st) == 0) continue;
@@ -445,9 +445,6 @@ drain_disc(lcsas_disc_locator *l, const char *root)
             (void)copy_file(src, dst);
         }
         closedir(d_pref);
-        /* Re-open d_root to keep iteration consistent — we replaced
-         * `e` while iterating the inner loop. */
-        rewinddir(d_root);
     }
     closedir(d_root);
 }
