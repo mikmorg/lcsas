@@ -38,6 +38,7 @@ make test-recovery-hardening   # this tier only
 | `test_disc_swap_docs.py` | `RECOVER.txt` losing the operator disc-swap guide: the automated test rig uses `disc-loader` (a setuid wrapper) to simulate swaps, so a passing blind-restore test gave false confidence about real-user UX.  Asserts that the `MULTI-DISC RESTORE` section header, the `eject` physical-step command, and the `LCSAS_PACK_CACHE_DIR` cache-knob are all present in `RECOVER.txt`, and that `UX_CONCERNS.txt` ID 005 is marked CLOSED (closes #106). |
 | `test_multi_disc_design_header.py` | MULTI_DISC_DESIGN.txt losing its "DESIGN DOCUMENT" banner or RECOVER.txt cross-reference — operators reading the design doc would mistakenly treat unshipped UX mockups as current behavior (closes #110). |
 | `test_env_var_docs.py` | `ENV_VARS.txt` being deleted or stripped of its defaults rationale — operators can't predict restore behavior without knowing which knobs are opt-in vs opt-out (closes #89). |
+| `test_agent_prompt.py` | `agent_prompt.txt` drifting from current feature set — blind-restore agent re-derives `LCSAS_PACK_CACHE_DIR` and disc-swap interaction from scratch each run, burning budget and risking wrong behavior (closes #103). |
 
 ## Adding a new hardening test
 

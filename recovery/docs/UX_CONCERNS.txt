@@ -201,6 +201,30 @@ MITIGATION:
   * Make this file the first thing referenced from START_HERE.txt.
 
 ────────────────────────────────────────────────────────────────────
+ID 011 -- disc-loader is test-only — no real-user disc-swap guide existed
+────────────────────────────────────────────────────────────────────
+STATUS: CLOSED
+RESOLVED BY: RECOVER.txt "MULTI-DISC RESTORE" section (closes #106).
+             Static regression test added in
+             tests/recovery_hardening/test_disc_swap_docs.py.
+IMPACT: HIGH.  The automated test rig uses a setuid C wrapper called
+        disc-loader to simulate disc swaps without human interaction.
+        Real disaster-recovery operators have no equivalent; they must
+        physically eject and insert discs.  No operator-facing
+        documentation of that process existed, so a passing test gave
+        false confidence that the UX was smooth for real users.
+
+MITIGATION:
+  * Added a MULTI-DISC RESTORE section to RECOVER.txt that documents
+    the full swap workflow: which disc to start with (LCSAS_META),
+    the exact prompt text the binary prints, the physical eject/insert
+    steps (eject /dev/sr0; insert; wait; press ENTER), and the
+    LCSAS_PACK_CACHE_DIR knob that reduces swap frequency.
+  * Added a note in that section explicitly calling out that
+    disc-loader is test-only and that a passing test does not
+    guarantee smooth live-operator UX.
+
+────────────────────────────────────────────────────────────────────
 ID 012 -- env-var defaults were undocumented
 ────────────────────────────────────────────────────────────────────
 STATUS: CLOSED
@@ -230,9 +254,9 @@ MITIGATION:
 
 PRIORITISATION
 
-  P0 (do this first):  001, 005
+  P0 (do this first):  001
   P1 (next):           002, 008, 010
   P2 (when time):      004, 009
   P3 (long-term):      003
   WONTFIX:             006 (cryptographic), 007 (hardware)
-  CLOSED:              012
+  CLOSED:              005, 011, 012
