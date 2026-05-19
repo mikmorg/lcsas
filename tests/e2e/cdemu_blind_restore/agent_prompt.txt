@@ -20,9 +20,14 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     - disc-swap box  → (see DISC SWAPS below)
 
   Step 4 — handle each disc-swap prompt as it appears:
-    (from a second Bash call, while tmux session runs)
-    disc-loader insert <LABEL_FROM_PROMPT>
-    tmux send-keys -t r "" C-m     (press ENTER to retry)
+    The prompt shows a pack hash, NOT a disc label.  Try each data
+    disc label from ~/disc-labels.txt (skip LCSAS_META) in order:
+      disc-loader insert LCSAS_TEST_TINY_2026_0001
+      tmux send-keys -t r "" C-m    (ENTER to retry)
+      (watch tmux pane — if restore continues, move on;
+       if another swap prompt appears, insert the next disc)
+    Repeat for 0002, 0003, 0004 as prompted.
+    NEVER abandon the tmux session to run lcsas-restore directly.
 
   Step 5 — when "RESTORE COMPLETE" appears in tmux output:
     print exactly: RESTORE COMPLETE
