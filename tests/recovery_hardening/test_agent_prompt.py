@@ -74,3 +74,56 @@ def test_agent_prompt_documents_enter_for_disc_swap() -> None:
         "a disc swap; the agent will insert the disc but lcsas-restore "
         "will keep waiting indefinitely."
     )
+
+
+def test_tmux_is_not_presented_as_required_to_real_operators() -> None:
+    """tmux is a test-rig workaround, not a real-operator requirement.
+
+    The agent_prompt.txt uses tmux only because the test agent's Bash tool
+    is one-shot and cannot hold an interactive process open.  Real operators
+    run restore.sh directly in a single terminal.  If agent_prompt.txt ever
+    stops calling out this distinction, it risks misleading readers into
+    thinking tmux is required for production recovery.
+
+    This test verifies that any tmux reference in the file is accompanied
+    by clear framing — either "test-rig" or "test harness" — within 500
+    characters of the first tmux mention.  It also verifies that
+    recovery/docs/RECOVER.txt (the real-operator guide) contains no tmux
+    reference at all.
+    """
+    text = _text()
+
+    # 1. agent_prompt.txt must contextualize tmux as a test-rig artifact.
+    tmux_idx = text.find("tmux")
+    assert tmux_idx != -1, (
+        "agent_prompt.txt no longer mentions tmux at all — if tmux was "
+        "removed entirely, also remove this guard and confirm no test-rig "
+        "guidance is needed."
+    )
+    # Search a 500-char window starting 500 chars before the first tmux
+    # reference so the NOTE block that precedes it is included.
+    window_start = max(0, tmux_idx - 500)
+    window = text[window_start: tmux_idx + 500].lower()
+    flagged = (
+        "test-rig" in window
+        or "test rig" in window
+        or "test-harness" in window
+        or "test harness" in window
+    )
+    assert flagged, (
+        "agent_prompt.txt mentions tmux but does not flag it as a "
+        "test-rig or test-harness workaround within 500 characters of "
+        "the first 'tmux' occurrence.  Add a NOTE explaining that real "
+        "operators do not need tmux — see recovery/docs/RECOVER.txt for "
+        "the real flow."
+    )
+
+    # 2. RECOVER.txt (the real-operator guide) must NOT mention tmux.
+    recover_txt = (
+        REPO_ROOT / "recovery" / "docs" / "RECOVER.txt"
+    ).read_text(encoding="utf-8")
+    assert "tmux" not in recover_txt, (
+        "recovery/docs/RECOVER.txt mentions tmux.  The real-operator "
+        "guide must not reference tmux — that is a test-rig artifact.  "
+        "Remove any tmux references from RECOVER.txt."
+    )
