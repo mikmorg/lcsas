@@ -61,6 +61,29 @@ def test_recover_txt_mentions_pack_cache():
     )
 
 
+def test_recover_txt_documents_first_contact_swap_count():
+    """RECOVER.txt must document the O(N) first-contact swap cost near the
+    MULTI-DISC RESTORE section so operators know to expect at least one swap
+    per DATA disc even when the pack cache is enabled.
+
+    Checks for at least one of the canonical phrasings within a bounded window
+    starting at the MULTI-DISC RESTORE header (same technique used by
+    test_ux_concerns_id005_is_closed to avoid false positives from unrelated
+    mentions elsewhere in the file).
+    """
+    idx = _RECOVER_TEXT.find("MULTI-DISC RESTORE")
+    assert idx != -1, "RECOVER.txt is missing the MULTI-DISC RESTORE section."
+    window = _RECOVER_TEXT[idx:]
+    markers = ["O(N", "N swap", "one swap per", "minimum"]
+    assert any(m in window for m in markers), (
+        "The MULTI-DISC RESTORE section of RECOVER.txt does not document the "
+        "O(N) first-contact swap lower bound. "
+        f"Expected at least one of {markers} after the section header. "
+        "Add a note explaining that each DATA disc requires one swap on first "
+        "contact even with LCSAS_PACK_CACHE_DIR enabled."
+    )
+
+
 def test_ux_concerns_id005_is_closed():
     """UX_CONCERNS.txt ID 005 must be marked CLOSED following the doc update."""
     idx = _UX_CONCERNS_TEXT.find("ID 005")

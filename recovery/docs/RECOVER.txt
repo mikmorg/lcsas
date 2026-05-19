@@ -216,6 +216,16 @@ eject/insert step manually.  A passing test therefore does NOT guarantee
 that the UX is smooth for a live operator — this section exists because
 the test rig hid the gap for some time (see UX_CONCERNS.txt ID 011).
 
+EXPECTED SWAP COUNT (FIRST-CONTACT COST)
+
+Even with the pack cache enabled, the first contact with each DATA disc
+always requires a physical swap — one swap per disc, minimum.  For an
+archive spread across N data discs, expect at least N swap prompts.
+With the cache active each disc is needed only once (O(N) total swaps);
+subsequent sessions find all packs in cache and need no disc at all.
+Without the cache, the same disc may be requested multiple times within
+a single restore session.
+
 REDUCING SWAP FREQUENCY WITH THE PACK CACHE
 
 By default restore.sh allocates an opportunistic pack cache under /tmp
