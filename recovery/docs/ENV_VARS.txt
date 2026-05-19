@@ -1,0 +1,264 @@
+LCSAS RECOVERY -- ENVIRONMENT VARIABLE REFERENCE
+=================================================
+
+DEFAULT-CHOICE PRINCIPLE
+─────────────────────────
+Features that only add cost or disk use are opt-in (default OFF).
+Features that change observable behavior — i.e., the restore would
+behave differently without them — are also opt-in unless the feature
+is always safe and the penalty of forgetting it is data loss or silent
+failure, in which case it is opt-out (default ON).
+
+This principle exists so operators can predict restore behavior without
+reading source code.  Each "Why this default" entry below maps to one
+of the two clauses above.
+
+────────────────────────────────────────────────────────────────────
+VARIABLE               DEFAULT   SINCE   WHAT IT DOES
+────────────────────────────────────────────────────────────────────
+
+CREDENTIALS
+───────────
+
+LCSAS_PASSWORD
+  Default:  unset (prompts on stdin)
+  Since:    Phase 1
+  What:     Encryption password for the Rustic repository.  When set,
+            restore.sh writes it to a temp file (mode 600) instead of
+            reading interactively.  Mutually exclusive with LCSAS_PWFILE.
+  Why:      Opt-in — credentials must never appear in the environment
+            by default.  Scripted / CI use requires explicit action.
+
+LCSAS_PWFILE
+  Default:  unset (prompts on stdin)
+  Since:    Phase 1
+  What:     Path to a file whose first line is the password.  Preferred
+            over LCSAS_PASSWORD in scripts because the secret stays in
+            a file rather than a shell variable.
+  Why:      Opt-in — same reasoning as LCSAS_PASSWORD.
+
+DISCOVERY OVERRIDES
+───────────────────
+
+LCSAS_REPO
+  Default:  unset (prompts when multiple repos found)
+  Since:    Phase 14
+  What:     Tenant / repository name to restore.  Matches the basename
+            of the metadata/<name>/ directory on the disc.  Skips the
+            numbered-list prompt on multi-tenant archives.
+  Why:      Opt-in — omitting it is correct and safe; it just shows an
+            interactive prompt.  Setting it changes which tenant's data
+            is restored; wrong value exits with an error.
+
+LCSAS_TARGET
+  Default:  unset (auto-detected from uname -m and uname -s)
+  Since:    Phase 21
+  What:     Override the rust-triple used to select which lcsas-restore
+            and rustic-static binaries to run (e.g.,
+            x86_64-unknown-linux-musl).  Useful when uname -m
+            misreports on an emulated or cross-compiled host.
+  Why:      Opt-in — auto-detection is correct in the vast majority of
+            cases; overriding it is an escape hatch for unusual hosts.
+
+LCSAS_META_DISC
+  Default:  unset (auto-detected via mtab / findmnt)
+  Since:    Phase 20
+  What:     Mount point of the recovery / meta disc.  Tells restore.sh
+            and the tier-1 binary to exclude that path from pack
+            searches so a user with a single optical drive can eject
+            the meta disc and reuse the drive for data discs.
+  Why:      Opt-in — auto-detection (mtab probe) handles the common
+            case correctly; explicit set is for unusual mount layouts
+            or initramfs environments where mtab is absent.
+
+LCSAS_MOUNT_DIRS
+  Default:  unset → /Volumes:/media/<user>:/media:/mnt:/run/media/<user>
+  Since:    Phase 20
+  What:     Colon-separated list of directories scanned for mounted
+            data discs.  Overrides the compiled-in default list on
+            both the shell side (restore.sh) and the C side
+            (lcsas-restore), which share the same value via export.
+            Set to '' (empty string) to disable auto-scan entirely.
+  Why:      Opt-in — the compiled-in default covers Linux, macOS, and
+            BSD conventions.  Override only when discs are mounted
+            under a non-standard path (e.g., systemd-managed
+            /run/media/$USER/ not in the default list) or in test
+            environments that need a controlled directory.
+
+BEHAVIOR KNOBS
+──────────────
+
+LCSAS_PACK_CACHE_DIR
+  Default:  auto  (opt-out / default ON)
+  Since:    Phase 24
+  What:     Opportunistic pack cache directory.  Three values:
+              auto    (default when unset) → allocate a temporary dir
+                      under ${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>.
+              <path>  → use that exact path (persists across runs).
+              ''      (explicitly empty) → cache off.
+            When active, every successful pack-file locate causes the
+            rest of that disc's data/ subtree to be copied into the
+            cache.  Subsequent packs from the same disc are served from
+            local storage; the disc-swap count drops from O(N_blobs)
+            to O(N_discs).
+  Why:      Opt-OUT.  The v3 blind run took 16 disc swaps for 3 needed
+            discs without the cache.  Forgetting this knob means the
+            operator swaps discs 3-16× more often than necessary —
+            a silent penalty that accumulates to hours of human time
+            and risks disc handling errors.  Disk-constrained operators
+            who cannot afford the cache space can explicitly set
+            LCSAS_PACK_CACHE_DIR='' to turn it off.
+
+LCSAS_TIER_FALLBACK
+  Default:  0  (opt-in / default OFF)
+  Since:    Phase 24
+  What:     0 (default) → restore.sh exec()s tier 1 directly; a tier-1
+            crash propagates its exit code to the caller.
+            1 → run each non-last tier as a subprocess; fall through to
+            the next tier (tier 2, then tier 3) on non-zero exit.
+  Why:      Opt-IN.  The default exec() behavior preserves the
+            bare-minimum recovery story: tier 1 IS the recovery, and
+            failures must surface immediately so the operator knows
+            tier 1 is broken.  Silent fallback could mask a tier-1
+            regression, giving false confidence that an archive is
+            recoverable when the primary path is actually broken.
+            LCSAS_TIER_FALLBACK=1 is an explicit opt-in for operators
+            who already know tier 1 is broken and want the cascade to
+            walk for them.
+
+LCSAS_ALLOW_PYTHON_TIER
+  Default:  1  (opt-out / default ON)
+  Since:    Phase 20
+  What:     1 (default) → tier-3 Python restorer is a reachable
+            fallback when tiers 1 and 2 are both absent or failed.
+            0 → stop the cascade after tiers 1/2; never invoke Python.
+  Why:      Opt-OUT.  Tier 3 is the last-resort safety net; disabling
+            it without an explicit operator choice removes the only
+            non-binary recovery option.  Environments that ban Python
+            entirely (air-gapped kiosks) can set this to 0.
+
+LCSAS_PROGRESS
+  Default:  unset → ON (opt-out / default ON)
+  Since:    Phase 22
+  What:     Controls periodic progress output on stderr during a
+            restore.  Applies to both the tier-1 C binary
+            (lcsas-restore prints "progress: N/M blobs, X MB" lines)
+            and the tier-3 Python restorer (prints "N/M files, X MB").
+            Set LCSAS_PROGRESS=0 to silence all progress output.
+            Any other value (including unset) enables progress.
+  Why:      Opt-OUT.  On a slow disc (~1 MB/s) a silent restore is
+            indistinguishable from a frozen process.  Forgetting this
+            knob means the operator cannot tell if recovery is
+            proceeding or stuck.  The only reason to silence it is in
+            machine-parseable log pipelines; that requires explicit opt.
+
+LCSAS_NO_RELOCATE
+  Default:  0  (opt-in / default OFF)
+  Since:    Phase 20
+  What:     1 → skip the relocation-to-RAM step.  Normally restore.sh
+            detects when it is running off a read-only optical medium
+            and copies itself + the recovery binaries to a writable
+            temp dir before exec()ing the copy.  This lets the operator
+            eject the meta disc and reuse the drive for data discs.
+            0 → perform relocation when the medium appears read-only.
+  Why:      Opt-IN.  The relocation is a safety behavior; disabling it
+            is only appropriate in test / development environments
+            (e.g., running restore.sh from a source checkout on a
+            writable disk).  Accidentally disabling it on a live single-
+            drive recovery holds the meta disc open and prevents ejecting.
+
+LCSAS_ALLOW_NO_PACK_SEARCH
+  Default:  0  (opt-in / default OFF)
+  Since:    Phase 23
+  What:     1 → suppress the "no data discs detected" hard error.
+            Normally restore.sh aborts before asking for a password if
+            no mounted disc contains a data/ directory, because the
+            binary will fail anyway and the early abort gives a more
+            actionable message.
+            0 → enforce the pre-flight check.
+  Why:      Opt-IN.  The check exists precisely because missing it
+            leads the operator to type a password and wait before
+            seeing the inevitable "no packs found" failure.  The bypass
+            is for test fixtures, initramfs environments, and scripted
+            pipelines that mount data discs between the script setup
+            step and the binary invocation.
+
+BUILD / CI GATES
+────────────────
+
+LCSAS_BLIND_ACK_COST
+  Default:  unset → OFF  (opt-in / default OFF)
+  Since:    Phase 22
+  What:     Gate for `make blind-restore` and `make blind-restore-x5`.
+            These targets spawn a real Claude sub-agent against a live
+            cdemu disc array; each run costs approximately USD 5-25 in
+            API credits.  Set LCSAS_BLIND_ACK_COST=1 to confirm that
+            you accept the cost before the Makefile proceeds.
+  Why:      Opt-IN.  Purely a cost-acknowledgement guard.  No restore
+            behavior is affected.
+
+TOOLCHAIN / DEVELOPER
+─────────────────────
+
+LCSAS_RECOVERY_CACHE
+  Default:  unset → ${HOME}/.cache/lcsas/recovery-binaries
+  Since:    Phase 21
+  What:     Directory used by recovery/scripts/fetch_upstream.sh as a
+            local cache for downloaded upstream recovery binaries
+            (rustic-static, python-build-standalone).  Set to a
+            shared path on build servers to avoid redundant downloads
+            across workspaces.
+  Why:      Opt-IN — the default HOME-relative path is suitable for
+            single-developer use; CI clusters override it explicitly.
+
+LCSAS_NO_WIZARD
+  Default:  unset → wizard runs on tty1 (opt-in to skip)
+  Since:    Phase 21
+  What:     When set, suppresses the interactive setup wizard in the
+            live-rootfs (src/lcsas/meta/live/build_rootfs.sh).  The
+            wizard only fires on tty1 of a live boot; it does not
+            affect restore.sh or the recovery binaries.
+  Why:      Opt-IN.  The wizard is the operator's primary on-screen
+            guide; skipping it requires an intentional signal.
+            Automated recovery testing sets this to avoid blocking on
+            a wizard prompt.
+
+LCSAS_OPTIONAL_ARCHES
+  Default:  unset
+  Since:    Phase 21
+  What:     Space-separated list of rust-triples that are allowed to
+            be absent from a built meta disc without failing tests.
+            Used by test_meta_bundling_completeness.py to mark
+            cross-compile targets that a developer hasn't built yet.
+  Why:      Test-only.  No restore behavior is affected.
+
+────────────────────────────────────────────────────────────────────
+VARIABLES NOT FOR OPERATORS
+────────────────────────────────────────────────────────────────────
+
+LCSAS_RELOCATED
+  Internal sentinel set by restore.sh on re-exec after relocation to
+  RAM.  Its value is the original meta-disc mount path.  Not a user
+  knob; do not set manually.
+
+────────────────────────────────────────────────────────────────────
+QUICK REFERENCE (operator-facing knobs only)
+────────────────────────────────────────────────────────────────────
+
+Variable                    Default   Opt-in/out  Typical operator use
+──────────────────────────  ────────  ──────────  ────────────────────
+LCSAS_PASSWORD              unset     opt-in      scripted restores
+LCSAS_PWFILE                unset     opt-in      scripted restores
+LCSAS_REPO                  unset     opt-in      multi-tenant shortcut
+LCSAS_TARGET                unset     opt-in      unusual host arch
+LCSAS_META_DISC             unset     opt-in      unusual mount layout
+LCSAS_MOUNT_DIRS            unset     opt-in      non-standard disc mounts
+LCSAS_PACK_CACHE_DIR        auto      opt-out     set ''  to disable cache
+LCSAS_TIER_FALLBACK         0         opt-in      set 1 to walk cascade
+LCSAS_ALLOW_PYTHON_TIER     1         opt-out     set 0 to ban Python
+LCSAS_PROGRESS              unset     opt-out     set 0 to silence output
+LCSAS_NO_RELOCATE           0         opt-in      set 1 for testing
+LCSAS_ALLOW_NO_PACK_SEARCH  0         opt-in      set 1 for test rigs
+LCSAS_BLIND_ACK_COST        unset     opt-in      set 1 to run blind e2e
+LCSAS_RECOVERY_CACHE        (home)    opt-in      CI shared binary cache
+LCSAS_NO_WIZARD             unset     opt-in      automated live-boot test
