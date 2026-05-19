@@ -300,6 +300,45 @@ def test_drain_exits_cleanly_on_dir_not_found(tmp_path: Path) -> None:
     )
 
 
+# ── --list-pending-packs (Issue #90) ────────────────────────────
+
+
+def test_list_pending_packs_flag_in_help() -> None:
+    """Pin Issue #90: --list-pending-packs must appear in --help output."""
+    bin_path = _find_bin()
+    res = _run(bin_path, "--help")
+    out = res.stdout + res.stderr
+    assert "--list-pending-packs" in out, (
+        "--list-pending-packs flag not found in --help output; "
+        "was it added to usage() in main.c?"
+    )
+
+
+def test_list_pending_packs_no_catalog_exits_nonzero(tmp_path: Path) -> None:
+    """Pin Issue #90: --list-pending-packs with no --catalog must exit
+    non-zero and mention 'catalog' in its error output."""
+    bin_path = _find_bin()
+    repo = _make_minimal_repo(tmp_path)
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("stub\n")
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--list-pending-packs",
+        timeout=5,
+    )
+    assert res.returncode != 0, (
+        "Expected non-zero exit when --list-pending-packs used without "
+        f"--catalog, but got rc={res.returncode}"
+    )
+    err = (res.stdout + res.stderr).lower()
+    assert "catalog" in err, (
+        "Expected 'catalog' in error output, "
+        f"got: {(res.stdout + res.stderr)!r}"
+    )
+
+
 def test_copy_file_partial_write_leaves_no_garbage() -> None:
     """Static analysis pin for Issue #85: confirm that disc_locator.c
     still contains the unlink(dst) call on the fwrite-error path in

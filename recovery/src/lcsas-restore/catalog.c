@@ -130,6 +130,58 @@ lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
     return (int)count;
 }
 
+int
+lcsas_catalog_print_pending_packs(lcsas_catalog *c)
+{
+    sqlite3_stmt *st = NULL;
+    int rc;
+    long long total_packs = 0;
+    long long total_bytes = 0;
+    long long total_discs = 0;
+    double mb;
+
+    /* Group all packs by volume label, ordered by pack count desc.
+     * Column names verified from lcsas_catalog_find_pack /
+     * lcsas_catalog_volumes_for_pack.  Mirror the DESTROYED filter. */
+    rc = sqlite3_prepare_v2(c->db,
+            "SELECT v.label, COUNT(p.pack_id), SUM(p.size_bytes) "
+            "FROM packs p "
+            "JOIN volume_packs vp ON p.pack_id = vp.pack_id "
+            "JOIN volumes v ON vp.volume_id = v.volume_id "
+            "WHERE v.status != 'DESTROYED' "
+            "GROUP BY v.label "
+            "ORDER BY COUNT(p.pack_id) DESC",
+            -1, &st, NULL);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "catalog query failed: %s\n", sqlite3_errmsg(c->db));
+        return -1;
+    }
+
+    printf("Pending packs by disc:\n");
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        const unsigned char *label = sqlite3_column_text(st, 0);
+        long long n_packs = sqlite3_column_int64(st, 1);
+        long long n_bytes = sqlite3_column_int64(st, 2);
+        mb = (double)n_bytes / (1024.0 * 1024.0);
+        printf("  %s: %lld pack%s (%.1f MB)\n",
+               label ? (const char *)label : "(unknown)",
+               n_packs,
+               n_packs == 1 ? "" : "s",
+               mb);
+        total_packs += n_packs;
+        total_bytes += n_bytes;
+        total_discs++;
+    }
+    sqlite3_finalize(st);
+
+    mb = (double)total_bytes / (1024.0 * 1024.0);
+    printf("Total: %lld pack%s, %.1f MB across %lld disc%s.\n",
+           total_packs, total_packs == 1 ? "" : "s",
+           mb,
+           total_discs, total_discs == 1 ? "" : "s");
+    return 0;
+}
+
 void
 lcsas_catalog_describe(lcsas_catalog *c)
 {
