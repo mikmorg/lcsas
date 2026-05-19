@@ -164,6 +164,12 @@ class SubprocessRusticRunner(SubprocessRunnerBase):
         password_file: Path,
         target_path: Path,
     ) -> None:
+        # Rustic 0.11.2 is idempotent by default: it compares size+mtime
+        # for each target file and skips files that are already up-to-date.
+        # Re-running restore after an interruption therefore resumes from
+        # where it left off without wasted I/O (Issue #92).
+        # --verify-existing would defeat this by forcing a re-read of every
+        # file regardless of mtime — do NOT add it here.
         args = ["restore", snapshot_id, str(target_path)]
         self._run(args, repo_path, password_file, timeout=21600)  # 6 hours
 

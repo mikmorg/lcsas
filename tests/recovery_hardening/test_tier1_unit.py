@@ -339,6 +339,61 @@ def test_list_pending_packs_no_catalog_exits_nonzero(tmp_path: Path) -> None:
     )
 
 
+# ── Idempotent restore resume (Issue #92) ────────────────────────
+
+
+def test_no_crash_on_existing_target_dir(tmp_path: Path) -> None:
+    """Issue #92 — idempotent resume: running lcsas-restore twice with
+    the same --target directory must not crash on the second run.
+
+    The first run fails (stub repo has no valid key data), but still
+    creates the target directory via lcsas_mkdir_p.  The second run
+    sees a non-empty target and must tolerate it gracefully (no
+    SIGSEGV / SIGABRT).  This pins the crash-safety half of the
+    idempotent-resume contract; end-to-end correctness (files actually
+    skipped) is verified by the blind-restore e2e test.
+    """
+    bin_path = _find_bin()
+    repo = _make_minimal_repo(tmp_path)
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("stub\n")
+    target = tmp_path / "restored"
+
+    # First run — expected to fail (stub repo), but target dir gets made.
+    res1 = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--target", str(target),
+        "--password-file", str(pwfile),
+        timeout=5,
+    )
+    assert res1.returncode != 0, (
+        "first run unexpectedly succeeded against a stub repo"
+    )
+
+    # Place a sentinel file in the target to simulate a partial restore.
+    target.mkdir(exist_ok=True)
+    sentinel = target / "already_restored.dat"
+    sentinel.write_bytes(b"partial content")
+
+    # Second run — must NOT crash, and must NOT wipe the sentinel.
+    res2 = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--target", str(target),
+        "--password-file", str(pwfile),
+        timeout=5,
+    )
+    assert res2.returncode not in (-11, 139, -6, 134), (
+        f"binary crashed on second run with non-empty target "
+        f"(rc={res2.returncode}); stderr:\n{res2.stderr}"
+    )
+    assert sentinel.exists(), (
+        "binary removed pre-existing files in target on second run; "
+        "interrupted restores would lose already-restored data (Issue #92)"
+    )
+
+
 def test_copy_file_partial_write_leaves_no_garbage() -> None:
     """Static analysis pin for Issue #85: confirm that disc_locator.c
     still contains the unlink(dst) call on the fwrite-error path in

@@ -332,6 +332,47 @@ class TestExecuteRestore:
             target_path=target,
         )
 
+    def test_resume_skips_existing_correct_file(self, executor, mock_rustic, tmp_path):
+        """Issue #92 — interrupted restores must not start over on re-run.
+
+        The executor must NOT remove or truncate pre-existing files in the
+        target directory before calling rustic.  Rustic 0.11.2 skips files
+        whose size+mtime already match the snapshot, so the resume is only
+        correct if the executor leaves the target untouched.
+
+        We pre-create a file in the target directory with a known content,
+        call execute_restore, then assert: (a) rustic.restore was called
+        exactly once (no pre-clobber loop before the call), and (b) the
+        pre-existing file was not overwritten by the executor itself.
+        """
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        target = tmp_path / "target"
+        target.mkdir()
+
+        # Simulate a partially-restored file from a previous interrupted run.
+        already_restored = target / "some_file.dat"
+        sentinel_content = b"already restored content"
+        already_restored.write_bytes(sentinel_content)
+
+        pw_file = tmp_path / "password.txt"
+        pw_file.write_text("testpass")
+
+        executor.execute_restore(cache, "snap123", target, pw_file)
+
+        # Executor must have called rustic exactly once (no retries or cleanup).
+        mock_rustic.restore.assert_called_once()
+
+        # The executor must not have clobbered the pre-existing file —
+        # that is rustic's responsibility based on size+mtime comparison.
+        assert already_restored.exists(), (
+            "executor removed pre-existing file before calling rustic; "
+            "interrupted restores would start over (Issue #92)"
+        )
+        assert already_restored.read_bytes() == sentinel_content, (
+            "executor overwrote pre-existing file content before calling rustic"
+        )
+
 
 # =========================================================================
 # verify_iso() — ECC integration
