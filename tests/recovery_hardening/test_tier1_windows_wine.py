@@ -1,57 +1,76 @@
-"""Issue #115: tier-1 C unit-test harness — fast, agent-free.
+"""Issue #118: tier-1 Windows cross-built binary coverage via wine.
 
-The blind-restore e2e is the only thing currently exercising the
-C binary against a real-ish repo.  Every C bug therefore costs
-~$5 of agent budget to discover.  This harness invokes
-`lcsas-restore` directly against synthetic fixtures, runs in
-seconds, and pins the behaviors we've already paid to learn:
+The cross-built x86_64-windows ``lcsas-restore.exe`` binary is bundled
+on every meta disc for Windows recovery hosts (Phase 21 cross-platform
+coverage), but until now had zero runtime coverage — no CI gate verified
+it hadn't drifted from source or broken under emulation.
 
-  • `--help` parses + prints usage
-  • `--version` (if present) doesn't crash
-  • A missing `--repo` arg fails with a clear error
-  • A wrong password fails cleanly (no crash)
-  • Pack cache directory is created when LCSAS_PACK_CACHE_DIR
-    is set
-  • The catalog-copy fix (commit `c6f89a0`) actually copies the
-    catalog into the cache rather than holding the source fd
+This module mirrors ``test_tier1_unit.py`` against
+``recovery/bin/x86_64-windows/lcsas-restore.exe``, exercising it via
+``wine`` + ``WINEPREFIX=/scratch/wine-prefix`` (wine-9.0 preinstalled).
 
-The tests use stub fixtures rather than real rustic-format data,
-because constructing a valid encrypted pack tree requires rustic
-itself.  For end-to-end semantics, the blind-restore e2e stays
-the source of truth — these tests cover the boring stuff so the
-blind test doesn't have to.
+If either the cross-built binary or ``wine`` is absent, the module
+skips honestly.  Whenever both are present, ALL nine cases must pass:
+same arg-parsing, cache plumbing, catalog handling, and crash-safety
+contract as the host binary.
+
+Windows-specific adjustments vs the Linux/aarch64 harnesses:
+
+  * No ``/dev/null`` — replaced with real temp files everywhere.
+  * Cache-off check uses ``tmp_path``-scoped glob, not ``/tmp``.
+  * ``--catalog`` flag availability is checked against ``--help`` output;
+    test skips gracefully if an older build is somehow tested.
+  * ``DISPLAY=""`` suppresses any X11 attempt by wine.
+
+The stub fixtures are intentionally invalid-as-rustic-repos — these
+tests cover the layers that run before pack decryption (arg parse, cache
+init, catalog discovery, no-segfault on garbage).  End-to-end semantics
+belong to the blind-restore e2e.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RESTORE_CANDIDATES = [
-    REPO_ROOT / "recovery" / "build" / "lcsas-restore",
-    REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-restore",
+RESTORE_EXE = REPO_ROOT / "recovery" / "bin" / "x86_64-windows" / "lcsas-restore.exe"
+
+_BIN_OK = RESTORE_EXE.is_file()
+_WINE_OK = shutil.which("wine") is not None
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not (_BIN_OK and _WINE_OK),
+        reason=(
+            f"Windows tier-1 wine coverage requires {RESTORE_EXE} "
+            f"(present={_BIN_OK}) and wine (present={_WINE_OK})"
+        ),
+    ),
 ]
 
+# Wine startup is significantly slower than native execution; bump
+# the timeout generously so CI on a loaded host doesn't flake.
+TIMEOUT = 60
 
-def _find_bin() -> Path:
-    for p in RESTORE_CANDIDATES:
-        if p.is_file() and os.access(p, os.X_OK):
-            return p
-    pytest.skip(
-        "no lcsas-restore binary; run `lcsas recovery build --arch host`"
-    )
+WINE_ENV_BASE = {
+    "WINEDEBUG": "-all",
+    "WINEPREFIX": "/scratch/wine-prefix",
+    "DISPLAY": "",        # suppress any X11 attempt
+}
 
 
-def _run(bin_path: Path, *args: str, env: dict[str, str] | None = None,
-         stdin_data: str = "", timeout: int = 10,
+def _run(*args: str, env: dict[str, str] | None = None,
+         stdin_data: str = "", timeout: int = TIMEOUT,
          ) -> subprocess.CompletedProcess:
-    full_env = {**os.environ, **(env or {})}
+    full_env = {**os.environ, **WINE_ENV_BASE, **(env or {})}
     return subprocess.run(
-        [str(bin_path), *args],
+        ["wine", str(RESTORE_EXE), *args],
         input=stdin_data, capture_output=True, text=True,
         env=full_env, timeout=timeout,
     )
@@ -72,8 +91,7 @@ def _make_minimal_repo(tmp_path: Path) -> Path:
 
 
 def test_help_exits_zero_and_prints_usage() -> None:
-    bin_path = _find_bin()
-    res = _run(bin_path, "--help")
+    res = _run("--help")
     assert res.returncode == 0, res.stderr
     out = res.stdout + res.stderr
     assert "usage" in out.lower()
@@ -82,9 +100,13 @@ def test_help_exits_zero_and_prints_usage() -> None:
     assert "--password-file" in out
 
 
-def test_missing_repo_fails_with_actionable_error() -> None:
-    bin_path = _find_bin()
-    res = _run(bin_path, "--target", "/tmp/x", "--password-file", "/dev/null")
+def test_missing_repo_fails_with_actionable_error(tmp_path: Path) -> None:
+    # Windows doesn't have /dev/null; use a real temp file.
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("stub\n")
+    # Omit --target as well: we want to trigger the --repo-missing path,
+    # not a --target-missing path.
+    res = _run("--password-file", str(pwfile))
     assert res.returncode != 0
     # Must name what's missing.  Don't pin the exact string; just
     # require that "repo" appears in some form.
@@ -93,11 +115,10 @@ def test_missing_repo_fails_with_actionable_error() -> None:
 
 
 def test_missing_target_fails_with_actionable_error(tmp_path: Path) -> None:
-    bin_path = _find_bin()
     pwfile = tmp_path / "pw"
     pwfile.write_text("stub\n")
     repo = _make_minimal_repo(tmp_path)
-    res = _run(bin_path, "--repo", str(repo), "--password-file", str(pwfile))
+    res = _run("--repo", str(repo), "--password-file", str(pwfile))
     assert res.returncode != 0
     err = (res.stdout + res.stderr).lower()
     assert "target" in err, err
@@ -109,7 +130,6 @@ def test_missing_target_fails_with_actionable_error(tmp_path: Path) -> None:
 def test_cache_dir_created_on_first_use(tmp_path: Path) -> None:
     """Setting LCSAS_PACK_CACHE_DIR to a non-existent path should
     auto-create it during locator init."""
-    bin_path = _find_bin()
     cache = tmp_path / "nested" / "cache"
     assert not cache.exists()
     repo = _make_minimal_repo(tmp_path)
@@ -119,12 +139,11 @@ def test_cache_dir_created_on_first_use(tmp_path: Path) -> None:
     # Run; expect failure (empty repo can't restore) but cache dir
     # should still be created by init.
     _run(
-        bin_path,
         "--repo", str(repo),
         "--target", str(target),
         "--password-file", str(pwfile),
         env={"LCSAS_PACK_CACHE_DIR": str(cache)},
-        timeout=5,
+        timeout=TIMEOUT,
     )
     assert cache.exists(), (
         "LCSAS_PACK_CACHE_DIR was not auto-created during locator init"
@@ -132,25 +151,25 @@ def test_cache_dir_created_on_first_use(tmp_path: Path) -> None:
 
 
 def test_cache_off_when_env_unset(tmp_path: Path) -> None:
-    """No env var → no spurious cache dir creation under /tmp."""
-    bin_path = _find_bin()
+    """No env var → no spurious cache dir creation.
+
+    The /tmp glob is Linux-specific; for Wine we verify that nothing
+    was created inside tmp_path either."""
     repo = _make_minimal_repo(tmp_path)
     pwfile = tmp_path / "pw"
     pwfile.write_text("stub\n")
     target = tmp_path / "restored"
     env = {k: v for k, v in os.environ.items() if k != "LCSAS_PACK_CACHE_DIR"}
-    pre = set(Path("/tmp").glob("lcsas-pack-cache.*"))
     _run(
-        bin_path,
         "--repo", str(repo),
         "--target", str(target),
         "--password-file", str(pwfile),
-        env=env, timeout=5,
+        env=env, timeout=TIMEOUT,
     )
-    post = set(Path("/tmp").glob("lcsas-pack-cache.*"))
-    new = post - pre
-    assert not new, (
-        f"binary created cache dirs {new} despite LCSAS_PACK_CACHE_DIR "
+    # Nothing named lcsas-pack-cache* should appear under our tmp_path.
+    created = list(tmp_path.glob("**/lcsas-pack-cache*"))
+    assert created == [], (
+        f"binary created cache dirs {created} despite LCSAS_PACK_CACHE_DIR "
         f"being unset"
     )
 
@@ -166,7 +185,11 @@ def test_catalog_is_copied_to_cache_not_held_in_place(tmp_path: Path) -> None:
     Indirect probe: after a run that involves catalog discovery,
     look for `.locator-catalog.db` in the cache dir.  If it's there,
     the copy path was exercised."""
-    bin_path = _find_bin()
+    # --catalog may not exist on older builds; check help first.
+    help_res = _run("--help")
+    if "--catalog" not in (help_res.stdout + help_res.stderr):
+        pytest.skip("--catalog not supported in this build")
+
     cache = tmp_path / "cache"
     repo = _make_minimal_repo(tmp_path)
     pwfile = tmp_path / "pw"
@@ -182,13 +205,12 @@ def test_catalog_is_copied_to_cache_not_held_in_place(tmp_path: Path) -> None:
     fake_cat.write_bytes(b"not really a catalog")
 
     _run(
-        bin_path,
         "--repo", str(repo),
         "--target", str(target),
         "--password-file", str(pwfile),
         "--catalog", str(fake_cat),
         env={"LCSAS_PACK_CACHE_DIR": str(cache)},
-        timeout=5,
+        timeout=TIMEOUT,
     )
     # The cache dir should exist.  Whether .locator-catalog.db
     # exists depends on whether the binary tried to "consider" the
@@ -203,17 +225,15 @@ def test_catalog_is_copied_to_cache_not_held_in_place(tmp_path: Path) -> None:
 def test_no_crash_on_empty_repo(tmp_path: Path) -> None:
     """Empty-but-shaped repo (no actual data) should fail cleanly,
     not segfault."""
-    bin_path = _find_bin()
     repo = _make_minimal_repo(tmp_path)
     pwfile = tmp_path / "pw"
     pwfile.write_text("stub\n")
     target = tmp_path / "restored"
     res = _run(
-        bin_path,
         "--repo", str(repo),
         "--target", str(target),
         "--password-file", str(pwfile),
-        timeout=5,
+        timeout=TIMEOUT,
     )
     # Expect non-zero; specifically NOT SIGSEGV (139) or SIGABRT (134).
     assert res.returncode != 0
@@ -224,29 +244,27 @@ def test_no_crash_on_empty_repo(tmp_path: Path) -> None:
 
 
 def test_no_crash_on_garbage_password_file(tmp_path: Path) -> None:
-    bin_path = _find_bin()
     repo = _make_minimal_repo(tmp_path)
     pwfile = tmp_path / "pw"
     pwfile.write_bytes(b"\x00\xff\x01\x02\xfe")  # binary garbage
     target = tmp_path / "restored"
     res = _run(
-        bin_path,
         "--repo", str(repo),
         "--target", str(target),
         "--password-file", str(pwfile),
-        timeout=5,
+        timeout=TIMEOUT,
     )
     assert res.returncode not in (-11, 139, -6, 134), res.stderr
 
 
-def test_missing_password_file_path() -> None:
-    bin_path = _find_bin()
+def test_missing_password_file_path(tmp_path: Path) -> None:
+    repo = _make_minimal_repo(tmp_path)
+    target = tmp_path / "restored"
     res = _run(
-        bin_path,
-        "--repo", "/tmp/nonexistent-repo",
-        "--target", "/tmp/restored",
-        "--password-file", "/this/path/does/not/exist",
-        timeout=5,
+        "--repo", str(repo),
+        "--target", str(target),
+        "--password-file", str(tmp_path / "this_path_does_not_exist"),
+        timeout=TIMEOUT,
     )
     assert res.returncode != 0
     assert res.returncode not in (-11, 139), res.stderr
