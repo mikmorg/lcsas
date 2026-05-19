@@ -202,6 +202,113 @@ class TestIngestVolume:
         # First copy ingested; second skipped (already exists)
         assert result.ingested == 1
 
+    def test_verify_true_good_pack_copied_and_counted(self, executor, tmp_path):
+        """verify=True: pack whose content hashes to expected SHA is ingested
+        and the post-copy debug log (line 302) is exercised."""
+        import hashlib
+
+        pack_data = b"pack_verify_test"
+        real_sha = hashlib.sha256(pack_data).hexdigest()
+
+        mount = tmp_path / "volume"
+        data_dir = mount / "data"
+        data_dir.mkdir(parents=True)
+        (data_dir / real_sha).write_bytes(pack_data)
+
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        result = executor.ingest_volume(cache, mount, [real_sha], verify=True)
+        assert result.ingested == 1
+        assert (cache / "data" / real_sha[:2] / real_sha).read_bytes() == pack_data
+
+    def test_corrupt_cached_pack_removed_and_reingested(self, executor, tmp_path):
+        """verify=True + already-cached corrupt file: corrupt file is removed
+        and re-ingested from volume (lines 253-260)."""
+        import hashlib
+
+        pack_data = b"pack_verify_test"
+        real_sha = hashlib.sha256(pack_data).hexdigest()
+
+        mount = tmp_path / "volume"
+        data_dir = mount / "data"
+        data_dir.mkdir(parents=True)
+        (data_dir / real_sha).write_bytes(pack_data)
+
+        cache = tmp_path / "cache"
+        prefix = cache / "data" / real_sha[:2]
+        prefix.mkdir(parents=True)
+        # Pre-populate cache with CORRUPT content (won't hash to real_sha)
+        corrupt_file = prefix / real_sha
+        corrupt_file.write_bytes(b"corrupt_bytes_that_do_not_match")
+
+        result = executor.ingest_volume(cache, mount, [real_sha], verify=True)
+        # Should have re-ingested the good copy
+        assert result.ingested == 1
+        assert corrupt_file.read_bytes() == pack_data
+
+    def test_cached_valid_pack_skipped_with_verify(self, executor, tmp_path):
+        """verify=True + already-cached valid file: file kept, not re-copied
+        (line 264 — the 'else: continue' branch after re-verify passes)."""
+        import hashlib
+
+        pack_data = b"pack_verify_test"
+        real_sha = hashlib.sha256(pack_data).hexdigest()
+
+        mount = tmp_path / "volume"
+        data_dir = mount / "data"
+        data_dir.mkdir(parents=True)
+        (data_dir / real_sha).write_bytes(pack_data)
+
+        cache = tmp_path / "cache"
+        prefix = cache / "data" / real_sha[:2]
+        prefix.mkdir(parents=True)
+        # Pre-populate cache with the CORRECT content
+        (prefix / real_sha).write_bytes(pack_data)
+
+        result = executor.ingest_volume(cache, mount, [real_sha], verify=True)
+        # Already present and valid — counted as 0 newly ingested (skipped)
+        assert result.ingested == 0
+        # File content must be untouched
+        assert (prefix / real_sha).read_bytes() == pack_data
+
+    def test_zero_byte_cached_pack_removed_and_reingested(self, executor, tmp_path):
+        """verify=False + zero-byte cached file: file is removed and re-ingested
+        from volume (lines 268-273)."""
+        mount = tmp_path / "volume"
+        data_dir = mount / "data"
+        data_dir.mkdir(parents=True)
+        sha = "a" * 64
+        (data_dir / sha).write_bytes(b"real_pack_data")
+
+        cache = tmp_path / "cache"
+        prefix = cache / "data" / sha[:2]
+        prefix.mkdir(parents=True)
+        # Pre-populate cache with a ZERO-BYTE file (simulates aborted copy)
+        (prefix / sha).write_bytes(b"")
+
+        result = executor.ingest_volume(cache, mount, [sha], verify=False)
+        assert result.ingested == 1
+        assert (prefix / sha).read_bytes() == b"real_pack_data"
+
+    def test_missing_pack_raises_without_collect_failures(self, executor, tmp_path):
+        """Pack not found on volume raises PackCorruptionError when
+        collect_failures=False (line 317)."""
+        from lcsas.restore.executor import PackCorruptionError
+
+        mount = tmp_path / "volume"
+        (mount / "data").mkdir(parents=True)
+        absent_sha = "f" * 64
+
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        with pytest.raises(PackCorruptionError, match=absent_sha):
+            executor.ingest_volume(
+                cache, mount, [absent_sha],
+                verify=False, collect_failures=False,
+            )
+
 
 # =========================================================================
 # execute_restore()
@@ -543,6 +650,49 @@ class TestVerifyCacheCompleteness:
         )
         assert missing == []
 
+    def test_verify_hashes_detects_corrupt_cached_pack(self, tmp_path):
+        """verify_hashes=True: file present but content doesn't match its
+        SHA-256 name → returned in missing list (lines 369-375)."""
+        import hashlib
+
+        cache = tmp_path / "cache"
+        data = cache / "data"
+
+        real_data = b"pack_verify_test"
+        real_sha = hashlib.sha256(real_data).hexdigest()
+
+        d = data / real_sha[:2]
+        d.mkdir(parents=True)
+        # Write CORRUPT content — won't hash to real_sha
+        (d / real_sha).write_bytes(b"corrupted_bytes_do_not_match_sha")
+
+        missing = RestoreExecutor.verify_cache_completeness(
+            cache, [real_sha], verify_hashes=True,
+        )
+        assert real_sha in missing, (
+            f"Corrupt cached pack should be in missing list, got: {missing!r}"
+        )
+
+    def test_verify_hashes_passes_good_pack(self, tmp_path):
+        """verify_hashes=True: file whose content actually matches its SHA-256
+        name is NOT reported as missing."""
+        import hashlib
+
+        cache = tmp_path / "cache"
+        data = cache / "data"
+
+        real_data = b"pack_verify_test"
+        real_sha = hashlib.sha256(real_data).hexdigest()
+
+        d = data / real_sha[:2]
+        d.mkdir(parents=True)
+        (d / real_sha).write_bytes(real_data)
+
+        missing = RestoreExecutor.verify_cache_completeness(
+            cache, [real_sha], verify_hashes=True,
+        )
+        assert missing == []
+
 
 # =========================================================================
 # ECC verify-or-repair on ingest_volume (Issue #20)
@@ -675,3 +825,24 @@ class TestIngestVolumeInvokesECC:
             f"Error should reference an alternate copy from a different "
             f"location; got: {msg!r}"
         )
+
+    def test_sha256_mismatch_no_ecc_raises_restore_error(self, mock_rustic, tmp_path):
+        """When no ECC runner is configured but expected_sha256 is supplied and
+        the ISO does NOT match, ingest_volume must raise RestoreError with the
+        SHA-256 mismatch message (line 216 — the else-branch for no-ECC path)."""
+        from lcsas.exceptions import RestoreError
+
+        ex = RestoreExecutor(mock_rustic, ecc_runner=None)
+        mount, iso_path, sha1 = self._setup_volume_and_iso(tmp_path)
+        cache = tmp_path / "cache"
+        cache.mkdir()
+
+        with pytest.raises(RestoreError) as exc_info:
+            ex.ingest_volume(
+                cache, mount, [sha1],
+                verify=False,
+                iso_path=iso_path,
+                expected_sha256="0" * 64,  # wrong hash → verify_iso returns False
+            )
+        msg = str(exc_info.value)
+        assert "SHA-256" in msg, f"Expected 'SHA-256' in error message, got: {msg!r}"
