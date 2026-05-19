@@ -699,6 +699,8 @@ lcsas_snapshot_find(const lcsas_snapshot_list *l, const char *id)
     return match;
 }
 
+/* FD LIFETIME: all file handles opened in this function are closed
+ * before it returns.  Do not hold fds across a disc unmount. */
 int
 lcsas_repo_read_blob(const char *repo_path,
                      const lcsas_master_key *mk,

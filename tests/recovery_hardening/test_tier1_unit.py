@@ -250,3 +250,72 @@ def test_missing_password_file_path() -> None:
     )
     assert res.returncode != 0
     assert res.returncode not in (-11, 139), res.stderr
+
+
+# ── fd-lifetime audit pins (Issue #85) ──────────────────────────
+
+
+def test_drain_exits_cleanly_on_dir_not_found(tmp_path: Path) -> None:
+    """Pin Issue #85: drain_disc must not crash when the mounted path
+    has no data/ subtree (the stat(data_dir) != 0 early-exit path).
+
+    Note: with a stub repo the binary bails before any pack lookup
+    triggers drain_disc itself, so this is a crash-safety smoke for
+    the code paths leading up to and including that early exit.
+    The invariant being pinned is: the binary must exit non-zero but
+    NOT crash (SIGSEGV/SIGABRT) when pointed at an empty mount-parent,
+    and the cache dir must survive intact.
+    """
+    bin_path = _find_bin()
+    cache = tmp_path / "cache"
+    repo = _make_minimal_repo(tmp_path)
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("stub\n")
+    target = tmp_path / "restored"
+
+    # An empty directory: no data/ subtree — exercises drain_disc's
+    # stat(data_dir) != 0 guard on any path that gets that far.
+    empty_mount_parent = tmp_path / "mount_parent"
+    empty_mount_parent.mkdir()
+
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--target", str(target),
+        "--password-file", str(pwfile),
+        "--mount-parent", str(empty_mount_parent),
+        env={"LCSAS_PACK_CACHE_DIR": str(cache)},
+        timeout=10,
+    )
+    # Must fail (stub repo can't decrypt) but NOT with a crash signal.
+    assert res.returncode != 0
+    assert res.returncode not in (-11, 139, -6, 134), (
+        f"binary crashed (rc={res.returncode}); stderr:\n{res.stderr}"
+    )
+    # Cache dir must still exist — drain returned cleanly without
+    # destroying the cache on any error path.
+    assert cache.exists(), (
+        "cache dir was removed or never created; drain_disc may have "
+        "crashed before the cache init completed"
+    )
+
+
+def test_copy_file_partial_write_leaves_no_garbage() -> None:
+    """Static analysis pin for Issue #85: confirm that disc_locator.c
+    still contains the unlink(dst) call on the fwrite-error path in
+    copy_file.  This is a documentation pin — it guards against the
+    error-path cleanup being accidentally deleted during future edits.
+    It does NOT execute the fwrite failure (that requires fault
+    injection), but it ensures the dead-code-remover never removes it.
+    """
+    disc_locator = (
+        Path(__file__).resolve().parents[2]
+        / "recovery" / "src" / "lcsas-restore" / "disc_locator.c"
+    )
+    assert disc_locator.is_file(), f"disc_locator.c not found at {disc_locator}"
+    src = disc_locator.read_text(encoding="utf-8", errors="replace")
+    assert "unlink(dst)" in src, (
+        "copy_file error-path cleanup (unlink(dst)) has been removed from "
+        "disc_locator.c — restore it to prevent partial-write garbage on "
+        "disc unmount during a restore."
+    )

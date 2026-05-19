@@ -391,6 +391,9 @@ try_with_meta(lcsas_disc_locator *l, const char *p, const char *hex,
  * Copy one pack file (src → dst) using buffered I/O.  Returns 0 on
  * success, -1 on any error.  Best-effort: callers ignore the rc
  * because draining is opportunistic.
+ *
+ * FD LIFETIME: all file handles opened in this function are closed
+ * before it returns.  Do not hold fds across a disc unmount.
  */
 static int
 copy_file(const char *src, const char *dst)
@@ -491,6 +494,8 @@ cache_bytes_used(const char *cache_dir)
     return total;
 }
 
+/* FD LIFETIME: all file handles opened in this function are closed
+ * before it returns.  Do not hold fds across a disc unmount. */
 static void
 drain_disc(lcsas_disc_locator *l, const char *root)
 {
