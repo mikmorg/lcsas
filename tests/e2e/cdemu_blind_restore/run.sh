@@ -67,10 +67,10 @@ sudo ln -sf "$RUN_DIR/disc-loader.log" /var/log/disc-loader.log
 # may still want more headroom.  Override with MAX_TURNS env to
 # tighten or loosen for stress testing.
 MAX_TURNS="${MAX_TURNS:-250}"
-# BLIND_MODEL: override the model used by the blind agent.
-# Default is whatever claude picks; set to claude-haiku-4-5-20251001
-# for faster/cheaper runs.  Must be a valid --model value.
-BLIND_MODEL="${BLIND_MODEL:-}"
+# BLIND_MODEL: the model used by the blind agent.
+# Default is haiku (fastest/cheapest; acceptable for gate).
+# Override with e.g. BLIND_MODEL=claude-sonnet-4-6 for deeper runs.
+BLIND_MODEL="${BLIND_MODEL:-claude-haiku-4-5-20251001}"
 PROMPT="$(cat "$RUN_DIR/prompt.txt")"
 
 # Run claude as lcsas-blind. --allowed-tools is restricted to Bash so
