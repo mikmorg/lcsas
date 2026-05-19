@@ -38,6 +38,19 @@ sudo bash -c '
     rm -rf /tmp/lcsas-meta /tmp/lcsas-work /tmp/disc /tmp/disc1 \
            /tmp/lcsas-restore-* /tmp/catalog.db /tmp/lcsas_cache \
            /tmp/alpha_packs* 2>/dev/null || true
+    # pkill -9 may truncate .claude.json if a background claude process
+    # (analytics, MCP keep-alive) was mid-write.  Restore from mikmorg.
+    if [ -f /home/mikmorg/.claude.json ]; then
+        cp /home/mikmorg/.claude.json /home/lcsas-blind/.claude.json
+        chmod 600 /home/lcsas-blind/.claude.json
+        chown lcsas-blind:lcsas-blind /home/lcsas-blind/.claude.json
+    fi
+    if [ -f /home/mikmorg/.claude/.credentials.json ]; then
+        mkdir -p /home/lcsas-blind/.claude
+        cp /home/mikmorg/.claude/.credentials.json /home/lcsas-blind/.claude/.credentials.json
+        chmod 600 /home/lcsas-blind/.claude/.credentials.json
+        chown -R lcsas-blind:lcsas-blind /home/lcsas-blind/.claude
+    fi
 '
 # Eject any leftover disc so the agent starts with an empty drive.
 disc-loader eject >/dev/null 2>&1 || true
