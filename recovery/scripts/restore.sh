@@ -675,6 +675,23 @@ if [ -n "$catalog_pick" ]; then
     printf '[lcsas-restore] using catalog %s\n' "$catalog_pick" >&2
 fi
 
+# If the operator is using a persistent (non-auto) pack cache, the
+# locator-catalog cached there may be stale when the source catalog
+# advances (e.g. a new data disc was added to the archive).  Delete
+# the stale copy so the binary re-derives it from the fresh catalog.
+if [ -n "${LCSAS_PACK_CACHE_DIR:-}" ] && [ -n "$catalog_pick" ]; then
+    _loc_cache="$LCSAS_PACK_CACHE_DIR/.locator-catalog.db"
+    if [ -f "$_loc_cache" ]; then
+        _loc_mt="$(stat -c '%Y' "$_loc_cache" 2>/dev/null \
+            || stat -f '%m' "$_loc_cache" 2>/dev/null \
+            || echo 0)"
+        if [ "$catalog_pick_mtime" -gt "$_loc_mt" ] 2>/dev/null; then
+            printf '[lcsas-restore] catalog advanced; discarding stale locator cache\n' >&2
+            rm -f "$_loc_cache"
+        fi
+    fi
+fi
+
 # ── Session log helper ───────────────────────────────────────────
 #
 # Append one ISO-8601 UTC line to $HOME/.lcsas-restore-log so a
