@@ -26,34 +26,58 @@ QUICK REFERENCE — complete command sequence (do exactly this)
 
   Step 4 — disc-swap LOOP (repeat until RESTORE COMPLETE):
     Each swap prompt shows a pack hash, not a disc label.
-    For EACH prompt: insert the next unused data disc, press ENTER.
-    Loop until the restore finishes — expect 3-4 swap prompts.
+    For EACH prompt: insert the next unused data disc AT /media,
+    then press ENTER in tmux.  Loop until the restore finishes —
+    expect 3-4 swap prompts.
 
-    IMPORTANT — pacing your tmux captures.  The Bash tool will REJECT
-    `sleep 30 && tmux capture-pane ...` as a long-sleep-then-command
-    chain.  Use the until-loop form instead — it polls every 2s and
-    returns as soon as a known string appears in the pane (or 60s
-    cap, whichever comes first):
+    CRITICAL — mount data discs at /media, NOT /mnt.  The recovery
+    binary received `--meta-disc /mnt` at startup and refuses to
+    consider /mnt (or any path under it) as a pack source — that
+    slot is "the meta disc" forever, even after you eject the meta
+    disc and load a data disc into the same drive.  Mount each new
+    data disc at /media instead:
 
-      until tmux capture-pane -t r -p \
-            | grep -qE 'restore complete|Insert the right disc|RESTORE FAILED|Type .q.'; do
-          sleep 2;
-      done; tmux capture-pane -t r -p
+      sudo umount /media 2>/dev/null    # release the prior data disc
+      disc-loader insert <NEXT_LABEL>   # swap the disc in the drive
+      sudo mount /dev/sr0 /media        # mount it where the binary will look
 
-    Pattern for each swap:
+    IMPORTANT — pacing your tmux captures.  `sleep 30 && tmux capture-
+    pane ...` is REJECTED by the Bash tool as a long-sleep-then-command
+    chain.  Use a BOUNDED for-loop with break on tmux death AND match —
+    NEVER an unbounded `until ...; do sleep ...; done`.  An unbounded
+    until-loop runs forever when the tmux session closes (capture
+    returns non-zero → grep matches nothing → loop sleeps + retries
+    indefinitely), orphaning a sleep process that holds the agent's
+    background-task channel open.  Use this 60-second-capped form:
 
+      out=""; for _ in $(seq 1 30); do
+          out=$(tmux capture-pane -t r -p 2>/dev/null) || break
+          printf '%s' "$out" | grep -qE 'restore complete|Insert the right disc|RESTORE FAILED|Type .q.' && break
+          sleep 2
+      done; printf '%s\n' "$out"
+
+    Pattern for each swap (combine the swap + the bounded poll):
+
+      sudo umount /media 2>/dev/null
       disc-loader insert LCSAS_TEST_TINY_2026_0001
+      sudo mount /dev/sr0 /media
       tmux send-keys -t r "" C-m
-      until tmux capture-pane -t r -p \
-            | grep -qE 'restore complete|Insert the right disc|RESTORE FAILED|Type .q.'; do sleep 2; done
-      tmux capture-pane -t r -p
+      out=""; for _ in $(seq 1 30); do
+          out=$(tmux capture-pane -t r -p 2>/dev/null) || break
+          printf '%s' "$out" | grep -qE 'restore complete|Insert the right disc|RESTORE FAILED|Type .q.' && break
+          sleep 2
+      done; printf '%s\n' "$out"
 
       # if another swap prompt appears in the captured output:
+      sudo umount /media 2>/dev/null
       disc-loader insert LCSAS_TEST_TINY_2026_0002
+      sudo mount /dev/sr0 /media
       tmux send-keys -t r "" C-m
-      until tmux capture-pane -t r -p \
-            | grep -qE 'restore complete|Insert the right disc|RESTORE FAILED|Type .q.'; do sleep 2; done
-      tmux capture-pane -t r -p
+      out=""; for _ in $(seq 1 30); do
+          out=$(tmux capture-pane -t r -p 2>/dev/null) || break
+          printf '%s' "$out" | grep -qE 'restore complete|Insert the right disc|RESTORE FAILED|Type .q.' && break
+          sleep 2
+      done; printf '%s\n' "$out"
 
       # continue for 0003, 0004 as more prompts appear
 
