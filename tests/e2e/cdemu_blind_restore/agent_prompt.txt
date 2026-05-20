@@ -19,22 +19,32 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     - "Password: "   → send: contents of ~/tenant-alpha.pw
     - disc-swap box  → (see DISC SWAPS below)
 
-  Step 4 — handle each disc-swap prompt as it appears:
-    The prompt shows a pack hash, NOT a disc label.  Try each data
-    disc label from ~/disc-labels.txt (skip LCSAS_META) in order:
+  Step 4 — disc-swap LOOP (repeat until RESTORE COMPLETE):
+    Each swap prompt shows a pack hash, not a disc label.
+    For EACH prompt: insert the next unused data disc, press ENTER.
+    Loop until the restore finishes — expect 3-4 swap prompts:
+
       disc-loader insert LCSAS_TEST_TINY_2026_0001
-      tmux send-keys -t r "" C-m    (ENTER to retry)
-      (watch tmux pane — if restore continues, move on;
-       if another swap prompt appears, insert the next disc)
-    Repeat for 0002, 0003, 0004 as prompted.
-    NEVER abandon the tmux session to run lcsas-restore directly.
+      tmux send-keys -t r "" C-m
+      sleep 30 && tmux capture-pane -t r -p   # check output
+
+      # if another swap prompt appears:
+      disc-loader insert LCSAS_TEST_TINY_2026_0002
+      tmux send-keys -t r "" C-m
+      sleep 30 && tmux capture-pane -t r -p
+
+      # continue for 0003, 0004 as more prompts appear
+
+    NEVER give up on the tmux session.  Keep inserting discs and
+    pressing ENTER until you see "restore complete" or an error.
+    NEVER run lcsas-restore directly.
 
   Step 5 — when "RESTORE COMPLETE" appears in tmux output:
     print exactly: RESTORE COMPLETE
 
 DO NOT deviate from these steps.  Do NOT explore before starting.
-DO NOT cat any file.  DO NOT run lcsas-restore directly.
-Start tmux within your first 3 Bash calls.
+DO NOT cat any script file (*.sh, *.py, *.bat, *.c, *.h).
+DO NOT run lcsas-restore directly.  Start tmux within your first 3 Bash calls.
 
 You are sitting in front of a single optical drive at /dev/sr0
 with a stack of labelled discs next to you.  You have:
