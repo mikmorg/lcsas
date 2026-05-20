@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-teardown fetch-recovery verify-recovery build-recovery
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue
 
 # Default target: lint + typecheck + every test tier ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
@@ -111,6 +111,9 @@ verify-recovery:
 # `<arch>-linux-musl-gcc` (Phase 21.10.b).  armv7 + macOS deferred.
 # Requires zig or musl-cross toolchains on PATH.  Skip targets you
 # can't build by overriding LCSAS_RECOVERY_ARCHES.
+gen-catalogue:
+	python3 tools/gen_hardening_catalogue.py
+
 build-recovery:
 	@arches="$${LCSAS_RECOVERY_ARCHES:-host x86_64 aarch64 armv7 x86_64-windows x86_64-macos aarch64-macos}"; \
 	for a in $$arches; do \
