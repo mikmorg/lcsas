@@ -463,63 +463,59 @@ The output directory can then be mastered to ISO and burned alongside your data 
 ### Restoring from Discs Only
 
 In a disaster scenario, you have:
-1. The data-volume ISOs (or physical discs)
-2. The meta-volume ISO (or physical disc)
-3. Your encryption key file (stored separately, e.g. in a safe)
+1. The physical data discs (or their ISO images)
+2. The meta-volume disc (or its ISO image)
+3. Your encryption password (stored separately, e.g. in a safe)
 
-No system-installed `rustic`, `xorriso`, or LCSAS is required.
+No system-installed `rustic`, `xorriso`, or LCSAS is required — everything is
+on the meta-volume.
+
+#### Physical Disc Swap (the normal path)
+
+Insert the meta disc, mount it, and run `restore.sh` directly.  The script
+prompts you interactively and pauses whenever it needs the next data disc.
 
 ```bash
-# 1. Mount or copy the meta-volume to local disk
-cp -r /media/meta-disc /tmp/lcsas-meta
-cd /tmp/lcsas-meta
+# 1. Mount the meta disc
+sudo mount /dev/sr0 /mnt
 
-# 2. Copy data-volume ISOs to a directory
-mkdir /tmp/isos
-cp /media/disc1/*.iso /tmp/isos/
-cp /media/disc2/*.iso /tmp/isos/
-# ... or mount each disc and copy the ISO files
+# 2. Start the restore — it will ask for your password, then prompt
+#    for each data disc as it needs them
+sh /mnt/restore.sh ~/restored/ latest
 
-# 3. Run the bootstrap restore script
-./restore.sh \
-  --key ~/safe/family.key \
-  --isos /tmp/isos/ \
-  --target ~/restored/
+# The script prints:
+#   Repository: <type the repo name and press Enter>
+#   Password:   <type your password and press Enter>
+#
+# When a data disc is needed it prints a swap prompt:
+#   Insert the right disc and press ENTER to retry.
+#
+# Eject the current disc, insert the requested data disc, press Enter.
+# Repeat until the script prints "restore complete".
 ```
 
-The restore script:
-1. Extracts all ISOs using the bundled `xorriso`
-2. Discovers repositories from disc metadata
-3. Assembles a restore cache with two-level pack layout
-4. Runs `rustic restore` using the bundled `rustic` binary
-5. Cleans up temporary files
+See [`recovery/docs/RECOVER.txt`](recovery/docs/RECOVER.txt) for the
+complete operator guide, including the physical swap steps and all
+environment variables.
 
-#### Restore Options
+#### Restoring from ISO Images (no optical drive)
 
-| Option | Required | Description |
-|--------|----------|-------------|
-| `--key FILE` | Yes | Path to your encryption key file |
-| `--isos DIR` | Yes | Directory containing `.iso` files |
-| `--target DIR` | Yes | Where to restore files |
-| `--repo NAME` | No | Restore only this repository (default: all) |
-| `--snapshot ID` | No | Specific snapshot to restore (default: latest) |
-| `--work-dir DIR` | No | Temporary work directory (default: auto) |
-
-#### Advanced: Using LCSAS CLI Instead
-
-The meta-volume also includes the full LCSAS source code, so you can use the
-standard CLI for more control:
+If you have ISO images on disk rather than physical discs, you can
+loop-mount each one as needed.  The workflow is identical to the physical
+path — `restore.sh` uses `/dev/sr0` (or whatever device you mount the
+ISO on), so mount each ISO in turn when the swap prompt appears:
 
 ```bash
-# Set up the bundled Python environment
-export LD_LIBRARY_PATH=/tmp/lcsas-meta/tools/lib:$LD_LIBRARY_PATH
-export PATH=/tmp/lcsas-meta/tools/bin:$PATH
-export PYTHONPATH=/tmp/lcsas-meta/lcsas/src
+# Mount the meta ISO
+sudo mount -o loop lcsas_meta.iso /mnt
+sh /mnt/restore.sh ~/restored/ latest
 
-# Use the full LCSAS restore workflow
-python3 -m lcsas restore plan <snapshot-id>
-python3 -m lcsas restore exec <snapshot-id> /target \
-  --password-file ~/safe/family.key
+# When a swap prompt appears, mount the next data ISO:
+sudo umount /mnt
+sudo mount -o loop lcsas_data_0001.iso /mnt
+# press Enter at the swap prompt
+
+# Repeat for each data ISO as prompted.
 ```
 
 ### Supported recovery platforms
