@@ -95,6 +95,33 @@ restore_file_node(const char *repo_path,
     long found = 0;
     int rc = 0;
 
+    /* Issue #92 — idempotent resume: skip files that are already fully
+     * restored.  We compare the on-disk file size against the "size"
+     * field recorded in the snapshot tree node.  If they match we
+     * assume the file is intact and return early, exactly as rustic
+     * does by default on the Python/rustic tier.
+     *
+     * lcsas_create_file() opens with O_TRUNC, so the check MUST come
+     * before that call or we would clobber the file unconditionally. */
+    {
+        long size_idx = lcsas_json_obj_get(src, toks, node_idx, "size");
+        if (size_idx >= 0 && toks[size_idx].type == LCSAS_JSON_NUMBER) {
+            long long expected_size = 0;
+            if (lcsas_json_decode_int(src, &toks[size_idx], &expected_size) == 0
+                    && expected_size >= 0) {
+                struct stat st;
+                if (stat(target_path, &st) == 0
+                        && S_ISREG(st.st_mode)
+                        && (long long)st.st_size == expected_size) {
+                    fprintf(stderr,
+                            "[lcsas-restore] skipping already-restored: %s\n",
+                            target_path);
+                    return 0;
+                }
+            }
+        }
+    }
+
     fd = lcsas_create_file(target_path);
     if (fd < 0) return -1;
 
