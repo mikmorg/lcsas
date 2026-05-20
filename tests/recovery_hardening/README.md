@@ -31,6 +31,7 @@ make test-recovery-hardening   # this tier only
 | `test_readme_invocation_parity.py` | Hardening test #2: README ↔ restore.sh invocation parity. |
 | `test_readme_simplification.py` | Hardening test: README_RESTORE simplification (Unit 5). |
 | `test_restore_discovery.py` | Hardening test #3: restore.sh repo discovery on canonical layouts. |
+| `test_restore_sh_catalog_invalidation.py` | Hardening test: mtime-based locator-catalog cache invalidation in restore.sh (Issue #108). |
 | `test_restore_sh_repo_flag.py` | Hardening test: --repo NAME flag on restore.sh (Issue #91). |
 | `test_restore_sh_ux.py` | Hardening tests: restore.sh UX improvements (recommendations #3, #4, #8). |
 | `test_restore_sh_version_flag.py` | Hardening test: --version flag on restore.sh (Issue #96). |
