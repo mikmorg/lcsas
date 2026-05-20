@@ -76,6 +76,7 @@ usage(const char *argv0)
         "usage: %s --repo DIR --password-file FILE --target DIR\n"
         "           [--snapshot ID|latest] [--list-snapshots] [--verbose]\n"
         "           [--catalog FILE]\n"
+        "           [--list-pending-packs]\n"
         "           [--pack-search DIR ...]\n"
         "           [--mount-parent DIR ...]\n"
         "           [--interactive {auto|on|off}]\n"
@@ -84,6 +85,14 @@ usage(const char *argv0)
         "Restore a restic-format repository.  --repo must point to an\n"
         "assembled tree (with subdirs keys/, index/, snapshots/, data/).\n"
         "Use scripts/restore.sh to assemble an on-disc LCSAS repo first.\n"
+        "\n"
+        "--list-pending-packs requires --catalog.  Prints a summary of\n"
+        "which discs you will need and how many packs each holds, then\n"
+        "exits without performing any restore:\n"
+        "    Pending packs by disc:\n"
+        "      LCSAS_X: 4 packs (12.3 MB)\n"
+        "      LCSAS_Y: 2 packs (8.1 MB)\n"
+        "    Total: 6 packs, 20.4 MB across 2 discs.\n"
         "\n"
         "--pack-search adds additional mount points to scan when a pack\n"
         "file is missing from --repo/data/.  Repeatable.\n"
@@ -146,6 +155,7 @@ main(int argc, char **argv)
     size_t n_mount_parents = 0;
     char *mount_parents_buf = NULL;  /* owns the splittable copy of $LCSAS_MOUNT_DIRS */
     int list_only = 0;
+    int list_pending_packs = 0;
     int verbose = 0;
     int i;
 
@@ -189,6 +199,8 @@ main(int argc, char **argv)
             matched = 1;
         } else if (strcmp(argv[i], "--list-snapshots") == 0) {
             list_only = 1; matched = 1;
+        } else if (strcmp(argv[i], "--list-pending-packs") == 0) {
+            list_pending_packs = 1; matched = 1;
         } else if (strcmp(argv[i], "--verbose") == 0
                 || strcmp(argv[i], "-v") == 0) {
             verbose = 1; matched = 1;
@@ -208,9 +220,30 @@ main(int argc, char **argv)
         usage(argv[0]);
         return 2;
     }
-    if (!list_only && !target) {
+    if (!list_only && !list_pending_packs && !target) {
         usage(argv[0]);
         return 2;
+    }
+
+    /* --list-pending-packs: print disc plan from catalog and exit.
+     * Catalog is required; no key load, no restore. */
+    if (list_pending_packs) {
+        lcsas_catalog *cat = NULL;
+        int lpp_rc;
+        if (!catalog_path) {
+            fprintf(stderr,
+                    "ERROR: --list-pending-packs requires --catalog\n");
+            return 1;
+        }
+        cat = lcsas_catalog_open(catalog_path);
+        if (!cat) {
+            fprintf(stderr,
+                    "ERROR: cannot open catalog %s\n", catalog_path);
+            return 1;
+        }
+        lpp_rc = lcsas_catalog_print_pending_packs(cat);
+        lcsas_catalog_close(cat);
+        return lpp_rc == 0 ? 0 : 1;
     }
 
     /* Resolve --interactive mode. */

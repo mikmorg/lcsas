@@ -67,4 +67,15 @@ int lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
  */
 void lcsas_catalog_describe(lcsas_catalog *c);
 
+/*
+ * Print a "pending packs by disc" summary to stdout, then exit.
+ * Groups all packs (catalog-wide) by volume label, sorted by pack
+ * count descending.  This is the --list-pending-packs path: it gives
+ * the operator a preview of which discs they will need to insert
+ * before any actual restore begins.
+ *
+ * Returns 0 on success, -1 on SQL error.
+ */
+int lcsas_catalog_print_pending_packs(lcsas_catalog *c);
+
 #endif
