@@ -175,13 +175,16 @@ RECOVERY=""
 TARGET=""
 SNAP="latest"
 
-# --help / -h short-circuit: print usage to stdout and exit 0 so this
-# script is friendly to interactive users and to test harnesses that
-# probe for a usage block.
-case "${1:-}" in
-    -h|--help)
-        cat <<EOF
-usage: $0 [RECOVERY_ROOT] TARGET_DIR [SNAPSHOT_ID|latest]
+# Flag parsing: strip named flags before positional-arg parsing so
+# operators can write `sh restore.sh --repo alpha RECOVERY TARGET` or
+# `sh restore.sh --help` without knowing about LCSAS_* env vars.
+# The `*) break ;;` stops the loop at the first non-flag argument so
+# the existing positional-arg if/elif block below still works unchanged.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            cat <<EOF
+usage: $0 [--repo NAME] [RECOVERY_ROOT] TARGET_DIR [SNAPSHOT_ID|latest]
 
 QUICK START:
   1. Insert ANY data disc into your drive.
@@ -194,7 +197,9 @@ QUICK START:
   recovery tree) must contain bin/<arch>/lcsas-restore and/or src/.
   TARGET_DIR is where to write restored files (default: /tmp/restored).
 
-ENVIRONMENT VARIABLES:
+FLAGS AND ENVIRONMENT VARIABLES:
+  --repo NAME             Repository / tenant name (same as LCSAS_REPO=NAME).
+                          Skips the multi-tenant selection prompt.
   LCSAS_PASSWORD          Encryption password (skips the Password: prompt).
                           Mutually exclusive with LCSAS_PWFILE.
   LCSAS_PWFILE            Path to a file whose contents are the password.
@@ -235,9 +240,13 @@ Most operators don't need any of these.  See the meta disc's
 README_RESTORE.md and TROUBLESHOOTING.md for the operator-friendly
 walkthrough.
 EOF
-        exit 0
-        ;;
-esac
+            exit 0 ;;
+        --repo)
+            LCSAS_REPO="${2:?--repo requires a NAME argument}"
+            shift 2 ;;
+        *) break ;;
+    esac
+done
 
 # Pattern 1: first arg looks like a recovery root (has bin/ or src/).
 if [ $# -ge 2 ] && [ -d "$1/bin" -o -d "$1/src" ] 2>/dev/null; then
@@ -253,7 +262,7 @@ elif [ -n "$AUTO_RECOVERY" ]; then
     TARGET="${TARGET:-/tmp/restored}"
 else
     cat >&2 <<EOF
-usage: $0 [RECOVERY_ROOT] TARGET_DIR [SNAPSHOT_ID|latest]
+usage: $0 [--repo NAME] [RECOVERY_ROOT] TARGET_DIR [SNAPSHOT_ID|latest]
 
   RECOVERY_ROOT (auto-detected when restore.sh is run from inside the
   recovery tree) must contain bin/<arch>/lcsas-restore and/or src/.
