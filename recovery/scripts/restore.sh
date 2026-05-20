@@ -27,6 +27,10 @@
 
 set -eu
 
+# Stamped at meta-volume build time by src/lcsas/meta/builder.py.
+LCSAS_RESTORE_BUILD_SHA="@@BUILD_SHA@@"
+LCSAS_RESTORE_BUILD_DATE="@@BUILD_DATE@@"
+
 # ── Argument handling and auto-discovery ──────────────────────────
 
 SCRIPT="$(
@@ -184,7 +188,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help)
             cat <<EOF
-usage: $0 [--repo NAME] [RECOVERY_ROOT] TARGET_DIR [SNAPSHOT_ID|latest]
+usage: $0 [--repo NAME] [--version] [RECOVERY_ROOT] TARGET_DIR [SNAPSHOT_ID|latest]
 
 QUICK START:
   1. Insert ANY data disc into your drive.
@@ -200,6 +204,7 @@ QUICK START:
 FLAGS AND ENVIRONMENT VARIABLES:
   --repo NAME             Repository / tenant name (same as LCSAS_REPO=NAME).
                           Skips the multi-tenant selection prompt.
+  --version               Print the build commit SHA and date, then exit.
   LCSAS_PASSWORD          Encryption password (skips the Password: prompt).
                           Mutually exclusive with LCSAS_PWFILE.
   LCSAS_PWFILE            Path to a file whose contents are the password.
@@ -244,6 +249,10 @@ EOF
         --repo)
             LCSAS_REPO="${2:?--repo requires a NAME argument}"
             shift 2 ;;
+        --version)
+            printf 'lcsas-restore.sh %s (built %s)\n' \
+                "$LCSAS_RESTORE_BUILD_SHA" "$LCSAS_RESTORE_BUILD_DATE"
+            exit 0 ;;
         *) break ;;
     esac
 done
@@ -262,7 +271,7 @@ elif [ -n "$AUTO_RECOVERY" ]; then
     TARGET="${TARGET:-/tmp/restored}"
 else
     cat >&2 <<EOF
-usage: $0 [--repo NAME] [RECOVERY_ROOT] TARGET_DIR [SNAPSHOT_ID|latest]
+usage: $0 [--repo NAME] [--version] [RECOVERY_ROOT] TARGET_DIR [SNAPSHOT_ID|latest]
 
   RECOVERY_ROOT (auto-detected when restore.sh is run from inside the
   recovery tree) must contain bin/<arch>/lcsas-restore and/or src/.

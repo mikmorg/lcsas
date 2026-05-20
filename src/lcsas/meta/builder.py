@@ -19,7 +19,7 @@ import os
 import re
 import shutil
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from lcsas.config.settings import LCSASConfig
@@ -2258,6 +2258,23 @@ class MetaVolumeBuilder:
         if new_driver.is_file():
             shutil.copy2(str(new_driver), str(script_path))
             os.chmod(str(script_path), 0o755)
+            # Stamp build SHA + date into the restore script placeholders.
+            import subprocess as _sp
+            try:
+                _sha = _sp.check_output(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    cwd=str(Path(__file__).resolve().parent),
+                    text=True,
+                    stderr=_sp.DEVNULL,
+                ).strip()
+            except Exception:
+                _sha = "unknown"
+            _build_date = date.today().isoformat()
+            _content = script_path.read_text(encoding="utf-8")
+            _content = _content.replace("@@BUILD_SHA@@", _sha).replace(
+                "@@BUILD_DATE@@", _build_date
+            )
+            _write_and_sync(script_path, _content)
             # Stash the legacy bash driver alongside for compatibility /
             # for users who specifically want it.  Off the bare path.
             legacy = self._output / "restore_legacy.sh"
