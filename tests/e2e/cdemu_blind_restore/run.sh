@@ -66,7 +66,10 @@ sudo ln -sf "$RUN_DIR/disc-loader.log" /var/log/disc-loader.log
 # disc_locator.c removes the pin, but real operators on slow drives
 # may still want more headroom.  Override with MAX_TURNS env to
 # tighten or loosen for stress testing.
-MAX_TURNS="${MAX_TURNS:-250}"
+# Bumped 250 → 350 after run-3223274 scored 12/15 because the 2700s
+# outer timeout expired before haiku fed all 3 required disc-swap
+# responses (Issue #134).
+MAX_TURNS="${MAX_TURNS:-350}"
 # BLIND_MODEL: the model used by the blind agent.
 # Default is haiku (fastest/cheapest; acceptable for gate).
 # Override with e.g. BLIND_MODEL=claude-sonnet-4-6 for deeper runs.
