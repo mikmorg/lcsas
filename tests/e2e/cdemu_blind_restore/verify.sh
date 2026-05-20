@@ -207,14 +207,22 @@ import json, re, sys
 #   bash /path/to/restore.sh ...
 #   exec ./restore.sh ...
 #   sudo sh restore.sh ...
+#   tmux new-session -d 'sh restore.sh ...'   (quoted shell arg — the
+#                                              test-rig pattern; the
+#                                              quoted string is itself
+#                                              a shell command)
 #
 # Plain mentions like `ls X.sh`, `cp X.sh Y`, `cat X.sh` are NOT
 # invocations — they were the v3 false-positive that flagged
 # `standalone_restorer.py` whenever the agent looked at it.  Only
 # count names that follow `sh|bash|exec|./` or appear as the very
-# first word of a command/clause.
+# first word of a command/clause.  Single and double quotes also act
+# as clause boundaries because the contents of a quoted argument
+# passed to `sh -c`, `tmux new-session`, `bash -lc`, etc. are
+# themselves shell — `tmux new-session 'sh restore.sh'` IS an
+# invocation of restore.sh, just one level removed.
 LEADING = re.compile(
-    r'(?:^|[;&|]|&&|\|\|)\s*(?:sudo\s+)?'
+    r"""(?:^|[;&|'"]|&&|\|\|)\s*(?:sudo\s+)?"""
     r'(?:'
     r'(?:sh|bash|exec)\s+(?:[A-Z_][A-Z0-9_]*=\S+\s+)*'  # interpreter+envvars
     r'|\.?/'                                              # ./ or /path

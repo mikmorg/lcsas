@@ -98,9 +98,34 @@ relocate_to_ram() {
         cp -f "$SCRIPT_DIR/detect_arch.sh" "$ramdir/recovery/scripts/detect_arch.sh"
         chmod +x "$ramdir/recovery/scripts/detect_arch.sh"
     fi
-    # Preserve the bin/ tree so tier-1/tier-2 still resolve.
-    if [ -d "$SCRIPT_DIR/../bin" ]; then
-        cp -R "$SCRIPT_DIR/../bin/." "$ramdir/recovery/bin/" 2>/dev/null || true
+    # Preserve the bin/ tree so tier-1/tier-2 still resolve.  The
+    # script lives at one of two valid locations on the meta disc:
+    #   (a) $META/restore.sh                — top-level entry; the
+    #       sibling tree is $META/recovery/bin/
+    #   (b) $META/recovery/scripts/restore.sh — canonical RECOVERY
+    #       layout; the sibling tree is $META/recovery/bin/ (i.e.
+    #       one level up from $SCRIPT_DIR)
+    # In case (a), $SCRIPT_DIR/../bin resolves to /bin (the HOST's
+    # /bin -- the original blind-restore regression).  Try both and
+    # pick the one that actually carries the recovery binaries.
+    src_bin=""
+    if [ -d "$SCRIPT_DIR/recovery/bin" ]; then
+        src_bin="$SCRIPT_DIR/recovery/bin"
+    elif [ -d "$SCRIPT_DIR/../bin" ]; then
+        # Cheap sanity check: the recovery bin/ has per-target
+        # subdirs (e.g. x86_64-unknown-linux-musl/).  Host /bin
+        # does not.  If neither pattern is present, skip the copy
+        # so the operator gets the actionable "no recovery method
+        # available" message later rather than a silent flat copy
+        # of /bin into the ramdir.
+        if ls -d "$SCRIPT_DIR/../bin"/*-*-* >/dev/null 2>&1 \
+           || ls -d "$SCRIPT_DIR/../bin"/x86_64* "$SCRIPT_DIR/../bin"/aarch64* \
+                    "$SCRIPT_DIR/../bin"/armv7* >/dev/null 2>&1; then
+            src_bin="$SCRIPT_DIR/../bin"
+        fi
+    fi
+    if [ -n "$src_bin" ]; then
+        cp -R "$src_bin/." "$ramdir/recovery/bin/" 2>/dev/null || true
     fi
     # Catalog sidecar for prompt hints (small enough to copy).
     for cat_cand in \
@@ -605,7 +630,17 @@ IFS="$OLD_IFS"
 # self-contained repo).  Without this, the recovery binary will
 # eventually fail with a less actionable "no packs found" message
 # after the operator has already typed a password.
+#
+# EXCEPTION (single-drive flow): when META_DISC is set, the operator
+# started by mounting the meta-disc.  They are about to be asked to
+# swap to a data disc -- that hand-off is the recovery binary's job
+# via its framed "Insert the right disc and press ENTER to retry."
+# prompt.  Hard-exiting here would short-circuit that loop with the
+# unactionable error of "you need a data disc mounted to even reach
+# the point where I would have told you to swap discs."  Fall through
+# and let the binary drive the swap loop.
 if [ -z "$PACK_SEARCH_ARGS" ] && [ ! -d "$REPO/data" ] \
+   && [ -z "${META_DISC:-}" ] \
    && [ "${LCSAS_ALLOW_NO_PACK_SEARCH:-0}" != "1" ]; then
     cat >&2 <<EOF
 ERROR: no data discs detected at any of: $LCSAS_MOUNT_DIRS_EFFECTIVE

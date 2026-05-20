@@ -152,6 +152,117 @@ def test_lcsas_allow_no_pack_search_bypasses_check(tmp_path: Path) -> None:
     )
 
 
+def test_relocate_finds_recovery_bin_from_meta_toplevel(tmp_path: Path) -> None:
+    """When the operator runs `sh /mnt/restore.sh` (the canonical META
+    disc top-level entry point), relocate_to_ram must copy
+    `/mnt/recovery/bin/*` into the ramdir -- NOT `$SCRIPT_DIR/../bin`,
+    which resolves to the HOST's `/bin` and silently flattens 1000+
+    unrelated host binaries into the ramdir's recovery/bin/.
+
+    Before the fix the agent reported:
+        ERROR: no recovery method available.
+        The bare-minimum recovery path (tiers 1-2) needs ONE of:
+          * a prebuilt /tmp/lcsas-restore.XXX/recovery/bin/x86_64-unknown-linux-musl/lcsas-restore
+    because relocate_to_ram had copied the host's /bin/ over the
+    recovery binaries.
+
+    This test stages a META-disc-shaped read-only layout and asserts
+    relocate_to_ram picks $SCRIPT_DIR/recovery/bin (the on-disc path)
+    over $SCRIPT_DIR/../bin (host /bin)."""
+    # Build a fake "meta disc" tree where the script lives at the root
+    # and the recovery binaries are at $META/recovery/bin/<target>/.
+    meta = tmp_path / "fake_meta"
+    meta.mkdir()
+    # Copy the production restore.sh into the meta root.
+    import shutil
+    shutil.copy(RESTORE_SH, meta / "restore.sh")
+    # Stage a sentinel recovery bin tree under the meta disc.
+    bin_dir = meta / "recovery" / "bin" / HOST_TARGET
+    bin_dir.mkdir(parents=True)
+    sentinel = bin_dir / "lcsas-restore"
+    sentinel.write_text("#!/bin/sh\necho 'SENTINEL TIER1 INVOKED'\nexit 0\n")
+    sentinel.chmod(0o755)
+    # Also stage a doc subtree so other restore.sh paths don't crash.
+    (meta / "recovery" / "scripts").mkdir()
+    target = tmp_path / "restored"
+
+    # Run restore.sh from the meta-disc-style top-level layout.  We
+    # pass enough fixture (single repo) that restore.sh reaches the
+    # binary dispatch step.  LCSAS_RELOCATED is NOT set -- we want
+    # relocate_to_ram to fire and exercise the path.
+    _make_repo_skeleton(meta / "metadata", "alpha", with_data=False)
+    env = {
+        **os.environ,
+        "LCSAS_MOUNT_DIRS": "",
+        # We deliberately do NOT set LCSAS_NO_RELOCATE here -- the
+        # whole point is to exercise relocate_to_ram.  But the test
+        # fixture is a writable dir, so the script's readonly probe
+        # won't fire; pass LCSAS_META_DISC so relocate fires anyway.
+        "LCSAS_META_DISC": str(meta),
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+    }
+    res = subprocess.run(
+        ["sh", str(meta / "restore.sh"),
+         str(meta / "recovery"), str(target), "latest"],
+        capture_output=True, text=True, env=env, timeout=15,
+        input="stub-pw\n",
+    )
+    # The "no recovery method available" banner is the symptom of the
+    # bug.  If our fix worked, the sentinel binary should have been
+    # found (and either dispatched, or the script should at least not
+    # complain that the binary is missing).
+    assert "no recovery method available" not in res.stderr, (
+        f"relocate_to_ram failed to find the on-disc recovery/bin -- "
+        f"the script reports the binary is missing.  This means it "
+        f"copied $SCRIPT_DIR/../bin (host /bin) instead of "
+        f"$SCRIPT_DIR/recovery/bin.\n"
+        f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    )
+
+
+def test_meta_disc_set_bypasses_hard_error(tmp_path: Path) -> None:
+    """Single-drive flow: when META_DISC is set (operator started by
+    mounting the meta-disc), the hard-exit on empty PACK_SEARCH_ARGS
+    must NOT fire — the recovery binary's framed disc-swap prompt is
+    the correct UX for the data-disc hand-off.  Hard-exiting here would
+    short-circuit the binary's swap loop and force the operator to
+    re-type the password after every swap.
+
+    This regression broke the blind-restore E2E run: the agent mounted
+    LCSAS_META at /mnt, ran restore.sh, picked the repo, typed the
+    password, and then the script exited with "no data discs detected"
+    instead of handing off to the binary that would have prompted for
+    a swap.  The single-drive flow is the canonical operator workflow
+    — it MUST work without LCSAS_ALLOW_NO_PACK_SEARCH gymnastics."""
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    (recovery / "bin" / HOST_TARGET).mkdir(parents=True)
+    # Metadata-only repo, no data/ — exactly what the meta disc carries.
+    _make_repo_skeleton(recovery / "metadata", "alpha", with_data=False)
+    target = tmp_path / "restored"
+
+    full_env = {
+        **os.environ,
+        "LCSAS_MOUNT_DIRS": "",
+        # Mark the script as having been relocated FROM the meta-disc
+        # mount point.  This is the same sentinel the script's own
+        # relocate_to_ram() sets when it re-execs from a writable dir
+        # after detecting it was running off an iso9660 filesystem.
+        "LCSAS_RELOCATED": str(recovery),
+    }
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        capture_output=True, text=True, env=full_env, timeout=15,
+        input="stub-pw\n",
+    )
+    # The gate must NOT fire — the binary's swap prompt is the right UX.
+    assert "no data discs detected" not in res.stderr, (
+        f"single-drive flow (META_DISC set) must bypass the discovery "
+        f"hard-error and fall through to the binary's swap loop; got:\n"
+        f"{res.stderr}"
+    )
+
+
 # ── Recommendation #4: numbered repo prompt ──────────────────────────
 
 

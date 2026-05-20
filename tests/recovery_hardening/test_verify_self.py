@@ -510,6 +510,46 @@ def test_check9_benign_ls_does_not_trigger(tmp_path: Path) -> None:
     )
 
 
+def test_check9_tmux_single_pane_command_counts_as_invocation(
+    tmp_path: Path,
+) -> None:
+    """`tmux new-session -d -s r 'sh /mnt/restore.sh ...'` must satisfy
+    check #9 even when the `sh restore.sh` is inside the quoted
+    session-argument string.
+
+    The quoted argument to `tmux new-session` is itself a shell command
+    that tmux's pane shell executes — so this IS a top-level invocation
+    of restore.sh, just one quoting level removed.  Before the regex was
+    updated to treat ``'``/``"`` as clause boundaries, the agent's
+    actual invocation pattern (taken straight from agent_prompt.txt
+    Step 2 — `tmux new-session -d -s r 'sh /mnt/restore.sh ...'`) was
+    scored as FAIL on check #9 because the regex required `sh` to
+    follow a shell operator like `&&` or `;`, never an opening quote.
+    That false negative would punish a transcript that did exactly what
+    the prompt told it to do.
+    """
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_transcript(run_dir, [
+        # The exact pattern from agent_prompt.txt Step 2 — no `&&` or
+        # `;` before `sh restore.sh`; only the opening single quote
+        # bridges them.
+        _bash_event(
+            "tmux new-session -d -s r "
+            "'sh /mnt/restore.sh ~/restored/ latest 2>&1'"
+        ),
+        _bash_event('tmux send-keys -t r "$(cat ~/tenant-alpha.pw)" C-m'),
+        _result_event(),
+    ])
+    _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
+    fix = _make_fake_fixture(tmp_path)
+    rc, out = _run_verify(run_dir, fixture=fix)
+    assert _check_status(out, "agent ran restore.sh") == "PASS", (
+        f"quoted tmux session-arg invocation of restore.sh must satisfy "
+        f"check #9:\n{out}"
+    )
+
+
 # ── Check #15: positive + negative cases ─────────────────────────────
 #
 # Check #15 tokenises each clause and looks at verb + args.  Only

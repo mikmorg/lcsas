@@ -127,3 +127,107 @@ def test_tmux_is_not_presented_as_required_to_real_operators() -> None:
         "guide must not reference tmux — that is a test-rig artifact.  "
         "Remove any tmux references from RECOVER.txt."
     )
+
+
+def test_agent_prompt_documents_media_mount_workflow() -> None:
+    """The disc-swap loop must tell the agent to mount data discs at
+    /media — NOT /mnt.
+
+    Why: the recovery binary received `--meta-disc /mnt` at startup
+    (so it could drop cwd outside /mnt before the operator umounts
+    it).  Internally the binary's `path_under` check excludes the
+    meta_disc path and every child from pack-search, FOREVER — even
+    after the operator ejects the meta disc and inserts a data disc
+    at the same mount point.  Mounting subsequent data discs at /mnt
+    leaves them invisible to the binary, and the swap-prompt loop
+    fires forever.
+
+    The blind-restore run-fix2 agent figured this out on its own by
+    trial and error (~10 wasted commands before it discovered
+    `mount /dev/sr0 /media` works).  Pin /media in the prompt so
+    future agents don't burn budget re-deriving it.
+
+    What this catches: any refactor that drops the /media instruction
+    or replaces it with /mnt.
+    """
+    text = _text()
+    assert "/media" in text, (
+        "agent_prompt.txt does not mention /media; the agent will mount "
+        "data discs at /mnt (the meta-disc path), the binary will skip "
+        "them via its path_under(/mnt) check, and the swap loop will "
+        "stall.  Document the /media workflow in Step 4."
+    )
+    # The swap-loop section should explicitly chain the umount + insert
+    # + mount /media pattern.  Look for both umount and a /media mount.
+    assert "umount" in text and "mount /dev/sr0 /media" in text, (
+        "agent_prompt.txt mentions /media but doesn't show the canonical "
+        "swap-disc pattern (`umount /media` + `disc-loader insert` + "
+        "`mount /dev/sr0 /media`).  Without all three, the agent may try "
+        "shortcuts that don't refresh the kernel mount."
+    )
+
+
+def test_agent_prompt_disc_swap_polling_is_bounded() -> None:
+    """The disc-swap polling pattern must be a BOUNDED for-loop with
+    a break on tmux death — never an unbounded `until ...; do sleep
+    ...; done`.
+
+    Why: in blind-restore run-fix2, the agent followed the prior
+    prompt's `until tmux capture-pane -t r -p | grep -qE ...; do
+    sleep 3; done` pattern.  When the tmux session ended after the
+    final restore completed, `tmux capture-pane` exited non-zero, the
+    grep saw no input (returned 1), and the until-loop kept sleeping
+    forever — orphaning a `sleep 3` child whose parent shell was the
+    agent's `run_in_background` task wrapper.  Claude Code refused to
+    finalize the session until the background task completed, so the
+    blind-test outer harness hung past the 6-minute restore for
+    another ~14 minutes before being manually killed.
+
+    Fix: every polling block in the swap-loop section must be either
+    (a) inside a `for _ in $(seq 1 N)` or `for i in 1 2 3 ...` outer
+    cap that bounds the iteration count, or (b) include an `|| break`
+    on the `tmux capture-pane` so a dead tmux exits the loop.  This
+    test checks both signals.
+    """
+    text = _text()
+    # The swap-loop section (between "Step 4" and the next major
+    # section) is what we care about; restrict the check to it.
+    step4_start = text.find("Step 4 — disc-swap LOOP")
+    assert step4_start != -1, (
+        "Step 4 disc-swap LOOP header missing from agent_prompt.txt; "
+        "this test cannot scope its check."
+    )
+    # Heuristic: section ends at the next "Step 5" or at the WHAT YOU
+    # MAY NOT DO header.  Use whichever comes first.
+    step5_idx = text.find("Step 5", step4_start)
+    whatnot_idx = text.find("WHAT YOU MAY NOT", step4_start)
+    section_end = min(
+        [i for i in (step5_idx, whatnot_idx, len(text)) if i > step4_start]
+    )
+    section = text[step4_start: section_end]
+
+    # The bounded-form signal: a `for _ in $(seq 1 N)` or `for i in
+    # 1 2 3 ...` somewhere in the swap section.
+    bounded = (
+        "for _ in $(seq" in section
+        or "for i in $(seq" in section
+        or "for _ in 1 2 3" in section
+        or "for i in 1 2 3" in section
+    )
+    assert bounded, (
+        "Step 4 swap loop must use a BOUNDED `for ... do ... done` "
+        "for polling tmux output, not an unbounded `until`.  An "
+        "unbounded until-loop orphans a sleep process when tmux dies, "
+        "blocking session finalization for the full 45-min wall-clock "
+        "cap.  See the run-fix2 retrospective."
+    )
+    # Defence-in-depth: the polling block should also `break` on
+    # capture failure so a dead tmux exits the loop immediately
+    # rather than waiting for the outer cap.
+    assert "|| break" in section, (
+        "Step 4 swap loop must `break` when `tmux capture-pane` "
+        "exits non-zero (the canonical 'tmux session ended' signal).  "
+        "Without this, every successful restore wastes the full "
+        "outer-cap timeout per swap because the until/for body keeps "
+        "polling a dead session."
+    )
