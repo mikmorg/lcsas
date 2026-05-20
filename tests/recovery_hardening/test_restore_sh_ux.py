@@ -190,7 +190,6 @@ def test_relocate_finds_recovery_bin_from_meta_toplevel(tmp_path: Path) -> None:
     # pass enough fixture (single repo) that restore.sh reaches the
     # binary dispatch step.  LCSAS_RELOCATED is NOT set -- we want
     # relocate_to_ram to fire and exercise the path.
-    repo = tmp_path / "fake_meta" / "metadata" / "alpha"
     _make_repo_skeleton(meta / "metadata", "alpha", with_data=False)
     env = {
         **os.environ,
