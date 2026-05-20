@@ -59,7 +59,7 @@ make test-recovery-hardening   # this tier only
    honestly-optional hosts (e.g. cross-compile toolchains a dev
    doesn't have).  Use env vars like `LCSAS_OPTIONAL_ARCHES` for
    the rare legitimate skip.
-5. Add a row to the catalogue table above.
+5. Run `make gen-catalogue` to regenerate the catalogue table above from your docstring.
 
 ## Why these are the LAST step
 
