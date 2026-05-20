@@ -61,6 +61,12 @@ Choose 1–3 issues from the open queue that are:
 - **Roughly equal effort** (~30–90 min each)
 - **Each ships with at least one new test** that pins the fix
 
+**File-boundary check (Issue #113 lesson):** Before finalising the
+batch, for each chosen issue list every file it will touch (source +
+test).  If any two issues share a file, drop one of them and replace
+it with a different issue — do not send sibling workers to the same
+file.  Conflicts always cost more than an extra cycle.
+
 Prefer (in order):
 
 1. Any `severity:high` open
@@ -143,6 +149,13 @@ When each worker reports back:
    user; do not merge a red blind run.
 5. **Merge**: `gh pr merge <num> --merge --admin`.  Sync
    `github` and `origin` (mirror remote).
+6. **Cross-PR retest (Issue #99 lesson):** If other PRs from the same
+   batch are still open, immediately rebase each against the now-updated
+   master and re-run `make test-recovery-hardening`.  A PR that passed
+   the gate against the old master may silently break after a sibling
+   merges (e.g. a new env-var guard added by PR N breaks PR N+1's tests).
+   If any rebase + retest fails, do NOT merge the broken PR — push a fix
+   commit to its branch and re-run the full gate before merging.
 
 ### Step 6 — Verify coverage moved
 
