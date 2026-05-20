@@ -98,9 +98,34 @@ relocate_to_ram() {
         cp -f "$SCRIPT_DIR/detect_arch.sh" "$ramdir/recovery/scripts/detect_arch.sh"
         chmod +x "$ramdir/recovery/scripts/detect_arch.sh"
     fi
-    # Preserve the bin/ tree so tier-1/tier-2 still resolve.
-    if [ -d "$SCRIPT_DIR/../bin" ]; then
-        cp -R "$SCRIPT_DIR/../bin/." "$ramdir/recovery/bin/" 2>/dev/null || true
+    # Preserve the bin/ tree so tier-1/tier-2 still resolve.  The
+    # script lives at one of two valid locations on the meta disc:
+    #   (a) $META/restore.sh                — top-level entry; the
+    #       sibling tree is $META/recovery/bin/
+    #   (b) $META/recovery/scripts/restore.sh — canonical RECOVERY
+    #       layout; the sibling tree is $META/recovery/bin/ (i.e.
+    #       one level up from $SCRIPT_DIR)
+    # In case (a), $SCRIPT_DIR/../bin resolves to /bin (the HOST's
+    # /bin -- the original blind-restore regression).  Try both and
+    # pick the one that actually carries the recovery binaries.
+    src_bin=""
+    if [ -d "$SCRIPT_DIR/recovery/bin" ]; then
+        src_bin="$SCRIPT_DIR/recovery/bin"
+    elif [ -d "$SCRIPT_DIR/../bin" ]; then
+        # Cheap sanity check: the recovery bin/ has per-target
+        # subdirs (e.g. x86_64-unknown-linux-musl/).  Host /bin
+        # does not.  If neither pattern is present, skip the copy
+        # so the operator gets the actionable "no recovery method
+        # available" message later rather than a silent flat copy
+        # of /bin into the ramdir.
+        if ls -d "$SCRIPT_DIR/../bin"/*-*-* >/dev/null 2>&1 \
+           || ls -d "$SCRIPT_DIR/../bin"/x86_64* "$SCRIPT_DIR/../bin"/aarch64* \
+                    "$SCRIPT_DIR/../bin"/armv7* >/dev/null 2>&1; then
+            src_bin="$SCRIPT_DIR/../bin"
+        fi
+    fi
+    if [ -n "$src_bin" ]; then
+        cp -R "$src_bin/." "$ramdir/recovery/bin/" 2>/dev/null || true
     fi
     # Catalog sidecar for prompt hints (small enough to copy).
     for cat_cand in \
