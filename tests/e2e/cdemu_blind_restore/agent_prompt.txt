@@ -10,7 +10,7 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     disc-loader insert LCSAS_META
     sudo mount /dev/sr0 /mnt
 
-  Step 2 — start restore.sh in a tmux session:
+  Step 2 — start restore.sh in a tmux session (test-rig workaround; real operators run restore.sh directly):
     tmux new-session -d -s r 'sh /mnt/restore.sh ~/restored/ latest 2>&1'
     (wait 3-5s, then capture output to see the prompt)
 

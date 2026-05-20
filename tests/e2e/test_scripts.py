@@ -36,6 +36,10 @@ def _format_failure(result: subprocess.CompletedProcess[bytes], script: Path) ->
 
 @pytest.mark.requires_rustic
 @pytest.mark.requires_xorriso
+@pytest.mark.skipif(
+    not Path("/mnt/lcsas-data").exists(),
+    reason="requires /mnt/lcsas-data LV — run scripts/setup_test_lv.sh first",
+)
 def test_e2e_pipeline(tmp_path: Path) -> None:
     """Run scripts/e2e_test.py as the canonical end-to-end pipeline test.
 
