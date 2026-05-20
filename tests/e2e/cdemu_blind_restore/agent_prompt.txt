@@ -11,8 +11,13 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     sudo mount /dev/sr0 /mnt
 
   Step 2 — start restore.sh in a tmux session (test-rig workaround; real operators run restore.sh directly):
+    tmux set-option -g remain-on-exit on
     tmux new-session -d -s r 'sh /mnt/restore.sh ~/restored/ latest 2>&1'
     (wait 3-5s, then capture output to see the prompt)
+    NOTE: `remain-on-exit on` keeps the pane open after restore.sh
+    exits (success OR crash) so you can read its final output.
+    Without it, the pane closes on exit and your next
+    `tmux capture-pane` fails with "no server running".
 
   Step 3 — answer the prompts via tmux send-keys:
     - "Repository: " → send: alpha
@@ -22,16 +27,33 @@ QUICK REFERENCE — complete command sequence (do exactly this)
   Step 4 — disc-swap LOOP (repeat until RESTORE COMPLETE):
     Each swap prompt shows a pack hash, not a disc label.
     For EACH prompt: insert the next unused data disc, press ENTER.
-    Loop until the restore finishes — expect 3-4 swap prompts:
+    Loop until the restore finishes — expect 3-4 swap prompts.
+
+    IMPORTANT — pacing your tmux captures.  The Bash tool will REJECT
+    `sleep 30 && tmux capture-pane ...` as a long-sleep-then-command
+    chain.  Use the until-loop form instead — it polls every 2s and
+    returns as soon as a known string appears in the pane (or 60s
+    cap, whichever comes first):
+
+      until tmux capture-pane -t r -p \
+            | grep -qE 'restore complete|Insert the right disc|RESTORE FAILED|Type .q.'; do
+          sleep 2;
+      done; tmux capture-pane -t r -p
+
+    Pattern for each swap:
 
       disc-loader insert LCSAS_TEST_TINY_2026_0001
       tmux send-keys -t r "" C-m
-      sleep 30 && tmux capture-pane -t r -p   # check output
+      until tmux capture-pane -t r -p \
+            | grep -qE 'restore complete|Insert the right disc|RESTORE FAILED|Type .q.'; do sleep 2; done
+      tmux capture-pane -t r -p
 
-      # if another swap prompt appears:
+      # if another swap prompt appears in the captured output:
       disc-loader insert LCSAS_TEST_TINY_2026_0002
       tmux send-keys -t r "" C-m
-      sleep 30 && tmux capture-pane -t r -p
+      until tmux capture-pane -t r -p \
+            | grep -qE 'restore complete|Insert the right disc|RESTORE FAILED|Type .q.'; do sleep 2; done
+      tmux capture-pane -t r -p
 
       # continue for 0003, 0004 as more prompts appear
 

@@ -605,7 +605,17 @@ IFS="$OLD_IFS"
 # self-contained repo).  Without this, the recovery binary will
 # eventually fail with a less actionable "no packs found" message
 # after the operator has already typed a password.
+#
+# EXCEPTION (single-drive flow): when META_DISC is set, the operator
+# started by mounting the meta-disc.  They are about to be asked to
+# swap to a data disc -- that hand-off is the recovery binary's job
+# via its framed "Insert the right disc and press ENTER to retry."
+# prompt.  Hard-exiting here would short-circuit that loop with the
+# unactionable error of "you need a data disc mounted to even reach
+# the point where I would have told you to swap discs."  Fall through
+# and let the binary drive the swap loop.
 if [ -z "$PACK_SEARCH_ARGS" ] && [ ! -d "$REPO/data" ] \
+   && [ -z "${META_DISC:-}" ] \
    && [ "${LCSAS_ALLOW_NO_PACK_SEARCH:-0}" != "1" ]; then
     cat >&2 <<EOF
 ERROR: no data discs detected at any of: $LCSAS_MOUNT_DIRS_EFFECTIVE

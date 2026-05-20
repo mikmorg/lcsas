@@ -152,6 +152,49 @@ def test_lcsas_allow_no_pack_search_bypasses_check(tmp_path: Path) -> None:
     )
 
 
+def test_meta_disc_set_bypasses_hard_error(tmp_path: Path) -> None:
+    """Single-drive flow: when META_DISC is set (operator started by
+    mounting the meta-disc), the hard-exit on empty PACK_SEARCH_ARGS
+    must NOT fire — the recovery binary's framed disc-swap prompt is
+    the correct UX for the data-disc hand-off.  Hard-exiting here would
+    short-circuit the binary's swap loop and force the operator to
+    re-type the password after every swap.
+
+    This regression broke the blind-restore E2E run: the agent mounted
+    LCSAS_META at /mnt, ran restore.sh, picked the repo, typed the
+    password, and then the script exited with "no data discs detected"
+    instead of handing off to the binary that would have prompted for
+    a swap.  The single-drive flow is the canonical operator workflow
+    — it MUST work without LCSAS_ALLOW_NO_PACK_SEARCH gymnastics."""
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    (recovery / "bin" / HOST_TARGET).mkdir(parents=True)
+    # Metadata-only repo, no data/ — exactly what the meta disc carries.
+    _make_repo_skeleton(recovery / "metadata", "alpha", with_data=False)
+    target = tmp_path / "restored"
+
+    full_env = {
+        **os.environ,
+        "LCSAS_MOUNT_DIRS": "",
+        # Mark the script as having been relocated FROM the meta-disc
+        # mount point.  This is the same sentinel the script's own
+        # relocate_to_ram() sets when it re-execs from a writable dir
+        # after detecting it was running off an iso9660 filesystem.
+        "LCSAS_RELOCATED": str(recovery),
+    }
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        capture_output=True, text=True, env=full_env, timeout=15,
+        input="stub-pw\n",
+    )
+    # The gate must NOT fire — the binary's swap prompt is the right UX.
+    assert "no data discs detected" not in res.stderr, (
+        f"single-drive flow (META_DISC set) must bypass the discovery "
+        f"hard-error and fall through to the binary's swap loop; got:\n"
+        f"{res.stderr}"
+    )
+
+
 # ── Recommendation #4: numbered repo prompt ──────────────────────────
 
 
