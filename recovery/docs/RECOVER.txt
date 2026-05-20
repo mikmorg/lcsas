@@ -1,4 +1,4 @@
-LCSAS RECOVERY TOOLCHAIN -- MANUAL RECOVERY PROCEDURE
+LCSAS RECOVERY TOOLCHAIN -- ON-DISC OPERATOR MANUAL
 =======================================================
 
 PURPOSE
@@ -25,24 +25,28 @@ DECISION FLOW
      NO  -> See "PHYSICAL RECOVERY" below.
      YES -> mount it read-only:
 
-         mount -o loop,ro /dev/sr0 /mnt/recovery       (block device)
+         mount -o ro /dev/sr0 /mnt                 (block device)
        OR
-         mount -o loop,ro path-to-iso.iso /mnt/recovery (ISO file)
+         mount -o loop,ro path-to-iso.iso /mnt     (ISO file)
 
-  Q: Does /mnt/recovery contain bin/<arch>/lcsas-restore for your arch?
+  Q: Does /mnt contain restore.sh and bin/<arch>/lcsas-restore?
      YES -> primary path:
 
-         sh /mnt/recovery/scripts/restore.sh /mnt/recovery /tmp/restored
+         sh /mnt/restore.sh /tmp/restored latest
 
        This prompts for the password and writes restored files under
        /tmp/restored.  The script auto-detects architecture and falls
        back through the cascade if the primary binary is missing.
 
-     NO  -> fall back to the pure-Python restorer (Tier 3):
+     NO  -> fall back to the pure-Python restorer (Tier 3) from a
+            data disc that ships its own standalone_restorer.py.
+            You first need to assemble a pack cache from the disc
+            (see "MANUAL CACHE ASSEMBLY" below), then run:
 
-         python3 /mnt/recovery/../standalone_restorer.py \
-             /mnt/recovery/repo /tmp/restored \
-             --password-file /tmp/pwfile
+         python3 /mnt/standalone_restorer.py \
+             --repo /tmp/cache \
+             --password-file /tmp/pwfile \
+             --target /tmp/restored
 
 CASCADE DETAILS
 
@@ -72,8 +76,8 @@ rationale.
 
 LIST AVAILABLE SNAPSHOTS
 
-  /mnt/recovery/bin/<arch>/lcsas-restore \
-      --repo /mnt/recovery/repo \
+  /mnt/bin/<arch>/lcsas-restore \
+      --repo /mnt/repo \
       --password-file /tmp/pw \
       --list-snapshots
 
@@ -85,13 +89,13 @@ Output:
 
 RESTORE A SPECIFIC SNAPSHOT
 
-  /mnt/recovery/bin/<arch>/lcsas-restore \
-      --repo /mnt/recovery/repo \
-      --password-file /tmp/pw \
-      --target /tmp/restored \
-      --snapshot a1b2c3d4
+  sh /mnt/restore.sh /tmp/restored a1b2c3d4
 
-The argument may be an exact ID or a unique prefix.
+The snapshot argument may be 'latest', an exact ID, or a unique prefix.
+restore.sh handles the disc cascade, password prompt, and pack-cache
+setup automatically.  To run the underlying binary directly without
+restore.sh, see the --repo / --password-file / --target / --snapshot
+flag set documented in lcsas-restore --help.
 
 VERIFY YOUR RESTORE
 
@@ -131,8 +135,8 @@ If you have multiple copies of an LCSAS volume (as is the default),
 they are bit-identical.  Any single working copy is sufficient.  To
 verify which disc you are using:
 
-  cat /mnt/recovery/volume_label.txt    # human-readable label
-  sha256sum /mnt/recovery/MANIFEST.sha256
+  cat /mnt/volume_label.txt    # human-readable label
+  sha256sum /mnt/MANIFEST.sha256
 
 SUPPORT
 
@@ -164,7 +168,7 @@ catalog, and restore.sh.
   1. Insert the META disc and mount it:
          sudo mount /dev/sr0 /mnt
   2. Run:
-         sh /mnt/scripts/restore.sh ~/restored/
+         sh /mnt/restore.sh ~/restored/ latest
   3. restore.sh copies itself and the binary into RAM (/tmp) so the
      META disc can later be ejected.  You will see:
          [lcsas-restore] copied recovery binaries to /tmp/lcsas-restore.Xxxx

@@ -73,7 +73,9 @@ all the discs plus the key to a computer professional."*
 
 **Current state:** If the archivist used different keys per repo,
 nothing on disc tells the user which key goes with which repo.
-`restore.sh` accepts a single `--key` argument.
+The modern `restore.sh` prompts interactively for a single password per
+invocation; the legacy `restore_legacy.sh` accepts a single `--key`
+argument.  Neither path lets you specify per-repo keys in one run.
 
 **Fix:** Write `KEY_INFO.txt` listing each repo, its human description,
 and which key file it needs.  Derive from config.
@@ -229,11 +231,12 @@ key location hints.
 ### 3.2 Multi-repo key confusion — P1 ❌
 
 **Current state:** Different repos may use different key files.
-`restore.sh` takes one `--key` for all repos.  Nothing maps keys to
-repos on disc.
+The modern `restore.sh` prompts for one password per invocation
+(re-run once per repo); the legacy `restore_legacy.sh` accepts a
+single `--key` flag.  Neither maps keys to repos on disc.
 
-**Fix:** `KEY_INFO.txt` (§1.5) and enhance `restore.sh` to accept
-per-repo keys.
+**Fix:** `KEY_INFO.txt` (§1.5) and enhance the entry-point scripts to
+loop over repos with per-repo keys.
 
 ### 3.3 Config file not backed up to disc — P2 ✅
 

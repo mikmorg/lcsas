@@ -241,12 +241,15 @@ If `restore.sh` produces an error you can't resolve via
 [TROUBLESHOOTING.md](./TROUBLESHOOTING.md), the meta disc also
 ships fallback paths:
 
-- **`restore-auto.sh`** — non-interactive, flag-driven version
+- **`restore_auto.sh`** — non-interactive, flag-driven version
   intended for CI pipelines.  Reads its disc-swap commands from
   whatever you set `--disc-cmd` to.  See Appendix A in
   `README_RESTORE.md`.
-- **`restore_legacy.sh`** — the older Bash driver.  Different
-  flag UX (`--key`, `--target`, `--repo`).  Still works.
+- **`restore_legacy.sh`** — the older Bash driver, written to the
+  meta-disc alongside `restore.sh`.  Different flag UX:
+  `./restore_legacy.sh --key <keyfile> --target <dir> [--isos <dir>]
+  [--repo <name>] [--snapshot <id>]`.  Useful when you already
+  have every ISO extracted to disk (pass `--isos`).
 - **Direct invocation of the upstream rustic binary** at
   `tools/bin/rustic-static`.  Requires you to manually assemble
   the pack tree (see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md#manual-pack-assembly)).

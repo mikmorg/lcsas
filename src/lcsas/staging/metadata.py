@@ -188,12 +188,19 @@ WHAT YOU NEED TO RESTORE
 HOW TO RESTORE (with meta-volume)
 ----------------------------------
 
-If you have the LCSAS meta-volume disc:
+If you have the LCSAS meta-volume disc, insert it and mount it,
+then run the interactive restore script.  It will prompt you for
+the repository name (if multi-tenant), the encryption password, and
+will pause for each data disc as it needs them.
 
-    cd /path/to/meta-volume
-    ./restore.sh --key /path/to/keyfile \\
-                 --isos /path/to/iso-directory \\
-                 --target /path/to/output
+    sudo mount /dev/sr0 /mnt
+    sh /mnt/restore.sh ~/restored/ latest
+
+When prompted, eject the current disc, insert the named data disc,
+and press Enter.  Repeat until you see "RESTORE COMPLETE".
+
+If you prefer a password file over the interactive prompt, set
+LCSAS_PWFILE=/path/to/key.txt before invoking restore.sh.
 
 HOW TO RESTORE (pure Python — no native binaries needed)
 ---------------------------------------------------------

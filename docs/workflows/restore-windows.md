@@ -303,17 +303,19 @@ need it.
    cd D:\
    ```
 
-3. Invoke the standalone restorer directly. The script takes the
-   repo path and the output directory as positional arguments, and
-   prompts for the password on stdin:
+3. Invoke the standalone restorer directly. The script takes its
+   inputs as flags (all three are required):
 
    ```
-   python standalone_restorer.py D:\repo C:\Users\me\restored
+   python standalone_restorer.py ^
+       --repo D:\repo ^
+       --password-file path\to\pw.txt ^
+       --target C:\Users\me\restored
    ```
 
-   Pass `--password-file path\to\pw.txt` if you prefer a password
-   file. See `python standalone_restorer.py --help` for the full
-   flag surface.
+   Use `--snapshot <id>` to pick a specific snapshot (default:
+   latest), or `--list-snapshots` to enumerate them.  See
+   `python standalone_restorer.py --help` for the full flag surface.
 
 4. The `restore.bat` orchestrator is **not** involved in this path.
    If you have already double-clicked `restore.bat` and watched it

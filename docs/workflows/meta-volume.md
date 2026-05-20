@@ -409,13 +409,21 @@ or disk *before* the drive is freed to accept data discs.
 4. **Insert any data disc** (the highest-numbered, if known, minimises
    the chance of needing a catalog upgrade —
    `src/lcsas/meta/builder.py:506-508`).
-5. Run from the extracted copy:
+5. Run from the extracted copy.  Modern path (interactive prompts;
+   the canonical entry on every current meta-disc):
    ```bash
-   ./restore.sh --key /path/to/keyfile.txt \
-                --target ~/restored/ \
-                --repo REPO_NAME
+   sh ./restore.sh ~/restored/ latest
+   # script prompts: Repository: REPO_NAME
+   #                 Password:   <type the password>
    ```
-   `restore.sh` defaults to single-drive mode
+   Legacy path (still shipped on the meta-disc for back-compat —
+   flag-driven, useful for scripted single-drive flows):
+   ```bash
+   ./restore_legacy.sh --key /path/to/keyfile.txt \
+                       --target ~/restored/ \
+                       --repo REPO_NAME
+   ```
+   The legacy script defaults to single-drive mode
    (`src/lcsas/meta/builder.py:152-159`).
 6. Phase 1 (bootstrap) mounts the inserted disc, reads its `catalog.db`,
    invokes `tools/restore_single_drive.py bootstrap --catalog ... --mount

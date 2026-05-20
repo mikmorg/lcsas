@@ -2,6 +2,11 @@
 
 Petabyte-scale, offline-first archival system for Linux. Orchestrates **Rustic** (content-defined chunking), **Xorriso** (ISO mastering), and **DVDisaster** (error correction) to write deduplicated, encrypted data packs onto optical media (BD-R, M-Disc).
 
+> **🚨 In an emergency and need to restore data?**
+> Start at **[docs/RECOVERY_GUIDE.md](docs/RECOVERY_GUIDE.md)** — it
+> routes you to the right OS-specific walkthrough (Linux, macOS,
+> Windows, bare-metal, or disc-only Python fallback) in one click.
+
 ## Key Capabilities
 
 - **Infinite Incrementalism** — CDC ensures file moves/renames consume zero additional storage payload
@@ -440,11 +445,14 @@ The **meta-volume** solves this by bundling *everything* needed for restore onto
 
 | Path | Contents |
 |------|----------|
-| `tools/bin/` | Portable Linux x86_64 binaries: `rustic`, `xorriso`, `python3` |
-| `tools/lib/` | All required shared libraries (discovered via `ldd`) |
+| `tools/bin/<target>/` | Per-platform tier-1 (`lcsas-restore`) + tier-2 (`rustic-static`) binaries for six targets: Linux x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows x86_64-gnu.  See [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md). |
+| `tools/lib/` | Shared libraries for the bundled CPython interpreter (tier-3 fallback) |
 | `lcsas/src/` | Complete LCSAS source code (zero pip dependencies) |
-| `docs/` | Architecture documentation |
-| `restore.sh` | Automated bash restore script |
+| `recovery/docs/` | On-disc operator manual (`RECOVER.txt`, `TIERS.txt`, `ENV_VARS.txt`, …) |
+| `restore.sh` | Interactive recovery script — start here |
+| `restore.bat` | Windows entry point |
+| `restore_auto.sh` | Non-interactive variant for automation |
+| `standalone_restorer.py` | Tier-3 pure-Python fallback (requires only Python 3.10+) |
 | `README_RESTORE.md` | Human-readable step-by-step recovery instructions |
 | `volume_info.json` | Machine-readable volume metadata |
 
