@@ -20,8 +20,17 @@ class MediaType(Enum):
     MDISC25 = (25_025_314_816, 15)     # 25 GB M-Disc BD-R
     MDISC100 = (100_103_356_416, 15)   # 100 GB M-Disc BDXL
 
-    # Testing media (tiny volumes for automated tests)
-    TEST_TINY = (1_048_576, 0)         # 1 MB — fast unit tests
+    # Testing media (tiny volumes for automated tests).
+    #
+    # Sized so a freshly-staged TEST_TINY ISO (with the full holographic
+    # injection — SQLite catalog + per-repo Rustic metadata + ISO 9660
+    # padding) still has a few hundred KB of pack-data headroom.  The 1 MB
+    # cap was raised to 2 MB in #142: an empty catalog alone is ~144 KB,
+    # the standalone restorer is ~44 KB, and xorriso's ISO 9660 overhead
+    # adds ~600 KB on small staging trees with many small files.  That put
+    # the bare-minimum ISO right at the 1 MB ceiling with zero pack budget,
+    # which broke e2e on dev hosts every time the catalog or restorer grew.
+    TEST_TINY = (2_097_152, 0)         # 2 MB — fast unit tests
 
     def __init__(self, capacity_bytes: int, ecc_overhead_pct: int) -> None:
         self._capacity_bytes = capacity_bytes

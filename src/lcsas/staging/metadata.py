@@ -30,7 +30,7 @@ _METADATA_FILES = ["config"]
 # + ISO 9660 filesystem overhead — together that's about 650-700 KB even
 # for a 1-repo / few-packs fixture.  Production deployments don't care
 # (the LCSASConfig default of 100 MB swamps it), but test fixtures that
-# materialize an ISO on the 1 MB TEST_TINY media MUST budget at least
+# materialize an ISO on the 2 MB TEST_TINY media MUST budget at least
 # this much in ``metadata_reserve_bytes`` or the staging directory will
 # overflow capacity.  Bump if the injector grows.
 MIN_HOLOGRAPHIC_RESERVE_BYTES = 700_000

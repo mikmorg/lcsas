@@ -54,14 +54,14 @@ class TestFirstFitDecreasing:
         assert len(selected) == 50
 
     def test_test_tiny_capacity(self):
-        """Simulate packing into TEST_TINY (1 MB) media."""
-        capacity = 1_048_576
-        items = [(f"pack_{i}", 100_000) for i in range(15)]
+        """Simulate packing into TEST_TINY (2 MB) media."""
+        capacity = 2_097_152
+        items = [(f"pack_{i}", 100_000) for i in range(30)]
         selected, remaining = first_fit_decreasing(items, capacity=capacity)
         total = sum(s for _, s in selected)
         assert total <= capacity
-        assert len(selected) == 10  # 10 * 100KB = 1MB
-        assert len(remaining) == 5
+        assert len(selected) == 20  # 20 * 100KB = 2MB
+        assert len(remaining) == 10
 
     def test_zero_capacity(self):
         items = [("a", 1)]

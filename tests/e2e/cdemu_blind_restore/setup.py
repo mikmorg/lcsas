@@ -66,15 +66,17 @@ SYSCTL_FILE = Path("/etc/sysctl.d/99-blind-restore.conf")
 AGENT_USER = "lcsas-blind"
 AGENT_HOME = Path("/home") / AGENT_USER
 
-# File sizing: each TEST_TINY volume has ~300 KB usable after the
-# holographic-metadata reserve (Phase 21.3: SQLite catalog + per-repo
-# Rustic index/snapshots/keys ≈ 700 KB).  With ALPHA ≈ 30 × 30 KB
-# = ~900 KB of pack data, alpha spans ~3 volumes — enough disc-swap
-# loops to exercise the agent's multi-disc reasoning without thrashing.
+# File sizing: each TEST_TINY volume has ~1.35 MB usable after the
+# holographic-metadata reserve (#142: TEST_TINY = 2 MB, reserve ≈ 700 KB
+# for SQLite catalog + per-repo Rustic index/snapshots/keys).  With
+# ALPHA ≈ 30 × 130 KB ≈ 3.9 MB of pack data, alpha spans ~3 volumes —
+# enough disc-swap loops to exercise the agent's multi-disc reasoning
+# without thrashing.  When you change TEST_TINY's capacity, keep ALPHA
+# proportionally large or you silently regress the multi-disc test.
 ALPHA_FILES = 30
-ALPHA_FILE_BYTES = 30 * 1024   # 30 KB × 30 = ~900 KB (≈ 3 TEST_TINY volumes)
+ALPHA_FILE_BYTES = 130 * 1024  # 130 KB × 30 = ~3.9 MB (≈ 3 TEST_TINY volumes)
 BRAVO_FILES = 15
-BRAVO_FILE_BYTES = 20 * 1024   # 20 KB × 15 = ~300 KB (≈ 1 TEST_TINY volume)
+BRAVO_FILE_BYTES = 60 * 1024   # 60 KB × 15 = ~900 KB (≈ 1 TEST_TINY volume)
 
 
 def banner(msg: str) -> None:
