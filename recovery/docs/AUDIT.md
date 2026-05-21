@@ -40,11 +40,33 @@ branch that returns `-1` or `goto out`.  These are unreachable without
 a fault-injection shim (see issue #165, deferred Phase 6).  100% would
 require LD_PRELOAD tricks; 95% is the achievable ceiling.
 
+## Fault injection (`make fault-inject`)
+
+Issue #165's malloc fault-injection harness — `recovery/scripts/malloc_inject.c` —
+is an `LD_PRELOAD` shim that fails the Nth allocation.  The driver
+(`recovery/scripts/run_fault_inject.py`) sweeps N=1..total across every
+test binary and hard-fails on any SIGSEGV/SIGABRT/SIGBUS/SIGFPE or timeout.
+
+A graceful error return (any non-crash exit code) is fine — what we're
+catching is unhandled malloc failures in production code that would
+crash under genuine OOM or hostile allocator behavior.
+
+```bash
+make -C recovery fault-inject            # full sweep (~3 min)
+make -C recovery fault-inject MAX_N=100  # smoke sweep (~5 s)
+```
+
+When run after `make coverage-c` builds the binaries with `--coverage`,
+the sweep accumulates `.gcda` data on every error branch it triggers,
+boosting per-file coverage on `repo.c` / `catalog.c` /  `disc_locator.c`
+by exercising the unreachable-by-default malloc-failure goto-out paths.
+
+The hardening test `tests/recovery_hardening/test_tier1_fault_inject.py`
+pins zero-crashes as a regression gate (opt-in via `LCSAS_FAULT_INJECT=1`).
+
 ## Known exclusions
 
-| File | Reason |
-|------|--------|
-| `arena.c` | Dead code — no callers in the current codebase.  The bump allocator was added for a future optimisation path that was never implemented.  Always reports 0% and is excluded via `--exclude arena.c`. |
+(arena.c was removed in PR #175 — no longer a coverage exception.)
 
 ## Interpreting failures
 
