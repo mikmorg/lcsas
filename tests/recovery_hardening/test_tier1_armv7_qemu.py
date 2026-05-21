@@ -32,7 +32,14 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RESTORE_BIN = REPO_ROOT / "recovery" / "bin" / "armv7" / "lcsas-restore"
+# ``LCSAS_RESTORE_BIN`` overrides the default location so the audit's
+# parallel-instrumented builds (coverage-c #150, sanitiser #152) can
+# point this test at an alternate binary without forking.  The override
+# MUST point at an armv7-ELF binary -- pointing at the host binary will
+# fail under qemu-user with a confusing exec error.
+RESTORE_BIN = Path(os.environ["LCSAS_RESTORE_BIN"]) if os.environ.get(
+    "LCSAS_RESTORE_BIN"
+) else REPO_ROOT / "recovery" / "bin" / "armv7" / "lcsas-restore"
 
 _BIN_OK = RESTORE_BIN.is_file() and os.access(RESTORE_BIN, os.X_OK)
 _QEMU_OK = shutil.which("qemu-arm-static") is not None
@@ -44,7 +51,8 @@ pytestmark = pytest.mark.skipif(
         f"{RESTORE_BIN} (present={_BIN_OK}) and "
         f"qemu-arm-static (present={_QEMU_OK}); "
         "build with `lcsas recovery build --arch armv7` and "
-        "install `qemu-user-static`"
+        "install `qemu-user-static` (or set LCSAS_RESTORE_BIN to "
+        "an armv7-ELF binary)"
     ),
 )
 

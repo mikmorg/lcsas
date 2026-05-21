@@ -46,7 +46,12 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECOVERY = REPO_ROOT / "recovery"
-BINARY = RECOVERY / "build" / "lcsas-restore"
+# ``LCSAS_RESTORE_BIN`` overrides the default build location so the
+# audit's parallel-instrumented builds (coverage-c #150, sanitiser
+# #152) can point this test at an alternate binary without forking.
+BINARY = Path(os.environ["LCSAS_RESTORE_BIN"]) if os.environ.get(
+    "LCSAS_RESTORE_BIN"
+) else RECOVERY / "build" / "lcsas-restore"
 
 # Reuse the e2e fixture builder so we get a real restic-format repo
 # the C binary can parse.  This is the cheapest way to exercise the
@@ -68,6 +73,9 @@ def _build_repo_or_skip(tmp: Path) -> tuple[Path, Path, Path]:
     built or the e2e fixture helper can't be imported -- this matches
     the rest of recovery_hardening's "skip-when-toolchain-absent" rule.
     """
+    _override = os.environ.get("LCSAS_RESTORE_BIN")
+    if _override and not (BINARY.is_file() and os.access(BINARY, os.X_OK)):
+        pytest.skip(f"LCSAS_RESTORE_BIN={_override!r} not executable")
     if not BINARY.exists():
         pytest.skip(f"tier-1 binary not built at {BINARY} "
                     f"(run `make -C recovery build/lcsas-restore`)")

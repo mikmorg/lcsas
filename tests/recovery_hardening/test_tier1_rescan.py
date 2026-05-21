@@ -58,13 +58,21 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECOVERY_DIR = REPO_ROOT / "recovery"
-BINARY = RECOVERY_DIR / "build" / "lcsas-restore"
+# ``LCSAS_RESTORE_BIN`` overrides the default build location so the
+# audit's parallel-instrumented builds (coverage-c #150, sanitiser
+# #152) can point this test at an alternate binary without forking.
+BINARY = Path(os.environ["LCSAS_RESTORE_BIN"]) if os.environ.get(
+    "LCSAS_RESTORE_BIN"
+) else RECOVERY_DIR / "build" / "lcsas-restore"
 
 # The fixture builder lives under recovery/tests/.
 sys.path.insert(0, str(RECOVERY_DIR / "tests"))
 
 
 def _require_binary() -> None:
+    _override = os.environ.get("LCSAS_RESTORE_BIN")
+    if _override and not (BINARY.is_file() and os.access(BINARY, os.X_OK)):
+        pytest.skip(f"LCSAS_RESTORE_BIN={_override!r} not executable")
     if not BINARY.exists():
         pytest.skip(
             f"{BINARY} not built; run `lcsas recovery build --arch host` first",

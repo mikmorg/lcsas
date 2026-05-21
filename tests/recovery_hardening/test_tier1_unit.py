@@ -38,6 +38,17 @@ RESTORE_CANDIDATES = [
 
 
 def _find_bin() -> Path:
+    """Resolve the tier-1 binary path.
+
+    Honours ``LCSAS_RESTORE_BIN`` first so parallel-instrumented
+    builds (coverage-c #150, sanitiser #152) can point THIS test
+    file at an alternate build dir without forking the source.
+    """
+    if path := os.environ.get("LCSAS_RESTORE_BIN"):
+        p = Path(path)
+        if p.is_file() and os.access(p, os.X_OK):
+            return p
+        pytest.skip(f"LCSAS_RESTORE_BIN={path} not executable")
     for p in RESTORE_CANDIDATES:
         if p.is_file() and os.access(p, os.X_OK):
             return p
