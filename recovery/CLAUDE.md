@@ -18,6 +18,10 @@ make -C recovery sanitize
 make -C recovery coverage-c           # writes recovery/build/coverage.txt
 LCSAS_COVERAGE=1 pytest tests/recovery_hardening/test_tier1_coverage_baseline.py -v
 
+# Fault-injection sweep (opt-in, no extra deps):
+make -C recovery fault-inject         # full sweep (~3 min)
+make -C recovery fault-inject MAX_N=100  # smoke (~5 s)
+
 # Fuzz harnesses (opt-in, needs clang with libFuzzer):
 make -C recovery fuzz-json-smoke      # 60 s
 make -C recovery fuzz-b64-smoke       # 60 s

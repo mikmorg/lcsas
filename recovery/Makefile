@@ -708,4 +708,29 @@ audit-gate:
 	    --json $(abspath $(BUILD))/coverage.json
 	@echo "[audit-gate] PASS"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64 coverage-c sanitize fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-smoke audit-gate
+# ── fault-inject ────────────────────────────────────────────────
+# Opt-in malloc-fault-injection sweep (issue #165).  Compiles the
+# LD_PRELOAD shim and runs every test binary with LCSAS_FAIL_AT=N
+# for N=1..total — exercises every malloc-failure error branch.
+# Hard-fails on any SEGV/ABORT/timeout.  Run together with --coverage
+# instrumentation to capture the swept branches in gcovr.
+#
+# Usage:
+#   make -C recovery fault-inject           # full sweep
+#   make -C recovery fault-inject MAX_N=200 # smoke sweep
+#
+MAX_N ?= 10000
+
+$(BUILD)/malloc_inject.so: scripts/malloc_inject.c
+	@mkdir -p $(BUILD)
+	cc -shared -fPIC -O0 -g -D_GNU_SOURCE \
+	    scripts/malloc_inject.c \
+	    -o $(BUILD)/malloc_inject.so -ldl
+
+fault-inject: $(BUILD)/malloc_inject.so
+	@# Ensure test binaries exist; build if needed.
+	@test -x $(BUILD)/test_catalog || $(MAKE) test
+	python3 scripts/run_fault_inject.py --max-sweep $(MAX_N)
+	@echo "[fault-inject] PASS: 0 crashes across all test binaries"
+
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64 coverage-c sanitize fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-smoke audit-gate fault-inject
