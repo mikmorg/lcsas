@@ -38,7 +38,14 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RESTORE_EXE = REPO_ROOT / "recovery" / "bin" / "x86_64-windows" / "lcsas-restore.exe"
+# ``LCSAS_RESTORE_BIN`` overrides the default location so the audit's
+# parallel-instrumented builds (coverage-c #150, sanitiser #152) can
+# point this test at an alternate binary without forking.  The override
+# MUST point at a Windows PE binary (.exe) -- pointing at a Linux ELF
+# will fail under wine with a confusing exec error.
+RESTORE_EXE = Path(os.environ["LCSAS_RESTORE_BIN"]) if os.environ.get(
+    "LCSAS_RESTORE_BIN"
+) else REPO_ROOT / "recovery" / "bin" / "x86_64-windows" / "lcsas-restore.exe"
 
 _BIN_OK = RESTORE_EXE.is_file()
 _WINE_OK = shutil.which("wine") is not None
@@ -49,7 +56,8 @@ pytestmark = [
         not (_BIN_OK and _WINE_OK),
         reason=(
             f"Windows tier-1 wine coverage requires {RESTORE_EXE} "
-            f"(present={_BIN_OK}) and wine (present={_WINE_OK})"
+            f"(present={_BIN_OK}) and wine (present={_WINE_OK}) "
+            "(or set LCSAS_RESTORE_BIN to a Windows PE binary)"
         ),
     ),
 ]
