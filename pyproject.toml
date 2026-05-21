@@ -24,6 +24,11 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.4",
     "mypy>=1.10",
+    # zstandard is optional at RUNTIME (CLAUDE.md "Zero runtime dependencies")
+    # but mandatory in the dev/CI environment: the integration suite exercises
+    # the tier-3 pure-Python restorer against real rustic v2 blobs, which are
+    # zstd-compressed.  Pinned here, not in base deps, on purpose.  See #141.
+    "zstandard>=0.22",
 ]
 
 [tool.setuptools.packages.find]
