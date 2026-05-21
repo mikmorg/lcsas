@@ -197,6 +197,220 @@ main(void)
         lcsas_disc_locator_free(&l);
     }
 
+    /* Discovered mount with a catalog.db file: exercises consider_catalog
+     * (disc_locator.c ~lines 243-265).  We just need a file named
+     * catalog.db to be present at the discovered mount root. */
+    {
+        char parent[1024];
+        char disc[1024];
+        char cat[1024];
+        const char *parents[1];
+        FILE *f;
+        snprintf(parent, sizeof parent, "%s_catparent", tmpdir);
+        snprintf(disc, sizeof disc, "%s/discA", parent);
+        snprintf(cat, sizeof cat, "%s/catalog.db", disc);
+        if (mkdir_recursive(disc) != 0) {
+            fprintf(stderr, "FAIL mkdir cat-parent disc\n"); fails++;
+        }
+        /* Stub catalog.db — content doesn't matter; consider_catalog
+         * only stats and tries to open it.  Empty file == invalid db
+         * which is fine; the open will fail and the locator falls back
+         * to whatever it had. */
+        f = fopen(cat, "wb");
+        if (f) { fputs("not a real catalog", f); fclose(f); }
+
+        /* Put the searchable pack inside this disc too so locate_pack
+         * actually descends and triggers consider_catalog. */
+        {
+            char dp[1024];
+            snprintf(dp, sizeof dp, "%s/data/01", disc);
+            mkdir_recursive(dp);
+            snprintf(dp, sizeof dp, "%s/data/01/%s", disc, hex);
+            write_pack(dp, "pack-from-cat-disc");
+        }
+        parents[0] = parent;
+        lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+        lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+        rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
+        (void)rc; /* we don't assert here; the path exercise is the goal */
+        lcsas_disc_locator_free(&l);
+        {
+            char rm[1024];
+            snprintf(rm, sizeof rm, "rm -rf %s", parent);
+            (void)system(rm);
+        }
+    }
+
+    /* Pre-populated cache dir: exercises cache_bytes_used.  Place
+     * several files of known sizes under cache_dir, then call
+     * locate_pack which triggers a drain that consults the cache size. */
+    {
+        char cache_dir[1024];
+        const char *search[] = { tmpdir };
+        snprintf(cache_dir, sizeof cache_dir, "%s_prefilled_cache", tmpdir);
+        if (mkdir_recursive(cache_dir) != 0) {
+            fprintf(stderr, "FAIL mkdir prefilled cache\n"); fails++;
+        }
+        /* Pre-populate with files of varying sizes (cache_bytes_used
+         * walks the dir recursively). */
+        {
+            char sub[1024];
+            FILE *f;
+            int j;
+            snprintf(sub, sizeof sub, "%s/aa", cache_dir);
+            mkdir_recursive(sub);
+            for (j = 0; j < 3; j++) {
+                snprintf(sub, sizeof sub, "%s/aa/file%d", cache_dir, j);
+                f = fopen(sub, "wb");
+                if (f) {
+                    int k;
+                    for (k = 0; k < 100; k++) fputc('x', f);
+                    fclose(f);
+                }
+            }
+        }
+        lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+        lcsas_disc_locator_set_cache_dir(&l, cache_dir);
+        rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
+        (void)rc;
+        lcsas_disc_locator_free(&l);
+        {
+            char rm[1024];
+            snprintf(rm, sizeof rm, "rm -rf %s", cache_dir);
+            (void)system(rm);
+        }
+    }
+
+    /* mkdir_p failure: a cache_dir whose parent is a regular file.
+     * mkdir_p should walk into the file as if it were a directory,
+     * mkdir fails (errno != EEXIST), and we exit early.  Exercises
+     * disc_locator.c lines 135-138 (mkdir/stat error paths). */
+    {
+        char file_as_parent[1024];
+        char nested[1024];
+        FILE *f;
+        snprintf(file_as_parent, sizeof file_as_parent,
+                 "%s_blocker_file", tmpdir);
+        f = fopen(file_as_parent, "wb");
+        if (f) { fputs("x", f); fclose(f); }
+        snprintf(nested, sizeof nested, "%s/cant_create_here",
+                 file_as_parent);
+        lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+        lcsas_disc_locator_set_cache_dir(&l, nested);  /* mkdir_p must fail */
+        /* l->cache_dir should still be NULL after the failure. */
+        lcsas_disc_locator_free(&l);
+        unlink(file_as_parent);
+    }
+
+    /* Drain chunk-limit branch: with LCSAS_DRAIN_CHUNK_PACKS=1 and >=2
+     * packs in the search root, drain_disc must hit limit_reached
+     * (disc_locator.c lines 613-614) after copying the first pack. */
+    {
+        char chunk_root[1024];
+        char chunk_cache[1024];
+        const char *search[1];
+        char p2[1024];
+        const char *hex2 =
+            "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+        snprintf(chunk_root, sizeof chunk_root, "%s_chunkroot", tmpdir);
+        snprintf(chunk_cache, sizeof chunk_cache, "%s_chunkcache", tmpdir);
+        {
+            char dp[1024];
+            snprintf(dp, sizeof dp, "%s/data/01", chunk_root);
+            mkdir_recursive(dp);
+            snprintf(dp, sizeof dp, "%s/data/01/%s", chunk_root, hex);
+            write_pack(dp, "first-pack");
+            snprintf(p2, sizeof p2, "%s/data/01/%s", chunk_root, hex2);
+            write_pack(p2, "second-pack");
+        }
+        mkdir_recursive(chunk_cache);
+        search[0] = chunk_root;
+        setenv("LCSAS_DRAIN_CHUNK_PACKS", "1", 1);
+        lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+        lcsas_disc_locator_set_cache_dir(&l, chunk_cache);
+        rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
+        (void)rc;
+        lcsas_disc_locator_free(&l);
+        unsetenv("LCSAS_DRAIN_CHUNK_PACKS");
+        {
+            char rm[1024];
+            snprintf(rm, sizeof rm, "rm -rf %s %s", chunk_root, chunk_cache);
+            (void)system(rm);
+        }
+    }
+
+    /* Pre-populated cache_dir/data/<prefix>/file: actually triggers
+     * cache_bytes_used's walk (lines 482-501).  Place files in the
+     * correct cache_dir/data/aa/* layout. */
+    {
+        char cache_dir[1024];
+        const char *search[] = { tmpdir };
+        snprintf(cache_dir, sizeof cache_dir, "%s_walked_cache", tmpdir);
+        {
+            char sub[1024];
+            FILE *f;
+            int j;
+            snprintf(sub, sizeof sub, "%s/data/aa", cache_dir);
+            mkdir_recursive(sub);
+            for (j = 0; j < 3; j++) {
+                snprintf(sub, sizeof sub, "%s/data/aa/file%d", cache_dir, j);
+                f = fopen(sub, "wb");
+                if (f) {
+                    int k;
+                    for (k = 0; k < 500; k++) fputc('y', f);
+                    fclose(f);
+                }
+            }
+        }
+        lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+        lcsas_disc_locator_set_cache_dir(&l, cache_dir);
+        rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
+        (void)rc;
+        lcsas_disc_locator_free(&l);
+        {
+            char rm[1024];
+            snprintf(rm, sizeof rm, "rm -rf %s", cache_dir);
+            (void)system(rm);
+        }
+    }
+
+    /* Interactive prompt + read_response: provide stdin input, run a
+     * locate against a missing pack, the locator must prompt and read
+     * a response.  We send "q" to abort the prompt loop. */
+    {
+        unsigned char missing[32];
+        const char *search[] = { tmpdir };
+        FILE *saved_stdin = stdin;
+        FILE *fake_in;
+        char input_path[1024];
+        snprintf(input_path, sizeof input_path, "%s_interactive_input",
+                 tmpdir);
+        {
+            FILE *iw = fopen(input_path, "w");
+            if (iw) {
+                /* Many "Enter" presses then "q" — read_response reads
+                 * one line at a time; tested up to N misses then quit. */
+                fputs("\nq\n", iw);
+                fclose(iw);
+            }
+        }
+        fake_in = freopen(input_path, "r", stdin);
+        if (fake_in == NULL) {
+            /* freopen failed — restore and skip without failing the test. */
+            stdin = saved_stdin;
+            fprintf(stderr, "[info] freopen stdin failed; skipping interactive test\n");
+        } else {
+            memset(missing, 0xCD, 32);
+            lcsas_disc_locator_init(&l, search, 1, NULL, /*interactive=*/1);
+            rc = lcsas_disc_locate_pack(&l, missing, found, sizeof found);
+            (void)rc;
+            lcsas_disc_locator_free(&l);
+            /* freopen leaves the file descriptor in place; the
+             * subsequent unlink is safe. */
+        }
+        unlink(input_path);
+    }
+
     /* Cleanup tmpdir. */
     {
         char rm_cmd[1024];

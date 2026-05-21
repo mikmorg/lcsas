@@ -114,7 +114,7 @@ verify-recovery:
 gen-catalogue:
 	python3 tools/gen_hardening_catalogue.py
 
-THRESHOLD ?= 80
+THRESHOLD ?= 85
 
 # Opt-in comprehensive gate for recovery/src/lcsas-restore/.
 # NOT part of the default `gate`.  Run before merging any PR that

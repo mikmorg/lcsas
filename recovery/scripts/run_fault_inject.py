@@ -39,16 +39,16 @@ def find_repo_root() -> Path:
     raise RuntimeError("could not locate repo root")
 
 
-def count_allocations(lib: Path, binary: Path) -> int:
+def count_allocations(lib: Path, argv: list[str]) -> int:
     env = os.environ.copy()
     env["LD_PRELOAD"] = str(lib)
-    res = subprocess.run([str(binary)], env=env, capture_output=True,
+    res = subprocess.run(argv, env=env, capture_output=True,
                           text=True, timeout=TIMEOUT_SEC)
     m = re.search(r"total allocations: (\d+)", res.stderr)
     return int(m.group(1)) if m else 0
 
 
-def sweep(lib: Path, binary: Path, total: int, max_n: int) -> list[tuple[int, int, str]]:
+def sweep(lib: Path, argv: list[str], total: int, max_n: int) -> list[tuple[int, int, str]]:
     """Return list of (N, rc, stderr_excerpt) for any crash."""
     crashes = []
     env = os.environ.copy()
@@ -58,7 +58,7 @@ def sweep(lib: Path, binary: Path, total: int, max_n: int) -> list[tuple[int, in
     for n in range(1, n_iter + 1):
         env["LCSAS_FAIL_AT"] = str(n)
         try:
-            res = subprocess.run([str(binary)], env=env,
+            res = subprocess.run(argv, env=env,
                                   capture_output=True, text=True,
                                   timeout=TIMEOUT_SEC)
             if res.returncode in CRASH_RCS:
@@ -86,27 +86,62 @@ def main() -> int:
         print(f"     -o {lib.relative_to(root)} -ldl", file=sys.stderr)
         return 1
 
+    # Each "target" is (display_name, argv).  Adds lcsas-restore against
+    # the generated fixture so the sweep also boosts production-code
+    # coverage of repo.c / tree.c / disc_locator.c / main.c.
+    targets: list[tuple[str, list[str]]] = []
     if args.binaries:
-        bins = [build / b for b in args.binaries.split(",")]
+        for b in args.binaries.split(","):
+            targets.append((b, [str(build / b)]))
     else:
-        bins = sorted(build.glob("test_*"))
-        # exclude .o, .gcda, etc.
-        bins = [b for b in bins if b.is_file() and os.access(b, os.X_OK)
-                and "." not in b.name]
+        for b in sorted(build.glob("test_*")):
+            if b.is_file() and os.access(b, os.X_OK) and "." not in b.name:
+                targets.append((b.name, [str(b)]))
+        # Plus lcsas-restore against the fixture, if it exists.
+        restore = build / "lcsas-restore"
+        fixture = root / "recovery" / "tests" / "fixtures" / "repo"
+        if (restore.is_file() and fixture.is_dir()
+                and (fixture / "keys").is_dir()):
+            pwfile = build / "fault_inject_pw.txt"
+            pwfile.write_text("test")
+            target_dir = build / "fault_inject_restore"
+            cache_dir = build / "fault_inject_cache"
+            # Add three lcsas-restore invocations covering different
+            # branches: list-snapshots (small), full restore (heavy),
+            # full restore w/ cache (drain_disc + cache_bytes_used).
+            targets.append(("lcsas-restore --list-snapshots", [
+                str(restore),
+                "--repo", str(fixture),
+                "--password-file", str(pwfile),
+                "--list-snapshots",
+            ]))
+            targets.append(("lcsas-restore restore", [
+                str(restore),
+                "--repo", str(fixture),
+                "--password-file", str(pwfile),
+                "--target", str(target_dir),
+            ]))
+            targets.append(("lcsas-restore restore w/ cache", [
+                str(restore),
+                "--repo", str(fixture),
+                "--password-file", str(pwfile),
+                "--target", str(target_dir),
+                "--meta-disc", "/tmp/_fi_meta",
+            ]))
 
     total_crashes = 0
-    print(f"[fault-inject] sweeping {len(bins)} test binaries (max N={args.max_sweep})")
-    for binary in bins:
+    print(f"[fault-inject] sweeping {len(targets)} targets (max N={args.max_sweep})")
+    for name, argv in targets:
         t0 = time.time()
-        total = count_allocations(lib, binary)
+        total = count_allocations(lib, argv)
         if total == 0:
-            print(f"  {binary.name:40s}  no allocations counted — skipped")
+            print(f"  {name:45s}  no allocations counted — skipped")
             continue
         n_iter = min(total, args.max_sweep)
-        crashes = sweep(lib, binary, total, args.max_sweep)
+        crashes = sweep(lib, argv, total, args.max_sweep)
         elapsed = time.time() - t0
         status = "OK" if not crashes else f"FAIL ({len(crashes)} crashes)"
-        print(f"  {binary.name:40s}  total={total:5d}  swept={n_iter:5d}  "
+        print(f"  {name:45s}  total={total:5d}  swept={n_iter:5d}  "
               f"{elapsed:5.1f}s  {status}")
         for n, rc, err in crashes[:5]:
             print(f"    alloc #{n}  rc={rc}  stderr: {err[:120]!r}")
@@ -115,9 +150,9 @@ def main() -> int:
 
     print()
     if total_crashes:
-        print(f"[fault-inject] FAIL: {total_crashes} crash(es) across all binaries", file=sys.stderr)
+        print(f"[fault-inject] FAIL: {total_crashes} crash(es) across all targets", file=sys.stderr)
         return 1
-    print(f"[fault-inject] PASS: 0 crashes across all binaries")
+    print(f"[fault-inject] PASS: 0 crashes across all targets")
     return 0
 
 
