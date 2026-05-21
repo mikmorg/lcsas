@@ -22,7 +22,8 @@ Audit complete through Phase 5.  See tracker issue #166.
 | Phase 2 fault-inject sweep | 2026-05-21 | 80.8% | LD_PRELOAD malloc fault sweep on test_catalog |
 | Phase 5 (catalog+main+json_q+disc_locator) | 2026-05-21 | 87.1% | Assertion-pinned unit tests |
 | Phase 7 (test_repo with encrypted fixture) | 2026-05-21 | 90.7% | gen_fixture.py + test_repo.c covering full repo + tree pipeline |
-| Phase 8 (fixture-driven CLI + disc_locator extensions) | 2026-05-21 | **92.4%** | fixture-based CLI tests (main.c) + catalog/drain/cache/interactive tests (disc_locator); fault-inject sweep extended to lcsas-restore for prod-robustness verification |
+| Phase 8 (fixture-driven CLI + disc_locator extensions) | 2026-05-21 | 92.4% | fixture-based CLI tests (main.c) + catalog/drain/cache/interactive tests (disc_locator) |
+| Phase 9 (compressed pack + broken trees + multiple keys/snaps) | 2026-05-21 | **93.9%** | zstd-compressed blobs (data + sub-tree); 3 broken-tree fixtures (missing blob, bad hex, broken subdir) for tree.c restore_file_node errors; multiple key files (sort+realloc) + multiple snapshots (sort) |
 
 ## Phase 8 per-file coverage (gcovr, 2026-05-21)
 

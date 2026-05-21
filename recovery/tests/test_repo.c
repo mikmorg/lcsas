@@ -32,9 +32,15 @@ static int fails = 0;
 #define FIXTURE_DATA_BLOB_HEX  \
     "6565160e5ca15054fd190b02fab20e4e7daf41e54d19e649d0798d7aca56c5b2"
 #define FIXTURE_TREE_BLOB_HEX  \
-    "ba0ad2810b752453a3d698f0357487e195de2e73fbad79c1d7861a6bb9bee2ac"
+    "ee915c16ffdf6f53b74e49f10090923a84d6d3a507bf40b71d05136c5b337425"
 #define FIXTURE_PACK_HEX       \
-    "33d6ab8cb46665ff83c00e2258c304e68866ff70124f3f4e812fee84bec83782"
+    "ecd0a6e1a59e303bf0b647e20cbddd10469b2a8882664af80cec3a306f54e402"
+#define FIXTURE_BROKEN_TREE_HEX  \
+    "b9a34a1fa85b4ccdcd91b96abdb97acd76c914ba1f99c0f9c61e08842861add3"
+#define FIXTURE_BAD_HEX_TREE_HEX \
+    "e9b21400fad094fe6f80db621ec8e68ace890c09875e807db12e9e78d65c884a"
+#define FIXTURE_BAD_SUBDIR_TREE_HEX \
+    "8d615e95dd9cd90bb4a14ee546624b8230280e4b31597c28fff105d7e8eb12f1"
 
 /* Locate the fixture directory.  Honour LCSAS_TEST_FIXTURE_DIR for
  * out-of-tree builds; otherwise assume cwd is repo root or recovery/. */
@@ -114,13 +120,14 @@ main(void)
 
     /* ── lcsas_repo_load_key_file directly ─────────────────────────── */
     {
-        /* The keys/ dir has one file; we don't know its name a priori
-         * because manifest.json has it.  Just try a path; load_keys_dir
-         * already verified the file is correct. */
+        /* The keys/ dir has multiple files (stubs + the real key).
+         * Walk the directory and find ONE that decrypts.  This also
+         * implicitly exercises stub key files that fail MAC verification. */
         lcsas_master_key direct;
         char keyfile[1024];
         DIR *d;
         struct dirent *e;
+        int found_real = 0;
         snprintf(keyfile, sizeof keyfile, "%s/keys", repo);
         d = opendir(keyfile);
         if (d) {
@@ -128,19 +135,22 @@ main(void)
                 if (e->d_name[0] == '.') continue;
                 snprintf(keyfile, sizeof keyfile, "%s/keys/%s",
                          repo, e->d_name);
-                break;
+                if (lcsas_repo_load_key_file(
+                        keyfile, (const unsigned char *)FIXTURE_PASSWORD,
+                        strlen(FIXTURE_PASSWORD), &direct) == 0) {
+                    if (memcmp(direct.encrypt, mk.encrypt, 32) != 0) {
+                        fprintf(stderr,
+                                "FAIL: direct load_key_file mismatch\n");
+                        fails++;
+                    }
+                    found_real = 1;
+                    break;
+                }
             }
             closedir(d);
         }
-        rc = lcsas_repo_load_key_file(
-            keyfile, (const unsigned char *)FIXTURE_PASSWORD,
-            strlen(FIXTURE_PASSWORD), &direct
-        );
-        if (rc != 0) {
-            fprintf(stderr, "FAIL: load_key_file direct rc=%d\n", rc);
-            fails++;
-        } else if (memcmp(direct.encrypt, mk.encrypt, 32) != 0) {
-            fprintf(stderr, "FAIL: direct load_key_file mismatch\n");
+        if (!found_real) {
+            fprintf(stderr, "FAIL: no key file in dir decrypted\n");
             fails++;
         }
     }
@@ -188,8 +198,8 @@ main(void)
             fprintf(stderr, "FAIL: load_index rc=%d\n", rc);
             fails++;
         }
-        if (ix.count != 3) {
-            fprintf(stderr, "FAIL: index count=%zu, want 3\n", ix.count);
+        if (ix.count != 6) {
+            fprintf(stderr, "FAIL: index count=%zu, want 6\n", ix.count);
             fails++;
         }
 
@@ -239,8 +249,8 @@ main(void)
             fprintf(stderr, "FAIL: load_snapshots rc=%d\n", rc);
             fails++;
         }
-        if (snaps.count != 1) {
-            fprintf(stderr, "FAIL: snap count=%zu, want 1\n", snaps.count);
+        if (snaps.count != 2) {
+            fprintf(stderr, "FAIL: snap count=%zu, want 2\n", snaps.count);
             fails++;
         }
         sidx = lcsas_snapshot_latest(&snaps);
@@ -468,6 +478,77 @@ main(void)
                 {
                     char cmd[1024];
                     snprintf(cmd, sizeof cmd, "rm -rf %s", target2);
+                    (void)system(cmd);
+                }
+            }
+        }
+
+        /* Broken tree #1: file references a blob NOT in the index.
+         * tree.c restore_file_node should hit the "blob not in index"
+         * branch and return -1.  lcsas_tree_restore propagates the
+         * failure (goto out → rc stays -1). */
+        {
+            char tdir[] = "/tmp/lcsas_test_broken_XXXXXX";
+            if (mkdtemp(tdir)) {
+                int rc2 = lcsas_tree_restore(
+                    repo, &mk, &ix, FIXTURE_BROKEN_TREE_HEX, tdir, tdir,
+                    NULL, NULL
+                );
+                if (rc2 == 0) {
+                    fprintf(stderr,
+                            "FAIL: broken tree (missing blob) should fail "
+                            "but rc=0\n");
+                    fails++;
+                }
+                {
+                    char cmd[1024];
+                    snprintf(cmd, sizeof cmd, "rm -rf %s", tdir);
+                    (void)system(cmd);
+                }
+            }
+        }
+
+        /* Broken tree #2: file content has non-hex characters in a
+         * 64-char string.  tree.c hex_decode returns -1 in
+         * restore_file_node. */
+        {
+            char tdir[] = "/tmp/lcsas_test_bad_hex_XXXXXX";
+            if (mkdtemp(tdir)) {
+                int rc2 = lcsas_tree_restore(
+                    repo, &mk, &ix, FIXTURE_BAD_HEX_TREE_HEX, tdir, tdir,
+                    NULL, NULL
+                );
+                if (rc2 == 0) {
+                    fprintf(stderr,
+                            "FAIL: bad-hex tree should fail but rc=0\n");
+                    fails++;
+                }
+                {
+                    char cmd[1024];
+                    snprintf(cmd, sizeof cmd, "rm -rf %s", tdir);
+                    (void)system(cmd);
+                }
+            }
+        }
+
+        /* Broken tree #3: a dir node whose subtree is the broken tree
+         * above.  lcsas_tree_restore recurses into the dir, the
+         * recursive call fails, and the outer call goto-out's. */
+        {
+            char tdir[] = "/tmp/lcsas_test_bad_subdir_XXXXXX";
+            if (mkdtemp(tdir)) {
+                int rc2 = lcsas_tree_restore(
+                    repo, &mk, &ix, FIXTURE_BAD_SUBDIR_TREE_HEX,
+                    tdir, tdir, NULL, NULL
+                );
+                if (rc2 == 0) {
+                    fprintf(stderr,
+                            "FAIL: bad-subdir tree should fail but rc=0\n");
+                    fails++;
+                }
+                {
+                    char cmd[1024];
+                    snprintf(cmd, sizeof cmd, "rm -rf %s", tdir);
                     (void)system(cmd);
                 }
             }
