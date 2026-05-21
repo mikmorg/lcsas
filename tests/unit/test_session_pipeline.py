@@ -158,7 +158,7 @@ def env(tmp_path):
 
 @pytest.fixture
 def multi_vol_env(tmp_path):
-    """Environment where packs require multiple volumes (TEST_TINY = 1MB)."""
+    """Environment where packs require multiple volumes (TEST_TINY = 2MB)."""
     config = _make_config(tmp_path, num_repos=2, media=MediaType.TEST_TINY)
     conn = get_memory_connection()
     create_all(conn)
@@ -167,10 +167,9 @@ def multi_vol_env(tmp_path):
         register_repo(conn, name, name.title(),
                       str(config.repositories[name].mirror_path))
 
-    # Each pack is ~400KB, so 3 packs won't fit in 1MB with 100 bytes reserve
-    # TEST_TINY capacity = 1_048_576 bytes, usable = 1_048_576 (0% ecc)
-    # 3 packs @ 400KB = 1.2MB > 1MB → needs 2 volumes
-    packs = _seed_packs(conn, config, num_packs=3, pack_size=400_000)
+    # TEST_TINY capacity = 2_097_152 bytes, usable = 2_097_152 (0% ecc).
+    # 3 packs @ 800KB = 2.4MB > 2MB → needs 2 volumes.
+    packs = _seed_packs(conn, config, num_packs=3, pack_size=800_000)
 
     xorriso = MagicMock()
     # create_iso must produce a real file so the ISO-existence check passes
@@ -830,9 +829,9 @@ class TestISOContentValidation:
 
     def test_multi_volume_iso_all_packs_covered(self, tmp_path):
         """When staging produces multiple volumes, all packs are in ISOs."""
-        # Use TEST_TINY (1 MB, 0% ECC).  Reserve the empirical
+        # Use TEST_TINY (2 MB, 0% ECC).  Reserve the empirical
         # holographic-injection budget (SQLite catalog + per-repo Rustic
-        # metadata) for staging; the remaining ~350 KB of usable capacity
+        # metadata) for staging; the remaining ~1.35 MB of usable capacity
         # then forces multi-volume splitting at the given pack size.
         from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
         config = _make_config(
@@ -846,9 +845,9 @@ class TestISOContentValidation:
             register_repo(conn, name, name.title(),
                           str(config.repositories[name].mirror_path))
 
-        # 8 packs × 100 KB = 800 KB > 350 KB usable per volume → at
+        # 8 packs × 400 KB = 3.2 MB > 1.35 MB usable per volume → at
         # least 3 volumes worth of splitting.
-        packs = _seed_packs(conn, config, num_packs=8, pack_size=100_000)
+        packs = _seed_packs(conn, config, num_packs=8, pack_size=400_000)
 
         xorriso = SubprocessXorrisoRunner()
         dvdisaster = MagicMock()

@@ -371,7 +371,7 @@ class TestDiscOnlyRestore:
         """Burn all unarchived packs to ISOs.  Returns list of ISO paths."""
         from lcsas.db.queries import get_unarchived_packs
 
-        mt = MediaType.TEST_TINY  # 1 MB — forces multi-volume
+        mt = MediaType.TEST_TINY  # 2 MB — forces multi-volume
         repo_configs = {
             "family": RepositoryConfig(
                 name="family",

@@ -13,7 +13,7 @@ from lcsas.config.settings import LCSASConfig, default_config, load_config
 
 class TestMediaType:
     def test_test_tiny_capacity(self):
-        assert MediaType.TEST_TINY.capacity_bytes == 1_048_576
+        assert MediaType.TEST_TINY.capacity_bytes == 2_097_152
 
     def test_test_tiny_ecc(self):
         assert MediaType.TEST_TINY.ecc_overhead_pct == 0
