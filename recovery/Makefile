@@ -482,4 +482,45 @@ sanitize:
 	        ../tests/recovery_hardening/test_tier1_rescan.py
 	@echo "[sanitize] PASS: 0 ASan/UBSan/LSan findings"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64 coverage-c sanitize
+# ── Fuzz targets ──────────────────────────────────────────────────
+#
+# Builds and runs LibFuzzer harnesses against the seed corpus.
+# fuzz-json-smoke: 60 seconds (CI-friendly gate check).
+# fuzz-json:       30 CPU-minutes (deep coverage run).
+#
+# Requires clang with libFuzzer support.
+#
+# Usage:
+#   make -C recovery fuzz-json-smoke   # 60 seconds
+#   make -C recovery fuzz-json         # 30 CPU-minutes
+#
+FUZZ_DIR  = $(abspath fuzz)
+FUZZ_BUILD = $(abspath $(BUILD)/fuzz)
+
+$(FUZZ_BUILD)/fuzz_json_parse: $(FUZZ_DIR)/fuzz_json_parse.c $(SRCDIR)/json_q.c $(SRCDIR)/json_q.h
+	@command -v clang >/dev/null 2>&1 || { echo "[fuzz] need clang (apt install clang)"; exit 1; }
+	@mkdir -p $(FUZZ_BUILD)
+	clang -fsanitize=fuzzer,address,undefined -O1 -g \
+	    -fno-omit-frame-pointer \
+	    -std=c89 -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64 \
+	    -Wno-long-long \
+	    -I $(SRCDIR) \
+	    $(FUZZ_DIR)/fuzz_json_parse.c \
+	    $(SRCDIR)/json_q.c \
+	    -o $(FUZZ_BUILD)/fuzz_json_parse
+
+fuzz-json-smoke: $(FUZZ_BUILD)/fuzz_json_parse
+	$(FUZZ_BUILD)/fuzz_json_parse \
+	    -max_total_time=60 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/json/
+	@echo "[fuzz-json-smoke] 60s PASS — 0 crashes"
+
+fuzz-json: $(FUZZ_BUILD)/fuzz_json_parse
+	$(FUZZ_BUILD)/fuzz_json_parse \
+	    -max_total_time=1800 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/json/
+	@echo "[fuzz-json] 30min PASS — 0 crashes"
+
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64 coverage-c sanitize fuzz-json-smoke fuzz-json

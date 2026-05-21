@@ -1,0 +1,5 @@
+# Fuzzer-generated corpus entries (hex-named SHA1 files)
+# Only the curated seed_* files are committed.
+corpus/json/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*
+crashes/json/[0-9a-f]*
+crashes/json/crash_*
