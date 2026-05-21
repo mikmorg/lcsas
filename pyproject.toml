@@ -43,7 +43,7 @@ markers = [
     "requires_dvdisaster: test needs the dvdisaster binary on PATH",
     "requires_cdemu: test needs the cdemu binary on PATH (and usually root)",
 ]
-addopts = "-v --tb=short --basetemp=/var/tmp/pytest-lcsas"
+addopts = "-v --tb=short"
 tmp_path_retention_policy = "none"
 
 [tool.ruff]
