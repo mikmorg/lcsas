@@ -25,7 +25,7 @@ int main(void)
 
         name_idx = lcsas_json_obj_get(src, toks, 0, "name");
         if (name_idx < 0) { fprintf(stderr, "FAIL get name\n"); fails++; }
-        if (lcsas_json_decode_string(src, &toks[name_idx], buf) < 0
+        if (lcsas_json_decode_string(src, &toks[name_idx], buf, sizeof buf) < 0
                 || strcmp(buf, "hello") != 0) {
             fprintf(stderr, "FAIL decode name: got %s\n", buf);
             fails++;
@@ -47,7 +47,7 @@ int main(void)
         char buf[32];
         if (ntoks <= 0) { fprintf(stderr, "FAIL escape parse\n"); fails++; }
         k_idx = lcsas_json_obj_get(src, toks, 0, "k");
-        if (lcsas_json_decode_string(src, &toks[k_idx], buf) < 0) {
+        if (lcsas_json_decode_string(src, &toks[k_idx], buf, sizeof buf) < 0) {
             fprintf(stderr, "FAIL decode escapes\n"); fails++;
         } else if (strcmp(buf, "a\nb\tc\"d\\e") != 0) {
             fprintf(stderr, "FAIL escape value: %s\n", buf); fails++;

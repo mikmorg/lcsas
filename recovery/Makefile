@@ -72,6 +72,7 @@ TEST_BINS = \
 	$(BUILD)/test_hex \
 	$(BUILD)/test_path \
 	$(BUILD)/test_json \
+	$(BUILD)/test_json_decode_string \
 	$(BUILD)/test_catalog \
 	$(BUILD)/test_zstd
 
@@ -200,6 +201,9 @@ $(BUILD)/test_path: $(TESTDIR)/test_path.c $(BUILD)/libcrypto.a
 
 $(BUILD)/test_json: $(TESTDIR)/test_json.c $(BUILD)/libcrypto.a
 	$(CC) $(CFLAGS) -I$(SRCDIR) $(TESTDIR)/test_json.c $(BUILD)/libcrypto.a -o $@
+
+$(BUILD)/test_json_decode_string: $(TESTDIR)/test_json_decode_string.c $(BUILD)/libcrypto.a
+	$(CC) $(CFLAGS) -I$(SRCDIR) $(TESTDIR)/test_json_decode_string.c $(BUILD)/libcrypto.a -o $@
 
 $(BUILD)/test_catalog: $(TESTDIR)/test_catalog.c $(BUILD)/catalog.o $(BUILD)/sqlite3.o
 	$(CC) $(CFLAGS) -I$(SRCDIR) $(TESTDIR)/test_catalog.c \
