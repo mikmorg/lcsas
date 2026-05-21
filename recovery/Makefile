@@ -523,4 +523,153 @@ fuzz-json: $(FUZZ_BUILD)/fuzz_json_parse
 	    $(FUZZ_DIR)/corpus/json/
 	@echo "[fuzz-json] 30min PASS — 0 crashes"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64 coverage-c sanitize fuzz-json-smoke fuzz-json
+# ── fuzz_b64 ─────────────────────────────────────────────────────
+$(FUZZ_BUILD)/fuzz_b64: $(FUZZ_DIR)/fuzz_b64.c $(SRCDIR)/b64.c $(SRCDIR)/b64.h
+	@command -v clang >/dev/null 2>&1 || { echo "[fuzz] need clang (apt install clang)"; exit 1; }
+	@mkdir -p $(FUZZ_BUILD)
+	clang -fsanitize=fuzzer,address,undefined -O1 -g \
+	    -fno-omit-frame-pointer \
+	    -std=c89 -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64 \
+	    -Wno-long-long \
+	    -I $(SRCDIR) \
+	    $(FUZZ_DIR)/fuzz_b64.c \
+	    $(SRCDIR)/b64.c \
+	    -o $(FUZZ_BUILD)/fuzz_b64
+
+fuzz-b64-smoke: $(FUZZ_BUILD)/fuzz_b64
+	$(FUZZ_BUILD)/fuzz_b64 \
+	    -max_total_time=60 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/b64/
+	@echo "[fuzz-b64-smoke] 60s PASS — 0 crashes"
+
+fuzz-b64: $(FUZZ_BUILD)/fuzz_b64
+	$(FUZZ_BUILD)/fuzz_b64 \
+	    -max_total_time=1800 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/b64/
+	@echo "[fuzz-b64] 30min PASS — 0 crashes"
+
+# ── fuzz_zstd_decode ─────────────────────────────────────────────
+# zstddeclib.c uses C99 constructs — compile it separately with gnu99.
+$(FUZZ_BUILD)/zstddeclib.fuzz.o: $(VENDOR)/zstd/zstddeclib.c $(VENDOR)/zstd/zstd.h
+	@mkdir -p $(FUZZ_BUILD)
+	clang -fsanitize=fuzzer,address,undefined -O1 -g -fno-omit-frame-pointer \
+	    -std=gnu99 -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64 \
+	    -c $< -o $@
+
+$(FUZZ_BUILD)/fuzz_zstd_decode: $(FUZZ_DIR)/fuzz_zstd_decode.c $(SRCDIR)/zstd_dec.c $(FUZZ_BUILD)/zstddeclib.fuzz.o
+	@command -v clang >/dev/null 2>&1 || { echo "[fuzz] need clang (apt install clang)"; exit 1; }
+	clang -fsanitize=fuzzer,address,undefined -O1 -g \
+	    -fno-omit-frame-pointer \
+	    -std=c89 -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64 \
+	    -Wno-long-long \
+	    -I $(SRCDIR) -I $(VENDOR)/zstd \
+	    $(FUZZ_DIR)/fuzz_zstd_decode.c \
+	    $(SRCDIR)/zstd_dec.c \
+	    $(FUZZ_BUILD)/zstddeclib.fuzz.o \
+	    -o $(FUZZ_BUILD)/fuzz_zstd_decode
+
+fuzz-zstd-smoke: $(FUZZ_BUILD)/fuzz_zstd_decode
+	$(FUZZ_BUILD)/fuzz_zstd_decode \
+	    -max_total_time=60 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/zstd/
+	@echo "[fuzz-zstd-smoke] 60s PASS — 0 crashes"
+
+fuzz-zstd: $(FUZZ_BUILD)/fuzz_zstd_decode
+	$(FUZZ_BUILD)/fuzz_zstd_decode \
+	    -max_total_time=1800 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/zstd/
+	@echo "[fuzz-zstd] 30min PASS — 0 crashes"
+
+# ── fuzz_path_safe ────────────────────────────────────────────────
+$(FUZZ_BUILD)/fuzz_path_safe: $(FUZZ_DIR)/fuzz_path_safe.c $(SRCDIR)/path.c $(SRCDIR)/path.h
+	@command -v clang >/dev/null 2>&1 || { echo "[fuzz] need clang (apt install clang)"; exit 1; }
+	@mkdir -p $(FUZZ_BUILD)
+	clang -fsanitize=fuzzer,address,undefined -O1 -g \
+	    -fno-omit-frame-pointer \
+	    -std=c89 -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64 \
+	    -Wno-long-long \
+	    -I $(SRCDIR) \
+	    $(FUZZ_DIR)/fuzz_path_safe.c \
+	    $(SRCDIR)/path.c \
+	    -o $(FUZZ_BUILD)/fuzz_path_safe
+
+fuzz-path-smoke: $(FUZZ_BUILD)/fuzz_path_safe
+	$(FUZZ_BUILD)/fuzz_path_safe \
+	    -max_total_time=60 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/path_safe/
+	@echo "[fuzz-path-smoke] 60s PASS — 0 crashes"
+
+fuzz-path: $(FUZZ_BUILD)/fuzz_path_safe
+	$(FUZZ_BUILD)/fuzz_path_safe \
+	    -max_total_time=1800 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/path_safe/
+	@echo "[fuzz-path] 30min PASS — 0 crashes"
+
+# ── fuzz_repo_strip_v2 ────────────────────────────────────────────
+# lcsas_repo_strip_v2_prefix lives in repo.c which drags in many deps.
+# Compile vendored files separately (gnu99/special defines), then link.
+$(FUZZ_BUILD)/sqlite3.fuzz.o: $(VENDOR)/sqlite/sqlite3.c $(VENDOR)/sqlite/sqlite3.h
+	@mkdir -p $(FUZZ_BUILD)
+	clang -fsanitize=fuzzer,address,undefined -O1 -g -fno-omit-frame-pointer \
+	    -std=gnu99 -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64 \
+	    -DSQLITE_OMIT_LOAD_EXTENSION=1 -DSQLITE_DEFAULT_MEMSTATUS=0 \
+	    -DSQLITE_OMIT_DEPRECATED=1 -DSQLITE_THREADSAFE=0 \
+	    -DSQLITE_OMIT_AUTHORIZATION=1 \
+	    -c $< -o $@
+
+FUZZ_REPO_SRCS = \
+    $(SRCDIR)/arena.c \
+    $(SRCDIR)/lcsas_io.c \
+    $(SRCDIR)/b64.c \
+    $(SRCDIR)/hex.c \
+    $(SRCDIR)/sha256.c \
+    $(SRCDIR)/aes.c \
+    $(SRCDIR)/pbkdf2.c \
+    $(SRCDIR)/poly1305.c \
+    $(SRCDIR)/scrypt.c \
+    $(SRCDIR)/json_q.c \
+    $(SRCDIR)/path.c \
+    $(SRCDIR)/zstd_dec.c \
+    $(SRCDIR)/catalog.c \
+    $(SRCDIR)/disc_locator.c \
+    $(SRCDIR)/repo.c \
+    $(SRCDIR)/tree.c
+
+$(FUZZ_BUILD)/fuzz_repo_strip_v2: $(FUZZ_DIR)/fuzz_repo_strip_v2.c \
+        $(FUZZ_REPO_SRCS) \
+        $(FUZZ_BUILD)/zstddeclib.fuzz.o \
+        $(FUZZ_BUILD)/sqlite3.fuzz.o
+	@command -v clang >/dev/null 2>&1 || { echo "[fuzz] need clang (apt install clang)"; exit 1; }
+	@mkdir -p $(FUZZ_BUILD)
+	clang -fsanitize=fuzzer,address,undefined -O1 -g \
+	    -fno-omit-frame-pointer \
+	    -std=c89 -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64 \
+	    -Wno-long-long \
+	    -I $(SRCDIR) -I $(VENDOR)/sqlite -I $(VENDOR)/zstd \
+	    $(FUZZ_DIR)/fuzz_repo_strip_v2.c \
+	    $(FUZZ_REPO_SRCS) \
+	    $(FUZZ_BUILD)/zstddeclib.fuzz.o \
+	    $(FUZZ_BUILD)/sqlite3.fuzz.o \
+	    -o $(FUZZ_BUILD)/fuzz_repo_strip_v2
+
+fuzz-repo-smoke: $(FUZZ_BUILD)/fuzz_repo_strip_v2
+	$(FUZZ_BUILD)/fuzz_repo_strip_v2 \
+	    -max_total_time=60 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/repo_strip_v2/
+	@echo "[fuzz-repo-smoke] 60s PASS — 0 crashes"
+
+fuzz-repo: $(FUZZ_BUILD)/fuzz_repo_strip_v2
+	$(FUZZ_BUILD)/fuzz_repo_strip_v2 \
+	    -max_total_time=1800 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/repo_strip_v2/
+	@echo "[fuzz-repo] 30min PASS — 0 crashes"
+
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64 coverage-c sanitize fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo
