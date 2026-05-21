@@ -289,24 +289,26 @@ lcsas_json_obj_get(const char *src,
 long
 lcsas_json_decode_string(const char *src,
                          const lcsas_json_tok *tok,
-                         char *out)
+                         char *out, size_t out_cap)
 {
     size_t i;
     size_t n = 0;
     if (tok->type != LCSAS_JSON_STRING) return -1;
+    /* Must have room for at least the trailing NUL. */
+    if (out_cap == 0) return -1;
     for (i = tok->start; i < tok->end; i++) {
         unsigned char c = (unsigned char)src[i];
         if (c == '\\' && i + 1 < tok->end) {
             char e = src[i + 1];
             switch (e) {
-                case '"':  out[n++] = '"'; break;
-                case '\\': out[n++] = '\\'; break;
-                case '/':  out[n++] = '/'; break;
-                case 'b':  out[n++] = '\b'; break;
-                case 'f':  out[n++] = '\f'; break;
-                case 'n':  out[n++] = '\n'; break;
-                case 'r':  out[n++] = '\r'; break;
-                case 't':  out[n++] = '\t'; break;
+                case '"':  if (n + 1 >= out_cap) return -1; out[n++] = '"';  break;
+                case '\\': if (n + 1 >= out_cap) return -1; out[n++] = '\\'; break;
+                case '/':  if (n + 1 >= out_cap) return -1; out[n++] = '/';  break;
+                case 'b':  if (n + 1 >= out_cap) return -1; out[n++] = '\b'; break;
+                case 'f':  if (n + 1 >= out_cap) return -1; out[n++] = '\f'; break;
+                case 'n':  if (n + 1 >= out_cap) return -1; out[n++] = '\n'; break;
+                case 'r':  if (n + 1 >= out_cap) return -1; out[n++] = '\r'; break;
+                case 't':  if (n + 1 >= out_cap) return -1; out[n++] = '\t'; break;
                 case 'u': {
                     int hi, lo, b3, b4;
                     unsigned long cp;
@@ -319,11 +321,14 @@ lcsas_json_decode_string(const char *src,
                     cp = ((unsigned long)hi << 12) | ((unsigned long)lo << 8) |
                          ((unsigned long)b3 << 4) | (unsigned long)b4;
                     if (cp < 0x80) {
+                        if (n + 1 >= out_cap) return -1;
                         out[n++] = (char)cp;
                     } else if (cp < 0x800) {
+                        if (n + 2 >= out_cap) return -1;
                         out[n++] = (char)(0xC0 | (cp >> 6));
                         out[n++] = (char)(0x80 | (cp & 0x3F));
                     } else {
+                        if (n + 3 >= out_cap) return -1;
                         out[n++] = (char)(0xE0 |  (cp >> 12));
                         out[n++] = (char)(0x80 | ((cp >>  6) & 0x3F));
                         out[n++] = (char)(0x80 |  (cp        & 0x3F));
@@ -335,6 +340,7 @@ lcsas_json_decode_string(const char *src,
             }
             i++; /* skip escape char */
         } else {
+            if (n + 1 >= out_cap) return -1;
             out[n++] = (char)c;
         }
     }

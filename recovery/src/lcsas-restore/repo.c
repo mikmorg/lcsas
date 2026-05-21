@@ -381,7 +381,7 @@ parse_blob_entry(const char *src,
         size_t i;
         for (i = 0; i < 32; i++) out->pack_id[i] = pack_id_raw[i];
     }
-    if (lcsas_json_decode_string(src, &toks[type_i], buf) < 0) return -1;
+    if (lcsas_json_decode_string(src, &toks[type_i], buf, sizeof buf) < 0) return -1;
     out->is_tree = (strcmp(buf, "tree") == 0);
     out->uncompressed_length = -1;
     if (ulen_i >= 0) {
@@ -632,7 +632,8 @@ lcsas_repo_load_snapshots(const char *repo_path,
             snap.tree_id_hex[n] = '\0';
         }
         if (time_i >= 0) {
-            lcsas_json_decode_string((char *)plain, &toks[time_i], snap.time);
+            lcsas_json_decode_string((char *)plain, &toks[time_i],
+                                     snap.time, sizeof snap.time);
         }
         if (paths_i >= 0 && toks[paths_i].type == LCSAS_JSON_ARRAY
                 && toks[paths_i].size > 0) {
@@ -641,7 +642,8 @@ lcsas_repo_load_snapshots(const char *repo_path,
                 if (toks[t].parent == paths_i
                         && toks[t].type == LCSAS_JSON_STRING) {
                     lcsas_json_decode_string((char *)plain, &toks[t],
-                                             snap.first_path);
+                                             snap.first_path,
+                                             sizeof snap.first_path);
                     break;
                 }
             }

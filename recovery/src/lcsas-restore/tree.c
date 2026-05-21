@@ -235,9 +235,11 @@ lcsas_tree_restore(const char *repo_path,
             char node_path[4096];
 
             if (name_i < 0 || type_i < 0) continue;
-            if (lcsas_json_decode_string((char *)blob, &toks[name_i], name_buf) < 0)
+            if (lcsas_json_decode_string((char *)blob, &toks[name_i],
+                                         name_buf, sizeof name_buf) < 0)
                 continue;
-            if (lcsas_json_decode_string((char *)blob, &toks[type_i], type_buf) < 0)
+            if (lcsas_json_decode_string((char *)blob, &toks[type_i],
+                                         type_buf, sizeof type_buf) < 0)
                 continue;
 
             /* Path traversal safety: name must be a plain basename. */
@@ -284,7 +286,7 @@ lcsas_tree_restore(const char *repo_path,
                 if (lt_i >= 0) {
                     char tgt[1024];
                     if (lcsas_json_decode_string((char *)blob, &toks[lt_i],
-                                                 tgt) < 0) continue;
+                                                 tgt, sizeof tgt) < 0) continue;
                     if (lcsas_path_safe_symlink(target_root,
                                                 target_dir, tgt) != 0) {
                         fprintf(stderr, "skip unsafe symlink %s -> %s\n",

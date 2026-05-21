@@ -60,12 +60,15 @@ long lcsas_json_obj_get(const char *src,
 
 /*
  * Decode a STRING token into a NUL-terminated buffer.  Returns the
- * decoded length on success, or -1 on error.  `out` must be at least
- * (tok.end - tok.start + 1) bytes.
+ * decoded length on success, or -1 on error.  `out_cap` is the size
+ * of `out` in bytes (including the trailing NUL).  If the decoded
+ * value would not fit -- including the trailing NUL -- the function
+ * returns -1 without overflowing the buffer.  `out_cap == 0` always
+ * returns -1 (no write).  This is enforced in code, not by convention.
  */
 long lcsas_json_decode_string(const char *src,
                               const lcsas_json_tok *tok,
-                              char *out);
+                              char *out, size_t out_cap);
 
 /*
  * Parse a NUMBER token as a long long.  Returns 0 on success.
