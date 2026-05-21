@@ -1,0 +1,43 @@
+name: audit-gate
+
+on:
+  push:
+    paths:
+      - "recovery/src/lcsas-restore/**"
+      - "recovery/tests/**"
+      - "recovery/fuzz/**"
+      - "recovery/scripts/coverage_check.py"
+      - "recovery/scripts/sanitize.sh"
+      - "recovery/Makefile"
+  pull_request:
+    paths:
+      - "recovery/src/lcsas-restore/**"
+      - "recovery/tests/**"
+      - "recovery/fuzz/**"
+      - "recovery/scripts/coverage_check.py"
+      - "recovery/scripts/sanitize.sh"
+      - "recovery/Makefile"
+
+jobs:
+  audit-gate:
+    name: "Tier-1 audit gate (coverage + sanitize + fuzz-smoke)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            gcovr \
+            python3-pip
+          pip3 install pytest
+
+      - name: Run audit-gate (default 60% threshold)
+        run: make -C recovery audit-gate THRESHOLD=60
+        env:
+          # Soft-skip LCSAS_SANITIZE and LCSAS_COVERAGE opt-in flags
+          # are not needed here — audit-gate calls the targets directly.
+          PYTHONDONTWRITEBYTECODE: "1"

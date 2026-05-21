@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate
 
 # Default target: lint + typecheck + every test tier ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
@@ -113,6 +113,14 @@ verify-recovery:
 # can't build by overriding LCSAS_RECOVERY_ARCHES.
 gen-catalogue:
 	python3 tools/gen_hardening_catalogue.py
+
+THRESHOLD ?= 60
+
+# Opt-in comprehensive gate for recovery/src/lcsas-restore/.
+# NOT part of the default `gate`.  Run before merging any PR that
+# touches the tier-1 C binary.  See recovery/docs/AUDIT.md.
+audit-gate:
+	$(MAKE) -C recovery audit-gate THRESHOLD=$(THRESHOLD)
 
 build-recovery:
 	@arches="$${LCSAS_RECOVERY_ARCHES:-host x86_64 aarch64 armv7 x86_64-windows x86_64-macos aarch64-macos}"; \

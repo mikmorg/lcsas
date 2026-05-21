@@ -38,8 +38,12 @@ make test-recovery-hardening   # this tier only
 | `test_setup_static_guards.py` | Hardening tests #7 + #8: static guards on the blind-test setup. |
 | `test_tier1_aarch64_qemu.py` | Issue #107: tier-1 aarch64 cross-built binary coverage via qemu-user. |
 | `test_tier1_armv7_qemu.py` | Issue #119: tier-1 armv7 cross-built binary coverage via qemu-user. |
+| `test_tier1_coverage_baseline.py` | Audit phase 1 (#150): opt-in gate that runs `make coverage-c` and verifies `recovery/build/coverage.txt` is written. Set `LCSAS_COVERAGE=1` to enable. |
+| `test_tier1_petabyte_fixture.py` | Audit phase 4 (#160): synthesises repos with 300 key files and 3000 index files (exercises BUG-2/3 fixes from #158), asserts no crash. |
 | `test_tier1_progress.py` | Hardening test for tier-1 restore progress output (recommendation #9). |
 | `test_tier1_rescan.py` | Hardening test: tier-1 binary rescans mount parents on each retry. |
+| `test_tier1_sanitize.py` | Audit phase 2 (#152): opt-in gate that runs `make sanitize` and asserts 0 ASan/UBSan/LSan findings. Set `LCSAS_SANITIZE=1` to enable. |
+| `test_tier1_silent_drop_guard.py` | Audit phase 4 (#158/#159/#160): verifies that silent truncation caps in repo.c were converted to dynamic arrays, and that disc_locator.c emits stderr diagnostics on path-too-long skips. |
 | `test_tier1_unit.py` | Issue #115: tier-1 C unit-test harness — fast, agent-free. |
 | `test_tier1_windows_wine.py` | Issue #118: tier-1 Windows cross-built binary coverage via wine. |
 | `test_tier3_invocation.py` | Hardening test #4: restore.sh tier-3 invocation flag correctness. |
