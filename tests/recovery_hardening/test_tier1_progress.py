@@ -73,6 +73,9 @@ def _build_repo_or_skip(tmp: Path) -> tuple[Path, Path, Path]:
     built or the e2e fixture helper can't be imported -- this matches
     the rest of recovery_hardening's "skip-when-toolchain-absent" rule.
     """
+    _override = os.environ.get("LCSAS_RESTORE_BIN")
+    if _override and not (BINARY.is_file() and os.access(BINARY, os.X_OK)):
+        pytest.skip(f"LCSAS_RESTORE_BIN={_override!r} not executable")
     if not BINARY.exists():
         pytest.skip(f"tier-1 binary not built at {BINARY} "
                     f"(run `make -C recovery build/lcsas-restore`)")

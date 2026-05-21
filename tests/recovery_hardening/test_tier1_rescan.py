@@ -70,6 +70,9 @@ sys.path.insert(0, str(RECOVERY_DIR / "tests"))
 
 
 def _require_binary() -> None:
+    _override = os.environ.get("LCSAS_RESTORE_BIN")
+    if _override and not (BINARY.is_file() and os.access(BINARY, os.X_OK)):
+        pytest.skip(f"LCSAS_RESTORE_BIN={_override!r} not executable")
     if not BINARY.exists():
         pytest.skip(
             f"{BINARY} not built; run `lcsas recovery build --arch host` first",
