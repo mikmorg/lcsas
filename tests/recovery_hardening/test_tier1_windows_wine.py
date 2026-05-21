@@ -33,6 +33,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -77,11 +78,18 @@ def _run(*args: str, env: dict[str, str] | None = None,
          stdin_data: str = "", timeout: int = TIMEOUT,
          ) -> subprocess.CompletedProcess:
     full_env = {**os.environ, **WINE_ENV_BASE, **(env or {})}
-    return subprocess.run(
-        ["wine", str(RESTORE_EXE), *args],
-        input=stdin_data, capture_output=True, text=True,
-        env=full_env, timeout=timeout,
-    )
+    # Copy the EXE to a temporary directory before invoking wine.
+    # Wine can update PE metadata / timestamps in-place on the binary it
+    # executes; running against a copy prevents spurious modifications to
+    # the checked-in artifact (fixes issue #147).
+    with tempfile.TemporaryDirectory() as tmpdir:
+        exe_copy = Path(tmpdir) / RESTORE_EXE.name
+        shutil.copy2(RESTORE_EXE, exe_copy)
+        return subprocess.run(
+            ["wine", str(exe_copy), *args],
+            input=stdin_data, capture_output=True, text=True,
+            env=full_env, timeout=timeout,
+        )
 
 
 def _make_minimal_repo(tmp_path: Path) -> Path:
