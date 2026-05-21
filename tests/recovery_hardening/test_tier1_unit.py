@@ -405,6 +405,171 @@ def test_no_crash_on_existing_target_dir(tmp_path: Path) -> None:
     )
 
 
+# ── CLI argument-parsing edge cases (main.c coverage) ─────────────
+
+
+def test_flag_missing_value_fails_cleanly() -> None:
+    """A CLI flag passed without its value (e.g. trailing `--repo`) must
+    print 'missing value for' and exit non-zero, not crash."""
+    bin_path = _find_bin()
+    res = _run(bin_path, "--repo")
+    assert res.returncode != 0
+    err = (res.stdout + res.stderr).lower()
+    assert "missing value" in err, err
+
+
+def test_unknown_flag_fails_with_usage(tmp_path: Path) -> None:
+    """An unrecognised flag must print 'unknown argument' and the usage
+    banner, then exit non-zero."""
+    bin_path = _find_bin()
+    res = _run(bin_path, "--this-flag-does-not-exist")
+    assert res.returncode != 0
+    err = (res.stdout + res.stderr).lower()
+    assert "unknown argument" in err, err
+
+
+def test_too_many_mount_parents_fails(tmp_path: Path) -> None:
+    """Issue #160 / overflow defense: passing more than MAX_MOUNT_PARENTS
+    (currently 16) --mount-parent flags must print an explicit overflow
+    error rather than silently truncate or crash."""
+    bin_path = _find_bin()
+    args = []
+    for i in range(64):
+        args += ["--mount-parent", f"/tmp/m{i}"]
+    res = _run(bin_path, *args)
+    assert res.returncode != 0
+    err = (res.stdout + res.stderr).lower()
+    assert "too many" in err and "mount-parent" in err, err
+
+
+def test_too_many_pack_search_fails(tmp_path: Path) -> None:
+    """Sibling of test_too_many_mount_parents: --pack-search has the same
+    MAX_PACK_SEARCH cap (64) and must fail loud, not silently truncate.
+    Pass 128 entries to exceed the cap regardless of off-by-one."""
+    bin_path = _find_bin()
+    args = []
+    for i in range(128):
+        args += ["--pack-search", f"/tmp/p{i}"]
+    res = _run(bin_path, *args)
+    assert res.returncode != 0
+    err = (res.stdout + res.stderr).lower()
+    assert "too many" in err and "pack-search" in err, err
+
+
+def test_list_pending_packs_with_valid_catalog(tmp_path: Path) -> None:
+    """--list-pending-packs with a valid catalog must run the SELECT and
+    exit 0 (covers main.c lines 238-246 + the catalog_print_pending_packs
+    success path)."""
+    bin_path = _find_bin()
+    db_path = tmp_path / "test.db"
+    import sqlite3
+    db = sqlite3.connect(db_path)
+    db.executescript("""
+        CREATE TABLE schema_version (version INTEGER, applied_at DATETIME);
+        INSERT INTO schema_version VALUES (5, datetime('now'));
+        CREATE TABLE repositories (repo_id TEXT PRIMARY KEY, name TEXT,
+          mirror_path TEXT NOT NULL, encryption_key_id TEXT DEFAULT '',
+          created_at DATETIME);
+        CREATE TABLE packs (pack_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sha256 TEXT UNIQUE NOT NULL, size_bytes INTEGER, repo_id TEXT,
+          is_pruned INTEGER DEFAULT 0);
+        INSERT INTO packs (sha256, size_bytes, repo_id) VALUES
+          ('aa', 1024, 'r1'), ('bb', 2048, 'r1');
+        CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          label TEXT UNIQUE, uuid TEXT UNIQUE, media_type TEXT,
+          capacity_bytes INTEGER, used_bytes INTEGER DEFAULT 0,
+          location TEXT DEFAULT 'Home_Shelf', status TEXT DEFAULT 'STAGING',
+          created_at DATETIME, closed_at DATETIME, verified_at DATETIME);
+        INSERT INTO volumes (label, uuid, media_type, capacity_bytes, status)
+          VALUES ('vol-a', 'uuid-a', 'BD25', 26843545600, 'VERIFIED');
+        CREATE TABLE volume_packs (volume_id INTEGER, pack_id INTEGER,
+          PRIMARY KEY (volume_id, pack_id));
+        INSERT INTO volume_packs VALUES (1, 1), (1, 2);
+    """)
+    db.commit()
+    db.close()
+
+    repo = _make_minimal_repo(tmp_path)
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("stub\n")
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--catalog", str(db_path),
+        "--list-pending-packs",
+        timeout=5,
+    )
+    assert res.returncode == 0, (
+        f"--list-pending-packs with a valid catalog should exit 0, "
+        f"got rc={res.returncode}; stderr:\n{res.stderr}"
+    )
+    out = res.stdout + res.stderr
+    assert "vol-a" in out, out
+
+
+def test_list_pending_packs_invalid_catalog_path_fails(tmp_path: Path) -> None:
+    """--list-pending-packs with a non-existent --catalog must fail (covers
+    the lcsas_catalog_open failure branch in main.c)."""
+    bin_path = _find_bin()
+    repo = _make_minimal_repo(tmp_path)
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("stub\n")
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--catalog", str(tmp_path / "does-not-exist.db"),
+        "--list-pending-packs",
+        timeout=5,
+    )
+    assert res.returncode != 0
+
+
+def test_verbose_flag_accepted(tmp_path: Path) -> None:
+    """The --verbose / -v flag is accepted by the parser (covers the
+    verbose=1 branch in main.c). Run with a non-restorable repo so it
+    fails before doing real work but after parsing the flag."""
+    bin_path = _find_bin()
+    repo = _make_minimal_repo(tmp_path)
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("stub\n")
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(tmp_path / "restored"),
+        "--verbose",
+        timeout=5,
+    )
+    # Will fail (empty repo, no keys), but verbose=1 should be set first
+    assert res.returncode != 0
+    # Verbose should NOT crash
+    assert res.returncode not in (-11, 139, -6, 134)
+
+
+def test_interactive_on_off_auto_accepted(tmp_path: Path) -> None:
+    """All three --interactive values must be accepted by the parser
+    (covers the strcmp branches in main.c lines 251-256)."""
+    bin_path = _find_bin()
+    repo = _make_minimal_repo(tmp_path)
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("stub\n")
+    for mode in ("on", "off", "auto"):
+        res = _run(
+            bin_path,
+            "--repo", str(repo),
+            "--password-file", str(pwfile),
+            "--target", str(tmp_path / f"out-{mode}"),
+            "--interactive", mode,
+            timeout=5,
+        )
+        assert res.returncode != 0  # fails on missing keys, that's fine
+        assert res.returncode not in (-11, 139, -6, 134), (
+            f"--interactive {mode} crashed (rc={res.returncode})"
+        )
+
+
 def test_copy_file_partial_write_leaves_no_garbage() -> None:
     """Static analysis pin for Issue #85: confirm that disc_locator.c
     still contains the unlink(dst) call on the fwrite-error path in

@@ -32,13 +32,36 @@ make -C recovery audit-gate THRESHOLD=95
 
 | Threshold | Meaning |
 |-----------|---------|
-| 60% (default) | Measured baseline floor (Phase 1 result).  Prevents regressions — no file should drop below this. |
-| 95% (aspirational) | Target after petabyte-fixture work (issue #162) and fault-injection harness (issue #165).  `make audit-gate THRESHOLD=95` shows remaining work. |
+| 70% (default) | Measured floor after Phase 5 (87.1% overall). Prevents regressions — no file should drop below this. |
+| 85% (next step) | Achievable once `tree.c` and `repo.c` get fixture-based tests with encrypted blobs (currently 70.3% and 75.9% — see below). |
+| 95% (aspirational) | Target after full fixture work. Requires Python-generated valid restic key/index/pack fixtures, OR cheaper expansion of `disc_locator` and `repo` C unit tests. |
 
-**Why not 100%?**  Every `malloc`/`calloc`/`realloc` call has an error
-branch that returns `-1` or `goto out`.  These are unreachable without
-a fault-injection shim (see issue #165, deferred Phase 6).  100% would
-require LD_PRELOAD tricks; 95% is the achievable ceiling.
+**Why not 100%?** Three constraints:
+1. Many `malloc`/`calloc`/`realloc` error branches require fault injection — the `make fault-inject` target (issue #165) covers some, but only branches that the test binaries actually reach.
+2. `disc_locator.c` (currently 81.6%) has filesystem-dependent branches (chroot, mount-namespace prompts, fs-full handling) that require either user-namespace fixtures or `unshare(2)` setup the tests don't currently do.
+3. `tree.c` and `repo.c` exercise restic-format encrypted data; their happy paths are covered by the blind-restore e2e but the local C unit tests use stub fixtures that fail at decryption. Bringing these to 95%+ needs a Python-side helper that produces valid encrypted blobs (master key, AES-CTR + Poly1305-AES tag + scrypt-derived KEK).
+
+## Per-file coverage (2026-05-21, after Phase 5)
+
+| File | Coverage | Notes |
+|------|----------|-------|
+| aes.c | 100% | Crypto primitive — covered by `test_aes` |
+| hex.c | 100% | |
+| sha256.c | 100% | |
+| zstd_dec.c | 100% | Both probe paths covered (Phase 1) |
+| path.c | 98.3% | |
+| scrypt.c | 98.0% | |
+| catalog.c | 98.0% | Boosted Phase 5 |
+| json_q.c | 97.1% | All escape paths + literals covered (Phase 5) |
+| b64.c | 95.7% | |
+| poly1305.c | 95.0% | |
+| pbkdf2.c | 94.7% | |
+| lcsas_io.c | 90.3% | |
+| main.c | 88.1% | CLI arg coverage (Phase 5) |
+| disc_locator.c | 81.6% | Drain/scan paths now covered (Phase 5) |
+| repo.c | 75.9% | Needs fixture: valid restic keys + indexes |
+| tree.c | 70.3% | Needs fixture: valid encrypted tree blobs |
+| **Overall** | **87.1%** | Baseline: 78.5% (pre-Phase-1) |
 
 ## Fault injection (`make fault-inject`)
 

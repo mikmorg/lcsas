@@ -72,6 +72,7 @@ TEST_BINS = \
 	$(BUILD)/test_json \
 	$(BUILD)/test_json_decode_string \
 	$(BUILD)/test_catalog \
+	$(BUILD)/test_disc_locator \
 	$(BUILD)/test_zstd
 
 # Binary extension is overridden by the Windows cross-build target.
@@ -203,6 +204,10 @@ $(BUILD)/test_json_decode_string: $(TESTDIR)/test_json_decode_string.c $(BUILD)/
 $(BUILD)/test_catalog: $(TESTDIR)/test_catalog.c $(BUILD)/catalog.o $(BUILD)/sqlite3.o
 	$(CC) $(CFLAGS) -I$(SRCDIR) $(TESTDIR)/test_catalog.c \
 	    $(BUILD)/catalog.o $(BUILD)/sqlite3.o -lpthread -o $@
+
+$(BUILD)/test_disc_locator: $(TESTDIR)/test_disc_locator.c $(BUILD)/disc_locator.o $(BUILD)/sqlite3.o $(BUILD)/libcrypto.a
+	$(CC) $(CFLAGS) -I$(SRCDIR) $(TESTDIR)/test_disc_locator.c \
+	    $(BUILD)/disc_locator.o $(BUILD)/sqlite3.o $(BUILD)/libcrypto.a -lpthread -ldl -o $@
 
 $(BUILD)/test_zstd: $(TESTDIR)/test_zstd.c $(BUILD)/zstd_dec.o $(BUILD)/zstddeclib.o
 	$(CC) $(CFLAGS) -I$(SRCDIR) $(TESTDIR)/test_zstd.c \
@@ -694,7 +699,7 @@ fuzz-smoke: fuzz-json-smoke fuzz-b64-smoke fuzz-zstd-smoke fuzz-path-smoke fuzz-
 #   95%  = aspirational target (issue #162); blocked by malloc-failure
 #          branches that require fault injection to exercise (issue #165)
 #
-THRESHOLD ?= 60
+THRESHOLD ?= 70
 
 audit-gate:
 	@echo "[audit-gate] Step 1/4: coverage-c"
