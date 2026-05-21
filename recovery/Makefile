@@ -379,6 +379,66 @@ repro-check:
 clean:
 	rm -rf $(BUILD) build
 
+# ── C coverage target ─────────────────────────────────────────────
+#
+# Rebuilds the entire lcsas-restore module with gcov instrumentation,
+# runs the C unit tests and the Python tier-1 hardening tests, then
+# invokes gcovr to produce an HTML report and a summary line.
+#
+# NOTE: -static is intentionally dropped here.  The gcov runtime
+# (libgcov) and address sanitiser runtimes are shared DSOs; a fully
+# static binary cannot load them.  This build is for measurement
+# only — the release artifact always uses LDFLAGS=$(STATIC).
+#
+# Usage:
+#   make -C recovery coverage-c
+#
+coverage-c:
+	# Step 1: clean slate so stale .gcda files cannot skew results
+	$(MAKE) clean
+	# Step 2: rebuild with coverage instrumentation (-O0 for accurate
+	# line mapping; --coverage adds both compile and link flags).
+	# Builds lcsas-restore, test binaries, and runs the C unit tests.
+	$(MAKE) test \
+	    CC=cc \
+	    CFLAGS="-O0 -g --coverage -std=c89 -pedantic -Wall -Wextra -Wshadow -Wno-long-long -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64" \
+	    LDFLAGS="--coverage"
+	@echo "[coverage-c] C unit tests: ALL OK"
+	# Step 3: run Python tier-1 hardening tests pointing at the
+	# instrumented binary (same path: build/lcsas-restore)
+	LCSAS_RESTORE_BIN=$(abspath $(BUILD)/lcsas-restore) \
+	    pytest -q \
+	        ../tests/recovery_hardening/test_tier1_unit.py \
+	        ../tests/recovery_hardening/test_tier1_progress.py \
+	        ../tests/recovery_hardening/test_tier1_rescan.py \
+	    || true
+	# Step 4: invoke gcovr (soft-skip if not installed)
+	@command -v gcovr >/dev/null 2>&1 || { echo "[coverage-c] gcovr not installed; run: pip install gcovr"; exit 0; }
+	# Step 5: generate reports narrowed to lcsas-restore sources only
+	# (vendored sqlite/zstd and other tools are excluded).
+	# gcovr --root must be the make working directory (recovery/) so
+	# that gcov can resolve relative source paths embedded in .gcda.
+	@mkdir -p $(BUILD)/coverage
+	gcovr \
+	    --root . \
+	    --filter '$(SRCDIR)/.*' \
+	    --exclude '$(VENDOR)/.*' \
+	    --gcov-object-directory $(abspath $(BUILD)) \
+	    --html-details $(abspath $(BUILD))/coverage/index.html \
+	    --json-summary $(abspath $(BUILD))/coverage.json \
+	    --print-summary \
+	    $(abspath $(BUILD))
+	# Step 6: write LINE_COVERAGE=X.Y% line to coverage.txt
+	@python3 -c "\
+import json, sys; \
+d = json.load(open('$(abspath $(BUILD))/coverage.json')); \
+pct = d.get('line_percent', 0.0); \
+line = 'LINE_COVERAGE={:.1f}%'.format(pct); \
+print(line); \
+open('$(abspath $(BUILD))/coverage.txt', 'w').write(line + '\n')"
+	@echo "[coverage-c] report: $(abspath $(BUILD))/coverage/index.html"
+	@echo "[coverage-c] summary: $(abspath $(BUILD))/coverage.txt"
+
 manifest:
 	@cd docs && find . -type f ! -name MANIFEST.sha256 -exec sha256sum {} \; \
 		| sort -k 2 > MANIFEST.sha256
@@ -392,4 +452,4 @@ manifest:
 	    > MANIFEST.sha256
 	@echo "wrote MANIFEST.sha256 (top-level, $(shell wc -l < MANIFEST.sha256) entries)"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64 coverage-c
