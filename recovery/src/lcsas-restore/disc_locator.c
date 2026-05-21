@@ -325,7 +325,11 @@ refresh_discovered(lcsas_disc_locator *l)
                 (name[1] == '\0' || (name[1] == '.' && name[2] == '\0')))
                 continue;
             rc = snprintf(child, sizeof child, "%s/%s", parent, name);
-            if (rc <= 0 || (size_t)rc >= sizeof child) continue;
+            if (rc <= 0 || (size_t)rc >= sizeof child) {
+                fprintf(stderr, "[lcsas-restore] path too long (>%lu bytes), skipping\n",
+                        (unsigned long)sizeof child);
+                continue;
+            }
             if (stat(child, &st) != 0) continue;
             if (!S_ISDIR(st.st_mode)) continue;
             if (l->meta_disc && path_under(child, l->meta_disc))
@@ -566,12 +570,20 @@ drain_disc(lcsas_disc_locator *l, const char *root)
         if (e_root->d_name[0] == '.') continue;
         rc = snprintf(prefix_dir, sizeof prefix_dir,
                       "%s/%s", data_dir, e_root->d_name);
-        if (rc <= 0 || (size_t)rc >= sizeof prefix_dir) continue;
+        if (rc <= 0 || (size_t)rc >= sizeof prefix_dir) {
+            fprintf(stderr, "[lcsas-restore] path too long (>%lu bytes), skipping\n",
+                    (unsigned long)sizeof prefix_dir);
+            continue;
+        }
         if (stat(prefix_dir, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
 
         rc = snprintf(cache_prefix, sizeof cache_prefix,
                       "%s/data/%s", l->cache_dir, e_root->d_name);
-        if (rc <= 0 || (size_t)rc >= sizeof cache_prefix) continue;
+        if (rc <= 0 || (size_t)rc >= sizeof cache_prefix) {
+            fprintf(stderr, "[lcsas-restore] path too long (>%lu bytes), skipping\n",
+                    (unsigned long)sizeof cache_prefix);
+            continue;
+        }
         if (mkdir_p(cache_prefix) != 0) continue;
 
         d_pref = opendir(prefix_dir);
@@ -580,10 +592,18 @@ drain_disc(lcsas_disc_locator *l, const char *root)
             if (e_pref->d_name[0] == '.') continue;
             rc = snprintf(src, sizeof src, "%s/%s",
                           prefix_dir, e_pref->d_name);
-            if (rc <= 0 || (size_t)rc >= sizeof src) continue;
+            if (rc <= 0 || (size_t)rc >= sizeof src) {
+                fprintf(stderr, "[lcsas-restore] path too long (>%lu bytes), skipping\n",
+                        (unsigned long)sizeof src);
+                continue;
+            }
             rc = snprintf(dst, sizeof dst, "%s/%s",
                           cache_prefix, e_pref->d_name);
-            if (rc <= 0 || (size_t)rc >= sizeof dst) continue;
+            if (rc <= 0 || (size_t)rc >= sizeof dst) {
+                fprintf(stderr, "[lcsas-restore] path too long (>%lu bytes), skipping\n",
+                        (unsigned long)sizeof dst);
+                continue;
+            }
             /* Skip if already cached. */
             if (stat(dst, &st) == 0) continue;
             if (stat(src, &st) != 0 || !S_ISREG(st.st_mode)) continue;

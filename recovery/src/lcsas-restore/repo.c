@@ -176,16 +176,32 @@ lcsas_repo_load_keys_dir(const char *keys_dir,
 {
     DIR *d;
     struct dirent *e;
-    char names[256][LCSAS_HEX_BLOB_ID_LEN + 1];
+    char (*names)[LCSAS_HEX_BLOB_ID_LEN + 1] = NULL;
     size_t ncount = 0;
+    size_t ncap = 0;
     int found = 0;
+    int rc = -1;
     size_t i;
 
     d = opendir(keys_dir);
     if (!d) return -1;
-    while ((e = readdir(d)) != NULL && ncount < 256) {
+    while ((e = readdir(d)) != NULL) {
+        char (*p)[LCSAS_HEX_BLOB_ID_LEN + 1];
         if (e->d_name[0] == '.') continue;
         if (strlen(e->d_name) > LCSAS_HEX_BLOB_ID_LEN) continue;
+        if (ncount >= 1000000) {
+            fprintf(stderr, "[lcsas-restore] key count exceeded sanity limit\n");
+            closedir(d);
+            goto out;
+        }
+        if (ncount == ncap) {
+            size_t newcap = ncap ? ncap * 2 : 256;
+            p = (char (*)[LCSAS_HEX_BLOB_ID_LEN + 1])realloc(
+                names, newcap * (LCSAS_HEX_BLOB_ID_LEN + 1));
+            if (!p) { closedir(d); goto out; }
+            names = p;
+            ncap = newcap;
+        }
         strcpy(names[ncount++], e->d_name);
     }
     closedir(d);
@@ -213,7 +229,11 @@ lcsas_repo_load_keys_dir(const char *keys_dir,
             break;
         }
     }
-    return found ? 0 : -1;
+    rc = found ? 0 : -1;
+
+out:
+    free(names);
+    return rc;
 }
 
 int
@@ -406,6 +426,7 @@ lcsas_repo_load_index(const char *repo_path,
      * (~1.3 MB) which alone would blow the stack. */
     char (*names)[72] = NULL;
     size_t ncount = 0;
+    size_t names_cap = 0;
     char (*super_set)[72] = NULL;
     size_t super_count = 0;
     lcsas_json_tok *pass1_toks = NULL;
@@ -422,13 +443,27 @@ lcsas_repo_load_index(const char *repo_path,
     pass1_toks = (lcsas_json_tok *)calloc(16384, sizeof(lcsas_json_tok));
     pass2_toks = (lcsas_json_tok *)calloc(32768, sizeof(lcsas_json_tok));
     if (!names || !super_set || !pass1_toks || !pass2_toks) goto out;
+    names_cap = 2048;
 
     snprintf(index_dir, sizeof index_dir, "%s/index", repo_path);
     d = opendir(index_dir);
     if (!d) return -1;
-    while ((e = readdir(d)) != NULL && ncount < 2048) {
+    while ((e = readdir(d)) != NULL) {
+        char (*p)[72];
         if (e->d_name[0] == '.') continue;
         if (strlen(e->d_name) > 64) continue;
+        if (ncount >= 1000000) {
+            fprintf(stderr, "[lcsas-restore] index count exceeded sanity limit\n");
+            closedir(d);
+            goto out;
+        }
+        if (ncount == names_cap) {
+            size_t newcap = names_cap * 2;
+            p = (char (*)[72])realloc(names, newcap * 72);
+            if (!p) { closedir(d); goto out; }
+            names = p;
+            names_cap = newcap;
+        }
         strcpy(names[ncount++], e->d_name);
     }
     closedir(d);
@@ -455,9 +490,16 @@ lcsas_repo_load_index(const char *repo_path,
             for (t = sup_arr + 1; found < children; t++) {
                 if (toks[t].parent == sup_arr) {
                     if (toks[t].type == LCSAS_JSON_STRING
-                            && super_count < 8192
                             && toks[t].size <= 64) {
                         size_t k;
+                        if (super_count >= 8192) {
+                            fprintf(stderr,
+                                "[lcsas-restore] supersedes overflow at %d"
+                                " — repository state may be pathological\n",
+                                (int)super_count);
+                            free(plain);
+                            goto out;
+                        }
                         for (k = 0; k < (size_t)toks[t].size; k++) {
                             super_set[super_count][k] =
                                 ((char *)plain)[toks[t].start + k];
