@@ -30,7 +30,6 @@ VENDOR    = vendored
 
 # Hand-written modules in dependency order.
 SRC = \
-	$(SRCDIR)/arena.c \
 	$(SRCDIR)/lcsas_io.c \
 	$(SRCDIR)/b64.c \
 	$(SRCDIR)/hex.c \
@@ -43,7 +42,6 @@ SRC = \
 	$(SRCDIR)/path.c
 
 OBJ = \
-	$(BUILD)/arena.o \
 	$(BUILD)/lcsas_io.o \
 	$(BUILD)/b64.o \
 	$(BUILD)/hex.o \
@@ -115,9 +113,6 @@ $(BUILD)/tree.o: $(SRCDIR)/tree.c $(SRCDIR)/tree.h $(BUILD)
 $(BUILD)/libcrypto.a: $(BUILD) $(OBJ)
 	rm -f $@
 	ar rcs $@ $(OBJ)
-
-$(BUILD)/arena.o: $(SRCDIR)/arena.c $(SRCDIR)/arena.h $(BUILD)
-	$(CC) $(CFLAGS) -c $(SRCDIR)/arena.c -o $@
 
 $(BUILD)/lcsas_io.o: $(SRCDIR)/lcsas_io.c $(SRCDIR)/lcsas_io.h $(SRCDIR)/posix_compat.h $(BUILD)
 	$(CC) $(CFLAGS) -c $(SRCDIR)/lcsas_io.c -o $@
@@ -624,7 +619,6 @@ $(FUZZ_BUILD)/sqlite3.fuzz.o: $(VENDOR)/sqlite/sqlite3.c $(VENDOR)/sqlite/sqlite
 	    -c $< -o $@
 
 FUZZ_REPO_SRCS = \
-    $(SRCDIR)/arena.c \
     $(SRCDIR)/lcsas_io.c \
     $(SRCDIR)/b64.c \
     $(SRCDIR)/hex.c \
@@ -710,10 +704,7 @@ audit-gate:
 	@echo "[audit-gate] Step 3/4: fuzz-smoke (5 harnesses × 60 s)"
 	$(MAKE) fuzz-smoke
 	@echo "[audit-gate] Step 4/4: per-file coverage threshold >= $(THRESHOLD)%"
-	# arena.c is excluded: it has no callers in the current codebase
-	# (dead allocator infrastructure) and therefore always measures 0%.
 	python3 scripts/coverage_check.py --threshold $(THRESHOLD) \
-	    --exclude arena.c \
 	    --json $(abspath $(BUILD))/coverage.json
 	@echo "[audit-gate] PASS"
 

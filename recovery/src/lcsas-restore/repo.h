@@ -10,7 +10,6 @@
 #ifndef LCSAS_REPO_H
 #define LCSAS_REPO_H
 
-#include "arena.h"
 #include <stddef.h>
 
 #define LCSAS_BLOB_ID_LEN 32         /* SHA-256 digest length */
