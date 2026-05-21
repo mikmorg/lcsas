@@ -85,6 +85,105 @@ int main(void)
         }
     }
 
+    /* true / false / null literals (parse_literal coverage) */
+    {
+        const char *src = "{\"t\":true,\"f\":false,\"n\":null}";
+        lcsas_json_tok toks[16];
+        long ntoks = lcsas_json_parse(src, strlen(src), toks, 16);
+        long t_idx, f_idx, n_idx;
+        if (ntoks <= 0) { fprintf(stderr, "FAIL parse literals\n"); fails++; }
+        t_idx = lcsas_json_obj_get(src, toks, 0, "t");
+        f_idx = lcsas_json_obj_get(src, toks, 0, "f");
+        n_idx = lcsas_json_obj_get(src, toks, 0, "n");
+        if (t_idx < 0 || toks[t_idx].type != LCSAS_JSON_TRUE) {
+            fprintf(stderr, "FAIL true literal type=%d\n",
+                    t_idx >= 0 ? (int)toks[t_idx].type : -1); fails++;
+        }
+        if (f_idx < 0 || toks[f_idx].type != LCSAS_JSON_FALSE) {
+            fprintf(stderr, "FAIL false literal\n"); fails++;
+        }
+        if (n_idx < 0 || toks[n_idx].type != LCSAS_JSON_NULL) {
+            fprintf(stderr, "FAIL null literal\n"); fails++;
+        }
+    }
+
+    /* Malformed literal: "tru" should fail to parse cleanly (parse_literal
+     * abort path when source diverges from expected literal). */
+    {
+        const char *src = "tru";
+        lcsas_json_tok toks[4];
+        long ntoks = lcsas_json_parse(src, strlen(src), toks, 4);
+        if (ntoks > 0) {
+            fprintf(stderr, "FAIL truncated literal accepted ntoks=%ld\n",
+                    ntoks); fails++;
+        }
+    }
+
+    /* All escape sequences (json_q.c lines 306-339 — \\, \/, \b, \f, \r). */
+    {
+        const char *src = "\"\\\\ \\/ \\b \\f \\r\"";
+        lcsas_json_tok toks[4];
+        long ntoks = lcsas_json_parse(src, strlen(src), toks, 4);
+        char buf[32];
+        long got;
+        if (ntoks != 1 || toks[0].type != LCSAS_JSON_STRING) {
+            fprintf(stderr, "FAIL escape full ntoks=%ld\n", ntoks); fails++;
+        }
+        got = lcsas_json_decode_string(src, &toks[0], buf, sizeof buf);
+        if (got < 0) {
+            fprintf(stderr, "FAIL decode all-escapes\n"); fails++;
+        } else if (strcmp(buf, "\\ / \b \f \r") != 0) {
+            fprintf(stderr, "FAIL escape value: %s\n", buf); fails++;
+        }
+    }
+
+    /* Invalid escape (\\x) — must return -1, not decode partially. */
+    {
+        const char *src = "\"\\x\"";
+        lcsas_json_tok toks[4];
+        char buf[16];
+        long ntoks = lcsas_json_parse(src, strlen(src), toks, 4);
+        if (ntoks > 0
+                && lcsas_json_decode_string(src, &toks[0], buf, sizeof buf) >= 0) {
+            fprintf(stderr, "FAIL invalid escape \\x accepted\n"); fails++;
+        }
+    }
+
+    /* Invalid hex digit in \u escape — should fail. */
+    {
+        const char *src = "\"\\uZZZZ\"";
+        lcsas_json_tok toks[4];
+        char buf[16];
+        long ntoks = lcsas_json_parse(src, strlen(src), toks, 4);
+        if (ntoks > 0
+                && lcsas_json_decode_string(src, &toks[0], buf, sizeof buf) >= 0) {
+            fprintf(stderr, "FAIL invalid \\u accepted\n"); fails++;
+        }
+    }
+
+    /* Token overflow (alloc_tok return -2): parse a deeply-nested array
+     * with only 2 tokens available — the parser must abort cleanly. */
+    {
+        const char *src = "[1,2,3,4,5,6,7,8,9]";
+        lcsas_json_tok toks[2];
+        long ntoks = lcsas_json_parse(src, strlen(src), toks, 2);
+        if (ntoks >= 0) {
+            fprintf(stderr, "FAIL token overflow accepted ntoks=%ld\n", ntoks);
+            fails++;
+        }
+    }
+
+    /* Malformed JSON — bare garbage. parse_value returns -1. */
+    {
+        const char *src = "@@@";
+        lcsas_json_tok toks[4];
+        long ntoks = lcsas_json_parse(src, strlen(src), toks, 4);
+        if (ntoks > 0) {
+            fprintf(stderr, "FAIL garbage accepted ntoks=%ld\n", ntoks);
+            fails++;
+        }
+    }
+
     if (fails == 0) printf("test_json: OK\n");
     return fails ? 1 : 0;
 }

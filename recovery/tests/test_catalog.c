@@ -125,7 +125,45 @@ int main(void)
         fails++;
     }
 
+    /* lcsas_catalog_describe(): smoke-test the printer (no return value
+     * to assert, just verify it doesn't crash and the function runs). */
+    lcsas_catalog_describe(c);
+
+    /* lcsas_catalog_print_pending_packs(): full SELECT/JOIN/GROUP path. */
+    if (lcsas_catalog_print_pending_packs(c) != 0) {
+        fprintf(stderr, "FAIL: print_pending_packs returned non-zero\n");
+        fails++;
+    }
+
+    /* lcsas_catalog_volumes_for_pack with non-existent pack_id: empty result. */
+    n = lcsas_catalog_volumes_for_pack(c, 9999, vols, 8);
+    if (n != 0) {
+        fprintf(stderr, "FAIL: volumes_for_pack(missing) returned %d (want 0)\n", n);
+        fails++;
+    }
+
+    /* lcsas_catalog_volumes_for_pack with a cap smaller than the result.
+     * Pack 2 has 2 volumes; ask for max=1 and verify we get exactly 1. */
+    n = lcsas_catalog_volumes_for_pack(c, 2, vols, 1);
+    if (n != 1) {
+        fprintf(stderr, "FAIL: volumes_for_pack(2, max=1) returned %d (want 1)\n", n);
+        fails++;
+    }
+
     lcsas_catalog_close(c);
+
+    /* Error path: open a non-existent DB path.  Verifies the error
+     * branch in lcsas_catalog_open that frees the allocated catalog
+     * and prints a diagnostic on sqlite3_open_v2 failure. */
+    {
+        lcsas_catalog *missing = lcsas_catalog_open("/tmp/does-not-exist-lcsas.db");
+        if (missing != NULL) {
+            fprintf(stderr, "FAIL: open on missing path should return NULL\n");
+            lcsas_catalog_close(missing);
+            fails++;
+        }
+    }
+
     unlink(db_path);
 
     if (fails == 0) printf("test_catalog: OK\n");
