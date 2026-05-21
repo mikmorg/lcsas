@@ -32,16 +32,16 @@ make -C recovery audit-gate THRESHOLD=95
 
 | Threshold | Meaning |
 |-----------|---------|
-| 70% (default) | Measured floor after Phase 5 (87.1% overall). Prevents regressions — no file should drop below this. |
-| 85% (next step) | Achievable once `tree.c` and `repo.c` get fixture-based tests with encrypted blobs (currently 70.3% and 75.9% — see below). |
-| 95% (aspirational) | Target after full fixture work. Requires Python-generated valid restic key/index/pack fixtures, OR cheaper expansion of `disc_locator` and `repo` C unit tests. |
+| 80% (default) | Measured floor after Phase 7 (90.7% overall, all 16 files ≥ 80%). Prevents regressions. |
+| 90% (next step) | Achievable once `disc_locator.c` (81.6%) gets a few more drain/fs-full edge-case tests. |
+| 95% (aspirational) | Target after fault-injection sweep is wired into the coverage build (issue #165 done; needs gcovr instrumentation merge). |
 
 **Why not 100%?** Three constraints:
 1. Many `malloc`/`calloc`/`realloc` error branches require fault injection — the `make fault-inject` target (issue #165) covers some, but only branches that the test binaries actually reach.
 2. `disc_locator.c` (currently 81.6%) has filesystem-dependent branches (chroot, mount-namespace prompts, fs-full handling) that require either user-namespace fixtures or `unshare(2)` setup the tests don't currently do.
 3. `tree.c` and `repo.c` exercise restic-format encrypted data; their happy paths are covered by the blind-restore e2e but the local C unit tests use stub fixtures that fail at decryption. Bringing these to 95%+ needs a Python-side helper that produces valid encrypted blobs (master key, AES-CTR + Poly1305-AES tag + scrypt-derived KEK).
 
-## Per-file coverage (2026-05-21, after Phase 5)
+## Per-file coverage (2026-05-21, after Phase 7)
 
 | File | Coverage | Notes |
 |------|----------|-------|
@@ -57,11 +57,24 @@ make -C recovery audit-gate THRESHOLD=95
 | poly1305.c | 95.0% | |
 | pbkdf2.c | 94.7% | |
 | lcsas_io.c | 90.3% | |
+| tree.c | 89.2% | **Phase 7**: full encrypted fixture exercises walk/dir/symlink/unsafe-name/unsupported branches |
 | main.c | 88.1% | CLI arg coverage (Phase 5) |
+| repo.c | 85.9% | **Phase 7**: encrypted key/index/snapshot + v2-zstd + supersedes branches |
 | disc_locator.c | 81.6% | Drain/scan paths now covered (Phase 5) |
-| repo.c | 75.9% | Needs fixture: valid restic keys + indexes |
-| tree.c | 70.3% | Needs fixture: valid encrypted tree blobs |
-| **Overall** | **87.1%** | Baseline: 78.5% (pre-Phase-1) |
+| **Overall** | **90.7%** | Baseline: 78.5% (pre-Phase-1) → +12.2 pp |
+
+## Phase 7: encrypted-fixture generator
+
+`recovery/tests/fixtures/gen_fixture.py` produces a deterministic but valid restic-format repository (scrypt-derived KEK + AES-CTR + Poly1305 MAC) covering:
+
+- Encrypted key file (decrypts with password `"test"`)
+- v2-zstd-prefixed index file (exercises `lcsas_repo_strip_v2_prefix` zstd branch in `repo.c`)
+- v1 index file with `supersedes` to a second index (exercises the dedup branch)
+- Encrypted snapshot pointing at a root tree
+- Encrypted pack containing: a data blob, a sub-tree blob, and the root tree blob
+- Root tree with diverse node types: file, dir (with subtree → another file), symlink (safe), symlink with traversal target (rejected), node with `..` name (rejected), node with `/` in name (rejected), unsupported `chardev` type (skipped)
+
+`test_repo.c` exercises the full API (`lcsas_repo_load_keys_dir`, `lcsas_repo_load_key_file`, `lcsas_repo_decrypt`, `lcsas_repo_load_index`, `lcsas_repo_load_snapshots`, `lcsas_repo_read_blob`, `lcsas_blob_index_find`, `lcsas_snapshot_latest`/`_find`, `lcsas_tree_restore`) against this fixture and asserts on the restored filesystem state.
 
 ## Fault injection (`make fault-inject`)
 

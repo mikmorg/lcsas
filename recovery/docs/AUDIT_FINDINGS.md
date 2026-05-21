@@ -20,40 +20,41 @@ Audit complete through Phase 5.  See tracker issue #166.
 |-------|------|---------|-------|
 | Phase 1 baseline | 2026-05-21 | 78.5% | After arena.c removal + zstd_dec to 100% |
 | Phase 2 fault-inject sweep | 2026-05-21 | 80.8% | LD_PRELOAD malloc fault sweep on test_catalog |
-| Phase 5 (catalog+main+json_q+disc_locator) | 2026-05-21 | **87.1%** | Assertion-pinned unit tests |
+| Phase 5 (catalog+main+json_q+disc_locator) | 2026-05-21 | 87.1% | Assertion-pinned unit tests |
+| Phase 7 (test_repo with encrypted fixture) | 2026-05-21 | **90.7%** | gen_fixture.py + test_repo.c covering full repo + tree pipeline |
 
-## Phase 5 per-file coverage (gcovr, 2026-05-21)
+## Phase 7 per-file coverage (gcovr, 2026-05-21)
 
-| File | Line% |
-|------|-------|
-| aes.c | 100.0% |
-| b64.c | 95.7% |
-| catalog.c | 98.0% (was 72.3%) |
-| disc_locator.c | 81.6% (was 60.3%) |
-| hex.c | 100.0% |
-| json_q.c | 97.1% (was 89.1%) |
-| lcsas_io.c | 90.3% |
-| main.c | 88.1% (was 79.3%) |
-| path.c | 98.3% |
-| pbkdf2.c | 94.7% |
-| poly1305.c | 95.0% |
-| repo.c | 75.9% |
-| scrypt.c | 98.0% |
-| sha256.c | 100.0% |
-| tree.c | 70.3% |
-| zstd_dec.c | 100.0% (was 63.6%) |
-| **Overall** | **87.1%** (was 78.5%) |
+| File | Line% | Δ from baseline |
+|------|-------|-----------------|
+| aes.c | 100.0% | — |
+| b64.c | 95.7% | — |
+| catalog.c | 98.0% | +25.7 (Phase 5) |
+| disc_locator.c | 81.6% | +21.3 (Phase 5) |
+| hex.c | 100.0% | — |
+| json_q.c | 97.1% | +8.0 (Phase 5) |
+| lcsas_io.c | 90.3% | — |
+| main.c | 88.1% | +8.8 (Phase 5) |
+| path.c | 98.3% | — |
+| pbkdf2.c | 94.7% | — |
+| poly1305.c | 95.0% | — |
+| repo.c | **85.9%** | +10.0 (**Phase 7** fixture) |
+| scrypt.c | 98.0% | — |
+| sha256.c | 100.0% | — |
+| tree.c | **89.2%** | +18.9 (**Phase 7** fixture) |
+| zstd_dec.c | 100.0% | +36.4 (Phase 1) |
+| **Overall** | **90.7%** | **+12.2** |
 
 Note: `arena.c` (was 0%) was deleted in PR #175 — dead code with no callers.
 
-## Remaining gaps and rationale
+## Remaining gaps (Phase 8+)
 
 | File | Current | To reach 95% requires |
 |------|---------|----------------------|
-| repo.c | 75.9% | Python-generated valid encrypted key/index fixtures fed to a new test_repo.c that calls lcsas_repo_load_key_file with real ciphertexts. |
-| tree.c | 70.3% | Same fixture work plus a valid tree-blob structure. End-to-end blind-restore covers this but at ~$5/run. |
-| disc_locator.c | 81.6% | Tests for drain_disc edge cases (fs-full, missing source) and the interactive prompt loop. Most remaining lines require user-namespace mount fixtures. |
-| main.c | 88.1% | Remaining branches are the snapshot-walking happy paths (need fixture). |
+| disc_locator.c | 81.6% | Drain edge cases (fs-full, missing source), interactive prompt loop, user-namespace mount fixtures for the chroot-style branches. |
+| repo.c | 85.9% | Malloc-failure paths in `read_blob` and a multi-blob compressed pack (lines 790-845). The fault-injection harness in #165 covers some; the rest need a compressed-blob fixture. |
+| tree.c | 89.2% | Remaining lines are corrupted-blob-content paths (malformed JSON tokens after decryption) — would need an attacker-crafted fixture, or a fuzz target on `lcsas_tree_restore` directly. |
+| main.c | 88.1% | Snapshot-walking error branches (snapshot blob fetch failure mid-restore). |
 
 **Aspirational target: 95%.** See `recovery/docs/AUDIT.md` for the path forward.
 
