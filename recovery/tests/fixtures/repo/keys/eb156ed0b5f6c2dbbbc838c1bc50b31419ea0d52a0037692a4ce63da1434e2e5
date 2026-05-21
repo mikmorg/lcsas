@@ -1,0 +1,11 @@
+{
+  "created": "2026-05-21T00:00:00Z",
+  "username": "test",
+  "hostname": "test",
+  "kdf": "scrypt",
+  "N": 16384,
+  "r": 8,
+  "p": 1,
+  "salt": "AAAAAAAAAAAAAAAAAAAAAA==",
+  "data": "AAAAAAAAAAAAAAAAAAAAAEioE9RuAU1/4OoAUDvdVvT/9WhUXLqJ5qAjmTiCq5aHyW/h0wmpA2yi9wGZSjQz/YDGXkxClqPZZ+WIhKrTAU5a6IUociQJH6hI3/AbxJkZC300TUIU3zqFbb5T4lUQSH77sKPPVKxuDB1ojDYYHkgH/wqsEL/WyWgMG4jioJqVQvE3CD+mx9skSWot8GyiiaNiwqIDRQ=="
+}
