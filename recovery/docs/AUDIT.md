@@ -32,16 +32,16 @@ make -C recovery audit-gate THRESHOLD=95
 
 | Threshold | Meaning |
 |-----------|---------|
-| 80% (default) | Measured floor after Phase 7 (90.7% overall, all 16 files ≥ 80%). Prevents regressions. |
-| 90% (next step) | Achievable once `disc_locator.c` (81.6%) gets a few more drain/fs-full edge-case tests. |
-| 95% (aspirational) | Target after fault-injection sweep is wired into the coverage build (issue #165 done; needs gcovr instrumentation merge). |
+| 85% (default) | Measured floor after Phase 8 (92.4% overall, all 16 files ≥ 85%). Prevents regressions. |
+| 90% (next step) | Achievable once `repo.c` (85.9%) gets a compressed-pack-blob fixture covering the zstd-decode branch in `read_blob`. |
+| 95% (aspirational) | Target after a fault-tolerant gcov runtime patch — current LD_PRELOAD shim works on non-coverage builds (verifies robustness; 0 prod crashes) but cannot accumulate .gcda data when fault-injecting the coverage build (gcov runtime crashes before flushing). |
 
 **Why not 100%?** Three constraints:
 1. Many `malloc`/`calloc`/`realloc` error branches require fault injection — the `make fault-inject` target (issue #165) covers some, but only branches that the test binaries actually reach.
 2. `disc_locator.c` (currently 81.6%) has filesystem-dependent branches (chroot, mount-namespace prompts, fs-full handling) that require either user-namespace fixtures or `unshare(2)` setup the tests don't currently do.
 3. `tree.c` and `repo.c` exercise restic-format encrypted data; their happy paths are covered by the blind-restore e2e but the local C unit tests use stub fixtures that fail at decryption. Bringing these to 95%+ needs a Python-side helper that produces valid encrypted blobs (master key, AES-CTR + Poly1305-AES tag + scrypt-derived KEK).
 
-## Per-file coverage (2026-05-21, after Phase 7)
+## Per-file coverage (2026-05-21, after Phase 8)
 
 | File | Coverage | Notes |
 |------|----------|-------|
@@ -56,12 +56,12 @@ make -C recovery audit-gate THRESHOLD=95
 | b64.c | 95.7% | |
 | poly1305.c | 95.0% | |
 | pbkdf2.c | 94.7% | |
+| main.c | 94.8% | **Phase 8**: real-fixture CLI tests (list-snapshots, verbose restore, snapshot find, --meta-disc, --pack-cache-dir, snapshot not found) |
 | lcsas_io.c | 90.3% | |
-| tree.c | 89.2% | **Phase 7**: full encrypted fixture exercises walk/dir/symlink/unsafe-name/unsupported branches |
-| main.c | 88.1% | CLI arg coverage (Phase 5) |
-| repo.c | 85.9% | **Phase 7**: encrypted key/index/snapshot + v2-zstd + supersedes branches |
-| disc_locator.c | 81.6% | Drain/scan paths now covered (Phase 5) |
-| **Overall** | **90.7%** | Baseline: 78.5% (pre-Phase-1) → +12.2 pp |
+| tree.c | 89.2% | Phase 7: encrypted-fixture walk/dir/symlink/unsafe-name/unsupported branches |
+| disc_locator.c | 88.5% | **Phase 8**: catalog.db discovery, drain chunk-limit, cache_bytes_used walk, interactive prompt, mkdir_p failure |
+| repo.c | 85.9% | Phase 7: encrypted key/index/snapshot + v2-zstd + supersedes branches |
+| **Overall** | **92.4%** | Baseline: 78.5% (pre-Phase-1) → +13.9 pp |
 
 ## Phase 7: encrypted-fixture generator
 
