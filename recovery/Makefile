@@ -452,4 +452,34 @@ manifest:
 	    > MANIFEST.sha256
 	@echo "wrote MANIFEST.sha256 (top-level, $(shell wc -l < MANIFEST.sha256) entries)"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64 coverage-c
+# ── Sanitizer target ─────────────────────────────────────────────
+#
+# Rebuilds lcsas-restore with clang + AddressSanitizer, UndefinedBehavior-
+# Sanitizer, and LeakSanitizer.  Requires clang.
+#
+# NOTE: -static is dropped (sanitizer runtimes are shared DSOs).
+# NOTE: vendored sqlite3 may emit intentional UB — add per-TU opt-out
+#       if needed, documented in SANITIZER_SUPPRESSIONS.txt.
+#
+# Usage:
+#   make -C recovery sanitize
+#
+sanitize:
+	@command -v clang >/dev/null 2>&1 || { echo "[sanitize] need clang (apt install clang)"; exit 0; }
+	$(MAKE) clean
+	$(MAKE) test \
+	    CC=clang \
+	    CFLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined,leak -fno-sanitize-recover=all -std=c89 -pedantic -Wall -Wextra -Wshadow -Wno-long-long -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64" \
+	    LDFLAGS="-fsanitize=address,undefined,leak"
+	@echo "[sanitize] C unit tests: ALL OK"
+	ASAN_OPTIONS=detect_leaks=1:abort_on_error=1:halt_on_error=1:strict_string_checks=1 \
+	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+	LSAN_OPTIONS=verbosity=1:log_threads=1 \
+	LCSAS_RESTORE_BIN=$(abspath $(BUILD)/lcsas-restore) \
+	    pytest -q \
+	        ../tests/recovery_hardening/test_tier1_unit.py \
+	        ../tests/recovery_hardening/test_tier1_progress.py \
+	        ../tests/recovery_hardening/test_tier1_rescan.py
+	@echo "[sanitize] PASS: 0 ASan/UBSan/LSan findings"
+
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64 coverage-c sanitize

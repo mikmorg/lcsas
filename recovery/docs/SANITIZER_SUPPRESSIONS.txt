@@ -1,0 +1,7 @@
+# SANITIZER_SUPPRESSIONS.txt
+#
+# Suppression entries for ASan/UBSan/LSan.  Default expectation: zero entries.
+# Any suppression added here MUST have a code comment at the suppressed site
+# explaining WHY the suppression is needed (e.g. intentional UB in sqlite3).
+#
+# Format: one entry per line, standard ASAN suppression format.
