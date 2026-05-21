@@ -32,9 +32,9 @@ make -C recovery audit-gate THRESHOLD=95
 
 | Threshold | Meaning |
 |-----------|---------|
-| 85% (default) | Measured floor after Phase 8 (92.4% overall, all 16 files ≥ 85%). Prevents regressions. |
-| 90% (next step) | Achievable once `repo.c` (85.9%) gets a compressed-pack-blob fixture covering the zstd-decode branch in `read_blob`. |
-| 95% (aspirational) | Target after a fault-tolerant gcov runtime patch — current LD_PRELOAD shim works on non-coverage builds (verifies robustness; 0 prod crashes) but cannot accumulate .gcda data when fault-injecting the coverage build (gcov runtime crashes before flushing). |
+| 88% (default) | Measured floor after Phase 9 (93.9% overall, all 16 files ≥ 88%). Prevents regressions. |
+| 95% (achieved by 12 / 16 files) | tree.c, main.c, json_q.c, catalog.c, scrypt.c, path.c, b64.c, poly1305.c, pbkdf2.c, lcsas_io.c, hex.c, aes.c, sha256.c, zstd_dec.c, lcsas_io.c, poly1305.c, b64.c. |
+| 95% (aspirational for last 4) | repo.c (90.6%), disc_locator.c (88.5%), pbkdf2.c (94.7%) — the malloc-failure error branches and contrived-corruption paths need either a fault-tolerant gcov runtime patch or large amounts of fixture engineering for diminishing returns. |
 
 **Why not 100%?** Three constraints:
 1. Many `malloc`/`calloc`/`realloc` error branches require fault injection — the `make fault-inject` target (issue #165) covers some, but only branches that the test binaries actually reach.
@@ -56,12 +56,12 @@ make -C recovery audit-gate THRESHOLD=95
 | b64.c | 95.7% | |
 | poly1305.c | 95.0% | |
 | pbkdf2.c | 94.7% | |
-| main.c | 94.8% | **Phase 8**: real-fixture CLI tests (list-snapshots, verbose restore, snapshot find, --meta-disc, --pack-cache-dir, snapshot not found) |
+| tree.c | **95.3%** | **Phase 9**: 3 broken-tree blobs (missing blob, bad hex, broken subdir) + compressed sub-tree |
+| main.c | 94.8% | Phase 8: real-fixture CLI tests |
+| repo.c | **90.6%** | **Phase 9**: zstd-compressed data blob (uncompressed_length both with + without) + corrupted-zstd index + multiple keys/snapshots forcing sort |
 | lcsas_io.c | 90.3% | |
-| tree.c | 89.2% | Phase 7: encrypted-fixture walk/dir/symlink/unsafe-name/unsupported branches |
-| disc_locator.c | 88.5% | **Phase 8**: catalog.db discovery, drain chunk-limit, cache_bytes_used walk, interactive prompt, mkdir_p failure |
-| repo.c | 85.9% | Phase 7: encrypted key/index/snapshot + v2-zstd + supersedes branches |
-| **Overall** | **92.4%** | Baseline: 78.5% (pre-Phase-1) → +13.9 pp |
+| disc_locator.c | 88.5% | Phase 8: catalog.db discovery, drain chunk-limit, cache_bytes_used walk, interactive prompt, mkdir_p failure |
+| **Overall** | **93.9%** | Baseline: 78.5% (pre-Phase-1) → +15.4 pp |
 
 ## Phase 7: encrypted-fixture generator
 

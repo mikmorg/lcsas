@@ -723,7 +723,7 @@ fuzz-smoke: fuzz-json-smoke fuzz-b64-smoke fuzz-zstd-smoke fuzz-path-smoke fuzz-
 #   95%  = aspirational target (issue #162); blocked by malloc-failure
 #          branches that require fault injection to exercise (issue #165)
 #
-THRESHOLD ?= 85
+THRESHOLD ?= 88
 
 audit-gate:
 	@echo "[audit-gate] Step 1/4: coverage-c"

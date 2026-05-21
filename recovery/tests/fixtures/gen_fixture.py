@@ -126,11 +126,20 @@ def make_pack_and_index(
 
     Returns (pack_id_hex, data_blob_id_hex, root_tree_id_hex, root_tree_id_hex).
     """
-    # ── Data blob (a plain-text file payload) ─────────────────────
+    # ── Data blob (zstd-compressed file payload).
+    #
+    # Restic v2 stores pack blobs as zstd-compressed *inside* the
+    # encrypted layer (no v2 prefix byte — the decrypted payload
+    # starts directly with the zstd magic 0x28 b5 2f fd).  Exercises
+    # the inline-decompression branch in repo.c read_blob.
+    #
+    # blob_id = sha256(*uncompressed* plaintext).
+    import zstandard
     data_plain = b"hello from lcsas-restore fixture\n"
     data_blob_id = sha256(data_plain)
+    data_compressed = zstandard.ZstdCompressor().compress(data_plain)
     data_enc = encrypt_authenticated(
-        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_DATA, data_plain
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_DATA, data_compressed
     )
 
     # ── Sub-tree (nested directory contents) ──────────────────────
@@ -148,15 +157,30 @@ def make_pack_and_index(
                 "inode": 2, "device_id": 0,
                 "size": 0,
                 "links": 1,
-                "content": [],  # empty content -> exercises empty-file path
+                "content": [],  # empty content array
+            },
+            {
+                # File node with NO "content" field at all.  Hits the
+                # `content_idx < 0` branch in restore_file_node (tree.c
+                # ~line 128-131) which closes fd and returns 0.
+                "name": "no_content.txt",
+                "type": "file",
+                "mode": 420,
+                "mtime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "size": 0,
             },
         ]
     }
+    # Sub-tree is also zstd-compressed but the index entry will
+    # OMIT uncompressed_length — this exercises the probe-size branch
+    # (lcsas_zstd_decode with out=NULL) in repo.c read_blob.
     sub_tree_plain = json.dumps(sub_tree_doc).encode()
     sub_tree_blob_id = sha256(sub_tree_plain)
+    sub_tree_compressed = zstandard.ZstdCompressor().compress(sub_tree_plain)
     sub_tree_enc = encrypt_authenticated(
         MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
-        b"\x06" + b"\x00" * 15, sub_tree_plain
+        b"\x06" + b"\x00" * 15, sub_tree_compressed
     )
 
     # ── Root tree: file + dir + symlink + unsupported node ────────
@@ -235,12 +259,92 @@ def make_pack_and_index(
                 "mtime": "2026-05-21T00:00:00Z",
                 "uid": 1000, "gid": 1000,
             },
+            {
+                # Symlink with a linktarget > 1024 bytes: exercises the
+                # lcsas_json_decode_string overflow branch in tree.c.
+                # The decode fails (return -1) and the loop `continue`s
+                # without restoring the node.
+                "name": "long_target",
+                "type": "symlink",
+                "linktarget": "/" + ("x" * 2048),
+                "mode": 511,
+                "mtime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+            },
         ]
     }
     tree_plain = json.dumps(tree_doc).encode()
     tree_blob_id = sha256(tree_plain)
     tree_enc = encrypt_authenticated(
         MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_TREE, tree_plain
+    )
+
+    # ── Broken tree: contains a file whose content references a blob
+    # NOT in the index.  test_repo calls lcsas_tree_restore on this
+    # blob and expects rc != 0 — exercises restore_file_node's
+    # blob-not-in-index error branch in tree.c.
+    broken_tree_doc = {
+        "nodes": [
+            {
+                "name": "missing_content.txt",
+                "type": "file",
+                "mode": 420,
+                "mtime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "size": 10,
+                "content": ["f" * 64],   # valid hex, but not in index
+            }
+        ]
+    }
+    broken_tree_plain = json.dumps(broken_tree_doc).encode()
+    broken_tree_blob_id = sha256(broken_tree_plain)
+    broken_tree_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        b"\x0b" + b"\x00" * 15, broken_tree_plain
+    )
+
+    # Second broken tree: file content has a non-hex char (passes the
+    # size check but fails hex_decode).
+    bad_hex_tree_doc = {
+        "nodes": [
+            {
+                "name": "bad_hex.txt",
+                "type": "file",
+                "mode": 420,
+                "mtime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "size": 10,
+                "content": ["g" * 64],   # 64 chars, but 'g' isn't hex
+            }
+        ]
+    }
+    bad_hex_tree_plain = json.dumps(bad_hex_tree_doc).encode()
+    bad_hex_tree_blob_id = sha256(bad_hex_tree_plain)
+    bad_hex_tree_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        b"\x0c" + b"\x00" * 15, bad_hex_tree_plain
+    )
+
+    # Third broken tree: a root tree whose dir node points at the
+    # broken subtree above.  When lcsas_tree_restore recurses into the
+    # subdir, the recursive call fails → goto out branch (tree.c ~282).
+    bad_subdir_tree_doc = {
+        "nodes": [
+            {
+                "name": "bad_subdir",
+                "type": "dir",
+                "mode": 493,
+                "mtime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "subtree": broken_tree_blob_id.hex(),
+            }
+        ]
+    }
+    bad_subdir_tree_plain = json.dumps(bad_subdir_tree_doc).encode()
+    bad_subdir_tree_blob_id = sha256(bad_subdir_tree_plain)
+    bad_subdir_tree_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        b"\x0d" + b"\x00" * 15, bad_subdir_tree_plain
     )
 
     # ── Pack file: data + sub_tree + root_tree blobs + header + footer ──
@@ -250,22 +354,32 @@ def make_pack_and_index(
     #   type:1   (0=data, 1=tree, 2=data+compressed, 3=tree+compressed)
     #   length:4 (LE)
     #   id:32
-    pack_body = data_enc + sub_tree_enc + tree_enc
-    off_data = 0
-    off_sub  = len(data_enc)
-    off_tree = off_sub + len(sub_tree_enc)
+    pack_body = (data_enc + sub_tree_enc + tree_enc
+                 + broken_tree_enc + bad_hex_tree_enc + bad_subdir_tree_enc)
+    off_data       = 0
+    off_sub        = len(data_enc)
+    off_tree       = off_sub + len(sub_tree_enc)
+    off_broken     = off_tree + len(tree_enc)
+    off_bad_hex    = off_broken + len(broken_tree_enc)
+    off_bad_subdir = off_bad_hex + len(bad_hex_tree_enc)
     offsets = {
-        "data": (off_data, len(data_enc)),
-        "sub":  (off_sub,  len(sub_tree_enc)),
-        "tree": (off_tree, len(tree_enc)),
+        "data":       (off_data,       len(data_enc)),
+        "sub":        (off_sub,        len(sub_tree_enc)),
+        "tree":       (off_tree,       len(tree_enc)),
+        "broken":     (off_broken,     len(broken_tree_enc)),
+        "bad_hex":    (off_bad_hex,    len(bad_hex_tree_enc)),
+        "bad_subdir": (off_bad_subdir, len(bad_subdir_tree_enc)),
     }
 
     # Header: per-blob descriptors
     header = b""
     for blob_type, blob_id, (off, ln) in [
-        (0, data_blob_id,     offsets["data"]),
-        (1, sub_tree_blob_id, offsets["sub"]),
-        (1, tree_blob_id,     offsets["tree"]),
+        (0, data_blob_id,            offsets["data"]),
+        (1, sub_tree_blob_id,        offsets["sub"]),
+        (1, tree_blob_id,            offsets["tree"]),
+        (1, broken_tree_blob_id,     offsets["broken"]),
+        (1, bad_hex_tree_blob_id,    offsets["bad_hex"]),
+        (1, bad_subdir_tree_blob_id, offsets["bad_subdir"]),
     ]:
         header += struct.pack("<BI", blob_type, ln) + blob_id
     header_enc = encrypt_authenticated(
@@ -291,10 +405,14 @@ def make_pack_and_index(
                 "id": pack_id_hex,
                 "blobs": [
                     {
+                        # Compressed data blob.  uncompressed_length hint
+                        # included so repo.c read_blob takes the
+                        # "loc->uncompressed_length > 0" branch.
                         "id": data_blob_id.hex(),
                         "type": "data",
                         "offset": offsets["data"][0],
                         "length": offsets["data"][1],
+                        "uncompressed_length": len(data_plain),
                     },
                     {
                         "id": sub_tree_blob_id.hex(),
@@ -307,6 +425,24 @@ def make_pack_and_index(
                         "type": "tree",
                         "offset": offsets["tree"][0],
                         "length": offsets["tree"][1],
+                    },
+                    {
+                        "id": broken_tree_blob_id.hex(),
+                        "type": "tree",
+                        "offset": offsets["broken"][0],
+                        "length": offsets["broken"][1],
+                    },
+                    {
+                        "id": bad_hex_tree_blob_id.hex(),
+                        "type": "tree",
+                        "offset": offsets["bad_hex"][0],
+                        "length": offsets["bad_hex"][1],
+                    },
+                    {
+                        "id": bad_subdir_tree_blob_id.hex(),
+                        "type": "tree",
+                        "offset": offsets["bad_subdir"][0],
+                        "length": offsets["bad_subdir"][1],
                     },
                 ],
             }
@@ -370,12 +506,66 @@ def make_pack_and_index(
     new_index_id = sha256(new_index_enc)
     (index_dir / new_index_id.hex()).write_bytes(new_index_enc)
 
+    # FOURTH index file: v2-zstd format with a CORRUPTED zstd frame.
+    # The decrypted payload starts with 0x02 + ZSTD_MAGIC + garbage,
+    # so strip_v2 detects zstd and lcsas_zstd_decode(probe) returns -1.
+    # Exercises repo.c lines 339-347 (zstd frame error path in
+    # decrypt_repo_file). Result: decrypt_repo_file returns NULL and
+    # load_index skips this file (graceful).
+    bad_zstd_payload = b"\x02" + b"\x28\xb5\x2f\xfd" + b"\xff" * 64
+    bad_zstd_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        b"\x09" + b"\x00" * 15, bad_zstd_payload
+    )
+    bad_zstd_id = sha256(bad_zstd_enc)
+    (index_dir / bad_zstd_id.hex()).write_bytes(bad_zstd_enc)
+
+    # Make broken-tree IDs available via globals so main() can stuff
+    # them into the manifest.
+    global BROKEN_TREE_ID, BAD_HEX_TREE_ID, BAD_SUBDIR_TREE_ID
+    BROKEN_TREE_ID = broken_tree_blob_id.hex()
+    BAD_HEX_TREE_ID = bad_hex_tree_blob_id.hex()
+    BAD_SUBDIR_TREE_ID = bad_subdir_tree_blob_id.hex()
+
     return pack_id_hex, data_blob_id.hex(), tree_blob_id.hex(), tree_blob_id.hex()
 
 
+BROKEN_TREE_ID = ""
+BAD_HEX_TREE_ID = ""
+BAD_SUBDIR_TREE_ID = ""
+
+
 def make_snapshot(repo_dir: Path, tree_id_hex: str) -> str:
-    """Write a snapshot file pointing at the tree blob."""
-    snap_doc = {
+    """Write two snapshot files (different timestamps) so the snapshot
+    sort loop runs at least one swap.  Returns the latest's hex id."""
+    snap_dir = repo_dir / "snapshots"
+    snap_dir.mkdir()
+
+    # OLDER snapshot — same tree, earlier timestamp.  After sort it
+    # should appear FIRST (ascending by time string).
+    old_doc = {
+        "time": "2025-01-01T00:00:00Z",
+        "tree": tree_id_hex,
+        "paths": ["/test-old"],
+        "hostname": "test",
+        "username": "test",
+        "uid": 1000, "gid": 1000,
+        "tags": [],
+        "id": "0" * 64,
+    }
+    old_plain = json.dumps(old_doc).encode()
+    old_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        b"\x0a" + b"\x00" * 15, old_plain
+    )
+    old_id = sha256(old_enc)
+    (snap_dir / old_id.hex()).write_bytes(old_enc)
+
+    # NEWER snapshot — pointed at the same tree.  After sort it should
+    # appear LAST.  We write this one SECOND in directory order
+    # arbitrarily; depending on hash collision order in readdir, the
+    # sort loop's swap branch will fire.
+    new_doc = {
         "time": "2026-05-21T00:00:00Z",
         "tree": tree_id_hex,
         "paths": ["/test"],
@@ -385,15 +575,13 @@ def make_snapshot(repo_dir: Path, tree_id_hex: str) -> str:
         "tags": [],
         "id": "0" * 64,
     }
-    snap_plain = json.dumps(snap_doc).encode()
-    snap_enc = encrypt_authenticated(
-        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_SNAP, snap_plain
+    new_plain = json.dumps(new_doc).encode()
+    new_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_SNAP, new_plain
     )
-    snap_id = sha256(snap_enc)
-    snap_dir = repo_dir / "snapshots"
-    snap_dir.mkdir()
-    (snap_dir / snap_id.hex()).write_bytes(snap_enc)
-    return snap_id.hex()
+    new_id = sha256(new_enc)
+    (snap_dir / new_id.hex()).write_bytes(new_enc)
+    return new_id.hex()
 
 
 def main() -> int:
@@ -411,12 +599,37 @@ def main() -> int:
             return 1
     args.out.mkdir(parents=True)
 
-    # keys/ — one key file
+    # keys/ — multiple key files.  The first is a stub that won't decrypt
+    # (forces the loader to try the next one).  The second is the real
+    # one.  Filenames are crafted so the stub sorts FIRST and the real
+    # key sorts SECOND, exercising the realloc + sort loop in
+    # lcsas_repo_load_keys_dir.
     keys_dir = args.out / "keys"
     keys_dir.mkdir()
-    # Use sha256(SALT_KEY || "k0") as the filename so it's deterministic.
+    # Stub key: a file that decrypts-FAIL (MAC mismatch).  The filename
+    # starts with "0000..." so it sorts ahead of the real key.
+    stub_key_id = "0" * 64
+    (keys_dir / stub_key_id).write_text(json.dumps({
+        "created": "2026-05-21T00:00:00Z",
+        "kdf": "scrypt",
+        "N": N, "r": R, "p": P,
+        "salt": base64.b64encode(SALT_KEY).decode(),
+        # Garbage data that won't decrypt.
+        "data": base64.b64encode(b"\x00" * 64).decode(),
+    }))
+    # Real key.  Filename starts with "eb15..." (sorts after "0000...").
     key_id = hashlib.sha256(SALT_KEY + b"k0").hexdigest()
     make_key_file(keys_dir / key_id)
+    # A third stub between them to force at least one realloc-growth
+    # iteration in the sort loop swap branch.
+    middle_stub_id = "7" + "0" * 63
+    (keys_dir / middle_stub_id).write_text(json.dumps({
+        "created": "2026-05-21T00:00:00Z",
+        "kdf": "scrypt",
+        "N": N, "r": R, "p": P,
+        "salt": base64.b64encode(SALT_KEY).decode(),
+        "data": base64.b64encode(b"\x00" * 64).decode(),
+    }))
 
     # pack + index
     pack_id, data_blob_id, tree_blob_id, _snap_tree = make_pack_and_index(args.out)
@@ -431,6 +644,9 @@ def main() -> int:
         "pack_id": pack_id,
         "data_blob_id": data_blob_id,
         "tree_blob_id": tree_blob_id,
+        "broken_tree_id": BROKEN_TREE_ID,
+        "bad_hex_tree_id": BAD_HEX_TREE_ID,
+        "bad_subdir_tree_id": BAD_SUBDIR_TREE_ID,
         "snapshot_id": snap_id,
         "master_encrypt_hex": MASTER_ENCRYPT.hex(),
         "master_mac_k_hex": MASTER_MAC_K.hex(),

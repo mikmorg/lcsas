@@ -1,10 +1,13 @@
 {
   "password": "test",
   "key_file": "eb156ed0b5f6c2dbbbc838c1bc50b31419ea0d52a0037692a4ce63da1434e2e5",
-  "pack_id": "33d6ab8cb46665ff83c00e2258c304e68866ff70124f3f4e812fee84bec83782",
+  "pack_id": "ecd0a6e1a59e303bf0b647e20cbddd10469b2a8882664af80cec3a306f54e402",
   "data_blob_id": "6565160e5ca15054fd190b02fab20e4e7daf41e54d19e649d0798d7aca56c5b2",
-  "tree_blob_id": "ba0ad2810b752453a3d698f0357487e195de2e73fbad79c1d7861a6bb9bee2ac",
-  "snapshot_id": "fa811db705e8157e510170b53ad125265e1f7f25bee2980a2243feb9362e41de",
+  "tree_blob_id": "ee915c16ffdf6f53b74e49f10090923a84d6d3a507bf40b71d05136c5b337425",
+  "broken_tree_id": "b9a34a1fa85b4ccdcd91b96abdb97acd76c914ba1f99c0f9c61e08842861add3",
+  "bad_hex_tree_id": "e9b21400fad094fe6f80db621ec8e68ace890c09875e807db12e9e78d65c884a",
+  "bad_subdir_tree_id": "8d615e95dd9cd90bb4a14ee546624b8230280e4b31597c28fff105d7e8eb12f1",
+  "snapshot_id": "980a78d960bdaaca28a8efe51741df76e7291aa5c39d39394eaac0da2fc67fb7",
   "master_encrypt_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
   "master_mac_k_hex": "202122232425262728292a2b2c2d2e2f",
   "master_mac_r_hex": "303132333435363738393a3b3c3d3e3f"
