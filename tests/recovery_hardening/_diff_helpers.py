@@ -98,14 +98,21 @@ def _walk_relative(root: Path) -> dict[str, Path]:
     return out
 
 
+_MTIME_TOLERANCE_SEC = 2.0
+
+
 def diff_trees(a: Path, b: Path,
-               ignore: tuple[str, ...] = ()) -> list[str]:
+               ignore: tuple[str, ...] = (),
+               compare_mtime: bool = False) -> list[str]:
     """Compare two directory trees for tier-1↔tier-2 parity.
 
     Compares: presence in both, regular-file content (sha256), file
-    mode (st_mode & 0o7777), symlink target.  Does NOT compare:
-    mtime, ownership.  Returns a list of human-readable difference
-    strings; empty list means identical."""
+    mode (st_mode & 0o7777), symlink target.  When ``compare_mtime``
+    is set, also compares mtime with a ±2 s tolerance window (issue
+    #188).  The default is False so that callers added before tier-1
+    learned to preserve mtime keep their pre-existing semantics.
+    Returns a list of human-readable difference strings; empty list
+    means identical."""
     ignore_set = set(ignore)
     side_a = {k: v for k, v in _walk_relative(a).items() if k not in ignore_set}
     side_b = {k: v for k, v in _walk_relative(b).items() if k not in ignore_set}
@@ -155,5 +162,16 @@ def diff_trees(a: Path, b: Path,
                     f"tier2 sha256={hb[:12]}…)"
                 )
         # Directories: nothing more to compare beyond mode + presence.
+
+        # mtime parity is opt-in.  Symlinks are exempt because not
+        # every filesystem honours AT_SYMLINK_NOFOLLOW timestamps and
+        # the divergence isn't load-bearing for the caller use cases.
+        if compare_mtime and not stat.S_ISLNK(sa.st_mode):
+            dt = abs(sa.st_mtime - sb.st_mtime)
+            if dt > _MTIME_TOLERANCE_SEC:
+                out.append(
+                    f"mtime mismatch: {rel} (tier1={sa.st_mtime:.3f} "
+                    f"tier2={sb.st_mtime:.3f} diff={dt:.3f}s)"
+                )
 
     return out

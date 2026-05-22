@@ -20,9 +20,48 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define LCSAS_PROGRESS_DEFAULT_BLOBS_PER_TICK 16ULL
 #define LCSAS_PROGRESS_DEFAULT_BYTES_PER_TICK (1024ULL * 1024ULL)
+
+/* Issue #188 — preserve mtime from the restic tree node.
+ *
+ * Decode the "mtime" field on `node_idx` (an RFC 3339 string) into a
+ * struct timespec pair where ts[0] = atime, ts[1] = mtime.  Both are
+ * set to the same value (the snapshot's mtime) because restic doesn't
+ * record a useful atime separately and tier-2 (rustic) sets atime =
+ * mtime in practice.
+ *
+ * Returns 0 on success and fills `ts_out` (a 2-element array).  Returns
+ * -1 if the field is missing, malformed, or can't be parsed; the caller
+ * should treat that as "skip silently" rather than failing the restore.
+ *
+ * Unused on Windows (POSIX time semantics don't carry across; the
+ * Windows port has no working utimensat shim).
+ */
+#ifndef _WIN32
+static int
+decode_node_mtime(const char *src, const lcsas_json_tok *toks,
+                  long node_idx, struct timespec ts_out[2])
+{
+    long mt_i = lcsas_json_obj_get(src, toks, node_idx, "mtime");
+    char buf[64];
+    long long sec = 0;
+    long nsec = 0;
+
+    if (mt_i < 0 || toks[mt_i].type != LCSAS_JSON_STRING) return -1;
+    if (lcsas_json_decode_string(src, &toks[mt_i], buf, sizeof buf) < 0)
+        return -1;
+    if (lcsas_parse_iso8601_utc(buf, &sec, &nsec) != 0) return -1;
+
+    ts_out[0].tv_sec = (time_t)sec;
+    ts_out[0].tv_nsec = nsec;
+    ts_out[1].tv_sec = (time_t)sec;
+    ts_out[1].tv_nsec = nsec;
+    return 0;
+}
+#endif
 
 void
 lcsas_progress_init(lcsas_progress *p, unsigned long long total_hint)
@@ -137,13 +176,14 @@ restore_file_node(const char *repo_path,
     if (fd < 0) return -1;
 
     if (content_idx < 0 || toks[content_idx].type != LCSAS_JSON_ARRAY) {
-        /* Empty content -> empty file. */
-        close(fd);
-        return 0;
+        /* Empty content -> empty file.  Fall through to the timestamp
+         * block so an empty file still carries the snapshot mtime. */
+        blob_count = 0;
+    } else {
+        blob_count = toks[content_idx].size;
     }
-    blob_count = toks[content_idx].size;
 
-    for (t = content_idx + 1; found < blob_count; t++) {
+    for (t = content_idx + 1; content_idx >= 0 && found < blob_count; t++) {
         if (toks[t].parent == content_idx
                 && toks[t].type == LCSAS_JSON_STRING) {
             unsigned char id[32];
@@ -175,6 +215,19 @@ restore_file_node(const char *repo_path,
         }
         if (toks[t].start >= toks[content_idx].end) break;
     }
+
+#ifndef _WIN32
+    /* Issue #188 — restore the snapshot's mtime onto the file we just
+     * wrote.  futimens() updates timestamps via the open fd, which
+     * avoids a race with anything that might rename the file under us
+     * (and dodges the symlink-deref question entirely). */
+    {
+        struct timespec ts[2];
+        if (decode_node_mtime(src, toks, node_idx, ts) == 0) {
+            (void)futimens(fd, ts);
+        }
+    }
+#endif
 
     close(fd);
     return rc;
@@ -309,6 +362,17 @@ lcsas_tree_restore(const char *repo_path,
                         goto out;
                     }
                 }
+#ifndef _WIN32
+                /* Issue #188 — apply dir mtime AFTER recursing into the
+                 * subtree.  Otherwise creating children re-bumps the
+                 * parent's mtime to the restore-time clock. */
+                {
+                    struct timespec ts[2];
+                    if (decode_node_mtime((char *)blob, toks, t, ts) == 0) {
+                        (void)utimensat(AT_FDCWD, node_path, ts, 0);
+                    }
+                }
+#endif
             } else if (strcmp(type_buf, "symlink") == 0) {
                 if (lt_i >= 0) {
                     char tgt[1024];
@@ -326,6 +390,19 @@ lcsas_tree_restore(const char *repo_path,
                         fprintf(stderr, "symlink failed: %s -> %s\n",
                                 node_path, tgt);
                     }
+#ifndef _WIN32
+                    else {
+                        /* Issue #188 — set the symlink's OWN mtime,
+                         * not the target's (AT_SYMLINK_NOFOLLOW).
+                         * Best-effort: not all filesystems / kernels
+                         * support this; ignore failure. */
+                        struct timespec ts[2];
+                        if (decode_node_mtime((char *)blob, toks, t, ts) == 0) {
+                            (void)utimensat(AT_FDCWD, node_path, ts,
+                                            AT_SYMLINK_NOFOLLOW);
+                        }
+                    }
+#endif
                 }
             } else {
                 fprintf(stderr, "skip unsupported node type %s: %s\n",

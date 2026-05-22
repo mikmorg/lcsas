@@ -135,3 +135,127 @@ lcsas_mkdir_p(const char *path)
     }
     return 0;
 }
+
+/* Parse a fixed-width run of `n` decimal digits starting at *pp.
+ * Advances *pp past the digits on success.  Returns 0/-1. */
+static int
+parse_fixed_digits(const char **pp, int n, long *out)
+{
+    const char *p = *pp;
+    long v = 0;
+    int i;
+    for (i = 0; i < n; i++) {
+        if (p[i] < '0' || p[i] > '9') return -1;
+        v = v * 10 + (p[i] - '0');
+    }
+    *pp = p + n;
+    *out = v;
+    return 0;
+}
+
+/* Howard Hinnant's days-from-civil algorithm (public domain).  Given a
+ * proleptic Gregorian civil date (y, m, d) with 1 <= m <= 12 and
+ * 1 <= d <= 31, returns the number of days from 1970-01-01 (negative
+ * for dates before).  Pure integer arithmetic — no libc, no tzdata. */
+static long long
+days_from_civil(long y, long m, long d)
+{
+    long long yy = (long long)(m <= 2 ? y - 1 : y);
+    long long era = (yy >= 0 ? yy : yy - 399) / 400;
+    long long yoe = yy - era * 400;                 /* [0, 399]     */
+    long long mp = (m + (m > 2 ? -3 : 9));          /* [0, 11]      */
+    long long doy = (153 * mp + 2) / 5 + d - 1;     /* [0, 365]     */
+    long long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; /* [0, 146096] */
+    return era * 146097 + doe - 719468;
+}
+
+int
+lcsas_parse_iso8601_utc(const char *s, long long *out_sec, long *out_nsec)
+{
+    /* Format: YYYY-MM-DDTHH:MM:SS[.fraction](Z|+HH:MM|-HH:MM)
+     *
+     * We do not allow trailing junk — restic emits a clean RFC 3339
+     * timestamp, so anything else is a sign of corruption or unknown
+     * provenance and we'd rather skip than guess.
+     */
+    long year = 0, mon = 0, day = 0, hour = 0, min = 0, sec = 0;
+    long nsec = 0;
+    long long secs;
+    int tz_sign = 0;
+    long tz_h = 0, tz_m = 0;
+    const char *p;
+
+    if (!s || !out_sec || !out_nsec) return -1;
+    p = s;
+
+    if (parse_fixed_digits(&p, 4, &year) != 0) return -1;
+    if (*p++ != '-') return -1;
+    if (parse_fixed_digits(&p, 2, &mon) != 0) return -1;
+    if (*p++ != '-') return -1;
+    if (parse_fixed_digits(&p, 2, &day) != 0) return -1;
+    if (*p++ != 'T' && *(p - 1) != 't') return -1;
+    if (parse_fixed_digits(&p, 2, &hour) != 0) return -1;
+    if (*p++ != ':') return -1;
+    if (parse_fixed_digits(&p, 2, &min) != 0) return -1;
+    if (*p++ != ':') return -1;
+    if (parse_fixed_digits(&p, 2, &sec) != 0) return -1;
+
+    /* Optional fractional seconds.  Restic emits up to 9 digits
+     * (nanoseconds).  We accept any digit count, capture up to 9, and
+     * silently truncate extra precision rather than failing. */
+    if (*p == '.') {
+        int i = 0;
+        long scale = 100000000L;     /* 1e8: digit 0 -> nsec */
+        p++;
+        while (*p >= '0' && *p <= '9') {
+            if (i < 9) {
+                nsec += (long)(*p - '0') * scale;
+                scale /= 10;
+            }
+            p++;
+            i++;
+        }
+        if (i == 0) return -1;       /* "12.X" with no digits */
+    }
+
+    /* Mandatory timezone.  rustic emits `+HH:MM` (or `-HH:MM`); the
+     * RFC 3339 / ISO 8601 alias `Z` means +00:00. */
+    if (*p == 'Z' || *p == 'z') {
+        tz_sign = 0;
+        p++;
+    } else if (*p == '+' || *p == '-') {
+        tz_sign = (*p == '-') ? -1 : 1;
+        p++;
+        if (parse_fixed_digits(&p, 2, &tz_h) != 0) return -1;
+        if (*p++ != ':') return -1;
+        if (parse_fixed_digits(&p, 2, &tz_m) != 0) return -1;
+    } else {
+        return -1;
+    }
+
+    if (*p != '\0') return -1;       /* trailing garbage */
+
+    /* Sanity-clamp the fields.  We don't try to be a full calendar
+     * validator; days_from_civil is well-defined for any input but
+     * obviously wrong values (hour 99) should be rejected. */
+    if (mon < 1 || mon > 12) return -1;
+    if (day < 1 || day > 31) return -1;
+    if (hour < 0 || hour > 23) return -1;
+    if (min < 0 || min > 59) return -1;
+    if (sec < 0 || sec > 60) return -1;       /* 60 = leap second */
+    if (tz_h < 0 || tz_h > 23) return -1;
+    if (tz_m < 0 || tz_m > 59) return -1;
+
+    secs = days_from_civil(year, mon, day) * 86400LL
+         + (long long)hour * 3600
+         + (long long)min * 60
+         + (long long)sec;
+    if (tz_sign != 0) {
+        long long off = (long long)tz_h * 3600 + (long long)tz_m * 60;
+        secs -= (long long)tz_sign * off;
+    }
+
+    *out_sec = secs;
+    *out_nsec = nsec;
+    return 0;
+}
