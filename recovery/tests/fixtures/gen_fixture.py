@@ -325,6 +325,38 @@ def make_pack_and_index(
         b"\x0c" + b"\x00" * 15, bad_hex_tree_plain
     )
 
+    # Missing-pack fictional blobs.  These index entries reference a
+    # pack_id that does NOT exist on disk.  Used to exercise:
+    #   - tree.c:157  (restore_file_node read_blob fail)
+    #   - tree.c:201  (lcsas_tree_restore read_blob fail for tree blob)
+    #   - repo.c:833-834 ("pack not found" diagnostic in read_blob)
+    MISSING_PACK_ID = b"\xff" * 32
+    MISSING_DATA_BLOB_ID = b"\xee" * 32
+    MISSING_TREE_BLOB_ID = b"\xdd" * 32
+
+    # Tree blob whose content references the missing data blob.  Real
+    # encrypted tree (in the real pack), but its file node points at a
+    # blob whose pack file is absent → restore_file_node hits 157.
+    missing_content_tree_doc = {
+        "nodes": [
+            {
+                "name": "needs_missing_blob.txt",
+                "type": "file",
+                "mode": 420,
+                "mtime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "size": 100,
+                "content": [MISSING_DATA_BLOB_ID.hex()],
+            }
+        ]
+    }
+    missing_content_tree_plain = json.dumps(missing_content_tree_doc).encode()
+    missing_content_tree_blob_id = sha256(missing_content_tree_plain)
+    missing_content_tree_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        b"\x15" + b"\x00" * 15, missing_content_tree_plain
+    )
+
     # Third broken tree: a root tree whose dir node points at the
     # broken subtree above.  When lcsas_tree_restore recurses into the
     # subdir, the recursive call fails → goto out branch (tree.c ~282).
@@ -409,26 +441,29 @@ def make_pack_and_index(
     #   id:32
     pack_body = (data_enc + sub_tree_enc + tree_enc
                  + broken_tree_enc + bad_hex_tree_enc + bad_subdir_tree_enc
-                 + wrong_nodes_enc + long_name_enc + long_type_enc)
-    off_data         = 0
-    off_sub          = len(data_enc)
-    off_tree         = off_sub + len(sub_tree_enc)
-    off_broken       = off_tree + len(tree_enc)
-    off_bad_hex      = off_broken + len(broken_tree_enc)
-    off_bad_subdir   = off_bad_hex + len(bad_hex_tree_enc)
-    off_wrong_nodes  = off_bad_subdir + len(bad_subdir_tree_enc)
-    off_long_name    = off_wrong_nodes + len(wrong_nodes_enc)
-    off_long_type    = off_long_name + len(long_name_enc)
+                 + wrong_nodes_enc + long_name_enc + long_type_enc
+                 + missing_content_tree_enc)
+    off_data            = 0
+    off_sub             = len(data_enc)
+    off_tree            = off_sub + len(sub_tree_enc)
+    off_broken          = off_tree + len(tree_enc)
+    off_bad_hex         = off_broken + len(broken_tree_enc)
+    off_bad_subdir      = off_bad_hex + len(bad_hex_tree_enc)
+    off_wrong_nodes     = off_bad_subdir + len(bad_subdir_tree_enc)
+    off_long_name       = off_wrong_nodes + len(wrong_nodes_enc)
+    off_long_type       = off_long_name + len(long_name_enc)
+    off_missing_content = off_long_type + len(long_type_enc)
     offsets = {
-        "data":         (off_data,         len(data_enc)),
-        "sub":          (off_sub,          len(sub_tree_enc)),
-        "tree":         (off_tree,         len(tree_enc)),
-        "broken":       (off_broken,       len(broken_tree_enc)),
-        "bad_hex":      (off_bad_hex,      len(bad_hex_tree_enc)),
-        "bad_subdir":   (off_bad_subdir,   len(bad_subdir_tree_enc)),
-        "wrong_nodes":  (off_wrong_nodes,  len(wrong_nodes_enc)),
-        "long_name":    (off_long_name,    len(long_name_enc)),
-        "long_type":    (off_long_type,    len(long_type_enc)),
+        "data":             (off_data,            len(data_enc)),
+        "sub":              (off_sub,             len(sub_tree_enc)),
+        "tree":             (off_tree,            len(tree_enc)),
+        "broken":           (off_broken,          len(broken_tree_enc)),
+        "bad_hex":          (off_bad_hex,         len(bad_hex_tree_enc)),
+        "bad_subdir":       (off_bad_subdir,      len(bad_subdir_tree_enc)),
+        "wrong_nodes":      (off_wrong_nodes,     len(wrong_nodes_enc)),
+        "long_name":        (off_long_name,       len(long_name_enc)),
+        "long_type":        (off_long_type,       len(long_type_enc)),
+        "missing_content":  (off_missing_content, len(missing_content_tree_enc)),
     }
 
     # Header: per-blob descriptors
@@ -443,6 +478,7 @@ def make_pack_and_index(
         (1, wrong_nodes_blob_id,     offsets["wrong_nodes"]),
         (1, long_name_blob_id,       offsets["long_name"]),
         (1, long_type_blob_id,       offsets["long_type"]),
+        (1, missing_content_tree_blob_id, offsets["missing_content"]),
     ]:
         header += struct.pack("<BI", blob_type, ln) + blob_id
     header_enc = encrypt_authenticated(
@@ -524,6 +560,33 @@ def make_pack_and_index(
                         "type": "tree",
                         "offset": offsets["long_type"][0],
                         "length": offsets["long_type"][1],
+                    },
+                    {
+                        "id": missing_content_tree_blob_id.hex(),
+                        "type": "tree",
+                        "offset": offsets["missing_content"][0],
+                        "length": offsets["missing_content"][1],
+                    },
+                ],
+            },
+            {
+                # Fictional pack — does NOT exist on disk.  The two
+                # blob entries below reference this pack so read_blob
+                # can never find them.  Used to exercise tree.c:157,
+                # tree.c:201, and repo.c:833-834.
+                "id": MISSING_PACK_ID.hex(),
+                "blobs": [
+                    {
+                        "id": MISSING_DATA_BLOB_ID.hex(),
+                        "type": "data",
+                        "offset": 0,
+                        "length": 100,
+                    },
+                    {
+                        "id": MISSING_TREE_BLOB_ID.hex(),
+                        "type": "tree",
+                        "offset": 100,
+                        "length": 200,
                     },
                 ],
             }
@@ -642,12 +705,15 @@ def make_pack_and_index(
     # them into the manifest.
     global BROKEN_TREE_ID, BAD_HEX_TREE_ID, BAD_SUBDIR_TREE_ID
     global WRONG_NODES_ID, LONG_NAME_ID, LONG_TYPE_ID
+    global MISSING_CONTENT_TREE_ID, MISSING_TREE_ID
     BROKEN_TREE_ID = broken_tree_blob_id.hex()
     BAD_HEX_TREE_ID = bad_hex_tree_blob_id.hex()
     BAD_SUBDIR_TREE_ID = bad_subdir_tree_blob_id.hex()
     WRONG_NODES_ID = wrong_nodes_blob_id.hex()
     LONG_NAME_ID = long_name_blob_id.hex()
     LONG_TYPE_ID = long_type_blob_id.hex()
+    MISSING_CONTENT_TREE_ID = missing_content_tree_blob_id.hex()
+    MISSING_TREE_ID = MISSING_TREE_BLOB_ID.hex()
 
     return pack_id_hex, data_blob_id.hex(), tree_blob_id.hex(), tree_blob_id.hex()
 
@@ -659,6 +725,8 @@ BROKEN_SNAP_ID = ""
 WRONG_NODES_ID = ""
 LONG_NAME_ID = ""
 LONG_TYPE_ID = ""
+MISSING_CONTENT_TREE_ID = ""
+MISSING_TREE_ID = ""
 
 
 def make_snapshot(repo_dir: Path, tree_id_hex: str,
@@ -1019,6 +1087,8 @@ def main() -> int:
             "wrong_nodes_tree_id": WRONG_NODES_ID,
             "long_name_tree_id": LONG_NAME_ID,
             "long_type_tree_id": LONG_TYPE_ID,
+            "missing_content_tree_id": MISSING_CONTENT_TREE_ID,
+            "missing_tree_id": MISSING_TREE_ID,
             "snapshot_id": snap_id,
             "broken_snapshot_id": BROKEN_SNAP_ID,
             "master_encrypt_hex": MASTER_ENCRYPT.hex(),

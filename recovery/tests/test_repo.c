@@ -34,7 +34,7 @@ static int fails = 0;
 #define FIXTURE_TREE_BLOB_HEX  \
     "ee915c16ffdf6f53b74e49f10090923a84d6d3a507bf40b71d05136c5b337425"
 #define FIXTURE_PACK_HEX       \
-    "2dbdc082789aebf4583955d0048cc7be9f210fd600889c163dc3f125df36de20"
+    "7dd0ffb9f98280b996899cf0a2e9a53c4f81ee55fc783df8066115e46b28eddd"
 #define FIXTURE_BROKEN_TREE_HEX  \
     "b9a34a1fa85b4ccdcd91b96abdb97acd76c914ba1f99c0f9c61e08842861add3"
 #define FIXTURE_BAD_HEX_TREE_HEX \
@@ -47,6 +47,11 @@ static int fails = 0;
     "95094ebdf69956bc13345d8204a1263f1f11a04c2237783ce640da2763f698a6"
 #define FIXTURE_LONG_TYPE_TREE_HEX \
     "1ae33da29ce6b897a97828272948ec450f1aa93e721365c5ceae9bf6f2e82dc0"
+#define FIXTURE_MISSING_CONTENT_TREE_HEX \
+    "2c36600359aa0ab187e85c582a93fa2710a1a42516dc12c0110c3ac88e9f9cbe"
+/* Fictional tree blob whose pack file does not exist on disk. */
+#define FIXTURE_MISSING_TREE_HEX \
+    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 
 /* Locate the fixture directory.  Honour LCSAS_TEST_FIXTURE_DIR for
  * out-of-tree builds; otherwise assume cwd is repo root or recovery/. */
@@ -204,8 +209,8 @@ main(void)
             fprintf(stderr, "FAIL: load_index rc=%d\n", rc);
             fails++;
         }
-        if (ix.count != 9) {
-            fprintf(stderr, "FAIL: index count=%zu, want 9\n", ix.count);
+        if (ix.count != 12) {
+            fprintf(stderr, "FAIL: index count=%zu, want 12\n", ix.count);
             fails++;
         }
 
@@ -527,6 +532,53 @@ main(void)
                 if (rc2 == 0) {
                     fprintf(stderr,
                             "FAIL: bad-hex tree should fail but rc=0\n");
+                    fails++;
+                }
+                {
+                    char cmd[1024];
+                    snprintf(cmd, sizeof cmd, "rm -rf %s", tdir);
+                    (void)system(cmd);
+                }
+            }
+        }
+
+        /* Tree blob whose content references a blob in a pack that
+         * does NOT exist on disk.  restore_file_node calls
+         * lcsas_repo_read_blob which can't find the pack and returns
+         * -1 → tree.c:157 (rc = -1; break). */
+        {
+            char tdir[] = "/tmp/lcsas_test_miss_content_XXXXXX";
+            if (mkdtemp(tdir)) {
+                int rc2 = lcsas_tree_restore(
+                    repo, &mk, &ix, FIXTURE_MISSING_CONTENT_TREE_HEX,
+                    tdir, tdir, NULL, NULL
+                );
+                if (rc2 == 0) {
+                    fprintf(stderr,
+                            "FAIL: missing-content tree should fail rc=0\n");
+                    fails++;
+                }
+                {
+                    char cmd[1024];
+                    snprintf(cmd, sizeof cmd, "rm -rf %s", tdir);
+                    (void)system(cmd);
+                }
+            }
+        }
+
+        /* Tree blob whose own pack does NOT exist on disk.  The
+         * lcsas_repo_read_blob for the tree blob itself fails →
+         * tree.c:201 (return -1) and repo.c:833-834 ("pack not found"). */
+        {
+            char tdir[] = "/tmp/lcsas_test_miss_tree_XXXXXX";
+            if (mkdtemp(tdir)) {
+                int rc2 = lcsas_tree_restore(
+                    repo, &mk, &ix, FIXTURE_MISSING_TREE_HEX,
+                    tdir, tdir, NULL, NULL
+                );
+                if (rc2 == 0) {
+                    fprintf(stderr,
+                            "FAIL: missing-tree blob should fail rc=0\n");
                     fails++;
                 }
                 {
