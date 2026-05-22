@@ -139,6 +139,41 @@ The `LCSAS_STRESS_LOOKUPS=N` env var on the binary is what
 after `lcsas_repo_load_index` returns, prints a single `[bench]` line
 on stderr, and exits.  Production paths are unaffected.
 
+## Differential oracle (`LCSAS_DIFF=1`)
+
+Phase 14 added a tier-1 ↔ tier-2 byte-identical comparison.  For each
+content profile (small_file, many_small_files, one_large_file,
+deep_tree, unicode_names, symlinks_and_modes, empty_dir,
+large_dir_node) the test:
+
+1. Builds a real restic-format repo via `rustic init` + `rustic backup`
+2. Restores via `lcsas-restore`  (tier 1) into `tier1_out/`
+3. Restores via `rustic restore` (tier 2) into `tier2_out/`
+4. Asserts byte-identical trees: same content, same mode, same
+   symlink targets, same presence
+
+The `small_file` profile runs in the default integration suite as a
+smoke test.  The remaining 7 profiles are opt-in:
+
+```bash
+LCSAS_DIFF=1 pytest tests/recovery_hardening/test_tier1_vs_tier2_differential.py -v
+```
+
+**Known intentional divergence** (test profiles MUST NOT trip on
+this):
+- Absolute-target symlinks: tier-1 rejects them as a security
+  measure (see `lcsas_path_safe_symlink` in path.c).  Tier-2
+  honours them.
+
+Phase 14 surfaced two real bugs on first run:
+- `lcsas_create_file` hardcoded mode 0600 → fixed to honour the
+  tree node's "mode" field via `fchmod` after `open()`.
+- `lcsas_mkdir_p` hardcoded 0700 for all components → fixed to
+  `chmod()` the leaf directory to the tree node's "mode" field.
+
+Both were silent permission-downgrades on restore.  See PR thread
+for details.
+
 ## Known exclusions
 
 (arena.c was removed in PR #175 — no longer a coverage exception.)
