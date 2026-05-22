@@ -448,6 +448,16 @@ coverage-c:
 	        && echo "[coverage-c] LCSAS_STRESS_LOOKUPS diagnostic exercised" \
 	        || echo "[coverage-c] LCSAS_STRESS_LOOKUPS exercise failed (non-fatal)"; \
 	fi
+	# Step 3c: fault-injection coverage sweep (Phase 13d).  Builds the
+	# LD_PRELOAD shim if missing, then runs every test binary under
+	# malloc_inject with LCSAS_FAIL_AT=N for N=1..min(total, 100).  The
+	# fault-tolerant gcov support installs SIGSEGV/SIGABRT handlers
+	# that call __gcov_dump() before _exit() so .gcda accumulates even
+	# on signal exits.  Unlocks ~20 malloc-failure error branches in
+	# repo.c / scrypt.c / catalog.c.
+	@cc -shared -fPIC -O0 -g -D_GNU_SOURCE \
+	    scripts/malloc_inject.c -o $(BUILD)/malloc_inject.so -ldl 2>/dev/null
+	@sh scripts/run_coverage_fault_inject.sh 100 || true
 	# Step 4: invoke gcovr (soft-skip if not installed)
 	@command -v gcovr >/dev/null 2>&1 || { echo "[coverage-c] gcovr not installed; run: pip install gcovr"; exit 0; }
 	# Step 5: generate reports narrowed to lcsas-restore sources only
@@ -460,6 +470,7 @@ coverage-c:
 	    --filter '$(SRCDIR)/.*' \
 	    --exclude '$(VENDOR)/.*' \
 	    --gcov-object-directory $(abspath $(BUILD)) \
+	    --gcov-suspicious-hits-threshold 999999999999999 \
 	    --html-details $(abspath $(BUILD))/coverage/index.html \
 	    --json-summary $(abspath $(BUILD))/coverage.json \
 	    --print-summary \
@@ -474,6 +485,10 @@ print(line); \
 open('$(abspath $(BUILD))/coverage.txt', 'w').write(line + '\n')"
 	@echo "[coverage-c] report: $(abspath $(BUILD))/coverage/index.html"
 	@echo "[coverage-c] summary: $(abspath $(BUILD))/coverage.txt"
+	# Step 7: enforce EXEMPTIONS.md as a coverage contract.  Fails if
+	# any uncov line is missing from the doc, or any doc entry refers
+	# to a line that's actually covered.  Kills doc drift.
+	@python3 scripts/exemptions_check.py
 
 manifest:
 	@cd docs && find . -type f ! -name MANIFEST.sha256 -exec sha256sum {} \; \

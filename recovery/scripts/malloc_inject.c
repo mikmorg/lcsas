@@ -31,10 +31,18 @@
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+/* Forward declaration of libgcov's flush-and-write entry point.
+ * Available since GCC 11; calls fwrite/etc. so MUST run before
+ * the process exits if we want .gcda data to land.
+ * If linker complains, build with -lgcov in the shim's link line —
+ * but typically the instrumented test binary already pulls libgcov in. */
+extern void __gcov_dump(void);
 
 #define BOOTSTRAP_SIZE 65536
 
@@ -133,4 +141,51 @@ static void summary(void) {
     if (getenv("LCSAS_FAIL_QUIET") == NULL) {
         fprintf(stderr, "[malloc_inject] total allocations: %ld\n", alloc_count);
     }
+}
+
+/* Fault-tolerant gcov support.
+ *
+ * Coverage-instrumented binaries call __gcov_dump() at normal exit to
+ * write .gcda files.  When we deliberately fail a malloc to exercise
+ * production-code error paths, the process may crash mid-execution
+ * (SIGSEGV from a NULL deref the production code didn't expect — these
+ * are the bugs we WANT to find) OR may exit cleanly via the error
+ * branch.  Either way, .gcda must flush.
+ *
+ * The trick: install SIGSEGV/SIGABRT/etc. handlers that
+ *   1. DISABLE further fault injection (otherwise __gcov_dump's own
+ *      mallocs would fail and the handler would recurse into the
+ *      same crash),
+ *   2. call __gcov_dump() to write counters,
+ *   3. _exit(1) without touching libc state.
+ *
+ * Enable by setting LCSAS_FAULT_INJECT_GCOV=1 alongside LCSAS_FAIL_AT.
+ * Without that env var, the handlers are not installed (avoids
+ * confusing crash diagnostics when fault-inject isn't intended). */
+
+static void
+gcov_dump_and_exit(int signo)
+{
+    (void)signo;
+    /* Critical: disable further fault injection BEFORE calling
+     * __gcov_dump.  Otherwise libgcov's own malloc would fail and
+     * we'd recurse into the same crash. */
+    fail_at = -1;
+    __gcov_dump();
+    _exit(1);
+}
+
+__attribute__((constructor))
+static void install_gcov_handlers(void)
+{
+    if (getenv("LCSAS_FAULT_INJECT_GCOV") == NULL) return;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = gcov_dump_and_exit;
+    sa.sa_flags = SA_RESETHAND;  /* one-shot — second signal aborts */
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGABRT, &sa, NULL);
+    sigaction(SIGBUS,  &sa, NULL);
+    sigaction(SIGFPE,  &sa, NULL);
 }

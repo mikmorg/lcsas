@@ -805,6 +805,60 @@ def test_fixture_target_unwritable_fails_cleanly(tmp_path: Path) -> None:
     assert "cannot create target dir" in err, err
 
 
+def test_fixture_supersedes_overflow_load_fails(tmp_path: Path) -> None:
+    """Plant an index file with 8193 supersedes entries — exercises
+    repo.c lines 534-539 (the supersedes-overflow diagnostic + goto out)
+    AND main.c line 375 (ERROR: index load failed).
+
+    Uses a COPY of the fixture so the overflow doesn't pollute the
+    real one (the overflow causes load_index to return -1 entirely)."""
+    repo = _fixture_repo()
+    if repo is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    bin_path = _find_bin()
+    pwfile = _make_pwfile(tmp_path)
+
+    import shutil
+    fixture_copy = tmp_path / "repo_with_overflow"
+    shutil.copytree(repo, fixture_copy)
+
+    # Build an encrypted index file with 8193 supersedes refs.
+    import hashlib as _hashlib
+    import json as _json
+    import sys as _sys
+    repo_root = Path(__file__).resolve().parents[2]
+    _sys.path.insert(0, str(repo_root / "recovery" / "tests" / "fixtures"))
+    from gen_fixture import (  # type: ignore[import-not-found]
+        MASTER_ENCRYPT,
+        MASTER_MAC_K,
+        MASTER_MAC_R,
+        encrypt_authenticated,
+    )
+
+    refs = [f"{i:064x}" for i in range(8193)]
+    doc = {"supersedes": refs, "packs": []}
+    plain = _json.dumps(doc, separators=(",", ":")).encode()
+    enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        b"\x16" + b"\x00" * 15, plain,
+    )
+    new_id = _hashlib.sha256(enc).hexdigest()
+    (fixture_copy / "index" / new_id).write_bytes(enc)
+
+    res = _run(
+        bin_path,
+        "--repo", str(fixture_copy),
+        "--password-file", str(pwfile),
+        "--target", str(tmp_path / "restored"),
+        timeout=30,
+    )
+    assert res.returncode != 0
+    err = res.stderr
+    assert "supersedes overflow" in err, err
+    # main.c also reports "index load failed" via the goto out chain.
+    assert "index load failed" in err, err
+
+
 def test_fixture_pack_cache_dir_speeds_repeat_restore(tmp_path: Path) -> None:
     """Setting LCSAS_PACK_CACHE_DIR exercises main.c lines 293 (cache
     dir set) and the disc_locator's cache_dir + drain_disc copy paths.

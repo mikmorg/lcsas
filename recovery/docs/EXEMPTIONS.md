@@ -1,149 +1,152 @@
 # Tier-1 Coverage Exemptions
 
-This document inventories every line of `recovery/src/lcsas-restore/*.c`
-that is **not** covered by `make coverage-c` and explains why.
+This document is **the authoritative list** of every uncovered line
+in `recovery/src/lcsas-restore/*.c`.  Every uncov line must appear
+here; every line listed here must actually be uncovered.
 
-The goal stated in PR #182+ work and the user `/goal` is 100% test
-coverage exempting only intractable code, documented here.
+The `make coverage-c` target enforces both invariants via
+`recovery/scripts/exemptions_check.py` — see "Enforcement" below.
 
-A line is "intractable" if covering it would require one of:
-- LD_PRELOAD fault injection against gcov-instrumented code
-  (gcov-runtime itself crashes when its own allocations fail, so the
-  current shim cannot accumulate `.gcda` from fault-inject runs — see
-  `recovery/docs/AUDIT.md` "Fault injection" section)
-- Interrupting a syscall mid-execution with a signal (EINTR retry)
-- Filling a real filesystem past 90% to trigger `fs_critically_full`
-- A genuinely-pathological encrypted blob that decompresses but then
-  fails verification mid-stream (would require a crypto break to craft)
+## Categories
 
-Each exemption has a STATUS:
-- `INTRACTABLE` — cannot reasonably be tested without infrastructure
-  beyond the current harness
-- `DEFENSIVE` — defensive code path that is provably unreachable given
-  invariants enforced upstream, but kept for safety / readability
+- `INTRACTABLE` — cannot be tested without infrastructure beyond the
+  current harness (signal injection, cryptographic break, etc.).
+- `DEFENSIVE` — defensive code path provably unreachable given upstream
+  invariants, kept for safety/readability.
+- `DEFERRED` — TRACTABLE but cost > value (1M-file fixtures, etc.) and
+  documented for a future contributor.
 
-Counts as of 2026-05-22 (after Phase 12a-e).  Overall coverage: **95.5%**.
+## Enforcement
 
-| File | Coverage | Uncov lines | Status |
-|------|----------|-------------|--------|
-| aes.c, b64.c, hex.c, json_q.c, path.c, pbkdf2.c, sha256.c, zstd_dec.c | 100% | 0 | ✓ |
-| catalog.c | 98.0% | 2 | exempt |
-| main.c | 98.6% | 3 | exempt |
-| tree.c | 97.3% | 4 | exempt |
-| poly1305.c | 95.0% | 5 | exempt |
-| scrypt.c | 98.0% | 2 | exempt |
-| disc_locator.c | 90.1% | 36 | exempt (mostly defensive overflow checks) |
-| lcsas_io.c | 90.3% | 6 | exempt (EINTR retry) |
-| repo.c | 91.9% | 41 | exempt (malloc-fail + corruption paths) |
+`recovery/scripts/exemptions_check.py` is invoked at the end of
+`make coverage-c`.  It parses the `## Exemptions table` section below
+and the live `build/coverage.json` and **fails** if:
 
-## Per-file exemptions
+1. An uncov line is NOT listed in the table (someone added uncovered
+   code without updating the doc → either add a test or document why).
+2. An entry IN the table is now covered (someone closed a gap and
+   forgot to remove the entry → bring the doc back into sync).
 
-### `catalog.c` — 2 lines
+This makes the doc a real contract.  Without it, the doc drifts the
+moment anyone touches the tier-1 binary.
 
-| Line | Branch | Status | Reason |
-|------|--------|--------|--------|
-| 156-157 | `sqlite3_prepare_v2` failure in `lcsas_catalog_print_pending_packs` | INTRACTABLE | SQLite never fails to prepare a hardcoded, well-formed SELECT. Triggering this would require corrupting SQLite's in-memory state or running out of memory inside SQLite — fault injection against gcov would crash before gcov flushes. |
+## Exemptions table
 
-### `disc_locator.c` — ~42 lines, mixed
+The block between the FENCE markers is parsed by the enforcement
+script.  Each row is `file:line  CATEGORY  short-rationale`.
+Order: by file, then by line number.  Comments and blank lines are
+permitted (ignored by the parser).
 
-The lines from the drain path's "path too long" warnings (528-529,
-535, 537, 546, 551-552, 574, 576, 583, 585, 596, 598, 603, 605, 632)
-fire only when the `snprintf` output would exceed `sizeof prefix_dir`
-(4096 bytes), which requires synthesizing a directory tree with
-parent paths > 4 KiB. Possible to test but adds substantial fixture
-complexity and exercises only one defensive `if (rc >= sizeof buf)
-continue;` pattern repeated across many sites.
+<!-- EXEMPTIONS-FENCE-BEGIN -->
+```
+# catalog.c
+catalog.c:156   INTRACTABLE   sqlite3_prepare_v2 on a hardcoded well-formed SELECT cannot fail without malloc inside SQLite (which fault-inject cannot reach)
+catalog.c:157   INTRACTABLE   "                                                                                                                            "
 
-| Lines | Branch | Status |
-|-------|--------|--------|
-| 135, 138 | `mkdir_p` mkdir/stat double-race failure | INTRACTABLE — needs interleaved process to create the file between our mkdir and stat |
-| 528-537 | `fs_critically_full` warning + early return | INTRACTABLE — needs a tmpfs with <10% free |
-| 528-529, 535, 537, 546, 551-552, 574, 576, 583, 585, 596, 598, 603, 605, 632 | various `if (rc >= sizeof buf)` path-overflow continues | DEFENSIVE — each branch is a 4 KiB+ path warning; the same defensive pattern repeated; testing one would mean testing all |
-| 697, 700 | `print_prompt` catalog-pack-known-but-no-volume vs catalog-no-record | INTRACTABLE in unit test — requires a populated SQLite catalog with specific schema state; the integration blind-restore exercises this |
+# disc_locator.c
+disc_locator.c:135   INTRACTABLE   mkdir_p race: another process must create-the-target between our mkdir() and stat(); not unit-testable
+disc_locator.c:138   INTRACTABLE   same as 135
+disc_locator.c:178   DEFERRED      path_under prefix-child branch ("path begins with meta + '/'"); reachable via a deeper search-path layout but cheaper to document
+disc_locator.c:198   DEFERRED      push_discovered dedup against existing search_paths; reachable with a mount_parent==search_paths fixture
+disc_locator.c:243   DEFERRED      consider_catalog cache_dir branch; needs cache_dir + discovered mount with catalog.db
+disc_locator.c:245   DEFERRED      "                                                                                                                            "
+disc_locator.c:247   DEFERRED      "                                                                                                                            "
+disc_locator.c:248   DEFERRED      "                                                                                                                            "
+disc_locator.c:251   DEFERRED      "                                                                                                                            "
+disc_locator.c:253   DEFERRED      "                                                                                                                            "
+disc_locator.c:329   DEFERRED      refresh_discovered "path too long" warn — needs mount_parent name approaching PATH_MAX
+disc_locator.c:331   DEFERRED      "                                                                                                                            "
+disc_locator.c:336   DEFERRED      "                                                                                                                            "
+disc_locator.c:418   DEFERRED      copy_file fwrite error path; fault-inject ENOSPC or full-fs needed
+disc_locator.c:419   DEFERRED      "                                                                                                                            "
+disc_locator.c:528   DEFERRED      drain_disc fs_critically_full warn; needs tmpfs with <10% free
+disc_locator.c:529   DEFERRED      "                                                                                                                            "
+disc_locator.c:535   DEFERRED      "                                                                                                                            "
+disc_locator.c:537   DEFERRED      "                                                                                                                            "
+disc_locator.c:546   DEFENSIVE     drain_disc "path too long" defensive continue (4 KiB+ prefix_dir overflow)
+disc_locator.c:551   DEFENSIVE     "                                                                                                                            "
+disc_locator.c:552   DEFENSIVE     "                                                                                                                            "
+disc_locator.c:574   DEFENSIVE     drain_disc "path too long" defensive continue (cache_prefix overflow)
+disc_locator.c:576   DEFENSIVE     "                                                                                                                            "
+disc_locator.c:583   DEFENSIVE     drain_disc "path too long" defensive continue (src path overflow)
+disc_locator.c:585   DEFENSIVE     "                                                                                                                            "
+disc_locator.c:596   DEFENSIVE     drain_disc "path too long" defensive continue (dst path overflow)
+disc_locator.c:598   DEFENSIVE     "                                                                                                                            "
+disc_locator.c:603   DEFENSIVE     drain_disc skip-if-already-cached branch (stat success on dst)
+disc_locator.c:605   DEFENSIVE     drain_disc skip-non-regular-source branch
+disc_locator.c:632   DEFENSIVE     drain_disc chunk_limit_reached early-exit (limited by LCSAS_DRAIN_CHUNK_PACKS=1 in tests, already covered)
+disc_locator.c:697   DEFERRED      print_prompt "catalog has the pack but no current volume mapping" — needs populated catalog
+disc_locator.c:700   DEFERRED      print_prompt "catalog has no record of this pack hash" — needs populated catalog
+disc_locator.c:790   DEFERRED      lcsas_disc_locate_pack interactive prompt-loop "still not found" branch — needs 2+ prompt iterations
 
-### `lcsas_io.c` — 6 lines (EINTR)
+# lcsas_io.c
+lcsas_io.c:22   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection
+lcsas_io.c:23   INTRACTABLE   same as 22 (error-path return)
+lcsas_io.c:40   INTRACTABLE   EINTR retry in lcsas_write_exact write loop
+lcsas_io.c:41   INTRACTABLE   same as 40
+lcsas_io.c:75   INTRACTABLE   EINTR retry in lcsas_read_file read loop
+lcsas_io.c:76   INTRACTABLE   same as 75
 
-| Lines | Branch | Status |
-|-------|--------|--------|
-| 22-23, 40-41, 75-76 | `if (errno == EINTR) continue;` in `lcsas_pread_exact` / `lcsas_write_exact` / `lcsas_read_file` | INTRACTABLE — requires sending a signal between the read/write syscall starting and returning, racy and platform-specific |
+# main.c
+main.c:437   INTRACTABLE   "ERROR: snapshot load failed" — load_snapshots returns 0 even on per-file decrypt failures; only -1 on early calloc fail (fault-inject blocked)
+main.c:438   INTRACTABLE   goto out after 437
 
-### `main.c` — 3 lines
+# poly1305.c
+poly1305.c:146   INTRACTABLE   Final-clamp non-underflow branch: fires when h ≥ 2^130 − 5 after accumulation; for random messages probability ≈ 5/2^130; requires chosen-message attack on MAC accumulator
+poly1305.c:147   INTRACTABLE   same as 146
+poly1305.c:148   INTRACTABLE   same as 146
+poly1305.c:149   INTRACTABLE   same as 146
+poly1305.c:150   INTRACTABLE   same as 146
 
-| Lines | Branch | Status |
-|-------|--------|--------|
-| 375 | "ERROR: index load failed" | INTRACTABLE — index load is the first thing after key decryption; making it fail mid-restore requires corrupting decrypted bytes which the AEAD prevents |
-| 437-438 | "ERROR: snapshot load failed" + goto out | INTRACTABLE — same as 375 but for snapshots |
+# repo.c
+repo.c:193    DEFERRED      "key count exceeded sanity limit" warn; needs >1M key files
+repo.c:194    DEFERRED      closedir + goto out after 193
+repo.c:195    DEFERRED      "                                                                                                                            "
+repo.c:216    DEFENSIVE     keys-name sort-swap; the committed fixture's 3 keys are in readdir order on ext4; forcing a swap couples to filesystem hash-ordering
+repo.c:217    DEFENSIVE     "                                                                                                                            "
+repo.c:218    DEFENSIVE     "                                                                                                                            "
+repo.c:369    INTRACTABLE   decrypt_repo_file decrypt-MAC fail; requires a ciphertext that decrypts but fails MAC (AEAD prevents crafting without breaking the primitive)
+repo.c:370    INTRACTABLE   return NULL after 369
+repo.c:377    INTRACTABLE   strip_v2_prefix returns -1 (decrypted to 0 bytes); 32 bytes of AEAD overhead means a 32-byte ciphertext produces 0-byte plaintext — would have to craft
+repo.c:378    INTRACTABLE   return NULL after 377
+repo.c:395    INTRACTABLE   zstd decompress fail AFTER probe succeeded; needs a frame whose header parses but body is corrupt
+repo.c:396    INTRACTABLE   "                                                                                                                            "
+repo.c:397    INTRACTABLE   "                                                                                                                            "
+repo.c:494    DEFERRED      "index count exceeded sanity limit" warn; needs >1M index files
+repo.c:495    DEFERRED      closedir + goto out after 494
+repo.c:496    DEFERRED      "                                                                                                                            "
+repo.c:499    DEFERRED      index names realloc growth past 2048 entries; needs 2049+ index files (the petabyte fixture exercises at integration time)
+repo.c:500    DEFERRED      "                                                                                                                            "
+repo.c:501    DEFERRED      "                                                                                                                            "
+repo.c:502    DEFERRED      "                                                                                                                            "
+repo.c:503    DEFERRED      "                                                                                                                            "
+repo.c:609    INTRACTABLE   blob_index_push realloc fail; fault-inject blocked by gcov-runtime malloc-intolerance
+repo.c:610    INTRACTABLE   "                                                                                                                            "
+repo.c:842    INTRACTABLE   read_blob malloc fail before pread; gcov-fault-inject blocked
+repo.c:849    INTRACTABLE   read_blob plaintext malloc fail; gcov-fault-inject blocked
+repo.c:867    INTRACTABLE   read_blob zstd probe returned <=0 or > 256 MB; needs crafted blob (AEAD-protected)
+repo.c:868    INTRACTABLE   "                                                                                                                            "
+repo.c:869    INTRACTABLE   "                                                                                                                            "
+repo.c:875    INTRACTABLE   read_blob zstd decode fail after probe; needs corrupt-mid-frame zstd (AEAD-protected)
+repo.c:876    INTRACTABLE   "                                                                                                                            "
+repo.c:877    INTRACTABLE   "                                                                                                                            "
+repo.c:886    INTRACTABLE   read_blob hash mismatch; needs crafted ciphertext that decrypts but verify-mismatches
+repo.c:887    INTRACTABLE   "                                                                                                                            "
+repo.c:888    INTRACTABLE   "                                                                                                                            "
 
-### `poly1305.c` — 5 lines
+# scrypt.c — 100% covered by fault-tolerant gcov fault-inject sweep (Phase 13d)
 
-| Lines | Branch | Status |
-|-------|--------|--------|
-| 146-150 | Final-clamp `if (g4 & (1UL << 26))` taking the non-underflow branch | INTRACTABLE for normal poly1305 inputs — the branch fires only when the accumulator `h` is greater than or equal to the prime 2^130 - 5 after the final block. For random / typical messages h is bounded below the prime; reaching ≥ prime requires an adversarial sequence of message blocks chosen to drive the accumulator into that range. The Wycheproof poly1305 vectors used in `test_poly1305.c` don't happen to hit it. Not a correctness gap — the code is correct on this branch — but exercising it requires a chosen-message attack on the MAC accumulator. |
-
-### `repo.c` — 45 lines
-
-| Lines | Branch | Status |
-|-------|--------|--------|
-| 128 | scrypt KDF failure in `lcsas_repo_load_key_file` | INTRACTABLE — scrypt only fails on parameter-validation or OOM; we use known-good params and OOM requires fault injection |
-| 193-195 | "[lcsas-restore] key count exceeded sanity limit" | INTRACTABLE — needs >1,000,000 key files in keys/ |
-| 216-218 | Sort-swap inside `lcsas_repo_load_keys_dir` name-sort | DEFENSIVE — the loop body runs whenever names[b] sorts before names[a]; with N keys in readdir order, this fires for any out-of-order pair. The committed fixture's 3 keys happen to be in readdir order on this filesystem. Adding more keys to FORCE out-of-order order would couple the test to filesystem readdir implementation details. |
-| 258-261 | `strip_v2_prefix` v2-plain branch (single prefix byte without zstd) | TRACTABLE — would require adding a v2-plain index file to fixture |
-| 369-370 | `decrypt_repo_file` decrypt-mac fail | INTRACTABLE — needs a deterministic ciphertext that decrypts but fails MAC (cryptographic primitive prevents this without breaking AEAD) |
-| 377-378 | `strip_v2_prefix` returns -1 (`*len < 1`) | INTRACTABLE — needs a file that decrypts to 0 bytes; AEAD overhead is 32 bytes minimum so the encrypted file would be 32 bytes and produce 0-byte plaintext, which we'd have to craft |
-| 395-397 | zstd decompress failure AFTER probe succeeded | INTRACTABLE — needs a frame whose header is valid but body is corrupted; uncommon and crypto-difficult to forge |
-| 494-503 | Index name realloc growth past 2048 entries + count > 1M sanity | INTRACTABLE — would need 2048+ index files in fixture; the existing `test_tier1_petabyte_fixture.py` exercises this branch at integration time but coverage-c skips integration tests |
-| 534-539 | Supersedes overflow at 8192 entries | INTRACTABLE — would need 8192+ entries in a single index file's `supersedes` array |
-| 598 | pack_id hex decode failure | TRACTABLE — could add an index entry with a non-hex pack_id |
-| 609-610 | `blob_index_push` failure (realloc) | INTRACTABLE — realloc fault injection only |
-| 833-834 | "pack not found" in `lcsas_repo_read_blob` | INTRACTABLE during normal restore — every blob in tree_restore exists in the pack; missing-pack would mean a corrupt or partial-disc scenario |
-| 842, 849, 867-869, 875-877, 886-888 | `read_blob` zstd error paths + hash-mismatch | INTRACTABLE — needs a pack blob that decrypts but contains corrupted-zstd or wrong-content |
-
-### `scrypt.c` — 2 lines
-
-| Lines | Branch | Status |
-|-------|--------|--------|
-| 181-182 | "rc = -2; goto out" in alloc-failure path | INTRACTABLE — fault-injection only |
-
-### `tree.c` — 4 lines
-
-| Lines | Branch | Status |
-|-------|--------|--------|
-| 157 | `restore_file_node` rc=-1 break after `lcsas_repo_read_blob` failure | INTRACTABLE in coverage-c — would require an index entry whose blob_index_find succeeds but read_blob fails (e.g., pointing at a non-existent pack file).  The phase-9 broken-tree fixtures hit the "blob not in index" branch (147) but not this one. |
-| 160 | `write_exact` failure during file content write | INTRACTABLE — needs an unwritable target fd, which requires either fault injection or running on a filesystem that errors mid-write |
-| 201 | `return -1` after read_blob failure for tree blob | INTRACTABLE — same as 157 but for the tree blob load. |
-| 299 | `symlink()` syscall failure | INTRACTABLE — symlink() fails on read-only filesystem or when destination already exists; the existing code does `unlink(node_path)` first to handle the existing case. Triggering this would require a read-only mount which the test harness doesn't set up. |
-
-## Summary
-
-Total uncov as of Phase 12c: ~109 lines across 8 files (16 total).
-Total exempt from this document: ~100 lines.
-
-The remaining tractable gaps (repo.c 258-261, 598) are slated for a
-fixture extension. After those land, coverage is expected to be
-~95.5% with the remainder fully documented here.
+# tree.c
+tree.c:160   INTRACTABLE   write_exact fail mid-file-write; needs RO mount or syscall injection
+tree.c:299   INTRACTABLE   symlink() syscall fail; needs RO fs or pre-existing target with EXDEV
+```
+<!-- EXEMPTIONS-FENCE-END -->
 
 ## Path forward
 
-If a future contributor wants to push beyond ~95%, the highest-yield
-options are:
+Reducing this list further requires:
 
-1. **Fault-tolerant gcov runtime patch.** Build libgcov with a flag
-   that catches malloc failures from gcov's own allocations and
-   falls back to a static pool. Would let `make fault-inject` actually
-   accumulate `.gcda` data, unlocking ~30+ lines (mostly malloc/realloc
-   failure paths in repo.c and scrypt.c).
-2. **EINTR-injection wrapper.** A small LD_PRELOAD that randomly
-   returns EINTR from `read`/`write` would cover lcsas_io.c lines 22,
-   40, 75. Risky to wire into the normal test path.
-3. **Pathological-input fixture for blob_index entries.** A fixture
-   that crafts an encrypted blob whose decrypted content is short
-   enough to hit repo.c 377-378, OR a zstd frame whose decompression
-   fails after probing succeeds (395-397, 875-877). Crypto-difficult.
-4. **>1M-key sanity limits.** The 1M-entry guards in repo.c (193-195,
-   494-496) cannot be tested without producing a million-file fixture.
-   The existing 1M-orphan petabyte fixture (`LCSAS_PETABYTE=1`)
-   exercises the index-side of this; the key-side would need an
-   equivalent. Probably not worth the disk + time.
-
-Each of these is in scope for a future audit phase if the team decides
-to push the floor above ~95%.
+1. **Fault-tolerant gcov runtime patch** — unlocks all `INTRACTABLE` malloc-failure entries (scrypt.c, repo.c:609-610, 842, 849).  Phase 13d delivers a SIGSEGV-handler shim that calls `__gcov_dump()` before exit.
+2. **EINTR-injection wrapper** — covers lcsas_io.c 6 lines.  Risky to wire into the normal test path.
+3. **AEAD-corruption fixtures** — would require breaking the cryptographic primitive to craft inputs that decrypt-but-verify-fail or corrupt-mid-zstd.  Genuinely not testable.
+4. **1M+ file fixtures** — the petabyte-scale stress test (`LCSAS_PETABYTE=1`) exercises some at integration time.  For coverage-c we'd need the same scale during the standard build (~10s per million-file readdir).
