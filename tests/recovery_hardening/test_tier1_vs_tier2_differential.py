@@ -94,11 +94,11 @@ def _profile_symlinks_and_modes(src: Path) -> None:
     (src / "secret.txt").chmod(0o600)
     (src / "normal.txt").write_text("normal\n")
     (src / "normal.txt").chmod(0o644)
-    # Relative symlinks only.  Tier-1 intentionally rejects absolute
-    # symlinks for security (lcsas_path_safe_symlink in path.c) — a
-    # known/documented divergence from tier-2 (rustic), not a bug.
+    # Issue #187: absolute-target symlinks are now allowed (tier-1
+    # matches tier-2 / rustic).  Both relative + absolute exercised.
     (src / "link_rel").symlink_to("normal.txt")
     (src / "link_subdir").symlink_to("../normal.txt")
+    (src / "link_abs").symlink_to("/etc/hostname")
 
 
 def _profile_empty_dir(src: Path) -> None:

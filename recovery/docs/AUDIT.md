@@ -159,11 +159,14 @@ smoke test.  The remaining 7 profiles are opt-in:
 LCSAS_DIFF=1 pytest tests/recovery_hardening/test_tier1_vs_tier2_differential.py -v
 ```
 
-**Known intentional divergence** (test profiles MUST NOT trip on
-this):
-- Absolute-target symlinks: tier-1 rejects them as a security
-  measure (see `lcsas_path_safe_symlink` in path.c).  Tier-2
-  honours them.
+**Security note** (PR #197, issue #187): as of this PR, tier-1
+honours absolute-target symlinks in restored snapshots (matching
+tier-2 / rustic).  Previously tier-1 rejected them as a containment
+defence.  Operators who relied on the implicit containment property
+must now sandbox the restore target separately — see issue #187 for
+the full rationale.  Relative-target symlinks are still validated
+via `lex_resolve_inside` to ensure they resolve under the restore
+root.
 
 Phase 14 surfaced two real bugs on first run:
 - `lcsas_create_file` hardcoded mode 0600 → fixed to honour the
