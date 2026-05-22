@@ -584,11 +584,215 @@ def make_snapshot(repo_dir: Path, tree_id_hex: str) -> str:
     return new_id.hex()
 
 
+def make_stress_fixture(
+    repo_dir: Path,
+    n_orphans: int,
+    n_files: int,
+    n_subdirs: int,
+) -> tuple[str, str, str]:
+    """Build a stress-test pack + index covering scaling characterisation.
+
+    Layout:
+      - 1 real data blob (small payload "hello\\n")
+      - n_files file nodes split across n_subdirs sub-tree blobs, each
+        file content references the real data blob
+      - 1 root tree with n_subdirs dir nodes pointing at the sub-trees
+      - 1 encrypted index file containing the real blob descriptors AND
+        n_orphans random-id orphan blob entries (never referenced from
+        any tree — they inflate the index for lookup-time scaling stress)
+
+    Returns (pack_id_hex, data_blob_id_hex, root_tree_id_hex).
+
+    Notes on token-budget safety: the tree.c JSON parser allocates 65536
+    tokens.  Each file node uses ~15-20 tokens, so each sub-tree should
+    hold no more than ~3000 files.  Caller should pick n_subdirs >=
+    n_files/3000.
+    """
+    import os as _os
+    import zstandard
+
+    if n_files > 0 and n_subdirs < 1:
+        raise ValueError("n_subdirs must be >= 1 when n_files > 0")
+
+    # ── Single real data blob ─────────────────────────────────────
+    data_plain = b"hello from petabyte stress fixture\n"
+    data_blob_id = sha256(data_plain)
+    data_compressed = zstandard.ZstdCompressor().compress(data_plain)
+    data_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_DATA, data_compressed
+    )
+
+    # ── Sub-tree blobs ────────────────────────────────────────────
+    sub_tree_records = []  # list of (blob_id, encrypted_bytes)
+    files_per_subdir = (n_files + max(n_subdirs, 1) - 1) // max(n_subdirs, 1)
+    for s in range(n_subdirs):
+        start = s * files_per_subdir
+        end = min(start + files_per_subdir, n_files)
+        if start >= end:
+            break
+        nodes = []
+        for i in range(start, end):
+            nodes.append({
+                "name": "file_{:06d}.txt".format(i),
+                "type": "file",
+                "mode": 420,
+                "mtime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "size": len(data_plain),
+                "content": [data_blob_id.hex()],
+            })
+        sub_doc = {"nodes": nodes}
+        sub_plain = json.dumps(sub_doc).encode()
+        sub_blob_id = sha256(sub_plain)
+        sub_compressed = zstandard.ZstdCompressor().compress(sub_plain)
+        sub_iv = bytes([0x10 + (s & 0xEF)]) + b"\x00" * 15
+        sub_enc = encrypt_authenticated(
+            MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, sub_iv, sub_compressed
+        )
+        sub_tree_records.append((sub_blob_id, sub_enc))
+
+    # ── Root tree ─────────────────────────────────────────────────
+    root_nodes = []
+    for s, (sub_blob_id, _) in enumerate(sub_tree_records):
+        root_nodes.append({
+            "name": "dir_{:03d}".format(s),
+            "type": "dir",
+            "mode": 493,
+            "mtime": "2026-05-21T00:00:00Z",
+            "uid": 1000, "gid": 1000,
+            "subtree": sub_blob_id.hex(),
+        })
+    root_doc = {"nodes": root_nodes}
+    root_plain = json.dumps(root_doc).encode()
+    root_blob_id = sha256(root_plain)
+    root_compressed = zstandard.ZstdCompressor().compress(root_plain)
+    root_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_TREE, root_compressed
+    )
+
+    # ── Assemble pack body ────────────────────────────────────────
+    blob_offsets = []  # list of (offset, length, blob_id, type)
+    pack_body = b""
+    blob_offsets.append((0, len(data_enc), data_blob_id, 0))
+    pack_body += data_enc
+    for sub_blob_id, sub_enc in sub_tree_records:
+        blob_offsets.append((len(pack_body), len(sub_enc), sub_blob_id, 1))
+        pack_body += sub_enc
+    blob_offsets.append((len(pack_body), len(root_enc), root_blob_id, 1))
+    pack_body += root_enc
+
+    # Pack header: per-blob descriptors
+    header = b""
+    for off, ln, blob_id, blob_type in blob_offsets:
+        header += struct.pack("<BI", blob_type, ln) + blob_id
+    header_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_HEADER, header
+    )
+    pack_bytes = pack_body + header_enc + struct.pack("<I", len(header_enc))
+    pack_id = sha256(pack_bytes)
+    pack_id_hex = pack_id.hex()
+
+    data_dir = repo_dir / "data" / pack_id_hex[:2]
+    data_dir.mkdir(parents=True)
+    (data_dir / pack_id_hex).write_bytes(pack_bytes)
+
+    # ── Index files ───────────────────────────────────────────────
+    # The C JSON parser allocates a fixed token buffer per index file
+    # (32768 tokens in lcsas_repo_load_index → ~3500 blob entries max
+    # per file).  Split orphans across multiple index files; the loader
+    # already merges them.
+    index_dir = repo_dir / "index"
+    index_dir.mkdir()
+
+    # First index file: all the real blob descriptors (small).
+    real_blobs_json = []
+    for off, ln, blob_id, blob_type in blob_offsets:
+        entry = {
+            "id": blob_id.hex(),
+            "type": "data" if blob_type == 0 else "tree",
+            "offset": off,
+            "length": ln,
+        }
+        if blob_type == 0:
+            entry["uncompressed_length"] = len(data_plain)
+        real_blobs_json.append(entry)
+
+    def _write_index(blobs_list: list, iv_byte: int) -> None:
+        idx_doc = {
+            "supersedes": [],
+            "packs": [{"id": pack_id_hex, "blobs": blobs_list}],
+        }
+        idx_plain = json.dumps(idx_doc).encode()
+        idx_zstd = zstandard.ZstdCompressor().compress(idx_plain)
+        idx_v2 = b"\x02" + idx_zstd
+        iv = bytes([iv_byte & 0xFF]) + b"\x00" * 15
+        idx_enc = encrypt_authenticated(
+            MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, iv, idx_v2
+        )
+        idx_id = sha256(idx_enc)
+        (index_dir / idx_id.hex()).write_bytes(idx_enc)
+
+    _write_index(real_blobs_json, 0x01)
+
+    # Orphan entries: split across ceil(n_orphans / ORPHANS_PER_FILE)
+    # additional index files.  3000 entries per file stays comfortably
+    # under the 32k-token JSON-parser ceiling in lcsas_repo_load_index.
+    ORPHANS_PER_FILE = 3000
+    if n_orphans > 0:
+        remaining = n_orphans
+        file_idx = 0
+        while remaining > 0:
+            chunk = min(remaining, ORPHANS_PER_FILE)
+            chunk_blobs = []
+            for _ in range(chunk):
+                chunk_blobs.append({
+                    "id": _os.urandom(32).hex(),
+                    "type": "data",
+                    "offset": 0,
+                    "length": len(data_enc),
+                })
+            _write_index(chunk_blobs, 0x40 + (file_idx & 0xBF))
+            file_idx += 1
+            remaining -= chunk
+
+    return pack_id_hex, data_blob_id.hex(), root_blob_id.hex()
+
+
+def make_stress_snapshot(repo_dir: Path, tree_id_hex: str) -> str:
+    """Write a single snapshot for stress mode (no sort-loop testing)."""
+    snap_doc = {
+        "time": "2026-05-21T00:00:00Z",
+        "tree": tree_id_hex,
+        "paths": ["/stress"],
+        "hostname": "test",
+        "username": "test",
+        "uid": 1000, "gid": 1000,
+        "tags": [],
+        "id": "0" * 64,
+    }
+    snap_plain = json.dumps(snap_doc).encode()
+    snap_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_SNAP, snap_plain
+    )
+    snap_id = sha256(snap_enc)
+    snap_dir = repo_dir / "snapshots"
+    snap_dir.mkdir()
+    (snap_dir / snap_id.hex()).write_bytes(snap_enc)
+    return snap_id.hex()
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("out", type=Path, help="output repo directory")
     p.add_argument("--clean", action="store_true",
                     help="delete out_dir if it exists")
+    p.add_argument("--stress", nargs=3, metavar=("N_ORPHANS", "N_FILES", "N_SUBDIRS"),
+                    type=int, default=None,
+                    help="generate stress-test fixture instead of default. "
+                         "N_ORPHANS = orphan blob index entries; "
+                         "N_FILES = real files in restored tree; "
+                         "N_SUBDIRS = sub-tree blobs (N_FILES / N_SUBDIRS "
+                         "must be < ~3000 due to JSON token budget)")
     args = p.parse_args()
 
     if args.out.exists():
@@ -599,59 +803,70 @@ def main() -> int:
             return 1
     args.out.mkdir(parents=True)
 
-    # keys/ — multiple key files.  The first is a stub that won't decrypt
-    # (forces the loader to try the next one).  The second is the real
-    # one.  Filenames are crafted so the stub sorts FIRST and the real
-    # key sorts SECOND, exercising the realloc + sort loop in
-    # lcsas_repo_load_keys_dir.
+    # keys/ — one real key file in stress mode (no stub-key sort
+    # exercises wanted), or the full multi-key setup in default mode.
     keys_dir = args.out / "keys"
     keys_dir.mkdir()
-    # Stub key: a file that decrypts-FAIL (MAC mismatch).  The filename
-    # starts with "0000..." so it sorts ahead of the real key.
-    stub_key_id = "0" * 64
-    (keys_dir / stub_key_id).write_text(json.dumps({
-        "created": "2026-05-21T00:00:00Z",
-        "kdf": "scrypt",
-        "N": N, "r": R, "p": P,
-        "salt": base64.b64encode(SALT_KEY).decode(),
-        # Garbage data that won't decrypt.
-        "data": base64.b64encode(b"\x00" * 64).decode(),
-    }))
-    # Real key.  Filename starts with "eb15..." (sorts after "0000...").
     key_id = hashlib.sha256(SALT_KEY + b"k0").hexdigest()
     make_key_file(keys_dir / key_id)
-    # A third stub between them to force at least one realloc-growth
-    # iteration in the sort loop swap branch.
-    middle_stub_id = "7" + "0" * 63
-    (keys_dir / middle_stub_id).write_text(json.dumps({
-        "created": "2026-05-21T00:00:00Z",
-        "kdf": "scrypt",
-        "N": N, "r": R, "p": P,
-        "salt": base64.b64encode(SALT_KEY).decode(),
-        "data": base64.b64encode(b"\x00" * 64).decode(),
-    }))
 
-    # pack + index
-    pack_id, data_blob_id, tree_blob_id, _snap_tree = make_pack_and_index(args.out)
+    if args.stress is None:
+        # Default mode keeps the multi-key sort-loop exercise.
+        stub_key_id = "0" * 64
+        (keys_dir / stub_key_id).write_text(json.dumps({
+            "created": "2026-05-21T00:00:00Z",
+            "kdf": "scrypt",
+            "N": N, "r": R, "p": P,
+            "salt": base64.b64encode(SALT_KEY).decode(),
+            "data": base64.b64encode(b"\x00" * 64).decode(),
+        }))
+        middle_stub_id = "7" + "0" * 63
+        (keys_dir / middle_stub_id).write_text(json.dumps({
+            "created": "2026-05-21T00:00:00Z",
+            "kdf": "scrypt",
+            "N": N, "r": R, "p": P,
+            "salt": base64.b64encode(SALT_KEY).decode(),
+            "data": base64.b64encode(b"\x00" * 64).decode(),
+        }))
 
-    # snapshot
-    snap_id = make_snapshot(args.out, tree_blob_id)
-
-    # Manifest (for test consumption)
-    manifest = {
-        "password": PASSWORD.decode(),
-        "key_file": key_id,
-        "pack_id": pack_id,
-        "data_blob_id": data_blob_id,
-        "tree_blob_id": tree_blob_id,
-        "broken_tree_id": BROKEN_TREE_ID,
-        "bad_hex_tree_id": BAD_HEX_TREE_ID,
-        "bad_subdir_tree_id": BAD_SUBDIR_TREE_ID,
-        "snapshot_id": snap_id,
-        "master_encrypt_hex": MASTER_ENCRYPT.hex(),
-        "master_mac_k_hex": MASTER_MAC_K.hex(),
-        "master_mac_r_hex": MASTER_MAC_R.hex(),
-    }
+    if args.stress is not None:
+        n_orphans, n_files, n_subdirs = args.stress
+        pack_id, data_blob_id, tree_blob_id = make_stress_fixture(
+            args.out, n_orphans, n_files, n_subdirs
+        )
+        snap_id = make_stress_snapshot(args.out, tree_blob_id)
+        manifest = {
+            "password": PASSWORD.decode(),
+            "key_file": key_id,
+            "pack_id": pack_id,
+            "data_blob_id": data_blob_id,
+            "tree_blob_id": tree_blob_id,
+            "snapshot_id": snap_id,
+            "n_orphan_blobs": n_orphans,
+            "n_files": n_files,
+            "n_subdirs": n_subdirs,
+            "stress": True,
+            "master_encrypt_hex": MASTER_ENCRYPT.hex(),
+            "master_mac_k_hex": MASTER_MAC_K.hex(),
+            "master_mac_r_hex": MASTER_MAC_R.hex(),
+        }
+    else:
+        pack_id, data_blob_id, tree_blob_id, _snap_tree = make_pack_and_index(args.out)
+        snap_id = make_snapshot(args.out, tree_blob_id)
+        manifest = {
+            "password": PASSWORD.decode(),
+            "key_file": key_id,
+            "pack_id": pack_id,
+            "data_blob_id": data_blob_id,
+            "tree_blob_id": tree_blob_id,
+            "broken_tree_id": BROKEN_TREE_ID,
+            "bad_hex_tree_id": BAD_HEX_TREE_ID,
+            "bad_subdir_tree_id": BAD_SUBDIR_TREE_ID,
+            "snapshot_id": snap_id,
+            "master_encrypt_hex": MASTER_ENCRYPT.hex(),
+            "master_mac_k_hex": MASTER_MAC_K.hex(),
+            "master_mac_r_hex": MASTER_MAC_R.hex(),
+        }
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     print(f"Fixture written to {args.out}")

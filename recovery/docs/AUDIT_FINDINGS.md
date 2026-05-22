@@ -23,7 +23,43 @@ Audit complete through Phase 5.  See tracker issue #166.
 | Phase 5 (catalog+main+json_q+disc_locator) | 2026-05-21 | 87.1% | Assertion-pinned unit tests |
 | Phase 7 (test_repo with encrypted fixture) | 2026-05-21 | 90.7% | gen_fixture.py + test_repo.c covering full repo + tree pipeline |
 | Phase 8 (fixture-driven CLI + disc_locator extensions) | 2026-05-21 | 92.4% | fixture-based CLI tests (main.c) + catalog/drain/cache/interactive tests (disc_locator) |
-| Phase 9 (compressed pack + broken trees + multiple keys/snaps) | 2026-05-21 | **93.9%** | zstd-compressed blobs (data + sub-tree); 3 broken-tree fixtures (missing blob, bad hex, broken subdir) for tree.c restore_file_node errors; multiple key files (sort+realloc) + multiple snapshots (sort) |
+| Phase 9 (compressed pack + broken trees + multiple keys/snaps) | 2026-05-21 | 93.9% | zstd-compressed blobs (data + sub-tree); 3 broken-tree fixtures (missing blob, bad hex, broken subdir) for tree.c restore_file_node errors; multiple key files (sort+realloc) + multiple snapshots (sort) |
+| Phase 10 (real petabyte fixture + scaling characterisation) | 2026-05-22 | 93.9% | gen_fixture.py --stress N M S mode; new scaling_bench.py; LCSAS_STRESS_LOOKUPS diagnostic in main.c; LCSAS_PETABYTE=1 end-to-end test (1M blobs, 1k files, RSS 109 MiB, wall 7.6 s) |
+
+## Scalability characteristics (Phase 10, 2026-05-22)
+
+`recovery/scripts/scaling_bench.py` sweeps the blob index from 100 to 1M
+entries, invoking `lcsas-restore` with `LCSAS_STRESS_LOOKUPS=1000` to
+measure 1000 random `lcsas_blob_index_find` calls per scale.
+
+| N (entries) | load_index_ms | RSS (KiB) | find_ns_mean |
+|------------:|--------------:|----------:|-------------:|
+|         102 |             2 |    18,176 |       11,333 |
+|       1,002 |             6 |    18,176 |       76,894 |
+|      10,002 |            56 |    18,176 |      572,238 |
+|     100,002 |           551 |    18,176 |    6,022,275 |
+|   1,000,002 |         5,836 |   113,792 |   61,156,104 |
+
+Per-find cost grows roughly 10× per 10× N — a textbook O(n) linear
+scan, consistent with the implementation at `repo.c:300-310`
+(`lcsas_blob_index_find` walks every entry calling `lcsas_ct_memcmp`).
+
+**At true petabyte scale (≈900M blob index entries)** the same per-find
+cost would extrapolate to ≈1 s/lookup.  A 100k-file restore would
+spend hours just in `find`.  See follow-up issue
+(file-an-issue for `O(log n)` sorted-bsearch or `O(1)` hash table).
+
+The end-to-end test `test_petabyte_scale_restore_stays_under_rss_budget`
+runs the 1M-entry / 1k-file restore at LCSAS_PETABYTE=1 and asserts
+RSS < 1.5 GiB, wall-clock < 600 s.  Observed on this host:
+RSS 109 MiB, wall 7.6 s.  Memory is fine; lookup cost is the bottleneck.
+
+**Bench reproduction**:
+
+```bash
+python3 recovery/scripts/scaling_bench.py
+LCSAS_PETABYTE=1 pytest tests/recovery_hardening/test_tier1_petabyte_fixture.py -v -m integration
+```
 
 ## Phase 8 per-file coverage (gcovr, 2026-05-21)
 

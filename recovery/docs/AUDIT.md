@@ -100,6 +100,45 @@ by exercising the unreachable-by-default malloc-failure goto-out paths.
 The hardening test `tests/recovery_hardening/test_tier1_fault_inject.py`
 pins zero-crashes as a regression gate (opt-in via `LCSAS_FAULT_INJECT=1`).
 
+## Petabyte benchmark (`scaling_bench.py` + `LCSAS_PETABYTE=1`)
+
+Phase 10 added two artefacts for characterising and stress-testing
+production-code behaviour at petabyte-class blob index sizes:
+
+```bash
+# Scaling sweep across N=100, 1k, 10k, 100k, 1M blob index entries.
+# Writes recovery/build/scaling.md with load/RSS/find_ns table.  ~6 min.
+python3 recovery/scripts/scaling_bench.py
+
+# End-to-end stress: 1M orphan blob entries + 1k restored files.
+# Asserts RSS < 1.5 GiB and wall-clock < 10 min.  Opt-in.  ~5 min.
+LCSAS_PETABYTE=1 pytest tests/recovery_hardening/test_tier1_petabyte_fixture.py \
+    -v -m integration
+```
+
+Neither is wired into `make gate` — both are explicit performance
+characterisation, not regression gates.  Use them when reasoning about
+how `lcsas-restore` will behave on real-world archive sizes.
+
+**Measured on this host (vm-desk1, 7.8 GiB RAM, 8 cores):**
+
+| N entries | RSS (MiB) | per-find (ns) | per-find at 100× scale |
+|----------:|----------:|--------------:|------------------------|
+| 100       | 18        | 11,333        | ~1ms                   |
+| 1k        | 18        | 76,894        | ~770 µs                |
+| 10k       | 18        | 572,238       | ~5.7 ms                |
+| 100k      | 18        | 6,022,275     | ~60 ms                 |
+| 1M        | 111       | 61,156,104    | ~600 ms                |
+
+`find_ns_mean` grows linearly with N — confirms `lcsas_blob_index_find`
+is O(n).  See `AUDIT_FINDINGS.md` for the full table and follow-up
+issue link.
+
+The `LCSAS_STRESS_LOOKUPS=N` env var on the binary is what
+`scaling_bench.py` uses: it times N random `lcsas_blob_index_find` calls
+after `lcsas_repo_load_index` returns, prints a single `[bench]` line
+on stderr, and exits.  Production paths are unaffected.
+
 ## Known exclusions
 
 (arena.c was removed in PR #175 — no longer a coverage exception.)
