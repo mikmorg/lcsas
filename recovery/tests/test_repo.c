@@ -277,6 +277,25 @@ main(void)
                     snaps.items[sidx].tree_id_hex, FIXTURE_TREE_BLOB_HEX);
             fails++;
         }
+        /* Regression guard for #194: load_snapshots must leave the
+         * array sorted ASCENDING by ISO-8601 `time` so that
+         * items[count-1] is the chronologically newest snapshot.
+         * Monotonic non-decreasing implies items[count-1] is max,
+         * so one pairwise pass over the array suffices. */
+        {
+            size_t k;
+            for (k = 1; k < snaps.count; k++) {
+                if (strcmp(snaps.items[k - 1].time,
+                           snaps.items[k].time) > 0) {
+                    fprintf(stderr,
+                            "FAIL: snapshots not sorted ascending by "
+                            "time: items[%zu].time=%s > items[%zu].time=%s\n",
+                            k - 1, snaps.items[k - 1].time,
+                            k, snaps.items[k].time);
+                    fails++;
+                }
+            }
+        }
         /* snapshot_find by exact ID */
         if (sidx >= 0) {
             long found = lcsas_snapshot_find(&snaps, snaps.items[sidx].file_name);

@@ -664,6 +664,24 @@ snap_list_push(lcsas_snapshot_list *l, const lcsas_snapshot *s)
     return 0;
 }
 
+/* Comparator for qsort: sort lcsas_snapshot entries ascending by
+ * their ISO-8601 `time` field.  Restic writes time strings in a
+ * zero-padded fixed-width form (e.g. "2026-05-21T00:00:00.123456Z"),
+ * which makes strcmp a correct chronological comparator: the lexical
+ * order matches the chronological order.
+ *
+ * Sorting by time (not by file_name, which is a content-addressed
+ * hash and thus filesystem-order-equivalent) is what makes
+ * `lcsas_snapshot_latest` agree with rustic's `latest` selector
+ * (closes #194). */
+static int
+snap_time_qsort_cmp(const void *a, const void *b)
+{
+    const lcsas_snapshot *sa = (const lcsas_snapshot *)a;
+    const lcsas_snapshot *sb = (const lcsas_snapshot *)b;
+    return strcmp(sa->time, sb->time);
+}
+
 int
 lcsas_repo_load_snapshots(const char *repo_path,
                           const lcsas_master_key *mk,
@@ -739,18 +757,15 @@ lcsas_repo_load_snapshots(const char *repo_path,
     }
     closedir(d);
 
-    /* Sort by time string. */
-    {
-        size_t a, b;
-        for (a = 0; a < out->count; a++) {
-            for (b = a + 1; b < out->count; b++) {
-                if (strcmp(out->items[b].time, out->items[a].time) < 0) {
-                    lcsas_snapshot tmp = out->items[a];
-                    out->items[a] = out->items[b];
-                    out->items[b] = tmp;
-                }
-            }
-        }
+    /* Sort ascending by ISO-8601 `time` so that items[count-1] is the
+     * chronologically newest snapshot — what `lcsas_snapshot_latest`
+     * returns and what rustic's `latest` selector also picks.  See
+     * snap_time_qsort_cmp for the rationale on strcmp vs. parsed
+     * time; the short version is that restic's time strings are
+     * zero-padded fixed-width so lexical order equals chronological. */
+    if (out->count > 1) {
+        qsort(out->items, out->count, sizeof(lcsas_snapshot),
+              snap_time_qsort_cmp);
     }
     rc = 0;
     return rc;
