@@ -46,7 +46,10 @@ int main(void)
     /* Symlinks */
     expect_sym("relative inside", "/restore", "/restore/a", "b",        1);
     expect_sym("relative escape", "/restore", "/restore/a", "../../etc/passwd", 0);
-    expect_sym("absolute",        "/restore", "/restore/a", "/etc/passwd",      0);
+    /* Absolute targets allowed (issue #187 — user decision to match
+     * tier-2 / rustic behaviour).  See path.c comment for the
+     * containment-property tradeoff. */
+    expect_sym("absolute",        "/restore", "/restore/a", "/etc/passwd",      1);
     expect_sym("dotdot to root",  "/restore", "/restore/a", "..",       1);  /* lands at /restore */
     expect_sym("dotdot past root","/restore", "/restore",   "..",       0);
 
