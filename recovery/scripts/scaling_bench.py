@@ -145,11 +145,16 @@ def main() -> int:
             )
         )
     md.append("")
-    md.append("**Interpretation**: `find_ns_mean` should scale roughly linearly with N "
-              "because `lcsas_blob_index_find` is an O(n) linear scan. "
-              "At true petabyte scale (~900M entries), per-lookup cost extrapolates "
-              "to ~1 s — making restores impractical without an index-lookup fix. "
-              "See repo.c:300-310.")
+    md.append(
+        "**Interpretation**: as of Phase 11 (issue #181 fix), "
+        "`lcsas_blob_index_find` uses sorted+bsearch (O(log n)) instead of "
+        "the previous linear scan.  `find_ns_mean` should now stay roughly "
+        "flat across N (a few microseconds, dominated by cache + comparator "
+        "constants).  `load_index_ms` includes the one-time qsort at the "
+        "end of load_index.  At true petabyte scale (~900M entries), "
+        "per-lookup cost extrapolates to under 10 µs — petabyte restore "
+        "is no longer find-bound."
+    )
     out = "\n".join(md) + "\n"
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(out)
