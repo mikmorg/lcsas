@@ -32,6 +32,8 @@ Audit complete through Phase 5.  See tracker issue #166.
 entries, invoking `lcsas-restore` with `LCSAS_STRESS_LOOKUPS=1000` to
 measure 1000 random `lcsas_blob_index_find` calls per scale.
 
+### Original (Phase 10, O(n) linear scan)
+
 | N (entries) | load_index_ms | RSS (KiB) | find_ns_mean |
 |------------:|--------------:|----------:|-------------:|
 |         102 |             2 |    18,176 |       11,333 |
@@ -40,21 +42,38 @@ measure 1000 random `lcsas_blob_index_find` calls per scale.
 |     100,002 |           551 |    18,176 |    6,022,275 |
 |   1,000,002 |         5,836 |   113,792 |   61,156,104 |
 
-Per-find cost grows roughly 10× per 10× N — a textbook O(n) linear
-scan, consistent with the implementation at `repo.c:300-310`
-(`lcsas_blob_index_find` walks every entry calling `lcsas_ct_memcmp`).
+Per-find cost grew ~10× per 10× N — textbook O(n).  At true petabyte
+scale (~900M entries), per-find extrapolated to ≈ 1 s — making
+restores impractical.
 
-**At true petabyte scale (≈900M blob index entries)** the same per-find
-cost would extrapolate to ≈1 s/lookup.  A 100k-file restore would
-spend hours just in `find`.  See follow-up issue
-(file-an-issue for `O(log n)` sorted-bsearch or `O(1)` hash table).
+### After Phase 11 fix (sorted + bsearch, O(log n))
+
+| N (entries) | load_index_ms | RSS (KiB) | find_ns_mean |
+|------------:|--------------:|----------:|-------------:|
+|         102 |             4 |    18,176 |          860 |
+|       1,002 |            10 |    18,048 |        1,131 |
+|      10,002 |           251 |    17,920 |        5,794 |
+|     100,002 |           969 |    18,176 |        1,821 |
+|   1,000,002 |         7,764 |   113,284 |        2,139 |
+
+`find_ns_mean` now stays under a few microseconds across the full
+sweep — a 28,000× speedup at N=1M.  `load_index_ms` includes the
+one-time qsort cost (+~2 s on 1M entries) which is amortised over
+every subsequent lookup.
+
+### Petabyte extrapolation
+
+At ~900M entries, `find_ns_mean` extrapolates to ~3 µs (one extra
+comparison per doubling of N, log2(900M/1M) ≈ 9.8 extra steps × ~30 ns
+per memcmp).  A 100k-file restore that needed 28 h of find cost under
+the linear scan now needs ~0.3 s.  **Petabyte restore is no longer
+find-bound.**
 
 The end-to-end test `test_petabyte_scale_restore_stays_under_rss_budget`
-runs the 1M-entry / 1k-file restore at LCSAS_PETABYTE=1 and asserts
-RSS < 1.5 GiB, wall-clock < 600 s.  Observed on this host:
-RSS 109 MiB, wall 7.6 s.  Memory is fine; lookup cost is the bottleneck.
+(opt-in via `LCSAS_PETABYTE=1`) still passes: 1M entries + 1k files,
+RSS 110 MiB, wall 7.8 s.
 
-**Bench reproduction**:
+### Bench reproduction
 
 ```bash
 python3 recovery/scripts/scaling_bench.py

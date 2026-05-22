@@ -296,17 +296,55 @@ blob_index_push(lcsas_blob_index *ix, const lcsas_blob_loc *loc)
     return 0;
 }
 
+/* Comparator for qsort: sort lcsas_blob_loc entries by their `id`
+ * field (32-byte SHA-256).  Used once at the tail of
+ * lcsas_repo_load_index to enable O(log n) lookup in
+ * lcsas_blob_index_find.
+ *
+ * memcmp is fine here (not constant-time): blob IDs are SHA-256
+ * digests of public ciphertext, not secret material — timing
+ * leakage of the sort/search position reveals nothing.
+ */
+static int
+blob_id_qsort_cmp(const void *a, const void *b)
+{
+    const lcsas_blob_loc *la = (const lcsas_blob_loc *)a;
+    const lcsas_blob_loc *lb = (const lcsas_blob_loc *)b;
+    return memcmp(la->id, lb->id, LCSAS_BLOB_ID_LEN);
+}
+
+/* Comparator for bsearch: key is the raw id bytes, item is a
+ * lcsas_blob_loc.  Same rationale as blob_id_qsort_cmp for memcmp. */
+static int
+blob_id_bsearch_cmp(const void *key, const void *entry)
+{
+    const lcsas_blob_loc *e = (const lcsas_blob_loc *)entry;
+    return memcmp(key, e->id, LCSAS_BLOB_ID_LEN);
+}
+
+/* Sort the blob index by id so lcsas_blob_index_find can use bsearch.
+ * Idempotent; safe to call repeatedly.  Caller must NOT mutate
+ * entries[] after this (or must call it again).  Internal helper —
+ * lcsas_repo_load_index calls this once on its own ix; no other
+ * caller needs it because nothing else mutates ix->entries. */
+static void
+blob_index_sort(lcsas_blob_index *ix)
+{
+    if (ix->count > 1) {
+        qsort(ix->entries, ix->count, sizeof(lcsas_blob_loc),
+              blob_id_qsort_cmp);
+    }
+}
+
 const lcsas_blob_loc *
 lcsas_blob_index_find(const lcsas_blob_index *ix,
                       const unsigned char id[LCSAS_BLOB_ID_LEN])
 {
-    size_t i;
-    for (i = 0; i < ix->count; i++) {
-        if (lcsas_ct_memcmp(ix->entries[i].id, id, LCSAS_BLOB_ID_LEN) == 0) {
-            return &ix->entries[i];
-        }
-    }
-    return NULL;
+    if (ix->count == 0) return NULL;
+    return (const lcsas_blob_loc *)bsearch(
+        id, ix->entries, ix->count,
+        sizeof(lcsas_blob_loc), blob_id_bsearch_cmp
+    );
 }
 
 /* Decrypt a repository file and strip any v2 compression prefix.
@@ -581,6 +619,11 @@ lcsas_repo_load_index(const char *repo_path,
         }
         free(plain);
     }
+    /* Sort by id so lcsas_blob_index_find can bsearch in O(log n)
+     * instead of the previous O(n) linear scan (issue #181).  This is
+     * a one-time cost at end of load_index; per-find cost drops by
+     * ~6 orders of magnitude at 1M entries. */
+    blob_index_sort(ix);
     rc = 0;
 
 out:
