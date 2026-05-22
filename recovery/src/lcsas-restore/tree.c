@@ -122,7 +122,18 @@ restore_file_node(const char *repo_path,
         }
     }
 
-    fd = lcsas_create_file(target_path);
+    /* Pull the "mode" field from the tree node (restic stores it as
+     * a decimal POSIX mode like 420 = 0o644).  Default to 0o644 if
+     * absent or malformed so restored files at least match the
+     * common-case rustic behaviour. */
+    {
+        long mode_idx = lcsas_json_obj_get(src, toks, node_idx, "mode");
+        long long mode_value = 0644;
+        if (mode_idx >= 0 && toks[mode_idx].type == LCSAS_JSON_NUMBER) {
+            (void)lcsas_json_decode_int(src, &toks[mode_idx], &mode_value);
+        }
+        fd = lcsas_create_file(target_path, (unsigned int)(mode_value & 07777));
+    }
     if (fd < 0) return -1;
 
     if (content_idx < 0 || toks[content_idx].type != LCSAS_JSON_ARRAY) {
@@ -270,6 +281,22 @@ lcsas_tree_restore(const char *repo_path,
                 }
             } else if (strcmp(type_buf, "dir") == 0) {
                 lcsas_mkdir_p(node_path);
+                /* mkdir_p hardcodes 0700 for intermediates; the leaf
+                 * directory's mode comes from the tree node's "mode"
+                 * field.  Match tier-2 (rustic) parity. */
+                {
+                    long dmode_i = lcsas_json_obj_get((char *)blob, toks,
+                                                     t, "mode");
+                    long long dmode_v = 0755;
+                    if (dmode_i >= 0
+                            && toks[dmode_i].type == LCSAS_JSON_NUMBER) {
+                        (void)lcsas_json_decode_int((char *)blob,
+                                                    &toks[dmode_i], &dmode_v);
+                    }
+#ifndef _WIN32
+                    (void)chmod(node_path, (mode_t)(dmode_v & 07777));
+#endif
+                }
                 if (subtree_i >= 0
                         && toks[subtree_i].type == LCSAS_JSON_STRING
                         && toks[subtree_i].size == 64) {

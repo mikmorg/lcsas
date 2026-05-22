@@ -89,11 +89,24 @@ lcsas_read_file(const char *path, unsigned char **buf, size_t *len_out)
 }
 
 int
-lcsas_create_file(const char *path)
+lcsas_create_file(const char *path, unsigned int mode)
 {
+    int fd;
     /* O_BINARY no-op on POSIX; on Windows it prevents \r\n translation
-     * that would corrupt restored binary files. */
-    return open(path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0600);
+     * that would corrupt restored binary files.  Mode is stripped by
+     * the process umask during open(); fchmod() below restores the
+     * requested bits so tier-1 matches tier-2 (rustic) parity. */
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY,
+              (mode_t)(mode & 0777));
+    if (fd < 0) return -1;
+#ifndef _WIN32
+    /* On Windows fchmod doesn't carry POSIX semantics; skip there. */
+    if (fchmod(fd, (mode_t)(mode & 07777)) != 0) {
+        /* Non-fatal: caller still gets the fd.  Mode parity is
+         * best-effort if e.g. the filesystem doesn't support it. */
+    }
+#endif
+    return fd;
 }
 
 int

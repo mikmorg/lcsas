@@ -25,10 +25,13 @@ int lcsas_pread_exact(int fd, void *buf, size_t len, long long off);
 int lcsas_write_exact(int fd, const void *buf, size_t len);
 
 /*
- * Create a file (or overwrite), 0600.  Returns fd or -1 on error.
+ * Create (or overwrite) a regular file with the given mode bits
+ * (umask-stripped during open(); restored via fchmod() after).
+ * Pass the mode from the restic tree node's "mode" field so the
+ * restored file matches the original.  Returns fd or -1 on error.
  * The intermediate directories must already exist.
  */
-int lcsas_create_file(const char *path);
+int lcsas_create_file(const char *path, unsigned int mode);
 
 /*
  * Create directory `path` and all parents (mode 0700).  Returns 0 on
