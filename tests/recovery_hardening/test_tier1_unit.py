@@ -706,6 +706,105 @@ def test_fixture_meta_disc_excludes_path(tmp_path: Path) -> None:
     assert res.returncode == 0, res.stderr
 
 
+def test_fixture_verbose_catalog_open_warn(tmp_path: Path) -> None:
+    """--catalog with a path that lcsas_catalog_open can't open (without
+    --list-pending-packs which exits early) must print the WARN message
+    in main.c line 265 — non-fatal, restore continues."""
+    repo = _fixture_repo()
+    if repo is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    bin_path = _find_bin()
+    pwfile = _make_pwfile(tmp_path)
+    target = tmp_path / "restored"
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(target),
+        "--catalog", str(tmp_path / "no-such.db"),
+        timeout=10,
+    )
+    assert res.returncode == 0, res.stderr
+    err = res.stderr
+    assert "WARN" in err and "cannot open catalog" in err, err
+
+
+def test_fixture_verbose_pack_cache_logs(tmp_path: Path) -> None:
+    """--verbose + LCSAS_PACK_CACHE_DIR triggers the verbose "opportunistic
+    pack cache" log in main.c line 297."""
+    repo = _fixture_repo()
+    if repo is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    bin_path = _find_bin()
+    pwfile = _make_pwfile(tmp_path)
+    cache = tmp_path / "pack_cache"
+    target = tmp_path / "restored"
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(target),
+        "--verbose",
+        env={"LCSAS_PACK_CACHE_DIR": str(cache)},
+        timeout=10,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "opportunistic pack cache" in res.stderr, res.stderr
+
+
+def test_fixture_broken_snapshot_target_restore_fails(tmp_path: Path) -> None:
+    """--snapshot <broken-tree-snapshot> --target ... exercises main.c
+    lines 494-495 (ERROR: tree restore failed + goto out) — the main
+    path's response when lcsas_tree_restore returns -1."""
+    repo = _fixture_repo()
+    if repo is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    import json as _json
+    manifest = _json.loads((repo / "manifest.json").read_text())
+    broken_snap = manifest.get("broken_snapshot_id")
+    if not broken_snap:
+        pytest.skip("fixture lacks broken_snapshot_id — regenerate")
+    bin_path = _find_bin()
+    pwfile = _make_pwfile(tmp_path)
+    target = tmp_path / "restored"
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(target),
+        "--snapshot", broken_snap,
+        timeout=10,
+    )
+    assert res.returncode != 0
+    err = (res.stdout + res.stderr).lower()
+    assert "tree restore failed" in err, err
+
+
+def test_fixture_target_unwritable_fails_cleanly(tmp_path: Path) -> None:
+    """Target dir that mkdir_p cannot create exercises main.c lines
+    472-473 (ERROR: cannot create target dir + goto out)."""
+    repo = _fixture_repo()
+    if repo is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    bin_path = _find_bin()
+    pwfile = _make_pwfile(tmp_path)
+    # Create a regular file at the parent location, then ask to restore
+    # into a child of that file — mkdir_p will fail.
+    blocker = tmp_path / "i_am_a_file"
+    blocker.write_text("x")
+    target = blocker / "cant_mkdir_here"
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(target),
+        timeout=10,
+    )
+    assert res.returncode != 0
+    err = (res.stdout + res.stderr).lower()
+    assert "cannot create target dir" in err, err
+
+
 def test_fixture_pack_cache_dir_speeds_repeat_restore(tmp_path: Path) -> None:
     """Setting LCSAS_PACK_CACHE_DIR exercises main.c lines 293 (cache
     dir set) and the disc_locator's cache_dir + drain_disc copy paths.

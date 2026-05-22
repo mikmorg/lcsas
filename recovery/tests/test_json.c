@@ -184,6 +184,66 @@ int main(void)
         }
     }
 
+    /* Object with key but no colon — exercises parse_object's
+     * "expected colon" error branch (json_q.c line 140). */
+    {
+        const char *src = "{\"key\"}";
+        lcsas_json_tok toks[8];
+        long ntoks = lcsas_json_parse(src, strlen(src), toks, 8);
+        if (ntoks > 0) {
+            fprintf(stderr, "FAIL missing-colon accepted ntoks=%ld\n", ntoks);
+            fails++;
+        }
+    }
+
+    /* Object with stray char after value (no comma, no close brace) —
+     * exercises parse_object's "expected comma or close-brace" branch
+     * (json_q.c lines 155-156). */
+    {
+        const char *src = "{\"k\":\"v\"x}";
+        lcsas_json_tok toks[8];
+        long ntoks = lcsas_json_parse(src, strlen(src), toks, 8);
+        if (ntoks > 0) {
+            fprintf(stderr, "FAIL stray-char-after-value accepted ntoks=%ld\n",
+                    ntoks);
+            fails++;
+        }
+    }
+
+    /* Array missing comma between elements — exercises parse_array's
+     * "expected comma or close-bracket" branch (json_q.c lines 198-199). */
+    {
+        const char *src = "[1 2]";
+        lcsas_json_tok toks[8];
+        long ntoks = lcsas_json_parse(src, strlen(src), toks, 8);
+        if (ntoks > 0) {
+            fprintf(stderr, "FAIL missing-comma array accepted ntoks=%ld\n",
+                    ntoks);
+            fails++;
+        }
+    }
+
+    /* ASCII \\u escape — exercises the cp < 0x80 branch in
+     * lcsas_json_decode_string (json_q.c lines 324-325). */
+    {
+        const char *src = "\"\\u0041BC\"";
+        lcsas_json_tok toks[4];
+        long ntoks = lcsas_json_parse(src, strlen(src), toks, 4);
+        char buf[16];
+        long got;
+        if (ntoks != 1 || toks[0].type != LCSAS_JSON_STRING) {
+            fprintf(stderr, "FAIL ASCII unicode escape parse ntoks=%ld\n",
+                    ntoks);
+            fails++;
+        }
+        got = lcsas_json_decode_string(src, &toks[0], buf, sizeof buf);
+        if (got != 3 || memcmp(buf, "ABC", 3) != 0) {
+            fprintf(stderr,
+                    "FAIL \\u0041 should decode to 'ABC', got %ld bytes\n", got);
+            fails++;
+        }
+    }
+
     if (fails == 0) printf("test_json: OK\n");
     return fails ? 1 : 0;
 }

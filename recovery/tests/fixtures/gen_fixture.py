@@ -347,6 +347,59 @@ def make_pack_and_index(
         b"\x0d" + b"\x00" * 15, bad_subdir_tree_plain
     )
 
+    # Tree where "nodes" is a string instead of array — exercises
+    # tree.c line 213 (nodes_arr type-check fails → rc=0 goto out).
+    wrong_nodes_doc = {"nodes": "not-an-array"}
+    wrong_nodes_plain = json.dumps(wrong_nodes_doc).encode()
+    wrong_nodes_blob_id = sha256(wrong_nodes_plain)
+    wrong_nodes_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        b"\x0f" + b"\x00" * 15, wrong_nodes_plain
+    )
+
+    # Tree with a node name > 1024 chars — exercises tree.c line 240
+    # (lcsas_json_decode_string returns -1, continue).
+    long_name_doc = {
+        "nodes": [
+            {
+                "name": "a" * 2048,    # exceeds 1024-byte name_buf
+                "type": "file",
+                "mode": 420,
+                "mtime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "size": 0,
+                "content": [],
+            }
+        ]
+    }
+    long_name_plain = json.dumps(long_name_doc).encode()
+    long_name_blob_id = sha256(long_name_plain)
+    long_name_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        b"\x11" + b"\x00" * 15, long_name_plain
+    )
+
+    # Tree with a node type > 32 chars — exercises tree.c line 243.
+    long_type_doc = {
+        "nodes": [
+            {
+                "name": "ok_name.txt",
+                "type": "y" * 64,    # exceeds 32-byte type_buf
+                "mode": 420,
+                "mtime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "size": 0,
+                "content": [],
+            }
+        ]
+    }
+    long_type_plain = json.dumps(long_type_doc).encode()
+    long_type_blob_id = sha256(long_type_plain)
+    long_type_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        b"\x12" + b"\x00" * 15, long_type_plain
+    )
+
     # ── Pack file: data + sub_tree + root_tree blobs + header + footer ──
     # Restic pack format (v1):
     #   [blob 1 ciphertext]...[encrypted header][4-byte LE header length]
@@ -355,20 +408,27 @@ def make_pack_and_index(
     #   length:4 (LE)
     #   id:32
     pack_body = (data_enc + sub_tree_enc + tree_enc
-                 + broken_tree_enc + bad_hex_tree_enc + bad_subdir_tree_enc)
-    off_data       = 0
-    off_sub        = len(data_enc)
-    off_tree       = off_sub + len(sub_tree_enc)
-    off_broken     = off_tree + len(tree_enc)
-    off_bad_hex    = off_broken + len(broken_tree_enc)
-    off_bad_subdir = off_bad_hex + len(bad_hex_tree_enc)
+                 + broken_tree_enc + bad_hex_tree_enc + bad_subdir_tree_enc
+                 + wrong_nodes_enc + long_name_enc + long_type_enc)
+    off_data         = 0
+    off_sub          = len(data_enc)
+    off_tree         = off_sub + len(sub_tree_enc)
+    off_broken       = off_tree + len(tree_enc)
+    off_bad_hex      = off_broken + len(broken_tree_enc)
+    off_bad_subdir   = off_bad_hex + len(bad_hex_tree_enc)
+    off_wrong_nodes  = off_bad_subdir + len(bad_subdir_tree_enc)
+    off_long_name    = off_wrong_nodes + len(wrong_nodes_enc)
+    off_long_type    = off_long_name + len(long_name_enc)
     offsets = {
-        "data":       (off_data,       len(data_enc)),
-        "sub":        (off_sub,        len(sub_tree_enc)),
-        "tree":       (off_tree,       len(tree_enc)),
-        "broken":     (off_broken,     len(broken_tree_enc)),
-        "bad_hex":    (off_bad_hex,    len(bad_hex_tree_enc)),
-        "bad_subdir": (off_bad_subdir, len(bad_subdir_tree_enc)),
+        "data":         (off_data,         len(data_enc)),
+        "sub":          (off_sub,          len(sub_tree_enc)),
+        "tree":         (off_tree,         len(tree_enc)),
+        "broken":       (off_broken,       len(broken_tree_enc)),
+        "bad_hex":      (off_bad_hex,      len(bad_hex_tree_enc)),
+        "bad_subdir":   (off_bad_subdir,   len(bad_subdir_tree_enc)),
+        "wrong_nodes":  (off_wrong_nodes,  len(wrong_nodes_enc)),
+        "long_name":    (off_long_name,    len(long_name_enc)),
+        "long_type":    (off_long_type,    len(long_type_enc)),
     }
 
     # Header: per-blob descriptors
@@ -380,6 +440,9 @@ def make_pack_and_index(
         (1, broken_tree_blob_id,     offsets["broken"]),
         (1, bad_hex_tree_blob_id,    offsets["bad_hex"]),
         (1, bad_subdir_tree_blob_id, offsets["bad_subdir"]),
+        (1, wrong_nodes_blob_id,     offsets["wrong_nodes"]),
+        (1, long_name_blob_id,       offsets["long_name"]),
+        (1, long_type_blob_id,       offsets["long_type"]),
     ]:
         header += struct.pack("<BI", blob_type, ln) + blob_id
     header_enc = encrypt_authenticated(
@@ -443,6 +506,24 @@ def make_pack_and_index(
                         "type": "tree",
                         "offset": offsets["bad_subdir"][0],
                         "length": offsets["bad_subdir"][1],
+                    },
+                    {
+                        "id": wrong_nodes_blob_id.hex(),
+                        "type": "tree",
+                        "offset": offsets["wrong_nodes"][0],
+                        "length": offsets["wrong_nodes"][1],
+                    },
+                    {
+                        "id": long_name_blob_id.hex(),
+                        "type": "tree",
+                        "offset": offsets["long_name"][0],
+                        "length": offsets["long_name"][1],
+                    },
+                    {
+                        "id": long_type_blob_id.hex(),
+                        "type": "tree",
+                        "offset": offsets["long_type"][0],
+                        "length": offsets["long_type"][1],
                     },
                 ],
             }
@@ -520,12 +601,53 @@ def make_pack_and_index(
     bad_zstd_id = sha256(bad_zstd_enc)
     (index_dir / bad_zstd_id.hex()).write_bytes(bad_zstd_enc)
 
+    # FIFTH index file: v2-plain format (prefix byte 0x01 followed by
+    # plain JSON, NOT zstd-compressed).  Exercises repo.c lines
+    # 258-261 in lcsas_repo_strip_v2_prefix — the branch that strips
+    # the single prefix byte without invoking zstd_decode.
+    v2plain_doc = {
+        "supersedes": [],
+        "packs": [],
+    }
+    v2plain_payload = b"\x01" + json.dumps(v2plain_doc).encode()
+    v2plain_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        b"\x13" + b"\x00" * 15, v2plain_payload
+    )
+    v2plain_id = sha256(v2plain_enc)
+    (index_dir / v2plain_id.hex()).write_bytes(v2plain_enc)
+
+    # SIXTH index file: a malformed pack_id (non-hex chars).
+    # Exercises repo.c line 598 (lcsas_hex_decode failure on pack_id
+    # → continue).  The packs[] entry is structurally valid JSON but
+    # the id field contains "g" which is not a hex digit.
+    bad_pack_id_doc = {
+        "supersedes": [],
+        "packs": [
+            {
+                "id": "g" * 64,    # 64 chars, non-hex
+                "blobs": [],
+            }
+        ],
+    }
+    bad_pack_id_plain = json.dumps(bad_pack_id_doc).encode()
+    bad_pack_id_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        b"\x14" + b"\x00" * 15, bad_pack_id_plain
+    )
+    bad_pack_id_id = sha256(bad_pack_id_enc)
+    (index_dir / bad_pack_id_id.hex()).write_bytes(bad_pack_id_enc)
+
     # Make broken-tree IDs available via globals so main() can stuff
     # them into the manifest.
     global BROKEN_TREE_ID, BAD_HEX_TREE_ID, BAD_SUBDIR_TREE_ID
+    global WRONG_NODES_ID, LONG_NAME_ID, LONG_TYPE_ID
     BROKEN_TREE_ID = broken_tree_blob_id.hex()
     BAD_HEX_TREE_ID = bad_hex_tree_blob_id.hex()
     BAD_SUBDIR_TREE_ID = bad_subdir_tree_blob_id.hex()
+    WRONG_NODES_ID = wrong_nodes_blob_id.hex()
+    LONG_NAME_ID = long_name_blob_id.hex()
+    LONG_TYPE_ID = long_type_blob_id.hex()
 
     return pack_id_hex, data_blob_id.hex(), tree_blob_id.hex(), tree_blob_id.hex()
 
@@ -533,13 +655,45 @@ def make_pack_and_index(
 BROKEN_TREE_ID = ""
 BAD_HEX_TREE_ID = ""
 BAD_SUBDIR_TREE_ID = ""
+BROKEN_SNAP_ID = ""
+WRONG_NODES_ID = ""
+LONG_NAME_ID = ""
+LONG_TYPE_ID = ""
 
 
-def make_snapshot(repo_dir: Path, tree_id_hex: str) -> str:
+def make_snapshot(repo_dir: Path, tree_id_hex: str,
+                  broken_tree_hex: str = "") -> str:
     """Write two snapshot files (different timestamps) so the snapshot
-    sort loop runs at least one swap.  Returns the latest's hex id."""
+    sort loop runs at least one swap.  Optionally also writes a
+    "broken" snapshot pointing at a tree that fails restore.
+
+    Returns the latest GOOD snapshot's hex id."""
     snap_dir = repo_dir / "snapshots"
     snap_dir.mkdir()
+
+    if broken_tree_hex:
+        # Snapshot pointing at the broken tree — used by tests that
+        # exercise main.c's "tree restore failed" path under --target.
+        broken_doc = {
+            "time": "2026-04-01T00:00:00Z",
+            "tree": broken_tree_hex,
+            "paths": ["/will-fail"],
+            "hostname": "test",
+            "username": "test",
+            "uid": 1000, "gid": 1000,
+            "tags": [],
+            "id": "1" * 64,
+        }
+        broken_plain = json.dumps(broken_doc).encode()
+        broken_enc = encrypt_authenticated(
+            MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+            b"\x0e" + b"\x00" * 15, broken_plain
+        )
+        broken_id = sha256(broken_enc)
+        (snap_dir / broken_id.hex()).write_bytes(broken_enc)
+        # Persist for manifest.
+        global BROKEN_SNAP_ID
+        BROKEN_SNAP_ID = broken_id.hex()
 
     # OLDER snapshot — same tree, earlier timestamp.  After sort it
     # should appear FIRST (ascending by time string).
@@ -852,7 +1006,7 @@ def main() -> int:
         }
     else:
         pack_id, data_blob_id, tree_blob_id, _snap_tree = make_pack_and_index(args.out)
-        snap_id = make_snapshot(args.out, tree_blob_id)
+        snap_id = make_snapshot(args.out, tree_blob_id, BROKEN_TREE_ID)
         manifest = {
             "password": PASSWORD.decode(),
             "key_file": key_id,
@@ -862,7 +1016,11 @@ def main() -> int:
             "broken_tree_id": BROKEN_TREE_ID,
             "bad_hex_tree_id": BAD_HEX_TREE_ID,
             "bad_subdir_tree_id": BAD_SUBDIR_TREE_ID,
+            "wrong_nodes_tree_id": WRONG_NODES_ID,
+            "long_name_tree_id": LONG_NAME_ID,
+            "long_type_tree_id": LONG_TYPE_ID,
             "snapshot_id": snap_id,
+            "broken_snapshot_id": BROKEN_SNAP_ID,
             "master_encrypt_hex": MASTER_ENCRYPT.hex(),
             "master_mac_k_hex": MASTER_MAC_K.hex(),
             "master_mac_r_hex": MASTER_MAC_R.hex(),

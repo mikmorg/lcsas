@@ -79,6 +79,31 @@ int main(void)
                "348c89dbcbd32b2f32d814b8116e84cf2b17347ebc1800181c4e2a1fb8dd53e1c635518c7dac47e9", 40);
     }
 
+    /* Key longer than HMAC block size (64 bytes) — exercises the
+     * keylen > BLK branch in pbkdf2.c (lines 27-28) where the key is
+     * pre-hashed with SHA-256 before being used as HMAC key. */
+    {
+        unsigned char long_key[128];
+        unsigned char dk[32];
+        size_t i;
+        for (i = 0; i < sizeof long_key; i++) long_key[i] = (unsigned char)i;
+        /* Just verify it doesn't crash and produces deterministic output. */
+        lcsas_pbkdf2_sha256(long_key, sizeof long_key,
+                            (unsigned char *)"salt", 4,
+                            1, dk, 32);
+        /* Same inputs should produce same output. */
+        {
+            unsigned char dk2[32];
+            lcsas_pbkdf2_sha256(long_key, sizeof long_key,
+                                (unsigned char *)"salt", 4,
+                                1, dk2, 32);
+            if (memcmp(dk, dk2, 32) != 0) {
+                fprintf(stderr, "FAIL: long-key pbkdf2 not deterministic\n");
+                fails++;
+            }
+        }
+    }
+
     if (fails == 0) printf("test_pbkdf2: OK\n");
     return fails ? 1 : 0;
 }

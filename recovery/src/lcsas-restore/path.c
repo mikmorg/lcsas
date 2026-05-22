@@ -36,8 +36,6 @@ lcsas_path_safe_name(const char *name)
             }
             if (c == '\0') return 0;
             seg_start = i + 1;
-        } else if (c == '\0') {
-            return 0;
         }
     }
 }

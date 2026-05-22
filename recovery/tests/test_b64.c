@@ -25,6 +25,15 @@ int main(void)
     /* with newlines (wrapped input) */
     check("Zm9v\nYmFy", "foobar", 6);
 
+    /* Invalid base64 character — exercises nyb_v return -1 (b64.c line 18). */
+    {
+        unsigned char out[16];
+        if (lcsas_b64_decode("!!!!", 4, out) != -1) {
+            fprintf(stderr, "FAIL: invalid b64 char not rejected\n");
+            fails++;
+        }
+    }
+
     if (fails == 0) printf("test_b64: OK\n");
     return fails ? 1 : 0;
 }

@@ -402,6 +402,10 @@ main(void)
         } else {
             memset(missing, 0xCD, 32);
             lcsas_disc_locator_init(&l, search, 1, NULL, /*interactive=*/1);
+            /* Also set meta_disc so print_prompt emits the
+             * "Single-drive recovery" instructions block
+             * (disc_locator.c lines 717-720). */
+            lcsas_disc_locator_set_meta(&l, "/tmp/dummy_meta");
             rc = lcsas_disc_locate_pack(&l, missing, found, sizeof found);
             (void)rc;
             lcsas_disc_locator_free(&l);
@@ -409,6 +413,22 @@ main(void)
              * subsequent unlink is safe. */
         }
         unlink(input_path);
+    }
+
+    /* path_under edge cases: meta exactly matches path or path has a
+     * trailing slash.  Exercises disc_locator.c lines 178, 198 (the
+     * boundary `path[ml] == '/' || path[ml] == '\\0'` check). */
+    {
+        const char *search[] = { tmpdir };
+        unsigned char fake_id[32];
+        memset(fake_id, 0xAB, 32);
+        lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+        /* Set meta to a prefix that exactly equals one of the search
+         * paths.  The path_under check fires when comparing root paths. */
+        lcsas_disc_locator_set_meta(&l, tmpdir);
+        rc = lcsas_disc_locate_pack(&l, fake_id, found, sizeof found);
+        (void)rc;
+        lcsas_disc_locator_free(&l);
     }
 
     /* Cleanup tmpdir. */
