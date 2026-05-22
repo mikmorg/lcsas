@@ -112,10 +112,13 @@ lcsas_path_safe_symlink(const char *root,
 
     if (!target || !target[0]) return -1;
     if (target[0] == '/') {
-        /* Absolute target: forbid entirely.  This matches the
-         * Python rule that an absolute symlink can never be safely
-         * dropped onto a restore tree. */
-        return -1;
+        /* Absolute target: allowed (issue #187 — user decision to
+         * match tier-2 / rustic behaviour).  The restore-tree
+         * containment property is no longer enforced for absolute
+         * symlinks; operators who rely on containment must sandbox
+         * the restore target separately.  Relative symlinks are
+         * still resolved + validated via lex_resolve_inside below. */
+        return 0;
     }
 
     /* Copy from_dir, ensure trailing slash. */
