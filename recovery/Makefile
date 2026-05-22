@@ -436,6 +436,18 @@ coverage-c:
 	        ../tests/recovery_hardening/test_tier1_progress.py \
 	        ../tests/recovery_hardening/test_tier1_rescan.py \
 	    || true
+	# Step 3b: exercise the LCSAS_STRESS_LOOKUPS diagnostic block in
+	# main.c (Linux-only) so coverage-c reports it.  ~1 s.  Uses the
+	# already-committed test fixture; no fixture regeneration needed.
+	@if [ -d $(TESTDIR)/fixtures/repo/keys ]; then \
+	    echo "test" > $(BUILD)/_cov_pw && \
+	    LCSAS_STRESS_LOOKUPS=10 $(BUILD)/lcsas-restore \
+	        --repo $(TESTDIR)/fixtures/repo \
+	        --password-file $(BUILD)/_cov_pw \
+	        --list-snapshots 2>&1 | grep -q "\[bench\]" \
+	        && echo "[coverage-c] LCSAS_STRESS_LOOKUPS diagnostic exercised" \
+	        || echo "[coverage-c] LCSAS_STRESS_LOOKUPS exercise failed (non-fatal)"; \
+	fi
 	# Step 4: invoke gcovr (soft-skip if not installed)
 	@command -v gcovr >/dev/null 2>&1 || { echo "[coverage-c] gcovr not installed; run: pip install gcovr"; exit 0; }
 	# Step 5: generate reports narrowed to lcsas-restore sources only

@@ -34,13 +34,19 @@ static int fails = 0;
 #define FIXTURE_TREE_BLOB_HEX  \
     "ee915c16ffdf6f53b74e49f10090923a84d6d3a507bf40b71d05136c5b337425"
 #define FIXTURE_PACK_HEX       \
-    "ecd0a6e1a59e303bf0b647e20cbddd10469b2a8882664af80cec3a306f54e402"
+    "2dbdc082789aebf4583955d0048cc7be9f210fd600889c163dc3f125df36de20"
 #define FIXTURE_BROKEN_TREE_HEX  \
     "b9a34a1fa85b4ccdcd91b96abdb97acd76c914ba1f99c0f9c61e08842861add3"
 #define FIXTURE_BAD_HEX_TREE_HEX \
     "e9b21400fad094fe6f80db621ec8e68ace890c09875e807db12e9e78d65c884a"
 #define FIXTURE_BAD_SUBDIR_TREE_HEX \
     "8d615e95dd9cd90bb4a14ee546624b8230280e4b31597c28fff105d7e8eb12f1"
+#define FIXTURE_WRONG_NODES_TREE_HEX \
+    "220de5d552d29def627b3351c74dba144aa87d059d481224bb1eb753f6d342ac"
+#define FIXTURE_LONG_NAME_TREE_HEX \
+    "95094ebdf69956bc13345d8204a1263f1f11a04c2237783ce640da2763f698a6"
+#define FIXTURE_LONG_TYPE_TREE_HEX \
+    "1ae33da29ce6b897a97828272948ec450f1aa93e721365c5ceae9bf6f2e82dc0"
 
 /* Locate the fixture directory.  Honour LCSAS_TEST_FIXTURE_DIR for
  * out-of-tree builds; otherwise assume cwd is repo root or recovery/. */
@@ -198,8 +204,8 @@ main(void)
             fprintf(stderr, "FAIL: load_index rc=%d\n", rc);
             fails++;
         }
-        if (ix.count != 6) {
-            fprintf(stderr, "FAIL: index count=%zu, want 6\n", ix.count);
+        if (ix.count != 9) {
+            fprintf(stderr, "FAIL: index count=%zu, want 9\n", ix.count);
             fails++;
         }
 
@@ -249,8 +255,8 @@ main(void)
             fprintf(stderr, "FAIL: load_snapshots rc=%d\n", rc);
             fails++;
         }
-        if (snaps.count != 2) {
-            fprintf(stderr, "FAIL: snap count=%zu, want 2\n", snaps.count);
+        if (snaps.count != 3) {
+            fprintf(stderr, "FAIL: snap count=%zu, want 3\n", snaps.count);
             fails++;
         }
         sidx = lcsas_snapshot_latest(&snaps);
@@ -521,6 +527,76 @@ main(void)
                 if (rc2 == 0) {
                     fprintf(stderr,
                             "FAIL: bad-hex tree should fail but rc=0\n");
+                    fails++;
+                }
+                {
+                    char cmd[1024];
+                    snprintf(cmd, sizeof cmd, "rm -rf %s", tdir);
+                    (void)system(cmd);
+                }
+            }
+        }
+
+        /* Tree where "nodes" is a string (not an array).  Hits tree.c
+         * line 213: rc = 0; goto out; — a soft skip (rc stays 0). */
+        {
+            char tdir[] = "/tmp/lcsas_test_wrong_nodes_XXXXXX";
+            if (mkdtemp(tdir)) {
+                int rc2 = lcsas_tree_restore(
+                    repo, &mk, &ix, FIXTURE_WRONG_NODES_TREE_HEX,
+                    tdir, tdir, NULL, NULL
+                );
+                /* Wrong-type "nodes" causes a graceful skip (rc=0). */
+                if (rc2 != 0) {
+                    fprintf(stderr,
+                            "FAIL: wrong-nodes-type should rc=0, got %d\n",
+                            rc2);
+                    fails++;
+                }
+                {
+                    char cmd[1024];
+                    snprintf(cmd, sizeof cmd, "rm -rf %s", tdir);
+                    (void)system(cmd);
+                }
+            }
+        }
+
+        /* Tree with a node name > 1024 bytes — exercises tree.c line 240
+         * (name decode_string returns -1, loop continues).  Walk
+         * completes with rc=0 because the offending node is just
+         * skipped. */
+        {
+            char tdir[] = "/tmp/lcsas_test_long_name_XXXXXX";
+            if (mkdtemp(tdir)) {
+                int rc2 = lcsas_tree_restore(
+                    repo, &mk, &ix, FIXTURE_LONG_NAME_TREE_HEX,
+                    tdir, tdir, NULL, NULL
+                );
+                if (rc2 != 0) {
+                    fprintf(stderr,
+                            "FAIL: long-name tree should rc=0, got %d\n", rc2);
+                    fails++;
+                }
+                {
+                    char cmd[1024];
+                    snprintf(cmd, sizeof cmd, "rm -rf %s", tdir);
+                    (void)system(cmd);
+                }
+            }
+        }
+
+        /* Tree with a node type > 32 bytes — exercises tree.c line 243
+         * (type decode_string returns -1, loop continues). */
+        {
+            char tdir[] = "/tmp/lcsas_test_long_type_XXXXXX";
+            if (mkdtemp(tdir)) {
+                int rc2 = lcsas_tree_restore(
+                    repo, &mk, &ix, FIXTURE_LONG_TYPE_TREE_HEX,
+                    tdir, tdir, NULL, NULL
+                );
+                if (rc2 != 0) {
+                    fprintf(stderr,
+                            "FAIL: long-type tree should rc=0, got %d\n", rc2);
                     fails++;
                 }
                 {

@@ -143,6 +143,20 @@ on stderr, and exits.  Production paths are unaffected.
 
 (arena.c was removed in PR #175 — no longer a coverage exception.)
 
+## Documented coverage exemptions
+
+Lines not covered by `make coverage-c` are individually justified in
+[`EXEMPTIONS.md`](EXEMPTIONS.md).  As of Phase 12 the codebase is
+**95.5%** covered overall; the remaining 4.5% is mapped to specific
+intractable categories (EINTR retry, malloc fault injection against
+gcov-instrumented code, defensive 4 KiB+ path overflow checks, etc.).
+
+Every uncov line has either:
+- a TRACTABLE entry in `EXEMPTIONS.md` slated for a future PR, or
+- an INTRACTABLE entry with rationale, or
+- a DEFENSIVE entry for safe-guard code that is provably unreachable
+  given upstream invariants but kept for readability.
+
 ## Interpreting failures
 
 ### Coverage below threshold
