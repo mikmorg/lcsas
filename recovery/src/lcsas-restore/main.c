@@ -53,6 +53,10 @@
 #  define isatty _isatty
 #  define STDIN_FILENO 0
 #endif
+#if defined(__linux__)
+#  include <time.h>        /* clock_gettime — only used by stress bench */
+#  include <sys/resource.h>/* getrusage     — only used by stress bench */
+#endif
 
 #define MAX_PACK_SEARCH 64
 #define MAX_MOUNT_PARENTS 32
@@ -359,9 +363,71 @@ main(int argc, char **argv)
     }
     if (verbose) fprintf(stderr, "[lcsas-restore] master key loaded\n");
 
-    if (lcsas_repo_load_index(repo_path, &mk, &ix) != 0) {
-        fprintf(stderr, "ERROR: index load failed\n");
-        goto out;
+    {
+        /* The LCSAS_STRESS_LOOKUPS bench diagnostic is Linux-only —
+         * macOS cross-builds (via zig cc) don't expose ru_maxrss in the
+         * same way and we don't run the bench from those targets. */
+#if defined(__linux__)
+        struct timespec _t_idx_a, _t_idx_b;
+        clock_gettime(CLOCK_MONOTONIC, &_t_idx_a);
+#endif
+        if (lcsas_repo_load_index(repo_path, &mk, &ix) != 0) {
+            fprintf(stderr, "ERROR: index load failed\n");
+            goto out;
+        }
+#if defined(__linux__)
+        clock_gettime(CLOCK_MONOTONIC, &_t_idx_b);
+        /* Scaling benchmark: LCSAS_STRESS_LOOKUPS=N timed-find diagnostic.
+         * After load_index succeeds, perform N random lcsas_blob_index_find
+         * calls against the loaded index, print a single benchmark line,
+         * and exit 0.  No production-path side effects. */
+        {
+            const char *env = getenv("LCSAS_STRESS_LOOKUPS");
+            if (env && *env) {
+                long n_lookups = atol(env);
+                long lk;
+                long long load_ns =
+                    (long long)(_t_idx_b.tv_sec - _t_idx_a.tv_sec) * 1000000000LL
+                    + (long long)(_t_idx_b.tv_nsec - _t_idx_a.tv_nsec);
+                struct rusage ru;
+                long rss_kib = 0;
+                struct timespec _t_find_a, _t_find_b;
+                unsigned long long total_find_ns = 0;
+                if (n_lookups <= 0) n_lookups = 1000;
+
+                if (getrusage(RUSAGE_SELF, &ru) == 0) {
+                    /* ru_maxrss is KiB on Linux. */
+                    rss_kib = ru.ru_maxrss;
+                }
+
+                clock_gettime(CLOCK_MONOTONIC, &_t_find_a);
+                for (lk = 0; lk < n_lookups; lk++) {
+                    /* Random lookup against the loaded index.  Most ids
+                     * won't match (orphan entries dominate), but the scan
+                     * cost is what we're measuring. */
+                    unsigned char probe[32];
+                    int j;
+                    for (j = 0; j < 32; j++) probe[j] = (unsigned char)(rand() & 0xff);
+                    (void)lcsas_blob_index_find(&ix, probe);
+                }
+                clock_gettime(CLOCK_MONOTONIC, &_t_find_b);
+                total_find_ns =
+                    (unsigned long long)(_t_find_b.tv_sec - _t_find_a.tv_sec) * 1000000000ULL
+                    + (unsigned long long)(_t_find_b.tv_nsec - _t_find_a.tv_nsec);
+
+                fprintf(stderr,
+                    "[bench] entries=%lu load_index_ms=%lld "
+                    "rss_after_index_kib=%ld find_ns_mean=%llu lookups=%ld\n",
+                    (unsigned long)ix.count,
+                    load_ns / 1000000LL,
+                    rss_kib,
+                    n_lookups > 0 ? total_find_ns / (unsigned long long)n_lookups : 0ULL,
+                    n_lookups);
+                rc = 0;
+                goto out;
+            }
+        }
+#endif /* __linux__ */
     }
     if (verbose)
         fprintf(stderr, "[lcsas-restore] indexed %lu blobs\n",
