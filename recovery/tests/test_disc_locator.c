@@ -132,16 +132,57 @@ main(void)
         }
     }
 
-    /* Meta-disc exclusion: tmpdir IS the meta disc → pack search must skip. */
+    /* Meta-disc LIVE exclusion: tmpdir IS the meta disc and the meta
+     * sentinel (recovery/scripts/restore.sh) is present → pack search
+     * must skip.  This guards the security property: when the meta
+     * disc is still mounted, never try to mount packs from it. */
     {
         const char *search[] = { tmpdir };
+        char sentinel_dir[1024];
+        char sentinel_file[1024];
+        FILE *f;
+        snprintf(sentinel_dir, sizeof sentinel_dir,
+                 "%s/recovery/scripts", tmpdir);
+        if (mkdir_recursive(sentinel_dir) != 0) {
+            fprintf(stderr, "FAIL mkdir sentinel\n"); fails++;
+        }
+        snprintf(sentinel_file, sizeof sentinel_file,
+                 "%s/recovery/scripts/restore.sh", tmpdir);
+        f = fopen(sentinel_file, "wb");
+        if (f) { fputs("#!/bin/sh\n", f); fclose(f); }
+
         lcsas_disc_locator_init(&l, search, 1, NULL, 0);
         lcsas_disc_locator_set_meta(&l, tmpdir);
         rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
         if (rc == 0) {
             fprintf(stderr,
-                    "FAIL: meta-disc exclusion should hide pack, rc=%d\n",
-                    rc); fails++;
+                    "FAIL: meta-disc exclusion should hide pack when "
+                    "sentinel is present, rc=%d\n", rc); fails++;
+        }
+        lcsas_disc_locator_free(&l);
+
+        /* Meta-disc EJECTED exclusion: remove the sentinel (simulating
+         * the operator ejecting the meta disc and mounting a data disc
+         * at the same mount point).  The path must now be considered
+         * again (issue #143). */
+        unlink(sentinel_file);
+        rmdir(sentinel_dir);
+        {
+            char rec[1024];
+            snprintf(rec, sizeof rec, "%s/recovery", tmpdir);
+            rmdir(rec);
+        }
+        lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+        lcsas_disc_locator_set_meta(&l, tmpdir);
+        rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
+        if (rc != 0) {
+            fprintf(stderr,
+                    "FAIL: meta-disc no longer live (sentinel removed) "
+                    "but pack still excluded, rc=%d\n", rc); fails++;
+        } else if (strstr(found, hex) == NULL) {
+            fprintf(stderr,
+                    "FAIL: found path %s missing hex after eject\n",
+                    found); fails++;
         }
         lcsas_disc_locator_free(&l);
     }
