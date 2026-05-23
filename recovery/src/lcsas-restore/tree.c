@@ -25,6 +25,110 @@
 #define LCSAS_PROGRESS_DEFAULT_BLOBS_PER_TICK 16ULL
 #define LCSAS_PROGRESS_DEFAULT_BYTES_PER_TICK (1024ULL * 1024ULL)
 
+/* Issue #192 — hardlink reconstruction.
+ *
+ * Restic records hardlinks via a per-node "inode" field: two file
+ * nodes sharing the same nonzero inode value represent the same
+ * hardlinked file.  Tier-2 (rustic restore) reconstructs them via
+ * link(2); without doing the same, tier-1 emits a full content copy
+ * for every name, which can multiply restored size by the link
+ * factor (e.g. /usr/lib/firmware ~10x).
+ *
+ * The map is per-restore (not global): a flat array of
+ * (inode, restored-path) pairs, populated as the recursion walks
+ * the tree.  Growth pattern mirrors blob_index_push in repo.c
+ * (cap = 64, double).
+ *
+ * Windows has no link(2); the map is unused there (Win32 hardlinks
+ * would need CreateHardLinkA which isn't worth the porting cost for
+ * a tier-1 binary whose Windows story is "best-effort").
+ */
+typedef struct {
+    long long inode;
+    char *path;          /* malloc'd; freed by hardlink_map_free */
+} hardlink_entry;
+
+typedef struct {
+    hardlink_entry *entries;
+    size_t count;
+    size_t cap;
+} hardlink_map;
+
+static void
+hardlink_map_init(hardlink_map *m)
+{
+    m->entries = NULL;
+    m->count = 0;
+    m->cap = 0;
+}
+
+static void
+hardlink_map_free(hardlink_map *m)
+{
+    size_t i;
+    if (!m || !m->entries) return;
+    for (i = 0; i < m->count; i++) free(m->entries[i].path);
+    free(m->entries);
+    m->entries = NULL;
+    m->count = m->cap = 0;
+}
+
+/* Lookup: returns the stored path or NULL.  Linear search — the map
+ * is bounded by the # of hardlinked files in the snapshot, typically
+ * small enough that an O(n) walk per node is cheaper than the alloc/
+ * compare overhead of anything fancier. */
+static const char *
+hardlink_map_find(const hardlink_map *m, long long inode)
+{
+    size_t i;
+    if (!m) return NULL;
+    for (i = 0; i < m->count; i++) {
+        if (m->entries[i].inode == inode) return m->entries[i].path;
+    }
+    return NULL;
+}
+
+static int
+hardlink_map_insert(hardlink_map *m, long long inode, const char *path)
+{
+    char *dup;
+    size_t plen;
+    if (!m) return -1;
+    if (m->count == m->cap) {
+        size_t newcap = m->cap ? m->cap * 2 : 64;
+        hardlink_entry *p = (hardlink_entry *)realloc(
+            m->entries, newcap * sizeof(hardlink_entry));
+        if (!p) return -1;
+        m->entries = p;
+        m->cap = newcap;
+    }
+    plen = strlen(path);
+    dup = (char *)malloc(plen + 1);
+    if (!dup) return -1;
+    memcpy(dup, path, plen + 1);
+    m->entries[m->count].inode = inode;
+    m->entries[m->count].path = dup;
+    m->count++;
+    return 0;
+}
+
+/* Decode the "inode" field on a file node.  Returns 0 and writes
+ * *out on success; returns -1 if the field is missing, not a number,
+ * or fails to parse.  Per rustic semantics, inode == 0 means "not
+ * hardlinked" and is treated the same as absent. */
+static int
+decode_node_inode(const char *src, const lcsas_json_tok *toks,
+                  long node_idx, long long *out)
+{
+    long ino_i = lcsas_json_obj_get(src, toks, node_idx, "inode");
+    long long val = 0;
+    if (ino_i < 0 || toks[ino_i].type != LCSAS_JSON_NUMBER) return -1;
+    if (lcsas_json_decode_int(src, &toks[ino_i], &val) != 0) return -1;
+    if (val == 0) return -1;
+    *out = val;
+    return 0;
+}
+
 /* Issue #188 — preserve mtime from the restic tree node.
  *
  * Decode the "mtime" field on `node_idx` (an RFC 3339 string) into a
@@ -125,7 +229,8 @@ restore_file_node(const char *repo_path,
                   long node_idx,
                   const char *target_path,
                   struct lcsas_disc_locator *locator,
-                  lcsas_progress *progress)
+                  lcsas_progress *progress,
+                  hardlink_map *hlmap)
 {
     long content_idx = lcsas_json_obj_get(src, toks, node_idx, "content");
     int fd;
@@ -141,7 +246,12 @@ restore_file_node(const char *repo_path,
      * does by default on the Python/rustic tier.
      *
      * lcsas_create_file() opens with O_TRUNC, so the check MUST come
-     * before that call or we would clobber the file unconditionally. */
+     * before that call or we would clobber the file unconditionally.
+     *
+     * Issue #192 — on a hit, register the path in the hardlink map
+     * so subsequent occurrences of the same inode can link() to it.
+     * Otherwise a partial-resume restore would never recover the
+     * hardlinks even though the first occurrence was already on disk. */
     {
         long size_idx = lcsas_json_obj_get(src, toks, node_idx, "size");
         if (size_idx >= 0 && toks[size_idx].type == LCSAS_JSON_NUMBER) {
@@ -155,11 +265,72 @@ restore_file_node(const char *repo_path,
                     fprintf(stderr,
                             "[lcsas-restore] skipping already-restored: %s\n",
                             target_path);
+#ifndef _WIN32
+                    if (hlmap) {
+                        long long ino = 0;
+                        if (decode_node_inode(src, toks, node_idx, &ino) == 0
+                                && hardlink_map_find(hlmap, ino) == NULL) {
+                            (void)hardlink_map_insert(hlmap, ino, target_path);
+                        }
+                    }
+#endif
                     return 0;
                 }
             }
         }
     }
+
+#ifndef _WIN32
+    /* Issue #192 — hardlink reconstruction.  If this node's inode
+     * matches one we've already restored in this snapshot, link()
+     * to the previously-restored path instead of writing a fresh
+     * content copy.  Falls through to the normal restore path if
+     * the inode is missing, zero, unmapped, or the link() call
+     * fails (best-effort: a failed link still gets a content copy). */
+    if (hlmap) {
+        long long inode = 0;
+        if (decode_node_inode(src, toks, node_idx, &inode) == 0) {
+            const char *prior = hardlink_map_find(hlmap, inode);
+            if (prior) {
+                /* Unlink any pre-existing target; link() refuses to
+                 * overwrite, and we may be re-running over a stale
+                 * tree (e.g. partial restore). */
+                (void)unlink(target_path);
+                if (link(prior, target_path) == 0) {
+                    /* Apply node mode + mtime via lstat path API.
+                     * Hardlinks share inode metadata so this also
+                     * touches `prior` — that's the snapshot's
+                     * intent (all names point at the same content). */
+                    long mode_idx = lcsas_json_obj_get(src, toks, node_idx,
+                                                      "mode");
+                    long long mode_value = 0644;
+                    if (mode_idx >= 0
+                            && toks[mode_idx].type == LCSAS_JSON_NUMBER) {
+                        (void)lcsas_json_decode_int(src, &toks[mode_idx],
+                                                    &mode_value);
+                    }
+                    (void)chmod(target_path,
+                                (mode_t)(mode_value & 07777));
+                    {
+                        struct timespec ts[2];
+                        if (decode_node_mtime(src, toks, node_idx, ts) == 0) {
+                            (void)utimensat(AT_FDCWD, target_path, ts, 0);
+                        }
+                    }
+                    return 0;
+                }
+                /* link() failed (cross-device? EXDEV on weird
+                 * filesystems?) — fall through to normal restore. */
+            } else {
+                /* First occurrence: record path so subsequent nodes
+                 * with the same inode become link()s. */
+                (void)hardlink_map_insert(hlmap, inode, target_path);
+            }
+        }
+    }
+#else
+    (void)hlmap;
+#endif
 
     /* Pull the "mode" field from the tree node (restic stores it as
      * a decimal POSIX mode like 420 = 0o644).  Default to 0o644 if
@@ -233,15 +404,16 @@ restore_file_node(const char *repo_path,
     return rc;
 }
 
-int
-lcsas_tree_restore(const char *repo_path,
-                   const lcsas_master_key *mk,
-                   const lcsas_blob_index *ix,
-                   const char *tree_id_hex,
-                   const char *target_dir,
-                   const char *target_root,
-                   struct lcsas_disc_locator *locator,
-                   lcsas_progress *progress)
+static int
+tree_restore_recurse(const char *repo_path,
+                     const lcsas_master_key *mk,
+                     const lcsas_blob_index *ix,
+                     const char *tree_id_hex,
+                     const char *target_dir,
+                     const char *target_root,
+                     struct lcsas_disc_locator *locator,
+                     lcsas_progress *progress,
+                     hardlink_map *hlmap)
 {
     unsigned char tree_id[32];
     const lcsas_blob_loc *loc;
@@ -328,7 +500,7 @@ lcsas_tree_restore(const char *repo_path,
             if (strcmp(type_buf, "file") == 0) {
                 if (restore_file_node(repo_path, mk, ix,
                                       (char *)blob, toks, t, node_path,
-                                      locator, progress) != 0) {
+                                      locator, progress, hlmap) != 0) {
                     fprintf(stderr, "file restore failed: %s\n", node_path);
                     goto out;
                 }
@@ -356,9 +528,10 @@ lcsas_tree_restore(const char *repo_path,
                     char sub_hex[65];
                     memcpy(sub_hex, (char *)blob + toks[subtree_i].start, 64);
                     sub_hex[64] = '\0';
-                    if (lcsas_tree_restore(repo_path, mk, ix, sub_hex,
-                                           node_path, target_root,
-                                           locator, progress) != 0) {
+                    if (tree_restore_recurse(repo_path, mk, ix, sub_hex,
+                                             node_path, target_root,
+                                             locator, progress,
+                                             hlmap) != 0) {
                         goto out;
                     }
                 }
@@ -416,5 +589,30 @@ lcsas_tree_restore(const char *repo_path,
 out:
     free(blob);
     free(toks);
+    return rc;
+}
+
+/*
+ * Public entry point.  Owns the per-restore hardlink map: allocates,
+ * passes it through the recursive walk, frees on return.  The map is
+ * INTENTIONALLY internal to tree.c so the public API stays stable.
+ */
+int
+lcsas_tree_restore(const char *repo_path,
+                   const lcsas_master_key *mk,
+                   const lcsas_blob_index *ix,
+                   const char *tree_id_hex,
+                   const char *target_dir,
+                   const char *target_root,
+                   struct lcsas_disc_locator *locator,
+                   lcsas_progress *progress)
+{
+    hardlink_map hlmap;
+    int rc;
+    hardlink_map_init(&hlmap);
+    rc = tree_restore_recurse(repo_path, mk, ix, tree_id_hex,
+                              target_dir, target_root,
+                              locator, progress, &hlmap);
+    hardlink_map_free(&hlmap);
     return rc;
 }
