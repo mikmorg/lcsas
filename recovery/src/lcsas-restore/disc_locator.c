@@ -179,6 +179,37 @@ path_under(const char *path, const char *meta)
 }
 
 /*
+ * Return non-zero iff the meta disc is *still mounted* at `meta`.
+ *
+ * The meta-disc exclusion (`path_under(p, meta)` at three call sites
+ * below) must NOT persist after the operator ejects the meta disc and
+ * mounts a data disc at the same mount point.  Otherwise the binary
+ * blacklists `/mnt` for the rest of the run and the swap prompt loops
+ * forever (issue #143).
+ *
+ * Cheap liveness test: probe a sentinel file that exists on the meta
+ * disc but never on a data disc.  `recovery/scripts/restore.sh` is
+ * written by `_bundle_recovery_toolchain_artifacts` (meta builder) and
+ * the holographic metadata injector that populates data discs does NOT
+ * write a `recovery/` directory.  `access(F_OK)` is the minimum-cost
+ * stat-like check (no fd, no open).
+ *
+ * NULL / empty `meta` => not live (defensive).
+ */
+static int
+meta_disc_is_live(const char *meta)
+{
+    char sentinel[4096];
+    int rc;
+
+    if (!meta || !*meta) return 0;
+    rc = snprintf(sentinel, sizeof sentinel,
+                  "%s/recovery/scripts/restore.sh", meta);
+    if (rc <= 0 || (size_t)rc >= sizeof sentinel) return 0;
+    return access(sentinel, F_OK) == 0;
+}
+
+/*
  * Append `path` to the discovered list if it isn't already in either
  * the caller-provided search paths or the discovered list.  Returns
  * 1 if appended, 0 if duplicate or on allocation failure.
@@ -290,8 +321,14 @@ static void
 refresh_discovered(lcsas_disc_locator *l)
 {
     size_t i;
+    int meta_live;
 
     free_discovered(l);
+
+    /* Liveness check once per refresh -- if the operator ejects the
+     * meta disc partway through, the worst case is a single stale
+     * decision; the next refresh re-evaluates. */
+    meta_live = l->meta_disc && meta_disc_is_live(l->meta_disc);
 
     /* Also try the parent itself as a candidate source (some setups
      * mount a single disc directly at /mnt rather than /mnt/<label>).
@@ -304,7 +341,7 @@ refresh_discovered(lcsas_disc_locator *l)
         int rc;
 
         if (!parent || !*parent) continue;
-        if (l->meta_disc && path_under(parent, l->meta_disc)) continue;
+        if (meta_live && path_under(parent, l->meta_disc)) continue;
 
         /* The parent itself may be the mount point of a single
          * inserted disc -- probe its catalog and add it as a search
@@ -332,7 +369,7 @@ refresh_discovered(lcsas_disc_locator *l)
             }
             if (stat(child, &st) != 0) continue;
             if (!S_ISDIR(st.st_mode)) continue;
-            if (l->meta_disc && path_under(child, l->meta_disc))
+            if (meta_live && path_under(child, l->meta_disc))
                 continue;
             push_discovered(l, child);
 
@@ -387,10 +424,12 @@ static int
 try_with_meta(lcsas_disc_locator *l, const char *p, const char *hex,
               char *out_path, size_t cap)
 {
+    int meta_live;
     if (!p) return 0;
-    if (l->meta_disc && path_under(p, l->meta_disc)) return 0;
+    meta_live = l->meta_disc && meta_disc_is_live(l->meta_disc);
+    if (meta_live && path_under(p, l->meta_disc)) return 0;
     if (!try_one_path(p, hex, out_path, cap)) return 0;
-    if (l->meta_disc && path_under(out_path, l->meta_disc)) return 0;
+    if (meta_live && path_under(out_path, l->meta_disc)) return 0;
     return 1;
 }
 
