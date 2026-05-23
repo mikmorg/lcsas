@@ -223,27 +223,10 @@ decode_node_mtime(const char *src, const lcsas_json_tok *toks,
     return 0;
 }
 
-/* Issue #193 — write a blob to fd, leaving holes for runs of zero
- * bytes >= 4 KiB.  For non-zero stretches and short zero runs the
- * bytes are written normally; for long zero runs we `lseek` past
- * them so the underlying filesystem records a hole instead of
- * materialising the zeros.
- *
- * Net effect on a 100 MiB sparse VM image with one 1 MiB write at
- * the end: tier-1 produces a restored file with `stat -c %b` ≈ the
- * non-zero region only (matches what rustic produces).
- *
- * On filesystems that don't honour hole semantics (some tmpfs
- * configs, some FUSE backends) the file ends up dense — which is
- * the same behaviour as a non-sparse-aware write loop.  No
- * regression vs. the prior implementation.
- *
- * The 4 KiB threshold is empirical: smaller zero runs aren't worth
- * the fragmentation + extra syscall.  Linux btrfs/ext4 use 4 KiB
- * blocks by default, so a single zero block can be a hole.
- *
- * Compiled out on Windows (no POSIX lseek hole semantics on NTFS).
- */
+/* Write a blob to fd, lseek-ing past zero runs >= 4 KiB to leave
+ * holes instead of materialising zeros.  Threshold matches
+ * btrfs/ext4 default block size: smaller runs aren't worth the
+ * extra syscall + potential fragmentation. */
 #ifndef _WIN32
 static int
 write_blob_sparse(int fd, const unsigned char *buf, size_t len)
@@ -311,9 +294,8 @@ apply_node_ownership(const char *src, const lcsas_json_tok *toks,
     }
     if (uid_v < 0 || gid_v < 0) return;
 
-    /* `(void)lchown(...)` is not enough on glibc — the
-     * warn_unused_result attribute fires through the cast.  Suppress
-     * via explicit assignment to an ignored variable. */
+    /* glibc's warn_unused_result on lchown fires through (void)
+     * casts — assign-then-ignore is the workaround. */
     {
         int chown_rc = lchown(path, (uid_t)uid_v, (gid_t)gid_v);
         (void)chown_rc;
@@ -353,9 +335,11 @@ apply_node_xattrs(const char *src, const lcsas_json_tok *toks,
     for (n = 0; n < count; n++) {
         long name_i, value_i;
         char name_buf[256];
-        unsigned char value_buf[4096];
-        long value_len;
+        unsigned char *value_buf = NULL;
+        long value_len = 0;
         long name_n;
+        size_t enc_len = 0;
+        size_t cap;
 
         /* Skip non-object array entries (defensive). */
         while (toks[elem_t].parent != ea_i) elem_t++;
@@ -382,22 +366,33 @@ apply_node_xattrs(const char *src, const lcsas_json_tok *toks,
             continue;
         }
 
-        /* Value: either a base64 string or an integer-array byte
-         * sequence.  Restic spec is base64 string. */
+        /* Value: a base64-encoded raw byte string.  lcsas_b64_decode
+         * has no destination-length parameter, so we MUST size the
+         * destination buffer from the encoded length BEFORE decoding
+         * to prevent a stack/heap overflow (xattrs can be up to
+         * 64 KiB on Linux).  Decoded size <= ceil(enc_len * 3 / 4). */
         if (toks[value_i].type == LCSAS_JSON_STRING) {
+            enc_len = (size_t)(toks[value_i].end - toks[value_i].start);
+            cap = (enc_len + 3) / 4 * 3 + 8;
+            value_buf = (unsigned char *)malloc(cap);
+            if (!value_buf) {
+                /* Best-effort — skip this xattr if we can't allocate. */
+                elem_t = toks[elem_t].end;
+                continue;
+            }
             value_len = lcsas_b64_decode(
-                src + toks[value_i].start,
-                toks[value_i].end - toks[value_i].start,
-                value_buf);
-            if (value_len < 0) value_len = 0;
-        } else {
-            value_len = 0;
+                src + toks[value_i].start, enc_len, value_buf);
+            if (value_len < 0 || (size_t)value_len > cap) value_len = 0;
         }
 
         /* lsetxattr matches lchown semantics — operates on the
          * symlink itself, not the target. */
-        (void)lsetxattr(path, name_buf, value_buf,
-                        (size_t)value_len, 0);
+        if (value_buf) {
+            (void)lsetxattr(path, name_buf, value_buf,
+                            (size_t)value_len, 0);
+            free(value_buf);
+            value_buf = NULL;
+        }
 
         elem_t = toks[elem_t].end;
     }
@@ -598,10 +593,8 @@ restore_file_node(const char *repo_path,
         if (mode_idx >= 0 && toks[mode_idx].type == LCSAS_JSON_NUMBER) {
             (void)lcsas_json_decode_int(src, &toks[mode_idx], &mode_value);
         }
-        fd = lcsas_create_file(target_path, mode_from_go_filemode(mode_value));
-        /* Stash the mode so the post-content fchmod below sees the
-         * right value without re-parsing. */
         final_posix_mode = mode_from_go_filemode(mode_value);
+        fd = lcsas_create_file(target_path, final_posix_mode);
     }
     if (fd < 0) return -1;
 
