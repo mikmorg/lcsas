@@ -56,6 +56,7 @@ DB_PATH = FIXTURE / "catalog.db"
 
 VAULT = Path("/var/lib/disc-vault")
 DISC_LOADER_BIN = Path("/usr/local/bin/disc-loader")
+RESTORE_SHELL_BIN = Path("/usr/local/bin/restore-shell")
 ROBOT_LIBEXEC = Path("/opt/disc-robot/libexec/cdr-robotctl")
 CDEMU_WRAPPER_INSTALL = Path("/usr/local/libexec/cdemu_drive.sh")
 CDEMU_WRAPPER_SRC = REPO_ROOT / "scripts" / "cdemu_drive.sh"
@@ -392,6 +393,13 @@ def _install_disc_loader() -> None:
         ["strip", "--strip-all", str(DISC_LOADER_BIN)],
         check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
+
+    # restore-shell: facade over tmux so the blind agent doesn't have
+    # to hand-roll capture-pane retry loops.  World-readable + exec —
+    # no secrets, just a wrapper.
+    shutil.copy2(HERE / "restore-shell", RESTORE_SHELL_BIN)
+    os.chown(RESTORE_SHELL_BIN, 0, 0)
+    os.chmod(RESTORE_SHELL_BIN, 0o755)
 
 
 # ---------------------------------------------------------------------------

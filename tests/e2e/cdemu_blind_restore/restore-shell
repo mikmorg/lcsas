@@ -1,0 +1,118 @@
+#!/bin/sh
+# restore-shell — facade over tmux for blind-restore agents.
+#
+# Why this exists: the original agent_prompt.txt asked the LLM to
+# hand-roll tmux idioms (capture-pane retry loops, send-keys + C-m,
+# `remain-on-exit on`, server-died detection).  That's incidental
+# complexity unrelated to the recovery process under test.  The
+# blind-restore is supposed to evaluate the recovery PATH, not the
+# agent's tmux fluency.  This wrapper collapses every per-action
+# concern into a single command.
+#
+# Usage:
+#   restore-shell start CMD...
+#       Start CMD inside a fresh tmux session named "r".  Kills any
+#       prior "r" session.  Sets remain-on-exit so the pane survives
+#       CMD's exit and the final output is still readable.  Returns
+#       immediately; CMD runs in the background.
+#
+#   restore-shell expect REGEX [TIMEOUT_SECS]
+#       Poll the pane until REGEX (extended grep) matches OR timeout.
+#       On match:        prints the full current pane, exits 0.
+#       On timeout:      prints the full current pane, exits 1.
+#       On session-gone: prints whatever was captured, exits 2.
+#       Default timeout: 60 s.  Each poll is 1 s apart.
+#
+#   restore-shell send TEXT
+#       Send TEXT followed by ENTER.  Backslash escapes (\n etc.)
+#       are NOT interpreted — pass the literal string you want typed.
+#
+#   restore-shell send-raw TEXT
+#       Send TEXT without trailing ENTER.  For composing multi-step
+#       keystroke sequences.
+#
+#   restore-shell screen
+#       Print the current pane content.
+#
+#   restore-shell quit
+#       Kill the "r" session.  No-op if it doesn't exist.
+#
+# The session name is "r" by default; override with $RESTORE_SHELL_SESSION
+# if needed (rare).
+
+set -u
+SESSION="${RESTORE_SHELL_SESSION:-r}"
+
+case "${1:-}" in
+    start)
+        shift
+        if [ $# -eq 0 ]; then
+            echo "[restore-shell] start: missing command" >&2
+            exit 2
+        fi
+        tmux kill-session -t "$SESSION" 2>/dev/null || true
+        # remain-on-exit lets us read the final output after CMD exits.
+        tmux set-option -g remain-on-exit on 2>/dev/null || true
+        if ! tmux new-session -d -s "$SESSION" -- "$@" 2>/tmp/.restore-shell-err; then
+            echo "[restore-shell] tmux new-session failed:" >&2
+            cat /tmp/.restore-shell-err >&2
+            exit 1
+        fi
+        # Let the child print its first prompt before the agent races
+        # to capture-pane.
+        sleep 0.5
+        echo "[restore-shell] session $SESSION started: $*"
+        ;;
+    expect)
+        pattern="${2:-}"
+        timeout="${3:-60}"
+        if [ -z "$pattern" ]; then
+            echo "[restore-shell] expect: missing REGEX" >&2
+            exit 2
+        fi
+        deadline=$(( $(date +%s) + timeout ))
+        out=""
+        while [ "$(date +%s)" -lt "$deadline" ]; do
+            if ! out=$(tmux capture-pane -t "$SESSION" -p 2>/dev/null); then
+                printf '%s\n' "$out"
+                echo "[restore-shell] session $SESSION ended unexpectedly" >&2
+                exit 2
+            fi
+            if printf '%s' "$out" | grep -qE "$pattern"; then
+                printf '%s\n' "$out"
+                exit 0
+            fi
+            sleep 1
+        done
+        printf '%s\n' "$out"
+        printf '[restore-shell] timeout (%ss) waiting for: %s\n' \
+            "$timeout" "$pattern" >&2
+        exit 1
+        ;;
+    send)
+        shift
+        tmux send-keys -t "$SESSION" -- "$@" C-m
+        ;;
+    send-raw)
+        shift
+        tmux send-keys -t "$SESSION" -l -- "$@"
+        ;;
+    screen)
+        tmux capture-pane -t "$SESSION" -p 2>/dev/null \
+            || { echo "[restore-shell] no session $SESSION" >&2; exit 1; }
+        ;;
+    quit)
+        tmux kill-session -t "$SESSION" 2>/dev/null || true
+        ;;
+    *)
+        cat >&2 <<EOF
+usage: restore-shell start CMD...
+       restore-shell expect REGEX [TIMEOUT_SECS]
+       restore-shell send TEXT
+       restore-shell send-raw TEXT
+       restore-shell screen
+       restore-shell quit
+EOF
+        exit 2
+        ;;
+esac
