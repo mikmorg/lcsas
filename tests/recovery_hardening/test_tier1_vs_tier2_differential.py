@@ -52,6 +52,12 @@ class Profile:
     name: str
     make_source: Callable[[Path], None]
     smoke: bool = False
+    # When set, the profile is run as an `xfail(strict=True)`: the
+    # mismatch it surfaces is a known tier-1 ↔ tier-2 divergence
+    # tracked under the referenced issue.  When the divergence is
+    # fixed the test becomes XPASS (strict) and forces the marker to
+    # be removed alongside the fix.
+    xfail_reason: str | None = None
 
 
 # ── Source-content generators (each materialises files under src/) ──
@@ -113,6 +119,24 @@ def _profile_large_dir_node(src: Path) -> None:
         (big / f"n{i:04d}.txt").write_text(f"{i}\n")
 
 
+def _profile_setuid_modes(src: Path) -> None:
+    """setuid (04755), setgid (02755), sticky (01777) — preserved or
+    stripped equally by both tiers?
+
+    Tier-1's ``lcsas_create_file`` uses ``fchmod(fd, mode & 07777)``
+    which includes setuid (04000), setgid (02000), and sticky (01000)
+    bits.  Tier-2 (rustic) should preserve them too.  ``diff_trees``
+    compares ``st_mode & 0o7777`` so any silent strip on either side
+    surfaces as a mode mismatch.  Issue #195.
+    """
+    (src / "setuid_bin").write_text("#!/bin/sh\necho ok\n")
+    (src / "setuid_bin").chmod(0o4755)
+    (src / "setgid_bin").write_text("#!/bin/sh\necho ok\n")
+    (src / "setgid_bin").chmod(0o2755)
+    (src / "sticky_dir").mkdir()
+    (src / "sticky_dir").chmod(0o1777)
+
+
 PROFILES = [
     Profile("small_file", _profile_small_file, smoke=True),
     Profile("many_small_files", _profile_many_small_files),
@@ -122,6 +146,17 @@ PROFILES = [
     Profile("symlinks_and_modes", _profile_symlinks_and_modes),
     Profile("empty_dir", _profile_empty_dir),
     Profile("large_dir_node", _profile_large_dir_node),
+    Profile(
+        "setuid_modes",
+        _profile_setuid_modes,
+        xfail_reason=(
+            "Issue #201: rustic stores `mode` as Go's os.FileMode "
+            "(setuid=bit 23, setgid=bit 22, sticky=bit 20), not the "
+            "POSIX 12-bit word.  Tier-1 masks with `& 07777` which "
+            "strips those bits silently.  Test pins the divergence "
+            "until tier-1 learns the Go encoding."
+        ),
+    ),
 ]
 
 
@@ -134,7 +169,9 @@ def _should_run(profile: Profile) -> bool:
 
 
 @pytest.mark.parametrize("profile", PROFILES, ids=lambda p: p.name)
-def test_tier1_vs_tier2_byte_identical(profile: Profile, tmp_path: Path) -> None:
+def test_tier1_vs_tier2_byte_identical(
+    profile: Profile, tmp_path: Path, request: pytest.FixtureRequest,
+) -> None:
     if not _should_run(profile):
         pytest.skip(
             f"profile {profile.name!r}: set LCSAS_DIFF=1 to run "
@@ -145,6 +182,10 @@ def test_tier1_vs_tier2_byte_identical(profile: Profile, tmp_path: Path) -> None
     bin_path = _find_restore_bin()
     if bin_path is None:
         pytest.skip("no lcsas-restore binary; run `make -C recovery`")
+    if profile.xfail_reason is not None:
+        request.applymarker(
+            pytest.mark.xfail(reason=profile.xfail_reason, strict=True)
+        )
 
     src = tmp_path / "src"
     src.mkdir()

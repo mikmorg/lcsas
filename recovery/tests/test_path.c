@@ -42,6 +42,12 @@ int main(void)
     expect_safe("empty",         "",              0);
     expect_safe("trailing-slash","foo//bar",      0);
     expect_safe("dot-only",      ".",             1);
+    /* Issue #195 — pin verbatim cases cited in the issue text so
+     * regressions surface against the exact strings reviewers expect
+     * the safety check to reject. */
+    expect_safe("dotdot-passwd", "../etc/passwd", 0);
+    expect_safe("abs-bare",      "/abs",          0);
+    expect_safe("dotdot-trail",  "foo/..",        0);
 
     /* Symlinks */
     expect_sym("relative inside", "/restore", "/restore/a", "b",        1);

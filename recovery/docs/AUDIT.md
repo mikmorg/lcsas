@@ -144,7 +144,7 @@ on stderr, and exits.  Production paths are unaffected.
 Phase 14 added a tier-1 ↔ tier-2 byte-identical comparison.  For each
 content profile (small_file, many_small_files, one_large_file,
 deep_tree, unicode_names, symlinks_and_modes, empty_dir,
-large_dir_node) the test:
+large_dir_node, setuid_modes) the test:
 
 1. Builds a real restic-format repo via `rustic init` + `rustic backup`
 2. Restores via `lcsas-restore`  (tier 1) into `tier1_out/`
@@ -176,6 +176,48 @@ Phase 14 surfaced two real bugs on first run:
 
 Both were silent permission-downgrades on restore.  See PR thread
 for details.
+
+### Phase 14.1 — setuid/setgid/sticky parity (issue #195 → #201)
+
+The `setuid_modes` profile (issue #195) backs up files with mode
+`0o4755` (setuid), `0o2755` (setgid), and a directory with `0o1777`
+(sticky) and asserts tier-1 ↔ tier-2 parity on bits beyond
+`0o0777`.  Result: **divergence** — tier-1 strips all three bits
+silently, tier-2 (rustic) preserves them.
+
+Root cause: rustic stores `mode` in tree-node JSON as Go's
+`os.FileMode` bit-field, **not** the POSIX 12-bit mode word.
+Setuid lives at Go bit 23, setgid at bit 22, sticky at bit 20.
+Tier-1's `& 07777` mask in `lcsas_create_file` (`lcsas_io.c:104`)
+and `lcsas_tree_restore`'s dir `chmod` (`tree.c:350`) extract only
+the POSIX-aligned bits, silently dropping the Go-encoded ones.
+
+The `setuid_modes` profile is marked `xfail(strict=True)` against
+issue #201.  When tier-1 learns the Go encoding the test becomes
+XPASS-strict and forces the xfail marker to be removed alongside
+the fix.
+
+### Phase 14.2 — filename normalization parity (issue #195)
+
+Tier-1's `lcsas_path_safe_name` (`path.c`) rejects names with a
+leading `/`, empty segments (`//`), and `..` segments.  These
+rules are unit-pinned in `recovery/tests/test_path.c` (`dotdot`,
+`dotdot-start`, `dotdot-passwd`, `absolute`, `abs-bare`,
+`trailing-slash`, `dotdot-trail`, `empty`).  The `gen_fixture.py`
+restic-format fixture used by `test_repo.c` already injects
+malicious node names (`"../escape"`, `"foo/bar"`, evil symlink
+`"../../../etc/passwd"`) and the test asserts none of them
+materialise on the restored tree.
+
+Tier-2 (rustic) sanitizes input during `rustic backup` — a real
+malicious tree cannot be created via the documented interface
+without synthesising a tree blob directly.  Operator-visible
+behaviour on a hostile snapshot therefore differs only in the
+delivery channel (tier-1 logs `skip unsafe name: <name>` to stderr
+and continues; rustic does not get the chance to fail on a name
+its own backup pipeline never produced).  This is parity in
+practice: both tiers refuse to materialise a `..`-escape or
+absolute path under the restore target.
 
 ## Known exclusions
 
