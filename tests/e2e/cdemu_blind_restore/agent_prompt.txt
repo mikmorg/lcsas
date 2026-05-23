@@ -88,15 +88,16 @@ first and follow the instructions you find on it.
 HOW TO RUN THE INTERACTIVE RECOVERY SCRIPT
 ==========================================
 
-NOTE — tmux IS A TEST-HARNESS WORKAROUND, NOT A REAL-OPERATOR REQUIREMENT
+NOTE — restore-shell IS A TEST-HARNESS WORKAROUND
 --------------------------------------------------------------------------
-You (the test agent) are driving restore.sh via the Bash tool, which is
+You (the test agent) drive restore.sh via the Bash tool, which is
 one-shot: it cannot hold an interactive process open across tool calls.
-tmux bridges that gap by letting you start the script in a detached
-session, read its screen state, and send keystrokes in separate one-shot
-Bash calls.
+restore-shell bridges that gap — it runs the recovery script in a
+managed tmux session under the hood, exposing a single command per
+agent action (start, expect, send, screen, quit).
 
-A REAL OPERATOR at a single terminal does NOT need tmux.  They run:
+A REAL OPERATOR at a single terminal does NOT use restore-shell.  They
+run:
 
     sh /mnt/recovery/scripts/restore.sh ~/restored/
 

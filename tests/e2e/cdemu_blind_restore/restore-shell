@@ -53,9 +53,12 @@ case "${1:-}" in
         tmux kill-session -t "$SESSION" 2>/dev/null || true
         # remain-on-exit lets us read the final output after CMD exits.
         tmux set-option -g remain-on-exit on 2>/dev/null || true
-        if ! tmux new-session -d -s "$SESSION" -- "$@" 2>/tmp/.restore-shell-err; then
-            echo "[restore-shell] tmux new-session failed:" >&2
-            cat /tmp/.restore-shell-err >&2
+        # Let tmux's own stderr flow directly to ours.  An earlier
+        # version wrote to a fixed /tmp file which collided between
+        # users (blind-agent runs as `lcsas-blind`; a prior root run
+        # created the file with root-only perms).
+        if ! tmux new-session -d -s "$SESSION" -- "$@" >&2; then
+            echo "[restore-shell] tmux new-session failed (see above)" >&2
             exit 1
         fi
         # Let the child print its first prompt before the agent races
