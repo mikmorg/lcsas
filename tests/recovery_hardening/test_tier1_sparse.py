@@ -26,40 +26,14 @@ import pytest
 
 from tests.recovery_hardening._diff_helpers import (
     build_rustic_repo,
+    find_restore_bin,
+    find_restored_root,
     restore_with_tier1,
     restore_with_tier2,
 )
 
 pytestmark = pytest.mark.integration
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RESTORE_BIN_CANDIDATES = [
-    REPO_ROOT / "recovery" / "build" / "lcsas-restore",
-    REPO_ROOT / "recovery" / "bin" / "x86_64-linux-musl" / "lcsas-restore",
-    REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-restore",
-]
-
-
-def _find_restore_bin() -> Path | None:
-    for p in RESTORE_BIN_CANDIDATES:
-        if p.is_file() and os.access(p, os.X_OK):
-            return p
-    return None
-
-
-def _find_restored_root(target: Path) -> Path:
-    cur = target
-    while True:
-        try:
-            entries = list(cur.iterdir())
-        except FileNotFoundError:
-            return target
-        if len(entries) != 1:
-            return cur
-        only = entries[0]
-        if not only.is_dir() or only.is_symlink():
-            return cur
-        cur = only
 
 
 def _stat_blocks(path: Path) -> int:
@@ -77,7 +51,7 @@ def test_sparse_file_restored_with_holes(tmp_path: Path) -> None:
     sub-4-KiB zero runs we don't bother holepunching)."""
     if not shutil.which("rustic"):
         pytest.skip("rustic not on PATH")
-    bin_path = _find_restore_bin()
+    bin_path = find_restore_bin()
     if bin_path is None:
         pytest.skip("no lcsas-restore binary")
 
@@ -110,13 +84,13 @@ def test_sparse_file_restored_with_holes(tmp_path: Path) -> None:
     # Tier-1 restore
     a = tmp_path / "tier1_out"
     restore_with_tier1(repo, a, pwfile, bin_path)
-    a_root = _find_restored_root(a)
+    a_root = find_restored_root(a)
     a_file = next(a_root.rglob("vm.img"))
 
     # Tier-2 restore
     b = tmp_path / "tier2_out"
     restore_with_tier2(repo, b, pwfile)
-    b_root = _find_restored_root(b)
+    b_root = find_restored_root(b)
     b_file = next(b_root.rglob("vm.img"))
 
     a_blocks = _stat_blocks(a_file)

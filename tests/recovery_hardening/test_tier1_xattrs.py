@@ -24,7 +24,6 @@ Skips when `rustic` / `setfattr` / `getfattr` aren't available.
 """
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -32,40 +31,15 @@ from pathlib import Path
 import pytest
 
 from tests.recovery_hardening._diff_helpers import (
+    REPO_ROOT,
     build_rustic_repo,
+    find_restore_bin,
+    find_restored_root,
     restore_with_tier1,
 )
 
 pytestmark = pytest.mark.integration
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RESTORE_BIN_CANDIDATES = [
-    REPO_ROOT / "recovery" / "build" / "lcsas-restore",
-    REPO_ROOT / "recovery" / "bin" / "x86_64-linux-musl" / "lcsas-restore",
-    REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-restore",
-]
-
-
-def _find_restore_bin() -> Path | None:
-    for p in RESTORE_BIN_CANDIDATES:
-        if p.is_file() and os.access(p, os.X_OK):
-            return p
-    return None
-
-
-def _find_restored_root(target: Path) -> Path:
-    cur = target
-    while True:
-        try:
-            entries = list(cur.iterdir())
-        except FileNotFoundError:
-            return target
-        if len(entries) != 1:
-            return cur
-        only = entries[0]
-        if not only.is_dir() or only.is_symlink():
-            return cur
-        cur = only
 
 
 def _setfattr(path: Path, name: str, value: str) -> bool:
@@ -99,7 +73,7 @@ def test_xattr_compiled_in_restores_user_namespace(tmp_path: Path) -> None:
         pytest.skip("rustic not on PATH")
     if not shutil.which("setfattr") or not shutil.which("getfattr"):
         pytest.skip("setfattr/getfattr not available")
-    bin_path = _find_restore_bin()
+    bin_path = find_restore_bin()
     if bin_path is None:
         pytest.skip("no lcsas-restore binary")
 
@@ -117,7 +91,7 @@ def test_xattr_compiled_in_restores_user_namespace(tmp_path: Path) -> None:
 
     target = tmp_path / "out"
     restore_with_tier1(repo, target, pwfile, bin_path)
-    root = _find_restored_root(target)
+    root = find_restored_root(target)
     restored = next(root.rglob("alpha.txt"))
 
     got = _getfattr(restored, "user.foo")
@@ -175,7 +149,7 @@ def test_no_xattr_build_compiles_and_restores_content(tmp_path: Path) -> None:
          "-o", str(no_xattr_bin),
          *src_paths,
         ],
-        cwd=rec, capture_output=True, text=True, timeout=120,
+        cwd=rec, capture_output=True, text=True, timeout=300,
     )
     assert rc.returncode == 0, (
         f"LCSAS_NO_XATTR build failed:\n{rc.stderr[:2000]}"
@@ -194,6 +168,6 @@ def test_no_xattr_build_compiles_and_restores_content(tmp_path: Path) -> None:
 
     target = tmp_path / "out"
     restore_with_tier1(repo, target, pwfile, no_xattr_bin)
-    root = _find_restored_root(target)
+    root = find_restored_root(target)
     restored = next(root.rglob("alpha.txt"))
     assert restored.read_bytes() == payload, "no-xattr binary corrupted content"

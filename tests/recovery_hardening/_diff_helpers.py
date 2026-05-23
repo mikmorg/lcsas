@@ -23,6 +23,42 @@ import stat
 import subprocess
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+RESTORE_BIN_CANDIDATES = (
+    REPO_ROOT / "recovery" / "build" / "lcsas-restore",
+    REPO_ROOT / "recovery" / "bin" / "x86_64-linux-musl" / "lcsas-restore",
+    REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-restore",
+)
+
+
+def find_restore_bin() -> Path | None:
+    """Return the first runnable lcsas-restore on the conventional paths,
+    or None if nothing has been built yet."""
+    for p in RESTORE_BIN_CANDIDATES:
+        if p.is_file() and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def find_restored_root(target: Path) -> Path:
+    """Both tier-1 and tier-2 may place the restored tree under
+    `<target>/<abs_src_path>/`.  Walk down until we hit a directory
+    with more than one entry OR a non-directory entry; that's the
+    effective root.  Both restorers follow the same convention so
+    callers can compare like-for-like."""
+    cur = target
+    while True:
+        try:
+            entries = list(cur.iterdir())
+        except FileNotFoundError:
+            return target
+        if len(entries) != 1:
+            return cur
+        only = entries[0]
+        if not only.is_dir() or only.is_symlink():
+            return cur
+        cur = only
+
 
 def build_rustic_repo(src: Path, repo: Path, pwfile: Path) -> str:
     """Run `rustic init` then `rustic backup <src>`.  Returns the

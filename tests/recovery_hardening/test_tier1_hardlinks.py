@@ -25,43 +25,14 @@ import pytest
 
 from tests.recovery_hardening._diff_helpers import (
     build_rustic_repo,
+    find_restore_bin,
+    find_restored_root,
     restore_with_tier1,
     restore_with_tier2,
 )
 
 pytestmark = pytest.mark.integration
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RESTORE_BIN_CANDIDATES = [
-    REPO_ROOT / "recovery" / "build" / "lcsas-restore",
-    REPO_ROOT / "recovery" / "bin" / "x86_64-linux-musl" / "lcsas-restore",
-    REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-restore",
-]
-
-
-def _find_restore_bin() -> Path | None:
-    for p in RESTORE_BIN_CANDIDATES:
-        if p.is_file() and os.access(p, os.X_OK):
-            return p
-    return None
-
-
-def _find_restored_root(target: Path) -> Path:
-    """Both restorers may place the restored tree under
-    ``<target>/<abs_src_path>/``.  Walk down until we hit a directory
-    with more than one entry to find the effective tree root."""
-    cur = target
-    while True:
-        try:
-            entries = list(cur.iterdir())
-        except FileNotFoundError:
-            return target
-        if len(entries) != 1:
-            return cur
-        only = entries[0]
-        if not only.is_dir() or only.is_symlink():
-            return cur
-        cur = only
 
 
 def test_tier1_reconstructs_hardlinks(tmp_path: Path) -> None:
@@ -69,7 +40,7 @@ def test_tier1_reconstructs_hardlinks(tmp_path: Path) -> None:
     sharing one inode under BOTH tier-1 and tier-2."""
     if not shutil.which("rustic"):
         pytest.skip("rustic not on PATH")
-    bin_path = _find_restore_bin()
+    bin_path = find_restore_bin()
     if bin_path is None:
         pytest.skip("no lcsas-restore binary; run `make -C recovery`")
 
@@ -95,8 +66,8 @@ def test_tier1_reconstructs_hardlinks(tmp_path: Path) -> None:
     restore_with_tier1(repo, tier1_out, pwfile, bin_path)
     restore_with_tier2(repo, tier2_out, pwfile)
 
-    tier1_root = _find_restored_root(tier1_out)
-    tier2_root = _find_restored_root(tier2_out)
+    tier1_root = find_restored_root(tier1_out)
+    tier2_root = find_restored_root(tier2_out)
 
     names = ("original.txt", "hardlink_a.txt", "hardlink_b.txt")
 

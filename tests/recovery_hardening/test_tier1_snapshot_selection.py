@@ -22,7 +22,6 @@ Skips when `rustic` isn't on PATH or `lcsas-restore` hasn't been built.
 """
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
@@ -31,21 +30,10 @@ from pathlib import Path
 
 import pytest
 
+from tests.recovery_hardening._diff_helpers import find_restore_bin, find_restored_root
+
 pytestmark = pytest.mark.integration
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RESTORE_BIN_CANDIDATES = [
-    REPO_ROOT / "recovery" / "build" / "lcsas-restore",
-    REPO_ROOT / "recovery" / "bin" / "x86_64-linux-musl" / "lcsas-restore",
-    REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-restore",
-]
-
-
-def _find_restore_bin() -> Path | None:
-    for p in RESTORE_BIN_CANDIDATES:
-        if p.is_file() and os.access(p, os.X_OK):
-            return p
-    return None
 
 
 def _rustic(*args: str, repo: Path, pwfile: Path,
@@ -57,26 +45,10 @@ def _rustic(*args: str, repo: Path, pwfile: Path,
     )
 
 
-def _find_restored_root(target: Path) -> Path:
-    """Both restorers may place the tree under <target>/<abs_src>/...
-
-    Descend single-child directories until we hit branching or a
-    non-dir leaf; that's the effective restore root."""
-    cur = target
-    while True:
-        entries = list(cur.iterdir())
-        if len(entries) != 1:
-            return cur
-        only = entries[0]
-        if not only.is_dir() or only.is_symlink():
-            return cur
-        cur = only
-
-
 def test_tier1_latest_is_newest_by_time(tmp_path: Path) -> None:
     if not shutil.which("rustic"):
         pytest.skip("rustic not on PATH")
-    bin_path = _find_restore_bin()
+    bin_path = find_restore_bin()
     if bin_path is None:
         pytest.skip("no lcsas-restore binary; run `make -C recovery`")
 
@@ -151,7 +123,7 @@ def test_tier1_latest_is_newest_by_time(tmp_path: Path) -> None:
         capture_output=True, check=True, timeout=180,
     )
 
-    root = _find_restored_root(target)
+    root = find_restored_root(target)
     restored = (root / "marker.txt").read_text()
     assert restored == contents[-1], (
         f"tier-1 default restore did not pick the newest snapshot "

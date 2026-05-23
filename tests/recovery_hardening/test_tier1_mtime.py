@@ -26,18 +26,14 @@ import pytest
 from tests.recovery_hardening._diff_helpers import (
     build_rustic_repo,
     diff_trees,
+    find_restore_bin,
+    find_restored_root,
     restore_with_tier1,
     restore_with_tier2,
 )
 
 pytestmark = pytest.mark.integration
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-RESTORE_BIN_CANDIDATES = [
-    REPO_ROOT / "recovery" / "build" / "lcsas-restore",
-    REPO_ROOT / "recovery" / "bin" / "x86_64-linux-musl" / "lcsas-restore",
-    REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-restore",
-]
 
 # Tolerance: rustic emits ns-precision strings but the kernel/filesystem
 # round-trip can shave sub-second bits, and `os.utime` only takes float
@@ -56,38 +52,12 @@ ORIGINAL_MTIMES = {
 }
 
 
-def _find_restore_bin() -> Path | None:
-    for p in RESTORE_BIN_CANDIDATES:
-        if p.is_file() and os.access(p, os.X_OK):
-            return p
-    return None
-
-
-def _find_restored_root(target: Path) -> Path:
-    """Mirror of the helper in test_tier1_vs_tier2_differential.py:
-    restorers may nest the restored tree under the original absolute
-    source path.  Walk down single-entry directories to find the
-    effective root."""
-    cur = target
-    while True:
-        try:
-            entries = list(cur.iterdir())
-        except FileNotFoundError:
-            return target
-        if len(entries) != 1:
-            return cur
-        only = entries[0]
-        if not only.is_dir() or only.is_symlink():
-            return cur
-        cur = only
-
-
 def test_tier1_preserves_mtime(tmp_path: Path) -> None:
     """Round-trip through rustic backup + tier-1 restore must keep
     the original mtime within MTIME_TOLERANCE_SEC."""
     if not shutil.which("rustic"):
         pytest.skip("rustic not on PATH")
-    bin_path = _find_restore_bin()
+    bin_path = find_restore_bin()
     if bin_path is None:
         pytest.skip("no lcsas-restore binary; run `make -C recovery`")
 
@@ -108,8 +78,8 @@ def test_tier1_preserves_mtime(tmp_path: Path) -> None:
     restore_with_tier1(repo, tier1, pwfile, bin_path)
     restore_with_tier2(repo, tier2, pwfile)
 
-    tier1_root = _find_restored_root(tier1)
-    tier2_root = _find_restored_root(tier2)
+    tier1_root = find_restored_root(tier1)
+    tier2_root = find_restored_root(tier2)
 
     failures: list[str] = []
     for name, expected in ORIGINAL_MTIMES.items():
