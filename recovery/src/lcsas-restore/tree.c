@@ -21,6 +21,25 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "b64.h"
+
+/* xattr support is Linux-only by default.  macOS has its own xattr
+ * call surface (sys/xattr.h with different fn signatures, plus
+ * com.apple.* namespace semantics) and the zig cross-build SDK
+ * doesn't ship the header anyway; Windows has no xattr concept.
+ * Both are excluded by default.  Operators on a platform with
+ * Linux-style xattrs but a non-Linux predefined macro can pass
+ * `-DLCSAS_FORCE_XATTR` to opt back in; pass `-DLCSAS_NO_XATTR` to
+ * force the no-op stub on any platform.  The restore still works
+ * everywhere — xattrs are silently dropped on no-xattr targets,
+ * matching the behaviour for non-root uid/gid below. */
+#if (defined(__linux__) || defined(LCSAS_FORCE_XATTR)) \
+    && !defined(LCSAS_NO_XATTR)
+#  include <sys/xattr.h>
+#  define LCSAS_HAS_XATTR 1
+#else
+#  define LCSAS_HAS_XATTR 0
+#endif
 
 #define LCSAS_PROGRESS_DEFAULT_BLOBS_PER_TICK 16ULL
 #define LCSAS_PROGRESS_DEFAULT_BYTES_PER_TICK (1024ULL * 1024ULL)
@@ -165,6 +184,138 @@ decode_node_mtime(const char *src, const lcsas_json_tok *toks,
     ts_out[1].tv_nsec = nsec;
     return 0;
 }
+
+/* Issue #189 — restore the snapshot's owner (uid) + group (gid).
+ *
+ * Restic stores uid/gid as integer fields on every tree node.  Only
+ * root (or a process with CAP_CHOWN) can actually change ownership;
+ * non-root attempts return EPERM.  We silently no-op when geteuid()
+ * != 0 so non-root recovery still works — the restored files end up
+ * owned by the recovery user, matching the documented behaviour.
+ *
+ * Use lchown() (NOT chown) so the symlink's own uid/gid is set, not
+ * the target's.  For files/dirs the two are equivalent.
+ */
+static void
+apply_node_ownership(const char *src, const lcsas_json_tok *toks,
+                     long node_idx, const char *path)
+{
+    long uid_i, gid_i;
+    long long uid_v = -1, gid_v = -1;
+
+    if (geteuid() != 0) return;
+
+    uid_i = lcsas_json_obj_get(src, toks, node_idx, "uid");
+    gid_i = lcsas_json_obj_get(src, toks, node_idx, "gid");
+    if (uid_i >= 0 && toks[uid_i].type == LCSAS_JSON_NUMBER) {
+        (void)lcsas_json_decode_int(src, &toks[uid_i], &uid_v);
+    }
+    if (gid_i >= 0 && toks[gid_i].type == LCSAS_JSON_NUMBER) {
+        (void)lcsas_json_decode_int(src, &toks[gid_i], &gid_v);
+    }
+    if (uid_v < 0 || gid_v < 0) return;
+
+    /* `(void)lchown(...)` is not enough on glibc — the
+     * warn_unused_result attribute fires through the cast.  Suppress
+     * via explicit assignment to an ignored variable. */
+    {
+        int chown_rc = lchown(path, (uid_t)uid_v, (gid_t)gid_v);
+        (void)chown_rc;
+    }
+}
+
+/* Issue #190 — restore extended attributes from a tree node.
+ *
+ * Restic stores them as `extended_attributes`: an array of objects
+ * each with a `name` (string) and `value` (base64-encoded raw bytes).
+ * Many xattrs are namespaced — only `user.*` is writable by an
+ * unprivileged process; `security.*` and `trusted.*` need root /
+ * CAP_SYS_ADMIN.  We do best-effort restoration: any setxattr
+ * failure is silent (errno EACCES is the common case for non-root +
+ * non-user.* namespaces).
+ *
+ * Compiled out entirely when LCSAS_NO_XATTR is defined or _WIN32 is
+ * set — the binary still restores file content and mode in that
+ * case, matching the LIKELY-to-be-non-portable nature of xattrs.
+ */
+#if LCSAS_HAS_XATTR
+static void
+apply_node_xattrs(const char *src, const lcsas_json_tok *toks,
+                  long node_idx, const char *path)
+{
+    long ea_i = lcsas_json_obj_get(src, toks, node_idx,
+                                   "extended_attributes");
+    long count, n;
+    long elem_t;
+
+    if (ea_i < 0) return;
+    if (toks[ea_i].type != LCSAS_JSON_ARRAY) return;
+    count = toks[ea_i].size;
+    if (count <= 0) return;
+
+    elem_t = ea_i + 1;
+    for (n = 0; n < count; n++) {
+        long name_i, value_i;
+        char name_buf[256];
+        unsigned char value_buf[4096];
+        long value_len;
+        long name_n;
+
+        /* Skip non-object array entries (defensive). */
+        while (toks[elem_t].parent != ea_i) elem_t++;
+        if (toks[elem_t].type != LCSAS_JSON_OBJECT) {
+            elem_t++;
+            continue;
+        }
+
+        name_i = lcsas_json_obj_get(src, toks, elem_t, "name");
+        value_i = lcsas_json_obj_get(src, toks, elem_t, "value");
+        if (name_i < 0 || value_i < 0) {
+            elem_t = toks[elem_t].end;
+            continue;
+        }
+        if (toks[name_i].type != LCSAS_JSON_STRING) {
+            elem_t = toks[elem_t].end;
+            continue;
+        }
+
+        name_n = lcsas_json_decode_string(src, &toks[name_i],
+                                          name_buf, sizeof name_buf);
+        if (name_n < 0 || name_n == 0) {
+            elem_t = toks[elem_t].end;
+            continue;
+        }
+
+        /* Value: either a base64 string or an integer-array byte
+         * sequence.  Restic spec is base64 string. */
+        if (toks[value_i].type == LCSAS_JSON_STRING) {
+            value_len = lcsas_b64_decode(
+                src + toks[value_i].start,
+                toks[value_i].end - toks[value_i].start,
+                value_buf);
+            if (value_len < 0) value_len = 0;
+        } else {
+            value_len = 0;
+        }
+
+        /* lsetxattr matches lchown semantics — operates on the
+         * symlink itself, not the target. */
+        (void)lsetxattr(path, name_buf, value_buf,
+                        (size_t)value_len, 0);
+
+        elem_t = toks[elem_t].end;
+    }
+}
+#else
+/* Stub when xattr support compiled out — xattrs silently dropped. */
+static void
+apply_node_xattrs(const char *src, const lcsas_json_tok *toks,
+                  long node_idx, const char *path)
+{
+    (void)src; (void)toks; (void)node_idx; (void)path;
+}
+#endif
+
 #endif
 
 void
@@ -398,6 +549,12 @@ restore_file_node(const char *repo_path,
             (void)futimens(fd, ts);
         }
     }
+    /* Issues #189 + #190 — uid/gid + xattrs (best-effort).
+     * Ownership applied AFTER content + mode so the file exists at
+     * the path; xattrs go last so a setxattr-time hook won't observe
+     * a partially-restored file. */
+    apply_node_ownership(src, toks, node_idx, target_path);
+    apply_node_xattrs(src, toks, node_idx, target_path);
 #endif
 
     close(fd);
@@ -545,6 +702,12 @@ tree_restore_recurse(const char *repo_path,
                         (void)utimensat(AT_FDCWD, node_path, ts, 0);
                     }
                 }
+                /* Issues #189 + #190 — uid/gid + xattrs on the dir.
+                 * Same ordering rationale as mtime: applied AFTER
+                 * children are restored so we don't fight the
+                 * recursive descent. */
+                apply_node_ownership((char *)blob, toks, t, node_path);
+                apply_node_xattrs((char *)blob, toks, t, node_path);
 #endif
             } else if (strcmp(type_buf, "symlink") == 0) {
                 if (lt_i >= 0) {
@@ -574,6 +737,15 @@ tree_restore_recurse(const char *repo_path,
                             (void)utimensat(AT_FDCWD, node_path, ts,
                                             AT_SYMLINK_NOFOLLOW);
                         }
+                        /* Issues #189 + #190 — symlink uid/gid +
+                         * xattrs.  apply_node_ownership uses
+                         * lchown() so the link's own ownership is
+                         * set (not the target's).  Similarly
+                         * lsetxattr() on a symlink path operates
+                         * on the link itself when the kernel
+                         * supports it. */
+                        apply_node_ownership((char *)blob, toks, t, node_path);
+                        apply_node_xattrs((char *)blob, toks, t, node_path);
                     }
 #endif
                 }
