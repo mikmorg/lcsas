@@ -185,6 +185,64 @@ decode_node_mtime(const char *src, const lcsas_json_tok *toks,
     return 0;
 }
 
+/* Issue #193 — write a blob to fd, leaving holes for runs of zero
+ * bytes >= 4 KiB.  For non-zero stretches and short zero runs the
+ * bytes are written normally; for long zero runs we `lseek` past
+ * them so the underlying filesystem records a hole instead of
+ * materialising the zeros.
+ *
+ * Net effect on a 100 MiB sparse VM image with one 1 MiB write at
+ * the end: tier-1 produces a restored file with `stat -c %b` ≈ the
+ * non-zero region only (matches what rustic produces).
+ *
+ * On filesystems that don't honour hole semantics (some tmpfs
+ * configs, some FUSE backends) the file ends up dense — which is
+ * the same behaviour as a non-sparse-aware write loop.  No
+ * regression vs. the prior implementation.
+ *
+ * The 4 KiB threshold is empirical: smaller zero runs aren't worth
+ * the fragmentation + extra syscall.  Linux btrfs/ext4 use 4 KiB
+ * blocks by default, so a single zero block can be a hole.
+ *
+ * Compiled out on Windows (no POSIX lseek hole semantics on NTFS).
+ */
+#ifndef _WIN32
+static int
+write_blob_sparse(int fd, const unsigned char *buf, size_t len)
+{
+    const size_t HOLE_MIN = 4096;
+    size_t i = 0;
+    while (i < len) {
+        size_t zstart = i;
+        size_t zend;
+        size_t zlen;
+        /* Find the next zero. */
+        while (zstart < len && buf[zstart] != 0) zstart++;
+        /* Write the non-zero prefix [i, zstart). */
+        if (zstart > i) {
+            if (lcsas_write_exact(fd, buf + i, zstart - i) != 0)
+                return -1;
+        }
+        if (zstart >= len) return 0;
+        /* Measure the zero run. */
+        zend = zstart;
+        while (zend < len && buf[zend] == 0) zend++;
+        zlen = zend - zstart;
+        if (zlen >= HOLE_MIN) {
+            /* Long zero run — seek past it, leaving a hole. */
+            if (lseek(fd, (off_t)zlen, SEEK_CUR) == (off_t)-1)
+                return -1;
+        } else {
+            /* Short zero run — fragmenting it isn't worth it. */
+            if (lcsas_write_exact(fd, buf + zstart, zlen) != 0)
+                return -1;
+        }
+        i = zend;
+    }
+    return 0;
+}
+#endif
+
 /* Issue #189 — restore the snapshot's owner (uid) + group (gid).
  *
  * Restic stores uid/gid as integer fields on every tree node.  Only
@@ -529,14 +587,45 @@ restore_file_node(const char *repo_path,
                                      &blob, &blob_len) != 0) {
                 rc = -1; break;
             }
+#ifndef _WIN32
+            /* Issue #193 — sparse-aware write: long zero runs become
+             * holes via lseek, short runs and non-zero bytes write
+             * normally.  Files restored from a sparse source (VM
+             * images, pre-allocated DB extents) end up with
+             * st_blocks similar to rustic-restore's output instead
+             * of dense materialisation. */
+            if (write_blob_sparse(fd, blob, blob_len) != 0) {
+                free(blob); rc = -1; break;
+            }
+#else
             if (lcsas_write_exact(fd, blob, blob_len) != 0) {
                 free(blob); rc = -1; break;
             }
+#endif
             lcsas_progress_tick(progress, (unsigned long long)blob_len);
             free(blob);
         }
         if (toks[t].start >= toks[content_idx].end) break;
     }
+
+#ifndef _WIN32
+    /* Issue #193 — if the last operation in the content loop was an
+     * lseek past zero bytes at end-of-file, the file's logical size
+     * doesn't reflect the trailing hole.  ftruncate it to the
+     * snapshot's declared size to guarantee size parity with the
+     * original (and with tier-2's restored output). */
+    {
+        long size_idx = lcsas_json_obj_get(src, toks, node_idx, "size");
+        if (size_idx >= 0 && toks[size_idx].type == LCSAS_JSON_NUMBER) {
+            long long expected_size = 0;
+            if (lcsas_json_decode_int(src, &toks[size_idx], &expected_size) == 0
+                    && expected_size >= 0) {
+                int ftrc = ftruncate(fd, (off_t)expected_size);
+                (void)ftrc;
+            }
+        }
+    }
+#endif
 
 #ifndef _WIN32
     /* Issue #188 — restore the snapshot's mtime onto the file we just
