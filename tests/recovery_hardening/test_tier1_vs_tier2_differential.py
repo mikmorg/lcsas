@@ -146,17 +146,7 @@ PROFILES = [
     Profile("symlinks_and_modes", _profile_symlinks_and_modes),
     Profile("empty_dir", _profile_empty_dir),
     Profile("large_dir_node", _profile_large_dir_node),
-    Profile(
-        "setuid_modes",
-        _profile_setuid_modes,
-        xfail_reason=(
-            "Issue #201: rustic stores `mode` as Go's os.FileMode "
-            "(setuid=bit 23, setgid=bit 22, sticky=bit 20), not the "
-            "POSIX 12-bit word.  Tier-1 masks with `& 07777` which "
-            "strips those bits silently.  Test pins the divergence "
-            "until tier-1 learns the Go encoding."
-        ),
-    ),
+    Profile("setuid_modes", _profile_setuid_modes),
 ]
 
 

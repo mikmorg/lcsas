@@ -163,6 +163,44 @@ decode_node_inode(const char *src, const lcsas_json_tok *toks,
  * Unused on Windows (POSIX time semantics don't carry across; the
  * Windows port has no working utimensat shim).
  */
+
+/* Issue #201 — translate restic's Go-encoded mode field into a
+ * POSIX 12-bit mode word.
+ *
+ * Restic stores `mode` using Go's `os.FileMode` bit layout:
+ *   - bits 0..8  POSIX rwxr-xr-x  (same as ours)
+ *   - bit 20     ModeSticky  (1 << 20)
+ *   - bit 22     ModeSetgid  (1 << 22)
+ *   - bit 23     ModeSetuid  (1 << 23)
+ * Bits 24..31 carry directory/symlink/device/etc. type flags which
+ * we don't need (the `type` JSON field already tells us those).
+ *
+ * Prior tier-1 code masked with `& 07777`, which kept the low 12
+ * bits — but the setuid/setgid/sticky bits restic emits live at
+ * bits 23/22/20, NOT at POSIX positions 11/10/9.  So those bits
+ * were silently dropped.
+ *
+ * Also accept POSIX-encoded variants (bits 11/10/9) in case a
+ * non-rustic tree-blob author chose to encode mode the POSIX way.
+ * Permissive OR: whichever encoding has the bit set, we honour it.
+ *
+ * Defined unconditionally (not behind _WIN32 guard) so the file/
+ * dir/hardlink call sites compile on Windows even though the
+ * post-content fchmod is itself Linux-only.
+ */
+static unsigned int
+mode_from_go_filemode(long long m)
+{
+    unsigned int posix = (unsigned int)(m & 0777);
+    if (m & ((long long)1 << 23)) posix |= 04000;  /* setuid (Go) */
+    if (m & ((long long)1 << 22)) posix |= 02000;  /* setgid (Go) */
+    if (m & ((long long)1 << 20)) posix |= 01000;  /* sticky (Go) */
+    if (m & 04000) posix |= 04000;                 /* setuid (POSIX) */
+    if (m & 02000) posix |= 02000;                 /* setgid (POSIX) */
+    if (m & 01000) posix |= 01000;                 /* sticky (POSIX) */
+    return posix;
+}
+
 #ifndef _WIN32
 static int
 decode_node_mtime(const char *src, const lcsas_json_tok *toks,
@@ -447,6 +485,7 @@ restore_file_node(const char *repo_path,
     long blob_count;
     long found = 0;
     int rc = 0;
+    unsigned int final_posix_mode = 0644;
 
     /* Issue #92 — idempotent resume: skip files that are already fully
      * restored.  We compare the on-disk file size against the "size"
@@ -519,7 +558,7 @@ restore_file_node(const char *repo_path,
                                                     &mode_value);
                     }
                     (void)chmod(target_path,
-                                (mode_t)(mode_value & 07777));
+                                (mode_t)mode_from_go_filemode(mode_value));
                     {
                         struct timespec ts[2];
                         if (decode_node_mtime(src, toks, node_idx, ts) == 0) {
@@ -542,16 +581,27 @@ restore_file_node(const char *repo_path,
 #endif
 
     /* Pull the "mode" field from the tree node (restic stores it as
-     * a decimal POSIX mode like 420 = 0o644).  Default to 0o644 if
-     * absent or malformed so restored files at least match the
-     * common-case rustic behaviour. */
+     * Go's os.FileMode; see mode_from_go_filemode).  Default to 0o644
+     * if absent or malformed so restored files at least match the
+     * common-case rustic behaviour.
+     *
+     * We capture the translated POSIX mode here and re-apply it
+     * AFTER the content + ftruncate (issue #201).  The Linux kernel
+     * strips setuid/setgid bits on every write() against a fd as a
+     * security measure (preventing privilege-escalation via
+     * overwriting a setuid binary).  Setting the bits via fchmod
+     * inside lcsas_create_file gets clobbered by the content loop.
+     * Setting them ONE LAST TIME after the loop sticks. */
     {
         long mode_idx = lcsas_json_obj_get(src, toks, node_idx, "mode");
         long long mode_value = 0644;
         if (mode_idx >= 0 && toks[mode_idx].type == LCSAS_JSON_NUMBER) {
             (void)lcsas_json_decode_int(src, &toks[mode_idx], &mode_value);
         }
-        fd = lcsas_create_file(target_path, (unsigned int)(mode_value & 07777));
+        fd = lcsas_create_file(target_path, mode_from_go_filemode(mode_value));
+        /* Stash the mode so the post-content fchmod below sees the
+         * right value without re-parsing. */
+        final_posix_mode = mode_from_go_filemode(mode_value);
     }
     if (fd < 0) return -1;
 
@@ -624,6 +674,16 @@ restore_file_node(const char *repo_path,
                 (void)ftrc;
             }
         }
+    }
+    /* Issue #201 — re-apply mode (incl. setuid/setgid/sticky) AFTER
+     * content writes.  The kernel strips setuid+setgid on write()
+     * for security; setting them here is the last touch before
+     * close so they stick.  Sticky is unaffected but harmless to
+     * re-apply.  Only chmods if the file was created in this call
+     * (rc still 0). */
+    if (rc == 0) {
+        int chmod_rc = fchmod(fd, (mode_t)final_posix_mode);
+        (void)chmod_rc;
     }
 #endif
 
@@ -765,7 +825,8 @@ tree_restore_recurse(const char *repo_path,
                                                     &toks[dmode_i], &dmode_v);
                     }
 #ifndef _WIN32
-                    (void)chmod(node_path, (mode_t)(dmode_v & 07777));
+                    (void)chmod(node_path,
+                                (mode_t)mode_from_go_filemode(dmode_v));
 #endif
                 }
                 if (subtree_i >= 0
