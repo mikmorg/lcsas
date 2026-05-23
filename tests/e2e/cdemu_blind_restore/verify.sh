@@ -211,6 +211,11 @@ import json, re, sys
 #                                              test-rig pattern; the
 #                                              quoted string is itself
 #                                              a shell command)
+#   restore-shell start sh restore.sh ...     (facade introduced by
+#                                              PR #206; argv after
+#                                              `start` is the command
+#                                              to exec inside the
+#                                              managed session)
 #
 # Plain mentions like `ls X.sh`, `cp X.sh Y`, `cat X.sh` are NOT
 # invocations — they were the v3 false-positive that flagged
@@ -222,7 +227,7 @@ import json, re, sys
 # themselves shell — `tmux new-session 'sh restore.sh'` IS an
 # invocation of restore.sh, just one level removed.
 LEADING = re.compile(
-    r"""(?:^|[;&|'"]|&&|\|\|)\s*(?:sudo\s+)?"""
+    r"""(?:^|[;&|'"]|&&|\|\||restore-shell\s+(?:start|send)\s+)\s*(?:sudo\s+)?"""
     r'(?:'
     r'(?:sh|bash|exec)\s+(?:[A-Z_][A-Z0-9_]*=\S+\s+)*'  # interpreter+envvars
     r'|\.?/'                                              # ./ or /path
