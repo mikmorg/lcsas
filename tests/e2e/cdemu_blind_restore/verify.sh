@@ -273,7 +273,13 @@ cat > "$RUN_DIR/script_read_check.py" <<'PY'
 import json, re, shlex, sys
 
 READERS = {
-    'cat', 'head', 'tail', 'less', 'more', 'sed', 'awk', 'grep',
+    # File-reading tools.  We omit `grep`, `sed`, `awk` because they
+    # are almost always used to filter pipeline data — and the
+    # blind-restore agent legitimately calls e.g. `ps aux | grep
+    # restore.sh` to find a running process.  That filtered the agent
+    # for "reading a script" when it never opened the file.  The
+    # cat/head/tail/less/more set still catches deliberate inspection.
+    'cat', 'head', 'tail', 'less', 'more',
     'strings', 'od', 'xxd', 'view', 'nano', 'vim', 'vi',
 }
 SCRIPT_EXT = re.compile(r'\.(?:sh|py|bat|c|h)(?:$|[\s,;:])')
@@ -327,11 +333,13 @@ check "agent did not cat any script" \
     "python3 '$RUN_DIR/script_read_check.py' '$TRANSCRIPT'"
 
 # -----------------------------------------------------------------------
-# 11. Agent drove the restore through tmux (proves human-in-chair
-#     simulation).  Requires both a `tmux ...` command and at least one
-#     `send-keys`.
-check "agent used tmux send-keys" \
-    "grep -q 'tmux ' '$TRANSCRIPT' && grep -q 'send-keys' '$TRANSCRIPT'"
+# 11. Agent drove the restore through a managed terminal session
+#     (proves human-in-chair simulation — kept restore.sh's interactive
+#     prompts in the loop, didn't bypass with stdin tricks).  Accepts
+#     EITHER the legacy `tmux ... send-keys` pattern OR the
+#     `restore-shell` facade introduced by PR #206.
+check "agent drove restore via managed terminal session" \
+    "grep -qE 'restore-shell (start|send|expect)|(tmux .* send-keys)' '$TRANSCRIPT'"
 
 # -----------------------------------------------------------------------
 # 12. Agent did not author wrapper scripts.  A real human-in-the-chair
