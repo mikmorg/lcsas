@@ -10,87 +10,64 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     disc-loader insert LCSAS_META
     sudo mount /dev/sr0 /mnt
 
-  Step 2 — start restore.sh in a tmux session (test-rig workaround; real operators run restore.sh directly):
-    tmux set-option -g remain-on-exit on
-    tmux new-session -d -s r 'sh /mnt/restore.sh ~/restored/ latest 2>&1'
-    (wait 3-5s, then capture output to see the prompt)
-    NOTE: `remain-on-exit on` keeps the pane open after restore.sh
-    exits (success OR crash) so you can read its final output.
-    Without it, the pane closes on exit and your next
-    `tmux capture-pane` fails with "no server running".
+  Step 2 — start restore.sh inside the restore-shell facade:
+    restore-shell start sh /mnt/restore.sh ~/restored/ latest
 
-  Step 3 — answer the prompts via tmux send-keys:
-    - "Repository: " → send: alpha
-    - "Password: "   → send: contents of ~/tenant-alpha.pw
-    - disc-swap box  → (see DISC SWAPS below)
+    `restore-shell` is a wrapper that runs the recovery process in
+    a managed tmux session.  You DO NOT need to know tmux.  Every
+    interaction is one command:
+
+      restore-shell expect REGEX [SECS]   wait for prompt, print pane
+      restore-shell send TEXT             type TEXT + ENTER
+      restore-shell send-raw TEXT         type TEXT (no ENTER)
+      restore-shell screen                show current pane
+      restore-shell quit                  shut it down
+
+    `expect` polls once per second, exits 0 on match, 1 on timeout
+    (default 60 s), 2 if the session died unexpectedly.  Pass a
+    regex that matches any of the next interesting states.
+
+  Step 3 — answer the prompts:
+
+    restore-shell expect 'Repository:'
+    restore-shell send alpha
+
+    restore-shell expect 'Password:'
+    restore-shell send "$(cat ~/tenant-alpha.pw)"
 
   Step 4 — disc-swap LOOP (repeat until RESTORE COMPLETE):
-    Each swap prompt shows a pack hash, not a disc label.
-    For EACH prompt: insert the next unused data disc AT /media,
-    then press ENTER in tmux.  Loop until the restore finishes —
-    expect 3-4 swap prompts.
+    Each swap prompt shows a pack hash, not a disc label.  Insert
+    the next unused data disc at /media, then send ENTER in the
+    restore-shell session.
 
-    CRITICAL — mount data discs at /media, NOT /mnt.  The recovery
-    binary received `--meta-disc /mnt` at startup and refuses to
-    consider /mnt (or any path under it) as a pack source — that
-    slot is "the meta disc" forever, even after you eject the meta
-    disc and load a data disc into the same drive.  Mount each new
-    data disc at /media instead:
-
-      sudo umount /media 2>/dev/null    # release the prior data disc
-      disc-loader insert <NEXT_LABEL>   # swap the disc in the drive
-      sudo mount /dev/sr0 /media        # mount it where the binary will look
-
-    IMPORTANT — pacing your tmux captures.  `sleep 30 && tmux capture-
-    pane ...` is REJECTED by the Bash tool as a long-sleep-then-command
-    chain.  Use a BOUNDED for-loop with break on tmux death AND match —
-    NEVER an unbounded `until ...; do sleep ...; done`.  An unbounded
-    until-loop runs forever when the tmux session closes (capture
-    returns non-zero → grep matches nothing → loop sleeps + retries
-    indefinitely), orphaning a sleep process that holds the agent's
-    background-task channel open.  Use this 60-second-capped form:
-
-      out=""; for _ in $(seq 1 30); do
-          out=$(tmux capture-pane -t r -p 2>/dev/null) || break
-          printf '%s' "$out" | grep -qE 'restore complete|Insert the right disc|RESTORE FAILED|Type .q.' && break
-          sleep 2
-      done; printf '%s\n' "$out"
-
-    Pattern for each swap (combine the swap + the bounded poll):
+      out=$(restore-shell expect 'Insert the right disc|RESTORE COMPLETE|RESTORE FAILED' 120)
+      case "$out" in
+          *"RESTORE COMPLETE"*) echo "RESTORE COMPLETE"; break ;;
+          *"RESTORE FAILED"*)   echo "FAILED"; exit 1 ;;
+          *"Insert the right"*) ;;  # fall through to swap
+      esac
 
       sudo umount /media 2>/dev/null
-      disc-loader insert LCSAS_TEST_TINY_2026_0001
+      disc-loader insert LCSAS_TEST_TINY_2026_0001   # bump label for each swap
       sudo mount /dev/sr0 /media
-      tmux send-keys -t r "" C-m
-      out=""; for _ in $(seq 1 30); do
-          out=$(tmux capture-pane -t r -p 2>/dev/null) || break
-          printf '%s' "$out" | grep -qE 'restore complete|Insert the right disc|RESTORE FAILED|Type .q.' && break
-          sleep 2
-      done; printf '%s\n' "$out"
+      restore-shell send ""
 
-      # if another swap prompt appears in the captured output:
-      sudo umount /media 2>/dev/null
-      disc-loader insert LCSAS_TEST_TINY_2026_0002
-      sudo mount /dev/sr0 /media
-      tmux send-keys -t r "" C-m
-      out=""; for _ in $(seq 1 30); do
-          out=$(tmux capture-pane -t r -p 2>/dev/null) || break
-          printf '%s' "$out" | grep -qE 'restore complete|Insert the right disc|RESTORE FAILED|Type .q.' && break
-          sleep 2
-      done; printf '%s\n' "$out"
+    Mount data discs at /media, NOT /mnt.  The recovery binary
+    received `--meta-disc /mnt` at startup and refuses to consider
+    paths under /mnt as a pack source — that slot is "the meta
+    disc" until you eject it AND the binary's live-check fails.
+    Always use /media for data discs.
 
-      # continue for 0003, 0004 as more prompts appear
+    Repeat the expect → swap → send pattern for each prompt (3-4
+    discs total).  NEVER run lcsas-restore directly.
 
-    NEVER give up on the tmux session.  Keep inserting discs and
-    pressing ENTER until you see "restore complete" or an error.
-    NEVER run lcsas-restore directly.
-
-  Step 5 — when "RESTORE COMPLETE" appears in tmux output:
+  Step 5 — when "RESTORE COMPLETE" appears:
     print exactly: RESTORE COMPLETE
 
 DO NOT deviate from these steps.  Do NOT explore before starting.
 DO NOT cat any script file (*.sh, *.py, *.bat, *.c, *.h).
-DO NOT run lcsas-restore directly.  Start tmux within your first 3 Bash calls.
+DO NOT run lcsas-restore directly.  Start restore-shell within your
+first 3 Bash calls.
 
 You are sitting in front of a single optical drive at /dev/sr0
 with a stack of labelled discs next to you.  You have:
@@ -135,32 +112,29 @@ canonical operator procedure.
 The meta disc's recovery script (restore.sh) is INTERACTIVE: it
 prompts for the encryption password on the terminal and pauses
 when the next disc is needed.  As a test agent whose Bash tool is
-one-shot, use `tmux` to host a persistent terminal session, then
-send keystrokes and read screen state turn by turn.  Typical pattern:
+one-shot, the `restore-shell` wrapper hosts a persistent terminal
+session for you.  Typical pattern:
 
-  # start the script in a detached tmux session
-  tmux new-session -d -s r 'cd /tmp/lcsas-meta && sh restore.sh ~/restored/ latest'
-  # read what it is showing right now
-  tmux capture-pane -t r -p
-  # respond — for example, type the password and press Enter
-  tmux send-keys -t r "$(cat ~/tenant-alpha.pw)" C-m
+  # start the script
+  restore-shell start sh /mnt/restore.sh ~/restored/ latest
+  # wait for a prompt
+  restore-shell expect 'Repository:'
+  # respond
+  restore-shell send alpha
 
 restore.sh asks up to three things via its terminal:
 
   1. `Repository:` — multi-tenant archives list the available
-     tenant names.  Type `alpha` (the only tenant you have the
-     password for) and press Enter.  Single-tenant archives skip
-     this.
-  2. `Password:` — type the contents of ~/tenant-alpha.pw and
-     press Enter.  Do NOT pipe the password through stdin.  Do
-     NOT set LCSAS_PASSWORD or LCSAS_PWFILE.  Type it through
-     the terminal as a human would.
+     tenant names.  Send `alpha` (the only tenant you have the
+     password for).  Single-tenant archives skip this.
+  2. `Password:` — send the contents of ~/tenant-alpha.pw.  Do
+     NOT pipe the password through stdin.  Do NOT set
+     LCSAS_PASSWORD or LCSAS_PWFILE.  Type it through the
+     terminal as a human would: `restore-shell send "$(cat ...)"`.
   3. A disc-swap box — the recovery binary could not find a
      required pack and prints a framed prompt containing the line
-     `Insert the right disc and press ENTER to retry.`  Switch
-     the disc with `disc-loader insert <label>` from a fresh
-     shell (not via tmux), then press ENTER in the tmux session:
-     `tmux send-keys -t r '' C-m`.
+     `Insert the right disc and press ENTER to retry.`  Swap the
+     disc, then `restore-shell send ""` to press ENTER.
 
 WHAT YOU MAY NOT DO
 ===================
@@ -199,8 +173,8 @@ WHAT TO EXPECT FROM LCSAS-RESTORE
 ==================================
 
 lcsas-restore writes progress and status lines to stderr.  The
-tmux session merges stdout and stderr, so you will see them
-interleaved with normal output.
+restore-shell session merges stdout and stderr, so you will see
+them interleaved with normal output.
 
   Progress lines (periodic):
       [lcsas-restore] progress: N/M blobs, X MB
@@ -215,9 +189,8 @@ interleaved with normal output.
       lcsas-restore prints a framed ASCII box to stderr ending with:
           Insert the right disc and press ENTER to retry.
           Type 'q' then ENTER to abort.
-      Use `disc-loader insert <label>` from a fresh shell to
-      load the disc, then press ENTER in the tmux session:
-          tmux send-keys -t r '' C-m
+      Use `disc-loader insert <label>` to load the disc, then
+      send ENTER: `restore-shell send ""`.
       The binary re-enumerates mounted discs after each ENTER, so
       the newly mounted disc is found automatically.  You do NOT
       need to pass any path to the binary.
