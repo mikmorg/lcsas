@@ -102,6 +102,26 @@ cmd_start() {
     err "/dev/vhba_ctl missing — did setup run?"
     exit 1
   fi
+  # Preflight: the cdemu daemon runs as the seat user and needs RW on
+  # /dev/vhba_ctl.  The setup phase installs a udev rule + ACL that
+  # grants the `cdrom` group access.  If setup wasn't run (or the
+  # udev rule wasn't applied — e.g. vhba was loaded BEFORE the rule
+  # was installed, common after a one-shot `modprobe vhba`), the
+  # daemon will fail with `Permission denied!` deep in libMirage.
+  # Detect it here and print the exact fix command rather than letting
+  # the operator chase a cryptic systemctl failure.
+  if [[ ! -r /dev/vhba_ctl || ! -w /dev/vhba_ctl ]]; then
+    err "/dev/vhba_ctl: $USER lacks rw permission."
+    err "  current owner/mode: $(stat -c '%U:%G %a' /dev/vhba_ctl 2>/dev/null)"
+    err "  granted via ACL:    $(getfacl /dev/vhba_ctl 2>/dev/null | \
+        grep -E '^(user|group):[^:]+:' | tr '\n' ' ')"
+    err ""
+    err "Fix options (pick one):"
+    err "  (a) Run setup once:        sudo bash $0 setup"
+    err "  (b) Quick one-shot ACL:    sudo setfacl -m u:$USER:rw /dev/vhba_ctl"
+    err "      (resets on next vhba reload — use (a) for persistence)"
+    exit 1
+  fi
   systemctl --user daemon-reload
   systemctl --user start cdemu-daemon.service
   # wait for /dev/sr0 to appear
