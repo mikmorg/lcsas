@@ -27,6 +27,22 @@
 
 set -eu
 
+# Test-infrastructure hook (issue #213): when `LCSAS_SHELL_TRACE` is
+# set to a writable path, the script emits a `bash -x`-style trace
+# of every executed line to that file.  Honoured only when bash is
+# the interpreter (BASH_XTRACEFD is bash-specific); dash/POSIX-sh
+# ignore the hook and run normally.  No production-path effect.
+if [ -n "${LCSAS_SHELL_TRACE:-}" ]; then
+    # 9 is a high enough fd to avoid clashing with stdin/stdout/stderr
+    # or any of the script's later `exec N>...` redirections.
+    exec 9>>"$LCSAS_SHELL_TRACE"
+    # shellcheck disable=SC2154,SC3028
+    BASH_XTRACEFD=9
+    # shellcheck disable=SC3043
+    PS4='+ $LINENO '
+    set -x
+fi
+
 # Stamped at meta-volume build time by src/lcsas/meta/builder.py.
 LCSAS_RESTORE_BUILD_SHA="@@BUILD_SHA@@"
 LCSAS_RESTORE_BUILD_DATE="@@BUILD_DATE@@"

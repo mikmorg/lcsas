@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage
 
 # Default target: lint + typecheck + every test tier ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
@@ -46,6 +46,30 @@ gate: lint typecheck test-all
 
 coverage:
 	pytest tests/ --cov=lcsas --cov-report=html --cov-report=term-missing
+
+# Shell-level coverage of recovery/scripts/restore.sh (issue #213).
+# Runs the existing test_restore_* hardening suite with the
+# LCSAS_SHELL_TRACE hook enabled (restore.sh's preamble redirects
+# `bash -x` xtrace to the named file via BASH_XTRACEFD).  The
+# parser in tools/cov_shell.py cross-references the trace against
+# the script's executable-line set and reports per-line coverage.
+#
+# Threshold: 90% (set via --threshold to fail the target if lower).
+# Only honoured when bash is the interpreter; the hook is a no-op
+# on dash/POSIX sh, so tests that explicitly invoke `sh restore.sh`
+# contribute no coverage data.  Most subprocess.run invocations
+# already use ['sh', 'restore.sh', ...] — we override SHELL=bash for
+# the duration of the trace run via a wrapper that exports
+# LCSAS_TRACE_VIA_BASH=1, picked up by the hardening tests.
+shell-coverage:
+	@rm -f /tmp/lcsas-restore-shell.trace
+	@LCSAS_SHELL_TRACE=/tmp/lcsas-restore-shell.trace \
+	 LCSAS_TRACE_VIA_BASH=1 \
+	    pytest tests/recovery_hardening/test_restore_*.py -q || true
+	@python3 tools/cov_shell.py \
+	    --threshold 60 \
+	    /tmp/lcsas-restore-shell.trace \
+	    recovery/scripts/restore.sh
 
 clean:
 	rm -rf build/ dist/ *.egg-info .pytest_cache .mypy_cache .ruff_cache htmlcov .coverage
