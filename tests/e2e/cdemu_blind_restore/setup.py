@@ -289,6 +289,8 @@ def _build_meta_iso() -> Path:
     META_STAGE.mkdir(parents=True)
     MetaVolumeBuilder(META_STAGE, catalog_db_path=DB_PATH).build()
 
+    _apply_variant_mutations(META_STAGE)
+
     meta_iso = ISO_OUT / "LCSAS_META.iso"
     sh([
         "xorriso", "-as", "mkisofs",
@@ -298,6 +300,44 @@ def _build_meta_iso() -> Path:
         str(META_STAGE),
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return meta_iso
+
+
+def _apply_variant_mutations(stage: Path) -> None:
+    """Issue #214 — mutate the staged meta-disc per LCSAS_VARIANT env.
+
+    Supported variants:
+      tier1-missing       — delete every lcsas-restore binary from
+                            bin/<arch>/.  Forces restore.sh's
+                            LCSAS_TIER_FALLBACK=1 path through to tier 2.
+      tier1-tier2-missing — delete tier-1 AND rustic-static; forces
+                            tier 3 (CPython + standalone_restorer.py).
+      "" / unset          — no mutation (default fixture).
+    """
+    variant = os.environ.get("LCSAS_VARIANT", "")
+    if not variant:
+        return
+    bin_root = stage / "recovery" / "bin"
+    if not bin_root.is_dir():
+        return
+    if variant in ("tier1-missing", "tier1-tier2-missing"):
+        for arch_dir in bin_root.iterdir():
+            if not arch_dir.is_dir():
+                continue
+            for name in ("lcsas-restore", "lcsas-restore.exe"):
+                bin_path = arch_dir / name
+                if bin_path.exists():
+                    bin_path.unlink()
+                    print(f"[variant {variant}] removed {bin_path}",
+                          file=sys.stderr)
+    if variant == "tier1-tier2-missing":
+        for arch_dir in bin_root.iterdir():
+            if not arch_dir.is_dir():
+                continue
+            rustic_bin = arch_dir / "rustic-static"
+            if rustic_bin.exists():
+                rustic_bin.unlink()
+                print(f"[variant {variant}] removed {rustic_bin}",
+                      file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
