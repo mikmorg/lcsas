@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage
 
 # Default target: lint + typecheck + every test tier ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
@@ -116,6 +116,32 @@ blind-restore-x5:
 
 blind-restore-teardown:
 	sudo tests/e2e/cdemu_blind_restore/teardown.sh
+
+# Adversarial blind-restore variants (issue #214).  Loops the blind
+# test through fixtures that force each recovery-cascade fallback
+# path.  Currently shipping 2 variants:
+#
+#   tier1-missing        — meta lacks lcsas-restore; restore.sh's
+#                          LCSAS_TIER_FALLBACK=1 path falls to tier 2
+#   tier1-tier2-missing  — meta lacks tier-1 AND tier-2; tier 3 takes over
+#
+# Variants that need fixture refactors (single-tenant, 5-tenant,
+# no-catalog) are tracked under separate follow-up issues.
+#
+# Cost: ~$5 per variant × 2 = ~$10 per full sweep.
+blind-restore-variants:
+	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
+		echo "ERROR: blind-restore-variants costs USD ~5 per variant (~\$10 today)." >&2; \
+		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
+		exit 1; \
+	fi
+	@for v in tier1-missing tier1-tier2-missing; do \
+		echo "=== variant: $$v ==="; \
+		sudo -E bash tests/e2e/cdemu_blind_restore/run_variant.sh $$v \
+		    || { echo "FAIL: variant $$v" >&2; exit 1; }; \
+		$(MAKE) blind-restore-teardown; \
+	done
+	@echo "blind-restore-variants: all variants PASS"
 
 # Populate ~/.cache/lcsas/recovery-binaries/ with the rustic + Python
 # tarballs pinned in recovery/UPSTREAM.sha256.  Idempotent; required

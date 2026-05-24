@@ -84,10 +84,21 @@ MODEL_FLAG=""
 if [ -n "$BLIND_MODEL" ]; then
     MODEL_FLAG="--model $BLIND_MODEL"
 fi
+# Variant-specific env passed to the agent.  Issue #214: the
+# tier1-missing / tier1-tier2-missing variants need
+# LCSAS_TIER_FALLBACK=1 so restore.sh falls through to tier 2/3
+# instead of execing the missing binary.  Empty when unset so the
+# default-blind run is byte-identical to before.
+VARIANT_ENV=""
+if [ -n "${LCSAS_TIER_FALLBACK:-}" ]; then
+    VARIANT_ENV="LCSAS_TIER_FALLBACK=$LCSAS_TIER_FALLBACK"
+fi
+
 sudo -u lcsas-blind -H bash -lc "
     cd ~ &&
     HOME=/home/lcsas-blind \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    $VARIANT_ENV \
     /usr/local/bin/claude \
         -p \"\$(cat '$PROMPT_FILE')\" \
         --output-format stream-json \
