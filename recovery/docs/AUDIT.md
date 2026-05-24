@@ -219,6 +219,34 @@ its own backup pipeline never produced).  This is parity in
 practice: both tiers refuse to materialise a `..`-escape or
 absolute path under the restore target.
 
+## Shell-level coverage (`make shell-coverage`)
+
+Issue #213 added `bash -x`-based line coverage for
+`recovery/scripts/restore.sh` (894 lines, ~393 executable).
+Pipeline:
+
+1. `restore.sh` preamble (~line 30) honours `LCSAS_SHELL_TRACE=<path>`
+   by enabling `BASH_XTRACEFD` + `set -x`.  No-op on dash/POSIX-sh.
+2. `tests/recovery_hardening/conftest.py` has an autouse fixture
+   that, when `LCSAS_TRACE_VIA_BASH=1`, rewrites every `['sh',
+   restore.sh, ...]` subprocess invocation to use bash + propagates
+   the trace env-var.
+3. `tools/cov_shell.py` parses the resulting `+ <LINENO> <command>`
+   trace lines and cross-references against the script's
+   executable-line set (excludes blank/comment/structural lines
+   and heredoc bodies).
+4. `make shell-coverage` chains all of the above and gates at 60%.
+
+**Current baseline: 61.1% (240/393 lines).**  Tier-2 / tier-3
+fallback branches dominate the uncov set — those need a
+deliberately-broken tier-1 binary to exercise.  See issue #214
+(adversarial blind-restore variants) for the natural way to push
+that higher.
+
+```bash
+make shell-coverage
+```
+
 ## Known exclusions
 
 (arena.c was removed in PR #175 — no longer a coverage exception.)
