@@ -125,8 +125,13 @@ blind-restore-teardown:
 #                          LCSAS_TIER_FALLBACK=1 path falls to tier 2
 #   tier1-tier2-missing  — meta lacks tier-1 AND tier-2; tier 3 takes over
 #
+# Both are XFAIL until #227 lands (rustic-static doesn't handle
+# disc-spread packs in the cascade fallback path).  See
+# run_variant.sh's LCSAS_VARIANT_XFAIL.  When #227 ships, drop the
+# variant from the xfail list and the target becomes a hard gate.
+#
 # Variants that need fixture refactors (single-tenant, 5-tenant,
-# no-catalog) are tracked under separate follow-up issues.
+# no-catalog) are tracked under separate follow-up issues (#216–#226).
 #
 # Cost: ~$5 per variant × 2 = ~$10 per full sweep.
 blind-restore-variants:
