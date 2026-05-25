@@ -24,6 +24,12 @@
 # Inputs:
 #   $LCSAS_PASSWORD  -- if set, used as password (otherwise prompts on stdin)
 #   $LCSAS_PWFILE    -- if set, path to a password file (overrides above)
+#
+# Documented exit codes:
+#   0    success
+#   1    generic failure (no repo, unsupported OS/arch, etc.)
+#   2    usage error
+#   64   no recovery binary available at any tier (issue #225)
 
 set -eu
 
@@ -397,6 +403,10 @@ ARCH="$TARGET"
 PWFILE_TMP=""
 cleanup() {
     [ -n "$PWFILE_TMP" ] && [ -f "$PWFILE_TMP" ] && rm -f "$PWFILE_TMP"
+    # Always return 0 so the trap does not clobber the script's exit
+    # status (POSIX traps inherit the trap action's return code under
+    # some shells -- notably dash on Debian / Ubuntu / busybox).
+    return 0
 }
 trap cleanup EXIT INT TERM
 
@@ -578,6 +588,89 @@ EOF
         ;;
 esac
 printf '[restore.sh] using repository %s\n' "$REPO" >&2
+
+# ── No-recovery-binary guard (issue #225) ─────────────────────────
+#
+# Surface the unrecoverable-state error BEFORE we prompt for a
+# password (otherwise the operator types a secret into the void) and
+# BEFORE we walk the rest of the discovery code.  The message lists
+# exactly which tier is missing what, includes a distinct exit code
+# (64), and points at the manual-recovery docs.
+
+EXIT_NO_RECOVERY_BIN=64
+
+# Compute paths the same way the tier-dispatch block does so the
+# diagnostic shows the operator the EXACT path the script looked at.
+# $TARGET is the rust-triple at this point; the user-supplied target
+# directory was renamed to $TARGET_DIR earlier.
+_RESTORE_BIN_PROBE="$RECOVERY/bin/$TARGET/lcsas-restore"
+_RUSTIC_BIN_PROBE="$RECOVERY/bin/$TARGET/rustic-static"
+
+# Probe tier 3 (CPython + standalone_restorer.py) availability using
+# the same search rules as the tier-3 dispatch block far below.  Kept
+# inline (not a function) so the search list stays in lock-step.
+_have_tier3_python=0
+_have_tier3_script=0
+_tier3_pybin_probe=""
+_tier3_script_probe=""
+if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
+    for cand in \
+        "$RECOVERY/bin/$TARGET/python/bin/python3" \
+        "$RECOVERY/bin/$TARGET/python/python.exe" \
+        "$RECOVERY/bin/$TARGET/python/bin/python"; do
+        if [ -x "$cand" ]; then
+            _tier3_pybin_probe="$cand"; _have_tier3_python=1; break
+        fi
+    done
+    if [ "$_have_tier3_python" = "0" ]; then
+        for p in python3 python; do
+            if command -v "$p" >/dev/null 2>&1; then
+                _tier3_pybin_probe="$p"; _have_tier3_python=1; break
+            fi
+        done
+    fi
+    for cand in "$RECOVERY/../standalone_restorer.py" \
+                "$RECOVERY/standalone_restorer.py" \
+                "$SCRIPT_DIR/../standalone_restorer.py"; do
+        if [ -f "$cand" ]; then
+            _tier3_script_probe="$cand"; _have_tier3_script=1; break
+        fi
+    done
+fi
+
+if [ ! -x "$_RESTORE_BIN_PROBE" ] \
+   && [ ! -x "$_RUSTIC_BIN_PROBE" ] \
+   && { [ "$_have_tier3_python" = "0" ] || [ "$_have_tier3_script" = "0" ]; }
+then
+    {
+        printf 'ERROR: meta disc lacks all recovery binaries -- verify disc integrity.\n'
+        printf '\n'
+        printf 'Missing components (no tier is runnable on this host):\n'
+        printf '  tier 1: %s -- not executable\n' "$_RESTORE_BIN_PROBE"
+        printf '  tier 2: %s -- not executable\n' "$_RUSTIC_BIN_PROBE"
+        if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" != "1" ]; then
+            printf '  tier 3: disabled by LCSAS_ALLOW_PYTHON_TIER=0\n'
+        else
+            if [ "$_have_tier3_python" = "0" ]; then
+                printf '  tier 3: no python3 on PATH and no bundled CPython at '
+                printf '%s/bin/%s/python/\n' "$RECOVERY" "$TARGET"
+            fi
+            if [ "$_have_tier3_script" = "0" ]; then
+                printf '  tier 3: standalone_restorer.py not found near '
+                printf '%s\n' "$RECOVERY"
+            fi
+        fi
+        printf '\n'
+        printf 'This meta disc cannot be used for recovery.  Try another\n'
+        printf 'copy of the meta disc (recovery is holographic -- every meta\n'
+        printf 'copy is interchangeable).  If no other copies exist, see\n'
+        printf '%s/docs/RECOVER.txt for manual recovery instructions.\n' "$RECOVERY"
+        printf '\n'
+        printf 'Exit code %d = no_recovery_binary_available.\n' \
+               "$EXIT_NO_RECOVERY_BIN"
+    } >&2
+    exit "$EXIT_NO_RECOVERY_BIN"
+fi
 
 # ── Password file (now that we know which repo we're decrypting) ──
 
@@ -829,8 +922,20 @@ if [ -x "$RESTORE_BIN" ]; then
 fi
 
 # ── Tier 2: vendored rustic-static (no Python) ────────────────────
+#
+# rustic-static expects ALL packs to live in $REPO/data/ on the local
+# filesystem.  It has no concept of LCSAS's holographic multi-disc
+# layout where packs are spread across N data discs that need to be
+# swapped through one drive (issue #227).  Skip tier 2 entirely when
+# the resolved repo doesn't carry its own data/ subtree -- the
+# operator gets the tier-3 prompt (which DOES understand the disc-
+# swap protocol via standalone_restorer.py) instead of a cryptic
+# rustic "pack not found" error after the meta disc is ejected.
 
-if [ -x "$RUSTIC_BIN" ]; then
+if [ -x "$RUSTIC_BIN" ] && [ ! -d "$REPO/data" ]; then
+    printf '[tier 2] skipped: rustic-static cannot drive multi-disc ' >&2
+    printf 'restores (no %s/data/); falling through to tier 3\n' "$REPO" >&2
+elif [ -x "$RUSTIC_BIN" ]; then
     printf '[tier 2] using vendored rustic-static (%s)\n' "$TARGET" >&2
     if [ "$FALLBACK" = "1" ]; then
         tier2_rc=0

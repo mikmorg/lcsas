@@ -88,8 +88,14 @@ echo "SCORE: ${pass_count}/${total} (variant=${VARIANT})"
 # xfail variant is reported as XFAIL and exits 0 (it's the baseline we
 # expect until the underlying production-code bug is fixed).
 # Default xfail set:
-#   tier1-missing, tier1-tier2-missing — issue #227 (tier-cascade
-#     fallback through rustic-static can't handle disc-spread packs).
+#   tier1-missing, tier1-tier2-missing — residual half of issue #227:
+#     restore.sh now skips tier 2 on multi-disc archives (UX win, no
+#     more cryptic rustic error after meta-disc eject) and falls
+#     through to tier 3, but tier 3 (standalone_restorer.py) does not
+#     yet implement the LCSAS disc-swap prompt protocol — so on the
+#     multi-disc fixture the agent must improvise, which fails the
+#     "agent drove via restore.sh" checks.  Wiring disc-swap into
+#     standalone_restorer.py is a follow-up (will be filed).
 #   single-tenant, 5-tenant, no-catalog — issues #216/#217/#218: the
 #     fixtures are in place but no live 15/15 blind score has been
 #     recorded yet (each costs ~$5 of compute).  Drop from the list
@@ -102,13 +108,13 @@ esac
 
 if [ "$pass_count" -eq "$total" ]; then
     if [ "$is_xfail" -eq 1 ]; then
-        echo "XPASS: variant=$VARIANT (was expected to fail per #227 — drop from LCSAS_VARIANT_XFAIL)"
+        echo "XPASS: variant=$VARIANT (was expected to fail — drop from LCSAS_VARIANT_XFAIL)"
     fi
     exit 0
 fi
 
 if [ "$is_xfail" -eq 1 ]; then
-    echo "XFAIL: variant=$VARIANT scored ${pass_count}/${total} (expected — tracks #227)"
+    echo "XFAIL: variant=$VARIANT scored ${pass_count}/${total} (expected)"
     exit 0
 fi
 exit 1

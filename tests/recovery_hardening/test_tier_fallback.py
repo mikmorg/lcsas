@@ -68,6 +68,10 @@ def _make_repo(recovery: Path) -> None:
     repo = recovery / "metadata" / "alpha"
     (repo / "keys").mkdir(parents=True)
     (repo / "index").mkdir()
+    # data/ marks this as a single-disc fixture — tier 2 (rustic-static)
+    # only runs when packs are local; multi-disc archives without a
+    # local data/ now skip tier 2 entirely per issue #227.
+    (repo / "data").mkdir()
 
 
 def _run(recovery: Path, target_dir: Path, env_extra: dict[str, str],
