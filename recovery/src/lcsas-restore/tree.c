@@ -915,10 +915,26 @@ tree_restore_recurse(const char *repo_path,
                         int saved_errno = errno;
                         if (saved_errno == ENOSPC
                                 || saved_errno == EDQUOT) {
+                            /* Issue #221 — out-of-space classifier. */
                             fprintf(stderr,
                                     "ERROR: target directory out of space "
                                     "(symlink path=%s, errno=%d)\n",
                                     node_path, saved_errno);
+                        } else if (saved_errno == EPERM
+                                || saved_errno == EOPNOTSUPP
+                                || saved_errno == ENOSYS) {
+                            /* Issue #224 — FAT32/exFAT/SMB targets cannot
+                             * store symlinks at all; symlink(2) returns
+                             * EPERM / EOPNOTSUPP / ENOSYS depending on
+                             * the filesystem driver.  Emit a clearer
+                             * warning per affected node so the operator
+                             * understands the lossy aspect of restoring
+                             * to a non-POSIX target, and continue with
+                             * the rest of the tree rather than aborting. */
+                            fprintf(stderr,
+                                    "WARNING: target filesystem does not "
+                                    "support symlinks; skipped %s -> %s\n",
+                                    node_path, tgt);
                         } else {
                             fprintf(stderr, "symlink failed: %s -> %s\n",
                                     node_path, tgt);
