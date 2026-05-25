@@ -214,6 +214,65 @@ def test_tier3_omits_snapshot_when_latest(tmp_path: Path) -> None:
     )
 
 
+def test_tier3_passes_interactive_on_and_mount_points(tmp_path: Path) -> None:
+    """Issue #234 -- restore.sh must hand tier-3 the disc-swap context:
+
+    1. `--interactive on` (because the blind harness redirects stdin
+       and `auto` would otherwise see no TTY and suppress prompting).
+    2. one `--mount-point <dir>` per LCSAS_MOUNT_DIRS entry, so the
+       disc-swap rescan loop knows where to look after the operator
+       inserts a data disc post-prompt.
+
+    Without these, multi-disc tier-3 restores can't drive the disc-
+    swap protocol and the blind harness can't reach RESTORE COMPLETE.
+    """
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    (recovery / "bin" / HOST_TARGET).mkdir(parents=True)
+    _make_minimal_repo(recovery)
+    (recovery.parent / "standalone_restorer.py").write_text("# stub\n")
+
+    pybin_dir = tmp_path / "stubbin"
+    argv_log = _install_python_stub(pybin_dir)
+
+    # Fake two mount parents; restore.sh should pass each.
+    parent_a = tmp_path / "mnt"
+    parent_b = tmp_path / "media"
+    parent_a.mkdir()
+    parent_b.mkdir()
+
+    target = tmp_path / "restored"
+    env = {
+        **os.environ,
+        "PATH": f"{pybin_dir}:" + os.environ.get("PATH", ""),
+        "LCSAS_MOUNT_DIRS": f"{parent_a}:{parent_b}",
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+    }
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        input="stub-password\n", capture_output=True, text=True,
+        env=env, timeout=15,
+    )
+    assert res.returncode == 0, res.stderr
+    args = argv_log.read_text().splitlines()
+
+    # --interactive on must be present (and exactly "on").
+    assert "--interactive" in args, f"--interactive missing: {args}"
+    assert args[args.index("--interactive") + 1] == "on", (
+        f"--interactive should be 'on' (not auto/off); argv: {args}"
+    )
+
+    # Each LCSAS_MOUNT_DIRS entry must appear as a --mount-point value.
+    mount_indices = [i for i, a in enumerate(args) if a == "--mount-point"]
+    mount_values = [args[i + 1] for i in mount_indices]
+    assert str(parent_a) in mount_values, (
+        f"--mount-point {parent_a} missing; argv: {args}"
+    )
+    assert str(parent_b) in mount_values, (
+        f"--mount-point {parent_b} missing; argv: {args}"
+    )
+
+
 def test_standalone_restorer_cli_uses_named_flags() -> None:
     """Sanity: the standalone_restorer.py CLI parser actually does
     require these flags.  If a future commit makes them positional,

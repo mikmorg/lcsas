@@ -1414,9 +1414,13 @@ class TestReadBlobErrorPaths:
     """Cover _find_pack_path and _read_blob error paths (lines 603, 619, 634-635, 640)."""
 
     def test_pack_file_not_found_raises(self, tmp_path):
-        """Line 603: FileNotFoundError when pack file missing."""
+        """Line 603: FileNotFoundError when pack file missing.
+
+        Uses ``interactive=False`` to opt out of the #234 disc-swap
+        prompt loop -- this test pins the non-interactive raise contract.
+        """
         repo = _build_test_repo(tmp_path)
-        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer = PurePythonRestorer(repo, password=PASSWORD, interactive=False)
         restorer._ensure_loaded()
         with pytest.raises(FileNotFoundError, match="Pack file not found"):
             restorer._find_pack_path("a" * 64)

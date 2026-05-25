@@ -285,12 +285,16 @@ class TestMissingPacks:
     """Verify restorer detects missing pack files."""
 
     def test_pack_file_deleted(self, tmp_path):
-        """Deleting the sole pack file should raise FileNotFoundError."""
+        """Deleting the sole pack file should raise FileNotFoundError.
+
+        ``interactive=False`` opts out of the #234 disc-swap prompt loop
+        -- this test pins the raise-on-miss contract for non-tty callers.
+        """
         repo, pw, pack_id = _build_repo(tmp_path)
         pack_path = repo / "data" / pack_id[:2] / pack_id
         pack_path.unlink()
 
-        restorer = PurePythonRestorer(repo, pw)
+        restorer = PurePythonRestorer(repo, pw, interactive=False)
         with pytest.raises(FileNotFoundError, match="Pack file not found"):
             restorer.restore(target=tmp_path / "out")
 
@@ -301,7 +305,7 @@ class TestMissingPacks:
         shutil.rmtree(repo / "data")
         (repo / "data").mkdir()  # recreate empty
 
-        restorer = PurePythonRestorer(repo, pw)
+        restorer = PurePythonRestorer(repo, pw, interactive=False)
         with pytest.raises(FileNotFoundError, match="Pack file not found"):
             restorer.restore(target=tmp_path / "out")
 
@@ -346,7 +350,7 @@ class TestMissingIndexEntries:
             new_idx = json.dumps(idx_doc).encode()
             f.write_bytes(_encrypt_with_master(new_idx))
 
-        restorer = PurePythonRestorer(repo, pw)
+        restorer = PurePythonRestorer(repo, pw, interactive=False)
         with pytest.raises(FileNotFoundError, match="Pack file not found"):
             restorer.restore(target=tmp_path / "out")
 
