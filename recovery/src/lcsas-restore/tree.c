@@ -596,7 +596,19 @@ restore_file_node(const char *repo_path,
         final_posix_mode = mode_from_go_filemode(mode_value);
         fd = lcsas_create_file(target_path, final_posix_mode);
     }
-    if (fd < 0) return -1;
+    if (fd < 0) {
+        /* Issue #221 — classify ENOSPC / EDQUOT explicitly so the
+         * operator knows the target filesystem ran out of room
+         * rather than seeing a generic "file restore failed". */
+        int saved_errno = errno;
+        if (saved_errno == ENOSPC || saved_errno == EDQUOT) {
+            fprintf(stderr,
+                    "ERROR: target directory out of space "
+                    "(path=%s, errno=%d)\n",
+                    target_path, saved_errno);
+        }
+        return -1;
+    }
 
     if (content_idx < 0 || toks[content_idx].type != LCSAS_JSON_ARRAY) {
         /* Empty content -> empty file.  Fall through to the timestamp
@@ -630,21 +642,40 @@ restore_file_node(const char *repo_path,
                                      &blob, &blob_len) != 0) {
                 rc = -1; break;
             }
+            {
 #ifndef _WIN32
-            /* Issue #193 — sparse-aware write: long zero runs become
-             * holes via lseek, short runs and non-zero bytes write
-             * normally.  Files restored from a sparse source (VM
-             * images, pre-allocated DB extents) end up with
-             * st_blocks similar to rustic-restore's output instead
-             * of dense materialisation. */
-            if (write_blob_sparse(fd, blob, blob_len) != 0) {
-                free(blob); rc = -1; break;
-            }
+                /* Issue #193 — sparse-aware write: long zero runs
+                 * become holes via lseek, short runs and non-zero
+                 * bytes write normally.  Files restored from a
+                 * sparse source (VM images, pre-allocated DB
+                 * extents) end up with st_blocks similar to
+                 * rustic-restore's output instead of dense
+                 * materialisation. */
+                int write_rc = write_blob_sparse(fd, blob, blob_len);
 #else
-            if (lcsas_write_exact(fd, blob, blob_len) != 0) {
-                free(blob); rc = -1; break;
-            }
+                int write_rc = lcsas_write_exact(fd, blob, blob_len);
 #endif
+                if (write_rc != 0) {
+                    /* Issue #221 — classify ENOSPC / EDQUOT
+                     * specifically; this is the dominant
+                     * environmental failure on a long restore.
+                     * `bytes_written` (from the post-fail seek
+                     * position) tells the operator how far the
+                     * restore got before the target filled. */
+                    int saved_errno = errno;
+                    if (saved_errno == ENOSPC || saved_errno == EDQUOT) {
+                        off_t cur = lseek(fd, 0, SEEK_CUR);
+                        fprintf(stderr,
+                                "ERROR: target directory out of space "
+                                "(path=%s, bytes_written=%lld, "
+                                "errno=%d)\n",
+                                target_path,
+                                (long long)(cur >= 0 ? (long long)cur : -1),
+                                saved_errno);
+                    }
+                    free(blob); rc = -1; break;
+                }
+            }
             lcsas_progress_tick(progress, (unsigned long long)blob_len);
             free(blob);
         }
@@ -804,7 +835,22 @@ tree_restore_recurse(const char *repo_path,
                     goto out;
                 }
             } else if (strcmp(type_buf, "dir") == 0) {
-                lcsas_mkdir_p(node_path);
+                if (lcsas_mkdir_p(node_path) != 0) {
+                    int saved_errno = errno;
+                    if (saved_errno == ENOSPC
+                            || saved_errno == EDQUOT) {
+                        fprintf(stderr,
+                                "ERROR: target directory out of space "
+                                "(mkdir path=%s, errno=%d)\n",
+                                node_path, saved_errno);
+                        goto out;
+                    }
+                    /* Non-ENOSPC mkdir failures stay best-effort:
+                     * mkdir_p returns 0 on EEXIST so this is a real
+                     * filesystem problem (perms, ENOENT path race,
+                     * read-only mount).  Continue and let later
+                     * operations surface the underlying issue. */
+                }
                 /* mkdir_p hardcodes 0700 for intermediates; the leaf
                  * directory's mode comes from the tree node's "mode"
                  * field.  Match tier-2 (rustic) parity. */
@@ -866,8 +912,17 @@ tree_restore_recurse(const char *repo_path,
                     /* Atomic create: unlink first if exists. */
                     unlink(node_path);
                     if (symlink(tgt, node_path) != 0) {
-                        fprintf(stderr, "symlink failed: %s -> %s\n",
-                                node_path, tgt);
+                        int saved_errno = errno;
+                        if (saved_errno == ENOSPC
+                                || saved_errno == EDQUOT) {
+                            fprintf(stderr,
+                                    "ERROR: target directory out of space "
+                                    "(symlink path=%s, errno=%d)\n",
+                                    node_path, saved_errno);
+                        } else {
+                            fprintf(stderr, "symlink failed: %s -> %s\n",
+                                    node_path, tgt);
+                        }
                     }
 #ifndef _WIN32
                     else {

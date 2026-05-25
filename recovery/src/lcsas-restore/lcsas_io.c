@@ -22,7 +22,14 @@ lcsas_pread_exact(int fd, void *buf, size_t len, long long off)
             if (errno == EINTR) continue;
             return -1;
         }
-        if (n == 0) return -1;             /* unexpected EOF */
+        if (n == 0) {
+            /* Unexpected EOF: the source shrank under us (truncated /
+             * disc ejected mid-read).  Set errno so callers can
+             * classify this as an I/O-loss event (issue #222) rather
+             * than a generic "read failed". */
+            errno = EIO;
+            return -1;
+        }
         p += n;
         len -= (size_t)n;
         off += n;

@@ -850,7 +850,25 @@ lcsas_repo_read_blob(const char *repo_path,
     }
 
     fd = open(path, O_RDONLY | O_BINARY);
-    if (fd < 0) return -1;
+    if (fd < 0) {
+        /* Issue #222 — surface drive-disconnect / read-error
+         * classes explicitly.  open() can fail with ENOENT (the
+         * disc was found by stat() above but ejected before we
+         * opened it), EIO (media error), ENXIO (no such device —
+         * the cdemu / USB drive vanished), or EACCES.  Without
+         * this hint the operator sees "blob not in index"-shaped
+         * silence and has no idea the drive went away. */
+        int saved_errno = errno;
+        if (saved_errno == ENOENT || saved_errno == EIO
+                || saved_errno == ENXIO || saved_errno == EBADF
+                || saved_errno == EACCES) {
+            fprintf(stderr,
+                    "ERROR: source disc read failed "
+                    "(pack=%s, path=%s, errno=%d)\n",
+                    hex, path, saved_errno);
+        }
+        return -1;
+    }
     /* Issue #220 — surface a clear diagnostic when the on-disc pack
      * is shorter than what the index says we need.  Without this the
      * pread short-read just becomes a generic "tree restore failed"
@@ -873,10 +891,28 @@ lcsas_repo_read_blob(const char *repo_path,
     enc = (unsigned char *)malloc((size_t)loc->length);
     if (!enc) { close(fd); return -1; }
     if (lcsas_pread_exact(fd, enc, (size_t)loc->length, loc->offset) != 0) {
-        fprintf(stderr,
-                "ERROR: pack read failed (short read or I/O error): %s "
-                "at offset %lld length %lld\n",
-                path, (long long)loc->offset, (long long)loc->length);
+        /* Issue #222 — pread classifies the same way as open().
+         * EIO covers both real media errors and our internal
+         * "unexpected EOF" mapping (see lcsas_io.c).  Issue #220's
+         * fstat short-circuits truncation above, but a pack that
+         * grew/shrank between fstat and pread (cdemu race) or a
+         * genuine media error still surfaces here. */
+        int saved_errno = errno;
+        if (saved_errno == EIO || saved_errno == ENXIO
+                || saved_errno == EBADF || saved_errno == ENOENT) {
+            fprintf(stderr,
+                    "ERROR: source disc read failed mid-pack "
+                    "(pack=%s, path=%s, off=%lld, len=%llu, errno=%d)\n",
+                    hex, path,
+                    (long long)loc->offset,
+                    (unsigned long long)loc->length,
+                    saved_errno);
+        } else {
+            fprintf(stderr,
+                    "ERROR: pack read failed (short read or I/O error): %s "
+                    "at offset %lld length %lld\n",
+                    path, (long long)loc->offset, (long long)loc->length);
+        }
         close(fd); free(enc); return -1;
     }
     close(fd);
