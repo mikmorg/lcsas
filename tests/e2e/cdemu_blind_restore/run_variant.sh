@@ -88,14 +88,17 @@ echo "SCORE: ${pass_count}/${total} (variant=${VARIANT})"
 # xfail variant is reported as XFAIL and exits 0 (it's the baseline we
 # expect until the underlying production-code bug is fixed).
 # Default xfail set:
-#   tier1-missing, tier1-tier2-missing — residual half of issue #227:
-#     restore.sh now skips tier 2 on multi-disc archives (UX win, no
-#     more cryptic rustic error after meta-disc eject) and falls
-#     through to tier 3, but tier 3 (standalone_restorer.py) does not
-#     yet implement the LCSAS disc-swap prompt protocol — so on the
-#     multi-disc fixture the agent must improvise, which fails the
-#     "agent drove via restore.sh" checks.  Wiring disc-swap into
-#     standalone_restorer.py is a follow-up (will be filed).
+#   tier1-missing, tier1-tier2-missing — issue #236: tier 3
+#     (standalone_restorer.py) implements the LCSAS disc-swap protocol
+#     as of PR #235, but the variant still flakes 11/15–14/15 on the
+#     blind-test fixture.  Diagnosis: tier-3 dies silently after the
+#     Password: prompt because the system python3 used by restore.sh
+#     can't import zstandard (the meta builder bundles zstandard under
+#     tools/lib/python/ but restore.sh's tier-3 exec doesn't set
+#     PYTHONPATH).  The agent has no actionable signal and starts
+#     improvising, tripping the no-cat / no-author / no-bypass checks.
+#     See VARIANT_FLAKE_NOTES.md for the full characterisation +
+#     recommended follow-ups.
 #   single-tenant, 5-tenant, no-catalog — issues #216/#217/#218: the
 #     fixtures are in place but no live 15/15 blind score has been
 #     recorded yet (each costs ~$5 of compute).  Drop from the list
