@@ -76,8 +76,32 @@ AGENT_HOME = Path("/home") / AGENT_USER
 # proportionally large or you silently regress the multi-disc test.
 ALPHA_FILES = 30
 ALPHA_FILE_BYTES = 130 * 1024  # 130 KB × 30 = ~3.9 MB (≈ 3 TEST_TINY volumes)
-BRAVO_FILES = 15
-BRAVO_FILE_BYTES = 60 * 1024   # 60 KB × 15 = ~900 KB (≈ 1 TEST_TINY volume)
+# Non-alpha tenants get a smaller footprint — only alpha is restored, the
+# others exist to populate the multi-tenant prompt and exercise pack
+# dedup across repos.  ~900 KB each ≈ 1 TEST_TINY volume per tenant.
+SECONDARY_FILES = 15
+SECONDARY_FILE_BYTES = 60 * 1024   # 60 KB × 15 = ~900 KB
+
+# Tenant list — parametrised by LCSAS_TENANT_COUNT (issues #216 #217).
+# Default = 2 (alpha + bravo) preserves the historical fixture.
+# Count = 1 exercises the no-prompt fast path (single-tenant archives
+# skip "Repository:").  Count = 5 stress-tests the multi-tenant prompt.
+_ALL_TENANTS = ("alpha", "bravo", "charlie", "delta", "echo")
+
+
+def _tenants() -> tuple[str, ...]:
+    count_str = os.environ.get("LCSAS_TENANT_COUNT", "2")
+    try:
+        count = int(count_str)
+    except ValueError:
+        print(f"LCSAS_TENANT_COUNT must be an integer, got: {count_str!r}",
+              file=sys.stderr)
+        sys.exit(1)
+    if count < 1 or count > len(_ALL_TENANTS):
+        print(f"LCSAS_TENANT_COUNT must be 1..{len(_ALL_TENANTS)}, got {count}",
+              file=sys.stderr)
+        sys.exit(1)
+    return _ALL_TENANTS[:count]
 
 
 def banner(msg: str) -> None:
@@ -194,11 +218,12 @@ def _init_burn_db():
     conn = get_connection(DB_PATH)
     create_all(conn)
 
-    for name in ("alpha", "bravo"):
+    tenants = _tenants()
+    for name in tenants:
         register_repo(conn, name, name, str(MIRROR / name))
     conn.commit()
 
-    for name in ("alpha", "bravo"):
+    for name in tenants:
         scanned = scan_mirror_packs(MIRROR / name)
         delta = DeltaAnalyzer(conn, scanned, repo_id=name)
         delta.register_new_packs()
@@ -220,7 +245,7 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
             mirror_path=MIRROR / name,
             password_file=SECRETS / f"{name}.pw",
         )
-        for name in ("alpha", "bravo")
+        for name in _tenants()
     }
 
     # Phase 21.3 fix: use the canonical empirical reserve constant
@@ -228,7 +253,17 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
     # ≈ 700 KB for a single-repo fixture).  The previous 150_000
     # under-reserved by ~5×, causing ISOs to overflow TEST_TINY's
     # 1 MB capacity after staging.
+    #
+    # Each additional tenant injects another ~150 KB of Rustic
+    # metadata (index/snapshots/keys) into every disc.  Scale the
+    # reserve so multi-tenant variants (#217 ships 5 repos) don't
+    # overflow the 2 MB TEST_TINY capacity after ECC.
     from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
+    per_extra_tenant_bytes = 150_000
+    reserve = (
+        MIN_HOLOGRAPHIC_RESERVE_BYTES
+        + max(0, len(repos) - 1) * per_extra_tenant_bytes
+    )
     config = LCSASConfig(
         mirror_base_path=MIRROR,
         staging_path=STAGING,
@@ -236,7 +271,7 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
         default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         label_prefix="LCSAS",
-        metadata_reserve_bytes=MIN_HOLOGRAPHIC_RESERVE_BYTES,
+        metadata_reserve_bytes=reserve,
         repositories=repos,
     )
 
@@ -263,6 +298,10 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
         except ValueError as exc:
             print(f"  burn stopped: {exc}", file=sys.stderr)
             break
+        # Variant hook (issue #218): strip catalog.db from data discs
+        # for the no-catalog variant, between prepare (which injects
+        # catalog.db into staging) and execute (which masters the ISO).
+        _apply_data_disc_variant_mutations(manifest.staging_path)
         iso_path = ISO_OUT / f"{manifest.volume_label}.iso"
         orchestrator.execute(
             manifest, iso_output=iso_path, skip_burn=True,
@@ -311,6 +350,15 @@ def _apply_variant_mutations(stage: Path) -> None:
                             LCSAS_TIER_FALLBACK=1 path through to tier 2.
       tier1-tier2-missing — delete tier-1 AND rustic-static; forces
                             tier 3 (CPython + standalone_restorer.py).
+      single-tenant       — no meta-disc mutation (handled by tenant
+                            count plumbing).
+      5-tenant            — no meta-disc mutation (handled by tenant
+                            count plumbing).
+      no-catalog          — no meta-disc mutation (the meta disc never
+                            carries catalog.db anyway — see
+                            MetaVolumeBuilder._bundle_metadata).  Data
+                            discs are handled by
+                            _apply_data_disc_variant_mutations().
       "" / unset          — no mutation (default fixture).
     """
     variant = os.environ.get("LCSAS_VARIANT", "")
@@ -338,6 +386,22 @@ def _apply_variant_mutations(stage: Path) -> None:
                 rustic_bin.unlink()
                 print(f"[variant {variant}] removed {rustic_bin}",
                       file=sys.stderr)
+
+
+def _apply_data_disc_variant_mutations(staging_path: Path) -> None:
+    """Issue #218 — mutate a single data-disc staging dir before ISO mastering.
+
+    For the no-catalog variant, strip catalog.db from every data disc
+    so the restore binary has no pack-hash → disc-label mapping and
+    must drive the operator through brute-force hash-only swap prompts.
+    """
+    variant = os.environ.get("LCSAS_VARIANT", "")
+    if variant != "no-catalog":
+        return
+    catalog = staging_path / "catalog.db"
+    if catalog.exists():
+        catalog.unlink()
+        print(f"[variant {variant}] removed {catalog}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -631,16 +695,30 @@ def main() -> int:
         d.mkdir(parents=True, exist_ok=True)
 
     banner("2. generate synthetic source data")
-    alpha_manifest = _generate_repo("alpha", ALPHA_FILES, ALPHA_FILE_BYTES)
-    bravo_manifest = _generate_repo("bravo", BRAVO_FILES, BRAVO_FILE_BYTES)
-    _write_manifest(FIXTURE / "alpha_manifest.sha256", alpha_manifest)
-    _write_manifest(FIXTURE / "bravo_manifest.sha256", bravo_manifest)
-    print(f"  alpha: {len(alpha_manifest)} files")
-    print(f"  bravo: {len(bravo_manifest)} files")
+    tenants = _tenants()
+    print(f"  tenants: {', '.join(tenants)}")
+    for tenant in tenants:
+        if tenant == "alpha":
+            count, size = ALPHA_FILES, ALPHA_FILE_BYTES
+        else:
+            count, size = SECONDARY_FILES, SECONDARY_FILE_BYTES
+        manifest = _generate_repo(tenant, count, size)
+        _write_manifest(FIXTURE / f"{tenant}_manifest.sha256", manifest)
+        print(f"  {tenant}: {len(manifest)} files")
+    # verify.sh hard-requires a non-empty bravo_manifest.sha256 (line 25
+    # of verify.sh: `sudo test -s`).  When the variant skips bravo,
+    # write a single comment so the file is non-empty and the leak-check
+    # trivially passes (no hashes → no possible intersection).
+    bravo_manifest_path = FIXTURE / "bravo_manifest.sha256"
+    if not bravo_manifest_path.exists():
+        bravo_manifest_path.write_text(
+            "# no bravo tenant in this variant (LCSAS_TENANT_COUNT=1)\n"
+        )
+        print("  bravo: 0 files (placeholder for verify.sh)")
 
     banner("3. init rustic repos + backup")
-    _init_rustic_repo("alpha")
-    _init_rustic_repo("bravo")
+    for tenant in tenants:
+        _init_rustic_repo(tenant)
 
     # Lock the source tree from the blind agent.  A physical user
     # recovering from disaster has no copy of the pre-disaster

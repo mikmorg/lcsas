@@ -29,10 +29,16 @@ QUICK REFERENCE — complete command sequence (do exactly this)
 
   Step 3 — answer the prompts:
 
-    restore-shell expect 'Repository:'
-    restore-shell send alpha
-
-    restore-shell expect 'Password:'
+    # A multi-tenant archive asks `Repository:` first; a single-tenant
+    # archive skips straight to `Password:`.  Wait on either, branch
+    # on which one matched.
+    out=$(restore-shell expect 'Repository:|Password:' 60)
+    case "$out" in
+        *"Repository:"*)
+            restore-shell send alpha
+            restore-shell expect 'Password:'
+            ;;
+    esac
     restore-shell send "$(cat ~/tenant-alpha.pw)"
 
   Step 4 — disc-swap LOOP (repeat until RESTORE COMPLETE):

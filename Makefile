@@ -119,28 +119,36 @@ blind-restore-teardown:
 
 # Adversarial blind-restore variants (issue #214).  Loops the blind
 # test through fixtures that force each recovery-cascade fallback
-# path.  Currently shipping 2 variants:
+# path or stress an unusual tenant topology.  Currently shipping 5
+# variants:
 #
 #   tier1-missing        — meta lacks lcsas-restore; restore.sh's
 #                          LCSAS_TIER_FALLBACK=1 path falls to tier 2
-#   tier1-tier2-missing  — meta lacks tier-1 AND tier-2; tier 3 takes over
+#                          (XFAIL pending #227).
+#   tier1-tier2-missing  — meta lacks tier-1 AND tier-2; tier 3 takes
+#                          over (XFAIL pending #227).
+#   single-tenant        — only the alpha repo exists; exercises the
+#                          no-prompt fast path (issue #216, XFAIL
+#                          pending live 15/15 confirmation).
+#   5-tenant             — alpha + bravo + charlie + delta + echo;
+#                          stress-tests the multi-tenant prompt
+#                          (issue #217, XFAIL pending live confirmation).
+#   no-catalog           — every data disc lacks catalog.db; forces
+#                          the hash-only swap-prompt path (issue #218,
+#                          XFAIL pending live confirmation).
 #
-# Both are XFAIL until #227 lands (rustic-static doesn't handle
-# disc-spread packs in the cascade fallback path).  See
-# run_variant.sh's LCSAS_VARIANT_XFAIL.  When #227 ships, drop the
-# variant from the xfail list and the target becomes a hard gate.
+# All five default to XFAIL — see run_variant.sh's LCSAS_VARIANT_XFAIL.
+# Each costs ~$5 of blind-test compute; drop from the XFAIL list once
+# a green 15/15 score has been recorded.
 #
-# Variants that need fixture refactors (single-tenant, 5-tenant,
-# no-catalog) are tracked under separate follow-up issues (#216–#226).
-#
-# Cost: ~$5 per variant × 2 = ~$10 per full sweep.
+# Cost: ~$5 per variant × 5 = ~$25 per full sweep.
 blind-restore-variants:
 	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
-		echo "ERROR: blind-restore-variants costs USD ~5 per variant (~\$10 today)." >&2; \
+		echo "ERROR: blind-restore-variants costs USD ~5 per variant (~\$25 today)." >&2; \
 		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
 		exit 1; \
 	fi
-	@for v in tier1-missing tier1-tier2-missing; do \
+	@for v in tier1-missing tier1-tier2-missing single-tenant 5-tenant no-catalog; do \
 		echo "=== variant: $$v ==="; \
 		sudo -E bash tests/e2e/cdemu_blind_restore/run_variant.sh $$v \
 		    || { echo "FAIL: variant $$v" >&2; exit 1; }; \
