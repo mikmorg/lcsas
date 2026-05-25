@@ -43,6 +43,7 @@
 #include "disc_locator.h"
 #include "posix_compat.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -469,7 +470,17 @@ main(int argc, char **argv)
             snaps.items[sidx].file_name, target);
 
     if (lcsas_mkdir_p(target) != 0) {
-        fprintf(stderr, "ERROR: cannot create target dir %s\n", target);
+        int saved_errno = errno;
+        if (saved_errno == ENOSPC || saved_errno == EDQUOT) {
+            fprintf(stderr,
+                    "ERROR: target directory out of space "
+                    "(path=%s, errno=%d)\n",
+                    target, saved_errno);
+        } else {
+            fprintf(stderr,
+                    "ERROR: cannot create target dir %s (errno=%d)\n",
+                    target, saved_errno);
+        }
         goto out;
     }
 

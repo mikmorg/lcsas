@@ -4,7 +4,17 @@
 #ifndef LCSAS_IO_H
 #define LCSAS_IO_H
 
+#include <errno.h>
 #include <stddef.h>
+
+/* EDQUOT is POSIX but absent on some hosted libcs (notably MinGW-w64
+ * on Windows).  Alias to ENOSPC there so callers can classify both
+ * the same way ("target out of space" UX) without per-call-site
+ * #ifdef guards.  EDQUOT is the per-user/group quota equivalent of
+ * ENOSPC; same operator response. */
+#ifndef EDQUOT
+#  define EDQUOT ENOSPC
+#endif
 
 /*
  * Read exactly `len` bytes from `path` into a newly malloc'd buffer.
