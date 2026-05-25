@@ -1040,17 +1040,38 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         if [ -n "$SNAP" ] && [ "$SNAP" != "latest" ]; then
             TIER3_SNAP_ARGS="--snapshot $SNAP"
         fi
-        # Issue #234 -- pass every currently-known data-disc root as
-        # --mount-point so tier 3 can drive the LCSAS disc-swap protocol
-        # exactly as tier 1 does.  PACK_SEARCH_ARGS is already built by
-        # the upstream LCSAS_MOUNT_DIRS walk (see line ~700) and contains
-        # one "--pack-search <root>" per inserted data disc.  Rewrite to
+        # Issue #234 -- pass every currently-known data-disc root AND
+        # every mount-parent dir as --mount-point so tier 3 can drive
+        # the LCSAS disc-swap protocol exactly as tier 1 does.
+        # PACK_SEARCH_ARGS is already built by the upstream
+        # LCSAS_MOUNT_DIRS walk (see line ~700) and contains one
+        # "--pack-search <root>" per inserted data disc.  Rewrite to
         # tier-3's flag name.
+        #
+        # In addition, since the operator typically inserts data discs
+        # one at a time after the prompt fires (the first disc may not
+        # be mounted when restore.sh started), we ALSO pass each
+        # LCSAS_MOUNT_DIRS entry directly as --mount-point so the swap
+        # rescan finds packs at the canonical mount point after each
+        # insert.  Tier 3 probes both data/<XX>/<hex> and <XX>/<hex>
+        # layouts under every mount point.
         TIER3_MOUNT_ARGS=""
         if [ -n "$PACK_SEARCH_ARGS" ]; then
             TIER3_MOUNT_ARGS="$(printf '%s\n' "$PACK_SEARCH_ARGS" \
                 | sed 's/--pack-search /--mount-point /g')"
         fi
+        OLD_IFS3="$IFS"; IFS=":"
+        for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
+            IFS="$OLD_IFS3"
+            [ -n "$parent" ] || { IFS=":"; continue; }
+            # Skip if we already covered this via PACK_SEARCH_ARGS.
+            case " $TIER3_MOUNT_ARGS " in
+                *" --mount-point $parent "*) IFS=":"; continue ;;
+            esac
+            TIER3_MOUNT_ARGS="$TIER3_MOUNT_ARGS --mount-point $parent"
+            IFS=":"
+        done
+        IFS="$OLD_IFS3"
         # --interactive on: blind-harness redirects stdin, so isatty()
         # would return false and 'auto' would suppress the prompt.  We
         # want the prompt FIRED so the agent (or operator) can swap
