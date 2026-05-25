@@ -1019,17 +1019,35 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
                "$PYBIN" "$PYREST" >&2
         # standalone_restorer.py CLI is flag-based:
         #   --repo DIR --password-file FILE --target DIR [--snapshot ID]
+        #   [--mount-point DIR ...] [--interactive on|off|auto]
         # See src/lcsas/restore/standalone_builder.py:_cli_main.
         # The non-"latest" sentinel is passed straight through.
         TIER3_SNAP_ARGS=""
         if [ -n "$SNAP" ] && [ "$SNAP" != "latest" ]; then
             TIER3_SNAP_ARGS="--snapshot $SNAP"
         fi
+        # Issue #234 -- pass every currently-known data-disc root as
+        # --mount-point so tier 3 can drive the LCSAS disc-swap protocol
+        # exactly as tier 1 does.  PACK_SEARCH_ARGS is already built by
+        # the upstream LCSAS_MOUNT_DIRS walk (see line ~700) and contains
+        # one "--pack-search <root>" per inserted data disc.  Rewrite to
+        # tier-3's flag name.
+        TIER3_MOUNT_ARGS=""
+        if [ -n "$PACK_SEARCH_ARGS" ]; then
+            TIER3_MOUNT_ARGS="$(printf '%s\n' "$PACK_SEARCH_ARGS" \
+                | sed 's/--pack-search /--mount-point /g')"
+        fi
+        # --interactive on: blind-harness redirects stdin, so isatty()
+        # would return false and 'auto' would suppress the prompt.  We
+        # want the prompt FIRED so the agent (or operator) can swap
+        # discs via the canonical LCSAS protocol.
         write_session_log 3
         exec "$PYBIN" "$PYREST" \
              --repo "$REPO" \
              --password-file "$PWFILE" \
              --target "$TARGET_DIR" \
+             --interactive on \
+             $TIER3_MOUNT_ARGS \
              $TIER3_SNAP_ARGS
     fi
 fi

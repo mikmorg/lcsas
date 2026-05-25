@@ -337,6 +337,8 @@ class PurePythonRestorer:
         repo_path: Path,
         password_file: Path | None = None,
         password: bytes | None = None,
+        pack_search_paths: list[Path] | None = None,
+        interactive: bool = True,
     ) -> None:
         """Initialize the restorer.
 
@@ -346,8 +348,34 @@ class PurePythonRestorer:
             repo_path: Path to an assembled restic repository.
             password_file: File containing the raw password on the first line.
             password: Raw password bytes (alternative to password_file).
+            pack_search_paths: Optional list of additional roots to scan for
+                pack files (each may contain ``data/<XX>/<hex>`` or ``data/<hex>``).
+                Defaults to ``[repo_path / "data"]`` -- preserves legacy behaviour
+                for single-disc / pre-assembled-cache callers.  Multi-disc tier-3
+                invocation passes one ``--mount-point`` per data disc (see
+                ``recovery/scripts/restore.sh``).
+            interactive: If True (default), ``_find_pack_path`` prints the
+                LCSAS disc-swap prompt to stderr and blocks on stdin when
+                a pack is not found in any configured search path, then
+                rescans (up to ``_DISC_SWAP_MAX_RETRIES`` times).  If False,
+                ``_find_pack_path`` raises FileNotFoundError on miss
+                (matches pre-#234 behaviour; tests that pin the raise
+                contract must opt out explicitly).  The tier-3 CLI sets
+                this from ``--interactive on|off|auto`` (auto = isatty);
+                see ``standalone_builder.py``.
         """
         self.repo_path = repo_path
+        self.interactive = interactive
+        # Search-path resolution: callers can either rely on the legacy
+        # ``repo_path/data`` location or pass an explicit list of mount
+        # points (typically each currently-inserted data disc's root).
+        # We keep an internal mutable list so the disc-swap prompt loop
+        # can extend it with newly-mounted discs without restarting the
+        # restore.
+        if pack_search_paths:
+            self._pack_search_paths: list[Path] = list(pack_search_paths)
+        else:
+            self._pack_search_paths = [repo_path / "data"]
 
         if password is not None:
             self._password = password
@@ -586,23 +614,105 @@ class PurePythonRestorer:
 
     # ── Blob Reading ─────────────────────────────────────────────
 
-    def _find_pack_path(self, pack_id: str) -> Path:
-        """Locate a pack file in the data directory.
+    # Max prompt iterations before giving up (bounded loop -- if the
+    # operator can't get the right disc into the drive after this many
+    # tries, something else is wrong and the restore should fail loudly).
+    _DISC_SWAP_MAX_RETRIES = 50
 
-        Supports both flat and two-level layouts.
+    def _scan_pack_search_paths(self, pack_id: str) -> Path | None:
+        """Search every configured root for the named pack.
+
+        Each root is probed for both the LCSAS holographic ``data/<XX>/<hex>``
+        / ``data/<hex>`` layout AND the legacy "root IS the data dir"
+        layout (``<XX>/<hex>`` / ``<hex>``).  Returns the first hit or None.
         """
-        data_dir = self.repo_path / "data"
-        # Two-level layout (standard)
-        two_level = data_dir / pack_id[:2] / pack_id
-        if two_level.is_file():
-            return two_level
-        # Flat layout (LCSAS disc layout)
-        flat = data_dir / pack_id
-        if flat.is_file():
-            return flat
+        prefix = pack_id[:2]
+        for root in self._pack_search_paths:
+            # Legacy default (root = repo_path/"data"): no nested "data/".
+            for candidate in (
+                root / prefix / pack_id,
+                root / pack_id,
+                root / "data" / prefix / pack_id,
+                root / "data" / pack_id,
+            ):
+                if candidate.is_file():
+                    return candidate
+        return None
+
+    def _print_swap_prompt(self, pack_id: str) -> None:
+        """Render the LCSAS disc-swap prompt to stderr.
+
+        Mirrors the framed prompt printed by ``recovery/src/lcsas-restore/
+        disc_locator.c::print_prompt`` so the blind-restore harness sees
+        an identical PASS marker regardless of which tier ran.
+        """
+        bar = "+" + "-" * 58 + "+"
+        lines = [
+            "",
+            bar,
+            f"| Pack {pack_id[:16]}... is required for the next file.       |",
+            "| (tier-3 standalone restorer: no catalog available)       |",
+            "|                                                          |",
+            "| Currently searching:                                     |",
+        ]
+        for p in self._pack_search_paths:
+            display = str(p)
+            if len(display) > 54:
+                display = "..." + display[-51:]
+            lines.append(f"|   {display:<54s} |")
+        lines.extend([
+            "|                                                          |",
+            "| Insert the right disc and press ENTER to retry.          |",
+            "| Type 'q' then ENTER to abort.                            |",
+            bar,
+            "> ",
+        ])
+        sys.stderr.write("\n".join(lines))
+        sys.stderr.flush()
+
+    def _find_pack_path(self, pack_id: str) -> Path:
+        """Locate a pack file in any configured search path.
+
+        Supports both flat and two-level layouts.  When *interactive*
+        is True and no copy is found, prints the LCSAS disc-swap prompt
+        to stderr, waits for ENTER on stdin, then rescans -- up to
+        ``_DISC_SWAP_MAX_RETRIES`` times.
+        """
+        hit = self._scan_pack_search_paths(pack_id)
+        if hit is not None:
+            return hit
+
+        if not self.interactive:
+            searched = ", ".join(str(p) for p in self._pack_search_paths)
+            raise FileNotFoundError(
+                f"Pack file not found: {pack_id}\n"
+                f"Looked in: {searched}"
+            )
+
+        # Interactive: prompt-and-retry loop, bounded.
+        for _ in range(self._DISC_SWAP_MAX_RETRIES):
+            self._print_swap_prompt(pack_id)
+            line = sys.stdin.readline()
+            if not line:
+                # EOF on stdin -- nothing more to read, give up cleanly.
+                break
+            if line.strip().lower() == "q":
+                sys.stderr.write("[lcsas-restore] aborted by user\n")
+                break
+            hit = self._scan_pack_search_paths(pack_id)
+            if hit is not None:
+                sys.stderr.write(
+                    f"[lcsas-restore] found {pack_id[:16]}...; continuing.\n"
+                )
+                return hit
+            sys.stderr.write(
+                "(still not found -- check the disc label and try again)\n"
+            )
+
+        searched = ", ".join(str(p) for p in self._pack_search_paths)
         raise FileNotFoundError(
             f"Pack file not found: {pack_id}\n"
-            f"Looked in: {two_level}, {flat}"
+            f"Looked in: {searched}"
         )
 
     def _read_blob(self, blob_id: str) -> bytes:

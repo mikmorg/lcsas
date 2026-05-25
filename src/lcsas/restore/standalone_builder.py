@@ -162,6 +162,23 @@ _CLI_BLOCK = textwrap.dedent("""\
             "--info", action="store_true",
             help="Show repository info and exit",
         )
+        parser.add_argument(
+            "--mount-point", action="append", default=None,
+            help=(
+                "Additional root to scan for pack files (each may contain "
+                "data/<XX>/<hex> or data/<hex>).  Pass once per data disc; "
+                "the disc-swap prompt also re-scans these on retry.  "
+                "Defaults to <repo>/data only."
+            ),
+        )
+        parser.add_argument(
+            "--interactive", choices=("on", "off", "auto"), default="auto",
+            help=(
+                "Disc-swap prompt mode.  'on' prompts on missing packs; "
+                "'off' raises FileNotFoundError; 'auto' (default) is 'on' "
+                "iff stdin is a TTY."
+            ),
+        )
 
         args = parser.parse_args()
 
@@ -173,9 +190,22 @@ _CLI_BLOCK = textwrap.dedent("""\
         if not pw_file.is_file():
             parser.error(f"Password file not found: {pw_file}")
 
+        if args.interactive == "auto":
+            interactive = sys.stdin.isatty()
+        else:
+            interactive = args.interactive == "on"
+
+        mount_points: list[Path] | None = None
+        if args.mount_point:
+            # Search the repo's own data/ first, then each mount point in
+            # operator-given order.
+            mount_points = [repo_path / "data"] + [Path(m) for m in args.mount_point]
+
         restorer = PurePythonRestorer(
             repo_path=repo_path,
             password_file=pw_file,
+            pack_search_paths=mount_points,
+            interactive=interactive,
         )
 
         if args.info:
