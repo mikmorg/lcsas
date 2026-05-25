@@ -159,6 +159,20 @@ relocate_to_ram() {
         cp -f "$cat_cand" "$ramdir/recovery/catalog.db" 2>/dev/null || true
         break
     done
+    # Issue #234 — copy standalone_restorer.py for tier 3 too.  Without
+    # this, post-relocation the tier-3 fall-through can't find the
+    # script (the orig location was under the now-ejected meta disc).
+    # The tier-3 search looks at $RECOVERY/../standalone_restorer.py
+    # (which resolves to $ramdir/standalone_restorer.py post-reloc).
+    for pyrest_cand in \
+        "$SCRIPT_DIR/../standalone_restorer.py" \
+        "$SCRIPT_DIR/standalone_restorer.py" \
+        "$SCRIPT_DIR/../../standalone_restorer.py"
+    do
+        [ -f "$pyrest_cand" ] || continue
+        cp -f "$pyrest_cand" "$ramdir/standalone_restorer.py" 2>/dev/null || true
+        break
+    done
 
     printf '[lcsas-restore] copied recovery binaries to %s\n' "$ramdir" >&2
     printf '[lcsas-restore] you may eject the recovery disc when the ' >&2
