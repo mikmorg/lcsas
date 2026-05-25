@@ -851,9 +851,32 @@ lcsas_repo_read_blob(const char *repo_path,
 
     fd = open(path, O_RDONLY | O_BINARY);
     if (fd < 0) return -1;
+    /* Issue #220 — surface a clear diagnostic when the on-disc pack
+     * is shorter than what the index says we need.  Without this the
+     * pread short-read just becomes a generic "tree restore failed"
+     * far up the call stack and operators can't tell whether the disc
+     * is unreadable, the catalog is stale, or the pack itself was
+     * truncated during burn/copy.  We fstat first so the message can
+     * name the actual on-disc size vs. the index-declared end offset. */
+    {
+        struct stat fst;
+        long long need_end = (long long)loc->offset + (long long)loc->length;
+        if (fstat(fd, &fst) == 0 && fst.st_size < (off_t)need_end) {
+            fprintf(stderr,
+                    "ERROR: pack truncated: %s "
+                    "(size=%lld, need offset+length=%lld)\n",
+                    path, (long long)fst.st_size, need_end);
+            close(fd);
+            return -1;
+        }
+    }
     enc = (unsigned char *)malloc((size_t)loc->length);
     if (!enc) { close(fd); return -1; }
     if (lcsas_pread_exact(fd, enc, (size_t)loc->length, loc->offset) != 0) {
+        fprintf(stderr,
+                "ERROR: pack read failed (short read or I/O error): %s "
+                "at offset %lld length %lld\n",
+                path, (long long)loc->offset, (long long)loc->length);
         close(fd); free(enc); return -1;
     }
     close(fd);
