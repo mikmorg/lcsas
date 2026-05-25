@@ -891,9 +891,39 @@ RESTORE_BIN="$RECOVERY/bin/$TARGET/lcsas-restore"
 RUSTIC_BIN="$RECOVERY/bin/$TARGET/rustic-static"
 FALLBACK="${LCSAS_TIER_FALLBACK:-0}"
 
+# Issue #223 — present-but-corrupted tier binaries.
+#
+# `[ -x BIN ]` only checks for the executable bit; it doesn't notice
+# bit-rot off the meta disc.  Two failure modes survive that check:
+#
+#   1. Zero-byte file.  POSIX shells "exec" an empty file as a no-op
+#      script that exits 0 -- so without a size check, a corrupted
+#      tier 1 silently claims success and the operator gets nothing.
+#   2. Wrong-arch binary (Linux ELF on macOS, Windows PE on Linux).
+#      `exec` returns 126 ("not executable") and the shell exits;
+#      under default semantics that aborts the cascade entirely.
+#
+# bin_preflight_ok PATH -- returns 0 iff PATH is non-empty AND a
+# `--help` dry-run completes without an exec-format error (rc != 126
+# and != 127).  Any other exit code (incl. program errors like rc=17
+# from a synthetic-failure stub) is treated as "binary loads fine";
+# the cascade then runs it for real and lets normal exit-code
+# semantics (or LCSAS_TIER_FALLBACK) handle the result.
+bin_preflight_ok() {
+    [ -s "$1" ] || return 1
+    "$1" --help >/dev/null 2>&1
+    case $? in
+        126|127) return 1 ;;
+    esac
+    return 0
+}
+
 # ── Tier 1: prebuilt lcsas-restore (C89, static, no Python) ───────
 
-if [ -x "$RESTORE_BIN" ]; then
+if [ -x "$RESTORE_BIN" ] && ! bin_preflight_ok "$RESTORE_BIN"; then
+    printf '[tier 1] %s is present but failed pre-flight ' "$RESTORE_BIN" >&2
+    printf '(zero-byte / wrong arch / corrupted binary); skipping\n' >&2
+elif [ -x "$RESTORE_BIN" ]; then
     printf '[tier 1] using prebuilt lcsas-restore (%s)\n' "$TARGET" >&2
     # Drop cwd outside the meta-disc before exec, so the kernel does
     # not hold it through the exec barrier.
@@ -932,7 +962,10 @@ fi
 # swap protocol via standalone_restorer.py) instead of a cryptic
 # rustic "pack not found" error after the meta disc is ejected.
 
-if [ -x "$RUSTIC_BIN" ] && [ ! -d "$REPO/data" ]; then
+if [ -x "$RUSTIC_BIN" ] && ! bin_preflight_ok "$RUSTIC_BIN"; then
+    printf '[tier 2] %s is present but failed pre-flight ' "$RUSTIC_BIN" >&2
+    printf '(zero-byte / wrong arch / corrupted binary); skipping\n' >&2
+elif [ -x "$RUSTIC_BIN" ] && [ ! -d "$REPO/data" ]; then
     printf '[tier 2] skipped: rustic-static cannot drive multi-disc ' >&2
     printf 'restores (no %s/data/); falling through to tier 3\n' "$REPO" >&2
 elif [ -x "$RUSTIC_BIN" ]; then
