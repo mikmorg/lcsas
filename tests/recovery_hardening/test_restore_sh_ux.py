@@ -94,11 +94,11 @@ def test_hard_error_when_no_data_discs_discovered(tmp_path: Path) -> None:
     not march on into a password prompt + opaque downstream failure."""
     recovery = tmp_path / "recovery"
     recovery.mkdir()
-    # Mark the dir as a recovery root so the script's auto-detect picks
-    # `$1` (its "looks like a recovery root" probe needs bin/ or src/).
-    # We leave the bin/<target>/ tree empty -- no tier binary will
-    # dispatch, but the discovery check fires before tier dispatch.
-    (recovery / "bin" / HOST_TARGET).mkdir(parents=True)
+    # Install a stub tier-1 binary so the no-recovery-binary guard
+    # (issue #225) does not short-circuit — the gate we're testing
+    # here is the discovery / pack-search hard error, which fires
+    # after the binary-availability check.
+    _install_stub_binary(recovery, HOST_TARGET, "lcsas-restore")
     # Single tenant, NO data/ subdir, so the legacy "self-contained
     # repo" escape hatch doesn't apply either.
     _make_repo_skeleton(recovery / "metadata", "alpha", with_data=False)

@@ -25,6 +25,14 @@ def _make_env(tmp_path: Path, catalog_newer: bool = True):
     (rec / "bin" / HOST_TARGET).mkdir(parents=True)
     (rec / "src").mkdir()
 
+    # Stub tier-1 binary so the new no-recovery-binary guard (issue
+    # #225) does NOT short-circuit before the catalog-invalidation
+    # block we are trying to exercise.  The stub just exits 1 — we
+    # only care about the script's behavior up to tier dispatch.
+    stub = rec / "bin" / HOST_TARGET / "lcsas-restore"
+    stub.write_text("#!/bin/sh\nexit 1\n")
+    stub.chmod(0o755)
+
     # Single-tenant repo so the script doesn't prompt for a choice.
     repo = rec / "metadata" / "myrepo"
     (repo / "keys").mkdir(parents=True)
