@@ -34,6 +34,11 @@ def _make_repo(recovery: Path) -> None:
     repo = recovery / "metadata" / "alpha"
     (repo / "keys").mkdir(parents=True)
     (repo / "index").mkdir()
+    # Tier-2 skip (#227) bypasses rustic-static when $REPO/data/ is
+    # absent (multi-disc archive — rustic can't drive disc swaps).
+    # These fixtures pin tier-1-corrupt → tier-2-fallback semantics,
+    # so the data/ dir must exist to keep tier 2 in the cascade.
+    (repo / "data").mkdir()
 
 
 def _install_zero_byte_binary(recovery: Path, name: str) -> Path:
