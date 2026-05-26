@@ -1072,6 +1072,45 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
             IFS=":"
         done
         IFS="$OLD_IFS3"
+        # Issue #239 -- wire PYTHONPATH to the bundled zstandard.
+        #
+        # `standalone_restorer.py` does `import zstandard` at module
+        # top (guarded by try/ImportError -> _HAS_ZSTD=False, so a
+        # truly-missing zstandard does NOT crash the script -- it
+        # only fails when a zstd-compressed blob is decompressed).
+        # But every real LCSAS repo IS zstd-compressed (rustic v2
+        # default), so the guard's fallback path would die on the
+        # FIRST pack; tier 3 must find zstandard to succeed.
+        #
+        # `MetaVolumeBuilder._bundle_tools` calls
+        # `ToolBundler.bundle_python_package("zstandard")` which
+        # stamps the package at <META>/tools/lib/python3.X/zstandard/.
+        # The bundled per-target CPython at $RECOVERY/bin/$TARGET/
+        # python/ does NOT have zstandard baked in, so we must export
+        # PYTHONPATH for tier 3 to find it.  Glob the python3.X
+        # subdir -- the host-built bundle stamps in the BUILD host's
+        # minor version, which matches the bundled per-target
+        # CPython minor (currently 3.12 ↔ 3.12 per
+        # recovery/UPSTREAM.sha256 and host install).  If a future
+        # version skew breaks ABI, the `import zstandard` guard
+        # still lets tier 3 START and fail on the first decompress
+        # with an actionable error.
+        META_ROOT="$(dirname "$RECOVERY")"
+        for _zstd_libdir in "$META_ROOT"/tools/lib/python*; do
+            if [ -d "$_zstd_libdir/zstandard" ]; then
+                if [ -n "${PYTHONPATH:-}" ]; then
+                    PYTHONPATH="$_zstd_libdir:$PYTHONPATH"
+                else
+                    PYTHONPATH="$_zstd_libdir"
+                fi
+                export PYTHONPATH
+                printf '[tier 3] PYTHONPATH includes bundled zstandard at %s\n' \
+                       "$_zstd_libdir" >&2
+                break
+            fi
+        done
+        unset _zstd_libdir
+
         # --interactive on: blind-harness redirects stdin, so isatty()
         # would return false and 'auto' would suppress the prompt.  We
         # want the prompt FIRED so the agent (or operator) can swap
