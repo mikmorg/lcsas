@@ -687,8 +687,18 @@ restore_file_node(const char *repo_path,
      * lseek past zero bytes at end-of-file, the file's logical size
      * doesn't reflect the trailing hole.  ftruncate it to the
      * snapshot's declared size to guarantee size parity with the
-     * original (and with tier-2's restored output). */
-    {
+     * original (and with tier-2's restored output).
+     *
+     * Issue #245 — guard with rc==0.  Previously this fired even
+     * when the blob loop bailed out with rc=-1 (transient pack
+     * read failure, mid-disc-swap, etc.), padding the partial
+     * file with a sparse hole up to expected_size.  That artifact
+     * then survived because the #92 idempotent-resume check sees a
+     * file at the right size and skips it next pass.  Symptom:
+     * one random file silently restored as 130 KiB of zeros on
+     * every blind-restore run.  On failure we'd rather leave the
+     * file at its actual written length so resume re-attempts it. */
+    if (rc == 0) {
         long size_idx = lcsas_json_obj_get(src, toks, node_idx, "size");
         if (size_idx >= 0 && toks[size_idx].type == LCSAS_JSON_NUMBER) {
             long long expected_size = 0;
