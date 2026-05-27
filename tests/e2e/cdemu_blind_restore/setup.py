@@ -328,6 +328,20 @@ def _build_meta_iso() -> Path:
     META_STAGE.mkdir(parents=True)
     MetaVolumeBuilder(META_STAGE, catalog_db_path=DB_PATH).build()
 
+    # Issue #261 — strip operator-convenience wrappers from the test
+    # meta disc.  Real meta discs ship `restore-auto.sh`, `restore_legacy.sh`,
+    # `restore_c89.sh`, and `restore.bat` as ergonomic shortcuts; verify.sh
+    # forbids the test agent from using them (see no_authoring_check.py
+    # line ~238).  Their presence on the test fixture is pure temptation
+    # — about 1-in-5 haiku runs bypasses the canonical `restore.sh` path
+    # for `restore-auto.sh`.  Pull them out of the fixture so the agent
+    # has no choice but the canonical path.
+    for convenience in ("restore-auto.sh", "restore_legacy.sh",
+                        "restore_c89.sh", "restore.bat"):
+        p = META_STAGE / convenience
+        if p.exists():
+            p.unlink()
+
     _apply_variant_mutations(META_STAGE)
 
     meta_iso = ISO_OUT / "LCSAS_META.iso"
