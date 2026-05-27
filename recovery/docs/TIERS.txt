@@ -29,7 +29,7 @@ THE TIERS
   ╞════╪═════════════════════════════╪════════════════════════════╡
   │ B  │   BARE MINIMUM PATH ENDS HERE                             │
   ╞════╪═════════════════════════════╪════════════════════════════╡
-  │ 3  │ Pure-Python standalone_      │ python3 (>=3.6)             │
+  │ 3  │ Pure-Python standalone_      │ python3 (>=3.7)             │
   │    │ restorer.py                  │ stdlib only (no pip needed) │
   └────┴─────────────────────────────┴────────────────────────────┘
 
@@ -59,6 +59,48 @@ If you want a hard guarantee that the recovery never touches Python:
 restore.sh will refuse to try tier 3 even if python3 and
 standalone_restorer.py are both present.
 
+TIER-2 ON MULTI-DISC ARCHIVES
+
+Tier 2 (rustic-static) skips itself entirely on multi-disc archives
+because rustic cannot drive the LCSAS disc-swap protocol -- it
+expects every pack to live under a single ``$REPO/data/`` tree.
+When restore.sh detects the multi-disc layout (no ``data/`` subdir
+on the meta-disc-resident repo), it prints a one-line skip
+diagnostic and falls through directly to tier 3.
+
+On a multi-disc archive the effective cascade is therefore
+TIER 1 -> TIER 3; tier 2 is a single-disc-only fallback.
+Operators with a multi-disc archive should treat tier 1 as the
+primary AND the only practical pre-Python fallback.
+
+TIER BINARY PRE-FLIGHT
+
+Before dispatching, restore.sh pre-flights each tier binary with
+a size check plus a ``--help`` dry-run (see ``bin_preflight_ok`` in
+``scripts/restore.sh``).  A zero-byte file or a wrong-arch binary
+fails pre-flight and is skipped with the diagnostic:
+    [tier N] ... is present but failed pre-flight ... skipping
+The cascade then advances to the next available tier.  This guard
+exists because POSIX ``sh`` execs an empty file as a no-op script
+that exits 0 -- without the pre-flight, a bit-rotted tier-1 binary
+would silently claim success and the operator would get nothing.
+
+See ``RECOVER.txt`` (CASCADE DETAILS, pre-flight paragraph) for the
+operator-facing version of this note.
+
+TIER FALLBACK ON RUNTIME FAILURES
+
+The default cascade ``exec``s the first available tier, so a tier-1
+crash mid-restore aborts the run with no automatic fall-through.
+This matches the bare-minimum recovery story: tier 1 IS the
+recovery, and it has to work.
+
+To make restore.sh walk the cascade on a tier-1 runtime failure
+(non-zero exit), set ``LCSAS_TIER_FALLBACK=1``.  Tiers 1 and 2 then
+run as subprocesses and fall through to the next tier on a non-zero
+exit code.  Tier 3 is always ``exec``'d (last resort, nothing to
+fall back to).  See ``RECOVER.txt`` ENVIRONMENT VARIABLES.
+
 WHY PYTHON IS NOT ON THE BARE PATH
 
 Python is a healthy ecosystem today, but at a 50-year horizon:
@@ -67,8 +109,11 @@ Python is a healthy ecosystem today, but at a 50-year horizon:
     collector, ABI, and standard library multiple times in 30 years.
     Source written today may not parse under a hypothetical Python
     of 2076.
-  * Python's stdlib provides scrypt and HMAC -- but only since
-    Python 3.6; that single ecosystem version pin is itself a risk.
+  * Python's stdlib provides scrypt and HMAC -- but the
+    standalone_restorer also requires dataclasses, ``from __future__
+    import annotations`` semantics, and pathlib edge cases that
+    pin the minimum at Python 3.7.  That single ecosystem version
+    pin is itself a risk.
   * The interpreter binary on the recovery medium depends on
     glibc / musl + dozens of optional shared libraries (ssl, expat,
     libffi, etc.).  Static-link is possible but uncommon.
