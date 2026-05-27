@@ -47,49 +47,52 @@ catalog.c:157   INTRACTABLE   "                                                 
 disc_locator.c:135   INTRACTABLE   mkdir_p race: another process must create-the-target between our mkdir() and stat(); not unit-testable
 disc_locator.c:138   INTRACTABLE   same as 135
 disc_locator.c:178   DEFERRED      path_under prefix-child branch ("path begins with meta + '/'"); reachable via a deeper search-path layout but cheaper to document
-disc_locator.c:198   DEFERRED      push_discovered dedup against existing search_paths; reachable with a mount_parent==search_paths fixture
-disc_locator.c:243   DEFERRED      consider_catalog cache_dir branch; needs cache_dir + discovered mount with catalog.db
-disc_locator.c:245   DEFERRED      "                                                                                                                            "
-disc_locator.c:247   DEFERRED      "                                                                                                                            "
-disc_locator.c:248   DEFERRED      "                                                                                                                            "
-disc_locator.c:251   DEFERRED      "                                                                                                                            "
-disc_locator.c:253   DEFERRED      "                                                                                                                            "
-disc_locator.c:329   DEFERRED      refresh_discovered "path too long" warn — needs mount_parent name approaching PATH_MAX
-disc_locator.c:331   DEFERRED      "                                                                                                                            "
-disc_locator.c:336   DEFERRED      "                                                                                                                            "
-disc_locator.c:418   DEFERRED      copy_file fwrite error path; fault-inject ENOSPC or full-fs needed
-disc_locator.c:419   DEFERRED      "                                                                                                                            "
-disc_locator.c:528   DEFERRED      drain_disc fs_critically_full warn; needs tmpfs with <10% free
-disc_locator.c:529   DEFERRED      "                                                                                                                            "
-disc_locator.c:535   DEFERRED      "                                                                                                                            "
-disc_locator.c:537   DEFERRED      "                                                                                                                            "
-disc_locator.c:546   DEFENSIVE     drain_disc "path too long" defensive continue (4 KiB+ prefix_dir overflow)
-disc_locator.c:551   DEFENSIVE     "                                                                                                                            "
-disc_locator.c:552   DEFENSIVE     "                                                                                                                            "
-disc_locator.c:574   DEFENSIVE     drain_disc "path too long" defensive continue (cache_prefix overflow)
-disc_locator.c:576   DEFENSIVE     "                                                                                                                            "
-disc_locator.c:583   DEFENSIVE     drain_disc "path too long" defensive continue (src path overflow)
-disc_locator.c:585   DEFENSIVE     "                                                                                                                            "
-disc_locator.c:596   DEFENSIVE     drain_disc "path too long" defensive continue (dst path overflow)
-disc_locator.c:598   DEFENSIVE     "                                                                                                                            "
-disc_locator.c:603   DEFENSIVE     drain_disc skip-if-already-cached branch (stat success on dst)
-disc_locator.c:605   DEFENSIVE     drain_disc skip-non-regular-source branch
-disc_locator.c:632   DEFENSIVE     drain_disc chunk_limit_reached early-exit (limited by LCSAS_DRAIN_CHUNK_PACKS=1 in tests, already covered)
-disc_locator.c:697   DEFERRED      print_prompt "catalog has the pack but no current volume mapping" — needs populated catalog
-disc_locator.c:700   DEFERRED      print_prompt "catalog has no record of this pack hash" — needs populated catalog
-disc_locator.c:790   DEFERRED      lcsas_disc_locate_pack interactive prompt-loop "still not found" branch — needs 2+ prompt iterations
+disc_locator.c:229   DEFERRED      push_discovered dedup against existing search_paths; reachable with a mount_parent==search_paths fixture
+disc_locator.c:274   DEFERRED      consider_catalog cache_dir branch (snprintf success path); needs cache_dir + discovered mount with catalog.db
+disc_locator.c:276   DEFERRED      "                                                                                                                            "
+disc_locator.c:278   DEFERRED      "                                                                                                                            "
+disc_locator.c:279   DEFERRED      "                                                                                                                            "
+disc_locator.c:282   DEFERRED      "                                                                                                                            "
+disc_locator.c:284   DEFERRED      "                                                                                                                            "
+disc_locator.c:366   DEFERRED      refresh_discovered "path too long" warn — needs mount_parent name approaching PATH_MAX
+disc_locator.c:368   DEFERRED      "                                                                                                                            "
+disc_locator.c:373   DEFERRED      meta_disc path_under exclusion in refresh_discovered — needs meta_disc + discovered mount under it
+disc_locator.c:457   DEFERRED      copy_file fwrite error path; fault-inject ENOSPC or full-fs needed
+disc_locator.c:458   DEFERRED      "                                                                                                                            "
+disc_locator.c:567   DEFERRED      drain_disc fs_critically_full warn; needs tmpfs with <10% free
+disc_locator.c:568   DEFERRED      "                                                                                                                            "
+disc_locator.c:574   DEFERRED      "                                                                                                                            "
+disc_locator.c:576   DEFERRED      "                                                                                                                            "
+disc_locator.c:585   DEFERRED      drain_disc 1 GiB cache_bytes_used soft warn; needs >1 GiB in cache_dir
+disc_locator.c:590   DEFERRED      "                                                                                                                            "
+disc_locator.c:591   DEFERRED      "                                                                                                                            "
+disc_locator.c:613   DEFENSIVE     drain_disc "path too long" defensive continue (prefix_dir overflow)
+disc_locator.c:615   DEFENSIVE     "                                                                                                                            "
+disc_locator.c:622   DEFENSIVE     drain_disc "path too long" defensive continue (cache_prefix overflow)
+disc_locator.c:624   DEFENSIVE     "                                                                                                                            "
+disc_locator.c:635   DEFENSIVE     drain_disc "path too long" defensive continue (src path overflow)
+disc_locator.c:637   DEFENSIVE     "                                                                                                                            "
+disc_locator.c:642   DEFENSIVE     drain_disc "path too long" defensive continue (dst path overflow)
+disc_locator.c:644   DEFENSIVE     "                                                                                                                            "
+disc_locator.c:671   DEFENSIVE     scan_paths cache_dir try_with_meta hit branch — needs a pre-populated cache_dir with the pack
+disc_locator.c:736   DEFERRED      print_prompt "catalog has the pack but no current volume mapping" — needs populated catalog
+disc_locator.c:739   DEFERRED      print_prompt "catalog has no record of this pack hash" — needs populated catalog
+disc_locator.c:829   DEFENSIVE     lcsas_disc_locate_pack cwd-under-meta_disc chdir-to-root fallback (best-effort; cwd is /tmp during tests so the predicate is false)
 
 # lcsas_io.c
 lcsas_io.c:22   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection
 lcsas_io.c:23   INTRACTABLE   same as 22 (error-path return)
-lcsas_io.c:40   INTRACTABLE   EINTR retry in lcsas_write_exact write loop
-lcsas_io.c:41   INTRACTABLE   same as 40
-lcsas_io.c:75   INTRACTABLE   EINTR retry in lcsas_read_file read loop
-lcsas_io.c:76   INTRACTABLE   same as 75
+lcsas_io.c:30   INTRACTABLE   lcsas_pread_exact unexpected-EOF EIO branch (issue #222 disc-disconnect classifier); needs a source that returns 0 mid-read — integration-only (test_tier1_drive_disconnect.py truncates packs; not run in coverage-c)
+lcsas_io.c:31   INTRACTABLE   "                                                                                                                            "
+lcsas_io.c:47   INTRACTABLE   EINTR retry in lcsas_write_exact write loop; needs racy signal injection
+lcsas_io.c:48   INTRACTABLE   same as 47 (error-path return)
+lcsas_io.c:82   INTRACTABLE   EINTR retry in lcsas_read_file read loop
+lcsas_io.c:83   INTRACTABLE   same as 82 (error-path return)
 
 # main.c
-main.c:437   INTRACTABLE   "ERROR: snapshot load failed" — load_snapshots returns 0 even on per-file decrypt failures; only -1 on early calloc fail (fault-inject blocked)
-main.c:438   INTRACTABLE   goto out after 437
+main.c:438   INTRACTABLE   "ERROR: snapshot load failed" — load_snapshots returns 0 even on per-file decrypt failures; only -1 on early calloc fail (fault-inject blocked)
+main.c:439   INTRACTABLE   goto out after 438
+main.c:475   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)
 
 # poly1305.c
 poly1305.c:146   INTRACTABLE   Final-clamp non-underflow branch: fires when h ≥ 2^130 − 5 after accumulation; for random messages probability ≈ 5/2^130; requires chosen-message attack on MAC accumulator
@@ -122,23 +125,126 @@ repo.c:502    DEFERRED      "                                                   
 repo.c:503    DEFERRED      "                                                                                                                            "
 repo.c:609    INTRACTABLE   blob_index_push realloc fail; fault-inject blocked by gcov-runtime malloc-intolerance
 repo.c:610    INTRACTABLE   "                                                                                                                            "
-repo.c:842    INTRACTABLE   read_blob malloc fail before pread; gcov-fault-inject blocked
-repo.c:849    INTRACTABLE   read_blob plaintext malloc fail; gcov-fault-inject blocked
-repo.c:867    INTRACTABLE   read_blob zstd probe returned <=0 or > 256 MB; needs crafted blob (AEAD-protected)
-repo.c:868    INTRACTABLE   "                                                                                                                            "
-repo.c:869    INTRACTABLE   "                                                                                                                            "
-repo.c:875    INTRACTABLE   read_blob zstd decode fail after probe; needs corrupt-mid-frame zstd (AEAD-protected)
-repo.c:876    INTRACTABLE   "                                                                                                                            "
-repo.c:877    INTRACTABLE   "                                                                                                                            "
-repo.c:886    INTRACTABLE   read_blob hash mismatch; needs crafted ciphertext that decrypts but verify-mismatches
+repo.c:861    INTRACTABLE   read_blob open() disc-disconnect EIO/ENXIO/EACCES classifier (issue #222); needs cdemu/USB-drive ejection mid-read — integration-only
+repo.c:862    INTRACTABLE   "                                                                                                                            "
+repo.c:863    INTRACTABLE   "                                                                                                                            "
+repo.c:864    INTRACTABLE   "                                                                                                                            "
+repo.c:865    INTRACTABLE   "                                                                                                                            "
+repo.c:870    INTRACTABLE   return -1 after 861-869 (open() disc-disconnect classifier path exit)
+repo.c:883    INTRACTABLE   read_blob pack-truncation diagnostic (issue #220); needs an on-disc pack shorter than the index says — integration-only (write-side bug; tier-1 reads validated packs)
+repo.c:886    INTRACTABLE   "                                                                                                                            "
 repo.c:887    INTRACTABLE   "                                                                                                                            "
 repo.c:888    INTRACTABLE   "                                                                                                                            "
+repo.c:900    INTRACTABLE   read_blob pread() disc-disconnect EIO/ENXIO classifier (issue #222); needs cdemu/USB ejection between fstat and pread
+repo.c:901    INTRACTABLE   "                                                                                                                            "
+repo.c:902    INTRACTABLE   "                                                                                                                            "
+repo.c:903    INTRACTABLE   "                                                                                                                            "
+repo.c:907    INTRACTABLE   "                                                                                                                            "
+repo.c:908    INTRACTABLE   "                                                                                                                            "
+repo.c:911    INTRACTABLE   read_blob generic pack-read fail diagnostic (covered by 900-908 classifier above when errno IS classifiable; else-branch needs a non-EIO/ENXIO/EBADF/ENOENT errno from pread)
+repo.c:914    INTRACTABLE   "                                                                                                                            "
+repo.c:916    INTRACTABLE   "                                                                                                                            "
+repo.c:923    INTRACTABLE   read_blob decrypt fail; AEAD primitive cannot be crafted into a decrypt-fail (mac would also fail first)
+repo.c:941    INTRACTABLE   read_blob zstd probe returned <=0 or > 256 MB; needs crafted blob (AEAD-protected)
+repo.c:942    INTRACTABLE   "                                                                                                                            "
+repo.c:943    INTRACTABLE   "                                                                                                                            "
+repo.c:949    INTRACTABLE   read_blob zstd decode fail after probe; needs corrupt-mid-frame zstd (AEAD-protected)
+repo.c:950    INTRACTABLE   "                                                                                                                            "
+repo.c:951    INTRACTABLE   "                                                                                                                            "
+repo.c:960    INTRACTABLE   read_blob hash mismatch; needs crafted ciphertext that decrypts but verify-mismatches
+repo.c:961    INTRACTABLE   "                                                                                                                            "
+repo.c:962    INTRACTABLE   "                                                                                                                            "
 
 # scrypt.c — 100% covered by fault-tolerant gcov fault-inject sweep (Phase 13d)
 
 # tree.c
-tree.c:160   INTRACTABLE   write_exact fail mid-file-write; needs RO mount or syscall injection
-tree.c:299   INTRACTABLE   symlink() syscall fail; needs RO fs or pre-existing target with EXDEV
+tree.c:216   DEFENSIVE     decode_node_mtime "fail" path (lcsas_json_decode_string returns -1); fixture mtime fields are always well-formed
+tree.c:245   INTRACTABLE   write_blob_sparse write_exact fail on non-zero prefix; needs RO mount or syscall injection
+tree.c:254   DEFERRED      write_blob_sparse "hole >= 4 KiB" lseek branch; fixture file content "hello from lcsas-restore fixture\n" has no zero runs
+tree.c:255   DEFERRED      "                                                                                                                            "
+tree.c:259   DEFERRED      write_blob_sparse short-zero write branch; same reason as 254
+tree.c:263   DEFERRED      write_blob_sparse loop-exit return 0; only reached when the buffer ends with a zero byte (write the prefix then fall out of the loop); fixture content "hello from lcsas-restore fixture\n" ends with '\n' so the early `if (zstart >= len) return 0;` at line 247 fires first.  NOTE: the fault-inject sweep can occasionally exercise this line as a side-effect of malloc-fail unwind paths in broken-tree fixtures; when that happens you'll see a stale-exemption error and can remove this entry for that one run.
+tree.c:287   DEFERRED      apply_node_ownership body (issue #189); early-returns when geteuid()!=0 — coverage-c runs as the unprivileged test user
+tree.c:288   DEFERRED      "                                                                                                                            "
+tree.c:289   DEFERRED      "                                                                                                                            "
+tree.c:290   DEFERRED      "                                                                                                                            "
+tree.c:292   DEFERRED      "                                                                                                                            "
+tree.c:293   DEFERRED      "                                                                                                                            "
+tree.c:295   DEFERRED      "                                                                                                                            "
+tree.c:300   DEFERRED      lchown wrapper around (void)cast; only reachable when running as root with valid uid/gid fields
+tree.c:330   DEFERRED      apply_node_xattrs body (issue #190); fixture has no "extended_attributes" array on any node — early-returns at the first ea_i<0 check
+tree.c:331   DEFERRED      "                                                                                                                            "
+tree.c:332   DEFERRED      "                                                                                                                            "
+tree.c:334   DEFERRED      "                                                                                                                            "
+tree.c:335   DEFERRED      "                                                                                                                            "
+tree.c:338   DEFERRED      "                                                                                                                            "
+tree.c:339   DEFERRED      "                                                                                                                            "
+tree.c:341   DEFERRED      "                                                                                                                            "
+tree.c:345   DEFERRED      "                                                                                                                            "
+tree.c:346   DEFERRED      "                                                                                                                            "
+tree.c:347   DEFERRED      "                                                                                                                            "
+tree.c:348   DEFERRED      "                                                                                                                            "
+tree.c:351   DEFERRED      "                                                                                                                            "
+tree.c:352   DEFERRED      "                                                                                                                            "
+tree.c:353   DEFERRED      "                                                                                                                            "
+tree.c:354   DEFERRED      "                                                                                                                            "
+tree.c:355   DEFERRED      "                                                                                                                            "
+tree.c:357   DEFERRED      "                                                                                                                            "
+tree.c:358   DEFERRED      "                                                                                                                            "
+tree.c:359   DEFERRED      "                                                                                                                            "
+tree.c:362   DEFERRED      "                                                                                                                            "
+tree.c:364   DEFERRED      "                                                                                                                            "
+tree.c:365   DEFERRED      "                                                                                                                            "
+tree.c:366   DEFERRED      "                                                                                                                            "
+tree.c:374   DEFERRED      "                                                                                                                            "
+tree.c:375   DEFERRED      "                                                                                                                            "
+tree.c:376   DEFERRED      "                                                                                                                            "
+tree.c:377   DEFERRED      "                                                                                                                            "
+tree.c:378   DEFERRED      "                                                                                                                            "
+tree.c:380   DEFERRED      "                                                                                                                            "
+tree.c:381   DEFERRED      "                                                                                                                            "
+tree.c:383   DEFERRED      "                                                                                                                            "
+tree.c:384   DEFERRED      "                                                                                                                            "
+tree.c:385   DEFERRED      "                                                                                                                            "
+tree.c:390   DEFERRED      "                                                                                                                            "
+tree.c:391   DEFERRED      "                                                                                                                            "
+tree.c:393   DEFERRED      "                                                                                                                            "
+tree.c:394   DEFERRED      "                                                                                                                            "
+tree.c:397   DEFERRED      "                                                                                                                            "
+tree.c:541   DEFERRED      hardlink_map link() success branch (issue #192); fixture has no node with inode matching an earlier-restored file
+tree.c:542   DEFERRED      "                                                                                                                            "
+tree.c:547   DEFERRED      "                                                                                                                            "
+tree.c:549   DEFERRED      "                                                                                                                            "
+tree.c:550   DEFERRED      "                                                                                                                            "
+tree.c:551   DEFERRED      "                                                                                                                            "
+tree.c:552   DEFERRED      "                                                                                                                            "
+tree.c:555   DEFERRED      "                                                                                                                            "
+tree.c:559   DEFERRED      "                                                                                                                            "
+tree.c:560   DEFERRED      "                                                                                                                            "
+tree.c:563   DEFERRED      "                                                                                                                            "
+tree.c:603   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on lcsas_create_file fail (issue #221); needs a filesystem-full target — integration-only (test_tier1_target_full.py mounts a 1 MiB tmpfs; not run in coverage-c)
+tree.c:604   INTRACTABLE   "                                                                                                                            "
+tree.c:605   INTRACTABLE   "                                                                                                                            "
+tree.c:610   INTRACTABLE   "                                                                                                                            "
+tree.c:665   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on write fail mid-content (issue #221); same constraint as 603
+tree.c:666   INTRACTABLE   "                                                                                                                            "
+tree.c:667   INTRACTABLE   "                                                                                                                            "
+tree.c:668   INTRACTABLE   "                                                                                                                            "
+tree.c:676   INTRACTABLE   "                                                                                                                            "
+tree.c:849   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on mkdir_p fail (issue #221); same constraint as 603 (filesystem-full target)
+tree.c:850   INTRACTABLE   "                                                                                                                            "
+tree.c:851   INTRACTABLE   "                                                                                                                            "
+tree.c:852   INTRACTABLE   "                                                                                                                            "
+tree.c:856   INTRACTABLE   "                                                                                                                            "
+tree.c:925   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT/EPERM/EOPNOTSUPP/ENOSYS classifier on symlink fail (issues #221/#224); needs a filesystem-full or non-POSIX (FAT32/exFAT/SMB) target — integration-only (test_tier1_fat32_target.py loop-mounts a vfat; not run in coverage-c)
+tree.c:926   INTRACTABLE   "                                                                                                                            "
+tree.c:927   INTRACTABLE   "                                                                                                                            "
+tree.c:929   INTRACTABLE   "                                                                                                                            "
+tree.c:933   INTRACTABLE   "                                                                                                                            "
+tree.c:934   INTRACTABLE   "                                                                                                                            "
+tree.c:935   INTRACTABLE   "                                                                                                                            "
+tree.c:944   INTRACTABLE   "                                                                                                                            "
+tree.c:949   INTRACTABLE   "                                                                                                                            "
 ```
 <!-- EXEMPTIONS-FENCE-END -->
 
