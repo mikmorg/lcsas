@@ -365,15 +365,26 @@ class PurePythonRestorer:
                 contract must opt out explicitly).  The tier-3 CLI sets
                 this from ``--interactive on|off|auto`` (auto = isatty);
                 see ``standalone_builder.py``.
-            catalog_path: Optional path to an LCSAS holographic ``catalog.db``.
-                When supplied, the disc-swap prompt resolves the missing pack
-                hash to one or more volume labels via the catalog and prints
-                them in the SAME framed shape that tier-1 emits (see
+            catalog_path: Optional **explicit override** path to an LCSAS
+                holographic ``catalog.db``.  When supplied, the disc-swap
+                prompt resolves the missing pack hash to one or more volume
+                labels via the catalog and prints them in the SAME framed
+                shape that tier-1 emits (see
                 ``recovery/src/lcsas-restore/disc_locator.c::print_prompt``).
                 Operators (and the blind-restore test agent's pattern matcher)
                 rely on that exact phrasing.  A missing, corrupt, or locked
                 catalog falls back to the legacy "(no catalog available)"
                 line; lookups never raise.
+
+                When ``None`` (the default), the restorer auto-discovers a
+                ``catalog.db`` lazily from ``pack_search_paths``: each
+                disc-swap prompt cycle re-scans the mount roots so a catalog
+                that becomes reachable mid-restore (e.g. the operator just
+                inserted a data disc that carries the holographic catalog)
+                is picked up on the next prompt fire.  See ``_discover_catalog``
+                for the search order.  This addresses issue #253 -- without
+                it, ``restore.sh``'s one-shot catalog-pick scan misses any
+                catalog that lives on a data disc not yet mounted at startup.
         """
         self.repo_path = repo_path
         self.interactive = interactive
@@ -661,6 +672,53 @@ class PurePythonRestorer:
     _CATALOG_HIT_NO_VOLS = "hit-no-vols"
     _CATALOG_MISS = "miss"
 
+    def _discover_catalog(self) -> Path | None:
+        """Walk pack search paths looking for a holographic ``catalog.db``.
+
+        The LCSAS ``HolographicInjector`` stamps ``catalog.db`` at the
+        staging root (see ``staging/metadata.py::inject_catalog``), so on a
+        mounted data disc the file lives at ``<mount-root>/catalog.db``.
+        Callers (notably ``restore.sh``) may pass either the disc root
+        (``--mount-point /mnt``) OR the disc's data subdir
+        (``--pack-search /mnt/data``) -- both rewrite to identical mount
+        points in tier-3's ``--mount-point`` flags, but the legacy default
+        of ``repo_path/data`` still bottoms out one level deep.  So we
+        probe both the root itself AND its parent (up to one level), and
+        also a ``recovery/`` subpath for the meta-disc layout where the
+        catalog might be tucked under ``recovery/``.
+
+        Probe order (first existing hit wins, stable across calls):
+
+          1. ``<root>/catalog.db``         -- disc root, normal holographic layout
+          2. ``<root>/../catalog.db``      -- root passed as ``data/`` subdir
+          3. ``<root>/recovery/catalog.db``-- meta-disc local-recovery-tree
+
+        Returns ``None`` if nothing is found.  Issue #253: this enables the
+        catalog hint to materialise on the FIRST disc-swap retry after the
+        operator inserts a data disc -- restore.sh's one-shot startup scan
+        cannot, because no data disc is mounted yet at that point.
+        """
+        seen: set[Path] = set()
+        for root in self._pack_search_paths:
+            for candidate in (
+                root / "catalog.db",
+                root.parent / "catalog.db",
+                root / "recovery" / "catalog.db",
+            ):
+                # Resolve only the parent to keep symlinks under control
+                # without forcing the file itself to exist (resolve(strict=False)
+                # may not be portable on every libc).
+                try:
+                    key = candidate.resolve(strict=False)
+                except OSError:
+                    key = candidate
+                if key in seen:
+                    continue
+                seen.add(key)
+                if candidate.is_file():
+                    return candidate
+        return None
+
     def _lookup_volume_labels(
         self, pack_id: str,
     ) -> tuple[list[str], str] | None:
@@ -669,13 +727,23 @@ class PurePythonRestorer:
         Returns
         -------
         ``None``
-            No ``catalog_path`` was configured, or the catalog file could
-            not be opened / queried.  Caller should fall back to the
-            legacy "(no catalog available)" framed-prompt line.
+            No catalog could be reached -- either no ``catalog_path``
+            override was passed AND auto-discovery turned up nothing
+            under any pack-search root, or the discovered file could not
+            be opened / queried.  Caller should fall back to the legacy
+            "(no catalog available)" framed-prompt line.
         ``(labels, status)``
             ``labels`` is the (possibly-empty) list of volume labels for
             the pack, ordered lexicographically.  ``status`` is one of
             the ``_CATALOG_*`` sentinels above.
+
+        Auto-discovery (issue #253): when ``self.catalog_path is None``,
+        every call walks ``self._pack_search_paths`` looking for a
+        ``catalog.db``.  On first hit the path is cached on the instance
+        so subsequent prompt frames don't re-stat the disc; on miss we
+        return ``None`` and try again on the next call -- letting a
+        catalog that materialises mid-restore (after the operator inserts
+        a data disc) be picked up on the next swap prompt.
 
         The catalog is opened read-only.  Any sqlite3 error is swallowed
         and treated as "catalog unavailable" -- the restore must never
@@ -683,7 +751,16 @@ class PurePythonRestorer:
         corrupt / locked / on a half-mounted disc.
         """
         if self.catalog_path is None:
-            return None
+            # Lazy discovery: scan the mount roots every prompt cycle
+            # until we find one.  On hit we cache to avoid re-statting
+            # the disc on subsequent prompts.
+            discovered = self._discover_catalog()
+            if discovered is None:
+                return None
+            self.catalog_path = discovered
+            sys.stderr.write(
+                f"[lcsas-restore] auto-discovered catalog at {discovered}\n"
+            )
         try:
             uri = f"file:{self.catalog_path}?mode=ro"
             with sqlite3.connect(uri, uri=True) as conn:
