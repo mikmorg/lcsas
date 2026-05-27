@@ -58,7 +58,8 @@ Python dependency; the BARE MINIMUM recovery path ends after tier 2.
                                        musl libc + kernel)
 
   Tier 2.  bin/<arch>/rustic-static    vendored Rust binary
-                                       (cross-check against tier 1)
+                                       (fallback when tier 1 won't run;
+                                       pinned upstream artifact)
   ─────────────────────────────────────────────────────────────────
   ^^ BARE MINIMUM PATH (zero Python).  If your future system has a
      working CPU and a kernel that can load a static binary, the
@@ -73,6 +74,18 @@ Python dependency; the BARE MINIMUM recovery path ends after tier 2.
 If all three fail, you have a hardware/environment problem.  See
 "PHYSICAL RECOVERY" below.  See docs/TIERS.txt for the full design
 rationale.
+
+Before dispatching to a tier, restore.sh pre-flights each binary
+with a size check plus a `--help` dry-run.
+If a binary is zero-byte, wrong-arch, or otherwise unrunnable, you
+will see a line like:
+    [tier N] /path/to/binary is present but failed pre-flight
+    (zero-byte / wrong arch / corrupted binary); skipping
+This is NORMAL, not a fatal error -- restore.sh then falls through to
+the next available tier.  The pre-flight exists because POSIX `sh`
+will exec an empty file as a no-op script that exits 0, so without
+this guard a bit-rotted tier-1 binary would silently claim success
+and the operator would get nothing.
 
 LIST AVAILABLE SNAPSHOTS
 
@@ -103,6 +116,36 @@ Every blob is verified against its SHA-256 hash during restore.  If
 any blob fails verification, lcsas-restore exits non-zero with a
 message identifying the bad blob.  Re-run the restore against a
 different disc copy (LCSAS maintains multiple copies of each volume).
+
+TARGET FILESYSTEM LIMITATIONS (FAT32 / EXFAT / SMB)
+
+If your target directory lives on a filesystem that cannot store
+symbolic links (FAT32, exFAT, most SMB shares, some FUSE mounts),
+lcsas-restore emits a per-affected-node warning:
+    WARNING: target filesystem does not support symlinks; skipped <path>
+The restore then continues with the rest of the tree.  The restored
+output is intentionally LOSSY on these filesystems: symlinks are
+dropped, and POSIX modes / ownership may also degrade silently.
+This is by design, not a corruption indicator -- the alternative
+(materialising the symlink target as a regular file containing the
+link string) would silently rewrite operator data.
+To preserve symlinks and POSIX metadata, restore to an ext4 / xfs /
+btrfs / APFS / NTFS target instead.
+
+RETRY SAFETY (RE-RUNNING A FAILED RESTORE)
+
+A failed or interrupted restore is safe to re-run from the same
+target directory.  When tier 1 aborts mid-file (transient disc
+read failure, ENOSPC, etc.), it leaves the partially-written file
+at its ACTUAL written length -- NOT padded to the expected size.
+On the next run, the idempotent-resume check sees the short file,
+treats it as incomplete, and re-restores from scratch.
+
+This means you can re-run `sh /mnt/restore.sh ...` against the same
+target directory without worrying about partial files being
+silently treated as complete.  Files that finished cleanly on the
+first pass (size matches manifest) are skipped; files that failed
+are retried.  No "delete the target directory first" dance.
 
 PHYSICAL RECOVERY (CORRUPT MEDIUM)
 
@@ -150,6 +193,51 @@ EXIT CODES
     0 -- success
     1 -- runtime error (bad password, missing file, integrity failure)
     2 -- usage error
+
+  restore.sh exits:
+    0  -- success (whichever tier ran)
+    1  -- generic failure (no repo found, unsupported OS/arch, etc.)
+    2  -- usage error
+    64 -- no recovery method available
+Exit 64 means every tier (1, 2, AND 3) was missing or unrunnable on
+the current meta disc, before any password was prompted.
+This is most likely on a corrupted meta disc (all binaries lost to
+bit-rot) or a wrong-arch host (e.g. an aarch64 meta disc booted on
+an x86_64 machine when LCSAS_TARGET was not overridden).
+The diagnostic that precedes the exit names each missing tier with
+its expected path; cross-reference those paths against the meta
+disc contents to confirm which is the case.
+
+ENVIRONMENT VARIABLES
+
+These tune restore.sh's behaviour from the calling shell.  Most
+operators do not need any of them.  Set them with `export NAME=value`
+before invoking restore.sh.
+
+  LCSAS_TIER_FALLBACK=1
+      Run each tier as a subprocess and fall through to the next
+      tier on a non-zero exit.  Default (unset or 0) is `exec` of
+      tier 1 directly, so a tier-1 crash aborts the run.  Use this
+      when you suspect a tier-1 bug and want the cascade to try
+      tier 2 / tier 3 instead.  Tier 3 is always exec'd (last resort,
+      nothing to fall back to).
+
+  LCSAS_ALLOW_PYTHON_TIER=0
+      Disable tier 3 entirely, even if python3 and
+      standalone_restorer.py are present.  Use this when you want a
+      hard guarantee that the recovery never touches Python.  If
+      tiers 1 and 2 both fail to start, restore.sh exits 64.
+
+  LCSAS_PACK_CACHE_DIR=<path>|auto|<empty>
+      Opportunistic pack cache that drops repeat disc-swap requests.
+      Default (unset): `auto` -> ${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>.
+      Set to a path to pin the cache to that directory.  Set to the
+      empty string to disable (disk-constrained hosts only -- see
+      "REDUCING SWAP FREQUENCY WITH THE PACK CACHE" below).
+
+See `sh restore.sh --help` for the full list including LCSAS_REPO,
+LCSAS_PASSWORD, LCSAS_PWFILE, LCSAS_TARGET, LCSAS_META_DISC,
+LCSAS_MOUNT_DIRS, LCSAS_NO_RELOCATE, and LCSAS_PROGRESS.
 
 MULTI-DISC RESTORE
 
