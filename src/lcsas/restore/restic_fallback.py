@@ -750,6 +750,7 @@ class PurePythonRestorer:
         crash inside a disc-swap prompt because the catalog file is
         corrupt / locked / on a half-mounted disc.
         """
+        was_auto_discovered = False
         if self.catalog_path is None:
             # Lazy discovery: scan the mount roots every prompt cycle
             # until we find one.  On hit we cache to avoid re-statting
@@ -758,6 +759,7 @@ class PurePythonRestorer:
             if discovered is None:
                 return None
             self.catalog_path = discovered
+            was_auto_discovered = True
             sys.stderr.write(
                 f"[lcsas-restore] auto-discovered catalog at {discovered}\n"
             )
@@ -792,6 +794,15 @@ class PurePythonRestorer:
         except sqlite3.Error:
             # Corrupt / locked / missing-tables catalog: treat as "no
             # catalog" so the operator at least sees the legacy prompt.
+            #
+            # If this catalog was auto-discovered (vs. an explicit
+            # --catalog override), invalidate the cache so the NEXT
+            # prompt cycle gets to re-scan the mount roots and possibly
+            # find a different, healthier catalog on a later-inserted
+            # disc.  An explicit override stays cached -- the operator
+            # asked for THAT catalog and we won't silently substitute.
+            if was_auto_discovered:
+                self.catalog_path = None
             return None
 
     @staticmethod

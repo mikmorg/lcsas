@@ -330,3 +330,98 @@ def test_discover_catalog_probes_recovery_subpath(tmp_path: Path) -> None:
     assert discovered == mount_root / "recovery" / "catalog.db", (
         f"recovery-subpath catalog not discovered; got {discovered}"
     )
+
+
+def test_auto_discovered_corrupt_catalog_is_evicted_for_retry(
+    tmp_path: Path,
+) -> None:
+    """If auto-discovery picks up a corrupt ``catalog.db`` (e.g. a
+    truncated file on a half-mounted disc), the cache must be evicted
+    so the NEXT prompt cycle can re-scan and possibly find a healthier
+    catalog on another mount root.
+
+    Without eviction, the bad path would stick for the rest of the
+    session even if a later-inserted disc carries a perfect catalog --
+    every subsequent prompt would print the legacy line and waste the
+    operator's time.
+
+    This pins the corrupt-cache-eviction contract specifically for
+    AUTO-DISCOVERED paths.  An explicit ``--catalog`` override stays
+    cached (see ``test_explicit_corrupt_catalog_stays_cached``).
+    """
+    # Two mount roots: first carries a corrupt catalog, second carries
+    # a real one.  The discovery probe walks the search-paths list in
+    # order, so the corrupt one gets picked up first.
+    bad_root = tmp_path / "bad"
+    good_root = tmp_path / "good"
+    bad_root.mkdir()
+    good_root.mkdir()
+    (bad_root / "catalog.db").write_bytes(b"not a sqlite database")
+    _make_catalog(good_root / "catalog.db")
+
+    restorer = _make_restorer(
+        tmp_path, pack_search_paths=[bad_root, good_root]
+    )
+    # Prompt 1: discovery finds the corrupt one first, opens it,
+    # sqlite3.Error fires, cache evicted, returns None (legacy line).
+    result1 = restorer._lookup_volume_labels(_PACK_HASH)
+    assert result1 is None, (
+        f"expected None on corrupt-catalog hit, got {result1}"
+    )
+    assert restorer.catalog_path is None, (
+        "auto-discovered corrupt catalog was NOT evicted from cache: "
+        f"{restorer.catalog_path}"
+    )
+
+    # Operator effectively ejects the bad disc; here we just delete the
+    # file so the NEXT discovery probe finds the good one.
+    (bad_root / "catalog.db").unlink()
+
+    # Prompt 2: discovery picks up the good catalog, returns labels.
+    result2 = restorer._lookup_volume_labels(_PACK_HASH)
+    assert result2 is not None, (
+        "expected catalog hit on retry after evicting corrupt entry; "
+        f"catalog_path is {restorer.catalog_path}"
+    )
+    labels, _status = result2
+    assert labels == [_VOLUME_LABEL]
+    assert restorer.catalog_path == good_root / "catalog.db"
+
+
+def test_explicit_corrupt_catalog_stays_cached(tmp_path: Path) -> None:
+    """An explicit ``--catalog`` pointing at a corrupt file must NOT
+    be auto-evicted -- the operator asked for THAT catalog and a
+    silent substitution would surprise them.
+
+    Behaviour pinned: each lookup against the corrupt explicit catalog
+    returns None (legacy line) but ``self.catalog_path`` stays set,
+    so the second lookup makes the same query against the same path
+    (and gets the same None).  No discovery runs.
+    """
+    explicit = tmp_path / "explicit.db"
+    explicit.write_bytes(b"not a sqlite database")
+
+    # Also drop a healthy auto-discoverable catalog -- if eviction
+    # fired, discovery would find this and the test would see labels.
+    good_root = tmp_path / "good"
+    good_root.mkdir()
+    _make_catalog(good_root / "catalog.db")
+
+    repo = tmp_path / "repo"
+    (repo / "data").mkdir(parents=True)
+    restorer = PurePythonRestorer(
+        repo_path=repo,
+        password=b"unused",
+        pack_search_paths=[good_root],
+        interactive=True,
+        catalog_path=explicit,
+    )
+    assert restorer._lookup_volume_labels(_PACK_HASH) is None
+    assert restorer.catalog_path == explicit, (
+        "explicit catalog was auto-evicted -- operator's --catalog choice "
+        f"got silently dropped: {restorer.catalog_path}"
+    )
+    # Confirm: second lookup uses the same (still corrupt) explicit
+    # path, never falls through to discovery.
+    assert restorer._lookup_volume_labels(_PACK_HASH) is None
+    assert restorer.catalog_path == explicit
