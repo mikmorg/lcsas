@@ -415,8 +415,13 @@ ARCH="$TARGET"
 
 # Cleanup hook for the temporary password file we may write below.
 PWFILE_TMP=""
+# Tier-3 stderr capture files (issue #240); set if tier 3 fires.
+TIER3_ERR=""
+TIER3_RC_FILE=""
 cleanup() {
     [ -n "$PWFILE_TMP" ] && [ -f "$PWFILE_TMP" ] && rm -f "$PWFILE_TMP"
+    [ -n "$TIER3_ERR" ] && [ -f "$TIER3_ERR" ] && rm -f "$TIER3_ERR"
+    [ -n "$TIER3_RC_FILE" ] && [ -f "$TIER3_RC_FILE" ] && rm -f "$TIER3_RC_FILE"
     # Always return 0 so the trap does not clobber the script's exit
     # status (POSIX traps inherit the trap action's return code under
     # some shells -- notably dash on Debian / Ubuntu / busybox).
@@ -1116,13 +1121,66 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         # want the prompt FIRED so the agent (or operator) can swap
         # discs via the canonical LCSAS protocol.
         write_session_log 3
-        exec "$PYBIN" "$PYREST" \
-             --repo "$REPO" \
-             --password-file "$PWFILE" \
-             --target "$TARGET_DIR" \
-             --interactive on \
-             $TIER3_MOUNT_ARGS \
-             $TIER3_SNAP_ARGS
+        # Issue #240 -- capture tier-3 stderr and echo on failure.
+        #
+        # Previously this was `exec "$PYBIN" "$PYREST" ...` which
+        # replaces the shell process and inherits the Python exit code
+        # silently.  When tier-3 crashes at startup (e.g. ImportError,
+        # missing PYTHONPATH), the operator sees only a numeric exit
+        # and the traceback vanishes.
+        #
+        # We now run tier-3 as a subprocess, tee stderr to both the
+        # operator's terminal AND a capture file, then on non-zero exit
+        # replay the captured stderr with a labelled separator so the
+        # failure mode is unambiguous in agent transcripts.
+        #
+        # Portability:
+        #  * `restore.sh` is `#!/bin/sh` so we cannot use bash's process
+        #    substitution `tee >(...)`.  Instead we swap fds: stderr is
+        #    redirected into the pipe to `tee`, stdout is restored via
+        #    fd 3 (which we opened to the outer stdout via `3>&1` on
+        #    the surrounding brace group).  `tee` then writes one copy
+        #    to TIER3_ERR and one copy back to the real stderr (`>&2`).
+        #  * POSIX sh has no `PIPESTATUS` / `pipefail`, so the Python
+        #    process's exit code cannot be recovered from `$?` after
+        #    the pipeline (that reads `tee`'s rc).  We relay the rc
+        #    through a second temp file written by the inner brace
+        #    group.
+        #  * stdin is NOT touched -- the operator's disc-swap prompt
+        #    (`restic_fallback.py::_print_swap_prompt`) still blocks
+        #    on stdin in real time; `tee` only sits in front of stderr.
+        TIER3_ERR=$(mktemp /tmp/lcsas-tier3-err.XXXXXX)
+        TIER3_RC_FILE=$(mktemp /tmp/lcsas-tier3-rc.XXXXXX)
+        # `set -e` would abort the LHS subshell of the pipe the moment
+        # Python exits non-zero, losing the rc capture.  The
+        # `&& echo 0 || echo $?` form converts both outcomes into a
+        # zero-rc statement (the `||` branch succeeds), keeping the
+        # subshell alive long enough to record the rc.  `$?` inside the
+        # `||` arm is the failing rc of the Python process -- exactly
+        # what we need.
+        {
+            { "$PYBIN" "$PYREST" \
+                   --repo "$REPO" \
+                   --password-file "$PWFILE" \
+                   --target "$TARGET_DIR" \
+                   --interactive on \
+                   $TIER3_MOUNT_ARGS \
+                   $TIER3_SNAP_ARGS \
+                && echo 0 > "$TIER3_RC_FILE" \
+                || echo $? > "$TIER3_RC_FILE"; \
+            } 2>&1 1>&3 3>&- | tee "$TIER3_ERR" >&2
+        } 3>&1
+        tier3_rc=$(cat "$TIER3_RC_FILE" 2>/dev/null || echo 1)
+        # Defensive: cat read an empty file?  Default to 1.
+        [ -n "$tier3_rc" ] || tier3_rc=1
+        if [ "$tier3_rc" -ne 0 ] && [ -s "$TIER3_ERR" ]; then
+            printf '\n[tier 3] FAILED (rc=%d)\n' "$tier3_rc" >&2
+            printf '[tier 3] -------------- captured stderr --------------\n' >&2
+            sed 's/^/[tier 3] /' "$TIER3_ERR" >&2
+            printf '[tier 3] --------------------------------------------\n' >&2
+        fi
+        rm -f "$TIER3_ERR" "$TIER3_RC_FILE"
+        exit "$tier3_rc"
     fi
 fi
 
