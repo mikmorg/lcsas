@@ -1120,8 +1120,17 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         # would return false and 'auto' would suppress the prompt.  We
         # want the prompt FIRED so the agent (or operator) can swap
         # discs via the canonical LCSAS protocol.
+        #
+        # Issue #248 -- pass the catalog through so tier-3's framed
+        # prompt can resolve pack hashes to volume labels in the
+        # SAME shape tier-1 prints.  $CATALOG_ARG was resolved
+        # earlier (~line 796) and reused here verbatim; empty when
+        # no catalog is reachable -- the standalone restorer then
+        # falls back to its legacy "(no catalog available)" line.
         write_session_log 3
         # Issue #240 -- capture tier-3 stderr and echo on failure.
+        # Issue #248 -- thread $CATALOG_ARG so tier-3's swap prompt
+        #               resolves pack hashes to volume labels.
         #
         # Previously this was `exec "$PYBIN" "$PYREST" ...` which
         # replaces the shell process and inherits the Python exit code
@@ -1164,6 +1173,7 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
                    --password-file "$PWFILE" \
                    --target "$TARGET_DIR" \
                    --interactive on \
+                   $CATALOG_ARG \
                    $TIER3_MOUNT_ARGS \
                    $TIER3_SNAP_ARGS \
                 && echo 0 > "$TIER3_RC_FILE" \

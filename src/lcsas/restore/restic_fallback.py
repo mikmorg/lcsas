@@ -43,6 +43,7 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import sys
 from dataclasses import dataclass, field
 from datetime import UTC
@@ -339,6 +340,7 @@ class PurePythonRestorer:
         password: bytes | None = None,
         pack_search_paths: list[Path] | None = None,
         interactive: bool = True,
+        catalog_path: Path | None = None,
     ) -> None:
         """Initialize the restorer.
 
@@ -363,9 +365,19 @@ class PurePythonRestorer:
                 contract must opt out explicitly).  The tier-3 CLI sets
                 this from ``--interactive on|off|auto`` (auto = isatty);
                 see ``standalone_builder.py``.
+            catalog_path: Optional path to an LCSAS holographic ``catalog.db``.
+                When supplied, the disc-swap prompt resolves the missing pack
+                hash to one or more volume labels via the catalog and prints
+                them in the SAME framed shape that tier-1 emits (see
+                ``recovery/src/lcsas-restore/disc_locator.c::print_prompt``).
+                Operators (and the blind-restore test agent's pattern matcher)
+                rely on that exact phrasing.  A missing, corrupt, or locked
+                catalog falls back to the legacy "(no catalog available)"
+                line; lookups never raise.
         """
         self.repo_path = repo_path
         self.interactive = interactive
+        self.catalog_path = catalog_path
         # Search-path resolution: callers can either rely on the legacy
         # ``repo_path/data`` location or pass an explicit list of mount
         # points (typically each currently-inserted data disc's root).
@@ -639,6 +651,85 @@ class PurePythonRestorer:
                     return candidate
         return None
 
+    # Sentinels returned by _lookup_volume_labels to disambiguate the
+    # three catalog states the framed prompt needs to print, mirroring
+    # the branches in disc_locator.c::print_prompt:
+    #   * labels = non-empty list  -> "It lives on volume(s):" + each label
+    #   * labels = []  and  catalog is reachable  -> _CATALOG_HIT_NO_VOLS
+    #   * labels = []  and  pack is NOT in catalog -> _CATALOG_MISS
+    #   * lookup_volume_labels returned None       -> no catalog (legacy line)
+    _CATALOG_HIT_NO_VOLS = "hit-no-vols"
+    _CATALOG_MISS = "miss"
+
+    def _lookup_volume_labels(
+        self, pack_id: str,
+    ) -> tuple[list[str], str] | None:
+        """Resolve a pack hex hash to the volume labels that carry it.
+
+        Returns
+        -------
+        ``None``
+            No ``catalog_path`` was configured, or the catalog file could
+            not be opened / queried.  Caller should fall back to the
+            legacy "(no catalog available)" framed-prompt line.
+        ``(labels, status)``
+            ``labels`` is the (possibly-empty) list of volume labels for
+            the pack, ordered lexicographically.  ``status`` is one of
+            the ``_CATALOG_*`` sentinels above.
+
+        The catalog is opened read-only.  Any sqlite3 error is swallowed
+        and treated as "catalog unavailable" -- the restore must never
+        crash inside a disc-swap prompt because the catalog file is
+        corrupt / locked / on a half-mounted disc.
+        """
+        if self.catalog_path is None:
+            return None
+        try:
+            uri = f"file:{self.catalog_path}?mode=ro"
+            with sqlite3.connect(uri, uri=True) as conn:
+                # Three-table join: volume_packs.pack_id is the INT FK,
+                # not the sha256 hex we have in hand -- so we go through
+                # packs.sha256.  ORDER BY label keeps the output stable
+                # across SQLite query-planner versions.
+                cur = conn.execute(
+                    "SELECT v.label "
+                    "FROM volumes v "
+                    "JOIN volume_packs vp ON v.volume_id = vp.volume_id "
+                    "JOIN packs p ON p.pack_id = vp.pack_id "
+                    "WHERE p.sha256 = ? "
+                    "ORDER BY v.label",
+                    (pack_id,),
+                )
+                labels = [row[0] for row in cur.fetchall()]
+                if labels:
+                    return labels, ""
+                # Pack hash present in the catalog but no volume mapping?
+                # Disambiguate that from "pack hash absent from catalog".
+                cur = conn.execute(
+                    "SELECT 1 FROM packs WHERE sha256 = ? LIMIT 1",
+                    (pack_id,),
+                )
+                if cur.fetchone() is not None:
+                    return [], self._CATALOG_HIT_NO_VOLS
+                return [], self._CATALOG_MISS
+        except sqlite3.Error:
+            # Corrupt / locked / missing-tables catalog: treat as "no
+            # catalog" so the operator at least sees the legacy prompt.
+            return None
+
+    @staticmethod
+    def _frame_indented(text: str) -> str:
+        """Render one indented line of the framed disc-swap prompt.
+
+        Mirrors ``disc_locator.c::print_search_path`` -- text longer
+        than 54 cols is prefixed with ``...`` and truncated from the
+        left so the trailing component (filename / label) stays
+        visible.
+        """
+        if len(text) > 54:
+            text = "..." + text[-51:]
+        return f"|   {text:<54s} |"
+
     def _print_swap_prompt(self, pack_id: str) -> None:
         """Render the LCSAS disc-swap prompt to stderr.
 
@@ -651,15 +742,41 @@ class PurePythonRestorer:
             "",
             bar,
             f"| Pack {pack_id[:16]}... is required for the next file.       |",
-            "| (tier-3 standalone restorer: no catalog available)       |",
+        ]
+
+        cat_result = self._lookup_volume_labels(pack_id)
+        if cat_result is None:
+            # No --catalog supplied (or catalog unreadable).  Preserve
+            # the legacy line so backwards-compat callers / tests that
+            # match on it still pass.
+            lines.append(
+                "| (tier-3 standalone restorer: no catalog available)       |"
+            )
+        else:
+            labels, status = cat_result
+            if labels:
+                # Byte-for-byte match with disc_locator.c so the
+                # blind-restore agent's pattern matcher can't tell tiers
+                # apart on this line.
+                lines.append(
+                    "| It lives on volume(s):                                   |"
+                )
+                lines.extend(self._frame_indented(lbl) for lbl in labels)
+            elif status == self._CATALOG_HIT_NO_VOLS:
+                lines.append(
+                    "| (catalog has the pack, but no current volume mapping)    |"
+                )
+            else:
+                # _CATALOG_MISS -- pack hash not in catalog at all.
+                lines.append(
+                    "| (catalog has no record of this pack hash)                |"
+                )
+
+        lines.extend([
             "|                                                          |",
             "| Currently searching:                                     |",
-        ]
-        for p in self._pack_search_paths:
-            display = str(p)
-            if len(display) > 54:
-                display = "..." + display[-51:]
-            lines.append(f"|   {display:<54s} |")
+        ])
+        lines.extend(self._frame_indented(str(p)) for p in self._pack_search_paths)
         lines.extend([
             "|                                                          |",
             "| Insert the right disc and press ENTER to retry.          |",
