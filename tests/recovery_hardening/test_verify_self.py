@@ -227,9 +227,14 @@ def test_cat_script_file_fails(tmp_path: Path) -> None:
 
 
 def test_no_tmux_fails(tmp_path: Path) -> None:
+    """Despite the name (kept for git-blame continuity), this really
+    asserts: with no managed terminal session — neither legacy tmux
+    nor the restore-shell facade introduced by PR #206 — the
+    managed-terminal check must FAIL.
+    """
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    # restore.sh present but no tmux/send-keys anywhere.
+    # restore.sh present but no tmux/send-keys or restore-shell anywhere.
     _write_transcript(run_dir, [
         _bash_event("sh /tmp/lcsas-meta/restore.sh ~/restored latest"),
         _result_event(),
@@ -237,7 +242,9 @@ def test_no_tmux_fails(tmp_path: Path) -> None:
     _write_disc_log(run_dir, ["2026-05-18T10:00:00+00:00 insert LCSAS_META"])
     fix = _make_fake_fixture(tmp_path)
     rc, out = _run_verify(run_dir, fixture=fix)
-    assert _check_status(out, "tmux send-keys") == "FAIL", out
+    # Check renamed from "tmux send-keys" to the facade-aware name by PR #206
+    # (restore-shell facade); the check now accepts either pattern.
+    assert _check_status(out, "managed terminal session") == "FAIL", out
 
 
 def test_illusion_leak_fails(tmp_path: Path) -> None:
@@ -349,23 +356,27 @@ def test_check6_many_unique_discs_fails(tmp_path: Path) -> None:
 
 
 def test_clean_transcript_passes_stumble_checks(tmp_path: Path) -> None:
-    """A minimal clean transcript (uses tmux + restore.sh, doesn't
-    cat scripts, no wrappers, no direct rustic) should pass at least
-    every stumble-detection check.  Manifest-match and other
-    data-content checks will still FAIL because we don't synthesize
-    a real fixture+restore in this test; we only assert the
-    stumble-detection checks are PASS."""
+    """A minimal clean transcript (uses the restore-shell facade +
+    restore.sh, doesn't cat scripts, no wrappers, no direct rustic)
+    should pass every stumble-detection check.  Manifest-match and
+    other data-content checks will still FAIL because we don't
+    synthesize a real fixture+restore in this test; we only assert
+    the stumble-detection checks are PASS.
+
+    Updated for PR #206 (restore-shell facade): canonical clean
+    transcripts now invoke `restore-shell start sh restore.sh ...`
+    rather than hand-rolled tmux idioms.
+    """
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     _write_transcript(run_dir, [
         _bash_event("disc-loader insert LCSAS_META"),
         _bash_event("sudo mount /dev/sr0 /mnt"),
         _bash_event(
-            "tmux new-session -d -s r 'cd /tmp/lcsas-meta && "
-            "sh restore.sh ~/restored latest'"
+            "restore-shell start sh /mnt/restore.sh ~/restored/ latest"
         ),
         _bash_event(
-            'tmux send-keys -t r "$(cat ~/tenant-alpha.pw)" C-m'
+            'restore-shell send "$(cat ~/tenant-alpha.pw)"'
         ),
         _result_event(),
     ])
@@ -380,7 +391,10 @@ def test_clean_transcript_passes_stumble_checks(tmp_path: Path) -> None:
     for check in (
         "agent ran restore.sh",
         "cat any script",
-        "tmux send-keys",
+        # Check renamed from "tmux send-keys" by PR #206 (restore-shell
+        # facade).  The clean transcript above invokes the facade
+        # directly so this asserts the facade satisfies the check.
+        "managed terminal session",
         "illusion intact",
         "author wrapper",
         "bypass restore.sh",
