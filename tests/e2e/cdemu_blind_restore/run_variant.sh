@@ -88,22 +88,23 @@ echo "SCORE: ${pass_count}/${total} (variant=${VARIANT})"
 # xfail variant is reported as XFAIL and exits 0 (it's the baseline we
 # expect until the underlying production-code bug is fixed).
 # Default xfail set:
-#   tier1-missing, tier1-tier2-missing — issue #236: tier 3
-#     (standalone_restorer.py) implements the LCSAS disc-swap protocol
-#     as of PR #235, but the variant still flakes 11/15–14/15 on the
-#     blind-test fixture.  Diagnosis: tier-3 dies silently after the
-#     Password: prompt because the system python3 used by restore.sh
-#     can't import zstandard (the meta builder bundles zstandard under
-#     tools/lib/python/ but restore.sh's tier-3 exec doesn't set
-#     PYTHONPATH).  The agent has no actionable signal and starts
-#     improvising, tripping the no-cat / no-author / no-bypass checks.
-#     See VARIANT_FLAKE_NOTES.md for the full characterisation +
-#     recommended follow-ups.
-#   single-tenant, 5-tenant, no-catalog — issues #216/#217/#218: the
-#     fixtures are in place but no live 15/15 blind score has been
-#     recorded yet (each costs ~$5 of compute).  Drop from the list
-#     once each variant has been blind-tested green.
-XFAIL="${LCSAS_VARIANT_XFAIL:-tier1-missing,tier1-tier2-missing,single-tenant,5-tenant,no-catalog}"
+#   tier1-missing — cascade reaches tier-2 fallback but agent improvises
+#     by invoking rustic-static directly (bypass check fires).  Data
+#     is restored but verify.sh flags the cascade bypass.  Tracked by
+#     #253 (catalog-arg discovery race) + agent-prompt hardening.
+#   tier1-tier2-missing — tier-3 fires via PYTHONPATH (#239) +
+#     disc-swap protocol (#234) + catalog awareness (#248), but the
+#     blind agent still flakes on the disc-iteration UX without a
+#     catalog hint reaching the standalone restorer at startup
+#     (issue #253).  See VARIANT_FLAKE_NOTES.md.
+#   single-tenant — issue #216 fixture in place; cycle-7 sweep recorded
+#     13/15 (agent restored 3/30 files before giving up).  Awaiting
+#     diagnosis; do NOT drop from xfail without a 15/15 confirmation.
+#
+# Promoted out of xfail (cycle 7 sweep, 2026-05-27):
+#   5-tenant     — 15/15 confirmed.
+#   no-catalog   — 15/15 confirmed.
+XFAIL="${LCSAS_VARIANT_XFAIL:-tier1-missing,tier1-tier2-missing,single-tenant}"
 case ",$XFAIL," in
     *",${VARIANT},"*) is_xfail=1 ;;
     *)                is_xfail=0 ;;
