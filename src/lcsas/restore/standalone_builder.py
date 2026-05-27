@@ -179,6 +179,17 @@ _CLI_BLOCK = textwrap.dedent("""\
                 "iff stdin is a TTY."
             ),
         )
+        parser.add_argument(
+            "--catalog", default=None,
+            help=(
+                "Path to an LCSAS holographic catalog.db.  When supplied, "
+                "the disc-swap prompt resolves the missing pack hash to "
+                "human-readable volume label(s), matching the framed "
+                "prompt printed by tier-1's lcsas-restore.  A missing or "
+                "corrupt catalog falls back silently to the legacy "
+                "hash-only prompt."
+            ),
+        )
 
         args = parser.parse_args()
 
@@ -201,11 +212,29 @@ _CLI_BLOCK = textwrap.dedent("""\
             # operator-given order.
             mount_points = [repo_path / "data"] + [Path(m) for m in args.mount_point]
 
+        # --catalog is optional; a missing path is treated the same as
+        # "no catalog supplied" -- the framed prompt's catalog branch
+        # gracefully degrades to the legacy line.  We pass None when
+        # the path doesn't exist so the lookup helper short-circuits
+        # without even trying sqlite3.connect.
+        catalog_path: Path | None = None
+        if args.catalog:
+            cand = Path(args.catalog)
+            if cand.is_file():
+                catalog_path = cand
+            else:
+                print(
+                    f"[lcsas-restore] --catalog {cand} not found; "
+                    "prompts will fall back to hash-only.",
+                    file=sys.stderr,
+                )
+
         restorer = PurePythonRestorer(
             repo_path=repo_path,
             password_file=pw_file,
             pack_search_paths=mount_points,
             interactive=interactive,
+            catalog_path=catalog_path,
         )
 
         if args.info:
