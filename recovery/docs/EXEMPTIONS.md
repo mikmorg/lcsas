@@ -163,6 +163,7 @@ tree.c:245   INTRACTABLE   write_blob_sparse write_exact fail on non-zero prefix
 tree.c:254   DEFERRED      write_blob_sparse "hole >= 4 KiB" lseek branch; fixture file content "hello from lcsas-restore fixture\n" has no zero runs
 tree.c:255   DEFERRED      "                                                                                                                            "
 tree.c:259   DEFERRED      write_blob_sparse short-zero write branch; same reason as 254
+tree.c:263   DEFERRED      write_blob_sparse loop-exit return 0; only reached when the buffer ends with a zero byte (write the prefix then fall out of the loop); fixture content "hello from lcsas-restore fixture\n" ends with '\n' so the early `if (zstart >= len) return 0;` at line 247 fires first
 tree.c:287   DEFERRED      apply_node_ownership body (issue #189); early-returns when geteuid()!=0 — coverage-c runs as the unprivileged test user
 tree.c:288   DEFERRED      "                                                                                                                            "
 tree.c:289   DEFERRED      "                                                                                                                            "
