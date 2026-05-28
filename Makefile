@@ -65,7 +65,8 @@ shell-coverage:
 	@rm -f /tmp/lcsas-restore-shell.trace
 	@LCSAS_SHELL_TRACE=/tmp/lcsas-restore-shell.trace \
 	 LCSAS_TRACE_VIA_BASH=1 \
-	    pytest tests/recovery_hardening/test_restore_*.py -q || true
+	    pytest tests/recovery_hardening/test_restore_*.py \
+	          tests/recovery_hardening/test_tier_fallback.py -q || true
 	@python3 tools/cov_shell.py \
 	    --threshold 60 \
 	    /tmp/lcsas-restore-shell.trace \
