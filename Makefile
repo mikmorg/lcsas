@@ -111,6 +111,7 @@ blind-restore-x5:
 			echo "FAIL on attempt $$i" >&2; exit 1; \
 		}; \
 		$(MAKE) blind-restore-teardown; \
+		[ "$$i" -lt 5 ] && { echo "=== throttle: sleeping 300s before next attempt ==="; sleep 300; } || true; \
 	done
 	@echo "blind-restore-x5: 5/5 PASS"
 
