@@ -764,8 +764,15 @@ class PurePythonRestorer:
                 f"[lcsas-restore] auto-discovered catalog at {discovered}\n"
             )
         try:
-            uri = f"file:{self.catalog_path}?mode=ro"
-            with sqlite3.connect(uri, uri=True) as conn:
+            # immutable=1: ISO 9660 is read-only so SQLite must not try to
+            # create WAL/shm sidecar files.  Without this, sqlite3.connect()
+            # with mode=ro raises OperationalError on iso9660 mounts AND
+            # (critically) leaves a kernel reference on the mount point that
+            # makes `umount /media` fail with EBUSY, preventing disc swaps.
+            # Issue #284 root cause 2.
+            uri = f"file:{self.catalog_path}?mode=ro&immutable=1"
+            conn = sqlite3.connect(uri, uri=True)
+            try:
                 # Three-table join: volume_packs.pack_id is the INT FK,
                 # not the sha256 hex we have in hand -- so we go through
                 # packs.sha256.  ORDER BY label keeps the output stable
@@ -791,6 +798,12 @@ class PurePythonRestorer:
                 if cur.fetchone() is not None:
                     return [], self._CATALOG_HIT_NO_VOLS
                 return [], self._CATALOG_MISS
+            finally:
+                # Explicit close is required: `with sqlite3.connect() as c:`
+                # is a transaction context manager, not a connection closer.
+                # Leaving the connection open keeps a fd on the iso9660 mount
+                # and prevents `umount /media` during disc swaps.
+                conn.close()
         except sqlite3.Error:
             # Corrupt / locked / missing-tables catalog: treat as "no
             # catalog" so the operator at least sees the legacy prompt.
