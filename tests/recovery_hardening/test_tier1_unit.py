@@ -960,3 +960,63 @@ def test_copy_file_partial_write_leaves_no_garbage() -> None:
         "disc_locator.c — restore it to prevent partial-write garbage on "
         "disc unmount during a restore."
     )
+
+
+# ── Issue #269: xattr + hardlink coverage fixtures ────────────────
+
+
+def test_fixture_xattr_restored_correctly(tmp_path: Path) -> None:
+    """File node with extended_attributes in fixture is restored with
+    correct content.  Exercises apply_node_xattrs (tree.c 330-397)."""
+    repo = _fixture_repo()
+    if repo is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    bin_path = _find_bin()
+    pwfile = _make_pwfile(tmp_path)
+    out = tmp_path / "out"
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(out),
+        timeout=15,
+    )
+    assert res.returncode == 0, res.stderr
+    xattr_file = out / "xattr_test_file"
+    assert xattr_file.exists(), (
+        f"xattr_test_file missing; restored files: "
+        f"{[p.name for p in out.iterdir()] if out.exists() else '(out missing)'}"
+    )
+    assert xattr_file.read_bytes() == b"xattr test content"
+
+
+def test_fixture_hardlink_restored_correctly(tmp_path: Path) -> None:
+    """Two file nodes sharing an inode are restored as hardlinks.
+    Exercises the hardlink success branch in restore_file_node
+    (tree.c 541-563)."""
+    repo = _fixture_repo()
+    if repo is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    bin_path = _find_bin()
+    pwfile = _make_pwfile(tmp_path)
+    out = tmp_path / "out"
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(out),
+        timeout=15,
+    )
+    assert res.returncode == 0, res.stderr
+    hl_a = out / "hardlink_a"
+    hl_b = out / "hardlink_b"
+    assert hl_a.exists(), "hardlink_a missing"
+    assert hl_b.exists(), "hardlink_b missing"
+    assert hl_a.read_bytes() == b"hardlink content"
+    assert hl_b.read_bytes() == b"hardlink content"
+    # Both should be actual hardlinks (same inode), not just same content.
+    assert hl_a.stat().st_ino == hl_b.stat().st_ino, (
+        f"hardlink_a inode={hl_a.stat().st_ino} != "
+        f"hardlink_b inode={hl_b.stat().st_ino} "
+        "(link() path was not taken)"
+    )
