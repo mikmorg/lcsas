@@ -174,6 +174,25 @@ relocate_to_ram() {
         break
     done
 
+    # Issue #284 — copy the bundled zstandard package so tier-3 PYTHONPATH
+    # resolution works post-relocation.  PR #239 wired PYTHONPATH to
+    # $META_ROOT/tools/lib/python*/zstandard/ but that path disappears
+    # when the meta disc is ejected.  Mirror the directory into the RAM
+    # dir so the existing PYTHONPATH search finds it at
+    # $ramdir/tools/lib/python*/zstandard/.
+    for _zstd_src in \
+        "$SCRIPT_DIR/../../tools/lib/python"*/zstandard \
+        "$SCRIPT_DIR/tools/lib/python"*/zstandard
+    do
+        [ -d "$_zstd_src" ] || continue
+        _zstd_pyver="$(basename "$(dirname "$_zstd_src")")"
+        mkdir -p "$ramdir/tools/lib/$_zstd_pyver"
+        cp -R "$_zstd_src" "$ramdir/tools/lib/$_zstd_pyver/zstandard" \
+            2>/dev/null || true
+        break
+    done
+    unset _zstd_src _zstd_pyver
+
     printf '[lcsas-restore] copied recovery binaries to %s\n' "$ramdir" >&2
     printf '[lcsas-restore] you may eject the recovery disc when the ' >&2
     printf 'binary prompts for a data disc.\n' >&2
