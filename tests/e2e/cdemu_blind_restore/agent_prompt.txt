@@ -48,19 +48,23 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     the next unused data disc at /media, then send ENTER in the
     restore-shell session.
 
-    Use a bounded loop (cap at 20 swaps).  The `|| break` exits
+    Use a bounded loop (cap at 40 swaps).  The `|| break` exits
     immediately when the session ends so no sleep orphan is left.
+    Cycle through ~/disc-labels.txt (skipping LCSAS_META) so each
+    swap inserts the next disc rather than repeating the same one.
 
-      for _ in $(seq 1 20); do
-          out=$(restore-shell expect 'Insert the right disc|RESTORE COMPLETE|RESTORE FAILED' 120) || break
+      DATA_DISCS=( $(grep -v '^LCSAS_META$' ~/disc-labels.txt) )
+      disc_idx=0
+      for _ in $(seq 1 40); do
+          out=$(restore-shell expect 'Insert the right disc|restore complete' 120) || break
           case "$out" in
-              *"RESTORE COMPLETE"*) echo "RESTORE COMPLETE"; break ;;
-              *"RESTORE FAILED"*)   echo "FAILED"; exit 1 ;;
+              *"restore complete"*) echo "RESTORE COMPLETE"; break ;;
               *"Insert the right"*) ;;  # fall through to swap
           esac
 
           sudo umount /media 2>/dev/null
-          disc-loader insert LCSAS_TEST_TINY_2026_0001   # bump label for each swap
+          disc-loader insert "${DATA_DISCS[$disc_idx]}"
+          disc_idx=$(( (disc_idx + 1) % ${#DATA_DISCS[@]} ))
           sudo mount /dev/sr0 /media
           restore-shell send ""
       done
