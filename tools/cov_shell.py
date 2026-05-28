@@ -66,6 +66,7 @@ def executable_lines(source_path: Path) -> set[int]:
     """
     out: set[int] = set()
     in_heredoc: str | None = None
+    in_continuation = False
     heredoc_pat = re.compile(
         r"<<-?\s*['\"]?(?P<tag>[A-Za-z_][A-Za-z0-9_]*)['\"]?"
     )
@@ -73,11 +74,29 @@ def executable_lines(source_path: Path) -> set[int]:
         "fi", "done", "esac", "}", "{", ";;",
         "else", "then", "do",
     }
+    # Structural keywords followed only by fd-redirections (e.g. "} 3>&1",
+    # "} 2>&1", "{ 3>&-") are never traced as their own line by bash -x.
+    _struct_with_redir = re.compile(
+        r"^([{}]|fi|done|esac|;;|else|then|do)\s+[\d<>&|;-]"
+    )
     for n, raw in enumerate(source_path.read_text().splitlines(), 1):
         stripped = raw.strip()
         if in_heredoc is not None:
             if stripped == in_heredoc:
                 in_heredoc = None
+            continue
+        # Bash -x does not emit a separate trace event for continuation
+        # lines (lines that follow a line ending with \).  Skip them so
+        # they don't show up as false "missed" lines in the report.
+        # Note: bash traces the FIRST line of a multi-line statement for
+        # most constructs (for/while/if headers), so those remain in the
+        # coverable set.  Single-statement continuations like multi-line
+        # variable assignments are traced at their last line; those are a
+        # known minor inaccuracy — the starting line appears "missed" even
+        # though the command ran.  Acceptable for our 75%+ gate target.
+        is_continuation = in_continuation
+        in_continuation = raw.rstrip().endswith("\\")
+        if is_continuation:
             continue
         if not stripped:
             continue
@@ -85,7 +104,7 @@ def executable_lines(source_path: Path) -> set[int]:
             continue
         if n == 1 and stripped.startswith("#!"):
             continue
-        if stripped in structural:
+        if stripped in structural or _struct_with_redir.match(stripped):
             continue
         m = heredoc_pat.search(raw)
         if m:
