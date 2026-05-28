@@ -97,14 +97,13 @@ echo "SCORE: ${pass_count}/${total} (variant=${VARIANT})"
 #     blind agent still flakes on the disc-iteration UX without a
 #     catalog hint reaching the standalone restorer at startup
 #     (issue #253).  See VARIANT_FLAKE_NOTES.md.
-#   single-tenant — issue #216 fixture in place; cycle-7 sweep recorded
-#     13/15 (agent restored 3/30 files before giving up).  Awaiting
-#     diagnosis; do NOT drop from xfail without a 15/15 confirmation.
-#
 # Promoted out of xfail (cycle 7 sweep, 2026-05-27):
 #   5-tenant     — 15/15 confirmed.
 #   no-catalog   — 15/15 confirmed.
-XFAIL="${LCSAS_VARIANT_XFAIL:-tier1-missing,tier1-tier2-missing,single-tenant}"
+# Promoted out of xfail (cycle 8, 2026-05-28):
+#   single-tenant — 15/15 confirmed after fix in PR #277 (expect pattern
+#     case + deterministic disc cycling, closes #256).
+XFAIL="${LCSAS_VARIANT_XFAIL:-tier1-missing,tier1-tier2-missing}"
 case ",$XFAIL," in
     *",${VARIANT},"*) is_xfail=1 ;;
     *)                is_xfail=0 ;;
