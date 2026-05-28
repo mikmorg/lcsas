@@ -14,7 +14,9 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     restore-shell start sh /mnt/restore.sh ~/restored/ latest
 
     `restore-shell` is a wrapper that runs the recovery process in
-    a managed tmux session.  You DO NOT need to know tmux.  Every
+    a managed tmux session (test-rig workaround — real operators run
+    restore.sh directly in one terminal; see the NOTE below).
+    You DO NOT need to know tmux.  Every
     interaction is one command:
 
       restore-shell expect REGEX [SECS]   wait for prompt, print pane
@@ -46,17 +48,22 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     the next unused data disc at /media, then send ENTER in the
     restore-shell session.
 
-      out=$(restore-shell expect 'Insert the right disc|RESTORE COMPLETE|RESTORE FAILED' 120)
-      case "$out" in
-          *"RESTORE COMPLETE"*) echo "RESTORE COMPLETE"; break ;;
-          *"RESTORE FAILED"*)   echo "FAILED"; exit 1 ;;
-          *"Insert the right"*) ;;  # fall through to swap
-      esac
+    Use a bounded loop (cap at 20 swaps).  The `|| break` exits
+    immediately when the session ends so no sleep orphan is left.
 
-      sudo umount /media 2>/dev/null
-      disc-loader insert LCSAS_TEST_TINY_2026_0001   # bump label for each swap
-      sudo mount /dev/sr0 /media
-      restore-shell send ""
+      for _ in $(seq 1 20); do
+          out=$(restore-shell expect 'Insert the right disc|RESTORE COMPLETE|RESTORE FAILED' 120) || break
+          case "$out" in
+              *"RESTORE COMPLETE"*) echo "RESTORE COMPLETE"; break ;;
+              *"RESTORE FAILED"*)   echo "FAILED"; exit 1 ;;
+              *"Insert the right"*) ;;  # fall through to swap
+          esac
+
+          sudo umount /media 2>/dev/null
+          disc-loader insert LCSAS_TEST_TINY_2026_0001   # bump label for each swap
+          sudo mount /dev/sr0 /media
+          restore-shell send ""
+      done
 
     Mount data discs at /media, NOT /mnt.  The recovery binary
     received `--meta-disc /mnt` at startup and refuses to consider
