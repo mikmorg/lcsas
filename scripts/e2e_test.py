@@ -343,6 +343,13 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
     """
     banner("Phase 6: Burn Pipeline (ISO-only)")
 
+    # Wipe stale staging and ISO directories from previous runs so accumulated
+    # pack hardlinks don't inflate the ISO beyond TEST_TINY capacity.
+    for d in [STAGING_DIR, ISO_DIR]:
+        if d.exists():
+            shutil.rmtree(d)
+        d.mkdir(parents=True)
+
     from lcsas.burn.orchestrator import BurnOrchestrator
     from lcsas.config.media import MediaType
     from lcsas.config.settings import LCSASConfig, RepositoryConfig

@@ -33,9 +33,9 @@ static int fails = 0;
 #define FIXTURE_DATA_BLOB_HEX  \
     "6565160e5ca15054fd190b02fab20e4e7daf41e54d19e649d0798d7aca56c5b2"
 #define FIXTURE_TREE_BLOB_HEX  \
-    "9a80411c8dd4fc00a9c1eab7c0dd90b012deaf223219df85d179f18119ff12e4"
+    "68255a117162e193d9a8e4940756c5754b20eb2e9f6e8934d68b31bcd0f5aa20"
 #define FIXTURE_PACK_HEX       \
-    "d61624ea32e4d71142818574902836c03474e0daf0e833f47dfd77cfe1c9e7f5"
+    "a34290c7448cc83ccbf56b59894dfcb8053444c14ddbdce455e84b9dd5195534"
 #define FIXTURE_XATTR_BLOB_HEX \
     "c8bc50e94a5aad4482a505268c3616656540113d62050921d6d7778c16d8eadb"
 #define FIXTURE_HLINK_BLOB_HEX \
@@ -214,8 +214,8 @@ main(void)
             fprintf(stderr, "FAIL: load_index rc=%d\n", rc);
             fails++;
         }
-        if (ix.count != 14) {
-            fprintf(stderr, "FAIL: index count=%zu, want 14\n", ix.count);
+        if (ix.count != 15) {
+            fprintf(stderr, "FAIL: index count=%zu, want 15\n", ix.count);
             fails++;
         }
 
