@@ -755,13 +755,13 @@ THRESHOLD ?= 88
 audit-gate:
 	@echo "[audit-gate] Step 1/4: coverage-c"
 	$(MAKE) coverage-c
-	@echo "[audit-gate] Step 2/4: sanitize"
-	$(MAKE) sanitize
-	@echo "[audit-gate] Step 3/4: fuzz-smoke (5 harnesses × 60 s)"
-	$(MAKE) fuzz-smoke
-	@echo "[audit-gate] Step 4/4: per-file coverage threshold >= $(THRESHOLD)%"
+	@echo "[audit-gate] Step 2/4: per-file coverage threshold >= $(THRESHOLD)%"
 	python3 scripts/coverage_check.py --threshold $(THRESHOLD) \
 	    --json $(abspath $(BUILD))/coverage.json
+	@echo "[audit-gate] Step 3/4: sanitize"
+	$(MAKE) sanitize
+	@echo "[audit-gate] Step 4/4: fuzz-smoke (5 harnesses × 60 s)"
+	$(MAKE) fuzz-smoke
 	@echo "[audit-gate] PASS"
 
 # ── fault-inject ────────────────────────────────────────────────
