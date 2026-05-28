@@ -160,10 +160,8 @@ repo.c:962    INTRACTABLE   "                                                   
 # tree.c
 tree.c:216   DEFENSIVE     decode_node_mtime "fail" path (lcsas_json_decode_string returns -1); fixture mtime fields are always well-formed
 tree.c:245   INTRACTABLE   write_blob_sparse write_exact fail on non-zero prefix; needs RO mount or syscall injection
-tree.c:254   DEFERRED      write_blob_sparse "hole >= 4 KiB" lseek branch; fixture file content "hello from lcsas-restore fixture\n" has no zero runs
-tree.c:255   DEFERRED      "                                                                                                                            "
-tree.c:259   DEFERRED      write_blob_sparse short-zero write branch; same reason as 254
-tree.c:263   DEFERRED      write_blob_sparse loop-exit return 0; only reached when the buffer ends with a zero byte (write the prefix then fall out of the loop); fixture content "hello from lcsas-restore fixture\n" ends with '\n' so the early `if (zstart >= len) return 0;` at line 247 fires first.  NOTE: the fault-inject sweep can occasionally exercise this line as a side-effect of malloc-fail unwind paths in broken-tree fixtures; when that happens you'll see a stale-exemption error and can remove this entry for that one run.
+tree.c:255   INTRACTABLE   write_blob_sparse lseek fail on sparse-hole seek; lseek(SEEK_CUR) on a writable regular file cannot fail without ioctl/syscall injection or a non-seekable fd (pipes/sockets are never used for restore output)
+tree.c:259   DEFERRED      write_blob_sparse short-zero write branch (zero run < 4 KiB); the trailing_zeros.bin fixture blob (0xff*64 + 0x00*8192) uses an 8192-byte run which takes the lseek branch instead; a separate test covering a sub-4-KiB zero run would also require rustic for fixture generation
 tree.c:287   INTRACTABLE   apply_node_ownership body; guarded by `geteuid() != 0` (early return at line 285) — only reachable when the test process runs as root, which the standard coverage-c harness never does
 tree.c:288   INTRACTABLE   "                                                                                                                            "
 tree.c:289   INTRACTABLE   "                                                                                                                            "

@@ -639,6 +639,51 @@ def test_fixture_verbose_full_restore(tmp_path: Path) -> None:
     assert "indexed" in err and "blobs" in err, err
 
 
+def test_fixture_trailing_zeros_restored_correctly(tmp_path: Path) -> None:
+    """Issue #264: trailing_zeros.bin in the fixture (0xff*64 + 0x00*8192)
+    exercises write_blob_sparse tree.c:263 — the loop-exit `return 0`
+    that only fires when the buffer ENDS with a zero run.
+
+    Verifies:
+      1. The file is restored at all (no crash, rc=0).
+      2. Its content matches the original (first 64 bytes 0xff, rest 0x00).
+      3. Its logical size matches (8256 bytes).
+
+    This deterministically covers tree.c:263 on every coverage-c run,
+    eliminating the non-deterministic fault-inject side-effect that
+    caused 50% failures in `make audit-gate THRESHOLD=95` (issue #264).
+    """
+    repo = _fixture_repo()
+    if repo is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    bin_path = _find_bin()
+    pwfile = _make_pwfile(tmp_path)
+    target = tmp_path / "restored"
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(target),
+        timeout=10,
+    )
+    assert res.returncode == 0, res.stderr
+    restored = target / "trailing_zeros.bin"
+    assert restored.is_file(), (
+        "trailing_zeros.bin was not restored; "
+        "tree.c:263 loop-exit branch may not have been exercised"
+    )
+    content = restored.read_bytes()
+    expected = b"\xff" * 64 + b"\x00" * 8192
+    assert len(content) == len(expected), (
+        f"trailing_zeros.bin size mismatch: got {len(content)}, "
+        f"want {len(expected)}"
+    )
+    assert content == expected, (
+        "trailing_zeros.bin content mismatch — sparse write produced "
+        "incorrect bytes"
+    )
+
+
 def test_fixture_snapshot_not_found_fails(tmp_path: Path) -> None:
     """--snapshot with an ID that doesn't exist in the fixture must
     print an error and exit non-zero (exercises main.c lines 397-399)."""
