@@ -1,15 +1,14 @@
 # Blind-restore variant flake notes
 
-Tracks the residual variance in the `tier1-tier2-missing` blind-restore
-variant added by PR #235.  Tracking issue: #236.
+Tracks the residual variance in blind-restore variants.
 
 ## Variants and their flake profile
 
 | Variant | Status | Notes |
 |---|---|---|
 | `default` | stable 15/15 | the gate that runs in PM cycles |
-| `tier1-missing` | xfail | tier-2 cannot drive multi-disc restores (issue #227) |
-| `tier1-tier2-missing` | xfail (this doc) | tier-3 silent-death after Password: prompt |
+| `tier1-missing` | xfail | tier-2 falls through to tier-3 (issue #227); tier-3 path needs verification |
+| `tier1-tier2-missing` | **stable 15/15** | promoted out of xfail 2026-05-28 (PR #285 + #286) |
 
 ## tier1-tier2-missing — why it flakes 11/15–14/15
 

@@ -88,22 +88,20 @@ echo "SCORE: ${pass_count}/${total} (variant=${VARIANT})"
 # xfail variant is reported as XFAIL and exits 0 (it's the baseline we
 # expect until the underlying production-code bug is fixed).
 # Default xfail set:
-#   tier1-missing — cascade reaches tier-2 fallback but agent improvises
-#     by invoking rustic-static directly (bypass check fires).  Data
-#     is restored but verify.sh flags the cascade bypass.  Tracked by
-#     #253 (catalog-arg discovery race) + agent-prompt hardening.
-#   tier1-tier2-missing — tier-3 fires via PYTHONPATH (#239) +
-#     disc-swap protocol (#234) + catalog awareness (#248), but the
-#     blind agent still flakes on the disc-iteration UX without a
-#     catalog hint reaching the standalone restorer at startup
-#     (issue #253).  See VARIANT_FLAKE_NOTES.md.
+#   tier1-missing — cascade reaches tier-2 fallback but tier-2 (rustic)
+#     cannot drive multi-disc archives (issue #227 partial fix: falls to
+#     tier-3, but tier-3 disc-swap protocol still needs verification).
 # Promoted out of xfail (cycle 7 sweep, 2026-05-27):
 #   5-tenant     — 15/15 confirmed.
 #   no-catalog   — 15/15 confirmed.
 # Promoted out of xfail (cycle 8, 2026-05-28):
 #   single-tenant — 15/15 confirmed after fix in PR #277 (expect pattern
 #     case + deterministic disc cycling, closes #256).
-XFAIL="${LCSAS_VARIANT_XFAIL:-tier1-missing,tier1-tier2-missing}"
+# Promoted out of xfail (cycle 9, 2026-05-28):
+#   tier1-tier2-missing — 15/15 confirmed after PR #285 (zstandard into
+#     RAM dir) + PR #286 (immutable=1 + conn.close() for catalog on
+#     iso9660, fixes EBUSY preventing disc swaps).
+XFAIL="${LCSAS_VARIANT_XFAIL:-tier1-missing}"
 case ",$XFAIL," in
     *",${VARIANT},"*) is_xfail=1 ;;
     *)                is_xfail=0 ;;
