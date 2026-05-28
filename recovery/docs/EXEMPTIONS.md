@@ -172,6 +172,16 @@ tree.c:292   INTRACTABLE   "                                                    
 tree.c:293   INTRACTABLE   "                                                                                                                            "
 tree.c:295   INTRACTABLE   "                                                                                                                            "
 tree.c:300   INTRACTABLE   lchown wrapper around (void)cast; only reachable when running as root with valid uid/gid fields
+tree.c:347   DEFENSIVE     apply_node_xattrs: body of non-object array entry guard; all entries in the fixture xattr list are JSON objects — the non-object path is a hardening guard against malformed JSON, never triggered in practice
+tree.c:348   DEFENSIVE     "                                                                                                                            "
+tree.c:354   DEFENSIVE     apply_node_xattrs: body of missing-name/value guard; fixture xattr objects always have both "name" and "value" keys — this path handles intentionally-malformed xattr descriptors
+tree.c:355   DEFENSIVE     "                                                                                                                            "
+tree.c:358   DEFENSIVE     apply_node_xattrs: body of non-string name type guard; fixture name field is always a JSON string — this path handles malformed type (e.g. a number in the name field)
+tree.c:359   DEFENSIVE     "                                                                                                                            "
+tree.c:365   DEFENSIVE     apply_node_xattrs: body of empty/failed name decode guard; fixture name "user.lcsas-test" always decodes without error or truncation
+tree.c:366   DEFENSIVE     "                                                                                                                            "
+tree.c:380   INTRACTABLE   apply_node_xattrs: malloc fail for value_buf; requires fault injection against a gcov-instrumented binary — the standard fault-inject sweep may not reach this specific allocation in test_repo
+tree.c:381   INTRACTABLE   "                                                                                                                            "
 tree.c:603   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on lcsas_create_file fail (issue #221); needs a filesystem-full target — integration-only (test_tier1_target_full.py mounts a 1 MiB tmpfs; not run in coverage-c)
 tree.c:604   INTRACTABLE   "                                                                                                                            "
 tree.c:605   INTRACTABLE   "                                                                                                                            "
