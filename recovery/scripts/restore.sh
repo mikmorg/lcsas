@@ -418,16 +418,27 @@ PWFILE_TMP=""
 # Tier-3 stderr capture files (issue #240); set if tier 3 fires.
 TIER3_ERR=""
 TIER3_RC_FILE=""
-cleanup() {
-    [ -n "$PWFILE_TMP" ] && [ -f "$PWFILE_TMP" ] && rm -f "$PWFILE_TMP"
-    [ -n "$TIER3_ERR" ] && [ -f "$TIER3_ERR" ] && rm -f "$TIER3_ERR"
-    [ -n "$TIER3_RC_FILE" ] && [ -f "$TIER3_RC_FILE" ] && rm -f "$TIER3_RC_FILE"
+# Persistent exit-diagnostic log (issue #259).  Written on non-zero exit so
+# the failure is visible even after the tmux session dies.
+_restore_exit_log="/tmp/lcsas-restore-exit.$(date +%Y%m%d-%H%M%S-$$)"
+_restore_exit_handler() {
+    rc=$?
+    [ -n "${TIER3_ERR:-}" ] && [ -f "${TIER3_ERR:-}" ] && rm -f "$TIER3_ERR"
+    [ -n "${TIER3_RC_FILE:-}" ] && [ -f "${TIER3_RC_FILE:-}" ] && rm -f "$TIER3_RC_FILE"
+    [ -n "${PWFILE_TMP:-}" ] && [ -f "${PWFILE_TMP:-}" ] && rm -f "$PWFILE_TMP"
+    if [ "$rc" -ne 0 ]; then
+        printf '[restore.sh] EXIT rc=%d at line approx=%d\n' "$rc" "${LINENO:-0}" \
+            >> "$_restore_exit_log" 2>/dev/null || true
+        printf '[restore.sh] PYBIN=%s PYREST=%s\n' "${PYBIN:-unset}" "${PYREST:-unset}" \
+            >> "$_restore_exit_log" 2>/dev/null || true
+        printf '[restore.sh] exit log: %s\n' "$_restore_exit_log" >&2 || true
+    fi
     # Always return 0 so the trap does not clobber the script's exit
     # status (POSIX traps inherit the trap action's return code under
     # some shells -- notably dash on Debian / Ubuntu / busybox).
     return 0
 }
-trap cleanup EXIT INT TERM
+trap _restore_exit_handler EXIT INT TERM
 
 # ── Repo discovery ────────────────────────────────────────────────
 #
@@ -1034,6 +1045,8 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         if [ -f "$cand" ]; then PYREST="$cand"; break; fi
     done
     if [ -n "$PYBIN" ] && [ -n "$PYREST" ]; then
+        printf '[tier 3] dispatch: pybin=%s pyrest=%s repo=%s\n' \
+            "$PYBIN" "$PYREST" "$REPO" >> "$_restore_exit_log" 2>/dev/null || true
         printf '[tier 3] falling back to Python (%s + %s)\n' \
                "$PYBIN" "$PYREST" >&2
         # standalone_restorer.py CLI is flag-based:
@@ -1183,12 +1196,14 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         tier3_rc=$(cat "$TIER3_RC_FILE" 2>/dev/null || echo 1)
         # Defensive: cat read an empty file?  Default to 1.
         [ -n "$tier3_rc" ] || tier3_rc=1
+        printf '[tier 3] rc=%d\n' "$tier3_rc" >> "$_restore_exit_log" 2>/dev/null || true
         if [ "$tier3_rc" -ne 0 ] && [ -s "$TIER3_ERR" ]; then
             printf '\n[tier 3] FAILED (rc=%d)\n' "$tier3_rc" >&2
             printf '[tier 3] -------------- captured stderr --------------\n' >&2
             sed 's/^/[tier 3] /' "$TIER3_ERR" >&2
             printf '[tier 3] --------------------------------------------\n' >&2
         fi
+        printf '[tier 3] diagnostic log: %s\n' "$_restore_exit_log" >&2 2>/dev/null || true
         rm -f "$TIER3_ERR" "$TIER3_RC_FILE"
         exit "$tier3_rc"
     fi
