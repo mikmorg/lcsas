@@ -54,6 +54,8 @@ IV_SNAP    = b"\x02" + b"\x00" * 15
 IV_DATA    = b"\x03" + b"\x00" * 15  # data blob in pack
 IV_TREE    = b"\x04" + b"\x00" * 15  # tree blob in pack
 IV_HEADER  = b"\x05" + b"\x00" * 15  # pack header
+IV_XATTR   = b"\x16" + b"\x00" * 15  # xattr content blob in pack
+IV_HLINK   = b"\x17" + b"\x00" * 15  # hardlink content blob in pack
 
 N, R, P = 16384, 8, 1  # smaller-than-default scrypt params to keep
                         # gen + test fast (still safe for fixture use)
@@ -140,6 +142,24 @@ def make_pack_and_index(
     data_compressed = zstandard.ZstdCompressor().compress(data_plain)
     data_enc = encrypt_authenticated(
         MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_DATA, data_compressed
+    )
+
+    # ── Xattr content blob (covers apply_node_xattrs lines 330-397) ──
+    # A small file payload for the node that carries extended_attributes.
+    xattr_plain = b"xattr test content"
+    xattr_blob_id = sha256(xattr_plain)
+    xattr_compressed = zstandard.ZstdCompressor().compress(xattr_plain)
+    xattr_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_XATTR, xattr_compressed
+    )
+
+    # ── Hardlink content blob (covers hardlink success branch 541-563) ─
+    # A small file payload shared by two file nodes with inode 9001.
+    hlink_plain = b"hardlink content"
+    hlink_blob_id = sha256(hlink_plain)
+    hlink_compressed = zstandard.ZstdCompressor().compress(hlink_plain)
+    hlink_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_HLINK, hlink_compressed
     )
 
     # ── Sub-tree (nested directory contents) ──────────────────────
@@ -270,6 +290,58 @@ def make_pack_and_index(
                 "mode": 511,
                 "mtime": "2026-05-21T00:00:00Z",
                 "uid": 1000, "gid": 1000,
+            },
+            {
+                # File with extended_attributes — exercises apply_node_xattrs
+                # (tree.c lines 330-397).  The value is base64("test").
+                "name": "xattr_test_file",
+                "type": "file",
+                "mode": 420,
+                "mtime": "2026-05-21T00:00:00Z",
+                "atime": "2026-05-21T00:00:00Z",
+                "ctime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "user": "test", "group": "test",
+                "inode": 8000, "device_id": 0,
+                "size": len(xattr_plain),
+                "links": 1,
+                "content": [xattr_blob_id.hex()],
+                "extended_attributes": [
+                    {"name": "user.lcsas-test", "value": "dGVzdA=="},
+                ],
+            },
+            {
+                # First node of a hardlink pair — exercises hardlink
+                # success branch in restore_file_node (tree.c 541-563).
+                # Both this node and hardlink_b share inode 9001.
+                "name": "hardlink_a",
+                "type": "file",
+                "mode": 420,
+                "mtime": "2026-05-21T00:00:00Z",
+                "atime": "2026-05-21T00:00:00Z",
+                "ctime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "user": "test", "group": "test",
+                "inode": 9001, "device_id": 0,
+                "size": len(hlink_plain),
+                "links": 2,
+                "content": [hlink_blob_id.hex()],
+            },
+            {
+                # Second node of the hardlink pair.  Same inode → link()
+                # is called instead of writing content a second time.
+                "name": "hardlink_b",
+                "type": "file",
+                "mode": 420,
+                "mtime": "2026-05-21T00:00:00Z",
+                "atime": "2026-05-21T00:00:00Z",
+                "ctime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "user": "test", "group": "test",
+                "inode": 9001, "device_id": 0,
+                "size": len(hlink_plain),
+                "links": 2,
+                "content": [hlink_blob_id.hex()],
             },
         ]
     }
@@ -442,7 +514,8 @@ def make_pack_and_index(
     pack_body = (data_enc + sub_tree_enc + tree_enc
                  + broken_tree_enc + bad_hex_tree_enc + bad_subdir_tree_enc
                  + wrong_nodes_enc + long_name_enc + long_type_enc
-                 + missing_content_tree_enc)
+                 + missing_content_tree_enc
+                 + xattr_enc + hlink_enc)
     off_data            = 0
     off_sub             = len(data_enc)
     off_tree            = off_sub + len(sub_tree_enc)
@@ -453,6 +526,8 @@ def make_pack_and_index(
     off_long_name       = off_wrong_nodes + len(wrong_nodes_enc)
     off_long_type       = off_long_name + len(long_name_enc)
     off_missing_content = off_long_type + len(long_type_enc)
+    off_xattr           = off_missing_content + len(missing_content_tree_enc)
+    off_hlink           = off_xattr + len(xattr_enc)
     offsets = {
         "data":             (off_data,            len(data_enc)),
         "sub":              (off_sub,             len(sub_tree_enc)),
@@ -464,6 +539,8 @@ def make_pack_and_index(
         "long_name":        (off_long_name,       len(long_name_enc)),
         "long_type":        (off_long_type,       len(long_type_enc)),
         "missing_content":  (off_missing_content, len(missing_content_tree_enc)),
+        "xattr":            (off_xattr,           len(xattr_enc)),
+        "hlink":            (off_hlink,           len(hlink_enc)),
     }
 
     # Header: per-blob descriptors
@@ -479,6 +556,8 @@ def make_pack_and_index(
         (1, long_name_blob_id,       offsets["long_name"]),
         (1, long_type_blob_id,       offsets["long_type"]),
         (1, missing_content_tree_blob_id, offsets["missing_content"]),
+        (0, xattr_blob_id,           offsets["xattr"]),
+        (0, hlink_blob_id,           offsets["hlink"]),
     ]:
         header += struct.pack("<BI", blob_type, ln) + blob_id
     header_enc = encrypt_authenticated(
@@ -566,6 +645,25 @@ def make_pack_and_index(
                         "type": "tree",
                         "offset": offsets["missing_content"][0],
                         "length": offsets["missing_content"][1],
+                    },
+                    {
+                        # Xattr content blob — referenced by xattr_test_file
+                        # node.  uncompressed_length included so read_blob
+                        # takes the "loc->uncompressed_length > 0" branch.
+                        "id": xattr_blob_id.hex(),
+                        "type": "data",
+                        "offset": offsets["xattr"][0],
+                        "length": offsets["xattr"][1],
+                        "uncompressed_length": len(xattr_plain),
+                    },
+                    {
+                        # Hardlink content blob — referenced by hardlink_a
+                        # and hardlink_b nodes (same inode 9001).
+                        "id": hlink_blob_id.hex(),
+                        "type": "data",
+                        "offset": offsets["hlink"][0],
+                        "length": offsets["hlink"][1],
+                        "uncompressed_length": len(hlink_plain),
                     },
                 ],
             },
@@ -706,6 +804,7 @@ def make_pack_and_index(
     global BROKEN_TREE_ID, BAD_HEX_TREE_ID, BAD_SUBDIR_TREE_ID
     global WRONG_NODES_ID, LONG_NAME_ID, LONG_TYPE_ID
     global MISSING_CONTENT_TREE_ID, MISSING_TREE_ID
+    global XATTR_BLOB_ID, HLINK_BLOB_ID
     BROKEN_TREE_ID = broken_tree_blob_id.hex()
     BAD_HEX_TREE_ID = bad_hex_tree_blob_id.hex()
     BAD_SUBDIR_TREE_ID = bad_subdir_tree_blob_id.hex()
@@ -714,6 +813,8 @@ def make_pack_and_index(
     LONG_TYPE_ID = long_type_blob_id.hex()
     MISSING_CONTENT_TREE_ID = missing_content_tree_blob_id.hex()
     MISSING_TREE_ID = MISSING_TREE_BLOB_ID.hex()
+    XATTR_BLOB_ID = xattr_blob_id.hex()
+    HLINK_BLOB_ID = hlink_blob_id.hex()
 
     return pack_id_hex, data_blob_id.hex(), tree_blob_id.hex(), tree_blob_id.hex()
 
@@ -727,6 +828,8 @@ LONG_NAME_ID = ""
 LONG_TYPE_ID = ""
 MISSING_CONTENT_TREE_ID = ""
 MISSING_TREE_ID = ""
+XATTR_BLOB_ID = ""
+HLINK_BLOB_ID = ""
 
 
 def make_snapshot(repo_dir: Path, tree_id_hex: str,
@@ -1089,6 +1192,8 @@ def main() -> int:
             "long_type_tree_id": LONG_TYPE_ID,
             "missing_content_tree_id": MISSING_CONTENT_TREE_ID,
             "missing_tree_id": MISSING_TREE_ID,
+            "xattr_blob_id": XATTR_BLOB_ID,
+            "hlink_blob_id": HLINK_BLOB_ID,
             "snapshot_id": snap_id,
             "broken_snapshot_id": BROKEN_SNAP_ID,
             "master_encrypt_hex": MASTER_ENCRYPT.hex(),

@@ -35,11 +35,12 @@ make -C recovery audit-gate THRESHOLD=95
 | 88% (default) | Measured floor after Phase 9 (93.9% overall, all 16 files ≥ 88%). Prevents regressions. |
 | 95% (achieved by 12 / 16 files) | tree.c, main.c, json_q.c, catalog.c, scrypt.c, path.c, b64.c, poly1305.c, pbkdf2.c, lcsas_io.c, hex.c, aes.c, sha256.c, zstd_dec.c, lcsas_io.c, poly1305.c, b64.c. |
 | 95% (aspirational for last 4) | repo.c (90.6%), disc_locator.c (88.5%), pbkdf2.c (94.7%) — the malloc-failure error branches and contrived-corruption paths need either a fault-tolerant gcov runtime patch or large amounts of fixture engineering for diminishing returns. |
+| 90% (achievable ceiling for tree.c) | tree.c has ~35 lines of INTRACTABLE code: apply_node_ownership (requires root for geteuid()!=0 guard), ENOSPC classifiers (require filesystem-full target), FAT32 symlink error paths (require non-POSIX mount). These count against the denominator permanently. |
 
 **Why not 100%?** Three constraints:
 1. Many `malloc`/`calloc`/`realloc` error branches require fault injection — the `make fault-inject` target (issue #165) covers some, but only branches that the test binaries actually reach.
 2. `disc_locator.c` (currently 81.6%) has filesystem-dependent branches (chroot, mount-namespace prompts, fs-full handling) that require either user-namespace fixtures or `unshare(2)` setup the tests don't currently do.
-3. `tree.c` and `repo.c` exercise restic-format encrypted data; their happy paths are covered by the blind-restore e2e but the local C unit tests use stub fixtures that fail at decryption. Bringing these to 95%+ needs a Python-side helper that produces valid encrypted blobs (master key, AES-CTR + Poly1305-AES tag + scrypt-derived KEK).
+3. `tree.c` has ~35 INTRACTABLE lines (geteuid()!=0 chown guard, ENOSPC classifiers, FAT32/non-POSIX symlink paths) that cannot be reached in the standard coverage-c harness. The aspirational ceiling for tree.c is ~90%, not 95%.
 
 ## Per-file coverage (2026-05-21, after Phase 8)
 
@@ -56,7 +57,7 @@ make -C recovery audit-gate THRESHOLD=95
 | b64.c | 95.7% | |
 | poly1305.c | 95.0% | |
 | pbkdf2.c | 94.7% | |
-| tree.c | **95.3%** | **Phase 9**: 3 broken-tree blobs (missing blob, bad hex, broken subdir) + compressed sub-tree |
+| tree.c | **~90% (achievable ceiling)** | **Issue #269**: xattr+hardlink fixture nodes added; apply_node_xattrs (330-397) and hardlink success branch (541-563) now covered. ~35 INTRACTABLE lines (geteuid()!=0 chown, ENOSPC classifiers, FAT32 symlink paths) prevent reaching 95%. |
 | main.c | 94.8% | Phase 8: real-fixture CLI tests |
 | repo.c | **90.6%** | **Phase 9**: zstd-compressed data blob (uncompressed_length both with + without) + corrupted-zstd index + multiple keys/snapshots forcing sort |
 | lcsas_io.c | 90.3% | |

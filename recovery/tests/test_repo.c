@@ -33,9 +33,13 @@ static int fails = 0;
 #define FIXTURE_DATA_BLOB_HEX  \
     "6565160e5ca15054fd190b02fab20e4e7daf41e54d19e649d0798d7aca56c5b2"
 #define FIXTURE_TREE_BLOB_HEX  \
-    "ee915c16ffdf6f53b74e49f10090923a84d6d3a507bf40b71d05136c5b337425"
+    "9a80411c8dd4fc00a9c1eab7c0dd90b012deaf223219df85d179f18119ff12e4"
 #define FIXTURE_PACK_HEX       \
-    "7dd0ffb9f98280b996899cf0a2e9a53c4f81ee55fc783df8066115e46b28eddd"
+    "d61624ea32e4d71142818574902836c03474e0daf0e833f47dfd77cfe1c9e7f5"
+#define FIXTURE_XATTR_BLOB_HEX \
+    "c8bc50e94a5aad4482a505268c3616656540113d62050921d6d7778c16d8eadb"
+#define FIXTURE_HLINK_BLOB_HEX \
+    "b12cdb5f098ad21783e8973d5d864e90c13b7cceedcfcf8013d94d8f7bd05247"
 #define FIXTURE_BROKEN_TREE_HEX  \
     "b9a34a1fa85b4ccdcd91b96abdb97acd76c914ba1f99c0f9c61e08842861add3"
 #define FIXTURE_BAD_HEX_TREE_HEX \
@@ -210,8 +214,8 @@ main(void)
             fprintf(stderr, "FAIL: load_index rc=%d\n", rc);
             fails++;
         }
-        if (ix.count != 12) {
-            fprintf(stderr, "FAIL: index count=%zu, want 12\n", ix.count);
+        if (ix.count != 14) {
+            fprintf(stderr, "FAIL: index count=%zu, want 14\n", ix.count);
             fails++;
         }
 
@@ -445,6 +449,56 @@ main(void)
                         fails++;
                     }
                 }
+            }
+        }
+
+        /* xattr_test_file must be restored with correct content. */
+        {
+            char xattr_path[1024];
+            char xattr_buf[64];
+            FILE *xf;
+            size_t xgot;
+            snprintf(xattr_path, sizeof xattr_path,
+                     "%s/xattr_test_file", target);
+            xf = fopen(xattr_path, "rb");
+            if (!xf) {
+                fprintf(stderr, "FAIL: xattr_test_file not created\n");
+                fails++;
+            } else {
+                xgot = fread(xattr_buf, 1, sizeof xattr_buf - 1, xf);
+                xattr_buf[xgot] = '\0';
+                if (strcmp(xattr_buf, "xattr test content") != 0) {
+                    fprintf(stderr,
+                            "FAIL: xattr_test_file content: '%s'\n",
+                            xattr_buf);
+                    fails++;
+                }
+                fclose(xf);
+            }
+        }
+
+        /* hardlink_a and hardlink_b must both be restored and share
+         * the same inode (confirming the link() path was taken). */
+        {
+            char hla[1024], hlb[1024];
+            struct stat sta, stb;
+            snprintf(hla, sizeof hla, "%s/hardlink_a", target);
+            snprintf(hlb, sizeof hlb, "%s/hardlink_b", target);
+            if (stat(hla, &sta) != 0) {
+                fprintf(stderr, "FAIL: hardlink_a not created\n");
+                fails++;
+            }
+            if (stat(hlb, &stb) != 0) {
+                fprintf(stderr, "FAIL: hardlink_b not created\n");
+                fails++;
+            }
+            if (sta.st_ino != stb.st_ino) {
+                fprintf(stderr,
+                        "FAIL: hardlink_a inode=%llu != hardlink_b "
+                        "inode=%llu (link() path not taken)\n",
+                        (unsigned long long)sta.st_ino,
+                        (unsigned long long)stb.st_ino);
+                fails++;
             }
         }
 
