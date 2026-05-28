@@ -180,6 +180,206 @@ def test_fallback_to_tier3_when_tier1_and_tier2_crash(tmp_path: Path) -> None:
     )
 
 
+def _make_tier3_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    """Return (recovery, pybin_dir) for a tier-3-only fixture.
+
+    Both tier-1 and tier-2 stubs crash.  standalone_restorer.py is
+    placed at recovery.parent.  Caller is responsible for installing
+    the desired stub python3 into the returned pybin_dir.
+    """
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    _make_repo(recovery)
+    _install_failing_binary(recovery, "lcsas-restore", exit_code=17)
+    _install_failing_binary(recovery, "rustic-static", exit_code=19)
+    (recovery.parent / "standalone_restorer.py").write_text("# stub\n")
+    pybin_dir = tmp_path / "stubbin"
+    pybin_dir.mkdir()
+    return recovery, pybin_dir
+
+
+def test_tier3_snap_args_non_latest(tmp_path: Path) -> None:
+    """Passing a non-'latest' snapshot ID → TIER3_SNAP_ARGS is set."""
+    recovery, pybin_dir = _make_tier3_fixture(tmp_path)
+    (pybin_dir / "python3").write_text(textwrap.dedent("""\
+        #!/bin/sh
+        echo "TIER3_PYTHON_RAN: $*"
+        exit 0
+    """))
+    (pybin_dir / "python3").chmod(0o755)
+
+    target = tmp_path / "restored"
+    env = {
+        **os.environ,
+        "LCSAS_MOUNT_DIRS": "",
+        "LCSAS_TIER_FALLBACK": "1",
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+        "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
+    }
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(target), "abc123snap"],
+        input="stub-password\n",
+        capture_output=True, text=True, env=env, timeout=15,
+    )
+    assert res.returncode == 0, f"rc={res.returncode}\nstderr:{res.stderr}"
+    assert "--snapshot abc123snap" in res.stdout, (
+        "TIER3_SNAP_ARGS not forwarded to standalone restorer; "
+        f"stdout:\n{res.stdout}"
+    )
+
+
+def test_tier3_pack_search_converted_to_mount_args(tmp_path: Path) -> None:
+    """When a data disc with data/ is found, PACK_SEARCH_ARGS is rewritten
+    to --mount-point args for tier-3 dispatch (line ~1097 of restore.sh)."""
+    recovery, pybin_dir = _make_tier3_fixture(tmp_path)
+    (pybin_dir / "python3").write_text(textwrap.dedent("""\
+        #!/bin/sh
+        echo "TIER3_PYTHON_RAN: $*"
+        exit 0
+    """))
+    (pybin_dir / "python3").chmod(0o755)
+
+    # Create a fake mount parent with a disc subdir that has data/.
+    # The pack-search walker adds it to PACK_SEARCH_ARGS only when
+    # data/ exists under the disc subdir.
+    mount_parent = tmp_path / "fake_mount"
+    mount_parent.mkdir()
+    disc_dir = mount_parent / "disc01"
+    (disc_dir / "data").mkdir(parents=True)
+
+    target = tmp_path / "restored"
+    env = {
+        **os.environ,
+        "LCSAS_MOUNT_DIRS": str(mount_parent),
+        "LCSAS_TIER_FALLBACK": "1",
+        "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
+    }
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        input="stub-password\n",
+        capture_output=True, text=True, env=env, timeout=15,
+    )
+    assert res.returncode == 0, f"rc={res.returncode}\nstderr:{res.stderr}"
+    assert "--mount-point" in res.stdout, (
+        "PACK_SEARCH_ARGS not converted to --mount-point for tier 3; "
+        f"stdout:\n{res.stdout}"
+    )
+
+
+def test_tier3_mount_dirs_appended_when_not_in_pack_search(tmp_path: Path) -> None:
+    """LCSAS_MOUNT_DIRS entries not already in PACK_SEARCH_ARGS are added
+    as additional --mount-point args for tier-3 (lines 1101-1109)."""
+    recovery, pybin_dir = _make_tier3_fixture(tmp_path)
+    (pybin_dir / "python3").write_text(textwrap.dedent("""\
+        #!/bin/sh
+        echo "TIER3_PYTHON_RAN: $*"
+        exit 0
+    """))
+    (pybin_dir / "python3").chmod(0o755)
+
+    # A mount parent without a data/ inside → PACK_SEARCH_ARGS stays empty.
+    # The parent itself is still added as --mount-point by the MOUNT_DIRS
+    # dedup loop (lines 1101-1109) because it isn't already covered.
+    mount_parent = tmp_path / "fake_mount"
+    mount_parent.mkdir()
+
+    target = tmp_path / "restored"
+    env = {
+        **os.environ,
+        "LCSAS_MOUNT_DIRS": str(mount_parent),
+        "LCSAS_TIER_FALLBACK": "1",
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+        "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
+    }
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        input="stub-password\n",
+        capture_output=True, text=True, env=env, timeout=15,
+    )
+    assert res.returncode == 0, f"rc={res.returncode}\nstderr:{res.stderr}"
+    assert str(mount_parent) in res.stdout, (
+        "LCSAS_MOUNT_DIRS entry not forwarded as --mount-point to tier 3; "
+        f"stdout:\n{res.stdout}"
+    )
+
+
+def test_tier3_pythonpath_set_from_bundled_zstandard(tmp_path: Path) -> None:
+    """When tools/lib/python3.X/zstandard/ exists under META_ROOT,
+    PYTHONPATH is exported so tier-3 can import zstandard (lines 1138-1146)."""
+    recovery, pybin_dir = _make_tier3_fixture(tmp_path)
+    (pybin_dir / "python3").write_text(textwrap.dedent("""\
+        #!/bin/sh
+        # Print PYTHONPATH so the test can assert it's set.
+        echo "PYTHONPATH=${PYTHONPATH:-unset}"
+        echo "TIER3_PYTHON_RAN: $*"
+        exit 0
+    """))
+    (pybin_dir / "python3").chmod(0o755)
+
+    # Create the bundled zstandard layout: recovery/../tools/lib/python3.12/
+    meta_root = tmp_path  # META_ROOT = dirname(RECOVERY) = tmp_path
+    zstd_dir = meta_root / "tools" / "lib" / "python3.12" / "zstandard"
+    zstd_dir.mkdir(parents=True)
+
+    target = tmp_path / "restored"
+    env = {
+        **os.environ,
+        "LCSAS_MOUNT_DIRS": "",
+        "LCSAS_TIER_FALLBACK": "1",
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+        "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
+    }
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        input="stub-password\n",
+        capture_output=True, text=True, env=env, timeout=15,
+    )
+    assert res.returncode == 0, f"rc={res.returncode}\nstderr:{res.stderr}"
+    zstd_libdir = str(meta_root / "tools" / "lib" / "python3.12")
+    assert "bundled zstandard" in res.stderr, (
+        "PYTHONPATH for zstandard not logged to stderr; "
+        f"stderr:\n{res.stderr}"
+    )
+    assert zstd_libdir in res.stdout, (
+        f"zstandard lib dir not in PYTHONPATH; stdout:\n{res.stdout}"
+    )
+
+
+def test_tier3_failure_stderr_replayed(tmp_path: Path) -> None:
+    """When tier-3 exits non-zero and wrote to stderr, restore.sh
+    replays the captured stderr with a labelled separator (lines 1220-1223)."""
+    recovery, pybin_dir = _make_tier3_fixture(tmp_path)
+    (pybin_dir / "python3").write_text(textwrap.dedent("""\
+        #!/bin/sh
+        echo "ImportError: No module named 'zstandard'" >&2
+        exit 1
+    """))
+    (pybin_dir / "python3").chmod(0o755)
+
+    target = tmp_path / "restored"
+    env = {
+        **os.environ,
+        "LCSAS_MOUNT_DIRS": "",
+        "LCSAS_TIER_FALLBACK": "1",
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+        "PATH": f"{pybin_dir}:{os.environ.get('PATH', '')}",
+    }
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        input="stub-password\n",
+        capture_output=True, text=True, env=env, timeout=15,
+    )
+    assert res.returncode == 1, (
+        f"tier-3 failure should propagate; got rc={res.returncode}"
+    )
+    assert "[tier 3] FAILED" in res.stderr, (
+        f"tier-3 failure banner missing from stderr:\n{res.stderr}"
+    )
+    assert "zstandard" in res.stderr, (
+        f"captured tier-3 stderr not replayed:\n{res.stderr}"
+    )
+
+
 def test_fallback_preserves_success_when_tier1_works(tmp_path: Path) -> None:
     """LCSAS_TIER_FALLBACK=1 + tier 1 succeeds → exit 0, no tier 2."""
     recovery = tmp_path / "recovery"
