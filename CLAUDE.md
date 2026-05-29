@@ -27,7 +27,7 @@ Pytest writes temp files to `/var/tmp/pytest-lcsas` and cleans them up automatic
 
 ## Architecture
 
-**LCSAS** orchestrates three external tools — **Rustic** (deduplication/encryption), **Xorriso** (ISO mastering), and **DVDisaster** (RS03 ECC) — to produce petabyte-scale optical cold-storage archives.
+**LCSAS** orchestrates three external tools — **Rustic** (deduplication/encryption), **Xorriso** (ISO mastering), and **DVDisaster** (RS03 ECC) — to produce durable, offline-first optical cold-storage archives (scaling to hundreds of discs across multiple repositories).
 
 ### Storage tier model
 
