@@ -122,14 +122,11 @@ def test_rs03_repairs_bitrot_byte_identical(tmp_path: Path) -> None:
     _damage_sectors(iso, DAMAGE_SECTORS, DAMAGE_START_SECTOR)
     assert runner.verify_iso(iso) is False, "verify must detect the damage"
 
-    # 5. Repair from the embedded RS03 ECC.
-    #    NOTE: dvdisaster's `-f` exits NONZERO (observed: 1) even when it
-    #    SUCCESSFULLY corrects errors, so `repair_iso()` (which returns
-    #    `returncode == 0`) reports False on a successful corrective repair.
-    #    We therefore do not assert on its boolean; the ground truth is whether
-    #    the data is actually recovered, asserted in step 6. See issue #302 for
-    #    the repair_iso() exit-code semantics follow-up.
-    runner.repair_iso(iso)
+    # 5. Repair from the embedded RS03 ECC. repair_iso() confirms the outcome
+    #    by re-verifying the image rather than trusting dvdisaster's `-f` exit
+    #    code (which is nonzero even on a successful corrective repair), so it
+    #    returns True iff the image is actually intact again. See #305.
+    assert runner.repair_iso(iso) is True, "repair_iso must report success"
 
     # 6. Ground truth: every file extracts byte-for-byte identical.
     out = tmp_path / "extracted"

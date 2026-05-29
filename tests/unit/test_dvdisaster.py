@@ -45,16 +45,31 @@ class TestDVDisasterMocked:
         assert runner.verify_iso(iso) is False
 
     @patch("lcsas.ecc.dvdisaster.subprocess.run")
-    def test_repair_success(self, mock_run, tmp_path):
-        mock_run.return_value = MagicMock(returncode=0)
+    def test_repair_clean_exit_then_verifies_clean(self, mock_run, tmp_path):
+        # repair_iso runs `-f` then re-verifies (issue #305). `-f` exits 0,
+        # the confirming `-t` verify reports clean -> True.
+        mock_run.side_effect = [MagicMock(returncode=0), MagicMock(returncode=0)]
         runner = SubprocessDVDisasterRunner()
         iso = tmp_path / "test.iso"
         iso.write_bytes(b"\x00" * 1024)
         assert runner.repair_iso(iso) is True
 
     @patch("lcsas.ecc.dvdisaster.subprocess.run")
-    def test_repair_failure(self, mock_run, tmp_path):
-        mock_run.return_value = MagicMock(returncode=1)
+    def test_repair_nonzero_exit_but_image_recovered(self, mock_run, tmp_path):
+        # The #305 scenario: `-f` exits NONZERO even though it successfully
+        # corrected the errors; the confirming `-t` verify reports the image
+        # is now clean. repair_iso must trust the verify, not the exit code.
+        mock_run.side_effect = [MagicMock(returncode=1), MagicMock(returncode=0)]
+        runner = SubprocessDVDisasterRunner()
+        iso = tmp_path / "test.iso"
+        iso.write_bytes(b"\x00" * 1024)
+        assert runner.repair_iso(iso) is True
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_repair_unrecoverable(self, mock_run, tmp_path):
+        # `-f` exits nonzero AND the confirming `-t` verify still reports
+        # corruption (damage beyond ECC capacity) -> False.
+        mock_run.side_effect = [MagicMock(returncode=1), MagicMock(returncode=13)]
         runner = SubprocessDVDisasterRunner()
         iso = tmp_path / "test.iso"
         iso.write_bytes(b"\x00" * 1024)
