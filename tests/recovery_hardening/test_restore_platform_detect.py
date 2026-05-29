@@ -94,10 +94,11 @@ def _run(
 @pytest.mark.parametrize(
     "sysname,machine,expected_target",
     [
-        ("Linux",  "aarch64", "aarch64-unknown-linux-musl"),
-        ("Linux",  "armv7l",  "armv7-unknown-linux-gnueabihf"),
-        ("Darwin", "arm64",   "aarch64-apple-darwin"),
-        ("Darwin", "x86_64",  "x86_64-apple-darwin"),
+        ("Linux",           "aarch64", "aarch64-unknown-linux-musl"),
+        ("Linux",           "armv7l",  "armv7-unknown-linux-gnueabihf"),
+        ("Darwin",          "arm64",   "aarch64-apple-darwin"),
+        ("Darwin",          "x86_64",  "x86_64-apple-darwin"),
+        ("MINGW64_NT-10.0", "x86_64",  "x86_64-pc-windows-gnu"),
     ],
 )
 def test_target_selected_for_platform(
@@ -137,6 +138,96 @@ def test_unsupported_linux_machine_exits_1(tmp_path: Path) -> None:
     )
     assert "unsupported Linux machine" in result.stderr, (
         f"expected 'unsupported Linux machine' in stderr; got:\n{result.stderr}"
+    )
+
+
+def test_unsupported_macos_machine_exits_1(tmp_path: Path) -> None:
+    """restore.sh exits 1 with a helpful message for an unknown macOS arch."""
+    recovery = _make_recovery(tmp_path)
+    uname_dir = _fake_uname_dir(tmp_path, "Darwin", "ppc64")
+    result = _run(recovery, tmp_path / "restored", uname_dir)
+
+    assert result.returncode == 1, (
+        f"expected exit 1 for Darwin/ppc64; got rc={result.returncode}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "unsupported macOS machine" in result.stderr, (
+        f"expected 'unsupported macOS machine' in stderr; got:\n{result.stderr}"
+    )
+
+
+def test_unsupported_windows_machine_exits_1(tmp_path: Path) -> None:
+    """restore.sh exits 1 for an unsupported Windows arch."""
+    recovery = _make_recovery(tmp_path)
+    uname_dir = _fake_uname_dir(tmp_path, "MINGW64_NT-10.0", "aarch64")
+    result = _run(recovery, tmp_path / "restored", uname_dir)
+
+    assert result.returncode == 1, (
+        f"expected exit 1 for MINGW64/aarch64; got rc={result.returncode}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "unsupported Windows machine" in result.stderr, (
+        f"expected 'unsupported Windows machine' in stderr; got:\n{result.stderr}"
+    )
+
+
+def test_lcsas_target_overrides_uname(tmp_path: Path) -> None:
+    """LCSAS_TARGET env bypasses uname-based detection entirely."""
+    recovery = _make_recovery(tmp_path)
+    target = "aarch64-unknown-linux-musl"
+    _install_target_stub(recovery, target)
+    # Fake uname reports x86_64 Linux — without the override the script
+    # would pick x86_64-unknown-linux-musl and fail to find the binary.
+    uname_dir = _fake_uname_dir(tmp_path, "Linux", "x86_64")
+    env: dict[str, str] = {
+        **os.environ,
+        "LCSAS_RELOCATED": "/fake/meta",
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+        "LCSAS_MOUNT_DIRS": "",
+        "LCSAS_TARGET": target,
+        "PATH": str(uname_dir) + ":" + os.environ.get("PATH", ""),
+    }
+    result = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored"), "latest"],
+        input="testpassword\n",
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env=env,
+    )
+    assert result.returncode == 0, (
+        f"expected exit 0 with LCSAS_TARGET override; rc={result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "CORRECT_TARGET_BINARY_RAN" in result.stdout
+
+
+def test_detect_arch_sh_used_when_present(tmp_path: Path) -> None:
+    """When $RECOVERY/scripts/detect_arch.sh is executable, restore.sh uses
+    it to determine MACHINE instead of calling uname directly (line 380)."""
+    recovery = _make_recovery(tmp_path)
+    target_triple = "x86_64-unknown-linux-musl"
+    _install_target_stub(recovery, target_triple)
+
+    # Create the detect_arch.sh in the recovery/scripts dir.
+    scripts_dir = recovery / "scripts"
+    scripts_dir.mkdir(exist_ok=True)
+    detect_arch = scripts_dir / "detect_arch.sh"
+    detect_arch.write_text("#!/bin/sh\necho 'x86_64'\n")
+    detect_arch.chmod(0o755)
+
+    uname_dir = _fake_uname_dir(tmp_path, "Linux", "aarch64")  # uname would say aarch64
+    result = _run(recovery, tmp_path / "restored", uname_dir)
+
+    # detect_arch.sh says x86_64, so the x86_64 stub should run even though
+    # uname would return aarch64.
+    assert result.returncode == 0, (
+        f"expected exit 0 when detect_arch.sh present; rc={result.returncode}\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "CORRECT_TARGET_BINARY_RAN" in result.stdout, (
+        f"x86_64 stub should run when detect_arch.sh returns x86_64; "
+        f"stdout:\n{result.stdout}"
     )
 
 
