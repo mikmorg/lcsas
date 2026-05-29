@@ -419,13 +419,13 @@ def test_auto_recovery_from_meta_toplevel_no_args(tmp_path: Path) -> None:
         capture_output=True, text=True, env=env, timeout=15,
         input="stub-pw\n",
     )
-    # Should reach the stub binary (not usage/exit 2, not "no recovery method")
-    assert res.returncode != 2, (
-        f"script exited with usage error (2) — AUTO_RECOVERY not set from "
-        f"meta-toplevel layout.\nstderr:\n{res.stderr}"
+    assert res.returncode == 0, (
+        f"expected exit 0 with meta-toplevel zero-arg call; rc={res.returncode}\n"
+        f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
-    assert "no recovery method available" not in res.stderr, (
-        f"binary not found despite being staged.\nstderr:\n{res.stderr}"
+    args = _stub_args(res.stdout)
+    assert args, (
+        f"stub binary did not run; stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
 
 
