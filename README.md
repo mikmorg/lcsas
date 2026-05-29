@@ -1,6 +1,6 @@
 # LCSAS — Linux Cold Storage Archival Suite
 
-Petabyte-scale, offline-first archival system for Linux. Orchestrates **Rustic** (content-defined chunking), **Xorriso** (ISO mastering), and **DVDisaster** (error correction) to write deduplicated, encrypted data packs onto optical media (BD-R, M-Disc).
+Durable, offline-first cold archival for Linux — built so data stays recoverable for decades, by a non-specialist, with no cloud provider and no central server. Orchestrates **Rustic** (content-defined chunking), **Xorriso** (ISO mastering), and **DVDisaster** (error correction) to write deduplicated, encrypted data packs onto optical media (BD-R, M-Disc). Scales to archives of hundreds of discs across multiple repositories.
 
 > **🚨 In an emergency and need to restore data?**
 > Start at **[docs/RECOVERY_GUIDE.md](docs/RECOVERY_GUIDE.md)** — it
