@@ -25,6 +25,7 @@ blind test doesn't have to.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -1019,4 +1020,56 @@ def test_fixture_hardlink_restored_correctly(tmp_path: Path) -> None:
         f"hardlink_a inode={hl_a.stat().st_ino} != "
         f"hardlink_b inode={hl_b.stat().st_ino} "
         "(link() path was not taken)"
+    )
+
+
+# ── emit_progress_line (Issue #293) ──────────────────────────────
+
+
+@pytest.mark.requires_rustic
+def test_progress_line_emitted_to_stderr(tmp_path: Path) -> None:
+    """emit_progress_line in tree.c must write at least one
+    '[lcsas-restore] progress:' line to stderr during a real restore.
+
+    lcsas_progress_finish() always emits a final line unconditionally,
+    so any successful restore against a real encrypted repo guarantees
+    at least one hit regardless of blob count or tick thresholds.
+    """
+    restore_bin = _find_bin()
+    if not shutil.which("rustic"):
+        pytest.skip("rustic not on PATH")
+
+    repo = tmp_path / "repo"
+    src = tmp_path / "src"
+    target = tmp_path / "target"
+    pwfile = tmp_path / "pw"
+
+    src.mkdir()
+    (src / "data.txt").write_text("progress test payload\n")
+    pwfile.write_text("test-password\n")
+
+    subprocess.run(
+        ["rustic", "-r", str(repo), "init", "--password-file", str(pwfile)],
+        capture_output=True, check=True, timeout=30,
+    )
+    subprocess.run(
+        ["rustic", "-r", str(repo), "backup", str(src),
+         "--password-file", str(pwfile)],
+        capture_output=True, check=True, timeout=30,
+    )
+
+    res = _run(
+        restore_bin,
+        "--repo", str(repo),
+        "--target", str(target),
+        "--password-file", str(pwfile),
+        timeout=30,
+    )
+    assert res.returncode == 0, (
+        f"restore failed (rc={res.returncode})\n"
+        f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    )
+    assert "[lcsas-restore] progress:" in res.stderr, (
+        f"emit_progress_line did not fire — expected '[lcsas-restore] progress:' "
+        f"in stderr.\nstderr:\n{res.stderr}"
     )
