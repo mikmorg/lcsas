@@ -136,8 +136,17 @@ def test_fat32_target_completes_with_symlink_warning(tmp_path: Path) -> None:
         )
     finally:
         # Unmount eagerly and SYNCHRONOUSLY so pytest's tmp_path
-        # rmtree doesn't trip over a busy loop-mount.  -l (lazy) is
-        # the fallback in case anything in the test held the mount.
-        umount = _sudo("umount", str(target), check=False)
-        if umount.returncode != 0:
-            _sudo("umount", "-l", str(target), check=False)
+        # rmtree doesn't trip over a busy loop-mount.
+        _sudo("umount", str(target), check=False)
+        # Detach any loop device still backed by our image.  The
+        # kernel keeps the loop device open until explicitly released;
+        # without this step pytest's rm -rf fails with EBUSY because
+        # the directory is still a reference target for the loop block
+        # device even after the vfat filesystem is unmounted.
+        detach = _sudo("losetup", "-j", str(img), check=False,
+                       capture_output=True)
+        if detach.returncode == 0:
+            for line in detach.stdout.splitlines():
+                dev = line.split(":")[0].strip()
+                if dev:
+                    _sudo("losetup", "-d", dev, check=False)
