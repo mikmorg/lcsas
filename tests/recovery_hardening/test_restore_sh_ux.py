@@ -26,6 +26,7 @@ What this catches:
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
@@ -295,6 +296,205 @@ def test_numbered_repo_prompt_accepts_number(tmp_path: Path) -> None:
     # The user should also see the numbered list in stderr.
     assert "1) alpha" in res.stderr and "2) bravo" in res.stderr, (
         f"stderr must render a numbered menu; got:\n{res.stderr}"
+    )
+
+
+# ── Interactive repo selection error path ───────────────────────────
+
+
+def test_interactive_bad_name_exits_1(tmp_path: Path) -> None:
+    """Typing an unrecognised repo name at the interactive prompt must
+    exit 1 with a 'no repository named' message (lines 632-634)."""
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    _install_stub_binary(recovery, HOST_TARGET, "lcsas-restore")
+    _make_repo_skeleton(recovery / "metadata", "alpha")
+    _make_repo_skeleton(recovery / "metadata", "bravo")
+    target = tmp_path / "restored"
+
+    full_env = {**os.environ, "LCSAS_MOUNT_DIRS": ""}
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(target), "latest"],
+        capture_output=True, text=True, env=full_env, timeout=15,
+        input="nonexistent_repo\nstub-pw\n",
+    )
+    assert res.returncode == 1, (
+        f"expected exit 1 for unknown repo name; got rc={res.returncode}\n"
+        f"stderr:\n{res.stderr}"
+    )
+    assert "no repository named" in res.stderr, (
+        f"expected 'no repository named' in stderr; got:\n{res.stderr}"
+    )
+
+
+# ── Usage/exit-2 path ────────────────────────────────────────────────
+
+
+def test_no_args_no_auto_recovery_prints_usage(tmp_path: Path) -> None:
+    """When called with zero positional args and no AUTO_RECOVERY
+    context, restore.sh should print usage and exit 2 (lines 353, 362)."""
+    # Copy the script to an isolated dir so $SCRIPT_DIR/../scripts and
+    # $SCRIPT_DIR/recovery/scripts do not exist — AUTO_RECOVERY stays "".
+    isolated = tmp_path / "isolated"
+    isolated.mkdir()
+    script = isolated / "restore.sh"
+    shutil.copy(RESTORE_SH, script)
+
+    env = {
+        **os.environ,
+        # Skip the relocation probe — not what we're testing here.
+        "LCSAS_RELOCATED": "/fake/meta",
+    }
+    res = subprocess.run(
+        ["sh", str(script)],
+        capture_output=True, text=True, env=env, timeout=10,
+    )
+    assert res.returncode == 2, (
+        f"expected exit 2 for usage error; got rc={res.returncode}\n"
+        f"stderr:\n{res.stderr}"
+    )
+    assert "usage:" in res.stderr, (
+        f"expected usage string in stderr; got:\n{res.stderr}"
+    )
+
+
+# ── META-toplevel AUTO_RECOVERY ───────────────────────────────────────
+
+
+def _make_meta_top(tmp_path: Path) -> Path:
+    """Return a meta-disc-top-level layout: restore.sh at root, recovery/
+    tree underneath with a minimal holographic repo."""
+    meta = tmp_path / "meta_top"
+    meta.mkdir()
+    shutil.copy(RESTORE_SH, meta / "restore.sh")
+    (meta / "recovery" / "scripts").mkdir(parents=True)
+    recovery = meta / "recovery"
+    _install_stub_binary(recovery, HOST_TARGET, "lcsas-restore")
+    _make_repo_skeleton(recovery / "metadata", "alpha")
+    return meta
+
+
+def test_auto_recovery_from_meta_toplevel_one_arg(tmp_path: Path) -> None:
+    """From a meta-disc top-level layout, restore.sh with a single TARGET
+    arg should auto-detect RECOVERY from $SCRIPT_DIR/recovery (lines 254-255,
+    345-348)."""
+    meta = _make_meta_top(tmp_path)
+    target = tmp_path / "restored"
+
+    env = {
+        **os.environ,
+        "LCSAS_RELOCATED": "/fake/meta",
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+        "LCSAS_MOUNT_DIRS": "",
+    }
+    res = subprocess.run(
+        ["sh", str(meta / "restore.sh"), str(target)],
+        capture_output=True, text=True, env=env, timeout=15,
+        input="stub-pw\n",
+    )
+    assert res.returncode == 0, (
+        f"expected exit 0 with meta-toplevel one-arg call; rc={res.returncode}\n"
+        f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    )
+    assert "CORRECT_TARGET_BINARY_RAN" not in res.stdout  # stub uses ARG: form
+    args = _stub_args(res.stdout)
+    assert args, (
+        f"stub binary did not run; stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    )
+
+
+def test_auto_recovery_from_meta_toplevel_no_args(tmp_path: Path) -> None:
+    """From a meta-disc top-level layout, zero positional args should
+    auto-detect both RECOVERY and TARGET (lines 254-255, 349-351)."""
+    meta = _make_meta_top(tmp_path)
+
+    env = {
+        **os.environ,
+        "LCSAS_RELOCATED": "/fake/meta",
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+        "LCSAS_MOUNT_DIRS": "",
+    }
+    res = subprocess.run(
+        ["sh", str(meta / "restore.sh")],
+        capture_output=True, text=True, env=env, timeout=15,
+        input="stub-pw\n",
+    )
+    assert res.returncode == 0, (
+        f"expected exit 0 with meta-toplevel zero-arg call; rc={res.returncode}\n"
+        f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    )
+    args = _stub_args(res.stdout)
+    assert args, (
+        f"stub binary did not run; stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    )
+
+
+# ── add_pack_search edge cases ────────────────────────────────────────
+
+
+def _make_recovery_with_binary(tmp_path: Path) -> Path:
+    recovery = tmp_path / "recovery"
+    recovery.mkdir(exist_ok=True)
+    _install_stub_binary(recovery, HOST_TARGET, "lcsas-restore")
+    _make_repo_skeleton(recovery / "metadata", "alpha")
+    return recovery
+
+
+def test_pack_search_skips_meta_disc_path(tmp_path: Path) -> None:
+    """add_pack_search must skip paths at or under META_DISC (lines 755-756)
+    so that a single-drive user can eject the meta disc after recovery
+    starts — we cannot use the meta disc as a pack source."""
+    recovery = _make_recovery_with_binary(tmp_path)
+    mounts_root = tmp_path / "mounts"
+    # The meta-disc mount and a separate data disc share the same parent.
+    meta_mnt = mounts_root / "meta_disc"
+    data_mnt = mounts_root / "data_disc"
+    meta_mnt.mkdir(parents=True)
+    (data_mnt / "data").mkdir(parents=True)  # valid pack-search target
+
+    env = {
+        **os.environ,
+        "LCSAS_RELOCATED": str(meta_mnt),  # META_DISC = meta_mnt
+        "LCSAS_MOUNT_DIRS": str(mounts_root),
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+    }
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored"), "latest"],
+        capture_output=True, text=True, env=env, timeout=15,
+        input="stub-pw\n",
+    )
+    args = _stub_args(res.stdout)
+    pack_roots = [args[i + 1] for i, a in enumerate(args) if a == "--pack-search"]
+    assert not any(str(meta_mnt) in p for p in pack_roots), (
+        f"add_pack_search must not include the meta-disc path in --pack-search "
+        f"roots; got pack_roots={pack_roots}"
+    )
+
+
+def test_pack_search_repo_data_subdir(tmp_path: Path) -> None:
+    """add_pack_search should recognise a mount that carries packs under
+    <mount>/repo/data/ (not <mount>/data/) and add <mount>/repo as the
+    pack-search root (lines 765-766)."""
+    recovery = _make_recovery_with_binary(tmp_path)
+    mounts_root = tmp_path / "mounts"
+    disc_mnt = mounts_root / "data_disc"
+    # Pack layout with an extra repo/ prefix (used by some LCSAS export tools).
+    (disc_mnt / "repo" / "data").mkdir(parents=True)
+
+    env = {
+        **os.environ,
+        "LCSAS_RELOCATED": "/fake/meta",
+        "LCSAS_MOUNT_DIRS": str(mounts_root),
+    }
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored"), "latest"],
+        capture_output=True, text=True, env=env, timeout=15,
+        input="stub-pw\n",
+    )
+    args = _stub_args(res.stdout)
+    pack_roots = [args[i + 1] for i, a in enumerate(args) if a == "--pack-search"]
+    assert any(str(disc_mnt / "repo") == p for p in pack_roots), (
+        f"expected '{disc_mnt}/repo' in pack-search roots; got {pack_roots}"
     )
 
 

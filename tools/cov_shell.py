@@ -67,6 +67,7 @@ def executable_lines(source_path: Path) -> set[int]:
     out: set[int] = set()
     in_heredoc: str | None = None
     in_continuation = False
+    _cont_is_keyword = False   # does current continuation start with a keyword?
     heredoc_pat = re.compile(
         r"<<-?\s*['\"]?(?P<tag>[A-Za-z_][A-Za-z0-9_]*)['\"]?"
     )
@@ -79,25 +80,49 @@ def executable_lines(source_path: Path) -> set[int]:
     _struct_with_redir = re.compile(
         r"^([{}]|fi|done|esac|;;|else|then|do)\s+[\d<>&|;-]"
     )
+    # bash -x never emits a trace line for function definition headers.
+    _func_hdr = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{?\s*$")
+    # No-op case branch: ``PATTERN) ;;`` — body is empty, bash never traces it.
+    _empty_case_branch = re.compile(r".*\)\s*;;\s*$")
+    # Shell control-flow keywords: bash traces multi-line headers at the FIRST
+    # line (e.g. ``for x in \``).  Variable assignments (``VAR=...  \``) are
+    # traced at the LAST continuation line instead.  Simple commands
+    # (``printf '...' \``, ``cp ... \``) trace at the FIRST line, like keywords.
+    _shell_kw = {"for", "while", "if", "case", "until", "elif", "select"}
+    # A variable assignment: identifier immediately followed by ``=`` or ``+=``.
+    _assignment_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
     for n, raw in enumerate(source_path.read_text().splitlines(), 1):
         stripped = raw.strip()
         if in_heredoc is not None:
             if stripped == in_heredoc:
                 in_heredoc = None
             continue
-        # Bash -x does not emit a separate trace event for continuation
-        # lines (lines that follow a line ending with \).  Skip them so
-        # they don't show up as false "missed" lines in the report.
-        # Note: bash traces the FIRST line of a multi-line statement for
-        # most constructs (for/while/if headers), so those remain in the
-        # coverable set.  Single-statement continuations like multi-line
-        # variable assignments are traced at their last line; those are a
-        # known minor inaccuracy — the starting line appears "missed" even
-        # though the command ran.  Acceptable for our 75%+ gate target.
-        is_continuation = in_continuation
+        # ── Backslash-continuation handling ──────────────────────────────
+        # Keywords and simple commands: trace at FIRST line — keep as-is.
+        # Variable assignments: bash traces at LAST continuation line, so
+        # the first line is a false positive; skip it and add the last line.
+        prev_cont = in_continuation
         in_continuation = raw.rstrip().endswith("\\")
-        if is_continuation:
-            continue
+        if prev_cont:
+            if in_continuation:
+                # Middle of a continuation sequence: always skip.
+                continue
+            else:
+                # Last line of a continuation sequence.
+                if _cont_is_keyword:
+                    # Keyword/command headers: already added at first line; skip last.
+                    continue
+                # else: variable assignment — bash traces at last line; fall through.
+        elif in_continuation:
+            # First line of a new continuation sequence.
+            first_word = stripped.split()[0] if stripped.split() else ""
+            _cont_is_keyword = (first_word in _shell_kw
+                                or not _assignment_re.match(stripped))
+            if not _cont_is_keyword:
+                # Variable assignment: bash traces at LAST line, not here;
+                # skip first line to avoid false positive.
+                continue
+            # else: keyword or command — add the first line (bash traces there).
         if not stripped:
             continue
         if stripped.startswith("#"):
@@ -105,6 +130,20 @@ def executable_lines(source_path: Path) -> set[int]:
         if n == 1 and stripped.startswith("#!"):
             continue
         if stripped in structural or _struct_with_redir.match(stripped):
+            continue
+        # Function definition headers (e.g. "foo() {") are never traced by
+        # bash -x — only the body lines are.
+        if _func_hdr.match(stripped):
+            continue
+        # Bare case-pattern labels (e.g. "Linux)" or "*)" without ";;") are
+        # never traced independently — bash traces the matched body line(s).
+        if stripped.endswith(")") and ";;" not in stripped and "(" not in stripped:
+            continue
+        # One-liner case branches with empty body (e.g. ``''|*[!0-9]*) ;; ``):
+        # bash traces the ``case`` header only, never the no-op branch line.
+        # Only the no-op form ``PATTERN) ;;`` is excluded; branches with an
+        # actual body (``PATTERN)  cmd ;;``) are real executable lines.
+        if _empty_case_branch.match(stripped):
             continue
         m = heredoc_pat.search(raw)
         if m:
