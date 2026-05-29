@@ -81,7 +81,12 @@ def executable_lines(source_path: Path) -> set[int]:
         r"^([{}]|fi|done|esac|;;|else|then|do)\s+[\d<>&|;-]"
     )
     # bash -x never emits a trace line for function definition headers.
-    _func_hdr = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{?\s*$")
+    # Covers: POSIX ``name() {``, space-before-parens ``name () {``, and
+    # bash ``function name {`` / ``function name() {`` forms.
+    _func_hdr = re.compile(
+        r"^(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\(\)\s*\{?\s*$"
+        r"|^function\s+[A-Za-z_][A-Za-z0-9_]*\s*\{?\s*$"
+    )
     # No-op case branch: ``PATTERN) ;;`` — body is empty, bash never traces it.
     _empty_case_branch = re.compile(r".*\)\s*;;\s*$")
     # Shell control-flow keywords: bash traces multi-line headers at the FIRST
@@ -89,8 +94,10 @@ def executable_lines(source_path: Path) -> set[int]:
     # traced at the LAST continuation line instead.  Simple commands
     # (``printf '...' \``, ``cp ... \``) trace at the FIRST line, like keywords.
     _shell_kw = {"for", "while", "if", "case", "until", "elif", "select"}
-    # A variable assignment: identifier immediately followed by ``=`` or ``+=``.
-    _assignment_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
+    # A variable assignment: bare ``VAR=`` or prefixed ``local/export/readonly VAR=``.
+    _assignment_re = re.compile(
+        r"^(?:(?:local|export|readonly)\s+)?[A-Za-z_][A-Za-z0-9_]*\+?="
+    )
     for n, raw in enumerate(source_path.read_text().splitlines(), 1):
         stripped = raw.strip()
         if in_heredoc is not None:
