@@ -93,7 +93,11 @@ ONGOING MAINTENANCE  (monthly, or after each new disc set)
     Why: optical media fails gradually.  A disc that reads cleanly
     today may have marginal sectors that become fatal within a year.
     The DVDisaster RS03 ECC layer can recover approximately 30% of
-    unreadable sectors, but only if the disc is caught early.
+    unreadable sectors, but only if the disc is caught early.  The RS03
+    repair path itself (below-threshold repair restores byte-identical;
+    above-threshold damage fails loud rather than silently) is verified
+    against the real dvdisaster binary by
+    tests/integration/test_ecc_repair.py (opt-in: LCSAS_ECC_REPAIR=1).
     HOW OFTEN: monthly for discs less than 2 years old; weekly for
     discs older than 5 years or stored in suboptimal conditions.
 
@@ -122,7 +126,10 @@ EMERGENCY DRILL  (annually)
     it does NOT test that a human can actually boot the meta disc,
     physically swap data discs, and recover files.  A passing CI
     gate does not substitute for a real drill.  See also
-    recovery/docs/UX_CONCERNS.txt for known UX gaps.
+    recovery/docs/UX_CONCERNS.txt for known UX gaps, and
+    recovery/docs/PHYSICAL_DISC_VALIDATION.txt for the physical-media
+    burn + blind-restore + ECC-damage-and-repair runbook (the
+    hardware-only complement to the software ECC tests).
     HOW OFTEN: annually, or whenever a major recovery component
     changes (new meta disc build, new tier-1 binary, new disc set).
 
@@ -172,6 +179,8 @@ RELATED DOCUMENTS
 
   recovery/docs/RECOVER.txt            Manual restore procedure
   recovery/docs/TIERS.txt             Recovery tier rationale
+  recovery/docs/PHYSICAL_DISC_VALIDATION.txt
+                                       Physical-disc burn/restore/ECC drill
   recovery/docs/CRYPTO.txt            Encryption design
   recovery/docs/ENV_VARS.txt          Environment variable reference
   recovery/docs/BOOT.txt              Meta disc boot procedure
