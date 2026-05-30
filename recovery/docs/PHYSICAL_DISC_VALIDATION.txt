@@ -1,0 +1,140 @@
+LCSAS PHYSICAL-DISC VALIDATION -- HANDS-ON RUNBOOK
+=======================================================
+
+PURPOSE
+
+This runbook covers the parts of issue #302 that CANNOT be automated
+in CI or on a VM: proving that an LCSAS archive survives a round trip
+through REAL optical media -- a physically burned disc, read back by a
+REAL optical drive, and (for the ECC layer) recovered from PHYSICALLY
+induced damage.
+
+It is the hardware-gated complement to the automated coverage:
+
+  - tests/e2e/cdemu_blind_restore/  -- blind restore across all three
+    recovery tiers, but on a CDEmu *virtual* drive (TEST_TINY media).
+  - tests/integration/test_ecc_repair.py -- real dvdisaster RS03
+    augment -> damage -> repair, but against a FILE IMAGE (sectors
+    overwritten in the .iso on disk), not a scratched physical disc.
+
+Both prove the logic; neither proves the physical medium + drive.
+That last mile needs a human with hardware, and is recorded here.
+
+WHY THIS IS NOT AUTOMATED
+
+The build/CI host and the standard dev VM have NO physical optical
+writer.  On the dev VM, /dev/sr0 is a CDEmu virtual drive
+(Model: "CDEmu CD-ROM"), which is exactly the emulation the automated
+e2e harness already exercises.  Driving an ISO through CDEmu is NOT a
+physical-disc test -- it is the same emulation path under a different
+name.  Do not let a green CDEmu run masquerade as physical validation.
+
+  Check before claiming hardware:
+    lsscsi | grep -i 'cd/dvd'      # must NOT say "CDEmu"
+    cat /proc/sys/dev/cdrom/info   # real drive reports BD/DVD-R caps
+
+PREREQUISITES (the human running this needs)
+
+  - A real BD-R / M-DISC writer (USB or SATA) attached to a Linux host.
+  - Blank physical media: at least 2 discs of the target type
+    (BD25 or MDISC100), so the multi-copy and damage runs do not
+    consume the only copy.
+  - The repository password file used to create the archive.
+  - LCSAS installed (`make dev`) and the tier-1 binary built
+    (`make -C recovery`).
+  - cdrtools / xorriso growisofs (`xorrecord` or `growisofs`) for
+    burning; `dvdisaster` for ECC; `rustic` for the tier-2 path.
+
+PROCEDURE
+
+  Record everything in the run log (template at the end).  Convert the
+  media-size constant to your real disc before burning (do NOT burn a
+  700 MB ECC-padded TEST_TINY image to a BD25 -- size the source so the
+  augmented image fits the disc).
+
+  STEP 1 -- BUILD A REAL VOLUME
+    Run the burn pipeline against the real media type, producing an ISO
+    and its RS03-augmented .ecc image:
+
+      lcsas burn --media MDISC100 --db <catalog> ...
+      # or drive burn/orchestrator.py directly; see the cdemu harness
+      # setup.py _run_burn_pipeline() for the exact call shape.
+
+    Capture the source-file SHA-256 manifest BEFORE burning -- this is
+    the ground truth for the byte-identical comparison.
+
+  STEP 2 -- BURN TO PHYSICAL MEDIA
+    Burn the augmented image to a real disc and record the drive/media:
+
+      xorrecord -v dev=/dev/sr0 blank=as_needed <image>
+      # or: growisofs -Z /dev/sr0=<image>
+
+    Note drive model, media brand/type, and burn speed in the run log.
+
+  STEP 3 -- BLIND RESTORE FROM THE PHYSICAL DISC
+    Eject, re-insert, and restore as a naive operator would -- via the
+    bundled recovery/scripts/restore.sh cascade (tier 1 -> 2 -> 3),
+    reading from the REAL mount (e.g. /media/<label>), NOT a loopback:
+
+      mount -o ro /dev/sr0 /mnt/disc
+      recovery/scripts/restore.sh --target /tmp/restored ...
+
+    Confirm every restored file matches the STEP 1 manifest
+    byte-for-byte (sha256sum -c).  This satisfies AC #2.
+
+  STEP 4 -- PHYSICAL ECC DAMAGE + REPAIR (below threshold)
+    Physically damage a SECOND copy below the RS03 redundancy
+    threshold.  Realistic options, least to most destructive:
+      a. A fine opaque-marker scribble or small adhesive dot on the
+         data side (a few mm -- well under the redundancy %).
+      b. A shallow radial scratch.
+    Verify the drive now reports read errors:
+
+      dvdisaster -d /dev/sr0 -t        # scan medium -> reports bad sectors
+
+    Then read the damaged image off the disc and repair from ECC:
+
+      dvdisaster -d /dev/sr0 -r -i damaged.iso          # read what we can
+      dvdisaster -i damaged.iso -f                       # RS03 repair
+      # or via the wrapper: SubprocessDVDisasterRunner().repair_iso(...)
+
+    Confirm the repaired image restores byte-identical to the STEP 1
+    manifest.  This satisfies AC #3 on PHYSICAL media (the file-image
+    form is already covered by test_ecc_repair.py).
+
+  STEP 5 -- DAMAGE ABOVE THRESHOLD (fails loud)
+    Damage a THIRD copy beyond the redundancy threshold (a large
+    gouge / many sectors).  Confirm repair REPORTS FAILURE rather than
+    silently producing a partial restore:
+
+      repair_iso() must return False; restore.sh must NOT report
+      success; the operator must be told the disc is unrecoverable.
+
+    This is the physical analogue of
+    test_rs03_fails_loud_when_damage_exceeds_capacity and satisfies
+    AC #4 on physical media.
+
+ACCEPTANCE-CRITERIA MAP (issue #302)
+
+  [auto]    AC #3 below-threshold repair, byte-identical
+              -> tests/integration/test_ecc_repair.py
+                 ::test_rs03_repairs_bitrot_byte_identical
+  [auto]    AC #4 above-threshold fails loud
+              -> tests/integration/test_ecc_repair.py
+                 ::test_rs03_fails_loud_when_damage_exceeds_capacity
+  [manual]  AC #1 documented procedure   -> THIS FILE
+  [manual]  AC #2 physical blind restore -> STEP 3 (needs hardware)
+  [manual]  AC #3/#4 on PHYSICAL media   -> STEPS 4-5 (needs hardware)
+
+RUN LOG TEMPLATE (copy into tests/e2e/ when executed)
+
+  date:               ____________________
+  operator:           ____________________
+  drive model:        ____________________  (lsscsi)
+  drive firmware:     ____________________
+  media type/brand:   ____________________  (e.g. Verbatim M-DISC 100GB)
+  burn tool + speed:  ____________________
+  source manifest:    ____________________  (sha256 of sha list)
+  STEP 3 blind restore byte-identical?   [ ] yes  [ ] no  notes: ____
+  STEP 4 below-threshold repair OK?      [ ] yes  [ ] no  notes: ____
+  STEP 5 above-threshold failed loud?    [ ] yes  [ ] no  notes: ____

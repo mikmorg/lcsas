@@ -137,3 +137,59 @@ def test_rs03_repairs_bitrot_byte_identical(tmp_path: Path) -> None:
         assert recovered[name] == expected, (
             f"{name}: content not recovered byte-identical after RS03 repair"
         )
+
+
+def test_rs03_fails_loud_when_damage_exceeds_capacity(tmp_path: Path) -> None:
+    """Damage ABOVE the ECC correction capacity must fail loud — #302.
+
+    The companion test proves recoverable damage round-trips byte-identical.
+    This proves the other half of the contract: when damage exceeds what RS03
+    can correct, repair_iso() must report **failure** (return False), so the
+    recovery path (restore/executor.py:82) aborts / falls back to another disc
+    copy rather than silently proceeding with un-repaired, corrupt data.
+
+    It also real-binary-validates the unrecoverable->False branch of the #305
+    fix (repair_iso confirms via re-verify): the unit tests mock that branch;
+    here a real dvdisaster `-f` runs against a genuinely unrecoverable image.
+    """
+    runner = SubprocessDVDisasterRunner()
+
+    src = tmp_path / "src"
+    src.mkdir()
+    rng = random.Random(RNG_SEED + 1)
+    for i in range(NUM_FILES):
+        (src / f"file_{i:03d}.bin").write_bytes(
+            rng.randbytes(rng.randint(100_000, 200_000))
+        )
+
+    iso = tmp_path / "vol.iso"
+    _make_iso(src, iso)
+    runner.augment_iso(iso, redundancy_pct=REDUNDANCY_PCT)
+
+    # Obliterate the LAST 80% of the medium's sectors — far beyond any RS03
+    # redundancy. (RS03 pads a small image up to a full medium, so the
+    # configured % yields a high absolute redundancy; we damage a large
+    # fraction to exceed it unambiguously rather than tune to the exact
+    # correction threshold.)
+    #
+    # Damage the TAIL, preserving the first 20% (the ISO header + the leading
+    # RS03 ECC headers), so dvdisaster still RECOGNIZES the image as
+    # ECC-augmented and attempts — then fails — correction. Wiping from
+    # sector 0 instead destroys the ECC signature, after which dvdisaster
+    # reports "no ECC / clean" and the damage goes UNDETECTED (verify would
+    # wrongly pass). Validated empirically: tail-80% → verify False, repair
+    # False; sector-0-80% → verify True (signature gone).
+    total_sectors = iso.stat().st_size // SECTOR
+    keep = int(total_sectors * 0.2)
+    _damage_sectors(iso, n_sectors=total_sectors - keep, start_sector=keep)
+
+    # Detection still works...
+    assert runner.verify_iso(iso) is False, "verify must detect the damage"
+
+    # ...but repair must REPORT FAILURE rather than silently claim success.
+    # This is the anti-silent-restore contract: a False here is what makes the
+    # executor log "ECC repair failed" and stop trusting this disc.
+    assert runner.repair_iso(iso) is False, (
+        "repair_iso must report failure when damage exceeds ECC capacity "
+        "(no silent partial restore)"
+    )
