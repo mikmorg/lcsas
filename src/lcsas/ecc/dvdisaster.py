@@ -123,7 +123,20 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
         iso_path: Path,
         timeout: int = 3600,
     ) -> bool:
-        """Attempt to repair a damaged ISO using its embedded ECC data."""
+        """Attempt to repair a damaged ISO using its embedded ECC data.
+
+        Returns True iff the image is intact *after* the repair attempt.
+
+        dvdisaster's ``-f`` exits NONZERO (observed: 1) even when it
+        SUCCESSFULLY corrects errors — its exit code conflates "corrected
+        some errors" with "failed to correct", so it is not a reliable
+        success signal (issue #305).  Rather than reverse-engineer an
+        undocumented, version-specific exit-code matrix, we measure the
+        outcome directly: ``-f`` fixes the image in place, then we re-run
+        verification and return whether the image now passes.  This is
+        version-independent and answers the only question a caller cares
+        about — is the disc good now?
+        """
         if not iso_path.exists():
             raise FileNotFoundError(f"ISO file not found: {iso_path}")
         cmd = [
@@ -138,4 +151,11 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
             )
         except subprocess.TimeoutExpired as exc:
             self._handle_timeout("dvdisaster", "ECC repair", exc)
-        return result.returncode == 0
+        if result.returncode != 0:
+            _logger.info(
+                "dvdisaster -f exited %d for %s; confirming outcome via verify",
+                result.returncode, iso_path.name,
+            )
+        # Ground truth: the repair succeeded iff the image now verifies clean.
+        # (-f fixes in place, so this re-reads the same file -f just wrote.)
+        return self.verify_iso(iso_path, timeout=timeout)
