@@ -88,6 +88,35 @@ would silently claim success and the operator would get nothing.
 See ``RECOVER.txt`` (CASCADE DETAILS, pre-flight paragraph) for the
 operator-facing version of this note.
 
+DISC-INTEGRITY LAYER (BENEATH THE TIERS)
+
+The cascade chooses WHICH TOOL reads the bytes; it assumes the bytes
+themselves are intact.  That assumption is upheld by two independent
+guards applied before/within any tier:
+
+  * DVDisaster RS03 ECC, wrapped around every burned image, repairs
+    bit-rotted sectors back to their original bytes.
+  * The tier-1 binary then authenticates every blob (Poly1305 MAC +
+    SHA-256 content hash) and REFUSES corrupt data rather than
+    propagating it -- so disc corruption is either repaired by ECC or
+    rejected loudly, never silently restored.
+
+The RS03 repair path is validated end-to-end against the real
+dvdisaster binary by ``tests/integration/test_ecc_repair.py``
+(opt-in: ``LCSAS_ECC_REPAIR=1 pytest ... -m integration``):
+
+  * test_rs03_repairs_bitrot_byte_identical -- augment an image with
+    RS03 ECC, overwrite data sectors (simulated bit-rot), repair, and
+    confirm every file extracts byte-for-byte identical.
+  * test_rs03_fails_loud_when_damage_exceeds_capacity -- damage beyond
+    the ECC correction capacity makes repair REPORT FAILURE (no silent
+    partial restore), so recovery aborts instead of trusting an
+    un-repairable disc.
+
+The physical-media half (a real burned disc read by a real optical
+drive, with physically induced damage) is hardware-gated and specified
+in ``recovery/docs/PHYSICAL_DISC_VALIDATION.txt``.
+
 TIER FALLBACK ON RUNTIME FAILURES
 
 The default cascade ``exec``s the first available tier, so a tier-1
