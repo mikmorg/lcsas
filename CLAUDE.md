@@ -89,6 +89,8 @@ The recovery tiers are documented in `recovery/docs/TIERS.txt` and dispatched by
 
 **Intent:** the bare path (tier 1) must work with nothing but kernel + libc + the `lcsas-restore` binary off the meta-volume. No `pip install`, no package manager, no upstream release matrix that still needs to exist decades from now. Cross-platform tier-1 coverage as of Phase 21.12: all 6 approved targets — Linux x86_64/aarch64/armv7 musl, Windows-gnu, macOS Intel + Apple Silicon (the macOS pair via `zig cc -target <arch>-macos`, no Apple SDK required). See `docs/CROSS_PLATFORM_META_RFC.md` §6 Q6.
 
+**Disc-integrity layer (beneath the cascade):** the tiers choose *which tool* reads the bytes; two guards keep the bytes themselves intact. DVDisaster RS03 ECC (wrapped around every burned image) repairs bit-rotted sectors, and tier-1 then authenticates every blob (Poly1305 MAC + SHA-256 content hash) and *rejects* corrupt data — so disc corruption is repaired-or-rejected, never silently restored. The RS03 repair path is validated against the real dvdisaster binary by `tests/integration/test_ecc_repair.py` (opt-in `LCSAS_ECC_REPAIR=1`: below-threshold damage → byte-identical repair; above-threshold → fails loud). The hardware-only physical-disc drill is `recovery/docs/PHYSICAL_DISC_VALIDATION.txt`. See `recovery/docs/TIERS.txt` "DISC-INTEGRITY LAYER".
+
 ### Database schema
 
 Schema version 5. Key tables: `repositories`, `packs`, `volumes`, `volume_packs` (M:M), `snapshots`, `locations`, `volume_copies`, `sessions`, `volume_events` (audit trail). Volume lifecycle: `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED`.
