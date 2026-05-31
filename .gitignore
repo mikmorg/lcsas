@@ -50,3 +50,7 @@ lcsas-test
 
 # Claude Code worker worktrees (local scratch only)
 .claude/worktrees/
+
+# SQLite in-memory sentinel — never a real file
+:memory:
+:memory:.lock

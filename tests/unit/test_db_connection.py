@@ -21,6 +21,20 @@ class TestGetConnection:
         conn.close()
         assert db.exists()
 
+    def test_memory_sentinel_creates_no_file(self, tmp_path, monkeypatch):
+        """get_connection(':memory:') opens an in-memory DB without creating
+        a junk file literally named ':memory:' in the cwd (regression)."""
+        monkeypatch.chdir(tmp_path)
+        conn = get_connection(":memory:")
+        try:
+            conn.execute("CREATE TABLE t (x INTEGER)")
+            conn.execute("INSERT INTO t VALUES (1)")
+            assert conn.execute("SELECT x FROM t").fetchone()[0] == 1
+        finally:
+            conn.close()
+        assert not (tmp_path / ":memory:").exists()
+        assert list(tmp_path.iterdir()) == [], "in-memory connection left files"
+
     def test_db_file_permissions(self, tmp_path):
         """DB file must be owner-readable only (mode 0o600)."""
         db = tmp_path / "secure.db"

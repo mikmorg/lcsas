@@ -21,14 +21,20 @@ def get_connection(db_path: Path | str) -> sqlite3.Connection:
     by using ``os.open()`` with ``O_CREAT | O_EXCL`` so the file is
     never world-readable even for an instant.
     """
-    db = Path(db_path)
-    db.parent.mkdir(parents=True, exist_ok=True)
-    # Atomically create the file with restricted permissions so there is
-    # no window where it is readable by other users (TOCTOU-safe).
-    if not db.exists():
-        fd = os.open(str(db), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.close(fd)
-    conn = sqlite3.connect(str(db_path))
+    db_str = str(db_path)
+    # The in-memory sentinel is NOT a filesystem path: Path(":memory:") plus
+    # os.open(O_CREAT) below would create a junk file literally named
+    # ":memory:" in the cwd (and locked_connection would add ":memory:.lock").
+    # Skip the filesystem setup and connect in-memory directly.
+    if db_str != ":memory:":
+        db = Path(db_path)
+        db.parent.mkdir(parents=True, exist_ok=True)
+        # Atomically create the file with restricted permissions so there is
+        # no window where it is readable by other users (TOCTOU-safe).
+        if not db.exists():
+            fd = os.open(str(db), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(fd)
+    conn = sqlite3.connect(db_str)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA wal_autocheckpoint=1000;")  # explicit: checkpoint every 1000 pages
