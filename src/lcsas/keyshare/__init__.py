@@ -15,6 +15,7 @@ Public API:
 
 from __future__ import annotations
 
+from .codec import decode_master_secret, encode_master_secret
 from .slip39 import (
     KeyShareError,
     combine_mnemonics,
@@ -26,6 +27,8 @@ from .slip39 import (
 __all__ = [
     "KeyShareError",
     "combine_mnemonics",
+    "decode_master_secret",
+    "encode_master_secret",
     "generate_mnemonics",
     "recover_secret",
     "split_secret",

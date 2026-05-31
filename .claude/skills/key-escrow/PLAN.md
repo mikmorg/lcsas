@@ -44,11 +44,11 @@ same durability contract as `lcsas-restore` (tier 1).
 
 ## Phase 1 — CLI & share artifacts
 
-- [ ] **K1.1** `lcsas key split --repo R --threshold K --shares N` (default 2-of-5): read repo password, emit N share files + printable plain-language **share cards** (txt: share text, index, K, "you need any K", who-else-holds-one hint). deps: K0.2
-- [ ] **K1.2** `lcsas key combine [shares...]` → reconstruct password to stdout/file; `<K` shares → clear actionable error; corrupted share → named failure. deps: K0.2
-- [ ] **K1.3** Config fields `key_threshold` / `key_shares` on `LCSASConfig`; wire defaults. deps: K1.1
-- [ ] **K1.4** CLI unit tests (happy path, under-threshold, corrupted, wrong-set) — **100% cov on the new cli/key code.** deps: K1.1, K1.2
-- **GATE 1→2:** CLI round-trips a real rustic password end-to-end; coverage green. *Halt.*
+- [x] **K1.1** `lcsas key split` (default 2-of-5): reads repo password, writes per-share mnemonic + plain-language card files (all mode 0600), security warning to stderr, password never printed. deps: K0.2
+- [x] **K1.2** `lcsas key combine` → reconstruct from ≥K shares (files or stdin) to stdout/`--out`; `<K`/corrupted/foreign → clear error, **exit non-zero**. deps: K0.2
+- [x] **K1.3** Config `key_threshold` / `key_shares` (default 2/5) on `LCSASConfig` + TOML parse. deps: K1.1
+- [x] **K1.4** CLI tests (round-trip, under-threshold, corrupted, foreign, perms, config override) + codec tests — **100% on new code (codec 18/18; key handlers fully covered)**. deps: K1.1, K1.2
+- **GATE 1→2:** ✅ real password round-trips end-to-end via the CLI; coverage green. *(Also fixed a pre-existing bug: `python -m lcsas` swallowed exit codes — `__main__.py` now `sys.exit(main())`, with a regression test.)* *Awaiting "merge #N".*
 
 ## Phase 2 — Recovery-path integration (zero-dep, production)
 

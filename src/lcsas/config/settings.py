@@ -41,6 +41,12 @@ class LCSASConfig:
     # Metadata overhead reserved during bin packing (bytes)
     metadata_reserve_bytes: int = 104_857_600  # 100 MB
 
+    # ── Key escrow (Shamir / SLIP-0039) defaults ─────────────────
+    # Default K-of-N split parameters for `lcsas key split`.  Bias toward
+    # recoverability (a backup's dominant risk is loss, not theft).
+    key_threshold: int = 2          # K: shares needed to reconstruct
+    key_shares: int = 5             # N: total shares produced
+
     # Repository definitions (populated from config file)
     repositories: dict[str, RepositoryConfig] = field(default_factory=dict)
 
@@ -83,6 +89,7 @@ def _validate_toml_keys(raw: dict[str, Any]) -> None:
     known_defaults = {
         "media_type", "ecc_redundancy_pct", "location",
         "optical_device", "label_prefix", "metadata_reserve_mb",
+        "key_threshold", "key_shares",
     }
     known_survive = {
         "archive_owner", "archive_description",
@@ -232,6 +239,8 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         optical_device=defaults.get("optical_device", "/dev/sr0"),
         label_prefix=defaults.get("label_prefix", "LCSAS"),
         metadata_reserve_bytes=defaults.get("metadata_reserve_mb", 100) * 1_048_576,
+        key_threshold=defaults.get("key_threshold", 2),
+        key_shares=defaults.get("key_shares", 5),
         repositories=repos,
         archive_owner=survive.get("archive_owner", ""),
         archive_description=survive.get("archive_description", ""),
