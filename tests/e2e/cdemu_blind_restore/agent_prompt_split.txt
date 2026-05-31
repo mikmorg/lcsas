@@ -1,0 +1,273 @@
+You are recovering data after a disaster.  Your job:
+
+  Restore every file that the "alpha" repository had backed up
+  into ~/restored/ and then say: RESTORE COMPLETE
+
+Your encryption key is split into 5 share cards:
+~/alpha-share-1.txt … ~/alpha-share-5.txt.  You need any 2 of
+them.  You have NO ~/tenant-alpha.pw — you must reconstruct the
+password from the cards before you can restore (see Step 2 below).
+
+QUICK REFERENCE — complete command sequence (do exactly this)
+=============================================================
+
+  Step 1 — insert and mount the META disc:
+    disc-loader insert LCSAS_META
+    sudo mount /dev/sr0 /mnt
+
+  Step 2 — reconstruct the password from any 2 share cards:
+    python3 /mnt/keyshare_combine.py ~/alpha-share-1.txt ~/alpha-share-2.txt > ~/alpha.pw
+
+    This writes the recovered password to ~/alpha.pw (raw bytes,
+    no trailing newline).  keyshare_combine.py is a Python program
+    you RUN with python3 — do NOT cat it or read it.  Any 2 of the
+    5 cards work; cards 1 and 2 are fine.  This is a PRE-STEP, not
+    a restore — running it is allowed and required.
+
+  Step 3 — start restore.sh inside the restore-shell facade:
+    restore-shell start sh /mnt/restore.sh ~/restored/ latest
+
+    `restore-shell` is a wrapper that runs the recovery process in
+    a managed tmux session (test-rig workaround — real operators run
+    restore.sh directly in one terminal; see the NOTE below).
+    You DO NOT need to know tmux.  Every
+    interaction is one command:
+
+      restore-shell expect REGEX [SECS]   wait for prompt, print pane
+      restore-shell send TEXT             type TEXT + ENTER
+      restore-shell send-raw TEXT         type TEXT (no ENTER)
+      restore-shell screen                show current pane
+      restore-shell quit                  shut it down
+
+    `expect` polls once per second, exits 0 on match, 1 on timeout
+    (default 60 s), 2 if the session died unexpectedly.  Pass a
+    regex that matches any of the next interesting states.
+
+  Step 4 — answer the prompts:
+
+    # A multi-tenant archive asks `Choose a repository` first; a
+    # single-tenant archive skips straight to `Password:`.  Wait on
+    # either, branch on which one matched.
+    out=$(restore-shell expect 'Choose a repository|Password:' 60)
+    case "$out" in
+        *"Choose a repository"*)
+            restore-shell send alpha
+            restore-shell expect 'Password:'
+            ;;
+    esac
+    restore-shell send "$(cat ~/alpha.pw)"
+
+  Step 5 — disc-swap LOOP (repeat until RESTORE COMPLETE):
+    Each swap prompt shows a pack hash, not a disc label.  Insert
+    the next unused data disc at /media, then send ENTER in the
+    restore-shell session.
+
+    Use a bounded loop (cap at 40 swaps).  The `|| break` exits
+    immediately when the session ends so no sleep orphan is left.
+    Cycle through ~/disc-labels.txt (skipping LCSAS_META) so each
+    swap inserts the next disc rather than repeating the same one.
+
+      DATA_DISCS=( $(grep -v '^LCSAS_META$' ~/disc-labels.txt) )
+      disc_idx=0
+      for _ in $(seq 1 40); do
+          out=$(restore-shell expect 'Insert the right disc|restore complete' 120) || break
+          case "$out" in
+              *"restore complete"*) echo "RESTORE COMPLETE"; break ;;
+              *"Insert the right"*) ;;  # fall through to swap
+          esac
+
+          sudo umount /media 2>/dev/null
+          disc-loader insert "${DATA_DISCS[$disc_idx]}"
+          disc_idx=$(( (disc_idx + 1) % ${#DATA_DISCS[@]} ))
+          sudo mount /dev/sr0 /media
+          restore-shell send ""
+      done
+
+    Mount data discs at /media, NOT /mnt.  The recovery binary
+    received `--meta-disc /mnt` at startup and refuses to consider
+    paths under /mnt as a pack source — that slot is "the meta
+    disc" until you eject it AND the binary's live-check fails.
+    Always use /media for data discs.
+
+    Repeat the expect → swap → send pattern for each prompt (3-4
+    discs total).  NEVER run lcsas-restore directly.
+
+  Step 6 — when "RESTORE COMPLETE" appears:
+    print exactly: RESTORE COMPLETE
+
+DO NOT deviate from these steps.  Do NOT explore before starting.
+DO NOT cat any script file (*.sh, *.py, *.bat, *.c, *.h).
+DO NOT run lcsas-restore directly.  Start restore-shell within your
+first 4 Bash calls (after mounting meta and reconstructing the key).
+
+You are sitting in front of a single optical drive at /dev/sr0
+with a stack of labelled discs next to you.  You have:
+
+  - A "disc-loader" robot in PATH (a setuid wrapper around your
+    optical drive):
+      disc-loader list            (show all discs you have)
+      disc-loader status          (what's in the drive)
+      disc-loader insert <label>  (swap in a labelled disc)
+      disc-loader eject
+  - ~/disc-labels.txt           — labels of every disc you own.
+  - ~/alpha-share-1.txt … ~/alpha-share-5.txt — the 5 SLIP-0039
+    share cards for repo alpha's encryption key.  Any 2 of them
+    reconstruct the password.  You have NO plaintext password file.
+  - sudo for mount/umount of /dev/sr0 (sudoers is locked down).
+
+You have been told one thing: insert the disc labelled LCSAS_META
+first and follow the instructions you find on it.
+
+HOW TO RUN THE INTERACTIVE RECOVERY SCRIPT
+==========================================
+
+NOTE — restore-shell IS A TEST-HARNESS WORKAROUND
+--------------------------------------------------------------------------
+You (the test agent) drive restore.sh via the Bash tool, which is
+one-shot: it cannot hold an interactive process open across tool calls.
+restore-shell bridges that gap — it runs the recovery script in a
+managed tmux session under the hood, exposing a single command per
+agent action (start, expect, send, screen, quit).
+
+A REAL OPERATOR at a single terminal does NOT use restore-shell.  They
+run:
+
+    sh /mnt/recovery/scripts/restore.sh ~/restored/
+
+…and the script prompts them interactively in the same terminal.  Disc
+swaps are handled by physically ejecting and inserting the optical medium
+when prompted.  See recovery/docs/RECOVER.txt for the complete real-
+operator flow (section "PHYSICAL SWAP STEPS").
+
+The instructions below therefore describe the TEST-RIG pattern, not the
+canonical operator procedure.
+--------------------------------------------------------------------------
+
+The meta disc's recovery script (restore.sh) is INTERACTIVE: it
+prompts for the encryption password on the terminal and pauses
+when the next disc is needed.  As a test agent whose Bash tool is
+one-shot, the `restore-shell` wrapper hosts a persistent terminal
+session for you.  Typical pattern:
+
+  # start the script
+  restore-shell start sh /mnt/restore.sh ~/restored/ latest
+  # wait for a prompt
+  restore-shell expect 'Choose a repository'
+  # respond
+  restore-shell send alpha
+
+restore.sh asks up to three things via its terminal:
+
+  1. `Choose a repository (number or name):` — multi-tenant archives
+     list the available tenant names.  Send `alpha` (the only tenant
+     you have the key shares for).  Single-tenant archives skip this.
+  2. `Password:` — send the contents of ~/alpha.pw (the password you
+     reconstructed from the share cards in Step 2).  Do NOT pipe the
+     password through stdin.  Do NOT set LCSAS_PASSWORD or
+     LCSAS_PWFILE.  Type it through the terminal as a human would:
+     `restore-shell send "$(cat ~/alpha.pw)"`.
+  3. A disc-swap box — the recovery binary could not find a
+     required pack and prints a framed prompt containing the line
+     `Insert the right disc and press ENTER to retry.`  Swap the
+     disc, then `restore-shell send ""` to press ENTER.
+
+WHAT YOU MAY NOT DO
+===================
+
+  - You may not run restore-auto.sh, restore_legacy.sh,
+    restore_c89.sh, restore.bat, or standalone_restorer.py
+    directly.  Only restore.sh.  (restore.sh itself may exec
+    whichever tier is appropriate — that is fine.)  The ONE
+    exception is the key-share PRE-STEP in Step 2:
+    `python3 /mnt/keyshare_combine.py …` is allowed and required
+    — it reconstructs your password, it does not run a restore.
+  - You may not invoke rustic, rustic-static, lcsas-restore, or
+    restic as a recovery driver.  restore.sh is the only allowed
+    entry point.  (Probing one with `--version` is OK; running a
+    restore through it is not.)
+  - You may not author wrapper scripts to work around production
+    bugs.  No `cat > /tmp/anything.sh`, no `chmod +x` on files
+    you wrote, no shimming `python3` to inject missing args.  If
+    `restore.sh` fails, capture its error output, print it, and
+    say `RESTORE FAILED: <reason>`.  Do NOT improvise — a real
+    human-in-chair cannot write code to patch broken tooling.
+  - You may not read any script file.  No cat, head, tail, less,
+    more, sed, awk, grep, strings, od, xxd, view, vi, vim, or
+    nano against any *.sh, *.py, *.bat, *.c, or *.h file —
+    including keyshare_combine.py.  You RUN it with python3 (as in
+    Step 2); you never inspect it.  Read the markdown / text
+    READMEs and the *.json / *.txt config files; execute scripts;
+    never inspect them.
+
+IF THE SCRIPT FAILS
+===================
+
+If `restore.sh` exits non-zero, prints an error, or doesn't
+populate ~/restored/, capture what it told you and report a
+failure — exactly like a real operator filing a bug report.  The
+correct response is `RESTORE FAILED: <captured error>`, not a
+sequence of workarounds.  Restoration via the production script,
+or no restoration at all.
+
+WHAT TO EXPECT FROM LCSAS-RESTORE
+==================================
+
+lcsas-restore writes progress and status lines to stderr.  The
+restore-shell session merges stdout and stderr, so you will see
+them interleaved with normal output.
+
+  Progress lines (periodic):
+      [lcsas-restore] progress: N/M blobs, X MB
+      The denominator M is the full index size, so it is an
+      upper bound; the real snapshot subset may be smaller.
+      The first progress line is emitted at 0/M before any
+      disc is read.  Do NOT treat silence for up to 60 seconds
+      as a hang — slow optical drives can take that long between
+      progress lines.
+
+  Disc-swap prompt (when a pack is not on any currently mounted disc):
+      lcsas-restore prints a framed ASCII box to stderr ending with:
+          Insert the right disc and press ENTER to retry.
+          Type 'q' then ENTER to abort.
+      Use `disc-loader insert <label>` to load the disc, then
+      send ENTER: `restore-shell send ""`.
+      The binary re-enumerates mounted discs after each ENTER, so
+      the newly mounted disc is found automatically.  You do NOT
+      need to pass any path to the binary.
+      For an N-data-disc archive expect at least N swap prompts minimum
+      even with the pack cache (the cache eliminates repeat visits, not
+      first contacts).
+
+  Completion:
+      [lcsas-restore] restore complete
+      [lcsas-restore] N disc swap(s) handled during restore
+
+  Abort:
+      If you type 'q' at the disc-swap prompt, lcsas-restore
+      exits non-zero.  treat that as RESTORE FAILED.
+
+USEFUL ENV VARS
+===============
+
+LCSAS_PACK_CACHE_DIR=auto
+    Set automatically by restore.sh when a writable /tmp exists.
+    Causes lcsas-restore to copy pack files into a local cache dir
+    as they are read from disc, so subsequent disc swaps for the
+    same packs can be served from cache.  The v3 blind run showed
+    this reduces disc swaps by 3-16x.  Do NOT unset this unless
+    debugging a cache bug.
+
+LCSAS_TIER_FALLBACK=1
+    If set, restore.sh will try tier 2 (rustic-static) if tier 1
+    (lcsas-restore) crashes.  Default OFF.  Set it if you suspect
+    a tier-1 binary bug and need to verify data is recoverable.
+
+LCSAS_REPO=<path>
+    Skip the multi-tenant selection prompt and use this repo
+    directory directly.  Useful when you already know the repo.
+
+LCSAS_ALLOW_NO_PACK_SEARCH=1
+    Bypass the hard-error when no data discs are detected on mount.
+    Use only if you've pre-staged pack files manually.
+
+Begin.
