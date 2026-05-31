@@ -34,6 +34,12 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# Bundle the official SLIP-0039 wordlist with the keyshare package so the
+# combiner works from an installed wheel / sdist (loaded via importlib path at
+# runtime).  Critical for the meta-volume standalone combiner (Phase 2 K2.1).
+"lcsas.keyshare" = ["wordlist.txt"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
