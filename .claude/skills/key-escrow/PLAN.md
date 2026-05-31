@@ -77,6 +77,17 @@ same durability contract as `lcsas-restore` (tier 1).
 
 ---
 
+## Phase 5 — C combiner (make split-key fully python-free)
+
+Goal: a tier-1-grade C89 `lcsas-keyshare` combiner so split-key reconstruction needs no python3 — closing the documented trade-off. Oracle = the 45 official SLIP-0039 vectors AND byte-match vs the Python `recover_secret`+`decode_master_secret`.
+
+- [x] **C5.1** `recovery/src/lcsas-keyshare/` C89 combiner (slip39.c/h + main.c) — RS1024/GF(256)/Feistel/HMAC-digest/codec, reuses sha256/pbkdf2/hmac/hex. Builds warning-clean (the only build warnings are pre-existing in untouched lcsas-restore/iso9660). deps: Phase 0–2
+- [x] **C5.2** `recovery/tests/test_keyshare.c` (+ embedded vectors header) wired into recovery `Makefile` `all:`+`test`. **45/45 official vectors**; lead independently cross-checked C vs Python byte-exact on fresh random passwords (4/4, incl. binary/16-byte-min/40-byte); under-threshold fails loud. deps: C5.1
+- [~] **C5.3** ASan/UBSan **clean** (lead re-ran). Test exercises 15 valid + 30 invalid vectors (error paths) + codec edges. Full coverage-c/EXEMPTIONS/fuzz integration of the new dir = documented follow-up (the coverage tooling is currently lcsas-restore-scoped). deps: C5.2
+- [x] **C5.4** Static-musl `lcsas-keyshare` (zig cc, statically linked like the other tier-1 bins) placed at `recovery/bin/x86_64/lcsas-keyshare` → auto-shipped (the meta builder `copytree`s the whole `recovery/` tree; on-disc `/mnt/recovery/bin/x86_64/lcsas-keyshare`). `agent_prompt_split.txt` Step 2 now uses the C combiner (python fallback). Not in MANIFEST (git-pinned, like lcsas-restore). Cross-arch static builds = same follow-up as the existing cross-arch tier-1 bins. deps: C5.1
+- [x] **C5.5** `split-key-2of5` blind run → **15/15** with the transcript showing the heir used `lcsas-keyshare` (C binary) ×2 and `keyshare_combine.py` ×0 — **python-free reconstruction proven end-to-end**. deps: C5.4
+- **GATE 5 = DONE ✅:** C combiner passes 45/45 vectors + byte-exact Python cross-check + ASan/UBSan clean; static binary bundled; blind split-key **15/15 via the C path, no python**. Split-key recovery now needs only kernel + libc + the static binary.
+
 ## Coverage gates (every phase must keep these green before its PR)
 - `make coverage` — new Python at 100% line cov, `--cov-report=term-missing` shows no misses in `keyshare/` or `cli/key`.
 - `make typecheck` (mypy strict) + `make lint` (ruff) clean.
@@ -89,3 +100,4 @@ same durability contract as `lcsas-restore` (tier 1).
 - 2026-05-31 · Phase 2 (K2.1–K2.4) · feat/keyshare-recovery-integration · PR #313 · combiner 100% (46/46) · clean-machine reconstruction verified
 - 2026-05-31 · Phase 3 (K3.1–K3.3) · feat/keyshare-blind-variants · PR #314 · verify.sh untouched · both variants 15/15 (accidental + deliberate)
 - 2026-05-31 · Phase 4 (K4.1–K4.3) · BLIND GATE · — · single-key 15/15 ×2; split-key-2of5 15/15 ×2 · /key-escrow COMPLETE
+- 2026-05-31 · Phase 5 (C5.1–C5.5) · feat/keyshare-c-combiner · PR #__ · C89 lcsas-keyshare: 45/45 vectors + Python byte-match + ASan clean; static bin bundled; blind split-key 15/15 via C path (python-free) · split-key now bare-path (kernel+libc only)
