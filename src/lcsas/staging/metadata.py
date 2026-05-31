@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import textwrap
 from collections.abc import Sequence
@@ -34,6 +35,50 @@ _METADATA_FILES = ["config"]
 # this much in ``metadata_reserve_bytes`` or the staging directory will
 # overflow capacity.  Bump if the injector grows.
 MIN_HOLOGRAPHIC_RESERVE_BYTES = 700_000
+
+
+def _share_recovery_lines(config: LCSASConfig) -> list[str]:
+    """Plain-language split-key recovery steps for the heir.
+
+    Only emitted when ``config.key_split`` is set (i.e. this archive's
+    password was actually split into shares).  Names the K/N in effect
+    and points at the standalone combiner pre-step bundled on the
+    meta-volume.
+    """
+    k = config.key_threshold
+    n = config.key_shares
+    return [
+        "SPLIT KEY — YOUR PASSWORD IS IN SHARE CARDS",
+        "-------------------------------------------",
+        f"This archive's password is SPLIT into {n} share cards.  You need",
+        f"any {k} of them.  Fewer than {k} cards reveal nothing.",
+        "",
+        "Reconstruct the password in TWO steps:",
+        "",
+        f"  STEP 1 (pre-step): gather any {k} share cards, then run the",
+        "  combiner from the META-VOLUME disc to print the password:",
+        "",
+        "      python3 keyshare_combine.py <card1> <card2>",
+        "",
+        f"  (pass any {k} card files; or pipe the share words on stdin).",
+        "  It prints the password and nothing else.  Save it, e.g.:",
+        "",
+        "      python3 keyshare_combine.py <card1> <card2> > repo.key",
+        "",
+        "  STEP 2: run the normal restore and use that password:",
+        "",
+        "      ./restore.sh --target ~/restored",
+        "",
+        "  When restore.sh shows the  Password:  prompt, type the password",
+        "  from STEP 1 (or pass the saved file with --key repo.key).",
+        "",
+        "  The single-key restore flow is UNCHANGED — the only extra work",
+        "  is the STEP 1 pre-step that turns your share cards back into the",
+        "  password.",
+        "",
+        "  Format + re-implementation details: docs/KEY_SHARE_FORMAT.md.",
+        "",
+    ]
 
 
 class HolographicInjector:
@@ -298,6 +343,38 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
             repo_names = ", ".join(sorted(config.repositories.keys()))
             repo_lines = f"\n  Repositories on these discs: {repo_names}\n"
 
+        # Split-key archives need an extra "reconstruct the password first"
+        # pre-step.  Single-key archives must NOT show share instructions.
+        split_block = ""
+        if config.key_split:
+            k = config.key_threshold
+            n = config.key_shares
+            split_block = textwrap.dedent(f"""\
+
+                YOUR PASSWORD IS SPLIT INTO {n} SHARE CARDS
+                -------------------------------------------
+
+                  The password for this archive was split into {n} share
+                  cards.  You need ANY {k} of them.  Before you can restore,
+                  you must FIRST rebuild the password from the cards:
+
+                    STEP 1: gather any {k} share cards.  On the META disc, run:
+
+                        python3 keyshare_combine.py <card1> <card2>
+
+                      (pass any {k} card files).  It prints the password.
+
+                    STEP 2: run the normal restore and enter that password
+                      at the  Password:  prompt:
+
+                        ./restore.sh --target ~/restored
+
+                  Fewer than {k} cards reveal nothing.  Details are in
+                  KEY_INFO.txt and docs/KEY_SHARE_FORMAT.md.
+                """)
+            # Indent to match the surrounding START_HERE section headers.
+            split_block = textwrap.indent(split_block, "          ")
+
         text = textwrap.dedent(f"""\
             ╔══════════════════════════════════════════════════════════╗
             ║                    START HERE                           ║
@@ -311,6 +388,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
 
               Contents: {description}
             {repo_lines}
+            {{SPLIT_BLOCK}}
             HOW TO GET YOUR FILES BACK
             --------------------------
 
@@ -356,6 +434,15 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
               - Blu-ray discs (especially M-Disc) can last 100+ years
                 with proper storage.
         """)
+        # Drop the entire placeholder line (incl. any leading indent that
+        # textwrap.dedent left behind) and substitute the (possibly empty)
+        # zero-indented split block in its place.
+        text = re.sub(
+            r"^[ \t]*\{SPLIT_BLOCK\}\n",
+            lambda _m: split_block,
+            text,
+            flags=re.MULTILINE,
+        )
 
         path = self._root / "START_HERE.txt"
         with open(path, "w", encoding="utf-8") as f:
@@ -404,6 +491,9 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
         lines.append("If you have only one key file, it likely works for all")
         lines.append("repositories (common setup).")
         lines.append("")
+
+        if config.key_split:
+            lines.extend(_share_recovery_lines(config))
 
         path = self._root / "KEY_INFO.txt"
         with open(path, "w", encoding="utf-8") as f:

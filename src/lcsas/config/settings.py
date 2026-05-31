@@ -46,6 +46,10 @@ class LCSASConfig:
     # recoverability (a backup's dominant risk is loss, not theft).
     key_threshold: int = 2          # K: shares needed to reconstruct
     key_shares: int = 5             # N: total shares produced
+    # Whether THIS archive's password is actually split into shares.  Gates
+    # the heir-facing share-recovery instructions (KEY_INFO / START_HERE):
+    # K/N always carry defaults, so they alone don't indicate a real split.
+    key_split: bool = False
 
     # Repository definitions (populated from config file)
     repositories: dict[str, RepositoryConfig] = field(default_factory=dict)
@@ -89,7 +93,7 @@ def _validate_toml_keys(raw: dict[str, Any]) -> None:
     known_defaults = {
         "media_type", "ecc_redundancy_pct", "location",
         "optical_device", "label_prefix", "metadata_reserve_mb",
-        "key_threshold", "key_shares",
+        "key_threshold", "key_shares", "key_split",
     }
     known_survive = {
         "archive_owner", "archive_description",
@@ -241,6 +245,7 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         metadata_reserve_bytes=defaults.get("metadata_reserve_mb", 100) * 1_048_576,
         key_threshold=defaults.get("key_threshold", 2),
         key_shares=defaults.get("key_shares", 5),
+        key_split=bool(defaults.get("key_split", False)),
         repositories=repos,
         archive_owner=survive.get("archive_owner", ""),
         archive_description=survive.get("archive_description", ""),

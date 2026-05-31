@@ -52,11 +52,11 @@ same durability contract as `lcsas-restore` (tier 1).
 
 ## Phase 2 — Recovery-path integration (zero-dep, production)
 
-- [ ] **K2.1** Bundle the pure-Python combiner + spec on the meta-volume via `meta/bundler.py`; pin in `recovery/MANIFEST.sha256`. (Optional **K2.1c**: C combiner → must pass `make audit-gate`.) deps: K0.2, K0.4
-- [ ] **K2.2** `recovery/scripts/restore.sh` share branch: detect share-based recovery, prompt "Do you have key shares? Enter any K" → reconstruct via bundled combiner → feed the password to the existing flow. **Single-key path stays byte-for-byte unchanged** (no shares → today's `Password:` prompt). deps: K2.1
-- [ ] **K2.3** Heir docs: `START_HERE.txt` / `KEY_INFO.txt` / `docs/ESTATE_PLANNING.md` — plain-language share-gathering steps + letter-to-heirs template naming holders/locations. deps: K2.2
-- [ ] **K2.4** Coverage: restore.sh share branch covered under `make shell-coverage`; C combiner (if built) green under `make audit-gate`. Non-blind integration test of the share branch in `tests/recovery_hardening/`. deps: K2.2
-- **GATE 2→3:** share branch works in a non-blind integration test; shell (+C) coverage green. *Halt.*
+- [x] **K2.1** Standalone `src/lcsas/meta/keyshare_combine.py` shipped at meta-volume root + `lcsas.keyshare` package (incl. wordlist) bundled via `bundle_python_package`. Imports ONLY keyshare, so reconstruction survives a broken LCSAS. MANIFEST: combiner/wordlist live in `src/` and are copied at build time like `standalone_restorer.py` (the `recovery/`-rooted MANIFEST intentionally doesn't pin them; git-pinned + 45-vector guarded; documented in `_bundle_keyshare_combiner`). C combiner deferred (documented future enhancement). deps: K0.2, K0.4
+- [x] **K2.2** **Design change (lead, per standing authorization): reconstruct-then-restore PRE-STEP, restore.sh byte-for-byte UNCHANGED** (lowest risk to the recovery-critical script; single-key path provably untouched). Heir runs `python3 keyshare_combine.py <K cards>` → password → normal `restore.sh` `Password:` flow. deps: K2.1
+- [x] **K2.3** Heir docs gated on `config.key_split`: `KEY_INFO.txt`/`START_HERE` (`staging/metadata.py`) + `docs/ESTATE_PLANNING.md` show the two-step share recovery with K/N; single-key archives show none of it. deps: K2.2
+- [x] **K2.4** 100% cov on `keyshare_combine.py` (46/46) + bundler/builder/settings/metadata new lines; independent clean-machine (`env -i`, bundled-layout) reconstruction verified by lead; restore.sh unchanged so `make shell-coverage` unaffected. deps: K2.2
+- **GATE 2→3:** ✅ standalone combiner reconstructs on a clean machine; coverage green; restore.sh untouched. *(Self-merge per authorization.)*
 
 ## Phase 3 — Blind-test variants (build the acceptance harness)
 
