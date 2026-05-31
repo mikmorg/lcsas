@@ -475,6 +475,54 @@ def build_parser() -> argparse.ArgumentParser:
         help="Verify reproducible build: builds twice, byte-compares output.",
     )
 
+    # --- key (Shamir / SLIP-0039 key escrow) ---
+    key_p = subparsers.add_parser(
+        "key",
+        help="Split / combine a repo password into SLIP-0039 key shares.",
+    )
+    key_sub = key_p.add_subparsers(dest="key_command")
+
+    key_split = key_sub.add_parser(
+        "split",
+        help="Split a repo password into K-of-N recoverable key shares.",
+    )
+    key_split.add_argument(
+        "--repo", required=True,
+        help="Repository name whose password to split.",
+    )
+    key_split.add_argument(
+        "--threshold", "-k", type=int, default=None,
+        help="K: shares required to reconstruct (default: config key_threshold).",
+    )
+    key_split.add_argument(
+        "--shares", "-n", type=int, default=None,
+        help="N: total shares to produce (default: config key_shares).",
+    )
+    key_split.add_argument(
+        "--password-file", type=Path, default=None,
+        help="Read the password from this file instead of the repo's "
+             "configured password_file.",
+    )
+    key_split.add_argument(
+        "--out", type=Path, default=None,
+        help="Output directory for share files (default: ./keyshares-<repo>/).",
+    )
+
+    key_combine = key_sub.add_parser(
+        "combine",
+        help="Reconstruct a repo password from K key-share mnemonics.",
+    )
+    key_combine.add_argument(
+        "--share-file", action="append", default=None, dest="share_files",
+        type=Path,
+        help="A file containing one share mnemonic (repeatable). "
+             "If omitted, shares are read from stdin, one per line.",
+    )
+    key_combine.add_argument(
+        "--out", type=Path, default=None,
+        help="Write the reconstructed password here (default: stdout).",
+    )
+
     return parser
 
 
@@ -3104,9 +3152,199 @@ def dispatch(args: argparse.Namespace) -> int:
         return cmd_verify(args)
     elif args.command == "consolidate":
         return cmd_consolidate(args)
+    elif args.command == "key":
+        if args.key_command == "split":
+            return cmd_key_split(args)
+        elif args.key_command == "combine":
+            return cmd_key_combine(args)
+        else:
+            logger.error("Usage: lcsas key {split,combine}")
+            return 1
 
     logger.error(f"Command '{args.command}' not yet implemented.")
     return 1
+
+
+def _write_private_file(path: Path, data: bytes) -> None:
+    """Write *data* to *path* with owner-only (0600) permissions, TOCTOU-safe.
+
+    The file is created with ``O_CREAT | O_EXCL`` and mode 0600 so it is never
+    even briefly readable by other users (mirrors ``db/connection.py``).  An
+    existing file is a hard error rather than a silent overwrite — share files
+    are sensitive and clobbering them could destroy the only copy.
+    """
+    fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+
+
+def _share_card_text(
+    repo: str, index: int, threshold: int, count: int, mnemonic: str
+) -> str:
+    """Build a plain-language printable 'share card' for one key share."""
+    return (
+        "================ LCSAS KEY SHARE ================\n"
+        f"Repository : {repo}\n"
+        f"Share      : {index} of {count}\n"
+        "\n"
+        "WHAT THIS IS\n"
+        "  This card holds ONE share of the password that unlocks the\n"
+        f"  '{repo}' backup archive.  The password was split into {count}\n"
+        "  shares using Shamir Secret Sharing (SLIP-0039).\n"
+        "\n"
+        "HOW TO USE IT\n"
+        f"  You need ANY {threshold} of the {count} shares to rebuild the\n"
+        "  password.  Fewer than that reveal NOTHING about it.  Gather at\n"
+        f"  least {threshold} share cards and run:\n"
+        "      lcsas key combine --share-file <share1> --share-file <share2> ...\n"
+        "  (or follow the recovery disc's instructions).\n"
+        "\n"
+        "  Other people each hold one of the remaining shares.  Losing more\n"
+        f"  than {count - threshold} of the {count} shares means the archive\n"
+        "  password can never be recovered.\n"
+        "\n"
+        "THE SHARE WORDS (keep every word, in order)\n"
+        f"  {mnemonic}\n"
+        "================================================\n"
+    )
+
+
+def cmd_key_split(args: argparse.Namespace) -> int:
+    """Split a repository password into K-of-N SLIP-0039 key shares."""
+    from lcsas.config.settings import load_config
+    from lcsas.keyshare import KeyShareError, encode_master_secret, split_secret
+
+    # Resolve K/N: explicit flags override config defaults.
+    threshold = args.threshold
+    shares = args.shares
+    repo_pw_file: Path | None = args.password_file
+
+    config = None
+    if args.config is not None:
+        config = load_config(args.config)
+    if threshold is None:
+        threshold = config.key_threshold if config is not None else 2
+    if shares is None:
+        shares = config.key_shares if config is not None else 5
+
+    # Resolve the password source.
+    if repo_pw_file is None:
+        if config is None:
+            logger.error(
+                "No password source: pass --password-file, or pass --config "
+                "so the repo's configured password_file can be used."
+            )
+            return 1
+        repo_cfg = config.repositories.get(args.repo)
+        if repo_cfg is None:
+            logger.error(
+                "Repository '%s' is not defined in the config file.", args.repo
+            )
+            return 1
+        if repo_cfg.password_file is None:
+            logger.error(
+                "Repository '%s' has no password_file configured; "
+                "pass --password-file instead.", args.repo
+            )
+            return 1
+        repo_pw_file = repo_cfg.password_file
+
+    if not repo_pw_file.exists():
+        logger.error("Password file does not exist: %s", repo_pw_file)
+        return 1
+
+    # Read the password and drop a single trailing newline (key files often
+    # have one; rustic's --password-file ignores it).
+    password = repo_pw_file.read_bytes().rstrip(b"\n")
+
+    try:
+        master_secret = encode_master_secret(password)
+        mnemonics = split_secret(master_secret, threshold, shares)
+    except (KeyShareError, ValueError) as e:
+        # KeyShareError: oversized password / bad master secret.
+        # ValueError: invalid threshold/shares (e.g. K>N, non-positive).
+        logger.error("Could not split password: %s", e)
+        return 1
+
+    out_dir: Path = args.out if args.out is not None else Path(f"./keyshares-{args.repo}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, mnemonic in enumerate(mnemonics, start=1):
+        share_path = out_dir / f"{args.repo}-share-{i}.txt"
+        card_path = out_dir / f"{args.repo}-share-{i}-card.txt"
+        _write_private_file(share_path, (mnemonic + "\n").encode("utf-8"))
+        card = _share_card_text(args.repo, i, threshold, shares, mnemonic)
+        _write_private_file(card_path, card.encode("utf-8"))
+
+    print(
+        f"Wrote {shares} share(s) ({threshold}-of-{shares}) for repo "
+        f"'{args.repo}' to {out_dir}"
+    )
+    print(
+        "  Each share and its plain-language card is mode 0600.\n"
+        f"  Distribute the {shares} shares to separate holders/locations."
+    )
+    print(
+        "SECURITY: the password was never printed. Store shares apart; any "
+        f"{threshold} of {shares} reconstruct it, fewer reveal nothing.",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def cmd_key_combine(args: argparse.Namespace) -> int:
+    """Reconstruct a repository password from K SLIP-0039 key-share mnemonics."""
+    from lcsas.keyshare import (
+        KeyShareError,
+        decode_master_secret,
+        recover_secret,
+    )
+
+    mnemonics: list[str] = []
+    if args.share_files:
+        for sf in args.share_files:
+            if not sf.exists():
+                logger.error("Share file does not exist: %s", sf)
+                return 1
+            text = sf.read_text(encoding="utf-8").strip()
+            if text:
+                mnemonics.append(text)
+    else:
+        # No --share-file: read shares from stdin, one mnemonic per line.
+        for line in sys.stdin:
+            line = line.strip()
+            if line:
+                mnemonics.append(line)
+
+    if not mnemonics:
+        logger.error(
+            "No shares supplied. Pass one or more --share-file, or pipe "
+            "shares on stdin (one mnemonic per line)."
+        )
+        return 1
+
+    try:
+        master_secret = recover_secret(mnemonics)
+        password = decode_master_secret(master_secret)
+    except KeyShareError as e:
+        logger.error(
+            "Could not reconstruct the password: %s\n"
+            "Check that you supplied at least the threshold (K) of valid, "
+            "uncorrupted shares from the SAME split.", e
+        )
+        return 1
+
+    if args.out is not None:
+        _write_private_file(args.out, password)
+        print(f"Reconstructed password written to {args.out} (mode 0600).")
+    else:
+        # Raw bytes: a password may not be valid UTF-8 and must not gain a
+        # trailing newline, or it would no longer match the original.
+        sys.stdout.buffer.write(password)
+        sys.stdout.buffer.flush()
+    return 0
 
 
 def cmd_session_list(args: argparse.Namespace) -> int:
