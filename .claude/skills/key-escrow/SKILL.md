@@ -14,16 +14,24 @@ graph and the gates. You coordinate and integrate; you delegate feature code.
 
 ## Autonomy policy
 
-- **Autonomous within a phase.** Land eligible (dep-satisfied, non-`[!]`) items back to
-  back without per-item sign-off. Honor deps and parallel-safety.
-- **Phase gates are hard halts.** Never cross a `GATE n→n+1` without the user merging the
-  phase's PR(s). At each gate: report results + coverage deltas + the four-line score
-  status, then STOP.
-- **A `[!]` item halts the loop with its question** — never guess. The only `[!]` today is
-  **D0.1 (share format)**: ask the user SLIP-0039 vs GF(256)+checksum, with the trade-off
-  (vetted-spec + checksums + human mnemonics vs minimal re-implementation surface), then stop.
-- **Phase 4 is the exception:** the blind diagnose→fix→re-run loop runs autonomously until
-  both variants hit 15/15 on consecutive runs — that is the whole point of the phase.
+**Standing authorization (user, 2026-05-31): "keep going until everything is done for
+/key-escrow except items that absolutely require a human; when you get to the blind runs,
+just do them without prompting."** So:
+
+- **Drive to completion autonomously.** Land items back to back; at each phase gate, run the
+  full gate, **open the PR, and merge it yourself** once CI is green (`gh pr merge --merge
+  --delete-branch`), then sync master and continue to the next phase. Do NOT stop to ask for
+  "merge #N".
+- **Run the blind tests without prompting.** `LCSAS_BLIND_ACK_COST=1` is pre-authorized.
+  Still bound the loop (budget guard below) and still haiku-only.
+- **Only halt for things that genuinely require a human:** physical hardware that doesn't
+  exist on this VM; a destructive/irreversible action outside this build; or a true design
+  fork with no defensible default. Otherwise decide and proceed — record the decision in the
+  Driver log. (D0.1 is already decided: SLIP-0039.)
+- **The budget guard still applies in Phase 4:** after 3 consecutive failing blind runs on
+  the same un-localized root cause, STOP and report rather than burn budget.
+- **Never weaken a gate to make progress** — not coverage, not `verify.sh`, not the
+  single-key-path-unchanged rule. A green achieved by lowering the bar is a regression.
 
 ## Hard rules (from CLAUDE.md, the recovery ethos, and project memory)
 
@@ -108,10 +116,12 @@ green, docs shipped. Present the final PR(s) and STOP for sign-off.
 
 ## Loop behavior (under `/loop`)
 
-- A cycle runs until the current phase empties of eligible work, then halts at the gate.
-- A `[!]`-blocked item (D0.1) always halts the loop with its question — never spin.
-- Phase 4 is the one autonomous loop: keep going until both variants are 15/15 ×2 or the
-  budget guard trips. Never auto-advance past a phase gate, even under `/loop`.
+- Under the standing authorization, a cycle advances across phase gates: complete a phase,
+  self-merge its green PR, sync master, and continue into the next phase in the same or next
+  cycle. Do not stop merely because a phase finished.
+- Stop and report only when: the whole plan is `[x]` (DONE — present all four blind score
+  lines); the budget guard trips in Phase 4; or a genuinely human-required item is reached.
+- Never spin on a flake without a localized root cause; never auto-weaken a gate.
 
 ## First run
 
