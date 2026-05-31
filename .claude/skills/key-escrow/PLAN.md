@@ -70,10 +70,10 @@ same durability contract as `lcsas-restore` (tier 1).
 > Blind runs cost ~$5 each and spawn a real haiku sub-agent. The driver MUST hold a
 > standing `LCSAS_BLIND_ACK_COST=1` user acknowledgement (see SKILL.md) and bound the loop.
 
-- [ ] **K4.1** Run `blind-restore-single-key`; on `<15/15`, diagnose from `transcript.jsonl` + `verify.sh` output, fix (delegate), re-run. Repeat until **15/15**. deps: K3.1
-- [ ] **K4.2** Run `blind-restore-split-2of5`; same diagnose→fix→re-run loop until **15/15**. deps: K3.2, K4.1
-- [ ] **K4.3** Flake guard: each variant green on **two consecutive** runs (the `blind-restore-x5` discipline, scaled to 2× per variant to bound cost). deps: K4.1, K4.2
-- **GATE 4 = DONE:** both variants 15/15 on consecutive runs; full coverage green; docs shipped. Present the final PR(s) + the four green score lines. *Halt for final sign-off.*
+- [x] **K4.1** `blind-restore-single-key` → **15/15** (deliberate, committed code). deps: K3.1
+- [x] **K4.2** `blind-restore-split-2of5` → **15/15** (heir reconstructed the password from 2 of 5 share cards via the production combiner, then restored). deps: K3.2, K4.1
+- [x] **K4.3** Flake guard met: each variant green on **two consecutive** runs. deps: K4.1, K4.2
+- **GATE 4 = DONE ✅:** all four blind runs 15/15 (single-key ×2, split-key-2of5 ×2), zero FAIL criteria; full coverage green; docs shipped. **/key-escrow COMPLETE.**
 
 ---
 
@@ -84,4 +84,8 @@ same durability contract as `lcsas-restore` (tier 1).
 - `make audit-gate` — only if a C combiner is built (Phase 2 K2.1c); EXEMPTIONS contract must stay green.
 
 ## Driver log (append one line per landed item: date · id · branch · PR · cov · notes)
-- (empty)
+- 2026-05-31 · Phase 0 (K0.2–K0.4) · feat/keyshare-slip39-primitive · PR #311 · keyshare 100% (349/349) · 45/45 official SLIP-0039 vectors
+- 2026-05-31 · Phase 1 (K1.1–K1.4) · feat/keyshare-cli · PR #312 · codec 100% + key handlers · also fixed `python -m lcsas` exit-code swallow
+- 2026-05-31 · Phase 2 (K2.1–K2.4) · feat/keyshare-recovery-integration · PR #313 · combiner 100% (46/46) · clean-machine reconstruction verified
+- 2026-05-31 · Phase 3 (K3.1–K3.3) · feat/keyshare-blind-variants · PR #314 · verify.sh untouched · both variants 15/15 (accidental + deliberate)
+- 2026-05-31 · Phase 4 (K4.1–K4.3) · BLIND GATE · — · single-key 15/15 ×2; split-key-2of5 15/15 ×2 · /key-escrow COMPLETE
