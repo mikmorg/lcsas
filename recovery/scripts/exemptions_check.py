@@ -112,23 +112,29 @@ def main() -> int:
         # Run gcovr with --json (not --json-summary) to get per-line.
         import subprocess
         detail_path = args.coverage_json.with_name("coverage_detail.json")
-        rc = subprocess.run(
-            [
-                "gcovr",
-                "--root", str(REPO_ROOT / "recovery"),
-                "--filter", "src/lcsas-restore/.*",
-                "--exclude", "vendored/.*",
-                "--gcov-object-directory",
-                str(REPO_ROOT / "recovery" / "build"),
-                # Fault-inject sweep accumulates large gcov counters
-                # that trip the "suspicious hits" parser.  Keep this
-                # threshold in sync with the Makefile.
+        gcovr_cmd = [
+            "gcovr",
+            "--root", str(REPO_ROOT / "recovery"),
+            "--filter", "src/lcsas-restore/.*",
+            "--exclude", "vendored/.*",
+            "--gcov-object-directory",
+            str(REPO_ROOT / "recovery" / "build"),
+        ]
+        # The fault-inject sweep accumulates large gcov counters that trip
+        # gcovr's "suspicious hits" parser, so we raise the threshold — but
+        # --gcov-suspicious-hits-threshold was renamed/dropped across gcovr
+        # versions and newer gcovr (e.g. CI) rejects it as unrecognized.
+        # Pass it only when the installed gcovr advertises it (kept in sync
+        # with the Makefile's GCOVR_SUSPICIOUS).
+        help_out = subprocess.run(
+            ["gcovr", "--help"], capture_output=True, text=True,
+        ).stdout
+        if "gcov-suspicious-hits-threshold" in help_out:
+            gcovr_cmd += [
                 "--gcov-suspicious-hits-threshold", "999999999999999",
-                "--json", str(detail_path),
-                str(REPO_ROOT / "recovery"),
-            ],
-            capture_output=True, text=True,
-        )
+            ]
+        gcovr_cmd += ["--json", str(detail_path), str(REPO_ROOT / "recovery")]
+        rc = subprocess.run(gcovr_cmd, capture_output=True, text=True)
         if rc.returncode != 0:
             print(f"[exemptions_check] gcovr detail failed:\n{rc.stderr}",
                   file=sys.stderr)

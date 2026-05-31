@@ -24,6 +24,12 @@ LDFLAGS =
 STATIC  = -static
 
 SRCDIR    = src/lcsas-restore
+
+# gcovr renamed/dropped --gcov-suspicious-hits-threshold across versions; the
+# flag is unrecognised by newer gcovr (e.g. the CI runner), which aborted
+# coverage-c. Pass it only when the local gcovr advertises it. Recursive (=)
+# so the gcovr probe runs only when coverage-c expands it, not on every make.
+GCOVR_SUSPICIOUS = $(shell gcovr --help 2>/dev/null | grep -q 'gcov-suspicious-hits-threshold' && echo '--gcov-suspicious-hits-threshold 999999999999999')
 TESTDIR   = tests
 BUILD     = build
 VENDOR    = vendored
@@ -502,7 +508,7 @@ coverage-c:
 	    --filter '$(SRCDIR)/.*' \
 	    --exclude '$(VENDOR)/.*' \
 	    --gcov-object-directory $(abspath $(BUILD)) \
-	    --gcov-suspicious-hits-threshold 999999999999999 \
+	    $(GCOVR_SUSPICIOUS) \
 	    --html-details $(abspath $(BUILD))/coverage/index.html \
 	    --json-summary $(abspath $(BUILD))/coverage.json \
 	    --print-summary \
