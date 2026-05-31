@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage
 
 # Default target: lint + typecheck + every test tier ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
@@ -158,6 +158,34 @@ blind-restore-variants:
 		$(MAKE) blind-restore-teardown; \
 	done
 	@echo "blind-restore-variants: all variants PASS"
+
+# Key-escrow Phase 3 blind variants.  Each costs ~$5 of blind-test
+# compute (same cost guard as blind-restore-variants).
+#
+#   blind-restore-single-key  — K3.1: explicit single-key baseline
+#                               (alias of default; plaintext password).
+#   blind-restore-split-2of5  — K3.2: agent gets only 5 SLIP-0039 share
+#                               cards and must reconstruct the password
+#                               (variant split-key-2of5) before restoring.
+blind-restore-single-key:
+	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
+		echo "ERROR: blind-restore-single-key costs USD ~5." >&2; \
+		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
+		exit 1; \
+	fi
+	sudo -E bash tests/e2e/cdemu_blind_restore/run_variant.sh single-key \
+	    || { echo "FAIL: variant single-key" >&2; $(MAKE) blind-restore-teardown; exit 1; }
+	$(MAKE) blind-restore-teardown
+
+blind-restore-split-2of5:
+	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
+		echo "ERROR: blind-restore-split-2of5 costs USD ~5." >&2; \
+		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
+		exit 1; \
+	fi
+	sudo -E bash tests/e2e/cdemu_blind_restore/run_variant.sh split-key-2of5 \
+	    || { echo "FAIL: variant split-key-2of5" >&2; $(MAKE) blind-restore-teardown; exit 1; }
+	$(MAKE) blind-restore-teardown
 
 # Populate ~/.cache/lcsas/recovery-binaries/ with the rustic + Python
 # tarballs pinned in recovery/UPSTREAM.sha256.  Idempotent; required

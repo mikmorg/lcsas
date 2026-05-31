@@ -565,9 +565,30 @@ def _create_agent_user(labels: list[str]) -> None:
 
     (AGENT_HOME / "restored").mkdir()
 
-    alpha_pw_dst = AGENT_HOME / "tenant-alpha.pw"
-    shutil.copy2(SECRETS / "alpha.pw", alpha_pw_dst)
-    os.chmod(alpha_pw_dst, 0o600)
+    # Key-escrow Phase 3 (K3.2): the split-key-2of5 variant stages the
+    # alpha password as 5 SLIP-0039 share cards instead of a plaintext
+    # ~/tenant-alpha.pw.  The agent must reconstruct any 2 of 5 with
+    # /mnt/keyshare_combine.py before it can answer the Password: prompt.
+    # All OTHER variants (including the single-key K3.1 alias of default)
+    # stage tenant-alpha.pw exactly as before.
+    secret_files: list[Path] = []
+    if os.environ.get("LCSAS_VARIANT", "") == "split-key-2of5":
+        sys.path.insert(0, str(REPO_ROOT / "src"))
+        alpha_pw = (SECRETS / "alpha.pw").read_bytes().rstrip(b"\n")
+        from lcsas.keyshare import split_secret
+        from lcsas.keyshare.codec import encode_master_secret
+
+        shares = split_secret(encode_master_secret(alpha_pw), 2, 5)
+        for i, mnemonic in enumerate(shares, start=1):
+            share_dst = AGENT_HOME / f"alpha-share-{i}.txt"
+            share_dst.write_text(mnemonic + "\n")
+            os.chmod(share_dst, 0o600)
+            secret_files.append(share_dst)
+    else:
+        alpha_pw_dst = AGENT_HOME / "tenant-alpha.pw"
+        shutil.copy2(SECRETS / "alpha.pw", alpha_pw_dst)
+        os.chmod(alpha_pw_dst, 0o600)
+        secret_files.append(alpha_pw_dst)
 
     labels_file = AGENT_HOME / "disc-labels.txt"
     lines = ["LCSAS_META", *sorted(lbl for lbl in labels if lbl != "LCSAS_META")]
@@ -575,7 +596,7 @@ def _create_agent_user(labels: list[str]) -> None:
 
     uid = pwd.getpwnam(AGENT_USER).pw_uid
     gid = pwd.getpwnam(AGENT_USER).pw_gid
-    for p in (AGENT_HOME, alpha_pw_dst, labels_file, AGENT_HOME / "restored"):
+    for p in (AGENT_HOME, *secret_files, labels_file, AGENT_HOME / "restored"):
         os.chown(p, uid, gid)
 
     # Propagate claude credentials so the headless sub-agent can authenticate.

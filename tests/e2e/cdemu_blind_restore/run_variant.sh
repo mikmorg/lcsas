@@ -17,6 +17,13 @@
 #                          stress-tests the multi-tenant prompt (#217).
 #   no-catalog           — every data disc lacks catalog.db; forces the
 #                          hash-only swap-prompt path (issue #218).
+#   single-key           — explicit baseline alias of `default`: agent
+#                          gets the plaintext ~/tenant-alpha.pw, standard
+#                          flow, no mutation (key-escrow Phase 3, K3.1).
+#   split-key-2of5       — agent gets ONLY 5 SLIP-0039 share cards (no
+#                          plaintext password) and must reconstruct the
+#                          password before restoring (key-escrow Phase 3,
+#                          K3.2).  Keeps alpha+bravo tenants.
 #
 # Exits 0 with `SCORE: 15/15 (variant=<name>)` on full pass.
 # Exits non-zero on any failure; the score line still prints.
@@ -29,10 +36,12 @@ VARIANT="${1:?usage: run_variant.sh <variant>}"
 case "$VARIANT" in
     default|tier1-missing|tier1-tier2-missing) : ;;
     single-tenant|5-tenant|no-catalog) : ;;
+    single-key|split-key-2of5) : ;;
     *)
         echo "ERROR: unknown variant: $VARIANT" >&2
         echo "       supported: default | tier1-missing | tier1-tier2-missing |" >&2
-        echo "                  single-tenant | 5-tenant | no-catalog" >&2
+        echo "                  single-tenant | 5-tenant | no-catalog |" >&2
+        echo "                  single-key | split-key-2of5" >&2
         exit 2
         ;;
 esac

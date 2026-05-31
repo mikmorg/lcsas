@@ -60,10 +60,10 @@ same durability contract as `lcsas-restore` (tier 1).
 
 ## Phase 3 — Blind-test variants (build the acceptance harness)
 
-- [ ] **K3.1** Variant `single-key` in `run_variant.sh` + setup.py — explicit baseline of the existing password flow (agent gets `~/tenant-alpha.pw`, types it). Makefile target `blind-restore-single-key`. deps: —
-- [ ] **K3.2** Variant `split-key-2of5` — setup.py stages **5** share files (`~/alpha-share-{1..5}.txt`) instead of the `.pw`; an agent-prompt variant instructs the heir to combine **any 2** via the bundled tool, then proceed exactly as the single-key flow. `verify.sh` unchanged (15/15 = data byte-identical + no bravo leak + no illusion pierce; reconstruction is implicit — wrong/missing password → no restore). Makefile target `blind-restore-split-2of5`. deps: K2.2, K3.1
-- [ ] **K3.3** Both variants exercise **production meta-disc output unmodified** (combiner + share branch shipped in Phase 2, not a test shim). deps: K3.2
-- **GATE 3→4:** both variants execute end-to-end (need not pass yet). *Halt.*
+- [x] **K3.1** Variant `single-key` — explicit baseline alias of `default` (agent gets `~/tenant-alpha.pw`). Makefile `blind-restore-single-key`. deps: —
+- [x] **K3.2** Variant `split-key-2of5` — setup.py stages **5** share cards (no plaintext pw, split via the real keyshare module); `agent_prompt_split.txt` has the heir reconstruct any 2 via `/mnt/keyshare_combine.py` then proceed as single-key; `verify.sh` unchanged. Makefile `blind-restore-split-2of5`. deps: K2.2, K3.1
+- [x] **K3.3** Both variants use **production meta-disc output unmodified** (the Phase 2 combiner, not a shim) — proven by the accidental live runs below. deps: K3.2
+- **GATE 3→4:** ✅ both variants execute end-to-end. During Phase 3 verification a `make -n` footgun ($(MAKE) recipe lines run under -n) accidentally launched **both** blind variants — **both scored 15/15** (incl. no-bravo-leak on split-key-2of5). Phase 4 re-runs deliberately for the consecutive-greens flake guard.
 
 ## Phase 4 — Iterate to perfect score (autonomous within the phase)
 

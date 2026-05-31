@@ -19,7 +19,16 @@ if ! flock -n 9; then
 fi
 echo "PID $$ started $(date -Iseconds)" >&9
 
-cp "$HERE/agent_prompt.txt" "$RUN_DIR/prompt.txt"
+# Select the agent prompt by variant.  Key-escrow Phase 3 (K3.2): the
+# split-key-2of5 variant ships a self-contained prompt that reconstructs
+# the password from share cards before restoring.  Every other variant
+# (and the unset/default case) uses agent_prompt.txt byte-identically.
+PROMPT_SRC="$HERE/agent_prompt.txt"
+if [ "${LCSAS_VARIANT:-}" = "split-key-2of5" ] \
+   && [ -f "$HERE/agent_prompt_split.txt" ]; then
+    PROMPT_SRC="$HERE/agent_prompt_split.txt"
+fi
+cp "$PROMPT_SRC" "$RUN_DIR/prompt.txt"
 
 # Clean stale state inside the agent's playground so each run starts
 # from a known-empty world. The agent typically scratches in /tmp and
