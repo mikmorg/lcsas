@@ -84,8 +84,8 @@ Goal: a tier-1-grade C89 `lcsas-keyshare` combiner so split-key reconstruction n
 - [x] **C5.1** `recovery/src/lcsas-keyshare/` C89 combiner (slip39.c/h + main.c) — RS1024/GF(256)/Feistel/HMAC-digest/codec, reuses sha256/pbkdf2/hmac/hex. Builds warning-clean (the only build warnings are pre-existing in untouched lcsas-restore/iso9660). deps: Phase 0–2
 - [x] **C5.2** `recovery/tests/test_keyshare.c` (+ embedded vectors header) wired into recovery `Makefile` `all:`+`test`. **45/45 official vectors**; lead independently cross-checked C vs Python byte-exact on fresh random passwords (4/4, incl. binary/16-byte-min/40-byte); under-threshold fails loud. deps: C5.1
 - [~] **C5.3** ASan/UBSan **clean** (lead re-ran). Test exercises 15 valid + 30 invalid vectors (error paths) + codec edges. Full coverage-c/EXEMPTIONS/fuzz integration of the new dir = documented follow-up (the coverage tooling is currently lcsas-restore-scoped). deps: C5.2
-- [ ] **C5.4** Bundle `lcsas-keyshare` per-arch on the meta-volume (`meta/bundler`); heir docs + `agent_prompt_split.txt` prefer the C combiner (python fallback). deps: C5.1
-- [ ] **C5.5** Re-validate: `split-key-2of5` blind run forcing the C combiner → 15/15 (proves python-free reconstruction end-to-end). deps: C5.4
+- [x] **C5.4** Static-musl `lcsas-keyshare` (zig cc, statically linked like the other tier-1 bins) placed at `recovery/bin/x86_64/lcsas-keyshare` → auto-shipped (the meta builder `copytree`s the whole `recovery/` tree; on-disc `/mnt/recovery/bin/x86_64/lcsas-keyshare`). `agent_prompt_split.txt` Step 2 now uses the C combiner (python fallback). Not in MANIFEST (git-pinned, like lcsas-restore). Cross-arch static builds = same follow-up as the existing cross-arch tier-1 bins. deps: C5.1
+- [~] **C5.5** Re-validate: `split-key-2of5` blind run forcing the C combiner → 15/15 (proves python-free reconstruction end-to-end). deps: C5.4
 - **GATE 5 = DONE:** C combiner passes 45 vectors + Python cross-check + audit-gate; bundled; blind split-key 15/15 via the C path.
 
 ## Coverage gates (every phase must keep these green before its PR)

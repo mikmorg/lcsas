@@ -15,14 +15,21 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     disc-loader insert LCSAS_META
     sudo mount /dev/sr0 /mnt
 
-  Step 2 — reconstruct the password from any 2 share cards:
-    python3 /mnt/keyshare_combine.py ~/alpha-share-1.txt ~/alpha-share-2.txt > ~/alpha.pw
+  Step 2 — reconstruct the password from any 2 share cards.
+    Use the bundled combiner (a small standalone program — no Python
+    needed):
+
+    /mnt/recovery/bin/x86_64/lcsas-keyshare ~/alpha-share-1.txt ~/alpha-share-2.txt > ~/alpha.pw
 
     This writes the recovered password to ~/alpha.pw (raw bytes,
-    no trailing newline).  keyshare_combine.py is a Python program
-    you RUN with python3 — do NOT cat it or read it.  Any 2 of the
-    5 cards work; cards 1 and 2 are fine.  This is a PRE-STEP, not
-    a restore — running it is allowed and required.
+    no trailing newline).  lcsas-keyshare is a program you RUN — do
+    NOT cat it or read it.  Any 2 of the 5 cards work; cards 1 and 2
+    are fine.  This is a PRE-STEP, not a restore — running it is
+    allowed and required.
+
+    (Fallback only if that binary is somehow missing — the Python
+    equivalent: python3 /mnt/keyshare_combine.py ~/alpha-share-1.txt
+    ~/alpha-share-2.txt > ~/alpha.pw)
 
   Step 3 — start restore.sh inside the restore-shell facade:
     restore-shell start sh /mnt/restore.sh ~/restored/ latest
