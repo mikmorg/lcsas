@@ -39,8 +39,8 @@ same durability contract as `lcsas-restore` (tier 1).
 - [x] **D0.1** Share format decided: **SLIP-0039** (user, 2026-05-31). Vendored stdlib-only pure-Python impl + spec on disc; official SLIP-0039 vectors as fixtures. deps: —
 - [x] **K0.2** `src/lcsas/keyshare/` — stdlib-only SLIP-0039 split/combine + RS1024/digest integrity (812 LOC + 1024-word list). Independently re-verified by lead. deps: D0.1
 - [x] **K0.3** 45/45 official SLIP-0039 vectors pass (15 valid / 30 invalid) + property tests; **100% line cov (349/349)**, ruff + mypy-strict clean. deps: K0.2
-- [ ] **K0.4** `docs/KEY_SHARE_FORMAT.md` (binary/word layout, KDF tie-in, re-implementation guidance — sibling of `RESTIC_FORMAT_SPEC.md`); register for meta-volume bundling. deps: K0.2
-- **GATE 0→1:** format locked, primitive round-trips + tamper-detects, 100% cov on the module, spec written. *Halt for "merge #N".*
+- [x] **K0.4** `docs/KEY_SHARE_FORMAT.md` — SLIP-0039 layout, algorithm + re-implementation guidance, LCSAS tie-in, 45-vector conformance pointer. Auto-bundled on the meta-volume via `_DOC_ITEMS=("docs",...)` (no code change needed). deps: K0.2
+- **GATE 0→1:** ✅ format locked, primitive round-trips + tamper-detects, 100% cov, spec written + bundled. *Awaiting "merge #N".*
 
 ## Phase 1 — CLI & share artifacts
 
