@@ -454,6 +454,26 @@ class TestMetaVolumeBuilder:
         assert "ingest" in content
         assert "finalize" in content
 
+    def test_keyshare_combiner_and_package_bundled(self):
+        """K2.4(b): the production build ships the split-key combiner.
+
+        Asserts the real ``build()`` output (not a direct helper call)
+        carries (1) ``keyshare_combine.py`` at the meta-volume root, and
+        (2) the ``keyshare`` package + its ``wordlist.txt`` under the
+        bundled stdlib — the two halves the heir pre-step needs.
+        """
+        import sys as _sys
+
+        combiner = self.output / "keyshare_combine.py"
+        assert combiner.is_file(), "keyshare_combine.py not at meta-volume root"
+        assert os.access(str(combiner), os.X_OK)
+
+        version = f"python{_sys.version_info.major}.{_sys.version_info.minor}"
+        pkg = self.output / "tools" / "lib" / version / "keyshare"
+        assert pkg.is_dir(), "keyshare package not bundled under tools/lib/"
+        assert (pkg / "wordlist.txt").is_file(), "SLIP-0039 wordlist not bundled"
+        assert (pkg / "slip39.py").is_file()
+
     def test_restore_script_single_drive_default(self):
         """restore_legacy.sh drives the single-drive multi-disc UX.
 

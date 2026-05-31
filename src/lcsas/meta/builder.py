@@ -1712,6 +1712,7 @@ class MetaVolumeBuilder:
         self._bundle_docs()
         self._bundle_standalone_restorer()
         self._bundle_restore_helper()
+        self._bundle_keyshare_combiner()
         self._bundle_metadata()
         if self._bundle_recovery_toolchain:
             self._bundle_recovery_toolchain_artifacts()
@@ -1798,6 +1799,12 @@ class MetaVolumeBuilder:
         # Bundle zstandard for pure-Python fallback restore of
         # zstd-compressed repos (rustic v2 default).
         bundler.bundle_python_package("zstandard")
+
+        # Bundle the stdlib-only SLIP-0039 keyshare package (+ wordlist.txt)
+        # so the standalone keyshare_combine.py pre-step can reconstruct a
+        # split repo password.  Lands as top-level ``keyshare`` under the
+        # bundled stdlib (importlib resolves it to .../lcsas/keyshare).
+        bundler.bundle_python_package("lcsas.keyshare")
 
         # Bundle static rustic binary (glibc-independent fallback).
         # If an explicit path was provided, use it.  Otherwise,
@@ -1898,6 +1905,40 @@ class MetaVolumeBuilder:
         tools_dir = self._output / "tools"
         tools_dir.mkdir(parents=True, exist_ok=True)
         dst = tools_dir / "restore_single_drive.py"
+        shutil.copy2(str(src), str(dst))
+        os.chmod(str(dst), 0o755)
+
+    def _bundle_keyshare_combiner(self) -> None:
+        """Place keyshare_combine.py at the meta-volume root.
+
+        This standalone, stdlib-only pre-step reconstructs a SLIP-0039
+        split repo password (any K of N shares) and prints it so an heir
+        can feed it to the normal restore flow.  It imports ONLY the
+        bundled ``lcsas.keyshare`` package, so reconstruction survives
+        even if the rest of LCSAS is broken.
+
+        Manifest pinning: ``keyshare_combine.py`` and the bundled
+        ``keyshare/wordlist.txt`` are NOT rows in
+        ``recovery/MANIFEST.sha256``.  That "files-we-author" manifest
+        is rooted at, and ``find``-verified against, the ``recovery/``
+        tree (the tier-1 C binary, vendored sqlite/zstd, recovery
+        scripts).  These two artifacts live in the main ``src/`` tree
+        and are copied onto the meta-volume at build time -- exactly like
+        ``standalone_restorer.py`` and ``restore_single_drive.py``, which
+        are likewise absent from that manifest.  They are pinned by git
+        (every ``src/`` file is version-controlled) and the wordlist is
+        additionally guarded by the 45 official SLIP-0039 conformance
+        vectors in the test suite.  Adding ``./src/...`` rows to a
+        ``recovery/``-rooted manifest would be flagged as unexpected by
+        its own verifier, so the correct treatment is build-time shipping,
+        documented here.
+        """
+        src = Path(__file__).parent / "keyshare_combine.py"
+        if not src.is_file():
+            raise FileNotFoundError(
+                f"keyshare_combine.py missing from source tree: {src}"
+            )
+        dst = self._output / "keyshare_combine.py"
         shutil.copy2(str(src), str(dst))
         os.chmod(str(dst), 0o755)
 

@@ -52,6 +52,47 @@ This document provides a checklist and templates to make that possible.
 - [ ] **NEVER store the key on an archive disc**
   (The whole point of encryption is separation of key and data)
 
+#### Option: Split the key into share cards (Shamir / SLIP-0039)
+
+A single key copy is a single point of failure: lose it and the archive is
+gone forever; let the wrong person find it and the archive is exposed. LCSAS
+can instead **split the password into N share cards such that any K
+reconstruct it and any K−1 reveal nothing** (default **2-of-5**). This biases
+toward recoverability — the dominant risk for a backup is *loss*, not theft.
+
+- [ ] **Split the password** once your archive is configured:
+
+  ```
+  lcsas key split --repo REPO --config lcsas.toml
+  ```
+
+  This writes `N` share files plus a plain-language **card** for each. Hand
+  the cards to separate trusted holders / locations (e.g. three relatives,
+  one safe deposit box, one attorney). No single holder can read the archive.
+
+- [ ] **Mark the archive as split** so the discs print share instructions —
+  set `key_split = true` (and your `key_threshold` / `key_shares`) under
+  `[defaults]` in `lcsas.toml` (see §4). When split, every disc's
+  `KEY_INFO.txt` and `START_HERE.txt` tell the heir to **first reconstruct
+  the password, then restore normally**.
+
+- [ ] **Tell heirs the reconstruction is a two-step pre-step**, in your
+  letter (template below):
+
+  1. Gather any **K** share cards and run the combiner from the META disc:
+
+     ```
+     python3 keyshare_combine.py <card1> <card2>
+     ```
+
+     It prints the password (and nothing else).
+
+  2. Run the normal restore (`restore.sh`) and enter that password at the
+     `Password:` prompt — exactly the single-key flow.
+
+  The share format and a from-scratch re-implementation guide are in
+  `docs/KEY_SHARE_FORMAT.md`, bundled on every meta-volume.
+
 ### 3. Letter to Heirs
 
 - [ ] **Write a letter** and store it with the disc binder:
@@ -106,10 +147,18 @@ archive_owner = "Your Full Name"
 archive_description = "Family photos, videos, and documents 2000-2025"
 key_storage_hints = "Paper copy in the home safe; USB copy at First National Bank safe deposit box #1234"
 technical_contact = "Jane Doe (jane@example.com) or any Linux IT professional"
+
+[defaults]
+# Only if you split the password into share cards (see §2):
+key_split = true       # mark this archive as split — prints share instructions
+key_threshold = 2      # K: share cards needed to reconstruct
+key_shares = 5         # N: share cards produced
 ```
 
 This information is automatically written to `START_HERE.txt` on every
 disc you burn — so your heirs can read it even without this document.
+When `key_split = true`, each disc's `START_HERE.txt` and `KEY_INFO.txt`
+also include the two-step share-reconstruction pre-step.
 
 ### 5. Periodic Maintenance
 
