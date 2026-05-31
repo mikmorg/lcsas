@@ -74,12 +74,13 @@ TEST_BINS = \
 	$(BUILD)/test_catalog \
 	$(BUILD)/test_disc_locator \
 	$(BUILD)/test_repo \
-	$(BUILD)/test_zstd
+	$(BUILD)/test_zstd \
+	$(BUILD)/test_keyshare
 
 # Binary extension is overridden by the Windows cross-build target.
 BIN_EXT ?=
 
-all: $(BUILD)/lcsas-restore$(BIN_EXT) $(BUILD)/lcsas-iso9660$(BIN_EXT) $(BUILD)/lcsas-init$(BIN_EXT)
+all: $(BUILD)/lcsas-restore$(BIN_EXT) $(BUILD)/lcsas-iso9660$(BIN_EXT) $(BUILD)/lcsas-init$(BIN_EXT) $(BUILD)/lcsas-keyshare$(BIN_EXT)
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -105,6 +106,27 @@ $(BUILD)/lcsas-init$(BIN_EXT): $(BUILD) src/lcsas-init/init.c
 
 $(BUILD)/main.o: $(SRCDIR)/main.c $(SRCDIR)/repo.h $(SRCDIR)/tree.h $(BUILD)
 	$(CC) $(CFLAGS) -c $(SRCDIR)/main.c -o $@
+
+# ── lcsas-keyshare (SLIP-0039 combiner) ───────────────────────────
+# Reuses sha256.o + pbkdf2.o + hex.o objects from lcsas-restore.
+KEYSHARE_DIR = src/lcsas-keyshare
+
+$(BUILD)/lcsas-keyshare$(BIN_EXT): $(BUILD) $(BUILD)/keyshare_slip39.o \
+		$(BUILD)/keyshare_wordlist.o $(BUILD)/keyshare_main.o \
+		$(BUILD)/sha256.o $(BUILD)/pbkdf2.o
+	$(CC) $(CFLAGS) $(LDFLAGS) \
+	    $(BUILD)/keyshare_slip39.o $(BUILD)/keyshare_wordlist.o \
+	    $(BUILD)/keyshare_main.o $(BUILD)/sha256.o $(BUILD)/pbkdf2.o -o $@
+
+$(BUILD)/keyshare_slip39.o: $(KEYSHARE_DIR)/slip39.c $(KEYSHARE_DIR)/slip39.h \
+		$(SRCDIR)/pbkdf2.h $(BUILD)
+	$(CC) $(CFLAGS) -c $(KEYSHARE_DIR)/slip39.c -o $@
+
+$(BUILD)/keyshare_wordlist.o: $(KEYSHARE_DIR)/wordlist.c $(KEYSHARE_DIR)/slip39.h $(BUILD)
+	$(CC) $(CFLAGS) -c $(KEYSHARE_DIR)/wordlist.c -o $@
+
+$(BUILD)/keyshare_main.o: $(KEYSHARE_DIR)/main.c $(KEYSHARE_DIR)/slip39.h $(BUILD)
+	$(CC) $(CFLAGS) -c $(KEYSHARE_DIR)/main.c -o $@
 
 $(BUILD)/repo.o: $(SRCDIR)/repo.c $(SRCDIR)/repo.h $(BUILD)
 	$(CC) $(CFLAGS) -c $(SRCDIR)/repo.c -o $@
@@ -236,6 +258,16 @@ $(BUILD)/test_repo: $(TESTDIR)/test_repo.c \
 $(BUILD)/test_zstd: $(TESTDIR)/test_zstd.c $(BUILD)/zstd_dec.o $(BUILD)/zstddeclib.o
 	$(CC) $(CFLAGS) -I$(SRCDIR) $(TESTDIR)/test_zstd.c \
 	    $(BUILD)/zstd_dec.o $(BUILD)/zstddeclib.o -o $@
+
+# test_keyshare: SLIP-0039 vectors + codec.  Links the combiner objects
+# plus the reused sha256/pbkdf2/hex objects.  Includes both SRCDIR (for
+# hex.h) and the keyshare dir (for slip39.h + the generated vectors).
+$(BUILD)/test_keyshare: $(TESTDIR)/test_keyshare.c $(TESTDIR)/keyshare_vectors.h \
+		$(BUILD)/keyshare_slip39.o $(BUILD)/keyshare_wordlist.o \
+		$(BUILD)/sha256.o $(BUILD)/pbkdf2.o $(BUILD)/hex.o
+	$(CC) $(CFLAGS) -I$(SRCDIR) -Isrc/lcsas-keyshare $(TESTDIR)/test_keyshare.c \
+	    $(BUILD)/keyshare_slip39.o $(BUILD)/keyshare_wordlist.o \
+	    $(BUILD)/sha256.o $(BUILD)/pbkdf2.o $(BUILD)/hex.o -o $@
 
 test: $(TEST_BINS) $(BUILD)/lcsas-restore
 	@set -e; for t in $(TEST_BINS); do echo "==> $$t"; $$t; done; echo "ALL OK"
