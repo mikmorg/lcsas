@@ -15,6 +15,12 @@ The `make coverage-c` target enforces both invariants via
   invariants, kept for safety/readability.
 - `DEFERRED` — TRACTABLE but cost > value (1M-file fixtures, etc.) and
   documented for a future contributor.
+- `VOLATILE` — environment/order-dependent: legitimately covered on some
+  hosts and uncovered on others (e.g. a branch whose coverage depends on
+  filesystem `readdir` ordering). Stays documented so an uncovered one still
+  satisfies the "every uncov line must be listed" rule, but is excluded from
+  the "exempted-but-covered → remove it" drift rule (which would otherwise
+  fail on whichever host happens to cover it).
 
 ## Enforcement
 
@@ -105,9 +111,9 @@ poly1305.c:150   INTRACTABLE   same as 146
 repo.c:193    DEFERRED      "key count exceeded sanity limit" warn; needs >1M key files
 repo.c:194    DEFERRED      closedir + goto out after 193
 repo.c:195    DEFERRED      "                                                                                                                            "
-repo.c:216    DEFENSIVE     keys-name sort-swap; the committed fixture's 3 keys are in readdir order on ext4; forcing a swap couples to filesystem hash-ordering
-repo.c:217    DEFENSIVE     "                                                                                                                            "
-repo.c:218    DEFENSIVE     "                                                                                                                            "
+repo.c:216    VOLATILE      keys-name sort-swap; coverage depends on filesystem readdir ordering of the fixture keys (uncovered on the author's ext4, covered on other hosts/CI) — env-dependent, so allowed either way
+repo.c:217    VOLATILE      "                                                                                                                            "
+repo.c:218    VOLATILE      "                                                                                                                            "
 repo.c:369    INTRACTABLE   decrypt_repo_file decrypt-MAC fail; requires a ciphertext that decrypts but fails MAC (AEAD prevents crafting without breaking the primitive)
 repo.c:370    INTRACTABLE   return NULL after 369
 repo.c:377    INTRACTABLE   strip_v2_prefix returns -1 (decrypted to 0 bytes); 32 bytes of AEAD overhead means a 32-byte ciphertext produces 0-byte plaintext — would have to craft

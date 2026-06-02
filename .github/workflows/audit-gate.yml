@@ -33,7 +33,14 @@ jobs:
             clang \
             gcovr \
             python3-pip
-          pip3 install pytest
+          # Install the lcsas package (editable) + dev deps. coverage-c Step 3
+          # runs the tier-1 hardening tests (tests/recovery_hardening/), which
+          # exercise the real binary and contribute main.c / disc_locator.c
+          # coverage. tests/conftest.py imports `lcsas`; without the package
+          # installed pytest fails at conftest collection (ModuleNotFoundError),
+          # those tests never run, and CI coverage falls ~5pts below the local
+          # figure the EXEMPTIONS contract is authored against -> false drift.
+          pip3 install --break-system-packages -e ".[dev]"
 
       - name: Run audit-gate (default 60% threshold)
         run: make -C recovery audit-gate THRESHOLD=60
