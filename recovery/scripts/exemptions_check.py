@@ -31,12 +31,22 @@ FENCE_END = "<!-- EXEMPTIONS-FENCE-END -->"
 # A row in the fenced block looks like:
 #   file.c:NNN   CATEGORY   rationale...
 ENTRY_RE = re.compile(
-    r"^([A-Za-z0-9_]+\.c):(\d+)\s+(INTRACTABLE|DEFENSIVE|DEFERRED)\b"
+    r"^([A-Za-z0-9_]+\.c):(\d+)\s+(INTRACTABLE|DEFENSIVE|DEFERRED|VOLATILE)\b"
 )
 
 
-def parse_exemptions(md_path: Path) -> set[tuple[str, int]]:
-    """Return {(filename, line_no), ...} from the fenced block."""
+def parse_exemptions(
+    md_path: Path,
+) -> tuple[set[tuple[str, int]], set[tuple[str, int]]]:
+    """Return (all_exempt, volatile) line sets from the fenced block.
+
+    VOLATILE marks environment/order-dependent lines — e.g. a branch whose
+    coverage depends on filesystem readdir ordering — which are legitimately
+    EITHER covered or uncovered depending on the host. They stay documented
+    (so an uncovered one still satisfies rule 1), but are excluded from the
+    "exempted-but-covered" drift rule, which would otherwise fail on whichever
+    host happens to cover them.
+    """
     text = md_path.read_text(encoding="utf-8")
     try:
         block = text.split(FENCE_BEGIN, 1)[1].split(FENCE_END, 1)[0]
@@ -45,6 +55,7 @@ def parse_exemptions(md_path: Path) -> set[tuple[str, int]]:
             f"[exemptions_check] {md_path} missing FENCE markers"
         )
     out = set()
+    volatile = set()
     for raw in block.splitlines():
         line = raw.strip()
         # Skip comments, blanks, code fences, and continuation rows
@@ -55,8 +66,11 @@ def parse_exemptions(md_path: Path) -> set[tuple[str, int]]:
         m = ENTRY_RE.match(line)
         if not m:
             continue
-        out.add((m.group(1), int(m.group(2))))
-    return out
+        key = (m.group(1), int(m.group(2)))
+        out.add(key)
+        if m.group(3) == "VOLATILE":
+            volatile.add(key)
+    return out, volatile
 
 
 def parse_uncov(cov_json: Path) -> set[tuple[str, int]]:
@@ -141,11 +155,13 @@ def main() -> int:
             return 1
         args.coverage_json = detail_path
 
-    exempt = parse_exemptions(args.exemptions_md)
+    exempt, volatile = parse_exemptions(args.exemptions_md)
     uncov = parse_uncov(args.coverage_json)
 
     missing_from_doc = uncov - exempt   # uncov but not documented
-    covered_but_listed = exempt - uncov  # listed but now covered
+    # listed but now covered — but VOLATILE entries are allowed to be covered
+    # on some hosts (e.g. readdir-order-dependent branches), so exclude them.
+    covered_but_listed = (exempt - uncov) - volatile
     matched = uncov & exempt
 
     errors = 0
