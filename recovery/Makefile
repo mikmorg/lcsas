@@ -395,6 +395,42 @@ bin/aarch64-macos/lcsas-restore:
 
 macos: bin/x86_64-macos/lcsas-restore bin/aarch64-macos/lcsas-restore
 
+# ── lcsas-keyshare per-arch cross builds ──────────────────────────
+# The SLIP-0039 combiner, so split-key reconstruction is python-free on
+# every approved tier-1 target.  Built with zig cc; the combiner links
+# ONLY the C89 recovery crypto primitives (sha256/pbkdf2/hex) — no
+# vendored sqlite/zstd — so it needs neither VENDOR_CFLAGS nor an
+# explicit -static (zig+musl is static by default; macOS is Mach-O
+# dynamic; windows-gnu is PE).  Separate build/<arch>-ks dirs so these
+# never clobber the lcsas-restore cross-build trees.  `make keyshare-arches`
+# regenerates all six.
+bin/x86_64/lcsas-keyshare:
+	$(MAKE) BUILD=build/x86_64-ks CC="$(ZIG_CC) -target x86_64-linux-musl" build/x86_64-ks/lcsas-keyshare
+	mkdir -p bin/x86_64 && cp build/x86_64-ks/lcsas-keyshare bin/x86_64/
+
+bin/aarch64/lcsas-keyshare:
+	$(MAKE) BUILD=build/aarch64-ks CC="$(ZIG_CC) -target aarch64-linux-musl" build/aarch64-ks/lcsas-keyshare
+	mkdir -p bin/aarch64 && cp build/aarch64-ks/lcsas-keyshare bin/aarch64/
+
+bin/armv7/lcsas-keyshare:
+	$(MAKE) BUILD=build/armv7-ks CC="$(ZIG_CC) -target arm-linux-musleabihf" build/armv7-ks/lcsas-keyshare
+	mkdir -p bin/armv7 && cp build/armv7-ks/lcsas-keyshare bin/armv7/
+
+bin/x86_64-windows/lcsas-keyshare.exe:
+	$(MAKE) BUILD=build/x86_64-windows-ks CC="$(ZIG_CC) -target x86_64-windows-gnu" BIN_EXT=.exe build/x86_64-windows-ks/lcsas-keyshare.exe
+	mkdir -p bin/x86_64-windows && cp build/x86_64-windows-ks/lcsas-keyshare.exe bin/x86_64-windows/
+
+bin/x86_64-macos/lcsas-keyshare:
+	$(MAKE) BUILD=build/x86_64-macos-ks CC="$(ZIG_CC) -target x86_64-macos" build/x86_64-macos-ks/lcsas-keyshare
+	mkdir -p bin/x86_64-macos && cp build/x86_64-macos-ks/lcsas-keyshare bin/x86_64-macos/
+
+bin/aarch64-macos/lcsas-keyshare:
+	$(MAKE) BUILD=build/aarch64-macos-ks CC="$(ZIG_CC) -target aarch64-macos" build/aarch64-macos-ks/lcsas-keyshare
+	mkdir -p bin/aarch64-macos && cp build/aarch64-macos-ks/lcsas-keyshare bin/aarch64-macos/
+
+keyshare-arches: bin/x86_64/lcsas-keyshare bin/aarch64/lcsas-keyshare bin/armv7/lcsas-keyshare bin/x86_64-windows/lcsas-keyshare.exe bin/x86_64-macos/lcsas-keyshare bin/aarch64-macos/lcsas-keyshare
+	@echo "keyshare-arches: built lcsas-keyshare for all 6 approved tier-1 targets"
+
 # Cross-compile with zig cc (single binary, deterministic).  Requires:
 #   apt-get install zig   OR   pip install ziglang
 zig-aarch64:
