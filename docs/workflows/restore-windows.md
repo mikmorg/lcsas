@@ -31,9 +31,13 @@ Sibling docs:
 ## Common context
 
 The Windows recovery stack is the file `recovery/scripts/restore.bat`
-plus the prebuilt binary `recovery/bin/x86_64-windows/lcsas-restore.exe`
-(see `recovery/docs/RECOVER_WINDOWS.txt` for the user-facing walkthrough
-and `recovery/docs/WINDOWS_RECOVERY_PLAN.txt` for the design rationale).
+plus the prebuilt `lcsas-restore.exe`. The binary lives at
+`recovery/bin/x86_64-windows/` in the **source tree** (build-host
+output dir), but the meta-builder bundles it onto the disc under the
+rust target triple `recovery\bin\x86_64-pc-windows-gnu\` — on-disc
+paths always use the triple (see `recovery/docs/RECOVER_WINDOWS.txt`
+for the user-facing walkthrough and
+`recovery/docs/WINDOWS_RECOVERY_PLAN.txt` for the design rationale).
 
 The orchestrator runs a two-tier cascade. The Python fallback that
 shipped on the disc is no longer chained from the .bat (the inner
@@ -47,9 +51,10 @@ scenario the script targets); users who need it invoke
 | 1    | `bin\<arch>\lcsas-restore.exe`                         | Primary           |
 | 2    | `bin\<arch>\rustic-static.exe` (cross-check)           | Secondary         |
 
-Architecture detection maps `PROCESSOR_ARCHITECTURE` (`AMD64`/`x86`/
-`ARM64`) and `PROCESSOR_ARCHITEW6432` to `x86_64-windows` or
-`aarch64-windows` at `recovery/scripts/restore.bat:94`-`105`. The binary
+Architecture detection maps `PROCESSOR_ARCHITECTURE` (`AMD64`/`x86`)
+and `PROCESSOR_ARCHITEW6432` to the `x86_64-pc-windows-gnu` target
+triple (ARM64 is explicitly rejected with a winget/rustic workaround
+message) at `recovery/scripts/restore.bat:93`-`123`. The binary
 itself is the C99 codebase with the Win32/POSIX shim
 `recovery/src/lcsas-restore/posix_compat.h` papering over `mkdir`,
 `lseek` (to `_lseeki64` for 64-bit pack offsets), `symlink` (stubbed to
@@ -90,7 +95,7 @@ discs are read from another drive.
 2. (Optional, paranoid users) Verify the script and binary against the
    per-disc manifest with `certutil`:
    `certutil -hashfile restore.bat SHA256` and
-   `certutil -hashfile recovery\bin\x86_64-windows\lcsas-restore.exe SHA256`,
+   `certutil -hashfile recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe SHA256`,
    then `findstr` the expected values out of
    `recovery\MANIFEST.sha256` (`recovery/docs/RECOVER_WINDOWS.txt:70`-`86`).
 3. Double-click `restore.bat` in File Explorer (or run it from CMD /
@@ -303,16 +308,25 @@ need it.
    cd D:\
    ```
 
-3. Invoke the standalone restorer directly. The script takes its
-   inputs as flags (all three are required):
+3. Put the password in a file (the script only reads it via
+   `--password-file`; it never asks for it interactively), then
+   invoke the standalone restorer directly. `--repo`,
+   `--password-file` and `--target` are all required flags; there
+   are no positional arguments:
 
    ```
    python standalone_restorer.py ^
-       --repo D:\repo ^
-       --password-file path\to\pw.txt ^
-       --target C:\Users\me\restored
+       --repo D:\metadata\<name> ^
+       --password-file C:\path\to\pw.txt ^
+       --target C:\Users\me\restored ^
+       --mount-point E:\
    ```
 
+   `<name>` is the backup-set folder under `D:\metadata\` (the
+   directory containing `keys\` and `index\`; `dir D:\metadata`
+   lists them). Pack data lives on the data discs: add one
+   `--mount-point <letter>:\` per inserted data disc — the
+   disc-swap pause re-scans the mount points after a swap.
    Use `--snapshot <id>` to pick a specific snapshot (default:
    latest), or `--list-snapshots` to enumerate them.  See
    `python standalone_restorer.py --help` for the full flag surface.
@@ -449,10 +463,11 @@ Windows workflow inherits. Source refs in parentheses.
   `restore.bat` from an elevated CMD (e.g. whether the password file
   in `%TEMP%` lands somewhere unexpected, whether `cd /d %SystemDrive%\`
   works under UAC virtualisation).
-- **No automated test of ARM64 Windows.** The `aarch64-windows` arch
-  is plumbed through `restore.bat:98` but
-  `recovery/docs/WINDOWS_RECOVERY_PLAN.txt:18`-`22` explicitly notes
-  it is not runtime-tested.
+- **No automated test of ARM64 Windows.** `restore.bat` explicitly
+  rejects ARM64 with a winget/rustic workaround message (no bundled
+  aarch64 Windows binary ships);
+  `recovery/docs/WINDOWS_RECOVERY_PLAN.txt:18`-`22` notes the target
+  is not runtime-tested.
 - **Multi-drive sweep is not exercised on real Windows.** The
   drive-letter sweep (`recovery/scripts/restore.bat:167`-`178`) is
   not covered by `test_e2e_windows.sh` because that test passes a
@@ -478,6 +493,7 @@ Windows workflow inherits. Source refs in parentheses.
 - `recovery/src/lcsas-restore/main.c:1`-`32` — `--meta-disc` / 
   `--pack-search` / `--catalog` flag surface used by `restore.bat`.
 - `recovery/bin/x86_64-windows/lcsas-restore.exe` — prebuilt static
-  Windows binary (UCRT, MinGW-w64 via `zig cc`); the artifact Tier 1
-  invokes.
+  Windows binary (UCRT, MinGW-w64 via `zig cc`) in the source tree;
+  bundled onto the disc at `recovery\bin\x86_64-pc-windows-gnu\`,
+  which is the path Tier 1 invokes.
 - `recovery/tests/test_e2e_windows.sh` — Wine-based end-to-end test.

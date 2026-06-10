@@ -75,15 +75,18 @@ required.
   STEP 2.  Compute the SHA-256 of restore.bat and lcsas-restore.exe.
 
       certutil -hashfile restore.bat SHA256
-      certutil -hashfile recovery\bin\x86_64-windows\lcsas-restore.exe SHA256
+      certutil -hashfile recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe SHA256
 
   STEP 3.  Look up the expected hash in recovery\MANIFEST.sha256:
 
       findstr /C:"restore.bat" recovery\MANIFEST.sha256
       findstr /C:"lcsas-restore.exe" recovery\MANIFEST.sha256
 
-  The two values for each file must match.  If they do not, the
-  disc has been tampered with or is corrupted -- do not run.
+  The two values for each file must match.  If findstr finds no
+  line for the file, you are probably looking at the wrong path --
+  check recovery\bin\ for the actual folder name.  A hash that
+  EXISTS in the manifest but differs from certutil's output means
+  corruption or tampering -- do not run that binary.
 
 ────────────────────────────────────────────────────────────────────
 SMARTSCREEN WARNING ("Windows protected your PC")
@@ -109,7 +112,7 @@ If your antivirus quarantines lcsas-restore.exe, restore it from
 the antivirus's quarantine UI.  The binary's SHA-256 is recorded in
 recovery\MANIFEST.sha256 on the disc; you can verify by hand:
 
-    certutil -hashfile recovery\bin\x86_64-windows\lcsas-restore.exe SHA256
+    certutil -hashfile recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe SHA256
 
 ────────────────────────────────────────────────────────────────────
 THE PASSWORD IS VISIBLE WHILE TYPING (CMD limitation)
@@ -183,8 +186,8 @@ CASE B.  The console window flashes and disappears.
 CASE C.  "lcsas-restore.exe is not recognized as an internal or
          external command."
          restore.bat looks for the .exe under
-         recovery\bin\x86_64-windows\.  If that path is empty on
-         your disc, the disc was built without the Windows binary.
+         recovery\bin\x86_64-pc-windows-gnu\.  If that path is empty
+         on your disc, the disc was built without the Windows binary.
          Options:
 
            (a) Cross-build on another machine and copy the .exe in.
@@ -192,7 +195,11 @@ CASE C.  "lcsas-restore.exe is not recognized as an internal or
                    cd recovery
                    make windows
                    cp bin/x86_64-windows/lcsas-restore.exe \
-                      /path/to/disc/recovery/bin/x86_64-windows/
+                      /path/to/disc/recovery/bin/x86_64-pc-windows-gnu/
+               NOTE the two folder names differ on purpose:
+               bin/x86_64-windows/ is the build-host output dir in
+               the source tree; the disc stores binaries under the
+               rust target triple, bin\x86_64-pc-windows-gnu\.
 
            (b) Use WSL.  Install WSL2 from the Microsoft Store (no
                admin needed in recent Windows versions), then:
@@ -204,7 +211,13 @@ CASE C.  "lcsas-restore.exe is not recognized as an internal or
                NOT chained from restore.bat any more -- see "MANUAL
                PYTHON RECOVERY" below for details).  Install Python
                from python.org, then run:
-                   python D:\standalone_restorer.py D:\repo C:\Users\me\restored
+                   python D:\standalone_restorer.py ^
+                       --repo D:\metadata\<name> ^
+                       --password-file C:\path\to\pw.txt ^
+                       --target C:\Users\me\restored ^
+                       --mount-point E:\
+               See "MANUAL PYTHON RECOVERY" below for what <name>,
+               the password file and --mount-point mean.
 
 CASE D.  Recovery completes but some files appear truncated.
          File a bug report with the SHA-256 of the affected file
@@ -265,16 +278,23 @@ wrapper around lcsas-restore.exe.  The .exe accepts:
     --target DIR           where to write restored files
     --snapshot ID|latest   which snapshot (default: latest)
     --list-snapshots       print all snapshots; do not restore
+    --pack-search DIR      extra dir to scan for pack files
+                           (repeatable; one per inserted data disc)
     --verbose              print progress messages
     --catalog FILE         optional path to LCSAS catalog.db
+
+The repository metadata lives under metadata\<name>\ on the disc,
+where <name> is the backup-set folder (the directory containing
+keys\ and index\); run `dir D:\metadata` to list them.
 
 Example:
 
     cd D:
-    bin\x86_64-windows\lcsas-restore.exe ^
-        --repo D:\repo ^
+    recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe ^
+        --repo D:\metadata\<name> ^
         --password-file C:\path\pw.txt ^
         --target C:\Users\me\restored ^
+        --pack-search E:\ ^
         --verbose
 
 ────────────────────────────────────────────────────────────────────
@@ -303,7 +323,11 @@ in order of effort:
 
   D. Use the standalone Python restorer.  Install Python 3 from
      python.org (versions 3.6 through 3.12 all work), then run:
-        python D:\standalone_restorer.py D:\repo C:\Users\me\restored
+        python D:\standalone_restorer.py ^
+            --repo D:\metadata\<name> ^
+            --password-file C:\path\to\pw.txt ^
+            --target C:\Users\me\restored ^
+            --mount-point E:\
      This works on any Windows that still runs Python 3.  Note that
      restore.bat does NOT chain to this script for you any more --
      you invoke it directly.  See "MANUAL PYTHON RECOVERY" below.
@@ -340,17 +364,35 @@ STEP 2.  Open a Command Prompt at the meta-disc root.  For example,
              D:
              cd D:\
 
-STEP 3.  Run the standalone restorer.  Two positional arguments:
-         the repository directory and the output directory.
+STEP 3.  Put the password in a file.  The script reads the password
+         from a file (--password-file); it never asks for it
+         interactively.  Open Notepad, type the password and nothing
+         else, and save it as e.g. C:\Users\me\pw.txt.  The password
+         is readable on screen and on disk while the file exists --
+         on a shared machine, save it to removable media instead and
+         delete it as soon as the restore finishes.
 
-             python standalone_restorer.py D:\repo C:\Users\me\restored
+STEP 4.  Run the standalone restorer.  --repo, --password-file and
+         --target are all required flags; there are no positional
+         arguments.
 
-         The script prompts for the password on stdin (visible while
-         typing -- CMD has no `read -s` equivalent).  Pass
-         --password-file C:\path\pw.txt if you prefer a password
-         file.  Run with --help for the full flag surface.
+             python standalone_restorer.py ^
+                 --repo D:\metadata\<name> ^
+                 --password-file C:\Users\me\pw.txt ^
+                 --target C:\Users\me\restored ^
+                 --mount-point E:\
 
-STEP 4.  Wait for "Recovery complete".  Files are byte-equal to the
+         <name> is the backup-set folder under D:\metadata\ -- the
+         directory that contains keys\ and index\.  Run
+         `dir D:\metadata` to list the available sets.
+
+         Pack data lives on the data discs, not under metadata\.
+         Add one --mount-point <letter>:\ argument per inserted
+         data disc; with a single drive, when a pack is missing the
+         script pauses so you can swap discs, then re-scans the
+         mount points.  Run with --help for the full flag surface.
+
+STEP 5.  Wait for "Recovery complete".  Files are byte-equal to the
          original snapshot.  Symlink, ACL, owner/group and other
          POSIX-specific metadata are dropped on Windows (same caveats
          as the binary path).

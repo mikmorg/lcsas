@@ -199,6 +199,12 @@ driver script: `recovery/scripts/restore.bat`.
 The .bat must replicate the cascade (tiers 1, 2, 3-skip, 4-skip,
 5):
 
+NOTE (post-Phase 21.1): the sketch below is the ORIGINAL design.
+The shipped restore.bat names binary directories by rust target
+triple (bin\x86_64-pc-windows-gnu\), rejects ARM64 with a winget
+workaround, and no longer chains the Python tier.  The shipped
+script is authoritative; this sketch is kept for design history.
+
     @echo off
     setlocal enabledelayedexpansion
 
@@ -345,8 +351,10 @@ src/lcsas/recovery/build.py
 src/lcsas/meta/builder.py
 
   Update _bundle_recovery_toolchain_artifacts() to also copy
-  bin/x86_64-windows/lcsas-restore.exe + restore.bat to the meta-
-  volume.
+  bin/x86_64-windows/lcsas-restore.exe (source-tree, build-host
+  layout) + restore.bat to the meta-volume.  The bundler renames
+  the directory to the rust target triple on the disc:
+  bin\x86_64-pc-windows-gnu\lcsas-restore.exe.
 
 src/lcsas/cli/main.py
 
@@ -438,13 +446,14 @@ Windows 95.  This binary has fewer features (no UCRT goodies) and
 slightly different behaviour, but runs on every 32/64-bit Windows
 from XP onward.
 
-Layout on the meta-volume:
+Layout on the meta-volume (on-disc dirs use the rust target
+triple, per Phase 21.1):
 
   recovery/
     bin/
-      x86_64-windows/      lcsas-restore.exe       (UCRT, modern)
-      x86_64-windows-msvcrt/ lcsas-restore.exe    (msvcrt, legacy)
-      aarch64-windows/     lcsas-restore.exe       (UCRT, ARM64)
+      x86_64-pc-windows-gnu/        lcsas-restore.exe  (UCRT, modern)
+      x86_64-pc-windows-gnu-msvcrt/ lcsas-restore.exe  (msvcrt, legacy)
+      aarch64-pc-windows-msvc/      lcsas-restore.exe  (UCRT, ARM64)
 
 restore.bat probes for both, preferring the modern UCRT build but
 falling back to the msvcrt one when UCRT is unavailable.

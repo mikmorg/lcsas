@@ -205,8 +205,12 @@ disc — no LCSAS install, no rustic, no network.
 
    ```
    python3 DISC/standalone_restorer.py --repo /tmp/cache \
-       --password-file /path/to/keyfile --list-snapshots
+       --password-file /path/to/keyfile --target /tmp/out \
+       --list-snapshots
    ```
+
+   (`--target` is a required flag even in list mode, but nothing is
+   written to it — the CLI exits after printing the snapshot list.)
 
    Or print repo info (version, snapshot count, blob count, zstd
    availability)

@@ -128,3 +128,6 @@ which CI never runs, per the verifier's refinement):
 
 1 day: 0.5 doc sweep + verbatim rehearsal against a built tree, 0.5 contract-test
 extensions. No special environment (Windows VM rehearsal can ride UX-01's drill).
+
+---
+**Implemented:** 2026-06-10. As planned, plus: regenerated recovery MANIFEST.sha256 + docs/MANIFEST.sha256 (my doc edits broke two previously-valid pins; regen also folded in pre-existing drift). Two deliberate forward-slash source-tree `bin/x86_64-windows/` references remain in RECOVER_WINDOWS.txt per fix-design item 1 (labelled build-host vs on-disc); the contract test bans the on-disc backslash form. UX-02 skeleton did not exist yet, so tests/unit/test_doc_command_contract.py was created here. Also fixed restore-disc-only.md --list-snapshots example (missing required --target).
