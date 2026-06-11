@@ -31,6 +31,7 @@ from lcsas.db.packs import register_pack
 from lcsas.db.queries import (
     get_archive_status_summary,
     get_location_summary,
+    get_unarchived_packs,
 )
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
@@ -534,12 +535,13 @@ class TestBurnSession:
 
 class TestCleanSession:
     def test_clean_removes_staging_dir(self, env):
-        """Clean session removes the staging directory."""
+        """Clean session removes the staging directory (after burning)."""
         orch = env["orch"]
 
         result = orch.stage()
         assert result.staging_dir.is_dir()
 
+        orch.burn_session(result.session_id, "Home_Shelf", skip_burn=True)
         orch.clean_session(result.session_id)
         assert not result.staging_dir.exists()
 
@@ -549,6 +551,7 @@ class TestCleanSession:
         orch = env["orch"]
 
         result = orch.stage()
+        orch.burn_session(result.session_id, "Home_Shelf", skip_burn=True)
         orch.clean_session(result.session_id)
 
         session = get_session(conn, result.session_id)
@@ -558,10 +561,241 @@ class TestCleanSession:
         """'latest' works for clean."""
         orch = env["orch"]
         result = orch.stage()
+        orch.burn_session(result.session_id, "Home_Shelf", skip_burn=True)
         orch.clean_session("latest")
 
         session = get_session(env["conn"], result.session_id)
         assert session.status == "CLEANED"
+
+    def test_clean_session_unburned_refuses(self, env):
+        """Cleaning a never-burned session refuses: ISOs and catalog intact."""
+        conn = env["conn"]
+        orch = env["orch"]
+
+        result = orch.stage()
+
+        with pytest.raises(ValueError, match="session abort"):
+            orch.clean_session(result.session_id)
+
+        # ISOs still on disk, staging dir intact
+        for iso in result.iso_paths:
+            assert iso.exists()
+        assert result.staging_dir.is_dir()
+
+        # Catalog untouched: volume still there, packs still claimed
+        for m in result.manifests:
+            assert get_volume_by_id(conn, m.volume_id) is not None
+        assert get_unarchived_packs(conn) == []
+        assert get_session(conn, result.session_id).status == "STAGED"
+
+    def test_clean_session_force_reclaims(self, env):
+        """force=True deletes unburned volumes and returns packs to the pool."""
+        conn = env["conn"]
+        orch = env["orch"]
+        packs = env["packs"]
+
+        result = orch.stage()
+        orch.clean_session(result.session_id, force=True)
+
+        # All packs unarchived again
+        unarchived = {p.sha256 for p in get_unarchived_packs(conn)}
+        assert unarchived == {p.sha256 for p in packs}
+
+        # Volumes deleted
+        row = conn.execute("SELECT COUNT(*) FROM volumes").fetchone()
+        assert row[0] == 0
+
+        # Session CLEANED, staging dir gone
+        assert get_session(conn, result.session_id).status == "CLEANED"
+        assert not result.staging_dir.exists()
+
+    def test_clean_session_burned_still_works(self, env):
+        """A burned (skip_burn) session cleans without force, as documented."""
+        conn = env["conn"]
+        orch = env["orch"]
+
+        result = orch.stage()
+        orch.burn_session(result.session_id, "Home_Shelf", skip_burn=True)
+        orch.clean_session(result.session_id)
+
+        assert get_session(conn, result.session_id).status == "CLEANED"
+        assert not result.staging_dir.exists()
+        # Burned volumes survive the clean; packs stay archived.
+        for m in result.manifests:
+            assert get_volume_by_id(conn, m.volume_id).status == "VERIFIED"
+        assert get_unarchived_packs(conn) == []
+
+
+# =========================================================================
+# Mid-Stage Failure Compensation Tests  [BURN-03]
+# =========================================================================
+
+
+class TestMidStageCompensation:
+    """Any post-commit failure in _stage_single_volume must delete the
+    committed volume so its packs return to the unarchived pool instead of
+    staying stranded as falsely 'archived' on a phantom STAGING volume."""
+
+    def test_iso_failure_midstage_reclaims_packs(self, multi_vol_env):
+        """xorriso failure on volume 2 of 2: volume 2 compensated away."""
+        conn = multi_vol_env["conn"]
+        orch = multi_vol_env["orch"]
+        xorriso = multi_vol_env["xorriso"]
+
+        calls = {"n": 0}
+
+        def _fail_second(source_dir, output_iso, volume_label, **kwargs):
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise RuntimeError("xorriso exploded")
+            Path(output_iso).write_bytes(b"\x00" * 1024)
+            return Path(output_iso)
+
+        xorriso.create_iso.side_effect = _fail_second
+
+        with pytest.raises(RuntimeError, match="xorriso exploded"):
+            orch.stage()
+
+        # Volume 1 + its session row survive
+        vols = conn.execute("SELECT volume_id FROM volumes").fetchall()
+        assert len(vols) == 1
+        sv = conn.execute(
+            "SELECT * FROM session_volumes WHERE volume_id = ?",
+            (vols[0]["volume_id"],),
+        ).fetchone()
+        assert sv is not None
+
+        # Volume 2 absent and its packs back in the unarchived pool
+        assert len(conn.execute("SELECT * FROM session_volumes").fetchall()) == 1
+        vol1_pack_count = conn.execute(
+            "SELECT COUNT(*) FROM volume_packs"
+        ).fetchone()[0]
+        unarchived = get_unarchived_packs(conn)
+        assert vol1_pack_count + len(unarchived) == len(multi_vol_env["packs"])
+        assert len(unarchived) >= 1
+
+    def test_ecc_failure_midstage_reclaims_packs(self, env, monkeypatch):
+        """dvdisaster failure mid-stage deletes the volume + pack links."""
+        conn = env["conn"]
+        orch = env["orch"]
+
+        # TEST_TINY carries 0% ECC overhead (ECC implicitly skipped); raise
+        # it so augment_iso actually runs.  monkeypatch restores it after.
+        monkeypatch.setattr(MediaType.TEST_TINY, "_ecc_overhead_pct", 5)
+        env["dvdisaster"].augment_iso.side_effect = RuntimeError(
+            "dvdisaster exploded"
+        )
+
+        with pytest.raises(RuntimeError, match="dvdisaster exploded"):
+            orch.stage()
+
+        assert conn.execute("SELECT COUNT(*) FROM volumes").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM volume_packs").fetchone()[0] == 0
+        unarchived = {p.sha256 for p in get_unarchived_packs(conn)}
+        assert unarchived == {p.sha256 for p in env["packs"]}
+
+    def test_keyboardinterrupt_during_ecc_compensates(self, env, monkeypatch):
+        """Ctrl-C during a multi-minute dvdisaster run also compensates."""
+        conn = env["conn"]
+        orch = env["orch"]
+
+        monkeypatch.setattr(MediaType.TEST_TINY, "_ecc_overhead_pct", 5)
+        env["dvdisaster"].augment_iso.side_effect = KeyboardInterrupt()
+
+        with pytest.raises(KeyboardInterrupt):
+            orch.stage()
+
+        assert conn.execute("SELECT COUNT(*) FROM volumes").fetchone()[0] == 0
+        unarchived = {p.sha256 for p in get_unarchived_packs(conn)}
+        assert unarchived == {p.sha256 for p in env["packs"]}
+
+    def test_session_volume_row_committed_atomically_with_volume(
+        self, env, monkeypatch,
+    ):
+        """No crash window: a volume row never exists outside session_volumes.
+
+        Crash right after _stage_single_volume returns (in the ISO-hashing
+        step of stage()); the already-committed volume must still be
+        reachable through session_volumes so burn_session / session abort
+        can see it.
+        """
+        conn = env["conn"]
+        orch = env["orch"]
+
+        def _boom(path):
+            raise RuntimeError("crash before session registration")
+
+        monkeypatch.setattr("lcsas.burn.orchestrator.sha256_file", _boom)
+
+        with pytest.raises(RuntimeError, match="crash before session"):
+            orch.stage()
+
+        vols = conn.execute("SELECT volume_id FROM volumes").fetchall()
+        assert len(vols) == 1
+        sv = conn.execute(
+            "SELECT * FROM session_volumes WHERE volume_id = ?",
+            (vols[0]["volume_id"],),
+        ).fetchone()
+        assert sv is not None
+        assert sv["iso_sha256"] == ""
+
+
+# =========================================================================
+# Session / Volume Abort Tests  [BURN-03]
+# =========================================================================
+
+
+class TestAbortSession:
+    def test_abort_session_reclaims_packs(self, env):
+        """abort_session deletes unburned volumes and reports the reclaim."""
+        conn = env["conn"]
+        orch = env["orch"]
+        packs = env["packs"]
+
+        result = orch.stage()
+        summary = orch.abort_session(result.session_id)
+
+        assert summary.volumes_deleted == len(result.manifests)
+        assert summary.packs_reclaimed == len(packs)
+        assert summary.bytes_reclaimed == sum(p.size_bytes for p in packs)
+
+        unarchived = {p.sha256 for p in get_unarchived_packs(conn)}
+        assert unarchived == {p.sha256 for p in packs}
+        assert get_session(conn, result.session_id).status == "CLEANED"
+        assert not result.staging_dir.exists()
+
+    def test_abort_volume_reclaims_single_stranded_volume(self, env):
+        """abort_volume deletes one STAGING volume with no session."""
+        conn = env["conn"]
+        orch = env["orch"]
+        packs = env["packs"]
+
+        # A stranded volume from a pre-fix crash window: volume + pack
+        # links exist, but no session_volumes row.
+        manifest = orch.prepare()
+        summary = orch.abort_volume(manifest.volume_label)
+
+        assert summary.volumes_deleted == 1
+        assert summary.packs_reclaimed == len(packs)
+        assert conn.execute("SELECT COUNT(*) FROM volumes").fetchone()[0] == 0
+        unarchived = {p.sha256 for p in get_unarchived_packs(conn)}
+        assert unarchived == {p.sha256 for p in packs}
+
+    def test_abort_volume_refuses_burned(self, env):
+        """abort_volume refuses VERIFIED volumes — discs are not phantom."""
+        orch = env["orch"]
+
+        result = orch.stage()
+        orch.burn_session(result.session_id, "Home_Shelf", skip_burn=True)
+        label = result.manifests[0].volume_label
+
+        with pytest.raises(ValueError, match="only never-burned"):
+            orch.abort_volume(label)
+
+    def test_abort_volume_unknown_label(self, env):
+        orch = env["orch"]
+        with pytest.raises(ValueError, match="not found"):
+            orch.abort_volume("NO_SUCH_VOLUME")
 
 
 # =========================================================================

@@ -29,6 +29,7 @@ from lcsas.db.sessions import (
     get_session_volumes,
     resolve_session_id,
     update_session_status,
+    update_session_volume_iso,
 )
 from lcsas.db.volume_copies import add_volume_copy
 from lcsas.db.volume_events import add_event
@@ -81,6 +82,16 @@ class StageResult:
     staging_dir: Path
     manifests: list[BurnManifest] = field(default_factory=list)
     iso_paths: list[Path] = field(default_factory=list)
+
+
+@dataclass
+class AbortSummary:
+    """What an abort returned to the unarchived pool."""
+
+    volumes_deleted: int
+    packs_reclaimed: int
+    bytes_reclaimed: int
+    labels: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -334,6 +345,7 @@ class BurnOrchestrator:
         vol_uuid: str,
         staging_root: Path,
         iso_output: Path | None = None,
+        session_id: str | None = None,
     ) -> BurnManifest:
         """Build staging dir, register volume, inject metadata, optionally create ISO.
 
@@ -355,6 +367,9 @@ class BurnOrchestrator:
             staging_root: Directory to stage files into.
             iso_output: If set, create an ISO at this path (+ ECC for
                 production media).
+            session_id: If set, link the volume into session_volumes in
+                the SAME transaction that creates it, so no crash can
+                leave a volume row invisible to ``burn_session``.
 
         Returns:
             BurnManifest describing the staged volume.
@@ -406,75 +421,101 @@ class BurnOrchestrator:
         pack_ids = [p.pack_id for p in selected_packs]
         bulk_link_packs(self._conn, volume.volume_id, pack_ids, commit=False)
         update_used_bytes(self._conn, volume.volume_id, total_bytes, commit=False)
+        if session_id is not None and iso_output is not None:
+            # Same transaction as the volume row: a volume can never exist
+            # outside session_volumes (the ISO hash is filled in later via
+            # update_session_volume_iso once the ISO has been mastered).
+            add_session_volume(
+                self._conn,
+                session_id=session_id,
+                volume_id=volume.volume_id,
+                iso_path=str(iso_output),
+                iso_sha256="",
+                commit=False,
+            )
         self._conn.commit()
 
-        # 4. Inject catalog AFTER DB commit.
-        #    Checkpoint WAL so all committed data is in the main .db file,
-        #    then copy it to staging.  If this fails, roll back the volume
-        #    registration so DB and disc catalog remain in sync.
+        # Steps 4-7 run AFTER the volume + volume_packs commit.  Any failure
+        # past this point (catalog injection, xorriso, dvdisaster, size
+        # checks, Ctrl-C) must compensate by deleting the committed volume:
+        # otherwise its packs stay falsely "archived" on a phantom STAGING
+        # volume that will never become a disc, and `lcsas stage` skips
+        # them forever.  BaseException so KeyboardInterrupt during a
+        # multi-minute dvdisaster run also compensates.  The staging tree
+        # is left on disk for diagnosis (abort/clean removes it).
         try:
-            self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            injector.inject_catalog(self._config.db_path)
-        except Exception as exc:
-            _logger.error(
-                "Catalog injection into staging failed; rolling back volume "
-                "registration for %s: %s",
-                vol_label, exc,
-            )
+            # 4. Inject catalog AFTER DB commit.
+            #    Checkpoint WAL so all committed data is in the main .db
+            #    file, then copy it to staging, keeping DB and disc catalog
+            #    in sync.
+            try:
+                self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                injector.inject_catalog(self._config.db_path)
+            except Exception as exc:
+                _logger.error(
+                    "Catalog injection into staging failed; rolling back volume "
+                    "registration for %s: %s",
+                    vol_label, exc,
+                )
+                raise RuntimeError(
+                    f"Failed to inject catalog into staging for volume {vol_label}. "
+                    f"Volume registration has been rolled back."
+                ) from exc
+
+            # 5. Write volume info files
+            vol = get_volume_by_id(self._conn, volume.volume_id)
+            injector.write_volume_info(vol, packs=selected_packs)
+            injector.write_restore_instructions()
+            injector.write_standalone_restorer()
+            if not media_type.is_test:
+                injector.write_lcsas_source()
+            injector.write_start_here(self._config)
+            injector.write_key_info(self._config)
+            injector.write_config_summary(self._config)
+            injector.write_disc_care()
+
+            # 6. Optionally create ISO + ECC
+            iso_path: Path | None = None
+            if iso_output is not None:
+                # Pre-flight: verify staging dir fits in the target media.
+                from lcsas.utils.fs import dir_size_bytes
+                estimated_bytes = dir_size_bytes(staging_root)
+                if estimated_bytes > media_type.capacity_bytes:
+                    raise ValueError(
+                        f"Staging directory for {vol_label} is too large: "
+                        f"{estimated_bytes:,} bytes > {media_type.capacity_bytes:,} bytes "
+                        f"capacity ({media_type.name}). Reduce pack count or use larger media."
+                    )
+                self._xorriso.create_iso(
+                    staging_root, iso_output, vol_label,
+                    expected_bytes=estimated_bytes,
+                )
+                iso_path = iso_output
+
+                if media_type.ecc_overhead_pct > 0:
+                    self._dvdisaster.augment_iso(
+                        iso_path, self._config.default_ecc_redundancy_pct,
+                    )
+
+                # 7. Validate ISO size against media capacity  [O4]
+                if not iso_path.exists():
+                    raise FileNotFoundError(
+                        f"ISO not created by xorriso: {iso_path}. "
+                        f"Check xorriso output for errors."
+                    )
+                iso_size = iso_path.stat().st_size
+                if iso_size > media_type.capacity_bytes:
+                    raise ValueError(
+                        f"ISO {iso_path.name} is {iso_size:,} bytes, exceeds "
+                        f"{media_type.name} capacity of "
+                        f"{media_type.capacity_bytes:,} bytes"
+                    )
+        except BaseException:
+            self._conn.rollback()  # drop any uncommitted partial state
+            # Removes volume_packs links and the session_volumes row too,
+            # so the packs reappear in get_unarchived_packs().
             delete_volume(self._conn, volume.volume_id)
-            raise RuntimeError(
-                f"Failed to inject catalog into staging for volume {vol_label}. "
-                f"Volume registration has been rolled back."
-            ) from exc
-
-        # 5. Write volume info files
-        vol = get_volume_by_id(self._conn, volume.volume_id)
-        injector.write_volume_info(vol, packs=selected_packs)
-        injector.write_restore_instructions()
-        injector.write_standalone_restorer()
-        if not media_type.is_test:
-            injector.write_lcsas_source()
-        injector.write_start_here(self._config)
-        injector.write_key_info(self._config)
-        injector.write_config_summary(self._config)
-        injector.write_disc_care()
-
-        # 6. Optionally create ISO + ECC
-        iso_path: Path | None = None
-        if iso_output is not None:
-            # Pre-flight: verify staging dir fits in the target media.
-            from lcsas.utils.fs import dir_size_bytes
-            estimated_bytes = dir_size_bytes(staging_root)
-            if estimated_bytes > media_type.capacity_bytes:
-                raise ValueError(
-                    f"Staging directory for {vol_label} is too large: "
-                    f"{estimated_bytes:,} bytes > {media_type.capacity_bytes:,} bytes "
-                    f"capacity ({media_type.name}). Reduce pack count or use larger media."
-                )
-            self._xorriso.create_iso(
-                staging_root, iso_output, vol_label,
-                expected_bytes=estimated_bytes,
-            )
-            iso_path = iso_output
-
-            if media_type.ecc_overhead_pct > 0:
-                self._dvdisaster.augment_iso(
-                    iso_path, self._config.default_ecc_redundancy_pct,
-                )
-
-            # 7. Validate ISO size against media capacity  [O4]
-            if not iso_path.exists():
-                raise FileNotFoundError(
-                    f"ISO not created by xorriso: {iso_path}. "
-                    f"Check xorriso output for errors."
-                )
-            iso_size = iso_path.stat().st_size
-            if iso_size > media_type.capacity_bytes:
-                raise ValueError(
-                    f"ISO {iso_path.name} is {iso_size:,} bytes, exceeds "
-                    f"{media_type.name} capacity of "
-                    f"{media_type.capacity_bytes:,} bytes"
-                )
+            raise
 
         return BurnManifest(
             volume_label=vol_label,
@@ -617,7 +658,9 @@ class BurnOrchestrator:
             staging_root = session_dir / vol_label
             iso_path = session_dir / f"{vol_label}.iso"
 
-            # Stage, register, inject metadata, create ISO + ECC
+            # Stage, register, inject metadata, create ISO + ECC.  The
+            # session_volumes row is committed atomically with the volume
+            # row inside _stage_single_volume (iso_sha256='' until hashed).
             manifest = self._stage_single_volume(
                 selected_packs=selected_packs,
                 total_bytes=total_bytes,
@@ -626,23 +669,21 @@ class BurnOrchestrator:
                 vol_uuid=vol_uuid,
                 staging_root=staging_root,
                 iso_output=iso_path,
+                session_id=session_id,
             )
 
-            # Compute ISO hash
+            # Compute ISO hash and record it on the session volume
             iso_hash = ""
             if manifest.iso_path and manifest.iso_path.exists():
                 iso_hash = sha256_file(manifest.iso_path)
 
-            # Register in session
-            add_session_volume(
+            update_session_volume_iso(
                 self._conn,
                 session_id=session_id,
                 volume_id=manifest.volume_id,
                 iso_path=str(manifest.iso_path or iso_path),
                 iso_sha256=iso_hash,
-                commit=False,
             )
-            self._conn.commit()
 
             manifests.append(manifest)
             if manifest.iso_path:
@@ -818,10 +859,38 @@ class BurnOrchestrator:
 
         return receipts
 
-    def clean_session(self, session_ref: str = "latest") -> None:
-        """Remove staged ISOs and staging directories for a session."""
+    def clean_session(
+        self,
+        session_ref: str = "latest",
+        *,
+        force: bool = False,
+    ) -> None:
+        """Remove staged ISOs and staging directories for a session.
+
+        Refuses to clean a session whose volumes were never burned: the
+        ISOs/staging tree are the only burnable artifacts, while the catalog
+        would keep claiming the packs "archived" on phantom STAGING volumes.
+        With ``force=True`` those volumes are deleted first, returning their
+        packs to the unarchived pool, then cleaning proceeds.
+        """
         session_id = resolve_session_id(self._conn, session_ref)
         session_vols = get_session_volumes(self._conn, session_id)
+
+        unburned = self._unburned_session_volumes(session_id)
+        if unburned and not force:
+            labels = ", ".join(label for _vid, label in unburned)
+            raise ValueError(
+                f"Session {session_id} has {len(unburned)} volume(s) that "
+                f"were never burned ({labels}). Cleaning now would "
+                f"permanently strand their packs as falsely 'archived'. "
+                f"Burn the session first ('lcsas burn --session {session_id}'), "
+                f"or abort it ('lcsas session abort {session_id}') to return "
+                f"the packs to the unarchived pool. "
+                f"Use --force to clean AND abort in one step."
+            )
+
+        for vid, _label in unburned:
+            delete_volume(self._conn, vid)
 
         for sv in session_vols:
             iso_path = Path(sv.iso_path)
@@ -835,7 +904,102 @@ class BurnOrchestrator:
         if staging_dir.exists():
             safe_remove_tree(staging_dir)
 
+        # Aborted sessions reuse CLEANED: the sessions.status CHECK allows
+        # only STAGED/PARTIAL/COMPLETE/CLEANED (no table rebuild for an
+        # ABORTED value); the log carries the distinction.
         update_session_status(self._conn, session_id, "CLEANED")
+
+    def abort_session(self, session_ref: str = "latest") -> AbortSummary:
+        """Abort a never-burned session: reclaim its packs, then clean it.
+
+        Deletes the session's STAGING/BURNING volumes (returning their packs
+        to the unarchived pool so the next `lcsas stage` picks them up),
+        removes the ISOs and staging tree, and marks the session CLEANED.
+        """
+        from lcsas.log import get_logger
+        logger = get_logger()
+
+        session_id = resolve_session_id(self._conn, session_ref)
+        unburned = self._unburned_session_volumes(session_id)
+        summary = self._reclaim_summary([vid for vid, _label in unburned])
+        summary.labels = [label for _vid, label in unburned]
+
+        self.clean_session(session_id, force=True)
+
+        logger.info(
+            "Aborted session %s: deleted %d volume(s)%s, reclaimed %d "
+            "pack(s), %s bytes returned to the unarchived pool.",
+            session_id,
+            summary.volumes_deleted,
+            f" ({', '.join(summary.labels)})" if summary.labels else "",
+            summary.packs_reclaimed,
+            f"{summary.bytes_reclaimed:,}",
+        )
+        return summary
+
+    def abort_volume(self, label: str) -> AbortSummary:
+        """Delete a single stranded never-burned volume by label.
+
+        Covers volumes with no session (crash-window strandings from old
+        catalogs).  Refuses anything not in STAGING/BURNING.
+        """
+        from lcsas.db.volumes import get_volume_by_label
+        from lcsas.log import get_logger
+        logger = get_logger()
+
+        vol = get_volume_by_label(self._conn, label)
+        if vol is None:
+            raise ValueError(f"Volume '{label}' not found in catalog.")
+        if vol.status not in ("STAGING", "BURNING"):
+            raise ValueError(
+                f"Volume {label} has status {vol.status} — only never-burned "
+                f"(STAGING/BURNING) volumes can be aborted."
+            )
+
+        summary = self._reclaim_summary([vol.volume_id])
+        summary.labels = [label]
+        delete_volume(self._conn, vol.volume_id)
+
+        logger.info(
+            "Aborted volume %s: reclaimed %d pack(s), %s bytes returned "
+            "to the unarchived pool.",
+            label, summary.packs_reclaimed, f"{summary.bytes_reclaimed:,}",
+        )
+        return summary
+
+    def _unburned_session_volumes(self, session_id: str) -> list[tuple[int, str]]:
+        """Return (volume_id, label) for a session's STAGING/BURNING volumes."""
+        rows = self._conn.execute(
+            """SELECT v.volume_id, v.label FROM volumes v
+               JOIN session_volumes sv ON sv.volume_id = v.volume_id
+               WHERE sv.session_id = ?
+                 AND v.status IN ('STAGING', 'BURNING')
+               ORDER BY v.label""",
+            (session_id,),
+        ).fetchall()
+        return [(row["volume_id"], row["label"]) for row in rows]
+
+    def _reclaim_summary(self, volume_ids: list[int]) -> AbortSummary:
+        """Count the distinct packs/bytes linked to the given volumes."""
+        if not volume_ids:
+            return AbortSummary(
+                volumes_deleted=0, packs_reclaimed=0, bytes_reclaimed=0,
+            )
+        placeholders = ",".join("?" for _ in volume_ids)
+        row = self._conn.execute(
+            f"""SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM (
+                    SELECT DISTINCT p.pack_id, p.size_bytes
+                    FROM packs p
+                    JOIN volume_packs vp ON vp.pack_id = p.pack_id
+                    WHERE vp.volume_id IN ({placeholders})
+                )""",
+            volume_ids,
+        ).fetchone()
+        return AbortSummary(
+            volumes_deleted=len(volume_ids),
+            packs_reclaimed=int(row[0]),
+            bytes_reclaimed=int(row[1]),
+        )
 
     # -----------------------------------------------------------------
     # Internal helpers

@@ -203,3 +203,12 @@ end-to-end; track under the GATE plans.
 
 3 days: 1.5 impl (compensation + transaction restructure + guard + abort CLI +
 status warning), 1.5 tests. No special environment.
+
+---
+**Implemented:** 2026-06-11. As planned, with three adjustments: the `session`
+CLI group already existed (added `abort` as its second verb); `delete_volume`
+was extended to remove `session_volumes` rows first (the FK has no ON DELETE
+CASCADE, which would otherwise block compensation/force-clean once fix 2
+registers session rows at volume-commit time); the three pre-existing
+TestCleanSession tests now burn (skip_burn) before cleaning to match the new
+guard.

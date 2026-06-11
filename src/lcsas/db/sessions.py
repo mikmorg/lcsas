@@ -145,6 +145,27 @@ def get_session_volumes(
     return [_row_to_session_volume(r) for r in rows]
 
 
+def update_session_volume_iso(
+    conn: sqlite3.Connection,
+    session_id: str,
+    volume_id: int,
+    iso_path: str,
+    iso_sha256: str,
+) -> None:
+    """Fill in the ISO path/hash for a session volume registered pre-ISO.
+
+    Volumes are linked into session_volumes in the same transaction that
+    creates them (before the ISO exists, with iso_sha256=''); this records
+    the final hash once the ISO has been mastered.
+    """
+    conn.execute(
+        """UPDATE session_volumes SET iso_path = ?, iso_sha256 = ?
+           WHERE session_id = ? AND volume_id = ?""",
+        (iso_path, iso_sha256, session_id, volume_id),
+    )
+    conn.commit()
+
+
 def update_iso_sha256(
     conn: sqlite3.Connection,
     session_id: str,

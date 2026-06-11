@@ -151,6 +151,10 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Specific repository IDs to stage.")
     stage_p.add_argument("--clean", action="store_true",
                          help="Clean up staged ISOs for a session.")
+    stage_p.add_argument("--force", action="store_true",
+                         help="With --clean: also abort a never-burned "
+                              "session, deleting its volumes and returning "
+                              "their packs to the unarchived pool.")
     stage_p.add_argument("--session", type=str, default=None,
                          help="Session ID (for --clean).")
     stage_p.add_argument("--dry-run", "-n", action="store_true", default=False,
@@ -387,6 +391,20 @@ def build_parser() -> argparse.ArgumentParser:
     sess_list_p.add_argument(
         "--status", type=str, default=None,
         help="Filter by status (STAGED, COMPLETE, PARTIAL, ABORTED).",
+    )
+    sess_abort_p = session_sub.add_parser(
+        "abort",
+        help="Abort a never-burned session: delete its volumes and return "
+             "their packs to the unarchived pool.",
+    )
+    sess_abort_p.add_argument(
+        "ref", nargs="?", default="latest",
+        help="Session ID or 'latest' (default).",
+    )
+    sess_abort_p.add_argument(
+        "--volume", type=str, default=None,
+        help="Abort a single stranded STAGING volume by label instead of "
+             "a whole session (for volumes with no session).",
     )
 
     # --- config ---
@@ -926,7 +944,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     """Show archive status summary."""
     from lcsas.db.connection import get_connection
-    from lcsas.db.queries import get_archive_status_summary
+    from lcsas.db.queries import (
+        get_archive_status_summary,
+        get_packs_stranded_on_unburned_volumes,
+    )
     from lcsas.db.schema import create_all
     from lcsas.db.volumes import list_volumes
 
@@ -937,6 +958,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
         summary = get_archive_status_summary(conn)
         volumes = list_volumes(conn)
+        stranded = get_packs_stranded_on_unburned_volumes(conn)
     finally:
         conn.close()
 
@@ -947,6 +969,16 @@ def cmd_status(args: argparse.Namespace) -> int:
     logger.info(f"Volumes: {len(volumes)} total")
     for v in volumes:
         logger.info(f"  {v.label:<25} {v.media_type:<10} {v.status:<10} {v.location}")
+    if stranded:
+        stranded_bytes = sum(p.size_bytes for p in stranded)
+        logger.warning(
+            "WARNING: %d pack(s) (%s bytes) are claimed by never-burned "
+            "volumes — they count as 'archived' but exist on no disc and "
+            "will never be re-staged. Run 'lcsas session abort <id>' or "
+            "'lcsas stage --clean --force' to return them to the "
+            "unarchived pool.",
+            len(stranded), f"{stranded_bytes:,}",
+        )
     return 0
 
 
@@ -1041,7 +1073,11 @@ def cmd_stage(args: argparse.Namespace) -> int:
 
             if args.clean:
                 session_ref = args.session or "latest"
-                orch.clean_session(session_ref)
+                try:
+                    orch.clean_session(session_ref, force=args.force)
+                except ValueError as e:
+                    logger.error("%s", e)
+                    return 1
                 logger.info(f"Cleaned session: {session_ref}")
                 return 0
 
@@ -3152,8 +3188,10 @@ def dispatch(args: argparse.Namespace) -> int:
     elif args.command == "session":
         if args.session_command == "list":
             return cmd_session_list(args)
+        elif args.session_command == "abort":
+            return cmd_session_abort(args)
         else:
-            logger.error("Usage: lcsas session {list}")
+            logger.error("Usage: lcsas session {list,abort}")
             return 1
     elif args.command == "restore":
         if args.restore_command == "plan":
@@ -3409,6 +3447,38 @@ def cmd_session_list(args: argparse.Namespace) -> int:
     finally:
         conn.close()
 
+    return 0
+
+
+def cmd_session_abort(args: argparse.Namespace) -> int:
+    """Abort a never-burned session (or one stranded volume), reclaiming packs."""
+    from lcsas.burn.orchestrator import BurnOrchestrator
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import locked_connection
+    from lcsas.db.schema import create_all
+    from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+    from lcsas.iso.xorriso import SubprocessXorrisoRunner
+
+    if args.config is None:
+        logger.error("--config is required for session abort.")
+        return 1
+    config = load_config(args.config)
+
+    with locked_connection(args.db or config.db_path) as conn:
+        create_all(conn)
+        orch = BurnOrchestrator(
+            config, conn,
+            SubprocessXorrisoRunner(tmpdir=config.staging_path),
+            SubprocessDVDisasterRunner(tmpdir=config.staging_path),
+        )
+        try:
+            if args.volume:
+                orch.abort_volume(args.volume)
+            else:
+                orch.abort_session(args.ref)
+        except ValueError as e:
+            logger.error("%s", e)
+            return 1
     return 0
 
 

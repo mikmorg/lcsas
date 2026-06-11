@@ -9,6 +9,7 @@ from lcsas.db.queries import (
     get_missing_packs,
     get_packs_for_volume,
     get_packs_only_on_volumes,
+    get_packs_stranded_on_unburned_volumes,
     get_pick_list,
     get_redundancy_report,
     get_snapshots_by_path,
@@ -145,6 +146,65 @@ class TestStatusSummary:
         assert summary["archived"] == 14
         assert summary["unarchived"] == 6
         assert summary["pruned"] == 0
+
+
+class TestStrandedPacks:
+    """get_packs_stranded_on_unburned_volumes — packs whose only claims
+    are stale never-burned (STAGING/BURNING) volumes.  [BURN-03]"""
+
+    def test_stranded_packs_query(self, memory_db):
+        from lcsas.db.packs import register_pack
+        from lcsas.db.volume_packs import bulk_link_packs
+        from lcsas.db.volumes import create_volume
+        from lcsas.utils.labels import generate_uuid
+
+        conn = memory_db
+
+        def _vol(label, status):
+            return create_volume(
+                conn, label=label, uuid=generate_uuid(),
+                media_type="BD25", capacity_bytes=25_000_000_000,
+                status=status,
+            )
+
+        old_staging = _vol("STALE_STAGING", "STAGING")
+        fresh_staging = _vol("FRESH_STAGING", "STAGING")
+        verified = _vol("VERIFIED_VOL", "VERIFIED")
+
+        # Age the stale volume beyond the 24 h cutoff
+        conn.execute(
+            """UPDATE volumes SET created_at = datetime('now', '-48 hours')
+               WHERE volume_id = ?""",
+            (old_staging.volume_id,),
+        )
+        conn.commit()
+
+        pack_stranded = register_pack(
+            conn, sha256="stranded_pack", size_bytes=100, repo_id="_test")
+        pack_also_verified = register_pack(
+            conn, sha256="also_on_verified", size_bytes=100, repo_id="_test")
+        pack_verified_only = register_pack(
+            conn, sha256="verified_only", size_bytes=100, repo_id="_test")
+        pack_fresh = register_pack(
+            conn, sha256="fresh_staging_pack", size_bytes=100, repo_id="_test")
+        register_pack(
+            conn, sha256="unarchived_pack", size_bytes=100, repo_id="_test")
+
+        bulk_link_packs(conn, old_staging.volume_id,
+                        [pack_stranded.pack_id, pack_also_verified.pack_id])
+        bulk_link_packs(conn, verified.volume_id,
+                        [pack_also_verified.pack_id, pack_verified_only.pack_id])
+        bulk_link_packs(conn, fresh_staging.volume_id, [pack_fresh.pack_id])
+
+        stranded = get_packs_stranded_on_unburned_volumes(conn, 24)
+        assert {p.sha256 for p in stranded} == {"stranded_pack"}
+
+        # With a zero-hour cutoff the fresh STAGING claim is stale too.
+        stranded_now = get_packs_stranded_on_unburned_volumes(
+            conn, older_than_hours=0)
+        assert {p.sha256 for p in stranded_now} == {
+            "stranded_pack", "fresh_staging_pack",
+        }
 
 
 class TestBatchBoundary:

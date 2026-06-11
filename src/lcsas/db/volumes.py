@@ -232,7 +232,13 @@ def list_volumes(
 
 
 def delete_volume(conn: sqlite3.Connection, volume_id: int) -> None:
-    """Delete a volume (and cascade via FK if enabled). Use with caution."""
+    """Delete a volume (and cascade via FK if enabled). Use with caution.
+
+    session_volumes has a FK to volumes WITHOUT ON DELETE CASCADE, so its
+    rows must be removed explicitly or the volume delete fails under
+    PRAGMA foreign_keys=ON.
+    """
+    conn.execute("DELETE FROM session_volumes WHERE volume_id = ?", (volume_id,))
     conn.execute("DELETE FROM volume_packs WHERE volume_id = ?", (volume_id,))
     conn.execute("DELETE FROM volumes WHERE volume_id = ?", (volume_id,))
     conn.commit()

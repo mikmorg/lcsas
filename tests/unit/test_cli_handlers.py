@@ -993,6 +993,108 @@ class TestCmdSessionList:
         assert "sess-real-001" not in out
 
 
+class TestCmdSessionAbort:
+    """`lcsas session abort` — reclaim packs from a never-burned session.
+    [BURN-03]"""
+
+    def _seed_unburned_session(self, tmp_path, db):
+        """Seed a STAGING volume + session with linked packs and on-disk
+        artifacts, mimicking a staged-but-never-burned session."""
+        from lcsas.db.connection import get_connection
+        from lcsas.db.packs import register_pack
+        from lcsas.db.repos import register_repo
+        from lcsas.db.sessions import add_session_volume, create_session
+        from lcsas.db.volume_packs import bulk_link_packs
+        from lcsas.db.volumes import create_volume
+
+        session_dir = tmp_path / "staging" / "sess-abort-001"
+        session_dir.mkdir(parents=True)
+        iso_path = session_dir / "TEST_VOL.iso"
+        iso_path.write_bytes(b"\x00" * 64)
+
+        conn = get_connection(db)
+        try:
+            register_repo(conn, "r1", "R1", "/mnt/r1")
+            p1 = register_pack(conn, sha256="a" * 64, size_bytes=100,
+                               repo_id="r1")
+            p2 = register_pack(conn, sha256="b" * 64, size_bytes=200,
+                               repo_id="r1")
+            vol = create_volume(
+                conn, label="TEST_VOL", uuid="uuid-abort-1",
+                media_type="TEST_TINY", capacity_bytes=2_097_152,
+                status="STAGING",
+            )
+            bulk_link_packs(conn, vol.volume_id, [p1.pack_id, p2.pack_id])
+            create_session(conn, media_type="TEST_TINY",
+                           staging_dir=str(session_dir),
+                           session_id="sess-abort-001")
+            add_session_volume(conn, "sess-abort-001", vol.volume_id,
+                               str(iso_path), iso_sha256="")
+        finally:
+            conn.close()
+        return session_dir, iso_path
+
+    def test_session_abort_cli(self, tmp_path, capsys):
+        """Wire-level: abort reclaims the packs and prints the summary."""
+        from lcsas.db.connection import get_connection
+        from lcsas.db.queries import get_unarchived_packs
+        from lcsas.db.sessions import get_session
+
+        cfg, db = _write_session_config(tmp_path)
+        session_dir, iso_path = self._seed_unburned_session(tmp_path, db)
+        capsys.readouterr()  # clear init output
+
+        result = main(["--config", cfg, "session", "abort", "sess-abort-001"])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "Aborted session sess-abort-001" in out
+        assert "1 volume(s)" in out
+        assert "2 pack(s)" in out
+        assert "300 bytes" in out
+
+        # Catalog: volume gone, packs back in the unarchived pool,
+        # session CLEANED.
+        conn = get_connection(db)
+        try:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM volumes").fetchone()[0] == 0
+            unarchived = {p.sha256 for p in get_unarchived_packs(conn)}
+            assert unarchived == {"a" * 64, "b" * 64}
+            assert get_session(conn, "sess-abort-001").status == "CLEANED"
+        finally:
+            conn.close()
+
+        # Disk: ISO and staging tree removed.
+        assert not iso_path.exists()
+        assert not session_dir.exists()
+
+    def test_stage_clean_unburned_refuses_then_force(self, tmp_path, capsys):
+        """`stage --clean` refuses on an unburned session; --force reclaims."""
+        from lcsas.db.connection import get_connection
+        from lcsas.db.queries import get_unarchived_packs
+
+        cfg, db = _write_session_config(tmp_path)
+        self._seed_unburned_session(tmp_path, db)
+        capsys.readouterr()
+
+        rc = main(["--config", cfg, "stage", "--clean",
+                   "--session", "sess-abort-001"])
+        assert rc == 1
+        out = capsys.readouterr().out
+        assert "never burned" in out
+        assert "session abort" in out
+
+        rc = main(["--config", cfg, "stage", "--clean", "--force",
+                   "--session", "sess-abort-001"])
+        assert rc == 0
+
+        conn = get_connection(db)
+        try:
+            assert len(get_unarchived_packs(conn)) == 2
+        finally:
+            conn.close()
+
+
 # ────────────────────────────────────────────────────────────────────
 #  cmd_consolidate — branch coverage
 # ────────────────────────────────────────────────────────────────────

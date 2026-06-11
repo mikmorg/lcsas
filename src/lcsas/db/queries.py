@@ -417,6 +417,42 @@ def get_redundancy_report(
     return [_row_to_pack(r) for r in rows]
 
 
+def get_packs_stranded_on_unburned_volumes(
+    conn: sqlite3.Connection,
+    older_than_hours: int = 24,
+) -> list[Pack]:
+    """Return packs whose ONLY volume claims are stale never-burned volumes.
+
+    A pack counts as "archived" the moment any volume_packs row exists, so
+    a pack linked solely to STAGING/BURNING volumes that never became discs
+    is silently stranded: it will never be re-staged, yet exists on no
+    physical medium.  This surfaces those packs so the operator can run
+    ``lcsas session abort`` / ``lcsas stage --clean --force``.
+
+    The age cutoff (default 24 h) avoids flagging volumes that are simply
+    mid-pipeline: a pack is returned only when every volume holding it is
+    STAGING/BURNING *and* older than the cutoff.
+    """
+    modifier = f"-{int(older_than_hours)} hours"
+    rows = conn.execute(
+        """SELECT p.* FROM packs p
+           WHERE p.is_pruned = 0
+             AND EXISTS (
+                 SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
+             )
+             AND NOT EXISTS (
+                 SELECT 1 FROM volume_packs vp
+                 JOIN volumes v ON v.volume_id = vp.volume_id
+                 WHERE vp.pack_id = p.pack_id
+                   AND (v.status NOT IN ('STAGING', 'BURNING')
+                        OR v.created_at > datetime('now', ?))
+             )
+           ORDER BY p.created_at""",
+        (modifier,),
+    ).fetchall()
+    return [_row_to_pack(r) for r in rows]
+
+
 def get_archive_status_summary(
     conn: sqlite3.Connection,
 ) -> dict[str, int]:
