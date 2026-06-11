@@ -202,6 +202,30 @@ LCSAS_ALLOW_NO_PACK_SEARCH
             pipelines that mount data discs between the script setup
             step and the binary invocation.
 
+LCSAS_ALLOW_TMPFS_TARGET
+  Default:  0  (opt-in / default OFF)
+  Since:    2026-06 audit (BOOT-05)
+  What:     1 → skip the interactive "Continue restoring into RAM
+            anyway? [y/N]" confirmation when the target directory sits
+            on a RAM-backed filesystem (tmpfs/ramfs).  The warning
+            banner still prints to stderr.
+  Why:      Opt-IN.  The prompt protects a human heir from restoring
+            into memory ("restore complete" → poweroff → everything
+            gone).  Suppressing it is for scripted-but-interactive
+            environments that have already accepted that trade-off.
+
+LCSAS_FORBID_TMPFS_TARGET
+  Default:  0  (opt-in / default OFF)
+  Since:    2026-06 audit (BOOT-05)
+  What:     1 → refuse to restore into a RAM-backed (tmpfs/ramfs)
+            target directory even when no TTY is attached.  The
+            default non-interactive behavior is warn-and-continue so
+            existing automation (blind drills, test harnesses) that
+            legitimately restores to tmp paths keeps working.
+  Why:      Opt-IN.  Hard-failing by default would break legitimate
+            scripted restores to tmpfs paths; automation that must
+            never write a restore into RAM sets this explicitly.
+
 BUILD / CI GATES
 ────────────────
 
@@ -279,6 +303,8 @@ LCSAS_ALLOW_PYTHON_TIER     1         opt-out     set 0 to ban Python
 LCSAS_PROGRESS              unset     opt-out     set 0 to silence output
 LCSAS_NO_RELOCATE           0         opt-in      set 1 for testing
 LCSAS_ALLOW_NO_PACK_SEARCH  0         opt-in      set 1 for test rigs
+LCSAS_ALLOW_TMPFS_TARGET    0         opt-in      set 1 to skip RAM-target prompt
+LCSAS_FORBID_TMPFS_TARGET   0         opt-in      set 1 to ban RAM targets
 LCSAS_BLIND_ACK_COST        unset     opt-in      set 1 to run blind e2e
 LCSAS_RECOVERY_CACHE        (home)    opt-in      CI shared binary cache
 LCSAS_NO_WIZARD             unset     opt-in      automated live-boot test

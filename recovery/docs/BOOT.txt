@@ -69,7 +69,11 @@ to prepare the stick) and a USB stick of 8 GB or more.
   7. Restored files land in /home/ubuntu/restored, which lives in
      RAM on a live system.  Copy them to a real disk (USB drive,
      internal disk) before powering off, or pass a path on a
-     mounted disk as the target instead.
+     mounted disk as the target instead.  Best practice in a
+     live-USB session: plug in an external drive and restore
+     directly to a directory on it, not the live system's home
+     folder -- restore.sh detects a RAM-backed target and asks for
+     confirmation before continuing.
 
 WHY THIS WORKS DECADES FROM NOW
 

@@ -143,3 +143,6 @@ non-interactive behavior didn't break automation.
 
 1 day: 0.4 shell implementation (portable fstype probe + prompt), 0.6 tests
 (PATH stubs, pty handling). No special environment.
+
+---
+**Implemented:** 2026-06-11. As planned; also added ENV_VARS.txt entries for both knobs and refreshed MANIFEST entries for the touched recovery files. `make blind-restore` not run (cost-gated via LCSAS_BLIND_ACK_COST; host /tmp is ext4 so the drills never hit the tmpfs path, and non-interactive behavior is warn-and-continue by design).

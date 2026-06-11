@@ -66,7 +66,11 @@ on the dead machine (internal or USB).
 7. **Copy the restored files to a real disk before powering off** — a
    live system's home directory lives in RAM. Either copy out of
    `/home/ubuntu/restored`, or pass a path on a mounted disk as the
-   target instead (mind tmpfs capacity for large restores).
+   target instead (mind tmpfs capacity for large restores). Best
+   practice in a live-USB session: restore directly to a plugged-in
+   external drive, not the live system's home folder — `restore.sh`
+   detects a RAM-backed (tmpfs) target and asks for confirmation
+   before continuing.
 
 ## Why this works decades out
 

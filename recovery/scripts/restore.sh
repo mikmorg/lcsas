@@ -327,6 +327,15 @@ FLAGS AND ENVIRONMENT VARIABLES:
   LCSAS_ALLOW_NO_PACK_SEARCH
                           1 → suppress the 'no data discs detected'
                           hard-error (advanced / test environments).
+  LCSAS_ALLOW_TMPFS_TARGET
+                          1 → skip the 'restore into RAM anyway?'
+                          confirmation prompt when TARGET_DIR sits on
+                          a RAM-backed filesystem (tmpfs/ramfs).  The
+                          warning still prints.
+  LCSAS_FORBID_TMPFS_TARGET
+                          1 → refuse a RAM-backed TARGET_DIR outright,
+                          even with no TTY attached.  For automation
+                          that must never restore into RAM.
   LCSAS_NO_RELOCATE       1 → don't copy the recovery scripts into
                           RAM before exec (testing / development).
   LCSAS_PROGRESS          0 → silence the periodic tier-3 progress
@@ -789,6 +798,85 @@ if [ -z "$PWFILE" ]; then
 fi
 
 mkdir -p "$TARGET_DIR"
+
+# ── RAM-backed-target guard [BOOT-05] ─────────────────────────────
+#
+# On many mainstream distros (Fedora, Arch, openSUSE) and on nearly
+# every live-USB session, /tmp -- and a live system's home directory
+# -- is a RAM-backed tmpfs.  The documented default target is
+# /tmp/restored, so an heir who accepts it gets a "successful"
+# restore that evaporates at poweroff.  Warn loudly; when a human is
+# reachable (TTY), default to aborting.  Non-interactive automation
+# keeps working (warn-and-continue) unless LCSAS_FORBID_TMPFS_TARGET=1.
+
+target_fstype() {
+    # Print the FSTYPE of the filesystem holding "$1"; empty when
+    # undetectable.  Never returns non-zero (set -e safety).
+    # LCSAS_PROC_MOUNTS (test seam) points the fallback parser at an
+    # alternate mount table AND bypasses findmnt so the awk path is
+    # exercisable on hosts that have findmnt.
+    if [ -z "${LCSAS_PROC_MOUNTS:-}" ] && command -v findmnt >/dev/null 2>&1; then
+        findmnt -n -o FSTYPE --target "$1" 2>/dev/null || true
+        return 0
+    fi
+    _tft_table="${LCSAS_PROC_MOUNTS:-/proc/mounts}"
+    [ -r "$_tft_table" ] || return 0
+    # Longest-prefix match of the target's canonical path against the
+    # mount-point column; same-length later entries win (overmounts
+    # append to the table).
+    awk -v p="$(cd "$1" 2>/dev/null && pwd -P)" '
+        {
+            pre = ($2 == "/") ? "/" : $2 "/"
+            if (p != "" && (p == $2 || index(p, pre) == 1) &&
+                length($2) >= l) { l = length($2); t = $3 }
+        }
+        END { print t }' "$_tft_table" 2>/dev/null || true
+    return 0
+}
+
+_tgt_fstype="$(target_fstype "$TARGET_DIR")"
+case "$_tgt_fstype" in
+tmpfs|ramfs)
+    {
+        printf '==========================================================\n'
+        printf '  WARNING: the restore target\n'
+        printf '      %s\n' "$TARGET_DIR"
+        printf '  is on a RAM-backed filesystem (%s).  Restored files\n' "$_tgt_fstype"
+        printf '  WILL BE LOST when this computer powers off or reboots.\n'
+        printf '  Choose a real disk instead, e.g.:\n'
+        printf '      sh restore.sh /media/<your-usb-drive>/restored latest\n'
+        printf '==========================================================\n'
+    } >&2
+    if [ "${LCSAS_FORBID_TMPFS_TARGET:-0}" = "1" ]; then
+        printf 'aborting: LCSAS_FORBID_TMPFS_TARGET=1 forbids RAM-backed targets.\n' >&2
+        exit 1
+    fi
+    _tmpfs_ans=""
+    if [ "${LCSAS_ALLOW_TMPFS_TARGET:-0}" = "1" ]; then
+        printf '[restore.sh] LCSAS_ALLOW_TMPFS_TARGET=1 -- continuing into RAM.\n' >&2
+    elif [ -t 0 ]; then
+        printf 'Continue restoring into RAM anyway? [y/N] ' >&2
+        IFS= read -r _tmpfs_ans || _tmpfs_ans=""
+    elif ( exec </dev/tty ) 2>/dev/null; then
+        # stdin is redirected but a controlling terminal exists --
+        # a human is still reachable; prompt there.
+        printf 'Continue restoring into RAM anyway? [y/N] ' >&2
+        IFS= read -r _tmpfs_ans </dev/tty || _tmpfs_ans=""
+    else
+        printf '[restore.sh] no TTY -- continuing into the RAM-backed target.\n' >&2
+        printf '[restore.sh] set LCSAS_FORBID_TMPFS_TARGET=1 to make this fatal.\n' >&2
+        _tmpfs_ans="y"
+    fi
+    if [ "${LCSAS_ALLOW_TMPFS_TARGET:-0}" != "1" ]; then
+        case "$_tmpfs_ans" in
+            y|Y) ;;
+            *)
+                printf 'aborted: pick a directory on a real disk and re-run.\n' >&2
+                exit 1 ;;
+        esac
+    fi
+    ;;
+esac
 
 # ── Auto-discover other mounted discs for multi-disc recovery ─────
 #
