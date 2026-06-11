@@ -83,3 +83,6 @@ recovery/-rooted contract.
 ## Effort
 
 0.5 days.
+
+---
+**Implemented:** 2026-06-11. As planned; mutation checks for wordlist.txt and wordlist.c verified to fail the new guards.

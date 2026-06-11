@@ -106,8 +106,13 @@ re-implementation must pass all 45. The pieces:
   locations / with separate holders, per `docs/ESTATE_PLANNING.md`. Shares are
   **never** written to any LCSAS volume (that would defeat the split).
 - **Wordlist provenance.** The bundled `wordlist.txt` is the official 1024-word
-  SLIP-0039 list (unique 4-letter prefixes); it is pinned in
-  `recovery/MANIFEST.sha256` alongside the combiner.
+  SLIP-0039 list (unique 4-letter prefixes). It is git-pinned in this
+  repository and guarded by the 45 official SLIP-0039 test vectors
+  (`recovery/tests/test_keyshare.c`, `tests/unit/test_keyshare.py`).
+  SHA-256 of `wordlist.txt` (1024 LF-terminated words):
+  `bcc4555340332d169718aed8bf31dd9d5248cb7da6e5d355140ef4f1e601eec3`
+  — verify with `sha256sum wordlist.txt`. The C combiner's `wordlist.c` is
+  generated from the same list.
 
 ## 6. Minimal recovery, no tools
 
