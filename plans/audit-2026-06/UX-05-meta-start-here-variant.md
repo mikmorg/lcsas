@@ -118,3 +118,6 @@ In `tests/unit/test_meta_builder.py` (always-on, `make test-unit` / CI):
 ## Effort
 
 1.5 days: 1 generator + text, 0.5 tests. No special environment.
+
+---
+**Implemented:** 2026-06-11. As planned; split-block reuses _share_recovery_lines verbatim (UX-02 not yet landed — its text update will flow through automatically); meta label rendered as <label_prefix>_META.

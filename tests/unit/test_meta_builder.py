@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
+import re
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.meta.builder import MetaVolumeBuilder
 from lcsas.meta.bundler import (
     ToolBundler,
@@ -16,6 +20,7 @@ from lcsas.meta.bundler import (
     get_shared_libs,
     resolve_binary,
 )
+from tests.unit.test_heir_doc_commands import _accepted_flags
 
 # ── resolve_binary ───────────────────────────────────────────────
 
@@ -1147,4 +1152,161 @@ class TestRegenerateRecoveryManifest:
         # Bundled python tree entry written.
         assert (
             f"./bin/{target}/python/bin/python3" in manifest_text
+        )
+
+
+# ────────────────────────────────────────────────────────────────────
+#  START_HERE.txt — one generator for both variants (UX-05)
+# ────────────────────────────────────────────────────────────────────
+
+
+def _survivability_config(base: Path) -> LCSASConfig:
+    """A production-shaped config exercising every survivability field."""
+    return LCSASConfig(
+        mirror_base_path=base / "mirror",
+        staging_path=base / "staging",
+        db_path=base / "db.db",
+        archive_owner="Alice Archivist",
+        archive_description="family photo and document backups",
+        key_storage_hints="Check the fire safe.\nCheck the bank deposit box.",
+        technical_contact="Bob the IT person <bob@example.org>",
+        key_split=True,
+        key_threshold=2,
+        key_shares=5,
+        repositories={
+            "family": RepositoryConfig(
+                name="family",
+                mirror_path=base / "mirror" / "family",
+            ),
+        },
+    )
+
+
+class TestMetaStartHereVariants:
+    """UX-05: production (config) builds must get the per-OS START_HERE.
+
+    Before the fix, the config branch reused the DATA-disc generator,
+    whose text claimed Linux was required, carried no runnable command,
+    and pointed at RESTORE_INSTRUCTIONS.txt — a file the meta builder
+    never writes.  These tests run a partial build (only the steps that
+    produce START_HERE.txt and the files it references), skipping the
+    ~200 MB tool bundling so they stay always-on (no rustic/xorriso).
+    """
+
+    @pytest.fixture(scope="class")
+    def meta_tree(self, tmp_path_factory):
+        base = tmp_path_factory.mktemp("meta_start_here")
+        out = base / "meta"
+        out.mkdir()
+        builder = MetaVolumeBuilder(out, config=_survivability_config(base))
+        # Same relative order as build(): the recovery toolchain bundle
+        # must land before _write_restore_script so the root restore.sh
+        # is the POSIX driver and recovery/docs/ exists on the tree.
+        builder._bundle_docs()
+        builder._bundle_keyshare_combiner()
+        builder._bundle_recovery_toolchain_artifacts()
+        builder._write_restore_script()
+        builder._write_start_here()
+        yield out, builder
+        shutil.rmtree(str(base), ignore_errors=True)
+
+    def test_start_here_with_config_has_os_dispatch(self, meta_tree):
+        """The config (production) variant must carry the per-OS dispatch,
+        a path-qualified restore.sh command, the owner string, and no
+        Linux-only claim."""
+        out, builder = meta_tree
+        content = (out / "START_HERE.txt").read_text(encoding="utf-8")
+        flat = " ".join(content.split())
+
+        assert "restore.bat" in content, "Windows route missing"
+        assert re.search(r"sh +/\S+/restore\.sh", flat), (
+            "no runnable restore.sh command with a path separator — a "
+            "bare 'sh restore.sh' fails from a Terminal opened in $HOME"
+        )
+        assert "Alice Archivist" in content, "owner survivability field missing"
+        assert "computer running Linux," not in flat, (
+            "data-disc Linux-only claim leaked into the meta START_HERE"
+        )
+        assert "RESTORE_INSTRUCTIONS.txt" not in content, (
+            "META text references RESTORE_INSTRUCTIONS.txt, which is "
+            "only written to data discs"
+        )
+
+        # The no-config render keeps the same structure minus the
+        # config fields.
+        bare = builder._render_meta_start_here(None)
+        for marker in (
+            ">>> Windows 10 or 11 <<<",
+            ">>> macOS <<<",
+            ">>> Linux <<<",
+            ">>> No working computer at all <<<",
+        ):
+            assert marker in content, f"config variant missing {marker!r}"
+            assert marker in bare, f"no-config variant missing {marker!r}"
+        assert "Alice Archivist" not in bare
+
+    def test_start_here_references_only_files_present(self, meta_tree):
+        """Generic guard: every file START_HERE.txt names must exist on
+        the built meta tree (catches the RESTORE_INSTRUCTIONS.txt class
+        of dangling reference)."""
+        out, _builder = meta_tree
+        content = (out / "START_HERE.txt").read_text(encoding="utf-8")
+
+        refs: set[str] = set()
+        for pattern in (
+            # Doc paths: recovery/docs/RECOVER.txt, docs/KEY_SHARE_FORMAT.md,
+            # and bare UPPER_CASE.txt files at the disc root.
+            r"(?:[A-Za-z0-9_./-]+/)?[A-Z][A-Z0-9_]*\.(?:txt|md)",
+            r"(?:[A-Za-z0-9_./$-]+/)?restore\.(?:sh|bat)",
+            r"keyshare_combine\.py",
+            r"standalone_restorer\.py",
+        ):
+            refs.update(re.findall(pattern, content))
+        assert refs, "expected START_HERE.txt to reference on-disc files"
+
+        missing = []
+        for ref in sorted(refs):
+            rel = ref.lstrip("/")
+            # Mount-prefixed commands (/Volumes/<LABEL>/restore.sh,
+            # /media/$USER/<LABEL>/restore.sh, /mnt/restore.sh) all
+            # resolve to the disc root.
+            if rel.endswith(("restore.sh", "restore.bat")):
+                rel = rel.rsplit("/", 1)[-1]
+            if not (out / rel).exists():
+                missing.append(ref)
+        assert not missing, (
+            f"START_HERE.txt references files absent from the meta tree: {missing}"
+        )
+
+    def test_start_here_split_block_present_when_key_split(self, meta_tree):
+        """key_split=True → the split-key pre-step appears, free of
+        phantom restore.sh flags (UX-02 contract); single-key configs
+        must not show it."""
+        out, builder = meta_tree
+        content = (out / "START_HERE.txt").read_text(encoding="utf-8")
+
+        assert "SPLIT KEY — YOUR PASSWORD IS IN SHARE CARDS" in content
+        assert "keyshare_combine.py" in content
+
+        # Every --flag attached to a restore.sh command must be one
+        # recovery/scripts/restore.sh actually accepts.
+        accepted = _accepted_flags()
+        flag_refs = {
+            flag
+            for line in content.splitlines()
+            if "restore.sh" in line
+            for flag in re.findall(r"--[a-z][a-z-]*", line)
+        }
+        phantom = flag_refs - accepted
+        assert not phantom, (
+            f"META START_HERE tells the heir to use restore.sh flag(s) "
+            f"{sorted(phantom)} that restore.sh does not accept"
+        )
+
+        single_key = dataclasses.replace(
+            _survivability_config(out), key_split=False
+        )
+        bare = builder._render_meta_start_here(single_key)
+        assert "SHARE CARDS" not in bare, (
+            "single-key archive must not show split-key instructions"
         )

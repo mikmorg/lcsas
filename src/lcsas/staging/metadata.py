@@ -401,8 +401,8 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
               2. You need ALL of the discs (or at least the ones containing
                  the files you want).
 
-              3. You need a computer running Linux, or someone who can help
-                 you use one.
+              3. You need a computer running Windows, macOS, or Linux
+                 (or someone who can help you use one).
 
             IMPORTANT: If this is confusing, take ALL the discs and the
             encryption key to a computer professional.  They do NOT need

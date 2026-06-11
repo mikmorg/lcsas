@@ -2418,29 +2418,46 @@ class MetaVolumeBuilder:
     def _write_start_here(self) -> None:
         """Write START_HERE.txt to the meta-volume.
 
-        Uses the LCSASConfig survivability fields if a config was
-        provided; otherwise writes a generic version.
+        One renderer serves both build variants (UX-05): the
+        production (config) build gets the same per-OS dispatch and
+        path-qualified commands as the no-config build, plus the
+        survivability fields.  The data-disc generator
+        (``HolographicInjector.write_start_here``) is deliberately
+        NOT used here — its text points at data-disc-only files
+        (RESTORE_INSTRUCTIONS.txt) and carries no runnable command.
         """
         from lcsas.staging.metadata import HolographicInjector
 
+        injector = HolographicInjector(self._output)
+        injector.write_disc_care()
         if self._config is not None:
-            # Use the full START_HERE generator from HolographicInjector
-            injector = HolographicInjector(self._output)
-            injector.write_start_here(self._config)
             injector.write_key_info(self._config)
             injector.write_config_summary(self._config)
-            injector.write_disc_care()
-        else:
-            # Write a minimal START_HERE.txt without config context
-            injector = HolographicInjector(self._output)
-            injector.write_disc_care()
-            # The no-OS route may only claim the disc boots when the
-            # build actually installed a verified live boot environment
-            # (UX-03).  Every standard `lcsas meta build` runs with
-            # bootable=False, so heirs get the borrow-a-computer +
-            # live-USB routing that works today.
-            if self._bootable:
-                no_os_block = """\
+        text = self._render_meta_start_here(self._config)
+        _write_and_sync(self._output / "START_HERE.txt", text)
+
+    def _render_meta_start_here(self, config: LCSASConfig | None) -> str:
+        """Render the meta-volume's START_HERE.txt text (UX-05).
+
+        The document always carries the per-OS dispatch (Windows /
+        macOS / Linux) with mount-path-qualified commands and the
+        honest no-OS routing (UX-03).  When *config* is given, the
+        survivability fields (owner, description, key-storage hints,
+        technical contact) and the split-key pre-step are merged in.
+        Every file the text references must exist on the meta-volume
+        (guarded by tests/unit/test_meta_builder.py).
+        """
+        from lcsas.staging.metadata import _share_recovery_lines
+
+        label = f"{config.label_prefix}_META" if config is not None else "LCSAS_META"
+
+        # The no-OS route may only claim the disc boots when the
+        # build actually installed a verified live boot environment
+        # (UX-03).  Every standard `lcsas meta build` runs with
+        # bootable=False, so heirs get the borrow-a-computer +
+        # live-USB routing that works today.
+        if self._bootable:
+            no_os_block = """\
   >>> No working computer at all <<<
        This disc includes a live boot environment.  Insert
        it, power on, and press F12 or F2 at power-on to
@@ -2448,8 +2465,8 @@ class MetaVolumeBuilder:
        If it does not boot, use any other computer instead
        (pick your section above).
 """
-            else:
-                no_os_block = """\
+        else:
+            no_os_block = """\
   >>> No working computer at all <<<
        These discs are NOT bootable, but they do NOT require
        a special computer.  Use any other computer — a
@@ -2462,7 +2479,55 @@ class MetaVolumeBuilder:
        from it, then follow the macOS/Linux steps above.
        (See recovery/docs/BOOT.txt for the steps.)
 """
-            text = f"""\
+
+        about_block = ""
+        key_hints_block = ""
+        key_info_line = ""
+        split_block = ""
+        contact_block = ""
+        if config is not None:
+            owner = config.archive_owner or "the person who created this archive"
+            description = config.archive_description or (
+                "digital files backed up using LCSAS"
+            )
+            repo_line = ""
+            if config.repositories:
+                repo_names = ", ".join(sorted(config.repositories.keys()))
+                repo_line = f"  Repositories in this archive: {repo_names}\n"
+            about_block = (
+                "WHOSE FILES ARE THESE?\n"
+                "\n"
+                "  These discs hold backup copies of digital files\n"
+                f"  created by {owner}.\n"
+                "\n"
+                f"  Contents: {description}\n"
+                f"{repo_line}"
+                "\n"
+            )
+            if config.key_storage_hints:
+                hints = "\n".join(
+                    f"      {line.strip()}"
+                    for line in config.key_storage_hints.strip().splitlines()
+                )
+                key_hints_block = f"    Where to find the password:\n{hints}\n"
+            key_info_line = (
+                "  * KEY_INFO.txt on this disc lists which key unlocks\n"
+                "    which repository.\n"
+            )
+            if config.key_split:
+                # Same split-key pre-step text as KEY_INFO.txt — one
+                # source so the doc-contract gates cover both.
+                split_block = (
+                    "\n" + "\n".join(_share_recovery_lines(config)).rstrip() + "\n"
+                )
+            if config.technical_contact:
+                contact_block = (
+                    "  The archive owner suggested this technical contact:\n"
+                    f"      {config.technical_contact}\n"
+                    "\n"
+                )
+
+        return f"""\
 ╔══════════════════════════════════════════════════════════╗
 ║                    START HERE                           ║
 ╚══════════════════════════════════════════════════════════╝
@@ -2470,15 +2535,23 @@ class MetaVolumeBuilder:
 This is the LCSAS META-VOLUME — it contains everything needed
 to recover the files on the LCSAS archive discs.
 
-╔══ Pick the section for your operating system ═══════════╗
+{about_block}╔══ Pick the section for your operating system ═══════════╗
 
   >>> Windows 10 or 11 <<<
-       Double-click  restore.bat  in this folder.
+       Open this disc in File Explorer and double-click
+       restore.bat
        (See recovery/docs/RECOVER_WINDOWS.txt for details.)
 
-  >>> macOS or Linux <<<
-       Open a Terminal, then run:
-           sh restore.sh ~/restored
+  >>> macOS <<<
+       Open Terminal, then run:
+           sh /Volumes/{label}/restore.sh ~/restored
+       (See recovery/docs/RECOVER.txt for details.)
+
+  >>> Linux <<<
+       Open a terminal, then run:
+           sh /media/$USER/{label}/restore.sh ~/restored
+       (or:  sudo mount /dev/sr0 /mnt
+        then: sh /mnt/restore.sh ~/restored)
        (See recovery/docs/RECOVER.txt for details.)
 
 {no_os_block}
@@ -2488,30 +2561,29 @@ WHAT YOU NEED
 
   * The password for this archive (the original owner should
     have written it down separately from the discs).
-  * Enough free disk space on your computer for the restored
+{key_hints_block}{key_info_line}  * Enough free disk space on your computer for the restored
     files.  Typical archives are 10 GB to several TB.
   * A USB Blu-ray reader (or any optical drive that can read
     the disc format used by this archive).
-
+{split_block}
 WHAT HAPPENS IF YOU LOSE THE PASSWORD
 
   The data is unrecoverable.  This is by design — the password
   is the only key to the encryption.  There is no back door,
-  no Anthropic / vendor recovery service, no master key held
-  anywhere.
+  no vendor recovery service, no master key held anywhere.
 
 INHERITED A WHOLE STACK OF DISCS?
 
   Look at the disc labels.  ONE of them will be labelled
-  LCSAS_META (or similar) — that is THIS disc.  Start with it.
+  {label} (or similar) — that is THIS disc.  Start with it.
   The recovery process will tell you which numbered data disc
   to insert next.
 
 NEED HELP?
 
-  Take all the discs plus the password to any computer
-  professional.  Any Linux system administrator or IT
-  professional should be able to follow the instructions in
+{contact_block}  Take all the discs plus the password to any computer
+  professional.  Any system administrator or IT professional
+  should be able to follow the instructions in
   recovery/docs/RECOVER.txt.
 
   The full source code is in recovery/src/, so a sufficiently
@@ -2519,4 +2591,3 @@ NEED HELP?
   scratch even if every prebuilt binary on the disc has gone
   unusable.
 """
-            _write_and_sync(self._output / "START_HERE.txt", text)
