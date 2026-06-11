@@ -889,7 +889,13 @@ class BurnOrchestrator:
                 f"Use --force to clean AND abort in one step."
             )
 
-        for vid, _label in unburned:
+        for vid, label in unburned:
+            reclaim = self._reclaim_summary([vid])
+            _logger.info(
+                "Volume %s was never burned — deleting; %d pack(s) return "
+                "to the unarchived pool",
+                label, reclaim.packs_reclaimed,
+            )
             delete_volume(self._conn, vid)
 
         for sv in session_vols:
@@ -955,6 +961,15 @@ class BurnOrchestrator:
                 f"Volume {label} has status {vol.status} — only never-burned "
                 f"(STAGING/BURNING) volumes can be aborted."
             )
+        has_copy = self._conn.execute(
+            "SELECT 1 FROM volume_copies WHERE volume_id = ? LIMIT 1",
+            (vol.volume_id,),
+        ).fetchone()
+        if has_copy is not None:
+            raise ValueError(
+                f"Volume {label} has recorded copies — a physical disc "
+                f"exists, refusing to abort it."
+            )
 
         summary = self._reclaim_summary([vol.volume_id])
         summary.labels = [label]
@@ -968,12 +983,21 @@ class BurnOrchestrator:
         return summary
 
     def _unburned_session_volumes(self, session_id: str) -> list[tuple[int, str]]:
-        """Return (volume_id, label) for a session's STAGING/BURNING volumes."""
+        """Return (volume_id, label) for a session's never-burned volumes.
+
+        Never-burned = status STAGING/BURNING AND zero volume_copies rows.
+        A volume with any copy row corresponds to a physical disc (however
+        stale its status) and is never deleted by clean/abort (FMA-01).
+        """
         rows = self._conn.execute(
             """SELECT v.volume_id, v.label FROM volumes v
                JOIN session_volumes sv ON sv.volume_id = v.volume_id
                WHERE sv.session_id = ?
                  AND v.status IN ('STAGING', 'BURNING')
+                 AND NOT EXISTS (
+                     SELECT 1 FROM volume_copies vc
+                     WHERE vc.volume_id = v.volume_id
+                 )
                ORDER BY v.label""",
             (session_id,),
         ).fetchall()

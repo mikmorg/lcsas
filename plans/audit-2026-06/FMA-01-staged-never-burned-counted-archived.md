@@ -181,3 +181,17 @@ All always-on in `make test-unit` (runs in `.github/workflows/test.yml`):
 
 3 days: 1.5 impl (queries + clean_session + reconcile command + status), 1.5 tests
 (including the pick-list compat matrix). No special environment; pure-unit.
+
+---
+**Implemented:** 2026-06-11. As planned, with four BURN-03-overlap adjustments:
+(1) `clean_session()` keeps BURN-03's refuse-unless-force guard instead of
+silently deleting ghosts; this plan adds the zero-`volume_copies` condition to
+"never burned" plus per-volume reclaim logging, and `abort_volume` now refuses
+volumes with copy records. (2) The unconfirmed-volume set is exposed via a new
+`get_unconfirmed_volume_labels()` helper rather than changing `get_pick_list`'s
+return type. (3) `cmd_status`'s BURN-03 stranded warning was replaced by the
+staged-bucket warning (its "will never be re-staged" claim is false under the
+new semantics; the stranded query survives with a corrected docstring).
+(4) `restore exec` (PickListV2 path) also prints the never-burned warning;
+`restore standalone` deliberately does not (a disc's own catalog always lists
+itself as STAGING).

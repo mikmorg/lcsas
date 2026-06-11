@@ -19,7 +19,7 @@ from lcsas.db.queries import get_unarchived_packs
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.volume_packs import get_pack_ids_for_volume
-from lcsas.db.volumes import get_volume_by_id, list_volumes
+from lcsas.db.volumes import get_volume_by_id, list_volumes, update_status
 from lcsas.staging.builder import (
     CorruptPacksError,
     MirrorUnavailableError,
@@ -156,9 +156,12 @@ class TestPrepare:
         """ValueError when nothing to archive."""
         orch = orch_env["orch"]
 
-        # Archive all packs first
-        orch.prepare()
-        # Now try again — all packs linked to a volume
+        # Archive all packs, then mark the volume durable: packs on a
+        # STAGING volume stay re-selectable under FMA-01 semantics.
+        manifest = orch.prepare()
+        update_status(orch_env["conn"], manifest.volume_id, "BURNING")
+        update_status(orch_env["conn"], manifest.volume_id, "BURNED")
+        # Now try again — all packs linked to a durable volume
         with pytest.raises(ValueError, match="No unarchived packs"):
             orch.prepare()
 

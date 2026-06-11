@@ -16,33 +16,50 @@ _logger = logging.getLogger(__name__)
 # Conservative batch limit – stays below SQLite's 999-variable limit on old builds.
 _SQLITE_BATCH = 900
 
+# FMA-01: a pack is "archived" only when it is linked to a volume in one of
+# these statuses — i.e. a disc that physically exists.  STAGING/BURNING
+# volumes are an intent, not a copy.  CONSOLIDATING is durable because it is
+# only entered from VERIFIED (the disc exists).
+DURABLE_VOLUME_STATUSES = ("BURNED", "VERIFIED", "CONSOLIDATING")
+
+# SQL literal list built once from the single source of truth above.
+_DURABLE_SQL = "(" + ", ".join(f"'{s}'" for s in DURABLE_VOLUME_STATUSES) + ")"
+
+# EXISTS-condition shared by the archived/unarchived queries below.
+_HAS_DURABLE_LINK = f"""EXISTS (
+    SELECT 1 FROM volume_packs vp
+    JOIN volumes v ON v.volume_id = vp.volume_id
+    WHERE vp.pack_id = p.pack_id
+      AND v.status IN {_DURABLE_SQL}
+)"""
+
 
 def get_unarchived_packs(
     conn: sqlite3.Connection,
     repo_id: str | None = None,
 ) -> list[Pack]:
-    """Return packs not yet assigned to any volume (and not pruned).
+    """Return non-pruned packs with no link to a durable (burned) volume.
 
     These are packs sitting on the Local Mirror that need to be burned.
+    Packs linked only to STAGING/BURNING volumes count as unarchived:
+    a volume that was never burned is not a copy, so its packs must
+    reappear in the default ``lcsas stage`` pool (FMA-01).  A pack with
+    at least one durable link stays archived (no double-burning).
     """
     if repo_id:
         rows = conn.execute(
-            """SELECT p.* FROM packs p
+            f"""SELECT p.* FROM packs p
                WHERE p.is_pruned = 0
                  AND p.repo_id = ?
-                 AND NOT EXISTS (
-                     SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
-                 )
+                 AND NOT {_HAS_DURABLE_LINK}
                ORDER BY p.created_at""",
             (repo_id,),
         ).fetchall()
     else:
         rows = conn.execute(
-            """SELECT p.* FROM packs p
+            f"""SELECT p.* FROM packs p
                WHERE p.is_pruned = 0
-                 AND NOT EXISTS (
-                     SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
-                 )
+                 AND NOT {_HAS_DURABLE_LINK}
                ORDER BY p.created_at"""
         ).fetchall()
     return [_row_to_pack(r) for r in rows]
@@ -52,26 +69,25 @@ def get_total_unarchived_bytes(
     conn: sqlite3.Connection,
     repo_id: str | None = None,
 ) -> int:
-    """Return total bytes of unarchived, non-pruned packs."""
+    """Return total bytes of unarchived, non-pruned packs.
+
+    Uses the same durable-volume semantics as :func:`get_unarchived_packs`.
+    """
     if repo_id:
         row = conn.execute(
-            """SELECT COALESCE(SUM(p.size_bytes), 0) as total
+            f"""SELECT COALESCE(SUM(p.size_bytes), 0) as total
                FROM packs p
                WHERE p.is_pruned = 0
                  AND p.repo_id = ?
-                 AND NOT EXISTS (
-                     SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
-                 )""",
+                 AND NOT {_HAS_DURABLE_LINK}""",
             (repo_id,),
         ).fetchone()
     else:
         row = conn.execute(
-            """SELECT COALESCE(SUM(p.size_bytes), 0) as total
+            f"""SELECT COALESCE(SUM(p.size_bytes), 0) as total
                FROM packs p
                WHERE p.is_pruned = 0
-                 AND NOT EXISTS (
-                     SELECT 1 FROM volume_packs vp WHERE vp.pack_id = p.pack_id
-                 )"""
+                 AND NOT {_HAS_DURABLE_LINK}"""
         ).fetchone()
     if row is None:
         raise RuntimeError("get_total_unarchived_bytes: aggregate query returned no row")
@@ -120,9 +136,17 @@ def get_pick_list(
     discs to retrieve.
 
     Prefers non-DEPRECATED/DESTROYED volumes. If a pack exists on multiple
-    volumes, prefers volumes at *preferred_location* (if specified) to
-    minimise disc-swapping across locations. Falls back to alphabetical
-    order.
+    volumes, prefers durable (BURNED/VERIFIED/CONSOLIDATING) volumes over
+    never-burned STAGING/BURNING ones, then volumes at *preferred_location*
+    (if specified) to minimise disc-swapping across locations. Falls back
+    to alphabetical order.
+
+    STAGING/BURNING volumes are deliberately NOT excluded: every on-disc
+    holographic catalog lists its own volume as STAGING (the catalog is
+    copied at staging time), so excluding them would break every restore
+    that runs against a disc-rebuilt catalog (FMA-01/FMA-10).  Use
+    :func:`get_unconfirmed_volume_labels` to warn about selected volumes
+    that have no record of ever being burned.
 
     Args:
         conn: DB connection.
@@ -157,7 +181,9 @@ def get_pick_list(
         batch = pack_sha256_list[batch_start : batch_start + _SQLITE_BATCH]
         placeholders = ",".join("?" for _ in batch)
 
-        # Order by: preferred location first, then alphabetically.
+        # Order by: durable volumes first (a disc that exists always beats
+        # a never-burned STAGING claim), then preferred location, then
+        # alphabetically.
         if preferred_location:
             rows = conn.execute(
                 f"""SELECT p.*, v.volume_id, v.label as vol_label,
@@ -167,7 +193,9 @@ def get_pick_list(
                     JOIN volumes v ON vp.volume_id = v.volume_id
                     WHERE p.sha256 IN ({placeholders})
                       AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
-                    ORDER BY (CASE WHEN v.location = ? THEN 0 ELSE 1 END),
+                    ORDER BY (CASE WHEN v.status IN {_DURABLE_SQL}
+                                   THEN 0 ELSE 1 END),
+                             (CASE WHEN v.location = ? THEN 0 ELSE 1 END),
                              v.label""",
                 [*batch, preferred_location],
             ).fetchall()
@@ -180,7 +208,9 @@ def get_pick_list(
                     JOIN volumes v ON vp.volume_id = v.volume_id
                     WHERE p.sha256 IN ({placeholders})
                       AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
-                    ORDER BY v.label""",
+                    ORDER BY (CASE WHEN v.status IN {_DURABLE_SQL}
+                                   THEN 0 ELSE 1 END),
+                             v.label""",
                 batch,
             ).fetchall()
 
@@ -206,9 +236,13 @@ def get_pick_list_with_alternates(
         {sha256: {"pack": Pack, "primary_label": str,
                   "primary_volume_id": int, "alternates": [str, ...]}}
 
-    The primary volume is chosen by: preferred location first, then
-    VERIFIED before BURNED, then alphabetical label.  Alternates are
-    the remaining volumes that also hold the pack.
+    The primary volume is chosen by: durable (BURNED/VERIFIED/
+    CONSOLIDATING) before never-burned STAGING/BURNING, then preferred
+    location, then VERIFIED before BURNED, then alphabetical label.
+    Alternates are the remaining volumes that also hold the pack.
+
+    STAGING volumes are kept as last-resort candidates rather than
+    excluded — see :func:`get_pick_list` for why (FMA-01/FMA-10).
     """
     if not pack_sha256_list:
         return {}
@@ -235,7 +269,9 @@ def get_pick_list_with_alternates(
                 JOIN volumes v ON vp.volume_id = v.volume_id
                 WHERE p.sha256 IN ({placeholders})
                   AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
-                ORDER BY {location_order}
+                ORDER BY (CASE WHEN v.status IN {_DURABLE_SQL}
+                               THEN 0 ELSE 1 END),
+                         {location_order}
                          (CASE WHEN v.status = 'VERIFIED' THEN 0
                                WHEN v.status = 'BURNED' THEN 1
                                ELSE 2 END),
@@ -259,6 +295,40 @@ def get_pick_list_with_alternates(
                 result[pack.sha256]["alternates"].append(vol_label)
 
     return result
+
+
+def get_unconfirmed_volume_labels(
+    conn: sqlite3.Connection,
+    labels: list[str],
+) -> set[str]:
+    """Return the subset of *labels* with no record of ever being burned.
+
+    A volume is "unconfirmed" when its status is STAGING/BURNING and it
+    has zero ``volume_copies`` rows: the catalog has no evidence the disc
+    was ever written.  Pick lists still offer such volumes (an on-disc
+    holographic catalog always lists its own volume as STAGING), but the
+    restore planner must warn that the disc may never have existed
+    (FMA-01).
+    """
+    if not labels:
+        return set()
+
+    unconfirmed: set[str] = set()
+    for batch_start in range(0, len(labels), _SQLITE_BATCH):
+        batch = labels[batch_start : batch_start + _SQLITE_BATCH]
+        placeholders = ",".join("?" for _ in batch)
+        rows = conn.execute(
+            f"""SELECT v.label FROM volumes v
+                WHERE v.label IN ({placeholders})
+                  AND v.status IN ('STAGING', 'BURNING')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM volume_copies vc
+                      WHERE vc.volume_id = v.volume_id
+                  )""",
+            batch,
+        ).fetchall()
+        unconfirmed.update(row["label"] for row in rows)
+    return unconfirmed
 
 
 def get_missing_packs(
@@ -423,11 +493,11 @@ def get_packs_stranded_on_unburned_volumes(
 ) -> list[Pack]:
     """Return packs whose ONLY volume claims are stale never-burned volumes.
 
-    A pack counts as "archived" the moment any volume_packs row exists, so
-    a pack linked solely to STAGING/BURNING volumes that never became discs
-    is silently stranded: it will never be re-staged, yet exists on no
-    physical medium.  This surfaces those packs so the operator can run
-    ``lcsas session abort`` / ``lcsas stage --clean --force``.
+    Since FMA-01 such packs DO reappear in the ``lcsas stage`` pool
+    (STAGING/BURNING links are no longer "archived"), but the dead claims
+    still clutter the catalog and mislead restore pick lists.  This
+    surfaces those packs so the operator can run ``lcsas session abort``,
+    ``lcsas stage --clean --force`` or ``lcsas catalog reconcile --fix``.
 
     The age cutoff (default 24 h) avoids flagging volumes that are simply
     mid-pipeline: a pack is returned only when every volume holding it is
@@ -453,17 +523,103 @@ def get_packs_stranded_on_unburned_volumes(
     return [_row_to_pack(r) for r in rows]
 
 
+def get_ghost_volumes(
+    conn: sqlite3.Connection,
+    older_than_hours: int = 24,
+) -> list[Volume]:
+    """Return stale never-burned volumes: STAGING/BURNING with zero copies.
+
+    A ghost volume claims packs in the catalog but corresponds to no
+    physical disc (no ``volume_copies`` row was ever recorded).  The age
+    cutoff (default 24 h) avoids flagging sessions that are simply
+    mid-pipeline.  ``lcsas catalog reconcile --fix`` deletes these.
+    """
+    modifier = f"-{int(older_than_hours)} hours"
+    rows = conn.execute(
+        """SELECT v.* FROM volumes v
+           WHERE v.status IN ('STAGING', 'BURNING')
+             AND NOT EXISTS (
+                 SELECT 1 FROM volume_copies vc
+                 WHERE vc.volume_id = v.volume_id
+             )
+             AND v.created_at <= datetime('now', ?)
+           ORDER BY v.label""",
+        (modifier,),
+    ).fetchall()
+    return [_row_to_volume(r) for r in rows]
+
+
+def get_durable_volumes_without_active_copies(
+    conn: sqlite3.Connection,
+) -> list[Volume]:
+    """Return volumes whose durable status disagrees with their copy records.
+
+    A volume marked BURNED/VERIFIED/CONSOLIDATING should have at least one
+    ACTIVE ``volume_copies`` row; one without is either a partially
+    recorded burn or a copy-tracking bug (feeds the FMA-04/BURN-10
+    volume-status/copies reconciliation).  Report-only — never auto-fixed.
+    """
+    rows = conn.execute(
+        f"""SELECT v.* FROM volumes v
+           WHERE v.status IN {_DURABLE_SQL}
+             AND NOT EXISTS (
+                 SELECT 1 FROM volume_copies vc
+                 WHERE vc.volume_id = v.volume_id
+                   AND vc.status = 'ACTIVE'
+             )
+           ORDER BY v.label"""
+    ).fetchall()
+    return [_row_to_volume(r) for r in rows]
+
+
+def get_volume_pack_stats_by_repo(
+    conn: sqlite3.Connection,
+    volume_id: int,
+) -> list[tuple[str, int, int]]:
+    """Return ``(repo_id, pack_count, total_bytes)`` per repo for a volume."""
+    rows = conn.execute(
+        """SELECT p.repo_id, COUNT(*), COALESCE(SUM(p.size_bytes), 0)
+           FROM packs p
+           JOIN volume_packs vp ON vp.pack_id = p.pack_id
+           WHERE vp.volume_id = ?
+           GROUP BY p.repo_id
+           ORDER BY p.repo_id""",
+        (volume_id,),
+    ).fetchall()
+    return [(str(r[0]), int(r[1]), int(r[2])) for r in rows]
+
+
 def get_archive_status_summary(
     conn: sqlite3.Connection,
 ) -> dict[str, int]:
-    """Return a summary of archive status: total packs, archived, unarchived, pruned."""
+    """Return a summary of archive status by pack bucket.
+
+    Buckets partition the non-pruned packs (FMA-01 semantics):
+
+    - ``archived``   — linked to at least one durable (BURNED/VERIFIED/
+      CONSOLIDATING) volume: the pack is on a disc that exists.
+    - ``staged``     — linked only to STAGING/BURNING volumes: claimed by
+      a burn-in-progress (or a ghost volume), NOT yet on any disc.
+    - ``unarchived`` — no volume links at all.
+    """
     row = conn.execute(
-        """SELECT
+        f"""SELECT
                COUNT(*) as total,
                SUM(CASE WHEN is_pruned = 1 THEN 1 ELSE 0 END) as pruned,
                SUM(CASE WHEN is_pruned = 0 AND EXISTS (
-                   SELECT 1 FROM volume_packs vp WHERE vp.pack_id = packs.pack_id
+                   SELECT 1 FROM volume_packs vp
+                   JOIN volumes v ON v.volume_id = vp.volume_id
+                   WHERE vp.pack_id = packs.pack_id
+                     AND v.status IN {_DURABLE_SQL}
                ) THEN 1 ELSE 0 END) as archived,
+               SUM(CASE WHEN is_pruned = 0 AND EXISTS (
+                   SELECT 1 FROM volume_packs vp WHERE vp.pack_id = packs.pack_id
+               ) AND NOT EXISTS (
+                   SELECT 1 FROM volume_packs vp
+                   JOIN volumes v ON v.volume_id = vp.volume_id
+                   WHERE vp.pack_id = packs.pack_id
+                     AND v.status IN {_DURABLE_SQL}
+               ) THEN 1 ELSE 0 END) as staged,
                SUM(CASE WHEN is_pruned = 0 AND NOT EXISTS (
                    SELECT 1 FROM volume_packs vp WHERE vp.pack_id = packs.pack_id
                ) THEN 1 ELSE 0 END) as unarchived
@@ -475,7 +631,8 @@ def get_archive_status_summary(
         "total": int(row[0]),
         "pruned": int(row[1] or 0),
         "archived": int(row[2] or 0),
-        "unarchived": int(row[3] or 0),
+        "staged": int(row[3] or 0),
+        "unarchived": int(row[4] or 0),
     }
 
 

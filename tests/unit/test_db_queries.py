@@ -148,6 +148,194 @@ class TestStatusSummary:
         assert summary["pruned"] == 0
 
 
+class TestDurableArchivedSemantics:
+    """A pack is archived only via a durable (BURNED/VERIFIED/CONSOLIDATING)
+    volume; STAGING/BURNING links are an intent, not a copy.  [FMA-01]"""
+
+    @staticmethod
+    def _vol(conn, label, status):
+        from lcsas.db.volumes import create_volume
+        from lcsas.utils.labels import generate_uuid
+        return create_volume(
+            conn, label=label, uuid=generate_uuid(),
+            media_type="BD25", capacity_bytes=25_000_000_000,
+            status=status,
+        )
+
+    def test_unarchived_requires_durable_volume(self, memory_db):
+        from lcsas.db.packs import register_pack
+        from lcsas.db.volume_packs import bulk_link_packs
+
+        conn = memory_db
+        staging = self._vol(conn, "STAGING_VOL", "STAGING")
+        pack = register_pack(
+            conn, sha256="staged_pack", size_bytes=100, repo_id="_test")
+        bulk_link_packs(conn, staging.volume_id, [pack.pack_id])
+
+        # Linked only to a STAGING volume → still unarchived (re-selectable)
+        assert {p.sha256 for p in get_unarchived_packs(conn)} == {
+            "staged_pack"
+        }
+        assert get_total_unarchived_bytes(conn) == 100
+
+        # Flipping the volume to a durable status flips the pack to archived
+        conn.execute(
+            "UPDATE volumes SET status = 'BURNED' WHERE volume_id = ?",
+            (staging.volume_id,),
+        )
+        conn.commit()
+        assert get_unarchived_packs(conn) == []
+        assert get_total_unarchived_bytes(conn) == 0
+
+    def test_summary_reports_staged_bucket(self, memory_db):
+        from lcsas.db.packs import mark_pruned, register_pack
+        from lcsas.db.volume_packs import bulk_link_packs
+
+        conn = memory_db
+        staging = self._vol(conn, "S_VOL", "STAGING")
+        verified = self._vol(conn, "V_VOL", "VERIFIED")
+
+        p_archived = register_pack(
+            conn, sha256="archived_p", size_bytes=10, repo_id="_test")
+        p_both = register_pack(
+            conn, sha256="both_p", size_bytes=10, repo_id="_test")
+        p_staged = register_pack(
+            conn, sha256="staged_p", size_bytes=10, repo_id="_test")
+        register_pack(
+            conn, sha256="unarchived_p", size_bytes=10, repo_id="_test")
+        p_pruned = register_pack(
+            conn, sha256="pruned_p", size_bytes=10, repo_id="_test")
+        mark_pruned(conn, p_pruned.pack_id)
+
+        bulk_link_packs(conn, verified.volume_id,
+                        [p_archived.pack_id, p_both.pack_id])
+        bulk_link_packs(conn, staging.volume_id,
+                        [p_both.pack_id, p_staged.pack_id])
+
+        summary = get_archive_status_summary(conn)
+        # Buckets partition: archived (durable link, even when also
+        # staged) / staged (links but none durable) / unarchived / pruned.
+        assert summary == {
+            "total": 5, "pruned": 1, "archived": 2, "staged": 1,
+            "unarchived": 1,
+        }
+        assert (summary["archived"] + summary["staged"]
+                + summary["unarchived"] + summary["pruned"]) == summary["total"]
+
+    def test_pick_list_prefers_durable_and_flags_unconfirmed(self, memory_db):
+        from lcsas.db.packs import register_pack
+        from lcsas.db.volume_packs import bulk_link_packs
+        from lcsas.restore.planner import RestorePlanner
+
+        conn = memory_db
+        # Ghost sorts alphabetically BEFORE the verified volume, so only
+        # the status rank can win the primary-volume choice.
+        ghost = self._vol(conn, "A_GHOST_STAGING", "STAGING")
+        verified = self._vol(conn, "B_VERIFIED", "VERIFIED")
+
+        p_both = register_pack(
+            conn, sha256="on_both", size_bytes=10, repo_id="_test")
+        p_ghost_only = register_pack(
+            conn, sha256="ghost_only", size_bytes=10, repo_id="_test")
+        bulk_link_packs(conn, verified.volume_id, [p_both.pack_id])
+        bulk_link_packs(conn, ghost.volume_id,
+                        [p_both.pack_id, p_ghost_only.pack_id])
+
+        pick = get_pick_list(conn, ["on_both", "ghost_only"])
+        # Pack on both volumes → assigned to the durable one.
+        assert {p.sha256 for p in pick["B_VERIFIED"]} == {"on_both"}
+        # Pack only on the ghost → still offered (on-disc holographic
+        # catalogs list their own volume as STAGING; excluding it would
+        # break disc-rebuilt-catalog restores).
+        assert {p.sha256 for p in pick["A_GHOST_STAGING"]} == {"ghost_only"}
+
+        # The planner flags the ghost (zero copies) as unconfirmed.
+        planner = RestorePlanner(conn)
+        plan = planner.generate_pick_list(["on_both", "ghost_only"])
+        assert plan.unconfirmed_volume_labels == {
+            "A_GHOST_STAGING": ["ghost_only"],
+        }
+        plan_v2 = planner.generate_pick_list_v2(["on_both", "ghost_only"])
+        assert plan_v2.unconfirmed_volume_labels == {
+            "A_GHOST_STAGING": ["ghost_only"],
+        }
+
+        # A copy record confirms the disc exists → no longer flagged.
+        from lcsas.db.locations import ensure_location
+        from lcsas.db.volume_copies import add_volume_copy
+        ensure_location(conn, "Home_Shelf")
+        add_volume_copy(conn, volume_id=ghost.volume_id,
+                        location="Home_Shelf")
+        plan = planner.generate_pick_list(["on_both", "ghost_only"])
+        assert plan.unconfirmed_volume_labels == {}
+
+
+class TestReconcileQueries:
+    """Ghost-volume and status/copy-drift queries for `catalog reconcile`.
+    [FMA-01]"""
+
+    def test_ghost_volumes_and_drift(self, memory_db):
+        from lcsas.db.locations import ensure_location
+        from lcsas.db.queries import (
+            get_durable_volumes_without_active_copies,
+            get_ghost_volumes,
+            get_volume_pack_stats_by_repo,
+        )
+        from lcsas.db.volume_copies import add_volume_copy
+        from lcsas.db.volumes import create_volume
+        from lcsas.utils.labels import generate_uuid
+
+        conn = memory_db
+        ensure_location(conn, "Home_Shelf")
+
+        def _vol(label, status):
+            return create_volume(
+                conn, label=label, uuid=generate_uuid(),
+                media_type="BD25", capacity_bytes=25_000_000_000,
+                status=status,
+            )
+
+        stale_ghost = _vol("STALE_GHOST", "STAGING")
+        _vol("FRESH_STAGING", "STAGING")
+        staging_with_copy = _vol("STAGING_WITH_COPY", "STAGING")
+        _vol("DRIFTED_VERIFIED", "VERIFIED")
+        healthy = _vol("HEALTHY_VERIFIED", "VERIFIED")
+
+        conn.execute(
+            """UPDATE volumes SET created_at = datetime('now', '-48 hours')
+               WHERE volume_id IN (?, ?)""",
+            (stale_ghost.volume_id, staging_with_copy.volume_id),
+        )
+        conn.commit()
+        add_volume_copy(conn, volume_id=staging_with_copy.volume_id,
+                        location="Home_Shelf")
+        add_volume_copy(conn, volume_id=healthy.volume_id,
+                        location="Home_Shelf")
+
+        ghosts = get_ghost_volumes(conn, 24)
+        assert {v.label for v in ghosts} == {"STALE_GHOST"}
+        # fresh volume becomes a ghost only with a zero-hour cutoff
+        assert {v.label for v in get_ghost_volumes(conn, 0)} == {
+            "STALE_GHOST", "FRESH_STAGING",
+        }
+
+        assert {v.label for v in
+                get_durable_volumes_without_active_copies(conn)} == {
+            "DRIFTED_VERIFIED",
+        }
+
+        from lcsas.db.packs import register_pack
+        from lcsas.db.volume_packs import bulk_link_packs
+        p1 = register_pack(
+            conn, sha256="g1", size_bytes=100, repo_id="_test")
+        p2 = register_pack(
+            conn, sha256="g2", size_bytes=250, repo_id="_test")
+        bulk_link_packs(conn, stale_ghost.volume_id,
+                        [p1.pack_id, p2.pack_id])
+        assert get_volume_pack_stats_by_repo(
+            conn, stale_ghost.volume_id) == [("_test", 2, 350)]
+
+
 class TestStrandedPacks:
     """get_packs_stranded_on_unburned_volumes — packs whose only claims
     are stale never-burned (STAGING/BURNING) volumes.  [BURN-03]"""

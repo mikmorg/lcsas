@@ -248,6 +248,28 @@ def build_parser() -> argparse.ArgumentParser:
              "data payload of the disc).",
     )
 
+    cat_reconcile_p = cat_sub.add_parser(
+        "reconcile",
+        help="Report (and optionally fix) catalog/physical disagreements: "
+             "ghost volumes that were never burned, and durable volumes "
+             "with no ACTIVE copy record.",
+    )
+    cat_reconcile_p.add_argument(
+        "--fix", action="store_true", default=False,
+        help="Delete ghost volumes (never-burned STAGING/BURNING volumes "
+             "with zero copies), returning their packs to the unarchived "
+             "pool. Asks for confirmation unless --yes is given.",
+    )
+    cat_reconcile_p.add_argument(
+        "--yes", action="store_true", default=False,
+        help="With --fix: skip the interactive confirmation.",
+    )
+    cat_reconcile_p.add_argument(
+        "--older-than-hours", type=int, default=24,
+        help="Treat STAGING/BURNING volumes as ghosts only when older than "
+             "this many hours (default: 24; protects in-flight sessions).",
+    )
+
     cat_rebuild_p = cat_sub.add_parser(
         "rebuild",
         help="Rebuild master catalog by merging disc-embedded holographic catalogs.",
@@ -937,6 +959,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     logger.info(f"New packs registered: {total_new}")
     logger.info(f"Archive: {summary['total']} total, "
                f"{summary['archived']} archived, "
+               f"{summary['staged']} staged, "
                f"{summary['unarchived']} unarchived")
     return 0
 
@@ -944,10 +967,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     """Show archive status summary."""
     from lcsas.db.connection import get_connection
-    from lcsas.db.queries import (
-        get_archive_status_summary,
-        get_packs_stranded_on_unburned_volumes,
-    )
+    from lcsas.db.queries import get_archive_status_summary
     from lcsas.db.schema import create_all
     from lcsas.db.volumes import list_volumes
 
@@ -958,26 +978,23 @@ def cmd_status(args: argparse.Namespace) -> int:
 
         summary = get_archive_status_summary(conn)
         volumes = list_volumes(conn)
-        stranded = get_packs_stranded_on_unburned_volumes(conn)
     finally:
         conn.close()
 
     logger.info(f"Packs: {summary['total']} total, "
                f"{summary['archived']} archived, "
+               f"{summary['staged']} staged (NOT yet on disc), "
                f"{summary['unarchived']} unarchived, "
                f"{summary['pruned']} pruned")
     logger.info(f"Volumes: {len(volumes)} total")
     for v in volumes:
         logger.info(f"  {v.label:<25} {v.media_type:<10} {v.status:<10} {v.location}")
-    if stranded:
-        stranded_bytes = sum(p.size_bytes for p in stranded)
+    if summary["staged"] > 0:
         logger.warning(
-            "WARNING: %d pack(s) (%s bytes) are claimed by never-burned "
-            "volumes — they count as 'archived' but exist on no disc and "
-            "will never be re-staged. Run 'lcsas session abort <id>' or "
-            "'lcsas stage --clean --force' to return them to the "
-            "unarchived pool.",
-            len(stranded), f"{stranded_bytes:,}",
+            "WARNING: %d pack(s) are staged on volumes that were never "
+            "burned — run 'lcsas catalog reconcile' or burn the pending "
+            "session.",
+            summary["staged"],
         )
     return 0
 
@@ -1539,6 +1556,123 @@ def cmd_catalog_validate(args: argparse.Namespace) -> int:
             len(result.corrupt_on_disc),
         )
         return 1
+
+
+def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
+    """Report and optionally repair catalog/physical-state disagreements.
+
+    Two checks (FMA-01):
+
+    1. Ghost volumes — STAGING/BURNING with zero ``volume_copies`` rows,
+       older than the cutoff.  These claim packs but correspond to no
+       physical disc; restore pick lists offer them by label and an heir
+       would hunt for a disc that never existed.  ``--fix`` deletes them
+       (the migration path for catalogs predating the FMA-01 semantics).
+    2. Durable volumes without an ACTIVE copy — status says a disc exists
+       but no copy record backs it.  Report-only.
+    """
+    from lcsas.db.connection import locked_connection
+    from lcsas.db.queries import (
+        get_durable_volumes_without_active_copies,
+        get_ghost_volumes,
+        get_volume_pack_stats_by_repo,
+    )
+    from lcsas.db.schema import create_all
+    from lcsas.db.volumes import delete_volume
+
+    config = None
+    if args.config is not None:
+        from lcsas.config.settings import load_config
+        config = load_config(args.config)
+    db_path = _resolve_db_path(args, config)
+
+    with locked_connection(db_path) as conn:
+        create_all(conn)
+
+        ghosts = get_ghost_volumes(conn, args.older_than_hours)
+        drifted = get_durable_volumes_without_active_copies(conn)
+
+        if drifted:
+            logger.warning(
+                "%d volume(s) have a durable status but no ACTIVE copy "
+                "record (status/copies drift — investigate, not auto-fixed):",
+                len(drifted),
+            )
+            for v in drifted:
+                logger.warning("  %s  status=%s  location=%s",
+                               v.label, v.status, v.location)
+
+        if not ghosts:
+            logger.info(
+                "Catalog reconcile: no ghost volumes found "
+                "(STAGING/BURNING, zero copies, older than %dh).",
+                args.older_than_hours,
+            )
+            return 0
+
+        logger.warning(
+            "%d ghost volume(s) — staged but with no record of ever being "
+            "burned. Their packs are NOT on any disc:",
+            len(ghosts),
+        )
+        ghost_pack_total = 0
+        ghost_byte_total = 0
+        for v in ghosts:
+            stats = get_volume_pack_stats_by_repo(conn, v.volume_id)
+            n_packs = sum(c for _r, c, _b in stats)
+            n_bytes = sum(b for _r, _c, b in stats)
+            ghost_pack_total += n_packs
+            ghost_byte_total += n_bytes
+            per_repo = "; ".join(
+                f"{repo}: {c} pack(s), {b:,} bytes" for repo, c, b in stats
+            ) or "no packs"
+            logger.warning(
+                "  %s  (status=%s, created %s) — %s",
+                v.label, v.status, v.created_at, per_repo,
+            )
+
+        if not args.fix:
+            logger.warning(
+                "Run 'lcsas catalog reconcile --fix' to delete these "
+                "volumes and return %d pack(s) (%s bytes) to the "
+                "unarchived pool.",
+                ghost_pack_total, f"{ghost_byte_total:,}",
+            )
+            return 1
+
+        if not args.yes:
+            try:
+                response = input(
+                    f"Delete {len(ghosts)} ghost volume(s) and return "
+                    f"their packs to the unarchived pool? "
+                    f"Type 'yes' to confirm: "
+                ).strip()
+            except EOFError:
+                logger.error(
+                    "No terminal available for confirmation — re-run with "
+                    "--yes to confirm non-interactively."
+                )
+                return 1
+            if response.lower() != "yes":
+                logger.info("Reconcile canceled — no changes made.")
+                return 1
+
+        ghost_ids = [v.volume_id for v in ghosts]
+        placeholders = ",".join("?" for _ in ghost_ids)
+        reclaimed = conn.execute(
+            f"SELECT COUNT(DISTINCT pack_id) FROM volume_packs "
+            f"WHERE volume_id IN ({placeholders})",
+            ghost_ids,
+        ).fetchone()[0]
+        for v in ghosts:
+            logger.info("Deleting ghost volume %s", v.label)
+            delete_volume(conn, v.volume_id)
+        logger.info(
+            "Deleted %d ghost volume(s); %d pack(s) returned to the "
+            "unarchived pool (re-run 'lcsas stage' to re-select them).",
+            len(ghosts), int(reclaimed),
+        )
+    return 0
 
 
 def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
@@ -2217,6 +2351,15 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
             "  If you can locate these discs, mount them and re-run restore."
         )
 
+    for label, hashes in sorted(pick_list.unconfirmed_volume_labels.items()):
+        logger.warning(
+            "\n  WARNING: volume %s was staged but has no record of ever "
+            "being burned. If you cannot find this disc, it may never have "
+            "existed. The %d pack(s) it lists may only exist on the "
+            "original NAS mirror.",
+            label, len(hashes),
+        )
+
     if pick_list.missing_packs:
         logger.error(
             "\n  ERROR: %d pack(s) required for this snapshot are not found in "
@@ -2350,6 +2493,15 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
             "%d pack(s) are only on DEPRECATED/DESTROYED volumes: %s",
             sum(len(v) for v in pick_list.deprecated_disc_labels.values()),
             ", ".join(sorted(pick_list.deprecated_disc_labels)),
+        )
+
+    for label, hashes in sorted(pick_list.unconfirmed_volume_labels.items()):
+        logger.warning(
+            "WARNING: volume %s was staged but has no record of ever being "
+            "burned. If you cannot find this disc, it may never have "
+            "existed. The %d pack(s) it lists may only exist on the "
+            "original NAS mirror.",
+            label, len(hashes),
         )
 
     if pick_list.missing_packs:
@@ -3180,10 +3332,14 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_catalog_import(args)
         elif args.catalog_command == "validate":
             return cmd_catalog_validate(args)
+        elif args.catalog_command == "reconcile":
+            return cmd_catalog_reconcile(args)
         elif args.catalog_command == "rebuild":
             return cmd_catalog_rebuild(args)
         else:
-            logger.error("Usage: lcsas catalog {import-receipts|validate|rebuild}")
+            logger.error(
+                "Usage: lcsas catalog {import-receipts|validate|reconcile|rebuild}"
+            )
             return 1
     elif args.command == "session":
         if args.session_command == "list":

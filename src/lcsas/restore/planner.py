@@ -11,6 +11,7 @@ from lcsas.db.queries import (
     get_missing_packs,
     get_pick_list,
     get_pick_list_with_alternates,
+    get_unconfirmed_volume_labels,
 )
 
 
@@ -38,6 +39,9 @@ class PickList:
     # Packs only on DEPRECATED/DESTROYED volumes — may still be physically recoverable.
     # {volume_label: [sha256, ...]}
     deprecated_disc_labels: dict[str, list[str]] = field(default_factory=dict)
+    # Selected volumes with no record of ever being burned (STAGING/BURNING,
+    # zero copies) — the disc may never have existed.  {volume_label: [sha256, ...]}
+    unconfirmed_volume_labels: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,9 @@ class PickListV2:
     # Packs only on DEPRECATED/DESTROYED volumes — may still be physically recoverable.
     # {volume_label: [sha256, ...]}
     deprecated_disc_labels: dict[str, list[str]] = field(default_factory=dict)
+    # Selected volumes with no record of ever being burned (STAGING/BURNING,
+    # zero copies) — the disc may never have existed.  {volume_label: [sha256, ...]}
+    unconfirmed_volume_labels: dict[str, list[str]] = field(default_factory=dict)
 
 
 class RestorePlanner:
@@ -78,6 +85,7 @@ class RestorePlanner:
         volumes = get_pick_list(self._conn, required_pack_hashes)
         missing = get_missing_packs(self._conn, required_pack_hashes)
         deprecated = get_deprecated_only_packs(self._conn, required_pack_hashes)
+        unconfirmed = get_unconfirmed_volume_labels(self._conn, list(volumes))
 
         total_packs = sum(len(packs) for packs in volumes.values())
         total_bytes = sum(
@@ -90,6 +98,11 @@ class RestorePlanner:
             total_packs=total_packs,
             total_bytes=total_bytes,
             deprecated_disc_labels=deprecated,
+            unconfirmed_volume_labels={
+                label: [p.sha256 for p in packs]
+                for label, packs in volumes.items()
+                if label in unconfirmed
+            },
         )
 
     def generate_pick_list_v2(
@@ -127,10 +140,17 @@ class RestorePlanner:
             total_packs += 1
             total_bytes += source.pack.size_bytes
 
+        unconfirmed = get_unconfirmed_volume_labels(self._conn, list(volumes))
+
         return PickListV2(
             volumes=volumes,
             missing_packs=missing,
             total_packs=total_packs,
             total_bytes=total_bytes,
             deprecated_disc_labels=deprecated,
+            unconfirmed_volume_labels={
+                label: [s.pack.sha256 for s in sources]
+                for label, sources in volumes.items()
+                if label in unconfirmed
+            },
         )

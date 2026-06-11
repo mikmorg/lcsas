@@ -1096,6 +1096,137 @@ class TestCmdSessionAbort:
 
 
 # ────────────────────────────────────────────────────────────────────
+#  Staged bucket + catalog reconcile  [FMA-01]
+# ────────────────────────────────────────────────────────────────────
+
+
+def _seed_ghost_volume(db: str, *, label: str = "GHOST_VOL",
+                       age_hours: int = 48) -> None:
+    """Seed a stale never-burned STAGING volume with two linked packs."""
+    from lcsas.db.connection import get_connection
+    from lcsas.db.packs import register_pack
+    from lcsas.db.repos import register_repo
+    from lcsas.db.volume_packs import bulk_link_packs
+    from lcsas.db.volumes import create_volume
+
+    conn = get_connection(db)
+    try:
+        register_repo(conn, "r1", "R1", "/mnt/r1")
+        p1 = register_pack(conn, sha256="a" * 64, size_bytes=100,
+                           repo_id="r1")
+        p2 = register_pack(conn, sha256="b" * 64, size_bytes=200,
+                           repo_id="r1")
+        vol = create_volume(
+            conn, label=label, uuid=f"uuid-{label}",
+            media_type="TEST_TINY", capacity_bytes=2_097_152,
+            status="STAGING",
+        )
+        bulk_link_packs(conn, vol.volume_id, [p1.pack_id, p2.pack_id])
+        conn.execute(
+            "UPDATE volumes SET created_at = datetime('now', ?) "
+            "WHERE volume_id = ?",
+            (f"-{int(age_hours)} hours", vol.volume_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_status_reports_staged_unburned_bucket(tmp_path, capsys):
+    """`lcsas status` shows the staged bucket + never-burned warning.
+    [FMA-01]"""
+    db = tmp_path / "test.db"
+    main(["init", "--db-path", str(db)])
+    _seed_ghost_volume(str(db))
+    capsys.readouterr()
+
+    result = main(["--db", str(db), "status"])
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "2 staged (NOT yet on disc)" in out
+    assert "never" in out and "burned" in out
+    assert "catalog reconcile" in out
+
+
+def test_catalog_reconcile_reports_and_fixes_ghosts(tmp_path, capsys):
+    """`catalog reconcile` lists ghosts; --fix --yes deletes them and the
+    packs return to the unarchived pool; a second run reports clean.
+    [FMA-01]"""
+    from lcsas.db.connection import get_connection
+    from lcsas.db.queries import get_unarchived_packs
+
+    db = tmp_path / "test.db"
+    main(["init", "--db-path", str(db)])
+    _seed_ghost_volume(str(db))
+    capsys.readouterr()
+
+    # Report-only: ghost listed, nonzero exit (needs attention), no change.
+    rc = main(["--db", str(db), "catalog", "reconcile"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "GHOST_VOL" in out
+    assert "--fix" in out
+
+    # Fix: ghost volume deleted, packs reclaimed.
+    rc = main(["--db", str(db), "catalog", "reconcile", "--fix", "--yes"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "2 pack(s) returned to the unarchived pool" in out
+
+    conn = get_connection(str(db))
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM volumes").fetchone()[0] == 0
+        assert {p.sha256 for p in get_unarchived_packs(conn)} == {
+            "a" * 64, "b" * 64,
+        }
+    finally:
+        conn.close()
+
+    # A second run reports clean.
+    rc = main(["--db", str(db), "catalog", "reconcile"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no ghost volumes" in out
+
+
+def test_catalog_reconcile_spares_fresh_and_burned_volumes(tmp_path, capsys):
+    """Mid-pipeline (fresh) STAGING volumes and volumes with copies are
+    never treated as ghosts.  [FMA-01]"""
+    from lcsas.db.connection import get_connection
+    from lcsas.db.locations import ensure_location
+    from lcsas.db.volume_copies import add_volume_copy
+    from lcsas.db.volumes import create_volume
+
+    db = tmp_path / "test.db"
+    main(["init", "--db-path", str(db)])
+    _seed_ghost_volume(str(db), label="FRESH_STAGING", age_hours=0)
+    conn = get_connection(str(db))
+    try:
+        ensure_location(conn, "Home_Shelf")
+        vol = create_volume(
+            conn, label="OLD_WITH_COPY", uuid="uuid-old-copy",
+            media_type="TEST_TINY", capacity_bytes=2_097_152,
+            status="STAGING",
+        )
+        add_volume_copy(conn, volume_id=vol.volume_id,
+                        location="Home_Shelf")
+        conn.execute(
+            "UPDATE volumes SET created_at = datetime('now', '-48 hours') "
+            "WHERE volume_id = ?", (vol.volume_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    capsys.readouterr()
+
+    rc = main(["--db", str(db), "catalog", "reconcile"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no ghost volumes" in out
+
+
+# ────────────────────────────────────────────────────────────────────
 #  cmd_consolidate — branch coverage
 # ────────────────────────────────────────────────────────────────────
 

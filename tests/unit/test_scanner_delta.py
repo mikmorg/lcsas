@@ -131,9 +131,12 @@ class TestDeltaAnalyzer:
 
     def test_archived_packs_excluded(self, memory_db):
         p = register_pack(memory_db, sha256="archived", size_bytes=100, repo_id="_test")
+        # Must be a durable (burned) volume: packs on STAGING volumes
+        # stay in the unarchived pool under FMA-01 semantics.
         vol = create_volume(
             memory_db, label="V1", uuid=generate_uuid(),
             media_type="BD25", capacity_bytes=25_000_000_000,
+            status="VERIFIED",
         )
         bulk_link_packs(memory_db, vol.volume_id, [p.pack_id])
 

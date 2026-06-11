@@ -38,7 +38,7 @@ from lcsas.db.schema import create_all
 from lcsas.db.sessions import get_session, get_session_volumes, list_sessions
 from lcsas.db.volume_copies import add_volume_copy, get_copies_for_volume
 from lcsas.db.volume_packs import get_pack_ids_for_volume
-from lcsas.db.volumes import get_volume_by_id
+from lcsas.db.volumes import get_volume_by_id, get_volume_by_label
 from lcsas.iso.xorriso import SubprocessXorrisoRunner
 from lcsas.utils.hashing import sha256_file
 
@@ -269,8 +269,13 @@ class TestStage:
             assert len(linked) == len(m.selected_packs)
 
     def test_stage_nothing_to_stage_raises(self, env):
-        """Raises when no unarchived packs exist."""
-        env["orch"].stage()
+        """Raises when no unarchived packs exist.
+
+        The first session must be burned: packs on STAGING volumes stay
+        re-selectable under FMA-01 semantics.
+        """
+        result = env["orch"].stage()
+        env["orch"].burn_session(result.session_id, "Home_Shelf", skip_burn=True)
         with pytest.raises(ValueError, match="No packs need staging"):
             env["orch"].stage()
 
@@ -582,10 +587,14 @@ class TestCleanSession:
             assert iso.exists()
         assert result.staging_dir.is_dir()
 
-        # Catalog untouched: volume still there, packs still claimed
+        # Catalog untouched: volumes and pack links still there.  Under
+        # FMA-01 semantics the packs count as *staged* (not archived) and
+        # remain in the re-selectable pool until the session is burned.
         for m in result.manifests:
             assert get_volume_by_id(conn, m.volume_id) is not None
-        assert get_unarchived_packs(conn) == []
+        summary = get_archive_status_summary(conn)
+        assert summary["staged"] == len(env["packs"])
+        assert summary["archived"] == 0
         assert get_session(conn, result.session_id).status == "STAGED"
 
     def test_clean_session_force_reclaims(self, env):
@@ -627,6 +636,63 @@ class TestCleanSession:
 
 
 # =========================================================================
+# Archived-Semantics Lifecycle Tests  [FMA-01]
+# =========================================================================
+
+
+def test_clean_unburned_session_returns_packs_to_unarchived(env):
+    """stage → clean(force): packs return to the pool, ghost volumes are
+    deleted, and a fresh stage re-selects the same packs.  [FMA-01]"""
+    conn = env["conn"]
+    orch = env["orch"]
+    packs = env["packs"]
+
+    result = orch.stage()
+    labels = [m.volume_label for m in result.manifests]
+
+    orch.clean_session(result.session_id, force=True)
+
+    # Every staged pack reappears in the unarchived pool and the
+    # never-burned volume rows are gone.
+    unarchived = {p.sha256 for p in get_unarchived_packs(conn)}
+    assert unarchived == {p.sha256 for p in packs}
+    for label in labels:
+        assert get_volume_by_label(conn, label) is None
+
+    # Acceptance (FMA-01): stage → stage --clean → stage re-selects the
+    # same packs end-to-end on TEST_TINY media.
+    result2 = orch.stage()
+    restaged = {
+        p.sha256 for m in result2.manifests for p in m.selected_packs
+    }
+    assert restaged == {p.sha256 for p in packs}
+
+
+def test_clean_burned_session_keeps_volumes(env):
+    """Cleaning a burned session leaves volumes, links and copies intact —
+    its packs stay durably archived.  [FMA-01]"""
+    conn = env["conn"]
+    orch = env["orch"]
+    packs = env["packs"]
+
+    result = orch.stage()
+    orch.burn_session(result.session_id, "Home_Shelf", skip_burn=True)
+    orch.clean_session(result.session_id)
+
+    for m in result.manifests:
+        vol = get_volume_by_id(conn, m.volume_id)
+        assert vol.status == "VERIFIED"
+        # burn_session recorded a physical copy at the location
+        assert get_copies_for_volume(conn, m.volume_id)
+        assert get_pack_ids_for_volume(conn, m.volume_id)
+
+    assert get_unarchived_packs(conn) == []
+    summary = get_archive_status_summary(conn)
+    assert summary["archived"] == len(packs)
+    assert summary["staged"] == 0
+
+
+# =========================================================================
 # Mid-Stage Failure Compensation Tests  [BURN-03]
 # =========================================================================
 
@@ -665,14 +731,16 @@ class TestMidStageCompensation:
         ).fetchone()
         assert sv is not None
 
-        # Volume 2 absent and its packs back in the unarchived pool
+        # Volume 2 absent: its links are gone, only volume 1's remain.
+        # Under FMA-01 semantics ALL packs are re-selectable (volume 1 is
+        # still STAGING — not burned), but volume 1's links survive.
         assert len(conn.execute("SELECT * FROM session_volumes").fetchall()) == 1
         vol1_pack_count = conn.execute(
             "SELECT COUNT(*) FROM volume_packs"
         ).fetchone()[0]
-        unarchived = get_unarchived_packs(conn)
-        assert vol1_pack_count + len(unarchived) == len(multi_vol_env["packs"])
-        assert len(unarchived) >= 1
+        assert 1 <= vol1_pack_count < len(multi_vol_env["packs"])
+        unarchived = {p.sha256 for p in get_unarchived_packs(conn)}
+        assert unarchived == {p.sha256 for p in multi_vol_env["packs"]}
 
     def test_ecc_failure_midstage_reclaims_packs(self, env, monkeypatch):
         """dvdisaster failure mid-stage deletes the volume + pack links."""

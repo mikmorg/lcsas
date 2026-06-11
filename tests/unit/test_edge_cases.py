@@ -145,7 +145,10 @@ class TestDbEdgeCases:
     def test_archive_status_summary_empty(self, memory_db):
         """Summary on empty DB returns all zeros."""
         summary = get_archive_status_summary(memory_db)
-        assert summary == {"total": 0, "pruned": 0, "archived": 0, "unarchived": 0}
+        assert summary == {
+            "total": 0, "pruned": 0, "archived": 0, "staged": 0,
+            "unarchived": 0,
+        }
 
 
 # =========================================================================
