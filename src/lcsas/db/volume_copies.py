@@ -44,27 +44,33 @@ def add_volume_copy(
     notes: str = "",
     *,
     iso_sha256: str | None = None,
+    last_verified_at: str | None = None,
     media_serial: str = "",
     commit: bool = True,
 ) -> VolumeCopy:
     """Record a physical copy of a volume at a location.
 
-    If a copy already exists at this location (re-burn), the burn_date
-    and notes are updated in-place.
+    If a copy already exists at this location (re-burn), the burn_date,
+    notes, and verification evidence are updated in-place: the row
+    describes the NEW disc, so a stale ``last_verified_at`` from the
+    replaced disc must not survive the re-burn.
     """
     if burn_date is None:
         burn_date = datetime.now(UTC).isoformat()
     conn.execute(
         """INSERT INTO volume_copies
-               (volume_id, location, burn_date, notes, iso_sha256, media_serial)
-           VALUES (?, ?, ?, ?, ?, ?)
+               (volume_id, location, burn_date, notes, iso_sha256,
+                last_verified_at, media_serial)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(volume_id, location) DO UPDATE SET
-               burn_date    = excluded.burn_date,
-               notes        = excluded.notes,
-               status       = 'ACTIVE',
-               iso_sha256   = excluded.iso_sha256,
-               media_serial = excluded.media_serial""",
-        (volume_id, location, burn_date, notes, iso_sha256, media_serial),
+               burn_date        = excluded.burn_date,
+               notes            = excluded.notes,
+               status           = 'ACTIVE',
+               iso_sha256       = excluded.iso_sha256,
+               last_verified_at = excluded.last_verified_at,
+               media_serial     = excluded.media_serial""",
+        (volume_id, location, burn_date, notes, iso_sha256,
+         last_verified_at, media_serial),
     )
     if commit:
         conn.commit()
@@ -215,6 +221,29 @@ def move_volume_copy(
         (volume_id, "LOCATION_MOVE", now, to_location, detail),
     )
     conn.commit()
+
+
+def touch_last_verified(
+    conn: sqlite3.Connection,
+    volume_id: int,
+    location: str,
+    *,
+    commit: bool = True,
+) -> bool:
+    """Stamp ``last_verified_at = now`` on the ACTIVE copy at a location.
+
+    Returns True if a row was updated (BURN-04: re-verification evidence
+    for the disc-rot re-check cadence).
+    """
+    now = datetime.now(UTC).isoformat()
+    result = conn.execute(
+        """UPDATE volume_copies SET last_verified_at = ?
+           WHERE volume_id = ? AND location = ? AND status = 'ACTIVE'""",
+        (now, volume_id, location),
+    )
+    if commit:
+        conn.commit()
+    return result.rowcount > 0
 
 
 def deprecate_copy(

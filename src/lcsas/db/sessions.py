@@ -19,11 +19,18 @@ def _row_to_session(row: sqlite3.Row) -> BurnSession:
 
 
 def _row_to_session_volume(row: sqlite3.Row) -> SessionVolume:
+    # iso_size_bytes is absent on catalogs burned before schema v7
+    # (on-disc holographic snapshots are frozen forever).
+    try:
+        iso_size_bytes = row["iso_size_bytes"]
+    except (IndexError, KeyError):
+        iso_size_bytes = None
     return SessionVolume(
         session_id=row["session_id"],
         volume_id=row["volume_id"],
         iso_path=row["iso_path"],
         iso_sha256=row["iso_sha256"],
+        iso_size_bytes=iso_size_bytes,
     )
 
 
@@ -114,14 +121,16 @@ def add_session_volume(
     volume_id: int,
     iso_path: str,
     iso_sha256: str | None = None,
+    iso_size_bytes: int | None = None,
     *,
     commit: bool = True,
 ) -> SessionVolume:
     """Link a volume to a session with its ISO path."""
     conn.execute(
-        """INSERT INTO session_volumes (session_id, volume_id, iso_path, iso_sha256)
-           VALUES (?, ?, ?, ?)""",
-        (session_id, volume_id, iso_path, iso_sha256),
+        """INSERT INTO session_volumes
+               (session_id, volume_id, iso_path, iso_sha256, iso_size_bytes)
+           VALUES (?, ?, ?, ?, ?)""",
+        (session_id, volume_id, iso_path, iso_sha256, iso_size_bytes),
     )
     if commit:
         conn.commit()
@@ -130,6 +139,7 @@ def add_session_volume(
         volume_id=volume_id,
         iso_path=iso_path,
         iso_sha256=iso_sha256,
+        iso_size_bytes=iso_size_bytes,
     )
 
 
@@ -151,17 +161,19 @@ def update_session_volume_iso(
     volume_id: int,
     iso_path: str,
     iso_sha256: str,
+    iso_size_bytes: int | None = None,
 ) -> None:
-    """Fill in the ISO path/hash for a session volume registered pre-ISO.
+    """Fill in the ISO path/hash/size for a session volume registered pre-ISO.
 
     Volumes are linked into session_volumes in the same transaction that
     creates them (before the ISO exists, with iso_sha256=''); this records
-    the final hash once the ISO has been mastered.
+    the final hash and byte length once the ISO has been mastered.
     """
     conn.execute(
-        """UPDATE session_volumes SET iso_path = ?, iso_sha256 = ?
+        """UPDATE session_volumes
+           SET iso_path = ?, iso_sha256 = ?, iso_size_bytes = ?
            WHERE session_id = ? AND volume_id = ?""",
-        (iso_path, iso_sha256, session_id, volume_id),
+        (iso_path, iso_sha256, iso_size_bytes, session_id, volume_id),
     )
     conn.commit()
 

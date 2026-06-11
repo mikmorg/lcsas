@@ -404,7 +404,9 @@ def build_parser() -> argparse.ArgumentParser:
     verify_p.add_argument("--all", action="store_true", default=False, dest="verify_all",
                           help="Verify all BURNED/VERIFIED volumes (batch mode).")
     verify_p.add_argument("--location", default=None,
-                          help="Filter --all to volumes at this location.")
+                          help="Filter --all to volumes at this location; with "
+                               "--disc, also stamp last_verified_at on the copy "
+                               "at this location when verification passes.")
 
     # --- session ---
     session_p = subparsers.add_parser("session", help="Manage burn sessions.")
@@ -1826,6 +1828,68 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _verify_disc_against_recorded_hash(
+    conn: sqlite3.Connection,
+    volume_id: int,
+    label: str,
+    device: str,
+) -> bool:
+    """Device read-back SHA-256 compare for ``verify --disc`` (BURN-04).
+
+    Returns True when the disc's bytes match the ISO hash recorded at
+    stage time, or when no hash was ever recorded (pre-Phase-13 volume:
+    readability is all the evidence available).  Returns False on
+    mismatch, on read errors, and when a hash is recorded but the ISO
+    byte length cannot be determined (-check_media alone is not enough
+    evidence for a volume that carries a hash).
+    """
+    from lcsas.burn.device_verify import read_device_sha256
+
+    row = conn.execute(
+        "SELECT iso_path, iso_sha256, iso_size_bytes FROM session_volumes "
+        "WHERE volume_id = ? AND iso_sha256 IS NOT NULL AND iso_sha256 != '' "
+        "ORDER BY rowid DESC LIMIT 1",
+        (volume_id,),
+    ).fetchone()
+    if row is None:
+        logger.warning(
+            "  No recorded ISO SHA-256 for %s — device hash check skipped "
+            "(pre-Phase-13 volume); check_media proved readability only.",
+            label,
+        )
+        return True
+
+    iso_size = row["iso_size_bytes"]
+    if iso_size is None and row["iso_path"]:
+        iso_file = Path(row["iso_path"])
+        if iso_file.exists():
+            iso_size = iso_file.stat().st_size
+    if iso_size is None:
+        logger.warning(
+            "  cannot device-verify %s: no recorded ISO size (pre-upgrade "
+            "session) and the ISO file is gone — NOT passing on "
+            "check_media alone.",
+            label,
+        )
+        return False
+
+    try:
+        device_hash = read_device_sha256(device, int(iso_size))
+    except OSError as exc:
+        logger.error(f"  Device hash verify: FAIL (read error: {exc})")
+        return False
+
+    expected = str(row["iso_sha256"])
+    ok = device_hash == expected
+    logger.info(f"  Device hash verify: {'PASS' if ok else 'FAIL'}")
+    if not ok:
+        logger.error(
+            f"  device hash mismatch: expected {expected[:8]}.., "
+            f"got {device_hash[:8]}.."
+        )
+    return ok
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Verify a volume's ISO image or burned disc.
 
@@ -1912,9 +1976,28 @@ def cmd_verify(args: argparse.Namespace) -> int:
             runner = SubprocessXorrisoRunner()
             logger.info(f"Verifying disc on {args.device} ...")
             ok = runner.verify_disc(device=args.device)
-            logger.info(f"  Disc verify: {'PASS' if ok else 'FAIL'}")
+            logger.info(f"  Disc verify (check_media): {'PASS' if ok else 'FAIL'}")
             if not ok:
                 passed = False
+            else:
+                # BURN-04: -check_media proves only readability — any
+                # readable disc in the tray passes it.  Read back the
+                # recorded ISO byte length from the device and compare
+                # against the SHA-256 recorded at stage time.
+                passed = _verify_disc_against_recorded_hash(
+                    conn, vol.volume_id, vol.label, args.device,
+                )
+            if passed and args.location:
+                from lcsas.db.volume_copies import touch_last_verified
+                if touch_last_verified(conn, vol.volume_id, args.location):
+                    logger.info(
+                        f"  Stamped last_verified_at on copy at {args.location}"
+                    )
+                else:
+                    logger.warning(
+                        f"  No ACTIVE copy of {vol.label} at {args.location} — "
+                        f"last_verified_at not updated"
+                    )
         else:
             if not iso_path.exists():
                 logger.error(f"ISO file not found: {iso_path}")

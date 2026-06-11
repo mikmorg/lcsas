@@ -151,3 +151,6 @@ candidate for the weekly scheduled CI job proposed in the GATE plans.
 
 2.5 days: 1.0 impl (reader + orchestrator + CLI + migration), 1.0 unit tests,
 0.5 cdemu e2e (needs the cdemu VM environment; no real burner required).
+
+---
+**Implemented:** 2026-06-11. As planned, plus required wiring: create_all() now applies pending migrations (nothing ever called migrate(), so v7 would never run); the legacy no-size/no-ISO warning path is unit-tested via the extracted _verify_burned_disc helper (unreachable through burn_session, which always has the ISO and falls back to st_size). BURN-05 ("no ACTIVE copy on failed verify") intentionally not included.

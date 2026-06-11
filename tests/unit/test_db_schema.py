@@ -290,3 +290,75 @@ class TestMigrateV4ToV5:
             "Status-filtered queries will degrade to full table scans."
         )
         conn.close()
+
+
+class TestMigrateV6ToV7:
+    """v6 → v7: session_volumes.iso_size_bytes for device read-back
+    verification (BURN-04)."""
+
+    def _make_v6_db(self):
+        """Minimal v6-era database: session_volumes without iso_size_bytes."""
+        conn = get_memory_connection()
+        conn.execute(
+            """CREATE TABLE schema_version (
+                version INTEGER NOT NULL,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        conn.execute("INSERT INTO schema_version (version) VALUES (6)")
+        conn.execute(
+            """CREATE TABLE session_volumes (
+                session_id  TEXT    NOT NULL,
+                volume_id   INTEGER NOT NULL,
+                iso_path    TEXT    NOT NULL,
+                iso_sha256  TEXT,
+                PRIMARY KEY (session_id, volume_id)
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO session_volumes (session_id, volume_id, iso_path, iso_sha256) "
+            "VALUES ('s1', 1, '/staging/V1.iso', 'abc123')"
+        )
+        conn.commit()
+        return conn
+
+    def test_migration_v6_to_v7(self):
+        conn = self._make_v6_db()
+        assert get_schema_version(conn) == 6
+        migrate(conn)
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+
+        cols = {
+            r[1]
+            for r in conn.execute("PRAGMA table_info(session_volumes)").fetchall()
+        }
+        assert "iso_size_bytes" in cols
+
+        # Pre-upgrade rows stay NULL (and keep their other columns)
+        row = conn.execute(
+            "SELECT iso_path, iso_sha256, iso_size_bytes FROM session_volumes"
+        ).fetchone()
+        assert row["iso_size_bytes"] is None
+        assert row["iso_path"] == "/staging/V1.iso"
+        assert row["iso_sha256"] == "abc123"
+        conn.close()
+
+    def test_migrate_idempotent_from_v6(self):
+        conn = self._make_v6_db()
+        migrate(conn)
+        migrate(conn)
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+        conn.close()
+
+    def test_create_all_applies_pending_migrations(self):
+        """create_all on an existing old-version DB must migrate it:
+        every CLI entry point calls create_all, none called migrate."""
+        conn = self._make_v6_db()
+        create_all(conn)
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+        cols = {
+            r[1]
+            for r in conn.execute("PRAGMA table_info(session_volumes)").fetchall()
+        }
+        assert "iso_size_bytes" in cols
+        conn.close()

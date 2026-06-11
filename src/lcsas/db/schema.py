@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 # ---------------------------------------------------------------------------
 # DDL Statements
@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS session_volumes (
     volume_id   INTEGER NOT NULL,
     iso_path    TEXT    NOT NULL,
     iso_sha256  TEXT,
+    iso_size_bytes INTEGER,
     PRIMARY KEY (session_id, volume_id),
     FOREIGN KEY (session_id) REFERENCES burn_sessions (session_id),
     FOREIGN KEY (volume_id) REFERENCES volumes (volume_id)
@@ -196,6 +197,13 @@ def create_all(conn: sqlite3.Connection) -> None:
         )
 
     conn.commit()
+
+    # Apply pending migrations: every CLI entry point calls create_all
+    # on the hot catalog, but nothing called migrate() — long-lived
+    # catalogs silently stayed on old schema versions (BURN-04 needs
+    # session_volumes.iso_size_bytes on upgraded v≤6 databases).
+    # No-op on freshly created databases (version is already current).
+    migrate(conn)
 
 
 def migrate(conn: sqlite3.Connection) -> int:
@@ -324,6 +332,35 @@ def migrate(conn: sqlite3.Connection) -> int:
         )
         conn.commit()
         conn.execute("PRAGMA foreign_keys=ON")
+
+    # v6 → v7: session_volumes.iso_size_bytes — the post-ECC ISO byte
+    # length, required to device-hash exactly the burned image after the
+    # ISO file itself has been cleaned up (BURN-04).  Nullable single
+    # ALTER, mirroring the v3→v4 pattern; pre-upgrade rows stay NULL.
+    if current < 7:
+        tables = {
+            r[0] for r in cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "session_volumes" not in tables:
+            # Partial legacy catalogs (pre-session era): create fresh
+            # with the column already present.
+            cursor.executescript(SQL_CREATE_SESSION_VOLUMES)
+        else:
+            cols = {
+                r[1] for r in cursor.execute(
+                    "PRAGMA table_info(session_volumes)"
+                ).fetchall()
+            }
+            if "iso_size_bytes" not in cols:
+                cursor.execute(
+                    "ALTER TABLE session_volumes ADD COLUMN iso_size_bytes INTEGER"
+                )
+        cursor.execute(
+            "INSERT INTO schema_version (version) VALUES (?)",
+            (7,),
+        )
 
     conn.commit()
     return CURRENT_SCHEMA_VERSION

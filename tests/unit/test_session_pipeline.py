@@ -155,7 +155,10 @@ def env(tmp_path):
     xorriso.create_iso.side_effect = _fake_create_iso
     dvdisaster = MagicMock()
 
-    orch = BurnOrchestrator(config, conn, xorriso, dvdisaster)
+    # BURN-04: fake device reader matching the fixture's all-zeros ISOs —
+    # returns the hash a correctly burned disc would yield.
+    orch = BurnOrchestrator(config, conn, xorriso, dvdisaster,
+                            device_reader=_zeros_device_reader)
 
     return {
         "orch": orch,
@@ -166,6 +169,11 @@ def env(tmp_path):
         "dvdisaster": dvdisaster,
         "tmp_path": tmp_path,
     }
+
+
+def _zeros_device_reader(device: str, length_bytes: int) -> str:
+    """Fake device reader: a disc burned from an all-zeros fixture ISO."""
+    return hashlib.sha256(b"\x00" * length_bytes).hexdigest()
 
 
 @pytest.fixture
@@ -190,7 +198,8 @@ def multi_vol_env(tmp_path):
         return Path(output_iso)
     xorriso.create_iso.side_effect = _fake_create_iso
     dvdisaster = MagicMock()
-    orch = BurnOrchestrator(config, conn, xorriso, dvdisaster)
+    orch = BurnOrchestrator(config, conn, xorriso, dvdisaster,
+                            device_reader=_zeros_device_reader)
 
     return {
         "orch": orch,
@@ -531,6 +540,167 @@ class TestBurnSession:
             events = get_events_for_volume(conn, receipt.volume_id, "VERIFY_FAIL")
             assert len(events) >= 1
             assert "failed" in events[0].detail.lower()
+
+
+class TestDeviceHashVerify:
+    """BURN-04: VERIFIED requires the disc bytes to match the recorded
+    ISO SHA-256 — -check_media alone is a readability smoke test."""
+
+    def test_verify_compares_device_hash(self, env):
+        """A readable disc whose bytes differ from the recorded hash must
+        never reach VERIFIED."""
+        from lcsas.db.volume_events import get_events_for_volume
+        conn = env["conn"]
+        xorriso = env["xorriso"]
+
+        # Reader returns a hash that can never match the recorded one.
+        orch = BurnOrchestrator(
+            env["config"], conn, xorriso, env["dvdisaster"],
+            device_reader=lambda device, length: "0" * 64,
+        )
+        result = orch.stage()
+
+        xorriso.burn_iso = MagicMock()
+        xorriso.verify_disc = MagicMock(return_value=True)
+
+        receipts = orch.burn_session(result.session_id, "Home_Shelf",
+                                     skip_burn=False)
+
+        for receipt in receipts:
+            assert receipt.verify_passed is False
+            vol = get_volume_by_id(conn, receipt.volume_id)
+            assert vol.status == "BURNED"
+
+            events = get_events_for_volume(conn, receipt.volume_id, "VERIFY_FAIL")
+            assert any("hash mismatch" in e.detail for e in events)
+
+    def test_verify_device_hash_match_grants_verified(self, env):
+        """Matching device hash → VERIFIED, copy row carries the hash and
+        a last_verified_at timestamp."""
+        conn = env["conn"]
+        orch = env["orch"]  # fixture reader matches the all-zeros ISOs
+        xorriso = env["xorriso"]
+
+        result = orch.stage()
+
+        xorriso.burn_iso = MagicMock()
+        xorriso.verify_disc = MagicMock(return_value=True)
+
+        receipts = orch.burn_session(result.session_id, "Home_Shelf",
+                                     skip_burn=False)
+
+        session_vols = {
+            sv.volume_id: sv
+            for sv in get_session_volumes(conn, result.session_id)
+        }
+        for receipt in receipts:
+            assert receipt.verify_passed is True
+            vol = get_volume_by_id(conn, receipt.volume_id)
+            assert vol.status == "VERIFIED"
+
+            copies = get_copies_for_volume(conn, receipt.volume_id)
+            assert len(copies) == 1
+            sv = session_vols[receipt.volume_id]
+            assert sv.iso_sha256  # stage recorded a real hash
+            assert copies[0].iso_sha256 == sv.iso_sha256
+            assert copies[0].last_verified_at is not None
+
+    def test_burn_session_writes_copy_iso_sha256(self, env):
+        """volume_copies.iso_sha256 mirrors session_volumes.iso_sha256,
+        and a re-burn no longer blanks the stored hash (UPSERT regression)."""
+        conn = env["conn"]
+        orch = env["orch"]
+
+        result = orch.stage()
+        orch.burn_session(result.session_id, "Home_Shelf", skip_burn=True)
+
+        session_vols = get_session_volumes(conn, result.session_id)
+        for sv in session_vols:
+            assert sv.iso_sha256
+            assert sv.iso_size_bytes == 1024  # fixture ISO size
+            copies = get_copies_for_volume(conn, sv.volume_id)
+            assert len(copies) == 1
+            assert copies[0].iso_sha256 == sv.iso_sha256
+
+        # Re-burn to the same location: the UPSERT must keep the hash.
+        orch.burn_session(result.session_id, "Home_Shelf", skip_burn=True)
+        for sv in session_vols:
+            copies = get_copies_for_volume(conn, sv.volume_id)
+            assert copies[0].iso_sha256 == sv.iso_sha256
+
+    def test_legacy_session_without_iso_size_warns_no_verified(self, env, caplog):
+        """Pre-v7 session row (NULL iso_size_bytes) with the ISO gone:
+        warn loudly, record VERIFY_FAIL, never pass on -check_media alone.
+
+        burn_session itself always has the ISO at hand (it just burned
+        from it, and falls back to its st_size), so the no-size-no-file
+        path is exercised on the verify step directly — it is reached in
+        production via re-verification after staging cleanup.
+        """
+        import logging
+
+        from lcsas.db.volume_events import get_events_for_volume
+        conn = env["conn"]
+        orch = env["orch"]
+        xorriso = env["xorriso"]
+
+        result = orch.stage()
+        create_location(conn, "Home_Shelf")  # burn_session's ensure_location
+
+        # Simulate a pre-upgrade catalog row: no recorded size, ISO gone.
+        conn.execute(
+            "UPDATE session_volumes SET iso_size_bytes = NULL "
+            "WHERE session_id = ?",
+            (result.session_id,),
+        )
+        conn.commit()
+        for iso in result.iso_paths:
+            iso.unlink()
+
+        xorriso.verify_disc = MagicMock(return_value=True)
+
+        sv = get_session_volumes(conn, result.session_id)[0]
+        assert sv.iso_sha256 and sv.iso_size_bytes is None
+
+        with caplog.at_level(logging.WARNING, logger="lcsas.burn.orchestrator"):
+            ok = orch._verify_burned_disc(
+                sv, "TEST-LEGACY", "/dev/sr0", "Home_Shelf",
+                Path(sv.iso_path),
+            )
+
+        assert ok is False
+        assert any("no recorded ISO size" in r.getMessage()
+                   for r in caplog.records)
+        events = get_events_for_volume(conn, sv.volume_id, "VERIFY_FAIL")
+        assert any("no recorded ISO size" in e.detail for e in events)
+        # False from the verify step keeps the volume at BURNED in
+        # burn_session (proven by test_burn_session_verify_fail_stays_burned).
+
+    def test_legacy_session_size_falls_back_to_iso_file(self, env):
+        """Pre-v7 session row with the ISO still on disk: the byte length
+        comes from st_size and the device compare still runs."""
+        conn = env["conn"]
+        orch = env["orch"]
+        xorriso = env["xorriso"]
+
+        result = orch.stage()
+        conn.execute(
+            "UPDATE session_volumes SET iso_size_bytes = NULL "
+            "WHERE session_id = ?",
+            (result.session_id,),
+        )
+        conn.commit()
+
+        xorriso.burn_iso = MagicMock()
+        xorriso.verify_disc = MagicMock(return_value=True)
+
+        receipts = orch.burn_session(result.session_id, "Home_Shelf",
+                                     skip_burn=False)
+
+        for receipt in receipts:
+            assert receipt.verify_passed is True
+            vol = get_volume_by_id(conn, receipt.volume_id)
+            assert vol.status == "VERIFIED"
 
 
 # =========================================================================

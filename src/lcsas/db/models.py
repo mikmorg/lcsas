@@ -113,6 +113,10 @@ class SessionVolume:
     volume_id: int
     iso_path: str
     iso_sha256: str | None
+    # Post-ECC ISO byte length — what device read-back verification
+    # hashes once the ISO file is gone (BURN-04).  None on rows written
+    # before schema v7.
+    iso_size_bytes: int | None = None
 
 
 @dataclass(frozen=True)

@@ -12,15 +12,17 @@ import logging
 import os
 import shutil
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 from lcsas.binpack.algorithm import first_fit_decreasing
+from lcsas.burn.device_verify import read_device_sha256
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig
 from lcsas.db.locations import ensure_location
-from lcsas.db.models import Pack, Volume
+from lcsas.db.models import Pack, SessionVolume, Volume
 from lcsas.db.queries import get_unarchived_or_missing_at_location, get_unarchived_packs
 from lcsas.db.repos import list_repos
 from lcsas.db.sessions import (
@@ -123,11 +125,16 @@ class BurnOrchestrator:
         conn: sqlite3.Connection,
         xorriso: XorrisoRunner,
         dvdisaster: DVDisasterRunner,
+        device_reader: Callable[[str, int], str] = read_device_sha256,
     ) -> None:
         self._config = config
         self._conn = conn
         self._xorriso = xorriso
         self._dvdisaster = dvdisaster
+        # Injected for testability (BURN-04), matching the protocol-
+        # injection pattern used for xorriso/dvdisaster: reads N bytes
+        # from a device and returns the hex SHA-256.
+        self._device_reader = device_reader
 
     def prepare(
         self,
@@ -672,10 +679,15 @@ class BurnOrchestrator:
                 session_id=session_id,
             )
 
-            # Compute ISO hash and record it on the session volume
+            # Compute ISO hash + byte length and record them on the
+            # session volume.  The length is what device read-back
+            # verification hashes against once the ISO file itself has
+            # been cleaned up (BURN-04).
             iso_hash = ""
+            iso_size: int | None = None
             if manifest.iso_path and manifest.iso_path.exists():
                 iso_hash = sha256_file(manifest.iso_path)
+                iso_size = manifest.iso_path.stat().st_size
 
             update_session_volume_iso(
                 self._conn,
@@ -683,6 +695,7 @@ class BurnOrchestrator:
                 volume_id=manifest.volume_id,
                 iso_path=str(manifest.iso_path or iso_path),
                 iso_sha256=iso_hash,
+                iso_size_bytes=iso_size,
             )
 
             manifests.append(manifest)
@@ -750,24 +763,21 @@ class BurnOrchestrator:
                 if not skip_burn:
                     self._xorriso.burn_iso(iso_path, device)
 
-                # Post-burn verification  [S1]
+                # Post-burn verification  [S1][BURN-04]
+                # Step 1: -check_media readability smoke test.
+                # Step 2: exact-length device read-back hashed against
+                # the ISO SHA-256 recorded at stage time — a readable
+                # disc that doesn't carry the mastered image (wrong
+                # disc, silent mis-burn, truncation) must never reach
+                # VERIFIED.
                 verify_passed = True
+                verified_at: str | None = None
                 if not skip_burn:
-                    verify_ok = self._xorriso.verify_disc(device)
-                    if verify_ok:
-                        add_event(
-                            self._conn, sv.volume_id, "VERIFY_PASS",
-                            location=location, detail="Post-burn read-back",
-                            commit=False,
-                        )
-                    else:
-                        add_event(
-                            self._conn, sv.volume_id, "VERIFY_FAIL",
-                            location=location,
-                            detail="Post-burn read-back failed",
-                            commit=False,
-                        )
-                        verify_passed = False
+                    verify_passed = self._verify_burned_disc(
+                        sv, vol.label, device, location, iso_path,
+                    )
+                    if verify_passed:
+                        verified_at = datetime.now(UTC).isoformat()
 
                 if not is_reburn:
                     if verify_passed:
@@ -788,11 +798,16 @@ class BurnOrchestrator:
                             commit=False,
                         )
 
-                # Record copy at location
+                # Record copy at location, with the verification
+                # evidence (BURN-04: previously iso_sha256 was omitted —
+                # every copy row got NULL, and a re-burn UPSERT blanked
+                # any stored hash; last_verified_at was never written).
                 add_volume_copy(
                     self._conn,
                     volume_id=sv.volume_id,
                     location=location,
+                    iso_sha256=sv.iso_sha256 or None,
+                    last_verified_at=verified_at,
                     commit=False,
                 )
                 self._conn.commit()
@@ -858,6 +873,100 @@ class BurnOrchestrator:
             self._write_receipts(receipts, session_dir, location)
 
         return receipts
+
+    def _verify_burned_disc(
+        self,
+        sv: SessionVolume,
+        label: str,
+        device: str,
+        location: str,
+        iso_path: Path,
+    ) -> bool:
+        """Two-step post-burn verification of the disc in *device* (BURN-04).
+
+        Step 1 — ``xorriso -check_media``: readability smoke test.
+        Step 2 — read back exactly the recorded ISO byte length from the
+        device and compare its SHA-256 to the hash recorded at stage
+        time.  ``-check_media`` alone never grants a pass when a hash is
+        on record: any readable disc sitting in the tray would pass it.
+
+        Records VERIFY_PASS/VERIFY_FAIL events with ``commit=False``
+        (the caller owns the transaction).  Returns True only when every
+        applicable step passed.
+        """
+        if not self._xorriso.verify_disc(device):
+            add_event(
+                self._conn, sv.volume_id, "VERIFY_FAIL",
+                location=location,
+                detail="Post-burn read-back failed",
+                commit=False,
+            )
+            return False
+
+        if not sv.iso_sha256:
+            # No hash recorded (pre-Phase-13 session row): readability
+            # is all the evidence available — preserve old semantics.
+            add_event(
+                self._conn, sv.volume_id, "VERIFY_PASS",
+                location=location, detail="Post-burn read-back",
+                commit=False,
+            )
+            return True
+
+        iso_size = sv.iso_size_bytes
+        if iso_size is None and iso_path.exists():
+            # Pre-v7 session row: the ISO file is still around — take
+            # the authoritative length from it.
+            iso_size = iso_path.stat().st_size
+        if iso_size is None:
+            _logger.warning(
+                "cannot device-verify %s: no recorded ISO size "
+                "(pre-upgrade session) and the ISO file is gone — "
+                "-check_media alone never grants VERIFIED when a hash "
+                "is on record",
+                label,
+            )
+            add_event(
+                self._conn, sv.volume_id, "VERIFY_FAIL",
+                location=location,
+                detail="device hash check impossible: no recorded ISO size "
+                       "(pre-upgrade session); -check_media alone is "
+                       "insufficient evidence",
+                commit=False,
+            )
+            return False
+
+        try:
+            device_hash = self._device_reader(device, iso_size)
+        except OSError as exc:
+            add_event(
+                self._conn, sv.volume_id, "VERIFY_FAIL",
+                location=location,
+                detail=f"device read-back failed: {exc}",
+                commit=False,
+            )
+            return False
+
+        if device_hash != sv.iso_sha256:
+            add_event(
+                self._conn, sv.volume_id, "VERIFY_FAIL",
+                location=location,
+                detail=(
+                    f"device hash mismatch: expected {sv.iso_sha256[:8]}.., "
+                    f"got {device_hash[:8]}.."
+                ),
+                commit=False,
+            )
+            return False
+
+        add_event(
+            self._conn, sv.volume_id, "VERIFY_PASS",
+            location=location,
+            detail=("Post-burn read-back + device hash match "
+                    f"({device_hash[:8]}..)"),
+            commit=False,
+        )
+        return True
 
     def clean_session(
         self,

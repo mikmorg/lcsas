@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e
 
 # Default target: lint + typecheck + every test tier ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
@@ -25,6 +25,13 @@ test-integration:
 
 test-e2e:
 	pytest tests/e2e -v
+
+# BURN-04 cdemu drill: a disc whose bytes differ from the recorded ISO
+# SHA-256 must fail `lcsas verify --disc` (a byte-flipped disc is still
+# perfectly readable, so -check_media alone can never catch it).
+# Opt-in: commandeers cdemu device 0; needs cdemu daemon + xorriso.
+verify-burn-e2e:
+	LCSAS_BURN_E2E=1 pytest tests/e2e/test_burn_verify_disc.py -v
 
 # Recovery-hardening tests — pedantic gates that exist because every
 # bug they catch slipped through unit/integration into a real blind

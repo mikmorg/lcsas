@@ -114,7 +114,14 @@ def orch_env(tmp_path):
     xorriso = MagicMock()
     dvdisaster = MagicMock()
 
-    orch = BurnOrchestrator(config, conn, xorriso, dvdisaster)
+    # BURN-04: deterministic fake device reader matching the b"fake-iso-data"
+    # ISOs written by _create_staged_session (the unit suite must never
+    # touch a real optical device).
+    def fake_device_reader(device: str, length_bytes: int) -> str:
+        return hashlib.sha256(b"fake-iso-data"[:length_bytes]).hexdigest()
+
+    orch = BurnOrchestrator(config, conn, xorriso, dvdisaster,
+                            device_reader=fake_device_reader)
     return {
         "orch": orch,
         "config": config,
