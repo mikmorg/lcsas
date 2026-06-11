@@ -361,6 +361,32 @@ class TestMetaVolumeBuilder:
         assert "WINDOWS" in upper
         assert "LINUX" in upper or "MACOS" in upper
 
+    def test_start_here_boot_claim_matches_bootability(self):
+        """UX-03: a default build (bootable=False) must not tell the
+        heir to boot the disc — no build the CLI can produce is
+        bootable — and must offer the borrow-a-computer + live-USB
+        route instead.
+        """
+        content = (self.output / "START_HERE.txt").read_text()
+        # Collapse the hard-wrapped 60-column layout so assertions are
+        # not sensitive to where a phrase happens to wrap.
+        flat = " ".join(content.split())
+        assert "Boot directly from the disc" not in flat, (
+            "START_HERE.txt promises a bootable disc on a non-bootable "
+            "build (the boot-the-disc dead end of UX-03/BOOT-01)"
+        )
+        assert "NOT bootable" in flat, (
+            "START_HERE.txt must state plainly that the disc is not "
+            "bootable so the heir does not try the dead-end route"
+        )
+        assert "do NOT require a special computer" in flat, (
+            "START_HERE.txt no-OS section must offer the "
+            "borrow-a-computer route"
+        )
+        assert "live Linux USB" in flat, (
+            "START_HERE.txt no-OS section must offer the live-USB route"
+        )
+
     def test_readme_restore_txt_generated(self):
         """Meta-volume should have a plain-text README_RESTORE.txt."""
         path = self.output / "README_RESTORE.txt"

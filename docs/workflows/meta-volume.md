@@ -576,9 +576,10 @@ Rustic metadata.
 1. Update the LCSAS source tree (git pull, version bump, etc.) and run
    `make lint`, `make test-unit`, `make typecheck` to confirm the build
    inputs are healthy (`CLAUDE.md` commands section).
-2. Run `lcsas meta build --output /tmp/meta-NEW [--config etc/lcsas.toml]
-   [--db /var/lib/lcsas/archive.db]`
-   (`src/lcsas/cli/main.py:383-394`). The full pipeline at
+2. Run `lcsas [--config etc/lcsas.toml] [--db /var/lib/lcsas/archive.db]
+   meta build --output /tmp/meta-NEW`
+   (`src/lcsas/cli/main.py:383-394`; `--config`/`--db` are global flags
+   and must come *before* the subcommand). The full pipeline at
    `src/lcsas/meta/builder.py:1652-1683` regenerates `lcsas/src/` from
    the current project root (`src/lcsas/meta/builder.py:1781-1803`) and
    re-renders all in-source script constants.

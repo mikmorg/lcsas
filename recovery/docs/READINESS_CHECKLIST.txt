@@ -29,6 +29,12 @@ BEFORE RELYING ON THESE DISCS  (one-time, at archive creation)
     Why: the no-OS journey is the worst credible failure mode; an
     undrilled live-USB path is an untested recovery path.
     See recovery/docs/BOOT.txt for the full procedure.
+    ERRATUM: meta discs burned before 2026-06 carry stale on-disc
+    text (START_HERE.txt / BOOT.txt) telling the reader to boot the
+    disc directly.  That path never worked on any build.  Re-burn
+    the meta disc, or store a printed correction note ("the disc is
+    NOT bootable -- use another computer or a live-Linux USB") with
+    the affected discs.
     HOW OFTEN: once per meta disc build.
 
 [ ] ENCRYPTION KEY REDUNDANCY — confirm the repository password is
@@ -118,15 +124,17 @@ EMERGENCY DRILL  (annually)
     air-gapped machine that has only the meta disc and data discs.
     No network.  No prior tools installed.  Start from the BIOS.
     Steps:
-      1. Boot the meta disc on a clean machine.
+      1. Boot a current live-Linux USB on a clean machine (the
+         discs are NOT bootable), then mount the meta disc.
       2. Follow recovery/docs/RECOVER.txt from step 1.
       3. Restore one representative snapshot to local storage.
       4. Verify file count and spot-check a handful of files.
       5. Record the date, elapsed time, and any issues in an
          audit_log.txt file stored alongside the physical discs.
     Why: the automated test suite uses a software disc-loader shim;
-    it does NOT test that a human can actually boot the meta disc,
-    physically swap data discs, and recover files.  A passing CI
+    it does NOT test that a human can actually bring up a live-USB
+    environment, mount the meta disc, physically swap data discs,
+    and recover files.  A passing CI
     gate does not substitute for a real drill.  See also
     recovery/docs/UX_CONCERNS.txt for known UX gaps, and
     recovery/docs/PHYSICAL_DISC_VALIDATION.txt for the physical-media
@@ -164,7 +172,7 @@ QUICK REFERENCE
 Item                            HOW OFTEN
 ──────────────────────────────  ─────────────────────────────────────
 Binary audit (sha256sum)        At build time; repeat on bin/ change
-Meta disc boot test             Once per meta disc build
+No-OS live-USB recovery drill   Once per meta disc build
 Encryption key redundancy       At creation; verify annually
 Full test-restore               At creation; see monthly cadence
 Monthly test-restore            Monthly

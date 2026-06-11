@@ -10,6 +10,7 @@ UX-02).
 
 from __future__ import annotations
 
+import argparse
 import ast
 import re
 from pathlib import Path
@@ -196,6 +197,94 @@ def test_standalone_restorer_invocations_use_real_flags() -> None:
     assert not problems, (
         "doc-quoted standalone_restorer.py commands diverge from the real CLI:\n"
         + "\n".join(problems)
+    )
+
+
+def _meta_build_parser_flags() -> set[str]:
+    """Option strings the real ``lcsas meta build`` subparser accepts.
+
+    Root-parser flags (``--config``, ``--db``, ...) are deliberately
+    NOT included: argparse rejects them after the subcommand, so a doc
+    quoting ``lcsas meta build --config ...`` sends the operator to an
+    ``unrecognized arguments`` error.
+    """
+    from lcsas.cli.main import build_parser
+
+    parser: argparse.ArgumentParser = build_parser()
+    for path in ("meta", "build"):
+        sub = next(
+            a for a in parser._actions
+            if isinstance(a, argparse._SubParsersAction)
+        )
+        parser = sub.choices[path]
+    return {
+        opt for action in parser._actions for opt in action.option_strings
+    }
+
+
+_META_BUILD = re.compile(r"\blcsas(?:\s+\S+)*?\s+meta\s+build\b")
+
+
+def _extract_meta_build_commands(text: str) -> list[tuple[int, str]]:
+    """Return ``(lineno, args_after_meta_build)`` for every doc-quoted
+    ``lcsas ... meta build`` command, joining inline-code spans and
+    ``\\``-continuations that run onto following lines."""
+    lines = text.splitlines()
+    found: list[tuple[int, str]] = []
+    i = 0
+    while i < len(lines):
+        match = _META_BUILD.search(lines[i])
+        if match is None:
+            i += 1
+            continue
+        start = i
+        in_code = "`" in lines[i][: match.start()]
+        parts = [lines[i][match.end():]]
+        # The command continues onto the next line while an opened
+        # inline-code span has no closing backtick, or the line ends
+        # with a shell continuation.
+        while i + 1 < len(lines) and (
+            (in_code and "`" not in parts[-1]) or _is_continued(parts[-1])
+        ):
+            i += 1
+            parts.append(lines[i])
+        if in_code:
+            parts[-1] = parts[-1].split("`", 1)[0]
+        joined = " ".join(
+            part.rstrip().rstrip("^\\").strip() for part in parts
+        )
+        found.append((start + 1, joined))
+        i += 1
+    return found
+
+
+def test_meta_build_flags_in_docs_exist() -> None:
+    """Every ``lcsas meta build --<flag>`` mention in the burned docs
+    must use a flag the real argparse subparser defines (UX-03).
+
+    This is the gate that kills the ``--recovery-boot`` class of
+    failure: BOOT.txt shipped that phantom flag on every meta disc for
+    a long time, and nothing checked doc-quoted build commands against
+    the CLI.
+    """
+    real = _meta_build_parser_flags()
+    assert "--output" in real  # introspection self-check
+    problems = []
+    for doc in _all_docs():
+        for lineno, cmd in _extract_meta_build_commands(doc.read_text()):
+            for token in cmd.split():
+                token = token.strip("`'\"[]")
+                if not token.startswith("--"):
+                    continue
+                flag = token.split("=", 1)[0].rstrip(".,;:)")
+                if flag not in real:
+                    problems.append(
+                        f"{doc.relative_to(REPO_ROOT)}:{lineno}: "
+                        f"flag {flag} not accepted by `lcsas meta build`"
+                    )
+    assert not problems, (
+        "doc-quoted `lcsas meta build` commands use flags the real CLI "
+        "rejects:\n" + "\n".join(problems)
     )
 
 

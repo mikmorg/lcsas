@@ -125,3 +125,13 @@ no-OS routing, and note the erratum in the next meta-disc re-burn guidance
 
 1.5 days: 0.5 generated-text + static-doc rewrites, 0.5 contract/unit tests,
 0.5 coordination with UX-05 generator merge. No special environment.
+
+---
+**Implemented:** 2026-06-11. Mostly as planned; BOOT-01 (landed first) had already
+fixed BOOT.txt, RECOVER.txt, the START_HERE boot text, and shipped restore-live-usb.md,
+so this plan delivered the remainder: conditional bootable-aware START_HERE no-OS block
+(install/verify live-boot before writing START_HERE; richer borrow-a-computer + live-USB
+text), RECOVERY_GUIDE.md no-OS rows -> restore-live-usb.md, restore-bare-metal.md
+status banner, READINESS_CHECKLIST blind-drill/quick-ref fixes + pre-2026-06 burned-disc
+erratum, and the `lcsas meta build` flag contract gate (which caught and fixed two real
+phantom usages: `--config`/`--db` after the subcommand in meta-volume.md:579).

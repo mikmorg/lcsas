@@ -1721,10 +1721,15 @@ class MetaVolumeBuilder:
         self._write_readme()
         self._write_readme_txt()
         self._write_volume_info()
-        self._write_start_here()
 
+        # Install (and verify) the live boot environment BEFORE writing
+        # START_HERE.txt: the no-OS routing in START_HERE only claims
+        # the disc is bootable when the boot artifacts actually exist
+        # (_install_live_boot raises otherwise) — see UX-03.
         if self._bootable:
             self._install_live_boot()
+
+        self._write_start_here()
 
         # Build complete — remove the marker
         incomplete_marker.unlink(missing_ok=True)
@@ -2429,7 +2434,35 @@ class MetaVolumeBuilder:
             # Write a minimal START_HERE.txt without config context
             injector = HolographicInjector(self._output)
             injector.write_disc_care()
-            text = """\
+            # The no-OS route may only claim the disc boots when the
+            # build actually installed a verified live boot environment
+            # (UX-03).  Every standard `lcsas meta build` runs with
+            # bootable=False, so heirs get the borrow-a-computer +
+            # live-USB routing that works today.
+            if self._bootable:
+                no_os_block = """\
+  >>> No working computer at all <<<
+       This disc includes a live boot environment.  Insert
+       it, power on, and press F12 or F2 at power-on to
+       choose the optical drive as the boot device.
+       If it does not boot, use any other computer instead
+       (pick your section above).
+"""
+            else:
+                no_os_block = """\
+  >>> No working computer at all <<<
+       These discs are NOT bootable, but they do NOT require
+       a special computer.  Use any other computer — a
+       friend's, a library's, or a cheap second-hand laptop.
+       Windows, macOS and Linux all work (pick your section
+       above).
+       If a computer has no operating system at all, ask a
+       helper to make a "live Linux USB stick" (free; search
+       for "create Ubuntu live USB"), start the computer
+       from it, then follow the macOS/Linux steps above.
+       (See recovery/docs/BOOT.txt for the steps.)
+"""
+            text = f"""\
 ╔══════════════════════════════════════════════════════════╗
 ║                    START HERE                           ║
 ╚══════════════════════════════════════════════════════════╝
@@ -2448,11 +2481,7 @@ to recover the files on the LCSAS archive discs.
            sh restore.sh ~/restored
        (See recovery/docs/RECOVER.txt for details.)
 
-  >>> No working computer at all <<<
-       This disc is NOT bootable.  Use any other computer, or
-       boot a current live-Linux USB stick on this one.
-       (See recovery/docs/BOOT.txt for the steps.)
-
+{no_os_block}
 ╚══════════════════════════════════════════════════════════╝
 
 WHAT YOU NEED

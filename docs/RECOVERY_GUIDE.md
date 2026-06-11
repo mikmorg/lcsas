@@ -32,7 +32,7 @@ Pick the row that matches your situation, then follow the linked doc.
 | Linux (any distro) | You have the discs + the META disc + a working OS | [docs/RECOVERY_RUNBOOK.md](RECOVERY_RUNBOOK.md) |
 | macOS (Intel or Apple Silicon) | You have the discs + the META disc + a working OS | [docs/workflows/restore-host-macos.md](workflows/restore-host-macos.md) |
 | Windows | You have the discs + the META disc + a working OS | [docs/workflows/restore-windows.md](workflows/restore-windows.md) |
-| No working OS | Lost the host machine entirely | [docs/workflows/restore-bare-metal.md](workflows/restore-bare-metal.md) (boot the META disc directly) |
+| No working OS | Lost the host machine entirely | [docs/workflows/restore-live-usb.md](workflows/restore-live-usb.md) (use another computer or a live-Linux USB — the discs are NOT bootable) |
 | Any OS with Python | You only have one or two data discs (no META disc) | [docs/workflows/restore-disc-only.md](workflows/restore-disc-only.md) (tier-3 Python fallback) |
 | Linux with LCSAS installed | Your archival machine is alive and just want files back | [docs/workflows/restore-host-linux.md](workflows/restore-host-linux.md) (`lcsas restore` — easy mode) |
 
@@ -215,7 +215,7 @@ Print this and tape it to the inside of your disc binder:
 │  walkthrough should I follow?" table.                   │
 │                                                         │
 │  No META disc?  See restore-disc-only.md (Python tier). │
-│  No working OS?  See restore-bare-metal.md (boot META). │
+│  No working OS?  See restore-live-usb.md (live USB).    │
 │  Confused?  Take discs + password to any IT pro.        │
 └─────────────────────────────────────────────────────────┘
 ```

@@ -1,5 +1,14 @@
 # Workflows: Bare-Metal Recovery (initramfs / Live USB)
 
+> **Status: this workflow describes a path the current build does not
+> produce.** No disc `lcsas meta build` outputs is bootable; the boot
+> stack described below was quarantined to `experimental/boot/`
+> (decision record in `experimental/boot/README.md`, plan BOOT-01),
+> and the `recovery/boot/` paths and `recovery/docs/BOOT.txt` line
+> references in this document predate that move. For the no-OS
+> recovery route that works today, see
+> [restore-live-usb.md](restore-live-usb.md).
+
 This document covers the *house-on-fire* recovery path: the inheritor (or the original owner after a total system loss) has the LCSAS optical discs in hand but **no working operating system, no Python interpreter, no internet, and possibly no second computer**. Recovery happens by booting the LCSAS meta-disc directly. PID 1 is a 158-line statically-linked C program (`recovery/src/lcsas-init/init.c`); everything from there forward is C and POSIX shell only — Python is explicitly **off** the bare path.
 
 This is the worst credible failure mode the toolchain is designed to survive. Every step has been audited so that an inheritor in 2045 with a stack of BD-R discs, a USB Blu-ray drive, and any x86_64 PC can recover the data without acquiring or trusting any third-party software. Sibling docs cover gentler scenarios: `docs/workflows/restore-host-linux.md` (working Linux host), `docs/workflows/restore-windows.md` (working Windows host), `docs/workflows/restore-disc-only.md` (single-disc spot recovery), `docs/workflows/recovery-toolchain.md` (binary cascade architecture), and `docs/workflows/meta-volume.md` (how the meta-disc is built).
