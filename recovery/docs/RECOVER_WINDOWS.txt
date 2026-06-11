@@ -24,7 +24,8 @@ You do NOT need:
   * Admin rights.
   * To install WSL, Cygwin, or any developer tools.
   * To re-partition your disk.
-  * To boot from the disc.
+  * To restart or boot the computer in any special way.  (LCSAS
+    discs are NOT bootable; you read them from inside Windows.)
 
 You DO need:
 

@@ -35,6 +35,11 @@ BEFORE RELYING ON THESE DISCS  (one-time, at archive creation)
     the meta disc, or store a printed correction note ("the disc is
     NOT bootable -- use another computer or a live-Linux USB") with
     the affected discs.
+    AUTOMATED: that the burned docs advertise no boot-the-disc path
+    is enforced by tests/recovery_hardening/
+    test_boot_path_quarantined.py (always-on).  A boot-the-disc
+    drill applies only if experimental/boot/ is ever revived (see
+    its README for the QEMU boot-smoke revival gate).
     HOW OFTEN: once per meta disc build.
 
 [ ] ENCRYPTION KEY REDUNDANCY — confirm the repository password is

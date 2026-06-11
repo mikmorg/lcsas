@@ -68,6 +68,46 @@ path MUST implement the following instead of re-deriving it:
 This record is pinned by
 `tests/recovery_hardening/test_boot_path_quarantined.py`.
 
+## Revival precondition: the QEMU boot-smoke gate (BOOT-08)
+
+The DROP stands until someone funds this gate.  Rule, verbatim:
+**no heir-facing doc may re-advertise booting until this gate exists
+and is green in CI** — the regex tripwire in
+`tests/recovery_hardening/test_boot_path_quarantined.py` is the
+enforcement.  If nobody will fund the gate, that is itself the
+evidence the DROP was correct (deep audit, 2026-06).
+
+The required gate, end to end:
+
+* **Makefile target `boot-smoke`** — build the bootable ISO from real
+  artifacts: an initramfs produced by the hard-failing
+  `initramfs/build_initramfs.sh` (BOOT-02: a missing source aborts the
+  build instead of emitting placeholder files), and a pinned kernel
+  listed in `recovery/UPSTREAM.sha256` (BOOT-07's pin-or-fail gate —
+  no unpinned boot artifact may ship).  Then boot it:
+
+  ```
+  qemu-system-x86_64 -M q35 -bios OVMF.fd -cdrom out.iso \
+      -serial stdio -display none
+  ```
+
+  asserting the `[lcsas-init] starting` and
+  `[lcsas-init] handing off to /mnt/recovery/scripts/restore.sh`
+  serial markers within 120 s.
+
+* **Matrix legs** — the same image, same markers, two more boots:
+  1. Legacy BIOS boot (SeaBIOS — drop `-bios OVMF.fd`), covering the
+     BIOS/isolinux config path whose menu entries pointed at files the
+     builder never staged (BOOT-03).
+  2. USB attachment (`-device usb-storage` instead of `-cdrom`),
+     covering the medium-scan fix (the BOOT-06 sentinel-scan spec
+     above) — today a USB-booted image cannot find itself.
+
+* **CI** — a weekly scheduled workflow (not per-PR; a system boot is
+  slow), alongside `.github/workflows/test.yml` in the style of
+  `live-usb-smoke.yml`.  OVMF and qemu-system-x86_64 are present on
+  Ubuntu runners.
+
 ## Contents
 
 * `linux/` — Linux 6.6 LTS kernel config notes (x86_64 / aarch64 / riscv64)

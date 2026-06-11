@@ -118,3 +118,13 @@ No catalog/schema impact.
 
 1 day: 0.5 tripwire test (regexes + parser/builder introspection + mutation
 check), 0.5 spec section + checklist re-scope. No special environment.
+
+---
+**Implemented:** 2026-06-11. As planned, with three notes: (1) the
+READINESS_CHECKLIST "META DISC BOOT TEST" item had already been replaced by
+UX-03's live-USB drill, so the automated-gate note was added to that item
+rather than replacing it; (2) RECOVER_WINDOWS.txt's negated "You do NOT
+need: * To boot from the disc." bullet was reworded — it matched the
+tripwire regex; (3) BOOT.txt is included in the static scan (regex anchored
+on disc/medium, so its live-USB text passes). Red-first verified against the
+pre-BOOT-01 RECOVER.txt and by bootable-param / --recovery-boot mutations.
