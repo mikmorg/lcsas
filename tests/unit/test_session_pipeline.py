@@ -601,6 +601,11 @@ class TestVerifyFailNoActiveCopy:
         missing = get_unarchived_or_missing_at_location(conn, "Home_Shelf")
         assert {p.sha256 for p in missing} == {p.sha256 for p in env["packs"]}
 
+        # FMA-04: the ISOs survive the failed verify so the operator can
+        # re-run the burn immediately without re-staging.
+        for iso_path in result.iso_paths:
+            assert iso_path.exists()
+
     def test_verify_fail_session_partial_not_complete(self, env):
         conn = env["conn"]
         result, _receipts = self._stage_and_fail_burn(env)

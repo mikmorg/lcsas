@@ -143,3 +143,11 @@ Always-on in `make test-unit` / CI `test.yml`:
 ## Effort
 
 1.5 days (0.5 impl, 1 test). No special environment; pure-unit.
+
+---
+**Implemented:** 2026-06-11. Fix-design item 1 (gate copy on verify_passed +
+iso_sha256 pass-through) had already landed via BURN-04/BURN-05/FMA-03; this
+commit implements the remainder: non-destructive UPSERT (COALESCE extended to
+iso_size_bytes, added by FMA-03 after this plan was written) plus the reburn-
+preserves-prior-copy and never-nulls-hash tests. `last_verified_at` stays
+`excluded.*` per FMA-03's deliberate reset-on-reburn semantics.

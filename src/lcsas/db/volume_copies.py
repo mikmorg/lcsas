@@ -60,6 +60,13 @@ def add_volume_copy(
     notes, and verification evidence are updated in-place: the row
     describes the NEW disc, so a stale ``last_verified_at`` from the
     replaced disc must not survive the re-burn.
+
+    Evidence is never destroyed by an *absent* value (FMA-04): a caller
+    that omits ``iso_sha256`` / ``iso_size_bytes`` / ``media_serial``
+    must not blank what a previous verified burn recorded — that hash is
+    what the portable SHA-256 verify fallback depends on.  Provided
+    (non-NULL / non-empty) values still replace, because they describe
+    the new disc.
     """
     if burn_date is None:
         burn_date = datetime.now(UTC).isoformat()
@@ -72,10 +79,14 @@ def add_volume_copy(
                burn_date        = excluded.burn_date,
                notes            = excluded.notes,
                status           = 'ACTIVE',
-               iso_sha256       = excluded.iso_sha256,
-               iso_size_bytes   = excluded.iso_size_bytes,
+               iso_sha256       = COALESCE(excluded.iso_sha256,
+                                           volume_copies.iso_sha256),
+               iso_size_bytes   = COALESCE(excluded.iso_size_bytes,
+                                           volume_copies.iso_size_bytes),
                last_verified_at = excluded.last_verified_at,
-               media_serial     = excluded.media_serial""",
+               media_serial     = CASE WHEN excluded.media_serial != ''
+                                       THEN excluded.media_serial
+                                       ELSE volume_copies.media_serial END""",
         (volume_id, location, burn_date, notes, iso_sha256,
          iso_size_bytes, last_verified_at, media_serial),
     )

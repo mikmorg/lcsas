@@ -942,3 +942,44 @@ class TestBurnSession:
         # Verify receipt indicates failure
         assert any(not r.verify_passed for r in receipts)
 
+    def test_reburn_verify_fail_preserves_prior_copy(self, orch_env):
+        """FMA-04: a verify-failed re-burn at the SAME location must leave
+        the prior good copy row byte-identical (hash, burn_date) — a
+        failed attempt to refresh a copy must not destroy the evidence
+        of the copy that already exists."""
+        from lcsas.db.sessions import get_session_volumes
+        from lcsas.db.volume_copies import get_copies_for_volume
+        from lcsas.db.volume_events import get_events_for_volume
+
+        session_id = self._create_staged_session(orch_env)
+        orch = orch_env["orch"]
+        conn = orch_env["conn"]
+        xorriso = orch_env["xorriso"]
+
+        # First burn: verified copy at Home_Shelf. skip_burn keeps the
+        # ISO on disk so the re-burn below has an image to burn from.
+        orch.burn_session(session_ref=session_id, location="Home_Shelf",
+                          skip_burn=True)
+
+        vols = get_session_volumes(conn, session_id)
+        volume_id = vols[0].volume_id
+        before = get_copies_for_volume(conn, volume_id)
+        assert len(before) == 1
+        assert before[0].iso_sha256  # stage recorded a real hash
+
+        # Re-burn to the SAME location, verify fails.
+        xorriso.verify_disc.return_value = False
+        xorriso.burn_iso.return_value = None
+        receipts = orch.burn_session(session_ref=session_id,
+                                     location="Home_Shelf", skip_burn=False)
+        assert any(not r.verify_passed for r in receipts)
+
+        after = get_copies_for_volume(conn, volume_id)
+        assert len(after) == 1
+        assert after[0].status == "ACTIVE"
+        assert after[0].iso_sha256 == before[0].iso_sha256
+        assert after[0].burn_date == before[0].burn_date
+
+        events = get_events_for_volume(conn, volume_id)
+        assert "VERIFY_FAIL_REBURN" in {e.event_type for e in events}
+

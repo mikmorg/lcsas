@@ -74,6 +74,47 @@ class TestVolumeCopyCRUD:
         assert copy2.notes == "re-burn"
         assert copy2.status == "ACTIVE"
 
+    def test_upsert_never_nulls_existing_iso_sha256(self, conn, volume):
+        """FMA-04: an upsert without a hash must not blank the recorded
+        one — that hash is the portable verify fallback's only evidence.
+        An upsert WITH a hash still replaces (new disc, new image)."""
+        add_volume_copy(
+            conn, volume.volume_id, "Home_Shelf",
+            iso_sha256="a" * 64, iso_size_bytes=1000,
+        )
+
+        # Re-burn recorded without evidence (legacy caller): preserved.
+        add_volume_copy(conn, volume.volume_id, "Home_Shelf")
+        copies = get_copies_for_volume(conn, volume.volume_id)
+        assert len(copies) == 1
+        assert copies[0].iso_sha256 == "a" * 64
+        assert copies[0].iso_size_bytes == 1000
+
+        # Re-burn recorded with fresh evidence: replaced.
+        add_volume_copy(
+            conn, volume.volume_id, "Home_Shelf",
+            iso_sha256="b" * 64, iso_size_bytes=2000,
+        )
+        copies = get_copies_for_volume(conn, volume.volume_id)
+        assert copies[0].iso_sha256 == "b" * 64
+        assert copies[0].iso_size_bytes == 2000
+
+    def test_upsert_blank_media_serial_preserves_existing(self, conn, volume):
+        """FMA-04 companion: media_serial defaults to '' (not None), so
+        the preserve-on-absent rule keys off the empty string."""
+        add_volume_copy(
+            conn, volume.volume_id, "Home_Shelf", media_serial="SER123",
+        )
+        add_volume_copy(conn, volume.volume_id, "Home_Shelf")
+        copies = get_copies_for_volume(conn, volume.volume_id)
+        assert copies[0].media_serial == "SER123"
+
+        add_volume_copy(
+            conn, volume.volume_id, "Home_Shelf", media_serial="SER456",
+        )
+        copies = get_copies_for_volume(conn, volume.volume_id)
+        assert copies[0].media_serial == "SER456"
+
     def test_get_copies_at_location(self, conn):
         v1 = create_volume(conn, "V1", generate_uuid(), "TEST_TINY", 1000000)
         v2 = create_volume(conn, "V2", generate_uuid(), "TEST_TINY", 1000000)
