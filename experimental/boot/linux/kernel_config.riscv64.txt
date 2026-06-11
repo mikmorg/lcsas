@@ -8,7 +8,8 @@ CONFIG_64BIT=y
 #   cp /path/to/this-file .config
 #   make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- olddefconfig
 #   make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j$(nproc)
-#   cp arch/riscv/boot/Image /path/to/recovery/boot/linux/vmlinuz-riscv64
+#   copy arch/riscv/boot/Image into this directory
+#   (experimental/boot/linux/) as vmlinuz-riscv64
 
 CONFIG_ISO9660_FS=y
 CONFIG_JOLIET=y

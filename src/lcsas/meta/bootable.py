@@ -28,6 +28,7 @@ import contextlib
 import gzip
 import logging
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -38,6 +39,20 @@ _logger = logging.getLogger(__name__)
 # Size of the EFI boot image in MiB — must be large enough
 # to hold GRUB EFI binary + grub.cfg + font
 _EFI_IMG_SIZE_MIB = 4
+
+# Staged-on-disc artifact names in recovery mode.  These are the
+# contract between _install_boot_files and every boot menu entry
+# (experimental/boot/efi/grub.cfg + the generated isolinux.cfg);
+# pinned by tests/recovery_hardening/test_boot_config_paths.py.
+_RECOVERY_KERNEL_NAME = "vmlinuz"
+_RECOVERY_INITRD_NAME = "initramfs.cpio.gz"
+
+# Paths loaded by boot menu entries: GRUB ``linux``/``initrd`` lines
+# and isolinux ``KERNEL`` / ``APPEND ... initrd=<path>``.
+_MENU_PATH_RE = re.compile(
+    r"^\s*(?:linux|initrd|KERNEL)\s+(/\S+)|initrd=(/\S+)",
+    re.MULTILINE,
+)
 
 # newc (SVR4) cpio header: 6-byte magic + 13 × 8-byte ASCII-hex fields.
 _NEWC_MAGIC = b"070701"
@@ -118,10 +133,10 @@ class BootableISOBuilder:
             volume_label: ISO 9660 volume label.
             xorriso_binary: Path or name of the ``xorriso`` binary.
             recovery_boot_dir: Alternative to ``alpine_dir``.  Points at
-                an ``experimental/boot/`` tree (Linux LTS + FreeBSD
-                configs + initramfs).  When set, the bootable ISO uses
-                the quarantined C89 recovery toolchain boot stack
-                instead of Alpine.
+                an ``experimental/boot/`` tree (Linux LTS configs +
+                initramfs).  When set, the bootable ISO uses the
+                quarantined C89 recovery toolchain boot stack instead
+                of Alpine.
             recovery_arch: Target architecture for ``recovery_boot_dir``
                 (x86_64, aarch64, or riscv64).
         """
@@ -154,6 +169,7 @@ class BootableISOBuilder:
         self._validate_inputs()
         self._install_boot_files()
         self._install_isolinux()
+        self._validate_boot_config_paths()
         self._install_efi()
         self._create_iso()
         return self._output
@@ -208,17 +224,8 @@ class BootableISOBuilder:
             arch = self._recovery_arch
             kernel_src = self._recovery_boot / "linux" / f"vmlinuz-{arch}"
             init_src = self._recovery_boot / f"initramfs-{arch}.cpio.gz"
-            shutil.copy2(str(kernel_src), str(boot_dir / "vmlinuz"))
-            shutil.copy2(str(init_src), str(boot_dir / "initramfs.cpio.gz"))
-            # FreeBSD alternate kernel if present.
-            fbsd_kernel = self._recovery_boot / "freebsd" / f"kernel-{arch}"
-            if fbsd_kernel.is_file():
-                fbsd_dir = self._staging / "boot" / "freebsd"
-                fbsd_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(str(fbsd_kernel), str(fbsd_dir / "kernel"))
-                loader_conf = self._recovery_boot / "freebsd" / "loader.conf"
-                if loader_conf.is_file():
-                    shutil.copy2(str(loader_conf), str(fbsd_dir / "loader.conf"))
+            shutil.copy2(str(kernel_src), str(boot_dir / _RECOVERY_KERNEL_NAME))
+            shutil.copy2(str(init_src), str(boot_dir / _RECOVERY_INITRD_NAME))
 
             grub_dir = boot_dir / "grub"
             grub_dir.mkdir(parents=True, exist_ok=True)
@@ -226,7 +233,11 @@ class BootableISOBuilder:
             if recovery_grub.is_file():
                 shutil.copy2(str(recovery_grub), str(grub_dir / "grub.cfg"))
             else:
-                self._write_default_grub_cfg(grub_dir / "grub.cfg")
+                self._write_default_grub_cfg(
+                    grub_dir / "grub.cfg",
+                    kernel=f"/boot/{_RECOVERY_KERNEL_NAME}",
+                    initrd=f"/boot/{_RECOVERY_INITRD_NAME}",
+                )
             return
 
         assert self._alpine is not None
@@ -257,12 +268,22 @@ class BootableISOBuilder:
         isolinux_dir = self._staging / "isolinux"
         isolinux_dir.mkdir(parents=True, exist_ok=True)
 
-        # Copy isolinux config
-        cfg_src = Path(__file__).parent / "live" / "isolinux.cfg"
-        if cfg_src.is_file():
-            shutil.copy2(str(cfg_src), str(isolinux_dir / "isolinux.cfg"))
+        if self._recovery_boot is not None:
+            # Recovery mode stages initramfs.cpio.gz, not the Alpine
+            # `initramfs` — never reuse live/isolinux.cfg here; generate
+            # the config from the staged names instead (sole source).
+            self._write_default_isolinux_cfg(
+                isolinux_dir / "isolinux.cfg",
+                kernel=f"/boot/{_RECOVERY_KERNEL_NAME}",
+                initrd=f"/boot/{_RECOVERY_INITRD_NAME}",
+            )
         else:
-            self._write_default_isolinux_cfg(isolinux_dir / "isolinux.cfg")
+            # Copy isolinux config
+            cfg_src = Path(__file__).parent / "live" / "isolinux.cfg"
+            if cfg_src.is_file():
+                shutil.copy2(str(cfg_src), str(isolinux_dir / "isolinux.cfg"))
+            else:
+                self._write_default_isolinux_cfg(isolinux_dir / "isolinux.cfg")
 
         # Find isolinux.bin and ldlinux.c32 on the system
         search_dirs = [
@@ -286,6 +307,33 @@ class BootableISOBuilder:
 
         if ldlinux_c32:
             shutil.copy2(str(ldlinux_c32), str(isolinux_dir / "ldlinux.c32"))
+
+    # ── Step 3.5: menu-entry / staged-tree consistency ───────────
+
+    def _validate_boot_config_paths(self) -> None:
+        """Cross-check installed boot menus against the staged tree.
+
+        Every kernel/initrd path referenced by the installed grub.cfg
+        and isolinux.cfg must exist in the staging directory — a
+        mismatch means a disc whose menu entries all 404 at boot
+        (audit finding BOOT-03).
+        """
+        configs = [
+            self._staging / "boot" / "grub" / "grub.cfg",
+            self._staging / "isolinux" / "isolinux.cfg",
+        ]
+        missing: set[str] = set()
+        for cfg in configs:
+            if not cfg.is_file():
+                continue
+            for match in _MENU_PATH_RE.finditer(cfg.read_text()):
+                ref = match.group(1) or match.group(2)
+                if not (self._staging / ref.lstrip("/")).is_file():
+                    missing.add(f"{ref} (from {cfg.relative_to(self._staging)})")
+        if missing:
+            raise ValueError(
+                "boot menu references missing path: " + ", ".join(sorted(missing))
+            )
 
     # ── Step 4: EFI boot ─────────────────────────────────────────
 
@@ -575,16 +623,20 @@ class BootableISOBuilder:
         return None
 
     @staticmethod
-    def _write_default_grub_cfg(path: Path) -> None:
-        """Write a minimal GRUB configuration."""
+    def _write_default_grub_cfg(
+        path: Path,
+        kernel: str = "/boot/vmlinuz",
+        initrd: str = "/boot/initramfs",
+    ) -> None:
+        """Write a minimal GRUB configuration for the staged names."""
         path.write_text(
             "set timeout=5\n"
             "set default=0\n"
             "terminal_input console\n"
             "terminal_output console\n"
             '\nmenuentry "LCSAS Recovery" {\n'
-            "    linux /boot/vmlinuz quiet loglevel=3 console=tty1\n"
-            "    initrd /boot/initramfs\n"
+            f"    linux {kernel} quiet loglevel=3 console=tty1\n"
+            f"    initrd {initrd}\n"
             "}\n"
             '\nmenuentry "Boot from Hard Drive" {\n'
             "    insmod chain\n"
@@ -594,15 +646,19 @@ class BootableISOBuilder:
         )
 
     @staticmethod
-    def _write_default_isolinux_cfg(path: Path) -> None:
-        """Write a minimal isolinux configuration."""
+    def _write_default_isolinux_cfg(
+        path: Path,
+        kernel: str = "/boot/vmlinuz",
+        initrd: str = "/boot/initramfs",
+    ) -> None:
+        """Write a minimal isolinux configuration for the staged names."""
         path.write_text(
             "DEFAULT lcsas\n"
             "TIMEOUT 50\n"
             "PROMPT 1\n"
             "\nLABEL lcsas\n"
-            "    KERNEL /boot/vmlinuz\n"
-            "    APPEND initrd=/boot/initramfs quiet loglevel=3\n"
+            f"    KERNEL {kernel}\n"
+            f"    APPEND initrd={initrd} quiet loglevel=3\n"
             "\nLABEL local\n"
             "    LOCALBOOT 0\n"
         )

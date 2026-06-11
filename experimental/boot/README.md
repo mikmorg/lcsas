@@ -35,7 +35,7 @@
 | Plan | Defect |
 |------|--------|
 | BOOT-02 | `initramfs/build_initramfs.sh` silently emits zero-byte placeholder files for missing sources (e.g. BusyBox, kernel), so a "successful" build produces a non-booting initramfs. |
-| BOOT-03 | Path mismatches between the kernel config docs, `initramfs/manifest.txt`, and the boot menu configs (`isolinux/isolinux.cfg`, `efi/grub.cfg`). |
+| BOOT-03 | **Fixed 2026-06.** Boot menu entries loaded the kernel from a `/boot/linux/` subdirectory the builder never stages (the kernel is staged at `/boot/vmlinuz`). `efi/grub.cfg` now uses the staged names (pinned by `tests/recovery_hardening/test_boot_config_paths.py`). Deleted: `isolinux/isolinux.cfg` (dead — referenced by no builder, required a `menu.c32` nothing copies) and `freebsd/` (the FreeBSD menu entries chainloaded `loader.bin`/`loader.efi`, artifacts that never existed anywhere in the repo). |
 | BOOT-05 | The boot flow targets a tmpfs restore destination, which cannot hold a real archive. |
 | BOOT-06 | `lcsas-init` scans optical devices only (`/dev/sr*`), so a USB-stick boot of the same image would never find its medium. `recovery/src/lcsas-init/` and its built binaries remain under `recovery/` for now — inert without a kernel. |
 
@@ -43,6 +43,5 @@
 
 * `linux/` — Linux 6.6 LTS kernel config notes (x86_64 / aarch64 / riscv64)
   and kernel cmdline.
-* `freebsd/` — FreeBSD 13.4 kernel config notes and `loader.conf`.
-* `isolinux/`, `efi/` — BIOS / UEFI boot menu configs.
+* `efi/` — UEFI (GRUB) boot menu config.
 * `initramfs/` — manifest + deterministic cpio.gz assembly script.

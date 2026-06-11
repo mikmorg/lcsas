@@ -125,3 +125,6 @@ No catalog/schema impact.
 
 1 day: 0.25 config corrections/deletions, 0.25 builder validation (if kept),
 0.5 tests. No special environment.
+
+---
+**Implemented:** 2026-06-11. As planned (KEEP-variant: BOOT-07 undecided, builder still alive, so Fix 3/4 + builder unit tests included). Also removed the builder's dead FreeBSD staging block and reworded stale `recovery/boot/linux` kernel-copy doc lines in `experimental/boot/linux/kernel_config.*.txt` to clear the acceptance grep.

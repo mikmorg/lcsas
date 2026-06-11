@@ -10,7 +10,8 @@ CONFIG_64BIT=y
 #   cp /path/to/this-file .config
 #   make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 #   make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
-#   cp arch/arm64/boot/Image /path/to/recovery/boot/linux/vmlinuz-aarch64
+#   copy arch/arm64/boot/Image into this directory
+#   (experimental/boot/linux/) as vmlinuz-aarch64
 
 # Standard filesystems (same as x86_64).
 CONFIG_ISO9660_FS=y
