@@ -44,7 +44,7 @@ from lcsas.db.volumes import (
 )
 from lcsas.ecc.dvdisaster import DVDisasterRunner
 from lcsas.iso.xorriso import XorrisoRunner
-from lcsas.staging.builder import StagingBuilder
+from lcsas.staging.builder import MirrorUnavailableError, StagingBuilder
 from lcsas.staging.metadata import HolographicInjector
 from lcsas.utils.fs import ensure_dir, safe_remove_tree
 from lcsas.utils.hashing import sha256_file
@@ -373,15 +373,23 @@ class BurnOrchestrator:
 
         for repo_id, repo_packs in packs_by_repo.items():
             mirror_path = mirror_paths.get(repo_id)
-            if mirror_path is None:
-                continue
-            data_dir = mirror_path / "data"
-            if data_dir.is_dir():
-                builder.stage_packs(repo_packs, data_dir)
+            data_dir = mirror_path / "data" if mirror_path is not None else None
+            if data_dir is None or not data_dir.is_dir():
+                # Fail loud BEFORE any catalog write: a silent skip here
+                # would link packs to a volume that physically lacks them.
+                raise MirrorUnavailableError(
+                    repo_id, mirror_path, [p.sha256[:12] for p in repo_packs],
+                )
+            builder.stage_packs(repo_packs, data_dir)
 
-        # 2. Inject holographic metadata
+        # Post-stage invariant: every selected pack must be present in the
+        # staging tree before anything is written to the catalog.
+        builder.assert_staged_complete(selected_packs)
+
+        # 2. Inject holographic metadata — strict for repos with packs on
+        #    this volume (the disc must stay self-describing for them).
         injector = HolographicInjector(staging_root)
-        injector.inject_metadata(mirror_paths)
+        injector.inject_metadata(mirror_paths, required_repos=set(packs_by_repo))
 
         # 3. Register volume in DB (atomic transaction)
         volume = create_volume(

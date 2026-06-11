@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 from pathlib import Path
 
 from lcsas.db.models import Pack
@@ -11,6 +13,8 @@ from lcsas.utils.hashing import sha256_file
 from lcsas.utils.pack_layout import find_pack_file, pack_dest_path
 
 _logger = logging.getLogger(__name__)
+
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class MissingPacksError(Exception):
@@ -23,6 +27,38 @@ class MissingPacksError(Exception):
             + ("..." if len(missing) > 5 else "")
         )
         self.missing = missing
+
+
+class MirrorUnavailableError(MissingPacksError):
+    """A repo's mirror (or its ``data/`` dir) is absent while packs from it
+    were selected for staging.
+
+    Subclasses :class:`MissingPacksError` so existing handlers keep working,
+    but carries its own user-facing message.
+    """
+
+    def __init__(
+        self,
+        repo_id: str,
+        mirror_path: Path | None,
+        packs: list[str],
+        detail: str | None = None,
+    ) -> None:
+        where = (
+            str(mirror_path) if mirror_path is not None
+            else "no mirror path registered"
+        )
+        what = detail or f"{len(packs)} selected pack(s) cannot be staged"
+        # Bypass MissingPacksError.__init__: this error formats its own message.
+        Exception.__init__(
+            self,
+            f"Mirror for repo '{repo_id}' is unavailable ({where}): {what}. "
+            "Is the NAS mounted? Nothing was written to the catalog; "
+            "fix the mirror and re-run 'lcsas stage'.",
+        )
+        self.missing = packs
+        self.repo_id = repo_id
+        self.mirror_path = mirror_path
 
 
 class StagingBuilder:
@@ -181,6 +217,42 @@ class StagingBuilder:
             raise MissingPacksError(missing)
 
         return staged
+
+    def assert_staged_complete(self, packs: list[Pack]) -> None:
+        """Post-stage invariant: the staged data tree holds exactly ``packs``.
+
+        Walks ``data/`` counting files with 64-hex names and summing their
+        sizes; raises :class:`MissingPacksError` on any count or byte-total
+        mismatch.  Defense in depth against a silent partial stage — callers
+        must invoke this before any catalog write.  Cost: one ``os.walk``
+        over hardlinks, no content reads.
+        """
+        expected_count = len(packs)
+        expected_bytes = sum(p.size_bytes for p in packs)
+        found_count = 0
+        found_bytes = 0
+        for dirpath, _dirnames, filenames in os.walk(self._data_dir):
+            for name in filenames:
+                if _HEX64_RE.match(name):
+                    found_count += 1
+                    found_bytes += os.stat(os.path.join(dirpath, name)).st_size
+        if found_count == expected_count and found_bytes == expected_bytes:
+            return
+
+        _logger.error(
+            "Staged data tree mismatch in %s: %d file(s) / %d byte(s) found, "
+            "expected %d / %d",
+            self._data_dir, found_count, found_bytes,
+            expected_count, expected_bytes,
+        )
+        bad: list[str] = []
+        for p in packs:
+            dst = pack_dest_path(self._data_dir, p.sha256)
+            if not dst.is_file() or dst.stat().st_size != p.size_bytes:
+                bad.append(p.sha256[:12])
+        raise MissingPacksError(
+            bad or [f"unexpected extra pack file(s) under {self._data_dir}"]
+        )
 
     def _find_pack_file(self, data_dir: Path, sha256: str) -> Path | None:
         """Locate a pack file in the mirror data directory.

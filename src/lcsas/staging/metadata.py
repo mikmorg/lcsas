@@ -7,6 +7,7 @@ and the archive catalog, enabling recovery from any single disc.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -18,8 +19,11 @@ from typing import Any
 from lcsas.config.settings import LCSASConfig
 from lcsas.db.models import Pack, Volume
 from lcsas.restore.standalone_builder import build_standalone
+from lcsas.staging.builder import MirrorUnavailableError
 from lcsas.utils.fs import copy_file, copy_tree, ensure_dir
 from lcsas.utils.pack_layout import METADATA_SUBDIRS
+
+_logger = logging.getLogger(__name__)
 
 # Repository subdirectories that constitute "hot" metadata
 _METADATA_DIRS = list(METADATA_SUBDIRS)
@@ -106,14 +110,35 @@ class HolographicInjector:
     def inject_metadata(
         self,
         mirror_paths: dict[str, Path],
+        required_repos: set[str] | None = None,
     ) -> None:
         """Copy repository metadata from each mirror into the staging tree.
 
         Args:
             mirror_paths: Dict of {repo_id: mirror_root_path}.
                 Each mirror_root should contain index/, snapshots/, keys/, config.
+            required_repos: Repo IDs that have packs on this volume.  For
+                these, a mirror_root lacking ALL of ``config`` + ``keys``
+                (the minimum for the disc to be self-describing) raises
+                :class:`MirrorUnavailableError` instead of being silently
+                skipped; any other missing metadata piece is logged as a
+                warning.  Repos not listed keep the lenient skip.
         """
+        required = required_repos or set()
         for repo_id, mirror_root in mirror_paths.items():
+            if repo_id in required and not (
+                (mirror_root / "config").is_file()
+                or (mirror_root / "keys").is_dir()
+            ):
+                raise MirrorUnavailableError(
+                    repo_id,
+                    mirror_root,
+                    [],
+                    detail=(
+                        "repository metadata (config, keys) is missing, so "
+                        "the disc would not be self-describing"
+                    ),
+                )
             repo_meta_dir = self._metadata_dir / repo_id
             ensure_dir(repo_meta_dir)
 
@@ -122,12 +147,22 @@ class HolographicInjector:
                 src = mirror_root / subdir_name
                 if src.is_dir():
                     copy_tree(src, repo_meta_dir / subdir_name)
+                elif repo_id in required:
+                    _logger.warning(
+                        "Repo '%s': metadata dir %s missing from mirror — "
+                        "not injected onto this volume.", repo_id, src,
+                    )
 
             # Copy metadata files
             for fname in _METADATA_FILES:
                 src = mirror_root / fname
                 if src.is_file():
                     copy_file(src, repo_meta_dir / fname)
+                elif repo_id in required:
+                    _logger.warning(
+                        "Repo '%s': metadata file %s missing from mirror — "
+                        "not injected onto this volume.", repo_id, src,
+                    )
 
     def inject_catalog(self, db_path: Path) -> None:
         """Copy the SQLite archive catalog to the staging root."""

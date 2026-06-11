@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -13,10 +14,16 @@ from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.db.connection import get_memory_connection
 from lcsas.db.packs import register_pack
+from lcsas.db.queries import get_unarchived_packs
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.volume_packs import get_pack_ids_for_volume
-from lcsas.db.volumes import get_volume_by_id
+from lcsas.db.volumes import get_volume_by_id, list_volumes
+from lcsas.staging.builder import (
+    MirrorUnavailableError,
+    MissingPacksError,
+    StagingBuilder,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -166,12 +173,17 @@ class TestPrepare:
         register_repo(conn, "work", "Work", "/mnt/mirror/work")
 
         # Create packs in both repos
-        data_dir = config.repositories["family"].mirror_path / "data"
+        mirror_path = config.repositories["family"].mirror_path
+        data_dir = mirror_path / "data"
         sha_f = "f" * 64
         sha_w = "a" * 64
         register_pack(conn, sha256=sha_f, size_bytes=100, repo_id="family")
         register_pack(conn, sha256=sha_w, size_bytes=200, repo_id="work")
         (data_dir / sha_f).write_bytes(b"x" * 100)
+        # Minimum holographic metadata for the staged repo (BURN-01:
+        # repos with packs on the volume must be self-describing).
+        (mirror_path / "keys").mkdir(exist_ok=True)
+        (mirror_path / "config").write_text('{"version": 2}')
 
         # Ensure db_path exists for inject_catalog
         config.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -611,6 +623,101 @@ class TestStage:
             mock_usage.return_value = unittest.mock.MagicMock(free=0)
             with pytest.raises(OSError, match="Insufficient disk space"):
                 orch.stage()
+
+
+# =========================================================================
+# BURN-01: stage() must fail loud when a repo mirror is unavailable
+# =========================================================================
+
+
+def _make_two_repo_env(tmp_path):
+    """Two registered repos, packs in both, fully-built mirrors on disk."""
+    mirror = tmp_path / "mirror"
+    staging = tmp_path / "staging"
+    staging.mkdir(parents=True, exist_ok=True)
+
+    conn = get_memory_connection()
+    create_all(conn)
+
+    repos = {}
+    for name in ("family", "work"):
+        repo_dir = mirror / name
+        (repo_dir / "data").mkdir(parents=True)
+        for subdir in ("index", "snapshots", "keys"):
+            (repo_dir / subdir).mkdir()
+        (repo_dir / "config").write_text('{"version": 2}')
+        repos[name] = RepositoryConfig(name=name, mirror_path=repo_dir)
+        register_repo(conn, name, name.title(), str(repo_dir))
+
+    config = LCSASConfig(
+        mirror_base_path=mirror,
+        staging_path=staging,
+        db_path=tmp_path / "archive.db",
+        default_media_type=MediaType.TEST_TINY,
+        default_ecc_redundancy_pct=0,
+        metadata_reserve_bytes=1000,
+        label_prefix="TEST",
+        repositories=repos,
+    )
+    config.db_path.write_bytes(b"sqlite_placeholder")
+
+    packs = []
+    for i, repo in enumerate(["family", "work", "family", "work"], start=1):
+        sha = f"{i:064x}"
+        packs.append(register_pack(conn, sha256=sha, size_bytes=100, repo_id=repo))
+        (mirror / repo / "data" / sha).write_bytes(b"d" * 100)
+
+    orch = BurnOrchestrator(config, conn, MagicMock(), MagicMock())
+    return orch, config, conn, packs
+
+
+class TestStageFailsLoudOnMissingMirror:
+    """BURN-01: a missing mirror must abort staging before any catalog write."""
+
+    def test_stage_raises_when_repo_data_dir_missing(self, tmp_path):
+        """One repo's data/ vanishes (e.g. NFS automount drop) → fail loud."""
+        orch, config, conn, packs = _make_two_repo_env(tmp_path)
+
+        shutil.rmtree(config.repositories["work"].mirror_path / "data")
+
+        with pytest.raises(MirrorUnavailableError, match="work"):
+            orch.stage()
+
+        # Nothing committed: no volume row, every pack still unarchived.
+        assert list_volumes(conn) == []
+        assert len(get_unarchived_packs(conn)) == len(packs)
+
+    def test_stage_raises_when_mirror_path_unregistered(self, tmp_path):
+        """A DB repo row pointing at a nonexistent mirror path → fail loud."""
+        orch, config, conn, packs = _make_two_repo_env(tmp_path)
+
+        register_repo(conn, "ghost", "Ghost", str(tmp_path / "no-such-mirror"))
+        register_pack(conn, sha256="f" * 64, size_bytes=100, repo_id="ghost")
+
+        with pytest.raises(MirrorUnavailableError, match="ghost"):
+            orch.stage()
+
+        assert list_volumes(conn) == []
+        assert len(get_unarchived_packs(conn)) == len(packs) + 1
+
+    def test_stage_asserts_staged_count_equals_selected(self, tmp_path, monkeypatch):
+        """Post-stage invariant catches a silent partial stage before commit."""
+        orch, config, conn, packs = _make_two_repo_env(tmp_path)
+
+        real_stage_packs = StagingBuilder.stage_packs
+
+        def partial_stage(self, repo_packs, mirror_data_dir):
+            # Silently drop the last pack — simulates a miscounting
+            # stage_packs regression that does not raise on its own.
+            return real_stage_packs(self, repo_packs[:-1], mirror_data_dir)
+
+        monkeypatch.setattr(StagingBuilder, "stage_packs", partial_stage)
+
+        with pytest.raises(MissingPacksError):
+            orch.stage()
+
+        assert list_volumes(conn) == []
+        assert len(get_unarchived_packs(conn)) == len(packs)
 
 
 # =========================================================================

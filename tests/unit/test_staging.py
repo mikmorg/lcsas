@@ -9,7 +9,11 @@ import pytest
 
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.db.models import Pack, Volume
-from lcsas.staging.builder import MissingPacksError, StagingBuilder
+from lcsas.staging.builder import (
+    MirrorUnavailableError,
+    MissingPacksError,
+    StagingBuilder,
+)
 from lcsas.staging.metadata import HolographicInjector
 
 
@@ -116,6 +120,35 @@ class TestHolographicInjector:
         assert (meta / "snapshots").is_dir()
         assert (meta / "keys").is_dir()
         assert (meta / "config").is_file()
+
+    def test_inject_metadata_raises_when_repo_config_missing(self, tmp_path):
+        """BURN-01: a required repo whose mirror lacks config+keys fails loud.
+
+        Repos with packs on the volume must keep the disc self-describing;
+        an unmounted/bare mirror root raises instead of silently injecting
+        nothing.
+        """
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+        bare_mirror = tmp_path / "bare_mirror"
+        bare_mirror.mkdir()  # exists, but has neither config nor keys/
+
+        injector = HolographicInjector(staging_root)
+        with pytest.raises(MirrorUnavailableError, match="test_repo"):
+            injector.inject_metadata(
+                {"test_repo": bare_mirror}, required_repos={"test_repo"}
+            )
+
+    def test_inject_metadata_non_required_repo_still_skipped(self, tmp_path):
+        """Repos without packs on this volume keep the lenient skip."""
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+        bare_mirror = tmp_path / "bare_mirror"
+        bare_mirror.mkdir()
+
+        injector = HolographicInjector(staging_root)
+        injector.inject_metadata({"test_repo": bare_mirror})  # must not raise
+        assert (staging_root / "metadata" / "test_repo").is_dir()
 
     def test_inject_catalog(self, tmp_path):
         staging_root = tmp_path / "staging"

@@ -170,3 +170,6 @@ The verifier confirmed no `already_covered_by` — these are all new.
 1.5 days: 0.5 impl (exception + loop + invariant + metadata strictness),
 1.0 tests + fixing any multi-repo fixtures that depended on the silent skip.
 No special environment.
+
+---
+**Implemented:** 2026-06-11. As planned, with two small extensions: `MirrorUnavailableError` gained an optional `detail` kwarg so the metadata-injection raise has an accurate message, and `inject_metadata` strictness landed as a `required_repos` param (all mirrors still injected; strict only for repos with packs on the volume, preserving holographic breadth). One pre-existing fixture (`test_prepare_with_repo_filter`) relied on the silent skip and was given a minimal config+keys mirror, as the plan anticipated.
