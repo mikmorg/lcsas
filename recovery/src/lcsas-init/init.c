@@ -50,6 +50,14 @@ ensure_dir(const char *path)
 /*
  * Try the well-known disc device nodes.  Returns 0 on first successful
  * mount or -1 if none worked.
+ *
+ * KNOWN LIMITATION (BOOT-06): only optical nodes are probed.  The
+ * bootable image is isohybrid'd so it can be written to a USB stick,
+ * but booted that way the medium is /dev/sdX -- never probed -- and
+ * boot dead-ends at the shell in main().  Inert while the boot path
+ * is quarantined; any revival must implement the sentinel-scan fix
+ * specified in experimental/boot/README.md ("BOOT-06: sentinel-scan
+ * fix spec") instead of widening this list ad hoc.
  */
 static int
 try_discs(const char *mount_point)

@@ -82,3 +82,6 @@ No catalog/schema impact; no behavior change to shipped binaries.
 ## Effort
 
 0.5 day (docs + comment + one test assertion). No special environment.
+
+---
+**Implemented:** 2026-06-11. As planned, with two notes: BOOT-08 has not landed, so `tests/recovery_hardening/test_boot_path_quarantined.py` was created here carrying only the BOOT-06 tripwire (BOOT-08 will extend it); `recovery/bin/*/lcsas-init` is gitignored, so the comment-only `init.c` change required no binary regeneration — only the `init.c` line in `recovery/MANIFEST.sha256` was re-pinned.
