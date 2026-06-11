@@ -141,3 +141,14 @@ would not gate merges — verifier-confirmed):
 
 2 days: 0.5 doc text fixes, 1.5 contract-gate test (generator fixtures + extraction
 regexes + allowlist). No special environment.
+
+---
+**Implemented:** 2026-06-11. KEY-02 landed first and made `--target`/`--key` real
+restore.sh flags, so Fix A's flag rewrites (and acceptance criterion 1) became moot —
+the burned text is truthful as-is. Delivered the remainder: bundled-CPython combiner
+fallback in both split-key doc sites; the generic gate (Assertion 1 over static +
+generated corpus with allowlist, Assertion 3 generalized to every `lcsas` subcommand,
+bundle-layout cross-check; Assertion 2 already landed via UX-04); red-first catch
+fixed `lcsas burn ... --db` in PHYSICAL_DISC_VALIDATION.txt + refreshed stale
+manifest entries (incl. 3 pre-existing). Blind-drill verify.sh tightening deferred to
+KEY-04 per the plan's own pairing.

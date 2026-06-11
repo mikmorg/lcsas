@@ -66,6 +66,14 @@ def _share_recovery_lines(config: LCSASConfig) -> list[str]:
         "",
         "      python3 keyshare_combine.py <card1> <card2>",
         "",
+        "  If python3 is not installed, use the copy bundled on the",
+        "  META-VOLUME disc — <platform> is the folder under",
+        "  recovery/bin/ that names your machine (for most PCs that is",
+        "  x86_64-unknown-linux-musl):",
+        "",
+        "      recovery/bin/<platform>/python/bin/python3 \\",
+        "          keyshare_combine.py <card1> <card2>",
+        "",
         f"  (pass any {k} card files; or pipe the share words on stdin).",
         "  Either combiner prints the password and nothing else.  Save",
         "  it, e.g.:",
@@ -377,6 +385,14 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
                       fallback is:
 
                         python3 keyshare_combine.py <card1> <card2>
+
+                      ...and if python3 is not installed either, use
+                      the copy bundled on the META disc (<platform> is
+                      the folder under recovery/bin/ naming your
+                      machine, e.g. x86_64-unknown-linux-musl):
+
+                        recovery/bin/<platform>/python/bin/python3 \\
+                            keyshare_combine.py <card1> <card2>
 
                     STEP 2: run the normal restore and enter that password
                       at the  Password:  prompt:

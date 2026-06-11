@@ -56,7 +56,7 @@ PROCEDURE
     Run the burn pipeline against the real media type, producing an ISO
     and its RS03-augmented .ecc image:
 
-      lcsas burn --media MDISC100 --db <catalog> ...
+      lcsas --db <catalog> burn --media MDISC100 ...
       # or drive burn/orchestrator.py directly; see the cdemu harness
       # setup.py _run_burn_pipeline() for the exact call shape.
 

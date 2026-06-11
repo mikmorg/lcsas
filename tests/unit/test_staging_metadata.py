@@ -71,6 +71,22 @@ def test_split_block_names_c_combiner(tmp_path: Path) -> None:
         )
 
 
+def test_split_block_offers_bundled_python_fallback(tmp_path: Path) -> None:
+    """A host with no python3 at all must still have a documented path
+    to the combiner pre-step: the per-target CPython bundled on the
+    META disc (UX-02).  Chain: lcsas-keyshare → python3 → bundled
+    recovery/bin/<platform>/python/bin/python3."""
+    fallback = "recovery/bin/<platform>/python/bin/python3"
+    for name, text in _render(tmp_path, key_split=True).items():
+        idx = text.find(fallback)
+        assert idx != -1, (
+            f"{name}: no bundled-python fallback for the combiner pre-step"
+        )
+        assert "keyshare_combine.py" in text[idx : idx + 200], (
+            f"{name}: the bundled-python fallback must run keyshare_combine.py"
+        )
+
+
 def test_single_key_render_has_no_share_instructions(tmp_path: Path) -> None:
     """Single-key archives must not mention any combiner at all."""
     for name, text in _render(tmp_path, key_split=False).items():
