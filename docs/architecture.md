@@ -353,7 +353,15 @@ Each repository maintains its own encryption independently:
 
 ### Verification
 
-- Post-burn: read-back the entire disc and verify SHA-256 of every pack
+- Staging-time: every selected pack is fully read and its SHA-256
+  verified against the catalog hash before the ISO is mastered; a
+  corrupt mirror pack aborts the stage before anything is written to
+  the catalog (`CorruptPacksError`)
+- Post-burn: media readability check (`xorriso -check_media`); a full
+  device read-back hash of the burned ISO is planned (BURN-04)
+- On demand: `lcsas catalog validate <mounted-disc> --content` re-reads
+  every pack file on a mounted disc and verifies its SHA-256 against
+  the filename hash
 - Periodic: `dvdisaster --verify` on stored volumes
 - Catalog cross-check: compare mirror packs against catalog records
 

@@ -164,3 +164,6 @@ sentence unless the BURN-04 device path exists.
 
 2.5 days: 1.0 impl (builder + verify.py + CLI + doc), 1.0 unit tests,
 0.5 integration test (needs xorriso locally; already in CI's integration job).
+
+---
+**Implemented:** 2026-06-11. As planned, plus collateral test-seed fixes: unit suites that staged packs with fabricated hashes (test_session_pipeline, test_burn_orchestrator, test_staging, test_parser_staging_labels, test_filesystem_failures) now seed content that really hashes to its name; the empty-staged-file case surfaces as CorruptPacksError instead of MissingPacksError.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from lcsas.db.models import Pack
@@ -103,30 +105,39 @@ class TestStagingEdgeCases:
         builder = StagingBuilder(tmp_path / "staging")
         builder.initialize()
 
-        sha = "a" * 64
+        content = b"pack_data"
+        sha = hashlib.sha256(content).hexdigest()
         mirror_data = tmp_path / "mirror_data"
         mirror_data.mkdir()
-        (mirror_data / sha).write_bytes(b"pack_data")
+        (mirror_data / sha).write_bytes(content)
 
-        # Pre-place the pack in staging
-        (builder.data_dir / sha).write_bytes(b"already_staged")
+        # Pre-place the pack in staging (two-level layout, valid content)
+        dst = builder.data_dir / sha[:2] / sha
+        dst.parent.mkdir(parents=True)
+        dst.write_bytes(content)
+        inode_before = dst.stat().st_ino
 
-        count = builder.stage_packs([self._make_pack(sha)], mirror_data)
+        count = builder.stage_packs(
+            [self._make_pack(sha, size=len(content))], mirror_data
+        )
         assert count == 1  # still counted
-        # Original content preserved (not overwritten)
-        assert (builder.data_dir / sha).read_bytes() == b"already_staged"
+        # Existing staged file kept (not re-linked from the mirror)
+        assert dst.stat().st_ino == inode_before
 
     def test_stage_without_initialize(self, tmp_path):
         """stage_packs creates data dir via ensure_dir even without initialize()."""
         builder = StagingBuilder(tmp_path / "staging2")
         # Skip initialize() deliberately
 
-        sha = "b" * 64
+        content = b"data"
+        sha = hashlib.sha256(content).hexdigest()
         mirror_data = tmp_path / "mirror_data"
         mirror_data.mkdir()
-        (mirror_data / sha).write_bytes(b"data")
+        (mirror_data / sha).write_bytes(content)
 
-        count = builder.stage_packs([self._make_pack(sha)], mirror_data)
+        count = builder.stage_packs(
+            [self._make_pack(sha, size=len(content))], mirror_data
+        )
         assert count == 1
         # Two-level layout: data/<prefix>/<hash>
         assert (builder.data_dir / sha[:2] / sha).exists()

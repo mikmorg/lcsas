@@ -1,5 +1,6 @@
 """Unit tests for db/verify.py — disc validation."""
 
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -235,5 +236,41 @@ class TestValidateDisc:
 
         result.missing_from_disc = []
         result.orphaned_on_disc = ["b" * 64]
+        assert not result.ok
+
+        result.orphaned_on_disc = []
+        result.corrupt_on_disc = ["c" * 64]
+        assert not result.ok
+
+    def test_validate_disc_content_mode_flags_corruption(self, disc_path):
+        """BURN-02: --content re-hashes pack bytes; name-only mode cannot
+        see the corruption (pins the distinction between the two modes)."""
+        good_content = b"intact pack content"
+        good_sha = hashlib.sha256(good_content).hexdigest()
+        bad_content = b"bit-rotted pack content"
+        # The corrupt pack carries the hash of what it SHOULD contain.
+        bad_sha = hashlib.sha256(b"original pack content").hexdigest()
+
+        volume_info = {
+            "label": "ROT_VOL",
+            "sha256_manifest": [good_sha, bad_sha],
+        }
+        with open(disc_path / "volume_info.json", "w") as f:
+            json.dump(volume_info, f)
+
+        for sha, content in ((good_sha, good_content), (bad_sha, bad_content)):
+            subdir = disc_path / "data" / sha[:2]
+            subdir.mkdir(parents=True, exist_ok=True)
+            (subdir / sha).write_bytes(content)
+
+        # Name-only mode: both filenames are present → passes.
+        name_only = validate_disc(disc_path)
+        assert name_only.ok
+        assert name_only.corrupt_on_disc == []
+
+        # Content mode: the rotted pack is flagged.
+        result = validate_disc(disc_path, content=True)
+        assert result.corrupt_on_disc == [bad_sha]
+        assert good_sha not in result.corrupt_on_disc
         assert not result.ok
 

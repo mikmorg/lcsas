@@ -29,6 +29,28 @@ class MissingPacksError(Exception):
         self.missing = missing
 
 
+class CorruptPacksError(Exception):
+    """Raised when a staged pack's bytes do not hash to its filename SHA-256.
+
+    This means the mirror copy itself is corrupt (bit-rot, truncated
+    replication, filesystem bug) — burning would replicate the corruption
+    to every disc at every location, discoverable only at restore time.
+    """
+
+    def __init__(self, corrupt: list[tuple[str, str]]) -> None:  # (expected, actual)
+        shorts = ", ".join(expected[:12] for expected, _actual in corrupt[:5])
+        super().__init__(
+            f"{len(corrupt)} pack(s) on the mirror are CORRUPT (content does "
+            f"not match filename hash): {shorts}"
+            + ("..." if len(corrupt) > 5 else "")
+            + ". The mirror copy is the only hot copy — do NOT delete it. "
+            "Run 'rustic check --read-data' on the repo and re-replicate "
+            "the mirror, then re-run 'lcsas stage'. "
+            "Nothing was written to the catalog."
+        )
+        self.corrupt = corrupt
+
+
 class MirrorUnavailableError(MissingPacksError):
     """A repo's mirror (or its ``data/`` dir) is absent while packs from it
     were selected for staging.
@@ -109,6 +131,11 @@ class StagingBuilder:
         window that exists in a two-pass approach where a pack could be
         deleted between verification and staging.
 
+        Every staged pack is fully read and its SHA-256 verified against
+        the catalog hash (the filename).  The dst is a hardlink to the
+        mirror inode, so this verifies the actual mirror bytes — the only
+        hot copy — before they are replicated to every disc (BURN-02).
+
         Args:
             packs: List of Pack objects to stage.
             mirror_data_dir: Path to the mirror's data/ directory.
@@ -117,13 +144,17 @@ class StagingBuilder:
             Number of packs successfully staged.
 
         Raises:
+            CorruptPacksError: If any pack's content does not hash to its
+                catalog SHA-256 (the mirror copy is corrupt).
             MissingPacksError: If any pack cannot be found, is a symlink, or
-                its destination has zero size after staging.
+                cannot be hardlinked/copied into staging.
         """
         ensure_dir(self._data_dir)
 
         missing: list[str] = []
+        corrupt: list[tuple[str, str]] = []  # (expected, actual)
         staged = 0
+        hashed_bytes = 0
         total = len(packs)
 
         for i, pack in enumerate(packs, 1):
@@ -151,34 +182,26 @@ class StagingBuilder:
                 # (guards against partial stages from prior failed runs)
                 dst_size = dst.stat().st_size if dst.exists() else 0
                 if dst_size == pack.size_bytes:
-                    # For small files, verify hash to catch corruption from bit-flips
-                    _hash_threshold = 500_000_000  # 500 MB
-                    if dst_size <= _hash_threshold:
-                        dst_hash = sha256_file(dst)
-                        if dst_hash == pack.sha256:
-                            # File is valid
-                            staged += 1
-                            _logger.debug(
-                                "Pack %s already staged, skipping (%d/%d)", short, i, total
-                            )
-                            continue
-                        else:
-                            # Hash mismatch; re-stage
-                            _logger.warning(
-                                "Pack %s hash mismatch (expected %s, got %s). "
-                                "Re-staging from source.",
-                                short, pack.sha256, dst_hash,
-                            )
-                            dst.unlink(missing_ok=True)
-                    else:
-                        # Large file; skip expensive hash check, just verify size
+                    # Content check regardless of size — bit-flips don't
+                    # change st_size and we are about to burn these bytes
+                    # to every copy at every location (BURN-02).
+                    dst_hash = sha256_file(dst)
+                    if dst_hash == pack.sha256:
+                        # File is valid
                         staged += 1
+                        hashed_bytes += dst_size
                         _logger.debug(
-                            "Pack %s already staged (large file, size verified), "
-                            "skipping (%d/%d)",
-                            short, i, total,
+                            "Pack %s already staged, skipping (%d/%d)", short, i, total
                         )
                         continue
+                    # Hash mismatch; re-stage from source (if the source is
+                    # corrupt too, the post-link check below catches it).
+                    _logger.warning(
+                        "Pack %s hash mismatch (expected %s, got %s). "
+                        "Re-staging from source.",
+                        short, pack.sha256, dst_hash,
+                    )
+                    dst.unlink(missing_ok=True)
                 else:
                     _logger.warning(
                         "Pack %s partially staged (expected %d bytes, got %d). "
@@ -198,21 +221,30 @@ class StagingBuilder:
                 missing.append(short)
                 continue
 
-            # Verify the destination is non-empty (guards against silent failures).
-            dst_size = dst.stat().st_size if dst.exists() else 0
-            if dst_size == 0:
+            # Verify content: dst is a hardlink to the mirror inode, so this
+            # reads and authenticates the actual mirror bytes.
+            dst_hash = sha256_file(dst)
+            if dst_hash != pack.sha256:
                 _logger.error(
-                    "Pack %s staged to %s but file is empty (expected %d bytes)",
-                    short, dst, pack.size_bytes,
+                    "Pack %s is CORRUPT on the mirror: expected SHA-256 %s, "
+                    "content hashes to %s",
+                    short, pack.sha256, dst_hash,
                 )
-                missing.append(short)
+                corrupt.append((pack.sha256, dst_hash))
                 dst.unlink(missing_ok=True)
                 continue
+            hashed_bytes += dst.stat().st_size
 
             staged += 1
             if i % 100 == 0 or i == total:
-                _logger.info("Staging packs: %d/%d complete", i, total)
+                _logger.info(
+                    "Staging packs: %d/%d complete (%.1f MB hashed)",
+                    i, total, hashed_bytes / 1e6,
+                )
 
+        if corrupt:
+            # Corruption is the scarier message — raise it before missing.
+            raise CorruptPacksError(corrupt)
         if missing:
             raise MissingPacksError(missing)
 

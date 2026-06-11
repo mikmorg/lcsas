@@ -2,19 +2,26 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.db.models import Pack, Volume
 from lcsas.staging.builder import (
+    CorruptPacksError,
     MirrorUnavailableError,
     MissingPacksError,
     StagingBuilder,
 )
 from lcsas.staging.metadata import HolographicInjector
+
+
+def _sha(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
 
 
 class TestStagingBuilder:
@@ -33,34 +40,41 @@ class TestStagingBuilder:
 
     def test_stage_packs_flat_layout(self, tmp_path):
         # Create mirror with flat layout
+        content_a, content_b = b"content_a", b"content_b"
+        sha_a, sha_b = _sha(content_a), _sha(content_b)
         mirror_data = tmp_path / "mirror" / "data"
         mirror_data.mkdir(parents=True)
-        (mirror_data / "aaa").write_bytes(b"content_a")
-        (mirror_data / "bbb").write_bytes(b"content_b")
+        (mirror_data / sha_a).write_bytes(content_a)
+        (mirror_data / sha_b).write_bytes(content_b)
 
         staging_root = tmp_path / "staging"
         builder = StagingBuilder(staging_root)
         builder.initialize()
 
-        packs = [self._make_pack("aaa"), self._make_pack("bbb")]
+        packs = [
+            self._make_pack(sha_a, size=len(content_a)),
+            self._make_pack(sha_b, size=len(content_b)),
+        ]
         staged = builder.stage_packs(packs, mirror_data)
 
         assert staged == 2
         # Two-level layout on staging: data/<prefix>/<hash>
-        assert (staging_root / "data" / "aa" / "aaa").exists()
-        assert (staging_root / "data" / "bb" / "bbb").exists()
+        assert (staging_root / "data" / sha_a[:2] / sha_a).exists()
+        assert (staging_root / "data" / sha_b[:2] / sha_b).exists()
 
     def test_stage_packs_two_level_layout(self, tmp_path):
         # Create mirror with two-level layout
+        content = b"data"
+        sha = _sha(content)
         mirror_data = tmp_path / "mirror" / "data"
-        (mirror_data / "aa").mkdir(parents=True)
-        (mirror_data / "aa" / "aabbcc").write_bytes(b"data")
+        (mirror_data / sha[:2]).mkdir(parents=True)
+        (mirror_data / sha[:2] / sha).write_bytes(content)
 
         staging_root = tmp_path / "staging"
         builder = StagingBuilder(staging_root)
         builder.initialize()
 
-        packs = [self._make_pack("aabbcc")]
+        packs = [self._make_pack(sha, size=len(content))]
         staged = builder.stage_packs(packs, mirror_data)
         assert staged == 1
 
@@ -456,8 +470,8 @@ class TestPartialStagedPack:
         # Create mirror with full pack
         mirror_data = tmp_path / "mirror" / "data"
         mirror_data.mkdir(parents=True)
-        sha = "a" * 64
         full_content = b"x" * 1000
+        sha = _sha(full_content)
         (mirror_data / sha).write_bytes(full_content)
 
         # Create staging with partial file (half size)
@@ -479,3 +493,142 @@ class TestPartialStagedPack:
         # File should now be full size
         assert partial_path.stat().st_size == 1000
         assert partial_path.read_bytes() == full_content
+
+
+class TestStagePackContentVerification:
+    """BURN-02: every staged pack's bytes must hash to its catalog SHA-256.
+
+    The dst is a hardlink to the mirror inode, so the staging-time hash
+    verifies the actual mirror bytes — the only hot copy — before they
+    are replicated to every disc at every location.
+    """
+
+    def _make_pack(self, sha256: str, size: int) -> Pack:
+        return Pack(
+            pack_id=1, sha256=sha256, size_bytes=size,
+            repo_id="test", is_pruned=False, created_at="",
+        )
+
+    def test_stage_rejects_pack_with_corrupt_content(self, tmp_path):
+        """A mirror pack whose bytes don't hash to its filename aborts staging."""
+        good_content = b"the bytes rustic originally wrote"
+        sha = _sha(good_content)
+        rotted = b"the bytes after silent NAS bit-rot!"  # same name, wrong bytes
+
+        mirror_data = tmp_path / "mirror" / "data"
+        mirror_data.mkdir(parents=True)
+        (mirror_data / sha).write_bytes(rotted)
+
+        staging_root = tmp_path / "staging"
+        builder = StagingBuilder(staging_root)
+        builder.initialize()
+
+        pack = self._make_pack(sha, size=len(rotted))
+        with pytest.raises(CorruptPacksError, match="CORRUPT") as excinfo:
+            builder.stage_packs([pack], mirror_data)
+
+        assert excinfo.value.corrupt == [(sha, _sha(rotted))]
+        # The corrupt file must not linger in the staging tree.
+        assert not (staging_root / "data" / sha[:2] / sha).exists()
+
+    def test_fresh_hardlink_is_hash_verified(self, tmp_path):
+        """Fresh stage of a corrupt source raises; good siblings still staged."""
+        good = b"valid pack content"
+        good_sha = _sha(good)
+        bad = b"corrupt pack content"
+        bad_sha = _sha(b"what the corrupt pack SHOULD contain")
+
+        mirror_data = tmp_path / "mirror" / "data"
+        mirror_data.mkdir(parents=True)
+        (mirror_data / good_sha).write_bytes(good)
+        (mirror_data / bad_sha).write_bytes(bad)
+
+        builder = StagingBuilder(tmp_path / "staging")
+        builder.initialize()
+
+        packs = [
+            self._make_pack(good_sha, size=len(good)),
+            self._make_pack(bad_sha, size=len(bad)),
+        ]
+        with pytest.raises(CorruptPacksError, match=bad_sha[:12]):
+            builder.stage_packs(packs, mirror_data)
+
+    def test_preexisting_large_staged_pack_is_hash_verified(self, tmp_path, monkeypatch):
+        """Pre-existing dst is hash-checked at ANY size (the 500 MB skip is gone).
+
+        Uses a sparse 600 MB file (above the deleted threshold) and a mock
+        on ``sha256_file`` to pin that the content check actually runs.
+        """
+        size = 600_000_000  # > the removed 500_000_000 threshold
+        sha = "c" * 64
+
+        mirror_data = tmp_path / "mirror" / "data"
+        mirror_data.mkdir(parents=True)
+        with open(mirror_data / sha, "wb") as f:
+            f.truncate(size)  # sparse — no real disk usage
+
+        staging_root = tmp_path / "staging"
+        builder = StagingBuilder(staging_root)
+        builder.initialize()
+
+        dst = staging_root / "data" / sha[:2] / sha
+        dst.parent.mkdir(parents=True)
+        with open(dst, "wb") as f:
+            f.truncate(size)  # pre-existing dst with the correct size
+
+        mock_hash = MagicMock(return_value=sha)
+        monkeypatch.setattr("lcsas.staging.builder.sha256_file", mock_hash)
+
+        pack = self._make_pack(sha, size=size)
+        staged = builder.stage_packs([pack], mirror_data)
+
+        assert staged == 1
+        mock_hash.assert_called_once()
+        assert mock_hash.call_args[0][0] == dst
+
+    def test_happy_path_hashes_each_pack_exactly_once(self, tmp_path, monkeypatch):
+        """Acceptance: every staged pack is read+hashed exactly once."""
+        from lcsas.utils.hashing import sha256_file as real_sha256_file
+
+        contents = [b"pack one content", b"pack two content", b"pack three"]
+        mirror_data = tmp_path / "mirror" / "data"
+        mirror_data.mkdir(parents=True)
+        packs = []
+        for c in contents:
+            sha = _sha(c)
+            (mirror_data / sha).write_bytes(c)
+            packs.append(self._make_pack(sha, size=len(c)))
+
+        builder = StagingBuilder(tmp_path / "staging")
+        builder.initialize()
+
+        mock_hash = MagicMock(side_effect=real_sha256_file)
+        monkeypatch.setattr("lcsas.staging.builder.sha256_file", mock_hash)
+
+        staged = builder.stage_packs(packs, mirror_data)
+
+        assert staged == len(contents)
+        assert mock_hash.call_count == len(contents)
+
+    def test_corrupt_preexisting_dst_restaged_from_good_source(self, tmp_path):
+        """A bit-rotted leftover in staging is re-staged from a good mirror copy."""
+        content = b"y" * 1000
+        sha = _sha(content)
+
+        mirror_data = tmp_path / "mirror" / "data"
+        mirror_data.mkdir(parents=True)
+        (mirror_data / sha).write_bytes(content)
+
+        staging_root = tmp_path / "staging"
+        builder = StagingBuilder(staging_root)
+        builder.initialize()
+
+        dst = staging_root / "data" / sha[:2] / sha
+        dst.parent.mkdir(parents=True)
+        dst.write_bytes(b"z" * 1000)  # right size, wrong bytes
+
+        pack = self._make_pack(sha, size=1000)
+        staged = builder.stage_packs([pack], mirror_data)
+
+        assert staged == 1
+        assert dst.read_bytes() == content

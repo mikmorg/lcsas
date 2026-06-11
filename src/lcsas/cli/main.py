@@ -133,7 +133,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Show burn plan without making changes.")
 
     # --- stage ---
-    stage_p = subparsers.add_parser("stage", help="Stage ISOs for deferred burning.")
+    stage_p = subparsers.add_parser(
+        "stage",
+        help="Stage ISOs for deferred burning.",
+        epilog=(
+            "Staging reads every selected pack in full and verifies its "
+            "SHA-256 against the catalog before mastering (corrupt mirror "
+            "packs abort the stage). Expect one extra full read of all "
+            "staged data, e.g. ~14 minutes for 25 GB at 30 MB/s."
+        ),
+    )
     stage_p.add_argument("--media", type=str, default=None,
                          help="Media type (BD25, MDISC100, TEST_TINY, etc.).")
     stage_p.add_argument("--for-location", type=str, default=None,
@@ -225,6 +234,14 @@ def build_parser() -> argparse.ArgumentParser:
         "disc",
         type=Path,
         help="Path to a mounted LCSAS disc (must contain catalog.db and data/).",
+    )
+    cat_validate_p.add_argument(
+        "--content",
+        action="store_true",
+        default=False,
+        help="Also read every pack file on the disc and verify its SHA-256 "
+             "against the filename hash (detects bit-rot; reads the full "
+             "data payload of the disc).",
     )
 
     cat_rebuild_p = cat_sub.add_parser(
@@ -1441,7 +1458,7 @@ def cmd_catalog_validate(args: argparse.Namespace) -> int:
 
     logger.info("Validating disc at: %s", disc_path)
     try:
-        result = validate_disc(disc_path)
+        result = validate_disc(disc_path, content=getattr(args, "content", False))
     except (FileNotFoundError, ValueError) as exc:
         logger.error("%s", exc)
         return 1
@@ -1466,14 +1483,24 @@ def cmd_catalog_validate(args: argparse.Namespace) -> int:
         for sha in result.orphaned_on_disc:
             logger.warning("  ORPHAN : %s", sha)
 
+    if result.corrupt_on_disc:
+        logger.error(
+            "%d pack file(s) on disc are CORRUPT "
+            "(content does not match filename hash):",
+            len(result.corrupt_on_disc),
+        )
+        for sha in result.corrupt_on_disc:
+            logger.error("  CORRUPT: %s", sha)
+
     if result.ok:
         logger.info("Catalog validation PASSED — disc and catalog are in sync.")
         return 0
     else:
         logger.error(
-            "Catalog validation FAILED — %d missing, %d orphaned.",
+            "Catalog validation FAILED — %d missing, %d orphaned, %d corrupt.",
             len(result.missing_from_disc),
             len(result.orphaned_on_disc),
+            len(result.corrupt_on_disc),
         )
         return 1
 

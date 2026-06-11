@@ -8,7 +8,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lcsas.staging.builder import MissingPacksError, StagingBuilder
+from lcsas.staging.builder import (
+    CorruptPacksError,
+    MissingPacksError,
+    StagingBuilder,
+)
 from lcsas.utils.fs import hardlink_or_copy
 
 # ---------------------------------------------------------------------------
@@ -100,7 +104,7 @@ class TestStagingBuilderFilesystemFailures:
         assert sha[:12] in exc_info.value.missing
 
     def test_empty_staged_file_detected(self, tmp_path):
-        """A staged file with zero bytes is treated as missing."""
+        """A staged file with zero bytes fails the content hash (BURN-02)."""
         sha = "d" * 64
         data_dir = self._make_pack(tmp_path, sha)
         pack = self._make_db_pack(sha)
@@ -115,11 +119,11 @@ class TestStagingBuilderFilesystemFailures:
 
         with (
             patch("lcsas.utils.fs.os.link", side_effect=_empty_link),
-            pytest.raises(MissingPacksError) as exc_info,
+            pytest.raises(CorruptPacksError) as exc_info,
         ):
             builder.stage_packs([pack], data_dir)
 
-        assert sha[:12] in exc_info.value.missing
+        assert sha in [expected for expected, _actual in exc_info.value.corrupt]
 
     def test_multiple_packs_all_failures_collected(self, tmp_path):
         """All missing packs are reported, not just the first failure."""

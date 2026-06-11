@@ -13,8 +13,8 @@ Includes:
 
 from __future__ import annotations
 
+import hashlib
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -93,6 +93,17 @@ def _make_config(tmp_path: Path, *, num_repos: int = 2,
     )
 
 
+def _pack_content(i: int, size: int) -> tuple[str, bytes]:
+    """Deterministic pack bytes of exactly *size* and their real SHA-256.
+
+    Staging hash-verifies pack content against the catalog SHA-256
+    (BURN-02), so seeded mirror files must really hash to their names.
+    """
+    seed = f"{i:08x}".encode()
+    content = (seed * (size // len(seed) + 1))[:size]
+    return hashlib.sha256(content).hexdigest(), content
+
+
 def _seed_packs(conn, config: LCSASConfig, num_packs: int = 10,
                 pack_size: int = 50) -> list:
     """Register packs in DB and create matching files in mirror data dirs."""
@@ -107,7 +118,7 @@ def _seed_packs(conn, config: LCSASConfig, num_packs: int = 10,
     packs = []
     for i in range(1, num_packs + 1):
         repo_name = repo_names[(i - 1) % len(repo_names)]
-        sha = f"{i:064x}"
+        sha, content = _pack_content(i, pack_size)
         p = register_pack(conn, sha256=sha, size_bytes=pack_size,
                            repo_id=repo_name)
         packs.append(p)
@@ -115,7 +126,7 @@ def _seed_packs(conn, config: LCSASConfig, num_packs: int = 10,
         # Create pack file in mirror
         data_dir = config.repositories[repo_name].mirror_path / "data"
         pack_file = data_dir / sha
-        pack_file.write_bytes(os.urandom(pack_size))
+        pack_file.write_bytes(content)
 
     return packs
 
@@ -339,11 +350,11 @@ class TestStageForLocation:
 
         # Now register 2 more packs (simulating next month)
         for i in range(6, 8):
-            sha = f"{i:064x}"
+            sha, content = _pack_content(i, 50)
             repo_name = list(config.repositories.keys())[0]
             register_pack(conn, sha256=sha, size_bytes=50, repo_id=repo_name)
             data_dir = config.repositories[repo_name].mirror_path / "data"
-            (data_dir / sha).write_bytes(os.urandom(50))
+            (data_dir / sha).write_bytes(content)
 
         # Stage for Offsite_Safe should pick up only the 2 new unarchived packs
         result2 = orch.stage(for_location="Offsite_Safe")
@@ -599,11 +610,11 @@ class TestMultiVolumePipeline:
 
         # Add new packs
         for i in range(20, 25):
-            sha = f"{i:064x}"
+            sha, content = _pack_content(i, 50)
             repo_name = list(config.repositories.keys())[0]
             register_pack(conn, sha256=sha, size_bytes=50, repo_id=repo_name)
             data_dir = config.repositories[repo_name].mirror_path / "data"
-            (data_dir / sha).write_bytes(os.urandom(50))
+            (data_dir / sha).write_bytes(content)
 
         # Session 2: stage only new packs
         r2 = orch.stage()

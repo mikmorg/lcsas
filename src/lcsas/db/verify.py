@@ -7,6 +7,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from lcsas.utils.hashing import sha256_file
+
 _logger = logging.getLogger(__name__)
 
 
@@ -21,6 +23,8 @@ class CatalogValidationResult:
         disc_pack_count: Number of pack files found on disc.
         missing_from_disc: Pack SHA-256 hashes listed in the catalog but absent on disc.
         orphaned_on_disc: Pack SHA-256 hashes found on disc but absent from the catalog.
+        corrupt_on_disc: Pack SHA-256 hashes whose on-disc content does not
+            hash to the filename (content mode only).
         ok: True if the disc and catalog are perfectly in sync.
     """
 
@@ -30,19 +34,24 @@ class CatalogValidationResult:
     disc_pack_count: int = 0
     missing_from_disc: list[str] = field(default_factory=list)
     orphaned_on_disc: list[str] = field(default_factory=list)
+    corrupt_on_disc: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
-        return not self.missing_from_disc and not self.orphaned_on_disc
+        return (
+            not self.missing_from_disc
+            and not self.orphaned_on_disc
+            and not self.corrupt_on_disc
+        )
 
 
-def _collect_disc_packs(data_dir: Path) -> set[str]:
-    """Walk the data/ directory and collect all pack SHA-256 hashes.
+def _collect_disc_pack_paths(data_dir: Path) -> dict[str, Path]:
+    """Walk the data/ directory and map pack SHA-256 hashes to file paths.
 
     Handles both flat (data/HASH) and two-level (data/ab/abcdef...) layouts.
     Files that do not look like SHA-256 hashes (64 hex chars) are skipped.
     """
-    found: set[str] = set()
+    found: dict[str, Path] = {}
     if not data_dir.is_dir():
         return found
 
@@ -53,14 +62,19 @@ def _collect_disc_packs(data_dir: Path) -> set[str]:
         # A valid SHA-256 is 64 hex characters (case-insensitive).
         # Normalize to lowercase for consistency.
         if len(name) == 64 and all(c in "0123456789abcdefABCDEF" for c in name):
-            found.add(name.lower())
+            found[name.lower()] = entry
         else:
             _logger.debug("Skipping non-pack file on disc: %s", entry)
 
     return found
 
 
-def validate_disc(disc_path: Path) -> CatalogValidationResult:
+def _collect_disc_packs(data_dir: Path) -> set[str]:
+    """Walk the data/ directory and collect all pack SHA-256 hashes."""
+    return set(_collect_disc_pack_paths(data_dir))
+
+
+def validate_disc(disc_path: Path, *, content: bool = False) -> CatalogValidationResult:
     """Cross-check the catalog embedded on *disc_path* against its data files.
 
     Opens ``catalog.db`` from the root of *disc_path*, queries the
@@ -70,6 +84,10 @@ def validate_disc(disc_path: Path) -> CatalogValidationResult:
 
     Args:
         disc_path: Path to a mounted LCSAS disc (e.g. ``/mnt/disc``).
+        content: When True, additionally read every pack file on disc and
+            verify its SHA-256 against the filename hash, reporting
+            mismatches in ``corrupt_on_disc``.  Reads the full data
+            payload of the disc (BURN-02 spot-check).
 
     Returns:
         A :class:`CatalogValidationResult` describing any discrepancies.
@@ -96,8 +114,29 @@ def validate_disc(disc_path: Path) -> CatalogValidationResult:
 
     # --- Walk disc data/ directory first (ground truth) ---
     _logger.info("Scanning disc data directory: %s", data_dir)
-    disc_hashes = _collect_disc_packs(data_dir)
+    disc_pack_paths = _collect_disc_pack_paths(data_dir)
+    disc_hashes = set(disc_pack_paths)
     result.disc_pack_count = len(disc_hashes)
+
+    if content:
+        # Read every pack on disc and verify its content hashes to its name.
+        _logger.info(
+            "Content verification: hashing %d pack file(s) on disc...",
+            len(disc_pack_paths),
+        )
+        for n, (expected, path) in enumerate(sorted(disc_pack_paths.items()), 1):
+            actual = sha256_file(path)
+            if actual != expected:
+                _logger.error(
+                    "Pack %s is CORRUPT on disc: content hashes to %s",
+                    expected, actual,
+                )
+                result.corrupt_on_disc.append(expected)
+            if n % 100 == 0 or n == len(disc_pack_paths):
+                _logger.info(
+                    "Content verification: %d/%d pack(s) hashed",
+                    n, len(disc_pack_paths),
+                )
 
     # --- Read catalog ---
     conn = sqlite3.connect(f"file:{catalog_db}?mode=ro", uri=True, timeout=10)

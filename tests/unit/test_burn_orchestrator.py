@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -20,6 +21,7 @@ from lcsas.db.schema import create_all
 from lcsas.db.volume_packs import get_pack_ids_for_volume
 from lcsas.db.volumes import get_volume_by_id, list_volumes
 from lcsas.staging.builder import (
+    CorruptPacksError,
     MirrorUnavailableError,
     MissingPacksError,
     StagingBuilder,
@@ -28,6 +30,19 @@ from lcsas.staging.builder import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _pack_bytes(i: int, size: int) -> bytes:
+    """Deterministic, per-index-distinct content of exactly *size* bytes.
+
+    Staging hash-verifies pack content against the catalog SHA-256
+    (BURN-02), so seeded mirror files must really hash to their names.
+    """
+    seed = f"{i:08x}".encode()
+    return (seed * (size // len(seed) + 1))[:size]
+
+
+def _sha(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
 
 def _make_config(tmp_path: Path) -> LCSASConfig:
     """Build a minimal config for testing."""
@@ -67,15 +82,17 @@ def _seed_db_and_mirror(conn, config: LCSASConfig, num_packs: int = 5):
     register_repo(conn, "family", "Family Photos", str(config.repositories["family"].mirror_path))
     data_dir = config.repositories["family"].mirror_path / "data"
 
-    # Create packs and mirror files
+    # Create packs and mirror files (content must hash to the registered
+    # sha — staging verifies it, BURN-02)
     packs = []
     for i in range(1, num_packs + 1):
-        sha = f"{i:064x}"
+        content = _pack_bytes(i, 100 * i)
+        sha = _sha(content)
         p = register_pack(conn, sha256=sha, size_bytes=100 * i, repo_id="family")
         packs.append(p)
         # Put a file in the mirror's data dir
         pack_file = data_dir / sha
-        pack_file.write_bytes(b"d" * (100 * i))
+        pack_file.write_bytes(content)
 
     # Also create metadata dirs for holographic injection
     mirror_path = config.repositories["family"].mirror_path
@@ -175,11 +192,12 @@ class TestPrepare:
         # Create packs in both repos
         mirror_path = config.repositories["family"].mirror_path
         data_dir = mirror_path / "data"
-        sha_f = "f" * 64
-        sha_w = "a" * 64
+        content_f = b"x" * 100
+        sha_f = _sha(content_f)
+        sha_w = "a" * 64  # never staged (filtered out), no file needed
         register_pack(conn, sha256=sha_f, size_bytes=100, repo_id="family")
         register_pack(conn, sha256=sha_w, size_bytes=200, repo_id="work")
-        (data_dir / sha_f).write_bytes(b"x" * 100)
+        (data_dir / sha_f).write_bytes(content_f)
         # Minimum holographic metadata for the staged repo (BURN-01:
         # repos with packs on the volume must be self-describing).
         (mirror_path / "keys").mkdir(exist_ok=True)
@@ -208,9 +226,10 @@ class TestPrepare:
         # Add more packs
         data_dir = orch_env["config"].repositories["family"].mirror_path / "data"
         for i in range(6, 9):
-            sha = f"{i:064x}"
+            content = _pack_bytes(i, 50)
+            sha = _sha(content)
             register_pack(conn, sha256=sha, size_bytes=50, repo_id="family")
-            (data_dir / sha).write_bytes(b"d" * 50)
+            (data_dir / sha).write_bytes(content)
 
         m2 = orch.prepare()
         # Parse seq numbers from labels
@@ -663,9 +682,10 @@ def _make_two_repo_env(tmp_path):
 
     packs = []
     for i, repo in enumerate(["family", "work", "family", "work"], start=1):
-        sha = f"{i:064x}"
+        content = _pack_bytes(i, 100)
+        sha = _sha(content)
         packs.append(register_pack(conn, sha256=sha, size_bytes=100, repo_id=repo))
-        (mirror / repo / "data" / sha).write_bytes(b"d" * 100)
+        (mirror / repo / "data" / sha).write_bytes(content)
 
     orch = BurnOrchestrator(config, conn, MagicMock(), MagicMock())
     return orch, config, conn, packs
@@ -716,6 +736,36 @@ class TestStageFailsLoudOnMissingMirror:
         with pytest.raises(MissingPacksError):
             orch.stage()
 
+        assert list_volumes(conn) == []
+        assert len(get_unarchived_packs(conn)) == len(packs)
+
+
+# =========================================================================
+# BURN-02: a corrupt mirror pack must abort staging before any catalog write
+# =========================================================================
+
+
+class TestStageCorruptPackCommitsNothing:
+    """BURN-02: bit-rot on the mirror fails loud; the catalog stays untouched."""
+
+    def test_stage_corrupt_pack_commits_nothing(self, tmp_path):
+        orch, config, conn, packs = _make_two_repo_env(tmp_path)
+
+        # Flip one byte of one seeded pack's mirror file (size unchanged —
+        # only the content hash can catch this).
+        victim = packs[0]
+        victim_path = (
+            config.repositories[victim.repo_id].mirror_path
+            / "data" / victim.sha256
+        )
+        rotted = bytearray(victim_path.read_bytes())
+        rotted[0] ^= 0xFF
+        victim_path.write_bytes(bytes(rotted))
+
+        with pytest.raises(CorruptPacksError, match="CORRUPT"):
+            orch.stage()
+
+        # Nothing committed: no volume row, every pack still unarchived.
         assert list_volumes(conn) == []
         assert len(get_unarchived_packs(conn)) == len(packs)
 
