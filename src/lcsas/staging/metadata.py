@@ -67,7 +67,7 @@ def _share_recovery_lines(config: LCSASConfig) -> list[str]:
         "",
         "  STEP 2: run the normal restore and use that password:",
         "",
-        "      ./restore.sh --target ~/restored",
+        "      sh /mnt/restore.sh --target ~/restored",
         "",
         "  When restore.sh shows the  Password:  prompt, type the password",
         "  from STEP 1 (or pass the saved file with --key repo.key).",
@@ -367,7 +367,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
                     STEP 2: run the normal restore and enter that password
                       at the  Password:  prompt:
 
-                        ./restore.sh --target ~/restored
+                        sh /mnt/restore.sh --target ~/restored
 
                   Fewer than {k} cards reveal nothing.  Details are in
                   KEY_INFO.txt and docs/KEY_SHARE_FORMAT.md.

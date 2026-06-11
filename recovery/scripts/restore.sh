@@ -257,6 +257,8 @@ fi
 
 RECOVERY=""
 TARGET=""
+TARGET_FLAG=""
+TARGET_FROM_POS=0
 SNAP="latest"
 
 # Flag parsing: strip named flags before positional-arg parsing so
@@ -264,11 +266,14 @@ SNAP="latest"
 # `sh restore.sh --help` without knowing about LCSAS_* env vars.
 # The `*) break ;;` stops the loop at the first non-flag argument so
 # the existing positional-arg if/elif block below still works unchanged.
+# Unknown `-*' flags are REJECTED loudly (exit 2): the burned-disc heir
+# docs reference these flags verbatim, and a silently-misparsed flag
+# used to become an uninterpretable snapshot-not-found failure [KEY-02].
 while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help)
             cat <<EOF
-usage: $0 [--repo NAME] [--version] [RECOVERY_ROOT] TARGET_DIR [SNAPSHOT_ID|latest]
+usage: $0 [--repo NAME] [--target DIR] [--key FILE] [--version] [RECOVERY_ROOT] [TARGET_DIR] [SNAPSHOT_ID|latest]
 
 QUICK START:
   1. Insert ANY data disc into your drive.
@@ -284,6 +289,12 @@ QUICK START:
 FLAGS AND ENVIRONMENT VARIABLES:
   --repo NAME             Repository / tenant name (same as LCSAS_REPO=NAME).
                           Skips the multi-tenant selection prompt.
+  --target DIR            Where to write restored files.  Equivalent to
+                          the positional TARGET_DIR; give one or the
+                          other, not both.
+  --key FILE              Path to a file whose contents are the password
+                          (same as LCSAS_PWFILE=FILE).  Skips the
+                          Password: prompt.
   --version               Print the build commit SHA and date, then exit.
   LCSAS_PASSWORD          Encryption password (skips the Password: prompt).
                           Mutually exclusive with LCSAS_PWFILE.
@@ -329,10 +340,29 @@ EOF
         --repo)
             LCSAS_REPO="${2:?--repo requires a NAME argument}"
             shift 2 ;;
+        --target)
+            TARGET_FLAG="${2:?--target requires a DIR argument}"
+            shift 2 ;;
+        --key)
+            LCSAS_PWFILE="${2:?--key requires a FILE argument}"
+            # Validate NOW -- before any password/disc prompts -- so a
+            # typo'd path fails in one obvious line, not mid-restore.
+            if [ ! -f "$LCSAS_PWFILE" ] || [ ! -r "$LCSAS_PWFILE" ]; then
+                printf "restore.sh: --key: cannot read '%s'\n" \
+                       "$LCSAS_PWFILE" >&2
+                exit 2
+            fi
+            export LCSAS_PWFILE
+            shift 2 ;;
         --version)
             printf 'lcsas-restore.sh %s (built %s)\n' \
                 "$LCSAS_RESTORE_BUILD_SHA" "$LCSAS_RESTORE_BUILD_DATE"
             exit 0 ;;
+        --) shift; break ;;
+        -*)
+            printf "restore.sh: unknown flag '%s'\n" "$1" >&2
+            printf 'valid flags: --repo NAME, --target DIR, --key FILE, --version, --help\n' >&2
+            exit 2 ;;
         *) break ;;
     esac
 done
@@ -341,25 +371,46 @@ done
 if [ $# -ge 2 ] && [ -d "$1/bin" -o -d "$1/src" ] 2>/dev/null; then
     RECOVERY="$1"
     TARGET="$2"
+    TARGET_FROM_POS=1
     SNAP="${3:-latest}"
+elif [ $# -ge 1 ] && [ -n "$TARGET_FLAG" ] \
+     && [ -d "$1/bin" -o -d "$1/src" ] 2>/dev/null; then
+    # --target DIR already supplied the target; the sole positional is
+    # the recovery root (optionally followed by a snapshot id).
+    RECOVERY="$1"
+    SNAP="${2:-latest}"
 elif [ $# -ge 1 ] && [ -n "$AUTO_RECOVERY" ]; then
     RECOVERY="$AUTO_RECOVERY"
     TARGET="$1"
+    TARGET_FROM_POS=1
     SNAP="${2:-latest}"
 elif [ -n "$AUTO_RECOVERY" ]; then
     RECOVERY="$AUTO_RECOVERY"
     TARGET="${TARGET:-/tmp/restored}"
 else
     cat >&2 <<EOF
-usage: $0 [--repo NAME] [--version] [RECOVERY_ROOT] TARGET_DIR [SNAPSHOT_ID|latest]
+usage: $0 [--repo NAME] [--target DIR] [--key FILE] [--version] [RECOVERY_ROOT] [TARGET_DIR] [SNAPSHOT_ID|latest]
 
   RECOVERY_ROOT (auto-detected when restore.sh is run from inside the
   recovery tree) must contain bin/<arch>/lcsas-restore and/or src/.
-  TARGET_DIR is where to write restored files (default: /tmp/restored).
+  TARGET_DIR is where to write restored files (default: /tmp/restored);
+  --target DIR is the equivalent named form.
 
-  Password is read from stdin, \$LCSAS_PASSWORD env, or \$LCSAS_PWFILE.
+  Password is read from stdin, \$LCSAS_PASSWORD env, \$LCSAS_PWFILE,
+  or --key FILE.
 EOF
     exit 2
+fi
+
+# --target DIR (flag) and a positional TARGET_DIR are mutually
+# exclusive -- with both present we cannot tell which the operator
+# meant, so refuse rather than guess.
+if [ -n "$TARGET_FLAG" ]; then
+    if [ "$TARGET_FROM_POS" = "1" ]; then
+        printf 'restore.sh: give the target once: either --target DIR or a positional TARGET_DIR\n' >&2
+        exit 2
+    fi
+    TARGET="$TARGET_FLAG"
 fi
 
 # ── Target detection (arch + OS) ──────────────────────────────────

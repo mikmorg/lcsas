@@ -149,3 +149,6 @@ misparse; the heir-visible remedy is "use the newest META disc").
 
 2 days: 1.0 restore.sh (flags + help + shell-coverage cases), 0.5 metadata.py
 doc text + renders, 0.5 contract test. No special environment (sh + pytest).
+
+---
+**Implemented:** 2026-06-11. As planned; additionally covered the `--` end-of-flags arm with its own hardening test so shell-coverage covers every new case arm.
