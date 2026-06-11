@@ -72,9 +72,10 @@ class BootableISOBuilder:
             volume_label: ISO 9660 volume label.
             xorriso_binary: Path or name of the ``xorriso`` binary.
             recovery_boot_dir: Alternative to ``alpine_dir``.  Points at
-                a ``recovery/boot/`` tree (Linux LTS + FreeBSD configs +
-                initramfs).  When set, the bootable ISO uses the C89
-                recovery toolchain's boot stack instead of Alpine.
+                an ``experimental/boot/`` tree (Linux LTS + FreeBSD
+                configs + initramfs).  When set, the bootable ISO uses
+                the quarantined C89 recovery toolchain boot stack
+                instead of Alpine.
             recovery_arch: Target architecture for ``recovery_boot_dir``
                 (x86_64, aarch64, or riscv64).
         """
@@ -120,7 +121,7 @@ class BootableISOBuilder:
                 f"Staging directory not found: {self._staging}"
             )
         if self._recovery_boot is not None:
-            # recovery/boot/ layout
+            # experimental/boot/ layout
             arch = self._recovery_arch
             required = [
                 self._recovery_boot / "linux" / f"vmlinuz-{arch}",
@@ -131,7 +132,8 @@ class BootableISOBuilder:
                     raise FileNotFoundError(
                         f"Recovery boot artifact not found: {p}\n"
                         f"Build with: make CC=<cross> bin/{arch}/lcsas-restore "
-                        f"&& bash boot/initramfs/build_initramfs.sh {arch} {p}"
+                        f"&& bash experimental/boot/initramfs/"
+                        f"build_initramfs.sh {arch} {p}"
                     )
             return
 

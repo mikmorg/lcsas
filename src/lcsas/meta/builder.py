@@ -2449,9 +2449,9 @@ to recover the files on the LCSAS archive discs.
        (See recovery/docs/RECOVER.txt for details.)
 
   >>> No working computer at all <<<
-       Boot directly from the disc.  Most computers boot from
-       optical media if you press F12 or F2 at power-on.
-       (See recovery/docs/BOOT.txt for details.)
+       This disc is NOT bootable.  Use any other computer, or
+       boot a current live-Linux USB stick on this one.
+       (See recovery/docs/BOOT.txt for the steps.)
 
 ╚══════════════════════════════════════════════════════════╝
 

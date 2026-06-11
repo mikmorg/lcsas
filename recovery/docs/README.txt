@@ -23,7 +23,8 @@ DOCUMENTATION
   RECOVER.txt         -- macOS / Linux manual recovery walkthrough
   RECOVER_WINDOWS.txt -- Windows recovery walkthrough
   TIERS.txt           -- recovery tier hierarchy + Python-free guarantee
-  BOOT.txt            -- bootable-medium boot stack
+  BOOT.txt            -- no-OS recovery procedure (live-USB; the
+                         discs themselves are NOT bootable)
   FORMAT.txt          -- on-disc data formats (restic + LCSAS)
   CRYPTO.txt          -- cryptographic primitives with test vectors
   ../specs/           -- bundled reference specs (FIPS, RFCs, ECMA)
@@ -42,8 +43,11 @@ SOURCE LAYOUT
   tests/               FIPS/RFC test vectors
   docs/                plain-text documentation
   vendored/            third-party source (Phase 2)
-  boot/                live-boot bootloader/kernel config (Phase 2)
   bin/<arch>/          prebuilt binaries (output of cross-compile)
+
+  (The former boot/ live-boot scaffolding was dropped -- never
+  bootable, never built -- and quarantined to ../experimental/boot/
+  in the source repository.  It does not ship on discs.)
 
 DESIGN DECISIONS
 
@@ -82,6 +86,9 @@ PHASE STATUS
       paths: Linux primary, FreeBSD alternate, shell, direct restore.
     - Initramfs assembly script + manifest (reproducible cpio.gz).
 
-    Runtime validation on real hardware (BD-R burn + boot test) is
-    deferred to the build host environment with cross-compilers,
-    QEMU, and physical media.  See docs/BOOT.txt.
+    The live-boot items above (kernel configs, boot menus, initramfs
+    assembly) were DROPPED in 2026: the boot stack was never built
+    and no LCSAS disc was ever bootable.  The scaffolding is
+    quarantined under ../experimental/boot/ in the source repository;
+    the no-OS recovery path is now a current live-Linux USB stick.
+    See docs/BOOT.txt.

@@ -178,3 +178,6 @@ and the next re-burn guidance (READINESS_CHECKLIST) notes the erratum.
 
 2 days: 1.0 quarantine move + manifest regen + reference sweep, 0.5 BOOT.txt /
 RECOVER.txt / restore-live-usb.md rewrite, 0.5 tests. No special environment.
+
+---
+**Implemented:** 2026-06-11. As planned, plus: UX-03 had not landed, so the builder.py minimal START_HERE heredoc was rerouted here (required by the belt-and-braces test); the new docs-reality gate also caught fictional `restore exec --snapshot/--target` flags in READINESS_CHECKLIST.txt (fixed to positional form) and the META DISC BOOT TEST entry was rescoped to a live-USB drill (shared-with-UX-03 item, landed here first). Manifests regenerated from a pristine index export so local gitignored fuzz-corpus files are not pinned.

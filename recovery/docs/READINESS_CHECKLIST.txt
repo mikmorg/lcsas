@@ -20,13 +20,15 @@ BEFORE RELYING ON THESE DISCS  (one-time, at archive creation)
           sha256sum -c recovery/UPSTREAM.sha256
     HOW OFTEN: once at build time, repeat when recovery/bin/ changes.
 
-[ ] META DISC BOOT TEST — verify the meta disc boots on a spare
-    machine.  Insert the meta disc, set BIOS to boot from optical,
-    confirm the live environment reaches the shell prompt and
-    restore.sh is reachable.
-    Why: an unbooted meta disc is an untested recovery path.  The
-    live-rootfs build can silently break isolinux or grub config.
-    See recovery/docs/BOOT.txt for expected boot flow.
+[ ] NO-OS RECOVERY DRILL — verify the live-USB recovery path on a
+    spare machine.  NOTE: LCSAS discs are NOT bootable.  Write a
+    current live-Linux image (e.g. Ubuntu Desktop LTS) to a USB
+    stick, boot the spare machine from it, mount the meta disc,
+    and confirm restore.sh is reachable:
+      sh /mnt/recovery/scripts/restore.sh --help
+    Why: the no-OS journey is the worst credible failure mode; an
+    undrilled live-USB path is an untested recovery path.
+    See recovery/docs/BOOT.txt for the full procedure.
     HOW OFTEN: once per meta disc build.
 
 [ ] ENCRYPTION KEY REDUNDANCY — confirm the repository password is
@@ -45,7 +47,7 @@ BEFORE RELYING ON THESE DISCS  (one-time, at archive creation)
     count matches the original backup.
     How:
       mkdir -p /tmp/test-restore
-      lcsas restore exec --snapshot latest --target /tmp/test-restore
+      lcsas restore exec latest /tmp/test-restore
       # or using the tier-1 binary directly:
       /mnt/recovery/scripts/restore.sh /tmp/test-restore
     Compare restored file count against the original source:
@@ -66,7 +68,7 @@ ONGOING MAINTENANCE  (monthly, or after each new disc set)
     subset of your data.
     How:
       mkdir -p /scratch/lcsas-test-restore
-      lcsas restore exec --snapshot latest --target /scratch/lcsas-test-restore
+      lcsas restore exec latest /scratch/lcsas-test-restore
     Check the exit code; lcsas-restore exits non-zero on any blob
     integrity failure.  Discard the output when done.
     Why: optical discs degrade.  A monthly smoke-test catches bit
@@ -183,6 +185,7 @@ RELATED DOCUMENTS
                                        Physical-disc burn/restore/ECC drill
   recovery/docs/CRYPTO.txt            Encryption design
   recovery/docs/ENV_VARS.txt          Environment variable reference
-  recovery/docs/BOOT.txt              Meta disc boot procedure
+  recovery/docs/BOOT.txt              No-OS recovery (live-USB; the
+                                       discs are NOT bootable)
   recovery/MANIFEST.sha256            Hash manifest for built artifacts
   recovery/UPSTREAM.sha256            Hash manifest for upstream binaries

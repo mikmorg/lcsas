@@ -21,10 +21,12 @@ make test-recovery-hardening   # this tier only
 | File | Catches |
 |------|---------|
 | `test_agent_prompt.py` | Hardening test: agent_prompt.txt staying current with lcsas-restore features. |
+| `test_boot_docs_reality.py` | BOOT-01/UX-02: every `lcsas ...` invocation in recovery/docs/*.txt must use real subcommands/flags from the argparse tree (caught the phantom `--recovery-boot` flag). |
 | `test_disc_swap_docs.py` | test_disc_swap_docs.py -- static regression guard for the MULTI-DISC RESTORE |
 | `test_env_var_docs.py` | Hardening test: ENV_VARS.txt inventory + opt-in/opt-out principle. |
 | `test_meta_bundling_completeness.py` | Hardening test #1: meta-disc tier-1 bundling completeness. |
 | `test_multi_disc_design_header.py` | test_multi_disc_design_header.py -- static regression guard ensuring |
+| `test_no_boot_deadend_routing.py` | BOOT-01: the no-OS recovery routing (RECOVER.txt / BOOT.txt / START_HERE) must never again send an heir to boot a non-bootable disc; routes to live-USB instead. |
 | `test_operational_features.py` | Hardening test: operational-friendliness features for repeat operators. |
 | `test_pack_cache.py` | Hardening test: tier-1 opportunistic pack cache (LCSAS_PACK_CACHE_DIR). |
 | `test_readiness_checklist.py` | test_readiness_checklist.py -- static regression guard for the operator |

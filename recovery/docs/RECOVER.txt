@@ -18,7 +18,9 @@ You will need:
 DECISION FLOW
 
   Q: Do you have a working OS?
-     NO  -> Boot the recovery medium directly.  See BOOT.txt.
+     NO  -> Use any other computer, or boot a current live-Linux
+            USB stick on this one.  See BOOT.txt for the steps.
+            (The LCSAS discs themselves are NOT bootable.)
      YES -> Continue.
 
   Q: Can you mount the recovery medium as an ISO9660 filesystem?
