@@ -137,6 +137,43 @@ The password file should contain only the password, no trailing
 newline.
 
 ────────────────────────────────────────────────────────────────────
+KEY SHARES (SPLIT PASSWORDS) -- rebuild the password first
+────────────────────────────────────────────────────────────────────
+
+Some archives split the password into N share cards (any K of them
+reconstruct it; fewer than K reveal nothing).  KEY_INFO.txt on any
+disc states whether this archive used split keys and the K/N in
+effect.  If it did, rebuild the password BEFORE running restore.bat:
+
+  STEP 1.  Gather any K share cards (printed pages titled
+           "LCSAS KEY SHARE").  If you only have paper, retype each
+           card into its own text file, e.g. C:\Users\me\card1.txt
+           and C:\Users\me\card2.txt.
+
+  STEP 2.  Open a Command Prompt at the disc root (e.g. D:) and run
+           the bundled combiner:
+
+               recovery\bin\x86_64-pc-windows-gnu\lcsas-keyshare.exe ^
+                   C:\Users\me\card1.txt C:\Users\me\card2.txt
+
+           It prints the password and nothing else.  Append
+           " > C:\Users\me\repo.key" to the command to also save it
+           to a file.
+
+  STEP 3.  Run restore.bat as normal and type the reconstructed
+           password at its "Password:" prompt.
+
+If lcsas-keyshare.exe will not run on your host, install Python 3
+(see "MANUAL PYTHON RECOVERY" below for the python.org steps) and
+use the pure-Python fallback at the disc root:
+
+               python D:\keyshare_combine.py ^
+                   C:\Users\me\card1.txt C:\Users\me\card2.txt
+
+Format + re-implementation details: docs/KEY_SHARE_FORMAT.md on the
+meta disc.
+
+────────────────────────────────────────────────────────────────────
 DESTINATION FOLDER NOTES
 ────────────────────────────────────────────────────────────────────
 

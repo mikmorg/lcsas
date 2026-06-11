@@ -35,6 +35,13 @@ MITIGATION (planned):
     that mirrors restore.sh.
   * Document the Windows workflow in docs/RECOVER_WINDOWS.txt and
     in START_HERE.txt.
+  * [DONE 2026-06-11, KEY-05] Split-key archives on Windows: the
+    static combiner lcsas-keyshare.exe is now documented in
+    RECOVER_WINDOWS.txt ("KEY SHARES (SPLIT PASSWORDS)") and in
+    restore.bat's header + password prompt, and the meta-builder
+    relocates it next to lcsas-restore.exe under the on-disc
+    rust-triple bin dir.  Pinned by
+    tests/recovery_hardening/test_keyshare_docs.py.
 
 ────────────────────────────────────────────────────────────────────
 ID 002 -- /restore.sh is one file among many at disc root

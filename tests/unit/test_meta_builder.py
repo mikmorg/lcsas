@@ -847,6 +847,42 @@ class TestBundleTier1Binaries:
         dst = recovery_dst / "bin" / "x86_64-pc-windows-gnu" / "lcsas-restore.exe"
         assert dst.is_file()
 
+    def test_keyshare_combiner_relocated_alongside_tier1(self, tmp_path):
+        """KEY-05: lcsas-keyshare[.exe] must land in the same rust-triple
+        dir as lcsas-restore — the heir-facing Windows docs name a single
+        on-disc bin dir (bin\\x86_64-pc-windows-gnu\\) for both binaries.
+        Targets without a built keyshare binary are skipped silently."""
+        from lcsas.meta.builder import MetaVolumeBuilder
+
+        src = self._make_source_recovery(tmp_path, {
+            "x86_64": "lcsas-restore",
+            "x86_64-windows": "lcsas-restore.exe",
+            "aarch64": "lcsas-restore",  # no keyshare build for this one
+        })
+        for short_arch, exe in (
+            ("x86_64", "lcsas-keyshare"),
+            ("x86_64-windows", "lcsas-keyshare.exe"),
+        ):
+            p = src / "bin" / short_arch / exe
+            p.write_text(f"fake keyshare {short_arch}\n")
+            p.chmod(0o755)
+        out = tmp_path / "meta"
+        out.mkdir()
+        recovery_dst = out / "recovery"
+        recovery_dst.mkdir()
+
+        b = MetaVolumeBuilder(out, recovery_dir=src)
+        b._bundle_tier1_binaries(recovery_dst)
+
+        bin_root = recovery_dst / "bin"
+        assert (bin_root / "x86_64-unknown-linux-musl" / "lcsas-keyshare").is_file()
+        assert (bin_root / "x86_64-pc-windows-gnu" / "lcsas-keyshare.exe").is_file()
+        # lcsas-restore still lands as before.
+        assert (bin_root / "x86_64-pc-windows-gnu" / "lcsas-restore.exe").is_file()
+        # Missing keyshare build → restore copied, keyshare skipped.
+        assert (bin_root / "aarch64-unknown-linux-musl" / "lcsas-restore").is_file()
+        assert not (bin_root / "aarch64-unknown-linux-musl" / "lcsas-keyshare").exists()
+
     def test_unmapped_short_arch_names_skipped(self, tmp_path):
         """Short-arch names NOT in the tier1_map (e.g. typo, or some
         future arch we haven't yet wired) are ignored even if the

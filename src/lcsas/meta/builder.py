@@ -2136,6 +2136,14 @@ class MetaVolumeBuilder:
         skipped silently; targets whose short-arch directory is
         empty are also skipped (operator hasn't built that arch yet).
 
+        KEY-05 extends the same relocation to ``lcsas-keyshare[.exe]``
+        (the static split-key combiner): the heir-facing Windows docs
+        name a single on-disc bin dir per target, so the combiner must
+        live next to lcsas-restore under the rust triple.  The
+        short-arch copies remain on disc too (the whole source
+        ``recovery/`` tree is copied verbatim by
+        ``_bundle_recovery_toolchain_artifacts``).
+
         Operators trigger the underlying cross-builds with
         ``lcsas recovery build --arch <short-arch>`` for each desired
         target, or `make build-recovery` to do all reachable targets
@@ -2162,17 +2170,24 @@ class MetaVolumeBuilder:
             if mapping is None:
                 continue
             short_arch, exe_name = mapping
-            src_bin = src_recovery / "bin" / short_arch / exe_name
-            if not src_bin.is_file():
-                continue
-            dst_bin_dir = recovery_dst / "bin" / rust_triple
-            dst_bin_dir.mkdir(parents=True, exist_ok=True)
-            dst_bin = dst_bin_dir / exe_name
-            shutil.copy2(str(src_bin), str(dst_bin))
-            # Preserve the executable bit on Unix targets (Windows
-            # binaries don't care about the +x mode, but extra +x
-            # never hurts).
-            os.chmod(str(dst_bin), 0o755)
+            # KEY-05: the static key-share combiner is part of the
+            # tier-1 binary family — relocate it next to lcsas-restore
+            # so the heir docs can name one on-disc Windows path
+            # (bin\<rust-triple>\lcsas-keyshare.exe).  Skip-if-absent,
+            # same tolerance as lcsas-restore itself.
+            suffix = ".exe" if exe_name.endswith(".exe") else ""
+            for name in (exe_name, f"lcsas-keyshare{suffix}"):
+                src_bin = src_recovery / "bin" / short_arch / name
+                if not src_bin.is_file():
+                    continue
+                dst_bin_dir = recovery_dst / "bin" / rust_triple
+                dst_bin_dir.mkdir(parents=True, exist_ok=True)
+                dst_bin = dst_bin_dir / name
+                shutil.copy2(str(src_bin), str(dst_bin))
+                # Preserve the executable bit on Unix targets (Windows
+                # binaries don't care about the +x mode, but extra +x
+                # never hurts).
+                os.chmod(str(dst_bin), 0o755)
 
     def _regenerate_recovery_manifest(self, recovery_dst: Path) -> None:
         """Merge bundled upstream binaries into recovery/MANIFEST.sha256.

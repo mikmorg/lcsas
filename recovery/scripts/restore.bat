@@ -17,6 +17,11 @@ REM standalone restorer ships on the disc but is NOT orchestrated from
 REM this .bat (it would depend on a Python install that is not
 REM guaranteed on headless-recovery Windows hosts); see
 REM recovery/docs/RECOVER_WINDOWS.txt for the manual invocation.
+REM
+REM Split-key archives: if KEY_INFO.txt says the password is split
+REM into share cards, rebuild it FIRST with the bundled combiner
+REM bin\<arch>\lcsas-keyshare.exe -- see recovery/docs/
+REM RECOVER_WINDOWS.txt, "KEY SHARES (SPLIT PASSWORDS)".
 REM ====================================================================
 
 setlocal enabledelayedexpansion
@@ -159,6 +164,10 @@ REM ----- Password prompt --------------------------------------------
 REM CMD has no `read -s` equivalent, so the password is visible while
 REM typing.  For privacy, run from PowerShell with Read-Host -AsSecure
 REM (documented in RECOVER_WINDOWS.txt).
+echo.
+echo If KEY_INFO.txt says the password is SPLIT into share cards,
+echo rebuild it first with bin\%ARCH%\lcsas-keyshare.exe -- see
+echo recovery\docs\RECOVER_WINDOWS.txt, "KEY SHARES (SPLIT PASSWORDS)".
 echo.
 set /p "LCSAS_PW=Password: "
 if "%LCSAS_PW%"=="" (

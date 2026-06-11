@@ -21,6 +21,17 @@ You need **three things** to restore your files:
 > giving up: home safe, bank safe deposit box, attorney's office,
 > shared password manager.
 
+> **Password split into share cards?**  If `KEY_INFO.txt` on any disc
+> says the password is split, you must reconstruct it first: gather
+> the stated number of share cards (printed pages titled "LCSAS KEY
+> SHARE") and run the combiner bundled on the META disc —
+> `recovery/bin/<machine>/lcsas-keyshare card1.txt card2.txt`
+> (`<machine>` is `x86_64` for most PCs; Windows users run
+> `lcsas-keyshare.exe`, see the Windows walkthrough).  If the binary
+> won't run, the fallback is `python3 keyshare_combine.py card1.txt
+> card2.txt`.  Either prints the password — then continue below as
+> normal.
+
 ---
 
 ## Which walkthrough should I follow?

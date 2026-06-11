@@ -55,15 +55,22 @@ def _share_recovery_lines(config: LCSASConfig) -> list[str]:
         "",
         "Reconstruct the password in TWO steps:",
         "",
-        f"  STEP 1 (pre-step): gather any {k} share cards, then run the",
-        "  combiner from the META-VOLUME disc to print the password:",
+        f"  STEP 1 (pre-step): gather any {k} share cards.  On the",
+        "  META-VOLUME disc, run the share combiner for your machine:",
+        "",
+        "      recovery/bin/<machine>/lcsas-keyshare <card1> <card2>",
+        "",
+        "  <machine> is x86_64 for most PCs (aarch64 = newer ARM/Apple,",
+        "  x86_64-windows = Windows: use lcsas-keyshare.exe).",
+        "  If that program will not run, the fallback is:",
         "",
         "      python3 keyshare_combine.py <card1> <card2>",
         "",
         f"  (pass any {k} card files; or pipe the share words on stdin).",
-        "  It prints the password and nothing else.  Save it, e.g.:",
+        "  Either combiner prints the password and nothing else.  Save",
+        "  it, e.g.:",
         "",
-        "      python3 keyshare_combine.py <card1> <card2> > repo.key",
+        "      recovery/bin/<machine>/lcsas-keyshare <card1> <card2> > repo.key",
         "",
         "  STEP 2: run the normal restore and use that password:",
         "",
@@ -358,11 +365,18 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
                   cards.  You need ANY {k} of them.  Before you can restore,
                   you must FIRST rebuild the password from the cards:
 
-                    STEP 1: gather any {k} share cards.  On the META disc, run:
+                    STEP 1: gather any {k} share cards.  On the META disc,
+                      run the share combiner for your machine:
+
+                        recovery/bin/<machine>/lcsas-keyshare <card1> <card2>
+
+                      (pass any {k} card files; <machine> is x86_64 for
+                      most PCs, aarch64 = newer ARM/Apple, x86_64-windows
+                      = Windows: use lcsas-keyshare.exe).  It prints the
+                      password.  If that program will not run, the
+                      fallback is:
 
                         python3 keyshare_combine.py <card1> <card2>
-
-                      (pass any {k} card files).  It prints the password.
 
                     STEP 2: run the normal restore and enter that password
                       at the  Password:  prompt:

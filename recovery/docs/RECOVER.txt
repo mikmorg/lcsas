@@ -167,12 +167,50 @@ If the disc returns I/O errors:
 
 PASSWORD RECOVERY
 
-There is no password recovery path.  The password directly seeds the
-scrypt KDF that derives the master key encryption key.  If you have
-lost the password, the data is cryptographically unrecoverable.
+There is no password recovery path unless the archive used split
+keys -- see "KEY SHARES (SPLIT PASSWORDS)" below.  The password
+directly seeds the scrypt KDF that derives the master key encryption
+key.  If you have lost the password (and hold no share cards), the
+data is cryptographically unrecoverable.
 
 If multiple key files exist under repo/keys/, lcsas-restore tries each
 in turn; you only need ONE valid password.
+
+KEY SHARES (SPLIT PASSWORDS)
+
+Some archives split the repository password into N share cards (any
+K of them reconstruct it; fewer than K reveal nothing).  KEY_INFO.txt
+on any disc states whether this archive used split keys and the K/N
+in effect.  If it did, reconstruct the password BEFORE running the
+normal cascade:
+
+  1. Gather any K share cards (printed pages titled
+     "LCSAS KEY SHARE", or the share text files).
+
+  2. On the meta disc, run the static combiner for your machine:
+
+         /mnt/recovery/bin/<arch>/lcsas-keyshare \
+             card1.txt card2.txt > repo.key
+
+     <arch> is x86_64 for most PCs; aarch64 / armv7 for ARM
+     machines; x86_64-macos / aarch64-macos for macOS.  Windows
+     ships lcsas-keyshare.exe -- see RECOVER_WINDOWS.txt,
+     "KEY SHARES (SPLIT PASSWORDS)".
+
+  3. If the binary will not run on your host, use the bundled
+     pure-Python fallback at the disc root:
+
+         python3 /mnt/keyshare_combine.py \
+             card1.txt card2.txt > repo.key
+
+  4. Continue with the normal cascade above.  Type the
+     reconstructed password at the  Password:  prompt, or pass the
+     saved file:
+
+         sh /mnt/restore.sh --key repo.key --target /tmp/restored
+
+Format + re-implementation details: docs/KEY_SHARE_FORMAT.md on the
+meta disc.
 
 DISC MIRRORING
 

@@ -115,3 +115,6 @@ use.
 ## Effort
 
 1 day (0.5 doc/text edits across 5 surfaces, 0.5 render + static tests).
+
+---
+**Implemented:** 2026-06-11. As planned, with two deviations: (1) `_bundle_tier1_binaries` now also relocates `lcsas-keyshare[.exe]` into the on-disc rust-triple dirs — the UX-04 doc-contract gates forbid the legacy `x86_64-windows\` path in burned Windows docs/restore.bat, so the documented `bin\x86_64-pc-windows-gnu\lcsas-keyshare.exe` path had to actually exist; (2) KEY-01 had not landed at implementation time, so the documented invocations still reject real `-card.txt` files until it does (no worse than the prior python3-only text).
