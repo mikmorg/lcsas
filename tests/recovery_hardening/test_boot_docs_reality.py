@@ -81,18 +81,40 @@ def _validate(tokens: list[str]) -> list[str]:
     # subcommand path, including the root parser (e.g. `--db`).
     allowed_flags = _option_strings(parser)
 
-    # Walk the subcommand path as deep as the tokens allow.
+    # Walk the subcommand path as deep as the tokens allow.  Root-parser
+    # flags may legally precede the first subcommand (`lcsas --db X burn`),
+    # so skip them (and their value tokens) while still validating them.
     choices = _subparser_actions(parser)
     consumed_path: list[str] = []
     idx = 0
-    while idx < len(tokens) and tokens[idx] in choices:
-        parser = choices[tokens[idx]]
-        consumed_path.append(tokens[idx])
-        allowed_flags |= _option_strings(parser)
-        choices = _subparser_actions(parser)
+    while idx < len(tokens):
+        token = tokens[idx]
+        if token in choices:
+            parser = choices[token]
+            consumed_path.append(token)
+            allowed_flags |= _option_strings(parser)
+            choices = _subparser_actions(parser)
+            idx += 1
+            continue
+        if consumed_path or not re.match(r"^--?[A-Za-z]", token):
+            break
+        flag = token.split("=", 1)[0].rstrip(".,;:)")
+        if flag not in allowed_flags:
+            problems.append(
+                f"flag '{flag}' does not exist on the root lcsas parser"
+            )
         idx += 1
+        # Skip the flag's value token (`--db <catalog>`), but never a
+        # token that is itself a flag or a subcommand.
+        if (
+            "=" not in token
+            and idx < len(tokens)
+            and tokens[idx] not in choices
+            and not tokens[idx].startswith("-")
+        ):
+            idx += 1
 
-    if not consumed_path:
+    if not consumed_path and idx == 0:
         problems.append(
             f"'{tokens[0]}' is not an lcsas subcommand"
         )
@@ -132,6 +154,16 @@ def test_recovery_docs_lcsas_invocations_exist_in_argparse_tree():
         "recovery docs reference lcsas invocations that the real CLI "
         "rejects (phantom subcommand or flag):\n  " + "\n  ".join(failures)
     )
+
+
+def test_validator_accepts_root_flags_before_subcommand():
+    """`lcsas --db <catalog> burn --media MDISC100 ...` is a legal shape —
+    --db is a root-parser flag consumed before the subcommand (regression:
+    checkpoint A, 2026-06; PHYSICAL_DISC_VALIDATION.txt:59 is correct)."""
+    assert _validate(["--db", "<catalog>", "burn", "--media", "MDISC100", "..."]) == []
+    assert _validate(["--verbose", "status"]) == []
+    # Phantom root flags are still caught.
+    assert _validate(["--no-such-flag", "burn"])
 
 
 def test_extractor_sees_known_invocations():
