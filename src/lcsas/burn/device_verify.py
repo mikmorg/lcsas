@@ -54,7 +54,8 @@ def read_device_sha256(
             if not data:
                 raise OSError(
                     f"Short read from {device}: got {offset:,} of "
-                    f"{length_bytes:,} bytes (device ended early)"
+                    f"{length_bytes:,} bytes — disc is shorter than the "
+                    f"recorded image (truncated burn?)"
                 )
             digest.update(data)
             offset += len(data)

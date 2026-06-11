@@ -215,3 +215,38 @@ class TestGetIsoSha256ForLabel:
         )
         # volume_copies hash 'd' wins, not session_volumes 'c'.
         assert get_iso_sha256_for_label(conn, "TEST_001") == "d" * 64
+
+
+class TestCopyIsoSizeBytes:
+    """FMA-03: the post-ECC byte length rides on the copy row so device
+    verification still has a length on rebuilt / receipt-imported
+    catalogs."""
+
+    def test_round_trip(self, conn, volume):
+        add_volume_copy(
+            conn, volume.volume_id, "Home_Shelf",
+            iso_sha256="a" * 64, iso_size_bytes=123_456,
+        )
+        copies = get_copies_for_volume(conn, volume.volume_id)
+        assert copies[0].iso_size_bytes == 123_456
+
+    def test_defaults_to_none(self, conn, volume):
+        add_volume_copy(conn, volume.volume_id, "Home_Shelf")
+        copies = get_copies_for_volume(conn, volume.volume_id)
+        assert copies[0].iso_size_bytes is None
+
+    def test_reburn_upsert_replaces_size(self, conn, volume):
+        """A re-burn describes a NEW disc: the size must track the new
+        image, exactly like the hash."""
+        add_volume_copy(
+            conn, volume.volume_id, "Home_Shelf",
+            iso_sha256="a" * 64, iso_size_bytes=1000,
+        )
+        add_volume_copy(
+            conn, volume.volume_id, "Home_Shelf",
+            iso_sha256="b" * 64, iso_size_bytes=2000,
+        )
+        copies = get_copies_for_volume(conn, volume.volume_id)
+        assert len(copies) == 1
+        assert copies[0].iso_sha256 == "b" * 64
+        assert copies[0].iso_size_bytes == 2000

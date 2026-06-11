@@ -359,6 +359,9 @@ class TestCmdBurnIso:
         assert data["location"] == "Offsite_Safe"
         assert data["verify_passed"] is True
         assert len(data["iso_sha256"]) == 64
+        # FMA-03: the byte length travels with the hash so an imported
+        # receipt can still device-verify the disc.
+        assert data["iso_size_bytes"] == 200
 
     def test_burn_iso_emits_receipt_with_explicit_label(self, tmp_path, capsys):
         """--label overrides parent-dir inference."""
@@ -736,6 +739,8 @@ class TestCmdVerify:
         with (
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
                   return_value=True) as mock_verify,
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.read_disc_volume_id",
+                  return_value="VOL_001"),
         ):
             result = main(["--db", str(db), "verify", "VOL_001", "--disc"])
 

@@ -362,3 +362,79 @@ class TestMigrateV6ToV7:
         }
         assert "iso_size_bytes" in cols
         conn.close()
+
+
+class TestMigrateV7ToV8:
+    """v7 → v8: volume_copies.iso_size_bytes so device verification
+    survives receipt import / catalog rebuild (FMA-03)."""
+
+    def _make_v7_db(self):
+        """Minimal v7-era database: volume_copies without iso_size_bytes."""
+        conn = get_memory_connection()
+        conn.execute(
+            """CREATE TABLE schema_version (
+                version INTEGER NOT NULL,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        conn.execute("INSERT INTO schema_version (version) VALUES (7)")
+        conn.execute(
+            """CREATE TABLE volume_copies (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                volume_id       INTEGER NOT NULL,
+                location        TEXT    NOT NULL,
+                status          TEXT    NOT NULL DEFAULT 'ACTIVE',
+                burn_date       TEXT    NOT NULL,
+                notes           TEXT    DEFAULT '',
+                iso_sha256      TEXT,
+                last_verified_at DATETIME,
+                media_serial    TEXT    NOT NULL DEFAULT '',
+                UNIQUE(volume_id, location)
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO volume_copies "
+            "(volume_id, location, burn_date, iso_sha256) "
+            "VALUES (1, 'Home_Shelf', '2026-01-01T00:00:00+00:00', 'abc123')"
+        )
+        conn.commit()
+        return conn
+
+    def test_migration_v7_to_v8(self):
+        conn = self._make_v7_db()
+        assert get_schema_version(conn) == 7
+        migrate(conn)
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+
+        cols = {
+            r[1]
+            for r in conn.execute("PRAGMA table_info(volume_copies)").fetchall()
+        }
+        assert "iso_size_bytes" in cols
+
+        # Pre-upgrade rows stay NULL (and keep their other columns)
+        row = conn.execute(
+            "SELECT location, iso_sha256, iso_size_bytes FROM volume_copies"
+        ).fetchone()
+        assert row["iso_size_bytes"] is None
+        assert row["location"] == "Home_Shelf"
+        assert row["iso_sha256"] == "abc123"
+        conn.close()
+
+    def test_migrate_idempotent_from_v7(self):
+        conn = self._make_v7_db()
+        migrate(conn)
+        migrate(conn)
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+        conn.close()
+
+    def test_fresh_create_all_has_column(self):
+        conn = get_memory_connection()
+        create_all(conn)
+        cols = {
+            r[1]
+            for r in conn.execute("PRAGMA table_info(volume_copies)").fetchall()
+        }
+        assert "iso_size_bytes" in cols
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+        conn.close()

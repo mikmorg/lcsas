@@ -167,6 +167,56 @@ class TestXorrisoMocked:
             runner.check_binary()  # should not raise
 
 
+class TestReadDiscVolumeId:
+    """FMA-03: PVD Volume ID read for the wrong-disc identity check."""
+
+    _PVD_OUTPUT = (
+        "xorriso 1.5.4 : RockRidge filesystem manipulator\n"
+        "Drive current: -indev '/dev/sr0'\n"
+        "Media current: BD-R\n"
+        "Volume id    : 'LCSAS_BD_2026_0001'\n"
+        "Volume timestamp : c : 2026061100000000\n"
+    )
+
+    @patch("lcsas.iso.xorriso.subprocess.run")
+    def test_parses_volume_id(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout=self._PVD_OUTPUT,
+        )
+        runner = SubprocessXorrisoRunner()
+        assert runner.read_disc_volume_id("/dev/sr0") == "LCSAS_BD_2026_0001"
+        args = mock_run.call_args[0][0]
+        assert "-pvd_info" in args
+        assert "/dev/sr0" in args
+
+    @patch("lcsas.iso.xorriso.subprocess.run")
+    def test_nonzero_returncode_yields_empty(self, mock_run):
+        """No readable disc → '' (an unknown identity must never match)."""
+        mock_run.return_value = MagicMock(returncode=1, stdout="")
+        runner = SubprocessXorrisoRunner()
+        assert runner.read_disc_volume_id("/dev/sr0") == ""
+
+    @patch("lcsas.iso.xorriso.subprocess.run")
+    def test_missing_volume_id_line_yields_empty(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="Drive current: -indev '/dev/sr0'\n",
+        )
+        runner = SubprocessXorrisoRunner()
+        assert runner.read_disc_volume_id("/dev/sr0") == ""
+
+    @patch("lcsas.iso.xorriso.subprocess.run")
+    def test_timeout_yields_empty(self, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired(["xorriso"], 300)
+        runner = SubprocessXorrisoRunner()
+        assert runner.read_disc_volume_id("/dev/sr0") == ""
+
+    @patch("lcsas.iso.xorriso.subprocess.run")
+    def test_missing_binary_yields_empty(self, mock_run):
+        mock_run.side_effect = FileNotFoundError()
+        runner = SubprocessXorrisoRunner()
+        assert runner.read_disc_volume_id("/dev/sr0") == ""
+
+
 # ── create_bootable_iso (El Torito records) ──────────────────────
 # Moved from tests/unit/test_bootable.py when the Alpine live stack
 # was deleted (BOOT-07); this API is generic ISO mastering, not part

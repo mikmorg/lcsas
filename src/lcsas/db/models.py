@@ -92,6 +92,10 @@ class VolumeCopy:
     iso_sha256: str | None
     last_verified_at: str | None
     media_serial: str
+    # Post-ECC ISO byte length, mirrored from session_volumes so device
+    # verification survives receipt import / catalog rebuild (FMA-03).
+    # None on rows written before schema v8.
+    iso_size_bytes: int | None = None
 
 
 @dataclass(frozen=True)

@@ -1273,9 +1273,11 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
 
     # Hash before burn — cheap insurance against the file changing under us.
     iso_sha256 = ""
+    iso_size_bytes: int | None = None
     if emit_receipt is not None:
         from lcsas.utils.hashing import sha256_file
         iso_sha256 = sha256_file(iso_path)
+        iso_size_bytes = iso_path.stat().st_size
 
     logger.info(f"Burning {iso_path} to {device} ...")
     runner.burn_iso(iso_path, device=device)
@@ -1296,6 +1298,7 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
             "device": device,
             "burn_date": datetime.now(UTC).isoformat(),
             "iso_sha256": iso_sha256,
+            "iso_size_bytes": iso_size_bytes,
             "verify_passed": verify_passed,
         }
         # Accept either a directory (auto-name) or a full file path.
@@ -1499,12 +1502,16 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                         commit=False,
                     )
 
+            receipt_size = receipt.get("iso_size_bytes")
             add_volume_copy(
                 conn,
                 volume_id=vol.volume_id,
                 location=receipt["location"],
                 burn_date=receipt.get("burn_date", ""),
                 iso_sha256=receipt_hash or None,
+                iso_size_bytes=(
+                    int(receipt_size) if receipt_size is not None else None
+                ),
                 commit=False,
             )
 
@@ -1881,8 +1888,16 @@ def _verify_disc_against_recorded_hash(
     mismatch, on read errors, and when a hash is recorded but the ISO
     byte length cannot be determined (-check_media alone is not enough
     evidence for a volume that carries a hash).
+
+    Hash + length come from ``session_volumes`` (written at stage time),
+    falling back to ``volume_copies`` — the copy rows survive receipt
+    import and catalog rebuild from disc, where session_volumes does
+    not (FMA-03).
     """
     from lcsas.burn.device_verify import read_device_sha256
+
+    expected: str | None = None
+    iso_size: int | None = None
 
     row = conn.execute(
         "SELECT iso_path, iso_sha256, iso_size_bytes FROM session_volumes "
@@ -1890,7 +1905,27 @@ def _verify_disc_against_recorded_hash(
         "ORDER BY rowid DESC LIMIT 1",
         (volume_id,),
     ).fetchone()
-    if row is None:
+    if row is not None:
+        expected = str(row["iso_sha256"])
+        iso_size = row["iso_size_bytes"]
+        if iso_size is None and row["iso_path"]:
+            iso_file = Path(row["iso_path"])
+            if iso_file.exists():
+                iso_size = iso_file.stat().st_size
+    else:
+        # Rebuilt / receipt-imported catalog: session_volumes is empty
+        # but the copy rows carry the evidence (schema v8, FMA-03).
+        copy_row = conn.execute(
+            "SELECT iso_sha256, iso_size_bytes FROM volume_copies "
+            "WHERE volume_id = ? AND iso_sha256 IS NOT NULL AND iso_sha256 != '' "
+            "ORDER BY (iso_size_bytes IS NULL), id DESC LIMIT 1",
+            (volume_id,),
+        ).fetchone()
+        if copy_row is not None:
+            expected = str(copy_row["iso_sha256"])
+            iso_size = copy_row["iso_size_bytes"]
+
+    if expected is None:
         logger.warning(
             "  No recorded ISO SHA-256 for %s — device hash check skipped "
             "(pre-Phase-13 volume); check_media proved readability only.",
@@ -1898,11 +1933,6 @@ def _verify_disc_against_recorded_hash(
         )
         return True
 
-    iso_size = row["iso_size_bytes"]
-    if iso_size is None and row["iso_path"]:
-        iso_file = Path(row["iso_path"])
-        if iso_file.exists():
-            iso_size = iso_file.stat().st_size
     if iso_size is None:
         logger.warning(
             "  cannot device-verify %s: no recorded ISO size (pre-upgrade "
@@ -1918,7 +1948,6 @@ def _verify_disc_against_recorded_hash(
         logger.error(f"  Device hash verify: FAIL (read error: {exc})")
         return False
 
-    expected = str(row["iso_sha256"])
     ok = device_hash == expected
     logger.info(f"  Device hash verify: {'PASS' if ok else 'FAIL'}")
     if not ok:
@@ -2014,6 +2043,25 @@ def cmd_verify(args: argparse.Namespace) -> int:
             from lcsas.iso.xorriso import SubprocessXorrisoRunner
             runner = SubprocessXorrisoRunner()
             logger.info(f"Verifying disc on {args.device} ...")
+            # FMA-03: identity gate first.  If the disc in the drive is
+            # not this volume (or carries no readable Volume ID), record
+            # NOTHING — a wrong disc is operator error, not evidence
+            # about this volume's burned copy.
+            disc_id = runner.read_disc_volume_id(device=args.device)
+            if disc_id != vol.label:
+                if disc_id:
+                    logger.error(
+                        f"Disc in {args.device} identifies as '{disc_id}' — "
+                        f"expected '{vol.label}'. Wrong disc? "
+                        f"Nothing was recorded."
+                    )
+                else:
+                    logger.error(
+                        f"Could not read a Volume ID from the disc in "
+                        f"{args.device} — cannot confirm it is "
+                        f"'{vol.label}'. Nothing was recorded."
+                    )
+                return 1
             ok = runner.verify_disc(device=args.device)
             logger.info(f"  Disc verify (check_media): {'PASS' if ok else 'FAIL'}")
             if not ok:

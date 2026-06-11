@@ -84,6 +84,11 @@ class XorrisoRunner(Protocol):
         device: str = "/dev/sr0",
     ) -> bool: ...
 
+    def read_disc_volume_id(
+        self,
+        device: str = "/dev/sr0",
+    ) -> str: ...
+
 
 class SubprocessXorrisoRunner(SubprocessRunnerBase):
     """Real Xorriso implementation using subprocess."""
@@ -323,3 +328,42 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
         except subprocess.TimeoutExpired as exc:
             self._handle_timeout("xorriso", f"disc verification of {device}", exc)
         return result.returncode == 0
+
+    def read_disc_volume_id(
+        self,
+        device: str = "/dev/sr0",
+        timeout: int = 300,
+    ) -> str:
+        """Read the ISO 9660 PVD Volume ID from the disc in *device*.
+
+        The Volume ID is written at mastering time (``-V <label>`` in
+        :meth:`create_iso`), so it is the disc's machine-readable
+        identity — verification compares it against the catalog label
+        to catch the wrong-disc-in-drive case (FMA-03).
+
+        Returns ``''`` on any failure (no disc, unreadable PVD, missing
+        binary, timeout): an unknown identity must never match a label.
+        """
+        cmd = [
+            self._binary,
+            "-indev", device,
+            "-pvd_info",
+        ]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=False,
+                env=self._env(), timeout=timeout,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return ""
+        if result.returncode != 0:
+            return ""
+        for line in result.stdout.splitlines():
+            # xorriso -pvd_info format: "Volume id    : 'LABEL'"
+            stripped = line.strip()
+            if stripped.lower().startswith("volume id") and ":" in stripped:
+                value = stripped.split(":", 1)[1].strip()
+                if value.startswith("'") and value.endswith("'") and len(value) >= 2:
+                    return value[1:-1]
+                return value
+        return ""

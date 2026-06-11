@@ -26,6 +26,7 @@ from lcsas.staging.builder import (
     MissingPacksError,
     StagingBuilder,
 )
+from tests.unit.test_session_pipeline import _wire_drive_identity
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -112,11 +113,22 @@ def orch_env(tmp_path):
     packs = _seed_db_and_mirror(conn, config)
 
     xorriso = MagicMock()
+
+    # create_iso writes a real (tiny) file so execute()'s post-burn hash
+    # compare has an image to hash (FMA-03); content matches the fake
+    # device reader below.
+    def _fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
+        Path(output_iso).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_iso).write_bytes(b"fake-iso-data")
+        return Path(output_iso)
+
+    xorriso.create_iso.side_effect = _fake_create_iso
+    _wire_drive_identity(xorriso)
     dvdisaster = MagicMock()
 
     # BURN-04: deterministic fake device reader matching the b"fake-iso-data"
-    # ISOs written by _create_staged_session (the unit suite must never
-    # touch a real optical device).
+    # ISOs written by _fake_create_iso / _create_staged_session (the unit
+    # suite must never touch a real optical device).
     def fake_device_reader(device: str, length_bytes: int) -> str:
         return hashlib.sha256(b"fake-iso-data"[:length_bytes]).hexdigest()
 
@@ -338,6 +350,43 @@ class TestExecute:
         orch.execute(manifest, skip_burn=False)
 
         xorriso.burn_iso.assert_called_once()
+
+    def test_execute_verify_rejects_wrong_volume_id(self, orch_env):
+        """FMA-03: execute() must fail when the disc in the drive does
+        not identify as the volume just burned."""
+        orch = orch_env["orch"]
+        conn = orch_env["conn"]
+        xorriso = orch_env["xorriso"]
+        manifest = self._prepare(orch_env)
+
+        xorriso.read_disc_volume_id = MagicMock(
+            return_value="SOME_OTHER_DISC",
+        )
+
+        with pytest.raises(ValueError, match="identifies as 'SOME_OTHER_DISC'"):
+            orch.execute(manifest, skip_burn=False)
+
+        # Failure reverts BURNING → STAGING like every other burn error.
+        vol = get_volume_by_id(conn, manifest.volume_id)
+        assert vol.status == "STAGING"
+
+    def test_execute_verify_rejects_device_hash_mismatch(self, orch_env):
+        """FMA-03: execute() must fail when the device bytes do not hash
+        to the ISO just burned (readable-but-wrong content)."""
+        config = orch_env["config"]
+        conn = orch_env["conn"]
+        xorriso = orch_env["xorriso"]
+        orch = BurnOrchestrator(
+            config, conn, xorriso, orch_env["dvdisaster"],
+            device_reader=lambda device, length: "0" * 64,
+        )
+        manifest = self._prepare({**orch_env, "orch": orch})
+
+        with pytest.raises(ValueError, match="device hash mismatch"):
+            orch.execute(manifest, skip_burn=False)
+
+        vol = get_volume_by_id(conn, manifest.volume_id)
+        assert vol.status == "STAGING"
 
     def test_execute_custom_iso_output(self, orch_env, tmp_path):
         """ISO output path can be overridden."""

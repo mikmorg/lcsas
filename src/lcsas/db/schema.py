@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 # ---------------------------------------------------------------------------
 # DDL Statements
@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS volume_copies (
     burn_date       TEXT    NOT NULL,
     notes           TEXT    DEFAULT '',
     iso_sha256      TEXT,
+    iso_size_bytes  INTEGER,
     last_verified_at DATETIME,
     media_serial    TEXT    NOT NULL DEFAULT '',
     FOREIGN KEY (volume_id) REFERENCES volumes (volume_id) ON DELETE CASCADE,
@@ -360,6 +361,33 @@ def migrate(conn: sqlite3.Connection) -> int:
         cursor.execute(
             "INSERT INTO schema_version (version) VALUES (?)",
             (7,),
+        )
+
+    # v7 → v8: volume_copies.iso_size_bytes — the same post-ECC byte
+    # length on the per-location copy row, so device verification still
+    # has a length after a receipt import or a catalog rebuild from
+    # disc copies (session_volumes is not merged by rebuild) (FMA-03).
+    if current < 8:
+        tables = {
+            r[0] for r in cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "volume_copies" not in tables:
+            cursor.executescript(SQL_CREATE_VOLUME_COPIES)
+        else:
+            cols = {
+                r[1] for r in cursor.execute(
+                    "PRAGMA table_info(volume_copies)"
+                ).fetchall()
+            }
+            if "iso_size_bytes" not in cols:
+                cursor.execute(
+                    "ALTER TABLE volume_copies ADD COLUMN iso_size_bytes INTEGER"
+                )
+        cursor.execute(
+            "INSERT INTO schema_version (version) VALUES (?)",
+            (8,),
         )
 
     conn.commit()

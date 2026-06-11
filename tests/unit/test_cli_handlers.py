@@ -1494,3 +1494,232 @@ class TestCmdConsolidate:
         ])
         assert result == 1
         assert "No terminal available" in caplog.text
+
+
+class TestVerifyDiscIdentityAndEvidence:
+    """FMA-03: ``lcsas verify <LABEL> --disc`` must prove the disc in
+    the drive IS the requested volume (PVD Volume ID), source its hash
+    evidence from session_volumes OR volume_copies, and downgrade
+    loudly — never silently — on catalogs that predate the evidence."""
+
+    def _make_burned_volume(
+        self,
+        db_path,
+        label: str = "VOL_A",
+        *,
+        iso_sha256: str | None = None,
+        iso_size_bytes: int | None = None,
+        iso_path: str = "/gone/away.iso",
+    ) -> int:
+        """Create a catalog with one BURNED volume; optionally a
+        session_volumes row carrying hash/size evidence."""
+        from lcsas.db.connection import get_connection
+        from lcsas.db.schema import create_all
+        from lcsas.db.sessions import add_session_volume, create_session
+        from lcsas.db.volumes import create_volume
+
+        conn = get_connection(db_path)
+        create_all(conn)
+        vol = create_volume(conn, label, f"uuid-{label}", "TEST_TINY",
+                            2_097_152, "Home", "BURNED")
+        if iso_sha256 is not None:
+            session = create_session(conn, media_type="TEST_TINY",
+                                     staging_dir="/tmp")
+            add_session_volume(
+                conn, session_id=session.session_id,
+                volume_id=vol.volume_id, iso_path=iso_path,
+                iso_sha256=iso_sha256, iso_size_bytes=iso_size_bytes,
+            )
+        conn.commit()
+        conn.close()
+        return vol.volume_id
+
+    def test_verify_disc_rejects_wrong_volume(self, tmp_path, caplog):
+        """Wrong disc in the drive: exit 1, BOTH labels named, and
+        NOTHING recorded — it is operator error, not evidence about
+        this volume."""
+        from unittest.mock import patch
+
+        from lcsas.db.connection import get_connection
+        from lcsas.db.volumes import get_volume_by_label
+
+        db = tmp_path / "test.db"
+        vol_id = self._make_burned_volume(
+            db, "VOL_A", iso_sha256="a" * 64, iso_size_bytes=100,
+        )
+
+        with (
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
+                  "read_disc_volume_id", return_value="VOL_B"),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
+                  return_value=True) as mock_check,
+        ):
+            result = main(["--db", str(db), "verify", "VOL_A", "--disc",
+                           "--device", "/dev/null"])
+
+        assert result == 1
+        assert "VOL_B" in caplog.text and "VOL_A" in caplog.text
+        assert "Wrong disc" in caplog.text
+        # The identity gate fires before any other check runs.
+        mock_check.assert_not_called()
+
+        conn = get_connection(db)
+        # Nothing recorded: no events, no promotion.
+        events = conn.execute(
+            "SELECT COUNT(*) FROM volume_events WHERE volume_id = ?",
+            (vol_id,),
+        ).fetchone()[0]
+        assert events == 0
+        assert get_volume_by_label(conn, "VOL_A").status == "BURNED"
+        conn.close()
+
+    def test_verify_disc_unreadable_volume_id_records_nothing(
+        self, tmp_path, caplog,
+    ):
+        """No readable PVD (blank/absent disc): exit 1, nothing recorded."""
+        from unittest.mock import patch
+
+        from lcsas.db.connection import get_connection
+        from lcsas.db.volumes import get_volume_by_label
+
+        db = tmp_path / "test.db"
+        vol_id = self._make_burned_volume(
+            db, "VOL_A", iso_sha256="a" * 64, iso_size_bytes=100,
+        )
+
+        with patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
+                   "read_disc_volume_id", return_value=""):
+            result = main(["--db", str(db), "verify", "VOL_A", "--disc",
+                           "--device", "/dev/null"])
+
+        assert result == 1
+        assert "Could not read a Volume ID" in caplog.text
+
+        conn = get_connection(db)
+        events = conn.execute(
+            "SELECT COUNT(*) FROM volume_events WHERE volume_id = ?",
+            (vol_id,),
+        ).fetchone()[0]
+        assert events == 0
+        assert get_volume_by_label(conn, "VOL_A").status == "BURNED"
+        conn.close()
+
+    def test_verify_disc_downgrade_warning_on_old_catalog(
+        self, tmp_path, caplog,
+    ):
+        """Pre-v7 catalog row (hash recorded, size NULL, ISO gone):
+        explicit downgrade warning, VERIFY_FAIL, no promotion — never
+        a silent pass on -check_media alone."""
+        from unittest.mock import patch
+
+        from lcsas.db.connection import get_connection
+        from lcsas.db.volume_events import get_events_for_volume
+        from lcsas.db.volumes import get_volume_by_label
+
+        db = tmp_path / "test.db"
+        vol_id = self._make_burned_volume(
+            db, "VOL_A", iso_sha256="a" * 64, iso_size_bytes=None,
+        )
+
+        with (
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
+                  "read_disc_volume_id", return_value="VOL_A"),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
+                  return_value=True),
+        ):
+            result = main(["--db", str(db), "verify", "VOL_A", "--disc",
+                           "--device", "/dev/null"])
+
+        assert result == 1
+        assert "cannot device-verify" in caplog.text
+
+        conn = get_connection(db)
+        assert get_volume_by_label(conn, "VOL_A").status == "BURNED"
+        assert get_events_for_volume(conn, vol_id, "VERIFY_FAIL")
+        conn.close()
+
+    def test_verify_disc_no_hash_warns_readability_only(
+        self, tmp_path, caplog,
+    ):
+        """Catalog rows that never carried a hash (pre-Phase-13):
+        readability-only verification with an explicit warning."""
+        from unittest.mock import patch
+
+        from lcsas.db.connection import get_connection
+        from lcsas.db.volumes import get_volume_by_label
+
+        db = tmp_path / "test.db"
+        self._make_burned_volume(db, "VOL_A", iso_sha256=None)
+
+        with (
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
+                  "read_disc_volume_id", return_value="VOL_A"),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
+                  return_value=True),
+        ):
+            result = main(["--db", str(db), "verify", "VOL_A", "--disc",
+                           "--device", "/dev/null"])
+
+        assert result == 0
+        assert "No recorded ISO SHA-256" in caplog.text
+
+        conn = get_connection(db)
+        assert get_volume_by_label(conn, "VOL_A").status == "VERIFIED"
+        conn.close()
+
+    def test_verify_disc_uses_copy_evidence_on_rebuilt_catalog(
+        self, tmp_path,
+    ):
+        """A catalog rebuilt from disc copies has no session_volumes
+        rows — the hash + size on volume_copies (schema v8) must still
+        enable the full device compare."""
+        import hashlib
+        from unittest.mock import patch
+
+        from lcsas.db.connection import get_connection
+        from lcsas.db.volume_copies import add_volume_copy
+        from lcsas.db.volumes import get_volume_by_label
+
+        db = tmp_path / "test.db"
+        vol_id = self._make_burned_volume(db, "VOL_A", iso_sha256=None)
+
+        # "Device" whose bytes ARE the recorded image.
+        disc_bytes = b"image-bytes" * 64
+        device = tmp_path / "fake_device"
+        device.write_bytes(disc_bytes)
+
+        conn = get_connection(db)
+        from lcsas.db.locations import ensure_location
+        ensure_location(conn, "Vault")
+        add_volume_copy(
+            conn, volume_id=vol_id, location="Vault",
+            iso_sha256=hashlib.sha256(disc_bytes).hexdigest(),
+            iso_size_bytes=len(disc_bytes),
+        )
+        conn.close()
+
+        with (
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
+                  "read_disc_volume_id", return_value="VOL_A"),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
+                  return_value=True),
+        ):
+            result = main(["--db", str(db), "verify", "VOL_A", "--disc",
+                           "--device", str(device)])
+
+        assert result == 0
+        conn = get_connection(db)
+        assert get_volume_by_label(conn, "VOL_A").status == "VERIFIED"
+        conn.close()
+
+        # And a tampered device fails against the same copy evidence.
+        device.write_bytes(b"x" + disc_bytes[1:])
+        with (
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
+                  "read_disc_volume_id", return_value="VOL_A"),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
+                  return_value=True),
+        ):
+            result = main(["--db", str(db), "verify", "VOL_A", "--disc",
+                           "--device", str(device)])
+        assert result == 1

@@ -54,7 +54,7 @@ Restore is the mirror: `restore/planner.py` generates a disc pick list; `restore
 |---------|------|
 | `cli/` | argparse entry-point (`lcsas` command, 15+ subcommands) |
 | `config/` | TOML config loader, media type definitions |
-| `db/` | SQLite catalog — schema (v7), connection, frozen-dataclass models, CRUD, queries |
+| `db/` | SQLite catalog — schema (v8), connection, frozen-dataclass models, CRUD, queries |
 | `rustic/` | Protocol-based subprocess wrapper + JSON output parser |
 | `packs/` | Mirror scanner, pack-to-snapshot delta analysis |
 | `binpack/` | FFD bin-packing algorithm |
@@ -93,4 +93,4 @@ The recovery tiers are documented in `recovery/docs/TIERS.txt` and dispatched by
 
 ### Database schema
 
-Schema version 7. Key tables: `repositories`, `packs`, `volumes`, `volume_packs` (M:M), `snapshots`, `locations`, `volume_copies`, `sessions`, `volume_events` (audit trail). Volume lifecycle: `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED`.
+Schema version 8. Key tables: `repositories`, `packs`, `volumes`, `volume_packs` (M:M), `snapshots`, `locations`, `volume_copies`, `sessions`, `volume_events` (audit trail). Volume lifecycle: `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED`.

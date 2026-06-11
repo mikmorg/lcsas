@@ -141,3 +141,12 @@ fail with `"Disc is shorter than the recorded image (got X of Y bytes) — trunc
 3 days: 1.5 impl (primitives + two call sites + v7 migration), 1 unit tests, 0.5 CDEmu
 integration. Needs the CDEmu loop locally (already available on this VM); do not run pytest
 concurrently with other suites here.
+
+---
+**Implemented:** 2026-06-11. Hash-compare half landed earlier as BURN-04/BURN-05 (schema v7,
+`read_device_sha256`); this commit adds the remainder: PVD Volume-ID identity gate on both burn
+paths and `verify --disc` (wrong disc → exit 1, nothing recorded), schema v8
+(`volume_copies.iso_size_bytes`) so device verification survives receipt import / catalog
+rebuild, and the size in burn receipts. CDEmu drill wired into the existing
+`tests/e2e/test_burn_verify_disc.py` under `LCSAS_BURN_E2E=1` (not a new
+`LCSAS_DISC_VERIFY` file as drafted).

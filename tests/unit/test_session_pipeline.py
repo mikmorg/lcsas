@@ -154,6 +154,7 @@ def env(tmp_path):
         Path(output_iso).write_bytes(b"\x00" * 1024)
         return Path(output_iso)
     xorriso.create_iso.side_effect = _fake_create_iso
+    _wire_drive_identity(xorriso)
     dvdisaster = MagicMock()
 
     # BURN-04: fake device reader matching the fixture's all-zeros ISOs —
@@ -177,6 +178,21 @@ def _zeros_device_reader(device: str, length_bytes: int) -> str:
     return hashlib.sha256(b"\x00" * length_bytes).hexdigest()
 
 
+def _wire_drive_identity(xorriso) -> None:
+    """Make the fake drive report the Volume ID of the last burned ISO.
+
+    Both burn paths name the ISO ``<volume_label>.iso``, so the stem of
+    the last ``burn_iso`` argument is exactly what a real disc's PVD
+    would carry (FMA-03 identity check).  Reads ``xorriso.burn_iso``
+    dynamically so tests that rebind it keep working.
+    """
+    def _read_id(device="/dev/sr0"):
+        call = xorriso.burn_iso.call_args
+        return Path(call[0][0]).stem if call else ""
+
+    xorriso.read_disc_volume_id = MagicMock(side_effect=_read_id)
+
+
 @pytest.fixture
 def multi_vol_env(tmp_path):
     """Environment where packs require multiple volumes (TEST_TINY = 2MB)."""
@@ -198,6 +214,7 @@ def multi_vol_env(tmp_path):
         Path(output_iso).write_bytes(b"\x00" * 1024)
         return Path(output_iso)
     xorriso.create_iso.side_effect = _fake_create_iso
+    _wire_drive_identity(xorriso)
     dvdisaster = MagicMock()
     orch = BurnOrchestrator(config, conn, xorriso, dvdisaster,
                             device_reader=_zeros_device_reader)
@@ -735,6 +752,10 @@ class TestDeviceHashVerify:
             iso.unlink()
 
         xorriso.verify_disc = MagicMock(return_value=True)
+        # _verify_burned_disc is called directly (no burn_iso call for the
+        # fixture identity wiring to observe) — report the right disc so
+        # the test exercises the missing-size path, not the identity gate.
+        xorriso.read_disc_volume_id = MagicMock(return_value="TEST-LEGACY")
 
         sv = get_session_volumes(conn, result.session_id)[0]
         assert sv.iso_sha256 and sv.iso_size_bytes is None
@@ -752,6 +773,66 @@ class TestDeviceHashVerify:
         assert any("no recorded ISO size" in e.detail for e in events)
         # False from the verify step keeps the volume at BURNED in
         # burn_session (proven by test_burn_session_verify_fail_stays_burned).
+
+    def test_burn_verify_rejects_wrong_volume_id(self, env):
+        """FMA-03: a readable disc whose PVD Volume ID is not this
+        volume's label must never reach VERIFIED — the bytes in the
+        drive belong to some other disc entirely."""
+        from lcsas.db.volume_events import get_events_for_volume
+        conn = env["conn"]
+        orch = env["orch"]
+        xorriso = env["xorriso"]
+
+        result = orch.stage()
+
+        xorriso.burn_iso = MagicMock()
+        xorriso.verify_disc = MagicMock(return_value=True)
+        # The drive reports a different disc than the one being verified.
+        xorriso.read_disc_volume_id = MagicMock(
+            return_value="LCSAS_WRONG_DISC",
+        )
+
+        receipts = orch.burn_session(result.session_id, "Home_Shelf",
+                                     skip_burn=False)
+
+        for receipt in receipts:
+            assert receipt.verify_passed is False
+            vol = get_volume_by_id(conn, receipt.volume_id)
+            assert vol.status == "BURNED"
+
+            events = get_events_for_volume(conn, receipt.volume_id,
+                                           "VERIFY_FAIL")
+            # The failure message names both identities.
+            assert any(
+                "LCSAS_WRONG_DISC" in e.detail and vol.label in e.detail
+                and "Wrong disc" in e.detail
+                for e in events
+            )
+
+            # BURN-05: the wrong disc is not a copy.
+            copies = get_copies_for_volume(conn, receipt.volume_id,
+                                           active_only=False)
+            assert copies == []
+
+    def test_burn_verify_passes_when_volume_id_matches(self, env):
+        """Positive control for the identity gate: the fixture drive
+        reports the burned ISO's stem (== volume label), so the full
+        check_media + identity + hash chain grants VERIFIED."""
+        conn = env["conn"]
+        orch = env["orch"]
+        xorriso = env["xorriso"]
+
+        result = orch.stage()
+        xorriso.verify_disc = MagicMock(return_value=True)
+
+        receipts = orch.burn_session(result.session_id, "Home_Shelf",
+                                     skip_burn=False)
+
+        for receipt in receipts:
+            assert receipt.verify_passed is True
+            vol = get_volume_by_id(conn, receipt.volume_id)
+            assert vol.status == "VERIFIED"
+            assert xorriso.read_disc_volume_id.called
 
     def test_legacy_session_size_falls_back_to_iso_file(self, env):
         """Pre-v7 session row with the ISO still on disk: the byte length

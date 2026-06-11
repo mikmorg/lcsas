@@ -110,6 +110,10 @@ class BurnReceipt:
     verify_passed: bool
     pack_count: int
     pack_ids: list[int] = field(default_factory=list)
+    # Post-ECC ISO byte length — travels with the hash so an imported
+    # receipt (or a catalog rebuilt from disc copies) can still device-
+    # verify the disc after the ISO file is gone (FMA-03).
+    iso_size_bytes: int | None = None
 
 
 class BurnOrchestrator:
@@ -304,11 +308,40 @@ class BurnOrchestrator:
 
             # Burn to disc
             if not skip_burn:
-                self._xorriso.burn_iso(iso_path, self._config.optical_device)
-                # Verify disc before marking VERIFIED
-                verify_ok = self._xorriso.verify_disc(self._config.optical_device)
-                if not verify_ok:
-                    raise ValueError("Post-burn verification failed")
+                device = self._config.optical_device
+                self._xorriso.burn_iso(iso_path, device)
+                # Post-burn verification [FMA-03]: readability smoke
+                # test, then disc identity (PVD Volume ID vs label),
+                # then exact-length device read-back hashed against the
+                # ISO just burned.  A readable disc that is not THIS
+                # image must never reach VERIFIED.
+                if not self._xorriso.verify_disc(device):
+                    raise ValueError(
+                        "Post-burn verification failed: "
+                        "-check_media read-back failed"
+                    )
+                disc_id = self._xorriso.read_disc_volume_id(device)
+                if disc_id != manifest.volume_label:
+                    raise ValueError(
+                        f"Disc in {device} identifies as '{disc_id}' — "
+                        f"expected '{manifest.volume_label}'. Wrong disc?"
+                    )
+                expected_hash = sha256_file(iso_path)
+                try:
+                    device_hash = self._device_reader(
+                        device, iso_path.stat().st_size,
+                    )
+                except OSError as exc:
+                    raise ValueError(
+                        f"Post-burn verification failed: "
+                        f"device read-back failed: {exc}"
+                    ) from exc
+                if device_hash != expected_hash:
+                    raise ValueError(
+                        f"Post-burn verification failed: device hash "
+                        f"mismatch (expected {expected_hash[:8]}.., "
+                        f"got {device_hash[:8]}..)"
+                    )
 
             # Finalize (atomic: status + close)
             update_status(self._conn, manifest.volume_id, "VERIFIED", commit=False)
@@ -763,9 +796,11 @@ class BurnOrchestrator:
                 if not skip_burn:
                     self._xorriso.burn_iso(iso_path, device)
 
-                # Post-burn verification  [S1][BURN-04]
+                # Post-burn verification  [S1][BURN-04][FMA-03]
                 # Step 1: -check_media readability smoke test.
-                # Step 2: exact-length device read-back hashed against
+                # Step 2: PVD Volume ID must match the volume label
+                # (wrong-disc guard).
+                # Step 3: exact-length device read-back hashed against
                 # the ISO SHA-256 recorded at stage time — a readable
                 # disc that doesn't carry the mastered image (wrong
                 # disc, silent mis-burn, truncation) must never reach
@@ -808,6 +843,7 @@ class BurnOrchestrator:
                         volume_id=sv.volume_id,
                         location=location,
                         iso_sha256=sv.iso_sha256 or None,
+                        iso_size_bytes=sv.iso_size_bytes,
                         last_verified_at=verified_at,
                         commit=False,
                     )
@@ -842,6 +878,7 @@ class BurnOrchestrator:
                     verify_passed=verify_passed,
                     pack_count=len(pack_ids),
                     pack_ids=pack_ids,
+                    iso_size_bytes=sv.iso_size_bytes,
                 )
                 receipts.append(receipt)
 
@@ -903,10 +940,13 @@ class BurnOrchestrator:
         location: str,
         iso_path: Path,
     ) -> bool:
-        """Two-step post-burn verification of the disc in *device* (BURN-04).
+        """Three-step post-burn verification of the disc in *device*
+        (BURN-04 + FMA-03).
 
         Step 1 — ``xorriso -check_media``: readability smoke test.
-        Step 2 — read back exactly the recorded ISO byte length from the
+        Step 2 — PVD Volume ID must equal the volume label (wrong-disc
+        guard).
+        Step 3 — read back exactly the recorded ISO byte length from the
         device and compare its SHA-256 to the hash recorded at stage
         time.  ``-check_media`` alone never grants a pass when a hash is
         on record: any readable disc sitting in the tray would pass it.
@@ -920,6 +960,23 @@ class BurnOrchestrator:
                 self._conn, sv.volume_id, "VERIFY_FAIL",
                 location=location,
                 detail="Post-burn read-back failed",
+                commit=False,
+            )
+            return False
+
+        # Disc identity: the PVD Volume ID was written from the volume
+        # label at mastering time, so a mismatch means the disc in the
+        # drive is not this volume at all (wrong disc never swapped, or
+        # a silently failed burn left an old disc behind).  [FMA-03]
+        disc_id = self._xorriso.read_disc_volume_id(device)
+        if disc_id != label:
+            add_event(
+                self._conn, sv.volume_id, "VERIFY_FAIL",
+                location=location,
+                detail=(
+                    f"Disc in {device} identifies as '{disc_id}' — "
+                    f"expected '{label}'. Wrong disc?"
+                ),
                 commit=False,
             )
             return False
@@ -1313,6 +1370,7 @@ class BurnOrchestrator:
                         "device": receipt.device,
                         "burn_date": receipt.burn_date,
                         "iso_sha256": receipt.iso_sha256,
+                        "iso_size_bytes": receipt.iso_size_bytes,
                         "verify_passed": receipt.verify_passed,
                         "pack_count": receipt.pack_count,
                         "pack_ids": receipt.pack_ids,

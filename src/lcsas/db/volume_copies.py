@@ -23,6 +23,10 @@ def _row_to_copy(row: sqlite3.Row) -> VolumeCopy:
         media_serial = row["media_serial"]
     except (IndexError, KeyError):
         media_serial = ""
+    try:
+        iso_size_bytes = row["iso_size_bytes"]
+    except (IndexError, KeyError):
+        iso_size_bytes = None
     return VolumeCopy(
         id=row["id"],
         volume_id=row["volume_id"],
@@ -33,6 +37,7 @@ def _row_to_copy(row: sqlite3.Row) -> VolumeCopy:
         iso_sha256=iso_sha256,
         last_verified_at=last_verified_at,
         media_serial=media_serial,
+        iso_size_bytes=iso_size_bytes,
     )
 
 
@@ -44,6 +49,7 @@ def add_volume_copy(
     notes: str = "",
     *,
     iso_sha256: str | None = None,
+    iso_size_bytes: int | None = None,
     last_verified_at: str | None = None,
     media_serial: str = "",
     commit: bool = True,
@@ -60,17 +66,18 @@ def add_volume_copy(
     conn.execute(
         """INSERT INTO volume_copies
                (volume_id, location, burn_date, notes, iso_sha256,
-                last_verified_at, media_serial)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+                iso_size_bytes, last_verified_at, media_serial)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(volume_id, location) DO UPDATE SET
                burn_date        = excluded.burn_date,
                notes            = excluded.notes,
                status           = 'ACTIVE',
                iso_sha256       = excluded.iso_sha256,
+               iso_size_bytes   = excluded.iso_size_bytes,
                last_verified_at = excluded.last_verified_at,
                media_serial     = excluded.media_serial""",
         (volume_id, location, burn_date, notes, iso_sha256,
-         last_verified_at, media_serial),
+         iso_size_bytes, last_verified_at, media_serial),
     )
     if commit:
         conn.commit()

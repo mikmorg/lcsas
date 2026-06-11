@@ -178,15 +178,28 @@ def _merge_one_disc(
         )
         counts["volume_packs"] = cur.rowcount
 
-        # 7. volume_copies — keyed on (volume_id, location)
+        # 7. volume_copies — keyed on (volume_id, location).
+        #    iso_size_bytes arrived in schema v8 (FMA-03); disc catalogs
+        #    burned before that lack the column, so select it only when
+        #    the source actually has it (holographic snapshots are
+        #    frozen forever — they can never be migrated in place).
+        src_copy_cols = {
+            r[1] for r in target.execute(
+                f"PRAGMA {alias}.table_info(volume_copies)"
+            ).fetchall()
+        }
+        size_expr = (
+            "svc.iso_size_bytes" if "iso_size_bytes" in src_copy_cols
+            else "NULL"
+        )
         cur = target.execute(
             f"""
             INSERT OR IGNORE INTO volume_copies
                 (volume_id, location, status, burn_date, notes, iso_sha256,
-                 last_verified_at, media_serial)
+                 iso_size_bytes, last_verified_at, media_serial)
             SELECT v.volume_id, svc.location, svc.status, svc.burn_date,
-                   svc.notes, svc.iso_sha256, svc.last_verified_at,
-                   svc.media_serial
+                   svc.notes, svc.iso_sha256, {size_expr},
+                   svc.last_verified_at, svc.media_serial
             FROM {alias}.volume_copies svc
             JOIN {alias}.volumes sv ON sv.volume_id = svc.volume_id
             JOIN volumes v ON v.uuid = sv.uuid
