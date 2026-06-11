@@ -14,6 +14,7 @@ STATUS legend:
   OPEN       not yet addressed; on the work plan
   IN PROGRESS being worked on now
   CLOSED     resolved by a specific commit
+  MITIGATED  materially reduced; a residual limitation remains
   DEFERRED   accepted as a known limitation for now
   WONTFIX    intentionally not addressed (with rationale)
 
@@ -148,7 +149,8 @@ MITIGATION (organizational, not technical):
 ────────────────────────────────────────────────────────────────────
 ID 007 -- Optical drives are increasingly rare on modern hardware
 ────────────────────────────────────────────────────────────────────
-STATUS: DEFERRED (out of our scope)
+STATUS: MITIGATED (live-USB route documented + gated; USB BD reader
+        still required to physically read the discs)
 IMPACT: MEDIUM.  By 2030 most laptops have no internal optical
         drive.  Inheritors must procure a USB BD reader (~$40,
         widely available today; uncertain for 2050).
@@ -157,7 +159,23 @@ MITIGATION:
   * Document the hardware requirement explicitly in START_HERE.txt.
   * Recommend (in archive-creation guidance) that owners also keep
     a USB BD reader physically next to the disc collection.
-  * No code-level mitigation possible.
+  * The no-OS / no-drive-bay machine route is the live-USB procedure
+    (BOOT.txt OPTION 2): boot a CURRENT mainstream live-Linux image,
+    then run restore.sh off the META disc through a USB BD reader.
+    Rationale: a current live image is vendor-signed for UEFI
+    SecureBoot (default-on on consumer machines since ~2012) and
+    carries current hardware drivers, so the route keeps working on
+    firmware and hardware that did not exist when the discs were
+    burned.  A self-maintained boot medium has neither property --
+    a 2026-frozen kernel + unsigned GRUB decays against 2040
+    machines, which is why the bundled boot stack was dropped
+    (experimental/boot/README.md).  The procedure's load-bearing
+    content is pinned by
+    tests/recovery_hardening/test_live_usb_procedure_docs.py and
+    end-to-end validated (Secure-Boot QEMU drill) by
+    tests/e2e/test_live_usb_restore.py [BOOT-04].
+  * Residual: reading the discs still requires optical hardware --
+    no code-level mitigation possible for that part.
 
 ────────────────────────────────────────────────────────────────────
 ID 008 -- "Which disc do I start with" is undocumented

@@ -24,6 +24,7 @@ make test-recovery-hardening   # this tier only
 | `test_boot_docs_reality.py` | BOOT-01/UX-02: every `lcsas ...` invocation in recovery/docs/*.txt must use real subcommands/flags from the argparse tree (caught the phantom `--recovery-boot` flag). |
 | `test_disc_swap_docs.py` | test_disc_swap_docs.py -- static regression guard for the MULTI-DISC RESTORE |
 | `test_env_var_docs.py` | Hardening test: ENV_VARS.txt inventory + opt-in/opt-out principle. |
+| `test_live_usb_procedure_docs.py` | BOOT-04: the live-USB no-OS procedure (BOOT.txt OPTION 2 / restore-live-usb.md) keeps its load-bearing content -- concrete image source, boot-menu key, exact mount + restore.sh commands, Secure-Boot/current-drivers rationale; UX_CONCERNS ID 007 stays MITIGATED. |
 | `test_meta_bundling_completeness.py` | Hardening test #1: meta-disc tier-1 bundling completeness. |
 | `test_multi_disc_design_header.py` | test_multi_disc_design_header.py -- static regression guard ensuring |
 | `test_no_boot_deadend_routing.py` | BOOT-01: the no-OS recovery routing (RECOVER.txt / BOOT.txt / START_HERE) must never again send an heir to boot a non-bootable disc; routes to live-USB instead. |

@@ -1,0 +1,107 @@
+name: live-usb-smoke
+
+# BOOT-04: weekly end-to-end drill of the live-USB no-OS recovery path.
+#
+# Boots the CURRENT pinned Ubuntu Server live ISO under OVMF with the
+# Microsoft-keys-enrolled Secure-Boot variables, attaches a freshly built
+# LCSAS meta + data image pair as cdroms, and proves the documented
+# `sh /mnt/recovery/scripts/restore.sh <target> latest` invocation
+# completes a tier-1 restore inside the live guest (marker + content
+# hash asserted on the serial console).  See
+# tests/e2e/test_live_usb_restore.py and recovery/docs/BOOT.txt OPTION 2.
+#
+# Scheduled weekly, NOT per-PR: the fixture is a ~3.4 GB ISO download
+# and the boot takes minutes even under KVM.  The always-on counterpart
+# (doc-pinning gate, tests/recovery_hardening/test_live_usb_procedure_docs.py)
+# runs in the normal suite.
+
+on:
+  schedule:
+    # Monday 04:17 UTC -- off the top of the hour per GitHub's guidance.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+jobs:
+  live-usb-smoke:
+    runs-on: ubuntu-latest
+    # TCG worst case: the test's own internal deadline is 25 min of VM
+    # time; leave headroom for the ISO download + fixture build.
+    timeout-minutes: 90
+
+    env:
+      # Pinned rustic release -- keep in lockstep with test.yml.
+      RUSTIC_VERSION: "0.11.2"
+      RUSTIC_ASSET: "rustic-v0.11.2-x86_64-unknown-linux-gnu.tar.gz"
+      RUSTIC_SHA256: "fb7b74a14418b2dd070360c9abb22607f8559bdd344a0adf1b33bc2e31f83f5f"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install rustic (pinned release tarball)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          cd "$(mktemp -d)"
+          url="https://github.com/rustic-rs/rustic/releases/download/v${RUSTIC_VERSION}/${RUSTIC_ASSET}"
+          echo "Downloading $url"
+          curl -fsSL -o rustic.tar.gz "$url"
+          actual=$(sha256sum rustic.tar.gz | awk '{print $1}')
+          if [ "$RUSTIC_SHA256" != "$actual" ]; then
+            echo "SHA256 mismatch: expected=$RUSTIC_SHA256 actual=$actual" >&2
+            exit 1
+          fi
+          echo "SHA256 verified: $actual"
+          tar -xzf rustic.tar.gz
+          install -m 0755 rustic "$HOME/.local/bin/rustic"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install QEMU, Secure-Boot OVMF, xorriso
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf xorriso
+          test -f /usr/share/OVMF/OVMF_CODE_4M.ms.fd
+          test -f /usr/share/OVMF/OVMF_VARS_4M.ms.fd
+
+      - name: Enable KVM for the runner user (TCG fallback if unavailable)
+        run: |
+          # GitHub-hosted Linux runners expose /dev/kvm but gate it behind
+          # group perms; open it up.  The test itself falls back to TCG
+          # when /dev/kvm is absent or unusable, so this step must not fail.
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules || true
+          sudo udevadm trigger --name-match=kvm || true
+          ls -la /dev/kvm || echo "no /dev/kvm -- the drill will run under TCG"
+
+      - name: Install LCSAS (editable, with dev deps)
+        run: make dev
+
+      - name: Cache pinned live ISO
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/lcsas-fixtures/*.iso
+          # Keyed on the pin file: bumping the pin invalidates the cache.
+          key: live-usb-iso-${{ hashFiles('tests/e2e/fixtures/live_usb_pins.txt') }}
+
+      - name: Run the live-USB Secure-Boot restore drill
+        env:
+          LCSAS_LIVE_USB_SMOKE: "1"
+          LCSAS_LIVE_USB_FIXTURES: ${{ runner.temp }}/lcsas-fixtures
+        run: pytest tests/e2e/test_live_usb_restore.py -v
+
+      - name: Surface serial log on failure
+        if: failure()
+        run: |
+          log="${{ runner.temp }}/lcsas-fixtures/live-usb-work/serial.log"
+          if [ -f "$log" ]; then
+            echo "===== last 200 serial lines ====="
+            tail -n 200 "$log"
+          else
+            echo "no serial log produced"
+          fi

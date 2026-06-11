@@ -1,0 +1,16 @@
+# live_usb_pins.txt -- pinned live-image fixture for
+# tests/e2e/test_live_usb_restore.py [BOOT-04].
+#
+# This pins the CURRENT mainstream live image the no-OS recovery
+# procedure (recovery/docs/BOOT.txt OPTION 2) tells an heir to fetch.
+# Ubuntu *Server* rather than Desktop because its autoinstall hook gives
+# deterministic serial-console automation without GUI driving; the boot
+# chain under test (signed shim -> GRUB -> kernel under Secure Boot) is
+# the same one the documented Desktop procedure rides.
+#
+# Bump this pin DELIBERATELY when a new point release ships -- the e2e
+# refuses to run if the downloaded ISO's SHA-256 mismatches, so fixture
+# drift is always a reviewed change.  Published checksum source:
+#   https://releases.ubuntu.com/24.04/SHA256SUMS
+ISO_URL=https://releases.ubuntu.com/24.04/ubuntu-24.04.4-live-server-amd64.iso
+ISO_SHA256=e907d92eeec9df64163a7e454cbc8d7755e8ddc7ed42f99dbc80c40f1a138433

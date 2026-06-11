@@ -129,3 +129,16 @@ No catalog/schema impact.
 2.5 days: 0.5 doc gate + ledger, 1.5 QEMU/autoinstall harness iteration (serial
 automation is fiddly; TCG runs are slow), 0.5 CI wiring. Needs ~4 GB scratch for
 fixtures; benefits from KVM but must not require it.
+
+---
+**Implemented:** 2026-06-11. As planned, with deviations: (1) the QEMU drill
+uses autoinstall `early-commands` instead of `late-commands` -- the restore
+property is identical but the marker fires without waiting for a full OS
+install, which would not fit the plan's own 25-minute TCG budget; (2) GRUB
+automation types the casper boot commands at the GRUB shell, synchronised on
+the OVMF serial-console mirror, instead of blind menu-editor line navigation
+(which proved fragile: a trailing blank editor line landed the appended args
+on the initrd line). Validated locally end to end under TCG (no nested KVM):
+PASSED in 15:05 -- SecureBoot=1 asserted from guest efivars, tier-1 restore
+hash-verified. The weekly workflow is committed but its first scheduled run
+is pending (this task does not push).
