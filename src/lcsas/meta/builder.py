@@ -1644,8 +1644,6 @@ class MetaVolumeBuilder:
         project_root: Path | None = None,
         static_rustic_path: Path | None = None,
         config: LCSASConfig | None = None,
-        bootable: bool = False,
-        alpine_dir: Path | None = None,
         catalog_db_path: Path | None = None,
         recovery_dir: Path | None = None,
         bundle_recovery_toolchain: bool = True,
@@ -1661,18 +1659,10 @@ class MetaVolumeBuilder:
             config: Optional LCSAS configuration.  When provided,
                 START_HERE.txt and KEY_INFO.txt are generated on the
                 meta-volume using the survivability fields.
-            bootable: If True, include Alpine Linux live boot environment
-                so the meta-volume can be booted directly.  Requires
-                *alpine_dir* with pre-built Alpine artifacts.
-            alpine_dir: Directory containing ``vmlinuz``, ``initramfs``,
-                and ``rootfs.squashfs`` (output of ``build_rootfs.sh``).
-                Required when *bootable* is True.
         """
         self._output = output_dir
         self._static_rustic_path = static_rustic_path
         self._config = config
-        self._bootable = bootable
-        self._alpine_dir = alpine_dir
         self._catalog_db_path = catalog_db_path
         self._bundle_recovery_toolchain = bundle_recovery_toolchain
 
@@ -1721,63 +1711,12 @@ class MetaVolumeBuilder:
         self._write_readme()
         self._write_readme_txt()
         self._write_volume_info()
-
-        # Install (and verify) the live boot environment BEFORE writing
-        # START_HERE.txt: the no-OS routing in START_HERE only claims
-        # the disc is bootable when the boot artifacts actually exist
-        # (_install_live_boot raises otherwise) — see UX-03.
-        if self._bootable:
-            self._install_live_boot()
-
         self._write_start_here()
 
         # Build complete — remove the marker
         incomplete_marker.unlink(missing_ok=True)
 
         return self._output
-
-    # ── Live boot environment ───────────────────────────────────
-
-    def _install_live_boot(self) -> None:
-        """Install Alpine Linux live boot environment into the meta-volume.
-
-        Copies kernel, initramfs, squashfs, boot configs, and the
-        TUI restore wizard from the Alpine build artifacts and the
-        ``live/`` package directory.
-        """
-        if self._alpine_dir is None:
-            raise ValueError(
-                "bootable=True requires alpine_dir with pre-built "
-                "Alpine artifacts (vmlinuz, initramfs, rootfs.squashfs)"
-            )
-        alpine = self._alpine_dir
-        for name in ("vmlinuz", "initramfs", "rootfs.squashfs"):
-            if not (alpine / name).is_file():
-                raise FileNotFoundError(
-                    f"Alpine artifact not found: {alpine / name}"
-                )
-
-        from lcsas.meta.bootable import BootableISOBuilder
-
-        # BootableISOBuilder._install_boot_files / _install_isolinux /
-        # _install_efi handle the heavy lifting.  We create a temporary
-        # builder just to use its helpers for staging.
-        bib = BootableISOBuilder(
-            staging_dir=self._output,
-            alpine_dir=alpine,
-            output_iso=Path("/dev/null"),  # not used here
-        )
-        bib._install_boot_files()
-        bib._install_isolinux()
-        bib._install_efi()
-
-        # Copy the TUI restore wizard into the meta-volume
-        live_dir = Path(__file__).parent / "live"
-        wizard_src = live_dir / "restore_wizard.py"
-        if wizard_src.is_file():
-            dst = self._output / "restore_wizard.py"
-            shutil.copy2(str(wizard_src), str(dst))
-            os.chmod(str(dst), 0o755)
 
     # ── Tool bundling ────────────────────────────────────────────
 
@@ -2466,22 +2405,11 @@ class MetaVolumeBuilder:
 
         label = f"{config.label_prefix}_META" if config is not None else "LCSAS_META"
 
-        # The no-OS route may only claim the disc boots when the
-        # build actually installed a verified live boot environment
-        # (UX-03).  Every standard `lcsas meta build` runs with
-        # bootable=False, so heirs get the borrow-a-computer +
-        # live-USB routing that works today.
-        if self._bootable:
-            no_os_block = """\
-  >>> No working computer at all <<<
-       This disc includes a live boot environment.  Insert
-       it, power on, and press F12 or F2 at power-on to
-       choose the optical drive as the boot device.
-       If it does not boot, use any other computer instead
-       (pick your section above).
-"""
-        else:
-            no_os_block = """\
+        # No LCSAS disc is bootable (the live-boot path was dropped per
+        # BOOT-01/BOOT-07), so the no-OS route must never claim the disc
+        # boots (UX-03): heirs get the borrow-a-computer + live-USB
+        # routing that works today.
+        no_os_block = """\
   >>> No working computer at all <<<
        These discs are NOT bootable, but they do NOT require
        a special computer.  Use any other computer — a

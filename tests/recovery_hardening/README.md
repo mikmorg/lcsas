@@ -27,6 +27,7 @@ make test-recovery-hardening   # this tier only
 | `test_meta_bundling_completeness.py` | Hardening test #1: meta-disc tier-1 bundling completeness. |
 | `test_multi_disc_design_header.py` | test_multi_disc_design_header.py -- static regression guard ensuring |
 | `test_no_boot_deadend_routing.py` | BOOT-01: the no-OS recovery routing (RECOVER.txt / BOOT.txt / START_HERE) must never again send an heir to boot a non-bootable disc; routes to live-USB instead. |
+| `test_no_unpinned_boot_artifacts.py` | BOOT-07: no executable or boot-named artifact reaches a built meta-volume tree without a row in recovery/MANIFEST.sha256 / UPSTREAM.sha256 (or a documented builder-authored exemption); no network-fetch tokens in src/lcsas/meta/. |
 | `test_operational_features.py` | Hardening test: operational-friendliness features for repeat operators. |
 | `test_pack_cache.py` | Hardening test: tier-1 opportunistic pack cache (LCSAS_PACK_CACHE_DIR). |
 | `test_readiness_checklist.py` | test_readiness_checklist.py -- static regression guard for the operator |

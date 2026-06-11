@@ -7,7 +7,6 @@ Covers:
 * ``RecoveryBuilder.write_manifest()`` produces a stable SHA-256 listing.
 * ``MetaVolumeBuilder`` with ``bundle_recovery_toolchain=True`` copies
   the recovery tree onto the meta-volume.
-* ``BootableISOBuilder`` accepts ``recovery_boot_dir`` mode.
 
 Skipped when:
 * The host has no C compiler (``cc`` not on PATH).
@@ -235,42 +234,3 @@ def test_recovery_builder_cross_builds_windows():
     assert a.lcsas_restore.name == "lcsas-restore.exe"
     # Windows binary isn't expected to ship lcsas-init (Linux PID 1 only).
     assert a.lcsas_init is None
-
-
-def test_bootable_builder_rejects_both_modes():
-    """BootableISOBuilder requires exactly one of alpine_dir or recovery_boot_dir."""
-    from lcsas.meta.bootable import BootableISOBuilder
-
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        BootableISOBuilder(
-            staging_dir=Path("/tmp"),
-            alpine_dir=Path("/tmp/a"),
-            recovery_boot_dir=Path("/tmp/r"),
-            output_iso=Path("/tmp/x.iso"),
-        )
-
-    with pytest.raises(ValueError, match="must specify"):
-        BootableISOBuilder(
-            staging_dir=Path("/tmp"),
-            output_iso=Path("/tmp/x.iso"),
-        )
-
-
-def test_bootable_builder_recovery_mode_validates_inputs(tmp_path):
-    """recovery_boot_dir mode raises if kernel/initramfs are missing."""
-    from lcsas.meta.bootable import BootableISOBuilder
-
-    staging = tmp_path / "staging"
-    staging.mkdir()
-    rb = tmp_path / "recovery_boot"
-    rb.mkdir()
-    (rb / "linux").mkdir()
-
-    bib = BootableISOBuilder(
-        staging_dir=staging,
-        recovery_boot_dir=rb,
-        recovery_arch="x86_64",
-        output_iso=tmp_path / "x.iso",
-    )
-    with pytest.raises(FileNotFoundError, match="vmlinuz"):
-        bib._validate_inputs()

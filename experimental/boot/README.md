@@ -45,3 +45,10 @@
   and kernel cmdline.
 * `efi/` — UEFI (GRUB) boot menu config.
 * `initramfs/` — manifest + deterministic cpio.gz assembly script.
+* `bootable.py` — the bootable-ISO builder (`BootableISOBuilder`), moved
+  out of `src/lcsas/meta/` by BOOT-07 (which also deleted its Alpine
+  live mode together with `src/lcsas/meta/live/`: the Alpine rootfs was
+  assembled from unpinned packages fetched over the network at build
+  time).  Only the `recovery_boot_dir` mode targeting this directory
+  survives; exercised by `tests/unit/test_boot_config_paths.py`
+  (skip-if-absent).

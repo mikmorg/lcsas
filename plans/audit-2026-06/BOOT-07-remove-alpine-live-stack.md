@@ -130,3 +130,6 @@ restore-side tolerance code is needed.
 
 1.5 days: 0.5 deletion + builder strip + test cleanup, 0.5 quarantine move +
 import/packaging checks, 0.5 the two guard tests. No special environment.
+
+---
+**Implemented:** 2026-06-11. As planned, with two small calls: the BOOT-03 builder tests stay in tests/unit/test_boot_config_paths.py but load the quarantined module from its file path (skip-if-absent), and the generic xorriso create_bootable_iso tests moved into tests/unit/test_xorriso.py rather than being deleted.

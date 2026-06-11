@@ -6,21 +6,43 @@ reused Alpine isolinux.cfg loaded /boot/initramfs without the
 .cpio.gz suffix).  These tests pin the fixed contract: every path a
 menu entry loads exists in the staging tree, and build() refuses to
 master an ISO when one does not.
+
+The builder under test is the QUARANTINED ``experimental/boot/
+bootable.py`` (moved out of the installed package by BOOT-07), so it
+is loaded from its file path and the whole module skips if the
+experimental tree has been deleted.
 """
 
 from __future__ import annotations
 
 import gzip
+import importlib.util
 import shutil
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from lcsas.meta.bootable import _MENU_PATH_RE, BootableISOBuilder
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REPO_GRUB_CFG = REPO_ROOT / "experimental" / "boot" / "efi" / "grub.cfg"
+_BOOTABLE_PY = REPO_ROOT / "experimental" / "boot" / "bootable.py"
+
+if not _BOOTABLE_PY.is_file():
+    pytest.skip(
+        "experimental/boot/bootable.py absent — quarantined builder "
+        "deleted; remove this test file with it",
+        allow_module_level=True,
+    )
+
+_spec = importlib.util.spec_from_file_location(
+    "experimental_bootable", _BOOTABLE_PY
+)
+assert _spec is not None and _spec.loader is not None
+_bootable = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_bootable)
+
+BootableISOBuilder = _bootable.BootableISOBuilder
+_MENU_PATH_RE = _bootable._MENU_PATH_RE
 
 
 def _trailer_only_cpio_gz(path: Path) -> None:
@@ -139,3 +161,17 @@ def test_build_passes_with_consistent_configs(
         patch.object(BootableISOBuilder, "_create_iso"),
     ):
         assert bib.build() == tmp_path / "out.iso"
+
+
+def test_builder_validates_missing_boot_artifacts(tmp_path: Path) -> None:
+    """_validate_inputs raises if kernel/initramfs are missing (moved
+    from tests/integration/test_recovery_orchestration.py by BOOT-07)."""
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    rb = tmp_path / "recovery_boot"
+    rb.mkdir()
+    (rb / "linux").mkdir()
+
+    bib = _builder(staging, rb, tmp_path)
+    with pytest.raises(FileNotFoundError, match="vmlinuz"):
+        bib._validate_inputs()

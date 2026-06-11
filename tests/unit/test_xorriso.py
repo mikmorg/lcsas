@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
@@ -162,3 +165,115 @@ class TestXorrisoMocked:
         runner = SubprocessXorrisoRunner()
         with patch("shutil.which", return_value="/usr/bin/xorriso"):
             runner.check_binary()  # should not raise
+
+
+# ── create_bootable_iso (El Torito records) ──────────────────────
+# Moved from tests/unit/test_bootable.py when the Alpine live stack
+# was deleted (BOOT-07); this API is generic ISO mastering, not part
+# of the dropped boot path.
+
+
+@pytest.fixture()
+def staging_dir(tmp_path: Path) -> Path:
+    """Create a minimal meta-volume staging directory."""
+    d = tmp_path / "staging"
+    d.mkdir()
+    (d / "restore.sh").write_text("#!/bin/bash\necho restore\n")
+    (d / "volume_info.json").write_text('{"type": "meta"}')
+    return d
+
+
+class TestXorrisoBootableISO:
+    """Test create_bootable_iso on SubprocessXorrisoRunner."""
+
+    @patch("subprocess.run")
+    def test_create_bootable_iso_bios_only(
+        self, mock_run: MagicMock, staging_dir: Path, tmp_path: Path
+    ):
+        # Set up BIOS boot files
+        isolinux = staging_dir / "isolinux"
+        isolinux.mkdir()
+        (isolinux / "isolinux.bin").write_bytes(b"\x00" * 64)
+
+        tmp_iso = tmp_path / "out.iso.tmp"
+
+        def fake_run(cmd, **kwargs):
+            tmp_iso.write_bytes(b"ISO")
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = fake_run
+
+        runner = SubprocessXorrisoRunner()
+        runner.create_bootable_iso(
+            staging_dir,
+            tmp_path / "out.iso",
+            "TEST_LABEL",
+            bios_boot=True,
+            uefi_boot=False,
+        )
+
+        call_args = mock_run.call_args[0][0]
+        assert "isolinux/isolinux.bin" in call_args
+        assert "-no-emul-boot" in call_args
+        # UEFI should not be present
+        assert "-eltorito-alt-boot" not in call_args
+
+    @patch("subprocess.run")
+    def test_create_bootable_iso_uefi_only(
+        self, mock_run: MagicMock, staging_dir: Path, tmp_path: Path
+    ):
+        # Set up UEFI boot files
+        boot = staging_dir / "boot"
+        boot.mkdir()
+        (boot / "efiboot.img").write_bytes(b"\x00" * 4096)
+
+        tmp_iso = tmp_path / "out.iso.tmp"
+
+        def fake_run(cmd, **kwargs):
+            tmp_iso.write_bytes(b"ISO")
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = fake_run
+
+        runner = SubprocessXorrisoRunner()
+        runner.create_bootable_iso(
+            staging_dir,
+            tmp_path / "out.iso",
+            "TEST_LABEL",
+            bios_boot=False,
+            uefi_boot=True,
+        )
+
+        call_args = mock_run.call_args[0][0]
+        assert "-eltorito-alt-boot" in call_args
+        assert "boot/efiboot.img" in call_args
+        # BIOS should not be present
+        assert "-b" not in call_args
+
+    @patch("subprocess.run")
+    def test_create_bootable_iso_missing_source(
+        self, mock_run: MagicMock, tmp_path: Path
+    ):
+        runner = SubprocessXorrisoRunner()
+        with pytest.raises(FileNotFoundError, match="Source directory"):
+            runner.create_bootable_iso(
+                tmp_path / "nonexistent",
+                tmp_path / "out.iso",
+                "TEST",
+            )
+
+    @patch("subprocess.run")
+    def test_create_bootable_iso_cleanup_on_failure(
+        self, mock_run: MagicMock, staging_dir: Path, tmp_path: Path
+    ):
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1, "xorriso", stderr="error"
+        )
+        runner = SubprocessXorrisoRunner()
+        with pytest.raises(subprocess.CalledProcessError):
+            runner.create_bootable_iso(
+                staging_dir,
+                tmp_path / "out.iso",
+                "TEST",
+            )
+        assert not (tmp_path / "out.iso.tmp").exists()

@@ -11,10 +11,14 @@ screen for the heir at boot.  These tests pin the inverted behavior:
 * placeholder archive -> rejected by ``_assert_no_empty_regular_files``.
 
 The script lives under ``experimental/boot/`` post-BOOT-01; the locator
-glob below survives either layout.
+glob below survives either layout.  The newc walker
+(``_assert_no_empty_regular_files``) follows the quarantined builder
+to ``experimental/boot/bootable.py`` (BOOT-07), so it is loaded from
+its file path; the whole module skips if the tree has been deleted.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -22,14 +26,29 @@ from pathlib import Path
 
 import pytest
 
-from lcsas.meta.bootable import _assert_no_empty_regular_files
-
 pytestmark = pytest.mark.skipif(
     shutil.which("cpio") is None or shutil.which("gzip") is None,
     reason="requires cpio and gzip binaries",
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_BOOTABLE_PY = _REPO_ROOT / "experimental" / "boot" / "bootable.py"
+
+if not _BOOTABLE_PY.is_file():
+    pytest.skip(
+        "experimental/boot/bootable.py absent — quarantined boot tree "
+        "deleted; remove this test file with it",
+        allow_module_level=True,
+    )
+
+_spec = importlib.util.spec_from_file_location(
+    "experimental_bootable_initramfs", _BOOTABLE_PY
+)
+assert _spec is not None and _spec.loader is not None
+_bootable = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_bootable)
+
+_assert_no_empty_regular_files = _bootable._assert_no_empty_regular_files
 
 
 def _build_script() -> Path:

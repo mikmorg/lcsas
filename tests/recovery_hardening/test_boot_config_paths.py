@@ -21,8 +21,9 @@ _BOOT_DIR = _REPO_ROOT / "experimental" / "boot"
 
 # The staged-on-disc names produced by
 # ``BootableISOBuilder._install_boot_files`` in recovery mode
-# (src/lcsas/meta/bootable.py).  This set IS the contract: every
-# kernel/initrd path in the quarantined boot configs must be in it.
+# (experimental/boot/bootable.py, quarantined by BOOT-07).  This set
+# IS the contract: every kernel/initrd path in the quarantined boot
+# configs must be in it.
 _STAGED_BOOT_PATHS = {"/boot/vmlinuz", "/boot/initramfs.cpio.gz"}
 
 # GRUB menu lines that load files: `linux <path> ...` / `initrd <path>`.

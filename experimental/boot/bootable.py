@@ -1,9 +1,19 @@
-"""Bootable ISO builder — wraps a meta-volume with Alpine Linux live boot.
+"""QUARANTINED bootable ISO builder (BOOT-07) — NOT part of the lcsas package.
 
 Takes an already-built meta-volume staging directory (from
-:class:`~lcsas.meta.builder.MetaVolumeBuilder`) and Alpine Linux
-artifacts (vmlinuz, initramfs, rootfs.squashfs), then creates a hybrid
-ISO image that boots on both UEFI and Legacy BIOS systems.
+``lcsas.meta.builder.MetaVolumeBuilder``) and the quarantined C89
+recovery boot artifacts (``experimental/boot/``: vmlinuz +
+initramfs.cpio.gz), then creates a hybrid ISO image that boots on
+both UEFI and Legacy BIOS systems.
+
+This module was moved out of ``src/lcsas/meta/`` together with the
+rest of the bootable-media scaffolding (see README.md in this
+directory).  Its Alpine live-boot mode was deleted with the Alpine
+stack (`src/lcsas/meta/live/`, plan BOOT-07): the build fetched
+unpinned packages from Alpine repos over the network, violating the
+every-shipped-runtime-artifact-is-pinned doctrine.  Only the
+``recovery_boot_dir`` mode survives.  Revival precondition: the
+QEMU/OVMF boot smoke gate of plan BOOT-08.
 
 Boot structure added to the meta-volume::
 
@@ -11,8 +21,7 @@ Boot structure added to the meta-volume::
     ├── grub/
     │   └── grub.cfg
     ├── vmlinuz
-    ├── initramfs
-    └── rootfs.squashfs
+    └── initramfs.cpio.gz
     EFI/
     └── BOOT/
         └── BOOTX64.EFI
@@ -106,7 +115,7 @@ class BootableISOBuilder:
 
         bib = BootableISOBuilder(
             staging_dir=Path("/tmp/meta"),
-            alpine_dir=Path("/tmp/alpine-out"),
+            recovery_boot_dir=Path("experimental/boot"),
             output_iso=Path("/tmp/LCSAS_META.iso"),
         )
         bib.build()
@@ -115,44 +124,30 @@ class BootableISOBuilder:
     def __init__(
         self,
         staging_dir: Path,
-        alpine_dir: Path | None = None,
+        recovery_boot_dir: Path,
         output_iso: Path | None = None,
         volume_label: str = "LCSAS_META",
         xorriso_binary: str = "xorriso",
-        recovery_boot_dir: Path | None = None,
         recovery_arch: str = "x86_64",
     ) -> None:
         """
         Args:
             staging_dir: Meta-volume root (already populated by
-                :class:`MetaVolumeBuilder`).
-            alpine_dir: Directory containing ``vmlinuz``, ``initramfs``,
-                and ``rootfs.squashfs`` (output of ``build_rootfs.sh``).
-                Mutually exclusive with ``recovery_boot_dir``.
+                ``MetaVolumeBuilder``).
+            recovery_boot_dir: Points at an ``experimental/boot/``
+                tree (Linux LTS configs + initramfs).  The bootable
+                ISO uses the quarantined C89 recovery toolchain boot
+                stack.
             output_iso: Path for the final ``.iso`` file.
             volume_label: ISO 9660 volume label.
             xorriso_binary: Path or name of the ``xorriso`` binary.
-            recovery_boot_dir: Alternative to ``alpine_dir``.  Points at
-                an ``experimental/boot/`` tree (Linux LTS configs +
-                initramfs).  When set, the bootable ISO uses the
-                quarantined C89 recovery toolchain boot stack instead
-                of Alpine.
             recovery_arch: Target architecture for ``recovery_boot_dir``
                 (x86_64, aarch64, or riscv64).
         """
-        if alpine_dir is None and recovery_boot_dir is None:
-            raise ValueError(
-                "must specify either alpine_dir or recovery_boot_dir"
-            )
-        if alpine_dir is not None and recovery_boot_dir is not None:
-            raise ValueError(
-                "alpine_dir and recovery_boot_dir are mutually exclusive"
-            )
         if output_iso is None:
             raise ValueError("output_iso is required")
 
         self._staging = staging_dir
-        self._alpine = alpine_dir
         self._recovery_boot = recovery_boot_dir
         self._recovery_arch = recovery_arch
         self._output = output_iso
@@ -182,80 +177,50 @@ class BootableISOBuilder:
             raise FileNotFoundError(
                 f"Staging directory not found: {self._staging}"
             )
-        if self._recovery_boot is not None:
-            # experimental/boot/ layout
-            arch = self._recovery_arch
-            required = [
-                self._recovery_boot / "linux" / f"vmlinuz-{arch}",
-                self._recovery_boot / f"initramfs-{arch}.cpio.gz",
-            ]
-            for p in required:
-                if not p.is_file():
-                    raise FileNotFoundError(
-                        f"Recovery boot artifact not found: {p}\n"
-                        f"Build with: make CC=<cross> bin/{arch}/lcsas-restore "
-                        f"&& bash experimental/boot/initramfs/"
-                        f"build_initramfs.sh {arch} {p}"
-                    )
-            # A present-but-placeholder archive (zero-byte /init or
-            # /bin/busybox) must be rejected here, not at first boot.
-            _assert_no_empty_regular_files(
-                self._recovery_boot / f"initramfs-{arch}.cpio.gz"
-            )
-            return
-
-        assert self._alpine is not None
-        for name in ("vmlinuz", "initramfs", "rootfs.squashfs"):
-            path = self._alpine / name
-            if not path.is_file():
+        # experimental/boot/ layout
+        arch = self._recovery_arch
+        required = [
+            self._recovery_boot / "linux" / f"vmlinuz-{arch}",
+            self._recovery_boot / f"initramfs-{arch}.cpio.gz",
+        ]
+        for p in required:
+            if not p.is_file():
                 raise FileNotFoundError(
-                    f"Alpine artifact not found: {path}"
+                    f"Recovery boot artifact not found: {p}\n"
+                    f"Build with: make CC=<cross> bin/{arch}/lcsas-restore "
+                    f"&& bash experimental/boot/initramfs/"
+                    f"build_initramfs.sh {arch} {p}"
                 )
+        # A present-but-placeholder archive (zero-byte /init or
+        # /bin/busybox) must be rejected here, not at first boot.
+        _assert_no_empty_regular_files(
+            self._recovery_boot / f"initramfs-{arch}.cpio.gz"
+        )
 
     # ── Step 2: boot files ───────────────────────────────────────
 
     def _install_boot_files(self) -> None:
-        """Copy kernel, initramfs, and squashfs into staging."""
+        """Copy kernel and initramfs into staging (C89 recovery boot stack)."""
         boot_dir = self._staging / "boot"
         boot_dir.mkdir(parents=True, exist_ok=True)
 
-        if self._recovery_boot is not None:
-            # New C89 recovery boot stack.
-            arch = self._recovery_arch
-            kernel_src = self._recovery_boot / "linux" / f"vmlinuz-{arch}"
-            init_src = self._recovery_boot / f"initramfs-{arch}.cpio.gz"
-            shutil.copy2(str(kernel_src), str(boot_dir / _RECOVERY_KERNEL_NAME))
-            shutil.copy2(str(init_src), str(boot_dir / _RECOVERY_INITRD_NAME))
+        arch = self._recovery_arch
+        kernel_src = self._recovery_boot / "linux" / f"vmlinuz-{arch}"
+        init_src = self._recovery_boot / f"initramfs-{arch}.cpio.gz"
+        shutil.copy2(str(kernel_src), str(boot_dir / _RECOVERY_KERNEL_NAME))
+        shutil.copy2(str(init_src), str(boot_dir / _RECOVERY_INITRD_NAME))
 
-            grub_dir = boot_dir / "grub"
-            grub_dir.mkdir(parents=True, exist_ok=True)
-            recovery_grub = self._recovery_boot.parent / "boot" / "efi" / "grub.cfg"
-            if recovery_grub.is_file():
-                shutil.copy2(str(recovery_grub), str(grub_dir / "grub.cfg"))
-            else:
-                self._write_default_grub_cfg(
-                    grub_dir / "grub.cfg",
-                    kernel=f"/boot/{_RECOVERY_KERNEL_NAME}",
-                    initrd=f"/boot/{_RECOVERY_INITRD_NAME}",
-                )
-            return
-
-        assert self._alpine is not None
-        for name in ("vmlinuz", "initramfs", "rootfs.squashfs"):
-            src = self._alpine / name
-            dst = boot_dir / name
-            if not dst.exists():
-                shutil.copy2(str(src), str(dst))
-                _logger.info("Installed %s (%d bytes)", name, dst.stat().st_size)
-
-        # GRUB config
         grub_dir = boot_dir / "grub"
         grub_dir.mkdir(parents=True, exist_ok=True)
-        grub_cfg = Path(__file__).parent / "live" / "grub.cfg"
-        if grub_cfg.is_file():
-            shutil.copy2(str(grub_cfg), str(grub_dir / "grub.cfg"))
+        recovery_grub = self._recovery_boot.parent / "boot" / "efi" / "grub.cfg"
+        if recovery_grub.is_file():
+            shutil.copy2(str(recovery_grub), str(grub_dir / "grub.cfg"))
         else:
-            self._write_default_grub_cfg(grub_dir / "grub.cfg")
+            self._write_default_grub_cfg(
+                grub_dir / "grub.cfg",
+                kernel=f"/boot/{_RECOVERY_KERNEL_NAME}",
+                initrd=f"/boot/{_RECOVERY_INITRD_NAME}",
+            )
 
     # ── Step 3: isolinux (Legacy BIOS) ───────────────────────────
 
@@ -268,22 +233,13 @@ class BootableISOBuilder:
         isolinux_dir = self._staging / "isolinux"
         isolinux_dir.mkdir(parents=True, exist_ok=True)
 
-        if self._recovery_boot is not None:
-            # Recovery mode stages initramfs.cpio.gz, not the Alpine
-            # `initramfs` — never reuse live/isolinux.cfg here; generate
-            # the config from the staged names instead (sole source).
-            self._write_default_isolinux_cfg(
-                isolinux_dir / "isolinux.cfg",
-                kernel=f"/boot/{_RECOVERY_KERNEL_NAME}",
-                initrd=f"/boot/{_RECOVERY_INITRD_NAME}",
-            )
-        else:
-            # Copy isolinux config
-            cfg_src = Path(__file__).parent / "live" / "isolinux.cfg"
-            if cfg_src.is_file():
-                shutil.copy2(str(cfg_src), str(isolinux_dir / "isolinux.cfg"))
-            else:
-                self._write_default_isolinux_cfg(isolinux_dir / "isolinux.cfg")
+        # Recovery mode stages initramfs.cpio.gz — generate the config
+        # from the staged names (sole source; BOOT-03).
+        self._write_default_isolinux_cfg(
+            isolinux_dir / "isolinux.cfg",
+            kernel=f"/boot/{_RECOVERY_KERNEL_NAME}",
+            initrd=f"/boot/{_RECOVERY_INITRD_NAME}",
+        )
 
         # Find isolinux.bin and ldlinux.c32 on the system
         search_dirs = [
