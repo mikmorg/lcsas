@@ -798,18 +798,33 @@ class BurnOrchestrator:
                             commit=False,
                         )
 
-                # Record copy at location, with the verification
-                # evidence (BURN-04: previously iso_sha256 was omitted —
-                # every copy row got NULL, and a re-burn UPSERT blanked
-                # any stored hash; last_verified_at was never written).
-                add_volume_copy(
-                    self._conn,
-                    volume_id=sv.volume_id,
-                    location=location,
-                    iso_sha256=sv.iso_sha256 or None,
-                    last_verified_at=verified_at,
-                    commit=False,
-                )
+                if verify_passed:
+                    # Record copy at location, with the verification
+                    # evidence (BURN-04: previously iso_sha256 was omitted —
+                    # every copy row got NULL, and a re-burn UPSERT blanked
+                    # any stored hash; last_verified_at was never written).
+                    add_volume_copy(
+                        self._conn,
+                        volume_id=sv.volume_id,
+                        location=location,
+                        iso_sha256=sv.iso_sha256 or None,
+                        last_verified_at=verified_at,
+                        commit=False,
+                    )
+                else:
+                    # BURN-05: a failed disc is not a copy. Recording one
+                    # would satisfy the ACTIVE-copy location queries and
+                    # `stage --for-location` would never re-stage these
+                    # packs — a phantom copy in the catalog forever. The
+                    # VERIFY_FAIL event above carries the location for
+                    # the audit trail.
+                    _logger.error(
+                        "Burn at %s FAILED verification for %s. NO copy "
+                        "was recorded — this location still needs this "
+                        "volume. Inspect the disc/drive and re-run: "
+                        "lcsas burn --session %s --location %s",
+                        location, vol.label, session_id, location,
+                    )
                 self._conn.commit()
 
                 # Build receipt (before ISO cleanup, in case unlink fails)
@@ -863,8 +878,14 @@ class BurnOrchestrator:
                         iso_path, exc,
                     )
 
-        # Update session status
-        update_session_status(self._conn, session_id, "COMPLETE")
+        # Update session status — any failed verify leaves the session
+        # PARTIAL so it can never masquerade as a completed copy set;
+        # re-running the burn at the same location is the recovery
+        # path.  [BURN-05]
+        any_failed = any(not r.verify_passed for r in receipts)
+        update_session_status(
+            self._conn, session_id, "PARTIAL" if any_failed else "COMPLETE",
+        )
 
         # Write receipts JSON
         session_vols_info = get_session_volumes(self._conn, session_id)

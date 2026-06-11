@@ -31,6 +31,7 @@ from lcsas.db.packs import register_pack
 from lcsas.db.queries import (
     get_archive_status_summary,
     get_location_summary,
+    get_unarchived_or_missing_at_location,
     get_unarchived_packs,
 )
 from lcsas.db.repos import register_repo
@@ -540,6 +541,82 @@ class TestBurnSession:
             events = get_events_for_volume(conn, receipt.volume_id, "VERIFY_FAIL")
             assert len(events) >= 1
             assert "failed" in events[0].detail.lower()
+
+            # BURN-05: a failed disc is not a copy — no row at all.
+            copies = get_copies_for_volume(conn, receipt.volume_id,
+                                           active_only=False)
+            assert copies == []
+
+
+class TestVerifyFailNoActiveCopy:
+    """BURN-05: a failed post-burn verify must not record an ACTIVE copy
+    or let the session reach COMPLETE — otherwise the location queries
+    count the bad disc as present and `stage --for-location` never
+    re-stages its packs."""
+
+    def _stage_and_fail_burn(self, env):
+        """Stage, then burn with verification failing (mocked burn)."""
+        orch = env["orch"]
+        xorriso = env["xorriso"]
+
+        result = orch.stage()
+
+        xorriso.burn_iso = MagicMock()
+        xorriso.verify_disc = MagicMock(return_value=False)
+
+        receipts = orch.burn_session(result.session_id, "Home_Shelf",
+                                     skip_burn=False)
+        return result, receipts
+
+    def test_verify_fail_does_not_create_active_copy(self, env):
+        conn = env["conn"]
+        result, receipts = self._stage_and_fail_burn(env)
+
+        assert len(receipts) == len(result.manifests)
+        for receipt in receipts:
+            assert receipt.verify_passed is False
+            copies = get_copies_for_volume(conn, receipt.volume_id,
+                                           active_only=False)
+            assert copies == []
+
+        # The location still needs every staged pack — `lcsas stage
+        # --for-location Home_Shelf` must re-select all of them.
+        missing = get_unarchived_or_missing_at_location(conn, "Home_Shelf")
+        assert {p.sha256 for p in missing} == {p.sha256 for p in env["packs"]}
+
+    def test_verify_fail_session_partial_not_complete(self, env):
+        conn = env["conn"]
+        result, _receipts = self._stage_and_fail_burn(env)
+
+        session = get_session(conn, result.session_id)
+        assert session.status == "PARTIAL"
+
+    def test_verify_fail_then_successful_reburn_records_copy(self, env):
+        conn = env["conn"]
+        orch = env["orch"]
+        xorriso = env["xorriso"]
+
+        result, _receipts = self._stage_and_fail_burn(env)
+
+        # Retry at the same location — verification passes this time
+        # (the fixture's device reader matches the all-zeros ISOs).
+        xorriso.verify_disc = MagicMock(return_value=True)
+        receipts = orch.burn_session(result.session_id, "Home_Shelf",
+                                     skip_burn=False)
+
+        for receipt in receipts:
+            assert receipt.verify_passed is True
+            vol = get_volume_by_id(conn, receipt.volume_id)
+            assert vol.status == "VERIFIED"
+
+            copies = get_copies_for_volume(conn, receipt.volume_id,
+                                           active_only=False)
+            assert len(copies) == 1
+            assert copies[0].status == "ACTIVE"
+            assert copies[0].location == "Home_Shelf"
+
+        session = get_session(conn, result.session_id)
+        assert session.status == "COMPLETE"
 
 
 class TestDeviceHashVerify:

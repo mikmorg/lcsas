@@ -971,6 +971,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     from lcsas.db.connection import get_connection
     from lcsas.db.queries import get_archive_status_summary
     from lcsas.db.schema import create_all
+    from lcsas.db.sessions import list_sessions
+    from lcsas.db.volume_events import get_latest_event
     from lcsas.db.volumes import list_volumes
 
     db_path = _resolve_db_path(args)
@@ -980,6 +982,16 @@ def cmd_status(args: argparse.Namespace) -> int:
 
         summary = get_archive_status_summary(conn)
         volumes = list_volumes(conn)
+        partial_sessions = list_sessions(conn, status_filter="PARTIAL")
+        # BURN-05: a volume whose latest event is a verify failure has no
+        # copy recorded for that burn — it needs a re-burn at the location.
+        needs_reburn: list[tuple[str, str]] = []
+        for v in volumes:
+            ev = get_latest_event(conn, v.volume_id)
+            if ev is not None and ev.event_type in (
+                "VERIFY_FAIL", "VERIFY_FAIL_REBURN",
+            ):
+                needs_reburn.append((v.label, ev.location or "<unknown>"))
     finally:
         conn.close()
 
@@ -998,6 +1010,15 @@ def cmd_status(args: argparse.Namespace) -> int:
             "session.",
             summary["staged"],
         )
+    for s in partial_sessions:
+        logger.warning(
+            "WARNING: session %s is PARTIAL — at least one burn failed "
+            "verification and recorded no copy. Re-run: "
+            "lcsas burn --session %s --location <location>",
+            s.session_id, s.session_id,
+        )
+    for label, loc in needs_reburn:
+        logger.warning("WARNING: %s needs re-burn at %s", label, loc)
     return 0
 
 
@@ -1209,7 +1230,25 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
 
     logger.info(f"Burned {len(receipts)} volume(s) to {location}:")
     for r in receipts:
-        logger.info(f"  {r.volume_label} → {r.pack_count} packs")
+        if r.verify_passed:
+            logger.info(f"  {r.volume_label} → {r.pack_count} packs")
+        else:
+            logger.error(
+                f"  {r.volume_label} → VERIFY FAILED — no copy recorded; "
+                f"needs re-burn at {location}"
+            )
+    failed = [r for r in receipts if not r.verify_passed]
+    if failed:
+        # BURN-05: the session stays PARTIAL; re-burning at the same
+        # location records the copy normally once verification passes.
+        logger.error(
+            "%d volume(s) failed verification — session %s is PARTIAL. "
+            "Inspect the disc/drive and re-run: "
+            "lcsas burn --session %s --location %s",
+            len(failed), failed[0].session_id,
+            failed[0].session_id, location,
+        )
+        return 1
     return 0
 
 

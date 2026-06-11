@@ -115,3 +115,6 @@ Always-on unit (`make test-unit`, CI test.yml), `tests/unit/test_session_pipelin
 ## Effort
 
 1 day: 0.4 impl, 0.6 tests. No special environment.
+
+---
+**Implemented:** 2026-06-11. As planned, plus one deviation the design missed: the volume state machine forbade BURNED → BURNING, so the "no special handling" retry path would have raised — added that transition to `VALID_TRANSITIONS` (db/volumes.py). `cmd_burn_session` also returns exit code 1 when any receipt failed verify.

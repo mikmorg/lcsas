@@ -122,3 +122,39 @@ class TestLocationQueries:
     def test_location_summary_empty(self, conn):
         summary = get_location_summary(conn)
         assert summary == []
+
+
+def test_failed_burn_does_not_satisfy_location(tmp_path):
+    """A burn whose post-burn verify failed must leave the location
+    unsatisfied: no ACTIVE copy → get_packs_at_location stays empty and
+    the packs keep being re-staged for that location.  [BURN-05]"""
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    from lcsas.burn.orchestrator import BurnOrchestrator
+    from tests.unit.test_session_pipeline import _make_config, _seed_packs
+
+    config = _make_config(tmp_path, num_repos=1)
+    conn = get_memory_connection()
+    create_all(conn)
+    register_repo(conn, "family", "Family",
+                  str(config.repositories["family"].mirror_path))
+    packs = _seed_packs(conn, config, num_packs=3, pack_size=50)
+
+    xorriso = MagicMock()
+
+    def _fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
+        Path(output_iso).write_bytes(b"\x00" * 1024)
+        return Path(output_iso)
+
+    xorriso.create_iso.side_effect = _fake_create_iso
+    xorriso.verify_disc = MagicMock(return_value=False)
+    orch = BurnOrchestrator(config, conn, xorriso, MagicMock())
+
+    result = orch.stage()
+    orch.burn_session(result.session_id, "Offsite_Safe", skip_burn=False)
+
+    # The failed disc satisfies nothing at the location.
+    assert get_packs_at_location(conn, "Offsite_Safe") == set()
+    missing = get_unarchived_or_missing_at_location(conn, "Offsite_Safe")
+    assert {p.sha256 for p in missing} == {p.sha256 for p in packs}
