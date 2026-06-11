@@ -25,9 +25,11 @@ Boot structure added to the meta-volume::
 from __future__ import annotations
 
 import contextlib
+import gzip
 import logging
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -36,6 +38,50 @@ _logger = logging.getLogger(__name__)
 # Size of the EFI boot image in MiB — must be large enough
 # to hold GRUB EFI binary + grub.cfg + font
 _EFI_IMG_SIZE_MIB = 4
+
+# newc (SVR4) cpio header: 6-byte magic + 13 × 8-byte ASCII-hex fields.
+_NEWC_MAGIC = b"070701"
+_NEWC_HEADER_LEN = 110
+
+
+def _assert_no_empty_regular_files(cpio_gz: Path) -> None:
+    """Parse the gzipped newc cpio; raise ValueError on any 0-byte regular file.
+
+    A zero-byte regular file in a recovery initramfs is a placeholder
+    left by a broken build (e.g. an empty ``/bin/busybox`` that every
+    shell symlink points at — a black screen at boot).  Such archives
+    must be rejected, never burned.
+    """
+    data = gzip.decompress(cpio_gz.read_bytes())
+    offenders: list[str] = []
+    offset = 0
+    while offset + _NEWC_HEADER_LEN <= len(data):
+        header = data[offset : offset + _NEWC_HEADER_LEN]
+        if header[:6] != _NEWC_MAGIC:
+            raise ValueError(
+                f"{cpio_gz}: not a newc cpio archive (bad magic at byte {offset})"
+            )
+        fields = [
+            int(header[6 + 8 * i : 6 + 8 * (i + 1)], 16) for i in range(13)
+        ]
+        mode, filesize, namesize = fields[1], fields[6], fields[11]
+        name_start = offset + _NEWC_HEADER_LEN
+        # namesize includes the trailing NUL.
+        name = data[name_start : name_start + namesize - 1].decode(
+            "ascii", errors="replace"
+        )
+        if name == "TRAILER!!!":
+            break
+        if stat.S_ISREG(mode) and filesize == 0:
+            offenders.append(name)
+        # Header+name padded to 4 bytes, then data padded to 4 bytes.
+        data_start = (name_start + namesize + 3) & ~3
+        offset = (data_start + filesize + 3) & ~3
+    if offenders:
+        raise ValueError(
+            f"{cpio_gz}: initramfs contains zero-byte regular files "
+            f"(placeholder build artifacts): {', '.join(sorted(offenders))}"
+        )
 
 
 class BootableISOBuilder:
@@ -135,6 +181,11 @@ class BootableISOBuilder:
                         f"&& bash experimental/boot/initramfs/"
                         f"build_initramfs.sh {arch} {p}"
                     )
+            # A present-but-placeholder archive (zero-byte /init or
+            # /bin/busybox) must be rejected here, not at first boot.
+            _assert_no_empty_regular_files(
+                self._recovery_boot / f"initramfs-{arch}.cpio.gz"
+            )
             return
 
         assert self._alpine is not None

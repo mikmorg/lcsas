@@ -140,3 +140,6 @@ No catalog/schema impact.
 
 1 day: 0.25 script fix + README claims, 0.25 newc parser helper, 0.5 tests.
 No special environment (cpio + gzip only).
+
+---
+**Implemented:** 2026-06-11. As planned (post-BOOT-01 layout: script fixed in experimental/boot/; Fix B in src/lcsas/meta/bootable.py since BOOT-07 has not landed; no `make -C recovery initramfs-check` target — pytest gate is the single home per the plan).

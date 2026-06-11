@@ -56,8 +56,11 @@ Summary:
 
   Architectures:   x86_64, aarch64, riscv64 (Phase 3)
   Bootstrap:       prebuilt + source; no compiler bundled
-  Userland:        BusyBox static (Phase 2)
-  Kernel:          Linux LTS 6.6 + FreeBSD 13.4 (Phase 2)
+  Userland:        none vendored (BusyBox was planned, never added;
+                   the boot stack is experimental -- see
+                   ../experimental/boot/ in the source repository)
+  Kernel:          none built (Linux LTS 6.6 + FreeBSD 13.4 were
+                   planned; configs quarantined with the boot stack)
   Language:        strict C89 + POSIX sh (no bashisms)
 
 PHASE STATUS
@@ -72,7 +75,9 @@ PHASE STATUS
     - zstd 1.5.6 vendored; restic v2 (compressed) repos restore round-trip.
     - SQLite 3.46.0 vendored; on-disc catalog query module (catalog.c).
     - lcsas-iso9660 mini-reader (no kernel mount-loop needed).
-    - lcsas-init C89 init for the live-boot initramfs.
+    - lcsas-init C89 init for the live-boot initramfs.  (The C89 init
+      source exists, but no userland or kernel was ever built; the
+      live-boot stack itself was dropped -- see the Phase 3 note.)
     - Reproducible-build verification (make repro-check).
     - End-to-end integration test against a Python-built synthetic
       restic repo, covering both v1 and v2 layouts.

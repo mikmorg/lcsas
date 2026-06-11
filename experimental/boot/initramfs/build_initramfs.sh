@@ -39,15 +39,18 @@ while IFS= read -r raw; do
             ;;
         f)
             src="$ROOT/$1"; target="$2"; mode="$3"
-            if [ ! -f "$src" ]; then
-                printf 'WARN: missing source %s; placeholder zero-byte file\n' \
-                    "$src" >&2
-                mkdir -p "$STAGING$(dirname "$target")"
-                : > "$STAGING$target"
-            else
-                mkdir -p "$STAGING$(dirname "$target")"
-                cp "$src" "$STAGING$target"
+            # Hard-fail on missing OR empty sources: an initramfs with a
+            # zero-byte /bin/busybox (or /init) is a black screen for the
+            # heir.  A build that cannot produce a working artifact must
+            # fail loud, never ship placeholders.
+            if [ ! -f "$src" ] || [ ! -s "$src" ]; then
+                printf 'ERROR: manifest source missing or empty: %s (for %s)\n' \
+                    "$src" "$target" >&2
+                printf 'ERROR: refusing to build an initramfs with placeholder files.\n' >&2
+                exit 1
             fi
+            mkdir -p "$STAGING$(dirname "$target")"
+            cp "$src" "$STAGING$target"
             chmod "$mode" "$STAGING$target"
             ;;
         s)
@@ -65,5 +68,17 @@ find "$STAGING" -depth -exec touch -h -d "@$SDE" {} +
 ( cd "$STAGING" && find . -print | LC_ALL=C sort \
     | cpio -o -H newc --reproducible 2>/dev/null \
     | gzip -n -9 ) > "$OUT"
+
+# Defense in depth: the archive must not contain any zero-byte regular
+# file (the f-branch above should make this unreachable).  The pytest
+# gate (tests/recovery_hardening/test_initramfs_manifest_sources.py)
+# is the authoritative check.
+empties="$(gzip -dc "$OUT" | cpio -tv 2>/dev/null | awk '/^-/ && $5 == 0')"
+if [ -n "$empties" ]; then
+    printf 'ERROR: built initramfs contains zero-byte regular files:\n%s\n' \
+        "$empties" >&2
+    rm -f "$OUT"
+    exit 1
+fi
 
 printf 'wrote %s (%s bytes)\n' "$OUT" "$(wc -c < "$OUT")" >&2
