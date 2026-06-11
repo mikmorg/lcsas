@@ -276,7 +276,7 @@ while [ $# -gt 0 ]; do
 usage: $0 [--repo NAME] [--target DIR] [--key FILE] [--version] [RECOVERY_ROOT] [TARGET_DIR] [SNAPSHOT_ID|latest]
 
 QUICK START:
-  1. Insert ANY data disc into your drive.
+  1. Insert the disc labelled LCSAS_META into your drive.
   2. Mount it (typically: sudo mount /dev/sr0 /mnt).
   3. Run: sh /mnt/restore.sh ~/restored/ latest
   4. Answer the prompts (repository, password).

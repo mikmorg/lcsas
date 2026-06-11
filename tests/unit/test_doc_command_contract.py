@@ -288,6 +288,37 @@ def test_meta_build_flags_in_docs_exist() -> None:
     )
 
 
+def _restore_sh_help_text() -> str:
+    """Extract the ``--help`` heredoc from ``recovery/scripts/restore.sh``."""
+    src = (REPO_ROOT / "recovery" / "scripts" / "restore.sh").read_text()
+    match = re.search(
+        r"-h\|--help\)\s*\n\s*cat <<EOF\n(.*?)\nEOF\n", src, re.DOTALL
+    )
+    assert match is not None, "could not locate the --help heredoc in restore.sh"
+    return match.group(1)
+
+
+def test_restore_sh_help_starts_from_meta() -> None:
+    """The ``--help`` QUICK START must route the operator to the META
+    disc (UX-06).
+
+    Data discs carry standalone_restorer.py, docs and packs — never
+    restore.sh; only the LCSAS_META disc does (RECOVER.txt).  The old
+    "Insert ANY data disc" step 1 walked a first-time heir straight
+    into ``sh: can't open /mnt/restore.sh``.
+    """
+    help_text = _restore_sh_help_text()
+    assert "QUICK START" in help_text
+    assert "Insert the disc labelled LCSAS_META" in help_text, (
+        "--help QUICK START step 1 must start from the LCSAS_META disc "
+        "(the only disc that carries restore.sh)"
+    )
+    assert "ANY data disc" not in help_text, (
+        "--help QUICK START must not tell the operator to insert a data "
+        "disc: data discs do not carry restore.sh (recovery/docs/RECOVER.txt)"
+    )
+
+
 def test_no_stdin_password_claim_for_standalone() -> None:
     """The generated standalone restorer never prompts for the
     password (``--password-file`` is required); the docs must not

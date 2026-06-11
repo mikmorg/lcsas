@@ -87,3 +87,6 @@ restore.sh's repo discovery tolerates being started from any layout regardless.
 ## Effort
 
 0.25 days (one heredoc line + one test). No special environment.
+
+---
+**Implemented:** 2026-06-11. As planned: heredoc step 1 → LCSAS_META; always-on unit gate + hardening-suite assertion. Also refreshed the stale restore.sh line in recovery/MANIFEST.sha256 (left stale by KEY-02).

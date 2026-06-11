@@ -516,3 +516,14 @@ def test_help_includes_quick_start() -> None:
         f"--help must include the canonical mount example; got:\n"
         f"{res.stdout}"
     )
+    # UX-06: step 1 must route to the META disc — data discs never
+    # carry restore.sh, so "insert ANY data disc" dead-ends at
+    # `sh: can't open /mnt/restore.sh`.
+    assert "Insert the disc labelled LCSAS_META" in res.stdout, (
+        f"--help QUICK START must start from the LCSAS_META disc; got:\n"
+        f"{res.stdout}"
+    )
+    assert "ANY data disc" not in res.stdout, (
+        f"--help must not route the operator to a data disc; got:\n"
+        f"{res.stdout}"
+    )
