@@ -261,27 +261,11 @@ def check_deprecation_safe(
     copies were recorded, skip_burn fixtures, catalogs rebuilt from old
     discs). A BURNED/VERIFIED volume whose every copy is
     DEPRECATED/DESTROYED is dead and must NOT count.
+
+    Thin wrapper over ``get_at_risk_packs_for_volume`` (``db/queries.py``)
+    so the deprecation guard and the ``lcsas volume impact`` blast-radius
+    report (FMA-08) can never disagree.
     """
-    rows = conn.execute(
-        """SELECT p.sha256
-           FROM volume_packs vp
-           JOIN packs p ON p.pack_id = vp.pack_id
-           WHERE vp.volume_id = ?
-             AND p.is_pruned = 0
-             AND NOT EXISTS (
-                 SELECT 1 FROM volume_packs vp2
-                 JOIN volumes v2 ON v2.volume_id = vp2.volume_id
-                 WHERE vp2.pack_id = vp.pack_id
-                   AND vp2.volume_id != ?
-                   AND v2.status IN ('BURNED', 'VERIFIED')
-                   AND (
-                       EXISTS (SELECT 1 FROM volume_copies vc
-                               WHERE vc.volume_id = v2.volume_id
-                                 AND vc.status = 'ACTIVE')
-                       OR NOT EXISTS (SELECT 1 FROM volume_copies vc2
-                                      WHERE vc2.volume_id = v2.volume_id)
-                   )
-             )""",
-        (volume_id, volume_id),
-    ).fetchall()
-    return [r[0] for r in rows]
+    from lcsas.db.queries import get_at_risk_packs_for_volume
+
+    return [p.sha256 for p in get_at_risk_packs_for_volume(conn, volume_id)]

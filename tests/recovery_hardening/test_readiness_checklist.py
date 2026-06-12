@@ -98,3 +98,28 @@ def test_readiness_checklist_references_manifest():
         "The binary audit section must name the manifest file so operators "
         "know which file to run sha256sum against."
     )
+
+
+def test_readiness_checklist_has_blast_radius_review():
+    """Checklist must document the monthly blast-radius review (FMA-08).
+
+    The pre-mortem question — "all copies of ONE disc fail: which data
+    is lost?" — is answered by `lcsas status --redundancy` (which discs
+    are single points of failure) and `lcsas volume impact <LABEL>`
+    (what exactly one disc's loss costs).  Without a checklist item the
+    commands exist but nobody runs them until after a disc has failed.
+    """
+    assert "BLAST-RADIUS REVIEW" in _TEXT, (
+        "READINESS_CHECKLIST.txt has no 'BLAST-RADIUS REVIEW' item. "
+        "Operators need a monthly prompt to ask which discs are single "
+        "points of failure (FMA-08)."
+    )
+    assert "lcsas status --redundancy" in _TEXT, (
+        "READINESS_CHECKLIST.txt does not quote 'lcsas status "
+        "--redundancy' — the command that lists under-replicated packs "
+        "grouped by holding disc."
+    )
+    assert "lcsas volume impact" in _TEXT, (
+        "READINESS_CHECKLIST.txt does not quote 'lcsas volume impact' — "
+        "the per-disc blast-radius command."
+    )

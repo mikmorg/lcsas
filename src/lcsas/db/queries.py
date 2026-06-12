@@ -499,35 +499,113 @@ def get_redundancy_report(
     conn: sqlite3.Connection,
     min_copies: int = 2,
 ) -> list[Pack]:
-    """Return non-pruned packs with fewer than min_copies volume assignments.
+    """Return non-pruned packs with fewer than min_copies physical copies.
 
-    Useful for ensuring every pack is stored on at least N volumes.
+    Useful for ensuring every pack is stored on at least N discs.
 
-    Replica truth (BURN-10): a volume counts as a copy iff it has >=1
-    ACTIVE row in ``volume_copies`` — except a volume with zero copy rows
-    at all, which counts by status alone (legacy: volumes burned before
-    copies were recorded, skip_burn fixtures, catalogs rebuilt from old
-    discs). A volume whose every physical copy is DEPRECATED/DESTROYED
-    contributes nothing to a pack's redundancy.
+    Replica truth (BURN-10/FMA-08): redundancy is counted in ACTIVE
+    ``volume_copies`` rows, not volume rows — two ACTIVE copies of one
+    volume are two discs, and a volume whose every physical copy is
+    DEPRECATED/DESTROYED contributes nothing.  A volume with zero copy
+    rows at all counts as one disc by status alone (legacy: volumes
+    burned before copies were recorded, skip_burn fixtures, catalogs
+    rebuilt from old discs).
     """
     rows = conn.execute(
-        """SELECT p.*, COUNT(v.volume_id) as copy_count
+        """SELECT p.*, COALESCE(SUM(
+               CASE
+                   WHEN v.volume_id IS NULL THEN 0
+                   WHEN NOT EXISTS (SELECT 1 FROM volume_copies vc
+                                    WHERE vc.volume_id = v.volume_id)
+                       THEN 1
+                   ELSE (SELECT COUNT(*) FROM volume_copies vc
+                         WHERE vc.volume_id = v.volume_id
+                           AND vc.status = 'ACTIVE')
+               END), 0) as copy_count
            FROM packs p
            LEFT JOIN volume_packs vp ON p.pack_id = vp.pack_id
            LEFT JOIN volumes v ON vp.volume_id = v.volume_id
                AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
-               AND (
-                   EXISTS (SELECT 1 FROM volume_copies vc
-                           WHERE vc.volume_id = v.volume_id
-                             AND vc.status = 'ACTIVE')
-                   OR NOT EXISTS (SELECT 1 FROM volume_copies vc2
-                                  WHERE vc2.volume_id = v.volume_id)
-               )
            WHERE p.is_pruned = 0
            GROUP BY p.pack_id
            HAVING copy_count < ?
            ORDER BY copy_count, p.sha256""",
         (min_copies,),
+    ).fetchall()
+    return [_row_to_pack(r) for r in rows]
+
+
+def get_live_volumes_for_packs(
+    conn: sqlite3.Connection,
+    pack_ids: list[int],
+) -> dict[int, list[Volume]]:
+    """Map pack_id → volumes that count as live replicas of it (FMA-08).
+
+    Live replica truth matches :func:`get_redundancy_report`: the volume
+    is not DEPRECATED/DESTROYED and has >=1 ACTIVE ``volume_copies`` row
+    (or zero copy rows at all — legacy).  Companion to the redundancy
+    report: groups its under-replicated packs by the disc(s) actually
+    holding them.
+    """
+    result: dict[int, list[Volume]] = {}
+    for batch_start in range(0, len(pack_ids), _SQLITE_BATCH):
+        batch = pack_ids[batch_start : batch_start + _SQLITE_BATCH]
+        placeholders = ",".join("?" for _ in batch)
+        rows = conn.execute(
+            f"""SELECT vp.pack_id AS vp_pack_id, v.*
+                FROM volume_packs vp
+                JOIN volumes v ON v.volume_id = vp.volume_id
+                WHERE vp.pack_id IN ({placeholders})
+                  AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+                  AND (
+                      EXISTS (SELECT 1 FROM volume_copies vc
+                              WHERE vc.volume_id = v.volume_id
+                                AND vc.status = 'ACTIVE')
+                      OR NOT EXISTS (SELECT 1 FROM volume_copies vc2
+                                     WHERE vc2.volume_id = v.volume_id)
+                  )
+                ORDER BY v.label""",
+            batch,
+        ).fetchall()
+        for r in rows:
+            result.setdefault(int(r["vp_pack_id"]), []).append(_row_to_volume(r))
+    return result
+
+
+def get_at_risk_packs_for_volume(
+    conn: sqlite3.Connection,
+    volume_id: int,
+) -> list[Pack]:
+    """Return packs whose ONLY live replica is the given volume (FMA-08).
+
+    The blast radius of a disc: lose every physical copy of this volume
+    and these packs are gone.  Replica truth matches
+    ``check_deprecation_safe`` (``db/volumes.py``): another volume counts
+    iff it is BURNED/VERIFIED and has >=1 ACTIVE ``volume_copies`` row
+    (or zero copy rows at all — legacy).
+    """
+    rows = conn.execute(
+        """SELECT p.*
+           FROM volume_packs vp
+           JOIN packs p ON p.pack_id = vp.pack_id
+           WHERE vp.volume_id = ?
+             AND p.is_pruned = 0
+             AND NOT EXISTS (
+                 SELECT 1 FROM volume_packs vp2
+                 JOIN volumes v2 ON v2.volume_id = vp2.volume_id
+                 WHERE vp2.pack_id = vp.pack_id
+                   AND vp2.volume_id != ?
+                   AND v2.status IN ('BURNED', 'VERIFIED')
+                   AND (
+                       EXISTS (SELECT 1 FROM volume_copies vc
+                               WHERE vc.volume_id = v2.volume_id
+                                 AND vc.status = 'ACTIVE')
+                       OR NOT EXISTS (SELECT 1 FROM volume_copies vc2
+                                      WHERE vc2.volume_id = v2.volume_id)
+                   )
+             )
+           ORDER BY p.repo_id, p.sha256""",
+        (volume_id, volume_id),
     ).fetchall()
     return [_row_to_pack(r) for r in rows]
 

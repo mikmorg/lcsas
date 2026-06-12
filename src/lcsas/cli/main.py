@@ -133,6 +133,11 @@ def build_parser() -> argparse.ArgumentParser:
     status_p.add_argument("--older-than-days", type=int, default=365,
                           help="Staleness threshold in days for --stale-copies "
                                "and the summary warning (default: 365).")
+    status_p.add_argument("--redundancy", action="store_true", default=False,
+                          help="Blast-radius report: under-replicated packs "
+                               "grouped by the disc holding them (FMA-08).")
+    status_p.add_argument("--min-copies", type=int, default=2,
+                          help="Copy threshold for --redundancy (default: 2).")
 
     # --- burn ---
     burn_p = subparsers.add_parser("burn", help="Burn staged ISOs to disc.")
@@ -270,6 +275,26 @@ def build_parser() -> argparse.ArgumentParser:
                             help="Volume label (e.g. ARCHIVE_MDISC100_0001).")
     copy_des_p.add_argument("location",
                             help="Location that held the copy (e.g. Home_Shelf).")
+
+    # --- volume ---
+    volume_p = subparsers.add_parser(
+        "volume", help="Per-volume catalog queries.",
+    )
+    volume_sub = volume_p.add_subparsers(dest="volume_command")
+
+    vol_impact_p = volume_sub.add_parser(
+        "impact",
+        help="Blast radius: what becomes unrestorable if every copy of "
+             "this volume fails? (FMA-08)",
+    )
+    vol_impact_p.add_argument("volume_label",
+                              help="Volume label (e.g. ARCHIVE_MDISC100_0001).")
+    vol_impact_p.add_argument(
+        "--snapshots", action="store_true", default=False,
+        help="Also list snapshots referencing at-risk packs (needs the "
+             "live mirror, the rustic binary, and --config with the "
+             "repo's password_file).",
+    )
 
     # --- catalog ---
     cat_p = subparsers.add_parser("catalog", help="Catalog management.")
@@ -1120,10 +1145,84 @@ def _print_stale_copies(conn: sqlite3.Connection, older_than_days: int) -> int:
     return 0
 
 
+def _print_redundancy_report(conn: sqlite3.Connection, min_copies: int) -> int:
+    """Blast-radius view: under-replicated packs grouped by disc (FMA-08).
+
+    Answers "which discs are single points of failure, and for how much
+    data?" from the catalog alone.  Per-disc detail (repos, snapshots)
+    lives in ``lcsas volume impact <LABEL>``.
+    """
+    from lcsas.db.models import Pack, Volume
+    from lcsas.db.queries import get_live_volumes_for_packs, get_redundancy_report
+    from lcsas.db.volume_copies import get_copies_for_volume
+
+    under = get_redundancy_report(conn, min_copies=min_copies)
+    if not under:
+        logger.info(
+            f"All packs have at least {min_copies} live cop(ies) — no "
+            f"single disc is a point of failure at this threshold."
+        )
+        return 0
+
+    live_map = get_live_volumes_for_packs(conn, [p.pack_id for p in under])
+
+    by_volume: dict[int, list[Pack]] = {}
+    vol_info: dict[int, Volume] = {}
+    on_no_disc: list[Pack] = []
+    for p in under:
+        holders = live_map.get(p.pack_id, [])
+        if not holders:
+            on_no_disc.append(p)
+            continue
+        for v in holders:
+            vol_info[v.volume_id] = v
+            by_volume.setdefault(v.volume_id, []).append(p)
+
+    total_bytes = sum(p.size_bytes for p in under)
+    logger.info(
+        f"{len(under)} pack(s) ({total_bytes / 1e9:.2f} GB) have fewer "
+        f"than {min_copies} live cop(ies):"
+    )
+    for vol_id in sorted(by_volume, key=lambda v: vol_info[v].label):
+        v = vol_info[vol_id]
+        packs = by_volume[vol_id]
+        sole = [p for p in packs if len(live_map[p.pack_id]) == 1]
+        locs = sorted({c.location for c in get_copies_for_volume(conn, vol_id)})
+        loc_str = ", ".join(locs) if locs else "<no ACTIVE copy recorded>"
+        logger.info("")
+        logger.info(f"  {v.label}  [{v.status}]  ACTIVE copies at: {loc_str}")
+        if sole:
+            sole_bytes = sum(p.size_bytes for p in sole)
+            logger.info(
+                f"    only durable holder of {len(sole)} pack(s) "
+                f"({sole_bytes / 1e9:.2f} GB) — lose every copy of this "
+                f"disc and they are gone"
+            )
+        if len(packs) > len(sole):
+            logger.info(
+                f"    plus {len(packs) - len(sole)} under-replicated "
+                f"pack(s) shared with other discs"
+            )
+    if on_no_disc:
+        logger.warning(
+            "WARNING: %d pack(s) (%.2f GB) are on NO disc at all — see "
+            "the unarchived/staged buckets in 'lcsas status'.",
+            len(on_no_disc),
+            sum(p.size_bytes for p in on_no_disc) / 1e9,
+        )
+    logger.info("")
+    logger.info("Per-disc blast radius: lcsas volume impact <LABEL>")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     """Show archive status summary."""
     from lcsas.db.connection import get_connection
-    from lcsas.db.queries import get_archive_status_summary
+    from lcsas.db.queries import (
+        get_archive_status_summary,
+        get_live_volumes_for_packs,
+        get_redundancy_report,
+    )
     from lcsas.db.schema import ensure_schema
     from lcsas.db.sessions import list_sessions
     from lcsas.db.volume_copies import find_stale_copies
@@ -1137,11 +1236,19 @@ def cmd_status(args: argparse.Namespace) -> int:
 
         if args.stale_copies:
             return _print_stale_copies(conn, args.older_than_days)
+        if args.redundancy:
+            return _print_redundancy_report(conn, args.min_copies)
 
         stale_count = len(find_stale_copies(conn, args.older_than_days))
         summary = get_archive_status_summary(conn)
         volumes = list_volumes(conn)
         partial_sessions = list_sessions(conn, status_filter="PARTIAL")
+        # FMA-08: packs that live on exactly one physical disc.  Packs in
+        # the <2-copies report with at least one live holder are on one
+        # disc; zero-holder packs are the unarchived/staged buckets above.
+        under = get_redundancy_report(conn, min_copies=2)
+        live_map = get_live_volumes_for_packs(conn, [p.pack_id for p in under])
+        single_disc_packs = [p for p in under if live_map.get(p.pack_id)]
         # BURN-05: a volume whose latest event is a verify failure has no
         # copy recorded for that burn — it needs a re-burn at the location.
         needs_reburn: list[tuple[str, str]] = []
@@ -1178,6 +1285,13 @@ def cmd_status(args: argparse.Namespace) -> int:
         )
     for label, loc in needs_reburn:
         logger.warning("WARNING: %s needs re-burn at %s", label, loc)
+    if single_disc_packs:
+        logger.warning(
+            "WARNING: %d pack(s) (%.1f GB) exist on only one disc — run "
+            "'lcsas status --redundancy' for the blast-radius report.",
+            len(single_disc_packs),
+            sum(p.size_bytes for p in single_disc_packs) / 1e9,
+        )
     if stale_count > 0:
         logger.warning(
             "WARNING: %d physical cop(ies) not verified in the last %d "
@@ -1615,6 +1729,181 @@ def cmd_copy(args: argparse.Namespace) -> int:
                 "report; re-burn with: lcsas stage --for-location %s",
                 args.volume_label, args.location,
             )
+    return 0
+
+
+def _print_snapshot_impact(
+    conn: sqlite3.Connection,
+    config: object | None,
+    at_risk_by_repo: dict[str, set[str]],
+    repo_names: dict[str, str],
+) -> None:
+    """List snapshots that reference at-risk packs (FMA-08 phase 2).
+
+    Snapshot→pack mapping needs the live mirror + rustic (the same
+    ``restore_dry_run`` machinery the restore planner uses); the catalog
+    alone cannot provide it.  Every missing prerequisite degrades to a
+    message — never an error — because the pack-level report already
+    printed is complete catalog-only truth.
+    """
+    from lcsas.config.settings import LCSASConfig
+    from lcsas.db.snapshots import list_snapshots
+    from lcsas.exceptions import BinaryError
+    from lcsas.utils.subprocess import check_binary_version
+
+    degrade = ("snapshot impact needs the live mirror — pack-level "
+               "report above is catalog-only")
+
+    if not isinstance(config, LCSASConfig):
+        logger.warning("%s (pass --config).", degrade)
+        return
+    try:
+        check_binary_version("rustic", min_version=(0, 9, 0))
+    except BinaryError as exc:
+        logger.warning("%s (%s)", degrade, exc)
+        return
+
+    from lcsas.rustic.wrapper import SubprocessRusticRunner
+    runner = SubprocessRusticRunner(tmpdir=config.staging_path)
+
+    logger.info("")
+    for repo_id in sorted(at_risk_by_repo, key=lambda r: repo_names.get(r, r)):
+        at_risk_shas = at_risk_by_repo[repo_id]
+        name = repo_names.get(repo_id, repo_id)
+        repo_cfg = config.repositories.get(name)
+        if repo_cfg is None or repo_cfg.password_file is None:
+            logger.warning(
+                "repo %s: %s (repo or password_file missing from "
+                "--config).", name, degrade,
+            )
+            continue
+        if not repo_cfg.mirror_path.is_dir():
+            logger.warning(
+                "repo %s: %s (mirror not mounted at %s).",
+                name, degrade, repo_cfg.mirror_path,
+            )
+            continue
+        snaps = list_snapshots(conn, repo_id=repo_id)
+        if not snaps:
+            logger.warning(
+                "repo %s: no snapshots registered in the catalog — run "
+                "'lcsas scan' first.", name,
+            )
+            continue
+        affected = []
+        for snap in snaps:
+            try:
+                plan = runner.restore_dry_run(
+                    snapshot_id=snap.snapshot_id,
+                    repo_path=repo_cfg.mirror_path,
+                    password_file=repo_cfg.password_file,
+                )
+            except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+                logger.warning(
+                    "repo %s snapshot %s: dry-run failed (%s) — cannot "
+                    "tell whether it is affected.",
+                    name, snap.snapshot_id, exc,
+                )
+                continue
+            if at_risk_shas & set(plan.required_pack_hashes):
+                affected.append(snap)
+        if not affected:
+            logger.info(
+                "repo %s: no snapshot references an at-risk pack.", name
+            )
+            continue
+        logger.warning(
+            "repo %s: %d snapshot(s) would become unrestorable:",
+            name, len(affected),
+        )
+        for snap in affected:
+            logger.warning(
+                "  %s  %s  paths=%s",
+                snap.snapshot_id, snap.timestamp or "<no timestamp>",
+                snap.paths,
+            )
+
+
+def cmd_volume_impact(args: argparse.Namespace) -> int:
+    """Blast radius for one disc: what is lost if ALL its copies fail?
+
+    Pack-level (catalog-only) report always prints; ``--snapshots`` adds
+    the snapshot-level view when the live mirror is available (FMA-08).
+    """
+    from datetime import UTC, datetime
+
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import get_connection
+    from lcsas.db.models import Pack
+    from lcsas.db.queries import get_at_risk_packs_for_volume
+    from lcsas.db.repos import list_repos
+    from lcsas.db.schema import ensure_schema
+    from lcsas.db.volume_copies import get_copies_for_volume
+    from lcsas.db.volumes import get_volume_by_label
+
+    config = load_config(args.config) if args.config else None
+    db_path = _resolve_db_path(args, config)
+    conn = get_connection(db_path)
+    try:
+        ensure_schema(conn)
+        vol = get_volume_by_label(conn, args.volume_label)
+        if vol is None:
+            logger.error(f"Volume '{args.volume_label}' not found.")
+            return 1
+
+        copies = get_copies_for_volume(conn, vol.volume_id, active_only=False)
+        at_risk = get_at_risk_packs_for_volume(conn, vol.volume_id)
+        repo_names = {r.repo_id: r.name for r in list_repos(conn)}
+
+        logger.info(f"Volume {vol.label}  [{vol.status}]  {vol.media_type}")
+        if not any(c.status == "ACTIVE" for c in copies):
+            logger.warning(
+                "  No ACTIVE physical copies recorded — this disc may "
+                "already be lost."
+            )
+        now = datetime.now(UTC)
+        for c in copies:
+            if c.last_verified_at:
+                days = (now - datetime.fromisoformat(c.last_verified_at)).days
+                age = f"last verified {days} day(s) ago ({c.last_verified_at[:10]})"
+            else:
+                age = "never verified"
+            logger.info(f"  copy at {c.location:<20} [{c.status}]  {age}")
+
+        logger.info("")
+        if not at_risk:
+            logger.info(
+                "Blast radius: NONE — every pack on this volume has "
+                "another live copy."
+            )
+            return 0
+
+        by_repo: dict[str, list[Pack]] = {}
+        for p in at_risk:
+            by_repo.setdefault(p.repo_id, []).append(p)
+        total = sum(p.size_bytes for p in at_risk)
+        logger.warning(
+            "Blast radius: if every copy of %s fails, %d pack(s) "
+            "(%.2f GB) become unrestorable:",
+            vol.label, len(at_risk), total / 1e9,
+        )
+        for repo_id in sorted(by_repo, key=lambda r: repo_names.get(r, r)):
+            packs = by_repo[repo_id]
+            logger.warning(
+                "  repo %-15s %d pack(s) (%.2f GB)",
+                repo_names.get(repo_id, repo_id), len(packs),
+                sum(p.size_bytes for p in packs) / 1e9,
+            )
+
+        if args.snapshots:
+            _print_snapshot_impact(
+                conn, config,
+                {rid: {p.sha256 for p in packs}
+                 for rid, packs in by_repo.items()},
+                repo_names,
+            )
+    finally:
+        conn.close()
     return 0
 
 
@@ -3901,6 +4190,12 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_copy(args)
         else:
             logger.error("Usage: lcsas copy {deprecate,destroy}")
+            return 1
+    elif args.command == "volume":
+        if args.volume_command == "impact":
+            return cmd_volume_impact(args)
+        else:
+            logger.error("Usage: lcsas volume {impact}")
             return 1
     elif args.command == "catalog":
         if args.catalog_command == "import-receipts":

@@ -99,3 +99,13 @@ Always-on in `make test-unit`:
 
 1.5 days for phase 1 (CLI + queries + tests); +1 day for `--snapshots` phase 2 (index-walk
 reuse). No special environment.
+
+---
+**Implemented:** 2026-06-12. As planned, with notes: `get_redundancy_report` now counts
+ACTIVE `volume_copies` rows (two ACTIVE copies of one volume = two discs), and
+`check_deprecation_safe` delegates to the new shared `get_at_risk_packs_for_volume`
+query so guard and impact report cannot disagree. Phase-2 `--snapshots` maps
+snapshot→packs via per-snapshot `restore_dry_run` (the planner machinery) over
+catalog-registered snapshots, degrading per-repo. The pre-existing BURN-10 test
+`test_redundancy_report_counts_active_copies` was extended (not duplicated) to pin
+copy-based counting.

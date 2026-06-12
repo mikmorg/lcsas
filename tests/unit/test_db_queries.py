@@ -127,11 +127,13 @@ class TestRedundancy:
             assert f"pack_{i:04d}_hash" in sha_set
 
     def test_redundancy_report_counts_active_copies(self, memory_db):
-        """BURN-10: a volume whose only copy is DESTROYED adds no redundancy.
+        """BURN-10/FMA-08: redundancy is the count of ACTIVE copy rows.
 
-        The volume keeps its VERIFIED status (loss recorded before
-        auto-demotion existed, or a rebuilt catalog) — the report must
-        count ACTIVE copy rows, not statuses.
+        A volume whose only copy is DESTROYED adds no redundancy even
+        while it keeps its VERIFIED status (loss recorded before
+        auto-demotion existed, or a rebuilt catalog); conversely, two
+        ACTIVE copies of ONE volume are two physical discs and satisfy
+        min_copies=2 on their own (copy-based, not volume-row-based).
         """
         from lcsas.db.locations import create_location
         from lcsas.db.packs import register_pack
@@ -171,6 +173,12 @@ class TestRedundancy:
 
         after = {q.sha256 for q in get_redundancy_report(memory_db, min_copies=2)}
         assert sha in after
+
+        # FMA-08: a SECOND ACTIVE copy of VOL_A is a second physical
+        # disc — the pack is redundant again with VOL_B still dead.
+        add_volume_copy(memory_db, va.volume_id, "Offsite_Safe")
+        third = {q.sha256 for q in get_redundancy_report(memory_db, min_copies=2)}
+        assert sha not in third
 
 
 class TestConsolidation:

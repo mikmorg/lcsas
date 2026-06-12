@@ -96,6 +96,22 @@ ONGOING MAINTENANCE  (monthly, or after each new disc set)
     an emergency restore costs time you don't have.
     HOW OFTEN: monthly, or after each new disc set is burned.
 
+[ ] BLAST-RADIUS REVIEW — ask the pre-mortem question: "if every
+    copy of ONE disc fails, which data is lost?"  Run:
+      lcsas status --redundancy
+    to list every under-replicated pack grouped by the disc holding
+    it, then for each disc flagged as a single point of failure:
+      lcsas volume impact <LABEL>
+    to see the affected repos, the bytes at stake, and where the
+    surviving copies live (add --snapshots with the mirror mounted
+    for the snapshot-level view).  Re-burn a second copy of any disc
+    whose loss you cannot accept:
+      lcsas stage --for-location <location>
+    Why: a disc that is the only durable holder of packs is a single
+    point of failure for every memory in them; without this review
+    the first time you learn a disc mattered is after it has failed.
+    HOW OFTEN: monthly, alongside the volume count check above.
+
 [ ] DISC READABILITY SCAN — insert each disc in a SATA or USB BD
     drive and re-verify it against the catalog.
     How (preferred — results are RECORDED in the catalog):
@@ -192,6 +208,7 @@ Encryption key redundancy       At creation; verify annually
 Full test-restore               At creation; see monthly cadence
 Monthly test-restore            Monthly
 Volume count check              Monthly / after new disc set
+Blast-radius review             Monthly, with the volume count check
 Disc readability scan           Monthly (<2 yr); weekly (>5 yr)
 Offsite copy verification       After each disc set; monthly log
 Annual blind restore drill      Annually / after major change
