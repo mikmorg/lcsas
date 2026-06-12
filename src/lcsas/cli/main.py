@@ -1969,6 +1969,13 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
     logger.info("Packs            : %d new", result.packs_merged)
     logger.info("Snapshots        : %d new", result.snapshots_merged)
 
+    # FMA-06: mixed-age disc boxes carry conflicting catalog views; the
+    # merge keeps the freshest one and explains what it overrode here.
+    if result.warnings:
+        logger.warning("Rebuild produced %d warning(s):", len(result.warnings))
+        for warning in result.warnings:
+            logger.warning("  %s", warning)
+
     if result.errors:
         logger.error("Rebuild completed with %d error(s):", len(result.errors))
         for err in result.errors:

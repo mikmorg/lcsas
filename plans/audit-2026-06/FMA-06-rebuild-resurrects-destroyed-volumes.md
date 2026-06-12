@@ -112,3 +112,9 @@ Always-on in `make test-unit`:
 ## Effort
 
 2 days (1 impl, 1 test incl. inverting the pinned tests). No special environment.
+
+---
+**Implemented:** 2026-06-12. As planned, plus: pre-existing volumes in a non-empty
+output DB are seeded with a row-derived freshness baseline (file mtime is useless
+post-ensure_schema); RECOVER.txt manifests regenerated (also fixing pre-existing
+README.txt/RECOVER_WINDOWS.txt hash drift from BOOT-02/BOOT-08).

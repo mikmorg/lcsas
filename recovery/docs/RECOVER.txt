@@ -397,3 +397,40 @@ The prompt explicitly tells you when to swap:
 Set LCSAS_NO_RELOCATE=1 to suppress the relocation step (only
 useful when running the script from a writable checkout for
 development).
+
+REBUILDING THE MASTER CATALOG FROM MIXED-AGE DISCS
+
+Every LCSAS disc carries a full copy of the catalog as it existed at
+burn time (the holographic catalog).  If the master catalog is lost,
+rebuild it from any pile of discs:
+
+    lcsas catalog rebuild --output master.db /mnt/disc1 /mnt/disc2 ...
+
+CAVEAT: on-disc catalogs are frozen at burn time, so a box of discs
+burned over several years contains CONFLICTING views of the archive.
+A disc burned before a volume was deprecated or destroyed still
+records that volume as VERIFIED.
+
+The rebuild handles this automatically: discs are merged NEWEST-FIRST
+(freshness is taken from the catalog.db file timestamp and the newest
+volume record inside it), and the freshest catalog's view wins —
+including downgrades to DEPRECATED or DESTROYED.  A destroyed volume
+is never silently resurrected by an older disc.  Feed order does not
+matter; the same pile of discs produces the same master catalog
+regardless of the order you list them.
+
+When an older disc claims a volume is MORE alive than the newest
+catalog records, the rebuild keeps the newer status and prints a
+warning naming the volume:
+
+    volume <label>: an older disc catalog records VERIFIED but a
+    newer one records DESTROYED — keeping DESTROYED. ...
+
+If you physically hold a disc named in such a warning, it may still
+be readable despite what the catalog says — check it with:
+
+    lcsas verify <label> --disc
+
+A restore plan generated from the rebuilt catalog will list packs
+that exist only on deprecated/destroyed volumes separately, so you
+know which data depends on discs that may no longer exist.

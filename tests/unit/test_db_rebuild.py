@@ -2,8 +2,91 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from lcsas.db import rebuild, schema
 from lcsas.db.connection import get_connection
+from lcsas.restore.planner import RestorePlanner
+
+# Shared fixtures for the recency-aware merge tests (FMA-06).
+# VOLUME_CREATED_AT is 2026-01-01 00:00:00 UTC == epoch 1767225600;
+# both mtimes lie after it so freshness is mtime-driven unless a test
+# deliberately equalises the mtimes.
+VOLUME_CREATED_AT = "2026-01-01 00:00:00"
+STALE_MTIME = 1_770_000_000.0  # 2026-02-02
+FRESH_MTIME = 1_780_000_000.0  # 2026-05-29
+
+_MERGED_TABLES = (
+    "repositories",
+    "locations",
+    "packs",
+    "volumes",
+    "snapshots",
+    "volume_packs",
+    "volume_copies",
+)
+
+
+def _build_disc(
+    base: Path,
+    name: str,
+    mtime: float,
+    volumes: list[tuple[str, str, str, str]],
+    packs: tuple[tuple[str, int, int, str], ...] = (),
+) -> Path:
+    """Create a disc dir with a catalog.db holding *volumes* and *packs*.
+
+    volumes: (label, uuid, status, created_at) tuples.
+    packs:   (sha256, size_bytes, is_pruned, volume_uuid) tuples.
+    The catalog file's mtime is forced to *mtime* (the freshness signal).
+    """
+    disc_dir = base / name
+    disc_dir.mkdir()
+    catalog_db = disc_dir / "catalog.db"
+    conn = get_connection(catalog_db)
+    schema.create_all(conn)
+    conn.execute(
+        "INSERT INTO repositories (repo_id, name, mirror_path, created_at) "
+        "VALUES (?, ?, ?, ?)",
+        ("repo1", "Test", "/mnt/mirror", VOLUME_CREATED_AT),
+    )
+    for label, uuid_, status, created_at in volumes:
+        conn.execute(
+            "INSERT INTO volumes (label, uuid, media_type, capacity_bytes, "
+            "status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (label, uuid_, "BD25", 25_000_000_000, status, created_at),
+        )
+    for sha, size_bytes, is_pruned, volume_uuid in packs:
+        conn.execute(
+            "INSERT INTO packs (sha256, size_bytes, repo_id, is_pruned, "
+            "created_at) VALUES (?, ?, ?, ?, ?)",
+            (sha, size_bytes, "repo1", is_pruned, VOLUME_CREATED_AT),
+        )
+        conn.execute(
+            "INSERT INTO volume_packs (volume_id, pack_id) "
+            "SELECT v.volume_id, p.pack_id FROM volumes v, packs p "
+            "WHERE v.uuid = ? AND p.sha256 = ?",
+            (volume_uuid, sha),
+        )
+    conn.commit()
+    conn.close()
+    os.utime(catalog_db, (mtime, mtime))
+    return disc_dir
+
+
+def _dump_merged_tables(db_path: Path) -> dict[str, list[tuple]]:
+    """Full contents of every merged table, for order-independence checks."""
+    conn = get_connection(db_path)
+    dump = {
+        table: [
+            tuple(row)
+            for row in conn.execute(f"SELECT * FROM {table} ORDER BY 1, 2")
+        ]
+        for table in _MERGED_TABLES
+    }
+    conn.close()
+    return dump
 
 
 class TestRebuildMerge:
@@ -47,9 +130,9 @@ class TestRebuildMerge:
 
         target_conn.close()
 
-    def test_merge_status_conflict_prefers_higher_quality(self, tmp_path):
-        """Status conflict resolution prefers higher-quality (more-verified) status."""
-        # Target has BURNED, source has VERIFIED → prefer VERIFIED
+    def _status_conflict_dbs(self, tmp_path, target_status, source_status):
+        """Target DB holding *target_status*, source DB holding *source_status*
+        for the same volume uuid.  Returns (target_conn, source_db_path)."""
         target_db = tmp_path / "target.db"
         target_conn = get_connection(target_db)
         schema.create_all(target_conn)
@@ -58,67 +141,93 @@ class TestRebuildMerge:
         source_conn = get_connection(source_db)
         schema.create_all(source_conn)
 
-        # Insert the same volume with different statuses
         target_conn.execute(
             "INSERT INTO volumes (label, uuid, media_type, capacity_bytes, status) "
             "VALUES (?, ?, ?, ?, ?)",
-            ("VOL001", "same-uuid", "BD25", 25000000000, "BURNED"),
+            ("VOL001", "same-uuid", "BD25", 25000000000, target_status),
         )
         target_conn.commit()
 
         source_conn.execute(
             "INSERT INTO volumes (label, uuid, media_type, capacity_bytes, status) "
             "VALUES (?, ?, ?, ?, ?)",
-            ("VOL001-VERIFIED", "same-uuid", "BD25", 25000000000, "VERIFIED"),
+            ("VOL001", "same-uuid", "BD25", 25000000000, source_status),
         )
         source_conn.commit()
         source_conn.close()
+        return target_conn, source_db
 
-        # Merge
-        rebuild._merge_one_disc(target_conn, source_db)
+    def test_merge_status_fresher_source_wins_including_downgrade(self, tmp_path):
+        """Recency wins (FMA-06): a fresher catalog's status is taken even
+        when it is a downgrade (VERIFIED → DESTROYED)."""
+        target_conn, source_db = self._status_conflict_dbs(
+            tmp_path, "VERIFIED", "DESTROYED"
+        )
 
-        # Target should now have VERIFIED (higher quality)
+        warnings: list[str] = []
+        rebuild._merge_one_disc(
+            target_conn,
+            source_db,
+            source_freshness=200.0,
+            status_freshness={"same-uuid": 100.0},
+            warnings=warnings,
+        )
+
         vol = target_conn.execute(
             "SELECT status FROM volumes WHERE uuid = ?", ("same-uuid",)
         ).fetchone()
-        assert vol[0] == "VERIFIED"
+        assert vol[0] == "DESTROYED"
+        assert warnings == []
 
         target_conn.close()
 
-    def test_merge_status_conflict_keeps_better_status(self, tmp_path):
-        """Status conflict: if target is VERIFIED, don't downgrade to BURNED."""
-        target_db = tmp_path / "target.db"
-        target_conn = get_connection(target_db)
-        schema.create_all(target_conn)
-
-        source_db = tmp_path / "source.db"
-        source_conn = get_connection(source_db)
-        schema.create_all(source_conn)
-
-        # Target has VERIFIED (better), source has BURNED (worse)
-        target_conn.execute(
-            "INSERT INTO volumes (label, uuid, media_type, capacity_bytes, status) "
-            "VALUES (?, ?, ?, ?, ?)",
-            ("VOL001", "same-uuid", "BD25", 25000000000, "VERIFIED"),
+    def test_merge_status_staler_source_cannot_resurrect(self, tmp_path):
+        """A stale catalog claiming a destroyed volume is VERIFIED must not
+        win — the fresh status is kept and a warning names the volume."""
+        target_conn, source_db = self._status_conflict_dbs(
+            tmp_path, "DESTROYED", "VERIFIED"
         )
-        target_conn.commit()
 
-        source_conn.execute(
-            "INSERT INTO volumes (label, uuid, media_type, capacity_bytes, status) "
-            "VALUES (?, ?, ?, ?, ?)",
-            ("VOL001-BURNED", "same-uuid", "BD25", 25000000000, "BURNED"),
+        warnings: list[str] = []
+        rebuild._merge_one_disc(
+            target_conn,
+            source_db,
+            source_freshness=100.0,
+            status_freshness={"same-uuid": 200.0},
+            warnings=warnings,
         )
-        source_conn.commit()
-        source_conn.close()
 
-        # Merge
-        rebuild._merge_one_disc(target_conn, source_db)
+        vol = target_conn.execute(
+            "SELECT status FROM volumes WHERE uuid = ?", ("same-uuid",)
+        ).fetchone()
+        assert vol[0] == "DESTROYED"
+        assert len(warnings) == 1
+        assert "VOL001" in warnings[0]
+        assert "lcsas verify VOL001 --disc" in warnings[0]
 
-        # Target should stay VERIFIED (no downgrade)
+        target_conn.close()
+
+    def test_merge_status_staler_lower_rank_keeps_target_quietly(self, tmp_path):
+        """A stale catalog with a LESS-alive status is ignored without a
+        warning — only the resurrection direction is alarming."""
+        target_conn, source_db = self._status_conflict_dbs(
+            tmp_path, "VERIFIED", "BURNED"
+        )
+
+        warnings: list[str] = []
+        rebuild._merge_one_disc(
+            target_conn,
+            source_db,
+            source_freshness=100.0,
+            status_freshness={"same-uuid": 200.0},
+            warnings=warnings,
+        )
+
         vol = target_conn.execute(
             "SELECT status FROM volumes WHERE uuid = ?", ("same-uuid",)
         ).fetchone()
         assert vol[0] == "VERIFIED"
+        assert warnings == []
 
         target_conn.close()
 
@@ -434,3 +543,141 @@ class TestRebuildMerge:
         assert vc[6] == "SERIAL123"
 
         target_conn.close()
+
+
+class TestRecencyAwareRebuild:
+    """FMA-06: rebuild merges newest-first; stale discs cannot resurrect
+    deprecated/destroyed volumes, and feed order never changes the output."""
+
+    def test_destroyed_volume_not_resurrected_either_order(self, tmp_path):
+        """A stale catalog says VERIFIED, a fresh one says DESTROYED:
+        DESTROYED must survive in both feed orders, with exactly one
+        resurrection warning, and the rebuilt catalog must route the
+        volume's packs through the planner's deprecated channel."""
+        sha = "a" * 64
+        stale = _build_disc(
+            tmp_path,
+            "stale",
+            STALE_MTIME,
+            volumes=[("VOL001", "uuid-001", "VERIFIED", VOLUME_CREATED_AT)],
+            packs=((sha, 1000, 0, "uuid-001"),),
+        )
+        fresh = _build_disc(
+            tmp_path,
+            "fresh",
+            FRESH_MTIME,
+            volumes=[("VOL001", "uuid-001", "DESTROYED", VOLUME_CREATED_AT)],
+            packs=((sha, 1000, 0, "uuid-001"),),
+        )
+
+        dumps = []
+        for idx, order in enumerate(([stale, fresh], [fresh, stale])):
+            output_db = tmp_path / f"master-{idx}.db"
+            result = rebuild.rebuild_catalog(order, output_db)
+            assert result.ok
+
+            conn = get_connection(output_db)
+            status = conn.execute(
+                "SELECT status FROM volumes WHERE uuid = ?", ("uuid-001",)
+            ).fetchone()[0]
+            assert status == "DESTROYED"
+
+            # Exactly one resurrection warning (emitted when the stale
+            # disc was processed), naming the volume and the remedy.
+            assert len(result.warnings) == 1
+            warning = result.warnings[0]
+            assert "VOL001" in warning
+            assert "VERIFIED" in warning
+            assert "DESTROYED" in warning
+            assert "lcsas verify VOL001 --disc" in warning
+
+            # Restore planning on the rebuilt catalog must NOT offer the
+            # destroyed volume as a pick — its packs go through the
+            # deprecated_disc_labels warning channel instead.
+            pick = RestorePlanner(conn).generate_pick_list([sha])
+            assert pick.volumes == {}
+            assert sha in pick.missing_packs
+            assert pick.deprecated_disc_labels == {"VOL001": [sha]}
+            conn.close()
+
+            dumps.append(_dump_merged_tables(output_db))
+
+        # Order-independence: all merged tables byte-identical.
+        assert dumps[0] == dumps[1]
+
+    def test_pack_fields_prefer_freshest_catalog(self, tmp_path):
+        """Sources disagree on is_pruned/size_bytes: both feed orders must
+        yield the freshest catalog's view, plus one summary warning."""
+        sha = "b" * 64
+        stale = _build_disc(
+            tmp_path,
+            "stale",
+            STALE_MTIME,
+            volumes=[("VOL001", "uuid-001", "VERIFIED", VOLUME_CREATED_AT)],
+            packs=((sha, 1111, 0, "uuid-001"),),
+        )
+        fresh = _build_disc(
+            tmp_path,
+            "fresh",
+            FRESH_MTIME,
+            volumes=[("VOL001", "uuid-001", "VERIFIED", VOLUME_CREATED_AT)],
+            packs=((sha, 2222, 1, "uuid-001"),),
+        )
+
+        dumps = []
+        for idx, order in enumerate(([stale, fresh], [fresh, stale])):
+            output_db = tmp_path / f"master-{idx}.db"
+            result = rebuild.rebuild_catalog(order, output_db)
+            assert result.ok
+
+            conn = get_connection(output_db)
+            row = conn.execute(
+                "SELECT size_bytes, is_pruned FROM packs WHERE sha256 = ?",
+                (sha,),
+            ).fetchone()
+            conn.close()
+            assert (row[0], row[1]) == (2222, 1)
+
+            # One summary warning about the is_pruned disagreement —
+            # statuses agree, so it is the only warning.
+            assert len(result.warnings) == 1
+            assert "is_pruned" in result.warnings[0]
+
+            dumps.append(_dump_merged_tables(output_db))
+
+        assert dumps[0] == dumps[1]
+
+    def test_freshness_falls_back_to_max_created_at(self, tmp_path):
+        """Equal mtimes (older than every row): the row-derived
+        MAX(volumes.created_at) must decide which catalog is fresher."""
+        equal_mtime = 1000.0
+        stale = _build_disc(
+            tmp_path,
+            "stale",
+            equal_mtime,
+            volumes=[("VOL001", "uuid-001", "VERIFIED", "2026-01-01 00:00:00")],
+        )
+        # The fresh catalog knows a volume created months later — its
+        # MAX(created_at) outranks the stale catalog's despite the mtimes.
+        fresh = _build_disc(
+            tmp_path,
+            "fresh",
+            equal_mtime,
+            volumes=[
+                ("VOL001", "uuid-001", "DESTROYED", "2026-01-01 00:00:00"),
+                ("VOL002", "uuid-002", "VERIFIED", "2026-04-01 00:00:00"),
+            ],
+        )
+
+        for idx, order in enumerate(([stale, fresh], [fresh, stale])):
+            output_db = tmp_path / f"master-{idx}.db"
+            result = rebuild.rebuild_catalog(order, output_db)
+            assert result.ok
+
+            conn = get_connection(output_db)
+            status = conn.execute(
+                "SELECT status FROM volumes WHERE uuid = ?", ("uuid-001",)
+            ).fetchone()[0]
+            conn.close()
+            assert status == "DESTROYED"
+            assert len(result.warnings) == 1
