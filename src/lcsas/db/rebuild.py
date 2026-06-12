@@ -238,13 +238,15 @@ def rebuild_catalog(
         :class:`RebuildResult` with merge statistics and any errors.
     """
     from lcsas.db.connection import get_connection
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
 
     result = RebuildResult()
 
     # Ensure the output DB is initialised with the current schema.
+    # Source disc catalogs are ATTACHed read-only below and are never
+    # migrated — only the output catalog goes through ensure_schema.
     conn = get_connection(output_db)
-    create_all(conn)
+    ensure_schema(conn)
 
     for disc_path in disc_paths:
         catalog_db = disc_path / "catalog.db"

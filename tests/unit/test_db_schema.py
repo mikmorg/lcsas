@@ -2,8 +2,141 @@
 
 from __future__ import annotations
 
+import logging
+import sqlite3
+from pathlib import Path
+
+import pytest
+
 from lcsas.db.connection import get_memory_connection
-from lcsas.db.schema import CURRENT_SCHEMA_VERSION, create_all, get_schema_version, migrate
+from lcsas.db.schema import (
+    CURRENT_SCHEMA_VERSION,
+    SchemaVersionError,
+    create_all,
+    ensure_schema,
+    get_schema_version,
+    migrate,
+)
+
+# Historical v5 catalog DDL, replayed verbatim (FMA-02).  This is the
+# shape of a real catalog created at v4 and migrated 4→5: the v5
+# migration recreated only `volumes` (adding CONSOLIDATING), so
+# `volume_events` keeps the v4-era 6-type CHECK — no VERIFY_FAIL_REBURN,
+# no BURN_RECEIPT_IMPORTED — and `session_volumes`/`volume_copies` lack
+# the v7/v8 `iso_size_bytes` columns.
+V5_HISTORICAL_DDL = """
+CREATE TABLE schema_version (
+    version INTEGER NOT NULL,
+    applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO schema_version (version) VALUES (4);
+INSERT INTO schema_version (version) VALUES (5);
+CREATE TABLE volumes (
+    volume_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    label       TEXT UNIQUE NOT NULL,
+    uuid        TEXT UNIQUE NOT NULL,
+    media_type  TEXT NOT NULL,
+    capacity_bytes INTEGER NOT NULL,
+    used_bytes  INTEGER NOT NULL DEFAULT 0,
+    location    TEXT NOT NULL DEFAULT 'Home_Shelf',
+    status      TEXT NOT NULL DEFAULT 'STAGING'
+                CHECK (status IN (
+                    'STAGING', 'BURNING', 'BURNED',
+                    'VERIFIED', 'CONSOLIDATING', 'DEPRECATED', 'DESTROYED'
+                )),
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    closed_at   DATETIME,
+    verified_at DATETIME
+);
+CREATE TABLE repositories (
+    repo_id          TEXT PRIMARY KEY,
+    name             TEXT NOT NULL,
+    mirror_path      TEXT NOT NULL,
+    encryption_key_id TEXT NOT NULL DEFAULT '',
+    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE packs (
+    pack_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    sha256      TEXT UNIQUE NOT NULL,
+    size_bytes  INTEGER NOT NULL,
+    repo_id     TEXT NOT NULL,
+    is_pruned   INTEGER NOT NULL DEFAULT 0,
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (repo_id) REFERENCES repositories (repo_id)
+);
+CREATE TABLE volume_packs (
+    volume_id   INTEGER NOT NULL,
+    pack_id     INTEGER NOT NULL,
+    PRIMARY KEY (volume_id, pack_id),
+    FOREIGN KEY (volume_id) REFERENCES volumes (volume_id),
+    FOREIGN KEY (pack_id)   REFERENCES packs (pack_id)
+);
+CREATE TABLE snapshots (
+    snapshot_id TEXT PRIMARY KEY,
+    repo_id     TEXT NOT NULL,
+    hostname    TEXT NOT NULL DEFAULT '',
+    timestamp   DATETIME,
+    paths       TEXT NOT NULL DEFAULT '[]',
+    tags        TEXT NOT NULL DEFAULT '[]',
+    description TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (repo_id) REFERENCES repositories (repo_id)
+);
+CREATE TABLE locations (
+    name        TEXT PRIMARY KEY,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    description TEXT DEFAULT ''
+);
+CREATE TABLE volume_copies (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    volume_id       INTEGER NOT NULL,
+    location        TEXT    NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'ACTIVE'
+                    CHECK (status IN ('ACTIVE', 'DEPRECATED', 'DESTROYED')),
+    burn_date       TEXT    NOT NULL,
+    notes           TEXT    DEFAULT '',
+    iso_sha256      TEXT,
+    last_verified_at DATETIME,
+    media_serial    TEXT    NOT NULL DEFAULT '',
+    FOREIGN KEY (volume_id) REFERENCES volumes (volume_id),
+    FOREIGN KEY (location) REFERENCES locations (name),
+    UNIQUE(volume_id, location)
+);
+CREATE TABLE burn_sessions (
+    session_id  TEXT PRIMARY KEY,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    media_type  TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'STAGED'
+                CHECK (status IN ('STAGED', 'PARTIAL', 'COMPLETE', 'CLEANED')),
+    staging_dir TEXT NOT NULL
+);
+CREATE TABLE session_volumes (
+    session_id  TEXT    NOT NULL,
+    volume_id   INTEGER NOT NULL,
+    iso_path    TEXT    NOT NULL,
+    iso_sha256  TEXT,
+    PRIMARY KEY (session_id, volume_id),
+    FOREIGN KEY (session_id) REFERENCES burn_sessions (session_id),
+    FOREIGN KEY (volume_id) REFERENCES volumes (volume_id)
+);
+CREATE TABLE volume_events (
+    event_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    volume_id   INTEGER NOT NULL,
+    event_type  TEXT NOT NULL CHECK(event_type IN (
+        'VERIFY_PASS', 'VERIFY_FAIL', 'ECC_REPAIR',
+        'LOCATION_MOVE', 'CONDITION_CHECK', 'NOTE')),
+    event_date  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    location    TEXT,
+    detail      TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (volume_id) REFERENCES volumes (volume_id),
+    FOREIGN KEY (location)  REFERENCES locations (name)
+);
+"""
+
+
+def seed_v5_catalog(conn: sqlite3.Connection) -> None:
+    """Build a v5-shaped catalog by replaying the historical DDL."""
+    conn.executescript(V5_HISTORICAL_DDL)
+    conn.commit()
 
 
 class TestSchema:
@@ -438,3 +571,95 @@ class TestMigrateV7ToV8:
         assert "iso_size_bytes" in cols
         assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
         conn.close()
+
+
+class TestEnsureSchema:
+    """FMA-02: ensure_schema is the single production schema entry point —
+    auto-migrate hot catalogs, refuse future schemas, never write to
+    read-only snapshots."""
+
+    def test_cli_auto_migrates_old_catalog(self, tmp_path):
+        """A v5 catalog opened by any CLI command is migrated in place."""
+        from lcsas.cli.main import main
+
+        db = tmp_path / "archive.db"
+        conn = sqlite3.connect(db)
+        seed_v5_catalog(conn)
+        conn.close()
+
+        assert main(["--db", str(db), "status"]) == 0
+
+        conn = sqlite3.connect(db)
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+        # The recreated volume_events CHECK accepts the new event types.
+        conn.execute(
+            "INSERT INTO volumes (label, uuid, media_type, capacity_bytes) "
+            "VALUES ('V1', 'uuid1', 'BD25', 25000000000)"
+        )
+        conn.execute(
+            "INSERT INTO volume_events (volume_id, event_type) "
+            "VALUES (1, 'VERIFY_FAIL_REBURN')"
+        )
+        conn.commit()
+        conn.close()
+
+    def test_refuses_future_schema(self):
+        """Opening a catalog from a newer LCSAS must fail loud, not write."""
+        conn = get_memory_connection()
+        conn.execute(
+            """CREATE TABLE schema_version (
+                version INTEGER NOT NULL,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        conn.execute("INSERT INTO schema_version (version) VALUES (99)")
+        conn.commit()
+
+        with pytest.raises(SchemaVersionError, match="newer LCSAS"):
+            ensure_schema(conn)
+
+        # No write occurred: version untouched, no tables created.
+        assert get_schema_version(conn) == 99
+        tables = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "volumes" not in tables
+        conn.close()
+
+    def test_readonly_catalog_not_migrated(self, tmp_path, caplog):
+        """Disc/RO-mount snapshots open in compat mode: warn, no write."""
+        db = tmp_path / "disc-catalog.db"
+        conn = sqlite3.connect(db)
+        seed_v5_catalog(conn)
+        conn.close()
+        db.chmod(0o444)
+
+        conn = sqlite3.connect(db)
+        with caplog.at_level(logging.WARNING, logger="lcsas.db.schema"):
+            assert ensure_schema(conn) == 5
+        assert any("compat mode" in r.message for r in caplog.records)
+        assert get_schema_version(conn) == 5
+        conn.close()
+
+    def test_query_only_connection_not_migrated(self):
+        """PRAGMA query_only connections are detected as read-only too."""
+        conn = sqlite3.connect(":memory:")
+        seed_v5_catalog(conn)
+        conn.execute("PRAGMA query_only=ON")
+        assert ensure_schema(conn) == 5
+        assert get_schema_version(conn) == 5
+        conn.close()
+
+    def test_no_bare_create_all_in_cli(self):
+        """Production code must go through ensure_schema, never bare
+        create_all — otherwise the future-version guard and the
+        read-only compat path are silently bypassed."""
+        repo_root = Path(__file__).resolve().parents[2]
+        for rel in ("src/lcsas/cli/main.py", "src/lcsas/db/rebuild.py"):
+            source = (repo_root / rel).read_text(encoding="utf-8")
+            assert "create_all(" not in source, (
+                f"{rel} calls create_all() directly — use "
+                "lcsas.db.schema.ensure_schema instead (FMA-02)."
+            )

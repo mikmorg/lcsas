@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import sqlite3
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -982,4 +983,79 @@ class TestBurnSession:
 
         events = get_events_for_volume(conn, volume_id)
         assert "VERIFY_FAIL_REBURN" in {e.event_type for e in events}
+
+
+class TestReburnVerifyFailOnV5Catalog:
+    """FMA-02: a catalog still on schema v5 (v4-era volume_events CHECK,
+    no VERIFY_FAIL_REBURN) crashed with IntegrityError exactly when a bad
+    re-burn needed recording.  Opening it through ensure_schema migrates
+    it so the event lands cleanly."""
+
+    def test_reburn_verify_fail_on_v5_catalog(self, tmp_path):
+        from lcsas.db.schema import (
+            CURRENT_SCHEMA_VERSION,
+            ensure_schema,
+            get_schema_version,
+        )
+        from lcsas.db.sessions import get_session_volumes
+        from lcsas.db.volume_events import get_events_for_volume
+        from tests.unit.test_db_schema import seed_v5_catalog
+
+        config = _make_config(tmp_path)
+        conn = get_memory_connection()
+        seed_v5_catalog(conn)
+        assert get_schema_version(conn) == 5
+
+        # Prove the fixture bites: the v5 CHECK rejects the event type
+        # (this is today's production crash without auto-migration).
+        conn.execute(
+            "INSERT INTO volumes (label, uuid, media_type, capacity_bytes) "
+            "VALUES ('PROBE', 'probe-uuid', 'BD25', 1)"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO volume_events (volume_id, event_type) "
+                "SELECT volume_id, 'VERIFY_FAIL_REBURN' FROM volumes "
+                "WHERE label = 'PROBE'"
+            )
+        conn.rollback()
+
+        ensure_schema(conn)
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+
+        _seed_db_and_mirror(conn, config)
+        xorriso = MagicMock()
+
+        def _fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
+            Path(output_iso).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_iso).write_bytes(b"fake-iso-data")
+            return Path(output_iso)
+
+        xorriso.create_iso.side_effect = _fake_create_iso
+        _wire_drive_identity(xorriso)
+
+        def fake_device_reader(device: str, length_bytes: int) -> str:
+            return hashlib.sha256(b"fake-iso-data"[:length_bytes]).hexdigest()
+
+        orch = BurnOrchestrator(config, conn, xorriso, MagicMock(),
+                                device_reader=fake_device_reader)
+
+        session_id = orch.stage().session_id
+        vols = get_session_volumes(conn, session_id)
+        volume_id = vols[0].volume_id
+        update_status(conn, volume_id, "VERIFIED", force=True)
+
+        # Re-burn whose post-burn verify fails.
+        xorriso.verify_disc.return_value = False
+        xorriso.burn_iso.return_value = None
+        receipts = orch.burn_session(
+            session_ref=session_id,
+            location="Remote_Archive",
+            skip_burn=False,
+        )
+
+        # The unhappy path records cleanly on the migrated catalog.
+        events = get_events_for_volume(conn, volume_id)
+        assert "VERIFY_FAIL_REBURN" in {e.event_type for e in events}
+        assert any(not r.verify_passed for r in receipts)
 

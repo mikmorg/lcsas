@@ -133,3 +133,14 @@ Always-on in `make test-unit` / `.github/workflows/test.yml`:
 ## Effort
 
 1.5 days (0.5 impl, 1 test incl. the historical-DDL fixture). No special environment.
+
+---
+**Implemented:** 2026-06-12. As planned, with drift adjustments: BURN-04 had already
+wired `migrate()` into `create_all()` (schema now v8), so FMA-02 adds the missing pieces —
+`ensure_schema()` single choke point (all ~19 CLI sites + `rebuild.py` output DB), the
+`SchemaVersionError` future-version refusal, and the read-only compat path. `_is_readonly`
+uses a zero-row UPDATE probe (BEGIN IMMEDIATE alone does not trip SQLITE_READONLY on
+sqlite 3.45). Unused `db_path` param dropped from the `ensure_schema` signature. The live
+`archive.db` was already at v8 (upgraded by a prior CLI run via BURN-04), so the post-merge
+operator migration step is moot. FMA-07 has not landed, but auto-migration was already live
+via BURN-04 — this change does not newly arm the crash window.

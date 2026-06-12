@@ -643,7 +643,7 @@ def cmd_init(args: argparse.Namespace) -> int:
       4. ``archive.db`` in the current working directory
     """
     from lcsas.db.connection import get_connection
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
 
     db_path: Path | None = getattr(args, "db_path", None)
     if db_path is None and getattr(args, "db", None):
@@ -663,7 +663,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection(db_path)
     try:
-        create_all(conn)
+        ensure_schema(conn)
     finally:
         conn.close()
     logger.info(f"Initialized LCSAS database at {db_path}")
@@ -674,13 +674,13 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
     """Register a new repository."""
     from lcsas.db.connection import locked_connection
     from lcsas.db.repos import register_repo
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
     from lcsas.utils.fs import read_repo_key_ids
     from lcsas.utils.labels import generate_uuid
 
     db_path = _resolve_db_path(args)
     with locked_connection(db_path) as conn:
-        create_all(conn)
+        ensure_schema(conn)
 
         repo_id = generate_uuid()
         mirror = args.mirror_path.resolve()
@@ -704,12 +704,12 @@ def cmd_repo_list(args: argparse.Namespace) -> int:
     """List registered repositories."""
     from lcsas.db.connection import get_connection
     from lcsas.db.repos import list_repos
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
 
     db_path = _resolve_db_path(args)
     conn = get_connection(db_path)
     try:
-        create_all(conn)
+        ensure_schema(conn)
         repos = list_repos(conn)
     finally:
         conn.close()
@@ -728,13 +728,13 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
     from lcsas.db.connection import locked_connection
     from lcsas.db.packs import bulk_mark_pruned, list_packs
     from lcsas.db.repos import delete_repo, get_repo
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
     from lcsas.db.snapshots import delete_snapshots_for_repo
     from lcsas.db.volume_packs import get_volume_ids_for_pack
 
     db_path = _resolve_db_path(args)
     with locked_connection(db_path) as conn:
-        create_all(conn)
+        ensure_schema(conn)
 
         try:
             repo = get_repo(conn, args.repo_id)
@@ -825,7 +825,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     from lcsas.db.connection import locked_connection
     from lcsas.db.queries import get_archive_status_summary
     from lcsas.db.repos import list_repos
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
 
@@ -836,7 +836,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     if not _validate_config_or_exit(config, skip_staging=True):
         return 1
     with locked_connection(config.db_path if args.db is None else args.db) as conn:
-        create_all(conn)
+        ensure_schema(conn)
 
         # Map config repo names → DB repo_ids (UUIDs)
         repos_db = {r.name: r.repo_id for r in list_repos(conn)}
@@ -970,7 +970,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     """Show archive status summary."""
     from lcsas.db.connection import get_connection
     from lcsas.db.queries import get_archive_status_summary
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
     from lcsas.db.sessions import list_sessions
     from lcsas.db.volume_events import get_latest_event
     from lcsas.db.volumes import list_volumes
@@ -978,7 +978,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args)
     conn = get_connection(db_path)
     try:
-        create_all(conn)
+        ensure_schema(conn)
 
         summary = get_archive_status_summary(conn)
         volumes = list_volumes(conn)
@@ -1046,7 +1046,7 @@ def cmd_staging_clean(args: argparse.Namespace) -> int:
     """Detect and remove orphaned staging directories."""
     from lcsas.config.settings import load_config
     from lcsas.db.connection import get_connection
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
     from lcsas.staging.cleanup import clean_orphaned_staging, detect_orphaned_staging
 
     if args.config is None:
@@ -1056,7 +1056,7 @@ def cmd_staging_clean(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     conn = get_connection(config.db_path if args.db is None else args.db)
     try:
-        create_all(conn)
+        ensure_schema(conn)
         orphans = detect_orphaned_staging(config, conn)
     finally:
         conn.close()
@@ -1086,7 +1086,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
     from lcsas.config.media import MediaType
     from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
     from lcsas.utils.shutdown import ShutdownManager
@@ -1103,7 +1103,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
 
     try:
         with locked_connection(args.db or config.db_path) as conn:
-            create_all(conn)
+            ensure_schema(conn)
 
             orch = BurnOrchestrator(
                 config, conn,
@@ -1166,7 +1166,7 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
     from lcsas.burn.orchestrator import BurnOrchestrator
     from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
@@ -1178,7 +1178,7 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
         return 1
 
     with locked_connection(args.db or config.db_path) as conn:
-        create_all(conn)
+        ensure_schema(conn)
 
         orch = BurnOrchestrator(
             config, conn,
@@ -1323,7 +1323,7 @@ def cmd_location(args: argparse.Namespace) -> int:
     """Handle location subcommands."""
     from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
     from lcsas.utils.labels import sanitize_name
 
     config = load_config(args.config) if args.config else None
@@ -1332,7 +1332,7 @@ def cmd_location(args: argparse.Namespace) -> int:
         return 1
 
     with locked_connection(args.db or config.db_path) as conn:
-        create_all(conn)
+        ensure_schema(conn)
 
         if args.location_command == "list":
             from lcsas.db.locations import list_locations
@@ -1410,7 +1410,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
     from lcsas.db.locations import ensure_location
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
     from lcsas.db.volume_copies import add_volume_copy
     from lcsas.db.volume_events import add_event, get_events_for_volume
     from lcsas.db.volumes import get_volume_by_label, mark_closed, update_status
@@ -1422,7 +1422,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
     rejected = 0
     with locked_connection(args.db or config.db_path) as conn:
-        create_all(conn)
+        ensure_schema(conn)
 
         imported = 0
         for receipt_file in args.receipt_files:
@@ -1625,7 +1625,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
         get_ghost_volumes,
         get_volume_pack_stats_by_repo,
     )
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
     from lcsas.db.volumes import delete_volume
 
     config = None
@@ -1635,7 +1635,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args, config)
 
     with locked_connection(db_path) as conn:
-        create_all(conn)
+        ensure_schema(conn)
 
         ghosts = get_ghost_volumes(conn, args.older_than_hours)
         drifted = get_durable_volumes_without_active_copies(conn)
@@ -1766,12 +1766,12 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
     from lcsas.config.settings import load_config
     from lcsas.consolidate.merger import VolumeMerger
     from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
 
     config = load_config(args.config) if args.config else None
     db_path = _resolve_db_path(args, config)
     with locked_connection(db_path) as conn:
-        create_all(conn)
+        ensure_schema(conn)
 
         try:
             media_type = MediaType[args.target_media]
@@ -1968,14 +1968,14 @@ def cmd_verify(args: argparse.Namespace) -> int:
     """
     from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
     from lcsas.db.volume_events import add_event
     from lcsas.db.volumes import get_volume_by_label, update_status
 
     config = load_config(args.config) if args.config else None
     db_path = _resolve_db_path(args, config)
     with locked_connection(db_path) as conn:
-        create_all(conn)
+        ensure_schema(conn)
 
         # --- Batch mode: verify --all ---
         if args.verify_all:
@@ -2441,7 +2441,7 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
     """Generate a restore pick list for a snapshot."""
     from lcsas.config.settings import load_config
     from lcsas.db.connection import get_connection
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
     from lcsas.restore.planner import RestorePlanner
     from lcsas.rustic.wrapper import SubprocessRusticRunner
 
@@ -2453,7 +2453,7 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
         return 1
     conn = get_connection(config.db_path if args.db is None else args.db)
     try:
-        create_all(conn)
+        ensure_schema(conn)
 
         # Resolve repo config
         repo_name = args.repo
@@ -2590,7 +2590,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
 
     from lcsas.config.settings import load_config
     from lcsas.db.connection import get_connection
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
     from lcsas.restore.executor import RestoreExecutor
     from lcsas.restore.planner import RestorePlanner
     from lcsas.rustic.wrapper import SubprocessRusticRunner
@@ -2604,7 +2604,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         return 1
     conn = get_connection(config.db_path if args.db is None else args.db)
     try:
-        create_all(conn)
+        ensure_schema(conn)
 
         repo_name = args.repo
         if repo_name not in config.repositories:
@@ -3781,7 +3781,7 @@ def cmd_session_abort(args: argparse.Namespace) -> int:
     from lcsas.burn.orchestrator import BurnOrchestrator
     from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
-    from lcsas.db.schema import create_all
+    from lcsas.db.schema import ensure_schema
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
@@ -3791,7 +3791,7 @@ def cmd_session_abort(args: argparse.Namespace) -> int:
     config = load_config(args.config)
 
     with locked_connection(args.db or config.db_path) as conn:
-        create_all(conn)
+        ensure_schema(conn)
         orch = BurnOrchestrator(
             config, conn,
             SubprocessXorrisoRunner(tmpdir=config.staging_path),

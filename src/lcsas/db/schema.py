@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 
+_logger = logging.getLogger(__name__)
+
 CURRENT_SCHEMA_VERSION = 8
+
+
+class SchemaVersionError(RuntimeError):
+    """Catalog schema is newer than this LCSAS build understands."""
 
 # ---------------------------------------------------------------------------
 # DDL Statements
@@ -199,12 +206,71 @@ def create_all(conn: sqlite3.Connection) -> None:
 
     conn.commit()
 
-    # Apply pending migrations: every CLI entry point calls create_all
-    # on the hot catalog, but nothing called migrate() — long-lived
-    # catalogs silently stayed on old schema versions (BURN-04 needs
+    # Apply pending migrations: production reaches create_all only via
+    # ensure_schema (FMA-02), but keep migrate() here too so any direct
+    # caller still upgrades long-lived catalogs (BURN-04 needs
     # session_volumes.iso_size_bytes on upgraded v≤6 databases).
     # No-op on freshly created databases (version is already current).
     migrate(conn)
+
+
+def _is_readonly(conn: sqlite3.Connection) -> bool:
+    """True when *conn* cannot write the main database.
+
+    Catches ``PRAGMA query_only`` connections, ``mode=ro`` URI opens,
+    and read-only files/mounts (disc catalogs live on ISO9660).  A
+    ``BEGIN IMMEDIATE`` alone is not enough — SQLite defers the actual
+    write attempt — so a zero-row UPDATE forces the readonly error.
+    """
+    row = conn.execute("PRAGMA query_only").fetchone()
+    if row is not None and row[0]:
+        return True
+    if conn.in_transaction:
+        # An open transaction proves a writable connection (and BEGIN
+        # would fail with "within a transaction" — not a readonly signal).
+        return False
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+    except sqlite3.OperationalError:
+        return True
+    try:
+        conn.execute("UPDATE schema_version SET version = version WHERE 0")
+    except sqlite3.OperationalError as exc:
+        # "no such table" on an uninitialized DB is not a readonly signal.
+        return "readonly" in str(exc).lower()
+    finally:
+        conn.execute("ROLLBACK")
+    return False
+
+
+def ensure_schema(conn: sqlite3.Connection) -> int:
+    """Create-or-migrate the catalog schema; refuse future schemas.
+
+    The ONLY schema entry point production code should call (FMA-02).
+    Returns the catalog's schema version after the call:
+    ``CURRENT_SCHEMA_VERSION`` on writable catalogs (created or migrated
+    in place), or the existing older version on read-only snapshots —
+    on-disc holographic catalogs are opened from read-only ISO9660
+    mounts and must never be migrated in place; reader code tolerates
+    old shapes (compat mode).
+    """
+    version = get_schema_version(conn)
+    if version > CURRENT_SCHEMA_VERSION:
+        raise SchemaVersionError(
+            f"Catalog schema is v{version}, but this LCSAS build understands "
+            f"up to v{CURRENT_SCHEMA_VERSION}. Use a newer LCSAS to open this "
+            f"catalog (writing with this build could corrupt it)."
+        )
+    if _is_readonly(conn):
+        if version < CURRENT_SCHEMA_VERSION:
+            _logger.warning(
+                "Catalog is v%d (read-only) — running in compat mode "
+                "without migrating to v%d.",
+                version, CURRENT_SCHEMA_VERSION,
+            )
+        return version
+    create_all(conn)  # runs migrate() on the hot catalog
+    return CURRENT_SCHEMA_VERSION
 
 
 def migrate(conn: sqlite3.Connection) -> int:
