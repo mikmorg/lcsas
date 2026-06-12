@@ -240,6 +240,31 @@ def build_parser() -> argparse.ArgumentParser:
     loc_move_p.add_argument("--to", dest="to_location", required=True,
                             help="Destination location.")
 
+    # --- copy ---
+    copy_p = subparsers.add_parser(
+        "copy",
+        help="Record the fate of physical disc copies (deprecate/destroy).",
+    )
+    copy_sub = copy_p.add_subparsers(dest="copy_command")
+
+    copy_dep_p = copy_sub.add_parser(
+        "deprecate",
+        help="Record a disc copy as deprecated (e.g. damaged, retired).",
+    )
+    copy_dep_p.add_argument("volume_label",
+                            help="Volume label (e.g. ARCHIVE_MDISC100_0001).")
+    copy_dep_p.add_argument("location",
+                            help="Location holding the copy (e.g. Home_Shelf).")
+
+    copy_des_p = copy_sub.add_parser(
+        "destroy",
+        help="Record a disc copy as destroyed or lost.",
+    )
+    copy_des_p.add_argument("volume_label",
+                            help="Volume label (e.g. ARCHIVE_MDISC100_0001).")
+    copy_des_p.add_argument("location",
+                            help="Location that held the copy (e.g. Home_Shelf).")
+
     # --- catalog ---
     cat_p = subparsers.add_parser("catalog", help="Catalog management.")
     cat_sub = cat_p.add_subparsers(dest="catalog_command")
@@ -1493,6 +1518,53 @@ def cmd_location(args: argparse.Namespace) -> int:
         else:
             logger.error("Usage: lcsas location {list|add|status|move}")
             return 1
+    return 0
+
+
+def cmd_copy(args: argparse.Namespace) -> int:
+    """Record a physical disc copy as deprecated or destroyed (BURN-10).
+
+    This is the supported way to tell the catalog a disc is gone.  When
+    the last ACTIVE copy of a volume is lost the volume auto-demotes to
+    DEPRECATED, so the redundancy report and the deprecation guard stop
+    counting it as a replica.
+    """
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import locked_connection
+    from lcsas.db.schema import ensure_schema
+    from lcsas.db.volume_copies import deprecate_copy, destroy_copy
+    from lcsas.db.volumes import get_volume_by_label
+
+    config = load_config(args.config) if args.config else None
+    db_path = _resolve_db_path(args, config)
+
+    with locked_connection(db_path) as conn:
+        ensure_schema(conn)
+        vol = get_volume_by_label(conn, args.volume_label)
+        if vol is None:
+            logger.error(f"Volume '{args.volume_label}' not found.")
+            return 1
+        try:
+            if args.copy_command == "deprecate":
+                demoted = deprecate_copy(conn, vol.volume_id, args.location)
+                verb = "deprecated"
+            else:
+                demoted = destroy_copy(conn, vol.volume_id, args.location)
+                verb = "destroyed"
+        except ValueError as exc:
+            logger.error(str(exc))
+            return 1
+        logger.info(
+            f"Recorded copy of {args.volume_label} at {args.location} "
+            f"as {verb.upper()}."
+        )
+        if demoted:
+            logger.warning(
+                "%s has no ACTIVE copies left — volume auto-deprecated. "
+                "Its packs now count in 'lcsas status' / the redundancy "
+                "report; re-burn with: lcsas stage --for-location %s",
+                args.volume_label, args.location,
+            )
     return 0
 
 
@@ -3614,6 +3686,12 @@ def dispatch(args: argparse.Namespace) -> int:
             return 1
     elif args.command == "location":
         return cmd_location(args)
+    elif args.command == "copy":
+        if args.copy_command in ("deprecate", "destroy"):
+            return cmd_copy(args)
+        else:
+            logger.error("Usage: lcsas copy {deprecate,destroy}")
+            return 1
     elif args.command == "catalog":
         if args.catalog_command == "import-receipts":
             return cmd_catalog_import(args)

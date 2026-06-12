@@ -234,6 +234,78 @@ class TestDeprecationSafety:
         assert vol.status == "DEPRECATED"
 
 
+    def test_deprecation_guard_ignores_volumes_without_active_copies(self, memory_db):
+        """BURN-10: a volume whose only copy is DESTROYED is not a replica.
+
+        VOL_B keeps its BURNED status (a loss recorded before
+        auto-demotion existed, or a rebuilt catalog); only the copy row
+        says the disc is gone — the guard must see through the status.
+        """
+        from lcsas.db.locations import create_location
+        from lcsas.db.packs import register_pack
+        from lcsas.db.volume_copies import add_volume_copy
+        from lcsas.db.volume_packs import bulk_link_packs
+
+        create_location(memory_db, "Home_Shelf")
+        create_location(memory_db, "Offsite_Safe")
+
+        va = create_volume(memory_db, label="VOL_A", uuid=generate_uuid(),
+                           media_type="BD25", capacity_bytes=25_000_000_000)
+        vb = create_volume(memory_db, label="VOL_B", uuid=generate_uuid(),
+                           media_type="BD25", capacity_bytes=25_000_000_000)
+        for v in (va, vb):
+            update_status(memory_db, v.volume_id, "BURNING")
+            update_status(memory_db, v.volume_id, "BURNED")
+        add_volume_copy(memory_db, va.volume_id, "Home_Shelf")
+        add_volume_copy(memory_db, vb.volume_id, "Offsite_Safe")
+
+        sha = "0badcafe" * 8
+        p = register_pack(memory_db, sha256=sha, size_bytes=100,
+                          repo_id="_test")
+        bulk_link_packs(memory_db, va.volume_id, [p.pack_id])
+        bulk_link_packs(memory_db, vb.volume_id, [p.pack_id])
+
+        # Both replicas live → deprecating VOL_A is safe.
+        assert check_deprecation_safe(memory_db, va.volume_id) == []
+
+        # Kill VOL_B's only copy at the row level WITHOUT demoting the
+        # volume (pre-BURN-10 catalogs recorded exactly this state).
+        memory_db.execute(
+            "UPDATE volume_copies SET status = 'DESTROYED' WHERE volume_id = ?",
+            (vb.volume_id,),
+        )
+        memory_db.commit()
+
+        at_risk = check_deprecation_safe(memory_db, va.volume_id)
+        assert sha in at_risk
+
+    def test_deprecation_guard_legacy_volume_without_copy_rows_counts(self, memory_db):
+        """BURN-10 carve-out: zero copy rows → the volume counts by status.
+
+        Volumes burned before copies were recorded (and skip_burn
+        fixtures, and rebuilt catalogs) have no volume_copies rows;
+        treating them as dead would mass-trip the guard.
+        """
+        from lcsas.db.packs import register_pack
+        from lcsas.db.volume_packs import bulk_link_packs
+
+        va = create_volume(memory_db, label="VOL_A", uuid=generate_uuid(),
+                           media_type="BD25", capacity_bytes=25_000_000_000)
+        vb = create_volume(memory_db, label="VOL_B", uuid=generate_uuid(),
+                           media_type="BD25", capacity_bytes=25_000_000_000)
+        for v in (va, vb):
+            update_status(memory_db, v.volume_id, "BURNING")
+            update_status(memory_db, v.volume_id, "BURNED")
+        update_status(memory_db, vb.volume_id, "VERIFIED")
+
+        p = register_pack(memory_db, sha256="1e9acafe" * 8, size_bytes=100,
+                          repo_id="_test")
+        bulk_link_packs(memory_db, va.volume_id, [p.pack_id])
+        bulk_link_packs(memory_db, vb.volume_id, [p.pack_id])
+
+        # VOL_B has no copy rows at all — it still counts as a replica.
+        assert check_deprecation_safe(memory_db, va.volume_id) == []
+
     def test_deprecate_inside_outer_transaction(self, memory_db):
         """update_status(DEPRECATED) works inside outer transaction (T20/R3-H2)."""
         from lcsas.db.packs import register_pack

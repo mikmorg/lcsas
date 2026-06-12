@@ -126,6 +126,52 @@ class TestRedundancy:
         for i in range(15, 21):
             assert f"pack_{i:04d}_hash" in sha_set
 
+    def test_redundancy_report_counts_active_copies(self, memory_db):
+        """BURN-10: a volume whose only copy is DESTROYED adds no redundancy.
+
+        The volume keeps its VERIFIED status (loss recorded before
+        auto-demotion existed, or a rebuilt catalog) — the report must
+        count ACTIVE copy rows, not statuses.
+        """
+        from lcsas.db.locations import create_location
+        from lcsas.db.packs import register_pack
+        from lcsas.db.volume_copies import add_volume_copy
+        from lcsas.db.volume_packs import bulk_link_packs
+        from lcsas.db.volumes import create_volume
+        from lcsas.utils.labels import generate_uuid
+
+        create_location(memory_db, "Home_Shelf")
+        create_location(memory_db, "Offsite_Safe")
+
+        va = create_volume(memory_db, label="VOL_A", uuid=generate_uuid(),
+                           media_type="BD25", capacity_bytes=25_000_000_000,
+                           status="VERIFIED")
+        vb = create_volume(memory_db, label="VOL_B", uuid=generate_uuid(),
+                           media_type="BD25", capacity_bytes=25_000_000_000,
+                           status="VERIFIED")
+        add_volume_copy(memory_db, va.volume_id, "Home_Shelf")
+        add_volume_copy(memory_db, vb.volume_id, "Offsite_Safe")
+
+        sha = "feedface" * 8
+        p = register_pack(memory_db, sha256=sha, size_bytes=100,
+                          repo_id="_test")
+        bulk_link_packs(memory_db, va.volume_id, [p.pack_id])
+        bulk_link_packs(memory_db, vb.volume_id, [p.pack_id])
+
+        # Two live replicas → pack satisfies min_copies=2.
+        before = {q.sha256 for q in get_redundancy_report(memory_db, min_copies=2)}
+        assert sha not in before
+
+        # Destroy VOL_B's only copy at the row level, status untouched.
+        memory_db.execute(
+            "UPDATE volume_copies SET status = 'DESTROYED' WHERE volume_id = ?",
+            (vb.volume_id,),
+        )
+        memory_db.commit()
+
+        after = {q.sha256 for q in get_redundancy_report(memory_db, min_copies=2)}
+        assert sha in after
+
 
 class TestConsolidation:
     def test_packs_on_volumes(self, populated_db):

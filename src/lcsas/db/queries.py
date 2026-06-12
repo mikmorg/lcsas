@@ -502,6 +502,13 @@ def get_redundancy_report(
     """Return non-pruned packs with fewer than min_copies volume assignments.
 
     Useful for ensuring every pack is stored on at least N volumes.
+
+    Replica truth (BURN-10): a volume counts as a copy iff it has >=1
+    ACTIVE row in ``volume_copies`` — except a volume with zero copy rows
+    at all, which counts by status alone (legacy: volumes burned before
+    copies were recorded, skip_burn fixtures, catalogs rebuilt from old
+    discs). A volume whose every physical copy is DEPRECATED/DESTROYED
+    contributes nothing to a pack's redundancy.
     """
     rows = conn.execute(
         """SELECT p.*, COUNT(v.volume_id) as copy_count
@@ -509,6 +516,13 @@ def get_redundancy_report(
            LEFT JOIN volume_packs vp ON p.pack_id = vp.pack_id
            LEFT JOIN volumes v ON vp.volume_id = v.volume_id
                AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+               AND (
+                   EXISTS (SELECT 1 FROM volume_copies vc
+                           WHERE vc.volume_id = v.volume_id
+                             AND vc.status = 'ACTIVE')
+                   OR NOT EXISTS (SELECT 1 FROM volume_copies vc2
+                                  WHERE vc2.volume_id = v.volume_id)
+               )
            WHERE p.is_pruned = 0
            GROUP BY p.pack_id
            HAVING copy_count < ?

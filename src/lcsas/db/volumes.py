@@ -253,7 +253,14 @@ def check_deprecation_safe(
     """Return pack SHA-256s that would become unreplicated if this volume is deprecated.
 
     A pack is "at risk" if it exists on this volume but on NO other volume
-    with an ACTIVE status (BURNED or VERIFIED).
+    that is a live replica.
+
+    Replica truth (BURN-10): a volume is a live replica iff it has >=1
+    ACTIVE row in ``volume_copies`` — except a volume with zero copy rows
+    at all, which counts by status alone (legacy: volumes burned before
+    copies were recorded, skip_burn fixtures, catalogs rebuilt from old
+    discs). A BURNED/VERIFIED volume whose every copy is
+    DEPRECATED/DESTROYED is dead and must NOT count.
     """
     rows = conn.execute(
         """SELECT p.sha256
@@ -267,6 +274,13 @@ def check_deprecation_safe(
                  WHERE vp2.pack_id = vp.pack_id
                    AND vp2.volume_id != ?
                    AND v2.status IN ('BURNED', 'VERIFIED')
+                   AND (
+                       EXISTS (SELECT 1 FROM volume_copies vc
+                               WHERE vc.volume_id = v2.volume_id
+                                 AND vc.status = 'ACTIVE')
+                       OR NOT EXISTS (SELECT 1 FROM volume_copies vc2
+                                      WHERE vc2.volume_id = v2.volume_id)
+                   )
              )""",
         (volume_id, volume_id),
     ).fetchall()

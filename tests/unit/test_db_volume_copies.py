@@ -19,7 +19,7 @@ from lcsas.db.volume_copies import (
     move_volume_copy,
 )
 from lcsas.db.volume_events import get_events_for_volume
-from lcsas.db.volumes import create_volume
+from lcsas.db.volumes import create_volume, get_volume_by_id, update_status
 from lcsas.utils.labels import generate_uuid
 
 
@@ -181,6 +181,66 @@ class TestVolumeCopyCRUD:
 
         all_copies = get_copies_for_volume(conn, volume.volume_id, active_only=False)
         assert all_copies[0].status == "DESTROYED"
+
+
+# ────────────────────────────────────────────────────────────────────
+#  Last-copy auto-demotion — BURN-10
+# ────────────────────────────────────────────────────────────────────
+
+
+class TestLastCopyAutoDemotion:
+    """Losing a volume's last ACTIVE copy demotes the volume itself."""
+
+    def test_destroy_last_copy_demotes_volume(self, conn, volume):
+        """Last copy destroyed → volume DEPRECATED + NOTE audit event."""
+        add_volume_copy(conn, volume.volume_id, "Home_Shelf")
+        demoted = destroy_copy(conn, volume.volume_id, "Home_Shelf")
+        assert demoted is True
+
+        vol = get_volume_by_id(conn, volume.volume_id)
+        assert vol.status == "DEPRECATED"
+
+        events = get_events_for_volume(conn, volume.volume_id, event_type="NOTE")
+        assert any(
+            "auto-deprecated" in e.detail and "Home_Shelf" in e.detail
+            for e in events
+        )
+
+    def test_destroy_with_remaining_active_copy_no_demotion(self, conn, volume):
+        """A second ACTIVE copy elsewhere keeps the volume alive."""
+        add_volume_copy(conn, volume.volume_id, "Home_Shelf")
+        add_volume_copy(conn, volume.volume_id, "Offsite_Safe")
+        demoted = destroy_copy(conn, volume.volume_id, "Home_Shelf")
+        assert demoted is False
+
+        vol = get_volume_by_id(conn, volume.volume_id)
+        assert vol.status != "DEPRECATED"
+        events = get_events_for_volume(conn, volume.volume_id, event_type="NOTE")
+        assert not any("auto-deprecated" in e.detail for e in events)
+
+    def test_deprecate_last_copy_demotes_volume(self, conn, volume):
+        """deprecate_copy triggers the same demotion as destroy_copy."""
+        add_volume_copy(conn, volume.volume_id, "Home_Shelf")
+        demoted = deprecate_copy(conn, volume.volume_id, "Home_Shelf")
+        assert demoted is True
+        assert get_volume_by_id(conn, volume.volume_id).status == "DEPRECATED"
+
+    def test_destroy_never_resurrects_destroyed_volume(self, conn, volume):
+        """An already-DESTROYED volume must not come back as DEPRECATED."""
+        add_volume_copy(conn, volume.volume_id, "Home_Shelf")
+        update_status(conn, volume.volume_id, "DESTROYED", force=True)
+        demoted = destroy_copy(conn, volume.volume_id, "Home_Shelf")
+        assert demoted is False
+        assert get_volume_by_id(conn, volume.volume_id).status == "DESTROYED"
+
+    def test_destroy_unknown_location_raises(self, conn, volume):
+        """No copy row at the location → loud failure, not a silent no-op."""
+        with pytest.raises(ValueError, match="No copy"):
+            destroy_copy(conn, volume.volume_id, "Home_Shelf")
+
+    def test_deprecate_unknown_location_raises(self, conn, volume):
+        with pytest.raises(ValueError, match="No active copy"):
+            deprecate_copy(conn, volume.volume_id, "Home_Shelf")
 
 
 # ────────────────────────────────────────────────────────────────────

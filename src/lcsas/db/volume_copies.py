@@ -264,29 +264,102 @@ def touch_last_verified(
     return result.rowcount > 0
 
 
+def _demote_volume_if_last_copy_lost(
+    conn: sqlite3.Connection,
+    volume_id: int,
+    location: str,
+    action: str,
+) -> bool:
+    """Demote the volume to DEPRECATED when its last ACTIVE copy is gone.
+
+    Replica truth (BURN-10): a volume is a live replica iff it has >=1
+    ACTIVE copy — except a volume with zero copy rows at all, which
+    counts by status alone (legacy).  A volume whose copy rows exist but
+    none are ACTIVE must therefore lose its durable status, or the
+    redundancy report and deprecation guard keep treating a destroyed
+    disc as a valid replica.
+
+    Direct UPDATE rather than ``update_status``: DEPRECATED is not a
+    legal transition from every durable state (e.g. BURNED), and the
+    deprecation-safety guard must not veto recording physical reality.
+    Already-DEPRECATED/DESTROYED volumes are left alone (never resurrect
+    a DESTROYED volume).  Shares the caller's transaction; no commit.
+    """
+    row = conn.execute(
+        """SELECT COUNT(*) AS total,
+                  COALESCE(SUM(CASE WHEN status = 'ACTIVE' THEN 1 ELSE 0 END), 0)
+                      AS active
+           FROM volume_copies WHERE volume_id = ?""",
+        (volume_id,),
+    ).fetchone()
+    if row["total"] == 0 or row["active"] > 0:
+        return False
+    result = conn.execute(
+        """UPDATE volumes SET status = 'DEPRECATED'
+           WHERE volume_id = ? AND status NOT IN ('DEPRECATED', 'DESTROYED')""",
+        (volume_id,),
+    )
+    if result.rowcount == 0:
+        return False
+    from lcsas.db.volume_events import add_event
+    add_event(
+        conn, volume_id, "NOTE",
+        location=location,
+        detail=f"auto-deprecated: last physical copy {action} at {location}",
+        commit=False,
+    )
+    return True
+
+
 def deprecate_copy(
     conn: sqlite3.Connection,
     volume_id: int,
     location: str,
-) -> None:
-    """Mark a volume copy as deprecated (e.g. disc damaged)."""
-    conn.execute(
+) -> bool:
+    """Mark a volume copy as deprecated (e.g. disc damaged).
+
+    Raises ValueError if no ACTIVE copy exists at the location.  Returns
+    True when this was the volume's last ACTIVE copy and the volume
+    itself was auto-demoted to DEPRECATED (BURN-10).
+    """
+    result = conn.execute(
         """UPDATE volume_copies SET status = 'DEPRECATED'
            WHERE volume_id = ? AND location = ? AND status = 'ACTIVE'""",
         (volume_id, location),
     )
+    if result.rowcount == 0:
+        raise ValueError(
+            f"No active copy of volume {volume_id} at '{location}'"
+        )
+    demoted = _demote_volume_if_last_copy_lost(
+        conn, volume_id, location, "deprecated"
+    )
     conn.commit()
+    return demoted
 
 
 def destroy_copy(
     conn: sqlite3.Connection,
     volume_id: int,
     location: str,
-) -> None:
-    """Mark a volume copy as destroyed."""
-    conn.execute(
+) -> bool:
+    """Mark a volume copy as destroyed.
+
+    Raises ValueError if no copy row exists at the location.  Returns
+    True when this was the volume's last ACTIVE copy and the volume
+    itself was auto-demoted to DEPRECATED (BURN-10).
+    """
+    result = conn.execute(
         """UPDATE volume_copies SET status = 'DESTROYED'
            WHERE volume_id = ? AND location = ?""",
         (volume_id, location),
     )
+    if result.rowcount == 0:
+        raise ValueError(
+            f"No copy of volume {volume_id} recorded at '{location}'"
+        )
+    demoted = _demote_volume_if_last_copy_lost(
+        conn, volume_id, location, "destroyed"
+    )
     conn.commit()
+    return demoted

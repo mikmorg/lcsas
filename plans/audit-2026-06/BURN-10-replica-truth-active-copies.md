@@ -119,3 +119,6 @@ Always-on unit (`make test-unit`, CI test.yml):
 
 1.5 days: 0.75 impl (queries + auto-demote + CLI), 0.75 tests. No special
 environment.
+
+---
+**Implemented:** 2026-06-12. As planned, plus: `deprecate_copy`/`destroy_copy` now raise ValueError on a missing copy row (loud CLI errors instead of silent no-ops); auto-demote never resurrects an already-DEPRECATED/DESTROYED volume.
