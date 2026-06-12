@@ -6,7 +6,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+from lcsas.ecc.dvdisaster import (
+    RS03_MEDIUM_LADDER_BYTES,
+    SubprocessDVDisasterRunner,
+    smallest_fitting_medium_bytes,
+)
 
 
 class TestDVDisasterMocked:
@@ -22,8 +26,15 @@ class TestDVDisasterMocked:
         args = mock_run.call_args[0][0]
         assert "dvdisaster" in args[0]
         assert "-mRS03" in args
-        assert "-n" in args
-        assert "20" in args
+        assert "-c" in args
+        # BURN-07: -n must NOT be passed for RS03 augmented images.  Per the
+        # dvdisaster manual, "Setting the redundancy is not possible due to
+        # constraints in the format. The codec will automatically choose the
+        # size of the smallest fitting medium." — a -n here is a placebo at
+        # best (and would mean 20 *roots*, not 20%, in ECC-file mode).
+        # Re-adding it must be a deliberate act.
+        assert "-n" not in args
+        assert "20" not in args
         # augment_iso now works on a temp copy then renames; verify the
         # original path is not passed (temp copy is).
         # Just verify dvdisaster was called.
@@ -188,3 +199,32 @@ class TestDVDisasterMocked:
 
         with pytest.raises(RuntimeError, match="timed out"):
             runner.repair_iso(iso, timeout=1)
+
+
+class TestSmallestFittingMedium:
+    """RS03 medium ladder used by the staging pre-flight (BURN-07)."""
+
+    CD, DVD, DVD9, BD25, BD50, BDXL100 = RS03_MEDIUM_LADDER_BYTES
+
+    def test_smallest_fitting_medium_ladder(self):
+        # 1 byte → CD
+        assert smallest_fitting_medium_bytes(1) == self.CD
+        # exactly CD → CD; one past → DVD
+        assert smallest_fitting_medium_bytes(self.CD) == self.CD
+        assert smallest_fitting_medium_bytes(self.CD + 1) == self.DVD
+        # one past DVD9 → BD25
+        assert smallest_fitting_medium_bytes(self.DVD9 + 1) == self.BD25
+        # one past BD50 → BDXL100
+        assert smallest_fitting_medium_bytes(self.BD50 + 1) == self.BDXL100
+        # beyond the largest medium → loud failure
+        with pytest.raises(ValueError, match="largest RS03 medium"):
+            smallest_fitting_medium_bytes(self.BDXL100 + 1)
+
+    def test_ladder_is_sector_aligned_and_ascending(self):
+        # dvdisaster sizes media in 2048-byte sectors; the ladder must be
+        # strictly ascending or the smallest-fit search breaks.
+        for size in RS03_MEDIUM_LADDER_BYTES:
+            assert size % 2048 == 0
+        assert list(RS03_MEDIUM_LADDER_BYTES) == sorted(
+            set(RS03_MEDIUM_LADDER_BYTES)
+        )

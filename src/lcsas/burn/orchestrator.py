@@ -45,7 +45,7 @@ from lcsas.db.volumes import (
     update_status,
     update_used_bytes,
 )
-from lcsas.ecc.dvdisaster import DVDisasterRunner
+from lcsas.ecc.dvdisaster import DVDisasterRunner, smallest_fitting_medium_bytes
 from lcsas.iso.xorriso import XorrisoRunner
 from lcsas.staging.builder import MirrorUnavailableError, StagingBuilder
 from lcsas.staging.metadata import HolographicInjector
@@ -653,13 +653,29 @@ class BurnOrchestrator:
                 iso_paths=[],
             )
 
-        # 3. Disk space pre-flight check
-        total_data_bytes = sum(b for _, b in volume_plans)
-        # Headroom: ISO filesystem overhead (~5%) + ECC overhead +
-        # the staging directory copy.  Use actual ECC percentage.
-        ecc_pct = self._config.default_ecc_redundancy_pct
-        overhead_factor = 1.05 * (1 + ecc_pct / 100) + 1  # ISO+ECC + staging copy
-        required_bytes = int(total_data_bytes * overhead_factor)
+        # 3. Disk space pre-flight check [BURN-07]
+        # Per volume we hold the staging tree (packs + holographic
+        # metadata) AND its ISO — ISOs persist for the whole session
+        # (BURN-06), so the padded ISO sizes are SUMMED, not maxed.  On
+        # ECC media (ecc_overhead_pct > 0) dvdisaster's RS03 augmented
+        # mode pads each ISO up to the smallest fitting medium (a 1 GB
+        # ISO becomes a 4.7 GB DVD image), and augment_iso additionally
+        # duplicates the ISO while augmenting — budget one extra copy of
+        # the largest padded ISO.
+        apply_ecc = mt.ecc_overhead_pct > 0
+        metadata_reserve = self._config.metadata_reserve_bytes
+        required_bytes = 0
+        max_padded_iso = 0
+        for _, vol_bytes in volume_plans:
+            # ~5% ISO 9660 filesystem overhead on top of the staged tree.
+            est_iso = int(vol_bytes * 1.05) + metadata_reserve
+            padded_iso = (
+                smallest_fitting_medium_bytes(est_iso) if apply_ecc else est_iso
+            )
+            required_bytes += vol_bytes + metadata_reserve + padded_iso
+            max_padded_iso = max(max_padded_iso, padded_iso)
+        if apply_ecc:
+            required_bytes += max_padded_iso  # augment_iso temp copy
         staging_usage = shutil.disk_usage(self._config.staging_path)
         if staging_usage.free < required_bytes:
             avail_gb = staging_usage.free / 1e9
@@ -667,6 +683,7 @@ class BurnOrchestrator:
             raise OSError(
                 f"Insufficient disk space for staging: "
                 f"{avail_gb:.1f} GB available, ~{need_gb:.1f} GB needed "
+                f"including RS03 medium padding "
                 f"(at {self._config.staging_path})"
             )
 

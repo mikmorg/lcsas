@@ -89,7 +89,9 @@ Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relat
 - Multi-tenant: each `[repos.<name>]` block validated independently; one error per failing repo.
 - OS: filesystem semantics of `Path.resolve()` and `os.access(..., W_OK)` matter; read-only mounts trip `staging_path is not writable`.
 - Multi-copy: N/A.
-- ECC: `default_ecc_redundancy_pct` range-checked only.
+- ECC: `default_ecc_redundancy_pct` range-checked; deprecated (BURN-07) —
+  it has no effect on RS03 augmented images (dvdisaster pads to the
+  smallest fitting medium), so any non-default value logs a WARNING.
 - Recovery tier: Tier 0.
 
 **Test coverage:**

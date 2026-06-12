@@ -97,6 +97,29 @@ class TestEccRedundancy:
         cfg = LCSASConfig(**{**cfg.__dict__, "default_ecc_redundancy_pct": 100})
         assert validate_config(cfg) == []
 
+    def test_ecc_non_default_warns_placebo(self, tmp_path, caplog):
+        """BURN-07: the knob is a placebo for RS03 augmented images.
+
+        A user configuring 30 for 'extra protection' must get a loud
+        warning at validation time, not silent placebo behavior — RS03
+        pads to the smallest fitting medium regardless.
+        """
+        import logging
+
+        cfg = _base_config(tmp_path)
+        cfg = LCSASConfig(**{**cfg.__dict__, "default_ecc_redundancy_pct": 30})
+        with caplog.at_level(logging.WARNING, logger="lcsas"):
+            assert validate_config(cfg) == []  # warning, not error
+        assert "no effect on RS03 augmented images" in caplog.text
+
+    def test_ecc_default_does_not_warn(self, tmp_path, caplog):
+        import logging
+
+        cfg = _base_config(tmp_path)
+        with caplog.at_level(logging.WARNING, logger="lcsas"):
+            assert validate_config(cfg) == []
+        assert "RS03 augmented images" not in caplog.text
+
 
 class TestMetadataReserve:
     def test_negative_metadata_reserve_errors(self, tmp_path):

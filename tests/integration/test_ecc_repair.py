@@ -32,7 +32,10 @@ from pathlib import Path
 
 import pytest
 
-from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+from lcsas.ecc.dvdisaster import (
+    SubprocessDVDisasterRunner,
+    smallest_fitting_medium_bytes,
+)
 
 pytestmark = [
     pytest.mark.integration,
@@ -48,9 +51,9 @@ pytestmark = [
 SECTOR = 2048
 RNG_SEED = 20260529
 NUM_FILES = 20
-# Matches the manually-validated config. At this scale RS03 pads the image up
-# to a full medium, so the exact percentage barely affects the layout — but we
-# pass it through the production wrapper to exercise the real augment path.
+# Deprecated and ignored since BURN-07 (RS03 augmented mode cannot take a
+# redundancy setting; it pads to the smallest fitting medium) — still passed
+# through the production wrapper to pin the signature-stability contract.
 REDUNDANCY_PCT = 15
 # Damage well within ECC capacity: 20 sectors out of a multi-hundred-sector
 # data region, far below the configured redundancy.
@@ -113,7 +116,28 @@ def test_rs03_repairs_bitrot_byte_identical(tmp_path: Path) -> None:
     _make_iso(src, iso)
     base_size = iso.stat().st_size
     runner.augment_iso(iso, redundancy_pct=REDUNDANCY_PCT)
-    assert iso.stat().st_size > base_size, "augment must grow the image with ECC"
+    padded_size = iso.stat().st_size
+    assert padded_size > base_size, "augment must grow the image with ECC"
+    # BURN-07: RS03 augmented mode pads to the smallest fitting medium.
+    # dvdisaster rounds the augmented image down to whole RS03 layers
+    # (multiples of 255 sectors — observed: 735,836,160 = 255 × 1409 ×
+    # 2048 for a CD-sized pad), so the result lands just UNDER the
+    # nominal medium size; smallest_fitting_medium_bytes is therefore a
+    # safe upper bound for the staging pre-flight budget.
+    ladder = smallest_fitting_medium_bytes(base_size)
+    assert padded_size <= ladder, (
+        f"augmented size {padded_size:,} exceeds the pre-flight budget "
+        f"({ladder:,}) — smallest_fitting_medium_bytes is no longer an "
+        f"upper bound"
+    )
+    assert padded_size > ladder * 0.98, (
+        f"augmented size {padded_size:,} is not within 2% of the smallest "
+        f"fitting medium ({ladder:,}) — RS03 did not pad to a full medium?"
+    )
+    print(
+        f"RS03 effective redundancy: {base_size:,} -> {padded_size:,} bytes "
+        f"(~{(padded_size - base_size) / base_size * 100:.0f}%)"
+    )
 
     # 3. A freshly augmented image verifies clean.
     assert runner.verify_iso(iso) is True, "augmented image should verify clean"

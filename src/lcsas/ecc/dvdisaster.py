@@ -12,6 +12,46 @@ from lcsas.utils.subprocess import SubprocessRunnerBase
 
 _logger = logging.getLogger(__name__)
 
+# RS03 augmented images cannot take a redundancy setting; dvdisaster pads
+# the image up to the smallest fitting medium and fills the slack with
+# parity ("Setting the redundancy is not possible due to constraints in
+# the format" — man dvdisaster, -n under "RS03 images").  These are the
+# medium sizes dvdisaster targets, in 2048-byte sectors × bytes:
+# CD 360,000 · DVD 2,295,104 · DVD9 4,171,712 · BD 12,219,392 ·
+# BD-DL 24,438,784 · BDXL-TL 48,878,592 (the BD trio matches
+# MediaType.{BD25,BD50,BDXL100}.capacity_bytes exactly).
+RS03_MEDIUM_LADDER_BYTES: tuple[int, ...] = (
+    737_280_000,        # CD (80 min)
+    4_700_372_992,      # DVD single layer
+    8_543_666_176,      # DVD9 dual layer
+    25_025_314_816,     # BD 25 GB single layer
+    50_050_629_632,     # BD 50 GB dual layer
+    100_103_356_416,    # BDXL 100 GB triple layer
+)
+
+
+def smallest_fitting_medium_bytes(image_bytes: int) -> int:
+    """Padded size of an RS03-augmented image of ``image_bytes`` bytes.
+
+    RS03 augmented mode grows the image to the smallest medium on
+    :data:`RS03_MEDIUM_LADDER_BYTES` that fits it; the burn pre-flight
+    must budget staging space for the *padded* size, not the raw ISO.
+    This is an upper bound: dvdisaster rounds the augmented image down
+    to whole RS03 layers (multiples of 255 sectors), so the real result
+    lands slightly under the nominal medium size (observed: a CD-sized
+    pad is 735,836,160 bytes vs the 737,280,000 nominal).
+
+    Raises:
+        ValueError: if the image exceeds the largest RS03 medium.
+    """
+    for medium_bytes in RS03_MEDIUM_LADDER_BYTES:
+        if image_bytes <= medium_bytes:
+            return medium_bytes
+    raise ValueError(
+        f"image of {image_bytes:,} bytes exceeds the largest RS03 medium "
+        f"({RS03_MEDIUM_LADDER_BYTES[-1]:,} bytes, BDXL 100 GB)"
+    )
+
 
 class DVDisasterRunner(Protocol):
     """Abstract interface for error correction code operations."""
@@ -54,6 +94,13 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
         Operates on a temporary copy to avoid corrupting the ISO if the
         process is interrupted.  On success the augmented copy replaces
         the original atomically via ``os.rename``.
+
+        ``redundancy_pct`` is deprecated and **ignored**: RS03 augmented
+        images cannot take a redundancy setting — dvdisaster pads the
+        image to the smallest fitting medium (see
+        :func:`smallest_fitting_medium_bytes`) and the padding *is* the
+        effective redundancy.  The parameter is kept for signature
+        stability only.
         """
         if not iso_path.exists():
             raise FileNotFoundError(f"ISO file not found: {iso_path}")
@@ -71,11 +118,12 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
         tmp = iso_path.with_suffix(".iso.ecc.tmp")
         try:
             shutil.copy2(str(iso_path), str(tmp))
+            # No -n: RS03 augmented images reject a redundancy setting and
+            # pad to the smallest fitting medium (man dvdisaster).
             cmd = [
                 self._binary,
                 "-i", str(tmp),
                 "-mRS03",
-                "-n", str(redundancy_pct),
                 "-c",
             ]
             try:
@@ -95,6 +143,15 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
             if tmp.exists():
                 tmp.unlink()
             raise
+
+        padded_size = iso_path.stat().st_size
+        effective_pct = (
+            (padded_size - iso_size) / iso_size * 100 if iso_size else 0.0
+        )
+        _logger.info(
+            "RS03 ECC: image padded to %s bytes (~%.0f%% effective redundancy)",
+            f"{padded_size:,}", effective_pct,
+        )
 
     def verify_iso(
         self,

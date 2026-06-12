@@ -118,3 +118,16 @@ Always-on unit (`make test-unit`, CI test.yml):
 
 1.5 days: 0.5 impl, 0.5 unit tests, 0.5 opt-in integration run + doc updates
 (ECC integration passes are minutes-long; run serially per project memory).
+
+---
+**Implemented:** 2026-06-12. As planned, with one empirical correction:
+the opt-in `LCSAS_ECC_REPAIR=1` run showed dvdisaster rounds the augmented
+image down to whole RS03 layers (255-sector multiples — a CD-sized pad is
+735,836,160 bytes, not the nominal 737,280,000), so the integration gate
+asserts `≤ ladder value and within 2%` rather than exact equality;
+`smallest_fitting_medium_bytes` is documented as the safe upper bound the
+pre-flight budgets with. Ladder constants verified against `man dvdisaster`
+/ manual.pdf on this host (DVD = 2,295,104 sectors; BD trio matches
+`MediaType` capacities). Adjacent (not fixed here, FMT owns doc truth):
+`staging/metadata.py:584` still writes "ECC redundancy: <pct>%" into the
+on-disc CONFIG_SUMMARY.

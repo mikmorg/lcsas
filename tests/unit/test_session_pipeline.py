@@ -18,7 +18,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -338,6 +338,53 @@ class TestStage:
         result = env["orch"].stage(for_location="Empty_Location")
         total_packs = sum(len(m.selected_packs) for m in result.manifests)
         assert total_packs == len(env["packs"])
+
+
+class TestStagePreflight:
+    """Disk-space pre-flight must budget RS03 medium padding (BURN-07)."""
+
+    def test_stage_preflight_budgets_padded_medium(self, tmp_path):
+        """1 GB session on BD25, 5 GB free → pre-flight OSError, no catalog write.
+
+        RS03 augmented mode pads the ~1 GB ISO up to the smallest fitting
+        dvdisaster medium (DVD, ~4.7 GB), and augment_iso duplicates the
+        ISO while augmenting — real need is data + padded ISO + temp copy
+        (~10.4 GB).  The old flat formula (1.05 * (1 + ecc/100) + 1 ≈ 2.2x
+        data) would have let this session through to ENOSPC mid-augment.
+        """
+        config = _make_config(tmp_path, num_repos=1, media=MediaType.BD25)
+        conn = get_memory_connection()
+        create_all(conn)
+        for name in config.repositories:
+            register_repo(conn, name, name.title(),
+                          str(config.repositories[name].mirror_path))
+        # Catalog-only pack: the pre-flight fires before any file is read,
+        # so the 1 GB needs to exist only as a registered size.
+        register_pack(conn, sha256="ab" * 32, size_bytes=1_000_000_000,
+                      repo_id="family")
+
+        orch = BurnOrchestrator(config, conn, MagicMock(), MagicMock())
+
+        with patch(
+            "lcsas.burn.orchestrator.shutil.disk_usage",
+            return_value=MagicMock(free=5_000_000_000),
+        ), pytest.raises(OSError, match="Insufficient disk space"):
+            orch.stage()
+
+        # Failed pre-flight must leave the catalog untouched.
+        assert list_sessions(conn) == []
+        assert get_unarchived_packs(conn) != []
+
+    def test_stage_preflight_no_padding_for_zero_ecc_media(self, env):
+        """TEST_TINY (ecc_overhead_pct == 0) skips augmentation, so the
+        pre-flight must not demand smallest-medium padding (CD ≈ 737 MB):
+        staging a few hundred bytes with 50 MB free must succeed."""
+        with patch(
+            "lcsas.burn.orchestrator.shutil.disk_usage",
+            return_value=MagicMock(free=50_000_000),
+        ):
+            result = env["orch"].stage()
+        assert len(result.manifests) >= 1
 
 
 class TestStageForLocation:

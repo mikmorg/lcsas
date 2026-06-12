@@ -44,13 +44,21 @@ matrix:
 
 ### 2.2 Redundancy
 
-The `redundancy_pct` parameter (LCSAS default: 15%) controls how
-many parity sectors are generated relative to the data size:
+In augmented-image mode (what LCSAS uses) the redundancy is **not
+configurable** — per the dvdisaster manual, "Setting the redundancy is
+not possible due to constraints in the format. The codec will
+automatically choose the size of the smallest fitting medium." The
+image is padded up to the smallest medium on the ladder
+CD → DVD → DVD9 → BD25 → BD50 → BDXL100 and the padding is filled with
+parity, so the *effective* redundancy is `(padded − data) / data`
+(LCSAS logs it after each augmentation).
 
-- 15% redundancy ≈ can tolerate ~15% of sectors being unreadable
-- Higher redundancy = more protection but larger disc usage
+- More slack between the data size and the next medium size = more
+  parity = more tolerance for unreadable sectors
 - The ECC data is appended to the end of the ISO, so the ISO
   remains a valid (readable) ISO 9660 image
+- (Only the separate *error-correction-file* mode accepts `-n`; there
+  a bare number means Reed-Solomon roots, and `%` means percent.)
 
 ### 2.3 Interleaving
 
@@ -133,7 +141,8 @@ is GF(2^8) — operations in the Galois Field of order 256.
 - **Field:** GF(2^8) with primitive polynomial 0x11D
   (x^8 + x^4 + x^3 + x^2 + 1)
 - **Code:** RS(255, 255-nroots) — up to 255 symbols per codeword
-- **nroots:** Determined by redundancy percentage (e.g., 15% → ~32 roots)
+- **nroots:** Determined by the effective redundancy, i.e. the padding
+  to the smallest fitting medium (e.g., ~15% → ~32 roots)
 - **Erasure correction:** Can correct up to `nroots` known-bad sectors
   per codeword (erasure channel model — dvdisaster knows WHICH sectors
   are bad because the drive reports read errors)
@@ -167,10 +176,12 @@ image in place.
 ### 5.3 Augment (create ECC)
 
 ```
-dvdisaster -i image.iso -mRS03 -n <redundancy_pct> -c
+dvdisaster -i image.iso -mRS03 -c
 ```
 
-Computes RS03 parity data and appends it to the ISO file.
+Computes RS03 parity data and appends it to the ISO file, padding the
+image up to the smallest fitting medium size (no `-n`: augmented-image
+redundancy is not settable — see §2.2).
 
 ---
 
@@ -216,7 +227,8 @@ layout, which requires reading the RS03 source code.
 
 ## 7. Practical Notes for LCSAS
 
-- LCSAS uses RS03 at 15% redundancy by default (configurable)
+- LCSAS uses RS03 augmented images; the redundancy is whatever padding
+  the smallest fitting medium leaves (not configurable — see §2.2)
 - ECC is applied at the ISO level, AFTER all data is packed
 - The augmented ISO is still a valid ISO 9660 filesystem — the ECC
   data appears after the filesystem boundary

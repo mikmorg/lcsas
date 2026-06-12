@@ -29,6 +29,9 @@ class LCSASConfig:
 
     # Defaults
     default_media_type: MediaType = MediaType.BD25
+    # Deprecated: ignored by RS03 augmented images (BURN-07) — dvdisaster
+    # pads to the smallest fitting medium and the padding IS the redundancy.
+    # Kept so existing TOMLs keep parsing; validate_config warns if non-15.
     default_ecc_redundancy_pct: int = 15
     default_location: str = "Home_Shelf"
 
@@ -316,6 +319,17 @@ def validate_config(config: LCSASConfig) -> list[str]:
         errors.append(
             f"default_ecc_redundancy_pct out of range (0-100): "
             f"{config.default_ecc_redundancy_pct}"
+        )
+    elif config.default_ecc_redundancy_pct != 15:
+        # Deprecated knob, kept so existing TOMLs parse.  RS03 augmented
+        # images cannot take a redundancy setting (man dvdisaster), so a
+        # non-default value must not silently masquerade as extra (or
+        # reduced) protection.
+        _logger.warning(
+            "default_ecc_redundancy_pct (%d) has no effect on RS03 augmented "
+            "images; effective redundancy is the padding of the smallest "
+            "fitting medium",
+            config.default_ecc_redundancy_pct,
         )
 
     # metadata_reserve_bytes (must be non-negative; zero is allowed but risky)

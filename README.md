@@ -132,6 +132,8 @@ database    = "/var/lib/lcsas/archive.db"
 
 [defaults]
 media_type         = "MDISC100"
+# Deprecated/ignored: RS03 augmented images pad to the smallest fitting
+# medium; the padding is the effective redundancy (non-15 values warn).
 ecc_redundancy_pct = 15
 location           = "Home_Shelf"
 optical_device     = "/dev/sr0"

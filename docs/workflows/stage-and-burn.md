@@ -448,8 +448,15 @@ The DVDisaster step is **always applied** to production media (any
 to bypass it — production archives without ECC cannot survive a single
 read error and were judged a vestigial misfeature (see GH-36).
 
-`dvdisaster -mRS03 -n <default_ecc_redundancy_pct> -c` is run on the ISO
-via a temp copy + atomic rename (`src/lcsas/ecc/dvdisaster.py:71-93`).
+`dvdisaster -mRS03 -c` is run on the ISO via a temp copy + atomic rename
+(`src/lcsas/ecc/dvdisaster.py`). No `-n` is passed (BURN-07): RS03
+augmented images cannot take a redundancy setting — dvdisaster pads the
+image to the smallest fitting medium (CD → DVD → DVD9 → BD25 → BD50 →
+BDXL100) and the padding *is* the effective redundancy (logged per
+volume after augmentation). The `default_ecc_redundancy_pct` config
+knob is deprecated/ignored, and the staging disk-space pre-flight
+budgets the *padded* ISO size per volume
+(`smallest_fitting_medium_bytes`) plus one temp copy for augmentation.
 
 Test media (`TEST_TINY`, `ecc_overhead_pct == 0`) is **implicitly
 skipped**: `BurnOrchestrator.execute` and `_stage_single_volume` only
