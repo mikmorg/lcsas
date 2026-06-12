@@ -76,6 +76,18 @@ def mark_pruned(conn: sqlite3.Connection, pack_id: int) -> None:
     conn.commit()
 
 
+def unmark_pruned(conn: sqlite3.Connection, pack_id: int) -> None:
+    """Restore a wrongly-pruned pack to the active pool (BURN-09).
+
+    Inverse of mark_pruned — the recovery tool for prune-sync mistakes
+    (e.g. a partially-unavailable mirror scanned as if packs were gone).
+    """
+    conn.execute(
+        "UPDATE packs SET is_pruned = 0 WHERE pack_id = ?", (pack_id,)
+    )
+    conn.commit()
+
+
 def bulk_mark_pruned(conn: sqlite3.Connection, pack_ids: list[int]) -> int:
     """Mark multiple packs as pruned in a single transaction.
 

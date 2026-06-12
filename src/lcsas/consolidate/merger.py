@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from lcsas.config.media import MediaType
 from lcsas.db.models import Pack
-from lcsas.db.queries import get_packs_only_on_volumes
+from lcsas.db.queries import get_packs_only_on_volumes, get_pruned_packs_on_volumes
 from lcsas.db.volumes import get_volume_by_id, update_status
 
 
@@ -21,6 +21,9 @@ class ConsolidationPlan:
     total_active_bytes: int
     target_media_type: MediaType
     volumes_needed: int
+    # Pruned packs on the source volumes that will NOT migrate — surfaced
+    # so a mis-pruned pack is caught before its discs are deprecated (BURN-09).
+    pruned_left_behind: list[Pack] = field(default_factory=list)
 
 
 class VolumeMerger:
@@ -63,6 +66,11 @@ class VolumeMerger:
         active_packs = get_packs_only_on_volumes(self._conn, source_volume_ids)
         total_bytes = sum(p.size_bytes for p in active_packs)
 
+        # Pruned packs stay behind — list them rather than silently exclude.
+        pruned_left_behind = get_pruned_packs_on_volumes(
+            self._conn, source_volume_ids
+        )
+
         # Estimate volumes needed
         from lcsas.binpack.algorithm import estimate_volumes_needed
         volumes_needed = estimate_volumes_needed(
@@ -79,6 +87,7 @@ class VolumeMerger:
             total_active_bytes=total_bytes,
             target_media_type=target_media_type,
             volumes_needed=volumes_needed,
+            pruned_left_behind=pruned_left_behind,
         )
 
     def deprecate_sources(

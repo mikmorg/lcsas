@@ -112,3 +112,6 @@ Always-on unit (`make test-unit`, CI test.yml):
 
 1.5 days: 0.75 impl (scanner result type ripples to two call sites), 0.75 tests.
 No special environment.
+
+---
+**Implemented:** 2026-06-12. As planned; additionally added a `lcsas pack unprune` CLI test class, and the MirrorScanResult return-type ripple covered all integration/e2e test call sites (not just the two src call sites).

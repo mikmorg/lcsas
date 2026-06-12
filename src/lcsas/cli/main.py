@@ -106,6 +106,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-prune-sync", action="store_true", default=False,
         help="Don't mark packs as pruned when absent from mirror.",
     )
+    scan_p.add_argument(
+        "--yes-prune", action="store_true", default=False,
+        help="Confirm a mass-prune: allow one scan to mark more than "
+             "max(10, 20%% of a repo's active packs) as pruned.",
+    )
+
+    # --- pack ---
+    pack_p = subparsers.add_parser("pack", help="Manage individual packs in the catalog.")
+    pack_sub = pack_p.add_subparsers(dest="pack_command")
+
+    pack_unprune_p = pack_sub.add_parser(
+        "unprune",
+        help="Restore a wrongly-pruned pack to the active pool.",
+    )
+    pack_unprune_p.add_argument(
+        "sha256",
+        help="SHA-256 of the pack (a unique prefix is accepted).",
+    )
 
     # --- status ---
     subparsers.add_parser("status", help="Show archive status summary.")
@@ -864,7 +882,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 continue
 
             mirror_path = repo_cfg.mirror_path
-            packs_on_disk = scan_mirror_packs(mirror_path)
+            scan_result = scan_mirror_packs(mirror_path)
+            packs_on_disk = scan_result.packs
             total_scanned += len(packs_on_disk)
 
             analyzer = DeltaAnalyzer(conn, packs_on_disk, db_repo_id)
@@ -874,18 +893,41 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
             total_new += len(new_packs)
 
-            # Prune sync: detect packs removed by rustic prune
+            # Prune sync: detect packs removed by rustic prune (BURN-09:
+            # only on a complete scan, and never en masse unconfirmed —
+            # registration above is additive and always safe).
             if not getattr(args, "no_prune_sync", False):
-                pruned = analyzer.detect_pruned()
-                if pruned:
-                    from lcsas.db.packs import bulk_mark_pruned
-                    pruned_ids = [p.pack_id for p in pruned]
-                    pruned_bytes = sum(p.size_bytes for p in pruned)
-                    marked = bulk_mark_pruned(conn, pruned_ids)
-                    logger.info(
-                        f"    Pruned packs:   {marked} "
-                        f"({pruned_bytes:,} bytes)"
+                if scan_result.errors:
+                    logger.warning(
+                        f"    Scan of {repo_name} was INCOMPLETE "
+                        f"({len(scan_result.errors)} unreadable path(s)) — "
+                        f"prune-sync skipped for this repo. "
+                        f"Fix permissions/mount and re-scan."
                     )
+                else:
+                    pruned = analyzer.detect_pruned()
+                    if pruned:
+                        from lcsas.db.packs import bulk_mark_pruned, list_packs
+                        active_total = len(list_packs(
+                            conn, repo_id=db_repo_id, include_pruned=False,
+                        ))
+                        if (len(pruned) > max(10, 0.2 * active_total)
+                                and not getattr(args, "yes_prune", False)):
+                            logger.warning(
+                                f"    Refusing to mark {len(pruned)}/{active_total} "
+                                f"packs of {repo_name} pruned in one scan — this "
+                                f"usually means the mirror is partially "
+                                f"unavailable. Re-run with --yes-prune to confirm "
+                                f"rustic really pruned them."
+                            )
+                        else:
+                            pruned_ids = [p.pack_id for p in pruned]
+                            pruned_bytes = sum(p.size_bytes for p in pruned)
+                            marked = bulk_mark_pruned(conn, pruned_ids)
+                            logger.info(
+                                f"    Pruned packs:   {marked} "
+                                f"({pruned_bytes:,} bytes)"
+                            )
 
             logger.info(f"  {repo_name}:")
             logger.info(f"    Packs on disk:  {len(packs_on_disk)}")
@@ -963,6 +1005,55 @@ def cmd_scan(args: argparse.Namespace) -> int:
                f"{summary['archived']} archived, "
                f"{summary['staged']} staged, "
                f"{summary['unarchived']} unarchived")
+    return 0
+
+
+def cmd_pack_unprune(args: argparse.Namespace) -> int:
+    """Restore a wrongly-pruned pack to the active pool (BURN-09)."""
+    from lcsas.config.settings import load_config
+    from lcsas.db.connection import locked_connection
+    from lcsas.db.packs import unmark_pruned
+    from lcsas.db.schema import ensure_schema
+
+    config = load_config(args.config) if args.config else None
+    db_path = _resolve_db_path(args, config)
+
+    prefix = args.sha256.strip().lower()
+    if not prefix:
+        logger.error("Empty SHA-256 prefix.")
+        return 1
+
+    with locked_connection(db_path) as conn:
+        ensure_schema(conn)
+        # substr() prefix match: immune to LIKE wildcards in user input.
+        rows = conn.execute(
+            "SELECT pack_id, sha256, is_pruned FROM packs "
+            "WHERE substr(sha256, 1, ?) = ? ORDER BY sha256",
+            (len(prefix), prefix),
+        ).fetchall()
+
+        if not rows:
+            logger.error(f"No pack matches prefix '{prefix}'.")
+            return 1
+        if len(rows) > 1:
+            logger.error(
+                f"Prefix '{prefix}' is ambiguous ({len(rows)} matches) — "
+                f"give more characters:"
+            )
+            for row in rows[:10]:
+                logger.error(f"  {row['sha256']}")
+            if len(rows) > 10:
+                logger.error(f"  … and {len(rows) - 10} more")
+            return 1
+
+        row = rows[0]
+        if not row["is_pruned"]:
+            logger.info(
+                f"Pack {row['sha256']} is already active — nothing to do."
+            )
+            return 0
+        unmark_pruned(conn, row["pack_id"])
+        logger.info(f"Pack {row['sha256']} restored to the active pool.")
     return 0
 
 
@@ -1797,6 +1888,20 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
         logger.info(f"  Total size:    {plan.total_active_bytes / 1e9:.1f} GB")
         logger.info(f"  Target media:  {plan.target_media_type.name}")
         logger.info(f"  Volumes needed: {plan.volumes_needed}")
+        if plan.pruned_left_behind:
+            left_bytes = sum(p.size_bytes for p in plan.pruned_left_behind)
+            logger.warning(
+                f"  Pruned left behind: {len(plan.pruned_left_behind)} pack(s) "
+                f"({left_bytes:,} bytes) on the source volume(s) are marked "
+                f"pruned and will NOT migrate. If any were pruned by mistake, "
+                f"run 'lcsas pack unprune <sha256>' and re-plan first:"
+            )
+            for p in plan.pruned_left_behind[:20]:
+                logger.warning(f"    {p.sha256}")
+            if len(plan.pruned_left_behind) > 20:
+                logger.warning(
+                    f"    … and {len(plan.pruned_left_behind) - 20} more"
+                )
 
         # Handle --deprecate flag (separate from --execute)
         if args.deprecate:
@@ -3481,6 +3586,12 @@ def dispatch(args: argparse.Namespace) -> int:
             return 1
     elif args.command == "scan":
         return cmd_scan(args)
+    elif args.command == "pack":
+        if args.pack_command == "unprune":
+            return cmd_pack_unprune(args)
+        else:
+            logger.error("Usage: lcsas pack {unprune}")
+            return 1
     elif args.command == "status":
         return cmd_status(args)
     elif args.command == "config":

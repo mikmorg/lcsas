@@ -14,9 +14,10 @@ from lcsas.utils.labels import generate_uuid
 class TestScanner:
     def test_scan_two_level_layout(self, tmp_mirror):
         """The tmp_mirror fixture uses two-level hash dirs."""
-        packs = scan_mirror_packs(tmp_mirror)
-        assert len(packs) == 10
-        for _sha, size in packs.items():
+        result = scan_mirror_packs(tmp_mirror)
+        assert len(result.packs) == 10
+        assert result.errors == []
+        for _sha, size in result.packs.items():
             assert size > 0
 
     def test_scan_flat_layout(self, tmp_path):
@@ -26,31 +27,37 @@ class TestScanner:
             # Use a valid 64-char hex filename (padded with zeros on the left).
             name = f"{i:064x}"
             (data_dir / name).write_bytes(b"x" * 50)
-        packs = scan_mirror_packs(tmp_path)
-        assert len(packs) == 5
+        result = scan_mirror_packs(tmp_path)
+        assert len(result.packs) == 5
+        assert result.errors == []
 
     def test_scan_empty_dir(self, tmp_path):
         (tmp_path / "data").mkdir()
-        packs = scan_mirror_packs(tmp_path)
-        assert packs == {}
+        result = scan_mirror_packs(tmp_path)
+        assert result.packs == {}
+        assert result.errors == []
 
     def test_scan_no_data_dir(self, tmp_path):
-        packs = scan_mirror_packs(tmp_path)
-        assert packs == {}
+        result = scan_mirror_packs(tmp_path)
+        assert result.packs == {}
+        assert result.errors == []
 
     def test_scan_permission_denied_on_data_dir(self, tmp_path):
-        """Scan logs warning and returns empty dict when data_dir is not readable."""
+        """An unreadable data_dir yields no packs and a reported error (BURN-09)."""
         from unittest.mock import patch
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         # Mock os.scandir to raise PermissionError
         with patch("lcsas.packs.scanner.os.scandir") as mock_scandir:
             mock_scandir.side_effect = PermissionError("Permission denied")
-            packs = scan_mirror_packs(tmp_path)
-        assert packs == {}
+            result = scan_mirror_packs(tmp_path)
+        assert result.packs == {}
+        # The incompleteness MUST be reported, not just logged.
+        assert len(result.errors) == 1
+        assert str(data_dir) in result.errors[0]
 
     def test_scan_permission_denied_on_subdir(self, tmp_path):
-        """Scan logs warning and skips inaccessible subdirectory in two-level layout."""
+        """An unreadable subdirectory is skipped AND reported in errors (BURN-09)."""
         from unittest.mock import MagicMock, patch
         data_dir = tmp_path / "data"
         data_dir.mkdir()
@@ -72,12 +79,15 @@ class TestScanner:
                 else:
                     raise PermissionError("Permission denied")
             mock_scandir.side_effect = scandir_side_effect
-            packs = scan_mirror_packs(tmp_path)
-        # Should return empty dict since subdir couldn't be accessed
-        assert packs == {}
+            result = scan_mirror_packs(tmp_path)
+        # No packs found, and the unreadable subdir is reported so callers
+        # know the scan was incomplete (must not be treated as pruned).
+        assert result.packs == {}
+        assert len(result.errors) == 1
+        assert str(subdir) in result.errors[0]
 
     def test_scan_oserror_on_pack_stat(self, tmp_path):
-        """Scan logs warning and skips pack files that can't be stat'd."""
+        """A pack file that can't be stat'd is skipped AND reported (BURN-09)."""
         from unittest.mock import MagicMock, patch
         data_dir = tmp_path / "data"
         data_dir.mkdir()
@@ -102,9 +112,11 @@ class TestScanner:
                     sub_entry.stat.side_effect = OSError("Can't stat")
                     return [sub_entry]
             mock_scandir.side_effect = scandir_side_effect
-            packs = scan_mirror_packs(tmp_path)
-        # Should return empty dict since pack stat failed
-        assert packs == {}
+            result = scan_mirror_packs(tmp_path)
+        # No packs found, and the unreadable pack file is reported.
+        assert result.packs == {}
+        assert len(result.errors) == 1
+        assert "Can't stat" in result.errors[0]
 
 
 class TestDeltaAnalyzer:

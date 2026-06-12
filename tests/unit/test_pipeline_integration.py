@@ -161,7 +161,7 @@ class TestScanAndRegister:
         conn = env["conn"]
 
         # Scan family
-        fam_scanned = scan_mirror_packs(env["family_mirror"])
+        fam_scanned = scan_mirror_packs(env["family_mirror"]).packs
         assert len(fam_scanned) == 4
         delta_fam = DeltaAnalyzer(conn, fam_scanned, repo_id="family")
         new_fam = delta_fam.register_new_packs()
@@ -169,7 +169,7 @@ class TestScanAndRegister:
         assert all(p.repo_id == "family" for p in new_fam)
 
         # Scan work
-        wrk_scanned = scan_mirror_packs(env["work_mirror"])
+        wrk_scanned = scan_mirror_packs(env["work_mirror"]).packs
         assert len(wrk_scanned) == 3
         delta_wrk = DeltaAnalyzer(conn, wrk_scanned, repo_id="work")
         new_wrk = delta_wrk.register_new_packs()
@@ -177,7 +177,7 @@ class TestScanAndRegister:
         assert all(p.repo_id == "work" for p in new_wrk)
 
         # Scan archive
-        arc_scanned = scan_mirror_packs(env["archive_mirror"])
+        arc_scanned = scan_mirror_packs(env["archive_mirror"]).packs
         assert len(arc_scanned) == 2
         delta_arc = DeltaAnalyzer(conn, arc_scanned, repo_id="archive")
         new_arc = delta_arc.register_new_packs()
@@ -195,7 +195,7 @@ class TestScanAndRegister:
         env = pipeline_env
         conn = env["conn"]
 
-        scanned = scan_mirror_packs(env["family_mirror"])
+        scanned = scan_mirror_packs(env["family_mirror"]).packs
         DeltaAnalyzer(conn, scanned, repo_id="family").register_new_packs()
 
         # Rescan
@@ -215,7 +215,7 @@ class TestScanAndRegister:
             ("work", env["work_mirror"]),
             ("archive", env["archive_mirror"]),
         ]:
-            scanned = scan_mirror_packs(mirror)
+            scanned = scan_mirror_packs(mirror).packs
             DeltaAnalyzer(conn, scanned, repo_id=repo_id).register_new_packs()
 
         assert len(get_unarchived_packs(conn, repo_id="family")) == 4
@@ -239,7 +239,7 @@ class TestBurnWithRedundancy:
             ("work", env["work_mirror"]),
             ("archive", env["archive_mirror"]),
         ]:
-            scanned = scan_mirror_packs(mirror)
+            scanned = scan_mirror_packs(mirror).packs
             DeltaAnalyzer(conn, scanned, repo_id=repo_id).register_new_packs()
 
     def test_create_two_volumes_with_full_redundancy(self, pipeline_env):
@@ -335,7 +335,7 @@ class TestFullPipelineRestore:
             ("work", env["work_mirror"], env["work_packs"]),
             ("archive", env["archive_mirror"], env["archive_packs"]),
         ]:
-            scanned = scan_mirror_packs(mirror)
+            scanned = scan_mirror_packs(mirror).packs
             delta = DeltaAnalyzer(conn, scanned, repo_id=repo_id)
             delta.register_new_packs()
             for sha, size in specs:

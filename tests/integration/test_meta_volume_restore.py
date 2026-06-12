@@ -167,7 +167,7 @@ class TestMetaVolumeRestore:
         register_repo(conn, "photos", "Photo Archive", str(repo))
 
         # ── Scan + burn ISOs ─────────────────────────────────────
-        scanned = scan_mirror_packs(repo)
+        scanned = scan_mirror_packs(repo).packs
         delta = DeltaAnalyzer(conn, scanned, repo_id="photos")
         delta.register_new_packs()
 

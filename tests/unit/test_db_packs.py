@@ -11,6 +11,7 @@ from lcsas.db.packs import (
     list_packs,
     mark_pruned,
     register_pack,
+    unmark_pruned,
 )
 from lcsas.db.repos import register_repo
 
@@ -52,6 +53,26 @@ class TestPacksCRUD:
         mark_pruned(memory_db, pack.pack_id)
         updated = get_pack_by_id(memory_db, pack.pack_id)
         assert updated.is_pruned is True
+
+    def test_unmark_pruned_roundtrip(self, memory_db):
+        """BURN-09: unmark_pruned restores a pack to the active pool."""
+        from lcsas.db.queries import get_unarchived_packs
+
+        pack = register_pack(
+            memory_db, sha256="roundtrip", size_bytes=100, repo_id="_test"
+        )
+        mark_pruned(memory_db, pack.pack_id)
+        assert get_pack_by_id(memory_db, pack.pack_id).is_pruned is True
+        assert all(
+            p.sha256 != "roundtrip" for p in get_unarchived_packs(memory_db)
+        )
+
+        unmark_pruned(memory_db, pack.pack_id)
+        assert get_pack_by_id(memory_db, pack.pack_id).is_pruned is False
+        # Back in the unarchived (burnable) pool.
+        assert any(
+            p.sha256 == "roundtrip" for p in get_unarchived_packs(memory_db)
+        )
 
     def test_bulk_register(self, memory_db):
         data = [

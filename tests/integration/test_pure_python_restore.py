@@ -312,7 +312,7 @@ class TestPurePythonFallbackRestore:
         self, conn: sqlite3.Connection, repos: dict[str, Path]
     ) -> None:
         for repo_id, repo_path in repos.items():
-            scanned = scan_mirror_packs(repo_path)
+            scanned = scan_mirror_packs(repo_path).packs
             delta = DeltaAnalyzer(conn, scanned, repo_id=repo_id)
             delta.register_new_packs()
 

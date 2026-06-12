@@ -61,6 +61,46 @@ class TestVolumeMerger:
         assert len(plan.active_packs) == 1
         assert plan.active_packs[0].sha256 == "active_pack"
 
+    def test_consolidation_surfaces_pruned_left_behind(self, tmp_path, capsys):
+        """BURN-09: pruned packs on source volumes are listed in the plan
+        report, not silently excluded — so a mis-pruned pack is caught
+        before its only discs are deprecated."""
+        from lcsas.cli.main import main
+        from lcsas.db.connection import get_connection
+        from lcsas.db.repos import register_repo
+        from lcsas.db.schema import create_all
+
+        db_path = tmp_path / "archive.db"
+        conn = get_connection(db_path)
+        create_all(conn)
+        register_repo(conn, "_test", "Test", "/test")
+
+        vol = create_volume(
+            conn, label="PRUNED_SRC", uuid=generate_uuid(),
+            media_type="BD25", capacity_bytes=25_000_000_000,
+            status="VERIFIED",
+        )
+        sha_active = "aa" * 32
+        sha_dead = "dd" * 32
+        p_active = register_pack(conn, sha256=sha_active, size_bytes=100, repo_id="_test")
+        p_dead = register_pack(conn, sha256=sha_dead, size_bytes=200, repo_id="_test")
+        mark_pruned(conn, p_dead.pack_id)
+        bulk_link_packs(conn, vol.volume_id, [p_active.pack_id, p_dead.pack_id])
+
+        # The plan itself carries the pruned packs left behind…
+        merger = VolumeMerger(conn)
+        plan = merger.plan_consolidation([vol.volume_id], MediaType.MDISC100)
+        assert [p.sha256 for p in plan.pruned_left_behind] == [sha_dead]
+        assert [p.sha256 for p in plan.active_packs] == [sha_active]
+        conn.close()
+
+        # …and the CLI report output lists them explicitly.
+        rc = main(["--db", str(db_path), "consolidate", str(vol.volume_id)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Pruned left behind" in out
+        assert sha_dead in out
+
     def test_deprecate_sources(self, memory_db):
         vol = create_volume(
             memory_db, label="DEP_ME", uuid=generate_uuid(),

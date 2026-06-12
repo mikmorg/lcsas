@@ -282,7 +282,7 @@ def _build_archive(work: Path) -> _Archive:
     create_all(conn)
     register_repo(conn, TENANT, TENANT, str(mirror))
     conn.commit()
-    delta = DeltaAnalyzer(conn, scan_mirror_packs(mirror), repo_id=TENANT)
+    delta = DeltaAnalyzer(conn, scan_mirror_packs(mirror).packs, repo_id=TENANT)
     delta.register_new_packs()
     conn.commit()
 

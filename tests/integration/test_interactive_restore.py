@@ -168,7 +168,7 @@ class TestInteractiveRestore:
         create_all(conn)
         register_repo(conn, "photos", "photos", str(repo))
 
-        scanned = scan_mirror_packs(repo)
+        scanned = scan_mirror_packs(repo).packs
         delta = DeltaAnalyzer(conn, scanned, repo_id="photos")
         delta.register_new_packs()
 

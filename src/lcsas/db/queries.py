@@ -464,6 +464,37 @@ def get_packs_only_on_volumes(
     return sorted(pack_map.values(), key=lambda p: p.sha256)
 
 
+def get_pruned_packs_on_volumes(
+    conn: sqlite3.Connection,
+    volume_ids: list[int],
+) -> list[Pack]:
+    """Return pruned packs present on the given volumes.
+
+    Consolidation intentionally leaves these behind; surfacing them in
+    the plan report makes the exclusion visible so a mis-pruned pack is
+    caught (and unpruned) before its only discs are deprecated (BURN-09).
+    """
+    if not volume_ids:
+        return []
+
+    pack_map: dict[int, Pack] = {}
+    for batch_start in range(0, len(volume_ids), _SQLITE_BATCH):
+        batch = volume_ids[batch_start : batch_start + _SQLITE_BATCH]
+        placeholders = ",".join("?" for _ in batch)
+        rows = conn.execute(
+            f"""SELECT DISTINCT p.* FROM packs p
+                JOIN volume_packs vp ON p.pack_id = vp.pack_id
+                WHERE vp.volume_id IN ({placeholders})
+                  AND p.is_pruned = 1
+                ORDER BY p.sha256""",
+            batch,
+        ).fetchall()
+        for r in rows:
+            p = _row_to_pack(r)
+            pack_map[p.pack_id] = p
+    return sorted(pack_map.values(), key=lambda p: p.sha256)
+
+
 def get_redundancy_report(
     conn: sqlite3.Connection,
     min_copies: int = 2,

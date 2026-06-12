@@ -158,16 +158,18 @@ class TestDbEdgeCases:
 
 class TestScannerEdgeCases:
     def test_empty_mirror(self, tmp_path):
-        """Empty data directory returns empty dict."""
+        """Empty data directory returns no packs."""
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         result = scan_mirror_packs(tmp_path)
-        assert result == {}
+        assert result.packs == {}
+        assert result.errors == []
 
     def test_nonexistent_data_dir(self, tmp_path):
-        """No data/ directory returns empty dict."""
+        """No data/ directory returns no packs."""
         result = scan_mirror_packs(tmp_path)
-        assert result == {}
+        assert result.packs == {}
+        assert result.errors == []
 
     def test_zero_byte_pack(self, tmp_path):
         """Zero-byte pack files are skipped (likely incomplete writes)."""
@@ -176,7 +178,7 @@ class TestScannerEdgeCases:
         sha = "0" * 64
         (data_dir / sha).write_bytes(b"")
         result = scan_mirror_packs(tmp_path)
-        assert sha not in result  # zero-byte packs are skipped
+        assert sha not in result.packs  # zero-byte packs are skipped
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Symlinks not standard on Windows")
     def test_symlinked_pack_included(self, tmp_path):
@@ -189,5 +191,5 @@ class TestScannerEdgeCases:
         (data_dir / sha).symlink_to(real)
 
         result = scan_mirror_packs(tmp_path)
-        assert sha in result
-        assert result[sha] == 50
+        assert sha in result.packs
+        assert result.packs[sha] == 50

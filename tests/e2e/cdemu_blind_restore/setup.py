@@ -224,7 +224,7 @@ def _init_burn_db():
     conn.commit()
 
     for name in tenants:
-        scanned = scan_mirror_packs(MIRROR / name)
+        scanned = scan_mirror_packs(MIRROR / name).packs
         delta = DeltaAnalyzer(conn, scanned, repo_id=name)
         delta.register_new_packs()
     conn.commit()

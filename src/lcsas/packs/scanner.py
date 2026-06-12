@@ -5,12 +5,26 @@ from __future__ import annotations
 import logging
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 _logger = logging.getLogger(__name__)
 
 # Pack filenames in Rustic repos are 64-char lowercase hex (SHA-256).
 _PACK_NAME_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+@dataclass(frozen=True)
+class MirrorScanResult:
+    """Outcome of a mirror scan: discovered packs plus unreadable paths.
+
+    A non-empty ``errors`` list means the scan was INCOMPLETE — packs
+    absent from ``packs`` may simply have been unreadable, so callers
+    must not treat absence as evidence of pruning (BURN-09).
+    """
+
+    packs: dict[str, int]
+    errors: list[str]
 
 
 def _register_pack(
@@ -34,29 +48,34 @@ def _register_pack(
     packs[name] = size
 
 
-def scan_mirror_packs(mirror_path: Path) -> dict[str, int]:
+def scan_mirror_packs(mirror_path: Path) -> MirrorScanResult:
     """Scan a Rustic repository's data directory for pack files.
 
     Handles both flat layout (data/HASH) and two-level hash-prefix
-    layout (data/ab/abcdef...). Returns {sha256_filename: size_bytes}.
+    layout (data/ab/abcdef...).
 
     Args:
         mirror_path: Root of the Rustic repository (contains data/ subdir).
 
     Returns:
-        Dict mapping pack filename (the SHA-256 hash) to file size in bytes.
+        MirrorScanResult with ``packs`` mapping pack filename (the
+        SHA-256 hash) to file size in bytes, and ``errors`` listing
+        every path that could not be read (a non-empty list marks the
+        scan as incomplete — see the dataclass docstring).
     """
     data_dir = mirror_path / "data"
     if not data_dir.is_dir():
-        return {}
+        return MirrorScanResult(packs={}, errors=[])
 
     packs: dict[str, int] = {}
+    errors: list[str] = []
 
     try:
         top_entries = list(os.scandir(data_dir))
     except PermissionError as exc:
         _logger.warning("Cannot scan %s: %s", data_dir, exc)
-        return packs
+        errors.append(f"{data_dir}: {exc}")
+        return MirrorScanResult(packs=packs, errors=errors)
 
     for entry in top_entries:
         try:
@@ -70,6 +89,7 @@ def scan_mirror_packs(mirror_path: Path) -> dict[str, int]:
                     sub_entries = list(os.scandir(subdir))
                 except PermissionError as exc:
                     _logger.warning("Cannot scan %s: %s", subdir, exc)
+                    errors.append(f"{subdir}: {exc}")
                     continue
                 for sub_entry in sub_entries:
                     if sub_entry.is_file() and not sub_entry.name.startswith("."):
@@ -80,7 +100,9 @@ def scan_mirror_packs(mirror_path: Path) -> dict[str, int]:
                             )
                         except OSError as exc:
                             _logger.warning("Cannot access pack file %s: %s", sub_entry.path, exc)
+                            errors.append(f"{sub_entry.path}: {exc}")
         except OSError as exc:
             _logger.warning("Cannot process entry %s: %s", entry.path, exc)
+            errors.append(f"{entry.path}: {exc}")
 
-    return packs
+    return MirrorScanResult(packs=packs, errors=errors)
