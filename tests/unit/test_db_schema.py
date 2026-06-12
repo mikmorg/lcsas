@@ -12,7 +12,9 @@ from lcsas.db.connection import get_memory_connection
 from lcsas.db.schema import (
     CURRENT_SCHEMA_VERSION,
     SchemaVersionError,
+    WedgedMigrationError,
     create_all,
+    detect_wedged_migration,
     ensure_schema,
     get_schema_version,
     migrate,
@@ -137,6 +139,89 @@ def seed_v5_catalog(conn: sqlite3.Connection) -> None:
     """Build a v5-shaped catalog by replaying the historical DDL."""
     conn.executescript(V5_HISTORICAL_DDL)
     conn.commit()
+
+
+# Historical v4 catalog DDL (FMA-07 crash-atomicity fixtures): the v4
+# `volumes` CHECK lacks CONSOLIDATING and `volume_events` has the
+# 6-type CHECK, so a full migrate() exercises BOTH table-recreating
+# steps (v4→v5 rebuilds volumes, v5→v6 rebuilds volume_events).
+V4_HISTORICAL_DDL = """
+CREATE TABLE schema_version (
+    version INTEGER NOT NULL,
+    applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO schema_version (version) VALUES (4);
+CREATE TABLE volumes (
+    volume_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    label       TEXT UNIQUE NOT NULL,
+    uuid        TEXT UNIQUE NOT NULL,
+    media_type  TEXT NOT NULL,
+    capacity_bytes INTEGER NOT NULL,
+    used_bytes  INTEGER NOT NULL DEFAULT 0,
+    location    TEXT NOT NULL DEFAULT 'Home_Shelf',
+    status      TEXT NOT NULL DEFAULT 'STAGING'
+                CHECK (status IN (
+                    'STAGING', 'BURNING', 'BURNED',
+                    'VERIFIED', 'DEPRECATED', 'DESTROYED'
+                )),
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    closed_at   DATETIME,
+    verified_at DATETIME
+);
+CREATE TABLE locations (
+    name        TEXT PRIMARY KEY,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    description TEXT DEFAULT ''
+);
+CREATE TABLE volume_events (
+    event_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    volume_id   INTEGER NOT NULL,
+    event_type  TEXT NOT NULL CHECK(event_type IN (
+        'VERIFY_PASS', 'VERIFY_FAIL', 'ECC_REPAIR',
+        'LOCATION_MOVE', 'CONDITION_CHECK', 'NOTE')),
+    event_date  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    location    TEXT,
+    detail      TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (volume_id) REFERENCES volumes (volume_id),
+    FOREIGN KEY (location)  REFERENCES locations (name)
+);
+INSERT INTO volumes (label, uuid, media_type, capacity_bytes, status)
+    VALUES ('VOL-0001', 'uuid-1', 'BD25', 25000000000, 'VERIFIED');
+INSERT INTO volumes (label, uuid, media_type, capacity_bytes, status)
+    VALUES ('VOL-0002', 'uuid-2', 'BD25', 25000000000, 'BURNED');
+INSERT INTO volume_events (volume_id, event_type, detail)
+    VALUES (1, 'VERIFY_PASS', 'initial verify');
+"""
+
+
+class _SimulatedCrashError(RuntimeError):
+    """Stands in for the process dying right after a statement ran."""
+
+
+class _InstrumentedCursor(sqlite3.Cursor):
+    """Records the txn state after each RENAME, and optionally raises
+    right after a marked statement executed (the statement itself
+    succeeds — like a kill -9 between it and the next one)."""
+
+    def execute(self, sql, params=()):  # type: ignore[override]
+        super().execute(sql, params)
+        conn = self.connection
+        if "RENAME TO" in sql:
+            conn.rename_txn_states.append((sql, conn.in_transaction))
+        marker = conn.crash_after_sql
+        if marker is not None and marker in sql:
+            raise _SimulatedCrashError(sql)
+        return self
+
+
+class _InstrumentedConnection(sqlite3.Connection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.crash_after_sql: str | None = None
+        self.rename_txn_states: list[tuple[str, bool]] = []
+
+    def cursor(self, factory=_InstrumentedCursor):  # type: ignore[override]
+        return super().cursor(factory)
 
 
 class TestSchema:
@@ -663,3 +748,191 @@ class TestEnsureSchema:
                 f"{rel} calls create_all() directly — use "
                 "lcsas.db.schema.ensure_schema instead (FMA-02)."
             )
+
+
+class TestMigrationCrashAtomicity:
+    """FMA-07: table-recreating migrations run in one transaction (a
+    crash rolls the whole step back), and catalogs wedged by a pre-fix
+    crash (leftover *_old tables) are refused loudly — never masked as
+    an empty catalog by create_all's IF NOT EXISTS."""
+
+    def _seed_v4_file(self, db: Path) -> None:
+        conn = sqlite3.connect(db)
+        conn.executescript(V4_HISTORICAL_DDL)
+        conn.commit()
+        conn.close()
+
+    def _wedged_conn(self) -> sqlite3.Connection:
+        """Hand-build the pre-fix crash state: the v4→v5 RENAME was
+        autocommitted, then the process died — volumes_old holds all
+        the data and there is no volumes table."""
+        conn = get_memory_connection()
+        conn.executescript(V4_HISTORICAL_DDL)
+        conn.execute("ALTER TABLE volumes RENAME TO volumes_old")
+        conn.commit()
+        return conn
+
+    @staticmethod
+    def _tables(conn: sqlite3.Connection) -> set[str]:
+        return {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+
+    def test_migration_crash_window_is_atomic(self, tmp_path):
+        """A crash right after the v4→v5 RENAME rolls the whole step
+        back: reopening the file shows the intact v4 catalog, and a
+        retry migrates cleanly."""
+        db = tmp_path / "archive.db"
+        self._seed_v4_file(db)
+
+        conn = sqlite3.connect(db, factory=_InstrumentedConnection)
+        conn.crash_after_sql = "ALTER TABLE volumes RENAME"
+        with pytest.raises(_SimulatedCrashError):
+            migrate(conn)
+        conn.close()
+
+        conn = sqlite3.connect(db)
+        tables = self._tables(conn)
+        assert "volumes" in tables
+        assert "volumes_old" not in tables
+        assert get_schema_version(conn) == 4
+        labels = {r[0] for r in conn.execute("SELECT label FROM volumes").fetchall()}
+        assert labels == {"VOL-0001", "VOL-0002"}
+
+        # Retry completes cleanly with all rows intact.
+        assert migrate(conn) == CURRENT_SCHEMA_VERSION
+        labels = {r[0] for r in conn.execute("SELECT label FROM volumes").fetchall()}
+        assert labels == {"VOL-0001", "VOL-0002"}
+        conn.close()
+
+    def test_migration_crash_window_is_atomic_v5_to_v6(self, tmp_path):
+        """Same crash drill for the v5→v6 volume_events recreate."""
+        db = tmp_path / "archive.db"
+        conn = sqlite3.connect(db)
+        conn.executescript(V5_HISTORICAL_DDL)
+        conn.execute(
+            "INSERT INTO volumes (label, uuid, media_type, capacity_bytes) "
+            "VALUES ('VOL-0001', 'uuid-1', 'BD25', 25000000000)"
+        )
+        conn.execute(
+            "INSERT INTO volume_events (volume_id, event_type, detail) "
+            "VALUES (1, 'VERIFY_PASS', 'ok')"
+        )
+        conn.commit()
+        conn.close()
+
+        conn = sqlite3.connect(db, factory=_InstrumentedConnection)
+        conn.crash_after_sql = "ALTER TABLE volume_events RENAME"
+        with pytest.raises(_SimulatedCrashError):
+            migrate(conn)
+        conn.close()
+
+        conn = sqlite3.connect(db)
+        tables = self._tables(conn)
+        assert "volume_events" in tables
+        assert "volume_events_old" not in tables
+        assert get_schema_version(conn) == 5
+        rows = conn.execute("SELECT event_type, detail FROM volume_events").fetchall()
+        assert rows == [("VERIFY_PASS", "ok")]
+
+        assert migrate(conn) == CURRENT_SCHEMA_VERSION
+        rows = conn.execute("SELECT event_type, detail FROM volume_events").fetchall()
+        assert rows == [("VERIFY_PASS", "ok")]
+        conn.close()
+
+    def test_migration_is_in_transaction_during_recreate(self, tmp_path):
+        """Pins the isolation fix directly: both RENAMEs execute inside
+        an open transaction (legacy isolation autocommitted them — the
+        exact crash window this plan closes)."""
+        db = tmp_path / "archive.db"
+        self._seed_v4_file(db)
+
+        conn = sqlite3.connect(db, factory=_InstrumentedConnection)
+        assert migrate(conn) == CURRENT_SCHEMA_VERSION
+        # v4→v5 renames volumes, v5→v6 renames volume_events.
+        assert len(conn.rename_txn_states) == 2
+        for sql, in_txn in conn.rename_txn_states:
+            assert in_txn, f"{sql!r} ran outside a transaction (autocommitted)"
+        conn.close()
+
+    def test_create_all_refuses_when_volumes_old_present(self):
+        conn = self._wedged_conn()
+        with pytest.raises(WedgedMigrationError, match="RUNBOOK_migration_recovery"):
+            create_all(conn)
+        # No empty shadow table was created over the renamed original.
+        tables = self._tables(conn)
+        assert "volumes" not in tables
+        assert "volumes_old" in tables
+        assert conn.execute("SELECT COUNT(*) FROM volumes_old").fetchone()[0] == 2
+        conn.close()
+
+    def test_ensure_schema_refuses_wedged_catalog(self):
+        conn = self._wedged_conn()
+        with pytest.raises(WedgedMigrationError, match="RUNBOOK_migration_recovery"):
+            ensure_schema(conn)
+        assert "volumes" not in self._tables(conn)
+        conn.close()
+
+    def test_migrate_refuses_wedged_catalog(self):
+        """migrate() on a wedged catalog raises the recovery error, not
+        OperationalError('no such table: volumes')."""
+        conn = self._wedged_conn()
+        with pytest.raises(WedgedMigrationError, match="volumes_old"):
+            migrate(conn)
+        conn.close()
+
+    def test_cli_fails_loud_on_wedged_catalog(self, tmp_path):
+        """No CLI command may present the empty-catalog illusion."""
+        from lcsas.cli.main import main
+
+        db = tmp_path / "archive.db"
+        conn = sqlite3.connect(db)
+        conn.executescript(V4_HISTORICAL_DDL)
+        conn.execute("ALTER TABLE volumes RENAME TO volumes_old")
+        conn.commit()
+        conn.close()
+
+        assert main(["--db", str(db), "status"]) == 1
+
+        conn = sqlite3.connect(db)
+        assert "volumes" not in self._tables(conn)
+        assert conn.execute("SELECT COUNT(*) FROM volumes_old").fetchone()[0] == 2
+        conn.close()
+
+    def test_runbook_commands_recover_wedged_catalog(self):
+        """The runbook quotes the exact recovery statements, and those
+        statements actually un-wedge a catalog — including one a
+        pre-fix create_all already masked with an empty shadow table."""
+        from lcsas.db.schema import SQL_CREATE_VOLUMES
+
+        repo_root = Path(__file__).resolve().parents[2]
+        runbook = (
+            repo_root / "docs" / "RUNBOOK_migration_recovery.md"
+        ).read_text(encoding="utf-8")
+        recovery_volumes = (
+            "DROP TABLE volumes;",
+            "ALTER TABLE volumes_old RENAME TO volumes;",
+        )
+        recovery_events = (
+            "DROP TABLE volume_events;",
+            "ALTER TABLE volume_events_old RENAME TO volume_events;",
+        )
+        for stmt in recovery_volumes + recovery_events:
+            assert stmt in runbook, f"runbook lost recovery statement {stmt!r}"
+
+        conn = self._wedged_conn()
+        conn.execute(SQL_CREATE_VOLUMES)  # the pre-fix empty shadow
+        conn.commit()
+        assert conn.execute("SELECT COUNT(*) FROM volumes").fetchone()[0] == 0
+
+        for stmt in recovery_volumes:
+            conn.execute(stmt)
+        conn.commit()
+
+        assert detect_wedged_migration(conn) == []
+        assert migrate(conn) == CURRENT_SCHEMA_VERSION
+        labels = {r[0] for r in conn.execute("SELECT label FROM volumes").fetchall()}
+        assert labels == {"VOL-0001", "VOL-0002"}
+        conn.close()

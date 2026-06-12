@@ -116,3 +116,6 @@ Always-on in `make test-unit` (`tests/unit/test_db_schema.py`):
 
 1.5 days (0.5 impl, 1 test — the crash-simulation fixtures are the bulk). No special
 environment.
+
+---
+**Implemented:** 2026-06-12. As planned, plus: the additive migration blocks (v2→v3, v3→v4, v6→v7, v7→v8) were wrapped in the same BEGIN IMMEDIATE template, and `executescript` (which implicitly commits open transactions) was replaced with `execute` throughout `migrate()`.
