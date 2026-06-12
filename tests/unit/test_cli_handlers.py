@@ -1226,6 +1226,101 @@ def test_catalog_reconcile_spares_fresh_and_burned_volumes(tmp_path, capsys):
     assert "no ghost volumes" in out
 
 
+def test_import_receipts_from_durable_dir(tmp_path):
+    """`catalog import-receipts <db dir>/receipts/*.json` repopulates
+    copy/location rows on a fresh hot DB from the durable receipts the
+    burn pipeline wrote beside the catalog.  [BURN-08]"""
+    import json
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    from lcsas.burn.orchestrator import BurnOrchestrator
+    from lcsas.db.connection import get_connection
+    from lcsas.db.repos import register_repo
+    from lcsas.db.schema import create_all
+    from lcsas.db.volume_copies import get_copies_for_volume
+    from lcsas.db.volumes import create_volume, get_volume_by_label
+    from tests.unit.test_session_pipeline import (
+        _make_config,
+        _seed_packs,
+        _wire_drive_identity,
+        _zeros_device_reader,
+    )
+
+    # 1. Real burn pipeline against a file-backed hot DB writes the
+    #    durable receipts into <db dir>/receipts/.
+    config = _make_config(tmp_path, num_repos=2)
+    conn = get_connection(config.db_path)
+    create_all(conn)
+    for name in config.repositories:
+        register_repo(conn, name, name.title(),
+                      str(config.repositories[name].mirror_path))
+    _seed_packs(conn, config, num_packs=5, pack_size=50)
+
+    xorriso = MagicMock()
+
+    def _fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
+        Path(output_iso).write_bytes(b"\x00" * 1024)
+        return Path(output_iso)
+
+    xorriso.create_iso.side_effect = _fake_create_iso
+    _wire_drive_identity(xorriso)
+    orch = BurnOrchestrator(config, conn, xorriso, MagicMock(),
+                            device_reader=_zeros_device_reader)
+    result = orch.stage()
+    orch.burn_session(result.session_id, "Offsite_Safe", skip_burn=True)
+    conn.close()
+
+    receipt_files = sorted(
+        (config.db_path.parent / "receipts").glob("*.json")
+    )
+    assert receipt_files, "burn must leave durable receipts beside the DB"
+    labels = [
+        json.loads(rf.read_text())["volume_label"] for rf in receipt_files
+    ]
+
+    # 2. Disaster: the hot DB is lost and rebuilt — the volumes are
+    #    known again (from the discs) but every copy/location is gone.
+    config.db_path.unlink()
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(str(config.db_path) + suffix)
+        if sidecar.exists():
+            sidecar.unlink()
+    fresh = get_connection(config.db_path)
+    create_all(fresh)
+    for label in labels:
+        create_volume(fresh, label, f"uuid-{label}", "TEST_TINY",
+                      2_097_152, "Home_Shelf", "STAGING")
+    fresh.close()
+
+    # 3. Replay the durable receipt directory through the CLI.
+    cfg = tmp_path / "lcsas.toml"
+    cfg.write_text(
+        "[paths]\n"
+        f'mirror_base = "{config.mirror_base_path}"\n'
+        f'staging = "{config.staging_path}"\n'
+        f'database = "{config.db_path}"\n'
+        "\n"
+        "[defaults]\n"
+        'media_type = "TEST_TINY"\n'
+        "metadata_reserve_mb = 0\n"
+    )
+    rc = main(["--config", str(cfg), "catalog", "import-receipts",
+               *[str(rf) for rf in receipt_files]])
+    assert rc == 0
+
+    # 4. Copy/location rows and statuses are back on the fresh DB.
+    check = get_connection(config.db_path)
+    try:
+        for label in labels:
+            vol = get_volume_by_label(check, label)
+            assert vol.status == "VERIFIED"
+            copies = get_copies_for_volume(check, vol.volume_id)
+            assert [c.location for c in copies] == ["Offsite_Safe"]
+    finally:
+        check.close()
+
+
 # ────────────────────────────────────────────────────────────────────
 #  cmd_consolidate — branch coverage
 # ────────────────────────────────────────────────────────────────────

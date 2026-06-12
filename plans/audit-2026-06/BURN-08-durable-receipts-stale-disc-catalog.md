@@ -114,3 +114,9 @@ Always-on unit (`make test-unit`, CI test.yml):
 ## Effort
 
 1 day: 0.4 impl, 0.6 tests. No special environment.
+
+---
+**Implemented:** 2026-06-12. As planned, with one e2e deviation: verify.sh gained a
+deterministic fixture check (#16 — newest data disc's START_HERE.txt discloses the
+staleness contract) instead of the agent-statement assertion, which would require
+recalibrating the blind-drill prompt and cannot be validated outside the weekly gate.

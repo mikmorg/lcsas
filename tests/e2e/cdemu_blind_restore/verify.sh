@@ -3,7 +3,7 @@
 #
 # Usage: verify.sh <run_dir>
 #
-# Exit 0 iff all fifteen success criteria from PLAN.md hold.
+# Exit 0 iff all success criteria from PLAN.md hold.
 
 set -uo pipefail
 
@@ -510,6 +510,34 @@ if hits:
 PY
 check "agent did not rename recovery binaries" \
     "python3 '$RUN_DIR/no_binary_rename_check.py' '$TRANSCRIPT'"
+
+# -----------------------------------------------------------------------
+# 16. BURN-08 — the newest data disc must disclose the catalog-staleness
+#     contract in START_HERE.txt: every disc's catalog is mastered
+#     BEFORE its own burn, so the final session's copy locations exist
+#     only in the printed receipt or a newer catalog.  Checked directly
+#     against the fixture ISO (deterministic; no agent involvement) —
+#     the disc with the freshest catalog is the highest-sequence data
+#     volume.  Variant-safe: the no-catalog variant strips catalog.db
+#     but never START_HERE.txt.
+NEWEST_DATA_ISO="$(sudo ls "$FIXTURE/iso_out" 2>/dev/null \
+    | grep -E '^LCSAS_.*\.iso$' \
+    | grep -v '^LCSAS_META\.iso$' \
+    | sort | tail -1)"
+STALE_DISCLOSED=no
+if [[ -n "$NEWEST_DATA_ISO" ]]; then
+    DATA_MNT=$(mktemp -d)
+    if sudo mount -o ro,loop "$FIXTURE/iso_out/$NEWEST_DATA_ISO" "$DATA_MNT" 2>/dev/null; then
+        if grep -qs 'catalog was written BEFORE this disc' "$DATA_MNT/START_HERE.txt" \
+           && grep -qs 'the catalog on any NEWER disc' "$DATA_MNT/START_HERE.txt"; then
+            STALE_DISCLOSED=yes
+        fi
+        sudo umount "$DATA_MNT" 2>/dev/null
+    fi
+    rmdir "$DATA_MNT" 2>/dev/null
+fi
+check "newest data disc discloses catalog staleness (BURN-08)" \
+    "[[ '$STALE_DISCLOSED' == 'yes' ]]"
 
 echo
 echo "$PASS passed, $FAIL failed"

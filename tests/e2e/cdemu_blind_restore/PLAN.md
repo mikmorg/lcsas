@@ -62,6 +62,11 @@ A run passes iff **all** of the following hold after the agent declares
     used `tmux send-keys` to respond to the script's prompts.  This
     proves the test exercised the same UX a human operator would
     see, not a scripted-pipe shortcut.
+11. **(BURN-08)** The newest data disc's `START_HERE.txt` discloses
+    the catalog-staleness contract: every disc's catalog is mastered
+    BEFORE its own burn, so the final session's copy locations exist
+    only in the printed receipt or a newer catalog.  Checked directly
+    against the fixture ISO, not the agent transcript.
 
 ---
 

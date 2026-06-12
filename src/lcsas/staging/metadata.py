@@ -186,6 +186,14 @@ class HolographicInjector:
                 ``total_bytes``, ``repositories``, and
                 ``sha256_manifest``.
         """
+        # This file (like the on-disc catalog) is a PRE-BURN snapshot:
+        # ``status`` is always STAGING here, and the catalog's
+        # ``volumes.location`` column for this volume holds the
+        # *intended first location* (the configured default at create
+        # time), never a burn confirmation.  Actual burn locations live
+        # in ``volume_copies`` on the operator's hot DB and in the
+        # durable burn receipts (``<db dir>/receipts/``) — deliberately
+        # NO location field is written here.  [BURN-08]
         info: dict[str, Any] = {
             "uuid": volume.uuid,
             "label": volume.label,
@@ -489,6 +497,14 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
               - If you cannot find the meta-volume disc, the file
                 RESTORE_INSTRUCTIONS.txt on this disc has step-by-step
                 manual recovery instructions.
+
+            ABOUT THIS DISC'S CATALOG
+            -------------------------
+
+              NOTE: this disc's catalog was written BEFORE this disc
+              was burned.  It cannot list where THIS batch's copies
+              are stored.  Check the printed receipt filed with the
+              discs, or the catalog on any NEWER disc.
 
             DISC CARE
             ---------

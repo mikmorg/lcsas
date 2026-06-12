@@ -1066,6 +1066,42 @@ class TestCleanSession:
         assert get_session(conn, result.session_id).status == "CLEANED"
         assert not result.staging_dir.exists()
 
+    def test_receipts_survive_clean_session(self, env):
+        """BURN-08: durable receipts live beside the catalog DB and
+        survive `stage --clean`.
+
+        The staging-tree receipts die with the tree; the copies under
+        ``<db dir>/receipts/`` are the only burn provenance for the
+        final session (its on-disc catalogs predate their own burns).
+        """
+        config = env["config"]
+        orch = env["orch"]
+
+        result = orch.stage()
+        receipts = orch.burn_session(result.session_id, "Home_Shelf",
+                                     skip_burn=True)
+        orch.clean_session(result.session_id)
+
+        # The staging-tree duplicates are gone with the tree...
+        assert not result.staging_dir.exists()
+
+        # ...but the durable copies remain, named for session + volume
+        # + location, with the verify evidence intact.
+        durable_dir = config.db_path.parent / "receipts"
+        files = sorted(durable_dir.glob("*.json"))
+        assert len(files) == len(receipts)
+
+        session_part = result.session_id.replace(":", "-")
+        labels = set()
+        for rf in files:
+            assert rf.name.startswith(session_part)
+            data = json.loads(rf.read_text())
+            assert data["location"] == "Home_Shelf"
+            assert data["verify_passed"] is True
+            assert data["session_id"] == result.session_id
+            labels.add(data["volume_label"])
+        assert labels == {r.volume_label for r in receipts}
+
     def test_clean_session_burned_still_works(self, env):
         """A burned (skip_burn) session cleans without force, as documented."""
         conn = env["conn"]

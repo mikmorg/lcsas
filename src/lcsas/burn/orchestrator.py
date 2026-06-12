@@ -935,11 +935,17 @@ class BurnOrchestrator:
             self._conn, session_id, "PARTIAL" if any_failed else "COMPLETE",
         )
 
-        # Write receipts JSON
+        # Write receipts JSON — once into the session staging tree (a
+        # convenience duplicate that dies with `stage --clean`) and once
+        # durably beside the catalog DB.  The on-disc catalog of this
+        # session was mastered BEFORE this burn, so the durable copy is
+        # the only record of where this session's discs went that
+        # survives both clean_session and a hot-DB loss.  [BURN-08]
         session_vols_info = get_session_volumes(self._conn, session_id)
         if session_vols_info:
             session_dir = Path(session_vols_info[0].iso_path).parent
             self._write_receipts(receipts, session_dir, location)
+        self._write_durable_receipts(receipts, location)
 
         return receipts
 
@@ -1070,6 +1076,11 @@ class BurnOrchestrator:
         would keep claiming the packs "archived" on phantom STAGING volumes.
         With ``force=True`` those volumes are deleted first, returning their
         packs to the unarchived pool, then cleaning proceeds.
+
+        The burn receipts inside the staging tree die here too — that is
+        fine: they are duplicates of the durable copies under
+        ``<db dir>/receipts/`` (:meth:`_write_durable_receipts`), which
+        this method never touches.  [BURN-08]
         """
         session_id = resolve_session_id(self._conn, session_ref)
         session_vols = get_session_volumes(self._conn, session_id)
@@ -1356,13 +1367,43 @@ class BurnOrchestrator:
             os.fsync(f.fileno())
         return manifest_path
 
+    @staticmethod
+    def _dump_receipt(receipt: BurnReceipt, path: Path) -> None:
+        """Serialize one burn receipt to *path* (fsynced)."""
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "volume_label": receipt.volume_label,
+                    "volume_id": receipt.volume_id,
+                    "session_id": receipt.session_id,
+                    "location": receipt.location,
+                    "device": receipt.device,
+                    "burn_date": receipt.burn_date,
+                    "iso_sha256": receipt.iso_sha256,
+                    "iso_size_bytes": receipt.iso_size_bytes,
+                    "verify_passed": receipt.verify_passed,
+                    "pack_count": receipt.pack_count,
+                    "pack_ids": receipt.pack_ids,
+                },
+                f,
+                indent=2,
+            )
+            f.flush()
+            os.fsync(f.fileno())
+
     def _write_receipts(
         self,
         receipts: list[BurnReceipt],
         session_dir: Path,
         location: str,
     ) -> list[Path]:
-        """Write burn receipt JSON files."""
+        """Write burn receipt JSON files into the session staging tree.
+
+        These are convenience duplicates only: ``clean_session`` removes
+        them along with the staging tree.  The permanent record is the
+        copy under ``<db dir>/receipts/`` written by
+        :meth:`_write_durable_receipts`.  [BURN-08]
+        """
         receipts_dir = session_dir / "receipts"
         ensure_dir(receipts_dir)
 
@@ -1371,26 +1412,42 @@ class BurnOrchestrator:
             receipt_path = receipts_dir / (
                 f"{receipt.volume_label}_{location}.json"
             )
-            with open(receipt_path, "w", encoding="utf-8") as f:
-                json.dump(
-                    {
-                        "volume_label": receipt.volume_label,
-                        "volume_id": receipt.volume_id,
-                        "session_id": receipt.session_id,
-                        "location": receipt.location,
-                        "device": receipt.device,
-                        "burn_date": receipt.burn_date,
-                        "iso_sha256": receipt.iso_sha256,
-                        "iso_size_bytes": receipt.iso_size_bytes,
-                        "verify_passed": receipt.verify_passed,
-                        "pack_count": receipt.pack_count,
-                        "pack_ids": receipt.pack_ids,
-                    },
-                    f,
-                    indent=2,
-                )
-                f.flush()
-                os.fsync(f.fileno())
+            self._dump_receipt(receipt, receipt_path)
+            paths.append(receipt_path)
+
+        return paths
+
+    def _write_durable_receipts(
+        self,
+        receipts: list[BurnReceipt],
+        location: str,
+    ) -> list[Path]:
+        """Persist burn receipts beside the catalog DB.  [BURN-08]
+
+        Every disc of a session carries a catalog mastered BEFORE the
+        session's burns, so the on-disc catalog can never say where the
+        newest discs' copies are kept.  These files — on the (backed-up)
+        catalog volume, outside the staging tree — are the durable
+        record of that provenance, and are what
+        ``lcsas catalog import-receipts <db dir>/receipts/*.json``
+        replays onto a rebuilt hot DB.
+        """
+        receipts_dir = self._config.db_path.parent / "receipts"
+        ensure_dir(receipts_dir)
+
+        paths: list[Path] = []
+        for receipt in receipts:
+            # Same ':' sanitization as the session staging dir name.
+            session_part = receipt.session_id.replace(":", "-")
+            receipt_path = receipts_dir / (
+                f"{session_part}_{receipt.volume_label}_"
+                f"{location}.json"
+            )
+            self._dump_receipt(receipt, receipt_path)
+            _logger.info(
+                "Receipt: %s — print it and file it with the disc.",
+                receipt_path,
+            )
             paths.append(receipt_path)
 
         return paths
