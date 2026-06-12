@@ -106,3 +106,6 @@ Always-on unit (`make test-unit`, CI test.yml), `tests/unit/test_session_pipelin
 
 1 day: 0.3 impl, 0.7 tests (the real-burn-path fixture is the work). No special
 environment.
+
+---
+**Implemented:** 2026-06-12. as planned

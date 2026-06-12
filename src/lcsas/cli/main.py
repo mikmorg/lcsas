@@ -1249,6 +1249,12 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
             failed[0].session_id, location,
         )
         return 1
+    # BURN-06: ISOs persist so the same session can be burned at more
+    # locations; cleanup is the explicit `stage --clean` step.
+    logger.info(
+        "ISOs retained for additional copies. After burning all "
+        "locations, free the staging space with: lcsas stage --clean"
+    )
     return 0
 
 

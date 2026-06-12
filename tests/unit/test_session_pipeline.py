@@ -866,6 +866,74 @@ class TestDeviceHashVerify:
             assert vol.status == "VERIFIED"
 
 
+class TestISORetention:
+    """BURN-06: ISOs persist across burns so the documented multi-location
+    flow (burn → burn → clean) works. Only clean_session / abort_session
+    may delete an ISO; auto-deleting after the first verified burn made
+    the README's Step-5 re-burn impossible."""
+
+    def _stage_with_mock_burn(self, env):
+        """Stage, then wire the real-burn path (mocked disc writes)."""
+        orch = env["orch"]
+        xorriso = env["xorriso"]
+
+        result = orch.stage()
+        xorriso.burn_iso = MagicMock()
+        xorriso.verify_disc = MagicMock(return_value=True)
+        return result
+
+    def test_multi_location_reburn_with_real_burn_path(self, env):
+        """README Steps 4-5: burn to two locations without re-staging,
+        on the real (skip_burn=False) path."""
+        conn = env["conn"]
+        orch = env["orch"]
+
+        result = self._stage_with_mock_burn(env)
+
+        receipts1 = orch.burn_session(result.session_id, "Home_Shelf",
+                                      skip_burn=False)
+        receipts2 = orch.burn_session(result.session_id, "Offsite_Safe",
+                                      skip_burn=False)
+
+        assert len(receipts1) == len(receipts2) == len(result.manifests)
+        assert all(r.verify_passed for r in receipts1 + receipts2)
+
+        for receipt in receipts1:
+            copies = get_copies_for_volume(conn, receipt.volume_id)
+            assert all(c.status == "ACTIVE" for c in copies)
+            locations = {c.location for c in copies}
+            assert locations == {"Home_Shelf", "Offsite_Safe"}
+
+    def test_iso_retained_after_verified_burn(self, env):
+        """A verified burn must not delete the session's ISOs."""
+        conn = env["conn"]
+        orch = env["orch"]
+
+        result = self._stage_with_mock_burn(env)
+
+        receipts = orch.burn_session(result.session_id, "Home_Shelf",
+                                     skip_burn=False)
+
+        assert all(r.verify_passed for r in receipts)
+        for sv in get_session_volumes(conn, result.session_id):
+            assert Path(sv.iso_path).exists()
+
+    def test_burn_missing_iso_error_mentions_restage(self, env):
+        """With the ISO genuinely gone, the error names the actual cause
+        and the `stage --for-location` recovery command."""
+        orch = env["orch"]
+
+        result = self._stage_with_mock_burn(env)
+        for iso_path in result.iso_paths:
+            iso_path.unlink()
+
+        with pytest.raises(FileNotFoundError,
+                           match=r"stage --for-location") as excinfo:
+            orch.burn_session(result.session_id, "Home_Shelf",
+                              skip_burn=False)
+        assert "lcsas stage --clean" in str(excinfo.value)
+
+
 # =========================================================================
 # Clean Session Tests
 # =========================================================================

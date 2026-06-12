@@ -246,7 +246,9 @@ lcsas --config /etc/lcsas/config.toml \
 #
 # Burns all ISOs in the current session. LCSAS prompts for disc
 # insertion between volumes. The --location tag records where this
-# physical copy is stored.
+# physical copy is stored. The staged ISOs persist after burning —
+# they are kept until Step 6 so additional copies can be burned
+# without re-staging.
 
 lcsas --config /etc/lcsas/config.toml \
   burn --session latest --location Home_Shelf

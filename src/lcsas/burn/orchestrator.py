@@ -775,12 +775,17 @@ class BurnOrchestrator:
 
         for sv in session_vols:
             iso_path = Path(sv.iso_path)
+            vol = get_volume_by_id(self._conn, sv.volume_id)
             if not skip_burn and not iso_path.exists():
                 raise FileNotFoundError(
-                    f"ISO file missing for volume {sv.volume_id}: {iso_path}. "
-                    f"Was the staging directory cleaned prematurely?"
+                    f"ISO file missing for volume {vol.label}: {iso_path}. "
+                    f"The session's staging area was cleaned "
+                    f"('lcsas stage --clean') or the file was removed "
+                    f"manually. To burn another copy, re-stage for the "
+                    f"target location: "
+                    f"lcsas stage --for-location {location} && "
+                    f"lcsas burn --session latest --location {location}"
                 )
-            vol = get_volume_by_id(self._conn, sv.volume_id)
 
             # For multi-location re-burns, skip status transitions if
             # the volume is already VERIFIED (just add another copy).
@@ -863,7 +868,7 @@ class BurnOrchestrator:
                     )
                 self._conn.commit()
 
-                # Build receipt (before ISO cleanup, in case unlink fails)
+                # Build receipt
                 from lcsas.db.volume_packs import get_pack_ids_for_volume
                 pack_ids = get_pack_ids_for_volume(self._conn, sv.volume_id)
 
@@ -882,9 +887,6 @@ class BurnOrchestrator:
                 )
                 receipts.append(receipt)
 
-                # ISO cleanup moved outside main try block (see below)
-                # to prevent unlink failures from rolling back the burn.
-
             except Exception as original_exc:
                 try:
                     self._conn.rollback()
@@ -902,18 +904,10 @@ class BurnOrchestrator:
                     update_session_status(self._conn, session_id, "PARTIAL")
                 raise original_exc
 
-            # Remove ISO after successful verified burn to free staging space.
-            # This is outside the main try/except to avoid rolling back verified burns
-            # if the ISO file deletion fails (e.g., permission error, stale NFS handle).
-            if verify_passed and not skip_burn and iso_path.exists():
-                try:
-                    iso_path.unlink()
-                    _logger.debug("Deleted ISO after successful burn: %s", iso_path)
-                except OSError as exc:
-                    _logger.warning(
-                        "Failed to delete ISO after burn (disc is safe): %s — %s",
-                        iso_path, exc,
-                    )
+            # BURN-06: the ISO is deliberately NOT deleted here. The
+            # documented multi-copy flow re-burns the same session at a
+            # second location, which needs the ISO intact. Deletion is
+            # the explicit `clean_session` / `abort_session` step.
 
         # Update session status — any failed verify leaves the session
         # PARTIAL so it can never masquerade as a completed copy set;
