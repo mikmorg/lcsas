@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from lcsas.db.models import VolumeCopy
 
@@ -262,6 +262,40 @@ def touch_last_verified(
     if commit:
         conn.commit()
     return result.rowcount > 0
+
+
+def find_stale_copies(
+    conn: sqlite3.Connection,
+    older_than_days: int = 365,
+    *,
+    now: datetime | None = None,
+) -> list[tuple[str, str, str | None]]:
+    """ACTIVE copies whose ``last_verified_at`` is NULL or too old.
+
+    Disc-rot re-verification cadence (FMA-05): returns
+    ``(label, location, last_verified_at)`` tuples, never-verified
+    (NULL) first, then oldest first.  Copies of DEPRECATED/DESTROYED
+    volumes are excluded — those discs are already out of service.
+
+    Timestamps are ISO-8601 UTC strings written by this module, so a
+    lexicographic compare against the cutoff is exact.
+    """
+    if now is None:
+        now = datetime.now(UTC)
+    cutoff = (now - timedelta(days=older_than_days)).isoformat()
+    rows = conn.execute(
+        """SELECT v.label, vc.location, vc.last_verified_at
+           FROM volume_copies vc JOIN volumes v USING (volume_id)
+           WHERE vc.status = 'ACTIVE'
+             AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+             AND (vc.last_verified_at IS NULL OR vc.last_verified_at < ?)
+           ORDER BY vc.last_verified_at IS NOT NULL,
+                    vc.last_verified_at, v.label, vc.location""",
+        (cutoff,),
+    ).fetchall()
+    return [
+        (r["label"], r["location"], r["last_verified_at"]) for r in rows
+    ]
 
 
 def _demote_volume_if_last_copy_lost(

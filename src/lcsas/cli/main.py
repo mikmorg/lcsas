@@ -126,7 +126,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # --- status ---
-    subparsers.add_parser("status", help="Show archive status summary.")
+    status_p = subparsers.add_parser("status", help="Show archive status summary.")
+    status_p.add_argument("--stale-copies", action="store_true", default=False,
+                          help="List physical copies never verified or not "
+                               "verified within the threshold (FMA-05).")
+    status_p.add_argument("--older-than-days", type=int, default=365,
+                          help="Staleness threshold in days for --stale-copies "
+                               "and the summary warning (default: 365).")
 
     # --- burn ---
     burn_p = subparsers.add_parser("burn", help="Burn staged ISOs to disc.")
@@ -445,11 +451,14 @@ def build_parser() -> argparse.ArgumentParser:
     verify_p.add_argument("--detail", default="",
                           help="Detail text for --mark-verified/--mark-failed event.")
     verify_p.add_argument("--all", action="store_true", default=False, dest="verify_all",
-                          help="Verify all BURNED/VERIFIED volumes (batch mode).")
+                          help="Verify all BURNED/VERIFIED volumes (batch mode). "
+                               "Combine with --disc to re-verify physical discs "
+                               "copy-by-copy, stamping last_verified_at.")
     verify_p.add_argument("--location", default=None,
-                          help="Filter --all to volumes at this location; with "
-                               "--disc, also stamp last_verified_at on the copy "
-                               "at this location when verification passes.")
+                          help="Filter --all to copies/volumes at this location; "
+                               "with single-volume --disc, stamp the copy at "
+                               "this location (defaults to the volume's only "
+                               "ACTIVE copy when unambiguous).")
 
     # --- session ---
     session_p = subparsers.add_parser("session", help="Manage burn sessions.")
@@ -1082,12 +1091,42 @@ def cmd_pack_unprune(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_stale_copies(conn: sqlite3.Connection, older_than_days: int) -> int:
+    """Report ACTIVE copies overdue for disc re-verification (FMA-05)."""
+    from datetime import UTC, datetime
+
+    from lcsas.db.volume_copies import find_stale_copies
+
+    stale = find_stale_copies(conn, older_than_days)
+    if not stale:
+        logger.info(
+            f"All ACTIVE copies verified within the last "
+            f"{older_than_days} days."
+        )
+        return 0
+    now = datetime.now(UTC)
+    logger.info(
+        f"{len(stale)} cop(ies) not verified in the last "
+        f"{older_than_days} days:"
+    )
+    for label, location, last_verified_at in stale:
+        if last_verified_at is None:
+            age = "never verified"
+        else:
+            days = (now - datetime.fromisoformat(last_verified_at)).days
+            age = f"{days} days ago ({last_verified_at[:10]})"
+        logger.info(f"  {label:<25} {location:<15} {age}")
+    logger.info("Re-verify with: lcsas verify --all --disc")
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     """Show archive status summary."""
     from lcsas.db.connection import get_connection
     from lcsas.db.queries import get_archive_status_summary
     from lcsas.db.schema import ensure_schema
     from lcsas.db.sessions import list_sessions
+    from lcsas.db.volume_copies import find_stale_copies
     from lcsas.db.volume_events import get_latest_event
     from lcsas.db.volumes import list_volumes
 
@@ -1096,6 +1135,10 @@ def cmd_status(args: argparse.Namespace) -> int:
     try:
         ensure_schema(conn)
 
+        if args.stale_copies:
+            return _print_stale_copies(conn, args.older_than_days)
+
+        stale_count = len(find_stale_copies(conn, args.older_than_days))
         summary = get_archive_status_summary(conn)
         volumes = list_volumes(conn)
         partial_sessions = list_sessions(conn, status_filter="PARTIAL")
@@ -1135,6 +1178,13 @@ def cmd_status(args: argparse.Namespace) -> int:
         )
     for label, loc in needs_reburn:
         logger.warning("WARNING: %s needs re-burn at %s", label, loc)
+    if stale_count > 0:
+        logger.warning(
+            "WARNING: %d physical cop(ies) not verified in the last %d "
+            "days — run 'lcsas status --stale-copies' to list them and "
+            "'lcsas verify --all --disc' to re-verify.",
+            stale_count, args.older_than_days,
+        )
     return 0
 
 
@@ -2141,6 +2191,50 @@ def _verify_disc_against_recorded_hash(
     return ok
 
 
+def _check_disc_for_volume(
+    conn: sqlite3.Connection,
+    volume_id: int,
+    label: str,
+    device: str,
+) -> str:
+    """FMA-03 disc check chain: identity gate → readability → device hash.
+
+    Returns ``"PASS"``, ``"FAIL"``, or ``"WRONG_DISC"``.  WRONG_DISC
+    means the disc in the drive is not (provably) this volume — that is
+    operator error, not evidence about the volume's burned copy, so
+    callers must record NOTHING for it.
+    """
+    from lcsas.iso.xorriso import SubprocessXorrisoRunner
+
+    runner = SubprocessXorrisoRunner()
+    disc_id = runner.read_disc_volume_id(device=device)
+    if disc_id != label:
+        if disc_id:
+            logger.error(
+                f"Disc in {device} identifies as '{disc_id}' — "
+                f"expected '{label}'. Wrong disc? "
+                f"Nothing was recorded."
+            )
+        else:
+            logger.error(
+                f"Could not read a Volume ID from the disc in "
+                f"{device} — cannot confirm it is "
+                f"'{label}'. Nothing was recorded."
+            )
+        return "WRONG_DISC"
+    ok = runner.verify_disc(device=device)
+    logger.info(f"  Disc verify (check_media): {'PASS' if ok else 'FAIL'}")
+    if not ok:
+        return "FAIL"
+    # BURN-04: -check_media proves only readability — any readable disc
+    # in the tray passes it.  Read back the recorded ISO byte length
+    # from the device and compare against the SHA-256 recorded at
+    # stage time.
+    if _verify_disc_against_recorded_hash(conn, volume_id, label, device):
+        return "PASS"
+    return "FAIL"
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Verify a volume's ISO image or burned disc.
 
@@ -2162,6 +2256,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
         # --- Batch mode: verify --all ---
         if args.verify_all:
+            if args.disc:
+                return _verify_all_disc(conn, args)
             return _verify_all(conn, args, config)
 
         # --- Single volume mode ---
@@ -2223,49 +2319,56 @@ def cmd_verify(args: argparse.Namespace) -> int:
         passed = True
 
         if args.disc:
-            from lcsas.iso.xorriso import SubprocessXorrisoRunner
-            runner = SubprocessXorrisoRunner()
+            from lcsas.db.volume_copies import (
+                get_copies_for_volume,
+                touch_last_verified,
+            )
+
+            # FMA-05: resolve which copy this disc IS before touching
+            # the device — with several ACTIVE copies the operator must
+            # say which one is in the drive, or the stamp would assert
+            # freshness for a disc that was never read.
+            stamp_location = args.location
+            if stamp_location is None:
+                active = get_copies_for_volume(conn, vol.volume_id)
+                if len(active) == 1:
+                    stamp_location = active[0].location
+                elif len(active) > 1:
+                    locs = ", ".join(sorted(c.location for c in active))
+                    logger.error(
+                        f"Volume {vol.label} has ACTIVE copies at {locs} — "
+                        f"pass --location to record which disc is being "
+                        f"verified."
+                    )
+                    return 1
             logger.info(f"Verifying disc on {args.device} ...")
             # FMA-03: identity gate first.  If the disc in the drive is
             # not this volume (or carries no readable Volume ID), record
             # NOTHING — a wrong disc is operator error, not evidence
             # about this volume's burned copy.
-            disc_id = runner.read_disc_volume_id(device=args.device)
-            if disc_id != vol.label:
-                if disc_id:
-                    logger.error(
-                        f"Disc in {args.device} identifies as '{disc_id}' — "
-                        f"expected '{vol.label}'. Wrong disc? "
-                        f"Nothing was recorded."
-                    )
-                else:
-                    logger.error(
-                        f"Could not read a Volume ID from the disc in "
-                        f"{args.device} — cannot confirm it is "
-                        f"'{vol.label}'. Nothing was recorded."
-                    )
+            outcome = _check_disc_for_volume(
+                conn, vol.volume_id, vol.label, args.device,
+            )
+            if outcome == "WRONG_DISC":
                 return 1
-            ok = runner.verify_disc(device=args.device)
-            logger.info(f"  Disc verify (check_media): {'PASS' if ok else 'FAIL'}")
-            if not ok:
-                passed = False
-            else:
-                # BURN-04: -check_media proves only readability — any
-                # readable disc in the tray passes it.  Read back the
-                # recorded ISO byte length from the device and compare
-                # against the SHA-256 recorded at stage time.
-                passed = _verify_disc_against_recorded_hash(
-                    conn, vol.volume_id, vol.label, args.device,
-                )
-            if passed and args.location:
-                from lcsas.db.volume_copies import touch_last_verified
-                if touch_last_verified(conn, vol.volume_id, args.location):
+            passed = outcome == "PASS"
+            if passed:
+                if stamp_location is None:
+                    logger.warning(
+                        f"  No ACTIVE copy of {vol.label} recorded — "
+                        f"last_verified_at not stamped"
+                    )
+                # Stamp uncommitted: the add_event() below commits it
+                # atomically with the VERIFY_PASS event.
+                elif touch_last_verified(
+                    conn, vol.volume_id, stamp_location, commit=False,
+                ):
                     logger.info(
-                        f"  Stamped last_verified_at on copy at {args.location}"
+                        f"  Stamped last_verified_at on copy at {stamp_location}"
                     )
                 else:
                     logger.warning(
-                        f"  No ACTIVE copy of {vol.label} at {args.location} — "
+                        f"  No ACTIVE copy of {vol.label} at {stamp_location} — "
                         f"last_verified_at not updated"
                     )
         else:
@@ -2374,12 +2477,22 @@ def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any)
         ).fetchone()
 
         if not row or not row["iso_path"]:
-            logger.info(f"  {vol.label}: no ISO path — skipped")
+            # FMA-05: burn_session() deletes the ISO after a verified
+            # burn — for a burned volume this is the NORMAL state, so
+            # point at the physical-disc batch mode instead of leaving
+            # a bare skip.
+            logger.info(
+                f"  {vol.label}: ISO deleted after burn — use "
+                f"'verify --all --disc' to verify the physical disc"
+            )
             continue
 
         iso_path = Path(row["iso_path"])
         if not iso_path.exists():
-            logger.info(f"  {vol.label}: ISO not found ({iso_path}) — skipped")
+            logger.info(
+                f"  {vol.label}: ISO deleted after burn ({iso_path}) — use "
+                f"'verify --all --disc' to verify the physical disc"
+            )
             continue
 
         if dvdisaster_available:
@@ -2416,6 +2529,96 @@ def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any)
         return 1
     if passed_count == 0:
         logger.warning("No volumes were actually verified (all skipped).")
+        return 1
+    return 0
+
+
+def _verify_all_disc(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
+    """Batch re-verify physical discs copy-by-copy (FMA-05).
+
+    Iterates ACTIVE copies of BURNED/VERIFIED volumes (optionally
+    filtered to --location), prompting the operator to insert each
+    disc.  A PASS stamps ``last_verified_at`` on the copy (committed
+    atomically with its VERIFY_PASS event); a FAIL records VERIFY_FAIL
+    and leaves the stamp untouched; a wrong disc in the drive records
+    nothing (FMA-03: operator error is not evidence).
+    """
+    from lcsas.db.volume_copies import touch_last_verified
+    from lcsas.db.volume_events import add_event
+    from lcsas.db.volumes import get_volume_by_id, update_status
+
+    params: tuple[Any, ...] = ()
+    where = "vc.status = 'ACTIVE' AND v.status IN ('BURNED', 'VERIFIED')"
+    if args.location:
+        where += " AND vc.location = ?"
+        params = (args.location,)
+    rows = conn.execute(
+        f"SELECT vc.volume_id, vc.location, v.label "
+        f"FROM volume_copies vc JOIN volumes v USING (volume_id) "
+        f"WHERE {where} ORDER BY v.label, vc.location",
+        params,
+    ).fetchall()
+    if not rows:
+        logger.info("No ACTIVE copies to verify.")
+        return 0
+
+    logger.info(f"Re-verifying {len(rows)} physical cop(ies) on {args.device}")
+    results: list[tuple[str, str, str]] = []
+    quit_early = False
+    for row in rows:
+        label, location = row["label"], row["location"]
+        if quit_early:
+            results.append((label, location, "SKIPPED"))
+            continue
+        try:
+            answer = input(
+                f"Insert disc {label} and press Enter (s = skip, q = quit): "
+            ).strip().lower()
+        except EOFError:
+            answer = "q"
+        if answer == "q":
+            quit_early = True
+            results.append((label, location, "SKIPPED"))
+            continue
+        if answer == "s":
+            results.append((label, location, "SKIPPED"))
+            continue
+        outcome = _check_disc_for_volume(
+            conn, row["volume_id"], label, args.device,
+        )
+        if outcome == "PASS":
+            # Uncommitted stamp + event commit together (one transaction).
+            touch_last_verified(conn, row["volume_id"], location, commit=False)
+            add_event(conn, row["volume_id"], "VERIFY_PASS",
+                      location=location, detail="Batch disc verify")
+            logger.info(f"  Stamped last_verified_at on copy at {location}")
+            # Re-read status: an earlier copy of the same volume may
+            # already have promoted it in this run.
+            if get_volume_by_id(conn, row["volume_id"]).status == "BURNED":
+                update_status(conn, row["volume_id"], "VERIFIED")
+                logger.info(f"Volume {label}: promoted BURNED → VERIFIED")
+            results.append((label, location, "PASS"))
+        elif outcome == "FAIL":
+            add_event(conn, row["volume_id"], "VERIFY_FAIL",
+                      location=location, detail="Batch disc verify")
+            results.append((label, location, "FAIL"))
+        else:
+            # WRONG_DISC: nothing recorded; the copy stays unverified.
+            results.append((label, location, "SKIPPED"))
+
+    logger.info("Batch disc verification results:")
+    for label, location, outcome in results:
+        logger.info(f"  {label:<25} {location:<15} {outcome}")
+    n_pass = sum(1 for r in results if r[2] == "PASS")
+    n_fail = sum(1 for r in results if r[2] == "FAIL")
+    logger.info(
+        f"Verification complete: {n_pass} passed, {n_fail} failed, "
+        f"{len(results) - n_pass - n_fail} skipped"
+    )
+    if n_fail > 0:
+        return 1
+    if n_pass == 0:
+        logger.warning("No discs were actually verified (all skipped).")
         return 1
     return 0
 

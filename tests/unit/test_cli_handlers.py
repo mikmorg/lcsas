@@ -1921,3 +1921,273 @@ class TestVerifyDiscIdentityAndEvidence:
             result = main(["--db", str(db), "verify", "VOL_A", "--disc",
                            "--device", str(device)])
         assert result == 1
+
+
+# ---------------------------------------------------------------------------
+# FMA-05: disc-rot re-verification — last_verified_at is a LIVE column.
+# ---------------------------------------------------------------------------
+
+
+def _fma05_catalog(db_path, volumes):
+    """Create a catalog of BURNED volumes, one ACTIVE copy each.
+
+    *volumes* maps label -> (location, disc_bytes); each copy row
+    carries the SHA-256 + size of *disc_bytes* as its evidence (the
+    rebuilt-catalog shape: no session_volumes rows).  Returns
+    label -> volume_id.
+    """
+    import hashlib
+
+    from lcsas.db.connection import get_connection
+    from lcsas.db.locations import ensure_location
+    from lcsas.db.schema import create_all
+    from lcsas.db.volume_copies import add_volume_copy
+    from lcsas.db.volumes import create_volume
+
+    conn = get_connection(db_path)
+    create_all(conn)
+    ids = {}
+    for label, (location, disc_bytes) in volumes.items():
+        vol = create_volume(conn, label, f"uuid-{label}", "TEST_TINY",
+                            2_097_152, "Home", "BURNED")
+        ensure_location(conn, location)
+        add_volume_copy(
+            conn, volume_id=vol.volume_id, location=location,
+            iso_sha256=hashlib.sha256(disc_bytes).hexdigest(),
+            iso_size_bytes=len(disc_bytes),
+        )
+        ids[label] = vol.volume_id
+    conn.commit()
+    conn.close()
+    return ids
+
+
+def test_verify_disc_stamps_last_verified_at(tmp_path):
+    """FMA-05: a passing ``verify --disc`` stamps last_verified_at on
+    the volume's single ACTIVE copy WITHOUT an explicit --location; a
+    failing verify leaves the stamp NULL (and records VERIFY_FAIL)."""
+    from unittest.mock import patch
+
+    from lcsas.db.connection import get_connection
+    from lcsas.db.volume_copies import get_copies_for_volume
+    from lcsas.db.volume_events import get_events_for_volume
+
+    disc_bytes = b"fma05-payload" * 64
+    device = tmp_path / "fake_device"
+    device.write_bytes(disc_bytes)
+
+    db = tmp_path / "pass.db"
+    ids = _fma05_catalog(db, {"VOL_A": ("Vault", disc_bytes)})
+
+    with (
+        patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
+              "read_disc_volume_id", return_value="VOL_A"),
+        patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
+              return_value=True),
+    ):
+        assert main(["--db", str(db), "verify", "VOL_A", "--disc",
+                     "--device", str(device)]) == 0
+
+    conn = get_connection(db)
+    (copy,) = get_copies_for_volume(conn, ids["VOL_A"])
+    assert copy.location == "Vault"
+    assert copy.last_verified_at is not None, (
+        "a passing disc verify must stamp the copy"
+    )
+    conn.close()
+
+    # FAIL: same catalog shape, tampered device — stamp must stay NULL.
+    db_fail = tmp_path / "fail.db"
+    ids = _fma05_catalog(db_fail, {"VOL_A": ("Vault", disc_bytes)})
+    device.write_bytes(b"X" + disc_bytes[1:])
+
+    with (
+        patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
+              "read_disc_volume_id", return_value="VOL_A"),
+        patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
+              return_value=True),
+    ):
+        assert main(["--db", str(db_fail), "verify", "VOL_A", "--disc",
+                     "--device", str(device)]) == 1
+
+    conn = get_connection(db_fail)
+    (copy,) = get_copies_for_volume(conn, ids["VOL_A"])
+    assert copy.last_verified_at is None, (
+        "a FAILED disc verify must never stamp the copy"
+    )
+    assert get_events_for_volume(conn, ids["VOL_A"], "VERIFY_FAIL")
+    conn.close()
+
+
+def test_verify_disc_ambiguous_copies_require_location(tmp_path, caplog):
+    """FMA-05: with ACTIVE copies at several locations and no
+    --location, verify --disc refuses up front (before any device
+    read) — the stamp must never guess which disc was in the drive."""
+    from unittest.mock import patch
+
+    from lcsas.db.connection import get_connection
+    from lcsas.db.locations import ensure_location
+    from lcsas.db.volume_copies import add_volume_copy
+
+    disc_bytes = b"fma05-payload" * 64
+    device = tmp_path / "fake_device"
+    device.write_bytes(disc_bytes)
+    db = tmp_path / "test.db"
+    ids = _fma05_catalog(db, {"VOL_A": ("Vault", disc_bytes)})
+
+    conn = get_connection(db)
+    ensure_location(conn, "Offsite")
+    add_volume_copy(conn, volume_id=ids["VOL_A"], location="Offsite")
+    conn.close()
+
+    with patch(
+        "lcsas.iso.xorriso.SubprocessXorrisoRunner.read_disc_volume_id",
+        return_value="VOL_A",
+    ) as mock_id:
+        assert main(["--db", str(db), "verify", "VOL_A", "--disc",
+                     "--device", str(device)]) == 1
+    assert "pass --location" in caplog.text
+    mock_id.assert_not_called()
+
+
+def test_verify_all_disc_iterates_copies(tmp_path, capsys):
+    """FMA-05: ``verify --all --disc`` walks ACTIVE copies with one
+    prompt per disc — PASS stamps the copy, FAIL records VERIFY_FAIL
+    without stamping, 's' skips — and prints the result table."""
+    from unittest.mock import patch
+
+    from lcsas.db.connection import get_connection
+    from lcsas.db.volume_copies import get_copies_for_volume
+    from lcsas.db.volume_events import get_events_for_volume
+    from lcsas.db.volumes import get_volume_by_label
+
+    disc_bytes = b"fma05-batch" * 64
+    device = tmp_path / "fake_device"
+    device.write_bytes(disc_bytes)
+
+    db = tmp_path / "test.db"
+    ids = _fma05_catalog(db, {
+        "VOL_A": ("Vault", disc_bytes),         # device matches → PASS
+        "VOL_B": ("Vault", b"other-image"),     # hash mismatch → FAIL
+        "VOL_C": ("Vault", disc_bytes),         # operator skips
+    })
+
+    with (
+        patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
+              "read_disc_volume_id", side_effect=["VOL_A", "VOL_B"]),
+        patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
+              return_value=True),
+        patch("builtins.input", side_effect=["", "", "s"]),
+    ):
+        rc = main(["--db", str(db), "verify", "--all", "--disc",
+                   "--device", str(device)])
+    assert rc == 1, "one FAIL must make the batch exit non-zero"
+
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert "Batch disc verification results:" in out
+    assert "1 passed, 1 failed, 1 skipped" in out
+
+    conn = get_connection(db)
+    (copy_a,) = get_copies_for_volume(conn, ids["VOL_A"])
+    assert copy_a.last_verified_at is not None
+    assert get_volume_by_label(conn, "VOL_A").status == "VERIFIED"
+
+    (copy_b,) = get_copies_for_volume(conn, ids["VOL_B"])
+    assert copy_b.last_verified_at is None
+    assert get_volume_by_label(conn, "VOL_B").status == "BURNED"
+    assert get_events_for_volume(conn, ids["VOL_B"], "VERIFY_FAIL")
+
+    (copy_c,) = get_copies_for_volume(conn, ids["VOL_C"])
+    assert copy_c.last_verified_at is None
+    assert not get_events_for_volume(conn, ids["VOL_C"], "VERIFY_PASS")
+    assert not get_events_for_volume(conn, ids["VOL_C"], "VERIFY_FAIL")
+    conn.close()
+
+
+def test_verify_all_disc_wrong_disc_records_nothing(tmp_path, capsys):
+    """FMA-05 + FMA-03: in batch mode a wrong disc in the drive is
+    operator error — counted SKIPPED, no event, no stamp."""
+    from unittest.mock import patch
+
+    from lcsas.db.connection import get_connection
+    from lcsas.db.volume_copies import get_copies_for_volume
+
+    disc_bytes = b"fma05-wrong" * 64
+    device = tmp_path / "fake_device"
+    device.write_bytes(disc_bytes)
+    db = tmp_path / "test.db"
+    ids = _fma05_catalog(db, {"VOL_A": ("Vault", disc_bytes)})
+
+    with (
+        patch("lcsas.iso.xorriso.SubprocessXorrisoRunner."
+              "read_disc_volume_id", return_value="VOL_OTHER"),
+        patch("builtins.input", side_effect=[""]),
+    ):
+        rc = main(["--db", str(db), "verify", "--all", "--disc",
+                   "--device", str(device)])
+    assert rc == 1, "nothing verified → non-zero"
+
+    captured = capsys.readouterr()
+    assert "Wrong disc" in captured.out + captured.err
+
+    conn = get_connection(db)
+    (copy,) = get_copies_for_volume(conn, ids["VOL_A"])
+    assert copy.last_verified_at is None
+    n_events = conn.execute(
+        "SELECT COUNT(*) FROM volume_events WHERE volume_id = ?",
+        (ids["VOL_A"],),
+    ).fetchone()[0]
+    assert n_events == 0, "wrong disc is operator error — nothing recorded"
+    conn.close()
+
+
+def test_status_stale_copies_report(tmp_path, capsys):
+    """FMA-05: ``status --stale-copies`` lists never-verified and
+    overdue copies with ages; fresh copies are absent; plain ``status``
+    carries a one-line summary warning."""
+    from datetime import UTC, datetime, timedelta
+
+    from lcsas.db.connection import get_connection
+
+    disc_bytes = b"fma05-stale"
+    db = tmp_path / "test.db"
+    _fma05_catalog(db, {
+        "VOL_NEVER": ("Vault", disc_bytes),
+        "VOL_OLD": ("Vault", disc_bytes),
+        "VOL_FRESH": ("Vault", disc_bytes),
+    })
+    conn = get_connection(db)
+    old = (datetime.now(UTC) - timedelta(days=400)).isoformat()
+    conn.execute(
+        "UPDATE volume_copies SET last_verified_at = ? WHERE volume_id = "
+        "(SELECT volume_id FROM volumes WHERE label = 'VOL_OLD')", (old,),
+    )
+    conn.execute(
+        "UPDATE volume_copies SET last_verified_at = ? WHERE volume_id = "
+        "(SELECT volume_id FROM volumes WHERE label = 'VOL_FRESH')",
+        (datetime.now(UTC).isoformat(),),
+    )
+    conn.commit()
+    conn.close()
+
+    assert main(["--db", str(db), "status", "--stale-copies"]) == 0
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert "VOL_NEVER" in out and "never verified" in out
+    assert "VOL_OLD" in out and "400 days ago" in out
+    assert "VOL_FRESH" not in out, "freshly verified copies are not stale"
+    assert "lcsas verify --all --disc" in out
+
+    # Plain status: one summary line when anything is overdue.
+    assert main(["--db", str(db), "status"]) == 0
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert "2 physical cop(ies) not verified in the last 365 days" in out
+
+    # Tighter threshold pulls the fresh copy in as well.
+    assert main(["--db", str(db), "status", "--stale-copies",
+                 "--older-than-days", "0"]) == 0
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert "VOL_FRESH" in out

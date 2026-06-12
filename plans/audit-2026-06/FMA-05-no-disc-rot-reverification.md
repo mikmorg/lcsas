@@ -101,3 +101,15 @@ Always-on in `make test-unit`:
 ## Effort
 
 2 days (1 impl, 1 test). CDEmu locally for the opt-in case; unit tests need nothing.
+
+---
+**Implemented:** 2026-06-12. As planned, with two naming deviations: the writer is the
+pre-existing `touch_last_verified()` (landed with BURN-04) rather than a new
+`stamp_copy_verified()`, and the CDEmu batch-mode case lives in the existing
+`tests/e2e/test_burn_verify_disc.py` under `LCSAS_BURN_E2E=1` (following FMA-03's
+deviation) rather than a new `LCSAS_DISC_VERIFY=1` file. Single-disc `verify --disc` now
+auto-resolves the copy location when unambiguous and refuses when ambiguous;
+`verify --all --disc` iterates ACTIVE copies with insert-disc prompts and a
+PASS/FAIL/SKIPPED table; `status --stale-copies [--older-than-days N]` reports overdue
+copies and plain `status` warns; READINESS_CHECKLIST disc scan now records results via
+the catalog (dd kept as no-catalog fallback).

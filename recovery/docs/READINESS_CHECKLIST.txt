@@ -97,9 +97,16 @@ ONGOING MAINTENANCE  (monthly, or after each new disc set)
     HOW OFTEN: monthly, or after each new disc set is burned.
 
 [ ] DISC READABILITY SCAN — insert each disc in a SATA or USB BD
-    drive and run a surface scan to confirm there are no read
-    errors.
-    How (Linux):
+    drive and re-verify it against the catalog.
+    How (preferred — results are RECORDED in the catalog):
+      lcsas verify --all --disc
+    This walks every ACTIVE copy, prompts you to insert each disc,
+    checks identity (PVD Volume ID) + full device hash against the
+    SHA-256 recorded at burn time, and stamps last_verified_at on
+    each passing copy.  Find overdue discs first with:
+      lcsas status --stale-copies
+    Fallback (no catalog / bare drive — read-only surface scan, NOT
+    recorded anywhere):
       dd if=/dev/sr0 of=/dev/null bs=64k status=progress
     Or use dvdisaster's read-test mode if available:
       dvdisaster -t /dev/sr0
@@ -111,6 +118,9 @@ ONGOING MAINTENANCE  (monthly, or after each new disc set)
     above-threshold damage fails loud rather than silently) is verified
     against the real dvdisaster binary by
     tests/integration/test_ecc_repair.py (opt-in: LCSAS_ECC_REPAIR=1).
+    Recording matters: the verification history travels with the
+    holographic catalog onto every later disc, so an heir can ask
+    "when was each copy last confirmed good?" decades from now.
     HOW OFTEN: monthly for discs less than 2 years old; weekly for
     discs older than 5 years or stored in suboptimal conditions.
 

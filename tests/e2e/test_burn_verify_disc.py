@@ -12,6 +12,10 @@ optical device:
   longer mark every volume VERIFIED without inserting a single correct
   disc (FMA-03).
 * A TRUNCATED burn (medium shorter than the recorded image) fails.
+* BATCH re-verification (``verify --all --disc``, FMA-05) walks ACTIVE
+  copies disc-by-disc: a passing disc stamps ``last_verified_at`` on
+  its copy, a byte-flipped disc records VERIFY_FAIL and is never
+  stamped — the disc-rot cadence the staleness report depends on.
 
 Flow of the original BURN-04 drill:
   1. Master a small ISO with xorriso and register it in a fresh catalog
@@ -332,6 +336,95 @@ def test_verify_disc_wrong_disc_records_nothing(cdemu_device, tmp_path):
 
     conn = get_connection(db_path)
     assert get_volume_by_label(conn, label_a).status == "VERIFIED"
+    conn.close()
+
+
+def test_verify_all_disc_batch_stamps_copies(cdemu_device, tmp_path):
+    """FMA-05: ``verify --all --disc`` walks ACTIVE copies against real
+    (virtual) discs — the matching disc passes and stamps
+    last_verified_at on its copy; a byte-flipped disc fails, records
+    VERIFY_FAIL, and is never stamped."""
+    from unittest.mock import patch
+
+    from lcsas.cli.main import main
+    from lcsas.db.connection import get_connection
+    from lcsas.db.volume_copies import get_copies_for_volume
+    from lcsas.db.volume_events import get_events_for_volume
+    from lcsas.db.volumes import get_volume_by_label
+
+    label_a = "LCSAS_E2E_FMA05_A"
+    label_b = "LCSAS_E2E_FMA05_B"
+    location = "E2E_Shelf"
+
+    iso_a = _master_iso(tmp_path, label_a)
+    iso_b = _master_iso(tmp_path, label_b)
+
+    db_path = tmp_path / "archive.db"
+    id_a = _register_burned_volume(db_path, label_a, iso_a)
+    id_b = _register_burned_volume(db_path, label_b, iso_b)
+
+    conn = get_connection(db_path)
+    conn.execute("INSERT INTO locations (name) VALUES (?)", (location,))
+    for vol_id in (id_a, id_b):
+        conn.execute(
+            "INSERT INTO volume_copies (volume_id, location, burn_date) "
+            "VALUES (?, ?, '2026-01-01T00:00:00+00:00')",
+            (vol_id, location),
+        )
+    conn.commit()
+    conn.close()
+
+    # Disc B is byte-flipped mid-payload: still perfectly readable and
+    # still identifies as B (PVD intact) — only the device-hash compare
+    # can catch it.
+    flipped = bytearray(iso_b.read_bytes())
+    flipped[len(flipped) // 2] ^= 0xFF
+    iso_b_flipped = tmp_path / f"{label_b}_flipped.iso"
+    iso_b_flipped.write_bytes(bytes(flipped))
+
+    discs = iter([iso_a, iso_b_flipped])
+
+    def operator_inserts_disc(prompt: str = "") -> str:
+        """Play the operator: swap the prompted-for disc into the drive.
+
+        A human waits for the drive to spin up before pressing Enter;
+        ``_load`` only proves open()+read() works, and xorriso's SCSI
+        path can lag the block device right after a cdemu load — so
+        poll until the PVD is actually readable.
+        """
+        from lcsas.iso.xorriso import SubprocessXorrisoRunner
+
+        with contextlib.suppress(RuntimeError):
+            _unload()
+        _load(next(discs), cdemu_device)
+        runner = SubprocessXorrisoRunner()
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if runner.read_disc_volume_id(device=cdemu_device):
+                return ""
+            time.sleep(0.5)
+        raise RuntimeError(f"PVD never became readable on {cdemu_device}")
+
+    with patch("builtins.input", side_effect=operator_inserts_disc):
+        rc = main([
+            "--db", str(db_path),
+            "verify", "--all", "--disc", "--device", cdemu_device,
+        ])
+    assert rc == 1, "one failing disc must make the batch exit non-zero"
+
+    conn = get_connection(db_path)
+    (copy_a,) = get_copies_for_volume(conn, id_a)
+    assert copy_a.last_verified_at is not None, (
+        "the passing disc must stamp last_verified_at on its copy"
+    )
+    assert get_volume_by_label(conn, label_a).status == "VERIFIED"
+
+    (copy_b,) = get_copies_for_volume(conn, id_b)
+    assert copy_b.last_verified_at is None, (
+        "the byte-flipped disc must never stamp its copy"
+    )
+    assert get_volume_by_label(conn, label_b).status == "BURNED"
+    assert get_events_for_volume(conn, id_b, "VERIFY_FAIL")
     conn.close()
 
 
