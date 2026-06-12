@@ -113,3 +113,22 @@ No schema change; no catalog semantics touched.
 2 days: 1 impl (Python + sh + C test fixture), 1 test. Needs passwordless-sudo tmpfs
 mounts locally for the gated tests (available on this VM); C part needs
 `make -C recovery` toolchain.
+
+---
+**Implemented:** 2026-06-12. As planned, with deviations: (1) item 3 (live
+restore wizard) skipped — `src/lcsas/meta/live/restore_wizard.py` was deleted
+by BOOT-07 (Alpine live-stack removal), nothing to patch; (2) `restore exec`
+has no `--yes` flag, so the non-interactive refusal keys on stdin not being a
+TTY; (3) restore.sh derives required bytes from the catalog via the sqlite3
+CLI when present, else the tier-1 binary's `--list-pending-packs` total (no C
+source change), and the catalog-discovery block moved ahead of the password
+prompt to make the preflight fire before any secret is typed; (4) the C
+drain fs-full unit covers the mid-drain write-failure branch always-on via
+RLIMIT_FSIZE and the `<10% free` guard branch via the `LCSAS_TEST_FULL_FS_DIR`
+seam driven by the gated tmpfs test; (5) coverage-c surfaced a latent
+environment dependence — on hosts whose /tmp is <10% free, every drain test
+silently took the guard branch, flipping ~80 disc_locator lines in/out of
+coverage.  Fixed by moving the drain-cache fixtures to a roomy fs base
+(`TMPDIR` → `/dev/shm` → `/tmp`, first with >=11% free) and reclassifying the
+genuinely host-dependent lines (457/458, 567/568/574/576) as VOLATILE in
+EXEMPTIONS.md.

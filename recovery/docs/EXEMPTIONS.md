@@ -63,12 +63,12 @@ disc_locator.c:284   DEFERRED      "                                            
 disc_locator.c:366   DEFERRED      refresh_discovered "path too long" warn — needs mount_parent name approaching PATH_MAX
 disc_locator.c:368   DEFERRED      "                                                                                                                            "
 disc_locator.c:373   DEFERRED      meta_disc path_under exclusion in refresh_discovered — needs meta_disc + discovered mount under it
-disc_locator.c:457   DEFERRED      copy_file fwrite error path; fault-inject ENOSPC or full-fs needed
-disc_locator.c:458   DEFERRED      "                                                                                                                            "
-disc_locator.c:567   DEFERRED      drain_disc fs_critically_full warn; needs tmpfs with <10% free
-disc_locator.c:568   DEFERRED      "                                                                                                                            "
-disc_locator.c:574   DEFERRED      "                                                                                                                            "
-disc_locator.c:576   DEFERRED      "                                                                                                                            "
+disc_locator.c:457   VOLATILE      copy_file fwrite error path; covered by test_disc_locator's RLIMIT_FSIZE fs-full drain case when a >=11%-free cache base exists (TMPDIR / /dev/shm / /tmp), uncovered otherwise [FMA-09]
+disc_locator.c:458   VOLATILE      "                                                                                                                            "
+disc_locator.c:567   VOLATILE      drain_disc fs_critically_full warn; covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache base fs is <10% free [FMA-09]
+disc_locator.c:568   VOLATILE      "                                                                                                                            "
+disc_locator.c:574   VOLATILE      "                                                                                                                            "
+disc_locator.c:576   VOLATILE      "                                                                                                                            "
 disc_locator.c:585   DEFERRED      drain_disc 1 GiB cache_bytes_used soft warn; needs >1 GiB in cache_dir
 disc_locator.c:590   DEFERRED      "                                                                                                                            "
 disc_locator.c:591   DEFERRED      "                                                                                                                            "

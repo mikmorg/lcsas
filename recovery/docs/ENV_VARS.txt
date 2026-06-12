@@ -226,6 +226,24 @@ LCSAS_FORBID_TMPFS_TARGET
             scripted restores to tmpfs paths; automation that must
             never write a restore into RAM sets this explicitly.
 
+LCSAS_SKIP_SPACE_CHECK
+  Default:  0  (check ON / opt-out)
+  Since:    2026-06 audit (FMA-09)
+  What:     1 → skip the free-space preflight restore.sh runs before
+            any password or disc prompt.  The check derives the
+            archive size from the freshest reachable catalog.db (via
+            a sqlite3 CLI when present, else the tier-1 binary's
+            --list-pending-packs total) and refuses with the exact
+            required-vs-available numbers when either the target
+            directory or the pack-cache filesystem is too small.
+            When the size cannot be derived the check silently skips.
+  Why:      Opt-OUT.  Forgetting the check means discovering a
+            too-small disk via ENOSPC after a long disc-swapping
+            session — the worst possible point.  The bypass exists
+            for operators restoring a SUBSET (one small snapshot of a
+            large archive) where the whole-archive estimate is a
+            deliberate overestimate.
+
 BUILD / CI GATES
 ────────────────
 
@@ -305,6 +323,7 @@ LCSAS_NO_RELOCATE           0         opt-in      set 1 for testing
 LCSAS_ALLOW_NO_PACK_SEARCH  0         opt-in      set 1 for test rigs
 LCSAS_ALLOW_TMPFS_TARGET    0         opt-in      set 1 to skip RAM-target prompt
 LCSAS_FORBID_TMPFS_TARGET   0         opt-in      set 1 to ban RAM targets
+LCSAS_SKIP_SPACE_CHECK      0         opt-out     set 1 to skip space preflight
 LCSAS_BLIND_ACK_COST        unset     opt-in      set 1 to run blind e2e
 LCSAS_RECOVERY_CACHE        (home)    opt-in      CI shared binary cache
 LCSAS_NO_WIZARD             unset     opt-in      automated live-boot test

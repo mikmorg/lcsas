@@ -13,7 +13,12 @@ PREREQUISITES
 You will need:
   - The LCSAS recovery medium (BD-R / DVD).
   - The repository password (set when the archive was created).
-  - A target directory with enough free space for the restored files.
+  - A target directory with free space of AT LEAST the archive size
+    (the size shown by `lcsas restore plan`, or the snapshot size) on
+    BOTH the target disk and the pack-cache disk (default: /tmp) --
+    restore.sh checks this for you before any password or disc prompt
+    and refuses with the exact numbers if either disk is too small.
+    Override with LCSAS_SKIP_SPACE_CHECK=1 if you know better.
 
 DECISION FLOW
 

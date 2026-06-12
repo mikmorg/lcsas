@@ -336,6 +336,11 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           1 → refuse a RAM-backed TARGET_DIR outright,
                           even with no TTY attached.  For automation
                           that must never restore into RAM.
+  LCSAS_SKIP_SPACE_CHECK  1 → skip the free-space preflight that
+                          compares the archive size (from the catalog)
+                          against free space at TARGET_DIR and the
+                          pack cache before any password/disc prompt.
+                          Default: check ON when the size is derivable.
   LCSAS_NO_RELOCATE       1 → don't copy the recovery scripts into
                           RAM before exec (testing / development).
   LCSAS_PROGRESS          0 → silence the periodic tier-3 progress
@@ -781,6 +786,183 @@ then
     exit "$EXIT_NO_RECOVERY_BIN"
 fi
 
+# Optional --catalog if a catalog.db is present somewhere reachable.
+# Used for human-readable volume hints in prompts, and by the free-
+# space preflight below [FMA-09] (which is why this block runs BEFORE
+# the password prompt).
+#
+# The meta-disc deliberately carries NO catalog.db (it would always be
+# stale at burn time -- see src/lcsas/meta/builder.py).  So we scan
+# every currently-mounted data disc and pick the FRESHEST catalog by
+# mtime, falling back to the recovery tree if nothing better is found.
+CATALOG_ARG=""
+catalog_pick=""
+catalog_pick_mtime=0
+catalog_consider() {
+    # Note the explicit `return 0` -- under `set -e` an implicit
+    # return after a failed test would propagate as a non-zero exit.
+    [ -f "$1" ] || return 0
+    mt="$(stat -c '%Y' "$1" 2>/dev/null \
+        || stat -f '%m' "$1" 2>/dev/null \
+        || echo 0)"
+    if [ "$mt" -gt "$catalog_pick_mtime" ] 2>/dev/null; then
+        catalog_pick="$1"
+        catalog_pick_mtime="$mt"
+    fi
+    return 0
+}
+# Local recovery-tree candidates (last resort).
+for cand in "$RECOVERY/catalog.db" "$REPO/catalog.db" \
+            "$RECOVERY/../catalog.db"; do
+    catalog_consider "$cand"
+done
+# Mounted discs: /Volumes/* (macOS), /media/$USER/* /media/* /mnt/* (Linux).
+if [ -d /Volumes ]; then
+    for mnt in /Volumes/*; do
+        [ -d "$mnt" ] || continue
+        catalog_consider "$mnt/catalog.db"
+    done
+fi
+for parent in "/media/$(id -un 2>/dev/null)" /media /mnt; do
+    [ -d "$parent" ] || continue
+    for mnt in "$parent"/*; do
+        [ -d "$mnt" ] || continue
+        catalog_consider "$mnt/catalog.db"
+    done
+done
+if [ -n "$catalog_pick" ]; then
+    CATALOG_ARG="--catalog $catalog_pick"
+    printf '[lcsas-restore] using catalog %s\n' "$catalog_pick" >&2
+fi
+
+# If the operator is using a persistent (non-auto) pack cache, the
+# locator-catalog cached there may be stale when the source catalog
+# advances (e.g. a new data disc was added to the archive).  Delete
+# the stale copy so the binary re-derives it from the fresh catalog.
+if [ -n "${LCSAS_PACK_CACHE_DIR:-}" ] && [ -n "$catalog_pick" ]; then
+    _loc_cache="$LCSAS_PACK_CACHE_DIR/.locator-catalog.db"
+    if [ -f "$_loc_cache" ]; then
+        _loc_mt="$(stat -c '%Y' "$_loc_cache" 2>/dev/null \
+            || stat -f '%m' "$_loc_cache" 2>/dev/null \
+            || echo 0)"
+        if [ "$catalog_pick_mtime" -gt "$_loc_mt" ] 2>/dev/null; then
+            printf '[lcsas-restore] catalog advanced; discarding stale locator cache\n' >&2
+            rm -f "$_loc_cache"
+        fi
+    fi
+fi
+
+# ── Free-space preflight [FMA-09] ─────────────────────────────────
+#
+# The burn side checks staging space before writing a byte; mirror
+# that on the restore side BEFORE the password / disc prompts so a
+# too-small target fails in one obvious line, not via ENOSPC after a
+# long disc-swapping session.  Required bytes come from the catalog:
+# the exact per-tenant pack sum when a sqlite3 CLI is on PATH, else
+# the tier-1 binary's --list-pending-packs total (a slight over-
+# estimate when packs live on several discs).  When neither tool can
+# run, the check is SKIPPED -- never block a restore on a missing
+# convenience tool.  Both the target and the pack cache filesystems
+# are checked: packs accumulate in the cache (~the same total)
+# before the restore writes the target.  LCSAS_SKIP_SPACE_CHECK=1
+# bypasses the whole check.
+
+space_probe_dir() {
+    # Print the nearest EXISTING ancestor directory of "$1" (df needs
+    # a path that exists; targets/caches often don't yet).
+    _sp_probe="$1"
+    while [ -n "$_sp_probe" ] && [ ! -d "$_sp_probe" ] \
+          && [ "$_sp_probe" != "/" ] && [ "$_sp_probe" != "." ]; do
+        _sp_probe="$(dirname "$_sp_probe")"
+    done
+    [ -d "$_sp_probe" ] && printf '%s\n' "$_sp_probe"
+    return 0
+}
+
+free_kb_for() {
+    # Available KB on the filesystem holding "$1"; empty if unknown.
+    _fk_dir="$(space_probe_dir "$1")"
+    [ -n "$_fk_dir" ] || return 0
+    df -Pk "$_fk_dir" 2>/dev/null | awk 'NR==2 { print $4 }'
+    return 0
+}
+
+fs_dev_for() {
+    # df device column for "$1" -- proxy for "same filesystem" so the
+    # target and cache aren't double-reported when they share one.
+    _fd_dir="$(space_probe_dir "$1")"
+    [ -n "$_fd_dir" ] || return 0
+    df -Pk "$_fd_dir" 2>/dev/null | awk 'NR==2 { print $1 }'
+    return 0
+}
+
+human_kb() {
+    # KB count -> "N.N GB" / "N MB" (GB collapses to 0.0 below 1 GB).
+    awk -v kb="$1" 'BEGIN {
+        if (kb >= 1048576) printf "%.1f GB", kb / 1048576;
+        else printf "%d MB", (kb + 1023) / 1024;
+    }'
+}
+
+if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
+    required_kb=0
+    _tenant="$(basename "$REPO")"
+    if [ -n "$catalog_pick" ] && command -v sqlite3 >/dev/null 2>&1; then
+        _req_bytes="$(sqlite3 "$catalog_pick" \
+            "SELECT COALESCE(SUM(p.size_bytes), 0) FROM packs p \
+             JOIN repositories r ON r.repo_id = p.repo_id \
+             WHERE (r.name = '$_tenant' OR r.repo_id = '$_tenant') \
+               AND p.is_pruned = 0;" 2>/dev/null || true)"
+        case "$_req_bytes" in
+            ''|*[!0-9]*) ;;
+            *) required_kb=$(( ($_req_bytes + 1023) / 1024 )) ;;
+        esac
+    fi
+    if [ "$required_kb" -eq 0 ] && [ -n "$catalog_pick" ] \
+       && [ -x "$_RESTORE_BIN_PROBE" ]; then
+        # Parse "Total: N packs, X.X MB across M discs." -> X.X
+        # (output captured -- must not leak onto the operator's tty).
+        _req_mb="$("$_RESTORE_BIN_PROBE" --catalog "$catalog_pick" \
+                       --list-pending-packs 2>/dev/null \
+                   | awk '/^Total:/ {
+                         for (i = 1; i < NF; i++)
+                             if ($(i+1) == "MB") { print $i; exit }
+                     }' || true)"
+        case "$_req_mb" in
+            ''|*[!0-9.]*) ;;
+            *) required_kb="$(awk -v mb="$_req_mb" \
+                   'BEGIN { printf "%d", mb * 1024 }')" ;;
+        esac
+    fi
+    if [ "$required_kb" -gt 0 ]; then
+        mkdir -p "$TARGET_DIR" 2>/dev/null || true
+        space_fail=0
+        _checked_devs=" "
+        for _sp_dir in "$TARGET_DIR" "${LCSAS_PACK_CACHE_DIR:-}"; do
+            [ -n "$_sp_dir" ] || continue
+            _sp_dev="$(fs_dev_for "$_sp_dir")"
+            [ -n "$_sp_dev" ] || _sp_dev="$_sp_dir"
+            case "$_checked_devs" in
+                *" $_sp_dev "*) continue ;;
+            esac
+            _checked_devs="$_checked_devs$_sp_dev "
+            _sp_free_kb="$(free_kb_for "$_sp_dir")"
+            case "$_sp_free_kb" in ''|*[!0-9]*) continue ;; esac
+            if [ "$_sp_free_kb" -lt "$required_kb" ]; then
+                printf 'restore.sh: Need about %s free at %s; only %s available.\n' \
+                       "$(human_kb "$required_kb")" "$_sp_dir" \
+                       "$(human_kb "$_sp_free_kb")" >&2
+                space_fail=1
+            fi
+        done
+        if [ "$space_fail" = "1" ]; then
+            printf 'Free space or choose a different --target, then re-run.\n' >&2
+            printf '(set LCSAS_SKIP_SPACE_CHECK=1 to bypass this check.)\n' >&2
+            exit 1
+        fi
+    fi
+fi
+
 # ── Password file (now that we know which repo we're decrypting) ──
 
 PWFILE="${LCSAS_PWFILE:-}"
@@ -958,70 +1140,6 @@ fi
 META_DISC_ARG=""
 if [ -n "${META_DISC:-}" ]; then
     META_DISC_ARG="--meta-disc $META_DISC"
-fi
-
-# Optional --catalog if a catalog.db is present somewhere reachable.
-# Used for human-readable volume hints in prompts.
-#
-# The meta-disc deliberately carries NO catalog.db (it would always be
-# stale at burn time -- see src/lcsas/meta/builder.py).  So we scan
-# every currently-mounted data disc and pick the FRESHEST catalog by
-# mtime, falling back to the recovery tree if nothing better is found.
-CATALOG_ARG=""
-catalog_pick=""
-catalog_pick_mtime=0
-catalog_consider() {
-    # Note the explicit `return 0` -- under `set -e` an implicit
-    # return after a failed test would propagate as a non-zero exit.
-    [ -f "$1" ] || return 0
-    mt="$(stat -c '%Y' "$1" 2>/dev/null \
-        || stat -f '%m' "$1" 2>/dev/null \
-        || echo 0)"
-    if [ "$mt" -gt "$catalog_pick_mtime" ] 2>/dev/null; then
-        catalog_pick="$1"
-        catalog_pick_mtime="$mt"
-    fi
-    return 0
-}
-# Local recovery-tree candidates (last resort).
-for cand in "$RECOVERY/catalog.db" "$REPO/catalog.db" \
-            "$RECOVERY/../catalog.db"; do
-    catalog_consider "$cand"
-done
-# Mounted discs: /Volumes/* (macOS), /media/$USER/* /media/* /mnt/* (Linux).
-if [ -d /Volumes ]; then
-    for mnt in /Volumes/*; do
-        [ -d "$mnt" ] || continue
-        catalog_consider "$mnt/catalog.db"
-    done
-fi
-for parent in "/media/$(id -un 2>/dev/null)" /media /mnt; do
-    [ -d "$parent" ] || continue
-    for mnt in "$parent"/*; do
-        [ -d "$mnt" ] || continue
-        catalog_consider "$mnt/catalog.db"
-    done
-done
-if [ -n "$catalog_pick" ]; then
-    CATALOG_ARG="--catalog $catalog_pick"
-    printf '[lcsas-restore] using catalog %s\n' "$catalog_pick" >&2
-fi
-
-# If the operator is using a persistent (non-auto) pack cache, the
-# locator-catalog cached there may be stale when the source catalog
-# advances (e.g. a new data disc was added to the archive).  Delete
-# the stale copy so the binary re-derives it from the fresh catalog.
-if [ -n "${LCSAS_PACK_CACHE_DIR:-}" ] && [ -n "$catalog_pick" ]; then
-    _loc_cache="$LCSAS_PACK_CACHE_DIR/.locator-catalog.db"
-    if [ -f "$_loc_cache" ]; then
-        _loc_mt="$(stat -c '%Y' "$_loc_cache" 2>/dev/null \
-            || stat -f '%m' "$_loc_cache" 2>/dev/null \
-            || echo 0)"
-        if [ "$catalog_pick_mtime" -gt "$_loc_mt" ] 2>/dev/null; then
-            printf '[lcsas-restore] catalog advanced; discarding stale locator cache\n' >&2
-            rm -f "$_loc_cache"
-        fi
-    fi
 fi
 
 # ── Session log helper ───────────────────────────────────────────

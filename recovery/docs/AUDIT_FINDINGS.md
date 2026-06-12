@@ -108,7 +108,7 @@ Note: `arena.c` (was 0%) was deleted in PR #175 — dead code with no callers.
 
 | File | Current | To reach 95% requires |
 |------|---------|----------------------|
-| disc_locator.c | 81.6% | Drain edge cases (fs-full, missing source), interactive prompt loop, user-namespace mount fixtures for the chroot-style branches. |
+| disc_locator.c | 81.6% | Interactive prompt loop, user-namespace mount fixtures for the chroot-style branches.  ~~Drain edge cases (fs-full, missing source)~~ — covered by `test_disc_locator` [FMA-09]: RLIMIT_FSIZE mid-drain write failure (truncated cache copy must be unlinked), dangling-symlink missing source, and the `<10% free` drain-guard branch via the `LCSAS_TEST_FULL_FS_DIR` seam (driven by `tests/recovery_hardening/test_restore_space_preflight.py`). |
 | repo.c | 85.9% | Malloc-failure paths in `read_blob` and a multi-blob compressed pack (lines 790-845). The fault-injection harness in #165 covers some; the rest need a compressed-blob fixture. |
 | tree.c | 89.2% | Remaining lines are corrupted-blob-content paths (malformed JSON tokens after decryption) — would need an attacker-crafted fixture, or a fuzz target on `lcsas_tree_restore` directly. |
 | main.c | 88.1% | Snapshot-walking error branches (snapshot blob fetch failure mid-restore). |

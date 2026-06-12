@@ -3266,6 +3266,45 @@ def _find_sibling_iso(vol_dir: Path, label: str) -> Path | None:
     return None
 
 
+def _nearest_existing_dir(path: Path) -> Path:
+    """Walk up from ``path`` to the closest ancestor that exists.
+
+    ``shutil.disk_usage`` / ``os.stat`` need an existing path; restore
+    targets and cache dirs frequently don't exist yet.  [FMA-09]
+    """
+    p = path.resolve()
+    while not p.exists() and p.parent != p:
+        p = p.parent
+    return p
+
+
+def _fs_dev(path: Path) -> int:
+    """Filesystem device id for ``path`` (nearest existing ancestor)."""
+    return os.stat(_nearest_existing_dir(path)).st_dev
+
+
+def _free_space_shortfalls(
+    required_bytes: int, target: Path, cache_base: Path,
+) -> list[tuple[Path, int]]:
+    """Return ``(path, free_bytes)`` for each filesystem short on space.
+
+    Checks the restore target, plus the pack-cache base when it lives
+    on a different filesystem — packs accumulate to ~``required_bytes``
+    in the cache before ``rustic restore`` runs.  [FMA-09]
+    """
+    import shutil
+
+    shortfalls: list[tuple[Path, int]] = []
+    target_free = shutil.disk_usage(_nearest_existing_dir(target)).free
+    if target_free < required_bytes:
+        shortfalls.append((target, target_free))
+    if _fs_dev(cache_base) != _fs_dev(target):
+        cache_free = shutil.disk_usage(_nearest_existing_dir(cache_base)).free
+        if cache_free < required_bytes:
+            shortfalls.append((cache_base, cache_free))
+    return shortfalls
+
+
 def cmd_restore_exec(args: argparse.Namespace) -> int:
     """Execute a restore operation."""
     import tempfile
@@ -3368,6 +3407,36 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
             if src.alternates:
                 alternates_map[src.pack.sha256] = list(src.alternates)
 
+    # ── Disk-space preflight [FMA-09] ──────────────────────────────
+    # Refuse (or hard-confirm) BEFORE the first disc prompt: an heir
+    # restoring onto a too-small disk must learn that NOW, not via
+    # ENOSPC after a long disc-swapping session.  The pack cache
+    # needs ~total_bytes too — packs accumulate there before rustic
+    # restore runs — so its filesystem is checked when distinct.
+    cache_base = (
+        args.cache_dir if args.cache_dir is not None else config.staging_path
+    )
+    shortfalls = _free_space_shortfalls(
+        pick_list.total_bytes, args.target_path, cache_base,
+    )
+    if shortfalls:
+        need_gb = pick_list.total_bytes / 1e9
+        for short_path, free_bytes in shortfalls:
+            logger.error(
+                "Restoring ~%.1f GB but %s has only %.1f GB free.",
+                need_gb, short_path, free_bytes / 1e9,
+            )
+        if not sys.stdin.isatty():
+            logger.error(
+                "Refusing to start: free up space or choose a different "
+                "target / --cache-dir, then re-run."
+            )
+            return 1
+        ans = input("Continue anyway? [y/N] ").strip().lower()
+        if ans != "y":
+            logger.error("Aborted: free up space and re-run.")
+            return 1
+
     # Set up cache directory
     _tmp_dir: tempfile.TemporaryDirectory[str] | None = None
     if args.cache_dir is None:
@@ -3444,7 +3513,6 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     )
         else:
             # Interactive: prompt user to mount each volume
-            import sys
             if not sys.stdin.isatty():
                 logger.error(
                     "Interactive restore requires a TTY. "

@@ -32,12 +32,13 @@ def _setup_db_with_packs(
     repo_name: str,
     pack_hashes: list[str],
     volume_label: str = "VOL_001",
+    pack_size: int = 1024,
 ) -> list[Pack]:
     """Register packs in the DB and assign them to a volume."""
     register_repo(conn, repo_name, repo_name, f"/mnt/mirror/{repo_name}", "")
     packs = []
     for sha in pack_hashes:
-        p = register_pack(conn, sha, 1024, repo_name)
+        p = register_pack(conn, sha, pack_size, repo_name)
         packs.append(p)
 
     vol = create_volume(
@@ -465,6 +466,214 @@ class TestCmdRestoreExec:
         args = parser.parse_args(["restore", "plan", "snap1", "--repo", "fam"])
         assert args.command == "restore"
         assert args.restore_command == "plan"
+
+
+# ---------------------------------------------------------------------------
+# Disk-space preflight tests [FMA-09]
+# ---------------------------------------------------------------------------
+
+
+class TestRestoreExecSpacePreflight:
+    """FMA-09: restore exec must check free space BEFORE any disc work."""
+
+    @staticmethod
+    def _usage(free: int):
+        from collections import namedtuple
+        return namedtuple("usage", "total used free")(10**13, 0, free)
+
+    def _fixture(self, tmp_path, pack_size: int = 5_000_000_000):
+        """DB + config + runner mocks; packs sum to 2 × pack_size."""
+        conn = get_memory_connection()
+        create_all(conn)
+        hashes = ["aa" * 32, "bb" * 32]
+        _setup_db_with_packs(conn, "family", hashes, "VOL_001",
+                             pack_size=pack_size)
+
+        vol_dir = tmp_path / "volumes" / "VOL_001" / "data"
+        vol_dir.mkdir(parents=True)
+        for sha in hashes:
+            (vol_dir / sha).write_bytes(b"fake_pack_data")
+
+        mirror_path = tmp_path / "mirror"
+        for sub in ["index", "snapshots", "keys"]:
+            (mirror_path / sub).mkdir(parents=True)
+        (mirror_path / "config").write_text("{}")
+
+        key_file = tmp_path / "key"
+        key_file.write_bytes(b"secret")
+
+        mock_config = MagicMock()
+        mock_config.db_path = Path(":memory:")
+        mock_config.staging_path = tmp_path / "staging"
+        mock_config.repositories = {
+            "family": MagicMock(mirror_path=mirror_path,
+                                password_file=key_file),
+        }
+
+        mock_runner = MagicMock()
+        mock_runner.restore_dry_run.return_value = RestorePlan(
+            snapshot_id="snap1", required_pack_hashes=hashes,
+        )
+        return conn, mock_config, mock_runner, key_file
+
+    def _args(self, tmp_path, key_file, cache_dir=None):
+        return _make_args(
+            restore_command="exec",
+            repo="family",
+            snapshot_id="snap1",
+            target_path=tmp_path / "restored",
+            password_file=key_file,
+            cache_dir=cache_dir if cache_dir is not None else tmp_path / "cache",
+            volume_dir=tmp_path / "volumes",
+        )
+
+    def test_restore_exec_refuses_insufficient_target_space(
+        self, tmp_path, caplog,
+    ):
+        """Non-interactive shortfall refuses with sizes, before any
+        executor call; interactive 'y' proceeds."""
+        import logging
+        conn, mock_config, mock_runner, key_file = self._fixture(tmp_path)
+        args = self._args(tmp_path, key_file)
+
+        with (
+            patch("lcsas.config.settings.load_config", return_value=mock_config),
+            patch("lcsas.db.connection.get_connection", return_value=conn),
+            patch("lcsas.utils.subprocess.check_binary_version"),
+            patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
+                  return_value=mock_runner),
+            patch("shutil.disk_usage", return_value=self._usage(10)),
+            patch("lcsas.restore.executor.RestoreExecutor") as mock_exec_cls,
+            patch("sys.stdin") as mock_stdin,
+            caplog.at_level(logging.ERROR),
+        ):
+            mock_stdin.isatty.return_value = False
+            result = cmd_restore_exec(args)
+
+        assert result == 1
+        all_msgs = " ".join(r.message for r in caplog.records)
+        # The message must name required vs available sizes.
+        assert "10.0 GB" in all_msgs        # required: 2 × 5 GB
+        assert "0.0 GB free" in all_msgs    # available: 10 bytes
+        assert str(tmp_path / "restored") in all_msgs
+        # Refusal must come before ANY executor work (no disc prompt,
+        # no cache preparation).
+        mock_exec_cls.assert_not_called()
+
+    def test_restore_exec_interactive_confirm_proceeds(
+        self, tmp_path, caplog, monkeypatch,
+    ):
+        """A TTY-attached operator answering 'y' continues the restore."""
+        import logging
+        conn, mock_config, mock_runner, key_file = self._fixture(tmp_path)
+        args = self._args(tmp_path, key_file)
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "y")
+
+        with (
+            patch("lcsas.config.settings.load_config", return_value=mock_config),
+            patch("lcsas.db.connection.get_connection", return_value=conn),
+            patch("lcsas.utils.subprocess.check_binary_version"),
+            patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
+                  return_value=mock_runner),
+            patch("shutil.disk_usage", return_value=self._usage(10)),
+            patch("sys.stdin") as mock_stdin,
+            caplog.at_level(logging.INFO),
+        ):
+            mock_stdin.isatty.return_value = True
+            result = cmd_restore_exec(args)
+
+        assert result == 0
+        all_msgs = " ".join(r.message for r in caplog.records)
+        assert "Restore complete" in all_msgs
+        mock_runner.restore.assert_called_once()
+
+    def test_restore_exec_interactive_decline_refuses(
+        self, tmp_path, caplog, monkeypatch,
+    ):
+        """A TTY-attached operator answering nothing (default N) aborts."""
+        import logging
+        conn, mock_config, mock_runner, key_file = self._fixture(tmp_path)
+        args = self._args(tmp_path, key_file)
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "")
+
+        with (
+            patch("lcsas.config.settings.load_config", return_value=mock_config),
+            patch("lcsas.db.connection.get_connection", return_value=conn),
+            patch("lcsas.utils.subprocess.check_binary_version"),
+            patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
+                  return_value=mock_runner),
+            patch("shutil.disk_usage", return_value=self._usage(10)),
+            patch("lcsas.restore.executor.RestoreExecutor") as mock_exec_cls,
+            patch("sys.stdin") as mock_stdin,
+            caplog.at_level(logging.ERROR),
+        ):
+            mock_stdin.isatty.return_value = True
+            result = cmd_restore_exec(args)
+
+        assert result == 1
+        mock_exec_cls.assert_not_called()
+
+    def test_restore_exec_checks_cache_filesystem(self, tmp_path, caplog):
+        """A pack cache on a different (too-small) filesystem is also
+        checked — packs accumulate there before rustic restore runs."""
+        import logging
+        conn, mock_config, mock_runner, key_file = self._fixture(tmp_path)
+        cache_dir = tmp_path / "cachefs"
+        cache_dir.mkdir()
+        (tmp_path / "restored").mkdir()
+        args = self._args(tmp_path, key_file, cache_dir=cache_dir)
+
+        def fake_disk_usage(path):
+            if "cachefs" in str(path):
+                return self._usage(10)          # cache fs: too small
+            return self._usage(10**13)          # target fs: plenty
+
+        with (
+            patch("lcsas.config.settings.load_config", return_value=mock_config),
+            patch("lcsas.db.connection.get_connection", return_value=conn),
+            patch("lcsas.utils.subprocess.check_binary_version"),
+            patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
+                  return_value=mock_runner),
+            patch("shutil.disk_usage", side_effect=fake_disk_usage),
+            # Mock the two paths onto distinct filesystems.
+            patch("lcsas.cli.main._fs_dev",
+                  side_effect=lambda p: 2 if "cachefs" in str(p) else 1),
+            patch("lcsas.restore.executor.RestoreExecutor") as mock_exec_cls,
+            patch("sys.stdin") as mock_stdin,
+            caplog.at_level(logging.ERROR),
+        ):
+            mock_stdin.isatty.return_value = False
+            result = cmd_restore_exec(args)
+
+        assert result == 1
+        all_msgs = " ".join(r.message for r in caplog.records)
+        assert "cachefs" in all_msgs
+        mock_exec_cls.assert_not_called()
+
+    def test_restore_exec_no_shortfall_skips_prompt(self, tmp_path, caplog):
+        """Plenty of space → no prompt, restore runs to completion."""
+        import logging
+        conn, mock_config, mock_runner, key_file = self._fixture(
+            tmp_path, pack_size=1024,
+        )
+        args = self._args(tmp_path, key_file)
+
+        with (
+            patch("lcsas.config.settings.load_config", return_value=mock_config),
+            patch("lcsas.db.connection.get_connection", return_value=conn),
+            patch("lcsas.utils.subprocess.check_binary_version"),
+            patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
+                  return_value=mock_runner),
+            patch("sys.stdin") as mock_stdin,
+            caplog.at_level(logging.INFO),
+        ):
+            mock_stdin.isatty.return_value = False
+            result = cmd_restore_exec(args)
+
+        assert result == 0
+        all_msgs = " ".join(r.message for r in caplog.records)
+        assert "only" not in all_msgs
+        assert "Restore complete" in all_msgs
 
 
 # ---------------------------------------------------------------------------
