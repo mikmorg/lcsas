@@ -720,7 +720,8 @@ print_prompt(lcsas_disc_locator *l, const char *hex)
 
     if (cat) {
         lcsas_catalog_pack pk;
-        if (lcsas_catalog_find_pack(cat, hex, &pk) == 0) {
+        int fr = lcsas_catalog_find_pack(cat, hex, &pk);
+        if (fr == 0) {
             lcsas_catalog_volume vols[8];
             int n = lcsas_catalog_volumes_for_pack(
                         cat, pk.pack_id, vols, 8);
@@ -735,6 +736,14 @@ print_prompt(lcsas_disc_locator *l, const char *hex)
             } else {
                 fputs("| (catalog has the pack, but no current volume mapping)    |\n", o);
             }
+        } else if (fr < 0) {
+            /* Query error -- almost always schema skew: the catalog was
+             * written by a newer LCSAS that renamed/dropped a column this
+             * binary queries.  Do NOT claim "no record": we never asked. */
+            fputs("| (catalog could not be queried -- likely written by a     |\n", o);
+            fputs("|  newer LCSAS; disc-swap hints unavailable. Insert discs  |\n", o);
+            fputs("|  one at a time when prompted, or use the restore tools   |\n", o);
+            fputs("|  from the NEWEST meta disc in this set.)                 |\n", o);
         } else {
             fputs("| (catalog has no record of this pack hash)                |\n", o);
         }

@@ -47,15 +47,25 @@ void lcsas_catalog_close(lcsas_catalog *c);
 int lcsas_catalog_schema_version(lcsas_catalog *c);
 
 /*
- * Look up a pack by its SHA-256 hex string.  Returns 0 on success,
- * -1 on miss / error.
+ * Look up a pack by its SHA-256 hex string.  Tri-state return:
+ *    0  = found (out is populated)
+ *    1  = not found (a genuine miss against a readable v5 surface)
+ *   -1  = query error (e.g. the catalog was written by a newer LCSAS
+ *         that renamed/dropped a frozen column -- see the schema-skew
+ *         warning emitted to stderr).  Callers MUST distinguish -1 from
+ *         1: a -1 means "could not ask", not "asked and the pack isn't
+ *         cataloged".
+ *
+ * The queried column set is the TIER-1 FROZEN SURFACE pinned in
+ * src/lcsas/db/schema.py / tests/unit/test_schema_v5_columns_frozen.py.
  */
 int lcsas_catalog_find_pack(lcsas_catalog *c, const char *sha256_hex,
                             lcsas_catalog_pack *out);
 
 /*
  * Given a pack_id, list volumes that contain it.  Writes up to
- * max_vols entries into `out`; returns the number written, or -1.
+ * max_vols entries into `out`; returns the number written (>= 0), or -1
+ * on query error (schema skew -- a warning is emitted to stderr).
  */
 int lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
                                    lcsas_catalog_volume *out,

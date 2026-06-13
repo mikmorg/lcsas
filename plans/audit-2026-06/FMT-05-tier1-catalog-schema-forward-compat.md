@@ -104,3 +104,6 @@ disciplined. No schema change in this plan.
 **2 focused days**: 1d C changes + C test (incl. cross-arch bin regen via `make
 keyshare-arches`-style flow + qemu spot-check), 0.5d Python frozen-surface test, 0.5d
 schema.py policy text + prompt-message coordination.
+
+---
+**Implemented:** 2026-06-13. As planned: catalog.c tri-states find_pack (0/1/-1) + caches schema_version + one-time skew warning (>v5); disc_locator.c three-way prompt branch; volumes_for_pack warns on prepare error. schema.py gains TIER1_FROZEN_SURFACE block + test_schema_v5_columns_frozen.py (always-on). test_catalog.c v6/renamed-column case (stderr-capture, warn-once, returns -1). All 5 committed lcsas-restore bins rebuilt via zig cc; qemu/wine hardening green.

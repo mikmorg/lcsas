@@ -98,8 +98,9 @@ int main(void)
         }
     }
 
-    if (lcsas_catalog_find_pack(c, "deadbeef", &pk) != -1) {
-        fprintf(stderr, "FAIL: find_pack should miss\n");
+    /* A genuine miss against a readable v5 surface returns 1 (not -1). */
+    if (lcsas_catalog_find_pack(c, "deadbeef", &pk) != 1) {
+        fprintf(stderr, "FAIL: find_pack miss should return 1\n");
         fails++;
     }
 
@@ -165,6 +166,112 @@ int main(void)
     }
 
     unlink(db_path);
+
+    /* ── FMT-05: schema forward-compat (version skew) ──────────────────
+     * Build a v6 catalog whose `packs.sha256` column was renamed to
+     * `content_hash` (a hypothetical future breaking change tier-1 does
+     * NOT understand).  Assert:
+     *   - open succeeds (the file format is fine; only the column moved);
+     *   - the newer-schema warning is emitted exactly once on stderr,
+     *     and only after a lookup is attempted;
+     *   - find_pack returns -1 (query error), distinguishable from the
+     *     1 (genuine miss) we proved above on the v5 fixture.
+     */
+    {
+        const char *v6_path = "/tmp/lcsas_catalog_test_v6.db";
+        const char *cap_path = "/tmp/lcsas_catalog_test_v6.stderr";
+        sqlite3 *v6 = NULL;
+        lcsas_catalog *cv6;
+        FILE *cap;
+        char line[512];
+        int warn_count = 0;
+        int saved_fd;
+        fpos_t saved_pos;
+        int rc6;
+
+        unlink(v6_path);
+        unlink(cap_path);
+
+        if (sqlite3_open(v6_path, &v6) != SQLITE_OK) {
+            fprintf(stderr, "FAIL: sqlite3_open v6\n");
+            return 1;
+        }
+        /* schema_version = 6; packs.sha256 -> packs.content_hash. */
+        if (exec_sql(v6,
+            "CREATE TABLE schema_version (version INTEGER, applied_at DATETIME);"
+            "INSERT INTO schema_version VALUES (6, datetime('now'));"
+            "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  content_hash TEXT UNIQUE NOT NULL, size_bytes INTEGER,"
+            "  repo_id TEXT);"
+            "INSERT INTO packs (content_hash, size_bytes, repo_id) VALUES"
+            "  ('aa11', 1024, 'repo-abc');"
+            ) < 0) {
+            fprintf(stderr, "FAIL: v6 schema setup\n");
+            sqlite3_close(v6);
+            return 1;
+        }
+        sqlite3_close(v6);
+
+        /* Redirect stderr to a file so we can count the warning lines.
+         * fflush + dup the fd, freopen, then restore afterwards. */
+        fflush(stderr);
+        fgetpos(stderr, &saved_pos);
+        saved_fd = dup(fileno(stderr));
+        if (freopen(cap_path, "w", stderr) == NULL) {
+            fprintf(stdout, "FAIL: freopen stderr\n");
+            return 1;
+        }
+
+        cv6 = lcsas_catalog_open(v6_path);
+
+        /* Two lookups: the warning must fire at most once across both. */
+        rc6 = -2;
+        if (cv6) {
+            rc6 = lcsas_catalog_find_pack(cv6, "aa11", &pk);
+            (void)lcsas_catalog_find_pack(cv6, "bb22", &pk);
+            lcsas_catalog_close(cv6);
+        }
+
+        /* Restore stderr. */
+        fflush(stderr);
+        dup2(saved_fd, fileno(stderr));
+        close(saved_fd);
+        clearerr(stderr);
+        fsetpos(stderr, &saved_pos);
+
+        if (!cv6) {
+            fprintf(stderr, "FAIL: v6 catalog open returned NULL\n");
+            fails++;
+        }
+        if (rc6 != -1) {
+            fprintf(stderr,
+                "FAIL: find_pack on v6/renamed column returned %d (want -1)\n",
+                rc6);
+            fails++;
+        }
+
+        cap = fopen(cap_path, "r");
+        if (!cap) {
+            fprintf(stderr, "FAIL: cannot reopen captured stderr\n");
+            fails++;
+        } else {
+            while (fgets(line, sizeof line, cap)) {
+                if (strstr(line, "is newer than this recovery binary")) {
+                    warn_count++;
+                }
+            }
+            fclose(cap);
+        }
+        if (warn_count != 1) {
+            fprintf(stderr,
+                "FAIL: newer-schema warning emitted %d times (want 1)\n",
+                warn_count);
+            fails++;
+        }
+
+        unlink(v6_path);
+        unlink(cap_path);
+    }
 
     if (fails == 0) printf("test_catalog: OK\n");
     return fails ? 1 : 0;

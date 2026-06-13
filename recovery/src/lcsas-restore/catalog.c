@@ -13,8 +13,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * Highest schema version whose query surface this binary understands.
+ * The frozen v5 surface is enumerated in src/lcsas/db/schema.py
+ * ("TIER-1 FROZEN SURFACE") and pinned by
+ * tests/unit/test_schema_v5_columns_frozen.py.  A catalog whose version
+ * exceeds this may have renamed/dropped a column tier-1 queries; we warn
+ * once and surface query errors as errors (not misses) so the heir is
+ * told to prefer same-generation tooling.
+ */
+#define LCSAS_TIER1_SCHEMA_MAX 5
+
 struct lcsas_catalog {
     sqlite3 *db;
+    int schema_version;   /* cached at open; -1 if unreadable */
+    int skew_warned;      /* emit the newer-schema warning at most once */
 };
 
 lcsas_catalog *
@@ -26,6 +39,8 @@ lcsas_catalog_open(const char *path)
     c = (lcsas_catalog *)malloc(sizeof(*c));
     if (!c) return NULL;
     c->db = NULL;
+    c->schema_version = -1;
+    c->skew_warned = 0;
     rc = sqlite3_open_v2(path, &c->db, SQLITE_OPEN_READONLY, NULL);
     if (rc != SQLITE_OK) {
         fprintf(stderr, "catalog open failed: %s\n",
@@ -34,7 +49,28 @@ lcsas_catalog_open(const char *path)
         free(c);
         return NULL;
     }
+    c->schema_version = lcsas_catalog_schema_version(c);
     return c;
+}
+
+/*
+ * Emit the newer-schema warning to stderr at most once per catalog.
+ * Called from the lookup paths so it fires only when disc-swap hints are
+ * actually being consulted, not merely on open.
+ */
+static void
+warn_schema_skew_once(lcsas_catalog *c)
+{
+    if (c->skew_warned) return;
+    if (c->schema_version > LCSAS_TIER1_SCHEMA_MAX) {
+        fprintf(stderr,
+            "[catalog] schema v%d is newer than this recovery binary "
+            "(supports v%d). Disc-swap hints may be missing -- prefer the "
+            "restore tooling from the same-generation META disc, or proceed "
+            "and insert discs when prompted.\n",
+            c->schema_version, LCSAS_TIER1_SCHEMA_MAX);
+        c->skew_warned = 1;
+    }
 }
 
 void
@@ -85,7 +121,10 @@ lcsas_catalog_find_pack(lcsas_catalog *c, const char *sha256_hex,
     rc = sqlite3_prepare_v2(c->db,
             "SELECT pack_id, sha256, size_bytes, repo_id "
             "FROM packs WHERE sha256 = ?", -1, &st, NULL);
-    if (rc != SQLITE_OK) return -1;
+    if (rc != SQLITE_OK) {
+        warn_schema_skew_once(c);
+        return -1;
+    }
     sqlite3_bind_text(st, 1, sha256_hex, -1, SQLITE_STATIC);
     if (sqlite3_step(st) == SQLITE_ROW) {
         out->pack_id = sqlite3_column_int64(st, 0);
@@ -95,7 +134,7 @@ lcsas_catalog_find_pack(lcsas_catalog *c, const char *sha256_hex,
         found = 1;
     }
     sqlite3_finalize(st);
-    return found ? 0 : -1;
+    return found ? 0 : 1;
 }
 
 int
@@ -114,7 +153,10 @@ lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
             "WHERE vp.pack_id = ? AND v.status != 'DESTROYED' "
             "ORDER BY v.volume_id",
             -1, &st, NULL);
-    if (rc != SQLITE_OK) return -1;
+    if (rc != SQLITE_OK) {
+        warn_schema_skew_once(c);
+        return -1;
+    }
     sqlite3_bind_int64(st, 1, pack_id);
     while (count < max_vols && sqlite3_step(st) == SQLITE_ROW) {
         out[count].volume_id = sqlite3_column_int64(st, 0);

@@ -18,6 +18,37 @@ class WedgedMigrationError(RuntimeError):
     """Catalog holds ``*_old`` leftovers from an interrupted migration."""
 
 # ---------------------------------------------------------------------------
+# TIER-1 FROZEN SURFACE  (FMT-05)
+# ---------------------------------------------------------------------------
+# The C tier-1 recovery reader (recovery/src/lcsas-restore/catalog.c) is
+# burned onto every disc and can NEVER be patched once written.  It hard-codes
+# SQL against the columns below.  An older meta-disc binary will routinely be
+# paired with newer data discs, so these (table, column) pairs are FROZEN:
+#
+#   schema_version : version
+#   packs          : pack_id, sha256, size_bytes, repo_id
+#   volume_packs   : volume_id, pack_id
+#   volumes        : volume_id, label, status   (+ the status != 'DESTROYED'
+#                    filter, so 'DESTROYED' must remain a valid status value)
+#
+# POLICY: future schema bumps must be ADDITIVE only over this surface — never
+# rename, drop, or re-type these columns, and never remove 'DESTROYED' from the
+# volumes.status CHECK.  catalog.c whose version > LCSAS_TIER1_SCHEMA_MAX (5)
+# now warns and reports query errors distinctly from misses, but already-burned
+# binaries can only be protected by writer-side discipline here.  The pins are
+# enforced by tests/unit/test_schema_v5_columns_frozen.py (always-on CI).
+TIER1_FROZEN_SURFACE: dict[str, tuple[str, ...]] = {
+    "schema_version": ("version",),
+    "packs": ("pack_id", "sha256", "size_bytes", "repo_id"),
+    "volume_packs": ("volume_id", "pack_id"),
+    "volumes": ("volume_id", "label", "status"),
+}
+
+# Status value the tier-1 DESTROYED filter depends on; must stay in the
+# volumes.status CHECK constraint forever.
+TIER1_REQUIRED_VOLUME_STATUS = "DESTROYED"
+
+# ---------------------------------------------------------------------------
 # DDL Statements
 # ---------------------------------------------------------------------------
 
