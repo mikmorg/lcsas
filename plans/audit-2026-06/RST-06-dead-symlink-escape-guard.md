@@ -94,3 +94,6 @@ upstream restic's verbatim restore).
 ## Effort
 
 0.5 day including test rewrites. No special environment.
+
+---
+**Implemented:** 2026-06-13. As planned: dropped the dead try/except, branch on the `is_relative_to` boolean, skip+log+record escaping relative symlinks as `skipped-symlink` manifest entries (RST-03 already landed). Un-skipped the unit test (now asserts manifest), rewrote the path-traversal file to drive the real `_restore_tree`, added a standalone subprocess escape test. Documented the policy in the `_restore_tree` docstring and `recovery/docs/TIERS.txt`. No C/binary changes; `standalone_restorer.py` is generated, so the fix propagates at next stage/meta build.

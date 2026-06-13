@@ -1,109 +1,153 @@
-"""Unit tests for path traversal protection in restic_fallback restore."""
+"""Path-traversal / symlink-escape protection in the tier-3 restorer.
 
+These tests drive the **production** ``PurePythonRestorer._restore_tree``
+(via ``restore()``) against crafted tree blobs in a synthetic restic repo,
+rather than re-implementing the guard logic inline. RST-06: the escaping
+relative-symlink case previously asserted against a hand-rolled
+``relative_to()`` copy, which gave false assurance while the real guard was
+dead code.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+
+from lcsas.restore.restic_fallback import MasterKey, PurePythonRestorer
+
+from .test_restic_fallback import (
+    MASTER_ENCRYPT,
+    MASTER_MAC_K,
+    MASTER_MAC_R,
+    PASSWORD,
+    _encrypt_with_master,
+    _make_key_file,
+)
 
 
-class TestPathTraversalProtection:
-    """Test that _restore_tree sanitizes node names and symlink targets."""
+def _build_repo_with_tree(tmp_path: Path, tree_nodes: list) -> Path:
+    """Build a synthetic restic repo whose root tree has *tree_nodes*."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
+    _make_key_file(mk, PASSWORD, repo)
 
-    @patch("lcsas.restore.restic_fallback._log")
-    def test_reject_node_name_with_parent_dir_component(self, mock_log):
-        """Node names with ../ should be rejected to prevent traversal."""
-        from lcsas.restore.restic_fallback import PurePythonRestorer
+    file_content = b"safe file\n"
+    file_id = hashlib.sha256(file_content).hexdigest()
 
-        restorer = MagicMock(spec=PurePythonRestorer)
-        blob_data = b'{"nodes":[{"name":"../../../etc/passwd","type":"file"}]}'
-        restorer._read_blob = MagicMock(return_value=blob_data)
+    root_tree = json.dumps({"nodes": tree_nodes}).encode()
+    root_tree_id = hashlib.sha256(root_tree).hexdigest()
 
-        # Test the sanitization logic
-        import json
+    pack_data = bytearray()
+    blobs_info = []
+    for content, bid, btype in [
+        (file_content, file_id, "data"),
+        (root_tree, root_tree_id, "tree"),
+    ]:
+        enc = _encrypt_with_master(content)
+        blobs_info.append(
+            {"id": bid, "type": btype, "offset": len(pack_data), "length": len(enc)}
+        )
+        pack_data.extend(enc)
 
-        tree_data = restorer._read_blob("tree-id")
-        tree_doc = json.loads(tree_data)
+    pack_id = hashlib.sha256(bytes(pack_data)).hexdigest()
+    pack_dir = repo / "data" / pack_id[:2]
+    pack_dir.mkdir(parents=True)
+    (pack_dir / pack_id).write_bytes(bytes(pack_data))
 
-        for node in tree_doc.get("nodes", []):
-            name = node["name"]
-            safe_name = Path(name).name
-            # Safe name should be just "passwd", not the full traversal path
-            assert safe_name == "passwd"
-            assert safe_name != name, "Dangerous path should be sanitized"
+    idx_doc = json.dumps({"packs": [{"id": pack_id, "blobs": blobs_info}]}).encode()
+    idx_dir = repo / "index"
+    idx_dir.mkdir()
+    idx_id = hashlib.sha256(idx_doc).hexdigest()
+    (idx_dir / idx_id).write_bytes(_encrypt_with_master(idx_doc))
 
-    def test_reject_absolute_symlink_target(self, tmp_path):
-        """Symlink targets that are absolute should be rejected."""
-        target_dir = tmp_path / "target"
-        target_dir.mkdir()
+    snap_doc = json.dumps(
+        {
+            "time": "2026-04-01T00:00:00Z",
+            "tree": root_tree_id,
+            "paths": ["/test"],
+            "hostname": "testhost",
+        }
+    ).encode()
+    snap_dir = repo / "snapshots"
+    snap_dir.mkdir()
+    snap_id = hashlib.sha256(snap_doc).hexdigest()
+    (snap_dir / snap_id).write_bytes(_encrypt_with_master(snap_doc))
 
-        # Simulate absolute symlink target
-        link_target = "/etc/passwd"
+    config_doc = json.dumps({"version": 2, "id": "tree-test"}).encode()
+    (repo / "config").write_bytes(_encrypt_with_master(config_doc))
 
-        # This should be detected as dangerous
-        is_absolute = Path(link_target).is_absolute()
-        assert is_absolute, "Absolute path should be detected"
+    return repo
 
-    def test_reject_symlink_target_escaping_tree(self, tmp_path):
-        """Symlink targets that resolve outside target_dir should be rejected."""
-        target_dir = tmp_path / "target"
-        target_dir.mkdir()
-        node_parent = target_dir / "dir"
-        node_parent.mkdir()
 
-        # Create a symlink target that escapes the target_dir
-        link_target = "../../outside"
+class TestSymlinkEscapeProtection:
+    """Drive the real restorer; assert escaping links never materialize."""
 
-        # Resolve the target relative to the node's parent
-        resolved = (node_parent / link_target).resolve()
+    def test_reject_node_name_with_parent_dir_component(self, tmp_path, capsys):
+        """Node names with ``../`` are sanitized to the basename and skipped."""
+        repo = _build_repo_with_tree(
+            tmp_path,
+            [
+                {"name": "../../../etc/passwd", "type": "file", "content": []},
+                {"name": "safe.txt", "type": "file", "content": []},
+            ],
+        )
+        target = tmp_path / "restored"
+        PurePythonRestorer(repo, password=PASSWORD).restore(target=target)
+        # The traversal node must not escape the target.
+        assert not (tmp_path / "etc" / "passwd").exists()
+        assert not (tmp_path.parent / "passwd").exists()
+        assert "suspicious name" in capsys.readouterr().err
 
-        # Check if it escapes the target directory
-        try:
-            resolved.relative_to(target_dir.resolve())
-            escapes = False
-        except ValueError:
-            escapes = True
+    def test_reject_absolute_symlink_target(self, tmp_path, capsys):
+        """Absolute symlink targets are skipped (never created)."""
+        repo = _build_repo_with_tree(
+            tmp_path,
+            [{"name": "evil.link", "type": "symlink", "linktarget": "/etc/passwd"}],
+        )
+        target = tmp_path / "restored"
+        PurePythonRestorer(repo, password=PASSWORD).restore(target=target)
+        assert not (target / "evil.link").is_symlink()
+        assert not (target / "evil.link").exists()
+        assert "absolute target" in capsys.readouterr().err
 
-        assert escapes, "Symlink target ../../outside should escape target_dir"
+    def test_reject_symlink_target_escaping_tree(self, tmp_path, capsys):
+        """RST-06: a relative target resolving outside the target dir is
+        skipped + logged + recorded, NOT created (the audit repro)."""
+        repo = _build_repo_with_tree(
+            tmp_path,
+            [
+                {
+                    "name": "escape.link",
+                    "type": "symlink",
+                    "linktarget": "../../../../etc",
+                }
+            ],
+        )
+        target = tmp_path / "restored"
+        PurePythonRestorer(repo, password=PASSWORD).restore(target=target)
+        # No symlink, not even a dangling one.
+        assert not (target / "escape.link").is_symlink()
+        assert not (target / "escape.link").exists()
+        captured = capsys.readouterr()
+        assert "out-of-bounds" in captured.err
+        manifest = (target / "RESTORE_FAILURES.txt").read_text()
+        assert "skipped-symlink" in manifest
 
     def test_allow_relative_symlink_within_tree(self, tmp_path):
-        """Relative symlinks that stay within target_dir should be allowed."""
-        target_dir = tmp_path / "target"
-        target_dir.mkdir()
-        subdir = target_dir / "subdir"
-        subdir.mkdir()
-
-        # Valid relative symlink within the tree
-        link_target = "../other_file"
-
-        # Resolve relative to subdir
-        resolved = (subdir / link_target).resolve()
-
-        # Should be within target_dir
-        try:
-            resolved.relative_to(target_dir.resolve())
-            within = True
-        except ValueError:
-            within = False
-
-        assert within, "Relative symlink ../other_file should stay within target_dir"
-
-    def test_node_name_with_slashes_stripped(self):
-        """Node names with directory separators should be stripped to basename only."""
-        # Names like "dir/file" should become just "file"
-        names = [
-            "simple.txt",              # OK
-            "dir/file.txt",            # Should become "file.txt"
-            "../../../etc/passwd",     # Should become "passwd"
-            "./file.txt",              # Should become "file.txt"
-        ]
-
-        for name in names:
-            safe_name = Path(name).name
-            assert "/" not in safe_name, f"Safe name {safe_name!r} should not contain /"
-            assert ".." not in safe_name, f"Safe name {safe_name!r} should not contain .."
-
-    def test_empty_node_name_rejected(self):
-        """Node names that resolve to empty after sanitization should be rejected."""
-        # Edge case: name is just a directory separator
-        for name in [".", "..", "/", "///", ""]:
-            safe_name = Path(name).name
-            if not safe_name:  # Empty basename means it should be rejected
-                assert safe_name == "", f"Name {name!r} should sanitize to empty"
+        """Legitimate in-tree relative symlinks are still restored."""
+        repo = _build_repo_with_tree(
+            tmp_path,
+            [
+                {"name": "actual.txt", "type": "file", "content": []},
+                {"name": "link.txt", "type": "symlink", "linktarget": "actual.txt"},
+            ],
+        )
+        target = tmp_path / "restored"
+        PurePythonRestorer(repo, password=PASSWORD).restore(target=target)
+        link = target / "link.txt"
+        assert link.is_symlink()
+        assert Path(link.readlink()) == Path("actual.txt")
+        # No manifest is written when nothing failed.
+        assert not (target / "RESTORE_FAILURES.txt").exists()

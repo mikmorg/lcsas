@@ -1817,25 +1817,27 @@ class TestRestoreTreeSecurityPaths:
         captured = capsys.readouterr()
         assert "absolute target" in captured.err
 
-    @pytest.mark.skip(
-        reason=(
-            "Lines 715-721: Path.is_relative_to() returns bool (never raises "
-            "ValueError) on Python 3.9+, so the except-ValueError branch is "
-            "dead code on the project's minimum interpreter (Python 3.11)."
-        )
-    )
     def test_symlink_escaping_target_skipped(self, tmp_path, capsys):
-        """Lines 715-721: symlink resolving outside target directory is skipped."""
+        """RST-06: symlink resolving outside target directory is skipped,
+        logged, and recorded in the failure manifest (was dead code: the
+        boolean from is_relative_to() was discarded under try/except
+        ValueError, which never raises, so escaping links were created)."""
         repo, _ = self._build_repo_with_tree(tmp_path, [
             {"name": "escape.link", "type": "symlink",
-             "linktarget": "../../outside"},
+             "linktarget": "../../../../etc"},
         ])
         target = tmp_path / "restored"
         restorer = PurePythonRestorer(repo, password=PASSWORD)
         restorer.restore(target=target)
+        # No symlink created (not even a dangling one).
+        assert not (target / "escape.link").is_symlink()
         assert not (target / "escape.link").exists()
         captured = capsys.readouterr()
         assert "out-of-bounds" in captured.err
+        # Recorded in the manifest as a skipped-symlink fidelity loss.
+        manifest = (target / "RESTORE_FAILURES.txt").read_text()
+        assert "skipped-symlink" in manifest
+        assert "escape.link" in manifest
 
     def test_symlink_overwrites_existing_file(self, tmp_path):
         """Lines 724-727: pre-existing file at symlink path is replaced."""

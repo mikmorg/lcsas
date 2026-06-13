@@ -1087,6 +1087,15 @@ class PurePythonRestorer:
         continues); a per-node failure records that node and continues
         to the next sibling.  ``strict=True`` restores the legacy
         raise-first behaviour.
+
+        Symlink policy (RST-06): restic restores symlinks verbatim; we
+        deliberately diverge for this last-resort tier.  Absolute targets
+        and relative targets that resolve outside *target_dir* are
+        **skipped and logged** (and recorded in RESTORE_FAILURES.txt as
+        ``skipped-symlink`` entries).  Skipping beats create-and-warn
+        because tier-3 may run as root from a rescue environment, where an
+        escaping link is a sandbox-escape primitive.  In-tree relative
+        links are restored normally.
         """
         try:
             tree_data = self._read_blob(tree_id)
@@ -1163,15 +1172,26 @@ class PurePythonRestorer:
                         )
                         continue
                     # Resolve the symlink target relative to the node's
-                    # parent directory
+                    # parent directory.  ``is_relative_to`` returns a bool
+                    # and never raises — branch on the value (RST-06: the
+                    # old try/except ValueError was dead code, so escaping
+                    # links were created).
                     resolved = (node_path.parent / link_target).resolve()
-                    try:
-                        resolved.is_relative_to(target_dir.resolve())
-                    except ValueError:
-                        # Symlink resolves outside target directory
-                        _log(
+                    if not resolved.is_relative_to(target_dir.resolve()):
+                        # Symlink resolves outside target directory.  We
+                        # deliberately diverge from restic's verbatim
+                        # restore: for the last-resort tier-3 path (which
+                        # may run as root from a rescue environment) an
+                        # escaping link is skipped, logged, and recorded in
+                        # RESTORE_FAILURES.txt so the fidelity loss is
+                        # visible rather than planting a sandbox escape.
+                        msg = (
                             f"Skipping symlink {node_path.name} with "
                             f"out-of-bounds target (would escape to {resolved})"
+                        )
+                        _log(msg)
+                        self._failures.append(
+                            (str(node_path), "", f"skipped-symlink: {link_target}")
                         )
                         continue
                     # Target is valid; create the symlink

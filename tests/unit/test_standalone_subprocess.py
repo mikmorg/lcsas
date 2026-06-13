@@ -60,7 +60,10 @@ def _encrypt_with_master(plaintext: bytes) -> bytes:
 
 
 def _build_repo_and_script(
-    tmp_path: Path, *, corrupt_first_blob: bool = False
+    tmp_path: Path,
+    *,
+    corrupt_first_blob: bool = False,
+    extra_nodes: list[dict] | None = None,
 ) -> tuple[Path, Path, Path]:
     """Build a synthetic repo + the standalone_restorer.py script.
 
@@ -68,6 +71,9 @@ def _build_repo_and_script(
 
     If *corrupt_first_blob*, the file data blob's ciphertext is flipped
     in the pack so its MAC check fails on read (RST-03 skip path).
+
+    *extra_nodes* are appended to the root tree's node list verbatim
+    (e.g. an escaping-symlink node for the RST-06 guard test).
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -100,19 +106,20 @@ def _build_repo_and_script(
     file_content = b"Standalone subprocess test data!\n"
     file_id = hashlib.sha256(file_content).hexdigest()
 
-    root_tree = json.dumps({
-        "nodes": [{
-            "name": "standalone_test.txt",
-            "type": "file",
-            "mode": 0o644,
-            "mtime": "2026-01-01T00:00:00.000000000Z",
-            "atime": "2026-01-01T00:00:00.000000000Z",
-            "ctime": "2026-01-01T00:00:00.000000000Z",
-            "uid": 1000, "gid": 1000,
-            "size": len(file_content),
-            "content": [file_id],
-        }],
-    }).encode()
+    root_nodes: list[dict] = [{
+        "name": "standalone_test.txt",
+        "type": "file",
+        "mode": 0o644,
+        "mtime": "2026-01-01T00:00:00.000000000Z",
+        "atime": "2026-01-01T00:00:00.000000000Z",
+        "ctime": "2026-01-01T00:00:00.000000000Z",
+        "uid": 1000, "gid": 1000,
+        "size": len(file_content),
+        "content": [file_id],
+    }]
+    if extra_nodes:
+        root_nodes.extend(extra_nodes)
+    root_tree = json.dumps({"nodes": root_nodes}).encode()
     root_tree_id = hashlib.sha256(root_tree).hexdigest()
 
     # Pack
@@ -320,6 +327,49 @@ class TestStandaloneSubprocess:
         manifest = target / "RESTORE_FAILURES.txt"
         assert manifest.is_file()
         assert "standalone_test.txt" in manifest.read_text()
+
+    def test_escaping_symlink_not_created(self, tmp_path):
+        """RST-06: the generated script must skip an escaping relative
+        symlink — no out-of-target link is created, and the loss is
+        recorded in the manifest (exit 2)."""
+        repo, pw_file, script = _build_repo_and_script(
+            tmp_path,
+            extra_nodes=[{
+                "name": "escape.link",
+                "type": "symlink",
+                "linktarget": "../../../../etc",
+            }],
+        )
+        target = tmp_path / "output"
+        target.mkdir()
+
+        result = subprocess.run(
+            [
+                sys.executable, str(script),
+                "--repo", str(repo),
+                "--password-file", str(pw_file),
+                "--target", str(target),
+                "--interactive", "off",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        # The escaping symlink is a recorded skip → exit 2.
+        assert result.returncode == 2, (
+            f"Expected exit 2 for skipped symlink, got {result.returncode}.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        link = target / "escape.link"
+        assert not link.is_symlink(), "escaping symlink must NOT be created"
+        assert not link.exists()
+        # The legitimate file still restored.
+        assert (target / "standalone_test.txt").is_file()
+        manifest = target / "RESTORE_FAILURES.txt"
+        assert manifest.is_file()
+        manifest_text = manifest.read_text()
+        assert "skipped-symlink" in manifest_text
+        assert "escape.link" in manifest_text
 
     def test_script_has_no_lcsas_imports(self, tmp_path):
         """The generated script must not contain any 'from lcsas' imports."""

@@ -147,6 +147,26 @@ tier 3 from a NEWER meta disc against those old data discs -- the
 restorer reads the data discs' packs, the script comes from the meta
 disc.
 
+TIER 3: SYMLINK POLICY (deliberate divergence from restic)
+
+restic restores symlinks verbatim.  Tier 3 does NOT: it may run as root
+from a rescue environment, where a symlink whose target escapes the
+restore root is a sandbox-escape primitive (a later write through the
+link lands outside the restore directory).  So tier 3 SKIPS and LOGS:
+
+  * symlinks with an ABSOLUTE target (e.g. /etc/passwd), and
+  * RELATIVE symlinks that resolve OUTSIDE the restore target
+    (e.g. linktarget ../../../../etc).
+
+Each skipped link is recorded in RESTORE_FAILURES.txt as a
+``skipped-symlink`` entry so the fidelity loss is visible (and counts
+toward the exit-2 "K file(s) skipped" outcome) rather than silently
+planting an escape.  In-tree relative symlinks restore normally.
+
+NOTE for ALREADY-BURNED data discs: the same generation rule applies --
+discs burned before RST-06 carry a dead guard that created escaping
+links; recover those from a newer meta disc to get the skip behaviour.
+
 TIER 3: ZSTD DECOMPRESSION (rustic v2 default)
 
 rustic v2 repos are zstd-compressed by default, so tier 3 MUST be able
