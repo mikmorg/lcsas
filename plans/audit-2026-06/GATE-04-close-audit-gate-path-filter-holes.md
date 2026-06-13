@@ -144,3 +144,6 @@ No catalog/schema impact.
 
 1 day: 0.25 workflow edits, 0.25 C smoke step (verify gcc-only build works on
 ubuntu-latest), 0.5 path-filter test + scratch-branch trigger verification.
+
+---
+**Implemented:** 2026-06-13. As planned, with two scope-accurate notes: (1) `recovery/src/lcsas-keyshare/**` was already in the audit-gate filter as a file-pin (added by KEY-06); the broadened `recovery/src/**` glob subsumes it. (2) The `recovery-hardening` CI job already ran `make -C recovery all test` (GATE-02); this plan adds the same smoke step to the always-on `test` job per the Fix design, so C build+unit-test coverage no longer depends on that one job. Path-filter test verified red-first against the pre-fix filter (ghost `sanitize.sh` + uncovered vendored/ecc/init/iso9660 dirs).

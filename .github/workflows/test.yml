@@ -75,6 +75,13 @@ jobs:
       - name: Install LCSAS (editable, with dev deps)
         run: make dev
 
+      - name: C smoke (build all recovery binaries + run C unit tests)
+        # Always-on, unconditional: audit-gate's path filter can drift again
+        # (GATE-04), but this cheap gcc-only build cannot be filtered out of a
+        # push/PR. After this lands, no C change anywhere under recovery/src or
+        # recovery/vendored can merge unbuilt or with a failing C unit test.
+        run: make -C recovery all test
+
       - name: Run unit tests
         run: make test-unit
 

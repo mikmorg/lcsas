@@ -1,24 +1,29 @@
 name: audit-gate
 
 on:
+  # Directory globs over file pins: the old hand-picked file list silently
+  # excluded vendored C, keyshare/iso9660/init/ecc sources, and every
+  # recovery/scripts file, and carried a ghost `sanitize.sh` entry — a
+  # behavior-breaking edit there merged unbuilt and untested (GATE-04). These
+  # globs subsume that list. test_workflow_path_filter.py guards them.
   push:
     paths:
-      - "recovery/src/lcsas-restore/**"
-      - "recovery/src/lcsas-keyshare/**"
+      - "recovery/src/**"
       - "recovery/tests/**"
       - "recovery/fuzz/**"
-      - "recovery/scripts/coverage_check.py"
-      - "recovery/scripts/sanitize.sh"
+      - "recovery/vendored/**"
+      - "recovery/scripts/**"
       - "recovery/Makefile"
+      - "recovery/MANIFEST.sha256"
   pull_request:
     paths:
-      - "recovery/src/lcsas-restore/**"
-      - "recovery/src/lcsas-keyshare/**"
+      - "recovery/src/**"
       - "recovery/tests/**"
       - "recovery/fuzz/**"
-      - "recovery/scripts/coverage_check.py"
-      - "recovery/scripts/sanitize.sh"
+      - "recovery/vendored/**"
+      - "recovery/scripts/**"
       - "recovery/Makefile"
+      - "recovery/MANIFEST.sha256"
 
 jobs:
   audit-gate:
