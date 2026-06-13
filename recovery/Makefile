@@ -80,6 +80,7 @@ TEST_BINS = \
 	$(BUILD)/test_catalog \
 	$(BUILD)/test_disc_locator \
 	$(BUILD)/test_repo \
+	$(BUILD)/test_tree \
 	$(BUILD)/test_zstd \
 	$(BUILD)/test_keyshare
 
@@ -260,6 +261,16 @@ $(BUILD)/test_repo: $(TESTDIR)/test_repo.c \
 	    $(BUILD)/disc_locator.o $(BUILD)/sqlite3.o \
 	    $(BUILD)/zstd_dec.o $(BUILD)/zstddeclib.o \
 	    $(BUILD)/libcrypto.a -lpthread -ldl -o $@
+
+# test_tree: tree-walk depth cap + path-length guard (T1C-04).  Links
+# tree.c with its non-repo helpers; the test file stubs out tree.c's
+# only two repo.c dependencies so no encrypted fixture is needed.
+$(BUILD)/test_tree: $(TESTDIR)/test_tree.c \
+		$(BUILD)/tree.o $(BUILD)/path.o $(BUILD)/json_q.o \
+		$(BUILD)/hex.o $(BUILD)/lcsas_io.o $(BUILD)/b64.o
+	$(CC) $(CFLAGS) -I$(SRCDIR) $(TESTDIR)/test_tree.c \
+	    $(BUILD)/tree.o $(BUILD)/path.o $(BUILD)/json_q.o \
+	    $(BUILD)/hex.o $(BUILD)/lcsas_io.o $(BUILD)/b64.o -o $@
 
 $(BUILD)/test_zstd: $(TESTDIR)/test_zstd.c $(BUILD)/zstd_dec.o $(BUILD)/zstddeclib.o
 	$(CC) $(CFLAGS) -I$(SRCDIR) $(TESTDIR)/test_zstd.c \
@@ -875,10 +886,50 @@ fuzz-keyshare: $(FUZZ_BUILD)/fuzz_slip39_mnemonic
 	    $(FUZZ_DIR)/corpus/slip39/
 	@echo "[fuzz-keyshare] 30min PASS — 0 crashes"
 
+# ── fuzz_tree_restore ────────────────────────────────────────────
+# Drives the full recursive tree-walker (tree.c) over crafted tree
+# blobs (T1C-04).  Link seam: the harness stubs out tree.c's only two
+# repo.c dependencies (lcsas_blob_index_find + lcsas_repo_read_blob),
+# so we link tree.c with its non-repo helpers only.
+FUZZ_TREE_SRCS = \
+    $(SRCDIR)/tree.c \
+    $(SRCDIR)/path.c \
+    $(SRCDIR)/json_q.c \
+    $(SRCDIR)/hex.c \
+    $(SRCDIR)/lcsas_io.c \
+    $(SRCDIR)/b64.c
+
+$(FUZZ_BUILD)/fuzz_tree_restore: $(FUZZ_DIR)/fuzz_tree_restore.c \
+        $(FUZZ_TREE_SRCS)
+	@command -v clang >/dev/null 2>&1 || { echo "[fuzz] need clang (apt install clang)"; exit 1; }
+	@mkdir -p $(FUZZ_BUILD)
+	clang -fsanitize=fuzzer,address,undefined -O1 -g \
+	    -fno-omit-frame-pointer \
+	    -std=c89 -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64 \
+	    -Wno-long-long \
+	    -I $(SRCDIR) \
+	    $(FUZZ_DIR)/fuzz_tree_restore.c \
+	    $(FUZZ_TREE_SRCS) \
+	    -o $(FUZZ_BUILD)/fuzz_tree_restore
+
+fuzz-tree-smoke: $(FUZZ_BUILD)/fuzz_tree_restore
+	$(FUZZ_BUILD)/fuzz_tree_restore \
+	    -max_total_time=60 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/tree/
+	@echo "[fuzz-tree-smoke] 60s PASS — 0 crashes"
+
+fuzz-tree: $(FUZZ_BUILD)/fuzz_tree_restore
+	$(FUZZ_BUILD)/fuzz_tree_restore \
+	    -max_total_time=1800 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/tree/
+	@echo "[fuzz-tree] 30min PASS — 0 crashes"
+
 # ── fuzz-smoke (all harnesses × 60 s) ────────────────────────────
-# Runs all six LibFuzzer harnesses for 60 seconds each (~6 min total).
+# Runs all seven LibFuzzer harnesses for 60 seconds each (~7 min total).
 # Used by the audit-gate composite target below.
-fuzz-smoke: fuzz-json-smoke fuzz-b64-smoke fuzz-zstd-smoke fuzz-path-smoke fuzz-repo-smoke fuzz-keyshare-smoke
+fuzz-smoke: fuzz-json-smoke fuzz-b64-smoke fuzz-zstd-smoke fuzz-path-smoke fuzz-repo-smoke fuzz-keyshare-smoke fuzz-tree-smoke
 	@echo "[fuzz-smoke] all harnesses: 0 crashes"
 
 # ── audit-gate ────────────────────────────────────────────────────
@@ -892,7 +943,7 @@ fuzz-smoke: fuzz-json-smoke fuzz-b64-smoke fuzz-zstd-smoke fuzz-path-smoke fuzz-
 # Steps (in order):
 #   1. coverage-c    — gcov line coverage report (~2 min)
 #   2. sanitize      — ASan + UBSan + LSan gate  (~2 min, needs clang)
-#   3. fuzz-smoke    — 5 harnesses × 60 s        (~5 min, needs clang)
+#   3. fuzz-smoke    — 7 harnesses × 60 s        (~7 min, needs clang)
 #   4. coverage_check — per-file threshold check
 #
 # Expected to run in under 10 min on a 4-core dev machine.
@@ -913,7 +964,7 @@ audit-gate:
 	    --json $(abspath $(BUILD))/coverage.json
 	@echo "[audit-gate] Step 3/4: sanitize"
 	$(MAKE) sanitize
-	@echo "[audit-gate] Step 4/4: fuzz-smoke (5 harnesses × 60 s)"
+	@echo "[audit-gate] Step 4/4: fuzz-smoke (7 harnesses × 60 s)"
 	$(MAKE) fuzz-smoke
 	@echo "[audit-gate] PASS"
 
@@ -942,4 +993,4 @@ fault-inject: $(BUILD)/malloc_inject.so
 	python3 scripts/run_fault_inject.py --max-sweep $(MAX_N)
 	@echo "[fault-inject] PASS: 0 crashes across all test binaries"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64 coverage-c sanitize fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-smoke audit-gate fault-inject
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64 coverage-c sanitize fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-smoke audit-gate fault-inject

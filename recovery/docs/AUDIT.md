@@ -25,7 +25,7 @@ make -C recovery audit-gate THRESHOLD=95
 |------|--------|-------------|
 | 1 | `coverage-c` | Rebuilds with `--coverage`, runs C unit tests + tier-1 Python suite, generates gcovr HTML + JSON report |
 | 2 | `sanitize` | Rebuilds with `clang -fsanitize=address,undefined,leak`, runs full test suite.  0 findings = pass |
-| 3 | `fuzz-smoke` | Runs all 5 LibFuzzer harnesses for 60 s each.  0 crashes = pass |
+| 3 | `fuzz-smoke` | Runs all 7 LibFuzzer harnesses for 60 s each.  0 crashes = pass |
 | 4 | `coverage_check` | Per-file threshold check against the gcovr JSON report |
 
 ## Coverage thresholds

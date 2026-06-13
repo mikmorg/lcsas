@@ -147,3 +147,19 @@ old behaviour forever — the fix ships with the next `recovery/bin/*` regenerat
 2 days: 0.5 depth cap + path-length guard + tests, 1.0 fuzz harness + Makefile wiring +
 corpus + one deep run, 0.5 triage/coverage. Local clang toolchain only; qemu re-verify
 of cross-built bins per the usual recovery flow.
+
+---
+**Implemented:** 2026-06-13. As planned, with three notes: (1) the
+fuzz harness immediately surfaced a pre-existing out-of-bounds token
+read in BOTH node loops (`tree_restore_recurse` and `restore_file_node`)
+on a malformed `nodes`/`content` array — fixed by bounding both loops
+with `t < ntoks` (restore_file_node now takes `ntoks`). (2) The C test
+lives in a new `recovery/tests/test_tree.c` (link-seam stubs) rather
+than extending `test_repo.c`, since a >4096-byte path needs a synthetic
+deep chain. (3) The deep-tree pytest uses 1100 levels (not 2000) for
+the over-cap cases: at 2000 levels the *restored* path exceeds 4095
+bytes and the path-length guard fires before depth, so 1100 (>1000 cap,
+~2.2 KB path) isolates the depth-cap/override behaviour. All 6 tracked
+per-target `lcsas-restore` bins regenerated via `zig cc` and verified
+(qemu/wine smoke + "deeper than" string present); out-of-scope iso9660
+toolchain drift reverted.

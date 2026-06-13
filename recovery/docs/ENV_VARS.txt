@@ -145,6 +145,24 @@ LCSAS_MAX_JSON_MIB
             JSON blob can't exhaust a small address space; overriding it
             is an escape hatch, not a routine knob.
 
+LCSAS_MAX_TREE_DEPTH
+  Default:  1000  (opt-in override; default cap always active)
+  Since:    Phase 26 (T1C-04)
+  What:     Maximum directory-tree recursion depth tier-1 will walk.
+            Tier-1 descends subtrees on the C stack (~6 KB per level);
+            1000 levels ~= 6 MB, inside the default 8 MB stack ulimit.
+            A tree deeper than this fails LOUD with a named error
+            ("directory tree deeper than N levels at <path>") instead of
+            crashing with a stackless SIGSEGV.  Raise it ONLY together
+            with 'ulimit -s unlimited' to restore a genuinely deeper
+            layout; otherwise prefer tier-2 (rustic).
+  Why:      Opt-IN override of an always-safe default.  Before the cap a
+            ~1300+ level tree killed the process by signal with zero
+            diagnostic — indistinguishable from "the software is broken"
+            to a non-technical heir.  The cap converts that into an
+            actionable, recoverable error.  Overriding it is an escape
+            hatch, not a routine knob.
+
 LCSAS_TIER_FALLBACK
   Default:  0  (opt-in / default OFF)
   Since:    Phase 24
@@ -334,6 +352,7 @@ LCSAS_MOUNT_DIRS            unset     opt-in      non-standard disc mounts
 LCSAS_PACK_CACHE_DIR        auto      opt-out     set ''  to disable cache
 LCSAS_DRAIN_CHUNK_PACKS     0         opt-in      set 100-500 for slow optical
 LCSAS_MAX_JSON_MIB          256       opt-in      lower on tiny 32-bit hosts
+LCSAS_MAX_TREE_DEPTH        1000      opt-in      raise + 'ulimit -s unlimited'
 LCSAS_TIER_FALLBACK         0         opt-in      set 1 to walk cascade
 LCSAS_ALLOW_PYTHON_TIER     1         opt-out     set 0 to ban Python
 LCSAS_PROGRESS              unset     opt-out     set 0 to silence output

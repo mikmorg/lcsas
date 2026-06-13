@@ -5,9 +5,14 @@
  *
  * Memory model: a tree blob is loaded, parsed, and the loop walks
  * each child in source order.  Subtree recursion is iterative-by-
- * recursion (C stack); for very deep trees this could overflow, but
- * restic trees are usually shallow.  For pathological depths use
- * `ulimit -s unlimited` before invoking.
+ * recursion (C stack).  Each frame holds a few KB of fixed buffers
+ * plus the parsed tokens + decrypted blob (freed only after the
+ * children return), so depth is bounded to keep the walk inside the
+ * default 8 MB stack: recursion is capped at lcsas_tree_max_depth
+ * (default 1000) and a deeper tree fails loud with a named error
+ * instead of a SIGSEGV (T1C-04).  Operators with a genuinely deeper
+ * layout raise LCSAS_MAX_TREE_DEPTH and the stack ulimit, or fall
+ * back to tier-2 (rustic).
  */
 #include "tree.h"
 #include "path.h"
@@ -43,6 +48,17 @@
 
 #define LCSAS_PROGRESS_DEFAULT_BLOBS_PER_TICK 16ULL
 #define LCSAS_PROGRESS_DEFAULT_BYTES_PER_TICK (1024ULL * 1024ULL)
+
+/* T1C-04: hard cap on tree-walk recursion depth.  Each recursion frame
+ * costs ~6 KB of stack (fixed name/type/path buffers) plus the live
+ * tokens + decrypted blob held until the children return, so an
+ * unbounded walk SIGSEGVs on a pathologically deep tree.  1000 levels
+ * ~= 6 MB stack, inside the default 8 MB ulimit with margin, and the
+ * 4096-byte node_path buffer bounds restorable depth to roughly that
+ * order anyway.  main.c lets LCSAS_MAX_TREE_DEPTH override it (escape
+ * hatch for a genuinely deeper layout, paired with `ulimit -s
+ * unlimited`). */
+int lcsas_tree_max_depth = 1000;
 
 /* Issue #192 — hardlink reconstruction.
  *
@@ -488,6 +504,7 @@ restore_file_node(const char *repo_path,
                   const lcsas_blob_index *ix,
                   const char *src,
                   const lcsas_json_tok *toks,
+                  long ntoks,
                   long node_idx,
                   const char *target_path,
                   struct lcsas_disc_locator *locator,
@@ -638,7 +655,8 @@ restore_file_node(const char *repo_path,
         blob_count = toks[content_idx].size;
     }
 
-    for (t = content_idx + 1; content_idx >= 0 && found < blob_count; t++) {
+    for (t = content_idx + 1;
+         content_idx >= 0 && t < ntoks && found < blob_count; t++) {
         if (toks[t].parent == content_idx
                 && toks[t].type == LCSAS_JSON_STRING) {
             unsigned char id[32];
@@ -773,7 +791,8 @@ tree_restore_recurse(const char *repo_path,
                      const char *target_root,
                      struct lcsas_disc_locator *locator,
                      lcsas_progress *progress,
-                     hardlink_map *hlmap)
+                     hardlink_map *hlmap,
+                     int depth)
 {
     unsigned char tree_id[32];
     const lcsas_blob_loc *loc;
@@ -785,6 +804,19 @@ tree_restore_recurse(const char *repo_path,
     long node_count, found = 0;
     long t;
     int rc = -1;
+
+    /* T1C-04: fail loud before the C stack overflows.  A SIGSEGV here
+     * is indistinguishable from "the recovery software is broken" to a
+     * non-technical heir; a named error is recoverable. */
+    if (depth > lcsas_tree_max_depth) {
+        fprintf(stderr,
+            "ERROR: directory tree deeper than %d levels at %s\n"
+            "       tier-1 caps recursion to avoid crashing; if this depth is\n"
+            "       genuine, re-run with LCSAS_MAX_TREE_DEPTH=<n> and\n"
+            "       'ulimit -s unlimited', or use tier-2 (rustic)\n",
+            lcsas_tree_max_depth, target_dir);
+        return -1;
+    }
 
     if (lcsas_hex_decode(tree_id_hex, 32, tree_id) != 0) return -1;
     loc = lcsas_blob_index_find(ix, tree_id);
@@ -829,7 +861,12 @@ tree_restore_recurse(const char *repo_path,
     /* mkdir target_dir if needed. */
     lcsas_mkdir_p(target_dir);
 
-    for (t = nodes_arr + 1; found < node_count; t++) {
+    /* T1C-04: bound the walk by ntoks.  A malformed blob (e.g. an
+     * invalid token inside the array) can leave `found < node_count`
+     * forever while t runs past the parsed-token count — reading
+     * toks[t] out of bounds.  The start>=end break below only fires
+     * for well-formed tokens, so the ntoks guard is the real backstop. */
+    for (t = nodes_arr + 1; t < ntoks && found < node_count; t++) {
         if (!(toks[t].parent == nodes_arr
                   && toks[t].type == LCSAS_JSON_OBJECT)) {
             if (toks[t].start >= toks[nodes_arr].end) break;
@@ -880,11 +917,23 @@ tree_restore_recurse(const char *repo_path,
                 }
             }
 
-            snprintf(node_path, sizeof node_path, "%s/%s", target_dir, name_buf);
+            {
+                /* T1C-04: a silently-truncated path restores a file to
+                 * the WRONG location — fail loud like every other
+                 * tier-1 error rather than corrupt the tree. */
+                int plen = snprintf(node_path, sizeof node_path, "%s/%s",
+                                    target_dir, name_buf);
+                if (plen < 0 || (size_t)plen >= sizeof node_path) {
+                    fprintf(stderr,
+                            "ERROR: restored path too long (>4095 bytes): "
+                            "%.200s...\n", target_dir);
+                    goto out;
+                }
+            }
 
             if (strcmp(type_buf, "file") == 0) {
                 if (restore_file_node(repo_path, mk, ix,
-                                      (char *)blob, toks, t, node_path,
+                                      (char *)blob, toks, ntoks, t, node_path,
                                       locator, progress, hlmap) != 0) {
                     fprintf(stderr, "file restore failed: %s\n", node_path);
                     goto out;
@@ -932,7 +981,7 @@ tree_restore_recurse(const char *repo_path,
                     if (tree_restore_recurse(repo_path, mk, ix, sub_hex,
                                              node_path, target_root,
                                              locator, progress,
-                                             hlmap) != 0) {
+                                             hlmap, depth + 1) != 0) {
                         goto out;
                     }
                 }
@@ -1061,7 +1110,7 @@ lcsas_tree_restore(const char *repo_path,
     hardlink_map_init(&hlmap);
     rc = tree_restore_recurse(repo_path, mk, ix, tree_id_hex,
                               target_dir, target_root,
-                              locator, progress, &hlmap);
+                              locator, progress, &hlmap, 0);
     hardlink_map_free(&hlmap);
     return rc;
 }

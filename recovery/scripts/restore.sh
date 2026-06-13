@@ -348,6 +348,12 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           ceiling fails loud (names the file, points at
                           tier-2), never silently skips.  Lower on tiny
                           32-bit hosts.
+  LCSAS_MAX_TREE_DEPTH    Max directory-tree recursion depth the tier-1
+                          binary will walk.  Default 1000 (~6 MB of the
+                          default 8 MB stack).  A deeper tree fails loud
+                          with a named error instead of crashing; raise
+                          this AND run 'ulimit -s unlimited' to restore a
+                          genuinely deeper layout, or use tier-2.
   LCSAS_NO_RELOCATE       1 → don't copy the recovery scripts into
                           RAM before exec (testing / development).
   LCSAS_PROGRESS          0 → silence the periodic tier-3 progress

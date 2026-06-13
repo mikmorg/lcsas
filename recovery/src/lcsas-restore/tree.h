@@ -12,6 +12,15 @@
 struct lcsas_disc_locator;
 
 /*
+ * T1C-04: hard cap on tree-walk recursion depth.  Defaults to 1000
+ * (~6 MB of the default 8 MB stack).  A tree deeper than this fails
+ * loud with a named error instead of a SIGSEGV.  main.c lets
+ * LCSAS_MAX_TREE_DEPTH override it (escape hatch, paired with
+ * `ulimit -s unlimited`).  Also a test seam.
+ */
+extern int lcsas_tree_max_depth;
+
+/*
  * Progress counter shared across recursive lcsas_tree_restore calls.
  *
  * Counters are accumulated as blobs flow through restore_file_node.

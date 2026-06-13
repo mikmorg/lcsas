@@ -45,6 +45,7 @@
 #include "posix_compat.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -385,6 +386,30 @@ main(int argc, char **argv)
             } else {
                 fprintf(stderr,
                         "WARNING: ignoring invalid LCSAS_MAX_JSON_MIB=%s "
+                        "(want a positive integer)\n", env);
+            }
+        }
+    }
+
+    /* T1C-04: optional override of the tree-walk recursion-depth cap.
+     * Defaults to 1000 (see lcsas_tree_max_depth); a deeper tree fails
+     * loud rather than SIGSEGV.  Raising this only makes sense alongside
+     * `ulimit -s unlimited` since each level costs ~6 KB of stack. */
+    {
+        const char *env = getenv("LCSAS_MAX_TREE_DEPTH");
+        if (env && *env) {
+            char *endp = NULL;
+            long d = strtol(env, &endp, 10);
+            if (endp && *endp == '\0' && d > 0 && d <= INT_MAX) {
+                lcsas_tree_max_depth = (int)d;
+                if (verbose) {
+                    fprintf(stderr,
+                            "[lcsas-restore] tree recursion-depth cap: "
+                            "%d\n", lcsas_tree_max_depth);
+                }
+            } else {
+                fprintf(stderr,
+                        "WARNING: ignoring invalid LCSAS_MAX_TREE_DEPTH=%s "
                         "(want a positive integer)\n", env);
             }
         }
