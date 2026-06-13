@@ -256,7 +256,37 @@ _CLI_BLOCK = textwrap.dedent("""\
             return
 
         target = Path(args.target)
-        restorer.restore(target=target, snapshot_id=args.snapshot)
+        # Tolerant by default (tier 3 is the last resort: one bad blob
+        # must NOT abort the whole restore).  A per-file failure is
+        # recorded, the rest of the data is restored, and the count is
+        # surfaced via restorer.failures with a RESTORE_FAILURES.txt
+        # manifest under the target.  Setup-level errors (bad password,
+        # missing/corrupt repo) still fail fast with exit 1 and no
+        # traceback.
+        try:
+            restorer.restore(target=target, snapshot_id=args.snapshot)
+        except KeyboardInterrupt:
+            print("\\n[lcsas-restore] aborted by user.", file=sys.stderr)
+            sys.exit(130)
+        except Exception as exc:
+            print(
+                f"[lcsas-restore] restore could not start: {exc}\\n"
+                "  Check the password, --repo path, and that the repository "
+                "metadata is present.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        if restorer.failures:
+            print(
+                f"[lcsas-restore] {restorer.failures} file(s) could NOT be "
+                f"restored. See {target}/RESTORE_FAILURES.txt for the list.\\n"
+                "  The rest of your data restored successfully. To recover the "
+                "skipped files, re-run from a newer meta disc or an undamaged "
+                "copy of the affected disc.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
 
 
     if __name__ == "__main__":

@@ -164,6 +164,16 @@ class IntegrityError(Exception):
     """MAC verification failed — data corrupted or wrong key."""
 
 
+class _NodeFailed(Exception):  # noqa: N818 — internal control-flow sentinel, not a public error
+    """Internal: a single file node could not be restored.
+
+    Raised by ``_restore_file`` after it has already cleaned up its
+    partial output and recorded the failure, so the ``_restore_tree``
+    caller can log uniformly and ``continue`` without double-recording.
+    Never escapes the module.
+    """
+
+
 def _decrypt_authenticated(
     encrypt_key: bytes,
     mac_k: bytes,
@@ -341,6 +351,7 @@ class PurePythonRestorer:
         pack_search_paths: list[Path] | None = None,
         interactive: bool = True,
         catalog_path: Path | None = None,
+        strict: bool = False,
     ) -> None:
         """Initialize the restorer.
 
@@ -385,10 +396,26 @@ class PurePythonRestorer:
                 for the search order.  This addresses issue #253 -- without
                 it, ``restore.sh``'s one-shot catalog-pick scan misses any
                 catalog that lives on a data disc not yet mounted at startup.
+            strict: If False (default), tree traversal is *tolerant*: a
+                corrupt blob, a missing index entry, or an unreadable
+                pack (after disc-swap retries are exhausted) records a
+                failure and the restore *continues*, so one bad blob can
+                never abort the whole last-resort restore.  After
+                traversal, ``restore()`` writes ``RESTORE_FAILURES.txt``
+                under the target and exposes the count via ``.failures``.
+                If True, the legacy raise-first contract is preserved:
+                the first such error aborts the restore.  Tier 3 (the
+                last-resort restorer) defaults to tolerant; callers that
+                want all-or-nothing semantics opt in explicitly.
         """
         self.repo_path = repo_path
         self.interactive = interactive
         self.catalog_path = catalog_path
+        self._strict = strict
+        # (relative path, blob_id-or-"", reason) for each node that
+        # could not be restored under tolerant traversal.  Reset at the
+        # top of every restore() call.
+        self._failures: list[tuple[str, str, str]] = []
         # Search-path resolution: callers can either rely on the legacy
         # ``repo_path/data`` location or pass an explicit list of mount
         # points (typically each currently-inserted data disc's root).
@@ -441,8 +468,15 @@ class PurePythonRestorer:
 
         Returns:
             SnapshotMeta for the restored snapshot.
+
+        Note:
+            Under the default tolerant mode (``strict=False``), a
+            per-node failure does not raise — the count is available on
+            ``self.failures`` after this returns, and a
+            ``RESTORE_FAILURES.txt`` manifest is written under *target*.
         """
         self._ensure_loaded()
+        self._failures = []
 
         if snapshot_id is not None:
             snap = self._find_snapshot(snapshot_id)
@@ -472,8 +506,55 @@ class PurePythonRestorer:
         # the total — otherwise the operator sees e.g. 47/50 and
         # wonders if the last 3 files were skipped.
         self._emit_progress(force=True)
-        _log("Restore complete.")
+
+        if self._failures:
+            self._write_failure_manifest(target)
+            restored = self._progress_done_files
+            total = restored + len(self._failures)
+            _log(
+                f"Restored {restored:,} of {total:,} files. "
+                f"{len(self._failures)} file(s) FAILED — see "
+                f"RESTORE_FAILURES.txt. The rest of your data is intact "
+                f"in {target}."
+            )
+        else:
+            _log("Restore complete.")
         return snap
+
+    @property
+    def failures(self) -> int:
+        """Number of nodes that could not be restored in the last run.
+
+        Zero on a clean restore.  Non-zero under tolerant mode when one
+        or more files were skipped; ``RESTORE_FAILURES.txt`` under the
+        target lists them.
+        """
+        return len(self._failures)
+
+    def _write_failure_manifest(self, target: Path) -> None:
+        """Write the per-file failure list to ``RESTORE_FAILURES.txt``.
+
+        One line per failure: relative path, reason, and the blob id
+        implicated (empty when the failure was not blob-scoped, e.g. a
+        whole-subtree tree-blob read failure).
+        """
+        manifest = target / "RESTORE_FAILURES.txt"
+        lines = [
+            "LCSAS pure-Python restore — files that could NOT be restored.",
+            "Every OTHER file in this directory restored successfully.",
+            "Re-running tier-3 from a newer meta disc, or re-mounting an",
+            "undamaged copy of the affected disc, is the remedy.",
+            "",
+            "path\treason\tblob_id",
+        ]
+        for path, blob_id, reason in self._failures:
+            lines.append(f"{path}\t{reason}\t{blob_id}")
+        try:
+            manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except OSError as exc:
+            # The manifest is best-effort: never let writing it mask the
+            # fact that the bulk of the data did restore.
+            _log(f"Could not write {manifest}: {exc}")
 
     def list_snapshots(self) -> list[SnapshotMeta]:
         """Return all snapshots sorted by time (oldest first)."""
@@ -989,9 +1070,22 @@ class PurePythonRestorer:
     # ── Tree Traversal & File Extraction ─────────────────────────
 
     def _restore_tree(self, tree_id: str, target_dir: Path) -> None:
-        """Recursively restore a tree node to *target_dir*."""
-        tree_data = self._read_blob(tree_id)
-        tree_doc = json.loads(tree_data)
+        """Recursively restore a tree node to *target_dir*.
+
+        Tolerant by default: a corrupt/missing tree blob records ONE
+        failure for the whole subtree and returns (the parent traversal
+        continues); a per-node failure records that node and continues
+        to the next sibling.  ``strict=True`` restores the legacy
+        raise-first behaviour.
+        """
+        try:
+            tree_data = self._read_blob(tree_id)
+            tree_doc = json.loads(tree_data)
+        except (IntegrityError, KeyError, OSError, json.JSONDecodeError) as exc:
+            if self._strict:
+                raise
+            self._record_failure(target_dir, tree_id, exc)
+            return
 
         # Track hardlink targets: inode → first_path
         hardlink_map: dict[int, Path] = {}
@@ -1010,88 +1104,142 @@ class PurePythonRestorer:
                 continue
             node_path = target_dir / safe_name
 
-            if node_type == "file":
-                inode = node.get("inode", 0)
-                links = node.get("links", 1)
+            # Per-node containment: one bad node never aborts the rest of
+            # the tree.  ``_restore_file`` and the subtree recursion have
+            # already recorded + cleaned up before raising ``_NodeFailed``;
+            # we just log-and-continue here.  Raw errors raised by the
+            # dir/symlink paths are recorded here.  ``strict=True`` lets
+            # them propagate (the inner handlers re-raise unchanged).
+            try:
+                if node_type == "file":
+                    inode = node.get("inode", 0)
+                    links = node.get("links", 1)
 
-                # Hardlink deduplication: if inode already restored, link it
-                if inode and links > 1 and inode in hardlink_map:
-                    src = hardlink_map[inode]
-                    try:
-                        node_path.parent.mkdir(parents=True, exist_ok=True)
-                        os.link(src, node_path)
-                        continue
-                    except OSError:
-                        # Cross-device or permission issue — fall through
-                        # to normal restore
+                    # Hardlink dedup: if inode already restored, link it
+                    if inode and links > 1 and inode in hardlink_map:
+                        src = hardlink_map[inode]
+                        try:
+                            node_path.parent.mkdir(parents=True, exist_ok=True)
+                            os.link(src, node_path)
+                            continue
+                        except OSError:
+                            # Cross-device or permission issue — fall
+                            # through to normal restore
+                            _log(
+                                f"Hardlink {node_path} → {src} failed, "
+                                f"copying instead"
+                            )
+
+                    self._restore_file(node, node_path)
+
+                    # Register as hardlink source for future occurrences
+                    if inode and links > 1:
+                        hardlink_map[inode] = node_path
+
+                elif node_type == "dir":
+                    node_path.mkdir(parents=True, exist_ok=True)
+                    if "subtree" in node:
+                        self._restore_tree(node["subtree"], node_path)
+                    # Restore directory permissions after contents
+                    self._apply_metadata(node, node_path)
+                elif node_type == "symlink":
+                    link_target = node.get("linktarget", "")
+                    # Validate symlink target: only allow relative links
+                    # to stay within target_dir
+                    if Path(link_target).is_absolute():
                         _log(
-                            f"Hardlink {node_path} → {src} failed, "
-                            f"copying instead"
+                            f"Skipping symlink {node_path.name} with absolute "
+                            f"target (security: {link_target!r})"
                         )
-
-                self._restore_file(node, node_path)
-
-                # Register as hardlink source for future occurrences
-                if inode and links > 1:
-                    hardlink_map[inode] = node_path
-
-            elif node_type == "dir":
-                node_path.mkdir(parents=True, exist_ok=True)
-                if "subtree" in node:
-                    self._restore_tree(node["subtree"], node_path)
-                # Restore directory permissions after contents
-                self._apply_metadata(node, node_path)
-            elif node_type == "symlink":
-                link_target = node.get("linktarget", "")
-                # Validate symlink target: only allow relative links to stay within target_dir
-                if Path(link_target).is_absolute():
+                        continue
+                    # Resolve the symlink target relative to the node's
+                    # parent directory
+                    resolved = (node_path.parent / link_target).resolve()
+                    try:
+                        resolved.is_relative_to(target_dir.resolve())
+                    except ValueError:
+                        # Symlink resolves outside target directory
+                        _log(
+                            f"Skipping symlink {node_path.name} with "
+                            f"out-of-bounds target (would escape to {resolved})"
+                        )
+                        continue
+                    # Target is valid; create the symlink
+                    if node_path.is_symlink() or node_path.exists():
+                        if node_path.is_dir() and not node_path.is_symlink():
+                            shutil.rmtree(node_path)
+                        else:
+                            node_path.unlink()
+                    node_path.symlink_to(link_target)
+                else:
                     _log(
-                        f"Skipping symlink {node_path.name} with absolute target "
-                        f"(security: {link_target!r})"
+                        f"Skipping unsupported node type {node_type!r}: {name}"
                     )
-                    continue
-                # Resolve the symlink target relative to the node's parent directory
-                resolved = (node_path.parent / link_target).resolve()
-                try:
-                    resolved.is_relative_to(target_dir.resolve())
-                except ValueError:
-                    # Symlink resolves outside target directory
-                    _log(
-                        f"Skipping symlink {node_path.name} with out-of-bounds target "
-                        f"(would escape to {resolved})"
-                    )
-                    continue
-                # Target is valid; create the symlink
-                if node_path.is_symlink() or node_path.exists():
-                    if node_path.is_dir() and not node_path.is_symlink():
-                        shutil.rmtree(node_path)
-                    else:
-                        node_path.unlink()
-                node_path.symlink_to(link_target)
-            else:
-                _log(
-                    f"Skipping unsupported node type {node_type!r}: {name}"
-                )
+            except _NodeFailed:
+                # Already recorded + logged by the failing leaf; the
+                # subtree recursion records its own. Keep going.
+                continue
+            except (IntegrityError, KeyError, OSError) as exc:
+                if self._strict:
+                    raise
+                self._record_failure(node_path, "", exc)
+                continue
 
     def _restore_file(self, node: dict[str, Any], path: Path) -> None:
-        """Extract a file from its content blobs."""
+        """Extract a file from its content blobs.
+
+        Writes to a sibling ``.lcsas-partial`` file and only
+        ``os.replace``s it onto the final path once every chunk has been
+        written and metadata applied — so an exception mid-file never
+        leaves a truncated file at the final path, and a re-run is
+        idempotent.  On failure the partial is unlinked, the failure is
+        recorded, and ``_NodeFailed`` is raised for the caller to log.
+        """
         path.parent.mkdir(parents=True, exist_ok=True)
         content_ids: list[str] = node.get("content", [])
+        tmp_path = path.with_name(path.name + ".lcsas-partial")
 
         bytes_written = 0
-        with open(path, "wb") as f:
-            for blob_id in content_ids:
-                chunk = self._read_blob(blob_id)
-                f.write(chunk)
-                bytes_written += len(chunk)
-
-        self._apply_metadata(node, path)
+        try:
+            with open(tmp_path, "wb") as f:
+                for blob_id in content_ids:
+                    try:
+                        chunk = self._read_blob(blob_id)
+                    except (IntegrityError, KeyError, OSError) as exc:
+                        if self._strict:
+                            raise
+                        self._record_failure(path, blob_id, exc)
+                        raise _NodeFailed from exc
+                    f.write(chunk)
+                    bytes_written += len(chunk)
+            self._apply_metadata(node, tmp_path)
+            os.replace(tmp_path, path)
+        except _NodeFailed:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        except (IntegrityError, KeyError, OSError) as exc:
+            # Failure outside the per-blob guard above (e.g. _apply_metadata
+            # or os.replace) — still record + clean up under tolerant mode.
+            tmp_path.unlink(missing_ok=True)
+            if self._strict:
+                raise
+            self._record_failure(path, "", exc)
+            raise _NodeFailed from exc
 
         # Update progress counters and emit a status line if either
         # the file-count or byte-count threshold has been reached.
         self._progress_done_files += 1
         self._progress_done_bytes += bytes_written
         self._emit_progress()
+
+    def _record_failure(
+        self, path: Path, blob_id: str, exc: BaseException
+    ) -> None:
+        """Record one per-node failure for the manifest + summary."""
+        self._failures.append(
+            (str(path), blob_id, f"{type(exc).__name__}: {exc}")
+        )
+        _log(f"FAILED (continuing): {path} — {exc}")
 
     def _count_files(self, tree_id: str) -> int:
         """Pre-pass: count file nodes reachable from *tree_id*.

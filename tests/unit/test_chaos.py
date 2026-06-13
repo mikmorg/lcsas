@@ -192,12 +192,17 @@ class TestTruncatedPacks:
     """Verify restorer detects truncated pack files."""
 
     def test_truncated_to_zero_bytes(self, tmp_path):
-        """A pack truncated to 0 bytes should raise an error."""
+        """A pack truncated to 0 bytes should raise an error.
+
+        ``strict=True`` pins the raise-first rejection contract (RST-03
+        made tolerant traversal the default; corruption is still
+        rejected there, just recorded per-file rather than raised).
+        """
         repo, pw, pack_id = _build_repo(tmp_path)
         pack_path = repo / "data" / pack_id[:2] / pack_id
         pack_path.write_bytes(b"")  # truncate to zero
 
-        restorer = PurePythonRestorer(repo, pw)
+        restorer = PurePythonRestorer(repo, pw, strict=True)
         with pytest.raises((IntegrityError, Exception)):
             restorer.restore(target=tmp_path / "out")
 
@@ -208,7 +213,7 @@ class TestTruncatedPacks:
         original = pack_path.read_bytes()
         pack_path.write_bytes(original[: len(original) // 2])
 
-        restorer = PurePythonRestorer(repo, pw)
+        restorer = PurePythonRestorer(repo, pw, strict=True)
         with pytest.raises((IntegrityError, Exception)):
             restorer.restore(target=tmp_path / "out")
 
@@ -220,7 +225,7 @@ class TestTruncatedPacks:
         # Chop off the last 16 bytes (MAC of the last blob)
         pack_path.write_bytes(original[:-16])
 
-        restorer = PurePythonRestorer(repo, pw)
+        restorer = PurePythonRestorer(repo, pw, strict=True)
         with pytest.raises((IntegrityError, Exception)):
             restorer.restore(target=tmp_path / "out")
 
@@ -244,7 +249,7 @@ class TestCorruptPackContents:
         data[flip_pos] ^= 0x01
         pack_path.write_bytes(bytes(data))
 
-        restorer = PurePythonRestorer(repo, pw)
+        restorer = PurePythonRestorer(repo, pw, strict=True)
         with pytest.raises((IntegrityError, Exception)):
             restorer.restore(target=tmp_path / "out")
 
@@ -258,7 +263,7 @@ class TestCorruptPackContents:
         data[-1] ^= 0x80
         pack_path.write_bytes(bytes(data))
 
-        restorer = PurePythonRestorer(repo, pw)
+        restorer = PurePythonRestorer(repo, pw, strict=True)
         with pytest.raises((IntegrityError, Exception)):
             restorer.restore(target=tmp_path / "out")
 
@@ -271,7 +276,7 @@ class TestCorruptPackContents:
         data[0], data[1] = data[1], data[0]
         pack_path.write_bytes(bytes(data))
 
-        restorer = PurePythonRestorer(repo, pw)
+        restorer = PurePythonRestorer(repo, pw, strict=True)
         with pytest.raises((IntegrityError, Exception)):
             restorer.restore(target=tmp_path / "out")
 
@@ -328,7 +333,7 @@ class TestMissingIndexEntries:
             empty_idx = json.dumps({"packs": []}).encode()
             f.write_bytes(_encrypt_with_master(empty_idx))
 
-        restorer = PurePythonRestorer(repo, pw)
+        restorer = PurePythonRestorer(repo, pw, strict=True)
         with pytest.raises(KeyError, match="Blob not found"):
             restorer.restore(target=tmp_path / "out")
 

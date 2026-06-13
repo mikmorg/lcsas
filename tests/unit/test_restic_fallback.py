@@ -2068,3 +2068,251 @@ class TestParseTimestampFallback:
         ts = _parse_timestamp("2026-01-15T10:30:00.123456Z")
         assert isinstance(ts, float)
         assert ts > 0
+
+
+# ── RST-03: tolerant tier-3 traversal ────────────────────────────
+
+
+def _build_multifile_repo(
+    tmp_path: Path,
+    *,
+    files: dict[str, bytes],
+    corrupt_blob: str | None = None,
+    drop_from_index: str | None = None,
+    chunked: dict[str, list[bytes]] | None = None,
+) -> Path:
+    """Build a synthetic repo with several single-blob top-level files.
+
+    *files* maps relative name -> content (one data blob each).
+    *chunked* maps relative name -> list of chunk contents (a multi-blob
+    file); its keys must not also appear in *files*.
+
+    Optional corruption hooks:
+      * corrupt_blob: flip a byte in the named file's (first) data blob
+        inside the pack so its MAC fails -> IntegrityError on read.
+      * drop_from_index: omit the named file's (first) data blob from
+        the index -> KeyError on read.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
+    _make_key_file(mk, PASSWORD, repo)
+
+    chunked = chunked or {}
+
+    # Assemble (name -> ordered list of (content, blob_id)).
+    file_blobs: dict[str, list[tuple[bytes, str]]] = {}
+    for name, content in files.items():
+        file_blobs[name] = [(content, hashlib.sha256(content).hexdigest())]
+    for name, chunks in chunked.items():
+        file_blobs[name] = [
+            (c, hashlib.sha256(c).hexdigest()) for c in chunks
+        ]
+
+    nodes = []
+    for name, blobs in file_blobs.items():
+        nodes.append({
+            "name": name,
+            "type": "file",
+            "mode": 0o644,
+            "mtime": "2026-01-15T10:00:00.000000000Z",
+            "atime": "2026-01-15T10:00:00.000000000Z",
+            "ctime": "2026-01-15T10:00:00.000000000Z",
+            "uid": 1000, "gid": 1000,
+            "size": sum(len(c) for c, _ in blobs),
+            "content": [bid for _, bid in blobs],
+        })
+    root_tree = json.dumps({"nodes": nodes}).encode()
+    root_tree_id = hashlib.sha256(root_tree).hexdigest()
+
+    # Build the pack: all data blobs, then the tree blob.
+    blobs_info: list[dict] = []
+    pack_data = bytearray()
+    # offset of the first byte of each named file's first data blob,
+    # so we can corrupt it precisely.
+    first_blob_span: dict[str, tuple[int, int]] = {}
+
+    for name, blobs in file_blobs.items():
+        for idx, (content, blob_id) in enumerate(blobs):
+            enc = _encrypt_with_master(content)
+            offset = len(pack_data)
+            if idx == 0:
+                first_blob_span[name] = (offset, len(enc))
+            if drop_from_index != name or idx != 0:
+                blobs_info.append({
+                    "id": blob_id, "type": "data",
+                    "offset": offset, "length": len(enc),
+                })
+            pack_data.extend(enc)
+
+    enc_tree = _encrypt_with_master(root_tree)
+    blobs_info.append({
+        "id": root_tree_id, "type": "tree",
+        "offset": len(pack_data), "length": len(enc_tree),
+    })
+    pack_data.extend(enc_tree)
+
+    if corrupt_blob is not None:
+        off, _ln = first_blob_span[corrupt_blob]
+        # Flip a byte well inside the ciphertext body (past the 16-byte IV)
+        # so the Poly1305 MAC check fails -> IntegrityError.
+        pos = off + 20
+        pack_data[pos] ^= 0xFF
+
+    pack_id = hashlib.sha256(bytes(pack_data)).hexdigest()
+    data_dir = repo / "data" / pack_id[:2]
+    data_dir.mkdir(parents=True)
+    (data_dir / pack_id).write_bytes(bytes(pack_data))
+
+    index_doc = json.dumps({
+        "packs": [{"id": pack_id, "blobs": blobs_info}],
+    }).encode()
+    index_dir = repo / "index"
+    index_dir.mkdir()
+    index_id = hashlib.sha256(index_doc).hexdigest()
+    (index_dir / index_id).write_bytes(_encrypt_with_master(index_doc))
+
+    snapshot_doc = json.dumps({
+        "time": "2026-01-15T10:30:00.000000000Z",
+        "tree": root_tree_id,
+        "paths": ["/home/test"],
+        "hostname": "testhost",
+        "username": "test",
+    }).encode()
+    snap_dir = repo / "snapshots"
+    snap_dir.mkdir()
+    snap_id = hashlib.sha256(snapshot_doc).hexdigest()
+    (snap_dir / snap_id).write_bytes(_encrypt_with_master(snapshot_doc))
+
+    config_doc = json.dumps({
+        "version": 2, "id": "rst03-test", "chunker_polynomial": "3DA3358B4DC173",
+    }).encode()
+    (repo / "config").write_bytes(_encrypt_with_master(config_doc))
+    return repo
+
+
+class TestTolerantTraversal:
+    """RST-03: one bad blob must not abort the whole tier-3 restore."""
+
+    @pytest.fixture
+    def password_file(self, tmp_path):
+        pf = tmp_path / "password.txt"
+        pf.write_bytes(PASSWORD + b"\n")
+        return pf
+
+    def test_restore_continues_past_corrupt_blob(self, tmp_path, password_file):
+        files = {
+            "a.txt": b"alpha content\n",
+            "b.txt": b"bravo content\n",
+            "c.txt": b"charlie content\n",
+        }
+        repo = _build_multifile_repo(tmp_path, files=files, corrupt_blob="b.txt")
+        target = tmp_path / "out"
+        r = PurePythonRestorer(repo, password_file=password_file)
+        r.restore(target=target)
+
+        # The other two files restored byte-identical.
+        assert (target / "a.txt").read_bytes() == files["a.txt"]
+        assert (target / "c.txt").read_bytes() == files["c.txt"]
+        # The bad file is absent (no truncated file at the final path).
+        assert not (target / "b.txt").exists()
+        # Exactly one recorded failure.
+        assert r.failures == 1
+        manifest = (target / "RESTORE_FAILURES.txt").read_text()
+        assert "b.txt" in manifest
+        assert "IntegrityError" in manifest
+
+    def test_restore_continues_past_missing_index_blob(
+        self, tmp_path, password_file
+    ):
+        files = {
+            "a.txt": b"alpha\n",
+            "b.txt": b"bravo\n",
+            "c.txt": b"charlie\n",
+        }
+        repo = _build_multifile_repo(
+            tmp_path, files=files, drop_from_index="b.txt"
+        )
+        target = tmp_path / "out"
+        r = PurePythonRestorer(repo, password_file=password_file)
+        r.restore(target=target)
+
+        assert (target / "a.txt").read_bytes() == files["a.txt"]
+        assert (target / "c.txt").read_bytes() == files["c.txt"]
+        assert not (target / "b.txt").exists()
+        assert r.failures == 1
+        manifest = (target / "RESTORE_FAILURES.txt").read_text()
+        assert "b.txt" in manifest
+        assert "KeyError" in manifest
+
+    def test_partial_file_not_left_behind(self, tmp_path, password_file):
+        # A 2-chunk file whose SECOND chunk is corrupt: the first chunk
+        # is written to the .lcsas-partial sibling, the second read
+        # fails, and nothing must remain at the final path or as litter.
+        good = {"a.txt": b"alpha\n"}
+        chunked = {"big.txt": [b"first-chunk-data!!", b"second-chunk-data"]}
+        # Corrupt the second chunk of big.txt by targeting its blob.
+        # _build_multifile_repo only exposes first-blob corruption, so
+        # corrupt the second chunk manually below.
+        repo = _build_multifile_repo(
+            tmp_path, files=good, chunked=chunked
+        )
+        # Locate and corrupt big.txt's second data blob in the pack.
+        second_chunk = chunked["big.txt"][1]
+        second_id = hashlib.sha256(second_chunk).hexdigest()
+        _corrupt_blob_in_pack(repo, second_id)
+
+        target = tmp_path / "out"
+        r = PurePythonRestorer(repo, password_file=password_file)
+        r.restore(target=target)
+
+        assert (target / "a.txt").read_bytes() == good["a.txt"]
+        # No final file and no partial litter for the failed chunked file.
+        assert not (target / "big.txt").exists()
+        assert not (target / "big.txt.lcsas-partial").exists()
+        assert r.failures == 1
+
+    def test_strict_mode_still_raises(self, tmp_path, password_file):
+        files = {"a.txt": b"alpha\n", "b.txt": b"bravo\n"}
+        repo = _build_multifile_repo(tmp_path, files=files, corrupt_blob="b.txt")
+        target = tmp_path / "out"
+        r = PurePythonRestorer(repo, password_file=password_file, strict=True)
+        with pytest.raises(IntegrityError):
+            r.restore(target=target)
+
+    def test_clean_restore_writes_no_manifest(self, tmp_path, password_file):
+        files = {"a.txt": b"alpha\n", "b.txt": b"bravo\n"}
+        repo = _build_multifile_repo(tmp_path, files=files)
+        target = tmp_path / "out"
+        r = PurePythonRestorer(repo, password_file=password_file)
+        r.restore(target=target)
+        assert r.failures == 0
+        assert not (target / "RESTORE_FAILURES.txt").exists()
+
+
+def _corrupt_blob_in_pack(repo: Path, blob_id: str) -> None:
+    """Flip a ciphertext byte of *blob_id* in the repo's single pack.
+
+    Reads the (encrypted) index to find the blob's offset/length, then
+    XORs a byte inside the ciphertext body so the MAC check fails.
+    """
+    # The repo has exactly one index file and one pack.
+    index_dir = repo / "index"
+    index_file = next(index_dir.iterdir())
+    enc_index = index_file.read_bytes()
+    index_json = json.loads(_decrypt_test(enc_index))
+    pack = index_json["packs"][0]
+    loc = next(b for b in pack["blobs"] if b["id"] == blob_id)
+    pack_id = pack["id"]
+    pack_path = repo / "data" / pack_id[:2] / pack_id
+    data = bytearray(pack_path.read_bytes())
+    pos = loc["offset"] + 20  # inside ciphertext, past the 16-byte IV
+    data[pos] ^= 0xFF
+    pack_path.write_bytes(bytes(data))
+
+
+def _decrypt_test(encrypted: bytes) -> bytes:
+    """Decrypt with the fixed test master key (mirror of restorer)."""
+    return _decrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, encrypted
+    )

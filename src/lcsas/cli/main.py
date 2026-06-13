@@ -3901,14 +3901,27 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
             )
             target = args.target_path.resolve()
             snap_arg = None if args.snapshot == "latest" else args.snapshot
+            restorer = PurePythonRestorer(
+                repo_path=cache_dir,
+                password_file=args.password_file,
+            )
             try:
-                meta = PurePythonRestorer(
-                    repo_path=cache_dir,
-                    password_file=args.password_file,
-                ).restore(target=target, snapshot_id=snap_arg)
+                meta = restorer.restore(target=target, snapshot_id=snap_arg)
             except Exception as exc:
+                # Setup-level failure (bad key, missing repo) — fail fast.
                 logger.error("Pure-Python restore failed: %s", exc)
                 return 1
+            if restorer.failures:
+                # Tolerant traversal skipped one or more files; the bulk
+                # of the data is restored and a manifest lists the rest.
+                logger.error(
+                    "Pure-Python restore finished with %d skipped file(s). "
+                    "See %s/RESTORE_FAILURES.txt; the rest of your data is "
+                    "intact. Re-run from a newer meta disc or an undamaged "
+                    "copy of the affected disc to recover them.",
+                    restorer.failures, target,
+                )
+                return 2
             logger.info(
                 "Restore complete (pure-Python fallback). Snapshot: %s, "
                 "hostname: %s",

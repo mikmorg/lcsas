@@ -126,3 +126,14 @@ Always-on unit (`make test-unit`, CI test.yml):
 
 2 days: 1 impl (traversal + atomic writes + both CLI surfaces), 1 tests (fixture corruption
 helpers exist in test_restic_fallback.py already). No special environment.
+
+---
+**Implemented:** 2026-06-13. As planned, with two noted deviations:
+(1) the internal sentinel is `_NodeFailed` per the plan; ruff N818 is suppressed with a
+targeted `# noqa` rather than renaming it. (2) Pre-existing `tests/unit/test_chaos.py`
+corruption-rejection tests encoded the old raise-first contract; they now pass `strict=True`
+(the documented legacy contract) so they still verify corruption is rejected. New tests added:
+4 unit (corrupt/missing-index/partial-litter/strict) + clean-restore no-manifest, 1 subprocess
+(exit 2, no traceback, manifest), 1 recovery-hardening static guard
+(`test_tier3_tolerant_restore.py`). TIERS.txt documents the tolerant behaviour + the
+re-run-from-newer-meta-disc remedy for already-burned discs.

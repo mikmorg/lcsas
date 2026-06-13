@@ -59,10 +59,15 @@ def _encrypt_with_master(plaintext: bytes) -> bytes:
     return _encrypt_data(MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, plaintext)
 
 
-def _build_repo_and_script(tmp_path: Path) -> tuple[Path, Path, Path]:
+def _build_repo_and_script(
+    tmp_path: Path, *, corrupt_first_blob: bool = False
+) -> tuple[Path, Path, Path]:
     """Build a synthetic repo + the standalone_restorer.py script.
 
     Returns (repo_dir, password_file, script_path).
+
+    If *corrupt_first_blob*, the file data blob's ciphertext is flipped
+    in the pack so its MAC check fails on read (RST-03 skip path).
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -123,6 +128,11 @@ def _build_repo_and_script(tmp_path: Path) -> tuple[Path, Path, Path]:
             "offset": len(pack_data), "length": len(enc),
         })
         pack_data.extend(enc)
+
+    if corrupt_first_blob:
+        # The file data blob is first in the pack; flip a byte inside its
+        # ciphertext body (past the 16-byte IV) so the MAC check fails.
+        pack_data[20] ^= 0xFF
 
     pack_id = hashlib.sha256(bytes(pack_data)).hexdigest()
     data_dir = repo / "data" / pack_id[:2]
@@ -276,6 +286,40 @@ class TestStandaloneSubprocess:
             timeout=60,
         )
         assert result.returncode != 0
+
+    def test_corrupt_blob_exits_2_no_traceback(self, tmp_path):
+        """RST-03: a corrupt blob skips that file, writes a manifest,
+        exits 2, and prints a plain-English message (no traceback)."""
+        repo, pw_file, script = _build_repo_and_script(
+            tmp_path, corrupt_first_blob=True
+        )
+        target = tmp_path / "output"
+        target.mkdir()
+
+        result = subprocess.run(
+            [
+                sys.executable, str(script),
+                "--repo", str(repo),
+                "--password-file", str(pw_file),
+                "--target", str(target),
+                "--interactive", "off",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert result.returncode == 2, (
+            f"Expected exit 2 for skipped file, got {result.returncode}.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        # No raw Python traceback leaked to the heir.
+        assert "Traceback (most recent call last)" not in result.stderr, (
+            f"Traceback leaked to stderr:\n{result.stderr}"
+        )
+        assert "RESTORE_FAILURES.txt" in result.stderr
+        manifest = target / "RESTORE_FAILURES.txt"
+        assert manifest.is_file()
+        assert "standalone_test.txt" in manifest.read_text()
 
     def test_script_has_no_lcsas_imports(self, tmp_path):
         """The generated script must not contain any 'from lcsas' imports."""

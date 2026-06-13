@@ -117,6 +117,36 @@ The physical-media half (a real burned disc read by a real optical
 drive, with physically induced damage) is hardware-gated and specified
 in ``recovery/docs/PHYSICAL_DISC_VALIDATION.txt``.
 
+TIER 3: SKIP-AND-CONTINUE ON A BAD BLOB
+
+Tier 3 (the pure-Python standalone_restorer.py, last resort) is
+TOLERANT by default: a single corrupt blob, a missing index entry, or
+a disc that stays unreadable after the disc-swap retries are exhausted
+records ONE failure and the restore CONTINUES, instead of aborting the
+whole run on the first bad byte.  All-or-nothing is the wrong default
+on the last-resort tier -- one bad blob must not cost the heir 99.9%
+of an otherwise-intact family archive.
+
+  * Files are written to a sibling ``.lcsas-partial`` file and only
+    renamed onto the final path after the last chunk -- so a truncated
+    file is NEVER left at a final restore path, and re-running is
+    idempotent.
+  * After traversal, ``RESTORE_FAILURES.txt`` is written under the
+    target listing each skipped file (path, reason, blob id), and a
+    plain-English summary line is printed ("Restored N of M files ...").
+  * Exit code 2 means "finished, but K file(s) were skipped" (distinct
+    from exit 1, a setup-level failure like a bad password or missing
+    repo).  The generated script prints a plain-English message, never
+    a raw Python traceback, for any outcome.
+
+NOTE for ALREADY-BURNED data discs: standalone_restorer.py is
+generated from the LCSAS source, so newer meta discs carry this
+behaviour automatically, but data discs burned BEFORE this change ship
+the older abort-on-first-error script forever.  The remedy is to run
+tier 3 from a NEWER meta disc against those old data discs -- the
+restorer reads the data discs' packs, the script comes from the meta
+disc.
+
 TIER FALLBACK ON RUNTIME FAILURES
 
 The default cascade ``exec``s the first available tier, so a tier-1
