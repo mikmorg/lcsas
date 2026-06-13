@@ -548,6 +548,63 @@ def _start_cdemu() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _stage_split_key_cards(
+    repo: str,
+    *,
+    threshold: int,
+    count: int,
+    out_dir: Path | None = None,
+    secret: bytes | None = None,
+) -> list[Path]:
+    """KEY-04: stage the production printable ``-card.txt`` artifacts.
+
+    Splits the repo password K-of-N and renders each share through the same
+    ``_share_card_text`` used by ``lcsas key split`` — header, usage text,
+    rotation metadata, and the mnemonic — then writes the first *threshold*
+    cards (mode 0600) into *out_dir* (defaults to the agent home) as
+    ``<repo>-share-<i>-card.txt``.  Bare mnemonic files are deliberately NOT
+    staged: the docs-driven gate must exercise card-file parsing, not a
+    pre-stripped mnemonic.
+
+    *secret* overrides the password source (used by unit tests so they need
+    no fixture secrets dir); production passes ``None`` and the repo's
+    fixture ``<repo>.pw`` is read.
+
+    Returns the staged card paths so the caller can chown them.
+    """
+    from datetime import date
+
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    from lcsas.cli.main import _share_card_text
+    from lcsas.keyshare import (
+        encode_master_secret,
+        share_identifier,
+        split_secret,
+    )
+
+    if out_dir is None:
+        out_dir = AGENT_HOME
+    if secret is None:
+        secret = (SECRETS / f"{repo}.pw").read_bytes().rstrip(b"\n")
+
+    mnemonics = split_secret(encode_master_secret(secret), threshold, count)
+    split_date = date.today().isoformat()
+    split_id = share_identifier(mnemonics[0])
+
+    staged: list[Path] = []
+    # Only the holder's quorum of cards is staged (a 2-of-5 split: the heir
+    # holds 2 of the 5 printed cards).
+    for i, mnemonic in enumerate(mnemonics[:threshold], start=1):
+        card = _share_card_text(
+            repo, i, threshold, count, mnemonic, split_date, split_id
+        )
+        card_dst = out_dir / f"{repo}-share-{i}-card.txt"
+        card_dst.write_text(card)
+        os.chmod(card_dst, 0o600)
+        staged.append(card_dst)
+    return staged
+
+
 def _create_agent_user(labels: list[str]) -> None:
     try:
         pwd.getpwnam(AGENT_USER)
@@ -571,8 +628,16 @@ def _create_agent_user(labels: list[str]) -> None:
     # /mnt/keyshare_combine.py before it can answer the Password: prompt.
     # All OTHER variants (including the single-key K3.1 alias of default)
     # stage tenant-alpha.pw exactly as before.
+    #
+    # KEY-04: the split-key-docs variant is the docs-driven acceptance gate.
+    # It stages the PRODUCTION printable -card.txt artifacts (header + usage
+    # text + mnemonic) — what a holder actually receives — NOT bare mnemonic
+    # files.  Only 2 of the 5 cards are staged (a 2-of-5 split), so card-file
+    # parsing and the on-disc START_HERE STEP 1/STEP 2 instructions are
+    # load-bearing.
     secret_files: list[Path] = []
-    if os.environ.get("LCSAS_VARIANT", "") == "split-key-2of5":
+    variant = os.environ.get("LCSAS_VARIANT", "")
+    if variant == "split-key-2of5":
         sys.path.insert(0, str(REPO_ROOT / "src"))
         alpha_pw = (SECRETS / "alpha.pw").read_bytes().rstrip(b"\n")
         from lcsas.keyshare import split_secret
@@ -584,6 +649,9 @@ def _create_agent_user(labels: list[str]) -> None:
             share_dst.write_text(mnemonic + "\n")
             os.chmod(share_dst, 0o600)
             secret_files.append(share_dst)
+    elif variant == "split-key-docs":
+        for card_dst in _stage_split_key_cards("alpha", threshold=2, count=5):
+            secret_files.append(card_dst)
     else:
         alpha_pw_dst = AGENT_HOME / "tenant-alpha.pw"
         shutil.copy2(SECRETS / "alpha.pw", alpha_pw_dst)

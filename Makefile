@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-split-docs blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e
 
 # Default target: lint + typecheck + every test tier ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
@@ -192,6 +192,24 @@ blind-restore-split-2of5:
 	fi
 	sudo -E bash tests/e2e/cdemu_blind_restore/run_variant.sh split-key-2of5 \
 	    || { echo "FAIL: variant split-key-2of5" >&2; $(MAKE) blind-restore-teardown; exit 1; }
+	$(MAKE) blind-restore-teardown
+
+# KEY-04: docs-driven split-key acceptance gate.  Unlike split-key-2of5
+# (a tooling smoke that spoon-feeds the command sequence), this variant
+# ships a scenario-only prompt + production -card.txt artifacts, so the
+# agent must derive every command from the on-disc START_HERE/KEY_INFO
+# instructions.  haiku-only, same cost guard.  NOT XFAIL'd: until
+# KEY-01/02/05 land it is expected to fail at STEP 1/STEP 2, and that
+# failure is the signal.  Acceptance gate for heir-doc / keyshare /
+# restore.sh changes: 15/15 twice consecutively before merge.
+blind-restore-split-docs:
+	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
+		echo "ERROR: blind-restore-split-docs costs USD ~5." >&2; \
+		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
+		exit 1; \
+	fi
+	sudo -E bash tests/e2e/cdemu_blind_restore/run_variant.sh split-key-docs \
+	    || { echo "FAIL: variant split-key-docs" >&2; $(MAKE) blind-restore-teardown; exit 1; }
 	$(MAKE) blind-restore-teardown
 
 # Populate ~/.cache/lcsas/recovery-binaries/ with the rustic + Python

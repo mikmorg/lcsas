@@ -27,6 +27,10 @@ PROMPT_SRC="$HERE/agent_prompt.txt"
 if [ "${LCSAS_VARIANT:-}" = "split-key-2of5" ] \
    && [ -f "$HERE/agent_prompt_split.txt" ]; then
     PROMPT_SRC="$HERE/agent_prompt_split.txt"
+elif [ "${LCSAS_VARIANT:-}" = "split-key-docs" ] \
+   && [ -f "$HERE/agent_prompt_split_docs.txt" ]; then
+    # KEY-04: docs-driven gate — scenario only, no command spoon-feed.
+    PROMPT_SRC="$HERE/agent_prompt_split_docs.txt"
 fi
 cp "$PROMPT_SRC" "$RUN_DIR/prompt.txt"
 

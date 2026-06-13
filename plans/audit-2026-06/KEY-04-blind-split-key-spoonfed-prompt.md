@@ -124,3 +124,15 @@ tier1-missing variant criticized by the GATE dimension).
 1.5 days impl (prompt + setup branch + Makefile + hygiene tests) + ~USD 20-30
 of blind runs across the red/green proof. Needs the local cdemu rig (this VM
 has CDEmu; do not run pytest concurrently with blind runs).
+
+---
+**Implemented:** 2026-06-13. As planned, with one deviation: the card-staging
+test asserts the mnemonic line is >= 20 words (the plan's "20/33" was
+illustrative; SLIP-0039 word count tracks the framed-secret length — a
+28-byte password yields a 31-word share). The recombine round-trip test
+proves the words are genuine. New docs-driven variant `split-key-docs`
+(scenario-only prompt + 2 production `-card.txt` artifacts), wired through
+run.sh/run_variant.sh/Makefile (`blind-restore-split-docs`, haiku-only, not
+XFAIL'd). Always-on `prompt_hygiene_check.py` + two unit test files enforce
+docs-driven hygiene and card staging under `make gate`. The cost-gated blind
+run itself was not executed (opt-in, requires the cdemu rig + real sub-agent).

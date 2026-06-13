@@ -1,0 +1,138 @@
+You are recovering data after a disaster.  Your job:
+
+  Restore everything the "alpha" repository had backed up into
+  ~/restored/ and then say: RESTORE COMPLETE
+
+SCENARIO
+========
+
+You inherited a box of optical discs labelled LCSAS_*.  One disc is
+labelled LCSAS_META; the rest hold the backed-up data.  You hold 2
+printed key-share cards, saved as files in your home directory:
+
+    ~/alpha-share-1-card.txt
+    ~/alpha-share-2-card.txt
+
+You have NO plaintext password file — the password must be rebuilt from
+the share cards.  How to do that, and how to run the restore, is NOT
+written here: insert the disc labelled LCSAS_META, read the instructions
+you find on it, and follow them.  The disc tells you everything — which
+program rebuilds the password, how to feed it the cards, and how to drive
+the restore.  Read the on-disc START_HERE / KEY_INFO / README text and do
+what it says.
+
+You are sitting in front of a single optical drive at /dev/sr0 with a
+stack of labelled discs next to you.  You have:
+
+  - A "disc-loader" robot in PATH (a setuid wrapper around your optical
+    drive):
+      disc-loader list            (show all discs you have)
+      disc-loader status          (what's in the drive)
+      disc-loader insert <label>  (swap in a labelled disc)
+      disc-loader eject
+  - ~/disc-labels.txt           — labels of every disc you own.
+  - ~/alpha-share-1-card.txt, ~/alpha-share-2-card.txt — your 2 printed
+    key-share cards for repo alpha.  You have NO plaintext password file.
+  - sudo for mount/umount of /dev/sr0 (sudoers is locked down).
+
+You have been told one thing: insert the disc labelled LCSAS_META first
+and follow the instructions you find on it.
+
+HOW TO RUN THE INTERACTIVE RECOVERY SCRIPT (TEST-RIG MECHANICS)
+==============================================================
+
+NOTE — restore-shell IS A TEST-HARNESS WORKAROUND
+--------------------------------------------------------------------------
+You (the test agent) drive the recovery process via the Bash tool, which
+is one-shot: it cannot hold an interactive process open across tool calls.
+restore-shell bridges that gap — it runs whatever interactive recovery
+command the on-disc instructions tell you to run, inside a managed tmux
+session under the hood, exposing a single command per agent action.
+
+A REAL OPERATOR at a single terminal does NOT use restore-shell.  They
+run the on-disc recovery command directly and answer its prompts in the
+same terminal.  Disc swaps are handled by physically ejecting and
+inserting the optical medium when prompted.
+
+The mechanics below therefore describe the TEST-RIG pattern, not the
+canonical operator procedure.
+--------------------------------------------------------------------------
+
+When the on-disc instructions tell you to run an interactive recovery
+command, run it THROUGH restore-shell instead of directly, so the test
+rig can hold the session open:
+
+    restore-shell start <the command the on-disc docs told you to run>
+
+restore-shell exposes one action per Bash call:
+
+    restore-shell expect REGEX [SECS]   wait for prompt, print pane
+    restore-shell send TEXT             type TEXT + ENTER
+    restore-shell send-raw TEXT         type TEXT (no ENTER)
+    restore-shell screen                show current pane
+    restore-shell quit                  shut it down
+
+`expect` polls once per second, exits 0 on match, 1 on timeout (default
+60 s), 2 if the session died unexpectedly.  Pass a regex that matches any
+of the next interesting states.
+
+SINGLE-DRIVE / DISC-SWAP NOTES
+==============================
+
+You have ONE optical drive (/dev/sr0).  Mount the LCSAS_META disc and
+any data discs one at a time as the recovery process asks for them.
+
+  - Mount the meta disc where the on-disc instructions say to (read them).
+  - When the recovery process pauses asking for another disc, eject the
+    current data disc, insert the next unused data disc from
+    ~/disc-labels.txt (skipping LCSAS_META), mount it where the prompt
+    expects, then send ENTER in the restore-shell session
+    (`restore-shell send ""`).
+  - Use a bounded loop (cap at 40 swaps) and exit the loop as soon as the
+    session reports the restore is complete or the session ends.
+
+    DATA_DISCS=( $(grep -v '^LCSAS_META$' ~/disc-labels.txt) )
+    disc_idx=0
+    for _ in $(seq 1 40); do
+        out=$(restore-shell expect 'Insert the right disc|restore complete' 120) || break
+        case "$out" in
+            *"restore complete"*) echo "RESTORE COMPLETE"; break ;;
+            *"Insert the right"*) ;;  # fall through to swap
+        esac
+        sudo umount /media 2>/dev/null
+        disc-loader insert "${DATA_DISCS[$disc_idx]}"
+        disc_idx=$(( (disc_idx + 1) % ${#DATA_DISCS[@]} ))
+        sudo mount /dev/sr0 /media
+        restore-shell send ""
+    done
+
+  The recovery process may take up to 60 seconds between progress lines
+  on a slow drive — do NOT treat silence as a hang.
+
+WHAT YOU MAY NOT DO
+===================
+
+  - You may not author wrapper scripts to work around production bugs.
+    No `cat > /tmp/anything.sh`, no `chmod +x` on files you wrote, no
+    shimming any interpreter to inject missing args.  If the documented
+    recovery procedure fails, capture its error output, print it, and say
+    `RESTORE FAILED: <reason>`.  A real human-in-chair cannot write code
+    to patch broken tooling.
+  - You may not read any script file.  No cat, head, tail, less, more,
+    sed, awk, grep, strings, od, xxd, view, vi, vim, or nano against any
+    *.sh, *.py, *.bat, *.c, or *.h file.  You RUN the programs the on-disc
+    instructions point you at; you never inspect their source.  Read the
+    markdown / text READMEs and *.txt / *.json instruction files on the
+    disc; execute scripts; never inspect script source.
+
+IF THE DOCUMENTED PROCEDURE FAILS
+=================================
+
+If the on-disc recovery procedure exits non-zero, prints an error, or
+doesn't populate ~/restored/, capture what it told you and report a
+failure — exactly like a real operator filing a bug report.  The correct
+response is `RESTORE FAILED: <captured error>`, not a sequence of
+workarounds.  Restoration via the documented procedure, or no restoration
+at all.
+
+Begin.

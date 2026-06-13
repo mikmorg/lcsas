@@ -24,6 +24,10 @@
 #                          plaintext password) and must reconstruct the
 #                          password before restoring (key-escrow Phase 3,
 #                          K3.2).  Keeps alpha+bravo tenants.
+#   split-key-docs       — KEY-04 docs-driven acceptance gate: agent gets a
+#                          scenario-only prompt (no command spoon-feed) plus 2
+#                          production -card.txt artifacts, and must derive
+#                          every command from the on-disc instructions.
 #
 # Exits 0 with `SCORE: 15/15 (variant=<name>)` on full pass.
 # Exits non-zero on any failure; the score line still prints.
@@ -36,12 +40,12 @@ VARIANT="${1:?usage: run_variant.sh <variant>}"
 case "$VARIANT" in
     default|tier1-missing|tier1-tier2-missing) : ;;
     single-tenant|5-tenant|no-catalog) : ;;
-    single-key|split-key-2of5) : ;;
+    single-key|split-key-2of5|split-key-docs) : ;;
     *)
         echo "ERROR: unknown variant: $VARIANT" >&2
         echo "       supported: default | tier1-missing | tier1-tier2-missing |" >&2
         echo "                  single-tenant | 5-tenant | no-catalog |" >&2
-        echo "                  single-key | split-key-2of5" >&2
+        echo "                  single-key | split-key-2of5 | split-key-docs" >&2
         exit 2
         ;;
 esac

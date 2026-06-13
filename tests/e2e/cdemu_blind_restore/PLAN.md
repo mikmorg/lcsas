@@ -574,3 +574,34 @@ the blind agent (think time + simulated swap sleeps), <5 s for verify.
 Items 1–5 are the production-code feature. Item 8 is the manual smoke
 that validates the feature works at all. Items 6–7 are the test rig.
 The blind-restore acceptance is the gate that says the feature ships.
+
+## KEY-04 — docs-driven split-key acceptance gate
+
+Two split-key blind variants now coexist with different jobs:
+
+- **`split-key-2of5`** (scripted, `agent_prompt_split.txt`) — a *tooling
+  smoke*. Its prompt spoon-feeds the exact command sequence (combiner path,
+  `restore.sh` invocation). Cheap regression catcher for the tools; it does
+  NOT exercise what the heir reads or holds, and never will.
+- **`split-key-docs`** (docs-driven, `agent_prompt_split_docs.txt`) — the
+  *acceptance gate*. Scenario-only prompt: the agent is told to insert
+  `LCSAS_META` and follow the on-disc instructions, and is handed 2
+  production `-card.txt` artifacts. It must derive every command from the
+  burned START_HERE / KEY_INFO text and parse the real cards. This is the
+  only variant that proves the heir's actual journey.
+
+**Acceptance policy.** Any PR that changes the heir-facing recovery
+contract — `src/lcsas/staging/metadata.py` heir text, the on-disc
+`keyshare_combine.py`, or `restore.sh` flags — MUST pass
+`make blind-restore-split-docs` at **15/15 twice consecutively** before
+merge. The cheap always-on pre-gate for every PR is KEY-02's
+`tests/unit/test_heir_doc_commands.py` (contract check, no LLM cost) plus
+the prompt-hygiene unit test `tests/unit/test_blind_prompt_hygiene.py`
+(keeps the docs-driven prompt docs-driven, enforced by `make gate`).
+
+**Not XFAIL'd.** Until KEY-01/KEY-02/KEY-05 land, this variant is expected
+to fail at STEP 1 or STEP 2 (broken on-disc instructions). That red is the
+signal the gate is working — do NOT add it to `LCSAS_VARIANT_XFAIL`
+(contrast the permanently-XFAIL tier1-missing variant the GATE dimension
+criticised). Record the red run once as evidence, then gate on green after
+the dependencies land.
