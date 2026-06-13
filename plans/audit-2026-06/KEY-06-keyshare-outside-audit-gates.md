@@ -112,3 +112,18 @@ bugs — fix-forward and rebuild via `make -C recovery keyshare-arches`).
 1.5 days: 0.5 Makefile/coverage + sanitize, 0.75 fuzz harness + corpus, 0.25
 CI + docs. Needs clang+libFuzzer and gcovr locally (already the audit-gate
 toolchain; watch the known gcovr-version drift).
+
+---
+**Implemented:** 2026-06-13. As planned, with two scoping deviations made
+explicit: (1) sanitize needed no change — `test_keyshare` is already in
+`TEST_BINS`, so `make sanitize` builds+runs it under ASan/UBSan/LSan;
+documented in EXEMPTIONS. (2) `wordlist.c` has zero gcov-executable lines
+(pure const data) so it neither needs the planned `--exclude` nor drags
+coverage; not excluded. coverage-c gained Step 3d to drive `main.c` via
+real `lcsas key split` cards (success path) + usage/error invocations
+(main.c 0% → 66.9%); EXEMPTIONS documents the keyshare dir narratively
+(the FENCE line-contract stays lcsas-restore-scoped, as the plan noted).
+Validated: `coverage-c` EXIT=0, LINE_COVERAGE=92.1%, slip39.c 90.7% /
+main.c 66.9% in report, exemptions_check PASS; `fuzz-keyshare-smoke` 60s
+0 crashes; lint+typecheck clean; audit-gate.yml YAML parses with the
+keyshare path. CI trigger verified at next checkpoint push.

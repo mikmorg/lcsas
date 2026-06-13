@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "recovery/src/lcsas-restore/**"
+      - "recovery/src/lcsas-keyshare/**"
       - "recovery/tests/**"
       - "recovery/fuzz/**"
       - "recovery/scripts/coverage_check.py"
@@ -12,6 +13,7 @@ on:
   pull_request:
     paths:
       - "recovery/src/lcsas-restore/**"
+      - "recovery/src/lcsas-keyshare/**"
       - "recovery/tests/**"
       - "recovery/fuzz/**"
       - "recovery/scripts/coverage_check.py"

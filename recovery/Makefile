@@ -522,6 +522,46 @@ coverage-c:
 	        && echo "[coverage-c] LCSAS_STRESS_LOOKUPS diagnostic exercised" \
 	        || echo "[coverage-c] LCSAS_STRESS_LOOKUPS exercise failed (non-fatal)"; \
 	fi
+	# Step 3d: exercise the lcsas-keyshare CLI (main.c) so coverage-c
+	# reports it [KEY-06].  test_keyshare links only the combiner library
+	# (slip39.c/wordlist.c), never main.c, so without this main.c shows 0%.
+	# Compile an instrumented main.o, link it against the already-
+	# instrumented combiner+crypto objects, then drive both the success
+	# path (real LCSAS cards via `lcsas key split`) and the failure/usage
+	# paths.  All steps non-fatal: a source-only checkout without python3
+	# or the lcsas package skips cleanly (the integration card test is the
+	# binding proof — this only contributes coverage).
+	@( cc -O0 -g --coverage -std=c89 -pedantic -Wall -Wextra -Wshadow \
+	      -Wno-long-long -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64 \
+	      -I$(KEYSHARE_DIR) -c $(KEYSHARE_DIR)/main.c -o $(BUILD)/keyshare_main.o && \
+	   cc --coverage \
+	      $(BUILD)/keyshare_main.o $(BUILD)/keyshare_slip39.o \
+	      $(BUILD)/keyshare_wordlist.o $(BUILD)/sha256.o $(BUILD)/pbkdf2.o \
+	      -o $(BUILD)/lcsas-keyshare-cov ) 2>/dev/null \
+	    && echo "[coverage-c] built instrumented lcsas-keyshare-cov" \
+	    || echo "[coverage-c] keyshare main.c instrument skipped (non-fatal)"
+	@if [ -x $(BUILD)/lcsas-keyshare-cov ] && command -v python3 >/dev/null 2>&1; then \
+	    ksdir=$(BUILD)/_cov_ks; rm -rf $$ksdir; mkdir -p $$ksdir; \
+	    printf 'coverage-pw\1' > $$ksdir/pw; \
+	    ( cd .. && python3 -m lcsas.cli.main key split --repo cov \
+	          --threshold 2 --shares 3 \
+	          --password-file recovery/$$ksdir/pw \
+	          --out recovery/$$ksdir/shares >/dev/null 2>&1 ) \
+	      && $(BUILD)/lcsas-keyshare-cov \
+	            $$ksdir/shares/cov-share-1-card.txt \
+	            $$ksdir/shares/cov-share-2-card.txt >/dev/null 2>&1 \
+	      && echo "[coverage-c] keyshare main.c success path exercised" \
+	      || echo "[coverage-c] keyshare main.c success path skipped (non-fatal)"; \
+	    cat $$ksdir/shares/cov-share-1-card.txt $$ksdir/shares/cov-share-2-card.txt 2>/dev/null \
+	        | $(BUILD)/lcsas-keyshare-cov >/dev/null 2>&1 || true; \
+	    $(BUILD)/lcsas-keyshare-cov >/dev/null 2>&1 || true; \
+	    $(BUILD)/lcsas-keyshare-cov --bogus-flag >/dev/null 2>&1 || true; \
+	    $(BUILD)/lcsas-keyshare-cov /nonexistent/card.txt >/dev/null 2>&1 || true; \
+	    echo "not a share" > $$ksdir/junk.txt; \
+	    $(BUILD)/lcsas-keyshare-cov $$ksdir/junk.txt >/dev/null 2>&1 || true; \
+	else \
+	    echo "[coverage-c] keyshare main.c exercise skipped (no python3/binary)"; \
+	fi
 	# Step 3c: fault-injection coverage sweep (Phase 13d).  Builds the
 	# LD_PRELOAD shim if missing, then runs every test binary under
 	# malloc_inject with LCSAS_FAIL_AT=N for N=1..min(total, 100).  The
@@ -542,6 +582,7 @@ coverage-c:
 	gcovr \
 	    --root . \
 	    --filter '$(SRCDIR)/.*' \
+	    --filter '$(KEYSHARE_DIR)/.*' \
 	    --exclude '$(VENDOR)/.*' \
 	    --gcov-object-directory $(abspath $(BUILD)) \
 	    $(GCOVR_SUSPICIOUS) \
@@ -796,10 +837,48 @@ fuzz-repo: $(FUZZ_BUILD)/fuzz_repo_strip_v2
 	    $(FUZZ_DIR)/corpus/repo_strip_v2/
 	@echo "[fuzz-repo] 30min PASS — 0 crashes"
 
+# ── fuzz_slip39_mnemonic ─────────────────────────────────────────
+# The lcsas-keyshare SLIP-0039 combiner parses untrusted heir-typed text
+# (mnemonics + whole card files) on the 50-year critical path [KEY-06].
+# Links the combiner (slip39.c + wordlist.c) plus the reused C89 crypto
+# primitives (sha256.c + pbkdf2.c) — no vendored sqlite/zstd.
+KEYSHARE_FUZZ_SRCS = \
+    $(KEYSHARE_DIR)/slip39.c \
+    $(KEYSHARE_DIR)/wordlist.c \
+    $(SRCDIR)/sha256.c \
+    $(SRCDIR)/pbkdf2.c
+
+$(FUZZ_BUILD)/fuzz_slip39_mnemonic: $(FUZZ_DIR)/fuzz_slip39_mnemonic.c \
+        $(KEYSHARE_FUZZ_SRCS) $(KEYSHARE_DIR)/slip39.h
+	@command -v clang >/dev/null 2>&1 || { echo "[fuzz] need clang (apt install clang)"; exit 1; }
+	@mkdir -p $(FUZZ_BUILD)
+	clang -fsanitize=fuzzer,address,undefined -O1 -g \
+	    -fno-omit-frame-pointer \
+	    -std=c89 -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64 \
+	    -Wno-long-long \
+	    -I $(KEYSHARE_DIR) -I $(SRCDIR) \
+	    $(FUZZ_DIR)/fuzz_slip39_mnemonic.c \
+	    $(KEYSHARE_FUZZ_SRCS) \
+	    -o $(FUZZ_BUILD)/fuzz_slip39_mnemonic
+
+fuzz-keyshare-smoke: $(FUZZ_BUILD)/fuzz_slip39_mnemonic
+	$(FUZZ_BUILD)/fuzz_slip39_mnemonic \
+	    -max_total_time=60 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/slip39/
+	@echo "[fuzz-keyshare-smoke] 60s PASS — 0 crashes"
+
+fuzz-keyshare: $(FUZZ_BUILD)/fuzz_slip39_mnemonic
+	$(FUZZ_BUILD)/fuzz_slip39_mnemonic \
+	    -max_total_time=1800 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/slip39/
+	@echo "[fuzz-keyshare] 30min PASS — 0 crashes"
+
 # ── fuzz-smoke (all harnesses × 60 s) ────────────────────────────
-# Runs all five LibFuzzer harnesses for 60 seconds each (~5 min total).
+# Runs all six LibFuzzer harnesses for 60 seconds each (~6 min total).
 # Used by the audit-gate composite target below.
-fuzz-smoke: fuzz-json-smoke fuzz-b64-smoke fuzz-zstd-smoke fuzz-path-smoke fuzz-repo-smoke
+fuzz-smoke: fuzz-json-smoke fuzz-b64-smoke fuzz-zstd-smoke fuzz-path-smoke fuzz-repo-smoke fuzz-keyshare-smoke
 	@echo "[fuzz-smoke] all harnesses: 0 crashes"
 
 # ── audit-gate ────────────────────────────────────────────────────
@@ -863,4 +942,4 @@ fault-inject: $(BUILD)/malloc_inject.so
 	python3 scripts/run_fault_inject.py --max-sweep $(MAX_N)
 	@echo "[fault-inject] PASS: 0 crashes across all test binaries"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64 coverage-c sanitize fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-smoke audit-gate fault-inject
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64 coverage-c sanitize fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-smoke audit-gate fault-inject

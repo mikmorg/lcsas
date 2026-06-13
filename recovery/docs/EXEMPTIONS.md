@@ -7,6 +7,14 @@ here; every line listed here must actually be uncovered.
 The `make coverage-c` target enforces both invariants via
 `recovery/scripts/exemptions_check.py` — see "Enforcement" below.
 
+> **Scope note (KEY-06).** The line-by-line FENCE contract below and its
+> enforcement script cover `src/lcsas-restore/*.c` only.  The
+> `src/lcsas-keyshare/` combiner is *also* in the coverage-c gcovr report
+> (added in KEY-06) and under the fuzz + sanitize gates, but it is not yet
+> line-pinned in the FENCE block — its coverage posture is documented
+> narratively in the "lcsas-keyshare (SLIP-0039 combiner)" section at the
+> end of this file.
+
 ## Categories
 
 - `INTRACTABLE` — cannot be tested without infrastructure beyond the
@@ -220,3 +228,54 @@ Reducing this list further requires:
 2. **EINTR-injection wrapper** — covers lcsas_io.c 6 lines.  Risky to wire into the normal test path.
 3. **AEAD-corruption fixtures** — would require breaking the cryptographic primitive to craft inputs that decrypt-but-verify-fail or corrupt-mid-zstd.  Genuinely not testable.
 4. **1M+ file fixtures** — the petabyte-scale stress test (`LCSAS_PETABYTE=1`) exercises some at integration time.  For coverage-c we'd need the same scale during the standard build (~10s per million-file readdir).
+
+## lcsas-keyshare (SLIP-0039 combiner)
+
+The combiner (`recovery/src/lcsas-keyshare/`) recovers an LCSAS repository
+password from SLIP-0039 mnemonic shares with no python3 dependency.  It
+parses untrusted, heir-typed text (mnemonics and whole printed share-card
+files) on the 50-year critical path, so KEY-06 brought it under the same
+tier-1 gates as `lcsas-restore`:
+
+- **Coverage** — `make coverage-c` now passes a second
+  `--filter 'src/lcsas-keyshare/.*'` to gcovr, so `slip39.c` and `main.c`
+  appear in `build/coverage.json` / the HTML report.
+  `tests/recovery_hardening/test_tier1_coverage_baseline.py` asserts both
+  files stay in the report, guarding against the filter silently
+  regressing.
+- **Fuzzing** — `fuzz/fuzz_slip39_mnemonic.c` exercises
+  `lcsas_keyshare_extract`, `lcsas_keyshare_check_share`, and
+  `lcsas_keyshare_recover_password` (passphrase matrix).  Run via
+  `make -C recovery fuzz-keyshare-smoke` and included in the `fuzz-smoke`
+  aggregate, so `make audit-gate` (and audit-gate CI) covers it.  Seed
+  corpus: the 45 official SLIP-0039 vectors + real printed card files.
+- **Sanitize** — `test_keyshare` is in `TEST_BINS`, so the `make
+  -C recovery sanitize` ASan/UBSan/LSan run already builds and runs it
+  (it formalises the one-off ASan check noted in PLAN.md C5.3).
+- **CI trigger** — `.github/workflows/audit-gate.yml` lists
+  `recovery/src/lcsas-keyshare/**` in both the push and pull_request path
+  filters, so a PR touching only combiner source runs the gate.
+
+Coverage notes (NOT FENCE-enforced — narrative only):
+
+- `wordlist.c` is pure data (the 1024-word const table); gcov reports it
+  as zero executable lines, so it neither needs an exclusion nor drags the
+  line percentage.
+- `slip39.c` carries the algorithm; its uncovered lines are the same class
+  of cryptographic-failure / malloc-failure branches that the
+  `lcsas-restore` table marks INTRACTABLE (a share set that decrypts but
+  fails the integrity digest cannot be crafted without breaking the
+  primitive).
+- `main.c` is the CLI shell.  coverage-c drives it (Step 3d: real cards
+  via `lcsas key split` for the success path, plus usage/error
+  invocations); the binding correctness proof is the integration test
+  `tests/integration/test_keyshare_binary_cards.py`, which subprocesses
+  the *committed* binary against real card artifacts.  A source-only
+  checkout without python3 skips Step 3d cleanly (non-fatal), so main.c
+  may read low there — that is environment-dependent, not a regression.
+
+These files are deliberately not (yet) line-pinned in the FENCE block:
+`exemptions_check.py` is `lcsas-restore`-scoped, and widening the
+line-by-line contract to a second directory is tracked separately.  The
+gates above (fuzz + sanitize + CI trigger + the baseline presence check)
+are the active guards for the combiner.

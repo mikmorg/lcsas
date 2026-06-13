@@ -1,0 +1,56 @@
+================ LCSAS KEY SHARE ================
+Repository : alpha
+Share      : 1 of 5
+Split on   : 2026-06-13
+Split ID   : 00968
+
+WHAT THIS IS
+  This card holds ONE share of the password that unlocks the
+  'alpha' backup archive.  The password was split into 5
+  shares using Shamir Secret Sharing (SLIP-0039).
+
+HOW TO USE IT
+  You need ANY 2 of the 5 shares to rebuild the
+  password.  Fewer than that reveal NOTHING about it.  Gather at
+  least 2 share cards and run:
+      lcsas key combine --share-file <share1> --share-file <share2> ...
+  (or follow the recovery disc's instructions).
+
+  Other people each hold one of the remaining shares.  Losing more
+  than 3 of the 5 shares means the archive
+  password can never be recovered.
+
+THE SHARE WORDS (keep every word, in order)
+  already email academic acid aide wildlife bracelet acne best impact ruler recover adapt decent perfect helpful national peasant chemical adequate
+
+  Tip: you may type just the first 4 letters of each word — the
+  combiner expands any unambiguous prefix to the full word.
+================================================
+================ LCSAS KEY SHARE ================
+Repository : alpha
+Share      : 2 of 5
+Split on   : 2026-06-13
+Split ID   : 00968
+
+WHAT THIS IS
+  This card holds ONE share of the password that unlocks the
+  'alpha' backup archive.  The password was split into 5
+  shares using Shamir Secret Sharing (SLIP-0039).
+
+HOW TO USE IT
+  You need ANY 2 of the 5 shares to rebuild the
+  password.  Fewer than that reveal NOTHING about it.  Gather at
+  least 2 share cards and run:
+      lcsas key combine --share-file <share1> --share-file <share2> ...
+  (or follow the recovery disc's instructions).
+
+  Other people each hold one of the remaining shares.  Losing more
+  than 3 of the 5 shares means the archive
+  password can never be recovered.
+
+THE SHARE WORDS (keep every word, in order)
+  already email academic agency briefing move bracelet lecture diet carbon cylinder trend guest ambition bolt mild voter loud flavor health
+
+  Tip: you may type just the first 4 letters of each word — the
+  combiner expands any unambiguous prefix to the full word.
+================================================
