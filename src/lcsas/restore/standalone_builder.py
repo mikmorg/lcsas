@@ -147,8 +147,20 @@ _HEADER = textwrap.dedent("""\
     #  (zstandard pip package needed only for zstd-compressed repos)
     #
     #  Performance: ~1 MB/s — acceptable for emergency recovery.
+    #
+    #  Requires Python 3.10 or newer (stdlib only).
     # ═══════════════════════════════════════════════════════════════════
     from __future__ import annotations
+
+    import sys
+
+    if sys.version_info < (3, 10):
+        sys.exit(
+            "This restore script needs Python 3.10 or newer. "
+            f"You are running {sys.version.split()[0]}. "
+            "Use the bundled python3 from the recovery disc instead "
+            "(see START_HERE.txt)."
+        )
 
 
 """)

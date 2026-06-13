@@ -46,7 +46,7 @@ import shutil
 import sqlite3
 import sys
 from dataclasses import dataclass, field
-from datetime import UTC
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -1434,11 +1434,13 @@ def _parse_timestamp(ts: str) -> float:
     from datetime import datetime
 
     try:
-        dt = datetime.fromisoformat(ts).replace(tzinfo=UTC)
+        # noqa UP017: datetime.UTC is 3.11+; this file is concatenated into
+        # the 3.10-floor standalone restorer, so timezone.utc is required.
+        dt = datetime.fromisoformat(ts).replace(tzinfo=timezone.utc)  # noqa: UP017
     except ValueError:
         # Last resort: basic parse
         dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f").replace(
-            tzinfo=UTC
+            tzinfo=timezone.utc  # noqa: UP017
         )
     return dt.timestamp()
 

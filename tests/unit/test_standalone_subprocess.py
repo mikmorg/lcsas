@@ -385,3 +385,38 @@ class TestStandaloneSubprocess:
             assert "import lcsas" not in stripped, (
                 f"Standalone script still has lcsas import: {stripped}"
             )
+
+    def test_old_python_gets_friendly_version_error(self, tmp_path):
+        """RST-09: under a <3.10 interpreter the script prints a plain-
+        English message and exits non-zero, with no traceback.
+
+        We can't downgrade the running interpreter, so we raise the guard
+        threshold in the generated script to force the <floor branch on
+        the dev interpreter — proving the guard message wins before any
+        post-floor import runs.
+        """
+        text = build_standalone()
+        # The guard reads ``sys.version_info < (3, 10)``; bump the floor
+        # past the dev interpreter so the branch fires here.
+        assert "sys.version_info < (3, 10)" in text
+        forced = text.replace(
+            "sys.version_info < (3, 10)",
+            "sys.version_info < (99, 0)",
+            1,
+        )
+        script = tmp_path / "standalone_restorer.py"
+        script.write_text(forced)
+
+        result = subprocess.run(
+            [sys.executable, str(script), "--help"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode != 0, (
+            f"Expected non-zero exit on too-old Python.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        combined = result.stdout + result.stderr
+        assert "Python 3.10 or newer" in combined, combined
+        assert "Traceback (most recent call last)" not in combined, combined

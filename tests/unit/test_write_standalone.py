@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import ast
+import shutil
+import subprocess
 
 import pytest
 
+from lcsas.restore.standalone_builder import build_standalone
 from lcsas.staging.metadata import HolographicInjector
 
 
@@ -62,3 +65,64 @@ class TestWriteStandaloneRestorer:
         injector.write_restore_instructions()
         text = (staging_root / "RESTORE_INSTRUCTIONS.txt").read_text()
         assert "standalone_restorer.py" in text
+
+
+class TestStandaloneFloor:
+    """The generated script must stay within its advertised 3.10 floor."""
+
+    # Names that only exist in Python > 3.10 and would crash a true 3.10
+    # interpreter at import-time.  The generated script is a stdlib-only
+    # tier-3 last resort whose whole pitch is "runs on whatever Python is
+    # already here" — RST-09.
+    _POST_310_FROM_IMPORTS = {
+        "datetime": {"UTC"},          # added 3.11
+        "typing": {"Self", "Never", "assert_never", "LiteralString"},  # 3.11
+    }
+    _POST_310_MODULES = {"tomllib"}   # added 3.11
+    # dotted attribute access markers (e.g. datetime.UTC used unqualified)
+    _POST_310_BUILTINS = {"ExceptionGroup", "BaseExceptionGroup"}  # 3.11
+
+    def test_generated_script_has_no_post_310_apis(self):
+        """AST-walk the generated script for known >3.10 markers."""
+        text = build_standalone()
+        tree = ast.parse(text)
+        offenders: list[str] = []
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                banned = self._POST_310_FROM_IMPORTS.get(node.module or "")
+                if banned:
+                    for alias in node.names:
+                        if alias.name in banned:
+                            offenders.append(
+                                f"from {node.module} import {alias.name}"
+                            )
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in self._POST_310_MODULES:
+                        offenders.append(f"import {alias.name}")
+            elif isinstance(node, ast.Name):
+                if node.id in self._POST_310_BUILTINS:
+                    offenders.append(node.id)
+
+        assert not offenders, (
+            "Generated standalone script uses post-3.10 APIs "
+            f"(violates advertised 3.10 floor): {sorted(set(offenders))}"
+        )
+
+    def test_generated_script_compiles_under_python310(self, tmp_path):
+        """If a python3.10 binary is on PATH, py_compile the script under it."""
+        py310 = shutil.which("python3.10")
+        if py310 is None:
+            pytest.skip("python3.10 not on PATH")
+        script = tmp_path / "standalone_restorer.py"
+        script.write_text(build_standalone())
+        result = subprocess.run(
+            [py310, "-m", "py_compile", str(script)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 0, (
+            f"py_compile under python3.10 failed:\n{result.stderr}"
+        )

@@ -82,3 +82,6 @@ Always-on unit (`make test-unit`):
 
 0.5 day. Optional: install python3.10 (deadsnakes/pyenv on this VM, /scratch) so the py_compile
 leg runs locally and in CI.
+
+---
+**Implemented:** 2026-06-13. As planned: restic_fallback now uses `timezone.utc` (UTC import removed; two `# noqa: UP017` since ruff's UP017 wants the 3.11-only `datetime.UTC` alias we must avoid); generated prologue carries a <3.10 friendly-exit guard before any sensitive import. Added ast-walk denylist test + optional python3.10 py_compile leg + forced-guard subprocess test. Docs already stated 3.10 (now true). No standalone-bin regeneration committed (no committed generated artifact in tree; generated on demand).
