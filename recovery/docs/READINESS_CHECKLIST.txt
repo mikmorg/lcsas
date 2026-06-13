@@ -51,6 +51,17 @@ BEFORE RELYING ON THESE DISCS  (one-time, at archive creation)
     the scrypt KDF; there is no password-recovery path.  A single
     copy is a single point of failure.  offsite storage is not
     optional for production archives.
+    DRILL: confirm the escrowed shares (or password copy) STILL
+    unlock the repo — a rotated/stale escrow opens nothing and the
+    failure is undetectable until recovery.  Run:
+      lcsas --config lcsas.toml key verify --repo REPO \
+          --share-file CARD1 --share-file CARD2   # any K of N
+      # or, to test a stored password copy directly:
+      lcsas --config lcsas.toml key verify --repo REPO \
+          --password-file /path/to/password-copy
+    Exit code 0 and an "OK:" line mean the escrow is good.  After any
+    re-key, ALL old cards are void — re-split and redistribute (see
+    docs/ESTATE_PLANNING.md "ROTATION").
     HOW OFTEN: verify at archive creation; re-confirm annually.
 
 [ ] FULL TEST-RESTORE — run a test-restore of the most recent

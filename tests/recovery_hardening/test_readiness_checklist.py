@@ -68,6 +68,24 @@ def test_readiness_checklist_has_offsite():
     )
 
 
+def test_readiness_checklist_names_key_verify_drill():
+    """Key-redundancy item must name the `lcsas key verify` drill [KEY-03].
+
+    The annual escrow re-confirmation was prose-only and named no command;
+    an operator had no documented way to prove the escrowed shares still
+    unlock the repo (a silent re-key voids them undetectably).
+    """
+    # The root --config flag precedes the subcommand (argparse position
+    # rules, enforced by tests/unit/test_doc_command_contract.py), so pin
+    # the subcommand token rather than a fixed full command line.
+    assert "key verify" in _TEXT, (
+        "READINESS_CHECKLIST.txt does not name the 'key verify' drill. "
+        "The annual key-redundancy drill must point operators at the "
+        "command that proves the escrowed shares/password still unlock the "
+        "repo (KEY-03)."
+    )
+
+
 def test_readiness_checklist_has_test_restore():
     """Checklist must document the test-restore verification step."""
     assert "test-restore" in _TEXT, (

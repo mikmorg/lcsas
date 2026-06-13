@@ -52,7 +52,7 @@ class TestExtractMnemonic:
         assert extract_mnemonic(share) == share
 
     def test_full_card_text(self, share: str) -> None:
-        card = _share_card_text("alpha", 1, 2, 5, share)
+        card = _share_card_text("alpha", 1, 2, 5, share, "2026-06-13", 12345)
         assert extract_mnemonic(card) == share
 
     def test_wrapped_mnemonic(self, share: str) -> None:
@@ -68,12 +68,12 @@ class TestExtractMnemonic:
         assert extract_mnemonic(wrapped) == share
 
     def test_crlf_line_endings(self, share: str) -> None:
-        card = _share_card_text("alpha", 1, 2, 5, share)
+        card = _share_card_text("alpha", 1, 2, 5, share, "2026-06-13", 12345)
         crlf = card.replace("\n", "\r\n")
         assert extract_mnemonic(crlf) == share
 
     def test_mixed_case(self, share: str) -> None:
-        card = _share_card_text("alpha", 1, 2, 5, share.upper())
+        card = _share_card_text("alpha", 1, 2, 5, share.upper(), "2026-06-13", 12345)
         assert extract_mnemonic(card) == share
 
     def test_empty_file_rejected(self) -> None:
@@ -106,7 +106,7 @@ def test_card_template_lines_unambiguous() -> None:
     """
     ms = encode_master_secret(b"correct horse battery staple")
     mnemonic = split_secret(ms, 2, 5)[0]
-    card = _share_card_text("alpha", 1, 2, 5, mnemonic)
+    card = _share_card_text("alpha", 1, 2, 5, mnemonic, "2026-06-13", 12345)
 
     mnemonic_lines = [
         line for line in card.splitlines() if is_mnemonic_line(line)

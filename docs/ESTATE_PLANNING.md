@@ -93,6 +93,38 @@ toward recoverability — the dominant risk for a backup is *loss*, not theft.
   The share format and a from-scratch re-implementation guide are in
   `docs/KEY_SHARE_FORMAT.md`, bundled on every meta-volume.
 
+#### ROTATION — when you change the repository password
+
+Re-keying the repository (changing the password, or `rustic key` rotation)
+**invalidates every distributed share card immediately.** The shares
+reconstruct the *old* password, which no longer unlocks the repo — and
+nothing in the cards themselves says so. A holder cannot tell a current card
+from a void one by looking at it.
+
+`lcsas key split` defaults to verifying the password against the repo's real
+key files before writing any card, and re-checks the written cards round-trip,
+so it will refuse to escrow a password that does not unlock the repo. But
+that protects the *moment of splitting* — it cannot reach cards already in the
+field after a later re-key.
+
+Procedure after any re-key:
+
+1. **Re-split** with the new password: `lcsas key split --config ... --repo R`.
+   Each card is stamped with `Split on : <date>` and a `Split ID : NNNNN`
+   (the SLIP-0039 identifier, shared by all cards of one split, different
+   between splits) so you can tell card generations apart in the binder.
+2. **Redistribute** the new cards to the same holders/locations.
+3. **Recall and destroy** the superseded cards (shred / incinerate). Note the
+   superseded `Split ID` in your estate notes so a stray old card is
+   recognisable as void.
+4. **Confirm** the new cards work end-to-end:
+   `lcsas key verify --config ... --repo R --share-file CARD1 --share-file CARD2`
+   (any K). Exit 0 + an `OK:` line means the new escrow is good.
+
+The annual READINESS drill (`recovery/docs/READINESS_CHECKLIST.txt`,
+"ENCRYPTION KEY REDUNDANCY") runs that same `lcsas key verify` so a silent
+rotation drift is caught within a year, not at recovery.
+
 ### 3. Letter to Heirs
 
 - [ ] **Write a letter** and store it with the disc binder:

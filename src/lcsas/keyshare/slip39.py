@@ -810,3 +810,15 @@ def split_secret(
 def recover_secret(mnemonics: list[str], passphrase: bytes = b"") -> bytes:
     """Convenience alias for :func:`combine_mnemonics`."""
     return combine_mnemonics(mnemonics, passphrase)
+
+
+def share_identifier(mnemonic: str) -> int:
+    """Return the 15-bit SLIP-0039 random identifier of a single share.
+
+    All shares produced by one split carry the same identifier; two
+    independent splits almost certainly differ.  Used to stamp share cards
+    so a stale (superseded) card set is recognisable in the field.
+
+    :raises KeyShareError: if *mnemonic* is not a valid SLIP-0039 share.
+    """
+    return _Share.from_mnemonic(mnemonic).identifier

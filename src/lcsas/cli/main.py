@@ -643,6 +643,33 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", type=Path, default=None,
         help="Output directory for share files (default: ./keyshares-<repo>/).",
     )
+    key_split.add_argument(
+        "--no-verify-repo", action="store_true",
+        help="Skip checking that the password actually unlocks the repo's "
+             "key files. Escrowing an unverified password is dangerous; use "
+             "only when the mirror's keys/ is unavailable at split time.",
+    )
+
+    key_verify = key_sub.add_parser(
+        "verify",
+        help="Verify that shares/a password actually unlock a repository "
+             "(annual key drill).",
+    )
+    key_verify.add_argument(
+        "--repo", required=True,
+        help="Repository name whose key files to test against.",
+    )
+    key_verify.add_argument(
+        "--share-file", action="append", default=None, dest="share_files",
+        type=Path,
+        help="A share or share-card file (repeatable). Supply at least the "
+             "threshold (K) to reconstruct the password.",
+    )
+    key_verify.add_argument(
+        "--password-file", type=Path, default=None,
+        help="Verify this password file directly instead of reconstructing "
+             "from shares.",
+    )
 
     key_combine = key_sub.add_parser(
         "combine",
@@ -4316,8 +4343,10 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_key_split(args)
         elif args.key_command == "combine":
             return cmd_key_combine(args)
+        elif args.key_command == "verify":
+            return cmd_key_verify(args)
         else:
-            logger.error("Usage: lcsas key {split,combine}")
+            logger.error("Usage: lcsas key {split,combine,verify}")
             return 1
 
     logger.error(f"Command '{args.command}' not yet implemented.")
@@ -4340,13 +4369,26 @@ def _write_private_file(path: Path, data: bytes) -> None:
 
 
 def _share_card_text(
-    repo: str, index: int, threshold: int, count: int, mnemonic: str
+    repo: str,
+    index: int,
+    threshold: int,
+    count: int,
+    mnemonic: str,
+    split_date: str,
+    split_id: int,
 ) -> str:
-    """Build a plain-language printable 'share card' for one key share."""
+    """Build a plain-language printable 'share card' for one key share.
+
+    The ``Split on`` date and ``Split ID`` (SLIP-0039 identifier, shared by
+    every card of one split) let a holder spot a superseded card set after a
+    re-key — see docs/ESTATE_PLANNING.md "ROTATION".
+    """
     return (
         "================ LCSAS KEY SHARE ================\n"
         f"Repository : {repo}\n"
         f"Share      : {index} of {count}\n"
+        f"Split on   : {split_date}\n"
+        f"Split ID   : {split_id:05d}\n"
         "\n"
         "WHAT THIS IS\n"
         "  This card holds ONE share of the password that unlocks the\n"
@@ -4370,10 +4412,99 @@ def _share_card_text(
     )
 
 
+def _verify_password_unlocks_repo(
+    keys_dir: Path, password: bytes, repo: str,
+) -> str | None:
+    """Authenticate *password* against a repo's ``keys/`` directory.
+
+    Returns ``None`` on success; otherwise a human-readable error string
+    naming the repo, the keys dir, and how to override.  Fails closed: a
+    missing or empty ``keys/`` is an error (escrow is exactly where
+    "probably fine" is wrong).
+    """
+    from lcsas.restore.restic_fallback import IntegrityError, _try_keys
+
+    if not keys_dir.is_dir():
+        return (
+            f"keys directory not found for repository '{repo}': {keys_dir}. "
+            "Cannot verify that the password unlocks the repo. Make the "
+            "mirror's keys/ reachable, or pass --no-verify-repo to skip "
+            "(escrowing an unverified password is dangerous)."
+        )
+    if not any(p.is_file() for p in keys_dir.iterdir()):
+        return (
+            f"no key files under {keys_dir} for repository '{repo}'. "
+            "Cannot verify that the password unlocks the repo. "
+            "Pass --no-verify-repo to skip (dangerous)."
+        )
+    try:
+        _try_keys(keys_dir, password)
+    except IntegrityError:
+        n = sum(1 for p in keys_dir.iterdir() if p.is_file())
+        return (
+            f"the password in this file does NOT unlock repository "
+            f"'{repo}' ({n} key file(s) checked under {keys_dir}). "
+            "You were about to escrow a wrong password. If you really "
+            "intend this, pass --no-verify-repo."
+        )
+    return None
+
+
+def _recombine_roundtrip_error(
+    mnemonics: list[str], expected: bytes,
+) -> str | None:
+    """Recombine K-subsets of *mnemonics* and confirm they reproduce *expected*.
+
+    Returns ``None`` on success, else an error naming the failing subset.
+    Bounds the C(N,K) blow-up at 64 subsets.  *mnemonics[0]*'s threshold is
+    read from the share metadata so this works without the caller passing K.
+    """
+    from itertools import combinations
+
+    from lcsas.keyshare import KeyShareError, decode_master_secret, recover_secret
+    from lcsas.keyshare.slip39 import _Share
+
+    # Read K from share metadata.  A corrupted/short mnemonic here is itself a
+    # verification failure (its checksum won't parse).
+    threshold: int | None = None
+    for i, mn in enumerate(mnemonics):
+        try:
+            threshold = _Share.from_mnemonic(mn).member_threshold
+            break
+        except KeyShareError as e:
+            return f"share {i + 1} is not a valid SLIP-0039 share: {e}"
+    assert threshold is not None  # mnemonics is non-empty; loop above returns
+    subsets = list(combinations(range(len(mnemonics)), threshold))
+    if len(subsets) > 64:
+        subsets = subsets[:64]
+    for idx in subsets:
+        subset = [mnemonics[i] for i in idx]
+        try:
+            got = decode_master_secret(recover_secret(subset))
+        except KeyShareError as e:
+            return (
+                f"shares {[i + 1 for i in idx]} failed to reconstruct: {e}"
+            )
+        if got != expected:
+            return (
+                f"shares {[i + 1 for i in idx]} do not reconstruct the input "
+                "password"
+            )
+    return None
+
+
 def cmd_key_split(args: argparse.Namespace) -> int:
     """Split a repository password into K-of-N SLIP-0039 key shares."""
+    from datetime import date
+
     from lcsas.config.settings import load_config
-    from lcsas.keyshare import KeyShareError, encode_master_secret, split_secret
+    from lcsas.keyshare import (
+        KeyShareError,
+        encode_master_secret,
+        extract_mnemonic,
+        share_identifier,
+        split_secret,
+    )
 
     # Resolve K/N: explicit flags override config defaults.
     threshold = args.threshold
@@ -4427,6 +4558,48 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         logger.error("Could not split password: %s", e)
         return 1
 
+    # ── Repo-unlock verification (default on) ─────────────────────────
+    # Authenticate the password against the real key files BEFORE writing
+    # anything, so a failed split leaves no wrong-password card on disk.
+    if args.no_verify_repo:
+        logger.warning(
+            "Skipping repo-unlock check (--no-verify-repo): the password "
+            "in %s was NOT verified to unlock repository '%s'.",
+            repo_pw_file, args.repo,
+        )
+    elif config is None:
+        logger.warning(
+            "No --config given: the password was NOT verified against any "
+            "repository. Run `lcsas key verify --config ... --password-file "
+            "%s` once the mirror is reachable.", repo_pw_file,
+        )
+    else:
+        repo_cfg = config.repositories.get(args.repo)
+        if repo_cfg is None:
+            logger.error(
+                "Repository '%s' is not defined in the config file.", args.repo
+            )
+            return 1
+        err = _verify_password_unlocks_repo(
+            repo_cfg.mirror_path / "keys", password, args.repo
+        )
+        if err is not None:
+            logger.error("%s", err)
+            return 1
+
+    # ── In-memory recombine round-trip (always on) ────────────────────
+    err = _recombine_roundtrip_error(mnemonics, password)
+    if err is not None:
+        logger.error("SPLIT FAILED VERIFICATION: %s. Nothing written.", err)
+        return 1
+
+    split_date = date.today().isoformat()
+    try:
+        split_id = share_identifier(mnemonics[0])
+    except KeyShareError as e:  # pragma: no cover - just-built share is valid
+        logger.error("Could not read share identifier: %s", e)
+        return 1
+
     out_dir: Path = args.out if args.out is not None else Path(f"./keyshares-{args.repo}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -4434,8 +4607,37 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         share_path = out_dir / f"{args.repo}-share-{i}.txt"
         card_path = out_dir / f"{args.repo}-share-{i}-card.txt"
         _write_private_file(share_path, (mnemonic + "\n").encode("utf-8"))
-        card = _share_card_text(args.repo, i, threshold, shares, mnemonic)
+        card = _share_card_text(
+            args.repo, i, threshold, shares, mnemonic, split_date, split_id
+        )
         _write_private_file(card_path, card.encode("utf-8"))
+
+    # ── Post-write round-trip (write-path check) ──────────────────────
+    # Re-read the CARD files from disk and verify the printed artifact —
+    # not just the bare files — reconstructs the password.  Catches a
+    # corrupted/short write before any card is distributed.
+    card_files = [
+        out_dir / f"{args.repo}-share-{i}-card.txt"
+        for i in range(1, shares + 1)
+    ]
+    try:
+        written_mnemonics = [
+            extract_mnemonic(p.read_text(encoding="utf-8"), source=str(p))
+            for p in card_files
+        ]
+    except KeyShareError as e:
+        logger.error(
+            "SPLIT FAILED VERIFICATION: written card unreadable: %s. "
+            "Do NOT distribute these cards.", e,
+        )
+        return 1
+    err = _recombine_roundtrip_error(written_mnemonics, password)
+    if err is not None:
+        logger.error(
+            "SPLIT FAILED VERIFICATION: written cards %s. Do NOT distribute "
+            "these cards.", err,
+        )
+        return 1
 
     print(
         f"Wrote {shares} share(s) ({threshold}-of-{shares}) for repo "
@@ -4512,6 +4714,93 @@ def cmd_key_combine(args: argparse.Namespace) -> int:
         # trailing newline, or it would no longer match the original.
         sys.stdout.buffer.write(password)
         sys.stdout.buffer.flush()
+    return 0
+
+
+def cmd_key_verify(args: argparse.Namespace) -> int:
+    """Verify that shares (or a password file) unlock a repository.
+
+    The annual key drill (recovery/docs/READINESS_CHECKLIST.txt): reconstruct
+    the password from the supplied shares/cards (or read --password-file), then
+    authenticate it against the repo's real ``keys/`` files.  Exit code is the
+    contract — rc 0 only when the password actually unlocks the repo.
+    """
+    from lcsas.config.settings import load_config
+    from lcsas.keyshare import (
+        KeyShareError,
+        decode_master_secret,
+        extract_mnemonic,
+        recover_secret,
+    )
+
+    if args.config is None:
+        logger.error("--config is required for key verify.")
+        return 1
+    if bool(args.share_files) == bool(args.password_file):
+        logger.error(
+            "Pass EITHER one or more --share-file (to reconstruct), OR a "
+            "single --password-file (to test directly)."
+        )
+        return 1
+
+    config = load_config(args.config)
+    repo_cfg = config.repositories.get(args.repo)
+    if repo_cfg is None:
+        logger.error(
+            "Repository '%s' is not defined in the config file.", args.repo
+        )
+        return 1
+
+    # Resolve the candidate password.
+    if args.password_file is not None:
+        if not args.password_file.exists():
+            logger.error("Password file does not exist: %s", args.password_file)
+            return 1
+        password = args.password_file.read_bytes().rstrip(b"\n")
+        n_shares = 0
+    else:
+        mnemonics: list[str] = []
+        for sf in args.share_files:
+            if not sf.exists():
+                logger.error("Share file does not exist: %s", sf)
+                return 1
+            try:
+                mnemonics.append(
+                    extract_mnemonic(
+                        sf.read_text(encoding="utf-8"), source=str(sf)
+                    )
+                )
+            except KeyShareError as e:
+                logger.error("%s", e)
+                return 1
+        try:
+            password = decode_master_secret(recover_secret(mnemonics))
+        except KeyShareError as e:
+            logger.error(
+                "Reconstruction failed: %s\n"
+                "Supply at least the threshold (K) of valid shares from the "
+                "SAME split.", e,
+            )
+            return 1
+        n_shares = len(mnemonics)
+
+    keys_dir = repo_cfg.mirror_path / "keys"
+    err = _verify_password_unlocks_repo(keys_dir, password, args.repo)
+    if err is not None:
+        logger.error("%s", err)
+        return 1
+
+    n_keys = sum(1 for p in keys_dir.iterdir() if p.is_file())
+    if n_shares:
+        print(
+            f"OK: these {n_shares} share(s) reconstruct the password that "
+            f"unlocks '{args.repo}' ({n_keys} key file(s) checked)."
+        )
+    else:
+        print(
+            f"OK: the password unlocks '{args.repo}' "
+            f"({n_keys} key file(s) checked)."
+        )
     return 0
 
 

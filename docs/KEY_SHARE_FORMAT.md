@@ -102,6 +102,21 @@ re-implementation must pass all 45. The pieces:
   master secret at the CLI layer (`lcsas key split`); the inverse decoding is
   applied after reconstruction. See `KEY_INFO.txt` on the disc for whether an
   archive used split keys and the K/N in effect.
+- **Verify-at-split.** `lcsas key split` authenticates the password against the
+  repo's real `keys/` files (pure-Python scrypt + Poly1305) and round-trips the
+  freshly written cards *before* declaring success, so it never escrows a
+  password that does not unlock the repo or a card that does not reconstruct.
+  Pass `--no-verify-repo` only when the mirror's `keys/` is unreachable at split
+  time. Re-confirm escrow health any time with
+  `lcsas key verify --config ... --repo R --share-file CARD …` (or
+  `--password-file FILE`); exit code is the contract.
+- **Card stamps & rotation.** Each printed card carries `Split on : <date>` and
+  `Split ID : NNNNN` — the 15-bit SLIP-0039 identifier, identical across all
+  cards of one split and (almost certainly) different between splits. After a
+  re-key, *all* old cards are void; re-split, redistribute, destroy superseded
+  cards, and `lcsas key verify` the new set. See `docs/ESTATE_PLANNING.md`
+  "ROTATION". Cards from before this stamping (no `Split on`/`Split ID` lines)
+  remain valid combiner input — the extractor ignores non-wordlist lines.
 - **Where shares live.** Off-disc, by design — printed share cards in separate
   locations / with separate holders, per `docs/ESTATE_PLANNING.md`. Shares are
   **never** written to any LCSAS volume (that would defeat the split).

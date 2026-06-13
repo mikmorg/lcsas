@@ -22,6 +22,7 @@ from .slip39 import (
     combine_mnemonics,
     generate_mnemonics,
     recover_secret,
+    share_identifier,
     split_secret,
 )
 
@@ -34,5 +35,6 @@ __all__ = [
     "generate_mnemonics",
     "is_mnemonic_line",
     "recover_secret",
+    "share_identifier",
     "split_secret",
 ]

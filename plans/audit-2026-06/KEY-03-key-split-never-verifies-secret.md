@@ -168,3 +168,6 @@ Always-on, `tests/unit/test_cli_key.py` (runs in `make test-unit` → `gate`):
 2.5 days: 1.0 split verification + fail-closed paths, 0.75 `key verify`
 subcommand + parser, 0.75 fixtures/tests/docs. No external binaries needed
 (pure-Python unlock path).
+
+---
+**Implemented:** 2026-06-13. As planned. `cmd_key_split` now runs repo-unlock (default on, `--no-verify-repo`) + recombine round-trips (in-memory and post-write card re-read) before declaring success; new `lcsas key verify` subcommand; cards stamped with `Split on`/`Split ID` (new `share_identifier` helper); ESTATE_PLANNING ROTATION + KEY_SHARE_FORMAT + READINESS_CHECKLIST docs. Doc examples use root-first `lcsas --config ... key verify` for the argparse doc-gate; the READINESS pin asserts the `key verify` token accordingly.
