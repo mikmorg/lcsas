@@ -833,3 +833,198 @@ int lcsas_keyshare_recover_password(const char *const *mnemonics, size_t n,
     free(ms);
     return rc;
 }
+
+/* --------------------------------------------------------------------- */
+/* Card-tolerant mnemonic extraction (KEY-01).                           */
+/* --------------------------------------------------------------------- */
+
+/* Lowercase a single token into `buf` (cap incl. NUL); returns 0 on
+ * success, -1 if the token is too long for a wordlist word. */
+static int lower_token(const char *tok, size_t len, char *buf, size_t cap)
+{
+    size_t i;
+    if (len + 1 > cap) {
+        return -1;
+    }
+    for (i = 0; i < len; i++) {
+        char c = tok[i];
+        if (c >= 'A' && c <= 'Z') {
+            c = (char)(c - 'A' + 'a');
+        }
+        buf[i] = c;
+    }
+    buf[len] = '\0';
+    return 0;
+}
+
+/* A line is a "mnemonic line" iff it is non-blank and every
+ * whitespace-separated token is a SLIP-0039 wordlist word.  `line`
+ * points at the start; `len` is its length (newline excluded). */
+static int line_is_mnemonic(const char *line, size_t len)
+{
+    size_t i = 0;
+    int saw_token = 0;
+
+    while (i < len) {
+        size_t start;
+        size_t wlen;
+        char word[32];
+
+        while (i < len && (line[i] == ' ' || line[i] == '\t')) {
+            i++;
+        }
+        if (i >= len) {
+            break;
+        }
+        start = i;
+        while (i < len && line[i] != ' ' && line[i] != '\t') {
+            i++;
+        }
+        wlen = i - start;
+        if (lower_token(line + start, wlen, word, sizeof(word)) != 0) {
+            return 0;
+        }
+        if (word_to_index(word, wlen) < 0) {
+            return 0;
+        }
+        saw_token = 1;
+    }
+    return saw_token;
+}
+
+int lcsas_keyshare_extract(const char *text, char *out, size_t cap,
+                           char *errbuf, size_t errcap)
+{
+    const char *p = text;
+    size_t outlen = 0;
+    size_t words = 0;
+
+    if (cap == 0) {
+        if (errbuf != NULL && errcap > 0) {
+            errbuf[0] = '\0';
+        }
+        return -1;
+    }
+    out[0] = '\0';
+
+    while (*p != '\0') {
+        const char *line = p;
+        size_t llen = 0;
+
+        while (p[llen] != '\0' && p[llen] != '\n') {
+            llen++;
+        }
+        /* Trim a trailing CR (CRLF line endings). */
+        {
+            size_t tlen = llen;
+            while (tlen > 0 &&
+                   (line[tlen - 1] == '\r' || line[tlen - 1] == ' ' ||
+                    line[tlen - 1] == '\t')) {
+                tlen--;
+            }
+            if (line_is_mnemonic(line, tlen)) {
+                /* Append this line's tokens to `out`, space-separated,
+                 * lowercasing as we go (the recover path is
+                 * case-sensitive against the canonical wordlist). */
+                size_t i = 0;
+                while (i < tlen) {
+                    size_t start;
+                    while (i < tlen &&
+                           (line[i] == ' ' || line[i] == '\t')) {
+                        i++;
+                    }
+                    if (i >= tlen) {
+                        break;
+                    }
+                    start = i;
+                    while (i < tlen &&
+                           line[i] != ' ' && line[i] != '\t') {
+                        i++;
+                    }
+                    if (outlen > 0) {
+                        if (outlen + 1 >= cap) {
+                            if (errbuf != NULL && errcap > 0) {
+                                errbuf[0] = '\0';
+                            }
+                            return -1;
+                        }
+                        out[outlen++] = ' ';
+                    }
+                    {
+                        size_t j;
+                        for (j = start; j < i; j++) {
+                            char c = line[j];
+                            if (c >= 'A' && c <= 'Z') {
+                                c = (char)(c - 'A' + 'a');
+                            }
+                            if (outlen + 1 >= cap) {
+                                if (errbuf != NULL && errcap > 0) {
+                                    errbuf[0] = '\0';
+                                }
+                                return -1;
+                            }
+                            out[outlen++] = c;
+                        }
+                    }
+                    words++;
+                }
+            }
+        }
+
+        p += llen;
+        if (*p == '\n') {
+            p++;
+        }
+    }
+
+    out[outlen] = '\0';
+
+    if (words < (size_t)MIN_MNEMONIC_LENGTH_WORDS) {
+        if (errbuf != NULL && errcap > 0) {
+            /* Avoid stdio in this library file; build the message into a
+             * fixed local buffer (errbuf may be small but the message is
+             * bounded), then copy-truncate into errbuf. */
+            char msg[64];
+            char num[16];
+            size_t ni = 0;
+            size_t mi = 0;
+            size_t k;
+            size_t w = words;
+            const char *pre = "found ";
+            const char *post = " share words, expected at least 20";
+
+            if (w == 0) {
+                num[ni++] = '0';
+            } else {
+                char tmp[16];
+                size_t ti = 0;
+                while (w > 0 && ti < sizeof(tmp)) {
+                    tmp[ti++] = (char)('0' + (int)(w % 10));
+                    w /= 10;
+                }
+                while (ti > 0) {
+                    num[ni++] = tmp[--ti];
+                }
+            }
+            num[ni] = '\0';
+
+            for (k = 0; pre[k] != '\0' && mi < sizeof(msg) - 1; k++) {
+                msg[mi++] = pre[k];
+            }
+            for (k = 0; num[k] != '\0' && mi < sizeof(msg) - 1; k++) {
+                msg[mi++] = num[k];
+            }
+            for (k = 0; post[k] != '\0' && mi < sizeof(msg) - 1; k++) {
+                msg[mi++] = post[k];
+            }
+            msg[mi] = '\0';
+
+            for (k = 0; msg[k] != '\0' && k + 1 < errcap; k++) {
+                errbuf[k] = msg[k];
+            }
+            errbuf[(k < errcap) ? k : errcap - 1] = '\0';
+        }
+        return -1;
+    }
+    return 0;
+}

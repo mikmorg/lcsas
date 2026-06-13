@@ -95,4 +95,21 @@ int lcsas_keyshare_recover_password(const char *const *mnemonics, size_t n,
                                     const unsigned char *passphrase, size_t plen,
                                     unsigned char *out_pw, size_t *out_pwlen);
 
+/*
+ * Extract the share mnemonic embedded in `text` (a bare mnemonic file OR
+ * a printed share card with header lines and prose).  A line contributes
+ * to the mnemonic iff it is non-blank and every whitespace-separated
+ * token is a SLIP-0039 wordlist word; such lines are joined, in order,
+ * into one space-separated, lowercased mnemonic written NUL-terminated
+ * into `out` (capacity `cap`).
+ *
+ * Returns 0 on success.  Returns nonzero if the joined word count is not
+ * a valid share length (20 or 33) or `out` is too small; on the
+ * word-count failure a one-line reason (e.g. "found 7 share words,
+ * expected 20 or 33") is written into `errbuf` (capacity `errcap`,
+ * truncated to fit; may be NULL to discard).
+ */
+int lcsas_keyshare_extract(const char *text, char *out, size_t cap,
+                           char *errbuf, size_t errcap);
+
 #endif

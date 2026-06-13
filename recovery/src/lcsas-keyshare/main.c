@@ -5,9 +5,12 @@
  *   lcsas-keyshare [--passphrase X] SHARE_FILE...
  *   lcsas-keyshare [--passphrase X] < shares.txt   (one mnemonic per line)
  *
- * Each SHARE_FILE holds exactly one SLIP-0039 mnemonic (the whole file is
- * one mnemonic; leading/trailing whitespace and newlines are ignored).
- * When no files are given, mnemonics are read from stdin, one per line.
+ * Each SHARE_FILE is a bare mnemonic file OR a printed share card (the
+ * {repo}-share-N-card.txt artifact a holder is handed): the share words
+ * are recognised by their content, so card header lines and prose are
+ * ignored.  When no files are given, mnemonics are read from stdin; each
+ * line whose tokens are all wordlist words is one share, others (blanks,
+ * card prose) are skipped, so `cat card1 card2 | lcsas-keyshare` works.
  *
  * The recovered LCSAS repository PASSWORD is written to stdout as raw
  * bytes with NO trailing newline.  Any failure prints a message to
@@ -27,47 +30,43 @@
 
 #define MAX_MNEMONICS  64
 #define MAX_LINE       4096
+/* A whole card file (header + prose + words) fits well under this. */
+#define MAX_FILE       65536
 
-/* Read an entire file into `buf` (NUL-terminated), trimming surrounding
- * whitespace.  Returns 0 on success, nonzero on error. */
+/* Read an entire file (bare mnemonic OR printed share card), extract the
+ * embedded share mnemonic into `buf` (NUL-terminated, capacity `cap`).
+ * Returns 0 on success, nonzero on error (an explanatory message naming
+ * `path` is printed to stderr). */
 static int read_file_mnemonic(const char *path, char *buf, size_t cap)
 {
+    static char filebuf[MAX_FILE];
     FILE *f = fopen(path, "rb");
     size_t got;
-    size_t start, end;
+    char err[64];
 
     if (f == NULL) {
         fprintf(stderr, "lcsas-keyshare: cannot open '%s'\n", path);
         return -1;
     }
-    got = fread(buf, 1, cap - 1, f);
+    got = fread(filebuf, 1, sizeof(filebuf) - 1, f);
     if (ferror(f)) {
         fprintf(stderr, "lcsas-keyshare: read error on '%s'\n", path);
         fclose(f);
         return -1;
     }
     fclose(f);
-    buf[got] = '\0';
+    filebuf[got] = '\0';
 
-    /* Trim leading/trailing whitespace in place. */
-    start = 0;
-    while (buf[start] == ' ' || buf[start] == '\t' ||
-           buf[start] == '\n' || buf[start] == '\r') {
-        start++;
-    }
-    end = got;
-    while (end > start) {
-        char c = buf[end - 1];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-            end--;
+    err[0] = '\0';
+    if (lcsas_keyshare_extract(filebuf, buf, cap, err, sizeof(err)) != 0) {
+        if (err[0] != '\0') {
+            fprintf(stderr, "lcsas-keyshare: '%s': %s "
+                            "— is this a complete share card?\n", path, err);
         } else {
-            break;
+            fprintf(stderr, "lcsas-keyshare: '%s': share too large\n", path);
         }
+        return -1;
     }
-    if (start > 0) {
-        memmove(buf, buf + start, end - start);
-    }
-    buf[end - start] = '\0';
     return 0;
 }
 
@@ -138,28 +137,20 @@ int main(int argc, char **argv)
             n++;
         }
     } else {
-        /* Read mnemonics from stdin, one per line. */
-        while (n < MAX_MNEMONICS && fgets(storage[n], MAX_LINE, stdin) != NULL) {
-            char *line = storage[n];
-            size_t len = strlen(line);
-            /* Strip trailing newline/CR. */
-            while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
-                line[--len] = '\0';
-            }
-            /* Skip blank lines. */
-            {
-                size_t s = 0;
-                while (line[s] == ' ' || line[s] == '\t') {
-                    s++;
-                }
-                if (line[s] == '\0') {
-                    continue;
-                }
+        /* Read mnemonics from stdin, one per line.  A line is a share iff
+         * its tokens are all wordlist words and number 20 or 33 (what
+         * lcsas_keyshare_extract validates); blank lines and card prose
+         * fail that and are skipped, so `cat card1 card2 | ...` works. */
+        static char linebuf[MAX_LINE];
+        while (n < MAX_MNEMONICS && fgets(linebuf, MAX_LINE, stdin) != NULL) {
+            if (lcsas_keyshare_extract(linebuf, storage[n], MAX_LINE,
+                                       NULL, 0) != 0) {
+                continue;
             }
             mnemonics[n] = storage[n];
             n++;
         }
-        if (n >= MAX_MNEMONICS && fgets(storage[0], MAX_LINE, stdin) != NULL) {
+        if (n >= MAX_MNEMONICS && fgets(linebuf, MAX_LINE, stdin) != NULL) {
             /* fgets above already consumed; this branch is defensive only
              * if exactly MAX_MNEMONICS lines were read. */
             fprintf(stderr, "lcsas-keyshare: too many shares (max %d)\n",

@@ -176,10 +176,110 @@ static void run_codec(void)
     }
 }
 
+/* Card-tolerant mnemonic extraction (KEY-01). */
+static void run_extract(void)
+{
+    /* A real 20-word SLIP-0039 share (vector 1's mnemonic). */
+    static const char SHARE[] =
+        "duckling enlarge academic academic agency result length solution "
+        "fridge kidney coal piece deal husband erode duke ajar critical "
+        "decision keyboard";
+
+    /* A printed share card: header lines + prose + the words on one line,
+     * exactly the {repo}-share-N-card.txt shape (CRLF on one line to also
+     * exercise carriage-return trimming). */
+    static const char CARD[] =
+        "================ LCSAS KEY SHARE ================\n"
+        "Repository : alpha\r\n"
+        "Share      : 1 of 5\n"
+        "\n"
+        "WHAT THIS IS\n"
+        "  This card holds ONE share of the password.\n"
+        "\n"
+        "THE SHARE WORDS (keep every word, in order)\n"
+        "  duckling enlarge academic academic agency result length solution "
+        "fridge kidney coal piece deal husband erode duke ajar critical "
+        "decision keyboard\r\n"
+        "================================================\n";
+
+    char out[4096];
+    char err[64];
+    int rc;
+
+    /* Bare mnemonic passes through unchanged. */
+    rc = lcsas_keyshare_extract(SHARE, out, sizeof(out), err, sizeof(err));
+    if (rc != 0 || strcmp(out, SHARE) != 0) {
+        fprintf(stderr, "FAIL extract: bare mnemonic (rc=%d)\n", rc);
+        fails++;
+    }
+
+    /* Full card text yields exactly the embedded share words. */
+    err[0] = '\0';
+    rc = lcsas_keyshare_extract(CARD, out, sizeof(out), err, sizeof(err));
+    if (rc != 0 || strcmp(out, SHARE) != 0) {
+        fprintf(stderr, "FAIL extract: card text (rc=%d, out='%s')\n",
+                rc, out);
+        fails++;
+    }
+
+    /* The extracted card mnemonic actually recovers — feed it back. */
+    {
+        const char *m[1];
+        unsigned char ms[LCSAS_SLIP39_MAX_SECRET];
+        size_t mslen = 0;
+        m[0] = out;
+        if (lcsas_slip39_recover(m, 1, TREZOR, sizeof(TREZOR),
+                                 ms, &mslen) != 0) {
+            fprintf(stderr, "FAIL extract: recovered card share failed\n");
+            fails++;
+        }
+    }
+
+    /* Truncated share (only the first 5 words) => nonzero, word count named. */
+    {
+        static const char SHORT[] =
+            "  duckling enlarge academic academic agency\n";
+        err[0] = '\0';
+        rc = lcsas_keyshare_extract(SHORT, out, sizeof(out),
+                                    err, sizeof(err));
+        if (rc == 0) {
+            fprintf(stderr, "FAIL extract: truncated accepted\n");
+            fails++;
+        } else if (strstr(err, "5") == NULL) {
+            fprintf(stderr, "FAIL extract: error lacks count: '%s'\n", err);
+            fails++;
+        }
+    }
+
+    /* Prose-only file (no wordlist line) => nonzero, "found 0". */
+    {
+        static const char PROSE[] =
+            "================ LCSAS KEY SHARE ================\n"
+            "Repository : alpha\n"
+            "(the holder lost the words)\n";
+        err[0] = '\0';
+        rc = lcsas_keyshare_extract(PROSE, out, sizeof(out),
+                                    err, sizeof(err));
+        if (rc == 0) {
+            fprintf(stderr, "FAIL extract: prose-only accepted\n");
+            fails++;
+        } else if (strstr(err, "0") == NULL) {
+            fprintf(stderr, "FAIL extract: prose error lacks count: '%s'\n",
+                    err);
+            fails++;
+        }
+    }
+
+    if (fails == 0) {
+        printf("test_keyshare: card extraction cases OK\n");
+    }
+}
+
 int main(void)
 {
     run_vectors();
     run_codec();
+    run_extract();
     if (fails == 0) {
         printf("test_keyshare: OK\n");
     }

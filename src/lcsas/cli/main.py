@@ -4458,6 +4458,8 @@ def cmd_key_combine(args: argparse.Namespace) -> int:
     from lcsas.keyshare import (
         KeyShareError,
         decode_master_secret,
+        extract_mnemonic,
+        is_mnemonic_line,
         recover_secret,
     )
 
@@ -4467,15 +4469,22 @@ def cmd_key_combine(args: argparse.Namespace) -> int:
             if not sf.exists():
                 logger.error("Share file does not exist: %s", sf)
                 return 1
-            text = sf.read_text(encoding="utf-8").strip()
-            if text:
-                mnemonics.append(text)
+            # Each file is one share: a bare mnemonic file or a printed
+            # share card.  extract_mnemonic ignores card header/prose and
+            # raises KeyShareError (naming the file + word count) on a
+            # truncated/prose-only file.
+            text = sf.read_text(encoding="utf-8")
+            try:
+                mnemonics.append(extract_mnemonic(text, source=str(sf)))
+            except KeyShareError as e:
+                logger.error("%s", e)
+                return 1
     else:
-        # No --share-file: read shares from stdin, one mnemonic per line.
+        # No --share-file: read shares from stdin.  Skip non-mnemonic
+        # lines (blanks, card prose) so `cat card1 card2 | ...` works.
         for line in sys.stdin:
-            line = line.strip()
-            if line:
-                mnemonics.append(line)
+            if is_mnemonic_line(line):
+                mnemonics.append(" ".join(line.split()))
 
     if not mnemonics:
         logger.error(

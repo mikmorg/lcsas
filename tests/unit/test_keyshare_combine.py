@@ -126,6 +126,81 @@ class TestCombinerInProcess:
         assert rc == 2
         assert "no share mnemonics" in capsys.readouterr().err
 
+    def test_combine_accepts_real_card_files(self, tmp_path, capsysbinary):
+        """KEY-01: the heir-facing -card.txt artifacts reconstruct.
+
+        Generates real cards via ``lcsas key split`` (the exact artifact a
+        holder is handed and told to pass to ``keyshare_combine.py``) and
+        feeds the cards — not the bare share files — to the combiner.
+        """
+        from lcsas.cli.main import main as cli_main
+
+        pw_file = tmp_path / "pw"
+        pw_file.write_bytes(_PASSWORD)
+        out = tmp_path / "shares"
+        assert cli_main([
+            "key", "split", "--repo", "alpha",
+            "--threshold", "2", "--shares", "5",
+            "--password-file", str(pw_file), "--out", str(out),
+        ]) == 0
+        capsysbinary.readouterr()
+
+        cards = sorted(out.glob("alpha-share-*-card.txt"))
+        assert len(cards) == 5
+        rc = keyshare_combine.main([str(cards[0]), str(cards[3])])
+        assert rc == 0
+        assert capsysbinary.readouterr().out == _PASSWORD
+
+    def test_combine_card_stdin(self, tmp_path, monkeypatch, capsysbinary):
+        """KEY-01: concatenated card text piped on stdin reconstructs."""
+        import io
+
+        from lcsas.cli.main import main as cli_main
+
+        pw_file = tmp_path / "pw"
+        pw_file.write_bytes(_PASSWORD)
+        out = tmp_path / "shares"
+        assert cli_main([
+            "key", "split", "--repo", "alpha",
+            "--password-file", str(pw_file), "--out", str(out),
+        ]) == 0
+        capsysbinary.readouterr()
+
+        cards = sorted(out.glob("alpha-share-*-card.txt"))
+        piped = cards[0].read_text() + cards[1].read_text()
+        monkeypatch.setattr("sys.stdin", io.StringIO(piped))
+        rc = keyshare_combine.main([])
+        assert rc == 0
+        assert capsysbinary.readouterr().out == _PASSWORD
+
+    def test_truncated_card_errors(self, tmp_path, capsys):
+        """KEY-01: a truncated card fails (rc 1), naming file + word count."""
+        from lcsas.cli.main import main as cli_main
+
+        pw_file = tmp_path / "pw"
+        pw_file.write_bytes(_PASSWORD)
+        out = tmp_path / "shares"
+        assert cli_main([
+            "key", "split", "--repo", "alpha",
+            "--password-file", str(pw_file), "--out", str(out),
+        ]) == 0
+        capsys.readouterr()
+
+        cards = sorted(out.glob("alpha-share-*-card.txt"))
+        trunc = tmp_path / "trunc-card.txt"
+        # Drop the share-words line entirely -> 0 share words.
+        from lcsas.keyshare import is_mnemonic_line
+        kept = [
+            ln for ln in cards[0].read_text().splitlines()
+            if not is_mnemonic_line(ln)
+        ]
+        trunc.write_text("\n".join(kept) + "\n")
+        rc = keyshare_combine.main([str(trunc), str(cards[1])])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "trunc-card.txt" in err
+        assert "share words" in err
+
 
 # ── (a') subprocess isolation: only the keyshare package importable ──
 

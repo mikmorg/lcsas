@@ -44,6 +44,11 @@ def _share_mnemonic_files(out_dir: Path, repo: str = "alpha") -> list[Path]:
     )
 
 
+def _share_card_files(out_dir: Path, repo: str = "alpha") -> list[Path]:
+    """Just the printable -card.txt files (the heir-facing artifact)."""
+    return sorted(out_dir.glob(f"{repo}-share-*-card.txt"))
+
+
 def _config_file(tmp_path: Path, **defaults: object) -> Path:
     """Write a minimal TOML config with optional [defaults] overrides."""
     pw_file = tmp_path / "alpha.pw"
@@ -152,6 +157,72 @@ class TestSplitCombineRoundTrip:
         ]) == 0
         assert (tmp_path / "keyshares-alpha").is_dir()
         assert len(_share_mnemonic_files(tmp_path / "keyshares-alpha")) == 5
+
+    def test_cli_combine_accepts_card_files(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        """KEY-01: real -card.txt files reconstruct via `lcsas key combine`."""
+        pw_file = _write_pw_file(tmp_path / "pw")
+        out = tmp_path / "shares"
+        assert main([
+            "key", "split", "--repo", "alpha",
+            "--threshold", "2", "--shares", "5",
+            "--password-file", str(pw_file), "--out", str(out),
+        ]) == 0
+        capsys.readouterr()
+
+        cards = _share_card_files(out)
+        assert len(cards) == 5
+        assert main([
+            "key", "combine",
+            "--share-file", str(cards[0]),
+            "--share-file", str(cards[3]),
+        ]) == 0
+        captured = capsys.readouterr()
+        assert captured.out.encode("utf-8", "surrogateescape") == PASSWORD
+
+    def test_cli_combine_card_stdin(self, tmp_path: Path, capsys, monkeypatch) -> None:
+        """KEY-01: concatenated card text on stdin reconstructs."""
+        import io
+
+        pw_file = _write_pw_file(tmp_path / "pw")
+        out = tmp_path / "shares"
+        assert main([
+            "key", "split", "--repo", "alpha",
+            "--password-file", str(pw_file), "--out", str(out),
+        ]) == 0
+        capsys.readouterr()
+
+        cards = _share_card_files(out)
+        piped = cards[0].read_text() + cards[1].read_text()
+        monkeypatch.setattr("sys.stdin", io.StringIO(piped))
+        assert main(["key", "combine"]) == 0
+        captured = capsys.readouterr()
+        assert captured.out.encode("utf-8", "surrogateescape") == PASSWORD
+
+    def test_cli_combine_rejects_truncated_card(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        """KEY-01: a truncated card fails, naming the file and word count."""
+        pw_file = _write_pw_file(tmp_path / "pw")
+        out = tmp_path / "shares"
+        assert main([
+            "key", "split", "--repo", "alpha",
+            "--password-file", str(pw_file), "--out", str(out),
+        ]) == 0
+        cards = _share_card_files(out)
+        trunc = tmp_path / "trunc-card.txt"
+        # Keep only the header (drop the share-words line) -> 0 share words.
+        head = [
+            ln for ln in cards[0].read_text().splitlines()
+            if "THE SHARE WORDS" not in ln
+        ]
+        trunc.write_text("\n".join(head[:8]) + "\n")
+        assert main([
+            "key", "combine",
+            "--share-file", str(trunc),
+            "--share-file", str(cards[1]),
+        ]) == 1
 
     def test_card_content(self, tmp_path: Path) -> None:
         pw_file = _write_pw_file(tmp_path / "pw")
@@ -320,7 +391,10 @@ class TestCombineErrors:
             "--share-file", str(mfiles[0]),
             "--share-file", str(bad),
         ]) == 1
-        assert "Could not reconstruct" in capsys.readouterr().out
+        # A non-wordlist token poisons the line, so no share words are
+        # extracted: the card-tolerant extractor rejects it early (rc 1,
+        # naming the file and the count) before reconstruction. [KEY-01]
+        assert "share words" in capsys.readouterr().out
 
     def test_foreign_share_set_fails(self, tmp_path: Path, capsys) -> None:
         mine = self._make_shares(tmp_path)
@@ -346,13 +420,15 @@ class TestCombineErrors:
         ]) == 1
         assert "Share file does not exist" in capsys.readouterr().out
 
-    def test_blank_share_file_skipped_then_no_shares(
+    def test_blank_share_file_rejected(
         self, tmp_path: Path, capsys
     ) -> None:
+        # A blank --share-file holds zero share words: the extractor names
+        # the file and the count rather than silently skipping it. [KEY-01]
         blank = tmp_path / "blank.txt"
         blank.write_text("   \n")
         assert main(["key", "combine", "--share-file", str(blank)]) == 1
-        assert "No shares supplied" in capsys.readouterr().out
+        assert "0 share words" in capsys.readouterr().out
 
     def test_combine_from_stdin(self, tmp_path: Path, capsys, monkeypatch) -> None:
         import io

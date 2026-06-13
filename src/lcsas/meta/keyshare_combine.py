@@ -14,10 +14,13 @@
 #    python3 keyshare_combine.py SHARE_FILE [SHARE_FILE ...]
 #    cat share1.txt share2.txt | python3 keyshare_combine.py
 #
-#  Each SHARE_FILE holds one share mnemonic (one mnemonic per line;
-#  blank lines and lines starting with '#' are ignored).  Supply any K
-#  of the N shares.  The reconstructed password is written to stdout as
-#  RAW BYTES with no trailing newline:
+#  Each SHARE_FILE is either a bare mnemonic file or a printed share
+#  CARD (the {repo}-share-N-card.txt artifact you were handed).  The
+#  share words are recognised by their content — header lines and prose
+#  in a card are ignored — so passing the cards directly works.  Supply
+#  any K of the N shares.  On stdin (cat card1 card2 | ...) each line is
+#  treated as words-or-prose the same way.  The reconstructed password
+#  is written to stdout as RAW BYTES with no trailing newline:
 #
 #    python3 keyshare_combine.py card1.txt card2.txt > repo.key
 #    ./restore.sh --key repo.key --target ~/restored
@@ -65,6 +68,8 @@ try:  # source checkout / dev: lcsas.keyshare
     from lcsas.keyshare import (
         KeyShareError,
         decode_master_secret,
+        extract_mnemonic,
+        is_mnemonic_line,
         recover_secret,
     )
 except ImportError:  # pragma: no cover - meta-volume top-level bundle path
@@ -75,6 +80,8 @@ except ImportError:  # pragma: no cover - meta-volume top-level bundle path
     from keyshare import (  # type: ignore[no-redef, import-not-found]
         KeyShareError,
         decode_master_secret,
+        extract_mnemonic,
+        is_mnemonic_line,
         recover_secret,
     )
 
@@ -82,24 +89,23 @@ except ImportError:  # pragma: no cover - meta-volume top-level bundle path
 def _read_mnemonics(paths: list[str]) -> list[str]:
     """Collect share mnemonics from *paths* and/or stdin.
 
-    Each mnemonic is one non-blank, non-comment line.  When no paths are
-    given, mnemonics are read from stdin instead.  Returns the list of
-    mnemonic strings in the order encountered.
+    For each file path, the whole file is treated as ONE share — a bare
+    mnemonic file or a printed share card — and its embedded mnemonic is
+    extracted (header/prose lines ignored).  When no paths are given,
+    mnemonics are read from stdin keeping one-mnemonic-per-line
+    semantics, but non-mnemonic lines (blanks, comments, card prose) are
+    skipped rather than fatal, so ``cat card1 card2 | ...`` works.
+    Returns the mnemonic strings in the order encountered.
     """
     mnemonics: list[str] = []
-    sources: list[str] = []
     if paths:
         for p in paths:
-            sources.append(Path(p).read_text(encoding="utf-8"))
+            text = Path(p).read_text(encoding="utf-8")
+            mnemonics.append(extract_mnemonic(text, source=p))
     else:
-        sources.append(sys.stdin.read())
-
-    for text in sources:
-        for line in text.splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            mnemonics.append(stripped)
+        for line in sys.stdin.read().splitlines():
+            if is_mnemonic_line(line):
+                mnemonics.append(" ".join(line.split()))
     return mnemonics
 
 
@@ -126,6 +132,9 @@ def main(argv: list[str] | None = None) -> int:
     except OSError as exc:
         sys.stderr.write(f"error: could not read share file: {exc}\n")
         return 2
+    except KeyShareError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 1
 
     if not mnemonics:
         sys.stderr.write(

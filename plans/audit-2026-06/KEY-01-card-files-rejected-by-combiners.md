@@ -167,3 +167,19 @@ Always-on (run in `make test-unit`, hence `make gate` via `test-all`):
 2.5 days: 1.0 Python (extractor + two call sites + tests), 1.0 C (extract
 function + main.c + test cases + ASan run), 0.5 cross-target rebuild
 (`zig cc` already installed per keyshare-arches flow) + integration test.
+
+---
+**Implemented:** 2026-06-13. As planned, with one substantive deviation: the
+plan's "valid share = 20 or 33 words" premise is empirically wrong for LCSAS.
+LCSAS frames a variable-length password into the master secret, so a share's
+word count is `METADATA_LENGTH_WORDS (7) + ceil(secret_bits/10)` and is NOT
+fixed at 20/33 (a real 2-of-5 split of a short password produced 25-word
+shares). Both extractors now require `>= MIN_MNEMONIC_LENGTH_WORDS` (20) with
+no upper bound; the RS1024 checksum in the combiner remains the backstop for
+wordlist-only-but-bogus lines. Error wording adjusted to "expected at least
+20". The C extractor lives in `slip39.c` (reusing the static `word_to_index`);
+Python output is lowercased to stay byte-identical to the C path. Two existing
+CLI error-path tests (corrupted-share, blank-file) were updated to the new
+early-rejection message — both still rc 1, password never printed. All 6
+target bins rebuilt; x86_64/aarch64/armv7 verified byte-exact via
+qemu-*-static and windows via wine; test_keyshare clean under ASan+UBSan.
