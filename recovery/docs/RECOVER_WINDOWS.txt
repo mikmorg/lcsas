@@ -59,6 +59,31 @@ remain on the meta-disc, so you can eject the recovery disc and
 insert each data disc into the same drive when prompted.
 
 ────────────────────────────────────────────────────────────────────
+FILES LARGER THAN 4 GiB (multi-extent ISO 9660 limitation)
+────────────────────────────────────────────────────────────────────
+
+Windows' built-in CDFS driver -- the one behind File Explorer's
+disc view and PowerShell's Mount-DiskImage -- cannot reassemble a
+single file larger than 4 GiB (precisely, 4 GiB - 2 KiB).  ISO 9660
+stores such a file as multiple "extents", and the native Windows
+driver reads only the first one: the file appears TRUNCATED with no
+error message.
+
+LCSAS refuses to master a disc containing a file this large (the
+ISO build aborts with an "OversizeFileError" naming the file), so a
+disc produced by an up-to-date LCSAS should never trigger this.  But
+if you are reading an older disc and a recovered file looks
+truncated AND the binary did NOT report a hash mismatch, suspect
+this limitation.
+
+WORKAROUND: do not read the over-large file through the mounted
+disc.  Instead copy the entire .iso image to a local disk and
+extract it with 7-Zip (https://www.7-zip.org), which reassembles
+multi-extent files correctly.  Right-click the .iso in 7-Zip File
+Manager -> Extract, then run restore.bat against the extracted
+folder instead of the mounted drive.
+
+────────────────────────────────────────────────────────────────────
 VERIFY THE BINARY BEFORE RUNNING IT (recommended for paranoid users)
 ────────────────────────────────────────────────────────────────────
 

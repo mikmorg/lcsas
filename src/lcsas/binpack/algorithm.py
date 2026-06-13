@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from lcsas.iso.xorriso import _ISO_MAX_FILE_BYTES
+
 _logger = logging.getLogger(__name__)
 
 
@@ -54,6 +56,25 @@ def first_fit_decreasing(
             "archived on this media type. Largest: '%s' (%d bytes). "
             "All oversized items: %s",
             oversized_count, usable, largest_id, largest_size, detail,
+        )
+
+    # Belt-and-braces early warning for the Windows multi-extent trap: a file
+    # larger than a single ISO 9660 extent (4 GiB - 2 KiB) is stored across
+    # multiple extents, which Windows' native CDFS mount silently truncates.
+    # ISO mastering hard-rejects these (iso.xorriso); warn at plan time too so
+    # the operator hears about it before staging completes.
+    multiextent = [
+        (iid, sz) for iid, sz in sorted_items if sz > _ISO_MAX_FILE_BYTES
+    ]
+    if multiextent:
+        detail = ", ".join(f"'{iid}' ({sz:,} bytes)" for iid, sz in multiextent[:5])
+        if len(multiextent) > 5:
+            detail += f" ... and {len(multiextent) - 5} more"
+        _logger.warning(
+            "%d item(s) exceed the single-extent ISO 9660 limit (%d bytes) and "
+            "would be stored multi-extent, which Windows' native mount silently "
+            "truncates. ISO mastering will refuse these. Items: %s",
+            len(multiextent), _ISO_MAX_FILE_BYTES, detail,
         )
 
     selected: list[tuple[str, int]] = []

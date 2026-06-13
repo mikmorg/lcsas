@@ -262,6 +262,17 @@ builder.
 ISO 9660 Level 3 with Rock Ridge + Joliet.  38-year-old standard,
 universally supported.  Good choice.
 
+**Multi-extent caveat (single files ≥ 4 GiB):** ISO 9660 Level 3
+stores a file larger than 4 GiB − 2 KiB as multiple extents.
+Windows' native CDFS driver (the `Mount-DiskImage` path behind
+`restore.bat`) does not reassemble multi-extent files — the heir
+sees a silently truncated file.  LCSAS closes this at the mastering
+choke point: `iso/xorriso.py` raises `OversizeFileError` for any
+file over the single-extent limit (both data and meta volumes), and
+the bin-packer warns at plan time.  See
+`recovery/docs/RECOVER_WINDOWS.txt` for the 7-Zip extraction
+workaround on any pre-guard disc.
+
 ### 4.2 Filename compatibility — ✅ Low risk
 
 Pack files named by SHA-256 hex (64 lowercase hex chars).  Volume

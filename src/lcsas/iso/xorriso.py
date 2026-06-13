@@ -14,6 +14,23 @@ from lcsas.utils.subprocess import SubprocessRunnerBase
 
 _logger = logging.getLogger(__name__)
 
+# Max single-extent ISO 9660 file section: 4 GiB - 2 KiB.  A file larger than
+# this is stored as multiple extents under ISO 9660 Level 3, which Windows'
+# native CDFS driver (the Mount-DiskImage path behind restore.bat) does not
+# reassemble — the heir silently sees a truncated file.  We refuse to master
+# any tree containing such a file.
+_ISO_MAX_FILE_BYTES = 0xFFFF_F800
+
+
+class OversizeFileError(Exception):
+    """A file in the staging tree is too large to store single-extent in ISO 9660.
+
+    ISO 9660 Level 3 splits a >4 GiB file across multiple extents, which
+    Windows' built-in CDFS mount silently truncates.  Rather than burn a disc
+    that the statistically most-likely heir platform cannot read, mastering is
+    refused.
+    """
+
 
 def _translate_burn_error(stderr: str, device: str) -> None:
     """Log a human-readable explanation for common xorriso burn failures.
@@ -100,6 +117,29 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
     ) -> None:
         super().__init__(xorriso_binary, tmpdir)
 
+    def _assert_no_multiextent_files(self, source_dir: Path) -> None:
+        """Refuse to master a tree containing a >4 GiB file.
+
+        Such a file becomes multi-extent under ISO 9660 Level 3 and is
+        silently truncated by Windows' native CDFS mount.  Called before any
+        xorriso process is spawned so the failure is loud and local.
+        """
+        offenders = [
+            (p, size)
+            for p in source_dir.rglob("*")
+            if p.is_file() and (size := p.stat().st_size) > _ISO_MAX_FILE_BYTES
+        ]
+        if offenders:
+            detail = "; ".join(
+                f"'{p.relative_to(source_dir)}' is {size:,} bytes"
+                for p, size in offenders
+            )
+            raise OversizeFileError(
+                f"{detail} (> 4 GiB - 2 KiB). ISO 9660 would store it "
+                f"multi-extent, which Windows' native mount silently truncates. "
+                f"Refusing to master. Split the file or reduce rustic pack size."
+            )
+
     def create_iso(
         self,
         source_dir: Path,
@@ -120,6 +160,7 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
         """
         if not source_dir.is_dir():
             raise FileNotFoundError(f"Source directory not found: {source_dir}")
+        self._assert_no_multiextent_files(source_dir)
         tmp_iso = output_iso.with_suffix(".iso.tmp")
         cmd = [
             self._binary,
@@ -219,6 +260,7 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
         """
         if not source_dir.is_dir():
             raise FileNotFoundError(f"Source directory not found: {source_dir}")
+        self._assert_no_multiextent_files(source_dir)
 
         tmp_iso = output_iso.with_suffix(".iso.tmp")
         cmd = [

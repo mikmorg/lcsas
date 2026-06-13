@@ -103,3 +103,6 @@ been burned; the guard prevents future ones; the doc caveat covers any that exis
 ## Effort
 
 **1 focused day** (0.5 impl, 0.5 tests + docs). No special environment.
+
+---
+**Implemented:** 2026-06-13. As planned: `OversizeFileError` + `_ISO_MAX_FILE_BYTES` guard at the xorriso choke point (both `create_iso` and `create_bootable_iso`, before any subprocess spawn); bin-packer plan-time multi-extent warning; RECOVER_WINDOWS.txt + SURVIVABILITY.md §4.1 caveats; three test modules (unit oversize guard, binpack warning, recovery-hardening doc-pin) all green.
