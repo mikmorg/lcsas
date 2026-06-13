@@ -120,9 +120,9 @@ cf96b02e68216f618ea33b20b49d476edba9d70f2333597ec516629d22971cda  ./specs/rfc801
 46321c9081c79c42f34f4748cdc8f13bd9e9edbbb7e03700a094abccbdd978e6  ./src/lcsas-iso9660/iso9660.c
 6982f0e7725f5c8f64f94193286a9f6124f341c4ed62253356a368308c228d14  ./src/lcsas-iso9660/iso9660.h
 26ab17188a712deb4da5692273d8158a629a21bee28eb6daf5d18cc426cc2496  ./src/lcsas-iso9660/main.c
-8937ad586dffce80d3591168d03d0b6c02ee22284c3fe591ec67dcfacd7af304  ./src/lcsas-keyshare/main.c
-07929ff3a70b0190e2c093d7a89b660986fe950fa414d505673dd0dfdce6e674  ./src/lcsas-keyshare/slip39.c
-84e1353758303fc2280c07155190702729dd4adcb67ec4c7aa29a3a1e245ed9d  ./src/lcsas-keyshare/slip39.h
+4890668d5ddcc2e07256109b604dd6fc37891f81d2e0c5dc223eddc198ccc287  ./src/lcsas-keyshare/main.c
+affa5a0e5128fa355b4cd0cd78ee84501e0985e242dba91e78b92d411abbaec2  ./src/lcsas-keyshare/slip39.c
+08308ba791d9bec45455d061f00c45f77c70f51b8fe3b07213dafd7cb1d3c364  ./src/lcsas-keyshare/slip39.h
 7aa545f4be82efbfdaf83dfad7bbe03a0dee580c7abf03dac7121ca972a03c2f  ./src/lcsas-keyshare/wordlist.c
 5c5436a8677391c43c73697acc5429bc508fde5363aad09e9ec4ada9465a08e4  ./src/lcsas-restore/aes.c
 fdedb9ff512078245a11aba51a261b52076669afb25c9aed0db0bfca91cd7f8d  ./src/lcsas-restore/aes.h
@@ -184,7 +184,7 @@ c3716d6e5ac8193689130a65de1eb4c85fd7797560f3dc07d78cc9f7a6b5132b  ./tests/test_e
 4f5eb8d6a38bb6f8fa9ac1dad392e0775be01c81b38ac807c45776aa64df3c48  ./tests/test_iso9660.py
 869c0b7ab29d6f0aa1c9b8902101ffe464381ef6c258f6e8ae61f9f90bd95c75  ./tests/test_json.c
 69285dcccfa75c9c21ede6075f471378b1fff5212eca32c6dcb50c6e3ce949c8  ./tests/test_json_decode_string.c
-81b4b31a674cc4fb0cfce3c030ab178d184e2997b1f6846b1c95bc3f9d261331  ./tests/test_keyshare.c
+c63dace2dfec98add7304857f853c4255a6d7b212212c9da324eac7d16635aaf  ./tests/test_keyshare.c
 85e5d40504f91da602bdadf70672cdb3e901f9d0ac0dc0171111650dc0b682a7  ./tests/test_multidisc.py
 c0e234c17fa6c0681fb4e60ef7297be979a5f8ee134c0d61316db96a6c661fc4  ./tests/test_path.c
 2e15bf81a942c616dd632548af27d71538ff9a29185a575e95209f24a32667e9  ./tests/test_pbkdf2.c

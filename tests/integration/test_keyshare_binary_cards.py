@@ -83,5 +83,13 @@ def test_committed_binary_rejects_truncated_card(tmp_path: Path) -> None:
         check=False,
     )
     assert proc.returncode != 0
-    assert b"share words" in proc.stderr
+    # KEY-07: a truncated card is rejected loudly.  Either it has no
+    # plausible share line ("share words"/"complete share card"), or the
+    # per-share pre-pass flags the densest surviving (prose) line as not a
+    # valid share — both name the problem; never a silent partial password.
+    assert (
+        b"share words" in proc.stderr
+        or b"complete share card" in proc.stderr
+        or b"failed individual validation" in proc.stderr
+    )
     assert proc.stdout == b""

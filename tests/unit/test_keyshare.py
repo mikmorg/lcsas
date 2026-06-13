@@ -15,6 +15,7 @@ import pytest
 
 from lcsas.keyshare import (
     KeyShareError,
+    check_share,
     combine_mnemonics,
     generate_mnemonics,
     recover_secret,
@@ -363,3 +364,84 @@ def test_recover_secret_alias_matches_combine() -> None:
     assert recover_secret(mnemonics[:2], b"z") == combine_mnemonics(
         mnemonics[:2], b"z"
     )
+
+
+# --------------------------------------------------------------------------- #
+# 4-letter-prefix entry + per-share diagnostics (KEY-07).
+# --------------------------------------------------------------------------- #
+
+
+def _prefix4(mnemonic: str) -> str:
+    """Return *mnemonic* with every word truncated to its first 4 letters."""
+    return " ".join(w[:4] for w in mnemonic.split())
+
+
+def test_prefix_words_accepted() -> None:
+    """Every word typed as its 4-letter prefix recovers byte-identically."""
+    mnemonics = split_secret(_MS, threshold=2, count=3)
+    full = recover_secret(mnemonics[:2])
+    prefixed = recover_secret([_prefix4(m) for m in mnemonics[:2]])
+    assert prefixed == full == _MS
+
+
+def test_prefix_words_accepted_mixed_full_and_prefix() -> None:
+    """A mix of full words and 4-letter prefixes in one share still works."""
+    mnemonics = split_secret(_MS, threshold=2, count=3)
+    words = mnemonics[0].split()
+    mixed = " ".join(w if i % 2 else w[:4] for i, w in enumerate(words))
+    assert recover_secret([mixed, mnemonics[1]]) == _MS
+
+
+def test_three_letter_token_rejected() -> None:
+    """A 3-letter token is below the unique-prefix length and is rejected."""
+    mnemonics = split_secret(_MS, threshold=2, count=3)
+    words = mnemonics[0].split()
+    bad = " ".join([words[0][:3], *words[1:]])
+    assert check_share(bad) is not None
+    with pytest.raises(KeyShareError, match="Unknown word"):
+        recover_secret([bad, mnemonics[1]])
+
+
+def test_full_word_wins_over_prefix() -> None:
+    """An exact full word always resolves to itself.
+
+    'academic' (index 0) and e.g. 'academy'-like neighbours share no exact
+    collision, but the contract is that a full word never degrades to prefix
+    logic; assert the index is the exact-match one.
+    """
+    assert slip39._word_index("academic") == slip39._WORD_TO_INDEX["academic"]
+
+
+def test_check_share_names_word_position() -> None:
+    """A mistyped word is reported with its 1-based position and the token."""
+    mnemonics = split_secret(_MS, threshold=2, count=3)
+    words = mnemonics[0].split()
+    words[6] = "buidling"  # word 7: not a wordlist word, not a unique prefix
+    reason = check_share(" ".join(words))
+    assert reason is not None
+    assert "word 7" in reason
+    assert "buidling" in reason
+
+
+def test_check_share_valid_returns_none() -> None:
+    """A valid share passes the per-share check with no message."""
+    mnemonics = split_secret(_MS, threshold=2, count=3)
+    assert check_share(mnemonics[0]) is None
+    assert check_share(_prefix4(mnemonics[0])) is None
+
+
+def test_check_share_bad_checksum() -> None:
+    """A share whose checksum fails is reported as a checksum error."""
+    mnemonics = split_secret(_MS, threshold=2, count=3)
+    words = mnemonics[0].split()
+    words[-1], words[-2] = words[-2], words[-1]  # disturb the RS1024 checksum
+    reason = check_share(" ".join(words))
+    assert reason is not None
+    assert "checksum" in reason.lower()
+
+
+def test_check_share_too_few_words() -> None:
+    """A truncated share names the word count and the minimum."""
+    reason = check_share("academic academic academic")
+    assert reason is not None
+    assert "found 3" in reason

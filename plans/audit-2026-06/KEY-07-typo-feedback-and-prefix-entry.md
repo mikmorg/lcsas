@@ -117,3 +117,6 @@ target bins (`make -C recovery keyshare-arches`) and commit.
 
 2 days: 1.0 C (prefix search + check_share + main.c output + tests), 0.75
 Python parity + cross-check, 0.25 docs + rebuild.
+
+---
+**Implemented:** 2026-06-13. As planned, with two scoped additions: (1) a token-dense-line fallback in `main.c` (`copy_candidate_line`) so a typo'd card — which strict extraction drops — still reaches the per-share pre-pass for an actionable diagnostic; (2) surgical (4-line) update of `recovery/MANIFEST.sha256` for the touched C sources only — the manifest was already broadly stale for unrelated files (e.g. ENV_VARS.txt), and a full `make manifest` regen would have swept that out-of-scope drift into this commit. KEY-06's fuzz/CI gate is not yet landed (not a blocker for this change). Cross-arch bins rebuilt for all 6 targets and verified via qemu/wine.

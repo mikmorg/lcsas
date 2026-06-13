@@ -112,4 +112,24 @@ int lcsas_keyshare_recover_password(const char *const *mnemonics, size_t n,
 int lcsas_keyshare_extract(const char *text, char *out, size_t cap,
                            char *errbuf, size_t errcap);
 
+/*
+ * Validate ONE share mnemonic independently of the rest of the set, for
+ * actionable per-share diagnostics before recovery is attempted.  Checks,
+ * in order: every token resolves to a wordlist word (full word, or a
+ * unique 4+-letter prefix); the word count is a valid share length; and
+ * the per-share RS1024 checksum verifies.
+ *
+ * Returns 0 if the share is individually valid.  On any failure returns
+ * nonzero and writes a one-line, human-readable reason into `errbuf`
+ * (capacity `errcap`, truncated to fit; may be NULL to discard), e.g.:
+ *   word 7 'buidling' is not a share word
+ *   checksum FAILED - recheck your typing against the card
+ *
+ * A pass here means the share is internally consistent; it does NOT mean
+ * the share belongs to the same split as the others — that mismatch only
+ * surfaces during recovery.
+ */
+int lcsas_keyshare_check_share(const char *mnemonic,
+                               char *errbuf, size_t errcap);
+
 #endif

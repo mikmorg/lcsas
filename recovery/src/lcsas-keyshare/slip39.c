@@ -141,6 +141,39 @@ static int rs1024_verify(const unsigned int *data, size_t n, int extendable)
 /* Word <-> index (binary search over the alphabetically sorted list).   */
 /* --------------------------------------------------------------------- */
 
+/* Minimum token length eligible for prefix expansion.  The SLIP-0039
+ * wordlist guarantees every word is uniquely identified by its first 4
+ * letters, so any token of length >= 4 that prefix-matches exactly one
+ * word resolves unambiguously (KEY_SHARE_FORMAT.md §2). */
+#define MIN_PREFIX_LEN 4
+
+/* Compare token (`w`, length `len`) against wordlist entry `cand` as a
+ * prefix probe: returns 0 if `w` is a prefix of `cand` (the first `len`
+ * chars match), <0 if `w` sorts before, >0 if after. */
+static int prefix_cmp(const char *w, size_t len, const char *cand)
+{
+    size_t i = 0;
+    while (i < len && cand[i] != '\0') {
+        unsigned char a = (unsigned char)w[i];
+        unsigned char b = (unsigned char)cand[i];
+        if (a != b) {
+            return (a < b) ? -1 : 1;
+        }
+        i++;
+    }
+    /* All `len` chars matched (cand is >= len long since wordlist words
+     * are >= 4 chars), or cand ended first.  If i == len, w is a prefix
+     * of cand; otherwise w extends past cand (sorts after). */
+    return (i == len) ? 0 : 1;
+}
+
+/*
+ * Map a token to a wordlist index.  An exact full-word match always
+ * wins.  Failing that, a token of length >= MIN_PREFIX_LEN that is the
+ * unique prefix of exactly one wordlist word resolves to that word's
+ * index.  Returns the index, or -1 if no full word matches and the token
+ * is not an unambiguous 4+-letter prefix.
+ */
 static int word_to_index(const char *w, size_t len)
 {
     int lo = 0, hi = 1023;
@@ -165,6 +198,36 @@ static int word_to_index(const char *w, size_t len)
             hi = mid - 1;
         } else {
             lo = mid + 1;
+        }
+    }
+
+    /* No exact full-word match.  Try prefix expansion: a token of >= 4
+     * letters identifies at most one word (wordlist invariant).  Binary
+     * search for the lowest index whose word has `w` as a prefix, then
+     * confirm exactly one such word exists. */
+    if (len >= MIN_PREFIX_LEN) {
+        int first;
+        lo = 0;
+        hi = 1023;
+        first = -1;
+        while (lo <= hi) {
+            int mid = lo + (hi - lo) / 2;
+            int c = prefix_cmp(w, len, lcsas_slip39_wordlist[mid]);
+            if (c == 0) {
+                first = mid;
+                hi = mid - 1;   /* keep searching left for the first */
+            } else if (c < 0) {
+                hi = mid - 1;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        if (first >= 0) {
+            /* Unique iff the next word is not also prefixed by `w`. */
+            if (first == 1023 ||
+                prefix_cmp(w, len, lcsas_slip39_wordlist[first + 1]) != 0) {
+                return first;
+            }
         }
     }
     return -1;
@@ -1027,4 +1090,180 @@ int lcsas_keyshare_extract(const char *text, char *out, size_t cap,
         return -1;
     }
     return 0;
+}
+
+/* --------------------------------------------------------------------- */
+/* Per-share diagnostics (KEY-07).                                       */
+/* --------------------------------------------------------------------- */
+
+/* Append the NUL-terminated `src` to `buf` (capacity `cap`, including the
+ * NUL) starting at `*pos`, truncating if it would overflow.  Keeps the
+ * library free of stdio. */
+static void sb_append(char *buf, size_t cap, size_t *pos, const char *src)
+{
+    size_t p = *pos;
+    size_t k = 0;
+    if (cap == 0) {
+        return;
+    }
+    while (src[k] != '\0' && p + 1 < cap) {
+        buf[p++] = src[k++];
+    }
+    buf[p] = '\0';
+    *pos = p;
+}
+
+/* Append the decimal representation of `v` to `buf`. */
+static void sb_append_uint(char *buf, size_t cap, size_t *pos, size_t v)
+{
+    char tmp[24];
+    size_t ti = 0;
+    char num[24];
+    size_t ni = 0;
+    if (v == 0) {
+        num[ni++] = '0';
+    } else {
+        while (v > 0 && ti < sizeof(tmp)) {
+            tmp[ti++] = (char)('0' + (int)(v % 10));
+            v /= 10;
+        }
+        while (ti > 0) {
+            num[ni++] = tmp[--ti];
+        }
+    }
+    num[ni] = '\0';
+    sb_append(buf, cap, pos, num);
+}
+
+/* Append `tok` (length `len`, lowercased) to `buf`. */
+static void sb_append_token(char *buf, size_t cap, size_t *pos,
+                            const char *tok, size_t len)
+{
+    size_t p = *pos;
+    size_t k = 0;
+    if (cap == 0) {
+        return;
+    }
+    while (k < len && p + 1 < cap) {
+        char c = tok[k];
+        if (c >= 'A' && c <= 'Z') {
+            c = (char)(c - 'A' + 'a');
+        }
+        buf[p++] = c;
+        k++;
+    }
+    buf[p] = '\0';
+    *pos = p;
+}
+
+int lcsas_keyshare_check_share(const char *mnemonic, char *errbuf, size_t errcap)
+{
+    const char *p = mnemonic;
+    unsigned int *words = NULL;
+    size_t count = 0;
+    size_t pos = 0;
+    int extendable;
+    int rc;
+
+    if (errbuf != NULL && errcap > 0) {
+        errbuf[0] = '\0';
+    }
+
+    words = (unsigned int *)malloc(MAX_MNEMONIC_WORDS * sizeof(unsigned int));
+    if (words == NULL) {
+        return -1;
+    }
+
+    /* Word-by-word lookup; on the first unknown token, name its 1-based
+     * position and the offending token. */
+    while (*p != '\0') {
+        const char *tok;
+        size_t wlen = 0;
+        char word[32];
+        int idx;
+
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
+            p++;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        tok = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t' &&
+               *p != '\n' && *p != '\r') {
+            p++;
+        }
+        wlen = (size_t)(p - tok);
+
+        if (wlen >= sizeof(word)) {
+            /* Too long to be any wordlist word: report it as not a word. */
+            if (errbuf != NULL && errcap > 0) {
+                sb_append(errbuf, errcap, &pos, "word ");
+                sb_append_uint(errbuf, errcap, &pos, count + 1);
+                sb_append(errbuf, errcap, &pos, " '");
+                sb_append_token(errbuf, errcap, &pos, tok, wlen);
+                sb_append(errbuf, errcap, &pos, "' is not a share word");
+            }
+            free(words);
+            return -1;
+        }
+        {
+            size_t j;
+            for (j = 0; j < wlen; j++) {
+                char c = tok[j];
+                if (c >= 'A' && c <= 'Z') {
+                    c = (char)(c - 'A' + 'a');
+                }
+                word[j] = c;
+            }
+            word[wlen] = '\0';
+        }
+        idx = word_to_index(word, wlen);
+        if (idx < 0) {
+            if (errbuf != NULL && errcap > 0) {
+                sb_append(errbuf, errcap, &pos, "word ");
+                sb_append_uint(errbuf, errcap, &pos, count + 1);
+                sb_append(errbuf, errcap, &pos, " '");
+                sb_append_token(errbuf, errcap, &pos, tok, wlen);
+                sb_append(errbuf, errcap, &pos, "' is not a share word");
+            }
+            free(words);
+            return -1;
+        }
+        if (count >= MAX_MNEMONIC_WORDS) {
+            free(words);
+            return -1;
+        }
+        words[count++] = (unsigned int)idx;
+    }
+
+    if (count < (size_t)MIN_MNEMONIC_LENGTH_WORDS) {
+        if (errbuf != NULL && errcap > 0) {
+            sb_append(errbuf, errcap, &pos, "found ");
+            sb_append_uint(errbuf, errcap, &pos, count);
+            sb_append(errbuf, errcap, &pos,
+                      " share words, expected at least 20");
+        }
+        free(words);
+        return -1;
+    }
+
+    /* The extendable flag lives in the id/exp prefix and selects the
+     * RS1024 customization string. */
+    {
+        unsigned long id_exp = (unsigned long)words[0] * RADIX + words[1];
+        extendable = (int)((id_exp >> ITERATION_EXP_LENGTH_BITS) & 1UL);
+    }
+
+    if (!rs1024_verify(words, count, extendable)) {
+        if (errbuf != NULL && errcap > 0) {
+            sb_append(errbuf, errcap, &pos,
+                      "checksum FAILED - recheck your typing against the card");
+        }
+        rc = -1;
+    } else {
+        rc = 0;
+    }
+    free(words);
+    return rc;
 }

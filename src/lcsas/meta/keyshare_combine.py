@@ -67,6 +67,7 @@ for _cand in [_HERE, *sorted(_HERE.glob("tools/lib/python*"))]:
 try:  # source checkout / dev: lcsas.keyshare
     from lcsas.keyshare import (
         KeyShareError,
+        check_share,
         decode_master_secret,
         extract_mnemonic,
         is_mnemonic_line,
@@ -79,6 +80,7 @@ except ImportError:  # pragma: no cover - meta-volume top-level bundle path
     # in tests/unit/test_keyshare_combine.py with ``lcsas`` blocked.
     from keyshare import (  # type: ignore[no-redef, import-not-found]
         KeyShareError,
+        check_share,
         decode_master_secret,
         extract_mnemonic,
         is_mnemonic_line,
@@ -86,7 +88,7 @@ except ImportError:  # pragma: no cover - meta-volume top-level bundle path
     )
 
 
-def _read_mnemonics(paths: list[str]) -> list[str]:
+def _read_mnemonics(paths: list[str]) -> list[tuple[str, str]]:
     """Collect share mnemonics from *paths* and/or stdin.
 
     For each file path, the whole file is treated as ONE share — a bare
@@ -95,17 +97,18 @@ def _read_mnemonics(paths: list[str]) -> list[str]:
     mnemonics are read from stdin keeping one-mnemonic-per-line
     semantics, but non-mnemonic lines (blanks, comments, card prose) are
     skipped rather than fatal, so ``cat card1 card2 | ...`` works.
-    Returns the mnemonic strings in the order encountered.
+    Returns ``(label, mnemonic)`` pairs in the order encountered; the label
+    (a file path or ``"stdin line N"``) is used for per-share diagnostics.
     """
-    mnemonics: list[str] = []
+    mnemonics: list[tuple[str, str]] = []
     if paths:
         for p in paths:
             text = Path(p).read_text(encoding="utf-8")
-            mnemonics.append(extract_mnemonic(text, source=p))
+            mnemonics.append((p, extract_mnemonic(text, source=p)))
     else:
-        for line in sys.stdin.read().splitlines():
+        for lineno, line in enumerate(sys.stdin.read().splitlines(), start=1):
             if is_mnemonic_line(line):
-                mnemonics.append(" ".join(line.split()))
+                mnemonics.append((f"stdin line {lineno}", " ".join(line.split())))
     return mnemonics
 
 
@@ -128,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        mnemonics = _read_mnemonics(args)
+        pairs = _read_mnemonics(args)
     except OSError as exc:
         sys.stderr.write(f"error: could not read share file: {exc}\n")
         return 2
@@ -136,13 +139,32 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"error: {exc}\n")
         return 1
 
-    if not mnemonics:
+    if not pairs:
         sys.stderr.write(
             "error: no share mnemonics supplied.  Pass share file paths as\n"
             "arguments, or pipe mnemonics (one per line) on stdin.\n"
         )
         return 2
 
+    # Per-share pre-pass: validate each share independently and print a
+    # named verdict, so a single mistyped card is pinpointed (file + word
+    # position + token) rather than collapsing into one generic failure.
+    any_bad = False
+    for label, mnemonic in pairs:
+        reason = check_share(mnemonic)
+        if reason is None:
+            sys.stderr.write(f"share ({label}): OK\n")
+        else:
+            sys.stderr.write(f"share ({label}): {reason}\n")
+            any_bad = True
+    if any_bad:
+        sys.stderr.write(
+            "error: one or more shares failed individual validation; fix the\n"
+            "flagged words above and retry.\n"
+        )
+        return 1
+
+    mnemonics = [mnemonic for _, mnemonic in pairs]
     try:
         master_secret = recover_secret(mnemonics)
         password = decode_master_secret(master_secret)

@@ -4408,6 +4408,9 @@ def _share_card_text(
         "\n"
         "THE SHARE WORDS (keep every word, in order)\n"
         f"  {mnemonic}\n"
+        "\n"
+        "  Tip: you may type just the first 4 letters of each word — the\n"
+        "  combiner expands any unambiguous prefix to the full word.\n"
         "================================================\n"
     )
 
@@ -4659,6 +4662,7 @@ def cmd_key_combine(args: argparse.Namespace) -> int:
     """Reconstruct a repository password from K SLIP-0039 key-share mnemonics."""
     from lcsas.keyshare import (
         KeyShareError,
+        check_share,
         decode_master_secret,
         extract_mnemonic,
         is_mnemonic_line,
@@ -4666,6 +4670,7 @@ def cmd_key_combine(args: argparse.Namespace) -> int:
     )
 
     mnemonics: list[str] = []
+    labels: list[str] = []
     if args.share_files:
         for sf in args.share_files:
             if not sf.exists():
@@ -4681,17 +4686,39 @@ def cmd_key_combine(args: argparse.Namespace) -> int:
             except KeyShareError as e:
                 logger.error("%s", e)
                 return 1
+            labels.append(str(sf))
     else:
         # No --share-file: read shares from stdin.  Skip non-mnemonic
         # lines (blanks, card prose) so `cat card1 card2 | ...` works.
-        for line in sys.stdin:
+        for lineno, line in enumerate(sys.stdin, start=1):
             if is_mnemonic_line(line):
                 mnemonics.append(" ".join(line.split()))
+                labels.append(f"stdin line {lineno}")
 
     if not mnemonics:
         logger.error(
             "No shares supplied. Pass one or more --share-file, or pipe "
             "shares on stdin (one mnemonic per line)."
+        )
+        return 1
+
+    # Per-share pre-pass: validate each share independently and print a
+    # named verdict, so a single mistyped card is pinpointed (file + word
+    # position + token) instead of collapsing into one generic failure.
+    # Verdicts go to stderr so stdout stays password-only (the combiner's
+    # raw-bytes contract); mirrors the C lcsas-keyshare pre-pass.
+    any_bad = False
+    for label, mnemonic in zip(labels, mnemonics, strict=True):
+        reason = check_share(mnemonic)
+        if reason is None:
+            print(f"share ({label}): OK", file=sys.stderr)
+        else:
+            print(f"share ({label}): {reason}", file=sys.stderr)
+            any_bad = True
+    if any_bad:
+        logger.error(
+            "One or more shares failed individual validation; fix the "
+            "flagged words above and retry."
         )
         return 1
 

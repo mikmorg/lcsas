@@ -29,3 +29,15 @@ if len(WORDLIST) != 1024:  # pragma: no cover - guards against a corrupted bundl
     )
 
 _WORD_TO_INDEX: dict[str, int] = {word: index for index, word in enumerate(WORDLIST)}
+
+# Every SLIP-0039 word is uniquely identified by its first four letters
+# (docs/KEY_SHARE_FORMAT.md §2), so a heir may type just that prefix.  This
+# maps each 4-letter prefix to its word index; a full-word match always wins
+# (exact lookups go through _WORD_TO_INDEX first).  The uniqueness invariant
+# is asserted here so a corrupted bundle fails loudly rather than silently
+# resolving a prefix to the wrong word.
+_PREFIX4_TO_INDEX: dict[str, int] = {word[:4]: index for index, word in enumerate(WORDLIST)}
+if len(_PREFIX4_TO_INDEX) != 1024:  # pragma: no cover - guards a corrupted bundle
+    raise RuntimeError(
+        "SLIP-0039 wordlist 4-letter prefixes are not unique; bundle is corrupt."
+    )

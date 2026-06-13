@@ -275,11 +275,131 @@ static void run_extract(void)
     }
 }
 
+/* Per-share diagnostics + 4-letter-prefix entry (KEY-07). */
+static void run_check_share(void)
+{
+    /* A real, individually-valid 20-word SLIP-0039 share (vector 1). */
+    static const char SHARE[] =
+        "duckling enlarge academic academic agency result length solution "
+        "fridge kidney coal piece deal husband erode duke ajar critical "
+        "decision keyboard";
+
+    char err[128];
+    int rc;
+
+    /* A valid share passes the per-share check with no message. */
+    err[0] = '\0';
+    rc = lcsas_keyshare_check_share(SHARE, err, sizeof(err));
+    if (rc != 0) {
+        fprintf(stderr, "FAIL check_share: valid share rejected ('%s')\n", err);
+        fails++;
+    }
+
+    /* (a) One mistyped word (word 7 'length' -> 'lenght') => named position
+     *     + offending token, NOT a generic error. */
+    {
+        static const char TYPO[] =
+            "duckling enlarge academic academic agency result lenght solution "
+            "fridge kidney coal piece deal husband erode duke ajar critical "
+            "decision keyboard";
+        err[0] = '\0';
+        rc = lcsas_keyshare_check_share(TYPO, err, sizeof(err));
+        if (rc == 0) {
+            fprintf(stderr, "FAIL check_share: typo accepted\n");
+            fails++;
+        } else if (strstr(err, "word 7") == NULL ||
+                   strstr(err, "lenght") == NULL) {
+            fprintf(stderr,
+                    "FAIL check_share: typo error lacks position/token: '%s'\n",
+                    err);
+            fails++;
+        }
+    }
+
+    /* (b) Every word truncated to its 4-letter prefix => still valid, and
+     *     recovers byte-identically to the full-word share. */
+    {
+        static const char PREFIX[] =
+            "duck enla acad acad agen resu leng solu "
+            "frid kidn coal piec deal husb erod duke ajar crit "
+            "deci keyb";
+        const char *full[1];
+        const char *pre[1];
+        unsigned char ms_full[LCSAS_SLIP39_MAX_SECRET];
+        unsigned char ms_pre[LCSAS_SLIP39_MAX_SECRET];
+        size_t lf = 0, lp = 0;
+
+        err[0] = '\0';
+        if (lcsas_keyshare_check_share(PREFIX, err, sizeof(err)) != 0) {
+            fprintf(stderr, "FAIL check_share: prefix share rejected ('%s')\n",
+                    err);
+            fails++;
+        }
+        full[0] = SHARE;
+        pre[0] = PREFIX;
+        if (lcsas_slip39_recover(full, 1, TREZOR, sizeof(TREZOR),
+                                 ms_full, &lf) != 0 ||
+            lcsas_slip39_recover(pre, 1, TREZOR, sizeof(TREZOR),
+                                 ms_pre, &lp) != 0) {
+            fprintf(stderr, "FAIL prefix: recovery failed\n");
+            fails++;
+        } else if (lf != lp || memcmp(ms_full, ms_pre, lf) != 0) {
+            fprintf(stderr, "FAIL prefix: prefix secret != full-word secret\n");
+            fails++;
+        }
+    }
+
+    /* (c) A 3-letter token is too short to be an unambiguous prefix => the
+     *     share is rejected naming that token. */
+    {
+        static const char SHORT[] =
+            "duc enlarge academic academic agency result length solution "
+            "fridge kidney coal piece deal husband erode duke ajar critical "
+            "decision keyboard";
+        err[0] = '\0';
+        rc = lcsas_keyshare_check_share(SHORT, err, sizeof(err));
+        if (rc == 0) {
+            fprintf(stderr, "FAIL check_share: 3-letter token accepted\n");
+            fails++;
+        } else if (strstr(err, "word 1") == NULL || strstr(err, "duc") == NULL) {
+            fprintf(stderr,
+                    "FAIL check_share: 3-letter error lacks token: '%s'\n",
+                    err);
+            fails++;
+        }
+    }
+
+    /* A whole-share checksum failure (swap two value words) is reported as a
+     * checksum error, not a word error. */
+    {
+        static const char BADCK[] =
+            "duckling enlarge academic academic agency result length solution "
+            "fridge kidney coal piece deal husband erode duke ajar critical "
+            "keyboard decision";   /* last two words swapped */
+        err[0] = '\0';
+        rc = lcsas_keyshare_check_share(BADCK, err, sizeof(err));
+        if (rc == 0) {
+            fprintf(stderr, "FAIL check_share: bad-checksum share accepted\n");
+            fails++;
+        } else if (strstr(err, "checksum") == NULL) {
+            fprintf(stderr,
+                    "FAIL check_share: checksum error not reported: '%s'\n",
+                    err);
+            fails++;
+        }
+    }
+
+    if (fails == 0) {
+        printf("test_keyshare: per-share check + prefix cases OK\n");
+    }
+}
+
 int main(void)
 {
     run_vectors();
     run_codec();
     run_extract();
+    run_check_share();
     if (fails == 0) {
         printf("test_keyshare: OK\n");
     }

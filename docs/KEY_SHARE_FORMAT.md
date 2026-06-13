@@ -35,14 +35,20 @@ document does not apply; use the password directly.
 1. Gather **any K** shares (default K=2). Each share is an ordered list of
    words from the LCSAS/SLIP-0039 wordlist (`recovery/.../keyshare/wordlist.txt`
    on the meta-volume; 1024 words, each uniquely identified by its first 4
-   letters).
+   letters). You may type just the first 4 letters of each word — the
+   bundled combiners (`lcsas-keyshare`, `keyshare_combine.py`, and
+   `lcsas key combine`) expand any unambiguous prefix to the full word.
 2. Run the bundled combiner (Phase 2 ships it on the meta-volume) or any
    SLIP-0039-compatible tool, **or** re-implement §4 below.
 3. The output bytes are the repository password. Feed it to `restore.sh` at the
    `Password:` prompt exactly as a single-key archive would.
 
 A wrong or incomplete share set **fails loudly** (checksum/digest mismatch or
-"insufficient shares") rather than returning garbage — see §4.6.
+"insufficient shares") rather than returning garbage — see §4.6. Before
+attempting recovery the bundled combiners run a per-share pre-pass: each
+share is validated on its own and a named verdict is printed (e.g.
+`share 2 (alpha-share-2-card.txt): word 7 'buidling' is not a share word`),
+so a single mistyped card is pinpointed instead of failing generically.
 
 ## 3. Share anatomy (SLIP-0039)
 

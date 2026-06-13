@@ -28,7 +28,7 @@ import secrets
 from collections.abc import Iterable, Sequence
 from typing import NamedTuple
 
-from .wordlist import _WORD_TO_INDEX, WORDLIST
+from .wordlist import _PREFIX4_TO_INDEX, _WORD_TO_INDEX, WORDLIST
 
 
 class KeyShareError(Exception):
@@ -177,11 +177,32 @@ def _int_from_word_indices(indices: Iterable[int]) -> int:
     return value
 
 
+def _word_index(token: str) -> int:
+    """Resolve one mnemonic token to its wordlist index.
+
+    A full-word match always wins.  Failing that, a token of four or more
+    letters that is the unique 4-letter prefix of a wordlist word resolves
+    to that word (the wordlist guarantees 4-letter prefix uniqueness), so an
+    heir may type just the first four letters of each word.
+
+    :raises KeyShareError: if the token is neither a full word nor an
+        unambiguous 4+-letter prefix.
+    """
+    word = token.lower()
+    index = _WORD_TO_INDEX.get(word)
+    if index is not None:
+        return index
+    if len(word) >= 4:
+        index = _PREFIX4_TO_INDEX.get(word[:4])
+        # Accept only when the whole token is a prefix of that word (so a
+        # 5+-letter typo whose first 4 letters happen to match is rejected).
+        if index is not None and WORDLIST[index].startswith(word):
+            return index
+    raise KeyShareError(f"Unknown word in mnemonic: {token!r}.")
+
+
 def _mnemonic_to_indices(mnemonic: str) -> list[int]:
-    try:
-        return [_WORD_TO_INDEX[word.lower()] for word in mnemonic.split()]
-    except KeyError as exc:
-        raise KeyShareError(f"Unknown word in mnemonic: {exc.args[0]!r}.") from None
+    return [_word_index(word) for word in mnemonic.split()]
 
 
 def _words_from_indices(indices: Iterable[int]) -> list[str]:
@@ -822,3 +843,43 @@ def share_identifier(mnemonic: str) -> int:
     :raises KeyShareError: if *mnemonic* is not a valid SLIP-0039 share.
     """
     return _Share.from_mnemonic(mnemonic).identifier
+
+
+def check_share(mnemonic: str) -> str | None:
+    """Validate ONE share mnemonic independently, for actionable diagnostics.
+
+    Mirrors the C ``lcsas_keyshare_check_share`` pre-pass: checks, in order,
+    that every token resolves to a wordlist word (full word or a unique
+    4+-letter prefix), that the word count is a valid share length, and that
+    the per-share RS1024 checksum verifies.
+
+    Returns ``None`` if the share is individually valid.  Otherwise returns a
+    one-line, human-readable reason naming the offending word position/token
+    or the checksum failure, e.g.::
+
+        word 7 'buidling' is not a share word
+        checksum FAILED - recheck your typing against the card
+
+    A pass means the share is internally consistent; it does *not* mean the
+    share belongs to the same split as the others (that mismatch surfaces only
+    during recovery).
+    """
+    tokens = mnemonic.split()
+    indices: list[int] = []
+    for position, token in enumerate(tokens, start=1):
+        try:
+            indices.append(_word_index(token))
+        except KeyShareError:
+            return f"word {position} {token.lower()!r} is not a share word"
+
+    if len(indices) < MIN_MNEMONIC_LENGTH_WORDS:
+        return (
+            f"found {len(indices)} share words, "
+            f"expected at least {MIN_MNEMONIC_LENGTH_WORDS}"
+        )
+
+    id_exp_int = _int_from_word_indices(indices[:ID_EXP_LENGTH_WORDS])
+    extendable = bool((id_exp_int >> ITERATION_EXP_LENGTH_BITS) & 1)
+    if not _rs1024_verify_checksum(indices, _customization_string(extendable)):
+        return "checksum FAILED - recheck your typing against the card"
+    return None

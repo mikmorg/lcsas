@@ -33,10 +33,111 @@
 /* A whole card file (header + prose + words) fits well under this. */
 #define MAX_FILE       65536
 
+/* Count whitespace-separated tokens on one line. */
+static size_t count_tokens(const char *line, size_t len)
+{
+    size_t i = 0;
+    size_t tokens = 0;
+    while (i < len) {
+        while (i < len && (line[i] == ' ' || line[i] == '\t')) {
+            i++;
+        }
+        if (i >= len) {
+            break;
+        }
+        tokens++;
+        while (i < len && line[i] != ' ' && line[i] != '\t') {
+            i++;
+        }
+    }
+    return tokens;
+}
+
+/* Fallback when strict extraction fails: copy the single line with the
+ * most tokens (the likely-but-typo'd share line) verbatim into `buf`,
+ * lowercased and whitespace-normalised, so a per-share check can pinpoint
+ * the offending word.  Returns the token count of that line (0 if none
+ * has enough tokens to plausibly be a share). */
+static size_t copy_candidate_line(const char *text, char *buf, size_t cap)
+{
+    const char *p = text;
+    const char *best = NULL;
+    size_t best_len = 0;
+    size_t best_tokens = 0;
+
+    while (*p != '\0') {
+        const char *line = p;
+        size_t llen = 0;
+        size_t tlen;
+        size_t tokens;
+
+        while (p[llen] != '\0' && p[llen] != '\n') {
+            llen++;
+        }
+        tlen = llen;
+        while (tlen > 0 &&
+               (line[tlen - 1] == '\r' || line[tlen - 1] == ' ' ||
+                line[tlen - 1] == '\t')) {
+            tlen--;
+        }
+        tokens = count_tokens(line, tlen);
+        if (tokens > best_tokens) {
+            best_tokens = tokens;
+            best = line;
+            best_len = tlen;
+        }
+        p += llen;
+        if (*p == '\n') {
+            p++;
+        }
+    }
+
+    /* Require enough tokens to plausibly be a share (>= the SLIP-0039
+     * minimum value words); a short prose line is not a candidate. */
+    if (best == NULL || best_tokens < 13) {
+        if (cap > 0) {
+            buf[0] = '\0';
+        }
+        return 0;
+    }
+    {
+        size_t i = 0;
+        size_t out = 0;
+        int in_gap = 1;
+        while (i < best_len && out + 1 < cap) {
+            char c = best[i];
+            if (c == ' ' || c == '\t') {
+                if (!in_gap) {
+                    buf[out++] = ' ';
+                    in_gap = 1;
+                }
+            } else {
+                if (c >= 'A' && c <= 'Z') {
+                    c = (char)(c - 'A' + 'a');
+                }
+                buf[out++] = c;
+                in_gap = 0;
+            }
+            i++;
+        }
+        if (out > 0 && buf[out - 1] == ' ') {
+            out--;
+        }
+        buf[out] = '\0';
+    }
+    return best_tokens;
+}
+
 /* Read an entire file (bare mnemonic OR printed share card), extract the
  * embedded share mnemonic into `buf` (NUL-terminated, capacity `cap`).
  * Returns 0 on success, nonzero on error (an explanatory message naming
- * `path` is printed to stderr). */
+ * `path` is printed to stderr).
+ *
+ * On a strict-extraction failure, falls back to copying the most
+ * token-dense line into `buf` (lowercased) so the per-share pre-pass in
+ * main() can name the offending word.  Returns 0 (lets the caller run
+ * diagnostics) when a candidate line was recovered, else nonzero (no
+ * plausible share line at all). */
 static int read_file_mnemonic(const char *path, char *buf, size_t cap)
 {
     static char filebuf[MAX_FILE];
@@ -58,21 +159,29 @@ static int read_file_mnemonic(const char *path, char *buf, size_t cap)
     filebuf[got] = '\0';
 
     err[0] = '\0';
-    if (lcsas_keyshare_extract(filebuf, buf, cap, err, sizeof(err)) != 0) {
-        if (err[0] != '\0') {
-            fprintf(stderr, "lcsas-keyshare: '%s': %s "
-                            "— is this a complete share card?\n", path, err);
-        } else {
-            fprintf(stderr, "lcsas-keyshare: '%s': share too large\n", path);
-        }
-        return -1;
+    if (lcsas_keyshare_extract(filebuf, buf, cap, err, sizeof(err)) == 0) {
+        return 0;
     }
-    return 0;
+
+    /* Strict extraction failed.  If a token-dense line exists, recover it
+     * for diagnosis (the pre-pass will name the bad word); otherwise the
+     * file genuinely has no share line. */
+    if (copy_candidate_line(filebuf, buf, cap) > 0) {
+        return 0;
+    }
+    if (err[0] != '\0') {
+        fprintf(stderr, "lcsas-keyshare: '%s': %s "
+                        "— is this a complete share card?\n", path, err);
+    } else {
+        fprintf(stderr, "lcsas-keyshare: '%s': share too large\n", path);
+    }
+    return -1;
 }
 
 int main(int argc, char **argv)
 {
     static char storage[MAX_MNEMONICS][MAX_LINE];
+    static char labels[MAX_MNEMONICS][MAX_LINE];
     const char *mnemonics[MAX_MNEMONICS];
     size_t n = 0;
     const unsigned char *passphrase = (const unsigned char *)"";
@@ -83,6 +192,7 @@ int main(int argc, char **argv)
     unsigned char pw[LCSAS_KEYSHARE_MAX_PW];
     size_t pwlen = 0;
     size_t i;
+    int any_bad = 0;
 
     /* Parse options (only --passphrase X is recognised). */
     while (argi < argc) {
@@ -134,6 +244,17 @@ int main(int argc, char **argv)
                 return 2;
             }
             mnemonics[n] = storage[n];
+            {
+                /* Record the source file path as this share's label, for
+                 * per-share diagnostics below. */
+                const char *path = argv[argi];
+                size_t j = 0;
+                while (path[j] != '\0' && j + 1 < MAX_LINE) {
+                    labels[n][j] = path[j];
+                    j++;
+                }
+                labels[n][j] = '\0';
+            }
             n++;
         }
     } else {
@@ -142,12 +263,15 @@ int main(int argc, char **argv)
          * lcsas_keyshare_extract validates); blank lines and card prose
          * fail that and are skipped, so `cat card1 card2 | ...` works. */
         static char linebuf[MAX_LINE];
+        size_t lineno = 0;
         while (n < MAX_MNEMONICS && fgets(linebuf, MAX_LINE, stdin) != NULL) {
+            lineno++;
             if (lcsas_keyshare_extract(linebuf, storage[n], MAX_LINE,
                                        NULL, 0) != 0) {
                 continue;
             }
             mnemonics[n] = storage[n];
+            sprintf(labels[n], "stdin line %lu", (unsigned long)lineno);
             n++;
         }
         if (n >= MAX_MNEMONICS && fgets(linebuf, MAX_LINE, stdin) != NULL) {
@@ -165,10 +289,35 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    /* Per-share pre-pass: validate each share independently and print a
+     * named verdict, so a single mistyped card is pinpointed (file + word
+     * position + token) instead of collapsing into one generic failure. */
+    for (i = 0; i < n; i++) {
+        char err[128];
+        err[0] = '\0';
+        if (lcsas_keyshare_check_share(mnemonics[i], err, sizeof(err)) == 0) {
+            fprintf(stderr, "share %lu (%s): OK\n",
+                    (unsigned long)(i + 1), labels[i]);
+        } else {
+            fprintf(stderr, "share %lu (%s): %s\n",
+                    (unsigned long)(i + 1), labels[i], err);
+            any_bad = 1;
+        }
+    }
+    if (any_bad) {
+        fprintf(stderr, "lcsas-keyshare: one or more shares failed individual "
+                        "validation; fix the flagged words above and retry\n");
+        return 1;
+    }
+
     if (lcsas_keyshare_recover_password(mnemonics, n, passphrase, plen,
                                         pw, &pwlen) != 0) {
+        /* Every share is internally valid, so the failure is a set-level
+         * problem: too few shares, or shares from different splits. */
         fprintf(stderr, "lcsas-keyshare: failed to recover the password "
                         "(insufficient, corrupt, or mismatched shares)\n");
+        fprintf(stderr, "lcsas-keyshare: supply at least K shares from the "
+                        "SAME archive (same Split ID on every card)\n");
         return 1;
     }
 
