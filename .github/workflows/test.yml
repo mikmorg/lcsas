@@ -78,6 +78,9 @@ jobs:
       - name: Run unit tests
         run: make test-unit
 
+      - name: Meta bundling completeness (six-target contract)
+        run: pytest tests/recovery_hardening/test_meta_bundling_completeness.py -v
+
       - name: Run integration tests
         run: make test-integration
 

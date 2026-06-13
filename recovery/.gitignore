@@ -1,4 +1,3 @@
-bin/*/lcsas-restore
 bin/*/lcsas-init
 bin/*/busybox
 dist/

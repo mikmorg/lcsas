@@ -140,3 +140,12 @@ check passes on every clone.
 
 0.5 day (commit + ignore edit + one test + one CI step). No special
 environment; verify with a fresh clone.
+
+---
+**Implemented:** 2026-06-13. As planned — committed a freshly-rebuilt
+x86_64-macos lcsas-restore (zig cc -target x86_64-macos, 1362298 bytes;
+size differs from the plan's stale 1357625 because the artifact was
+rebuilt from current source), removed `bin/*/lcsas-restore` from
+recovery/.gitignore, added `test_tier1_binary_git_tracked`, wired the
+completeness file into .github/workflows/test.yml, and corrected the
+docstring's CI claim. No C source changed, so no full per-target rebuild.

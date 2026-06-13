@@ -30,6 +30,8 @@ What it catches:
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -64,7 +66,16 @@ APPROVED_TIER1_TARGETS: list[tuple[str, str, str]] = [
 # `snap install zig --classic --beta` is the standard fix.
 #
 # Set LCSAS_OPTIONAL_ARCHES=arch1,arch2 in your shell to allow a local
-# skip; CI runs unset and therefore requires all six.
+# skip of the disk-presence test on a host that lacks a cross-toolchain.
+#
+# Note: OPTIONAL_TARGETS only gates the *disk-presence* test
+# (test_tier1_source_binary_present), which depends on the host having
+# built each arch.  The *git-tracked* contract
+# (test_tier1_binary_git_tracked) ignores it entirely — tracked-ness is
+# a repo property, not a host-toolchain property.  CI enforces the
+# six-target contract via the "Meta bundling completeness (six-target
+# contract)" step in .github/workflows/test.yml, which runs this whole
+# file with LCSAS_OPTIONAL_ARCHES unset.
 OPTIONAL_TARGETS: tuple[str, ...] = tuple(
     t.strip() for t in os.environ.get("LCSAS_OPTIONAL_ARCHES", "").split(",")
     if t.strip()
@@ -116,6 +127,42 @@ def test_tier1_source_binary_present(
         f"(or, for cross-targets without a host toolchain:\n"
         f"    lcsas recovery build --arch {short_arch} "
         f"--cc 'zig cc -target {rust_triple}'  )."
+    )
+
+
+@pytest.mark.parametrize(
+    "rust_triple,short_arch,exe",
+    APPROVED_TIER1_TARGETS,
+    ids=[t[0] for t in APPROVED_TIER1_TARGETS],
+)
+def test_tier1_binary_git_tracked(
+    rust_triple: str, short_arch: str, exe: str
+) -> None:
+    """Every approved tier-1 binary must be COMMITTED, not merely present:
+    a fresh clone builds the meta disc from tracked files only.
+
+    No OPTIONAL_TARGETS escape hatch: tracked-ness is a repo property, not
+    a host-toolchain property, so it must hold everywhere a git checkout
+    exists.  Skipped only when not in a git work tree (e.g. the LCSAS
+    source tree burned onto a meta disc).
+    """
+    rel = f"recovery/bin/{short_arch}/{exe}"
+    if shutil.which("git") is None or subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    ).returncode != 0:
+        pytest.skip("not a git checkout (e.g. burned source tree)")
+    res = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", rel],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, (
+        f"{rel} is not git-tracked; fresh clones will silently build a "
+        f"meta disc without the {rust_triple} tier-1 binary. "
+        f"Fix: git add -f {rel}"
     )
 
 
