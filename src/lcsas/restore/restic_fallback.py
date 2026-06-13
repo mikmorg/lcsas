@@ -1079,7 +1079,12 @@ class PurePythonRestorer:
 
     # ── Tree Traversal & File Extraction ─────────────────────────
 
-    def _restore_tree(self, tree_id: str, target_dir: Path) -> None:
+    def _restore_tree(
+        self,
+        tree_id: str,
+        target_dir: Path,
+        hardlink_map: dict[tuple[int, int], Path] | None = None,
+    ) -> None:
         """Recursively restore a tree node to *target_dir*.
 
         Tolerant by default: a corrupt/missing tree blob records ONE
@@ -1106,8 +1111,12 @@ class PurePythonRestorer:
             self._record_failure(target_dir, tree_id, exc)
             return
 
-        # Track hardlink targets: inode → first_path
-        hardlink_map: dict[int, Path] = {}
+        # Track hardlink targets across the whole traversal (one map for
+        # all directories) so cross-directory links restore as links, not
+        # copies.  Keyed by (device, inode): two equal inodes on different
+        # source devices must never be cross-linked.
+        if hardlink_map is None:
+            hardlink_map = {}
 
         for node in tree_doc.get("nodes", []):
             name = node["name"]
@@ -1133,10 +1142,13 @@ class PurePythonRestorer:
                 if node_type == "file":
                     inode = node.get("inode", 0)
                     links = node.get("links", 1)
+                    # device absent → 0, matching legacy inode-only behavior
+                    device = node.get("device_id", node.get("device", 0))
+                    hl_key = (device, inode)
 
                     # Hardlink dedup: if inode already restored, link it
-                    if inode and links > 1 and inode in hardlink_map:
-                        src = hardlink_map[inode]
+                    if inode and links > 1 and hl_key in hardlink_map:
+                        src = hardlink_map[hl_key]
                         try:
                             node_path.parent.mkdir(parents=True, exist_ok=True)
                             os.link(src, node_path)
@@ -1153,12 +1165,14 @@ class PurePythonRestorer:
 
                     # Register as hardlink source for future occurrences
                     if inode and links > 1:
-                        hardlink_map[inode] = node_path
+                        hardlink_map[hl_key] = node_path
 
                 elif node_type == "dir":
                     node_path.mkdir(parents=True, exist_ok=True)
                     if "subtree" in node:
-                        self._restore_tree(node["subtree"], node_path)
+                        self._restore_tree(
+                            node["subtree"], node_path, hardlink_map
+                        )
                     # Restore directory permissions after contents
                     self._apply_metadata(node, node_path)
                 elif node_type == "symlink":

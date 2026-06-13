@@ -876,6 +876,157 @@ class TestHardlinkRestore:
         # Different inodes — not hardlinked
         assert a.stat().st_ino != b.stat().st_ino
 
+    def test_hardlink_across_directories_restored_as_link(self, tmp_path):
+        """Hardlinked files in two sibling dirs restore as one inode (RST-08).
+
+        The shared hardlink_map must span the whole traversal, not reset
+        per directory, or the second occurrence is fully re-copied.
+        """
+        repo = _build_test_repo(tmp_path)
+
+        file_content = b"Cross-directory hardlink\n"
+        file_id = hashlib.sha256(file_content).hexdigest()
+
+        # Two subtrees, each holding one node with the SAME inode.
+        sub_a = json.dumps({
+            "nodes": [{
+                "name": "file.txt", "type": "file", "mode": 0o644,
+                "inode": 424242, "device_id": 7, "links": 2,
+                "content": [file_id],
+            }],
+        }).encode()
+        sub_a_id = hashlib.sha256(sub_a).hexdigest()
+        sub_b = json.dumps({
+            "nodes": [{
+                "name": "file.txt", "type": "file", "mode": 0o644,
+                "inode": 424242, "device_id": 7, "links": 2,
+                "content": [file_id],
+            }],
+        }).encode()
+        sub_b_id = hashlib.sha256(sub_b).hexdigest()
+
+        root_tree = json.dumps({
+            "nodes": [
+                {"name": "dir_a", "type": "dir", "mode": 0o755,
+                 "subtree": sub_a_id},
+                {"name": "dir_b", "type": "dir", "mode": 0o755,
+                 "subtree": sub_b_id},
+            ],
+        }).encode()
+        root_tree_id = hashlib.sha256(root_tree).hexdigest()
+
+        pack_data = bytearray()
+        blobs_info = []
+        for content, blob_id, btype in [
+            (file_content, file_id, "data"),
+            (sub_a, sub_a_id, "tree"),
+            (sub_b, sub_b_id, "tree"),
+            (root_tree, root_tree_id, "tree"),
+        ]:
+            enc = _encrypt_with_master(content)
+            offset = len(pack_data)
+            pack_data.extend(enc)
+            blobs_info.append({
+                "id": blob_id, "type": btype,
+                "offset": offset, "length": len(enc),
+            })
+
+        pack_id = hashlib.sha256(bytes(pack_data)).hexdigest()
+        pack_dir = repo / "data" / pack_id[:2]
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        (pack_dir / pack_id).write_bytes(bytes(pack_data))
+
+        new_index = json.dumps(
+            {"packs": [{"id": pack_id, "blobs": blobs_info}]}
+        ).encode()
+        idx_id = hashlib.sha256(new_index).hexdigest()
+        (repo / "index" / idx_id).write_bytes(_encrypt_with_master(new_index))
+
+        snap_doc = json.dumps({
+            "time": "2026-03-03T10:00:00Z",
+            "tree": root_tree_id,
+            "paths": ["/test"],
+            "hostname": "testhost",
+        }).encode()
+        snap_id = hashlib.sha256(snap_doc).hexdigest()
+        (repo / "snapshots" / snap_id).write_bytes(_encrypt_with_master(snap_doc))
+
+        target = tmp_path / "restored_xdir_hardlink"
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer.restore(target=target)
+
+        a = target / "dir_a" / "file.txt"
+        b = target / "dir_b" / "file.txt"
+        assert a.read_text() == "Cross-directory hardlink\n"
+        assert b.read_text() == "Cross-directory hardlink\n"
+        # One inode, two names across directories.
+        assert a.stat().st_ino == b.stat().st_ino
+        assert a.stat().st_nlink == 2
+
+    def test_hardlink_same_inode_different_device_not_linked(self, tmp_path):
+        """Equal inode on different source devices must NOT be linked (RST-08)."""
+        repo = _build_test_repo(tmp_path)
+
+        file_content = b"Same inode, different device\n"
+        file_id = hashlib.sha256(file_content).hexdigest()
+
+        root_tree = json.dumps({
+            "nodes": [
+                {"name": "on_dev1.txt", "type": "file", "mode": 0o644,
+                 "inode": 555, "device_id": 1, "links": 2,
+                 "content": [file_id]},
+                {"name": "on_dev2.txt", "type": "file", "mode": 0o644,
+                 "inode": 555, "device_id": 2, "links": 2,
+                 "content": [file_id]},
+            ],
+        }).encode()
+        root_tree_id = hashlib.sha256(root_tree).hexdigest()
+
+        pack_data = bytearray()
+        blobs_info = []
+        for content, blob_id, btype in [
+            (file_content, file_id, "data"),
+            (root_tree, root_tree_id, "tree"),
+        ]:
+            enc = _encrypt_with_master(content)
+            offset = len(pack_data)
+            pack_data.extend(enc)
+            blobs_info.append({
+                "id": blob_id, "type": btype,
+                "offset": offset, "length": len(enc),
+            })
+
+        pack_id = hashlib.sha256(bytes(pack_data)).hexdigest()
+        pack_dir = repo / "data" / pack_id[:2]
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        (pack_dir / pack_id).write_bytes(bytes(pack_data))
+
+        new_index = json.dumps(
+            {"packs": [{"id": pack_id, "blobs": blobs_info}]}
+        ).encode()
+        idx_id = hashlib.sha256(new_index).hexdigest()
+        (repo / "index" / idx_id).write_bytes(_encrypt_with_master(new_index))
+
+        snap_doc = json.dumps({
+            "time": "2026-03-04T10:00:00Z",
+            "tree": root_tree_id,
+            "paths": ["/test"],
+            "hostname": "testhost",
+        }).encode()
+        snap_id = hashlib.sha256(snap_doc).hexdigest()
+        (repo / "snapshots" / snap_id).write_bytes(_encrypt_with_master(snap_doc))
+
+        target = tmp_path / "restored_xdev"
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer.restore(target=target)
+
+        a = target / "on_dev1.txt"
+        b = target / "on_dev2.txt"
+        assert a.read_text() == "Same inode, different device\n"
+        assert b.read_text() == "Same inode, different device\n"
+        # Different source devices → two independent files.
+        assert a.stat().st_ino != b.stat().st_ino
+
 
 # ── Unsupported Node Type Test ───────────────────────────────────
 

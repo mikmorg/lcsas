@@ -66,3 +66,6 @@ Always-on unit (`make test-unit`):
 ## Effort
 
 0.5 day. No special environment.
+
+---
+**Implemented:** 2026-06-13. As planned: shared (device,inode)-keyed hardlink_map threaded through _restore_tree; two cross-dir + cross-device tests added.
