@@ -102,3 +102,23 @@ Four layers, cheapest-first:
 
 2 days: 0.5 CI wiring/collect-sanity, 1 blind-restore-windows variant, 0.5 drill log
 + checklist meta-test. Needs wine locally; GitHub windows-latest via INFRA-01.
+
+---
+**Implemented:** 2026-06-13. Layers 1, 3, and the local arm of layer 2 landed;
+the layer-2 windows-e2e.yml CI workflow is intentionally deferred to its hard
+prerequisites. Done: (1) always-on `journey-contracts` collect-only sanity step
+in test.yml guarding `test_doc_command_contract.py`; (2-local)
+`recovery/tests/test_restore_bat_e2e.sh` wine smoke (no-repo guard + repo
+discovery/arch detect) wired into `make -C recovery test`, conditional on wine,
+already inside the audit-gate path filter (recovery/tests/** + recovery/Makefile,
+GATE-04); (3) JOURNEY DRILL LOG section in READINESS_CHECKLIST.txt + quick-ref
+row, `blind-restore-windows` Makefile target (cost-gated like its siblings),
+`windows` case in run_variant.sh, and a checklist meta-test
+(test_readiness_checklist_has_journey_drill_log). DEVIATION: INFRA-01 and UX-01
+have NOT landed (no commits/markers), so the windows variant + the
+windows-latest CI workflow cannot complete a real scored run — the variant and
+the Makefile target FAIL LOUD naming UX-01/INFRA-01 as the blocker rather than
+faking a score, and windows-e2e.yml is left for the INFRA-01 plan to add.
+Acceptance criteria #3 (target exists + refuses without cost ack) met; #2/#4's
+green scored run blocked on those prerequisites. Layer 4 (macOS) already covered
+by the existing contract tests — verify-only, no change.

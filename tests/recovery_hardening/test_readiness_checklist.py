@@ -141,3 +141,32 @@ def test_readiness_checklist_has_blast_radius_review():
         "READINESS_CHECKLIST.txt does not quote 'lcsas volume impact' — "
         "the per-disc blast-radius command."
     )
+
+
+def test_readiness_checklist_has_journey_drill_log():
+    """Checklist must carry the JOURNEY DRILL LOG section (UX-08).
+
+    The blind-restore variants are the only end-to-end proof an heir can
+    recover, but they are opt-in, cost-gated, and never run in CI — so the
+    only durable record that they ran is this log.  If the section is
+    deleted the audit trail vanishes silently.  Pin the section header and
+    every variant row so a drop is caught at commit time.
+    """
+    assert "JOURNEY DRILL LOG" in _TEXT, (
+        "READINESS_CHECKLIST.txt has no 'JOURNEY DRILL LOG' section. "
+        "The opt-in blind-restore drills are uncovered by CI; this log is "
+        "their only audit trail (UX-08)."
+    )
+    for variant in ("single-key", "split-2of5", "tier1-missing", "windows"):
+        assert variant in _TEXT, (
+            f"JOURNEY DRILL LOG is missing the '{variant}' variant row. "
+            "Every blind-restore variant must have a dated drill-log line "
+            "(UX-08)."
+        )
+    # The model column must pin haiku (project policy: blind drills run on
+    # haiku only, never sonnet/opus).
+    assert "haiku" in _TEXT.lower(), (
+        "JOURNEY DRILL LOG does not record the model. Per project policy "
+        "blind-restore drills run on haiku only; the log must say so so a "
+        "future reader can trust the recorded score (UX-08)."
+    )

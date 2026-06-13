@@ -82,6 +82,19 @@ jobs:
         # recovery/vendored can merge unbuilt or with a failing C unit test.
         run: make -C recovery all test
 
+      - name: Journey contract layer present (UX-08 layer 1)
+        # The doc/script contract tests (UX-02/03/04/06) are the always-on
+        # journey safety net: they pin every command quoted in the burned
+        # recovery docs to the real tool interfaces.  They ride `make
+        # test-unit`, but a future test-tree reorg could silently drop the
+        # file and the net would vanish unnoticed.  Fail the build if the
+        # contract file collects zero tests (moved/renamed/emptied).
+        run: |
+          set -euo pipefail
+          pytest tests/unit/test_doc_command_contract.py --collect-only -q \
+            | tee /tmp/contract_collect.log
+          grep -Eq '[1-9][0-9]* tests? collected' /tmp/contract_collect.log
+
       - name: Run unit tests
         run: make test-unit
 

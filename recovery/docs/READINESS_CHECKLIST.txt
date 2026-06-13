@@ -215,6 +215,30 @@ EMERGENCY DRILL  (annually)
     advisory affecting a pinned component.
 
 ────────────────────────────────────────────────────────────────────
+JOURNEY DRILL LOG  (one line per blind-restore variant, per meta build)
+────────────────────────────────────────────────────────────────────
+
+The blind-restore drills (make blind-restore-*) are the only end-to-end
+proof that an HEIR can actually recover.  They are opt-in and cost ~$5
+each, so they do NOT run in CI — which means the only record that they
+ran at all is this log.  Update it on every meta-disc build: one dated
+row per variant.  An empty or stale row is itself the finding.
+
+Per project policy the blind-restore agent runs on HAIKU only (not
+sonnet/opus); record the model so a future reader can trust the score.
+A passing drill is 15/15.
+
+  DATE        VARIANT        MODEL   SCORE   META-BUILD / NOTE
+  ──────────  ─────────────  ──────  ──────  ───────────────────────────
+  (pending)   single-key     haiku   --/15   make blind-restore-single-key
+  (pending)   split-2of5     haiku   --/15   make blind-restore-split-2of5
+  (pending)   tier1-missing  haiku   --/15   run_variant.sh tier1-missing
+  (pending)   windows        haiku   --/15   make blind-restore-windows
+
+  HOW OFTEN: once per meta disc build, and after any change to
+  restore.sh / restore.bat, the heir docs, or a tier binary.
+
+────────────────────────────────────────────────────────────────────
 QUICK REFERENCE
 ────────────────────────────────────────────────────────────────────
 
@@ -230,6 +254,7 @@ Blast-radius review             Monthly, with the volume count check
 Disc readability scan           Monthly (<2 yr); weekly (>5 yr)
 Offsite copy verification       After each disc set; monthly log
 Annual blind restore drill      Annually / after major change
+Journey drill log               Per meta build; per restore.sh/.bat change
 Key escrow review               Annually
 Binary pin review               Annually / on CVE advisory
 

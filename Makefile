@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-tier3-qemu test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-split-docs blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e meta-gate
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-tier3-qemu test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-split-docs blind-restore-windows blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e meta-gate
 
 # Default target: lint + typecheck + every test tier ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
@@ -228,6 +228,27 @@ blind-restore-split-docs:
 	sudo -E bash tests/e2e/cdemu_blind_restore/run_variant.sh split-key-docs \
 	    || { echo "FAIL: variant split-key-docs" >&2; $(MAKE) blind-restore-teardown; exit 1; }
 	$(MAKE) blind-restore-teardown
+
+# UX-08 layer 3: the Windows heir journey end-to-end through
+# recovery/scripts/restore.bat under wine (the discs are presented as a
+# directory tree — Windows has no cdemu/vhba).  Same ~$5 cost guard as its
+# siblings.  haiku-only per project policy; record the score in
+# recovery/docs/READINESS_CHECKLIST.txt (JOURNEY DRILL LOG) after each run.
+#
+# Hard dependency: UX-01 (restore.bat repo discovery) + INFRA-01 (windows
+# fixture builder + agent prompt).  Until both land the windows variant
+# exits non-zero with that reason rather than scoring broken plumbing — so
+# this target will FAIL loud, by design, until its prerequisites merge.
+# The cheap pre-flight available today is `make -C recovery test` (which
+# runs recovery/tests/test_restore_bat_e2e.sh when wine is present).
+blind-restore-windows:
+	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
+		echo "ERROR: blind-restore-windows costs USD ~5." >&2; \
+		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
+		exit 1; \
+	fi
+	bash tests/e2e/cdemu_blind_restore/run_variant.sh windows \
+	    || { echo "FAIL: variant windows" >&2; exit 1; }
 
 # Populate ~/.cache/lcsas/recovery-binaries/ with the rustic + Python
 # tarballs pinned in recovery/UPSTREAM.sha256.  Idempotent; required

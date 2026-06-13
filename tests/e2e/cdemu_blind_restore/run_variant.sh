@@ -28,6 +28,14 @@
 #                          scenario-only prompt (no command spoon-feed) plus 2
 #                          production -card.txt artifacts, and must derive
 #                          every command from the on-disc instructions.
+#   windows              — UX-08 layer 3: the Windows heir journey driven
+#                          through recovery/scripts/restore.bat under wine,
+#                          with the discs presented as a plain directory
+#                          tree (no cdemu — Windows has no vhba).  HARD
+#                          DEPENDENCY on UX-01 (restore.bat repo discovery)
+#                          and INFRA-01 (windows fixture builder); until
+#                          both land this case fails loud with that reason
+#                          rather than scoring a meaningless run.
 #
 # Exits 0 with `SCORE: 15/15 (variant=<name>)` on full pass.
 # Exits non-zero on any failure; the score line still prints.
@@ -41,14 +49,40 @@ case "$VARIANT" in
     default|tier1-missing|tier1-tier2-missing) : ;;
     single-tenant|5-tenant|no-catalog) : ;;
     single-key|split-key-2of5|split-key-docs) : ;;
+    windows) : ;;
     *)
         echo "ERROR: unknown variant: $VARIANT" >&2
         echo "       supported: default | tier1-missing | tier1-tier2-missing |" >&2
         echo "                  single-tenant | 5-tenant | no-catalog |" >&2
-        echo "                  single-key | split-key-2of5 | split-key-docs" >&2
+        echo "                  single-key | split-key-2of5 | split-key-docs |" >&2
+        echo "                  windows" >&2
         exit 2
         ;;
 esac
+
+# UX-08 layer 3: the Windows journey does NOT use the cdemu/vhba disc
+# loader (no kernel module on a Windows-emulating host) — it presents the
+# discs as a directory tree and drives restore.bat under `wine cmd`.  That
+# harness is only meaningful once UX-01 (restore.bat repo discovery) and
+# INFRA-01 (the windows fixture builder + agent prompt) have landed; until
+# then a "run" would score against broken plumbing and teach us nothing.
+# Fail loud with the precise blocker instead of faking a green/red number.
+if [ "$VARIANT" = "windows" ]; then
+    if ! command -v wine >/dev/null 2>&1; then
+        echo "ERROR: variant windows needs wine (no cdemu on Windows)." >&2
+        echo "       Install wine, then re-run once UX-01+INFRA-01 land." >&2
+        exit 2
+    fi
+    echo "ERROR: variant windows is not yet runnable." >&2
+    echo "       Blocked on UX-01 (restore.bat repo discovery) and" >&2
+    echo "       INFRA-01 (windows directory-tree fixture + agent prompt)." >&2
+    echo "       The smoke layer that IS available today:" >&2
+    echo "         sh recovery/tests/test_restore_bat_e2e.sh" >&2
+    echo "       Record drills in recovery/docs/READINESS_CHECKLIST.txt" >&2
+    echo "       (JOURNEY DRILL LOG) once this variant scores 15/15." >&2
+    echo "SCORE: 0/15 (variant=windows)  [BLOCKED: UX-01/INFRA-01]" >&2
+    exit 3
+fi
 
 echo "=== blind-restore variant: $VARIANT ==="
 

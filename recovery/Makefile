@@ -317,6 +317,16 @@ $(BUILD)/test_ecc: $(TESTDIR)/test_ecc.c \
 
 test: $(TEST_BINS) $(BUILD)/lcsas-restore
 	@set -e; for t in $(TEST_BINS); do echo "==> $$t"; $$t; done; echo "ALL OK"
+	@# UX-08 layer 2 (local): restore.bat wine smoke.  Conditional on wine
+	@# being installed -- the script self-skips (exit 77) otherwise, so a
+	@# host without wine still passes `make test`.  The faithful Windows
+	@# journey gate is INFRA-01's windows-latest CI job.
+	@if command -v wine >/dev/null 2>&1; then \
+		echo "==> restore.bat wine smoke"; \
+		sh tests/test_restore_bat_e2e.sh; \
+	else \
+		echo "==> restore.bat wine smoke: SKIP (no wine)"; \
+	fi
 
 test-e2e: $(BUILD)/lcsas-restore
 	@echo "==> end-to-end synthetic repo"
