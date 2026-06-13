@@ -52,6 +52,14 @@ This document provides a checklist and templates to make that possible.
 - [ ] **NEVER store the key on an archive disc**
   (The whole point of encryption is separation of key and data)
 
+- [ ] **Print a Recovery Card per storage location**:
+  - Generate one with `lcsas --config lcsas.toml key card --repo <name>`
+    (the password is never printed; the card carries a transcription
+    check code so a hand-copied password can be verified later), or
+  - Fill in `docs/RECOVERY_CARD.txt` by hand.
+  - Store each card with that location's physical records — never with
+    the discs (key/data separation).
+
 #### Option: Split the key into share cards (Shamir / SLIP-0039)
 
 A single key copy is a single point of failure: lose it and the archive is

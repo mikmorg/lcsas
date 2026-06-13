@@ -99,3 +99,6 @@ Always-on (`make test-unit` → `gate`):
 
 1.5 days: 0.75 generator + check mode, 0.25 static template + doc refs, 0.5
 tests.
+
+---
+**Implemented:** 2026-06-13. As planned: added `lcsas key card` (render + `--check`/`--code` verify, `--no-check-code`), `docs/RECOVERY_CARD.txt`, ESTATE_PLANNING §2 reference, UX_CONCERNS ID 006 marked IMPLEMENTED. Note: `--config` is the existing global flag (placed before the subcommand), not a per-`card` flag, to satisfy the doc-command contract gate.

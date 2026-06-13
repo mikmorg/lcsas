@@ -1,0 +1,63 @@
+=============== LCSAS RECOVERY CARD ===============
+(Fill-in-the-blanks template for a DEFAULT, single-key archive. Print one
+copy per storage location. Do NOT store any copy with the discs — the whole
+point of encryption is to keep the key and the data physically apart.)
+
+Owner       : ____________________________________________
+
+Repository  : ____________________________________________
+
+Key file    : ____________________________________________
+              (the name of the password/key file, e.g. alpha.pw)
+
+Made on     : ____________________________________________
+
+Discs       : labeled LCSAS_*   (adjust if you set a custom label_prefix)
+
+
+WHAT THIS IS
+  This card records the password that unlocks the backup archive above.
+  WITHOUT it the discs cannot be decrypted — there is no recovery. Store
+  this card physically SEPARATE from the discs.
+
+
+THE PASSWORD (write it here BY HAND)
+  ┌────────────────────────────────────────────────────┐
+  │                                                      │
+  │                                                      │
+  └────────────────────────────────────────────────────┘
+
+
+WHERE COPIES OF THIS CARD ARE KEPT
+  1. ____________________________________________
+  2. ____________________________________________
+  3. ____________________________________________
+
+
+HOW TO USE IT
+  Mount any archive disc and follow START_HERE.txt; supply the password
+  above as the key for the repository named above.
+
+
+TRANSCRIPTION CHECK CODE (optional but recommended)
+  Code: __________   (4 hex characters)
+
+  A hand-copied password discovered to have a typo DECADES LATER, at restore
+  time, is an unrecoverable archive. The check code lets you (and later your
+  heir) confirm the password was transcribed correctly without printing the
+  password itself. To compute the code from your key file:
+
+      python3 -c "import sys,hashlib;print(hashlib.sha256(open(sys.argv[1],'rb').read().rstrip(b'\n')).hexdigest()[:4])" KEYFILE
+
+  Write the resulting 4 characters in the Code box above. To check a typed
+  transcription later, run the same one-liner on the typed file (or use
+  `lcsas key card --check <file> --code <code>`) and confirm it MATCHES.
+
+  Security note: the code is the first 4 hex characters of
+  SHA-256(password). It leaks ~16 bits of an oracle on the password —
+  negligible against a high-entropy password, but stated honestly. Omit it
+  if you prefer no disclosure at all.
+
+  Tip: `lcsas key card --repo <name> --config lcsas.toml` generates this
+  card with the check code already filled in (the password is never printed).
+===================================================

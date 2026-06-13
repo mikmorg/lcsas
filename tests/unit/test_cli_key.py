@@ -938,3 +938,130 @@ class TestKeyVerify:
     def test_key_router_lists_verify(self, capsys) -> None:
         assert main(["key"]) == 1
         assert "verify" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# KEY-09: single-key Recovery Card (`lcsas key card`)
+# --------------------------------------------------------------------------
+
+class TestKeyCard:
+    def test_key_card_renders(self, tmp_path: Path, capsys) -> None:
+        cfg = _config_file(tmp_path, label_prefix='"FAMILY"')
+        # key_storage_hints lives in [survivability]; append it.
+        cfg.write_text(
+            cfg.read_text()
+            + '[survivability]\nkey_storage_hints = "Safe at home; bank box #7"\n'
+        )
+        rc = main([
+            "--config", str(cfg),
+            "key", "card", "--repo", "alpha",
+        ])
+        assert rc == 0
+        out = capsys.readouterr().out
+        # Card carries the repo name, key file name, hints, a date, and code.
+        assert "alpha" in out
+        assert "alpha.pw" in out          # repo_cfg.password_file.name
+        assert "Safe at home; bank box #7" in out
+        assert "FAMILY_*" in out
+        # ISO date is present.
+        import datetime
+        assert datetime.date.today().isoformat() in out
+        # 4-char check code = first 4 hex of SHA-256(PASSWORD).
+        expected_code = hashlib.sha256(PASSWORD).hexdigest()[:4]
+        assert expected_code in out
+        assert "TRANSCRIPTION CHECK CODE" in out
+        # The password itself is NEVER printed.
+        assert PASSWORD.decode("latin-1") not in out
+        assert "correct horse" not in out
+
+    def test_key_card_no_check_code(self, tmp_path: Path, capsys) -> None:
+        cfg = _config_file(tmp_path)
+        rc = main([
+            "--config", str(cfg),
+            "key", "card", "--repo", "alpha", "--no-check-code",
+        ])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "TRANSCRIPTION CHECK CODE" not in out
+        expected_code = hashlib.sha256(PASSWORD).hexdigest()[:4]
+        assert expected_code not in out
+
+    def test_key_card_single_repo_no_flag(self, tmp_path: Path, capsys) -> None:
+        cfg = _config_file(tmp_path)
+        rc = main(["--config", str(cfg), "key", "card"])
+        assert rc == 0
+        assert "alpha" in capsys.readouterr().out
+
+    def test_key_card_to_file_mode_0600(self, tmp_path: Path) -> None:
+        cfg = _config_file(tmp_path)
+        out_file = tmp_path / "card.txt"
+        rc = main([
+            "--config", str(cfg),
+            "key", "card", "--repo", "alpha", "--out", str(out_file),
+        ])
+        assert rc == 0
+        assert out_file.exists()
+        assert (os.stat(out_file).st_mode & 0o777) == 0o600
+
+    def test_key_card_requires_config(self, capsys) -> None:
+        rc = main(["key", "card", "--repo", "alpha"])
+        assert rc == 1
+        assert "config" in capsys.readouterr().out.lower()
+
+    def test_key_card_unknown_repo(self, tmp_path: Path, capsys) -> None:
+        cfg = _config_file(tmp_path)
+        rc = main(["--config", str(cfg), "key", "card", "--repo", "ghost"])
+        assert rc == 1
+        assert "not defined in the config" in capsys.readouterr().out
+
+    def test_key_card_check_mode(self, tmp_path: Path, capsys) -> None:
+        pw_file = _write_pw_file(tmp_path / "typed.pw")
+        code = hashlib.sha256(PASSWORD).hexdigest()[:4]
+        # Correct transcription -> MATCH, rc 0.
+        rc = main([
+            "key", "card", "--check", str(pw_file), "--code", code,
+        ])
+        assert rc == 0
+        assert "MATCH" in capsys.readouterr().out
+
+    def test_key_card_check_mismatch(self, tmp_path: Path, capsys) -> None:
+        # One-char typo in the typed password file.
+        typo = PASSWORD[:-1] + bytes([PASSWORD[-1] ^ 0x01])
+        pw_file = _write_pw_file(tmp_path / "typed.pw", pw=typo)
+        code = hashlib.sha256(PASSWORD).hexdigest()[:4]
+        rc = main([
+            "key", "card", "--check", str(pw_file), "--code", code,
+        ])
+        assert rc == 1
+        assert "MISMATCH" in capsys.readouterr().out
+
+    def test_key_card_check_requires_code(self, tmp_path: Path, capsys) -> None:
+        pw_file = _write_pw_file(tmp_path / "typed.pw")
+        rc = main(["key", "card", "--check", str(pw_file)])
+        assert rc == 1
+        assert "--code" in capsys.readouterr().out
+
+    def test_key_card_check_missing_file(self, tmp_path: Path, capsys) -> None:
+        rc = main([
+            "key", "card", "--check", str(tmp_path / "nope.pw"),
+            "--code", "abcd",
+        ])
+        assert rc == 1
+        assert "does not exist" in capsys.readouterr().out
+
+    def test_key_card_code_without_check(self, capsys) -> None:
+        rc = main(["key", "card", "--code", "abcd"])
+        assert rc == 1
+        assert "--check" in capsys.readouterr().out
+
+    def test_key_card_missing_password_file(self, tmp_path: Path, capsys) -> None:
+        cfg = _config_file(tmp_path)
+        # Remove the configured password file so the check-code path errors.
+        (tmp_path / "alpha.pw").unlink()
+        rc = main(["--config", str(cfg), "key", "card", "--repo", "alpha"])
+        assert rc == 1
+        assert "does not exist" in capsys.readouterr().out
+
+    def test_key_card_router_lists_card(self, capsys) -> None:
+        assert main(["key"]) == 1
+        assert "card" in capsys.readouterr().out

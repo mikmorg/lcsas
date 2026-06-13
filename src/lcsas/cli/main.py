@@ -692,6 +692,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the reconstructed password here (default: stdout).",
     )
 
+    key_card = key_sub.add_parser(
+        "card",
+        help="Print a paper Recovery Card for the DEFAULT (single-key) "
+             "archive — for owners who do NOT split the password.",
+    )
+    key_card.add_argument(
+        "--repo", default=None,
+        help="Repository name the card is for (uses its configured "
+             "password_file name and creation context).",
+    )
+    key_card.add_argument(
+        "--out", type=Path, default=None,
+        help="Write the card here (default: stdout). The password is never "
+             "written — the owner fills the PASSWORD box by hand.",
+    )
+    key_card.add_argument(
+        "--no-check-code", action="store_true",
+        help="Omit the transcription check code. The check code is the first "
+             "4 hex chars of SHA-256(password); it leaks ~16 bits of an "
+             "oracle (negligible against a high-entropy password) and lets "
+             "an heir confirm they typed the password correctly.",
+    )
+    key_card.add_argument(
+        "--check", type=Path, default=None, metavar="PASSWORD_FILE",
+        help="Verify mode: recompute the check code from a typed-in password "
+             "file and print MATCH/MISMATCH against the code on the card. "
+             "Requires --code.",
+    )
+    key_card.add_argument(
+        "--code", default=None,
+        help="The 4-char check code from a printed card, compared against "
+             "--check's password file. rc 0 on MATCH, 1 on MISMATCH.",
+    )
+
     return parser
 
 
@@ -4361,8 +4395,10 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_key_combine(args)
         elif args.key_command == "verify":
             return cmd_key_verify(args)
+        elif args.key_command == "card":
+            return cmd_key_card(args)
         else:
-            logger.error("Usage: lcsas key {split,combine,verify}")
+            logger.error("Usage: lcsas key {split,combine,verify,card}")
             return 1
 
     logger.error(f"Command '{args.command}' not yet implemented.")
@@ -4429,6 +4465,169 @@ def _share_card_text(
         "  combiner expands any unambiguous prefix to the full word.\n"
         "================================================\n"
     )
+
+
+def _check_code(password: bytes) -> str:
+    """4-char transcription check code: first 4 hex of SHA-256(password).
+
+    Lets an owner (and later an heir) confirm a hand-copied password was
+    transcribed correctly without printing the password itself.  Discloses
+    ~16 bits of an oracle on the password — negligible against a
+    high-entropy password but stated honestly on the card.
+    """
+    import hashlib
+
+    return hashlib.sha256(password).hexdigest()[:4]
+
+
+def _recovery_card_text(
+    repo: str,
+    key_file_name: str,
+    storage_hints: str,
+    card_date: str,
+    label_prefix: str,
+    check_code: str | None,
+) -> str:
+    """Build a paper Recovery Card for a DEFAULT (single-key) archive.
+
+    Mirrors the visual style of ``_share_card_text``.  The password itself
+    is NEVER rendered — the owner writes it by hand into the PASSWORD box.
+    When *check_code* is given, an heir can confirm a correct transcription
+    with ``lcsas key card --check <typed-file> --code <code>``.
+    """
+    hints = storage_hints if storage_hints else "(fill in where copies are kept)"
+    lines = [
+        "=============== LCSAS RECOVERY CARD ===============",
+        f"Repository : {repo}",
+        f"Key file   : {key_file_name}",
+        f"Made on    : {card_date}",
+        f"Discs      : labeled {label_prefix}_*",
+        "",
+        "WHAT THIS IS",
+        "  This card records the password that unlocks the",
+        f"  '{repo}' backup archive.  WITHOUT it the discs cannot",
+        "  be decrypted — there is no recovery.  Store this card",
+        "  physically SEPARATE from the discs (key/data separation).",
+        "",
+        "THE PASSWORD (write it here by hand — do NOT type it into a",
+        "computer to print this card)",
+        "  ┌────────────────────────────────────────────────────┐",
+        "  │                                                      │",
+        "  │                                                      │",
+        "  └────────────────────────────────────────────────────┘",
+        "",
+        "WHERE COPIES ARE KEPT",
+        f"  {hints}",
+        "",
+        "HOW TO USE IT",
+        "  Mount any archive disc and follow START_HERE.txt; supply",
+        f"  the password above as the key for repository '{repo}'.",
+    ]
+    if check_code is not None:
+        lines += [
+            "",
+            "TRANSCRIPTION CHECK CODE",
+            f"  {check_code}",
+            "  After writing the password, save it to a file and run:",
+            "      lcsas key card --check <file> --code "
+            f"{check_code}",
+            "  MATCH means you copied it correctly; MISMATCH means a typo.",
+            "  (The code is the first 4 hex of SHA-256(password). It leaks",
+            "  ~16 bits of an oracle — negligible for a strong password.)",
+        ]
+    lines.append("===================================================")
+    return "\n".join(lines) + "\n"
+
+
+def cmd_key_card(args: argparse.Namespace) -> int:
+    """Print (or verify) a paper Recovery Card for a single-key archive."""
+    # ── Verify mode: recompute the check code from a typed password file ──
+    if args.check is not None:
+        if args.code is None:
+            logger.error("--check requires --code (the code printed on the card).")
+            return 1
+        check_file: Path = args.check
+        if not check_file.exists():
+            logger.error("Password file does not exist: %s", check_file)
+            return 1
+        # Match the split path's read convention (drop one trailing newline).
+        password = check_file.read_bytes().rstrip(b"\n")
+        computed = _check_code(password)
+        expected = args.code.strip().lower()
+        if computed == expected:
+            print(f"MATCH: {computed}")
+            return 0
+        print(f"MISMATCH: typed file -> {computed}, card -> {expected}")
+        return 1
+
+    if args.code is not None:
+        logger.error("--code is only valid with --check (verify mode).")
+        return 1
+
+    # ── Render mode ──────────────────────────────────────────────────────
+    from datetime import date
+
+    from lcsas.config.settings import load_config
+
+    if args.config is None:
+        logger.error("--config is required to render a recovery card.")
+        return 1
+    config = load_config(args.config)
+
+    repo_name = args.repo
+    if repo_name is None:
+        if len(config.repositories) != 1:
+            logger.error(
+                "--repo is required (config defines %d repositories).",
+                len(config.repositories),
+            )
+            return 1
+        repo_name = next(iter(config.repositories))
+
+    repo_cfg = config.repositories.get(repo_name)
+    if repo_cfg is None:
+        logger.error(
+            "Repository '%s' is not defined in the config file.", repo_name
+        )
+        return 1
+    if repo_cfg.password_file is None:
+        logger.error(
+            "Repository '%s' has no password_file configured.", repo_name
+        )
+        return 1
+
+    check_code: str | None = None
+    if not args.no_check_code:
+        pw_file = repo_cfg.password_file
+        if not pw_file.exists():
+            logger.error(
+                "Password file does not exist: %s (use --no-check-code to "
+                "render a card without a transcription check).", pw_file,
+            )
+            return 1
+        password = pw_file.read_bytes().rstrip(b"\n")
+        check_code = _check_code(password)
+
+    card = _recovery_card_text(
+        repo=repo_name,
+        key_file_name=repo_cfg.password_file.name,
+        storage_hints=config.key_storage_hints,
+        card_date=date.today().isoformat(),
+        label_prefix=config.label_prefix,
+        check_code=check_code,
+    )
+
+    if args.out is not None:
+        _write_private_file(args.out, card.encode("utf-8"))
+        print(f"Wrote recovery card for repo '{repo_name}' to {args.out}")
+        print(
+            "  Mode 0600. The password is NOT on the card — write it in by "
+            "hand and store the card separate from the discs.",
+            file=sys.stderr,
+        )
+    else:
+        print(card, end="")
+    return 0
 
 
 def _verify_password_unlocks_repo(
