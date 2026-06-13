@@ -726,6 +726,22 @@ def build_parser() -> argparse.ArgumentParser:
              "--check's password file. rc 0 on MATCH, 1 on MISMATCH.",
     )
 
+    estate_p = subparsers.add_parser(
+        "estate",
+        help="Estate-planning artifacts (whole-archive Recovery Card).",
+    )
+    estate_sub = estate_p.add_subparsers(dest="estate_command")
+    estate_card = estate_sub.add_parser(
+        "card",
+        help="Generate a one-page whole-archive Recovery Card: owner, "
+             "repositories, disc inventory, key scheme, and the literal "
+             "first command an heir runs.",
+    )
+    estate_card.add_argument(
+        "--output", "--out", dest="output", type=Path, default=None,
+        help="Write the card here (default: stdout).",
+    )
+
     return parser
 
 
@@ -4400,6 +4416,12 @@ def dispatch(args: argparse.Namespace) -> int:
         else:
             logger.error("Usage: lcsas key {split,combine,verify,card}")
             return 1
+    elif args.command == "estate":
+        if args.estate_command == "card":
+            return cmd_estate_card(args)
+        else:
+            logger.error("Usage: lcsas estate card")
+            return 1
 
     logger.error(f"Command '{args.command}' not yet implemented.")
     return 1
@@ -4623,6 +4645,165 @@ def cmd_key_card(args: argparse.Namespace) -> int:
         print(
             "  Mode 0600. The password is NOT on the card — write it in by "
             "hand and store the card separate from the discs.",
+            file=sys.stderr,
+        )
+    else:
+        print(card, end="")
+    return 0
+
+
+def _estate_card_text(
+    *,
+    owner: str,
+    description: str,
+    technical_contact: str,
+    repositories: list[str],
+    key_storage_hints: str,
+    key_split: bool,
+    key_threshold: int,
+    key_shares: int,
+    label_prefix: str,
+    disc_count: int | None,
+    card_date: str,
+) -> str:
+    """Build the one-page whole-archive Recovery Card (UX-09).
+
+    Unlike the per-repo ``key card`` (which records ONE password), this is
+    the heir's starting sheet for the entire estate: who owns it, what is on
+    the discs, how many discs there are, how the key is stored, and the
+    literal first command to run.  No secret is ever printed.  Every field
+    degrades to a fill-in blank when its source (config or catalog) is
+    absent, so the card is always printable.
+    """
+    blank = "______________________________"
+
+    def or_blank(value: str) -> str:
+        return value if value else blank
+
+    repos_line = ", ".join(repositories) if repositories else blank
+    if disc_count is None:
+        disc_line = f"{blank}  (labeled {label_prefix}_*)"
+    else:
+        disc_line = f"{disc_count} disc(s), labeled {label_prefix}_*"
+
+    lines = [
+        "============== LCSAS RECOVERY CARD (ARCHIVE) ==============",
+        f"Owner       : {or_blank(owner)}",
+        f"Description : {or_blank(description)}",
+        f"Made on     : {card_date}",
+        "",
+        "WHAT THIS IS",
+        "  This is the starting sheet for an entire LCSAS backup",
+        "  archive.  Keep it WITH the discs; keep the password(s)",
+        "  SOMEWHERE ELSE (key/data separation).  WITHOUT the",
+        "  password the discs cannot be decrypted — there is no",
+        "  recovery.",
+        "",
+        "WHAT IS ON THE DISCS",
+        f"  Repositories : {repos_line}",
+        f"  Discs        : {disc_line}",
+        "",
+        "WHERE THE KEY IS KEPT",
+        f"  {or_blank(key_storage_hints)}",
+    ]
+    if key_split:
+        lines += [
+            "",
+            "THE KEY IS SPLIT INTO SHARE CARDS",
+            f"  Any {key_threshold} of {key_shares} share cards reconstruct the",
+            "  password; fewer reveal nothing.  Share holders:",
+            "    1. ______________________   2. ______________________",
+            "    3. ______________________   4. ______________________",
+            "    5. ______________________",
+            "  Gather any K share cards and, on the LCSAS_META disc, run:",
+            "      python3 keyshare_combine.py <card1> <card2>",
+            "  It prints the password; enter it at the restore prompt.",
+        ]
+    lines += [
+        "",
+        "FIRST STEP — recover the files",
+        "  Insert the META disc, then for your computer:",
+        "    Windows : open the LCSAS_META disc and double-click",
+        "              restore.bat",
+        "    macOS   : open Terminal and run",
+        f"              sh /Volumes/{label_prefix}_META/restore.sh ~/restored",
+        "    Linux   : open a terminal and run",
+        f"              sh /media/$USER/{label_prefix}_META/restore.sh ~/restored",
+        "  Then follow the on-screen prompts (START_HERE.txt on any",
+        "  disc has the full walkthrough).",
+        "",
+        "IF YOU GET STUCK",
+        f"  Technical contact: {or_blank(technical_contact)}",
+        "  Or take ALL the discs AND the password to any computer",
+        "  professional — the instructions travel on the discs.",
+        "",
+        "STORE THIS SHEET WITH THE DISCS — STORE THE PASSWORD ELSEWHERE.",
+        "==========================================================",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def cmd_estate_card(args: argparse.Namespace) -> int:
+    """Generate the whole-archive Recovery Card (UX-09).
+
+    Reads survivability fields from the config and, when a catalog is
+    reachable, the burned-disc count.  Never fails on a missing/old
+    catalog — the disc inventory degrades to a fill-in blank.
+    """
+    from datetime import date
+
+    from lcsas.config.settings import load_config
+
+    if args.config is None:
+        logger.error("--config is required to generate an estate Recovery Card.")
+        return 1
+    config = load_config(args.config)
+
+    disc_count: int | None = None
+    db_path = _resolve_db_path(args, config)
+    if db_path.exists():
+        from lcsas.constants import (
+            STATUS_BURNED,
+            STATUS_DEPRECATED,
+            STATUS_VERIFIED,
+        )
+        from lcsas.db.connection import get_connection
+        from lcsas.db.schema import ensure_schema
+        from lcsas.db.volumes import list_volumes
+
+        conn = get_connection(db_path)
+        try:
+            ensure_schema(conn)
+            # Count discs that physically exist (burned and beyond), not
+            # in-progress STAGING/BURNING volumes an heir won't hold, nor
+            # DESTROYED ones that no longer exist.
+            burned = {STATUS_BURNED, STATUS_VERIFIED, STATUS_DEPRECATED}
+            disc_count = sum(
+                1 for v in list_volumes(conn) if v.status in burned
+            )
+        finally:
+            conn.close()
+
+    card = _estate_card_text(
+        owner=config.archive_owner,
+        description=config.archive_description,
+        technical_contact=config.technical_contact,
+        repositories=sorted(config.repositories),
+        key_storage_hints=config.key_storage_hints,
+        key_split=config.key_split,
+        key_threshold=config.key_threshold,
+        key_shares=config.key_shares,
+        label_prefix=config.label_prefix,
+        disc_count=disc_count,
+        card_date=date.today().isoformat(),
+    )
+
+    if args.output is not None:
+        args.output.write_text(card, encoding="utf-8")
+        print(f"Wrote whole-archive Recovery Card to {args.output}")
+        print(
+            "  Store this sheet WITH the discs; store the password "
+            "SOMEWHERE ELSE.",
             file=sys.stderr,
         )
     else:

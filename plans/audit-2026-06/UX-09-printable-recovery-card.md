@@ -82,3 +82,6 @@ absent catalog the card degrades to blanks — never fails.
 ## Effort
 
 1 day: 0.5 generator + CLI, 0.5 tests/docs. No special environment.
+
+---
+**Implemented:** 2026-06-13. As planned, modulo KEY-09 overlap: KEY-09 already shipped the per-repo single-key `lcsas key card` + static `docs/RECOVERY_CARD.txt` + ESTATE_PLANNING/UX_CONCERNS references. This plan added the distinct whole-archive artifact `lcsas estate card` (owner, repositories, catalog disc count, K-of-N share scheme, per-OS first command, on-disc `keyshare_combine.py` path), with the generated card folded into UX-02's restore.sh flag-contract corpus. Step-2 share-card wording change was already satisfied (ESTATE_PLANNING uses the on-disc combiner; `_share_card_text` defers to the disc's instructions).

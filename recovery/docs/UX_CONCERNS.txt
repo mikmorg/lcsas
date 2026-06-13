@@ -146,6 +146,13 @@ MITIGATION (organizational, not technical):
     the password itself is never printed). An owner/heir verifies a
     hand-copied password with `lcsas key card --check FILE --code CODE`
     (MATCH/MISMATCH). The card is an off-disc artifact by design.
+  * IMPLEMENTED (UX-09): whole-archive starting sheet generator
+    `lcsas --config lcsas.toml estate card --output card.txt` — one page
+    covering owner, repositories, disc count (from the catalog when
+    reachable, else fill-in blanks), the K-of-N share scheme when split,
+    and the literal first command an heir runs per OS. Complements the
+    per-repo `key card` (which records one password); the estate card is
+    the heir's entry point and is stored WITH the discs (no secret on it).
   * Optionally: support a secondary password (escrow) at archive
     creation time.  Phase 5+.
   * No technical mitigation possible from the inheritor side.

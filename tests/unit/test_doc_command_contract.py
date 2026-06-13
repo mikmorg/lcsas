@@ -416,6 +416,24 @@ def _rendered_heir_docs(tmp_path: Path) -> dict[str, str]:
     builder = MetaVolumeBuilder(tmp_path / "meta", config=config)
     docs["<meta>/START_HERE.txt"] = builder._render_meta_start_here(config)
     docs["<meta-noconfig>/START_HERE.txt"] = builder._render_meta_start_here(None)
+
+    # UX-09: the generated whole-archive Recovery Card carries per-OS
+    # restore.sh commands — hold them to the same flag contract.
+    from lcsas.cli.main import _estate_card_text
+
+    docs["<estate-card>"] = _estate_card_text(
+        owner="Jane Smith",
+        description="Family photos 2000-2025",
+        technical_contact="Bob (bob@example.org)",
+        repositories=["family"],
+        key_storage_hints="Safe deposit box #1234",
+        key_split=True,
+        key_threshold=2,
+        key_shares=5,
+        label_prefix="LCSAS",
+        disc_count=8,
+        card_date="2026-06-13",
+    )
     return docs
 
 

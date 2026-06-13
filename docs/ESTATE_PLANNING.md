@@ -32,9 +32,13 @@ This document provides a checklist and templates to make that possible.
   - Avoid attics, basements, and areas with temperature swings
 
 - [ ] **Maintain a paper manifest**
-  - Print a list of all disc labels and what they contain
-  - Store the manifest WITH the disc binder
-  - Update it each time you burn new discs
+  - Generate a one-page whole-archive **Recovery Card** with
+    `lcsas --config lcsas.toml estate card --output card.txt` — it fills in
+    the owner, repositories, disc count (from the catalog), key scheme, and
+    the literal first command an heir runs per operating system. No password
+    is printed. Store this sheet WITH the disc binder.
+  - Or print a list of all disc labels and what they contain by hand.
+  - Update it each time you burn new discs.
 
 ### 2. Encryption Key Management
 
