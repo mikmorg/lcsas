@@ -147,3 +147,6 @@ No catalog/schema impact.
 2 days: 0.5 impl (workflow + floor script), 0.5 parity test, 1.0 iterating CI
 (first runs will surface env-specific skips/failures; budget for 3-5 red
 runs). Needs nothing beyond GitHub-hosted ubuntu runners.
+
+---
+**Implemented:** 2026-06-13. As planned: added `recovery-hardening` CI job (rustic pin + xorriso/dvdisaster/qemu-user-static/wine + `make -C recovery all test` + full hardening suite with junit + skip-rot floor), `scripts/ci_min_passed.py` + `tests/unit/test_ci_min_passed.py`, and `tests/recovery_hardening/test_ci_workflow_parity.py` (KNOWN_UNWIRED={test-e2e}, EQUIVALENCE for the raw pytest invocation, skip-rot-floor presence check). Deviations: FLOOR set to a conservative placeholder (200) with a re-baseline comment since the first green CI count isn't knowable locally; test-e2e deferred per GATE-10; pre-push hook (item 4, "optional") not added. CI-only validation done by yaml.safe_load parse; GitHub run happens at next checkpoint push.

@@ -89,3 +89,82 @@ jobs:
 
       - name: Lint (ruff)
         run: make lint
+
+  # The recovery-hardening suite is where every behavioral test of
+  # recovery/scripts/restore.sh lives (tier fallback, disc discovery,
+  # tier-3 swap, doc-parity, UX).  `make gate` runs it as the final
+  # "this build is shippable" step, but until GATE-02 it never ran in
+  # CI — restore.sh behavior was enforced purely by local discipline.
+  # Separate job (parallel to `test`) so a hardening failure is legible
+  # at a glance.  test-e2e is deferred behind GATE-10 (it hard-skips
+  # off-host); see tests/recovery_hardening/test_ci_workflow_parity.py
+  # KNOWN_UNWIRED.
+  recovery-hardening:
+    runs-on: ubuntu-latest
+
+    env:
+      # Same pinned rustic as the `test` job — keep in lockstep.
+      RUSTIC_VERSION: "0.11.2"
+      RUSTIC_ASSET: "rustic-v0.11.2-x86_64-unknown-linux-gnu.tar.gz"
+      RUSTIC_SHA256: "fb7b74a14418b2dd070360c9abb22607f8559bdd344a0adf1b33bc2e31f83f5f"
+      # Skip-rot floor: minimum passed-test count.  qemu-user-static + wine
+      # below let the aarch64/armv7/windows committed-binary tests actually
+      # execute in CI (they skip everywhere but the dev VM otherwise), so
+      # the real floor is well above this.  RE-BASELINE: after the first
+      # green run, read the "passed" count from the junit summary and set
+      # FLOOR to (passed - 5).  This conservative starting value only
+      # catches catastrophic skip-rot until that re-baseline lands.
+      FLOOR: "200"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install rustic (pinned release tarball)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          cd "$(mktemp -d)"
+          url="https://github.com/rustic-rs/rustic/releases/download/v${RUSTIC_VERSION}/${RUSTIC_ASSET}"
+          echo "Downloading $url"
+          curl -fsSL -o rustic.tar.gz "$url"
+          actual=$(sha256sum rustic.tar.gz | awk '{print $1}')
+          if [ "$RUSTIC_SHA256" != "$actual" ]; then
+            echo "SHA256 mismatch: expected=$RUSTIC_SHA256 actual=$actual" >&2
+            exit 1
+          fi
+          echo "SHA256 verified: $actual"
+          tar -xzf rustic.tar.gz
+          install -m 0755 rustic "$HOME/.local/bin/rustic"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install xorriso + dvdisaster + qemu + wine
+        run: |
+          sudo apt-get update
+          # qemu-user-static + wine let the cross-arch committed-binary
+          # hardening tests (aarch64/armv7 via qemu, windows .exe via wine)
+          # actually run here instead of skipping — raising the floor.
+          sudo apt-get install -y xorriso dvdisaster qemu-user-static wine
+          xorriso -version
+          dvdisaster --version
+
+      - name: Install LCSAS (editable, with dev deps)
+        run: make dev
+
+      - name: Build host tier-1 binaries + C unit tests
+        # Gives the tier-1 hardening tests a build/lcsas-restore to target,
+        # and runs the vendored C unit tests.  ~2 min.
+        run: make -C recovery all test
+
+      - name: Recovery hardening suite
+        run: pytest tests/recovery_hardening/ -v --junitxml=/tmp/hardening.xml
+
+      - name: Skip-rot floor
+        # Fails if fewer than FLOOR tests passed — catches a regression that
+        # silently turns assertions into skips.  See env.FLOOR for re-baseline.
+        run: python3 scripts/ci_min_passed.py /tmp/hardening.xml --min-passed "$FLOOR"
