@@ -56,7 +56,7 @@ test-all: test-unit test-integration test-e2e test-recovery-hardening
 # Production build gate.  Composes lint + typecheck + the entire test
 # pyramid; the recovery-hardening tier is the final step.  Anything
 # that fails here blocks `git push`.
-gate: lint typecheck test-all
+gate: lint typecheck test-all shell-coverage
 	@echo "build gate passed."
 
 coverage:
@@ -69,7 +69,14 @@ coverage:
 # parser in tools/cov_shell.py cross-references the trace against
 # the script's executable-line set and reports per-line coverage.
 #
-# Threshold: 90% (set via --threshold to fail the target if lower).
+# Threshold: 89% (measured floor on master 2026-06-13; set via
+# --threshold to fail the target if lower).  Ratchet intent: raise
+# toward 90 as restore.sh branches gain tests; never lower without an
+# issue.  The pytest trace run below must exit 0 — a non-zero exit
+# (collection error, test failure, or exit-5 "no tests collected")
+# fails shell-coverage, because a broken trace run is exactly the state
+# this gate exists to catch.  Honest per-test skips (missing optional
+# tools) still exit 0 and are fine.
 # Only honoured when bash is the interpreter; the hook is a no-op
 # on dash/POSIX sh, so tests that explicitly invoke `sh restore.sh`
 # contribute no coverage data.  Most subprocess.run invocations
@@ -82,9 +89,9 @@ shell-coverage:
 	 LCSAS_TRACE_VIA_BASH=1 \
 	    pytest tests/recovery_hardening/test_restore_*.py \
 	          tests/recovery_hardening/test_tier_fallback.py \
-	          tests/recovery_hardening/test_restore_platform_detect.py -q || true
+	          tests/recovery_hardening/test_restore_platform_detect.py -q
 	@python3 tools/cov_shell.py \
-	    --threshold 60 \
+	    --threshold 89 \
 	    /tmp/lcsas-restore-shell.trace \
 	    recovery/scripts/restore.sh
 

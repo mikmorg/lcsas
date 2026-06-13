@@ -106,3 +106,6 @@ No catalog/schema impact.
 1 day: 0.25 Makefile edits, 0.25 measure + set floor, 0.25 contract test,
 0.25 CI wiring + scratch-branch verification. No special environment (bash +
 pytest only).
+
+---
+**Implemented:** 2026-06-13. As planned. Measured floor on master = 89.2%; threshold set to 89 in both the Makefile comment and `--threshold` flag, capped below 90. Dropped `|| true` from the trace-generating pytest run (fail-loud). Wired `shell-coverage` into `make gate` and into the GATE-02 recovery-hardening CI job (GATE-02 had already landed, so no standalone test.yml step was needed). Added `tests/recovery_hardening/test_shell_coverage_contract.py` (comment==flag parity + no-`|| true`); the existing `test_ci_workflow_parity.py` auto-enforces the new gate-tier-is-wired requirement.

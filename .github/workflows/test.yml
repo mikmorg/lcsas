@@ -175,3 +175,11 @@ jobs:
         # Fails if fewer than FLOOR tests passed — catches a regression that
         # silently turns assertions into skips.  See env.FLOOR for re-baseline.
         run: python3 scripts/ci_min_passed.py /tmp/hardening.xml --min-passed "$FLOOR"
+
+      - name: Shell coverage floor (restore.sh)
+        # GATE-09: a real, enforced line-coverage floor for the heir's single
+        # entry point.  Fails the job if the trace-generating pytest run is
+        # non-zero OR coverage drops below the documented Makefile threshold.
+        # Self-contained (pytest + bash + tools/cov_shell.py); rides this job
+        # because restore.sh's behavioral tests all live in recovery_hardening.
+        run: make shell-coverage
