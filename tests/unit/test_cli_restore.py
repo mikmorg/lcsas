@@ -49,6 +49,32 @@ def _setup_db_with_packs(
     return packs
 
 
+def _setup_db_multi_copy(
+    conn: sqlite3.Connection,
+    repo_name: str,
+    layout: dict[str, list[str]],
+    pack_size: int = 1024,
+) -> None:
+    """Register packs, linking each to every volume in *layout* that lists it.
+
+    ``layout`` maps ``{volume_label: [sha256, ...]}``.  A pack appearing in
+    two volumes gets one volume as primary and the other as an alternate in
+    the V2 pick list.
+    """
+    register_repo(conn, repo_name, repo_name, f"/mnt/mirror/{repo_name}", "")
+    pack_ids: dict[str, int] = {}
+    for hashes in layout.values():
+        for sha in hashes:
+            if sha not in pack_ids:
+                pack_ids[sha] = register_pack(conn, sha, pack_size, repo_name).pack_id
+    for label, hashes in layout.items():
+        vol = create_volume(
+            conn, label, generate_uuid(), "TEST_TINY",
+            1_000_000, "Home_Shelf", "VERIFIED",
+        )
+        bulk_link_packs(conn, vol.volume_id, [pack_ids[s] for s in hashes])
+
+
 def _make_args(**kwargs):
     """Build a namespace mimicking parsed CLI args."""
     defaults = {
@@ -164,6 +190,73 @@ class TestCmdRestorePlan:
         assert "ARCHIVE_001" in all_msgs
         assert "3 packs" in all_msgs
         assert "family" in all_msgs
+
+    @pytest.mark.skipif(
+        not shutil.which("rustic"), reason="rustic binary not installed"
+    )
+    def test_plan_output_shows_alternates(self, tmp_path, caplog):
+        """RST-07: `restore plan` shows an 'also on:' column for multi-copy
+        packs and omits it when packs have only a single source.
+        """
+        import logging
+
+        # --- Multi-copy: pack on VOL_A + VOL_B → 'also on:' VOL_B ---------
+        conn = get_memory_connection()
+        create_all(conn)
+        dup = "aa" * 32
+        _setup_db_multi_copy(conn, "family", {"VOL_A": [dup], "VOL_B": [dup]})
+
+        mock_config = MagicMock()
+        mock_config.db_path = Path(":memory:")
+        mock_config.repositories = {
+            "family": MagicMock(
+                mirror_path=Path("/mnt/mirror/family"),
+                password_file=Path("/root/keys/family.key"),
+            ),
+        }
+        mock_runner = MagicMock()
+        mock_runner.restore_dry_run.return_value = RestorePlan(
+            snapshot_id="snap1", required_pack_hashes=[dup],
+        )
+        args = _make_args(restore_command="plan", snapshot_id="snap1")
+        with (
+            patch("lcsas.config.settings.load_config", return_value=mock_config),
+            patch("lcsas.db.connection.get_connection", return_value=conn),
+            patch("lcsas.db.schema.create_all"),
+            patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
+                  return_value=mock_runner),
+            caplog.at_level(logging.INFO),
+        ):
+            result = cmd_restore_plan(args)
+        assert result == 0
+        msgs = " ".join(r.message for r in caplog.records)
+        assert "also on:" in msgs
+        assert "VOL_B" in msgs
+
+        caplog.clear()
+
+        # --- Single-copy: no alternates → no 'also on:' ------------------
+        conn2 = get_memory_connection()
+        create_all(conn2)
+        solo = "bb" * 32
+        _setup_db_with_packs(conn2, "family", [solo], "VOL_SOLO")
+        mock_runner.restore_dry_run.return_value = RestorePlan(
+            snapshot_id="snap2", required_pack_hashes=[solo],
+        )
+        args2 = _make_args(restore_command="plan", snapshot_id="snap2")
+        with (
+            patch("lcsas.config.settings.load_config", return_value=mock_config),
+            patch("lcsas.db.connection.get_connection", return_value=conn2),
+            patch("lcsas.db.schema.create_all"),
+            patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
+                  return_value=mock_runner),
+            caplog.at_level(logging.INFO),
+        ):
+            result2 = cmd_restore_plan(args2)
+        assert result2 == 0
+        msgs2 = " ".join(r.message for r in caplog.records)
+        assert "VOL_SOLO" in msgs2
+        assert "also on:" not in msgs2
 
     def test_plan_unknown_repo(self, caplog):
         """restore plan with unknown repo logs error."""
@@ -448,6 +541,130 @@ class TestCmdRestoreExec:
         call_kwargs = mock_runner.restore.call_args
         assert call_kwargs[1]["snapshot_id"] == "snap1" or call_kwargs[0][0] == "snap1"
 
+    @pytest.mark.skipif(
+        not shutil.which("rustic"), reason="rustic binary not installed"
+    )
+    def test_skip_primary_volume_triggers_alternate_prompt(self, tmp_path, caplog):
+        """RST-07: answering 'skip' to the primary disc routes its packs into
+        the alternates retry, which prompts for the alternate disc and lets
+        the restore complete (exit 0) from the redundant copy.
+        """
+        import logging
+        conn = get_memory_connection()
+        create_all(conn)
+        pack = "aa" * 32
+        # Pack lives on both VOL_A (primary) and VOL_B (alternate).
+        _setup_db_multi_copy(conn, "family", {"VOL_A": [pack], "VOL_B": [pack]})
+
+        # VOL_B's mounted tree carries the pack (two-level layout).
+        volb = tmp_path / "volb" / "data" / pack[:2]
+        volb.mkdir(parents=True)
+        (volb / pack).write_bytes(b"pack-data")
+
+        mirror_path = tmp_path / "mirror"
+        for sub in ("index", "snapshots", "keys"):
+            (mirror_path / sub).mkdir(parents=True)
+        (mirror_path / "config").write_text("{}")
+
+        key_file = tmp_path / "key"
+        key_file.write_bytes(b"secret")
+        mock_config = MagicMock()
+        mock_config.db_path = Path(":memory:")
+        mock_config.repositories = {
+            "family": MagicMock(mirror_path=mirror_path, password_file=key_file),
+        }
+        mock_runner = MagicMock()
+        mock_runner.restore_dry_run.return_value = RestorePlan(
+            snapshot_id="snap1", required_pack_hashes=[pack],
+        )
+
+        args = _make_args(
+            restore_command="exec", repo="family", snapshot_id="snap1",
+            target_path=tmp_path / "restored", password_file=key_file,
+            cache_dir=tmp_path / "cache", volume_dir=None, iso_dir=None,
+        )
+
+        prompts: list[str] = []
+
+        def fake_input(prompt: str = "") -> str:
+            prompts.append(prompt)
+            # 'skip' the primary VOL_A; then mount VOL_B at the retry prompt.
+            return "skip" if "VOL_A" in prompt else str(tmp_path / "volb")
+
+        with (
+            patch("lcsas.config.settings.load_config", return_value=mock_config),
+            patch("lcsas.db.connection.get_connection", return_value=conn),
+            patch("lcsas.db.schema.create_all"),
+            patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
+                  return_value=mock_runner),
+            patch("builtins.input", side_effect=fake_input),
+            patch("sys.stdin") as mock_stdin,
+            caplog.at_level(logging.INFO),
+        ):
+            mock_stdin.isatty.return_value = True
+            result = cmd_restore_exec(args)
+
+        assert result == 0
+        mock_runner.restore.assert_called_once()
+        # The alternates retry prompt for VOL_B must have fired.
+        assert any("VOL_B" in p for p in prompts)
+
+    @pytest.mark.skipif(
+        not shutil.which("rustic"), reason="rustic binary not installed"
+    )
+    def test_final_missing_error_names_volume_labels(self, tmp_path):
+        """RST-07: skipping every disc (including the alternate prompt) fails
+        with a PackCorruptionError naming the primary disc *and* the redundant
+        alternate; the bare SHA-256 is never the only identifier.
+        """
+        from lcsas.restore.executor import PackCorruptionError
+        conn = get_memory_connection()
+        create_all(conn)
+        pack = "aa" * 32
+        _setup_db_multi_copy(conn, "family", {"VOL_A": [pack], "VOL_B": [pack]})
+
+        mirror_path = tmp_path / "mirror"
+        for sub in ("index", "snapshots", "keys"):
+            (mirror_path / sub).mkdir(parents=True)
+        (mirror_path / "config").write_text("{}")
+
+        key_file = tmp_path / "key"
+        key_file.write_bytes(b"secret")
+        mock_config = MagicMock()
+        mock_config.db_path = Path(":memory:")
+        mock_config.repositories = {
+            "family": MagicMock(mirror_path=mirror_path, password_file=key_file),
+        }
+        mock_runner = MagicMock()
+        mock_runner.restore_dry_run.return_value = RestorePlan(
+            snapshot_id="snap1", required_pack_hashes=[pack],
+        )
+
+        args = _make_args(
+            restore_command="exec", repo="family", snapshot_id="snap1",
+            target_path=tmp_path / "restored", password_file=key_file,
+            cache_dir=tmp_path / "cache", volume_dir=None, iso_dir=None,
+        )
+
+        with (
+            patch("lcsas.config.settings.load_config", return_value=mock_config),
+            patch("lcsas.db.connection.get_connection", return_value=conn),
+            patch("lcsas.db.schema.create_all"),
+            patch("lcsas.rustic.wrapper.SubprocessRusticRunner",
+                  return_value=mock_runner),
+            patch("builtins.input", return_value="skip"),
+            patch("sys.stdin") as mock_stdin,
+            pytest.raises(PackCorruptionError) as exc,
+        ):
+            mock_stdin.isatty.return_value = True
+            cmd_restore_exec(args)
+
+        msg = str(exc.value)
+        assert "VOL_A" in msg
+        assert "VOL_B" in msg
+        assert pack not in msg
+        mock_runner.restore.assert_not_called()
+
     def test_exec_dispatches_via_main(self):
         """restore exec is routed through dispatch()."""
         parser = build_parser()
@@ -679,6 +896,54 @@ class TestRestoreExecSpacePreflight:
 # ---------------------------------------------------------------------------
 # _retry_from_alternates_batch helper tests
 # ---------------------------------------------------------------------------
+
+
+class TestReportMissingByLabel:
+    """RST-07: completeness-failure reporter groups by disc, demotes hashes."""
+
+    def test_groups_by_disc_with_alternates_and_deprecated(self, caplog):
+        import logging
+
+        from lcsas.cli.main import _report_missing_by_label
+        from lcsas.db.models import Pack
+        from lcsas.restore.planner import PackSource, PickListV2
+
+        sha_a = "aa" * 32
+        sha_b = "bb" * 32
+        pack_a = Pack(
+            pack_id=1, sha256=sha_a, size_bytes=1, repo_id="r",
+            is_pruned=False, created_at="2026-06-13",
+        )
+        pack_b = Pack(
+            pack_id=2, sha256=sha_b, size_bytes=1, repo_id="r",
+            is_pruned=False, created_at="2026-06-13",
+        )
+        pick = PickListV2(
+            volumes={
+                "VOL_A": [
+                    PackSource(pack_a, "VOL_A", 1, alternates=["VOL_B"]),
+                    PackSource(pack_b, "VOL_A", 1, alternates=[]),
+                ],
+            },
+            missing_packs=[],
+            deprecated_disc_labels={"OLD_DISC": [sha_b]},
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="lcsas"):
+            _report_missing_by_label(pick, [sha_a, sha_b])
+
+        errors = " ".join(
+            r.message for r in caplog.records if r.levelno >= logging.ERROR
+        )
+        assert "VOL_A" in errors
+        assert "VOL_B" in errors            # alternate named
+        assert "OLD_DISC" in errors         # deprecated source named
+        # Raw hashes only at DEBUG level.
+        assert sha_a not in errors
+        debug = " ".join(
+            r.message for r in caplog.records if r.levelno == logging.DEBUG
+        )
+        assert sha_a in debug
 
 
 class TestRetryFromAlternatesBatch:

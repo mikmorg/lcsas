@@ -98,3 +98,6 @@ Always-on unit (`make test-unit`):
 
 1.5 days: 0.5 impl, 1 tests (interactive-input fixtures for two commands). No special
 environment.
+
+---
+**Implemented:** 2026-06-13. As planned, with two scope-aware deviations: (1) RST-01 had already landed the minimal `_discs_for_packs` label list — replaced it with the fuller `_disc_summary_for_packs` (primary + redundant alternates) so the raised `PackCorruptionError` in both interactive commands now names alternates, which is the error path skip-all actually reaches (the `return 1` completeness block is a backstop, still rewritten via `_report_missing_by_label`). (2) The `restore plan` alternates test lives in `tests/unit/test_cli_restore.py` (where `cmd_restore_plan` is tested) rather than `test_restore.py` (planner-only). Skip now routes packs into alternates in both `cmd_restore_exec` and `cmd_restore_from_disc`; the interactive retry prompt explains *why* via `primary_labels`. All 5 planned tests + 1 helper unit test pass; full unit suite 1706 passed / 1 skipped; lint + mypy --strict clean.

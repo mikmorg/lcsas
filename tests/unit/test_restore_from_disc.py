@@ -101,6 +101,36 @@ def _write_multivolume_catalog(
     conn.close()
 
 
+def _write_multicopy_catalog(
+    path: Path,
+    repo_name: str,
+    layout: dict[str, list[str]],
+) -> None:
+    """Write a catalog where a pack listed in two volumes gets an alternate.
+
+    ``layout`` maps ``{volume_label: [sha256, ...]}``.  Each pack is
+    registered once; volumes that share a pack become primary/alternate in
+    the V2 pick list.  [RST-07]
+    """
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    create_all(conn)
+    register_repo(conn, repo_name, repo_name, f"/mnt/mirror/{repo_name}", "")
+    pack_ids: dict[str, int] = {}
+    for hashes in layout.values():
+        for sha in hashes:
+            if sha not in pack_ids:
+                pack_ids[sha] = register_pack(conn, sha, 1024, repo_name).pack_id
+    for label, hashes in layout.items():
+        vol = create_volume(
+            conn, label, generate_uuid(), "TEST_TINY",
+            1_000_000, "Home_Shelf", "VERIFIED",
+        )
+        bulk_link_packs(conn, vol.volume_id, [pack_ids[s] for s in hashes])
+    conn.commit()
+    conn.close()
+
+
 def _place_pack(vol_data_dir: Path, sha256: str) -> None:
     """Write a placeholder pack file at the two-level layout location."""
     dst = vol_data_dir / sha256[:2] / sha256
@@ -509,6 +539,106 @@ class TestFromDiscBatchMode:
         # because the cache was already complete by the time the retry
         # guard ran (it never reaches _retry_from_alternates_interactive).
         assert not any("alternate" in p.lower() for p in prompts)
+
+    def test_skip_primary_disc_triggers_alternate_prompt(self, tmp_path):
+        """RST-07: skipping the primary disc routes its packs to the alternate
+        retry, which prompts for the alternate disc and completes (exit 0).
+
+        Real executor; only the rustic runner and input()/isatty are faked.
+        """
+        pack = "aa" * 32
+        # Initial disc holds nothing extra; pack lives on VOL_A + VOL_B.
+        disc = tmp_path / "disc"
+        (disc / "data").mkdir(parents=True)
+        _write_multicopy_catalog(
+            disc / "catalog.db", "family",
+            {"VOL_A": [pack], "VOL_B": [pack]},
+        )
+        _write_disc_metadata(disc / "metadata" / "family")
+
+        # Alternate disc VOL_B carries the pack.
+        disc_b = tmp_path / "disc_b"
+        (disc_b / "data").mkdir(parents=True)
+        _place_pack(disc_b / "data", pack)
+
+        key_file = tmp_path / "secret.key"
+        key_file.write_bytes(b"password")
+
+        mock_plan = MagicMock(spec=RestorePlan)
+        mock_plan.required_pack_hashes = [pack]
+        mock_runner = MagicMock()
+        mock_runner.restore_dry_run.return_value = mock_plan
+
+        args = _make_disc_args(
+            disc=disc, target_path=tmp_path / "restored",
+            volume_dir=None, skip_verify=True, password_file=key_file,
+        )
+
+        prompts: list[str] = []
+
+        def fake_input(prompt: str = "") -> str:
+            prompts.append(prompt)
+            # 'skip' the primary; mount VOL_B at the alternate prompt.
+            return "skip" if "VOL_A" in prompt else str(disc_b)
+
+        with (
+            patch("lcsas.utils.subprocess.check_binary_version", return_value="1.0.0"),
+            patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+            patch("builtins.input", side_effect=fake_input),
+            patch("sys.stdin") as mock_stdin,
+        ):
+            mock_stdin.isatty.return_value = True
+            result = cmd_restore_from_disc(args)
+
+        assert result == 0
+        mock_runner.restore.assert_called_once()
+        assert any("VOL_B" in p for p in prompts)
+
+    def test_skip_all_discs_error_names_labels(self, tmp_path):
+        """RST-07: skipping every disc (including the alternate prompt) fails
+        with a PackCorruptionError that names the primary disc *and* the
+        redundant alternate, never only the bare SHA-256.
+        """
+        from lcsas.restore.executor import PackCorruptionError
+
+        pack = "aa" * 32
+        disc = tmp_path / "disc"
+        (disc / "data").mkdir(parents=True)
+        _write_multicopy_catalog(
+            disc / "catalog.db", "family",
+            {"VOL_A": [pack], "VOL_B": [pack]},
+        )
+        _write_disc_metadata(disc / "metadata" / "family")
+
+        key_file = tmp_path / "secret.key"
+        key_file.write_bytes(b"password")
+
+        mock_plan = MagicMock(spec=RestorePlan)
+        mock_plan.required_pack_hashes = [pack]
+        mock_runner = MagicMock()
+        mock_runner.restore_dry_run.return_value = mock_plan
+
+        args = _make_disc_args(
+            disc=disc, target_path=tmp_path / "restored",
+            volume_dir=None, skip_verify=True, password_file=key_file,
+        )
+
+        import pytest
+        with (
+            patch("lcsas.utils.subprocess.check_binary_version", return_value="1.0.0"),
+            patch("lcsas.rustic.wrapper.SubprocessRusticRunner", return_value=mock_runner),
+            patch("builtins.input", return_value="skip"),
+            patch("sys.stdin") as mock_stdin,
+            pytest.raises(PackCorruptionError) as exc,
+        ):
+            mock_stdin.isatty.return_value = True
+            cmd_restore_from_disc(args)
+
+        msg = str(exc.value)
+        assert "VOL_A" in msg
+        assert "VOL_B" in msg  # the redundant alternate is named
+        assert pack not in msg
+        mock_runner.restore.assert_not_called()
 
     def test_batch_missing_packs_raises(self, tmp_path):
         """Batch restore with permanently missing packs fails loud.

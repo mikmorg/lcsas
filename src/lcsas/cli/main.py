@@ -3344,9 +3344,9 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
             password_file=repo_cfg.password_file,
         )
 
-        # Generate pick list
+        # Generate pick list with alternate-volume info (RST-07).
         planner = RestorePlanner(conn)
-        pick_list = planner.generate_pick_list(plan.required_pack_hashes)
+        pick_list = planner.generate_pick_list_v2(plan.required_pack_hashes)
     finally:
         conn.close()
 
@@ -3357,10 +3357,14 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
     logger.info("")
 
     if pick_list.volumes:
-        for label, packs in sorted(pick_list.volumes.items()):
-            total = sum(p.size_bytes for p in packs)
-            logger.info(f"  {label:<30} {len(packs):>4} packs  "
-                       f"({total / (1024 * 1024):.1f} MB)")
+        for label, sources in sorted(pick_list.volumes.items()):
+            total = sum(s.pack.size_bytes for s in sources)
+            also_on = sorted({
+                alt for s in sources for alt in s.alternates if alt != label
+            })
+            also = f"  also on: {', '.join(also_on)}" if also_on else ""
+            logger.info(f"  {label:<30} {len(sources):>4} packs  "
+                       f"({total / (1024 * 1024):.1f} MB){also}")
         logger.info("")
         logger.info(f"  Total: {pick_list.total_packs} packs across "
                    f"{len(pick_list.volumes)} volumes "
@@ -3580,8 +3584,10 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
 
     # Build alternates lookup: sha256 -> [alt_labels]
     alternates_map: dict[str, list[str]] = {}
-    for sources in pick_list.volumes.values():
+    primary_labels: dict[str, str] = {}
+    for label, sources in pick_list.volumes.items():
         for src in sources:
+            primary_labels[src.pack.sha256] = label
             if src.alternates:
                 alternates_map[src.pack.sha256] = list(src.alternates)
 
@@ -3690,12 +3696,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                 still_failed = _prune_recovered(cache_dir, still_failed)
                 if still_failed:
                     from lcsas.restore.executor import PackCorruptionError
-                    discs = _discs_for_packs(still_failed, pick_list.volumes)
-                    where = (
-                        f" They live on disc(s): {', '.join(discs)}. "
-                        "Re-mount those discs (check for damage) and retry."
-                        if discs else ""
-                    )
+                    where = _disc_summary_for_packs(pick_list, still_failed)
                     raise PackCorruptionError(
                         f"{len(still_failed)} pack(s) could not be "
                         f"recovered.{where}"
@@ -3718,6 +3719,9 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     ).strip()
                     if mount_path.lower() == "skip":
                         logger.info(f"  Skipping {label}")
+                        # RST-07: enqueue the skipped disc's packs so the
+                        # alternates retry can offer redundant copies.
+                        all_failed.extend(pack_hashes)
                         break
                     vol_path = Path(mount_path)
                     if not vol_path.is_dir():
@@ -3755,16 +3759,12 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     verify=not args.skip_verify,
                     iso_dir=args.iso_dir,
                     iso_shas=iso_shas,
+                    primary_labels=primary_labels,
                 )
                 still_failed = _prune_recovered(cache_dir, still_failed)
                 if still_failed:
                     from lcsas.restore.executor import PackCorruptionError
-                    discs = _discs_for_packs(still_failed, pick_list.volumes)
-                    where = (
-                        f" They live on disc(s): {', '.join(discs)}. "
-                        "Re-mount those discs (check for damage) and retry."
-                        if discs else ""
-                    )
+                    where = _disc_summary_for_packs(pick_list, still_failed)
                     raise PackCorruptionError(
                         f"{len(still_failed)} pack(s) could not be "
                         f"recovered.{where}"
@@ -3782,10 +3782,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                 f"\n{len(missing)} of {len(all_required)} required packs "
                 f"missing from cache after ingestion."
             )
-            for sha in missing[:10]:
-                logger.error(f"  missing: {sha}")
-            if len(missing) > 10:
-                logger.error(f"  ... and {len(missing) - 10} more")
+            _report_missing_by_label(pick_list, missing)
             logger.error(
                 "\nRestore cannot proceed — mount the missing volumes "
                 "and retry, or check for damaged discs."
@@ -4112,8 +4109,10 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
 
         # Build alternates lookup for resilient pack collection.
         alternates_map: dict[str, list[str]] = {}
-        for sources in pick_list.volumes.values():
+        primary_labels: dict[str, str] = {}
+        for label, sources in pick_list.volumes.items():
             for src in sources:
+                primary_labels[src.pack.sha256] = label
                 if src.alternates:
                     alternates_map[src.pack.sha256] = list(src.alternates)
 
@@ -4166,12 +4165,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                 )
                 still_failed = _prune_recovered(cache_dir, still_failed)
                 if still_failed:
-                    discs = _discs_for_packs(still_failed, pick_list.volumes)
-                    where = (
-                        f" They live on disc(s): {', '.join(discs)}. "
-                        "Re-mount those discs (check for damage) and retry."
-                        if discs else ""
-                    )
+                    where = _disc_summary_for_packs(pick_list, still_failed)
                     raise PackCorruptionError(
                         f"{len(still_failed)} pack(s) could not be "
                         f"recovered.{where}"
@@ -4220,6 +4214,9 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                         ).strip()
                         if mount_path.lower() == "skip":
                             logger.info("  Skipping %s", label)
+                            # RST-07: enqueue the skipped disc's packs so
+                            # the alternates retry can offer redundant copies.
+                            all_failed.extend(pack_hashes)
                             break
                         vol_path = Path(mount_path)
                         if not vol_path.is_dir():
@@ -4247,15 +4244,11 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                     executor, cache_dir,
                     all_failed, alternates_map,
                     verify=not args.skip_verify,
+                    primary_labels=primary_labels,
                 )
                 still_failed = _prune_recovered(cache_dir, still_failed)
                 if still_failed:
-                    discs = _discs_for_packs(still_failed, pick_list.volumes)
-                    where = (
-                        f" They live on disc(s): {', '.join(discs)}. "
-                        "Re-mount those discs (check for damage) and retry."
-                        if discs else ""
-                    )
+                    where = _disc_summary_for_packs(pick_list, still_failed)
                     raise PackCorruptionError(
                         f"{len(still_failed)} pack(s) could not be "
                         f"recovered.{where}"
@@ -4269,10 +4262,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                 "\n%d of %d required pack(s) missing from cache.",
                 len(missing), len(all_required),
             )
-            for sha in missing[:10]:
-                logger.error("  missing: %s", sha)
-            if len(missing) > 10:
-                logger.error("  ... and %d more", len(missing) - 10)
+            _report_missing_by_label(pick_list, missing)
             logger.error(
                 "\nRestore cannot proceed — mount the missing discs and retry,\n"
                 "or check for damaged discs."
@@ -4374,6 +4364,7 @@ def _retry_from_alternates_interactive(
     verify: bool = True,
     iso_dir: Path | None = None,
     iso_shas: dict[str, str | None] | None = None,
+    primary_labels: dict[str, str] | None = None,
 ) -> list[str]:
     """Retry failed packs from alternate volumes (interactive).
 
@@ -4385,8 +4376,13 @@ def _retry_from_alternates_interactive(
     ``iso_dir`` is hashed against the catalog-recorded SHA before its
     packs are read.  Defaults are None for backward-compat — direct
     callers without iso info continue to work unchanged.
+
+    RST-07: ``primary_labels`` maps each pack sha to the disc it was
+    originally assigned to (the one skipped/failed), so the prompt can
+    explain *why* the alternate is being offered.
     """
     remaining = list(failed_packs)
+    primary_labels = primary_labels or {}
 
     for alt_label in _collect_alt_labels(remaining, alternates_map):
         packs_on_alt = [
@@ -4396,8 +4392,19 @@ def _retry_from_alternates_interactive(
         if not packs_on_alt:
             continue
 
-        logger.info(f"\n{len(packs_on_alt)} failed packs may be on "
-                     f"alternate volume '{alt_label}'")
+        skipped = sorted({
+            primary_labels[sha] for sha in packs_on_alt
+            if sha in primary_labels and primary_labels[sha] != alt_label
+        })
+        if skipped:
+            logger.info(
+                "\nDisc(s) %s were skipped/failed; %d of their packs are "
+                "also on '%s'.",
+                ", ".join(skipped), len(packs_on_alt), alt_label,
+            )
+        else:
+            logger.info(f"\n{len(packs_on_alt)} failed packs may be on "
+                         f"alternate volume '{alt_label}'")
         mount_path = input(
             f"Mount '{alt_label}' and enter path (or 'skip'): "
         ).strip()
@@ -4459,25 +4466,119 @@ def _prune_recovered(cache_dir: Path, failed: list[str]) -> list[str]:
     return RestoreExecutor.verify_cache_completeness(cache_dir, unique)
 
 
-def _discs_for_packs(
-    failed: list[str], volumes: dict[str, Any]
-) -> list[str]:
-    """Catalog volume label(s) holding the given (unrecovered) packs.
+def _disc_summary_for_packs(pick_list: Any, packs: list[str]) -> str:
+    """Human sentence naming primary disc(s) and alternate(s) for packs.
 
-    ``volumes`` is a pick-list ``{label: [PackSource | Pack, ...]}`` map.
-    Returns sorted, de-duped labels so a genuine failure names the discs
-    to re-mount rather than only opaque SHA-256 hashes.  (Full label-map
-    UX is RST-07; this is the minimal actionable list.)
+    Used in the raised-error path so a genuine failure names both the disc
+    the packs were assigned to and any alternate that also holds them —
+    not only opaque SHA-256 hashes.  [RST-07]
     """
-    wanted = set(failed)
-    labels: set[str] = set()
-    for label, entries in volumes.items():
-        for entry in entries:
-            sha = getattr(entry, "pack", entry).sha256
-            if sha in wanted:
-                labels.add(label)
-                break
-    return sorted(labels)
+    label_map = _labels_for_packs(pick_list, packs)
+    primaries = sorted({labels[0] for labels in label_map.values() if labels})
+    alternates = sorted({
+        alt for labels in label_map.values() for alt in labels[1:]
+    })
+    if not primaries:
+        return ""
+    msg = f" They live on disc(s): {', '.join(primaries)}."
+    if alternates:
+        msg += f" Redundant copies are on: {', '.join(alternates)}."
+    msg += " Re-mount those discs (check for damage) and retry."
+    return msg
+
+
+def _labels_for_packs(
+    pick_list: Any, hashes: list[str]
+) -> dict[str, list[str]]:
+    """Map each pack SHA-256 to ``[primary_label, *alternates]``.
+
+    Works on a ``PickListV2`` (``volumes`` holds ``PackSource`` entries
+    carrying ``.alternates``).  Packs not in any source come back absent
+    from the result — the caller treats those as truly missing.  [RST-07]
+    """
+    wanted = set(hashes)
+    out: dict[str, list[str]] = {}
+    for label, sources in pick_list.volumes.items():
+        for src in sources:
+            sha = src.pack.sha256
+            if sha not in wanted:
+                continue
+            labels = [label]
+            labels.extend(
+                alt for alt in getattr(src, "alternates", [])
+                if alt != label
+            )
+            out[sha] = labels
+    return out
+
+
+def _report_missing_by_label(pick_list: Any, missing: list[str]) -> None:
+    """Log a completeness failure grouped by disc label, not by hash.
+
+    Names the disc each missing pack lives on plus its alternates and any
+    deprecated/destroyed sources, so the operator knows which discs to
+    re-mount.  Raw SHA-256 hashes are demoted to debug level.  [RST-07]
+    """
+    label_map = _labels_for_packs(pick_list, missing)
+
+    # sha -> deprecated/destroyed labels that still hold it (physically
+    # retrievable but not active in the catalog).
+    depr_for: dict[str, list[str]] = {}
+    for dlabel, dhashes in pick_list.deprecated_disc_labels.items():
+        for sha in dhashes:
+            depr_for.setdefault(sha, []).append(dlabel)
+
+    # Group missing packs by primary disc.
+    by_primary: dict[str, list[str]] = {}
+    unknown: list[str] = []
+    for sha in missing:
+        labels = label_map.get(sha)
+        if labels:
+            by_primary.setdefault(labels[0], []).append(sha)
+        else:
+            unknown.append(sha)
+
+    for primary in sorted(by_primary):
+        shas = by_primary[primary]
+        alts: list[str] = []
+        depr: list[str] = []
+        for sha in shas:
+            alts.extend(label_map.get(sha, [])[1:])
+            depr.extend(depr_for.get(sha, []))
+        suffix = ""
+        if alts:
+            suffix += f" — alternates: {', '.join(sorted(set(alts)))}"
+        if depr:
+            suffix += (
+                f" — also on DEPRECATED/DESTROYED disc(s): "
+                f"{', '.join(sorted(set(depr)))}"
+            )
+        logger.error(
+            "  still need disc %s (%d pack(s))%s", primary, len(shas), suffix
+        )
+
+    if unknown:
+        depr_only: dict[str, list[str]] = {}
+        for sha in unknown:
+            for dlabel in depr_for.get(sha, []):
+                depr_only.setdefault(dlabel, []).append(sha)
+        for dlabel in sorted(depr_only):
+            logger.error(
+                "  packs only on DEPRECATED/DESTROYED disc %s (%d pack(s)) "
+                "— locate it physically if possible",
+                dlabel, len(depr_only[dlabel]),
+            )
+        truly_missing = [
+            sha for sha in unknown if sha not in depr_for
+        ]
+        if truly_missing:
+            logger.error(
+                "  %d pack(s) are on no known disc at all",
+                len(truly_missing),
+            )
+
+    for sha in missing:
+        logger.debug("  missing pack: %s", sha)
 
 
 def dispatch(args: argparse.Namespace) -> int:
