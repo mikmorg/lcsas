@@ -24,6 +24,10 @@ from pathlib import Path
 
 from lcsas.config.settings import LCSASConfig
 from lcsas.meta.bundler import ToolBundler
+from lcsas.meta.required_contents import (
+    APPROVED_TARGETS,
+    required_meta_paths,
+)
 
 # ── Constants ────────────────────────────────────────────────────────
 
@@ -1731,6 +1735,24 @@ class MetaVolumeBuilder:
 
         return self._output
 
+    def missing_required_contents(self) -> list[str]:
+        """Return required-contents paths absent from the built output.
+
+        RST-05: walks the 2026-06 required-contents contract
+        (``required_meta_paths``) against ``self._output``.  A path that
+        names a directory (e.g. ``tools``) is satisfied by the directory
+        existing; everything else must be a file.  Empty list ⇒ complete.
+        """
+        missing: list[str] = []
+        for rel in required_meta_paths():
+            target = self._output / rel
+            if rel == "tools":
+                if not target.is_dir():
+                    missing.append(rel)
+            elif not target.is_file():
+                missing.append(rel)
+        return missing
+
     # ── Tool bundling ────────────────────────────────────────────
 
     def _bundle_tools(self) -> None:
@@ -2127,7 +2149,8 @@ class MetaVolumeBuilder:
         """
         # rust-triple → (short_arch_dir_name, lcsas-restore_filename)
         # Phase 21.12 closed the last open mapping; every approved
-        # target now has a tier-1 path.
+        # target now has a tier-1 path.  Keyed off APPROVED_TARGETS
+        # (RST-05) so the map can never drift from the contract.
         tier1_map: dict[str, tuple[str, str] | None] = {
             "x86_64-unknown-linux-musl":     ("x86_64", "lcsas-restore"),
             "aarch64-unknown-linux-musl":    ("aarch64", "lcsas-restore"),
@@ -2136,6 +2159,10 @@ class MetaVolumeBuilder:
             "x86_64-apple-darwin":           ("x86_64-macos", "lcsas-restore"),
             "x86_64-pc-windows-gnu":         ("x86_64-windows", "lcsas-restore.exe"),
         }
+        assert set(tier1_map) == set(APPROVED_TARGETS), (
+            "tier1_map keys drifted from APPROVED_TARGETS "
+            "(src/lcsas/meta/required_contents.py)"
+        )
 
         src_recovery = self._recovery_dir
         for rust_triple, mapping in tier1_map.items():

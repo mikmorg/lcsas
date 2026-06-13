@@ -34,21 +34,28 @@ from pathlib import Path
 
 import pytest
 
+from lcsas.meta.required_contents import APPROVED_TARGETS, required_meta_paths
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECOVERY_BIN = REPO_ROOT / "recovery" / "bin"
 
 
 # Targets the codebase claims to support (docs/CROSS_PLATFORM_META_RFC.md
-# §6 Q6 enumerates these as the six approved triples).  Keep this in
-# lock-step with `_bundle_tier1_binaries.tier1_map`.
+# §6 Q6 enumerates these as the six approved triples).  The rust-triple
+# column is driven from the single-source-of-truth APPROVED_TARGETS
+# (src/lcsas/meta/required_contents.py); the short-arch + exe columns
+# mirror `_bundle_tier1_binaries.tier1_map`.
+_SHORT_ARCH: dict[str, tuple[str, str]] = {
+    "x86_64-unknown-linux-musl":     ("x86_64",        "lcsas-restore"),
+    "aarch64-unknown-linux-musl":    ("aarch64",       "lcsas-restore"),
+    "armv7-unknown-linux-gnueabihf": ("armv7",         "lcsas-restore"),
+    "aarch64-apple-darwin":          ("aarch64-macos", "lcsas-restore"),
+    "x86_64-apple-darwin":           ("x86_64-macos",  "lcsas-restore"),
+    "x86_64-pc-windows-gnu":         ("x86_64-windows", "lcsas-restore.exe"),
+}
 APPROVED_TIER1_TARGETS: list[tuple[str, str, str]] = [
-    # (rust_triple, short_arch_dir, exe_name)
-    ("x86_64-unknown-linux-musl",     "x86_64",        "lcsas-restore"),
-    ("aarch64-unknown-linux-musl",    "aarch64",       "lcsas-restore"),
-    ("armv7-unknown-linux-gnueabihf", "armv7",         "lcsas-restore"),
-    ("aarch64-apple-darwin",          "aarch64-macos", "lcsas-restore"),
-    ("x86_64-apple-darwin",           "x86_64-macos",  "lcsas-restore"),
-    ("x86_64-pc-windows-gnu",         "x86_64-windows", "lcsas-restore.exe"),
+    (triple, _SHORT_ARCH[triple][0], _SHORT_ARCH[triple][1])
+    for triple in APPROVED_TARGETS
 ]
 
 # Targets a developer is allowed to skip on a host that lacks the
@@ -150,3 +157,42 @@ def test_meta_build_bundles_every_present_target(tmp_path: Path) -> None:
             f"bundled {bundled} is not executable — the +x bit "
             f"was lost during copy."
         )
+
+
+# Set LCSAS_META_BUILT_DIR to the output of `lcsas meta build` (a
+# fully-provisioned host with the upstream cache fetched + all six
+# binaries built) to assert the BUILT output — not just the source tree —
+# satisfies the required-contents contract.  Unset by default: most hosts
+# lack the ~600 MB upstream cache, so this is a release-prep / meta-gate
+# check rather than an every-commit one.
+_BUILT_DIR_ENV = os.environ.get("LCSAS_META_BUILT_DIR", "").strip()
+
+
+@pytest.mark.skipif(
+    not _BUILT_DIR_ENV,
+    reason="set LCSAS_META_BUILT_DIR=<lcsas meta build output> to run",
+)
+def test_built_meta_volume_satisfies_required_contents() -> None:
+    """Every path in the required-contents contract must exist in a BUILT
+    meta-volume — per-target lcsas-restore, rustic, the CPython tree, and
+    the root restore artifacts.  Driven entirely from required_meta_paths
+    so the test and the builder/verify gates can never drift (RST-05)."""
+    built = Path(_BUILT_DIR_ENV).resolve()
+    assert built.is_dir(), f"LCSAS_META_BUILT_DIR is not a directory: {built}"
+
+    absent: list[str] = []
+    for rel in required_meta_paths():
+        path = built / rel
+        if rel == "tools":
+            if not path.is_dir():
+                absent.append(rel)
+        elif not path.is_file():
+            absent.append(rel)
+
+    assert not absent, (
+        "BUILT meta-volume at "
+        f"{built} is missing required-contents artifacts:\n"
+        + "\n".join(f"  ABSENT {p}" for p in absent)
+        + "\n\nRun `make fetch-recovery build-recovery` and rebuild, or "
+        "see `make meta-gate`."
+    )

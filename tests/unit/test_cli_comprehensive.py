@@ -1236,13 +1236,33 @@ class TestCmdMetaVerify:
     """Phase 21.8 — `lcsas meta verify <dir>` audits a built meta-volume
     against its recovery/MANIFEST.sha256."""
 
-    def _make_meta(self, tmp_path, files: dict[str, bytes]):
+    def _populate_required_contents(self, out):
+        """Lay down every artifact the RST-05 required-contents contract
+        demands, so the manifest-hash assertions below can be exercised
+        on an otherwise-complete tree (the contract check is orthogonal to
+        the hash check and would otherwise flag ABSENT)."""
+        from lcsas.meta.required_contents import required_meta_paths
+
+        for rel in required_meta_paths():
+            path = out / rel
+            if rel == "tools":
+                path.mkdir(parents=True, exist_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if not path.exists():
+                    path.write_bytes(b"contract-stub\n")
+
+    def _make_meta(self, tmp_path, files: dict[str, bytes], *, complete=True):
         """Build a synthetic meta-volume tree with a matching MANIFEST.
 
         ``files`` maps relative paths under ``recovery/`` (e.g.
         ``"scripts/restore.sh"``) to their byte content.  The manifest
         is written with one line per file plus a header comment so
         we exercise the comment-skip path too.
+
+        ``complete`` (default True) also lays down the RST-05
+        required-contents artifacts so the manifest-hash tests aren't
+        derailed by the orthogonal contract check.
         """
         import hashlib
 
@@ -1250,6 +1270,8 @@ class TestCmdMetaVerify:
         out.mkdir()
         recovery = out / "recovery"
         recovery.mkdir()
+        if complete:
+            self._populate_required_contents(out)
 
         lines = ["# Phase 21.4 merged manifest (test fixture)"]
         for rel, content in sorted(files.items()):
@@ -1363,6 +1385,86 @@ class TestCmdMetaVerify:
         assert result == 0
         assert "PASSED" in caplog.text
         assert "EXTRA" not in caplog.text
+
+    def test_reports_absent_required_artifacts(self, tmp_path, caplog):
+        """RST-05: a built meta-volume whose manifest hashes all pass but
+        which is *missing a required per-target artifact* must FAIL verify
+        with ABSENT, naming the gap.  Before the gate this returned 0
+        because the manifest only pins what was bundled."""
+        out = self._make_meta(tmp_path, {"VERSION": b"21.8\n"})
+        # Remove one required target entirely (simulates a disc that
+        # never shipped the Windows binaries).
+        import shutil
+        shutil.rmtree(out / "recovery" / "bin" / "x86_64-pc-windows-gnu")
+        caplog.clear()
+
+        result = main(["meta", "verify", str(out)])
+        assert result == 1
+        assert "ABSENT" in caplog.text
+        assert "x86_64-pc-windows-gnu" in caplog.text
+        assert "lcsas-restore.exe" in caplog.text
+        # The vintage note is surfaced so an operator reads an ABSENT
+        # verdict as the honest signal, not a false alarm.
+        assert "required-contents contract" in caplog.text
+
+    def test_reports_absent_root_artifact(self, tmp_path, caplog):
+        """A missing root-level restore artifact (outside recovery/) is
+        also caught — the contract check is rooted at the output dir."""
+        out = self._make_meta(tmp_path, {"VERSION": b"21.8\n"})
+        (out / "restore.bat").unlink()
+        caplog.clear()
+
+        result = main(["meta", "verify", str(out)])
+        assert result == 1
+        assert "ABSENT" in caplog.text
+        assert "restore.bat" in caplog.text
+
+
+# ===================================================================
+# cmd_meta_build — RST-05 required-contents build gate
+# ===================================================================
+
+class TestCmdMetaBuildGate:
+    """RST-05: `lcsas meta build` fails by default on an incomplete
+    rescue disc; `--allow-incomplete` restores single-arch dev behavior."""
+
+    def test_require_complete_fails_listing_missing_targets(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """With an empty upstream cache (no rustic/python trees) the
+        default build fails and enumerates every approved triple plus
+        the missing root artifacts."""
+        from lcsas.meta.required_contents import APPROVED_TARGETS
+
+        # Point the upstream cache at an empty dir so no rustic/python
+        # trees get bundled; tier-1 source bins may exist but rustic +
+        # python are guaranteed absent → INCOMPLETE.
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "empty-cache"))
+        out = tmp_path / "meta"
+        caplog.clear()
+
+        result = main(["meta", "build", "--output", str(out)])
+        assert result == 1
+        assert "INCOMPLETE" in caplog.text
+        # Every approved target is named in the missing report.
+        for target in APPROVED_TARGETS:
+            assert target in caplog.text
+        # The remediation hint points at the build targets.
+        assert "--allow-incomplete" in caplog.text
+
+    def test_allow_incomplete_builds(self, tmp_path, monkeypatch, caplog):
+        """--allow-incomplete downgrades the gate to a warning and the
+        build returns 0 (the historical single-arch dev path)."""
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "empty-cache"))
+        out = tmp_path / "meta"
+        caplog.clear()
+
+        result = main([
+            "meta", "build", "--output", str(out), "--allow-incomplete",
+        ])
+        assert result == 0
+        assert "INCOMPLETE" in caplog.text
+        assert "built successfully" in caplog.text
 
 
 # ===================================================================

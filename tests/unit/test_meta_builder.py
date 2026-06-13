@@ -593,7 +593,12 @@ class TestBundleUpstreamBinaries:
             (root / "python" / target / "python" / "lib").mkdir()
 
     def test_no_cache_dir_is_silent_skip(self, tmp_path, monkeypatch):
-        """Missing cache root → bundler returns without error or output."""
+        """Missing cache root → the *bundler* returns without error or
+        output.  This low-level tolerance is intentional: a partial cache
+        must not crash the build.  Completeness is enforced one level up,
+        by the RST-05 build gate in ``cmd_meta_build`` (default ON,
+        escape hatch ``--allow-incomplete``) — see
+        ``test_cli_comprehensive.TestCmdMetaBuildGate``."""
         from lcsas.meta.builder import MetaVolumeBuilder
         monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "nonexistent"))
         b = MetaVolumeBuilder(tmp_path / "meta")

@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-tier3-qemu test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-split-docs blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-tier3-qemu test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-split-docs blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e meta-gate
 
 # Default target: lint + typecheck + every test tier ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
@@ -260,3 +260,21 @@ build-recovery:
 	@# python-free everywhere and the bins don't drift from source.
 	@echo "==> make -C recovery keyshare-arches"
 	$(MAKE) -C recovery keyshare-arches
+
+# RST-05 release-prep gate: provision the full per-target binary set
+# (upstream rustic/python + tier-1 lcsas-restore + keyshare), build a
+# meta-volume, and prove it satisfies the required-contents contract via
+# both the build gate (default --require-complete) and `meta verify`.
+# Fails if any required artifact is absent.  Requires the zig/qemu
+# toolchains + network for fetch-recovery.  CI wiring (tags/scheduled) is
+# owned by the GATE plans; this target is the reusable entry point.
+META_GATE_DIR ?= $(shell mktemp -d /var/tmp/lcsas-meta-gate.XXXXXX)
+meta-gate: fetch-recovery build-recovery
+	@echo "==> lcsas meta build --output $(META_GATE_DIR)"
+	lcsas meta build --output "$(META_GATE_DIR)"
+	@echo "==> lcsas meta verify --strict $(META_GATE_DIR)"
+	lcsas meta verify --strict "$(META_GATE_DIR)"
+	@echo "==> built meta-volume satisfies required-contents contract"
+	LCSAS_META_BUILT_DIR="$(META_GATE_DIR)" pytest \
+		tests/recovery_hardening/test_meta_bundling_completeness.py::test_built_meta_volume_satisfies_required_contents -v
+	@echo "meta-gate PASSED"

@@ -126,3 +126,6 @@ No catalog/schema change (the meta disc carries no catalog.db).
 2 days: 1 impl (contract module + build/verify wiring + error wording), 1 tests + Makefile
 target. No special environment (gate logic is testable with fake trees; the full `meta-gate`
 needs the binary cache, available on this machine).
+
+---
+**Implemented:** 2026-06-13. As planned, with two scoping notes: (1) the bundler methods (`_bundle_upstream_binaries`/`_bundle_tier1_binaries`) keep their silent skip-if-absent tolerance; completeness is enforced one level up by the `cmd_meta_build` gate + `MetaVolumeBuilder.missing_required_contents()` and the `cmd_meta_verify` ABSENT check (both reading `required_meta_paths()`). (2) `meta verify` takes a positional output dir + `--strict` (not `--output`); `make meta-gate` uses that form.

@@ -548,6 +548,15 @@ def build_parser() -> argparse.ArgumentParser:
             "surprise."
         ),
     )
+    meta_build.add_argument(
+        "--allow-incomplete", action="store_true",
+        help=(
+            "Permit a meta-volume missing per-target binaries or root "
+            "restore artifacts (single-arch developer builds). By default "
+            "the build fails loud and lists every missing artifact so an "
+            "incomplete 'rescue' disc never ships unnoticed (RST-05)."
+        ),
+    )
 
     meta_verify = meta_sub.add_parser(
         "verify",
@@ -3119,6 +3128,47 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
         logger.error(f"{e}")
         return 1
 
+    # RST-05: required-contents completeness gate (default ON).  A
+    # meta-volume missing per-target binaries or root restore artifacts
+    # is an incomplete rescue disc; fail loud unless --allow-incomplete.
+    missing = builder.missing_required_contents()
+    if missing:
+        if getattr(args, "allow_incomplete", False):
+            logger.warning(
+                "Meta-volume is INCOMPLETE (%d required artifact(s) "
+                "missing) — building anyway because --allow-incomplete "
+                "was given. Missing: %s",
+                len(missing), ", ".join(missing),
+            )
+        else:
+            from lcsas.meta.required_contents import APPROVED_TARGETS
+            logger.error(
+                "Meta-volume is INCOMPLETE — %d required artifact(s) "
+                "missing:", len(missing),
+            )
+            for target in APPROVED_TARGETS:
+                prefix = f"recovery/bin/{target}/"
+                target_missing = [
+                    m[len(prefix):] if m.startswith(prefix) else m
+                    for m in missing
+                    if m.startswith(prefix)
+                    or m == f"recovery/bin/{target}/python"
+                ]
+                if target_missing:
+                    logger.error("  [%s] %s", target, ", ".join(target_missing))
+            root_missing = [
+                m for m in missing
+                if not m.startswith("recovery/bin/")
+            ]
+            if root_missing:
+                logger.error("  [root] %s", ", ".join(root_missing))
+            logger.error(
+                "Build the binaries (make build-recovery / "
+                "make keyshare-arches, sh recovery/scripts/fetch_upstream.sh) "
+                "or pass --allow-incomplete for a dev build."
+            )
+            return 1
+
     logger.info(f"Meta-volume built successfully at {output}")
     logger.info("Contents:")
     logger.info("  tools/          Portable rustic, xorriso, python3 + libraries")
@@ -3201,6 +3251,21 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
             if rel not in listed:
                 extras.append(rel)
 
+    # RST-05: required-contents check, independent of the manifest.  The
+    # manifest is regenerated from whatever was bundled, so it cannot
+    # catch a *never-bundled* target — this contract check can.  Rooted
+    # at the meta-volume output dir (not recovery/), so it also covers the
+    # root-level restore artifacts that live outside recovery/.
+    from lcsas.meta.required_contents import VINTAGE_NOTE, required_meta_paths
+    absent: list[str] = []
+    for rel in required_meta_paths():
+        path = out / rel
+        if rel == "tools":
+            if not path.is_dir():
+                absent.append(rel)
+        elif not path.is_file():
+            absent.append(rel)
+
     for rel in sorted(missing):
         logger.error("  MISSING  %s", rel)
     for rel, want, got in sorted(mismatched):
@@ -3210,17 +3275,23 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
         )
     for rel in sorted(extras):
         logger.error("  EXTRA    %s  (present on disk but absent from manifest)", rel)
+    for rel in sorted(absent):
+        logger.error("  ABSENT   %s  (required by the meta-volume contract)", rel)
 
-    total_issues = len(missing) + len(mismatched) + len(extras)
+    total_issues = len(missing) + len(mismatched) + len(extras) + len(absent)
     if total_issues:
         logger.error(
-            "Meta-volume verify FAILED: %d issue(s) (%d missing, %d mismatched, %d extra).",
-            total_issues, len(missing), len(mismatched), len(extras),
+            "Meta-volume verify FAILED: %d issue(s) "
+            "(%d missing, %d mismatched, %d extra, %d absent).",
+            total_issues, len(missing), len(mismatched), len(extras), len(absent),
         )
+        if absent:
+            logger.error("Note: %s", VINTAGE_NOTE)
         return 1
 
     logger.info(
-        "Meta-volume verify PASSED: %d files match recovery/MANIFEST.sha256.",
+        "Meta-volume verify PASSED: %d files match recovery/MANIFEST.sha256; "
+        "all required-contents artifacts present.",
         checked,
     )
     return 0
