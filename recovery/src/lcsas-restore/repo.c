@@ -358,11 +358,27 @@ lcsas_blob_index_find(const lcsas_blob_index *ix,
     );
 }
 
+/* Reason a decrypt_repo_file call returned NULL.  Callers that must
+ * distinguish "skippable" (a stray/corrupt single file) from "fatal for
+ * the whole load" (an index this tier provably cannot read in full) pass
+ * an int* and switch on this; pass NULL to ignore (key/config/snapshot
+ * loads keep their current behaviour). */
+enum lcsas_decrypt_err {
+    LCSAS_DEC_OK = 0,
+    LCSAS_DEC_IO,      /* read or alloc failure */
+    LCSAS_DEC_MAC,     /* authentication (Poly1305/decrypt) failure */
+    LCSAS_DEC_TOOBIG,  /* zstd frame declares > the 256 MiB tier-1 cap */
+    LCSAS_DEC_ZSTD     /* malformed zstd frame (probe/decode failed) */
+};
+
 /* Decrypt a repository file and strip any v2 compression prefix.
  * For Phase 1, refuses zstd-compressed file content.
- * Returns malloc'd pointer + len, or NULL on error. */
+ * Returns malloc'd pointer + len, or NULL on error.  If `why` is
+ * non-NULL it is set to an lcsas_decrypt_err classifying the outcome
+ * (LCSAS_DEC_OK on success). */
 static unsigned char *
-decrypt_repo_file(const char *path, const lcsas_master_key *mk, size_t *out_len)
+decrypt_repo_file(const char *path, const lcsas_master_key *mk,
+                  size_t *out_len, int *why)
 {
     unsigned char *raw = NULL;
     size_t raw_len = 0;
@@ -373,10 +389,12 @@ decrypt_repo_file(const char *path, const lcsas_master_key *mk, size_t *out_len)
     int needs_zstd = 0;
     unsigned char *result = NULL;
 
+    if (why) *why = LCSAS_DEC_IO;
     if (lcsas_read_file(path, &raw, &raw_len) != 0) return NULL;
     pt = (unsigned char *)malloc(raw_len + 1);
     if (!pt) { free(raw); return NULL; }
     if (lcsas_repo_decrypt(mk, raw, raw_len, pt, &pt_len) != 0) {
+        if (why) *why = LCSAS_DEC_MAC;
         free(raw); free(pt);
         return NULL;
     }
@@ -385,6 +403,7 @@ decrypt_repo_file(const char *path, const lcsas_master_key *mk, size_t *out_len)
     p = pt;
     plen = pt_len;
     if (lcsas_repo_strip_v2_prefix(&p, &plen, &needs_zstd) != 0) {
+        if (why) *why = LCSAS_DEC_ZSTD;
         free(pt);
         return NULL;
     }
@@ -393,6 +412,10 @@ decrypt_repo_file(const char *path, const lcsas_master_key *mk, size_t *out_len)
         unsigned char *out;
         long got;
         if (dsz <= 0 || dsz > (long)(256 * 1024 * 1024)) {
+            /* A negative/zero probe means the frame header is malformed
+             * (ZSTD); a too-large value means a well-formed frame that
+             * declares more than tier-1 will decompress (TOOBIG). */
+            if (why) *why = (dsz > 0) ? LCSAS_DEC_TOOBIG : LCSAS_DEC_ZSTD;
             fprintf(stderr,
                     "ERROR: zstd frame at %s reports invalid size %ld\n",
                     path, dsz);
@@ -403,12 +426,14 @@ decrypt_repo_file(const char *path, const lcsas_master_key *mk, size_t *out_len)
         if (!out) { free(pt); return NULL; }
         got = lcsas_zstd_decode(p, plen, out, (size_t)dsz);
         if (got < 0) {
+            if (why) *why = LCSAS_DEC_ZSTD;
             fprintf(stderr, "ERROR: zstd decompression failed for %s\n", path);
             free(out); free(pt);
             return NULL;
         }
         out[got] = '\0';
         *out_len = (size_t)got;
+        if (why) *why = LCSAS_DEC_OK;
         free(pt);
         return out;
     }
@@ -419,6 +444,7 @@ decrypt_repo_file(const char *path, const lcsas_master_key *mk, size_t *out_len)
     memcpy(result, p, plen);
     result[plen] = '\0';
     *out_len = plen;
+    if (why) *why = LCSAS_DEC_OK;
     free(pt);
     return result;
 }
@@ -537,13 +563,32 @@ lcsas_repo_load_index(const char *repo_path,
         lcsas_json_tok *toks = NULL;
         long ntoks;
         long sup_arr;
+        int why = LCSAS_DEC_OK;
 
         snprintf(path, sizeof path, "%s/%s", index_dir, names[i]);
-        plain = decrypt_repo_file(path, mk, &plen);
+        plain = decrypt_repo_file(path, mk, &plen, &why);
         if (!plain) {
-            /* MAC/decrypt failure stays non-fatal here (a stray or
-             * corrupt index file must not sink the whole load), but it
-             * is no longer silent: warn per file and tally a summary. */
+            if (why == LCSAS_DEC_TOOBIG || why == LCSAS_DEC_ZSTD) {
+                /* A frame this tier provably cannot read in full (cap
+                 * exceeded, or malformed zstd): the index — and every
+                 * blob it described — would silently vanish, surfacing
+                 * later as a cryptic "blob not in index".  Fail BEFORE
+                 * any restore I/O so the operator can switch to tier-2. */
+                if (why == LCSAS_DEC_TOOBIG) {
+                    fprintf(stderr,
+                            "ERROR: index file %s exceeds the 256 MiB "
+                            "tier-1 decompress cap; use tier-2 (rustic)\n",
+                            names[i]);
+                } else {
+                    fprintf(stderr,
+                            "ERROR: index file %s is corrupt (zstd); "
+                            "use tier-2 (rustic)\n", names[i]);
+                }
+                goto out;
+            }
+            /* MAC/decrypt or I/O failure stays non-fatal here (a stray
+             * or corrupt single file must not sink the whole load), but
+             * it is no longer silent: warn per file and tally a summary. */
             fprintf(stderr,
                     "WARNING: index file %s failed authentication; "
                     "skipping\n", names[i]);
@@ -606,6 +651,7 @@ lcsas_repo_load_index(const char *repo_path,
         long ntoks;
         long packs_arr;
         int superseded = 0;
+        int why = LCSAS_DEC_OK;
         size_t s;
 
         for (s = 0; s < super_count; s++) {
@@ -614,8 +660,25 @@ lcsas_repo_load_index(const char *repo_path,
         if (superseded) continue;
 
         snprintf(path, sizeof path, "%s/%s", index_dir, names[i]);
-        plain = decrypt_repo_file(path, mk, &plen);
+        plain = decrypt_repo_file(path, mk, &plen, &why);
         if (!plain) {
+            if (why == LCSAS_DEC_TOOBIG || why == LCSAS_DEC_ZSTD) {
+                /* Pass 1 already fails loud on these, so pass 2 should
+                 * never reach here for a cap/zstd file; keep the fatal
+                 * branch anyway in case the on-disc set changed between
+                 * passes (TOCTOU) rather than half-loading the index. */
+                if (why == LCSAS_DEC_TOOBIG) {
+                    fprintf(stderr,
+                            "ERROR: index file %s exceeds the 256 MiB "
+                            "tier-1 decompress cap; use tier-2 (rustic)\n",
+                            names[i]);
+                } else {
+                    fprintf(stderr,
+                            "ERROR: index file %s is corrupt (zstd); "
+                            "use tier-2 (rustic)\n", names[i]);
+                }
+                goto out;
+            }
             /* Already warned + tallied in pass 1 (same file set); stay
              * non-fatal so MAC failures don't sink the load. */
             auth_failures++;
@@ -773,7 +836,7 @@ lcsas_repo_load_snapshots(const char *repo_path,
         if (strlen(e->d_name) > LCSAS_HEX_BLOB_ID_LEN) continue;
 
         snprintf(path, sizeof path, "%s/%s", snap_dir, e->d_name);
-        plain = decrypt_repo_file(path, mk, &plen);
+        plain = decrypt_repo_file(path, mk, &plen, NULL);
         if (!plain) {
             /* A snapshot that fails authentication vanishes from the
              * list — that is silent selection data loss, so name it. */

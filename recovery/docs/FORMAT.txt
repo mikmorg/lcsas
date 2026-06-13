@@ -190,7 +190,16 @@ TIER-1 LIMITS
      in MiB for any single JSON structure.  A structure that needs more
      than this fails LOUD, naming the offending file and pointing at
      tier-2 (rustic); it is never silently skipped.  See ENV_VARS.txt.
-   - the 256 MiB zstd decompression cap (T1C-05).
+   - a 256 MiB zstd decompression cap on any single repository file: if a
+     decrypted file's zstd frame declares more than 256 MiB of content,
+     tier-1 refuses to decompress it.  For an INDEX file this is now FATAL
+     to load_index (T1C-05): it names the file, says "use tier-2 (rustic)",
+     and aborts the load BEFORE any restore I/O -- rather than silently
+     dropping the index and surfacing later as a cryptic "blob not in
+     index".  A malformed (un-decodable) index frame is treated the same.
+     Authentication (MAC) failure on a single stray index file stays
+     non-fatal: it is warned, skipped, and counted in a summary line, so
+     one corrupt file never sinks an otherwise-loadable repository.
 
   Both are escape hatches for memory-starved 32-bit hosts, not normal
   operating limits -- ordinary repositories never approach them.

@@ -20,6 +20,8 @@
 #include "hex.h"
 #include "json_q.h"
 #include "lcsas_io.h"
+#include "aes.h"
+#include "poly1305.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,6 +87,83 @@ static const char *fixture_path(char *buf, size_t cap)
     if (access(buf, F_OK) == 0) return buf;
     snprintf(buf, cap, "tests/fixtures/repo");
     return buf;
+}
+
+/* ---- T1C-05 helpers: craft encrypted index files on the fly ----------
+ *
+ * decrypt_repo_file is static, so the only way to exercise its
+ * reason-code paths through lcsas_repo_load_index is to feed it real
+ * MAC-valid encrypted files.  These helpers mirror the Python
+ * gen_fixture.py encrypt_authenticated() (AES-256-CTR + Poly1305-AES,
+ * output IV(16) || ciphertext || MAC(16)) using the loaded master key. */
+
+/* Encrypt `plain` under `mk` with `iv` and write IV||ct||tag to `path`.
+ * Returns 0 on success. */
+static int
+enc_write(const lcsas_master_key *mk, const unsigned char iv[16],
+          const unsigned char *plain, size_t plen, const char *path)
+{
+    lcsas_aes256_key ek;
+    lcsas_aes128_key sk;
+    unsigned char *file = NULL;
+    unsigned char s[16];
+    FILE *f;
+    size_t total = 16 + plen + 16;
+
+    file = (unsigned char *)malloc(total);
+    if (!file) return -1;
+    memcpy(file, iv, 16);
+    lcsas_aes256_set_key(&ek, mk->encrypt);
+    lcsas_aes256_ctr(&ek, iv, plain, file + 16, plen);
+    /* s = AES-128-ECB(mac_k, iv); tag = Poly1305(mac_r, s, ciphertext). */
+    lcsas_aes128_set_key(&sk, mk->mac_k);
+    lcsas_aes128_encrypt(&sk, iv, s);
+    lcsas_poly1305_mac(mk->mac_r, s, file + 16, plen, file + 16 + plen);
+
+    f = fopen(path, "wb");
+    if (!f) { free(file); return -1; }
+    if (fwrite(file, 1, total, f) != total) { fclose(f); free(file); return -1; }
+    fclose(f);
+    free(file);
+    return 0;
+}
+
+/* Copy every regular file in <fixture>/index into <dst>/index, creating
+ * <dst>/index.  Returns 0 on success.  Used so the crafted-bad-file
+ * cases load against a directory that ALSO contains the genuine,
+ * fully-loadable index files. */
+static int
+copy_valid_indexes(const char *fixture_repo, const char *dst_repo)
+{
+    char src_dir[1024], dst_dir[1024], src[2048], dst[2048];
+    DIR *d;
+    struct dirent *e;
+
+    snprintf(dst_dir, sizeof dst_dir, "%s/index", dst_repo);
+    if (mkdir(dst_repo, 0700) != 0 && access(dst_repo, F_OK) != 0) return -1;
+    if (mkdir(dst_dir, 0700) != 0 && access(dst_dir, F_OK) != 0) return -1;
+
+    snprintf(src_dir, sizeof src_dir, "%s/index", fixture_repo);
+    d = opendir(src_dir);
+    if (!d) return -1;
+    while ((e = readdir(d)) != NULL) {
+        unsigned char *buf = NULL;
+        size_t n = 0;
+        FILE *out;
+        if (e->d_name[0] == '.') continue;
+        snprintf(src, sizeof src, "%s/%s", src_dir, e->d_name);
+        snprintf(dst, sizeof dst, "%s/%s", dst_dir, e->d_name);
+        if (lcsas_read_file(src, &buf, &n) != 0) { closedir(d); return -1; }
+        out = fopen(dst, "wb");
+        if (!out) { free(buf); closedir(d); return -1; }
+        if (fwrite(buf, 1, n, out) != n) {
+            fclose(out); free(buf); closedir(d); return -1;
+        }
+        fclose(out);
+        free(buf);
+    }
+    closedir(d);
+    return 0;
 }
 
 int
@@ -990,6 +1069,136 @@ main(void)
                                     &sec, &nsec) != 0) {
             fprintf(stderr, "FAIL: iso8601 fractional + TZ failed\n");
             fails++;
+        }
+    }
+
+    /* ── T1C-05: an index file over the 256 MiB decompress cap is FATAL ─
+     * A v2-zstd index whose frame HEADER declares 300 MiB of content (a
+     * tiny crafted frame — no need to actually materialise 300 MiB) makes
+     * decrypt_repo_file return NULL with LCSAS_DEC_TOOBIG.  Before this
+     * fix both load_index passes treated that NULL as a silent skip and
+     * returned success with the index — and every blob it described —
+     * missing, surfacing much later as a cryptic "blob not in index".
+     * load_index must now fail loud (<0) BEFORE any restore I/O. */
+    {
+        char tmp[] = "/tmp/lcsas_t1c05_toobig_XXXXXX";
+        char idx_path[1024];
+        lcsas_blob_index ix;
+        unsigned char iv[16];
+        unsigned char frame[5 + 13];
+        unsigned long long fcs = 300ULL * 1024 * 1024;
+        int b;
+        /* 64-hex name so load_index does not pre-skip it. */
+        const char *name =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        memset(iv, 0, 16); iv[0] = 0x21;   /* unique IV for this fixture */
+        /* v2 prefix byte 0x02, then a minimal zstd frame whose header
+         * declares an 8-byte content size of 300 MiB:
+         *   magic 28 b5 2f fd | desc 0xE0 (FCS=8B, single-segment) | FCS. */
+        frame[0] = 0x02;
+        frame[1] = 0x28; frame[2] = 0xb5; frame[3] = 0x2f; frame[4] = 0xfd;
+        frame[5] = 0xE0;
+        for (b = 0; b < 8; b++)
+            frame[6 + b] = (unsigned char)((fcs >> (8 * b)) & 0xFF);
+
+        if (mkdtemp(tmp) == NULL) {
+            fprintf(stderr, "FAIL: T1C-05 mkdtemp\n"); fails++;
+        } else if (copy_valid_indexes(repo, tmp) != 0) {
+            fprintf(stderr, "FAIL: T1C-05 copy_valid_indexes\n"); fails++;
+        } else {
+            snprintf(idx_path, sizeof idx_path, "%s/index/%s", tmp, name);
+            if (enc_write(&mk, iv, frame, sizeof frame, idx_path) != 0) {
+                fprintf(stderr, "FAIL: T1C-05 enc_write toobig\n"); fails++;
+            } else {
+                fprintf(stderr,
+                        "[test_repo] T1C-05 expecting cap ERROR below:\n");
+                lcsas_blob_index_init(&ix);
+                rc = lcsas_repo_load_index(tmp, &mk, &ix);
+                if (rc >= 0) {
+                    fprintf(stderr,
+                            "FAIL: T1C-05 over-cap index did not fail load "
+                            "(rc=%d); must be fatal, not a silent skip\n", rc);
+                    fails++;
+                }
+                /* The valid index files were also present; load must NOT
+                 * have half-succeeded with their blobs.  rc<0 is the
+                 * contract; the index may hold partial entries from pass 2
+                 * before it tripped, so we only assert the failure code. */
+                lcsas_blob_index_free(&ix);
+            }
+        }
+    }
+
+    /* ── T1C-05 companion: a MAC-corrupt index alongside a valid one ────
+     * still loads (warn + skip + summary count).  This pins the
+     * petabyte/BUG-3 premise: authentication failure on one stray index
+     * file must NOT sink the whole load — only the provably-unreadable
+     * cap/zstd cases are fatal. */
+    {
+        char tmp[] = "/tmp/lcsas_t1c05_macbad_XXXXXX";
+        char idx_path[1024];
+        lcsas_blob_index ix;
+        const lcsas_blob_loc *loc;
+        unsigned char iv[16];
+        unsigned char junk[64];
+        size_t k;
+        const char *name =
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        memset(iv, 0, 16); iv[0] = 0x22;
+        for (k = 0; k < sizeof junk; k++) junk[k] = (unsigned char)k;
+
+        if (mkdtemp(tmp) == NULL) {
+            fprintf(stderr, "FAIL: T1C-05 macbad mkdtemp\n"); fails++;
+        } else if (copy_valid_indexes(repo, tmp) != 0) {
+            fprintf(stderr, "FAIL: T1C-05 macbad copy_valid_indexes\n");
+            fails++;
+        } else {
+            FILE *bad;
+            int wrote_bad = 0;
+            /* Write a MAC-valid file then corrupt its tag so
+             * lcsas_repo_decrypt fails (LCSAS_DEC_MAC, non-fatal). */
+            snprintf(idx_path, sizeof idx_path, "%s/index/%s", tmp, name);
+            if (enc_write(&mk, iv, junk, sizeof junk, idx_path) == 0) {
+                bad = fopen(idx_path, "r+b");
+                if (bad) {
+                    /* Flip the last byte (part of the Poly1305 tag). */
+                    unsigned char b;
+                    if (fseek(bad, -1, SEEK_END) == 0
+                            && fread(&b, 1, 1, bad) == 1) {
+                        b ^= 0xFF;
+                        if (fseek(bad, -1, SEEK_END) == 0)
+                            fwrite(&b, 1, 1, bad);
+                    }
+                    fclose(bad);
+                    wrote_bad = 1;
+                }
+            }
+            if (!wrote_bad) {
+                fprintf(stderr, "FAIL: T1C-05 macbad setup\n"); fails++;
+            } else {
+                fprintf(stderr,
+                        "[test_repo] T1C-05 expecting auth WARNING below:\n");
+                lcsas_blob_index_init(&ix);
+                rc = lcsas_repo_load_index(tmp, &mk, &ix);
+                if (rc != 0) {
+                    fprintf(stderr,
+                            "FAIL: T1C-05 MAC-corrupt index made load fatal "
+                            "(rc=%d); must warn+skip, not abort\n", rc);
+                    fails++;
+                }
+                /* The genuine fixture blobs must still be present. */
+                lcsas_hex_decode(FIXTURE_DATA_BLOB_HEX, 32, data_id);
+                loc = lcsas_blob_index_find(&ix, data_id);
+                if (!loc) {
+                    fprintf(stderr,
+                            "FAIL: T1C-05 valid blobs lost when a sibling "
+                            "index failed MAC\n");
+                    fails++;
+                }
+                lcsas_blob_index_free(&ix);
+            }
         }
     }
 

@@ -903,19 +903,13 @@ def make_pack_and_index(
     new_index_id = sha256(new_index_enc)
     (index_dir / new_index_id.hex()).write_bytes(new_index_enc)
 
-    # FOURTH index file: v2-zstd format with a CORRUPTED zstd frame.
-    # The decrypted payload starts with 0x02 + ZSTD_MAGIC + garbage,
-    # so strip_v2 detects zstd and lcsas_zstd_decode(probe) returns -1.
-    # Exercises repo.c lines 339-347 (zstd frame error path in
-    # decrypt_repo_file). Result: decrypt_repo_file returns NULL and
-    # load_index skips this file (graceful).
-    bad_zstd_payload = b"\x02" + b"\x28\xb5\x2f\xfd" + b"\xff" * 64
-    bad_zstd_enc = encrypt_authenticated(
-        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
-        b"\x09" + b"\x00" * 15, bad_zstd_payload
-    )
-    bad_zstd_id = sha256(bad_zstd_enc)
-    (index_dir / bad_zstd_id.hex()).write_bytes(bad_zstd_enc)
+    # NOTE (T1C-05): a v2-zstd index with a CORRUPTED frame used to live
+    # here as a "graceful skip" case.  Since T1C-05 a malformed-zstd OR
+    # over-cap index file is FATAL to load_index (it would otherwise drop
+    # an index and every blob it described, surfacing later as a cryptic
+    # "blob not in index").  That scenario therefore can no longer share
+    # this repo fixture (it would sink every other load_index assertion);
+    # it is exercised in isolation by test_repo.c's crafted-frame cases.
 
     # FIFTH index file: v2-plain format (prefix byte 0x01 followed by
     # plain JSON, NOT zstd-compressed).  Exercises repo.c lines

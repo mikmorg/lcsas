@@ -104,3 +104,14 @@ frame *header* can declare any content size, so a tiny fixture triggers the cap.
 
 0.5 day inside the T1C-01 PR (reason-code plumbing + two unit cases + crafted-frame
 fixture helper). Local toolchain only.
+
+---
+**Implemented:** 2026-06-13. As planned: `decrypt_repo_file` gained an `int *why`
+reason-code out-param (LCSAS_DEC_IO/MAC/TOOBIG/ZSTD); both `lcsas_repo_load_index`
+passes now `goto out` (rc -1) with a file-naming "use tier-2 (rustic)" message on
+TOOBIG/ZSTD and stay warn+skip+count on MAC/IO. FORMAT.txt TIER-1 LIMITS updated.
+Two test_repo.c cases (crafted 300 MiB-FCS zstd frame → fatal; MAC-corrupt sibling
+→ non-fatal) via on-the-fly AES-CTR+Poly1305 encryption helpers; the old graceful
+bad-zstd fixture (FOURTH index) removed from gen_fixture.py and its blob deleted.
+All 5 tracked per-target `lcsas-restore` bins rebuilt with zig cc (x86_64/aarch64/
+armv7 linux-musl, aarch64-macos, x86_64-windows-gnu) and verified under qemu/wine.
