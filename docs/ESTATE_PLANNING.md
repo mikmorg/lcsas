@@ -226,6 +226,9 @@ also include the two-step share-reconstruction pre-step.
 - [ ] **Tell someone trusted** that these discs exist and where to find them
 - [ ] **Keep a Blu-ray drive available** — as optical drives disappear from
   consumer hardware, you may need to buy a USB Blu-ray drive separately
+- [ ] **If your archive uses 100 GB BDXL media, verify the stored drive is
+  BDXL-capable** — many ordinary BD drives are NOT, and a non-BDXL drive
+  reads none of the 100 GB discs
 
 ---
 

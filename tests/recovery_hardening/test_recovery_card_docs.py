@@ -70,6 +70,24 @@ def test_estate_planning_references_recovery_card() -> None:
     )
 
 
+def test_estate_planning_has_bdxl_drive_checklist_item() -> None:
+    """ESTATE_PLANNING.md §5 must carry the BDXL-drive verification item [FMT-07].
+
+    The 100 GB BDXL/M-DISC tiers need a BDXL-capable drive — a strictly
+    rarer class than ordinary BD drives.  An heir buying a non-BDXL
+    replacement reads NONE of the 100 GB discs.  The Periodic Maintenance
+    checklist must tell the owner to confirm the stored drive is
+    BDXL-capable, or the docs-vs-reality contract drifts apart.
+    """
+    content = ESTATE_PLANNING.read_text()
+    assert "BDXL-capable" in content and "100 GB BDXL media" in content, (
+        "docs/ESTATE_PLANNING.md no longer carries the FMT-07 BDXL-drive "
+        "checklist item ('If your archive uses 100 GB BDXL media, verify the "
+        "stored drive is BDXL-capable'). Without it, an heir can replace a "
+        "dead drive with a non-BDXL drive that reads none of the 100 GB discs."
+    )
+
+
 def test_ux_concerns_id006_mitigation_implemented() -> None:
     """UX_CONCERNS ID 006's Recovery Card bullet must be marked implemented."""
     content = UX_CONCERNS.read_text()

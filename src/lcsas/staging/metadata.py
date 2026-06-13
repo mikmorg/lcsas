@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig
 from lcsas.db.models import Pack, Volume
 from lcsas.restore.standalone_builder import build_standalone
@@ -651,12 +652,25 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
             f.flush()
             os.fsync(f.fileno())
 
-    def write_disc_care(self) -> None:
+    def write_disc_care(self, config: LCSASConfig | None = None) -> None:
         """Write DISC_CARE.txt with media storage guidance.
 
         This standalone file provides detailed disc care instructions
         beyond the brief summary in START_HERE.txt.
+
+        Args:
+            config: LCSAS configuration.  When the archive's
+                ``default_media_type`` is a 100 GB BDXL tier
+                (``BDXL100`` / ``MDISC100``), the DRIVE AVAILABILITY
+                section leads with a hard warning that a BDXL-capable
+                drive is mandatory.  ``None`` (meta-volume callers
+                without config) yields only the generic BDXL caveat.
         """
+        uses_bdxl = config is not None and config.default_media_type in (
+            MediaType.BDXL100,
+            MediaType.MDISC100,
+        )
+
         text = """\
 DISC CARE & STORAGE GUIDE
 =========================
@@ -698,14 +712,21 @@ ENVIRONMENT
 MEDIA LONGEVITY
 ---------------
 
-  - M-DISC (Millenniata): Rated for 1000+ years.  Uses an
-    inorganic data layer that does not degrade like organic
-    dye.  Best choice for archival.
+  Durability comes from REDUNDANCY and RE-BURN CADENCE (see
+  PERIODIC VERIFICATION), not from media choice.  More copies
+  and offsite sets move the needle far more than any disc brand.
+
+  - M-DISC: manufacturer-rated 1000+ years.  This rating is
+    vendor marketing that cannot be independently verified
+    (the manufacturer is defunct); the recording layer is
+    similar to standard BD-R HTL (50-100 years).  Treat
+    M-DISC as a good BD-R HTL, not as immortal.
   - Standard BD-R HTL: ~50-100 years with proper storage.
   - Standard BD-R LTH: ~10-30 years (organic dye, less stable).
   - DVD+R / DVD-R: ~10-50 years depending on dye quality.
 
-  M-DISC is strongly recommended for archival purposes.
+  M-DISC is a reasonable premium option, not a substitute
+  for keeping multiple copies.
 
 PERIODIC VERIFICATION
 ---------------------
@@ -728,11 +749,27 @@ PERIODIC VERIFICATION
 
 DRIVE AVAILABILITY
 ------------------
+"""
+
+        if uses_bdxl:
+            text += """\
+
+  THIS ARCHIVE USES 100 GB BDXL MEDIA.  The binder drive MUST
+  list BDXL support, or it will read none of these discs.
+"""
+
+        text += """\
 
   As optical drives disappear from consumer hardware:
 
   - Keep at least one USB Blu-ray drive in your disc binder
     or storage location.
+  - 100 GB discs (BDXL / M-DISC 100) require a BDXL-capable
+    drive.  Many BD drives are NOT BDXL-capable -- check the
+    spec sheet before buying a replacement.
+  - A 100 GB disc concentrates 4x the data of a BD25, so any
+    single 100 GB disc lost takes 4x as much with it -- keep
+    at least the same copy count you would for BD25.
   - USB external BD drives are widely available and affordable.
   - Standard USB interface ensures future compatibility.
   - Internal SATA BD drives with a USB-SATA adapter also work.

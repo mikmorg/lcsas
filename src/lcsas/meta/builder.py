@@ -2458,7 +2458,7 @@ class MetaVolumeBuilder:
         from lcsas.staging.metadata import HolographicInjector
 
         injector = HolographicInjector(self._output)
-        injector.write_disc_care()
+        injector.write_disc_care(self._config)
         if self._config is not None:
             injector.write_key_info(self._config)
             injector.write_config_summary(self._config)

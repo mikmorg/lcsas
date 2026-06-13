@@ -96,3 +96,6 @@ every disc burned after this lands and on the newest meta disc.
 
 **1 focused day** (0.5 impl across the three call sites + wording, 0.5 tests). No special
 environment.
+
+---
+**Implemented:** 2026-06-13. As planned. `write_disc_care` made media-aware (signature `write_disc_care(self, config: LCSASConfig | None = None)` — `| None` accommodates the meta-volume caller whose `self._config` is optional; both production call sites pass their config). MEDIA LONGEVITY reworded with redundancy/re-burn headline and qualified M-DISC rating; DRIVE AVAILABILITY gains the conditional must-be-BDXL warning + always-on generic caveat + blast-radius sentence. ESTATE_PLANNING.md §5 checklist item added. Tests: tests/unit/test_disc_care_media_guidance.py (always-on) + doc-pin in tests/recovery_hardening/test_recovery_card_docs.py.

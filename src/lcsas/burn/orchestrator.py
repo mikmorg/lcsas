@@ -541,7 +541,7 @@ class BurnOrchestrator:
             injector.write_start_here(self._config, escrow_override=escrow_kn)
             injector.write_key_info(self._config, escrow_override=escrow_kn)
             injector.write_config_summary(self._config)
-            injector.write_disc_care()
+            injector.write_disc_care(self._config)
 
             # 6. Optionally create ISO + ECC
             iso_path: Path | None = None
