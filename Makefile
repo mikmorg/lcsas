@@ -141,23 +141,25 @@ blind-restore-teardown:
 # variants:
 #
 #   tier1-missing        — meta lacks lcsas-restore; restore.sh's
-#                          LCSAS_TIER_FALLBACK=1 path falls to tier 2
-#                          (XFAIL pending #227).
+#                          LCSAS_TIER_FALLBACK=1 path skips tier 2 on
+#                          the multi-disc layout and falls to tier 3
+#                          (XFAIL pending live 15/15, issue #227).
 #   tier1-tier2-missing  — meta lacks tier-1 AND tier-2; tier 3 takes
-#                          over (XFAIL pending #227).
+#                          over (promoted cycle 9, 2026-05-28).
 #   single-tenant        — only the alpha repo exists; exercises the
-#                          no-prompt fast path (issue #216, XFAIL
-#                          pending live 15/15 confirmation).
+#                          no-prompt fast path (promoted cycle 8).
 #   5-tenant             — alpha + bravo + charlie + delta + echo;
 #                          stress-tests the multi-tenant prompt
-#                          (issue #217, XFAIL pending live confirmation).
+#                          (promoted cycle 7).
 #   no-catalog           — every data disc lacks catalog.db; forces
-#                          the hash-only swap-prompt path (issue #218,
-#                          XFAIL pending live confirmation).
+#                          the hash-only swap-prompt path (promoted
+#                          cycle 7).
 #
-# All five default to XFAIL — see run_variant.sh's LCSAS_VARIANT_XFAIL.
-# Each costs ~$5 of blind-test compute; drop from the XFAIL list once
-# a green 15/15 score has been recorded.
+# XFAIL set lives in the ledger tests/e2e/cdemu_blind_restore/XFAIL.list
+# (GATE-06); run_variant.sh reads it.  Each variant costs ~$5 of blind-
+# test compute; remove a variant's line from the ledger once a green
+# 15/15 score has been recorded (a 15/15 while still listed is a strict
+# XPASS — run_variant.sh exits 1 to force the cleanup).
 #
 # Cost: ~$5 per variant × 5 = ~$25 per full sweep.
 blind-restore-variants:

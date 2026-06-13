@@ -97,13 +97,13 @@ echo
 echo "SCORE: ${pass_count}/${total} (variant=${VARIANT})"
 
 # Variants that are expected to fail until a tracked bug lands are
-# listed in LCSAS_VARIANT_XFAIL (comma-separated).  A red score on an
-# xfail variant is reported as XFAIL and exits 0 (it's the baseline we
-# expect until the underlying production-code bug is fixed).
-# Default xfail set:
-#   tier1-missing — cascade reaches tier-2 fallback but tier-2 (rustic)
-#     cannot drive multi-disc archives (issue #227 partial fix: falls to
-#     tier-3, but tier-3 disc-swap protocol still needs verification).
+# recorded in the XFAIL ledger (GATE-06): tests/e2e/cdemu_blind_restore/
+# XFAIL.list, one "<variant> issue=#N expires=YYYY-MM-DD" entry per
+# line.  A red score on a listed variant is reported as XFAIL and exits
+# 0 (the baseline we expect until the underlying production-code bug is
+# fixed).  The LCSAS_VARIANT_XFAIL env var (comma-separated) still
+# overrides the ledger for ad-hoc runs.
+#
 # Promoted out of xfail (cycle 7 sweep, 2026-05-27):
 #   5-tenant     — 15/15 confirmed.
 #   no-catalog   — 15/15 confirmed.
@@ -114,7 +114,32 @@ echo "SCORE: ${pass_count}/${total} (variant=${VARIANT})"
 #   tier1-tier2-missing — 15/15 confirmed after PR #285 (zstandard into
 #     RAM dir) + PR #286 (immutable=1 + conn.close() for catalog on
 #     iso9660, fixes EBUSY preventing disc swaps).
-XFAIL="${LCSAS_VARIANT_XFAIL:-tier1-missing}"
+# Still in the ledger (XFAIL.list):
+#   tier1-missing — cascade reaches tier-2 fallback but tier-2 (rustic)
+#     cannot drive multi-disc archives (issue #227 partial fix: falls to
+#     tier-3, but tier-3 disc-swap protocol still needs verification in
+#     this variant).  Deterministic coverage of the chain is pinned by
+#     tests/recovery_hardening/test_restore_sh_tier1_missing_multidisc.py;
+#     this variant stays listed until a live 15/15 is recorded.
+XFAIL_LIST="$HERE/XFAIL.list"
+if [ -n "${LCSAS_VARIANT_XFAIL+x}" ]; then
+    # Env override (comma-separated) for ad-hoc runs.
+    XFAIL="$LCSAS_VARIANT_XFAIL"
+else
+    # Ledger: collect the first field of each non-comment, non-blank
+    # line into a comma-separated set.
+    XFAIL=""
+    if [ -f "$XFAIL_LIST" ]; then
+        while IFS= read -r _ledger_line || [ -n "$_ledger_line" ]; do
+            case "$_ledger_line" in
+                ''|'#'*) continue ;;
+            esac
+            _ledger_variant="${_ledger_line%%[ 	]*}"
+            [ -n "$_ledger_variant" ] || continue
+            XFAIL="${XFAIL:+$XFAIL,}$_ledger_variant"
+        done < "$XFAIL_LIST"
+    fi
+fi
 case ",$XFAIL," in
     *",${VARIANT},"*) is_xfail=1 ;;
     *)                is_xfail=0 ;;
@@ -122,7 +147,12 @@ esac
 
 if [ "$pass_count" -eq "$total" ]; then
     if [ "$is_xfail" -eq 1 ]; then
-        echo "XPASS: variant=$VARIANT (was expected to fail — drop from LCSAS_VARIANT_XFAIL)"
+        # Strict XPASS: a listed variant that scores 15/15 must force
+        # the ledger cleanup NOW, not whenever someone reads the log.
+        echo "XPASS: variant=$VARIANT scored ${pass_count}/${total} (was expected to fail)"
+        echo "       Promote it: remove the '$VARIANT' line from $XFAIL_LIST" >&2
+        echo "       and record the 15/15 in run_variant.sh's promotion log." >&2
+        exit 1
     fi
     exit 0
 fi

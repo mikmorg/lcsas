@@ -73,6 +73,14 @@ TIER 1 -> TIER 3; tier 2 is a single-disc-only fallback.
 Operators with a multi-disc archive should treat tier 1 as the
 primary AND the only practical pre-Python fallback.
 
+CAVEAT (GATE-06, issue #227): the tier-1-missing fallback journey on a
+multi-disc archive (tier 1 absent -> tier 2 skipped -> tier 3 completes)
+has deterministic coverage only -- it is pinned by
+tests/recovery_hardening/test_restore_sh_tier1_missing_multidisc.py but
+has not yet passed a live blind restore (cdemu, 15/15).  This caveat is
+removed once the live tier1-missing variant is promoted out of the
+XFAIL ledger (tests/e2e/cdemu_blind_restore/XFAIL.list).
+
 TIER BINARY PRE-FLIGHT
 
 Before dispatching, restore.sh pre-flights each tier binary with

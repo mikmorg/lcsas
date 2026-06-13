@@ -159,3 +159,6 @@ No catalog/schema impact.
 strict-XPASS + tests, 0.5 live runs/promotion. Live leg needs the local VM
 with cdemu/vhba and sudo (not CI-able); ~$5-15 of blind-test compute, haiku
 model only.
+
+---
+**Implemented:** 2026-06-13. Parts 1, 2, 4 as planned (deterministic tier1-missing multi-disc e2e driving restore.sh to a byte-identical tier-3 restore; XFAIL.list ledger with expiry; run_variant.sh now reads the ledger and exits 1 on strict-XPASS; ledger test enforces issue/expiry + no inline default; TIERS.txt caveat; Makefile catalogue corrected). Part 3 (live $5 cdemu 15/15 promotion) deferred — local-only, sudo+cdemu+cost-gated, not runnable in this remediation context; tier1-missing stays in the ledger (issue #227, expires 2026-09-01) until the live run.

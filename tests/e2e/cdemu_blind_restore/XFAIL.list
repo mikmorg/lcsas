@@ -1,0 +1,21 @@
+# Blind-restore variant XFAIL ledger (GATE-06).
+#
+# One entry per line for each blind-restore variant that is expected to
+# fail until a tracked bug lands.  run_variant.sh reads this file to
+# decide whether a red score is an XFAIL (exit 0) or a real failure
+# (exit 1).  The LCSAS_VARIANT_XFAIL env var still overrides this file
+# for ad-hoc runs.
+#
+# Format (whitespace-separated):
+#   <variant>  issue=#<N>  expires=<YYYY-MM-DD>
+#
+# Rules enforced by tests/recovery_hardening/test_blind_variant_xfail_ledger.py:
+#   * every entry MUST carry an issue=#N reference and a future expires= date;
+#   * an expired entry FAILS the hardening suite -- the team must either
+#     promote the variant (delete the line) or consciously re-date it in a
+#     reviewed diff;
+#   * lines starting with '#' and blank lines are comments.
+#
+# A variant that scores 15/15 while still listed here triggers a strict
+# XPASS (run_variant.sh exits 1), forcing the ledger cleanup immediately.
+tier1-missing  issue=#227  expires=2026-09-01
