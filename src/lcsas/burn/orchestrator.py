@@ -20,7 +20,7 @@ from pathlib import Path
 from lcsas.binpack.algorithm import first_fit_decreasing
 from lcsas.burn.device_verify import read_device_sha256
 from lcsas.config.media import MediaType
-from lcsas.config.settings import LCSASConfig
+from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.db.key_escrow import EscrowDriftError, detect_escrow_drift, get_split
 from lcsas.db.locations import ensure_location
 from lcsas.db.models import Pack, SessionVolume, Volume
@@ -208,6 +208,12 @@ class BurnOrchestrator:
         selected_hashes = {sha for sha, _size in selected_items}
         selected_packs = [p for p in all_unarchived if p.sha256 in selected_hashes]
         total_bytes = sum(s for _, s in selected_items)
+
+        # FMT-03: prove participating repos decode with the pinned recovery
+        # readers before staging anything to disk or catalog.
+        self._format_preflight(
+            sorted({p.repo_id for p in selected_packs})
+        )
 
         # 3. Generate volume identity
         existing_labels = [
@@ -591,6 +597,78 @@ class BurnOrchestrator:
             iso_path=iso_path,
         )
 
+    def _format_preflight(self, repo_ids: list[str]) -> None:
+        """Prove every participating repo is readable by the pinned readers.
+
+        FMT-03: before any ISO is mastered, decode-prove each repo with the
+        tier-3 :class:`PurePythonRestorer` (config version 1-2 + index + one
+        blob).  A repo whose live rustic has outrun the pinned recovery
+        readers (e.g. a future v3 format) is refused here, so no disc that no
+        shipped reader can open is ever burned.
+
+        A repo with no ``password_file`` configured cannot be decode-proven;
+        it is refused unless ``allow_unverified_repo_format`` is set.  The DB
+        repo is matched to its ``RepositoryConfig`` by mirror_path (the
+        authoritative join: the DB ``name`` may be title-cased / differ from
+        the config key), falling back to name.
+        """
+        from lcsas.burn.format_preflight import (
+            FormatDriftError,
+            check_repo_recoverable,
+        )
+        from lcsas.db.repos import get_repo
+
+        for repo_id in sorted(set(repo_ids)):
+            repo = get_repo(self._conn, repo_id)
+            repo_cfg = self._match_repo_config(repo.name, repo.mirror_path)
+            password_file = repo_cfg.password_file if repo_cfg else None
+
+            if password_file is None:
+                msg = (
+                    f"repo '{repo.name}': no password_file configured — cannot "
+                    f"prove discs will be restorable by the pinned recovery "
+                    f"readers."
+                )
+                if self._config.allow_unverified_repo_format:
+                    _logger.warning(
+                        "%s Burning anyway (allow_unverified_repo_format=true) "
+                        "— NOT recommended.", msg,
+                    )
+                    continue
+                raise FormatDriftError(
+                    f"{msg} Set password_file or set "
+                    f"allow_unverified_repo_format = true in lcsas.toml to "
+                    f"burn anyway (NOT recommended)."
+                )
+
+            check_repo_recoverable(Path(repo.mirror_path), password_file)
+
+    def _match_repo_config(
+        self, db_name: str, db_mirror_path: str,
+    ) -> RepositoryConfig | None:
+        """Find the RepositoryConfig for a DB repo, joining on mirror_path.
+
+        mirror_path is the authoritative join (the DB ``name`` may be
+        title-cased relative to the config key, as in `lcsas repo add`).
+        Falls back to an exact then case-insensitive name match.
+        """
+        try:
+            db_resolved = Path(db_mirror_path).resolve()
+        except OSError:
+            db_resolved = Path(db_mirror_path)
+        for cfg in self._config.repositories.values():
+            try:
+                if cfg.mirror_path.resolve() == db_resolved:
+                    return cfg
+            except OSError:
+                continue
+        if db_name in self._config.repositories:
+            return self._config.repositories[db_name]
+        for key, cfg in self._config.repositories.items():
+            if key.lower() == db_name.lower():
+                return cfg
+        return None
+
     def _get_mirror_paths(self) -> dict[str, Path]:
         """Build a dict of {repo_id: mirror_path} from database repositories."""
         paths: dict[str, Path] = {}
@@ -712,6 +790,14 @@ class BurnOrchestrator:
                 manifests=[],
                 iso_paths=[],
             )
+
+        # FMT-03: prove every participating repo decodes with the pinned
+        # recovery readers BEFORE any session/staging/ISO side effect.  A repo
+        # whose live rustic has outrun the readers (e.g. a v3 format) is
+        # refused here, never burned.
+        participating_repos = {p.repo_id for _packs, _b in volume_plans
+                               for p in _packs}
+        self._format_preflight(sorted(participating_repos))
 
         # 3. Disk space pre-flight check [BURN-07]
         # Per volume we hold the staging tree (packs + holographic

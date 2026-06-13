@@ -92,6 +92,9 @@ def _make_config(tmp_path: Path, *, num_repos: int = 2,
         metadata_reserve_bytes=metadata_reserve_bytes,
         label_prefix="TEST",
         repositories=repos,
+        # Fake mirrors carry no real restic crypto / password_file; opt out
+        # of the FMT-03 decode proof for these bin-packing/pipeline tests.
+        allow_unverified_repo_format=True,
     )
 
 

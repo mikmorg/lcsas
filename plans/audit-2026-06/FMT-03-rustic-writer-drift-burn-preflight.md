@@ -134,3 +134,17 @@ gives years of warning before any operator upgrades their NAS rustic.
 **2.5 focused days**: 1d preflight module + orchestrator wiring + messages, 1d unit/integration
 fixtures, 0.5d canary workflow. No special environment (rustic already in CI; tier-1 binary
 already built by `make -C recovery`).
+
+---
+**Implemented:** 2026-06-13. As planned, with these notes: the burn gate runs in BOTH
+`stage()` (session path) and `prepare()` (legacy single-volume path) via a new
+`BurnOrchestrator._format_preflight`, before any side effect. The DB repo is joined to its
+`RepositoryConfig` by mirror_path (authoritative: `lcsas repo add` title-cases the DB `name`,
+which differs from the config key), falling back to name. New config flag
+`allow_unverified_repo_format` (deviation: plan named it inline in the message; added as a real
+`[defaults]` key). Pre-existing burn/session unit fixtures use fake non-restic mirrors with no
+password_file, so they opt into the override (`allow_unverified_repo_format=True`) — the gate
+correctly refused them otherwise. Canary test is opt-in (`LCSAS_FORMAT_CANARY=1`) under
+`tests/recovery_hardening/`, round-trips latest rustic through tier-1 AND tier-3; workflow files
+an issue (label `format-drift`) on failure. All three test layers run green locally against the
+installed rustic + freshly built tier-1 binary.

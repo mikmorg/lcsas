@@ -40,6 +40,15 @@ KEY FILE
 
 REPO V1 vs V2
 
+  Versions 1 and 2 are a FROZEN, GATED contract (FMT-03): they are the
+  only formats every recovery tier (this C reader, the pinned rustic
+  fallback, and the pure-Python tier-3 restorer) can decode.  The burn
+  pipeline decode-proves each mirror before mastering any disc and
+  REFUSES to burn a repo whose live writer has migrated past v2 — so no
+  disc that no shipped reader can open is ever produced.  Bumping the set
+  means changing all three readers together, not just upgrading the NAS
+  rustic.
+
   Repo version 1: encrypted blobs decrypt directly to JSON / raw data.
   Repo version 2: a leading compression-type byte is prepended after
   decryption:

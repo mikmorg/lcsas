@@ -72,6 +72,8 @@ def _make_config(tmp_path: Path) -> LCSASConfig:
         metadata_reserve_bytes=1000,
         label_prefix="TEST",
         repositories={"family": repo_cfg},
+        # Fake mirror, no real restic crypto: skip the FMT-03 decode proof.
+        allow_unverified_repo_format=True,
     )
 
 
@@ -737,6 +739,8 @@ def _make_two_repo_env(tmp_path):
         metadata_reserve_bytes=1000,
         label_prefix="TEST",
         repositories=repos,
+        # Fake mirrors, no real restic crypto: skip the FMT-03 decode proof.
+        allow_unverified_repo_format=True,
     )
     config.db_path.write_bytes(b"sqlite_placeholder")
 

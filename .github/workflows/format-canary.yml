@@ -1,0 +1,113 @@
+name: format-canary
+
+# FMT-03: weekly early-warning canary against repository-format drift.
+#
+# The pinned-reader differential suite (test_tier1_vs_tier2_differential)
+# pins the WRITER to rustic 0.11.2 by construction, so it can only validate
+# the readers — it can never see the live writer outrun them.  This canary
+# deliberately installs the LATEST upstream rustic (UNPINNED), writes a
+# fixture tree with it, and restores that tree with BOTH pinned readers
+# (tier-1 C binary + tier-3 PurePythonRestorer), byte-comparing each restore
+# against the source.
+#
+# A failure means a newer rustic has bumped the on-disk repository format
+# past the pinned readers' frozen v1/v2 contract (see
+# docs/RESTIC_FORMAT_SPEC.md, src/lcsas/burn/format_preflight.py).  That is
+# years of warning before any operator upgrades the rustic on their NAS and
+# starts burning discs no shipped reader can open.
+
+on:
+  schedule:
+    # Mondays 06:17 UTC (offset off the hour to dodge scheduler congestion).
+    - cron: "17 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install LATEST rustic (deliberately unpinned)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          cd "$(mktemp -d)"
+          # Resolve the latest release asset for x86_64 linux-gnu via the API.
+          api="https://api.github.com/repos/rustic-rs/rustic/releases/latest"
+          url=$(curl -fsSL "$api" \
+            | grep -o 'https://[^"]*x86_64-unknown-linux-gnu\.tar\.gz' \
+            | head -n1)
+          if [ -z "$url" ]; then
+            echo "could not resolve latest rustic linux-gnu asset" >&2
+            exit 1
+          fi
+          echo "Downloading latest rustic: $url"
+          curl -fsSL -o rustic.tar.gz "$url"
+          tar -xzf rustic.tar.gz
+          install -m 0755 rustic "$HOME/.local/bin/rustic"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Show the rustic version under test
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          rustic --version
+
+      - name: Build the tier-1 recovery binary
+        run: make -C recovery
+
+      - name: Install LCSAS (editable, with dev deps)
+        run: make dev
+
+      - name: Run format canary (latest rustic vs pinned readers)
+        env:
+          LCSAS_FORMAT_CANARY: "1"
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          python -m pytest tests/recovery_hardening/test_format_canary.py -v
+
+      - name: File an issue on drift
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = "format-canary: latest rustic may have drifted past the pinned reader contract (FMT-03)";
+            const body = [
+              "The weekly FMT-03 format canary FAILED: data written by the",
+              "**latest** upstream rustic could not be byte-faithfully restored",
+              "by the pinned recovery readers (tier-1 C binary and/or tier-3",
+              "PurePythonRestorer).",
+              "",
+              "This is an early warning that the upstream repository format may",
+              "have bumped past the frozen v1/v2 contract. Before any operator",
+              "upgrades the rustic on their NAS, the readers must learn the new",
+              "format (update `SUPPORTED_REPO_VERSIONS` + all three tiers).",
+              "",
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            ].join("\n");
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "format-drift",
+            });
+            if (existing.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ["format-drift"],
+              });
+            }

@@ -329,6 +329,16 @@ key.  Decrypted:
 - `id`: unique identifier for this repository
 - `chunker_polynomial`: Rabin fingerprint polynomial for CDC
 
+**Frozen, gated contract (FMT-03):** versions 1 and 2 are the *only* formats
+every shipped recovery tier (tier-1 C reader, tier-2 pinned rustic, tier-3
+PurePythonRestorer) can decode. The burn pipeline runs a format preflight
+(`src/lcsas/burn/format_preflight.py`) that decode-proves each mirror — config
+version + one index + one blob — before any disc is mastered, and **refuses to
+burn** a repo whose live writer has migrated past version 2. Bumping the
+supported set is a deliberate cross-tier change (update
+`SUPPORTED_REPO_VERSIONS` and all three readers together), not an operator-side
+rustic upgrade.
+
 ---
 
 ## 9. Content-Defined Chunking (CDC)
