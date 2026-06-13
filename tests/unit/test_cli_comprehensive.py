@@ -1443,7 +1443,12 @@ class TestCmdMetaBuildGate:
         out = tmp_path / "meta"
         caplog.clear()
 
-        result = main(["meta", "build", "--output", str(out)])
+        # --allow-no-dvdisaster-source so the empty cache trips the RST-05
+        # completeness gate under test rather than the FMT-02 source gate.
+        result = main([
+            "meta", "build", "--output", str(out),
+            "--allow-no-dvdisaster-source",
+        ])
         assert result == 1
         assert "INCOMPLETE" in caplog.text
         # Every approved target is named in the missing report.
@@ -1461,6 +1466,7 @@ class TestCmdMetaBuildGate:
 
         result = main([
             "meta", "build", "--output", str(out), "--allow-incomplete",
+            "--allow-no-dvdisaster-source",
         ])
         assert result == 0
         assert "INCOMPLETE" in caplog.text

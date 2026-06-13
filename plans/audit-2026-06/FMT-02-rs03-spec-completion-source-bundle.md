@@ -115,3 +115,6 @@ This work *is* the layout-extraction spike that decides FMT-01's Option B; do it
 pin/fetch/bundle plumbing, 1d conformance + hardening tests. Needs dvdisaster installed
 locally (multi-minute augment passes; see ECC test-environment memory note — don't run
 concurrently with other pytest runs).
+
+---
+**Implemented:** 2026-06-13. As planned. Pinned dvdisaster 0.79.10-pl6 source in recovery/UPSTREAM.sha256 (new `dvdisaster/src/` category) + fetch_upstream.sh handler; meta builder bundles it to `tools/src/` fail-loud (`--allow-no-dvdisaster-source` escape hatch). Rewrote DVDISASTER_RS03_FORMAT.md §3.2 with byte-exact EccHeader table (offsets confirmed via offsetof + real-image parse), new §4 layout/interleaving (RS03SectorIndex) + worked example, corrected GF poly 0x187, dropped pip-installable framing → bundled source. SURVIVABILITY.md §2.5 restated. Conformance test passes vs real dvdisaster (4m14s); 5 always-on hardening tests pass.

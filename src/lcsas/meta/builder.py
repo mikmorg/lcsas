@@ -43,6 +43,37 @@ _OPTIONAL_TOOLS = ("dvdisaster",)
 _SOURCE_ITEMS = ("src",)
 _DOC_ITEMS = ("docs", "README.md", "pyproject.toml")
 
+# FMT-02: the pinned dvdisaster RS03 source tarball is bundled on every
+# meta-volume so a future engineer can re-implement RS03 repair from the
+# exact source docs/DVDISASTER_RS03_FORMAT.md transcribes.  The filename
+# is the single source of truth in recovery/UPSTREAM.sha256
+# (category ``dvdisaster/src/``); we read it from there rather than
+# hard-coding the version twice.
+_DVDISASTER_SOURCE_SUBDIR = "tools/src"
+
+
+def pinned_dvdisaster_source_name(recovery_dir: Path) -> str | None:
+    """Return the dvdisaster source tarball filename pinned in UPSTREAM.sha256.
+
+    Reads ``recovery/UPSTREAM.sha256`` and returns the basename of the
+    single ``dvdisaster/src/<filename>`` entry, or ``None`` if the
+    manifest has no dvdisaster source pin.
+    """
+    manifest = recovery_dir / "UPSTREAM.sha256"
+    if not manifest.is_file():
+        return None
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        relpath = parts[-1]
+        if relpath.startswith("dvdisaster/src/"):
+            return relpath.rsplit("/", 1)[-1]
+    return None
+
 
 def _write_and_sync(path: Path, content: str) -> None:
     """Write *content* to *path* and fsync to disk."""
@@ -1657,6 +1688,7 @@ class MetaVolumeBuilder:
         recovery_dir: Path | None = None,
         bundle_recovery_toolchain: bool = True,
         allow_no_zstd: bool = False,
+        allow_no_dvdisaster_source: bool = False,
     ) -> None:
         """
         Args:
@@ -1676,6 +1708,7 @@ class MetaVolumeBuilder:
         self._catalog_db_path = catalog_db_path
         self._bundle_recovery_toolchain = bundle_recovery_toolchain
         self._allow_no_zstd = allow_no_zstd
+        self._allow_no_dvdisaster_source = allow_no_dvdisaster_source
         # Whether the native ``zstandard`` package was bundled for this
         # build host's arch/CPython.  Recorded in volume_info.json so
         # ``lcsas meta verify`` can report tier-3 native-zstd coverage.
@@ -1717,6 +1750,7 @@ class MetaVolumeBuilder:
         self._bundle_tools()
         self._bundle_source()
         self._bundle_docs()
+        self._bundle_dvdisaster_source()
         self._bundle_standalone_restorer()
         self._bundle_restore_helper()
         self._bundle_keyshare_combiner()
@@ -1872,6 +1906,57 @@ class MetaVolumeBuilder:
             elif src.is_file():
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(str(src), str(dst))
+
+    def _bundle_dvdisaster_source(self) -> None:
+        """Bundle the pinned dvdisaster RS03 source tarball (FMT-02).
+
+        ``docs/DVDISASTER_RS03_FORMAT.md`` is only re-implementable
+        against the *exact* source it transcribes; that source must
+        therefore travel on the rescue disc, not at a dormant GitHub URL.
+        The tarball is pinned in ``recovery/UPSTREAM.sha256`` (category
+        ``dvdisaster/src/``) and fetched into the recovery cache by
+        ``recovery/scripts/fetch_upstream.sh``; here we copy it to
+        ``tools/src/`` on the meta-volume.
+
+        Fail loud if the tarball is pinned but absent from the cache —
+        a meta disc whose RS03 spec points at source that isn't on the
+        disc is exactly the broken hedge FMT-02 fixes.  Pass
+        ``allow_no_dvdisaster_source`` (or ``--allow-no-dvdisaster-source``)
+        to build without it.
+        """
+        name = pinned_dvdisaster_source_name(self._recovery_dir)
+        if name is None:
+            if self._allow_no_dvdisaster_source:
+                return
+            raise MetaBuildError(
+                "no dvdisaster source tarball is pinned in "
+                f"{self._recovery_dir / 'UPSTREAM.sha256'} (category "
+                "dvdisaster/src/). docs/DVDISASTER_RS03_FORMAT.md would "
+                "point at source that does not travel on the disc. Pin it "
+                "or pass --allow-no-dvdisaster-source."
+            )
+
+        cache_root_env = os.environ.get("LCSAS_RECOVERY_CACHE")
+        if cache_root_env:
+            cache_root = Path(cache_root_env)
+        else:
+            cache_root = Path.home() / ".cache" / "lcsas" / "recovery-binaries"
+        src = cache_root / "dvdisaster" / "src" / name
+
+        if not src.is_file():
+            if self._allow_no_dvdisaster_source:
+                return
+            raise MetaBuildError(
+                f"pinned dvdisaster source {name} not found in the recovery "
+                f"cache ({src}). Run `sh recovery/scripts/fetch_upstream.sh` "
+                "to download it, or pass --allow-no-dvdisaster-source to "
+                "build a meta disc whose RS03 spec lacks its reference "
+                "source."
+            )
+
+        dst_dir = self._output / _DVDISASTER_SOURCE_SUBDIR
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(src), str(dst_dir / name))
 
     # ── Script / doc generation ──────────────────────────────────
 

@@ -197,7 +197,11 @@ class TestMetaVolumeBuilder:
         """Build the meta-volume once for all tests in this class."""
         base = tmp_path_factory.mktemp("meta_builder")
         output = base / "meta"
-        builder = MetaVolumeBuilder(output)
+        # allow_no_dvdisaster_source: this fixture asserts nothing about
+        # the FMT-02 RS03 source tarball and must build on hosts with a
+        # cold recovery cache. The dedicated bundling assertions live in
+        # tests/recovery_hardening/test_meta_bundles_dvdisaster_source.py.
+        builder = MetaVolumeBuilder(output, allow_no_dvdisaster_source=True)
         builder.build()
         # Store on the class so test methods can access them
         TestMetaVolumeBuilder._output = output

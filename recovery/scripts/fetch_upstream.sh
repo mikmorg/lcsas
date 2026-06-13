@@ -14,6 +14,7 @@
 #       rustic/<target>/rustic                          ← extracted binary
 #       python/<target>/<python-archive>.tar.gz         ← downloaded archive
 #       python/<target>/python/                         ← extracted prefix
+#       dvdisaster/src/<dvdisaster-archive>.tar.gz       ← downloaded (not extracted)
 #
 # Override the cache root with $LCSAS_RECOVERY_CACHE.
 # Override the manifest path with $LCSAS_UPSTREAM_MANIFEST (default:
@@ -92,13 +93,22 @@ fi
 
 RUSTIC_BASE="https://github.com/rustic-rs/rustic/releases/download/v0.11.2"
 PYTHON_BASE="https://github.com/astral-sh/python-build-standalone/releases/download/20260510"
+# dvdisaster has no source-tarball release asset; GitHub serves a stable
+# per-tag source archive from codeload.  The manifest filename embeds the
+# tag, so we strip the leading "dvdisaster-" and trailing ".tar.gz" to
+# recover the tag (e.g. dvdisaster-0.79.10-pl6.tar.gz → v0.79.10-pl6).
+DVDISASTER_CODELOAD="https://codeload.github.com/speed47/dvdisaster/tar.gz/refs/tags"
 
 resolve_url() {
-    # $1: category (rustic | python)
+    # $1: category (rustic | python | dvdisaster)
     # $2: filename (basename of the artifact)
     case "$1" in
         rustic) printf '%s/%s\n' "$RUSTIC_BASE" "$2" ;;
         python) printf '%s/%s\n' "$PYTHON_BASE" "$2" ;;
+        dvdisaster)
+            tag="${2#dvdisaster-}"
+            tag="v${tag%.tar.gz}"
+            printf '%s/%s\n' "$DVDISASTER_CODELOAD" "$tag" ;;
         *) printf 'unknown category: %s\n' "$1" >&2; return 1 ;;
     esac
 }

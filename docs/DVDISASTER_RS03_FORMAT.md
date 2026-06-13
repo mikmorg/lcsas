@@ -9,7 +9,18 @@
 > [dvdisaster source code](https://github.com/speed47/dvdisaster)
 > (GPL v3 license).
 >
-> Last updated: 2026-02-21
+> **This spec is definitive for dvdisaster 0.79.x as pinned in
+> `recovery/UPSTREAM.sha256`** (`dvdisaster/src/dvdisaster-0.79.10-pl6.tar.gz`).
+> Every offset, field width, byte order, and layout formula below is
+> transcribed from that exact source (`src/dvdisaster.h`,
+> `src/rs03-common.c`, `src/endian.c`) and verified against the real
+> binary's `dvdisaster -t` output (see
+> `tests/integration/test_rs03_doc_conformance.py`). The source tarball
+> itself is bundled on every meta-volume under `tools/src/`, so a future
+> engineer holding only a rescue disc has both this spec and the code it
+> describes.
+>
+> Last updated: 2026-06-13
 
 ---
 
@@ -93,34 +104,62 @@ An RS03-augmented ISO has this structure:
 
 ### 3.2 ECC Header
 
-The RS03 ECC header is located immediately after the last ISO 9660
-sector.  Key fields include:
+The RS03 ECC header is the `EccHeader` C struct (`src/dvdisaster.h`,
+`typedef struct _EccHeader`).  In an augmented image it occupies **one
+2048-byte sector** located at sector `dataSectors` — i.e. immediately
+after the last ISO 9660 data sector (see §4 for the formula).  The
+struct is 4096 bytes wide in memory, but only the first 2048 bytes land
+in the header sector; bytes 2048+ hold a copy of the first ecc block's
+CRC sums and are not part of the field table.
 
-| Offset | Size | Field | Description |
-|--------|------|-------|-------------|
-| 0 | 16 | cookie | Magic bytes: `"*dvdisaster*"` |
-| 16 | 4 | methodFlags | Bit flags for ECC method |
-| 20 | 16 | mediumFP | Fingerprint of the original medium |
-| 36 | 16 | mediumSum | MD5 checksum of data sectors |
-| 52 | 4 | eccBytes | Number of ECC bytes per code word |
-| 56 | 4 | creatorVersion | dvdisaster version that created it |
-| 60 | 4 | neededVersion | Minimum version needed to process |
-| 64 | 4 | fpSector | Sector used for fingerprinting |
-| 68 | 8 | selfCRC | CRC-32 of the header itself |
-| 76 | 8 | inLay | Layout information |
-| 84 | 8 | sectorsPerLayer | Sectors in each RS layer |
-| 92 | 4 | nroots | Number of RS roots (parity symbols) |
-| 96 | 4 | dataBytes | Data bytes per RS codeword |
-| 100 | 8 | dataSectors | Number of original data sectors |
-| 108 | 8 | eccSectors | Number of ECC parity sectors |
+**This is the definitive, byte-exact layout** for the pinned 0.79.x
+source.  Offsets account for the natural C alignment of the two
+8-byte-aligned `guint64` fields (`__attribute__((aligned(8)))` in
+`dvdisaster.h`); they were confirmed with `offsetof()` on the real
+struct and by parsing a real augmented image (§4.1 worked example).
 
-The actual struct layout and byte order may vary between dvdisaster
-versions; consult the source code's `rs03-common.h` for the
-definitive field layout.
+| Offset | Size | Field | Type | Description |
+|--------|------|-------|------|-------------|
+| 0 | 12 | cookie | `gint8[12]` | Magic bytes `"*dvdisaster*"` (exactly 12 bytes, **not** NUL-terminated) |
+| 12 | 4 | method | `gint8[4]` | Method tag, ASCII `"RS03"` |
+| 16 | 4 | methodFlags | `gint8[4]` | Per-method flag bytes (byte 3 reserved) |
+| 20 | 16 | mediumFP | `guint8[16]` | MD5 fingerprint of the fingerprint sector |
+| 36 | 16 | mediumSum | `guint8[16]` | MD5 of the whole medium |
+| 52 | 16 | eccSum | `guint8[16]` | MD5 of the ecc section (ecc-file mode) |
+| 68 | 8 | sectors | `guint8[8]` | Medium sectors without ecc (raw 8-byte LE integer, **not** aligned) |
+| 76 | 4 | dataBytes | `gint32` | Data symbols per RS codeword = **ndata** |
+| 80 | 4 | eccBytes | `gint32` | Parity symbols per RS codeword = **nroots** |
+| 84 | 4 | creatorVersion | `gint32` | dvdisaster version that wrote it (e.g. 7910) |
+| 88 | 4 | neededVersion | `gint32` | Oldest version that can decode it |
+| 92 | 4 | fpSector | `gint32` | Sector used to compute `mediumFP` |
+| 96 | 4 | selfCRC | `guint32` | CRC-32 of the header (computed with this field set to `0xffffffff`) |
+| 100 | 16 | crcSum | `guint8[16]` | MD5 of the RS02 crc section (RS02 only) |
+| 116 | 4 | inLast | `gint32` | Valid bytes in the last data sector |
+| 120 | 8 | sectorsPerLayer | `guint64` | Sectors per RS layer (8-byte aligned) |
+| 128 | 8 | sectorsAddedByEcc | `guint64` | Sectors added by ecc (8-byte aligned) |
+| 136 | 3960 | padding | `gint8[3960]` | Pads the struct to 4096 bytes |
 
-**Important:** The header uses the `"*dvdisaster*"` magic string for
-identification.  Any tool scanning for RS03 ECC data should search
-for this cookie starting at the end of the ISO 9660 filesystem.
+**Byte order.** All multi-byte integer fields are stored
+**little-endian** on disc.  dvdisaster only byte-swaps when running on a
+big-endian host (`src/endian.c` `SwapEccHeaderBytes`, guarded by
+`#ifdef HAVE_BIG_ENDIAN`), and it swaps exactly these fields: `dataBytes`,
+`eccBytes`, `creatorVersion`, `neededVersion`, `fpSector`, `inLast`
+(32-bit) and `sectorsPerLayer`, `sectorsAddedByEcc` (64-bit).  The
+byte-array fields (`cookie`, `method`, `mediumFP`, `mediumSum`, `eccSum`,
+`sectors`, `crcSum`) are never swapped — `sectors` is read as raw
+little-endian bytes.
+
+**`nroots`/`ndata`.** RS03 always uses a 255-symbol Reed-Solomon code,
+so `dataBytes` (ndata) + `eccBytes` (nroots) = 255.  Those two header
+fields are the parity specification; the per-layer/per-image sector
+counts are *derived* from `sectors`, `sectorsPerLayer`, `ndata`, and
+`nroots` via the formulas in §4.
+
+**Cookie semantics.** The 12-byte cookie `"*dvdisaster*"` (bytes
+`2a 64 76 64 69 73 61 73 74 65 72 2a`) identifies any dvdisaster ECC
+header.  A tool scanning for RS03 ECC data searches for this cookie on a
+2048-byte sector boundary at or after the ISO 9660 filesystem size; the
+adjacent `method` field (`"RS03"`) distinguishes RS03 from RS01/RS02.
 
 ### 3.3 CRC Sectors
 
@@ -136,18 +175,130 @@ is GF(2^8) — operations in the Galois Field of order 256.
 
 ---
 
-## 4. Reed-Solomon Parameters
+## 4. Image Layout and Interleaving (augmented image)
 
-- **Field:** GF(2^8) with primitive polynomial 0x11D
-  (x^8 + x^4 + x^3 + x^2 + 1)
-- **Code:** RS(255, 255-nroots) — up to 255 symbols per codeword
-- **nroots:** Determined by the effective redundancy, i.e. the padding
-  to the smallest fitting medium (e.g., ~15% → ~32 roots)
-- **Erasure correction:** Can correct up to `nroots` known-bad sectors
-  per codeword (erasure channel model — dvdisaster knows WHICH sectors
-  are bad because the drive reports read errors)
-- **Interleaving factor:** Distributes codeword symbols across the
-  entire disc surface
+Everything here is for the augmented-image case (`target = ECC_IMAGE`),
+which is what LCSAS produces.  The formulas are transcribed from
+`CalcRS03Layout` and `RS03SectorIndex` in `src/rs03-common.c`.
+
+### 4.1 Layout formula
+
+Let `GF_FIELDMAX = 255`.  Given the original image data-sector count
+`dataSectors` (from the header `sectors` field) and the selected medium
+capacity `mediumCapacity` (the smallest medium on the ladder
+CD → DVD → DVD9 → BD25 → BD50 → BDXL whose layout yields ≥ 8 roots; see
+§2.2), dvdisaster computes:
+
+```
+sectorsPerLayer = mediumCapacity / 255          # integer division
+totalSectors    = 255 * sectorsPerLayer
+
+ndata = ceil((dataSectors + 2) / sectorsPerLayer)   # data layers
+if ndata < 84: ndata = 84                            # clip redundancy at 170 roots
+dataPadding = ndata * sectorsPerLayer - dataSectors - 2
+ndata  = ndata + 1        # the CRC layer is protected too → counts as data
+nroots = 255 - ndata
+
+eccHeaderPos = dataSectors                       # the header sector
+firstCrcPos  = (ndata - 1) * sectorsPerLayer     # first CRC sector
+firstEccPos  = firstCrcPos + sectorsPerLayer     # first parity sector
+```
+
+The `+2` accounts for the ECC header sector plus one sector reserved for
+chaining CRC sums.  Note `sectorsPerLayer` and `ndata`/`nroots` from the
+header (`sectorsPerLayer`, `dataBytes`, `eccBytes`) are authoritative;
+the equations above let you re-derive them and the layer positions.
+
+**Image structure** (sectors, in order):
+
+```
+0                         .. dataSectors-1     : ISO 9660 data
+dataSectors (eccHeaderPos)                     : ECC header (1 sector)
+dataSectors+1 .. firstCrcPos-1                 : data padding
+firstCrcPos   .. firstCrcPos+sectorsPerLayer-1 : CRC layer (one per data sector)
+firstEccPos   .. totalSectors-1                : nroots parity layers
+```
+
+### 4.2 Codeword interleaving
+
+A Reed-Solomon codeword has 255 symbols (one per layer).  The image is
+divided into 255 *layers*, each `sectorsPerLayer` sectors long.  For a
+given layer index `L` (0-based) and a position `n` within the layer
+(`0 ≤ n < sectorsPerLayer`), the absolute image sector is:
+
+```
+RS03SectorIndex(L, n) =
+    L * sectorsPerLayer + n                              if L <  ndata-1   (data layers)
+    firstCrcPos + n                                      if L == ndata-1   (CRC layer)
+    firstEccPos + (L - ndata) * sectorsPerLayer + n      if L >= ndata     (parity layers)
+```
+
+The first `ndata-1` layers are the contiguous data region; layer
+`ndata-1` is the CRC layer; layers `ndata .. 254` are the `nroots`
+parity layers.
+
+**Codeword assembly.** Fix a layer position `n` and a byte offset
+`b` within a sector (`0 ≤ b < 2048`).  The 255-symbol codeword
+`C(n, b)` is:
+
+```
+C(n, b)[L] = image[ 2048 * RS03SectorIndex(L, n) + b ]   for L = 0 .. 254
+```
+
+i.e. symbol `L` of the codeword is byte `b` of the layer-`L` sector at
+position `n`.  Symbols `0 .. ndata-1` are the data+CRC payload; symbols
+`ndata .. 254` are parity.  There are `sectorsPerLayer * 2048` such
+codewords, and because consecutive image sectors live in the *same*
+layer (not consecutive codewords), a physical scratch spanning many
+sectors hits one symbol in each of many codewords — that is the
+interleaving (§2.3).
+
+### 4.3 Worked example (verify by hand)
+
+A 3 000 000-byte payload masters to a **1648-sector** ISO.  Augmented to
+the smallest fitting medium it lands on the BDXL ladder with these
+header values (parsed from a real augmented image — see the conformance
+test):
+
+```
+dataSectors      = 1648
+sectorsPerLayer  = 1409
+dataBytes  (ndata)  = 85
+eccBytes   (nroots) = 170     # 85 + 170 = 255  ✓
+```
+
+Re-derive the layout:
+
+```
+totalSectors = 255 * 1409          = 359295
+ndata-1      = 84                   (84 data layers)
+firstCrcPos  = 84 * 1409           = 118356
+firstEccPos  = 118356 + 1409       = 119765
+eccHeaderPos = dataSectors         = 1648
+```
+
+`dvdisaster -t -v` on the same image prints `total sectors = 359295`,
+`first ECC sector = 119765`, `nroots = 170 (200.0%)` — matching every
+derived value.  The ECC header cookie is found at byte
+`2048 * 1648 = 3375104`.
+
+### 4.4 Reed-Solomon parameters
+
+- **Field:** GF(2^8) with the generator (primitive) polynomial
+  `0x187` = x^8 + x^7 + x^2 + x + 1
+  (`RS_GENERATOR_POLY` in `src/dvdisaster.h`; `GF_FIELDSIZE = 256`,
+  `GF_FIELDMAX = 255`).  This is **not** the common 0x11D primitive —
+  dvdisaster uses 0x187, so a decoder must build its log/exp tables from
+  0x187 to match the parity.
+- **Code:** RS(255, ndata) — 255 symbols per codeword, `ndata` data
+  symbols, `nroots = 255 - ndata` parity symbols.
+- **nroots:** From the header `eccBytes`; equals the redundancy chosen by
+  padding to the smallest fitting medium (clipped to ≤ 170 roots).
+- **Erasure correction:** Corrects up to `nroots` known-bad sectors per
+  codeword (erasure channel — the drive reports which sectors are
+  unreadable, so positions are known).
+- **Interleaving factor:** `sectorsPerLayer` — codeword symbols are one
+  layer apart in the image (§4.2).
 
 ---
 
@@ -189,39 +340,57 @@ redundancy is not settable — see §2.2).
 
 If dvdisaster is no longer available, a replacement tool needs to:
 
-1. **Find the ECC header** — scan for `"*dvdisaster*"` magic after
-   the ISO 9660 filesystem
-2. **Parse the header** — extract nroots, dataSectors, eccSectors,
-   sectorsPerLayer
-3. **Read CRC sectors** — header tells you where they start
-4. **Identify bad sectors** — compare each data sector's CRC-32
-   against the stored CRC value
-5. **Apply RS correction** — for each RS codeword, collect the
-   interleaved symbols from across the disc, mark the known-bad
-   positions as erasures, and solve the RS erasure correction
-6. **Write repaired sectors** — replace the bad sectors in the image
+1. **Find the ECC header** — scan for the 12-byte `"*dvdisaster*"`
+   cookie on a 2048-byte boundary at or after the ISO 9660 size; confirm
+   the adjacent `method` field is `"RS03"` (§3.2).
+2. **Parse the header** — read `dataBytes` (ndata), `eccBytes` (nroots),
+   `sectors` (dataSectors), and `sectorsPerLayer` at the offsets in §3.2;
+   re-derive `firstCrcPos`/`firstEccPos`/`totalSectors` per §4.1.
+3. **Read CRC sectors** — the CRC layer starts at `firstCrcPos`; CRC
+   sector `i` holds 512 CRC-32 values (one per data sector of layer `i`).
+4. **Identify bad sectors** — compute each data sector's CRC-32 and
+   compare against the stored value, OR take the drive's read-error
+   reports directly as erasures.
+5. **Apply RS correction** — for each codeword `C(n, b)` (§4.2), gather
+   the 255 interleaved symbols, mark known-bad positions as erasures, and
+   solve the RS(255, ndata) erasure system over GF(2^8) with generator
+   polynomial 0x187.
+6. **Write repaired sectors** — write the recovered symbols back to the
+   bad sectors in the image.
 
 ### Required Math
 
-- **GF(2^8) arithmetic** — addition (XOR), multiplication (log/exp
-  tables), division
-- **Reed-Solomon decoder** — Berlekamp-Massey or Euclidean algorithm
-  for error locator polynomial; Forney algorithm for error values
-  (though for pure erasure correction, the math simplifies)
-- **Interleaving order** — must match dvdisaster's layout to correctly
-  map sectors to RS codeword positions
+- **GF(2^8) arithmetic** — addition (XOR), multiplication / division via
+  log/exp tables built from the primitive polynomial **0x187** (§4.4).
+- **Reed-Solomon decoder** — Berlekamp-Massey or Euclidean algorithm for
+  the error-locator polynomial; Forney for error values.  For pure
+  erasure correction (positions known) the math reduces to solving a
+  linear system, which is what dvdisaster does.
+- **Interleaving order** — `RS03SectorIndex` (§4.2) is the exact mapping
+  from `(layer, position)` to image sector; matching it is the whole
+  "challenge" the older revisions of this doc hand-waved.
 
-### Reference Implementations
+### Reference Sources
 
-Reed-Solomon GF(2^8) implementations exist in many languages:
+The authoritative reference is the pinned dvdisaster source itself,
+**bundled on this meta-volume** at
+`tools/src/dvdisaster-0.79.10-pl6.tar.gz` (GPLv3) and pinned by SHA-256
+in `recovery/UPSTREAM.sha256`.  The load-bearing files are:
 
-- Python: `reedsolo` library (pure Python, pip-installable)
-- Rust: `reed-solomon-erasure` crate
-- C: `libfec` by Phil Karn
-- JavaScript: `@aspect/reedsolomon`
+- `src/dvdisaster.h` — the `EccHeader` struct (§3.2) and the RS field
+  constants (`GF_FIELDSIZE`, `RS_GENERATOR_POLY`).
+- `src/rs03-common.c` — `CalcRS03Layout` (§4.1) and `RS03SectorIndex`
+  (§4.2).
+- `src/galois.c` — the GF(2^8) log/exp table construction.
+- `src/endian.c` — `SwapEccHeaderBytes` (byte order, §3.2).
 
-The main challenge is matching dvdisaster's specific interleaving
-layout, which requires reading the RS03 source code.
+When the LCSAS in-house RS03 decoder lands (FMT-01) it lives at
+`recovery/src/lcsas-ecc/` and serves as a second, audited reference
+implementation built against this spec.  General-purpose RS GF(2^8)
+codecs (e.g. Phil Karn's `libfec` in C, or `reed-solomon-erasure` in
+Rust) can supply the field/decoder primitives, but the decoder must be
+parameterised to 0x187 and wrapped in the §4.2 interleaving to match
+dvdisaster's parity.
 
 ---
 

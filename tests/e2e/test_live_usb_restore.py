@@ -331,7 +331,9 @@ def _build_archive(work: Path) -> _Archive:
 
     meta_stage = work / "meta_stage"
     meta_stage.mkdir()
-    MetaVolumeBuilder(meta_stage, catalog_db_path=db_path).build()
+    MetaVolumeBuilder(
+        meta_stage, catalog_db_path=db_path, allow_no_dvdisaster_source=True
+    ).build()
     meta_iso = iso_out / "LCSAS_META.iso"
     subprocess.run(
         ["xorriso", "-as", "mkisofs", "-V", "LCSAS_META", "-R", "-J",

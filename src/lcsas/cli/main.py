@@ -549,6 +549,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     meta_build.add_argument(
+        "--allow-no-dvdisaster-source", action="store_true",
+        help=(
+            "Build even if the pinned dvdisaster RS03 source tarball is "
+            "absent from the recovery cache. Without this flag the build "
+            "fails loud, because docs/DVDISASTER_RS03_FORMAT.md is only "
+            "re-implementable against the source it transcribes — that "
+            "source must travel on the disc. Run "
+            "`sh recovery/scripts/fetch_upstream.sh` to populate the cache."
+        ),
+    )
+    meta_build.add_argument(
         "--allow-incomplete", action="store_true",
         help=(
             "Permit a meta-volume missing per-target binaries or root "
@@ -3115,6 +3126,9 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
         config=config,
         catalog_db_path=db_path,
         allow_no_zstd=getattr(args, "allow_no_zstd", False),
+        allow_no_dvdisaster_source=getattr(
+            args, "allow_no_dvdisaster_source", False
+        ),
     )
 
     logger.info(f"Building meta-volume in {output} ...")

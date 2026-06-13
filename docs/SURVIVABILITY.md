@@ -175,11 +175,30 @@ reverse-engineering unless the bundled binary still works.
 **Fix:** Bundle the RS03 format documentation on the meta-volume.
 Long-term: consider a pure-Python RS03 decoder.
 
-**Resolution:** Created `docs/DVDISASTER_RS03_FORMAT.md` — covers
-RS03 binary layout (header, CRC sectors, parity sectors), GF(2^8)
-arithmetic (primitive polynomial 0x11D), Reed-Solomon interleaving,
-verify/repair/augment operations, and re-implementation guidance
-with reference libraries.  Bundled via `_DOC_ITEMS`.
+**Resolution (FMT-02):** The abandonment risk is closed by three
+concrete things, not just "docs written":
+
+1. **Source pinned + bundled.** The exact dvdisaster 0.79.x source
+   tarball is pinned by SHA-256 in `recovery/UPSTREAM.sha256`
+   (`dvdisaster/src/`), fetched by `fetch_upstream.sh`, and bundled on
+   every meta-volume under `tools/src/` (fail-loud if missing — see
+   `MetaVolumeBuilder._bundle_dvdisaster_source`).  The code that
+   defines the format now travels with the disc.
+2. **Spec is definitive, not hand-wavy.** `docs/DVDISASTER_RS03_FORMAT.md`
+   gives the byte-exact `EccHeader` table (every offset/width/endianness,
+   transcribed from `dvdisaster.h`), the §4 image-layout and
+   interleaving formulas (`CalcRS03Layout`/`RS03SectorIndex`), the
+   correct GF(2^8) generator polynomial **0x187**, and a worked example
+   verified against the real binary's `dvdisaster -t` output
+   (`tests/integration/test_rs03_doc_conformance.py`).  It no longer
+   punts to "consult the source code".
+3. **In-house decoder (FMT-01).** The C89 `recovery/src/lcsas-ecc/`
+   decoder, built against this spec, will be the durable repair path so
+   recovery does not depend on the dvdisaster binary running.
+
+A 2050 engineer holding a damaged disc, this spec, and the bundled
+source can re-implement RS03 repair.  Bundled via
+`_bundle_dvdisaster_source` (source) and `_DOC_ITEMS` (spec).
 
 ### 2.6 No restic format specification on disc — P0 🔧 (in progress)
 

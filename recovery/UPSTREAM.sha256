@@ -4,6 +4,10 @@
 # Categories:
 #   rustic/<target>/  → rustic upstream release artifact (extracted: rustic binary)
 #   python/<target>/  → python-build-standalone install_only_stripped tarball
+#   dvdisaster/src/   → dvdisaster RS03 source tarball (NOT extracted; the
+#                       archive itself is bundled on the meta-volume so a
+#                       future engineer can re-implement RS03 from the exact
+#                       source that docs/DVDISASTER_RS03_FORMAT.md transcribes)
 #
 # Targets (six approved per docs/CROSS_PLATFORM_META_RFC.md §6 Q1):
 #   x86_64-unknown-linux-musl       Linux x86_64 (static, replaces glibc target)
@@ -17,6 +21,7 @@
 # Source URLs (regenerate this file by running recovery/scripts/fetch_upstream.sh):
 #   https://github.com/rustic-rs/rustic/releases/download/v0.11.2/
 #   https://github.com/astral-sh/python-build-standalone/releases/download/20260510/
+#   https://codeload.github.com/speed47/dvdisaster/tar.gz/refs/tags/v0.79.10-pl6
 
 # ── rustic v0.11.2 ────────────────────────────────────────────────
 ff5954015236b21d121d43c6a9d690c21613c0a1ea42a767604ba17eec266bd3  rustic/x86_64-unknown-linux-musl/rustic-v0.11.2-x86_64-unknown-linux-musl.tar.gz
@@ -33,3 +38,11 @@ f92cf137f80ec75abbe1540f2cdd637ce05a82b6230b7b2eb6b598753222828f  python/armv7-u
 55bc1a5edbc8ac4da0081f4f5731ed2d1ed10c57cb37a820b2a0dbc7cad742e9  python/aarch64-apple-darwin/cpython-3.12.13+20260510-aarch64-apple-darwin-install_only_stripped.tar.gz
 6bab7fa97d4f2ddba86da0e05acff66c53b5edaca1df8edcf00ddca785a9c59b  python/x86_64-apple-darwin/cpython-3.12.13+20260510-x86_64-apple-darwin-install_only_stripped.tar.gz
 24168aff2e7d93784c6a436124c4ebb79b076a4e289bde4902c08333507b71d0  python/x86_64-pc-windows-msvc/cpython-3.12.13+20260510-x86_64-pc-windows-msvc-install_only_stripped.tar.gz
+
+# ── dvdisaster 0.79.10-pl6 source (RS03 reference; GPLv3) ─────────
+# The `lcsas burn` preflight accepts dvdisaster >= 0.79.0; this is the
+# 0.79.10 source whose rs03-common.c / dvdisaster.h define the layout
+# transcribed verbatim into docs/DVDISASTER_RS03_FORMAT.md.  Bundled —
+# not extracted — onto every meta-volume as the in-archive source of
+# truth for re-implementing RS03 repair.
+f302b92df53abde1fb239230fc4c8b1fc425405c0ba59da3e2ba85c30f5320cc  dvdisaster/src/dvdisaster-0.79.10-pl6.tar.gz

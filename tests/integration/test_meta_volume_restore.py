@@ -210,7 +210,9 @@ class TestMetaVolumeRestore:
 
         # ── Build meta-volume ────────────────────────────────────
         meta_dir = tmp_path / "meta_volume"
-        meta_builder = MetaVolumeBuilder(meta_dir)
+        meta_builder = MetaVolumeBuilder(
+            meta_dir, allow_no_dvdisaster_source=True
+        )
         meta_builder.build()
 
         # ═══════════════════════════════════════════════════════════
