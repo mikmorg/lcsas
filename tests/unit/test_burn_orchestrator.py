@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from lcsas.burn.operator import NullOperatorPrompt
 from lcsas.burn.orchestrator import BurnOrchestrator
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
@@ -21,6 +22,7 @@ from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.volume_packs import get_pack_ids_for_volume
 from lcsas.db.volumes import get_volume_by_id, list_volumes, update_status
+from lcsas.iso.xorriso import MediaStatus
 from lcsas.staging.builder import (
     CorruptPacksError,
     MirrorUnavailableError,
@@ -135,8 +137,12 @@ def orch_env(tmp_path):
     def fake_device_reader(device: str, length_bytes: int) -> str:
         return hashlib.sha256(b"fake-iso-data"[:length_bytes]).hexdigest()
 
+    # FUP-01: non-interactive by default so existing real-burn-path tests
+    # never block on the TTY; the operator-protocol tests below build their
+    # own orchestrator with a recording FakeOperatorPrompt.
     orch = BurnOrchestrator(config, conn, xorriso, dvdisaster,
-                            device_reader=fake_device_reader)
+                            device_reader=fake_device_reader,
+                            prompt=NullOperatorPrompt())
     return {
         "orch": orch,
         "config": config,
@@ -1074,7 +1080,8 @@ class TestReburnVerifyFailOnV5Catalog:
             return hashlib.sha256(b"fake-iso-data"[:length_bytes]).hexdigest()
 
         orch = BurnOrchestrator(config, conn, xorriso, MagicMock(),
-                                device_reader=fake_device_reader)
+                                device_reader=fake_device_reader,
+                                prompt=NullOperatorPrompt())
 
         session_id = orch.stage().session_id
         vols = get_session_volumes(conn, session_id)
@@ -1172,4 +1179,214 @@ class TestEscrowDrift:
         events = get_events_for_volume(orch_env["conn"], manifest.volume_id)
         notes = [e for e in events if e.event_type == "NOTE"]
         assert any("KEY-08 escrow drift override" in e.detail for e in notes)
+
+
+# =========================================================================
+# FUP-01: operator burn protocol — checkpoints, blank-check, eject, receipts
+# =========================================================================
+
+
+class FakeOperatorPrompt:
+    """Recording prompt: stores every checkpoint message, never blocks."""
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def checkpoint(self, message: str) -> None:
+        self.messages.append(message)
+
+
+def _seed_multi_vol(conn, config, num_packs=5, pack_size=800_000):
+    """Seed packs sized so a TEST_TINY (2 MB) session needs >1 volume."""
+    config.db_path.parent.mkdir(parents=True, exist_ok=True)
+    config.db_path.write_bytes(b"sqlite_placeholder")
+    register_repo(conn, "family", "Family Photos",
+                  str(config.repositories["family"].mirror_path))
+    data_dir = config.repositories["family"].mirror_path / "data"
+    for i in range(1, num_packs + 1):
+        content = _pack_bytes(i, pack_size)
+        sha = _sha(content)
+        register_pack(conn, sha256=sha, size_bytes=pack_size, repo_id="family")
+        (data_dir / sha).write_bytes(content)
+    mirror_path = config.repositories["family"].mirror_path
+    for subdir in ("index", "snapshots", "keys"):
+        (mirror_path / subdir).mkdir(exist_ok=True)
+    (mirror_path / "config").write_text('{"version": 2}')
+
+
+@pytest.fixture
+def multi_vol_env(tmp_path):
+    """Three-volume session on TEST_TINY (5 packs @ 800 KB ÷ 2 MB → 3 discs)."""
+    config = _make_config(tmp_path)
+    conn = get_memory_connection()
+    create_all(conn)
+    _seed_multi_vol(conn, config)
+
+    xorriso = MagicMock()
+
+    def _fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
+        Path(output_iso).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_iso).write_bytes(b"\x00" * 4096)
+        return Path(output_iso)
+
+    xorriso.create_iso.side_effect = _fake_create_iso
+    _wire_drive_identity(xorriso)
+    xorriso.verify_disc = MagicMock(return_value=True)
+    xorriso.media_status = MagicMock(return_value=MediaStatus.BLANK)
+    dvdisaster = MagicMock()
+
+    def _device_reader(device, length):
+        return hashlib.sha256((b"\x00" * 4096)[:length]).hexdigest()
+
+    return {
+        "config": config, "conn": conn,
+        "xorriso": xorriso, "dvdisaster": dvdisaster,
+        "device_reader": _device_reader,
+    }
+
+
+def _make_orch(env, prompt):
+    return BurnOrchestrator(
+        env["config"], env["conn"], env["xorriso"], env["dvdisaster"],
+        device_reader=env["device_reader"], prompt=prompt,
+    )
+
+
+class TestOperatorProtocol:
+    """FUP-01 mitigations 1, 2, 4 (mitigation 3 is BURN-04/FMA-03)."""
+
+    def test_burn_session_checkpoints_between_volumes(self, multi_vol_env):
+        """3-volume interactive session: one swap prompt + one labeling
+        prompt per volume, eject after each, exact labels in messages."""
+        prompt = FakeOperatorPrompt()
+        orch = _make_orch(multi_vol_env, prompt)
+        result = orch.stage()
+        labels = [m.volume_label for m in result.manifests]
+        assert len(labels) >= 3
+
+        ejected: list[str] = []
+        import lcsas.burn.orchestrator as orch_mod
+        orig = orch_mod.eject_tray
+        orch_mod.eject_tray = lambda device: (ejected.append(device), True)[1]
+        try:
+            receipts = orch.burn_session(
+                result.session_id, "Offsite_Safe", skip_burn=False,
+                interactive=True,
+            )
+        finally:
+            orch_mod.eject_tray = orig
+
+        assert all(r.verify_passed for r in receipts)
+        # One swap prompt per volume, naming "Disc i of N" and the label.
+        swaps = [m for m in prompt.messages if "Insert a BLANK disc" in m]
+        assert len(swaps) == len(labels)
+        for i, label in enumerate(labels, start=1):
+            assert any(f"Disc {i} of {len(labels)}" in m and label in m
+                       for m in swaps), f"no swap prompt for disc {i}"
+        # One labeling prompt per volume, with the exact label + location.
+        label_msgs = [m for m in prompt.messages if "write on it now" in m]
+        assert len(label_msgs) == len(labels)
+        for label in labels:
+            assert any(label in m and "Offsite_Safe" in m for m in label_msgs)
+        # Tray ejected once per burned disc.
+        assert len(ejected) == len(labels)
+
+    def test_burn_session_no_prompt_flag(self, multi_vol_env):
+        """interactive=False: prompt never called (protects cdemu/CI)."""
+        prompt = FakeOperatorPrompt()
+        orch = _make_orch(multi_vol_env, prompt)
+        result = orch.stage()
+
+        orch.burn_session(result.session_id, "Home_Shelf",
+                          skip_burn=False, interactive=False)
+        assert prompt.messages == []
+
+    def test_skip_burn_implies_non_interactive(self, multi_vol_env):
+        """skip_burn=True forces non-interactive even with interactive=True."""
+        prompt = FakeOperatorPrompt()
+        orch = _make_orch(multi_vol_env, prompt)
+        result = orch.stage()
+        orch.burn_session(result.session_id, "Home_Shelf",
+                          skip_burn=True, interactive=True)
+        assert prompt.messages == []
+
+    def test_burn_refuses_closed_media(self, multi_vol_env):
+        """media_status=closed: burn_iso never runs, error names the device
+        and says insert a blank disc, volume stays STAGING, no copy."""
+        from lcsas.db.volume_copies import get_copies_for_volume
+        from lcsas.db.volumes import get_volume_by_id
+
+        multi_vol_env["xorriso"].media_status = MagicMock(
+            return_value=MediaStatus.CLOSED,
+        )
+        prompt = FakeOperatorPrompt()
+        orch = _make_orch(multi_vol_env, prompt)
+        result = orch.stage()
+        vid = result.manifests[0].volume_id
+
+        with pytest.raises(ValueError) as ei:
+            orch.burn_session(result.session_id, "Home_Shelf",
+                              skip_burn=False, interactive=True)
+        msg = str(ei.value)
+        assert multi_vol_env["config"].optical_device in msg
+        assert "blank disc" in msg.lower()
+        multi_vol_env["xorriso"].burn_iso.assert_not_called()
+        vol = get_volume_by_id(multi_vol_env["conn"], vid)
+        assert vol.status == "STAGING"
+        assert get_copies_for_volume(multi_vol_env["conn"], vid) == []
+
+    def test_verify_fails_on_volume_id_mismatch(self, multi_vol_env):
+        """read_disc_volume_id returns the wrong label → verify fails, a
+        VERIFY_FAIL event names both labels, and no ACTIVE copy is recorded."""
+        from lcsas.db.volume_copies import get_copies_for_volume
+        from lcsas.db.volume_events import get_events_for_volume
+
+        multi_vol_env["xorriso"].read_disc_volume_id = MagicMock(
+            return_value="WRONG-LABEL-9999",
+        )
+        prompt = FakeOperatorPrompt()
+        orch = _make_orch(multi_vol_env, prompt)
+        result = orch.stage()
+        vid = result.manifests[0].volume_id
+        label = result.manifests[0].volume_label
+
+        receipts = orch.burn_session(
+            result.session_id, "Home_Shelf",
+            skip_burn=False, interactive=True,
+        )
+        assert all(not r.verify_passed for r in receipts)
+        events = get_events_for_volume(multi_vol_env["conn"], vid)
+        fails = [e for e in events if e.event_type == "VERIFY_FAIL"]
+        assert any("WRONG-LABEL-9999" in e.detail and label in e.detail
+                   for e in fails)
+        # BURN-05: a failed disc is never recorded as a copy.
+        assert get_copies_for_volume(multi_vol_env["conn"], vid) == []
+
+    def test_receipt_written_per_volume(self, multi_vol_env):
+        """Kill the burn on volume 2 of N: volume 1's durable receipt exists."""
+        result_holder = {}
+        prompt = FakeOperatorPrompt()
+        orch = _make_orch(multi_vol_env, prompt)
+        result = orch.stage()
+        result_holder["labels"] = [m.volume_label for m in result.manifests]
+
+        calls = {"n": 0}
+
+        def _burn(iso_path, device="/dev/sr0"):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("simulated burn failure on disc 2")
+
+        multi_vol_env["xorriso"].burn_iso = MagicMock(side_effect=_burn)
+        # _wire_drive_identity reads burn_iso.call_args; keep it wired.
+        _wire_drive_identity(multi_vol_env["xorriso"])
+
+        with pytest.raises(RuntimeError):
+            orch.burn_session(result.session_id, "Home_Shelf",
+                              skip_burn=False, interactive=True)
+
+        receipts_dir = multi_vol_env["config"].db_path.parent / "receipts"
+        first_label = result_holder["labels"][0]
+        written = list(receipts_dir.glob(f"*{first_label}*Home_Shelf*.json"))
+        assert written, "volume 1 receipt missing after mid-session crash"
 

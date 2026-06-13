@@ -19,6 +19,12 @@ from pathlib import Path
 
 from lcsas.binpack.algorithm import first_fit_decreasing
 from lcsas.burn.device_verify import read_device_sha256
+from lcsas.burn.operator import (
+    ConsoleOperatorPrompt,
+    NullOperatorPrompt,
+    OperatorPrompt,
+    eject_tray,
+)
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.db.key_escrow import EscrowDriftError, detect_escrow_drift, get_split
@@ -47,7 +53,7 @@ from lcsas.db.volumes import (
     update_used_bytes,
 )
 from lcsas.ecc.dvdisaster import DVDisasterRunner, smallest_fitting_medium_bytes
-from lcsas.iso.xorriso import XorrisoRunner
+from lcsas.iso.xorriso import MediaStatus, XorrisoRunner
 from lcsas.staging.builder import MirrorUnavailableError, StagingBuilder
 from lcsas.staging.metadata import HolographicInjector
 from lcsas.utils.fs import ensure_dir, safe_remove_tree
@@ -132,11 +138,16 @@ class BurnOrchestrator:
         dvdisaster: DVDisasterRunner,
         device_reader: Callable[[str, int], str] = read_device_sha256,
         allow_escrow_drift: bool = False,
+        prompt: OperatorPrompt | None = None,
     ) -> None:
         self._config = config
         self._conn = conn
         self._xorriso = xorriso
         self._dvdisaster = dvdisaster
+        # FUP-01: injectable operator-interaction seam.  Defaults to the
+        # TTY-backed console prompt; unit tests pass a recording fake and
+        # `burn_session(interactive=False)` swaps in a no-op.
+        self._prompt = prompt or ConsoleOperatorPrompt()
         # Injected for testability (BURN-04), matching the protocol-
         # injection pattern used for xorriso/dvdisaster: reads N bytes
         # from a device and returns the hex SHA-256.
@@ -915,6 +926,7 @@ class BurnOrchestrator:
         location: str = "Home_Shelf",
         device: str | None = None,
         skip_burn: bool = False,
+        interactive: bool = True,
     ) -> list[BurnReceipt]:
         """Burn all ISOs in a session to disc, tagged with a location.
 
@@ -923,6 +935,10 @@ class BurnOrchestrator:
             location: Physical location tag for this copy.
             device: Optical device (overrides config).
             skip_burn: If True, skip physical burn (for testing).
+            interactive: If True (default), pause before each physical
+                burn so the operator can load a blank disc, and after each
+                verified burn eject the tray and print the label to write.
+                Forced off when ``skip_burn`` is set (no disc is touched).
 
         Returns:
             List of BurnReceipt objects.
@@ -931,14 +947,32 @@ class BurnOrchestrator:
         session_vols = get_session_volumes(self._conn, session_id)
         device = device or self._config.optical_device
 
+        # skip_burn never touches a disc, so it implies non-interactive
+        # (protects cdemu/CI flows that pass skip_burn=True).  [FUP-01]
+        prompt: OperatorPrompt = (
+            self._prompt if interactive and not skip_burn
+            else NullOperatorPrompt()
+        )
+
         # Ensure location exists
         ensure_location(self._conn, location)
 
         receipts: list[BurnReceipt] = []
+        total = len(session_vols)
 
-        for sv in session_vols:
+        for idx, sv in enumerate(session_vols, start=1):
             iso_path = Path(sv.iso_path)
             vol = get_volume_by_id(self._conn, sv.volume_id)
+
+            # FUP-01: operator checkpoint + blank-media pre-check BEFORE
+            # the physical burn.  Both are no-ops under skip_burn.
+            if not skip_burn:
+                prompt.checkpoint(
+                    f"=== Disc {idx} of {total} — volume {vol.label} ===\n"
+                    f"Insert a BLANK disc into {device}."
+                )
+                self._assert_blank_media(device, vol.label)
+
             if not skip_burn and not iso_path.exists():
                 raise FileNotFoundError(
                     f"ISO file missing for volume {vol.label}: {iso_path}. "
@@ -1050,6 +1084,13 @@ class BurnOrchestrator:
                 )
                 receipts.append(receipt)
 
+                # FUP-01: persist this disc's receipt NOW (durable, beside
+                # the catalog DB), not only in the end-of-session sweep — a
+                # mid-session crash then still leaves a receipt for every
+                # disc actually burned.  The end-of-session writes below
+                # are idempotent re-writes of the same files.
+                self._write_durable_receipts([receipt], location)
+
             except Exception as original_exc:
                 try:
                     self._conn.rollback()
@@ -1066,6 +1107,19 @@ class BurnOrchestrator:
                 if receipts:
                     update_session_status(self._conn, session_id, "PARTIAL")
                 raise original_exc
+
+            # FUP-01: after a verified burn, eject the tray (best-effort)
+            # and tell the operator exactly what to write on the disc — the
+            # hand-written label is the only link from a physical disc back
+            # to the catalog decades later.  Skipped on a failed verify
+            # (the disc is suspect) and under skip_burn (no disc).
+            if not skip_burn and receipt.verify_passed:
+                if interactive and not eject_tray(device):
+                    _logger.warning(
+                        "Could not eject %s — remove the disc by hand.",
+                        device,
+                    )
+                self._prompt_labeling(prompt, vol.label, location)
 
             # BURN-06: the ISO is deliberately NOT deleted here. The
             # documented multi-copy flow re-burns the same session at a
@@ -1094,6 +1148,37 @@ class BurnOrchestrator:
         self._write_durable_receipts(receipts, location)
 
         return receipts
+
+    def _assert_blank_media(self, device: str, label: str) -> None:
+        """Refuse to burn onto a disc that already carries data (FUP-01).
+
+        Converts the "forgot to swap the just-burned disc" mistake from a
+        raw CalledProcessError + PARTIAL session into a clean, retryable
+        error BEFORE any burn or status transition.  ``unknown`` (an odd
+        drive we cannot classify) warns and proceeds rather than bricking
+        the burn; ``no_media`` is left to ``burn_iso``'s own diagnostics.
+        """
+        status = self._xorriso.media_status(device)
+        if status is MediaStatus.CLOSED:
+            raise ValueError(
+                f"Disc in {device} is not blank (it already contains data) "
+                f"— cannot burn {label}. Remove it and insert a blank disc."
+            )
+        if status is MediaStatus.UNKNOWN:
+            _logger.warning(
+                "Could not determine the media status of %s before burning "
+                "%s — proceeding anyway.", device, label,
+            )
+
+    def _prompt_labeling(
+        self, prompt: OperatorPrompt, label: str, location: str,
+    ) -> None:
+        """Tell the operator what to hand-write on the disc just burned."""
+        prompt.checkpoint(
+            "Burn VERIFIED. Remove the disc and write on it now, with a "
+            "soft felt-tip marker:\n"
+            f"    {label}        (location: {location})"
+        )
 
     def _verify_burned_disc(
         self,

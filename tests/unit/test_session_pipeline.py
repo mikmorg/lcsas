@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lcsas.burn.operator import NullOperatorPrompt
 from lcsas.burn.orchestrator import BurnOrchestrator, StageResult
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
@@ -161,9 +162,13 @@ def env(tmp_path):
     dvdisaster = MagicMock()
 
     # BURN-04: fake device reader matching the fixture's all-zeros ISOs —
-    # returns the hash a correctly burned disc would yield.
+    # returns the hash a correctly burned disc would yield.  FUP-01: the
+    # default fixture is non-interactive (NullOperatorPrompt) so real-burn
+    # tests never block on the TTY; the operator-protocol tests inject
+    # their own recording prompt.
     orch = BurnOrchestrator(config, conn, xorriso, dvdisaster,
-                            device_reader=_zeros_device_reader)
+                            device_reader=_zeros_device_reader,
+                            prompt=NullOperatorPrompt())
 
     return {
         "orch": orch,
@@ -706,6 +711,7 @@ class TestDeviceHashVerify:
         orch = BurnOrchestrator(
             env["config"], conn, xorriso, env["dvdisaster"],
             device_reader=lambda device, length: "0" * 64,
+            prompt=NullOperatorPrompt(),
         )
         result = orch.stage()
 

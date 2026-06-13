@@ -7,12 +7,30 @@ import os
 import subprocess
 import threading
 import time
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
 from lcsas.utils.subprocess import SubprocessRunnerBase
 
 _logger = logging.getLogger(__name__)
+
+
+class MediaStatus(StrEnum):
+    """State of the optical medium loaded in a drive (FUP-01).
+
+    Distinguishes "safe to burn onto" (``blank``/``appendable``) from
+    "already carries data" (``closed``) so a multi-disc session refuses
+    to overwrite the disc just burned instead of failing mid-burn.
+    ``unknown`` covers drives whose -toc output we cannot classify — the
+    caller warns and proceeds rather than bricking an odd drive.
+    """
+
+    BLANK = "blank"
+    APPENDABLE = "appendable"
+    CLOSED = "closed"
+    NO_MEDIA = "no_media"
+    UNKNOWN = "unknown"
 
 # Max single-extent ISO 9660 file section: 4 GiB - 2 KiB.  A file larger than
 # this is stored as multiple extents under ISO 9660 Level 3, which Windows'
@@ -105,6 +123,11 @@ class XorrisoRunner(Protocol):
         self,
         device: str = "/dev/sr0",
     ) -> str: ...
+
+    def media_status(
+        self,
+        device: str = "/dev/sr0",
+    ) -> MediaStatus: ...
 
 
 class SubprocessXorrisoRunner(SubprocessRunnerBase):
@@ -409,3 +432,61 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
                     return value[1:-1]
                 return value
         return ""
+
+    def media_status(
+        self,
+        device: str = "/dev/sr0",
+        timeout: int = 300,
+    ) -> MediaStatus:
+        """Classify the medium in *device* before a burn (FUP-01).
+
+        Parses ``xorriso -outdev <device> -toc``.  A ``closed`` disc
+        already carries finalized data and must not be burned onto; a
+        ``blank`` or ``appendable`` disc is safe.  Anything we cannot
+        classify returns :attr:`MediaStatus.UNKNOWN` — the caller warns
+        and proceeds rather than bricking an odd drive.
+
+        Returns :attr:`MediaStatus.UNKNOWN` on any failure to spawn the
+        binary or on timeout: an unrecognised drive must never block a
+        burn outright.
+        """
+        cmd = [
+            self._binary,
+            "-outdev", device,
+            "-toc",
+        ]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=False,
+                env=self._env(), timeout=timeout,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return MediaStatus.UNKNOWN
+        return self._classify_toc(
+            (result.stdout or "") + "\n" + (result.stderr or "")
+        )
+
+    @staticmethod
+    def _classify_toc(output: str) -> MediaStatus:
+        """Map xorriso -toc output to a :class:`MediaStatus`.
+
+        xorriso reports the medium state on a ``Media status :`` line
+        (``is blank`` / ``is written`` / ``is closed`` / ``is
+        appendable``) and the absence of media as ``No media present`` or
+        ``Media current: is not present``.
+        """
+        low = output.lower()
+        if (
+            "no media" in low
+            or "is not present" in low
+            or "no medium" in low
+            or "medium not present" in low
+        ):
+            return MediaStatus.NO_MEDIA
+        if "is blank" in low:
+            return MediaStatus.BLANK
+        if "is appendable" in low:
+            return MediaStatus.APPENDABLE
+        if "is closed" in low or "is written" in low:
+            return MediaStatus.CLOSED
+        return MediaStatus.UNKNOWN

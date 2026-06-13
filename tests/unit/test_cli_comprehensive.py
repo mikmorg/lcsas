@@ -19,6 +19,7 @@ from lcsas.db.connection import get_connection
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.db.volumes import create_volume
+from lcsas.iso.xorriso import MediaStatus
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -316,6 +317,12 @@ class TestCmdBurnIso:
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.burn_iso") as mock_burn,
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
                   return_value=True),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.media_status",
+                  return_value=MediaStatus.BLANK),
+            # FUP-01 identity readback: report the inferred label so the
+            # wrong-disc guard passes.
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.read_disc_volume_id",
+                  return_value=iso.parent.name),
         ):
             result = main(["burn-iso", str(iso)])
 
@@ -346,6 +353,10 @@ class TestCmdBurnIso:
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.burn_iso"),
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
                   return_value=True),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.media_status",
+                  return_value=MediaStatus.BLANK),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.read_disc_volume_id",
+                  return_value="ARCHIVE_TEST_0001"),
         ):
             result = main(["burn-iso", str(iso),
                            "--emit-receipt", str(out_dir),
@@ -373,6 +384,10 @@ class TestCmdBurnIso:
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.burn_iso"),
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
                   return_value=True),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.media_status",
+                  return_value=MediaStatus.BLANK),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.read_disc_volume_id",
+                  return_value="EXPLICIT_LABEL"),
         ):
             result = main(["burn-iso", str(iso),
                            "--emit-receipt", str(out_file),

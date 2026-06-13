@@ -190,3 +190,6 @@ plus a scripted `FakeOperatorPrompt` recording messages; always-on via `make tes
 
 Mitigations: 2 days impl + 1 day tests (fakes only; +0.5 day on the real burn host for
 hardware validation of blank-check/eject). Charter audit: 1-2 days. Total ≈ 4-5 days.
+
+---
+**Implemented:** 2026-06-13. Part (1) immediate mitigations as planned — operator checkpoint seam (`burn/operator.py`: `OperatorPrompt` Protocol, `ConsoleOperatorPrompt`, `NullOperatorPrompt`, `eject_tray`), `--no-prompt`/`interactive` flag (skip_burn implies non-interactive), blank-media pre-check (`MediaStatus` + `media_status` via `xorriso -outdev -toc`), per-disc durable receipt at burn time, and `cmd_burn_iso` blank-check + identity readback behind `--verify`. Identity-readback mismatch (mitigation 3) reuses the existing `read_disc_volume_id` + `_verify_burned_disc` VERIFY_FAIL plumbing landed earlier (BURN-04/FMA-03). `MediaStatus` uses `StrEnum` (py3.11+, ruff UP042). Part (2) charter remains documentation. Touched test fixtures inject `NullOperatorPrompt` so the new console-default prompt never blocks the suite.

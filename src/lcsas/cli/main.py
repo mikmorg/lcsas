@@ -158,6 +158,11 @@ def build_parser() -> argparse.ArgumentParser:
                              "rejected to guard against typos).")
     burn_p.add_argument("--device", type=str, default=None,
                         help="Optical device path (overrides config).")
+    burn_p.add_argument("--no-prompt", action="store_true", default=False,
+                        help="Do not pause between discs for the operator "
+                             "(for scripted/cdemu runs). Without this, a "
+                             "multi-disc burn pauses before each disc to load "
+                             "a blank and after each to write the label.")
     burn_p.add_argument("--dry-run", "-n", action="store_true", default=False,
                         help="Show burn plan without making changes.")
 
@@ -1629,6 +1634,7 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
             session_ref=args.session,
             location=location,
             device=device,
+            interactive=not getattr(args, "no_prompt", False),
         )
 
     logger.info(f"Burned {len(receipts)} volume(s) to {location}:")
@@ -1688,6 +1694,25 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
         iso_sha256 = sha256_file(iso_path)
         iso_size_bytes = iso_path.stat().st_size
 
+    label = args.label or iso_path.parent.name
+
+    # FUP-01 mitigation 2: blank-media pre-check (behind --verify). A disc
+    # that already carries data is refused before the burn, not after.
+    if args.verify:
+        from lcsas.iso.xorriso import MediaStatus
+        status = runner.media_status(device=device)
+        if status is MediaStatus.CLOSED:
+            logger.error(
+                "Disc in %s is not blank (it already contains data). "
+                "Remove it and insert a blank disc.", device,
+            )
+            return 1
+        if status is MediaStatus.UNKNOWN:
+            logger.warning(
+                "Could not determine the media status of %s — "
+                "proceeding anyway.", device,
+            )
+
     logger.info(f"Burning {iso_path} to {device} ...")
     runner.burn_iso(iso_path, device=device)
     logger.info("Burn complete.")
@@ -1697,9 +1722,20 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
         logger.info(f"Verifying disc on {device} ...")
         verify_passed = runner.verify_disc(device=device)
         logger.info(f"  Verify: {'PASS' if verify_passed else 'FAIL'}")
+        # FUP-01 mitigation 3: post-burn identity readback. The PVD Volume
+        # ID was written from the label at mastering time, so a mismatch
+        # means the disc in the drive is not this image (wrong disc / silent
+        # mis-burn).
+        if verify_passed:
+            disc_id = runner.read_disc_volume_id(device=device)
+            if disc_id != label:
+                logger.error(
+                    "Disc in %s identifies as '%s' — expected '%s'. "
+                    "Wrong disc?", device, disc_id, label,
+                )
+                verify_passed = False
 
     if emit_receipt is not None:
-        label = args.label or iso_path.parent.name
         receipt = {
             "volume_label": label,
             "session_id": args.session,

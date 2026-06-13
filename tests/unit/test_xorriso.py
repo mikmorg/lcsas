@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lcsas.iso.xorriso import SubprocessXorrisoRunner
+from lcsas.iso.xorriso import MediaStatus, SubprocessXorrisoRunner
 
 
 class TestXorrisoMocked:
@@ -215,6 +215,69 @@ class TestReadDiscVolumeId:
         mock_run.side_effect = FileNotFoundError()
         runner = SubprocessXorrisoRunner()
         assert runner.read_disc_volume_id("/dev/sr0") == ""
+
+
+class TestMediaStatus:
+    """FUP-01: blank-media pre-check via xorriso -outdev -toc."""
+
+    @patch("lcsas.iso.xorriso.subprocess.run")
+    def test_blank(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="Media current: BD-R\nMedia status : is blank\n",
+            stderr="",
+        )
+        runner = SubprocessXorrisoRunner()
+        assert runner.media_status("/dev/sr0") is MediaStatus.BLANK
+        args = mock_run.call_args[0][0]
+        assert "-outdev" in args and "-toc" in args
+
+    @patch("lcsas.iso.xorriso.subprocess.run")
+    def test_closed(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="Media status : is written , is closed\n", stderr="",
+        )
+        runner = SubprocessXorrisoRunner()
+        assert runner.media_status("/dev/sr0") is MediaStatus.CLOSED
+
+    @patch("lcsas.iso.xorriso.subprocess.run")
+    def test_appendable(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="Media status : is written , is appendable\n", stderr="",
+        )
+        runner = SubprocessXorrisoRunner()
+        assert runner.media_status("/dev/sr0") is MediaStatus.APPENDABLE
+
+    @patch("lcsas.iso.xorriso.subprocess.run")
+    def test_no_media(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="",
+            stderr="xorriso : FAILURE : No media present in drive\n",
+        )
+        runner = SubprocessXorrisoRunner()
+        assert runner.media_status("/dev/sr0") is MediaStatus.NO_MEDIA
+
+    @patch("lcsas.iso.xorriso.subprocess.run")
+    def test_unrecognised_output_is_unknown(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="something we cannot parse\n", stderr="",
+        )
+        runner = SubprocessXorrisoRunner()
+        assert runner.media_status("/dev/sr0") is MediaStatus.UNKNOWN
+
+    @patch("lcsas.iso.xorriso.subprocess.run")
+    def test_timeout_is_unknown(self, mock_run):
+        mock_run.side_effect = subprocess.TimeoutExpired(["xorriso"], 300)
+        runner = SubprocessXorrisoRunner()
+        assert runner.media_status("/dev/sr0") is MediaStatus.UNKNOWN
+
+    @patch("lcsas.iso.xorriso.subprocess.run")
+    def test_missing_binary_is_unknown(self, mock_run):
+        mock_run.side_effect = FileNotFoundError()
+        runner = SubprocessXorrisoRunner()
+        assert runner.media_status("/dev/sr0") is MediaStatus.UNKNOWN
 
 
 # ── create_bootable_iso (El Torito records) ──────────────────────

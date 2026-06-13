@@ -131,6 +131,7 @@ def test_failed_burn_does_not_satisfy_location(tmp_path):
     from pathlib import Path
     from unittest.mock import MagicMock
 
+    from lcsas.burn.operator import NullOperatorPrompt
     from lcsas.burn.orchestrator import BurnOrchestrator
     from tests.unit.test_session_pipeline import _make_config, _seed_packs
 
@@ -149,7 +150,8 @@ def test_failed_burn_does_not_satisfy_location(tmp_path):
 
     xorriso.create_iso.side_effect = _fake_create_iso
     xorriso.verify_disc = MagicMock(return_value=False)
-    orch = BurnOrchestrator(config, conn, xorriso, MagicMock())
+    orch = BurnOrchestrator(config, conn, xorriso, MagicMock(),
+                            prompt=NullOperatorPrompt())
 
     result = orch.stage()
     orch.burn_session(result.session_id, "Offsite_Safe", skip_burn=False)
