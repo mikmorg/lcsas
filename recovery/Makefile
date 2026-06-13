@@ -82,12 +82,13 @@ TEST_BINS = \
 	$(BUILD)/test_repo \
 	$(BUILD)/test_tree \
 	$(BUILD)/test_zstd \
-	$(BUILD)/test_keyshare
+	$(BUILD)/test_keyshare \
+	$(BUILD)/test_ecc
 
 # Binary extension is overridden by the Windows cross-build target.
 BIN_EXT ?=
 
-all: $(BUILD)/lcsas-restore$(BIN_EXT) $(BUILD)/lcsas-iso9660$(BIN_EXT) $(BUILD)/lcsas-init$(BIN_EXT) $(BUILD)/lcsas-keyshare$(BIN_EXT)
+all: $(BUILD)/lcsas-restore$(BIN_EXT) $(BUILD)/lcsas-iso9660$(BIN_EXT) $(BUILD)/lcsas-init$(BIN_EXT) $(BUILD)/lcsas-keyshare$(BIN_EXT) $(BUILD)/lcsas-ecc$(BIN_EXT)
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -134,6 +135,27 @@ $(BUILD)/keyshare_wordlist.o: $(KEYSHARE_DIR)/wordlist.c $(KEYSHARE_DIR)/slip39.
 
 $(BUILD)/keyshare_main.o: $(KEYSHARE_DIR)/main.c $(KEYSHARE_DIR)/slip39.h $(BUILD)
 	$(CC) $(CFLAGS) -c $(KEYSHARE_DIR)/main.c -o $@
+
+# ── lcsas-ecc (in-house RS03 verify/repair) ───────────────────────
+# Self-contained: GF(2^8) over 0x187 + RS03 layout/decode + CLI.  Links
+# ONLY its own three objects (no vendored sqlite/zstd, no shared crypto)
+# so it cross-builds on the proven zig-cc matrix exactly like keyshare.
+# FMT-01.
+ECC_DIR = src/lcsas-ecc
+
+$(BUILD)/lcsas-ecc$(BIN_EXT): $(BUILD) $(BUILD)/ecc_gf256.o \
+		$(BUILD)/ecc_rs03.o $(BUILD)/ecc_main.o
+	$(CC) $(CFLAGS) $(LDFLAGS) \
+	    $(BUILD)/ecc_gf256.o $(BUILD)/ecc_rs03.o $(BUILD)/ecc_main.o -o $@
+
+$(BUILD)/ecc_gf256.o: $(ECC_DIR)/gf256.c $(ECC_DIR)/gf256.h $(BUILD)
+	$(CC) $(CFLAGS) -c $(ECC_DIR)/gf256.c -o $@
+
+$(BUILD)/ecc_rs03.o: $(ECC_DIR)/rs03.c $(ECC_DIR)/rs03.h $(ECC_DIR)/gf256.h $(BUILD)
+	$(CC) $(CFLAGS) -c $(ECC_DIR)/rs03.c -o $@
+
+$(BUILD)/ecc_main.o: $(ECC_DIR)/main.c $(ECC_DIR)/rs03.h $(ECC_DIR)/gf256.h $(BUILD)
+	$(CC) $(CFLAGS) -c $(ECC_DIR)/main.c -o $@
 
 $(BUILD)/repo.o: $(SRCDIR)/repo.c $(SRCDIR)/repo.h $(BUILD)
 	$(CC) $(CFLAGS) -c $(SRCDIR)/repo.c -o $@
@@ -285,6 +307,13 @@ $(BUILD)/test_keyshare: $(TESTDIR)/test_keyshare.c $(TESTDIR)/keyshare_vectors.h
 	$(CC) $(CFLAGS) -I$(SRCDIR) -Isrc/lcsas-keyshare $(TESTDIR)/test_keyshare.c \
 	    $(BUILD)/keyshare_slip39.o $(BUILD)/keyshare_wordlist.o \
 	    $(BUILD)/sha256.o $(BUILD)/pbkdf2.o $(BUILD)/hex.o -o $@
+
+# test_ecc: RS03 codec (GF tables, CRC vectors, layout, encode/corrupt/
+# repair round trip).  Links only the ecc objects -- no shared crypto.
+$(BUILD)/test_ecc: $(TESTDIR)/test_ecc.c \
+		$(BUILD)/ecc_gf256.o $(BUILD)/ecc_rs03.o
+	$(CC) $(CFLAGS) -I$(ECC_DIR) $(TESTDIR)/test_ecc.c \
+	    $(BUILD)/ecc_gf256.o $(BUILD)/ecc_rs03.o -o $@
 
 test: $(TEST_BINS) $(BUILD)/lcsas-restore
 	@set -e; for t in $(TEST_BINS); do echo "==> $$t"; $$t; done; echo "ALL OK"
