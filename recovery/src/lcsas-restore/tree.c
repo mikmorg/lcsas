@@ -777,12 +777,28 @@ tree_restore_recurse(const char *repo_path,
         return -1;
     }
 
-    /* Trees can be large; allocate a generous token buffer. */
-    toks = (lcsas_json_tok *)malloc(sizeof(lcsas_json_tok) * 65536);
-    if (!toks) { free(blob); return -1; }
-
-    ntoks = lcsas_json_parse((const char *)blob, blob_len, toks, 65536);
-    if (ntoks <= 0 || toks[0].type != LCSAS_JSON_OBJECT) goto out;
+    /* Trees can be large; grow the token buffer on demand (T1C-01).
+     * The 1024-token start keeps the per-recursion-frame heap small
+     * (~40 KB) for typical directories while still scaling to wide
+     * folders / long chunk lists. */
+    ntoks = lcsas_json_parse_alloc((const char *)blob, blob_len, &toks, 1024);
+    if (ntoks == -2) {
+        fprintf(stderr,
+                "ERROR: tree blob %.64s is too large for tier-1 (a directory "
+                "with very many entries,\n       or a file with very many "
+                "chunks); use tier-2 (rustic)\n", tree_id_hex);
+        free(blob);
+        return -1;
+    }
+    if (ntoks < 0) {
+        fprintf(stderr, "ERROR: tree blob %.64s: invalid JSON\n", tree_id_hex);
+        free(blob);
+        return -1;
+    }
+    if (toks[0].type != LCSAS_JSON_OBJECT) {
+        fprintf(stderr, "ERROR: tree blob %.64s: invalid JSON\n", tree_id_hex);
+        goto out;
+    }
 
     nodes_arr = lcsas_json_obj_get((char *)blob, toks, 0, "nodes");
     if (nodes_arr < 0 || toks[nodes_arr].type != LCSAS_JSON_ARRAY) {

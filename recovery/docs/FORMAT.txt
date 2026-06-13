@@ -174,3 +174,21 @@ CHECKSUMS
 
   At the disc level, dvdisaster RS03 ECC provides additional integrity
   + repair beyond the cryptographic checks.
+
+TIER-1 LIMITS
+
+  Tier-1 JSON parsing (index files, snapshot files, tree blobs) is
+  size-adaptive: the token buffer is grown on demand, so there is no
+  fixed cap on the number of blob entries per index, directory entries
+  per tree, or content chunks per file.  See lcsas_json_parse_alloc in
+  src/lcsas-restore/json_q.c.
+
+  The only ceilings are:
+   - LCSAS_MAX_JSON_MIB (default 256) -- the maximum token-buffer memory
+     in MiB for any single JSON structure.  A structure that needs more
+     than this fails LOUD, naming the offending file and pointing at
+     tier-2 (rustic); it is never silently skipped.  See ENV_VARS.txt.
+   - the 256 MiB zstd decompression cap (T1C-05).
+
+  Both are escape hatches for memory-starved 32-bit hosts, not normal
+  operating limits -- ordinary repositories never approach them.

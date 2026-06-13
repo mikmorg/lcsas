@@ -50,6 +50,35 @@ long lcsas_json_parse(const char *src, size_t len,
                       lcsas_json_tok *toks, size_t max_toks);
 
 /*
+ * Parse with a heap-grown token buffer (T1C-01).  The tokenizer core
+ * (lcsas_json_parse) stays allocation-free; this wrapper is the
+ * documented exception so call sites never have to guess a fixed cap.
+ *
+ * Starts at `initial_toks`, doubles on a cap-hit (-2), and stops
+ * growing at min(len + 1 tokens, lcsas_json_max_tok_bytes).  The
+ * len+1 ceiling is exact: every token consumes at least one source
+ * byte, so a document of `len` bytes never yields more than `len`
+ * tokens (the +1 covers an empty document / root literal).
+ *
+ * On success `*toks_out` is malloc'd (caller frees) and the token
+ * count is returned.  On failure `*toks_out` is set to NULL and:
+ *   -1: malformed JSON
+ *   -2: still over the ceiling after growth (input too large for tier-1)
+ *   -3: out of memory
+ */
+long lcsas_json_parse_alloc(const char *src, size_t len,
+                            lcsas_json_tok **toks_out,
+                            size_t initial_toks);
+
+/*
+ * Ceiling on token-buffer memory for lcsas_json_parse_alloc, in bytes.
+ * Defaults to 256 MiB.  Bounds heap growth on 32-bit targets (armv7)
+ * where an unbounded doubling could exhaust the address space.  main.c
+ * lets LCSAS_MAX_JSON_MIB override it (test seam + escape hatch).
+ */
+extern size_t lcsas_json_max_tok_bytes;
+
+/*
  * Look up `key` (NUL-terminated) inside the object at `toks[obj_idx]`.
  * Returns the token index of the value, or -1 if not found.
  */

@@ -341,6 +341,13 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           against free space at TARGET_DIR and the
                           pack cache before any password/disc prompt.
                           Default: check ON when the size is derivable.
+  LCSAS_MAX_JSON_MIB      Max token-buffer memory (MiB) the tier-1
+                          binary allocates to parse any single JSON
+                          structure (index/snapshot/tree).  Default 256;
+                          parsing is otherwise size-adaptive.  Over the
+                          ceiling fails loud (names the file, points at
+                          tier-2), never silently skips.  Lower on tiny
+                          32-bit hosts.
   LCSAS_NO_RELOCATE       1 → don't copy the recovery scripts into
                           RAM before exec (testing / development).
   LCSAS_PROGRESS          0 → silence the periodic tier-3 progress

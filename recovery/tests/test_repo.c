@@ -18,6 +18,7 @@
 #include "repo.h"
 #include "tree.h"
 #include "hex.h"
+#include "json_q.h"
 #include "lcsas_io.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -257,6 +258,28 @@ main(void)
             }
         }
 
+        lcsas_blob_index_free(&ix);
+    }
+
+    /* ── T1C-01: clamped JSON ceiling makes load_index FAIL LOUD ────── */
+    /* With lcsas_json_max_tok_bytes clamped tiny, the index file can no
+     * longer be tokenized.  The old code silently skipped such files and
+     * returned success with an empty index (then later: cryptic "blob
+     * not in index").  The fix returns <0 instead — better to fail at
+     * load than to half-restore. */
+    {
+        lcsas_blob_index ix;
+        size_t saved = lcsas_json_max_tok_bytes;
+        lcsas_blob_index_init(&ix);
+        lcsas_json_max_tok_bytes = sizeof(lcsas_json_tok); /* 1 token */
+        rc = lcsas_repo_load_index(repo, &mk, &ix);
+        lcsas_json_max_tok_bytes = saved;
+        if (rc >= 0) {
+            fprintf(stderr,
+                    "FAIL: load_index returned %d with clamped JSON ceiling; "
+                    "must fail loud (<0), not silently drop the index\n", rc);
+            fails++;
+        }
         lcsas_blob_index_free(&ix);
     }
 

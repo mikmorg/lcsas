@@ -128,6 +128,23 @@ LCSAS_DRAIN_CHUNK_PACKS
             trade-off between restore interactivity and disc-read
             continuity; operators who want it must opt in.
 
+LCSAS_MAX_JSON_MIB
+  Default:  256  (opt-in override; default ceiling always active)
+  Since:    Phase 26 (T1C-01)
+  What:     Maximum token-buffer memory, in MiB, that tier-1 will
+            allocate to parse any single JSON structure (index file,
+            snapshot file, or tree blob).  Tier-1 parsing is otherwise
+            size-adaptive — the buffer grows on demand — so ordinary
+            repositories never approach this ceiling.  A structure that
+            needs more fails LOUD (names the file, points at tier-2);
+            it is never silently skipped.  Lower it on a memory-starved
+            32-bit host (e.g. armv7); raise it only if a genuinely huge
+            structure legitimately needs more than 256 MiB of tokens.
+  Why:      Opt-IN override of an always-safe default.  The 256 MiB
+            ceiling bounds heap growth so a pathological or malicious
+            JSON blob can't exhaust a small address space; overriding it
+            is an escape hatch, not a routine knob.
+
 LCSAS_TIER_FALLBACK
   Default:  0  (opt-in / default OFF)
   Since:    Phase 24
@@ -316,6 +333,7 @@ LCSAS_META_DISC             unset     opt-in      unusual mount layout
 LCSAS_MOUNT_DIRS            unset     opt-in      non-standard disc mounts
 LCSAS_PACK_CACHE_DIR        auto      opt-out     set ''  to disable cache
 LCSAS_DRAIN_CHUNK_PACKS     0         opt-in      set 100-500 for slow optical
+LCSAS_MAX_JSON_MIB          256       opt-in      lower on tiny 32-bit hosts
 LCSAS_TIER_FALLBACK         0         opt-in      set 1 to walk cascade
 LCSAS_ALLOW_PYTHON_TIER     1         opt-out     set 0 to ban Python
 LCSAS_PROGRESS              unset     opt-out     set 0 to silence output

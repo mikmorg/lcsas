@@ -153,3 +153,6 @@ dependency below.
 3 days: 1.5 impl (parse_alloc + three call sites + messages + env knob), 1.5 fixtures/tests
 (gen_fixture extensions are the bulk). Needs only the local Linux toolchain (clang for sanitize/fuzz);
 qemu re-verification of cross-built bins per the usual recovery build flow.
+
+---
+**Implemented:** 2026-06-13. As planned: added `lcsas_json_parse_alloc` (heap-grown, calloc'd, len+1 / `lcsas_json_max_tok_bytes` ceiling) + `LCSAS_MAX_JSON_MIB` env knob in main.c; rewired both index passes, `load_snapshots`, and `tree.c` to fail loud (named file + "use tier-2") on `-2`/`-1` instead of silently skipping; MAC-failure index skips now warn + tally (BUG-3 non-fatal premise preserved). gen_fixture gained `--dense-index` + `--chunks-per-file`; three new hardening tests (dense index 6k, wide dir 5k, large file 40k chunks) + clamped-ceiling fail-loud test, plus C tests in test_json.c/test_repo.c. Sanitize gate clean (0 ASan/UBSan/LSan); fuzz-json-smoke 0 crashes. Rebuilt + recommitted all 5 git-tracked tier-1 `lcsas-restore` bins (x86_64/aarch64/armv7 musl-static via zig, x86_64-windows PE, aarch64-macos Mach-O); x86_64-macos restore is gitignored/untracked upstream so left as-is (pre-existing inconsistency). T1C-05 (decrypt cap) deferred — separate plan despite the "same PR" note.

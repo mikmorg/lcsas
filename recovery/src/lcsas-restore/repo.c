@@ -460,27 +460,27 @@ lcsas_repo_load_index(const char *repo_path,
     DIR *d;
     struct dirent *e;
     /* Big arrays moved to the heap so we don't overflow Windows'
-     * 1 MB default thread stack.  Pass-2 also uses 32768 tokens
-     * (~1.3 MB) which alone would blow the stack. */
+     * 1 MB default thread stack.  Per-file token buffers are likewise
+     * heap-allocated (and grown) by lcsas_json_parse_alloc. */
     char (*names)[72] = NULL;
     size_t ncount = 0;
     size_t names_cap = 0;
     char (*super_set)[72] = NULL;
     size_t super_count = 0;
-    lcsas_json_tok *pass1_toks = NULL;
-    lcsas_json_tok *pass2_toks = NULL;
+    size_t auth_failures = 0;   /* index files that failed MAC/decrypt */
 
     size_t i;
     int rc = -1;
 
     /* calloc (zero-init) because the tok walks below tolerate looking
      * one token past the last-parsed entry; on Windows uninitialized
-     * heap is genuinely random and was causing intermittent failures. */
+     * heap is genuinely random and was causing intermittent failures.
+     * Token buffers are now grown per-file by lcsas_json_parse_alloc
+     * (T1C-01) so index size is no longer capped at a fixed token
+     * count. */
     names      = (char (*)[72])calloc(2048, 72);
     super_set  = (char (*)[72])calloc(8192, 72);
-    pass1_toks = (lcsas_json_tok *)calloc(16384, sizeof(lcsas_json_tok));
-    pass2_toks = (lcsas_json_tok *)calloc(32768, sizeof(lcsas_json_tok));
-    if (!names || !super_set || !pass1_toks || !pass2_toks) goto out;
+    if (!names || !super_set) goto out;
     names_cap = 2048;
 
     snprintf(index_dir, sizeof index_dir, "%s/index", repo_path);
@@ -511,15 +511,34 @@ lcsas_repo_load_index(const char *repo_path,
         char path[4096];
         unsigned char *plain;
         size_t plen;
-        lcsas_json_tok *toks = pass1_toks;
+        lcsas_json_tok *toks = NULL;
         long ntoks;
         long sup_arr;
 
         snprintf(path, sizeof path, "%s/%s", index_dir, names[i]);
         plain = decrypt_repo_file(path, mk, &plen);
-        if (!plain) continue;
-        ntoks = lcsas_json_parse((const char *)plain, plen, toks, 16384);
-        if (ntoks <= 0) { free(plain); continue; }
+        if (!plain) {
+            /* MAC/decrypt failure stays non-fatal here (a stray or
+             * corrupt index file must not sink the whole load), but it
+             * is no longer silent: warn per file and tally a summary. */
+            fprintf(stderr,
+                    "WARNING: index file %s failed authentication; "
+                    "skipping\n", names[i]);
+            auth_failures++;
+            continue;
+        }
+        ntoks = lcsas_json_parse_alloc((const char *)plain, plen, &toks, 16384);
+        if (ntoks == -2) {
+            fprintf(stderr,
+                    "ERROR: index file %s is too large for tier-1 to parse;\n"
+                    "       use tier-2 (rustic) for this repository\n", path);
+            free(plain); goto out;
+        }
+        if (ntoks <= 0) {
+            fprintf(stderr,
+                    "ERROR: index file %s: invalid JSON after decrypt\n", path);
+            free(plain); goto out;
+        }
         sup_arr = lcsas_json_obj_get((char *)plain, toks, 0, "supersedes");
         if (sup_arr >= 0 && toks[sup_arr].type == LCSAS_JSON_ARRAY) {
             long t;
@@ -536,6 +555,7 @@ lcsas_repo_load_index(const char *repo_path,
                                 " — repository state may be pathological\n",
                                 (int)super_count);
                             free(plain);
+                            free(toks);
                             goto out;
                         }
                         for (k = 0; k < (size_t)toks[t].size; k++) {
@@ -551,6 +571,7 @@ lcsas_repo_load_index(const char *repo_path,
             }
         }
         free(plain);
+        free(toks);
     }
 
     /* Pass 2: load entries, skipping superseded files. */
@@ -558,7 +579,7 @@ lcsas_repo_load_index(const char *repo_path,
         char path[4096];
         unsigned char *plain;
         size_t plen;
-        lcsas_json_tok *toks = pass2_toks;
+        lcsas_json_tok *toks = NULL;
         long ntoks;
         long packs_arr;
         int superseded = 0;
@@ -571,9 +592,24 @@ lcsas_repo_load_index(const char *repo_path,
 
         snprintf(path, sizeof path, "%s/%s", index_dir, names[i]);
         plain = decrypt_repo_file(path, mk, &plen);
-        if (!plain) continue;
-        ntoks = lcsas_json_parse((const char *)plain, plen, toks, 32768);
-        if (ntoks <= 0) { free(plain); continue; }
+        if (!plain) {
+            /* Already warned + tallied in pass 1 (same file set); stay
+             * non-fatal so MAC failures don't sink the load. */
+            auth_failures++;
+            continue;
+        }
+        ntoks = lcsas_json_parse_alloc((const char *)plain, plen, &toks, 16384);
+        if (ntoks == -2) {
+            fprintf(stderr,
+                    "ERROR: index file %s is too large for tier-1 to parse;\n"
+                    "       use tier-2 (rustic) for this repository\n", path);
+            free(plain); goto out;
+        }
+        if (ntoks <= 0) {
+            fprintf(stderr,
+                    "ERROR: index file %s: invalid JSON after decrypt\n", path);
+            free(plain); goto out;
+        }
 
         packs_arr = lcsas_json_obj_get((char *)plain, toks, 0, "packs");
         if (packs_arr >= 0 && toks[packs_arr].type == LCSAS_JSON_ARRAY) {
@@ -607,6 +643,7 @@ lcsas_repo_load_index(const char *repo_path,
                                                  pack_id, &loc) == 0) {
                                 if (blob_index_push(ix, &loc) != 0) {
                                     free(plain);
+                                    free(toks);
                                     goto out;
                                 }
                             }
@@ -618,6 +655,12 @@ lcsas_repo_load_index(const char *repo_path,
             }
         }
         free(plain);
+        free(toks);
+    }
+    if (auth_failures > 0) {
+        fprintf(stderr,
+                "[lcsas-restore] %lu index file(s) failed authentication "
+                "and were skipped\n", (unsigned long)auth_failures);
     }
     /* Sort by id so lcsas_blob_index_find can bsearch in O(log n)
      * instead of the previous O(n) linear scan (issue #181).  This is
@@ -629,8 +672,6 @@ lcsas_repo_load_index(const char *repo_path,
 out:
     free(names);
     free(super_set);
-    free(pass1_toks);
-    free(pass2_toks);
     return rc;
 }
 
@@ -700,7 +741,7 @@ lcsas_repo_load_snapshots(const char *repo_path,
         char path[4096];
         unsigned char *plain;
         size_t plen;
-        lcsas_json_tok toks[256];
+        lcsas_json_tok *toks = NULL;
         long ntoks;
         long tree_i, time_i, paths_i;
         lcsas_snapshot snap;
@@ -710,9 +751,28 @@ lcsas_repo_load_snapshots(const char *repo_path,
 
         snprintf(path, sizeof path, "%s/%s", snap_dir, e->d_name);
         plain = decrypt_repo_file(path, mk, &plen);
-        if (!plain) continue;
-        ntoks = lcsas_json_parse((const char *)plain, plen, toks, 256);
-        if (ntoks <= 0) { free(plain); continue; }
+        if (!plain) {
+            /* A snapshot that fails authentication vanishes from the
+             * list — that is silent selection data loss, so name it. */
+            fprintf(stderr,
+                    "WARNING: snapshot file %s failed authentication; "
+                    "skipping\n", e->d_name);
+            continue;
+        }
+        ntoks = lcsas_json_parse_alloc((const char *)plain, plen, &toks, 256);
+        if (ntoks == -2) {
+            fprintf(stderr,
+                    "ERROR: snapshot file %s is too large for tier-1 to "
+                    "parse;\n       use tier-2 (rustic) for this repository\n",
+                    path);
+            free(plain); closedir(d); return -1;
+        }
+        if (ntoks <= 0) {
+            fprintf(stderr,
+                    "ERROR: snapshot file %s: invalid JSON after decrypt\n",
+                    path);
+            free(plain); closedir(d); return -1;
+        }
 
         memset(&snap, 0, sizeof snap);
         {
@@ -741,7 +801,9 @@ lcsas_repo_load_snapshots(const char *repo_path,
         if (paths_i >= 0 && toks[paths_i].type == LCSAS_JSON_ARRAY
                 && toks[paths_i].size > 0) {
             long t;
-            for (t = paths_i + 1; t <= paths_i + 64; t++) {
+            long t_end = paths_i + 64;
+            if (t_end >= ntoks) t_end = ntoks - 1;
+            for (t = paths_i + 1; t <= t_end; t++) {
                 if (toks[t].parent == paths_i
                         && toks[t].type == LCSAS_JSON_STRING) {
                     lcsas_json_decode_string((char *)plain, &toks[t],
@@ -754,6 +816,7 @@ lcsas_repo_load_snapshots(const char *repo_path,
 
         snap_list_push(out, &snap);
         free(plain);
+        free(toks);
     }
     closedir(d);
 

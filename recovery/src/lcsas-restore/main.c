@@ -38,6 +38,7 @@
  */
 #include "repo.h"
 #include "tree.h"
+#include "json_q.h"
 #include "lcsas_io.h"
 #include "catalog.h"
 #include "disc_locator.h"
@@ -363,6 +364,31 @@ main(int argc, char **argv)
         goto out;
     }
     if (verbose) fprintf(stderr, "[lcsas-restore] master key loaded\n");
+
+    /* T1C-01: optional ceiling on adaptive JSON token-buffer memory.
+     * Defaults to 256 MiB (see lcsas_json_max_tok_bytes); LCSAS_MAX_JSON_MIB
+     * overrides it.  This is both a test seam (clamp it tiny to force the
+     * "too large for tier-1" path) and an escape hatch on memory-starved
+     * 32-bit hosts. */
+    {
+        const char *env = getenv("LCSAS_MAX_JSON_MIB");
+        if (env && *env) {
+            char *endp = NULL;
+            unsigned long mib = strtoul(env, &endp, 10);
+            if (endp && *endp == '\0' && mib > 0) {
+                lcsas_json_max_tok_bytes = (size_t)mib * 1024UL * 1024UL;
+                if (verbose) {
+                    fprintf(stderr,
+                            "[lcsas-restore] JSON token-buffer ceiling: "
+                            "%lu MiB\n", mib);
+                }
+            } else {
+                fprintf(stderr,
+                        "WARNING: ignoring invalid LCSAS_MAX_JSON_MIB=%s "
+                        "(want a positive integer)\n", env);
+            }
+        }
+    }
 
     {
         /* The LCSAS_STRESS_LOOKUPS bench diagnostic is Linux-only —

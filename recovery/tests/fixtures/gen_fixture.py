@@ -1000,30 +1000,45 @@ def make_stress_fixture(
     n_orphans: int,
     n_files: int,
     n_subdirs: int,
+    dense_index: bool = False,
+    chunks_per_file: int = 1,
 ) -> tuple[str, str, str]:
     """Build a stress-test pack + index covering scaling characterisation.
 
     Layout:
       - 1 real data blob (small payload "hello\\n")
       - n_files file nodes split across n_subdirs sub-tree blobs, each
-        file content references the real data blob
+        file's content array references the real data blob
+        ``chunks_per_file`` times (default 1)
       - 1 root tree with n_subdirs dir nodes pointing at the sub-trees
-      - 1 encrypted index file containing the real blob descriptors AND
+      - 1+ encrypted index files containing the real blob descriptors AND
         n_orphans random-id orphan blob entries (never referenced from
         any tree — they inflate the index for lookup-time scaling stress)
 
     Returns (pack_id_hex, data_blob_id_hex, root_tree_id_hex).
 
-    Notes on token-budget safety: the tree.c JSON parser allocates 65536
-    tokens.  Each file node uses ~15-20 tokens, so each sub-tree should
-    hold no more than ~3000 files.  Caller should pick n_subdirs >=
-    n_files/3000.
+    Adaptive-parser exercise (T1C-01): tier-1 JSON parsing is now
+    size-adaptive (lcsas_json_parse_alloc grows the token buffer on
+    demand), so the fixture deliberately stresses the *wide* shapes the
+    old fixed-cap parser could not handle:
+
+      * ``dense_index=True`` writes ALL orphan entries into ONE index
+        file (bypassing the per-file split below) so a single index blob
+        carries tens of thousands of tokens — the case the petabyte test
+        sidesteps.
+      * a large ``n_files`` with ``n_subdirs=1`` produces one very wide
+        sub-tree blob (>100k tokens for n_files=5000).
+      * ``chunks_per_file`` repeats the data-blob id in one file node's
+        content array (valid restic semantics for a chunked file); set it
+        to e.g. 40,000 to exercise a single huge content list.
     """
     import os as _os
     import zstandard
 
     if n_files > 0 and n_subdirs < 1:
         raise ValueError("n_subdirs must be >= 1 when n_files > 0")
+    if chunks_per_file < 1:
+        raise ValueError("chunks_per_file must be >= 1")
 
     # ── Single real data blob ─────────────────────────────────────
     data_plain = b"hello from petabyte stress fixture\n"
@@ -1049,8 +1064,8 @@ def make_stress_fixture(
                 "mode": 420,
                 "mtime": "2026-05-21T00:00:00Z",
                 "uid": 1000, "gid": 1000,
-                "size": len(data_plain),
-                "content": [data_blob_id.hex()],
+                "size": len(data_plain) * chunks_per_file,
+                "content": [data_blob_id.hex()] * chunks_per_file,
             })
         sub_doc = {"nodes": nodes}
         sub_plain = json.dumps(sub_doc).encode()
@@ -1108,10 +1123,10 @@ def make_stress_fixture(
     (data_dir / pack_id_hex).write_bytes(pack_bytes)
 
     # ── Index files ───────────────────────────────────────────────
-    # The C JSON parser allocates a fixed token buffer per index file
-    # (32768 tokens in lcsas_repo_load_index → ~3500 blob entries max
-    # per file).  Split orphans across multiple index files; the loader
-    # already merges them.
+    # Tier-1 grows its JSON token buffer per file (lcsas_json_parse_alloc),
+    # so a single index file of any size parses fine; the loader still
+    # merges descriptors across multiple files.  The orphan split below is
+    # a fixture knob (see dense_index), not a parser constraint.
     index_dir = repo_dir / "index"
     index_dir.mkdir()
 
@@ -1145,10 +1160,14 @@ def make_stress_fixture(
 
     _write_index(real_blobs_json, 0x01)
 
-    # Orphan entries: split across ceil(n_orphans / ORPHANS_PER_FILE)
-    # additional index files.  3000 entries per file stays comfortably
-    # under the 32k-token JSON-parser ceiling in lcsas_repo_load_index.
-    ORPHANS_PER_FILE = 3000
+    # Orphan entries.  Tier-1 parsing is now size-adaptive
+    # (lcsas_json_parse_alloc), so the split below is purely a knob:
+    #   * dense_index=True  → one index file holds ALL n_orphans entries
+    #     (one dense blob, tens of thousands of tokens — the wide-index
+    #     case the old fixed-cap parser silently dropped).
+    #   * dense_index=False → split into ORPHANS_PER_FILE-sized chunks
+    #     (the historical layout; useful for many-files scaling stress).
+    ORPHANS_PER_FILE = n_orphans if dense_index else 3000
     if n_orphans > 0:
         remaining = n_orphans
         file_idx = 0
@@ -1202,8 +1221,16 @@ def main() -> int:
                     help="generate stress-test fixture instead of default. "
                          "N_ORPHANS = orphan blob index entries; "
                          "N_FILES = real files in restored tree; "
-                         "N_SUBDIRS = sub-tree blobs (N_FILES / N_SUBDIRS "
-                         "must be < ~3000 due to JSON token budget)")
+                         "N_SUBDIRS = sub-tree blobs.  Tier-1 parsing is "
+                         "size-adaptive so N_FILES/N_SUBDIRS is unconstrained; "
+                         "set N_SUBDIRS=1 to force one very wide sub-tree.")
+    p.add_argument("--dense-index", action="store_true",
+                    help="write all N_ORPHANS entries into ONE index file "
+                         "(stresses a single wide index blob)")
+    p.add_argument("--chunks-per-file", type=int, default=1,
+                    help="repeat the data-blob id this many times in each "
+                         "file's content array (stresses one huge content "
+                         "list / chunked file)")
     args = p.parse_args()
 
     if args.out.exists():
@@ -1243,7 +1270,9 @@ def main() -> int:
     if args.stress is not None:
         n_orphans, n_files, n_subdirs = args.stress
         pack_id, data_blob_id, tree_blob_id = make_stress_fixture(
-            args.out, n_orphans, n_files, n_subdirs
+            args.out, n_orphans, n_files, n_subdirs,
+            dense_index=args.dense_index,
+            chunks_per_file=args.chunks_per_file,
         )
         snap_id = make_stress_snapshot(args.out, tree_blob_id)
         manifest = {
@@ -1256,6 +1285,8 @@ def main() -> int:
             "n_orphan_blobs": n_orphans,
             "n_files": n_files,
             "n_subdirs": n_subdirs,
+            "dense_index": args.dense_index,
+            "chunks_per_file": args.chunks_per_file,
             "stress": True,
             "master_encrypt_hex": MASTER_ENCRYPT.hex(),
             "master_mac_k_hex": MASTER_MAC_K.hex(),

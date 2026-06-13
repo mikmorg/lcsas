@@ -5,6 +5,10 @@
  */
 #include "json_q.h"
 
+#include <stdlib.h>
+
+size_t lcsas_json_max_tok_bytes = (size_t)256 * 1024 * 1024;
+
 typedef struct {
     const char *src;
     size_t len;
@@ -230,6 +234,56 @@ lcsas_json_parse(const char *src, size_t len,
     skip_ws(&p);
     if (p.pos != len) return -1;
     return p.ntoks;
+}
+
+long
+lcsas_json_parse_alloc(const char *src, size_t len,
+                       lcsas_json_tok **toks_out, size_t initial_toks)
+{
+    size_t cap;
+    size_t ceil_toks;
+    size_t max_toks_by_bytes;
+
+    *toks_out = NULL;
+    if (initial_toks < 1) initial_toks = 1;
+
+    /* Exact upper bound: each token consumes >= 1 source byte, so a
+     * len-byte document holds at most len tokens; +1 covers the empty /
+     * single-literal document. */
+    ceil_toks = len + 1;
+
+    /* Memory ceiling, in tokens.  Guard the divide against a zero-or-
+     * tiny override that would make the ceiling 0. */
+    max_toks_by_bytes = lcsas_json_max_tok_bytes / sizeof(lcsas_json_tok);
+    if (max_toks_by_bytes < 1) max_toks_by_bytes = 1;
+    if (ceil_toks > max_toks_by_bytes) ceil_toks = max_toks_by_bytes;
+
+    cap = initial_toks;
+    if (cap > ceil_toks) cap = ceil_toks;
+
+    for (;;) {
+        lcsas_json_tok *toks;
+        long rc;
+
+        /* calloc (zero-init): some call-site tok-walks read one slot
+         * past the last parsed token as a loop guard, and rely on that
+         * slot being zeroed rather than uninitialized heap. */
+        toks = (lcsas_json_tok *)calloc(cap, sizeof(lcsas_json_tok));
+        if (!toks) return -3;
+
+        rc = lcsas_json_parse(src, len, toks, cap);
+        if (rc >= 0) {
+            *toks_out = toks;
+            return rc;
+        }
+        free(toks);
+        if (rc == -1) return -1;          /* malformed: growing won't help */
+
+        /* rc == -2: cap-hit.  Grow unless we are already at the ceiling. */
+        if (cap >= ceil_toks) return -2;
+        cap *= 2;
+        if (cap > ceil_toks) cap = ceil_toks;
+    }
 }
 
 /*

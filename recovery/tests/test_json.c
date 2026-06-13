@@ -3,6 +3,7 @@
  */
 #include "json_q.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int fails = 0;
@@ -240,6 +241,84 @@ int main(void)
         if (got != 3 || memcmp(buf, "ABC", 3) != 0) {
             fprintf(stderr,
                     "FAIL \\u0041 should decode to 'ABC', got %ld bytes\n", got);
+            fails++;
+        }
+    }
+
+    /* T1C-01: lcsas_json_parse_alloc growth — an array of 10,000
+     * numbers needs ~10,001 tokens, far past the initial=16 buffer.
+     * The wrapper must double until it fits and return the exact
+     * count without aborting. */
+    {
+        size_t cap = 64 * 1024;     /* big enough for "[" + 10k "N," + "]" */
+        char *src = (char *)malloc(cap);
+        size_t pos = 0;
+        int i;
+        lcsas_json_tok *toks = NULL;
+        long ntoks;
+
+        if (!src) { fprintf(stderr, "FAIL alloc src\n"); fails++; }
+        else {
+            src[pos++] = '[';
+            for (i = 0; i < 10000; i++) {
+                pos += (size_t)sprintf(src + pos, "%d", i % 10);
+                if (i != 9999) src[pos++] = ',';
+            }
+            src[pos++] = ']';
+            ntoks = lcsas_json_parse_alloc(src, pos, &toks, 16);
+            /* 1 array token + 10,000 number tokens. */
+            if (ntoks != 10001) {
+                fprintf(stderr, "FAIL parse_alloc growth ntoks=%ld\n", ntoks);
+                fails++;
+            }
+            if (toks == NULL || toks[0].type != LCSAS_JSON_ARRAY
+                    || toks[0].size != 10000) {
+                fprintf(stderr, "FAIL parse_alloc array shape\n");
+                fails++;
+            }
+            free(toks);
+            free(src);
+        }
+    }
+
+    /* T1C-01: ceiling case — clamp lcsas_json_max_tok_bytes so tiny
+     * that even a small array overflows.  The wrapper must return -2
+     * (over ceiling), NOT -1 (malformed): the JSON is well-formed,
+     * we simply refuse to allocate enough tokens. */
+    {
+        const char *src = "[1,2,3,4,5,6,7,8,9,10]";
+        lcsas_json_tok *toks = (lcsas_json_tok *)0x1; /* poison */
+        long ntoks;
+        size_t saved = lcsas_json_max_tok_bytes;
+
+        lcsas_json_max_tok_bytes = sizeof(lcsas_json_tok); /* 1 token */
+        ntoks = lcsas_json_parse_alloc(src, strlen(src), &toks, 4);
+        lcsas_json_max_tok_bytes = saved;
+
+        if (ntoks != -2) {
+            fprintf(stderr, "FAIL parse_alloc ceiling rc=%ld (want -2)\n",
+                    ntoks);
+            fails++;
+        }
+        if (toks != NULL) {
+            fprintf(stderr, "FAIL parse_alloc must NULL toks_out on failure\n");
+            fails++;
+        }
+    }
+
+    /* T1C-01: malformed input through parse_alloc returns -1, and
+     * growing must not be attempted (it would never help). */
+    {
+        const char *src = "{\"k\":}";
+        lcsas_json_tok *toks = NULL;
+        long ntoks = lcsas_json_parse_alloc(src, strlen(src), &toks, 4);
+        if (ntoks != -1) {
+            fprintf(stderr, "FAIL parse_alloc malformed rc=%ld (want -1)\n",
+                    ntoks);
+            fails++;
+        }
+        if (toks != NULL) {
+            fprintf(stderr, "FAIL parse_alloc malformed leaked toks\n");
             fails++;
         }
     }
