@@ -316,7 +316,7 @@ def scan_and_register(conn: sqlite3.Connection, repos: dict[str, Path]) -> int:
 
     total_packs = 0
     for repo_name, repo_path in repos.items():
-        scanned = scan_mirror_packs(repo_path)
+        scanned = scan_mirror_packs(repo_path).packs
         info(f"{repo_name}: found {len(scanned)} packs ({sum(scanned.values()):,} bytes)")
 
         delta = DeltaAnalyzer(conn, scanned, repo_id=repo_name)
