@@ -49,8 +49,15 @@ jobs:
           # figure the EXEMPTIONS contract is authored against -> false drift.
           pip3 install --break-system-packages -e ".[dev]"
 
-      - name: Run audit-gate (default 60% threshold)
-        run: make -C recovery audit-gate THRESHOLD=60
+      - name: Run audit-gate (CI threshold 83 = local 88 floor − 5 pt measured CI delta)
+        # THRESHOLD is a *derived* number, not a magic constant: it is the
+        # authoritative local floor (recovery/Makefile THRESHOLD ?= 88) minus
+        # the ~5 pt CI-environment delta explained in the Install step above
+        # (lines 36-42 / the conftest+lcsas-install effect). If a CI run shows
+        # the real delta differs, set the highest reliably-passing value and
+        # update this comment with the measurement — keep the 88 relationship.
+        # test_audit_gate_threshold_parity.py pins ci >= local - 5.
+        run: make -C recovery audit-gate THRESHOLD=83
         env:
           # Soft-skip LCSAS_SANITIZE and LCSAS_COVERAGE opt-in flags
           # are not needed here — audit-gate calls the targets directly.

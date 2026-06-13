@@ -73,8 +73,13 @@ def main() -> int:
             failures.append((short, line_pct))
 
     if not rows:
-        print("[coverage_check] WARNING: no src/lcsas-restore/*.c files found in report", file=sys.stderr)
-        return 0
+        print(
+            "[coverage_check] ERROR: no src/lcsas-restore/*.c files found "
+            "in report — gcovr filter/path drift has emptied the coverage "
+            "report; the threshold gate cannot run. Failing closed.",
+            file=sys.stderr,
+        )
+        return 1
 
     max_name = max(len(r[0]) for r in rows)
     print(f"\n{'File':<{max_name}}  {'Line%':>7}  {'Status':>12}")

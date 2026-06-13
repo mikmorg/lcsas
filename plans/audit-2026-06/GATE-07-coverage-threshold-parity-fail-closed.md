@@ -114,3 +114,6 @@ No catalog/schema impact.
 
 1 day: 0.25 checker + unit tests, 0.25 workflow/docs, 0.5 measuring the real
 CI floor (one or two scratch-branch audit-gate runs). No special environment.
+
+---
+**Implemented:** 2026-06-13. As planned: coverage_check.py fails closed on empty report; CI THRESHOLD 60→83 (88 local floor − 5pt CI delta); AUDIT.md lines 11/320 reconciled; added test_coverage_check_fail_closed.py + test_audit_gate_threshold_parity.py. Real CI run deferred to next checkpoint push (cannot trigger hosted runner locally).

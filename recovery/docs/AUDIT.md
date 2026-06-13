@@ -8,7 +8,7 @@ tier-1 C binary.
 ## Quick start
 
 ```bash
-# From repo root (default threshold 60%):
+# From repo root (default threshold 88% — the measured floor):
 make audit-gate
 
 # With aspirational threshold:
@@ -317,4 +317,8 @@ See `.github/workflows/audit-gate.yml` (issue #163).  The workflow
 triggers on pushes to paths matching `recovery/src/lcsas-restore/**`,
 `recovery/tests/**`, `recovery/fuzz/**`, and `recovery/Makefile`.
 
-It runs `make -C recovery audit-gate` with the default threshold.
+It runs `make -C recovery audit-gate THRESHOLD=83` — the local 88% floor
+(`recovery/Makefile` `THRESHOLD ?= 88`) minus the measured ~5 pt CI
+environment delta (the conftest/lcsas-install effect; see the workflow's
+Install step comment). The parity is pinned by
+`tests/recovery_hardening/test_audit_gate_threshold_parity.py`.
