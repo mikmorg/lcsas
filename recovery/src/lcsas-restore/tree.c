@@ -73,6 +73,26 @@ typedef struct {
     size_t cap;
 } hardlink_map;
 
+/* Decode a JSON string into a path component, rejecting any embedded
+ * NUL byte.  The decoder returns the TRUE decoded length, but a JSON
+ * NUL escape (backslash-u-0000) lands a literal NUL in `out` while the
+ * resulting C string truncates there -- so two distinct names whose
+ * bytes differ only after a NUL would collide to the same restored
+ * path (T1C-03).  Comparing the returned length against strlen(out)
+ * detects the truncation.  Returns the length on success, -1 on a
+ * plain decode failure (overflow / bad escape), or DECODE_PATH_NUL
+ * when the decode succeeded but the value contains an embedded NUL. */
+#define DECODE_PATH_NUL (-2)
+static long
+decode_path_component(const char *src, const lcsas_json_tok *tok,
+                      char *out, size_t cap)
+{
+    long n = lcsas_json_decode_string(src, tok, out, cap);
+    if (n < 0) return -1;
+    if ((size_t)n != strlen(out)) return DECODE_PATH_NUL;
+    return n;
+}
+
 static void
 hardlink_map_init(hardlink_map *m)
 {
@@ -827,9 +847,18 @@ tree_restore_recurse(const char *repo_path,
             char node_path[4096];
 
             if (name_i < 0 || type_i < 0) continue;
-            if (lcsas_json_decode_string((char *)blob, &toks[name_i],
-                                         name_buf, sizeof name_buf) < 0)
-                continue;
+            {
+                long nrc = decode_path_component((char *)blob,
+                                                 &toks[name_i],
+                                                 name_buf,
+                                                 sizeof name_buf);
+                if (nrc == DECODE_PATH_NUL) {
+                    fprintf(stderr,
+                            "skip unsafe name (embedded NUL)\n");
+                    continue;
+                }
+                if (nrc < 0) continue;  /* overflow / bad escape */
+            }
             if (lcsas_json_decode_string((char *)blob, &toks[type_i],
                                          type_buf, sizeof type_buf) < 0)
                 continue;
@@ -927,8 +956,16 @@ tree_restore_recurse(const char *repo_path,
             } else if (strcmp(type_buf, "symlink") == 0) {
                 if (lt_i >= 0) {
                     char tgt[1024];
-                    if (lcsas_json_decode_string((char *)blob, &toks[lt_i],
-                                                 tgt, sizeof tgt) < 0) continue;
+                    long lrc = decode_path_component((char *)blob,
+                                                     &toks[lt_i],
+                                                     tgt, sizeof tgt);
+                    if (lrc == DECODE_PATH_NUL) {
+                        fprintf(stderr,
+                                "skip unsafe symlink "
+                                "(embedded NUL in target)\n");
+                        continue;
+                    }
+                    if (lrc < 0) continue;  /* overflow / bad escape */
                     if (lcsas_path_safe_symlink(target_root,
                                                 target_dir, tgt) != 0) {
                         fprintf(stderr, "skip unsafe symlink %s -> %s\n",

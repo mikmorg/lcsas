@@ -58,6 +58,8 @@ IV_XATTR   = b"\x16" + b"\x00" * 15  # xattr content blob in pack
 IV_HLINK   = b"\x17" + b"\x00" * 15  # hardlink content blob in pack
 IV_TZ      = b"\x18" + b"\x00" * 15  # trailing-zeros data blob in pack
 IV_ZMAGIC  = b"\x19" + b"\x00" * 15  # uncompressed blob whose content is a zstd frame
+IV_NULNAME      = b"\x1a" + b"\x00" * 15  # T1C-03 nul-name tree blob in pack
+IV_NULSIB_DATA  = b"\x1b" + b"\x00" * 15  # T1C-03 sibling "evil" content blob
 
 N, R, P = 16384, 8, 1  # smaller-than-default scrypt params to keep
                         # gen + test fast (still safe for fixture use)
@@ -198,6 +200,18 @@ def make_pack_and_index(
     zmagic_blob_id = sha256(zmagic_plain)
     zmagic_enc = encrypt_authenticated(
         MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_ZMAGIC, zmagic_plain
+    )
+
+    # ── T1C-03 nul-name sibling content blob ─────────────────────────
+    # The legitimate sibling node "evil" carries this content.  The
+    # hostile node "evil\0x" must be skipped (embedded NUL) so it
+    # never collides with / overwrites this content at the same path.
+    nulsib_plain = b"the real sibling content\n"
+    nulsib_blob_id = sha256(nulsib_plain)
+    nulsib_compressed = zstandard.ZstdCompressor().compress(nulsib_plain)
+    nulsib_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        IV_NULSIB_DATA, nulsib_compressed
     )
 
     # ── Sub-tree (nested directory contents) ──────────────────────
@@ -560,6 +574,44 @@ def make_pack_and_index(
         b"\x12" + b"\x00" * 15, long_type_plain
     )
 
+    # ── T1C-03 nul-name tree ─────────────────────────────────────────
+    # Two file nodes that would map to the SAME restored basename if the
+    # decoder's embedded NUL were not caught: the legitimate sibling
+    # "evil" and a hostile "evil\0x".  C-string truncation at the NUL
+    # makes "evil\0x" → "evil".  Order is sibling-FIRST, hostile-
+    # SECOND so that the *buggy* behaviour (write hostile over sibling)
+    # would clobber the sibling's content — the test then bites.  With
+    # the fix the hostile node is skipped and "evil" keeps its content.
+    nul_name_doc = {
+        "nodes": [
+            {
+                "name": "evil",
+                "type": "file",
+                "mode": 420,
+                "mtime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "size": len(nulsib_plain),
+                "content": [nulsib_blob_id.hex()],
+            },
+            {
+                "name": "evil" + chr(0) + "x",  # -> ` `
+                "type": "file",
+                "mode": 420,
+                "mtime": "2026-05-21T00:00:00Z",
+                "uid": 1000, "gid": 1000,
+                "size": len(data_plain),
+                "content": [data_blob_id.hex()],   # different content
+            },
+        ]
+    }
+    nul_name_plain = json.dumps(nul_name_doc).encode()
+    assert b"\\u0000" in nul_name_plain  # the embedded-NUL vector
+    nul_name_blob_id = sha256(nul_name_plain)
+    nul_name_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        IV_NULNAME, nul_name_plain
+    )
+
     # ── Pack file: data + sub_tree + root_tree blobs + header + footer ──
     # Restic pack format (v1):
     #   [blob 1 ciphertext]...[encrypted header][4-byte LE header length]
@@ -571,6 +623,7 @@ def make_pack_and_index(
                  + broken_tree_enc + bad_hex_tree_enc + bad_subdir_tree_enc
                  + wrong_nodes_enc + long_name_enc + long_type_enc
                  + missing_content_tree_enc
+                 + nul_name_enc + nulsib_enc
                  + xattr_enc + hlink_enc + trailing_zeros_enc + zmagic_enc)
     off_data            = 0
     off_sub             = len(data_enc)
@@ -582,7 +635,9 @@ def make_pack_and_index(
     off_long_name       = off_wrong_nodes + len(wrong_nodes_enc)
     off_long_type       = off_long_name + len(long_name_enc)
     off_missing_content = off_long_type + len(long_type_enc)
-    off_xattr           = off_missing_content + len(missing_content_tree_enc)
+    off_nul_name        = off_missing_content + len(missing_content_tree_enc)
+    off_nulsib          = off_nul_name + len(nul_name_enc)
+    off_xattr           = off_nulsib + len(nulsib_enc)
     off_hlink           = off_xattr + len(xattr_enc)
     off_trailing_zeros  = off_hlink + len(hlink_enc)
     off_zmagic          = off_trailing_zeros + len(trailing_zeros_enc)
@@ -597,6 +652,8 @@ def make_pack_and_index(
         "long_name":        (off_long_name,       len(long_name_enc)),
         "long_type":        (off_long_type,       len(long_type_enc)),
         "missing_content":  (off_missing_content, len(missing_content_tree_enc)),
+        "nul_name":         (off_nul_name,        len(nul_name_enc)),
+        "nulsib":           (off_nulsib,          len(nulsib_enc)),
         "xattr":            (off_xattr,           len(xattr_enc)),
         "hlink":            (off_hlink,           len(hlink_enc)),
         "trailing_zeros":   (off_trailing_zeros,  len(trailing_zeros_enc)),
@@ -616,6 +673,8 @@ def make_pack_and_index(
         (1, long_name_blob_id,       offsets["long_name"]),
         (1, long_type_blob_id,       offsets["long_type"]),
         (1, missing_content_tree_blob_id, offsets["missing_content"]),
+        (1, nul_name_blob_id,         offsets["nul_name"]),
+        (0, nulsib_blob_id,           offsets["nulsib"]),
         (0, xattr_blob_id,            offsets["xattr"]),
         (0, hlink_blob_id,            offsets["hlink"]),
         (0, trailing_zeros_blob_id,   offsets["trailing_zeros"]),
@@ -707,6 +766,21 @@ def make_pack_and_index(
                         "type": "tree",
                         "offset": offsets["missing_content"][0],
                         "length": offsets["missing_content"][1],
+                    },
+                    {
+                        # T1C-03 nul-name tree.
+                        "id": nul_name_blob_id.hex(),
+                        "type": "tree",
+                        "offset": offsets["nul_name"][0],
+                        "length": offsets["nul_name"][1],
+                    },
+                    {
+                        # T1C-03 sibling "evil" content blob.
+                        "id": nulsib_blob_id.hex(),
+                        "type": "data",
+                        "offset": offsets["nulsib"][0],
+                        "length": offsets["nulsib"][1],
+                        "uncompressed_length": len(nulsib_plain),
                     },
                     {
                         # Xattr content blob — referenced by xattr_test_file
@@ -926,6 +1000,7 @@ def make_pack_and_index(
     global MISSING_CONTENT_TREE_ID, MISSING_TREE_ID
     global XATTR_BLOB_ID, HLINK_BLOB_ID, TRAILING_ZEROS_BLOB_ID
     global ZMAGIC_BLOB_ID
+    global NUL_NAME_TREE_ID, NULSIB_BLOB_ID
     BROKEN_TREE_ID = broken_tree_blob_id.hex()
     BAD_HEX_TREE_ID = bad_hex_tree_blob_id.hex()
     BAD_SUBDIR_TREE_ID = bad_subdir_tree_blob_id.hex()
@@ -938,6 +1013,8 @@ def make_pack_and_index(
     HLINK_BLOB_ID = hlink_blob_id.hex()
     TRAILING_ZEROS_BLOB_ID = trailing_zeros_blob_id.hex()
     ZMAGIC_BLOB_ID = zmagic_blob_id.hex()
+    NUL_NAME_TREE_ID = nul_name_blob_id.hex()
+    NULSIB_BLOB_ID = nulsib_blob_id.hex()
 
     return pack_id_hex, data_blob_id.hex(), tree_blob_id.hex(), tree_blob_id.hex()
 
@@ -955,6 +1032,8 @@ XATTR_BLOB_ID = ""
 HLINK_BLOB_ID = ""
 TRAILING_ZEROS_BLOB_ID = ""
 ZMAGIC_BLOB_ID = ""
+NUL_NAME_TREE_ID = ""
+NULSIB_BLOB_ID = ""
 
 
 def make_snapshot(repo_dir: Path, tree_id_hex: str,
@@ -1352,6 +1431,8 @@ def main() -> int:
             "hlink_blob_id": HLINK_BLOB_ID,
             "trailing_zeros_blob_id": TRAILING_ZEROS_BLOB_ID,
             "zmagic_blob_id": ZMAGIC_BLOB_ID,
+            "nul_name_tree_id": NUL_NAME_TREE_ID,
+            "nulsib_blob_id": NULSIB_BLOB_ID,
             "snapshot_id": snap_id,
             "broken_snapshot_id": BROKEN_SNAP_ID,
             "master_encrypt_hex": MASTER_ENCRYPT.hex(),

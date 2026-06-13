@@ -54,7 +54,9 @@ int main(void)
     expect_sym("relative escape", "/restore", "/restore/a", "../../etc/passwd", 0);
     /* Absolute targets allowed (issue #187 — user decision to match
      * tier-2 / rustic behaviour).  See path.c comment for the
-     * containment-property tradeoff. */
+     * containment-property tradeoff.  FORMAT.txt PATH SAFETY documents
+     * this as "restored as-is ... containment is NOT guaranteed"
+     * (reconciled in T1C-03 — the doc previously claimed rejection). */
     expect_sym("absolute",        "/restore", "/restore/a", "/etc/passwd",      1);
     expect_sym("dotdot to root",  "/restore", "/restore/a", "..",       1);  /* lands at /restore */
     expect_sym("dotdot past root","/restore", "/restore",   "..",       0);

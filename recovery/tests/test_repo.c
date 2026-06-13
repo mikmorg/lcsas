@@ -36,7 +36,7 @@ static int fails = 0;
 #define FIXTURE_TREE_BLOB_HEX  \
     "68255a117162e193d9a8e4940756c5754b20eb2e9f6e8934d68b31bcd0f5aa20"
 #define FIXTURE_PACK_HEX       \
-    "0201a52fbef6c4772f3e9f5674480d1343ddf8b440d0f8c89a18bd6d16a7330a"
+    "303294d19875abfad5ac347ac2f0a586936efd2850b7252378cafac5c4bd3ec6"
 /* RST-02: a data blob stored UNcompressed whose plaintext is itself a
  * zstd frame; index entry has no uncompressed_length.  read_blob must
  * return it verbatim (no false decompression). */
@@ -63,6 +63,14 @@ static int fails = 0;
 /* Fictional tree blob whose pack file does not exist on disk. */
 #define FIXTURE_MISSING_TREE_HEX \
     "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+/* T1C-03: tree with a legitimate "evil" file plus a hostile "evil\0x"
+ * whose name carries a JSON ` ` escape (literal NUL).  Both map to
+ * basename "evil" under C-string truncation; the hostile node must be
+ * skipped so the sibling's content survives intact. */
+#define FIXTURE_NUL_NAME_TREE_HEX \
+    "39b129393d23aac68106bff79a945674dd27f077f6e02234a7c91677750fb9a9"
+/* Content of the legitimate "evil" sibling (== nulsib_plain). */
+#define FIXTURE_NUL_SIBLING_CONTENT "the real sibling content\n"
 
 /* Locate the fixture directory.  Honour LCSAS_TEST_FIXTURE_DIR for
  * out-of-tree builds; otherwise assume cwd is repo root or recovery/. */
@@ -220,8 +228,8 @@ main(void)
             fprintf(stderr, "FAIL: load_index rc=%d\n", rc);
             fails++;
         }
-        if (ix.count != 16) {
-            fprintf(stderr, "FAIL: index count=%zu, want 16\n", ix.count);
+        if (ix.count != 18) {
+            fprintf(stderr, "FAIL: index count=%zu, want 18\n", ix.count);
             fails++;
         }
 
@@ -301,8 +309,8 @@ main(void)
             fprintf(stderr, "FAIL: T1C-02 load_index rc=%d\n", rc);
             fails++;
         }
-        if (ix.count != 16) {
-            fprintf(stderr, "FAIL: T1C-02 index count=%zu, want 16 "
+        if (ix.count != 18) {
+            fprintf(stderr, "FAIL: T1C-02 index count=%zu, want 18 "
                     "(oversized entries must be dropped)\n", ix.count);
             fails++;
         }
@@ -844,6 +852,56 @@ main(void)
                     fprintf(stderr,
                             "FAIL: long-type tree should rc=0, got %d\n", rc2);
                     fails++;
+                }
+                {
+                    char cmd[1024];
+                    snprintf(cmd, sizeof cmd, "rm -rf %s", tdir);
+                    (void)system(cmd);
+                }
+            }
+        }
+
+        /* T1C-03: nul-name tree.  A legitimate "evil" file plus a
+         * hostile "evil\0x" (JSON ` ` escape) both reduce to
+         * basename "evil" under C-string truncation.  The hostile node
+         * must be skipped (embedded NUL) so it never overwrites the
+         * sibling.  Assert the restore succeeds (rc=0, skip-and-
+         * continue) AND that "evil" holds the SIBLING's content, not
+         * the hostile node's. */
+        {
+            char tdir[] = "/tmp/lcsas_test_nul_name_XXXXXX";
+            if (mkdtemp(tdir)) {
+                int rc2 = lcsas_tree_restore(
+                    repo, &mk, &ix, FIXTURE_NUL_NAME_TREE_HEX,
+                    tdir, tdir, NULL, NULL
+                );
+                if (rc2 != 0) {
+                    fprintf(stderr,
+                            "FAIL: nul-name tree should rc=0, got %d\n", rc2);
+                    fails++;
+                }
+                {
+                    char path[1100];
+                    char buf[256];
+                    FILE *f;
+                    size_t n;
+                    snprintf(path, sizeof path, "%s/evil", tdir);
+                    f = fopen(path, "rb");
+                    if (!f) {
+                        fprintf(stderr,
+                                "FAIL: nul-name 'evil' not restored\n");
+                        fails++;
+                    } else {
+                        n = fread(buf, 1, sizeof buf - 1, f);
+                        fclose(f);
+                        buf[n] = '\0';
+                        if (strcmp(buf, FIXTURE_NUL_SIBLING_CONTENT) != 0) {
+                            fprintf(stderr,
+                                    "FAIL: nul-name collision — 'evil' has "
+                                    "wrong content: %s\n", buf);
+                            fails++;
+                        }
+                    }
                 }
                 {
                     char cmd[1024];

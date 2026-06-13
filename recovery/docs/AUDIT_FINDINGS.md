@@ -128,3 +128,23 @@ Note: `arena.c` (was 0%) was deleted in PR #175 — dead code with no callers.
 | BUG-3 | repo.c:429 (lcsas_repo_load_index)    | silent index cap at 2048           | medium   | Phase-0 audit  | fixed in PR #169            |
 | BUG-4 | repo.c:480 (lcsas_repo_load_index)    | silent supersedes cap at 8192 (fail-loud) | medium | Phase-0 audit | fixed in PR #169           |
 | BUG-5 | disc_locator.c (5 sites)        | silent path-too-long drops at 5 sites   | low      | Phase-0 audit  | fixed in PR #169            |
+| T1C-03 | tree.c (name + linktarget decode) | embedded-NUL path collision (` ` escape truncates C string; two entries map to one path) | medium | audit-2026-06 | fixed (decode_path_component length-checks decode) |
+
+## FORMAT.txt corrections (on-disc spec drift)
+
+`recovery/docs/FORMAT.txt` is copied onto every burned disc.  Copies on
+discs burned BEFORE 2026-06-13 carry an outdated PATH SAFETY claim; a
+future reader pairing an old disc with newer source should apply this
+correction:
+
+- **Absolute symlink targets (T1C-03).** Old FORMAT.txt said symlinks
+  with an absolute `linktarget` are REJECTED.  The binary has allowed
+  absolute targets since issue #187 (rustic/tier-2 parity); the spec
+  was reconciled on 2026-06-13 to say absolute targets are restored
+  as-is with NO restore-tree containment guarantee.  Only RELATIVE
+  linktargets that lexically escape the restore root are rejected.  The
+  code (`path.c:lcsas_path_safe_symlink`) never changed — only the doc.
+- **NUL in names (T1C-03).** The NUL-rejection claim was always in the
+  spec but was not enforced for names until 2026-06-13
+  (`tree.c:decode_path_component`).  Old discs' binaries do not reject
+  embedded-NUL names; rebuilt binaries do.

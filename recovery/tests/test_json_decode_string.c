@@ -259,6 +259,37 @@ int main(void)
          * present, would catch any actual out-of-bounds write. */
     }
 
+    /* 8. T1C-03: ` ` decodes to a literal NUL byte.  The decoder
+     *    reports the TRUE length (3 for "a\0b"), but the resulting C
+     *    string truncates at out[1].  This documents why path-bearing
+     *    callers must length-check decode against strlen rather than
+     *    trusting the C string -- otherwise "a\0b" and "a" collide. */
+    {
+        const char *src = "{\"k\":\"a\\u0000b\"}";
+        lcsas_json_tok toks[8];
+        char buf[8];
+        long idx, rc;
+        memset(buf, GUARD, sizeof buf);
+        idx = parse_and_find(src, "k", toks, 8);
+        rc = lcsas_json_decode_string(src, &toks[idx], buf, sizeof buf);
+        if (rc != 3) {
+            fprintf(stderr, "FAIL nul-escape: rc=%ld (expected 3)\n", rc);
+            fails++;
+        }
+        if (buf[0] != 'a' || buf[1] != '\0' || buf[2] != 'b') {
+            fprintf(stderr, "FAIL nul-escape: bad bytes %02x %02x %02x\n",
+                    (unsigned char)buf[0], (unsigned char)buf[1],
+                    (unsigned char)buf[2]);
+            fails++;
+        }
+        /* The C string truncates at the NUL even though rc==3. */
+        if (strlen(buf) != 1) {
+            fprintf(stderr, "FAIL nul-escape: strlen=%zu (expected 1)\n",
+                    strlen(buf));
+            fails++;
+        }
+    }
+
     if (fails == 0) printf("test_json_decode_string: OK\n");
     return fails ? 1 : 0;
 }

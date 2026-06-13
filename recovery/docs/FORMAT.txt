@@ -160,8 +160,10 @@ PATH SAFETY
 
   When materializing a tree:
    - REJECT any "name" that contains "/" or ".." or NUL bytes.
-   - REJECT symlinks whose "linktarget" is absolute or whose lexically-
-     resolved target escapes the restore root.
+   - Symlinks whose "linktarget" is ABSOLUTE are restored as-is (matching
+     rustic; see issue #187).  Containment of the restore tree is NOT
+     guaranteed for absolute symlinks.  REJECT symlinks whose RELATIVE
+     linktarget lexically escapes the restore root.
 
   See src/lcsas-restore/path.c.
 
