@@ -81,3 +81,24 @@ def test_rebuild_section_explains_resurrection_warning():
         "The mixed-age rebuild section of RECOVER.txt does not tell the "
         "operator to check a warned disc with 'lcsas verify <label> --disc'."
     )
+
+
+def test_rebuild_section_documents_newest_session_staging_gap():
+    """FMA-10: a disc cannot record its own burn (its holographic catalog
+    is frozen at STAGING time), so the newest session looks unfinished
+    after a disc-rebuild.  Operators must find that documented as EXPECTED
+    plus the remedy, or they will mistake it for corruption / data loss."""
+    window = _section_window()
+    assert "STAGING" in window, (
+        "RECOVER.txt does not document that the newest session's volumes "
+        "appear as STAGING after a disc-rebuild (FMA-10)."
+    )
+    assert "EXPECTED" in window or "expected" in window, (
+        "RECOVER.txt does not state that the STAGING/no-location appearance "
+        "of the newest session is EXPECTED, not corruption (FMA-10)."
+    )
+    assert "import-receipts" in window, (
+        "RECOVER.txt does not point operators at 'lcsas catalog "
+        "import-receipts' to re-ingest the newest session's burn "
+        "provenance (FMA-10)."
+    )

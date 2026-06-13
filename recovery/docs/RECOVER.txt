@@ -439,3 +439,27 @@ be readable despite what the catalog says — check it with:
 A restore plan generated from the rebuilt catalog will list packs
 that exist only on deprecated/destroyed volumes separately, so you
 know which data depends on discs that may no longer exist.
+
+CAVEAT: the NEWEST session's volumes look unfinished after a rebuild.
+A disc's holographic catalog is copied onto it at STAGING time, before
+the burn happens, so a disc cannot record its own burn.  The very
+latest session therefore appears in a disc-rebuilt catalog as STAGING
+volumes with no locations and no verification history, and the newest
+discs' ISO hashes may be absent.  This is EXPECTED, not corruption:
+restore still works (the packs are on the discs).  What is missing is
+operational metadata — where copies live and what was verified.  To
+re-establish it, run:
+
+    lcsas verify <label> --disc
+
+for each fresh disc you hold; this records the copy at its location
+with a fresh verification.  Older sessions are unaffected — their
+burn provenance was captured on later discs and is merged back in
+(volume_events, burn_sessions, and session_volumes all survive the
+rebuild).
+
+OPERATOR HABIT: keep the latest session's receipts/ JSON files with
+your printed estate papers.  After a rebuild they re-ingest the burn
+locations and ISO hashes for the newest discs in one step:
+
+    lcsas catalog import-receipts /path/to/receipts/*.json

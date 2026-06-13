@@ -868,6 +868,38 @@ class TestBurnSession:
             copies = get_copies_for_volume(conn, receipt.volume_id)
             assert any(c.location == "Home_Shelf" for c in copies)
 
+    def test_burn_records_iso_sha256_on_copy(self, orch_env):
+        """FMA-10/FMA-04: a verified burn writes the copy row with the
+        same non-NULL iso_sha256 the session volume recorded at stage —
+        the portable SHA-256 verify fallback depends on it surviving."""
+        from lcsas.db.sessions import get_session_volumes
+        from lcsas.db.volume_copies import get_copies_for_volume
+
+        session_id = self._create_staged_session(orch_env)
+        orch = orch_env["orch"]
+        conn = orch_env["conn"]
+        xorriso = orch_env["xorriso"]
+
+        xorriso.verify_disc.return_value = True
+        xorriso.burn_iso.return_value = None
+
+        receipts = orch.burn_session(
+            session_ref=session_id,
+            location="Home_Shelf",
+            skip_burn=False,
+        )
+        assert receipts
+
+        sv = {s.volume_id: s for s in get_session_volumes(conn, session_id)}
+        for receipt in receipts:
+            assert receipt.verify_passed
+            stage_hash = sv[receipt.volume_id].iso_sha256
+            assert stage_hash  # stage recorded a real hash
+            copies = get_copies_for_volume(conn, receipt.volume_id)
+            home = [c for c in copies if c.location == "Home_Shelf"]
+            assert home, "no copy recorded at the burn location"
+            assert home[0].iso_sha256 == stage_hash
+
     def test_burn_session_latest_resolves(self, orch_env):
         """burn_session('latest') finds the most recent session."""
         self._create_staged_session(orch_env)

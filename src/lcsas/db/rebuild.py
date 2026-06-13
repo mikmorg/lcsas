@@ -93,6 +93,9 @@ class RebuildResult:
     packs_merged: int = 0
     snapshots_merged: int = 0
     locations_merged: int = 0
+    events_merged: int = 0
+    sessions_merged: int = 0
+    session_volumes_merged: int = 0
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -299,6 +302,89 @@ def _merge_one_disc(
         )
         counts["volume_copies"] = cur.rowcount
 
+        # 8. Provenance/audit tables (FMA-10).  These arrived after the
+        #    earliest holographic catalogs, so a disc burned before them
+        #    simply lacks the table; probe sqlite_master and skip the
+        #    merge for that disc rather than failing the whole rebuild.
+        src_tables = {
+            r[0] for r in target.execute(
+                f"SELECT name FROM {alias}.sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+
+        # 8a. volume_events — keyed on (volume uuid, event_type, event_date).
+        #     The event_id autoincrement differs across DBs, so translate
+        #     volume_id via uuid and let INSERT OR IGNORE dedupe on the
+        #     natural triple (enforced by the unique index below at write
+        #     time; here we guard with NOT EXISTS since the live schema's
+        #     PK is the surrogate event_id).
+        if "volume_events" in src_tables:
+            cur = target.execute(
+                f"""
+                INSERT INTO volume_events
+                    (volume_id, event_type, event_date, location, detail)
+                SELECT v.volume_id, se.event_type, se.event_date,
+                       se.location, se.detail
+                FROM {alias}.volume_events se
+                JOIN {alias}.volumes sv ON sv.volume_id = se.volume_id
+                JOIN volumes v ON v.uuid = sv.uuid
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM volume_events te
+                    WHERE te.volume_id  = v.volume_id
+                      AND te.event_type = se.event_type
+                      AND te.event_date = se.event_date
+                      AND te.detail     = se.detail
+                )
+                """
+            )
+            counts["volume_events"] = cur.rowcount
+        else:
+            counts["volume_events"] = 0
+
+        # 8b. burn_sessions — keyed on session_id (a global UUID-ish text
+        #     key, identical across catalogs).
+        if "burn_sessions" in src_tables:
+            cur = target.execute(
+                f"""
+                INSERT OR IGNORE INTO burn_sessions
+                    (session_id, created_at, media_type, status, staging_dir)
+                SELECT session_id, created_at, media_type, status, staging_dir
+                FROM {alias}.burn_sessions
+                """
+            )
+            counts["burn_sessions"] = cur.rowcount
+        else:
+            counts["burn_sessions"] = 0
+
+        # 8c. session_volumes — keyed on (session_id, volume_id) with the
+        #     volume_id translated via uuid.  iso_size_bytes arrived in
+        #     schema v7; select it only when the source column exists.
+        if "session_volumes" in src_tables:
+            src_sv_cols = {
+                r[1] for r in target.execute(
+                    f"PRAGMA {alias}.table_info(session_volumes)"
+                ).fetchall()
+            }
+            sv_size_expr = (
+                "ssv.iso_size_bytes" if "iso_size_bytes" in src_sv_cols
+                else "NULL"
+            )
+            cur = target.execute(
+                f"""
+                INSERT OR IGNORE INTO session_volumes
+                    (session_id, volume_id, iso_path, iso_sha256,
+                     iso_size_bytes)
+                SELECT ssv.session_id, v.volume_id, ssv.iso_path,
+                       ssv.iso_sha256, {sv_size_expr}
+                FROM {alias}.session_volumes ssv
+                JOIN {alias}.volumes sv ON sv.volume_id = ssv.volume_id
+                JOIN volumes v ON v.uuid = sv.uuid
+                """
+            )
+            counts["session_volumes"] = cur.rowcount
+        else:
+            counts["session_volumes"] = 0
+
         target.commit()
 
     finally:
@@ -403,6 +489,9 @@ def rebuild_catalog(
         result.packs_merged += counts.get("packs", 0)
         result.snapshots_merged += counts.get("snapshots", 0)
         result.locations_merged += counts.get("locations", 0)
+        result.events_merged += counts.get("volume_events", 0)
+        result.sessions_merged += counts.get("burn_sessions", 0)
+        result.session_volumes_merged += counts.get("session_volumes", 0)
         is_pruned_conflicts += counts.get("is_pruned_conflicts", 0)
 
         _logger.info(

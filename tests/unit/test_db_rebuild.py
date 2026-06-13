@@ -544,6 +544,148 @@ class TestRebuildMerge:
 
         target_conn.close()
 
+    def test_rebuild_merges_events_and_sessions(self, tmp_path):
+        """FMA-10: a source catalog carrying volume_events + session rows
+        ends up in the rebuilt master with the volume_id translated via
+        uuid (autoincrement ids differ between databases)."""
+        target_db = tmp_path / "target.db"
+        target_conn = get_connection(target_db)
+        schema.create_all(target_conn)
+
+        source_db = tmp_path / "source.db"
+        source_conn = get_connection(source_db)
+        schema.create_all(source_conn)
+
+        # Bump the source volume's surrogate id so a naive (untranslated)
+        # merge would attach the audit rows to the wrong/absent volume.
+        source_conn.execute(
+            "INSERT INTO volumes (volume_id, label, uuid, media_type, "
+            "capacity_bytes, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (77, "VOL001", "uuid-evt", "BD25", 25000000000, "VERIFIED"),
+        )
+        source_conn.execute(
+            "INSERT INTO burn_sessions (session_id, media_type, status, "
+            "staging_dir) VALUES (?, ?, ?, ?)",
+            ("sess-abc", "BD25", "COMPLETE", "/staging/sess-abc"),
+        )
+        source_conn.execute(
+            "INSERT INTO session_volumes (session_id, volume_id, iso_path, "
+            "iso_sha256, iso_size_bytes) VALUES (?, ?, ?, ?, ?)",
+            ("sess-abc", 77, "/staging/sess-abc/VOL001.iso", "c" * 64, 4096),
+        )
+        source_conn.execute(
+            "INSERT INTO volume_events (volume_id, event_type, event_date, "
+            "detail) VALUES (?, ?, ?, ?)",
+            (77, "VERIFY_PASS", "2026-03-01 00:00:00", "post-burn read-back"),
+        )
+        source_conn.commit()
+        source_conn.close()
+
+        result = rebuild._merge_one_disc(target_conn, source_db)
+        assert result["volume_events"] == 1
+        assert result["burn_sessions"] == 1
+        assert result["session_volumes"] == 1
+
+        tgt_vol_id = target_conn.execute(
+            "SELECT volume_id FROM volumes WHERE uuid = ?", ("uuid-evt",)
+        ).fetchone()[0]
+
+        evt = tuple(target_conn.execute(
+            "SELECT volume_id, event_type, detail FROM volume_events"
+        ).fetchone())
+        assert evt == (tgt_vol_id, "VERIFY_PASS", "post-burn read-back")
+
+        sess = tuple(target_conn.execute(
+            "SELECT session_id, status, staging_dir FROM burn_sessions"
+        ).fetchone())
+        assert sess == ("sess-abc", "COMPLETE", "/staging/sess-abc")
+
+        sv = tuple(target_conn.execute(
+            "SELECT session_id, volume_id, iso_sha256, iso_size_bytes "
+            "FROM session_volumes"
+        ).fetchone())
+        assert sv == ("sess-abc", tgt_vol_id, "c" * 64, 4096)
+
+        target_conn.close()
+
+    def test_rebuild_events_dedupe_across_two_discs(self, tmp_path):
+        """The same event present on two discs must land once (the natural
+        triple is volume-uuid + type + date + detail)."""
+        target_db = tmp_path / "target.db"
+        target_conn = get_connection(target_db)
+        schema.create_all(target_conn)
+
+        def _make_source(path: Path) -> Path:
+            conn = get_connection(path)
+            schema.create_all(conn)
+            conn.execute(
+                "INSERT INTO volumes (label, uuid, media_type, "
+                "capacity_bytes, status) VALUES (?, ?, ?, ?, ?)",
+                ("VOL001", "uuid-dup", "BD25", 25000000000, "VERIFIED"),
+            )
+            vid = conn.execute(
+                "SELECT volume_id FROM volumes WHERE uuid = ?", ("uuid-dup",)
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO volume_events (volume_id, event_type, "
+                "event_date, detail) VALUES (?, ?, ?, ?)",
+                (vid, "VERIFY_PASS", "2026-03-01 00:00:00", "rb"),
+            )
+            conn.commit()
+            conn.close()
+            return path
+
+        src1 = _make_source(tmp_path / "s1.db")
+        src2 = _make_source(tmp_path / "s2.db")
+
+        r1 = rebuild._merge_one_disc(target_conn, src1)
+        r2 = rebuild._merge_one_disc(target_conn, src2)
+        assert r1["volume_events"] == 1
+        assert r2["volume_events"] == 0  # already present, deduped
+
+        count = target_conn.execute(
+            "SELECT COUNT(*) FROM volume_events"
+        ).fetchone()[0]
+        assert count == 1
+        target_conn.close()
+
+    def test_rebuild_tolerates_catalog_without_event_tables(self, tmp_path):
+        """A v3-era-shaped source (no volume_events/burn_sessions/
+        session_volumes) merges cleanly; other tables stay intact and the
+        provenance counts are zero rather than raising."""
+        target_db = tmp_path / "target.db"
+        target_conn = get_connection(target_db)
+        schema.create_all(target_conn)
+
+        # A v3-era catalog: the live schema minus the three provenance
+        # tables that arrived later (volume_events / burn_sessions /
+        # session_volumes).  Dropping them off a real schema keeps every
+        # other table shaped exactly as the rebuild SELECTs expect.
+        source_db = tmp_path / "source.db"
+        source_conn = get_connection(source_db)
+        schema.create_all(source_conn)
+        for tbl in ("session_volumes", "burn_sessions", "volume_events"):
+            source_conn.execute(f"DROP TABLE {tbl}")
+        source_conn.execute(
+            "INSERT INTO volumes (label, uuid, media_type, capacity_bytes, "
+            "status) VALUES (?, ?, ?, ?, ?)",
+            ("VOL001", "uuid-old", "BD25", 25000000000, "VERIFIED"),
+        )
+        source_conn.commit()
+        source_conn.close()
+
+        result = rebuild._merge_one_disc(target_conn, source_db)
+        assert result["volumes"] == 1
+        assert result["volume_events"] == 0
+        assert result["burn_sessions"] == 0
+        assert result["session_volumes"] == 0
+
+        vol = target_conn.execute(
+            "SELECT label FROM volumes WHERE uuid = ?", ("uuid-old",)
+        ).fetchone()
+        assert vol[0] == "VOL001"
+        target_conn.close()
+
 
 class TestRecencyAwareRebuild:
     """FMA-06: rebuild merges newest-first; stale discs cannot resurrect

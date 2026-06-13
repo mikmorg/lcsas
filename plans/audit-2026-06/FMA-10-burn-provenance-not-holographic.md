@@ -83,3 +83,6 @@ Always-on in `make test-unit`:
 ## Effort
 
 1 day (0.5 impl, 0.5 test). No special environment.
+
+---
+**Implemented:** 2026-06-13. Items 2+3 as planned; item 1 (iso_sha256 pass-through) was already landed by BURN-04/05+FMA-03 — covered here by the new `test_burn_records_iso_sha256_on_copy` assertion. Rebuild now merges volume_events/burn_sessions/session_volumes (uuid-translated, sqlite_master-probed for old catalogs); RECOVER.txt documents the newest-session STAGING gap + import-receipts remedy.
