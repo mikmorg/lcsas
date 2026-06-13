@@ -690,6 +690,47 @@ class TestStage:
         session_vols = get_session_volumes(orch_env["conn"], result.session_id)
         assert len(session_vols) >= 1
 
+    def test_session_row_committed_before_dir(self, orch_env, monkeypatch):
+        """FUP-02: the burn_sessions row is committed before its dir exists.
+
+        Closes the staging-clean TOCTOU: any session-named dir on disk has a
+        non-CLEANED row, so detect_orphaned_staging can never flag an
+        in-flight stage.  We wrap ensure_dir and, when it creates the session
+        root, assert the row is already queryable.
+        """
+        import lcsas.burn.orchestrator as orch_mod
+
+        orch = orch_env["orch"]
+        conn = orch_env["conn"]
+        staging_root = orch_env["config"].staging_path
+        real_ensure_dir = orch_mod.ensure_dir
+        checked = {"session_dir_seen": False}
+
+        def spy_ensure_dir(path):
+            # The session root is a direct child of staging_path (volume dirs
+            # are nested one level deeper).
+            if path.parent == staging_root:
+                row = conn.execute(
+                    "SELECT status FROM burn_sessions WHERE staging_dir = ?",
+                    (str(path),),
+                ).fetchone()
+                assert row is not None, (
+                    "session dir created before burn_sessions row committed"
+                )
+                assert row["status"] != "CLEANED"
+                checked["session_dir_seen"] = True
+            return real_ensure_dir(path)
+
+        monkeypatch.setattr(orch_mod, "ensure_dir", spy_ensure_dir)
+
+        def fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
+            output_iso.write_bytes(b"fake-iso-data")
+
+        orch_env["xorriso"].create_iso.side_effect = fake_create_iso
+
+        orch.stage()
+        assert checked["session_dir_seen"], "session dir was never created"
+
     def test_stage_with_repo_filter(self, orch_env):
         """stage() with repo_ids filter only stages packs from that repo."""
         orch = orch_env["orch"]

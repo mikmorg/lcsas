@@ -3,15 +3,47 @@
 from __future__ import annotations
 
 import contextlib
+import json
+import subprocess
 import sys
 import threading
+import time
 
 import pytest
 
 from lcsas.db.connection import get_connection, locked_connection
 from lcsas.db.repos import list_repos, register_repo
 from lcsas.db.schema import create_all
+from lcsas.exceptions import CatalogLockTimeout
 from lcsas.utils.labels import generate_uuid
+
+
+def _hold_lock_subprocess(db_path, hold_seconds: float) -> subprocess.Popen:
+    """Spawn a child that takes the catalog lock and holds it.
+
+    A separate process is required because ``fcntl.flock`` is keyed on the
+    open file description; two acquires within one process would not
+    contend the way two real ``lcsas`` invocations do.
+    """
+    code = (
+        "import time\n"
+        "from lcsas.db.connection import set_lock_holder_label, locked_connection\n"
+        "set_lock_holder_label('lcsas burn session')\n"
+        f"with locked_connection({str(db_path)!r}) as conn:\n"
+        "    print('HELD', flush=True)\n"
+        f"    time.sleep({hold_seconds})\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", code],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    # Wait until the child reports it holds the lock.
+    assert proc.stdout is not None
+    line = proc.stdout.readline()
+    assert line.strip() == "HELD", f"child failed to take lock: {line!r}"
+    return proc
 
 
 class TestGetConnection:
@@ -159,6 +191,64 @@ class TestLockedConnection:
 
         assert len(results) == 4
         assert all(r == [] for r in results)
+
+    def test_locked_connection_writes_holder_info(self, tmp_path):
+        """While held, <db>.lock contains the holder's pid/cmd/since JSON."""
+        import os
+
+        from lcsas.db.connection import set_lock_holder_label
+
+        db = tmp_path / "holder.db"
+        lock = tmp_path / "holder.db.lock"
+        set_lock_holder_label("lcsas burn session")
+        try:
+            with locked_connection(db):
+                info = json.loads(lock.read_text(encoding="utf-8"))
+                assert info["pid"] == os.getpid()
+                assert info["cmd"] == "lcsas burn session"
+                assert "since" in info and info["since"]
+        finally:
+            set_lock_holder_label("lcsas")
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="fcntl not available on Windows")
+    def test_locked_connection_prints_waiting_and_blocks(self, tmp_path, capfd):
+        """A waiter prints a holder-identifying message, then acquires once free."""
+        db = tmp_path / "wait.db"
+        proc = _hold_lock_subprocess(db, hold_seconds=1.0)
+        try:
+            acquired_at = []
+
+            def _acquire() -> None:
+                with locked_connection(db):
+                    acquired_at.append(time.monotonic())
+
+            t = threading.Thread(target=_acquire)
+            t.start()
+            t.join(timeout=15)
+            assert acquired_at, "waiter never acquired the lock"
+        finally:
+            proc.wait(timeout=10)
+
+        err = capfd.readouterr().err
+        assert "Waiting for the catalog lock" in err
+        assert "lcsas burn session" in err
+        assert str(proc.pid) in err
+        assert "Do NOT kill" in err
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="fcntl not available on Windows")
+    def test_locked_connection_timeout_raises(self, tmp_path):
+        """timeout= raises CatalogLockTimeout naming the holder on expiry."""
+        db = tmp_path / "timeout.db"
+        proc = _hold_lock_subprocess(db, hold_seconds=3.0)
+        try:
+            with pytest.raises(CatalogLockTimeout) as excinfo, \
+                    locked_connection(db, timeout=0.2):
+                pass
+            msg = str(excinfo.value)
+            assert "lcsas burn session" in msg
+            assert str(proc.pid) in msg
+        finally:
+            proc.wait(timeout=10)
 
     def test_corrupted_db_raises_error(self, tmp_path):
         """Opening a corrupted DB raises an error (and closes connection)."""

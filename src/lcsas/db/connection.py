@@ -3,11 +3,31 @@
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import sqlite3
+import sys
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
+
+from lcsas.exceptions import CatalogLockTimeout
+
+# Command label written into the lock file so a waiter can name the holder.
+# Set by the CLI before taking the lock; falls back to a generic label.
+_HOLDER_CMD = "lcsas"
+
+
+def set_lock_holder_label(label: str) -> None:
+    """Record the command label stamped into the lock file when held.
+
+    Called by the CLI dispatcher so a concurrent process that waits on the
+    lock can print which command is holding it.
+    """
+    global _HOLDER_CMD
+    _HOLDER_CMD = label
 
 
 def get_connection(db_path: Path | str) -> sqlite3.Connection:
@@ -53,11 +73,34 @@ def get_connection(db_path: Path | str) -> sqlite3.Connection:
     return conn
 
 
+def _read_holder(lock_path: Path) -> str:
+    """Describe the current lock holder from the lock file, best-effort.
+
+    The holder JSON is written by whoever currently holds the lock; an
+    empty/garbage file (older code, or a holder that died before stamping)
+    yields a generic description rather than an error.
+    """
+    try:
+        raw = lock_path.read_text(encoding="utf-8").strip()
+        info = json.loads(raw)
+        cmd = info.get("cmd", "another lcsas command")
+        pid = info.get("pid", "?")
+        since = info.get("since", "")
+        # Show only HH:MM of the ISO timestamp for a terse message.
+        since_short = since[11:16] if len(since) >= 16 else since
+        if since_short:
+            return f"'{cmd}' (pid {pid}, since {since_short})"
+        return f"'{cmd}' (pid {pid})"
+    except (OSError, ValueError):
+        return "another lcsas process"
+
+
 @contextmanager
 def locked_connection(
     db_path: Path | str,
     *,
     exclusive: bool = True,
+    timeout: float | None = None,
 ) -> Generator[sqlite3.Connection, None, None]:
     """Context manager that acquires a file lock around a DB connection.
 
@@ -71,14 +114,56 @@ def locked_connection(
         Path to the SQLite database file.
     exclusive:
         If *True* (default), use ``LOCK_EX``; otherwise ``LOCK_SH``.
+    timeout:
+        Maximum seconds to wait for the lock.  ``None`` (default) waits
+        forever (the interactive default).  On expiry a
+        :class:`CatalogLockTimeout` is raised naming the holder.
     """
     lock_path = Path(str(db_path) + ".lock")
-    # open("a") creates the file if absent and is inherently atomic —
-    # no separate touch() needed, which avoided a TOCTOU window.
-    lock_fd = open(lock_path, "a", encoding="utf-8")  # noqa: SIM115
+    # open("a+") creates the file if absent and is inherently atomic —
+    # no separate touch() needed, which avoided a TOCTOU window.  We need
+    # read+write so we can both read a prior holder's stamp and rewrite ours.
+    lock_fd = open(lock_path, "a+", encoding="utf-8")  # noqa: SIM115
     try:
         flag = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-        fcntl.flock(lock_fd, flag)
+        try:
+            fcntl.flock(lock_fd, flag | fcntl.LOCK_NB)
+        except BlockingIOError:
+            holder = _read_holder(lock_path)
+            print(
+                f"Waiting for the catalog lock: held by {holder}.\n"
+                "Ctrl-C safely cancels THIS command. Do NOT kill the other "
+                "process — it may be burning.",
+                file=sys.stderr,
+                flush=True,
+            )
+            if timeout is None:
+                fcntl.flock(lock_fd, flag)
+            else:
+                deadline = time.monotonic() + timeout
+                while True:
+                    try:
+                        fcntl.flock(lock_fd, flag | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise CatalogLockTimeout(
+                                f"Timed out after {timeout:g}s waiting for the "
+                                f"catalog lock: held by {_read_holder(lock_path)}."
+                            ) from None
+                        time.sleep(0.1)
+        # Stamp our identity for the next waiter (older code never reads it).
+        holder_json = json.dumps(
+            {
+                "pid": os.getpid(),
+                "cmd": _HOLDER_CMD,
+                "since": datetime.now().astimezone().isoformat(),
+            }
+        )
+        lock_fd.seek(0)
+        lock_fd.truncate()
+        lock_fd.write(holder_json)
+        lock_fd.flush()
         conn = get_connection(db_path)
         try:
             yield conn

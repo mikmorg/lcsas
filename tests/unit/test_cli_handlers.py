@@ -255,36 +255,26 @@ class TestCmdDispatchEdges:
         result = main(["verify", "SOME_LABEL"])
         assert result == 1
 
-    def test_status_auto_creates_db_at_unknown_path(self, tmp_path, capsys):
-        """`status` against a fresh DB path auto-creates the file and schema.
+    def test_status_fails_and_creates_nothing_at_unknown_path(
+        self, tmp_path, capsys
+    ):
+        """`status` against a fresh DB path must FAIL, not auto-create.
 
-        Regression test for the auto-init path: ``cmd_status`` defensively
-        calls ``create_all()`` and ``get_connection`` creates missing parent
-        directories, so an unused path should succeed (not error out).
+        FUP-02 mitigation 4: read-only commands are genuinely read-only — they
+        no longer call ``create_all`` as a side effect (which used to write
+        outside the catalog lock and masked a mistyped path).  A missing
+        catalog yields a non-zero exit and the "Run `lcsas init`" hint.
         """
-        import sqlite3
-
         db = tmp_path / "fresh-subdir" / "archive.db"
         assert not db.exists()
         assert not db.parent.exists()
 
         result = main(["--db", str(db), "status"])
-        assert result == 0
-        assert db.exists(), "status should have created the DB file"
-
-        # Verify the schema was applied (a few core tables should exist).
-        conn = sqlite3.connect(str(db))
-        try:
-            tables = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
-            }
-        finally:
-            conn.close()
-        for expected in ("repositories", "packs", "volumes"):
-            assert expected in tables, f"expected table '{expected}' in {tables}"
+        assert result != 0
+        out = capsys.readouterr()
+        assert "lcsas init" in (out.out + out.err)
+        # The read-only command must NOT have created the DB or its parent.
+        assert not db.exists(), "status created a catalog as a side effect"
 
 
 # ---------------------------------------------------------------------------

@@ -42,3 +42,12 @@ class CatalogError(LcsasError):
 
 class StagingError(LcsasError):
     """Error assembling the staging directory."""
+
+
+class CatalogLockTimeout(LcsasError):  # noqa: N818 - "Timeout" reads as the error
+    """Timed out waiting to acquire the catalog file lock.
+
+    The CLI maps this to exit code 75 (``EX_TEMPFAIL``) so scripts can
+    retry; the message names the holder so the operator knows what to wait
+    on (and not to kill it — it may be mid-burn).
+    """

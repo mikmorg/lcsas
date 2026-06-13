@@ -132,3 +132,18 @@ metadata_reserve_mb = 0
             "init silently fell back to default archive.db in cwd; "
             "--config was ignored"
         )
+
+
+class TestReadOnlyCommandsRequireCatalog:
+    """FUP-02 mitigation 4: read-only commands must fail (not create a
+    catalog) when none exists, and perform zero writes outside the lock."""
+
+    def test_status_fails_without_catalog(self, tmp_path, capsys):
+        db = tmp_path / "nope.db"
+        result = main(["--db", str(db), "status"])
+        assert result != 0
+        combined = capsys.readouterr()
+        text = combined.out + combined.err
+        assert "lcsas init" in text
+        # The read-only command must NOT have created the catalog.
+        assert not db.exists(), "status created a catalog as a side effect"

@@ -1528,6 +1528,49 @@ class TestCmdStagingClean:
         out = capsys.readouterr().out
         assert "required" in out.lower()
 
+    def test_staging_clean_rechecks_after_prompt(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """FUP-02: a session committed during the confirm prompt is spared.
+
+        Two orphan dirs are flagged; while the (mocked) input() blocks, a new
+        burn_sessions row is committed pointing at one of them.  The re-check
+        under the held lock must remove only the still-orphaned dir.
+        """
+        from lcsas.db.sessions import create_session
+
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        conn.close()
+
+        staging = tmp_path / "staging"
+        keep = staging / "2025-01-01T00-00-00.000000+00-00-aaaaaaaa"
+        gone = staging / "2025-01-02T00-00-00.000000+00-00-bbbbbbbb"
+        keep.mkdir(parents=True)
+        gone.mkdir(parents=True)
+
+        def _confirm(_prompt):
+            # Simulate a concurrent `lcsas stage` committing a session for
+            # `keep` while the operator stares at the prompt.
+            c = get_connection(db)
+            create_session(
+                c, media_type="TEST_TINY", staging_dir=str(keep),
+                session_id="2025-01-01T00:00:00.000000+00:00-aaaaaaaa",
+            )
+            c.close()
+            return "y"
+
+        monkeypatch.setattr("builtins.input", _confirm)
+
+        result = main(["--config", str(cfg), "staging", "clean"])
+        assert result == 0
+        assert keep.exists(), "in-flight session dir was wrongly deleted"
+        assert not gone.exists(), "stale orphan was not removed"
+        out = capsys.readouterr().out
+        assert "Removed 1" in out
+
 
 # ===================================================================
 # cmd_restore_plan / cmd_restore_exec — see test_cli_restore.py

@@ -65,6 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--verbose", "-v", action="store_true", default=False,
         help="Show full tracebacks on errors.",
     )
+    parser.add_argument(
+        "--lock-timeout", type=float, default=None,
+        help="Seconds to wait for the catalog lock before failing with exit "
+             "code 75 (default: wait forever). Overrides LCSAS_LOCK_TIMEOUT.",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -799,6 +804,67 @@ def _resolve_db_path(
     return Path("archive.db")
 
 
+def _resolve_lock_timeout(args: argparse.Namespace) -> float | None:
+    """Resolve the catalog-lock wait timeout in seconds.
+
+    Priority: ``--lock-timeout`` flag > ``LCSAS_LOCK_TIMEOUT`` env >
+    ``None`` (wait forever, the interactive default).
+    """
+    val: float | None = getattr(args, "lock_timeout", None)
+    if val is not None:
+        return float(val)
+    env = os.environ.get("LCSAS_LOCK_TIMEOUT")
+    if env:
+        try:
+            return float(env)
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid LCSAS_LOCK_TIMEOUT=%r (not a number).", env
+            )
+    return None
+
+
+def _holder_label(args: argparse.Namespace) -> str:
+    """Human-readable command label stamped into the lock file when held."""
+    parts = ["lcsas", getattr(args, "command", "") or ""]
+    for sub in ("repo_command", "staging_command", "copy_command",
+                "volume_command", "catalog_command"):
+        val = getattr(args, sub, None)
+        if val:
+            parts.append(val)
+            break
+    return " ".join(p for p in parts if p).strip()
+
+
+def _open_existing_catalog(db_path: Path | str) -> sqlite3.Connection:
+    """Open a catalog read-only-ish, failing if it does not yet exist.
+
+    Read-only commands must NOT create the catalog as a side effect (that
+    masks a missing/mistyped path and writes outside the lock).  This opens
+    an existing catalog and verifies its schema without migrating it; an
+    uninitialized path raises :class:`CatalogError` telling the operator to
+    run ``lcsas init``.
+    """
+    from lcsas.db.connection import get_connection
+    from lcsas.db.schema import get_schema_version
+    from lcsas.exceptions import CatalogError
+
+    db_str = str(db_path)
+    if db_str != ":memory:" and not Path(db_str).exists():
+        raise CatalogError(
+            f"No catalog at {db_path}.",
+            recovery_hint="Run `lcsas init` first.",
+        )
+    conn = get_connection(db_path)
+    if get_schema_version(conn) == 0:
+        conn.close()
+        raise CatalogError(
+            f"No catalog at {db_path}.",
+            recovery_hint="Run `lcsas init` first.",
+        )
+    return conn
+
+
 def _resolve_repo_names_to_ids(
     conn: sqlite3.Connection,
     names: list[str] | None,
@@ -837,7 +903,7 @@ def cmd_init(args: argparse.Namespace) -> int:
       3. ``paths.database`` from the TOML config (``--config``)
       4. ``archive.db`` in the current working directory
     """
-    from lcsas.db.connection import get_connection
+    from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
 
     db_path: Path | None = getattr(args, "db_path", None)
@@ -856,11 +922,10 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     # Ensure parent directory exists (XDG paths may not exist yet)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = get_connection(db_path)
-    try:
+    with locked_connection(
+        db_path, timeout=_resolve_lock_timeout(args)
+    ) as conn:
         ensure_schema(conn)
-    finally:
-        conn.close()
     logger.info(f"Initialized LCSAS database at {db_path}")
     return 0
 
@@ -874,7 +939,7 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
     from lcsas.utils.labels import generate_uuid
 
     db_path = _resolve_db_path(args)
-    with locked_connection(db_path) as conn:
+    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
 
         repo_id = generate_uuid()
@@ -897,14 +962,11 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
 
 def cmd_repo_list(args: argparse.Namespace) -> int:
     """List registered repositories."""
-    from lcsas.db.connection import get_connection
     from lcsas.db.repos import list_repos
-    from lcsas.db.schema import ensure_schema
 
     db_path = _resolve_db_path(args)
-    conn = get_connection(db_path)
+    conn = _open_existing_catalog(db_path)
     try:
-        ensure_schema(conn)
         repos = list_repos(conn)
     finally:
         conn.close()
@@ -928,7 +990,7 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
     from lcsas.db.volume_packs import get_volume_ids_for_pack
 
     db_path = _resolve_db_path(args)
-    with locked_connection(db_path) as conn:
+    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
 
         try:
@@ -1030,7 +1092,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     if not _validate_config_or_exit(config, skip_staging=True):
         return 1
-    with locked_connection(config.db_path if args.db is None else args.db) as conn:
+    with locked_connection(
+        config.db_path if args.db is None else args.db,
+        timeout=_resolve_lock_timeout(args),
+    ) as conn:
         ensure_schema(conn)
 
         # Map config repo names → DB repo_ids (UUIDs)
@@ -1200,7 +1265,7 @@ def cmd_pack_unprune(args: argparse.Namespace) -> int:
         logger.error("Empty SHA-256 prefix.")
         return 1
 
-    with locked_connection(db_path) as conn:
+    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
         # substr() prefix match: immune to LIKE wildcards in user input.
         rows = conn.execute(
@@ -1335,23 +1400,19 @@ def _print_redundancy_report(conn: sqlite3.Connection, min_copies: int) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     """Show archive status summary."""
-    from lcsas.db.connection import get_connection
     from lcsas.db.queries import (
         get_archive_status_summary,
         get_live_volumes_for_packs,
         get_redundancy_report,
     )
-    from lcsas.db.schema import ensure_schema
     from lcsas.db.sessions import list_sessions
     from lcsas.db.volume_copies import find_stale_copies
     from lcsas.db.volume_events import get_latest_event
     from lcsas.db.volumes import list_volumes
 
     db_path = _resolve_db_path(args)
-    conn = get_connection(db_path)
+    conn = _open_existing_catalog(db_path)
     try:
-        ensure_schema(conn)
-
         if args.stale_copies:
             return _print_stale_copies(conn, args.older_than_days)
         if args.redundancy:
@@ -1443,7 +1504,7 @@ def cmd_config_check(args: argparse.Namespace) -> int:
 def cmd_staging_clean(args: argparse.Namespace) -> int:
     """Detect and remove orphaned staging directories."""
     from lcsas.config.settings import load_config
-    from lcsas.db.connection import get_connection
+    from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
     from lcsas.staging.cleanup import clean_orphaned_staging, detect_orphaned_staging
 
@@ -1452,28 +1513,38 @@ def cmd_staging_clean(args: argparse.Namespace) -> int:
         return 1
 
     config = load_config(args.config)
-    conn = get_connection(config.db_path if args.db is None else args.db)
-    try:
+    # Hold the catalog lock across detection AND the confirm prompt so a
+    # concurrent `lcsas stage` cannot commit a new in-flight session whose
+    # directory we already flagged.  Blocking the stage here is the point;
+    # with the loud-wait mitigation it now sees a "waiting for lock" message.
+    with locked_connection(
+        config.db_path if args.db is None else args.db,
+        timeout=_resolve_lock_timeout(args),
+    ) as conn:
         ensure_schema(conn)
         orphans = detect_orphaned_staging(config, conn)
-    finally:
-        conn.close()
 
-    if not orphans:
-        logger.info("No orphaned staging directories found.")
-        return 0
-
-    logger.info(f"Found {len(orphans)} orphaned staging directory(ies):")
-    for p in orphans:
-        logger.info(f"  {p}")
-
-    if not args.force:
-        confirm = input("Remove these directories? [y/N] ").strip().lower()
-        if confirm != "y":
-            logger.info("Aborted.")
+        if not orphans:
+            logger.info("No orphaned staging directories found.")
             return 0
 
-    removed = clean_orphaned_staging(orphans)
+        logger.info(f"Found {len(orphans)} orphaned staging directory(ies):")
+        for p in orphans:
+            logger.info(f"  {p}")
+
+        if not args.force:
+            confirm = input("Remove these directories? [y/N] ").strip().lower()
+            if confirm != "y":
+                logger.info("Aborted.")
+                return 0
+            # Re-check under the still-held lock: the prompt may have sat for
+            # minutes, during which a session could have been committed against
+            # one of these dirs.  Delete only the intersection.  (Also covers
+            # two --force runs racing — re-detection is cheap.)
+            still_orphaned = set(detect_orphaned_staging(config, conn))
+            orphans = [p for p in orphans if p in still_orphaned]
+
+        removed = clean_orphaned_staging(orphans)
     logger.info(f"Removed {removed} orphaned staging directory(ies).")
     return 0
 
@@ -1500,7 +1571,9 @@ def cmd_stage(args: argparse.Namespace) -> int:
     shutdown.install()
 
     try:
-        with locked_connection(args.db or config.db_path) as conn:
+        with locked_connection(
+        args.db or config.db_path, timeout=_resolve_lock_timeout(args)
+    ) as conn:
             ensure_schema(conn)
 
             orch = BurnOrchestrator(
@@ -1585,7 +1658,9 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
     if not _validate_config_or_exit(config):
         return 1
 
-    with locked_connection(args.db or config.db_path) as conn:
+    with locked_connection(
+        args.db or config.db_path, timeout=_resolve_lock_timeout(args)
+    ) as conn:
         ensure_schema(conn)
 
         orch = BurnOrchestrator(
@@ -1776,7 +1851,9 @@ def cmd_location(args: argparse.Namespace) -> int:
         logger.error("--config is required for location.")
         return 1
 
-    with locked_connection(args.db or config.db_path) as conn:
+    with locked_connection(
+        args.db or config.db_path, timeout=_resolve_lock_timeout(args)
+    ) as conn:
         ensure_schema(conn)
 
         if args.location_command == "list":
@@ -1861,7 +1938,7 @@ def cmd_copy(args: argparse.Namespace) -> int:
     config = load_config(args.config) if args.config else None
     db_path = _resolve_db_path(args, config)
 
-    with locked_connection(db_path) as conn:
+    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
         vol = get_volume_by_label(conn, args.volume_label)
         if vol is None:
@@ -2088,7 +2165,9 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
         return 1
 
     rejected = 0
-    with locked_connection(args.db or config.db_path) as conn:
+    with locked_connection(
+        args.db or config.db_path, timeout=_resolve_lock_timeout(args)
+    ) as conn:
         ensure_schema(conn)
 
         imported = 0
@@ -2301,7 +2380,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
         config = load_config(args.config)
     db_path = _resolve_db_path(args, config)
 
-    with locked_connection(db_path) as conn:
+    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
 
         ghosts = get_ghost_volumes(conn, args.older_than_hours)
@@ -2444,7 +2523,7 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
 
     config = load_config(args.config) if args.config else None
     db_path = _resolve_db_path(args, config)
-    with locked_connection(db_path) as conn:
+    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
 
         try:
@@ -2706,7 +2785,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     config = load_config(args.config) if args.config else None
     db_path = _resolve_db_path(args, config)
-    with locked_connection(db_path) as conn:
+    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
 
         # --- Batch mode: verify --all ---
@@ -3350,8 +3429,6 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
 def cmd_restore_plan(args: argparse.Namespace) -> int:
     """Generate a restore pick list for a snapshot."""
     from lcsas.config.settings import load_config
-    from lcsas.db.connection import get_connection
-    from lcsas.db.schema import ensure_schema
     from lcsas.restore.planner import RestorePlanner
     from lcsas.rustic.wrapper import SubprocessRusticRunner
 
@@ -3361,10 +3438,8 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     if not _validate_config_or_exit(config, skip_staging=True):
         return 1
-    conn = get_connection(config.db_path if args.db is None else args.db)
+    conn = _open_existing_catalog(config.db_path if args.db is None else args.db)
     try:
-        ensure_schema(conn)
-
         # Resolve repo config
         repo_name = args.repo
         if repo_name not in config.repositories:
@@ -3542,8 +3617,6 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
     import tempfile
 
     from lcsas.config.settings import load_config
-    from lcsas.db.connection import get_connection
-    from lcsas.db.schema import ensure_schema
     from lcsas.restore.executor import RestoreExecutor
     from lcsas.restore.planner import RestorePlanner
     from lcsas.rustic.wrapper import SubprocessRusticRunner
@@ -3555,10 +3628,8 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     if not _validate_config_or_exit(config, skip_staging=True):
         return 1
-    conn = get_connection(config.db_path if args.db is None else args.db)
+    conn = _open_existing_catalog(config.db_path if args.db is None else args.db)
     try:
-        ensure_schema(conn)
-
         repo_name = args.repo
         if repo_name not in config.repositories:
             logger.error(f"repository '{repo_name}' not found in config.")
@@ -5377,7 +5448,9 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         from lcsas.db.schema import ensure_schema
 
         try:
-            with locked_connection(config.db_path) as conn:
+            with locked_connection(
+                config.db_path, timeout=_resolve_lock_timeout(args)
+            ) as conn:
                 ensure_schema(conn)
                 record_split(conn, args.repo, threshold, shares, split_id)
         except Exception as e:  # noqa: BLE001 - cards are written; don't fail the split
@@ -5639,7 +5712,9 @@ def cmd_session_abort(args: argparse.Namespace) -> int:
         return 1
     config = load_config(args.config)
 
-    with locked_connection(args.db or config.db_path) as conn:
+    with locked_connection(
+        args.db or config.db_path, timeout=_resolve_lock_timeout(args)
+    ) as conn:
         ensure_schema(conn)
         orch = BurnOrchestrator(
             config, conn,
@@ -5668,10 +5743,20 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
 
+    # Stamp the lock file with the actual command being run so a concurrent
+    # waiter can name the holder.
+    from lcsas.db.connection import set_lock_holder_label
+    set_lock_holder_label(_holder_label(args))
+
     try:
         return dispatch(args)
     except Exception as e:
-        from lcsas.exceptions import LcsasError
+        from lcsas.exceptions import CatalogLockTimeout, LcsasError
+        if isinstance(e, CatalogLockTimeout):
+            logger.error("%s", e)
+            if e.recovery_hint:
+                logger.error("Hint: %s", e.recovery_hint)
+            return 75  # EX_TEMPFAIL — the lock holder is busy; retry later.
         if isinstance(e, LcsasError):
             logger.error("%s", e)
             if e.recovery_hint:

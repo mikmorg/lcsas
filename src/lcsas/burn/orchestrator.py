@@ -844,10 +844,14 @@ class BurnOrchestrator:
                 f"(at {self._config.staging_path})"
             )
 
-        # 4. Create session
+        # 4. Create session.  FUP-02: commit the burn_sessions row BEFORE the
+        # directory exists on disk.  Invariant: any session-named dir on disk
+        # has a non-CLEANED row (never flagged orphan by staging-clean); the
+        # only other window is a row with no dir (a crash between commit and
+        # mkdir), which detect_orphaned_staging already ignores and
+        # clean_session tolerates.  This closes the in-flight-dir-orphaned race.
         session_id = generate_session_id()
         session_dir = self._config.staging_path / session_id.replace(":", "-")
-        ensure_dir(session_dir)
 
         create_session(
             self._conn,
@@ -855,6 +859,8 @@ class BurnOrchestrator:
             staging_dir=str(session_dir),
             session_id=session_id,
         )
+
+        ensure_dir(session_dir)
 
         # 5. Build staging dirs, create ISOs, apply ECC for each volume
         manifests: list[BurnManifest] = []

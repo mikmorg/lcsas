@@ -205,6 +205,28 @@ manual.
 
 ---
 
+## `Waiting for the catalog lock: held by '...' (pid N, ...)`
+
+Another `lcsas` command holds the catalog lock — commonly a
+`lcsas burn` that runs for hours.  Your command is queued and will
+proceed automatically when the holder finishes.
+
+- **Ctrl-C is safe for the *waiting* command** — it cancels only the
+  command you just started, never the one holding the lock.
+- **Do NOT kill the holding process.** The named pid may be mid-burn;
+  killing it can abort a burn.  Let it finish, or wait at another time.
+- For scripts that must not block forever, pass `--lock-timeout <seconds>`
+  (or set `LCSAS_LOCK_TIMEOUT`).  On expiry the command exits with code
+  **75** (`EX_TEMPFAIL`) so the caller can retry later, instead of hanging.
+
+The lock lives in `<catalog>.lock`.  **Never delete it manually.**  The
+kernel releases the underlying `flock` automatically the instant the
+holding process exits (even on a crash or `kill -9`); the file itself is
+inert and removing it does not unstick anything — it only discards the
+holder-identity stamp the next waiter would have read.
+
+---
+
 ## When everything fails — the bare-metal escape hatch
 
 The on-disc data format is documented in

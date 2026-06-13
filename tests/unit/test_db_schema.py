@@ -664,7 +664,12 @@ class TestEnsureSchema:
     read-only snapshots."""
 
     def test_cli_auto_migrates_old_catalog(self, tmp_path):
-        """A v5 catalog opened by any CLI command is migrated in place."""
+        """A v5 catalog opened by a write CLI command is migrated in place.
+
+        FUP-02 made read-only commands (status/repo list/restore) genuinely
+        read-only, so migration now happens via the lock-taking write entry
+        points (here ``init``, which calls ``ensure_schema`` under the lock).
+        """
         from lcsas.cli.main import main
 
         db = tmp_path / "archive.db"
@@ -672,7 +677,7 @@ class TestEnsureSchema:
         seed_v5_catalog(conn)
         conn.close()
 
-        assert main(["--db", str(db), "status"]) == 0
+        assert main(["--db", str(db), "init"]) == 0
 
         conn = sqlite3.connect(db)
         assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION

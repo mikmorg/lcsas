@@ -228,3 +228,15 @@ files: `tests/unit/test_db_connection.py` (already exercises `locked_connection`
 Mitigations: 1.5 days impl + 1 day tests (two-process tests need care on CI but no
 special hardware). Charter audit: 1.5-2 days. Total ≈ 4-4.5 days. No Windows/qemu needs;
 NFS charter question needs a NAS mount (available on the home network, not this VM).
+
+---
+**Implemented:** 2026-06-13. Part 1 only (part 2 charter remains a document). As
+planned, adapted to post-FMA-02 reality: read-only commands previously called
+`ensure_schema` (not bare `create_all`); mitigation 4 now routes them through a new
+`_open_existing_catalog()` helper that fails (CatalogError → "Run `lcsas init`") on an
+uninitialized catalog and never writes, while `cmd_init` migrated to `locked_connection`.
+Added `CatalogLockTimeout` (→ exit 75), loud holder-stamped lock waits with
+`--lock-timeout`/`LCSAS_LOCK_TIMEOUT`, staging-clean re-check under the held lock,
+row-before-dir in `stage()`, and a TROUBLESHOOTING.md lock note. Two pre-existing tests
+that encoded the old auto-create/`status`-migrates behavior were updated to assert the new
+read-only semantics.
