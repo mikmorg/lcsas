@@ -146,3 +146,16 @@ No catalog/schema impact.
 
 1.5 days: 0.5 the native harness, 1.0 workflow iteration on hosted Mac
 runners (expect a few red runs for runner-image quirks). No local Mac needed.
+
+---
+**Implemented:** 2026-06-13. Added `tests/recovery_hardening/test_tier1_macos_native.py`
+(darwin-only skipif; honest skip on Linux, verified) and `.github/workflows/macos-tier1.yml`
+(macos-15-intel + macos-14 matrix, recovery-path + weekly + dispatch triggers).
+Deviation: the keyshare case combines a real `lcsas key split` 2-of-5 card set
+byte-exact rather than an official SLIP-0039 vector — the committed CLI binary
+recovers an LCSAS-framed password (chains SLIP-0039 + the length-prefixed codec,
+slip39.h `lcsas_keyshare_decode_master_secret`), so the raw-master-secret vectors
+in vectors.json cannot be fed to it directly; verified all 15 valid vectors fail
+the CLI's decode step on the host x86_64 binary. Test bodies validated green on
+Linux against the x86_64 tier-1 binaries via `LCSAS_RESTORE_BIN`; truncated-binary
+negative check confirms the gate goes red. No C/binary changes (no rebuild needed).

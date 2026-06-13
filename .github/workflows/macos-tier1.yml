@@ -1,0 +1,78 @@
+name: macos-tier1
+
+# GATE-03: execute the committed Mach-O tier-1 binaries on real macOS runners.
+#
+# The two cross-built macOS binaries (recovery/bin/{aarch64-macos,x86_64-macos}/
+# lcsas-restore + lcsas-keyshare) are produced by `zig cc -target <arch>-macos`
+# against zig's bundled libSystem stubs and bundled on every meta disc, but
+# every other gate runs on Linux/cdemu — so a zig/SDK regression (a Mach-O the
+# loader rejects, or a symbol the stub permits but real libSystem gates) would
+# ship green while leaving a Mac heir with an unproven tier-1 artifact.
+#
+# This workflow runs tests/recovery_hardening/test_tier1_macos_native.py on
+# hosted Intel + Apple-Silicon runners: list-snapshots, byte-identical fixture
+# restore, clean wrong-password failure, and a byte-exact keyshare combine.
+# Both matrix legs must pass.
+#
+# Gatekeeper note (UX_CONCERNS ID 004 stays open): a git-checkout binary has no
+# quarantine xattr, so this proves the binary is SOUND, not that a Finder
+# double-click works for an heir.
+
+on:
+  push:
+    paths:
+      - 'recovery/src/**'
+      - 'recovery/vendored/**'
+      - 'recovery/bin/**'
+      - 'recovery/Makefile'
+      - 'tests/recovery_hardening/test_tier1_macos_native.py'
+      - '.github/workflows/macos-tier1.yml'
+  pull_request:
+    paths:
+      - 'recovery/src/**'
+      - 'recovery/vendored/**'
+      - 'recovery/bin/**'
+      - 'recovery/Makefile'
+      - 'tests/recovery_hardening/test_tier1_macos_native.py'
+      - '.github/workflows/macos-tier1.yml'
+  # Weekly so runner-image drift (a new macOS that rejects the Mach-O) is
+  # caught even when recovery/ is quiet.
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  tier1:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Intel leg. GitHub retired macos-13; macos-15-intel is the
+          # supported Intel label through ~Aug 2027. When it retires, fall
+          # back to Rosetta 2 on an arm64 runner:
+          #   arch -x86_64 recovery/bin/x86_64-macos/lcsas-restore ...
+          # which still proves the Mach-O loads and runs.
+          - { runner: macos-15-intel, arch: x86_64 }
+          - { runner: macos-14,       arch: arm64  }
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clear any quarantine xattr (belt-and-braces)
+        run: xattr -rc recovery/bin || true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install LCSAS (editable, with dev deps)
+        run: pip install -e ".[dev]"
+
+      - name: Execute the Mach-O tier-1 binaries
+        run: pytest tests/recovery_hardening/test_tier1_macos_native.py -v
