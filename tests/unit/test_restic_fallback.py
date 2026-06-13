@@ -1149,23 +1149,136 @@ class TestDecompressZstd:
         result = _decompress_zstd(compressed)
         assert result == original
 
-    def test_zstd_not_installed_raises(self, monkeypatch):
-        """Lines 100-104: fallback function raises RuntimeError when no zstandard."""
+    def test_pure_python_zstd_fallback_round_trip(self):
+        """The pure-Python zstd backend round-trips real zstd frames.
+
+        RST-04: when ``zstandard`` is absent the fallback decompresses via
+        the vendored pure-Python decoder instead of raising.  This exercises
+        that backend directly (independent of whether this host has the
+        native package).
+        """
+        try:
+            import zstandard as zstd  # type: ignore[import-not-found]
+        except ImportError:
+            pytest.skip("need zstandard to PRODUCE a frame to decode")
+        from lcsas.restore._zstd_pure import decompress as pure_decompress
+        original = b"the quick brown fox 0123 " * 400
+        compressed = zstd.ZstdCompressor(level=9).compress(original)
+        assert pure_decompress(compressed, len(original) * 4) == original
+
+
+def _build_zstd_repo(tmp_path: Path) -> tuple[Path, bytes]:
+    """Build a restic repo whose data blob is zstd-compressed (repo v2).
+
+    Returns (repo_path, original_file_content).  The blob carries a
+    compression-type prefix byte + zstd frame and the index entry sets
+    ``uncompressed_length`` — the discriminator the fallback uses to
+    decompress.
+    """
+    import zstandard as zstd  # type: ignore[import-not-found]
+
+    repo = tmp_path / "zrepo"
+    repo.mkdir()
+    mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
+    _make_key_file(mk, PASSWORD, repo)
+
+    # A compressible file so the blob is genuinely zstd-encoded.
+    file_content = b"the quick brown fox jumps over the lazy dog. " * 200
+    file_id = hashlib.sha256(file_content).hexdigest()
+
+    root_tree = json.dumps({
+        "nodes": [{
+            "name": "big.txt",
+            "type": "file",
+            "mode": 0o644,
+            "mtime": "2026-01-15T10:00:00.000000000Z",
+            "uid": 1000, "gid": 1000,
+            "size": len(file_content),
+            "content": [file_id],
+        }],
+    }).encode()
+    root_tree_id = hashlib.sha256(root_tree).hexdigest()
+
+    # A compressed pack BLOB is the raw zstd frame (no compression-type
+    # prefix byte — that prefix belongs to repository FILES like index /
+    # snapshot, not to in-pack blobs).  The index entry's
+    # ``uncompressed_length`` is the discriminator.
+    compressed_blob = zstd.ZstdCompressor(level=9).compress(file_content)
+
+    pack_data = bytearray()
+    blobs_info: list[dict] = []
+    # data blob (compressed) then tree blob (uncompressed)
+    enc = _encrypt_with_master(compressed_blob)
+    blobs_info.append({
+        "id": file_id, "type": "data",
+        "offset": 0, "length": len(enc),
+        "uncompressed_length": len(file_content),
+    })
+    pack_data.extend(enc)
+    enc_tree = _encrypt_with_master(root_tree)
+    blobs_info.append({
+        "id": root_tree_id, "type": "tree",
+        "offset": len(pack_data), "length": len(enc_tree),
+    })
+    pack_data.extend(enc_tree)
+
+    pack_id = hashlib.sha256(bytes(pack_data)).hexdigest()
+    data_dir = repo / "data" / pack_id[:2]
+    data_dir.mkdir(parents=True)
+    (data_dir / pack_id).write_bytes(bytes(pack_data))
+
+    index_doc = json.dumps(
+        {"packs": [{"id": pack_id, "blobs": blobs_info}]}
+    ).encode()
+    index_dir = repo / "index"
+    index_dir.mkdir()
+    (index_dir / hashlib.sha256(index_doc).hexdigest()).write_bytes(
+        _encrypt_with_master(index_doc)
+    )
+
+    snapshot_doc = json.dumps({
+        "time": "2026-01-15T10:30:00.000000000Z",
+        "tree": root_tree_id,
+        "paths": ["/home/test"],
+        "hostname": "testhost",
+    }).encode()
+    snap_dir = repo / "snapshots"
+    snap_dir.mkdir()
+    (snap_dir / hashlib.sha256(snapshot_doc).hexdigest()).write_bytes(
+        _encrypt_with_master(snapshot_doc)
+    )
+
+    config_doc = json.dumps({"version": 2, "id": "ztest-repo-id"}).encode()
+    (repo / "config").write_bytes(_encrypt_with_master(config_doc))
+    return repo, file_content
+
+
+class TestZstdFallbackRestore:
+    """RST-04: full restore of a zstd-compressed repo via the pure backend."""
+
+    def test_zstd_fallback_used_without_zstandard(self, tmp_path, monkeypatch):
+        """A zstd-compressed snapshot restores byte-identical via the pure
+        backend, simulating a host where ``zstandard`` is absent."""
+        pytest.importorskip("zstandard")  # needed only to PRODUCE the repo
         from lcsas.restore import restic_fallback
-        if not restic_fallback._HAS_ZSTD:
-            # Already on the no-zstd path; call directly.
-            with pytest.raises(RuntimeError, match="zstandard"):
-                restic_fallback._decompress_zstd(b"somedata")
-        else:
-            # We can't easily re-execute module-level code, so cover the
-            # fallback message by calling the no-zstd variant directly.
-            def _no_zstd(data: bytes, max_output_size: int = 0) -> bytes:
-                raise RuntimeError(
-                    "This repository uses zstd compression but the 'zstandard' "
-                    "Python package is not installed."
-                )
-            with pytest.raises(RuntimeError, match="zstandard"):
-                _no_zstd(b"data")
+        from lcsas.restore._zstd_pure import decompress as pure_decompress
+
+        repo, original = _build_zstd_repo(tmp_path)
+
+        # Force the no-native-zstd path: route _decompress_zstd through the
+        # pure-Python decoder regardless of what this host has installed.
+        monkeypatch.setattr(
+            restic_fallback, "_decompress_zstd",
+            lambda data, max_output_size=0: pure_decompress(data, max_output_size),
+        )
+
+        target = tmp_path / "out"
+        restorer = restic_fallback.PurePythonRestorer(
+            repo_path=repo, password=PASSWORD, interactive=False,
+        )
+        restorer.restore(target=target)
+        assert (target / "big.txt").read_bytes() == original
+        assert restorer.failures == 0
 
 
 # ── _try_keys Error Path Tests ───────────────────────────────────

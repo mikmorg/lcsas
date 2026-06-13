@@ -1346,3 +1346,68 @@ class TestMetaStartHereVariants:
         assert "SHARE CARDS" not in bare, (
             "single-key archive must not show split-key instructions"
         )
+
+
+# ── RST-04: loud failure when native zstandard is unbundleable ───
+
+
+class TestZstdBundleGuard:
+    """`_bundle_tools` must fail loud when native zstandard is absent.
+
+    The native ``zstandard`` C extension is the FAST tier-3 path; the
+    pure-Python decoder (lcsas.restore._zstd_pure) always ships, so the
+    failure is about not silently shipping a slow-only disc when the
+    operator could have had the fast path.
+    """
+
+    @staticmethod
+    def _patch_heavy(monkeypatch):
+        """No-op the binary/python bundling so the test stays light."""
+        monkeypatch.setattr(ToolBundler, "bundle_binary", lambda self, t: None)
+        monkeypatch.setattr(ToolBundler, "bundle_python", lambda self: None)
+
+    def test_build_fails_when_zstandard_unbundleable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from lcsas.meta.builder import MetaBuildError
+
+        self._patch_heavy(monkeypatch)
+        # Pretend NOTHING is installed on the build host.
+        monkeypatch.setattr(
+            ToolBundler, "_find_installed_package", staticmethod(lambda name: None)
+        )
+        builder = MetaVolumeBuilder(tmp_path / "meta")
+        with pytest.raises(MetaBuildError, match="zstandard"):
+            builder._bundle_tools()
+
+    def test_allow_no_zstd_suppresses_the_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        self._patch_heavy(monkeypatch)
+        monkeypatch.setattr(
+            ToolBundler, "_find_installed_package", staticmethod(lambda name: None)
+        )
+        builder = MetaVolumeBuilder(tmp_path / "meta", allow_no_zstd=True)
+        # Should not raise; records that native zstd was not bundled.
+        builder._bundle_tools()
+        assert builder._native_zstd_bundled is False
+
+    def test_volume_info_records_zstd_capability(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        self._patch_heavy(monkeypatch)
+        monkeypatch.setattr(
+            ToolBundler, "_find_installed_package", staticmethod(lambda name: None)
+        )
+        builder = MetaVolumeBuilder(tmp_path / "meta", allow_no_zstd=True)
+        (tmp_path / "meta").mkdir()
+        builder._bundle_tools()
+        builder._write_volume_info()
+        info = json.loads(
+            (tmp_path / "meta" / "volume_info.json").read_text()
+        )
+        zstd = info["zstd_support"]
+        # Pure-Python tier-3 zstd always available; native absent here.
+        assert zstd["pure_python_zstd"] is True
+        assert zstd["native_zstd"] is False
+        assert zstd["native_zstd_arch"] is None

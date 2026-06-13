@@ -192,10 +192,24 @@ def test_build_standalone_preserves_import_guard() -> None:
     assert import_idx > try_idx, (
         "`import zstandard` no longer sits inside the try block."
     )
-    # The except branch must set _HAS_ZSTD = False (otherwise the
-    # guard 'works' but downstream code raises NameError on _HAS_ZSTD).
-    except_idx = text.find("except ImportError:\n    _HAS_ZSTD = False")
+    # RST-04: the except branch must (a) set _HAS_ZSTD = False and (b)
+    # degrade to the inlined pure-Python decoder, NOT raise on missing
+    # zstandard.  The old "pip install zstandard" raise stub is gone.
+    except_idx = text.find("except ImportError:")
     assert except_idx > import_idx, (
-        "the `except ImportError: _HAS_ZSTD = False` fallback no longer "
-        "follows the import."
+        "the `except ImportError:` fallback no longer follows the import."
+    )
+    has_zstd_false = text.find("_HAS_ZSTD = False", except_idx)
+    assert has_zstd_false > except_idx, (
+        "the except branch no longer sets _HAS_ZSTD = False."
+    )
+    # The fallback must route _decompress_zstd to the inlined pure decoder.
+    assert text.find("decompress", has_zstd_false) > has_zstd_false, (
+        "the no-native-zstd branch must degrade to the pure-Python "
+        "decompressor (RST-04), not raise."
+    )
+    # The dead 'pip install zstandard' raise stub must be gone.
+    assert "pip install zstandard\\n" not in text, (
+        "the old raise-on-missing-zstandard stub should be removed; "
+        "tier 3 now degrades to the slow pure-Python decoder."
     )

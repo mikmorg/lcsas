@@ -123,3 +123,6 @@ remedy is burning a new meta disc — note this in `recovery/docs/TIERS.txt` tie
 3 days: 0.5 Part 1 + tests, 2 decoder port + vector tests (the C decoder is the reference, so
 this is translation + validation, not research), 0.5 qemu/portability wiring. Needs qemu-user
 (already used by the tier-1 cross-arch tests on this machine).
+
+---
+**Implemented:** 2026-06-13. Both parts shipped, with one deviation: the plan's premise that a "from-scratch C decoder" (`zstd_dec.c`) existed to translate is wrong — that file is a 70-line wrapper around the full vendored upstream zstd v1.5.6 library, so `_zstd_pure.py` was written against RFC 8878 directly (predefined FSE DTables + OF_base extracted verbatim from `recovery/vendored/zstd` for self-consistency) and validated by ~12k round-trips against the `zstandard` compressor (all levels/sizes/checksums) plus the C decoder's vector corpus. Part 1 (loud meta-build failure + `--allow-no-zstd` + per-target `zstd_support` in volume_info.json) and Part 2 (pure decoder wired as the no-native-zstd fallback, inlined into standalone_restorer.py) both as planned. qemu cross-arch test is opt-in/self-skipping (needs an aarch64 CPython at `LCSAS_AARCH64_PYTHON`; none committed in-repo).

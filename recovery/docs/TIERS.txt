@@ -147,6 +147,34 @@ tier 3 from a NEWER meta disc against those old data discs -- the
 restorer reads the data discs' packs, the script comes from the meta
 disc.
 
+TIER 3: ZSTD DECOMPRESSION (rustic v2 default)
+
+rustic v2 repos are zstd-compressed by default, so tier 3 MUST be able
+to decompress zstd to be useful.  Two backends, fast-path first:
+
+  * Native ``zstandard`` C extension, when present.  ~100x faster, but
+    arch- and CPython-minor-specific: the meta builder bundles only the
+    BUILD HOST's copy (tools/lib/pythonX.Y/zstandard), so it helps only
+    a recovery host that matches that arch + CPython minor.
+  * Pure-Python decoder (lcsas.restore._zstd_pure), the fallback.  It is
+    stdlib-only and ships in the LCSAS source on every meta-volume AND
+    inlined into the per-disc standalone_restorer.py, so it works under
+    ANY of the bundled per-target CPython interpreters (all six approved
+    targets) and on any future CPython -- slower, but always available.
+    A startup log line notes the slow path; install 'zstandard' for the
+    fast one.
+
+The build records native-zstd capability per meta-volume in
+volume_info.json ("zstd_support"); ``lcsas meta build`` fails loud if
+the build host has no native zstandard (pass --allow-no-zstd to accept
+the pure-Python-only fast-path gap).
+
+NOTE for ALREADY-BURNED meta discs: a meta disc burned before this
+change carries native-zstd-only tier-3 (host-arch only).  The remedy is
+the same as above -- burn a NEW meta disc; its inlined pure-Python
+decoder reads the same (already-burned) zstd-compressed data discs on
+any architecture.
+
 TIER FALLBACK ON RUNTIME FAILURES
 
 The default cascade ``exec``s the first available tier, so a tier-1

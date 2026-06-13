@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-split-docs blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-tier3-qemu test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-split-docs blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e
 
 # Default target: lint + typecheck + every test tier ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
@@ -39,6 +39,14 @@ verify-burn-e2e:
 # tests/recovery_hardening/README.md for the per-test catalogue.
 test-recovery-hardening:
 	pytest tests/recovery_hardening/ -v
+
+# Opt-in cross-arch proof: tier-3 zstd restore under aarch64 CPython via
+# qemu-user (RST-04).  Needs qemu-aarch64-static + an aarch64 python3 at
+# LCSAS_AARCH64_PYTHON.  The portability lane in
+# test_tier3_zstd_portability.py runs in the always-on suite above.
+test-tier3-qemu:
+	LCSAS_ZSTD_QEMU=1 pytest \
+		tests/recovery_hardening/test_tier3_zstd_qemu.py -v
 
 # Full test suite.  Recovery-hardening runs LAST: every other tier
 # (unit/integration/e2e) must succeed first; the hardening checks are

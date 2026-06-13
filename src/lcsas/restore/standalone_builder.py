@@ -35,6 +35,7 @@ def build_standalone() -> str:
     with a ``__main__`` CLI block.
     """
     aes_src = (_SRC_DIR / "_aes_pure.py").read_text()
+    zstd_src = (_SRC_DIR / "_zstd_pure.py").read_text()
     fallback_src = (_SRC_DIR / "restic_fallback.py").read_text()
 
     # ── Process _aes_pure.py ─────────────────────────────────────
@@ -42,8 +43,16 @@ def build_standalone() -> str:
     aes_lines = _strip_header(aes_src)
     aes_body = "\n".join(aes_lines)
 
+    # ── Process _zstd_pure.py ────────────────────────────────────
+    # Pure-Python zstd decompressor — the tier-3 fallback when the
+    # native ``zstandard`` package is absent (RST-04).
+    zstd_lines = _strip_header(zstd_src)
+    zstd_body = "\n".join(zstd_lines)
+
     # ── Process restic_fallback.py ───────────────────────────────
-    # Remove the lcsas import line
+    # Remove the lcsas import lines (both _aes_pure and _zstd_pure; the
+    # latter is imported lazily inside the ImportError branch, so it is
+    # rewritten to a direct reference to the inlined decompress()).
     fallback_src = re.sub(
         r"^from lcsas\.restore\._aes_pure import \(\n"
         r"(?:    .*\n)*"
@@ -59,11 +68,27 @@ def build_standalone() -> str:
         fallback_src,
         flags=re.MULTILINE,
     )
+    # The pure-zstd import is inside the ImportError branch; replace the
+    # import statement with a binding to the inlined symbol so the
+    # generated single file remains self-contained.
+    fallback_src = re.sub(
+        r"^(\s*)from lcsas\.restore\._zstd_pure import "
+        r"decompress as (\w+)$",
+        r"\1\2 = decompress",
+        fallback_src,
+        flags=re.MULTILINE,
+    )
     fallback_lines = _strip_header(fallback_src)
     fallback_body = "\n".join(fallback_lines)
 
     # ── Assemble ─────────────────────────────────────────────────
-    return _HEADER + aes_body + "\n\n" + fallback_body + "\n\n" + _CLI_BLOCK
+    return (
+        _HEADER
+        + aes_body + "\n\n"
+        + zstd_body + "\n\n"
+        + fallback_body + "\n\n"
+        + _CLI_BLOCK
+    )
 
 
 def _strip_header(source: str) -> list[str]:
@@ -106,10 +131,13 @@ _HEADER = textwrap.dedent("""\
     #
     #  This file is AUTO-GENERATED from:
     #    - src/lcsas/restore/_aes_pure.py   (AES-256-CTR implementation)
+    #    - src/lcsas/restore/_zstd_pure.py  (pure-Python zstd decompressor)
     #    - src/lcsas/restore/restic_fallback.py  (restic repo reader)
     #
     #  It restores data from a restic/rustic repository using ONLY
-    #  Python 3 standard library (plus optional zstandard for zstd).
+    #  Python 3 standard library.  zstd-compressed (rustic v2 default)
+    #  repos decompress via the bundled pure-Python decoder; the optional
+    #  'zstandard' package is used instead when present (~100x faster).
     #
     #  Usage:
     #    python3 standalone_restorer.py --repo /path/to/cache \\\\

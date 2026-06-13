@@ -27,6 +27,11 @@ from lcsas.meta.bundler import ToolBundler
 
 # ── Constants ────────────────────────────────────────────────────────
 
+
+class MetaBuildError(Exception):
+    """A meta-volume could not be built completely / safely."""
+
+
 _REQUIRED_TOOLS = ("rustic", "xorriso")
 _OPTIONAL_TOOLS = ("dvdisaster",)
 
@@ -1647,6 +1652,7 @@ class MetaVolumeBuilder:
         catalog_db_path: Path | None = None,
         recovery_dir: Path | None = None,
         bundle_recovery_toolchain: bool = True,
+        allow_no_zstd: bool = False,
     ) -> None:
         """
         Args:
@@ -1665,6 +1671,13 @@ class MetaVolumeBuilder:
         self._config = config
         self._catalog_db_path = catalog_db_path
         self._bundle_recovery_toolchain = bundle_recovery_toolchain
+        self._allow_no_zstd = allow_no_zstd
+        # Whether the native ``zstandard`` package was bundled for this
+        # build host's arch/CPython.  Recorded in volume_info.json so
+        # ``lcsas meta verify`` can report tier-3 native-zstd coverage.
+        # (Tier-3 zstd ALSO works via the bundled pure-Python decoder on
+        # every target, so a False here is a speed note, not a gap.)
+        self._native_zstd_bundled = False
 
         if project_root is None:
             # meta/ → lcsas/ → src/ → (project root)
@@ -1740,9 +1753,29 @@ class MetaVolumeBuilder:
 
         bundler.bundle_python()
 
-        # Bundle zstandard for pure-Python fallback restore of
-        # zstd-compressed repos (rustic v2 default).
-        bundler.bundle_python_package("zstandard")
+        # Bundle the native ``zstandard`` package for fast tier-3 restore
+        # of zstd-compressed repos (rustic v2 default).  This copies the
+        # BUILD HOST's arch/CPython-specific C extension, so it only helps
+        # recovery hosts that match.  Cross-target / future-CPython hosts
+        # fall back to the bundled pure-Python decoder
+        # (``lcsas.restore._zstd_pure``), which is slower but always works.
+        #
+        # RST-04: if the build host has no ``zstandard`` at all the native
+        # copy is silently absent; fail loud unless explicitly allowed, so
+        # an operator who WANTED the fast path isn't surprised by a
+        # pure-Python-only meta disc.
+        self._native_zstd_bundled = (
+            bundler.bundle_python_package("zstandard") is not None
+        )
+        if not self._native_zstd_bundled and not self._allow_no_zstd:
+            raise MetaBuildError(
+                "zstandard is not installed on the build host — the fast "
+                "tier-3 restore path for zstd-compressed (default) repos "
+                "would not be bundled. The pure-Python decoder still works "
+                "(slower), but if you want the native fast path, install it "
+                "(pip install zstandard). Pass --allow-no-zstd to build "
+                "anyway."
+            )
 
         # Bundle the stdlib-only SLIP-0039 keyshare package (+ wordlist.txt)
         # so the standalone keyshare_combine.py pre-step can reconstruct a
@@ -2357,6 +2390,21 @@ class MetaVolumeBuilder:
                 "restore_script": "restore.sh",
                 "restore_auto_script": "restore-auto.sh",
                 "documentation": True,
+            },
+            # Tier-3 zstd capability (RST-04).  ``native_zstd`` records
+            # whether the build host's ``zstandard`` C extension was bundled
+            # (fast path, host-arch/CPython-specific).  ``pure_python_zstd``
+            # is always True: the stdlib-only decoder
+            # (lcsas.restore._zstd_pure) ships in the LCSAS source and works
+            # on every target / CPython minor.
+            "zstd_support": {
+                "native_zstd": self._native_zstd_bundled,
+                "native_zstd_arch": (
+                    f"linux-{os.uname().machine}-cp"
+                    f"{sys.version_info.major}{sys.version_info.minor}"
+                    if self._native_zstd_bundled else None
+                ),
+                "pure_python_zstd": True,
             },
             "requires": {
                 "key_file": "User must provide the encryption key file",

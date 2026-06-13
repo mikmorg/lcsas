@@ -538,6 +538,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--project-root", type=Path, default=None,
         help="LCSAS project root (default: auto-detect).",
     )
+    meta_build.add_argument(
+        "--allow-no-zstd", action="store_true",
+        help=(
+            "Build even if the native 'zstandard' package is missing on "
+            "this host. The bundled pure-Python zstd decoder still enables "
+            "tier-3 restore of compressed repos (slower); without this flag "
+            "the build fails loud so the missing fast path is not a "
+            "surprise."
+        ),
+    )
 
     meta_verify = meta_sub.add_parser(
         "verify",
@@ -3070,7 +3080,7 @@ def cmd_recovery(args: argparse.Namespace) -> int:
 
 def cmd_meta_build(args: argparse.Namespace) -> int:
     """Build a self-contained meta-volume with all restore tools."""
-    from lcsas.meta.builder import MetaVolumeBuilder
+    from lcsas.meta.builder import MetaBuildError, MetaVolumeBuilder
 
     # Load config for survivability fields (START_HERE.txt, KEY_INFO.txt)
     config = None
@@ -3095,6 +3105,7 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
         project_root=args.project_root,
         config=config,
         catalog_db_path=db_path,
+        allow_no_zstd=getattr(args, "allow_no_zstd", False),
     )
 
     logger.info(f"Building meta-volume in {output} ...")
@@ -3103,6 +3114,9 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
     except FileNotFoundError as e:
         logger.error(f"{e}")
         logger.error("Ensure rustic, xorriso, and python3 are installed.")
+        return 1
+    except MetaBuildError as e:
+        logger.error(f"{e}")
         return 1
 
     logger.info(f"Meta-volume built successfully at {output}")

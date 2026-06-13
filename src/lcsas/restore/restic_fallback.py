@@ -99,15 +99,25 @@ try:
 
     _HAS_ZSTD = True
 except ImportError:
+    # No native zstandard: fall back to the vendored pure-Python zstd
+    # decompressor.  It is ~100x slower but stdlib-only, so tier-3 restore
+    # of zstd-compressed (rustic v2 default) repos still works on any
+    # architecture / CPython minor with nothing pre-installed.  This is the
+    # whole point of tier 3 — see RST-04.
+    from lcsas.restore._zstd_pure import decompress as _pure_zstd_decompress
+
     _HAS_ZSTD = False
+    _warned_pure_zstd = False
 
     def _decompress_zstd(data: bytes, max_output_size: int = 0) -> bytes:  # noqa: F811
-        raise RuntimeError(
-            "This repository uses zstd compression but the 'zstandard' "
-            "Python package is not installed.  Install it with:\n"
-            "  pip install zstandard\n"
-            "or extract compressed blobs manually using the zstd CLI tool."
-        )
+        global _warned_pure_zstd
+        if not _warned_pure_zstd:
+            _warned_pure_zstd = True
+            _log(
+                "using slow built-in zstd decoder — install 'zstandard' "
+                "for ~100x faster restore"
+            )
+        return _pure_zstd_decompress(data, max_output_size)
 
 
 # ── Poly1305-AES MAC ────────────────────────────────────────────
