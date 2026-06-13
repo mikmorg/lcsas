@@ -374,6 +374,28 @@ all-arches: bin/x86_64/lcsas-restore bin/aarch64/lcsas-restore bin/riscv64/lcsas
 # redistributables or admin privileges.
 ZIG_CC = python3 -m ziglang cc
 
+# Pinned cross-build toolchain.  bin-parity byte-compares committed artifacts
+# against clean rebuilds, so the zig version must match the one that produced
+# the committed bins, or byte-identity becomes meaningless/flaky.  The pin
+# lives in recovery/TOOLCHAIN (e.g. "ziglang==0.16.0"); this warns on skew
+# (recursive = so the probe runs only when expanded, not on every make).
+TOOLCHAIN_PIN = $(shell cut -d= -f3 TOOLCHAIN 2>/dev/null)
+ZIG_VERSION   = $(shell python3 -m ziglang version 2>/dev/null)
+
+# Emit a loud warning (not a hard error -- host builds don't need zig) when
+# the installed ziglang version differs from the pin.  Used by bin-parity.
+check-toolchain:
+	@if [ -z "$(TOOLCHAIN_PIN)" ]; then \
+	    echo "[toolchain] WARNING: recovery/TOOLCHAIN missing or unparseable"; \
+	elif [ "$(ZIG_VERSION)" != "$(TOOLCHAIN_PIN)" ]; then \
+	    echo "[toolchain] WARNING: ziglang $(ZIG_VERSION) installed, but"; \
+	    echo "[toolchain]          recovery/TOOLCHAIN pins $(TOOLCHAIN_PIN)."; \
+	    echo "[toolchain]          bin-parity byte-identity may be unreliable;"; \
+	    echo "[toolchain]          install the pinned version: pip install \"$$(cat TOOLCHAIN)\""; \
+	else \
+	    echo "[toolchain] ziglang $(ZIG_VERSION) matches recovery/TOOLCHAIN pin"; \
+	fi
+
 bin/x86_64-windows/lcsas-restore.exe:
 	rm -rf build/x86_64-windows
 	$(MAKE) BUILD=build/x86_64-windows \
@@ -513,6 +535,21 @@ repro-check:
 		ls -la /tmp/lcsas-restore.first /tmp/lcsas-restore.second; \
 		exit 1; \
 	fi
+
+# ── bin-parity (GATE-08) ──────────────────────────────────────────
+#
+# Prove the COMMITTED recovery/bin/<arch>/ artifacts -- the ones the meta
+# disc actually bundles -- still match current source.  For each committed
+# binary, clean cross-rebuild with the pinned zig + SOURCE_DATE_EPOCH and
+# byte-compare against bin/.  Linux musl targets are byte-reproducible and
+# gated; non-reproducible Mach-O/PE targets are listed in BIN_PARITY_EXEMPT
+# (still rebuilt, byte-compare skipped, exemption printed loudly).  Also
+# fails on any uncommitted change under recovery/bin.
+#
+# Usage:
+#   make -C recovery bin-parity
+bin-parity: check-toolchain
+	python3 scripts/bin_parity.py
 
 clean:
 	rm -rf $(BUILD) build
@@ -1022,4 +1059,4 @@ fault-inject: $(BUILD)/malloc_inject.so
 	python3 scripts/run_fault_inject.py --max-sweep $(MAX_N)
 	@echo "[fault-inject] PASS: 0 crashes across all test binaries"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check zig-aarch64 zig-riscv64 coverage-c sanitize fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-smoke audit-gate fault-inject
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check check-toolchain bin-parity zig-aarch64 zig-riscv64 coverage-c sanitize fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-smoke audit-gate fault-inject

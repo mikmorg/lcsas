@@ -1,0 +1,65 @@
+name: bin-parity
+
+# GATE-08: prove the COMMITTED recovery/bin/<arch>/ artifacts -- the binaries
+# the meta disc actually bundles -- still match current source.
+#
+# Almost every other gate builds a FRESH binary from source, so a C fix can
+# land, pass every source-level gate, and still ship an UNFIXED committed
+# binary on every meta disc burned afterwards.  This gate closes that hole:
+# for each committed artifact it does a clean cross-rebuild with the pinned
+# zig (recovery/TOOLCHAIN) + SOURCE_DATE_EPOCH and byte-compares it against
+# the committed file.  Linux musl targets are byte-reproducible and gated;
+# non-reproducible Mach-O/PE targets are listed in recovery/BIN_PARITY_EXEMPT
+# (still rebuilt to prove they compile+link, byte-compare skipped, exemption
+# printed loudly).  Pairs with macos-tier1.yml / the qemu+wine tests, which
+# prove "it runs"; this proves "it embodies current source".
+
+on:
+  push:
+    paths:
+      - 'recovery/src/**'
+      - 'recovery/vendored/**'
+      - 'recovery/bin/**'
+      - 'recovery/Makefile'
+      - 'recovery/TOOLCHAIN'
+      - 'recovery/BIN_PARITY_EXEMPT'
+      - 'recovery/scripts/bin_parity.py'
+      - '.github/workflows/bin-parity.yml'
+  pull_request:
+    paths:
+      - 'recovery/src/**'
+      - 'recovery/vendored/**'
+      - 'recovery/bin/**'
+      - 'recovery/Makefile'
+      - 'recovery/TOOLCHAIN'
+      - 'recovery/BIN_PARITY_EXEMPT'
+      - 'recovery/scripts/bin_parity.py'
+      - '.github/workflows/bin-parity.yml'
+  # Weekly backstop so toolchain-image drift is caught even when recovery/
+  # is quiet.
+  schedule:
+    - cron: "37 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  bin-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the pinned zig toolchain
+        # Install exactly the version pinned in recovery/TOOLCHAIN
+        # (e.g. "ziglang==0.16.0"), so byte-identity is meaningful.
+        run: pip install "$(cat recovery/TOOLCHAIN)"
+
+      - name: Rebuild-and-diff committed binaries
+        run: make -C recovery bin-parity

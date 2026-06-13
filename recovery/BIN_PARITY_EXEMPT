@@ -1,0 +1,28 @@
+# recovery/BIN_PARITY_EXEMPT -- targets exempt from the bin-parity byte gate.
+#
+# `make -C recovery bin-parity` clean-rebuilds every committed
+# recovery/bin/<arch>/ artifact with the pinned toolchain (recovery/TOOLCHAIN)
+# and SOURCE_DATE_EPOCH and byte-compares it against the committed file.  A
+# target listed here is NOT byte-compared -- because its current toolchain
+# produces non-byte-reproducible output -- but bin-parity STILL clean-rebuilds
+# it (proving it compiles+links) and prints the exemption loudly.
+#
+# Exemption is a liability, not a free pass: GATE-08 step 5 mandates that each
+# exempt target carry a tracking issue.  Drop a target the moment its toolchain
+# yields byte-reproducible output (e.g. a future zig with deterministic
+# Mach-O/PE linking, or a documented post-link normalization step).
+#
+# Format (one per line):  <rel-path-under-bin/>  issue=#N  reason="..."
+# Blank lines and #-comments are ignored.
+#
+# zig 0.16.0's Mach-O linker recomputes LC_UUID + chained-fixup / function-
+# starts / code-directory hashes per run (~38KB scattered diff across two
+# back-to-back builds); -Wl,-no_uuid is rejected as an unsupported linker arg.
+x86_64-macos/lcsas-restore    issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
+x86_64-macos/lcsas-keyshare   issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
+aarch64-macos/lcsas-restore   issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
+aarch64-macos/lcsas-keyshare  issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
+# zig 0.16.0's PE-COFF linker embeds a per-run PE header timestamp + debug-
+# directory checksum (~20-byte diff across two back-to-back builds).
+x86_64-windows/lcsas-restore.exe   issue=#320  reason="zig 0.16.0 PE linker non-reproducible"
+x86_64-windows/lcsas-keyshare.exe  issue=#320  reason="zig 0.16.0 PE linker non-reproducible"
