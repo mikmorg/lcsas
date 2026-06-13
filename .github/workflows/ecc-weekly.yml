@@ -1,0 +1,53 @@
+name: ecc-weekly
+
+# The RS03 ECC repair proof (tests/integration/test_ecc_repair.py) is the only
+# end-to-end validation of the disc-integrity layer's core promise: below-
+# threshold disc damage repairs byte-identical, above-threshold fails loud. It
+# is opt-in (LCSAS_ECC_REPAIR=1) and slow, so it never runs in the default
+# push/PR suite. This workflow opts in explicitly:
+#   - weekly schedule bounds toolchain/environment-drift regressions to days;
+#   - pull_request on the ECC wrapper paths gives immediate coverage to the
+#     highest-risk edits (argument drift, wrong image targeted, redundancy
+#     semantics) without waiting for Monday.
+# See plans/audit-2026-06/GATE-05-schedule-ecc-repair-proof-ci.md.
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"          # Mondays 04:00 UTC
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - "src/lcsas/ecc/**"
+      - "tests/integration/test_ecc_repair.py"
+      - ".github/workflows/ecc-weekly.yml"
+
+jobs:
+  ecc-repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install xorriso and dvdisaster
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorriso dvdisaster
+          xorriso -version
+          dvdisaster --version
+      - name: Install LCSAS (editable, with dev deps)
+        run: make dev
+      - name: RS03 repair proof (below-threshold repairs byte-identical; above fails loud)
+        run: LCSAS_ECC_REPAIR=1 pytest tests/integration/test_ecc_repair.py -v -m integration
+      - name: File an issue on failure
+        # Scheduled-run failures email the workflow-file author, but a red
+        # Monday run is easy to miss. File a tracking issue so it can't be.
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "ecc-weekly failed: RS03 repair proof regressed" \
+            --body "The scheduled RS03 ECC repair proof (\`tests/integration/test_ecc_repair.py\`) failed on \`${{ github.sha }}\`. The disc-integrity repair path may be regressed — every disc burned thereafter could be unrepairable. Investigate run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --label "bug" || true

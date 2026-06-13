@@ -128,3 +128,6 @@ No catalog/schema impact.
 1 day: 0.25 workflow, 0.25 issue-on-failure step, 0.5 first-run iteration and
 runtime measurement on hosted runners. No special hardware (works on a plain
 runner — the test damages ISO files, not physical discs).
+
+---
+**Implemented:** 2026-06-13. As planned — new `.github/workflows/ecc-weekly.yml` (schedule Mon 04:00 UTC + workflow_dispatch + PR on ECC paths), opt-in test unchanged, issue-on-scheduled-failure step added. Doc lines drifted from 95-101/89-91: the ECC-repair description actually lives at READINESS_CHECKLIST.txt:147-151; updated there and in root CLAUDE.md to state the weekly CI run.

@@ -148,7 +148,10 @@ ONGOING MAINTENANCE  (monthly, or after each new disc set)
     repair path itself (below-threshold repair restores byte-identical;
     above-threshold damage fails loud rather than silently) is verified
     against the real dvdisaster binary by
-    tests/integration/test_ecc_repair.py (opt-in: LCSAS_ECC_REPAIR=1).
+    tests/integration/test_ecc_repair.py.  That proof runs weekly in CI
+    (the ecc-weekly workflow: scheduled Mondays + on any PR touching the
+    ECC wrapper) and is also available locally via the opt-in
+    LCSAS_ECC_REPAIR=1 invocation.
     Recording matters: the verification history travels with the
     holographic catalog onto every later disc, so an heir can ask
     "when was each copy last confirmed good?" decades from now.
