@@ -40,6 +40,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         if (toks[i].type == LCSAS_JSON_STRING) {
             lcsas_json_decode_string((const char *)data, &toks[i],
                                      out, OUT_CAP);
+        } else if (toks[i].type == LCSAS_JSON_NUMBER) {
+            /* Exercise the integer decoder's overflow guard (T1C-02).
+             * Long digit runs in a NUMBER token must not invoke signed
+             * overflow UB; result is discarded. */
+            long long v;
+            lcsas_json_decode_int((const char *)data, &toks[i], &v);
         }
     }
 

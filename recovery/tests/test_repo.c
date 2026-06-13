@@ -283,6 +283,46 @@ main(void)
         lcsas_blob_index_free(&ix);
     }
 
+    /* ── T1C-02: oversized blob `length` is range-rejected ──────────── */
+    /* The fixture's seventh index file declares two bad blobs: "ab"*32
+     * with a length that overflows long long (caught by decode_int) and
+     * "ba"*32 with a 1 TiB length that decodes but exceeds the 512 MiB
+     * cap (caught by parse_blob_entry's range check).  load_index must
+     * still succeed (per-entry skip), but neither blob may appear in the
+     * merged index — proving both were rejected before any
+     * need_end/malloc/pread.  ix.count stays 16. */
+    {
+        lcsas_blob_index ix;
+        const lcsas_blob_loc *loc;
+        unsigned char bad_id[32];
+        lcsas_blob_index_init(&ix);
+        rc = lcsas_repo_load_index(repo, &mk, &ix);
+        if (rc != 0) {
+            fprintf(stderr, "FAIL: T1C-02 load_index rc=%d\n", rc);
+            fails++;
+        }
+        if (ix.count != 16) {
+            fprintf(stderr, "FAIL: T1C-02 index count=%zu, want 16 "
+                    "(oversized entries must be dropped)\n", ix.count);
+            fails++;
+        }
+        memset(bad_id, 0xAB, 32);
+        loc = lcsas_blob_index_find(&ix, bad_id);
+        if (loc != NULL) {
+            fprintf(stderr, "FAIL: T1C-02 overflow-length blob was "
+                    "accepted into the index\n");
+            fails++;
+        }
+        memset(bad_id, 0xBA, 32);
+        loc = lcsas_blob_index_find(&ix, bad_id);
+        if (loc != NULL) {
+            fprintf(stderr, "FAIL: T1C-02 over-cap-length blob was "
+                    "accepted into the index\n");
+            fails++;
+        }
+        lcsas_blob_index_free(&ix);
+    }
+
     /* ── lcsas_repo_load_snapshots ──────────────────────────────────── */
     {
         lcsas_snapshot_list snaps;

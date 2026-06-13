@@ -5,7 +5,14 @@
  */
 #include "json_q.h"
 
+#include <limits.h>
 #include <stdlib.h>
+
+/* Strict C89 limits.h may predate the long long extension and lack
+ * LLONG_MAX; fall back to the standard two's-complement value. */
+#ifndef LLONG_MAX
+#define LLONG_MAX 9223372036854775807LL
+#endif
 
 size_t lcsas_json_max_tok_bytes = (size_t)256 * 1024 * 1024;
 
@@ -415,8 +422,14 @@ lcsas_json_decode_int(const char *src,
     if (i >= tok->end) return -1;
     while (i < tok->end) {
         char c = src[i];
+        int d;
         if (c < '0' || c > '9') return -1;
-        v = v * 10 + (c - '0');
+        d = c - '0';
+        /* Reject signed overflow (UB in C).  We never accept a value
+         * above LLONG_MAX, so the later negation -v cannot reach
+         * LLONG_MIN and stays well-defined. */
+        if (v > (LLONG_MAX - d) / 10) return -1;
+        v = v * 10 + d;
         i++;
     }
     *out = neg ? -v : v;

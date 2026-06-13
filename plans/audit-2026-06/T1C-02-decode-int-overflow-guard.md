@@ -89,3 +89,6 @@ No format or catalog impact; read-side hardening only.
 ## Effort
 
 1 day (0.5 impl, 0.5 tests/fuzz corpus + pre/post UBSan verification). Local clang only.
+
+---
+**Implemented:** 2026-06-13. As planned. decode_int overflow guard (LLONG_MAX, with #ifndef fallback) added in json_q.c; parse_blob_entry range-rejects off<0/len<=0/len>512MiB/off+len overflow with a printed error; read_blob gains a defensive length<=0 check before its mallocs. fuzz_json_parse now decodes NUMBER tokens; corpus seeded with a 40-digit length (verified to trap signed-overflow UBSan pre-fix, green post-fix). test_json boundary cases + a two-bad-entry gen_fixture index variant (overflow + over-cap length) assert load succeeds with the bad blobs dropped. Sanitize clean; fuzz-json-smoke 0 crashes. Rebuilt all 5 git-tracked tier-1 lcsas-restore binaries (zig: musl-static x86_64/aarch64/armv7, PE x86_64-windows, Mach-O aarch64-macos; qemu/wine-verified). MANIFEST.sha256 left as-is per predecessor T1C-01 convention (already stale at HEAD; regenerating adds ~2300 unrelated corpus entries).

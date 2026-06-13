@@ -880,6 +880,45 @@ def make_pack_and_index(
     bad_pack_id_id = sha256(bad_pack_id_enc)
     (index_dir / bad_pack_id_id.hex()).write_bytes(bad_pack_id_enc)
 
+    # SEVENTH index file (T1C-02): a structurally-valid pack with two bad
+    # blob entries.  parse_blob_entry must reject BOTH (print + per-entry
+    # skip) so neither reaches the need_end/malloc/pread path in read_blob.
+    #   - "ab"*32: length is a 40-digit number that OVERFLOWS long long,
+    #     caught by decode_int's overflow guard.
+    #   - "ba"*32: length (1 TiB) decodes fine but EXCEEDS the 512 MiB
+    #     blob-length cap, caught by parse_blob_entry's range check.
+    # load_index still succeeds; neither blob id may appear in the merged
+    # index.  The pack_id is fictional ("cd"*32, not on disk).
+    oversize_doc = {
+        "supersedes": [],
+        "packs": [
+            {
+                "id": "cd" * 32,
+                "blobs": [
+                    {
+                        "id": "ab" * 32,
+                        "type": "data",
+                        "offset": 0,
+                        "length": 9999999999999999999999999999999999999999,
+                    },
+                    {
+                        "id": "ba" * 32,
+                        "type": "data",
+                        "offset": 0,
+                        "length": 1099511627776,
+                    },
+                ],
+            }
+        ],
+    }
+    oversize_plain = json.dumps(oversize_doc).encode()
+    oversize_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R,
+        b"\x15" + b"\x00" * 15, oversize_plain
+    )
+    oversize_id = sha256(oversize_enc)
+    (index_dir / oversize_id.hex()).write_bytes(oversize_enc)
+
     # Make broken-tree IDs available via globals so main() can stuff
     # them into the manifest.
     global BROKEN_TREE_ID, BAD_HEX_TREE_ID, BAD_SUBDIR_TREE_ID

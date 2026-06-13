@@ -16,9 +16,20 @@
 #include "posix_compat.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef LLONG_MAX
+#define LLONG_MAX 9223372036854775807LL
+#endif
+
+/* Generous upper bound on a single blob's on-disc (compressed) length.
+ * The 256 MiB uncompressed cap bounds any valid blob; 512 MiB leaves
+ * ample headroom while still rejecting astronomical index values before
+ * they reach malloc/pread. */
+#define LCSAS_BLOB_LEN_MAX ((long long)(512 * 1024 * 1024))
 
 /* zstd magic; if we see this in plaintext we cannot proceed yet. */
 static const unsigned char ZSTD_MAGIC[4] = { 0x28, 0xB5, 0x2F, 0xFD };
@@ -433,6 +444,18 @@ parse_blob_entry(const char *src,
     if (lcsas_hex_decode(src + toks[id_i].start, 32, out->id) != 0) return -1;
     if (lcsas_json_decode_int(src, &toks[off_i], &off) != 0) return -1;
     if (lcsas_json_decode_int(src, &toks[len_i], &len) != 0) return -1;
+    /* Range-validate before these values reach need_end/malloc/pread in
+     * read_blob.  off+len must not overflow long long, and len must be a
+     * plausible blob size.  A failure here is a per-entry skip in pass-2
+     * (silent continue); print so the operator can see the bad entry. */
+    if (off < 0 || len <= 0 || len > LCSAS_BLOB_LEN_MAX
+            || off > LLONG_MAX - len) {
+        fprintf(stderr,
+                "ERROR: index entry for blob %.64s has invalid "
+                "offset/length\n",
+                src + toks[id_i].start);
+        return -1;
+    }
     out->offset = off;
     out->length = len;
     {
@@ -940,6 +963,10 @@ lcsas_repo_read_blob(const char *repo_path,
      * is unreadable, the catalog is stale, or the pack itself was
      * truncated during burn/copy.  We fstat first so the message can
      * name the actual on-disc size vs. the index-declared end offset. */
+    /* Defensive: parse_blob_entry range-checks length, but read_blob is
+     * also reachable with caller-supplied locs.  A non-positive length
+     * would make the casts to size_t below wrap into a wild malloc. */
+    if (loc->length <= 0) { close(fd); return -1; }
     {
         struct stat fst;
         long long need_end = (long long)loc->offset + (long long)loc->length;

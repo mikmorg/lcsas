@@ -323,6 +323,50 @@ int main(void)
         }
     }
 
+    /* T1C-02: decode_int overflow guard + boundary values. */
+    {
+        struct { const char *num; int want_rc; long long want_v; } cases[] = {
+            { "99999999999999999999999999",   -1, 0 },
+            { "9223372036854775807",           0, 9223372036854775807LL },
+            { "9223372036854775808",          -1, 0 },
+            { "-9223372036854775807",          0, -9223372036854775807LL }
+        };
+        size_t ci;
+        for (ci = 0; ci < sizeof cases / sizeof cases[0]; ci++) {
+            char src[64];
+            lcsas_json_tok toks[8];
+            long ntoks;
+            long long v = 0;
+            int rc;
+            /* Wrap the number in an object so the tokenizer sees a NUMBER. */
+            sprintf(src, "{\"length\":%s}", cases[ci].num);
+            ntoks = lcsas_json_parse(src, strlen(src), toks, 8);
+            if (ntoks <= 0) {
+                fprintf(stderr, "FAIL T1C-02 parse %s\n", cases[ci].num);
+                fails++;
+                continue;
+            }
+            {
+                long li = lcsas_json_obj_get(src, toks, 0, "length");
+                if (li < 0) {
+                    fprintf(stderr, "FAIL T1C-02 get %s\n", cases[ci].num);
+                    fails++;
+                    continue;
+                }
+                rc = (int)lcsas_json_decode_int(src, &toks[li], &v);
+            }
+            if (rc != cases[ci].want_rc) {
+                fprintf(stderr, "FAIL T1C-02 %s rc=%d want=%d\n",
+                        cases[ci].num, rc, cases[ci].want_rc);
+                fails++;
+            } else if (rc == 0 && v != cases[ci].want_v) {
+                fprintf(stderr, "FAIL T1C-02 %s v=%lld want=%lld\n",
+                        cases[ci].num, v, cases[ci].want_v);
+                fails++;
+            }
+        }
+    }
+
     if (fails == 0) printf("test_json: OK\n");
     return fails ? 1 : 0;
 }
