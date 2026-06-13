@@ -70,3 +70,6 @@ reaches heirs via the newest meta disc (the documented convention).
 ## Effort
 
 **0.5 focused days** (doc edits + one static test).
+
+---
+**Implemented:** 2026-06-13. As planned: corrected RECOVER.txt + READINESS_CHECKLIST.txt to 13-15% (tied to the 15% default, with augmented-mode floor nuance), added always-on static doc test test_ecc_capacity_claims.py importing default_ecc_redundancy_pct.

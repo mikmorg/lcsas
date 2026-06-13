@@ -139,8 +139,12 @@ ONGOING MAINTENANCE  (monthly, or after each new disc set)
       dvdisaster -t /dev/sr0
     Why: optical media fails gradually.  A disc that reads cleanly
     today may have marginal sectors that become fatal within a year.
-    The DVDisaster RS03 ECC layer can recover approximately 30% of
-    unreadable sectors, but only if the disc is caught early.  The RS03
+    The DVDisaster RS03 ECC layer can repair roughly 13-15% of
+    unreadable sectors with the default 15% redundancy (higher
+    configured redundancy raises this proportionally; augmented mode
+    may exceed it, so treat 13-15% as a conservative floor) -- but
+    only if the disc is caught early.  Treat ANY read error as a
+    signal to re-burn; do not wait.  The RS03
     repair path itself (below-threshold repair restores byte-identical;
     above-threshold damage fails loud rather than silently) is verified
     against the real dvdisaster binary by

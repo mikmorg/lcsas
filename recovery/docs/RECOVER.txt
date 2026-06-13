@@ -165,7 +165,11 @@ If the disc returns I/O errors:
   2. The disc is augmented with DVDisaster RS03 ECC.  If you have
      dvdisaster installed:
          dvdisaster -i /tmp/disc.iso -f
-     This restores up to ~30% of unreadable sectors.
+     With the default 15% redundancy, roughly 13-15% of unreadable
+     sectors can be repaired.  Higher configured redundancy raises
+     this proportionally (augmented mode may exceed the configured
+     figure, so treat 13-15% as a conservative floor).  Treat ANY
+     read error as a signal to re-burn -- do not wait.
 
   3. After ECC repair, mount the recovered ISO and continue with the
      normal cascade above.
