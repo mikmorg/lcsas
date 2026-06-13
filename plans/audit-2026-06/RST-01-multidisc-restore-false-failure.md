@@ -138,3 +138,6 @@ All always-on unit tests (`make test-unit`, already in `.github/workflows/test.y
 
 1.5 days (0.5 impl, 1 test — converting the repro into non-mocked unit tests and de-masking the
 existing mocks is most of the work). No special environment.
+
+---
+**Implemented:** 2026-06-13. As planned: `_prune_recovered` cache-truth guard + `_discs_for_packs` label helper applied at all four `cmd_restore_from_disc` raise points and both `cmd_restore_exec` raises; genuine-failure messages now name volume labels. De-masked the empty-`failed` mocks; added real-executor multidisc (batch+interactive) + label-naming tests (proved red without the prune). Deviation: opt-in `make test-e2e` driver deferred (needs a real 2-volume staged-archive harness); unit-lane acceptance gate met.

@@ -3588,7 +3588,11 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     )
                     all_failed.extend(result.failed)
 
-            # Retry failed packs from alternate volumes
+            # Retry failed packs from alternate volumes.  Prune against
+            # the cache first: never fail a restore whose cache is
+            # already complete (RST-01 — keeps the invariant uniform
+            # across the disc-only and config-driven restore paths).
+            all_failed = _prune_recovered(cache_dir, all_failed)
             if all_failed:
                 logger.info(f"\nRetrying {len(all_failed)} failed packs "
                             f"from alternate volumes...")
@@ -3598,11 +3602,18 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     verify=not args.skip_verify,
                     iso_shas=iso_shas,
                 )
+                still_failed = _prune_recovered(cache_dir, still_failed)
                 if still_failed:
                     from lcsas.restore.executor import PackCorruptionError
+                    discs = _discs_for_packs(still_failed, pick_list.volumes)
+                    where = (
+                        f" They live on disc(s): {', '.join(discs)}. "
+                        "Re-mount those discs (check for damage) and retry."
+                        if discs else ""
+                    )
                     raise PackCorruptionError(
-                        f"{len(still_failed)} packs could not be recovered "
-                        f"from any volume: {still_failed[:5]}"
+                        f"{len(still_failed)} pack(s) could not be "
+                        f"recovered.{where}"
                     )
         else:
             # Interactive: prompt user to mount each volume
@@ -3651,6 +3662,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     break
 
             # Interactive retry for failed packs
+            all_failed = _prune_recovered(cache_dir, all_failed)
             if all_failed:
                 still_failed = _retry_from_alternates_interactive(
                     executor, cache_dir,
@@ -3659,11 +3671,18 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     iso_dir=args.iso_dir,
                     iso_shas=iso_shas,
                 )
+                still_failed = _prune_recovered(cache_dir, still_failed)
                 if still_failed:
                     from lcsas.restore.executor import PackCorruptionError
+                    discs = _discs_for_packs(still_failed, pick_list.volumes)
+                    where = (
+                        f" They live on disc(s): {', '.join(discs)}. "
+                        "Re-mount those discs (check for damage) and retry."
+                        if discs else ""
+                    )
                     raise PackCorruptionError(
-                        f"{len(still_failed)} packs could not be recovered "
-                        f"from any volume: {still_failed[:5]}"
+                        f"{len(still_failed)} pack(s) could not be "
+                        f"recovered.{where}"
                     )
 
         # ── Post-ingest completeness check ──────────────────────────
@@ -4035,16 +4054,29 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                     )
                     all_failed.extend(result.failed)
 
+            # The cache is the source of truth: packs that live on a
+            # later disc were seeded into all_failed by the initial-disc
+            # ingest, then ingested for real in the loop above.  Prune
+            # them before any retry/raise so a multi-disc snapshot whose
+            # cache is complete never falsely fails (RST-01).
+            all_failed = _prune_recovered(cache_dir, all_failed)
             if all_failed:
                 still_failed = _retry_from_alternates_batch(
                     executor, cache_dir, vol_dir,
                     all_failed, alternates_map,
                     verify=not args.skip_verify,
                 )
+                still_failed = _prune_recovered(cache_dir, still_failed)
                 if still_failed:
+                    discs = _discs_for_packs(still_failed, pick_list.volumes)
+                    where = (
+                        f" They live on disc(s): {', '.join(discs)}. "
+                        "Re-mount those discs (check for damage) and retry."
+                        if discs else ""
+                    )
                     raise PackCorruptionError(
-                        f"{len(still_failed)} packs could not be recovered "
-                        f"from any disc: {still_failed[:5]}"
+                        f"{len(still_failed)} pack(s) could not be "
+                        f"recovered.{where}"
                     )
 
         else:
@@ -4111,16 +4143,24 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                             all_failed.extend(result.failed)
                         break
 
+            all_failed = _prune_recovered(cache_dir, all_failed)
             if all_failed:
                 still_failed = _retry_from_alternates_interactive(
                     executor, cache_dir,
                     all_failed, alternates_map,
                     verify=not args.skip_verify,
                 )
+                still_failed = _prune_recovered(cache_dir, still_failed)
                 if still_failed:
+                    discs = _discs_for_packs(still_failed, pick_list.volumes)
+                    where = (
+                        f" They live on disc(s): {', '.join(discs)}. "
+                        "Re-mount those discs (check for damage) and retry."
+                        if discs else ""
+                    )
                     raise PackCorruptionError(
-                        f"{len(still_failed)} packs could not be recovered "
-                        f"from any disc: {still_failed[:5]}"
+                        f"{len(still_failed)} pack(s) could not be "
+                        f"recovered.{where}"
                     )
 
         # Completeness check before running rustic.
@@ -4300,6 +4340,46 @@ def _collect_alt_labels(
                 seen.add(alt)
                 labels.append(alt)
     return labels
+
+
+def _prune_recovered(cache_dir: Path, failed: list[str]) -> list[str]:
+    """Drop packs already present + valid in the cache (deduped).
+
+    The cache is the source of truth: a pack ingested from any volume is
+    recovered no matter which disc reported it as "not found on this
+    volume".  Pruning ``failed`` against the cache before any retry/raise
+    is what prevents a multi-disc snapshot from falsely failing — packs
+    that live on a *later* disc are seeded into ``failed`` by the initial
+    ingest, then ingested for real later in the loop, but nothing else
+    removes them.  Also heals the verify-on-A / ingest-from-B case.
+    """
+    if not failed:
+        return []
+    from lcsas.restore.executor import RestoreExecutor
+
+    unique = list(dict.fromkeys(failed))
+    return RestoreExecutor.verify_cache_completeness(cache_dir, unique)
+
+
+def _discs_for_packs(
+    failed: list[str], volumes: dict[str, Any]
+) -> list[str]:
+    """Catalog volume label(s) holding the given (unrecovered) packs.
+
+    ``volumes`` is a pick-list ``{label: [PackSource | Pack, ...]}`` map.
+    Returns sorted, de-duped labels so a genuine failure names the discs
+    to re-mount rather than only opaque SHA-256 hashes.  (Full label-map
+    UX is RST-07; this is the minimal actionable list.)
+    """
+    wanted = set(failed)
+    labels: set[str] = set()
+    for label, entries in volumes.items():
+        for entry in entries:
+            sha = getattr(entry, "pack", entry).sha256
+            if sha in wanted:
+                labels.add(label)
+                break
+    return sorted(labels)
 
 
 def dispatch(args: argparse.Namespace) -> int:
