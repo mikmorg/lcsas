@@ -21,6 +21,7 @@ from lcsas.binpack.algorithm import first_fit_decreasing
 from lcsas.burn.device_verify import read_device_sha256
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig
+from lcsas.db.key_escrow import EscrowDriftError, detect_escrow_drift, get_split
 from lcsas.db.locations import ensure_location
 from lcsas.db.models import Pack, SessionVolume, Volume
 from lcsas.db.queries import get_unarchived_or_missing_at_location, get_unarchived_packs
@@ -130,6 +131,7 @@ class BurnOrchestrator:
         xorriso: XorrisoRunner,
         dvdisaster: DVDisasterRunner,
         device_reader: Callable[[str, int], str] = read_device_sha256,
+        allow_escrow_drift: bool = False,
     ) -> None:
         self._config = config
         self._conn = conn
@@ -139,6 +141,9 @@ class BurnOrchestrator:
         # injection pattern used for xorriso/dvdisaster: reads N bytes
         # from a device and returns the hex SHA-256.
         self._device_reader = device_reader
+        # KEY-08 escape hatch: skip the key-escrow drift abort (logged as a
+        # volume event on each staged volume).  For multi-config edge cases.
+        self._allow_escrow_drift = allow_escrow_drift
 
     def prepare(
         self,
@@ -426,6 +431,11 @@ class BurnOrchestrator:
         for p in selected_packs:
             packs_by_repo[p.repo_id].append(p)
 
+        # KEY-08: refuse to stage if disc share-instructions would drift from
+        # the recorded split.  Runs BEFORE any catalog write or card render so
+        # an abort leaves no wrong-instruction disc behind.
+        drift_msg = self._escrow_preflight(list(packs_by_repo))
+
         for repo_id, repo_packs in packs_by_repo.items():
             mirror_path = mirror_paths.get(repo_id)
             data_dir = mirror_path / "data" if mirror_path is not None else None
@@ -461,6 +471,16 @@ class BurnOrchestrator:
         pack_ids = [p.pack_id for p in selected_packs]
         bulk_link_packs(self._conn, volume.volume_id, pack_ids, commit=False)
         update_used_bytes(self._conn, volume.volume_id, total_bytes, commit=False)
+        if drift_msg is not None:
+            # Escape hatch was used: audit that this disc was staged despite
+            # key-escrow drift, in the same transaction as the volume row.
+            add_event(
+                self._conn,
+                volume.volume_id,
+                "NOTE",
+                detail=f"KEY-08 escrow drift override: {drift_msg}",
+                commit=False,
+            )
         if session_id is not None and iso_output is not None:
             # Same transaction as the volume row: a volume can never exist
             # outside session_volumes (the ISO hash is filled in later via
@@ -509,8 +529,11 @@ class BurnOrchestrator:
             injector.write_standalone_restorer()
             if not media_type.is_test:
                 injector.write_lcsas_source()
-            injector.write_start_here(self._config)
-            injector.write_key_info(self._config)
+            # KEY-08: render share K/N from the recorded split when present,
+            # so disc text reflects the split that was actually performed.
+            escrow_kn = self._effective_kn(list(packs_by_repo))
+            injector.write_start_here(self._config, escrow_override=escrow_kn)
+            injector.write_key_info(self._config, escrow_override=escrow_kn)
             injector.write_config_summary(self._config)
             injector.write_disc_care()
 
@@ -579,6 +602,43 @@ class BurnOrchestrator:
             paths["default"] = self._config.mirror_base_path
 
         return paths
+
+    def _escrow_preflight(self, repo_ids: list[str]) -> str | None:
+        """Abort the burn if config key_split/K/N drifts from the record.
+
+        Returns the drift message when ``allow_escrow_drift`` suppresses the
+        abort (so callers can log it as a volume event), else None.  Raises
+        :class:`EscrowDriftError` on drift unless the escape hatch is set.
+        """
+        message = detect_escrow_drift(
+            self._conn,
+            repo_ids,
+            config_split=self._config.key_split,
+            config_threshold=self._config.key_threshold,
+            config_shares=self._config.key_shares,
+        )
+        if message is None:
+            return None
+        if self._allow_escrow_drift:
+            _logger.warning("%s (proceeding: --allow-escrow-drift)", message)
+            return message
+        raise EscrowDriftError(message)
+
+    def _effective_kn(self, repo_ids: list[str]) -> tuple[int, int] | None:
+        """K/N to render on this volume's disc text, from the record when present.
+
+        A recorded split is the authoritative source for the heir-facing K/N
+        (KEY-08); falls back to None (caller uses config) when no repo on the
+        volume has a record.  If the staged repos carry different recorded
+        splits, the first by repo_id wins — the drift preflight already blocked
+        any config/record disagreement, and mixed-split archives are out of
+        scope for the single archive-wide split block.
+        """
+        for repo_id in sorted(set(repo_ids)):
+            record = get_split(self._conn, repo_id)
+            if record is not None:
+                return (record.threshold, record.shares)
+        return None
 
     # =================================================================
     # Session-based staging and burning (multi-volume, multi-copy)

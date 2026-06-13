@@ -1091,3 +1091,81 @@ class TestReburnVerifyFailOnV5Catalog:
         assert "VERIFY_FAIL_REBURN" in {e.event_type for e in events}
         assert any(not r.verify_passed for r in receipts)
 
+
+# =========================================================================
+# KEY-08: key-escrow drift abort + override
+# =========================================================================
+
+
+class TestEscrowDrift:
+    """Burn/stage must abort when config key_split/K/N drifts from the record."""
+
+    @staticmethod
+    def _split_orch(orch_env, *, key_split, k=2, n=5, allow_drift=False):
+        """Rebuild the orchestrator with a key_split-aware config."""
+        import dataclasses
+
+        base = orch_env["config"]
+        cfg = dataclasses.replace(
+            base, key_split=key_split, key_threshold=k, key_shares=n,
+        )
+        return BurnOrchestrator(
+            cfg, orch_env["conn"], orch_env["xorriso"], orch_env["dvdisaster"],
+            allow_escrow_drift=allow_drift,
+        )
+
+    def test_config_true_no_record_aborts(self, orch_env):
+        """key_split=true but no recorded split → abort naming both sides."""
+        from lcsas.db.key_escrow import EscrowDriftError
+
+        orch = self._split_orch(orch_env, key_split=True)
+        with pytest.raises(EscrowDriftError) as ei:
+            orch.prepare()
+        msg = str(ei.value)
+        assert "key_split=true" in msg
+        assert "no split" in msg
+        assert "family" in msg
+
+    def test_record_but_config_false_aborts(self, orch_env):
+        """A recorded split with key_split=false → abort (superseded key)."""
+        from lcsas.db.key_escrow import EscrowDriftError, record_split
+
+        record_split(orch_env["conn"], "family", 3, 5, 12345)
+        orch = self._split_orch(orch_env, key_split=False)
+        with pytest.raises(EscrowDriftError) as ei:
+            orch.prepare()
+        msg = str(ei.value)
+        assert "key_split=false" in msg
+        assert "3-of-5" in msg
+
+    def test_kn_mismatch_aborts(self, orch_env):
+        """key_split=true 2-of-5 but record is 3-of-5 → abort."""
+        from lcsas.db.key_escrow import EscrowDriftError, record_split
+
+        record_split(orch_env["conn"], "family", 3, 5, 999)
+        orch = self._split_orch(orch_env, key_split=True, k=2, n=5)
+        with pytest.raises(EscrowDriftError) as ei:
+            orch.prepare()
+        msg = str(ei.value)
+        assert "2-of-5" in msg
+        assert "3-of-5" in msg
+
+    def test_consistent_split_proceeds(self, orch_env):
+        """key_split=true 3-of-5 matching the record → no abort."""
+        from lcsas.db.key_escrow import record_split
+
+        record_split(orch_env["conn"], "family", 3, 5, 777)
+        orch = self._split_orch(orch_env, key_split=True, k=3, n=5)
+        manifest = orch.prepare()  # must not raise
+        assert manifest.volume_id > 0
+
+    def test_allow_drift_proceeds_and_logs_event(self, orch_env):
+        """--allow-escrow-drift proceeds and records a NOTE volume event."""
+        from lcsas.db.volume_events import get_events_for_volume
+
+        orch = self._split_orch(orch_env, key_split=True, allow_drift=True)
+        manifest = orch.prepare()  # drift present, but override set
+        events = get_events_for_volume(orch_env["conn"], manifest.volume_id)
+        notes = [e for e in events if e.event_type == "NOTE"]
+        assert any("KEY-08 escrow drift override" in e.detail for e in notes)
+

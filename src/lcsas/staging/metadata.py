@@ -41,16 +41,23 @@ _METADATA_FILES = ["config"]
 MIN_HOLOGRAPHIC_RESERVE_BYTES = 700_000
 
 
-def _share_recovery_lines(config: LCSASConfig) -> list[str]:
+def _share_recovery_lines(
+    config: LCSASConfig, escrow_override: tuple[int, int] | None = None
+) -> list[str]:
     """Plain-language split-key recovery steps for the heir.
 
     Only emitted when ``config.key_split`` is set (i.e. this archive's
     password was actually split into shares).  Names the K/N in effect
     and points at the standalone combiner pre-step bundled on the
     meta-volume.
+
+    ``escrow_override`` is the (K, N) of the recorded split (KEY-08); when
+    present it overrides the config values so disc text reflects the split
+    that was actually performed.
     """
-    k = config.key_threshold
-    n = config.key_shares
+    k, n = escrow_override if escrow_override is not None else (
+        config.key_threshold, config.key_shares
+    )
     return [
         "SPLIT KEY — YOUR PASSWORD IS IN SHARE CARDS",
         "-------------------------------------------",
@@ -371,7 +378,11 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
             f.flush()
             os.fsync(f.fileno())
 
-    def write_start_here(self, config: LCSASConfig) -> None:
+    def write_start_here(
+        self,
+        config: LCSASConfig,
+        escrow_override: tuple[int, int] | None = None,
+    ) -> None:
         """Write a plain-language START_HERE.txt to the staging root.
 
         This file is written in simple English for a non-technical
@@ -380,6 +391,8 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
 
         Args:
             config: LCSAS configuration with survivability fields.
+            escrow_override: (K, N) of the recorded split (KEY-08); when set,
+                overrides the config's K/N in the share-recovery block.
         """
         owner = config.archive_owner or "the person who created this archive"
         description = config.archive_description or (
@@ -405,8 +418,9 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
         # pre-step.  Single-key archives must NOT show share instructions.
         split_block = ""
         if config.key_split:
-            k = config.key_threshold
-            n = config.key_shares
+            k, n = escrow_override if escrow_override is not None else (
+                config.key_threshold, config.key_shares
+            )
             split_block = textwrap.dedent(f"""\
 
                 YOUR PASSWORD IS SPLIT INTO {n} SHARE CARDS
@@ -531,11 +545,17 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
             f.flush()
             os.fsync(f.fileno())
 
-    def write_key_info(self, config: LCSASConfig) -> None:
+    def write_key_info(
+        self,
+        config: LCSASConfig,
+        escrow_override: tuple[int, int] | None = None,
+    ) -> None:
         """Write KEY_INFO.txt mapping repositories to their key requirements.
 
         Args:
             config: LCSAS configuration with repository definitions.
+            escrow_override: (K, N) of the recorded split (KEY-08); when set,
+                overrides the config's K/N in the share-recovery section.
         """
         lines = [
             "KEY INFORMATION",
@@ -574,7 +594,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
         lines.append("")
 
         if config.key_split:
-            lines.extend(_share_recovery_lines(config))
+            lines.extend(_share_recovery_lines(config, escrow_override))
 
         path = self._root / "KEY_INFO.txt"
         with open(path, "w", encoding="utf-8") as f:

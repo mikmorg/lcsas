@@ -323,6 +323,50 @@ class TestConfigDefaults:
             "--share-file", str(mfiles[1]),
         ]) == 1
 
+
+class TestSplitRecordsState:
+    """KEY-08: --config split writes a key_escrow row + prints the next step."""
+
+    def test_split_records_state(self, tmp_path: Path, capsys) -> None:
+        from lcsas.config.settings import load_config
+        from lcsas.db.connection import locked_connection
+        from lcsas.db.key_escrow import get_split
+
+        cfg = _config_file(tmp_path, key_threshold=3, key_shares=4)
+        out = tmp_path / "shares"
+        assert main([
+            "--config", str(cfg),
+            "key", "split", "--repo", "alpha", "--out", str(out),
+        ]) == 0
+
+        # The catalog records the 3/4 split.
+        config = load_config(cfg)
+        with locked_connection(config.db_path) as conn:
+            rec = get_split(conn, "alpha")
+        assert rec is not None
+        assert (rec.threshold, rec.shares) == (3, 4)
+        assert rec.slip39_id >= 0
+
+        # The success output names the key_split next step.
+        captured = capsys.readouterr()
+        assert "NEXT STEP" in captured.out
+        assert "key_split = true" in captured.out
+        assert "key_threshold = 3" in captured.out
+        assert "key_shares = 4" in captured.out
+
+    def test_no_config_warns_not_recorded(self, tmp_path: Path, capsys) -> None:
+        pw_file = _write_pw_file(tmp_path / "pw")
+        out = tmp_path / "shares"
+        assert main([
+            "key", "split", "--repo", "alpha",
+            "--password-file", str(pw_file), "--out", str(out),
+        ]) == 0
+        # Reminder still printed; plus a loud "not recorded" warning (the
+        # CLI logger writes to stdout, see lcsas.log._StdoutHandler).
+        captured = capsys.readouterr()
+        assert "NEXT STEP" in captured.out
+        assert "was NOT recorded" in captured.out
+
     def test_config_password_file_used(self, tmp_path: Path) -> None:
         cfg = _config_file(tmp_path)
         out = tmp_path / "shares"

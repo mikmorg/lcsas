@@ -123,3 +123,17 @@ Always-on, `make test-unit` → `gate`:
 
 2 days: 0.75 schema/db module + migration, 0.75 split/stage/burn wiring,
 0.5 tests.
+
+---
+**Implemented:** 2026-06-13. As planned, adapted to drift since the plan was
+written: schema was already at v8, so the additive `key_escrow` table landed
+as **v9** (v8→v9 migration). New `db/key_escrow.py` (record/get/clear + the
+`detect_escrow_drift` helper + `EscrowDriftError`). `cmd_key_split` records the
+split at `config.db_path` and prints the next-step reminder (loud warning
+without `--config`). Drift preflight runs in `_stage_single_volume` (covers
+both `prepare()` and `stage()`), surfaced through `cmd_stage`; disc K/N comes
+from the record via `escrow_override` on `write_start_here`/`write_key_info`;
+`--allow-escrow-drift` escape hatch logs a NOTE volume event. rebuild.py
+already probes `sqlite_master` so v≤8 disc catalogs lacking the table merge
+fine (test added). All plan tests present and passing; full `make test-unit`
+green (1607 passed).

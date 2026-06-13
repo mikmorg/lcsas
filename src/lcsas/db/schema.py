@@ -7,7 +7,7 @@ import sqlite3
 
 _logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 
 
 class SchemaVersionError(RuntimeError):
@@ -160,6 +160,21 @@ CREATE TABLE IF NOT EXISTS volume_events (
 );
 """
 
+# Durable record of a `lcsas key split`: the K/N actually performed and the
+# SLIP-0039 identifier of that split (KEY-08).  Disc share instructions are
+# derived from this row when present, and the burn pipeline aborts if the
+# config's key_split/K/N disagrees with it — so heir-facing instructions can
+# never silently drift away from the split that was really done.
+SQL_CREATE_KEY_ESCROW = """
+CREATE TABLE IF NOT EXISTS key_escrow (
+    repo_id    TEXT PRIMARY KEY,
+    threshold  INTEGER NOT NULL,
+    shares     INTEGER NOT NULL,
+    slip39_id  INTEGER NOT NULL,
+    split_at   DATETIME NOT NULL
+);
+"""
+
 # ---------------------------------------------------------------------------
 # Indices
 # ---------------------------------------------------------------------------
@@ -233,6 +248,7 @@ def create_all(conn: sqlite3.Connection) -> None:
     cursor.execute(SQL_CREATE_BURN_SESSIONS)
     cursor.execute(SQL_CREATE_SESSION_VOLUMES)
     cursor.execute(SQL_CREATE_VOLUME_EVENTS)
+    cursor.execute(SQL_CREATE_KEY_ESCROW)
 
     for idx_sql in SQL_CREATE_INDICES:
         cursor.execute(idx_sql)
@@ -525,6 +541,21 @@ def migrate(conn: sqlite3.Connection) -> int:
             cursor.execute(
                 "INSERT INTO schema_version (version) VALUES (?)",
                 (8,),
+            )
+            cursor.execute("COMMIT")
+
+        # v8 → v9: key_escrow — the durable record of a `lcsas key split`
+        # (KEY-08).  Additive bare CREATE TABLE, no data movement; pre-upgrade
+        # catalogs simply gain an empty table.  Restore-side readers
+        # (tier-1 C, tier-3 standalone) never touch it, and rebuild.py probes
+        # sqlite_master before merging any table, so v≤8 disc catalogs that
+        # lack it are unaffected.
+        if current < 9:
+            cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute(SQL_CREATE_KEY_ESCROW)
+            cursor.execute(
+                "INSERT INTO schema_version (version) VALUES (?)",
+                (9,),
             )
             cursor.execute("COMMIT")
     except BaseException:

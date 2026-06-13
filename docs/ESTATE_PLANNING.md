@@ -69,12 +69,23 @@ toward recoverability — the dominant risk for a backup is *loss*, not theft.
   This writes `N` share files plus a plain-language **card** for each. Hand
   the cards to separate trusted holders / locations (e.g. three relatives,
   one safe deposit box, one attorney). No single holder can read the archive.
+  With `--config`, the split's **K/N and identifier are recorded in the
+  catalog** so disc instructions can be derived from the split you actually
+  performed (and the next-step reminder is printed).
 
 - [ ] **Mark the archive as split** so the discs print share instructions —
   set `key_split = true` (and your `key_threshold` / `key_shares`) under
   `[defaults]` in `lcsas.toml` (see §4). When split, every disc's
   `KEY_INFO.txt` and `START_HERE.txt` tell the heir to **first reconstruct
   the password, then restore normally**.
+
+  > **Drift guard (KEY-08).** `lcsas stage` aborts if `key_split` / `key_threshold`
+  > / `key_shares` in `lcsas.toml` disagree with the recorded split — so discs
+  > can never print instructions that contradict the real split (e.g. config
+  > says "any 2" while the split was 3-of-5, or `key_split=true` with no split
+  > ever performed). The disc's K/N is taken from the recorded split when one
+  > exists. `--allow-escrow-drift` overrides the abort for multi-config edge
+  > cases (logged as a volume event).
 
 - [ ] **Tell heirs the reconstruction is a two-step pre-step**, in your
   letter (template below):

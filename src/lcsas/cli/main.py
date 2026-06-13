@@ -188,6 +188,12 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Session ID (for --clean).")
     stage_p.add_argument("--dry-run", "-n", action="store_true", default=False,
                          help="Show staging plan without creating ISOs or DB rows.")
+    stage_p.add_argument("--allow-escrow-drift", action="store_true", default=False,
+                         help="Proceed even if lcsas.toml's key_split/K/N "
+                              "disagrees with the recorded split (KEY-08). "
+                              "Logged as a volume event. For multi-config "
+                              "edge cases only — discs may print share "
+                              "instructions that do not match the real split.")
 
     # --- burn-iso ---
     burniso_p = subparsers.add_parser(
@@ -1416,6 +1422,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
                 config, conn,
                 SubprocessXorrisoRunner(tmpdir=config.staging_path),
                 SubprocessDVDisasterRunner(tmpdir=config.staging_path),
+                allow_escrow_drift=getattr(args, "allow_escrow_drift", False),
             )
 
             if args.clean:
@@ -1444,12 +1451,21 @@ def cmd_stage(args: argparse.Namespace) -> int:
                 logger.error(str(e))
                 return 1
 
-            result = orch.stage(
-                media_type=media_type,
-                for_location=args.for_location,
-                repo_ids=repo_ids,
-                dry_run=getattr(args, "dry_run", False),
-            )
+            from lcsas.db.key_escrow import EscrowDriftError
+            try:
+                result = orch.stage(
+                    media_type=media_type,
+                    for_location=args.for_location,
+                    repo_ids=repo_ids,
+                    dry_run=getattr(args, "dry_run", False),
+                )
+            except EscrowDriftError as e:
+                logger.error("%s", e)
+                logger.error(
+                    "Refusing to stage. Pass --allow-escrow-drift to override "
+                    "(discs may print wrong share instructions)."
+                )
+                return 1
 
             if getattr(args, "dry_run", False):
                 return 0
@@ -4642,6 +4658,32 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         )
         return 1
 
+    # ── Record the split durably (KEY-08) ─────────────────────────────
+    # The catalog row is what the burn pipeline reconciles against and what
+    # disc share-instructions are derived from.  Without --config there is no
+    # catalog to write to, so drift-checking is unavailable — warn loudly.
+    if config is not None:
+        from lcsas.db.connection import locked_connection
+        from lcsas.db.key_escrow import record_split
+        from lcsas.db.schema import ensure_schema
+
+        try:
+            with locked_connection(config.db_path) as conn:
+                ensure_schema(conn)
+                record_split(conn, args.repo, threshold, shares, split_id)
+        except Exception as e:  # noqa: BLE001 - cards are written; don't fail the split
+            logger.warning(
+                "Split succeeded but recording it in the catalog failed: %s. "
+                "Run 'lcsas migrate' then re-run 'lcsas key split' so burn "
+                "drift-checking works.", e,
+            )
+    else:
+        logger.warning(
+            "No --config given: the split was NOT recorded in any catalog, so "
+            "burn-time key-escrow drift checking is unavailable. Re-run with "
+            "--config once the catalog is reachable.",
+        )
+
     print(
         f"Wrote {shares} share(s) ({threshold}-of-{shares}) for repo "
         f"'{args.repo}' to {out_dir}"
@@ -4649,6 +4691,11 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     print(
         "  Each share and its plain-language card is mode 0600.\n"
         f"  Distribute the {shares} shares to separate holders/locations."
+    )
+    print(
+        f"NEXT STEP: set key_split = true (and key_threshold = {threshold}, "
+        f"key_shares = {shares}) under [defaults] in lcsas.toml so burned "
+        "discs print share instructions."
     )
     print(
         "SECURITY: the password was never printed. Store shares apart; any "

@@ -133,3 +133,14 @@ class VolumeEvent:
     event_date: str
     location: str | None
     detail: str
+
+
+@dataclass(frozen=True)
+class KeyEscrow:
+    """The durable record of a `lcsas key split` for one repository (KEY-08)."""
+
+    repo_id: str
+    threshold: int       # K: shares needed to reconstruct
+    shares: int          # N: total shares produced
+    slip39_id: int       # SLIP-0039 identifier of the split
+    split_at: str        # ISO datetime the split was recorded

@@ -101,3 +101,23 @@ def test_single_key_render_has_no_share_instructions(tmp_path: Path) -> None:
         assert "SHARE CARDS" not in text, (
             f"{name}: split-key block leaked into a single-key render"
         )
+
+
+def test_kn_comes_from_recorded_split_not_config(tmp_path: Path) -> None:
+    """KEY-08: when an escrow_override is passed, the rendered K/N comes from
+    the recorded split, NOT the config.  Config says 2-of-5; the recorded
+    split is 3-of-5; the disc text must say 'any 3' of 5."""
+    root = tmp_path / "drift"
+    root.mkdir()
+    injector = HolographicInjector(root)
+    config = _config(tmp_path, key_split=True)  # config = 2-of-5
+    injector.write_start_here(config, escrow_override=(3, 5))
+    injector.write_key_info(config, escrow_override=(3, 5))
+    for name in ("START_HERE.txt", "KEY_INFO.txt"):
+        text = (root / name).read_text(encoding="utf-8")
+        assert "any 3" in text.lower(), (
+            f"{name}: rendered K must come from the record (3), not config (2)"
+        )
+        assert "any 2" not in text.lower(), (
+            f"{name}: the config K (2) leaked into the heir-facing text"
+        )
