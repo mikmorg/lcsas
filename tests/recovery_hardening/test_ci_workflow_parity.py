@@ -10,9 +10,9 @@ This test parses the Makefile to derive the transitive leaf prerequisites
 of `gate`, then asserts each appears in .github/workflows/test.yml — either
 as `make <target>` or via an explicit, commented equivalence (e.g. the raw
 `pytest tests/recovery_hardening/` invocation in the dedicated job).  A
-declared KNOWN_UNWIRED set lets a deliberate, tracked gap (test-e2e until
-GATE-10 lands) be *visible* rather than silent.  Fails if a new tier is
-added to test-all without CI wiring, or if a wired step is deleted.
+declared KNOWN_UNWIRED set lets a deliberate, tracked gap be *visible*
+rather than silent.  Fails if a new tier is added to test-all without CI
+wiring, or if a wired step is deleted.
 """
 
 from __future__ import annotations
@@ -26,10 +26,8 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test.yml"
 
 # Tiers intentionally not yet wired into CI, each with the plan that removes
 # it from this set.  A gap here is *declared*, never invisible.
-#   test-e2e — tests/e2e hard-skips off-host (/mnt/lcsas-data); wiring it
-#              before GATE-10's portability fix would add a permanently
-#              skipping step and false confidence.  Removed by GATE-10.
-KNOWN_UNWIRED = {"test-e2e"}
+#   (empty — GATE-10 wired test-e2e via LCSAS_E2E_BASE; see EQUIVALENCE.)
+KNOWN_UNWIRED: set[str] = set()
 
 # Some gate prerequisites are run in CI via an equivalent pinned command
 # rather than the bare `make <target>`.  Maintain the equivalence here so
@@ -43,6 +41,11 @@ EQUIVALENCE: dict[str, str] = {
     # single-file invocation — e.g. the meta-bundling smoke in the `test`
     # job — does NOT satisfy this; only running the entire suite counts.
     "test-recovery-hardening": r"pytest\s+tests/recovery_hardening/\s",
+    # GATE-10 runs the e2e pipeline test directly (with LCSAS_E2E_BASE +
+    # a grep-for-`1 passed` guard) rather than `make test-e2e`, so the CI
+    # step proves it RAN instead of going green-by-skip.  Match that pinned
+    # invocation of the canonical pipeline test.
+    "test-e2e": r"pytest\s+tests/e2e/test_scripts\.py::test_e2e_pipeline",
 }
 
 

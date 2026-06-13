@@ -91,6 +91,20 @@ jobs:
       - name: Run integration tests
         run: make test-integration
 
+      - name: Run e2e pipeline test (full scan→binpack→stage→ISO→ECC)
+        # GATE-10: e2e_test.py used to hard-skip off /mnt/lcsas-data (the dev
+        # VM LV), so the gate went green-by-skip everywhere else. Point it at
+        # a CI scratch base and PROVE it ran: green-by-skip is the bug being
+        # fixed, so we grep the summary for the pipeline test passing and fail
+        # the step if it was skipped or never collected.
+        run: |
+          set -euo pipefail
+          export LCSAS_E2E_BASE=/var/tmp/lcsas-e2e
+          mkdir -p "$LCSAS_E2E_BASE"
+          pytest tests/e2e/test_scripts.py::test_e2e_pipeline -v \
+            | tee /tmp/e2e_pytest.log
+          grep -Eq '1 passed' /tmp/e2e_pytest.log
+
       - name: Type-check (mypy strict)
         run: make typecheck
 

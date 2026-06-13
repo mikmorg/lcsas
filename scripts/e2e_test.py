@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -36,7 +37,9 @@ from pathlib import Path
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-BASE = Path("/mnt/lcsas-data")
+# Default to the dev-VM logical volume, but allow any host (and CI) to point the
+# pipeline at a writable scratch base via LCSAS_E2E_BASE.
+BASE = Path(os.environ.get("LCSAS_E2E_BASE", "/mnt/lcsas-data"))
 MIRROR_DIR = BASE / "mirror"
 STAGING_DIR = BASE / "staging"
 ISO_DIR = BASE / "iso_output"
@@ -116,8 +119,14 @@ def preflight() -> bool:
 
     ok = True
     if not BASE.is_dir():
-        fail(f"{BASE} does not exist — run scripts/setup_test_lv.sh first")
-        return False
+        # An explicit LCSAS_E2E_BASE is a caller-chosen scratch dir we may
+        # create; the default LV must be provisioned out-of-band.
+        if "LCSAS_E2E_BASE" in os.environ:
+            BASE.mkdir(parents=True, exist_ok=True)
+            info(f"Created base {BASE}")
+        else:
+            fail(f"{BASE} does not exist — run scripts/setup_test_lv.sh first")
+            return False
 
     for d in [MIRROR_DIR, STAGING_DIR, ISO_DIR, RESTORE_DIR, DB_DIR, TEST_DATA_DIR]:
         if not d.is_dir():

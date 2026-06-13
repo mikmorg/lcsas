@@ -83,3 +83,6 @@ No catalog/schema impact (the script builds and discards its own catalog).
 
 1 day: 0.5 script/test refactor, 0.5 CI iteration (disk/space/runtime tuning
 on hosted runners). No special environment.
+
+---
+**Implemented:** 2026-06-13. As planned, with two deviations: (1) `scripts/e2e_test.py` auto-creates the base only when `LCSAS_E2E_BASE` is explicitly set (the default LV must still be provisioned out-of-band); (2) the test's tmp-base cleanup uses a `_force_rmtree` that chmods the read-only directories xorriso extracts from the ISO before removal, since `ignore_errors`/file-only chmod left the scratch tree behind. CI runs the pinned `pytest .../test_e2e_pipeline` form (not `make test-e2e`) with a `grep '1 passed'` guard; `test_ci_workflow_parity.py` updated accordingly (KNOWN_UNWIRED now empty, EQUIVALENCE entry added). Verified off-LV (LCSAS_E2E_BASE absent + non-existent) and on-LV (unset) — both pass and the fallback leaves no stray dirs.
