@@ -1499,6 +1499,128 @@ class TestReadBlobErrorPaths:
         result = restorer._read_blob(blob_id)
         assert result == original_content
 
+    def test_uncompressed_blob_with_zstd_magic_roundtrips(self, tmp_path):
+        """RST-02: a blob whose *content* is a zstd frame, stored uncompressed
+        (index entry has no uncompressed_length), must be returned verbatim —
+        never decompressed.  Pre-fix this raised IntegrityError."""
+        from lcsas.restore.restic_fallback import _HAS_ZSTD, BlobLocation
+        if not _HAS_ZSTD:
+            pytest.skip("zstandard not installed")
+        import zstandard as zstd  # type: ignore[import-not-found]
+
+        repo = _build_test_repo(tmp_path)
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer._ensure_loaded()
+
+        # The stored content is itself a real zstd frame (an archived .zst
+        # file). Restic auto-compression keeps it uncompressed, so the blob
+        # id is the SHA-256 of this zstd-framed content.
+        cctx = zstd.ZstdCompressor()
+        original_content = cctx.compress(b"this is the inner payload of a .zst file")
+        assert original_content[:4] == b"\x28\xb5\x2f\xfd"
+        blob_id = hashlib.sha256(original_content).hexdigest()
+
+        encrypted = _encrypt_data(
+            MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, original_content
+        )
+        fake_pack_id = "f" * 64
+        pack_dir = repo / "data" / fake_pack_id[:2]
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        (pack_dir / fake_pack_id).write_bytes(encrypted)
+
+        assert restorer._blob_index is not None
+        restorer._blob_index[blob_id] = BlobLocation(
+            pack_id=fake_pack_id,
+            offset=0,
+            length=len(encrypted),
+            blob_type="data",
+            uncompressed_length=None,  # index silent => stored uncompressed
+        )
+
+        result = restorer._read_blob(blob_id)
+        assert result == original_content
+
+    def test_compressed_blob_decompresses_via_index_hint(self, tmp_path):
+        """RST-02 regression guard: a compressed blob whose decompressed form
+        happens to also start with the zstd magic still decompresses, driven
+        purely by the index uncompressed_length hint."""
+        from lcsas.restore.restic_fallback import _HAS_ZSTD, BlobLocation
+        if not _HAS_ZSTD:
+            pytest.skip("zstandard not installed")
+        import zstandard as zstd  # type: ignore[import-not-found]
+
+        repo = _build_test_repo(tmp_path)
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer._ensure_loaded()
+
+        # Inner content is itself a zstd frame; the blob is then compressed
+        # again, so BOTH the stored bytes and the decompressed bytes begin
+        # with the magic. Only the index hint disambiguates.
+        cctx = zstd.ZstdCompressor()
+        original_content = cctx.compress(b"inner zstd payload that is recompressed")
+        assert original_content[:4] == b"\x28\xb5\x2f\xfd"
+        blob_id = hashlib.sha256(original_content).hexdigest()
+        compressed = cctx.compress(original_content)
+        assert compressed[:4] == b"\x28\xb5\x2f\xfd"
+
+        encrypted = _encrypt_data(
+            MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, compressed
+        )
+        fake_pack_id = "0" * 64
+        pack_dir = repo / "data" / fake_pack_id[:2]
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        (pack_dir / fake_pack_id).write_bytes(encrypted)
+
+        assert restorer._blob_index is not None
+        restorer._blob_index[blob_id] = BlobLocation(
+            pack_id=fake_pack_id,
+            offset=0,
+            length=len(encrypted),
+            blob_type="data",
+            uncompressed_length=len(original_content),
+        )
+
+        result = restorer._read_blob(blob_id)
+        assert result == original_content
+
+    def test_legacy_index_no_hint_magic_fallback(self, tmp_path):
+        """RST-02: index-silent legacy path — a genuinely compressed blob with
+        no uncompressed_length still decompresses, because the raw bytes do not
+        hash to the blob id, so the magic-sniff fallback fires."""
+        from lcsas.restore.restic_fallback import _HAS_ZSTD, BlobLocation
+        if not _HAS_ZSTD:
+            pytest.skip("zstandard not installed")
+        import zstandard as zstd  # type: ignore[import-not-found]
+
+        repo = _build_test_repo(tmp_path)
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer._ensure_loaded()
+
+        original_content = b"legacy compressed blob, index has no hint"
+        blob_id = hashlib.sha256(original_content).hexdigest()
+        cctx = zstd.ZstdCompressor()
+        compressed = cctx.compress(original_content)
+
+        encrypted = _encrypt_data(
+            MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, compressed
+        )
+        fake_pack_id = "1" * 64
+        pack_dir = repo / "data" / fake_pack_id[:2]
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        (pack_dir / fake_pack_id).write_bytes(encrypted)
+
+        assert restorer._blob_index is not None
+        restorer._blob_index[blob_id] = BlobLocation(
+            pack_id=fake_pack_id,
+            offset=0,
+            length=len(encrypted),
+            blob_type="data",
+            uncompressed_length=None,  # legacy index: silent
+        )
+
+        result = restorer._read_blob(blob_id)
+        assert result == original_content
+
 
 # ── _restore_tree Security / Error Path Tests ────────────────────
 

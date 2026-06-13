@@ -43,7 +43,8 @@ def aead_encrypt(encrypt_key: bytes, mac_k: bytes, mac_r: bytes,
 def build_repo(repo_dir: Path, password: str,
                files: dict[str, bytes],
                v2: bool = False,
-               split_packs: int = 1) -> str:
+               split_packs: int = 1,
+               incompressible: set[str] | None = None) -> str:
     """Build a synthetic restic repo (v1 by default) containing the given files.
 
     With v2=True, blob plaintexts are zstd-compressed before encryption
@@ -56,8 +57,15 @@ def build_repo(repo_dir: Path, password: str,
     pack.  This is used by test_multidisc.py to simulate an archive
     that spans multiple physical discs.
 
+    `incompressible` (RST-02): filenames whose data blob restic "auto"
+    compression would store UNcompressed even in a v2 repo -- the blob is
+    written verbatim and its index entry OMITS uncompressed_length.  Used
+    to model an archived .zst file whose content begins with the zstd
+    magic; the reader must NOT decompress it.
+
     Returns the snapshot ID (hex).
     """
+    incompressible = incompressible or set()
     try:
         import zstandard as zstd_lib
     except ImportError:
@@ -120,14 +128,17 @@ def build_repo(repo_dir: Path, password: str,
         }
         if content:
             blob_id = hashlib.sha256(content).digest()
-            if v2:
+            # compressed=True ⇒ index entry will carry uncompressed_length.
+            if v2 and name not in incompressible:
                 stored_plain = zstd_lib.ZstdCompressor().compress(content)
+                compressed = True
             else:
                 stored_plain = content
+                compressed = False
             encrypted = aead_encrypt(master_encrypt, master_mac_k, master_mac_r,
                                      stored_plain)
             pack_blobs.append(
-                ("data", content, encrypted, blob_id, len(content)))
+                ("data", content, encrypted, blob_id, len(content), compressed))
             node_entry["content"] = [blob_id.hex()]
         node_entries.append(node_entry)
 
@@ -141,7 +152,7 @@ def build_repo(repo_dir: Path, password: str,
     tree_encrypted = aead_encrypt(master_encrypt, master_mac_k, master_mac_r,
                                   tree_stored)
     pack_blobs.append(("tree", tree_plain, tree_encrypted, tree_id,
-                       len(tree_plain)))
+                       len(tree_plain), v2))
 
     # Partition the blobs into split_packs groups (round-robin for data
     # blobs; the tree blob always lands in the last pack).
@@ -169,7 +180,7 @@ def build_repo(repo_dir: Path, password: str,
         pack_body = b""
         blob_entries_for_index = []
         header_entries = b""
-        for btype, plain, enc, blob_id, ulen in group:
+        for btype, plain, enc, blob_id, ulen, compressed in group:
             offset = len(pack_body)
             length = len(enc)
             pack_body += enc
@@ -179,7 +190,7 @@ def build_repo(repo_dir: Path, password: str,
                 "offset": offset,
                 "length": length,
             }
-            if v2:
+            if compressed:
                 entry["uncompressed_length"] = ulen
             blob_entries_for_index.append(entry)
             type_byte = b"\x00" if btype == "data" else b"\x01"
@@ -233,14 +244,15 @@ def build_repo(repo_dir: Path, password: str,
 
 
 def _run_one(label: str, password: str, files: dict[str, bytes],
-             v2: bool) -> int:
+             v2: bool, incompressible: set[str] | None = None) -> int:
     tmp = Path(tempfile.mkdtemp(prefix=f"lcsas_e2e_{label}_"))
     try:
         repo = tmp / "repo"
         target = tmp / "out"
         pwfile = tmp / "pw"
         pwfile.write_text(password + "\n")
-        snap_id = build_repo(repo, password, files, v2=v2)
+        snap_id = build_repo(repo, password, files, v2=v2,
+                             incompressible=incompressible)
         print(f"[{label}] built synthetic repo at {repo}, snap={snap_id[:12]}")
         result = subprocess.run(
             [str(BINARY),
@@ -292,8 +304,24 @@ def main() -> int:
     fails += _run_one("v1", password, files, v2=False)
 
     try:
-        import zstandard  # noqa: F401
+        import zstandard as _zstd
         fails += _run_one("v2-zstd", password, files, v2=True)
+
+        # RST-02: a v2 repo containing an archived .zst file.  Restic auto
+        # compression stores the already-compressed blob UNcompressed (no
+        # uncompressed_length in the index); the blob's decrypted bytes begin
+        # with the zstd magic.  lcsas-restore must return it byte-identical
+        # rather than falsely decompressing it.
+        zst_payload = _zstd.ZstdCompressor().compress(
+            b"inner payload of an archived .zst file" * 16
+        )
+        assert zst_payload[:4] == b"\x28\xb5\x2f\xfd"
+        zst_files = {
+            "hello.txt": b"Hello, LCSAS recovery!\n",
+            "archive.tar.zst": zst_payload,
+        }
+        fails += _run_one("v2-zst-file", password, zst_files, v2=True,
+                          incompressible={"archive.tar.zst"})
     except ImportError:
         print("SKIP v2-zstd (no zstandard module installed)", file=sys.stderr)
 

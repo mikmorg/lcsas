@@ -128,3 +128,15 @@ the mitigation for the back-catalog (note this in the spec changelog).
 
 2 days: 0.5 Python + spec, 0.5 C (incl. audit-gate run), 1 tests/fixtures. Needs the local
 recovery toolchain (clang/gcovr for audit-gate); no cross-arch environment required.
+
+---
+**Implemented:** 2026-06-13. As planned, with these deviations: (1) the doc-contract
+grep gate was NOT added — that test family is owned by the FMT/GATE plans and does not yet
+exist to extend; the spec §4.5 rewrite (index-presence rule + magic-sniff warning + changelog)
+is in place. (2) The C unit + e2e fixtures were folded into the existing generators
+(`gen_fixture.py` adds a zstd-magic uncompressed data blob; `test_e2e.py` gains an
+`incompressible=` knob and a `v2-zst-file` case) rather than new standalone files. Both red-first
+proven against the unfixed readers (tier-3 IntegrityError; tier-1 exit=1). All 5 committed
+per-target `lcsas-restore` bins (x86_64, aarch64, armv7, x86_64-windows, aarch64-macos)
+rebuilt via `zig cc`; unrelated `lcsas-iso9660` bins left untouched. qemu/wine cross-arch
+hardening tests + audit-gate run.

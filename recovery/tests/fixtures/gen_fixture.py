@@ -57,6 +57,7 @@ IV_HEADER  = b"\x05" + b"\x00" * 15  # pack header
 IV_XATTR   = b"\x16" + b"\x00" * 15  # xattr content blob in pack
 IV_HLINK   = b"\x17" + b"\x00" * 15  # hardlink content blob in pack
 IV_TZ      = b"\x18" + b"\x00" * 15  # trailing-zeros data blob in pack
+IV_ZMAGIC  = b"\x19" + b"\x00" * 15  # uncompressed blob whose content is a zstd frame
 
 N, R, P = 16384, 8, 1  # smaller-than-default scrypt params to keep
                         # gen + test fast (still safe for fixture use)
@@ -180,6 +181,23 @@ def make_pack_and_index(
     trailing_zeros_blob_id = sha256(trailing_zeros_plain)
     trailing_zeros_enc = encrypt_authenticated(
         MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_TZ, trailing_zeros_plain
+    )
+
+    # ── zstd-magic UNcompressed data blob (RST-02) ───────────────────
+    #
+    # The plaintext is itself a valid zstd frame (an archived .zst file).
+    # Restic "auto" compression stores incompressible blobs UNcompressed,
+    # so this blob is NOT zstd-wrapped: the decrypted bytes begin with the
+    # zstd magic yet the blob id is sha256(the raw frame).  Its index entry
+    # OMITS uncompressed_length.  read_blob must return it verbatim — the
+    # old magic-sniff would falsely decompress and fail the hash check.
+    zmagic_plain = zstandard.ZstdCompressor().compress(
+        b"archived .zst payload that restic stores uncompressed"
+    )
+    assert zmagic_plain[:4] == b"\x28\xb5\x2f\xfd"
+    zmagic_blob_id = sha256(zmagic_plain)
+    zmagic_enc = encrypt_authenticated(
+        MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, IV_ZMAGIC, zmagic_plain
     )
 
     # ── Sub-tree (nested directory contents) ──────────────────────
@@ -553,7 +571,7 @@ def make_pack_and_index(
                  + broken_tree_enc + bad_hex_tree_enc + bad_subdir_tree_enc
                  + wrong_nodes_enc + long_name_enc + long_type_enc
                  + missing_content_tree_enc
-                 + xattr_enc + hlink_enc + trailing_zeros_enc)
+                 + xattr_enc + hlink_enc + trailing_zeros_enc + zmagic_enc)
     off_data            = 0
     off_sub             = len(data_enc)
     off_tree            = off_sub + len(sub_tree_enc)
@@ -567,6 +585,7 @@ def make_pack_and_index(
     off_xattr           = off_missing_content + len(missing_content_tree_enc)
     off_hlink           = off_xattr + len(xattr_enc)
     off_trailing_zeros  = off_hlink + len(hlink_enc)
+    off_zmagic          = off_trailing_zeros + len(trailing_zeros_enc)
     offsets = {
         "data":             (off_data,            len(data_enc)),
         "sub":              (off_sub,             len(sub_tree_enc)),
@@ -581,6 +600,7 @@ def make_pack_and_index(
         "xattr":            (off_xattr,           len(xattr_enc)),
         "hlink":            (off_hlink,           len(hlink_enc)),
         "trailing_zeros":   (off_trailing_zeros,  len(trailing_zeros_enc)),
+        "zmagic":           (off_zmagic,          len(zmagic_enc)),
     }
 
     # Header: per-blob descriptors
@@ -599,6 +619,7 @@ def make_pack_and_index(
         (0, xattr_blob_id,            offsets["xattr"]),
         (0, hlink_blob_id,            offsets["hlink"]),
         (0, trailing_zeros_blob_id,   offsets["trailing_zeros"]),
+        (0, zmagic_blob_id,           offsets["zmagic"]),
     ]:
         header += struct.pack("<BI", blob_type, ln) + blob_id
     header_enc = encrypt_authenticated(
@@ -715,6 +736,15 @@ def make_pack_and_index(
                         "type": "data",
                         "offset": offsets["trailing_zeros"][0],
                         "length": offsets["trailing_zeros"][1],
+                    },
+                    {
+                        # RST-02: uncompressed blob whose content is itself a
+                        # zstd frame.  No uncompressed_length → read_blob must
+                        # NOT decompress (raw bytes already hash to the id).
+                        "id": zmagic_blob_id.hex(),
+                        "type": "data",
+                        "offset": offsets["zmagic"][0],
+                        "length": offsets["zmagic"][1],
                     },
                 ],
             },
@@ -856,6 +886,7 @@ def make_pack_and_index(
     global WRONG_NODES_ID, LONG_NAME_ID, LONG_TYPE_ID
     global MISSING_CONTENT_TREE_ID, MISSING_TREE_ID
     global XATTR_BLOB_ID, HLINK_BLOB_ID, TRAILING_ZEROS_BLOB_ID
+    global ZMAGIC_BLOB_ID
     BROKEN_TREE_ID = broken_tree_blob_id.hex()
     BAD_HEX_TREE_ID = bad_hex_tree_blob_id.hex()
     BAD_SUBDIR_TREE_ID = bad_subdir_tree_blob_id.hex()
@@ -867,6 +898,7 @@ def make_pack_and_index(
     XATTR_BLOB_ID = xattr_blob_id.hex()
     HLINK_BLOB_ID = hlink_blob_id.hex()
     TRAILING_ZEROS_BLOB_ID = trailing_zeros_blob_id.hex()
+    ZMAGIC_BLOB_ID = zmagic_blob_id.hex()
 
     return pack_id_hex, data_blob_id.hex(), tree_blob_id.hex(), tree_blob_id.hex()
 
@@ -883,6 +915,7 @@ MISSING_TREE_ID = ""
 XATTR_BLOB_ID = ""
 HLINK_BLOB_ID = ""
 TRAILING_ZEROS_BLOB_ID = ""
+ZMAGIC_BLOB_ID = ""
 
 
 def make_snapshot(repo_dir: Path, tree_id_hex: str,
@@ -1248,6 +1281,7 @@ def main() -> int:
             "xattr_blob_id": XATTR_BLOB_ID,
             "hlink_blob_id": HLINK_BLOB_ID,
             "trailing_zeros_blob_id": TRAILING_ZEROS_BLOB_ID,
+            "zmagic_blob_id": ZMAGIC_BLOB_ID,
             "snapshot_id": snap_id,
             "broken_snapshot_id": BROKEN_SNAP_ID,
             "master_encrypt_hex": MASTER_ENCRYPT.hex(),

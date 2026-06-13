@@ -35,7 +35,12 @@ static int fails = 0;
 #define FIXTURE_TREE_BLOB_HEX  \
     "68255a117162e193d9a8e4940756c5754b20eb2e9f6e8934d68b31bcd0f5aa20"
 #define FIXTURE_PACK_HEX       \
-    "a34290c7448cc83ccbf56b59894dfcb8053444c14ddbdce455e84b9dd5195534"
+    "0201a52fbef6c4772f3e9f5674480d1343ddf8b440d0f8c89a18bd6d16a7330a"
+/* RST-02: a data blob stored UNcompressed whose plaintext is itself a
+ * zstd frame; index entry has no uncompressed_length.  read_blob must
+ * return it verbatim (no false decompression). */
+#define FIXTURE_ZMAGIC_BLOB_HEX \
+    "1ced7ffcc1a7d50543ef724a3c7e4bef5504e5c51d0e76bfd0b8217222e60b35"
 #define FIXTURE_XATTR_BLOB_HEX \
     "c8bc50e94a5aad4482a505268c3616656540113d62050921d6d7778c16d8eadb"
 #define FIXTURE_HLINK_BLOB_HEX \
@@ -214,8 +219,8 @@ main(void)
             fprintf(stderr, "FAIL: load_index rc=%d\n", rc);
             fails++;
         }
-        if (ix.count != 15) {
-            fprintf(stderr, "FAIL: index count=%zu, want 15\n", ix.count);
+        if (ix.count != 16) {
+            fprintf(stderr, "FAIL: index count=%zu, want 16\n", ix.count);
             fails++;
         }
 
@@ -361,6 +366,58 @@ main(void)
                         fprintf(stderr,
                                 "FAIL: data blob content mismatch "
                                 "(got %zu bytes)\n", blob_len);
+                        fails++;
+                    }
+                    free(blob);
+                }
+            }
+        }
+        lcsas_blob_index_free(&ix);
+    }
+
+    /* ── RST-02: zstd-magic blob stored UNcompressed reads verbatim ── */
+    {
+        lcsas_blob_index ix;
+        const lcsas_blob_loc *loc;
+        unsigned char zmagic_id[32];
+        unsigned char *blob = NULL;
+        size_t blob_len = 0;
+        lcsas_blob_index_init(&ix);
+        if (lcsas_repo_load_index(repo, &mk, &ix) == 0) {
+            lcsas_hex_decode(FIXTURE_ZMAGIC_BLOB_HEX, 32, zmagic_id);
+            loc = lcsas_blob_index_find(&ix, zmagic_id);
+            if (!loc) {
+                fprintf(stderr, "FAIL: zmagic blob not in index\n");
+                fails++;
+            } else {
+                /* Index entry must NOT carry uncompressed_length. */
+                if (loc->uncompressed_length > 0) {
+                    fprintf(stderr,
+                            "FAIL: zmagic blob has unexpected "
+                            "uncompressed_length=%lld\n",
+                            (long long)loc->uncompressed_length);
+                    fails++;
+                }
+                rc = lcsas_repo_read_blob(repo, &mk, loc, NULL,
+                                          &blob, &blob_len);
+                if (rc != 0) {
+                    /* Pre-fix: magic-sniff decompresses, hash mismatch,
+                     * rc != 0.  Post-fix: returned verbatim, rc == 0. */
+                    fprintf(stderr,
+                            "FAIL: zmagic read_blob rc=%d "
+                            "(false decompression?)\n", rc);
+                    fails++;
+                } else {
+                    /* read_blob's own sha256 check already proves byte
+                     * identity; assert the bytes are still the raw zstd
+                     * frame (would be the decompressed payload if the bug
+                     * had fired). */
+                    if (blob_len < 4
+                            || blob[0] != 0x28 || blob[1] != 0xb5
+                            || blob[2] != 0x2f || blob[3] != 0xfd) {
+                        fprintf(stderr,
+                                "FAIL: zmagic blob not returned verbatim "
+                                "(len=%zu)\n", blob_len);
                         fails++;
                     }
                     free(blob);

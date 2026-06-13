@@ -955,12 +955,26 @@ class PurePythonRestorer:
 
         plaintext = self._decrypt(encrypted)
 
-        # Handle zstd compression.  In restic repo v2, compressed
-        # pack blobs start directly with the zstd frame (no type
-        # prefix byte, unlike standalone files like index/snapshots).
-        if plaintext[:4] == _ZSTD_MAGIC:
-            max_out = loc.uncompressed_length or (len(plaintext) * 20)
-            plaintext = _decompress_zstd(plaintext, max_output_size=max_out)
+        # Handle zstd compression.  The restic repo-v2 index contract is
+        # the discriminator: a blob is compressed iff its index entry
+        # carries `uncompressed_length`.  Auto-compression stores
+        # incompressible blobs (e.g. an archived `.zst` file) UNcompressed,
+        # and those can legitimately begin with the zstd magic — so never
+        # infer compression from leading bytes when the index has spoken.
+        if loc.uncompressed_length is not None:
+            plaintext = _decompress_zstd(
+                plaintext, max_output_size=loc.uncompressed_length
+            )
+        elif (
+            plaintext[:4] == _ZSTD_MAGIC
+            and hashlib.sha256(plaintext).hexdigest() != blob_id
+        ):
+            # Index silent (v1 repo / legacy index): the raw SHA-256 is
+            # authoritative.  Only decompress if the raw bytes do not
+            # already hash to the blob id.
+            plaintext = _decompress_zstd(
+                plaintext, max_output_size=len(plaintext) * 20
+            )
 
         # Verify content hash
         actual_hash = hashlib.sha256(plaintext).hexdigest()

@@ -176,8 +176,28 @@ compression is enabled:
 
 - Blobs are compressed with zstd before encryption
 - The repository `config` file indicates the compression mode
-- After decrypting a blob, check if it starts with the zstd magic
-  bytes (`0x28 0xB5 0x2F 0xFD`); if so, decompress with zstd
+
+A pack blob is zstd-compressed **if and only if** its index entry carries
+an `uncompressed_length` field (see §5).  This is the authoritative
+discriminator.  Decompress to exactly `uncompressed_length` bytes, then
+verify the SHA-256 of the result against the blob id.
+
+**Do NOT infer compression from the leading bytes.**  Restic/Rustic "auto"
+compression stores incompressible blobs *uncompressed*; an archived file
+that is itself zstd data (e.g. `.zst`, `.tar.zst`) is stored verbatim and
+will legitimately begin with the zstd magic (`0x28 0xB5 0x2F 0xFD`).
+Sniffing the magic and decompressing unconditionally corrupts such blobs
+and fails their content hash.
+
+For a legacy/v1 index that omits `uncompressed_length` entirely, the raw
+SHA-256 of the decrypted bytes is authoritative: if it already matches the
+blob id, the blob is uncompressed; only otherwise attempt decompression.
+
+> **Changelog:** Earlier versions of this spec (shipped on discs burned
+> before 2026-06) instructed magic-sniffing, which mis-handles archived
+> zstd files on tiers 1 and 3.  The corrected rule above ships on discs
+> burned after this date; for the back-catalog, use the tier-2 upstream
+> rustic binary to restore any archive containing already-compressed files.
 
 ---
 

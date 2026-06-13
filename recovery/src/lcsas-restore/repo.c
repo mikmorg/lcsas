@@ -820,6 +820,7 @@ lcsas_repo_read_blob(const char *repo_path,
     struct stat st;
     int rc = -1;
     int found = 0;
+    int do_decompress;
 
     lcsas_hex_encode(loc->pack_id, 32, hex);
     hex[64] = '\0';
@@ -924,10 +925,32 @@ lcsas_repo_read_blob(const char *repo_path,
     }
     free(enc);
 
-    /* Inline pack blobs in restic v2 are zstd-compressed (no prefix byte). */
-    if (pt_len >= 4
+    /*
+     * The restic repo-v2 index contract is the discriminator: a blob is
+     * zstd-compressed iff its index entry carries uncompressed_length
+     * (loc->uncompressed_length > 0; -1 means absent).  Auto-compression
+     * stores incompressible blobs (e.g. an archived .zst file) UNcompressed,
+     * and those can legitimately begin with the zstd magic -- so never infer
+     * compression from leading bytes when the index has spoken.
+     */
+    do_decompress = 0;
+    if (loc->uncompressed_length > 0) {
+        do_decompress = 1;
+    } else if (pt_len >= 4
             && pt[0] == ZSTD_MAGIC[0] && pt[1] == ZSTD_MAGIC[1]
             && pt[2] == ZSTD_MAGIC[2] && pt[3] == ZSTD_MAGIC[3]) {
+        /*
+         * Index silent (v1 repo / legacy index): the raw SHA-256 is
+         * authoritative.  Only decompress if the raw bytes do not already
+         * hash to the blob id.
+         */
+        lcsas_sha256(pt, pt_len, digest);
+        if (lcsas_ct_memcmp(digest, loc->id, 32) != 0) {
+            do_decompress = 1;
+        }
+    }
+
+    if (do_decompress) {
         long dsz;
         unsigned char *dec;
         long got;
