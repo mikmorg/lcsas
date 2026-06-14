@@ -150,17 +150,32 @@ def master_iso(stage: Path, iso_path: Path, *, volume_label: str) -> Path:
 
 
 def build_meta_iso(
-    *, meta_stage: Path, iso_out: Path, catalog_db: Path | None = None
+    *,
+    meta_stage: Path,
+    iso_out: Path,
+    catalog_db: Path | None = None,
+    allow_no_dvdisaster_source: bool = False,
 ) -> Path:
     """Build a production meta tree with :class:`MetaVolumeBuilder` and
-    master it to ``<iso_out>/LCSAS_META.iso``."""
+    master it to ``<iso_out>/LCSAS_META.iso``.
+
+    *allow_no_dvdisaster_source* lets a fixture build proceed without the
+    ~600 MB upstream recovery cache (`make fetch-recovery`): the meta tree
+    still carries restore.bat + the committed tier-1 binaries, which is all
+    the Windows-journey gate needs.  The cdemu fixture leaves it False (its
+    host has the full cache and exercises the complete disc).
+    """
     _ensure_src_on_path()
     from lcsas.meta.builder import MetaVolumeBuilder
 
     if meta_stage.exists():
         shutil.rmtree(meta_stage)
     meta_stage.mkdir(parents=True)
-    MetaVolumeBuilder(meta_stage, catalog_db_path=catalog_db).build()
+    MetaVolumeBuilder(
+        meta_stage,
+        catalog_db_path=catalog_db,
+        allow_no_dvdisaster_source=allow_no_dvdisaster_source,
+    ).build()
     return master_iso(
         meta_stage, iso_out / "LCSAS_META.iso", volume_label="LCSAS_META"
     )
@@ -293,8 +308,14 @@ def build_windows_fixture(
         data_isos.append(iso_path)
     conn.close()
 
-    # 5. meta ISO (carries the tier-1 lcsas-restore.exe + a repo to discover)
-    meta_iso = build_meta_iso(meta_stage=meta_stage, iso_out=iso_out)
+    # 5. meta ISO (carries the tier-1 lcsas-restore.exe + a repo to discover).
+    #    Tolerate a missing upstream recovery cache so the gate runs on a
+    #    bare ubuntu runner without `make fetch-recovery`'s ~600 MB download.
+    meta_iso = build_meta_iso(
+        meta_stage=meta_stage,
+        iso_out=iso_out,
+        allow_no_dvdisaster_source=True,
+    )
 
     # 6. manifest the restorable source tree
     manifest_path = workdir / "manifest.json"
