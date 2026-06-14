@@ -315,7 +315,16 @@ def _build_meta_iso() -> Path:
     if META_STAGE.exists():
         shutil.rmtree(META_STAGE)
     META_STAGE.mkdir(parents=True)
-    MetaVolumeBuilder(META_STAGE, catalog_db_path=DB_PATH).build()
+    # allow_no_dvdisaster_source: the pinned dvdisaster tarball (FMT-01/02) is
+    # a reference source shipped for posterity; the restore PATH never reads it,
+    # so the blind-restore fixture skips it rather than depend on a populated
+    # recovery cache / network fetch.  Meta-bundle completeness is covered by
+    # its own gate, not this restore-journey drill.
+    MetaVolumeBuilder(
+        META_STAGE,
+        catalog_db_path=DB_PATH,
+        allow_no_dvdisaster_source=True,
+    ).build()
 
     # Issue #261 — strip operator-convenience wrappers from the test
     # meta disc.  Real meta discs ship `restore-auto.sh`, `restore_legacy.sh`,
