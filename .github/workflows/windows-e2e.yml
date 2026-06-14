@@ -215,6 +215,10 @@ jobs:
           $restored = Get-ChildItem -Path $target -Recurse -File -ErrorAction SilentlyContinue
           if ($restored) { throw "wrong-password run left a partial tree behind" }
           Write-Host "Wrong-password case failed cleanly with no partial tree."
+          # All assertions passed; throw above is the only failure path.
+          # Without this, the step inherits the lingering $LASTEXITCODE=1
+          # from the intentional wrong-password `cmd /c` and reports red.
+          exit 0
 
       - name: Dismount ISOs
         if: always()
