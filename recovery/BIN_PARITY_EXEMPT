@@ -20,9 +20,12 @@
 # back-to-back builds); -Wl,-no_uuid is rejected as an unsupported linker arg.
 x86_64-macos/lcsas-restore    issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
 x86_64-macos/lcsas-keyshare   issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
+x86_64-macos/lcsas-ecc        issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
 aarch64-macos/lcsas-restore   issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
 aarch64-macos/lcsas-keyshare  issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
+aarch64-macos/lcsas-ecc       issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
 # zig 0.16.0's PE-COFF linker embeds a per-run PE header timestamp + debug-
 # directory checksum (~20-byte diff across two back-to-back builds).
 x86_64-windows/lcsas-restore.exe   issue=#320  reason="zig 0.16.0 PE linker non-reproducible"
 x86_64-windows/lcsas-keyshare.exe  issue=#320  reason="zig 0.16.0 PE linker non-reproducible"
+x86_64-windows/lcsas-ecc.exe       issue=#320  reason="zig 0.16.0 PE linker non-reproducible"

@@ -503,6 +503,42 @@ bin/aarch64-macos/lcsas-keyshare:
 keyshare-arches: bin/x86_64/lcsas-keyshare bin/aarch64/lcsas-keyshare bin/armv7/lcsas-keyshare bin/x86_64-windows/lcsas-keyshare.exe bin/x86_64-macos/lcsas-keyshare bin/aarch64-macos/lcsas-keyshare
 	@echo "keyshare-arches: built lcsas-keyshare for all 6 approved tier-1 targets"
 
+# ── lcsas-ecc per-arch cross builds ───────────────────────────────
+# The in-house RS03 verify/repair tool, so the disc-integrity REPAIR
+# half ships python-free on every approved tier-1 target (FMT-01).
+# Built with zig cc; lcsas-ecc links ONLY its own three objects (no
+# vendored sqlite/zstd, no shared crypto) so it needs neither
+# VENDOR_CFLAGS nor an explicit -static (zig+musl is static by default;
+# macOS is Mach-O dynamic; windows-gnu is PE).  Separate build/<arch>-ecc
+# dirs so these never clobber the lcsas-restore/keyshare cross-build
+# trees.  `make ecc-arches` regenerates all six.
+bin/x86_64/lcsas-ecc:
+	$(MAKE) BUILD=build/x86_64-ecc CC="$(ZIG_CC) -target x86_64-linux-musl" build/x86_64-ecc/lcsas-ecc
+	mkdir -p bin/x86_64 && cp build/x86_64-ecc/lcsas-ecc bin/x86_64/
+
+bin/aarch64/lcsas-ecc:
+	$(MAKE) BUILD=build/aarch64-ecc CC="$(ZIG_CC) -target aarch64-linux-musl" build/aarch64-ecc/lcsas-ecc
+	mkdir -p bin/aarch64 && cp build/aarch64-ecc/lcsas-ecc bin/aarch64/
+
+bin/armv7/lcsas-ecc:
+	$(MAKE) BUILD=build/armv7-ecc CC="$(ZIG_CC) -target arm-linux-musleabihf" build/armv7-ecc/lcsas-ecc
+	mkdir -p bin/armv7 && cp build/armv7-ecc/lcsas-ecc bin/armv7/
+
+bin/x86_64-windows/lcsas-ecc.exe:
+	$(MAKE) BUILD=build/x86_64-windows-ecc CC="$(ZIG_CC) -target x86_64-windows-gnu" BIN_EXT=.exe build/x86_64-windows-ecc/lcsas-ecc.exe
+	mkdir -p bin/x86_64-windows && cp build/x86_64-windows-ecc/lcsas-ecc.exe bin/x86_64-windows/
+
+bin/x86_64-macos/lcsas-ecc:
+	$(MAKE) BUILD=build/x86_64-macos-ecc CC="$(ZIG_CC) -target x86_64-macos" build/x86_64-macos-ecc/lcsas-ecc
+	mkdir -p bin/x86_64-macos && cp build/x86_64-macos-ecc/lcsas-ecc bin/x86_64-macos/
+
+bin/aarch64-macos/lcsas-ecc:
+	$(MAKE) BUILD=build/aarch64-macos-ecc CC="$(ZIG_CC) -target aarch64-macos" build/aarch64-macos-ecc/lcsas-ecc
+	mkdir -p bin/aarch64-macos && cp build/aarch64-macos-ecc/lcsas-ecc bin/aarch64-macos/
+
+ecc-arches: bin/x86_64/lcsas-ecc bin/aarch64/lcsas-ecc bin/armv7/lcsas-ecc bin/x86_64-windows/lcsas-ecc.exe bin/x86_64-macos/lcsas-ecc bin/aarch64-macos/lcsas-ecc
+	@echo "ecc-arches: built lcsas-ecc for all 6 approved tier-1 targets"
+
 # Cross-compile with zig cc (single binary, deterministic).  Requires:
 #   apt-get install zig   OR   pip install ziglang
 zig-aarch64:
@@ -1069,4 +1105,4 @@ fault-inject: $(BUILD)/malloc_inject.so
 	python3 scripts/run_fault_inject.py --max-sweep $(MAX_N)
 	@echo "[fault-inject] PASS: 0 crashes across all test binaries"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check check-toolchain bin-parity zig-aarch64 zig-riscv64 coverage-c sanitize fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-smoke audit-gate fault-inject
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check check-toolchain bin-parity zig-aarch64 zig-riscv64 keyshare-arches ecc-arches coverage-c sanitize fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-smoke audit-gate fault-inject
