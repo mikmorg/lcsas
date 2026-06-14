@@ -51,19 +51,23 @@ sudo bash -c '
     rm -rf /tmp/lcsas-meta /tmp/lcsas-work /tmp/disc /tmp/disc1 \
            /tmp/lcsas-restore-* /tmp/catalog.db /tmp/lcsas_cache \
            /tmp/alpha_packs* 2>/dev/null || true
-    # pkill -9 may truncate .claude.json if a background claude process
-    # (analytics, MCP keep-alive) was mid-write.  Restore to a known-good
-    # minimal config.  Auth tokens live in .credentials.json (separate file,
-    # not truncated by pkill) so {} is sufficient for Claude Code to start.
-    printf '{}' > /home/lcsas-blind/.claude.json
-    chmod 600 /home/lcsas-blind/.claude.json
-    chown lcsas-blind:lcsas-blind /home/lcsas-blind/.claude.json
+    # Isolate the agent CLI state in a dedicated per-run CLAUDE_CONFIG_DIR
+    # (passed in the launch env below) instead of the shared ~/.claude.json.
+    # Why: claude 2.x writes a ~26 KB config and maintains background state;
+    # a leftover analytics/keep-alive process from a prior run can O_TRUNC
+    # ~/.claude.json while the agent reads it, yielding the fatal
+    # "config file ... corrupted: Unexpected EOF".  A fresh dir wiped each
+    # run cannot be raced by any stale process pointed at the old location.
+    # Auth tokens live in <cfgdir>/.credentials.json; {} is a valid seed.
+    rm -rf /home/lcsas-blind/.claude-cfg /home/lcsas-blind/.claude.json
+    mkdir -p /home/lcsas-blind/.claude-cfg
+    printf '{}' > /home/lcsas-blind/.claude-cfg/.claude.json
+    chmod 600 /home/lcsas-blind/.claude-cfg/.claude.json
     if [ -f /home/mikmorg/.claude/.credentials.json ]; then
-        mkdir -p /home/lcsas-blind/.claude
-        cp /home/mikmorg/.claude/.credentials.json /home/lcsas-blind/.claude/.credentials.json
-        chmod 600 /home/lcsas-blind/.claude/.credentials.json
-        chown -R lcsas-blind:lcsas-blind /home/lcsas-blind/.claude
+        cp /home/mikmorg/.claude/.credentials.json /home/lcsas-blind/.claude-cfg/.credentials.json
+        chmod 600 /home/lcsas-blind/.claude-cfg/.credentials.json
     fi
+    chown -R lcsas-blind:lcsas-blind /home/lcsas-blind/.claude-cfg
 '
 # Eject any leftover disc so the agent starts with an empty drive.
 disc-loader eject >/dev/null 2>&1 || true
@@ -111,6 +115,10 @@ sudo -u lcsas-blind -H bash -lc "
     cd ~ &&
     HOME=/home/lcsas-blind \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    CLAUDE_CONFIG_DIR=/home/lcsas-blind/.claude-cfg \
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+    DISABLE_AUTOUPDATER=1 \
+    DISABLE_TELEMETRY=1 \
     $VARIANT_ENV \
     /usr/local/bin/claude \
         -p \"\$(cat '$PROMPT_FILE')\" \

@@ -648,22 +648,23 @@ def _create_agent_user(labels: list[str]) -> None:
         os.chown(p, uid, gid)
 
     # Propagate claude credentials so the headless sub-agent can authenticate.
-    # .claude.json holds only account metadata + feature-flag cache; auth
-    # tokens live in .credentials.json.  Write a minimal valid JSON so
-    # Claude Code starts without an "Unexpected EOF" parse error — copying
-    # mikmorg's .claude.json is fragile because that file can be empty when
-    # a claude session was interrupted mid-write.
-    dst_top = AGENT_HOME / ".claude.json"
+    # The agent runs with CLAUDE_CONFIG_DIR=<home>/.claude-cfg (see run.sh), so
+    # all CLI state — config + auth — lives in one dedicated dir that run.sh
+    # wipes per run.  This avoids the shared ~/.claude.json, which claude 2.x
+    # rewrites as a ~26 KB file and which a stale background process can
+    # O_TRUNC mid-read ("config file ... corrupted: Unexpected EOF").  {} is a
+    # valid seed; tokens come from .credentials.json in the same dir.
+    cfg_dir = AGENT_HOME / ".claude-cfg"
+    cfg_dir.mkdir(exist_ok=True)
+    os.chmod(cfg_dir, 0o700)
+    os.chown(cfg_dir, uid, gid)
+    dst_top = cfg_dir / ".claude.json"
     dst_top.write_text("{}")
     os.chmod(dst_top, 0o600)
     os.chown(dst_top, uid, gid)
     src_creds = Path("/home/mikmorg/.claude/.credentials.json")
     if src_creds.is_file():
-        dst_dir = AGENT_HOME / ".claude"
-        dst_dir.mkdir(exist_ok=True)
-        os.chmod(dst_dir, 0o700)
-        os.chown(dst_dir, uid, gid)
-        dst_creds = dst_dir / ".credentials.json"
+        dst_creds = cfg_dir / ".credentials.json"
         shutil.copy2(src_creds, dst_creds)
         os.chmod(dst_creds, 0o600)
         os.chown(dst_creds, uid, gid)
