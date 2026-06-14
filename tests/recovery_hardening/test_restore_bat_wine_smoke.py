@@ -190,7 +190,7 @@ def test_missing_repo_reports_error(tmp_path: Path) -> None:
     res = _run_bat(env, "e", stdin_data=stdin_data)
 
     out = (res.stdout + res.stderr).lower()
-    assert "no restic repo" in out, (
+    assert "could not find an lcsas backup set" in out, (
         "restore.bat did not report the missing-repo error under wine; "
         f"rc={res.returncode}\n--- output ---\n{res.stdout + res.stderr}"
     )
