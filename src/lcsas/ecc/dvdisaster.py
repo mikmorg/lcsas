@@ -6,7 +6,7 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Protocol
+from typing import NoReturn, Protocol
 
 from lcsas.utils.subprocess import SubprocessRunnerBase
 
@@ -216,3 +216,121 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
         # Ground truth: the repair succeeded iff the image now verifies clean.
         # (-f fixes in place, so this re-reads the same file -f just wrote.)
         return self.verify_iso(iso_path, timeout=timeout)
+
+
+class LcsasEccRunner(SubprocessRunnerBase):
+    """In-house RS03 verify/repair via the bundled ``lcsas-ecc`` binary.
+
+    Implements the :class:`DVDisasterRunner` protocol so operator-side
+    ``lcsas verify`` / ``restore exec`` keep working when no dvdisaster is
+    installed — the same C89 RS03 decoder that ships on the meta-volume
+    tier-1 path (FMT-01).  The *augment* (encode) side is not implemented
+    here: writing parity is still dvdisaster's job until the optional
+    ``lcsas-ecc augment`` phase-2 encoder lands.  The format is identical,
+    so this reads/repairs any dvdisaster-written RS03 image.
+
+    ``lcsas-ecc`` exit-code contract (see recovery/src/lcsas-ecc/main.c):
+      0  success (verify: no damage; fix: fully repaired / no repair needed)
+      1  damage found (verify) / uncorrectable codewords remain (fix)
+      2  no RS03 ECC header (not an augmented image)
+      3  usage / I/O / structural error
+    """
+
+    def __init__(
+        self,
+        ecc_binary: str = "lcsas-ecc",
+        tmpdir: Path | None = None,
+    ) -> None:
+        super().__init__(ecc_binary, tmpdir)
+
+    def augment_iso(
+        self,
+        iso_path: Path,
+        redundancy_pct: int = 15,
+    ) -> None:
+        """Not supported: lcsas-ecc is decode-only (verify/repair).
+
+        RS03 *encoding* remains dvdisaster's responsibility in the burn
+        pipeline.  Callers needing augment must use
+        :class:`SubprocessDVDisasterRunner`.
+        """
+        raise NotImplementedError(
+            "lcsas-ecc does not encode RS03 parity (decode-only); "
+            "use dvdisaster for the augment step."
+        )
+
+    def verify_iso(
+        self,
+        iso_path: Path,
+        timeout: int = 3600,
+    ) -> bool:
+        """Return True iff the image's RS03 data sectors verify clean.
+
+        A missing ECC header (exit 2) or any structural/I/O error (exit 3)
+        is surfaced as a failure with a clear exception, never silently
+        reported as "intact" — silent success on an unreadable image would
+        defeat the disc-integrity guard.
+        """
+        if not iso_path.exists():
+            raise FileNotFoundError(f"ISO file not found: {iso_path}")
+        cmd = [self._binary, "verify", str(iso_path)]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=False,
+                env=self._env(), timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self._handle_timeout("lcsas-ecc", "ECC verification", exc)
+        if result.returncode in (0, 1):
+            return result.returncode == 0
+        self._raise_for_ecc_error("verify", iso_path, result)
+
+    def repair_iso(
+        self,
+        iso_path: Path,
+        timeout: int = 3600,
+    ) -> bool:
+        """Repair the image in place using its embedded RS03 parity.
+
+        Returns True iff the image is intact after the repair attempt.
+        ``lcsas-ecc fix`` repairs atomically (it refuses to write a
+        partial repair when damage exceeds RS03 capacity), so its exit
+        code is an authoritative success signal — unlike dvdisaster ``-f``
+        we do not need a re-verify round trip.
+        """
+        if not iso_path.exists():
+            raise FileNotFoundError(f"ISO file not found: {iso_path}")
+        cmd = [self._binary, "fix", str(iso_path)]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=False,
+                env=self._env(), timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            self._handle_timeout("lcsas-ecc", "ECC repair", exc)
+        if result.returncode in (0, 1):
+            if result.returncode != 0:
+                _logger.info(
+                    "lcsas-ecc fix could not fully repair %s "
+                    "(damage exceeds RS03 capacity)",
+                    iso_path.name,
+                )
+            return result.returncode == 0
+        self._raise_for_ecc_error("fix", iso_path, result)
+
+    @staticmethod
+    def _raise_for_ecc_error(
+        op: str,
+        iso_path: Path,
+        result: subprocess.CompletedProcess[str],
+    ) -> NoReturn:
+        """Translate a non-{0,1} lcsas-ecc exit into a loud RuntimeError."""
+        stderr = (result.stderr or "").strip()
+        if result.returncode == 2:
+            detail = "no RS03 ECC header (not an augmented image)"
+        else:
+            detail = stderr or "structural or I/O error"
+        raise RuntimeError(
+            f"lcsas-ecc {op} failed on '{iso_path.name}' "
+            f"(exit {result.returncode}): {detail}"
+        )

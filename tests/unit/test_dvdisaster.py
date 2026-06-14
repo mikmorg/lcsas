@@ -8,6 +8,7 @@ import pytest
 
 from lcsas.ecc.dvdisaster import (
     RS03_MEDIUM_LADDER_BYTES,
+    LcsasEccRunner,
     SubprocessDVDisasterRunner,
     smallest_fitting_medium_bytes,
 )
@@ -228,3 +229,101 @@ class TestSmallestFittingMedium:
         assert list(RS03_MEDIUM_LADDER_BYTES) == sorted(
             set(RS03_MEDIUM_LADDER_BYTES)
         )
+
+
+class TestLcsasEccRunner:
+    """In-house lcsas-ecc verify/repair runner (FMT-01).
+
+    The exit-code contract (recovery/src/lcsas-ecc/main.c):
+      0 ok · 1 damage/uncorrectable · 2 no header · 3 usage/I-O.
+    """
+
+    def _iso(self, tmp_path):
+        iso = tmp_path / "disc.iso"
+        iso.write_bytes(b"\x00" * 1024)
+        return iso
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_verify_clean_calls_subcommand(self, mock_run, tmp_path):
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        runner = LcsasEccRunner()
+        iso = self._iso(tmp_path)
+        assert runner.verify_iso(iso) is True
+        args = mock_run.call_args[0][0]
+        assert "lcsas-ecc" in args[0]
+        assert args[1] == "verify"
+        assert args[2] == str(iso)
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_verify_damage_returns_false(self, mock_run, tmp_path):
+        mock_run.return_value = MagicMock(returncode=1, stderr="DAMAGE")
+        runner = LcsasEccRunner()
+        assert runner.verify_iso(self._iso(tmp_path)) is False
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_verify_no_header_raises_not_silent_success(self, mock_run, tmp_path):
+        # Exit 2 (not an augmented image) must be loud, never reported as
+        # "intact" — that would defeat the disc-integrity guard.
+        mock_run.return_value = MagicMock(returncode=2, stderr="no RS03 header")
+        runner = LcsasEccRunner()
+        with pytest.raises(RuntimeError, match="no RS03 ECC header"):
+            runner.verify_iso(self._iso(tmp_path))
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_verify_io_error_raises(self, mock_run, tmp_path):
+        mock_run.return_value = MagicMock(returncode=3, stderr="short read")
+        runner = LcsasEccRunner()
+        with pytest.raises(RuntimeError, match="exit 3"):
+            runner.verify_iso(self._iso(tmp_path))
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_repair_success(self, mock_run, tmp_path):
+        # Unlike dvdisaster -f, lcsas-ecc fix is authoritative (atomic): a
+        # single call, exit 0 == repaired.  No re-verify round trip.
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        runner = LcsasEccRunner()
+        iso = self._iso(tmp_path)
+        assert runner.repair_iso(iso) is True
+        assert mock_run.call_count == 1
+        args = mock_run.call_args[0][0]
+        assert args[1] == "fix"
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_repair_uncorrectable_returns_false(self, mock_run, tmp_path):
+        mock_run.return_value = MagicMock(returncode=1, stderr="uncorrectable")
+        runner = LcsasEccRunner()
+        assert runner.repair_iso(self._iso(tmp_path)) is False
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_repair_no_header_raises(self, mock_run, tmp_path):
+        mock_run.return_value = MagicMock(returncode=2, stderr="")
+        runner = LcsasEccRunner()
+        with pytest.raises(RuntimeError, match="no RS03 ECC header"):
+            runner.repair_iso(self._iso(tmp_path))
+
+    def test_augment_not_supported(self, tmp_path):
+        runner = LcsasEccRunner()
+        with pytest.raises(NotImplementedError, match="decode-only"):
+            runner.augment_iso(self._iso(tmp_path))
+
+    def test_verify_missing_file_raises(self, tmp_path):
+        runner = LcsasEccRunner()
+        with pytest.raises(FileNotFoundError):
+            runner.verify_iso(tmp_path / "absent.iso")
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_verify_timeout_raises(self, mock_run, tmp_path):
+        import subprocess as sp
+
+        mock_run.side_effect = sp.TimeoutExpired(cmd="lcsas-ecc", timeout=1)
+        runner = LcsasEccRunner()
+        with pytest.raises(RuntimeError, match="timed out"):
+            runner.verify_iso(self._iso(tmp_path))
+
+    def test_satisfies_dvdisaster_protocol(self):
+        from lcsas.ecc.dvdisaster import DVDisasterRunner
+
+        runner: DVDisasterRunner = LcsasEccRunner()
+        assert hasattr(runner, "augment_iso")
+        assert hasattr(runner, "verify_iso")
+        assert hasattr(runner, "repair_iso")
