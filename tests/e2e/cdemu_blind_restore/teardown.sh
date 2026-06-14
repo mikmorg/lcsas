@@ -12,6 +12,8 @@ bash /home/mikmorg/git/lcsas/scripts/cdemu_drive.sh unload >/dev/null 2>&1 || tr
 rm -rf /var/lib/disc-vault
 rm -rf /opt/disc-robot
 rm -rf /var/lib/lcsas-blind-test
+rm -rf /scratch/lcsas-blind-claude-cfg  # agent CLAUDE_CONFIG_DIR (off "/")
+rm -rf /home/lcsas-blind/.claude-cfg     # legacy on-"/" location, pre-fix
 rm -rf /mnt/lcsas-data/blind-test  # legacy v1 location, harmless if absent
 rm -f  /usr/local/bin/disc-loader
 rm -f  /usr/local/libexec/cdemu_drive.sh

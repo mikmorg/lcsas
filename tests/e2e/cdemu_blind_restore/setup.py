@@ -75,6 +75,10 @@ SYSCTL_FILE = Path("/etc/sysctl.d/99-blind-restore.conf")
 
 AGENT_USER = "lcsas-blind"
 AGENT_HOME = Path("/home") / AGENT_USER
+# Agent CLI config dir lives on /scratch, not under AGENT_HOME on "/": claude
+# 2.x writes a ~26 KB config + session files and the small root partition can
+# ENOSPC mid-write, corrupting the config.  See the seeding block below.
+AGENT_CLAUDE_CFG = Path("/scratch/lcsas-blind-claude-cfg")
 
 # File sizing: each TEST_TINY volume has ~1.35 MB usable after the
 # holographic-metadata reserve (#142: TEST_TINY = 2 MB, reserve ≈ 700 KB
@@ -648,14 +652,17 @@ def _create_agent_user(labels: list[str]) -> None:
         os.chown(p, uid, gid)
 
     # Propagate claude credentials so the headless sub-agent can authenticate.
-    # The agent runs with CLAUDE_CONFIG_DIR=<home>/.claude-cfg (see run.sh), so
-    # all CLI state — config + auth — lives in one dedicated dir that run.sh
-    # wipes per run.  This avoids the shared ~/.claude.json, which claude 2.x
-    # rewrites as a ~26 KB file and which a stale background process can
-    # O_TRUNC mid-read ("config file ... corrupted: Unexpected EOF").  {} is a
-    # valid seed; tokens come from .credentials.json in the same dir.
-    cfg_dir = AGENT_HOME / ".claude-cfg"
-    cfg_dir.mkdir(exist_ok=True)
+    # The agent runs with CLAUDE_CONFIG_DIR=AGENT_CLAUDE_CFG (see run.sh) — a
+    # dedicated dir ON /scratch, NOT under the agent HOME on "/".  claude 2.x
+    # rewrites a ~26 KB config plus session files at startup; the small, often
+    # >95%-full root partition can ENOSPC mid-write, truncating .claude.json to
+    # 0 bytes so claude dies reading it back ("config file ... corrupted:
+    # Unexpected EOF").  /scratch has tens of GB free (machine policy: scratch
+    # state belongs on /scratch).  {} is a valid seed; tokens go in the same
+    # dir.  run.sh re-seeds this each run; we also seed it here so a bare
+    # setup (without run.sh) leaves a usable config.
+    cfg_dir = AGENT_CLAUDE_CFG
+    cfg_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(cfg_dir, 0o700)
     os.chown(cfg_dir, uid, gid)
     dst_top = cfg_dir / ".claude.json"

@@ -51,23 +51,28 @@ sudo bash -c '
     rm -rf /tmp/lcsas-meta /tmp/lcsas-work /tmp/disc /tmp/disc1 \
            /tmp/lcsas-restore-* /tmp/catalog.db /tmp/lcsas_cache \
            /tmp/alpha_packs* 2>/dev/null || true
-    # Isolate the agent CLI state in a dedicated per-run CLAUDE_CONFIG_DIR
-    # (passed in the launch env below) instead of the shared ~/.claude.json.
-    # Why: claude 2.x writes a ~26 KB config and maintains background state;
-    # a leftover analytics/keep-alive process from a prior run can O_TRUNC
-    # ~/.claude.json while the agent reads it, yielding the fatal
-    # "config file ... corrupted: Unexpected EOF".  A fresh dir wiped each
-    # run cannot be raced by any stale process pointed at the old location.
+    # Isolate the agent CLI state in a dedicated CLAUDE_CONFIG_DIR ON /scratch
+    # (passed in the launch env below), NOT under the agent HOME on "/".
+    # Two reasons, both specific to claude 2.x:
+    #   1. claude 2.x rewrites a ~26 KB config plus session files at startup.
+    #      The root partition "/" on this host is small and routinely >95%
+    #      full; an ENOSPC mid-write leaves .claude.json truncated to 0 bytes,
+    #      and claude then dies reading it back ("config file ... corrupted:
+    #      Unexpected EOF").  /scratch has tens of GB free (machine policy:
+    #      scratch state belongs on /scratch, never /).
+    #   2. A dedicated dir wiped each run cannot be raced by any stale
+    #      analytics/keep-alive process pointed at the old shared location.
     # Auth tokens live in <cfgdir>/.credentials.json; {} is a valid seed.
-    rm -rf /home/lcsas-blind/.claude-cfg /home/lcsas-blind/.claude.json
-    mkdir -p /home/lcsas-blind/.claude-cfg
-    printf '{}' > /home/lcsas-blind/.claude-cfg/.claude.json
-    chmod 600 /home/lcsas-blind/.claude-cfg/.claude.json
+    rm -rf /scratch/lcsas-blind-claude-cfg /home/lcsas-blind/.claude-cfg \
+           /home/lcsas-blind/.claude.json
+    mkdir -p /scratch/lcsas-blind-claude-cfg
+    printf '{}' > /scratch/lcsas-blind-claude-cfg/.claude.json
+    chmod 600 /scratch/lcsas-blind-claude-cfg/.claude.json
     if [ -f /home/mikmorg/.claude/.credentials.json ]; then
-        cp /home/mikmorg/.claude/.credentials.json /home/lcsas-blind/.claude-cfg/.credentials.json
-        chmod 600 /home/lcsas-blind/.claude-cfg/.credentials.json
+        cp /home/mikmorg/.claude/.credentials.json /scratch/lcsas-blind-claude-cfg/.credentials.json
+        chmod 600 /scratch/lcsas-blind-claude-cfg/.credentials.json
     fi
-    chown -R lcsas-blind:lcsas-blind /home/lcsas-blind/.claude-cfg
+    chown -R lcsas-blind:lcsas-blind /scratch/lcsas-blind-claude-cfg
 '
 # Eject any leftover disc so the agent starts with an empty drive.
 disc-loader eject >/dev/null 2>&1 || true
@@ -115,7 +120,7 @@ sudo -u lcsas-blind -H bash -lc "
     cd ~ &&
     HOME=/home/lcsas-blind \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    CLAUDE_CONFIG_DIR=/home/lcsas-blind/.claude-cfg \
+    CLAUDE_CONFIG_DIR=/scratch/lcsas-blind-claude-cfg \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
     DISABLE_AUTOUPDATER=1 \
     DISABLE_TELEMETRY=1 \
