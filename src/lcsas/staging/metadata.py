@@ -291,7 +291,12 @@ WHAT YOU NEED TO RESTORE
 ------------------------
 
 1. This disc (and possibly others — check catalog.db for the full list)
-2. Your encryption key file (NOT stored on any disc for security)
+2. Your encryption PASSWORD.  The password itself is NOT written on any
+   disc.  The discs DO carry password-locked key files — that is what the
+   password opens.  Anyone holding a disc can try password guesses against
+   those key files forever, so the password must be long and random.
+   See docs/DISC_CONFIDENTIALITY.md (on the meta-volume) for the full
+   stolen-disc threat model.
 3. The LCSAS meta-volume disc (contains all required tools), OR:
    - rustic (https://rustic.cli.rs/) or restic (https://restic.net/)
    - Python 3.10+ and the LCSAS source code
@@ -480,10 +485,16 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
             HOW TO GET YOUR FILES BACK
             --------------------------
 
-              1. You need an ENCRYPTION KEY to unlock the data on these discs.
-                 The key is NOT on any disc (for security).
+              1. You need the ENCRYPTION PASSWORD to unlock the data on
+                 these discs.  Your password is NOT written on any disc.
+                 The discs DO carry password-locked key files — that is
+                 what your password opens.  Anyone who holds a disc can
+                 try password guesses against it forever, so the password
+                 must be long and random.  (For the full stolen-disc
+                 threat model, see docs/DISC_CONFIDENTIALITY.md on the
+                 META disc.)
 
-                 Where to find the key:
+                 Where to find the password:
                  {key_hints}
 
               2. You need ALL of the discs (or at least the ones containing
@@ -592,6 +603,15 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
         lines.append("NOTE: Each repository requires its own encryption key.")
         lines.append("If you have only one key file, it likely works for all")
         lines.append("repositories (common setup).")
+        lines.append("")
+        lines.append("ABOUT THE PASSWORD AND THESE DISCS")
+        lines.append("----------------------------------")
+        lines.append("Your password is NOT written on any disc.  The discs DO")
+        lines.append("carry password-locked key files — that is what your")
+        lines.append("password opens.  Anyone who holds a disc can try password")
+        lines.append("guesses against it forever, so the password must be long")
+        lines.append("and random.  See docs/DISC_CONFIDENTIALITY.md (on the")
+        lines.append("meta-volume) for the full stolen-disc threat model.")
         lines.append("")
 
         if config.key_split:

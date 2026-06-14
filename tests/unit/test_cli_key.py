@@ -294,6 +294,53 @@ class TestSplitCombineRoundTrip:
 
 
 # --------------------------------------------------------------------------
+# FUP-03: weak-password advisory (warn, never block).
+# --------------------------------------------------------------------------
+
+class TestWeakPasswordWarning:
+    def test_key_split_warns_on_short_password(
+        self, tmp_path: Path, caplog
+    ) -> None:
+        """A short/low-entropy password file warns on stderr but the split
+        still succeeds (exit code unchanged)."""
+        import logging
+
+        pw_file = _write_pw_file(tmp_path / "pw", pw=b"hunter2")
+        out = tmp_path / "shares"
+        with caplog.at_level(logging.WARNING, logger="lcsas.cli.main"):
+            rc = main([
+                "key", "split", "--repo", "alpha",
+                "--no-verify-repo",
+                "--password-file", str(pw_file), "--out", str(out),
+            ])
+        assert rc == 0  # warning, not a block
+        msgs = "\n".join(r.getMessage() for r in caplog.records)
+        assert "Weak password" in msgs
+        assert "DISC_CONFIDENTIALITY.md" in msgs
+        # The split still produced cards.
+        assert len(_share_card_files(out)) == 5
+
+    def test_key_split_no_warning_on_strong_password(
+        self, tmp_path: Path, caplog
+    ) -> None:
+        """A long, mixed-class password does not trip the advisory."""
+        import logging
+
+        strong = b"Tr0ub4dor&3-correct-horse-battery-staple-7x"
+        pw_file = _write_pw_file(tmp_path / "pw", pw=strong)
+        out = tmp_path / "shares"
+        with caplog.at_level(logging.WARNING, logger="lcsas.cli.main"):
+            rc = main([
+                "key", "split", "--repo", "alpha",
+                "--no-verify-repo",
+                "--password-file", str(pw_file), "--out", str(out),
+            ])
+        assert rc == 0
+        msgs = "\n".join(r.getMessage() for r in caplog.records)
+        assert "Weak password" not in msgs
+
+
+# --------------------------------------------------------------------------
 # Config-driven defaults for K/N.
 # --------------------------------------------------------------------------
 

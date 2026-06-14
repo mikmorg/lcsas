@@ -5292,6 +5292,53 @@ def _recombine_roundtrip_error(
     return None
 
 
+def _estimate_password_bits(password: bytes) -> float:
+    """Rough Shannon-style entropy estimate for an advisory check.
+
+    Deliberately conservative and character-class based — this is a
+    "is this obviously too weak?" gate, not a real strength meter.  It
+    never blocks; it only decides whether to print the FUP-03 warning.
+    """
+    try:
+        text = password.decode("utf-8", errors="replace")
+    except Exception:  # pragma: no cover - decode with replace never raises
+        text = ""
+    pool = 0
+    if any(c.islower() for c in text):
+        pool += 26
+    if any(c.isupper() for c in text):
+        pool += 26
+    if any(c.isdigit() for c in text):
+        pool += 10
+    if any(not c.isalnum() for c in text):
+        pool += 32
+    if pool == 0:
+        return 0.0
+    import math
+
+    return len(text) * math.log2(pool)
+
+
+def _warn_if_weak_password(password: bytes) -> None:
+    """Print a non-blocking weak-password advisory (FUP-03).
+
+    Burned discs carry the password-locked key files forever, so the
+    password faces unlimited offline scrypt guessing.  Warn when it is
+    short (<16 chars) or low-entropy (<60 bits estimated).
+    """
+    chars = len(password.decode("utf-8", errors="replace"))
+    bits = _estimate_password_bits(password)
+    if chars < 16 or bits < 60.0:
+        logger.warning(
+            "Weak password: ~%d chars / ~%.0f bits estimated. Every burned "
+            "disc carries the password-locked key files, so a disc thief can "
+            "brute-force this password offline forever (scrypt N=2^15). Use a "
+            "generated diceware passphrase of 7+ words. See "
+            "docs/DISC_CONFIDENTIALITY.md.",
+            chars, bits,
+        )
+
+
 def cmd_key_split(args: argparse.Namespace) -> int:
     """Split a repository password into K-of-N SLIP-0039 key shares."""
     from datetime import date
@@ -5347,6 +5394,13 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     # Read the password and drop a single trailing newline (key files often
     # have one; rustic's --password-file ignores it).
     password = repo_pw_file.read_bytes().rstrip(b"\n")
+
+    # Weak-password advisory (FUP-03).  Every burned disc carries the
+    # password-locked key files, so the password faces unlimited offline
+    # scrypt guessing forever.  Warn (never block) when the password looks
+    # too weak to bet decades of GPU progress against.  See
+    # docs/DISC_CONFIDENTIALITY.md.
+    _warn_if_weak_password(password)
 
     try:
         master_secret = encode_master_secret(password)

@@ -42,6 +42,17 @@ This document provides a checklist and templates to make that possible.
 
 ### 2. Encryption Key Management
 
+- [ ] **Choose the password like it WILL be brute-forced.** Every burned disc
+  carries the password-locked key files forever, so a thief who steals any one
+  disc can guess your password offline, in parallel, with no rate limit, on
+  hardware that only gets faster. The only defense is entropy. **Generate** the
+  password — do not invent it: use a diceware passphrase of **7+ words**
+  (≈ 90 bits) or an equivalent random string from a password manager. You are
+  betting against scrypt `N=2^15, r=8, p=1` (tens of ms/guess). See
+  [DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md) for the full stolen-disc
+  threat model, the entropy table, and why changing the password later does
+  nothing for discs already burned.
+
 - [ ] **Store the encryption key in multiple locations**:
   - Paper printout in a fireproof safe at home
   - USB drive in a bank safe deposit box
@@ -200,7 +211,10 @@ With love,
 [survivability]
 archive_owner = "Your Full Name"
 archive_description = "Family photos, videos, and documents 2000-2025"
-key_storage_hints = "Paper copy in the home safe; USB copy at First National Bank safe deposit box #1234"
+# NOTE: key_storage_hints is printed VERBATIM on every disc. Write it to point
+# an heir to the password WITHOUT handing it to a disc thief — name a custodian,
+# not a findable cache. See DISC_CONFIDENTIALITY.md §5.
+key_storage_hints = "Sealed envelope with the family attorney (see my will)"
 technical_contact = "Jane Doe (jane@example.com) or any Linux IT professional"
 
 [defaults]

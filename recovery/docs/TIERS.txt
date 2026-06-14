@@ -125,6 +125,14 @@ The physical-media half (a real burned disc read by a real optical
 drive, with physically induced damage) is hardware-gated and specified
 in ``recovery/docs/PHYSICAL_DISC_VALIDATION.txt``.
 
+CONFIDENTIALITY (what a STOLEN disc gives an adversary): the integrity
+guards above keep the bytes intact and authentic; they do NOT keep them
+SECRET.  Every disc carries the full plaintext catalog and every repo's
+password-locked key files, so the password is the only thing protecting
+your data against unlimited offline guessing.  The stolen-disc threat
+model, the entropy guidance, and the no-rotation reality are documented
+in ``docs/DISC_CONFIDENTIALITY.md`` (bundled on every meta-volume).
+
 TIER 3: SKIP-AND-CONTINUE ON A BAD BLOB
 
 Tier 3 (the pure-Python standalone_restorer.py, last resort) is

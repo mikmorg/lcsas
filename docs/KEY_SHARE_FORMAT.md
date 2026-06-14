@@ -100,6 +100,15 @@ re-implementation must pass all 45. The pieces:
 
 ## 5. LCSAS specifics
 
+- **Choose the password like it will be brute-forced.** Splitting protects you
+  from *losing* a card; it does **not** strengthen the password itself.
+  Reconstruct K cards and you get the same password a disc thief is guessing
+  against — every burned disc carries the password-locked key files forever and
+  faces unlimited offline scrypt guessing (`N=2^15, r=8, p=1`). **Generate** the
+  password — a diceware passphrase of **7+ words** (≈ 90 bits) or an equivalent
+  random string. `lcsas key split` prints a non-blocking warning when the
+  password is under 16 chars or below ~60 estimated bits. Full threat model and
+  entropy table: `docs/DISC_CONFIDENTIALITY.md`.
 - **Default split: 2-of-5.** A backup's dominant risk is *loss*, so K is kept
   low for recoverability; raise it for more privacy at the cost of more ways to
   become unrecoverable.

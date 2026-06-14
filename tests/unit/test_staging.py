@@ -252,7 +252,7 @@ class TestHolographicInjector:
 
         txt = (staging_root / "RESTORE_INSTRUCTIONS.txt").read_text()
         assert "LCSAS Data Volume" in txt
-        assert "encryption key file" in txt
+        assert "encryption PASSWORD" in txt
         assert "rustic" in txt
 
     def test_restore_instructions_no_placeholder_url(self, tmp_path):
@@ -330,6 +330,47 @@ class TestHolographicInjector:
         assert "START HERE" in txt
         assert "ENCRYPTION KEY" in txt
         assert "computer professional" in txt
+
+    def test_start_here_and_key_info_password_wording(self, tmp_path):
+        """FUP-03: the three heir-facing files must not claim the key is
+        'NOT on any disc (for security)' and must carry the new
+        password-locked-key-files + offline-guessing warning."""
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+
+        config = LCSASConfig(
+            mirror_base_path=tmp_path / "mirror",
+            staging_path=tmp_path / "staging",
+            db_path=tmp_path / "db.db",
+            repositories={
+                "family": RepositoryConfig(
+                    name="family",
+                    mirror_path=tmp_path / "mirror" / "family",
+                    password_file=Path("/keys/family.key"),
+                ),
+            },
+        )
+
+        injector = HolographicInjector(staging_root)
+        injector.write_start_here(config)
+        injector.write_key_info(config)
+        injector.write_restore_instructions()
+
+        start_here = (staging_root / "START_HERE.txt").read_text()
+        key_info = (staging_root / "KEY_INFO.txt").read_text()
+        restore = (staging_root / "RESTORE_INSTRUCTIONS.txt").read_text()
+
+        for txt in (start_here, key_info, restore):
+            # Old false-comfort wording is gone.
+            assert "NOT on any disc (for security)" not in txt
+            assert "NOT stored on any disc for security" not in txt
+            # New honest wording present.
+            assert "password-locked key files" in txt
+            assert "DISC_CONFIDENTIALITY.md" in txt
+        # The brute-force warning must appear in the heir-facing files.
+        assert "guess" in start_here.lower()
+        assert "guess" in key_info.lower()
+        assert "guess" in restore.lower()
 
     def test_write_key_info_with_repos(self, tmp_path):
         """KEY_INFO.txt lists repos and key file names."""

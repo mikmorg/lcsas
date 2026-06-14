@@ -170,3 +170,6 @@ filed as plans. Expected 1-1.5 focused days.
 Mitigations: 1 day (docs + wording + two unit tests). Charter audit: 1-1.5 days
 (includes the rustic key-file KDF measurement and a GPU-rate literature pass; no
 special hardware beyond this VM and one fresh rustic repo). Total ≈ 2.5 days.
+
+---
+**Implemented:** 2026-06-14. Part 1 only, as planned: docs/DISC_CONFIDENTIALITY.md written + linked from ESTATE_PLANNING/SURVIVABILITY/TIERS.txt; START_HERE/KEY_INFO/RESTORE_INSTRUCTIONS wording fixed; passphrase guidance added to ESTATE_PLANNING + KEY_SHARE_FORMAT; settings.py example hint de-located; cmd_key_split weak-password warning (warn, never block); 4 new tests + docs-presence gate. Part 2 charter remains a document.

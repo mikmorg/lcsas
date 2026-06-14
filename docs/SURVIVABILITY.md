@@ -13,6 +13,13 @@ recoverable over an estimated **50-year term**.
 
 Everything in this document is evaluated against that single objective.
 
+> **Confidentiality counterpart.** This audit optimizes for *recovery*. The
+> mirror-image concern — what a thief who steals a single disc gets, and the
+> password entropy that is the only thing protecting your data — is documented
+> in [DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md). The hint examples
+> below predate that threat model; write `key_storage_hints` to name a
+> custodian, not a findable cache (DISC_CONFIDENTIALITY.md §5).
+
 ---
 
 ## 1. Human Documentation on Disc

@@ -679,3 +679,15 @@ def test_architecture_md_no_phantom_disc_readback_claim() -> None:
         "docs/architecture.md claims a post-burn per-pack disc read-back "
         "that is not implemented (BURN-02/BURN-04)"
     )
+
+
+def test_disc_confidentiality_doc_present_and_linked() -> None:
+    """FUP-03 docs gate: the stolen-disc threat model must exist and be
+    referenced from the owner-facing docs so it cannot rot out of the set."""
+    doc = REPO_ROOT / "docs" / "DISC_CONFIDENTIALITY.md"
+    assert doc.is_file(), "docs/DISC_CONFIDENTIALITY.md is missing (FUP-03)"
+
+    estate = (REPO_ROOT / "docs" / "ESTATE_PLANNING.md").read_text()
+    assert "DISC_CONFIDENTIALITY.md" in estate, (
+        "docs/ESTATE_PLANNING.md must reference DISC_CONFIDENTIALITY.md"
+    )

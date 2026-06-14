@@ -160,7 +160,10 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         [survivability]
         archive_owner = "John Doe"
         archive_description = "Family photos, videos, and documents 2000-2025"
-        key_storage_hints = "Paper copy in the home safe; USB copy in safe deposit box #1234"
+        # The hint is printed verbatim on EVERY disc, so it must point an heir
+        # to the password without handing it to a disc thief — name a custodian,
+        # not a findable location.  See docs/DISC_CONFIDENTIALITY.md.
+        key_storage_hints = "Sealed envelope with the family attorney (see my will)"
         technical_contact = "Jane Doe (jane@example.com) or any Linux-savvy IT professional"
 
         [repos.family]
