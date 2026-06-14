@@ -70,6 +70,25 @@ if not errorlevel 1 (
 )
 if exist "%~dp0..\catalog.db" copy /Y "%~dp0..\catalog.db" "%RAMDIR%\recovery\catalog.db" >nul
 
+REM Carry the holographic repo metadata (keys/index/config/snapshots
+REM under metadata\<tenant>\) into RAM too.  Without this, the relocated
+REM copy's %RECOVERY%\metadata\* probe finds nothing once the meta disc
+REM is ejected and discovery fails -- defeating the whole point of
+REM relocating.  metadata\ is small (KBs-low MBs), safe for %TEMP%.
+REM Two source forms: ..\..\metadata when run from recovery\scripts\,
+REM metadata when surfaced at the disc root.
+set "META_SRC="
+if exist "%~dp0..\..\metadata\" for %%I in ("%~dp0..\..\metadata") do set "META_SRC=%%~fI"
+if not defined META_SRC if exist "%~dp0metadata\" for %%I in ("%~dp0metadata") do set "META_SRC=%%~fI"
+if defined META_SRC (
+    where robocopy >nul 2>nul
+    if not errorlevel 1 (
+        robocopy "!META_SRC!" "%RAMDIR%\recovery\metadata" /E /NFL /NDL /NJH /NJS /NC /NS /NP >nul
+    ) else (
+        xcopy /E /I /Y /Q "!META_SRC!" "%RAMDIR%\recovery\metadata\" >nul 2>nul
+    )
+)
+
 echo [lcsas-restore] copied recovery files to %RAMDIR%
 echo [lcsas-restore] you may eject the recovery disc when the binary
 echo                 prompts for a data disc.
@@ -129,15 +148,128 @@ if "%ARCH%"=="" (
 )
 
 REM ----- Find the restic repo ---------------------------------------
+REM A restic repo is any directory holding both keys\ and index\.  The
+REM holographic layout LCSAS burns puts a per-tenant repo under
+REM metadata\<tenant>\ on EVERY disc (meta and data).  restore.bat is
+REM surfaced at the disc root, so %RECOVERY% is <disc>\recovery and the
+REM repo material is one level up at <disc>\metadata\<tenant>\ and on any
+REM other mounted disc at <drive>:\metadata\<tenant>\.  This mirrors
+REM restore.sh's candidate model (legacy direct layouts first, then the
+REM holographic layout on this volume, then every other mounted disc).
+REM Canonicalise DISC_ROOT (drop the trailing "\.." so later globs and
+REM error text are clean, and so interpreters that choke on "..\" path
+REM segments still enumerate metadata\).
+for %%I in ("%RECOVERY%\..") do set "DISC_ROOT=%%~fI"
 set "REPO="
-if exist "%RECOVERY%\repo\keys" if exist "%RECOVERY%\repo\index" set "REPO=%RECOVERY%\repo"
-if "%REPO%"=="" if exist "%RECOVERY%\keys" if exist "%RECOVERY%\index" set "REPO=%RECOVERY%"
+set "NCAND=0"
 
-if "%REPO%"=="" (
-    echo ERROR: no restic repo (keys\ + index\) found under %RECOVERY%
+REM add_candidate <path>: if <path>\keys and <path>\index both exist and
+REM its tenant name (last path component) is new, record it.
+REM Implemented inline via the :add_cand label because CMD has no funcs.
+
+REM -- Legacy direct layouts (cheap; keep first for old discs).
+call :add_cand "%RECOVERY%\repo"
+call :add_cand "%RECOVERY%"
+REM -- Holographic layout on this volume (disc root and relocated RAM dir).
+REM    `dir /ad /b` enumerates the tenant subdirs; it is portable across
+REM    CMD interpreters where `for /d` globbing is unreliable.
+call :scan_metadata "%DISC_ROOT%\metadata"
+call :scan_metadata "%RECOVERY%\metadata"
+REM -- Holographic layout on every other mounted disc (data discs carry
+REM    metadata\<tenant>\ too).
+for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
+    call :scan_metadata "%%L:\metadata"
+)
+
+if !NCAND! equ 0 (
+    echo ERROR: could not find an LCSAS backup set ^(a folder containing keys\ and index\^).
+    echo Looked in:
+    echo    %RECOVERY%\repo
+    echo    %RECOVERY%
+    echo    %DISC_ROOT%\metadata\^<name^>\
+    echo    D:\metadata\^<name^>\ .. Z:\metadata\^<name^>\
+    echo.
+    echo Insert the disc labelled LCSAS_META ^(or any LCSAS data disc^), wait
+    echo for it to appear in File Explorer, then run restore.bat again.
     pause
     exit /b 1
 )
+
+REM -- Select the tenant.  (goto-based; labels must NOT live inside a
+REM parenthesised block, so the multi-candidate prompt is its own loop.)
+REM See the :add_cand portability note re: %%NCAND%% / `call set`.
+set "REPO="
+if defined LCSAS_REPO (
+    for /l %%I in (1,1,%NCAND%) do (
+        call set "_NM=%%CAND_NAME_%%I%%"
+        if /i "!_NM!"=="%LCSAS_REPO%" call set "REPO=%%CAND_%%I%%"
+    )
+    if not defined REPO (
+        echo ERROR: LCSAS_REPO=%LCSAS_REPO% is not among the backup sets on this archive:
+        for /l %%I in (1,1,%NCAND%) do call echo    %%CAND_NAME_%%I%%
+        pause
+        exit /b 1
+    )
+    goto :repo_selected
+)
+if %NCAND% equ 1 (
+    set "REPO=!CAND_1!"
+    goto :repo_selected
+)
+
+echo.
+echo This archive contains more than one backup set:
+for /l %%I in (1,1,%NCAND%) do call echo    [%%I] %%CAND_NAME_%%I%%
+echo.
+:pick_repo
+set "REPO_PICK="
+set /p "REPO_PICK=Which one do you want to restore? [1]: "
+if "!REPO_PICK!"=="" set "REPO_PICK=1"
+set "REPO="
+for /l %%I in (1,1,%NCAND%) do (
+    if "!REPO_PICK!"=="%%I" call set "REPO=%%CAND_%%I%%"
+)
+if not defined REPO (
+    echo Please enter a number between 1 and %NCAND%.
+    goto :pick_repo
+)
+
+goto :repo_selected
+
+:add_cand
+REM %~1 = candidate dir.  Validity: keys\ and index\ both present.
+REM De-dup by tenant name (last path component); first hit wins so the
+REM meta-disc / earlier-scanned copy is preferred.
+REM
+REM Portability note: the for-range uses %%NCAND%% (plain expansion, set
+REM before the loop) and dereferences CAND_NAME_<n> via `call set`.  Both
+REM avoid the `!VAR!`-in-for-range and `!CAND_%%I!`-nested-deref forms,
+REM which real CMD honours but wine's cmd does NOT (the documented
+REM delayed-expansion divergence) -- this keeps the same code working
+REM under the wine smoke and the real-Windows e2e gate.
+if not exist "%~1\keys" goto :eof
+if not exist "%~1\index" goto :eof
+set "_CN=%~nx1"
+for /l %%I in (1,1,%NCAND%) do (
+    call set "_EXIST=%%CAND_NAME_%%I%%"
+    if /i "!_EXIST!"=="!_CN!" goto :eof
+)
+set /a NCAND+=1
+call set "CAND_%%NCAND%%=%~f1"
+call set "CAND_NAME_%%NCAND%%=!_CN!"
+goto :eof
+
+:scan_metadata
+REM %~1 = a "...\metadata" dir.  Enumerate its immediate subdirs (one per
+REM tenant) and offer each as a candidate.  `dir /ad /b` is used instead
+REM of `for /d` globbing because the latter is unreliable across CMD
+REM interpreters (notably wine), whereas `dir /ad /b` lists bare names
+REM consistently.  Absent dir -> dir errors -> nothing enumerated.
+if not exist "%~1\" goto :eof
+for /f "delims=" %%T in ('dir /ad /b "%~1" 2^>nul') do call :add_cand "%~1\%%T"
+goto :eof
+
+:repo_selected
 
 REM ----- Ask for target directory -----------------------------------
 set "DEFAULT_TARGET=%USERPROFILE%\Documents\restored"

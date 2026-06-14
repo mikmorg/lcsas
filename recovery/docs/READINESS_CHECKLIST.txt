@@ -42,6 +42,31 @@ BEFORE RELYING ON THESE DISCS  (one-time, at archive creation)
     its README for the QEMU boot-smoke revival gate).
     HOW OFTEN: once per meta disc build.
 
+[ ] WINDOWS DOUBLE-CLICK DRILL — on a stock Windows 10/11 VM (no admin
+    elevation), mount the freshly built meta ISO, then confirm the
+    advertised heir journey actually works:
+      [ ] File Explorer shows START_HERE.txt + restore.bat at the root.
+      [ ] Double-click restore.bat -> SmartScreen -> "Run anyway".
+      [ ] The script DISCOVERS the backup set (no "could not find an
+          LCSAS backup set" dead-end) and reaches the "Password:" prompt.
+      [ ] With >=2 tenants on the archive, a numbered selection prompt
+          appears; LCSAS_REPO=<name> skips it.
+      [ ] Recovery completes; files land in Documents\restored and are
+          byte-equal to the source.
+    Why: Windows is the single most likely OS an heir holds, and its
+    repo discovery silently dead-ended before UX-01 (it probed only
+    %RECOVERY%\repo / %RECOVERY%, neither of which exists on a real
+    meta-volume whose repos live under metadata\<tenant>\).  Static .bat
+    grep tests cannot catch a layout-contract break; only running the
+    .bat against a built disc does.
+    AUTOMATED: the windows-e2e workflow (INFRA-01) builds a fixture on
+    Linux and runs restore.bat unattended on a windows-latest runner,
+    hash-comparing the restored tree; the wine smoke
+    (recovery/tests/test_restore_bat_e2e.sh) is the local pre-flight.
+    Neither substitutes for a stock-VM double-click pass before relying
+    on the discs.
+    HOW OFTEN: once per meta disc build, and after any restore.bat change.
+
 [ ] ENCRYPTION KEY REDUNDANCY — confirm the repository password is
     stored in at least 2 physically separate locations.  Acceptable
     forms: a printed copy in a fireproof safe, an offsite estate
@@ -246,6 +271,7 @@ Item                            HOW OFTEN
 ──────────────────────────────  ─────────────────────────────────────
 Binary audit (sha256sum)        At build time; repeat on bin/ change
 No-OS live-USB recovery drill   Once per meta disc build
+Windows double-click drill      Once per meta disc build / .bat change
 Encryption key redundancy       At creation; verify annually
 Full test-restore               At creation; see monthly cadence
 Monthly test-restore            Monthly

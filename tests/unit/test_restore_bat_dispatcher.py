@@ -65,3 +65,51 @@ def test_restore_bat_honors_lcsas_target_override():
     the auto-detected target (e.g. when running under emulation)."""
     content = RESTORE_BAT.read_text()
     assert "LCSAS_TARGET" in content
+
+
+def test_restore_bat_probes_holographic_metadata_layout():
+    """UX-01: restore.bat must discover repos under the holographic
+    ``metadata\\<tenant>\\`` layout the meta-builder actually writes, and
+    the single-drive RAM relocation must carry ``metadata`` along so
+    discovery still works after the meta disc is ejected.
+
+    The pre-UX-01 dispatcher probed only ``%RECOVERY%\\repo`` and
+    ``%RECOVERY%`` — neither of which ever exists on a real meta-volume —
+    and the relocation copied only ``bin`` + ``catalog.db``.  This guard
+    bites against that regression.
+    """
+    content = RESTORE_BAT.read_text()
+
+    # The holographic per-tenant metadata\ tree must be enumerated.  The
+    # implementation walks metadata\<tenant>\ subdirs via the :scan_metadata
+    # helper (which uses `dir /ad /b` — `for /d` globbing is unreliable
+    # across CMD interpreters, notably wine).
+    assert ":scan_metadata" in content, "no :scan_metadata repo probe helper"
+    assert "%RECOVERY%\\metadata" in content, (
+        "this-volume metadata\\ probe missing (relocated-RAM case)"
+    )
+    assert "%DISC_ROOT%\\metadata" in content, (
+        "disc-root metadata\\ probe missing"
+    )
+
+    # The drive-letter scan (D..Z) for other mounted discs must be present,
+    # so a data disc carrying metadata\<tenant>\ is discoverable when the
+    # meta disc itself ships no repo.
+    assert "%%L:\\metadata" in content, (
+        "no per-drive-letter metadata probe (other mounted discs)"
+    )
+
+    # LCSAS_REPO must select a tenant (parity with restore.sh).
+    assert "LCSAS_REPO" in content
+
+    # The relocation block must copy metadata into the RAM dir.
+    assert "%RAMDIR%\\recovery\\metadata" in content, (
+        "single-drive relocation does not carry metadata\\ into RAM"
+    )
+
+    # The dead-end "no restic repo" message must be gone in favour of the
+    # actionable multi-path error.
+    assert "could not find an LCSAS backup set" in content
+    assert "no restic repo" not in content, (
+        "the dead-end 'no restic repo' message must be replaced"
+    )

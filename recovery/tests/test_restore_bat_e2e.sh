@@ -13,11 +13,15 @@
 # mapping all differ).  So this asserts ONLY the deterministic, early
 # control-flow that wine reproduces reliably:
 #
-#   1. no-repo  -> exits non-zero AND prints the "no restic repo" error
-#                  (proves the .bat parses, runs, and the guard fires).
-#   2. repo-found -> prints the resolved Repo: line and the canonical
-#                  target triple (proves auto-discovery + arch detect
-#                  reach the interactive prompt).
+#   1. no-repo  -> exits non-zero AND prints the "could not find an LCSAS
+#                  backup set" error (proves the .bat parses, runs, and
+#                  the guard fires).
+#   2. holographic -> with a metadata\<tenant>\ repo (the layout the meta
+#                  builder actually writes; NO repo\ dir) and LCSAS_REPO
+#                  set, the .bat gets PAST repo discovery and prints the
+#                  resolved Repo: line + canonical target triple (proves
+#                  the UX-01 holographic-layout discovery reaches the
+#                  interactive prompt / tier-1 dispatch).
 #
 # A byte-correct end-to-end restore through the .bat is owned by the
 # INFRA-01 windows-latest CI job (real CMD + a real lcsas-restore.exe);
@@ -78,31 +82,44 @@ if [ "$rc1" -eq 0 ]; then
     echo "FAIL[no-repo]: expected non-zero exit, got 0" >&2
     fail=1
 fi
-if ! printf '%s' "$out1" | grep -q "no restic repo"; then
-    echo "FAIL[no-repo]: missing 'no restic repo' error in output:" >&2
+if ! printf '%s' "$out1" | grep -q "could not find an LCSAS backup set"; then
+    echo "FAIL[no-repo]: missing 'could not find an LCSAS backup set' error:" >&2
     printf '%s\n' "$out1" >&2
     fail=1
 fi
-[ "$fail" -eq 0 ] && echo "PASS[no-repo]: exit $rc1, 'no restic repo' guard fired"
+[ "$fail" -eq 0 ] && echo "PASS[no-repo]: exit $rc1, backup-set guard fired"
 
-# ---- Case 2: repo present -> discovery + arch reach the prompt -----
-mkdir -p "$WORK/recovery/repo/keys" "$WORK/recovery/repo/index"
+# ---- Case 2: holographic metadata\<tenant>\ layout (UX-01) ---------
+# Build the layout the meta builder actually writes: the repo material
+# lives under <disc-root>/metadata/<tenant>/, with NO recovery/repo dir.
+# %RECOVERY% resolves to <root>/recovery (recovery/bin exists), so the
+# .bat must climb to <root>/metadata/<tenant>/.  LCSAS_REPO selects it.
+mkdir -p "$WORK/metadata/alpha/keys" "$WORK/metadata/alpha/index"
 # Feed an unwritable target + a password so the run advances PAST repo
 # discovery and the arch banner without needing a real binary.
 printf 'Q:\\nonexistent\\out\npw\n' > "$WORK/in2.txt"
-out2="$(run_bat in2.txt || true)"
+out2="$( ( cd "$WORK" \
+    && WINEDEBUG=-all LCSAS_NO_RELOCATE=1 \
+       LCSAS_TARGET=x86_64-pc-windows-gnu LCSAS_REPO=alpha \
+       timeout 120 wine cmd /c "recovery\\scripts\\restore.bat < in2.txt" ) \
+    2>&1 || true )"
 
 if ! printf '%s' "$out2" | grep -q "x86_64-pc-windows-gnu"; then
-    echo "FAIL[repo-found]: canonical target triple not printed:" >&2
+    echo "FAIL[holographic]: canonical target triple not printed:" >&2
     printf '%s\n' "$out2" >&2
     fail=1
 fi
 if ! printf '%s' "$out2" | grep -q "Repo:"; then
-    echo "FAIL[repo-found]: repo discovery banner ('Repo:') not reached:" >&2
+    echo "FAIL[holographic]: repo discovery banner ('Repo:') not reached:" >&2
     printf '%s\n' "$out2" >&2
     fail=1
 fi
-[ "$fail" -eq 0 ] && echo "PASS[repo-found]: discovery + arch detect reached the prompt"
+if ! printf '%s' "$out2" | grep -q "alpha"; then
+    echo "FAIL[holographic]: selected tenant 'alpha' not in Repo: line:" >&2
+    printf '%s\n' "$out2" >&2
+    fail=1
+fi
+[ "$fail" -eq 0 ] && echo "PASS[holographic]: metadata\\<tenant>\\ discovery reached the prompt"
 
 if [ "$fail" -ne 0 ]; then
     echo "restore.bat smoke: FAIL" >&2

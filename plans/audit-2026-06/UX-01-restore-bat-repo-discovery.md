@@ -178,3 +178,6 @@ keep working because the legacy probes stay first.
 3 days: 1.5 impl (.bat discovery + relocation + prompts; batch quoting is fiddly),
 1.5 test (wine smoke + INFRA-01 job iteration + Win11 VM manual pass).
 Needs: wine locally; a real Windows VM or the INFRA-01 runner for sign-off.
+
+---
+**Implemented:** 2026-06-14. As planned, with one portability deviation: the metadata\<tenant>\ enumeration uses `dir /ad /b` (via a :scan_metadata helper) instead of `for /d` globbing, and tenant lookup/dedup use `%%NCAND%%`-in-range + `call set` deref instead of `!CAND_%%I!`/`!NCAND!`-in-range. Real CMD honours both forms; wine 9.0's cmd does NOT (for /d glob, delayed-expansion in for-range, and nested-delayed deref are all broken there), so the chosen forms keep one code path green under both the wine smoke and the INFRA-01 windows-e2e gate. DISC_ROOT is canonicalised (drops `..`) so globs/error text are clean. Relocation carries metadata\ into RAM (canonicalised source). Added the holographic-probe unit guard, rewrote the wine smoke to exercise the metadata\<tenant>\ layout (no repo\), updated three MANIFEST.sha256 rows, and added the Windows double-click drill to READINESS_CHECKLIST.txt.
