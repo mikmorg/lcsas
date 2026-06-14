@@ -27,7 +27,6 @@ Responsibilities (see PLAN.md § setup.py responsibilities):
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import os
 import pwd
@@ -40,6 +39,16 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
+
+# Shared fixture builders (INFRA-01): the rustic-repo and ISO-mastering
+# primitives live in tests/e2e/fixture_lib.py so the Windows-journey
+# workflow and this cdemu fixture build identical repos/ISOs.
+sys.path.insert(0, str(REPO_ROOT / "tests" / "e2e"))
+from fixture_lib import (  # noqa: E402
+    generate_source_tree,
+    init_rustic_repo,
+    master_iso,
+)
 
 # Keep the fixture OUT of /mnt — that path is reserved for the
 # agent's legitimate `sudo mount /dev/sr0 /mnt`, and putting our
@@ -141,26 +150,13 @@ def require_binaries() -> None:
 
 
 def _generate_repo(name: str, count: int, size: int) -> dict[str, str]:
-    """Create incompressible files under sources/<name>/ and return sha map."""
-    root = SOURCES / name
-    if root.exists():
-        shutil.rmtree(root)
-    root.mkdir(parents=True)
+    """Create incompressible files under sources/<name>/ and return sha map.
 
-    manifest: dict[str, str] = {}
-    for i in range(count):
-        name_i = f"file_{i:03d}.bin"
-        path = root / name_i
-        h = hashlib.sha256()
-        with open(path, "wb") as f:
-            remaining = size
-            while remaining > 0:
-                chunk = os.urandom(min(1 << 20, remaining))
-                f.write(chunk)
-                h.update(chunk)
-                remaining -= len(chunk)
-        manifest[name_i] = h.hexdigest()
-    return manifest
+    Delegates to the shared fixture builder (INFRA-01).  The source tree is
+    flat, so the returned manifest is keyed by bare filename exactly as
+    before.
+    """
+    return generate_source_tree(SOURCES / name, count=count, size_bytes=size)
 
 
 def _write_manifest(path: Path, manifest: dict[str, str]) -> None:
@@ -178,24 +174,13 @@ def _init_rustic_repo(name: str) -> None:
     pw_file = SECRETS / f"{name}.pw"
     pw_file.write_text(os.urandom(16).hex())
     pw_file.chmod(0o600)
-
-    mirror = MIRROR / name
-    mirror.mkdir(parents=True, exist_ok=True)
-
-    env = {
-        **os.environ,
-        "RUSTIC_REPOSITORY": str(mirror),
-        "RUSTIC_PASSWORD_FILE": str(pw_file),
-    }
-    sh(["rustic", "init"], env=env)
-    sh([
-        "rustic", "config",
-        "--set-datapack-size", "256KiB",
-        "--set-datapack-size-limit", "512KiB",
-        "--set-treepack-size", "128KiB",
-        "--set-treepack-size-limit", "256KiB",
-    ], env=env)
-    sh(["rustic", "backup", str(SOURCES / name)], env=env)
+    # Shared builder (INFRA-01): identical rustic init/config/backup the
+    # Windows fixture uses.
+    init_rustic_repo(
+        mirror=MIRROR / name,
+        password_file=pw_file,
+        source_tree=SOURCES / name,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -344,15 +329,10 @@ def _build_meta_iso() -> Path:
 
     _apply_variant_mutations(META_STAGE)
 
-    meta_iso = ISO_OUT / "LCSAS_META.iso"
-    sh([
-        "xorriso", "-as", "mkisofs",
-        "-V", "LCSAS_META",
-        "-R", "-J",
-        "-o", str(meta_iso),
-        str(META_STAGE),
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return meta_iso
+    # Shared ISO mastering (INFRA-01).
+    return master_iso(
+        META_STAGE, ISO_OUT / "LCSAS_META.iso", volume_label="LCSAS_META"
+    )
 
 
 def _apply_variant_mutations(stage: Path) -> None:

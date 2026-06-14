@@ -1,0 +1,46 @@
+name: windows-debug
+
+# INFRA-01 Tier 2 — on-demand interactive Windows session.
+#
+# This is NEVER a gate.  It exists so restore.bat (the heir's Windows
+# entry point) can be developed against a REAL windows-latest runner with
+# a real cmd/powershell, since this VM has no Windows machine and no
+# nested virt (/dev/kvm absent).  It opens a tmate SSH session restricted
+# to the dispatcher; edit/re-run restore.bat in-session, then paste the
+# final script back into a commit.
+#
+# Public repo → windows-latest minutes are free, including long
+# interactive sessions (job cap is 6h).
+
+on:
+  workflow_dispatch:
+    inputs:
+      fixture_run_id:
+        description: >-
+          Optional run id of a windows-e2e run whose fixture artifact to
+          download into the session (leave blank to start with no fixture).
+        required: false
+        default: ""
+
+jobs:
+  debug:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download fixture artifact (optional)
+        if: ${{ inputs.fixture_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-fixture
+          path: fixture
+          run-id: ${{ inputs.fixture_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Interactive tmate session (dispatcher only)
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true

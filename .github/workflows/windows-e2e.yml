@@ -1,0 +1,221 @@
+name: windows-e2e
+
+# INFRA-01 Tier 3 — the Windows-journey gate.
+#
+# The single most likely heir journey is: Windows machine, double-click
+# restore.bat.  It had ZERO functional coverage and currently dead-ends at
+# repo discovery (UX-01).  This two-job workflow builds a real fixture on
+# Linux, then on a real windows-latest runner mounts the ISOs, runs
+# restore.bat unattended, and hash-compares the restored tree.
+#
+# EXPECTED STATE AT LANDING: the `restore` job is RED — it fails at
+# restore.bat's broken repo discovery (UX-01).  That red is the proof the
+# gate bites.  It flips green in the same PR series as the UX-01 fix.
+#
+# Public repo → windows-latest minutes are free.
+
+on:
+  pull_request:
+    paths:
+      - "recovery/scripts/**"
+      - "src/lcsas/meta/**"
+      - "src/lcsas/staging/metadata.py"
+      - "recovery/bin/x86_64-windows/**"
+      - "tests/e2e/fixture_lib.py"
+      - ".github/workflows/windows-e2e.yml"
+  schedule:
+    # Weekly: catch drift even when no path-filtered file changes.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Job 1 (Linux): build the fixture — real rustic repo + LCSAS ISOs +
+  # meta ISO + a SHA-256 manifest of the restorable tree.
+  # ---------------------------------------------------------------------
+  fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      RUSTIC_VERSION: "0.11.2"
+      RUSTIC_ASSET: "rustic-v0.11.2-x86_64-unknown-linux-gnu.tar.gz"
+      RUSTIC_SHA256: "fb7b74a14418b2dd070360c9abb22607f8559bdd344a0adf1b33bc2e31f83f5f"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install rustic (pinned release tarball)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          cd "$(mktemp -d)"
+          url="https://github.com/rustic-rs/rustic/releases/download/v${RUSTIC_VERSION}/${RUSTIC_ASSET}"
+          curl -fsSL -o rustic.tar.gz "$url"
+          actual=$(sha256sum rustic.tar.gz | awk '{print $1}')
+          if [ "$RUSTIC_SHA256" != "$actual" ]; then
+            echo "SHA256 mismatch: expected=$RUSTIC_SHA256 actual=$actual" >&2
+            exit 1
+          fi
+          tar -xzf rustic.tar.gz
+          install -m 0755 rustic "$HOME/.local/bin/rustic"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install xorriso
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorriso
+          xorriso -version
+
+      - name: Install LCSAS (editable, with dev deps)
+        run: make dev
+
+      - name: Build Windows fixture (rustic repo + ISOs + manifest)
+        run: |
+          set -euo pipefail
+          mkdir -p fixture-out
+          PYTHONPATH=src python3 tests/e2e/fixture_lib.py "$PWD/fixture-out" \
+            | tee fixture-out/artifacts.json
+          # Flatten the produced artifacts into an upload dir.  data ISOs +
+          # meta ISO live under fixture-out/iso_out/.
+          mkdir -p upload
+          cp fixture-out/iso_out/*.iso        upload/
+          cp fixture-out/manifest.json        upload/
+          cp fixture-out/repo.pw              upload/repo.pw
+          ls -la upload/
+
+      - name: Upload fixture artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-fixture
+          path: upload/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------
+  # Job 2 (Windows): mount the ISOs, run restore.bat unattended, verify.
+  # ---------------------------------------------------------------------
+  restore:
+    runs-on: windows-latest
+    needs: fixture
+    timeout-minutes: 20
+
+    steps:
+      - name: Download fixture artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-fixture
+          path: fixture
+
+      - name: Mount ISOs and run restore.bat (happy path)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $PWD "fixture"
+
+          # Mount every ISO; collect drive letters.  The meta ISO carries
+          # restore.bat + the tier-1 .exe; data ISOs carry pack data\.
+          $metaDrive = $null
+          $isos = Get-ChildItem -Path $fixture -Filter *.iso
+          foreach ($iso in $isos) {
+            $img = Mount-DiskImage -ImagePath $iso.FullName -PassThru
+            $vol = Get-Volume -DiskImage $img
+            $letter = $vol.DriveLetter
+            Write-Host "Mounted $($iso.Name) at ${letter}:"
+            if (Test-Path "${letter}:\restore.bat") { $metaDrive = $letter }
+          }
+          if (-not $metaDrive) { throw "no restore.bat found on any mounted ISO" }
+
+          $target = Join-Path $env:RUNNER_TEMP "restored"
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          $pw = (Get-Content (Join-Path $fixture "repo.pw") -Raw).Trim()
+
+          # answers.txt: target dir, password, then generous trailing blank
+          # lines so a stray pause/set /p on any error branch never blocks
+          # on an empty stream until the job timeout.
+          $answers = Join-Path $env:RUNNER_TEMP "answers.txt"
+          @($target, $pw, "", "", "", "", "", "") | Set-Content -Path $answers -Encoding ascii
+
+          $env:LCSAS_NO_RELOCATE = "1"
+          $bat = "${metaDrive}:\restore.bat"
+          Write-Host "Running: cmd /c `"$bat`" < answers.txt"
+          cmd /c "`"$bat`" < `"$answers`""
+          $rc = $LASTEXITCODE
+          Write-Host "restore.bat exit code: $rc"
+          "RESTORE_RC=$rc"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          "TARGET_DIR=$target" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          if ($rc -ne 0) { throw "restore.bat failed (rc=$rc) — see log above" }
+
+      - name: Verify restored tree matches manifest (byte-exact)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture  = Join-Path $PWD "fixture"
+          $manifest = Get-Content (Join-Path $fixture "manifest.json") -Raw | ConvertFrom-Json
+          $target   = $env:TARGET_DIR
+
+          # rustic restores the original absolute-ish source path under the
+          # target; locate the leaf dir that actually holds file_000.bin.
+          $anchor = Get-ChildItem -Path $target -Recurse -Filter "file_000.bin" `
+                    | Select-Object -First 1
+          if (-not $anchor) { throw "restored tree has no file_000.bin under $target" }
+          $root = $anchor.Directory.FullName
+          Write-Host "Restored tree root: $root"
+
+          $fail = $false
+          foreach ($p in $manifest.PSObject.Properties) {
+            $rel = $p.Name; $want = $p.Value
+            $f = Join-Path $root $rel
+            if (-not (Test-Path $f)) { Write-Host "MISSING: $rel"; $fail = $true; continue }
+            $got = (Get-FileHash -Algorithm SHA256 $f).Hash.ToLower()
+            if ($got -ne $want) { Write-Host "HASH MISMATCH: $rel"; $fail = $true }
+          }
+          # No extra files beyond the manifest.
+          $expected = @($manifest.PSObject.Properties.Name)
+          Get-ChildItem -Path $root -Recurse -File | ForEach-Object {
+            $rel = $_.FullName.Substring($root.Length).TrimStart('\').Replace('\','/')
+            if ($expected -notcontains $rel) { Write-Host "EXTRA: $rel"; $fail = $true }
+          }
+          if ($fail) { throw "restored tree does not match manifest" }
+          Write-Host "Restored tree is byte-identical to manifest."
+
+      - name: Negative case — wrong password fails cleanly
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fixture = Join-Path $PWD "fixture"
+          $metaDrive = $null
+          foreach ($d in (Get-Volume | Where-Object { $_.DriveLetter })) {
+            if (Test-Path "$($d.DriveLetter):\restore.bat") { $metaDrive = $d.DriveLetter }
+          }
+          if (-not $metaDrive) { throw "meta ISO no longer mounted" }
+
+          $target = Join-Path $env:RUNNER_TEMP "restored-wrong"
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          $answers = Join-Path $env:RUNNER_TEMP "answers-wrong.txt"
+          @($target, "definitely-the-wrong-password", "", "", "", "") `
+            | Set-Content -Path $answers -Encoding ascii
+
+          $env:LCSAS_NO_RELOCATE = "1"
+          cmd /c "`"${metaDrive}:\restore.bat`" < `"$answers`""
+          $rc = $LASTEXITCODE
+          Write-Host "wrong-password exit code: $rc"
+          if ($rc -eq 0) { throw "restore.bat returned 0 with a wrong password" }
+          # No partial tree should be left behind.
+          $restored = Get-ChildItem -Path $target -Recurse -File -ErrorAction SilentlyContinue
+          if ($restored) { throw "wrong-password run left a partial tree behind" }
+          Write-Host "Wrong-password case failed cleanly with no partial tree."
+
+      - name: Dismount ISOs
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path (Join-Path $PWD "fixture") -Filter *.iso `
+            -ErrorAction SilentlyContinue | ForEach-Object {
+              Dismount-DiskImage -ImagePath $_.FullName -ErrorAction SilentlyContinue | Out-Null
+            }

@@ -82,3 +82,6 @@ Wine maps drive letters via symlinks: `ln -s <fixture-dir> $WINEPREFIX/dosdevice
 ## Effort
 
 ~1.5–2 weeks total alongside UX-01: tmate workflow + `.gitattributes` + wine smoke ≈ 1–2 days; fixture-lib refactor + fixture job ≈ 1–2 days; restore job + flake-hunting ≈ 2–3 days; the remainder is UX-01's restore.bat work developed on this scaffolding. Multi-disc swap variant: +1 week, deferred until single-disc is green.
+
+---
+**Implemented:** 2026-06-14. As planned, single-disc tiers landed: `.gitattributes` (`*.bat eol=crlf`); `tests/recovery_hardening/test_restore_bat_wine_smoke.py` (Tier-1 wine smoke, throwaway WINEPREFIX, coarse asserts, skips without wine); fixture-builder refactor into `tests/e2e/fixture_lib.py` (shared by cdemu `setup.py` + workflow, plus a `build_windows_fixture` CLI verified end-to-end locally with real rustic+xorriso); `.github/workflows/windows-debug.yml` (Tier-2 tmate, dispatch-only) and `.github/workflows/windows-e2e.yml` (Tier-3 two-job gate, expected RED at restore.bat repo discovery until UX-01). Deferred per plan: multi-disc swap variant; restore.bat `LCSAS_NONINTERACTIVE=1` (UX-01). Step-zero docs-vs-reality contract test is UX-01-owned (not in this plan's scope).

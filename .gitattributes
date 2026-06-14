@@ -1,0 +1,6 @@
+# Windows batch files MUST keep CRLF line endings.  An LF-mangled .bat
+# fails in cmd.exe in ways that look like logic bugs (labels/gotos not
+# found, `set /p` reading a stray CR into a variable), so the Windows
+# recovery driver would dead-end before the journey even started.
+# [INFRA-01]
+*.bat text eol=crlf
