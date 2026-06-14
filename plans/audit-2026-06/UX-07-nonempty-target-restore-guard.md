@@ -109,3 +109,6 @@ No catalog/schema impact.
 
 1.5 days: 0.5 sh, 0.5 bat (quoting + non-TTY handling), 0.5 tests/docs.
 Wine helpful for .bat sanity; real verification rides the UX-01 Windows drill.
+
+---
+**Implemented:** 2026-06-14. As planned, with two deviations: (1) the marker/exit-code constant (EXIT_USER_ABORT=65) is defined inline at the guard rather than alongside EXIT_NO_RECOVERY_BIN, matching that exit code's own inline definition; (2) the verify.sh blind-drill expectation was intentionally NOT added — the blind drill restores into an empty target so the guard never fires there, and a hard scoring check on absent guard text would fail every existing passing run. recovery_hardening + unit tests fully cover the behavior. Pre-existing unrelated failure noted: tests/recovery_hardening/test_restore_bat_wine_smoke.py::test_missing_repo_reports_error asserts the stale "no restic repo" string (replaced by UX-01) and fails on clean master, independent of this change.

@@ -285,12 +285,46 @@ echo.
 set /p "TARGET=Restore to which folder? [%DEFAULT_TARGET%]: "
 if "%TARGET%"=="" set "TARGET=%DEFAULT_TARGET%"
 
+REM ----- Non-empty-target guard [UX-07] -----------------------------
+REM Warn BEFORE the password prompt when %TARGET% already holds the
+REM heir's OWN files (same names would silently overwrite live data).
+REM Re-running into a prior LCSAS restore is the supported resume from
+REM an interrupted run, so we skip the prompt when the hidden marker
+REM file .lcsas-restore-marker is present (and when
+REM LCSAS_FORCE_NONEMPTY_TARGET=1).  The marker is written after
+REM confirmation/creation so subsequent re-runs are silent.
+set "MARKER=%TARGET%\.lcsas-restore-marker"
+if exist "%TARGET%\" if not exist "%MARKER%" if not "%LCSAS_FORCE_NONEMPTY_TARGET%"=="1" (
+    dir /b "%TARGET%" 2>nul | findstr "." >nul
+    if not errorlevel 1 (
+        echo.
+        echo ==========================================================
+        echo   WARNING: the folder
+        echo       %TARGET%
+        echo   already contains files that do not look like a previous
+        echo   LCSAS restore.  Restored files with the same names will
+        echo   OVERWRITE what is there now.
+        echo.
+        echo   Safest choice: stop, and restore into a NEW, empty
+        echo   folder instead.
+        echo ==========================================================
+        set /p "OVERWRITE_ANS=Type YES to overwrite, anything else to stop: "
+        if /i not "!OVERWRITE_ANS!"=="YES" (
+            echo Aborting; nothing was written.
+            pause
+            exit /b 65
+        )
+    )
+)
+
 if not exist "%TARGET%" mkdir "%TARGET%" 2>nul
 if not exist "%TARGET%" (
     echo ERROR: could not create %TARGET%
     pause
     exit /b 1
 )
+REM Mark this folder so a later resume into it does not re-prompt.
+> "%MARKER%" echo. 2>nul
 
 REM ----- Password prompt --------------------------------------------
 REM CMD has no `read -s` equivalent, so the password is visible while

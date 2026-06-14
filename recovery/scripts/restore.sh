@@ -341,6 +341,14 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           against free space at TARGET_DIR and the
                           pack cache before any password/disc prompt.
                           Default: check ON when the size is derivable.
+  LCSAS_FORCE_NONEMPTY_TARGET
+                          1 → skip the 'TARGET_DIR is non-empty and not
+                          a previous LCSAS restore -- overwrite?' prompt.
+                          Restoring into such a folder otherwise prompts
+                          (and refuses with exit 65 when no terminal is
+                          attached).  Re-runs into a prior LCSAS target
+                          are silent regardless (a hidden marker file,
+                          .lcsas-restore-marker, identifies them).
   LCSAS_MAX_JSON_MIB      Max token-buffer memory (MiB) the tier-1
                           binary allocates to parse any single JSON
                           structure (index/snapshot/tree).  Default 256;
@@ -975,6 +983,53 @@ if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
         fi
     fi
 fi
+
+# ── Non-empty-target guard [UX-07] ────────────────────────────────
+#
+# Writing into a folder that already holds the heir's OWN files (same
+# names) silently overwrites live data with decades-old archive
+# content -- the one place in the journey where a confused operator
+# loses CURRENT data rather than just failing a restore.  Warn here,
+# BEFORE the password prompt, so the heir is stopped before typing a
+# secret.
+#
+# A hard refusal would be wrong: re-running into the SAME target is the
+# supported recovery from an interrupted restore (RECOVER.txt RETRY
+# SAFETY -- idempotent resume).  So we warn only when the target is
+# non-empty AND lacks our marker file.  After confirmation/creation we
+# drop a hidden zero-byte marker, so every subsequent re-run is silent.
+EXIT_USER_ABORT=65
+MARKER="$TARGET_DIR/.lcsas-restore-marker"
+if [ -d "$TARGET_DIR" ] && [ -n "$(ls -A "$TARGET_DIR" 2>/dev/null)" ] \
+   && [ ! -f "$MARKER" ] \
+   && [ "${LCSAS_FORCE_NONEMPTY_TARGET:-0}" != "1" ]; then
+    {
+        printf '==========================================================\n'
+        printf '  WARNING: the folder\n'
+        printf '      %s\n' "$TARGET_DIR"
+        printf '  already contains files that do not look like a previous\n'
+        printf '  LCSAS restore.  Restored files with the same names will\n'
+        printf '  OVERWRITE what is there now.\n'
+        printf '\n'
+        printf '  Safest choice: stop, and restore into a NEW, empty\n'
+        printf '  folder instead.\n'
+        printf '==========================================================\n'
+    } >&2
+    if [ -t 0 ]; then
+        printf 'Type YES to overwrite, anything else to stop: ' >&2
+        IFS= read -r ans
+        if [ "$ans" != "YES" ]; then
+            printf 'Aborting; nothing was written.\n' >&2
+            exit "$EXIT_USER_ABORT"
+        fi
+    else
+        printf 'No terminal to confirm on; refusing to overwrite.\n' >&2
+        printf 'Set LCSAS_FORCE_NONEMPTY_TARGET=1 to proceed non-interactively.\n' >&2
+        exit "$EXIT_USER_ABORT"
+    fi
+fi
+mkdir -p "$TARGET_DIR"
+: > "$MARKER" 2>/dev/null || true
 
 # ── Password file (now that we know which repo we're decrypting) ──
 

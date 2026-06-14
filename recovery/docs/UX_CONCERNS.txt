@@ -206,16 +206,27 @@ MITIGATION:
 ────────────────────────────────────────────────────────────────────
 ID 009 -- No verification step before destructive write
 ────────────────────────────────────────────────────────────────────
-STATUS: OPEN
+STATUS: RESOLVED (non-empty-target guard) [UX-07]
 IMPACT: LOW.  lcsas-restore writes restored files directly into
         --target.  If --target already has data, files are
         overwritten without prompt.
 
 MITIGATION:
-  * Add --verify-only flag: decrypt + hash-check every blob but
-    never write to disk.  Print summary.
-  * Make restore.sh refuse to write into a non-empty target dir
-    without --force.
+  * DONE [UX-07]: restore.sh and restore.bat now WARN before the
+    password prompt and refuse (exit 65) to write into a non-empty
+    target that does not look like a previous LCSAS restore.  A hidden
+    marker file (.lcsas-restore-marker) identifies prior LCSAS
+    targets, so the supported idempotent-resume re-run (RECOVER.txt
+    RETRY SAFETY) stays SILENT.  Override with
+    LCSAS_FORCE_NONEMPTY_TARGET=1 for non-interactive use.  Empty
+    targets proceed silently.  Drivers: restore.sh (~line 979),
+    restore.bat (target block); tests:
+    tests/recovery_hardening/test_nonempty_target_guard.py and
+    tests/unit/test_restore_bat_dispatcher.py.
+  * DEFERRED to a tier-1 C follow-up (T1C): --verify-only flag --
+    decrypt + hash-check every blob but never write to disk, print a
+    summary.  A read-only dry run is a binary feature, out of scope
+    for the driver-level guard above.
 
 ────────────────────────────────────────────────────────────────────
 ID 010 -- Disc-creation date and original-archive context are opaque

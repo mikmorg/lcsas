@@ -154,6 +154,20 @@ silently treated as complete.  Files that finished cleanly on the
 first pass (size matches manifest) are skipped; files that failed
 are retried.  No "delete the target directory first" dance.
 
+The first restore into a folder drops a hidden zero-byte marker
+(.lcsas-restore-marker) in it.  Because the marker is present, every
+re-run into that SAME folder proceeds SILENTLY -- the resume case
+above is never interrupted by a prompt.
+
+If you instead point a restore at a folder that already holds YOUR
+own files (no marker -- it was not made by a prior LCSAS restore),
+restore.sh / restore.bat WARN you before asking for the password and
+refuse unless you type YES, because restored files with the same
+names would overwrite what is there now.  Safest choice: restore into
+a NEW, empty folder.  To proceed non-interactively (no terminal to
+type YES on), set LCSAS_FORCE_NONEMPTY_TARGET=1.  A declined prompt
+exits with code 65 and writes nothing.
+
 PHYSICAL RECOVERY (CORRUPT MEDIUM)
 
 If the disc returns I/O errors:

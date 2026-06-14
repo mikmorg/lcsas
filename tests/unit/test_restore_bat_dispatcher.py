@@ -113,3 +113,26 @@ def test_restore_bat_probes_holographic_metadata_layout():
     assert "no restic repo" not in content, (
         "the dead-end 'no restic repo' message must be replaced"
     )
+
+
+def test_restore_bat_warns_before_overwriting_nonempty_target():
+    """UX-07: restore.bat must guard a non-empty, non-LCSAS target.
+
+    Functional .bat coverage rides INFRA-01's Windows e2e; until then
+    we assert the load-bearing strings are present: the hidden marker
+    filename, the YES confirmation prompt, the override env var, and the
+    distinct abort exit code (65).  The guard must sit BEFORE the
+    password prompt so the heir is stopped before typing a secret.
+    """
+    content = RESTORE_BAT.read_text()
+
+    assert ".lcsas-restore-marker" in content, "marker filename missing"
+    assert "Type YES" in content, "YES confirmation prompt missing"
+    assert "LCSAS_FORCE_NONEMPTY_TARGET" in content, "override env var missing"
+    assert "exit /b 65" in content, "distinct abort exit code (65) missing"
+
+    # The guard must precede the password prompt.
+    guard_at = content.find(".lcsas-restore-marker")
+    pw_at = content.find('set /p "LCSAS_PW=Password:')
+    assert guard_at != -1 and pw_at != -1
+    assert guard_at < pw_at, "non-empty-target guard must come before the password prompt"
