@@ -188,6 +188,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          # pwsh 7.4+ turns a non-zero native exit into a terminating
+          # error; here a non-zero `cmd /c` is the EXPECTED outcome (wrong
+          # password), so opt out and let this step's own assertions on
+          # $LASTEXITCODE decide pass/fail.
+          $PSNativeCommandUseErrorActionPreference = $false
           $fixture = Join-Path $PWD "fixture"
           $metaDrive = $null
           foreach ($d in (Get-Volume | Where-Object { $_.DriveLetter })) {
