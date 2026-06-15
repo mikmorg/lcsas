@@ -147,6 +147,82 @@ if "%ARCH%"=="" (
     exit /b 1
 )
 
+REM ----- --check-disc: scratched-disc repair path [FMT-01] ----------
+REM The Windows equivalent of restore.sh --check-disc.  Runs the bundled
+REM in-house RS03 ECC tool (lcsas-ecc.exe) on a disc image to verify and,
+REM on damage, offer/perform an in-place repair using the burned parity.
+REM No externally installed dvdisaster is required.  Usage:
+REM     restore.bat --check-disc C:\path\to\disc.iso
+if /i "%~1"=="--check-disc" (
+    set "CHECK_IMG=%~2"
+    if "!CHECK_IMG!"=="" (
+        echo ERROR: --check-disc requires an IMAGE argument.
+        pause
+        exit /b 3
+    )
+    if not exist "!CHECK_IMG!" (
+        echo ERROR: --check-disc: image not found: !CHECK_IMG!
+        pause
+        exit /b 3
+    )
+    set "ECC_BIN=%RECOVERY%\bin\%ARCH%\lcsas-ecc.exe"
+    if not exist "!ECC_BIN!" (
+        echo ERROR: no lcsas-ecc.exe under %RECOVERY%\bin\%ARCH%\ --
+        echo this meta disc cannot repair discs.  Try the newest META disc.
+        pause
+        exit /b 3
+    )
+    echo [check-disc] scanning !CHECK_IMG! for damage with !ECC_BIN!
+    "!ECC_BIN!" verify "!CHECK_IMG!"
+    set "VRC=!ERRORLEVEL!"
+    if !VRC! equ 0 (
+        echo [check-disc] no damage found; disc image is intact.
+        pause
+        exit /b 0
+    )
+    if !VRC! equ 2 (
+        echo [check-disc] this image has no RS03 ECC parity layer; nothing to repair.
+        pause
+        exit /b 2
+    )
+    if not !VRC! equ 1 (
+        echo [check-disc] could not read the image ^(exit !VRC!^).
+        pause
+        exit /b 3
+    )
+    echo [check-disc] DAMAGE DETECTED in !CHECK_IMG!.
+    set "DOFIX="
+    if /i "%LCSAS_CHECK_DISC_AUTOFIX%"=="1" (
+        set "DOFIX=1"
+    ) else (
+        set /p "FIX_ANS=Repair it now using the burned ECC parity? [y/N]: "
+        if /i "!FIX_ANS!"=="y"   set "DOFIX=1"
+        if /i "!FIX_ANS!"=="yes" set "DOFIX=1"
+    )
+    if not "!DOFIX!"=="1" (
+        echo [check-disc] left unrepaired at your request.
+        pause
+        exit /b 1
+    )
+    echo [check-disc] repairing in place with !ECC_BIN! ...
+    "!ECC_BIN!" fix "!CHECK_IMG!"
+    set "FRC=!ERRORLEVEL!"
+    if !FRC! equ 0 (
+        echo [check-disc] repair succeeded; !CHECK_IMG! is now intact.
+        pause
+        exit /b 0
+    )
+    if !FRC! equ 1 (
+        echo [check-disc] damage exceeded the available ECC parity; some
+        echo sectors are uncorrectable.  Try another copy of this disc.
+        pause
+        exit /b 1
+    )
+    echo [check-disc] repair failed ^(exit !FRC!^).
+    pause
+    exit /b 3
+)
+
 REM ----- Find the restic repo ---------------------------------------
 REM A restic repo is any directory holding both keys\ and index\.  The
 REM holographic layout LCSAS burns puts a per-tenant repo under

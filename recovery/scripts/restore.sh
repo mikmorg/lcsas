@@ -260,6 +260,11 @@ TARGET=""
 TARGET_FLAG=""
 TARGET_FROM_POS=0
 SNAP="latest"
+# --check-disc IMAGE: the heir-facing "my disc is scratched" path.  When
+# set, restore.sh runs the bundled in-house RS03 ECC tool (lcsas-ecc) on
+# IMAGE to verify and, on damage, offer/perform a repair -- then exits.
+# No password, no repo discovery, no restore.  [FMT-01]
+CHECK_DISC_IMG=""
 
 # Flag parsing: strip named flags before positional-arg parsing so
 # operators can write `sh restore.sh --repo alpha RECOVERY TARGET` or
@@ -273,7 +278,17 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help)
             cat <<EOF
-usage: $0 [--repo NAME] [--target DIR] [--key FILE] [--version] [RECOVERY_ROOT] [TARGET_DIR] [SNAPSHOT_ID|latest]
+usage: $0 [--repo NAME] [--target DIR] [--key FILE] [--version]
+         [--check-disc IMAGE] [RECOVERY_ROOT] [TARGET_DIR] [SNAPSHOT_ID|latest]
+
+SCRATCHED / DAMAGED DISC?
+  sh restore.sh --check-disc /path/to/disc.iso
+  Runs the bundled in-house RS03 ECC tool (lcsas-ecc) to scan the disc
+  image for damage and, if any is found, offers to REPAIR it using the
+  ~15%% parity that was burned alongside your data.  No externally
+  installed dvdisaster or ddrescue is required -- the repair tool ships
+  on this meta disc.  (Image a damaged optical disc first with, e.g.,
+  'dd if=/dev/sr0 of=disc.iso conv=noerror,sync bs=2048'.)
 
 QUICK START:
   1. Insert the disc labelled LCSAS_META into your drive.
@@ -393,14 +408,152 @@ EOF
             printf 'lcsas-restore.sh %s (built %s)\n' \
                 "$LCSAS_RESTORE_BUILD_SHA" "$LCSAS_RESTORE_BUILD_DATE"
             exit 0 ;;
+        --check-disc)
+            CHECK_DISC_IMG="${2:?--check-disc requires an IMAGE argument}"
+            shift 2 ;;
         --) shift; break ;;
         -*)
             printf "restore.sh: unknown flag '%s'\n" "$1" >&2
-            printf 'valid flags: --repo NAME, --target DIR, --key FILE, --version, --help\n' >&2
+            printf 'valid flags: --repo NAME, --target DIR, --key FILE, --version, --check-disc IMAGE, --help\n' >&2
             exit 2 ;;
         *) break ;;
     esac
 done
+
+# ── --check-disc: scratched-disc repair path [FMT-01] ─────────────
+#
+# Self-contained "my disc is scratched" entry point.  Resolves the
+# recovery root + per-target triple, locates the bundled in-house
+# lcsas-ecc binary, runs `lcsas-ecc verify`, and -- on damage (exit
+# 1) -- offers/performs `lcsas-ecc fix`.  Never touches the repo,
+# password, or restore machinery; exits when done.
+#
+# Exit codes mirror the wrapped tool plus a couple of script-local
+# ones:
+#   0   disc clean, or damage fully repaired
+#   1   damage remained uncorrectable after fix (or user declined fix)
+#   2   image has no RS03 ECC header (nothing to check/repair)
+#   3   usage / I-O error (missing image, no lcsas-ecc binary)
+if [ -n "$CHECK_DISC_IMG" ]; then
+    if [ ! -f "$CHECK_DISC_IMG" ]; then
+        printf 'restore.sh: --check-disc: image not found: %s\n' \
+               "$CHECK_DISC_IMG" >&2
+        exit 3
+    fi
+
+    # Resolve the recovery root the same way the main path does, but
+    # without requiring a TARGET_DIR positional: an explicit recovery
+    # root as $1, else the auto-detected tree.
+    cd_recovery=""
+    if [ $# -ge 1 ] && { [ -d "$1/bin" ] || [ -d "$1/src" ]; } 2>/dev/null; then
+        cd_recovery="$1"
+    elif [ -n "$AUTO_RECOVERY" ]; then
+        cd_recovery="$AUTO_RECOVERY"
+    else
+        printf 'restore.sh: --check-disc: cannot locate the recovery tree ' >&2
+        printf '(run from inside it, or pass RECOVERY_ROOT as the first arg)\n' >&2
+        exit 3
+    fi
+
+    # Per-target triple selection -- same matrix as the main dispatch,
+    # honouring $LCSAS_TARGET.  Resolve bin/<triple>/lcsas-ecc, with a
+    # bin/lcsas-ecc fallback for flat layouts / tests.
+    cd_machine="$(uname -m 2>/dev/null || echo x86_64)"
+    cd_os="$(uname -s 2>/dev/null || echo Linux)"
+    if [ -n "${LCSAS_TARGET:-}" ]; then
+        cd_triple="$LCSAS_TARGET"
+    else
+        case "$cd_os" in
+            Linux)
+                case "$cd_machine" in
+                    x86_64|amd64)      cd_triple="x86_64-unknown-linux-musl" ;;
+                    aarch64|arm64)     cd_triple="aarch64-unknown-linux-musl" ;;
+                    armv7*|armv6*|arm) cd_triple="armv7-unknown-linux-gnueabihf" ;;
+                    *)                 cd_triple="x86_64-unknown-linux-musl" ;;
+                esac ;;
+            Darwin)
+                case "$cd_machine" in
+                    arm64|aarch64)     cd_triple="aarch64-apple-darwin" ;;
+                    *)                 cd_triple="x86_64-apple-darwin" ;;
+                esac ;;
+            *)                         cd_triple="x86_64-pc-windows-gnu" ;;
+        esac
+    fi
+
+    cd_ecc_bin=""
+    for cd_cand in \
+        "$cd_recovery/bin/$cd_triple/lcsas-ecc" \
+        "$cd_recovery/bin/$cd_triple/lcsas-ecc.exe" \
+        "$cd_recovery/bin/lcsas-ecc"; do
+        if [ -x "$cd_cand" ]; then cd_ecc_bin="$cd_cand"; break; fi
+    done
+    if [ -z "$cd_ecc_bin" ]; then
+        printf 'restore.sh: --check-disc: no lcsas-ecc binary found under ' >&2
+        printf '%s/bin/%s/ -- this meta disc cannot repair discs.\n' \
+               "$cd_recovery" "$cd_triple" >&2
+        printf 'Try the newest META disc in the set (its tooling can repair ' >&2
+        printf 'older data discs).\n' >&2
+        exit 3
+    fi
+
+    printf '[check-disc] scanning %s for damage with %s\n' \
+           "$CHECK_DISC_IMG" "$cd_ecc_bin" >&2
+    cd_rc=0
+    "$cd_ecc_bin" verify "$CHECK_DISC_IMG" || cd_rc=$?
+    case "$cd_rc" in
+        0)
+            printf '[check-disc] no damage found; disc image is intact.\n' >&2
+            exit 0 ;;
+        2)
+            printf '[check-disc] this image has no RS03 ECC parity layer; ' >&2
+            printf 'nothing to repair.\n' >&2
+            exit 2 ;;
+        1)
+            : ;;  # damage found -- fall through to the repair offer
+        *)
+            printf '[check-disc] could not read the image (exit %d).\n' \
+                   "$cd_rc" >&2
+            exit 3 ;;
+    esac
+
+    printf '[check-disc] DAMAGE DETECTED in %s.\n' "$CHECK_DISC_IMG" >&2
+    # Confirm before writing, unless told to repair non-interactively.
+    cd_do_fix=0
+    if [ "${LCSAS_CHECK_DISC_AUTOFIX:-0}" = "1" ]; then
+        cd_do_fix=1
+    elif [ -t 0 ]; then
+        printf 'Repair it now using the burned ECC parity? [y/N]: ' >&2
+        IFS= read -r cd_ans
+        case "$cd_ans" in y|Y|yes|YES|Yes) cd_do_fix=1 ;; esac
+    else
+        printf '[check-disc] no terminal to confirm on; not repairing.\n' >&2
+        printf 'Re-run with LCSAS_CHECK_DISC_AUTOFIX=1 to repair ' >&2
+        printf 'non-interactively.\n' >&2
+        exit 1
+    fi
+    if [ "$cd_do_fix" != "1" ]; then
+        printf '[check-disc] left unrepaired at your request.\n' >&2
+        exit 1
+    fi
+
+    printf '[check-disc] repairing in place with %s ...\n' "$cd_ecc_bin" >&2
+    cd_fix_rc=0
+    "$cd_ecc_bin" fix "$CHECK_DISC_IMG" || cd_fix_rc=$?
+    case "$cd_fix_rc" in
+        0)
+            printf '[check-disc] repair succeeded; %s is now intact.\n' \
+                   "$CHECK_DISC_IMG" >&2
+            exit 0 ;;
+        1)
+            printf '[check-disc] damage exceeded the available ECC parity; ' >&2
+            printf 'some sectors are uncorrectable.\n' >&2
+            printf 'Try another copy of this disc if one exists.\n' >&2
+            exit 1 ;;
+        *)
+            printf '[check-disc] repair failed (exit %d).\n' "$cd_fix_rc" >&2
+            exit 3 ;;
+    esac
+fi
 
 # Pattern 1: first arg looks like a recovery root (has bin/ or src/).
 if [ $# -ge 2 ] && [ -d "$1/bin" -o -d "$1/src" ] 2>/dev/null; then
