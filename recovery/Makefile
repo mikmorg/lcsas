@@ -377,6 +377,17 @@ bin/riscv64/lcsas-restore:
 	cp build/riscv64/lcsas-iso9660 bin/riscv64/
 	cp build/riscv64/lcsas-init    bin/riscv64/
 
+# Source deps so a tier-1 source edit forces a cross rebuild (see
+# ecc-arches).  The all-arches / windows / macos recipes build restore +
+# iso9660 + init into each per-arch tree, so all three tools' sources (plus
+# the vendored sqlite/zstd they link) gate these bin targets.
+ARCH_SRCS := $(wildcard $(SRCDIR)/*.c $(SRCDIR)/*.h) \
+             $(wildcard src/lcsas-iso9660/*.c src/lcsas-iso9660/*.h) \
+             $(wildcard src/lcsas-init/*.c src/lcsas-init/*.h) \
+             $(wildcard $(VENDOR)/sqlite/*.c $(VENDOR)/sqlite/*.h) \
+             $(wildcard $(VENDOR)/zstd/*.c $(VENDOR)/zstd/*.h)
+bin/x86_64/lcsas-restore bin/aarch64/lcsas-restore bin/riscv64/lcsas-restore bin/x86_64-windows/lcsas-restore.exe bin/aarch64-windows/lcsas-restore.exe bin/x86_64-macos/lcsas-restore bin/aarch64-macos/lcsas-restore: $(ARCH_SRCS)
+
 all-arches: bin/x86_64/lcsas-restore bin/aarch64/lcsas-restore bin/riscv64/lcsas-restore
 
 # Cross-compile for Windows via zig cc (ships its own MinGW headers).
@@ -500,6 +511,10 @@ bin/aarch64-macos/lcsas-keyshare:
 	$(MAKE) BUILD=build/aarch64-macos-ks CC="$(ZIG_CC) -target aarch64-macos" build/aarch64-macos-ks/lcsas-keyshare
 	mkdir -p bin/aarch64-macos && cp build/aarch64-macos-ks/lcsas-keyshare bin/aarch64-macos/
 
+# Source deps so a keyshare .c/.h edit forces a rebuild (see ecc-arches).
+KEYSHARE_SRCS := $(wildcard $(KEYSHARE_DIR)/*.c $(KEYSHARE_DIR)/*.h)
+bin/x86_64/lcsas-keyshare bin/aarch64/lcsas-keyshare bin/armv7/lcsas-keyshare bin/x86_64-windows/lcsas-keyshare.exe bin/x86_64-macos/lcsas-keyshare bin/aarch64-macos/lcsas-keyshare: $(KEYSHARE_SRCS)
+
 keyshare-arches: bin/x86_64/lcsas-keyshare bin/aarch64/lcsas-keyshare bin/armv7/lcsas-keyshare bin/x86_64-windows/lcsas-keyshare.exe bin/x86_64-macos/lcsas-keyshare bin/aarch64-macos/lcsas-keyshare
 	@echo "keyshare-arches: built lcsas-keyshare for all 6 approved tier-1 targets"
 
@@ -535,6 +550,15 @@ bin/x86_64-macos/lcsas-ecc:
 bin/aarch64-macos/lcsas-ecc:
 	$(MAKE) BUILD=build/aarch64-macos-ecc CC="$(ZIG_CC) -target aarch64-macos" build/aarch64-macos-ecc/lcsas-ecc
 	mkdir -p bin/aarch64-macos && cp build/aarch64-macos-ecc/lcsas-ecc bin/aarch64-macos/
+
+# Source prerequisites for the cross bins.  Without these the bin/<arch>/
+# file targets have NO prerequisites, so Make treats an existing committed
+# binary as up-to-date and `ecc-arches` is a NO-OP once the bins exist --
+# silently shipping STALE binaries after a source change (hit 2026-06-15:
+# an `augment` change kept the old bins).  Declaring the deps makes a .c/.h
+# edit force a rebuild.
+ECC_SRCS := $(wildcard $(ECC_DIR)/*.c $(ECC_DIR)/*.h)
+bin/x86_64/lcsas-ecc bin/aarch64/lcsas-ecc bin/armv7/lcsas-ecc bin/x86_64-windows/lcsas-ecc.exe bin/x86_64-macos/lcsas-ecc bin/aarch64-macos/lcsas-ecc: $(ECC_SRCS)
 
 ecc-arches: bin/x86_64/lcsas-ecc bin/aarch64/lcsas-ecc bin/armv7/lcsas-ecc bin/x86_64-windows/lcsas-ecc.exe bin/x86_64-macos/lcsas-ecc bin/aarch64-macos/lcsas-ecc
 	@echo "ecc-arches: built lcsas-ecc for all 6 approved tier-1 targets"
