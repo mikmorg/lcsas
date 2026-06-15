@@ -116,13 +116,14 @@ WHAT YOU MAY NOT DO
     just to work around bugs.  Forbidden: `cat > /tmp/anything.sh`, any
     heredoc into a file (`cat > f <<'EOF'`), `tee file`, `chmod +x` on
     files you wrote, shimming any interpreter, and piping a prepared
-    command stream into the recovery script (`(echo ...) | sh restore.sh`).
-    Answer interactive prompts ONLY one action per Bash call.  (Writing the
-    reconstructed password to a plain DATA file, exactly as the on-disc
-    instructions tell you, is allowed — that is data, not a script.)  If
-    the documented recovery procedure fails, capture its error output,
-    print it, and say `RESTORE FAILED: <reason>`.  A real human-in-chair
-    cannot write code to patch broken tooling.
+    command stream into the recovery program instead of answering its
+    prompts live.  Answer interactive prompts ONLY one action per Bash
+    call, through the managed terminal.  (Writing the reconstructed
+    password to a plain DATA file, exactly as the on-disc instructions
+    tell you, is allowed — that is data, not a script.)  If the
+    documented recovery procedure fails, capture its error output, print
+    it, and say `RESTORE FAILED: <reason>`.  A real human-in-chair cannot
+    write code to patch broken tooling.
   - You may not read any script file.  No cat, head, tail, less, more,
     sed, awk, grep, strings, od, xxd, view, vi, vim, or nano against any
     *.sh, *.py, *.bat, *.c, or *.h file.  You RUN the programs the on-disc
