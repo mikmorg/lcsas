@@ -305,6 +305,57 @@ def test_meta_build_bundles_lcsas_ecc_per_target(tmp_path: Path) -> None:
         )
 
 
+def test_meta_manifest_pins_lcsas_ecc_per_target(tmp_path: Path) -> None:
+    """FMT-01 pinning: every bundled lcsas-ecc binary must have a matching
+    ``./bin/<target>/lcsas-ecc`` row in the meta volume's regenerated
+    recovery/MANIFEST.sha256, so an heir can ``sha256sum -c`` the in-house
+    RS03 repair tool exactly like every other bundled binary.  Our own
+    cross-built bins are pinned here (the per-build on-disc manifest), NOT
+    in UPSTREAM.sha256 (upstream artifacts only) nor the source-tree
+    MANIFEST (which prunes ./bin); this gate is that pin's guarantee."""
+    import hashlib
+
+    from lcsas.meta.builder import MetaVolumeBuilder
+
+    out_dir = tmp_path / "meta_stage"
+    out_dir.mkdir()
+    MetaVolumeBuilder(
+        out_dir, catalog_db_path=None, allow_no_dvdisaster_source=True,
+    ).build()
+
+    manifest = out_dir / "recovery" / "MANIFEST.sha256"
+    assert manifest.is_file(), "meta volume has no recovery/MANIFEST.sha256"
+    pinned: dict[str, str] = {}
+    for line in manifest.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("  ", 1)
+        if len(parts) == 2:
+            pinned[parts[1]] = parts[0]
+
+    bundled_bin = out_dir / "recovery" / "bin"
+    checked = 0
+    for rust_triple, short_arch, _exe in APPROVED_TIER1_TARGETS:
+        ecc = _ecc_exe(rust_triple)
+        if not (RECOVERY_BIN / short_arch / ecc).is_file():
+            continue
+        bundled = bundled_bin / rust_triple / ecc
+        assert bundled.is_file()
+        rel = f"./bin/{rust_triple}/{ecc}"
+        assert rel in pinned, (
+            f"{rel} is bundled but absent from the meta MANIFEST.sha256 -- "
+            f"_regenerate_recovery_manifest must pin every bundled bin (FMT-01)."
+        )
+        want = hashlib.sha256(bundled.read_bytes()).hexdigest()
+        assert pinned[rel] == want, (
+            f"MANIFEST hash for {rel} ({pinned[rel]}) != actual bundled "
+            f"binary hash ({want}); the pin is stale."
+        )
+        checked += 1
+    assert checked > 0, "no lcsas-ecc bins were bundled -- nothing pinned"
+
+
 def test_completeness_gate_fails_when_lcsas_ecc_missing(
     tmp_path: Path,
 ) -> None:
