@@ -18,4 +18,8 @@
 #
 # A variant that scores 15/15 while still listed here triggers a strict
 # XPASS (run_variant.sh exits 1), forcing the ledger cleanup immediately.
-tier1-missing  issue=#227  expires=2026-09-01
+#
+# Promoted out (2026-06-15): tier1-missing (issue #227) — scored 16/16 on
+# two consecutive blind runs (tier-1 binary absent → restore.sh rides the
+# fallback path and recovers all data).  Ledger is currently empty; add a
+# line here only when a new variant has a tracked, expected-fail bug.
