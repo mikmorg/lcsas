@@ -211,11 +211,31 @@ long rs03_verify(const unsigned char *img, size_t img_len,
                 continue;           /* data padding region */
             }
 
-            /* A sector beyond the readable image is an erasure. */
+            /* A data sector beyond the readable image is an erasure. */
             if ((size_t) (sec + 1) * RS03_SECTOR_SIZE > img_len) {
                 bad[sec] = 1;
                 ndamaged++;
                 continue;
+            }
+
+            /* The CRC for this sector lives in a LATER image sector
+             * (first_crc_pos + pos), which a truncated image may not
+             * carry even when the data sector itself is present.  Reading
+             * it unconditionally is a heap over-read (found by
+             * fuzz_rs03_parse).  When the CRC slot is past the readable
+             * image, we cannot verify the sector -- treat it as an
+             * erasure (damage), matching the documented "truncated image
+             * is reported as damage, not crash" contract. */
+            {
+                unsigned long crc_sec = L->first_crc_pos + pos;
+                size_t crc_end =
+                    (size_t) crc_sec * RS03_SECTOR_SIZE
+                    + (size_t) layer * 4 + 4;
+                if (crc_end > img_len) {
+                    bad[sec] = 1;
+                    ndamaged++;
+                    continue;
+                }
             }
 
             stored = read_stored_crc(img, L, layer, pos);

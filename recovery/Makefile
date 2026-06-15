@@ -706,6 +706,7 @@ coverage-c:
 	    --root . \
 	    --filter '$(SRCDIR)/.*' \
 	    --filter '$(KEYSHARE_DIR)/.*' \
+	    --filter '$(ECC_DIR)/.*' \
 	    --exclude '$(VENDOR)/.*' \
 	    --gcov-object-directory $(abspath $(BUILD)) \
 	    $(GCOVR_SUSPICIOUS) \
@@ -1038,10 +1039,45 @@ fuzz-tree: $(FUZZ_BUILD)/fuzz_tree_restore
 	    $(FUZZ_DIR)/corpus/tree/
 	@echo "[fuzz-tree] 30min PASS — 0 crashes"
 
+# ── fuzz_rs03_parse ──────────────────────────────────────────────
+# The in-house RS03 ECC parser/decoder (rs03.c) reads an untrusted,
+# corruption-controlled disc image off a scratched medium [FMT-01].
+# Links only the ecc objects (gf256.c + rs03.c) — no vendored deps.
+FUZZ_RS03_SRCS = \
+    $(ECC_DIR)/gf256.c \
+    $(ECC_DIR)/rs03.c
+
+$(FUZZ_BUILD)/fuzz_rs03_parse: $(FUZZ_DIR)/fuzz_rs03_parse.c \
+        $(FUZZ_RS03_SRCS) $(ECC_DIR)/rs03.h $(ECC_DIR)/gf256.h
+	@command -v clang >/dev/null 2>&1 || { echo "[fuzz] need clang (apt install clang)"; exit 1; }
+	@mkdir -p $(FUZZ_BUILD)
+	clang -fsanitize=fuzzer,address,undefined -O1 -g \
+	    -fno-omit-frame-pointer \
+	    -std=c89 -D_POSIX_C_SOURCE=200809L -D_FILE_OFFSET_BITS=64 \
+	    -Wno-long-long \
+	    -I $(ECC_DIR) \
+	    $(FUZZ_DIR)/fuzz_rs03_parse.c \
+	    $(FUZZ_RS03_SRCS) \
+	    -o $(FUZZ_BUILD)/fuzz_rs03_parse
+
+fuzz-rs03-smoke: $(FUZZ_BUILD)/fuzz_rs03_parse
+	$(FUZZ_BUILD)/fuzz_rs03_parse \
+	    -max_total_time=60 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/rs03/
+	@echo "[fuzz-rs03-smoke] 60s PASS — 0 crashes"
+
+fuzz-rs03: $(FUZZ_BUILD)/fuzz_rs03_parse
+	$(FUZZ_BUILD)/fuzz_rs03_parse \
+	    -max_total_time=1800 \
+	    -artifact_prefix=$(FUZZ_BUILD)/crash_ \
+	    $(FUZZ_DIR)/corpus/rs03/
+	@echo "[fuzz-rs03] 30min PASS — 0 crashes"
+
 # ── fuzz-smoke (all harnesses × 60 s) ────────────────────────────
-# Runs all seven LibFuzzer harnesses for 60 seconds each (~7 min total).
+# Runs all eight LibFuzzer harnesses for 60 seconds each (~8 min total).
 # Used by the audit-gate composite target below.
-fuzz-smoke: fuzz-json-smoke fuzz-b64-smoke fuzz-zstd-smoke fuzz-path-smoke fuzz-repo-smoke fuzz-keyshare-smoke fuzz-tree-smoke
+fuzz-smoke: fuzz-json-smoke fuzz-b64-smoke fuzz-zstd-smoke fuzz-path-smoke fuzz-repo-smoke fuzz-keyshare-smoke fuzz-tree-smoke fuzz-rs03-smoke
 	@echo "[fuzz-smoke] all harnesses: 0 crashes"
 
 # ── audit-gate ────────────────────────────────────────────────────
@@ -1105,4 +1141,4 @@ fault-inject: $(BUILD)/malloc_inject.so
 	python3 scripts/run_fault_inject.py --max-sweep $(MAX_N)
 	@echo "[fault-inject] PASS: 0 crashes across all test binaries"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check check-toolchain bin-parity zig-aarch64 zig-riscv64 keyshare-arches ecc-arches coverage-c sanitize fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-smoke audit-gate fault-inject
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check check-toolchain bin-parity zig-aarch64 zig-riscv64 keyshare-arches ecc-arches coverage-c sanitize fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-rs03-smoke fuzz-rs03 fuzz-smoke audit-gate fault-inject
