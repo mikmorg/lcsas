@@ -334,3 +334,45 @@ class LcsasEccRunner(SubprocessRunnerBase):
             f"lcsas-ecc {op} failed on '{iso_path.name}' "
             f"(exit {result.returncode}): {detail}"
         )
+
+
+def select_ecc_runner(
+    *,
+    require_augment: bool = False,
+    tmpdir: Path | None = None,
+) -> DVDisasterRunner | None:
+    """Pick the ECC runner for an operator-side verify/repair path (FMT-01).
+
+    Selection order:
+
+    1. The real ``dvdisaster`` binary if it is on ``PATH`` — it covers
+       encode *and* decode and is the byte-exact tool that wrote the
+       parity, so prefer it whenever present.
+    2. Otherwise the in-house ``lcsas-ecc`` binary if it is on ``PATH`` —
+       a verify/repair-only fallback (decode-only) so a host *without*
+       dvdisaster still spends the burned RS03 parity instead of skipping
+       ECC entirely.  This is the whole point of FMT-01: the repair half
+       of the disc-integrity layer must not depend on an abandoned,
+       externally-installed tool.
+    3. ``None`` when neither is available — the caller then degrades to a
+       portable SHA-256 compare (detect-only) or logs "not verified".
+
+    ``require_augment=True`` restricts the choice to runners that can
+    *write* parity (encode): only dvdisaster qualifies, because
+    :class:`LcsasEccRunner` is decode-only.  Use this on the burn
+    (augment) path so a missing dvdisaster is reported as such rather
+    than silently selecting a runner that cannot encode.
+
+    The returned object satisfies the :class:`DVDisasterRunner` protocol;
+    callers use ``verify_iso`` / ``repair_iso`` (and ``augment_iso`` only
+    when ``require_augment`` was set).
+    """
+    if shutil.which("dvdisaster") is not None:
+        return SubprocessDVDisasterRunner(tmpdir=tmpdir)
+    if require_augment:
+        # Only dvdisaster can encode; do not fall back to a decode-only
+        # runner for the augment path.
+        return None
+    if shutil.which("lcsas-ecc") is not None:
+        return LcsasEccRunner(tmpdir=tmpdir)
+    return None

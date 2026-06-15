@@ -1021,7 +1021,10 @@ class TestVerifyAllShaFallback:
 
         with patch(
             "shutil.which",
-            side_effect=lambda name: None if name == "dvdisaster" else "/usr/bin/" + name,
+            side_effect=lambda name: (
+                None if name in ("dvdisaster", "lcsas-ecc")
+                else "/usr/bin/" + name
+            ),
         ):
             result = main(["--db", str(db), "verify", "--all"])
 
@@ -1047,7 +1050,10 @@ class TestVerifyAllShaFallback:
 
         with patch(
             "shutil.which",
-            side_effect=lambda name: None if name == "dvdisaster" else "/usr/bin/" + name,
+            side_effect=lambda name: (
+                None if name in ("dvdisaster", "lcsas-ecc")
+                else "/usr/bin/" + name
+            ),
         ):
             result = main(["--db", str(db), "verify", "--all"])
 

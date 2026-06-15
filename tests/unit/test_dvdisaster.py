@@ -327,3 +327,56 @@ class TestLcsasEccRunner:
         assert hasattr(runner, "augment_iso")
         assert hasattr(runner, "verify_iso")
         assert hasattr(runner, "repair_iso")
+
+
+class TestSelectEccRunner:
+    """select_ecc_runner() picks dvdisaster > lcsas-ecc > None (FMT-01)."""
+
+    @patch("lcsas.ecc.dvdisaster.shutil.which")
+    def test_prefers_dvdisaster_when_present(self, mock_which):
+        from lcsas.ecc.dvdisaster import select_ecc_runner
+
+        # dvdisaster present (lcsas-ecc would also be, but must not be reached).
+        mock_which.side_effect = lambda name: (
+            "/usr/bin/dvdisaster" if name == "dvdisaster" else None
+        )
+        runner = select_ecc_runner()
+        assert isinstance(runner, SubprocessDVDisasterRunner)
+
+    @patch("lcsas.ecc.dvdisaster.shutil.which")
+    def test_falls_back_to_lcsas_ecc_when_dvdisaster_absent(self, mock_which):
+        from lcsas.ecc.dvdisaster import select_ecc_runner
+
+        mock_which.side_effect = lambda name: (
+            "/opt/lcsas/lcsas-ecc" if name == "lcsas-ecc" else None
+        )
+        runner = select_ecc_runner()
+        assert isinstance(runner, LcsasEccRunner)
+
+    @patch("lcsas.ecc.dvdisaster.shutil.which")
+    def test_returns_none_when_neither_present(self, mock_which):
+        from lcsas.ecc.dvdisaster import select_ecc_runner
+
+        mock_which.return_value = None
+        assert select_ecc_runner() is None
+
+    @patch("lcsas.ecc.dvdisaster.shutil.which")
+    def test_require_augment_only_accepts_dvdisaster(self, mock_which):
+        from lcsas.ecc.dvdisaster import select_ecc_runner
+
+        # Only lcsas-ecc present, but augment needs an encoder → None,
+        # NOT a decode-only LcsasEccRunner (which cannot encode).
+        mock_which.side_effect = lambda name: (
+            "/opt/lcsas/lcsas-ecc" if name == "lcsas-ecc" else None
+        )
+        assert select_ecc_runner(require_augment=True) is None
+
+    @patch("lcsas.ecc.dvdisaster.shutil.which")
+    def test_require_augment_accepts_dvdisaster(self, mock_which):
+        from lcsas.ecc.dvdisaster import select_ecc_runner
+
+        mock_which.side_effect = lambda name: (
+            "/usr/bin/dvdisaster" if name == "dvdisaster" else None
+        )
+        runner = select_ecc_runner(require_augment=True)
+        assert isinstance(runner, SubprocessDVDisasterRunner)

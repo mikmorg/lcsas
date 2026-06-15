@@ -2910,25 +2910,30 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 logger.error(f"ISO file not found: {iso_path}")
                 return 1
 
-            # Phase 21.3: try DVDisaster RS03 verify first (Linux primary
-            # path; can detect AND repair).  If dvdisaster isn't available
-            # on the host (macOS, Windows, or a stripped-down Linux box),
-            # fall back to a portable SHA-256 compare against the hash
-            # recorded at burn time (detect-only).  See
-            # docs/CROSS_PLATFORM_META_RFC.md §6 Q2 for the rationale.
+            # Phase 21.3 / FMT-01: try an RS03 ECC verify first (can detect
+            # AND repair).  Prefer the real dvdisaster when installed; else
+            # fall back to the bundled in-house lcsas-ecc (decode-only) so a
+            # host without dvdisaster still spends the burned parity.  If
+            # NEITHER ECC tool is present, fall back to a portable SHA-256
+            # compare against the hash recorded at burn time (detect-only).
+            # See docs/CROSS_PLATFORM_META_RFC.md §6 Q2 for the rationale.
             from lcsas.db.volume_copies import get_iso_sha256_for_label
-            from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+            from lcsas.ecc.dvdisaster import select_ecc_runner
             from lcsas.restore.executor import verify_iso_sha256
 
             logger.info(f"Verifying ISO: {iso_path}")
+            ecc_runner = select_ecc_runner()
             try:
-                dvd_runner = SubprocessDVDisasterRunner()
-                ok = dvd_runner.verify_iso(iso_path)
+                if ecc_runner is None:
+                    raise FileNotFoundError(
+                        "no dvdisaster or lcsas-ecc on PATH"
+                    )
+                ok = ecc_runner.verify_iso(iso_path)
                 logger.info(f"  ECC verify: {'PASS' if ok else 'FAIL'}")
             except (FileNotFoundError, RuntimeError) as e:
-                # dvdisaster isn't installed — fall back to SHA-256.
+                # No usable ECC tool — fall back to SHA-256.
                 logger.info(
-                    "  dvdisaster unavailable (%s); falling back to "
+                    "  ECC tool unavailable (%s); falling back to "
                     "portable SHA-256 verify", e.__class__.__name__,
                 )
                 expected = get_iso_sha256_for_label(conn, args.volume_label)
@@ -2985,21 +2990,22 @@ def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any)
     passed_count = 0
     failed_count = 0
 
-    # Phase 21.5.a: probe dvdisaster ONCE up front, not per-volume.  If
-    # it isn't installed we fall back to SHA-256 verification against
-    # the catalog-recorded hash (Phase 21.3 pattern).
-    import shutil
-
+    # Phase 21.5.a / FMT-01: probe the ECC tool ONCE up front, not
+    # per-volume.  Prefer real dvdisaster, else the in-house lcsas-ecc
+    # (decode-only) so a host without dvdisaster still spends the burned
+    # parity; if neither is present, fall back to SHA-256 verification
+    # against the catalog-recorded hash (Phase 21.3 pattern).
     from lcsas.db.volume_copies import get_iso_sha256_for_label
-    from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
+    from lcsas.ecc.dvdisaster import select_ecc_runner
     from lcsas.restore.executor import verify_iso_sha256
 
-    dvdisaster_available = shutil.which("dvdisaster") is not None
-    dvd_runner = SubprocessDVDisasterRunner() if dvdisaster_available else None
-    if not dvdisaster_available:
+    ecc_runner = select_ecc_runner()
+    ecc_available = ecc_runner is not None
+    if not ecc_available:
         logger.info(
-            "  dvdisaster unavailable; falling back to portable SHA-256 "
-            "verify for all volumes (Phase 21.3 / 21.5)."
+            "  no ECC tool (dvdisaster / lcsas-ecc) available; falling "
+            "back to portable SHA-256 verify for all volumes "
+            "(Phase 21.3 / 21.5 / FMT-01)."
         )
 
     for vol in candidates:
@@ -3029,9 +3035,9 @@ def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any)
             )
             continue
 
-        if dvdisaster_available:
-            assert dvd_runner is not None  # mypy hint
-            ok = dvd_runner.verify_iso(iso_path)
+        if ecc_available:
+            assert ecc_runner is not None  # mypy hint
+            ok = ecc_runner.verify_iso(iso_path)
             verify_kind = "Batch ISO verify"
         else:
             # SHA-256 fallback path.  No recorded hash → skip (don't
@@ -3039,8 +3045,8 @@ def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any)
             expected = get_iso_sha256_for_label(conn, vol.label)
             if not expected:
                 logger.info(
-                    f"  {vol.label}: no recorded SHA-256 and dvdisaster "
-                    f"unavailable — skipped"
+                    f"  {vol.label}: no recorded SHA-256 and no ECC tool "
+                    f"available — skipped"
                 )
                 continue
             ok = verify_iso_sha256(iso_path, expected)
@@ -3761,7 +3767,11 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
     shutdown.install()
 
     try:
-        executor = RestoreExecutor(runner)
+        # FMT-01: prefer real dvdisaster, else the in-house lcsas-ecc
+        # (decode-only) so restore can verify/repair RS03 parity on a
+        # host without dvdisaster.  None → executor degrades to SHA-256.
+        from lcsas.ecc.dvdisaster import select_ecc_runner
+        executor = RestoreExecutor(runner, ecc_runner=select_ecc_runner())
 
         # Prepare cache with metadata from the repo mirror
         metadata_source = repo_cfg.mirror_path
@@ -4062,7 +4072,10 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
             rustic_available = False
 
         runner = SubprocessRusticRunner(tmpdir=tmp_dir)
-        executor = RestoreExecutor(runner)
+        # FMT-01: ECC verify/repair on restore — dvdisaster if present,
+        # else the in-house lcsas-ecc fallback.
+        from lcsas.ecc.dvdisaster import select_ecc_runner
+        executor = RestoreExecutor(runner, ecc_runner=select_ecc_runner())
 
         logger.info("Copying repository metadata from disc to cache...")
         executor.prepare_cache(cache_dir, disc_meta)
