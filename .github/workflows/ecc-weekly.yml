@@ -36,10 +36,25 @@ jobs:
           sudo apt-get install -y xorriso dvdisaster
           xorriso -version
           dvdisaster --version
+      - name: Build in-house lcsas-ecc (so the cross-conformance test runs)
+        # The dvdisaster cross-conformance test (test_lcsas_ecc_repairs_
+        # dvdisaster_augmented_image) needs a runnable lcsas-ecc, else it
+        # SKIPS silently. Build it from current source and put it on PATH so
+        # the test exercises THIS commit's decoder, not a stale committed bin.
+        run: |
+          make -C recovery build/lcsas-ecc
+          echo "$GITHUB_WORKSPACE/recovery/build" >> "$GITHUB_PATH"
       - name: Install LCSAS (editable, with dev deps)
         run: make dev
-      - name: RS03 repair proof (below-threshold repairs byte-identical; above fails loud)
-        run: LCSAS_ECC_REPAIR=1 pytest tests/integration/test_ecc_repair.py -v -m integration
+      - name: RS03 repair proof + dvdisaster cross-conformance
+        # Repair proof: below-threshold damage repairs byte-identical, above
+        # fails loud. Cross-conformance: lcsas-ecc reads real dvdisaster RS03
+        # parity -- currently xfail(strict) pending issue #321 (interleaving
+        # not yet conformant); -rX prints the xfail reason. When the fix lands
+        # the case XPASSes -> strict xfail fails this job -> drop the marker.
+        run: |
+          echo "lcsas-ecc on PATH: $(command -v lcsas-ecc || echo MISSING)"
+          LCSAS_ECC_REPAIR=1 pytest tests/integration/test_ecc_repair.py -v -rX -m integration
       - name: File an issue on failure
         # Scheduled-run failures email the workflow-file author, but a red
         # Monday run is easy to miss. File a tracking issue so it can't be.
