@@ -59,9 +59,11 @@ unsigned long rs03_sector_index(const rs03_layout *L,
 int rs03_parse(const unsigned char *img, size_t img_len, rs03_layout *out);
 
 /*
- * dvdisaster-compatible CRC-32 (ISO 3309 / zlib polynomial 0xEDB88320,
- * reflected, init 0xffffffff, final XOR 0xffffffff).  Exposed for unit
- * tests; rs03_verify uses it internally.
+ * dvdisaster-compatible CRC-32 (src/crc32.c Crc32): reflected CRC-32 with
+ * polynomial 0xEDB88320, init 0xffffffff, and NO final inversion (returns
+ * the raw running register, unlike the conventional zlib CRC-32 which XORs
+ * 0xffffffff at the end).  Exposed for unit tests; rs03_verify uses it
+ * internally.  A 2048-byte zero sector hashes to 0x0E174561.
  */
 unsigned long rs03_crc32(const unsigned char *data, size_t len);
 

@@ -87,19 +87,21 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    /* CRC layer the dvdisaster way (chain-back): every data-layer sector's
+     * CRC at codeword position `pos` is stored in CRC sector (pos-1)%spl,
+     * slot `layer` -- matching rs03.c read_stored_crc so verify is clean. */
     for (layer = 0; layer < L.ndata - 1; layer++) {
         for (pos = 0; pos < L.sectors_per_layer; pos++) {
+            unsigned long crc;
+            unsigned long crc_pos;
+            unsigned long crc_sec;
             sec = rs03_sector_index(&L, layer, pos);
-            if (sec == L.ecc_header_pos || sec > L.data_sectors) {
-                continue;
-            }
-            {
-                unsigned long crc = rs03_crc32(
-                    img + (size_t) sec * RS03_SECTOR_SIZE, RS03_SECTOR_SIZE);
-                unsigned long crc_sec = L.first_crc_pos + pos;
-                put_u32le(img + (size_t) crc_sec * RS03_SECTOR_SIZE
-                              + (size_t) layer * 4, crc);
-            }
+            crc = rs03_crc32(
+                img + (size_t) sec * RS03_SECTOR_SIZE, RS03_SECTOR_SIZE);
+            crc_pos = (pos + L.sectors_per_layer - 1) % L.sectors_per_layer;
+            crc_sec = L.first_crc_pos + crc_pos;
+            put_u32le(img + (size_t) crc_sec * RS03_SECTOR_SIZE
+                          + (size_t) layer * 4, crc);
         }
     }
 

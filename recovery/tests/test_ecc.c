@@ -61,10 +61,24 @@ static void test_gf(void)
 
 static void test_crc(void)
 {
-    /* Standard CRC-32 of "123456789" is 0xCBF43926. */
-    CHECK(rs03_crc32((const unsigned char *) "123456789", 9) == 0xCBF43926UL,
-          "crc32 check vector");
-    CHECK(rs03_crc32((const unsigned char *) "", 0) == 0UL, "crc32 empty");
+    /* dvdisaster's RS03 CRC is the standard reflected CRC-32 WITHOUT the
+     * final inversion (src/crc32.c Crc32 returns the raw running register).
+     * Standard CRC-32("123456789") = 0xCBF43926, so the dvdisaster value is
+     * that with the final XOR undone: 0xCBF43926 ^ 0xffffffff = 0x340BC6D9.
+     * The empty input yields the un-inverted init register, 0xFFFFFFFF.
+     * (Conformance to dvdisaster proven against a real augmented image: a
+     * 2048-byte zero sector's stored CRC is 0x0E174561.) */
+    CHECK(rs03_crc32((const unsigned char *) "123456789", 9) == 0x340BC6D9UL,
+          "crc32 check vector (dvdisaster, no final inversion)");
+    CHECK(rs03_crc32((const unsigned char *) "", 0) == 0xFFFFFFFFUL,
+          "crc32 empty (un-inverted init register)");
+    {
+        /* A 2048-byte zero sector matches dvdisaster's stored zero CRC. */
+        unsigned char zero[RS03_SECTOR_SIZE];
+        memset(zero, 0, sizeof(zero));
+        CHECK(rs03_crc32(zero, RS03_SECTOR_SIZE) == 0x0E174561UL,
+              "crc32 zero sector == dvdisaster 0x0E174561");
+    }
 }
 
 /* ---- build a small RS03 image in memory ----------------------------- */
@@ -125,21 +139,24 @@ static unsigned char *build_image(rs03_layout *L, size_t *len_out)
         return NULL;
     }
 
-    /* Compute the CRC layer: for each data layer (0..ndata-2) and pos,
-     * store crc32 of that data sector at CRC sector `pos`, slot `layer`. */
+    /* Compute the CRC layer the way dvdisaster does (chain-back): for
+     * every data-layer sector (0..ndata-2, ALL positions incl. the header
+     * and padding sectors), store crc32 of the sector at codeword position
+     * `pos` in CRC sector at position (pos-1)%spl, slot `layer`.  This
+     * mirrors rs03.c read_stored_crc so the self round-trip stays valid. */
     for (layer = 0; layer < L->ndata - 1; layer++) {
         for (pos = 0; pos < L->sectors_per_layer; pos++) {
+            unsigned long crc_pos;
+            unsigned long crc_sec;
+            unsigned long crc;
             sec = rs03_sector_index(L, layer, pos);
-            if (sec == L->ecc_header_pos || sec > L->data_sectors) {
-                continue;
-            }
-            {
-                unsigned long crc = rs03_crc32(
-                    img + (size_t) sec * RS03_SECTOR_SIZE, RS03_SECTOR_SIZE);
-                unsigned long crc_sec = L->first_crc_pos + pos;
-                put_u32le(img + (size_t) crc_sec * RS03_SECTOR_SIZE
-                              + (size_t) layer * 4, crc);
-            }
+            crc = rs03_crc32(
+                img + (size_t) sec * RS03_SECTOR_SIZE, RS03_SECTOR_SIZE);
+            crc_pos = (pos + L->sectors_per_layer - 1)
+                      % L->sectors_per_layer;
+            crc_sec = L->first_crc_pos + crc_pos;
+            put_u32le(img + (size_t) crc_sec * RS03_SECTOR_SIZE
+                          + (size_t) layer * 4, crc);
         }
     }
 

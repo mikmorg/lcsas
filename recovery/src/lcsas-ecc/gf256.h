@@ -38,4 +38,14 @@ unsigned char gf_exp(int e);
 /* Discrete log base alpha of a (a must be non-zero; returns 0 if a==0). */
 int gf_log(unsigned char a);
 
+/* dvdisaster index/exp accessors (src/galois.c convention).  These match
+ * dvdisaster's `index_of`/`alpha_to` tables exactly and are used by the
+ * faithfully-ported RS03 error+erasure decoder:
+ *   - gf_index_of(0)   == GF_ALPHA0 (255), the "log of zero" sentinel;
+ *   - gf_alpha_to(e)   for e in [0, GF_FIELDMAX]; gf_alpha_to(GF_ALPHA0)==0.
+ * Callers reduce exponents with mod_fieldmax before indexing.  */
+#define GF_ALPHA0 GF_FIELDMAX
+int gf_index_of(unsigned char a);
+unsigned char gf_alpha_to(int e);
+
 #endif /* LCSAS_ECC_GF256_H */

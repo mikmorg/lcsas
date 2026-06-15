@@ -56,7 +56,18 @@ static unsigned long rd_u64le_lo(const unsigned char *p)
 #define OFF_ECCBYTES          80   /* nroots */
 #define OFF_SECTORSPERLAYER   120
 
-/* ---- CRC-32 (zlib / ISO 3309) --------------------------------------- */
+/* ---- CRC-32 (dvdisaster RS03 conformant) ---------------------------- */
+/*
+ * dvdisaster's per-sector RS03 CRC (src/crc32.c Crc32) is the standard
+ * reflected CRC-32 (polynomial 0xEDB88320, table-driven, init 0xffffffff)
+ * but it does NOT apply the conventional final XOR with 0xffffffff -- it
+ * returns the raw running register.  Conformance proof: a 2048-byte zero
+ * sector's stored RS03 CRC is 0x0e174561, which equals the running CRC of
+ * zeros with no final inversion (i.e. zlib.crc32(zeros) ^ 0xffffffff).
+ * We therefore omit the final inversion here so verify reads dvdisaster's
+ * parity correctly; lcsas-ecc's own test encoder uses this same function
+ * on both sides, so its self round-trip stays valid.
+ */
 
 static unsigned long crc_table[256];
 static int crc_ready = 0;
@@ -90,7 +101,9 @@ unsigned long rs03_crc32(const unsigned char *data, size_t len)
     for (i = 0; i < len; i++) {
         c = crc_table[(c ^ data[i]) & 0xff] ^ (c >> 8);
     }
-    return (c ^ 0xffffffffUL) & 0xffffffffUL;
+    /* No final inversion: dvdisaster's Crc32() returns the raw running
+     * register (see header note). */
+    return c & 0xffffffffUL;
 }
 
 /* ---- layout --------------------------------------------------------- */
@@ -168,19 +181,33 @@ int rs03_parse(const unsigned char *img, size_t img_len, rs03_layout *out)
 
 /* ---- CRC verification ----------------------------------------------- */
 /*
- * CRC layer storage (matches our encoder; documented assumption from
- * spec sec 3.3 / 6.3): the CRC layer is `sectors_per_layer` sectors,
- * each holding 512 uint32 little-endian CRC values.  The CRC of the
- * data sector at codeword position `pos`, data layer `layer`
- * (0..ndata-2) is stored as the `layer`-th uint32 within CRC sector
- * `pos` (i.e. CRC sector first_crc_pos+pos, byte offset layer*4).
- * Since ndata-1 <= 84 <= 512 this always fits in one CRC sector.
+ * CRC layer storage -- dvdisaster RS03 conformant (src/rs03-create.c,
+ * read_next_chunk + the encoder thread, flush_crc).  The CRC layer is
+ * `sectors_per_layer` sectors, each a 2048-byte sector holding 512
+ * little-endian uint32 slots.  dvdisaster writes the CRC layer with a
+ * one-position "chain-back": the CRC of the data sector at codeword
+ * position `pos`, data layer `layer` (0..ndata-2), is stored NOT in CRC
+ * sector `pos` but in CRC sector `pos-1` (the PREVIOUS position), slot
+ * `layer`.  Equivalently, CRC sector at position `i` holds, in slot
+ * `layer`, the CRC of the data sector at (layer, i+1); the last CRC
+ * sector (i = spl-1) wraps around and holds the CRCs of position 0
+ * (dvdisaster's ec->firstCrc cache).  So the slot that verifies
+ * (layer, pos) lives at CRC position (pos - 1 + spl) % spl.
+ *
+ * (lcsas-ecc's own test encoder mirrors this chain-back so the C
+ * self round-trip stays self-consistent; see recovery/tests/test_ecc.c.)
+ *
+ * The metadata CrcBlock (cookie/method/geometry) that dvdisaster overlays
+ * at the END of each CRC sector (uint32 slots 256+) never collides with a
+ * data slot, since ndata-1 <= 254 < 256.
  */
 static unsigned long read_stored_crc(const unsigned char *img,
                                      const rs03_layout *L,
                                      int layer, unsigned long pos)
 {
-    unsigned long crc_sec = L->first_crc_pos + pos;
+    unsigned long crc_pos =
+        (pos + L->sectors_per_layer - 1) % L->sectors_per_layer;
+    unsigned long crc_sec = L->first_crc_pos + crc_pos;
     const unsigned char *p =
         img + crc_sec * RS03_SECTOR_SIZE + (size_t) layer * 4;
     return rd_u32le(p);
@@ -196,20 +223,15 @@ long rs03_verify(const unsigned char *img, size_t img_len,
 
     memset(bad, 0, (size_t) L->total_sectors);
 
-    /* Data layers are 0 .. ndata-2.  Only sectors that actually hold
-     * ISO/padding data are checked; the header sector and padding past
-     * data_sectors carry no meaningful CRC, so skip them. */
+    /* Data layers are 0 .. ndata-2.  dvdisaster CRC-protects EVERY sector
+     * in these layers -- including the ECC header sector and the padding
+     * region between data_sectors and the CRC layer -- so all of them are
+     * checked (verified empirically against a real augmented image). */
     for (layer = 0; layer < L->ndata - 1; layer++) {
         for (pos = 0; pos < L->sectors_per_layer; pos++) {
             unsigned long sec = rs03_sector_index(L, layer, pos);
             unsigned long stored, actual;
-
-            if (sec == L->ecc_header_pos) {
-                continue;           /* header sector: not CRC-protected here */
-            }
-            if (sec > L->data_sectors) {
-                continue;           /* data padding region */
-            }
+            unsigned long crc_pos;
 
             /* A data sector beyond the readable image is an erasure. */
             if ((size_t) (sec + 1) * RS03_SECTOR_SIZE > img_len) {
@@ -218,16 +240,18 @@ long rs03_verify(const unsigned char *img, size_t img_len,
                 continue;
             }
 
-            /* The CRC for this sector lives in a LATER image sector
-             * (first_crc_pos + pos), which a truncated image may not
+            /* The CRC for this sector lives in CRC sector (pos-1)%spl
+             * (the chain-back position), which a truncated image may not
              * carry even when the data sector itself is present.  Reading
              * it unconditionally is a heap over-read (found by
              * fuzz_rs03_parse).  When the CRC slot is past the readable
              * image, we cannot verify the sector -- treat it as an
              * erasure (damage), matching the documented "truncated image
              * is reported as damage, not crash" contract. */
+            crc_pos = (pos + L->sectors_per_layer - 1)
+                      % L->sectors_per_layer;
             {
-                unsigned long crc_sec = L->first_crc_pos + pos;
+                unsigned long crc_sec = L->first_crc_pos + crc_pos;
                 size_t crc_end =
                     (size_t) crc_sec * RS03_SECTOR_SIZE
                     + (size_t) layer * 4 + 4;
@@ -254,33 +278,64 @@ long rs03_verify(const unsigned char *img, size_t img_len,
     return ndamaged;
 }
 
-/* ---- Reed-Solomon erasure decode ------------------------------------ */
+/* ---- Reed-Solomon error+erasure decode ------------------------------ */
 /*
  * One codeword has 255 symbols, one per layer, at a fixed (pos, byte)
- * coordinate (spec sec 4.2).  Symbols 0..ndata-1 are data+CRC payload,
- * ndata..254 are parity.  Given the erased layer set we reconstruct the
- * erased symbols.
+ * coordinate (spec sec 4.2).  This is a faithful port of dvdisaster's
+ * decoder (src/rs03-fix.c, the per-byte error+erasure loop) and uses the
+ * SAME Reed-Solomon parameters as dvdisaster:
  *
- * Erasure-only decode with consecutive generator roots alpha^0.. :
- *   syndrome S_j = sum over all symbols i of  c_i * alpha^(i*j),
- *                  j = 0 .. nroots-1   (erased positions read as 0)
- *   erasure locator  Lambda(x) = prod (1 - X_k x),  X_k = alpha^(pos_k)
- *   Omega(x) = S(x) Lambda(x) mod x^nroots
- *   value_k  = - X_k * Omega(X_k^-1) / Lambda'(X_k^-1)
- * For up to nroots erasures this is exact.
+ *   - GF(2^8) over primitive polynomial 0x187 (gf256);
+ *   - first consecutive root  RS_FIRST_ROOT  = 112  (CCSDS choice);
+ *   - primitive element       RS_PRIM_ELEM   = 11;
+ *   - prim-th root of unity   RS_PRIMTH_ROOT = 116  (used by Chien search);
+ *   - codeword polynomial position of layer L is GF_FIELDMAX-1-L (254-L),
+ *     i.e. sym[0] (layer 0) is the highest-degree coefficient.
+ *
+ * These parameters were extracted from the pinned dvdisaster 0.79.x source
+ * (src/dvdisaster.h, src/galois.c, src/rs03-fix.c) and verified against a
+ * real augmented image: with FCR=112/PRIM=11 and the 254-L position map,
+ * the syndromes of every undamaged codeword vanish.  (The previous
+ * RS_FIRST_ROOT=0 / consecutive-power formulation did NOT match
+ * dvdisaster's parity -- it made every codeword look uncorrectable.)
+ *
+ * Berlekamp-Massey + Chien + Forney over the full 255-symbol codeword;
+ * the erasure positions seed the locator polynomial.  Corrections are
+ * applied (XOR) in place to `sym`.  Returns 0 if every flagged erasure
+ * was located and corrected, -1 otherwise (uncorrectable).
  */
 
-#define MAXSYM 255
+#define MAXSYM        255
+#define RS_FIRST_ROOT 112
+#define RS_PRIM_ELEM  11
+#define RS_PRIMTH     116           /* RS_PRIMTH_ROOT */
+
+#define MIN2(a, b)    ((a) < (b) ? (a) : (b))
+
+/* x mod GF_FIELDMAX, for x in [0, 2*GF_FIELDMAX). */
+static int mod_fm(int x)
+{
+    while (x >= GF_FIELDMAX) {
+        x -= GF_FIELDMAX;
+    }
+    return x;
+}
 
 static int decode_codeword(unsigned char *sym,        /* 255 symbols, in/out */
-                           const int *erased_pos,     /* indices, ascending  */
+                           const int *erased_pos,     /* layer indices, asc  */
                            int nerased,
                            int nroots)
 {
-    unsigned char synd[MAXSYM];
-    unsigned char lambda[MAXSYM + 1];
-    unsigned char omega[MAXSYM];
-    int i, j, k;
+    int syn[MAXSYM];
+    int lambda[MAXSYM + 1];
+    int b[MAXSYM + 1];
+    int t[MAXSYM + 1];
+    int omega[MAXSYM + 1];
+    int root[MAXSYM];
+    int reg[MAXSYM + 1];
+    int loc[MAXSYM];
+    int i, j, k, r, el, deg_lambda, deg_omega, count;
+    int discr_r, tmp, num1, num2, den, syn_error;
 
     if (nerased == 0) {
         return 0;
@@ -289,75 +344,185 @@ static int decode_codeword(unsigned char *sym,        /* 255 symbols, in/out */
         return -1;              /* uncorrectable */
     }
 
-    /* Syndromes S_j = sum_i sym_i * (alpha^i)^j, j=0..nroots-1.
-     * (erased symbols already read as their current value; the caller
-     * zeroes them before calling so they contribute nothing.) */
-    for (j = 0; j < nroots; j++) {
-        unsigned char s = 0;
-        for (i = 0; i < MAXSYM; i++) {
-            if (sym[i] != 0) {
-                /* sym_i * alpha^(i*j) */
-                s ^= gf_mul(sym[i], gf_exp(i * j));
+    /* Form the syndromes by Horner's rule over all 255 symbols, sym[0]
+     * being the highest-degree coefficient (rs03-fix.c:549-559). */
+    for (i = 0; i < nroots; i++) {
+        syn[i] = sym[0];
+    }
+    for (j = 1; j < GF_FIELDMAX; j++) {
+        int data = sym[j];
+        for (i = 0; i < nroots; i++) {
+            if (syn[i] == 0) {
+                syn[i] = data;
+            } else {
+                syn[i] = data ^ gf_alpha_to(
+                    mod_fm(gf_index_of((unsigned char) syn[i])
+                           + (RS_FIRST_ROOT + i) * RS_PRIM_ELEM));
             }
         }
-        synd[j] = s;
     }
 
-    /* Erasure locator Lambda(x) = prod_k (1 - X_k x), X_k = alpha^pos_k.
-     * Build coefficients (lambda[0] = 1). */
-    lambda[0] = 1;
-    for (i = 1; i <= nerased; i++) {
+    /* Convert syndromes to index form; check for a nonzero condition. */
+    syn_error = 0;
+    for (i = 0; i < nroots; i++) {
+        syn_error |= syn[i];
+        syn[i] = gf_index_of((unsigned char) syn[i]);
+    }
+    if (!syn_error) {
+        return 0;               /* already correct */
+    }
+
+    /* Initialise lambda to the erasure locator polynomial. */
+    for (i = 1; i <= nroots; i++) {
         lambda[i] = 0;
     }
-    for (k = 0; k < nerased; k++) {
-        unsigned char Xk = gf_exp(erased_pos[k]);
-        /* multiply current Lambda by (1 - Xk x): new_i = old_i - Xk*old_{i-1} */
-        for (i = k + 1; i >= 1; i--) {
-            lambda[i] ^= gf_mul(Xk, lambda[i - 1]);
-        }
-    }
-
-    /* Omega(x) = S(x) * Lambda(x) mod x^nroots. */
-    for (i = 0; i < nroots; i++) {
-        unsigned char o = 0;
-        for (j = 0; j <= i; j++) {
-            if (j < nroots && (i - j) <= nerased) {
-                o ^= gf_mul(synd[j], lambda[i - j]);
+    lambda[0] = 1;
+    if (nerased > 0) {
+        lambda[1] = gf_alpha_to(
+            mod_fm(RS_PRIM_ELEM * (GF_FIELDMAX - 1 - erased_pos[0])));
+        for (i = 1; i < nerased; i++) {
+            int u = mod_fm(RS_PRIM_ELEM * (GF_FIELDMAX - 1 - erased_pos[i]));
+            for (j = i + 1; j > 0; j--) {
+                tmp = gf_index_of((unsigned char) lambda[j - 1]);
+                if (tmp != GF_ALPHA0) {
+                    lambda[j] ^= gf_alpha_to(mod_fm(u + tmp));
+                }
             }
         }
-        omega[i] = o;
     }
 
-    /* Forney: for each erased position k,
-     *   Xinv = X_k^-1 = alpha^(-pos_k)
-     *   num  = Omega(Xinv)
-     *   den  = Lambda'(Xinv)   (formal derivative: odd-index terms)
-     *   val  = X_k * num / den          (RS_FIRST_ROOT = 0)
-     */
-    for (k = 0; k < nerased; k++) {
-        int pos = erased_pos[k];
-        unsigned char Xk = gf_exp(pos);
-        unsigned char Xinv = gf_inv(Xk);
-        unsigned char num = 0, den = 0, xi;
-        unsigned char val;
+    for (i = 0; i < nroots + 1; i++) {
+        b[i] = gf_index_of((unsigned char) lambda[i]);
+    }
 
-        /* evaluate Omega(Xinv) */
-        xi = 1;
-        for (i = 0; i < nroots; i++) {
-            num ^= gf_mul(omega[i], xi);
-            xi = gf_mul(xi, Xinv);
+    /* Berlekamp-Massey: extend the erasure locator to an error+erasure
+     * locator (rs03-fix.c:597-639). */
+    r = nerased;
+    el = nerased;
+    while (++r <= nroots) {
+        discr_r = 0;
+        for (i = 0; i < r; i++) {
+            if ((lambda[i] != 0) && (syn[r - i - 1] != GF_ALPHA0)) {
+                discr_r ^= gf_alpha_to(
+                    mod_fm(gf_index_of((unsigned char) lambda[i])
+                           + syn[r - i - 1]));
+            }
         }
-        /* Lambda'(Xinv): sum of odd-degree terms lambda[i]*Xinv^(i-1). */
-        xi = 1;                          /* Xinv^0 -> term i=1 */
-        for (i = 1; i <= nerased; i += 2) {
-            den ^= gf_mul(lambda[i], xi);
-            xi = gf_mul(xi, gf_mul(Xinv, Xinv));
+        discr_r = gf_index_of((unsigned char) discr_r);
+
+        if (discr_r == GF_ALPHA0) {
+            /* B(x) = x*B(x) */
+            for (i = nroots; i >= 1; i--) {
+                b[i] = b[i - 1];
+            }
+            b[0] = GF_ALPHA0;
+        } else {
+            t[0] = lambda[0];
+            for (i = 0; i < nroots; i++) {
+                if (b[i] != GF_ALPHA0) {
+                    t[i + 1] = lambda[i + 1]
+                             ^ gf_alpha_to(mod_fm(discr_r + b[i]));
+                } else {
+                    t[i + 1] = lambda[i + 1];
+                }
+            }
+            if (2 * el <= r + nerased - 1) {
+                el = r + nerased - el;
+                for (i = 0; i <= nroots; i++) {
+                    b[i] = (lambda[i] == 0) ? GF_ALPHA0
+                        : mod_fm(gf_index_of((unsigned char) lambda[i])
+                                 - discr_r + GF_FIELDMAX);
+                }
+            } else {
+                for (i = nroots; i >= 1; i--) {
+                    b[i] = b[i - 1];
+                }
+                b[0] = GF_ALPHA0;
+            }
+            for (i = 0; i <= nroots; i++) {
+                lambda[i] = t[i];
+            }
         }
-        if (den == 0) {
-            return -1;                   /* should not happen for valid erasures */
+    }
+
+    /* Convert lambda to index form and compute its degree. */
+    deg_lambda = 0;
+    for (i = 0; i < nroots + 1; i++) {
+        lambda[i] = gf_index_of((unsigned char) lambda[i]);
+        if (lambda[i] != GF_ALPHA0) {
+            deg_lambda = i;
         }
-        val = gf_mul(Xk, gf_div(num, den));
-        sym[pos] = val;
+    }
+
+    /* Chien search for the roots of lambda(x). */
+    for (i = 1; i < nroots + 1; i++) {
+        reg[i] = lambda[i];
+    }
+    count = 0;
+    k = RS_PRIMTH - 1;
+    for (i = 1; i <= GF_FIELDMAX; i++, k = mod_fm(k + RS_PRIMTH)) {
+        int q = 1;          /* lambda[0] is always 0 in index form path */
+        for (j = deg_lambda; j > 0; j--) {
+            if (reg[j] != GF_ALPHA0) {
+                reg[j] = mod_fm(reg[j] + j);
+                q ^= gf_alpha_to(reg[j]);
+            }
+        }
+        if (q != 0) {
+            continue;       /* not a root */
+        }
+        root[count] = i;
+        loc[count] = k;
+        if (++count == deg_lambda) {
+            break;
+        }
+    }
+
+    /* deg(lambda) != #roots => uncorrectable. */
+    if (deg_lambda != count) {
+        return -1;
+    }
+
+    /* Evaluator omega(x) = syn(x)*lambda(x) mod x^nroots (index form). */
+    deg_omega = deg_lambda - 1;
+    for (i = 0; i <= deg_omega; i++) {
+        tmp = 0;
+        for (j = i; j >= 0; j--) {
+            if ((syn[i - j] != GF_ALPHA0) && (lambda[j] != GF_ALPHA0)) {
+                tmp ^= gf_alpha_to(mod_fm(syn[i - j] + lambda[j]));
+            }
+        }
+        omega[i] = gf_index_of((unsigned char) tmp);
+    }
+
+    /* Forney: compute and apply each error/erasure value. */
+    for (j = count - 1; j >= 0; j--) {
+        num1 = 0;
+        for (i = deg_omega; i >= 0; i--) {
+            if (omega[i] != GF_ALPHA0) {
+                num1 ^= gf_alpha_to(mod_fm(omega[i] + i * root[j]));
+            }
+        }
+        num2 = gf_alpha_to(
+            mod_fm(root[j] * (RS_FIRST_ROOT - 1) + GF_FIELDMAX));
+        den = 0;
+        /* lambda[i+1] for i even is the formal derivative of lambda. */
+        for (i = MIN2(deg_lambda, nroots - 1) & ~1; i >= 0; i -= 2) {
+            if (lambda[i + 1] != GF_ALPHA0) {
+                den ^= gf_alpha_to(mod_fm(lambda[i + 1] + i * root[j]));
+            }
+        }
+        if (num1 != 0) {
+            int location = loc[j];
+            if (location < 0 || location >= MAXSYM || den == 0) {
+                return -1;
+            }
+            sym[location] ^= gf_alpha_to(
+                mod_fm(gf_index_of((unsigned char) num1)
+                       + gf_index_of((unsigned char) num2)
+                       + GF_FIELDMAX
+                       - gf_index_of((unsigned char) den)));
+        }
     }
 
     return 0;
@@ -398,17 +563,15 @@ long rs03_fix(unsigned char *img, size_t img_len,
             continue;
         }
 
-        /* Repair each byte-offset's codeword. */
+        /* Repair each byte-offset's codeword.  Like dvdisaster, the
+         * decoder keeps the (corrupted) erased bytes in place and applies
+         * XOR corrections -- the erasure positions seed the locator. */
         for (b = 0; b < RS03_SECTOR_SIZE; b++) {
             unsigned char sym[MAXSYM];
             int i;
             for (layer = 0; layer < GF_FIELDMAX; layer++) {
                 unsigned long sec = rs03_sector_index(L, layer, pos);
                 sym[layer] = img[(size_t) sec * RS03_SECTOR_SIZE + b];
-            }
-            /* Zero the erased symbols (their on-disc bytes are garbage). */
-            for (i = 0; i < nerased; i++) {
-                sym[erased_pos[i]] = 0;
             }
             if (decode_codeword(sym, erased_pos, nerased, L->nroots) != 0) {
                 /* uncorrectable for this codeword; count once per pos. */

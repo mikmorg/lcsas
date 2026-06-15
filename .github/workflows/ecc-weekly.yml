@@ -48,10 +48,10 @@ jobs:
         run: make dev
       - name: RS03 repair proof + dvdisaster cross-conformance
         # Repair proof: below-threshold damage repairs byte-identical, above
-        # fails loud. Cross-conformance: lcsas-ecc reads real dvdisaster RS03
-        # parity -- currently xfail(strict) pending issue #321 (interleaving
-        # not yet conformant); -rX prints the xfail reason. When the fix lands
-        # the case XPASSes -> strict xfail fails this job -> drop the marker.
+        # fails loud. Cross-conformance (FMT-01, #321 closed): lcsas-ecc reads
+        # real dvdisaster RS03 parity byte-exactly -- this is now a HARD GATE
+        # (no longer xfail). A red run here means the in-house decoder has
+        # diverged from dvdisaster's format and must be fixed before release.
         run: |
           echo "lcsas-ecc on PATH: $(command -v lcsas-ecc || echo MISSING)"
           LCSAS_ECC_REPAIR=1 pytest tests/integration/test_ecc_repair.py -v -rX -m integration

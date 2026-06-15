@@ -241,14 +241,6 @@ def _resolve_lcsas_ecc() -> str | None:
     return None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="lcsas-ecc is not yet RS03-conformant with real dvdisaster: it "
-    "parses the geometry but its CRC/ECC layer interleaving diverges, so a "
-    "freshly dvdisaster-augmented image verifies as fully damaged. Tracking: "
-    "https://github.com/mikmorg/lcsas/issues/321. strict=True so the fix's "
-    "XPASS fails loud -- remove this marker and close #321 when conformant.",
-)
 def test_lcsas_ecc_repairs_dvdisaster_augmented_image(tmp_path: Path) -> None:
     """Cross-conformance: the in-house lcsas-ecc decoder repairs an image
     that the REAL dvdisaster augmented (FMT-01).
@@ -258,9 +250,13 @@ def test_lcsas_ecc_repairs_dvdisaster_augmented_image(tmp_path: Path) -> None:
     Opt-in via LCSAS_ECC_REPAIR=1 (shares the slow-augment gate above) and
     additionally requires a runnable lcsas-ecc binary.
 
-    XFAIL (strict, #321): lcsas-ecc currently misreads real dvdisaster RS03
-    parity layout. When the conformance fix lands this XPASSes and strict
-    xfail turns it into a failure -- the signal to drop the marker.
+    FMT-01 / #321: this was the conformance gate. lcsas-ecc now reads
+    dvdisaster's RS03 parity exactly -- the un-inverted CRC, the chain-back
+    CRC-layer ordering, and the RS(255) decoder parameterised to
+    dvdisaster's FCR=112 / PRIM_ELEM=11 / 254-L position convention -- so a
+    freshly dvdisaster-augmented image verifies clean, and damage within
+    capacity is repaired byte-identically. This is a hard gate (no longer
+    xfail).
     """
     from lcsas.ecc.dvdisaster import LcsasEccRunner
 

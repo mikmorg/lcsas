@@ -35,9 +35,22 @@ void gf_init(void)
     /* alpha^255 == 1 == alpha^0; index_of[0] is the "log of zero"
      * sentinel (dvdisaster uses GF_FIELDMAX here so that adding logs
      * never accidentally lands on a valid index for a zero operand;
-     * the gf_mul guard below makes the value moot, but keep it). */
+     * the gf_mul guard below makes the value moot, but keep it).
+     * alpha_to[GF_ALPHA0] == 0 mirrors dvdisaster (galois.c:72) so the
+     * ported decoder's `alpha_to[mod_fieldmax(...)]` matches exactly. */
     index_of[0] = GF_FIELDMAX;
+    alpha_to[GF_ALPHA0] = 0;
     gf_ready = 1;
+}
+
+int gf_index_of(unsigned char a)
+{
+    return index_of[a];
+}
+
+unsigned char gf_alpha_to(int e)
+{
+    return alpha_to[e];
 }
 
 unsigned char gf_mul(unsigned char a, unsigned char b)
