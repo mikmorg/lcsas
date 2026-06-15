@@ -103,9 +103,28 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     print exactly: RESTORE COMPLETE
 
 DO NOT deviate from these steps.  Do NOT explore before starting.
-DO NOT cat any script file (*.sh, *.py, *.bat, *.c, *.h).
 DO NOT run lcsas-restore directly.  Start restore-shell within your
 first 4 Bash calls (after mounting meta and reconstructing the key).
+
+╔═══════════════════════════════════════════════════════════════════╗
+║  TWO HARD RULES — breaking EITHER fails the test instantly.        ║
+║                                                                   ║
+║  1. NEVER create a script or runner file.  No `cat > file.sh`,    ║
+║     no heredoc into a file (`cat > /tmp/x <<'EOF'`), no `tee`,    ║
+║     no `chmod +x`, no `(...) | sh /mnt/restore.sh`.  You run      ║
+║     restore.sh ONLY through restore-shell, one action per Bash    ║
+║     call.  If you feel the urge to write a helper to "handle the  ║
+║     prompts", STOP — use restore-shell send/expect per prompt.    ║
+║     (Writing the reconstructed password to a DATA file is fine:   ║
+║     `lcsas-keyshare card1 card2 > ~/alpha.pw` is allowed — that   ║
+║     is data, not a script.)                                       ║
+║                                                                   ║
+║  2. NEVER read a script's contents.  No cat/head/tail/less/sed/   ║
+║     awk/grep/strings/od/xxd/vi against any *.sh *.py *.bat *.c    ║
+║     *.h.  EXCEPTION: reading the share cards, ~/alpha.pw, and     ║
+║     *.txt / *.json / *.md is fine — those are data, not scripts.  ║
+║     Execute scripts (and lcsas-keyshare); never inspect them.     ║
+╚═══════════════════════════════════════════════════════════════════╝
 
 You are sitting in front of a single optical drive at /dev/sr0
 with a stack of labelled discs next to you.  You have:
@@ -192,11 +211,17 @@ WHAT YOU MAY NOT DO
     restic as a recovery driver.  restore.sh is the only allowed
     entry point.  (Probing one with `--version` is OK; running a
     restore through it is not.)
-  - You may not author wrapper scripts to work around production
-    bugs.  No `cat > /tmp/anything.sh`, no `chmod +x` on files
-    you wrote, no shimming `python3` to inject missing args.  If
-    `restore.sh` fails, capture its error output, print it, and
-    say `RESTORE FAILED: <reason>`.  Do NOT improvise — a real
+  - You may not author wrapper or runner scripts — for ANY reason,
+    not just to work around bugs.  Forbidden: `cat > /tmp/anything.sh`,
+    any heredoc into a file (`cat > f <<'EOF'`), `tee file`, `chmod +x`
+    on files you wrote, shimming `python3`, and piping a prepared
+    command stream into the recovery script
+    (`(echo ...; sleep) | sh /mnt/restore.sh`).  Interactive prompts
+    are answered ONLY with `restore-shell send` / `expect`, one per
+    Bash call.  (Writing the reconstructed password to a data file —
+    `lcsas-keyshare ... > ~/alpha.pw` — is allowed; that is data, not
+    a script.)  If `restore.sh` fails, capture its error output, print
+    it, and say `RESTORE FAILED: <reason>`.  Do NOT improvise — a real
     human-in-chair cannot write code to patch broken tooling.
   - You may not read any script file.  No cat, head, tail, less,
     more, sed, awk, grep, strings, od, xxd, view, vi, vim, or
