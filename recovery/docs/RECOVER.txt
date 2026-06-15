@@ -172,21 +172,45 @@ PHYSICAL RECOVERY (CORRUPT MEDIUM)
 
 If the disc returns I/O errors:
 
-  1. Use ddrescue to make a best-effort copy:
-         ddrescue /dev/sr0 /tmp/disc.iso /tmp/disc.log
-     Repeat passes if /tmp/disc.log shows recovered sectors.
+  1. Make a best-effort image of the scratched disc.  No special tool
+     is required -- plain dd skips over unreadable sectors and pads
+     them with zeros so the image stays the right size for ECC repair:
 
-  2. The disc is augmented with DVDisaster RS03 ECC.  If you have
-     dvdisaster installed:
-         dvdisaster -i /tmp/disc.iso -f
+         dd if=/dev/sr0 of=/tmp/disc.iso conv=noerror,sync bs=2048
+
+     If you happen to have GNU ddrescue installed it does a better job
+     on a badly-scratched disc (multiple passes, logged progress):
+
+         ddrescue /dev/sr0 /tmp/disc.iso /tmp/disc.log
+
+     ddrescue is NOT required and is NOT bundled -- dd is enough.
+
+  2. Repair the image with the BUNDLED in-house ECC tool.  Every disc
+     is augmented with DVDisaster RS03 parity (~15% of capacity), and
+     the meta disc ships its own RS03 repair tool -- lcsas-ecc -- so
+     you do NOT need to install dvdisaster or anything else.  The
+     easiest path is the one-shot helper, which scans the image and
+     offers to repair it:
+
+         sh /mnt/restore.sh --check-disc /tmp/disc.iso
+
+     (Or call the tool directly:
+         /mnt/recovery/bin/<arch>/lcsas-ecc verify /tmp/disc.iso
+         /mnt/recovery/bin/<arch>/lcsas-ecc fix    /tmp/disc.iso
+      -- where <arch> is your machine's target dir under recovery/bin/.)
+
      With the default 15% redundancy, roughly 13-15% of unreadable
      sectors can be repaired.  Higher configured redundancy raises
      this proportionally (augmented mode may exceed the configured
-     figure, so treat 13-15% as a conservative floor).  Treat ANY
-     read error as a signal to re-burn -- do not wait.
+     figure, so treat 13-15% as a conservative floor).  If damage
+     exceeds the parity, lcsas-ecc says so and refuses a partial
+     repair rather than handing back a silently-broken image.  Treat
+     ANY read error as a signal to re-burn -- do not wait.
 
   3. After ECC repair, mount the recovered ISO and continue with the
-     normal cascade above.
+     normal cascade above.  (Tier 1 also re-checks every blob it reads
+     with a Poly1305 MAC + SHA-256 hash and rejects corrupt data, so a
+     repair that didn't fully take is caught, never silently restored.)
 
 PASSWORD RECOVERY
 

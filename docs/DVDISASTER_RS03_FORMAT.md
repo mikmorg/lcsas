@@ -1,13 +1,25 @@
 # dvdisaster RS03 Error Correction Format
 
 > Bundled with LCSAS archive volumes for long-term survivability.
-> This document enables a future programmer to understand and
-> potentially re-implement RS03 ECC verification/repair if the
-> `dvdisaster` binary is no longer available.
+> This document specifies the RS03 format that LCSAS's OWN in-house
+> ECC tool — `lcsas-ecc` (a C89 RS03 verify/repair decoder, cross-built
+> for all six approved targets and bundled on every meta-volume, see
+> `recovery/src/lcsas-ecc/`) — implements.  It also lets any future
+> programmer re-implement RS03 verification/repair from scratch should
+> both `lcsas-ecc` and the abandoned upstream `dvdisaster` binary be
+> unavailable.  At restore time the heir does NOT need this document or
+> dvdisaster: `restore.sh --check-disc <image>` drives the bundled
+> `lcsas-ecc` directly.
 >
-> Sources: [dvdisaster documentation](https://dvdisaster.jcea.es/),
-> [dvdisaster source code](https://github.com/speed47/dvdisaster)
-> (GPL v3 license).
+> Source of record: the pinned dvdisaster source tarball
+> (`dvdisaster/src/dvdisaster-0.79.10-pl6.tar.gz`, pinned in
+> `recovery/UPSTREAM.sha256`, GPL v3), which LCSAS ships and audits on
+> every meta-volume under `tools/src/` — not a third-party download.
+> The corresponding public mirror of that source is
+> [github.com/speed47/dvdisaster](https://github.com/speed47/dvdisaster).
+> (Upstream dvdisaster is abandoned — last release 2020 — so no
+> external download or fan-maintained mirror is part of the recovery
+> path.)
 >
 > **This spec is definitive for dvdisaster 0.79.x as pinned in
 > `recovery/UPSTREAM.sha256`** (`dvdisaster/src/dvdisaster-0.79.10-pl6.tar.gz`).

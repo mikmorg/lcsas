@@ -227,6 +227,49 @@ def test_verify_io_error_exits_three(tmp_path: Path) -> None:
     assert "ECC-CALL: fix" not in res.stdout
 
 
+# ── docs-vs-reality: the burned manuals name the bundled repair tool ──
+
+
+_DOCS = REPO_ROOT / "recovery" / "docs"
+_RECOVER = _DOCS / "RECOVER.txt"
+_RECOVER_WIN = _DOCS / "RECOVER_WINDOWS.txt"
+_TIERS = _DOCS / "TIERS.txt"
+
+
+def test_restore_sh_contains_check_disc_dispatch() -> None:
+    """The script really wires --check-disc → lcsas-ecc verify/fix."""
+    src = RESTORE_SH.read_text(encoding="utf-8")
+    assert "--check-disc" in src
+    assert "lcsas-ecc" in src
+    assert "verify" in src and "fix" in src
+
+
+def test_recover_txt_names_bundled_repair_tool() -> None:
+    text = _RECOVER.read_text(encoding="utf-8")
+    assert "lcsas-ecc" in text, "RECOVER.txt must name the bundled repair tool"
+    assert "--check-disc" in text, "RECOVER.txt must point at restore.sh --check-disc"
+
+
+def test_recover_windows_names_bundled_repair_tool_no_fanmirror() -> None:
+    text = _RECOVER_WIN.read_text(encoding="utf-8")
+    assert "lcsas-ecc" in text
+    assert "--check-disc" in text
+    # The abandoned-upstream fan mirror must be gone everywhere.
+    assert "jcea.es" not in text.lower()
+
+
+def test_tiers_txt_names_lcsas_ecc() -> None:
+    text = _TIERS.read_text(encoding="utf-8")
+    assert "lcsas-ecc" in text
+
+
+def test_no_jcea_mirror_anywhere_in_recovery_docs() -> None:
+    for doc in _DOCS.glob("*.txt"):
+        assert "jcea.es" not in doc.read_text(encoding="utf-8").lower(), (
+            f"{doc.name} still references the abandoned jcea.es fan mirror"
+        )
+
+
 # ── triple auto-detection: no LCSAS_TARGET → uname-derived triple ─────
 
 

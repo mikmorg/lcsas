@@ -102,16 +102,31 @@ The cascade chooses WHICH TOOL reads the bytes; it assumes the bytes
 themselves are intact.  That assumption is upheld by two independent
 guards applied before/within any tier:
 
-  * DVDisaster RS03 ECC, wrapped around every burned image, repairs
-    bit-rotted sectors back to their original bytes.
+  * RS03 ECC parity (~15% of capacity), wrapped around every burned
+    image, repairs bit-rotted / scratched sectors back to their
+    original bytes.  The parity is spent at recovery time by the
+    BUNDLED in-house repair tool ``lcsas-ecc`` -- a small C89 RS03
+    decoder cross-built for all six approved targets and shipped on the
+    meta disc next to ``lcsas-restore`` -- so the repair half of this
+    layer needs NOTHING installed (no dvdisaster, no ddrescue).  The
+    heir-facing entry point is ``restore.sh --check-disc <image>``
+    (``restore.bat --check-disc`` on Windows): it runs
+    ``lcsas-ecc verify`` and, on damage, offers ``lcsas-ecc fix``.
+    The parity format is dvdisaster's RS03, unchanged, so a newer meta
+    disc's ``lcsas-ecc`` repairs the entire already-burned back-catalog.
   * The tier-1 binary then authenticates every blob (Poly1305 MAC +
     SHA-256 content hash) and REFUSES corrupt data rather than
     propagating it -- so disc corruption is either repaired by ECC or
     rejected loudly, never silently restored.
 
-The RS03 repair path is validated end-to-end against the real
-dvdisaster binary by ``tests/integration/test_ecc_repair.py``
-(opt-in: ``LCSAS_ECC_REPAIR=1 pytest ... -m integration``):
+The RS03 repair path is validated two ways.  An always-on, no-dvdisaster
+self-repair gate (``tests/e2e/test_ecc_selfrepair_no_dvdisaster.py``)
+corrupts an augmented image and repairs it with ONLY the bundled
+``lcsas-ecc``, asserting byte-identical extraction.  A cross-conformance
+gate against the real dvdisaster binary
+(``tests/integration/test_ecc_repair.py``, opt-in:
+``LCSAS_ECC_REPAIR=1 pytest ... -m integration``) proves the in-house
+decoder reads dvdisaster-written parity:
 
   * test_rs03_repairs_bitrot_byte_identical -- augment an image with
     RS03 ECC, overwrite data sectors (simulated bit-rot), repair, and

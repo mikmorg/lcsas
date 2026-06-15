@@ -473,14 +473,36 @@ If the disc itself is unreadable (cracks, scratches, drive errors):
 
   1. Try a different optical drive (drives differ in how aggressively
      they retry weak sectors).
-  2. The discs include DVDisaster RS03 error-correction data.  On
-     Windows, install dvdisaster from https://dvdisaster.jcea.es
-     (or your distro's equivalent), then:
-        dvdisaster --read --image=disc.iso
-        dvdisaster --fix --image=disc.iso
-     Then mount the recovered .iso via Windows' built-in mount
+  2. The discs include RS03 error-correction data (~15% of capacity),
+     and the meta disc ships its OWN repair tool -- lcsas-ecc.exe --
+     so you do NOT need to install dvdisaster or any other program.
+
+     a. Make an image of the scratched disc.  Use any imaging tool;
+        the free, open-source ImgBurn (Read mode: Disc -> Image) is a
+        common choice on Windows.  Save it as, e.g., C:\temp\disc.iso.
+
+     b. From a CMD prompt at the disc root, run the bundled helper,
+        which scans the image and offers to repair it in place:
+
+           restore.bat --check-disc C:\temp\disc.iso
+
+        (Or call the tool directly:
+           recovery\bin\<arch>\lcsas-ecc.exe verify C:\temp\disc.iso
+           recovery\bin\<arch>\lcsas-ecc.exe fix    C:\temp\disc.iso
+         -- <arch> is your machine's dir under recovery\bin\, normally
+         x86_64-pc-windows-gnu.)
+
+     If damage exceeds the parity, lcsas-ecc reports it and refuses a
+     partial repair rather than returning a silently-broken image.
+
+  3. Then mount the recovered .iso via Windows' built-in mount
      (right-click -> Mount) and re-run restore.bat against the
      mounted drive.
-  3. If you have multiple copies of the same volume, any single
+  4. If you have multiple copies of the same volume, any single
      readable copy is sufficient.  The on-disc binaries and packs
      are bit-identical across copies.
+
+The in-house repair tool (lcsas-ecc) is built from source we ship and
+audit on the meta disc; the dvdisaster RS03 reference source is pinned
+in recovery/UPSTREAM.sha256 and travels on the disc too.  There is no
+dependency on any external download or fan-maintained mirror.
