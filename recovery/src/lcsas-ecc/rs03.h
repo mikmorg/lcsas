@@ -82,6 +82,43 @@ long rs03_verify(const unsigned char *img, size_t img_len,
                  const rs03_layout *L, unsigned char *bad);
 
 /*
+ * Compute the RS03 augmented-image layout for a plain data image of
+ * `data_sectors` 2048-byte sectors, choosing the smallest fitting medium
+ * from dvdisaster's ladder (CD -> DVD -> DVD9 -> BD25 -> BD50 -> BDXL) such
+ * that the codec yields >= 8 parity roots.  This is a faithful port of
+ * dvdisaster's CalcRS03Layout (ECC_IMAGE target, src/rs03-common.c) and is
+ * the layout the encoder pads to so real dvdisaster recognises the result.
+ *
+ * Fills *out (ndata, nroots, sectors_per_layer, and all derived positions).
+ * Returns 0 on success, -1 if `data_sectors` is 0 or exceeds the largest
+ * medium (would yield < 8 roots even on a quad-layer BDXL).
+ */
+int rs03_calc_layout(unsigned long data_sectors, rs03_layout *out);
+
+/*
+ * Encode an RS03-augmented image (the "augment" / burn side).
+ *
+ * `data` is the plain data image (an ISO) of `data_len` bytes; `in_last`
+ * is the number of valid bytes in its final 2048-byte sector (2048 when
+ * the image is a whole number of sectors).  On success *out points to a
+ * freshly malloc'd full-medium image of *out_len bytes (caller frees) that
+ * contains: the data sectors (zero-padded to a sector boundary), the RS03
+ * ECC header at sector data_sectors (byte-for-byte what dvdisaster writes,
+ * so `dvdisaster -t` recognises it), data padding, the CRC layer, and the
+ * Reed-Solomon parity layers.  The output is bidirectionally conformant:
+ * both real dvdisaster and rs03_verify/rs03_fix accept and repair it.
+ *
+ * Returns 0 on success; -1 on a layout/size error; -2 on out-of-memory; a
+ * positive count if the internal parity solve left codewords uncorrected
+ * (should never happen for a well-formed full medium -- treated as error).
+ *
+ * gf_init() must have been called first.
+ */
+int rs03_augment(const unsigned char *data, size_t data_len,
+                 unsigned int in_last,
+                 unsigned char **out, size_t *out_len);
+
+/*
  * Repair damaged sectors in `img` (modified in place).  `bad` is the
  * per-sector erasure flag array produced by rs03_verify (or supplied by
  * the caller from drive read-error reports), length total_sectors.

@@ -300,3 +300,64 @@ def test_lcsas_ecc_repairs_dvdisaster_augmented_image(tmp_path: Path) -> None:
             f"{name}: not recovered byte-identical after lcsas-ecc repair "
             f"of a dvdisaster-augmented image"
         )
+
+
+def test_dvdisaster_repairs_lcsas_ecc_augmented_image(tmp_path: Path) -> None:
+    """Reverse cross-conformance (FMT-01 phase 2): the REAL dvdisaster
+    recognises, verifies, and repairs an image that the in-house
+    ``lcsas-ecc augment`` encoded -- byte-identically.
+
+    The forward test proves lcsas-ecc reads dvdisaster's parity; this proves
+    dvdisaster reads OURS, i.e. ``lcsas-ecc augment`` writes a genuinely
+    dvdisaster-compatible full-medium RS03 image (right layout, header, CRC
+    layer and parity). That is what lets the burn pipeline drop dvdisaster
+    from the encode side while the produced discs stay repairable by the
+    real tool too.
+
+    Opt-in via LCSAS_ECC_REPAIR=1 (augment pads to a full ~700 MB medium)
+    and requires a runnable lcsas-ecc binary.
+    """
+    from lcsas.ecc.dvdisaster import LcsasEccRunner
+
+    ecc_bin = _resolve_lcsas_ecc()
+    if ecc_bin is None:
+        pytest.skip("no runnable lcsas-ecc (build: make -C recovery ecc-arches)")
+
+    dvd = SubprocessDVDisasterRunner()
+    ecc = LcsasEccRunner(ecc_binary=ecc_bin)
+
+    src = tmp_path / "src"
+    src.mkdir()
+    rng = random.Random(RNG_SEED + 11)
+    manifest: dict[str, str] = {}
+    for i in range(NUM_FILES):
+        data = rng.randbytes(rng.randint(100_000, 200_000))
+        name = f"file_{i:03d}.bin"
+        (src / name).write_bytes(data)
+        manifest[name] = hashlib.sha256(data).hexdigest()
+
+    # Augment with the IN-HOUSE tool, then verify with the REAL dvdisaster.
+    iso = tmp_path / "vol.iso"
+    _make_iso(src, iso)
+    ecc.augment_iso(iso, redundancy_pct=REDUNDANCY_PCT)
+    assert dvd.verify_iso(iso) is True, (
+        "real dvdisaster must recognise + verify the lcsas-ecc-augmented "
+        "image clean (not 'medium.ecc: not present')"
+    )
+
+    # Damage, then let the REAL dvdisaster detect + repair using OUR parity.
+    _damage_sectors(iso, DAMAGE_SECTORS, DAMAGE_START_SECTOR)
+    assert dvd.verify_iso(iso) is False, "dvdisaster must detect the damage"
+    assert dvd.repair_iso(iso) is True, (
+        "real dvdisaster must repair the lcsas-ecc-augmented image"
+    )
+
+    # Ground truth: byte-identical extraction after dvdisaster's repair.
+    out = tmp_path / "extracted"
+    _extract(iso, out)
+    recovered = {p.name: _sha(p) for p in out.iterdir() if p.is_file()}
+    for name, expected in manifest.items():
+        assert recovered.get(name) == expected, (
+            f"{name}: not recovered byte-identical after dvdisaster repaired "
+            f"a lcsas-ecc-augmented image"
+        )

@@ -223,17 +223,19 @@ class LcsasEccRunner(SubprocessRunnerBase):
 
     Implements the :class:`DVDisasterRunner` protocol so operator-side
     ``lcsas verify`` / ``restore exec`` keep working when no dvdisaster is
-    installed — the same C89 RS03 decoder that ships on the meta-volume
-    tier-1 path (FMT-01).  The *augment* (encode) side is not implemented
-    here: writing parity is still dvdisaster's job until the optional
-    ``lcsas-ecc augment`` phase-2 encoder lands.  The format is identical,
-    so this reads/repairs any dvdisaster-written RS03 image.
+    installed — the same C89 RS03 codec that ships on the meta-volume
+    tier-1 path (FMT-01).  As of FMT-01 phase 2 it *also* encodes
+    (``augment_iso``), so the burn pipeline can run dvdisaster-free.  The
+    format is identical to dvdisaster's, so this reads/repairs/writes any
+    dvdisaster-compatible RS03 image (bidirectionally conformant: real
+    ``dvdisaster -t`` recognises and repairs ``lcsas-ecc``-augmented
+    output, and vice versa).
 
     ``lcsas-ecc`` exit-code contract (see recovery/src/lcsas-ecc/main.c):
-      0  success (verify: no damage; fix: fully repaired / no repair needed)
+      0  success (verify: no damage; fix/augment: succeeded / no repair needed)
       1  damage found (verify) / uncorrectable codewords remain (fix)
       2  no RS03 ECC header (not an augmented image)
-      3  usage / I/O / structural error
+      3  usage / I/O / structural / encode error
     """
 
     def __init__(
@@ -247,16 +249,71 @@ class LcsasEccRunner(SubprocessRunnerBase):
         self,
         iso_path: Path,
         redundancy_pct: int = 15,
+        timeout: int = 7200,
     ) -> None:
-        """Not supported: lcsas-ecc is decode-only (verify/repair).
+        """Augment an ISO with RS03 ECC using the in-house ``lcsas-ecc``.
 
-        RS03 *encoding* remains dvdisaster's responsibility in the burn
-        pipeline.  Callers needing augment must use
-        :class:`SubprocessDVDisasterRunner`.
+        Writes a dvdisaster-compatible RS03-augmented full-medium image
+        (FMT-01 phase 2): the data sectors, the RS03 ECC header, the CRC
+        layer, and the Reed-Solomon parity layers, padded to the smallest
+        fitting medium on dvdisaster's ladder.  The result is recognised
+        and repairable by real ``dvdisaster -t``/``-f`` as well as by
+        ``lcsas-ecc verify``/``fix``, so the burn pipeline no longer needs
+        dvdisaster installed.
+
+        Operates on a temporary copy and atomically replaces the original
+        on success, mirroring :meth:`SubprocessDVDisasterRunner.augment_iso`.
+
+        ``redundancy_pct`` is deprecated and **ignored**: RS03 augmented
+        images cannot take a redundancy setting — the codec pads to the
+        smallest fitting medium and the padding *is* the effective
+        redundancy.  The parameter is kept for signature stability only.
         """
-        raise NotImplementedError(
-            "lcsas-ecc does not encode RS03 parity (decode-only); "
-            "use dvdisaster for the augment step."
+        if not iso_path.exists():
+            raise FileNotFoundError(f"ISO file not found: {iso_path}")
+
+        # Pre-flight: the augmented image is padded up to a full medium, so
+        # budget the padded size (not the raw ISO) plus a safety margin.
+        iso_size = iso_path.stat().st_size
+        try:
+            padded_size = smallest_fitting_medium_bytes(iso_size)
+        except ValueError as exc:
+            raise OSError(str(exc)) from exc
+        disk_free = shutil.disk_usage(iso_path.parent).free
+        if disk_free < padded_size + 1_048_576:
+            raise OSError(
+                f"Insufficient disk space to augment '{iso_path.name}': "
+                f"{disk_free:,} bytes free, {padded_size + 1_048_576:,} "
+                f"bytes needed for the RS03 full-medium image."
+            )
+
+        tmp = iso_path.with_suffix(".iso.ecc.tmp")
+        cmd = [self._binary, "augment", str(iso_path), "--out", str(tmp)]
+        try:
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, check=False,
+                    env=self._env(), timeout=timeout,
+                )
+            except subprocess.TimeoutExpired as exc:
+                self._handle_timeout("lcsas-ecc", "ECC augmentation", exc)
+            if result.returncode != 0:
+                self._raise_for_ecc_error("augment", iso_path, result)
+            import os
+            os.rename(tmp, iso_path)
+        except BaseException:
+            if tmp.exists():
+                tmp.unlink()
+            raise
+
+        final_size = iso_path.stat().st_size
+        effective_pct = (
+            (final_size - iso_size) / iso_size * 100 if iso_size else 0.0
+        )
+        _logger.info(
+            "RS03 ECC (lcsas-ecc): image padded to %s bytes "
+            "(~%.0f%% effective redundancy)",
+            f"{final_size:,}", effective_pct,
         )
 
     def verify_iso(
@@ -349,30 +406,29 @@ def select_ecc_runner(
        encode *and* decode and is the byte-exact tool that wrote the
        parity, so prefer it whenever present.
     2. Otherwise the in-house ``lcsas-ecc`` binary if it is on ``PATH`` —
-       a verify/repair-only fallback (decode-only) so a host *without*
-       dvdisaster still spends the burned RS03 parity instead of skipping
-       ECC entirely.  This is the whole point of FMT-01: the repair half
-       of the disc-integrity layer must not depend on an abandoned,
-       externally-installed tool.
+       the same C89 RS03 codec that ships on the meta-volume.  As of
+       FMT-01 phase 2 it covers *both* encode (``augment``) and decode
+       (verify/repair), so a host without dvdisaster can still write *and*
+       spend RS03 parity instead of skipping ECC entirely.  This is the
+       whole point of FMT-01: neither half of the disc-integrity layer may
+       depend on an abandoned, externally-installed tool.
     3. ``None`` when neither is available — the caller then degrades to a
        portable SHA-256 compare (detect-only) or logs "not verified".
 
     ``require_augment=True`` restricts the choice to runners that can
-    *write* parity (encode): only dvdisaster qualifies, because
-    :class:`LcsasEccRunner` is decode-only.  Use this on the burn
-    (augment) path so a missing dvdisaster is reported as such rather
-    than silently selecting a runner that cannot encode.
+    *write* parity (encode).  Both dvdisaster and ``lcsas-ecc`` now
+    qualify (the latter since FMT-01 phase 2), so the burn pipeline is
+    dvdisaster-free: it prefers real dvdisaster when present and otherwise
+    augments with the in-house tool.  ``None`` is returned only when
+    neither encoder is on ``PATH``.
 
     The returned object satisfies the :class:`DVDisasterRunner` protocol;
-    callers use ``verify_iso`` / ``repair_iso`` (and ``augment_iso`` only
-    when ``require_augment`` was set).
+    callers use ``verify_iso`` / ``repair_iso`` / ``augment_iso``.
     """
     if shutil.which("dvdisaster") is not None:
         return SubprocessDVDisasterRunner(tmpdir=tmpdir)
-    if require_augment:
-        # Only dvdisaster can encode; do not fall back to a decode-only
-        # runner for the augment path.
-        return None
     if shutil.which("lcsas-ecc") is not None:
+        # lcsas-ecc now encodes as well as decodes, so it satisfies the
+        # augment path too (require_augment no longer excludes it).
         return LcsasEccRunner(tmpdir=tmpdir)
     return None

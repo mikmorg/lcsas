@@ -2,9 +2,11 @@
  * main.c -- lcsas-ecc CLI: in-house dvdisaster RS03 verify/repair.
  *
  * Usage:
- *   lcsas-ecc info   <image>            print RS03 geometry
- *   lcsas-ecc verify <image>            scan CRC layer, report damage
- *   lcsas-ecc fix    <image> [--out F]  erasure-repair (in place or to F)
+ *   lcsas-ecc info    <image>            print RS03 geometry
+ *   lcsas-ecc verify  <image>            scan CRC layer, report damage
+ *   lcsas-ecc fix     <image> [--out F]  erasure-repair (in place or to F)
+ *   lcsas-ecc augment <image> [--out F]  write RS03-augmented full-medium
+ *                                        image (encode; in place or to F)
  *
  * Exit codes:
  *   0  success (verify: no damage; fix: fully repaired)
@@ -234,13 +236,60 @@ static int cmd_fix(const char *path, const char *out)
     return 0;
 }
 
+static int cmd_augment(const char *path, const char *out)
+{
+    unsigned char *data, *aug;
+    size_t data_len, aug_len;
+    unsigned int in_last;
+    int rc;
+
+    if (slurp(path, &data, &data_len) != 0) {
+        return 3;
+    }
+    if (data_len == 0) {
+        fprintf(stderr, "lcsas-ecc: %s is empty, cannot augment\n", path);
+        free(data);
+        return 3;
+    }
+
+    /* Bytes in the last data sector (2048 if the image is whole sectors). */
+    in_last = (unsigned int) (data_len % RS03_SECTOR_SIZE);
+    if (in_last == 0) {
+        in_last = RS03_SECTOR_SIZE;
+    }
+
+    rc = rs03_augment(data, data_len, in_last, &aug, &aug_len);
+    free(data);
+    if (rc == -2) {
+        fprintf(stderr, "lcsas-ecc: out of memory augmenting %s\n", path);
+        return 3;
+    }
+    if (rc != 0) {
+        fprintf(stderr,
+            "lcsas-ecc: cannot augment %s (image too large for the RS03 "
+            "medium ladder, or internal encode error)\n", path);
+        return 3;
+    }
+
+    if (dump(out ? out : path, aug, aug_len) != 0) {
+        free(aug);
+        return 3;
+    }
+    printf("AUGMENTED: %s -- RS03 ECC written (%lu sectors total) -> %s\n",
+           path, (unsigned long) (aug_len / RS03_SECTOR_SIZE),
+           out ? out : path);
+    free(aug);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     gf_init();
 
     if (argc < 3) {
         fprintf(stderr,
-            "usage: lcsas-ecc info|verify|fix <image> [--out FILE]\n");
+            "usage: lcsas-ecc info|verify|fix|augment <image> "
+            "[--out FILE]\n");
         return 3;
     }
 
@@ -256,6 +305,13 @@ int main(int argc, char **argv)
             out = argv[4];
         }
         return cmd_fix(argv[2], out);
+    }
+    if (strcmp(argv[1], "augment") == 0) {
+        const char *out = NULL;
+        if (argc >= 5 && strcmp(argv[3], "--out") == 0) {
+            out = argv[4];
+        }
+        return cmd_augment(argv[2], out);
     }
 
     fprintf(stderr, "lcsas-ecc: unknown command '%s'\n", argv[1]);

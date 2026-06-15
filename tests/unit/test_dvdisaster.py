@@ -301,10 +301,29 @@ class TestLcsasEccRunner:
         with pytest.raises(RuntimeError, match="no RS03 ECC header"):
             runner.repair_iso(self._iso(tmp_path))
 
-    def test_augment_not_supported(self, tmp_path):
-        runner = LcsasEccRunner()
-        with pytest.raises(NotImplementedError, match="decode-only"):
-            runner.augment_iso(self._iso(tmp_path))
+    def test_augment_invokes_lcsas_ecc(self, tmp_path):
+        """FMT-01 phase 2: augment_iso is now implemented (was a decode-only
+        NotImplementedError) -- it shells out to ``lcsas-ecc augment`` and
+        atomically replaces the original with the augmented image."""
+        iso = self._iso(tmp_path)
+
+        def _fake_run(cmd, **kw):
+            # The encoder writes the --out path; create it so the atomic
+            # rename onto the original succeeds under the mock.
+            out = cmd[cmd.index("--out") + 1]
+            with open(out, "wb") as fh:
+                fh.write(b"\x00" * 4096)
+            return MagicMock(returncode=0)
+
+        with (
+            patch("lcsas.ecc.dvdisaster.subprocess.run",
+                  side_effect=_fake_run) as mock_run,
+            patch("lcsas.ecc.dvdisaster.shutil.disk_usage",
+                  return_value=MagicMock(free=1_073_741_824)),
+        ):
+            LcsasEccRunner().augment_iso(iso)  # must not raise
+        cmd = mock_run.call_args[0][0]
+        assert "augment" in cmd and "--out" in cmd
 
     def test_verify_missing_file_raises(self, tmp_path):
         runner = LcsasEccRunner()
@@ -361,15 +380,17 @@ class TestSelectEccRunner:
         assert select_ecc_runner() is None
 
     @patch("lcsas.ecc.dvdisaster.shutil.which")
-    def test_require_augment_only_accepts_dvdisaster(self, mock_which):
+    def test_require_augment_accepts_lcsas_ecc(self, mock_which):
         from lcsas.ecc.dvdisaster import select_ecc_runner
 
-        # Only lcsas-ecc present, but augment needs an encoder → None,
-        # NOT a decode-only LcsasEccRunner (which cannot encode).
+        # FMT-01 phase 2: lcsas-ecc can now ENCODE (augment), so with only
+        # lcsas-ecc present require_augment=True returns the in-house runner
+        # (was None pre-phase-2, when the in-house tool was decode-only).
         mock_which.side_effect = lambda name: (
             "/opt/lcsas/lcsas-ecc" if name == "lcsas-ecc" else None
         )
-        assert select_ecc_runner(require_augment=True) is None
+        runner = select_ecc_runner(require_augment=True)
+        assert isinstance(runner, LcsasEccRunner)
 
     @patch("lcsas.ecc.dvdisaster.shutil.which")
     def test_require_augment_accepts_dvdisaster(self, mock_which):

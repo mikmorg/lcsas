@@ -20,6 +20,7 @@
 #include "rs03.h"
 #include "gf256.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- little-endian field readers ------------------------------------ */
@@ -525,6 +526,299 @@ static int decode_codeword(unsigned char *sym,        /* 255 symbols, in/out */
         }
     }
 
+    return 0;
+}
+
+/* ---- encode / augment ----------------------------------------------- */
+/*
+ * The augment (burn) side: take a plain data image (an ISO) and write a
+ * dvdisaster-compatible RS03-augmented full-medium image.  This makes the
+ * burn pipeline dvdisaster-free (FMT-01 phase 2).  The output is recognised
+ * AND repaired by real dvdisaster as well as by rs03_verify/rs03_fix.
+ *
+ * Approach: port dvdisaster's CalcRS03Layout (ECC_IMAGE) to select the
+ * medium + ndata/nroots/sectorsPerLayer, then lay down exactly what
+ * dvdisaster's expand_image()/encoder writes -- the data sectors, the
+ * 4096-byte EccHeader at sector dataSectors (with selfCRC computed the
+ * dvdisaster way), the data-padding sectors, the CRC layer (chain-back
+ * ordering), and the parity layers (solved by treating them as erasures
+ * and reusing the conformant rs03_fix decoder -- the same proven trick the
+ * test fixture uses, so no separate RS encoder is needed).
+ */
+
+/* dvdisaster medium-size ladder (src/dvdisaster.h), in 2048-byte sectors. */
+#define RS03_CDR_SIZE      (351L * 1024L)
+#define RS03_DVD_SL_SIZE   2295104L
+#define RS03_DVD_DL_SIZE   4171712L
+#define RS03_BD_SL_SIZE    11826176L
+#define RS03_BD_DL_SIZE    23652352L
+#define RS03_BDXL_TL_SIZE  47305728L
+#define RS03_BDXL_QL_SIZE  60403712L
+
+/* dvdisaster's selfCRC placeholder on little-endian: the bytes of the CRC
+ * field hold 0x004c5047 ("PLG") while the header CRC is computed over the
+ * whole 4096-byte EccHeader (src/rs03-create.c prepare_header). */
+#define RS03_SELFCRC_PLACEHOLDER 0x004c5047UL
+
+#define RS03_CREATOR_VERSION 7910   /* dvdisaster 0.79.10 (Closure->version) */
+#define RS03_NEEDED_VERSION  7900   /* NEEDED_VERSION (src/rs03-create.c) */
+#define RS03_FINGERPRINT_SECTOR 16  /* FINGERPRINT_SECTOR (src/dvdisaster.h) */
+
+static void wr_u32le(unsigned char *p, unsigned long v)
+{
+    p[0] = (unsigned char) (v & 0xff);
+    p[1] = (unsigned char) ((v >> 8) & 0xff);
+    p[2] = (unsigned char) ((v >> 16) & 0xff);
+    p[3] = (unsigned char) ((v >> 24) & 0xff);
+}
+
+static void wr_u64le(unsigned char *p, unsigned long v)
+{
+    wr_u32le(p, v);
+    wr_u32le(p + 4, 0);   /* every medium fits in 32 bits (BDXL ~ 6e7) */
+}
+
+/*
+ * roots(data_sectors, medium_capacity): dvdisaster's get_roots
+ * (src/rs03-common.c).  Number of parity roots the codec would use if the
+ * image were padded to `medium_capacity` sectors.
+ */
+static int rs03_get_roots(unsigned long data_sectors,
+                          unsigned long medium_capacity)
+{
+    unsigned long spl = medium_capacity / GF_FIELDMAX;
+    long ndata;
+    if (spl == 0) {
+        return -1;
+    }
+    ndata = (long) ((data_sectors + 2 + spl - 1) / spl);
+    return GF_FIELDMAX - (int) ndata - 1;
+}
+
+int rs03_calc_layout(unsigned long data_sectors, rs03_layout *out)
+{
+    unsigned long capacity = 0;
+    int ndata;
+
+    if (data_sectors == 0) {
+        return -1;
+    }
+
+    /* Smallest fitting medium yielding >= 8 roots (CalcRS03Layout,
+     * ECC_IMAGE; defect-management defaults on, so the plain BD/BDXL
+     * sizes are used). */
+    if (rs03_get_roots(data_sectors, RS03_CDR_SIZE) >= 8) {
+        capacity = RS03_CDR_SIZE;
+    } else if (rs03_get_roots(data_sectors, RS03_DVD_SL_SIZE) >= 8) {
+        capacity = RS03_DVD_SL_SIZE;
+    } else if (rs03_get_roots(data_sectors, RS03_DVD_DL_SIZE) >= 8) {
+        capacity = RS03_DVD_DL_SIZE;
+    } else if (rs03_get_roots(data_sectors, RS03_BD_SL_SIZE) >= 8) {
+        capacity = RS03_BD_SL_SIZE;
+    } else if (rs03_get_roots(data_sectors, RS03_BD_DL_SIZE) >= 8) {
+        capacity = RS03_BD_DL_SIZE;
+    } else if (rs03_get_roots(data_sectors, RS03_BDXL_TL_SIZE) >= 8) {
+        capacity = RS03_BDXL_TL_SIZE;
+    } else if (rs03_get_roots(data_sectors, RS03_BDXL_QL_SIZE) >= 8) {
+        capacity = RS03_BDXL_QL_SIZE;
+    } else {
+        return -1;   /* too big even for a quad-layer BDXL */
+    }
+
+    out->sectors_per_layer = capacity / GF_FIELDMAX;
+
+    /* ndata = ceil((dataSectors + 2) / spl), clipped up to 84
+     * (CalcRS03Layout); then +1 for the CRC layer. */
+    ndata = (int) ((data_sectors + 2 + out->sectors_per_layer - 1)
+                   / out->sectors_per_layer);
+    if (ndata < 84) {
+        ndata = 84;
+    }
+    ndata += 1;                       /* CRC layer counts as data */
+    out->ndata  = ndata;
+    out->nroots = GF_FIELDMAX - ndata;
+
+    out->data_sectors  = data_sectors;
+    out->total_sectors = (unsigned long) GF_FIELDMAX * out->sectors_per_layer;
+    out->ecc_header_pos = data_sectors;
+    out->first_crc_pos  = (unsigned long) (ndata - 1) * out->sectors_per_layer;
+    out->first_ecc_pos  = out->first_crc_pos + out->sectors_per_layer;
+
+    if (out->nroots < 8 || out->data_sectors >= out->first_crc_pos) {
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * Write the 4096-byte EccHeader at *hdr, byte-for-byte as dvdisaster does
+ * (src/rs03-create.c prepare_header).  The two header sectors are real
+ * data so they verify SECTOR_PRESENT; the selfCRC over the 4096 bytes
+ * (with the placeholder in the CRC field) is what dvdisaster's
+ * FindRS03HeaderInImage/valid_header validates to recognise the ECC.
+ *
+ * mediumFP/mediumSum/eccSum/crcSum are left zero and MFLAG_DATA_MD5 is NOT
+ * set: dvdisaster only compares/prints those when that flag is present
+ * (rs03-verify.c), and the fingerprint match for augmented images is
+ * compiled out (#if 0 in rs03-recognize.c valid_header).  selfCRC covers
+ * exactly the bytes we write, so any consistent values pass.
+ */
+static void write_ecc_header(unsigned char *hdr, const rs03_layout *L,
+                             unsigned int in_last)
+{
+    unsigned long crc;
+
+    memset(hdr, 0, 4096);
+    memcpy(hdr + OFF_COOKIE, RS03_COOKIE, RS03_COOKIE_LEN);
+    memcpy(hdr + OFF_METHOD, "RS03", 4);
+    /* methodFlags all zero: augmented image, no MFLAG_ECC_FILE, no DATA_MD5,
+     * release flags 0 (regtest-equivalent -- not validated on read). */
+    wr_u64le(hdr + OFF_SECTORS, L->data_sectors);   /* sectors[8] LE */
+    wr_u32le(hdr + OFF_DATABYTES, (unsigned long) L->ndata);
+    wr_u32le(hdr + OFF_ECCBYTES, (unsigned long) L->nroots);
+    wr_u32le(hdr + 84, RS03_CREATOR_VERSION);
+    wr_u32le(hdr + 88, RS03_NEEDED_VERSION);
+    wr_u32le(hdr + 92, RS03_FINGERPRINT_SECTOR);    /* fpSector */
+    wr_u32le(hdr + 96, RS03_SELFCRC_PLACEHOLDER);   /* selfCRC placeholder */
+    wr_u32le(hdr + 116, in_last);                   /* inLast */
+    wr_u64le(hdr + OFF_SECTORSPERLAYER, L->sectors_per_layer);
+    wr_u64le(hdr + 128, (unsigned long) L->nroots * L->sectors_per_layer
+                        + L->sectors_per_layer + 2);  /* sectorsAddedByEcc */
+
+    /* selfCRC = Crc32 over the 4096-byte header with the placeholder in
+     * the CRC field (already written above). */
+    crc = rs03_crc32(hdr, 4096);
+    wr_u32le(hdr + 96, crc);
+}
+
+/*
+ * dvdisaster padding sector for the data region (src/ds-marker.c
+ * CreatePaddingSector, dsmVersion=1).  The exact bytes only need to be
+ * self-consistent with the CRC we then store, but we match dvdisaster so
+ * the augmented image is byte-comparable.  `fingerprint` may be NULL.
+ */
+static void create_padding_sector(unsigned char *out, unsigned long sector)
+{
+    char *buf = (char *) out;
+    const char *hist =
+        "dvdisaster padding sector       "
+        "This is a padding sector needed for augmenting the image "
+        "with error correction data.";
+    const char *end_marker = "dvdisaster padding sector end marker";
+    size_t end_len = strlen(end_marker);
+    char num[32];
+    size_t i;
+
+    memset(buf, 0, RS03_SECTOR_SIZE);
+    memcpy(buf, hist, strlen(hist));
+    memcpy(buf + 2047 - end_len, end_marker, end_len);
+
+    memcpy(buf + 0x100, "Padding sector marker version", 29);
+    memcpy(buf + 0x120, "1.00", 4);
+    memcpy(buf + 0x140, "Padding sector number", 21);
+    /* decimal sector number at 0x160 */
+    {
+        unsigned long v = sector;
+        int n = 0;
+        char tmp[32];
+        if (v == 0) {
+            num[0] = '0';
+            num[1] = '\0';
+        } else {
+            while (v > 0 && n < 31) {
+                tmp[n++] = (char) ('0' + (int) (v % 10));
+                v /= 10;
+            }
+            for (i = 0; i < (size_t) n; i++) {
+                num[i] = tmp[n - 1 - i];
+            }
+            num[n] = '\0';
+        }
+    }
+    memcpy(buf + 0x160, num, strlen(num));
+    memcpy(buf + 0x180, "Medium fingerprint", 18);
+    memcpy(buf + 0x1b0, "none", 4);               /* fingerprint not embedded */
+    memcpy(buf + 0x1c0, "Medium fingerprint sector", 25);
+    memcpy(buf + 0x1e0, "16", 2);
+}
+
+int rs03_augment(const unsigned char *data, size_t data_len,
+                 unsigned int in_last,
+                 unsigned char **out, size_t *out_len)
+{
+    rs03_layout L;
+    unsigned long data_sectors;
+    size_t need;
+    unsigned char *img;
+    unsigned char *bad;
+    unsigned long pos, sec;
+    int layer;
+    long uncorr;
+
+    /* ceil(data_len / 2048); a zero-length image is rejected. */
+    data_sectors = (unsigned long) ((data_len + RS03_SECTOR_SIZE - 1)
+                                    / RS03_SECTOR_SIZE);
+    if (rs03_calc_layout(data_sectors, &L) != 0) {
+        return -1;
+    }
+
+    need = (size_t) L.total_sectors * RS03_SECTOR_SIZE;
+    img = (unsigned char *) calloc(need, 1);
+    if (!img) {
+        return -2;
+    }
+
+    /* Data region: copy the ISO, zero-padding the final partial sector. */
+    memcpy(img, data, data_len);
+
+    /* ECC header (2 sectors) at data_sectors. */
+    write_ecc_header(img + (size_t) data_sectors * RS03_SECTOR_SIZE,
+                     &L, in_last ? in_last : RS03_SECTOR_SIZE);
+
+    /* Data-padding sectors: from data_sectors+2 up to firstCrcPos. */
+    for (sec = data_sectors + 2; sec < L.first_crc_pos; sec++) {
+        create_padding_sector(img + (size_t) sec * RS03_SECTOR_SIZE, sec);
+    }
+
+    /* CRC layer (chain-back ordering, matching read_stored_crc): the CRC
+     * of data-layer (layer, pos) is stored in CRC sector (pos-1)%spl. */
+    for (layer = 0; layer < L.ndata - 1; layer++) {
+        for (pos = 0; pos < L.sectors_per_layer; pos++) {
+            unsigned long crc, crc_pos, crc_sec;
+            sec = rs03_sector_index(&L, layer, pos);
+            crc = rs03_crc32(img + (size_t) sec * RS03_SECTOR_SIZE,
+                             RS03_SECTOR_SIZE);
+            crc_pos = (pos + L.sectors_per_layer - 1) % L.sectors_per_layer;
+            crc_sec = L.first_crc_pos + crc_pos;
+            wr_u32le(img + (size_t) crc_sec * RS03_SECTOR_SIZE
+                         + (size_t) layer * 4, crc);
+        }
+    }
+
+    /* Parity layers: flag every parity sector as an erasure and let the
+     * conformant decoder solve them.  This computes exactly the parity
+     * dvdisaster would, because rs03_fix uses dvdisaster's RS parameters
+     * and interleaving. */
+    bad = (unsigned char *) calloc((size_t) L.total_sectors, 1);
+    if (!bad) {
+        free(img);
+        return -2;
+    }
+    for (layer = L.ndata; layer < GF_FIELDMAX; layer++) {
+        for (pos = 0; pos < L.sectors_per_layer; pos++) {
+            sec = rs03_sector_index(&L, layer, pos);
+            bad[sec] = 1;
+        }
+    }
+    uncorr = rs03_fix(img, need, &L, bad);
+    free(bad);
+    if (uncorr != 0) {
+        free(img);
+        return uncorr > 0 ? (int) uncorr : -1;
+    }
+
+    *out = img;
+    *out_len = need;
     return 0;
 }
 

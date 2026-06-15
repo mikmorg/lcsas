@@ -309,11 +309,30 @@ static void test_parse_reject(void)
     CHECK(rs03_parse(buf, 10, &L) != 0, "parse rejects tiny input");
 }
 
+/* ---- rs03_calc_layout: medium selection for the augment encoder ----- */
+/* Spec §4.3 worked example: a 1648-sector payload lands on the BDXL ladder
+ * with dataBytes(ndata)=85, eccBytes(nroots)=170, sectorsPerLayer=1409,
+ * totalSectors=359295, firstCrcPos=118356, firstEccPos=119765. */
+
+static void test_calc_layout(void)
+{
+    rs03_layout L;
+    CHECK(rs03_calc_layout(1648UL, &L) == 0, "calc_layout 1648 ok");
+    CHECK(L.ndata == 85, "calc_layout ndata=85");
+    CHECK(L.nroots == 170, "calc_layout nroots=170");
+    CHECK(L.sectors_per_layer == 1409, "calc_layout spl=1409");
+    CHECK(L.total_sectors == 359295UL, "calc_layout total=359295");
+    CHECK(L.first_crc_pos == 118356UL, "calc_layout firstcrc=118356");
+    CHECK(L.first_ecc_pos == 119765UL, "calc_layout firstecc=119765");
+    CHECK(L.ndata + L.nroots == 255, "calc_layout ndata+nroots=255");
+}
+
 int main(void)
 {
     test_gf();
     test_crc();
     test_layout();
+    test_calc_layout();
     test_verify_clean();
     test_repair();
     test_uncorrectable();
