@@ -422,6 +422,17 @@ def select_ecc_runner(
     augments with the in-house tool.  ``None`` is returned only when
     neither encoder is on ``PATH``.
 
+    Criticality asymmetry (why ``lcsas-ecc augment`` is *not* perf-tuned):
+    encode runs at WRITE time, on the operator's machine, which has
+    dvdisaster (the preferred, fast encoder); the in-house augment is a
+    correctness fallback / defence-in-depth, not on the durability-critical
+    path.  Only DECODE (verify/repair) is durability-critical -- it runs at
+    the heir's RESTORE time, decades out, on a bare machine with no
+    dvdisaster -- so that is the half that must be in-house and is the half
+    we optimise.  ``lcsas-ecc augment`` is intentionally left slow (it fills
+    parity via the erasure decoder rather than a dedicated RS encoder);
+    deliberately not optimised because it is off the critical path.
+
     The returned object satisfies the :class:`DVDisasterRunner` protocol;
     callers use ``verify_iso`` / ``repair_iso`` / ``augment_iso``.
     """
