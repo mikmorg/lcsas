@@ -206,6 +206,142 @@ def test_meta_build_bundles_every_present_target(tmp_path: Path) -> None:
         )
 
 
+# FMT-01: lcsas-ecc filename per target (Windows carries .exe).
+def _ecc_exe(rust_triple: str) -> str:
+    return (
+        "lcsas-ecc.exe"
+        if rust_triple == "x86_64-pc-windows-gnu"
+        else "lcsas-ecc"
+    )
+
+
+@pytest.mark.parametrize(
+    "rust_triple,short_arch,exe",
+    APPROVED_TIER1_TARGETS,
+    ids=[t[0] for t in APPROVED_TIER1_TARGETS],
+)
+def test_lcsas_ecc_source_binary_present(
+    rust_triple: str, short_arch: str, exe: str
+) -> None:
+    """FMT-01: a pre-built lcsas-ecc must exist for every approved
+    target -- it is the bundled "scratched disc" repair tool, REQUIRED
+    on every meta volume (not opportunistic like the old dvdisaster)."""
+    if rust_triple in OPTIONAL_TARGETS:
+        pytest.skip(f"{rust_triple} OPTIONAL on this host")
+    src_bin = RECOVERY_BIN / short_arch / _ecc_exe(rust_triple)
+    assert src_bin.is_file(), (
+        f"approved target {rust_triple} has no pre-built lcsas-ecc at "
+        f"{src_bin}; the meta disc would lack the in-house RS03 repair "
+        f"tool for this arch.  Build it with `make -C recovery "
+        f"ecc-arches`."
+    )
+
+
+@pytest.mark.parametrize(
+    "rust_triple,short_arch,exe",
+    APPROVED_TIER1_TARGETS,
+    ids=[t[0] for t in APPROVED_TIER1_TARGETS],
+)
+def test_lcsas_ecc_git_tracked(
+    rust_triple: str, short_arch: str, exe: str
+) -> None:
+    """FMT-01: every per-target lcsas-ecc must be COMMITTED so a fresh
+    clone bundles a complete repair toolset."""
+    rel = f"recovery/bin/{short_arch}/{_ecc_exe(rust_triple)}"
+    if shutil.which("git") is None or subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=REPO_ROOT, capture_output=True,
+    ).returncode != 0:
+        pytest.skip("not a git checkout")
+    res = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", rel],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert res.returncode == 0, (
+        f"{rel} is not git-tracked; fresh clones build a meta disc "
+        f"without the {rust_triple} RS03 repair tool.  Fix: git add -f {rel}"
+    )
+
+
+def test_required_contents_includes_lcsas_ecc_per_target() -> None:
+    """FMT-01: the required-contents contract names lcsas-ecc for every
+    approved target -- so the post-build gate (missing_required_contents
+    / cmd_meta_verify) enforces it, not a silent skip-if-absent."""
+    from lcsas.meta.required_contents import required_meta_paths
+
+    paths = set(required_meta_paths())
+    for rust_triple, _short, _exe in APPROVED_TIER1_TARGETS:
+        rel = f"recovery/bin/{rust_triple}/{_ecc_exe(rust_triple)}"
+        assert rel in paths, (
+            f"required_meta_paths() omits {rel}; a meta disc missing the "
+            f"{rust_triple} lcsas-ecc would pass the completeness gate."
+        )
+
+
+def test_meta_build_bundles_lcsas_ecc_per_target(tmp_path: Path) -> None:
+    """End-to-end: a built meta disc carries lcsas-ecc under every
+    target whose source binary is present (the bundling side of FMT-01)."""
+    from lcsas.meta.builder import MetaVolumeBuilder
+
+    out_dir = tmp_path / "meta_stage"
+    out_dir.mkdir()
+    # allow_no_dvdisaster_source: this test exercises bundling, not the
+    # FMT-02 source-pin gate, so it must run on hosts without the ~600 MB
+    # upstream cache fetched.
+    MetaVolumeBuilder(
+        out_dir, catalog_db_path=None, allow_no_dvdisaster_source=True,
+    ).build()
+
+    bundled_bin = out_dir / "recovery" / "bin"
+    for rust_triple, short_arch, _exe in APPROVED_TIER1_TARGETS:
+        ecc = _ecc_exe(rust_triple)
+        if not (RECOVERY_BIN / short_arch / ecc).is_file():
+            continue
+        bundled = bundled_bin / rust_triple / ecc
+        assert bundled.is_file(), (
+            f"source lcsas-ecc for {rust_triple} exists but the bundler "
+            f"did not copy it to {bundled}.  See _bundle_tier1_binaries "
+            f"in src/lcsas/meta/builder.py (FMT-01)."
+        )
+
+
+def test_completeness_gate_fails_when_lcsas_ecc_missing(
+    tmp_path: Path,
+) -> None:
+    """FMT-01 fail-loud: deleting one target's lcsas-ecc from a built
+    meta tree makes missing_required_contents() report it -- the same
+    mechanism that enforces lcsas-restore completeness (RST-05)."""
+    from lcsas.meta.builder import MetaVolumeBuilder
+
+    out_dir = tmp_path / "meta_stage"
+    out_dir.mkdir()
+    builder = MetaVolumeBuilder(
+        out_dir, catalog_db_path=None, allow_no_dvdisaster_source=True,
+    )
+    builder.build()
+
+    # Pick a target whose ecc bin actually got bundled (host-built).
+    victim: tuple[str, str] | None = None
+    for rust_triple, _short_arch, _exe in APPROVED_TIER1_TARGETS:
+        ecc = _ecc_exe(rust_triple)
+        bundled = out_dir / "recovery" / "bin" / rust_triple / ecc
+        if bundled.is_file():
+            victim = (rust_triple, ecc)
+            bundled.unlink()
+            break
+    if victim is None:
+        pytest.skip("no lcsas-ecc bundled on this host to delete")
+
+    rust_triple, ecc = victim
+    missing = builder.missing_required_contents()
+    rel = f"recovery/bin/{rust_triple}/{ecc}"
+    assert rel in missing, (
+        f"deleting {rel} did not trip the completeness gate; "
+        f"missing_required_contents() returned {missing}.  The meta "
+        f"build would ship an incomplete repair toolset silently."
+    )
+
+
 # Set LCSAS_META_BUILT_DIR to the output of `lcsas meta build` (a
 # fully-provisioned host with the upstream cache fetched + all six
 # binaries built) to assert the BUILT output — not just the source tree —

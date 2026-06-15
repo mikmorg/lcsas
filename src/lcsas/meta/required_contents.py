@@ -67,6 +67,14 @@ def _rustic_name(target: str) -> str:
     return "rustic-static.exe" if target in _WINDOWS_TARGETS else "rustic-static"
 
 
+def _ecc_name(target: str) -> str:
+    # FMT-01: the in-house RS03 ECC verify/repair tool, bundled per
+    # target so the heir-facing "scratched disc" repair path
+    # (restore.sh --check-disc → lcsas-ecc) works off the meta disc with
+    # no externally-installed dvdisaster.  Required, not optional.
+    return "lcsas-ecc.exe" if target in _WINDOWS_TARGETS else "lcsas-ecc"
+
+
 def python_tree_marker(target: str) -> str:
     """Relative path proving the bundled CPython tree for ``target`` is real.
 
@@ -85,6 +93,7 @@ def required_target_paths(target: str) -> list[str]:
     return [
         f"recovery/bin/{target}/{_tier1_exe(target)}",
         f"recovery/bin/{target}/{_rustic_name(target)}",
+        f"recovery/bin/{target}/{_ecc_name(target)}",
         python_tree_marker(target),
     ]
 

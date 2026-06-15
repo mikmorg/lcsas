@@ -2257,10 +2257,24 @@ class MetaVolumeBuilder:
             # KEY-05: the static key-share combiner is part of the
             # tier-1 binary family — relocate it next to lcsas-restore
             # so the heir docs can name one on-disc Windows path
-            # (bin\<rust-triple>\lcsas-keyshare.exe).  Skip-if-absent,
-            # same tolerance as lcsas-restore itself.
+            # (bin\<rust-triple>\lcsas-keyshare.exe).
+            #
+            # FMT-01: the in-house RS03 ECC tool ``lcsas-ecc`` is likewise
+            # a required member of the tier-1 binary family — it is the
+            # bundled "my disc is scratched" repair tool restore.sh
+            # --check-disc dispatches.  It is copied here next to
+            # lcsas-restore; the post-build required-contents gate
+            # (required_target_paths → missing_required_contents) FAILS
+            # LOUD if any target's lcsas-ecc is absent, so a bare
+            # skip-if-absent here can never produce a silently incomplete
+            # rescue disc (mirrors how lcsas-restore completeness is
+            # enforced).
             suffix = ".exe" if exe_name.endswith(".exe") else ""
-            for name in (exe_name, f"lcsas-keyshare{suffix}"):
+            for name in (
+                exe_name,
+                f"lcsas-keyshare{suffix}",
+                f"lcsas-ecc{suffix}",
+            ):
                 src_bin = src_recovery / "bin" / short_arch / name
                 if not src_bin.is_file():
                     continue
