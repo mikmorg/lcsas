@@ -114,7 +114,13 @@ def meta_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     out = tmp_path_factory.mktemp("boot07") / "meta_stage"
     out.mkdir()
-    MetaVolumeBuilder(out, catalog_db_path=None).build()
+    # allow_no_dvdisaster_source: this gate scans the staging tree for
+    # unpinned EXECUTABLES; the dvdisaster source tarball (FMT-02) is neither
+    # an executable nor what we test here, so don't require it in the cache
+    # (build() raises MetaBuildError otherwise -- #322).
+    MetaVolumeBuilder(
+        out, catalog_db_path=None, allow_no_dvdisaster_source=True,
+    ).build()
     return out
 
 

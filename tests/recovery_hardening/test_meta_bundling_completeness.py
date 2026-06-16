@@ -180,7 +180,13 @@ def test_meta_build_bundles_every_present_target(tmp_path: Path) -> None:
 
     out_dir = tmp_path / "meta_stage"
     out_dir.mkdir()
-    builder = MetaVolumeBuilder(out_dir, catalog_db_path=None)
+    # allow_no_dvdisaster_source: this test exercises tier-1 *bundling*, not
+    # the FMT-02 source pin, so it must not require the multi-MB dvdisaster
+    # source tarball cached (build() raises MetaBuildError otherwise -- #322;
+    # matches the other build-based tests in this file).
+    builder = MetaVolumeBuilder(
+        out_dir, catalog_db_path=None, allow_no_dvdisaster_source=True,
+    )
     builder.build()
 
     bundled_bin = out_dir / "recovery" / "bin"
