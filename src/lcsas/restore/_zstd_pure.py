@@ -226,6 +226,73 @@ class _BackwardBitReader:
         return self._bitpos < 0
 
 
+class _FseDStreamReader:
+    """Faithful port of zstd's ``BIT_DStream`` (64-bit container, MSB-first).
+
+    Used to decode an FSE stream whose symbol count is *not* known ahead of
+    time and is therefore determined purely by stream exhaustion — i.e. the
+    Huffman weight stream.  Unlike :class:`_BackwardBitReader`, this models
+    zstd's exact reload / overflow semantics: the final symbols are decoded
+    from the high zero-padding bits of the 8-byte container, and decoding
+    stops only when ``bitsConsumed`` exceeds the container width
+    (``BIT_DStream_overflow``).  A reader that merely stops at the first
+    missing real bit decodes one symbol too few, dropping the last weight.
+    """
+
+    _CONT = 8  # container width in bytes (matches zstd's 64-bit register)
+
+    __slots__ = ("_data", "_start", "_ptr", "_container", "_consumed")
+
+    def __init__(self, data: bytes) -> None:
+        if not data:
+            raise ZstdError("empty bitstream")
+        last = data[-1]
+        if last == 0:
+            raise ZstdError("bitstream final byte is zero (no sentinel)")
+        self._data = data
+        self._start = 0
+        size = len(data)
+        skip = 8 - (last.bit_length() - 1)  # padding bits + sentinel
+        if size >= self._CONT:
+            self._ptr = size - self._CONT
+            self._consumed = skip
+        else:
+            self._ptr = 0
+            self._consumed = skip + (self._CONT - size) * 8
+        self._container = self._load(self._ptr)
+
+    def _load(self, ptr: int) -> int:
+        chunk = self._data[ptr : ptr + self._CONT].ljust(self._CONT, b"\0")
+        return int.from_bytes(chunk, "little")
+
+    def read(self, nbits: int) -> int:
+        """Read *nbits* bits MSB-first; auto-reloads the container."""
+        if nbits == 0:
+            return 0
+        # zstd masks the shift, so an over-read past the end returns the
+        # garbage tail of the container (its result is discarded once the
+        # following ``overflowed()`` check breaks the decode loop).
+        shift = (self._CONT * 8 - self._consumed - nbits) & (self._CONT * 8 - 1)
+        val = (self._container >> shift) & ((1 << nbits) - 1)
+        self._consumed += nbits
+        self._reload()
+        return val
+
+    def _reload(self) -> None:
+        if self._consumed > self._CONT * 8 or self._ptr == self._start:
+            return
+        nbytes = self._consumed >> 3
+        if self._ptr - nbytes < self._start:
+            nbytes = self._ptr - self._start
+        self._ptr -= nbytes
+        self._consumed -= nbytes * 8
+        self._container = self._load(self._ptr)
+
+    def overflowed(self) -> bool:
+        """True once consumed bits exceed the container (BIT_DStream_overflow)."""
+        return self._consumed > self._CONT * 8
+
+
 # ── FSE decoding ─────────────────────────────────────────────────
 
 
@@ -476,26 +543,33 @@ def _fse_decode_weight_stream(fse_bytes: bytes) -> list[int]:
     table = _build_fse_table(counts, accuracy_log)
 
     stream = fse_bytes[table_bytes:]
-    br = _BackwardBitReader(stream)
+    br = _FseDStreamReader(stream)
 
     state1 = br.read(accuracy_log)
     state2 = br.read(accuracy_log)
 
+    # Faithful port of zstd ``FSE_decompress_usingDTable_generic`` tail
+    # drain.  Each step emits the state's current symbol and then advances
+    # the state by reading its transition bits (``FSE_decodeSymbol``);
+    # exhaustion (``BIT_DStream_overflow``) is tested *after* that read.
+    # The two interleaved states are drained until one read overflows.  This
+    # exact ordering matters: a flat backward reader that stops the instant
+    # it runs out of real bits drops the final weight on certain byte
+    # boundaries, corrupting the Huffman table for single-stream literals.
+    sym, base, nbits = table.symbol, table.baseline, table.num_bits
     weights: list[int] = []
-    # Decode alternating until the backward reader is exhausted.
+
     while True:
-        weights.append(table.symbol[state1])
-        if br.finished():
-            weights.append(table.symbol[state2])
+        weights.append(sym[state1])
+        state1 = base[state1] + br.read(nbits[state1])
+        if br.overflowed():
+            weights.append(sym[state2])
             break
-        nb = table.num_bits[state1]
-        state1 = table.baseline[state1] + br.read(nb)
-        weights.append(table.symbol[state2])
-        if br.finished():
-            weights.append(table.symbol[state1])
+        weights.append(sym[state2])
+        state2 = base[state2] + br.read(nbits[state2])
+        if br.overflowed():
+            weights.append(sym[state1])
             break
-        nb = table.num_bits[state2]
-        state2 = table.baseline[state2] + br.read(nb)
     return weights
 
 

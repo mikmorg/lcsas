@@ -20,6 +20,7 @@ import struct
 
 import pytest
 
+from lcsas.restore import _zstd_pure as _zp
 from lcsas.restore._zstd_pure import ZstdError, decompress
 
 try:
@@ -257,8 +258,8 @@ class TestHuffmanLiterals:
     def test_fuzz_huffman_shapes(self, seed):
         # Vary size and level so size_format 1/2/3 and treeless reuse all
         # occur; assert byte-identical decode every time.  Sizes are kept
-        # >= 1 KB so zstd uses 4-stream Huffman literals (the single-stream
-        # layout has a known pure-decoder defect — see PR notes / #324).
+        # >= 1 KB so zstd uses 4-stream Huffman literals; the complementary
+        # single-stream layout is covered by TestSingleStreamHuffman (#326).
         import random
 
         rng = random.Random(1000 + seed)
@@ -266,6 +267,114 @@ class TestHuffmanLiterals:
             n = rng.randint(1024, 50000)
             original = _skewed_text(n, _BIG_ALPHA, seed=rng.randint(0, 1 << 30))
             _roundtrip(original, rng.choice([3, 9, 19]))
+
+
+def _decode_and_sniff(frame: bytes) -> tuple[bytes, bool]:
+    """Decode *frame* and report whether it used single-stream Huffman.
+
+    zstd uses the 1-stream Huffman layout only for small literal sections
+    (size_format 0, block_type 2/3).  We sniff the decoder's own literal
+    branch *during the single decode* the test already needs, so confirming
+    the path is taken costs no extra decompression.  Returns
+    ``(plaintext, used_single_stream)``.
+    """
+    seen = [False]
+    real = _zp._decode_literals
+
+    def _spy(src, prev):  # type: ignore[no-untyped-def]
+        b0 = src[0]
+        if (b0 & 0x3) in (2, 3) and ((b0 >> 2) & 0x3) == 0:
+            seen[0] = True
+        return real(src, prev)
+
+    _zp._decode_literals = _spy
+    try:
+        plaintext = _zp.decompress(frame)
+    finally:
+        _zp._decode_literals = real
+    return plaintext, seen[0]
+
+
+@pytest.mark.skipif(not _HAS_ZSTD, reason="zstandard needed to produce frames")
+class TestSingleStreamHuffman:
+    """Regression for #326: the single-stream Huffman literal layout.
+
+    zstd emits single-stream (not 4-stream) Huffman literals for small
+    literal sections (< ~1 KB).  The pure decoder's weight-FSE drain used
+    to stop one symbol short on certain byte boundaries, dropping the last
+    Huffman weight and silently mis-decoding literals (e.g. 'f' → 'e').
+    These inputs force the single-stream path across a 200-input sweep and
+    several levels and assert byte-identical output.
+    """
+
+    def test_known_off_by_one_vector(self):
+        # The exact failure first reported in #326: this 42-byte input
+        # decodes 'f' → 'e' before the fix.  Skewed small alphabet that
+        # zstd packs as single-stream Huffman literals.
+        import random
+
+        rng = random.Random(7)
+        for _ in range(200):
+            data = bytes(
+                rng.choice(b"abcdefABCDEF0123 \n")
+                for _ in range(rng.randint(40, 400))
+            )
+            frame = _zstd.ZstdCompressor(
+                level=rng.randint(1, 19)
+            ).compress(data)
+            if data == b"B11BBfd21ECd1B0fC132a1 fEa03dbC\nAfA Fd2\nA3":
+                plaintext, single = _decode_and_sniff(frame)
+                assert single
+                assert plaintext == data
+                break
+        else:  # pragma: no cover - the vector is deterministic
+            pytest.skip("known vector not produced by this zstandard build")
+
+    @pytest.mark.parametrize("level", [1, 3, 9, 19])
+    def test_sweep_forces_single_stream(self, level):
+        # 200+ small skewed inputs per level.  Each is byte-checked, and at
+        # least one per level must actually take the single-stream path so
+        # the test genuinely bites the fixed code (not just the 4-stream
+        # layout covered by TestHuffmanLiterals).
+        import random
+
+        rng = random.Random(900 + level)
+        single_stream_hits = 0
+        for _ in range(220):
+            n = rng.randint(40, 400)
+            data = bytes(
+                rng.choice(b"abcdefABCDEF0123 \n") for _ in range(n)
+            )
+            frame = _zstd.ZstdCompressor(level=level).compress(data)
+            plaintext, single = _decode_and_sniff(frame)
+            # equals native zstandard decompression by construction
+            assert plaintext == data
+            if single:
+                single_stream_hits += 1
+        assert single_stream_hits > 0, (
+            "no single-stream Huffman frame produced; test would not bite"
+        )
+
+    @pytest.mark.parametrize("seed", range(4))
+    def test_fuzz_single_stream_shapes(self, seed):
+        # Skewed alphabets of varying cardinality, all small enough to land
+        # in the single-stream layout, including the gap-alphabet (a symbol
+        # absent below the maximum) that exposed the dropped final weight.
+        import random
+
+        alphabets = [
+            b"abcdefABCDEF0123 \n",
+            b"abcdfABCDEF0123 \n",  # no 'e' below 'f' (gap alphabet)
+            b"The quick brown fox.\n",
+            _BIG_ALPHA,
+        ]
+        rng = random.Random(2000 + seed)
+        for _ in range(60):
+            alpha = rng.choice(alphabets)
+            data = _skewed_text(rng.randint(40, 600), alpha, rng.randint(0, 1 << 20))
+            level = rng.choice([1, 5, 12, 19])
+            frame = _zstd.ZstdCompressor(level=level).compress(data)
+            assert decompress(frame) == data
 
 
 # ── Hand-crafted minimal frames (paths zstandard won't emit) ─────
