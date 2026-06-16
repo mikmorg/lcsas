@@ -201,6 +201,24 @@ class TestDVDisasterMocked:
         with pytest.raises(RuntimeError, match="timed out"):
             runner.repair_iso(iso, timeout=1)
 
+    def test_augment_missing_file_raises(self, tmp_path):
+        """augment_iso raises FileNotFoundError for a missing ISO."""
+        runner = SubprocessDVDisasterRunner()
+        with pytest.raises(FileNotFoundError, match="ISO file not found"):
+            runner.augment_iso(tmp_path / "absent.iso")
+
+    def test_verify_missing_file_raises(self, tmp_path):
+        """verify_iso raises FileNotFoundError for a missing ISO."""
+        runner = SubprocessDVDisasterRunner()
+        with pytest.raises(FileNotFoundError, match="ISO file not found"):
+            runner.verify_iso(tmp_path / "absent.iso")
+
+    def test_repair_missing_file_raises(self, tmp_path):
+        """repair_iso raises FileNotFoundError for a missing ISO."""
+        runner = SubprocessDVDisasterRunner()
+        with pytest.raises(FileNotFoundError, match="ISO file not found"):
+            runner.repair_iso(tmp_path / "absent.iso")
+
 
 class TestSmallestFittingMedium:
     """RS03 medium ladder used by the staging pre-flight (BURN-07)."""
@@ -329,6 +347,97 @@ class TestLcsasEccRunner:
         runner = LcsasEccRunner()
         with pytest.raises(FileNotFoundError):
             runner.verify_iso(tmp_path / "absent.iso")
+
+    def test_augment_missing_file_raises(self, tmp_path):
+        runner = LcsasEccRunner()
+        with pytest.raises(FileNotFoundError, match="ISO file not found"):
+            runner.augment_iso(tmp_path / "absent.iso")
+
+    def test_repair_missing_file_raises(self, tmp_path):
+        runner = LcsasEccRunner()
+        with pytest.raises(FileNotFoundError, match="ISO file not found"):
+            runner.repair_iso(tmp_path / "absent.iso")
+
+    def test_augment_image_too_large_raises_oserror(self, tmp_path):
+        """An ISO larger than the biggest RS03 medium → ValueError inside
+        smallest_fitting_medium_bytes, re-raised as OSError so the burn
+        pre-flight surfaces it as a disk/IO problem."""
+        iso = self._iso(tmp_path)
+        runner = LcsasEccRunner()
+        with (
+            patch(
+                "lcsas.ecc.dvdisaster.smallest_fitting_medium_bytes",
+                side_effect=ValueError("image exceeds the largest RS03 medium"),
+            ),
+            pytest.raises(OSError, match="largest RS03 medium"),
+        ):
+            runner.augment_iso(iso)
+
+    def test_augment_insufficient_disk_space_raises(self, tmp_path):
+        """augment_iso budgets the *padded* full-medium size; too little free
+        space → OSError before the subprocess is ever launched."""
+        iso = self._iso(tmp_path)
+        runner = LcsasEccRunner()
+        with (
+            patch(
+                "lcsas.ecc.dvdisaster.shutil.disk_usage",
+                return_value=MagicMock(free=512),
+            ),
+            pytest.raises(OSError, match="Insufficient disk space to augment"),
+        ):
+            runner.augment_iso(iso)
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_augment_timeout_raises(self, mock_run, tmp_path):
+        """augment_iso raises RuntimeError when lcsas-ecc times out, and
+        cleans up the temp file."""
+        import subprocess as sp
+
+        mock_run.side_effect = sp.TimeoutExpired(cmd="lcsas-ecc", timeout=1)
+        iso = self._iso(tmp_path)
+        runner = LcsasEccRunner()
+        with (
+            patch(
+                "lcsas.ecc.dvdisaster.shutil.disk_usage",
+                return_value=MagicMock(free=1_073_741_824),
+            ),
+            pytest.raises(RuntimeError, match="timed out"),
+        ):
+            runner.augment_iso(iso, timeout=1)
+        assert not iso.with_suffix(".iso.ecc.tmp").exists()
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_augment_nonzero_exit_raises_and_cleans_up(self, mock_run, tmp_path):
+        """A non-zero lcsas-ecc augment exit is surfaced via
+        _raise_for_ecc_error, and the partial temp file is removed."""
+        iso = self._iso(tmp_path)
+
+        def _fake_run(cmd, **kw):
+            out = cmd[cmd.index("--out") + 1]
+            with open(out, "wb") as fh:
+                fh.write(b"\x00" * 4096)
+            return MagicMock(returncode=3, stderr="encode error")
+
+        runner = LcsasEccRunner()
+        with (
+            patch("lcsas.ecc.dvdisaster.subprocess.run", side_effect=_fake_run),
+            patch(
+                "lcsas.ecc.dvdisaster.shutil.disk_usage",
+                return_value=MagicMock(free=1_073_741_824),
+            ),
+            pytest.raises(RuntimeError, match="lcsas-ecc augment failed"),
+        ):
+            runner.augment_iso(iso)
+        assert not iso.with_suffix(".iso.ecc.tmp").exists()
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_repair_timeout_raises(self, mock_run, tmp_path):
+        import subprocess as sp
+
+        mock_run.side_effect = sp.TimeoutExpired(cmd="lcsas-ecc", timeout=1)
+        runner = LcsasEccRunner()
+        with pytest.raises(RuntimeError, match="timed out"):
+            runner.repair_iso(self._iso(tmp_path))
 
     @patch("lcsas.ecc.dvdisaster.subprocess.run")
     def test_verify_timeout_raises(self, mock_run, tmp_path):
