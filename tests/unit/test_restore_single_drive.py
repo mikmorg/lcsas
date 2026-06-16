@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -845,3 +846,252 @@ def test_reseed_fails_gracefully_on_missing_repo(tmp_path, capsys):
     assert (cache / "index" / "marker").read_text() == original_index
     err = capsys.readouterr().err
     assert "repo not found" in err
+
+
+# ---------------------------------------------------------------------------
+# pack path helpers — short-SHA / flat-layout fallbacks
+# ---------------------------------------------------------------------------
+
+
+def test_pack_dest_path_short_sha_is_flat(tmp_path):
+    """A SHA shorter than 2 chars has no two-level prefix dir (line 58)."""
+    assert helper.pack_dest_path(tmp_path, "a") == tmp_path / "a"
+
+
+def test_find_pack_file_falls_back_to_flat_layout(tmp_path):
+    """find_pack_file finds a pack stored flat (not under a prefix dir)."""
+    sha = _sha(b"flatpack")
+    flat = tmp_path / sha
+    flat.write_bytes(b"flatpack")
+    # No <sha[:2]>/<sha> exists, so the flat path is returned (lines 66-67).
+    assert helper.find_pack_file(tmp_path, sha) == flat
+
+
+def test_find_pack_file_returns_none_when_absent(tmp_path):
+    """No prefix-dir copy and no flat copy → None (line 67)."""
+    sha = _sha(b"missing")
+    assert helper.find_pack_file(tmp_path, sha) is None
+
+
+# ---------------------------------------------------------------------------
+# _seed_metadata — alternate (meta-disc root) layout + not-found guard
+# ---------------------------------------------------------------------------
+
+
+def test_seed_metadata_uses_root_layout_when_no_metadata_dir(tmp_path):
+    """When mount/metadata/<repo_id> is absent but mount/<repo_id> exists,
+    seed from the root layout (lines 174-176)."""
+    mount = tmp_path / "meta_disc"
+    alt = mount / REPO_ID
+    for sub in ("index", "snapshots", "keys"):
+        (alt / sub).mkdir(parents=True)
+        (alt / sub / "marker").write_text(f"root-{sub}")
+    (alt / "config").write_text("root-config")
+
+    cache = tmp_path / "cache"
+    helper._seed_metadata(mount, cache, REPO_ID)
+
+    for sub in ("index", "snapshots", "keys"):
+        assert (cache / sub / "marker").read_text() == f"root-{sub}"
+    assert (cache / "config").read_text() == "root-config"
+
+
+def test_seed_metadata_raises_when_metadata_absent(tmp_path):
+    """Neither layout present → SystemExit with a helpful message (line 178)."""
+    mount = tmp_path / "empty_disc"
+    mount.mkdir()
+    cache = tmp_path / "cache"
+    with pytest.raises(SystemExit) as exc:
+        helper._seed_metadata(mount, cache, REPO_ID)
+    assert "metadata for repo" in str(exc.value)
+
+
+# ---------------------------------------------------------------------------
+# bootstrap — empty catalog
+# ---------------------------------------------------------------------------
+
+
+def test_bootstrap_empty_catalog_errors(tmp_path, capsys):
+    """A catalog with no repositories and no --repo → exit 1 (lines 217-218)."""
+    catalog = tmp_path / "catalog.db"
+    conn = sqlite3.connect(catalog)
+    conn.executescript("""
+        CREATE TABLE repositories (repo_id TEXT PRIMARY KEY, name TEXT);
+        CREATE TABLE volumes (
+            volume_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT UNIQUE, status TEXT, created_at TEXT
+        );
+        CREATE TABLE packs (
+            pack_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sha256 TEXT UNIQUE, size_bytes INTEGER, repo_id TEXT,
+            is_pruned INTEGER DEFAULT 0
+        );
+        CREATE TABLE volume_packs (
+            volume_id INTEGER, pack_id INTEGER,
+            PRIMARY KEY (volume_id, pack_id)
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+    mount = tmp_path / "disc"
+    mount.mkdir()
+
+    rc = helper.main([
+        "bootstrap",
+        "--catalog", str(catalog),
+        "--mount", str(mount),
+        "--cache", str(tmp_path / "cache"),
+    ])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "no repositories in catalog" in err
+
+
+# ---------------------------------------------------------------------------
+# _load_pick_list — missing pick list
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_without_bootstrap_errors(tmp_path, capsys):
+    """ingest before bootstrap → SystemExit(1) telling the user to bootstrap
+    (lines 264-268)."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    mount = tmp_path / "disc"
+    mount.mkdir()
+    with pytest.raises(SystemExit) as exc:
+        helper.main([
+            "ingest",
+            "--mount", str(mount),
+            "--cache", str(cache),
+            "--disc-label", "LCSAS_CD_2026_0001",
+        ])
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "run bootstrap first" in err
+
+
+# ---------------------------------------------------------------------------
+# verify_disc — unreadable / malformed volume_info.json
+# ---------------------------------------------------------------------------
+
+
+def test_verify_disc_fails_on_malformed_json(tmp_path, capsys):
+    """volume_info.json that isn't valid JSON → warning + False (lines 291-296)."""
+    mount = tmp_path / "disc"
+    mount.mkdir()
+    (mount / "volume_info.json").write_text("{ this is not json")
+    assert helper.verify_disc(mount, "LCSAS_CD_2026_0001") is False
+    err = capsys.readouterr().err
+    assert "could not read volume_info.json" in err
+
+
+# ---------------------------------------------------------------------------
+# ingest — --verify-disc gate
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_aborts_when_verify_disc_fails(tmp_path, capsys):
+    """--verify-disc with a mismatched label aborts ingest → exit 2
+    (lines 306-310)."""
+    blob = b"alpha"
+    sha = _sha(blob)
+    cache = _bootstrap(
+        tmp_path,
+        [(sha, len(blob), "LCSAS_CD_2026_0001")],
+        disc_blobs={sha: blob},
+    )
+    wrong = tmp_path / "wrong_disc"
+    _seed_disc(wrong, {sha: blob})
+    (wrong / "volume_info.json").write_text(
+        json.dumps({"label": "LCSAS_CD_2026_9999"})
+    )
+
+    rc = helper.main([
+        "ingest",
+        "--mount", str(wrong),
+        "--cache", str(cache),
+        "--disc-label", "LCSAS_CD_2026_0001",
+        "--verify-disc",
+    ])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "disc verification failed" in err
+    # Nothing should have been copied.
+    assert not (cache / "data" / sha[:2] / sha).exists()
+
+
+# ---------------------------------------------------------------------------
+# ingest — already-cached + missing-on-disc per-pack continues
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_skips_already_cached_and_absent_packs(tmp_path):
+    """A pack already in the cache is skipped (line 342); a wanted pack that
+    isn't on this disc is skipped without error (line 345)."""
+    blob_a = b"cached-already"
+    blob_b = b"not-on-disc"
+    sha_a, sha_b = _sha(blob_a), _sha(blob_b)
+    cache = _bootstrap(
+        tmp_path,
+        [
+            (sha_a, len(blob_a), "LCSAS_CD_2026_0001"),
+            (sha_b, len(blob_b), "LCSAS_CD_2026_0001"),
+        ],
+        disc_blobs={sha_a: blob_a},
+    )
+    # Pre-seed sha_a into the cache so ingest hits the already-cached branch.
+    dst = helper.pack_dest_path(cache / "data", sha_a)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(blob_a)
+
+    # Disc 0001 carries only sha_a; sha_b is wanted but absent on disc.
+    disc = tmp_path / "ingest_disc"
+    _seed_disc(disc, {sha_a: blob_a})
+
+    rc = helper.main([
+        "ingest",
+        "--mount", str(disc),
+        "--cache", str(cache),
+        "--disc-label", "LCSAS_CD_2026_0001",
+    ])
+    # Both packs were "handled" (one already cached, one absent) with no
+    # corruption → exit 0.
+    assert rc == 0
+    assert dst.read_bytes() == blob_a
+    # sha_b was never available, so it stays absent.
+    assert not helper.pack_dest_path(cache / "data", sha_b).is_file()
+
+
+# ---------------------------------------------------------------------------
+# main — defensive unknown-phase branch + script entrypoint
+# ---------------------------------------------------------------------------
+
+
+def test_main_unknown_phase_returns_2(monkeypatch):
+    """The trailing ``return 2`` guards against a parsed-but-undispatched
+    phase (line 561). argparse normally makes this unreachable, so we feed
+    main a namespace with an unrecognised phase directly."""
+    import argparse
+
+    ns = argparse.Namespace(phase="bogus")
+    monkeypatch.setattr(
+        argparse.ArgumentParser, "parse_args", lambda self, argv: ns
+    )
+    assert helper.main([]) == 2
+
+
+def test_run_module_as_main_in_process(monkeypatch):
+    """Execute the module under ``__name__ == '__main__'`` in-process so the
+    coverage tracer credits the script-guard line (565). With no subcommand,
+    argparse raises SystemExit(2)."""
+    import runpy
+
+    monkeypatch.setattr(
+        sys, "argv", ["restore_single_drive.py"]
+    )
+    with pytest.raises(SystemExit) as exc:
+        runpy.run_path(helper.__file__, run_name="__main__")
+    # No subcommand → argparse SystemExit(2).
+    assert exc.value.code == 2
