@@ -2582,3 +2582,170 @@ def _decrypt_test(encrypted: bytes) -> bytes:
     return _decrypt_authenticated(
         MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, encrypted
     )
+
+
+# ── RST-04: import-time no-zstandard wiring (lines 101-120) ───────
+#
+# The ``except ImportError`` block in restic_fallback wires the vendored
+# pure-Python zstd decoder and defines the one-time-warning ``_decompress_zstd``.
+# It runs ONLY at import time, and ONLY when ``import zstandard`` fails. This
+# test host HAS native zstandard, so the block is never reached by the rest of
+# the suite. The heir's bare machine WON'T have zstandard — this is the path that
+# actually runs for them, so it must be proven correct.
+#
+# We can't simply ``del sys.modules['zstandard']`` and re-import: native
+# zstandard is already loaded, and import machinery may re-find it. Instead we
+# spawn a fresh ``python3`` whose ``sys.meta_path`` rejects ``zstandard`` BEFORE
+# restic_fallback is imported, forcing the ImportError branch. The zstd frame is
+# produced HERE with native zstandard and handed to the child, which decompresses
+# it through the pure path and must return byte-identical plaintext. A subprocess
+# keeps the block-zstandard hack from polluting the rest of the suite.
+
+_NO_ZSTANDARD_CHILD = r'''
+import sys
+import importlib.abc
+
+
+class _BlockZstandard(importlib.abc.MetaPathFinder):
+    """Make ``import zstandard`` raise ImportError, as on a bare host."""
+
+    def find_spec(self, name, path, target=None):
+        if name == "zstandard" or name.startswith("zstandard."):
+            raise ImportError("zstandard blocked for tier-3 fallback test")
+        return None
+
+
+sys.meta_path.insert(0, _BlockZstandard())
+
+# Confirm the block really bites before importing the module under test.
+try:
+    import zstandard  # noqa: F401
+    print("FAIL: zstandard import unexpectedly succeeded", file=sys.stderr)
+    sys.exit(2)
+except ImportError:
+    pass
+
+import io
+import contextlib
+
+# Capture stderr across import + first decompress to assert the one-time
+# "slow built-in zstd decoder" warning fires exactly once.
+err = io.StringIO()
+with contextlib.redirect_stderr(err):
+    from lcsas.restore import restic_fallback as fb
+
+    # The ImportError branch must have run at import time.
+    assert fb._HAS_ZSTD is False, "expected _HAS_ZSTD False without zstandard"
+    assert fb._warned_pure_zstd is False, "warning must not fire before first use"
+
+    compressed = sys.stdin.buffer.read()
+    with open(sys.argv[1], "rb") as fh:
+        expected = fh.read()
+
+    out1 = fb._decompress_zstd(compressed, max_output_size=len(expected) * 4)
+    out2 = fb._decompress_zstd(compressed, max_output_size=len(expected) * 4)
+
+assert out1 == expected, "pure-path decompression not byte-identical"
+assert out2 == expected, "second pure-path decompression not byte-identical"
+assert fb._warned_pure_zstd is True, "warning flag must flip True after first use"
+
+warnings = err.getvalue().count("slow built-in zstd decoder")
+assert warnings == 1, f"expected one-time warning, saw {warnings}"
+
+print("OK")
+'''
+
+
+class TestNoZstandardImportWiring:
+    """RST-04: prove the ``except ImportError`` wiring (lines 101-120).
+
+    Runs in a subprocess so blocking ``zstandard`` cannot pollute the rest of
+    the suite, which relies on native zstandard being importable.
+    """
+
+    def test_pure_path_decompresses_without_zstandard(self, tmp_path):
+        import subprocess
+        import sys
+
+        zstd = pytest.importorskip("zstandard")  # only to PRODUCE a frame
+
+        original = b"heir's bare-machine restore payload 0123456789 " * 500
+        compressed = zstd.ZstdCompressor(level=9).compress(original)
+
+        expected_file = tmp_path / "expected.bin"
+        expected_file.write_bytes(original)
+
+        result = subprocess.run(
+            [sys.executable, "-c", _NO_ZSTANDARD_CHILD, str(expected_file)],
+            input=compressed,
+            capture_output=True,
+            timeout=120,
+        )
+        assert result.returncode == 0, (
+            "child failed:\n"
+            f"stdout={result.stdout!r}\n"
+            f"stderr={result.stderr.decode(errors='replace')}"
+        )
+        assert result.stdout.strip() == b"OK"
+
+    def test_pure_path_in_process_reload(self, tmp_path, capsys):
+        """In-process variant: reload restic_fallback with ``zstandard`` blocked.
+
+        The subprocess test above is the polution-proof correctness proof; this
+        one additionally exercises lines 101-120 within THIS interpreter so the
+        coverage tool records them. State (``sys.modules``, ``sys.meta_path``) is
+        fully restored in a finally block and the module re-imported clean, so
+        every later test still sees native zstandard.
+        """
+        import importlib
+        import importlib.abc
+        import sys
+
+        zstd = pytest.importorskip("zstandard")  # only to PRODUCE a frame
+        original = b"in-process bare-host payload " * 400
+        compressed = zstd.ZstdCompressor(level=9).compress(original)
+
+        class _BlockZstandard(importlib.abc.MetaPathFinder):
+            def find_spec(self, name, path, target=None):  # type: ignore[no-untyped-def]
+                if name == "zstandard" or name.startswith("zstandard."):
+                    raise ImportError("zstandard blocked for tier-3 test")
+                return None
+
+        from lcsas.restore import restic_fallback as fb
+
+        saved_zstd_mods = {
+            name: mod
+            for name, mod in sys.modules.items()
+            if name == "zstandard" or name.startswith("zstandard.")
+        }
+        finder = _BlockZstandard()
+        try:
+            for name in saved_zstd_mods:
+                del sys.modules[name]
+            sys.meta_path.insert(0, finder)
+
+            reloaded = importlib.reload(fb)
+            assert reloaded._HAS_ZSTD is False
+            assert reloaded._warned_pure_zstd is False
+
+            out = reloaded._decompress_zstd(
+                compressed, max_output_size=len(original) * 4
+            )
+            assert out == original
+            assert reloaded._warned_pure_zstd is True
+            # Warning is emitted once; a second call must not re-warn.
+            capsys.readouterr()
+            reloaded._decompress_zstd(compressed, max_output_size=len(original) * 4)
+            assert "slow built-in zstd decoder" not in capsys.readouterr().err
+        finally:
+            sys.meta_path.remove(finder)
+            for name in list(sys.modules):
+                if name == "zstandard" or name.startswith("zstandard."):
+                    del sys.modules[name]
+            sys.modules.update(saved_zstd_mods)
+            # Re-import the module cleanly so later tests see native zstandard.
+            importlib.reload(fb)
+
+        # Sanity: the live module is back on the native fast path.
+        from lcsas.restore import restic_fallback as fb_after
+        assert fb_after._HAS_ZSTD is True
