@@ -78,7 +78,7 @@ repo/
 - Ranges from ~4 MB to ~100 MB in typical configurations
 
 The on-disc restic/rustic pack format LCSAS reads and restores is specified in
-[docs/formats/restic-pack.md](formats/restic-pack.md).
+[docs/RESTIC_FORMAT_SPEC.md](RESTIC_FORMAT_SPEC.md).
 
 ### SQLite Catalog Schema
 
@@ -206,7 +206,7 @@ key_escrow (
 > The `key_escrow` table records *that* a repository key was split into a
 > K-of-N SLIP-0039 set (and when) — it never stores the shares or the key
 > itself. Share words live only on the printed recovery cards. See the
-> key-share format spec ([docs/formats/key-share.md](formats/key-share.md))
+> key-share format spec ([docs/KEY_SHARE_FORMAT.md](KEY_SHARE_FORMAT.md))
 > and the `keyshare/` package.
 
 ### Volume Lifecycle States
@@ -373,7 +373,7 @@ Each repository maintains its own encryption independently:
   dependency-free
 - Typical overhead: 15% for optical media
 - Enables recovery from surface scratches, partial media degradation
-- Format details: [docs/formats/rs03-ecc.md](formats/rs03-ecc.md)
+- Format details: [docs/DVDISASTER_RS03_FORMAT.md](DVDISASTER_RS03_FORMAT.md)
 
 ### Redundancy Strategy
 
@@ -425,7 +425,7 @@ without needing the encryption key, external tools, or prior knowledge.
 **Implication:** An attacker with physical access to a disc can learn *what*
 was backed up (file paths, timestamps, hostnames) but cannot read *any* file
 contents without the repository password. The full stolen-disc threat model
-is in [docs/formats/disc-confidentiality.md](formats/disc-confidentiality.md).
+is in [docs/DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md).
 
 **For highly sensitive archives**, consider:
 
@@ -616,7 +616,7 @@ required), `lcsas-keyshare` (SLIP-0039 share recombination), plus
 > approved targets (Linux x86_64/aarch64/armv7 musl, Windows x86_64-gnu,
 > macOS Intel + Apple Silicon), so the durable path is available on every
 > supported host rather than x86_64/glibc only. See the cross-platform meta
-> RFC ([docs/development/cross-platform-meta-rfc.md](development/cross-platform-meta-rfc.md)).
+> RFC ([docs/CROSS_PLATFORM_META_RFC.md](CROSS_PLATFORM_META_RFC.md)).
 
 ### JSON Compatibility
 

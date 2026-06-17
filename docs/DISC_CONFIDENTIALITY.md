@@ -11,7 +11,7 @@ This document is the deliberate, written threat model for **confidentiality**
 of a burned LCSAS disc (restorability findings live elsewhere). It exists so
 that an owner choosing where to store discs and key cards can weigh the
 tradeoff with eyes open. It is referenced from `docs/ESTATE_PLANNING.md`,
-`docs/SURVIVABILITY.md`, and `recovery/docs/TIERS.txt`, and is bundled on
+`docs/guides/survivability.md`, and `recovery/docs/TIERS.txt`, and is bundled on
 every meta-volume.
 
 ---

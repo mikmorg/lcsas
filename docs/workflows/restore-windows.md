@@ -54,7 +54,7 @@ hint at the password prompt); the Python fallback is
 `keyshare_combine.py` run under the meta-disc's bundled CPython. See
 `recovery/docs/RECOVER_WINDOWS.txt` ("KEY SHARES (SPLIT PASSWORDS)"),
 [`docs/KEY_SHARE_FORMAT.md`](../KEY_SHARE_FORMAT.md), and
-[`docs/RECOVERY_RUNBOOK.md`](../RECOVERY_RUNBOOK.md).
+[`docs/guides/recovery-runbook.md`](../guides/recovery-runbook.md).
 
 | Tier | What runs                                              | Status on Windows |
 |------|--------------------------------------------------------|-------------------|

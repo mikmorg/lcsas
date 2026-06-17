@@ -54,7 +54,7 @@ Schema version is 9 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the 
 - Handler: `cmd_init` (`src/lcsas/cli/main.py`)
 - Schema DDL + `create_all` / `ensure_schema`: `src/lcsas/db/schema.py`
 - Schema version constant: `CURRENT_SCHEMA_VERSION` (`src/lcsas/db/schema.py`)
-- Catalog overview: `docs/architecture/overview.md`
+- Catalog overview: `docs/architecture.md`
 
 ---
 
