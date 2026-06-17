@@ -40,7 +40,7 @@ Tier 2 — COLD   Optical           (burned discs; permanent)
 ### Data flow (burn pipeline)
 
 1. **Scan** — `packs/scanner.py` walks the Rustic mirror and registers new pack files in the SQLite catalog (`db/`).
-2. **Bin-pack** — `binpack/algorithm.py` runs first-fit-decreasing to fill volumes to the configured media size (BD25, MDISC100, BDXL100, TEST_TINY — defined in `config/media.py`).
+2. **Bin-pack** — `binpack/algorithm.py` runs first-fit-decreasing to fill volumes to the configured media size (BD25, BD50, BDXL100, MDISC25, MDISC100, TEST_TINY — defined in `config/media.py`).
 3. **Stage** — `staging/builder.py` hardlinks packs into a staging tree; `staging/metadata.py` (`HolographicInjector`) copies the complete SQLite catalog and per-repo Rustic metadata (index, snapshots, keys) onto every disc so any single disc is self-describing.
 4. **ISO** — `iso/xorriso.py` calls xorriso to master the staging directory into an ISO.
 5. **ECC** — `ecc/dvdisaster.py` augments the ISO with DVDisaster RS03 error correction.
@@ -52,7 +52,7 @@ Restore is the mirror: `restore/planner.py` generates a disc pick list; `restore
 
 | Package | Role |
 |---------|------|
-| `cli/` | argparse entry-point (`lcsas` command, 15+ subcommands) |
+| `cli/` | argparse entry-point (`lcsas` command, 22 top-level subcommands: `burn`, `burn-iso`, `catalog`, `config`, `consolidate`, `copy`, `estate`, `init`, `key`, `location`, `meta`, `pack`, `recovery`, `repo`, `restore`, `scan`, `session`, `stage`, `staging`, `status`, `verify`, `volume`) |
 | `config/` | TOML config loader, media type definitions |
 | `db/` | SQLite catalog — schema (v9), connection, frozen-dataclass models, CRUD, queries |
 | `rustic/` | Protocol-based subprocess wrapper + JSON output parser |
@@ -65,6 +65,8 @@ Restore is the mirror: `restore/planner.py` generates a disc pick list; `restore
 | `restore/` | Restore planner, executor, pure-Python fallback, standalone env builder |
 | `consolidate/` | Volume merger (collapses redundant packs across discs) |
 | `meta/` | Meta-volume builder (bootable disaster-recovery disc with bundled binaries + source) |
+| `recovery/` | C89 recovery-binary cross-compilation harness (drives `lcsas recovery build`; builds tier-1 `lcsas-restore` against vendored sqlite+zstd) |
+| `keyshare/` | Pure-Python SLIP-0039 Shamir key splitting (K-of-N escrow of repo keys) |
 | `utils/` | Hashing, label generation, two-level hex pack layout, subprocess base, fs helpers |
 
 ### Key design patterns
@@ -87,10 +89,10 @@ The recovery tiers are documented in `recovery/docs/TIERS.txt` and dispatched by
 
 **Vendoring vs runtime dependency:** sqlite + zstd live as C source in `recovery/vendored/` and we compile them ourselves alongside our own code — that's not a "third party runtime dependency", it's source we ship and audit (pinned in `recovery/MANIFEST.sha256`). Rustic and CPython ARE runtime dependencies (we ship opaque prebuilt artifacts pinned in `recovery/UPSTREAM.sha256`).
 
-**Intent:** the bare path (tier 1) must work with nothing but kernel + libc + the `lcsas-restore` binary off the meta-volume. No `pip install`, no package manager, no upstream release matrix that still needs to exist decades from now. Cross-platform tier-1 coverage as of Phase 21.12: all 6 approved targets — Linux x86_64/aarch64/armv7 musl, Windows-gnu, macOS Intel + Apple Silicon (the macOS pair via `zig cc -target <arch>-macos`, no Apple SDK required). See `docs/CROSS_PLATFORM_META_RFC.md` §6 Q6.
+**Intent:** the bare path (tier 1) must work with nothing but kernel + libc + the `lcsas-restore` binary off the meta-volume. No `pip install`, no package manager, no upstream release matrix that still needs to exist decades from now. Cross-platform tier-1 coverage as of Phase 21.12: all 6 approved targets — Linux x86_64/aarch64/armv7 musl, Windows-gnu, macOS Intel + Apple Silicon (the macOS pair via `zig cc -target <arch>-macos`, no Apple SDK required). See `docs/development/cross-platform-meta-rfc.md` §6 Q6.
 
 **Disc-integrity layer (beneath the cascade):** the tiers choose *which tool* reads the bytes; two guards keep the bytes themselves intact. DVDisaster RS03 ECC (wrapped around every burned image) repairs bit-rotted sectors, and tier-1 then authenticates every blob (Poly1305 MAC + SHA-256 content hash) and *rejects* corrupt data — so disc corruption is repaired-or-rejected, never silently restored. The RS03 repair path is validated against the real dvdisaster binary by `tests/integration/test_ecc_repair.py` (below-threshold damage → byte-identical repair; above-threshold → fails loud). That proof runs weekly in CI (`.github/workflows/ecc-weekly.yml`: scheduled Mondays + on any PR touching `src/lcsas/ecc/`) and is also available locally via the opt-in `LCSAS_ECC_REPAIR=1` invocation. The hardware-only physical-disc drill is `recovery/docs/PHYSICAL_DISC_VALIDATION.txt`. See `recovery/docs/TIERS.txt` "DISC-INTEGRITY LAYER".
 
 ### Database schema
 
-Schema version 9. Key tables: `repositories`, `packs`, `volumes`, `volume_packs` (M:M), `snapshots`, `locations`, `volume_copies`, `sessions`, `volume_events` (audit trail), `key_escrow` (recorded Shamir split: K/N + SLIP-0039 id, KEY-08). Volume lifecycle: `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED`.
+Schema version 9 (12 tables). Key tables: `repositories`, `packs`, `volumes`, `volume_packs` (M:M), `snapshots`, `locations`, `volume_copies`, `burn_sessions` + `session_volumes` (session/burn audit), `volume_events` (audit trail), `key_escrow` (recorded Shamir split: K/N + SLIP-0039 id, KEY-08). Volume lifecycle: `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED`.
