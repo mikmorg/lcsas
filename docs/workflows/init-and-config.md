@@ -2,7 +2,7 @@
 
 First-time setup and ongoing config management: create the SQLite catalog and validate a TOML config. These run before any scan/stage/burn cycle.
 
-Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relative paths against the config file's parent dir (`src/lcsas/config/settings.py:151`).
+Schema version is 9 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the TOML loader resolves relative paths against the config file's parent dir (`src/lcsas/config/settings.py`).
 
 ## Table of contents
 
@@ -21,14 +21,14 @@ Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relat
 - Optional TOML config — when `--config` is set, `paths.database` from the config is used as the DB location.
 
 **Steps:**
-1. `lcsas [--config FILE] init [--db-path PATH]` — create the SQLite file and run `create_all()`. (`src/lcsas/cli/main.py:447`)
-   - Parser: `src/lcsas/cli/main.py:71`.
+1. `lcsas [--config FILE] init [--db-path PATH]` — create the SQLite file and run `ensure_schema()` (which calls `create_all()` on a fresh DB). (`cmd_init`, `src/lcsas/cli/main.py`)
+   - Parser: `init` subparser in `build_parser()` (`src/lcsas/cli/main.py`).
    - DB path resolution order: explicit `--db-path` > global `--db` > `--config`'s `paths.database` > `archive.db` in cwd.
-2. `create_all()` issues `CREATE TABLE IF NOT EXISTS` for every table and inserts a row into `schema_version` if empty. (`src/lcsas/db/schema.py:170`)
+2. `create_all()` issues `CREATE TABLE IF NOT EXISTS` for every table and inserts a row into `schema_version` if empty. (`src/lcsas/db/schema.py`)
 
 **Expected outcome:**
-- A valid SQLite file exists at `--db-path` with tables `schema_version`, `volumes`, `repositories`, `packs`, `volume_packs`, `snapshots`, `locations`, `volume_copies`, `burn_sessions`, `session_volumes`, `volume_events`.
-- `SELECT MAX(version) FROM schema_version` returns `5`.
+- A valid SQLite file exists at `--db-path` with tables `schema_version`, `volumes`, `repositories`, `packs`, `volume_packs`, `snapshots`, `locations`, `volume_copies`, `burn_sessions`, `session_volumes`, `volume_events`, `key_escrow`.
+- `SELECT MAX(version) FROM schema_version` returns `9`.
 - Idempotent — re-running against an existing DB is a no-op and returns 0.
 
 **Variant axes that apply:**
@@ -46,14 +46,15 @@ Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relat
   - `tests/unit/test_cli.py::TestCLIParsing::test_init_command` — argparse wiring.
   - `tests/unit/test_cli_comprehensive.py::TestCmdInit::test_reinit_on_existing_db` — idempotent re-init.
 - Gaps:
-  - No assertion that `schema_version` actually equals 5 after `init`.
+  - No assertion that `schema_version` actually equals 9 after `init`.
   - No coverage for the `mkdir(parents=True)` branch (e.g., `--db-path /tmp/new/dir/archive.db`).
 
 **Source refs:**
-- Parser: `src/lcsas/cli/main.py:71`
-- Handler: `src/lcsas/cli/main.py:447`
-- Schema DDL + `create_all`: `src/lcsas/db/schema.py:170`
-- Schema version constant: `src/lcsas/db/schema.py:7`
+- Parser: `init` subparser in `build_parser()` (`src/lcsas/cli/main.py`)
+- Handler: `cmd_init` (`src/lcsas/cli/main.py`)
+- Schema DDL + `create_all` / `ensure_schema`: `src/lcsas/db/schema.py`
+- Schema version constant: `CURRENT_SCHEMA_VERSION` (`src/lcsas/db/schema.py`)
+- Catalog overview: `docs/architecture/overview.md`
 
 ---
 
@@ -66,19 +67,19 @@ Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relat
 - Paths referenced in the TOML must exist and be the correct type for a clean run.
 
 **Steps:**
-1. `lcsas --config PATH config check` — load and validate. (`src/lcsas/cli/main.py:818`)
-   - Parser: `src/lcsas/cli/main.py:372`.
-   - Missing `--config` logs `--config is required for config check.` and returns 1 (`src/lcsas/cli/main.py:822`).
-2. `load_config()` parses via `tomllib`, warns on unknown sections/keys, resolves relative paths, and builds a frozen `LCSASConfig`. (`src/lcsas/config/settings.py:119`)
-3. `validate_config()` checks (`src/lcsas/config/settings.py:258`):
-   - `mirror_base_path` exists and is a directory (`:266`).
-   - `staging_path` exists, is a directory, and is writable (`:276`).
-   - `db_path` parent exists and is writable (`:290`).
-   - `default_ecc_redundancy_pct` in `[0, 100]` (`:301`).
-   - `metadata_reserve_bytes` non-negative and `< default_media_type.usable_bytes` (`:308`).
-   - `label_prefix` non-empty, matches `[A-Z0-9_]+`, short enough for a 32-char ISO 9660 label (`:322`).
-   - Per-repo `mirror_path` exists and is a directory; `password_file` exists if set (`:342`).
-   - `staging_path` and `mirror_base_path` are not identical or nested (cleanup would destroy mirrors) (`:361`).
+1. `lcsas --config PATH config check` — load and validate. (`cmd_config_check`, `src/lcsas/cli/main.py`)
+   - Parser: `config` subparser in `build_parser()` (`src/lcsas/cli/main.py`).
+   - Missing `--config` logs `--config is required for config check.` and returns 1.
+2. `load_config()` parses via `tomllib`, warns on unknown sections/keys, resolves relative paths, and builds a frozen `LCSASConfig`. (`src/lcsas/config/settings.py`)
+3. `validate_config()` checks (`src/lcsas/config/settings.py`):
+   - `mirror_base_path` exists and is a directory.
+   - `staging_path` exists, is a directory, and is writable.
+   - `db_path` parent exists and is writable.
+   - `default_ecc_redundancy_pct` in `[0, 100]`.
+   - `metadata_reserve_bytes` non-negative and `< default_media_type.usable_bytes`.
+   - `label_prefix` non-empty, matches `[A-Z0-9_]+`, short enough for a 32-char ISO 9660 label.
+   - Per-repo `mirror_path` exists and is a directory; `password_file` exists if set.
+   - `staging_path` and `mirror_base_path` are not identical or nested (cleanup would destroy mirrors).
 
 **Expected outcome:**
 - Valid: one `Configuration is valid.` log line, exit 0.
@@ -107,9 +108,9 @@ Schema version is 5 (`src/lcsas/db/schema.py:7`); the TOML loader resolves relat
   - `optical_device` not validated (gap, not a test gap).
 
 **Source refs:**
-- Parser / dispatch / handler: `src/lcsas/cli/main.py:372`, `:2677`, `:818`.
-- Loader / validator / default-config factory: `src/lcsas/config/settings.py:119`, `:258`, `:243`.
-- Unknown-key warning whitelist: `src/lcsas/config/settings.py:78`.
+- Parser / dispatch / handler: `config` subparser + `cmd_config_check` (`src/lcsas/cli/main.py`).
+- Loader / validator / default-config factory: `load_config` / `validate_config` (`src/lcsas/config/settings.py`).
+- Unknown-key warning whitelist: `src/lcsas/config/settings.py`.
 
 ---
 
@@ -119,8 +120,8 @@ Observations from reading the source; **not** fixes.
 
 - **Catalog distribution is holographic.** The complete SQLite catalog is copied onto every burned disc by `staging/metadata.py::HolographicInjector`, so any single disc is self-describing. There is no separate JSON-export step.
 - **True backup = copy the `.sqlite` file.** There is no `db import` and no `db export` command; operators wanting an off-disc snapshot of the catalog should copy the raw SQLite file.
-- **`init` honors `--config`.** `lcsas --config foo.toml init` writes to the TOML's `paths.database` (resolution order: `--db-path` > `--db` > `--config` > `./archive.db`) — fixed in issue #17 (`src/lcsas/cli/main.py:452`).
-- **`init` does not migrate.** `create_all` stamps `CURRENT_SCHEMA_VERSION` only when `schema_version` is empty (`src/lcsas/db/schema.py:189`); migrations happen on access via `migrate()` (`src/lcsas/db/schema.py:200`).
+- **`init` honors `--config`.** `lcsas --config foo.toml init` writes to the TOML's `paths.database` (resolution order: `--db-path` > `--db` > `--config` > `./archive.db`) — fixed in issue #17 (`cmd_init`, `src/lcsas/cli/main.py`).
+- **`init` migrates if needed.** On an existing catalog `ensure_schema()` calls `migrate()` to bring an older DB up to `CURRENT_SCHEMA_VERSION`; on a fresh DB `create_all()` stamps the current version directly (`src/lcsas/db/schema.py`).
 - **`config check` does not validate `optical_device`** — typos surface only at burn time.
 - **`--config` is a top-level flag.** `lcsas config check --config foo.toml` fails argparse; correct form is `lcsas --config foo.toml config check`. The error message could be clearer about position.
 - **Unknown TOML keys are warnings, not errors.** A typo-quiet config can load "successfully" and silently produce nothing on `scan` (`src/lcsas/config/settings.py:78`).

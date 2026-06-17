@@ -48,47 +48,47 @@ airgapped sites, and split-machine "stage here, burn there" pipelines.
 
 - An ISO previously produced by `lcsas stage` (typically containing the
   holographic catalog snapshot and DVDisaster RS03 ECC already
-  applied — see `src/lcsas/burn/orchestrator.py:452-461`).
+  applied — see `src/lcsas/burn/orchestrator.py`).
 - `xorriso` ≥ 1.4.0 on the burner machine (used both for burning and
-  for read-back verification — `src/lcsas/iso/xorriso.py:272-325`).
+  for read-back verification — `src/lcsas/iso/xorriso.py`).
 - A target optical drive (`/dev/sr0` by default).
 - For receipt emission: a known **volume label** (defaults to the ISO's
   parent directory name) and a **location tag** that names the physical
   destination of the disc (required when `--emit-receipt` is given —
-  `src/lcsas/cli/main.py:1097-1100`).
+  `cmd_burn_iso`).
 - **No** config file, **no** database, **no** mirror access is required.
 
 **Steps:**
 
 1. Verify the ISO exists; bail out early if it does not
-   (`src/lcsas/cli/main.py:1093-1095`).
+   (`cmd_burn_iso`).
 2. If `--emit-receipt` is requested without `--location`, refuse the run
    so that downstream import has a destination to write
-   (`src/lcsas/cli/main.py:1097-1100`).
+   (`cmd_burn_iso`).
 3. Hash the ISO with SHA-256 **before** the burn, so the receipt records
    exactly the bits that went to disc even if the file is later
-   replaced (`src/lcsas/cli/main.py:1106-1109`,
-   `src/lcsas/utils/hashing.py`).
-4. Stream the ISO to the optical device with xorriso in `-as cdrecord
-   -dao` mode (`src/lcsas/cli/main.py:1111-1113`,
-   `src/lcsas/iso/xorriso.py:272-305`).
-5. Unless `--no-verify` is passed, read-back-verify the disc with
-   `xorriso -check_media`; record `verify_passed` for the receipt
-   (`src/lcsas/cli/main.py:1115-1119`,
-   `src/lcsas/iso/xorriso.py:307-325`).
-6. If `--emit-receipt` was given, build the receipt dict with
+   replaced (`cmd_burn_iso`, `src/lcsas/utils/hashing.py`).
+4. Unless `--no-verify` is passed, a blank-media pre-check refuses a disc
+   that already carries data before the burn begins (`cmd_burn_iso`).
+5. Stream the ISO to the optical device with xorriso in `-as cdrecord
+   -dao` mode (`cmd_burn_iso`, `src/lcsas/iso/xorriso.py`).
+6. Unless `--no-verify` is passed, read-back-verify the disc with
+   `xorriso -check_media`, then read the disc's PVD Volume ID back and
+   confirm it matches the label; record `verify_passed` for the receipt
+   (`cmd_burn_iso`, `src/lcsas/iso/xorriso.py`).
+7. If `--emit-receipt` was given, build the receipt dict with
    `volume_label` (from `--label` or `iso.parent.name`), `session_id`,
-   `location`, `device`, `burn_date` (UTC ISO 8601), `iso_sha256`, and
-   `verify_passed` (`src/lcsas/cli/main.py:1121-1131`).
-7. Persist the receipt JSON. If `--emit-receipt` points at a directory,
+   `location`, `device`, `burn_date` (UTC ISO 8601), `iso_sha256`,
+   `iso_size_bytes`, and `verify_passed` (`cmd_burn_iso`).
+8. Persist the receipt JSON. If `--emit-receipt` points at a directory,
    auto-name the file `<label>_<location>.json`; otherwise treat the
    path as the receipt filename and create parent directories as
    needed. The write is `fsync()`-ed before the process returns so the
    receipt survives a power loss on the burner
-   (`src/lcsas/cli/main.py:1133-1142`).
-8. Exit non-zero if `--verify` was on and verification failed — but the
+   (`cmd_burn_iso`).
+9. Exit non-zero if `--verify` was on and verification failed — but the
    receipt is still written so the failure is recorded
-   (`src/lcsas/cli/main.py:1144-1145`).
+   (`cmd_burn_iso`).
 
 **Expected outcome:**
 
@@ -156,21 +156,20 @@ command.
   `verify_passed: true` purely on the basis that no verify was attempted
   (this is the current code path — `verify_passed` is initialised `True`
   and only flipped by an actual failed verify run, see
-  `src/lcsas/cli/main.py:1115-1119`). Reasonable people could disagree
+  `cmd_burn_iso`). Reasonable people could disagree
   on whether that semantics is correct.
 - No test asserts that the receipt file is `fsync()`-ed.
 - No test covers `--emit-receipt` pointing at a non-existent nested
   directory (the code calls `mkdir(parents=True, exist_ok=True)` —
-  `src/lcsas/cli/main.py:1136-1137`).
+  `cmd_burn_iso`).
 
 **Source refs:**
 
-- `src/lcsas/cli/main.py:147-172` — argparse wiring for `burn-iso`.
-- `src/lcsas/cli/main.py:1086-1147` — `cmd_burn_iso` handler.
-- `src/lcsas/cli/main.py:2690-2691` — dispatch.
-- `src/lcsas/iso/xorriso.py:272-325` — `burn_iso` and `verify_disc`.
+- `build_parser()` in `src/lcsas/cli/main.py` — argparse wiring for `burn-iso`.
+- `cmd_burn_iso` in `src/lcsas/cli/main.py` — handler and dispatch.
+- `src/lcsas/iso/xorriso.py` — `burn_iso` and `verify_disc`.
 - `src/lcsas/utils/hashing.py` — `sha256_file`.
-- `tests/unit/test_cli_comprehensive.py:302-403` — test class.
+- `tests/unit/test_cli_comprehensive.py` — `TestCmdBurnIso` test class.
 
 ---
 
@@ -198,11 +197,11 @@ its long-term-storage location (B).
    into `<staging>/<session>/<volume_label>/`, an ISO is created next
    to it as `<staging>/<session>/<volume_label>.iso`, and ECC is
    applied. Volumes are written to the catalog in `STAGING` status
-   (`src/lcsas/burn/orchestrator.py:503-654`).
+   (`src/lcsas/burn/orchestrator.py`).
 2. **On A — verify staging.** The session manifest `session.json` is
    written into the session directory and lists every volume label,
    ISO path, UUID, and pack ID set
-   (`src/lcsas/burn/orchestrator.py:934-965`). This is the manifest you
+   (`src/lcsas/burn/orchestrator.py`). This is the manifest you
    ship alongside the ISOs.
 3. **Transport.** Copy each `<volume_label>.iso` from A to B. Optional
    but recommended: also copy `session.json` and the per-volume
@@ -216,15 +215,17 @@ its long-term-storage location (B).
    [--label <override>] [--session <session-id>]`. The `--label`
    defaults to the ISO's parent directory name, which matches the
    label that A used when staging
-   (`src/lcsas/cli/main.py:1121-1122`), so it is usually safe to omit.
-   `--session` is free-form metadata that ends up in the receipt and
-   lets the canonical catalog correlate the receipt with the session
-   row (`src/lcsas/cli/main.py:171-172`,
-   `src/lcsas/cli/main.py:1123-1131`).
+   (`cmd_burn_iso`), so it is usually safe to omit.
+   `--session` is free-form metadata that ends up in the receipt's
+   `session_id` field; note that `cmd_catalog_import` does **not**
+   consult it (it reads only `volume_label`, `location`,
+   `verify_passed`, `burn_date`, `iso_sha256`, and `iso_size_bytes`),
+   though the value is preserved verbatim in the
+   `BURN_RECEIPT_IMPORTED` audit event (`build_parser()`, `cmd_burn_iso`).
 5. **On B — collect receipts.** Each burn writes one JSON receipt to
    the directory passed to `--emit-receipt`, auto-named
    `<label>_<location>.json`
-   (`src/lcsas/cli/main.py:1133-1142`). After all burns finish, B has
+   (`cmd_burn_iso`). After all burns finish, B has
    one receipt per (volume, location) pair.
 6. **Transport back.** Copy the receipt directory back to A. Receipts
    are small JSON files; bandwidth and trust requirements are minimal.
@@ -237,7 +238,7 @@ its long-term-storage location (B).
    long-term storage location, the discs stay where they are. If they
    are being couriered to a third site, follow up with `lcsas location
    move <label> --from <burner-site> --to <vault>` after the disc
-   physically arrives (`src/lcsas/cli/main.py:200-207`).
+   physically arrives (`build_parser()`, `cmd_location`).
 
 **Expected outcome:**
 
@@ -246,10 +247,10 @@ its long-term-storage location (B).
   location).
 - Failed verifies on B become `BURNED` (not `VERIFIED`) on A and emit
   a `VERIFY_FAIL` audit event so the operator can investigate
-  (`src/lcsas/cli/main.py:1291-1298`).
+  (`cmd_catalog_import`).
 - A complete audit trail exists on A: every receipt-imported event
   includes the receipt filename in its detail field
-  (`src/lcsas/cli/main.py:1288, 1296`).
+  (`cmd_catalog_import`).
 
 **Variant axes that apply:**
 
@@ -258,7 +259,7 @@ its long-term-storage location (B).
   vault, ships a second ISO to site C which burns its own copy, both
   receipts come back to A. The catalog merges them via two
   `volume_copies` rows for the same volume_id (re-burn case handled by
-  `cmd_catalog_import` at `src/lcsas/cli/main.py:1277-1306`).
+  `cmd_catalog_import`).
 - **Multi-tenant:** Each volume can contain packs from multiple Rustic
   repos; the receipt is repo-agnostic — it carries only the volume
   label — so multi-tenant deployments need no special handling at
@@ -292,23 +293,23 @@ B.
   `catalog import-receipts` against a different temp catalog).
 - No test asserts that a remote-burn receipt carrying `session_id`
   produces a session-correlatable audit trail; the session ID is
-  written into the receipt
-  (`src/lcsas/cli/main.py:1125`) but is **not** consulted by
-  `cmd_catalog_import` (`src/lcsas/cli/main.py:1230-1311`), which only
-  reads `volume_label`, `location`, `verify_passed`, and `burn_date`.
+  written into the receipt by `cmd_burn_iso` and is preserved verbatim
+  in the `BURN_RECEIPT_IMPORTED` audit event, but `cmd_catalog_import`
+  does **not** otherwise act on it — for status transitions it consults
+  only `volume_label`, `location`, `verify_passed`, `burn_date`,
+  `iso_sha256`, and `iso_size_bytes`.
 - No documented procedure for what to ship alongside ISOs (the
   session.json manifest is a strong candidate but is not required for
   burning).
 
 **Source refs:**
 
-- `src/lcsas/cli/main.py:147-172` — `burn-iso` CLI.
-- `src/lcsas/cli/main.py:209-215` — `catalog import-receipts` CLI.
-- `src/lcsas/cli/main.py:1086-1147` — `cmd_burn_iso`.
-- `src/lcsas/cli/main.py:1230-1311` — `cmd_catalog_import`.
-- `src/lcsas/burn/orchestrator.py:503-654` — `stage()` (on host A).
-- `src/lcsas/burn/orchestrator.py:934-1003` — session manifest + receipt
-  writers.
+- `build_parser()` in `src/lcsas/cli/main.py` — `burn-iso` and
+  `catalog import-receipts` CLI wiring.
+- `cmd_burn_iso` in `src/lcsas/cli/main.py`.
+- `cmd_catalog_import` in `src/lcsas/cli/main.py`.
+- `src/lcsas/burn/orchestrator.py` — `stage()` (on host A) and the
+  session manifest + receipt writers.
 - `src/lcsas/staging/metadata.py` — holographic catalog injection.
 
 ---
@@ -325,58 +326,67 @@ produced by a live burn pipeline.
 **Prerequisites:**
 
 - An LCSAS config file (`--config` is required —
-  `src/lcsas/cli/main.py:1247-1249`).
+  `cmd_catalog_import`).
 - Read/write access to the master `catalog.db` (defaults from config;
   overridable via `--db`).
 - One or more receipt JSON files with at minimum the keys
   `volume_label` and `location`
-  (`src/lcsas/cli/main.py:1264-1268`).
+  (`cmd_catalog_import`).
 - The referenced volume must already exist in the master catalog —
   i.e. `lcsas stage` must have run for it. Receipts whose volume label
   is unknown are skipped with a warning
-  (`src/lcsas/cli/main.py:1270-1273`); they are **not** an error and
+  (`cmd_catalog_import`); they are **not** an error and
   do not abort the rest of the batch.
 
 **Steps:**
 
 1. Load the LCSAS config; refuse if `--config` was not provided
-   (`src/lcsas/cli/main.py:1246-1249`).
+   (`cmd_catalog_import`).
 2. Open `catalog.db` under a locked connection and ensure the schema
-   exists (`src/lcsas/cli/main.py:1251-1252`,
+   exists (`cmd_catalog_import`,
    `src/lcsas/db/connection.py`, `src/lcsas/db/schema.py`).
 3. For each receipt file:
    1. Parse JSON; on `JSONDecodeError` or `OSError`, log a warning and
       continue with the next file
-      (`src/lcsas/cli/main.py:1255-1261`).
+      (`cmd_catalog_import`).
    2. Validate required keys (`volume_label`, `location`); skip with a
       warning if any are missing
-      (`src/lcsas/cli/main.py:1263-1268`).
+      (`cmd_catalog_import`).
    3. Look up the volume by label; skip with a warning if absent
-      (`src/lcsas/cli/main.py:1270-1273`).
-   4. Ensure the destination location exists (creates the row if not —
-      `src/lcsas/cli/main.py:1275`,
-      `src/lcsas/db/locations.py:42`).
-   5. Read `verify_passed` (default `False`)
-      (`src/lcsas/cli/main.py:1279`).
-   6. If the volume is in `STAGING`, advance it:
+      (`cmd_catalog_import`).
+   4. Issue #18 hash guard: if any prior `BURN_RECEIPT_IMPORTED` event
+      for this volume recorded a different `iso_sha256`, **reject** the
+      receipt (no rows written) and count it toward the non-zero exit
+      (`cmd_catalog_import`).
+   5. Ensure the destination location exists (creates the row if not —
+      `cmd_catalog_import`,
+      `src/lcsas/db/locations.py`).
+   6. Read `verify_passed` (default `False`)
+      (`cmd_catalog_import`).
+   7. If the volume is in `STAGING`, advance it:
       - `STAGING → BURNING` (always)
       - then `BURNING → VERIFIED` + `mark_closed` + `VERIFY_PASS`
         event, if `verify_passed`
-        (`src/lcsas/cli/main.py:1281-1290`).
+        (`cmd_catalog_import`).
       - or `BURNING → BURNED` + `VERIFY_FAIL` event, if not
-        (`src/lcsas/cli/main.py:1291-1298`).
+        (`cmd_catalog_import`).
       Status transitions are validated against `VALID_TRANSITIONS`
-      (`src/lcsas/db/volumes.py:25-33`), so an already-`VERIFIED`
+      (`src/lcsas/db/volumes.py`), so an already-`VERIFIED`
       volume cannot be reverted from a receipt.
-   7. Add a `volume_copies` row for this `(volume_id, location)` pair,
-      stamping the burn date from the receipt
-      (`src/lcsas/cli/main.py:1300-1306`). The underlying upsert
+   8. Add a `volume_copies` row for this `(volume_id, location)` pair,
+      stamping the burn date, `iso_sha256`, and `iso_size_bytes` from
+      the receipt (`cmd_catalog_import`). The underlying upsert
       collapses re-imports of the same receipt into the existing copy
-      (`src/lcsas/db/volume_copies.py:38-79`).
-   8. Commit per receipt; bump the `imported` counter
-      (`src/lcsas/cli/main.py:1307-1308`).
-4. Log the total imported count
-   (`src/lcsas/cli/main.py:1310`).
+      (`src/lcsas/db/volume_copies.py`).
+   9. Record a `BURN_RECEIPT_IMPORTED` audit event whose `detail` is a
+      JSON blob of the receipt provenance (`iso_sha256`, `session_id`,
+      `device`, `pack_ids`, receipt filename)
+      (`cmd_catalog_import`).
+   10. Commit per receipt; bump the `imported` counter
+      (`cmd_catalog_import`).
+4. Log the total imported count; if any receipt was rejected for an
+   `iso_sha256` mismatch, return a non-zero exit code
+   (`cmd_catalog_import`).
 
 **Expected outcome:**
 
@@ -387,11 +397,13 @@ produced by a live burn pipeline.
 - For volumes that were already `VERIFIED` at import time, **no**
   status change — only a copy row is added (the "re-burn to a new
   location" path)
-  (`src/lcsas/cli/main.py:1277-1280, 1300-1306`;
-  asserted by `tests/unit/test_cli_comprehensive.py:563-590`).
+  (`cmd_catalog_import`;
+  asserted by `TestCmdCatalogImport::test_import_reburn_only_adds_copy`).
 - Bad / malformed / orphan receipts are skipped with warnings; the
-  command returns `0` even when some receipts fail to import (the
-  successful ones are still committed).
+  command still returns `0` in that case (the successful ones are
+  committed). It returns a **non-zero** exit code only when a receipt
+  is rejected for an `iso_sha256` mismatch against a prior
+  `BURN_RECEIPT_IMPORTED` event (`cmd_catalog_import`).
 
 **Variant axes that apply:**
 
@@ -425,31 +437,28 @@ behaviour.
 **Gaps in coverage:**
 
 - No test exercises a malformed JSON file or a missing-keys receipt
-  (the warning-and-skip path at
-  `src/lcsas/cli/main.py:1259-1268`).
+  (the warning-and-skip path in `cmd_catalog_import`).
 - No test exercises an orphan receipt (`volume_label` unknown) —
-  `src/lcsas/cli/main.py:1270-1273`.
+  `cmd_catalog_import`.
 - No test exercises a batch with **mixed** good/bad receipts to confirm
   the bad ones do not poison the transaction.
-- `iso_sha256`, `device`, `session_id`, and `pack_ids` from the receipt
-  are **not** persisted on import — the catalog has nowhere to store
-  the per-burn ISO hash on the `volume_copies` row (the column exists
-  per `src/lcsas/db/volume_copies.py:13-16` but `cmd_catalog_import`
-  passes neither `iso_sha256` nor `media_serial` —
-  `src/lcsas/cli/main.py:1300-1306`). See "Gaps" below.
+- `iso_sha256` and `iso_size_bytes` are now persisted onto the
+  `volume_copies` row, and `iso_sha256`, `session_id`, `device`, and
+  `pack_ids` are persisted as a `BURN_RECEIPT_IMPORTED` audit event
+  (issue #18 — `cmd_catalog_import`). See "Gaps" below for the
+  remaining `pack_ids` limitation.
 
 **Source refs:**
 
-- `src/lcsas/cli/main.py:209-215` — argparse for `catalog
+- `build_parser()` in `src/lcsas/cli/main.py` — argparse for `catalog
   import-receipts`.
-- `src/lcsas/cli/main.py:1230-1311` — `cmd_catalog_import`.
-- `src/lcsas/cli/main.py:2700-2708` — subcommand dispatch.
-- `src/lcsas/db/volumes.py:25-33, 105-190` — `update_status`,
-  `mark_closed`, `VALID_TRANSITIONS`.
-- `src/lcsas/db/volume_copies.py:38-79` — `add_volume_copy` upsert.
-- `src/lcsas/db/volume_events.py:34` — `add_event`.
-- `src/lcsas/db/locations.py:42` — `ensure_location`.
-- `tests/unit/test_cli_comprehensive.py:480-590` — test class.
+- `cmd_catalog_import` in `src/lcsas/cli/main.py` — handler and dispatch.
+- `src/lcsas/db/volumes.py` — `update_status`, `mark_closed`,
+  `VALID_TRANSITIONS`.
+- `src/lcsas/db/volume_copies.py` — `add_volume_copy` upsert.
+- `src/lcsas/db/volume_events.py` — `add_event`, `get_events_for_volume`.
+- `src/lcsas/db/locations.py` — `ensure_location`.
+- `tests/unit/test_cli_comprehensive.py` — `TestCmdCatalogImport` test class.
 
 ---
 
@@ -463,13 +472,13 @@ and how the code responds today.
 - **Symptom:** xorriso exits non-zero before the ISO is fully written
   (cable yank, drive eject, write error, timeout).
 - **Behaviour:** `SubprocessXorrisoRunner.burn_iso` raises (see
-  `src/lcsas/iso/xorriso.py:290-305` —
+  `src/lcsas/iso/xorriso.py` —
   `CalledProcessError` is logged and re-raised after
   `_translate_burn_error`; `TimeoutExpired` becomes a `RuntimeError`
   via `_handle_timeout`).
 - **Catalog impact:** None on the burner — no DB is touched. No
   receipt is emitted because the receipt-write step
-  (`src/lcsas/cli/main.py:1121-1142`) is reached only after the burn
+  (`cmd_burn_iso`) is reached only after the burn
   and (optionally) the verify both complete.
 - **Recovery:** Discard the bad media; re-run `burn-iso` with a fresh
   disc. No reconciliation needed on host A.
@@ -478,20 +487,18 @@ and how the code responds today.
 
 - **Symptom:** xorriso reports a successful write, but `verify_disc`
   (`-check_media`) returns non-zero.
-- **Behaviour:** `cmd_burn_iso` sets `verify_passed = False`
-  (`src/lcsas/cli/main.py:1115-1119`). The receipt is **still
-  written** with `verify_passed: false`
-  (`src/lcsas/cli/main.py:1121-1142`); the process exits 1
-  (`src/lcsas/cli/main.py:1144-1145`). The disc is physically present
+- **Behaviour:** `cmd_burn_iso` sets `verify_passed = False`. The
+  receipt is **still written** with `verify_passed: false`; the
+  process exits 1 (`cmd_burn_iso`). The disc is physically present
   but suspect.
 - **Catalog impact on import:** `STAGING → BURNED` (not VERIFIED), a
   `VERIFY_FAIL` audit event is appended, and a `volume_copies` row is
   still added — so the operator can see the disc exists at the
   location but is known-bad
-  (`src/lcsas/cli/main.py:1291-1306`;
-  `tests/unit/test_cli_comprehensive.py:533-561`).
+  (`cmd_catalog_import`;
+  `TestCmdCatalogImport::test_import_transitions_staging_to_burned_on_verify_fail`).
 - **Recovery:** Investigate the disc (mount and run `lcsas catalog
-  validate` — `src/lcsas/cli/main.py:1314-1361`; or use `lcsas verify
+  validate` — `cmd_catalog_validate`; or use `lcsas verify
   --disc`); if irrecoverable, re-burn a replacement and re-import its
   receipt.
 
@@ -508,7 +515,7 @@ and how the code responds today.
      and feed it to `catalog import-receipts`.
   3. Use the manual recovery path: `lcsas verify <label>
      --mark-verified --detail "remote burn, receipt lost"`
-     (`src/lcsas/cli/main.py:346-355`). This skips the
+     (`cmd_verify`). This skips the
      receipt entirely but only works for already-staged volumes.
 
 ### Duplicate import (same receipt fed twice)
@@ -519,12 +526,12 @@ and how the code responds today.
   - **Volume status:** Already `VERIFIED` after the first import.
     The second import sees `vol.status == "VERIFIED"` and skips the
     transition block entirely
-    (`src/lcsas/cli/main.py:1280-1298`). No `VERIFY_PASS` event is
+    (`cmd_catalog_import`). No `VERIFY_PASS` event is
     re-fired.
   - **Volume copy:** `add_volume_copy` is an UPSERT on
     `(volume_id, location)` — second import refreshes `burn_date`
     and `notes` on the existing row rather than creating a duplicate
-    (`src/lcsas/db/volume_copies.py:56-67`).
+    (`src/lcsas/db/volume_copies.py`).
 - **Net effect:** Idempotent except for the `burn_date` and `notes`
   fields on the copy, which take the latest receipt's values.
 - **Caveat:** If the second receipt has `verify_passed: false` and the
@@ -540,7 +547,7 @@ and how the code responds today.
   back, or the receipt is for a volume that never existed).
 - **Behaviour:** `get_volume_by_label` returns `None`; the receipt is
   skipped with a warning
-  (`src/lcsas/cli/main.py:1270-1273`). No error, no partial update.
+  (`cmd_catalog_import`). No error, no partial update.
 - **Recovery:** Stage the volume on A (or restore the missing volume
   row), then re-import the receipt.
 
@@ -549,7 +556,7 @@ and how the code responds today.
 - **Symptom:** Truncated file, encoding error, permission denied.
 - **Behaviour:** `JSONDecodeError` / `OSError` are caught
   per-receipt; the file is skipped with a warning and the rest of the
-  batch continues (`src/lcsas/cli/main.py:1255-1261`).
+  batch continues (`cmd_catalog_import`).
 - **Recovery:** Repair the file, or re-export it on B if the
   filesystem there is intact.
 
@@ -559,7 +566,7 @@ and how the code responds today.
   itself, populate the `volume_packs` rows for the volume. The
   session-based burn path on A produces receipts that carry `pack_ids`
   (see `BurnReceipt` in
-  `src/lcsas/burn/orchestrator.py:86-99`), but the standalone
+  `src/lcsas/burn/orchestrator.py`), but the standalone
   `cmd_burn_iso` path emits a receipt **without** `pack_ids` —
   `cmd_burn_iso` does not have catalog access on the burner host and
   therefore cannot resolve the staged ISO's contents to integer pack
@@ -584,7 +591,7 @@ and how the code responds today.
 ### Burner host loses power immediately after write
 
 - **Behaviour:** The receipt write uses `flush()` + `fsync()`
-  (`src/lcsas/cli/main.py:1140-1141`), so a successful return from
+  (`cmd_burn_iso`), so a successful return from
   `cmd_burn_iso` implies the receipt is durable on B's filesystem.
 - **Caveat:** If power is lost **before** the write completes, no
   receipt exists; treat as "Missing receipt" above.
@@ -599,62 +606,63 @@ but operators should be aware:
 
 - **ISO SHA-256, `session_id`, `device`, and `pack_ids` are persisted on
   import via a `BURN_RECEIPT_IMPORTED` audit event (issue #18).** The
-  importer now both passes `iso_sha256` through to `add_volume_copy`
-  and emits a `volume_events` row of type `BURN_RECEIPT_IMPORTED` whose
-  `detail` is a JSON blob containing all four provenance fields. If a
-  prior `BURN_RECEIPT_IMPORTED` event for the same volume recorded a
-  different `iso_sha256`, the incoming receipt is **rejected** with a
-  non-zero exit code and no spurious event row is written. `pack_ids`
-  is still **not emitted by standalone `burn-iso`** — see "Standalone
-  `burn-iso` receipts cannot register pack membership" under Failure
-  modes for the rationale.
+  importer now both passes `iso_sha256` (and `iso_size_bytes`) through
+  to `add_volume_copy` and emits a `volume_events` row of type
+  `BURN_RECEIPT_IMPORTED` whose `detail` is a JSON blob containing all
+  four provenance fields. If a prior `BURN_RECEIPT_IMPORTED` event for
+  the same volume recorded a different `iso_sha256`, the incoming
+  receipt is **rejected** with a non-zero exit code and no spurious
+  event row is written. `pack_ids` is still **not emitted by standalone
+  `burn-iso`** — see "Standalone `burn-iso` receipts cannot register
+  pack membership" under Failure modes for the rationale.
 - **No "dry-run" / preview for `import-receipts`.** Operators cannot
   preview which receipts would be skipped, which volumes would
   transition, or which copies would be refreshed before committing.
 - **No CLI cross-check between receipt's `iso_sha256` and the
   staging-side ISO hash.** A receipt could be silently swapped for one
-  from a different ISO and the import would not notice (the master
-  catalog has the session-time hash in `session_volumes`
-  via `add_session_volume` — `src/lcsas/burn/orchestrator.py:630-639`
-  — but the import path does not consult it).
+  from a different ISO and the import would not notice it differs from
+  the session-time hash (the master catalog has the session-time hash
+  in `session_volumes` via `add_session_volume` —
+  `src/lcsas/burn/orchestrator.py` — but the import path does not
+  consult it; it only cross-checks against prior receipts for the same
+  volume).
 - **Re-burn verify failures aren't recorded.** A receipt with
   `verify_passed: false` against an already-`VERIFIED` volume updates
   the copy row but emits no `VERIFY_FAIL` event (the failure-event
   branch lives inside the `vol.status == "STAGING"` block —
-  `src/lcsas/cli/main.py:1280-1298`). The interactive burn path *does*
+  `cmd_catalog_import`). The interactive burn path *does*
   log a `VERIFY_FAIL_REBURN` event for the equivalent case
-  (`src/lcsas/burn/orchestrator.py:735-742`); the receipt-import path
+  (`src/lcsas/burn/orchestrator.py`); the receipt-import path
   does not have parity.
 - **No batching guarantee.** Each receipt is committed individually
-  (`src/lcsas/cli/main.py:1307`), so a `KeyboardInterrupt` mid-batch
+  (`cmd_catalog_import`), so a `KeyboardInterrupt` mid-batch
   leaves a partial import; this is benign because every operation is
   idempotent on re-run, but worth documenting for operators.
 
 ---
 
+## See also
+
+- [Architecture overview](../architecture.md) — the burn pipeline,
+  storage tiers, and holographic-catalog design that this workflow
+  decouples.
+
+---
+
 ## Source refs (consolidated)
 
-- CLI: `src/lcsas/cli/main.py:147-172` (argparse for `burn-iso`),
-  `src/lcsas/cli/main.py:209-215` (argparse for `catalog
-  import-receipts`), `src/lcsas/cli/main.py:1086-1147`
-  (`cmd_burn_iso`), `src/lcsas/cli/main.py:1230-1311`
-  (`cmd_catalog_import`), `src/lcsas/cli/main.py:2690-2708`
-  (dispatch).
-- Burn pipeline: `src/lcsas/burn/orchestrator.py:86-99`
-  (`BurnReceipt`), `src/lcsas/burn/orchestrator.py:503-654`
-  (`stage`), `src/lcsas/burn/orchestrator.py:656-813`
-  (`burn_session`), `src/lcsas/burn/orchestrator.py:934-1003`
-  (manifest + receipt writers).
-- ISO tooling: `src/lcsas/iso/xorriso.py:272-325` (`burn_iso`,
-  `verify_disc`).
-- DB: `src/lcsas/db/volumes.py:25-33` (`VALID_TRANSITIONS`),
-  `src/lcsas/db/volumes.py:105-203` (`update_status`,
-  `mark_closed`), `src/lcsas/db/volume_copies.py:38-79`
-  (`add_volume_copy` UPSERT), `src/lcsas/db/volume_events.py:34`
-  (`add_event`), `src/lcsas/db/locations.py:42`
+- CLI: `build_parser()` in `src/lcsas/cli/main.py` (argparse for
+  `burn-iso` and `catalog import-receipts`), `cmd_burn_iso` and
+  `cmd_catalog_import` in `src/lcsas/cli/main.py` (handlers + dispatch).
+- Burn pipeline: `src/lcsas/burn/orchestrator.py` — `BurnReceipt`,
+  `stage`, `burn_session`, and the manifest + receipt writers.
+- ISO tooling: `src/lcsas/iso/xorriso.py` — `burn_iso`, `verify_disc`.
+- DB: `src/lcsas/db/volumes.py` (`VALID_TRANSITIONS`, `update_status`,
+  `mark_closed`), `src/lcsas/db/volume_copies.py` (`add_volume_copy`
+  UPSERT), `src/lcsas/db/volume_events.py` (`add_event`,
+  `get_events_for_volume`), `src/lcsas/db/locations.py`
   (`ensure_location`).
 - Hashing: `src/lcsas/utils/hashing.py` (`sha256_file`).
-- Tests: `tests/unit/test_cli_comprehensive.py:298-403` (burn-iso),
-  `tests/unit/test_cli_comprehensive.py:476-590` (catalog import),
-  `tests/unit/test_xorriso.py:50-148` (xorriso burn/verify),
-  `tests/unit/test_subprocess_timeouts.py:44-52` (burn timeout).
+- Tests: `tests/unit/test_cli_comprehensive.py` (`TestCmdBurnIso`,
+  `TestCmdCatalogImport`), `tests/unit/test_xorriso.py` (xorriso
+  burn/verify), `tests/unit/test_subprocess_timeouts.py` (burn timeout).
