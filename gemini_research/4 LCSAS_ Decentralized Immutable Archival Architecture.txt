@@ -1,4 +1,6 @@
-﻿Linux Cold Storage Archival Suite (LCSAS)
+﻿[Original design research (historical reference; the architecture has since shipped — see docs/architecture.md).]
+
+Linux Cold Storage Archival Suite (LCSAS)
 Definitive Architecture and Implementation Guide
 Version: 1.0
 Target Media: Blu-ray (BD-R), M-Disc, LTO Tape

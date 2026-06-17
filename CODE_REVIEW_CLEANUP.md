@@ -1,5 +1,11 @@
 # Code Review Cleanup Task
 
+> **STATUS: historical — the items below have largely been addressed.**
+> This is a point-in-time cleanup checklist; the lint/typecheck/DRY passes
+> it describes have since been carried out. Some audit plans cite this file
+> by section/line as a ledger reference, so it is kept in place. Retained
+> for reference.
+
 This task guides a comprehensive code review and cleanup pass across the LCSAS codebase. Work through sections systematically, commit after each logical grouping.
 
 ## 1. Lint & Type Checking

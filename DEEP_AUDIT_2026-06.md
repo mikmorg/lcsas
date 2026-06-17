@@ -1,3 +1,13 @@
+> **STATUS — HISTORICAL RECORD (substantially remediated).**
+> This audit drove a remediation effort that has now largely landed: the
+> FMA-/BURN-/KEY-/RST-/FMT-/GATE- plan families have been implemented and
+> their plans archived as RESOLVED. The 78 findings below are preserved
+> verbatim as the original audit record — they are **not** rewritten here.
+> For per-item resolution status see the remediation plan index at
+> **`plans/audit-2026-06/INDEX.md`** (resolved plans are archived under
+> `plans/done/` as they land). Treat this file as the point-in-time audit
+> it was; consult the plan index for current state.
+
 # LCSAS Deep Audit — 2026-06-10
 
 **Goal judged against:** a non-technical heir, decades from now, holding a box of discs, must be able to restore the data with no outside help. Everything below is scored against that bar, not against what a developer could work around.

@@ -1,4 +1,6 @@
-﻿Definitive Guide to Immutable Cold Storage Architecture: Implementing a Multi-Tenant, Infinite-Incremental Optical Archival System for Linux
+﻿[Original design research (historical reference; the architecture has since shipped — see docs/architecture.md).]
+
+Definitive Guide to Immutable Cold Storage Architecture: Implementing a Multi-Tenant, Infinite-Incremental Optical Archival System for Linux
 1. Executive Summary
 The preservation of high-volume, static data assets presents a unique engineering challenge that stands in stark contrast to the requirements of high-availability transactional systems. The objective outlined is the creation of a "Write-Once, Read-Never" archival system for terabytes of Linux-hosted data, utilizing cold offline optical media (Blu-ray and M-Disc) as the storage substrate.
 This report details the Linux Cold Storage Archival Suite (LCSAS) architecture. This custom workflow leverages Content-Defined Chunking (CDC) to achieve storage-agnostic deduplication, ensuring that file moves and renames consume only negligible metadata space rather than duplicating payload storage.
