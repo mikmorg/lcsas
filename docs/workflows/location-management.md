@@ -22,9 +22,10 @@ disc is in hand.
 2. [`lcsas location list`](#lcsas-location-list)
 3. [`lcsas location status`](#lcsas-location-status)
 4. [`lcsas location move`](#lcsas-location-move)
-5. [Multi-copy sync via `--for-location`](#multi-copy-sync-via---for-location)
-6. [How `volume_copies` and `locations` interact](#how-volume_copies-and-locations-interact)
-7. [Gaps & multi-copy edge cases](#gaps--multi-copy-edge-cases)
+5. [`lcsas copy deprecate` / `lcsas copy destroy`](#lcsas-copy-deprecate--lcsas-copy-destroy)
+6. [Multi-copy sync via `--for-location`](#multi-copy-sync-via---for-location)
+7. [How `volume_copies` and `locations` interact](#how-volume_copies-and-locations-interact)
+8. [Gaps & multi-copy edge cases](#gaps--multi-copy-edge-cases)
 
 ---
 
@@ -243,6 +244,54 @@ created; the disc retains its `burn_date`, `iso_sha256`, and
 
 ---
 
+## `lcsas copy deprecate` / `lcsas copy destroy`
+
+**Purpose:** Record the *fate* of a single physical disc copy when a disc
+is damaged, retired, or lost. `deprecate` marks a copy as retired-but-
+present; `destroy` marks it as gone. Both mutate one `volume_copies` row
+(by `(volume_label, location)`), leaving copies at other locations
+untouched.
+
+**Prerequisites:**
+- `--config` with a writable catalog.
+- The volume label must resolve to a `Volume` row; an `ACTIVE`
+  `volume_copies` row must exist for `(volume, location)`.
+
+**Steps:**
+1. Parser registers `copy deprecate <volume_label> <location>` and
+   `copy destroy <volume_label> <location>` (both positional)
+   in `build_parser()`.
+2. `cmd_copy` resolves the label with `get_volume_by_label`; a missing
+   label logs an error and returns 1.
+3. It dispatches to `deprecate_copy(conn, volume_id, location)` or
+   `destroy_copy(conn, volume_id, location)`
+   (`src/lcsas/db/volume_copies.py`), which flip the copy's `status` to
+   `DEPRECATED` / `DESTROYED`. A `ValueError` (no such ACTIVE copy) is
+   logged and returns 1.
+4. **Auto-demotion:** if that was the *last* `ACTIVE` copy of the volume,
+   the helper returns a "demoted" flag and the volume itself drops to
+   `DEPRECATED`. `cmd_copy` then warns that the volume's packs now count
+   in `lcsas status` / the redundancy report and suggests re-burning via
+   `lcsas stage --for-location <location>`.
+
+**Expected outcome:** One `volume_copies` row transitions to
+`DEPRECATED` / `DESTROYED`. Losing the last `ACTIVE` copy auto-demotes
+the parent volume to `DEPRECATED` so the redundancy report and the
+deprecation guard stop counting it as a replica.
+
+**Variant axes that apply:**
+- Multi-copy — the command is only meaningful once a volume has copies
+  across locations; with a single copy, `destroy` triggers the
+  auto-demotion warning.
+- Multi-tenant — operates on a volume label, independent of repo.
+
+**Source refs:**
+- `build_parser()` (`copy` subparser), `cmd_copy`
+  (`src/lcsas/cli/main.py`)
+- `src/lcsas/db/volume_copies.py` (`deprecate_copy`, `destroy_copy`)
+
+---
+
 ## Multi-copy sync via `--for-location`
 
 **Purpose:** Bring a lagging location up to parity with the master mirror
@@ -352,7 +401,9 @@ existing copies at the target.
 
 ## How `volume_copies` and `locations` interact
 
-The two tables form a small star schema around the physical world:
+The two tables form a small star schema around the physical world
+(see [`docs/architecture.md`](../architecture.md) for the full catalog
+schema, version 9):
 
 ```
 locations                volume_copies                  volumes
@@ -460,11 +511,13 @@ operating LCSAS in a multi-location production setup:
    than as a special "obsolete" state. The location row remains in the
    registry until explicitly deleted.
 
-9. **No CLI for `deprecate_copy` / `destroy_copy`.**
-   The DB layer exposes `deprecate_copy` and `destroy_copy`
-   (`src/lcsas/db/volume_copies.py:158`, `:172`), but neither is wired
-   into the CLI. Marking a damaged disc requires a Python REPL or
-   direct SQL.
+9. **Recording copy fate is supported via `lcsas copy`.**
+   The DB layer's `deprecate_copy` / `destroy_copy`
+   (`src/lcsas/db/volume_copies.py`) are wired into the CLI as
+   `lcsas copy deprecate` and `lcsas copy destroy` (`cmd_copy` in
+   `src/lcsas/cli/main.py`). Marking a damaged or lost disc no longer
+   requires a Python REPL or direct SQL — see the
+   [`lcsas copy`](#lcsas-copy-deprecate--lcsas-copy-destroy) section.
 
 10. **`media_serial` is captured in `volume_copies` but not surfaced.**
     The schema reserves `media_serial` and `last_verified_at` columns

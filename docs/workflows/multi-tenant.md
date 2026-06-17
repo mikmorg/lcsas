@@ -7,9 +7,9 @@ because every pack is rustic-encrypted with the repo's own key before
 LCSAS sees it. The catalog tags every pack, snapshot, and volume link
 with `repo_id` so burn, restore, and consolidation scope cleanly.
 
-The `repositories` table (schema v5) holds `repo_id` (UUID), `name`,
+The `repositories` table (schema v9) holds `repo_id` (UUID), `name`,
 `mirror_path`, and `encryption_key_id` (auto-detected from the mirror's
-`keys/` directory — `src/lcsas/utils/fs.py:132`). The TOML config
+`keys/` directory — `read_repo_key_ids` in `src/lcsas/utils/fs.py`). The TOML config
 supplies the rustic `password_file` per repo; the password is never
 stored in the catalog or written to disc.
 
@@ -39,12 +39,12 @@ encryption key ID from the mirror's `keys/` directory.
 
 1. `lcsas repo add <name> <mirror_path>` — generate UUID, scan
    `keys/` for the first key filename, INSERT into `repositories`.
-   (`src/lcsas/cli/main.py:464`)
+   (`cmd_repo_add` in `src/lcsas/cli/main.py`)
 2. `register_repo()` writes `repo_id`, `name`, absolute `mirror_path`,
-   and `encryption_key_id`. (`src/lcsas/db/repos.py:25`)
+   and `encryption_key_id`. (`register_repo` in `src/lcsas/db/repos.py`)
 3. The encryption key ID is auto-detected from `mirror_path/keys/`.
    The password file is supplied via TOML config.
-   (`src/lcsas/utils/fs.py:132`)
+   (`read_repo_key_ids` in `src/lcsas/utils/fs.py`)
 
 **Expected outcome:** New row with fresh UUID and absolute mirror path;
 log line `Registered repository '<name>' (id: <uuid>)`. Subsequent
@@ -74,11 +74,12 @@ log line `Registered repository '<name>' (id: <uuid>)`. Subsequent
 
 **Source refs:**
 
-- CLI parser: `src/lcsas/cli/main.py:76-90`
-- Handler: `src/lcsas/cli/main.py:464-491`
-- DB insert: `src/lcsas/db/repos.py:25-39`
-- Key-ID auto-detection: `src/lcsas/utils/fs.py:132-143`
-- Model: `src/lcsas/db/models.py:41-49`
+- CLI parser: `build_parser()` (`repo add`) in `src/lcsas/cli/main.py`
+- Handler: `cmd_repo_add` in `src/lcsas/cli/main.py`
+- DB insert: `register_repo` in `src/lcsas/db/repos.py`
+- Key-ID auto-detection: `read_repo_key_ids` in `src/lcsas/utils/fs.py`
+- Model: `Repository` in `src/lcsas/db/models.py`
+- Architecture overview: [`docs/architecture.md`](../architecture.md)
 
 ---
 
@@ -92,13 +93,13 @@ resolve repo names to UUIDs.
 **Steps:**
 
 1. `lcsas repo list` — fetch all rows from `repositories` ordered by
-   name, print one line per repo. (`src/lcsas/cli/main.py:494`)
+   name, print one line per repo. (`cmd_repo_list` in `src/lcsas/cli/main.py`)
 2. `list_repos()` runs `SELECT * FROM repositories ORDER BY name`
    and maps rows to frozen `Repository` dataclasses.
-   (`src/lcsas/db/repos.py:52-55`)
+   (`list_repos` in `src/lcsas/db/repos.py`)
 3. Format: `<name>  <uuid>  <mirror_path>`. Empty catalog emits
    `No repositories registered.` and exits 0.
-   (`src/lcsas/cli/main.py:508-513`)
+   (`cmd_repo_list` in `src/lcsas/cli/main.py`)
 
 **Expected outcome:** Tenants listed alphabetically; exit 0 in all
 cases.
@@ -121,9 +122,9 @@ cases.
 
 **Source refs:**
 
-- CLI parser: `src/lcsas/cli/main.py:85`
-- Handler: `src/lcsas/cli/main.py:494-514`
-- DB query: `src/lcsas/db/repos.py:52-55`
+- CLI parser: `build_parser()` (`repo list`) in `src/lcsas/cli/main.py`
+- Handler: `cmd_repo_list` in `src/lcsas/cli/main.py`
+- DB query: `list_repos` in `src/lcsas/db/repos.py`
 
 ---
 
@@ -142,18 +143,18 @@ lives on `volumes` (managed by `consolidate --deprecate`).
 **Steps:**
 
 1. `lcsas repo remove <repo_id> [--force]` — look up by UUID; exit 1
-   with `not found` if missing. (`src/lcsas/cli/main.py:517-534`)
+   with `not found` if missing. (`cmd_repo_remove` in `src/lcsas/cli/main.py`)
 2. List active (non-pruned) packs. Refuse without `--force` if any are
    linked to active volumes, then refuse without `--force` if any
-   active packs exist at all. (`src/lcsas/cli/main.py:537-558`)
+   active packs exist at all. (`cmd_repo_remove` in `src/lcsas/cli/main.py`)
 3. With `--force`, prompt `Type 'yes' to confirm`; EOF on stdin
-   returns exit 1. (`src/lcsas/cli/main.py:561-580`)
+   returns exit 1. (`cmd_repo_remove` in `src/lcsas/cli/main.py`)
 4. `bulk_mark_pruned` active packs → `DELETE FROM volume_packs` per
    pack → `DELETE FROM packs WHERE repo_id = ?` → delete snapshots →
-   delete the `repositories` row. (`src/lcsas/cli/main.py:582-602`,
-   `src/lcsas/db/repos.py:58-74`)
+   delete the `repositories` row. (`cmd_repo_remove` in
+   `src/lcsas/cli/main.py`, `delete_repo` in `src/lcsas/db/repos.py`)
 5. Whole teardown runs inside `locked_connection` (single transaction).
-   (`src/lcsas/cli/main.py:527`)
+   (`cmd_repo_remove` in `src/lcsas/cli/main.py`)
 
 **Expected outcome:**
 
@@ -190,10 +191,10 @@ lives on `volumes` (managed by `consolidate --deprecate`).
 
 **Source refs:**
 
-- CLI parser: `src/lcsas/cli/main.py:87-90`
-- Handler: `src/lcsas/cli/main.py:517-608`
-- DB delete (with pack-count guard): `src/lcsas/db/repos.py:58-74`
-- Snapshot cascade: `src/lcsas/db/snapshots.py` (`delete_snapshots_for_repo`)
+- CLI parser: `build_parser()` (`repo remove`) in `src/lcsas/cli/main.py`
+- Handler: `cmd_repo_remove` in `src/lcsas/cli/main.py`
+- DB delete: `delete_repo` in `src/lcsas/db/repos.py`
+- Snapshot cascade: `delete_snapshots_for_repo` in `src/lcsas/db/snapshots.py`
 
 ---
 
@@ -212,18 +213,20 @@ operator's filesystem — never in staging or on disc.
 
 1. `BurnOrchestrator._get_mirror_paths()` builds `{repo_id: mirror_path}`
    from **every** row in `repositories`.
-   (`src/lcsas/burn/orchestrator.py:487-497`)
+   (`BurnOrchestrator._get_mirror_paths` in `src/lcsas/burn/orchestrator.py`)
 2. `HolographicInjector.inject_metadata` copies `index/`, `snapshots/`,
    `keys/`, and `config` from each repo's mirror into
    `<staging>/metadata/<repo_id>/`. The rustic key file is itself
-   password-encrypted. (`src/lcsas/staging/metadata.py:35-59`,
-   `src/lcsas/utils/pack_layout.py:24`)
+   password-encrypted. (`HolographicInjector.inject_metadata` in
+   `src/lcsas/staging/metadata.py`, `METADATA_SUBDIRS` in
+   `src/lcsas/utils/pack_layout.py`)
 3. `HolographicInjector.write_key_info` renders `KEY_INFO.txt` listing
    each repo's key ID and key filename for the human reader.
-   (`src/lcsas/staging/metadata.py:348-394`)
+   (`HolographicInjector.write_key_info` in `src/lcsas/staging/metadata.py`)
 4. `SubprocessRusticRunner._run` passes `--password-file <path>` per
    call; the path is scrubbed from error output via
-   `mask_password_path`. (`src/lcsas/rustic/wrapper.py:74-118`)
+   `mask_password_path`. (`SubprocessRusticRunner._run` in
+   `src/lcsas/rustic/wrapper.py`)
 
 **Expected outcome:**
 
@@ -256,12 +259,12 @@ operator's filesystem — never in staging or on disc.
 
 **Source refs:**
 
-- Mirror-path enumeration: `src/lcsas/burn/orchestrator.py:487-497`
-- Metadata injection: `src/lcsas/staging/metadata.py:35-59`
-- Metadata subdir list: `src/lcsas/utils/pack_layout.py:24`
-- KEY_INFO renderer: `src/lcsas/staging/metadata.py:348-394`
-- Rustic password handling: `src/lcsas/rustic/wrapper.py:74-118`
-- Password masking: `src/lcsas/log.py` (`mask_password_path`)
+- Mirror-path enumeration: `BurnOrchestrator._get_mirror_paths` in `src/lcsas/burn/orchestrator.py`
+- Metadata injection: `HolographicInjector.inject_metadata` in `src/lcsas/staging/metadata.py`
+- Metadata subdir list: `METADATA_SUBDIRS` in `src/lcsas/utils/pack_layout.py`
+- KEY_INFO renderer: `HolographicInjector.write_key_info` in `src/lcsas/staging/metadata.py`
+- Rustic password handling: `SubprocessRusticRunner._run` in `src/lcsas/rustic/wrapper.py`
+- Password masking: `mask_password_path` in `src/lcsas/log.py`
 
 ---
 
@@ -278,17 +281,18 @@ LCSAS does not enforce password distinctness.
 1. Each repo is `rustic init`-ed with its own password before LCSAS
    sees it; rustic stores a password-wrapped master key in
    `<mirror>/keys/<id>`. LCSAS only ever invokes rustic with
-   `--password-file <repo's file>`. (`src/lcsas/rustic/wrapper.py:82-89`)
+   `--password-file <repo's file>`. (`SubprocessRusticRunner._run` in
+   `src/lcsas/rustic/wrapper.py`)
 2. Packs on the mirror are already rustic-encrypted when LCSAS picks
    them up and are content-addressed by ciphertext hash; LCSAS never
-   decrypts. (`src/lcsas/packs/scanner.py`)
+   decrypts. (`scan_mirror_packs` in `src/lcsas/packs/scanner.py`)
 3. The catalog scopes every `packs` and `snapshots` row by `repo_id`,
    so `get_unarchived_packs(repo_id=...)` and restore planning are
-   tenant-scoped. (`src/lcsas/db/queries.py`,
+   tenant-scoped. (`get_unarchived_packs` in `src/lcsas/db/queries.py`,
    `tests/unit/test_multi_tenant.py`)
 4. Bin-packing mixes tenants on a disc but keeps each repo's metadata
    under its own `<staging>/metadata/<repo_id>/`.
-   (`src/lcsas/burn/orchestrator.py:366-384`)
+   (`BurnOrchestrator` in `src/lcsas/burn/orchestrator.py`)
 
 **Guarantees:**
 
@@ -307,8 +311,9 @@ LCSAS does not enforce password distinctness.
   in `KEY_INFO.txt` / `CONFIG_SUMMARY.txt` and carries a
   `metadata/<repo_id>/` subtree even with zero packs from that repo.
   One disc reveals all tenant names.
-  (`src/lcsas/staging/metadata.py:367-394`,
-  `src/lcsas/staging/metadata.py:425-432`)
+  (`HolographicInjector.write_key_info` and
+  `HolographicInjector.write_config_summary` in
+  `src/lcsas/staging/metadata.py`)
 - **Pack-size side-channel:** `catalog.db` on every disc enumerates
   `(pack_id, repo_id, size_bytes)` for **all** packs across all
   tenants. Any single disc leaks every other tenant's backup size and
@@ -344,13 +349,16 @@ LCSAS does not enforce password distinctness.
 
 **Source refs:**
 
-- Catalog scoping: `src/lcsas/db/models.py:30-49`,
-  `src/lcsas/db/queries.py`
+- Catalog scoping: `Repository` in `src/lcsas/db/models.py`,
+  `get_unarchived_packs` in `src/lcsas/db/queries.py`
 - Bin-pack groups by repo at stage time:
-  `src/lcsas/burn/orchestrator.py:366-384`
+  `BurnOrchestrator` in `src/lcsas/burn/orchestrator.py`
 - Per-disc per-tenant metadata trees:
-  `src/lcsas/staging/metadata.py:35-59`
+  `HolographicInjector.inject_metadata` in `src/lcsas/staging/metadata.py`
 - Survivability disclosure surface:
-  `src/lcsas/staging/metadata.py:348-444`
+  `HolographicInjector.write_key_info` /
+  `HolographicInjector.write_config_summary` in
+  `src/lcsas/staging/metadata.py`
 - Rustic password isolation:
-  `src/lcsas/rustic/wrapper.py:74-118`
+  `SubprocessRusticRunner._run` in `src/lcsas/rustic/wrapper.py`
+- Architecture overview: [`docs/architecture.md`](../architecture.md)

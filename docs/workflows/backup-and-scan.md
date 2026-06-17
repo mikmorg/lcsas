@@ -21,7 +21,7 @@ that pack is invisible to the burn pipeline.
 2. [`lcsas scan` — full scan across all configured repos](#2-lcsas-scan--full-scan-across-all-configured-repos)
 3. [`lcsas scan --repo <name>` — single-repo filter](#3-lcsas-scan---repo-name--single-repo-filter)
 4. [`lcsas scan --no-snapshots` — skip rustic snapshot listing](#4-lcsas-scan---no-snapshots--skip-rustic-snapshot-listing)
-5. [`lcsas scan --no-prune-sync` — skip prune reconciliation](#5-lcsas-scan---no-prune-sync--skip-prune-reconciliation)
+5. [`lcsas scan --no-prune-sync` / `--yes-prune` — prune reconciliation controls](#5-lcsas-scan---no-prune-sync--yes-prune--prune-reconciliation-controls)
 6. [Pack registration & delta computation (internals)](#6-pack-registration--delta-computation-internals)
 7. [Gaps & known issues](#7-gaps--known-issues)
 
@@ -36,24 +36,26 @@ backup runner in tests/programmatic use).
 
 **Prerequisites:**
 - A registered repo in the catalog (`lcsas repo add <name> <mirror_path>`)
-  (`src/lcsas/cli/main.py:79`).
+  (`cmd_repo_add` in `src/lcsas/cli/main.py`).
 - An initialized Rustic repository at `mirror_path` with a `data/`,
-  `index/`, `keys/`, `snapshots/`, and `config` layout. `SubprocessRusticRunner.init_repo`
-  can do this programmatically (`src/lcsas/rustic/wrapper.py:120`).
+  `index/`, `keys/`, `snapshots/`, and `config` layout.
+  `SubprocessRusticRunner.init_repo` can do this programmatically
+  (`src/lcsas/rustic/wrapper.py`).
 - A `password_file` pointing at the repository's encryption key
-  (referenced by `scan` for snapshot listing — see
-  `src/lcsas/cli/main.py:706` and `src/lcsas/cli/main.py:722`).
+  (referenced by `scan` for snapshot listing — see the snapshot block in
+  `cmd_scan`, `src/lcsas/cli/main.py`).
 - `rustic >= 0.9.0` on PATH (enforced at scan time by
-  `check_binary_version("rustic", min_version=(0, 9, 0))` —
-  `src/lcsas/cli/main.py:695`).
+  `check_binary_version("rustic", min_version=(0, 9, 0))` in `cmd_scan`,
+  `src/lcsas/cli/main.py`).
 
 **Steps:**
 1. `rustic -r <mirror_path> --password-file <pwfile> init` — one-time, only
-   if the repo does not exist (`src/lcsas/rustic/wrapper.py:126`).
+   if the repo does not exist (`SubprocessRusticRunner.init_repo`,
+   `src/lcsas/rustic/wrapper.py`).
 2. `rustic -r <mirror_path> --password-file <pwfile> backup --json <src...>` —
    produce a new snapshot and the pack files that back it. The expected
    `--json` envelope is what `SubprocessRusticRunner.backup` issues
-   (`src/lcsas/rustic/wrapper.py:131`).
+   (`src/lcsas/rustic/wrapper.py`).
 3. (Optional) `rustic -r <mirror_path> --password-file <pwfile> prune` — drops
    unreferenced packs from the local mirror; `scan` will reconcile them
    (see workflow §5).
@@ -61,16 +63,16 @@ backup runner in tests/programmatic use).
 **Expected outcome:**
 - New pack files appear under `<mirror_path>/data/`. LCSAS supports both
   layouts:
-  - Flat: `data/<64-hex-sha256>` (`src/lcsas/packs/scanner.py:64`).
-  - Two-level: `data/ab/abcdef...` (`src/lcsas/packs/scanner.py:67`).
+  - Flat: `data/<64-hex-sha256>` (`scan_mirror_packs`, `src/lcsas/packs/scanner.py`).
+  - Two-level: `data/ab/abcdef...` (`scan_mirror_packs`, `src/lcsas/packs/scanner.py`).
 - A new entry under `<mirror_path>/snapshots/` describing the snapshot, which
   `scan` will harvest via `rustic snapshots --json`
-  (`src/lcsas/rustic/wrapper.py:141`).
+  (`SubprocessRusticRunner.snapshots`, `src/lcsas/rustic/wrapper.py`).
 - File names are 64-character lowercase hex (the SHA-256 of the pack); other
-  names are skipped by the scanner regex `^[0-9a-f]{64}$`
-  (`src/lcsas/packs/scanner.py:13`).
+  names are skipped by the scanner regex `_PACK_NAME_RE = ^[0-9a-f]{64}$`
+  (`src/lcsas/packs/scanner.py`).
 - Zero-byte files are skipped with a warning — treated as an incomplete
-  write rather than a real pack (`src/lcsas/packs/scanner.py:28`).
+  write rather than a real pack (`_register_pack`, `src/lcsas/packs/scanner.py`).
 
 **Variant axes that apply:** Multi-tenant (one repo per tenant, distinct
 password files). All other axes: N/A — backup is upstream of media selection,
@@ -85,10 +87,11 @@ ECC, and burn.
   on `rustic` being on PATH).
 
 **Source refs:**
-- `src/lcsas/rustic/wrapper.py:16` (Protocol) · `:64` (subprocess impl) ·
-  `:120` (init) · `:131` (backup) · `:141` (snapshots) · `:170` (prune).
-- `src/lcsas/rustic/types.py:8` (`BackupResult`) · `:20` (`SnapshotInfo`).
-- `src/lcsas/packs/scanner.py:13` (pack-name regex).
+- `src/lcsas/rustic/wrapper.py`: `RusticRunner` (Protocol) ·
+  `SubprocessRusticRunner` (impl) · `init_repo` · `backup` · `snapshots` ·
+  `prune_dry_run`.
+- `src/lcsas/rustic/types.py`: `BackupResult` · `SnapshotInfo`.
+- `src/lcsas/packs/scanner.py`: `_PACK_NAME_RE` (pack-name regex).
 
 ---
 
@@ -101,45 +104,50 @@ catalogued yet?" command.
 
 **Prerequisites:**
 - A TOML config file with `[paths]` and one or more `[repos.<name>]` blocks.
-  `--config` is **required** for scan (`src/lcsas/cli/main.py:623`).
+  `--config` is **required** for scan (`cmd_scan` returns early if it is
+  `None`).
 - A catalog DB. Path resolution order: `--db` flag > `config.db_path`
-  (`src/lcsas/cli/main.py:629`). Schema is created on demand by
-  `create_all(conn)` (`src/lcsas/cli/main.py:630`).
+  (the `locked_connection(...)` call in `cmd_scan`). Schema is ensured on
+  demand by `ensure_schema(conn)`.
 - Each repo in config must already exist in the DB (run
   `lcsas repo add <name> <mirror_path>` first); unregistered repos are
-  warned and skipped (`src/lcsas/cli/main.py:649-655`).
-- For snapshot persistence: `password_file` must be set per repo
-  (`src/lcsas/cli/main.py:706`) and `rustic >= 0.9.0` must be on PATH
-  (`src/lcsas/cli/main.py:695`).
+  warned and skipped (`cmd_scan`, "not registered in DB" branch).
+- For snapshot persistence: `password_file` must be set per repo and
+  `rustic >= 0.9.0` must be on PATH (both checked inside the snapshot
+  block of `cmd_scan`).
 
 **Steps:**
 1. `lcsas --config <conf.toml> [--db <path>] scan` — argparse entry
-   (`src/lcsas/cli/main.py:93`), dispatched to `cmd_scan`
-   (`src/lcsas/cli/main.py:611`).
-2. For each repo in `config.repositories` (`src/lcsas/cli/main.py:645`):
-   a. Walk `mirror_path/data/` via `scan_mirror_packs`
-      (`src/lcsas/cli/main.py:658`, `src/lcsas/packs/scanner.py:37`).
+   (`scan_p` in `build_parser()`), dispatched to `cmd_scan`
+   (`src/lcsas/cli/main.py`).
+2. For each repo in `config.repositories` (`cmd_scan`):
+   a. Walk `mirror_path/data/` via `scan_mirror_packs`, which returns a
+      `MirrorScanResult` with `.packs` and `.errors`
+      (`scan_mirror_packs` in `src/lcsas/packs/scanner.py`).
    b. Diff against the catalog with `DeltaAnalyzer.register_new_packs`
-      (`src/lcsas/cli/main.py:661-662`, `src/lcsas/packs/delta.py:31`).
+      (`src/lcsas/packs/delta.py`).
    c. Compute unarchived totals via `get_unarchived` /
-      `get_total_unarchived_bytes` (`src/lcsas/cli/main.py:663-664`,
-      `src/lcsas/packs/delta.py:73`).
-   d. Reconcile pruned packs via `detect_pruned` + `bulk_mark_pruned`
-      (`src/lcsas/cli/main.py:669-679`, `src/lcsas/packs/delta.py:85`,
-      `src/lcsas/db/packs.py:79`).
+      `get_total_unarchived_bytes` (`DeltaAnalyzer`,
+      `src/lcsas/packs/delta.py`).
+   d. Reconcile pruned packs via `detect_pruned` + `bulk_mark_pruned`,
+      but **only when the scan was complete** (`scan_result.errors` empty)
+      and only if the mass-prune guard passes (see §5)
+      (`cmd_scan`; `DeltaAnalyzer.detect_pruned`, `src/lcsas/packs/delta.py`;
+      `bulk_mark_pruned`, `src/lcsas/db/packs.py`).
 3. Persist snapshots: `rustic snapshots --json` per repo, then
-   `bulk_upsert_snapshots` (`src/lcsas/cli/main.py:687-743`,
-   `src/lcsas/rustic/wrapper.py:141`).
+   `bulk_upsert_snapshots` (snapshot block of `cmd_scan`;
+   `SubprocessRusticRunner.snapshots` in `src/lcsas/rustic/wrapper.py`).
 4. Print archive summary via `get_archive_status_summary`
-   (`src/lcsas/cli/main.py:748`).
+   (`src/lcsas/db/queries.py`).
 
 **Expected outcome:**
 - New packs appear in the `packs` table with `is_pruned = 0`, sized from
-  `stat().st_size` at scan time (`src/lcsas/db/packs.py:100`).
+  `stat().st_size` at scan time (`bulk_register`, `src/lcsas/db/packs.py`).
 - Already-known packs are not re-inserted; `INSERT OR IGNORE` makes the
-  command safe to re-run (`src/lcsas/db/packs.py:121`).
+  command safe to re-run (`bulk_register`, `src/lcsas/db/packs.py`).
 - Packs in the DB but missing from the mirror are flagged as pruned (unless
-  `--no-prune-sync`); their `is_pruned` flag flips to 1.
+  `--no-prune-sync`, the scan was incomplete, or the mass-prune guard
+  trips — see §5); their `is_pruned` flag flips to 1.
 - Snapshots are upserted into the `snapshots` table.
 - stdout per repo:
   ```
@@ -152,9 +160,9 @@ catalogued yet?" command.
   ```
   Total scanned: N packs across R repos
   New packs registered: M
-  Archive: T total, A archived, U unarchived
+  Archive: T total, A archived, S staged, U unarchived
   ```
-  (`src/lcsas/cli/main.py:681-684`, `:750-755`).
+  (`cmd_scan`).
 
 **Variant axes that apply:** Multi-tenant (loops over all repos in config).
 Other axes: N/A.
@@ -167,20 +175,19 @@ Other axes: N/A.
 - `test_scan_prints_total_summary` — footer formatting.
 - Scanner specifics: `tests/unit/test_scanner_delta.py::TestScanner`
   (two-level layout, flat layout, missing `data/`, permission errors).
-- **Gap:** No unit test exercises the snapshot-persistence branch
-  (`src/lcsas/cli/main.py:687-746`); the test config sets
-  `password_file = ""` to skip that branch
-  (`tests/unit/test_cli_scan.py:37`, `src/lcsas/cli/main.py:706`).
+- **Gap:** No unit test exercises the snapshot-persistence branch of
+  `cmd_scan`; the test config sets `password_file = ""`/`None` to skip that
+  branch (`tests/unit/test_cli_scan.py`).
 - **Gap:** No test covers the `rustic` binary-version check failure path
-  (`src/lcsas/cli/main.py:694-698`).
+  (the `check_binary_version` call in `cmd_scan`).
 
 **Source refs:**
-- CLI: `src/lcsas/cli/main.py:92-108` (parser) · `:611-756` (`cmd_scan`) ·
-  `:2671-2672` (dispatch).
-- Scanner: `src/lcsas/packs/scanner.py:37`.
-- Delta: `src/lcsas/packs/delta.py:15`.
-- Catalog: `src/lcsas/db/packs.py:100` (`bulk_register`) · `:79`
-  (`bulk_mark_pruned`).
+- CLI: `scan_p` in `build_parser()` (parser) · `cmd_scan` (handler), both
+  in `src/lcsas/cli/main.py`.
+- Scanner: `scan_mirror_packs` in `src/lcsas/packs/scanner.py`.
+- Delta: `DeltaAnalyzer` in `src/lcsas/packs/delta.py`.
+- Catalog: `bulk_register` · `bulk_mark_pruned`, both in
+  `src/lcsas/db/packs.py`.
 
 ---
 
@@ -191,25 +198,24 @@ mirror is slow, network-mounted, or has just received a big backup batch.
 
 **Prerequisites:** Same as the full scan, plus the supplied repo name(s) must
 exist in `config.repositories`. Unknown names trigger a warning and are
-skipped (`src/lcsas/cli/main.py:640-643`).
+skipped (`cmd_scan`, "not found in config" branch).
 
 **Steps:**
 1. `lcsas --config <conf.toml> scan --repo family` — single repo.
 2. `lcsas --config <conf.toml> scan --repo family personal work` — multiple
-   repos (`--repo` is `nargs="*"`, `src/lcsas/cli/main.py:98`).
-3. The handler builds `repo_filter = set(args.repo)`
-   (`src/lcsas/cli/main.py:635`) and skips repos whose name is not in the
-   filter at both the pack-scan loop (`src/lcsas/cli/main.py:646`) and the
-   snapshot-persistence loop (`src/lcsas/cli/main.py:704`).
+   repos (`--repo` is `nargs="*"`, `scan_p` in `build_parser()`).
+3. The handler builds `repo_filter = set(args.repo) if args.repo else None`
+   (`cmd_scan`) and skips repos whose name is not in the filter at both the
+   pack-scan loop and the snapshot-persistence loop.
 
 **Expected outcome:**
 - Only the named repo(s) are walked; other repos' packs and snapshots are
   untouched.
 - The footer still reports `across R repos` where R is `len(config.repositories)`
-  — i.e., the **configured** total, not the filtered count
-  (`src/lcsas/cli/main.py:751`). This is mildly misleading; see Gaps §7.
+  — i.e., the **configured** total, not the filtered count (`cmd_scan`).
+  This is mildly misleading; see Gaps §7.
 - Unknown repo names emit `"repository '<name>' not found in config, skipping."`
-  (`src/lcsas/cli/main.py:643`).
+  (`cmd_scan`).
 
 **Variant axes that apply:** Multi-tenant (this *is* the per-tenant axis).
 Other axes: N/A.
@@ -220,10 +226,10 @@ Other axes: N/A.
 - `tests/unit/test_cli_scan.py::TestScanParser::test_scan_parser_with_repo_filter`
   covers argparse acceptance of multiple names.
 - **Gap:** No test covers the "unknown repo name" warning path
-  (`src/lcsas/cli/main.py:640-643`).
+  (`cmd_scan`).
 
-**Source refs:** `src/lcsas/cli/main.py:97-100` (flag) · `:635-655` (filter
-application) · `:704-705` (filter for snapshots).
+**Source refs:** `scan_p` `--repo` in `build_parser()` (flag) · `cmd_scan`
+(filter application, both the pack-scan and snapshot loops).
 
 ---
 
@@ -240,61 +246,78 @@ rustic-on-PATH requirement (both checked inside the snapshot branch only).
 
 **Steps:**
 1. `lcsas --config <conf.toml> scan --no-snapshots` — parser flag
-   (`src/lcsas/cli/main.py:101-104`).
+   (`scan_p` in `build_parser()`).
 2. `cmd_scan` evaluates `if not getattr(args, "no_snapshots", False)` and
-   skips the entire snapshot block when the flag is set
-   (`src/lcsas/cli/main.py:687`).
+   skips the entire snapshot block when the flag is set.
 
 **Expected outcome:**
 - The packs table is updated as in the full scan.
 - The `snapshots` table is **not** touched. Existing snapshot rows are
   preserved as-is (they are not invalidated, since they may still describe
   packs already on burned media).
-- The `rustic` binary-version check (`src/lcsas/cli/main.py:694-698`) is
-  bypassed — `scan --no-snapshots` works on a host with no rustic installed.
-- No "Snapshots persisted: N" line is printed
-  (`src/lcsas/cli/main.py:745-746`).
+- The `rustic` binary-version check (the `check_binary_version` call in
+  `cmd_scan`) is bypassed — `scan --no-snapshots` works on a host with no
+  rustic installed.
+- No "Snapshots persisted: N" line is printed (`cmd_scan`).
 
 **Variant axes that apply:** Multi-tenant. Other axes: N/A.
 
 **Test coverage:**
-- Indirectly covered: the test fixture sets `password_file = ""` which
+- Indirectly covered: the test fixture leaves `password_file` unset, which
   triggers the same skip path inside the snapshot branch
-  (`tests/unit/test_cli_scan.py:37`, `src/lcsas/cli/main.py:706-711`).
+  (`tests/unit/test_cli_scan.py`, `cmd_scan`).
 - **Gap:** No dedicated test passes `--no-snapshots` explicitly.
 
-**Source refs:** `src/lcsas/cli/main.py:101-104` (flag) · `:687`
-(guard) · `:687-746` (snapshot block being skipped).
+**Source refs:** `scan_p` `--no-snapshots` in `build_parser()` (flag) ·
+`cmd_scan` (`not getattr(args, "no_snapshots", False)` guard and the
+snapshot block it skips).
 
 ---
 
-## 5. `lcsas scan --no-prune-sync` — skip prune reconciliation
+## 5. `lcsas scan --no-prune-sync` / `--yes-prune` — prune reconciliation controls
 
-**Purpose:** Disable the "detect packs absent from the mirror and mark them
-as pruned" step. Use when the mirror is known to be incomplete (e.g., still
-syncing from a remote NAS) so as not to flip live packs to `is_pruned = 1`
-spuriously.
+**Purpose:** Two flags govern the "detect packs absent from the mirror and
+mark them as pruned" step.
+
+- `--no-prune-sync` disables prune reconciliation entirely. Use when the
+  mirror is known to be incomplete (e.g., still syncing from a remote NAS)
+  so as not to flip live packs to `is_pruned = 1` spuriously.
+- `--yes-prune` *confirms* a mass-prune: it lets a single scan mark more
+  than `max(10, 20% of a repo's active packs)` as pruned. Without it,
+  `cmd_scan` refuses a mass-prune and warns instead (the usual cause is a
+  partially-unavailable mirror, not a real `rustic prune`).
 
 **Prerequisites:** Same as a full scan.
 
 **Steps:**
 1. `lcsas --config <conf.toml> scan --no-prune-sync` — parser flag
-   (`src/lcsas/cli/main.py:105-108`).
+   (`scan_p` in `build_parser()`).
 2. `cmd_scan` guards the prune-sync block with
    `if not getattr(args, "no_prune_sync", False)` and skips
-   `DeltaAnalyzer.detect_pruned` + `bulk_mark_pruned`
-   (`src/lcsas/cli/main.py:669-679`).
+   `DeltaAnalyzer.detect_pruned` + `bulk_mark_pruned` when set.
+3. Within the prune-sync block, two further guards apply even when the flag
+   is *not* set (BURN-09):
+   a. If `scan_result.errors` is non-empty (any unreadable path), the scan
+      is treated as INCOMPLETE and prune-sync is skipped for that repo with
+      a warning — absence from a partial listing is never taken as evidence
+      of pruning.
+   b. If `detect_pruned` returns more than `max(10, 0.2 * active_total)`
+      packs and `--yes-prune` was not passed, `cmd_scan` refuses to mark
+      them and warns; re-run with `--yes-prune` to confirm.
 
 **Expected outcome:**
 - New packs are still registered.
-- Packs in the DB that no longer exist on the mirror **keep**
-  `is_pruned = 0`.
-- No `"Pruned packs: N (B bytes)"` line is printed.
-- Note that even without `--no-prune-sync`, an **empty** scanner result
-  (e.g., totally unreachable mirror) is already treated as "cannot detect
-  pruned packs" with a warning, not as "every pack is pruned"
-  (`src/lcsas/packs/delta.py:96-104`) — the flag exists for the case where
-  the mirror *partially* exists.
+- With `--no-prune-sync`: packs in the DB that no longer exist on the
+  mirror **keep** `is_pruned = 0`, and no `"Pruned packs: N (B bytes)"`
+  line is printed.
+- Without any flag, an incomplete scan (`scan_result.errors` non-empty) or
+  an over-threshold prune set is skipped with a warning rather than flipping
+  live packs to `is_pruned = 1`. `--yes-prune` overrides only the
+  over-threshold guard, not the incomplete-scan guard.
+- Note that `DeltaAnalyzer.detect_pruned` additionally bails out with a
+  warning if the scanner result is *empty* (totally unreachable mirror),
+  treating it as "cannot detect pruned packs" rather than "every pack is
+  pruned" (`src/lcsas/packs/delta.py`).
 
 **Variant axes that apply:** Multi-tenant. Other axes: N/A.
 
@@ -305,12 +328,16 @@ spuriously.
   `::test_detect_pruned_ignores_already_pruned`.
 - `bulk_mark_pruned` is covered:
   `tests/unit/test_scanner_delta.py::TestBulkMarkPruned`.
-- **Gap:** No CLI-level test exercises `--no-prune-sync`; no test asserts
-  the prune-sync block runs in a default scan and updates `is_pruned`.
+- The mass-prune guard and `--yes-prune` override are covered at the CLI
+  level in `tests/unit/test_cli_scan.py`.
+- **Gap:** No CLI-level test exercises `--no-prune-sync` specifically; no
+  test asserts the prune-sync block runs in a default (sub-threshold) scan
+  and updates `is_pruned`.
 
-**Source refs:** `src/lcsas/cli/main.py:105-108` (flag) · `:669-679`
-(guarded block) · `src/lcsas/packs/delta.py:85` (`detect_pruned`) ·
-`src/lcsas/db/packs.py:79` (`bulk_mark_pruned`).
+**Source refs:** `scan_p` `--no-prune-sync` / `--yes-prune` in
+`build_parser()` (flags) · `cmd_scan` (guarded prune-sync block) ·
+`DeltaAnalyzer.detect_pruned` in `src/lcsas/packs/delta.py` ·
+`bulk_mark_pruned` in `src/lcsas/db/packs.py`.
 
 ---
 
@@ -321,49 +348,46 @@ catalog rows. This is the load-bearing piece of every scan invocation; it
 also runs implicitly inside `cmd_stage`, `cmd_burn`, and related pipeline
 commands when they instantiate a `DeltaAnalyzer`.
 
-**Prerequisites:** A `dict[str, int]` from `scan_mirror_packs` mapping
-SHA-256 filename to byte size (`src/lcsas/packs/scanner.py:37`).
+**Prerequisites:** A `dict[str, int]` mapping SHA-256 filename to byte size.
+This is the `.packs` field of the `MirrorScanResult` returned by
+`scan_mirror_packs`; `cmd_scan` passes `scan_result.packs` into the
+`DeltaAnalyzer` constructor (`src/lcsas/packs/scanner.py`).
 
-**Algorithm (`DeltaAnalyzer.register_new_packs`,
-`src/lcsas/packs/delta.py:31`):**
-1. If the scanner returned an empty dict, return `[]` immediately
-   (`src/lcsas/packs/delta.py:40-41`).
+**Algorithm (`DeltaAnalyzer.register_new_packs`, `src/lcsas/packs/delta.py`):**
+1. If the scanner result (dict) is empty, return `[]` immediately.
 2. Reject if `repo_id` was not supplied at construction time — packs must
-   be tied to a repo (`src/lcsas/packs/delta.py:43-47`).
-3. Build `(sha256, size_bytes, repo_id)` tuples for every scanner entry
-   (`src/lcsas/packs/delta.py:49-52`).
+   be tied to a repo.
+3. Build `(sha256, size_bytes, repo_id)` tuples for every scanner entry.
 4. Batch-query existing SHA-256s in chunks of `_batch = 900` to stay
-   below SQLite's `SQLITE_MAX_VARIABLE_NUMBER`
-   (`src/lcsas/packs/delta.py:55-65`, parallels `_SQLITE_BATCH = 900` in
-   `src/lcsas/db/packs.py:14`).
-5. Filter to "not yet in DB" and call `bulk_register`
-   (`src/lcsas/packs/delta.py:67-71`).
+   below SQLite's `SQLITE_MAX_VARIABLE_NUMBER` (parallels `_SQLITE_BATCH`
+   in `src/lcsas/db/packs.py`).
+5. Filter to "not yet in DB" and call `bulk_register`.
 6. `bulk_register` uses `INSERT OR IGNORE … executemany` followed by a
    batched `SELECT` to return Pack rows; it logs a warning if the DB-side
    size differs from the on-disk size for an already-present pack
-   (`src/lcsas/db/packs.py:121-145`).
+   (`bulk_register`, `src/lcsas/db/packs.py`).
 
-**Prune detection (`DeltaAnalyzer.detect_pruned`,
-`src/lcsas/packs/delta.py:85`):**
+**Prune detection (`DeltaAnalyzer.detect_pruned`, `src/lcsas/packs/delta.py`):**
 1. `list_packs(conn, repo_id, include_pruned=False)` fetches active packs
-   for this repo (`src/lcsas/packs/delta.py:94`, `src/lcsas/db/packs.py:149`).
+   for this repo (`list_packs`, `src/lcsas/db/packs.py`).
 2. If the scanner returned nothing, *bail out* with a warning rather than
    marking every active pack as pruned — this is the "is the mirror path
-   right?" guard (`src/lcsas/packs/delta.py:96-104`).
-3. Otherwise return active packs whose SHA-256 is not in the scanner result
-   (`src/lcsas/packs/delta.py:106-107`).
-4. `cmd_scan` then runs `bulk_mark_pruned` over the returned pack IDs
-   (`src/lcsas/cli/main.py:672-675`, `src/lcsas/db/packs.py:79`).
+   right?" guard.
+3. Otherwise return active packs whose SHA-256 is not in the scanner result.
+4. `cmd_scan` then applies the incomplete-scan and mass-prune guards (see §5)
+   and runs `bulk_mark_pruned` over the surviving pack IDs (`cmd_scan`;
+   `bulk_mark_pruned`, `src/lcsas/db/packs.py`).
 
 **Expected outcome:**
 - A pack on disk is registered exactly once, regardless of how many times
   scan is re-run (`INSERT OR IGNORE`).
 - A pack absent from disk but in the DB is flipped to `is_pruned = 1` —
-  unless `--no-prune-sync` is set, or the mirror is completely empty.
+  unless `--no-prune-sync` is set, the scan was incomplete, the mass-prune
+  guard tripped (see §5), or the mirror is completely empty.
 - Pack size in the DB is whatever the **first** scan recorded; subsequent
-  scans only log a warning on mismatch (`src/lcsas/db/packs.py:138-145`).
-  This is intentional because pack SHA-256 is content-addressed, so size
-  cannot legitimately change without a new hash.
+  scans only log a warning on mismatch (`bulk_register`,
+  `src/lcsas/db/packs.py`). This is intentional because pack SHA-256 is
+  content-addressed, so size cannot legitimately change without a new hash.
 
 **Variant axes that apply:** Multi-tenant (each repo has its own `repo_id`,
 and the delta is computed per repo). Other axes: N/A.
@@ -375,14 +399,14 @@ and the delta is computed per repo). Other axes: N/A.
 - **Gap:** No test exercises the SQLite-variable-batching path with
   >900 packs in a single scan.
 - **Gap:** No test asserts the size-mismatch warning in `bulk_register`
-  (`src/lcsas/db/packs.py:138-145`).
+  (`src/lcsas/db/packs.py`).
 
 **Source refs:**
-- `src/lcsas/packs/delta.py:15` (`DeltaAnalyzer` class) · `:31`
-  (`register_new_packs`) · `:85` (`detect_pruned`).
-- `src/lcsas/db/packs.py:100` (`bulk_register`) · `:79`
-  (`bulk_mark_pruned`) · `:149` (`list_packs`).
-- `src/lcsas/packs/scanner.py:37` (`scan_mirror_packs`).
+- `DeltaAnalyzer` (class · `register_new_packs` · `detect_pruned`) in
+  `src/lcsas/packs/delta.py`.
+- `bulk_register` · `bulk_mark_pruned` · `list_packs` in
+  `src/lcsas/db/packs.py`.
+- `scan_mirror_packs` in `src/lcsas/packs/scanner.py`.
 
 ---
 
@@ -390,28 +414,30 @@ and the delta is computed per repo). Other axes: N/A.
 
 - **Misleading footer when `--repo` filters.** The total-scanned line says
   `across {len(config.repositories)} repos` even when `--repo` narrows the
-  scan to one repo (`src/lcsas/cli/main.py:751`). A filtered scan that
-  visits one repo out of five will still print "across 5 repos". Cosmetic
-  only.
+  scan to one repo (`cmd_scan`). A filtered scan that visits one repo out of
+  five will still print "across 5 repos". Cosmetic only.
 - **No `--no-snapshots` CLI test.** The flag's skip path is only exercised
-  indirectly (via empty `password_file`). A direct test would protect the
+  indirectly (via an unset `password_file`). A direct test would protect the
   current behaviour.
-- **No `--no-prune-sync` CLI test.** Same as above for the prune-sync
-  guard.
+- **No `--no-prune-sync` CLI test.** The mass-prune `--yes-prune` override
+  *is* covered (`tests/unit/test_cli_scan.py`), but the `--no-prune-sync`
+  skip path is not.
 - **Size mismatch is non-fatal.** `bulk_register` logs a warning on size
-  mismatch but trusts the DB row (`src/lcsas/db/packs.py:138-145`). For a
+  mismatch but trusts the DB row (`src/lcsas/db/packs.py`). For a
   content-addressed store this is the conservative choice, but no
   observability surface (DB column, audit event) flags that a mismatch was
   seen. Operators only see a log line.
-- **`detect_pruned` semantics when the mirror is *partly* missing.** If
-  the mirror returns *some* packs but not all (e.g., a partial NFS mount),
-  the missing ones will be flagged as pruned with no further check. Use
-  `--no-prune-sync` whenever a mirror's completeness is uncertain.
+- **`detect_pruned` semantics when the mirror is *partly* missing.** A
+  partial mirror that raises read errors is now skipped for prune-sync
+  (`scan_result.errors` guard), and an over-threshold prune set requires
+  `--yes-prune` (BURN-09). But a mirror that reads cleanly yet is *silently*
+  missing a sub-threshold set of files will still flag those as pruned with
+  no further check. Use `--no-prune-sync` whenever a mirror's completeness
+  is uncertain.
 - **Snapshot listing failure is per-repo soft-fail.** If `rustic snapshots`
   raises for a given repo, the error is logged and the loop continues
-  (`src/lcsas/cli/main.py:725-729`). The overall scan still returns 0,
-  which can mask partial outages. No metric or audit-trail event is
-  emitted.
+  (snapshot block of `cmd_scan`). The overall scan still returns 0, which
+  can mask partial outages. No metric or audit-trail event is emitted.
 - **No integration test driving real `rustic backup`** as the upstream
   event of a scan. Existing tests fabricate pack files directly on disk.
 
@@ -420,4 +446,7 @@ and the delta is computed per repo). Other axes: N/A.
 *Document generated as part of the LCSAS workflow matrix — see
 `docs/workflows/` for sibling docs covering bin-packing, staging, ISO
 mastering, ECC, burning, restoration, consolidation, and meta-volume
-workflows.*
+workflows. For the system-level picture (tier model, holographic catalog,
+schema v9), see [`docs/architecture.md`](../architecture.md); for the Rustic
+on-disk pack format the scanner walks, see
+[`docs/RESTIC_FORMAT_SPEC.md`](../RESTIC_FORMAT_SPEC.md).*
