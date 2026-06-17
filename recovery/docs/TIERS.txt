@@ -29,14 +29,14 @@ THE TIERS
   ╞════╪═════════════════════════════╪════════════════════════════╡
   │ B  │   BARE MINIMUM PATH ENDS HERE                             │
   ╞════╪═════════════════════════════╪════════════════════════════╡
-  │ 3  │ Pure-Python standalone_      │ python3 (>=3.7)             │
+  │ 3  │ Pure-Python standalone_      │ python3 (>=3.10)            │
   │    │ restorer.py                  │ stdlib only (no pip needed) │
   └────┴─────────────────────────────┴────────────────────────────┘
 
 DESIGN INVARIANT
 
 The bare-minimum path (tiers 1-2) is verified Python-free by
-``tests/test_bare_path.sh``:
+``recovery/tests/test_bare_path.sh``:
 
   1. Statically inspect ``scripts/restore.sh`` -- the slice from
      "Tier 1:" to "BARE-MINIMUM PATH ENDS HERE" must contain no
@@ -48,7 +48,7 @@ The bare-minimum path (tiers 1-2) is verified Python-free by
      anything named ``python*``.  Set ``LCSAS_ALLOW_PYTHON_TIER=0``.
      Invoke ``scripts/restore.sh``.  Verify recovery succeeds.
 
-  Run as: ``make test-bare-path``
+  Run as: ``make -C recovery test-bare-path``
 
 OPTING OUT OF TIER 3
 
@@ -250,7 +250,8 @@ Python is a healthy ecosystem today, but at a 50-year horizon:
   * Python's stdlib provides scrypt and HMAC -- but the
     standalone_restorer also requires dataclasses, ``from __future__
     import annotations`` semantics, and pathlib edge cases that
-    pin the minimum at Python 3.7.  That single ecosystem version
+    pin the minimum at Python 3.10 (the generated restorer exits with
+    a clear message on anything older).  That single ecosystem version
     pin is itself a risk.
   * The interpreter binary on the recovery medium depends on
     glibc / musl + dozens of optional shared libraries (ssl, expat,
