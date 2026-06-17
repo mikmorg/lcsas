@@ -51,24 +51,40 @@ the meta-volume; this doc is the operator-facing companion.
 
    The driver auto-detects the host arch via `uname -s` + `uname -m`
    and selects `recovery/bin/aarch64-apple-darwin/` on Apple Silicon
-   or `recovery/bin/x86_64-apple-darwin/` on Intel
-   (see `recovery/scripts/restore.sh:230-270` for the dispatch
-   table).
+   or `recovery/bin/x86_64-apple-darwin/` on Intel (see the `Darwin`
+   arm of the target-dispatch block in `recovery/scripts/restore.sh`).
 3. The script prompts for the encryption password.  Paste from the
    offline copy.  Alternative non-interactive forms:
 
    - `LCSAS_PASSWORD='...' sh restore.sh ~/Restored`
    - `LCSAS_PWFILE=/path/to/key.txt sh restore.sh ~/Restored`
 
-4. Tier 1 (prebuilt `lcsas-restore`) runs.  If it succeeds, restored
+   If the archive's password was **split** into SLIP-0039 key shares
+   (`KEY_INFO.txt` on the disc says so), rebuild it first with the
+   bundled combiner — primary path is the static
+   `recovery/bin/aarch64-apple-darwin/lcsas-keyshare` (or the
+   `x86_64-apple-darwin` build on Intel); the Python fallback is
+   `keyshare_combine.py` run under the meta-disc's bundled CPython at
+   `recovery/bin/<platform>/python/bin/python3`.  See
+   [`docs/KEY_SHARE_FORMAT.md`](../KEY_SHARE_FORMAT.md) for the share
+   format and [`docs/RECOVERY_RUNBOOK.md`](../RECOVERY_RUNBOOK.md) for
+   the full operator runbook.
+
+4. Tier 1 (prebuilt C89 `lcsas-restore`) runs.  If it succeeds, restored
    files land in `~/Restored/`.  Tier 2 (`rustic-static`) and
    tier 3 (`python3 standalone_restorer.py`, using the meta-disc's
    bundled CPython at `recovery/bin/<target>/python/bin/python3`)
    are reached only if a prior tier crashes; the cascade is
-   transparent to the operator.
+   transparent to the operator.  Tier-1 fall-through to tier-2/3 is
+   opt-in via `LCSAS_TIER_FALLBACK=1` (default `0` exec()s tier 1
+   directly so a tier-1 regression surfaces loudly — see
+   `recovery/docs/ENV_VARS.txt`).  The macOS tier-1 binaries are
+   cross-built with `zig cc -target <arch>-macos` (Phase 21.12; no
+   Apple SDK required).
 
-**Source refs:** `recovery/scripts/restore.sh:230` (dispatch table),
-`recovery/scripts/restore.sh:378-460` (tier cascade).
+**Source refs:** `recovery/scripts/restore.sh` (the `case "$OS" in`
+Darwin dispatch arm selects the `*-apple-darwin` triple),
+`src/lcsas/meta/builder.py` (`tier1_map`).
 
 ## Workflow: mounting data discs (`hdiutil` and the GUI)
 
@@ -148,20 +164,21 @@ Rosetta 2 (e.g. for compatibility testing), force it:
 LCSAS_TARGET=x86_64-apple-darwin sh /Volumes/LCSAS_META/restore.sh ~/Restored
 ```
 
-This is `restore.sh:243` — the `LCSAS_TARGET` env var short-circuits
-auto-detection.
+The `LCSAS_TARGET` env var short-circuits auto-detection in
+`restore.sh` (the `if [ -n "${LCSAS_TARGET:-}" ]` branch of the
+target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
 
 ## Gaps and known limitations
 
-- **Tier 1 (`lcsas-restore`) is unavailable on macOS today.**  The
-  recovery cascade declares the C89 `lcsas-restore` binary as the
-  primary recovery tool, but Phase 21.1 didn't cross-compile it
-  for the Darwin targets (would need osxcross or an Apple-licensed
-  SDK in CI).  On macOS the cascade currently runs:
-  tier 1 (missing) → tier 2 (`rustic-static`, works) → tier 3
-  (bundled Python, works).  Restore *succeeds* — you just lose the
-  "long-lived C89 binary" durability layer that's available on the
-  build host.  Tracked as Phase 21.12 (deferred — see
+- **Tier 1 (`lcsas-restore`) IS bundled for macOS** as of Phase
+  21.12.  Both Darwin targets (`aarch64-apple-darwin`,
+  `x86_64-apple-darwin`) carry a prebuilt C89 `lcsas-restore`,
+  cross-compiled with `zig cc -target <arch>-macos` — no osxcross or
+  Apple-licensed SDK required.  The cascade on macOS is the same as
+  on Linux: tier 1 (`lcsas-restore`) → tier 2 (`rustic-static`) →
+  tier 3 (bundled Python).  The durability story (long-lived C89
+  binary as the primary path) holds on macOS, not just on the build
+  host (see
   [`CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q6).
 - **Boot directly from the meta-disc:** Mac firmware doesn't boot ISO
   9660 on USB optical drives well.  If your Mac is fully bricked,
