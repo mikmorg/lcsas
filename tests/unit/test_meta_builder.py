@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import dataclasses
+import importlib as _importlib
 import json
 import os
 import re
 import shutil
 import sqlite3
 import subprocess
+import types as _types
 from pathlib import Path
 
 import pytest
@@ -1752,3 +1754,65 @@ class TestBundleUpstreamBinariesStaging:
         # Tarball + extraction marker are not copied into the meta tree.
         assert not (win_dst / "cpython.tar.gz").exists()
         assert not (win_dst / ".extracted").exists()
+
+
+# ── ToolBundler edge-branch coverage (cycle 19) ──────────────────────
+
+
+class TestBundlerEdgeBranches:
+    def test_get_shared_libs_bare_absolute_path_lib(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # ldd output where a bundleable lib appears as a BARE absolute path
+        # (no "=>", like the loader line) -> the elif branch appends it
+        # (bundler.py:87-90).  The real loader is glibc-filtered, so this
+        # path only fires for a synthetic non-glibc bare-path entry.
+        from lcsas.meta import bundler as _bnd
+
+        fake_so = tmp_path / "libwidget.so.1"
+        fake_so.write_bytes(b"\x7fELF")
+
+        class _Result:
+            stdout = f"\t{fake_so} (0x00007f0000000000)\n"
+
+        monkeypatch.setattr(_bnd.subprocess, "run", lambda *a, **k: _Result())
+        libs = get_shared_libs(tmp_path / "anybin")
+        assert fake_so.resolve() in libs
+
+    def test_get_python_paths_sysconfig_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        # base_prefix with no lib/<ver>/os.py -> fall through to the
+        # sysconfig stdlib path (bundler.py:114-120).
+        from lcsas.meta import bundler as _bnd
+
+        monkeypatch.setattr(
+            _bnd.sys, "base_prefix", "/nonexistent-prefix-xyz"
+        )
+        _exe, stdlib = get_python_paths()
+        assert (stdlib / "os.py").is_file()
+
+    def test_find_installed_package_single_file_module(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        # A bundleable name that imports to a single-file MODULE (has
+        # __file__, no __path__) -> returns its parent (bundler.py:338-339).
+        name = sorted(ToolBundler._BUNDLEABLE_PACKAGES)[0]
+        fake = _types.ModuleType(name)
+        fake.__file__ = "/tmp/fake_pkg/mod.py"  # no __path__
+        monkeypatch.setattr(_importlib, "import_module", lambda _n: fake)
+        assert ToolBundler._find_installed_package(name) == Path("/tmp/fake_pkg")
+
+    def test_find_installed_package_no_path_no_file(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Module with neither __path__ nor __file__ -> None (bundler.py:341).
+        name = sorted(ToolBundler._BUNDLEABLE_PACKAGES)[0]
+        fake = _types.ModuleType(name)
+        fake.__dict__.pop("__file__", None)
+        monkeypatch.setattr(_importlib, "import_module", lambda _n: fake)
+        assert ToolBundler._find_installed_package(name) is None
+
+    def test_find_installed_package_rejects_unlisted(self):
+        with pytest.raises(ValueError, match="not in the allowed bundle list"):
+            ToolBundler._find_installed_package("requests")
