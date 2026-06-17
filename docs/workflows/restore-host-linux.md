@@ -44,7 +44,7 @@ If the host is alive and the catalog is intact, **start here**.
   ([`src/lcsas/cli/main.py:1780`](../../src/lcsas/cli/main.py#L1780),
   [`src/lcsas/cli/main.py:1892`](../../src/lcsas/cli/main.py#L1892)).
 - A populated catalog at `config.db_path` (the same SQLite the burn
-  pipeline writes to). Schema v5
+  pipeline writes to). Schema v9
   ([`CLAUDE.md`](../../CLAUDE.md), Database schema section).
 - A live rustic mirror for the repo at `repo_cfg.mirror_path` — the
   planner *and* the executor both call `rustic restore --dry-run`
