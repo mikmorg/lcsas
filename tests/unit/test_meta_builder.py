@@ -7,13 +7,20 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
-from lcsas.meta.builder import MetaVolumeBuilder
+from lcsas.meta import builder as _builder_mod
+from lcsas.meta.builder import (
+    MetaBuildError,
+    MetaVolumeBuilder,
+    _get_tool_version,
+    pinned_dvdisaster_source_name,
+)
 from lcsas.meta.bundler import (
     ToolBundler,
     get_python_paths,
@@ -1420,3 +1427,328 @@ class TestZstdBundleGuard:
         assert zstd["pure_python_zstd"] is True
         assert zstd["native_zstd"] is False
         assert zstd["native_zstd_arch"] is None
+
+
+# ── Builder private-helper branch coverage (cycle 17) ────────────────
+#
+# These exercise the small error/edge branches of MetaVolumeBuilder's
+# private bundling helpers directly, with crafted tmp fixtures and no
+# rustic/xorriso on PATH — they pin the failure/skip paths that the
+# full build() integration test never reaches.
+
+
+class TestPinnedDvdisasterSourceName:
+    def test_returns_none_when_manifest_absent(self, tmp_path: Path):
+        # No UPSTREAM.sha256 in the recovery dir -> None (builder.py:64).
+        assert pinned_dvdisaster_source_name(tmp_path) is None
+
+    def test_skips_malformed_and_non_dvdisaster_lines(self, tmp_path: Path):
+        # A comment, a blank line, a single-field (malformed) line, and a
+        # valid non-dvdisaster pin -> the loop falls through to None
+        # (builder.py:71 the <2-parts continue, builder.py:75 the return).
+        (tmp_path / "UPSTREAM.sha256").write_text(
+            "# a comment\n"
+            "\n"
+            "onlyonefield\n"
+            "deadbeef  rustic/bin/rustic\n"
+        )
+        assert pinned_dvdisaster_source_name(tmp_path) is None
+
+    def test_returns_basename_for_dvdisaster_pin(self, tmp_path: Path):
+        (tmp_path / "UPSTREAM.sha256").write_text(
+            "deadbeef  dvdisaster/src/dvdisaster-0.79.5.tar.bz2\n"
+        )
+        assert (
+            pinned_dvdisaster_source_name(tmp_path)
+            == "dvdisaster-0.79.5.tar.bz2"
+        )
+
+
+class TestGetToolVersionFailure:
+    def test_unknown_when_binary_unrunnable(self, tmp_path: Path):
+        # subprocess.run on a nonexistent path raises FileNotFoundError
+        # (an OSError) for both --version and bare version attempts, so
+        # the helper returns "unknown" (builder.py:175-177).
+        assert _get_tool_version(tmp_path / "nope" / "ghost-bin") == "unknown"
+
+
+class TestBuilderProperties:
+    def test_output_and_project_root_properties(self, tmp_path: Path):
+        b = MetaVolumeBuilder(tmp_path / "out", project_root=tmp_path)
+        assert b.output_dir == tmp_path / "out"   # builder.py:1732
+        assert b.project_root == tmp_path.resolve()
+
+
+class TestMissingRequiredContents:
+    def test_empty_output_reports_tools_dir_missing(self, tmp_path: Path):
+        # tools is a directory-contract entry: an empty output tree makes
+        # it (and every file entry) missing — hits the tools is_dir guard
+        # (builder.py:1785) plus the file elif.
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(out, project_root=tmp_path)
+        missing = b.missing_required_contents()
+        assert "tools" in missing
+
+
+class TestBundleDvdisasterSource:
+    def _builder(self, tmp_path: Path, *, allow: bool) -> MetaVolumeBuilder:
+        recovery = tmp_path / "recovery"
+        recovery.mkdir()
+        # UPSTREAM.sha256 present but with NO dvdisaster/src pin.
+        (recovery / "UPSTREAM.sha256").write_text(
+            "deadbeef  rustic/bin/rustic\n"
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        return MetaVolumeBuilder(
+            out,
+            project_root=tmp_path,
+            recovery_dir=recovery,
+            allow_no_dvdisaster_source=allow,
+        )
+
+    def test_returns_when_unpinned_and_allowed(self, tmp_path: Path):
+        # name is None + allow flag -> silent return (builder.py:1929-1930).
+        b = self._builder(tmp_path, allow=True)
+        b._bundle_dvdisaster_source()  # must not raise
+
+    def test_raises_when_unpinned_and_not_allowed(self, tmp_path: Path):
+        # name is None + not allowed -> MetaBuildError (builder.py:1931).
+        b = self._builder(tmp_path, allow=False)
+        with pytest.raises(MetaBuildError, match="no dvdisaster source"):
+            b._bundle_dvdisaster_source()
+
+
+class TestBundleSourceAndDocs:
+    def test_bundle_source_overwrites_existing_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # project_root with a src/ dir and a top-level file item; running
+        # twice exercises the rmtree-of-existing-dir branch (builder.py:1878)
+        # and the file-item branch (builder.py:1889-1891).
+        proj = tmp_path / "proj"
+        (proj / "src").mkdir(parents=True)
+        (proj / "src" / "a.py").write_text("x = 1\n")
+        (proj / "afile.txt").write_text("hello\n")
+        monkeypatch.setattr(_builder_mod, "_SOURCE_ITEMS", ("src", "afile.txt"))
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(out, project_root=proj)
+        b._bundle_source()
+        b._bundle_source()  # second pass hits the rmtree-existing branch
+        assert (out / "lcsas" / "src" / "a.py").read_text() == "x = 1\n"
+        assert (out / "lcsas" / "afile.txt").read_text() == "hello\n"
+
+    def test_bundle_docs_overwrites_existing_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # docs/ dir copied twice -> rmtree-existing branch (builder.py:1900).
+        proj = tmp_path / "proj"
+        (proj / "docs").mkdir(parents=True)
+        (proj / "docs" / "guide.md").write_text("# guide\n")
+        monkeypatch.setattr(_builder_mod, "_DOC_ITEMS", ("docs",))
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(out, project_root=proj)
+        b._bundle_docs()
+        b._bundle_docs()
+        assert (out / "docs" / "guide.md").read_text() == "# guide\n"
+
+
+class TestBundleRecoveryToolchainArtifacts:
+    def test_returns_when_recovery_dir_absent(self, tmp_path: Path):
+        # recovery_dir is not a directory -> silent return (builder.py:2053).
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(
+            out, project_root=tmp_path, recovery_dir=tmp_path / "ghost"
+        )
+        b._bundle_recovery_toolchain_artifacts()  # must not raise
+        assert not (out / "recovery").exists()
+
+    def test_overwrites_existing_recovery_dst(self, tmp_path: Path):
+        # An existing output recovery/ tree is rmtree'd then recopied
+        # (builder.py:2057).
+        recovery = tmp_path / "recovery"
+        (recovery / "scripts").mkdir(parents=True)
+        (recovery / "scripts" / "restore.sh").write_text("#!/bin/sh\n")
+        out = tmp_path / "out"
+        (out / "recovery").mkdir(parents=True)
+        (out / "recovery" / "stale.txt").write_text("old\n")
+        b = MetaVolumeBuilder(
+            out, project_root=tmp_path, recovery_dir=recovery
+        )
+        b._bundle_recovery_toolchain_artifacts()
+        # Stale file gone (tree was replaced), real script present.
+        assert not (out / "recovery" / "stale.txt").exists()
+        assert (out / "recovery" / "scripts" / "restore.sh").is_file()
+
+
+class TestRegenerateRecoveryManifestComments:
+    def test_preserves_comments_drops_stale_bin_rows(self, tmp_path: Path):
+        # A MANIFEST with a comment, a kept source row, and a stale ./bin/
+        # row: comment is preserved (builder.py:2318-2319), the bin row is
+        # dropped and regenerated from the actual bin/ tree.
+        out = tmp_path / "out"
+        recovery_dst = out / "recovery"
+        (recovery_dst / "bin" / "x86_64").mkdir(parents=True)
+        (recovery_dst / "bin" / "x86_64" / "lcsas-restore").write_bytes(b"ELF")
+        (recovery_dst / "MANIFEST.sha256").write_text(
+            "# recovery manifest\n"
+            "abc123  ./scripts/restore.sh\n"
+            "stale99  ./bin/x86_64/old-binary\n"
+        )
+        b = MetaVolumeBuilder(out, project_root=tmp_path)
+        b._regenerate_recovery_manifest(recovery_dst)
+        text = (recovery_dst / "MANIFEST.sha256").read_text()
+        assert "# recovery manifest" in text            # comment preserved
+        assert "./scripts/restore.sh" in text           # source row kept
+        assert "old-binary" not in text                 # stale bin dropped
+        assert "./bin/x86_64/lcsas-restore" in text      # regenerated
+
+
+class TestBundleMetadata:
+    def test_returns_when_catalog_absent(self, tmp_path: Path):
+        # catalog_db_path set but the file does not exist -> return
+        # (builder.py:2369).
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(
+            out, project_root=tmp_path, catalog_db_path=tmp_path / "ghost.db"
+        )
+        b._bundle_metadata()  # must not raise
+        assert not (out / "metadata").exists()
+
+    def test_copies_per_repo_rustic_metadata(self, tmp_path: Path):
+        # A catalog with one repository whose mirror has config/keys
+        # files and an index/ dir -> the copy loop runs (builder.py:2385-2396).
+        mirror = tmp_path / "mirror" / "family"
+        mirror.mkdir(parents=True)
+        (mirror / "config").write_text("repo-config\n")
+        (mirror / "keys").write_text("key-material\n")
+        (mirror / "index").mkdir()
+        (mirror / "index" / "idx0").write_text("idx\n")
+        # snapshots intentionally absent -> exercises the skip path too.
+
+        db = tmp_path / "catalog.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE repositories (repo_id TEXT, mirror_path TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO repositories VALUES (?, ?)",
+            ("family", str(mirror)),
+        )
+        # A second repo whose mirror_path is not a directory -> skipped
+        # (builder.py:2387), proving a stale catalog row can't crash the
+        # bundle.
+        conn.execute(
+            "INSERT INTO repositories VALUES (?, ?)",
+            ("gone", str(tmp_path / "no-such-mirror")),
+        )
+        conn.commit()
+        conn.close()
+
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(
+            out, project_root=tmp_path, catalog_db_path=db
+        )
+        b._bundle_metadata()
+        repo_dst = out / "metadata" / "family"
+        assert (repo_dst / "config").read_text() == "repo-config\n"
+        assert (repo_dst / "keys").read_text() == "key-material\n"
+        assert (repo_dst / "index" / "idx0").read_text() == "idx\n"
+        assert not (repo_dst / "snapshots").exists()
+
+
+class TestWriteRestoreScriptFallback:
+    def test_legacy_fallback_when_no_recovery_driver(self, tmp_path: Path):
+        # No recovery/scripts/restore.sh in the output -> the else branch
+        # writes the legacy bash heredoc as restore.sh (builder.py:2456-2457).
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(out, project_root=tmp_path)
+        b._write_restore_script()
+        script = out / "restore.sh"
+        assert script.is_file()
+        assert os.access(script, os.X_OK)
+
+    def test_build_sha_unknown_when_git_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # A bundled recovery driver is present, but git rev-parse raises ->
+        # the SHA falls back to "unknown" (builder.py:2429-2430).
+        out = tmp_path / "out"
+        (out / "recovery" / "scripts").mkdir(parents=True)
+        (out / "recovery" / "scripts" / "restore.sh").write_text(
+            "#!/bin/sh\n# build @@BUILD_SHA@@ @@BUILD_DATE@@\n"
+        )
+
+        def _boom(*_a, **_k):
+            raise OSError("git unavailable")
+
+        monkeypatch.setattr(subprocess, "check_output", _boom)
+        b = MetaVolumeBuilder(out, project_root=tmp_path)
+        b._write_restore_script()
+        text = (out / "restore.sh").read_text()
+        assert "unknown" in text                  # SHA placeholder filled
+        assert "@@BUILD_SHA@@" not in text         # placeholder replaced
+
+
+class TestBundleUpstreamBinariesStaging:
+    def test_returns_when_cache_absent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "ghost"))
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(out, project_root=tmp_path)
+        b._bundle_upstream_binaries(out / "recovery")  # cache missing -> noop
+        assert not (out / "recovery" / "bin").exists()
+
+    def test_stages_linux_tree_and_windows_flat_install(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Build a fake recovery-binaries cache:
+        #  * a Linux target with a python/<target>/python/ TREE
+        #    (exercises the directory-copy branch + its rmtree on re-run,
+        #     builder.py:2161-2169 incl. 2165),
+        #  * a Windows target with a flat python.exe install
+        #    (exercises the alt-install branch builder.py:2176-2191).
+        cache = tmp_path / "cache"
+        # Linux tree install.
+        lin = cache / "python" / "x86_64-unknown-linux-musl" / "python"
+        (lin / "bin").mkdir(parents=True)
+        (lin / "bin" / "python3").write_text("#!/bin/sh\n")
+        # Windows flat install: python.exe at the target root, plus a
+        # sibling dir + file, and tarball/marker files that must be skipped.
+        win = cache / "python" / "x86_64-pc-windows-gnu"
+        win.mkdir(parents=True)
+        (win / "python.exe").write_bytes(b"MZ")
+        (win / "Lib").mkdir()
+        (win / "Lib" / "os.py").write_text("# stdlib\n")
+        (win / "vcruntime.dll").write_bytes(b"\x00")
+        (win / "cpython.tar.gz").write_bytes(b"skip-me")
+        (win / ".extracted").write_text("marker\n")
+
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache))
+        out = tmp_path / "out"
+        recovery_dst = out / "recovery"
+        recovery_dst.mkdir(parents=True)
+        b = MetaVolumeBuilder(out, project_root=tmp_path)
+
+        b._bundle_upstream_binaries(recovery_dst)
+        b._bundle_upstream_binaries(recovery_dst)  # re-run -> rmtree branches
+
+        lin_dst = recovery_dst / "bin" / "x86_64-unknown-linux-musl" / "python"
+        assert (lin_dst / "bin" / "python3").is_file()
+
+        win_dst = recovery_dst / "bin" / "x86_64-pc-windows-gnu" / "python"
+        assert (win_dst / "python.exe").is_file()
+        assert (win_dst / "Lib" / "os.py").is_file()
+        assert (win_dst / "vcruntime.dll").is_file()
+        # Tarball + extraction marker are not copied into the meta tree.
+        assert not (win_dst / "cpython.tar.gz").exists()
+        assert not (win_dst / ".extracted").exists()
