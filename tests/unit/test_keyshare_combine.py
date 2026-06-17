@@ -507,3 +507,29 @@ class TestConfigKeySplit:
         )
         config = load_config(cfg_file)
         assert config.key_split is False
+
+
+class TestCombinerPerShareValidation:
+    """The per-share pre-pass pinpoints a single mistyped share."""
+
+    def test_invalid_share_flagged_and_returns_1(self, tmp_path, capsys):
+        # Swap two valid words so the share still parses structurally (all
+        # words in the wordlist, correct count) but its SLIP-0039 CHECKSUM
+        # is broken -> _read_mnemonics accepts it, but the per-share
+        # check_share pre-pass returns a reason, so main() prints a named
+        # verdict and aborts with the aggregate error before reconstruction
+        # (keyshare_combine.py:158-159, 161-165).
+        mns = _make_2of5()
+        words = mns[0].split()
+        i, j = 4, 5
+        if words[i] == words[j]:
+            j = 6
+        words[i], words[j] = words[j], words[i]
+        bad = tmp_path / "bad-card.txt"
+        bad.write_text(" ".join(words) + "\n")
+
+        rc = keyshare_combine.main([str(bad)])
+
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "failed individual validation" in err
