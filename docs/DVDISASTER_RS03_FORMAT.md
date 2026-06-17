@@ -316,35 +316,57 @@ derived value.  The ECC header cookie is found at byte
 
 ## 5. Operations
 
+These are the operations the in-house `lcsas-ecc` binary
+(`recovery/src/lcsas-ecc/`) implements; it is the tool the recovery
+scripts actually drive (`restore.sh --check-disc <image>`), and it
+reads/writes the exact RS03 layout specified above.  The abandoned
+upstream `dvdisaster` equivalents are noted for reference — its output
+remains byte-compatible — but no `dvdisaster` binary is on the recovery
+path.
+
 ### 5.1 Verify (non-destructive)
 
 ```
-dvdisaster -i image.iso -t
+lcsas-ecc verify <image>          # dvdisaster equivalent: dvdisaster -i image.iso -t
 ```
 
 Reads all sectors, computes CRC-32, compares against stored CRCs.
 Reports number of good/bad/missing sectors and whether the ECC can
-repair the damage.
+repair the damage.  Exit 0 = clean, 1 = damage found, 2 = no RS03
+header, 3 = usage/I-O error (see `main.c`).
 
 ### 5.2 Repair
 
 ```
-dvdisaster -i image.iso -f
+lcsas-ecc fix <image> [--out F]   # dvdisaster equivalent: dvdisaster -i image.iso -f
 ```
 
 Reads all sectors (including damaged ones), applies Reed-Solomon
-error correction to reconstruct missing/bad sectors, writes repaired
-image in place.
+erasure correction to reconstruct missing/bad sectors, and writes the
+repaired image back in place (or to `--out F`).  `lcsas-ecc` repairs
+atomically — it refuses to write a partially repaired image if any
+codeword remains uncorrectable (exit 1).
 
 ### 5.3 Augment (create ECC)
 
 ```
-dvdisaster -i image.iso -mRS03 -c
+lcsas-ecc augment <image> [--out F]   # dvdisaster equivalent: dvdisaster -i image.iso -mRS03 -c
 ```
 
 Computes RS03 parity data and appends it to the ISO file, padding the
-image up to the smallest fitting medium size (no `-n`: augmented-image
-redundancy is not settable — see §2.2).
+image up to the smallest fitting medium size (no redundancy knob:
+augmented-image redundancy is not settable — see §2.2).  This is what
+the burn pipeline (`src/lcsas/ecc/dvdisaster.py`) calls to ECC-protect
+each volume.
+
+### 5.4 Geometry
+
+```
+lcsas-ecc info <image>
+```
+
+Prints the parsed RS03 geometry (ndata/nroots/sectorsPerLayer and the
+derived layer positions of §4) without reading the whole image.
 
 ---
 
@@ -396,9 +418,12 @@ in `recovery/UPSTREAM.sha256`.  The load-bearing files are:
 - `src/galois.c` — the GF(2^8) log/exp table construction.
 - `src/endian.c` — `SwapEccHeaderBytes` (byte order, §3.2).
 
-When the LCSAS in-house RS03 decoder lands (FMT-01) it lives at
-`recovery/src/lcsas-ecc/` and serves as a second, audited reference
-implementation built against this spec.  General-purpose RS GF(2^8)
+The LCSAS in-house RS03 decoder (FMT-01) lives at
+`recovery/src/lcsas-ecc/` (`gf256.c`, `rs03.c`, `main.c`) and is a
+second, audited reference implementation built against this spec — it
+augments, verifies, and repairs RS03 images itself, so the recovery
+path no longer depends on the abandoned upstream binary.  General-purpose
+RS GF(2^8)
 codecs (e.g. Phil Karn's `libfec` in C, or `reed-solomon-erasure` in
 Rust) can supply the field/decoder primitives, but the decoder must be
 parameterised to 0x187 and wrapped in the §4.2 interleaving to match
@@ -416,4 +441,5 @@ dvdisaster's parity.
 - Pack files inside the ISO are also protected by SHA-256 content
   hashing, providing an additional integrity layer
 - If a pack file's SHA-256 doesn't match after extraction, the disc
-  may be damaged — repair with dvdisaster first, then re-extract
+  may be damaged — repair with `lcsas-ecc fix <image>` (or the upstream
+  `dvdisaster -f`) first, then re-extract
