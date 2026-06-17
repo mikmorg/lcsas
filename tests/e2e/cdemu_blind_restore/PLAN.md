@@ -108,7 +108,7 @@ A run passes iff **all** of the following hold after the agent declares
 │                                                                            │
 │  run.sh    spawns headless `claude -p` as user lcsas-blind, captures       │
 │            stream-json to transcript.jsonl, allowed-tools = Bash           │
-│  verify.sh runs the seven success checks above                             │
+│  verify.sh runs the success checks above (16 checks as of now)             │
 └────────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
@@ -462,7 +462,7 @@ tests/e2e/cdemu_blind_restore/
 ├── agent_prompt.txt       # the ~120-word initial prompt
 ├── run.sh                 # spawns headless claude, captures transcript
 ├── merge_timeline.py      # interleaves transcript + disc-loader log
-├── verify.sh              # the seven success checks
+├── verify.sh              # the success checks (16 today; see the criteria list)
 └── teardown.sh            # unmount, clear vault, drop agent home, stop cdemu
 ```
 
@@ -508,24 +508,40 @@ tests/e2e/cdemu_blind_restore/
 ## How to run
 
 ```bash
-make blind-restore       # convenience target — runs setup → run → verify
+LCSAS_BLIND_ACK_COST=1 make blind-restore   # setup → run (capped) → verify
 ```
 
-`make blind-restore` is a thin wrapper:
-
-```makefile
-.PHONY: blind-restore
-blind-restore:
-	sudo ./tests/e2e/cdemu_blind_restore/setup.py
-	./tests/e2e/cdemu_blind_restore/run.sh
-	./tests/e2e/cdemu_blind_restore/verify.sh /tmp/lcsas-blind-run-*
-	./tests/e2e/cdemu_blind_restore/teardown.sh
-```
+**Cost gate.** Every `make blind-restore*` target spawns a real headless
+Claude sub-agent and burns API credits (≈ USD 5 per run), so it refuses
+to run unless `LCSAS_BLIND_ACK_COST=1` is set. The target drives
+`setup.py`, then `run.sh` under a 45-minute wall-clock `timeout`
+(`RUN_DIR=/tmp/lcsas-blind-run-$$`), then `verify.sh` against the newest
+run dir. Run `teardown.sh` separately (`make blind-restore-teardown`)
+when you're done.
 
 The blind restore target is **deliberately out-of-band** — it is not in
 `make test-unit` or `make test-integration`. Reasons: it needs cdemu, a
 headless `claude` with auth, a pre-allocated LV at `/mnt/lcsas-data`,
 and ~1 GB of scratch.
+
+> **`/`-partition note (CLAUDE_CONFIG_DIR).** `run.sh` points the blind
+> agent's `CLAUDE_CONFIG_DIR` at a dedicated dir on `/scratch`
+> (`/scratch/lcsas-blind-claude-cfg`), never under the agent's home on
+> the small `/` partition. An exhausted `/` corrupts the agent's
+> `.claude.json` and the run dies with an opaque "Unexpected EOF".
+> `teardown.sh` removes that scratch config dir.
+
+### Variants
+
+`run_variant.sh` drives the same fixture in alternate shapes (each still
+cost-gated). The variant set: `default`/`single-key`, `single-tenant`,
+`5-tenant`, `no-catalog`, `tier1-missing`, `tier1-tier2-missing`,
+`split-key-2of5`, `split-key-docs`, and `windows` (the last hard-blocked
+on UX-01/INFRA-01). Convenience targets exist for the headline ones
+(`make blind-restore-single-key`, `blind-restore-split-2of5`,
+`blind-restore-split-docs`, `blind-restore-windows`,
+`blind-restore-variants`). Expected scores and the XFAIL ledger are
+tracked in `VARIANT_FLAKE_NOTES.md` + `XFAIL.list`.
 
 Expected runtime: ~5 min for setup (urandom + burn + ECC), 5–15 min for
 the blind agent (think time + simulated swap sleeps), <5 s for verify.
