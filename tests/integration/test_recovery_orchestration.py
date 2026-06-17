@@ -35,6 +35,36 @@ pytestmark = [
 ]
 
 
+@pytest.fixture(scope="session")
+def isolated_recovery_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A throwaway, per-session copy of the live ``recovery/`` tree.
+
+    Cross-build tests that PRODUCE per-arch binaries must not write into the
+    committed ``recovery/bin/`` tree.  Doing so:
+
+    * leaves the working tree dirty after every gate — zig's Mach-O / PE
+      output is non-deterministic, so the macOS/Windows bins change bytes on
+      each build (issue #320); and
+    * races a concurrent ``meta build`` test that ``copytree``s the live
+      ``recovery/`` tree — one run rewrites ``bin/<arch>/`` while the other
+      walks it, a non-deterministic gate failure (issue #327).
+
+    Building in a per-session copy keeps the tracked tree immutable, so gates
+    are deterministic under concurrency and never dirty the checkout.  The
+    copy excludes regenerable build artifacts to stay lean; ``make`` rebuilds
+    them in the copy.
+    """
+    dst = tmp_path_factory.mktemp("recovery_build") / "recovery"
+    shutil.copytree(
+        RECOVERY_DIR,
+        dst,
+        ignore=shutil.ignore_patterns(
+            "build", "build-*", "__pycache__", "*.o", "*.a", "*.pyc",
+        ),
+    )
+    return dst
+
+
 def test_recovery_builder_build_host():
     """Building the host arch produces lcsas-restore."""
     from lcsas.recovery import RecoveryBuilder
@@ -163,21 +193,27 @@ def _ziglang_available() -> bool:
     not _ziglang_available(),
     reason="ziglang module required for macOS cross-build",
 )
-def test_recovery_builder_cross_builds_macos():
+def test_recovery_builder_cross_builds_macos(isolated_recovery_tree):
     """End-to-end: cross-compile the macOS Mach-O binary via
     `zig cc -target X-macos` (no Apple SDK needed).  Skipped when
-    ziglang isn't installed."""
+    ziglang isn't installed.
+
+    Builds in an isolated recovery copy so the non-deterministic Mach-O
+    output never dirties the committed tree (#320/#327)."""
     from lcsas.recovery import RecoveryBuilder
 
-    rb = RecoveryBuilder(RECOVERY_DIR)
+    rb = RecoveryBuilder(isolated_recovery_tree)
     # Remove any stale artifact so we know this run produced it.
-    stale = RECOVERY_DIR / "bin" / "x86_64-macos" / "lcsas-restore"
+    stale = isolated_recovery_tree / "bin" / "x86_64-macos" / "lcsas-restore"
     if stale.exists():
         stale.unlink()
 
     a = rb.cross_build("x86_64-macos", verbose=False)
     assert a.arch == "x86_64-macos"
     assert a.lcsas_restore.is_file()
+    # Isolation guard (#320/#327): the artifact lives in the throwaway
+    # copy, never the committed recovery/ tree.
+    assert RECOVERY_DIR not in a.lcsas_restore.parents
     # Mach-O binaries don't get the .exe suffix.
     assert a.lcsas_restore.name == "lcsas-restore"
     # iso9660 + init not produced for macOS (same as Windows).
@@ -214,23 +250,30 @@ def test_recovery_builder_multi_token_cc_probes_first_word():
     not __import__("shutil").which("python3"),
     reason="ziglang module / python3 required for windows cross-build",
 )
-def test_recovery_builder_cross_builds_windows():
-    """End-to-end: cross-compile the Windows .exe via RecoveryBuilder."""
+def test_recovery_builder_cross_builds_windows(isolated_recovery_tree):
+    """End-to-end: cross-compile the Windows .exe via RecoveryBuilder.
+
+    Builds in an isolated recovery copy so the non-deterministic PE output
+    never dirties the committed tree (#320/#327)."""
     import importlib.util
     if importlib.util.find_spec("ziglang") is None:
         pytest.skip("ziglang not installed")
 
     from lcsas.recovery import RecoveryBuilder
 
-    rb = RecoveryBuilder(RECOVERY_DIR)
+    rb = RecoveryBuilder(isolated_recovery_tree)
     # Remove any stale artifact so we know this run produced it.
-    stale = RECOVERY_DIR / "bin" / "x86_64-windows" / "lcsas-restore.exe"
+    stale = (
+        isolated_recovery_tree / "bin" / "x86_64-windows" / "lcsas-restore.exe"
+    )
     if stale.exists():
         stale.unlink()
 
     a = rb.cross_build("x86_64-windows", verbose=False)
     assert a.arch == "x86_64-windows"
     assert a.lcsas_restore.is_file()
+    # Isolation guard (#320/#327): the artifact lives in the throwaway copy.
+    assert RECOVERY_DIR not in a.lcsas_restore.parents
     assert a.lcsas_restore.name == "lcsas-restore.exe"
     # Windows binary isn't expected to ship lcsas-init (Linux PID 1 only).
     assert a.lcsas_init is None
