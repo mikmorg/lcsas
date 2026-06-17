@@ -113,13 +113,23 @@ toward recoverability — the dominant risk for a backup is *loss*, not theft.
 - [ ] **Tell heirs the reconstruction is a two-step pre-step**, in your
   letter (template below):
 
-  1. Gather any **K** share cards and run the combiner from the META disc:
+  1. Gather any **K** share cards and run the combiner from the META disc.
+     The primary combiner is the static, python-free `lcsas-keyshare`
+     binary (one per platform under `recovery/bin/<machine>/`; Windows
+     heirs run `lcsas-keyshare.exe`):
+
+     ```
+     recovery/bin/<machine>/lcsas-keyshare <card1> <card2>
+     ```
+
+     If that binary won't run on the host, the pure-Python fallback is
+     equivalent:
 
      ```
      python3 keyshare_combine.py <card1> <card2>
      ```
 
-     It prints the password (and nothing else).
+     Either one prints the password (and nothing else).
 
   2. Run the normal restore (`restore.sh`) and enter that password at the
      `Password:` prompt — exactly the single-key flow.
@@ -232,10 +242,14 @@ also include the two-step share-reconstruction pre-step.
 ### 5. Periodic Maintenance
 
 - [ ] **Re-burn discs every 5-10 years** (even M-Disc degrades eventually)
-- [ ] **Verify existing discs** periodically:
+- [ ] **Verify existing discs** periodically.  To re-check every burned
+  volume in one pass (against its catalog hashes):
   ```
-  lcsas verify --isos /path/to/your/disc/images/
+  lcsas verify --all
   ```
+  Add `--disc` to read the physical discs from the drive instead of the
+  staged ISO files, or verify one volume at a time with
+  `lcsas verify <LABEL> --iso /path/to/<LABEL>.iso`.
 - [ ] **Update your letter** when you burn new discs or change key storage
 - [ ] **Tell someone trusted** that these discs exist and where to find them
 - [ ] **Keep a Blu-ray drive available** — as optical drives disappear from

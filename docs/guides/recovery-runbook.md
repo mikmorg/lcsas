@@ -1,4 +1,11 @@
-# LCSAS Disaster Recovery — End-to-End Runbook
+# LCSAS Disaster Recovery — Linux End-to-End Runbook
+
+> **New here?** Start at [RECOVERY_GUIDE.md](../RECOVERY_GUIDE.md) — the
+> short entry-point that routes you to the right walkthrough for your OS
+> and situation. This runbook is the **detailed Linux + META-disc**
+> walkthrough it points to. For macOS, Windows, live-USB, or disc-only
+> (no META disc) restores, follow the per-OS workflow linked from that
+> guide instead.
 
 > **Scenario**: a fire, flood, or ransomware event has destroyed
 > the original storage.  You have a box of optical discs labelled
@@ -9,7 +16,7 @@
 > command by command.
 
 If anything below behaves differently from what's described, jump
-to [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
+to [troubleshooting.md](../TROUBLESHOOTING.md).
 
 ---
 
@@ -201,7 +208,7 @@ packs into RAM-backed `/tmp/lcsas-pack-cache.<pid>/`, and
 subsequent packs from the same disc resolve from cache.
 
 If `/tmp` is constrained, see the cache-size warnings in
-[TROUBLESHOOTING.md](./TROUBLESHOOTING.md#cache-filesystem-is-10-free).
+[troubleshooting.md](../TROUBLESHOOTING.md#warning-cache-filesystem-at-x-is-10-free-disabling-further-drains).
 
 ---
 
@@ -238,13 +245,16 @@ from it immediately.
 ## When `restore.sh` won't work — fallbacks
 
 If `restore.sh` produces an error you can't resolve via
-[TROUBLESHOOTING.md](./TROUBLESHOOTING.md), the meta disc also
+[troubleshooting.md](../TROUBLESHOOTING.md), the meta disc also
 ships fallback paths:
 
-- **`restore_auto.sh`** — non-interactive, flag-driven version
-  intended for CI pipelines.  Reads its disc-swap commands from
-  whatever you set `--disc-cmd` to.  See Appendix A in
-  `README_RESTORE.md`.
+- **`restore_auto.sh`** — non-interactive version intended for CI
+  pipelines.  Takes two positional arguments
+  (`restore_auto.sh RECOVERY_ROOT TARGET_ROOT`) and reads the password
+  from the `LCSAS_PWFILE` environment variable (which must be set); it
+  restores the latest snapshot of every repository it discovers.  No
+  interactive disc-swap prompts — point it at a tree that already holds
+  every pack.  See Appendix A in `README_RESTORE.md`.
 - **`restore_legacy.sh`** — the older Bash driver, written to the
   meta-disc alongside `restore.sh`.  Different flag UX:
   `./restore_legacy.sh --key <keyfile> --target <dir> [--isos <dir>]
@@ -252,7 +262,7 @@ ships fallback paths:
   have every ISO extracted to disk (pass `--isos`).
 - **Direct invocation of the upstream rustic binary** at
   `tools/bin/rustic-static`.  Requires you to manually assemble
-  the pack tree (see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md#manual-pack-assembly)).
+  the pack tree (see [troubleshooting.md](../TROUBLESHOOTING.md#manual-pack-assembly-last-resort-tier-3-fallback)).
 - **Pure-Python `standalone_restorer.py`** (slowest, ~1 MB/s).
   Requires only Python 3.10+ + standard library.  Run with
   `--repo /path/to/assembled/repo --password-file <file>

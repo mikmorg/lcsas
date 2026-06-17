@@ -40,7 +40,7 @@ Pick the row that matches your situation, then follow the linked doc.
 
 | Your computer | Your starting state | Walkthrough |
 |---|---|---|
-| Linux (any distro) | You have the discs + the META disc + a working OS | [docs/RECOVERY_RUNBOOK.md](RECOVERY_RUNBOOK.md) |
+| Linux (any distro) | You have the discs + the META disc + a working OS | [docs/guides/recovery-runbook.md](guides/recovery-runbook.md) |
 | macOS (Intel or Apple Silicon) | You have the discs + the META disc + a working OS | [docs/workflows/restore-host-macos.md](workflows/restore-host-macos.md) |
 | Windows | You have the discs + the META disc + a working OS | [docs/workflows/restore-windows.md](workflows/restore-windows.md) |
 | No working OS | Lost the host machine entirely | [docs/workflows/restore-live-usb.md](workflows/restore-live-usb.md) (use another computer or a live-Linux USB — the discs are NOT bootable) |
@@ -65,7 +65,7 @@ sh /mnt/restore.sh ~/restored/ latest          # start restore
 ```
 
 When you see `RESTORE COMPLETE`, your files are in `~/restored/`.
-[RECOVERY_RUNBOOK.md](RECOVERY_RUNBOOK.md) has the long form with
+[recovery-runbook.md](guides/recovery-runbook.md) has the long form with
 troubleshooting and multi-tenant guidance.
 
 ---
@@ -139,7 +139,7 @@ If you don't have a Linux computer, the easiest path:
 2. **Create a bootable USB** using Rufus (Windows) or balenaEtcher (any OS)
 3. **Boot from the USB** — you can "Try Ubuntu" without installing it
 4. Open a terminal (Ctrl+Alt+T) and follow
-   [RECOVERY_RUNBOOK.md](RECOVERY_RUNBOOK.md)
+   [recovery-runbook.md](guides/recovery-runbook.md)
 
 Alternatively, use a virtual machine:
 

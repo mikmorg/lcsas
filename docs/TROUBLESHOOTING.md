@@ -198,8 +198,9 @@ to manually assemble a rustic-format repo by hand:
     --password-file ~/key.txt restore latest ~/restored/
 ```
 
-This is what `restore-auto.sh` does internally when invoked with
-`--disc-cmd "<your-disc-swap-helper>"`.  The end result is
+This is essentially what `restore_auto.sh RECOVERY_ROOT TARGET_ROOT`
+(with `LCSAS_PWFILE` set) does for you non-interactively when every
+pack is already laid out under `RECOVERY_ROOT`.  The end result is
 identical to a successful `restore.sh` run — just slower and more
 manual.
 
