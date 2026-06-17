@@ -1,5 +1,7 @@
 # BOOT-07: Remove the Alpine live stack; one (or zero) boot implementations, all artifacts pinned
 
+> **STATUS: RESOLVED** — landed in `309ee99` (meta+boot: delete the Alpine live stack; quarantine BootableISOBuilder; pin-or-fail guard [BOOT-07]); guarded by `tests/unit/test_boot_config_paths.py`.
+
 **Priority:** P2 · **Severity:** medium · **Dimension:** boot-live-distro · **Audit status:** confirmed (high confidence) · **Ledger:** partially tracked: docs/CROSS_PLATFORM_META_RFC.md:470-471 (Alpine arch story out of scope). The duplication, unpinned network-fetched boot artifacts, and untested wizard are untracked.
 **Suggested GH issue title:** Delete Alpine live stack and bootable builder params; gate unpinned artifacts
 
