@@ -385,7 +385,8 @@ in order of effort:
      or musl, both universal on Linux.
 
   D. Use the standalone Python restorer.  Install Python 3 from
-     python.org (versions 3.6 through 3.12 all work), then run:
+     python.org (Python 3.10 or newer; the script exits with a clear
+     message on anything older), then run:
         python D:\standalone_restorer.py ^
             --repo D:\metadata\<name> ^
             --password-file C:\path\to\pw.txt ^
@@ -418,7 +419,8 @@ The standalone_restorer.py file is still on the disc; you invoke
 it directly when you need it.
 
 STEP 1.  Install Python 3 from https://www.python.org if it is not
-         already on the host.  Python 3.6 through 3.12 all work.
+         already on the host.  Python 3.10 or newer is required (the
+         restorer exits with a clear message on anything older).
          Tick "Add Python to PATH" in the installer.
 
 STEP 2.  Open a Command Prompt at the meta-disc root.  For example,
