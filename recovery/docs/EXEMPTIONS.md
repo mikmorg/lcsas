@@ -7,6 +7,12 @@ here; every line listed here must actually be uncovered.
 The `make coverage-c` target enforces both invariants via
 `recovery/scripts/exemptions_check.py` — see "Enforcement" below.
 
+> This file is a **live contract**, not a status ledger: it is parsed
+> and enforced on every coverage run, so it stays in place.  For the
+> consolidated open-vs-resolved audit tracker see
+> [`STATUS_LEDGER.md`](STATUS_LEDGER.md); for the audit-gate mechanism
+> see [`AUDIT.md`](AUDIT.md).
+
 > **Scope note (KEY-06).** The line-by-line FENCE contract below and its
 > enforcement script cover `src/lcsas-restore/*.c` only.  The
 > `src/lcsas-keyshare/` combiner is *also* in the coverage-c gcovr report

@@ -5,6 +5,17 @@
 `make gate` — run it explicitly before merging any PR that touches the
 tier-1 C binary.
 
+> **Status reconciliation (audit remediation, 2026-06).**  This doc
+> describes the *mechanism* of the audit gate.  The point-in-time audit
+> *findings* and the deferred-work parking lot have been consolidated
+> into [`STATUS_LEDGER.md`](STATUS_LEDGER.md) — start there for what is
+> open vs resolved.  The line-by-line coverage contract remains in
+> [`EXEMPTIONS.md`](EXEMPTIONS.md) (it is enforced live by
+> `exemptions_check.py`, not a static ledger).  Landed since the original
+> audit: fault injection (`make fault-inject`, #165), the
+> `fuzz_tree_restore` harness (T1C-04), and the FMA-09 fs-full drain
+> seam are all in-tree and gated.
+
 ## Quick start
 
 ```bash
@@ -39,7 +50,7 @@ make -C recovery audit-gate THRESHOLD=95
 
 **Why not 100%?** Three constraints:
 1. Many `malloc`/`calloc`/`realloc` error branches require fault injection — the `make fault-inject` target (issue #165) covers some, but only branches that the test binaries actually reach.
-2. `disc_locator.c` (currently 81.6%) has filesystem-dependent branches (chroot, mount-namespace prompts, fs-full handling) that require either user-namespace fixtures or `unshare(2)` setup the tests don't currently do.
+2. `disc_locator.c` (88.5%) has filesystem-dependent branches (chroot, mount-namespace prompts, fs-full handling) that require either user-namespace fixtures or `unshare(2)` setup the tests don't currently do.  The fs-full drain branches are now reachable via the `LCSAS_TEST_FULL_FS_DIR` seam exercised by `test_restore_space_preflight.py` (FMA-09); the residual lines are line-pinned VOLATILE/DEFERRED in `EXEMPTIONS.md`.
 3. `tree.c` has ~35 INTRACTABLE lines (geteuid()!=0 chown guard, ENOSPC classifiers, FAT32/non-POSIX symlink paths) that cannot be reached in the standard coverage-c harness. The aspirational ceiling for tree.c is ~90%, not 95%.
 
 ## Per-file coverage (2026-05-21, after Phase 8)
@@ -271,7 +282,7 @@ Every uncov line has either:
 ### Coverage below threshold
 
 ```
-src/lcsas-restore/disc_locator.c    60.3%  FAIL (<75%)
+src/lcsas-restore/disc_locator.c    86.1%  FAIL (<88%)
 ```
 
 Open `recovery/build/coverage/index.html` in a browser and navigate to
