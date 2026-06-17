@@ -21,14 +21,24 @@ STATUS legend:
 ────────────────────────────────────────────────────────────────────
 ID 001 -- Windows users have no recovery path
 ────────────────────────────────────────────────────────────────────
-STATUS: OPEN (planning -- see WINDOWS_RECOVERY_PLAN.txt)
+STATUS: MITIGATED (native Windows path shipped; a SecureBoot-signed
+        live-USB remains the no-OS fallback)
+RESOLVED BY: UX-01 / INFRA-01 landed the full native path —
+        recovery/bin/x86_64-windows/lcsas-restore.exe (built via
+        zig cc), recovery/scripts/restore.bat (CMD driver mirroring
+        restore.sh, with holographic-metadata layout discovery), and
+        recovery/docs/RECOVER_WINDOWS.txt.  A wine smoke test plus a
+        two-job Windows-journey e2e gate exercise the .bat end to end.
+        Residual: no Authenticode signature yet (the unsigned-binary
+        concern below), and a bare no-OS machine still rides the
+        live-USB route (the optical-drive-rarity concern below).
 IMPACT: HIGH.  Windows is ~70% of the laptop market.  A user with a
         Windows-only laptop who inherits the discs cannot run any
         of the prebuilt binaries; they would need to install WSL2,
         install a Linux distro, mount the disc inside WSL, and run
         the shell driver -- a multi-hour learning curve.
 
-MITIGATION (planned):
+MITIGATION (DONE -- UX-01 / INFRA-01):
   * Cross-build lcsas-restore.exe for x86_64-windows via zig cc.
   * Ship recovery/bin/x86_64-windows/lcsas-restore.exe on the meta-
     volume.
@@ -301,9 +311,11 @@ MITIGATION:
 
 PRIORITISATION
 
-  P0 (do this first):  001
   P1 (next):           002, 008, 010
-  P2 (when time):      004, 009
+  P2 (when time):      004
   P3 (long-term):      003
-  WONTFIX:             006 (cryptographic), 007 (hardware)
+  WONTFIX:             006 (cryptographic)
+  MITIGATED:           001 (native Windows path shipped, UX-01),
+                       007 (live-USB route documented + gated)
+  RESOLVED:            009 (non-empty-target guard, UX-07)
   CLOSED:              005, 011, 012
