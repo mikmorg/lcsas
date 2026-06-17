@@ -16,7 +16,7 @@ The matrix mirrors LCSAS's three-tier storage model. Workflows on the Rustic
 mirror (backup-and-scan) live in **Tier 0 — HOT**. Workflows that assemble
 staging trees and master ISOs (stage-and-burn, burn-iso-portable, consolidate)
 live in **Tier 1 — WARM**. Workflows that produce, verify, or restore from
-physical media (location-management, the four restore variants, meta-volume,
+physical media (location-management, the five restore variants, meta-volume,
 verify-and-audit) live in **Tier 2 — COLD**. Cross-tier workflows (init,
 multi-tenant, recovery-toolchain) are called out as such in their detail files.
 
@@ -32,7 +32,8 @@ multi-tenant, recovery-toolchain) are called out as such in their detail files.
 | location-management | [workflows/location-management.md](workflows/location-management.md) | `location add/list/status/move` and multi-copy sync. |
 | restore-host-linux | [workflows/restore-host-linux.md](workflows/restore-host-linux.md) | Restore from a running Linux host with `lcsas restore`. |
 | restore-host-macos | [workflows/restore-host-macos.md](workflows/restore-host-macos.md) | Restore from a running macOS host (Apple Silicon or Intel). |
-| restore-bare-metal | [workflows/restore-bare-metal.md](workflows/restore-bare-metal.md) | initramfs + live-USB recovery from cold start. |
+| restore-live-usb | [workflows/restore-live-usb.md](workflows/restore-live-usb.md) | No-OS recovery: boot a live-Linux USB (discs are not bootable), then restore. The route that works today. |
+| restore-bare-metal | [workflows/restore-bare-metal.md](workflows/restore-bare-metal.md) | initramfs / direct-boot recovery from cold start — describes the quarantined boot stack (`experimental/boot/`); use restore-live-usb for the no-OS path that ships today. |
 | restore-windows | [workflows/restore-windows.md](workflows/restore-windows.md) | `restore.bat` end-to-end from a Windows host. |
 | restore-disc-only | [workflows/restore-disc-only.md](workflows/restore-disc-only.md) | Tier-3 pure-Python single-disc restore. |
 | recovery-toolchain | [workflows/recovery-toolchain.md](workflows/recovery-toolchain.md) | `recovery build/test/manifest/verify`, cross-arch. |
@@ -56,8 +57,9 @@ two detail files — `workflows/restore-bare-metal.md` and
 rather than a top-level axis.
 
 - **Media type** — one of `BD25`, `BD50`, `BDXL100`, `MDISC25`, `MDISC100`,
-  `TEST_TINY` (defined in `src/lcsas/config/media.py`). All types carry 15%
-  ECC overhead.
+  `TEST_TINY` (defined in `src/lcsas/config/media.py`). The five production
+  types carry 15% ECC overhead; the test-only `TEST_TINY` carries 0% (see the
+  ECC axis below).
 - **Multi-tenant** — single registered repo vs. multiple repos sharing
   physical volumes, each with its own encryption key.
 - **OS** — Linux host, Linux bare-metal initramfs, Windows, macOS. Determines

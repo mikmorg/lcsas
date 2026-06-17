@@ -29,17 +29,22 @@ make test-unit
 make test-all
 ```
 
-## Architecture
+## Documentation
 
-See [docs/architecture.md](docs/architecture.md) for the full synthesized architecture reference.
+Start at the **[documentation index](docs/README.md)** — it routes to the
+architecture reference, on-disc formats, operator guides, the workflow
+matrix, and the on-disc recovery manuals.
+
+The full synthesized architecture reference lives at
+[docs/architecture/overview.md](docs/architecture/overview.md).
 
 ## Project Structure
 
 ```
 src/lcsas/
-├── cli/          # argparse CLI interface
+├── cli/          # argparse CLI interface (22 top-level subcommands)
 ├── config/       # Settings, media types, TOML config loading
-├── db/           # SQLite schema, connection, CRUD, queries
+├── db/           # SQLite schema (v9), connection, CRUD, queries
 ├── rustic/       # Rustic subprocess wrapper (Protocol-based)
 ├── packs/        # Pack scanner and delta analysis
 ├── binpack/      # First-fit-decreasing bin packing algorithm
@@ -47,9 +52,11 @@ src/lcsas/
 ├── iso/          # Xorriso ISO creation wrapper
 ├── ecc/          # DVDisaster ECC wrapper
 ├── burn/         # Burn orchestrator (full pipeline)
-├── restore/      # Restore planner and executor
+├── restore/      # Restore planner, executor, pure-Python fallback
 ├── consolidate/  # Volume merger / consolidation
 ├── meta/         # Meta-volume builder (disaster recovery toolkit)
+├── recovery/     # C89 recovery-binary cross-compilation harness (tier-1)
+├── keyshare/     # Pure-Python SLIP-0039 Shamir key splitting
 └── utils/        # Hashing, filesystem helpers, label generation
 ```
 
@@ -449,7 +456,7 @@ The **meta-volume** solves this by bundling *everything* needed for restore onto
 
 | Path | Contents |
 |------|----------|
-| `tools/bin/<target>/` | Per-platform tier-1 (`lcsas-restore`) + tier-2 (`rustic-static`) binaries for six targets: Linux x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows x86_64-gnu.  See [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md). |
+| `tools/bin/<target>/` | Per-platform tier-1 (`lcsas-restore`) + tier-2 (`rustic-static`) binaries for six targets: Linux x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows x86_64-gnu.  See [`docs/development/cross-platform-meta-rfc.md`](docs/development/cross-platform-meta-rfc.md). |
 | `tools/lib/` | Shared libraries for the bundled CPython interpreter (tier-3 fallback) |
 | `lcsas/src/` | Complete LCSAS source code (zero pip dependencies) |
 | `recovery/docs/` | On-disc operator manual (`RECOVER.txt`, `TIERS.txt`, `ENV_VARS.txt`, …) |
@@ -534,7 +541,7 @@ sudo mount -o loop lcsas_data_0001.iso /mnt
 
 The meta-volume can carry prebuilt recovery binaries for six target
 platforms.  The supported matrix (cross-platform meta-volume work
-landed in Phase 21.1 — see [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md)):
+landed in Phase 21.1 — see [`docs/development/cross-platform-meta-rfc.md`](docs/development/cross-platform-meta-rfc.md)):
 
 | Target | OS | Notes |
 |---|---|---|
@@ -632,7 +639,7 @@ On those still-pending targets the cascade falls through tier 1
 ### Decisions about coverage gaps
 
 Targets **not** currently bundled, and the rationale (full discussion
-in [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md) §6 Q1):
+in [`docs/development/cross-platform-meta-rfc.md`](docs/development/cross-platform-meta-rfc.md) §6 Q1):
 
 - **RISC-V** — upstream rustic does not yet ship a release artifact
   for `riscv64gc-unknown-linux-gnu`; we don't cross-compile ourselves.
