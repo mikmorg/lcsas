@@ -67,7 +67,7 @@ the meta-volume; this doc is the operator-facing companion.
    `keyshare_combine.py` run under the meta-disc's bundled CPython at
    `recovery/bin/<platform>/python/bin/python3`.  See
    [`docs/KEY_SHARE_FORMAT.md`](../KEY_SHARE_FORMAT.md) for the share
-   format and [`docs/RECOVERY_RUNBOOK.md`](../RECOVERY_RUNBOOK.md) for
+   format and [`docs/guides/recovery-runbook.md`](../guides/recovery-runbook.md) for
    the full operator runbook.
 
 4. Tier 1 (prebuilt C89 `lcsas-restore`) runs.  If it succeeds, restored

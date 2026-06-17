@@ -44,7 +44,7 @@ assumes:
 - The recipient is technically capable of `pip install -e .` from the
   bundled `lcsas_src/` after building the binaries.
 
-For a 50-year-survivability archive (see `docs/SURVIVABILITY.md`), this
+For a 50-year-survivability archive (see `docs/guides/survivability.md`), this
 is a real risk.  ARM is already dominant in consumer devices; in 30
 years it may be the only commodity host architecture available.
 

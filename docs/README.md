@@ -9,7 +9,7 @@ home; start here and follow the link that matches what you need.
 
 ## Architecture
 
-- [architecture/overview.md](architecture/overview.md) — synthesized
+- [architecture.md](architecture.md) — synthesized
   architecture reference: storage-tier model, burn pipeline, holographic
   catalog, multi-tenancy, and the recovery cascade.
 
@@ -17,13 +17,13 @@ home; start here and follow the link that matches what you need.
 
 How the bytes on a disc are laid out, encrypted, and protected:
 
-- [formats/restic-pack.md](formats/restic-pack.md) — Rustic/restic pack file
+- [RESTIC_FORMAT_SPEC.md](RESTIC_FORMAT_SPEC.md) — Rustic/restic pack file
   format (the encrypted, deduplicated blobs LCSAS archives).
-- [formats/rs03-ecc.md](formats/rs03-ecc.md) — DVDisaster RS03 error-correction
+- [DVDISASTER_RS03_FORMAT.md](DVDISASTER_RS03_FORMAT.md) — DVDisaster RS03 error-correction
   layer wrapped around every burned image.
-- [formats/key-share.md](formats/key-share.md) — SLIP-0039 Shamir key-share
+- [KEY_SHARE_FORMAT.md](KEY_SHARE_FORMAT.md) — SLIP-0039 Shamir key-share
   format used by the `keyshare` package and `lcsas key` escrow.
-- [formats/disc-confidentiality.md](formats/disc-confidentiality.md) — what a
+- [DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md) — what a
   disc does and does not reveal to someone who finds it.
 
 ## Operator guides
@@ -32,7 +32,7 @@ Task-oriented walkthroughs for running and recovering an archive:
 
 - [guides/recovery-runbook.md](guides/recovery-runbook.md) — step-by-step
   disaster-recovery runbook.
-- [guides/troubleshooting.md](guides/troubleshooting.md) — diagnosing and
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — diagnosing and
   fixing common failures.
 - [guides/survivability.md](guides/survivability.md) — durability rationale:
   why the cascade and disc-integrity layers survive decades.
@@ -50,7 +50,7 @@ Task-oriented walkthroughs for running and recovering an archive:
 
 - [development/roadmap.md](development/roadmap.md) — phased development plan and
   roadmap.
-- [development/cross-platform-meta-rfc.md](development/cross-platform-meta-rfc.md)
+- [CROSS_PLATFORM_META_RFC.md](CROSS_PLATFORM_META_RFC.md)
   — RFC for cross-platform meta-volume / tier-1 recovery-binary coverage.
 
 ## On-disc recovery manuals
