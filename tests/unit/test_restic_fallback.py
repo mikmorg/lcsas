@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -37,6 +39,7 @@ from lcsas.restore.restic_fallback import (
     _clamp_r,
     _constant_time_eq,
     _decrypt_authenticated,
+    _NodeFailed,
     _parse_timestamp,
     _poly1305_mac,
 )
@@ -2319,19 +2322,14 @@ class TestApplyMetadataOSErrors:
 # ── _parse_timestamp Fallback Tests ─────────────────────────────
 
 class TestParseTimestampFallback:
-    """Cover _parse_timestamp fallback strptime path (lines 904-906)."""
+    """Cover the _parse_timestamp strptime fallback path."""
 
-    @pytest.mark.skip(
-        reason=(
-            "Lines 904-906: datetime.fromisoformat handles all inputs on "
-            "Python 3.11+ (project minimum), so the strptime except-branch "
-            "is dead code on supported interpreters."
-        )
-    )
     def test_fallback_parse_nonstandard_format(self):
-        """Lines 904-906: strptime fallback path exists for pre-3.11 Python."""
+        # datetime.fromisoformat REJECTS non-zero-padded month/day even on
+        # 3.11+ (verified: "2026-1-5T..." -> ValueError); the strptime
+        # fallback accepts it.  The branch is live, not dead code.
         from lcsas.restore.restic_fallback import _parse_timestamp
-        ts = _parse_timestamp("2026-01-15T10:30:00.123456Z")
+        ts = _parse_timestamp("2026-1-5T10:30:00Z")
         assert isinstance(ts, float)
         assert ts > 0
 
@@ -2713,6 +2711,17 @@ class TestNoZstandardImportWiring:
 
         from lcsas.restore import restic_fallback as fb
 
+        # Snapshot the original module namespace BEFORE any reload.  A
+        # plain importlib.reload re-binds the module's class objects
+        # (IntegrityError, _NodeFailed, PurePythonRestorer, …) in place,
+        # so reloading again in the finally would leak NEW class identities
+        # to every later test in the session — any test that raises one of
+        # these and relies on the module's own ``except`` catching it would
+        # then break on identity mismatch.  Restoring this snapshot keeps
+        # the live module's classes identical to the ones imported at the
+        # top of this file.
+        orig_dict = dict(fb.__dict__)
+
         saved_zstd_mods = {
             name: mod
             for name, mod in sys.modules.items()
@@ -2743,9 +2752,159 @@ class TestNoZstandardImportWiring:
                 if name == "zstandard" or name.startswith("zstandard."):
                     del sys.modules[name]
             sys.modules.update(saved_zstd_mods)
-            # Re-import the module cleanly so later tests see native zstandard.
-            importlib.reload(fb)
+            # Restore the ORIGINAL module namespace (native zstandard, and
+            # the original class identities) rather than reloading again —
+            # see the orig_dict snapshot note above.
+            fb.__dict__.clear()
+            fb.__dict__.update(orig_dict)
 
         # Sanity: the live module is back on the native fast path.
         from lcsas.restore import restic_fallback as fb_after
         assert fb_after._HAS_ZSTD is True
+
+
+# ── Tier-3 helper branch coverage (cycle 18) ─────────────────────────
+#
+# Exercise the tolerant/interactive/error-recovery branches of
+# PurePythonRestorer directly with monkeypatched I/O — the paths the
+# end-to-end happy-path repo tests never reach.
+
+
+def _bare_restorer(tmp_path: Path, **kw) -> PurePythonRestorer:
+    """A restorer constructed for white-box helper tests (no real repo
+    load — private methods are driven directly)."""
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+    return PurePythonRestorer(repo_path=repo, password=PASSWORD, **kw)
+
+
+class TestFailureManifestWriteError:
+    def test_oserror_writing_manifest_is_swallowed(
+        self, tmp_path: Path, capsys
+    ):
+        # target is a regular FILE, so target/RESTORE_FAILURES.txt can't
+        # be created -> OSError caught + logged, never propagated
+        # (restic_fallback.py:564-567).
+        r = _bare_restorer(tmp_path)
+        r._failures = [("some/file", "blobid", "corrupt blob")]
+        not_a_dir = tmp_path / "afile"
+        not_a_dir.write_text("x")
+        r._write_failure_manifest(not_a_dir)  # must not raise
+        assert "Could not write" in capsys.readouterr().err
+
+
+class TestDiscoverCatalogDedup:
+    def test_duplicate_search_paths_deduped(self, tmp_path: Path):
+        # The same root listed twice: the second pass's candidates are
+        # already in `seen` -> the dedup `continue` fires
+        # (restic_fallback.py:807).  No catalog.db anywhere -> None.
+        d = tmp_path / "mnt"
+        d.mkdir()
+        r = _bare_restorer(tmp_path, pack_search_paths=[d, d])
+        assert r._discover_catalog() is None
+
+    def test_finds_catalog_in_search_path(self, tmp_path: Path):
+        d = tmp_path / "mnt"
+        d.mkdir()
+        (d / "catalog.db").write_bytes(b"SQLite")
+        r = _bare_restorer(tmp_path, pack_search_paths=[d])
+        assert r._discover_catalog() == d / "catalog.db"
+
+
+class TestSwapPromptCatalogStates:
+    def test_hit_but_no_volume_mapping_line(self, tmp_path: Path, capsys):
+        # Catalog knows the pack but has no current volume mapping ->
+        # the dedicated prompt line (restic_fallback.py:958).
+        r = _bare_restorer(tmp_path)
+        r._lookup_volume_labels = lambda pid: ([], r._CATALOG_HIT_NO_VOLS)
+        r._print_swap_prompt("a" * 32)
+        assert "no current volume mapping" in capsys.readouterr().err
+
+
+class TestInteractiveFindPackPath:
+    def test_eof_on_stdin_gives_up(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Empty stdin -> readline() returns "" -> break -> FileNotFound
+        # (restic_fallback.py:1004-1007 then 1021-1025).
+        d = tmp_path / "mnt"
+        d.mkdir()
+        r = _bare_restorer(tmp_path, pack_search_paths=[d], interactive=True)
+        monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+        with pytest.raises(FileNotFoundError, match="Pack file not found"):
+            r._find_pack_path("deadbeef" * 8)
+
+    def test_q_aborts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ):
+        # 'q' -> abort message + break (restic_fallback.py:1008-1010).
+        d = tmp_path / "mnt"
+        d.mkdir()
+        r = _bare_restorer(tmp_path, pack_search_paths=[d], interactive=True)
+        monkeypatch.setattr(sys, "stdin", io.StringIO("q\n"))
+        with pytest.raises(FileNotFoundError):
+            r._find_pack_path("deadbeef" * 8)
+        assert "aborted by user" in capsys.readouterr().err
+
+    def test_found_after_retry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ):
+        # First scans miss (pre-loop + 1st retry -> "still not found"),
+        # then the pack appears and is returned
+        # (restic_fallback.py:1011-1019).
+        d = tmp_path / "mnt"
+        d.mkdir()
+        found = d / "found-pack"
+        results = iter([None, None, found])
+        r = _bare_restorer(tmp_path, pack_search_paths=[d], interactive=True)
+        monkeypatch.setattr(
+            r, "_scan_pack_search_paths", lambda pid: next(results)
+        )
+        monkeypatch.setattr(sys, "stdin", io.StringIO("\n\n"))
+        assert r._find_pack_path("deadbeef" * 8) == found
+        err = capsys.readouterr().err
+        assert "still not found" in err
+        assert "continuing" in err
+
+
+class TestTolerantRestoreFailureRecording:
+    def test_restore_tree_records_unreadable_tree_blob(self, tmp_path: Path):
+        # Tolerant mode: a tree blob that won't read records ONE subtree
+        # failure and returns (restic_fallback.py:1111-1112).
+        r = _bare_restorer(tmp_path, strict=False)
+
+        def _boom(_blob_id):
+            raise IntegrityError("corrupt tree blob")
+
+        r._read_blob = _boom
+        r._restore_tree("treedeadbeef", tmp_path / "out")  # must not raise
+        assert len(r._failures) == 1
+
+    def test_restore_tree_strict_reraises_tree_blob_error(self, tmp_path: Path):
+        r = _bare_restorer(tmp_path, strict=True)
+
+        def _boom(_blob_id):
+            raise IntegrityError("corrupt tree blob")
+
+        r._read_blob = _boom
+        with pytest.raises(IntegrityError):
+            r._restore_tree("treedeadbeef", tmp_path / "out")
+
+    def test_restore_file_records_metadata_failure(self, tmp_path: Path):
+        # Blob reads fine but _apply_metadata raises -> the outside-the-
+        # per-blob-guard branch records the failure, cleans the partial,
+        # and raises _NodeFailed (restic_fallback.py:1264-1271).
+        r = _bare_restorer(tmp_path, strict=False)
+        r._read_blob = lambda _bid: b"file-bytes"
+
+        def _meta_boom(_node, _path):
+            raise OSError("chmod failed")
+
+        r._apply_metadata = _meta_boom
+        out = tmp_path / "out" / "file.bin"
+        with pytest.raises(_NodeFailed):
+            r._restore_file({"content": ["blob1"]}, out)
+        assert len(r._failures) == 1
+        # Partial scratch file cleaned up; final path never created.
+        assert not out.exists()
+        assert not out.with_name(out.name + ".lcsas-partial").exists()
