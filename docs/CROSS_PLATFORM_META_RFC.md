@@ -1,9 +1,12 @@
 # Cross-Platform Meta-Volume — Design RFC
 
-**Status:** **APPROVED** (2026-05-16). All §6 open questions resolved; see
-"Decisions" lines under each question.  Implementation kick-off scope in §9.
+**Status:** **IMPLEMENTED** (Phase 21.1–21.12 shipped 2026-05-17).  Approved
+2026-05-16; all §6 open questions resolved (see "Decisions" lines under each
+question).  Tier-1 (`lcsas-restore`) coverage is complete for all six approved
+targets — see §6 Q6.  §5/§8/§9 are retained as the historical implementation
+plan; the work they describe is done.
 **Author:** Claude Opus 4.7 (drafted from a session with Michael Morgan).
-**Date:** 2026-05-16 (drafted), 2026-05-16 (approved).
+**Date:** 2026-05-16 (drafted), 2026-05-16 (approved), 2026-05-17 (implemented).
 **Supersedes:** PR #78 (`feat(recovery): C89 + POSIX-sh recovery toolchain`),
 which was closed unmerged because it reintroduced the 5-tier recovery
 cascade that PR #30 had deliberately collapsed to 3 tiers.
@@ -117,7 +120,7 @@ choice for cold-start recovery.
   rely on the host system's `python3` if present (any 3.6+); the
   bundled copy is the fallback.
 
-**Sizing:** A meta-volume with binaries for the 5 targets above grows
+**Sizing:** A meta-volume with binaries for the 6 targets above grows
 from today's ~120 MB to roughly 600–800 MB.  This still fits comfortably
 on a BD25 (25 GB) meta-disc.  Manifest hash list grows linearly.
 
@@ -233,9 +236,12 @@ artifact, so we never have to cross-compile anything ourselves.
   the *fast* path for a problem (host arch mismatch) we can solve
   by bundling more binaries.
 
-## 5. Proposed implementation plan
+## 5. Implementation plan (DELIVERED)
 
-These are sketch-level steps; each one would be its own PR with full
+> Historical record.  Every step below shipped across Phase 21.1–21.12
+> (2026-05-17).  Retained for traceability.
+
+These were sketch-level steps; each one became its own PR with full
 tests before merge.
 
 1. **Multi-arch downloader.**  Add `recovery/scripts/fetch_upstream.sh`
@@ -271,7 +277,7 @@ tests before merge.
 
 6. **Test coverage.**  Per-arch unit tests for the dispatcher logic
    (mock `uname -m` / `uname -s`).  An integration test that
-   builds a meta-volume containing all 5 targets and asserts the
+   builds a meta-volume containing all 6 targets and asserts the
    directory tree and MANIFEST.sha256 are correct.  Cross-arch
    *execution* testing is out of scope — we can only test on
    `x86_64-linux-gnu` from CI; the other targets are verified by
@@ -472,7 +478,7 @@ cross-platform meta-volume RFC is fully implemented.
 - Restoring on Windows ARM64.  Marginal target, can be added when
   rustic upstream ships it.
 
-## 8. Acceptance criteria (for the eventual implementation PRs)
+## 8. Acceptance criteria (ALL MET)
 
 - A meta-volume built on x86_64 Linux contains a working
   `lcsas-restore` for every target in the matrix.
@@ -490,10 +496,12 @@ cross-platform meta-volume RFC is fully implemented.
 
 ---
 
-## 9. Implementation kick-off
+## 9. Implementation kick-off (SHIPPED as Phase 21.1)
 
-The first PR's scope (call it Phase 21.1) is the smallest end-to-end
-slice that proves the design:
+> Historical record of the first PR's scope.  Shipped 2026-05-17.
+
+The first PR's scope (Phase 21.1) was the smallest end-to-end
+slice that proved the design:
 
 1. **`recovery/UPSTREAM.sha256`** — new file pinning the SHA-256 of the
    rustic v0.11.2 release artifact for every target in §3, plus the
@@ -546,5 +554,8 @@ slices.
 
 ---
 
-**Status:** APPROVED 2026-05-16.  Ready to begin Phase 21.1
-implementation on a separate branch.
+**Status:** IMPLEMENTED.  Approved 2026-05-16; Phase 21.1–21.12 shipped
+2026-05-17.  All six approved targets have tier-1 (`lcsas-restore`),
+tier-2 (`rustic-static`), and tier-3 (CPython) coverage.  See §6 Q6 for the
+tier-1 cross-compilation detail and the forward-looking roadmap at
+[`development/roadmap.md`](development/roadmap.md) for what comes next.
