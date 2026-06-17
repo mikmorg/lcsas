@@ -77,7 +77,16 @@ repo/
 - Is immutable once written
 - Ranges from ~4 MB to ~100 MB in typical configurations
 
+The on-disc restic/rustic pack format LCSAS reads and restores is specified in
+[docs/formats/restic-pack.md](formats/restic-pack.md).
+
 ### SQLite Catalog Schema
+
+The catalog is at **schema version 9** (`CURRENT_SCHEMA_VERSION` in
+`src/lcsas/db/schema.py`) and defines **12 tables**: `schema_version`,
+`volumes`, `repositories`, `packs`, `volume_packs`, `snapshots`,
+`locations`, `volume_copies`, `burn_sessions`, `session_volumes`,
+`volume_events`, and `key_escrow`.
 
 ```sql
 -- Tracks schema migrations
@@ -183,7 +192,22 @@ volume_events (
     location     TEXT REFERENCES locations,
     detail       TEXT
 )
+
+-- Recorded Shamir/SLIP-0039 key split per repo (KEY-08)
+key_escrow (
+    repo_id      TEXT PRIMARY KEY REFERENCES repositories,
+    threshold    INTEGER NOT NULL, -- K in a K-of-N split
+    shares       INTEGER NOT NULL, -- N total shares issued
+    slip39_id    INTEGER NOT NULL, -- SLIP-0039 identifier
+    split_at     DATETIME NOT NULL
+)
 ```
+
+> The `key_escrow` table records *that* a repository key was split into a
+> K-of-N SLIP-0039 set (and when) — it never stores the shares or the key
+> itself. Share words live only on the printed recovery cards. See the
+> key-share format spec ([docs/formats/key-share.md](formats/key-share.md))
+> and the `keyshare/` package.
 
 ### Volume Lifecycle States
 
@@ -340,10 +364,16 @@ Each repository maintains its own encryption independently:
 
 ### Error Correction
 
-- **RS03** (dvdisaster) augments the ISO with Reed-Solomon parity data
+- **RS03** Reed-Solomon parity is appended to every ISO, so a single image
+  carries both data and its own ECC
+- Write path: `ecc/dvdisaster.py` wraps the dvdisaster binary to augment ISOs
+- Bare-metal read/repair path: the in-house C89 `lcsas-ecc` tool (FMT-01,
+  `recovery/src/lcsas-ecc/`) reads and repairs the same RS03 format with **no
+  dvdisaster binary required** — keeping the durable recovery path
+  dependency-free
 - Typical overhead: 15% for optical media
 - Enables recovery from surface scratches, partial media degradation
-- Can be verified offline: `dvdisaster --verify`
+- Format details: [docs/formats/rs03-ecc.md](formats/rs03-ecc.md)
 
 ### Redundancy Strategy
 
@@ -358,7 +388,8 @@ Each repository maintains its own encryption independently:
   corrupt mirror pack aborts the stage before anything is written to
   the catalog (`CorruptPacksError`)
 - Post-burn: media readability check (`xorriso -check_media`); a full
-  device read-back hash of the burned ISO is planned (BURN-04)
+  device read-back hash of the burned ISO is planned (BURN-04 — see the
+  [roadmap](development/roadmap.md))
 - On demand: `lcsas catalog validate <mounted-disc> --content` re-reads
   every pack file on a mounted disc and verifies its SHA-256 against
   the filename hash
@@ -393,7 +424,8 @@ without needing the encryption key, external tools, or prior knowledge.
 
 **Implication:** An attacker with physical access to a disc can learn *what*
 was backed up (file paths, timestamps, hostnames) but cannot read *any* file
-contents without the repository password.
+contents without the repository password. The full stolen-disc threat model
+is in [docs/formats/disc-confidentiality.md](formats/disc-confidentiality.md).
 
 **For highly sensitive archives**, consider:
 
@@ -468,24 +500,39 @@ disappear from the mirror. LCSAS detects this during `scan`:
 
 
 
+The Python source lives under `src/lcsas/` and is organised into **20
+packages/modules**:
+
 ```
 lcsas/
 ├── config/          # MediaType enum, TOML settings, repo definitions
-├── db/              # SQLite: schema, connection, models, CRUD, queries
-├── utils/           # Hashing, filesystem ops, label generation
+├── db/              # SQLite: schema (v9), connection, models, CRUD, queries
+├── utils/           # Hashing, filesystem ops, two-level hex layout, label generation
 ├── binpack/         # First-fit-decreasing volume packing
-├── packs/           # Mirror scanner, delta analysis
+├── packs/           # Mirror scanner, pack-to-snapshot delta analysis
 ├── rustic/          # Subprocess wrapper (Protocol), JSON parsers
-├── iso/             # Xorriso wrapper (Protocol) — ISO creation & burning
-├── ecc/             # DVDisaster wrapper (Protocol) — RS03 ECC
-├── staging/         # Staging directory builder, holographic metadata
+├── iso/             # Xorriso wrapper (Protocol) — ISO mastering
+├── ecc/             # DVDisaster RS03 wrapper (Protocol) — ECC augmentation
+├── staging/         # Staging directory builder, holographic metadata injector
 ├── burn/            # Burn orchestrator (pipeline conductor)
 ├── restore/         # Pick-list planner, restore executor, pure-Python fallback
 ├── consolidate/     # Volume merger, deprecation
-├── meta/            # Meta-volume builder (bundled tools, docs, restore.sh)
-├── log/             # Logging configuration
-└── cli/             # argparse CLI with subcommands
+├── meta/            # Meta-volume builder (bundled per-target tools, source, restore.sh)
+├── recovery/        # Recovery-bundle build driver for the tier-1/2/3 cascade
+├── keyshare/        # SLIP-0039 share split/recombine, codec, printed recovery cards
+├── cli/             # argparse CLI entry point (22 top-level + 33 nested subcommands)
+├── constants.py     # Shared constants
+├── exceptions.py    # Typed exception hierarchy
+└── log.py           # Logging configuration
 ```
+
+> Two of these — `recovery/` and `keyshare/` — back the durability story
+> beyond the burn pipeline. `recovery/` drives the build of the
+> meta-volume's three-tier restore cascade (see §9.10); `keyshare/`
+> implements the SLIP-0039 K-of-N key split whose ledger is the
+> `key_escrow` table (see §3). The in-tree C89 recovery tools live
+> separately under the repo-root `recovery/src/` tree (`lcsas-restore`,
+> `lcsas-ecc`, `lcsas-keyshare`, `lcsas-iso9660`, `lcsas-init`).
 
 ### Key Design Patterns
 
@@ -514,9 +561,11 @@ and restored by the other without conversion.
 ### Decision
 
 **Rustic is the primary tool** for all LCSAS write-path operations (backup,
-prune, forget). The vendored static `rustic-static` binary serves as a
-**fallback in the restore cascade** (tier 2 of 3), with the pure-Python
-restorer as the final tier 3 fallback.
+prune, forget). On the *restore* side the durable path is **not** rustic:
+the meta-volume cascade leads with our in-house C89 `lcsas-restore`
+(tier 1), falls back to the pinned upstream `rustic-static` (tier 2), and
+finally to bundled CPython + `standalone_restorer.py` (tier 3). See
+"Recovery Cascade" below.
 
 ### Rationale
 
@@ -530,22 +579,44 @@ restorer as the final tier 3 fallback.
 | **Repository format** | v1/v2 (identical to restic) | v1/v2 (identical to rustic) |
 | **LCSAS integration** | Primary wrapper (`RusticRunner`) | Cascade-only, no dedicated wrapper |
 
-### Restore Cascade Order
+### Recovery Cascade Order
 
-The `restore.sh` script on each meta-volume attempts tools in this order:
+The `restore.sh` script (`recovery/scripts/restore.sh`) on each meta-volume
+dispatches three durability tiers, documented in `recovery/docs/TIERS.txt`:
 
-1. **Bundled rustic** — statically linked binary on the meta-volume itself
-2. **rustic-static** — downloaded/cached static build
-3. **System rustic** — `rustic` on `$PATH`
-4. **System restic** — `restic` on `$PATH` (format-compatible)
-5. **Pure-Python fallback** — `standalone_restorer.py` / `restic_fallback.py`
-   using only Python stdlib (AES-CTR, scrypt, zstd via bundled zstandard)
+| Tier | Binary | Intent |
+|---|---|---|
+| **1 (primary)** | in-house C89 `lcsas-restore`, built against vendored sqlite+zstd | The DURABLE path — ABI-stable, depends only on kernel + libc, **no third-party runtime dependency**. Cross-platform across all 6 approved targets. |
+| 2 (fallback) | upstream `rustic-static` | Hedge if tier 1 will not run on a given host. Pinned artifact (`recovery/UPSTREAM.sha256`). |
+| 3 (last resort) | bundled CPython + `standalone_restorer.py` | Final fallback if tiers 1+2 both fail. Pinned upstream CPython. |
 
-> **Platform note:** The bundled rustic binary on the meta-volume is an
-> x86_64/glibc ELF binary (steps 1–2 above).  On ARM64 or musl-libc systems
-> the cascade skips directly to step 3 (system rustic/restic) or step 5
-> (pure-Python fallback), which works on any Python 3.9+ interpreter.
-> `standalone_restorer.py` on every data disc has **no platform dependency**.
+`standalone_restorer.py` is a self-contained stdlib-only script (AES-CTR,
+scrypt, zstd) that also rides on **every data disc**, so any single disc is
+restorable with nothing but a Python 3.9+ interpreter.
+
+**Vendoring vs runtime dependency:** sqlite + zstd ship as audited C source
+in `recovery/vendored/` (pinned in `recovery/MANIFEST.sha256`) and we
+compile them ourselves — that is source we own, not an opaque runtime
+dependency. Rustic and CPython (tiers 2/3) *are* runtime dependencies: we
+ship pinned prebuilt artifacts (`recovery/UPSTREAM.sha256`).
+
+**Disc-integrity layer (beneath the cascade):** the tiers choose *which
+tool* reads the bytes; two guards keep the bytes intact. DVDisaster RS03 ECC
+(wrapped around every burned image) repairs bit-rotted sectors, and tier-1
+then authenticates every blob (Poly1305 MAC + SHA-256 content hash) and
+*rejects* corrupt data — disc corruption is repaired-or-rejected, never
+silently restored.
+
+The companion in-house C89 tools complete the bare-metal toolchain:
+`lcsas-ecc` (FMT-01 — our own RS03 read/repair, no dvdisaster binary
+required), `lcsas-keyshare` (SLIP-0039 share recombination), plus
+`lcsas-iso9660` and `lcsas-init`. All live under `recovery/src/`.
+
+> **Platform note:** tier-1 `lcsas-restore` is cross-built for all six
+> approved targets (Linux x86_64/aarch64/armv7 musl, Windows x86_64-gnu,
+> macOS Intel + Apple Silicon), so the durable path is available on every
+> supported host rather than x86_64/glibc only. See the cross-platform meta
+> RFC ([docs/development/cross-platform-meta-rfc.md](development/cross-platform-meta-rfc.md)).
 
 ### JSON Compatibility
 
@@ -567,6 +638,11 @@ interpreter, even without rustic, restic, or the meta-volume.
 ---
 
 ## 10. CLI Commands
+
+The `lcsas` entry point (`src/lcsas/cli/main.py`) exposes **22 top-level
+subcommands and 33 nested subcommands**. The selection below is
+representative, not exhaustive — run `lcsas --help` (or read
+`cli/main.py`) for the authoritative, current command surface.
 
 ```
 lcsas init          [--db-path PATH]              Initialize catalog database
