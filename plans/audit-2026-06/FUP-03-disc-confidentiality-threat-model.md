@@ -1,5 +1,7 @@
 # FUP-03: Disc confidentiality — threat model for a stolen disc, passphrase reality, no-rotation story
 
+> **STATUS: RESOLVED** — landed in `f42775f` (docs+cli+staging: stolen-disc threat model + honest key-on-disc wording [FUP-03]); guarded by `tests/unit/test_cli_key.py`.
+
 **Priority:** P2 · **Severity:** medium · **Dimension:** follow-up: disc-confidentiality-threat-model · **Audit status:** flagged by completeness critic (citations re-verified against code 2026-06-10) · **Ledger:** untracked (named only in DEEP_AUDIT Appendix C / P2 roadmap)
 **Suggested GH issue title:** Document the stolen-disc threat model; fix key-on-disc wording and passphrase guidance
 
