@@ -124,9 +124,15 @@ def test_python_tier_disabled_treated_as_missing(tmp_path: Path) -> None:
     target = tmp_path / "restored"
 
     # Even though the host has python3 on PATH, the env flag must
-    # cause the guard to treat tier 3 as unavailable.
+    # cause the guard to treat tier 3 as unavailable.  PATH is scoped to
+    # /usr/bin:/bin so real python3 is still found (proving the FLAG, not
+    # its absence, disables tier 3) while the stock restic/rustic tier-2b
+    # binaries (installed under /usr/local/bin on dev hosts) are NOT on
+    # PATH -- otherwise tier 2b would legitimately provide a tier and the
+    # no-recovery-binary guard would (correctly) not fire.
     env = {
         **os.environ,
+        "PATH": "/usr/bin:/bin",
         "LCSAS_MOUNT_DIRS": "",
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
         "LCSAS_ALLOW_PYTHON_TIER": "0",

@@ -207,3 +207,29 @@ def test_tier_preflight_helper_named_matches_script() -> None:
         "restore.sh no longer defines bin_preflight_ok -- TIERS.txt's "
         "pre-flight section describes a function that no longer exists."
     )
+
+
+def test_stock_restic_tier_present_in_script_and_doc() -> None:
+    """The stock-restic auto-fallback (tier 2b) must exist in restore.sh AND
+    be described in TIERS.txt -- they must not drift apart."""
+    # restore.sh dispatches a stock restic/rustic step using restic's flag
+    # form (RESTIC_PASSWORD_FILE + -r REPO restore SNAP --target DIR).
+    assert "tier 2b" in _RESTORE_TEXT, (
+        "restore.sh no longer has the tier-2b stock-restic auto-fallback."
+    )
+    assert "RESTIC_PASSWORD_FILE" in _RESTORE_TEXT and "--no-lock" in _RESTORE_TEXT, (
+        "restore.sh's stock-restic invocation lost its restic-form flags "
+        "(RESTIC_PASSWORD_FILE / --no-lock)."
+    )
+    # It prefers the per-target bundled restic, then PATH.
+    assert 'bin/$TARGET/restic' in _RESTORE_TEXT, (
+        "restore.sh no longer prefers the bundled per-target restic."
+    )
+    # TIERS.txt must document the tier so the burned-to-disc cascade doc is
+    # honest, and must point at the manual standard-tools runbook.
+    assert "TIER 2b" in _TIERS_TEXT or "tier 2b" in _TIERS_TEXT, (
+        "TIERS.txt no longer documents the stock-restic tier 2b."
+    )
+    assert "RESTORE_STANDARD_TOOLS.txt" in _TIERS_TEXT, (
+        "TIERS.txt no longer points at the manual standard-tools runbook."
+    )
