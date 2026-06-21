@@ -2153,6 +2153,22 @@ class MetaVolumeBuilder:
                     staged_any = True
                     break
 
+            # ── restic ─────────────────────────────────────────────
+            # Stock upstream restic (the audited Go original), bundled so the
+            # "standard tools" recovery tier works fully offline.  The fetch
+            # script decompresses the per-platform asset to "restic" (or
+            # "restic.exe" on Windows).  Kept under its own name (not
+            # rustic-static) so the heir runbook can point at it explicitly.
+            restic_cache = cache_root / "restic" / target
+            for cand in (restic_cache / "restic", restic_cache / "restic.exe"):
+                if cand.is_file():
+                    bin_dst.mkdir(parents=True, exist_ok=True)
+                    out_name = "restic.exe" if cand.suffix == ".exe" else "restic"
+                    shutil.copy2(str(cand), str(bin_dst / out_name))
+                    os.chmod(str(bin_dst / out_name), 0o755)
+                    staged_any = True
+                    break
+
             # ── python ─────────────────────────────────────────────
             # python-build-standalone tarballs extract to a "python/"
             # tree (Linux/macOS) or a flat install tree (Windows;

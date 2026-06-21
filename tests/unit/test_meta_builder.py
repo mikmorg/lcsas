@@ -1710,6 +1710,35 @@ class TestBundleUpstreamBinariesStaging:
         b._bundle_upstream_binaries(out / "recovery")  # cache missing -> noop
         assert not (out / "recovery" / "bin").exists()
 
+    def test_stages_stock_restic_per_target(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Stock restic is bundled per-target so the standard-tools tier works
+        # offline: cache restic/<target>/restic (or restic.exe) -> the builder
+        # stages it to recovery/bin/<target>/restic[.exe].
+        cache = tmp_path / "cache"
+        unix_target = "x86_64-unknown-linux-musl"
+        win_target = "x86_64-pc-windows-gnu"
+        (cache / "restic" / unix_target).mkdir(parents=True)
+        (cache / "restic" / unix_target / "restic").write_bytes(b"\x7fELFrestic")
+        (cache / "restic" / win_target).mkdir(parents=True)
+        (cache / "restic" / win_target / "restic.exe").write_bytes(b"MZrestic")
+
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache))
+        out = tmp_path / "out"
+        recovery_dst = out / "recovery"
+        recovery_dst.mkdir(parents=True)
+        b = MetaVolumeBuilder(out, project_root=tmp_path)
+        b._bundle_upstream_binaries(recovery_dst)
+
+        unix_bin = recovery_dst / "bin" / unix_target / "restic"
+        win_bin = recovery_dst / "bin" / win_target / "restic.exe"
+        assert unix_bin.is_file(), "stock restic not staged for the unix target"
+        assert win_bin.is_file(), "stock restic.exe not staged for the windows target"
+        assert os.access(unix_bin, os.X_OK), "staged restic is not executable"
+        # restic is kept under its own name, distinct from rustic-static.
+        assert unix_bin.read_bytes() == b"\x7fELFrestic"
+
     def test_stages_linux_tree_and_windows_flat_install(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):

@@ -92,6 +92,10 @@ fi
 # headers also requires updating these URL bases.
 
 RUSTIC_BASE="https://github.com/rustic-rs/rustic/releases/download/v0.11.2"
+# Stock upstream restic (the audited Go original) -- bundled so the
+# "restore with standard tools" tier (recovery/docs/RESTORE_STANDARD_TOOLS.txt)
+# is fully offline.  restic ships one compressed binary per platform.
+RESTIC_BASE="https://github.com/restic/restic/releases/download/v0.19.0"
 PYTHON_BASE="https://github.com/astral-sh/python-build-standalone/releases/download/20260510"
 # dvdisaster has no source-tarball release asset; GitHub serves a stable
 # per-tag source archive from codeload.  The manifest filename embeds the
@@ -104,6 +108,7 @@ resolve_url() {
     # $2: filename (basename of the artifact)
     case "$1" in
         rustic) printf '%s/%s\n' "$RUSTIC_BASE" "$2" ;;
+        restic) printf '%s/%s\n' "$RESTIC_BASE" "$2" ;;
         python) printf '%s/%s\n' "$PYTHON_BASE" "$2" ;;
         dvdisaster)
             tag="${2#dvdisaster-}"
@@ -209,6 +214,21 @@ process_line() {
                     chmod +x "$dest_dir/rustic"* 2>/dev/null || true
                 fi
             done
+            ;;
+        restic)
+            # restic ships ONE compressed binary per platform: <name>.bz2
+            # (unix) or <name>.zip (windows, single .exe entry).  Decompress
+            # to a stable name so the bundler finds it regardless of version.
+            case "$filename" in
+                *.bz2)
+                    bunzip2 -c "$dest_file" > "$dest_dir/restic"
+                    chmod +x "$dest_dir/restic" 2>/dev/null || true
+                    ;;
+                *.zip)
+                    unzip -p "$dest_file" > "$dest_dir/restic.exe"
+                    chmod +x "$dest_dir/restic.exe" 2>/dev/null || true
+                    ;;
+            esac
             ;;
         python)
             # PBS tarballs unpack to a "python/" prefix tree.

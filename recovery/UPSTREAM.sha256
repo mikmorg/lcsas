@@ -31,6 +31,18 @@ ed8803f0a290eb6a5b290e12ffa614c8be710ef28db3e6fb24e661c636762ff3  rustic/armv7-u
 73712d1a5be74c8d2868b77d4cd199134f9f665ed20e90c97f5bbb4998cf3db7  rustic/x86_64-apple-darwin/rustic-v0.11.2-x86_64-apple-darwin.tar.gz
 494d13815ba6243c9d38e77846791b0b49d182e27b1fd15ed2a6ef4715bd4dd2  rustic/x86_64-pc-windows-gnu/rustic-v0.11.2-x86_64-pc-windows-gnu.tar.gz
 
+# ── restic 0.19.0 (stock upstream Go binary — "standard tools" tier) ───
+# One compressed binary per platform; restic's official SHA256SUMS for v0.19.0.
+# Maps each LCSAS target to restic's release asset (restic reads the same repo
+# rustic writes — verified byte-identical; see tests/recovery_hardening/
+# test_stock_restic_compat.py).
+13176fe6d89d4357947a2cd107218ab2873a5f9d8e1ac2d4cd1c8e07e6839c21  restic/x86_64-unknown-linux-musl/restic_0.19.0_linux_amd64.bz2
+e522ce6bf748d753fee8093e8ec59359972cf5b6bc65fc7c7cf38ae952351d91  restic/aarch64-unknown-linux-musl/restic_0.19.0_linux_arm64.bz2
+2997e6ebd953a551abe33172876ce1a88aa1bb29a93425b167747ece7a38c850  restic/armv7-unknown-linux-gnueabihf/restic_0.19.0_linux_arm.bz2
+1475397bf759ef4be16a77b19dec650bdbfec00d2cacd82005553411cdd37997  restic/aarch64-apple-darwin/restic_0.19.0_darwin_arm64.bz2
+c9d9a71234bc0955fdba6da93cc9375f8793ec1e1cbce77a91014d536a969148  restic/x86_64-apple-darwin/restic_0.19.0_darwin_amd64.bz2
+6fa4219a70b1b5d1c429bb106a7f97f3d2a5aab74494db2e490b625edc486d8f  restic/x86_64-pc-windows-gnu/restic_0.19.0_windows_amd64.zip
+
 # ── python-build-standalone 20260510 (CPython 3.12.13, install_only_stripped) ───
 8481ab65a9e478174cd196e7cf3d3c14f89f7d6b9b0bd8d15271d6bb1966954c  python/x86_64-unknown-linux-musl/cpython-3.12.13+20260510-x86_64-unknown-linux-musl-install_only_stripped.tar.gz
 5b41126fce0b153c320466b6d2af0b68466e0e6d31c49168b65bbff887ef1793  python/aarch64-unknown-linux-musl/cpython-3.12.13+20260510-aarch64-unknown-linux-musl-install_only_stripped.tar.gz

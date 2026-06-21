@@ -18,9 +18,10 @@ WHAT YOU NEED
     metadata is copied onto every disc, so any single disc carries it).
   * The repository password, OR (if the archive was split) at least K of the
     N recovery cards.
-  * A computer.  Either install restic fresh (below), OR use the rustic copy
-    bundled on this disc under recovery/bin/<your-machine>/ -- rustic reads the
-    same repository and takes the same restore commands as restic.
+  * A computer.  A stock restic binary AND a rustic binary are bundled on this
+    disc under recovery/bin/<your-machine>/ (restic, restic.exe, rustic) -- so
+    you need no internet.  You may also install restic fresh (below) if you'd
+    rather trust your own download; both read the same repository.
 
 --------------------------------------------------------------------------------
 STEP 1  (OPTIONAL) -- repair scratched discs
@@ -88,9 +89,10 @@ STEP 3 -- get the repository password
 --------------------------------------------------------------------------------
 STEP 4 -- restore with stock restic
 --------------------------------------------------------------------------------
-Install restic from your OS (apt install restic / brew install restic /
-download restic.exe).  Or skip the install and use the rustic copy bundled on
-this disc (recovery/bin/<your-machine>/rustic) -- it takes the same commands.
+Use the stock restic bundled on this disc
+(recovery/bin/<your-machine>/restic, or restic.exe on Windows) -- no install
+needed.  Or install your own (apt install restic / brew install restic /
+download restic.exe), or use the bundled rustic; all take the same commands.
 Then:
 
     export RESTIC_PASSWORD='your-password'          # 3a
