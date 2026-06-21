@@ -73,6 +73,20 @@ TIER 1 -> TIER 3; tier 2 is a single-disc-only fallback.
 Operators with a multi-disc archive should treat tier 1 as the
 primary AND the only practical pre-Python fallback.
 
+TIER 2b: STOCK RESTIC / RUSTIC (INDEPENDENT AUDITED READER)
+
+After tier 2, restore.sh automatically tries a stock restic (the
+cryptographically-audited Go original) -- the per-target copy bundled
+at bin/<arch>/restic, or any restic/rustic on the operator's PATH --
+before falling through to the Python tier.  restic is a fully
+independent implementation that restores the same repository
+byte-identically (proven by test_stock_restic_compat.py), so a heir
+who cannot run, or does not trust, the binaries we shipped still gets
+an automatic restore using only widely-audited third-party tools.
+Like tier 2 it needs a single-disc $REPO/data/ tree; the fully MANUAL
+standard-tools procedure (multi-disc reassembly included) is
+recovery/docs/RESTORE_STANDARD_TOOLS.txt.
+
 CAVEAT (GATE-06, issue #227): the tier-1-missing fallback journey on a
 multi-disc archive (tier 1 absent -> tier 2 skipped -> tier 3 completes)
 has deterministic coverage only -- it is pinned by

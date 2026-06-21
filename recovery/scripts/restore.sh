@@ -9,7 +9,9 @@
 #
 #   Tier 1.  bin/<arch>/lcsas-restore        prebuilt static C89 binary
 #   Tier 2.  bin/<arch>/rustic-static        vendored Rust binary (cross-check)
-#   ----- Bare minimum stops here.  Neither of the above needs Python. -----
+#   Tier 2b. bin/<arch>/restic (or PATH)     stock restic/rustic — independent
+#                                            audited reader of the same format
+#   ----- Bare minimum stops here.  None of the above needs Python. -----
 #   Tier 3.  python3 standalone_restorer.py  (only if all above failed)
 #
 # The script can be invoked two ways:
@@ -926,8 +928,26 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
     done
 fi
 
+# Probe tier 2b (stock restic / rustic) availability -- the per-target
+# bundled binary, then any restic/rustic on PATH.  Counted by presence
+# (like tier 2) so the "no recovery binary" guard never fires when a
+# stock reader is available to drive the restore.
+_have_stdtool=0
+_stdtool_probe=""
+for cand in "$RECOVERY/bin/$TARGET/restic" "$RECOVERY/bin/$TARGET/restic.exe"; do
+    if [ -x "$cand" ]; then _stdtool_probe="$cand"; _have_stdtool=1; break; fi
+done
+if [ "$_have_stdtool" = "0" ]; then
+    for c in restic rustic; do
+        if command -v "$c" >/dev/null 2>&1; then
+            _stdtool_probe="$(command -v "$c")"; _have_stdtool=1; break
+        fi
+    done
+fi
+
 if [ ! -x "$_RESTORE_BIN_PROBE" ] \
    && [ ! -x "$_RUSTIC_BIN_PROBE" ] \
+   && [ "$_have_stdtool" = "0" ] \
    && { [ "$_have_tier3_python" = "0" ] || [ "$_have_tier3_script" = "0" ]; }
 then
     {
@@ -936,6 +956,7 @@ then
         printf 'Missing components (no tier is runnable on this host):\n'
         printf '  tier 1: %s -- not executable\n' "$_RESTORE_BIN_PROBE"
         printf '  tier 2: %s -- not executable\n' "$_RUSTIC_BIN_PROBE"
+        printf '  tier 2b: no stock restic/rustic (bundled or on PATH)\n'
         if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" != "1" ]; then
             printf '  tier 3: disabled by LCSAS_ALLOW_PYTHON_TIER=0\n'
         else
@@ -1509,6 +1530,61 @@ elif [ -x "$RUSTIC_BIN" ]; then
         write_session_log 2
         exec "$RUSTIC_BIN" --repository "$REPO" --password-file "$PWFILE" \
                      restore "$SNAP" "$TARGET_DIR"
+    fi
+fi
+
+# ── Tier 2b: stock restic / rustic (independent, audited reader) ──
+#
+# A fully independent, widely-audited reader of the SAME repository
+# format (restic is the cryptographically-audited Go original; it
+# restores a rustic-written repo byte-identically -- proven by
+# tests/recovery_hardening/test_stock_restic_compat.py).  Tried after the
+# vendored rustic-static so a heir who cannot run -- or does not trust --
+# the binaries we shipped still gets an AUTOMATIC, no-LCSAS-code restore
+# before the Python last resort.  Prefers the per-target stock restic
+# bundled on the meta-volume (recovery/bin/<arch>/restic), then any
+# restic or rustic on the operator's PATH.  Same on-disc-repo requirement
+# as tier 2 (it cannot drive the multi-disc swap), so skip when $REPO has
+# no local data/.  The fully manual equivalent is
+# recovery/docs/RESTORE_STANDARD_TOOLS.txt.
+STDTOOL_BIN=""
+for _cand in "$RECOVERY/bin/$TARGET/restic" "$RECOVERY/bin/$TARGET/restic.exe"; do
+    if [ -x "$_cand" ]; then STDTOOL_BIN="$_cand"; break; fi
+done
+if [ -z "$STDTOOL_BIN" ]; then
+    for _c in restic rustic; do
+        if command -v "$_c" >/dev/null 2>&1; then
+            STDTOOL_BIN="$(command -v "$_c")"; break
+        fi
+    done
+fi
+if [ -n "$STDTOOL_BIN" ] && [ -x "$STDTOOL_BIN" ] \
+       && [ -d "$REPO/data" ] && bin_preflight_ok "$STDTOOL_BIN"; then
+    case "$STDTOOL_BIN" in
+        *rustic*) _stdtool_kind=rustic ;;
+        *)        _stdtool_kind=restic ;;
+    esac
+    printf '[tier 2b] using stock %s (%s)\n' "$_stdtool_kind" "$STDTOOL_BIN" >&2
+    if [ "$FALLBACK" = "1" ]; then
+        tier2b_rc=0
+        if [ "$_stdtool_kind" = rustic ]; then
+            "$STDTOOL_BIN" --repository "$REPO" --password-file "$PWFILE" \
+                 restore "$SNAP" "$TARGET_DIR" || tier2b_rc=$?
+        else
+            RESTIC_PASSWORD_FILE="$PWFILE" "$STDTOOL_BIN" -r "$REPO" \
+                 restore "$SNAP" --target "$TARGET_DIR" --no-lock || tier2b_rc=$?
+        fi
+        if [ $tier2b_rc -eq 0 ]; then write_session_log 2; exit 0; fi
+        printf '[tier 2b] exited %d, falling through to tier 3\n' $tier2b_rc >&2
+    else
+        write_session_log 2
+        if [ "$_stdtool_kind" = rustic ]; then
+            exec "$STDTOOL_BIN" --repository "$REPO" --password-file "$PWFILE" \
+                 restore "$SNAP" "$TARGET_DIR"
+        else
+            exec env RESTIC_PASSWORD_FILE="$PWFILE" "$STDTOOL_BIN" -r "$REPO" \
+                 restore "$SNAP" --target "$TARGET_DIR" --no-lock
+        fi
     fi
 fi
 
