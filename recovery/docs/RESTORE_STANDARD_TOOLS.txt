@@ -26,11 +26,29 @@ WHAT YOU NEED
 --------------------------------------------------------------------------------
 STEP 1  (OPTIONAL) -- repair scratched discs
 --------------------------------------------------------------------------------
-Each disc carries error-correction so a scratched disc can still be read.  Two
-standard tools can spend it; use whichever you can install:
+Every disc is written as an RS03 error-correction image (dvdisaster's format),
+so a scratched disc can usually still be read.  Repair the disc image with
+EITHER tool -- use whichever you can run:
 
-  par2      :  par2 repair disc.iso.par2          (par2cmdline, in every distro)
-  dvdisaster:  dvdisaster -r -i disc.iso -e disc.iso.ecc   (RS03 error correction)
+  dvdisaster:  dvdisaster -r -i disc.iso        the format LCSAS writes; the
+                                                tool is still in most distros
+                                                (upstream is dormant but forks
+                                                exist)
+  lcsas-ecc :  recovery/bin/<your-machine>/lcsas-ecc fix disc.iso
+                                                the in-house RS03 repairer
+                                                bundled on this disc -- needs
+                                                NO dvdisaster.  (Or simply:
+                                                sh restore.sh --check-disc disc.iso)
+
+OPTIONAL EXTRA HEDGE (par2): LCSAS does not ship par2 recovery data -- RS03
+already protects every disc and is repairable by the two tools above, so par2
+would only duplicate it (and cannot protect itself if stored on the same disc).
+If you want a third, actively-maintained tool in reserve, create your OWN par2
+set over each disc image while the disc is still good and keep it SEPARATELY
+(another drive, the cloud, a second disc):
+
+  par2 create -r10 disc.par2 disc.iso     # 10% redundancy, stored off-disc
+  par2 repair disc.par2                    # later, if disc.iso is damaged
 
 If a disc reads fine, skip this step.
 
