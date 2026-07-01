@@ -137,10 +137,39 @@ def _restore(bin_path: Path, repo: Path, target: Path, pwfile: Path,
 
 
 def _bottom_file(target: Path, leaf_name: str) -> Path | None:
-    for dirpath, _dirs, files in os.walk(target):
-        if leaf_name in files:
-            return Path(dirpath) / leaf_name
-    return None
+    """Locate ``leaf_name`` under ``target`` without ``os.walk``.
+
+    ``os.walk`` recurses via ``yield from`` on some CPython builds (it did
+    on the CI runner's interpreter, though this dev box's os.walk is
+    iterative), so a >1000-level tree blows the interpreter recursion
+    limit deep inside ``_walk`` — the same trap ``_rmtree_deep`` documents
+    (issue #378: it reddened master's CI for weeks).  Descend with chdir
+    one short relative level at a time instead: iterative, and keeping the
+    working directory at each level means a deep chain never trips
+    PATH_MAX either.  The deep-tree fixtures are single ``d/`` chains, so
+    following the one subdirectory per level reaches the bottom file."""
+    cwd = os.getcwd()
+    if not target.exists():
+        return None
+    try:
+        os.chdir(target)
+        rel: list[str] = []
+        while True:
+            found = None
+            subdir = None
+            for name in os.listdir("."):
+                if os.path.isdir(name) and not os.path.islink(name):
+                    subdir = name
+                elif name == leaf_name:
+                    found = name
+            if found is not None:
+                return target.joinpath(*rel, found)
+            if subdir is None:
+                return None
+            os.chdir(subdir)
+            rel.append(subdir)
+    finally:
+        os.chdir(cwd)
 
 
 def _requirements() -> Path:
