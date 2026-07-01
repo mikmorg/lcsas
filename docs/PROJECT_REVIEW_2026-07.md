@@ -261,8 +261,9 @@ correctly use `/mnt/recovery/bin/<arch>/`;
 (c) ESTATE_PLANNING.md:195 letter template says "a computer running Linux"
 though Windows restore is first-class — the first artifact a non-technical
 heir touches points them away from their most likely machine;
-(d) README.md:459/~644 + CLAUDE.md link `docs/development/cross-platform-meta-rfc.md`
-— actual file is `docs/CROSS_PLATFORM_META_RFC.md`;
+(d) README.md:459/~644 + CLAUDE.md link a `development/cross-platform-meta-rfc.md`
+path (under the docs tree) that does not exist — the actual file is
+`CROSS_PLATFORM_META_RFC.md` at the docs root;
 (e) README.md:635 "still-pending targets" is stale (all 6 covered).
 
 **M11. Tier-3 tolerant mode aborts on zstd-level corruption.**
