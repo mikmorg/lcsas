@@ -7,7 +7,8 @@ it hadn't drifted from source or broken under emulation.
 
 This module mirrors ``test_tier1_unit.py`` against
 ``recovery/bin/x86_64-windows/lcsas-restore.exe``, exercising it via
-``wine`` + ``WINEPREFIX=/scratch/wine-prefix`` (wine-9.0 preinstalled).
+``wine`` with a self-provisioned ``WINEPREFIX`` (created and initialized
+by the ``_wine_prefix_ready`` fixture; override with ``LCSAS_WINEPREFIX``).
 
 If either the cross-built binary or ``wine`` is absent, the module
 skips honestly.  Whenever both are present, ALL nine cases must pass:
@@ -30,6 +31,7 @@ belong to the blind-restore e2e.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import subprocess
@@ -67,11 +69,42 @@ pytestmark = [
 # the timeout generously so CI on a loaded host doesn't flake.
 TIMEOUT = 60
 
+# WINEPREFIX must live at a path whose parent always exists.  A hardcoded
+# /scratch/wine-prefix passed on the dev box (which has /scratch) but left
+# master's CI red for weeks -- CI runners have no /scratch, so wine died at
+# startup with "chdir to /scratch/wine-prefix: No such file or directory"
+# (issue #378).  Default to a self-provisioned prefix under the system temp
+# dir; allow an explicit override for callers that maintain their own.
+WINEPREFIX = os.environ.get("LCSAS_WINEPREFIX") or os.path.join(
+    tempfile.gettempdir(), "lcsas-wine-prefix"
+)
+
 WINE_ENV_BASE = {
     "WINEDEBUG": "-all",
-    "WINEPREFIX": "/scratch/wine-prefix",
+    "WINEPREFIX": WINEPREFIX,
     "DISPLAY": "",        # suppress any X11 attempt
 }
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _wine_prefix_ready() -> None:
+    """Provision WINEPREFIX before any wine test runs.
+
+    Creates the prefix directory (its parent always exists, unlike the old
+    hardcoded /scratch path) and initializes it once via wineboot so
+    per-test invocations are fast and do not leak first-run init noise into
+    asserted output.  No-op when the binary or wine is absent (tests skip)."""
+    if not (_BIN_OK and _WINE_OK):
+        return
+    os.makedirs(WINEPREFIX, exist_ok=True)
+    init_env = {**os.environ, **WINE_ENV_BASE}
+    # Best effort: even without an explicit boot, wine auto-initializes the
+    # prefix on first real use now that the directory exists.
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(
+            ["wine", "wineboot", "--init"],
+            env=init_env, capture_output=True, timeout=180,
+        )
 
 
 def _run(*args: str, env: dict[str, str] | None = None,
