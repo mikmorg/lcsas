@@ -141,14 +141,21 @@ jobs:
       RUSTIC_VERSION: "0.11.2"
       RUSTIC_ASSET: "rustic-v0.11.2-x86_64-unknown-linux-gnu.tar.gz"
       RUSTIC_SHA256: "fb7b74a14418b2dd070360c9abb22607f8559bdd344a0adf1b33bc2e31f83f5f"
-      # Skip-rot floor: minimum passed-test count.  qemu-user-static + wine
-      # below let the aarch64/armv7/windows committed-binary tests actually
-      # execute in CI (they skip everywhere but the dev VM otherwise), so
-      # the real floor is well above this.  RE-BASELINE: after the first
-      # green run, read the "passed" count from the junit summary and set
-      # FLOOR to (passed - 5).  This conservative starting value only
-      # catches catastrophic skip-rot until that re-baseline lands.
-      FLOOR: "200"
+      # Skip-rot floor: minimum passed-test count.  qemu-user-static + wine +
+      # stock restic (all installed below) let the aarch64/armv7/windows
+      # committed-binary tests and the standard-tools compat gate actually
+      # execute in CI, instead of skipping everywhere but the dev VM.
+      # RE-BASELINED (issue #366): 581 tests collected; recent CI runs report
+      # 550 passed / 26 skipped / 5 failed.  The Skip-rot floor step only runs
+      # when the suite step is green (0 failures), at which point passed is
+      # 581 - skips (~555); and even today 550 pass despite the 5 unrelated
+      # failures, so passed is >= 550 whenever this floor evaluates.  540
+      # (= 550 - 10) stays safely below that — never false-failing a PR —
+      # while catching a chunk of tests silently rotting to skips (e.g. a
+      # broken fixture or an uninstalled dep turning assertions into skips).
+      # Never raise it to chase a flake; re-baseline down only from a
+      # known-good run.
+      FLOOR: "540"
 
     steps:
       - name: Checkout
@@ -176,6 +183,43 @@ jobs:
           tar -xzf rustic.tar.gz
           install -m 0755 rustic "$HOME/.local/bin/rustic"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install stock restic (pinned, for the standard-tools compat gate)
+        # H4: tests/recovery_hardening/test_stock_restic_compat.py — the
+        # "standard tools" restore tier — skips unless a STOCK upstream restic
+        # (the Go original, not rustic, not bundled) is present.  No job
+        # installed one, so that gate silently skipped forever: a rustic
+        # upstream change that broke stock-restic readability of an LCSAS repo
+        # would have passed CI green.  Pin restic 0.19.0 and verify it against
+        # the SHA-256 already recorded in recovery/UPSTREAM.sha256, read
+        # straight from that manifest so the hash can never drift from the pin.
+        run: |
+          set -euo pipefail
+          asset="restic_0.19.0_linux_amd64.bz2"
+          # Read the pinned hash from the manifest (repo root is the cwd here);
+          # $2 == <path> skips comment lines and never re-hardcodes the value.
+          expected=$(awk -v a="restic/x86_64-unknown-linux-musl/$asset" \
+            '$2 == a {print $1}' recovery/UPSTREAM.sha256)
+          if [ -z "$expected" ]; then
+            echo "no pinned hash for $asset in recovery/UPSTREAM.sha256" >&2
+            exit 1
+          fi
+          mkdir -p "$HOME/.local/bin"
+          cd "$(mktemp -d)"
+          url="https://github.com/restic/restic/releases/download/v0.19.0/$asset"
+          echo "Downloading $url"
+          curl -fsSL -o restic.bz2 "$url"
+          actual=$(sha256sum restic.bz2 | awk '{print $1}')
+          if [ "$expected" != "$actual" ]; then
+            echo "restic SHA256 mismatch: expected=$expected actual=$actual" >&2
+            exit 1
+          fi
+          echo "restic SHA256 verified: $actual"
+          bunzip2 restic.bz2
+          install -m 0755 restic "$HOME/.local/bin/restic"
+          # The gate checks LCSAS_RESTIC_BIN first, then PATH; set the env var
+          # so it unambiguously binds to this STOCK binary.
+          echo "LCSAS_RESTIC_BIN=$HOME/.local/bin/restic" >> "$GITHUB_ENV"
 
       - name: Install xorriso + dvdisaster + qemu + wine
         run: |
