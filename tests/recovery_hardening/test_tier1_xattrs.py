@@ -107,6 +107,76 @@ def test_xattr_compiled_in_restores_user_namespace(tmp_path: Path) -> None:
     assert got == "bar", f"user.foo xattr should be 'bar', got {got!r}"
 
 
+def test_xattr_compiled_in_restores_multiple_user_xattrs(tmp_path: Path) -> None:
+    """Issue #361 regression: tier-1 must restore *all* of a node's
+    extended attributes, not just the first.
+
+    The pre-fix `apply_node_xattrs` advanced its array cursor by a JSON
+    *byte offset* (`toks[elem_t].end`) while using it as a *token index*.
+    With a single xattr the corrupting assignment happened after the
+    last needed iteration, so it was invisible (why the single-xattr
+    test above passes).  With 2+ xattrs — routine for SELinux labels,
+    POSIX ACLs, capabilities — the second iteration dereferenced
+    `toks[]` out of bounds, crashing (or silently corrupting) the whole
+    restore.
+
+    Three `user.*` xattrs are used deliberately: `user.*` is the only
+    namespace an unprivileged process may write, so every value is
+    actually restorable and can be asserted.  Asserting each value (not
+    merely "the restore finished") also catches the silent-corruption
+    variant where the OOB read reads adjacent live tokens instead of
+    faulting.  Must FAIL before the fix and PASS after.
+    """
+    if not shutil.which("rustic"):
+        pytest.skip("rustic not on PATH")
+    if not shutil.which("setfattr") or not shutil.which("getfattr"):
+        pytest.skip("setfattr/getfattr not available")
+    bin_path = find_restore_bin()
+    if bin_path is None:
+        pytest.skip("no lcsas-restore binary")
+
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "alpha.txt"
+    f.write_text("hi\n")
+    wanted = {"user.a": "one", "user.b": "two", "user.c": "three"}
+    for name, value in wanted.items():
+        if not _setfattr(f, name, value):
+            pytest.skip("source filesystem does not support xattrs")
+
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("test-password\n")
+    repo = tmp_path / "repo"
+    build_rustic_repo(src, repo, pwfile)
+
+    target = tmp_path / "out"
+    restore_with_tier1(repo, target, pwfile, bin_path)
+    root = find_restored_root(target)
+    restored = next(root.rglob("alpha.txt"))
+
+    # Read every attr back BEFORE deciding to skip.  Skip only when the
+    # target dropped *all* of them (true "no xattr support" / the
+    # LCSAS_NO_XATTR build).  The pre-fix bug restored only array element
+    # 0, and rustic records extended_attributes in raw listxattr(2)
+    # order (filesystem-dependent, not sorted) — so probing a single
+    # name (e.g. user.a) could fire a false skip that masks the very
+    # regression this test exists to catch.  If *some* survived but not
+    # all, that is the bug, and the assertion below must fail.
+    got = {name: _getfattr(restored, name) for name in wanted}
+    if all(v is None for v in got.values()):
+        pytest.skip(
+            "restored file has no user.* xattrs; either tier-1 was "
+            "built with LCSAS_NO_XATTR, or the target filesystem "
+            "drops xattrs"
+        )
+
+    for name, value in wanted.items():
+        assert got[name] == value, (
+            f"{name} xattr should be {value!r}, got {got[name]!r} "
+            f"(all three must survive the tier-1 array walk)"
+        )
+
+
 def test_no_xattr_build_compiles_and_restores_content(tmp_path: Path) -> None:
     """Issue #190 acceptance: the codebase must compile cleanly with
     LCSAS_NO_XATTR defined, and the resulting binary must restore

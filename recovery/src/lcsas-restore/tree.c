@@ -354,53 +354,45 @@ apply_node_ownership(const char *src, const lcsas_json_tok *toks,
  */
 #if LCSAS_HAS_XATTR
 static void
-apply_node_xattrs(const char *src, const lcsas_json_tok *toks,
+apply_node_xattrs(const char *src, const lcsas_json_tok *toks, long ntoks,
                   long node_idx, const char *path)
 {
     long ea_i = lcsas_json_obj_get(src, toks, node_idx,
                                    "extended_attributes");
-    long count, n;
-    long elem_t;
+    long count, found = 0;
+    long j;
 
     if (ea_i < 0) return;
     if (toks[ea_i].type != LCSAS_JSON_ARRAY) return;
     count = toks[ea_i].size;
     if (count <= 0) return;
 
-    elem_t = ea_i + 1;
-    for (n = 0; n < count; n++) {
-        long name_i, value_i;
+    /* Walk the array by TOKEN INDEX, never by byte offset.  json_q's
+     * `.end` is an exclusive byte offset into `src`, NOT a token index
+     * (json_q.h:35), so advancing `j` by it would run off the end of
+     * toks[].  Instead, scan tokens forward and treat each direct child
+     * of the array (parent == ea_i) as one element; nested subtree
+     * tokens are skipped by the parent filter.  Bounded by both ntoks
+     * and the declared element count — the same idiom as the content
+     * and nodes walks above (tree.c ~658, ~869). */
+    for (j = ea_i + 1; j < ntoks && found < count; j++) {
+        long name_i, value_i, name_n;
         char name_buf[256];
         unsigned char *value_buf = NULL;
         long value_len = 0;
-        long name_n;
-        size_t enc_len = 0;
-        size_t cap;
 
-        /* Skip non-object array entries (defensive). */
-        while (toks[elem_t].parent != ea_i) elem_t++;
-        if (toks[elem_t].type != LCSAS_JSON_OBJECT) {
-            elem_t++;
-            continue;
-        }
+        if (toks[j].parent != ea_i) continue;
+        found++;
+        if (toks[j].type != LCSAS_JSON_OBJECT) continue;
 
-        name_i = lcsas_json_obj_get(src, toks, elem_t, "name");
-        value_i = lcsas_json_obj_get(src, toks, elem_t, "value");
-        if (name_i < 0 || value_i < 0) {
-            elem_t = toks[elem_t].end;
-            continue;
-        }
-        if (toks[name_i].type != LCSAS_JSON_STRING) {
-            elem_t = toks[elem_t].end;
-            continue;
-        }
+        name_i = lcsas_json_obj_get(src, toks, j, "name");
+        value_i = lcsas_json_obj_get(src, toks, j, "value");
+        if (name_i < 0 || value_i < 0) continue;
+        if (toks[name_i].type != LCSAS_JSON_STRING) continue;
 
         name_n = lcsas_json_decode_string(src, &toks[name_i],
                                           name_buf, sizeof name_buf);
-        if (name_n < 0 || name_n == 0) {
-            elem_t = toks[elem_t].end;
-            continue;
-        }
+        if (name_n <= 0) continue;
 
         /* Value: a base64-encoded raw byte string.  lcsas_b64_decode
          * has no destination-length parameter, so we MUST size the
@@ -408,14 +400,11 @@ apply_node_xattrs(const char *src, const lcsas_json_tok *toks,
          * to prevent a stack/heap overflow (xattrs can be up to
          * 64 KiB on Linux).  Decoded size <= ceil(enc_len * 3 / 4). */
         if (toks[value_i].type == LCSAS_JSON_STRING) {
-            enc_len = (size_t)(toks[value_i].end - toks[value_i].start);
-            cap = (enc_len + 3) / 4 * 3 + 8;
+            size_t enc_len =
+                (size_t)(toks[value_i].end - toks[value_i].start);
+            size_t cap = (enc_len + 3) / 4 * 3 + 8;
             value_buf = (unsigned char *)malloc(cap);
-            if (!value_buf) {
-                /* Best-effort — skip this xattr if we can't allocate. */
-                elem_t = toks[elem_t].end;
-                continue;
-            }
+            if (!value_buf) continue;  /* best-effort: skip on OOM */
             value_len = lcsas_b64_decode(
                 src + toks[value_i].start, enc_len, value_buf);
             if (value_len < 0 || (size_t)value_len > cap) value_len = 0;
@@ -427,19 +416,16 @@ apply_node_xattrs(const char *src, const lcsas_json_tok *toks,
             (void)lsetxattr(path, name_buf, value_buf,
                             (size_t)value_len, 0);
             free(value_buf);
-            value_buf = NULL;
         }
-
-        elem_t = toks[elem_t].end;
     }
 }
 #else
 /* Stub when xattr support compiled out — xattrs silently dropped. */
 static void
-apply_node_xattrs(const char *src, const lcsas_json_tok *toks,
+apply_node_xattrs(const char *src, const lcsas_json_tok *toks, long ntoks,
                   long node_idx, const char *path)
 {
-    (void)src; (void)toks; (void)node_idx; (void)path;
+    (void)src; (void)toks; (void)ntoks; (void)node_idx; (void)path;
 }
 #endif
 
@@ -775,7 +761,7 @@ restore_file_node(const char *repo_path,
      * the path; xattrs go last so a setxattr-time hook won't observe
      * a partially-restored file. */
     apply_node_ownership(src, toks, node_idx, target_path);
-    apply_node_xattrs(src, toks, node_idx, target_path);
+    apply_node_xattrs(src, toks, ntoks, node_idx, target_path);
 #endif
 
     close(fd);
@@ -1000,7 +986,7 @@ tree_restore_recurse(const char *repo_path,
                  * children are restored so we don't fight the
                  * recursive descent. */
                 apply_node_ownership((char *)blob, toks, t, node_path);
-                apply_node_xattrs((char *)blob, toks, t, node_path);
+                apply_node_xattrs((char *)blob, toks, ntoks, t, node_path);
 #endif
             } else if (strcmp(type_buf, "symlink") == 0) {
                 if (lt_i >= 0) {
@@ -1071,7 +1057,7 @@ tree_restore_recurse(const char *repo_path,
                          * on the link itself when the kernel
                          * supports it. */
                         apply_node_ownership((char *)blob, toks, t, node_path);
-                        apply_node_xattrs((char *)blob, toks, t, node_path);
+                        apply_node_xattrs((char *)blob, toks, ntoks, t, node_path);
                     }
 #endif
                 }
