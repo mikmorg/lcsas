@@ -1216,7 +1216,14 @@ if [ -z "$PWFILE" ]; then
         printf '%s\n' "$LCSAS_PASSWORD" > "$PWFILE"
     else
         printf 'Password: ' >&2
+        # Disable terminal echo so the passphrase is not shown on screen
+        # or left in scrollback (issue #363).  Save/restore the tty state
+        # and emit the newline the (now-invisible) Enter didn't produce.
+        # Guarded for the non-tty case (stty -g fails → skip).
+        _stty_saved="$(stty -g 2>/dev/null)" || _stty_saved=""
+        [ -n "$_stty_saved" ] && stty -echo 2>/dev/null
         IFS= read -r pw
+        [ -n "$_stty_saved" ] && { stty "$_stty_saved" 2>/dev/null; printf '\n' >&2; }
         printf '%s\n' "$pw" > "$PWFILE"
     fi
 fi
@@ -1488,14 +1495,18 @@ elif [ -x "$RESTORE_BIN" ]; then
         printf '[tier 1] exited %d, falling through to tier 2\n' \
                $tier1_rc >&2
     else
-        # We're about to exec -- write the session log anticipatorily.
-        # If the binary later crashes mid-restore the log line is a
-        # slight lie, but the alternative (no log on the default code
-        # path) is worse for the second-time operator UX.
-        write_session_log 1
-        exec "$RESTORE_BIN" --repo "$REPO" --password-file "$PWFILE" \
+        # Run (not exec) so the EXIT trap fires and shreds the temporary
+        # password file; exec would replace this shell and leave
+        # /tmp/lcsas-pw.* on disk after the restore (issue #363).  This is
+        # the last tier we try on the non-fallback path, so exit with the
+        # binary's own status either way.
+        _tier1_rc=0
+        "$RESTORE_BIN" --repo "$REPO" --password-file "$PWFILE" \
                        --target "$TARGET_DIR" --snapshot "$SNAP" \
-                       $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG
+                       $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG \
+                       || _tier1_rc=$?
+        [ "$_tier1_rc" -eq 0 ] && write_session_log 1
+        exit "$_tier1_rc"
     fi
 fi
 
@@ -1527,9 +1538,14 @@ elif [ -x "$RUSTIC_BIN" ]; then
         printf '[tier 2] exited %d, falling through to tier 3\n' \
                $tier2_rc >&2
     else
-        write_session_log 2
-        exec "$RUSTIC_BIN" --repository "$REPO" --password-file "$PWFILE" \
-                     restore "$SNAP" "$TARGET_DIR"
+        # Run (not exec) so the EXIT trap shreds the temp password file
+        # (issue #363).  Last tier on the non-fallback path → exit with
+        # rustic's own status.
+        _tier2_rc=0
+        "$RUSTIC_BIN" --repository "$REPO" --password-file "$PWFILE" \
+                     restore "$SNAP" "$TARGET_DIR" || _tier2_rc=$?
+        [ "$_tier2_rc" -eq 0 ] && write_session_log 2
+        exit "$_tier2_rc"
     fi
 fi
 
@@ -1577,14 +1593,19 @@ if [ -n "$STDTOOL_BIN" ] && [ -x "$STDTOOL_BIN" ] \
         if [ $tier2b_rc -eq 0 ]; then write_session_log 2; exit 0; fi
         printf '[tier 2b] exited %d, falling through to tier 3\n' $tier2b_rc >&2
     else
-        write_session_log 2
+        # Run (not exec) so the EXIT trap shreds the temp password file
+        # (issue #363).  Last tier on the non-fallback path → exit with
+        # the tool's own status.
+        _tier2b_rc=0
         if [ "$_stdtool_kind" = rustic ]; then
-            exec "$STDTOOL_BIN" --repository "$REPO" --password-file "$PWFILE" \
-                 restore "$SNAP" "$TARGET_DIR"
+            "$STDTOOL_BIN" --repository "$REPO" --password-file "$PWFILE" \
+                 restore "$SNAP" "$TARGET_DIR" || _tier2b_rc=$?
         else
-            exec env RESTIC_PASSWORD_FILE="$PWFILE" "$STDTOOL_BIN" -r "$REPO" \
-                 restore "$SNAP" --target "$TARGET_DIR" --no-lock
+            RESTIC_PASSWORD_FILE="$PWFILE" "$STDTOOL_BIN" -r "$REPO" \
+                 restore "$SNAP" --target "$TARGET_DIR" --no-lock || _tier2b_rc=$?
         fi
+        [ "$_tier2b_rc" -eq 0 ] && write_session_log 2
+        exit "$_tier2b_rc"
     fi
 fi
 
