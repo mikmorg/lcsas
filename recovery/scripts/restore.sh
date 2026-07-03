@@ -1576,9 +1576,13 @@ if [ -z "$STDTOOL_BIN" ]; then
 fi
 if [ -n "$STDTOOL_BIN" ] && [ -x "$STDTOOL_BIN" ] \
        && [ -d "$REPO/data" ] && bin_preflight_ok "$STDTOOL_BIN"; then
-    case "$STDTOOL_BIN" in
-        *rustic*) _stdtool_kind=rustic ;;
-        *)        _stdtool_kind=restic ;;
+    # Classify by the BINARY NAME, not the whole path: a stock restic
+    # installed under e.g. /opt/rustic-tools/bin/restic must NOT be driven
+    # with rustic's CLI just because "rustic" appears in a parent dir
+    # (issue #368).
+    case "$(basename "$STDTOOL_BIN")" in
+        rustic*) _stdtool_kind=rustic ;;
+        *)       _stdtool_kind=restic ;;
     esac
     printf '[tier 2b] using stock %s (%s)\n' "$_stdtool_kind" "$STDTOOL_BIN" >&2
     if [ "$FALLBACK" = "1" ]; then

@@ -133,3 +133,34 @@ def test_tier2b_prefers_bundled_restic_over_path(
     assert not (tmp_path / "DECOY_RAN").exists(), (
         "tier-2b ran the PATH restic instead of the bundled one."
     )
+
+
+def test_tier2b_classifies_restic_by_basename_not_path(tmp_path: Path) -> None:
+    """#368: a stock restic whose full path contains 'rustic' (e.g. it lives
+    under a rustic-named parent dir) must still be driven with restic's CLI
+    (flag form + RESTIC_PASSWORD_FILE), not mis-classified as rustic from the
+    path.  The old `case "$STDTOOL_BIN" in *rustic*` matched the whole path."""
+    # Recovery tree under a parent whose name contains 'rustic', so the
+    # bundled restic's absolute path contains 'rustic'.
+    recovery = tmp_path / "rustic-backups" / "recovery"
+    recovery.mkdir(parents=True)
+    stub = _install_restic_stub(recovery)
+    assert "rustic" in str(stub)  # precondition: path contains 'rustic'
+    _repo_with_data(recovery / "metadata", "alpha")
+    target = tmp_path / "restored"
+
+    res = _run(recovery, target, env={})
+    assert res.returncode == 0, res.stderr
+    assert "[tier 2b] using stock restic" in res.stderr, (
+        f"restic under a rustic-named path was mis-classified as rustic;\n"
+        f"stderr:\n{res.stderr}"
+    )
+    args = _args(res.stdout)
+    assert "--no-lock" in args and "--target" in args, (
+        f"expected restic flag form; argv: {args}"
+    )
+    assert "--password-file" not in args, (
+        f"restic takes the password via RESTIC_PASSWORD_FILE, not "
+        f"--password-file (rustic's form); argv: {args}"
+    )
+    assert "PWFILE=" in res.stdout and "PWFILE=UNSET" not in res.stdout
