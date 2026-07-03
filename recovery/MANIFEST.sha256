@@ -149,7 +149,7 @@ acf2475fa670283d175bce6cb0d644b5658ab6ef6b01f7e2a9c43bc7a29b5bc0  ./src/lcsas-re
 1aa6de08217ecf30d21df70cc45a4a6083db5b50a86ee7de9e48cdc412b294d5  ./src/lcsas-restore/posix_compat.h
 a3bf568161ad183213a6291031e1afd639111efad72a36efffac4efaf42f44bb  ./src/lcsas-restore/repo.c
 5c01dd3d9396db59610b85071e19e8381774ccc7ce2923192ddf94620cf0bbc9  ./src/lcsas-restore/repo.h
-f188c7ce9738b43ce1285cb5a57026afda1828857e1f6b79a0bda78d16b26eeb  ./src/lcsas-restore/scrypt.c
+630a1a200aaade635afb96819ee39fb9396886ddedc5fa81dd9898fd0fdeb24f  ./src/lcsas-restore/scrypt.c
 766b1676df12e27529cf40d3bd9adbcdd63e44f2c47b046f181625d0fbdf315d  ./src/lcsas-restore/scrypt.h
 f93314a23bd33d186f8d2a77006b5368f9a15878c00553dc3fd301a295c16c07  ./src/lcsas-restore/sha256.c
 505af21011f54d41f3908f2666bc1ffc981e1228bbf3e414869e95a1dcf9865e  ./src/lcsas-restore/sha256.h
@@ -191,7 +191,7 @@ d8927399a835f172128a888a5775840e7bac6ce91f56edb4f6dcba24ba356697  ./tests/test_p
 cbff877bd39cf61d88bea8930e1b82491b0dd5fc50979fde8b8ff7d51b5167e6  ./tests/test_poly1305.c
 88d13dd21004885d681cf34256f8cbfdeb6c75259c55b3a3ae795400a5376b88  ./tests/test_repo.c
 d545bfb73d0183b9d7b3ca36f297f150bd7daf8362ca067351ca42f73692e751  ./tests/test_restore_bat_e2e.sh
-a69d11c1d15afcc71fa84098979b74394a0338ee6b1aef112d41a28622832c38  ./tests/test_scrypt.c
+11d0000be102eae215cfc53d908e90065eab8ef93325f4951d03e8936987068d  ./tests/test_scrypt.c
 64698e8e358ef76142c663aa7bbd45c3bf20c884cf344467888cb224366c4071  ./tests/test_sha256.c
 6a4dd4d8a67752f12e2e6b349843925307b5bae635a6dc9dd5d784808e7fa138  ./tests/test_zstd.c
 c7fe05b844f733e4a6bff4943eff87716f7fe579ca09220999da2112d7025932  ./UPSTREAM.sha256

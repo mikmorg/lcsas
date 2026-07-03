@@ -225,6 +225,55 @@ class TestMetaVolumeBuilder:
     def output(self) -> Path:
         return self._output
 
+    def test_recovery_manifest_matches_on_disc(self):
+        """Issue #365: after the build replaces recovery/scripts/restore.sh
+        with the redirect stub, its recovery/MANIFEST.sha256 row must match
+        the stub on disc -- otherwise an heir's `sha256sum -c` reports a
+        MISMATCH on the single most important recovery file.  Verify that
+        row explicitly, plus every other row whose file is present.
+        """
+        import hashlib
+
+        manifest = self.output / "recovery" / "MANIFEST.sha256"
+        if not manifest.is_file():
+            pytest.skip("build produced no recovery/MANIFEST.sha256")
+        recovery = self.output / "recovery"
+
+        rows: dict[str, str] = {}
+        for line in manifest.read_text().splitlines():
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            parts = s.split("  ", 1)
+            if len(parts) == 2:
+                rows[parts[1]] = parts[0]
+
+        def _sha(p: Path) -> str:
+            h = hashlib.sha256()
+            h.update(p.read_bytes())
+            return h.hexdigest()
+
+        # The stub row must exist and match the stub on disc.
+        assert "./scripts/restore.sh" in rows, (
+            "recovery/MANIFEST.sha256 has no ./scripts/restore.sh row"
+        )
+        stub = recovery / "scripts" / "restore.sh"
+        assert stub.is_file()
+        assert _sha(stub) == rows["./scripts/restore.sh"], (
+            "MANIFEST row for scripts/restore.sh does not match the on-disc "
+            "stub -- heir `sha256sum -c` would report a MISMATCH (issue #365)"
+        )
+
+        # Defensive: no listed file that IS present may mismatch.
+        mismatches = [
+            rel for rel, want in rows.items()
+            if (recovery / rel.removeprefix("./")).is_file()
+            and _sha(recovery / rel.removeprefix("./")) != want
+        ]
+        assert not mismatches, (
+            f"MANIFEST rows mismatch their on-disc files: {mismatches}"
+        )
+
     def test_build_creates_directory_structure(self):
         """Build a meta-volume and verify all expected components."""
         # Restore script

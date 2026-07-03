@@ -14,6 +14,13 @@
 
 #include <stdlib.h>
 
+/* Upper bound on scrypt scratch memory (issue #362).  2 GiB is far above
+ * any real restic/rustic work factor (their worst case is ~1 GiB at
+ * N=2^20, r=8) yet fits unsigned long on every target -- C guarantees
+ * unsigned long >= 32 bits, so 2^31 < ULONG_MAX and the bounded products
+ * 128*r*N and 128*r*p cannot wrap. */
+#define SCRYPT_MAX_MEM (1UL << 31)
+
 #define U32 unsigned long
 
 static U32
@@ -170,7 +177,21 @@ lcsas_scrypt(const unsigned char *pw, size_t pwlen,
     if (N < 2 || (N & (N - 1)) != 0) return -1;
     if (r == 0 || p == 0) return -1;
 
+    /* Bound the cost parameters so the size arithmetic below cannot
+     * overflow (issue #362).  N, r and p are read from the repository
+     * key file, which on a tampered disc is attacker-controlled and
+     * reaches this function BEFORE any password/MAC check.  Without a
+     * ceiling, `128 * r * N` (and `* p`) wrap unsigned long -- trivially
+     * on the 32-bit armv7 target -- yielding a small malloc followed by
+     * a huge out-of-bounds write inside smix.  Cap total scratch memory
+     * at SCRYPT_MAX_MEM, testing each factor by division so the check
+     * itself never multiplies.  restic/rustic never write N>2^20, r>8,
+     * p>1, so every real repository passes; anything larger is either a
+     * corrupt/hostile key file or an infeasible work factor. */
+    if (r > (SCRYPT_MAX_MEM / 128UL)) return -1;   /* 128*r cannot overflow */
     bs = 128UL * r;
+    if (N > (SCRYPT_MAX_MEM / bs)) return -1;       /* bs*N <= SCRYPT_MAX_MEM */
+    if (p > (SCRYPT_MAX_MEM / bs)) return -1;       /* bs*p <= SCRYPT_MAX_MEM */
 
     B = (unsigned char *)malloc(bs * p);
     V = (unsigned char *)malloc(bs * N);
