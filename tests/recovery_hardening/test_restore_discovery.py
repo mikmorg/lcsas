@@ -229,3 +229,23 @@ def test_no_repos_fails_with_actionable_error(tmp_path: Path) -> None:
         kw in res.stderr.lower()
         for kw in ("mount", "insert", "data disc")
     ), f"error message missing actionable hint; got:\n{res.stderr}"
+
+
+def test_multi_tenant_repo_path_with_spaces_resolves(tmp_path: Path) -> None:
+    """#364: a repo discovered under a mount path containing spaces (e.g.
+    a disc auto-mounted at /media/user/DISC LABEL 1) must resolve without
+    the candidate-list loop word-splitting the path into bogus tenants."""
+    recovery = tmp_path / "DISC LABEL 1" / "recovery"
+    recovery.mkdir(parents=True)
+    _install_stub_binary(recovery, HOST_TARGET, "lcsas-restore")
+    alpha = _make_repo_skeleton(recovery / "metadata", "alpha")
+    _make_repo_skeleton(recovery / "metadata", "bravo")
+    target = tmp_path / "restored"
+
+    res = _run_restore(recovery, target, env={"LCSAS_REPO": "alpha"})
+    assert res.returncode == 0, res.stderr
+    args = _stub_args(res.stdout)
+    assert _arg_value(args, "--repo") == str(alpha), (
+        f"a spaced repo path must resolve intact; got "
+        f"{_arg_value(args, '--repo')!r} (word-split candidate list?)"
+    )
