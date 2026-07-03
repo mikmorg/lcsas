@@ -397,6 +397,51 @@ class TestExecute:
         vol = get_volume_by_id(conn, manifest.volume_id)
         assert vol.status == "STAGING"
 
+    def test_verify_rehashes_when_recorded_hash_empty(self, orch_env, tmp_path):
+        """#370: a crash between the volume commit and the ISO-hash update
+        leaves a modern session row with iso_sha256='' while the staged ISO
+        is still on disk.  Verify must RE-HASH the ISO and do the full
+        read-back comparison, not downgrade to readability-only (which would
+        pass any readable disc)."""
+        from lcsas.db.models import SessionVolume
+        from lcsas.utils.hashing import sha256_file
+
+        config = orch_env["config"]
+        conn = orch_env["conn"]
+        xorriso = orch_env["xorriso"]
+        xorriso.verify_disc = MagicMock(return_value=True)
+
+        manifest = self._prepare(orch_env)
+        label = manifest.volume_label
+        xorriso.read_disc_volume_id = MagicMock(return_value=label)
+
+        iso = tmp_path / "vol.iso"
+        iso.write_bytes(b"the burned disc image contents " * 4096)
+        real_hash = sha256_file(iso)
+
+        # Crash-truncated row: hash empty, but the ISO is still on disk.
+        sv = SessionVolume(
+            session_id="s", volume_id=manifest.volume_id,
+            iso_path=str(iso), iso_sha256="", iso_size_bytes=None,
+        )
+
+        # Wrong device content: the OLD code downgraded to a readability
+        # pass (returned True); the re-hash must now FAIL loud.
+        orch_bad = BurnOrchestrator(
+            config, conn, xorriso, orch_env["dvdisaster"],
+            device_reader=lambda device, length: "0" * 64,
+        )
+        assert orch_bad._verify_burned_disc(
+            sv, label, "/dev/sr0", None, iso) is False
+
+        # Correct device content → re-hash matches → real PASS.
+        orch_ok = BurnOrchestrator(
+            config, conn, xorriso, orch_env["dvdisaster"],
+            device_reader=lambda device, length: real_hash,
+        )
+        assert orch_ok._verify_burned_disc(
+            sv, label, "/dev/sr0", None, iso) is True
+
     def test_execute_custom_iso_output(self, orch_env, tmp_path):
         """ISO output path can be overridden."""
         orch = orch_env["orch"]

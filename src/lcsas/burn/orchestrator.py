@@ -1235,15 +1235,26 @@ class BurnOrchestrator:
             )
             return False
 
-        if not sv.iso_sha256:
-            # No hash recorded (pre-Phase-13 session row): readability
-            # is all the evidence available — preserve old semantics.
-            add_event(
-                self._conn, sv.volume_id, "VERIFY_PASS",
-                location=location, detail="Post-burn read-back",
-                commit=False,
-            )
-            return True
+        expected_hash = sv.iso_sha256
+        if not expected_hash:
+            if iso_path.exists():
+                # A crash between the volume commit and
+                # update_session_volume_iso (#370) leaves a MODERN row with
+                # an empty hash even though the staged ISO is still on disk.
+                # Re-hash it now for a full read-back comparison instead of
+                # silently downgrading to readability-only.
+                expected_hash = sha256_file(iso_path)
+            else:
+                # Genuine pre-Phase-13 row (no hash ever recorded) AND the
+                # ISO is gone: readability is all the evidence available —
+                # preserve old semantics.
+                add_event(
+                    self._conn, sv.volume_id, "VERIFY_PASS",
+                    location=location,
+                    detail="Post-burn read-back (no hash on record)",
+                    commit=False,
+                )
+                return True
 
         iso_size = sv.iso_size_bytes
         if iso_size is None and iso_path.exists():
@@ -1279,12 +1290,12 @@ class BurnOrchestrator:
             )
             return False
 
-        if device_hash != sv.iso_sha256:
+        if device_hash != expected_hash:
             add_event(
                 self._conn, sv.volume_id, "VERIFY_FAIL",
                 location=location,
                 detail=(
-                    f"device hash mismatch: expected {sv.iso_sha256[:8]}.., "
+                    f"device hash mismatch: expected {expected_hash[:8]}.., "
                     f"got {device_hash[:8]}.."
                 ),
                 commit=False,
@@ -1322,24 +1333,25 @@ class BurnOrchestrator:
         session_id = resolve_session_id(self._conn, session_ref)
         session_vols = get_session_volumes(self._conn, session_id)
 
-        unburned = self._unburned_session_volumes(session_id)
-        if unburned and not force:
-            labels = ", ".join(label for _vid, label in unburned)
+        strandable = self._strandable_session_volumes(session_id)
+        if strandable and not force:
+            labels = ", ".join(label for _vid, label in strandable)
             raise ValueError(
-                f"Session {session_id} has {len(unburned)} volume(s) that "
-                f"were never burned ({labels}). Cleaning now would "
+                f"Session {session_id} has {len(strandable)} volume(s) with "
+                f"no verified disc copy ({labels}) — never burned, or burned "
+                f"but post-burn verification failed. Cleaning now would "
                 f"permanently strand their packs as falsely 'archived'. "
-                f"Burn the session first ('lcsas burn --session {session_id}'), "
+                f"Re-burn the session ('lcsas burn --session {session_id}'), "
                 f"or abort it ('lcsas session abort {session_id}') to return "
                 f"the packs to the unarchived pool. "
                 f"Use --force to clean AND abort in one step."
             )
 
-        for vid, label in unburned:
+        for vid, label in strandable:
             reclaim = self._reclaim_summary([vid])
             _logger.info(
-                "Volume %s was never burned — deleting; %d pack(s) return "
-                "to the unarchived pool",
+                "Volume %s has no verified disc copy — deleting; %d pack(s) "
+                "return to the unarchived pool",
                 label, reclaim.packs_reclaimed,
             )
             delete_volume(self._conn, vid)
@@ -1372,9 +1384,9 @@ class BurnOrchestrator:
         logger = get_logger()
 
         session_id = resolve_session_id(self._conn, session_ref)
-        unburned = self._unburned_session_volumes(session_id)
-        summary = self._reclaim_summary([vid for vid, _label in unburned])
-        summary.labels = [label for _vid, label in unburned]
+        strandable = self._strandable_session_volumes(session_id)
+        summary = self._reclaim_summary([vid for vid, _label in strandable])
+        summary.labels = [label for _vid, label in strandable]
 
         self.clean_session(session_id, force=True)
 
@@ -1428,18 +1440,25 @@ class BurnOrchestrator:
         )
         return summary
 
-    def _unburned_session_volumes(self, session_id: str) -> list[tuple[int, str]]:
-        """Return (volume_id, label) for a session's never-burned volumes.
+    def _strandable_session_volumes(
+        self, session_id: str
+    ) -> list[tuple[int, str]]:
+        """Return (volume_id, label) for a session's volumes that have NO
+        durable disc copy — cleaning them would strand their packs as
+        falsely 'archived'.
 
-        Never-burned = status STAGING/BURNING AND zero volume_copies rows.
-        A volume with any copy row corresponds to a physical disc (however
-        stale its status) and is never deleted by clean/abort (FMA-01).
+        That is any STAGING/BURNING volume (never burned) OR a BURNED
+        volume with zero ``volume_copies`` rows: burned, but its post-burn
+        verification failed so no verified copy was ever recorded and no
+        durable disc exists (#369).  A volume with any copy row corresponds
+        to a physical disc (however stale its status) and is never deleted
+        by clean/abort (FMA-01).
         """
         rows = self._conn.execute(
             """SELECT v.volume_id, v.label FROM volumes v
                JOIN session_volumes sv ON sv.volume_id = v.volume_id
                WHERE sv.session_id = ?
-                 AND v.status IN ('STAGING', 'BURNING')
+                 AND v.status IN ('STAGING', 'BURNING', 'BURNED')
                  AND NOT EXISTS (
                      SELECT 1 FROM volume_copies vc
                      WHERE vc.volume_id = v.volume_id
