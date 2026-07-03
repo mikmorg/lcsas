@@ -36,7 +36,7 @@ DECISION FLOW
        OR
          mount -o loop,ro path-to-iso.iso /mnt     (ISO file)
 
-  Q: Does /mnt contain restore.sh and bin/<arch>/lcsas-restore?
+  Q: Does /mnt contain restore.sh and recovery/bin/<arch>/lcsas-restore?
      YES -> primary path:
 
          sh /mnt/restore.sh /tmp/restored latest
@@ -67,6 +67,19 @@ Python dependency; the BARE MINIMUM recovery path ends after tier 2.
   Tier 2.  bin/<arch>/rustic-static    vendored Rust binary
                                        (fallback when tier 1 won't run;
                                        pinned upstream artifact)
+
+  Tier 2b. bin/<arch>/restic           stock upstream restic/rustic --
+           (or restic/rustic on PATH)  an independent, widely-audited
+                                       reader of the SAME repo format,
+                                       using ZERO LCSAS code.  Tried
+                                       before the Python last resort so
+                                       an heir who cannot run, or does
+                                       not trust, our binaries still
+                                       gets an automatic restore.  Needs
+                                       a single-repo data/ tree (skipped
+                                       on the multi-disc holographic
+                                       layout).  Full manual equivalent:
+                                       RESTORE_STANDARD_TOOLS.txt.
   ─────────────────────────────────────────────────────────────────
   ^^ BARE MINIMUM PATH (zero Python).  If your future system has a
      working CPU and a kernel that can load a static binary, the
@@ -96,7 +109,7 @@ and the operator would get nothing.
 
 LIST AVAILABLE SNAPSHOTS
 
-  /mnt/bin/<arch>/lcsas-restore \
+  /mnt/recovery/bin/<arch>/lcsas-restore \
       --repo /mnt/repo \
       --password-file /tmp/pw \
       --list-snapshots
@@ -239,9 +252,11 @@ normal cascade:
          /mnt/recovery/bin/<arch>/lcsas-keyshare \
              card1.txt card2.txt > repo.key
 
-     <arch> is x86_64 for most PCs; aarch64 / armv7 for ARM
-     machines; x86_64-macos / aarch64-macos for macOS.  Windows
-     ships lcsas-keyshare.exe -- see RECOVER_WINDOWS.txt,
+     <arch> is your machine's target dir under recovery/bin/ -- run
+     `ls /mnt/recovery/bin/` to see the exact name (the burned dirs use
+     rust triples, e.g. x86_64-unknown-linux-musl for a 64-bit PC,
+     aarch64-unknown-linux-musl for 64-bit ARM).  Windows ships
+     lcsas-keyshare.exe -- see RECOVER_WINDOWS.txt,
      "KEY SHARES (SPLIT PASSWORDS)".
 
   3. If the binary will not run on your host, use the bundled
@@ -286,7 +301,7 @@ EXIT CODES
     1  -- generic failure (no repo found, unsupported OS/arch, etc.)
     2  -- usage error
     64 -- no recovery method available
-Exit 64 means every tier (1, 2, AND 3) was missing or unrunnable on
+Exit 64 means every tier (1, 2, 2b, AND 3) was missing or unrunnable on
 the current meta disc, before any password was prompted.
 This is most likely on a corrupted meta disc (all binaries lost to
 bit-rot) or a wrong-arch host (e.g. an aarch64 meta disc booted on
