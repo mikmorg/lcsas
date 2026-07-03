@@ -47,6 +47,33 @@ TIMEOUT = 120
 _CC = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
 _WINE = shutil.which("wine")
 
+
+@pytest.fixture(scope="module", autouse=True)
+def _require_working_wineboot() -> None:
+    """Skip these tests if wineboot cannot initialise a fresh prefix within a
+    bounded time.  On some hosts wineboot's first-run init hangs indefinitely
+    (issue #390); each per-test wine call then burns the full TIMEOUT, wedging
+    `make gate`'s shell-coverage phase.  A single bounded probe fails fast to a
+    clean skip instead of grinding.
+    """
+    if not _WINE:
+        return  # the module skipif already handles a missing wine
+    import tempfile
+    with tempfile.TemporaryDirectory() as _td:
+        env = {**os.environ, "WINEDEBUG": "-all",
+               "WINEPREFIX": _td, "DISPLAY": ""}
+        try:
+            subprocess.run(["wine", "wineboot", "--init"],
+                           env=env, capture_output=True, timeout=90)
+        except subprocess.TimeoutExpired:
+            pytest.skip(
+                "wineboot did not initialise a fresh prefix within 90s on "
+                "this host (issue #390) — skipping restore.bat wine tests"
+            )
+        except OSError:
+            pytest.skip("wine is not runnable on this host")
+
+
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
