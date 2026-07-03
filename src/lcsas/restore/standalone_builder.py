@@ -78,6 +78,16 @@ def build_standalone() -> str:
         fallback_src,
         flags=re.MULTILINE,
     )
+    # The pure-zstd ZstdError import (used to classify a corrupt zstd
+    # frame as a skippable bad blob, #374) is likewise rebound to the
+    # inlined class name.
+    fallback_src = re.sub(
+        r"^(\s*)from lcsas\.restore\._zstd_pure import "
+        r"ZstdError as (\w+)$",
+        r"\1\2 = ZstdError",
+        fallback_src,
+        flags=re.MULTILINE,
+    )
     fallback_lines = _strip_header(fallback_src)
     fallback_body = "\n".join(fallback_lines)
 

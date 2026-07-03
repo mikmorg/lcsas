@@ -1766,6 +1766,49 @@ class TestReadBlobErrorPaths:
         result = restorer._read_blob(blob_id)
         assert result == original_content
 
+    def test_read_blob_corrupt_zstd_frame_raises_integrity_not_zstderror(
+        self, tmp_path
+    ):
+        """#374: a blob that decrypts (MAC-valid) but whose zstd frame is
+        corrupt must surface as IntegrityError -- a 'bad blob' the tolerant
+        tier-3 restore records and skips -- NOT a raw ZstdError that escapes
+        and aborts the whole last-resort restore."""
+        from lcsas.restore.restic_fallback import (
+            _ZSTD_MAGIC,
+            BlobLocation,
+            IntegrityError,
+        )
+
+        repo = _build_test_repo(tmp_path)
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer._ensure_loaded()
+
+        # Valid zstd magic + garbage body → decompression raises, whichever
+        # decoder (native or pure) is active.  MAC-valid: we encrypt it.
+        corrupt = _ZSTD_MAGIC + b"\xff" * 64
+        blob_id = hashlib.sha256(b"intended-original-content").hexdigest()
+        encrypted = _encrypt_data(
+            MASTER_ENCRYPT, MASTER_MAC_K, MASTER_MAC_R, corrupt
+        )
+        pack_id = "d" * 64
+        pack_dir = repo / "data" / pack_id[:2]
+        pack_dir.mkdir(parents=True, exist_ok=True)
+        (pack_dir / pack_id).write_bytes(encrypted)
+
+        assert restorer._blob_index is not None
+        restorer._blob_index[blob_id] = BlobLocation(
+            pack_id=pack_id,
+            offset=0,
+            length=len(encrypted),
+            blob_type="data",
+            uncompressed_length=100,  # index says compressed → decompress it
+        )
+
+        # IntegrityError (not ZstdError): if a raw ZstdError escaped, this
+        # pytest.raises would not match and the test would error out.
+        with pytest.raises(IntegrityError):
+            restorer._read_blob(blob_id)
+
     def test_uncompressed_blob_with_zstd_magic_roundtrips(self, tmp_path):
         """RST-02: a blob whose *content* is a zstd frame, stored uncompressed
         (index entry has no uncompressed_length), must be returned verbatim —

@@ -97,6 +97,11 @@ try:
             # sparse database backups with long runs of zeros).
             return dctx.decompress(data, max_output_size=max(len(data) * 100, 64 * 1024 * 1024))  # type: ignore[no-any-return,unused-ignore]
 
+    # Exception(s) _decompress_zstd raises on a corrupt zstd frame; wrapped
+    # into IntegrityError at the call site so tolerant restore skips the
+    # blob instead of aborting (#374).
+    _ZSTD_ERRORS: tuple[type[BaseException], ...] = (_zstd.ZstdError,)
+
     _HAS_ZSTD = True
 except ImportError:
     # No native zstandard: fall back to the vendored pure-Python zstd
@@ -104,7 +109,11 @@ except ImportError:
     # of zstd-compressed (rustic v2 default) repos still works on any
     # architecture / CPython minor with nothing pre-installed.  This is the
     # whole point of tier 3 — see RST-04.
+    from lcsas.restore._zstd_pure import ZstdError as _PureZstdError
     from lcsas.restore._zstd_pure import decompress as _pure_zstd_decompress
+
+    # The pure decoder raises its own ZstdError on a corrupt frame (#374).
+    _ZSTD_ERRORS = (_PureZstdError,)
 
     _HAS_ZSTD = False
     _warned_pure_zstd = False
@@ -1052,20 +1061,31 @@ class PurePythonRestorer:
         # incompressible blobs (e.g. an archived `.zst` file) UNcompressed,
         # and those can legitimately begin with the zstd magic — so never
         # infer compression from leading bytes when the index has spoken.
-        if loc.uncompressed_length is not None:
-            plaintext = _decompress_zstd(
-                plaintext, max_output_size=loc.uncompressed_length
-            )
-        elif (
-            plaintext[:4] == _ZSTD_MAGIC
-            and hashlib.sha256(plaintext).hexdigest() != blob_id
-        ):
-            # Index silent (v1 repo / legacy index): the raw SHA-256 is
-            # authoritative.  Only decompress if the raw bytes do not
-            # already hash to the blob id.
-            plaintext = _decompress_zstd(
-                plaintext, max_output_size=len(plaintext) * 20
-            )
+        try:
+            if loc.uncompressed_length is not None:
+                plaintext = _decompress_zstd(
+                    plaintext, max_output_size=loc.uncompressed_length
+                )
+            elif (
+                plaintext[:4] == _ZSTD_MAGIC
+                and hashlib.sha256(plaintext).hexdigest() != blob_id
+            ):
+                # Index silent (v1 repo / legacy index): the raw SHA-256 is
+                # authoritative.  Only decompress if the raw bytes do not
+                # already hash to the blob id.
+                plaintext = _decompress_zstd(
+                    plaintext, max_output_size=len(plaintext) * 20
+                )
+        except _ZSTD_ERRORS as exc:
+            # A blob that decrypts (MAC-valid) but whose zstd frame is
+            # corrupt must count as a BAD BLOB, not an abort: raise
+            # IntegrityError so tolerant tier-3 restore records the failure
+            # and continues, honouring the 'one bad blob never aborts'
+            # contract (#374).  Strict mode still surfaces it (as an
+            # IntegrityError) exactly like a hash mismatch.
+            raise IntegrityError(
+                f"Blob {blob_id} failed zstd decompression: {exc}"
+            ) from exc
 
         # Verify content hash
         actual_hash = hashlib.sha256(plaintext).hexdigest()
