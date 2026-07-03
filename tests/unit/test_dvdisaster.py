@@ -2,16 +2,57 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from lcsas.ecc.dvdisaster import (
+    MIN_EFFECTIVE_REDUNDANCY_PCT,
     RS03_MEDIUM_LADDER_BYTES,
     LcsasEccRunner,
     SubprocessDVDisasterRunner,
+    _log_effective_redundancy,
     smallest_fitting_medium_bytes,
 )
+
+
+class TestEffectiveRedundancyWarning:
+    """Issue #371: a volume packed nearly to the medium ceiling gets
+    almost no RS03 parity.  That dilution must surface as a WARNING, not
+    a buried INFO line."""
+
+    def test_thin_redundancy_warns(self, caplog):
+        # padded only 1% above the data → below the floor.
+        iso = 100_000_000
+        with caplog.at_level(logging.INFO, logger="lcsas.ecc.dvdisaster"):
+            _log_effective_redundancy(int(iso * 1.01), iso)
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert warnings, "thin redundancy did not warn"
+        assert "thin bit-rot protection" in warnings[0].getMessage()
+
+    def test_adequate_redundancy_is_info_only(self, caplog):
+        iso = 100_000_000
+        pct = MIN_EFFECTIVE_REDUNDANCY_PCT + 10
+        with caplog.at_level(logging.INFO, logger="lcsas.ecc.dvdisaster"):
+            _log_effective_redundancy(int(iso * (1 + pct / 100)), iso)
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
+        infos = [r for r in caplog.records if r.levelname == "INFO"]
+        assert infos and "effective redundancy" in infos[0].getMessage()
+
+    def test_floor_boundary_at_exactly_floor_is_info(self, caplog):
+        iso = 100_000_000
+        padded = int(iso * (1 + MIN_EFFECTIVE_REDUNDANCY_PCT / 100))
+        with caplog.at_level(logging.INFO, logger="lcsas.ecc.dvdisaster"):
+            _log_effective_redundancy(padded, iso)
+        # exactly-at-floor is acceptable (>= floor) → INFO, not WARNING.
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+    def test_lcsas_ecc_tool_label_in_message(self, caplog):
+        iso = 100_000_000
+        with caplog.at_level(logging.INFO, logger="lcsas.ecc.dvdisaster"):
+            _log_effective_redundancy(int(iso * 1.20), iso, tool=" (lcsas-ecc)")
+        assert any("(lcsas-ecc)" in r.getMessage() for r in caplog.records)
 
 
 class TestDVDisasterMocked:
