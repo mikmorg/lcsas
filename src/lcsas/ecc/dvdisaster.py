@@ -12,6 +12,40 @@ from lcsas.utils.subprocess import SubprocessRunnerBase
 
 _logger = logging.getLogger(__name__)
 
+# Below this effective redundancy an RS03-augmented image carries too
+# little parity to repair meaningful bit-rot, so we warn LOUDLY instead
+# of burying it in an INFO line (issue #371).  RS03 augmented images
+# cannot take a redundancy setting -- the padding to the next medium size
+# IS the redundancy -- so a volume packed nearly to the medium ceiling
+# ships with almost no protection.  The only remedy is to leave headroom
+# (pack fewer packs per volume) or move up to a larger medium.
+MIN_EFFECTIVE_REDUNDANCY_PCT: float = 5.0
+
+
+def _log_effective_redundancy(
+    padded_size: int, iso_size: int, tool: str = ""
+) -> None:
+    """Report post-augment effective redundancy; warn when it is thin."""
+    prefix = f"RS03 ECC{tool}"
+    effective_pct = (
+        (padded_size - iso_size) / iso_size * 100 if iso_size else 0.0
+    )
+    if effective_pct < MIN_EFFECTIVE_REDUNDANCY_PCT:
+        _logger.warning(
+            "%s: image padded to %s bytes but only ~%.1f%% effective "
+            "redundancy (below the %.0f%% floor) -- this disc has thin "
+            "bit-rot protection. Pack fewer packs per volume to leave "
+            "headroom below the medium size, or use a larger medium.",
+            prefix, f"{padded_size:,}", effective_pct,
+            MIN_EFFECTIVE_REDUNDANCY_PCT,
+        )
+    else:
+        _logger.info(
+            "%s: image padded to %s bytes (~%.0f%% effective redundancy)",
+            prefix, f"{padded_size:,}", effective_pct,
+        )
+
+
 # RS03 augmented images cannot take a redundancy setting; dvdisaster pads
 # the image up to the smallest fitting medium and fills the slack with
 # parity ("Setting the redundancy is not possible due to constraints in
@@ -145,13 +179,7 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
             raise
 
         padded_size = iso_path.stat().st_size
-        effective_pct = (
-            (padded_size - iso_size) / iso_size * 100 if iso_size else 0.0
-        )
-        _logger.info(
-            "RS03 ECC: image padded to %s bytes (~%.0f%% effective redundancy)",
-            f"{padded_size:,}", effective_pct,
-        )
+        _log_effective_redundancy(padded_size, iso_size)
 
     def verify_iso(
         self,
@@ -307,14 +335,7 @@ class LcsasEccRunner(SubprocessRunnerBase):
             raise
 
         final_size = iso_path.stat().st_size
-        effective_pct = (
-            (final_size - iso_size) / iso_size * 100 if iso_size else 0.0
-        )
-        _logger.info(
-            "RS03 ECC (lcsas-ecc): image padded to %s bytes "
-            "(~%.0f%% effective redundancy)",
-            f"{final_size:,}", effective_pct,
-        )
+        _log_effective_redundancy(final_size, iso_size, tool=" (lcsas-ecc)")
 
     def verify_iso(
         self,
