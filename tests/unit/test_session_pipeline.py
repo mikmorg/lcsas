@@ -1075,6 +1075,48 @@ class TestCleanSession:
         assert get_session(conn, result.session_id).status == "CLEANED"
         assert not result.staging_dir.exists()
 
+    def test_clean_session_refuses_burned_without_verified_copy(self, env):
+        """#369: a BURNED volume whose post-burn verification failed (no
+        volume_copies row, so no durable disc) must count as strandable --
+        clean refuses without --force, and --force reclaims its packs."""
+        conn = env["conn"]
+        orch = env["orch"]
+        packs = env["packs"]
+
+        result = orch.stage()
+        # Simulate a burned-but-verify-failed session: every volume is
+        # BURNED with NO copy row (none STAGING/BURNING), isolating the
+        # BURNED-no-copy case the old guard missed.
+        for m in result.manifests:
+            conn.execute(
+                "UPDATE volumes SET status='BURNED' WHERE volume_id=?",
+                (m.volume_id,),
+            )
+        conn.commit()
+        for m in result.manifests:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM volume_copies WHERE volume_id=?",
+                (m.volume_id,),
+            ).fetchone()[0] == 0
+
+        # Without --force the clean must REFUSE (packs would be stranded).
+        with pytest.raises(ValueError, match="no verified disc copy"):
+            orch.clean_session(result.session_id)
+        for m in result.manifests:
+            assert get_volume_by_id(conn, m.volume_id) is not None
+
+        # --force reclaims the strandable volumes and returns their packs.
+        orch.clean_session(result.session_id, force=True)
+        unarchived = {p.sha256 for p in get_unarchived_packs(conn)}
+        assert unarchived == {p.sha256 for p in packs}
+        vids = [m.volume_id for m in result.manifests]
+        placeholders = ",".join("?" for _ in vids)
+        remaining = conn.execute(
+            f"SELECT COUNT(*) FROM volumes WHERE volume_id IN ({placeholders})",
+            vids,
+        ).fetchone()[0]
+        assert remaining == 0
+
     def test_receipts_survive_clean_session(self, env):
         """BURN-08: durable receipts live beside the catalog DB and
         survive `stage --clean`.
