@@ -820,6 +820,16 @@ EOF
         # Multi-tenant archive.  Honour LCSAS_REPO if it matches a
         # candidate's basename (`alpha`, `bravo`, ...); otherwise
         # prompt the operator to pick one.
+        #
+        # REPO_CANDIDATES is newline-separated and a repo path can contain
+        # spaces (e.g. a disc auto-mounted at /media/user/DISC LABEL 1), so
+        # split ONLY on newlines here — default IFS word-splitting would
+        # shatter such a path into bogus candidates (issue #364).  The
+        # `IFS= read` below is a command-scoped assignment and does not
+        # disturb this block-level IFS.
+        _saved_ifs=$IFS
+        IFS='
+'
         REPO_NAMES=""
         for cand in $REPO_CANDIDATES; do
             REPO_NAMES="$REPO_NAMES $(basename "$cand")"
@@ -870,11 +880,13 @@ EOF
                 done
             fi
             if [ -z "$REPO" ]; then
+                IFS=$_saved_ifs
                 printf 'no repository named %s; choose from: %s\n' \
                        "$repo_choice" "$REPO_NAMES" >&2
                 exit 1
             fi
         fi
+        IFS=$_saved_ifs
         ;;
 esac
 printf '[restore.sh] using repository %s\n' "$REPO" >&2
