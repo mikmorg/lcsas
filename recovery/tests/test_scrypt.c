@@ -71,6 +71,27 @@ int main(void)
                     "c727afb94a83ee6d8360cbdfa2cc0640", 64);
     }
 
+    /* Issue #362: hostile scrypt cost parameters from a tampered key
+     * file must be REJECTED (rc == -1), never overflow 128*r*N / 128*r*p
+     * into a small malloc followed by a huge out-of-bounds write.  Each
+     * value below passes the power-of-two / nonzero checks yet overflows
+     * the size math on a 32-bit unsigned long. */
+    {
+        unsigned char dk[64];
+        if (lcsas_scrypt((unsigned char *)"", 0, (unsigned char *)"", 0,
+                         (1UL << 30), 8, 1, dk, 64) != -1) {
+            fprintf(stderr, "FAIL scrypt accepted overflowing N\n"); fails++;
+        }
+        if (lcsas_scrypt((unsigned char *)"", 0, (unsigned char *)"", 0,
+                         1024, (1UL << 25), 1, dk, 64) != -1) {
+            fprintf(stderr, "FAIL scrypt accepted overflowing r\n"); fails++;
+        }
+        if (lcsas_scrypt((unsigned char *)"", 0, (unsigned char *)"", 0,
+                         1024, 8, (1UL << 30), dk, 64) != -1) {
+            fprintf(stderr, "FAIL scrypt accepted overflowing p\n"); fails++;
+        }
+    }
+
     if (fails == 0) printf("test_scrypt: OK\n");
     return fails ? 1 : 0;
 }
