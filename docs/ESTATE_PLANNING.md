@@ -192,12 +192,13 @@ To access the files on these discs:
 2. Find the META disc in this binder.  It contains all the software
    needed to restore the files.
 
-3. Insert the META disc into a computer running Linux.  Open the
-   file called START_HERE.txt — it has step-by-step instructions.
+3. Insert the META disc into any computer — Windows, macOS, or Linux
+   all work.  Open the file called START_HERE.txt — it has
+   step-by-step instructions for each system.
 
-4. For a complete walkthrough (including how to get Linux if you
-   don't have it), see RECOVERY_GUIDE.md on the META disc, or the
-   printed copy in this binder.
+4. For a complete walkthrough (including how to boot a free Linux USB
+   stick if that turns out to be easiest), see RECOVERY_GUIDE.md on
+   the META disc, or the printed copy in this binder.
 
 5. If you are not comfortable doing this yourself, take ALL the discs
    AND the encryption key to a computer professional.  The instructions

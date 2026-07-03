@@ -456,7 +456,7 @@ The **meta-volume** solves this by bundling *everything* needed for restore onto
 
 | Path | Contents |
 |------|----------|
-| `tools/bin/<target>/` | Per-platform tier-1 (`lcsas-restore`) + tier-2 (`rustic-static`) binaries for six targets: Linux x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows x86_64-gnu.  See [`docs/development/cross-platform-meta-rfc.md`](docs/development/cross-platform-meta-rfc.md). |
+| `tools/bin/<target>/` | Per-platform tier-1 (`lcsas-restore`) + tier-2 (`rustic-static`) binaries for six targets: Linux x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows x86_64-gnu.  See [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md). |
 | `tools/lib/` | Shared libraries for the bundled CPython interpreter (tier-3 fallback) |
 | `lcsas/src/` | Complete LCSAS source code (zero pip dependencies) |
 | `recovery/docs/` | On-disc operator manual (`RECOVER.txt`, `TIERS.txt`, `ENV_VARS.txt`, …) |
@@ -541,7 +541,7 @@ sudo mount -o loop lcsas_data_0001.iso /mnt
 
 The meta-volume can carry prebuilt recovery binaries for six target
 platforms.  The supported matrix (cross-platform meta-volume work
-landed in Phase 21.1 — see [`docs/development/cross-platform-meta-rfc.md`](docs/development/cross-platform-meta-rfc.md)):
+landed in Phase 21.1 — see [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md)):
 
 | Target | OS | Notes |
 |---|---|---|
@@ -632,14 +632,17 @@ must still notarize or codesign the binary themselves if they
 want macOS Gatekeeper to bless it; unsigned binaries still run
 via Finder's "Open anyway" path.
 
-On those still-pending targets the cascade falls through tier 1
-(missing) → tier 2 (works) so restore succeeds; you just lose the
-"C89 binary depends only on libc + kernel" durability layer.
+All six approved targets now ship a tier-1 `lcsas-restore` binary
+(Phase 21.12), so the C89 durability layer is present on each.  For a
+target that is **not** bundled (the coverage gaps below), the cascade
+falls through tier 1 (missing) → tier 2 (works) so restore still
+succeeds; you just lose the "C89 binary depends only on libc + kernel"
+durability layer.
 
 ### Decisions about coverage gaps
 
 Targets **not** currently bundled, and the rationale (full discussion
-in [`docs/development/cross-platform-meta-rfc.md`](docs/development/cross-platform-meta-rfc.md) §6 Q1):
+in [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md) §6 Q1):
 
 - **RISC-V** — upstream rustic does not yet ship a release artifact
   for `riscv64gc-unknown-linux-gnu`; we don't cross-compile ourselves.
