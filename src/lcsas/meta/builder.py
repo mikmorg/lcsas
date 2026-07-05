@@ -1785,7 +1785,30 @@ class MetaVolumeBuilder:
                     missing.append(rel)
             elif not target.is_file():
                 missing.append(rel)
+        # Per-repo metadata keys (issue #367): each tenant staged under
+        # metadata/<repo>/ must carry its keys/ subtree — without a repo's
+        # key its packs cannot be decrypted, so a missing keys/ is
+        # restore-blocking, not a hedge.
+        metadata_root = self._output / "metadata"
+        if metadata_root.is_dir():
+            for repo_dir in sorted(metadata_root.iterdir()):
+                if repo_dir.is_dir() and not (repo_dir / "keys").is_dir():
+                    missing.append(f"metadata/{repo_dir.name}/keys")
         return missing
+
+    def missing_recommended_contents(self) -> list[str]:
+        """Recommended-but-not-required paths absent from the built output.
+
+        Issue #367: stock restic (the tier-2b "standard tools" hedge) and
+        lcsas-keyshare (the SLIP-0039 combiner).  Absence WARNS but does not
+        fail the completeness gate — a disc carrying the tier-1 lcsas-restore
+        and the tier-3 CPython path is still fully recoverable without them.
+        """
+        from lcsas.meta.required_contents import recommended_meta_paths
+        return [
+            rel for rel in recommended_meta_paths()
+            if not (self._output / rel).is_file()
+        ]
 
     # ── Tool bundling ────────────────────────────────────────────
 

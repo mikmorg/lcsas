@@ -3304,6 +3304,20 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
             )
             return 1
 
+    # Issue #367: recommended-contents advisory (WARN only).  A meta-volume
+    # missing the tier-2b restic hedge or lcsas-keyshare is still
+    # recoverable via tier-1 + tier-3, so warn rather than fail — and stock
+    # restic comes from the upstream cache, so it is legitimately absent on
+    # a cold-cache build.
+    recommended_missing = builder.missing_recommended_contents()
+    if recommended_missing:
+        logger.warning(
+            "Meta-volume is missing %d RECOMMENDED artifact(s) (still "
+            "recoverable without them — stock restic tier-2b hedge and/or "
+            "lcsas-keyshare): %s",
+            len(recommended_missing), ", ".join(recommended_missing),
+        )
+
     logger.info(f"Meta-volume built successfully at {output}")
     logger.info("Contents:")
     logger.info("  tools/          Portable rustic, xorriso, python3 + libraries")
