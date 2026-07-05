@@ -993,6 +993,16 @@ then
     exit "$EXIT_NO_RECOVERY_BIN"
 fi
 
+# A single newline, used as the field separator for the tier-invocation
+# argument lists below.  restore.sh may run against discs auto-mounted at
+# paths containing spaces (e.g. /media/user/DISC LABEL 1), so the flag
+# lists (--pack-search / --catalog / --meta-disc / --mount-point) are
+# stored one token per line and expanded with `IFS=$NL; set -- $LIST` at
+# each call site — never as space-joined strings that word-split a spaced
+# path (issue #364).
+NL='
+'
+
 # Optional --catalog if a catalog.db is present somewhere reachable.
 # Used for human-readable volume hints in prompts, and by the free-
 # space preflight below [FMA-09] (which is why this block runs BEFORE
@@ -1038,7 +1048,7 @@ for parent in "/media/$(id -un 2>/dev/null)" /media /mnt; do
     done
 done
 if [ -n "$catalog_pick" ]; then
-    CATALOG_ARG="--catalog $catalog_pick"
+    CATALOG_ARG="--catalog$NL$catalog_pick"
     printf '[lcsas-restore] using catalog %s\n' "$catalog_pick" >&2
 fi
 
@@ -1340,11 +1350,11 @@ add_pack_search() {
     fi
     # Add it if data/ exists, or if the path itself contains pack files.
     if [ -d "$1/data" ]; then
-        PACK_SEARCH_ARGS="$PACK_SEARCH_ARGS --pack-search $1"
+        PACK_SEARCH_ARGS="$PACK_SEARCH_ARGS${PACK_SEARCH_ARGS:+$NL}--pack-search$NL$1"
         return
     fi
     if [ -d "$1/repo/data" ]; then
-        PACK_SEARCH_ARGS="$PACK_SEARCH_ARGS --pack-search $1/repo"
+        PACK_SEARCH_ARGS="$PACK_SEARCH_ARGS${PACK_SEARCH_ARGS:+$NL}--pack-search$NL$1/repo"
         return
     fi
 }
@@ -1400,7 +1410,7 @@ fi
 # from its own search list and drops cwd outside of it before prompts.
 META_DISC_ARG=""
 if [ -n "${META_DISC:-}" ]; then
-    META_DISC_ARG="--meta-disc $META_DISC"
+    META_DISC_ARG="--meta-disc$NL$META_DISC"
 fi
 
 # ── Session log helper ───────────────────────────────────────────
@@ -1415,12 +1425,12 @@ fi
 # swaps internally; that delta is not visible here.
 
 session_disc_count() {
-    # Count `--pack-search` flag tokens in $PACK_SEARCH_ARGS.  awk
-    # avoids `set -- $PACK_SEARCH_ARGS`, which would clobber the
-    # caller's positional parameters.
+    # Count `--pack-search` flag tokens in $PACK_SEARCH_ARGS.  The list is
+    # newline-delimited (one token per line), so each flag is its own line;
+    # awk on whole-line equality avoids `set -- $PACK_SEARCH_ARGS`, which
+    # would clobber the caller's positional parameters.
     printf '%s\n' "$PACK_SEARCH_ARGS" \
-        | awk '{ for (i = 1; i <= NF; i++) if ($i == "--pack-search") n++ }
-               END { print n + 0 }'
+        | awk '$0 == "--pack-search" { n++ } END { print n + 0 }'
 }
 
 write_session_log() {
@@ -1495,13 +1505,21 @@ elif [ -x "$RESTORE_BIN" ]; then
     # Drop cwd outside the meta-disc before exec, so the kernel does
     # not hold it through the exec barrier.
     [ -n "${META_DISC:-}" ] && cd / 2>/dev/null || true
+    # Build the pack-search / catalog / meta-disc flag list as positional
+    # params.  The lists are newline-delimited, so splitting on $NL (not
+    # the default IFS) keeps a spaced path — e.g. a disc mounted at
+    # /media/user/DISC LABEL 1 — as a single argument (issue #364).
+    _oifs=$IFS; IFS=$NL
+    # shellcheck disable=SC2086
+    set -- $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG
+    IFS=$_oifs
     if [ "$FALLBACK" = "1" ]; then
         # `set -e` would kill the script on any tier-1 non-zero; the
         # `|| true` lets us capture $? and decide whether to advance.
         tier1_rc=0
         "$RESTORE_BIN" --repo "$REPO" --password-file "$PWFILE" \
                        --target "$TARGET_DIR" --snapshot "$SNAP" \
-                       $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG \
+                       "$@" \
                        || tier1_rc=$?
         if [ $tier1_rc -eq 0 ]; then write_session_log 1; exit 0; fi
         printf '[tier 1] exited %d, falling through to tier 2\n' \
@@ -1515,7 +1533,7 @@ elif [ -x "$RESTORE_BIN" ]; then
         _tier1_rc=0
         "$RESTORE_BIN" --repo "$REPO" --password-file "$PWFILE" \
                        --target "$TARGET_DIR" --snapshot "$SNAP" \
-                       $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG \
+                       "$@" \
                        || _tier1_rc=$?
         [ "$_tier1_rc" -eq 0 ] && write_session_log 1
         exit "$_tier1_rc"
@@ -1666,7 +1684,7 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         # The non-"latest" sentinel is passed straight through.
         TIER3_SNAP_ARGS=""
         if [ -n "$SNAP" ] && [ "$SNAP" != "latest" ]; then
-            TIER3_SNAP_ARGS="--snapshot $SNAP"
+            TIER3_SNAP_ARGS="--snapshot$NL$SNAP"
         fi
         # Issue #234 -- pass every currently-known data-disc root AND
         # every mount-parent dir as --mount-point so tier 3 can drive
@@ -1683,20 +1701,26 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         # rescan finds packs at the canonical mount point after each
         # insert.  Tier 3 probes both data/<XX>/<hex> and <XX>/<hex>
         # layouts under every mount point.
+        # TIER3_MOUNT_ARGS is newline-delimited like PACK_SEARCH_ARGS; the
+        # flag token lives on its own line, so rewrite the whole
+        # `--pack-search` line to `--mount-point` (a value line with a
+        # spaced path is left untouched -- issue #364).
         TIER3_MOUNT_ARGS=""
         if [ -n "$PACK_SEARCH_ARGS" ]; then
             TIER3_MOUNT_ARGS="$(printf '%s\n' "$PACK_SEARCH_ARGS" \
-                | sed 's/--pack-search /--mount-point /g')"
+                | sed 's/^--pack-search$/--mount-point/')"
         fi
         OLD_IFS3="$IFS"; IFS=":"
         for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
             IFS="$OLD_IFS3"
             [ -n "$parent" ] || { IFS=":"; continue; }
-            # Skip if we already covered this via PACK_SEARCH_ARGS.
-            case " $TIER3_MOUNT_ARGS " in
-                *" --mount-point $parent "*) IFS=":"; continue ;;
+            # Skip if we already covered this via PACK_SEARCH_ARGS.  Match a
+            # whole newline-delimited value line so a spaced parent still
+            # compares exactly.
+            case "$NL$TIER3_MOUNT_ARGS$NL" in
+                *"$NL$parent$NL"*) IFS=":"; continue ;;
             esac
-            TIER3_MOUNT_ARGS="$TIER3_MOUNT_ARGS --mount-point $parent"
+            TIER3_MOUNT_ARGS="$TIER3_MOUNT_ARGS${TIER3_MOUNT_ARGS:+$NL}--mount-point$NL$parent"
             IFS=":"
         done
         IFS="$OLD_IFS3"
@@ -1783,6 +1807,14 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         #    on stdin in real time; `tee` only sits in front of stderr.
         TIER3_ERR=$(mktemp /tmp/lcsas-tier3-err.XXXXXX)
         TIER3_RC_FILE=$(mktemp /tmp/lcsas-tier3-rc.XXXXXX)
+        # Build the catalog / mount-point / snapshot flag list as positional
+        # params, splitting the newline-delimited lists so spaced paths
+        # survive intact (issue #364).  Done before the redirect block so
+        # "$@" can be used inside it.
+        _oifs=$IFS; IFS=$NL
+        # shellcheck disable=SC2086
+        set -- $CATALOG_ARG $TIER3_MOUNT_ARGS $TIER3_SNAP_ARGS
+        IFS=$_oifs
         # `set -e` would abort the LHS subshell of the pipe the moment
         # Python exits non-zero, losing the rc capture.  The
         # `&& echo 0 || echo $?` form converts both outcomes into a
@@ -1796,9 +1828,7 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
                    --password-file "$PWFILE" \
                    --target "$TARGET_DIR" \
                    --interactive on \
-                   $CATALOG_ARG \
-                   $TIER3_MOUNT_ARGS \
-                   $TIER3_SNAP_ARGS \
+                   "$@" \
                 && echo 0 > "$TIER3_RC_FILE" \
                 || echo $? > "$TIER3_RC_FILE"; \
             } 2>&1 1>&3 3>&- | tee "$TIER3_ERR" >&2

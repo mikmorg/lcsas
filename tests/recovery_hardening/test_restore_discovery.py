@@ -249,3 +249,28 @@ def test_multi_tenant_repo_path_with_spaces_resolves(tmp_path: Path) -> None:
         f"a spaced repo path must resolve intact; got "
         f"{_arg_value(args, '--repo')!r} (word-split candidate list?)"
     )
+
+
+def test_pack_search_value_with_spaces_survives(tmp_path: Path) -> None:
+    """#364: a data disc mounted at a path containing spaces produces a
+    --pack-search VALUE with spaces; it must reach the tier-1 binary as a
+    single argument, not word-split into bogus fragments."""
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    _install_stub_binary(recovery, HOST_TARGET, "lcsas-restore")
+    _make_repo_skeleton(recovery / "metadata", "alpha")
+
+    # A data disc auto-mounted under a spaced path (e.g. /media/user/...).
+    mount_parent = tmp_path / "mnt"
+    disc = mount_parent / "DISC LABEL 1"
+    (disc / "data").mkdir(parents=True)
+    target = tmp_path / "restored"
+
+    res = _run_restore(recovery, target,
+                       env={"LCSAS_MOUNT_DIRS": str(mount_parent)})
+    assert res.returncode == 0, res.stderr
+    args = _stub_args(res.stdout)
+    assert _arg_value(args, "--pack-search") == str(disc), (
+        f"spaced --pack-search value must survive intact; got "
+        f"{_arg_value(args, '--pack-search')!r}; all args: {args}"
+    )
