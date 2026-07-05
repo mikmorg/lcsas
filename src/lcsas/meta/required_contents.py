@@ -27,6 +27,14 @@ approved rust triples (``docs/CROSS_PLATFORM_META_RFC.md`` §6 Q6) plus the
 root-level restore artifacts.  Older meta discs that predate this contract
 will (correctly) report ABSENT for targets they never shipped — that is
 the desired honest signal, not a false alarm.
+
+Two tiers (issue #367):
+
+* **Required** (``required_meta_paths`` + per-repo ``metadata/<repo>/keys``)
+  — restore-BLOCKING.  Missing any of these fails ``--require-complete``.
+* **Recommended** (``recommended_meta_paths``: stock restic tier-2b hedge,
+  lcsas-keyshare) — WARNS but does not fail: a disc with tier-1 + tier-3 is
+  still recoverable, and stock restic legitimately absents on a cold cache.
 """
 
 from __future__ import annotations
@@ -108,6 +116,47 @@ def required_meta_paths() -> list[str]:
     for target in APPROVED_TARGETS:
         paths.extend(required_target_paths(target))
     paths.extend(_ROOT_ARTIFACTS)
+    return paths
+
+
+def _restic_name(target: str) -> str:
+    return "restic.exe" if target in _WINDOWS_TARGETS else "restic"
+
+
+def _keyshare_name(target: str) -> str:
+    return "lcsas-keyshare.exe" if target in _WINDOWS_TARGETS else "lcsas-keyshare"
+
+
+def recommended_target_paths(target: str) -> list[str]:
+    """Relative paths a complete meta-volume is RECOMMENDED to bundle for
+    one target (issue #367).
+
+    Unlike ``required_target_paths`` these are hedges, not restore-blockers:
+    a disc with the tier-1 ``lcsas-restore`` and the tier-3 CPython path is
+    still fully recoverable without them, so their absence WARNS rather than
+    fails the completeness gate.
+
+    * stock ``restic`` — the tier-2b "standard tools" hedge, sourced from the
+      upstream cache (``recovery/UPSTREAM.sha256``), so it is legitimately
+      absent on a cold-cache build.
+    * ``lcsas-keyshare`` — the SLIP-0039 combiner, only needed to reconstruct
+      a K-of-N split repo password.
+    """
+    return [
+        f"recovery/bin/{target}/{_restic_name(target)}",
+        f"recovery/bin/{target}/{_keyshare_name(target)}",
+    ]
+
+
+def recommended_meta_paths() -> list[str]:
+    """Every relative path a complete meta-volume is recommended to bundle.
+
+    Absence WARNS but does not fail ``--require-complete`` (see
+    ``recommended_target_paths``).
+    """
+    paths: list[str] = []
+    for target in APPROVED_TARGETS:
+        paths.extend(recommended_target_paths(target))
     return paths
 
 
