@@ -2125,6 +2125,48 @@ class MetaVolumeBuilder:
         # the orchestrator level rather than inside either bundler.
         self._regenerate_recovery_manifest(dst)
 
+    def _verify_cached_upstream_archives(self, cache_root: Path) -> None:
+        """Re-verify every PRESENT cached upstream archive against
+        recovery/UPSTREAM.sha256 before staging (issue #372).
+
+        fetch_upstream.sh verifies on download, but a cache entry can rot or
+        be tampered with between fetch and burn.  Raise MetaBuildError on the
+        first hash mismatch so a corrupted rustic/restic/python never reaches
+        a burned disc.  Absent archives are skipped — a partial cache is a
+        legitimate single-arch build, and the per-target staging loop already
+        skips absent targets — so this fails only on genuine corruption.
+        """
+        import hashlib
+        manifest = self._recovery_dir / "UPSTREAM.sha256"
+        if not manifest.is_file():
+            return
+        mismatches: list[str] = []
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            expected, relpath = parts[0], parts[1]
+            cached = cache_root / relpath
+            if not cached.is_file():
+                continue  # partial cache — the staging loop skips it too
+            digest = hashlib.sha256()
+            with cached.open("rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    digest.update(chunk)
+            got = digest.hexdigest()
+            if got != expected:
+                mismatches.append(f"{relpath}: expected {expected}, got {got}")
+        if mismatches:
+            raise MetaBuildError(
+                "cached upstream artifact(s) FAILED re-verification against "
+                "recovery/UPSTREAM.sha256 — refusing to bundle a possibly "
+                "corrupted or tampered cache (issue #372):\n  "
+                + "\n  ".join(mismatches)
+            )
+
     def _bundle_upstream_binaries(self, recovery_dst: Path) -> None:
         """Copy cached upstream rustic + python tarball contents per target.
 
@@ -2147,6 +2189,16 @@ class MetaVolumeBuilder:
 
         if not cache_root.is_dir():
             return  # No cache → meta build still works for single-arch path.
+
+        # Issue #372 — supply-chain: re-verify the cached upstream archives
+        # against recovery/UPSTREAM.sha256 BEFORE staging anything onto the
+        # disc.  fetch_upstream.sh verifies on download, but a cache entry
+        # could rot or be tampered with between fetch and burn; catch that
+        # here rather than shipping a corrupted rustic/restic/python.  Only
+        # PRESENT archives are checked (a partial cache is legitimate — the
+        # per-target loop below already skips absent targets), so this fails
+        # only on genuine corruption, never on incompleteness.
+        self._verify_cached_upstream_archives(cache_root)
 
         # Approved targets per docs/CROSS_PLATFORM_META_RFC.md §3.  We
         # iterate this list rather than `os.listdir(cache_root)` so a
