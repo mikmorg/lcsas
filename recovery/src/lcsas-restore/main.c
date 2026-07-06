@@ -61,6 +61,16 @@
 #  include <sys/resource.h>/* getrusage     — only used by stress bench */
 #endif
 
+/* Distinct exit status for "could not decrypt the repo keys with the given
+ * password" (issue #384).  A wrong password is TERMINAL: every recovery
+ * tier reads the same keys with the same password, so restore.sh /
+ * restore.bat treat this code as "stop, do not fall through to the next
+ * tier" — which both avoids a pointless retry and prevents a later tier
+ * from writing a partial tree before it too rejects the password.  77 is
+ * the BSD sysexits.h EX_NOPERM value, kept clear of the binary's other
+ * statuses (0 ok, 1 generic failure, 2 usage). */
+#define EXIT_WRONG_PASSWORD 77
+
 #define MAX_PACK_SEARCH 64
 #define MAX_MOUNT_PARENTS 32
 
@@ -362,6 +372,7 @@ main(int argc, char **argv)
     snprintf(keys_dir, sizeof keys_dir, "%s/keys", repo_path);
     if (lcsas_repo_load_keys_dir(keys_dir, pw, pw_len, &mk) != 0) {
         fprintf(stderr, "ERROR: could not decrypt any key file (wrong password?)\n");
+        rc = EXIT_WRONG_PASSWORD;   /* terminal — see restore.sh / .bat (#384) */
         goto out;
     }
     if (verbose) fprintf(stderr, "[lcsas-restore] master key loaded\n");

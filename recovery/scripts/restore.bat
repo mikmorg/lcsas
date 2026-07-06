@@ -486,6 +486,19 @@ if exist "%BIN%" (
         pause
         exit /b 0
     )
+    if !RC! equ 77 (
+        REM Wrong password / unreadable repo keys (issue #384).  Every tier
+        REM reads the SAME keys with the SAME password, so tier 2 would only
+        REM fail identically -- and leave a partial tree behind first.  Stop
+        REM here with a clear message instead of falling through.
+        echo.
+        echo ============================================================
+        echo  ERROR: could not decrypt the repository with that password.
+        echo  Check the password ^(and any split-key shares^) and re-run.
+        echo ============================================================
+        pause
+        exit /b 77
+    )
     echo [tier 1] failed with exit code !RC!; trying tier 2...
 )
 
