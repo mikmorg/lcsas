@@ -67,10 +67,13 @@ def _run(
 
 
 def test_wrong_password_fails_with_clear_error(tmp_path: Path) -> None:
-    """Closes #219.  Operator typo: the wrong password is supplied to a
-    valid fixture repo.  The binary must exit non-zero with a message
-    that points the operator at the password — not crash, and not
-    silently appear to succeed."""
+    """Closes #219 (+ #384 exit-code pin).  Operator typo: the wrong
+    password is supplied to a valid fixture repo.  The binary must exit
+    with the DISTINCT wrong-password status 77 (EXIT_WRONG_PASSWORD in
+    main.c) and a message that points the operator at the password — not
+    crash, and not silently appear to succeed.  restore.sh / restore.bat
+    key off 77 to stop instead of falling through to tier 2 (#384), so
+    this code is load-bearing script ABI, not just cosmetics."""
     bin_path = _find_bin()
     repo = _require_fixture()
     target = tmp_path / "restored"
@@ -90,10 +93,13 @@ def test_wrong_password_fails_with_clear_error(tmp_path: Path) -> None:
         f"binary crashed on wrong password (rc={res.returncode}); "
         f"stderr:\n{res.stderr}"
     )
-    # Must exit non-zero.
-    assert res.returncode != 0, (
-        f"binary appeared to succeed with the wrong password "
-        f"(rc=0); stderr:\n{res.stderr}"
+    # Must exit with the distinct wrong-password status (#384).  The
+    # restore scripts treat 77 as terminal (no tier-2 fallthrough), so a
+    # regression to a generic 1 would silently re-enable the partial-tree
+    # failure mode this pins down.
+    assert res.returncode == 77, (
+        f"expected EXIT_WRONG_PASSWORD (77), got rc={res.returncode}; "
+        f"stderr:\n{res.stderr}"
     )
     # Must name the cause.  The message in main.c is:
     #   "ERROR: could not decrypt any key file (wrong password?)"

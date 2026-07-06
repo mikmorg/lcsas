@@ -400,7 +400,12 @@ if not exist "%TARGET%" (
     exit /b 1
 )
 REM Mark this folder so a later resume into it does not re-prompt.
+REM +h matches restore.sh's dot-file convention and the docs' "hidden
+REM zero-byte marker" -- on Windows a leading dot alone hides nothing,
+REM and an unhidden marker reads as restored data to any "did the failed
+REM run leave files behind?" check -- issue #384 / windows-e2e.
 > "%MARKER%" echo. 2>nul
+attrib +h "%MARKER%" 2>nul
 
 REM ----- Password prompt --------------------------------------------
 REM CMD has no `read -s` equivalent, so the password is visible while
@@ -487,10 +492,12 @@ if exist "%BIN%" (
         exit /b 0
     )
     if !RC! equ 77 (
-        REM Wrong password / unreadable repo keys (issue #384).  Every tier
+        REM Wrong password / unreadable repo keys -- issue #384.  Every tier
         REM reads the SAME keys with the SAME password, so tier 2 would only
         REM fail identically -- and leave a partial tree behind first.  Stop
-        REM here with a clear message instead of falling through.
+        REM here with a clear message instead of falling through.  NB: no
+        REM parens in these comments -- an unescaped ^) inside a REM line
+        REM in a parenthesized block ends the block early in cmd.
         echo.
         echo ============================================================
         echo  ERROR: could not decrypt the repository with that password.

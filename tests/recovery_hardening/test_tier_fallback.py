@@ -380,6 +380,46 @@ def test_tier3_failure_stderr_replayed(tmp_path: Path) -> None:
     )
 
 
+def test_wrong_password_is_terminal_no_tier2_fallthrough(tmp_path: Path) -> None:
+    """Issue #384: tier-1 exit 77 (EXIT_WRONG_PASSWORD) is TERMINAL even
+    under LCSAS_TIER_FALLBACK=1.  Every tier reads the same keys with the
+    same password, so falling through to tier 2 can only fail identically
+    — and rustic writes a partial tree before it rejects the password.
+    The script must stop at tier 1 with a clear message instead."""
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    _make_repo(recovery)
+    _install_failing_binary(recovery, "lcsas-restore", exit_code=77)
+    _install_succeeding_binary(recovery, "rustic-static")
+    target = tmp_path / "restored"
+
+    res = _run(recovery, target, env_extra={"LCSAS_TIER_FALLBACK": "1"})
+    assert res.returncode == 77, (
+        f"wrong-password exit must propagate as 77; got "
+        f"rc={res.returncode}\nstdout:{res.stdout}\nstderr:{res.stderr}"
+    )
+    assert "SUCCESS_rustic-static" not in res.stdout, (
+        "tier 2 ran after a tier-1 wrong-password exit — the terminal "
+        f"77 check is not stopping the cascade; stdout:\n{res.stdout}"
+    )
+    assert "wrong password" in res.stderr.lower(), (
+        f"operator-facing wrong-password message missing; "
+        f"stderr:\n{res.stderr}"
+    )
+    # No tier may leave restored data behind on a wrong password.  The
+    # zero-byte .lcsas-restore-marker is exempt: restore.sh drops it
+    # before any tier runs (idempotent-resume sentinel, UX-07), so it is
+    # not tier output.
+    leftovers = (
+        [p for p in target.rglob("*")
+         if p.is_file() and p.name != ".lcsas-restore-marker"]
+        if target.exists() else []
+    )
+    assert leftovers == [], (
+        f"wrong-password run left a partial tree: {leftovers}"
+    )
+
+
 def test_fallback_preserves_success_when_tier1_works(tmp_path: Path) -> None:
     """LCSAS_TIER_FALLBACK=1 + tier 1 succeeds → exit 0, no tier 2."""
     recovery = tmp_path / "recovery"

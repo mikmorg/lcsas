@@ -96,8 +96,8 @@ e977300a6ea06219c9ad5e29d2ee4b3dcd84bf8800693306806b03f4b5cd496e  ./scripts/cove
 79492b90d473e2387338ef1518dfbceb9e3392ae5740235a6696621e42218efa  ./scripts/initramfs/passwd
 c5054a5000258029d7119ddd5ddd8ca75054852c74e2e2ab4234c91b3ecd3b43  ./scripts/malloc_inject.c
 41c81b9d41d0b70b25a5856f058e0b031291d82ed18b6e571f12fa2648afaa07  ./scripts/restore_auto.sh
-a16de88477bea06a8112f292bdeb73bcc8b4a9347c3174a54084507fa61975ae  ./scripts/restore.bat
-e229f1c0ea79fe97ff71ff6d618ee3f68d9bba1da0a1d11eb81b99ddbcb3b20c  ./scripts/restore.sh
+6c47330a51326202bb678825602b5b9db77d2c977d3f2b14dde51f8d744b7ee4  ./scripts/restore.bat
+1e4af1fcea8fae3dd21211d74e4e89982be885826e455b64fc4194a2224f0ed6  ./scripts/restore.sh
 1086a8fc156d9a85b7404eacf33d418c10c09b7fdd5ad7e9f86407be76457d44  ./scripts/run_coverage_fault_inject.sh
 57f72c26a36279b4db7345e5c9fe2fe2a0cd2988208c9bb3a4738ac693cb757b  ./scripts/run_fault_inject.py
 900c521c5061e9a89a346098272192284d3435af367e7a87910d6682d620478b  ./scripts/scaling_bench.py
@@ -139,7 +139,7 @@ ec4082af81aebc47f987d37bcbe26188897aca8279cfb0a4932ef3051178a1a5  ./src/lcsas-re
 ba9ca3762ddea3767fba1f3d2f20397c0f013ff7aa78fff4de7b7b1395591b99  ./src/lcsas-restore/json_q.h
 c1bb1dc41ff1be26396c711fdf28e604bb857d6c160d239abe0c086ef58d037e  ./src/lcsas-restore/lcsas_io.c
 bf00448d338a39756b238d5c3fdd032e894071e1574d505f247fc6cd19f54481  ./src/lcsas-restore/lcsas_io.h
-8a7dd32f52677becd00e7cc971fbbddc1e704189de767c6cd996d50d3c59e06f  ./src/lcsas-restore/main.c
+6e33ca982a7368659ebdc954039be8f7cb89be94cfb77b4a09bc61f3bd69e7e0  ./src/lcsas-restore/main.c
 2628b3c4e57b4995423d876046874d9437ffca989133979c8d0b93d1b174ebd7  ./src/lcsas-restore/path.c
 acf2475fa670283d175bce6cb0d644b5658ab6ef6b01f7e2a9c43bc7a29b5bc0  ./src/lcsas-restore/path.h
 7e3b8f3221d831ffa2e821c1f2a43968a54cd6d31da0c6f1070b8df43b336602  ./src/lcsas-restore/pbkdf2.c
