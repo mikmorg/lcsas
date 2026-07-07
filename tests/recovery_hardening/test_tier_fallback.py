@@ -30,6 +30,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+from tests.recovery_hardening._diff_helpers import non_marker_files
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_SH = REPO_ROOT / "recovery" / "scripts" / "restore.sh"
 HOST_TARGET = "x86_64-unknown-linux-musl"
@@ -406,15 +408,9 @@ def test_wrong_password_is_terminal_no_tier2_fallthrough(tmp_path: Path) -> None
         f"operator-facing wrong-password message missing; "
         f"stderr:\n{res.stderr}"
     )
-    # No tier may leave restored data behind on a wrong password.  The
-    # zero-byte .lcsas-restore-marker is exempt: restore.sh drops it
-    # before any tier runs (idempotent-resume sentinel, UX-07), so it is
-    # not tier output.
-    leftovers = (
-        [p for p in target.rglob("*")
-         if p.is_file() and p.name != ".lcsas-restore-marker"]
-        if target.exists() else []
-    )
+    # No tier may leave restored data behind on a wrong password (the
+    # resume sentinel is excluded — see conftest.non_marker_files).
+    leftovers = non_marker_files(target)
     assert leftovers == [], (
         f"wrong-password run left a partial tree: {leftovers}"
     )

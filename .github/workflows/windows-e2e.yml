@@ -207,14 +207,22 @@ jobs:
             | Set-Content -Path $answers -Encoding ascii
 
           $env:LCSAS_NO_RELOCATE = "1"
-          cmd /c "`"${metaDrive}:\restore.bat`" < `"$answers`""
+          $out = cmd /c "`"${metaDrive}:\restore.bat`" < `"$answers`"" 2>&1 | Out-String
           $rc = $LASTEXITCODE
+          Write-Host $out
           Write-Host "wrong-password exit code: $rc"
-          if ($rc -eq 0) { throw "restore.bat returned 0 with a wrong password" }
-          # No partial tree should be left behind.
+          # #384 contract: a wrong password is TERMINAL with the DISTINCT
+          # exit status 77 — not a generic non-zero — and tier 2 must
+          # never be attempted (it would leave a partial tree first).
+          if ($rc -ne 77) { throw "restore.bat must exit 77 on a wrong password; got $rc" }
+          if ($out -match "trying tier 2") { throw "restore.bat fell through to tier 2 on a wrong password" }
+          if ($out -notmatch "could not decrypt the repository") { throw "wrong-password banner missing from output" }
+          # No partial tree should be left behind.  (The hidden
+          # .lcsas-restore-marker sentinel is excluded by default —
+          # Get-ChildItem without -Force skips hidden files.)
           $restored = Get-ChildItem -Path $target -Recurse -File -ErrorAction SilentlyContinue
           if ($restored) { throw "wrong-password run left a partial tree behind" }
-          Write-Host "Wrong-password case failed cleanly with no partial tree."
+          Write-Host "Wrong-password case failed cleanly (rc=77, terminal, no partial tree)."
           # All assertions passed; throw above is the only failure path.
           # Without this, the step inherits the lingering $LASTEXITCODE=1
           # from the intentional wrong-password `cmd /c` and reports red.

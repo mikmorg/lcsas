@@ -37,8 +37,21 @@ int lcsas_repo_decrypt(const lcsas_master_key *key,
                        unsigned char *out, size_t *out_len);
 
 /*
+ * Distinct failure code for "a structurally valid key file POSITIVELY
+ * rejected the password" (Poly1305 MAC mismatch on the KEK-encrypted
+ * master key).  main.c maps this -- and ONLY this -- to the terminal
+ * wrong-password exit status 77 (#384).  Unreadable/absent keys dir,
+ * malformed key files, and allocation failures return the generic -1
+ * so the recovery cascade is NOT told the password is wrong when it
+ * may not be.
+ */
+#define LCSAS_REPO_ERR_WRONG_PASSWORD (-2)
+
+/*
  * Load and decrypt one key file with the given password.  Returns 0
- * on success and fills *mk.
+ * on success and fills *mk, LCSAS_REPO_ERR_WRONG_PASSWORD when the
+ * file parsed but its MAC rejected the derived key (wrong password),
+ * and -1 for any other failure (unreadable, malformed, OOM).
  */
 int lcsas_repo_load_key_file(const char *path,
                              const unsigned char *password, size_t pw_len,
@@ -46,7 +59,10 @@ int lcsas_repo_load_key_file(const char *path,
 
 /*
  * Try every regular file in keys_dir until one decrypts.  Returns 0
- * on success.
+ * on success; LCSAS_REPO_ERR_WRONG_PASSWORD when at least one key
+ * file positively rejected the password (and none succeeded); -1 when
+ * the directory is unreadable, holds no candidate key files, or an
+ * allocation failed -- i.e. "could not even try", not "wrong password".
  */
 int lcsas_repo_load_keys_dir(const char *keys_dir,
                              const unsigned char *password, size_t pw_len,

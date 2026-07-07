@@ -33,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.recovery_hardening._diff_helpers import non_marker_files
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_BAT = REPO_ROOT / "recovery" / "scripts" / "restore.bat"
 RESTORE_EXE = REPO_ROOT / "recovery" / "bin" / "x86_64-windows" / "lcsas-restore.exe"
@@ -111,14 +113,15 @@ def _map_drive(prefix: Path, letter: str, target: Path) -> None:
     link.symlink_to(target, target_is_directory=True)
 
 
-def _make_meta_tree(root: Path) -> None:
+def _make_meta_tree(root: Path, repo_src: Path | None = None) -> None:
     """A meta-disc-shaped tree: recovery/scripts/restore.bat + a repo +
     the bundled Windows tier-1 binary at recovery/bin/<arch>/.
 
     restore.bat auto-discovers the recovery root one level up from its own
     location (``%~dp0..``), so we mirror the real on-disc layout:
     ``<root>/recovery/scripts/restore.bat`` with ``recovery/bin`` and
-    ``recovery/repo`` beside it.
+    ``recovery/repo`` beside it.  ``repo_src`` copies a real repo (e.g.
+    the decryptable fixture) in place of the default empty stub.
     """
     scripts = root / "recovery" / "scripts"
     scripts.mkdir(parents=True)
@@ -131,9 +134,12 @@ def _make_meta_tree(root: Path) -> None:
         shutil.copy2(RESTORE_EXE, bin_arch / "lcsas-restore.exe")
 
     repo = root / "recovery" / "repo"
-    (repo / "keys").mkdir(parents=True)
-    (repo / "index").mkdir()
-    (repo / "data").mkdir()
+    if repo_src is not None:
+        shutil.copytree(repo_src, repo)
+    else:
+        (repo / "keys").mkdir(parents=True)
+        (repo / "index").mkdir()
+        (repo / "data").mkdir()
 
 
 def _run_bat(
@@ -221,11 +227,7 @@ def test_wrong_password_is_terminal_no_tier2_fallthrough(
     env = _init_prefix(prefix)
 
     meta = tmp_path / "meta"
-    _make_meta_tree(meta)
-    # Swap the stub repo for the real fixture repo (decryptable keys).
-    repo = meta / "recovery" / "repo"
-    shutil.rmtree(repo)
-    shutil.copytree(fixture_repo, repo)
+    _make_meta_tree(meta, repo_src=fixture_repo)
     # Decoy tier 2: exists, so a fallthrough WOULD print its banner.
     bin_arch = meta / "recovery" / "bin" / "x86_64-pc-windows-gnu"
     (bin_arch / "rustic-static.exe").write_bytes(b"MZ decoy")
@@ -261,15 +263,9 @@ def test_wrong_password_is_terminal_no_tier2_fallthrough(
     assert "trying tier 2" not in out and "[tier 2] running" not in out, (
         f"restore.bat fell through to tier 2 on a wrong password:\n{out}"
     )
-    # No restored data may be left behind.  The zero-byte
-    # .lcsas-restore-marker is exempt — restore.bat drops it before any
-    # tier runs (idempotent-resume sentinel, UX-07), it is not tier
-    # output.
-    leftovers = (
-        [p for p in target.rglob("*")
-         if p.is_file() and p.name != ".lcsas-restore-marker"]
-        if target.exists() else []
-    )
+    # No restored data may be left behind (the resume sentinel is
+    # excluded — see conftest.non_marker_files).
+    leftovers = non_marker_files(target)
     assert leftovers == [], (
         f"wrong-password run left a partial tree: {leftovers}"
     )

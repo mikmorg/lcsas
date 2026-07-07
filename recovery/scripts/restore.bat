@@ -404,8 +404,12 @@ REM +h matches restore.sh's dot-file convention and the docs' "hidden
 REM zero-byte marker" -- on Windows a leading dot alone hides nothing,
 REM and an unhidden marker reads as restored data to any "did the failed
 REM run leave files behind?" check -- issue #384 / windows-e2e.
-> "%MARKER%" echo. 2>nul
-attrib +h "%MARKER%" 2>nul
+REM Create-if-absent: cmd cannot `>`-overwrite a file that already has
+REM the hidden attribute (access denied), so a resume run must not try.
+if not exist "%MARKER%" (
+    > "%MARKER%" echo. 2>nul
+    attrib +h "%MARKER%" 2>nul
+)
 
 REM ----- Password prompt --------------------------------------------
 REM CMD has no `read -s` equivalent, so the password is visible while
@@ -482,8 +486,12 @@ if exist "%BIN%" (
     echo [tier 1] running %BIN%
     "%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --target "%TARGET%" --snapshot latest %PACK_SEARCH_ARGS% %CATALOG_ARG% %META_DISC_ARG%
     set "RC=!ERRORLEVEL!"
-    del "%PWFILE%" 2>nul
+    REM %PWFILE% is deleted only on the TERMINAL branches below -- the
+    REM fall-through to tier 2 needs it alive or rustic-static.exe gets
+    REM a --password-file pointing at nothing and can never succeed.
+    REM Tier 2 and the no-tier epilogue each do their own del.
     if !RC! equ 0 (
+        del "%PWFILE%" 2>nul
         echo.
         echo ============================================================
         echo  Recovery complete.  Files restored to: %TARGET%
@@ -492,12 +500,14 @@ if exist "%BIN%" (
         exit /b 0
     )
     if !RC! equ 77 (
-        REM Wrong password / unreadable repo keys -- issue #384.  Every tier
-        REM reads the SAME keys with the SAME password, so tier 2 would only
-        REM fail identically -- and leave a partial tree behind first.  Stop
-        REM here with a clear message instead of falling through.  NB: no
-        REM parens in these comments -- an unescaped ^) inside a REM line
-        REM in a parenthesized block ends the block early in cmd.
+        REM A key file POSITIVELY rejected the password -- issue #384.
+        REM Every tier reads the SAME keys with the SAME password, so
+        REM tier 2 would only fail identically -- and leave a partial
+        REM tree behind first.  Stop here with a clear message instead
+        REM of falling through.  NB: no parens in these comments -- an
+        REM unescaped ^) inside a REM line in a parenthesized block
+        REM ends the block early in cmd.
+        del "%PWFILE%" 2>nul
         echo.
         echo ============================================================
         echo  ERROR: could not decrypt the repository with that password.

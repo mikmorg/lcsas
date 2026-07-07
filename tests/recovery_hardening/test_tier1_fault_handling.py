@@ -117,6 +117,68 @@ def test_wrong_password_fails_with_clear_error(tmp_path: Path) -> None:
         )
 
 
+def test_missing_keys_dir_is_not_a_password_verdict(tmp_path: Path) -> None:
+    """#384 follow-through: 77 must mean 'a key file POSITIVELY rejected
+    the password' and nothing else.  A repo path with no keys/ directory
+    (typo'd --repo, unmounted disc, media damage) must exit with the
+    generic 1 — NOT 77 — so the restore scripts do not terminally blame
+    the password (and block the tier cascade) for a setup problem."""
+    bin_path = _find_bin()
+    repo = tmp_path / "not-a-repo"
+    repo.mkdir()
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("does-not-matter")
+
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(tmp_path / "restored"),
+        timeout=30,
+    )
+
+    assert res.returncode == 1, (
+        f"missing keys dir must exit 1 (generic), got rc={res.returncode}; "
+        f"stderr:\n{res.stderr}"
+    )
+    err = (res.stdout + res.stderr).lower()
+    assert "wrong password" not in err, (
+        f"missing keys dir must not be reported as a password problem:\n"
+        f"{res.stderr}"
+    )
+    assert "keys" in err, (
+        f"error message should point at the keys directory:\n{res.stderr}"
+    )
+
+
+def test_corrupt_key_file_is_not_a_password_verdict(tmp_path: Path) -> None:
+    """A keys/ directory whose only key file is unparseable garbage is a
+    media/setup problem, not a password verdict: exit 1, not 77."""
+    bin_path = _find_bin()
+    repo = tmp_path / "repo"
+    (repo / "keys").mkdir(parents=True)
+    (repo / "keys" / "aabbccdd").write_text("garbage-not-json")
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("does-not-matter")
+
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(tmp_path / "restored"),
+        timeout=30,
+    )
+
+    assert res.returncode == 1, (
+        f"corrupt key file must exit 1 (generic), got rc={res.returncode}; "
+        f"stderr:\n{res.stderr}"
+    )
+    assert "wrong password" not in (res.stdout + res.stderr).lower(), (
+        f"corrupt key file must not be reported as a password problem:\n"
+        f"{res.stderr}"
+    )
+
+
 # ── Issue #220: truncated pack handling ─────────────────────────────
 
 

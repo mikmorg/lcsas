@@ -148,7 +148,13 @@ lcsas_repo_load_key_file(const char *path,
     master_json = (unsigned char *)malloc(encrypted_len + 1);
     if (!master_json) goto out;
     if (lcsas_repo_decrypt(&kek, encrypted, encrypted_len,
-                           master_json, &master_len) != 0) goto out;
+                           master_json, &master_len) != 0) {
+        /* MAC mismatch: the file is a well-formed key file and the
+         * derived key failed to authenticate -- the one failure that
+         * genuinely means "wrong password" (#384). */
+        rc = LCSAS_REPO_ERR_WRONG_PASSWORD;
+        goto out;
+    }
     master_json[master_len] = '\0';
 
     mntoks = lcsas_json_parse((const char *)master_json, master_len, mtoks, 64);
@@ -191,6 +197,7 @@ lcsas_repo_load_keys_dir(const char *keys_dir,
     size_t ncount = 0;
     size_t ncap = 0;
     int found = 0;
+    int saw_reject = 0;
     int rc = -1;
     size_t i;
 
@@ -234,13 +241,19 @@ lcsas_repo_load_keys_dir(const char *keys_dir,
 
     for (i = 0; i < ncount; i++) {
         char path[4096];
+        int r;
         snprintf(path, sizeof path, "%s/%s", keys_dir, names[i]);
-        if (lcsas_repo_load_key_file(path, password, pw_len, mk) == 0) {
+        r = lcsas_repo_load_key_file(path, password, pw_len, mk);
+        if (r == 0) {
             found = 1;
             break;
         }
+        if (r == LCSAS_REPO_ERR_WRONG_PASSWORD) saw_reject = 1;
     }
-    rc = found ? 0 : -1;
+    /* Wrong-password only when a key file POSITIVELY rejected the
+     * password; "no usable key files at all" stays -1 so the caller
+     * does not blame the password for a setup/media problem (#384). */
+    rc = found ? 0 : (saw_reject ? LCSAS_REPO_ERR_WRONG_PASSWORD : -1);
 
 out:
     free(names);
