@@ -201,19 +201,24 @@ main(void)
         }
     }
 
-    /* ── Wrong password must fail cleanly, NOT crash ──────────────── */
+    /* ── Wrong password must fail with the DISTINCT reject code ────── */
     {
         lcsas_master_key bad;
         rc = lcsas_repo_load_keys_dir(
             path, (const unsigned char *)"wrong-password", 14, &bad
         );
-        if (rc == 0) {
-            fprintf(stderr, "FAIL: wrong password accepted\n");
+        /* A real key file positively MAC-rejects the password -> the
+         * terminal wrong-password code (mapped to exit 77 by main.c,
+         * #384).  NOT the generic -1 that a setup failure returns. */
+        if (rc != LCSAS_REPO_ERR_WRONG_PASSWORD) {
+            fprintf(stderr,
+                    "FAIL: wrong password rc=%d, want %d (WRONG_PASSWORD)\n",
+                    rc, LCSAS_REPO_ERR_WRONG_PASSWORD);
             fails++;
         }
     }
 
-    /* ── Empty keys dir must fail ──────────────────────────────────── */
+    /* ── Nonexistent keys dir is NOT a password verdict ────────────── */
     {
         lcsas_master_key bad;
         rc = lcsas_repo_load_keys_dir(
@@ -221,8 +226,13 @@ main(void)
             (const unsigned char *)FIXTURE_PASSWORD,
             strlen(FIXTURE_PASSWORD), &bad
         );
-        if (rc == 0) {
-            fprintf(stderr, "FAIL: nonexistent keys dir accepted\n");
+        /* Must be the generic -1, never WRONG_PASSWORD: the password was
+         * never tested, so the cascade must stay free to try other
+         * tiers (#384 round 2). */
+        if (rc != -1) {
+            fprintf(stderr,
+                    "FAIL: nonexistent keys dir rc=%d, want -1 (generic)\n",
+                    rc);
             fails++;
         }
     }
@@ -289,11 +299,37 @@ main(void)
         unsigned char plain[256];
         size_t plain_len = sizeof plain;
 
-        /* Too short — must fail (data_len < 33). */
+        /* Too short — must fail the STRUCTURAL check with generic -1,
+         * distinct from the MAC-mismatch code, so a truncated key file
+         * is never mistaken for a rejected password (#384 round 2). */
         unsigned char tiny[32] = {0};
-        if (lcsas_repo_decrypt(&mk, tiny, sizeof tiny, plain, &plain_len) == 0) {
+        rc = lcsas_repo_decrypt(&mk, tiny, sizeof tiny, plain, &plain_len);
+        if (rc == 0) {
             fprintf(stderr, "FAIL: decrypt accepted <33-byte input\n");
             fails++;
+        } else if (rc == LCSAS_REPO_ERR_MAC) {
+            fprintf(stderr,
+                    "FAIL: <33-byte input returned MAC code (%d); a too-short "
+                    "input computes no MAC and must return generic -1\n", rc);
+            fails++;
+        }
+
+        /* A full-length buffer with a bad tag must fail as MAC mismatch
+         * (the genuine wrong-key signal), distinct from the length
+         * check above. */
+        {
+            unsigned char blob[64];
+            size_t j;
+            for (j = 0; j < sizeof blob; j++) blob[j] = (unsigned char)j;
+            plain_len = sizeof plain;
+            rc = lcsas_repo_decrypt(&mk, blob, sizeof blob,
+                                    plain, &plain_len);
+            if (rc != LCSAS_REPO_ERR_MAC) {
+                fprintf(stderr,
+                        "FAIL: bad-tag decrypt rc=%d, want %d (MAC)\n",
+                        rc, LCSAS_REPO_ERR_MAC);
+                fails++;
+            }
         }
     }
 
