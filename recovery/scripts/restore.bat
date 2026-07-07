@@ -406,10 +406,12 @@ REM and an unhidden marker reads as restored data to any "did the failed
 REM run leave files behind?" check -- issue #384 / windows-e2e.
 REM Create-if-absent: cmd cannot `>`-overwrite a file that already has
 REM the hidden attribute (access denied), so a resume run must not try.
-if not exist "%MARKER%" (
-    > "%MARKER%" echo. 2>nul
-    attrib +h "%MARKER%" 2>nul
-)
+if not exist "%MARKER%" > "%MARKER%" echo. 2>nul
+REM Hide unconditionally (idempotent) so a marker written UNHIDDEN by an
+REM older restore.bat is retro-hidden on resume -- else it lingers as a
+REM visible file and reads as restored data to a "did the run leave
+REM files behind?" check (issue #384 / windows-e2e).
+attrib +h "%MARKER%" 2>nul
 
 REM ----- Password prompt --------------------------------------------
 REM CMD has no `read -s` equivalent, so the password is visible while

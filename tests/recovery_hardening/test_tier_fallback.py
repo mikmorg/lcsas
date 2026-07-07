@@ -409,7 +409,7 @@ def test_wrong_password_is_terminal_no_tier2_fallthrough(tmp_path: Path) -> None
         f"stderr:\n{res.stderr}"
     )
     # No tier may leave restored data behind on a wrong password (the
-    # resume sentinel is excluded — see conftest.non_marker_files).
+    # resume sentinel is excluded — see _diff_helpers.non_marker_files).
     leftovers = non_marker_files(target)
     assert leftovers == [], (
         f"wrong-password run left a partial tree: {leftovers}"

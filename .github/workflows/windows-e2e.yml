@@ -207,8 +207,13 @@ jobs:
             | Set-Content -Path $answers -Encoding ascii
 
           $env:LCSAS_NO_RELOCATE = "1"
-          $out = cmd /c "`"${metaDrive}:\restore.bat`" < `"$answers`"" 2>&1 | Out-String
+          # Redirect to a file (not a pipeline) so $LASTEXITCODE is
+          # unambiguously cmd's own exit code — piping a native command
+          # through a cmdlet like Out-String can obscure it.
+          $outFile = Join-Path $env:RUNNER_TEMP "wrong-out.txt"
+          cmd /c "`"${metaDrive}:\restore.bat`" < `"$answers`"" > $outFile 2>&1
           $rc = $LASTEXITCODE
+          $out = Get-Content $outFile -Raw
           Write-Host $out
           Write-Host "wrong-password exit code: $rc"
           # #384 contract: a wrong password is TERMINAL with the DISTINCT
@@ -224,7 +229,7 @@ jobs:
           if ($restored) { throw "wrong-password run left a partial tree behind" }
           Write-Host "Wrong-password case failed cleanly (rc=77, terminal, no partial tree)."
           # All assertions passed; throw above is the only failure path.
-          # Without this, the step inherits the lingering $LASTEXITCODE=1
+          # Without this, the step inherits the lingering $LASTEXITCODE=77
           # from the intentional wrong-password `cmd /c` and reports red.
           exit 0
 

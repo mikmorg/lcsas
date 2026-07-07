@@ -37,13 +37,24 @@ int lcsas_repo_decrypt(const lcsas_master_key *key,
                        unsigned char *out, size_t *out_len);
 
 /*
+ * Distinct failure code returned by lcsas_repo_decrypt on a Poly1305
+ * MAC mismatch -- the one decrypt outcome that means "this key did not
+ * authenticate the ciphertext" (i.e. wrong password/key), as opposed
+ * to the generic -1 it returns for a structurally too-short input
+ * where no MAC is ever computed.  Same numeric value as
+ * LCSAS_REPO_ERR_WRONG_PASSWORD: at the key-file layer a MAC mismatch
+ * IS a positively-rejected password.
+ */
+#define LCSAS_REPO_ERR_MAC (-2)
+
+/*
  * Distinct failure code for "a structurally valid key file POSITIVELY
  * rejected the password" (Poly1305 MAC mismatch on the KEK-encrypted
  * master key).  main.c maps this -- and ONLY this -- to the terminal
  * wrong-password exit status 77 (#384).  Unreadable/absent keys dir,
- * malformed key files, and allocation failures return the generic -1
- * so the recovery cascade is NOT told the password is wrong when it
- * may not be.
+ * malformed/truncated key files, and allocation failures return the
+ * generic -1 so the recovery cascade is NOT told the password is wrong
+ * when it may not be.
  */
 #define LCSAS_REPO_ERR_WRONG_PASSWORD (-2)
 

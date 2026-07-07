@@ -179,6 +179,60 @@ def test_corrupt_key_file_is_not_a_password_verdict(tmp_path: Path) -> None:
     )
 
 
+def _mangle_fixture_key(repo: Path, data_b64: str) -> None:
+    """Copy the fixture key file(s) into repo/keys, then overwrite the
+    first key's ``data`` field with a chosen base64 string.  Used to
+    forge a structurally-valid key file whose ciphertext is too short
+    to authenticate."""
+    import base64  # noqa: F401  (documents the encoding used by callers)
+    import json
+
+    src = _require_fixture() / "keys"
+    (repo / "keys").mkdir(parents=True)
+    names = sorted(p.name for p in src.iterdir())
+    for i, name in enumerate(names):
+        obj = json.loads((src / name).read_text())
+        if i == 0:
+            obj["data"] = data_b64
+        (repo / "keys" / name).write_text(json.dumps(obj))
+
+
+def test_truncated_data_field_is_not_a_password_verdict(
+    tmp_path: Path,
+) -> None:
+    """#384 round 2: a key file with valid JSON but a ``data`` field that
+    decodes to fewer than 33 bytes fails lcsas_repo_decrypt's structural
+    length check BEFORE any Poly1305 MAC is computed.  That is media
+    corruption, not a rejected password, so it must exit 1 (generic) —
+    NOT the terminal 77.  Before the fix this exited 77 and blocked the
+    tier cascade for a bit-rotted key file."""
+    import base64
+
+    bin_path = _find_bin()
+    repo = tmp_path / "repo"
+    # 9 bytes < 33 → structural failure, no MAC check.
+    _mangle_fixture_key(repo, base64.b64encode(b"shortpad").decode())
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("does-not-matter")
+
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(tmp_path / "restored"),
+        timeout=30,
+    )
+
+    assert res.returncode == 1, (
+        f"truncated key-file data must exit 1, got rc={res.returncode}; "
+        f"stderr:\n{res.stderr}"
+    )
+    assert "wrong password" not in (res.stdout + res.stderr).lower(), (
+        f"truncated ciphertext must not read as a wrong password:\n"
+        f"{res.stderr}"
+    )
+
+
 # ── Issue #220: truncated pack handling ─────────────────────────────
 
 

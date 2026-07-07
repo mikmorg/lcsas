@@ -96,8 +96,8 @@ e977300a6ea06219c9ad5e29d2ee4b3dcd84bf8800693306806b03f4b5cd496e  ./scripts/cove
 79492b90d473e2387338ef1518dfbceb9e3392ae5740235a6696621e42218efa  ./scripts/initramfs/passwd
 c5054a5000258029d7119ddd5ddd8ca75054852c74e2e2ab4234c91b3ecd3b43  ./scripts/malloc_inject.c
 e1dbf5ad6e7f1d9ce844712923341db67240e534a4cc11f673bd9696733a6fad  ./scripts/restore_auto.sh
-18c14a7d6cf498df63e9e1c919f205c8865bfb1e5375634eeac035f35eb1c076  ./scripts/restore.bat
-1e4af1fcea8fae3dd21211d74e4e89982be885826e455b64fc4194a2224f0ed6  ./scripts/restore.sh
+c86a25c4ba420a462530cb1263108be59f10406ee7c9bc3465bf757e8682b816  ./scripts/restore.bat
+f848e0d05ec3576c823ab2f65618d330baa1f4cccac6a375eab5fd1f0656496e  ./scripts/restore.sh
 1086a8fc156d9a85b7404eacf33d418c10c09b7fdd5ad7e9f86407be76457d44  ./scripts/run_coverage_fault_inject.sh
 57f72c26a36279b4db7345e5c9fe2fe2a0cd2988208c9bb3a4738ac693cb757b  ./scripts/run_fault_inject.py
 900c521c5061e9a89a346098272192284d3435af367e7a87910d6682d620478b  ./scripts/scaling_bench.py
@@ -147,8 +147,8 @@ acf2475fa670283d175bce6cb0d644b5658ab6ef6b01f7e2a9c43bc7a29b5bc0  ./src/lcsas-re
 00a6aa88a7994a79952268059e39c61d40f81e374294bf61f1a27ac06762610c  ./src/lcsas-restore/poly1305.c
 80543511e8036d293ab28479c6ff70b35774857263ec9e1049d9b97d2ecd932a  ./src/lcsas-restore/poly1305.h
 1aa6de08217ecf30d21df70cc45a4a6083db5b50a86ee7de9e48cdc412b294d5  ./src/lcsas-restore/posix_compat.h
-aacce52e99eda8f6b7d46f9b7ad28656ca85988a1d02fcd40eb88e9ee65576b1  ./src/lcsas-restore/repo.c
-42be52c859ae9610369ad6f735cbf35f4f5df9b897af3a8cc66978a5f89fccf8  ./src/lcsas-restore/repo.h
+cd814af20ded0d15f5b922a9a3ecd1a1fd38753fd7472ab1c80cee52aca3994b  ./src/lcsas-restore/repo.c
+a6e5155f4ee8e8e5ac5704bd8ffbad272f0709e2a9519751faa0608d951678ef  ./src/lcsas-restore/repo.h
 630a1a200aaade635afb96819ee39fb9396886ddedc5fa81dd9898fd0fdeb24f  ./src/lcsas-restore/scrypt.c
 766b1676df12e27529cf40d3bd9adbcdd63e44f2c47b046f181625d0fbdf315d  ./src/lcsas-restore/scrypt.h
 f93314a23bd33d186f8d2a77006b5368f9a15878c00553dc3fd301a295c16c07  ./src/lcsas-restore/sha256.c
