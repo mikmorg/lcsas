@@ -254,17 +254,25 @@ exit code.  Tier 3 is always ``exec``'d (last resort, nothing to
 fall back to).  See ``RECOVER.txt`` ENVIRONMENT VARIABLES.
 
 EXCEPTION -- wrong password is TERMINAL (issue #384): when tier 1
-runs and exits 77 (its distinct "a key file POSITIVELY rejected the
-password" status -- a Poly1305 MAC mismatch, not just any key-load
-problem), restore.sh and restore.bat STOP with a clear message even
-under LCSAS_TIER_FALLBACK=1.  Every tier reads the same keys with the
-same password, so a later tier could only fail the same way -- and
-some (rustic) write a partial tree before rejecting the password.
-Setup-shaped key failures (missing/unreadable keys directory, no key
-files) exit 1, not 77, and MAY still fall through -- the password was
-never actually tested.  Scope: this guard lives in tier 1; if tier 1
-is absent or skipped by pre-flight, a wrong password is only detected
-by a later tier, which can still leave a partial tree (issue #399).
+runs and exits 77, restore.sh and restore.bat STOP with a clear
+message even under LCSAS_TIER_FALLBACK=1.  Every tier reads the same
+keys with the same password, so a later tier could only fail the same
+way -- and some (rustic) write a partial tree before rejecting the
+password.
+
+Tier 1 exits 77 only when EVERY key file it examined positively
+rejected the password with a Poly1305 MAC mismatch AND none failed
+before their MAC check.  Anything softer keeps exit 1 and MAY still
+fall through, because the password was not conclusively tested:
+  * a missing/unreadable keys directory, or no key files at all;
+  * a malformed/truncated key file (fails the ciphertext length or
+    JSON checks before any MAC is computed);
+  * a multi-key repo where the key matching this password is one
+    tier-1 cannot parse but a later tier (rustic) can -- exit 1 lets
+    that tier get its chance.
+Scope: this guard lives in tier 1; if tier 1 is absent or skipped by
+pre-flight, a wrong password is only detected by a later tier, which
+can still leave a partial tree (issue #399).
 
 WHY PYTHON IS NOT ON THE BARE PATH
 
