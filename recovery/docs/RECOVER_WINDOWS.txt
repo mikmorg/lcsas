@@ -312,6 +312,10 @@ TROUBLESHOOTING -- error messages
    -> The password is wrong, OR the password contains characters
       CMD mangled (rare; non-ASCII or quote characters).  Try the
       PowerShell entry point above or the LCSAS_PWFILE workflow.
+      restore.bat stops here on purpose (exit code 77) instead of
+      trying the other recovery tiers -- they all read the same
+      keys, so they would fail the same way.  Nothing was restored;
+      fix the password and simply re-run.
 
 "tree blob not found: <hex>"
    -> A pack file containing the blob is on a different disc.

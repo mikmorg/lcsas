@@ -253,6 +253,13 @@ run as subprocesses and fall through to the next tier on a non-zero
 exit code.  Tier 3 is always ``exec``'d (last resort, nothing to
 fall back to).  See ``RECOVER.txt`` ENVIRONMENT VARIABLES.
 
+EXCEPTION -- wrong password is TERMINAL (issue #384): when tier 1
+exits 77 (its distinct "could not decrypt the repo keys" status),
+restore.sh and restore.bat STOP with a clear message even under
+LCSAS_TIER_FALLBACK=1.  Every tier reads the same keys with the same
+password, so a later tier could only fail the same way -- and some
+(rustic) write a partial tree before rejecting the password.
+
 WHY PYTHON IS NOT ON THE BARE PATH
 
 Python is a healthy ecosystem today, but at a 50-year horizon:
