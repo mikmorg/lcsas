@@ -207,11 +207,13 @@ jobs:
             | Set-Content -Path $answers -Encoding ascii
 
           $env:LCSAS_NO_RELOCATE = "1"
-          # Redirect to a file (not a pipeline) so $LASTEXITCODE is
-          # unambiguously cmd's own exit code — piping a native command
-          # through a cmdlet like Out-String can obscure it.
+          # Do BOTH redirections INSIDE the cmd /c string so PowerShell
+          # sees only a bare `cmd /c "..."` — a PowerShell-level `> file
+          # 2>&1` on the native command resets $LASTEXITCODE to 0 and we
+          # lose restore.bat's exit /b 77.  cmd does the redirect and
+          # returns the batch's real exit code.
           $outFile = Join-Path $env:RUNNER_TEMP "wrong-out.txt"
-          cmd /c "`"${metaDrive}:\restore.bat`" < `"$answers`"" > $outFile 2>&1
+          cmd /c "`"${metaDrive}:\restore.bat`" < `"$answers`" > `"$outFile`" 2>&1"
           $rc = $LASTEXITCODE
           $out = Get-Content $outFile -Raw
           Write-Host $out
