@@ -33,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.recovery_hardening._diff_helpers import non_marker_files
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_BAT = REPO_ROOT / "recovery" / "scripts" / "restore.bat"
 RESTORE_EXE = REPO_ROOT / "recovery" / "bin" / "x86_64-windows" / "lcsas-restore.exe"
@@ -111,14 +113,15 @@ def _map_drive(prefix: Path, letter: str, target: Path) -> None:
     link.symlink_to(target, target_is_directory=True)
 
 
-def _make_meta_tree(root: Path) -> None:
+def _make_meta_tree(root: Path, repo_src: Path | None = None) -> None:
     """A meta-disc-shaped tree: recovery/scripts/restore.bat + a repo +
     the bundled Windows tier-1 binary at recovery/bin/<arch>/.
 
     restore.bat auto-discovers the recovery root one level up from its own
     location (``%~dp0..``), so we mirror the real on-disc layout:
     ``<root>/recovery/scripts/restore.bat`` with ``recovery/bin`` and
-    ``recovery/repo`` beside it.
+    ``recovery/repo`` beside it.  ``repo_src`` copies a real repo (e.g.
+    the decryptable fixture) in place of the default empty stub.
     """
     scripts = root / "recovery" / "scripts"
     scripts.mkdir(parents=True)
@@ -131,9 +134,12 @@ def _make_meta_tree(root: Path) -> None:
         shutil.copy2(RESTORE_EXE, bin_arch / "lcsas-restore.exe")
 
     repo = root / "recovery" / "repo"
-    (repo / "keys").mkdir(parents=True)
-    (repo / "index").mkdir()
-    (repo / "data").mkdir()
+    if repo_src is not None:
+        shutil.copytree(repo_src, repo)
+    else:
+        (repo / "keys").mkdir(parents=True)
+        (repo / "index").mkdir()
+        (repo / "data").mkdir()
 
 
 def _run_bat(
@@ -141,6 +147,7 @@ def _run_bat(
     meta_letter: str,
     *,
     stdin_data: str,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Drive restore.bat under wine with redirected stdin.
 
@@ -152,6 +159,7 @@ def _run_bat(
         **env,
         "LCSAS_NO_RELOCATE": "1",
         "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+        **(extra_env or {}),
     }
     bat = f"{meta_letter.upper()}:\\recovery\\scripts\\restore.bat"
     return subprocess.run(
@@ -193,6 +201,73 @@ def test_happy_path_discovers_repo_and_invokes_tier1(tmp_path: Path) -> None:
     assert "Repo:" in out or "[tier 1]" in out, (
         "restore.bat did not reach repo discovery / tier-1 under wine; "
         f"rc={res.returncode}\n--- output ---\n{out}"
+    )
+
+
+def test_wrong_password_is_terminal_no_tier2_fallthrough(
+    tmp_path: Path,
+) -> None:
+    """Issue #384: a tier-1 wrong-password exit (77) must STOP restore.bat
+    -- no 'trying tier 2' fallthrough.  Every tier reads the same keys with
+    the same password, and a later tier can leave a partial tree behind
+    before it too rejects the password.
+
+    Uses the real committed lcsas-restore.exe against the real fixture
+    repo so the 77 comes from the genuine key-decrypt failure path, and
+    plants a decoy rustic-static.exe so the no-fallthrough assertion has
+    teeth (the tier-2 `if exist` is true).
+    """
+    fixture_repo = REPO_ROOT / "recovery" / "tests" / "fixtures" / "repo"
+    if not RESTORE_EXE.is_file():
+        pytest.skip(f"{RESTORE_EXE} not present")
+    if not (fixture_repo / "keys").is_dir():
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+
+    prefix = tmp_path / "wineprefix"
+    env = _init_prefix(prefix)
+
+    meta = tmp_path / "meta"
+    _make_meta_tree(meta, repo_src=fixture_repo)
+    # Decoy tier 2: exists, so a fallthrough WOULD print its banner.
+    bin_arch = meta / "recovery" / "bin" / "x86_64-pc-windows-gnu"
+    (bin_arch / "rustic-static.exe").write_bytes(b"MZ decoy")
+    _map_drive(prefix, "e", meta)
+
+    # The target must be a Windows-visible path (cmd cannot mkdir a
+    # /scratch/... Unix path).  Reuse the already-mapped E: drive — a
+    # second post-boot drive letter is not reliably visible to wine's
+    # mountmgr on every host.
+    #
+    # Wine's `set /p` cannot do sequential multi-line answers: the FIRST
+    # prompt slurps the entire remaining stdin into one variable (CRLF
+    # or LF alike; a real Windows console reads per line).  So: feed
+    # exactly ONE LF-terminated line (the target — a lone line reads
+    # cleanly), and deliver the password by pre-setting LCSAS_PW in the
+    # environment — `set /p` at EOF keeps the variable's prior value,
+    # which is also genuine cmd semantics on real Windows.
+    target = meta / "restored"
+    res = _run_bat(
+        env, "e",
+        stdin_data="E:\\restored\n",
+        extra_env={"LCSAS_PW": "not-the-real-password"},
+    )
+
+    out = res.stdout + res.stderr
+    assert res.returncode == 77, (
+        "restore.bat must propagate tier-1's wrong-password exit 77; "
+        f"rc={res.returncode}\n--- output ---\n{out}"
+    )
+    assert "could not decrypt the repository" in out.lower(), (
+        f"operator-facing wrong-password banner missing:\n{out}"
+    )
+    assert "trying tier 2" not in out and "[tier 2] running" not in out, (
+        f"restore.bat fell through to tier 2 on a wrong password:\n{out}"
+    )
+    # No restored data may be left behind (the resume sentinel is
+    # excluded — see _diff_helpers.non_marker_files).
+    leftovers = non_marker_files(target)
+    assert leftovers == [], (
+        f"wrong-password run left a partial tree: {leftovers}"
     )
 
 

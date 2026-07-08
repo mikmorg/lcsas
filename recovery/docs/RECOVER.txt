@@ -322,7 +322,13 @@ before invoking restore.sh.
       tier 1 directly, so a tier-1 crash aborts the run.  Use this
       when you suspect a tier-1 bug and want the cascade to try
       tier 2 / tier 3 instead.  Tier 3 is always exec'd (last resort,
-      nothing to fall back to).
+      nothing to fall back to).  Exception: a wrong password (tier-1
+      exit 77, meaning a key file positively rejected it) STOPS the
+      run -- every tier reads the same keys, so retrying with another
+      tier cannot help and may leave a partial tree.  Fix the
+      password and re-run.  (A missing/unreadable keys directory is
+      NOT treated as a wrong password; it exits 1 and falls through
+      normally.)
 
   LCSAS_ALLOW_PYTHON_TIER=0
       Disable tier 3 entirely, even if python3 and

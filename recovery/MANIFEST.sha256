@@ -12,11 +12,11 @@ b7e1f14cb4282f8dcec58b1deafd0fb5546b8de083adbd2d4c84942c43b8fe23  ./docs/EXEMPTI
 6de7cfa8137722b7627a8cb0cd4eb2967fa8b70f8763d3b715a8e4630585b5e6  ./docs/PHYSICAL_DISC_VALIDATION.txt
 ac1f87354665966fadb288f9eb2fc13c5a25516a4cdac6ec0baf3584d2717e66  ./docs/READINESS_CHECKLIST.txt
 a28fb460544b0cfa62cf96195c96d973cbe5688946ba0773434a5539d650d9e8  ./docs/README.txt
-65af112f1c8933204eb9003660165907cabf80f87ce109797f8012f861d56420  ./docs/RECOVER.txt
-37632df0f7ab721feb0e381fdc938ce57ded8b92eed929c946d25a4f42d5eda6  ./docs/RECOVER_WINDOWS.txt
+edb9e65d9cd885905931dbf1c6510ed01b1adff2516ecbfcdec135eb773b6cab  ./docs/RECOVER.txt
+1736646e859b78f5d0b1f15fe336ad81abac8828933dbd5a7bd90840e0b6dcdf  ./docs/RECOVER_WINDOWS.txt
 f194c16ed7c3a60a1a33377cf7444a7036f583f3da591e51a528058a536434da  ./docs/RESTORE_STANDARD_TOOLS.txt
 cfa31efe2f8bdca2559ccfb1b31734a22de7d5cf83b18d99cdd66edec0a87204  ./docs/SANITIZER_SUPPRESSIONS.txt
-94f3370f7e986795497071d593d645c07261e18ce2883250acf0f1bb4163bc74  ./docs/TIERS.txt
+ec69475b103237434fb35336d1ac05b608e799a76d6defc285f182dfe14ec201  ./docs/TIERS.txt
 179165a0fe80961437768be776afea164906b9209fee7b0c74c46a5d11c5bb2d  ./docs/UX_CONCERNS.txt
 d4f4fee1fe7dd65e9c6ea92b730c7fa0765da57faf2b738c46d75e0431699956  ./docs/WINDOWS_RECOVERY_PLAN.txt
 b3a909e3418d2e76f7a9727724c6bd2861547a2e89530125b3ef54ff5965ecbf  ./fuzz/corpus/b64/seed_ab
@@ -95,9 +95,9 @@ e977300a6ea06219c9ad5e29d2ee4b3dcd84bf8800693306806b03f4b5cd496e  ./scripts/cove
 7a696fcfba89a55a6d73fa1a03c7f071fad2141340027b17a25db249e26b9be8  ./scripts/initramfs/group
 79492b90d473e2387338ef1518dfbceb9e3392ae5740235a6696621e42218efa  ./scripts/initramfs/passwd
 c5054a5000258029d7119ddd5ddd8ca75054852c74e2e2ab4234c91b3ecd3b43  ./scripts/malloc_inject.c
-41c81b9d41d0b70b25a5856f058e0b031291d82ed18b6e571f12fa2648afaa07  ./scripts/restore_auto.sh
-a16de88477bea06a8112f292bdeb73bcc8b4a9347c3174a54084507fa61975ae  ./scripts/restore.bat
-e229f1c0ea79fe97ff71ff6d618ee3f68d9bba1da0a1d11eb81b99ddbcb3b20c  ./scripts/restore.sh
+e1dbf5ad6e7f1d9ce844712923341db67240e534a4cc11f673bd9696733a6fad  ./scripts/restore_auto.sh
+ab964f6a3af53234c2256532ddc4f4855709300fb64ffffda526d19cfc5e067b  ./scripts/restore.bat
+f848e0d05ec3576c823ab2f65618d330baa1f4cccac6a375eab5fd1f0656496e  ./scripts/restore.sh
 1086a8fc156d9a85b7404eacf33d418c10c09b7fdd5ad7e9f86407be76457d44  ./scripts/run_coverage_fault_inject.sh
 57f72c26a36279b4db7345e5c9fe2fe2a0cd2988208c9bb3a4738ac693cb757b  ./scripts/run_fault_inject.py
 900c521c5061e9a89a346098272192284d3435af367e7a87910d6682d620478b  ./scripts/scaling_bench.py
@@ -139,7 +139,7 @@ ec4082af81aebc47f987d37bcbe26188897aca8279cfb0a4932ef3051178a1a5  ./src/lcsas-re
 ba9ca3762ddea3767fba1f3d2f20397c0f013ff7aa78fff4de7b7b1395591b99  ./src/lcsas-restore/json_q.h
 c1bb1dc41ff1be26396c711fdf28e604bb857d6c160d239abe0c086ef58d037e  ./src/lcsas-restore/lcsas_io.c
 bf00448d338a39756b238d5c3fdd032e894071e1574d505f247fc6cd19f54481  ./src/lcsas-restore/lcsas_io.h
-8a7dd32f52677becd00e7cc971fbbddc1e704189de767c6cd996d50d3c59e06f  ./src/lcsas-restore/main.c
+45e7248f5381768e28dac472d9158bc7bd0c49a1143eb4ef6f5bb607c879ad1d  ./src/lcsas-restore/main.c
 2628b3c4e57b4995423d876046874d9437ffca989133979c8d0b93d1b174ebd7  ./src/lcsas-restore/path.c
 acf2475fa670283d175bce6cb0d644b5658ab6ef6b01f7e2a9c43bc7a29b5bc0  ./src/lcsas-restore/path.h
 7e3b8f3221d831ffa2e821c1f2a43968a54cd6d31da0c6f1070b8df43b336602  ./src/lcsas-restore/pbkdf2.c
@@ -147,8 +147,8 @@ acf2475fa670283d175bce6cb0d644b5658ab6ef6b01f7e2a9c43bc7a29b5bc0  ./src/lcsas-re
 00a6aa88a7994a79952268059e39c61d40f81e374294bf61f1a27ac06762610c  ./src/lcsas-restore/poly1305.c
 80543511e8036d293ab28479c6ff70b35774857263ec9e1049d9b97d2ecd932a  ./src/lcsas-restore/poly1305.h
 1aa6de08217ecf30d21df70cc45a4a6083db5b50a86ee7de9e48cdc412b294d5  ./src/lcsas-restore/posix_compat.h
-a3bf568161ad183213a6291031e1afd639111efad72a36efffac4efaf42f44bb  ./src/lcsas-restore/repo.c
-5c01dd3d9396db59610b85071e19e8381774ccc7ce2923192ddf94620cf0bbc9  ./src/lcsas-restore/repo.h
+dc2a170c7185d645c16ef99df1d0c46b44f494e29db84ef6faf44472f18318a2  ./src/lcsas-restore/repo.c
+a6e5155f4ee8e8e5ac5704bd8ffbad272f0709e2a9519751faa0608d951678ef  ./src/lcsas-restore/repo.h
 630a1a200aaade635afb96819ee39fb9396886ddedc5fa81dd9898fd0fdeb24f  ./src/lcsas-restore/scrypt.c
 766b1676df12e27529cf40d3bd9adbcdd63e44f2c47b046f181625d0fbdf315d  ./src/lcsas-restore/scrypt.h
 f93314a23bd33d186f8d2a77006b5368f9a15878c00553dc3fd301a295c16c07  ./src/lcsas-restore/sha256.c
@@ -189,7 +189,7 @@ c63dace2dfec98add7304857f853c4255a6d7b212212c9da324eac7d16635aaf  ./tests/test_k
 d8927399a835f172128a888a5775840e7bac6ce91f56edb4f6dcba24ba356697  ./tests/test_path.c
 2e15bf81a942c616dd632548af27d71538ff9a29185a575e95209f24a32667e9  ./tests/test_pbkdf2.c
 cbff877bd39cf61d88bea8930e1b82491b0dd5fc50979fde8b8ff7d51b5167e6  ./tests/test_poly1305.c
-88d13dd21004885d681cf34256f8cbfdeb6c75259c55b3a3ae795400a5376b88  ./tests/test_repo.c
+7a4524fd0df4e5cbbcf83ced0fc08d0bf1202f0fc7e0b1a41174690ca17e5dbd  ./tests/test_repo.c
 d545bfb73d0183b9d7b3ca36f297f150bd7daf8362ca067351ca42f73692e751  ./tests/test_restore_bat_e2e.sh
 11d0000be102eae215cfc53d908e90065eab8ef93325f4951d03e8936987068d  ./tests/test_scrypt.c
 64698e8e358ef76142c663aa7bbd45c3bf20c884cf344467888cb224366c4071  ./tests/test_sha256.c

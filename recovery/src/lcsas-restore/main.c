@@ -61,6 +61,19 @@
 #  include <sys/resource.h>/* getrusage     — only used by stress bench */
 #endif
 
+/* Distinct exit status for "a key file POSITIVELY rejected the given
+ * password" (Poly1305 MAC mismatch -- issue #384).  A wrong password is
+ * TERMINAL: every recovery tier reads the same keys with the same
+ * password, so restore.sh / restore.bat treat this code as "stop, do not
+ * fall through to the next tier" — which both avoids a pointless retry
+ * and prevents a later tier from writing a partial tree before it too
+ * rejects the password.  Setup-shaped key failures (missing/unreadable
+ * keys dir, no candidate files, OOM) deliberately exit 1, NOT 77, so the
+ * cascade is free to try other tiers when the password was never really
+ * tested.  77 is the BSD sysexits.h EX_NOPERM value, kept clear of the
+ * binary's other statuses (0 ok, 1 generic failure, 2 usage). */
+#define EXIT_WRONG_PASSWORD 77
+
 #define MAX_PACK_SEARCH 64
 #define MAX_MOUNT_PARENTS 32
 
@@ -360,9 +373,31 @@ main(int argc, char **argv)
     }
 
     snprintf(keys_dir, sizeof keys_dir, "%s/keys", repo_path);
-    if (lcsas_repo_load_keys_dir(keys_dir, pw, pw_len, &mk) != 0) {
-        fprintf(stderr, "ERROR: could not decrypt any key file (wrong password?)\n");
-        goto out;
+    {
+        int krc = lcsas_repo_load_keys_dir(keys_dir, pw, pw_len, &mk);
+        if (krc == LCSAS_REPO_ERR_WRONG_PASSWORD) {
+            /* A well-formed key file positively rejected the password
+             * (MAC mismatch).  Terminal -- see restore.sh / .bat (#384). */
+            fprintf(stderr, "ERROR: could not decrypt any key file (wrong password?)\n");
+            rc = EXIT_WRONG_PASSWORD;
+            goto out;
+        }
+        if (krc != 0) {
+            /* Not a password verdict: no key file could be tested at
+             * all -- the directory is missing/unreadable, holds no key
+             * files, OR every key file is corrupt/truncated (fails
+             * before its MAC check), or an allocation failed.  Generic
+             * failure (1) so the cascade may still try another tier.
+             * Name all the plausible causes so a heir with a present
+             * but bit-rotted key file is not misdirected to a
+             * directory-permissions problem (#384 review round 3). */
+            fprintf(stderr, "ERROR: could not read or decrypt any repo key "
+                            "file under %s\n"
+                            "       (keys directory missing/unreadable, no "
+                            "key files, or a key file is corrupt)\n",
+                    keys_dir);
+            goto out;
+        }
     }
     if (verbose) fprintf(stderr, "[lcsas-restore] master key loaded\n");
 

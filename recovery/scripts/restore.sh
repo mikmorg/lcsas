@@ -1522,6 +1522,19 @@ elif [ -x "$RESTORE_BIN" ]; then
                        "$@" \
                        || tier1_rc=$?
         if [ $tier1_rc -eq 0 ]; then write_session_log 1; exit 0; fi
+        # Exit 77 means a key file POSITIVELY rejected the password
+        # (Poly1305 MAC mismatch) -- NOT a missing/unreadable keys dir,
+        # which exits 1 and is allowed to fall through.  A rejected
+        # password is TERMINAL: tiers 2/2b/3 read the SAME keys with the
+        # SAME password, so they would only fail identically -- and a
+        # later tier can leave a partial tree behind before it rejects
+        # the password (issue #384).  Stop with a clear message.
+        if [ $tier1_rc -eq 77 ]; then
+            printf '[tier 1] wrong password: a repo key rejected it, and the\n'  >&2
+            printf '        other tiers use the same keys, so not retrying.\n'    >&2
+            printf '        Check the password (and any split-key shares).\n'     >&2
+            exit 77
+        fi
         printf '[tier 1] exited %d, falling through to tier 2\n' \
                $tier1_rc >&2
     else

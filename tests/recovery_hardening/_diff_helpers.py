@@ -14,6 +14,14 @@ Three pure functions:
       difference strings.  Empty list = identical.
 
 Used by tests/recovery_hardening/test_tier1_vs_tier2_differential.py.
+
+Plus one tree-inspection helper shared by the #384 wrong-password
+tests:
+
+  non_marker_files(target) -> list[Path]
+      Regular files under target excluding the .lcsas-restore-marker
+      resume sentinel (dropped by restore.sh/.bat BEFORE any tier
+      runs, so it is script state, not tier output).
 """
 from __future__ import annotations
 
@@ -38,6 +46,24 @@ def find_restore_bin() -> Path | None:
         if p.is_file() and os.access(p, os.X_OK):
             return p
     return None
+
+
+# The idempotent-resume sentinel restore.sh / restore.bat drop into the
+# restore target BEFORE any tier runs (UX-07).
+MARKER_NAME = ".lcsas-restore-marker"
+
+
+def non_marker_files(target: Path) -> list[Path]:
+    """Regular files under ``target`` excluding the resume sentinel.
+
+    Empty list when ``target`` does not exist.  Use for "no partial
+    tree left behind" assertions (#384) — the marker is script state,
+    not tier output.
+    """
+    if not target.exists():
+        return []
+    return [p for p in target.rglob("*")
+            if p.is_file() and p.name != MARKER_NAME]
 
 
 def find_restored_root(target: Path) -> Path:

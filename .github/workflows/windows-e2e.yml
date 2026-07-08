@@ -207,16 +207,35 @@ jobs:
             | Set-Content -Path $answers -Encoding ascii
 
           $env:LCSAS_NO_RELOCATE = "1"
-          cmd /c "`"${metaDrive}:\restore.bat`" < `"$answers`""
+          # Do BOTH redirections INSIDE the cmd /c string so PowerShell
+          # sees only a bare `cmd /c "..."` — a PowerShell-level `> file
+          # 2>&1` on the native command resets $LASTEXITCODE to 0 and we
+          # lose restore.bat's exit /b 77.  cmd does the redirect and
+          # returns the batch's real exit code.
+          $outFile = Join-Path $env:RUNNER_TEMP "wrong-out.txt"
+          cmd /c "`"${metaDrive}:\restore.bat`" < `"$answers`" > `"$outFile`" 2>&1"
           $rc = $LASTEXITCODE
+          $out = Get-Content $outFile -Raw
+          Write-Host $out
           Write-Host "wrong-password exit code: $rc"
-          if ($rc -eq 0) { throw "restore.bat returned 0 with a wrong password" }
-          # No partial tree should be left behind.
-          $restored = Get-ChildItem -Path $target -Recurse -File -ErrorAction SilentlyContinue
-          if ($restored) { throw "wrong-password run left a partial tree behind" }
-          Write-Host "Wrong-password case failed cleanly with no partial tree."
+          # #384 contract: a wrong password is TERMINAL with the DISTINCT
+          # exit status 77 — not a generic non-zero — and tier 2 must
+          # never be attempted (it would leave a partial tree first).
+          if ($rc -ne 77) { throw "restore.bat must exit 77 on a wrong password; got $rc" }
+          if ($out -match "trying tier 2") { throw "restore.bat fell through to tier 2 on a wrong password" }
+          if ($out -notmatch "could not decrypt the repository") { throw "wrong-password banner missing from output" }
+          # No restored data may be left behind.  restore.bat drops a
+          # .lcsas-restore-marker resume sentinel into the target BEFORE
+          # any tier runs (UX-07); it is script state, not tier output,
+          # so exclude it by NAME.  -Force so a marker is seen and
+          # filtered regardless of attributes; anything else is a real
+          # partial tree.
+          $restored = Get-ChildItem -Path $target -Recurse -File -Force -ErrorAction SilentlyContinue |
+                      Where-Object { $_.Name -ne '.lcsas-restore-marker' }
+          if ($restored) { throw "wrong-password run left a partial tree behind: $($restored.FullName -join ', ')" }
+          Write-Host "Wrong-password case failed cleanly (rc=77, terminal, no partial tree)."
           # All assertions passed; throw above is the only failure path.
-          # Without this, the step inherits the lingering $LASTEXITCODE=1
+          # Without this, the step inherits the lingering $LASTEXITCODE=77
           # from the intentional wrong-password `cmd /c` and reports red.
           exit 0
 

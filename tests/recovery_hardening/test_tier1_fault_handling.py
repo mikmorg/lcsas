@@ -67,10 +67,13 @@ def _run(
 
 
 def test_wrong_password_fails_with_clear_error(tmp_path: Path) -> None:
-    """Closes #219.  Operator typo: the wrong password is supplied to a
-    valid fixture repo.  The binary must exit non-zero with a message
-    that points the operator at the password — not crash, and not
-    silently appear to succeed."""
+    """Closes #219 (+ #384 exit-code pin).  Operator typo: the wrong
+    password is supplied to a valid fixture repo.  The binary must exit
+    with the DISTINCT wrong-password status 77 (EXIT_WRONG_PASSWORD in
+    main.c) and a message that points the operator at the password — not
+    crash, and not silently appear to succeed.  restore.sh / restore.bat
+    key off 77 to stop instead of falling through to tier 2 (#384), so
+    this code is load-bearing script ABI, not just cosmetics."""
     bin_path = _find_bin()
     repo = _require_fixture()
     target = tmp_path / "restored"
@@ -90,10 +93,13 @@ def test_wrong_password_fails_with_clear_error(tmp_path: Path) -> None:
         f"binary crashed on wrong password (rc={res.returncode}); "
         f"stderr:\n{res.stderr}"
     )
-    # Must exit non-zero.
-    assert res.returncode != 0, (
-        f"binary appeared to succeed with the wrong password "
-        f"(rc=0); stderr:\n{res.stderr}"
+    # Must exit with the distinct wrong-password status (#384).  The
+    # restore scripts treat 77 as terminal (no tier-2 fallthrough), so a
+    # regression to a generic 1 would silently re-enable the partial-tree
+    # failure mode this pins down.
+    assert res.returncode == 77, (
+        f"expected EXIT_WRONG_PASSWORD (77), got rc={res.returncode}; "
+        f"stderr:\n{res.stderr}"
     )
     # Must name the cause.  The message in main.c is:
     #   "ERROR: could not decrypt any key file (wrong password?)"
@@ -109,6 +115,162 @@ def test_wrong_password_fails_with_clear_error(tmp_path: Path) -> None:
         assert leftovers == [], (
             f"wrong-password run produced output files: {leftovers}"
         )
+
+
+def test_missing_keys_dir_is_not_a_password_verdict(tmp_path: Path) -> None:
+    """#384 follow-through: 77 must mean 'a key file POSITIVELY rejected
+    the password' and nothing else.  A repo path with no keys/ directory
+    (typo'd --repo, unmounted disc, media damage) must exit with the
+    generic 1 — NOT 77 — so the restore scripts do not terminally blame
+    the password (and block the tier cascade) for a setup problem."""
+    bin_path = _find_bin()
+    repo = tmp_path / "not-a-repo"
+    repo.mkdir()
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("does-not-matter")
+
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(tmp_path / "restored"),
+        timeout=30,
+    )
+
+    assert res.returncode == 1, (
+        f"missing keys dir must exit 1 (generic), got rc={res.returncode}; "
+        f"stderr:\n{res.stderr}"
+    )
+    err = (res.stdout + res.stderr).lower()
+    assert "wrong password" not in err, (
+        f"missing keys dir must not be reported as a password problem:\n"
+        f"{res.stderr}"
+    )
+    assert "keys" in err, (
+        f"error message should point at the keys directory:\n{res.stderr}"
+    )
+
+
+def test_corrupt_key_file_is_not_a_password_verdict(tmp_path: Path) -> None:
+    """A keys/ directory whose only key file is unparseable garbage is a
+    media/setup problem, not a password verdict: exit 1, not 77."""
+    bin_path = _find_bin()
+    repo = tmp_path / "repo"
+    (repo / "keys").mkdir(parents=True)
+    (repo / "keys" / "aabbccdd").write_text("garbage-not-json")
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("does-not-matter")
+
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(tmp_path / "restored"),
+        timeout=30,
+    )
+
+    assert res.returncode == 1, (
+        f"corrupt key file must exit 1 (generic), got rc={res.returncode}; "
+        f"stderr:\n{res.stderr}"
+    )
+    assert "wrong password" not in (res.stdout + res.stderr).lower(), (
+        f"corrupt key file must not be reported as a password problem:\n"
+        f"{res.stderr}"
+    )
+
+
+def _mangle_fixture_key(repo: Path, data_b64: str) -> None:
+    """Build a SINGLE-key repo/keys whose one key file is a real fixture
+    key with its ``data`` field overwritten by ``data_b64`` (already
+    base64).  Single key on purpose: an intact sibling key would
+    MAC-reject the test password and (correctly) make the run terminal,
+    masking the structural-failure path this helper is here to exercise."""
+    import json
+
+    src = _require_fixture() / "keys"
+    (repo / "keys").mkdir(parents=True)
+    name = sorted(p.name for p in src.iterdir())[0]
+    obj = json.loads((src / name).read_text())
+    obj["data"] = data_b64
+    (repo / "keys" / name).write_text(json.dumps(obj))
+
+
+def test_truncated_data_field_is_not_a_password_verdict(
+    tmp_path: Path,
+) -> None:
+    """#384 round 2: a key file with valid JSON but a ``data`` field that
+    decodes to fewer than 33 bytes fails lcsas_repo_decrypt's structural
+    length check BEFORE any Poly1305 MAC is computed.  That is media
+    corruption, not a rejected password, so it must exit 1 (generic) —
+    NOT the terminal 77.  Before the fix this exited 77 and blocked the
+    tier cascade for a bit-rotted key file."""
+    import base64
+
+    bin_path = _find_bin()
+    repo = tmp_path / "repo"
+    # 8 bytes < 33 → structural failure, no MAC check.
+    _mangle_fixture_key(repo, base64.b64encode(b"shortpad").decode())
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("does-not-matter")
+
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(tmp_path / "restored"),
+        timeout=30,
+    )
+
+    assert res.returncode == 1, (
+        f"truncated key-file data must exit 1, got rc={res.returncode}; "
+        f"stderr:\n{res.stderr}"
+    )
+    assert "wrong password" not in (res.stdout + res.stderr).lower(), (
+        f"truncated ciphertext must not read as a wrong password:\n"
+        f"{res.stderr}"
+    )
+
+
+def test_wrong_password_is_terminal_even_with_a_corrupt_second_key(
+    tmp_path: Path,
+) -> None:
+    """#384 CLOSED design decision (review round 3): when a real key file
+    CONCLUSIVELY MAC-rejects the password, that is terminal (77) even if
+    keys/ also holds a stray/corrupt file that fails before its own MAC
+    check.  Otherwise a wrong password plus one bit-rotted key would
+    demote the verdict to a fall-through and let tier 2 write a partial
+    tree — the exact harm #384 prevents.  The case this trades away
+    (a restic multi-key repo where the matching key is the unparseable
+    one) is not produced by LCSAS and is documented on #399."""
+    import base64
+
+    bin_path = _find_bin()
+    fixture = _require_fixture()
+    repo = tmp_path / "repo"
+    (repo / "keys").mkdir(parents=True)
+    # A real, decryptable key file (will MAC-reject the wrong password)...
+    for p in (fixture / "keys").iterdir():
+        (repo / "keys" / p.name).write_text(p.read_text())
+    # ...plus a structurally-valid-but-truncated stray key file.
+    import json
+    any_key = json.loads(next((fixture / "keys").iterdir()).read_text())
+    any_key["data"] = base64.b64encode(b"shortpad").decode()
+    (repo / "keys" / "ffffffffffffffff").write_text(json.dumps(any_key))
+
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("not-the-real-password")
+
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(tmp_path / "restored"),
+        timeout=30,
+    )
+    assert res.returncode == 77, (
+        f"a conclusive MAC reject must stay terminal (77) despite a "
+        f"corrupt sibling key; got rc={res.returncode}\nstderr:\n{res.stderr}"
+    )
 
 
 # ── Issue #220: truncated pack handling ─────────────────────────────

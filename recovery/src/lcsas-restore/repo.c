@@ -48,6 +48,11 @@ lcsas_repo_decrypt(const lcsas_master_key *key,
     lcsas_aes128_key mac_kk;
     lcsas_aes256_key data_kk;
 
+    /* Structural: too short to even hold IV+MAC.  This is NOT an
+     * authentication verdict -- no MAC is computed -- so it returns the
+     * generic -1, distinct from the MAC-mismatch code below.  Callers
+     * that classify "wrong password" (lcsas_repo_load_key_file, #384)
+     * rely on that distinction. */
     if (data_len < 33) return -1;
     iv = data;
     ct = data + 16;
@@ -57,7 +62,12 @@ lcsas_repo_decrypt(const lcsas_master_key *key,
     lcsas_aes128_set_key(&mac_kk, key->mac_k);
     lcsas_aes128_encrypt(&mac_kk, iv, s);
     lcsas_poly1305_mac(key->mac_r, s, ct, ct_len, tag);
-    if (lcsas_ct_memcmp(tag, mac, 16) != 0) return -1;
+    /* Authentication failure: the derived key did not produce the
+     * stored tag -- the one condition that genuinely means "this key
+     * (password) is wrong".  Distinct code so key-file loading can
+     * tell a rejected password from a malformed ciphertext. */
+    if (lcsas_ct_memcmp(tag, mac, 16) != 0)
+        return LCSAS_REPO_ERR_MAC;
 
     lcsas_aes256_set_key(&data_kk, key->encrypt);
     lcsas_aes256_ctr(&data_kk, iv, ct, out, ct_len);
@@ -147,8 +157,24 @@ lcsas_repo_load_key_file(const char *path,
 
     master_json = (unsigned char *)malloc(encrypted_len + 1);
     if (!master_json) goto out;
-    if (lcsas_repo_decrypt(&kek, encrypted, encrypted_len,
-                           master_json, &master_len) != 0) goto out;
+    {
+        int drc = lcsas_repo_decrypt(&kek, encrypted, encrypted_len,
+                                     master_json, &master_len);
+        if (drc == LCSAS_REPO_ERR_MAC) {
+            /* MAC mismatch: the file is a well-formed key file and the
+             * derived key failed to authenticate -- the one failure
+             * that genuinely means "wrong password" (#384). */
+            rc = LCSAS_REPO_ERR_WRONG_PASSWORD;
+            goto out;
+        }
+        if (drc != 0) {
+            /* Structurally malformed ciphertext (too short, etc.) --
+             * the password was never actually tested against a MAC, so
+             * leave rc at the generic -1 (a media/format problem, not a
+             * password verdict). */
+            goto out;
+        }
+    }
     master_json[master_len] = '\0';
 
     mntoks = lcsas_json_parse((const char *)master_json, master_len, mtoks, 64);
@@ -191,6 +217,7 @@ lcsas_repo_load_keys_dir(const char *keys_dir,
     size_t ncount = 0;
     size_t ncap = 0;
     int found = 0;
+    int saw_reject = 0;    /* >=1 key file positively MAC-rejected */
     int rc = -1;
     size_t i;
 
@@ -234,13 +261,41 @@ lcsas_repo_load_keys_dir(const char *keys_dir,
 
     for (i = 0; i < ncount; i++) {
         char path[4096];
+        int r;
         snprintf(path, sizeof path, "%s/%s", keys_dir, names[i]);
-        if (lcsas_repo_load_key_file(path, password, pw_len, mk) == 0) {
+        r = lcsas_repo_load_key_file(path, password, pw_len, mk);
+        if (r == 0) {
             found = 1;
             break;
         }
+        if (r == LCSAS_REPO_ERR_WRONG_PASSWORD) saw_reject = 1;
     }
-    rc = found ? 0 : -1;
+    /* Terminal wrong-password (mapped to exit 77) when a key file
+     * CONCLUSIVELY rejected the password via a Poly1305 MAC mismatch
+     * and none decrypted.  "No key file even reached its MAC check"
+     * (unreadable/malformed/truncated -- load_key_file returned the
+     * generic -1) stays -1 so the cascade can still try another tier,
+     * because the password was never actually tested.
+     *
+     * CLOSED DESIGN DECISION (#384; do not re-litigate).  When keys/
+     * holds >1 file and one MAC-rejects while another is untestable,
+     * tier-1 cannot tell "wrong password + a stray/corrupt file"
+     * (review round 3: should be terminal) from "multi-key repo, right
+     * password, matching key is the one tier-1 can't parse" (review
+     * round 2: should fall through) -- the two are indistinguishable
+     * from here.  We break the tie toward the #384 charter: a
+     * conclusive MAC reject is TERMINAL.  This is a no-op for real
+     * LCSAS archives (one key file per repo, so saw_reject alone is
+     * exact); it only bites a hand-rolled restic MULTI-KEY repo whose
+     * matching key tier-1 cannot parse, where a correct password would
+     * be wrongly reported wrong.  That case is not produced by LCSAS
+     * and is tracked as a documented limitation on issue #399. */
+    if (found)
+        rc = 0;
+    else if (saw_reject)
+        rc = LCSAS_REPO_ERR_WRONG_PASSWORD;
+    else
+        rc = -1;
 
 out:
     free(names);

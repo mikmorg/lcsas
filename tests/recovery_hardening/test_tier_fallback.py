@@ -30,6 +30,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+from tests.recovery_hardening._diff_helpers import non_marker_files
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_SH = REPO_ROOT / "recovery" / "scripts" / "restore.sh"
 HOST_TARGET = "x86_64-unknown-linux-musl"
@@ -377,6 +379,40 @@ def test_tier3_failure_stderr_replayed(tmp_path: Path) -> None:
     )
     assert "zstandard" in res.stderr, (
         f"captured tier-3 stderr not replayed:\n{res.stderr}"
+    )
+
+
+def test_wrong_password_is_terminal_no_tier2_fallthrough(tmp_path: Path) -> None:
+    """Issue #384: tier-1 exit 77 (EXIT_WRONG_PASSWORD) is TERMINAL even
+    under LCSAS_TIER_FALLBACK=1.  Every tier reads the same keys with the
+    same password, so falling through to tier 2 can only fail identically
+    — and rustic writes a partial tree before it rejects the password.
+    The script must stop at tier 1 with a clear message instead."""
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    _make_repo(recovery)
+    _install_failing_binary(recovery, "lcsas-restore", exit_code=77)
+    _install_succeeding_binary(recovery, "rustic-static")
+    target = tmp_path / "restored"
+
+    res = _run(recovery, target, env_extra={"LCSAS_TIER_FALLBACK": "1"})
+    assert res.returncode == 77, (
+        f"wrong-password exit must propagate as 77; got "
+        f"rc={res.returncode}\nstdout:{res.stdout}\nstderr:{res.stderr}"
+    )
+    assert "SUCCESS_rustic-static" not in res.stdout, (
+        "tier 2 ran after a tier-1 wrong-password exit — the terminal "
+        f"77 check is not stopping the cascade; stdout:\n{res.stdout}"
+    )
+    assert "wrong password" in res.stderr.lower(), (
+        f"operator-facing wrong-password message missing; "
+        f"stderr:\n{res.stderr}"
+    )
+    # No tier may leave restored data behind on a wrong password (the
+    # resume sentinel is excluded — see _diff_helpers.non_marker_files).
+    leftovers = non_marker_files(target)
+    assert leftovers == [], (
+        f"wrong-password run left a partial tree: {leftovers}"
     )
 
 

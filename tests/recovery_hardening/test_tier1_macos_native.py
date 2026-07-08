@@ -191,9 +191,12 @@ def test_full_restore_byte_identical(tmp_path: Path) -> None:
 
 
 def test_wrong_password_fails_cleanly(tmp_path: Path) -> None:
-    """An incorrect password must exit non-zero WITHOUT a crash signal
-    (no SIGSEGV/SIGABRT) — proves the Mach-O error path is sound, not
-    just the happy path."""
+    """An incorrect password must exit with the DISTINCT wrong-password
+    status 77 (EXIT_WRONG_PASSWORD, #384) WITHOUT a crash signal (no
+    SIGSEGV/SIGABRT) — proves the Mach-O error path is sound, not just
+    the happy path.  restore.sh keys off 77 to stop the tier cascade,
+    so the Mach-O binaries must speak the same script ABI as the ELF
+    ones (test_tier1_fault_handling pins the same value on Linux)."""
     repo = _fixture_repo()
     if repo is None:
         pytest.skip("fixture repo not generated; run gen_fixture.py")
@@ -205,10 +208,13 @@ def test_wrong_password_fails_cleanly(tmp_path: Path) -> None:
         "--target", str(target),
         timeout=10,
     )
-    assert res.returncode != 0, "wrong password unexpectedly succeeded"
     # NOT SIGSEGV (-11/139) or SIGABRT (-6/134).
     assert res.returncode not in (-11, 139, -6, 134), (
         f"binary crashed on wrong password (rc={res.returncode}); "
+        f"stderr:\n{res.stderr}"
+    )
+    assert res.returncode == 77, (
+        f"expected EXIT_WRONG_PASSWORD (77), got rc={res.returncode}; "
         f"stderr:\n{res.stderr}"
     )
 

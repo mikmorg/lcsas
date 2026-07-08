@@ -43,9 +43,22 @@ for r in "$repos_root"/*/; do
     # which, on a multi-tenant archive, would hit the interactive
     # selection prompt (EOF → fail) or restore the same repo every loop
     # (issue #373).
-    if ! LCSAS_REPO="$name" sh "$RECOVERY/scripts/restore.sh" \
-             "$RECOVERY" "$out" latest; then
-        printf '!!! restore of %s FAILED\n' "$name" >&2
+    rc=0
+    LCSAS_REPO="$name" sh "$RECOVERY/scripts/restore.sh" \
+             "$RECOVERY" "$out" latest || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        if [ "$rc" -eq 77 ]; then
+            # Wrong password for THIS repo (issue #384).  Repos have
+            # independent keys, so one shared LCSAS_PWFILE can be right
+            # for some tenants and wrong for others -- keep looping,
+            # but say exactly which repo rejected the password.
+            printf '!!! restore of %s FAILED: wrong password (exit 77).\n' \
+                   "$name" >&2
+            printf '    LCSAS_PWFILE does not decrypt this repo'"'"'s keys;\n' >&2
+            printf '    the remaining repos are still attempted.\n' >&2
+        else
+            printf '!!! restore of %s FAILED (exit %s)\n' "$name" "$rc" >&2
+        fi
         fail=1
     fi
 done

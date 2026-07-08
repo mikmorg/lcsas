@@ -400,6 +400,14 @@ if not exist "%TARGET%" (
     exit /b 1
 )
 REM Mark this folder so a later resume into it does not re-prompt.
+REM Kept intentionally simple: a bare redirect, no `if`/`attrib` around
+REM it.  Anything more here sits between the target prompt and the
+REM password prompt, and a subtle cmd parse of a conditional redirect
+REM can swallow the next piped stdin line -- which silently ate the
+REM password on the windows-e2e runner (issue #384).  The marker is a
+REM known filename; callers that must ignore it (the windows-e2e
+REM negative case, the shell/wine tests) exclude it BY NAME rather than
+REM relying on a hidden attribute.
 > "%MARKER%" echo. 2>nul
 
 REM ----- Password prompt --------------------------------------------
@@ -477,14 +485,35 @@ if exist "%BIN%" (
     echo [tier 1] running %BIN%
     "%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --target "%TARGET%" --snapshot latest %PACK_SEARCH_ARGS% %CATALOG_ARG% %META_DISC_ARG%
     set "RC=!ERRORLEVEL!"
-    del "%PWFILE%" 2>nul
+    REM %PWFILE% is deleted only on the TERMINAL branches below -- the
+    REM fall-through to tier 2 needs it alive or rustic-static.exe gets
+    REM a --password-file pointing at nothing and can never succeed.
+    REM Tier 2 and the no-tier epilogue each do their own del.
     if !RC! equ 0 (
+        del "%PWFILE%" 2>nul
         echo.
         echo ============================================================
         echo  Recovery complete.  Files restored to: %TARGET%
         echo ============================================================
         pause
         exit /b 0
+    )
+    REM A key file POSITIVELY rejected the password (issue #384).  Every
+    REM tier reads the same keys with the same password, so tier 2 would
+    REM only fail identically (and leave a partial tree behind first);
+    REM stop here instead of falling through.  Exit 77 must be raised at
+    REM TOP LEVEL: a bare "exit /b 77" INSIDE this parenthesized
+    REM `if exist "%BIN%"` block does NOT propagate to `cmd /c` on real
+    REM Windows (cmd /c returns 0), so goto a top-level label to exit.
+    if !RC! equ 77 (
+        del "%PWFILE%" 2>nul
+        echo.
+        echo ============================================================
+        echo  ERROR: could not decrypt the repository with that password.
+        echo  Check the password ^(and any split-key shares^) and re-run.
+        echo ============================================================
+        pause
+        goto :wrong_password
     )
     echo [tier 1] failed with exit code !RC!; trying tier 2...
 )
@@ -524,3 +553,10 @@ echo  launch it for you.
 echo ============================================================
 pause
 exit /b 1
+
+REM Reached only via `goto` from the tier-1 exit-77 branch above.  At
+REM top level (outside every parenthesized block) so `exit /b 77`
+REM reliably propagates to `cmd /c` (issue #384).  Normal flow stops at
+REM the `exit /b 1` above and never falls into this label.
+:wrong_password
+exit /b 77
