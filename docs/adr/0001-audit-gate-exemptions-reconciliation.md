@@ -69,3 +69,57 @@ Investigation corrected the issue's original framing:
   as a low-priority diagnostic (possible real infinite-retry/deadlock on
   allocation failure) but does not block #383.
 - EXEMPTIONS.md is MANIFEST-pinned; its row is refreshed on every edit.
+
+## Outcome (2026-07-08)
+
+Executed on branch `fix/383-audit-exemptions`.
+
+**Diagnosis refined.** The failure was overwhelmingly **line-number drift**,
+not new gaps: #384 (and other post-06-17 merges) shifted `repo.c`/`main.c`/
+`tree.c` line numbers, so an entry like `repo.c:369 decrypt-MAC-fail` now
+describes a comment while the branch it documented moved to ~463. The
+authoritative worklist came straight from the failing audit-gate CI log
+(`exemptions_check` prints the exact sets): **133 undocumented + 95 stale →
+187 currently-uncovered lines**. Reconciling to CI's set is *more* correct
+than a local sweep — the new per-run `timeout` makes local coverage ≤ CI's, so
+reconciling to a local run would over-document and re-red on `covered_but_listed`.
+
+**Hybrid discipline (test vs document).** Only genuinely *net-new*
+(undocumented) lines got the write-a-test treatment:
+- `main.c` env-override + wrong-password branches — 2 fixture-only tests in
+  `test_tier1_unit.py` plus wiring `test_tier1_fault_handling.py` into
+  coverage-c's Step-3 pytest list (both fixture-only, no rustic).
+- `tree.c` root-not-object / symlink-embedded-NUL(security) / "too large" (-2) —
+  3 new `test_tree.c` cases via the existing stub harness.
+- `repo.c:175` and `repo.c:1092-1097` are then closed *incidentally* by the
+  now-wired `test_tier1_fault_handling` (truncated key / truncated pack).
+
+**Quality finding — the contract was partly a dumping ground.** A source-anchored
+re-classification of every uncovered line found many entries that are NOT
+genuinely unreachable: the recurring `repo.c` "AEAD prevents crafting without
+breaking the primitive" rationale is **false** — the C unit harness controls the
+master key (`test_repo.c enc_write`) and the blob metadata (`lcsas_blob_loc`), so
+a MAC-fail / hash-mismatch / corrupt-zstd input is crafted by corrupting a valid
+blob, no primitive broken. Rather than write ~40 crypto-craft tests inside #383
+(out of scope), their **category** is corrected from the false `INTRACTABLE` to
+the honest `DEFERRED` with a group rationale and the test-conversion tracked in
+**#401**. This is doc-only and changes no gate behaviour (the check ignores
+category). `repo.c:461-463` was corrected `INTRACTABLE → DEFENSIVE` (the
+`strip_v2_prefix` 0-byte return is provably unreachable — decrypt rejects <33 B).
+
+**Reconciled fence: 159 rows** (was 149 drifted) — INTRACTABLE 61, DEFERRED 66,
+DEFENSIVE 23, VOLATILE 9; 28 formerly-listed/net-new lines are now closed by
+tests. The nine VOLATILE entries (readdir-order / fs-full, incl. `repo.c:216-218`)
+were preserved on re-anchor so they don't re-red on whichever host covers them.
+
+**Guard (Decision 3c) — `test_exemptions_contract.py` (GATE-11).** A stdlib-only,
+offline meta-test in the *watched* suite (`make gate` + `test.yml`), following the
+GATE-02/07/08 pattern. It pins the enforcement wiring (exemptions_check ∈
+coverage-c ∈ audit-gate ∈ CI) so the gate can't be silently decoupled, and fence
+well-formedness (valid categories, every pinned line exists in-file) so gross rot
+surfaces in the watched suite. **Its limit is honest and documented:** it cannot
+detect a *fresh line-drift* red — only a coverage run can. The complete fix for
+that is making the audit-gate CI job a **required status check**; this is
+*recommended* rather than done here because the pre-existing-red bin-parity gate
+(#381/#320) still forces `--admin` merges that would bypass a required check too.
+Flip it once #381 lands.

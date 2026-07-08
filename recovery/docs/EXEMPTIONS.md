@@ -60,180 +60,206 @@ permitted (ignored by the parser).
 <!-- EXEMPTIONS-FENCE-BEGIN -->
 ```
 # catalog.c
-catalog.c:156   INTRACTABLE   sqlite3_prepare_v2 on a hardcoded well-formed SELECT cannot fail without malloc inside SQLite (which fault-inject cannot reach)
-catalog.c:157   INTRACTABLE   "                                                                                                                            "
+catalog.c:157   INTRACTABLE   sqlite3_prepare_v2 on a hardcoded well-formed SELECT cannot fail without malloc inside SQLite (fault-inject cannot reach); warn_schema_skew_once hedges a corrupt/old catalog
+catalog.c:158   INTRACTABLE   "
+catalog.c:198   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardcoded well-formed SELECT; same SQLite-internal-malloc constraint as 157
+catalog.c:199   INTRACTABLE   "
 
 # disc_locator.c
-disc_locator.c:135   INTRACTABLE   mkdir_p race: another process must create-the-target between our mkdir() and stat(); not unit-testable
-disc_locator.c:138   INTRACTABLE   same as 135
-disc_locator.c:178   DEFERRED      path_under prefix-child branch ("path begins with meta + '/'"); reachable via a deeper search-path layout but cheaper to document
-disc_locator.c:229   DEFERRED      push_discovered dedup against existing search_paths; reachable with a mount_parent==search_paths fixture
-disc_locator.c:274   DEFERRED      consider_catalog cache_dir branch (snprintf success path); needs cache_dir + discovered mount with catalog.db
-disc_locator.c:276   DEFERRED      "                                                                                                                            "
-disc_locator.c:278   DEFERRED      "                                                                                                                            "
-disc_locator.c:279   DEFERRED      "                                                                                                                            "
-disc_locator.c:282   DEFERRED      "                                                                                                                            "
-disc_locator.c:284   DEFERRED      "                                                                                                                            "
-disc_locator.c:366   DEFERRED      refresh_discovered "path too long" warn — needs mount_parent name approaching PATH_MAX
-disc_locator.c:368   DEFERRED      "                                                                                                                            "
-disc_locator.c:373   DEFERRED      meta_disc path_under exclusion in refresh_discovered — needs meta_disc + discovered mount under it
-disc_locator.c:457   VOLATILE      copy_file fwrite error path; covered by test_disc_locator's RLIMIT_FSIZE fs-full drain case when a >=11%-free cache base exists (TMPDIR / /dev/shm / /tmp), uncovered otherwise [FMA-09]
-disc_locator.c:458   VOLATILE      "                                                                                                                            "
-disc_locator.c:567   VOLATILE      drain_disc fs_critically_full warn; covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache base fs is <10% free [FMA-09]
-disc_locator.c:568   VOLATILE      "                                                                                                                            "
-disc_locator.c:574   VOLATILE      "                                                                                                                            "
-disc_locator.c:576   VOLATILE      "                                                                                                                            "
-disc_locator.c:585   DEFERRED      drain_disc 1 GiB cache_bytes_used soft warn; needs >1 GiB in cache_dir
-disc_locator.c:590   DEFERRED      "                                                                                                                            "
-disc_locator.c:591   DEFERRED      "                                                                                                                            "
-disc_locator.c:613   DEFENSIVE     drain_disc "path too long" defensive continue (prefix_dir overflow)
-disc_locator.c:615   DEFENSIVE     "                                                                                                                            "
-disc_locator.c:622   DEFENSIVE     drain_disc "path too long" defensive continue (cache_prefix overflow)
-disc_locator.c:624   DEFENSIVE     "                                                                                                                            "
-disc_locator.c:635   DEFENSIVE     drain_disc "path too long" defensive continue (src path overflow)
-disc_locator.c:637   DEFENSIVE     "                                                                                                                            "
-disc_locator.c:642   DEFENSIVE     drain_disc "path too long" defensive continue (dst path overflow)
-disc_locator.c:644   DEFENSIVE     "                                                                                                                            "
-disc_locator.c:671   DEFENSIVE     scan_paths cache_dir try_with_meta hit branch — needs a pre-populated cache_dir with the pack
-disc_locator.c:736   DEFERRED      print_prompt "catalog has the pack but no current volume mapping" — needs populated catalog
-disc_locator.c:739   DEFERRED      print_prompt "catalog has no record of this pack hash" — needs populated catalog
-disc_locator.c:829   DEFENSIVE     lcsas_disc_locate_pack cwd-under-meta_disc chdir-to-root fallback (best-effort; cwd is /tmp during tests so the predicate is false)
+disc_locator.c:135   DEFERRED   mkdir_p intermediate-mkdir failure; line-reachable via cache_dir=<regular-file>/a/b (ENOTDIR), no race needed (the TOCTOU race branch itself stays untestable) [#401]
+disc_locator.c:138   DEFERRED   "
+disc_locator.c:178   DEFERRED   path_under strict-child branch; reachable via a search path under a LIVE meta_disc (try_with_meta) [#401]
+disc_locator.c:229   DEFERRED   push_discovered dedup vs existing search_paths; reachable with mount_parents==search_paths + a missing pack [#401]
+disc_locator.c:274   DEFERRED   consider_catalog cache_dir happy path (snprintf/unlink/copy_file/open); reachable by merging the mount_parents+catalog.db and cache_dir fixtures [#401]
+disc_locator.c:276   DEFENSIVE   consider_catalog open_path snprintf-overflow guard (cache_dir approaching PATH_MAX); fixtures never trigger
+disc_locator.c:278   DEFERRED   consider_catalog cache_dir happy path (snprintf/unlink/copy_file/open); reachable by merging the mount_parents+catalog.db and cache_dir fixtures [#401]
+disc_locator.c:279   DEFERRED   "
+disc_locator.c:282   DEFERRED   consider_catalog copy_file-failure fallback (open the original); needs the copy to fail (e.g. a dir collision at cache/.locator-catalog.db) [#401]
+disc_locator.c:284   DEFERRED   consider_catalog cache_dir happy path (snprintf/unlink/copy_file/open); reachable by merging the mount_parents+catalog.db and cache_dir fixtures [#401]
+disc_locator.c:366   DEFERRED   refresh_discovered path-too-long warn; needs a real openable mount_parent name approaching PATH_MAX
+disc_locator.c:368   DEFERRED   "
+disc_locator.c:373   DEFERRED   refresh_discovered child-under-live-meta continue; reachable with meta_disc live + a discovered mount at/under it [#401]
+disc_locator.c:457   VOLATILE   copy_file fwrite error path; covered by test_disc_locator RLIMIT_FSIZE fs-full drain when a >=11%-free cache base exists (TMPDIR / /dev/shm / /tmp), uncovered otherwise [FMA-09]
+disc_locator.c:458   VOLATILE   "
+disc_locator.c:567   VOLATILE   drain_disc fs_critically_full warn; covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache base fs is <10% free [FMA-09]
+disc_locator.c:568   VOLATILE   "
+disc_locator.c:574   VOLATILE   "
+disc_locator.c:576   VOLATILE   "
+disc_locator.c:585   DEFERRED   drain_disc 1 GiB cache_bytes_used soft warn; needs >1 GiB summed under cache_dir (a sparse file makes it cheap) [#401]
+disc_locator.c:590   DEFERRED   "
+disc_locator.c:591   DEFERRED   "
+disc_locator.c:613   DEFENSIVE   drain_disc path-too-long defensive continue (prefix_dir overflow)
+disc_locator.c:615   DEFENSIVE   "
+disc_locator.c:622   DEFENSIVE   drain_disc path-too-long defensive continue (cache_prefix overflow)
+disc_locator.c:624   DEFENSIVE   "
+disc_locator.c:635   DEFENSIVE   drain_disc path-too-long defensive continue (src path overflow)
+disc_locator.c:637   DEFENSIVE   "
+disc_locator.c:642   DEFENSIVE   drain_disc path-too-long defensive continue (dst path overflow)
+disc_locator.c:644   DEFENSIVE   "
+disc_locator.c:671   DEFERRED   scan_paths cache-hit return (a normal hit path, not defensive); reachable by pre-populating cache_dir/data/<XX>/<hex> then locating that pack [#401]
+disc_locator.c:737   DEFERRED   print_prompt catalog-has-pack-but-no-current-volume-mapping; needs a populated catalog fixture
+disc_locator.c:739   DEFERRED   print_prompt schema-skew branch (find_pack prepare failed, catalog written by a newer LCSAS); needs a catalog that opens but whose packs query fails [#401]
+disc_locator.c:743   DEFERRED   "
+disc_locator.c:744   DEFERRED   "
+disc_locator.c:745   DEFERRED   "
+disc_locator.c:746   DEFERRED   "
+disc_locator.c:748   DEFERRED   print_prompt catalog-has-no-record-of-this-pack-hash (fr>0); needs a valid catalog lacking the pack row
+disc_locator.c:838   DEFERRED   lcsas_disc_locate_pack cwd-under-meta chdir-to-root fallback; reachable by chdir into a meta subdir before the interactive path (mutates process cwd) [#401]
 
 # lcsas_io.c
 lcsas_io.c:22   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection
-lcsas_io.c:23   INTRACTABLE   same as 22 (error-path return)
-lcsas_io.c:30   INTRACTABLE   lcsas_pread_exact unexpected-EOF EIO branch (issue #222 disc-disconnect classifier); needs a source that returns 0 mid-read — integration-only (test_tier1_drive_disconnect.py truncates packs; not run in coverage-c)
-lcsas_io.c:31   INTRACTABLE   "                                                                                                                            "
+lcsas_io.c:23   INTRACTABLE   "
+lcsas_io.c:30   INTRACTABLE   lcsas_pread_exact unexpected-EOF EIO branch (#222 disc-disconnect classifier); needs a source that returns 0 mid-read - integration-only
+lcsas_io.c:31   INTRACTABLE   "
 lcsas_io.c:47   INTRACTABLE   EINTR retry in lcsas_write_exact write loop; needs racy signal injection
-lcsas_io.c:48   INTRACTABLE   same as 47 (error-path return)
-lcsas_io.c:82   INTRACTABLE   EINTR retry in lcsas_read_file read loop
-lcsas_io.c:83   INTRACTABLE   same as 82 (error-path return)
+lcsas_io.c:48   INTRACTABLE   "
+lcsas_io.c:82   INTRACTABLE   EINTR retry in lcsas_read_file read loop; needs racy signal injection
+lcsas_io.c:83   INTRACTABLE   "
 
 # main.c
-main.c:438   INTRACTABLE   "ERROR: snapshot load failed" — load_snapshots returns 0 even on per-file decrypt failures; only -1 on early calloc fail (fault-inject blocked)
-main.c:439   INTRACTABLE   goto out after 438
-main.c:475   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)
+main.c:524   DEFERRED   ERROR: snapshot load failed; load_snapshots returns -1 on early calloc fail (fault-inject blocked) AND on the craftable too-large/invalid-JSON snapshot paths (repo.c 905-915) - reachable, deferred with those [#401]
+main.c:525   DEFERRED   "
+main.c:561   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)
 
 # poly1305.c
-poly1305.c:146   INTRACTABLE   Final-clamp non-underflow branch: fires when h ≥ 2^130 − 5 after accumulation; for random messages probability ≈ 5/2^130; requires chosen-message attack on MAC accumulator
-poly1305.c:147   INTRACTABLE   same as 146
-poly1305.c:148   INTRACTABLE   same as 146
-poly1305.c:149   INTRACTABLE   same as 146
-poly1305.c:150   INTRACTABLE   same as 146
+poly1305.c:146   INTRACTABLE   Final-clamp non-underflow branch: fires when h >= 2^130-5 after accumulation; ~5/2^130 for random messages; requires a chosen-message attack on the MAC accumulator
+poly1305.c:147   INTRACTABLE   "
+poly1305.c:148   INTRACTABLE   "
+poly1305.c:149   INTRACTABLE   "
+poly1305.c:150   INTRACTABLE   "
 
 # repo.c
-repo.c:193    DEFERRED      "key count exceeded sanity limit" warn; needs >1M key files
-repo.c:194    DEFERRED      closedir + goto out after 193
-repo.c:195    DEFERRED      "                                                                                                                            "
-repo.c:216    VOLATILE      keys-name sort-swap; coverage depends on filesystem readdir ordering of the fixture keys (uncovered on the author's ext4, covered on other hosts/CI) — env-dependent, so allowed either way
-repo.c:217    VOLATILE      "                                                                                                                            "
-repo.c:218    VOLATILE      "                                                                                                                            "
-repo.c:369    INTRACTABLE   decrypt_repo_file decrypt-MAC fail; requires a ciphertext that decrypts but fails MAC (AEAD prevents crafting without breaking the primitive)
-repo.c:370    INTRACTABLE   return NULL after 369
-repo.c:377    INTRACTABLE   strip_v2_prefix returns -1 (decrypted to 0 bytes); 32 bytes of AEAD overhead means a 32-byte ciphertext produces 0-byte plaintext — would have to craft
-repo.c:378    INTRACTABLE   return NULL after 377
-repo.c:395    INTRACTABLE   zstd decompress fail AFTER probe succeeded; needs a frame whose header parses but body is corrupt
-repo.c:396    INTRACTABLE   "                                                                                                                            "
-repo.c:397    INTRACTABLE   "                                                                                                                            "
-repo.c:494    DEFERRED      "index count exceeded sanity limit" warn; needs >1M index files
-repo.c:495    DEFERRED      closedir + goto out after 494
-repo.c:496    DEFERRED      "                                                                                                                            "
-repo.c:499    DEFERRED      index names realloc growth past 2048 entries; needs 2049+ index files (the petabyte fixture exercises at integration time)
-repo.c:500    DEFERRED      "                                                                                                                            "
-repo.c:501    DEFERRED      "                                                                                                                            "
-repo.c:502    DEFERRED      "                                                                                                                            "
-repo.c:503    DEFERRED      "                                                                                                                            "
-repo.c:609    INTRACTABLE   blob_index_push realloc fail; fault-inject blocked by gcov-runtime malloc-intolerance
-repo.c:610    INTRACTABLE   "                                                                                                                            "
-repo.c:861    INTRACTABLE   read_blob open() disc-disconnect EIO/ENXIO/EACCES classifier (issue #222); needs cdemu/USB-drive ejection mid-read — integration-only
-repo.c:862    INTRACTABLE   "                                                                                                                            "
-repo.c:863    INTRACTABLE   "                                                                                                                            "
-repo.c:864    INTRACTABLE   "                                                                                                                            "
-repo.c:865    INTRACTABLE   "                                                                                                                            "
-repo.c:870    INTRACTABLE   return -1 after 861-869 (open() disc-disconnect classifier path exit)
-repo.c:883    INTRACTABLE   read_blob pack-truncation diagnostic (issue #220); needs an on-disc pack shorter than the index says — integration-only (write-side bug; tier-1 reads validated packs)
-repo.c:886    INTRACTABLE   "                                                                                                                            "
-repo.c:887    INTRACTABLE   "                                                                                                                            "
-repo.c:888    INTRACTABLE   "                                                                                                                            "
-repo.c:900    INTRACTABLE   read_blob pread() disc-disconnect EIO/ENXIO classifier (issue #222); needs cdemu/USB ejection between fstat and pread
-repo.c:901    INTRACTABLE   "                                                                                                                            "
-repo.c:902    INTRACTABLE   "                                                                                                                            "
-repo.c:903    INTRACTABLE   "                                                                                                                            "
-repo.c:907    INTRACTABLE   "                                                                                                                            "
-repo.c:908    INTRACTABLE   "                                                                                                                            "
-repo.c:911    INTRACTABLE   read_blob generic pack-read fail diagnostic (covered by 900-908 classifier above when errno IS classifiable; else-branch needs a non-EIO/ENXIO/EBADF/ENOENT errno from pread)
-repo.c:914    INTRACTABLE   "                                                                                                                            "
-repo.c:916    INTRACTABLE   "                                                                                                                            "
-repo.c:923    INTRACTABLE   read_blob decrypt fail; AEAD primitive cannot be crafted into a decrypt-fail (mac would also fail first)
-repo.c:941    INTRACTABLE   read_blob zstd probe returned <=0 or > 256 MB; needs crafted blob (AEAD-protected)
-repo.c:942    INTRACTABLE   "                                                                                                                            "
-repo.c:943    INTRACTABLE   "                                                                                                                            "
-repo.c:949    INTRACTABLE   read_blob zstd decode fail after probe; needs corrupt-mid-frame zstd (AEAD-protected)
-repo.c:950    INTRACTABLE   "                                                                                                                            "
-repo.c:951    INTRACTABLE   "                                                                                                                            "
-repo.c:960    INTRACTABLE   read_blob hash mismatch; needs crafted ciphertext that decrypts but verify-mismatches
-repo.c:961    INTRACTABLE   "                                                                                                                            "
-repo.c:962    INTRACTABLE   "                                                                                                                            "
-
-# scrypt.c — 100% covered by fault-tolerant gcov fault-inject sweep (Phase 13d)
+repo.c:216   VOLATILE   keys-dir sort/init blocks; fixture-key readdir order decides which run is cold vs warm (inverse of the 254-256 swap body) - env-dependent, allowed either way
+repo.c:217   VOLATILE   "
+repo.c:218   VOLATILE   "
+repo.c:231   DEFERRED   key count exceeded sanity limit guard; needs >1M key files
+repo.c:232   DEFERRED   "
+repo.c:233   DEFERRED   "
+repo.c:461   DEFENSIVE   strip_v2_prefix 0-byte-plaintext return; decrypt rejects <33B input so pt_len>=1 always -> provably unreachable
+repo.c:462   DEFENSIVE   "
+repo.c:463   DEFENSIVE   "
+repo.c:484   DEFERRED   decrypt_repo_file zstd decode-fail after a VALID probe; craftable via test_repo.c enc_write (valid header, corrupt body) [#401]
+repo.c:485   DEFERRED   "
+repo.c:486   DEFERRED   "
+repo.c:487   DEFERRED   "
+repo.c:598   DEFERRED   index count exceeded sanity limit guard; needs >1M index files
+repo.c:599   DEFERRED   "
+repo.c:600   DEFERRED   "
+repo.c:603   DEFERRED   load_index names[] realloc growth at the 2048->4096 boundary; needs 2049 valid-named index files (fires before decrypt) [#401]
+repo.c:604   DEFERRED   "
+repo.c:605   DEFERRED   "
+repo.c:606   DEFERRED   "
+repo.c:607   DEFERRED   "
+repo.c:638   DEFERRED   load_index pass-1 fatal on a malformed-zstd index (DEC_ZSTD); craftable via test_repo.c enc_write [#401]
+repo.c:640   DEFERRED   "
+repo.c:725   DEFENSIVE   load_index pass-2 TOCTOU guard for TOOBIG/ZSTD; pass-1 already fatals on the same static file set, unreachable single-threaded (kept as a guard)
+repo.c:726   DEFENSIVE   "
+repo.c:729   DEFENSIVE   "
+repo.c:731   DEFENSIVE   "
+repo.c:733   DEFENSIVE   "
+repo.c:735   DEFENSIVE   "
+repo.c:744   DEFENSIVE   load_index pass-2 index-too-large (-2); pass-1 parses the same file first with the same cap and fatals -> unreachable
+repo.c:747   DEFENSIVE   "
+repo.c:750   DEFENSIVE   load_index pass-2 invalid-JSON (<=0); pass-1 parses the same file first and fatals -> unreachable
+repo.c:752   DEFENSIVE   "
+repo.c:786   INTRACTABLE   blob_index_push realloc fail; malloc fault-inject blocked by the gcov runtime
+repo.c:787   INTRACTABLE   "
+repo.c:788   INTRACTABLE   "
+repo.c:898   DEFERRED   load_snapshots snapshot auth-fail warn+continue; reachable via a short/corrupt file in snapshots/ [#401]
+repo.c:900   DEFERRED   "
+repo.c:901   DEFERRED   "
+repo.c:905   DEFERRED   load_snapshots snapshot too-large (-2); clamp lcsas_json_max_tok_bytes tiny then load_snapshots [#401]
+repo.c:909   DEFERRED   "
+repo.c:912   DEFERRED   load_snapshots snapshot invalid-JSON (<=0); enc_write a non-JSON plaintext as a snapshot file [#401]
+repo.c:915   DEFERRED   "
+repo.c:1066   DEFERRED   read_blob open() errno classifier; a chmod-000 pack (stat OK, open EACCES) covers the branch (non-root only; the EIO/ENXIO disc-disconnect intent stays hardware-only) [#401]
+repo.c:1067   DEFERRED   "
+repo.c:1068   DEFERRED   "
+repo.c:1069   DEFERRED   "
+repo.c:1070   DEFERRED   "
+repo.c:1075   DEFERRED   "
+repo.c:1109   INTRACTABLE   read_blob pread() disc-disconnect EIO/ENXIO classifier; the fstat guard passed, so pread fails only on a real media error / shrink race - hardware/race only
+repo.c:1110   INTRACTABLE   "
+repo.c:1111   INTRACTABLE   "
+repo.c:1112   INTRACTABLE   "
+repo.c:1116   INTRACTABLE   "
+repo.c:1117   INTRACTABLE   "
+repo.c:1120   INTRACTABLE   read_blob pread generic-errno else-branch + shared exit; needs a non-classified errno from pread (hardware/race)
+repo.c:1123   INTRACTABLE   "
+repo.c:1125   INTRACTABLE   "
+repo.c:1132   DEFERRED   read_blob decrypt fail; a >=33B garbage pack region fails the MAC (the easy direction - harness controls mk + loc, no primitive broken) [#401]
+repo.c:1172   DEFERRED   read_blob bad zstd blob size; a validly-encrypted blob + synthetic loc.uncompressed_length>256MB [#401]
+repo.c:1173   DEFERRED   "
+repo.c:1174   DEFERRED   "
+repo.c:1180   DEFERRED   read_blob zstd decode fail; a validly-encrypted NON-zstd plaintext + loc.uncompressed_length in (0,256MB] [#401]
+repo.c:1181   DEFERRED   "
+repo.c:1182   DEFERRED   "
+repo.c:1191   DEFERRED   read_blob hash mismatch; a validly-encrypted blob + synthetic loc.id set to a WRONG hash (harness controls the expected id) [#401]
+repo.c:1192   DEFERRED   "
+repo.c:1193   DEFERRED   "
 
 # tree.c
-tree.c:216   DEFENSIVE     decode_node_mtime "fail" path (lcsas_json_decode_string returns -1); fixture mtime fields are always well-formed
-tree.c:245   INTRACTABLE   write_blob_sparse write_exact fail on non-zero prefix; needs RO mount or syscall injection
-tree.c:255   INTRACTABLE   write_blob_sparse lseek fail on sparse-hole seek; lseek(SEEK_CUR) on a writable regular file cannot fail without ioctl/syscall injection or a non-seekable fd (pipes/sockets are never used for restore output)
-tree.c:259   DEFERRED      write_blob_sparse short-zero write branch (zero run < 4 KiB); the trailing_zeros.bin fixture blob (0xff*64 + 0x00*8192) uses an 8192-byte run which takes the lseek branch instead; a separate test covering a sub-4-KiB zero run would also require rustic for fixture generation
-tree.c:287   INTRACTABLE   apply_node_ownership body; guarded by `geteuid() != 0` (early return at line 285) — only reachable when the test process runs as root, which the standard coverage-c harness never does
-tree.c:288   INTRACTABLE   "                                                                                                                            "
-tree.c:289   INTRACTABLE   "                                                                                                                            "
-tree.c:290   INTRACTABLE   "                                                                                                                            "
-tree.c:292   INTRACTABLE   "                                                                                                                            "
-tree.c:293   INTRACTABLE   "                                                                                                                            "
-tree.c:295   INTRACTABLE   "                                                                                                                            "
-tree.c:300   INTRACTABLE   lchown wrapper around (void)cast; only reachable when running as root with valid uid/gid fields
-tree.c:347   DEFENSIVE     apply_node_xattrs: body of non-object array entry guard; all entries in the fixture xattr list are JSON objects — the non-object path is a hardening guard against malformed JSON, never triggered in practice
-tree.c:348   DEFENSIVE     "                                                                                                                            "
-tree.c:354   DEFENSIVE     apply_node_xattrs: body of missing-name/value guard; fixture xattr objects always have both "name" and "value" keys — this path handles intentionally-malformed xattr descriptors
-tree.c:355   DEFENSIVE     "                                                                                                                            "
-tree.c:358   DEFENSIVE     apply_node_xattrs: body of non-string name type guard; fixture name field is always a JSON string — this path handles malformed type (e.g. a number in the name field)
-tree.c:359   DEFENSIVE     "                                                                                                                            "
-tree.c:365   DEFENSIVE     apply_node_xattrs: body of empty/failed name decode guard; fixture name "user.lcsas-test" always decodes without error or truncation
-tree.c:366   DEFENSIVE     "                                                                                                                            "
-tree.c:380   INTRACTABLE   apply_node_xattrs: malloc fail for value_buf; requires fault injection against a gcov-instrumented binary — the standard fault-inject sweep may not reach this specific allocation in test_repo
-tree.c:381   INTRACTABLE   "                                                                                                                            "
-tree.c:603   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on lcsas_create_file fail (issue #221); needs a filesystem-full target — integration-only (test_tier1_target_full.py mounts a 1 MiB tmpfs; not run in coverage-c)
-tree.c:604   INTRACTABLE   "                                                                                                                            "
-tree.c:605   INTRACTABLE   "                                                                                                                            "
-tree.c:610   INTRACTABLE   "                                                                                                                            "
-tree.c:665   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on write fail mid-content (issue #221); same constraint as 603
-tree.c:666   INTRACTABLE   "                                                                                                                            "
-tree.c:667   INTRACTABLE   "                                                                                                                            "
-tree.c:668   INTRACTABLE   "                                                                                                                            "
-tree.c:676   INTRACTABLE   "                                                                                                                            "
-tree.c:849   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on mkdir_p fail (issue #221); same constraint as 603 (filesystem-full target)
-tree.c:850   INTRACTABLE   "                                                                                                                            "
-tree.c:851   INTRACTABLE   "                                                                                                                            "
-tree.c:852   INTRACTABLE   "                                                                                                                            "
-tree.c:856   INTRACTABLE   "                                                                                                                            "
-tree.c:925   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT/EPERM/EOPNOTSUPP/ENOSYS classifier on symlink fail (issues #221/#224); needs a filesystem-full or non-POSIX (FAT32/exFAT/SMB) target — integration-only (test_tier1_fat32_target.py loop-mounts a vfat; not run in coverage-c)
-tree.c:926   INTRACTABLE   "                                                                                                                            "
-tree.c:927   INTRACTABLE   "                                                                                                                            "
-tree.c:929   INTRACTABLE   "                                                                                                                            "
-tree.c:933   INTRACTABLE   "                                                                                                                            "
-tree.c:934   INTRACTABLE   "                                                                                                                            "
-tree.c:935   INTRACTABLE   "                                                                                                                            "
-tree.c:944   INTRACTABLE   "                                                                                                                            "
-tree.c:949   INTRACTABLE   "                                                                                                                            "
+tree.c:252   DEFENSIVE   decode_node_mtime decode-string fail (lcsas_json_decode_string<0); fixture mtime fields are always well-formed
+tree.c:281   INTRACTABLE   write_blob_sparse write_exact fail on the non-zero prefix; needs a RO mount or write-syscall injection
+tree.c:291   INTRACTABLE   write_blob_sparse lseek fail on the sparse-hole seek; SEEK_CUR on a writable regular fd cannot fail without syscall injection
+tree.c:295   INTRACTABLE   write_blob_sparse write_exact fail on a short (<4 KiB) zero run; same syscall-injection need as 281 (the branch itself is now covered)
+tree.c:323   INTRACTABLE   apply_node_ownership body; guarded by geteuid()!=0 early-return - only reachable when the test process runs as root, which coverage-c never does
+tree.c:324   INTRACTABLE   "
+tree.c:325   INTRACTABLE   "
+tree.c:326   INTRACTABLE   "
+tree.c:328   INTRACTABLE   "
+tree.c:329   INTRACTABLE   "
+tree.c:331   INTRACTABLE   "
+tree.c:336   INTRACTABLE   apply_node_ownership lchown wrapper; only reachable when running as root with valid uid/gid fields
+tree.c:626   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on lcsas_create_file fail (#221); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
+tree.c:627   INTRACTABLE   "
+tree.c:628   INTRACTABLE   "
+tree.c:633   INTRACTABLE   "
+tree.c:689   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on write fail mid-content (#221); same constraint as 626
+tree.c:690   INTRACTABLE   "
+tree.c:691   INTRACTABLE   "
+tree.c:692   INTRACTABLE   "
+tree.c:700   INTRACTABLE   "
+tree.c:932   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on mkdir_p fail (#221); a non-ENOSPC mkdir failure is tested, the fs-full branch is integration-only
+tree.c:936   INTRACTABLE   "
+tree.c:1013   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT/EPERM/EOPNOTSUPP/ENOSYS classifier on symlink() fail (#221/#224); needs a filesystem-full or non-POSIX (FAT32/exFAT/SMB) target - integration-only
+tree.c:1014   INTRACTABLE   "
+tree.c:1015   INTRACTABLE   "
+tree.c:1017   INTRACTABLE   "
+tree.c:1021   INTRACTABLE   "
+tree.c:1022   INTRACTABLE   "
+tree.c:1023   INTRACTABLE   "
+tree.c:1032   INTRACTABLE   "
+tree.c:1037   INTRACTABLE   tree_restore_recurse generic symlink()-fail catch-all; any symlink() failure needs an environmental condition (RO mount, EACCES) the coverage-c harness does not provide
 ```
 <!-- EXEMPTIONS-FENCE-END -->
 
 ## Path forward
 
-Reducing this list further requires:
+The categories above are honest about *why* each line is uncovered:
 
-1. **Fault-tolerant gcov runtime patch** — unlocks all `INTRACTABLE` malloc-failure entries (scrypt.c, repo.c:609-610, 842, 849).  Phase 13d delivers a SIGSEGV-handler shim that calls `__gcov_dump()` before exit.
-2. **EINTR-injection wrapper** — covers lcsas_io.c 6 lines.  Risky to wire into the normal test path.
-3. **AEAD-corruption fixtures** — would require breaking the cryptographic primitive to craft inputs that decrypt-but-verify-fail or corrupt-mid-zstd.  Genuinely not testable.
-4. **1M+ file fixtures** — the petabyte-scale stress test (`LCSAS_PETABYTE=1`) exercises some at integration time.  For coverage-c we'd need the same scale during the standard build (~10s per million-file readdir).
+- **`DEFERRED`** entries are TRACTABLE — a test could reach them cheaply — but
+  the tests are not yet written.  The bulk of this work is tracked in
+  **#401** (convert testable-but-exempt lines to real tests): notably the
+  `repo.c` read-blob / decrypt / snapshot error paths.  The C unit harness
+  controls the master key (`test_repo.c enc_write`) and the blob metadata
+  (`lcsas_blob_loc`), so a decrypt-MAC-fail / hash-mismatch / corrupt-zstd
+  input is crafted by corrupting a valid blob — **no cryptographic primitive is
+  broken** (the earlier "AEAD prevents crafting" framing was wrong; #383).
+- **`INTRACTABLE`** entries genuinely need infrastructure beyond the unit
+  harness: the fault-tolerant gcov runtime cannot reach some `malloc`-failure
+  branches (`repo.c blob_index_push`); `EINTR` retries in `lcsas_io.c` need
+  racy signal injection; the `poly1305` final-clamp needs a chosen-message
+  attack; the ENOSPC/EDQUOT and disc-disconnect classifiers need a
+  filesystem-full or hardware-eject target (exercised only by the
+  integration-tier tests, not `coverage-c`).
+- **`DEFENSIVE`** entries are provably unreachable given upstream invariants
+  (kept as guards); **`VOLATILE`** entries are environment/order-dependent
+  (`readdir` order, free-space) and covered on some hosts, uncovered on others.
+
+Reducing the `INTRACTABLE` set further would need a fault-tolerant gcov runtime
+patch (malloc-failure branches), an EINTR-injection wrapper (`lcsas_io.c`), or
+running the integration-tier filesystem/disc-fault fixtures inside `coverage-c`.
 
 ## lcsas-keyshare (SLIP-0039 combiner)
 
