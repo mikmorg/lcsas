@@ -222,11 +222,15 @@ jobs:
           if ($rc -ne 77) { throw "restore.bat must exit 77 on a wrong password; got $rc" }
           if ($out -match "trying tier 2") { throw "restore.bat fell through to tier 2 on a wrong password" }
           if ($out -notmatch "could not decrypt the repository") { throw "wrong-password banner missing from output" }
-          # No partial tree should be left behind.  (The hidden
-          # .lcsas-restore-marker sentinel is excluded by default —
-          # Get-ChildItem without -Force skips hidden files.)
-          $restored = Get-ChildItem -Path $target -Recurse -File -ErrorAction SilentlyContinue
-          if ($restored) { throw "wrong-password run left a partial tree behind" }
+          # No restored data may be left behind.  restore.bat drops a
+          # .lcsas-restore-marker resume sentinel into the target BEFORE
+          # any tier runs (UX-07); it is script state, not tier output,
+          # so exclude it by NAME.  -Force so a marker is seen and
+          # filtered regardless of attributes; anything else is a real
+          # partial tree.
+          $restored = Get-ChildItem -Path $target -Recurse -File -Force -ErrorAction SilentlyContinue |
+                      Where-Object { $_.Name -ne '.lcsas-restore-marker' }
+          if ($restored) { throw "wrong-password run left a partial tree behind: $($restored.FullName -join ', ')" }
           Write-Host "Wrong-password case failed cleanly (rc=77, terminal, no partial tree)."
           # All assertions passed; throw above is the only failure path.
           # Without this, the step inherits the lingering $LASTEXITCODE=77

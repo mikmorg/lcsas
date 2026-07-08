@@ -400,18 +400,15 @@ if not exist "%TARGET%" (
     exit /b 1
 )
 REM Mark this folder so a later resume into it does not re-prompt.
-REM +h matches restore.sh's dot-file convention and the docs' "hidden
-REM zero-byte marker" -- on Windows a leading dot alone hides nothing,
-REM and an unhidden marker reads as restored data to any "did the failed
-REM run leave files behind?" check -- issue #384 / windows-e2e.
-REM Create-if-absent: cmd cannot `>`-overwrite a file that already has
-REM the hidden attribute (access denied), so a resume run must not try.
-if not exist "%MARKER%" > "%MARKER%" echo. 2>nul
-REM Hide unconditionally (idempotent) so a marker written UNHIDDEN by an
-REM older restore.bat is retro-hidden on resume -- else it lingers as a
-REM visible file and reads as restored data to a "did the run leave
-REM files behind?" check (issue #384 / windows-e2e).
-attrib +h "%MARKER%" 2>nul
+REM Kept intentionally simple: a bare redirect, no `if`/`attrib` around
+REM it.  Anything more here sits between the target prompt and the
+REM password prompt, and a subtle cmd parse of a conditional redirect
+REM can swallow the next piped stdin line -- which silently ate the
+REM password on the windows-e2e runner (issue #384).  The marker is a
+REM known filename; callers that must ignore it (the windows-e2e
+REM negative case, the shell/wine tests) exclude it BY NAME rather than
+REM relying on a hidden attribute.
+> "%MARKER%" echo. 2>nul
 
 REM ----- Password prompt --------------------------------------------
 REM CMD has no `read -s` equivalent, so the password is visible while
