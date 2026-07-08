@@ -180,21 +180,19 @@ def test_corrupt_key_file_is_not_a_password_verdict(tmp_path: Path) -> None:
 
 
 def _mangle_fixture_key(repo: Path, data_b64: str) -> None:
-    """Copy the fixture key file(s) into repo/keys, then overwrite the
-    first key's ``data`` field with a chosen base64 string.  Used to
-    forge a structurally-valid key file whose ciphertext is too short
-    to authenticate."""
-    import base64  # noqa: F401  (documents the encoding used by callers)
+    """Build a SINGLE-key repo/keys whose one key file is a real fixture
+    key with its ``data`` field overwritten by ``data_b64`` (already
+    base64).  Single key on purpose: an intact sibling key would
+    MAC-reject the test password and (correctly) make the run terminal,
+    masking the structural-failure path this helper is here to exercise."""
     import json
 
     src = _require_fixture() / "keys"
     (repo / "keys").mkdir(parents=True)
-    names = sorted(p.name for p in src.iterdir())
-    for i, name in enumerate(names):
-        obj = json.loads((src / name).read_text())
-        if i == 0:
-            obj["data"] = data_b64
-        (repo / "keys" / name).write_text(json.dumps(obj))
+    name = sorted(p.name for p in src.iterdir())[0]
+    obj = json.loads((src / name).read_text())
+    obj["data"] = data_b64
+    (repo / "keys" / name).write_text(json.dumps(obj))
 
 
 def test_truncated_data_field_is_not_a_password_verdict(
@@ -210,7 +208,7 @@ def test_truncated_data_field_is_not_a_password_verdict(
 
     bin_path = _find_bin()
     repo = tmp_path / "repo"
-    # 9 bytes < 33 → structural failure, no MAC check.
+    # 8 bytes < 33 → structural failure, no MAC check.
     _mangle_fixture_key(repo, base64.b64encode(b"shortpad").decode())
     pwfile = tmp_path / "pw"
     pwfile.write_text("does-not-matter")
@@ -230,6 +228,48 @@ def test_truncated_data_field_is_not_a_password_verdict(
     assert "wrong password" not in (res.stdout + res.stderr).lower(), (
         f"truncated ciphertext must not read as a wrong password:\n"
         f"{res.stderr}"
+    )
+
+
+def test_wrong_password_is_terminal_even_with_a_corrupt_second_key(
+    tmp_path: Path,
+) -> None:
+    """#384 CLOSED design decision (review round 3): when a real key file
+    CONCLUSIVELY MAC-rejects the password, that is terminal (77) even if
+    keys/ also holds a stray/corrupt file that fails before its own MAC
+    check.  Otherwise a wrong password plus one bit-rotted key would
+    demote the verdict to a fall-through and let tier 2 write a partial
+    tree — the exact harm #384 prevents.  The case this trades away
+    (a restic multi-key repo where the matching key is the unparseable
+    one) is not produced by LCSAS and is documented on #399."""
+    import base64
+
+    bin_path = _find_bin()
+    fixture = _require_fixture()
+    repo = tmp_path / "repo"
+    (repo / "keys").mkdir(parents=True)
+    # A real, decryptable key file (will MAC-reject the wrong password)...
+    for p in (fixture / "keys").iterdir():
+        (repo / "keys" / p.name).write_text(p.read_text())
+    # ...plus a structurally-valid-but-truncated stray key file.
+    import json
+    any_key = json.loads(next((fixture / "keys").iterdir()).read_text())
+    any_key["data"] = base64.b64encode(b"shortpad").decode()
+    (repo / "keys" / "ffffffffffffffff").write_text(json.dumps(any_key))
+
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("not-the-real-password")
+
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(tmp_path / "restored"),
+        timeout=30,
+    )
+    assert res.returncode == 77, (
+        f"a conclusive MAC reject must stay terminal (77) despite a "
+        f"corrupt sibling key; got rc={res.returncode}\nstderr:\n{res.stderr}"
     )
 
 

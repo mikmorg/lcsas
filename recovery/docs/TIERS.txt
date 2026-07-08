@@ -260,16 +260,21 @@ keys with the same password, so a later tier could only fail the same
 way -- and some (rustic) write a partial tree before rejecting the
 password.
 
-Tier 1 exits 77 only when EVERY key file it examined positively
-rejected the password with a Poly1305 MAC mismatch AND none failed
-before their MAC check.  Anything softer keeps exit 1 and MAY still
-fall through, because the password was not conclusively tested:
+Tier 1 exits 77 when a key file CONCLUSIVELY rejected the password
+with a Poly1305 MAC mismatch and none decrypted.  A softer failure --
+where no key file even reached its MAC check -- keeps exit 1 and MAY
+still fall through, because the password was never actually tested:
   * a missing/unreadable keys directory, or no key files at all;
   * a malformed/truncated key file (fails the ciphertext length or
-    JSON checks before any MAC is computed);
-  * a multi-key repo where the key matching this password is one
-    tier-1 cannot parse but a later tier (rustic) can -- exit 1 lets
-    that tier get its chance.
+    JSON checks before any MAC is computed).
+A conclusive reject stays terminal even if keys/ also holds a stray or
+corrupt file -- otherwise a wrong password plus one bit-rotted key
+would fall through and let tier 2 leave a partial tree, the exact harm
+this guards against.  The case this trades away -- a hand-rolled
+restic MULTI-KEY repo where the key matching the password is the one
+tier-1 cannot parse -- is not produced by LCSAS (one key file per
+repo) and is a documented limitation on issue #399.
+
 Scope: this guard lives in tier 1; if tier 1 is absent or skipped by
 pre-flight, a wrong password is only detected by a later tier, which
 can still leave a partial tree (issue #399).

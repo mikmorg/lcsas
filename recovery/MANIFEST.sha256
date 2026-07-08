@@ -16,7 +16,7 @@ edb9e65d9cd885905931dbf1c6510ed01b1adff2516ecbfcdec135eb773b6cab  ./docs/RECOVER
 1736646e859b78f5d0b1f15fe336ad81abac8828933dbd5a7bd90840e0b6dcdf  ./docs/RECOVER_WINDOWS.txt
 f194c16ed7c3a60a1a33377cf7444a7036f583f3da591e51a528058a536434da  ./docs/RESTORE_STANDARD_TOOLS.txt
 cfa31efe2f8bdca2559ccfb1b31734a22de7d5cf83b18d99cdd66edec0a87204  ./docs/SANITIZER_SUPPRESSIONS.txt
-19426ef150c98a2f4ceb714646ab9a3f181b724e3ca37e87a6f5f68c45cb0596  ./docs/TIERS.txt
+ec69475b103237434fb35336d1ac05b608e799a76d6defc285f182dfe14ec201  ./docs/TIERS.txt
 179165a0fe80961437768be776afea164906b9209fee7b0c74c46a5d11c5bb2d  ./docs/UX_CONCERNS.txt
 d4f4fee1fe7dd65e9c6ea92b730c7fa0765da57faf2b738c46d75e0431699956  ./docs/WINDOWS_RECOVERY_PLAN.txt
 b3a909e3418d2e76f7a9727724c6bd2861547a2e89530125b3ef54ff5965ecbf  ./fuzz/corpus/b64/seed_ab
@@ -139,7 +139,7 @@ ec4082af81aebc47f987d37bcbe26188897aca8279cfb0a4932ef3051178a1a5  ./src/lcsas-re
 ba9ca3762ddea3767fba1f3d2f20397c0f013ff7aa78fff4de7b7b1395591b99  ./src/lcsas-restore/json_q.h
 c1bb1dc41ff1be26396c711fdf28e604bb857d6c160d239abe0c086ef58d037e  ./src/lcsas-restore/lcsas_io.c
 bf00448d338a39756b238d5c3fdd032e894071e1574d505f247fc6cd19f54481  ./src/lcsas-restore/lcsas_io.h
-20f263a18cc7e7e74f728404fd37199e0435969e801b3124f801e5054c8d4e51  ./src/lcsas-restore/main.c
+45e7248f5381768e28dac472d9158bc7bd0c49a1143eb4ef6f5bb607c879ad1d  ./src/lcsas-restore/main.c
 2628b3c4e57b4995423d876046874d9437ffca989133979c8d0b93d1b174ebd7  ./src/lcsas-restore/path.c
 acf2475fa670283d175bce6cb0d644b5658ab6ef6b01f7e2a9c43bc7a29b5bc0  ./src/lcsas-restore/path.h
 7e3b8f3221d831ffa2e821c1f2a43968a54cd6d31da0c6f1070b8df43b336602  ./src/lcsas-restore/pbkdf2.c
@@ -147,7 +147,7 @@ acf2475fa670283d175bce6cb0d644b5658ab6ef6b01f7e2a9c43bc7a29b5bc0  ./src/lcsas-re
 00a6aa88a7994a79952268059e39c61d40f81e374294bf61f1a27ac06762610c  ./src/lcsas-restore/poly1305.c
 80543511e8036d293ab28479c6ff70b35774857263ec9e1049d9b97d2ecd932a  ./src/lcsas-restore/poly1305.h
 1aa6de08217ecf30d21df70cc45a4a6083db5b50a86ee7de9e48cdc412b294d5  ./src/lcsas-restore/posix_compat.h
-cd814af20ded0d15f5b922a9a3ecd1a1fd38753fd7472ab1c80cee52aca3994b  ./src/lcsas-restore/repo.c
+dc2a170c7185d645c16ef99df1d0c46b44f494e29db84ef6faf44472f18318a2  ./src/lcsas-restore/repo.c
 a6e5155f4ee8e8e5ac5704bd8ffbad272f0709e2a9519751faa0608d951678ef  ./src/lcsas-restore/repo.h
 630a1a200aaade635afb96819ee39fb9396886ddedc5fa81dd9898fd0fdeb24f  ./src/lcsas-restore/scrypt.c
 766b1676df12e27529cf40d3bd9adbcdd63e44f2c47b046f181625d0fbdf315d  ./src/lcsas-restore/scrypt.h

@@ -383,11 +383,18 @@ main(int argc, char **argv)
             goto out;
         }
         if (krc != 0) {
-            /* Missing/unreadable keys dir, no candidate key files, or
-             * allocation failure: NOT a password verdict.  Generic
-             * failure (1) so the cascade may still try another tier. */
-            fprintf(stderr, "ERROR: cannot read any repo key file under %s "
-                            "(missing or unreadable keys directory?)\n",
+            /* Not a password verdict: no key file could be tested at
+             * all -- the directory is missing/unreadable, holds no key
+             * files, OR every key file is corrupt/truncated (fails
+             * before its MAC check), or an allocation failed.  Generic
+             * failure (1) so the cascade may still try another tier.
+             * Name all the plausible causes so a heir with a present
+             * but bit-rotted key file is not misdirected to a
+             * directory-permissions problem (#384 review round 3). */
+            fprintf(stderr, "ERROR: could not read or decrypt any repo key "
+                            "file under %s\n"
+                            "       (keys directory missing/unreadable, no "
+                            "key files, or a key file is corrupt)\n",
                     keys_dir);
             goto out;
         }

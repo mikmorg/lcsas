@@ -217,8 +217,7 @@ lcsas_repo_load_keys_dir(const char *keys_dir,
     size_t ncount = 0;
     size_t ncap = 0;
     int found = 0;
-    int saw_reject = 0;    /* >=1 key file positively MAC-rejected     */
-    int saw_untested = 0;  /* >=1 key file failed before its MAC check */
+    int saw_reject = 0;    /* >=1 key file positively MAC-rejected */
     int rc = -1;
     size_t i;
 
@@ -270,19 +269,30 @@ lcsas_repo_load_keys_dir(const char *keys_dir,
             break;
         }
         if (r == LCSAS_REPO_ERR_WRONG_PASSWORD) saw_reject = 1;
-        else saw_untested = 1;   /* -1: couldn't reach the MAC check */
     }
-    /* Terminal wrong-password (mapped to exit 77) only when EVERY key
-     * file we saw was actually tested and rejected the password.  If
-     * even one key file failed before its MAC check (unreadable,
-     * malformed, or a tier-1 parser limit a different tool might not
-     * hit), stay at the generic -1 so the cascade can still try another
-     * tier against that key -- e.g. a restic multi-key repo where the
-     * key matching this password is the one tier-1 couldn't parse
-     * (#384 review round 2). */
+    /* Terminal wrong-password (mapped to exit 77) when a key file
+     * CONCLUSIVELY rejected the password via a Poly1305 MAC mismatch
+     * and none decrypted.  "No key file even reached its MAC check"
+     * (unreadable/malformed/truncated -- load_key_file returned the
+     * generic -1) stays -1 so the cascade can still try another tier,
+     * because the password was never actually tested.
+     *
+     * CLOSED DESIGN DECISION (#384; do not re-litigate).  When keys/
+     * holds >1 file and one MAC-rejects while another is untestable,
+     * tier-1 cannot tell "wrong password + a stray/corrupt file"
+     * (review round 3: should be terminal) from "multi-key repo, right
+     * password, matching key is the one tier-1 can't parse" (review
+     * round 2: should fall through) -- the two are indistinguishable
+     * from here.  We break the tie toward the #384 charter: a
+     * conclusive MAC reject is TERMINAL.  This is a no-op for real
+     * LCSAS archives (one key file per repo, so saw_reject alone is
+     * exact); it only bites a hand-rolled restic MULTI-KEY repo whose
+     * matching key tier-1 cannot parse, where a correct password would
+     * be wrongly reported wrong.  That case is not produced by LCSAS
+     * and is tracked as a documented limitation on issue #399. */
     if (found)
         rc = 0;
-    else if (saw_reject && !saw_untested)
+    else if (saw_reject)
         rc = LCSAS_REPO_ERR_WRONG_PASSWORD;
     else
         rc = -1;
