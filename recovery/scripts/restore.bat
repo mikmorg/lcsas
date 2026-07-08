@@ -498,14 +498,14 @@ if exist "%BIN%" (
         pause
         exit /b 0
     )
+    REM A key file POSITIVELY rejected the password (issue #384).  Every
+    REM tier reads the same keys with the same password, so tier 2 would
+    REM only fail identically (and leave a partial tree behind first);
+    REM stop here instead of falling through.  Exit 77 must be raised at
+    REM TOP LEVEL: a bare "exit /b 77" INSIDE this parenthesized
+    REM `if exist "%BIN%"` block does NOT propagate to `cmd /c` on real
+    REM Windows (cmd /c returns 0), so goto a top-level label to exit.
     if !RC! equ 77 (
-        REM A key file POSITIVELY rejected the password -- issue #384.
-        REM Every tier reads the SAME keys with the SAME password, so
-        REM tier 2 would only fail identically -- and leave a partial
-        REM tree behind first.  Stop here with a clear message instead
-        REM of falling through.  NB: no parens in these comments -- an
-        REM unescaped ^) inside a REM line in a parenthesized block
-        REM ends the block early in cmd.
         del "%PWFILE%" 2>nul
         echo.
         echo ============================================================
@@ -513,7 +513,7 @@ if exist "%BIN%" (
         echo  Check the password ^(and any split-key shares^) and re-run.
         echo ============================================================
         pause
-        exit /b 77
+        goto :wrong_password
     )
     echo [tier 1] failed with exit code !RC!; trying tier 2...
 )
@@ -553,3 +553,10 @@ echo  launch it for you.
 echo ============================================================
 pause
 exit /b 1
+
+REM Reached only via `goto` from the tier-1 exit-77 branch above.  At
+REM top level (outside every parenthesized block) so `exit /b 77`
+REM reliably propagates to `cmd /c` (issue #384).  Normal flow stops at
+REM the `exit /b 1` above and never falls into this label.
+:wrong_password
+exit /b 77

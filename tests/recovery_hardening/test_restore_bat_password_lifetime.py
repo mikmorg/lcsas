@@ -41,10 +41,17 @@ def test_no_pwfile_delete_on_tier1_fallthrough_path() -> None:
     block = _tier1_block()
 
     # Carve out the two terminal branch bodies; whatever `del` remains is
-    # on the fall-through path.
+    # on the fall-through path.  A terminal branch ends at whichever
+    # comes first: an `exit /b` or a `goto :` (the 77 branch leaves the
+    # block via `goto :wrong_password` so its exit propagates from top
+    # level — see restore.bat).
     def _branch_body(marker: str) -> str:
         start = block.index(marker)
-        exit_at = block.index("exit /b", start)
+        exit_at = min(
+            (i for i in (block.find("exit /b", start),
+                         block.find("goto :", start)) if i != -1),
+            default=len(block),
+        )
         return block[start:exit_at]
 
     fallthrough = block
@@ -67,7 +74,12 @@ def test_terminal_branches_delete_pwfile() -> None:
     block = _tier1_block()
     for marker in ("if !RC! equ 0 (", "if !RC! equ 77 ("):
         branch_start = block.index(marker)
-        branch_exit = block.index("exit /b", branch_start)
+        # 77 branch leaves via `goto :wrong_password`; success via `exit /b`.
+        branch_exit = min(
+            (i for i in (block.find("exit /b", branch_start),
+                         block.find("goto :", branch_start)) if i != -1),
+            default=len(block),
+        )
         branch = block[branch_start:branch_exit]
         assert 'del "%PWFILE%"' in branch, (
             f"tier-1 branch {marker!r} exits without deleting %PWFILE% — "
