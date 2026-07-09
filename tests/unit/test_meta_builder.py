@@ -640,19 +640,32 @@ class TestBundleUpstreamBinaries:
     """
 
     def _make_cache(self, root, target, *, with_rustic=True, with_python=True):
-        """Populate root with fake cached files for one target."""
+        """Populate root with fake cached files for one target.
+
+        Mirrors the REAL fetch_upstream.sh layout: python lands under
+        its own triple — x86_64-pc-windows-MSVC for the windows-gnu
+        target, because python-build-standalone ships no gnu build
+        (UPSTREAM.sha256 header; MetaVolumeBuilder.PYTHON_TRIPLE_OVERRIDE,
+        #404).  Faking python under the gnu triple would re-encode the
+        pre-#404 bug this layout exposed.
+        """
+        from lcsas.meta.builder import MetaVolumeBuilder
+
         if with_rustic:
             d = root / "rustic" / target
             d.mkdir(parents=True)
             (d / "rustic").write_text("#!/bin/sh\necho fake rustic\n")
             (d / "rustic").chmod(0o755)
         if with_python:
-            d = root / "python" / target / "python" / "bin"
+            py_target = MetaVolumeBuilder.PYTHON_TRIPLE_OVERRIDE.get(
+                target, target
+            )
+            d = root / "python" / py_target / "python" / "bin"
             d.mkdir(parents=True)
             (d / "python3").write_text("#!/bin/sh\necho fake python3\n")
             (d / "python3").chmod(0o755)
             # Add a stdlib placeholder so the tree looks real.
-            (root / "python" / target / "python" / "lib").mkdir()
+            (root / "python" / py_target / "python" / "lib").mkdir()
 
     def test_no_cache_dir_is_silent_skip(self, tmp_path, monkeypatch):
         """Missing cache root → the *bundler* returns without error or
@@ -1804,7 +1817,10 @@ class TestBundleUpstreamBinariesStaging:
         (lin / "bin" / "python3").write_text("#!/bin/sh\n")
         # Windows flat install: python.exe at the target root, plus a
         # sibling dir + file, and tarball/marker files that must be skipped.
-        win = cache / "python" / "x86_64-pc-windows-gnu"
+        # Cached under the MSVC triple exactly as fetch_upstream.sh
+        # produces it (PBS ships no windows-gnu python); the builder's
+        # PYTHON_TRIPLE_OVERRIDE remaps the gnu target's lookup (#404).
+        win = cache / "python" / "x86_64-pc-windows-msvc"
         win.mkdir(parents=True)
         (win / "python.exe").write_bytes(b"MZ")
         (win / "Lib").mkdir()

@@ -1678,6 +1678,17 @@ class MetaVolumeBuilder:
         └── volume_info.json  self-describing metadata
     """
 
+    # python-build-standalone publishes Windows CPython only for the
+    # *-msvc triple, while rustic/restic ship *-gnu — so UPSTREAM.sha256
+    # pins the Windows python under x86_64-pc-windows-msvc (see its
+    # header note "PBS don't ship gnu").  The per-target staging loop
+    # iterates rust triples keyed to rustic; this override remaps ONLY
+    # the python cache lookup so the Windows python is actually found
+    # on a freshly-fetched cache (#404).
+    PYTHON_TRIPLE_OVERRIDE = {
+        "x86_64-pc-windows-gnu": "x86_64-pc-windows-msvc",
+    }
+
     def __init__(
         self,
         output_dir: Path,
@@ -2248,7 +2259,10 @@ class MetaVolumeBuilder:
             # python-build-standalone tarballs extract to a "python/"
             # tree (Linux/macOS) or a flat install tree (Windows;
             # python.exe sits at the top).  Copy the whole tree.
-            python_cache = cache_root / "python" / target / "python"
+            # The Windows python is cached under the msvc triple (PBS
+            # ships no windows-gnu build) — remap the lookup (#404).
+            py_target = self.PYTHON_TRIPLE_OVERRIDE.get(target, target)
+            python_cache = cache_root / "python" / py_target / "python"
             if python_cache.is_dir():
                 py_dst = bin_dst / "python"
                 bin_dst.mkdir(parents=True, exist_ok=True)
@@ -2261,7 +2275,7 @@ class MetaVolumeBuilder:
             else:
                 # Windows PBS tarballs extract to "python/" directly or
                 # to the target root; try both.
-                python_alt = cache_root / "python" / target
+                python_alt = cache_root / "python" / py_target
                 python_exe = python_alt / "python.exe"
                 if python_exe.is_file():
                     py_dst = bin_dst / "python"
