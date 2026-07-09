@@ -36,6 +36,7 @@ from pathlib import Path
 
 import pytest
 
+from lcsas.meta.builder import MetaVolumeBuilder
 from lcsas.meta.required_contents import APPROVED_TARGETS, required_meta_paths
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -435,4 +436,77 @@ def test_built_meta_volume_satisfies_required_contents() -> None:
         + "\n".join(f"  ABSENT {p}" for p in absent)
         + "\n\nRun `make fetch-recovery build-recovery` and rebuild, or "
         "see `make meta-gate`."
+    )
+
+
+# ── #404: Windows python lives under the msvc triple in the cache ──────
+#
+# UPSTREAM.sha256 pins Windows rustic/restic as x86_64-pc-windows-GNU but
+# Windows CPython as x86_64-pc-windows-MSVC (python-build-standalone ships
+# no gnu build).  The per-target staging loop iterates rust triples keyed
+# to rustic, so without PYTHON_TRIPLE_OVERRIDE the Windows python is never
+# found on a freshly-fetched cache and a complete meta build fails loud
+# (RST-05).  These are the fixture-only guards so `make meta-gate` (which
+# needs the ~600 MB cache) isn't the only thing exercising the remap.
+
+
+def _make_builder(tmp_path: Path) -> MetaVolumeBuilder:
+    return MetaVolumeBuilder(output_dir=tmp_path / "meta-out")
+
+
+def test_windows_python_staged_from_msvc_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#404: with the cache laid out exactly as fetch_upstream.sh produces
+    it (python under the MSVC triple), staging must place the python tree
+    under the GNU triple's bin dir alongside rustic."""
+    cache = tmp_path / "cache"
+    py_src = cache / "python" / "x86_64-pc-windows-msvc" / "python"
+    py_src.mkdir(parents=True)
+    (py_src / "python.exe").write_bytes(b"MZ fake-cpython")
+    # No *.tar.gz archives in the fake cache: the #372 re-verification
+    # checks only PRESENT archives, so it passes trivially here.
+    monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache))
+
+    recovery_dst = tmp_path / "recovery_dst"
+    recovery_dst.mkdir()
+    _make_builder(tmp_path)._bundle_upstream_binaries(recovery_dst)
+
+    staged = (
+        recovery_dst / "bin" / "x86_64-pc-windows-gnu" / "python" / "python.exe"
+    )
+    assert staged.is_file(), (
+        "Windows python was not staged from the msvc cache triple — "
+        "PYTHON_TRIPLE_OVERRIDE in MetaVolumeBuilder is broken or gone "
+        "(#404); a fresh-cache `lcsas meta build` would fail RST-05 with "
+        "[x86_64-pc-windows-gnu] python/python.exe missing."
+    )
+
+
+def test_python_triple_override_only_remaps_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The override must not disturb non-Windows targets: a Linux python
+    cached under its own (identical) triple still stages normally."""
+    cache = tmp_path / "cache"
+    py_src = cache / "python" / "x86_64-unknown-linux-musl" / "python" / "bin"
+    py_src.mkdir(parents=True)
+    (py_src / "python3").write_bytes(b"\x7fELF fake-cpython")
+    monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(cache))
+
+    recovery_dst = tmp_path / "recovery_dst"
+    recovery_dst.mkdir()
+    _make_builder(tmp_path)._bundle_upstream_binaries(recovery_dst)
+
+    staged = (
+        recovery_dst
+        / "bin"
+        / "x86_64-unknown-linux-musl"
+        / "python"
+        / "bin"
+        / "python3"
+    )
+    assert staged.is_file(), (
+        "Linux python failed to stage from its own triple — the #404 "
+        "override must remap ONLY x86_64-pc-windows-gnu."
     )
