@@ -650,12 +650,16 @@ coverage-c:
 	    LDFLAGS="--coverage"
 	@echo "[coverage-c] C unit tests: ALL OK"
 	# Step 3: run Python tier-1 hardening tests pointing at the
-	# instrumented binary (same path: build/lcsas-restore)
+	# instrumented binary (same path: build/lcsas-restore).
+	# test_tier1_fault_handling is fixture-only (no rustic), so it runs
+	# here to keep main.c's wrong-password (#219/#384 exit-77) and the
+	# read_blob error diagnostics live under coverage-c (#383).
 	LCSAS_RESTORE_BIN=$(abspath $(BUILD)/lcsas-restore) \
 	    pytest -q \
 	        ../tests/recovery_hardening/test_tier1_unit.py \
 	        ../tests/recovery_hardening/test_tier1_progress.py \
 	        ../tests/recovery_hardening/test_tier1_rescan.py \
+	        ../tests/recovery_hardening/test_tier1_fault_handling.py \
 	    || true
 	# Step 3b: exercise the LCSAS_STRESS_LOOKUPS diagnostic block in
 	# main.c (Linux-only) so coverage-c reports it.  ~1 s.  Uses the

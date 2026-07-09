@@ -1073,3 +1073,66 @@ def test_progress_line_emitted_to_stderr(tmp_path: Path) -> None:
         f"emit_progress_line did not fire — expected '[lcsas-restore] progress:' "
         f"in stderr.\nstderr:\n{res.stderr}"
     )
+
+
+# ── main.c memory-override env vars (LCSAS_MAX_JSON_MIB / _TREE_DEPTH) ──
+#
+# #383: these are cheaply-reachable normal branches, so per docs/adr/0001
+# they get a test rather than an EXEMPTIONS entry.  The pre-existing tests
+# that exercise them (test_tier1_dense_index / test_tier1_deep_tree) are
+# integration-marked and need rustic, so they never run under coverage-c;
+# these fixture-only variants keep the branches live in the coverage-c
+# harness.  Both env vars are parsed once at startup right after the master
+# key loads, so a plain --list-snapshots (no tree walk needed) reaches them.
+
+
+def test_valid_memory_overrides_accepted_and_logged(tmp_path: Path) -> None:
+    """A valid LCSAS_MAX_JSON_MIB / LCSAS_MAX_TREE_DEPTH is accepted; with
+    --verbose the binary logs the chosen ceiling/cap and the run still
+    succeeds (main.c JSON+TREE override valid branches)."""
+    repo = _fixture_repo()
+    if repo is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    bin_path = _find_bin()
+    pwfile = _make_pwfile(tmp_path)
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--list-snapshots",
+        "--verbose",
+        env={"LCSAS_MAX_JSON_MIB": "64", "LCSAS_MAX_TREE_DEPTH": "500"},
+        timeout=10,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "JSON token-buffer ceiling: 64 MiB" in res.stderr, res.stderr
+    assert "tree recursion-depth cap: 500" in res.stderr, res.stderr
+
+
+def test_invalid_memory_overrides_warn_and_are_ignored(
+    tmp_path: Path,
+) -> None:
+    """A non-numeric LCSAS_MAX_JSON_MIB / LCSAS_MAX_TREE_DEPTH is not fatal:
+    the binary warns and falls back to the default, and the run still
+    succeeds (main.c JSON+TREE override invalid-value branches)."""
+    repo = _fixture_repo()
+    if repo is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    bin_path = _find_bin()
+    pwfile = _make_pwfile(tmp_path)
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--list-snapshots",
+        env={"LCSAS_MAX_JSON_MIB": "not-a-number",
+             "LCSAS_MAX_TREE_DEPTH": "xyz"},
+        timeout=10,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "ignoring invalid LCSAS_MAX_JSON_MIB=not-a-number" in res.stderr, (
+        res.stderr
+    )
+    assert "ignoring invalid LCSAS_MAX_TREE_DEPTH=xyz" in res.stderr, (
+        res.stderr
+    )
