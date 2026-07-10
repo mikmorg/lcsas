@@ -307,6 +307,27 @@ static void test_parse_reject(void)
     memset(buf, 0, sizeof(buf));
     CHECK(rs03_parse(buf, sizeof(buf), &L) != 0, "parse rejects non-RS03");
     CHECK(rs03_parse(buf, 10, &L) != 0, "parse rejects tiny input");
+
+    /* #402: a well-formed-looking header whose ndata/nroots are huge
+     * positive i32s.  The geometry check must bound each count BEFORE
+     * summing them -- ndata + nroots with both near INT_MAX is signed
+     * overflow (UB) that a compiler may assume unreachable and elide
+     * the reject.  Craft the header at sector 0 so the stored sectors
+     * field (0) matches the cookie position and parsing reaches the
+     * geometry check. */
+    memcpy(buf + 0, RS03_COOKIE, RS03_COOKIE_LEN);
+    memcpy(buf + 12, "RS03", 4);
+    put_u32le(buf + 68, 0);              /* sectors = hdr sector 0   */
+    put_u32le(buf + 76, 0x7fffffffUL);   /* ndata  = INT_MAX         */
+    put_u32le(buf + 80, 0x7fffffffUL);   /* nroots = INT_MAX         */
+    put_u32le(buf + 120, 1);             /* sectorsPerLayer          */
+    CHECK(rs03_parse(buf, sizeof(buf), &L) != 0,
+          "parse rejects huge ndata/nroots without summing them (#402)");
+
+    /* The asymmetric shape too: INT_MAX + 1 wraps to INT_MIN. */
+    put_u32le(buf + 80, 1);              /* nroots = 1               */
+    CHECK(rs03_parse(buf, sizeof(buf), &L) != 0,
+          "parse rejects INT_MAX ndata with tiny nroots (#402)");
 }
 
 /* ---- rs03_calc_layout: medium selection for the augment encoder ----- */

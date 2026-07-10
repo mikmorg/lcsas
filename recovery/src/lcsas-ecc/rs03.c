@@ -159,8 +159,15 @@ int rs03_parse(const unsigned char *img, size_t img_len, rs03_layout *out)
         return -1;
     }
 
-    /* Geometry sanity: ndata + nroots must be 255, counts in range. */
-    if (out->ndata <= 0 || out->nroots <= 0
+    /* Geometry sanity: ndata + nroots must be 255, counts in range.
+     * Bound each count BEFORE summing: both are attacker-controlled
+     * i32s straight from the header, and summing two near-INT_MAX
+     * values is signed overflow -- UB that a compiler may assume
+     * cannot happen and elide the reject (#402).  Any valid split has
+     * both counts in (0, GF_FIELDSIZE-1), so the bounds reject exactly
+     * the same headers the sum check would, minus the UB. */
+    if (out->ndata <= 0 || out->ndata >= GF_FIELDSIZE - 1
+        || out->nroots <= 0 || out->nroots >= GF_FIELDSIZE - 1
         || out->ndata + out->nroots != GF_FIELDSIZE - 1
         || out->sectors_per_layer == 0
         || out->sectors_per_layer > 0x7fffffffUL) {
