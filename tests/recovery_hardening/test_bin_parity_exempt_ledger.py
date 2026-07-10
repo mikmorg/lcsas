@@ -37,14 +37,11 @@ _LINE_RE = re.compile(r"^(?P<path>\S+)\s+issue=#\d+\b")
 
 # The targets that are non-reproducible under the pinned toolchain and so must
 # remain exempt until the toolchain produces deterministic Mach-O/PE output.
-EXPECTED_EXEMPT = {
-    "x86_64-macos/lcsas-restore",
-    "x86_64-macos/lcsas-keyshare",
-    "aarch64-macos/lcsas-restore",
-    "aarch64-macos/lcsas-keyshare",
-    "x86_64-windows/lcsas-restore.exe",
-    "x86_64-windows/lcsas-keyshare.exe",
-}
+# EMPTY since the #320 promotion: link-time stripping (-Wl,-S Mach-O,
+# -Wl,--strip-debug PE) made both former exemption classes byte-reproducible,
+# so every committed target is byte-gated. If a toolchain bump regresses a
+# flavor, re-add its targets here AND to BIN_PARITY_EXEMPT with a fresh issue.
+EXPECTED_EXEMPT: set[str] = set()
 
 
 def _entries() -> list[tuple[int, str]]:

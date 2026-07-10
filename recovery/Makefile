@@ -431,6 +431,7 @@ bin/x86_64-windows/lcsas-restore.exe:
 	$(MAKE) BUILD=build/x86_64-windows \
 	        CC="$(ZIG_CC) -target x86_64-windows-gnu" \
 	        VENDOR_CFLAGS="-std=gnu99 -O2 -DNDEBUG -Wno-deprecated-declarations -Wno-unused-function" \
+	        LDFLAGS=-Wl,--strip-debug \
 	        BIN_EXT=.exe \
 	        build/x86_64-windows/lcsas-restore.exe
 	mkdir -p bin/x86_64-windows
@@ -441,6 +442,7 @@ bin/aarch64-windows/lcsas-restore.exe:
 	$(MAKE) BUILD=build/aarch64-windows \
 	        CC="$(ZIG_CC) -target aarch64-windows-gnu" \
 	        VENDOR_CFLAGS="-std=gnu99 -O2 -DNDEBUG -Wno-deprecated-declarations -Wno-unused-function" \
+	        LDFLAGS=-Wl,--strip-debug \
 	        BIN_EXT=.exe \
 	        build/aarch64-windows/lcsas-restore.exe
 	mkdir -p bin/aarch64-windows
@@ -470,7 +472,7 @@ bin/x86_64-macos/lcsas-restore:
 	$(MAKE) BUILD=build/x86_64-macos \
 	        CC="$(ZIG_CC) -target x86_64-macos" \
 	        VENDOR_CFLAGS="-std=gnu99 -O2 -DNDEBUG -Wno-deprecated-declarations -Wno-unused-function" \
-	        LDFLAGS= \
+	        LDFLAGS=-Wl,-S \
 	        build/x86_64-macos/lcsas-restore
 	mkdir -p bin/x86_64-macos
 	cp build/x86_64-macos/lcsas-restore bin/x86_64-macos/
@@ -480,7 +482,7 @@ bin/aarch64-macos/lcsas-restore:
 	$(MAKE) BUILD=build/aarch64-macos \
 	        CC="$(ZIG_CC) -target aarch64-macos" \
 	        VENDOR_CFLAGS="-std=gnu99 -O2 -DNDEBUG -Wno-deprecated-declarations -Wno-unused-function" \
-	        LDFLAGS= \
+	        LDFLAGS=-Wl,-S \
 	        build/aarch64-macos/lcsas-restore
 	mkdir -p bin/aarch64-macos
 	cp build/aarch64-macos/lcsas-restore bin/aarch64-macos/
@@ -509,15 +511,15 @@ bin/armv7/lcsas-keyshare:
 	mkdir -p bin/armv7 && cp build/armv7-ks/lcsas-keyshare bin/armv7/
 
 bin/x86_64-windows/lcsas-keyshare.exe:
-	$(MAKE) BUILD=build/x86_64-windows-ks CC="$(ZIG_CC) -target x86_64-windows-gnu" BIN_EXT=.exe build/x86_64-windows-ks/lcsas-keyshare.exe
+	$(MAKE) BUILD=build/x86_64-windows-ks CC="$(ZIG_CC) -target x86_64-windows-gnu" "LDFLAGS=-Wl,--strip-debug" BIN_EXT=.exe build/x86_64-windows-ks/lcsas-keyshare.exe
 	mkdir -p bin/x86_64-windows && cp build/x86_64-windows-ks/lcsas-keyshare.exe bin/x86_64-windows/
 
 bin/x86_64-macos/lcsas-keyshare:
-	$(MAKE) BUILD=build/x86_64-macos-ks CC="$(ZIG_CC) -target x86_64-macos" build/x86_64-macos-ks/lcsas-keyshare
+	$(MAKE) BUILD=build/x86_64-macos-ks CC="$(ZIG_CC) -target x86_64-macos" "LDFLAGS=-Wl,-S" build/x86_64-macos-ks/lcsas-keyshare
 	mkdir -p bin/x86_64-macos && cp build/x86_64-macos-ks/lcsas-keyshare bin/x86_64-macos/
 
 bin/aarch64-macos/lcsas-keyshare:
-	$(MAKE) BUILD=build/aarch64-macos-ks CC="$(ZIG_CC) -target aarch64-macos" build/aarch64-macos-ks/lcsas-keyshare
+	$(MAKE) BUILD=build/aarch64-macos-ks CC="$(ZIG_CC) -target aarch64-macos" "LDFLAGS=-Wl,-S" build/aarch64-macos-ks/lcsas-keyshare
 	mkdir -p bin/aarch64-macos && cp build/aarch64-macos-ks/lcsas-keyshare bin/aarch64-macos/
 
 # Source deps so a keyshare .c/.h edit forces a rebuild (see ecc-arches).
@@ -549,15 +551,15 @@ bin/armv7/lcsas-ecc:
 	mkdir -p bin/armv7 && cp build/armv7-ecc/lcsas-ecc bin/armv7/
 
 bin/x86_64-windows/lcsas-ecc.exe:
-	$(MAKE) BUILD=build/x86_64-windows-ecc CC="$(ZIG_CC) -target x86_64-windows-gnu" BIN_EXT=.exe build/x86_64-windows-ecc/lcsas-ecc.exe
+	$(MAKE) BUILD=build/x86_64-windows-ecc CC="$(ZIG_CC) -target x86_64-windows-gnu" "LDFLAGS=-Wl,--strip-debug" BIN_EXT=.exe build/x86_64-windows-ecc/lcsas-ecc.exe
 	mkdir -p bin/x86_64-windows && cp build/x86_64-windows-ecc/lcsas-ecc.exe bin/x86_64-windows/
 
 bin/x86_64-macos/lcsas-ecc:
-	$(MAKE) BUILD=build/x86_64-macos-ecc CC="$(ZIG_CC) -target x86_64-macos" build/x86_64-macos-ecc/lcsas-ecc
+	$(MAKE) BUILD=build/x86_64-macos-ecc CC="$(ZIG_CC) -target x86_64-macos" "LDFLAGS=-Wl,-S" build/x86_64-macos-ecc/lcsas-ecc
 	mkdir -p bin/x86_64-macos && cp build/x86_64-macos-ecc/lcsas-ecc bin/x86_64-macos/
 
 bin/aarch64-macos/lcsas-ecc:
-	$(MAKE) BUILD=build/aarch64-macos-ecc CC="$(ZIG_CC) -target aarch64-macos" build/aarch64-macos-ecc/lcsas-ecc
+	$(MAKE) BUILD=build/aarch64-macos-ecc CC="$(ZIG_CC) -target aarch64-macos" "LDFLAGS=-Wl,-S" build/aarch64-macos-ecc/lcsas-ecc
 	mkdir -p bin/aarch64-macos && cp build/aarch64-macos-ecc/lcsas-ecc bin/aarch64-macos/
 
 # Source prerequisites for the cross bins.  Without these the bin/<arch>/
