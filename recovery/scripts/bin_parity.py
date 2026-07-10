@@ -144,7 +144,15 @@ def rebuild(t: Target) -> None:
         f"CC={cc}",
     ]
     if t.static:
-        args.append("LDFLAGS=-static")
+        # --strip-debug (#408): unstripped output embeds machine paths in
+        # DWARF — zig's bundled-musl sources at the ziglang INSTALL path,
+        # the checkout dir, and stale zig-cache comp dirs — so bytes were
+        # only reproducible on the machine (and cache) that built them.
+        # Link-time strip removes musl's DWARF too (compile -g0 would not)
+        # and makes output byte-identical across checkout path, ziglang
+        # install path, and cache state (all three proven empirically).
+        # Keep in sync with the Makefile cross recipes + recovery/build.py.
+        args.append("LDFLAGS=-static -Wl,--strip-debug")
     else:
         args.append("LDFLAGS=")
     args.append(f"VENDOR_CFLAGS={t.vendor_cflags or VENDOR_CFLAGS}")
