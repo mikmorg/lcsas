@@ -1136,3 +1136,54 @@ def test_invalid_memory_overrides_warn_and_are_ignored(
     assert "ignoring invalid LCSAS_MAX_TREE_DEPTH=xyz" in res.stderr, (
         res.stderr
     )
+
+
+def test_snapshot_load_failure_is_fatal_and_named(tmp_path: Path) -> None:
+    """#401: a snapshot file that decrypts fine but contains invalid JSON
+    makes lcsas_repo_load_snapshots return -1, and main must abort with
+    the named "snapshot load failed" error (main.c) — never restore from
+    a silently-partial snapshot list.
+
+    Crafting the file needs the fixture's master key; gen_fixture.py
+    exposes it (static, fixture-only) along with encrypt_authenticated,
+    so the crafted snapshot authenticates and the failure happens at the
+    JSON layer — the exact path a truncated-at-generation snapshot would
+    take."""
+    import shutil as _sh
+    import sys as _sys
+
+    repo_src = _fixture_repo()
+    if repo_src is None:
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    bin_path = _find_bin()
+
+    _sys.path.insert(
+        0, str(REPO_ROOT / "recovery" / "tests" / "fixtures")
+    )
+    try:
+        import gen_fixture as gf
+    finally:
+        _sys.path.pop(0)
+
+    repo = tmp_path / "repo"
+    _sh.copytree(repo_src, repo)
+    bad = gf.encrypt_authenticated(
+        gf.MASTER_ENCRYPT, gf.MASTER_MAC_K, gf.MASTER_MAC_R,
+        b"\x7f" + b"\x00" * 15, b'{"unterminated":',
+    )
+    (repo / "snapshots" / ("9" * 64)).write_bytes(bad)
+
+    pwfile = _make_pwfile(tmp_path)
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--list-snapshots",
+        timeout=10,
+    )
+    assert res.returncode != 0, (
+        f"invalid-JSON snapshot must abort the run; got rc=0\n{res.stderr}"
+    )
+    assert "snapshot load failed" in (res.stdout + res.stderr).lower(), (
+        f"missing the named error; stderr:\n{res.stderr}"
+    )
