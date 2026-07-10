@@ -330,6 +330,14 @@ before invoking restore.sh.
       NOT treated as a wrong password; it exits 1 and falls through
       normally.)
 
+      One residual on the no-tier-1 path (#399): when the tier-1
+      binary is absent or won't run (bit rot, wrong arch), the
+      cascade starts directly at tier 2, which has no distinct
+      wrong-password stop -- a wrong password there may leave a
+      partial tree in the target.  This is recoverable, not
+      dangerous: fix the password, delete the target directory,
+      and re-run; restores are idempotent.
+
   LCSAS_ALLOW_PYTHON_TIER=0
       Disable tier 3 entirely, even if python3 and
       standalone_restorer.py are present.  Use this when you want a
