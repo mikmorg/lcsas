@@ -1238,6 +1238,360 @@ main(void)
         }
     }
 
+    /* ══════ #401: testable-but-exempt EXEMPTIONS lines → real tests ═════
+     * The harness controls both the master key (enc_write) and the public
+     * lcsas_blob_loc, so the old exemptions' "AEAD prevents crafting"
+     * premise was false: craft a MAC-valid blob, then corrupt it or point
+     * the loc at a wrong expectation.  Each block below closes a group of
+     * formerly-DEFERRED uncovered lines (issue #401). */
+
+    /* ── #401-A: read_blob error returns via synthetic locs ──────────── */
+    {
+        char tmp[] = "/tmp/lcsas_401_readblob_XXXXXX";
+        char dir[1200], path[1400], hexname[65];
+        lcsas_blob_loc bloc;
+        unsigned char *blob = NULL;
+        size_t blob_len = 0;
+        unsigned char iv[16];
+        /* Deliberately NOT a zstd frame and NOT zstd-magic-prefixed. */
+        static const char payload[] = "lcsas #401 read_blob payload";
+        size_t enc_len = 16 + (sizeof payload - 1) + 16;
+
+        memset(iv, 0, 16); iv[0] = 0x41;
+
+        if (mkdtemp(tmp) == NULL) {
+            fprintf(stderr, "FAIL: 401-A mkdtemp\n"); fails++;
+        } else {
+            FILE *f;
+            unsigned char junk[64];
+            size_t k;
+            for (k = 0; k < sizeof junk; k++)
+                junk[k] = (unsigned char)(k * 7 + 3);
+
+            snprintf(dir, sizeof dir, "%s/data", tmp);    mkdir(dir, 0700);
+            snprintf(dir, sizeof dir, "%s/data/aa", tmp); mkdir(dir, 0700);
+            snprintf(dir, sizeof dir, "%s/data/bb", tmp); mkdir(dir, 0700);
+
+            /* (a) decrypt fail: >=33 B of garbage fails the Poly1305 MAC
+             * (the EASY direction — no primitive broken). */
+            memset(hexname, 'a', 64); hexname[64] = '\0';
+            snprintf(path, sizeof path, "%s/data/aa/%s", tmp, hexname);
+            f = fopen(path, "wb");
+            if (f) { fwrite(junk, 1, sizeof junk, f); fclose(f); }
+            memset(&bloc, 0, sizeof bloc);
+            lcsas_hex_decode(hexname, 32, bloc.pack_id);
+            bloc.offset = 0; bloc.length = (long long)sizeof junk;
+            bloc.uncompressed_length = -1;
+            blob = NULL;
+            if (lcsas_repo_read_blob(tmp, &mk, &bloc, NULL,
+                                     &blob, &blob_len) == 0) {
+                fprintf(stderr, "FAIL: 401-A garbage pack decrypted\n");
+                fails++; free(blob);
+            }
+
+            /* MAC-valid pack for (b)/(c)/(d). */
+            memset(hexname, 'b', 64); hexname[64] = '\0';
+            snprintf(path, sizeof path, "%s/data/bb/%s", tmp, hexname);
+            if (enc_write(&mk, iv, (const unsigned char *)payload,
+                          sizeof payload - 1, path) != 0) {
+                fprintf(stderr, "FAIL: 401-A enc_write\n"); fails++;
+            } else {
+                memset(&bloc, 0, sizeof bloc);
+                lcsas_hex_decode(hexname, 32, bloc.pack_id);
+                bloc.offset = 0; bloc.length = (long long)enc_len;
+
+                /* (b) bad zstd size: index claims >256 MiB uncompressed. */
+                bloc.uncompressed_length = 300LL * 1024 * 1024;
+                fprintf(stderr,
+                        "[test_repo] 401-A expecting bad-size ERROR below:\n");
+                blob = NULL;
+                if (lcsas_repo_read_blob(tmp, &mk, &bloc, NULL,
+                                         &blob, &blob_len) == 0) {
+                    fprintf(stderr, "FAIL: 401-A >256MiB size accepted\n");
+                    fails++; free(blob);
+                }
+
+                /* (c) zstd decode fail: plausible size, non-zstd payload. */
+                bloc.uncompressed_length = 64;
+                fprintf(stderr,
+                        "[test_repo] 401-A expecting decode ERROR below:\n");
+                blob = NULL;
+                if (lcsas_repo_read_blob(tmp, &mk, &bloc, NULL,
+                                         &blob, &blob_len) == 0) {
+                    fprintf(stderr, "FAIL: 401-A non-zstd decompressed\n");
+                    fails++; free(blob);
+                }
+
+                /* (d) hash mismatch: loc.id (all-zero) != sha256(payload). */
+                bloc.uncompressed_length = -1;
+                fprintf(stderr,
+                        "[test_repo] 401-A expecting hash mismatch below:\n");
+                blob = NULL;
+                if (lcsas_repo_read_blob(tmp, &mk, &bloc, NULL,
+                                         &blob, &blob_len) == 0) {
+                    fprintf(stderr, "FAIL: 401-A wrong-id blob accepted\n");
+                    fails++; free(blob);
+                }
+            }
+        }
+    }
+
+    /* ── #401-C: read_blob open() errno classifier via a chmod-000 pack ─
+     * stat() needs only path search permission while open(O_RDONLY) needs
+     * read permission, so mode 000 yields "found by stat, EACCES on open"
+     * and drives the #222 disc-disconnect classifier without hardware.
+     * Root bypasses DAC, so skip there (coverage-c never runs as root). */
+    if (geteuid() != 0) {
+        char tmp[] = "/tmp/lcsas_401_eacces_XXXXXX";
+        char dir[1200], path[1400], hexname[65];
+        lcsas_blob_loc bloc;
+        unsigned char *blob = NULL;
+        size_t blob_len = 0;
+
+        if (mkdtemp(tmp) == NULL) {
+            fprintf(stderr, "FAIL: 401-C mkdtemp\n"); fails++;
+        } else {
+            FILE *f;
+            unsigned char junk[64];
+            memset(junk, 0x5a, sizeof junk);
+            memset(hexname, 'c', 64); hexname[64] = '\0';
+            snprintf(dir, sizeof dir, "%s/data", tmp);    mkdir(dir, 0700);
+            snprintf(dir, sizeof dir, "%s/data/cc", tmp); mkdir(dir, 0700);
+            snprintf(path, sizeof path, "%s/data/cc/%s", tmp, hexname);
+            f = fopen(path, "wb");
+            if (!f) {
+                fprintf(stderr, "FAIL: 401-C pack write\n"); fails++;
+            } else {
+                fwrite(junk, 1, sizeof junk, f); fclose(f);
+                chmod(path, 0);
+                memset(&bloc, 0, sizeof bloc);
+                lcsas_hex_decode(hexname, 32, bloc.pack_id);
+                bloc.offset = 0; bloc.length = (long long)sizeof junk;
+                bloc.uncompressed_length = -1;
+                fprintf(stderr,
+                        "[test_repo] 401-C expecting disc-read ERROR below:\n");
+                blob = NULL;
+                if (lcsas_repo_read_blob(tmp, &mk, &bloc, NULL,
+                                         &blob, &blob_len) == 0) {
+                    fprintf(stderr,
+                            "FAIL: 401-C unreadable pack read anyway\n");
+                    fails++; free(blob);
+                }
+                chmod(path, 0600);   /* let tmp-cleanup tools remove it */
+            }
+        }
+    }
+
+    /* ── #401-D: index with a VALID zstd header but corrupt body ────────
+     * T1C-05 pinned the too-large probe (TOOBIG); this is its sibling: a
+     * frame whose header parses (FCS=100, under the cap) but whose body
+     * is garbage.  decrypt_repo_file's full decode fails (DEC_ZSTD) and
+     * load_index pass-1 must fail loud — the corrupt-index diagnostic. */
+    {
+        char tmp[] = "/tmp/lcsas_401_zstdbody_XXXXXX";
+        char idx_path[1200], hexname[65];
+        lcsas_blob_index ix;
+        unsigned char iv[16];
+        unsigned char frame[18];
+        unsigned long long fcs = 100;
+        int b;
+
+        memset(iv, 0, 16); iv[0] = 0x43;
+        /* v2 prefix 0x02 | zstd magic | desc 0xE0 (FCS=8B, single-segment)
+         * | FCS=100 | 4 bytes of garbage where a block header should be. */
+        frame[0] = 0x02;
+        frame[1] = 0x28; frame[2] = 0xb5; frame[3] = 0x2f; frame[4] = 0xfd;
+        frame[5] = 0xE0;
+        for (b = 0; b < 8; b++)
+            frame[6 + b] = (unsigned char)((fcs >> (8 * b)) & 0xFF);
+        frame[14] = 0xFF; frame[15] = 0xFF; frame[16] = 0xFF; frame[17] = 0xFF;
+
+        if (mkdtemp(tmp) == NULL) {
+            fprintf(stderr, "FAIL: 401-D mkdtemp\n"); fails++;
+        } else if (copy_valid_indexes(repo, tmp) != 0) {
+            fprintf(stderr, "FAIL: 401-D copy_valid_indexes\n"); fails++;
+        } else {
+            memset(hexname, 'c', 64); hexname[64] = '\0';
+            snprintf(idx_path, sizeof idx_path, "%s/index/%s", tmp, hexname);
+            if (enc_write(&mk, iv, frame, sizeof frame, idx_path) != 0) {
+                fprintf(stderr, "FAIL: 401-D enc_write\n"); fails++;
+            } else {
+                fprintf(stderr,
+                        "[test_repo] 401-D expecting corrupt-zstd ERROR "
+                        "below:\n");
+                lcsas_blob_index_init(&ix);
+                rc = lcsas_repo_load_index(tmp, &mk, &ix);
+                if (rc >= 0) {
+                    fprintf(stderr,
+                            "FAIL: 401-D corrupt-body zstd index did not "
+                            "fail load (rc=%d)\n", rc);
+                    fails++;
+                }
+                lcsas_blob_index_free(&ix);
+            }
+        }
+    }
+
+    /* ── #401-E: load_snapshots error paths ───────────────────────────── */
+    {
+        unsigned char iv[16];
+        char hexname[65];
+        memset(iv, 0, 16);
+
+        /* (a) auth-fail snapshot → WARN + skip, load still succeeds. */
+        {
+            char tmp[] = "/tmp/lcsas_401_snapauth_XXXXXX";
+            char sdir[1100], spath[1300];
+            lcsas_snapshot_list snaps;
+            FILE *f;
+            if (mkdtemp(tmp) == NULL) {
+                fprintf(stderr, "FAIL: 401-E(a) mkdtemp\n"); fails++;
+            } else {
+                memset(hexname, 'd', 64); hexname[64] = '\0';
+                snprintf(sdir, sizeof sdir, "%s/snapshots", tmp);
+                mkdir(sdir, 0700);
+                snprintf(spath, sizeof spath, "%s/%s", sdir, hexname);
+                f = fopen(spath, "wb");
+                if (f) { fwrite("garbage!!", 1, 9, f); fclose(f); }
+                fprintf(stderr,
+                        "[test_repo] 401-E expecting auth WARNING below:\n");
+                lcsas_snapshot_list_init(&snaps);
+                rc = lcsas_repo_load_snapshots(tmp, &mk, &snaps);
+                if (rc != 0 || snaps.count != 0) {
+                    fprintf(stderr,
+                            "FAIL: 401-E(a) auth-fail snapshot must warn+"
+                            "skip (rc=%d count=%zu)\n", rc, snaps.count);
+                    fails++;
+                }
+                lcsas_snapshot_list_free(&snaps);
+            }
+        }
+
+        /* (b) decrypts OK but invalid JSON → fatal (-1). */
+        {
+            char tmp[] = "/tmp/lcsas_401_snapjson_XXXXXX";
+            char sdir[1100], spath[1300];
+            lcsas_snapshot_list snaps;
+            static const char badjson[] = "{\"unterminated\":";
+            iv[0] = 0x44;
+            if (mkdtemp(tmp) == NULL) {
+                fprintf(stderr, "FAIL: 401-E(b) mkdtemp\n"); fails++;
+            } else {
+                memset(hexname, 'e', 64); hexname[64] = '\0';
+                snprintf(sdir, sizeof sdir, "%s/snapshots", tmp);
+                mkdir(sdir, 0700);
+                snprintf(spath, sizeof spath, "%s/%s", sdir, hexname);
+                if (enc_write(&mk, iv, (const unsigned char *)badjson,
+                              sizeof badjson - 1, spath) != 0) {
+                    fprintf(stderr, "FAIL: 401-E(b) enc_write\n"); fails++;
+                } else {
+                    fprintf(stderr,
+                            "[test_repo] 401-E expecting invalid-JSON ERROR "
+                            "below:\n");
+                    lcsas_snapshot_list_init(&snaps);
+                    rc = lcsas_repo_load_snapshots(tmp, &mk, &snaps);
+                    if (rc >= 0) {
+                        fprintf(stderr,
+                                "FAIL: 401-E(b) invalid-JSON snapshot must "
+                                "be fatal (rc=%d)\n", rc);
+                        fails++;
+                    }
+                    lcsas_snapshot_list_free(&snaps);
+                }
+            }
+        }
+
+        /* (c) too large for the clamped token ceiling → fatal (-1). */
+        {
+            char tmp[] = "/tmp/lcsas_401_snapbig_XXXXXX";
+            char sdir[1100], spath[1300];
+            lcsas_snapshot_list snaps;
+            size_t saved = lcsas_json_max_tok_bytes;
+            static const char okjson[] = "{\"tree\":\"ab\",\"time\":\"t\"}";
+            iv[0] = 0x45;
+            if (mkdtemp(tmp) == NULL) {
+                fprintf(stderr, "FAIL: 401-E(c) mkdtemp\n"); fails++;
+            } else {
+                memset(hexname, 'f', 64); hexname[64] = '\0';
+                snprintf(sdir, sizeof sdir, "%s/snapshots", tmp);
+                mkdir(sdir, 0700);
+                snprintf(spath, sizeof spath, "%s/%s", sdir, hexname);
+                if (enc_write(&mk, iv, (const unsigned char *)okjson,
+                              sizeof okjson - 1, spath) != 0) {
+                    fprintf(stderr, "FAIL: 401-E(c) enc_write\n"); fails++;
+                } else {
+                    fprintf(stderr,
+                            "[test_repo] 401-E expecting too-large ERROR "
+                            "below:\n");
+                    lcsas_snapshot_list_init(&snaps);
+                    lcsas_json_max_tok_bytes = sizeof(lcsas_json_tok);
+                    rc = lcsas_repo_load_snapshots(tmp, &mk, &snaps);
+                    lcsas_json_max_tok_bytes = saved;
+                    if (rc >= 0) {
+                        fprintf(stderr,
+                                "FAIL: 401-E(c) over-ceiling snapshot must "
+                                "be fatal (rc=%d)\n", rc);
+                        fails++;
+                    }
+                    lcsas_snapshot_list_free(&snaps);
+                }
+            }
+        }
+    }
+
+    /* ── #401-G: load_index names[] realloc growth past 2048 entries ────
+     * 2049 MAC-valid index files fire the doubling realloc during name
+     * collection.  The old DEFERRED rationale conflated this 2049-FILE
+     * boundary with the petabyte fixture's ~6M-blob scale; 2049 tiny
+     * valid files are cheap. */
+    {
+        char tmp[] = "/tmp/lcsas_401_growth_XXXXXX";
+        char idir[1100], ipath[1300];
+        lcsas_blob_index ix;
+        unsigned char iv[16];
+        static const char empty_index[] = "{\"packs\":[]}";
+        int i;
+        int wrote = 0;
+
+        memset(iv, 0, 16); iv[0] = 0x46;
+
+        if (mkdtemp(tmp) == NULL) {
+            fprintf(stderr, "FAIL: 401-G mkdtemp\n"); fails++;
+        } else {
+            char gname[65];
+            int j;
+            snprintf(idir, sizeof idir, "%s/index", tmp);
+            mkdir(idir, 0700);
+            for (i = 0; i < 2049; i++) {
+                for (j = 0; j < 60; j++) gname[j] = '0';
+                snprintf(gname + 60, 5, "%04x", i);
+                snprintf(ipath, sizeof ipath, "%s/%s", idir, gname);
+                iv[1] = (unsigned char)(i & 0xff);
+                iv[2] = (unsigned char)((i >> 8) & 0xff);
+                if (enc_write(&mk, iv,
+                              (const unsigned char *)empty_index,
+                              sizeof empty_index - 1, ipath) != 0) {
+                    break;
+                }
+                wrote++;
+            }
+            if (wrote != 2049) {
+                fprintf(stderr, "FAIL: 401-G wrote %d/2049 files\n", wrote);
+                fails++;
+            } else {
+                lcsas_blob_index_init(&ix);
+                rc = lcsas_repo_load_index(tmp, &mk, &ix);
+                if (rc != 0) {
+                    fprintf(stderr,
+                            "FAIL: 401-G 2049 empty indexes must load "
+                            "cleanly (rc=%d)\n", rc);
+                    fails++;
+                }
+                lcsas_blob_index_free(&ix);
+            }
+        }
+    }
+
     if (fails == 0) printf("test_repo: OK\n");
     return fails ? 1 : 0;
 }

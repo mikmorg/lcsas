@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <fcntl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -665,6 +666,255 @@ main(void)
                         "cache filesystem\n", dst);
                 fails++;
             }
+        }
+    }
+
+    /* mkdir_p INTERMEDIATE failure: a cache_dir TWO levels under a
+     * regular file.  The intermediate mkdir("<file>/a") fails with
+     * ENOTDIR (not a benign race), so mkdir_p restores the slash and
+     * the follow-up stat also fails -> early -1.  Exercises
+     * disc_locator.c lines 135-138; the one-level case above only
+     * reaches the FINAL mkdir at the end of mkdir_p. */
+    {
+        char file_as_parent[1024];
+        char nested[1024];
+        FILE *f;
+        snprintf(file_as_parent, sizeof file_as_parent,
+                 "%s_blocker_file2", tmpdir);
+        f = fopen(file_as_parent, "wb");
+        if (f) { fputs("x", f); fclose(f); }
+        snprintf(nested, sizeof nested, "%s/a/b", file_as_parent);
+        lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+        lcsas_disc_locator_set_cache_dir(&l, nested);  /* must fail */
+        lcsas_disc_locator_free(&l);
+        unlink(file_as_parent);
+    }
+
+    /* path_under strict-child branch: a search path that is a CHILD
+     * of a live meta disc must be excluded.  meta=<mnt> (sentinel
+     * present), search=<mnt>/disc -> path_under("<mnt>/disc","<mnt>")
+     * takes the prefix-child return (disc_locator.c line 178). */
+    {
+        char mnt[1024];
+        char disc[1024];
+        char sub[1024];
+        const char *search[1];
+        FILE *f;
+        snprintf(mnt, sizeof mnt, "%s_metamnt", tmpdir);
+        snprintf(disc, sizeof disc, "%s/disc", mnt);
+        snprintf(sub, sizeof sub, "%s/recovery/scripts", mnt);
+        if (mkdir_recursive(sub) != 0) {
+            fprintf(stderr, "FAIL mkdir meta-child sentinel\n"); fails++;
+        }
+        snprintf(sub, sizeof sub, "%s/recovery/scripts/restore.sh", mnt);
+        f = fopen(sub, "wb");
+        if (f) { fputs("#!/bin/sh\n", f); fclose(f); }
+        /* Real pack under the child so only the exclusion can hide it. */
+        snprintf(sub, sizeof sub, "%s/data/01", disc);
+        mkdir_recursive(sub);
+        snprintf(sub, sizeof sub, "%s/data/01/%s", disc, hex);
+        write_pack(sub, "pack-under-meta-child");
+        search[0] = disc;
+        lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+        lcsas_disc_locator_set_meta(&l, mnt);
+        rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
+        if (rc == 0) {
+            fprintf(stderr,
+                    "FAIL: search path under live meta must be "
+                    "excluded, rc=%d\n", rc); fails++;
+        }
+        lcsas_disc_locator_free(&l);
+        {
+            char rm[1024];
+            snprintf(rm, sizeof rm, "rm -rf %s", mnt);
+            (void)system(rm);
+        }
+    }
+
+    /* push_discovered dedup: the same directory given as BOTH a
+     * search path and a mount parent must not be double-registered.
+     * Locating a missing pack forces refresh_discovered ->
+     * push_discovered(tmpdir), which matches search_paths[0] and
+     * returns early (disc_locator.c line 229). */
+    {
+        unsigned char missing[32];
+        const char *search[] = { tmpdir };
+        const char *parents[] = { tmpdir };
+        memset(missing, 0xEE, 32);
+        lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+        lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+        rc = lcsas_disc_locate_pack(&l, missing, found, sizeof found);
+        if (rc == 0) {
+            fprintf(stderr,
+                    "FAIL: dedup miss should return non-zero, got 0\n");
+            fails++;
+        }
+        lcsas_disc_locator_free(&l);
+    }
+
+    /* consider_catalog WITH a cache dir: the catalog.db found on a
+     * discovered mount must be copied into the cache and the COPY
+     * opened, not the original (disc_locator.c lines 274-284:
+     * snprintf of the copy path, unlink of a prior copy, copy_file,
+     * open of the copy).  A stub catalog copies fine and then fails
+     * to open, which is enough to line-cover the path. */
+    {
+        char parent[1024];
+        char disc[1024];
+        char cat[1024];
+        char cache_dir[1024];
+        const char *parents[1];
+        FILE *f;
+        snprintf(parent, sizeof parent, "%s_catcacheparent", tmpdir);
+        snprintf(disc, sizeof disc, "%s/discA", parent);
+        snprintf(cat, sizeof cat, "%s/catalog.db", disc);
+        snprintf(cache_dir, sizeof cache_dir,
+                 "%s/lcsas_dl_catcache_%ld", roomy_base(), (long)getpid());
+        if (mkdir_recursive(disc) != 0) {
+            fprintf(stderr, "FAIL mkdir catcache disc\n"); fails++;
+        }
+        f = fopen(cat, "wb");
+        if (f) { fputs("not a real catalog", f); fclose(f); }
+        {
+            char dp[1024];
+            snprintf(dp, sizeof dp, "%s/data/01", disc);
+            mkdir_recursive(dp);
+            snprintf(dp, sizeof dp, "%s/data/01/%s", disc, hex);
+            write_pack(dp, "pack-from-catcache-disc");
+        }
+        mkdir_recursive(cache_dir);
+        parents[0] = parent;
+        lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+        lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+        lcsas_disc_locator_set_cache_dir(&l, cache_dir);
+        rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
+        (void)rc; /* the catalog-copy path exercise is the goal */
+        lcsas_disc_locator_free(&l);
+        {
+            char rm[1024];
+            snprintf(rm, sizeof rm, "rm -rf %s %s", parent, cache_dir);
+            (void)system(rm);
+        }
+    }
+
+    /* refresh_discovered: a mount-parent child that IS the live meta
+     * disc must be skipped during the walk (disc_locator.c line 373)
+     * while sibling discs are still discovered and searched. */
+    {
+        char parent[1024];
+        char metadisc[1024];
+        char discb[1024];
+        char sub[1024];
+        const char *parents[1];
+        FILE *f;
+        snprintf(parent, sizeof parent, "%s_metaskipparent", tmpdir);
+        snprintf(metadisc, sizeof metadisc, "%s/metadisc", parent);
+        snprintf(discb, sizeof discb, "%s/discB", parent);
+        snprintf(sub, sizeof sub, "%s/recovery/scripts", metadisc);
+        if (mkdir_recursive(sub) != 0) {
+            fprintf(stderr, "FAIL mkdir metaskip sentinel\n"); fails++;
+        }
+        snprintf(sub, sizeof sub,
+                 "%s/recovery/scripts/restore.sh", metadisc);
+        f = fopen(sub, "wb");
+        if (f) { fputs("#!/bin/sh\n", f); fclose(f); }
+        snprintf(sub, sizeof sub, "%s/data/01", discb);
+        mkdir_recursive(sub);
+        snprintf(sub, sizeof sub, "%s/data/01/%s", discb, hex);
+        write_pack(sub, "pack-on-sibling-disc");
+        parents[0] = parent;
+        lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+        lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+        lcsas_disc_locator_set_meta(&l, metadisc);
+        rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
+        if (rc != 0) {
+            fprintf(stderr,
+                    "FAIL: sibling disc must still be found when a "
+                    "mount-parent child is the live meta, rc=%d\n", rc);
+            fails++;
+        } else if (strstr(found, "discB") == NULL) {
+            fprintf(stderr,
+                    "FAIL: found %s not on sibling discB\n", found);
+            fails++;
+        }
+        lcsas_disc_locator_free(&l);
+        {
+            char rm[1024];
+            snprintf(rm, sizeof rm, "rm -rf %s", parent);
+            (void)system(rm);
+        }
+    }
+
+    /* Cache fast path: a pack pre-seeded at cache_dir/data/<XX>/<hex>
+     * must be found from the cache before any search path or drain is
+     * tried (disc_locator.c line 671). */
+    {
+        char cache_dir[1024];
+        char cp[1024];
+        snprintf(cache_dir, sizeof cache_dir,
+                 "%s/lcsas_dl_seeded_cache_%ld",
+                 roomy_base(), (long)getpid());
+        snprintf(cp, sizeof cp, "%s/data/01", cache_dir);
+        mkdir_recursive(cp);
+        snprintf(cp, sizeof cp, "%s/data/01/%s", cache_dir, hex);
+        write_pack(cp, "pack-from-cache");
+        lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+        lcsas_disc_locator_set_cache_dir(&l, cache_dir);
+        rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
+        if (rc != 0) {
+            fprintf(stderr, "FAIL: cache fast path rc=%d\n", rc); fails++;
+        } else if (strstr(found, cache_dir) == NULL) {
+            fprintf(stderr,
+                    "FAIL: found %s not from cache\n", found); fails++;
+        }
+        lcsas_disc_locator_free(&l);
+        {
+            char rm[1024];
+            snprintf(rm, sizeof rm, "rm -rf %s", cache_dir);
+            (void)system(rm);
+        }
+    }
+
+    /* >1 GiB cache soft warning: a SPARSE 2 GiB file pre-seeded in
+     * the cache's data/ tree makes cache_bytes_used exceed 1 GiB, so
+     * the next drain fires the single-shot size warning
+     * (disc_locator.c lines 585-591).  Sparse -> near-zero real disk.
+     * Skips (without failing) if the filesystem refuses ftruncate. */
+    {
+        char cache_dir[1024];
+        char sp[1024];
+        const char *search[] = { tmpdir };
+        int fd;
+        int seeded = 0;
+        snprintf(cache_dir, sizeof cache_dir,
+                 "%s/lcsas_dl_bigcache_%ld", roomy_base(), (long)getpid());
+        snprintf(sp, sizeof sp, "%s/data/aa", cache_dir);
+        mkdir_recursive(sp);
+        snprintf(sp, sizeof sp, "%s/data/aa/sparse-2g", cache_dir);
+        fd = open(sp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            if (ftruncate(fd, (off_t)1 << 31) == 0) seeded = 1;
+            close(fd);
+        }
+        if (!seeded) {
+            fprintf(stderr,
+                    "[info] cannot create 2 GiB sparse file at %s; "
+                    "skipping >1GiB cache-warn test\n", sp);
+        } else {
+            lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+            lcsas_disc_locator_set_cache_dir(&l, cache_dir);
+            rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
+            if (rc != 0) {
+                fprintf(stderr,
+                        "FAIL: locate with oversized cache rc=%d\n", rc);
+                fails++;
+            }
+            lcsas_disc_locator_free(&l);
+        }
+        {
+            char rm[1024];
+            snprintf(rm, sizeof rm, "rm -rf %s", cache_dir);
+            (void)system(rm);
         }
     }
 

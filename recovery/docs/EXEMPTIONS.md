@@ -66,28 +66,15 @@ catalog.c:198   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardco
 catalog.c:199   INTRACTABLE   "
 
 # disc_locator.c
-disc_locator.c:135   DEFERRED   mkdir_p intermediate-mkdir failure; line-reachable via cache_dir=<regular-file>/a/b (ENOTDIR), no race needed (the TOCTOU race branch itself stays untestable) [#401]
-disc_locator.c:138   DEFERRED   "
-disc_locator.c:178   DEFERRED   path_under strict-child branch; reachable via a search path under a LIVE meta_disc (try_with_meta) [#401]
-disc_locator.c:229   DEFERRED   push_discovered dedup vs existing search_paths; reachable with mount_parents==search_paths + a missing pack [#401]
-disc_locator.c:274   DEFERRED   consider_catalog cache_dir happy path (snprintf/unlink/copy_file/open); reachable by merging the mount_parents+catalog.db and cache_dir fixtures [#401]
-disc_locator.c:276   DEFENSIVE   consider_catalog open_path snprintf-overflow guard (cache_dir approaching PATH_MAX); fixtures never trigger
-disc_locator.c:278   DEFERRED   consider_catalog cache_dir happy path (snprintf/unlink/copy_file/open); reachable by merging the mount_parents+catalog.db and cache_dir fixtures [#401]
-disc_locator.c:279   DEFERRED   "
 disc_locator.c:282   DEFERRED   consider_catalog copy_file-failure fallback (open the original); needs the copy to fail (e.g. a dir collision at cache/.locator-catalog.db) [#401]
-disc_locator.c:284   DEFERRED   consider_catalog cache_dir happy path (snprintf/unlink/copy_file/open); reachable by merging the mount_parents+catalog.db and cache_dir fixtures [#401]
 disc_locator.c:366   DEFERRED   refresh_discovered path-too-long warn; needs a real openable mount_parent name approaching PATH_MAX
 disc_locator.c:368   DEFERRED   "
-disc_locator.c:373   DEFERRED   refresh_discovered child-under-live-meta continue; reachable with meta_disc live + a discovered mount at/under it [#401]
 disc_locator.c:457   VOLATILE   copy_file fwrite error path; covered by test_disc_locator RLIMIT_FSIZE fs-full drain when a >=11%-free cache base exists (TMPDIR / /dev/shm / /tmp), uncovered otherwise [FMA-09]
 disc_locator.c:458   VOLATILE   "
 disc_locator.c:567   VOLATILE   drain_disc fs_critically_full warn; covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache base fs is <10% free [FMA-09]
 disc_locator.c:568   VOLATILE   "
 disc_locator.c:574   VOLATILE   "
 disc_locator.c:576   VOLATILE   "
-disc_locator.c:585   DEFERRED   drain_disc 1 GiB cache_bytes_used soft warn; needs >1 GiB summed under cache_dir (a sparse file makes it cheap) [#401]
-disc_locator.c:590   DEFERRED   "
-disc_locator.c:591   DEFERRED   "
 disc_locator.c:613   DEFENSIVE   drain_disc path-too-long defensive continue (prefix_dir overflow)
 disc_locator.c:615   DEFENSIVE   "
 disc_locator.c:622   DEFENSIVE   drain_disc path-too-long defensive continue (cache_prefix overflow)
@@ -96,7 +83,6 @@ disc_locator.c:635   DEFENSIVE   drain_disc path-too-long defensive continue (sr
 disc_locator.c:637   DEFENSIVE   "
 disc_locator.c:642   DEFENSIVE   drain_disc path-too-long defensive continue (dst path overflow)
 disc_locator.c:644   DEFENSIVE   "
-disc_locator.c:671   DEFERRED   scan_paths cache-hit return (a normal hit path, not defensive); reachable by pre-populating cache_dir/data/<XX>/<hex> then locating that pack [#401]
 disc_locator.c:737   DEFERRED   print_prompt catalog-has-pack-but-no-current-volume-mapping; needs a populated catalog fixture
 disc_locator.c:739   DEFERRED   print_prompt schema-skew branch (find_pack prepare failed, catalog written by a newer LCSAS); needs a catalog that opens but whose packs query fails [#401]
 disc_locator.c:743   DEFERRED   "
@@ -117,8 +103,6 @@ lcsas_io.c:82   INTRACTABLE   EINTR retry in lcsas_read_file read loop; needs ra
 lcsas_io.c:83   INTRACTABLE   "
 
 # main.c
-main.c:524   DEFERRED   ERROR: snapshot load failed; load_snapshots returns -1 on early calloc fail (fault-inject blocked) AND on the craftable too-large/invalid-JSON snapshot paths (repo.c 905-915) - reachable, deferred with those [#401]
-main.c:525   DEFERRED   "
 main.c:561   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)
 
 # poly1305.c
@@ -138,20 +122,9 @@ repo.c:233   DEFERRED   "
 repo.c:461   DEFENSIVE   strip_v2_prefix 0-byte-plaintext return; decrypt rejects <33B input so pt_len>=1 always -> provably unreachable
 repo.c:462   DEFENSIVE   "
 repo.c:463   DEFENSIVE   "
-repo.c:484   DEFERRED   decrypt_repo_file zstd decode-fail after a VALID probe; craftable via test_repo.c enc_write (valid header, corrupt body) [#401]
-repo.c:485   DEFERRED   "
-repo.c:486   DEFERRED   "
-repo.c:487   DEFERRED   "
 repo.c:598   DEFERRED   index count exceeded sanity limit guard; needs >1M index files
 repo.c:599   DEFERRED   "
 repo.c:600   DEFERRED   "
-repo.c:603   DEFERRED   load_index names[] realloc growth at the 2048->4096 boundary; needs 2049 valid-named index files (fires before decrypt) [#401]
-repo.c:604   DEFERRED   "
-repo.c:605   DEFERRED   "
-repo.c:606   DEFERRED   "
-repo.c:607   DEFERRED   "
-repo.c:638   DEFERRED   load_index pass-1 fatal on a malformed-zstd index (DEC_ZSTD); craftable via test_repo.c enc_write [#401]
-repo.c:640   DEFERRED   "
 repo.c:725   DEFENSIVE   load_index pass-2 TOCTOU guard for TOOBIG/ZSTD; pass-1 already fatals on the same static file set, unreachable single-threaded (kept as a guard)
 repo.c:726   DEFENSIVE   "
 repo.c:729   DEFENSIVE   "
@@ -165,19 +138,6 @@ repo.c:752   DEFENSIVE   "
 repo.c:786   INTRACTABLE   blob_index_push realloc fail; malloc fault-inject blocked by the gcov runtime
 repo.c:787   INTRACTABLE   "
 repo.c:788   INTRACTABLE   "
-repo.c:898   DEFERRED   load_snapshots snapshot auth-fail warn+continue; reachable via a short/corrupt file in snapshots/ [#401]
-repo.c:900   DEFERRED   "
-repo.c:901   DEFERRED   "
-repo.c:905   DEFERRED   load_snapshots snapshot too-large (-2); clamp lcsas_json_max_tok_bytes tiny then load_snapshots [#401]
-repo.c:909   DEFERRED   "
-repo.c:912   DEFERRED   load_snapshots snapshot invalid-JSON (<=0); enc_write a non-JSON plaintext as a snapshot file [#401]
-repo.c:915   DEFERRED   "
-repo.c:1066   DEFERRED   read_blob open() errno classifier; a chmod-000 pack (stat OK, open EACCES) covers the branch (non-root only; the EIO/ENXIO disc-disconnect intent stays hardware-only) [#401]
-repo.c:1067   DEFERRED   "
-repo.c:1068   DEFERRED   "
-repo.c:1069   DEFERRED   "
-repo.c:1070   DEFERRED   "
-repo.c:1075   DEFERRED   "
 repo.c:1109   INTRACTABLE   read_blob pread() disc-disconnect EIO/ENXIO classifier; the fstat guard passed, so pread fails only on a real media error / shrink race - hardware/race only
 repo.c:1110   INTRACTABLE   "
 repo.c:1111   INTRACTABLE   "
@@ -187,16 +147,6 @@ repo.c:1117   INTRACTABLE   "
 repo.c:1120   INTRACTABLE   read_blob pread generic-errno else-branch + shared exit; needs a non-classified errno from pread (hardware/race)
 repo.c:1123   INTRACTABLE   "
 repo.c:1125   INTRACTABLE   "
-repo.c:1132   DEFERRED   read_blob decrypt fail; a >=33B garbage pack region fails the MAC (the easy direction - harness controls mk + loc, no primitive broken) [#401]
-repo.c:1172   DEFERRED   read_blob bad zstd blob size; a validly-encrypted blob + synthetic loc.uncompressed_length>256MB [#401]
-repo.c:1173   DEFERRED   "
-repo.c:1174   DEFERRED   "
-repo.c:1180   DEFERRED   read_blob zstd decode fail; a validly-encrypted NON-zstd plaintext + loc.uncompressed_length in (0,256MB] [#401]
-repo.c:1181   DEFERRED   "
-repo.c:1182   DEFERRED   "
-repo.c:1191   DEFERRED   read_blob hash mismatch; a validly-encrypted blob + synthetic loc.id set to a WRONG hash (harness controls the expected id) [#401]
-repo.c:1192   DEFERRED   "
-repo.c:1193   DEFERRED   "
 
 # tree.c
 tree.c:252   DEFENSIVE   decode_node_mtime decode-string fail (lcsas_json_decode_string<0); fixture mtime fields are always well-formed
@@ -231,8 +181,7 @@ tree.c:1022   INTRACTABLE   "
 tree.c:1023   INTRACTABLE   "
 tree.c:1032   INTRACTABLE   "
 tree.c:1037   INTRACTABLE   tree_restore_recurse generic symlink()-fail catch-all; any symlink() failure needs an environmental condition (RO mount, EACCES) the coverage-c harness does not provide
-```
-<!-- EXEMPTIONS-FENCE-END -->
+```<!-- EXEMPTIONS-FENCE-END -->
 
 ## Path forward
 
