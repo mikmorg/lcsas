@@ -345,6 +345,15 @@ test-windows: bin/x86_64-windows/lcsas-restore.exe
 # Override CC explicitly for clarity.  Each target builds host-arch's
 # OBJ files into a per-arch bin/<arch>/ tree.
 
+# Release cross-builds link with -Wl,--strip-debug (#408): unstripped output
+# embeds machine paths in DWARF (zig's bundled-musl sources at the ziglang
+# install path, the checkout dir, stale zig-cache comp dirs), which made the
+# committed bins irreproducible off the author's machine and bin-parity
+# permanently red on CI.  Link-time strip removes musl's DWARF too (compile
+# -g0 would not) and is proven byte-identical across checkout path, ziglang
+# install path, and cache state.  Full source travels on the meta disc, so
+# debuggability is preserved by rebuild-with-debug; shipped bins shrink ~80%.
+# Keep in sync with scripts/bin_parity.py + src/lcsas/recovery/build.py.
 bin/x86_64/lcsas-restore: ARCH=x86_64
 bin/aarch64/lcsas-restore: ARCH=aarch64
 bin/riscv64/lcsas-restore: ARCH=riscv64
@@ -361,7 +370,7 @@ bin/aarch64/lcsas-restore:
 	$(MAKE) clean
 	$(MAKE) BUILD=build/aarch64 \
 	        CC=$${CC_AARCH64:-aarch64-linux-musl-gcc} \
-	        LDFLAGS=-static
+	        LDFLAGS="-static -Wl,--strip-debug"
 	mkdir -p bin/aarch64
 	cp build/aarch64/lcsas-restore bin/aarch64/
 	cp build/aarch64/lcsas-iso9660 bin/aarch64/
@@ -371,7 +380,7 @@ bin/riscv64/lcsas-restore:
 	$(MAKE) clean
 	$(MAKE) BUILD=build/riscv64 \
 	        CC=$${CC_RISCV64:-riscv64-linux-musl-gcc} \
-	        LDFLAGS=-static
+	        LDFLAGS="-static -Wl,--strip-debug"
 	mkdir -p bin/riscv64
 	cp build/riscv64/lcsas-restore bin/riscv64/
 	cp build/riscv64/lcsas-iso9660 bin/riscv64/
@@ -568,7 +577,7 @@ ecc-arches: bin/x86_64/lcsas-ecc bin/aarch64/lcsas-ecc bin/armv7/lcsas-ecc bin/x
 zig-aarch64:
 	$(MAKE) clean
 	$(MAKE) CC="zig cc -target aarch64-linux-musl" \
-	        LDFLAGS=-static \
+	        LDFLAGS="-static -Wl,--strip-debug" \
 	        BUILD=build/aarch64-zig
 	mkdir -p bin/aarch64
 	cp build/aarch64-zig/lcsas-restore bin/aarch64/
@@ -578,7 +587,7 @@ zig-aarch64:
 zig-riscv64:
 	$(MAKE) clean
 	$(MAKE) CC="zig cc -target riscv64-linux-musl" \
-	        LDFLAGS=-static \
+	        LDFLAGS="-static -Wl,--strip-debug" \
 	        BUILD=build/riscv64-zig
 	mkdir -p bin/riscv64
 	cp build/riscv64-zig/lcsas-restore bin/riscv64/

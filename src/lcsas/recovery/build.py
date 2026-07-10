@@ -194,7 +194,11 @@ class RecoveryBuilder:
                 "make", "-C", str(self._dir), "all",
                 f"CC={cc}",
                 f"BUILD=build/{arch}",
-                "LDFLAGS=-static",
+                # --strip-debug (#408): keep release cross-builds free of
+                # machine paths (zig's musl DWARF embeds the ziglang install
+                # dir + comp dirs) so output is byte-reproducible anywhere.
+                # Keep in sync with recovery/Makefile + bin_parity.py.
+                "LDFLAGS=-static -Wl,--strip-debug",
             ],
             env=env, capture_output=not verbose, text=True, check=False,
         )
