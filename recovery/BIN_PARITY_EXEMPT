@@ -15,17 +15,16 @@
 # Format (one per line):  <rel-path-under-bin/>  issue=#N  reason="..."
 # Blank lines and #-comments are ignored.
 #
-# zig 0.16.0's Mach-O linker recomputes LC_UUID + chained-fixup / function-
-# starts / code-directory hashes per run (~38KB scattered diff across two
-# back-to-back builds); -Wl,-no_uuid is rejected as an unsupported linker arg.
-x86_64-macos/lcsas-restore    issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
-x86_64-macos/lcsas-keyshare   issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
-x86_64-macos/lcsas-ecc        issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
-aarch64-macos/lcsas-restore   issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
-aarch64-macos/lcsas-keyshare  issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
-aarch64-macos/lcsas-ecc       issue=#320  reason="zig 0.16.0 Mach-O linker non-reproducible"
-# zig 0.16.0's PE-COFF linker embeds a per-run PE header timestamp + debug-
-# directory checksum (~20-byte diff across two back-to-back builds).
-x86_64-windows/lcsas-restore.exe   issue=#320  reason="zig 0.16.0 PE linker non-reproducible"
-x86_64-windows/lcsas-keyshare.exe  issue=#320  reason="zig 0.16.0 PE linker non-reproducible"
-x86_64-windows/lcsas-ecc.exe       issue=#320  reason="zig 0.16.0 PE linker non-reproducible"
+#
+# EMPTY as of the #320 promotion: link-time stripping made both former
+# exemption classes byte-reproducible, so ALL committed targets are now
+# byte-gated.
+#   - Mach-O: zig 0.16.0 recomputed LC_UUID + chained-fixup/function-starts/
+#     code-directory hashes per run.  LC_UUID is a content hash; with debug
+#     stripped (-Wl,-S) the content is stable and back-to-back builds are
+#     byte-identical.
+#   - PE: the per-run debug-directory checksum lived in the stripped
+#     sections; with -Wl,--strip-debug back-to-back builds are
+#     byte-identical.
+# If a future toolchain regresses, re-add the affected targets here WITH a
+# fresh tracking issue.

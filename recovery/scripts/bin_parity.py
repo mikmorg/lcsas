@@ -153,6 +153,16 @@ def rebuild(t: Target) -> None:
         # install path, and cache state (all three proven empirically).
         # Keep in sync with the Makefile cross recipes + recovery/build.py.
         args.append("LDFLAGS=-static -Wl,--strip-debug")
+    elif "windows" in t.zig_target:
+        # PE (#320 promotion): zig's per-run debug-directory checksum lived
+        # in the stripped sections; with --strip-debug back-to-back builds
+        # are byte-identical, so Windows targets are byte-gated too.
+        args.append("LDFLAGS=-Wl,--strip-debug")
+    elif "macos" in t.zig_target:
+        # Mach-O (#320 promotion): LC_UUID is a content hash — with debug
+        # stripped (-S is ld64's spelling) the content is stable and so is
+        # the UUID; back-to-back builds are byte-identical.
+        args.append("LDFLAGS=-Wl,-S")
     else:
         args.append("LDFLAGS=")
     args.append(f"VENDOR_CFLAGS={t.vendor_cflags or VENDOR_CFLAGS}")
