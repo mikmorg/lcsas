@@ -1371,6 +1371,13 @@ for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
         [ "$mnt" = "$RECOVERY" ] && continue
         add_pack_search "$mnt"
     done
+    # The disc may be mounted AT the mount dir itself (the documented
+    # single-drive journey mounts the data disc at /media), in which
+    # case data/ lives directly under $parent and no child matches.
+    # Without this, a catalog-less restore has NO pack source at all
+    # and even packs on the inserted disc are invisible (#412).  The
+    # function's META_DISC guard + data/-existence check keep this safe.
+    [ "$parent" = "$RECOVERY" ] || add_pack_search "$parent"
     IFS=":"
 done
 IFS="$OLD_IFS"
