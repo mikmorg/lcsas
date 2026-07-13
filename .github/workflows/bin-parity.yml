@@ -8,11 +8,17 @@ name: bin-parity
 # binary on every meta disc burned afterwards.  This gate closes that hole:
 # for each committed artifact it does a clean cross-rebuild with the pinned
 # zig (recovery/TOOLCHAIN) + SOURCE_DATE_EPOCH and byte-compares it against
-# the committed file.  Linux musl targets are byte-reproducible and gated;
-# non-reproducible Mach-O/PE targets are listed in recovery/BIN_PARITY_EXEMPT
-# (still rebuilt to prove they compile+link, byte-compare skipped, exemption
-# printed loudly).  Pairs with macos-tier1.yml / the qemu+wine tests, which
-# prove "it runs"; this proves "it embodies current source".
+# the committed file.  Since the #320 promotion ALL targets are byte-gated
+# (link-time stripping made Mach-O/PE reproducible; recovery/BIN_PARITY_EXEMPT
+# is empty).  Pairs with macos-tier1.yml / the qemu+wine tests, which prove
+# "it runs"; this proves "it embodies current source".
+#
+# REQUIRED-CHECK SHAPE (#412): `pull_request` is deliberately UNFILTERED and
+# the path relevance moves into the `changes` job, so the always-reporting
+# `bin-parity-required` job can be a required status check without blocking
+# PRs that never touch gate-relevant paths ("Expected" forever).  push keeps
+# its path filter for master monitoring; the weekly schedule is the
+# toolchain-image-drift backstop.
 
 on:
   push:
@@ -26,15 +32,6 @@ on:
       - 'recovery/scripts/bin_parity.py'
       - '.github/workflows/bin-parity.yml'
   pull_request:
-    paths:
-      - 'recovery/src/**'
-      - 'recovery/vendored/**'
-      - 'recovery/bin/**'
-      - 'recovery/Makefile'
-      - 'recovery/TOOLCHAIN'
-      - 'recovery/BIN_PARITY_EXEMPT'
-      - 'recovery/scripts/bin_parity.py'
-      - '.github/workflows/bin-parity.yml'
   # Weekly backstop so toolchain-image drift is caught even when recovery/
   # is quiet.
   schedule:
@@ -45,7 +42,55 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect gate-relevant changes
+        id: detect
+        run: |
+          # GATE-04 invariant: this list must stay IDENTICAL to push.paths
+          # above (test_workflow_path_filter.py parses and compares both).
+          cat > /tmp/gate-paths.txt <<'EOF'
+          recovery/src/**
+          recovery/vendored/**
+          recovery/bin/**
+          recovery/Makefile
+          recovery/TOOLCHAIN
+          recovery/BIN_PARITY_EXEMPT
+          recovery/scripts/bin_parity.py
+          .github/workflows/bin-parity.yml
+          EOF
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          if [ -z "$base" ] || [ -z "$head" ]; then
+            # push / schedule / dispatch: always run the gate.
+            echo "relevant=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          changed=$(git diff --name-only "$base" "$head")
+          echo "changed files:"; echo "$changed" | sed 's/^/  /'
+          rel=false
+          while IFS= read -r pat; do
+            pat="$(echo "$pat" | xargs)"; [ -z "$pat" ] && continue
+            case "$pat" in
+              *'/**')
+                prefix="${pat%\*\*}"
+                if printf '%s\n' "$changed" | grep -q "^${prefix}"; then rel=true; fi ;;
+              *)
+                if printf '%s\n' "$changed" | grep -qx "$pat"; then rel=true; fi ;;
+            esac
+          done < /tmp/gate-paths.txt
+          echo "relevant=$rel" >> "$GITHUB_OUTPUT"
+          echo "gate-relevant: $rel"
+
   bin-parity:
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -63,3 +108,21 @@ jobs:
 
       - name: Rebuild-and-diff committed binaries
         run: make -C recovery bin-parity
+
+  # The required status check (#412): reports on EVERY pull request.  Passes
+  # instantly when no gate-relevant path changed; otherwise mirrors the real
+  # job's result.  Branch protection requires THIS context, not `bin-parity`.
+  bin-parity-required:
+    needs: [changes, bin-parity]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate verdict
+        run: |
+          if [ "${{ needs.changes.outputs.relevant }}" != "true" ]; then
+            echo "no gate-relevant paths changed -- pass"; exit 0
+          fi
+          if [ "${{ needs.bin-parity.result }}" = "success" ]; then
+            echo "bin-parity passed"; exit 0
+          fi
+          echo "bin-parity result: ${{ needs.bin-parity.result }}"; exit 1
