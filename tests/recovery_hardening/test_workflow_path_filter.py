@@ -13,8 +13,12 @@ These tests keep the broadened filter honest:
 2. Every directory directly under recovery/src/ and recovery/vendored/ must be
    matched by at least one filter glob — so adding recovery/src/lcsas-newtool/
    without gate coverage fails the suite.
-3. push.paths and pull_request.paths must be identical — they must not drift
-   apart.
+3. push.paths and the `changes` job's in-job guard list must be identical —
+   they must not drift apart.  (Since the #414 required-check shape the
+   pull_request trigger is deliberately UNFILTERED: the relevance decision
+   lives in the `changes` job so the always-reporting `audit-gate-required`
+   job can be a required status check without blocking unrelated PRs on a
+   check that never reports.)
 
 Text-level / YAML-free parsing on purpose: the suite is stdlib-only and runs
 with no external tools.
@@ -74,16 +78,57 @@ def _path_lists() -> dict[str, list[str]]:
     return lists
 
 
-def test_push_and_pull_request_paths_identical() -> None:
-    lists = _path_lists()
-    assert "push" in lists and "pull_request" in lists, (
-        f"audit-gate.yml must define both push.paths and pull_request.paths; "
-        f"found {sorted(lists)}"
+def _guard_list() -> list[str]:
+    """Extract the `changes` job's heredoc guard list (gate-paths.txt).
+
+    The pull_request trigger is unfiltered (#414), so PR-side relevance is
+    decided by this in-job list; it is the thing that must stay in lockstep
+    with push.paths.
+    """
+    text = WORKFLOW.read_text()
+    m = re.search(
+        r"cat > /tmp/gate-paths\.txt <<'EOF'\n(.*?)\n\s*EOF",
+        text,
+        re.DOTALL,
     )
-    assert lists["push"] == lists["pull_request"], (
-        "audit-gate push.paths and pull_request.paths have drifted apart — "
-        f"push={lists['push']} pull_request={lists['pull_request']}. "
-        "A change must trigger the gate identically on push and on PR."
+    assert m, (
+        "audit-gate.yml `changes` job lost its gate-paths.txt heredoc — the "
+        "PR-side relevance guard is gone, so audit-gate-required would pass "
+        "on every PR regardless of what changed."
+    )
+    return [ln.strip() for ln in m.group(1).splitlines() if ln.strip()]
+
+
+def test_push_and_changes_guard_paths_identical() -> None:
+    lists = _path_lists()
+    assert "push" in lists, (
+        f"audit-gate.yml must define push.paths; found {sorted(lists)}"
+    )
+    assert "pull_request" not in lists, (
+        "audit-gate.yml pull_request trigger must stay UNFILTERED (#414): a "
+        "paths: filter there makes the required `audit-gate-required` check "
+        "never report on unrelated PRs, blocking them forever on 'Expected'. "
+        "PR relevance belongs in the `changes` job guard list."
+    )
+    assert lists["push"] == _guard_list(), (
+        "audit-gate push.paths and the `changes` job guard list have drifted "
+        f"apart — push={lists['push']} guard={_guard_list()}. A change must "
+        "trigger the gate identically on push and on PR."
+    )
+
+
+def test_required_wrapper_job_present() -> None:
+    """The required status-check context must keep existing: branch
+    protection requires `audit-gate-required`, and renaming/deleting the job
+    would silently turn the required check into an always-blocking or
+    never-reported context."""
+    text = WORKFLOW.read_text()
+    assert re.search(r"^  audit-gate-required:", text, re.MULTILINE), (
+        "audit-gate.yml lost the `audit-gate-required` job — branch "
+        "protection requires that exact context."
+    )
+    assert re.search(r"^  changes:", text, re.MULTILINE), (
+        "audit-gate.yml lost the `changes` relevance job."
     )
 
 

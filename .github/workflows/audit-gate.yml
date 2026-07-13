@@ -6,6 +6,12 @@ on:
   # recovery/scripts file, and carried a ghost `sanitize.sh` entry — a
   # behavior-breaking edit there merged unbuilt and untested (GATE-04). These
   # globs subsume that list. test_workflow_path_filter.py guards them.
+  #
+  # REQUIRED-CHECK SHAPE (#412): `pull_request` is deliberately UNFILTERED
+  # and the path relevance moves into the `changes` job, so the always-
+  # reporting `audit-gate-required` job can be a required status check
+  # without blocking PRs that never touch gate paths ("Expected" forever).
+  # push keeps its filter for master monitoring.
   push:
     paths:
       - "recovery/src/**"
@@ -16,18 +22,57 @@ on:
       - "recovery/Makefile"
       - "recovery/MANIFEST.sha256"
   pull_request:
-    paths:
-      - "recovery/src/**"
-      - "recovery/tests/**"
-      - "recovery/fuzz/**"
-      - "recovery/vendored/**"
-      - "recovery/scripts/**"
-      - "recovery/Makefile"
-      - "recovery/MANIFEST.sha256"
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.detect.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect gate-relevant changes
+        id: detect
+        run: |
+          # GATE-04 invariant: this list must stay IDENTICAL to push.paths
+          # above (test_workflow_path_filter.py parses and compares both).
+          cat > /tmp/gate-paths.txt <<'EOF'
+          recovery/src/**
+          recovery/tests/**
+          recovery/fuzz/**
+          recovery/vendored/**
+          recovery/scripts/**
+          recovery/Makefile
+          recovery/MANIFEST.sha256
+          EOF
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          if [ -z "$base" ] || [ -z "$head" ]; then
+            # push (master monitoring): always run the gate.
+            echo "relevant=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          changed=$(git diff --name-only "$base" "$head")
+          echo "changed files:"; echo "$changed" | sed 's/^/  /'
+          rel=false
+          while IFS= read -r pat; do
+            pat="$(echo "$pat" | xargs)"; [ -z "$pat" ] && continue
+            case "$pat" in
+              *'/**')
+                prefix="${pat%\*\*}"
+                if printf '%s\n' "$changed" | grep -q "^${prefix}"; then rel=true; fi ;;
+              *)
+                if printf '%s\n' "$changed" | grep -qx "$pat"; then rel=true; fi ;;
+            esac
+          done < /tmp/gate-paths.txt
+          echo "relevant=$rel" >> "$GITHUB_OUTPUT"
+          echo "gate-relevant: $rel"
+
   audit-gate:
     name: "Tier-1 audit gate (coverage + sanitize + fuzz-smoke)"
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -62,3 +107,22 @@ jobs:
           # Soft-skip LCSAS_SANITIZE and LCSAS_COVERAGE opt-in flags
           # are not needed here — audit-gate calls the targets directly.
           PYTHONDONTWRITEBYTECODE: "1"
+
+  # The required status check (#412): reports on EVERY pull request.  Passes
+  # instantly when no gate-relevant path changed; otherwise mirrors the real
+  # job's result.  Branch protection requires THIS context, not the ~60-min
+  # gate job itself.
+  audit-gate-required:
+    needs: [changes, audit-gate]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate verdict
+        run: |
+          if [ "${{ needs.changes.outputs.relevant }}" != "true" ]; then
+            echo "no gate-relevant paths changed -- pass"; exit 0
+          fi
+          if [ "${{ needs.audit-gate.result }}" = "success" ]; then
+            echo "audit-gate passed"; exit 0
+          fi
+          echo "audit-gate result: ${{ needs.audit-gate.result }}"; exit 1
