@@ -274,3 +274,32 @@ def test_pack_search_value_with_spaces_survives(tmp_path: Path) -> None:
         f"spaced --pack-search value must survive intact; got "
         f"{_arg_value(args, '--pack-search')!r}; all args: {args}"
     )
+
+
+def test_pack_search_finds_disc_mounted_at_mount_dir_itself(
+    tmp_path: Path,
+) -> None:
+    """#412: the documented single-drive journey mounts the data disc AT
+    the mount dir (e.g. `mount /dev/sr0 /media`), so data/ lives directly
+    under the LCSAS_MOUNT_DIRS entry and no CHILD of it matches.  The
+    discovery walk must consider the mount dir itself, or a catalog-less
+    restore has no pack source at all — even packs on the inserted disc
+    are invisible (the no-catalog blind variant failed exactly here)."""
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    _install_stub_binary(recovery, HOST_TARGET, "lcsas-restore")
+    _make_repo_skeleton(recovery / "metadata", "alpha")
+
+    # The disc root IS the mount dir: data/ directly beneath it.
+    mount_dir = tmp_path / "media"
+    (mount_dir / "data").mkdir(parents=True)
+    target = tmp_path / "restored"
+
+    res = _run_restore(recovery, target,
+                       env={"LCSAS_MOUNT_DIRS": str(mount_dir)})
+    assert res.returncode == 0, res.stderr
+    args = _stub_args(res.stdout)
+    assert _arg_value(args, "--pack-search") == str(mount_dir), (
+        f"a disc mounted AT the mount dir must be offered as --pack-search; "
+        f"got {_arg_value(args, '--pack-search')!r}; all args: {args}"
+    )
