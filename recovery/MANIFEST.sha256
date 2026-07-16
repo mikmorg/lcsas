@@ -129,7 +129,7 @@ affa5a0e5128fa355b4cd0cd78ee84501e0985e242dba91e78b92d411abbaec2  ./src/lcsas-ke
 fdedb9ff512078245a11aba51a261b52076669afb25c9aed0db0bfca91cd7f8d  ./src/lcsas-restore/aes.h
 90ec6596f31829e3e51fd37cf265cea6a34b7ec824fcea83aacb8a971b29f0c9  ./src/lcsas-restore/b64.c
 f22c4d0db8ccf2237f0fb70c63ddbe0f9e741760d9225f87bd3e109b57d806fc  ./src/lcsas-restore/b64.h
-3df4012f5938c984d965ff961cc00e9ab23c0a634e73e6fa357b6d130a2ca7c5  ./src/lcsas-restore/catalog.c
+bc57d2dd40c61530d3a9dc3e60454a2177d9e08c457f83aa89231c9519f1db38  ./src/lcsas-restore/catalog.c
 b649bc3a6263202418e6cfd7c4962ab25e71c4aa693c15ec0b5c85264c1a7c6d  ./src/lcsas-restore/catalog.h
 996744260af924f0a226e0568297d7ab14736e3dcc75cd1d697c75eceb4fa688  ./src/lcsas-restore/disc_locator.c
 9bea2a411ba4dfb0e2ca734c2964c5d6da631b375ce625ea01d21e512188a1f8  ./src/lcsas-restore/disc_locator.h

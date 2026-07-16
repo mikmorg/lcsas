@@ -172,6 +172,21 @@ lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
     return (int)count;
 }
 
+/* Prints the WHOLE-ARCHIVE disc plan, not a per-snapshot one -- by
+ * design (#350, resolved won't-fix).  A snapshot-filtered pick-list needs
+ * the snapshot->pack mapping, which the catalog does NOT hold: the catalog
+ * maps pack->volume (packs/volume_packs/volumes), while which packs a given
+ * snapshot's blobs live in is derivable only from the repo index/trees.
+ * (The Python planner is no different -- restore/planner.py takes the pack
+ * list as INPUT, sourced from a rustic dry-run, and uses the catalog only
+ * for the pack->disc half.)  Giving the durable tier-1 binary a per-snapshot
+ * preview would mean either enlarging the holographically-burned catalog
+ * with a snapshot_packs table (paid on every disc) or adding a repo
+ * index-walk in C89 to the 50-year path -- both taxing the "minimal durable
+ * binary" thesis to save disc fetches on a multi-hundred-disc restore.
+ * Deliberately declined: correctness is unaffected (the over-broad list
+ * still restores the right data) and the per-snapshot optimisation stays a
+ * tier-3 (rustic) capability.  See issue #350 for the full analysis. */
 int
 lcsas_catalog_print_pending_packs(lcsas_catalog *c)
 {
