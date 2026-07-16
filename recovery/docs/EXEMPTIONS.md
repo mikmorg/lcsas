@@ -62,8 +62,8 @@ permitted (ignored by the parser).
 # catalog.c
 catalog.c:157   INTRACTABLE   sqlite3_prepare_v2 on a hardcoded well-formed SELECT cannot fail without malloc inside SQLite (fault-inject cannot reach); warn_schema_skew_once hedges a corrupt/old catalog
 catalog.c:158   INTRACTABLE   "
-catalog.c:198   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardcoded well-formed SELECT; same SQLite-internal-malloc constraint as 157
-catalog.c:199   INTRACTABLE   "
+catalog.c:213   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardcoded well-formed SELECT; same SQLite-internal-malloc constraint as 157
+catalog.c:214   INTRACTABLE   "
 
 # disc_locator.c
 disc_locator.c:282   DEFERRED   consider_catalog copy_file-failure fallback (open the original); needs the copy to fail (e.g. a dir collision at cache/.locator-catalog.db) [#401]

@@ -1592,6 +1592,50 @@ main(void)
         }
     }
 
+    /* ── #350/#401-D': load_index pass-1 invalid-JSON (ntoks<=0) ─────────
+     * Sibling of 401-D (which crafts a corrupt-ZSTD index -> DEC_ZSTD).
+     * Here the index decrypts fine, is NOT zstd, and its plaintext is not
+     * valid JSON -> pass-1's `if (ntoks <= 0)` fatal branch. Previously
+     * this branch was covered only nondeterministically by the malloc
+     * fault-inject sweep (repo.c:661/663 flaked missing on a CI run); a
+     * deterministic test pins it. */
+    {
+        char tmp[] = "/tmp/lcsas_350_idxjson_XXXXXX";
+        char idx_path[1200], hexname[65];
+        lcsas_blob_index ix;
+        unsigned char iv[16];
+        /* Not zstd-magic, not v2-prefixed (leading 'n'), invalid JSON. */
+        static const char notjson[] = "not json at all";
+
+        memset(iv, 0, 16); iv[0] = 0x47;
+
+        if (mkdtemp(tmp) == NULL) {
+            fprintf(stderr, "FAIL: 350-idxjson mkdtemp\n"); fails++;
+        } else if (copy_valid_indexes(repo, tmp) != 0) {
+            fprintf(stderr, "FAIL: 350-idxjson copy_valid_indexes\n"); fails++;
+        } else {
+            memset(hexname, '7', 64); hexname[64] = '\0';
+            snprintf(idx_path, sizeof idx_path, "%s/index/%s", tmp, hexname);
+            if (enc_write(&mk, iv, (const unsigned char *)notjson,
+                          sizeof notjson - 1, idx_path) != 0) {
+                fprintf(stderr, "FAIL: 350-idxjson enc_write\n"); fails++;
+            } else {
+                fprintf(stderr,
+                        "[test_repo] 350 expecting invalid-JSON index ERROR "
+                        "below:\n");
+                lcsas_blob_index_init(&ix);
+                rc = lcsas_repo_load_index(tmp, &mk, &ix);
+                if (rc >= 0) {
+                    fprintf(stderr,
+                            "FAIL: 350-idxjson invalid-JSON index must fail "
+                            "load (rc=%d)\n", rc);
+                    fails++;
+                }
+                lcsas_blob_index_free(&ix);
+            }
+        }
+    }
+
     if (fails == 0) printf("test_repo: OK\n");
     return fails ? 1 : 0;
 }

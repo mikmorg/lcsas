@@ -6,7 +6,7 @@ c841ed8ec7f878757acd494713e72bc14d5c921044a6251c89459aee3bd74b3d  ./docs/AUDIT_F
 2dc36d5248cfa9b721166f3e8d3a916ce69e31c404750bfa8763df760d93149d  ./docs/CRYPTO.txt
 a0fb81fd62f28c8412676b1b584471e6012865f3ae6d95fd51595c2d91fce9d6  ./docs/DEFERRED_WORK.txt
 2cc7fbd44d56caffcd58c237cee8bb378bc16155f4a67fdc002e7b85a23cbea1  ./docs/ENV_VARS.txt
-0b470e7e20fdac4048e9d562b0aa694efb37c2eb979a2fc9d910c315f5bd3e38  ./docs/EXEMPTIONS.md
+c970e3ee46203e747951d32ec7ea69fb0706eb43a3aa82910b06aa256786298a  ./docs/EXEMPTIONS.md
 464d551a1130ee3c4ed429b146607759fc300bcfbccf4b2fb77bedaa63d4285d  ./docs/FORMAT.txt
 4ef6eb8109a103acb5b5b2f2566c6dc9ba74d6abcb1b6b01a8e73cce9caa3c74  ./docs/MULTI_DISC_DESIGN.txt
 6de7cfa8137722b7627a8cb0cd4eb2967fa8b70f8763d3b715a8e4630585b5e6  ./docs/PHYSICAL_DISC_VALIDATION.txt
@@ -129,7 +129,7 @@ affa5a0e5128fa355b4cd0cd78ee84501e0985e242dba91e78b92d411abbaec2  ./src/lcsas-ke
 fdedb9ff512078245a11aba51a261b52076669afb25c9aed0db0bfca91cd7f8d  ./src/lcsas-restore/aes.h
 90ec6596f31829e3e51fd37cf265cea6a34b7ec824fcea83aacb8a971b29f0c9  ./src/lcsas-restore/b64.c
 f22c4d0db8ccf2237f0fb70c63ddbe0f9e741760d9225f87bd3e109b57d806fc  ./src/lcsas-restore/b64.h
-3df4012f5938c984d965ff961cc00e9ab23c0a634e73e6fa357b6d130a2ca7c5  ./src/lcsas-restore/catalog.c
+bc57d2dd40c61530d3a9dc3e60454a2177d9e08c457f83aa89231c9519f1db38  ./src/lcsas-restore/catalog.c
 b649bc3a6263202418e6cfd7c4962ab25e71c4aa693c15ec0b5c85264c1a7c6d  ./src/lcsas-restore/catalog.h
 996744260af924f0a226e0568297d7ab14736e3dcc75cd1d697c75eceb4fa688  ./src/lcsas-restore/disc_locator.c
 9bea2a411ba4dfb0e2ca734c2964c5d6da631b375ce625ea01d21e512188a1f8  ./src/lcsas-restore/disc_locator.h
@@ -189,7 +189,7 @@ c63dace2dfec98add7304857f853c4255a6d7b212212c9da324eac7d16635aaf  ./tests/test_k
 d8927399a835f172128a888a5775840e7bac6ce91f56edb4f6dcba24ba356697  ./tests/test_path.c
 2e15bf81a942c616dd632548af27d71538ff9a29185a575e95209f24a32667e9  ./tests/test_pbkdf2.c
 cbff877bd39cf61d88bea8930e1b82491b0dd5fc50979fde8b8ff7d51b5167e6  ./tests/test_poly1305.c
-a17b3fcb529106466d803db742b1a1ff33f150b86c76f324bb6bbe18fc4a9a1a  ./tests/test_repo.c
+49fdc07de12ff91afc5a0413075207de9554f039642108489be4443b6ccc5c9c  ./tests/test_repo.c
 d545bfb73d0183b9d7b3ca36f297f150bd7daf8362ca067351ca42f73692e751  ./tests/test_restore_bat_e2e.sh
 11d0000be102eae215cfc53d908e90065eab8ef93325f4951d03e8936987068d  ./tests/test_scrypt.c
 64698e8e358ef76142c663aa7bbd45c3bf20c884cf344467888cb224366c4071  ./tests/test_sha256.c
