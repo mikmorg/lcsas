@@ -36,7 +36,7 @@ make -C recovery audit-gate THRESHOLD=95
 |------|--------|-------------|
 | 1 | `coverage-c` | Rebuilds with `--coverage`, runs C unit tests + tier-1 Python suite, generates gcovr HTML + JSON report |
 | 2 | `sanitize` | Rebuilds with `clang -fsanitize=address,undefined,leak`, runs full test suite.  0 findings = pass |
-| 3 | `fuzz-smoke` | Runs all 7 LibFuzzer harnesses for 60 s each.  0 crashes = pass |
+| 3 | `fuzz-smoke` | Runs all 8 LibFuzzer harnesses (json, b64, zstd, path, repo, keyshare, tree, rs03) for 60 s each.  0 crashes = pass |
 | 4 | `coverage_check` | Per-file threshold check against the gcovr JSON report |
 
 ## Coverage thresholds
@@ -44,8 +44,8 @@ make -C recovery audit-gate THRESHOLD=95
 | Threshold | Meaning |
 |-----------|---------|
 | 88% (default) | Measured floor after Phase 9 (93.9% overall, all 16 files ≥ 88%). Prevents regressions. |
-| 95% (achieved by 12 / 16 files) | tree.c, main.c, json_q.c, catalog.c, scrypt.c, path.c, b64.c, poly1305.c, pbkdf2.c, lcsas_io.c, hex.c, aes.c, sha256.c, zstd_dec.c, lcsas_io.c, poly1305.c, b64.c. |
-| 95% (aspirational for last 4) | repo.c (90.6%), disc_locator.c (88.5%), pbkdf2.c (94.7%) — the malloc-failure error branches and contrived-corruption paths need either a fault-tolerant gcov runtime patch or large amounts of fixture engineering for diminishing returns. |
+| 95% (achieved by 10 / 16 files at the 2026-05-21 snapshot) | aes.c, hex.c, sha256.c, zstd_dec.c, path.c, scrypt.c, catalog.c, json_q.c, b64.c, poly1305.c. |
+| 95% (aspirational for the rest, tree.c aside) | repo.c (90.6%), disc_locator.c (88.5%), lcsas_io.c (90.3%), pbkdf2.c (94.7%), main.c (94.8%) — the malloc-failure error branches and contrived-corruption paths need either a fault-tolerant gcov runtime patch or large amounts of fixture engineering for diminishing returns. |
 | 90% (achievable ceiling for tree.c) | tree.c has ~35 lines of INTRACTABLE code: apply_node_ownership (requires root for geteuid()!=0 guard), ENOSPC classifiers (require filesystem-full target), FAT32 symlink error paths (require non-POSIX mount). These count against the denominator permanently. |
 
 **Why not 100%?** Three constraints:
@@ -142,9 +142,12 @@ how `lcsas-restore` will behave on real-world archive sizes.
 | 100k      | 18        | 6,022,275     | ~60 ms                 |
 | 1M        | 111       | 61,156,104    | ~600 ms                |
 
-`find_ns_mean` grows linearly with N — confirms `lcsas_blob_index_find`
-is O(n).  See `AUDIT_FINDINGS.md` for the full table and follow-up
-issue link.
+At that (pre-Phase-11) measurement `find_ns_mean` grew linearly with N
+— `lcsas_blob_index_find` was O(n).  **Phase 11 replaced the linear
+scan with a sorted array + `bsearch`** (~28,000× faster at N=1M);
+petabyte-scale restore is no longer find-bound.  The table above is
+kept as the historical motivation — see `STATUS_LEDGER.md`
+(Scalability) for the current numbers.
 
 The `LCSAS_STRESS_LOOKUPS=N` env var on the binary is what
 `scaling_bench.py` uses: it times N random `lcsas_blob_index_find` calls
@@ -234,7 +237,9 @@ absolute path under the restore target.
 ## Shell-level coverage (`make shell-coverage`)
 
 Issue #213 added `bash -x`-based line coverage for
-`recovery/scripts/restore.sh` (894 lines, ~393 executable).
+`recovery/scripts/restore.sh` (894 lines / ~393 executable at the
+time; the script has since grown to ~1900 lines — `make
+shell-coverage` output is the authoritative current count).
 Pipeline:
 
 1. `restore.sh` preamble (~line 30) honours `LCSAS_SHELL_TRACE=<path>`
@@ -249,11 +254,10 @@ Pipeline:
    and heredoc bodies).
 4. `make shell-coverage` chains all of the above and gates at 60%.
 
-**Current baseline: 61.1% (240/393 lines).**  Tier-2 / tier-3
-fallback branches dominate the uncov set — those need a
-deliberately-broken tier-1 binary to exercise.  See issue #214
-(adversarial blind-restore variants) for the natural way to push
-that higher.
+**Baseline at #213: 61.1% (240/393 lines)**; the gate holds at 60%
+as the script grows.  Tier-2 / tier-3 fallback branches dominated
+the original uncov set — the #214 adversarial blind-restore variants
+were the natural way to push that higher.
 
 ```bash
 make shell-coverage
@@ -266,8 +270,9 @@ make shell-coverage
 ## Documented coverage exemptions
 
 Lines not covered by `make coverage-c` are individually justified in
-[`EXEMPTIONS.md`](EXEMPTIONS.md).  As of Phase 12 the codebase is
-**95.5%** covered overall; the remaining 4.5% is mapped to specific
+[`EXEMPTIONS.md`](EXEMPTIONS.md).  Overall coverage sits at ~94%
+(93.9% at the 2026-06 reconciliation — `STATUS_LEDGER.md` is the
+authoritative tracker); the uncovered remainder is mapped to specific
 intractable categories (EINTR retry, malloc fault injection against
 gcov-instrumented code, defensive 4 KiB+ path overflow checks, etc.).
 
@@ -324,9 +329,13 @@ descriptively), fix the bug, and re-run `fuzz-smoke`.
 
 ## CI integration
 
-See `.github/workflows/audit-gate.yml` (issue #163).  The workflow
-triggers on pushes to paths matching `recovery/src/lcsas-restore/**`,
-`recovery/tests/**`, `recovery/fuzz/**`, and `recovery/Makefile`.
+See `.github/workflows/audit-gate.yml` (issue #163; required-check
+shape per #412/#414).  `push` triggers on paths matching
+`recovery/src/**`, `recovery/tests/**`, `recovery/fuzz/**`,
+`recovery/vendored/**`, `recovery/scripts/**`, `recovery/Makefile`,
+and `recovery/MANIFEST.sha256`; `pull_request` is deliberately
+UNFILTERED (path relevance moves into the workflow's `changes` job so
+`audit-gate-required` can be a required status check).
 
 It runs `make -C recovery audit-gate THRESHOLD=83` — the local 88% floor
 (`recovery/Makefile` `THRESHOLD ?= 88`) minus the measured ~5 pt CI

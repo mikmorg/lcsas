@@ -3,6 +3,7 @@ LCSAS RECOVERY -- DEFERRED WORK (moved)
 
 The deferred-work parking lot has been folded into the unified tracker
 STATUS_LEDGER.md (section "Open / deferred").  See STATUS_LEDGER.md for
-the four follow-ups (disc_index.txt sidecar, volume_info.json
-mounted-disc id, auto-mount detection, snapshot-aware pick list), their
-reconciled status against landed code, and the resume priority order.
+the three open follow-ups (disc_index.txt sidecar, volume_info.json
+mounted-disc id, auto-mount detection), their reconciled status against
+landed code, and the resume priority order.  (A fourth item, the
+snapshot-aware pick list, was closed won't-fix by design — issue #350.)

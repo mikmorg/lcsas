@@ -87,13 +87,13 @@ Like tier 2 it needs a single-disc $REPO/data/ tree; the fully MANUAL
 standard-tools procedure (multi-disc reassembly included) is
 recovery/docs/RESTORE_STANDARD_TOOLS.txt.
 
-CAVEAT (GATE-06, issue #227): the tier-1-missing fallback journey on a
-multi-disc archive (tier 1 absent -> tier 2 skipped -> tier 3 completes)
-has deterministic coverage only -- it is pinned by
-tests/recovery_hardening/test_restore_sh_tier1_missing_multidisc.py but
-has not yet passed a live blind restore (cdemu, 15/15).  This caveat is
-removed once the live tier1-missing variant is promoted out of the
-XFAIL ledger (tests/e2e/cdemu_blind_restore/XFAIL.list).
+The tier-1-missing fallback journey on a multi-disc archive (tier 1
+absent -> tier 2 skipped -> tier 3 completes) is pinned
+deterministically by
+tests/recovery_hardening/test_restore_sh_tier1_missing_multidisc.py
+AND has passed live blind restores: promoted out of the XFAIL ledger
+(tests/e2e/cdemu_blind_restore/XFAIL.list) on 2026-06-15 after scoring
+a full 16/16 on two consecutive blind runs (issue #227).
 
 TIER BINARY PRE-FLIGHT
 

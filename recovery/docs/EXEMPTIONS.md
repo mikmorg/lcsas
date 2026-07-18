@@ -188,9 +188,11 @@ tree.c:1037   INTRACTABLE   tree_restore_recurse generic symlink()-fail catch-al
 The categories above are honest about *why* each line is uncovered:
 
 - **`DEFERRED`** entries are TRACTABLE — a test could reach them cheaply — but
-  the tests are not yet written.  The bulk of this work is tracked in
-  **#401** (convert testable-but-exempt lines to real tests): notably the
-  `repo.c` read-blob / decrypt / snapshot error paths.  The C unit harness
+  the tests are not yet written.  The bulk of this work was completed in
+  **#401** (closed; 50 testable-but-exempt lines — including the `repo.c`
+  read-blob / decrypt / snapshot error paths — were converted to real
+  tests in ba3a93d).  The handful of `[#401]`-tagged rows still in the
+  fence above are the residue that stayed deferred.  The C unit harness
   controls the master key (`test_repo.c enc_write`) and the blob metadata
   (`lcsas_blob_loc`), so a decrypt-MAC-fail / hash-mismatch / corrupt-zstd
   input is crafted by corrupting a valid blob — **no cryptographic primitive is
