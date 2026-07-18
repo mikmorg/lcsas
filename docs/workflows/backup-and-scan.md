@@ -21,7 +21,7 @@ that pack is invisible to the burn pipeline.
 2. [`lcsas scan` — full scan across all configured repos](#2-lcsas-scan--full-scan-across-all-configured-repos)
 3. [`lcsas scan --repo <name>` — single-repo filter](#3-lcsas-scan---repo-name--single-repo-filter)
 4. [`lcsas scan --no-snapshots` — skip rustic snapshot listing](#4-lcsas-scan---no-snapshots--skip-rustic-snapshot-listing)
-5. [`lcsas scan --no-prune-sync` / `--yes-prune` — prune reconciliation controls](#5-lcsas-scan---no-prune-sync--yes-prune--prune-reconciliation-controls)
+5. [`lcsas scan --no-prune-sync` / `--yes-prune` — prune reconciliation controls](#5-lcsas-scan---no-prune-sync----yes-prune--prune-reconciliation-controls)
 6. [Pack registration & delta computation (internals)](#6-pack-registration--delta-computation-internals)
 7. [Gaps & known issues](#7-gaps--known-issues)
 

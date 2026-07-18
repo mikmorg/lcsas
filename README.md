@@ -36,7 +36,7 @@ architecture reference, on-disc formats, operator guides, the workflow
 matrix, and the on-disc recovery manuals.
 
 The full synthesized architecture reference lives at
-[docs/architecture/overview.md](docs/architecture/overview.md).
+[docs/architecture.md](docs/architecture.md).
 
 ## Project Structure
 
@@ -161,10 +161,13 @@ password_file = "/root/keys/personal.key"
 Each `[repos.<name>]` block declares a `password_file` path. LCSAS reads
 this path once per operation and forwards it to `rustic` via the
 `--password-file` flag for every subprocess invocation (backup, scan,
-restore, etc.). There is **no** `$LCSAS_PASSWORD` or `$RESTIC_PASSWORD`
-environment variable: key location is config-driven so the same
-`config.toml` is reproducible across machines and the CLI never accepts
-secret material on the command line or via the environment.
+restore, etc.). The archival CLI honors **no** `$LCSAS_PASSWORD` or
+`$RESTIC_PASSWORD` environment variable: key location is config-driven
+so the same `config.toml` is reproducible across machines and the CLI
+never accepts secret material on the command line or via the
+environment. (The disaster-recovery script on the meta-volume is the
+one exception — `restore.sh` accepts `LCSAS_PASSWORD` to skip its
+interactive prompt; see `recovery/docs/ENV_VARS.txt`.)
 
 The `password_file` value is the only supported way to tell LCSAS where
 a repo's key lives. The file itself must already exist on disk and be
@@ -211,6 +214,8 @@ rustic backup \
 # LCSAS detects new packs created by the backup and registers them
 # in the archive catalog. Only genuinely new data is flagged for archival.
 
+lcsas --config /etc/lcsas/config.toml scan
+
 lcsas --config /etc/lcsas/config.toml status
 # Output shows unarchived pack count per repo
 
@@ -240,11 +245,14 @@ lcsas --config /etc/lcsas/config.toml \
 #
 #   rsync -avP /mnt/staging/<session>/ burner:/tmp/session/
 #
-#   # On the burner machine (no catalog DB needed):
+#   # On the burner machine (no catalog DB needed). --emit-receipt
+#   # writes a burn-receipt JSON; --location is required with it:
 #   lcsas burn-iso /tmp/session/ARCHIVE_MD_2026_001.iso \
-#     --device /dev/sr0
+#     --device /dev/sr0 \
+#     --emit-receipt /tmp/session/receipts/ --location Home_Shelf
 #   lcsas burn-iso /tmp/session/ARCHIVE_MD_2026_002.iso \
-#     --device /dev/sr0
+#     --device /dev/sr0 \
+#     --emit-receipt /tmp/session/receipts/ --location Home_Shelf
 #
 #   # Sync burn receipts back to the archival machine:
 #   rsync -avP burner:/tmp/session/receipts/ archiver:/tmp/receipts/
@@ -367,7 +375,7 @@ rustic snapshots \
 # packs to physical disc labels.
 
 lcsas --config /etc/lcsas/config.toml \
-  restore plan abc123def456
+  restore plan abc123def456 --repo family
 
 # Output:
 #   Restore Pick List for snapshot abc123def456
@@ -391,7 +399,7 @@ lcsas --config /etc/lcsas/config.toml \
 
 lcsas --config /etc/lcsas/config.toml \
   restore exec abc123def456 /srv/restored \
-  --password-file /root/keys/family.key
+  --repo family --password-file /root/keys/family.key
 
 # LCSAS will:
 #   1. Prepare a restore cache with Rustic metadata
@@ -408,14 +416,18 @@ lcsas --config /etc/lcsas/config.toml \
 If your home shelf discs are lost or damaged, the offsite copies work identically. LCSAS pick lists are aware of all volume copies — if the home copy of `ARCHIVE_MDISC100_0001` is destroyed, the offsite copy is automatically used instead.
 
 ```bash
-# Mark the damaged home copy as destroyed
+# Check the damaged home copy
 lcsas --config /etc/lcsas/config.toml \
   verify ARCHIVE_MDISC100_0001
-# → If verification fails, the volume is flagged DEPRECATED
+# → If verification fails, a VERIFY_FAIL event is recorded in the
+#   volume's audit trail. Retiring the copy is a separate, explicit
+#   step:
+lcsas --config /etc/lcsas/config.toml \
+  copy deprecate ARCHIVE_MDISC100_0001 Home_Shelf
 
 # Re-plan — LCSAS routes to surviving offsite copies
 lcsas --config /etc/lcsas/config.toml \
-  restore plan abc123def456
+  restore plan abc123def456 --repo family
 # Pick list now points to offsite copies instead
 ```
 
@@ -502,8 +514,9 @@ sudo mount /dev/sr0 /mnt
 #    for each data disc as it needs them
 sh /mnt/restore.sh ~/restored/ latest
 
-# The script prints:
-#   Repository: <type the repo name and press Enter>
+# With multiple repos on the archive the script prints a numbered menu:
+#   Choose a repository (number or name): <pick one and press Enter>
+# (single-repo archives skip the prompt), then:
 #   Password:   <type your password and press Enter>
 #
 # When a data disc is needed it prints a swap prompt:
@@ -541,7 +554,7 @@ sudo mount -o loop lcsas_data_0001.iso /mnt
 
 The meta-volume can carry prebuilt recovery binaries for six target
 platforms.  The supported matrix (cross-platform meta-volume work
-landed in Phase 21.1 — see [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md)):
+landed across Phase 21.1–21.12 — see [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md)):
 
 | Target | OS | Notes |
 |---|---|---|
@@ -644,9 +657,12 @@ durability layer.
 Targets **not** currently bundled, and the rationale (full discussion
 in [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md) §6 Q1):
 
-- **RISC-V** — upstream rustic does not yet ship a release artifact
-  for `riscv64gc-unknown-linux-gnu`; we don't cross-compile ourselves.
-  Will be added when upstream ships.
+- **RISC-V** — upstream rustic (tier 2) does not yet ship a release
+  artifact for `riscv64gc-unknown-linux-gnu`, and we don't cross-compile
+  rustic ourselves; will be added when upstream ships. (The tier-1
+  `lcsas-restore` CLI can already cross-build for `riscv64` —
+  `lcsas recovery build --arch riscv64` — but riscv64 is not one of the
+  six approved bundled targets.)
 - **i686** (32-bit x86) — upstream ships it but the cold-storage
   recovery audience for 32-bit x86 in 2026+ is vanishingly small.
 - **FreeBSD / OpenBSD** — no upstream rustic.  Recipient must install
@@ -674,7 +690,7 @@ lcsas burn --session latest --location Offsite_Safe
 
 ## Testing
 
-Uses the `TEST_TINY` (1 MB) media type for fast pipeline tests without optical hardware. Integration tests auto-skip when external tools are not installed.
+Uses the `TEST_TINY` (2 MB) media type for fast pipeline tests without optical hardware. Integration tests auto-skip when external tools are not installed.
 
 ```bash
 make test-unit         # Pure Python, no external deps
@@ -764,6 +780,11 @@ On macOS / non-Linux hosts the blind-restore suite is unsupported; rely on `make
 
 1. Installs rustic from the pinned release tarball above
 2. `apt-get install`s xorriso + dvdisaster
-3. `make dev` → `make test-unit` → `make test-integration` → `make typecheck` → `make lint`
+3. `make dev` → `make -C recovery all test` (C smoke: build every recovery
+   binary + run the C unit tests) → `make test-unit` →
+   `make test-integration` → e2e pipeline test → `make typecheck` →
+   `make lint`
+4. A second `recovery-hardening` job runs the recovery-hardening suite,
+   including `make shell-coverage`
 
 The e2e blind-restore suite is intentionally excluded from CI (cdemu/vhba unavailable on GitHub runners). Run it locally before cutting a release.

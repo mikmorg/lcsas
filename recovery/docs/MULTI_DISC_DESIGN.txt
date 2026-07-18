@@ -349,7 +349,7 @@ UNIT (recovery/tests/test_disc_locator.c):
   * Mock prompt_in with "q\n" -- assert abort returns -1.
   * With --catalog set, assert the prompt includes the volume label.
 
-E2E (recovery/tests/test_e2e_multidisc.py):
+E2E (implemented in recovery/tests/test_multidisc.py):
   * Build a synthetic restic repo with 4 packs.
   * Split into two "discs": packs 1+2 on disc A, packs 3+4 on disc B.
   * Build a tiny catalog.db with both volumes.
@@ -357,7 +357,7 @@ E2E (recovery/tests/test_e2e_multidisc.py):
     against a restic tree that needs blobs from both discs.
   * Verify all files restored byte-equal.
 
-INTERACTIVE E2E (recovery/tests/test_swap_prompt.py):
+INTERACTIVE E2E (implemented in recovery/tests/test_multidisc.py):
   * Same fixture, but pass packs from disc B's data only AFTER
     receiving the prompt.
   * Use a Python subprocess to spawn lcsas-restore with a pty,

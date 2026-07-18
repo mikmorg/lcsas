@@ -289,7 +289,8 @@ NEW FILES
     * Troubleshooting: SmartScreen, "Windows protected your PC",
       antivirus quarantine, long-path issues.
 
-  recovery/docs/START_HERE.txt   (existing -- needs Windows section)
+  START_HERE.txt   (generated at meta-build time by meta/builder.py --
+                    needs Windows section)
     Add: "If you are on Windows, double-click restore.bat (or read
          RECOVER_WINDOWS.txt for details)."
 

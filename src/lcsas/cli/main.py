@@ -3554,7 +3554,7 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
             )
         logger.error(
             "  If discs are physically present but not yet scanned, run "
-            "`lcsas catalog validate --disc /mnt/disc` to check each disc."
+            "`lcsas catalog validate /mnt/disc` to check each disc."
         )
         return 1
 

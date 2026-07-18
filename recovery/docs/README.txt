@@ -33,7 +33,7 @@ SOURCE LAYOUT
 
   src/lcsas-restore/   the C89 recovery binary
     sha256, aes, pbkdf2, poly1305, scrypt  -- crypto
-    arena, io, b64, hex, path              -- support
+    io, b64, hex, path                     -- support
     json_q                                  -- JSON tokenizer
     repo                                    -- restic repo reader
     tree                                    -- recursive restorer

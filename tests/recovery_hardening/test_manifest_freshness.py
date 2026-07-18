@@ -39,6 +39,17 @@ brittle allow/deny list that would itself drift.  A flaky or guess-based
 completeness assertion is worse than none; the hash-match half is the
 high-value tamper/freshness gate and stands on its own.
 
+DOCS MANIFEST (recovery/docs/MANIFEST.sha256)
+---------------------------------------------
+The same freshness gate also covers the per-directory docs manifest.  Unlike
+the curated top-level manifest, recovery/docs/ has a DETERMINISTIC scope --
+every file in the directory except MANIFEST.sha256 itself (exactly what the
+``manifest`` Make target sweeps, and the directory holds only authored docs).
+So for the docs manifest we CAN and DO assert the reverse/completeness half:
+every doc in the directory must have a row.  (Before this gate existed the
+docs manifest drifted silently: three rows went stale across the #384 doc
+edits and RESTORE_STANDARD_TOOLS.txt was never added at all.)
+
 Pure pathlib + hashlib -- no subprocess, no optical hardware, fast.  Modelled
 on the doc-contract tests in this directory (test_tiers_contract.py,
 test_env_var_docs.py).
@@ -56,20 +67,24 @@ pytestmark = pytest.mark.integration
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECOVERY_DIR = REPO_ROOT / "recovery"
 MANIFEST = RECOVERY_DIR / "MANIFEST.sha256"
+DOCS_DIR = RECOVERY_DIR / "docs"
+DOCS_MANIFEST = DOCS_DIR / "MANIFEST.sha256"
 
 # Each row is "<64 hex sha256><two spaces><relpath>".  Paths are stored
-# relative to recovery/ with a leading "./" (e.g. "./docs/TIERS.txt").
+# relative to the manifest's own directory with a leading "./"
+# (e.g. "./docs/TIERS.txt" in the top-level manifest, "./TIERS.txt" in the
+# docs manifest).
 _DIGEST_LEN = 64
 
 
-def _parse_rows() -> list[tuple[int, str, str]]:
+def _parse_manifest_rows(manifest: Path, label: str) -> list[tuple[int, str, str]]:
     """Return [(line_no, digest, relpath)] for every non-blank manifest row.
 
     Raises an assertion (caught by the parse test) on any malformed row so a
     corrupt manifest fails loud rather than silently skipping rows.
     """
     rows: list[tuple[int, str, str]] = []
-    for line_no, raw in enumerate(MANIFEST.read_text(encoding="utf-8").splitlines(), 1):
+    for line_no, raw in enumerate(manifest.read_text(encoding="utf-8").splitlines(), 1):
         line = raw.rstrip("\n")
         if not line.strip():
             continue
@@ -77,7 +92,7 @@ def _parse_rows() -> list[tuple[int, str, str]]:
         # of whitespace to be tolerant, then validate the digest shape.
         parts = line.split(maxsplit=1)
         assert len(parts) == 2, (
-            f"recovery/MANIFEST.sha256 line {line_no} is not "
+            f"{label} line {line_no} is not "
             f"'<sha256>  <path>': {line!r}"
         )
         digest, relpath = parts
@@ -85,11 +100,15 @@ def _parse_rows() -> list[tuple[int, str, str]]:
         assert len(digest) == _DIGEST_LEN and all(
             c in "0123456789abcdef" for c in digest
         ), (
-            f"recovery/MANIFEST.sha256 line {line_no} has a malformed SHA-256 "
+            f"{label} line {line_no} has a malformed SHA-256 "
             f"digest: {digest!r}"
         )
         rows.append((line_no, digest, relpath))
     return rows
+
+
+def _parse_rows() -> list[tuple[int, str, str]]:
+    return _parse_manifest_rows(MANIFEST, "recovery/MANIFEST.sha256")
 
 
 def test_manifest_exists() -> None:
@@ -161,5 +180,103 @@ def test_every_listed_file_exists_and_matches_digest() -> None:
     assert not problems, (
         "recovery/MANIFEST.sha256 has drifted from the real tree; an heir "
         "verifying a GOOD disc against it would get a spurious mismatch.\n\n"
+        + "\n\n".join(problems)
+    )
+
+
+# ── recovery/docs/MANIFEST.sha256 — same gate + completeness half ────────
+
+
+def test_docs_manifest_exists() -> None:
+    """The per-directory docs manifest must exist alongside the docs."""
+    assert DOCS_MANIFEST.is_file(), (
+        f"recovery/docs/MANIFEST.sha256 is missing at {DOCS_MANIFEST}.  It is "
+        f"the tamper-evidence record for the on-disc operator manual; without "
+        f"it an heir cannot verify the docs they are following."
+    )
+
+
+def test_docs_manifest_rows_parse_and_are_unique() -> None:
+    """Every docs-manifest row is well-formed and no path is listed twice."""
+    rows = _parse_manifest_rows(DOCS_MANIFEST, "recovery/docs/MANIFEST.sha256")
+    assert rows, (
+        "recovery/docs/MANIFEST.sha256 has no rows -- the integrity record "
+        "is empty."
+    )
+    seen: dict[str, int] = {}
+    dups: list[str] = []
+    for line_no, _digest, relpath in rows:
+        if relpath in seen:
+            dups.append(f"{relpath} (lines {seen[relpath]} and {line_no})")
+        else:
+            seen[relpath] = line_no
+    assert not dups, (
+        "recovery/docs/MANIFEST.sha256 lists the same path more than once -- "
+        "ambiguous tamper record:\n  " + "\n  ".join(dups)
+    )
+
+
+def test_docs_manifest_listed_files_match_and_are_complete() -> None:
+    """Docs-manifest gate, BOTH directions.
+
+    Forward: every listed path exists in recovery/docs/ and its recomputed
+    SHA-256 equals the committed digest (same staleness gate as the
+    top-level manifest).
+
+    Reverse (docs-only): every file in recovery/docs/ except
+    MANIFEST.sha256 itself has a row.  The docs directory's scope is
+    deterministic -- it holds only authored docs, exactly what the
+    ``manifest`` Make target sweeps -- so a missing row is always a real
+    omission (this is how RESTORE_STANDARD_TOOLS.txt went unpinned for
+    weeks).
+    """
+    rows = _parse_manifest_rows(DOCS_MANIFEST, "recovery/docs/MANIFEST.sha256")
+    missing: list[str] = []
+    drifted: list[str] = []
+    listed: set[Path] = set()
+
+    for line_no, digest, relpath in rows:
+        target = (DOCS_DIR / relpath).resolve()
+        listed.add(target)
+        if not target.is_file():
+            missing.append(f"line {line_no}: {relpath}")
+            continue
+        actual = hashlib.sha256(target.read_bytes()).hexdigest()
+        if actual != digest:
+            drifted.append(
+                f"line {line_no}: {relpath}\n"
+                f"      committed: {digest}\n"
+                f"      actual:    {actual}"
+            )
+
+    unlisted = sorted(
+        p.name
+        for p in DOCS_DIR.iterdir()
+        if p.is_file() and p.name != "MANIFEST.sha256" and p.resolve() not in listed
+    )
+
+    problems: list[str] = []
+    if missing:
+        problems.append(
+            f"{len(missing)} docs-manifest row(s) point at files that no "
+            f"longer exist under recovery/docs/ (delete/rename the row or "
+            f"restore the file):\n  " + "\n  ".join(missing)
+        )
+    if drifted:
+        problems.append(
+            f"{len(drifted)} docs-manifest digest(s) no longer match the "
+            f"file on disc -- refresh the row(s):\n  " + "\n  ".join(drifted)
+        )
+    if unlisted:
+        problems.append(
+            f"{len(unlisted)} file(s) in recovery/docs/ have NO manifest row "
+            f"-- add them (regenerate with `make -C recovery manifest`, then "
+            f"restore the curated top-level manifest if the blind sweep "
+            f"clobbered it):\n  " + "\n  ".join(unlisted)
+        )
+    assert not problems, (
+        "recovery/docs/MANIFEST.sha256 has drifted from the real docs tree; "
+        "an heir verifying GOOD docs against it would get a spurious "
+        "mismatch (or a gap in the tamper record).\n\n"
         + "\n\n".join(problems)
     )

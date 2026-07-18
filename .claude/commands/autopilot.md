@@ -9,9 +9,11 @@ run to *landed* or *escalated*, never to half-done.
 ## Policy (edit this block as reality changes — nowhere else)
 
 - **Merge authority:** merge on green.  `--admin` is permitted ONLY when
-  the sole red checks are the named pre-existing gates — currently
-  **bin-parity (#381/#320)**.  Any other red = fix forward on the branch;
-  if that stalls, escalate.  A new red is never waved through.
+  the sole red checks are named pre-existing gates listed HERE —
+  currently **none** (bin-parity went green when #381/#320 landed,
+  2026-07; the `--admin` era is over per #414's required-check shape).
+  Any red = fix forward on the branch; if that stalls, escalate.  A new
+  red is never waved through.
 - **Blind-restore gate:** haiku model, `LCSAS_BLIND_ACK_COST=1`, only when
   the change touches the restore path (recovery/src, recovery/scripts,
   src/lcsas/restore, src/lcsas/meta).  Tests+docs-only changes skip it.

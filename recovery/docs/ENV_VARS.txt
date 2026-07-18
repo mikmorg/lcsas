@@ -279,6 +279,40 @@ LCSAS_SKIP_SPACE_CHECK
             large archive) where the whole-archive estimate is a
             deliberate overestimate.
 
+LCSAS_CHECK_DISC_AUTOFIX
+  Default:  0  (ask on a terminal; refuse without one / opt-in)
+  Since:    2026-06 audit (FMT-01, --check-disc)
+  What:     1 → when `restore.sh --check-disc` (or restore.bat
+            :check_disc) finds damage in a disc image, repair it
+            using the burned RS03 ECC parity WITHOUT the interactive
+            "Repair it now? [y/N]" confirmation.  With no terminal
+            and this unset, the script refuses to write and exits
+            nonzero.
+  Why:      Opt-IN.  Repair rewrites the image file; an unattended
+            run must explicitly accept that risk.
+
+LCSAS_FORCE_NONEMPTY_TARGET
+  Default:  0  (confirm on a terminal; refuse without one / opt-in)
+  Since:    2026-06 audit (UX-07)
+  What:     1 → skip the "target folder already contains files that
+            do not look like a previous LCSAS restore" overwrite
+            guard in restore.sh / restore.bat.  Interactively the
+            guard asks you to type YES; non-interactively it refuses
+            unless this is set.  (A hidden marker file makes re-runs
+            into the same restore target silent either way.)
+  Why:      Opt-IN.  Restoring over unrelated existing files can
+            silently overwrite them; scripted runs must opt in.
+
+LCSAS_KEYSHARE_PASSPHRASE
+  Default:  unset (empty passphrase)
+  Since:    Key escrow (C5, 2026-05)
+  What:     Passphrase for SLIP-0039 share combination, read by the
+            tier-1 `lcsas-keyshare` combiner when no --passphrase
+            flag is given.  Only relevant for splits created with a
+            non-default passphrase.
+  Why:      Opt-in — same credentials reasoning as LCSAS_PASSWORD:
+            secrets enter the environment only by explicit action.
+
 BUILD / CI GATES
 ────────────────
 
@@ -306,18 +340,6 @@ LCSAS_RECOVERY_CACHE
             across workspaces.
   Why:      Opt-IN — the default HOME-relative path is suitable for
             single-developer use; CI clusters override it explicitly.
-
-LCSAS_NO_WIZARD
-  Default:  unset → wizard runs on tty1 (opt-in to skip)
-  Since:    Phase 21
-  What:     When set, suppresses the interactive setup wizard in the
-            live-rootfs (src/lcsas/meta/live/build_rootfs.sh).  The
-            wizard only fires on tty1 of a live boot; it does not
-            affect restore.sh or the recovery binaries.
-  Why:      Opt-IN.  The wizard is the operator's primary on-screen
-            guide; skipping it requires an intentional signal.
-            Automated recovery testing sets this to avoid blocking on
-            a wizard prompt.
 
 LCSAS_OPTIONAL_ARCHES
   Default:  unset
@@ -355,6 +377,9 @@ LCSAS_MAX_JSON_MIB          256       opt-in      lower on tiny 32-bit hosts
 LCSAS_MAX_TREE_DEPTH        1000      opt-in      raise + 'ulimit -s unlimited'
 LCSAS_TIER_FALLBACK         0         opt-in      set 1 to walk cascade
 LCSAS_ALLOW_PYTHON_TIER     1         opt-out     set 0 to ban Python
+LCSAS_CHECK_DISC_AUTOFIX    0         opt-in      unattended ECC repair
+LCSAS_FORCE_NONEMPTY_TARGET 0         opt-in      scripted overwrite ack
+LCSAS_KEYSHARE_PASSPHRASE   unset     opt-in      split-key passphrase
 LCSAS_PROGRESS              unset     opt-out     set 0 to silence output
 LCSAS_NO_RELOCATE           0         opt-in      set 1 for testing
 LCSAS_ALLOW_NO_PACK_SEARCH  0         opt-in      set 1 for test rigs

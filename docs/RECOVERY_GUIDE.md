@@ -106,7 +106,9 @@ Insert the right disc and press ENTER to retry.
 
 Eject the current disc, insert the named one, press Enter.  If a
 physical disc is damaged, check whether you have a redundant copy at
-another storage location (LCSAS writes ≥2 copies by default).
+another storage location (the recommended practice is burning ≥2
+copies of every volume to separate locations; the catalog tracks
+every copy).
 
 ### The bundled binary won't run on this system
 
@@ -159,7 +161,7 @@ Alternatively, use a virtual machine:
 Every LCSAS data disc contains:
 
 ```
-LCSAS_BD25_001.iso
+LCSAS_BD25_2026_0001.iso
 ├── START_HERE.txt           Read this first (plain English)
 ├── KEY_INFO.txt             Which password unlocks which repository
 ├── CONFIG_SUMMARY.txt       Archive settings snapshot

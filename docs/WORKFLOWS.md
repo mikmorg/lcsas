@@ -37,7 +37,7 @@ multi-tenant, recovery-toolchain) are called out as such in their detail files.
 | restore-windows | [workflows/restore-windows.md](workflows/restore-windows.md) | `restore.bat` end-to-end from a Windows host. |
 | restore-disc-only | [workflows/restore-disc-only.md](workflows/restore-disc-only.md) | Tier-3 pure-Python single-disc restore. |
 | recovery-toolchain | [workflows/recovery-toolchain.md](workflows/recovery-toolchain.md) | `recovery build/test/manifest/verify`, cross-arch. |
-| meta-volume | [workflows/meta-volume.md](workflows/meta-volume.md) | Bootable disaster-recovery disc with bundled binaries + source. |
+| meta-volume | [workflows/meta-volume.md](workflows/meta-volume.md) | Disaster-recovery disc (not bootable) with bundled binaries + source. |
 | consolidate-and-catalog-ops | [workflows/consolidate-and-catalog-ops.md](workflows/consolidate-and-catalog-ops.md) | `consolidate` plus `catalog validate/rebuild`. |
 | verify-and-audit | [workflows/verify-and-audit.md](workflows/verify-and-audit.md) | `verify`, `status`, `session list`. |
 
@@ -73,8 +73,8 @@ rather than a top-level axis.
   (`MediaType.ecc_overhead_pct == 0`). There is no user-facing toggle.
 - **Live distro** — yes (recovery booted from USB / meta-volume) vs. no
   (workflow runs under the host OS).
-- **Recovery tier** — `1` prebuilt static `lcsas-restore`, `2` vendored
-  `rustic-static`, `3` pure-Python `standalone_restorer.py`.
+- **Recovery tier** — `1` prebuilt static `lcsas-restore`, `2` pinned
+  upstream `rustic-static`, `3` pure-Python `standalone_restorer.py`.
   Full definitions in `recovery/docs/TIERS.txt`; tiers 1–2 are the
   bare-minimum path and must remain Python-free.
 
@@ -101,7 +101,9 @@ Each detail file ends with a "Test coverage" table using these tokens:
 
 ## Conventions
 
-Every step in every detail file carries a source reference of the form
-`(path/to/file.py:LINE)` pointing at the handler that implements it. Paths
-are repo-relative (rooted at the LCSAS checkout) so they remain stable across
-worktrees and forks.
+Every step in every detail file carries a source reference pointing at the
+code that implements it — by symbol name, e.g. `` `cmd_restore_plan()` in
+`src/lcsas/cli/main.py` `` (symbol names survive the refactors that rot line
+numbers; a few older detail files still carry legacy `file.py:LINE` refs
+pending migration). Paths are repo-relative (rooted at the LCSAS checkout)
+so they remain stable across worktrees and forks.

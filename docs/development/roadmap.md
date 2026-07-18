@@ -15,8 +15,8 @@ DVDisaster to write deduplicated, encrypted data packs onto optical media
 - **Multi-copy location tracking** (burn N copies, each tagged to a location)
 - **Session-based multi-volume staging** (decouple ISO creation from burning)
 - **DVDisaster RS03 ECC** (image-level error correction, always-on for production media)
-- **3-tier recovery cascade** (in-house C `lcsas-restore` → vendored `rustic-static`
-  → pure-Python `standalone_restorer.py`; tiers 1–2 are Python-free)
+- **3-tier recovery cascade** (in-house C `lcsas-restore` → pinned upstream
+  `rustic-static` → pure-Python `standalone_restorer.py`; tiers 1–2 are Python-free)
 - **Shamir key escrow** (recorded K/N + SLIP-0039 split; `key_escrow` table, KEY-08)
 
 The codebase has zero runtime pip dependencies (pure stdlib; `zstandard` is
@@ -31,7 +31,6 @@ roughly in descending order of "addresses a real limitation users have hit."
 
 | Item | Status | Notes |
 |---|---|---|
-| **Coverage backfill** | Active gap | The largest remaining single-module gaps are `meta/live/restore_wizard.py` (TUI) and `meta/bootable.py` (Alpine live-boot installer). Both would benefit from a dedicated terminal-mocking strategy. |
 | **RISC-V meta-volume target** | Blocked on upstream | `riscv64gc-*` has no upstream rustic / python-build-standalone artifact yet. Add when upstream ships. See [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q1. |
 | **Windows ARM64 (`aarch64-pc-windows-msvc`)** | Blocked on upstream | No upstream rustic artifact. Non-goal until it lands. |
 | **FreeBSD / OpenBSD targets** | Deferred | No upstream rustic artifact; different binary formats. |

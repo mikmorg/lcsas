@@ -37,7 +37,7 @@ the catalog records intact so the volumes remain referenceable.
 - [`lcsas burn --session <id>` — burn a previously staged session](#lcsas-burn---session-id--burn-a-previously-staged-session)
 - [`lcsas burn --dry-run` — plan + ISO build without burning](#lcsas-burn---dry-run--plan--iso-build-without-burning)
 - [`lcsas stage --dry-run` — plan-only (no side effects)](#lcsas-stage---dry-run--plan-only-no-side-effects)
-- [`lcsas burn --for-location <name>` — delta burn for a specific location](#lcsas-burn---for-location-name--delta-burn-for-a-specific-location)
+- [`lcsas stage --for-location <name>` — delta burn for a specific location](#lcsas-stage---for-location-name--delta-burn-for-a-specific-location)
 - [Per-media-type variants](#per-media-type-variants)
 - [Session lifecycle and resuming an interrupted burn](#session-lifecycle-and-resuming-an-interrupted-burn)
 - [Variant-axis matrix](#variant-axis-matrix)
@@ -354,7 +354,7 @@ location filter (`--for-location`). No ISO is produced.
 
 ---
 
-## `lcsas burn --for-location <name>` — delta burn for a specific location
+## `lcsas stage --for-location <name>` — delta burn for a specific location
 
 **Purpose:** Stage only the packs that are **not yet present at a specific
 physical location**, then burn them. The classic "Offsite_Safe is six

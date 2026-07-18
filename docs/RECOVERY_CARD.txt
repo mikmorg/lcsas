@@ -58,6 +58,6 @@ TRANSCRIPTION CHECK CODE (optional but recommended)
   negligible against a high-entropy password, but stated honestly. Omit it
   if you prefer no disclosure at all.
 
-  Tip: `lcsas key card --repo <name> --config lcsas.toml` generates this
+  Tip: `lcsas --config lcsas.toml key card --repo <name>` generates this
   card with the check code already filled in (the password is never printed).
 ===================================================

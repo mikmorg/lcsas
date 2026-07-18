@@ -1,7 +1,12 @@
 ---
 name: key-escrow
-description: Drive the LCSAS Shamir key-escrow build to completion one dependency-aware step at a time. Reads .claude/skills/key-escrow/PLAN.md as source of truth, advances the lowest open phase, delegates code to worktree sub-agents with full-coverage + lint + typecheck gates, opens a PR per item, and HALTS at phase gates for the user to merge. Phase 4 iterates the two blind tests (single-key + 2-of-5 split-key) autonomously until BOTH score 15/15 on consecutive runs.
+description: COMPLETE (all 6 phases shipped 2026-05-31, PRs #311-#315 merged; kept for a possible future phase). Drove the LCSAS Shamir key-escrow build one dependency-aware step at a time. Reads .claude/skills/key-escrow/PLAN.md as source of truth, advances the lowest open phase, delegates code to worktree sub-agents with full-coverage + lint + typecheck gates, opens a PR per item, and (per the 2026-05-31 standing authorization) merges on green without waiting for the user. Phase 4 iterated the two blind tests (single-key + 2-of-5 split-key) autonomously until BOTH scored full marks on consecutive runs.
 ---
+
+> **STATUS: COMPLETE.** Every phase (0–5) in PLAN.md is `[x]`; the feature is
+> shipped and blind-proven. Invoking this skill with no open plan items is a
+> no-op — it exists as the driver record and for any future phase appended to
+> PLAN.md.
 
 # Key-Escrow Driver
 
@@ -40,21 +45,23 @@ just do them without prompting."** So:
    the combiner is on the 50-year critical path, same bar as `lcsas-restore`.
 2. **Coverage is a gate, not a nicety.** New Python at **100% line cov** (`make coverage`,
    term-missing must show zero misses in new modules); `make typecheck` + `make lint` clean;
-   `make shell-coverage` covers the restore.sh share branch; `make audit-gate` green for any
-   C combiner (EXEMPTIONS contract — every uncovered line documented).
+   `make shell-coverage` stays green (restore.sh itself is byte-for-byte unchanged per the
+   K2.2 design — the combiner is a pre-step, not a restore.sh branch); `make audit-gate`
+   green for any C combiner (EXEMPTIONS contract — every uncovered line documented).
 3. **Blind runs: haiku only, and they cost ~$5 each.** Never use sonnet/opus for a blind
-   gate run. Never spawn a blind run without a standing `LCSAS_BLIND_ACK_COST=1`
-   acknowledgement from the user (ask once at the Phase 3→4 gate; record it in the Driver
-   log). Bound the loop — see Phase 4 below.
+   gate run. `LCSAS_BLIND_ACK_COST=1` is pre-authorized by the 2026-05-31 standing
+   authorization (see Autonomy policy) — recorded in the Driver log. Bound the loop — see
+   Phase 4 below.
 4. **The blind test exercises PRODUCTION meta-disc output unmodified.** No overlay scripts,
    no patched restore.sh, no test-only combiner. If the heir can't recover from the real
    meta disc + real prompts, the feature has not shipped. (This is the existing harness's
    own acceptance gate — do not weaken it.)
 5. **The single-key path must stay byte-for-byte unchanged.** Shares are additive; an
    archive with no shares prompts for the password exactly as today.
-6. **PR per item; you merge nothing at a gate.** Branch per item, open a PR, run the gates.
-   At a phase gate the user merges ("merge #N") — match the established workflow. Within a
-   phase you may stack branches but keep each item's PR reviewable.
+6. **PR per item.** Branch per item, open a PR, run the gates. Per the Autonomy policy
+   (2026-05-31 standing authorization, which supersedes the original halt-at-gates rule),
+   merge yourself once CI is green. Within a phase you may stack branches but keep each
+   item's PR reviewable.
 7. **Verify before claiming done.** Real runs, not just mocks — especially the blind score.
    Self-correct openly when a check disproves an assumption.
 

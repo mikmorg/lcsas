@@ -251,14 +251,18 @@ row per variant.  An empty or stale row is itself the finding.
 
 Per project policy the blind-restore agent runs on HAIKU only (not
 sonnet/opus); record the model so a future reader can trust the score.
-A passing drill is 15/15.
+A passing drill is a full score — every check green.  (verify.sh
+currently runs 16 checks; rows recorded before the 16th check landed
+show /15.)
 
   DATE        VARIANT        MODEL   SCORE   META-BUILD / NOTE
   ──────────  ─────────────  ──────  ──────  ───────────────────────────
-  (pending)   single-key     haiku   --/15   make blind-restore-single-key
-  (pending)   split-2of5     haiku   --/15   make blind-restore-split-2of5
-  (pending)   tier1-missing  haiku   --/15   run_variant.sh tier1-missing
-  (pending)   windows        haiku   --/15   make blind-restore-windows
+  (pending)   single-key     haiku   --/16   make blind-restore-single-key
+  (pending)   split-2of5     haiku   --/16   make blind-restore-split-2of5
+  2026-06-15  tier1-missing  haiku   16/16   run_variant.sh tier1-missing;
+                                             twice consecutively — promoted
+                                             out of XFAIL.list (issue #227)
+  (pending)   windows        haiku   --/16   make blind-restore-windows
 
   HOW OFTEN: once per meta disc build, and after any change to
   restore.sh / restore.bat, the heir docs, or a tier binary.

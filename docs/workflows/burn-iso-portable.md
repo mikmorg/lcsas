@@ -192,7 +192,7 @@ its long-term-storage location (B).
 
 **Steps:**
 
-1. **On A — stage.** Run `lcsas stage [--media-type ...]` to bin-pack
+1. **On A — stage.** Run `lcsas stage [--media ...]` to bin-pack
    unarchived packs into one or more volumes; each volume is staged
    into `<staging>/<session>/<volume_label>/`, an ISO is created next
    to it as `<staging>/<session>/<volume_label>.iso`, and ECC is

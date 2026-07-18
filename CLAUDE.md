@@ -21,9 +21,14 @@ pytest tests/unit/test_foo.py::test_bar -v
 make lint                         # ruff check src/ tests/
 make lint-fix                     # ruff check --fix src/ tests/
 make typecheck                    # mypy src/ (strict mode)
+
+# The pre-push gate (also the default make target)
+make gate                         # lint + typecheck + test-all + shell-coverage
 ```
 
-Pytest writes temp files to `/var/tmp/pytest-lcsas` and cleans them up automatically. Integration tests are skipped unless the required binaries are present; unit tests run with no external dependencies.
+Other gates to know about: `make audit-gate` (required before tier-1 C changes under `recovery/src/`), `make shell-coverage` (restore.sh line coverage), `make test-e2e` / `make test-recovery-hardening`, and `make meta-gate` (fetch-recovery + build-recovery). See the Makefile for the full list.
+
+Pytest cleans up its temp files automatically (`tmp_path_retention_policy = "none"`). Integration tests are skipped unless the required binaries are present; unit tests run with no external dependencies.
 
 ## Architecture
 
@@ -64,7 +69,7 @@ Restore is the mirror: `restore/planner.py` generates a disc pick list; `restore
 | `burn/` | Full burn pipeline orchestrator |
 | `restore/` | Restore planner, executor, pure-Python fallback, standalone env builder |
 | `consolidate/` | Volume merger (collapses redundant packs across discs) |
-| `meta/` | Meta-volume builder (bootable disaster-recovery disc with bundled binaries + source) |
+| `meta/` | Meta-volume builder (disaster-recovery disc with bundled binaries + source; NOT bootable — the live-boot path was dropped per BOOT-01/BOOT-07) |
 | `recovery/` | C89 recovery-binary cross-compilation harness (drives `lcsas recovery build`; builds tier-1 `lcsas-restore` against vendored sqlite+zstd) |
 | `keyshare/` | Pure-Python SLIP-0039 Shamir key splitting (K-of-N escrow of repo keys) |
 | `utils/` | Hashing, label generation, two-level hex pack layout, subprocess base, fs helpers |
@@ -75,7 +80,7 @@ Restore is the mirror: `restore/planner.py` generates a disc pick list; `restore
 - **Holographic catalog** — the complete SQLite catalog is burned onto every disc so recovery never requires a central server.
 - **Multi-tenancy** — multiple Rustic repos share physical volumes; each repo is encrypted with its own key; the catalog tracks per-repo ownership.
 - **Zero runtime dependencies** — the entire codebase uses only the Python standard library (`zstandard` is optional). This is intentional so the restore path works on a bare system.
-- **Meta-volume** — a separate bootable disc (`meta/`) bundles per-target static binaries (rustic, xorriso, python3), LCSAS source, and a `restore.sh` script so full recovery is possible with nothing pre-installed.  Phase 21 added per-target bundling for six rust-triples (Linux x86_64/aarch64/armv7 musl, macOS arm64/x86_64, Windows x86_64-gnu).
+- **Meta-volume** — a separate disc (`meta/`) bundles per-target static binaries (rustic, xorriso, python3), LCSAS source, and a `restore.sh` script so full recovery is possible with nothing pre-installed. No LCSAS disc is bootable — the meta disc is mounted from a running OS (the live-boot path was quarantined to `experimental/boot/`). Phase 21 added per-target bundling for six rust-triples (Linux x86_64/aarch64/armv7 musl, macOS arm64/x86_64, Windows x86_64-gnu).
 
 ### Recovery cascade (intent + reality)
 
@@ -95,4 +100,4 @@ The recovery tiers are documented in `recovery/docs/TIERS.txt` and dispatched by
 
 ### Database schema
 
-Schema version 9 (12 tables). Key tables: `repositories`, `packs`, `volumes`, `volume_packs` (M:M), `snapshots`, `locations`, `volume_copies`, `burn_sessions` + `session_volumes` (session/burn audit), `volume_events` (audit trail), `key_escrow` (recorded Shamir split: K/N + SLIP-0039 id, KEY-08). Volume lifecycle: `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED`.
+Schema version 9 (12 tables). Key tables: `repositories`, `packs`, `volumes`, `volume_packs` (M:M), `snapshots`, `locations`, `volume_copies`, `burn_sessions` + `session_volumes` (session/burn audit), `volume_events` (audit trail), `key_escrow` (recorded Shamir split: K/N + SLIP-0039 id, KEY-08). Volume lifecycle: `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED`, plus `CONSOLIDATING` (entered from VERIFIED while `consolidate/` merges a volume's packs onto a successor).

@@ -120,31 +120,27 @@ bare-metal initramfs flow (no auto-mount daemon there), so it is not urgent.
 *Effort:* Linux inotify ~120 LOC + ~80 LOC test; macOS kevent ~100 LOC;
 Windows polling ~30 LOC.
 
-### 4. Snapshot-aware pick list (avoid prompting for unused discs) — PARTIAL (P1)
+### 4. Snapshot-aware pick list — CLOSED WON'T-FIX (issue #350, 2026-07-16)
 
 Print upfront "this restore needs vols 001, 003, 007 — have them ready"
 instead of resolving missing packs reactively.
 
-- *Python path:* `meta/restore_single_drive.py::_build_pick_list` already
-  groups packs by volume and returns an ordered `volumes` list.
-- *C path:* `catalog.c::lcsas_catalog_print_pending_packs` prints
-  "Pending packs by disc:" grouped by volume — **but over ALL live packs,
-  not the specific snapshot's tree.**  The remaining work is to walk the
-  selected snapshot's tree once (locator in fail-fast + collect-missing
-  mode), collect referenced `pack_id`s, and scope the printed volume list
-  to that set.
-
-*Effort:* ~200 LOC across `tree.c` + `main.c`.
+Resolved as **won't-fix by design** (#350, commit 985c118): the catalog
+structurally lacks a snapshot→pack mapping, so the tier-1 pick list
+(`catalog.c::lcsas_catalog_print_pending_packs`) is whole-archive **by
+design**.  Per-snapshot pick lists remain a tier-3 capability
+(`meta/restore_single_drive.py::_build_pick_list` groups packs by volume
+per snapshot).  See the #350 discussion for the full rationale.
 
 ### Priority order for resuming
 
-- **P1:** Snapshot-aware pick list (item 4) — biggest UX impact, reuses
-  existing catalog data, no new on-disc format.
 - **P2:** Auto-mount detection (item 3) — quality-of-life; Linux/macOS only.
 - **P3:** volume_info.json wire-up (item 2) — low effort, low payoff;
   useful once auto-mount lands.
 - **P4:** disc_index.txt sidecar (item 1) — pure defence in depth; defer
   indefinitely unless field evidence demands it.
+- Item 4 (snapshot-aware pick list) closed won't-fix per #350 — no longer
+  in the queue.
 
 ---
 
