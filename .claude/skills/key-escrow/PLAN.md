@@ -10,14 +10,14 @@ Status keys: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked (nee
 
 ## Mission & acceptance gate
 
-Eliminate the single unsolvable failure in `docs/SURVIVABILITY.md` §3.1 (key loss = total
-loss) by splitting the per-repo password with Shamir Secret Sharing (SSS): **N shares, any
+Eliminate the single unsolvable failure in `docs/guides/survivability.md` §3.1 (key loss =
+total loss) by splitting the per-repo password with Shamir Secret Sharing (SSS): **N shares, any
 K reconstruct, K-1 reveal nothing.** Offline, zero-runtime-dependency, spec-reconstructable —
 same durability contract as `lcsas-restore` (tier 1).
 
 **DONE means all of:**
 - New code at **100% line coverage** (`make coverage`), mypy-strict + ruff clean.
-- restore.sh share branch covered by `make shell-coverage`; any C combiner passes `make audit-gate` (EXEMPTIONS contract).
+- `make shell-coverage` stays green (per the K2.2 design change restore.sh is byte-for-byte unchanged — the combiner is a pre-step, not a restore.sh branch); any C combiner passes `make audit-gate` (EXEMPTIONS contract).
 - **Blind run A — single (no-split) key: `SCORE: 15/15`** on two consecutive runs.
 - **Blind run B — 2-of-5 split key: `SCORE: 15/15`** on two consecutive runs.
 - Both blind runs use the **production** meta-disc output unmodified (no overlay scripts — the PLAN.md acceptance gate of the existing harness).
@@ -40,7 +40,7 @@ same durability contract as `lcsas-restore` (tier 1).
 - [x] **K0.2** `src/lcsas/keyshare/` — stdlib-only SLIP-0039 split/combine + RS1024/digest integrity (812 LOC + 1024-word list). Independently re-verified by lead. deps: D0.1
 - [x] **K0.3** 45/45 official SLIP-0039 vectors pass (15 valid / 30 invalid) + property tests; **100% line cov (349/349)**, ruff + mypy-strict clean. deps: K0.2
 - [x] **K0.4** `docs/KEY_SHARE_FORMAT.md` — SLIP-0039 layout, algorithm + re-implementation guidance, LCSAS tie-in, 45-vector conformance pointer. Auto-bundled on the meta-volume via `_DOC_ITEMS=("docs",...)` (no code change needed). deps: K0.2
-- **GATE 0→1:** ✅ format locked, primitive round-trips + tamper-detects, 100% cov, spec written + bundled. *Awaiting "merge #N".*
+- **GATE 0→1:** ✅ format locked, primitive round-trips + tamper-detects, 100% cov, spec written + bundled. *PR #311 merged 2026-05-31.*
 
 ## Phase 1 — CLI & share artifacts
 
@@ -48,7 +48,7 @@ same durability contract as `lcsas-restore` (tier 1).
 - [x] **K1.2** `lcsas key combine` → reconstruct from ≥K shares (files or stdin) to stdout/`--out`; `<K`/corrupted/foreign → clear error, **exit non-zero**. deps: K0.2
 - [x] **K1.3** Config `key_threshold` / `key_shares` (default 2/5) on `LCSASConfig` + TOML parse. deps: K1.1
 - [x] **K1.4** CLI tests (round-trip, under-threshold, corrupted, foreign, perms, config override) + codec tests — **100% on new code (codec 18/18; key handlers fully covered)**. deps: K1.1, K1.2
-- **GATE 1→2:** ✅ real password round-trips end-to-end via the CLI; coverage green. *(Also fixed a pre-existing bug: `python -m lcsas` swallowed exit codes — `__main__.py` now `sys.exit(main())`, with a regression test.)* *Awaiting "merge #N".*
+- **GATE 1→2:** ✅ real password round-trips end-to-end via the CLI; coverage green. *(Also fixed a pre-existing bug: `python -m lcsas` swallowed exit codes — `__main__.py` now `sys.exit(main())`, with a regression test.)* *PR #312 merged 2026-05-31.*
 
 ## Phase 2 — Recovery-path integration (zero-dep, production)
 
@@ -91,8 +91,8 @@ Goal: a tier-1-grade C89 `lcsas-keyshare` combiner so split-key reconstruction n
 ## Coverage gates (every phase must keep these green before its PR)
 - `make coverage` — new Python at 100% line cov, `--cov-report=term-missing` shows no misses in `keyshare/` or `cli/key`.
 - `make typecheck` (mypy strict) + `make lint` (ruff) clean.
-- `make shell-coverage` — restore.sh share branch covered (Phase 2+).
-- `make audit-gate` — only if a C combiner is built (Phase 2 K2.1c); EXEMPTIONS contract must stay green.
+- `make shell-coverage` — stays green (restore.sh unchanged per K2.2; no share branch exists).
+- `make audit-gate` — only if a C combiner is built (that became Phase 5, C5.1–C5.5); EXEMPTIONS contract must stay green.
 
 ## Driver log (append one line per landed item: date · id · branch · PR · cov · notes)
 - 2026-05-31 · Phase 0 (K0.2–K0.4) · feat/keyshare-slip39-primitive · PR #311 · keyshare 100% (349/349) · 45/45 official SLIP-0039 vectors
@@ -100,4 +100,4 @@ Goal: a tier-1-grade C89 `lcsas-keyshare` combiner so split-key reconstruction n
 - 2026-05-31 · Phase 2 (K2.1–K2.4) · feat/keyshare-recovery-integration · PR #313 · combiner 100% (46/46) · clean-machine reconstruction verified
 - 2026-05-31 · Phase 3 (K3.1–K3.3) · feat/keyshare-blind-variants · PR #314 · verify.sh untouched · both variants 15/15 (accidental + deliberate)
 - 2026-05-31 · Phase 4 (K4.1–K4.3) · BLIND GATE · — · single-key 15/15 ×2; split-key-2of5 15/15 ×2 · /key-escrow COMPLETE
-- 2026-05-31 · Phase 5 (C5.1–C5.5) · feat/keyshare-c-combiner · PR #__ · C89 lcsas-keyshare: 45/45 vectors + Python byte-match + ASan clean; static bin bundled; blind split-key 15/15 via C path (python-free) · split-key now bare-path (kernel+libc only)
+- 2026-05-31 · Phase 5 (C5.1–C5.5) · feat/keyshare-c-combiner · PR #315 · C89 lcsas-keyshare: 45/45 vectors + Python byte-match + ASan clean; static bin bundled; blind split-key 15/15 via C path (python-free) · split-key now bare-path (kernel+libc only)

@@ -19,13 +19,14 @@ delegated a continuous-improvement loop to you, with these goals
    `Skill: review` (or spawn a code-reviewer agent) on each
    landed PR and act on the findings.
 4. **Gate pushes** on:
-   - `make gate` green (lint + typecheck + unit + integration +
-     e2e + recovery-hardening)
+   - `make gate` green (lint + typecheck + test-all [unit +
+     integration + e2e + recovery-hardening] + shell-coverage)
    - `LCSAS_BLIND_ACK_COST=1 make blind-restore` green (only
      when the change touches the restore path; otherwise skip)
 5. **Push the restore-path coverage as close to 100% as
    possible.**  After each landing, run
-   `pytest --cov=lcsas.restore --cov=recovery tests/ --cov-report=term`
+   `pytest --cov=lcsas.restore --cov=lcsas.recovery tests/ --cov-report=term`
+   (the C tier-1 coverage is separate: `make -C recovery coverage-c`)
    and file a follow-up issue for any uncovered branch you can't
    exercise.
 
@@ -46,7 +47,8 @@ gh issue list --label severity:medium --state open --json number,title,labels \
     | head -10
 ```
 
-Also check the tracker issue (currently #117) for context.
+If a tracker/meta issue is open (label `tracker`), read it for
+context.  (Past trackers: #117, closed.)
 
 Then read the docstrings of test files in `tests/recovery_hardening/`
 to know what's already covered.  Skim `recovery/src/lcsas-restore/*.c`
@@ -160,7 +162,7 @@ When each worker reports back:
 ### Step 6 — Verify coverage moved
 
 ```sh
-pytest --cov=lcsas.restore --cov=recovery tests/ \
+pytest --cov=lcsas.restore --cov=lcsas.recovery tests/ \
     --cov-report=term-missing 2>&1 | tail -30
 ```
 
@@ -197,71 +199,26 @@ When all three are true, file one summary issue describing the
 state and ask the user whether to continue grinding down medium /
 low or pause.
 
-## Special priorities
+## Special priorities — ALL SHIPPED (kept as context)
 
-### Tier-1 cross-platform unit-test coverage
+The three original special priorities have all landed; they are
+listed here so a future cycle doesn't re-file them.  If you spot a
+regression in one, file an issue instead of redoing the work.
 
-The blind-restore e2e only ever exercises the **host** arch
-(x86_64-linux-musl on the dev box).  The other five approved
-targets (aarch64-linux-musl, armv7-linux-musleabihf,
-x86_64-pc-windows-gnu, x86_64/aarch64-apple-darwin) get
-**built** but never **exercised**.  Address this:
-
-1. **Windows binary unit tests via wine.**  zig already
-   cross-builds `.exe` for `x86_64-pc-windows-gnu`.  Install
-   `wine` (apt-get), then run the existing
-   `tests/recovery_hardening/test_tier1_unit.py` suite under
-   wine with `WINEDEBUG=-all wine64 recovery/bin/x86_64-windows/lcsas-restore.exe`
-   as the binary path.  Many of the 9 tier-1 unit tests will
-   work as-is.  Pin this in a new
-   `test_tier1_windows_wine.py`.
-2. **aarch64 + armv7 via qemu-user.**  `qemu-user-static`
-   transparently runs cross-arch ELF binaries.  Once installed
-   (`apt-get install qemu-user-static`), `binfmt_misc` routes
-   `aarch64`/`armv7` ELFs through qemu automatically; the
-   existing tests can run against
-   `recovery/bin/aarch64/lcsas-restore` with no other change.
-   Pin in `test_tier1_aarch64_qemu.py` and
-   `test_tier1_armv7_qemu.py`.
-3. **macOS variants** — no straightforward emulator on Linux.
-   Document as a known gap; rely on Apple CI when available.
-
-A worker should land Windows + aarch64 + armv7 unit-test
-suites separately (3 PRs, parallel).  Each marks the new
-test file with `pytestmark = pytest.mark.skipif(
-shutil.which('wine64') is None, reason='wine not installed')`
-so the file is opt-in.
-
-### restore.sh shell-level coverage
-
-`bash` has `set -x` instrumentation.  Add a make target
-`make shell-coverage` that wraps:
-
-```sh
-LCSAS_PACK_CACHE_DIR=/tmp/sc bash -x recovery/scripts/restore.sh \
-    /path/to/fake-recovery ~/restored/ latest 2> /tmp/restore.trace
-python3 tools/cov_shell.py /tmp/restore.trace recovery/scripts/restore.sh
-```
-
-`tools/cov_shell.py` parses `bash -x` output to identify hit /
-miss lines (LINENO env var is set on each `+ <cmd>` line).  Aim
-for ≥ 90% of executable shell lines hit by the
-`tests/recovery_hardening/test_restore_*.py` suites.
-
-### Adversarial blind-restore variants
-
-The current blind test always runs with the default fixture
-(2 tenants, 4 TEST_TINY discs).  Add a `blind-restore-variants`
-make target that loops the test through:
-
-- **Single tenant** (force `_setup_tenant_count=1`)
-- **5 tenants** (sets a stress ceiling)
-- **No catalog on any disc** (force the hash-only prompt path)
-- **Tier 1 missing** (force tier 2)
-- **Tier 1 + tier 2 missing** (force tier 3, with `LCSAS_TIER_FALLBACK=1`)
-
-Each variant should score 15/15.  Cost: ~$25 per full sweep
-(opt in via `LCSAS_BLIND_ACK_COST=1`).
+1. **Tier-1 cross-platform unit tests** — ✅ shipped as
+   `tests/recovery_hardening/test_tier1_windows_wine.py` (wine),
+   `test_tier1_aarch64_qemu.py` + `test_tier1_armv7_qemu.py`
+   (qemu-user-static); each is opt-in via `skipif` on the tool
+   being installed.  macOS variants remain the documented gap
+   (no Linux emulator).
+2. **restore.sh shell-level coverage** — ✅ shipped as
+   `make shell-coverage` (`tools/cov_shell.py`; part of
+   `make gate`, gates at 60%).
+3. **Adversarial blind-restore variants** — ✅ shipped as
+   `make blind-restore-variants` (issue #214): single-tenant,
+   5-tenant, no-catalog, tier1-missing, tier1+tier2-missing.
+   Full score required (verify.sh currently runs 16 checks);
+   cost-gated via `LCSAS_BLIND_ACK_COST=1`.
 
 ## Forbidden moves
 
