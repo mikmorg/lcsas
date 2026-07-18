@@ -39,6 +39,11 @@ Task-oriented walkthroughs for running and recovering an archive:
 - [RECOVERY_GUIDE.md](RECOVERY_GUIDE.md) — emergency router to the OS-specific
   recovery path (Linux, macOS, Windows, bare-metal, disc-only fallback).
 - [ESTATE_PLANNING.md](ESTATE_PLANNING.md) — handing the archive to an heir.
+- [RECOVERY_CARD.txt](RECOVERY_CARD.txt) — printable fill-in-the-blanks
+  recovery-card template, one per storage location (never stored with the
+  discs — key and data stay physically apart).
+- [RUNBOOK_migration_recovery.md](RUNBOOK_migration_recovery.md) — runbook for
+  recovering a catalog wedged by an interrupted schema migration.
 
 ## Workflows
 
@@ -52,6 +57,18 @@ Task-oriented walkthroughs for running and recovering an archive:
   roadmap.
 - [CROSS_PLATFORM_META_RFC.md](CROSS_PLATFORM_META_RFC.md)
   — RFC for cross-platform meta-volume / tier-1 recovery-binary coverage.
+- [adr/](adr/) — architecture decision records (e.g.
+  [adr/0001](adr/0001-audit-gate-exemptions-reconciliation.md), audit-gate
+  exemptions reconciliation).
+
+## Point-in-time reports
+
+Historical snapshots, preserved as written (not living documents):
+
+- [PROJECT_REVIEW_2026-07.md](PROJECT_REVIEW_2026-07.md) — full-project
+  review at `f181f11` (2026-07-01) that seeded the #361–#415 remediation.
+- [READINESS_ASSESSMENT_2026-06.md](READINESS_ASSESSMENT_2026-06.md) —
+  "is it ready?" assessment against the decades-long survivability bar.
 
 ## On-disc recovery manuals
 

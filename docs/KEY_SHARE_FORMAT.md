@@ -33,12 +33,14 @@ document does not apply; use the password directly.
 ## 2. How to reconstruct (operator summary)
 
 1. Gather **any K** shares (default K=2). Each share is an ordered list of
-   words from the LCSAS/SLIP-0039 wordlist (`recovery/.../keyshare/wordlist.txt`
-   on the meta-volume; 1024 words, each uniquely identified by its first 4
-   letters). You may type just the first 4 letters of each word — the
-   bundled combiners (`lcsas-keyshare`, `keyshare_combine.py`, and
-   `lcsas key combine`) expand any unambiguous prefix to the full word.
-2. Run the bundled combiner (Phase 2 ships it on the meta-volume) or any
+   words from the LCSAS/SLIP-0039 wordlist (1024 words, each uniquely
+   identified by its first 4 letters; shipped inside the bundled
+   `lcsas.keyshare` python package on the meta-volume, and compiled into
+   `lcsas-keyshare` as `wordlist.c`). You may type just the first 4
+   letters of each word — the bundled combiners (`lcsas-keyshare`,
+   `keyshare_combine.py`, and `lcsas key combine`) expand any unambiguous
+   prefix to the full word.
+2. Run the bundled combiner (shipped on the meta-volume) or any
    SLIP-0039-compatible tool, **or** re-implement §4 below.
 3. The output bytes are the repository password. Feed it to `restore.sh` at the
    `Password:` prompt exactly as a single-key archive would.
@@ -123,7 +125,7 @@ re-implementation must pass all 45. The pieces:
   password that does not unlock the repo or a card that does not reconstruct.
   Pass `--no-verify-repo` only when the mirror's `keys/` is unreachable at split
   time. Re-confirm escrow health any time with
-  `lcsas key verify --config ... --repo R --share-file CARD …` (or
+  `lcsas --config ... key verify --repo R --share-file CARD …` (or
   `--password-file FILE`); exit code is the contract.
 - **Card stamps & rotation.** Each printed card carries `Split on : <date>` and
   `Split ID : NNNNN` — the 15-bit SLIP-0039 identifier, identical across all

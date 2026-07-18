@@ -78,8 +78,9 @@ subcommand. `--output` / `-o` is required.
   `START_HERE.txt`, `KEY_INFO.txt`, and `CONFIG_SUMMARY.txt`.
 - Optional `--db` (or `config.db_path`) to seed per-repo Rustic metadata.
 - The cross-built recovery binaries under `recovery/bin/<arch>/` and the
-  pinned upstream cache (run `make build-recovery` / `make keyshare-arches`
-  and `sh recovery/scripts/fetch_upstream.sh`) for a *complete* build —
+  pinned upstream cache (run `make build-recovery` — which also runs the
+  keyshare cross-builds — and `sh recovery/scripts/fetch_upstream.sh`) for a
+  *complete* build —
   otherwise the RST-05 completeness gate fails loud unless
   `--allow-incomplete` is given.
 
@@ -197,7 +198,8 @@ verify/repair tool (FMT-01). `required_meta_paths()`
 
 ```bash
 make build-recovery               # cross-build tier-1 lcsas-* per arch (zig cc)
-make keyshare-arches              # cross-build the keyshare combiner
+make -C recovery keyshare-arches  # cross-build the keyshare combiner
+                                  # (also run as part of build-recovery)
 sh recovery/scripts/fetch_upstream.sh   # pinned rustic + CPython cache
 lcsas meta build --output ./meta  # bundle every target with a cached binary
 ```

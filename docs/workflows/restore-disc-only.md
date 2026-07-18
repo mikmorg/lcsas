@@ -41,14 +41,19 @@ Sibling recovery tiers (more capable, prefer them when available):
 ## When to use Tier 3
 
 Use this path **only** if all higher tiers are unreachable. Tier 3
-operates at ~1 MB/s
-(`src/lcsas/restore/restic_fallback.py:10`) and **cannot** stitch packs
-together across multiple discs (`src/lcsas/restore/restic_fallback.py:539`).
+operates at ~1 MB/s (module docstring,
+`src/lcsas/restore/restic_fallback.py`) and reads packs only from its
+configured search paths — multi-disc snapshots need operator help: merge
+every disc's `data/` into one cache first, pass one `--mount-point` per
+disc, or answer the interactive disc-swap prompt
+(`PurePythonRestorer._find_pack_path()` in
+`src/lcsas/restore/restic_fallback.py`).
 
 Pick Tier 3 when, and only when:
 
 - No working `rustic` or `restic` binary is available for the host
-  architecture (`src/lcsas/cli/main.py:2216`).
+  architecture (the rustic probe in `cmd_restore_from_disc()`,
+  `src/lcsas/cli/main.py`).
 - The meta-volume is lost, damaged, or its bundled binaries cannot
   execute (different CPU, glibc ABI break).
 - Internet access is unavailable, so a new binary cannot be downloaded.
@@ -56,38 +61,41 @@ Pick Tier 3 when, and only when:
   contents include the snapshot you want.
 
 If the snapshot you want spans multiple discs and rustic is unavailable,
-you must extract pack files from every relevant disc into a single
-cache directory **before** invoking the restorer
-(`src/lcsas/cli/main.py:2255`–`2261`). The restorer itself does no
-disc-prompting; that orchestration lives in the LCSAS wrapper, not in
-the standalone script.
+either extract pack files from every relevant disc into a single cache
+directory **before** invoking the restorer (the merge hint logged by
+`cmd_restore_from_disc()` in `src/lcsas/cli/main.py`), or lean on the
+restorer's own disc handling: since #234 `standalone_restorer.py`
+accepts repeatable `--mount-point` roots and, when interactive, prompts
+for the next disc whenever a pack is not found in any search path
+(`PurePythonRestorer._find_pack_path()`).
 
 ---
 
 ## What every data disc contains
 
 The `HolographicInjector` ensures every disc is self-describing
-(`src/lcsas/staging/metadata.py:28`). After
+(`src/lcsas/staging/metadata.py`). After
 `HolographicInjector.write_*` runs during the burn pipeline, the root
 of each ISO contains:
 
 | Path on disc | Source | Purpose for Tier 3 |
 | --- | --- | --- |
-| `data/` | hardlinked packs (`staging/builder.py`) | The encrypted restic pack files. Flat layout, one file per SHA-256 (`src/lcsas/restore/restic_fallback.py:549`). |
-| `metadata/<repo>/index/` | mirror copy (`src/lcsas/staging/metadata.py:50`) | Encrypted blob → pack offset map. |
-| `metadata/<repo>/snapshots/` | mirror copy (`src/lcsas/staging/metadata.py:50`) | Encrypted snapshot pointers (root tree IDs). |
-| `metadata/<repo>/keys/` | mirror copy (`src/lcsas/staging/metadata.py:50`) | scrypt-protected master key files. |
-| `metadata/<repo>/config` | mirror copy (`src/lcsas/staging/metadata.py:57`) | Repo version + chunker params. |
-| `catalog.db` | SQLite catalog (`src/lcsas/staging/metadata.py:61`) | Holographic archive catalog — every disc carries the full catalog. |
-| `volume_info.json` | written by `write_volume_info` (`src/lcsas/staging/metadata.py:66`) | UUID, label, pack manifest. |
-| `standalone_restorer.py` | written by `write_standalone_restorer` (`src/lcsas/staging/metadata.py:133`) | The pure-Python restorer (this document's hero). |
-| `RESTORE_INSTRUCTIONS.txt` | written by `write_restore_instructions` (`src/lcsas/staging/metadata.py:148`) | Plain-text steps for a human. |
-| `START_HERE.txt`, `KEY_INFO.txt`, `CONFIG_SUMMARY.txt`, `DISC_CARE.txt` | survivability docs (`src/lcsas/staging/metadata.py:253`, `:348`, `:396`, `:445`) | Onboarding for a non-technical finder. |
-| `lcsas_src/restore/`, `lcsas_src/utils/`, `lcsas_src/db/` | `write_lcsas_source` (`src/lcsas/staging/metadata.py:106`) | The LCSAS source subpackages (for inspection or re-running). |
+| `data/` | hardlinked packs (`staging/builder.py`) | The encrypted restic pack files. Two-level `data/<prefix>/<sha256>` layout (`pack_dest_path()` in `src/lcsas/utils/pack_layout.py`); the restorer also accepts flat `data/<sha256>` (`PurePythonRestorer._find_pack_path()`). |
+| `metadata/<repo>/index/` | mirror copy (`HolographicInjector.inject_metadata()`) | Encrypted blob → pack offset map. |
+| `metadata/<repo>/snapshots/` | mirror copy (`inject_metadata()`) | Encrypted snapshot pointers (root tree IDs). |
+| `metadata/<repo>/keys/` | mirror copy (`inject_metadata()`) | scrypt-protected master key files. |
+| `metadata/<repo>/config` | mirror copy (`inject_metadata()`) | Repo version + chunker params. |
+| `catalog.db` | SQLite catalog (`inject_catalog()`) | Holographic archive catalog — every disc carries the full catalog. |
+| `volume_info.json` | written by `write_volume_info()` | UUID, label, pack manifest. |
+| `standalone_restorer.py` | written by `write_standalone_restorer()` | The pure-Python restorer (this document's hero). |
+| `RESTORE_INSTRUCTIONS.txt` | written by `write_restore_instructions()` | Plain-text steps for a human. |
+| `START_HERE.txt`, `KEY_INFO.txt`, `CONFIG_SUMMARY.txt`, `DISC_CARE.txt` | survivability docs (`write_start_here()`, `write_key_info()`, `write_config_summary()`, `write_disc_care()`) | Onboarding for a non-technical finder. |
+| `lcsas_src/restore/`, `lcsas_src/utils/`, `lcsas_src/db/` | `write_lcsas_source()` | The LCSAS source subpackages (for inspection or re-running). |
 
 The encryption key (`KEY_INFO.txt` lists which one) is **never** on the
 disc; the operator must supply it
-(`src/lcsas/staging/metadata.py:172`).
+(stated in the text written by
+`HolographicInjector.write_restore_instructions()`).
 
 ---
 
@@ -101,25 +109,29 @@ on any OS so that `standalone_restorer.py` can run against it.
 - Python 3.10+ (stdlib only).
 - The data disc, either physical (BD/DVD/M-Disc) or as an ISO image.
 - Read access to the disc (no write needed).
-- The encryption key file (NOT on the disc — see
-  `src/lcsas/staging/metadata.py:172`).
+- The encryption key file (NOT on the disc — see the note written by
+  `HolographicInjector.write_restore_instructions()`,
+  `src/lcsas/staging/metadata.py`).
 
 **Steps:**
 
 1. Insert the optical disc, or copy the ISO to local storage.
 2. Mount or extract the disc using whatever the host OS provides
-   (`src/lcsas/staging/metadata.py:205`–`211`):
+   (the "HOW TO RESTORE (manual)" section of the on-disc
+   `RESTORE_INSTRUCTIONS.txt`, written by
+   `write_restore_instructions()`):
    - Linux: `sudo mount -o loop,ro VOLUME.iso /mnt/disc`
    - macOS: `hdiutil attach VOLUME.iso` (auto-mounts read-only).
    - Windows: right-click the `.iso` → *Mount*, or insert physical
      disc — Explorer assigns a drive letter.
    - Anywhere with `7z`: `7z x VOLUME.iso -o/tmp/vol1/`
-     (`src/lcsas/staging/metadata.py:208`).
+     (option B in the same instructions text).
    - Anywhere with `xorriso`: `xorriso -indev VOLUME.iso -osirrox on
-     -extract / /tmp/vol1/` (`src/lcsas/staging/metadata.py:211`).
+     -extract / /tmp/vol1/` (option C in the same instructions text).
 3. Confirm the mount/extract is complete by listing the root and
    checking for `standalone_restorer.py`, `catalog.db`, and
-   `metadata/` (`src/lcsas/staging/metadata.py:231`–`246`).
+   `metadata/` (the "DISC CONTENTS" listing in
+   `RESTORE_INSTRUCTIONS.txt`).
 4. Note the mount path — call it `DISC` in later steps.
 
 **Expected outcome:** `DISC/standalone_restorer.py`,
@@ -133,19 +145,21 @@ readable from the chosen host.
 
 **Test coverage:**
 
-- Existing: `tests/integration/test_disc_only_restore.py:422` covers the
-  `xorriso`-based ISO extraction path used by the wider test suite.
-- Existing: `tests/integration/test_disc_only_restore.py:527` proves
-  every ISO carries `volume_info.json` and a working `catalog.db`.
+- Existing: `tests/integration/test_disc_only_restore.py::TestDiscOnlyRestore._extract_iso`
+  covers the `xorriso`-based ISO extraction path used by the wider test
+  suite.
+- Existing: `tests/integration/test_disc_only_restore.py::TestDiscOnlyRestore::test_isos_are_self_describing`
+  proves every ISO carries `volume_info.json` and a working `catalog.db`.
 - Gap: no automated check that the manual `mount -o loop,ro` and `7z x`
   variants leave the same on-disc filenames intact (they should — these
   are filesystem-level extracts of the same ISO9660/Joliet image
   produced by `iso/xorriso.py`).
 
 **Source refs:**
-`src/lcsas/staging/metadata.py:148`–`246`,
-`src/lcsas/staging/metadata.py:133`–`146`,
-`tests/integration/test_disc_only_restore.py:422`–`468`.
+`HolographicInjector.write_restore_instructions()` and
+`write_standalone_restorer()` in `src/lcsas/staging/metadata.py`,
+`TestDiscOnlyRestore._extract_iso` in
+`tests/integration/test_disc_only_restore.py`.
 
 ---
 
@@ -158,13 +172,17 @@ disc — no LCSAS install, no rustic, no network.
 
 - Disc mounted/extracted per Workflow A.
 - Python ≥ 3.10
-  (`src/lcsas/staging/metadata.py:199`,
-  `src/lcsas/restore/standalone_builder.py:6`).
+  (enforced by the generated script's version guard — `_HEADER` in
+  `src/lcsas/restore/standalone_builder.py`).
 - Password file holding the repo key on its first line
-  (`src/lcsas/restore/restic_fallback.py:333`).
-- Optional: `pip install zstandard` if any pack is zstd-compressed
-  (`src/lcsas/restore/restic_fallback.py:62`–`88`,
-  `src/lcsas/restore/restic_fallback.py:200`).
+  (`PurePythonRestorer.__init__()` in
+  `src/lcsas/restore/restic_fallback.py`).
+- Optional: `pip install zstandard` for ~100x faster zstd
+  decompression. Since RST-04 a pure-Python zstd decoder
+  (`src/lcsas/restore/_zstd_pure.py`) is bundled into the generated
+  script, so zstd-compressed repos restore with stdlib only
+  (module-level `_decompress_zstd()` in
+  `src/lcsas/restore/restic_fallback.py`).
 
 **Steps:**
 
@@ -178,17 +196,21 @@ disc — no LCSAS install, no rustic, no network.
      keys/
      index/
      snapshots/
-     data/<flat pack files>
+     data/<pack files>
    ```
 
-   The restorer's `_find_pack_path` accepts either the standard
-   two-level `data/<prefix>/<hash>` layout or LCSAS's flat
-   `data/<hash>` (`src/lcsas/restore/restic_fallback.py:539`–`556`), so
+   The restorer's `_find_pack_path()` accepts both the standard
+   two-level `data/<prefix>/<hash>` layout and a flat `data/<hash>`
+   (`PurePythonRestorer._find_pack_path()` in
+   `src/lcsas/restore/restic_fallback.py`), so
    the on-disc tree can be linked verbatim. Linking (instead of
    copying) the on-disc `data/` keeps the cache footprint near zero
-   (`src/lcsas/cli/main.py:2233`–`2246`).
+   (the data-symlink step in `cmd_restore_from_disc()`,
+   `src/lcsas/cli/main.py`).
 2. Run the restorer from the disc using the host's `python3`
-   (`src/lcsas/staging/metadata.py:195`–`200`):
+   (the "pure Python" section of the on-disc
+   `RESTORE_INSTRUCTIONS.txt`, written by
+   `write_restore_instructions()`):
 
    ```
    python3 DISC/standalone_restorer.py \
@@ -198,10 +220,10 @@ disc — no LCSAS install, no rustic, no network.
    ```
 
    The script's CLI is generated by `_CLI_BLOCK`
-   (`src/lcsas/restore/standalone_builder.py:128`–`205`).
+   (`src/lcsas/restore/standalone_builder.py`).
 3. To peek before restoring, list snapshots first
-   (`src/lcsas/restore/standalone_builder.py:157`–`160`,
-   `src/lcsas/restore/restic_fallback.py:377`):
+   (`--list-snapshots` in `_CLI_BLOCK`;
+   `PurePythonRestorer.list_snapshots()`):
 
    ```
    python3 DISC/standalone_restorer.py --repo /tmp/cache \
@@ -214,33 +236,34 @@ disc — no LCSAS install, no rustic, no network.
 
    Or print repo info (version, snapshot count, blob count, zstd
    availability)
-   (`src/lcsas/restore/standalone_builder.py:161`–`164`,
-   `src/lcsas/restore/restic_fallback.py:732`).
+   (`--info` in `_CLI_BLOCK`; `PurePythonRestorer.repo_info()`).
 4. To pick a specific snapshot rather than the latest, pass
    `--snapshot <hex_id_or_prefix>`
-   (`src/lcsas/restore/standalone_builder.py:153`–`156`,
-   `src/lcsas/restore/restic_fallback.py:516`–`535`).
+   (`--snapshot` in `_CLI_BLOCK`;
+   `PurePythonRestorer._find_snapshot()`).
 5. Each restored file's SHA-256 is verified against the blob ID
    recorded in the tree
-   (`src/lcsas/restore/restic_fallback.py:587`–`593`).
+   (`PurePythonRestorer._read_blob()`).
 
 **Expected outcome:** Files appear under `--target`, with permissions,
 mtime/atime, xattrs and (where supported) hardlinks reconstructed best
-effort (`src/lcsas/restore/restic_fallback.py:599`–`728`).
+effort (`PurePythonRestorer._restore_tree()` / `_apply_metadata()`).
 
 **Variant axes that apply:**
 
 - OS: any Python-capable host (Linux/macOS/Windows/BSD).
 - Recovery tier: 3.
-- Compression: uncompressed restic v1, zstd v2 (auto-detected by magic
-  bytes — `src/lcsas/restore/restic_fallback.py:433`–`440`,
-  `src/lcsas/restore/restic_fallback.py:583`–`586`).
-- Pack layout: flat (disc-style) or two-level (rustic-style)
-  (`src/lcsas/restore/restic_fallback.py:539`–`556`).
+- Compression: uncompressed restic v1, zstd v2. Compression is
+  discriminated by the index's `uncompressed_length` field, with a
+  magic-bytes fallback for v1/legacy indexes
+  (`PurePythonRestorer._read_blob()`); standalone repo files use a
+  compression-type prefix byte (`_decrypt_file()`).
+- Pack layout: two-level (discs and rustic mirrors alike) or flat
+  (legacy) (`PurePythonRestorer._find_pack_path()`).
 
 **Test coverage:**
 
-- Existing: `tests/unit/test_restic_fallback.py:427`–`510` —
+- Existing: `tests/unit/test_restic_fallback.py::TestPurePythonRestorer` —
   `PurePythonRestorer` smoke tests (verify_key, list_snapshots,
   repo_info, full restore, password-bytes path, target-dir creation,
   snapshot-by-prefix lookup) against a synthetic repo.
@@ -248,17 +271,19 @@ effort (`src/lcsas/restore/restic_fallback.py:599`–`728`).
   layout, symlink, hardlink, unsupported node, and xattr cases
   (`TestPermissionRestore`, `TestFlatLayout`, `TestSymlinkRestore`,
   `TestHardlinkRestore`, `TestUnsupportedNodeType`, `TestXattrRestore`).
-- Existing: `tests/integration/test_pure_python_restore.py:521` (full
-  family restore via `PurePythonRestorer`).
-- Existing: `tests/integration/test_pure_python_restore.py:552` (full
-  work restore including modified files).
-- Existing: `tests/integration/test_pure_python_restore.py:582`
+- Existing: `tests/integration/test_pure_python_restore.py::TestPurePythonFallbackRestore::test_fallback_restore_family`
+  (full family restore via `PurePythonRestorer`).
+- Existing: `...::test_fallback_restore_work` (full work restore
+  including modified files).
+- Existing: `...::test_fallback_matches_rustic_restore`
   byte-for-byte compares fallback output against `rustic restore`.
-- Existing: `tests/integration/test_pure_python_restore.py:630` proves
-  flat (LCSAS) layout works.
-- Existing: `tests/integration/test_pure_python_restore.py:469`,
-  `:481`, `:495` cover `verify_key`, wrong-password rejection, and
-  snapshot listing against real rustic repos.
+- Existing: `...::test_fallback_restore_with_flat_layout` proves
+  flat (legacy) layout works.
+- Existing: `...::test_fallback_verifies_key`,
+  `test_fallback_rejects_wrong_password`, and
+  `test_fallback_lists_snapshots` cover `verify_key`,
+  wrong-password rejection, and snapshot listing against real rustic
+  repos.
 - Gap: no automated test runs the *generated*
   `standalone_restorer.py` as a subprocess (only the in-tree
   `PurePythonRestorer` class). Confidence comes indirectly from
@@ -266,10 +291,13 @@ effort (`src/lcsas/restore/restic_fallback.py:599`–`728`).
   concatenation of the same modules.
 
 **Source refs:**
-`src/lcsas/restore/restic_fallback.py:303`–`595`,
-`src/lcsas/restore/standalone_builder.py:30`–`205`,
-`src/lcsas/staging/metadata.py:133`–`146`,
-`tests/integration/test_pure_python_restore.py:463`–`667`.
+`PurePythonRestorer` in `src/lcsas/restore/restic_fallback.py`,
+`build_standalone()` + `_CLI_BLOCK` in
+`src/lcsas/restore/standalone_builder.py`,
+`HolographicInjector.write_standalone_restorer()` in
+`src/lcsas/staging/metadata.py`,
+`TestPurePythonFallbackRestore` in
+`tests/integration/test_pure_python_restore.py`.
 
 ---
 
@@ -290,41 +318,42 @@ auto-falls-back to `PurePythonRestorer`.
 - Optional: `--volume-dir` of pre-extracted other discs for batch
   restore.
 
+All step references below are to `cmd_restore_from_disc()` in
+`src/lcsas/cli/main.py` unless noted otherwise.
+
 **Steps:**
 
 1. Verify the disc path is a directory
-   (`src/lcsas/cli/main.py:2118`).
+   (early validation in `cmd_restore_from_disc()`).
 2. Locate `catalog.db` — default `DISC/catalog.db`, override with
-   `--catalog`
-   (`src/lcsas/cli/main.py:2132`).
+   `--catalog`.
 3. Copy `catalog.db` into a temp dir to avoid locking the read-only
-   mount (`src/lcsas/cli/main.py:2153`–`2155`).
+   mount.
 4. Read the disc-resident catalog to pick the repository (single repo
-   = auto-selected; multi-repo = `--repo NAME`)
-   (`src/lcsas/cli/main.py:2159`–`2191`).
-5. Locate `metadata/<repo>/` on the disc
-   (`src/lcsas/cli/main.py:2196`–`2204`).
+   = auto-selected; multi-repo = `--repo NAME`).
+5. Locate `metadata/<repo>/` on the disc.
 6. Probe for a usable `rustic` binary; if absent, mark
    `rustic_available = False`
-   (`src/lcsas/cli/main.py:2215`–`2219`).
-7. `RestoreExecutor.prepare_cache` copies the disc metadata into the
-   temp cache (`src/lcsas/cli/main.py:2224`–`2225`,
-   `src/lcsas/restore/executor.py:75`).
+   (the `check_binary_version("rustic", ...)` probe).
+7. `RestoreExecutor.prepare_cache()` copies the disc metadata into the
+   temp cache (`src/lcsas/restore/executor.py`).
 8. If no rustic, symlink `DISC/data/` into `cache/data/` so the
    restorer can read packs without copying gigabytes
-   (`src/lcsas/cli/main.py:2233`–`2253`). For multi-disc snapshots,
+   (the data-symlink block). For multi-disc snapshots,
    merge other discs' `data/` into the cache *before* running.
 9. Invoke `PurePythonRestorer.restore(target, snapshot_id)` —
-   `--snapshot latest` is mapped to `None`
-   (`src/lcsas/cli/main.py:2262`–`2271`).
+   `--snapshot latest` is mapped to `None`.
 10. Errors print a fallback hint pointing back to
     `standalone_restorer.py` if rustic was expected but absent
-    (`src/lcsas/cli/main.py:2317`–`2326`,
-    `:2533`–`:2540`).
+    (the `FileNotFoundError` handlers around the dry-run and
+    `execute_restore()` calls).
 
 **Expected outcome:** Files restored to `target_path`, log line
 identifying the snapshot ID and hostname
-(`src/lcsas/cli/main.py:2272`–`2276`).
+(the pure-Python success log in `cmd_restore_from_disc()`).
+A partial pure-Python restore — some files skipped under tolerant
+traversal — exits `2` and leaves a `RESTORE_FAILURES.txt` manifest
+under the target.
 
 **Variant axes that apply:**
 
@@ -332,38 +361,39 @@ identifying the snapshot ID and hostname
 - Recovery tier: 3 (auto-degrades from 2 if rustic missing).
 - Mode: interactive (single disc + prompts) or batch
   (`--volume-dir`)
-  (`src/lcsas/cli/main.py:2384`,
-  `:2430`–`:2438`). Note: batch and interactive multi-disc modes are
-  rustic-paths; pure-Python mode in this wrapper returns at
-  `:2277` after restoring whatever packs are reachable from the
+  (the two ingest branches of `cmd_restore_from_disc()`). Note: batch
+  and interactive multi-disc modes are rustic-paths; the pure-Python
+  branch of `cmd_restore_from_disc()` returns before the rustic-path
+  code, after restoring whatever packs are reachable from the
   mounted/symlinked `data/`.
 - Skip-verify: `--skip-verify` disables SHA-256 ingest verification
-  (`src/lcsas/cli/main.py:2321`–`2323`).
+  (passed through to `ingest_volume()` by
+  `cmd_restore_from_disc()`).
 
 **Test coverage:**
 
 - Existing: argparse registration and option defaults —
-  `tests/unit/test_restore_from_disc.py:83`–`131` (`TestFromDiscParser`).
+  `tests/unit/test_restore_from_disc.py::TestFromDiscParser`.
 - Existing: validation failures (missing disc path, missing catalog,
   no repos, missing metadata, no rustic, no TTY) —
-  `tests/unit/test_restore_from_disc.py:133`–`257`
-  (`TestFromDiscValidation`).
+  `tests/unit/test_restore_from_disc.py::TestFromDiscValidation`.
 - Existing: batch mode + repo auto-select + custom catalog —
-  `tests/unit/test_restore_from_disc.py:259`–`419`
-  (`TestFromDiscBatchMode`).
+  `tests/unit/test_restore_from_disc.py::TestFromDiscBatchMode`.
 - Existing: end-to-end behaviour of the wrapper components is
   exercised by `tests/integration/test_disc_only_restore.py` (rustic
   path) and `tests/integration/test_pure_python_restore.py` (fallback
   path).
 - Gap: no test drives the pure-Python branch of `cmd_restore_from_disc`
-  end-to-end through the CLI (the function returns at `:2277`
-  separately from the rustic branch).
+  end-to-end through the CLI (that branch returns separately, before
+  the rustic-path code).
 
 **Source refs:**
-`src/lcsas/cli/main.py:277`–`323` (argparser),
-`src/lcsas/cli/main.py:2089`–`2277` (handler — pure-Python branch),
-`src/lcsas/cli/main.py:2721`–`2722` (dispatch),
-`src/lcsas/restore/executor.py:75`–`122` (`prepare_cache`).
+the `restore standalone` subparser in `build_parser()`
+(`src/lcsas/cli/main.py`),
+`cmd_restore_from_disc()` in `src/lcsas/cli/main.py`
+(pure-Python branch),
+`dispatch()` in `src/lcsas/cli/main.py`,
+`RestoreExecutor.prepare_cache()` in `src/lcsas/restore/executor.py`.
 
 ---
 
@@ -382,7 +412,8 @@ belong to — all without any central server.
 **Steps:**
 
 1. Confirm the catalog file is present
-   (`src/lcsas/staging/metadata.py:61`–`64`):
+   (written by `HolographicInjector.inject_catalog()`,
+   `src/lcsas/staging/metadata.py`):
 
    ```
    ls DISC/catalog.db
@@ -395,7 +426,8 @@ belong to — all without any central server.
    ```
 
 3. List repositories the archive knows about
-   (`src/lcsas/cli/main.py:2159`–`2161`):
+   (the same query `cmd_restore_from_disc()` runs against the
+   disc catalog):
 
    ```
    SELECT repo_id, name, mirror_path FROM repositories;
@@ -410,7 +442,7 @@ belong to — all without any central server.
 
    The catalog on the **latest-burned** disc lists *every* prior
    volume — verified by
-   `tests/integration/test_disc_only_restore.py:577`–`595`.
+   `tests/integration/test_disc_only_restore.py::TestDiscOnlyRestore::test_latest_catalog_knows_all_volumes`.
 5. Find which volume holds a particular pack (used by
    `RestorePlanner.generate_pick_list_v2`):
 
@@ -423,7 +455,7 @@ belong to — all without any central server.
    ```
 
    Demonstrated end-to-end in
-   `tests/integration/test_disc_only_restore.py:722`–`758`.
+   `tests/integration/test_disc_only_restore.py::TestDiscOnlyRestore::test_on_disc_catalog_enables_pick_list`.
 6. Read the human-friendly `volume_info.json` for the disc's own
    identity:
 
@@ -433,7 +465,7 @@ belong to — all without any central server.
 
    Contains `uuid`, `label`, `media_type`, `pack_count`, `total_bytes`,
    `repositories`, `sha256_manifest`
-   (`src/lcsas/staging/metadata.py:82`–`100`).
+   (`HolographicInjector.write_volume_info()`).
 
 **Expected outcome:** A complete inventory of the entire archive
 reconstructed from the single mounted disc, including which other
@@ -446,18 +478,20 @@ physical volumes you must fetch to complete a snapshot.
 
 **Test coverage:**
 
-- Existing: `tests/integration/test_disc_only_restore.py:527`–`549`
+- Existing: `tests/integration/test_disc_only_restore.py::TestDiscOnlyRestore::test_isos_are_self_describing`
   (catalog tables present on every ISO).
-- Existing: `tests/integration/test_disc_only_restore.py:577`–`595`
+- Existing: `...::test_latest_catalog_knows_all_volumes`
   (latest disc lists all volumes).
-- Existing: `tests/integration/test_disc_only_restore.py:722`–`758`
+- Existing: `...::test_on_disc_catalog_enables_pick_list`
   (pick list generated from on-disc catalog).
 - Gap: no test exercises `volume_info.json` parsing — only existence
-  (`:527`–`536`).
+  (asserted in `test_isos_are_self_describing`).
 
 **Source refs:**
-`src/lcsas/staging/metadata.py:61`–`104`,
-`tests/integration/test_disc_only_restore.py:527`–`758`,
+`HolographicInjector.inject_catalog()` and `write_volume_info()` in
+`src/lcsas/staging/metadata.py`,
+the `TestDiscOnlyRestore` catalog tests in
+`tests/integration/test_disc_only_restore.py`,
 `CLAUDE.md` (*Holographic catalog*).
 
 ---
@@ -467,6 +501,9 @@ physical volumes you must fetch to complete a snapshot.
 **Purpose:** Understand and (if needed) audit the crypto path the
 pure-Python restorer takes. Every restic blob on the disc passes through
 the same primitives.
+
+All symbol references below are to
+`src/lcsas/restore/restic_fallback.py` unless noted otherwise.
 
 **Prerequisites:**
 
@@ -479,39 +516,41 @@ the same primitives.
 1. **Master-key recovery (per repo, once).** Open a JSON file from
    `metadata/<repo>/keys/` and run scrypt with the params it embeds
    (`N`, `r`, `p`, default `N=32768, r=8, p=1`)
-   (`src/lcsas/restore/restic_fallback.py:213`–`224`).
+   (`_load_master_key()`).
 2. **Split the 64-byte derived key** into a 32-byte AES-256 key, a
    16-byte AES-128 key for Poly1305 nonce encryption, and a 16-byte
    Poly1305 `r` key
-   (`src/lcsas/restore/restic_fallback.py:226`–`229`).
+   (`_load_master_key()`).
 3. **Decrypt the key file's `data`** — format `IV(16) || ct || MAC(16)`
    — using authenticated decryption
-   (`src/lcsas/restore/restic_fallback.py:145`–`184`). The MAC is
+   (`_decrypt_authenticated()`). The MAC is
    computed as `s = AES-128-ECB(mac_k, IV); tag = Poly1305(mac_r, s,
-   ct)` (`src/lcsas/restore/restic_fallback.py:99`–`126`,
-   `:176`–`179`). Comparison is constant-time
-   (`:187`–`194`).
+   ct)` (`_poly1305_mac()`, applied inside
+   `_decrypt_authenticated()`). Comparison is constant-time
+   (`_constant_time_eq()`).
 4. **Pack blob read.** Look up the blob in the merged
    `metadata/<repo>/index/` files (`pack_id`, `offset`, `length`,
    `type`, `uncompressed_length`)
-   (`src/lcsas/restore/restic_fallback.py:442`–`480`). Superseded
-   index files are skipped (`:451`–`462`).
+   (`_load_index()`). Superseded
+   index files are skipped (first pass of `_load_index()`).
 5. **Locate the pack** under `data/<prefix>/<id>` or `data/<id>`
-   (`src/lcsas/restore/restic_fallback.py:539`–`556`), seek to
+   (`PurePythonRestorer._find_pack_path()`), seek to
    `offset`, read `length` bytes.
 6. **AES-256-CTR decrypt** the blob using the master key
-   (`src/lcsas/restore/restic_fallback.py:574`–`578`). The pure-Python
+   (`_read_blob()` → `_decrypt()`). The pure-Python
    AES implementation is in `src/lcsas/restore/_aes_pure.py` and is
    exercised against NIST FIPS-197 / SP 800-38A vectors in
-   `tests/unit/test_aes_pure.py:36`–`126`.
-7. **zstd-decompress** if the decrypted blob starts with the magic
-   `\x28\xB5\x2F\xFD` (repo v2 inline frame —
-   `src/lcsas/restore/restic_fallback.py:583`–`586`). For standalone
+   `tests/unit/test_aes_pure.py` (`TestAESEncryptBlock`, `TestAESCTR`).
+7. **zstd-decompress** when the index entry carries
+   `uncompressed_length` (repo v2), with a magic-bytes
+   (`\x28\xB5\x2F\xFD`) fallback for legacy/v1 indexes
+   (`_read_blob()`). For standalone
    files (`index/`, `snapshots/`) a leading compression-type byte is
-   stripped first (`:432`–`440`). Requires the optional `zstandard`
-   pip package (`:62`–`88`).
+   stripped first (`_decrypt_file()`). Decompression uses the
+   `zstandard` package when installed, else the bundled pure-Python
+   decoder (`_decompress_zstd()`; `src/lcsas/restore/_zstd_pure.py`).
 8. **Verify** the decrypted blob's SHA-256 equals the blob ID
-   (`src/lcsas/restore/restic_fallback.py:587`–`593`).
+   (`_read_blob()`).
 
 **Expected outcome:** Plaintext file content or tree JSON, with
 integrity proven by MAC + SHA-256.
@@ -519,39 +558,42 @@ integrity proven by MAC + SHA-256.
 **Variant axes that apply:**
 
 - Repo format: v1 (no compression-type prefix) and v2 (zstd-capable)
-  (`src/lcsas/restore/restic_fallback.py:421`–`440`).
-- Compression: optional `zstandard` package
-  (`src/lcsas/restore/restic_fallback.py:79`–`88`).
+  (`_decrypt_file()`).
+- Compression: `zstandard` package when installed, else the bundled
+  pure-Python decoder (`_decompress_zstd()` /
+  `src/lcsas/restore/_zstd_pure.py`).
 - Crypto primitives: all pure-Python, no `cryptography` / OpenSSL
   required.
 
 **Test coverage:**
 
-- Existing: `tests/unit/test_aes_pure.py:12`–`126` — key schedule,
+- Existing: `tests/unit/test_aes_pure.py::TestAESKeySchedule`,
+  `TestAESEncryptBlock`, `TestAESCTR` — key schedule,
   AES-128/256 ECB NIST vectors, CTR round-trip, NIST CTR vector,
   empty, partial block, multi-block.
-- Existing: `tests/unit/test_restic_fallback.py:268`–`305` —
+- Existing: `tests/unit/test_restic_fallback.py::TestPoly1305` —
   Poly1305 RFC 8439 vector, empty message, `_clamp_r` bit clearing.
-- Existing: `tests/unit/test_restic_fallback.py:307`–`361` —
+- Existing: `tests/unit/test_restic_fallback.py::TestAuthenticatedEncryption` —
   authenticated encryption round-trip, wrong-key rejection,
   tampered-data rejection, too-short-data rejection, large-data
   round-trip.
-- Existing: `tests/unit/test_restic_fallback.py:364`–`373` —
+- Existing: `tests/unit/test_restic_fallback.py::TestConstantTimeEq` —
   constant-time equality.
-- Existing: `tests/unit/test_restic_fallback.py:377`–`391` —
+- Existing: `tests/unit/test_restic_fallback.py::TestParseTimestamp` —
   timestamp parsing (nanosecond, microsecond, no-fractional).
-- Existing: `tests/unit/test_restic_fallback.py:394`–`426` —
+- Existing: `tests/unit/test_restic_fallback.py::TestKeyDerivation` —
   scrypt key derivation, wrong-password rejection (synthetic key).
-- Existing: `tests/integration/test_pure_python_restore.py:469`–`667`
+- Existing: `tests/integration/test_pure_python_restore.py::TestPurePythonFallbackRestore`
   exercises the full crypto chain against real rustic-produced data
   (scrypt → master key → AES-CTR → Poly1305 → optional zstd → SHA-256).
 
 **Source refs:**
-`src/lcsas/restore/restic_fallback.py:13`–`24` (crypto stack table),
-`src/lcsas/restore/restic_fallback.py:93`–`242` (KDF + AE),
-`src/lcsas/restore/restic_fallback.py:411`–`507` (file/index/snapshot
-decryption), `src/lcsas/restore/restic_fallback.py:558`–`595` (blob
-read + verify), `src/lcsas/restore/_aes_pure.py`,
+module docstring crypto-stack table, `_poly1305_mac()`,
+`_decrypt_authenticated()`, `_load_master_key()`, `_try_keys()`
+(KDF + AE), `_decrypt_file()` / `_load_index()` / `_load_snapshots()`
+(file/index/snapshot decryption), `_read_blob()` (blob read + verify) —
+all in `src/lcsas/restore/restic_fallback.py`;
+`src/lcsas/restore/_aes_pure.py`;
 `tests/unit/test_aes_pure.py`.
 
 ---
@@ -571,40 +613,41 @@ built-in "extract one path" flag.
 1. Build the cache directory (Workflow B step 1).
 2. Run the restorer with `--target /path/to/output` and either no
    `--snapshot` (latest) or a hex prefix
-   (`src/lcsas/restore/restic_fallback.py:344`–`375`).
+   (`PurePythonRestorer.restore()` in
+   `src/lcsas/restore/restic_fallback.py`).
 3. The restorer recursively walks the snapshot's root tree
-   (`src/lcsas/restore/restic_fallback.py:372`,
-   `src/lcsas/restore/restic_fallback.py:599`–`682`), reconstructing
-   directories, files, symlinks (validated against path traversal —
-   `:610`–`618`, `:655`–`671`), and hardlinks
-   (`:622`–`644`). Metadata (mode, mtime, atime, xattrs) is restored
-   best effort (`:696`–`728`).
+   (`restore()` → `_restore_tree()`), reconstructing
+   directories, files, symlinks (validated against path traversal
+   inside `_restore_tree()`), and hardlinks.
+   Metadata (mode, mtime, atime, xattrs) is restored
+   best effort (`_apply_metadata()`).
 
 **Expected outcome:** A complete tree under `--target` matching the
 snapshot, byte-for-byte identical to a `rustic restore` of the same
 snapshot — proven by
-`tests/integration/test_pure_python_restore.py:582`.
+`tests/integration/test_pure_python_restore.py::TestPurePythonFallbackRestore::test_fallback_matches_rustic_restore`.
 
 ### F.2 — Single-file recovery
 
 There is **no** `--include` flag on the standalone restorer
-(`src/lcsas/restore/standalone_builder.py:128`–`205`). Two practical
-options:
+(`_CLI_BLOCK` in `src/lcsas/restore/standalone_builder.py`). Two
+practical options:
 
 1. **Restore the whole snapshot to scratch space**, then copy the one
    file out. Acceptable when the snapshot is small relative to free
    space. Use `--list-snapshots`
-   (`src/lcsas/restore/standalone_builder.py:157`–`160`) first to pick
+   (`--list-snapshots` in `_CLI_BLOCK`) first to pick
    the right one.
 2. **Drive `PurePythonRestorer` from a Python REPL or short script**:
    import the class from the on-disc `standalone_restorer.py`
    (or from `lcsas_src/restore/restic_fallback.py` on the disc —
-   `src/lcsas/staging/metadata.py:119`), load the master key, walk
+   bundled by `HolographicInjector.write_lcsas_source()`), load the
+   master key, walk
    `tree → subtree → ... → node`, and read only the desired file's
    content blobs via the private `_read_blob` API
-   (`src/lcsas/restore/restic_fallback.py:558`–`595`). Each file's
+   (`PurePythonRestorer._read_blob()`). Each file's
    content is the concatenation of its `content` blob IDs
-   (`src/lcsas/restore/restic_fallback.py:687`–`692`).
+   (`PurePythonRestorer._restore_file()`).
 
 **Expected outcome:** Targeted file extracted with the same integrity
 guarantees as a full restore (SHA-256 verified per blob).
@@ -619,20 +662,24 @@ guarantees as a full restore (SHA-256 verified per blob).
 **Test coverage:**
 
 - Existing: full-restore correctness —
-  `tests/integration/test_pure_python_restore.py:521`, `:552`, `:582`,
-  `:630`, `:669`.
+  `tests/integration/test_pure_python_restore.py::TestPurePythonFallbackRestore::test_fallback_restore_family`,
+  `test_fallback_restore_work`, `test_fallback_matches_rustic_restore`,
+  `test_fallback_restore_with_flat_layout`,
+  `test_fallback_incremental_files_present`.
 - Existing: snapshot listing —
-  `tests/integration/test_pure_python_restore.py:495`.
+  `...::test_fallback_lists_snapshots`.
 - Existing: snapshot lookup by ID prefix —
-  `src/lcsas/restore/restic_fallback.py:516`–`535` (covered indirectly
+  `PurePythonRestorer._find_snapshot()` (covered indirectly
   by the restore tests).
 - Gap: no test or CLI flag for a single-file extraction. This is
   intentional — Tier 3 is "get everything back, slowly".
 
 **Source refs:**
-`src/lcsas/restore/restic_fallback.py:344`–`728`,
-`src/lcsas/restore/standalone_builder.py:128`–`205`,
-`tests/integration/test_pure_python_restore.py:495`–`687`.
+`PurePythonRestorer.restore()`, `_restore_tree()`, `_restore_file()`,
+`_apply_metadata()` in `src/lcsas/restore/restic_fallback.py`,
+`_CLI_BLOCK` in `src/lcsas/restore/standalone_builder.py`,
+`TestPurePythonFallbackRestore` in
+`tests/integration/test_pure_python_restore.py`.
 
 ---
 
@@ -640,18 +687,27 @@ guarantees as a full restore (SHA-256 verified per blob).
 
 This path deliberately trades capability for portability. It **cannot**:
 
-- **Stitch packs across multiple discs.** `PurePythonRestorer` reads
-  packs from a single repository directory
-  (`src/lcsas/restore/restic_fallback.py:303`–`341`). The `lcsas
-  restore standalone` wrapper compensates by symlinking the disc's
-  `data/` into the cache and instructing the operator to merge other
-  discs manually (`src/lcsas/cli/main.py:2255`–`2261`). The standalone
-  script offers no such orchestration.
-- **Locate missing packs.** If a required pack is on a disc you have
-  not mounted, the SHA-256 will not be found in `_find_pack_path` and
-  the restore aborts (`src/lcsas/restore/restic_fallback.py:553`).
-  Consult `catalog.db` (Workflow D) to discover where the missing pack
-  lives and mount that disc.
+- **Stitch packs across discs unattended.** `PurePythonRestorer` reads
+  packs from its configured search paths — by default the single
+  assembled cache directory (`PurePythonRestorer.__init__()`).
+  Multi-disc coverage needs an operator in the loop: merge every
+  disc's `data/` into the cache beforehand, pass one `--mount-point`
+  per disc, or answer the interactive disc-swap prompt when a pack is
+  not found (`_find_pack_path()`, added in #234). There is no
+  automated pick-list orchestration like the rustic paths have; the
+  `lcsas restore standalone` wrapper likewise symlinks only the
+  mounted disc's `data/` and instructs the operator to merge other
+  discs manually (`cmd_restore_from_disc()` in
+  `src/lcsas/cli/main.py`).
+- **Locate missing packs by itself (non-interactive).** In
+  non-interactive mode a required pack absent from every search path
+  raises `FileNotFoundError` (`_find_pack_path()`); under tolerant
+  traversal the affected file is recorded as failed. Interactively,
+  the disc-swap prompt resolves the missing pack hash to volume
+  label(s) via the holographic catalog when one is reachable
+  (`_lookup_volume_labels()` / `_discover_catalog()`). Consult
+  `catalog.db` (Workflow D) to discover where a missing pack lives
+  and mount that disc.
 - **Deduplicate or prune.** It is a *reader*, not a repo manager — no
   `forget`, `prune`, or `repair-index` equivalents exist in
   `restic_fallback.py`.
@@ -660,16 +716,24 @@ This path deliberately trades capability for portability. It **cannot**:
 - **Verify ECC.** Read errors on a degraded disc must be repaired with
   `dvdisaster` *before* Tier 3 starts, because the restorer reads
   pack bytes verbatim and verifies SHA-256 afterwards — a flipped bit
-  surfaces as `IntegrityError` (`src/lcsas/restore/restic_fallback.py:587`).
+  surfaces as an `IntegrityError` from
+  `PurePythonRestorer._read_blob()` (recorded as a per-file failure
+  under the default tolerant mode).
 - **Run fast.** Expect ~1 MB/s on modern hardware
-  (`src/lcsas/restore/restic_fallback.py:10`).
+  (module docstring, `src/lcsas/restore/restic_fallback.py`).
 - **Handle a repository where the password is wrong.** Wrong password
   raises `IntegrityError` from MAC verification
-  (`src/lcsas/restore/restic_fallback.py:166`–`183`,
-  `:272`); use `--info`/`verify_key()` to test
-  (`src/lcsas/restore/restic_fallback.py:383`–`392`).
-- **Skip a damaged blob and continue.** A SHA-256 mismatch aborts the
-  current restore (`src/lcsas/restore/restic_fallback.py:587`–`593`).
+  (`_decrypt_authenticated()` / `_try_keys()`); use
+  `--info`/`verify_key()` to test
+  (`PurePythonRestorer.verify_key()`).
+- **Recover a damaged blob.** A MAC/SHA-256/zstd failure on a blob
+  cannot be repaired at this tier. Under the default *tolerant*
+  traversal (#374) the affected file is skipped and listed in
+  `RESTORE_FAILURES.txt` under the target (the CLI exits `2`; the
+  rest of the data restores); `strict=True` on the Python API
+  restores the legacy abort-on-first-error contract
+  (`PurePythonRestorer` `strict` parameter,
+  `_write_failure_manifest()`).
 
 If you need cross-disc reconstruction or pack repair, escalate to
 Tier 1 or Tier 2 (`docs/workflows/restore-host-linux.md`,
@@ -682,36 +746,36 @@ holographic catalog this tier relies on.
 
 | Concern | Test | Status |
 | --- | --- | --- |
-| AES-128/256 key schedule (FIPS 197) | `tests/unit/test_aes_pure.py:12`–`30` | Covered |
-| AES-128 ECB NIST vector | `tests/unit/test_aes_pure.py:36` | Covered |
-| AES-256 ECB NIST vector | `tests/unit/test_aes_pure.py:46` | Covered |
-| AES-CTR round-trip + NIST | `tests/unit/test_aes_pure.py:74`–`126` | Covered |
-| Poly1305 RFC 8439 vector | `tests/unit/test_restic_fallback.py:268`–`291` | Covered |
-| `_clamp_r` bit clearing | `tests/unit/test_restic_fallback.py:292`–`305` | Covered |
-| Authenticated encryption round-trip | `tests/unit/test_restic_fallback.py:309`–`361` | Covered |
-| Constant-time equality | `tests/unit/test_restic_fallback.py:364`–`373` | Covered |
-| Timestamp parsing | `tests/unit/test_restic_fallback.py:377`–`391` | Covered |
-| scrypt master-key derivation (synthetic) | `tests/unit/test_restic_fallback.py:394`–`426` | Covered |
-| `PurePythonRestorer` core methods (synthetic) | `tests/unit/test_restic_fallback.py:427`–`510` | Covered |
+| AES-128/256 key schedule (FIPS 197) | `tests/unit/test_aes_pure.py::TestAESKeySchedule` | Covered |
+| AES-128 ECB NIST vector | `tests/unit/test_aes_pure.py::TestAESEncryptBlock` | Covered |
+| AES-256 ECB NIST vector | `tests/unit/test_aes_pure.py::TestAESEncryptBlock` | Covered |
+| AES-CTR round-trip + NIST | `tests/unit/test_aes_pure.py::TestAESCTR` | Covered |
+| Poly1305 RFC 8439 vector | `tests/unit/test_restic_fallback.py::TestPoly1305` | Covered |
+| `_clamp_r` bit clearing | `tests/unit/test_restic_fallback.py::TestPoly1305` | Covered |
+| Authenticated encryption round-trip | `tests/unit/test_restic_fallback.py::TestAuthenticatedEncryption` | Covered |
+| Constant-time equality | `tests/unit/test_restic_fallback.py::TestConstantTimeEq` | Covered |
+| Timestamp parsing | `tests/unit/test_restic_fallback.py::TestParseTimestamp` | Covered |
+| scrypt master-key derivation (synthetic) | `tests/unit/test_restic_fallback.py::TestKeyDerivation` | Covered |
+| `PurePythonRestorer` core methods (synthetic) | `tests/unit/test_restic_fallback.py::TestPurePythonRestorer` | Covered |
 | Permission / flat-layout / symlink / hardlink / xattr restore | `tests/unit/test_restic_fallback.py` (later classes) | Covered |
-| scrypt → master key (real rustic) | `tests/integration/test_pure_python_restore.py:469` | Covered |
-| Wrong-password rejection (real rustic) | `tests/integration/test_pure_python_restore.py:481` | Covered |
-| Snapshot listing | `tests/integration/test_pure_python_restore.py:495` | Covered |
-| Repo info (version, blob count) | `tests/integration/test_pure_python_restore.py:508` | Covered |
-| Full restore (family — initial + incremental) | `tests/integration/test_pure_python_restore.py:521` | Covered |
-| Full restore (work — modified files) | `tests/integration/test_pure_python_restore.py:552` | Covered |
-| Pure-Python ≡ rustic byte-for-byte | `tests/integration/test_pure_python_restore.py:582` | Covered |
-| Flat (LCSAS disc) pack layout | `tests/integration/test_pure_python_restore.py:630` | Covered |
-| Incremental file presence | `tests/integration/test_pure_python_restore.py:669` | Covered |
-| `RestoreExecutor.prepare_cache` + fallback | `tests/integration/test_pure_python_restore.py:688` | Covered |
-| Every ISO is self-describing (catalog + volume_info) | `tests/integration/test_disc_only_restore.py:527` | Covered |
-| Holographic metadata on every ISO | `tests/integration/test_disc_only_restore.py:551` | Covered |
-| Latest catalog knows all volumes | `tests/integration/test_disc_only_restore.py:577` | Covered |
-| Pick list from on-disc catalog | `tests/integration/test_disc_only_restore.py:722` | Covered |
-| Packs span multiple discs | `tests/integration/test_disc_only_restore.py:760` | Covered |
-| `cmd_restore_from_disc` argparser registration | `tests/unit/test_restore_from_disc.py:83`–`131` | Covered |
-| `cmd_restore_from_disc` validation paths | `tests/unit/test_restore_from_disc.py:133`–`257` | Covered |
-| `cmd_restore_from_disc` batch mode | `tests/unit/test_restore_from_disc.py:259`–`419` | Covered |
+| scrypt → master key (real rustic) | `tests/integration/test_pure_python_restore.py::TestPurePythonFallbackRestore::test_fallback_verifies_key` | Covered |
+| Wrong-password rejection (real rustic) | `...::test_fallback_rejects_wrong_password` | Covered |
+| Snapshot listing | `...::test_fallback_lists_snapshots` | Covered |
+| Repo info (version, blob count) | `...::test_fallback_repo_info` | Covered |
+| Full restore (family — initial + incremental) | `...::test_fallback_restore_family` | Covered |
+| Full restore (work — modified files) | `...::test_fallback_restore_work` | Covered |
+| Pure-Python ≡ rustic byte-for-byte | `...::test_fallback_matches_rustic_restore` | Covered |
+| Flat (legacy) pack layout | `...::test_fallback_restore_with_flat_layout` | Covered |
+| Incremental file presence | `...::test_fallback_incremental_files_present` | Covered |
+| `RestoreExecutor.prepare_cache` + fallback | `...::test_restore_executor_with_fallback_pipeline` | Covered |
+| Every ISO is self-describing (catalog + volume_info) | `tests/integration/test_disc_only_restore.py::TestDiscOnlyRestore::test_isos_are_self_describing` | Covered |
+| Holographic metadata on every ISO | `...::test_every_iso_has_holographic_metadata` | Covered |
+| Latest catalog knows all volumes | `...::test_latest_catalog_knows_all_volumes` | Covered |
+| Pick list from on-disc catalog | `...::test_on_disc_catalog_enables_pick_list` | Covered |
+| Packs span multiple discs | `...::test_packs_span_multiple_discs` | Covered |
+| `cmd_restore_from_disc` argparser registration | `tests/unit/test_restore_from_disc.py::TestFromDiscParser` | Covered |
+| `cmd_restore_from_disc` validation paths | `tests/unit/test_restore_from_disc.py::TestFromDiscValidation` | Covered |
+| `cmd_restore_from_disc` batch mode | `tests/unit/test_restore_from_disc.py::TestFromDiscBatchMode` | Covered |
 | `cmd_restore_from_disc` pure-Python branch E2E | — | **Gap** |
 | Generated `standalone_restorer.py` run as subprocess | — | **Gap** |
 | `volume_info.json` shape | — | **Gap** (existence only) |
@@ -724,21 +788,22 @@ holographic catalog this tier relies on.
 Required reading (repo-relative):
 
 - `CLAUDE.md`
-- `src/lcsas/cli/main.py` — argparser `:277`–`323`,
-  handler `cmd_restore_from_disc` `:2089`–`2548`, dispatch
-  `:2716`–`:2722`.
+- `src/lcsas/cli/main.py` — the `restore standalone` subparser in
+  `build_parser()`, handler `cmd_restore_from_disc()`, dispatch
+  `dispatch()`.
 - `src/lcsas/restore/restic_fallback.py` — pure-Python AES/zstd reader
   (full file).
 - `src/lcsas/restore/_aes_pure.py` — AES primitives.
-- `src/lcsas/restore/standalone_builder.py` — builds
-  `standalone_restorer.py` (`:30`–`:205`).
+- `src/lcsas/restore/_zstd_pure.py` — pure-Python zstd decoder
+  (RST-04 fallback).
+- `src/lcsas/restore/standalone_builder.py` — `build_standalone()` +
+  `_CLI_BLOCK` build `standalone_restorer.py`.
 - `src/lcsas/staging/metadata.py` — `HolographicInjector`
-  (`:28`–`:535`), `write_standalone_restorer` (`:133`–`:146`),
-  `write_lcsas_source` (`:106`–`:131`), `write_restore_instructions`
-  (`:148`–`:251`), `inject_catalog` (`:61`–`:64`), `write_volume_info`
-  (`:66`–`:104`).
-- `src/lcsas/restore/executor.py` — `prepare_cache` (`:75`),
-  `ingest_volume` (`:122`), `verify_cache_completeness` (`:256`).
+  (class), `write_standalone_restorer()`, `write_lcsas_source()`,
+  `write_restore_instructions()`, `inject_catalog()`,
+  `write_volume_info()`.
+- `src/lcsas/restore/executor.py` — `prepare_cache()`,
+  `ingest_volume()`, `verify_cache_completeness()`.
 - `tests/unit/test_aes_pure.py` — AES-CTR NIST vectors.
 - `tests/integration/test_disc_only_restore.py` — end-to-end
   rustic-path multi-disc proof.

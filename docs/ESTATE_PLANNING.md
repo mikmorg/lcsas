@@ -21,7 +21,7 @@ This document provides a checklist and templates to make that possible.
 
 - [ ] **Label every disc** with a permanent marker or printed label:
   - Archive name (e.g. "Smith Family Archive")
-  - Volume label (printed on the disc by LCSAS, e.g. `LCSAS_BD25_001`)
+  - Volume label (printed on the disc by LCSAS, e.g. `LCSAS_BD25_2026_0001`)
   - Date burned
   - "META" on the meta-volume disc (this is the rescue disc)
 
@@ -86,7 +86,7 @@ toward recoverability — the dominant risk for a backup is *loss*, not theft.
 - [ ] **Split the password** once your archive is configured:
 
   ```
-  lcsas key split --repo REPO --config lcsas.toml
+  lcsas --config lcsas.toml key split --repo REPO
   ```
 
   This writes `N` share files plus a plain-language **card** for each. Hand
@@ -153,7 +153,7 @@ field after a later re-key.
 
 Procedure after any re-key:
 
-1. **Re-split** with the new password: `lcsas key split --config ... --repo R`.
+1. **Re-split** with the new password: `lcsas --config ... key split --repo R`.
    Each card is stamped with `Split on : <date>` and a `Split ID : NNNNN`
    (the SLIP-0039 identifier, shared by all cards of one split, different
    between splits) so you can tell card generations apart in the binder.
@@ -162,7 +162,7 @@ Procedure after any re-key:
    superseded `Split ID` in your estate notes so a stray old card is
    recognisable as void.
 4. **Confirm** the new cards work end-to-end:
-   `lcsas key verify --config ... --repo R --share-file CARD1 --share-file CARD2`
+   `lcsas --config ... key verify --repo R --share-file CARD1 --share-file CARD2`
    (any K). Exit 0 + an `OK:` line means the new escrow is good.
 
 The annual READINESS drill (`recovery/docs/READINESS_CHECKLIST.txt`,

@@ -28,7 +28,7 @@ These concerns relate to what a non-technical person sees when they
 insert a disc.  The audience is a grieving family member who may not
 know what Linux, encryption, or a "repository" is.
 
-### 1.1 No plain-language START_HERE file — P0 ❌
+### 1.1 No plain-language START_HERE file — P0 ✅ (resolved)
 
 **Current state:** Data discs have `RESTORE_INSTRUCTIONS.txt` which
 opens with *"This disc is part of an LCSAS (Linux Cold Storage Archival
@@ -48,7 +48,7 @@ meta) written in plain English:
 Requires: new config fields `archive_owner`, `archive_description`,
 `key_storage_hints`, `technical_contact` on `LCSASConfig`.
 
-### 1.2 No "what is this data" description — P0 ❌
+### 1.2 No "what is this data" description — P0 ✅ (resolved)
 
 **Current state:** `volume_info.json` has `"repositories": ["family",
 "work"]` but no human-meaningful description.  Config has no field for
@@ -57,7 +57,7 @@ a human-readable archive description.
 **Fix:** Add `archive_description` to config, embed in `START_HERE.txt`
 and `volume_info.json`.
 
-### 1.3 No "where is the key" hint on disc — P0 ❌
+### 1.3 No "where is the key" hint on disc — P0 ✅ (resolved)
 
 **Current state:** `RESTORE_INSTRUCTIONS.txt` says the key is *"NOT
 stored on any disc for security"* but never says WHERE the archivist
@@ -67,7 +67,7 @@ put it.  Key storage strategy exists only in the archivist's head.
 home safe, USB copy in safe deposit box #1234 at First National Bank").
 Embed in `START_HERE.txt`.
 
-### 1.4 No "get a tech person" advice — P1 ❌
+### 1.4 No "get a tech person" advice — P1 ✅ (resolved)
 
 **Current state:** Neither `RESTORE_INSTRUCTIONS.txt` nor
 `README_RESTORE.md` says *"If these instructions are confusing, take
@@ -76,7 +76,7 @@ all the discs plus the key to a computer professional."*
 **Fix:** Add this guidance to `START_HERE.txt` and
 `RESTORE_INSTRUCTIONS.txt`.
 
-### 1.5 No key-to-repo mapping on disc — P1 ❌
+### 1.5 No key-to-repo mapping on disc — P1 ✅ (resolved)
 
 **Current state:** If the archivist used different keys per repo,
 nothing on disc tells the user which key goes with which repo.
@@ -87,12 +87,13 @@ argument.  Neither path lets you specify per-repo keys in one run.
 **Fix:** Write `KEY_INFO.txt` listing each repo, its human description,
 and which key file it needs.  Derive from config.
 
-### 1.6 Placeholder URL in RESTORE_INSTRUCTIONS.txt — P1 ❌
+### 1.6 Placeholder URL in RESTORE_INSTRUCTIONS.txt — P1 ✅ (resolved)
 
-**Current state:** `staging/metadata.py` line 164 references
-`https://github.com/your-org/lcsas` — a placeholder that will be a 404.
+**Original finding:** `staging/metadata.py` referenced
+`https://github.com/your-org/lcsas` — a placeholder that would be a 404.
 
-**Fix:** Replace with real URL or remove.
+**Resolution:** The placeholder was removed; the only URLs the injector
+writes today point at rustic.cli.rs / restic.net.
 
 ### 1.7 Markdown format for README_RESTORE — P2 ✅
 
@@ -128,7 +129,7 @@ meta-volume automatically via `_DOC_ITEMS`.
 These concerns relate to whether the meta-volume's bundled tools will
 still function in 10, 25, or 50 years.
 
-### 2.1 ELF binaries are architecture-locked — P0 🔧 (in progress)
+### 2.1 ELF binaries are architecture-locked — P0 ✅ (resolved)
 
 **Current state:** Bundled `rustic`, `xorriso`, `python3` are Linux
 x86_64 ELF binaries.  They will not run natively on ARM64, macOS, or
@@ -142,7 +143,7 @@ support indefinitely.
 that eliminates glibc dependency entirely.  Add `--static-rustic` option
 to meta-volume builder.
 
-### 2.2 glibc ABI dependency — P0 🔧 (in progress)
+### 2.2 glibc ABI dependency — P0 ✅ (resolved)
 
 **Current state:** `bundler.py` explicitly does NOT bundle glibc family
 libs (`libc.so`, `libpthread.so`, `ld-linux`, etc.).  The bundled
@@ -154,7 +155,7 @@ them.
 the critical-path tool.  xorriso dependency is being eliminated from
 `restore.sh` (§2.4).
 
-### 2.3 No tool version recording — P1 🔧 (in progress)
+### 2.3 No tool version recording — P1 ✅ (resolved)
 
 **Current state:** `volume_info.json` records `python_version` but not
 `rustic` or `xorriso` versions.
@@ -163,7 +164,7 @@ the critical-path tool.  xorriso dependency is being eliminated from
 --version` during meta-volume build.  Record in `volume_info.json`
 under `tool_versions`.
 
-### 2.4 xorriso dependency in restore.sh — P1 🔧 (in progress)
+### 2.4 xorriso dependency in restore.sh — P1 ✅ (resolved)
 
 **Current state:** `restore.sh` calls `$XORRISO -indev "$iso" -osirrox
 on -extract / "$dest"` to extract ISOs.  This is the ONLY use of
@@ -207,7 +208,7 @@ A 2050 engineer holding a damaged disc, this spec, and the bundled
 source can re-implement RS03 repair.  Bundled via
 `_bundle_dvdisaster_source` (source) and `_DOC_ITEMS` (spec).
 
-### 2.6 No restic format specification on disc — P0 🔧 (in progress)
+### 2.6 No restic format specification on disc — P0 ✅ (resolved)
 
 **Current state:** The project treats pack files as opaque blobs,
 delegating all format understanding to the `rustic` binary.  If rustic
@@ -254,7 +255,7 @@ any disc.
 **Partial fix:** `START_HERE.txt` (§1.1) will include this warning and
 key location hints.
 
-### 3.2 Multi-repo key confusion — P1 ❌
+### 3.2 Multi-repo key confusion — P1 ✅ (resolved)
 
 **Current state:** Different repos may use different key files.
 The modern `restore.sh` prompts for one password per invocation

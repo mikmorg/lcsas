@@ -367,7 +367,7 @@ still apply.
   where both Tier 1 and Tier 2 are unusable.
 
 **Test coverage:** The pure-Python restorer is exercised by the
-Linux-side pytest suite (`src/restore/restic_fallback.py`); there is
+Linux-side pytest suite (`src/lcsas/restore/restic_fallback.py`); there is
 no automated Wine/Windows test of the manual invocation path. The
 `Phase W5 — legacy msvcrt build` documented at
 `recovery/docs/WINDOWS_RECOVERY_PLAN.txt` is the long-term plan to
@@ -375,7 +375,7 @@ give XP/Vista a native binary path, but it is not yet implemented.
 
 **Source refs:** `standalone_restorer.py` (root of the meta disc),
 `recovery/docs/RECOVER_WINDOWS.txt` (user-facing manual recovery
-section), `src/restore/restic_fallback.py` (the underlying
+section), `src/lcsas/restore/restic_fallback.py` (the underlying
 pure-Python AES/zstd restorer).
 
 ## Path / drive-letter handling differences from Linux
