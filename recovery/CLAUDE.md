@@ -28,7 +28,10 @@ make -C recovery fuzz-b64-smoke       # 60 s
 make -C recovery fuzz-zstd-smoke      # 60 s
 make -C recovery fuzz-path-smoke      # 60 s
 make -C recovery fuzz-repo-smoke      # 60 s
-make -C recovery fuzz-smoke           # all five × 60 s (~5 min)
+make -C recovery fuzz-keyshare-smoke  # 60 s
+make -C recovery fuzz-tree-smoke      # 60 s
+make -C recovery fuzz-rs03-smoke      # 60 s
+make -C recovery fuzz-smoke           # all eight × 60 s (~8 min)
 
 # Comprehensive audit gate (opt-in — NOT part of make gate):
 make -C recovery audit-gate           # coverage + sanitize + fuzz-smoke (~10 min)
@@ -43,18 +46,21 @@ threshold rationale, and how to interpret failures.
 ## When to run audit-gate
 
 Run `make audit-gate` (or `make audit-gate THRESHOLD=95`) **before merging any PR**
-that touches `recovery/src/lcsas-restore/**`.  It is a pre-merge
-quality check, not a CI gate — it takes ~10 minutes and requires
-clang + gcovr locally.
+that touches `recovery/src/**`.  It requires clang + gcovr locally and
+takes a while (the CI run is ~55 min).
 
-The GitHub Actions workflow (`.github/workflows/audit-gate.yml`) also
-runs automatically on pushes to paths within `recovery/`.
+Since #414 it IS a CI gate: `.github/workflows/audit-gate.yml` runs on
+every PR (an in-workflow `changes` job skip-passes PRs that don't touch
+gate paths) and `audit-gate-required` is a required branch-protection
+check, alongside `bin-parity-required`.
 
 ## Architecture
 
 Tier-1 recovery binary: `recovery/src/lcsas-restore/` — C89, static,
-depends only on kernel + libc.  Vendored dependencies: sqlite3 and
-zstd (source in `recovery/vendored/`; built alongside our code —
-not runtime dependencies).
+depends only on kernel + libc.  Sibling tier-1 tools under
+`recovery/src/`: `lcsas-keyshare` (SLIP-0039 combiner), `lcsas-ecc`
+(RS03 verify/repair), `lcsas-iso9660`, `lcsas-init`.  Vendored
+dependencies: sqlite3 and zstd (source in `recovery/vendored/`; built
+alongside our code — not runtime dependencies).
 
 See the root `CLAUDE.md` for the full recovery cascade (tier 1 → 2 → 3).
