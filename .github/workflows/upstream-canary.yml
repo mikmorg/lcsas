@@ -33,3 +33,41 @@ jobs:
           sh recovery/scripts/fetch_upstream.sh \
             --no-extract \
             --cache "$RUNNER_TEMP/upstream-cache"
+
+  canary-watchdog:
+    # Uniform scheduled-canary watchdog (#420): scheduled-run failures
+    # only email the workflow author, and two canaries rotted for ~5
+    # weeks with a zero-issue backlog before anyone noticed (#418,
+    # #419).  Job-level on a fresh runner, cancelled-aware (a
+    # timeout-minutes kill is conclusion `cancelled`, invisible to
+    # failure()), explicit issues:write, no error swallowing.  needs:
+    # is load-bearing -- without it needs.*.result is empty and this
+    # job never fires.
+    runs-on: ubuntu-latest
+    needs: [verify-upstream]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && (contains(needs.*.result, 'failure')
+          || contains(needs.*.result, 'cancelled'))
+    permissions:
+      issues: write
+    steps:
+      - name: File (or bump) the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          title="upstream-canary: pinned upstream artifact failed cold-fetch verification"
+          body="Scheduled upstream-canary run went red (${{ needs.verify-upstream.result }}) on \`${{ github.sha }}\`.
+
+          A cold fetch of the artifacts pinned in recovery/UPSTREAM.sha256 no longer hash-verifies from the source URL (retag, deletion, or silent content change upstream -- issue #372's supply-chain scenario), or the source is unreachable.  Until resolved, a disaster recovery that needs to re-fetch upstream tools may fail.  (A \`cancelled\` result usually means the job outgrew its timeout budget -- check step timings first.)
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          existing="$(gh issue list --state open \
+            --search "\"$title\" in:title" \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --label bug --body "$body"
+          fi

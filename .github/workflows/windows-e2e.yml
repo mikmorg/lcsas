@@ -247,3 +247,41 @@ jobs:
             -ErrorAction SilentlyContinue | ForEach-Object {
               Dismount-DiskImage -ImagePath $_.FullName -ErrorAction SilentlyContinue | Out-Null
             }
+
+  canary-watchdog:
+    # Uniform scheduled-canary watchdog (#420): scheduled-run failures
+    # only email the workflow author, and two canaries rotted for ~5
+    # weeks with a zero-issue backlog before anyone noticed (#418,
+    # #419).  Job-level on a fresh runner, cancelled-aware (a
+    # timeout-minutes kill is conclusion `cancelled`, invisible to
+    # failure()), explicit issues:write, no error swallowing.  needs:
+    # is load-bearing -- without it needs.*.result is empty and this
+    # job never fires.
+    runs-on: ubuntu-latest
+    needs: [fixture, restore]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && (contains(needs.*.result, 'failure')
+          || contains(needs.*.result, 'cancelled'))
+    permissions:
+      issues: write
+    steps:
+      - name: File (or bump) the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          title="windows-e2e: scheduled restore.bat journey went red"
+          body="Scheduled windows-e2e run went red (fixture: ${{ needs.fixture.result }}, restore: ${{ needs.restore.result }}) on \`${{ github.sha }}\`.
+
+          The single most likely heir journey -- Windows machine, double-click restore.bat (INFRA-01 tier 3) -- is unproven until this is green again.  (A \`cancelled\` result usually means the job outgrew its timeout budget -- check step timings first.)
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          existing="$(gh issue list --state open \
+            --search "\"$title\" in:title" \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --label bug --body "$body"
+          fi

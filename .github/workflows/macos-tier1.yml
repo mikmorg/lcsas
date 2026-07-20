@@ -76,3 +76,41 @@ jobs:
 
       - name: Execute the Mach-O tier-1 binaries
         run: pytest tests/recovery_hardening/test_tier1_macos_native.py -v
+
+  canary-watchdog:
+    # Uniform scheduled-canary watchdog (#420): scheduled-run failures
+    # only email the workflow author, and two canaries rotted for ~5
+    # weeks with a zero-issue backlog before anyone noticed (#418,
+    # #419).  Job-level on a fresh runner, cancelled-aware (a
+    # timeout-minutes kill is conclusion `cancelled`, invisible to
+    # failure()), explicit issues:write, no error swallowing.  needs:
+    # is load-bearing -- without it needs.*.result is empty and this
+    # job never fires.
+    runs-on: ubuntu-latest
+    needs: [tier1]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && (contains(needs.*.result, 'failure')
+          || contains(needs.*.result, 'cancelled'))
+    permissions:
+      issues: write
+    steps:
+      - name: File (or bump) the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          title="macos-tier1: committed Mach-O tier-1 binaries went red on real macOS"
+          body="Scheduled macos-tier1 run went red (${{ needs.tier1.result }}) on \`${{ github.sha }}\`.
+
+          The cross-built macOS tier-1 binaries (zig cc -target <arch>-macos) failed to execute on a real macOS runner (GATE-03) -- a zig/SDK regression would otherwise ship green while leaving a Mac heir with an unproven tier-1 artifact.  (A \`cancelled\` result usually means the job outgrew its timeout budget -- check step timings first.)
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          existing="$(gh issue list --state open \
+            --search "\"$title\" in:title" \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --label bug --body "$body"
+          fi
