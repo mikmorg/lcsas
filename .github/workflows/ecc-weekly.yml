@@ -24,7 +24,18 @@ on:
 jobs:
   ecc-repair:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Measured budget, not a guess (#419): the FMT-01 cross-conformance
+    # pair made the suite outgrow the old 60-min limit -- the reverse
+    # test (test_dvdisaster_repairs_lcsas_ecc_augmented_image) has the
+    # deliberately-not-perf-tuned lcsas-ecc encoder (d19f1a2) write a
+    # full ~700 MB RS03 medium, then real dvdisaster verify+repair it.
+    # On 2026-07-13 the first three tests finished by minute 15 and the
+    # fourth was still running at the minute-60 kill.  150 = the fast
+    # three + the slow reverse test + headroom for runner variance.  A
+    # weekly runner-hour is the honest price of the two-directional
+    # conformance proof; do NOT reclaim it by shrinking the medium (RS03
+    # is a full-medium format -- dvdisaster must recognise a real one).
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -55,14 +66,39 @@ jobs:
         run: |
           echo "lcsas-ecc on PATH: $(command -v lcsas-ecc || echo MISSING)"
           LCSAS_ECC_REPAIR=1 pytest tests/integration/test_ecc_repair.py -v -rX -m integration
-      - name: File an issue on failure
-        # Scheduled-run failures email the workflow-file author, but a red
-        # Monday run is easy to miss. File a tracking issue so it can't be.
-        if: failure() && github.event_name == 'schedule'
+  canary-watchdog:
+    # Scheduled-run failures only email the workflow author; the old
+    # in-job step was `if: failure()` -- blind to conclusion `cancelled`,
+    # which is exactly what a timeout-minutes kill produces, so four
+    # straight dead Mondays filed nothing (#419).  Job-level on a fresh
+    # runner, cancelled-aware, explicit issues:write, and no `|| true`:
+    # if ticket-filing itself fails, this job fails loud.  Fleet-wide
+    # pattern: #420.
+    runs-on: ubuntu-latest
+    needs: [ecc-repair]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && (needs.ecc-repair.result == 'failure'
+          || needs.ecc-repair.result == 'cancelled')
+    permissions:
+      issues: write
+    steps:
+      - name: File (or bump) the tracking issue
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          gh issue create \
-            --title "ecc-weekly failed: RS03 repair proof regressed" \
-            --body "The scheduled RS03 ECC repair proof (\`tests/integration/test_ecc_repair.py\`) failed on \`${{ github.sha }}\`. The disc-integrity repair path may be regressed — every disc burned thereafter could be unrepairable. Investigate run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --label "bug" || true
+          set -euo pipefail
+          title="ecc-weekly: RS03 repair proof went red"
+          body="Scheduled RS03 ECC repair proof (\`tests/integration/test_ecc_repair.py\`) result: **${{ needs.ecc-repair.result }}** on \`${{ github.sha }}\`.
+
+          The disc-integrity repair path is unproven until this is green again -- every disc burned meanwhile could be unrepairable.  (A \`cancelled\` result usually means the job outgrew its timeout-minutes budget, not a test failure -- check step timings first.)
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          existing="$(gh issue list --state open \
+            --search "\"$title\" in:title" \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --label bug --body "$body"
+          fi
