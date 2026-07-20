@@ -77,37 +77,37 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           python -m pytest tests/recovery_hardening/test_format_canary.py -v
 
-      - name: File an issue on drift
-        if: failure()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const title = "format-canary: latest rustic may have drifted past the pinned reader contract (FMT-03)";
-            const body = [
-              "The weekly FMT-03 format canary FAILED: data written by the",
-              "**latest** upstream rustic could not be byte-faithfully restored",
-              "by the pinned recovery readers (tier-1 C binary and/or tier-3",
-              "PurePythonRestorer).",
-              "",
-              "This is an early warning that the upstream repository format may",
-              "have bumped past the frozen v1/v2 contract. Before any operator",
-              "upgrades the rustic on their NAS, the readers must learn the new",
-              "format (update `SUPPORTED_REPO_VERSIONS` + all three tiers).",
-              "",
-              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-            ].join("\n");
-            const existing = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: "open",
-              labels: "format-drift",
-            });
-            if (existing.data.length === 0) {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                body,
-                labels: ["format-drift"],
-              });
-            }
+  canary-watchdog:
+    # Uniform scheduled-canary watchdog (#420): the old step-level filer
+    # was `if: failure()` -- blind to conclusion `cancelled` (what a
+    # timeout kill produces; the #419 lesson).  Job-level on a fresh
+    # runner, cancelled-aware, explicit issues:write, no error
+    # swallowing.  needs: is load-bearing -- without it needs.*.result
+    # is empty and this job never fires.
+    runs-on: ubuntu-latest
+    needs: [canary]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && (contains(needs.*.result, 'failure')
+          || contains(needs.*.result, 'cancelled'))
+    permissions:
+      issues: write
+    steps:
+      - name: File (or bump) the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          title="format-canary: latest rustic may have drifted past the pinned reader contract (FMT-03)"
+          body="Weekly FMT-03 format canary result: **${{ needs.canary.result }}** on \`${{ github.sha }}\`.
+
+          Data written by the LATEST upstream rustic could not be byte-faithfully restored by the pinned recovery readers (tier-1 C binary and/or tier-3 PurePythonRestorer) -- an early warning that the upstream repository format may have bumped past the frozen v1/v2 contract.  Before any operator upgrades the rustic on their NAS, the readers must learn the new format (update \`SUPPORTED_REPO_VERSIONS\` + all three tiers).  (A \`cancelled\` result usually means a timeout, not drift -- check step timings first.)
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          existing="$(gh issue list --state open --label format-drift \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --label format-drift --body "$body"
+          fi

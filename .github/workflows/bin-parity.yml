@@ -126,3 +126,41 @@ jobs:
             echo "bin-parity passed"; exit 0
           fi
           echo "bin-parity result: ${{ needs.bin-parity.result }}"; exit 1
+
+  canary-watchdog:
+    # Uniform scheduled-canary watchdog (#420): scheduled-run failures
+    # only email the workflow author, and two canaries rotted for ~5
+    # weeks with a zero-issue backlog before anyone noticed (#418,
+    # #419).  Job-level on a fresh runner, cancelled-aware (a
+    # timeout-minutes kill is conclusion `cancelled`, invisible to
+    # failure()), explicit issues:write, no error swallowing.  needs:
+    # is load-bearing -- without it needs.*.result is empty and this
+    # job never fires.
+    runs-on: ubuntu-latest
+    needs: [changes, bin-parity]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && (contains(needs.*.result, 'failure')
+          || contains(needs.*.result, 'cancelled'))
+    permissions:
+      issues: write
+    steps:
+      - name: File (or bump) the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          title="bin-parity: scheduled reproducibility check went red"
+          body="Scheduled bin-parity run went red (bin-parity: ${{ needs.bin-parity.result }}) on \`${{ github.sha }}\`.
+
+          The committed recovery binaries no longer rebuild byte-identical under the pinned toolchain (GATE-08) -- environment/toolchain drift has broken reproducibility even with no repo change.  June 2026's four consecutive red Mondays (the #408 unstripped-DWARF breakage) went unticketed; this watchdog exists so that cannot recur.  (A \`cancelled\` result usually means the job outgrew its timeout budget -- check step timings first.)
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          existing="$(gh issue list --state open \
+            --search "\"$title\" in:title" \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --label bug --body "$body"
+          fi
