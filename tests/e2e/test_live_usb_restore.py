@@ -138,7 +138,15 @@ export LCSAS_ALLOW_TMPFS_TARGET=1
 m=LCSAS_LIVE_USB
 if sh /media/lcsas-meta/recovery/scripts/restore.sh /restored latest \\
       </dev/null >/run/lcsas-restore.log 2>&1; then
-  h=$(find /restored -type f -exec sha256sum {} + \\
+  # Hash the restored PAYLOAD set.  restore.sh deliberately drops one
+  # product-owned metadata file into the target (.lcsas-restore-marker,
+  # UX-07: identifies an LCSAS-owned target so re-runs skip the
+  # non-empty-target prompt) -- exclude it, or the empty-file digest
+  # poisons the content-set hash on every run (#418).  Drift stays
+  # self-policing: if the marker is ever renamed, the unexpected extra
+  # file makes this drill fail loud again.
+  h=$(find /restored -type f ! -name .lcsas-restore-marker \\
+      -exec sha256sum {} + \\
       | awk '{print $1}' | sort | sha256sum | cut -d" " -f1)
   echo "${m}_OK $h"
 else
@@ -217,7 +225,10 @@ class _Archive:
 
 def _content_set_hash(root: Path) -> str:
     """Path-independent content hash, mirroring the guest-side pipeline:
-    sha256 of the sorted newline-joined per-file sha256 hex digests."""
+    sha256 of the sorted newline-joined per-file sha256 hex digests.
+    (The guest side additionally excludes restore.sh's product-owned
+    ``.lcsas-restore-marker`` from the set -- see _GUEST_SCRIPT / #418;
+    this host side hashes the pre-backup sources, where no marker exists.)"""
     digests = sorted(
         hashlib.sha256(p.read_bytes()).hexdigest()
         for p in root.rglob("*")

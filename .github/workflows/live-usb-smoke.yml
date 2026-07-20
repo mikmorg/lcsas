@@ -105,3 +105,43 @@ jobs:
           else
             echo "no serial log produced"
           fi
+
+  canary-watchdog:
+    # Scheduled-run failures only email the workflow author; this drill sat
+    # red for 5 straight Mondays with a zero-issue backlog before anyone
+    # noticed (#418).  File (or bump) a tracking issue so a red canary is
+    # always visible work.  Job-level rather than a step in the drill job,
+    # and cancelled-aware, so a timeout-kill (conclusion `cancelled`, for
+    # which failure() is false -- the #419 blind spot) still triggers it on
+    # a fresh runner.  See #420 for the fleet-wide pattern.
+    runs-on: ubuntu-latest
+    needs: [live-usb-smoke]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && (needs.live-usb-smoke.result == 'failure'
+          || needs.live-usb-smoke.result == 'cancelled')
+    permissions:
+      issues: write
+    steps:
+      - name: File (or bump) the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # No `|| true`: if ticket-filing itself fails (perms, missing
+        # label), this job must fail loud -- a silent watchdog is this
+        # bug all over again one level up.
+        run: |
+          set -euo pipefail
+          title="live-usb-smoke: scheduled Secure-Boot restore drill went red"
+          body="Scheduled live-USB drill result: **${{ needs.live-usb-smoke.result }}** on \`${{ github.sha }}\`.
+
+          The BOOT-04 no-OS recovery route (boot a stock live ISO, run restore.sh off the META disc) is unproven until this is green again.
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          existing="$(gh issue list --state open \
+            --search "\"$title\" in:title" \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --label bug --body "$body"
+          fi
