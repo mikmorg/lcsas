@@ -101,3 +101,14 @@ The recovery tiers are documented in `recovery/docs/TIERS.txt` and dispatched by
 ### Database schema
 
 Schema version 9 (12 tables). Key tables: `repositories`, `packs`, `volumes`, `volume_packs` (M:M), `snapshots`, `locations`, `volume_copies`, `burn_sessions` + `session_volumes` (session/burn audit), `volume_events` (audit trail), `key_escrow` (recorded Shamir split: K/N + SLIP-0039 id, KEY-08). Volume lifecycle: `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED`, plus `CONSOLIDATING` (entered from VERIFIED while `consolidate/` merges a volume's packs onto a successor).
+
+### Test tiers
+
+`tests/` has four tiers, run in order by `make test-all` / `make gate`:
+
+1. `tests/unit/` — no external tools required.
+2. `tests/integration/` — real `rustic`/`xorriso`/`dvdisaster`/`cdemu` binaries, gated behind pytest markers (`requires_rustic`, etc.) so missing tools self-skip rather than fail.
+3. `tests/e2e/` — full-pipeline scripted drills (e.g. `test_burn_verify_disc.py`, live-USB restore).
+4. `tests/recovery_hardening/` — the last gate before a build ships (see `tests/recovery_hardening/README.md`). Each test exists because a specific bug reached production only after slipping through tiers 1–3; most are cheap static-analysis/stub-binary checks, plus a handful of opt-in slow gates behind env vars (`LCSAS_COVERAGE=1`, `LCSAS_SANITIZE=1`, `LCSAS_FAULT_INJECT=1`, `LCSAS_ZSTD_QEMU=1`).
+
+**Blind-restore agent harness** (`tests/e2e/cdemu_blind_restore/`, driven by `make blind-restore*`): spawns a real Claude sub-agent with no prior context, hands it only the on-disc recovery docs + a simulated optical drive (`cdemu`), and scores whether it can complete a full disaster recovery from scratch. This is the acceptance test for the recovery cascade and docs, not just the code — it costs real LLM API spend (~$5/run) so it is opt-in (`LCSAS_BLIND_ACK_COST=1`) and not part of the default gate. Variants (`blind-restore-variants`) force specific cascade fallback paths (tier-1 missing, no-catalog, multi-tenant, split-key); the XFAIL ledger for known-failing variants lives at `tests/e2e/cdemu_blind_restore/XFAIL.list`.
