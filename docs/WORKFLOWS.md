@@ -56,10 +56,13 @@ two detail files — `workflows/restore-bare-metal.md` and
 "Variant axes that apply" sections. Treat drive count as a per-workflow concern
 rather than a top-level axis.
 
-- **Media type** — one of `BD25`, `BD50`, `BDXL100`, `MDISC25`, `MDISC100`,
-  `TEST_TINY` (defined in `src/lcsas/config/media.py`). The five production
-  types carry 15% ECC overhead; the test-only `TEST_TINY` carries 0% (see the
-  ECC axis below).
+- **Media type** — one of `CD700`, `BD25`, `BD50`, `BDXL100`, `MDISC25`,
+  `MDISC50`, `MDISC100`, `TEST_TINY` (defined in
+  `src/lcsas/config/media.py`). The seven production types carry 15% ECC
+  overhead; the test-only `TEST_TINY` carries 0% (see the ECC axis below).
+  `CD700` suits bounded collections and realistic-size testing, not
+  decades-scale archival — see the sizing and durability notes in
+  `media.py`.
 - **Multi-tenant** — single registered repo vs. multiple repos sharing
   physical volumes, each with its own encryption key.
 - **OS** — Linux host, Linux bare-metal initramfs, Windows, macOS. Determines
