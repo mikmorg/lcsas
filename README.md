@@ -774,6 +774,35 @@ sudo make blind-restore
 
 On macOS / non-Linux hosts the blind-restore suite is unsupported; rely on `make test-integration` instead.
 
+### Running on a host without Python 3.11+ (Docker)
+
+LCSAS requires Python ≥ 3.11 (`tomllib`, `StrEnum`), which rules out older
+distributions — Debian 10 ships Python 3.7. `docker/Dockerfile.host-a` packages
+the assembly half of the pipeline so such a host can still scan, bin-pack,
+stage, master ISOs, and apply ECC. Debian 12 supplies every external tool at or
+above its enforced floor (python 3.11.2, xorriso 1.5.4, dvdisaster 0.79.5), so
+nothing is built from source; only rustic is pinned, to the same v0.11.2 musl
+artifact listed in `recovery/UPSTREAM.sha256` as the tier-2 recovery reader.
+
+The image is **host A only** — it never touches optical hardware, so it needs no
+device passthrough and runs unprivileged. Burning happens on the host with the
+drive via `lcsas burn-iso`, which requires no catalog and no mirror. See
+[docs/workflows/burn-iso-portable.md](docs/workflows/burn-iso-portable.md).
+
+```bash
+docker build -t lcsas:host-a -f docker/Dockerfile.host-a .
+
+# Keep mirror/ and staging/ under ONE bind mount: staging hardlinks packs
+# from the mirror, and falls back to a full copy on EXDEV. Two separate
+# mounts read as two devices and silently copy every volume in full.
+docker run --rm -u "$(id -u):$(id -g)" -v /srv/lcsas:/srv/lcsas lcsas:host-a scan
+docker run --rm -u "$(id -u):$(id -g)" -v /srv/lcsas:/srv/lcsas lcsas:host-a stage --media BD50
+```
+
+On a pre-bullseye Docker host, bookworm's glibc can trip an old `libseccomp2`
+under Docker's default seccomp profile; install `libseccomp2` ≥ 2.4.4 from
+backports on the host if containers fail in unexplained ways.
+
 ### Continuous integration
 
 `.github/workflows/test.yml` runs on every push and pull request:

@@ -1,0 +1,63 @@
+# LCSAS host-A image — scan, bin-pack, stage, master ISOs, apply ECC.
+#
+# Purpose: run the assembly half of the portable burn workflow on a host
+# that cannot run LCSAS natively.  The motivating case is a Debian 10
+# (buster) NAS: buster ships Python 3.7, and LCSAS requires >= 3.11
+# (tomllib in config/settings.py, StrEnum in iso/xorriso.py).
+#
+# Debian 12 supplies every external tool at or above its enforced floor,
+# so nothing here is compiled from source:
+#
+#   python3     3.11.2   >= 3.11    pyproject.toml requires-python
+#   xorriso     1.5.4    >= 1.4.0   burn/orchestrator.py (check_binary_version)
+#   dvdisaster  0.79.5   >= 0.79.0  burn/orchestrator.py (check_binary_version)
+#
+# Only rustic is absent from Debian; it is pinned below.
+#
+# This image is host A ONLY.  It never touches optical hardware, so it
+# needs no device passthrough and runs fine unprivileged.  Burning happens
+# on the host with the drive via `lcsas burn-iso`, which needs no catalog
+# and no mirror.  See docs/workflows/burn-iso-portable.md.
+
+FROM debian:12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 \
+        xorriso \
+        dvdisaster \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# rustic v0.11.2, static musl — deliberately the SAME artifact pinned in
+# recovery/UPSTREAM.sha256 as the tier-2 recovery reader bundled onto the
+# meta-volume.  Version coherence is not cosmetic here: the config default
+# allow_unverified_repo_format=false makes `lcsas burn` refuse to master a
+# disc from a repo it cannot prove readable by the pinned recovery
+# readers.  Writing the mirror with this exact rustic avoids that refusal.
+ARG RUSTIC_VERSION=0.11.2
+ARG RUSTIC_TARBALL=rustic-v0.11.2-x86_64-unknown-linux-musl.tar.gz
+ARG RUSTIC_SHA256=ff5954015236b21d121d43c6a9d690c21613c0a1ea42a767604ba17eec266bd3
+
+RUN curl -fsSL -o "/tmp/${RUSTIC_TARBALL}" \
+      "https://github.com/rustic-rs/rustic/releases/download/v${RUSTIC_VERSION}/${RUSTIC_TARBALL}" \
+ && echo "${RUSTIC_SHA256}  /tmp/${RUSTIC_TARBALL}" | sha256sum -c - \
+ && tar -xzf "/tmp/${RUSTIC_TARBALL}" -C /tmp \
+ && install -m 0755 "$(find /tmp -type f -name rustic | head -1)" /usr/local/bin/rustic \
+ && rm -rf /tmp/* \
+ && rustic --version
+
+# LCSAS itself: zero runtime dependencies (pyproject.toml `dependencies = []`),
+# pure standard library.  No pip, no venv, no build step — source on
+# PYTHONPATH is enough.  src/lcsas/__main__.py propagates the exit code, so
+# `python3 -m lcsas` behaves identically to the installed console script.
+COPY src/ /opt/lcsas/src/
+ENV PYTHONPATH=/opt/lcsas/src
+
+# Keep the Rustic mirror and the staging tree under ONE bind mount rooted
+# here.  staging/builder.py hardlinks packs from mirror into staging, and
+# utils/fs.py falls back to a full copy on EXDEV — two separate bind mounts
+# read as two devices and would silently copy every volume in full.
+WORKDIR /srv/lcsas
+
+ENTRYPOINT ["python3", "-m", "lcsas"]
