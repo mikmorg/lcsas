@@ -45,7 +45,7 @@ Tier 2 — COLD   Optical           (burned discs; permanent)
 ### Data flow (burn pipeline)
 
 1. **Scan** — `packs/scanner.py` walks the Rustic mirror and registers new pack files in the SQLite catalog (`db/`).
-2. **Bin-pack** — `binpack/algorithm.py` runs first-fit-decreasing to fill volumes to the configured media size (BD25, BD50, BDXL100, MDISC25, MDISC100, TEST_TINY — defined in `config/media.py`).
+2. **Bin-pack** — `binpack/algorithm.py` runs first-fit-decreasing to fill volumes to the configured media size (CD700, BD25, BD50, BDXL100, MDISC25, MDISC50, MDISC100, TEST_TINY — defined in `config/media.py`). Every production capacity is a rung on dvdisaster's RS03 medium ladder (`ecc/dvdisaster.py`), and same-capacity tiers (M-Disc vs BD-R) must keep distinct enum values or `Enum` silently aliases them.
 3. **Stage** — `staging/builder.py` hardlinks packs into a staging tree; `staging/metadata.py` (`HolographicInjector`) copies the complete SQLite catalog and per-repo Rustic metadata (index, snapshots, keys) onto every disc so any single disc is self-describing.
 4. **ISO** — `iso/xorriso.py` calls xorriso to master the staging directory into an ISO.
 5. **ECC** — `ecc/dvdisaster.py` augments the ISO with DVDisaster RS03 error correction.

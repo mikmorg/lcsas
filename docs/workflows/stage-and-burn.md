@@ -444,11 +444,19 @@ The orchestrator's media handling rules:
 
 | Media   | `capacity_bytes` | `ecc_overhead_pct` | `usable_bytes` | ECC step | Notes |
 |---------|------------------|--------------------|----------------|----------|-------|
+| `CD700`    | 737,280,000       | 15 | ~626.7 MB | RS03 augment | 80-min CD-R. Bounded collections and realistic-size testing only — the holographic catalog grows with the archive and eventually will not fit; CD-R dye also rots far sooner than BD-R HTL or M-Disc. |
 | `BD25`     | 25,025,314,816    | 15 | ~21.27 GB | RS03 augment | Single-layer BD-R. |
 | `BD50`     | 50,050,629,632    | 15 | ~42.54 GB | RS03 augment | Dual-layer BD-R. |
 | `BDXL100`  | 100,103,356,416   | 15 | ~85.09 GB | RS03 augment | Triple-layer BDXL. |
 | `MDISC25`  | 25,025,314,816    | 15 | ~21.27 GB | RS03 augment | Same geometry as `BD25`; longevity-rated. |
+| `MDISC50`  | 50,050,629,632    | 15 | ~42.54 GB | RS03 augment | Same geometry as `BD50`; longevity-rated. |
 | `MDISC100` | 100,103,356,416   | 15 | ~85.09 GB | RS03 augment | Same geometry as `BDXL100`; longevity-rated. |
+
+Every production capacity above is a rung on dvdisaster's RS03 medium ladder
+(`RS03_MEDIUM_LADDER_BYTES`). Media types must not be added off the ladder: an
+off-rung capacity pads up to the next rung, burning a disc mostly full of
+padding. Same-capacity tiers (M-Disc vs BD-R) must also differ in the enum's
+`family` field, or `Enum` collapses them into aliases.
 
 ### Test media
 
