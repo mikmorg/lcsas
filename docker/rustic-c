@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+#
+# rustic-c — run the pinned rustic from the LCSAS host-A image.
+#
+# The image bundles rustic v0.11.2 (static musl), the same artifact
+# recovery/UPSTREAM.sha256 pins as the tier-2 recovery reader.  Using it to
+# WRITE the mirror keeps the writer aligned with the pinned recovery readers,
+# which matters because allow_unverified_repo_format defaults to false: burn
+# refuses to master discs from a repo it cannot prove those readers can open.
+#
+# Paths are mounted at identical locations inside the container, so every path
+# you type means the same thing in and out.
+#
+#   rustic-c -r /srv/lcsas/mirror/personal \
+#            --password-file /srv/lcsas/keys/personal.key backup /srv/data/personal
+#
+# Environment overrides:
+#   LCSAS_IMAGE  container image                     (default: lcsas:host-a)
+#   LCSAS_ROOT   read-write mount; mirror + staging  (default: /srv/lcsas)
+#   LCSAS_SRC    space-separated read-only source paths (default: /srv/data)
+#
+# LCSAS_ROOT is a single mount on purpose.  staging/builder.py hardlinks packs
+# out of the mirror, and utils/fs.py silently falls back to a full copy on
+# EXDEV — mounting mirror and staging separately makes the container see two
+# devices and copy every volume in full.  Keep both under one root.
+
+set -euo pipefail
+
+IMAGE="${LCSAS_IMAGE:-lcsas:host-a}"
+ROOT="${LCSAS_ROOT:-/srv/lcsas}"
+
+if [ "$#" -eq 0 ]; then
+    sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'
+    exit 2
+fi
+
+command -v docker >/dev/null 2>&1 || {
+    echo "rustic-c: docker not found on PATH" >&2
+    exit 127
+}
+
+docker image inspect "$IMAGE" >/dev/null 2>&1 || {
+    echo "rustic-c: image '$IMAGE' not found." >&2
+    echo "  build it:  docker build -t $IMAGE -f docker/Dockerfile.host-a ." >&2
+    exit 1
+}
+
+[ -d "$ROOT" ] || {
+    echo "rustic-c: LCSAS_ROOT '$ROOT' does not exist or is not a directory" >&2
+    exit 1
+}
+
+args=( --rm -i )
+
+# Only allocate a TTY when there actually is one; -t breaks under cron,
+# pipes, and CI.  rustic still needs -i for password input.
+if [ -t 0 ] && [ -t 1 ]; then
+    args+=( -t )
+fi
+
+# Run as the invoking user so mirror files are not left root-owned.
+# -w pins the container cwd to $ROOT.  Four commands (repo add/list/remove,
+# status) resolve the catalog with _resolve_db_path(args) and never consult
+# the config, falling back to a RELATIVE "archive.db".  Anchoring cwd to
+# $ROOT makes that fallback land on $ROOT/archive.db, so it coincides with
+# a config whose [paths].database is $ROOT/archive.db instead of silently
+# creating a second, empty catalog wherever you happened to be standing.
+args+=( -u "$(id -u):$(id -g)" -v "$ROOT:$ROOT" -w "$ROOT" )
+
+read -r -a src_paths <<< "${LCSAS_SRC:-/srv/data}"
+for path in "${src_paths[@]}"; do
+    [ -n "$path" ] || continue
+    [ -d "$path" ] || {
+        echo "rustic-c: source path '$path' not found (set LCSAS_SRC)" >&2
+        exit 1
+    }
+    # Read-only: this wrapper backs data up, it never writes to a source.
+    args+=( -v "$path:$path:ro" )
+done
+
+exec docker run "${args[@]}" --entrypoint rustic "$IMAGE" "$@"
