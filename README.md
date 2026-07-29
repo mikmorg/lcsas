@@ -791,13 +791,41 @@ drive via `lcsas burn-iso`, which requires no catalog and no mirror. See
 
 ```bash
 docker build -t lcsas:host-a -f docker/Dockerfile.host-a .
-
-# Keep mirror/ and staging/ under ONE bind mount: staging hardlinks packs
-# from the mirror, and falls back to a full copy on EXDEV. Two separate
-# mounts read as two devices and silently copy every volume in full.
-docker run --rm -u "$(id -u):$(id -g)" -v /srv/lcsas:/srv/lcsas lcsas:host-a scan
-docker run --rm -u "$(id -u):$(id -g)" -v /srv/lcsas:/srv/lcsas lcsas:host-a stage --media BD50
 ```
+
+Two wrappers ship alongside it — symlink them onto `PATH`:
+
+| Script | Runs |
+|---|---|
+| `docker/lcsas` | LCSAS itself; auto-injects `--config` (the CLI has no default) |
+| `docker/rustic-c` | the image's pinned rustic, so the mirror is written by the same build the recovery cascade reads |
+
+```bash
+ln -s "$PWD/docker/lcsas"    ~/bin/lcsas
+ln -s "$PWD/docker/rustic-c" ~/bin/rustic-c
+
+lcsas scan
+lcsas stage --media CD700
+rustic-c -r /srv/lcsas/mirror/personal \
+    --password-file /srv/lcsas/keys/personal.key backup /srv/data/personal
+```
+
+Both mount `LCSAS_ROOT` (default `/srv/lcsas`) as a **single** bind mount, because
+staging hardlinks packs out of the mirror and falls back to a full copy on
+`EXDEV` — two separate mounts read as two devices and silently copy every
+volume in full. They also run as the invoking user, so nothing is left
+root-owned, and pin the container cwd to `LCSAS_ROOT` (see
+`[paths].database` guidance below). Override with `LCSAS_IMAGE`,
+`LCSAS_ROOT`, `LCSAS_CONFIG`, `LCSAS_SRC` (rustic-c source mounts, read-only)
+and `LCSAS_EXTRA` (lcsas restore targets).
+
+Set `[paths].database` to `<LCSAS_ROOT>/archive.db`. `repo add`, `repo list`,
+`repo remove` and `status` resolve the catalog without consulting the config
+and fall back to a *relative* `archive.db`; with cwd pinned to `LCSAS_ROOT`
+that fallback lands on the same file, instead of creating a second, empty
+catalog.
+
+The image bakes in `src/`, so rebuild it after changing LCSAS source.
 
 On a pre-bullseye Docker host, bookworm's glibc can trip an old `libseccomp2`
 under Docker's default seccomp profile; install `libseccomp2` ≥ 2.4.4 from

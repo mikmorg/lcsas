@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+#
+# lcsas — run LCSAS from the host-A container image.
+#
+# For hosts that cannot run LCSAS natively (it needs Python >= 3.11; Debian 10
+# ships 3.7).  Handles the assembly half of the portable burn workflow: scan,
+# bin-pack, stage, master ISOs, apply ECC.  Burning happens on the host with
+# the optical drive via `lcsas burn-iso`, which needs no catalog and no mirror.
+#
+# Paths are mounted at identical locations inside the container, so every path
+# you type means the same thing in and out.
+#
+#   lcsas scan
+#   lcsas stage --media CD700
+#
+# Environment overrides:
+#   LCSAS_IMAGE   container image                      (default: lcsas:host-a)
+#   LCSAS_ROOT    read-write mount; mirror + staging   (default: /srv/lcsas)
+#   LCSAS_CONFIG  TOML config                          (default: $LCSAS_ROOT/lcsas.toml)
+#   LCSAS_EXTRA   space-separated extra read-write mounts, e.g. a restore target
+#
+# --config is injected automatically when LCSAS_CONFIG exists and you have not
+# passed your own.  It has no default in the CLI (`--config is required for
+# scan`), so nearly every invocation would otherwise need it spelled out.
+#
+# LCSAS_ROOT is a single mount on purpose.  staging/builder.py hardlinks packs
+# out of the mirror, and utils/fs.py silently falls back to a full copy on
+# EXDEV — mounting mirror and staging separately makes the container see two
+# devices and copy every volume in full.  Keep both under one root.
+#
+# Deliberately self-contained (it duplicates a little of docker/rustic-c)
+# so it stays correct when symlinked onto PATH.
+
+set -euo pipefail
+
+IMAGE="${LCSAS_IMAGE:-lcsas:host-a}"
+ROOT="${LCSAS_ROOT:-/srv/lcsas}"
+CONFIG="${LCSAS_CONFIG:-$ROOT/lcsas.toml}"
+
+if [ "$#" -eq 0 ]; then
+    sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'
+    exit 2
+fi
+
+command -v docker >/dev/null 2>&1 || {
+    echo "lcsas: docker not found on PATH" >&2
+    exit 127
+}
+
+docker image inspect "$IMAGE" >/dev/null 2>&1 || {
+    echo "lcsas: image '$IMAGE' not found." >&2
+    echo "  build it:  docker build -t $IMAGE -f docker/Dockerfile.host-a ." >&2
+    exit 1
+}
+
+[ -d "$ROOT" ] || {
+    echo "lcsas: LCSAS_ROOT '$ROOT' does not exist or is not a directory" >&2
+    exit 1
+}
+
+args=( --rm -i )
+
+# Only allocate a TTY when there actually is one; -t breaks under cron, pipes
+# and CI.  -i stays on regardless: restore and multi-tenant paths prompt.
+if [ -t 0 ] && [ -t 1 ]; then
+    args+=( -t )
+fi
+
+# Run as the invoking user so staged trees and the catalog are not root-owned.
+# -w pins the container cwd to $ROOT.  Four commands (repo add/list/remove,
+# status) resolve the catalog with _resolve_db_path(args) and never consult
+# the config, falling back to a RELATIVE "archive.db".  Anchoring cwd to
+# $ROOT makes that fallback land on $ROOT/archive.db, so it coincides with
+# a config whose [paths].database is $ROOT/archive.db instead of silently
+# creating a second, empty catalog wherever you happened to be standing.
+args+=( -u "$(id -u):$(id -g)" -v "$ROOT:$ROOT" -w "$ROOT" )
+
+for path in ${LCSAS_EXTRA:-}; do
+    [ -d "$path" ] || {
+        echo "lcsas: LCSAS_EXTRA path '$path' not found" >&2
+        exit 1
+    }
+    args+=( -v "$path:$path" )
+done
+
+# Inject --config unless the caller supplied one.  It is a global option, so
+# it must precede the subcommand.
+inject_config=1
+for arg in "$@"; do
+    case "$arg" in
+        --config|--config=*) inject_config=0; break ;;
+    esac
+done
+
+if [ "$inject_config" -eq 1 ] && [ -f "$CONFIG" ]; then
+    exec docker run "${args[@]}" "$IMAGE" --config "$CONFIG" "$@"
+fi
+
+exec docker run "${args[@]}" "$IMAGE" "$@"
