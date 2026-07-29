@@ -67,12 +67,9 @@ if [ -t 0 ] && [ -t 1 ]; then
 fi
 
 # Run as the invoking user so staged trees and the catalog are not root-owned.
-# -w pins the container cwd to $ROOT.  Four commands (repo add/list/remove,
-# status) resolve the catalog with _resolve_db_path(args) and never consult
-# the config, falling back to a RELATIVE "archive.db".  Anchoring cwd to
-# $ROOT makes that fallback land on $ROOT/archive.db, so it coincides with
-# a config whose [paths].database is $ROOT/archive.db instead of silently
-# creating a second, empty catalog wherever you happened to be standing.
+# -w pins the container cwd to $ROOT so relative paths resolve somewhere
+# predictable — including the last-resort "./archive.db" that _resolve_db_path
+# falls back to when neither --db nor --config names a catalog.
 args+=( -u "$(id -u):$(id -g)" -v "$ROOT:$ROOT" -w "$ROOT" )
 
 for path in ${LCSAS_EXTRA:-}; do

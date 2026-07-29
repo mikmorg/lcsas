@@ -59,12 +59,8 @@ if [ -t 0 ] && [ -t 1 ]; then
 fi
 
 # Run as the invoking user so mirror files are not left root-owned.
-# -w pins the container cwd to $ROOT.  Four commands (repo add/list/remove,
-# status) resolve the catalog with _resolve_db_path(args) and never consult
-# the config, falling back to a RELATIVE "archive.db".  Anchoring cwd to
-# $ROOT makes that fallback land on $ROOT/archive.db, so it coincides with
-# a config whose [paths].database is $ROOT/archive.db instead of silently
-# creating a second, empty catalog wherever you happened to be standing.
+# -w pins the container cwd to $ROOT so relative paths resolve somewhere
+# predictable rather than against the container's default working directory.
 args+=( -u "$(id -u):$(id -g)" -v "$ROOT:$ROOT" -w "$ROOT" )
 
 read -r -a src_paths <<< "${LCSAS_SRC:-/srv/data}"

@@ -814,16 +814,13 @@ Both mount `LCSAS_ROOT` (default `/srv/lcsas`) as a **single** bind mount, becau
 staging hardlinks packs out of the mirror and falls back to a full copy on
 `EXDEV` — two separate mounts read as two devices and silently copy every
 volume in full. They also run as the invoking user, so nothing is left
-root-owned, and pin the container cwd to `LCSAS_ROOT` (see
-`[paths].database` guidance below). Override with `LCSAS_IMAGE`,
-`LCSAS_ROOT`, `LCSAS_CONFIG`, `LCSAS_SRC` (rustic-c source mounts, read-only)
-and `LCSAS_EXTRA` (lcsas restore targets).
+root-owned, and pin the container cwd to `LCSAS_ROOT` so relative paths
+resolve somewhere predictable. Override with `LCSAS_IMAGE`, `LCSAS_ROOT`,
+`LCSAS_CONFIG`, `LCSAS_SRC` (rustic-c source mounts, read-only) and
+`LCSAS_EXTRA` (lcsas restore targets).
 
-Set `[paths].database` to `<LCSAS_ROOT>/archive.db`. `repo add`, `repo list`,
-`repo remove` and `status` resolve the catalog without consulting the config
-and fall back to a *relative* `archive.db`; with cwd pinned to `LCSAS_ROOT`
-that fallback lands on the same file, instead of creating a second, empty
-catalog.
+`[paths].database` may point anywhere under `LCSAS_ROOT`; every command
+honours it, and `LCSAS_CONFIG` is injected automatically.
 
 The image bakes in `src/`, so rebuild it after changing LCSAS source.
 
