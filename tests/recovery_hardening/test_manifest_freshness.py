@@ -18,26 +18,41 @@ WHAT THIS GATE ASSERTS
     recovery/ -- no orphaned rows pointing at deleted/renamed files.
   * The recomputed SHA-256 of each listed file equals the committed digest --
     the core freshness/tamper gate.  Every drifted/missing row is reported.
+  * COMPLETENESS: every authored file under recovery/ HAS a row, and the
+    manifest lists nothing that is not an authored file.
 
-SCOPE / WHY NO "COMPLETENESS" HALF
-----------------------------------
-This gate deliberately checks only the FORWARD direction (every listed row
-still matches its file).  It does NOT assert the reverse -- that every
-authored file has a row -- and here is why:
-
+SCOPE -- WHAT COUNTS AS "AUTHORED" (issue #425)
+------------------------------------------------
 recovery/MANIFEST.sha256 is a CURATED "files-we-author" manifest, not a blind
-full-tree sweep.  At time of writing it holds ~206 rows against 391 git-tracked
-files under recovery/: it intentionally omits 149 of the 214 tracked fuzz
-seeds, the built ``bin/`` artifacts, ``TOOLCHAIN``, ``BIN_PARITY_EXEMPT``, and
-others.  The manifest carries no machine-readable header declaring that
-inclusion rule, and the ``manifest`` Make target regenerates it with a blind
-``find ... | sha256sum`` that sweeps in UNTRACKED fuzzer corpus + build
-artifacts (a known prior corruption).  So there is no deterministic, committed
-scope we could mirror to compute "the set of files that SHOULD have a row"
-without either reintroducing the untracked-corpus problem or hard-coding a
-brittle allow/deny list that would itself drift.  A flaky or guess-based
-completeness assertion is worse than none; the hash-match half is the
-high-value tamper/freshness gate and stands on its own.
+full-tree sweep, and the curation rule is:
+
+    every git-tracked file under recovery/, minus bin/ (built artifacts,
+    covered by bin-parity and regenerated per-target at burn time by
+    meta/builder.py _regenerate_recovery_manifest), minus the two
+    MANIFEST.sha256 files themselves.
+
+git is the oracle on purpose.  fuzz/corpus/ is a MIXED directory -- curated
+seed_* inputs are committed, fuzzer-generated hex-named entries are gitignored
+(fuzz/.gitignore: "Only the curated seed_* files are committed") -- so no
+``find`` predicate can separate the two populations.  That is exactly why the
+old find-based ``manifest`` target grew this file from 208 to 8,710 rows.
+
+This section previously argued that no completeness half was possible because
+there was "no deterministic, committed scope we could mirror".  There is one:
+git's index.  The ``manifest`` Make target now generates from
+``git ls-files``, and this gate mirrors that same scope, so the two cannot
+disagree.
+
+The forward-only gap this closes was real and had already been recorded in
+docs/PROJECT_REVIEW_2026-07.md:289 ("new authored file with no row is
+invisible"): when the completeness half was missing, the manifest had silently
+gone stale by 161 files, including the ENTIRE src/lcsas-ecc/ C source and the
+slip39/, rs03/ and tree/ fuzz corpora.
+
+The completeness check uses ``--cached --others --exclude-standard`` rather
+than the generator's ``--cached``, deliberately: an authored file that was
+created but never ``git add``ed then fails this gate LOUDLY instead of quietly
+being absent from both the index and the tamper record.
 
 DOCS MANIFEST (recovery/docs/MANIFEST.sha256)
 ---------------------------------------------
@@ -50,7 +65,9 @@ every doc in the directory must have a row.  (Before this gate existed the
 docs manifest drifted silently: three rows went stale across the #384 doc
 edits and RESTORE_STANDARD_TOOLS.txt was never added at all.)
 
-Pure pathlib + hashlib -- no subprocess, no optical hardware, fast.  Modelled
+Mostly pure pathlib + hashlib; the completeness half shells to ``git
+ls-files`` (as test_meta_bundling_completeness.py already does) and skips when
+recovery/ is not inside a git work tree.  No optical hardware, fast.  Modelled
 on the doc-contract tests in this directory (test_tiers_contract.py,
 test_env_var_docs.py).
 """
@@ -58,6 +75,8 @@ test_env_var_docs.py).
 from __future__ import annotations
 
 import hashlib
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -181,6 +200,95 @@ def test_every_listed_file_exists_and_matches_digest() -> None:
         "recovery/MANIFEST.sha256 has drifted from the real tree; an heir "
         "verifying a GOOD disc against it would get a spurious mismatch.\n\n"
         + "\n\n".join(problems)
+    )
+
+
+# Paths the manifest deliberately does NOT cover.  Keep in lockstep with the
+# `manifest` target's pathspec in recovery/Makefile -- see the SCOPE section
+# above for why each one is excluded.
+_EXCLUDED_PREFIXES = ("./bin/",)
+_EXCLUDED_PATHS = frozenset({"./MANIFEST.sha256", "./docs/MANIFEST.sha256"})
+
+
+def _is_authored(relpath: str) -> bool:
+    """True when `relpath` (a "./"-prefixed path) belongs in the manifest."""
+    if relpath in _EXCLUDED_PATHS:
+        return False
+    return not relpath.startswith(_EXCLUDED_PREFIXES)
+
+
+def _git_authored_files() -> set[str]:
+    """The set of authored files under recovery/, per git.
+
+    Uses ``--cached --others --exclude-standard`` so a NEW authored file that
+    was never ``git add``ed still counts -- it must fail the completeness gate
+    loudly rather than slip past both the index and the tamper record.
+    ``--exclude-standard`` honours .gitignore, which is what keeps the
+    fuzzer-generated corpus and build artifacts out.
+    """
+    if shutil.which("git") is None or not (REPO_ROOT / ".git").exists():
+        pytest.skip("not a git work tree -- cannot determine the authored file set")
+    proc = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            ".",
+        ],
+        cwd=RECOVERY_DIR,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return {
+        f"./{line}"
+        for line in proc.stdout.splitlines()
+        if line and _is_authored(f"./{line}")
+    }
+
+
+def test_manifest_is_complete_over_authored_files() -> None:
+    """Reverse gate: every authored file has a row, and no row covers a
+    non-authored file.
+
+    Without this half the manifest is forward-only -- a newly added authored
+    file is simply invisible to the tamper record, and an heir who verifies a
+    disc gets a clean bill of health for a file nobody ever pinned.  That is
+    how src/lcsas-ecc/ and three whole fuzz corpora went unpinned (#425).
+    """
+    listed = {relpath for _line_no, _digest, relpath in _parse_rows()}
+    authored = _git_authored_files()
+
+    unpinned = sorted(authored - listed)
+    stray = sorted(listed - authored)
+
+    problems: list[str] = []
+    if unpinned:
+        problems.append(
+            f"{len(unpinned)} file(s) under recovery/ have NO manifest row, so "
+            f"they are absent from the tamper-evidence record.\n"
+            f"    If the file IS authored content: `git add` it, then run "
+            f"`make -C recovery manifest` and commit the result.  (The "
+            f"generator reads the git index, so regenerating BEFORE adding the "
+            f"file will not pick it up.)\n"
+            f"    If it is NOT authored content: delete it, or add it to a "
+            f".gitignore so it stops counting as authored.\n  "
+            + "\n  ".join(unpinned)
+        )
+    if stray:
+        problems.append(
+            f"{len(stray)} manifest row(s) cover files that are not authored "
+            f"content (generated output, build artifacts, or files under "
+            f"bin/).  This is the blind-sweep corruption from #425 -- "
+            f"regenerate with `make -C recovery manifest`:\n  "
+            + "\n  ".join(stray)
+        )
+    assert not problems, (
+        "recovery/MANIFEST.sha256 does not match the authored file set it "
+        "claims to pin.\n\n" + "\n\n".join(problems)
     )
 
 
