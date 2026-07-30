@@ -187,8 +187,21 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
     defaults = raw.get("defaults", {})
 
     def resolve(p: str) -> Path:
+        """Make *p* absolute **without touching the filesystem**.
+
+        Relative paths are joined to the config file's directory and
+        normalised lexically rather than with ``Path.resolve()``:
+        ``resolve()`` lstats every component, which on a stale NFS/CIFS
+        mount blocks for the mount's timeout instead of returning.  Since
+        every command now reads the config to find its catalog, that would
+        hang commands that never touch the mirror at all (#427).  Absolute
+        paths were already returned untouched, so this only makes the two
+        branches consistent.
+        """
         path = Path(p)
-        return path if path.is_absolute() else (base_dir / path).resolve()
+        if path.is_absolute():
+            return path
+        return Path(os.path.normpath(base_dir / path))
 
     repos: dict[str, RepositoryConfig] = {}
     for repo_name, repo_cfg in raw.get("repos", {}).items():
@@ -200,28 +213,13 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
             encryption_key_id=repo_cfg.get("encryption_key_id", ""),
         )
 
-    # Warn early about missing mirror paths; scan/burn will silently produce
-    # no work if the mirror is absent, which is very hard to diagnose later.
-    for repo_name, repo_cfg in repos.items():
-        try:
-            mirror_exists = repo_cfg.mirror_path.exists()
-        except OSError:
-            mirror_exists = True  # Can't check — don't warn about access errors
-        if not mirror_exists:
-            _logger.warning(
-                "Config: repo '%s' mirror_path does not exist: %s",
-                repo_name, repo_cfg.mirror_path,
-            )
-        if repo_cfg.password_file is not None:
-            try:
-                pw_exists = repo_cfg.password_file.exists()
-            except OSError:
-                pw_exists = True  # Can't check — don't warn
-            if not pw_exists:
-                _logger.warning(
-                    "Config: repo '%s' password_file does not exist: %s",
-                    repo_name, repo_cfg.password_file,
-                )
+    # NB: loading a config deliberately performs no I/O on the repo paths.
+    # A missing mirror_path / password_file is reported by validate_config()
+    # as a hard error, and every command that actually reads a mirror (scan,
+    # stage, burn, restore plan/exec) gates on it via _validate_config_or_exit
+    # — so probing here was pure duplication.  It was also a liability: after
+    # bdcbd31 every command resolves its catalog through load_config, so a
+    # stale mount turned `repo list` and `status` into a hang (#427).
 
     media_str = defaults.get("media_type", "BD25")
     try:
