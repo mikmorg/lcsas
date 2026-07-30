@@ -10,10 +10,13 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lcsas import __version__
 from lcsas.log import get_logger, setup_logging
+
+if TYPE_CHECKING:
+    from lcsas.config.settings import LCSASConfig
 
 logger = get_logger()
 
@@ -216,8 +219,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     burniso_p.add_argument("iso_path", type=Path, help="Path to .iso file.")
-    burniso_p.add_argument("--device", type=str, default="/dev/sr0",
-                           help="Optical device path.")
+    burniso_p.add_argument("--device", type=str, default=None,
+                           help="Optical device path (overrides config; "
+                                "default /dev/sr0 when neither is set).")
     burniso_p.add_argument("--verify", action=argparse.BooleanOptionalAction, default=True,
                            help="Verify after burning (use --no-verify to skip).")
     burniso_p.add_argument("--emit-receipt", type=Path, default=None,
@@ -483,8 +487,9 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Path to the ISO file (auto-detected from session if omitted).")
     verify_p.add_argument("--disc", action="store_true", default=False,
                           help="Verify a burned disc instead of an ISO file.")
-    verify_p.add_argument("--device", default="/dev/sr0",
-                          help="Optical drive device (default: /dev/sr0).")
+    verify_p.add_argument("--device", default=None,
+                          help="Optical drive device (overrides config; "
+                               "default /dev/sr0 when neither is set).")
     verify_p.add_argument("--mark-verified", action="store_true", default=False,
                           help="Manually mark the volume as verified (remote workflow).")
     verify_p.add_argument("--mark-failed", action="store_true", default=False,
@@ -786,8 +791,47 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # ---------------------------------------------------------------------------
-# Helper — DB path resolution
+# Helpers — resolving the context a command runs in (config, catalog, device)
+#
+# Every command resolves these through the helpers below rather than reaching
+# into args or the config directly, so a handler cannot end up addressing a
+# different catalog or drive than the rest of the CLI.
 # ---------------------------------------------------------------------------
+
+def _load_config_opt(args: argparse.Namespace) -> LCSASConfig | None:
+    """Load ``--config`` when given, else ``None``.
+
+    Every handler that accepts an optional config funnels through here so
+    the two failure modes — a path that is not there, and a file that will
+    not parse — surface as an actionable ConfigError instead of a bare
+    traceback or a silent fallback to a different catalog.
+    """
+    cfg = getattr(args, "config", None)
+    if not cfg:
+        return None
+
+    import tomllib
+
+    from lcsas.config.settings import load_config
+    from lcsas.exceptions import ConfigError
+
+    cfg_path = Path(cfg)
+    # Let load_config do the opening — a stat() first would only add a
+    # TOCTOU gap for the same answer.
+    try:
+        return load_config(cfg_path)
+    except FileNotFoundError as e:
+        raise ConfigError(
+            f"--config path does not exist: {cfg_path}",
+            recovery_hint=(
+                "Check the path, or omit --config to use ./archive.db."
+            ),
+        ) from e
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigError(f"Malformed TOML in {cfg_path}: {e}") from e
+    except OSError as e:
+        raise ConfigError(f"Cannot read config {cfg_path}: {e}") from e
+
 
 def _resolve_db_path(
     args: argparse.Namespace,
@@ -795,13 +839,47 @@ def _resolve_db_path(
 ) -> Path:
     """Resolve the database path from CLI args, config, or default.
 
-    Priority: ``--db`` flag > config.db_path > ``archive.db`` (cwd).
+    Priority: ``--db`` flag > config ``[paths].database`` > ``archive.db``
+    relative to the current working directory.
+
+    *config* is an optimisation, not a switch: handlers that already
+    loaded it pass it in to avoid a second parse.  When it is omitted this
+    still honours ``--config``, because a handler that forgets to load one
+    must not end up addressing a *different* catalog than the rest of the
+    CLI — that silently creates an empty ``archive.db`` in whatever
+    directory the operator happened to be standing in, while ``scan`` and
+    ``stage`` keep using the configured path.
     """
     if getattr(args, "db", None):
         return Path(args.db)
+    if config is None:
+        config = _load_config_opt(args)
     if config is not None and hasattr(config, "db_path"):
         return Path(config.db_path)
     return Path("archive.db")
+
+
+def _resolve_device(
+    args: argparse.Namespace,
+    config: object | None = None,
+) -> str:
+    """Resolve the optical device from CLI args, config, or default.
+
+    Priority: ``--device`` flag > config ``optical_device`` > ``/dev/sr0``.
+
+    Commands that resolve a device must leave ``--device`` defaulting to
+    ``None`` in the parser; a hard-coded parser default is indistinguishable
+    from an operator choice here and would shadow the configured drive.
+    """
+    device = getattr(args, "device", None)
+    if device:
+        return str(device)
+    if config is None:
+        config = _load_config_opt(args)
+    configured = getattr(config, "optical_device", None)
+    if configured:
+        return str(configured)
+    return "/dev/sr0"
 
 
 def _resolve_lock_timeout(args: argparse.Namespace) -> float | None:
@@ -906,19 +984,11 @@ def cmd_init(args: argparse.Namespace) -> int:
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
 
+    # --db-path is init-only and outranks everything; the rest of the
+    # ladder is the same one every other command walks.
     db_path: Path | None = getattr(args, "db_path", None)
-    if db_path is None and getattr(args, "db", None):
-        db_path = Path(args.db)
-    if db_path is None and getattr(args, "config", None):
-        from lcsas.config.settings import load_config
-        cfg_path = Path(args.config)
-        if not cfg_path.exists():
-            logger.error(f"--config path does not exist: {cfg_path}")
-            return 1
-        config = load_config(cfg_path)
-        db_path = Path(config.db_path)
     if db_path is None:
-        db_path = Path("archive.db")
+        db_path = _resolve_db_path(args)
 
     # Ensure parent directory exists (XDG paths may not exist yet)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1078,7 +1148,6 @@ def cmd_scan(args: argparse.Namespace) -> int:
     """Scan mirrors for new packs and register them in the catalog."""
     import json as _json
 
-    from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
     from lcsas.db.queries import get_archive_status_summary
     from lcsas.db.repos import list_repos
@@ -1086,14 +1155,14 @@ def cmd_scan(args: argparse.Namespace) -> int:
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
 
-    if args.config is None:
+    config = _load_config_opt(args)
+    if config is None:
         logger.error("--config is required for scan.")
         return 1
-    config = load_config(args.config)
     if not _validate_config_or_exit(config, skip_staging=True):
         return 1
     with locked_connection(
-        config.db_path if args.db is None else args.db,
+        _resolve_db_path(args, config),
         timeout=_resolve_lock_timeout(args),
     ) as conn:
         ensure_schema(conn)
@@ -1252,12 +1321,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
 def cmd_pack_unprune(args: argparse.Namespace) -> int:
     """Restore a wrongly-pruned pack to the active pool (BURN-09)."""
-    from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
     from lcsas.db.packs import unmark_pruned
     from lcsas.db.schema import ensure_schema
 
-    config = load_config(args.config) if args.config else None
+    config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
 
     prefix = args.sha256.strip().lower()
@@ -1483,13 +1551,12 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_config_check(args: argparse.Namespace) -> int:
     """Validate a TOML configuration file."""
-    from lcsas.config.settings import load_config, validate_config
+    from lcsas.config.settings import validate_config
 
-    if args.config is None:
+    config = _load_config_opt(args)
+    if config is None:
         logger.error("--config is required for config check.")
         return 1
-
-    config = load_config(args.config)
     errors = validate_config(config)
 
     if not errors:
@@ -1503,22 +1570,20 @@ def cmd_config_check(args: argparse.Namespace) -> int:
 
 def cmd_staging_clean(args: argparse.Namespace) -> int:
     """Detect and remove orphaned staging directories."""
-    from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
     from lcsas.staging.cleanup import clean_orphaned_staging, detect_orphaned_staging
 
-    if args.config is None:
+    config = _load_config_opt(args)
+    if config is None:
         logger.error("--config is required for staging clean.")
         return 1
-
-    config = load_config(args.config)
     # Hold the catalog lock across detection AND the confirm prompt so a
     # concurrent `lcsas stage` cannot commit a new in-flight session whose
     # directory we already flagged.  Blocking the stage here is the point;
     # with the loud-wait mitigation it now sees a "waiting for lock" message.
     with locked_connection(
-        config.db_path if args.db is None else args.db,
+        _resolve_db_path(args, config),
         timeout=_resolve_lock_timeout(args),
     ) as conn:
         ensure_schema(conn)
@@ -1553,14 +1618,13 @@ def cmd_stage(args: argparse.Namespace) -> int:
     """Stage ISOs for deferred burning."""
     from lcsas.burn.orchestrator import BurnOrchestrator
     from lcsas.config.media import MediaType
-    from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
     from lcsas.utils.shutdown import ShutdownManager
 
-    config = load_config(args.config) if args.config else None
+    config = _load_config_opt(args)
     if config is None:
         logger.error("--config is required for stage.")
         return 1
@@ -1572,8 +1636,9 @@ def cmd_stage(args: argparse.Namespace) -> int:
 
     try:
         with locked_connection(
-        args.db or config.db_path, timeout=_resolve_lock_timeout(args)
-    ) as conn:
+            _resolve_db_path(args, config),
+            timeout=_resolve_lock_timeout(args),
+        ) as conn:
             ensure_schema(conn)
 
             orch = BurnOrchestrator(
@@ -1645,13 +1710,12 @@ def cmd_stage(args: argparse.Namespace) -> int:
 def cmd_burn_session(args: argparse.Namespace) -> int:
     """Burn a staged session to disc."""
     from lcsas.burn.orchestrator import BurnOrchestrator
-    from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
-    config = load_config(args.config) if args.config else None
+    config = _load_config_opt(args)
     if config is None:
         logger.error("--config is required for burn.")
         return 1
@@ -1659,7 +1723,7 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
         return 1
 
     with locked_connection(
-        args.db or config.db_path, timeout=_resolve_lock_timeout(args)
+        _resolve_db_path(args, config), timeout=_resolve_lock_timeout(args)
     ) as conn:
         ensure_schema(conn)
 
@@ -1694,7 +1758,7 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
                 logger.info(f"  {vol.label}  status={vol.status}")
             return 0
 
-        device = args.device or config.optical_device
+        device = _resolve_device(args, config)
         if not getattr(args, "skip_burn", False):
             import os
             if not os.path.exists(device):
@@ -1759,7 +1823,10 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
         return 1
 
     runner = SubprocessXorrisoRunner()
-    device = args.device
+    # burn-iso is the portable half of the split workflow and needs no
+    # catalog, so it loads no config of its own — but honour optical_device
+    # when the operator did point it at one.
+    device = _resolve_device(args)
 
     # Hash before burn — cheap insurance against the file changing under us.
     iso_sha256 = ""
@@ -1841,18 +1908,17 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
 
 def cmd_location(args: argparse.Namespace) -> int:
     """Handle location subcommands."""
-    from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
     from lcsas.utils.labels import sanitize_name
 
-    config = load_config(args.config) if args.config else None
+    config = _load_config_opt(args)
     if config is None:
         logger.error("--config is required for location.")
         return 1
 
     with locked_connection(
-        args.db or config.db_path, timeout=_resolve_lock_timeout(args)
+        _resolve_db_path(args, config), timeout=_resolve_lock_timeout(args)
     ) as conn:
         ensure_schema(conn)
 
@@ -1929,13 +1995,12 @@ def cmd_copy(args: argparse.Namespace) -> int:
     DEPRECATED, so the redundancy report and the deprecation guard stop
     counting it as a replica.
     """
-    from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
     from lcsas.db.volume_copies import deprecate_copy, destroy_copy
     from lcsas.db.volumes import get_volume_by_label
 
-    config = load_config(args.config) if args.config else None
+    config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
 
     with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
@@ -2068,7 +2133,6 @@ def cmd_volume_impact(args: argparse.Namespace) -> int:
     """
     from datetime import UTC, datetime
 
-    from lcsas.config.settings import load_config
     from lcsas.db.connection import get_connection
     from lcsas.db.models import Pack
     from lcsas.db.queries import get_at_risk_packs_for_volume
@@ -2077,7 +2141,7 @@ def cmd_volume_impact(args: argparse.Namespace) -> int:
     from lcsas.db.volume_copies import get_copies_for_volume
     from lcsas.db.volumes import get_volume_by_label
 
-    config = load_config(args.config) if args.config else None
+    config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
     conn = get_connection(db_path)
     try:
@@ -2151,7 +2215,6 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
       - verify_passed=false → STAGING → BURNING → BURNED
     Already-VERIFIED volumes (re-burn to a new location) just get a copy added.
     """
-    from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
     from lcsas.db.locations import ensure_location
     from lcsas.db.schema import ensure_schema
@@ -2159,14 +2222,14 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     from lcsas.db.volume_events import add_event, get_events_for_volume
     from lcsas.db.volumes import get_volume_by_label, mark_closed, update_status
 
-    config = load_config(args.config) if args.config else None
+    config = _load_config_opt(args)
     if config is None:
         logger.error("--config is required for catalog.")
         return 1
 
     rejected = 0
     with locked_connection(
-        args.db or config.db_path, timeout=_resolve_lock_timeout(args)
+        _resolve_db_path(args, config), timeout=_resolve_lock_timeout(args)
     ) as conn:
         ensure_schema(conn)
 
@@ -2374,10 +2437,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
     from lcsas.db.schema import ensure_schema
     from lcsas.db.volumes import delete_volume
 
-    config = None
-    if args.config is not None:
-        from lcsas.config.settings import load_config
-        config = load_config(args.config)
+    config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
 
     with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
@@ -2516,12 +2576,11 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
 def cmd_consolidate(args: argparse.Namespace) -> int:
     """Plan and optionally execute volume consolidation."""
     from lcsas.config.media import MediaType
-    from lcsas.config.settings import load_config
     from lcsas.consolidate.merger import VolumeMerger
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
 
-    config = load_config(args.config) if args.config else None
+    config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
     with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
@@ -2777,21 +2836,21 @@ def cmd_verify(args: argparse.Namespace) -> int:
     - Manual marking: --mark-verified / --mark-failed for remote workflows
     - Batch: --all to verify all BURNED/VERIFIED volumes
     """
-    from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
     from lcsas.db.volume_events import add_event
     from lcsas.db.volumes import get_volume_by_label, update_status
 
-    config = load_config(args.config) if args.config else None
+    config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
+    device = _resolve_device(args, config)
     with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
 
         # --- Batch mode: verify --all ---
         if args.verify_all:
             if args.disc:
-                return _verify_all_disc(conn, args)
+                return _verify_all_disc(conn, args, device)
             return _verify_all(conn, args, config)
 
         # --- Single volume mode ---
@@ -2875,13 +2934,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
                         f"verified."
                     )
                     return 1
-            logger.info(f"Verifying disc on {args.device} ...")
+            logger.info(f"Verifying disc on {device} ...")
             # FMA-03: identity gate first.  If the disc in the drive is
             # not this volume (or carries no readable Volume ID), record
             # NOTHING — a wrong disc is operator error, not evidence
             # about this volume's burned copy.
             outcome = _check_disc_for_volume(
-                conn, vol.volume_id, vol.label, args.device,
+                conn, vol.volume_id, vol.label, device,
             )
             if outcome == "WRONG_DISC":
                 return 1
@@ -3073,7 +3132,9 @@ def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any)
     return 0
 
 
-def _verify_all_disc(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
+def _verify_all_disc(
+    conn: sqlite3.Connection, args: argparse.Namespace, device: str,
+) -> int:
     """Batch re-verify physical discs copy-by-copy (FMA-05).
 
     Iterates ACTIVE copies of BURNED/VERIFIED volumes (optionally
@@ -3102,7 +3163,7 @@ def _verify_all_disc(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
         logger.info("No ACTIVE copies to verify.")
         return 0
 
-    logger.info(f"Re-verifying {len(rows)} physical cop(ies) on {args.device}")
+    logger.info(f"Re-verifying {len(rows)} physical cop(ies) on {device}")
     results: list[tuple[str, str, str]] = []
     quit_early = False
     for row in rows:
@@ -3124,7 +3185,7 @@ def _verify_all_disc(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
             results.append((label, location, "SKIPPED"))
             continue
         outcome = _check_disc_for_volume(
-            conn, row["volume_id"], label, args.device,
+            conn, row["volume_id"], label, device,
         )
         if outcome == "PASS":
             # Uncommitted stamp + event commit together (one transaction).
@@ -3223,14 +3284,14 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
     """Build a self-contained meta-volume with all restore tools."""
     from lcsas.meta.builder import MetaBuildError, MetaVolumeBuilder
 
-    # Load config for survivability fields (START_HERE.txt, KEY_INFO.txt)
+    # Load config for survivability fields (START_HERE.txt, KEY_INFO.txt).
+    # A broken config downgrades those fields; it must not block the build,
+    # so this is the one caller that swallows the error.
     config = None
-    if hasattr(args, "config") and args.config:
-        from lcsas.config.settings import load_config
-        try:
-            config = load_config(args.config)
-        except Exception as e:
-            logger.warning(f"Could not load config for START_HERE.txt: {e}")
+    try:
+        config = _load_config_opt(args)
+    except Exception as e:
+        logger.warning(f"Could not load config for START_HERE.txt: {e}")
 
     output = args.output.resolve()
     db_path: Path | None = None
@@ -3448,17 +3509,16 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
 
 def cmd_restore_plan(args: argparse.Namespace) -> int:
     """Generate a restore pick list for a snapshot."""
-    from lcsas.config.settings import load_config
     from lcsas.restore.planner import RestorePlanner
     from lcsas.rustic.wrapper import SubprocessRusticRunner
 
-    if args.config is None:
+    config = _load_config_opt(args)
+    if config is None:
         logger.error("--config is required for restore plan.")
         return 1
-    config = load_config(args.config)
     if not _validate_config_or_exit(config, skip_staging=True):
         return 1
-    conn = _open_existing_catalog(config.db_path if args.db is None else args.db)
+    conn = _open_existing_catalog(_resolve_db_path(args, config))
     try:
         # Resolve repo config
         repo_name = args.repo
@@ -3636,19 +3696,18 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
     """Execute a restore operation."""
     import tempfile
 
-    from lcsas.config.settings import load_config
     from lcsas.restore.executor import RestoreExecutor
     from lcsas.restore.planner import RestorePlanner
     from lcsas.rustic.wrapper import SubprocessRusticRunner
     from lcsas.utils.fs import ensure_dir
 
-    if args.config is None:
+    config = _load_config_opt(args)
+    if config is None:
         logger.error("--config is required for restore exec.")
         return 1
-    config = load_config(args.config)
     if not _validate_config_or_exit(config, skip_staging=True):
         return 1
-    conn = _open_existing_catalog(config.db_path if args.db is None else args.db)
+    conn = _open_existing_catalog(_resolve_db_path(args, config))
     try:
         repo_name = args.repo
         if repo_name not in config.repositories:
@@ -5016,12 +5075,11 @@ def cmd_key_card(args: argparse.Namespace) -> int:
     # ── Render mode ──────────────────────────────────────────────────────
     from datetime import date
 
-    from lcsas.config.settings import load_config
 
-    if args.config is None:
+    config = _load_config_opt(args)
+    if config is None:
         logger.error("--config is required to render a recovery card.")
         return 1
-    config = load_config(args.config)
 
     repo_name = args.repo
     if repo_name is None:
@@ -5179,12 +5237,11 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
     """
     from datetime import date
 
-    from lcsas.config.settings import load_config
 
-    if args.config is None:
+    config = _load_config_opt(args)
+    if config is None:
         logger.error("--config is required to generate an estate Recovery Card.")
         return 1
-    config = load_config(args.config)
 
     disc_count: int | None = None
     db_path = _resolve_db_path(args, config)
@@ -5370,7 +5427,6 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     """Split a repository password into K-of-N SLIP-0039 key shares."""
     from datetime import date
 
-    from lcsas.config.settings import load_config
     from lcsas.keyshare import (
         KeyShareError,
         encode_master_secret,
@@ -5384,9 +5440,7 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     shares = args.shares
     repo_pw_file: Path | None = args.password_file
 
-    config = None
-    if args.config is not None:
-        config = load_config(args.config)
+    config = _load_config_opt(args)
     if threshold is None:
         threshold = config.key_threshold if config is not None else 2
     if shares is None:
@@ -5530,7 +5584,8 @@ def cmd_key_split(args: argparse.Namespace) -> int:
 
         try:
             with locked_connection(
-                config.db_path, timeout=_resolve_lock_timeout(args)
+                _resolve_db_path(args, config),
+                timeout=_resolve_lock_timeout(args),
             ) as conn:
                 ensure_schema(conn)
                 record_split(conn, args.repo, threshold, shares, split_id)
@@ -5662,7 +5717,6 @@ def cmd_key_verify(args: argparse.Namespace) -> int:
     authenticate it against the repo's real ``keys/`` files.  Exit code is the
     contract — rc 0 only when the password actually unlocks the repo.
     """
-    from lcsas.config.settings import load_config
     from lcsas.keyshare import (
         KeyShareError,
         decode_master_secret,
@@ -5670,7 +5724,8 @@ def cmd_key_verify(args: argparse.Namespace) -> int:
         recover_secret,
     )
 
-    if args.config is None:
+    config = _load_config_opt(args)
+    if config is None:
         logger.error("--config is required for key verify.")
         return 1
     if bool(args.share_files) == bool(args.password_file):
@@ -5680,7 +5735,6 @@ def cmd_key_verify(args: argparse.Namespace) -> int:
         )
         return 1
 
-    config = load_config(args.config)
     repo_cfg = config.repositories.get(args.repo)
     if repo_cfg is None:
         logger.error(
@@ -5743,15 +5797,14 @@ def cmd_key_verify(args: argparse.Namespace) -> int:
 
 def cmd_session_list(args: argparse.Namespace) -> int:
     """List burn sessions stored in the catalog."""
-    from lcsas.config.settings import load_config
     from lcsas.db.connection import get_connection
     from lcsas.db.sessions import get_session_volumes, list_sessions
 
-    if args.config is None:
+    config = _load_config_opt(args)
+    if config is None:
         logger.error("--config is required for session list.")
         return 1
-    config = load_config(args.config)
-    conn = get_connection(config.db_path)
+    conn = get_connection(_resolve_db_path(args, config))
     try:
         sessions = list_sessions(conn, status_filter=args.status)
 
@@ -5782,19 +5835,18 @@ def cmd_session_list(args: argparse.Namespace) -> int:
 def cmd_session_abort(args: argparse.Namespace) -> int:
     """Abort a never-burned session (or one stranded volume), reclaiming packs."""
     from lcsas.burn.orchestrator import BurnOrchestrator
-    from lcsas.config.settings import load_config
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
     from lcsas.ecc.dvdisaster import SubprocessDVDisasterRunner
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
-    if args.config is None:
+    config = _load_config_opt(args)
+    if config is None:
         logger.error("--config is required for session abort.")
         return 1
-    config = load_config(args.config)
 
     with locked_connection(
-        args.db or config.db_path, timeout=_resolve_lock_timeout(args)
+        _resolve_db_path(args, config), timeout=_resolve_lock_timeout(args)
     ) as conn:
         ensure_schema(conn)
         orch = BurnOrchestrator(
