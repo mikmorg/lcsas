@@ -1493,6 +1493,45 @@ class TestCmdMetaBuildGate:
         assert "INCOMPLETE" in caplog.text
         assert "built successfully" in caplog.text
 
+    def test_reports_which_repos_got_their_keys(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """Issue #435: a repo whose mirror is unreachable is skipped — but
+        the operator must be able to tell from the command's output that
+        this disc carries no keys for it."""
+        import sqlite3
+
+        mirror = tmp_path / "mirror" / "family"
+        (mirror / "keys").mkdir(parents=True)
+        (mirror / "keys" / "k0").write_text("key-material\n")
+
+        db = tmp_path / "catalog.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE repositories (repo_id TEXT, mirror_path TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO repositories VALUES (?, ?)",
+            [("family", str(mirror)), ("gone", str(tmp_path / "unmounted"))],
+        )
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "empty-cache"))
+        out = tmp_path / "meta"
+        caplog.clear()
+
+        result = main([
+            "--db", str(db),
+            "meta", "build", "--output", str(out), "--allow-incomplete",
+            "--allow-no-dvdisaster-source",
+        ])
+        # Still exit 0: a stale catalog row must not block a rescue disc.
+        assert result == 0
+        assert "bundled for 1 of 2 catalogued repo(s): family" in caplog.text
+        assert "NO keys on this meta-volume: gone" in caplog.text
+        assert (out / "metadata" / "family" / "keys" / "k0").is_file()
+
 
 # ===================================================================
 # cmd_staging_clean

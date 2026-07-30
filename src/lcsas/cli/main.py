@@ -3379,6 +3379,28 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
             len(recommended_missing), ", ".join(recommended_missing),
         )
 
+    # Issue #435: state which repos' Rustic keys this disc carries.  An
+    # unreachable mirror is skipped by design (a stale catalog row must
+    # not block a rescue disc) — but shipping a meta-volume that cannot
+    # decrypt a repo has to be a decision the operator sees, not an
+    # accident discovered during a recovery.
+    results = builder.metadata_results
+    if results:
+        bundled = [r for r in results if r.bundled]
+        skipped = [r for r in results if not r.bundled]
+        logger.info(
+            "Rustic metadata bundled for %d of %d catalogued repo(s): %s",
+            len(bundled), len(results),
+            ", ".join(r.repo_id for r in bundled) or "(none)",
+        )
+        if skipped:
+            logger.warning(
+                "%d repo(s) have NO keys on this meta-volume: %s — their "
+                "packs cannot be decrypted from this disc alone. Mount the "
+                "mirror(s) and rebuild if that is not what you want.",
+                len(skipped), ", ".join(r.repo_id for r in skipped),
+            )
+
     logger.info(f"Meta-volume built successfully at {output}")
     logger.info("Contents:")
     logger.info("  tools/          Portable rustic, xorriso, python3 + libraries")

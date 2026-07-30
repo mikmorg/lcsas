@@ -14,11 +14,16 @@ archive discs, minus only the encryption key file:
 
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
 import os
 import re
 import shutil
+import signal
 import sys
+import time
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -28,6 +33,8 @@ from lcsas.meta.required_contents import (
     APPROVED_TARGETS,
     required_meta_paths,
 )
+
+_logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────
 
@@ -1655,6 +1662,117 @@ discs and feed in the key file.
 '''
 
 
+# ── Per-repo metadata bundling (#435) ────────────────────────────────
+
+# Wall-clock bound on the "is this mirror reachable?" probe.  A stat()
+# against a stale NFS/CIFS mount does not fail — it blocks for the
+# mount's timeout, which is unbounded from our side (#427 closed the
+# same hole in load_config).  Five seconds is far longer than any live
+# mount needs to answer and far shorter than a stale mount's timeout.
+_MIRROR_PROBE_TIMEOUT_S = 5.0
+
+
+def _is_dir_bounded(
+    path: Path, timeout: float = _MIRROR_PROBE_TIMEOUT_S
+) -> bool | None:
+    """``path.is_dir()`` with a wall-clock bound.
+
+    Returns ``True``/``False`` as ``is_dir()`` would, or ``None`` when
+    the probe did not answer within *timeout* — i.e. the path is on a
+    hung mount and the answer is unknowable without blocking.
+
+    The probe runs in a forked **child process**, not a thread.  That is
+    not a style preference: a blocking ``stat()`` cannot be interrupted,
+    so the probe must be *abandonable*, and an abandoned daemon thread
+    still stops CPython 3.12 from exiting — it never reaches a GIL
+    checkpoint where finalization could discard it, so the build hangs
+    at exit instead of in the middle.  Measured against a FUSE mount
+    whose ``getattr`` never returns: with a thread the process never
+    exits; with a child process it exits immediately.  A child that
+    ignores SIGKILL (a hard NFS mount's uninterruptible ``stat()``) is
+    simply left behind and reparented to init when we exit — which is
+    why the kill below is *not* followed by a blocking wait.
+
+    ``OSError`` is caught in the child: ``pathlib`` swallows
+    ENOENT/ENOTDIR/ELOOP but not ESTALE, and "cannot read this mirror"
+    is the same decision as ``False``.
+    """
+    if not hasattr(os, "fork"):  # pragma: no cover — Linux build host
+        try:
+            return path.is_dir()
+        except OSError:
+            return False
+    try:
+        pid = os.fork()
+    except OSError:  # pragma: no cover — fork exhaustion
+        try:
+            return path.is_dir()
+        except OSError:
+            return False
+
+    if pid == 0:
+        # Child: report through the exit status and never run any
+        # interpreter cleanup (our parent's buffers are shared).
+        code = 1
+        try:
+            # Detach the inherited stdio first.  An abandoned child
+            # holding the write end of our stdout keeps a downstream
+            # `lcsas meta build | tee` (or any pipeline, or CI's log
+            # capture) waiting for EOF long after we exit — measured:
+            # the build itself finished in 5s and the pipeline hung
+            # forever.  Nothing here writes, so /dev/null loses nothing.
+            devnull = os.open(os.devnull, os.O_RDWR)
+            for fd in (0, 1, 2):
+                os.dup2(devnull, fd)
+            code = 0 if path.is_dir() else 1
+        except BaseException:
+            code = 1
+        finally:
+            os._exit(code)
+
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            reaped, status = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            # Someone else reaped it (a host application's SIGCHLD
+            # handler) — the answer is gone, so report "unknown" rather
+            # than invent one.
+            return None
+        if reaped == pid:
+            return os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.01)
+
+    # Abandon it.  SIGKILL is best-effort — a process wedged in an
+    # uninterruptible stat() will not take it — so the reap is
+    # non-blocking and the child, if still alive, is left to init.
+    with contextlib.suppress(OSError):
+        os.kill(pid, signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        os.waitpid(pid, os.WNOHANG)
+    return None
+
+
+@dataclass(frozen=True)
+class RepoMetadataResult:
+    """Outcome of bundling one catalogued repo's Rustic metadata.
+
+    ``bundled`` False means this meta-volume carries no keys for the
+    repo — its packs cannot be decrypted from this disc alone.  That is
+    a survivable, deliberate state (a deregistered repo, a mirror that
+    is offline at build time), but never a silent one: it is warned to
+    the log and recorded in ``volume_info.json`` on the disc.
+    """
+
+    repo_id: str
+    mirror_path: str
+    bundled: bool
+    detail: str = ""
+    parts: tuple[str, ...] = ()
+
+
 class MetaVolumeBuilder:
     """Assembles a self-contained rescue volume.
 
@@ -1726,6 +1844,10 @@ class MetaVolumeBuilder:
         # (Tier-3 zstd ALSO works via the bundled pure-Python decoder on
         # every target, so a False here is a speed note, not a gap.)
         self._native_zstd_bundled = False
+        # Per-repo outcome of _bundle_metadata (#435).  Empty until it
+        # runs; stays empty when there is no catalog to read (a
+        # no-catalog meta disc bundles no repo metadata by design).
+        self._metadata_results: list[RepoMetadataResult] = []
 
         if project_root is None:
             # meta/ → lcsas/ → src/ → (project root)
@@ -2466,7 +2588,15 @@ class MetaVolumeBuilder:
 
         We do bundle Rustic metadata (keys, config, index, snapshots)
         because keys are needed to decrypt packs and don't go stale.
+
+        A repo whose mirror is unreachable is skipped rather than fatal
+        — a stale catalog row (a deregistered repo, a mirror offline at
+        build time) must not block a rescue disc.  But the skip is
+        recorded, not silent (#435): every outcome lands in
+        ``metadata_results``, which the log, the build summary, and
+        ``volume_info.json`` on the disc all report.
         """
+        self._metadata_results = []
         if self._catalog_db_path is None:
             return
         src = Path(self._catalog_db_path)
@@ -2487,11 +2617,35 @@ class MetaVolumeBuilder:
         meta_root = self._output / "metadata"
         meta_root.mkdir(parents=True, exist_ok=True)
         for repo_id, mirror_path in rows:
+            if not mirror_path:
+                self._record_metadata_skip(
+                    repo_id, "", "no mirror_path recorded in the catalog"
+                )
+                continue
             mp = Path(mirror_path)
-            if not mp.is_dir():
+            # Bounded probe only.  The copies below stay in this
+            # process: abandoning a shutil.copytree on a timeout would
+            # leave it writing a partial keys/ into the output after
+            # build() returned successfully — a truncated key is worse
+            # than a hang.  A mirror that goes stale *between* this
+            # probe and the copy therefore still blocks; the probe is
+            # what is bounded, per #435's acceptance criteria.
+            reachable = _is_dir_bounded(mp)
+            if reachable is None:
+                self._record_metadata_skip(
+                    repo_id, str(mp),
+                    f"mirror did not answer within {_MIRROR_PROBE_TIMEOUT_S:g}s "
+                    "(stale or hung mount?)",
+                )
+                continue
+            if not reachable:
+                self._record_metadata_skip(
+                    repo_id, str(mp), "mirror path is not a readable directory"
+                )
                 continue
             dst_repo = meta_root / repo_id
             dst_repo.mkdir(parents=True, exist_ok=True)
+            copied: list[str] = []
             for sub in ("config", "keys", "index", "snapshots"):
                 s = mp / sub
                 d = dst_repo / sub
@@ -2499,6 +2653,40 @@ class MetaVolumeBuilder:
                     shutil.copy2(str(s), str(d))
                 elif s.is_dir() and not d.exists():
                     shutil.copytree(str(s), str(d))
+                if d.exists():
+                    copied.append(sub)
+            self._metadata_results.append(
+                RepoMetadataResult(
+                    repo_id=repo_id,
+                    mirror_path=str(mp),
+                    bundled=True,
+                    parts=tuple(copied),
+                )
+            )
+
+    def _record_metadata_skip(
+        self, repo_id: str, mirror_path: str, detail: str
+    ) -> None:
+        """Log and record a repo whose Rustic metadata was NOT bundled."""
+        _logger.warning(
+            "Meta-volume: NO Rustic metadata bundled for repo '%s' "
+            "(mirror %s): %s — this disc carries no keys for that repo, so "
+            "its packs cannot be decrypted from the meta-volume alone.",
+            repo_id, mirror_path or "<unset>", detail,
+        )
+        self._metadata_results.append(
+            RepoMetadataResult(
+                repo_id=repo_id,
+                mirror_path=mirror_path,
+                bundled=False,
+                detail=detail,
+            )
+        )
+
+    @property
+    def metadata_results(self) -> list[RepoMetadataResult]:
+        """Per-repo outcome of the last ``_bundle_metadata`` run (#435)."""
+        return list(self._metadata_results)
 
     def _write_restore_script(self) -> None:
         """Install the meta-volume's top-level ``restore.sh``.
@@ -2680,6 +2868,26 @@ class MetaVolumeBuilder:
                     if self._native_zstd_bundled else None
                 ),
                 "pure_python_zstd": True,
+            },
+            # Which catalogued repos' Rustic metadata (keys/, config,
+            # index, snapshots) this disc actually carries (#435).  A
+            # repo listed under ``not_bundled`` has NO keys here — its
+            # packs cannot be decrypted from this disc alone.  Both
+            # lists are empty on a no-catalog build, which bundles no
+            # repo metadata by design.
+            "repo_metadata": {
+                "bundled": [
+                    {"repo_id": r.repo_id, "parts": list(r.parts)}
+                    for r in self._metadata_results if r.bundled
+                ],
+                "not_bundled": [
+                    {
+                        "repo_id": r.repo_id,
+                        "mirror_path": r.mirror_path,
+                        "reason": r.detail,
+                    }
+                    for r in self._metadata_results if not r.bundled
+                ],
             },
             "requires": {
                 "key_file": "User must provide the encryption key file",

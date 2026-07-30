@@ -5,11 +5,14 @@ from __future__ import annotations
 import dataclasses
 import importlib as _importlib
 import json
+import logging
 import os
 import re
 import shutil
 import sqlite3
 import subprocess
+import sys
+import time
 import types as _types
 from pathlib import Path
 
@@ -21,6 +24,7 @@ from lcsas.meta.builder import (
     MetaBuildError,
     MetaVolumeBuilder,
     _get_tool_version,
+    _is_dir_bounded,
     pinned_dvdisaster_source_name,
 )
 from lcsas.meta.bundler import (
@@ -1725,6 +1729,238 @@ class TestBundleMetadata:
         assert (repo_dst / "keys").read_text() == "key-material\n"
         assert (repo_dst / "index" / "idx0").read_text() == "idx\n"
         assert not (repo_dst / "snapshots").exists()
+
+    # ── #435: an unreachable mirror is skipped, but never silently ──
+
+    def _two_repo_catalog(self, tmp_path: Path) -> tuple[Path, Path]:
+        """A catalog with one reachable repo ('family') and one absent ('gone')."""
+        mirror = tmp_path / "mirror" / "family"
+        (mirror / "keys").mkdir(parents=True)
+        (mirror / "keys" / "k0").write_text("key-material\n")
+        (mirror / "config").write_text("repo-config\n")
+
+        db = tmp_path / "catalog.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE repositories (repo_id TEXT, mirror_path TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO repositories VALUES (?, ?)", ("family", str(mirror))
+        )
+        conn.execute(
+            "INSERT INTO repositories VALUES (?, ?)",
+            ("gone", str(tmp_path / "no-such-mirror")),
+        )
+        conn.commit()
+        conn.close()
+        return db, mirror
+
+    def test_unreachable_mirror_warns_and_others_still_bundle(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ):
+        """AC 1+4: the skip names the repo AND the path, and does not stop
+        the reachable repo from getting its keys."""
+        db, _mirror = self._two_repo_catalog(tmp_path)
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(out, project_root=tmp_path, catalog_db_path=db)
+        with caplog.at_level(logging.WARNING, logger="lcsas.meta.builder"):
+            b._bundle_metadata()
+
+        warning = "\n".join(
+            r.getMessage() for r in caplog.records
+            if r.levelno >= logging.WARNING
+        )
+        assert "gone" in warning
+        assert str(tmp_path / "no-such-mirror") in warning
+        # The reachable repo is unaffected by its neighbour's absence.
+        assert (out / "metadata" / "family" / "keys" / "k0").is_file()
+        assert not (out / "metadata" / "gone").exists()
+
+    def test_metadata_results_report_both_outcomes(self, tmp_path: Path):
+        """AC 2: the build can state which repos got their keys."""
+        db, mirror = self._two_repo_catalog(tmp_path)
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(out, project_root=tmp_path, catalog_db_path=db)
+        b._bundle_metadata()
+
+        by_id = {r.repo_id: r for r in b.metadata_results}
+        assert set(by_id) == {"family", "gone"}
+        assert by_id["family"].bundled is True
+        assert "keys" in by_id["family"].parts
+        assert by_id["gone"].bundled is False
+        assert by_id["gone"].detail
+        assert by_id["gone"].mirror_path == str(tmp_path / "no-such-mirror")
+
+    def test_volume_info_records_unbundled_repos(self, tmp_path: Path):
+        """AC 2: the record survives onto the disc, not just into the log."""
+        db, _mirror = self._two_repo_catalog(tmp_path)
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(out, project_root=tmp_path, catalog_db_path=db)
+        b._bundle_metadata()
+        b._write_volume_info()
+
+        info = json.loads((out / "volume_info.json").read_text())
+        assert [e["repo_id"] for e in info["repo_metadata"]["bundled"]] == [
+            "family"
+        ]
+        not_bundled = info["repo_metadata"]["not_bundled"]
+        assert [e["repo_id"] for e in not_bundled] == ["gone"]
+        assert not_bundled[0]["reason"]
+
+    def test_null_mirror_path_is_skipped_not_fatal(self, tmp_path: Path):
+        """A NULL mirror_path column would raise TypeError in Path()."""
+        db = tmp_path / "catalog.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE repositories (repo_id TEXT, mirror_path TEXT)"
+        )
+        conn.execute("INSERT INTO repositories VALUES (?, ?)", ("null", None))
+        conn.commit()
+        conn.close()
+
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(out, project_root=tmp_path, catalog_db_path=db)
+        b._bundle_metadata()  # must not raise
+        assert [r.bundled for r in b.metadata_results] == [False]
+
+    def test_results_reset_between_runs(self, tmp_path: Path):
+        """Two builds on one builder must not accumulate stale rows."""
+        db, _mirror = self._two_repo_catalog(tmp_path)
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(out, project_root=tmp_path, catalog_db_path=db)
+        b._bundle_metadata()
+        b._bundle_metadata()
+        assert len(b.metadata_results) == 2
+
+
+class TestBoundedMirrorProbe:
+    """#435: the reachability probe is bounded, so a hung mount cannot
+    stall `meta build` forever (the same failure mode as #427)."""
+
+    def test_answers_true_and_false(self, tmp_path: Path):
+        assert _is_dir_bounded(tmp_path) is True
+        assert _is_dir_bounded(tmp_path / "nope") is False
+        f = tmp_path / "file"
+        f.write_text("x")
+        assert _is_dir_bounded(f) is False
+
+    def test_returns_none_when_probe_blocks(self, tmp_path: Path):
+        """A stat() that never returns (stale mount) yields None inside the
+        bound rather than blocking the build."""
+
+        class _BlockingPath:
+            def is_dir(self) -> bool:
+                time.sleep(30)
+                return True
+
+        start = time.monotonic()
+        result = _is_dir_bounded(_BlockingPath(), timeout=0.2)  # type: ignore[arg-type]
+        elapsed = time.monotonic() - start
+        assert result is None
+        assert elapsed < 5, f"probe was not bounded: {elapsed:.1f}s"
+
+    @pytest.mark.skipif(
+        not Path("/proc/self/fd").is_dir(), reason="needs /proc"
+    )
+    def test_probe_runs_detached_in_a_child_process(self, tmp_path: Path):
+        """Pins the two properties that make an abandoned probe harmless,
+        both learned the hard way against a real hung FUSE mount:
+
+        * it runs in a **child process**, not a thread — a daemon thread
+          blocked in stat() never reaches a GIL checkpoint, so CPython 3.12
+          cannot finalize and the hang merely moves to process exit;
+        * its **stdio is detached** — an abandoned child holding the write
+          end of our stdout keeps any downstream pipe (`| tee`, CI log
+          capture) waiting for EOF long after the build has finished.
+        """
+        evidence = tmp_path / "probe-evidence.json"
+
+        class _ReportingPath:
+            def is_dir(self) -> bool:  # runs inside the forked child
+                evidence.write_text(json.dumps({
+                    "pid": os.getpid(),
+                    "stdout": os.readlink("/proc/self/fd/1"),
+                    "stderr": os.readlink("/proc/self/fd/2"),
+                }))
+                return True
+
+        assert _is_dir_bounded(_ReportingPath(), timeout=10) is True  # type: ignore[arg-type]
+        seen = json.loads(evidence.read_text())
+        assert seen["pid"] != os.getpid(), "probe ran in this process"
+        assert seen["stdout"] == os.devnull
+        assert seen["stderr"] == os.devnull
+
+    def test_process_can_still_exit_after_an_abandoned_probe(self):
+        """An abandoned probe must not extend the interpreter's life.
+
+        (Cheap behavioural companion to the test above: a blocking probe
+        that IS killable is reaped here.  The uninterruptible case — a
+        stat() the kernel will not abort — cannot be produced without a
+        FUSE mount, so it lives in the manual validation recorded on #435,
+        not in this tier.)
+        """
+        snippet = (
+            "import sys, time\n"
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parents[2] / 'src')!r})\n"
+            "from lcsas.meta.builder import _is_dir_bounded\n"
+            "class P:\n"
+            "    def is_dir(self):\n"
+            "        time.sleep(300)\n"
+            "print(_is_dir_bounded(P(), timeout=0.2))\n"
+        )
+        start = time.monotonic()
+        proc = subprocess.run(
+            [sys.executable, "-c", snippet],
+            capture_output=True, text=True, timeout=30,
+        )
+        elapsed = time.monotonic() - start
+        assert proc.stdout.strip() == "None", proc.stderr
+        assert elapsed < 15, f"interpreter did not exit promptly: {elapsed:.1f}s"
+
+    def test_oserror_is_unreachable_not_a_traceback(self, tmp_path: Path):
+        """ESTALE is not in pathlib's ignored-errno set, so is_dir() can
+        raise; that means 'cannot read', same decision as False."""
+
+        class _StalePath:
+            def is_dir(self) -> bool:
+                raise OSError(116, "Stale file handle")
+
+        assert _is_dir_bounded(_StalePath(), timeout=5) is False  # type: ignore[arg-type]
+
+    def test_hung_mirror_is_skipped_with_a_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """AC 3, end to end: a mirror whose probe never answers is reported
+        as unbundled instead of hanging the build."""
+        db = tmp_path / "catalog.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE repositories (repo_id TEXT, mirror_path TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO repositories VALUES (?, ?)",
+            ("stale", str(tmp_path / "hung-mount")),
+        )
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr(
+            _builder_mod, "_is_dir_bounded", lambda *_a, **_k: None
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(out, project_root=tmp_path, catalog_db_path=db)
+        with caplog.at_level(logging.WARNING, logger="lcsas.meta.builder"):
+            b._bundle_metadata()
+        assert [r.bundled for r in b.metadata_results] == [False]
+        assert "stale" in caplog.text
+        assert not (out / "metadata" / "stale").exists()
 
 
 class TestWriteRestoreScriptFallback:

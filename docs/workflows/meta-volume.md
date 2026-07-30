@@ -110,7 +110,16 @@ subcommand. `--output` / `-o` is required.
    8. `_bundle_metadata` — if a catalog DB was provided, copy per-repo
       Rustic `config`, `keys`, `index`, and `snapshots` into
       `metadata/<repo_id>/`. This stage *does not* copy `catalog.db` —
-      see the policy section.
+      see the policy section. A repo whose `mirror_path` is unreachable
+      is **skipped, not fatal** (a stale catalog row must not block a
+      rescue disc) — but never silently (#435): the skip is warned with
+      the repo id and path, counted in the build summary
+      (`Rustic metadata bundled for N of M catalogued repo(s)`), and
+      recorded on the disc under `volume_info.json` →
+      `repo_metadata.not_bundled`. Reachability is probed in a
+      short-lived child process with a 5 s bound, so a stale NFS/CIFS
+      mount costs five seconds instead of hanging the build (the
+      catalog-side twin of #427).
    9. `_bundle_recovery_toolchain_artifacts` — copy the recovery `bin/`
       tree (per-target `lcsas-restore`, `rustic-static`, **`lcsas-ecc`**,
       and the bundled CPython) and merge `recovery/MANIFEST.sha256`
@@ -122,7 +131,9 @@ subcommand. `--output` / `-o` is required.
    11. `_write_readme` / `_write_readme_txt` — render `README_RESTORE.md`
        and a plain-text twin.
    12. `_write_volume_info` — write `volume_info.json` with `type: "meta"`,
-       bundled-tool list, tool versions, and timestamps.
+       bundled-tool list, tool versions, timestamps, and `repo_metadata`
+       (which catalogued repos' keys this disc does — and does not —
+       carry).
    13. `_write_start_here` — write `START_HERE.txt`, plus `KEY_INFO.txt`,
        `CONFIG_SUMMARY.txt` (config builds), and `DISC_CARE.txt` via the
        `HolographicInjector`.
@@ -260,8 +271,8 @@ required-contents contract (`required_meta_paths`,
 | `recovery/bin/<target>/lcsas-ecc` | `_bundle_tier1_binaries` | **FMT-01:** in-house RS03 verify/repair, per target. Required, not optional. |
 | `recovery/bin/<target>/python/...` | `_bundle_upstream_binaries` | Tier-3 bundled CPython tree, per target. |
 | `recovery/MANIFEST.sha256` | merged by `_bundle_recovery_toolchain_artifacts` | SHA-256 of the bundled recovery source/scripts (audited by `lcsas meta verify`). |
-| `metadata/<repo_id>/{config,keys,index,snapshots}` (optional) | `_bundle_metadata` | Per-repo Rustic state that *doesn't* go stale (keys decrypt any future pack). |
-| `volume_info.json` | `_write_volume_info` | `type: "meta"` + bundled-tool inventory + tool versions. |
+| `metadata/<repo_id>/{config,keys,index,snapshots}` (optional) | `_bundle_metadata` | Per-repo Rustic state that *doesn't* go stale (keys decrypt any future pack). A repo whose mirror was unreachable at build time is absent here — and named in the build summary and in `volume_info.json` (#435). |
+| `volume_info.json` | `_write_volume_info` | `type: "meta"` + bundled-tool inventory + tool versions + `repo_metadata` (repos whose keys are / are not on this disc). |
 | **NOT present:** `catalog.db` | — | Deliberately absent — see [Catalog policy](#catalog-policy-why-no-catalogdb-on-the-meta-disc). |
 | **NOT present:** any kernel / initramfs / GRUB / isolinux / boot wizard | — | LCSAS discs are NOT bootable (the Alpine live stack was removed, BOOT-07). |
 
