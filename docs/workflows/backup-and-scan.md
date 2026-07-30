@@ -447,6 +447,6 @@ and the delta is computed per repo). Other axes: N/A.
 `docs/workflows/` for sibling docs covering bin-packing, staging, ISO
 mastering, ECC, burning, restoration, consolidation, and meta-volume
 workflows. For the system-level picture (tier model, holographic catalog,
-schema v9), see [`docs/architecture.md`](../architecture.md); for the Rustic
+schema v10), see [`docs/architecture.md`](../architecture.md); for the Rustic
 on-disk pack format the scanner walks, see
 [`docs/RESTIC_FORMAT_SPEC.md`](../RESTIC_FORMAT_SPEC.md).*

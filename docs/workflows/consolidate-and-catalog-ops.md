@@ -502,7 +502,7 @@ sufficiently recent set of them restores the master.
 3. Call `rebuild_catalog(disc_dirs, output_db)`
    (`cmd_catalog_rebuild`).  Internally:
    1. Open (or create) `output_db` and run `ensure_schema` to install
-      the current (v9) schema.  Pre-existing master rows seed a
+      the current (v10) schema.  Pre-existing master rows seed a
       per-volume freshness baseline from their `created_at`
       (`src/lcsas/db/rebuild.py`).
    2. **Sort discs newest-first** by the source catalog's freshness
@@ -675,7 +675,7 @@ DESTROYED     → (terminal)
 ```
 
 (`BURNED → BURNING` is the re-burn retry after a failed post-burn
-verify.)  The CHECK constraint in the schema (currently v9) enumerates
+verify.)  The CHECK constraint in the schema (currently v10) enumerates
 the legal statuses (`src/lcsas/db/schema.py`).  The `CONSOLIDATING`
 status was added by the v4→v5 migration in the same module.
 

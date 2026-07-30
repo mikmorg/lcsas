@@ -658,6 +658,130 @@ class TestMigrateV7ToV8:
         conn.close()
 
 
+class TestMigrateV9ToV10:
+    """v9 → v10: repositories.status, so a repo whose mirror is gone for
+    good can be marked retired instead of guessed at (#437)."""
+
+    def _make_v9_db(self):
+        """Minimal v9-era database: repositories without `status`."""
+        conn = get_memory_connection()
+        conn.execute(
+            """CREATE TABLE schema_version (
+                version INTEGER NOT NULL,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        conn.execute("INSERT INTO schema_version (version) VALUES (9)")
+        conn.execute(
+            """CREATE TABLE repositories (
+                repo_id          TEXT PRIMARY KEY,
+                name             TEXT NOT NULL,
+                mirror_path      TEXT NOT NULL,
+                encryption_key_id TEXT NOT NULL DEFAULT '',
+                created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO repositories "
+            "(repo_id, name, mirror_path, encryption_key_id) "
+            "VALUES ('r1', 'Family', '/mnt/mirror/family', 'keyabc')"
+        )
+        conn.commit()
+        return conn
+
+    def test_migration_v9_to_v10(self):
+        conn = self._make_v9_db()
+        assert get_schema_version(conn) == 9
+        migrate(conn)
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+
+        cols = {
+            r[1]
+            for r in conn.execute("PRAGMA table_info(repositories)").fetchall()
+        }
+        assert "status" in cols
+
+        # Pre-upgrade rows survive intact and default to 'active' — the
+        # migration must not silently retire anybody.
+        row = conn.execute(
+            "SELECT repo_id, name, mirror_path, encryption_key_id, status "
+            "FROM repositories"
+        ).fetchone()
+        assert row["repo_id"] == "r1"
+        assert row["name"] == "Family"
+        assert row["mirror_path"] == "/mnt/mirror/family"
+        assert row["encryption_key_id"] == "keyabc"
+        assert row["status"] == "active"
+        conn.close()
+
+    def test_migrate_idempotent_from_v9(self):
+        conn = self._make_v9_db()
+        migrate(conn)
+        migrate(conn)
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+        conn.close()
+
+    def test_fresh_create_all_has_status(self):
+        conn = get_memory_connection()
+        create_all(conn)
+        cols = {
+            r[1]
+            for r in conn.execute("PRAGMA table_info(repositories)").fetchall()
+        }
+        assert "status" in cols
+        assert get_schema_version(conn) == CURRENT_SCHEMA_VERSION
+        conn.close()
+
+    def test_migrated_and_fresh_shapes_match(self):
+        """A migrated v9→v10 catalog and a freshly-created v10 one must
+        agree on `repositories` down to name/type/notnull/default.
+
+        This is the assertion that would have caught a CHECK constraint
+        added to SQL_CREATE_REPOSITORIES: SQLite cannot retro-apply one
+        through ALTER TABLE ADD COLUMN, so it would exist on fresh
+        catalogs only.  (PRAGMA table_info does not surface CHECKs, so
+        the sqlite_master comparison below is the one that catches it.)
+        """
+        migrated = self._make_v9_db()
+        migrate(migrated)
+        fresh = get_memory_connection()
+        create_all(fresh)
+
+        def shape(conn):
+            return [
+                (r[1], r[2].upper(), r[3], r[4])  # name, type, notnull, default
+                for r in conn.execute(
+                    "PRAGMA table_info(repositories)"
+                ).fetchall()
+            ]
+
+        assert shape(migrated) == shape(fresh)
+
+        def ddl(conn):
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type='table' AND name='repositories'"
+            ).fetchone()
+            # Normalize whitespace; the migrated table's DDL is the
+            # original CREATE with the ADD COLUMN clause appended.
+            return " ".join(row[0].split()).upper()
+
+        migrated_ddl, fresh_ddl = ddl(migrated), ddl(fresh)
+        assert ("CHECK" in migrated_ddl) == ("CHECK" in fresh_ddl), (
+            "repositories gained a CHECK on one creation path but not the "
+            "other — see the note above SQL_CREATE_REPOSITORIES"
+        )
+        migrated.close()
+        fresh.close()
+
+    def test_v10_repositories_is_outside_the_tier1_frozen_surface(self):
+        """The bump is legal under the additive-only policy (FMT-05)
+        precisely because tier-1 C never reads `repositories`."""
+        from lcsas.db.schema import TIER1_FROZEN_SURFACE
+
+        assert "repositories" not in TIER1_FROZEN_SURFACE
+
+
 class TestEnsureSchema:
     """FMA-02: ensure_schema is the single production schema entry point —
     auto-migrate hot catalogs, refuse future schemas, never write to

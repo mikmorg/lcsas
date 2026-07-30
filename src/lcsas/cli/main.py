@@ -97,6 +97,23 @@ def build_parser() -> argparse.ArgumentParser:
     repo_rm.add_argument("--force", action="store_true",
                          help="Force removal even if packs exist (marks them pruned).")
 
+    repo_retire = repo_sub.add_parser(
+        "retire",
+        help="Mark a repository retired (its mirror is gone for good).",
+        description="Mark a repository retired: its mirror is gone for good, "
+                    "so `lcsas meta build` stops requiring its Rustic keys. "
+                    "The catalog row and its pack history are kept intact "
+                    "(unlike `repo remove --force`). Reversible with "
+                    "`lcsas repo activate`.",
+    )
+    repo_retire.add_argument("repo_id", help="Repository ID to retire.")
+
+    repo_activate = repo_sub.add_parser(
+        "activate",
+        help="Mark a retired repository active again.",
+    )
+    repo_activate.add_argument("repo_id", help="Repository ID to activate.")
+
     # --- scan ---
     scan_p = subparsers.add_parser(
         "scan",
@@ -1046,8 +1063,67 @@ def cmd_repo_list(args: argparse.Namespace) -> int:
         return 0
 
     for repo in repos:
-        logger.info(f"  {repo.name:<20} {repo.repo_id}  {repo.mirror_path}")
+        logger.info(
+            f"  {repo.name:<20} {repo.status:<8} {repo.repo_id}  "
+            f"{repo.mirror_path}"
+        )
     return 0
+
+
+def _cmd_repo_set_status(args: argparse.Namespace, status: str) -> int:
+    """Shared implementation of `repo retire` / `repo activate` (#437).
+
+    No confirmation prompt: unlike `repo remove --force`, which destroys
+    pack and snapshot history, this only flips a flag and is reversible
+    with the opposite verb.
+    """
+    from lcsas.db.connection import locked_connection
+    from lcsas.db.repos import get_repo, set_repo_status
+    from lcsas.db.schema import ensure_schema
+
+    db_path = _resolve_db_path(args)
+    # locked_connection + ensure_schema (not _open_existing_catalog): a
+    # v9 catalog has no `status` column yet, so it must be migrated before
+    # the UPDATE — otherwise this would fail on exactly the catalogs that
+    # most need retiring.
+    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
+        ensure_schema(conn)
+        try:
+            repo = get_repo(conn, args.repo_id)
+        except ValueError:
+            logger.error(f"Repository '{args.repo_id}' not found.")
+            return 1
+        if repo.status == status:
+            logger.info(
+                f"Repository '{repo.name}' ({repo.repo_id}) is already "
+                f"{status}."
+            )
+            return 0
+        set_repo_status(conn, repo.repo_id, status)
+
+    logger.info(f"Repository '{repo.name}' ({repo.repo_id}) is now {status}.")
+    return 0
+
+
+def cmd_repo_retire(args: argparse.Namespace) -> int:
+    """Mark a repository retired — its mirror is gone for good (#437)."""
+    from lcsas.db.repos import REPO_STATUS_RETIRED
+
+    rc = _cmd_repo_set_status(args, REPO_STATUS_RETIRED)
+    if rc == 0:
+        logger.info(
+            "Its packs and snapshots are untouched — retirement records "
+            "that the mirror is gone for good, it does not delete history. "
+            "Re-enable with `lcsas repo activate %s`.", args.repo_id,
+        )
+    return rc
+
+
+def cmd_repo_activate(args: argparse.Namespace) -> int:
+    """Mark a retired repository active again (#437)."""
+    from lcsas.db.repos import REPO_STATUS_ACTIVE
+
+    return _cmd_repo_set_status(args, REPO_STATUS_ACTIVE)
 
 
 def cmd_repo_remove(args: argparse.Namespace) -> int:
@@ -4821,8 +4897,12 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_repo_list(args)
         elif args.repo_command == "remove":
             return cmd_repo_remove(args)
+        elif args.repo_command == "retire":
+            return cmd_repo_retire(args)
+        elif args.repo_command == "activate":
+            return cmd_repo_activate(args)
         else:
-            logger.error("Usage: lcsas repo {add,list,remove}")
+            logger.error("Usage: lcsas repo {add,list,remove,retire,activate}")
             return 1
     elif args.command == "scan":
         return cmd_scan(args)

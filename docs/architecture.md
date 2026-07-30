@@ -82,7 +82,7 @@ The on-disc restic/rustic pack format LCSAS reads and restores is specified in
 
 ### SQLite Catalog Schema
 
-The catalog is at **schema version 9** (`CURRENT_SCHEMA_VERSION` in
+The catalog is at **schema version 10** (`CURRENT_SCHEMA_VERSION` in
 `src/lcsas/db/schema.py`) and defines **12 tables**: `schema_version`,
 `volumes`, `repositories`, `packs`, `volume_packs`, `snapshots`,
 `locations`, `volume_copies`, `burn_sessions`, `session_volumes`,
@@ -508,7 +508,7 @@ packages plus 5 top-level modules**:
 ```
 lcsas/
 ├── config/          # MediaType enum, TOML settings, repo definitions
-├── db/              # SQLite: schema (v9), connection, models, CRUD, queries
+├── db/              # SQLite: schema (v10), connection, models, CRUD, queries
 ├── utils/           # Hashing, filesystem ops, two-level hex layout, label generation
 ├── binpack/         # First-fit-decreasing volume packing
 ├── packs/           # Mirror scanner, pack-to-snapshot delta analysis
@@ -651,6 +651,8 @@ lcsas init          [--db-path PATH]              Initialize catalog database
 lcsas repo add      NAME MIRROR_PATH               Register a repository
 lcsas repo list                                    List registered repositories
 lcsas repo remove   REPO_ID [--force]              Remove a repository and its packs
+lcsas repo retire   REPO_ID                        Mark a repository retired (mirror gone for good)
+lcsas repo activate REPO_ID                        Mark a retired repository active again
 lcsas scan          [--repo REPO] [--no-prune-sync] Discover new packs, mark pruned
 lcsas status        [--redundancy] [--stale-copies] Show archive status summary
 lcsas burn          --session ID [--media TYPE]    Burn staged ISOs to disc
