@@ -50,28 +50,63 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INTEGRATION_DIR = REPO_ROOT / "tests" / "integration"
 
 _MARKER = "integration"
 
 
-def _marker_names(node: ast.expr) -> set[str]:
-    """Marker names in a `pytestmark` value: `pytest.mark.X`, a list of them,
-    or a name bound elsewhere in the module (e.g. `requires_xorriso`).
+def _module_bindings(tree: ast.Module) -> dict[str, ast.expr]:
+    """Module-level `NAME = <expr>` bindings, so marker aliases resolve.
 
-    Only `pytest.mark.<name>` attribute chains yield a name; bare identifiers
-    are ignored, which is safe here because the assertion is about the
-    presence of `integration`, never its absence in some alias.
+    `requires_xorriso = pytest.mark.skipif(...)` is the common shape in this
+    repo, but a module may equally write
+    `INTEGRATION = pytest.mark.integration` and put `INTEGRATION` in its
+    `pytestmark` list.  Without this the gate would report a correctly-marked
+    module as unmarked.
+    """
+    bindings: dict[str, ast.expr] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and node.value is not None:
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    bindings[target.id] = node.value
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and node.value is not None
+            and isinstance(node.target, ast.Name)
+        ):
+            bindings[node.target.id] = node.value
+    return bindings
+
+
+def _marker_names(
+    node: ast.expr,
+    bindings: dict[str, ast.expr],
+    seen: frozenset[str] = frozenset(),
+) -> set[str]:
+    """Marker names reachable from a `pytestmark` value.
+
+    Handles `pytest.mark.X`, lists/tuples of them, `pytest.mark.X(...)` calls,
+    and identifiers bound at module level (resolved through `bindings`).
+    `seen` breaks self-referential bindings so a pathological module cannot
+    send this into infinite recursion.
     """
     if isinstance(node, ast.List | ast.Tuple):
         found: set[str] = set()
         for element in node.elts:
-            found |= _marker_names(element)
+            found |= _marker_names(element, bindings, seen)
         return found
     # Unwrap `pytest.mark.skipif(...)` -> `pytest.mark.skipif`
     if isinstance(node, ast.Call):
-        return _marker_names(node.func)
+        return _marker_names(node.func, bindings, seen)
+    # An alias: `requires_xorriso`, `INTEGRATION`, ...
+    if isinstance(node, ast.Name):
+        if node.id in seen or node.id not in bindings:
+            return set()
+        return _marker_names(bindings[node.id], bindings, seen | {node.id})
     # `pytest.mark.integration`
     if (
         isinstance(node, ast.Attribute)
@@ -84,6 +119,7 @@ def _marker_names(node: ast.expr) -> set[str]:
 
 def _module_markers(tree: ast.Module) -> set[str]:
     """Every marker name declared by a module-level `pytestmark` assignment."""
+    bindings = _module_bindings(tree)
     markers: set[str] = set()
     for node in tree.body:
         targets: list[ast.expr] = []
@@ -97,7 +133,7 @@ def _module_markers(tree: ast.Module) -> set[str]:
             isinstance(t, ast.Name) and t.id == "pytestmark" for t in targets
         )
         if is_pytestmark and node.value is not None:
-            markers |= _marker_names(node.value)
+            markers |= _marker_names(node.value, bindings)
     return markers
 
 
@@ -109,6 +145,43 @@ def _defines_tests(tree: ast.Module) -> bool:
         ) and node.name.startswith("test"):
             return True
     return False
+
+
+@pytest.mark.parametrize(
+    ("label", "source", "expected"),
+    [
+        ("direct", "pytestmark = pytest.mark.integration", True),
+        (
+            "list",
+            "pytestmark = [pytest.mark.integration, "
+            "pytest.mark.skipif(True, reason='x')]",
+            True,
+        ),
+        (
+            "alias",
+            "INTEGRATION = pytest.mark.integration\n"
+            "pytestmark = [INTEGRATION, pytest.mark.skipif(True, reason='x')]",
+            True,
+        ),
+        ("alias_chain", "A = pytest.mark.integration\nB = A\npytestmark = B", True),
+        ("annotated", "pytestmark: list = [pytest.mark.integration]", True),
+        ("self_reference", "X = X\npytestmark = [X]", False),
+        ("only_skipif", "pytestmark = pytest.mark.skipif(True, reason='x')", False),
+        ("absent", "", False),
+    ],
+)
+def test_marker_detection_handles_the_forms_this_repo_uses(
+    label: str, source: str, expected: bool
+) -> None:
+    """Pin the AST parser's behaviour.
+
+    The gate is only as good as its marker detection: a parser that missed
+    aliases would false-fail a correctly-marked module, and one that matched
+    too loosely would wave through an unmarked one. `self_reference` also
+    proves the binding resolution terminates rather than recursing forever.
+    """
+    tree = ast.parse(f"import pytest\n{source}\n")
+    assert (_MARKER in _module_markers(tree)) is expected, label
 
 
 def test_integration_dir_exists() -> None:
