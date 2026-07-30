@@ -28,6 +28,10 @@ requires_xorriso = pytest.mark.skipif(
     reason="xorriso not installed",
 )
 
+# `make test-integration` selects with `-m integration`; without this the
+# module is deselected and runs in no gate target at all (#426).
+pytestmark = [pytest.mark.integration, requires_xorriso]
+
 
 def _sha(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
@@ -47,7 +51,6 @@ def _write_minimal_catalog(path: Path) -> None:
     conn.close()
 
 
-@requires_xorriso
 def test_catalog_validate_content_flags_corrupt_pack_on_real_iso(tmp_path, capsys):
     good_content = b"intact pack payload " * 64
     good_sha = _sha(good_content)
