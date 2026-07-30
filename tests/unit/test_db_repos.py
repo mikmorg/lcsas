@@ -7,7 +7,13 @@ import sqlite3
 import pytest
 
 from lcsas.db.packs import register_pack
-from lcsas.db.repos import delete_repo, get_repo, list_repos, register_repo
+from lcsas.db.repos import (
+    delete_repo,
+    get_repo,
+    list_repos,
+    register_repo,
+    set_repo_status,
+)
 from lcsas.db.snapshots import delete_snapshots_for_repo, upsert_snapshot
 
 
@@ -107,3 +113,87 @@ class TestDeleteSnapshotsForRepo:
         assert count == 1
         from lcsas.db.snapshots import get_snapshot
         assert get_snapshot(memory_db, "sb") is not None
+
+
+class TestRepoStatus:
+    """Schema v10: repositories.status — 'active' by default, flipped to
+    'retired' when a mirror is gone for good (#437)."""
+
+    def test_new_repo_is_active(self, memory_db):
+        repo = register_repo(memory_db, "r_new", "New", "/mnt/new")
+        assert repo.status == "active"
+
+    def test_retire_then_activate_round_trip(self, memory_db):
+        register_repo(memory_db, "r_rt", "Round Trip", "/mnt/rt")
+
+        retired = set_repo_status(memory_db, "r_rt", "retired")
+        assert retired.status == "retired"
+        assert get_repo(memory_db, "r_rt").status == "retired"
+
+        active = set_repo_status(memory_db, "r_rt", "active")
+        assert active.status == "active"
+        assert get_repo(memory_db, "r_rt").status == "active"
+
+    def test_retiring_preserves_the_rest_of_the_row(self, memory_db):
+        """Retirement is a flag, not a deletion — `repo remove --force`
+        is the destructive verb, this one keeps pack history reachable."""
+        register_repo(
+            memory_db, "r_keep", "Keep", "/mnt/keep", encryption_key_id="k9"
+        )
+        register_pack(memory_db, sha256="c" * 64, size_bytes=42, repo_id="r_keep")
+
+        set_repo_status(memory_db, "r_keep", "retired")
+
+        repo = get_repo(memory_db, "r_keep")
+        assert repo.name == "Keep"
+        assert repo.mirror_path == "/mnt/keep"
+        assert repo.encryption_key_id == "k9"
+        n_packs = memory_db.execute(
+            "SELECT COUNT(*) FROM packs WHERE repo_id = 'r_keep'"
+        ).fetchone()[0]
+        assert n_packs == 1
+
+    def test_invalid_status_raises(self, memory_db):
+        register_repo(memory_db, "r_bad", "Bad", "/mnt/bad")
+        with pytest.raises(ValueError, match="Invalid repository status"):
+            set_repo_status(memory_db, "r_bad", "deleted")
+        # ...and the row is untouched
+        assert get_repo(memory_db, "r_bad").status == "active"
+
+    def test_unknown_repo_raises(self, memory_db):
+        with pytest.raises(ValueError, match="not found"):
+            set_repo_status(memory_db, "nope", "retired")
+
+    def test_only_the_named_repo_changes(self, memory_db):
+        register_repo(memory_db, "r_x", "X", "/x")
+        register_repo(memory_db, "r_y", "Y", "/y")
+        set_repo_status(memory_db, "r_x", "retired")
+        assert get_repo(memory_db, "r_y").status == "active"
+
+    def test_v9_catalog_row_reads_back_active(self):
+        """A pre-v10 catalog has no `status` column at all — on-disc
+        holographic catalogs are never migrated in place, so the row→model
+        mapping must default rather than raise."""
+        import sqlite3 as _sqlite3
+
+        conn = _sqlite3.connect(":memory:")
+        conn.row_factory = _sqlite3.Row
+        conn.execute(
+            """CREATE TABLE repositories (
+                repo_id          TEXT PRIMARY KEY,
+                name             TEXT NOT NULL,
+                mirror_path      TEXT NOT NULL,
+                encryption_key_id TEXT NOT NULL DEFAULT '',
+                created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO repositories (repo_id, name, mirror_path) "
+            "VALUES ('old', 'Old', '/mnt/old')"
+        )
+        conn.commit()
+
+        repo = get_repo(conn, "old")
+        assert repo.status == "active"
+        assert [r.status for r in list_repos(conn)] == ["active"]
+        conn.close()

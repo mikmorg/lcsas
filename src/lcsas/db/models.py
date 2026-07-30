@@ -47,6 +47,10 @@ class Repository:
     mirror_path: str
     encryption_key_id: str
     created_at: str
+    # 'active' | 'retired' (schema v10).  'retired' means the mirror is
+    # gone for good, not merely unmounted — see lcsas.db.repos.
+    # Catalogs older than v10 have no column and read back as 'active'.
+    status: str = "active"
 
 
 @dataclass(frozen=True)

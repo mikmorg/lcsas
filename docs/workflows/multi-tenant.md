@@ -7,9 +7,11 @@ because every pack is rustic-encrypted with the repo's own key before
 LCSAS sees it. The catalog tags every pack, snapshot, and volume link
 with `repo_id` so burn, restore, and consolidation scope cleanly.
 
-The `repositories` table (schema v9) holds `repo_id` (UUID), `name`,
-`mirror_path`, and `encryption_key_id` (auto-detected from the mirror's
-`keys/` directory — `read_repo_key_ids` in `src/lcsas/utils/fs.py`). The TOML config
+The `repositories` table (schema v10) holds `repo_id` (UUID), `name`,
+`mirror_path`, `encryption_key_id` (auto-detected from the mirror's
+`keys/` directory — `read_repo_key_ids` in `src/lcsas/utils/fs.py`), and
+`status` (`active` | `retired` — see
+[Retire a repository](#retire-a-repository-lcsas-repo-retire)). The TOML config
 supplies the rustic `password_file` per repo; the password is never
 stored in the catalog or written to disc.
 
@@ -17,9 +19,10 @@ stored in the catalog or written to disc.
 
 1. [Register a repository (`lcsas repo add`)](#register-a-repository-lcsas-repo-add)
 2. [Enumerate registered repositories (`lcsas repo list`)](#enumerate-registered-repositories-lcsas-repo-list)
-3. [Remove a repository (`lcsas repo remove`)](#remove-a-repository-lcsas-repo-remove)
-4. [Per-repo key handling on shared volumes](#per-repo-key-handling-on-shared-volumes)
-5. [Cross-repo isolation guarantees](#cross-repo-isolation-guarantees)
+3. [Retire a repository (`lcsas repo retire`)](#retire-a-repository-lcsas-repo-retire)
+4. [Remove a repository (`lcsas repo remove`)](#remove-a-repository-lcsas-repo-remove)
+5. [Per-repo key handling on shared volumes](#per-repo-key-handling-on-shared-volumes)
+6. [Cross-repo isolation guarantees](#cross-repo-isolation-guarantees)
 
 ---
 
@@ -97,7 +100,7 @@ resolve repo names to UUIDs.
 2. `list_repos()` runs `SELECT * FROM repositories ORDER BY name`
    and maps rows to frozen `Repository` dataclasses.
    (`list_repos` in `src/lcsas/db/repos.py`)
-3. Format: `<name>  <uuid>  <mirror_path>`. Empty catalog emits
+3. Format: `<name>  <status>  <uuid>  <mirror_path>`. Empty catalog emits
    `No repositories registered.` and exits 0.
    (`cmd_repo_list` in `src/lcsas/cli/main.py`)
 
@@ -125,6 +128,71 @@ cases.
 - CLI parser: `build_parser()` (`repo list`) in `src/lcsas/cli/main.py`
 - Handler: `cmd_repo_list` in `src/lcsas/cli/main.py`
 - DB query: `list_repos` in `src/lcsas/db/repos.py`
+
+---
+
+## Retire a repository (`lcsas repo retire`)
+
+**Purpose:** Record that a tenant's Rustic mirror is gone *for good*, as
+opposed to merely unmounted right now. LCSAS cannot tell those two apart
+from `mirror_path` alone, and the difference matters when a build has to
+decide whether a rescue disc carrying no keys for that repo is a defect
+or a documented state: `lcsas meta build` skips a retired repo's mirror
+and reports it as deliberate rather than missing (see
+[meta-volume.md](meta-volume.md)). Retiring is how an operator answers
+that question once, in the catalog, instead of re-deciding it on every
+build.
+
+Retirement is **not** removal. `lcsas repo remove --force` deletes the
+repo's packs and snapshots from the catalog — an operator whose data is
+on burned discs must never be pushed toward that verb just to quiet a
+gate. `retire` only flips a flag, keeps every row, and is undone by
+`lcsas repo activate <repo_id>`. Because it destroys nothing, it does
+not prompt for confirmation.
+
+**Prerequisites:** A registered repo (UUID from `lcsas repo list`).
+
+**Steps:**
+
+1. `lcsas repo retire <repo_id>` — look up by UUID; exit 1 with
+   `Repository '<id>' not found.` if absent.
+   (`cmd_repo_retire` in `src/lcsas/cli/main.py`)
+2. The handler opens a `locked_connection` and runs `ensure_schema`
+   first, so a pre-v10 catalog (no `status` column) migrates in place
+   rather than failing the `UPDATE`.
+   (`_cmd_repo_set_status` in `src/lcsas/cli/main.py`)
+3. `set_repo_status()` validates the value against `REPO_STATUSES` in
+   Python — the column carries no SQL `CHECK`, because SQLite cannot
+   retro-apply one through `ALTER TABLE ADD COLUMN` and a migrated
+   catalog would silently lack it.
+   (`set_repo_status` in `src/lcsas/db/repos.py`)
+4. `lcsas repo activate <repo_id>` reverses it. Re-running either verb
+   on a repo already in that state is a no-op that exits 0.
+
+**Expected outcome:** `repo list` shows the new status; packs,
+snapshots, and `volume_packs` links are untouched.
+
+**Nothing else reads `status`.** Not `scan`, not `burn`, not `status`,
+not `estate` — retirement narrows exactly one gate and nothing more.
+
+**Variant axes that apply:**
+
+- Multi-tenant: retire one tenant, leave the others gated.
+- All others: N/A.
+
+**Test coverage:**
+
+- Existing:
+  - `tests/unit/test_cli_repo_retirement.py`
+  - `tests/unit/test_db_repos.py::TestRepoStatus`
+  - `tests/unit/test_db_schema.py::TestMigrateV9ToV10`
+
+**Source refs:**
+
+- CLI parser: `build_parser()` (`repo retire` / `repo activate`) in `src/lcsas/cli/main.py`
+- Handlers: `cmd_repo_retire`, `cmd_repo_activate` in `src/lcsas/cli/main.py`
+- DB write: `set_repo_status` in `src/lcsas/db/repos.py`
+- Migration: `migrate()` v9 → v10 in `src/lcsas/db/schema.py`
 
 ---
 

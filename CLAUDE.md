@@ -59,7 +59,7 @@ Restore is the mirror: `restore/planner.py` generates a disc pick list; `restore
 |---------|------|
 | `cli/` | argparse entry-point (`lcsas` command, 22 top-level subcommands: `burn`, `burn-iso`, `catalog`, `config`, `consolidate`, `copy`, `estate`, `init`, `key`, `location`, `meta`, `pack`, `recovery`, `repo`, `restore`, `scan`, `session`, `stage`, `staging`, `status`, `verify`, `volume`) |
 | `config/` | TOML config loader, media type definitions |
-| `db/` | SQLite catalog — schema (v9), connection, frozen-dataclass models, CRUD, queries |
+| `db/` | SQLite catalog — schema (v10), connection, frozen-dataclass models, CRUD, queries |
 | `rustic/` | Protocol-based subprocess wrapper + JSON output parser |
 | `packs/` | Mirror scanner, pack-to-snapshot delta analysis |
 | `binpack/` | FFD bin-packing algorithm |
@@ -100,7 +100,7 @@ The recovery tiers are documented in `recovery/docs/TIERS.txt` and dispatched by
 
 ### Database schema
 
-Schema version 9 (12 tables). Key tables: `repositories`, `packs`, `volumes`, `volume_packs` (M:M), `snapshots`, `locations`, `volume_copies`, `burn_sessions` + `session_volumes` (session/burn audit), `volume_events` (audit trail), `key_escrow` (recorded Shamir split: K/N + SLIP-0039 id, KEY-08). Volume lifecycle: `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED`, plus `CONSOLIDATING` (entered from VERIFIED while `consolidate/` merges a volume's packs onto a successor).
+Schema version 10 (12 tables). Key tables: `repositories`, `packs`, `volumes`, `volume_packs` (M:M), `snapshots`, `locations`, `volume_copies`, `burn_sessions` + `session_volumes` (session/burn audit), `volume_events` (audit trail), `key_escrow` (recorded Shamir split: K/N + SLIP-0039 id, KEY-08). Volume lifecycle: `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED`, plus `CONSOLIDATING` (entered from VERIFIED while `consolidate/` merges a volume's packs onto a successor).
 
 ### Test tiers
 

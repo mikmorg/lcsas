@@ -14,7 +14,12 @@ from lcsas.db.key_escrow import (
     get_split,
     record_split,
 )
-from lcsas.db.schema import create_all, get_schema_version, migrate
+from lcsas.db.schema import (
+    CURRENT_SCHEMA_VERSION,
+    create_all,
+    get_schema_version,
+    migrate,
+)
 
 
 @pytest.fixture
@@ -132,9 +137,9 @@ def test_escrow_drift_error_is_runtime_error():
 
 
 def _v8_catalog():
-    """A v8 catalog: full v9 schema minus key_escrow, version pinned to 8."""
+    """A v8 catalog: the current schema minus key_escrow, version pinned to 8."""
     c = get_memory_connection()
-    create_all(c)  # builds v9 schema
+    create_all(c)  # builds the current schema
     # Roll back to a v8 shape: drop the v9-only table and rewrite the version.
     c.execute("DROP TABLE key_escrow")
     c.execute("DELETE FROM schema_version")
@@ -155,7 +160,9 @@ def test_migrate_v8_to_v9_adds_table():
 
     migrate(c)
 
-    assert get_schema_version(c) == 9
+    # migrate() always runs through to the latest version; what this test
+    # pins is that the v8 → v9 step creates key_escrow on the way.
+    assert get_schema_version(c) == CURRENT_SCHEMA_VERSION
     tables = {
         r["name"] for r in c.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"

@@ -7,7 +7,7 @@ import sqlite3
 
 _logger = logging.getLogger(__name__)
 
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 10
 
 
 class SchemaVersionError(RuntimeError):
@@ -79,13 +79,20 @@ CREATE TABLE IF NOT EXISTS volumes (
 );
 """
 
+# NOTE: `status` deliberately carries NO CHECK constraint.  SQLite cannot
+# retro-apply a CHECK through `ALTER TABLE ... ADD COLUMN`, so a CHECK here
+# would give a freshly-created v10 catalog a constraint that a migrated
+# v9→v10 catalog silently lacks.  The enum is enforced in Python instead
+# (`lcsas.db.repos.REPO_STATUSES` / `set_repo_status`).  `volumes.status`
+# has its CHECK only because it was present in the original CREATE.
 SQL_CREATE_REPOSITORIES = """
 CREATE TABLE IF NOT EXISTS repositories (
     repo_id          TEXT PRIMARY KEY,
     name             TEXT NOT NULL,
     mirror_path      TEXT NOT NULL,
     encryption_key_id TEXT NOT NULL DEFAULT '',
-    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status           TEXT NOT NULL DEFAULT 'active'
 );
 """
 
@@ -587,6 +594,46 @@ def migrate(conn: sqlite3.Connection) -> int:
             cursor.execute(
                 "INSERT INTO schema_version (version) VALUES (?)",
                 (9,),
+            )
+            cursor.execute("COMMIT")
+
+        # v9 → v10: repositories.status — an explicit 'retired' marker so a
+        # catalog row whose mirror is legitimately gone forever can be told
+        # apart from one that is merely unmounted right now (#437).  Every
+        # pre-upgrade repo becomes 'active', which is exactly today's
+        # semantics.  Additive plain ADD COLUMN with a *constant* default
+        # (a non-constant default such as CURRENT_TIMESTAMP is rejected by
+        # SQLite), no data movement, and no CHECK — see the note above
+        # SQL_CREATE_REPOSITORIES.  Restore-side readers (tier-1 C, tier-3
+        # standalone) never query `repositories`, so v≤9 disc catalogs are
+        # unaffected, and rebuild.py merges the table by explicit column
+        # name rather than positionally.
+        if current < 10:
+            cursor.execute("BEGIN IMMEDIATE")
+            tables = {
+                r[0] for r in cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            if "repositories" not in tables:
+                # Partial legacy catalogs (and migration-unit fixtures that
+                # carry only the tables a given step touches): create fresh
+                # with the column already present.
+                cursor.execute(SQL_CREATE_REPOSITORIES)
+            else:
+                cols = {
+                    r[1] for r in cursor.execute(
+                        "PRAGMA table_info(repositories)"
+                    ).fetchall()
+                }
+                if "status" not in cols:
+                    cursor.execute(
+                        "ALTER TABLE repositories ADD COLUMN "
+                        "status TEXT NOT NULL DEFAULT 'active'"
+                    )
+            cursor.execute(
+                "INSERT INTO schema_version (version) VALUES (?)",
+                (10,),
             )
             cursor.execute("COMMIT")
     except BaseException:

@@ -20,7 +20,7 @@ DVDisaster to write deduplicated, encrypted data packs onto optical media
 - **Shamir key escrow** (recorded K/N + SLIP-0039 split; `key_escrow` table, KEY-08)
 
 The codebase has zero runtime pip dependencies (pure stdlib; `zstandard` is
-optional for the pure-Python tier-3 fallback). Catalog schema is at **v9**.
+optional for the pure-Python tier-3 fallback). Catalog schema is at **v10**.
 
 ---
 

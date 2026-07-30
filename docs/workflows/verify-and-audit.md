@@ -27,7 +27,7 @@ For the meaning of status strings (`STAGING`, `BURNING`, `BURNED`,
 `VERIFY_FAIL`, `VERIFY_FAIL_REBURN`, `ECC_REPAIR`, `LOCATION_MOVE`,
 `CONDITION_CHECK`, `BURN_RECEIPT_IMPORTED`, `NOTE`), see
 `src/lcsas/db/volume_events.py` (`VALID_EVENT_TYPES`) and the schema in
-`src/lcsas/db/schema.py` (schema v9).
+`src/lcsas/db/schema.py` (schema v10).
 
 ## Table of contents
 
@@ -58,7 +58,7 @@ For the meaning of status strings (`STAGING`, `BURNING`, `BURNED`,
 **Steps:**
 1. Argparse registers `verify` with optional positional `volume_label` plus `--iso`, `--disc`, `--device`, `--mark-verified`, `--mark-failed`, `--detail`, `--all`, `--location` (`build_parser()`, `src/lcsas/cli/main.py`).
 2. Dispatch routes `args.command == "verify"` to `cmd_verify` (`src/lcsas/cli/main.py`).
-3. `cmd_verify` loads config and acquires a `locked_connection` against the resolved db path, then runs `ensure_schema` (schema v9) (`cmd_verify`, `src/lcsas/cli/main.py`).
+3. `cmd_verify` loads config and acquires a `locked_connection` against the resolved db path, then runs `ensure_schema` (schema v10) (`cmd_verify`, `src/lcsas/cli/main.py`).
 4. If `--all` is set, control hands off to `_verify_all_disc` (when `--disc`) or `_verify_all` — see the next workflow.
 5. Otherwise, look up the volume by label; bail if missing.
 6. **Manual-marking branch (`--mark-verified`):** transition `BURNED → VERIFIED` (or `STAGING → VERIFIED` with `force=True` for the split-machine workflow) and append a `VERIFY_PASS` event.
