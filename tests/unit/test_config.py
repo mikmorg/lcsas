@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 
 from lcsas.config.media import MediaType
-from lcsas.config.settings import LCSASConfig, default_config, load_config
+from lcsas.config.settings import (
+    LCSASConfig,
+    default_config,
+    load_config,
+    validate_config,
+)
 
 
 class TestMediaType:
@@ -212,9 +217,14 @@ class TestNegativeConfig:
         with pytest.raises(ValueError, match="Unknown media type"):
             load_config(config_file)
 
-    def test_missing_mirror_path_warns(self, tmp_path, caplog):
-        """A repo mirror_path that doesn't exist emits a warning."""
-        import logging
+    def test_missing_mirror_path_is_reported(self, tmp_path):
+        """A repo mirror_path that doesn't exist is reported as an error.
+
+        The check used to run (as a warning) inside ``load_config``; it now
+        lives only in ``validate_config``, which every mirror-touching
+        command gates on.  See test_config_lazy_mirror_probe.py for why
+        loading must not touch the path.
+        """
         config_file = tmp_path / "warn.toml"
         config_file.write_text(textwrap.dedent(f"""\
             [paths]
@@ -225,13 +235,11 @@ class TestNegativeConfig:
             [repos.missing_mirror]
             mirror_path = "/absolute/nonexistent/mirror/path/12345"
         """))
-        with caplog.at_level(logging.WARNING, logger="lcsas"):
-            load_config(config_file)
-        assert "mirror_path does not exist" in caplog.text
+        errors = validate_config(load_config(config_file))
+        assert any("mirror_path does not exist" in e for e in errors)
 
-    def test_missing_password_file_warns(self, tmp_path, caplog):
-        """A password_file that doesn't exist emits a warning."""
-        import logging
+    def test_missing_password_file_is_reported(self, tmp_path):
+        """A password_file that doesn't exist is reported as an error."""
         mirror = tmp_path / "mirror"
         mirror.mkdir()
         config_file = tmp_path / "warn.toml"
@@ -245,9 +253,8 @@ class TestNegativeConfig:
             mirror_path = "{mirror}"
             password_file = "{tmp_path / 'nonexistent.key'}"
         """))
-        with caplog.at_level(logging.WARNING, logger="lcsas"):
-            load_config(config_file)
-        assert "password_file does not exist" in caplog.text
+        errors = validate_config(load_config(config_file))
+        assert any("password_file does not exist" in e for e in errors)
 
     def test_malformed_toml_raises(self, tmp_path):
         """Syntactically invalid TOML raises an error on load."""
