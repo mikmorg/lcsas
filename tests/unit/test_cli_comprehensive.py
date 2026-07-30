@@ -1534,6 +1534,233 @@ class TestCmdMetaBuildGate:
 
 
 # ===================================================================
+# cmd_meta_build — the #437 key gate
+# ===================================================================
+
+class TestCmdMetaBuildKeyGate:
+    """#437: `lcsas meta build` FAILS when a live repo whose packs are on
+    discs got no Rustic keys bundled.
+
+    Reporting alone (#436) still lets a build script that only checks the
+    exit code master and burn a disc that cannot decrypt a tenant. But a
+    blanket hard-fail is undecidable — LCSAS cannot tell "mirror
+    unmounted right now" from "mirror gone for good" — so the gate is
+    narrowed to a gap that is genuinely a survivability defect:
+    packs-on-discs AND not-retired AND no-keys.
+    """
+
+    @staticmethod
+    def _catalog(
+        tmp_path, *, mirror_exists: bool, packs_on_discs: bool = True,
+        retired: bool = False, volume_status: str = "BURNED",
+    ):
+        """A real (schema-current) catalog with one repo named 'family'."""
+        from lcsas.db.packs import register_pack
+        from lcsas.db.repos import register_repo as _register
+        from lcsas.db.volume_packs import link_pack_to_volume
+
+        mirror = tmp_path / "mirror" / "family"
+        if mirror_exists:
+            (mirror / "keys").mkdir(parents=True)
+            (mirror / "keys" / "k0").write_text("key-material\n")
+
+        db = tmp_path / "catalog.db"
+        conn = get_connection(db)
+        create_all(conn)
+        _register(conn, "family", "Family", str(mirror))
+        if packs_on_discs:
+            pack = register_pack(
+                conn, sha256="f" * 64, size_bytes=1024, repo_id="family"
+            )
+            vol = create_volume(
+                conn, label="V001", uuid="u-001",
+                media_type="BD25", capacity_bytes=25_000_000_000,
+                status=volume_status,
+            )
+            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+        if retired:
+            from lcsas.db.repos import set_repo_status
+            set_repo_status(conn, "family", "retired")
+        conn.commit()
+        conn.close()
+        return db
+
+    @staticmethod
+    def _build(db, tmp_path, monkeypatch, *, extra=()):
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "empty-cache"))
+        out = tmp_path / "meta"
+        argv = [
+            "--db", str(db),
+            "meta", "build", "--output", str(out), "--allow-incomplete",
+            "--allow-no-dvdisaster-source", *extra,
+        ]
+        return main(argv), out
+
+    # ── the gate fires ────────────────────────────────────────────
+
+    def test_fails_for_active_repo_with_packs_and_no_keys(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        db = self._catalog(tmp_path, mirror_exists=False)
+        caplog.clear()
+        rc, _out = self._build(db, tmp_path, monkeypatch)
+        assert rc == 1
+        assert "could not decrypt" in caplog.text
+        assert "family" in caplog.text
+
+    def test_failure_names_all_three_ways_out(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """An error that states the problem without stating the remedies
+        just moves the dead end. All three must be offered."""
+        db = self._catalog(tmp_path, mirror_exists=False)
+        caplog.clear()
+        rc, _out = self._build(db, tmp_path, monkeypatch)
+        assert rc == 1
+        assert "Mount the mirror" in caplog.text
+        assert "lcsas repo retire" in caplog.text
+        assert "--allow-missing-metadata" in caplog.text
+        # `repo retire` must be offered WITH the warning that the
+        # destructive neighbour deletes history — an operator who reaches
+        # for `repo remove --force` to silence this gate destroys the pack
+        # and snapshot record of data still sitting on their discs.
+        assert "repo remove --force" in caplog.text
+        assert "deletes it" in caplog.text
+
+    def test_gate_ignores_is_pruned(self, tmp_path, monkeypatch, caplog):
+        """packs.is_pruned is NOT in the tier-1 frozen surface, so tier-1
+        will happily restore a pruned pack that is still on a disc. A repo
+        whose on-disc packs are all pruned therefore still needs its keys.
+        """
+        db = self._catalog(tmp_path, mirror_exists=False)
+        conn = get_connection(db)
+        conn.execute("UPDATE packs SET is_pruned = 1")
+        conn.commit()
+        conn.close()
+        caplog.clear()
+        rc, _out = self._build(db, tmp_path, monkeypatch)
+        assert rc == 1
+
+    # ── the gate stays silent ─────────────────────────────────────
+
+    def test_silent_for_retired_repo(self, tmp_path, monkeypatch, caplog):
+        """`lcsas repo retire` is the operator saying the mirror is gone
+        for good — that is a documented state, not a defect."""
+        db = self._catalog(tmp_path, mirror_exists=False, retired=True)
+        caplog.clear()
+        rc, _out = self._build(db, tmp_path, monkeypatch)
+        assert rc == 0
+        assert "could not decrypt" not in caplog.text
+        # ...but it is still REPORTED, per #436.
+        assert "NO keys on this meta-volume: family" in caplog.text
+
+    def test_silent_for_repo_with_no_packs(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """A freshly-registered or empty repo has nothing on any disc that
+        needs its keys."""
+        db = self._catalog(
+            tmp_path, mirror_exists=False, packs_on_discs=False
+        )
+        caplog.clear()
+        rc, _out = self._build(db, tmp_path, monkeypatch)
+        assert rc == 0
+        assert "could not decrypt" not in caplog.text
+
+    def test_silent_when_packs_only_on_destroyed_volumes(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """`volumes.status != 'DESTROYED'` is the same filter the tier-1 C
+        reader uses, so gate and reader agree on what data still exists."""
+        db = self._catalog(
+            tmp_path, mirror_exists=False, volume_status="DESTROYED"
+        )
+        caplog.clear()
+        rc, _out = self._build(db, tmp_path, monkeypatch)
+        assert rc == 0
+        assert "could not decrypt" not in caplog.text
+
+    def test_silent_when_keys_were_bundled(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        db = self._catalog(tmp_path, mirror_exists=True)
+        caplog.clear()
+        rc, out = self._build(db, tmp_path, monkeypatch)
+        assert rc == 0
+        assert (out / "metadata" / "family" / "keys" / "k0").is_file()
+
+    def test_silent_for_no_catalog_build(self, tmp_path, monkeypatch, caplog):
+        """LOAD-BEARING. `_bundle_metadata` returns early with no catalog,
+        so a no-catalog disc bundles zero repos — a supported, tested
+        configuration (the blind-restore fixture builds one). A rule that
+        failed 2-of-3 repos while passing 0-of-3 is the incoherence #437
+        exists to avoid.
+        """
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "empty-cache"))
+        out = tmp_path / "meta"
+        caplog.clear()
+        rc = main([
+            "--db", str(tmp_path / "absent.db"),
+            "meta", "build", "--output", str(out), "--allow-incomplete",
+            "--allow-no-dvdisaster-source",
+        ])
+        assert rc == 0
+        assert "could not decrypt" not in caplog.text
+
+    # ── the valve ─────────────────────────────────────────────────
+
+    def test_allow_missing_metadata_downgrades_to_warning(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        db = self._catalog(tmp_path, mirror_exists=False)
+        caplog.clear()
+        rc, out = self._build(
+            db, tmp_path, monkeypatch, extra=["--allow-missing-metadata"]
+        )
+        assert rc == 0
+        assert "ACKNOWLEDGED" in caplog.text
+        assert "family" in caplog.text
+        assert "built successfully" in caplog.text
+
+    def test_acknowledgement_is_recorded_on_the_disc(
+        self, tmp_path, monkeypatch
+    ):
+        """The disc must carry the fact that a gap was accepted — years
+        later an heir has to tell an accepted gap from a defect, and the
+        build log is long gone."""
+        db = self._catalog(tmp_path, mirror_exists=False)
+        _rc, out = self._build(
+            db, tmp_path, monkeypatch, extra=["--allow-missing-metadata"]
+        )
+        info = json.loads((out / "volume_info.json").read_text())
+        assert info["repo_metadata"]["acknowledged"] is True
+        not_bundled = info["repo_metadata"]["not_bundled"]
+        assert [e["repo_id"] for e in not_bundled] == ["family"]
+        assert not_bundled[0]["packs_on_discs"] == 1
+        assert not_bundled[0]["retired"] is False
+
+    def test_acknowledged_is_false_on_an_ordinary_build(
+        self, tmp_path, monkeypatch
+    ):
+        db = self._catalog(tmp_path, mirror_exists=True)
+        _rc, out = self._build(db, tmp_path, monkeypatch)
+        info = json.loads((out / "volume_info.json").read_text())
+        assert info["repo_metadata"]["acknowledged"] is False
+
+    def test_allow_incomplete_does_not_silence_the_key_gate(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """--allow-incomplete means 'dev build lacking per-target
+        binaries'. It is habitual, lives in build scripts, and must NOT
+        double as an override for a survivability gap — that is exactly
+        why --allow-missing-metadata is a separate flag."""
+        db = self._catalog(tmp_path, mirror_exists=False)
+        caplog.clear()
+        rc, _out = self._build(db, tmp_path, monkeypatch)  # already passes --allow-incomplete
+        assert rc == 1
+
+
+# ===================================================================
 # cmd_staging_clean
 # ===================================================================
 

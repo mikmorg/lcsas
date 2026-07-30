@@ -119,7 +119,9 @@ subcommand. `--output` / `-o` is required.
       `repo_metadata.not_bundled`. Reachability is probed in a
       short-lived child process with a 5 s bound, so a stale NFS/CIFS
       mount costs five seconds instead of hanging the build (the
-      catalog-side twin of #427).
+      catalog-side twin of #427). This stage also records, per repo,
+      whether it is `retired` and how many of its packs sit on volumes
+      that still exist — the two facts the key gate below decides on.
    9. `_bundle_recovery_toolchain_artifacts` — copy the recovery `bin/`
       tree (per-target `lcsas-restore`, `rustic-static`, **`lcsas-ecc`**,
       and the bundled CPython) and merge `recovery/MANIFEST.sha256`
@@ -271,8 +273,8 @@ required-contents contract (`required_meta_paths`,
 | `recovery/bin/<target>/lcsas-ecc` | `_bundle_tier1_binaries` | **FMT-01:** in-house RS03 verify/repair, per target. Required, not optional. |
 | `recovery/bin/<target>/python/...` | `_bundle_upstream_binaries` | Tier-3 bundled CPython tree, per target. |
 | `recovery/MANIFEST.sha256` | merged by `_bundle_recovery_toolchain_artifacts` | SHA-256 of the bundled recovery source/scripts (audited by `lcsas meta verify`). |
-| `metadata/<repo_id>/{config,keys,index,snapshots}` (optional) | `_bundle_metadata` | Per-repo Rustic state that *doesn't* go stale (keys decrypt any future pack). A repo whose mirror was unreachable at build time is absent here — and named in the build summary and in `volume_info.json` (#435). |
-| `volume_info.json` | `_write_volume_info` | `type: "meta"` + bundled-tool inventory + tool versions + `repo_metadata` (repos whose keys are / are not on this disc). |
+| `metadata/<repo_id>/{config,keys,index,snapshots}` (optional) | `_bundle_metadata` | Per-repo Rustic state that *doesn't* go stale (keys decrypt any future pack). A repo whose mirror was unreachable at build time is absent here — and named in the build summary and in `volume_info.json` (#435), and fails the build outright if it is a live repo with packs on discs (#437). |
+| `volume_info.json` | `_write_volume_info` | `type: "meta"` + bundled-tool inventory + tool versions + `repo_metadata` (repos whose keys are / are not on this disc, each with its `retired` flag and `packs_on_discs` count, plus `acknowledged` — whether the build was waved through with `--allow-missing-metadata`). |
 | **NOT present:** `catalog.db` | — | Deliberately absent — see [Catalog policy](#catalog-policy-why-no-catalogdb-on-the-meta-disc). |
 | **NOT present:** any kernel / initramfs / GRUB / isolinux / boot wizard | — | LCSAS discs are NOT bootable (the Alpine live stack was removed, BOOT-07). |
 
@@ -402,6 +404,71 @@ re-running the same command.
 **Source refs:** `RESTORE_SCRIPT` / `RESTORE_AUTO_SCRIPT` constants and
 `_write_restore_script` (`src/lcsas/meta/builder.py`);
 `src/lcsas/meta/restore_single_drive.py`.
+
+---
+
+## Key gate: when a missing repo key FAILS the build
+
+**Policy:** `lcsas meta build` exits **1** when a catalogued repo satisfies
+all three of:
+
+1. it has packs on at least one volume whose `status != 'DESTROYED'`, **and**
+2. it is not `retired` (`repositories.status`, schema v10), **and**
+3. no Rustic keys were bundled for it.
+
+Everything else keeps the #436 behaviour exactly — reported, exit 0.
+
+**Why a gate at all:** #436 made the gap loud, but a build script that
+only checks the exit code would still master and burn a disc that cannot
+decrypt a tenant's packs. Burning a disc you cannot prove restorable is
+the thing this gate exists to prevent.
+
+**Why it is narrowed, not blanket:** LCSAS cannot tell "mirror
+temporarily unmounted" from "mirror gone for good" using `mirror_path`
+alone. A blanket rule would fire on every routine build in an estate
+with one long-dead repo, get pasted into the build script permanently,
+and thereafter read as "checked" while checking nothing. So the gate
+derives from *packs on discs* — data that exists right now and needs
+these keys — mirroring `HolographicInjector.inject_metadata`'s existing
+rule (`src/lcsas/staging/metadata.py`): a repo with data *here* hard-fails,
+everything else skips.
+
+**What is deliberately NOT gated:**
+
+| Case | Why exempt |
+|---|---|
+| No catalog at all | `_bundle_metadata` returns early, so a no-catalog disc bundles **zero** repos — a supported, tested configuration (the blind-restore fixture builds one). A rule that failed 2-of-3 repos while passing 0-of-3 would not be defensible. |
+| Retired repo | The operator has stated the mirror is gone for good via `lcsas repo retire` — see [multi-tenant.md](multi-tenant.md#retire-a-repository-lcsas-repo-retire). |
+| Repo with zero packs on discs | Nothing out there needs its keys yet (empty or freshly-registered repo). |
+| Packs only on `DESTROYED` volumes | Same filter the tier-1 C reader uses (`TIER1_FROZEN_SURFACE` in `src/lcsas/db/schema.py`), so gate and reader agree on what "data that still exists" means. |
+
+`packs.is_pruned` is deliberately **not** filtered: `is_pruned` is not part
+of the tier-1 frozen surface, so tier-1 will restore a pruned pack that is
+still on a disc. A repo whose on-disc packs are all pruned still needs its
+keys.
+
+**The way out:** the error names the offending repos and offers all three
+remedies — mount the mirror and rebuild, `lcsas repo retire <repo_id>`, or
+`--allow-missing-metadata` for this build. That last one is a **new flag,
+deliberately not `--allow-incomplete`**: `--allow-incomplete` means "dev
+build lacking per-target binaries", it lives habitually in build scripts,
+and letting it double as the override would silence a survivability gap by
+accident. When it is used, `volume_info.json` records
+`repo_metadata.acknowledged: true`, so the **disc itself** carries the fact
+that the gap was accepted — years later an heir can tell an accepted gap
+from a defect, long after the build log is gone.
+
+**Note:** `lcsas repo remove --force` is *not* a remedy. It deletes the
+repo's packs and snapshots from the catalog; an operator whose data is on
+burned discs must never be pushed toward it to quiet a gate. That is why
+retirement exists.
+
+**Source refs:** `_bundle_metadata`, `_read_retired_repos`,
+`_read_packs_on_discs`, `RepoMetadataResult` (`src/lcsas/meta/builder.py`);
+the exit-code decision in `cmd_meta_build` (`src/lcsas/cli/main.py`).
+
+**Test coverage:** `tests/unit/test_cli_comprehensive.py::TestCmdMetaBuildKeyGate`;
+`tests/unit/test_meta_builder.py::TestBundleMetadata`.
 
 ---
 

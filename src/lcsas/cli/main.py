@@ -600,6 +600,18 @@ def build_parser() -> argparse.ArgumentParser:
             "incomplete 'rescue' disc never ships unnoticed (RST-05)."
         ),
     )
+    meta_build.add_argument(
+        "--allow-missing-metadata", action="store_true",
+        help=(
+            "Permit a meta-volume that carries no Rustic keys for a live "
+            "repo whose packs are on discs. By default that fails the "
+            "build (#437) — the disc could not decrypt that repo. Deliberately "
+            "separate from --allow-incomplete, which means 'dev build lacking "
+            "per-target binaries': a habitual flag must not silence a "
+            "survivability gap. The acknowledgement is recorded on the disc "
+            "in volume_info.json."
+        ),
+    )
 
     meta_verify = meta_sub.add_parser(
         "verify",
@@ -3387,6 +3399,9 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
         allow_no_dvdisaster_source=getattr(
             args, "allow_no_dvdisaster_source", False
         ),
+        allow_missing_metadata=getattr(
+            args, "allow_missing_metadata", False
+        ),
     )
 
     logger.info(f"Building meta-volume in {output} ...")
@@ -3476,6 +3491,73 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
                 "mirror(s) and rebuild if that is not what you want.",
                 len(skipped), ", ".join(r.repo_id for r in skipped),
             )
+
+        # Issue #437: the key gate.  Reporting alone (#436) still lets a
+        # build script that only checks the exit code master and burn a
+        # disc that cannot decrypt a tenant's packs.  Fail the build —
+        # but ONLY for a gap that is genuinely a survivability defect:
+        #
+        #   * has packs on a volume that still exists  (data is out there
+        #     right now that needs these keys), AND
+        #   * is not retired  (the operator has not said the mirror is
+        #     gone for good — `lcsas repo retire`), AND
+        #   * got no keys bundled.
+        #
+        # Everything else keeps #436's behaviour exactly: report, exit 0.
+        # That includes an empty repo, a freshly-registered repo, a
+        # retired repo, and — load-bearing — a build with no catalog at
+        # all, which bundles zero repos by design and is a supported,
+        # tested configuration.  A rule that failed 2-of-3 repos while
+        # passing 0-of-3 is the incoherence #437 exists to avoid.
+        gaps = [
+            r for r in skipped
+            if not r.retired and r.packs_on_discs > 0
+        ]
+        if gaps:
+            if getattr(args, "allow_missing_metadata", False):
+                logger.warning(
+                    "ACKNOWLEDGED: %d repo(s) with packs on discs have NO "
+                    "keys on this meta-volume — building anyway because "
+                    "--allow-missing-metadata was given. This disc CANNOT "
+                    "decrypt: %s",
+                    len(gaps),
+                    ", ".join(
+                        f"{r.repo_id} ({r.packs_on_discs} pack(s) on discs)"
+                        for r in gaps
+                    ),
+                )
+                logger.warning(
+                    "Recorded on the disc as repo_metadata.acknowledged in "
+                    "volume_info.json."
+                )
+            else:
+                logger.error(
+                    "Meta-volume carries NO Rustic keys for %d repo(s) whose "
+                    "packs are on discs that still exist — this rescue disc "
+                    "could not decrypt them:", len(gaps),
+                )
+                for r in gaps:
+                    logger.error(
+                        "  %s — %d pack(s) on discs; mirror %s: %s",
+                        r.repo_id, r.packs_on_discs,
+                        r.mirror_path or "<unset>", r.detail,
+                    )
+                logger.error("Resolve this in one of three ways:")
+                logger.error(
+                    "  1. Mount the mirror(s) above and rebuild — the fix "
+                    "that actually makes the disc restorable."
+                )
+                logger.error(
+                    "  2. `lcsas repo retire <repo_id>` if a mirror is gone "
+                    "for good. Reversible, and it keeps the repo's pack and "
+                    "snapshot history (unlike `repo remove --force`, which "
+                    "deletes it)."
+                )
+                logger.error(
+                    "  3. `--allow-missing-metadata` to accept the gap for "
+                    "this build; the acknowledgement is recorded on the disc."
+                )
+                return 1
 
     logger.info(f"Meta-volume built successfully at {output}")
     logger.info("Contents:")
