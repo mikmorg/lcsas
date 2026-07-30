@@ -268,9 +268,14 @@ def test_manifest_is_complete_over_authored_files() -> None:
     problems: list[str] = []
     if unpinned:
         problems.append(
-            f"{len(unpinned)} authored file(s) under recovery/ have NO manifest "
-            f"row, so they are absent from the tamper-evidence record.  Run "
-            f"`make -C recovery manifest` and commit the result:\n  "
+            f"{len(unpinned)} file(s) under recovery/ have NO manifest row, so "
+            f"they are absent from the tamper-evidence record.\n"
+            f"    If the file IS authored content: `git add` it, then run "
+            f"`make -C recovery manifest` and commit the result.  (The "
+            f"generator reads the git index, so regenerating BEFORE adding the "
+            f"file will not pick it up.)\n"
+            f"    If it is NOT authored content: delete it, or add it to a "
+            f".gitignore so it stops counting as authored.\n  "
             + "\n  ".join(unpinned)
         )
     if stray:
