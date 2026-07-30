@@ -5,7 +5,7 @@
 #   all       -- build host-arch lcsas-restore (default)
 #   test      -- build and run unit tests
 #   clean     -- remove build artifacts
-#   manifest  -- regenerate docs/MANIFEST.sha256
+#   manifest  -- regenerate MANIFEST.sha256 + docs/MANIFEST.sha256
 #
 # Strict C89 + standard POSIX flags.  Reproducible via SOURCE_DATE_EPOCH.
 #
@@ -808,18 +808,61 @@ open('$(abspath $(BUILD))/coverage.txt', 'w').write(line + '\n')"
 	# to a line that's actually covered.  Kills doc drift.
 	@python3 scripts/exemptions_check.py
 
+# ── Integrity manifests ──────────────────────────────────────────
+#
+# THE CURATION RULE (the answer to "what belongs in MANIFEST.sha256?")
+#
+#   MANIFEST.sha256 lists the files WE AUTHOR under recovery/, so an
+#   heir can `sha256sum -c` a disc and detect tampering or bit-rot.
+#   CROSS_PLATFORM_META_RFC.md Q4 fixes the split: files we author go
+#   here, files we merely trust from upstream (rustic, CPython) go in
+#   UPSTREAM.sha256.
+#
+#   "Files we author" == "files tracked by git under recovery/", minus:
+#     * bin/           -- built artifacts, not source.  Their integrity
+#                         is covered by bin-parity, and the meta-volume
+#                         builder regenerates ./bin/ rows per-target at
+#                         burn time (meta/builder.py
+#                         _regenerate_recovery_manifest).  Keeping them
+#                         out is what lets MANIFEST.sha256 "stay stable"
+#                         when only binaries change (RFC Q4).
+#     * the two MANIFEST.sha256 files -- a manifest cannot list itself.
+#
+#   git is the oracle on purpose.  fuzz/corpus/ is a MIXED directory:
+#   the curated seed_* inputs are committed, while fuzzer-generated
+#   hex-named entries are gitignored (see fuzz/.gitignore, "Only the
+#   curated seed_* files are committed").  No `find` predicate can
+#   separate those two populations, which is why the previous
+#   find-based sweep grew this file from 208 to 8,710 rows and swept in
+#   untracked corpus + __pycache__ (issue #425).
+#
+#   Determinism: LC_ALL=C pins collation so the byte output does not
+#   depend on the developer's locale, and --cached ignores worktree
+#   noise.  Re-running this target on a clean checkout MUST produce a
+#   byte-identical file; tests/recovery_hardening/test_manifest_freshness.py
+#   asserts both halves (every row matches, and every authored file has
+#   a row).
+#
+# docs/MANIFEST.sha256 keeps its find-based sweep: recovery/docs/ holds
+# only authored docs, so "every file in the directory" is already the
+# correct, deterministic scope.
 manifest:
 	@cd docs && find . -type f ! -name MANIFEST.sha256 -exec sha256sum {} \; \
-		| sort -k 2 > MANIFEST.sha256
+		| LC_ALL=C sort -k 2 > MANIFEST.sha256
 	@echo "wrote docs/MANIFEST.sha256"
-	@find . -path ./build -prune \
-	    -o -path ./bin -prune \
-	    -o -path ./.git -prune \
-	    -o -name MANIFEST.sha256 -prune \
-	    -o -type f -print \
-	    | sort | xargs sha256sum \
+	@git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { \
+	    echo "manifest: not a git work tree -- cannot determine the authored" >&2; \
+	    echo "manifest: file set.  Regenerate from a git checkout." >&2; \
+	    exit 1; }
+	@git ls-files --cached -z -- . \
+	        ':(exclude)bin' \
+	        ':(exclude)MANIFEST.sha256' \
+	        ':(exclude)docs/MANIFEST.sha256' \
+	    | LC_ALL=C sort -z \
+	    | sed -z 's|^|./|' \
+	    | xargs -0 sha256sum \
 	    > MANIFEST.sha256
-	@echo "wrote MANIFEST.sha256 (top-level, $(shell wc -l < MANIFEST.sha256) entries)"
+	@echo "wrote MANIFEST.sha256 (top-level, $$(wc -l < MANIFEST.sha256) entries)"
 
 # ── Sanitizer target ─────────────────────────────────────────────
 #
