@@ -649,7 +649,47 @@ clean:
 # Usage:
 #   make -C recovery coverage-c
 #
+# coverage-c is a wrapper so `decontaminate` ALWAYS runs, including when a
+# step inside coverage-c-run fails.  That is the whole point: `audit-gate`
+# aborts on a coverage_check threshold miss, and coverage-c's own last step
+# (exemptions_check.py) is designed to fail on doc drift.  A cleanup merely
+# appended to the recipe would be skipped in exactly those cases -- which is
+# how the tree got poisoned before.  A failure inside coverage-c-run still
+# fails coverage-c (make normalises any recipe failure to exit 2), so
+# audit-gate and CI still stop.
 coverage-c:
+	@rc=0; $(MAKE) coverage-c-run || rc=$$?; \
+	 $(MAKE) decontaminate; \
+	 exit $$rc
+
+# Remove every instrumented artifact from $(BUILD), keeping any coverage
+# report.  Shared by coverage-c (gcov) and sanitize (ASan/UBSan/LSan) --
+# both leave objects that only link against their own runtime.
+#
+# Why this is required: instrumented objects reference runtime symbols the
+# ordinary build does not link (--coverage -> __gcov_merge_add, __gcov_init,
+# __gcov_exit; -fsanitize -> __asan_*).  Left in $(BUILD) they are newer
+# than their sources, so a later plain `make all` happily REUSES them and
+# links without the instrumentation flag -- failing with e.g. "undefined
+# reference to __gcov_merge_add" in a build that touched no such flags at
+# all.  $(BUILD) is gitignored, so the poison is invisible to `git status`
+# and survives indefinitely (observed: gcov objects sat here for two weeks
+# and broke an unrelated `make gate` run).
+#
+# -maxdepth 1 confines this to the host build: cross-build outputs live in
+# $(BUILD)/<arch>/ subdirectories and must survive.  coverage.json and
+# coverage.txt are kept because audit-gate reads coverage.json immediately
+# after this runs, coverage_check.py defaults to that path, and
+# recovery/CLAUDE.md documents build/coverage.txt as the summary.
+decontaminate:
+	@[ -d $(BUILD) ] || exit 0; \
+	 find $(BUILD) -maxdepth 1 -type f \
+	     ! -name coverage.txt ! -name coverage.json -delete; \
+	 find $(BUILD) \( -name '*.gcno' -o -name '*.gcda' \) -delete; \
+	 rm -rf $(BUILD)/_cov_ks; \
+	 echo "[decontaminate] purged instrumented objects (coverage report kept)"
+
+coverage-c-run:
 	# Step 1: clean slate so stale .gcda files cannot skew results
 	$(MAKE) clean
 	# Step 2: rebuild with coverage instrumentation (-O0 for accurate
@@ -793,7 +833,19 @@ manifest:
 # Usage:
 #   make -C recovery sanitize
 #
+# Wrapped for the same reason as coverage-c: sanitize leaves clang
+# -fsanitize objects in $(BUILD), which a later plain `make all` would reuse
+# and link without -fsanitize, failing on undefined __asan_* symbols.  Today
+# that is masked only because sanitize STARTS with `make clean` and
+# audit-gate happens to run it after coverage-c -- neither is a guarantee,
+# and a sanitize that fails its ASan/UBSan/LSan run (the interesting case)
+# leaves the tree instrumented.  See `decontaminate` above.
 sanitize:
+	@rc=0; $(MAKE) sanitize-run || rc=$$?; \
+	 $(MAKE) decontaminate; \
+	 exit $$rc
+
+sanitize-run:
 	@command -v clang >/dev/null 2>&1 || { echo "[sanitize] need clang (apt install clang)"; exit 0; }
 	$(MAKE) clean
 	$(MAKE) test \
@@ -1180,4 +1232,4 @@ fault-inject: $(BUILD)/malloc_inject.so
 	python3 scripts/run_fault_inject.py --max-sweep $(MAX_N)
 	@echo "[fault-inject] PASS: 0 crashes across all test binaries"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check check-toolchain bin-parity zig-aarch64 zig-riscv64 keyshare-arches ecc-arches coverage-c sanitize fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-rs03-smoke fuzz-rs03 fuzz-smoke audit-gate fault-inject
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check check-toolchain bin-parity zig-aarch64 zig-riscv64 keyshare-arches ecc-arches coverage-c coverage-c-run decontaminate sanitize sanitize-run fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-rs03-smoke fuzz-rs03 fuzz-smoke audit-gate fault-inject
