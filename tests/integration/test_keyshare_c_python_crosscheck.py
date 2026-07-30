@@ -29,10 +29,15 @@ _KEYSHARE_BIN = _REPO_ROOT / "recovery" / "bin" / "x86_64" / "lcsas-keyshare"
 
 _PASSWORD = b"correct horse battery staple\x01"
 
-pytestmark = pytest.mark.skipif(
-    not _KEYSHARE_BIN.is_file(),
-    reason="committed recovery/bin/x86_64/lcsas-keyshare not present",
-)
+# `make test-integration` selects with `-m integration`; without the marker
+# this module is deselected and runs in no gate target at all (#426).
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not _KEYSHARE_BIN.is_file(),
+        reason="committed recovery/bin/x86_64/lcsas-keyshare not present",
+    ),
+]
 
 
 def _split_cards(tmp_path: Path) -> list[Path]:
