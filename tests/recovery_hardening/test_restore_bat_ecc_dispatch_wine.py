@@ -110,6 +110,37 @@ def _build_fixture_image(workdir: Path) -> Path:
     return img
 
 
+def _harden_prefix_drives(prefix: Path) -> None:
+    """Claim every D:-Z: drive letter with an empty throwaway directory.
+
+    restore.bat scans D: through Z: for a ``metadata\\<name>\\`` folder
+    (the disc-hunting fallback for when the meta disc isn't at the letter
+    it expects).  A fresh WINEPREFIX auto-maps D: (plus the raw D::
+    device node) to whatever the host currently has mounted at /media or
+    backed by /dev/sr0, and Z: to the host's `/` -- both entirely outside
+    the test's control.  Worse, wine's cdrom autodetection re-runs at
+    *every* fresh wineserver start and grabs the first free letter it
+    finds, so merely deleting D:/D:: only closes that one slot: a
+    leftover host mount (the exact condition that broke these tests
+    under #440 -- a blind-restore run's teardown left /dev/sr0 mounted at
+    /media) simply reappears at the next free letter instead of D:.
+    Filling every D-Z slot here, before the test maps its own drives,
+    closes all of them at once; `_map_drive` always unlinks-then-relinks,
+    so a test's own explicit mapping (e.g. E: -> the fake meta tree)
+    still wins over this.
+    """
+    dosdevices = prefix / "dosdevices"
+    dosdevices.mkdir(parents=True, exist_ok=True)
+    empty = prefix / "_no_drive"
+    empty.mkdir(exist_ok=True)
+    for letter in "defghijklmnopqrstuvwxyz":
+        for name in (f"{letter}:", f"{letter}::"):
+            link = dosdevices / name
+            if link.exists() or link.is_symlink():
+                link.unlink()
+        (dosdevices / f"{letter}:").symlink_to(empty, target_is_directory=True)
+
+
 def _init_prefix(prefix: Path) -> dict[str, str]:
     prefix.mkdir(parents=True, exist_ok=True)
     env = {
@@ -120,6 +151,10 @@ def _init_prefix(prefix: Path) -> dict[str, str]:
     }
     subprocess.run(["wine", "cmd", "/c", "ver"], env=env,
                    capture_output=True, text=True, timeout=TIMEOUT)
+    # Hermeticity (#440): strip wine's auto-mapped host drives so the
+    # D-Z scan in restore.bat can only ever see letters this test maps
+    # itself, never a disc the host happens to have mounted.
+    _harden_prefix_drives(prefix)
     return env
 
 
