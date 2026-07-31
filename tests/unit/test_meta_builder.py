@@ -1837,6 +1837,122 @@ class TestBundleMetadata:
         b._bundle_metadata()
         assert len(b.metadata_results) == 2
 
+    # ── #437: the two facts the key gate needs ────────────────────
+
+    def _gate_catalog(
+        self, tmp_path: Path, *, retired: bool = False,
+        volume_status: str = "BURNED", link: bool = True,
+    ) -> Path:
+        """A real (schema-current) catalog: repo 'family', mirror absent."""
+        from lcsas.db.connection import get_connection
+        from lcsas.db.packs import register_pack
+        from lcsas.db.repos import register_repo, set_repo_status
+        from lcsas.db.schema import create_all
+        from lcsas.db.volume_packs import link_pack_to_volume
+        from lcsas.db.volumes import create_volume
+
+        db = tmp_path / "gate.db"
+        conn = get_connection(db)
+        create_all(conn)
+        register_repo(conn, "family", "Family", str(tmp_path / "no-mirror"))
+        pack = register_pack(
+            conn, sha256="e" * 64, size_bytes=512, repo_id="family"
+        )
+        vol = create_volume(
+            conn, label="V9", uuid="u-9", media_type="BD25",
+            capacity_bytes=25_000_000_000, status=volume_status,
+        )
+        if link:
+            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+        if retired:
+            set_repo_status(conn, "family", "retired")
+        conn.commit()
+        conn.close()
+        return db
+
+    def _only_result(self, tmp_path: Path, db: Path):
+        out = tmp_path / "out"
+        out.mkdir(exist_ok=True)
+        b = MetaVolumeBuilder(out, project_root=tmp_path, catalog_db_path=db)
+        b._bundle_metadata()
+        results = b.metadata_results
+        assert len(results) == 1
+        return results[0]
+
+    def test_reports_packs_on_discs(self, tmp_path: Path):
+        r = self._only_result(tmp_path, self._gate_catalog(tmp_path))
+        assert r.bundled is False
+        assert r.retired is False
+        assert r.packs_on_discs == 1
+
+    def test_reports_retired(self, tmp_path: Path):
+        r = self._only_result(
+            tmp_path, self._gate_catalog(tmp_path, retired=True)
+        )
+        assert r.retired is True
+
+    def test_destroyed_volumes_do_not_count(self, tmp_path: Path):
+        """Same filter as the tier-1 C reader's frozen surface."""
+        r = self._only_result(
+            tmp_path, self._gate_catalog(tmp_path, volume_status="DESTROYED")
+        )
+        assert r.packs_on_discs == 0
+
+    def test_unlinked_packs_do_not_count(self, tmp_path: Path):
+        """A pack registered but never burned is not on a disc."""
+        r = self._only_result(
+            tmp_path, self._gate_catalog(tmp_path, link=False)
+        )
+        assert r.packs_on_discs == 0
+
+    def test_tolerates_a_pre_v10_catalog_with_no_status_column(
+        self, tmp_path: Path
+    ):
+        """Disc-borne and legacy catalogs are never migrated in place, so
+        the status probe must default rather than let the query raise."""
+        db, _mirror = self._two_repo_catalog(tmp_path)  # repositories only
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(out, project_root=tmp_path, catalog_db_path=db)
+        b._bundle_metadata()  # must not raise
+        assert all(r.retired is False for r in b.metadata_results)
+
+    def test_tolerates_a_catalog_with_no_pack_tables(self, tmp_path: Path):
+        """A catalog oddity must never block a rescue disc: a minimal
+        catalog carrying `repositories` alone yields 0, not an exception."""
+        db, _mirror = self._two_repo_catalog(tmp_path)
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(out, project_root=tmp_path, catalog_db_path=db)
+        b._bundle_metadata()  # must not raise
+        assert all(r.packs_on_discs == 0 for r in b.metadata_results)
+
+    def test_volume_info_records_acknowledgement(self, tmp_path: Path):
+        db = self._gate_catalog(tmp_path)
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(
+            out, project_root=tmp_path, catalog_db_path=db,
+            allow_missing_metadata=True,
+        )
+        b._bundle_metadata()
+        b._write_volume_info()
+        info = json.loads((out / "volume_info.json").read_text())
+        assert info["repo_metadata"]["acknowledged"] is True
+        entry = info["repo_metadata"]["not_bundled"][0]
+        assert entry["packs_on_discs"] == 1
+        assert entry["retired"] is False
+
+    def test_volume_info_acknowledged_defaults_false(self, tmp_path: Path):
+        db = self._gate_catalog(tmp_path)
+        out = tmp_path / "out"
+        out.mkdir()
+        b = MetaVolumeBuilder(out, project_root=tmp_path, catalog_db_path=db)
+        b._bundle_metadata()
+        b._write_volume_info()
+        info = json.loads((out / "volume_info.json").read_text())
+        assert info["repo_metadata"]["acknowledged"] is False
+
 
 class TestBoundedMirrorProbe:
     """#435: the reachability probe is bounded, so a hung mount cannot

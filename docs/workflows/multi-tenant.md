@@ -135,13 +135,12 @@ cases.
 
 **Purpose:** Record that a tenant's Rustic mirror is gone *for good*, as
 opposed to merely unmounted right now. LCSAS cannot tell those two apart
-from `mirror_path` alone, and the difference matters when a build has to
-decide whether a rescue disc carrying no keys for that repo is a defect
-or a documented state: `lcsas meta build` skips a retired repo's mirror
-and reports it as deliberate rather than missing (see
-[meta-volume.md](meta-volume.md)). Retiring is how an operator answers
-that question once, in the catalog, instead of re-deciding it on every
-build.
+from `mirror_path` alone, and the difference matters: `lcsas meta build`
+**fails** when a live repo whose packs are on discs got no Rustic keys
+bundled, and retiring is what exempts a repo whose mirror is legitimately
+gone (see [meta-volume.md](meta-volume.md#key-gate-when-a-missing-repo-key-fails-the-build)).
+Retiring is how an operator answers that question once, in the catalog,
+instead of passing an override flag on every build.
 
 Retirement is **not** removal. `lcsas repo remove --force` deletes the
 repo's packs and snapshots from the catalog — an operator whose data is
@@ -170,7 +169,8 @@ not prompt for confirmation.
    on a repo already in that state is a no-op that exits 0.
 
 **Expected outcome:** `repo list` shows the new status; packs,
-snapshots, and `volume_packs` links are untouched.
+snapshots, and `volume_packs` links are untouched; `lcsas meta build`
+stops failing on that repo's absent keys.
 
 **Nothing else reads `status`.** Not `scan`, not `burn`, not `status`,
 not `estate` — retirement narrows exactly one gate and nothing more.

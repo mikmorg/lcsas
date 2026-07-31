@@ -26,6 +26,10 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # sqlite3 is imported lazily where it is actually used
+    import sqlite3
 
 from lcsas.config.settings import LCSASConfig
 from lcsas.meta.bundler import ToolBundler
@@ -1764,6 +1768,12 @@ class RepoMetadataResult:
     a survivable, deliberate state (a deregistered repo, a mirror that
     is offline at build time), but never a silent one: it is warned to
     the log and recorded in ``volume_info.json`` on the disc.
+
+    ``retired`` and ``packs_on_discs`` are the two *facts* the key gate
+    (#437) needs to tell a real survivability gap from a stale catalog
+    row.  This class only reports them; whether they add up to a failed
+    build is decided in ``cmd_meta_build``, mirroring the existing
+    ``missing_required_contents()`` / RST-05 split.
     """
 
     repo_id: str
@@ -1771,6 +1781,13 @@ class RepoMetadataResult:
     bundled: bool
     detail: str = ""
     parts: tuple[str, ...] = ()
+    # repositories.status == 'retired' (schema v10).  Always False for a
+    # catalog older than v10, which has no such column: those repos
+    # pre-date retirement and are therefore active.
+    retired: bool = False
+    # How many of this repo's packs sit on a volume that still exists.
+    # 0 means nothing on any disc needs this repo's keys.
+    packs_on_discs: int = 0
 
 
 class MetaVolumeBuilder:
@@ -1818,6 +1835,7 @@ class MetaVolumeBuilder:
         bundle_recovery_toolchain: bool = True,
         allow_no_zstd: bool = False,
         allow_no_dvdisaster_source: bool = False,
+        allow_missing_metadata: bool = False,
     ) -> None:
         """
         Args:
@@ -1838,6 +1856,11 @@ class MetaVolumeBuilder:
         self._bundle_recovery_toolchain = bundle_recovery_toolchain
         self._allow_no_zstd = allow_no_zstd
         self._allow_no_dvdisaster_source = allow_no_dvdisaster_source
+        # #437: the operator accepted a known key gap for this build.  The
+        # exit-code policy lives in cmd_meta_build, but the flag has to
+        # reach the builder because _write_volume_info runs inside build()
+        # — the disc itself must carry the fact that gaps were accepted.
+        self._allow_missing_metadata = allow_missing_metadata
         # Whether the native ``zstandard`` package was bundled for this
         # build host's arch/CPython.  Recorded in volume_info.json so
         # ``lcsas meta verify`` can report tier-3 native-zstd coverage.
@@ -2611,15 +2634,20 @@ class MetaVolumeBuilder:
             rows = conn.execute(
                 "SELECT repo_id, mirror_path FROM repositories"
             ).fetchall()
+            retired = self._read_retired_repos(conn)
+            packs_on_discs = self._read_packs_on_discs(conn)
         finally:
             conn.close()
 
         meta_root = self._output / "metadata"
         meta_root.mkdir(parents=True, exist_ok=True)
         for repo_id, mirror_path in rows:
+            is_retired = repo_id in retired
+            n_on_discs = packs_on_discs.get(repo_id, 0)
             if not mirror_path:
                 self._record_metadata_skip(
-                    repo_id, "", "no mirror_path recorded in the catalog"
+                    repo_id, "", "no mirror_path recorded in the catalog",
+                    retired=is_retired, packs_on_discs=n_on_discs,
                 )
                 continue
             mp = Path(mirror_path)
@@ -2636,11 +2664,13 @@ class MetaVolumeBuilder:
                     repo_id, str(mp),
                     f"mirror did not answer within {_MIRROR_PROBE_TIMEOUT_S:g}s "
                     "(stale or hung mount?)",
+                    retired=is_retired, packs_on_discs=n_on_discs,
                 )
                 continue
             if not reachable:
                 self._record_metadata_skip(
-                    repo_id, str(mp), "mirror path is not a readable directory"
+                    repo_id, str(mp), "mirror path is not a readable directory",
+                    retired=is_retired, packs_on_discs=n_on_discs,
                 )
                 continue
             dst_repo = meta_root / repo_id
@@ -2661,11 +2691,85 @@ class MetaVolumeBuilder:
                     mirror_path=str(mp),
                     bundled=True,
                     parts=tuple(copied),
+                    retired=is_retired,
+                    packs_on_discs=n_on_discs,
                 )
             )
 
+    @staticmethod
+    def _read_retired_repos(conn: sqlite3.Connection) -> set[str]:
+        """Repo ids marked retired in the catalog (schema v10+).
+
+        A catalog older than v10 has no ``status`` column at all — and
+        this reader is deliberately permissive about catalog vintage, so
+        probe for the column rather than letting the query raise.  No
+        column means nobody has been retired yet.
+        """
+        try:
+            cols = {
+                r[1] for r in conn.execute(
+                    "PRAGMA table_info(repositories)"
+                ).fetchall()
+            }
+        except Exception:  # pragma: no cover - malformed catalog
+            return set()
+        if "status" not in cols:
+            return set()
+        try:
+            return {
+                r[0] for r in conn.execute(
+                    "SELECT repo_id FROM repositories WHERE status = 'retired'"
+                ).fetchall()
+            }
+        except Exception:  # pragma: no cover - malformed catalog
+            return set()
+
+    @staticmethod
+    def _read_packs_on_discs(conn: sqlite3.Connection) -> dict[str, int]:
+        """Per-repo count of packs that live on a volume which still exists.
+
+        ``volumes.status != 'DESTROYED'`` is the same filter the tier-1 C
+        reader applies (see ``TIER1_FROZEN_SURFACE`` in db/schema.py), so
+        the key gate and the recovery reader agree on what "data that
+        still exists" means.
+
+        Deliberately NOT filtered on ``packs.is_pruned``: is_pruned is not
+        part of the tier-1 frozen surface, so tier-1 will happily restore
+        a pruned pack that is still on a disc.  A repo whose only
+        on-disc packs are pruned therefore still needs its keys.
+
+        Missing tables yield an empty mapping rather than raising — a
+        catalog oddity must never block a rescue disc, and hand-rolled
+        minimal catalogs (tests, partial legacy catalogs) may carry
+        ``repositories`` alone.
+        """
+        try:
+            tables = {
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+        except Exception:  # pragma: no cover - malformed catalog
+            return {}
+        if not {"packs", "volume_packs", "volumes"} <= tables:
+            return {}
+        try:
+            return {
+                r[0]: r[1] for r in conn.execute(
+                    "SELECT p.repo_id, COUNT(DISTINCT p.pack_id) "
+                    "FROM packs p "
+                    "JOIN volume_packs vp ON vp.pack_id = p.pack_id "
+                    "JOIN volumes v ON v.volume_id = vp.volume_id "
+                    "WHERE v.status != 'DESTROYED' "
+                    "GROUP BY p.repo_id"
+                ).fetchall()
+            }
+        except Exception:  # pragma: no cover - malformed catalog
+            return {}
+
     def _record_metadata_skip(
-        self, repo_id: str, mirror_path: str, detail: str
+        self, repo_id: str, mirror_path: str, detail: str,
+        retired: bool = False, packs_on_discs: int = 0,
     ) -> None:
         """Log and record a repo whose Rustic metadata was NOT bundled."""
         _logger.warning(
@@ -2680,6 +2784,8 @@ class MetaVolumeBuilder:
                 mirror_path=mirror_path,
                 bundled=False,
                 detail=detail,
+                retired=retired,
+                packs_on_discs=packs_on_discs,
             )
         )
 
@@ -2875,7 +2981,13 @@ class MetaVolumeBuilder:
             # packs cannot be decrypted from this disc alone.  Both
             # lists are empty on a no-catalog build, which bundles no
             # repo metadata by design.
+            # ``acknowledged`` is true when this disc was built with
+            # --allow-missing-metadata (#437): the operator was told a
+            # live repo's keys are absent and chose to master it anyway.
+            # Recorded here so the *disc* carries that fact — years later
+            # a recovering heir can tell an accepted gap from a defect.
             "repo_metadata": {
+                "acknowledged": self._allow_missing_metadata,
                 "bundled": [
                     {"repo_id": r.repo_id, "parts": list(r.parts)}
                     for r in self._metadata_results if r.bundled
@@ -2885,6 +2997,8 @@ class MetaVolumeBuilder:
                         "repo_id": r.repo_id,
                         "mirror_path": r.mirror_path,
                         "reason": r.detail,
+                        "retired": r.retired,
+                        "packs_on_discs": r.packs_on_discs,
                     }
                     for r in self._metadata_results if not r.bundled
                 ],
