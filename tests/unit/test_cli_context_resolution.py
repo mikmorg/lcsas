@@ -112,6 +112,45 @@ class TestLoadConfigOpt:
             _load_config_opt(_args(config=str(bad)))
         assert "Malformed TOML" in str(exc.value)
 
+    def test_unknown_media_type_raises_config_error_not_bare_valueerror(
+        self, tmp_path
+    ):
+        """#429: a plain typo in [defaults].media_type used to reach
+        main()'s generic handler and print "Unexpected error:", which
+        reads like an internal crash rather than a one-word fix."""
+        cfg = tmp_path / "typo.toml"
+        mirror = tmp_path / "mirror"
+        mirror.mkdir()
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        cfg.write_text(
+            "[paths]\n"
+            f'mirror_base = "{mirror}"\n'
+            f'staging = "{staging}"\n'
+            f'database = "{tmp_path / "a.db"}"\n'
+            "\n[defaults]\n"
+            'media_type = "BD26"\n'
+        )
+        with pytest.raises(ConfigError) as exc:
+            _load_config_opt(_args(config=str(cfg)))
+        # The offending file, the bad value, and the valid set all survive
+        # the wrapping — the operator needs all three to fix it.
+        assert str(cfg) in str(exc.value)
+        assert "BD26" in str(exc.value)
+        assert "BD25" in str(exc.value)
+        assert exc.value.recovery_hint
+
+    def test_malformed_toml_still_wins_over_the_valueerror_arm(self, tmp_path):
+        """tomllib.TOMLDecodeError IS a ValueError subclass, so the catch
+        ORDER in _load_config_opt is load-bearing: a syntax error must
+        still report as malformed TOML, not as an invalid value."""
+        bad = tmp_path / "bad.toml"
+        bad.write_text("[paths\ndatabase = ")
+        with pytest.raises(ConfigError) as exc:
+            _load_config_opt(_args(config=str(bad)))
+        assert "Malformed TOML" in str(exc.value)
+        assert "Invalid value" not in str(exc.value)
+
 
 class TestResolveDevice:
     def test_flag_outranks_config(self, tmp_path):

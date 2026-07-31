@@ -831,9 +831,10 @@ def _load_config_opt(args: argparse.Namespace) -> LCSASConfig | None:
     """Load ``--config`` when given, else ``None``.
 
     Every handler that accepts an optional config funnels through here so
-    the two failure modes — a path that is not there, and a file that will
-    not parse — surface as an actionable ConfigError instead of a bare
-    traceback or a silent fallback to a different catalog.
+    config failures — a path that is not there, a file that will not
+    parse, a value the loader rejects — surface as an actionable
+    ConfigError instead of a bare traceback or a silent fallback to a
+    different catalog.
     """
     cfg = getattr(args, "config", None)
     if not cfg:
@@ -857,9 +858,22 @@ def _load_config_opt(args: argparse.Namespace) -> LCSASConfig | None:
             ),
         ) from e
     except tomllib.TOMLDecodeError as e:
+        # MUST precede the ValueError arm below — TOMLDecodeError is a
+        # ValueError subclass, so the order here is load-bearing.
         raise ConfigError(f"Malformed TOML in {cfg_path}: {e}") from e
     except OSError as e:
         raise ConfigError(f"Cannot read config {cfg_path}: {e}") from e
+    except ValueError as e:
+        # load_config rejects bad *values* with ValueError — today only an
+        # unknown [defaults].media_type, which already names the valid set
+        # in its message.  Without this arm a plain typo in the operator's
+        # TOML reaches main()'s generic handler and is reported as
+        # "Unexpected error:", which reads like an internal crash rather
+        # than the one-word fix it is (#429).
+        raise ConfigError(
+            f"Invalid value in {cfg_path}: {e}",
+            recovery_hint="Correct the offending key in the config file.",
+        ) from e
 
 
 def _resolve_db_path(
