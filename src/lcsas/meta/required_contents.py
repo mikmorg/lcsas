@@ -160,6 +160,33 @@ def recommended_meta_paths() -> list[str]:
     return paths
 
 
+def is_per_repo_keys_gap(path: str) -> bool:
+    """True if ``path`` names a per-repo ``metadata/<repo>/keys`` entry.
+
+    ``MetaVolumeBuilder.missing_required_contents()`` appends these
+    (issue #367) when a bundled repo's metadata carries no ``keys/``
+    subtree — a survivability gap distinct from the rest of that list
+    (missing per-target binaries / root restore artifacts). Issue #443:
+    ``cmd_meta_build`` uses this predicate to route the two kinds of gap
+    to different overrides — ``--allow-incomplete`` for everything else,
+    ``--allow-missing-metadata`` for this one, matching the #437 key gate
+    it shares its failure mode with ("this meta-volume cannot decrypt
+    repo X").
+
+    Matched precisely rather than by substring: exactly three path
+    segments, ``metadata`` / ``<repo>`` / ``keys`` — a repo id cannot
+    itself contain ``/`` in practice, but this stays exact rather than
+    relying on that.
+    """
+    parts = path.split("/")
+    return (
+        len(parts) == 3
+        and parts[0] == "metadata"
+        and parts[1] != ""
+        and parts[2] == "keys"
+    )
+
+
 # Human-facing note printed by both gates so an operator understands an
 # ABSENT verdict against an older disc is expected, not a defect.
 VINTAGE_NOTE = (

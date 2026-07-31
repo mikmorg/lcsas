@@ -463,12 +463,24 @@ repo's packs and snapshots from the catalog; an operator whose data is on
 burned discs must never be pushed toward it to quiet a gate. That is why
 retirement exists.
 
+**The other shape of the same gap (#367 / #443):** this gate covers a
+mirror that was **unreachable** at build time, so the repo never gets
+bundled at all. But the RST-05 completeness gate (`missing_required_contents()`,
+[above](#workflow-lcsas-meta-build--produce-the-meta-volume-tree)) can
+*also* fail a build for a mirror that **was** reachable and bundled but
+whose `keys/` subtree was itself absent — `metadata/<repo>/keys`. Both
+are the identical failure ("this meta-volume cannot decrypt repo X"),
+just reached by different routes, so both answer to the same valve:
+`--allow-missing-metadata` only. `--allow-incomplete` covers neither.
+
 **Source refs:** `_bundle_metadata`, `_read_retired_repos`,
 `_read_packs_on_discs`, `RepoMetadataResult` (`src/lcsas/meta/builder.py`);
 the exit-code decision in `cmd_meta_build` (`src/lcsas/cli/main.py`).
 
 **Test coverage:** `tests/unit/test_cli_comprehensive.py::TestCmdMetaBuildKeyGate`;
-`tests/unit/test_meta_builder.py::TestBundleMetadata`.
+`tests/unit/test_meta_builder.py::TestBundleMetadata`;
+`tests/unit/test_cli_comprehensive.py::TestCmdMetaBuildPerRepoKeysNotAllowIncomplete`
+(the `metadata/<repo>/keys` variant).
 
 ---
 

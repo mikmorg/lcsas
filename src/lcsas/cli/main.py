@@ -3418,42 +3418,103 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
     # RST-05: required-contents completeness gate (default ON).  A
     # meta-volume missing per-target binaries or root restore artifacts
     # is an incomplete rescue disc; fail loud unless --allow-incomplete.
+    #
+    # Issue #443: the per-repo metadata/<repo>/keys entries (#367) are
+    # split out of that gate. "--allow-incomplete" means "dev build
+    # lacking per-target binaries" — habitual, and lives in build
+    # scripts. A missing repo key is the SAME survivability gap #437
+    # already gates behind --allow-missing-metadata (mirror unreachable
+    # at build time); it must not be silenced by the dev-build flag just
+    # because this time the mirror *was* reachable but had no keys/.
+    # So: group 1 (the per-repo keys entries) answers only to
+    # --allow-missing-metadata; group 2 (everything else) keeps today's
+    # --allow-incomplete behaviour unchanged.
     missing = builder.missing_required_contents()
     if missing:
-        if getattr(args, "allow_incomplete", False):
-            logger.warning(
-                "Meta-volume is INCOMPLETE (%d required artifact(s) "
-                "missing) — building anyway because --allow-incomplete "
-                "was given. Missing: %s",
-                len(missing), ", ".join(missing),
-            )
-        else:
-            from lcsas.meta.required_contents import APPROVED_TARGETS
-            logger.error(
-                "Meta-volume is INCOMPLETE — %d required artifact(s) "
-                "missing:", len(missing),
-            )
-            for target in APPROVED_TARGETS:
-                prefix = f"recovery/bin/{target}/"
-                target_missing = [
-                    m[len(prefix):] if m.startswith(prefix) else m
-                    for m in missing
-                    if m.startswith(prefix)
-                    or m == f"recovery/bin/{target}/python"
+        from lcsas.meta.required_contents import is_per_repo_keys_gap
+        keys_missing = [m for m in missing if is_per_repo_keys_gap(m)]
+        other_missing = [m for m in missing if not is_per_repo_keys_gap(m)]
+        gate_failed = False
+
+        if other_missing:
+            if getattr(args, "allow_incomplete", False):
+                logger.warning(
+                    "Meta-volume is INCOMPLETE (%d required artifact(s) "
+                    "missing) — building anyway because --allow-incomplete "
+                    "was given. Missing: %s",
+                    len(other_missing), ", ".join(other_missing),
+                )
+            else:
+                from lcsas.meta.required_contents import APPROVED_TARGETS
+                logger.error(
+                    "Meta-volume is INCOMPLETE — %d required artifact(s) "
+                    "missing:", len(other_missing),
+                )
+                for target in APPROVED_TARGETS:
+                    prefix = f"recovery/bin/{target}/"
+                    target_missing = [
+                        m[len(prefix):] if m.startswith(prefix) else m
+                        for m in other_missing
+                        if m.startswith(prefix)
+                        or m == f"recovery/bin/{target}/python"
+                    ]
+                    if target_missing:
+                        logger.error(
+                            "  [%s] %s", target, ", ".join(target_missing)
+                        )
+                root_missing = [
+                    m for m in other_missing
+                    if not m.startswith("recovery/bin/")
                 ]
-                if target_missing:
-                    logger.error("  [%s] %s", target, ", ".join(target_missing))
-            root_missing = [
-                m for m in missing
-                if not m.startswith("recovery/bin/")
-            ]
-            if root_missing:
-                logger.error("  [root] %s", ", ".join(root_missing))
-            logger.error(
-                "Build the binaries (make build-recovery / "
-                "make keyshare-arches, sh recovery/scripts/fetch_upstream.sh) "
-                "or pass --allow-incomplete for a dev build."
+                if root_missing:
+                    logger.error("  [root] %s", ", ".join(root_missing))
+                logger.error(
+                    "Build the binaries (make build-recovery / "
+                    "make keyshare-arches, sh recovery/scripts/fetch_upstream.sh) "
+                    "or pass --allow-incomplete for a dev build."
+                )
+                gate_failed = True
+
+        if keys_missing:
+            repo_ids = sorted(
+                m[len("metadata/"):-len("/keys")] for m in keys_missing
             )
+            if getattr(args, "allow_missing_metadata", False):
+                logger.warning(
+                    "ACKNOWLEDGED: %d repo(s) bundled onto this meta-volume "
+                    "have NO keys/ in their metadata — building anyway "
+                    "because --allow-missing-metadata was given. This disc "
+                    "CANNOT decrypt: %s",
+                    len(keys_missing), ", ".join(repo_ids),
+                )
+                logger.warning(
+                    "Recorded on the disc as repo_metadata.acknowledged in "
+                    "volume_info.json."
+                )
+            else:
+                logger.error(
+                    "Meta-volume is missing metadata/<repo>/keys for %d "
+                    "repo(s) — this rescue disc could not decrypt them: %s",
+                    len(keys_missing), ", ".join(repo_ids),
+                )
+                logger.error(
+                    "--allow-incomplete does NOT cover this — a missing "
+                    "repo key is a survivability gap, not a dev-build "
+                    "hedge. Resolve this in one of two ways:"
+                )
+                logger.error(
+                    "  1. Mount/repair the mirror so its keys/ subtree is "
+                    "present, then rebuild — the fix that actually makes "
+                    "the disc restorable."
+                )
+                logger.error(
+                    "  2. `--allow-missing-metadata` to accept the gap for "
+                    "this build; the acknowledgement is recorded on the "
+                    "disc."
+                )
+                gate_failed = True
+
+        if gate_failed:
             return 1
 
     # Issue #367: recommended-contents advisory (WARN only).  A meta-volume

@@ -1761,6 +1761,121 @@ class TestCmdMetaBuildKeyGate:
 
 
 # ===================================================================
+# cmd_meta_build — #443: metadata/<repo>/keys is not --allow-incomplete's
+# to silence
+# ===================================================================
+
+class TestCmdMetaBuildPerRepoKeysNotAllowIncomplete:
+    """#443: `missing_required_contents()`'s per-repo ``metadata/<repo>/
+    keys`` entries (#367 — a mirror WAS reachable and bundled, but had no
+    ``keys/``) are the SAME failure as #437's key gate ("this meta-volume
+    cannot decrypt repo X"), just reached a different way (mirror
+    unreachable vs. mirror reachable-but-keyless). ``--allow-incomplete``
+    means "dev build lacking per-target binaries" and must not double as
+    an override for either shape of that gap — only
+    ``--allow-missing-metadata`` may.
+
+    Distinct from ``TestCmdMetaBuildKeyGate`` above: that class covers an
+    UNREACHABLE mirror (the repo never gets bundled at all, so it shows
+    up in ``metadata_results`` as skipped). This class covers a
+    REACHABLE, bundled mirror whose ``keys/`` subtree is simply absent —
+    ``missing_required_contents()``'s RST-05 path, not the #437
+    ``metadata_results`` path.
+    """
+
+    @staticmethod
+    def _catalog_with_keyless_mirror(tmp_path):
+        """A reachable mirror for repo 'family' with a config file but
+        deliberately NO keys/ subtree, so `_bundle_metadata` bundles it
+        (bundled=True) while `missing_required_contents()` still flags
+        `metadata/family/keys` as missing."""
+        mirror = tmp_path / "mirror" / "family"
+        mirror.mkdir(parents=True)
+        (mirror / "config").write_text("repo-config\n")
+
+        db = tmp_path / "catalog.db"
+        conn = get_connection(db)
+        create_all(conn)
+        register_repo(conn, "family", "Family", str(mirror))
+        conn.commit()
+        conn.close()
+        return db
+
+    @staticmethod
+    def _build(db, tmp_path, monkeypatch, *, extra=()):
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "empty-cache"))
+        out = tmp_path / "meta"
+        argv = [
+            "--db", str(db),
+            "meta", "build", "--output", str(out),
+            "--allow-no-dvdisaster-source", *extra,
+        ]
+        return main(argv), out
+
+    def test_default_build_fails_naming_the_repo(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        db = self._catalog_with_keyless_mirror(tmp_path)
+        caplog.clear()
+        rc, out = self._build(db, tmp_path, monkeypatch)
+        assert rc == 1
+        assert "metadata/<repo>/keys" in caplog.text
+        assert "family" in caplog.text
+        assert "could not decrypt them" in caplog.text
+        # bundled=True: the repo IS on the disc, just without keys/.
+        assert (out / "metadata" / "family" / "config").is_file()
+        assert not (out / "metadata" / "family" / "keys").exists()
+
+    def test_allow_incomplete_alone_still_fails(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """This is the whole point of #443: --allow-incomplete downgrades
+        the ordinary per-target-binary gaps to a warning, but must NOT
+        also wave through the missing repo key."""
+        db = self._catalog_with_keyless_mirror(tmp_path)
+        caplog.clear()
+        rc, _out = self._build(
+            db, tmp_path, monkeypatch, extra=("--allow-incomplete",)
+        )
+        assert rc == 1
+        assert "family" in caplog.text
+        assert "does NOT cover this" in caplog.text
+        assert "--allow-missing-metadata" in caplog.text
+
+    def test_allow_missing_metadata_downgrades_with_acknowledged_warning(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        db = self._catalog_with_keyless_mirror(tmp_path)
+        caplog.clear()
+        rc, _out = self._build(
+            db, tmp_path, monkeypatch,
+            extra=("--allow-incomplete", "--allow-missing-metadata"),
+        )
+        assert rc == 0
+        assert "ACKNOWLEDGED" in caplog.text
+        assert "family" in caplog.text
+        assert "built successfully" in caplog.text
+
+    def test_allow_incomplete_still_downgrades_ordinary_missing_binaries(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """Proves the change did not over-broaden: a build whose only
+        gap is the ordinary per-target binaries (no catalog at all, so
+        no per-repo keys entries exist) is still waved through by
+        --allow-incomplete alone, unchanged from before #443."""
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "empty-cache"))
+        out = tmp_path / "meta"
+        caplog.clear()
+        rc = main([
+            "meta", "build", "--output", str(out), "--allow-incomplete",
+            "--allow-no-dvdisaster-source",
+        ])
+        assert rc == 0
+        assert "INCOMPLETE" in caplog.text
+        assert "built successfully" in caplog.text
+
+
+# ===================================================================
 # cmd_staging_clean
 # ===================================================================
 
