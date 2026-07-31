@@ -7,6 +7,19 @@ if [[ $EUID -ne 0 ]]; then
     exec sudo "$0" "$@"
 fi
 
+# Unmount whatever the blind run mounted from the cdemu virtual drive
+# BEFORE unloading it -- a drive can't cleanly unload while its disc is
+# still mounted, and a left-behind mount is exactly what broke #440: wine
+# maps `d: -> /media` in every fresh WINEPREFIX when something is really
+# mounted there, so a stale /media mount makes restore.bat's D:-Z: scan
+# (tests/recovery_hardening/test_restore_bat_wine_smoke.py) find a phantom
+# backup set instead of reporting "could not find an LCSAS backup set".
+# Only unmount mountpoints actually backed by the cdemu drive (/dev/sr0),
+# never anything else that might happen to be mounted at /media.
+for mp in $(findmnt -rno TARGET -S /dev/sr0 2>/dev/null || true); do
+    umount "$mp" >/dev/null 2>&1 || true
+done
+
 bash /home/mikmorg/git/lcsas/scripts/cdemu_drive.sh unload >/dev/null 2>&1 || true
 
 rm -rf /var/lib/disc-vault
