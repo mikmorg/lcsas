@@ -14,6 +14,7 @@ the dispatch table, not just the CRUD underneath.
 
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
 
 from lcsas.cli.main import main
@@ -157,3 +158,97 @@ class TestRepoRetireActivate:
         finally:
             conn.close()
         assert _status(db, repo_id) == "retired"
+
+
+class TestRetireWarnsWhenStillInConfig:
+    """#437 follow-up: retirement is a CATALOG fact, but mirror-existence
+    validation is a CONFIG one.
+
+    `validate_config` makes a missing `mirror_path` a hard error and
+    scan/burn/verify/status gate on it via `_validate_config_or_exit`. So
+    an operator who follows the meta-build key gate's advice ("`lcsas repo
+    retire <id>` if a mirror is gone for good") gets a clean `meta build`
+    and then hits a wall on their next `scan`, because the dead mirror is
+    still listed in lcsas.toml. `repo retire` closes that loop.
+    """
+
+    @staticmethod
+    def _config(tmp_path: Path, db: Path, mirror: Path, name: str) -> Path:
+        staging = tmp_path / "staging"
+        staging.mkdir(exist_ok=True)
+        cfg = tmp_path / "lcsas.toml"
+        cfg.write_text(textwrap.dedent(f"""\
+            [paths]
+            mirror_base = "{tmp_path}"
+            staging = "{staging}"
+            database = "{db}"
+
+            [defaults]
+            media_type = "TEST_TINY"
+
+            [repos.{name}]
+            mirror_path = "{mirror}"
+        """))
+        return cfg
+
+    def test_warns_when_repo_still_has_a_config_block(self, tmp_path, caplog):
+        db, repo_id = _init_with_repo(tmp_path, "family")
+        cfg = self._config(tmp_path, db, tmp_path / "family", "family")
+
+        caplog.clear()
+        assert main(
+            ["--config", str(cfg), "--db", str(db), "repo", "retire", repo_id]
+        ) == 0
+        assert "still listed as [repos.family]" in caplog.text
+        assert "catalog, not the config" in caplog.text
+        assert _status(db, repo_id) == "retired"
+
+    def test_silent_when_repo_is_absent_from_config(self, tmp_path, caplog):
+        """The operator already removed the block — nothing to say."""
+        db, repo_id = _init_with_repo(tmp_path, "family")
+        cfg = self._config(tmp_path, db, tmp_path / "other", "other")
+
+        caplog.clear()
+        assert main(
+            ["--config", str(cfg), "--db", str(db), "repo", "retire", repo_id]
+        ) == 0
+        assert "still listed as" not in caplog.text
+
+    def test_no_config_is_not_an_error(self, tmp_path, caplog):
+        """Retirement must not require a config to exist at all."""
+        db, repo_id = _init_with_repo(tmp_path, "family")
+        caplog.clear()
+        assert main(["--db", str(db), "repo", "retire", repo_id]) == 0
+        assert "still listed as" not in caplog.text
+        assert _status(db, repo_id) == "retired"
+
+    def test_unparseable_config_does_not_fail_the_retirement(
+        self, tmp_path, caplog
+    ):
+        """The catalog write already happened — an advisory lookup must
+        never turn a successful retirement into a failure."""
+        db, repo_id = _init_with_repo(tmp_path, "family")
+        cfg = tmp_path / "broken.toml"
+        cfg.write_text("this is not [valid toml\n")
+
+        caplog.clear()
+        assert main(
+            ["--config", str(cfg), "--db", str(db), "repo", "retire", repo_id]
+        ) == 0
+        assert _status(db, repo_id) == "retired"
+
+    def test_activate_does_not_warn(self, tmp_path, caplog):
+        """The advice is specific to retiring; re-activating a repo that
+        is still configured is the consistent state, not a mismatch."""
+        db, repo_id = _init_with_repo(tmp_path, "family")
+        cfg = self._config(tmp_path, db, tmp_path / "family", "family")
+        assert main(
+            ["--config", str(cfg), "--db", str(db), "repo", "retire", repo_id]
+        ) == 0
+
+        caplog.clear()
+        assert main(
+            ["--config", str(cfg), "--db", str(db), "repo", "activate", repo_id]
+        ) == 0
+        assert "still listed as" not in caplog.text
+        assert _status(db, repo_id) == "active"
