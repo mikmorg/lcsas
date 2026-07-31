@@ -1082,12 +1082,18 @@ def cmd_repo_list(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_repo_set_status(args: argparse.Namespace, status: str) -> int:
+def _cmd_repo_set_status(
+    args: argparse.Namespace, status: str
+) -> tuple[int, str | None]:
     """Shared implementation of `repo retire` / `repo activate` (#437).
 
     No confirmation prompt: unlike `repo remove --force`, which destroys
     pack and snapshot history, this only flips a flag and is reversible
     with the opposite verb.
+
+    Returns ``(exit_code, repo_name)``; *repo_name* is None when the repo
+    could not be resolved, so callers can key follow-up advice off the
+    repo's config name without re-opening the catalog.
     """
     from lcsas.db.connection import locked_connection
     from lcsas.db.repos import get_repo, set_repo_status
@@ -1104,30 +1110,64 @@ def _cmd_repo_set_status(args: argparse.Namespace, status: str) -> int:
             repo = get_repo(conn, args.repo_id)
         except ValueError:
             logger.error(f"Repository '{args.repo_id}' not found.")
-            return 1
+            return 1, None
         if repo.status == status:
             logger.info(
                 f"Repository '{repo.name}' ({repo.repo_id}) is already "
                 f"{status}."
             )
-            return 0
+            return 0, repo.name
         set_repo_status(conn, repo.repo_id, status)
 
     logger.info(f"Repository '{repo.name}' ({repo.repo_id}) is now {status}.")
-    return 0
+    return 0, repo.name
+
+
+def _warn_if_still_in_config(args: argparse.Namespace, repo_name: str) -> None:
+    """Warn when a just-retired repo is still a live ``[repos.*]`` block.
+
+    Retirement is a CATALOG fact; mirror-existence validation is a CONFIG
+    one (``validate_config`` in config/settings.py makes a missing
+    ``mirror_path`` a hard error, and scan/burn/verify/status gate on it
+    via ``_validate_config_or_exit``).  So an operator who follows the
+    meta-build key gate's advice — "`lcsas repo retire <id>` if a mirror
+    is gone for good" — gets a clean `meta build` and then walks into a
+    hard config error on their next `scan`, because the dead mirror is
+    still listed in lcsas.toml.  Close that loop here, where the operator
+    actually is, rather than leaving it to be discovered mid-recovery.
+
+    Advisory only: a config that is absent or unparseable must never turn
+    a successful retirement into a failure — the catalog write already
+    happened.
+    """
+    try:
+        config = _load_config_opt(args)
+    except Exception:  # noqa: BLE001 - advisory path, never fatal
+        return
+    if config is None or repo_name not in getattr(config, "repositories", {}):
+        return
+    logger.warning(
+        "Repository '%s' is still listed as [repos.%s] in your config. "
+        "Retirement is recorded in the catalog, not the config — until you "
+        "remove that block, commands that read mirrors (scan, burn, verify, "
+        "status) will still fail with 'mirror_path does not exist'.",
+        repo_name, repo_name,
+    )
 
 
 def cmd_repo_retire(args: argparse.Namespace) -> int:
     """Mark a repository retired — its mirror is gone for good (#437)."""
     from lcsas.db.repos import REPO_STATUS_RETIRED
 
-    rc = _cmd_repo_set_status(args, REPO_STATUS_RETIRED)
+    rc, repo_name = _cmd_repo_set_status(args, REPO_STATUS_RETIRED)
     if rc == 0:
         logger.info(
             "Its packs and snapshots are untouched — retirement records "
             "that the mirror is gone for good, it does not delete history. "
             "Re-enable with `lcsas repo activate %s`.", args.repo_id,
         )
+        if repo_name:
+            _warn_if_still_in_config(args, repo_name)
     return rc
 
 
@@ -1135,7 +1175,8 @@ def cmd_repo_activate(args: argparse.Namespace) -> int:
     """Mark a retired repository active again (#437)."""
     from lcsas.db.repos import REPO_STATUS_ACTIVE
 
-    return _cmd_repo_set_status(args, REPO_STATUS_ACTIVE)
+    rc, _repo_name = _cmd_repo_set_status(args, REPO_STATUS_ACTIVE)
+    return rc
 
 
 def cmd_repo_remove(args: argparse.Namespace) -> int:
@@ -3612,7 +3653,9 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
                     "  2. `lcsas repo retire <repo_id>` if a mirror is gone "
                     "for good. Reversible, and it keeps the repo's pack and "
                     "snapshot history (unlike `repo remove --force`, which "
-                    "deletes it)."
+                    "deletes it). Also drop its [repos.<name>] block from "
+                    "your config — retirement is a catalog fact, and scan/"
+                    "burn still fail on a config mirror_path that is gone."
                 )
                 logger.error(
                     "  3. `--allow-missing-metadata` to accept the gap for "

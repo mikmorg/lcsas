@@ -172,6 +172,16 @@ not prompt for confirmation.
 snapshots, and `volume_packs` links are untouched; `lcsas meta build`
 stops failing on that repo's absent keys.
 
+**Also remove its `[repos.<name>]` block from the config.** Retirement is
+a *catalog* fact, but mirror-existence validation is a *config* one:
+`validate_config` (`src/lcsas/config/settings.py`) treats a missing
+`mirror_path` as a hard error, and `scan`, `burn`, `verify`, and `status`
+all gate on it via `_validate_config_or_exit`. So a repo that is retired
+in the catalog but still configured will keep failing those commands with
+`mirror_path does not exist`, even though `meta build` is now happy.
+`lcsas repo retire` warns when it detects this, so the two halves cannot
+silently drift apart.
+
 **Nothing else reads `status`.** Not `scan`, not `burn`, not `status`,
 not `estate` — retirement narrows exactly one gate and nothing more.
 
