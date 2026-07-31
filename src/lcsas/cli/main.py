@@ -1952,9 +1952,13 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
         return 1
 
     runner = SubprocessXorrisoRunner()
-    # burn-iso is the portable half of the split workflow and needs no
-    # catalog, so it loads no config of its own — but honour optical_device
-    # when the operator did point it at one.
+    # burn-iso is the portable half of the split workflow: it needs no
+    # CATALOG, so it never opens one.  It does still read config — via
+    # _resolve_device, which falls back to `--config`'s optical_device so
+    # an operator who recorded the drive there need not repeat it as
+    # --device on every burn.  That read happens only when --device was
+    # not given and only when --config was: --device short-circuits
+    # first, and _load_config_opt returns None without a --config.
     device = _resolve_device(args)
 
     # Hash before burn — cheap insurance against the file changing under us.
