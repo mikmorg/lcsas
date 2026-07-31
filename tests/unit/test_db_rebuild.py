@@ -687,6 +687,119 @@ class TestRebuildMerge:
         target_conn.close()
 
 
+class TestRebuildPreservesRepoStatus:
+    """#437 follow-up: `catalog rebuild` must not resurrect a retired repo.
+
+    Disc catalogs are complete v10 snapshots and carry
+    `repositories.status`. If the merge dropped the column, every retired
+    repo would come back as 'active' (the table default) and the next
+    `lcsas meta build` would hard-fail on a repo the operator had already
+    retired — right after the catalog loss that made the rebuild necessary.
+    """
+
+    @staticmethod
+    def _source_with_repo(path, *, status=None, with_status_col=True):
+        conn = get_connection(path)
+        schema.create_all(conn)
+        if not with_status_col:
+            # Rewind `repositories` to its v9 shape (no status column).
+            conn.executescript(
+                """
+                ALTER TABLE repositories RENAME TO repositories_v9_tmp;
+                CREATE TABLE repositories (
+                    repo_id          TEXT PRIMARY KEY,
+                    name             TEXT NOT NULL,
+                    mirror_path      TEXT NOT NULL,
+                    encryption_key_id TEXT NOT NULL DEFAULT '',
+                    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                DROP TABLE repositories_v9_tmp;
+                """
+            )
+        cols = "repo_id, name, mirror_path"
+        vals = ["ghost", "Ghost", "/mnt/gone"]
+        if with_status_col and status is not None:
+            cols += ", status"
+            vals.append(status)
+        conn.execute(
+            f"INSERT INTO repositories ({cols}) "
+            f"VALUES ({', '.join('?' * len(vals))})",
+            tuple(vals),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_retired_survives_a_rebuild(self, tmp_path):
+        target_db = tmp_path / "target.db"
+        target_conn = get_connection(target_db)
+        schema.create_all(target_conn)
+
+        source_db = tmp_path / "source.db"
+        self._source_with_repo(source_db, status="retired")
+
+        assert rebuild._merge_one_disc(target_conn, source_db)["repositories"] == 1
+
+        row = target_conn.execute(
+            "SELECT status FROM repositories WHERE repo_id = ?", ("ghost",)
+        ).fetchone()
+        assert row[0] == "retired"
+        target_conn.close()
+
+    def test_active_stays_active(self, tmp_path):
+        target_db = tmp_path / "target.db"
+        target_conn = get_connection(target_db)
+        schema.create_all(target_conn)
+
+        source_db = tmp_path / "source.db"
+        self._source_with_repo(source_db, status="active")
+
+        rebuild._merge_one_disc(target_conn, source_db)
+        row = target_conn.execute(
+            "SELECT status FROM repositories WHERE repo_id = ?", ("ghost",)
+        ).fetchone()
+        assert row[0] == "active"
+        target_conn.close()
+
+    def test_pre_v10_disc_catalog_merges_as_active(self, tmp_path):
+        """A v≤9 disc has no `status` column at all — probe, don't raise."""
+        target_db = tmp_path / "target.db"
+        target_conn = get_connection(target_db)
+        schema.create_all(target_conn)
+
+        source_db = tmp_path / "source.db"
+        self._source_with_repo(source_db, with_status_col=False)
+
+        assert rebuild._merge_one_disc(target_conn, source_db)["repositories"] == 1
+        row = target_conn.execute(
+            "SELECT status FROM repositories WHERE repo_id = ?", ("ghost",)
+        ).fetchone()
+        assert row[0] == "active"
+        target_conn.close()
+
+    def test_freshest_disc_owns_the_status(self, tmp_path):
+        """rebuild_catalog merges discs freshest-first with INSERT OR IGNORE,
+        so the freshest catalog that mentions a repo owns its status — the
+        same rule volumes follow."""
+        target_db = tmp_path / "target.db"
+        target_conn = get_connection(target_db)
+        schema.create_all(target_conn)
+
+        stale = tmp_path / "stale.db"
+        fresh = tmp_path / "fresh.db"
+        self._source_with_repo(stale, status="active")
+        self._source_with_repo(fresh, status="retired")
+
+        # Freshest first, exactly as rebuild_catalog orders them.
+        rebuild._merge_one_disc(target_conn, fresh)
+        rebuild._merge_one_disc(target_conn, stale)
+
+        row = target_conn.execute(
+            "SELECT status FROM repositories WHERE repo_id = ?", ("ghost",)
+        ).fetchone()
+        assert row[0] == "retired"
+        target_conn.close()
+
+
 class TestRecencyAwareRebuild:
     """FMA-06: rebuild merges newest-first; stale discs cannot resurrect
     deprecated/destroyed volumes, and feed order never changes the output."""

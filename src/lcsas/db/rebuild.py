@@ -139,12 +139,32 @@ def _merge_one_disc(
     alias = "src"
     target.execute(f"ATTACH DATABASE ? AS {alias}", (str(source_db),))
     try:
-        # 1. repositories — keyed on repo_id
+        # 1. repositories — keyed on repo_id.
+        #
+        # `status` (schema v10) must travel with the row.  Discs are merged
+        # freshest-first and this is INSERT OR IGNORE, so the freshest
+        # catalog that mentions a repo owns its status — the same rule
+        # volumes follow below.  Dropping the column instead would silently
+        # resurrect every retired repo as 'active' (the table default), and
+        # the next `lcsas meta build` would then hard-fail on a repo the
+        # operator had already retired (#437) — right after the catalog loss
+        # that made a rebuild necessary.  The disc is the record; preserve
+        # what it recorded.
+        #
+        # A v≤9 disc catalog has no such column, so probe before selecting
+        # it: those repos pre-date retirement and are therefore active.
+        src_repo_cols = {
+            r[1] for r in target.execute(
+                f"PRAGMA {alias}.table_info(repositories)"
+            ).fetchall()
+        }
+        status_expr = "status" if "status" in src_repo_cols else "'active'"
         cur = target.execute(
             f"""
             INSERT OR IGNORE INTO repositories (repo_id, name, mirror_path,
-                encryption_key_id, created_at)
-            SELECT repo_id, name, mirror_path, encryption_key_id, created_at
+                encryption_key_id, created_at, status)
+            SELECT repo_id, name, mirror_path, encryption_key_id, created_at,
+                {status_expr}
             FROM {alias}.repositories
             """
         )
