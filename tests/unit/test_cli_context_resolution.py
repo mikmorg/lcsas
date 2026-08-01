@@ -29,6 +29,34 @@ from lcsas.cli.main import (
 from lcsas.exceptions import ConfigError
 
 
+def _device_actions(parser, _prefix=""):
+    """Yield ``(command_path, action)`` for every ``--device`` argument in
+    *parser* and, recursively, all of its subparsers.
+
+    Walks argparse's subparser tree instead of taking a hand-written list
+    of commands, so a subcommand added tomorrow is covered the day it is
+    added (#430).  Nested subcommands (``repo add``, ``volume list``, …)
+    are reached too, and reported with their full path.
+
+    argparse exposes no public API for this, so it reads ``_actions`` and
+    ``_SubParsersAction.choices``.  Both have been stable across every
+    CPython 3.x; the companion test asserts the walk still finds the
+    commands we know take ``--device``, so a future break shows up as a
+    failure rather than as silent under-coverage.
+    """
+    seen = set()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for name, sub in action.choices.items():
+                path = f"{_prefix}{name}"
+                if id(sub) in seen:      # aliases share a parser object
+                    continue
+                seen.add(id(sub))
+                yield from _device_actions(sub, _prefix=f"{path} ")
+        elif "--device" in action.option_strings:
+            yield _prefix.strip(), action
+
+
 def _write_config(tmp_path, db, *, optical_device=None):
     """Write a minimal but canonical TOML config; return its path as str."""
     mirror_base = tmp_path / "mirror"
@@ -168,6 +196,46 @@ class TestResolveDevice:
     def test_default_when_neither_set(self):
         assert _resolve_device(_args(device=None)) == "/dev/sr0"
 
+    def test_no_device_taking_command_has_a_parser_level_default(self):
+        """A hard-coded parser default would shadow the config forever, and
+        is indistinguishable downstream from an operator choice — EVERY
+        device-taking command must leave the slot empty.
+
+        Derived from the parser rather than from a hand-written list of
+        subcommands (#430): the previous version asserted the invariant
+        over the three commands that took ``--device`` on the day it was
+        written, so a fourth added later with
+        ``add_argument("--device", default="/dev/sr0")`` reintroduced the
+        exact bug of ``bdcbd31`` while this test kept passing. The
+        docstring promised "every"; only the walk below delivers it.
+        """
+        from lcsas.cli.main import build_parser
+
+        offenders = [
+            (path, action.default)
+            for path, action in _device_actions(build_parser())
+            if action.default is not None
+        ]
+        assert offenders == [], (
+            "these commands hard-code a --device default, which shadows "
+            f"[defaults].optical_device forever: {offenders}"
+        )
+
+    def test_the_device_walk_actually_finds_the_known_commands(self):
+        """A derived guard that silently finds nothing passes vacuously.
+
+        This pins the walk itself: if refactoring the parser (or argparse
+        internals shifting under us) makes ``_device_actions`` return an
+        empty or shrunken set, the test above would go green while
+        checking nothing at all — the precise failure mode #430 is about.
+        """
+        from lcsas.cli.main import build_parser
+
+        found = {path for path, _action in _device_actions(build_parser())}
+        assert {"verify", "burn-iso", "burn"} <= found, (
+            f"--device walk lost known commands; found only: {sorted(found)}"
+        )
+
     @pytest.mark.parametrize(
         "argv",
         [
@@ -177,9 +245,8 @@ class TestResolveDevice:
         ],
     )
     def test_device_is_unset_when_not_passed(self, argv):
-        """A hard-coded parser default would shadow the config forever, and
-        is indistinguishable downstream from an operator choice — every
-        device-taking command must leave the slot empty."""
+        """The same invariant observed end-to-end through parse_args, for
+        the three commands that took --device when bdcbd31 landed."""
         from lcsas.cli.main import build_parser
 
         assert build_parser().parse_args(argv).device is None
