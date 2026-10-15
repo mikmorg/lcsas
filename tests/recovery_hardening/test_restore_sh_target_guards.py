@@ -30,6 +30,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+from .conftest import _scaled_timeout
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_SH = REPO_ROOT / "recovery" / "scripts" / "restore.sh"
 HOST_TARGET = "x86_64-unknown-linux-musl"
@@ -178,7 +180,7 @@ def _run_pty(recovery: Path, target: Path, env: dict[str, str],
             out += chunk
     finally:
         os.close(master)
-    rc = proc.wait(timeout=30)
+    rc = proc.wait(timeout=_scaled_timeout(30))
     return rc, out.decode(errors="replace")
 
 

@@ -32,6 +32,10 @@ probe in the restore.bat suites: it exists precisely to fail FAST to a
 clean skip when wine is wedged (#390).  Stretching it would defeat its
 purpose and make a bad host grind for minutes instead of seconds.
 
+``Popen.wait()`` / ``communicate()`` never pass through this wrapper, so
+the few pty tests that need ``Popen`` call ``_scaled_timeout`` on their
+own hang-guards; ``test_timeout_scaling.py`` fails any that don't (#458).
+
 Scale with ``LCSAS_TEST_TIMEOUT_SCALE`` (default 4; 1 disables).
 """
 from __future__ import annotations

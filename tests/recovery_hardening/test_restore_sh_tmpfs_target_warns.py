@@ -26,6 +26,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+from .conftest import _scaled_timeout
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_SH = REPO_ROOT / "recovery" / "scripts" / "restore.sh"
 
@@ -125,7 +127,7 @@ def test_tmpfs_target_warns_and_prompts(tmp_path: Path) -> None:
         )
         os.close(slave)
         os.write(master, b"n\n")
-        out, err = proc.communicate(timeout=30)
+        out, err = proc.communicate(timeout=_scaled_timeout(30))
     finally:
         os.close(master)
 
