@@ -9,11 +9,17 @@ producing false alarms.
 The scaling must be *selective*, and these tests pin that: stretching
 the 90 s `wineboot` probe would defeat the fail-fast skip that stops a
 wedged wine host from grinding `make gate` for minutes (#390).
+
+The wrapper only sees `subprocess.run`, so the pty tests that need
+`Popen` scale their own hang-guards; a static guard below keeps the
+next one from bypassing the fix (#458).
 """
 
 from __future__ import annotations
 
+import ast
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -27,6 +33,18 @@ from .conftest import (
 # Captured at import time — before the autouse fixture swaps it — so the
 # "is it actually installed?" check below has an unpatched reference.
 _real_run_snapshot = subprocess.run
+
+
+@pytest.fixture(autouse=True)
+def _pin_default_scale(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Assert against the default, not whatever the shell exports (#458).
+
+    LCSAS_TEST_TIMEOUT_SCALE is a knob someone on a slow box is *meant*
+    to set, so this file must not inherit it -- at the documented
+    disable value of 1 the end-to-end test below would raise an uncaught
+    TimeoutExpired.  Tests that exercise the knob set it on top of this.
+    """
+    monkeypatch.delenv("LCSAS_TEST_TIMEOUT_SCALE", raising=False)
 
 
 class TestScaledTimeout:
@@ -169,3 +187,75 @@ class TestWrapperIsActuallyInstalled:
         # the 5-second child has to trip it.
         with pytest.raises(subprocess.TimeoutExpired):
             subprocess.run(["sleep", "5"], timeout=2)
+
+
+# Calls whose ``timeout`` never reaches the run() wrapper: Popen's own
+# waits, plus the two convenience helpers built on them rather than on
+# run().  Positional index is where ``timeout`` lands if not passed by
+# keyword.
+_BYPASSING_CALLS = {"wait": 0, "communicate": 1, "call": None, "check_call": None}
+
+
+def _scan_bypassing_timeouts() -> tuple[list[str], list[str]]:
+    """Return (unscaled, scaled) ``file:line`` sites across the tier."""
+    unscaled: list[str] = []
+    scaled: list[str] = []
+    for path in sorted(Path(__file__).parent.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in _BYPASSING_CALLS):
+                continue
+            value = next((kw.value for kw in node.keywords
+                          if kw.arg == "timeout"), None)
+            pos = _BYPASSING_CALLS[node.func.attr]
+            if value is None and pos is not None and len(node.args) > pos:
+                value = node.args[pos]
+            if value is None:
+                continue
+            where = f"{path.name}:{node.lineno}"
+            if (isinstance(value, ast.Call)
+                    and isinstance(value.func, ast.Name)
+                    and value.func.id == "_scaled_timeout"):
+                scaled.append(where)
+            elif isinstance(value, ast.Constant) and (
+                value.value is None
+                or (isinstance(value.value, (int, float))
+                    and not isinstance(value.value, bool)
+                    and value.value >= _HANG_GUARD_CEILING_S)):
+                # A deliberate wait (or none) -- the wrapper would leave
+                # it alone too, so there is nothing to bypass.
+                pass
+            else:
+                unscaled.append(where)
+    return unscaled, scaled
+
+
+class TestPopenHangGuardsAreScaled:
+    """``Popen.wait()``/``communicate()`` never pass through the run()
+    wrapper, so a pty test that needs ``Popen`` must scale its own
+    hang-guard -- otherwise it misfires under full-tier load exactly as
+    #453's did.  Wrapping is always safe: ``_scaled_timeout`` already
+    passes deliberate waits (>= the ceiling) through untouched."""
+
+    def test_no_unscaled_hang_guard_bypasses_the_wrapper(self):
+        unscaled, _ = _scan_bypassing_timeouts()
+        assert not unscaled, (
+            "These Popen-style waits bypass the subprocess.run timeout "
+            "scaling (#453/#458). Wrap the value in _scaled_timeout() "
+            "(from .conftest), or use a literal >= "
+            f"{_HANG_GUARD_CEILING_S:g}s if it is a deliberate wait:\n  "
+            + "\n  ".join(unscaled)
+        )
+
+    def test_the_scan_actually_sees_the_scaled_sites(self):
+        """Non-vacuity: a walker that matched nothing would pass the
+        guard above trivially.  The three #458 pty sites must show up."""
+        _, scaled = _scan_bypassing_timeouts()
+        files = {where.split(":")[0] for where in scaled}
+        assert {
+            "test_nonempty_target_guard.py",
+            "test_restore_sh_target_guards.py",
+            "test_restore_sh_tmpfs_target_warns.py",
+        } <= files, scaled
