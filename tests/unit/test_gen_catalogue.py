@@ -70,6 +70,54 @@ class TestIdempotent:
         assert first_pass == second_pass, "Generator output is not idempotent"
 
 
+class TestRealReadmeIsFresh:
+    """The checked-in README must already match the generator (#459).
+
+    Every other test here runs the generator against a temp copy, which
+    proved ``--check`` works while nothing ever ran it against the real
+    file -- and the table drifted 15 files stale.  This is the enforcement.
+    """
+
+    def test_real_readme_matches_generator(self) -> None:
+        exit_code = GEN.run(_TEST_DIR, _TEST_DIR / "README.md", check_mode=True)
+        assert exit_code == 0, (
+            "tests/recovery_hardening/README.md catalogue is stale: a "
+            "hardening test was added, removed, or had its docstring's "
+            "first line changed.  Run:  make gen-catalogue"
+        )
+
+
+class TestUnknownArgsRejected:
+    """An unrecognised flag must fail, never fall through to rewrite (#459)."""
+
+    def test_unknown_arg_fails_without_writing(self, monkeypatch) -> None:
+        def _no_run(*_args, **_kwargs):
+            raise AssertionError("run() must not be reached on a bad argv")
+
+        monkeypatch.setattr(GEN, "run", _no_run)
+        for argv in (["--chek"], ["--dry-run"], ["--check", "--verbose"]):
+            assert GEN.main(argv) != 0, argv
+
+    def test_help_prints_usage_without_writing(self, monkeypatch, capsys) -> None:
+        def _no_run(*_args, **_kwargs):
+            raise AssertionError("--help must not reach run()")
+
+        monkeypatch.setattr(GEN, "run", _no_run)
+        assert GEN.main(["--help"]) == 0
+        assert "--check" in capsys.readouterr().out
+
+    def test_check_alone_is_still_accepted(self, monkeypatch) -> None:
+        seen: dict[str, bool] = {}
+
+        def _fake_run(_test_dir, _readme, check_mode):
+            seen["check_mode"] = check_mode
+            return 0
+
+        monkeypatch.setattr(GEN, "run", _fake_run)
+        assert GEN.main(["--check"]) == 0
+        assert seen == {"check_mode": True}
+
+
 class TestCheckModeFailsWhenStale:
     """--check must exit non-zero when the README is out of date."""
 
