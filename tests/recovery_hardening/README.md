@@ -52,17 +52,21 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_ci_workflow_parity.py` | Hardening: CI workflow ↔ `make gate` suite parity (GATE-02). |
 | `test_cross_build_deps.py` | Guard the recovery cross-build source dependencies. |
 | `test_disc_swap_docs.py` | test_disc_swap_docs.py -- static regression guard for the MULTI-DISC RESTORE |
+| `test_dockerfile_rustic_pin_parity.py` | The host-A image's rustic pin must equal the tier-2 recovery pin (#428). |
 | `test_ecc_capacity_claims.py` | Hardening test: ECC repair-capacity claims must match configured redundancy. |
 | `test_ecc_tooling_on_meta.py` | FMT-01: the RS03 repair tool ships on every meta volume. |
 | `test_env_var_docs.py` | Hardening test: ENV_VARS.txt inventory + opt-in/opt-out principle. |
+| `test_exemptions_contract.py` | Hardening: the tier-1 coverage-exemptions contract cannot silently rot or |
 | `test_format_canary.py` | FMT-03 format canary: round-trip LATEST rustic through the pinned readers. |
 | `test_format_txt_path_safety.py` | Hardening test: FORMAT.txt PATH SAFETY must match binary behaviour. |
 | `test_initramfs_manifest_sources.py` | BOOT-02: build_initramfs.sh must hard-fail on missing sources. |
 | `test_keyshare_docs.py` | test_keyshare_docs.py -- static guard: heir docs name the C combiner [KEY-05]. |
 | `test_last_verified_writer_exists.py` | Hardening test: volume_copies.last_verified_at must have a writer. |
 | `test_live_usb_procedure_docs.py` | test_live_usb_procedure_docs.py -- static doc-pinning gate for the |
+| `test_manifest_freshness.py` | test_manifest_freshness.py -- tamper/staleness gate for recovery/MANIFEST.sha256. |
 | `test_meta_bundles_dvdisaster_source.py` | Hardening test (FMT-02): the dvdisaster RS03 source must be pinned, |
 | `test_meta_bundling_completeness.py` | Hardening test #1: meta-disc tier-1 bundling completeness. |
+| `test_meta_completeness_367.py` | test_meta_completeness_367.py -- tiered meta completeness (issue #367). |
 | `test_multi_disc_design_header.py` | test_multi_disc_design_header.py -- static regression guard ensuring |
 | `test_no_boot_deadend_routing.py` | test_no_boot_deadend_routing.py -- static regression guard against the |
 | `test_no_bypass_check.py` | Unit tests for the blind-restore #13 bypass check. |
@@ -75,7 +79,9 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_readme_simplification.py` | Hardening test: README_RESTORE simplification (Unit 5). |
 | `test_rebuild_docs.py` | test_rebuild_docs.py -- static regression guard for the mixed-age-discs |
 | `test_recovery_card_docs.py` | Hardening test: the single-key Recovery Card artifact + its references. |
+| `test_restore_auto_repo_select.py` | test_restore_auto_repo_select.py -- restore_auto.sh per-repo selection. |
 | `test_restore_bat_ecc_dispatch_wine.py` | FMT-01: restore.bat --check-disc ECC repair path, end-to-end under wine. |
+| `test_restore_bat_password_lifetime.py` | restore.bat temp-password-file lifetime (issue #384 review finding). |
 | `test_restore_bat_wine_smoke.py` | INFRA-01: local wine smoke loop for recovery/scripts/restore.bat. |
 | `test_restore_discovery.py` | Hardening test #3: restore.sh repo discovery on canonical layouts. |
 | `test_restore_no_recovery_binaries.py` | Hardening test (issue #225): restore.sh terminal error UX when |
@@ -83,8 +89,10 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_sh_binary_corrupt.py` | Issue #223 — restore.sh detects present-but-corrupted tier binaries. |
 | `test_restore_sh_catalog_invalidation.py` | Hardening test: mtime-based locator-catalog cache invalidation in restore.sh (Issue #108). |
 | `test_restore_sh_ecc_dispatch.py` | Hardening tests: restore.sh --check-disc ECC dispatch [FMT-01]. |
+| `test_restore_sh_password_hygiene.py` | test_restore_sh_password_hygiene.py -- restore.sh password-file cleanup. |
 | `test_restore_sh_relocate.py` | Hardening tests: restore.sh relocation path (read-only SCRIPT_DIR). |
 | `test_restore_sh_repo_flag.py` | Hardening test: --repo NAME flag on restore.sh (Issue #91). |
+| `test_restore_sh_stock_restic_tier.py` | test_restore_sh_stock_restic_tier.py -- restore.sh tier-2b dispatch. |
 | `test_restore_sh_target_guards.py` | Hardening tests: restore.sh target-safety guards [UX-07] + [BOOT-05]. |
 | `test_restore_sh_target_key_flags.py` | Hardening tests: --target / --key flags on restore.sh [KEY-02]. |
 | `test_restore_sh_tier1_missing_multidisc.py` | Hardening test (GATE-06): restore.sh drives the full tier1-missing |
@@ -93,9 +101,13 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_sh_version_flag.py` | Hardening test: --version flag on restore.sh (Issue #96). |
 | `test_restore_skips_tier2_on_multi_disc.py` | Hardening test (issue #227): restore.sh skips tier 2 when the |
 | `test_restore_space_preflight.py` | Hardening tests: restore-side free-space preflight [FMA-09]. |
+| `test_scheduled_canary_watchdogs.py` | Hardening: every scheduled canary self-tickets when it goes red (#420). |
 | `test_setup_static_guards.py` | Hardening tests #7 + #8: static guards on the blind-test setup. |
 | `test_shell_coverage_contract.py` | Hardening: the `shell-coverage` Makefile recipe stays a real gate (GATE-09). |
 | `test_standalone_zstandard_guard.py` | Hardening test: standalone_restorer.py's `import zstandard` guard. |
+| `test_standard_tools_runbook.py` | test_standard_tools_runbook.py -- keep RESTORE_STANDARD_TOOLS.txt honest. |
+| `test_stock_restic_compat.py` | test_stock_restic_compat.py -- the "standard tools" restore-tier guarantee. |
+| `test_supply_chain_372.py` | test_supply_chain_372.py -- bundle-time upstream re-verification (#372). |
 | `test_tier1_aarch64_qemu.py` | Issue #107: tier-1 aarch64 cross-built binary coverage via qemu-user. |
 | `test_tier1_armv7_qemu.py` | Issue #119: tier-1 armv7 cross-built binary coverage via qemu-user. |
 | `test_tier1_coverage_baseline.py` | Opt-in gate: make coverage-c must complete without error. |
@@ -135,6 +147,8 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_tier3_zstd_portability.py` | Hardening test: tier-3 zstd works on every approved target (RST-04). |
 | `test_tier3_zstd_qemu.py` | Opt-in cross-arch proof: tier-3 zstd restore under aarch64 CPython (RST-04). |
 | `test_tier_fallback.py` | Hardening test #10: restore.sh tier fallback under |
+| `test_tiers_contract.py` | test_tiers_contract.py -- docs-vs-reality contract gate for TIERS.txt. |
+| `test_timeout_scaling.py` | #453: hang-guard timeouts are stretched; deliberate waits are not. |
 | `test_verify_self.py` | Hardening test #6 + #9: verify.sh must fail closed on every known |
 | `test_windows_doc_multiextent_caveat.py` | Hardening doc-pin: RECOVER_WINDOWS.txt documents the >4 GiB CDFS trap (FMT-04). |
 | `test_workflow_path_filter.py` | Hardening: audit-gate path-filter has no ghost entries and no holes (GATE-04). |

@@ -123,6 +123,19 @@ def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
 
+    if "-h" in argv or "--help" in argv:
+        print(__doc__)
+        return 0
+    # Anything but --check used to fall through to rewrite mode, so a
+    # typo'd or check-like flag (--chek, --help) silently edited the
+    # README instead of failing (#459).
+    unknown = [arg for arg in argv if arg != "--check"]
+    if unknown:
+        print(
+            f"ERROR: unknown argument(s): {' '.join(unknown)}\n{__doc__}",
+            file=sys.stderr,
+        )
+        return 2
     check_mode = "--check" in argv
 
     repo_root = Path(__file__).parent.parent
