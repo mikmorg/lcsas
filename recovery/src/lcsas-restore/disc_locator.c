@@ -5,6 +5,8 @@
  */
 #include "disc_locator.h"
 #include "hex.h"
+#include "json_q.h"
+#include "lcsas_io.h"
 #include "posix_compat.h"
 
 #include <stdio.h>
@@ -26,6 +28,27 @@
 
 /* Forward declarations for helpers defined further below. */
 static int copy_file(const char *src, const char *dst);
+
+/*
+ * A disc root whose volume_info.json has been announced (#456).  The
+ * file's stat identity tells a different disc mounted at the same path
+ * apart; Windows reports st_ino 0, so size + mtime carry it there.
+ */
+struct lcsas_seen_volume {
+    char              *root;
+    unsigned long long dev;
+    unsigned long long ino;
+    long long          size;
+    long long          mtime;
+    int                seen;    /* found again by the refresh in progress */
+};
+
+/*
+ * volume_info.json is a few hundred bytes plus ~70 per pack in its
+ * sha256_manifest: ~7 MB for a BDXL100 of 1 MiB packs.  A bigger file
+ * is not one LCSAS wrote, so it is skipped rather than read.
+ */
+#define VOLUME_INFO_MAX_BYTES (16L * 1024L * 1024L)
 
 void
 lcsas_disc_locator_init(lcsas_disc_locator *l,
@@ -54,6 +77,10 @@ lcsas_disc_locator_init(lcsas_disc_locator *l,
     l->cache_dir           = NULL;
     chunk_env = getenv("LCSAS_DRAIN_CHUNK_PACKS");
     l->drain_chunk_packs   = chunk_env ? atoi(chunk_env) : 0;
+    l->seen_volumes        = NULL;
+    l->n_seen_volumes      = 0;
+    l->cap_seen_volumes    = 0;
+    l->mid_prompt_line     = 0;
     l->auto_mount          = 1;
     /* 2 s: a desktop auto-mount takes a second or two, so a faster
      * poll gains nothing, and each tick costs one readdir per mount
@@ -112,7 +139,15 @@ free_discovered(lcsas_disc_locator *l)
 void
 lcsas_disc_locator_free(lcsas_disc_locator *l)
 {
+    size_t i;
     free_discovered(l);
+    for (i = 0; i < l->n_seen_volumes; i++) {
+        free(l->seen_volumes[i].root);
+    }
+    free(l->seen_volumes);
+    l->seen_volumes     = NULL;
+    l->n_seen_volumes   = 0;
+    l->cap_seen_volumes = 0;
     if (l->owned_catalog) {
         lcsas_catalog_close(l->owned_catalog);
         l->owned_catalog = NULL;
@@ -327,17 +362,163 @@ effective_catalog(lcsas_disc_locator *l)
 }
 
 /*
+ * Start a line of output on the operator stream.  While the prompt
+ * waits, the cursor sits after its "> ", so a line printed then (a poll
+ * tick's find) needs a newline first.
+ */
+static void
+begin_line(lcsas_disc_locator *l)
+{
+    if (l->mid_prompt_line) {
+        fputc('\n', l->prompt_out);
+        l->mid_prompt_line = 0;
+    }
+}
+
+/*
+ * Decode the top-level string field `key` of the object at toks[0]
+ * into `out`.  Returns 1 for a non-empty string that fits, else 0.
+ */
+static int
+json_string_field(const char *src, const lcsas_json_tok *toks,
+                  const char *key, char *out, size_t cap)
+{
+    long idx = lcsas_json_obj_get(src, toks, 0, key);
+    return idx >= 0
+        && toks[idx].type == LCSAS_JSON_STRING
+        && lcsas_json_decode_string(src, &toks[idx], out, cap) > 0;
+}
+
+/*
+ * Print the one line that names the disc at `root` from its
+ * volume_info.json: the label LCSAS gave it, the meta (recovery) disc,
+ * or why the file could not be used.  A bad file only costs the label;
+ * the disc is searched for packs either way.
+ */
+static void
+describe_volume(lcsas_disc_locator *l, const char *root,
+                const char *info_path, long long size)
+{
+    FILE *o = l->prompt_out;
+    unsigned char *buf = NULL;
+    size_t len = 0;
+    lcsas_json_tok *toks = NULL;
+    const char *why = NULL;
+    char label[128];
+    char kind[8];
+
+    begin_line(l);
+    if (size > VOLUME_INFO_MAX_BYTES) {
+        why = "is too large";
+    } else if (lcsas_read_file(info_path, &buf, &len) != 0) {
+        why = "could not be read";
+    } else if (lcsas_json_parse_alloc((const char *)buf, len, &toks, 64) < 1
+               || toks[0].type != LCSAS_JSON_OBJECT) {
+        why = "is not valid JSON";
+    } else if (json_string_field((const char *)buf, toks, "label",
+                                 label, sizeof label)) {
+        /* The label is read off the disc: show printable ASCII only, so
+         * a stray byte can't drive the terminal. */
+        char *c;
+        for (c = label; *c; c++) {
+            if ((unsigned char)*c < 0x20 || (unsigned char)*c > 0x7e)
+                *c = '?';
+        }
+        fprintf(o, "[lcsas-restore] mounted volume %s at %s\n",
+                label, root);
+    } else if (json_string_field((const char *)buf, toks, "type",
+                                 kind, sizeof kind)
+               && strcmp(kind, "meta") == 0) {
+        /* The meta disc's volume_info.json has no label. */
+        fprintf(o, "[lcsas-restore] mounted the recovery (meta) disc "
+                   "at %s\n", root);
+    } else {
+        why = "has no usable label";
+    }
+    if (why) {
+        fprintf(o, "[lcsas-restore] disc at %s: its volume_info.json %s; "
+                   "searching it anyway.\n", root, why);
+    }
+    fflush(o);
+    free(toks);
+    free(buf);
+}
+
+/*
+ * Name the disc at `root` if it carries a volume_info.json not already
+ * named for this insertion (#456).  Absent file: silent, as for older
+ * discs and plain directories.  Returns 1 if it printed a line.
+ */
+static int
+announce_volume(lcsas_disc_locator *l, const char *root)
+{
+    char info_path[4096];
+    struct stat st;
+    struct lcsas_seen_volume *sv = NULL;
+    size_t i;
+    int rc;
+
+    rc = snprintf(info_path, sizeof info_path, "%s/volume_info.json", root);
+    if (rc <= 0 || (size_t)rc >= sizeof info_path) return 0;
+    if (stat(info_path, &st) != 0) return 0;
+
+    for (i = 0; i < l->n_seen_volumes; i++) {
+        if (strcmp(l->seen_volumes[i].root, root) == 0) {
+            sv = &l->seen_volumes[i];
+            break;
+        }
+    }
+    if (sv) {
+        sv->seen = 1;
+        if (sv->dev == (unsigned long long)st.st_dev
+                && sv->ino == (unsigned long long)st.st_ino
+                && sv->size == (long long)st.st_size
+                && sv->mtime == (long long)st.st_mtime)
+            return 0;
+    } else {
+        if (l->n_seen_volumes == l->cap_seen_volumes) {
+            size_t newcap = l->cap_seen_volumes
+                              ? l->cap_seen_volumes * 2 : 8;
+            struct lcsas_seen_volume *grown =
+                (struct lcsas_seen_volume *)realloc(
+                    l->seen_volumes, newcap * sizeof *grown);
+            /* Out of memory: stay quiet rather than repeat the line on
+             * every poll tick. */
+            if (!grown) return 0;
+            l->seen_volumes     = grown;
+            l->cap_seen_volumes = newcap;
+        }
+        sv = &l->seen_volumes[l->n_seen_volumes];
+        sv->root = (char *)malloc(strlen(root) + 1);
+        if (!sv->root) return 0;
+        memcpy(sv->root, root, strlen(root) + 1);
+        sv->seen = 1;
+        l->n_seen_volumes++;
+    }
+    sv->dev   = (unsigned long long)st.st_dev;
+    sv->ino   = (unsigned long long)st.st_ino;
+    sv->size  = (long long)st.st_size;
+    sv->mtime = (long long)st.st_mtime;
+    describe_volume(l, root, info_path, (long long)st.st_size);
+    return 1;
+}
+
+/*
  * Walk each mount_parent directory, append every direct subdirectory
  * to discovered_paths, and check each for a fresher catalog.db.
  * Discards prior discoveries first so the list is always current.
  */
-static void
+static int
 refresh_discovered(lcsas_disc_locator *l)
 {
     size_t i;
     int meta_live;
+    int announced = 0;
 
     free_discovered(l);
+    for (i = 0; i < l->n_seen_volumes; i++) {
+        l->seen_volumes[i].seen = 0;
+    }
 
     /* Liveness check once per refresh -- if the operator ejects the
      * meta disc partway through, the worst case is a single stale
@@ -366,6 +547,7 @@ refresh_discovered(lcsas_disc_locator *l)
             consider_catalog(l, child);
         }
         push_discovered(l, parent);
+        announced += announce_volume(l, parent);
 
         d = opendir(parent);
         if (!d) continue;
@@ -386,6 +568,7 @@ refresh_discovered(lcsas_disc_locator *l)
             if (meta_live && path_under(child, l->meta_disc))
                 continue;
             push_discovered(l, child);
+            announced += announce_volume(l, child);
 
             /* Look for a catalog.db at the disc root (LCSAS holographic
              * layout) -- pick the freshest one we can open. */
@@ -397,6 +580,18 @@ refresh_discovered(lcsas_disc_locator *l)
         }
         closedir(d);
     }
+
+    /* Forget discs that are gone, so one put back is named again. */
+    i = 0;
+    while (i < l->n_seen_volumes) {
+        if (l->seen_volumes[i].seen) {
+            i++;
+            continue;
+        }
+        free(l->seen_volumes[i].root);
+        l->seen_volumes[i] = l->seen_volumes[--l->n_seen_volumes];
+    }
+    return announced;
 }
 
 /*
@@ -809,6 +1004,7 @@ print_prompt(lcsas_disc_locator *l, const char *hex)
     fputs("+----------------------------------------------------------+\n", o);
     fputs("> ", o);
     fflush(o);
+    l->mid_prompt_line = 1;
 }
 
 /*
@@ -846,6 +1042,7 @@ read_response(lcsas_disc_locator *l, int fd)
 {
     int c;
     int abort_req = 0;
+    l->mid_prompt_line = 0;   /* the answer's newline ends the line */
     if (l->prompt_in == NULL) return -1;
     c = next_answer_char(l, fd);
     if (c == EOF) return -1;
@@ -870,6 +1067,7 @@ wait_for_answer_or_disc(lcsas_disc_locator *l, const char *hex,
 {
 #ifndef _WIN32
     int fd;
+    int announced;
 
     if (!auto_detect_active(l)) return read_response(l, -1);
     fd = fileno(l->prompt_in);
@@ -892,8 +1090,16 @@ wait_for_answer_or_disc(lcsas_disc_locator *l, const char *hex,
             l->auto_mount = 0;
             return read_response(l, -1);
         }
-        refresh_discovered(l);
+        announced = refresh_discovered(l);
         if (scan_paths(l, hex, out_path, out_path_cap)) return 1;
+        if (announced) {
+            /* A disc went in, but not the one with this pack.  Say so,
+             * and put the "> " back under the line just printed. */
+            fputs("(still not found -- check the disc label and try "
+                  "again)\n> ", l->prompt_out);
+            fflush(l->prompt_out);
+            l->mid_prompt_line = 1;
+        }
     }
 #else
     (void)hex; (void)out_path; (void)out_path_cap;
@@ -965,8 +1171,9 @@ lcsas_disc_locate_pack(lcsas_disc_locator *l,
             return -1;
         }
         if (answer > 0) {
+            begin_line(l);
             fprintf(l->prompt_out,
-                    "\n[lcsas-restore] new disc detected -- no ENTER "
+                    "[lcsas-restore] new disc detected -- no ENTER "
                     "needed.\n"
                     "[lcsas-restore] found %.16s...; continuing.\n", hex);
             return 0;

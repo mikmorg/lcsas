@@ -62,6 +62,38 @@ write_pack(const char *path, const char *contents)
  * wins (plain /tmp when none qualifies -- the affected lines are
  * classified VOLATILE in recovery/docs/EXEMPTIONS.md).
  */
+/*
+ * Count the lines of `f` (rewound) that contain `needle`.
+ */
+static int
+count_lines_with(FILE *f, const char *needle)
+{
+    char line[512];
+    int n = 0;
+    rewind(f);
+    while (fgets(line, sizeof line, f)) {
+        if (strstr(line, needle)) n++;
+    }
+    fseek(f, 0, SEEK_END);
+    return n;
+}
+
+/*
+ * Make <parent>/<name>/ holding volume_info.json = `json` (NULL: no
+ * file at all).
+ */
+static void
+make_labelled_disc(const char *parent, const char *name, const char *json)
+{
+    char p[1024];
+    snprintf(p, sizeof p, "%s/%s", parent, name);
+    mkdir_recursive(p);
+    if (json) {
+        snprintf(p, sizeof p, "%s/%s/volume_info.json", parent, name);
+        write_pack(p, json);
+    }
+}
+
 static const char *
 roomy_base(void)
 {
@@ -1119,6 +1151,302 @@ main(void)
             lcsas_disc_locator_free(&l);
             close(pfd[1]);
             if (in) fclose(in);
+            if (out) fclose(out);
+        }
+    }
+
+    /* Volume label (#456): each refresh of the mount parents names a
+     * disc by the label in its volume_info.json, once per insertion.
+     * Absent file: silent.  A bad one gets a note and the disc is still
+     * searched.  Non-interactive misses drive the refreshes here. */
+    {
+        char parent[1024], away[1024], disc[1024], p[1024];
+        char longlabel[260];
+        const char *parents[1];
+        const char *search[] = { tmpdir };
+        unsigned char missing[32];
+        FILE *out = tmpfile();
+        int k;
+        memset(missing, 0xEC, 32);
+        snprintf(parent, sizeof parent, "%s/label_media", tmpdir);
+        mkdir_recursive(parent);
+        make_labelled_disc(parent, "VOL_OK",
+            "{\"uuid\": \"u-1\", \"label\": \"LCSAS_BD25_2026_0001\", "
+            "\"media_type\": \"BD25\"}");
+        make_labelled_disc(parent, "VOL_META",
+            "{\"type\": \"meta\", \"description\": \"rescue\"}");
+        make_labelled_disc(parent, "VOL_BADJSON", "{\"label\": \"x\"");
+        make_labelled_disc(parent, "VOL_ARRAY", "[\"label\"]");
+        make_labelled_disc(parent, "VOL_NOLABEL", "{\"uuid\": \"u-2\"}");
+        make_labelled_disc(parent, "VOL_NUMLABEL", "{\"label\": 7}");
+        make_labelled_disc(parent, "VOL_CTRL",
+            "{\"label\": \"EVIL\\u001b[31mX\\u0007\"}");
+        memset(longlabel, 0, sizeof longlabel);
+        memcpy(longlabel, "{\"label\": \"", 11);
+        memset(longlabel + 11, 'L', 200);
+        memcpy(longlabel + 211, "\"}", 2);
+        make_labelled_disc(parent, "VOL_LONGLABEL", longlabel);
+        make_labelled_disc(parent, "VOL_NONE", NULL);
+        /* volume_info.json that is a directory: stat()s, can't be read.
+         * Not empty: btrfs gives an empty directory st_size 0, which
+         * would read as an empty file rather than fail with EISDIR. */
+        snprintf(p, sizeof p, "%s/VOL_DIR/volume_info.json", parent);
+        mkdir_recursive(p);
+        snprintf(p, sizeof p, "%s/VOL_DIR/volume_info.json/entry", parent);
+        write_pack(p, "x");
+        /* Past the size cap: a sparse file, so nothing is written. */
+        make_labelled_disc(parent, "VOL_BIG", "{}");
+        snprintf(p, sizeof p, "%s/VOL_BIG/volume_info.json", parent);
+        if (truncate(p, 16L * 1024L * 1024L + 1L) != 0) {
+            fprintf(stderr, "FAIL: truncate VOL_BIG errno=%d\n", errno);
+            fails++;
+        }
+        parents[0] = parent;
+
+        if (!out) {
+            fprintf(stderr, "FAIL: tmpfile\n"); fails++;
+        } else {
+            lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+            lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+            l.prompt_out = out;
+            for (k = 0; k < 3; k++) {
+                (void)lcsas_disc_locate_pack(&l, missing, found, sizeof found);
+            }
+            {
+                static const struct { const char *needle; int want; } c[] = {
+                    { "mounted volume LCSAS_BD25_2026_0001 at ", 1 },
+                    { "mounted the recovery (meta) disc at ", 1 },
+                    { "VOL_BADJSON: its volume_info.json is not valid JSON; "
+                      "searching it anyway.", 1 },
+                    { "VOL_ARRAY: its volume_info.json is not valid JSON", 1 },
+                    { "VOL_NOLABEL: its volume_info.json has no usable label", 1 },
+                    { "VOL_NUMLABEL: its volume_info.json has no usable label", 1 },
+                    { "VOL_LONGLABEL: its volume_info.json has no usable label", 1 },
+                    { "mounted volume EVIL?[31mX? at ", 1 },
+                    { "VOL_DIR: its volume_info.json could not be read", 1 },
+                    { "VOL_BIG: its volume_info.json is too large", 1 },
+                    { "VOL_NONE", 0 },
+                    { "\033", 0 }
+                };
+                size_t j;
+                for (j = 0; j < sizeof c / sizeof c[0]; j++) {
+                    int got = count_lines_with(out, c[j].needle);
+                    if (got != c[j].want) {
+                        fprintf(stderr,
+                                "FAIL: volume label: %d line(s) with '%s' "
+                                "after 3 refreshes (want %d)\n",
+                                got, c[j].needle, c[j].want);
+                        fails++;
+                    }
+                }
+            }
+
+            /* Eject VOL_OK and put it back: named again.  Then a
+             * different disc at the same path: named too. */
+            snprintf(disc, sizeof disc, "%s/VOL_OK", parent);
+            snprintf(away, sizeof away, "%s/label_away", tmpdir);
+            if (rename(disc, away) != 0) {
+                fprintf(stderr, "FAIL: eject VOL_OK errno=%d\n", errno);
+                fails++;
+            }
+            (void)lcsas_disc_locate_pack(&l, missing, found, sizeof found);
+            if (rename(away, disc) != 0) {
+                fprintf(stderr, "FAIL: reinsert VOL_OK errno=%d\n", errno);
+                fails++;
+            }
+            (void)lcsas_disc_locate_pack(&l, missing, found, sizeof found);
+            (void)lcsas_disc_locate_pack(&l, missing, found, sizeof found);
+            if (count_lines_with(out, "mounted volume LCSAS_BD25_2026_0001 ")
+                    != 2) {
+                fprintf(stderr,
+                        "FAIL: volume label: a disc ejected and put back "
+                        "is not named again (or is named every refresh)\n");
+                fails++;
+            }
+            snprintf(p, sizeof p, "%s/VOL_OK/volume_info.json", parent);
+            write_pack(p, "{\"label\": \"LCSAS_BD25_2026_0002\", \"uuid\": "
+                          "\"u-other-disc\"}");
+            (void)lcsas_disc_locate_pack(&l, missing, found, sizeof found);
+            if (count_lines_with(out, "mounted volume LCSAS_BD25_2026_0002 ")
+                    != 1) {
+                fprintf(stderr,
+                        "FAIL: volume label: a different disc at the same "
+                        "mount path is not named\n");
+                fails++;
+            }
+            lcsas_disc_locator_free(&l);
+            fclose(out);
+        }
+
+        /* A mount parent too long to append "/volume_info.json" to is
+         * skipped, not overrun. */
+        {
+            char *huge = (char *)malloc(5000);
+            if (huge) {
+                const char *hp[1];
+                memset(huge, 'p', 4999);
+                huge[0] = '/';
+                huge[4999] = '\0';
+                hp[0] = huge;
+                lcsas_disc_locator_init(&l, search, 1, NULL, 0);
+                lcsas_disc_locator_set_mount_parents(&l, hp, 1);
+                (void)lcsas_disc_locate_pack(&l, missing, found, sizeof found);
+                if (l.n_seen_volumes != 0) {
+                    fprintf(stderr,
+                            "FAIL: volume label: overlong mount parent "
+                            "recorded as a disc\n");
+                    fails++;
+                }
+                lcsas_disc_locator_free(&l);
+                free(huge);
+            }
+        }
+    }
+
+    /* Volume label while the prompt polls: the wrong disc goes in
+     * first.  It is named on a fresh line (not glued to the "> "),
+     * followed by the "still not found" line; a child process waits for
+     * that line, ejects it and inserts the right disc, which is named
+     * and then picked up. */
+    {
+        const char *hex3 =
+            "fd23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        unsigned char id3[32];
+        char parent[1024], wrong[1024], right[1024], outpath[1024];
+        char wrong_in[1024], right_in[1024], p[1024];
+        const char *parents[1];
+        const char *search[] = { tmpdir };
+        int pfd[2];
+        size_t k;
+        for (k = 0; k < 32; k++) {
+            unsigned int b;
+            sscanf(hex3 + 2 * k, "%2x", &b);
+            id3[k] = (unsigned char)b;
+        }
+        snprintf(parent, sizeof parent, "%s/label_poll_media", tmpdir);
+        snprintf(wrong, sizeof wrong, "%s/label_poll_wrong", tmpdir);
+        snprintf(right, sizeof right, "%s/label_poll_right", tmpdir);
+        snprintf(wrong_in, sizeof wrong_in, "%s/DISC_W", parent);
+        snprintf(right_in, sizeof right_in, "%s/DISC_R", parent);
+        snprintf(outpath, sizeof outpath, "%s/label_poll_out.txt", tmpdir);
+        mkdir_recursive(parent);
+        make_labelled_disc(tmpdir, "label_poll_wrong",
+                           "{\"label\": \"WRONG_DISC\"}");
+        make_labelled_disc(tmpdir, "label_poll_right",
+                           "{\"label\": \"RIGHT_DISC\"}");
+        snprintf(p, sizeof p, "%s/data/fd", right);
+        mkdir_recursive(p);
+        snprintf(p, sizeof p, "%s/data/fd/%s", right, hex3);
+        write_pack(p, "right-disc");
+        parents[0] = parent;
+        if (pipe(pfd) != 0) {
+            fprintf(stderr, "FAIL: pipe errno=%d\n", errno); fails++;
+        } else {
+            FILE *out = fopen(outpath, "w+");
+            pid_t kid = out ? fork() : -1;
+            if (kid == 0) {
+                /* Once the prompt is up, insert the wrong disc; once
+                 * the locator says it isn't the one, swap it for the
+                 * right one.  Each wait gives up after ~15 s. */
+                static const char *const waits[] = {
+                    "is required for the next file", "(still not found"
+                };
+                int w;
+                for (w = 0; w < 2; w++) {
+                    struct timeval tv;
+                    int tries;
+                    for (tries = 0; tries < 750; tries++) {
+                        char buf[8192];
+                        size_t n;
+                        FILE *f = fopen(outpath, "r");
+                        if (f) {
+                            n = fread(buf, 1, sizeof buf - 1, f);
+                            buf[n] = '\0';
+                            fclose(f);
+                            if (strstr(buf, waits[w])) break;
+                        }
+                        tv.tv_sec = 0;
+                        tv.tv_usec = 20000;
+                        (void)select(0, NULL, NULL, NULL, &tv);
+                    }
+                    if (w == 0) {
+                        if (rename(wrong, wrong_in) != 0) _exit(1);
+                    } else {
+                        if (rename(wrong_in, wrong) != 0) _exit(1);
+                        _exit(rename(right, right_in) == 0 ? 0 : 1);
+                    }
+                }
+                _exit(1);
+            } else if (kid > 0) {
+                FILE *in = fdopen(pfd[0], "r");
+                char lines[64][512];
+                int nl = 0, iw = -1, ir = -1, glued = 0, i;
+                lcsas_disc_locator_init(&l, search, 1, NULL, 1);
+                lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+                if (in) l.prompt_in = in;
+                l.prompt_out = out;
+                l.poll_ms = 50;
+                alarm(20);
+                rc = lcsas_disc_locate_pack(&l, id3, found, sizeof found);
+                alarm(0);
+                if (rc != 0 || strstr(found, "DISC_R") == NULL) {
+                    fprintf(stderr,
+                            "FAIL: volume label poll rc=%d found=%s\n",
+                            rc, rc == 0 ? found : "(none)");
+                    fails++;
+                }
+                rewind(out);
+                while (nl < 64 && fgets(lines[nl], sizeof lines[nl], out)) {
+                    if (strstr(lines[nl], "mounted volume")
+                            && strncmp(lines[nl], "[lcsas-restore] ", 16) != 0)
+                        glued = 1;
+                    if (strstr(lines[nl], "mounted volume WRONG_DISC at ")
+                            && iw < 0)
+                        iw = nl;
+                    if (strstr(lines[nl], "mounted volume RIGHT_DISC at ")
+                            && ir < 0)
+                        ir = nl;
+                    nl++;
+                }
+                if (glued) {
+                    fprintf(stderr,
+                            "FAIL: volume label printed on the prompt's "
+                            "'> ' line\n");
+                    fails++;
+                }
+                if (iw < 0 || iw + 1 >= nl
+                        || strncmp(lines[iw + 1], "(still not found", 16) != 0) {
+                    fprintf(stderr,
+                            "FAIL: wrong disc not named, or not followed "
+                            "by 'still not found'\n");
+                    fails++;
+                }
+                if (ir < 0 || ir < iw || ir + 1 >= nl
+                        || strncmp(lines[ir + 1],
+                                   "[lcsas-restore] new disc detected", 33) != 0) {
+                    fprintf(stderr,
+                            "FAIL: right disc not named just before "
+                            "'new disc detected'\n");
+                    fails++;
+                }
+                for (i = 0; i < nl; i++) {
+                    if (strcmp(lines[i], "\n") == 0 && i + 1 < nl
+                            && strstr(lines[i + 1], "new disc detected")) {
+                        fprintf(stderr,
+                                "FAIL: blank line before 'new disc "
+                                "detected'\n");
+                        fails++;
+                    }
+                }
+                lcsas_disc_locator_free(&l);
+                close(pfd[1]);
+                if (in) fclose(in); else close(pfd[0]);
+                (void)waitpid(kid, NULL, 0);
+            } else {
+                fprintf(stderr, "FAIL: fork/fopen\n"); fails++;
+                close(pfd[0]);
+                close(pfd[1]);
+            }
             if (out) fclose(out);
         }
     }

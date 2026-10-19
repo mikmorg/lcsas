@@ -484,8 +484,10 @@ physical volumes you must fetch to complete a snapshot.
   (latest disc lists all volumes).
 - Existing: `...::test_on_disc_catalog_enables_pick_list`
   (pick list generated from on-disc catalog).
-- Gap: no test exercises `volume_info.json` parsing — only existence
-  (asserted in `test_isos_are_self_describing`).
+- `tests/recovery_hardening/test_tier1_volume_label.py`: tier-1 parses
+  `volume_info.json` as `write_volume_info()` writes it and names the
+  mounted disc (#456).  The Python reader (`verify_disc`) is still only
+  checked for the file's existence (`test_isos_are_self_describing`).
 
 **Source refs:**
 `HolographicInjector.inject_catalog()` and `write_volume_info()` in

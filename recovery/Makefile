@@ -711,6 +711,7 @@ coverage-c-run:
 	        ../tests/recovery_hardening/test_tier1_progress.py \
 	        ../tests/recovery_hardening/test_tier1_rescan.py \
 	        ../tests/recovery_hardening/test_tier1_auto_mount.py \
+	        ../tests/recovery_hardening/test_tier1_volume_label.py \
 	        ../tests/recovery_hardening/test_tier1_fault_handling.py \
 	    || true
 	# Step 3b: exercise the LCSAS_STRESS_LOOKUPS diagnostic block in
