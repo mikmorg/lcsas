@@ -82,18 +82,45 @@ implemented and verified end-to-end
 (`tests/test_multidisc.py::case_catalog_prompt_label`).  These follow-ups
 were deliberately deferred from that work.
 
-### 1. disc_index.txt sidecar (resilience-only redundancy) — DEFERRED (P4)
+### 1. disc_index.txt sidecar (resilience-only redundancy) — NOT BUILDING (decided #457, 2026-10)
 
-A plain-text `<sha256>  <label>  <uuid>` pack→volume map written at burn
-time, read by a C-side `disc_index.{c,h}` as a *tertiary* fallback when
-SQLite cannot open `catalog.db`.  catalog.db is bundled on every data disc
-and the C reader queries it directly; the binary statically links the
-SQLite amalgamation, so the "sqlite refuses to open" surface is small.
-**Not started** (no `disc_index` symbol anywhere in-tree as of 2026-06).
-Prioritise only if field evidence shows catalog.db corruption events.
+The proposal was a plain-text `<sha256>  <label>  <uuid>` pack→volume map
+written at burn time, read by a C-side `disc_index.{c,h}` as a *tertiary*
+fallback when SQLite cannot open `catalog.db`.  Decision (#457): don't
+build it until one of the triggers below turns up.  Nothing for it exists
+in-tree.
 
-*Effort:* Python writer ~30 LOC; C reader + locator wire-in ~150 LOC;
-test ~50 LOC.
+Why the gap it would fill is small:
+
+- **Every copy has to fail first.**  `catalog.db` is copied to every data
+  disc, and tier-1 statically links the SQLite amalgamation, so the
+  sidecar only matters when every catalog copy to hand fails to open
+  while the packs on those same discs still read.
+- **Losing the catalog costs the hint, not the restore.**  Tier-1 finds
+  packs through the repository's own index.  The catalog only supplies
+  the swap prompt's "insert disc X" line.  Without it the prompt names
+  the pack hash and the operator inserts discs one at a time.  The
+  blind-restore `no-catalog` variant (every data disc without
+  `catalog.db`, so the hash-only prompt) scored the full 15/15 with an
+  agent that had never seen LCSAS when it was promoted out of xfail on
+  2026-05-27 (`tests/e2e/cdemu_blind_restore/VARIANT_FLAKE_NOTES.md`).
+- **Discs are named anyway.**  Since #456 tier-1 names each disc on
+  insertion from its own `volume_info.json`, so even with no catalog the
+  operator can see which disc is in the drive.
+- **A second map can drift.**  A sidecar would be another pack→volume map
+  to keep in step with the catalog through consolidation and extra
+  copies.
+
+Reopen and build it if any of these turns up:
+
+- a real restore or physical drill in which every available `catalog.db`
+  failed to open but the discs' packs still read;
+- the blind `no-catalog` variant losing points at the swap step;
+- a field report that swapping discs by hash alone was impractical for
+  the size of the archive.
+
+*Effort if built:* Python writer ~30 LOC; C reader + locator wire-in
+~150 LOC; test ~50 LOC.
 
 ### 2. mounted-disc identification via volume_info.json — LANDED (#456, 2026-10)
 
@@ -147,8 +174,8 @@ per snapshot).  See the #350 discussion for the full rationale.
 
 ### Priority order for resuming
 
-- **P4:** disc_index.txt sidecar (item 1) — pure defence in depth; defer
-  indefinitely unless field evidence demands it.
+- Item 1 (disc_index.txt sidecar) is not being built (#457); item 1 lists
+  the evidence that would reopen it.
 - Item 2 (volume_info.json mounted-disc id) landed in #456.
 - Item 3 (auto-mount detection) landed in #455.
 - Item 4 (snapshot-aware pick list) closed won't-fix per #350 — no longer

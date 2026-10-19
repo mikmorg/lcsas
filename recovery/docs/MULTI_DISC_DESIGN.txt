@@ -37,9 +37,9 @@ WHAT HAS SHIPPED (as of Phase 21)
     operator-facing procedure including exact prompt text and physical
     swap steps.
 
-The sections below describe the INTENDED DESIGN including features
-still unimplemented (disc_index.txt sidecar, the E7 UUID check, etc.).
-Do not treat them as current behavior.
+The sections below describe the INTENDED DESIGN, including parts still
+unimplemented (the E7 UUID check, etc.) and the disc_index.txt sidecar,
+which #457 decided not to build.  Do not treat them as current behavior.
 PRIORITY: P0 -- the highest-impact UX gap in the current workflow
 
 ────────────────────────────────────────────────────────────────────
@@ -308,6 +308,11 @@ We want THREE independent sources for "which disc contains pack X?":
        Adds ~50 bytes per pack on the disc; for a typical archive
        of 100,000 packs across 50 discs, that's 5 MB total spread
        across discs.  Acceptable.
+       [NOT BUILT, by decision (#457): without catalog.db the prompt
+       falls back to the pack hash and the restore still completes
+       (the blind-restore no-catalog variant), and #456 names each
+       disc as it mounts.  STATUS_LEDGER.md item 1 lists the evidence
+       that would reopen it.]
 
   C.  Each disc has its own .lcsas_volume_info file at the root
        with the volume label + UUID, so when a disc is mounted,
@@ -627,5 +632,6 @@ SEE ALSO
                         LCSAS_PACK_CACHE_DIR cache knob.
 
   DEFERRED_WORK.txt     Features from this design that remain
-                        unimplemented (disc_index.txt sidecar,
-                        E2E interactive tests, etc.).
+                        unimplemented (E2E interactive tests, etc.)
+                        or were decided against (disc_index.txt
+                        sidecar, #457).
