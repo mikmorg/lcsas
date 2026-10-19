@@ -17,8 +17,9 @@ on:
     inputs:
       fixture_run_id:
         description: >-
-          Optional run id of a windows-e2e run whose fixture artifact to
-          download into the session (leave blank to start with no fixture).
+          Optional run id of a windows-e2e (or windows-e2e-weekly) run
+          whose fixture artifact to download into the session (leave blank
+          to start with no fixture).
         required: false
         default: ""
 

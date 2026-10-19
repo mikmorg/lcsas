@@ -101,6 +101,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_sh_version_flag.py` | Hardening test: --version flag on restore.sh (Issue #96). |
 | `test_restore_skips_tier2_on_multi_disc.py` | Hardening test (issue #227): restore.sh skips tier 2 when the |
 | `test_restore_space_preflight.py` | Hardening tests: restore-side free-space preflight [FMA-09]. |
+| `test_schedule_only_workflows.py` | Hardening: a scheduled workflow file holds a schedule and nothing else (#462). |
 | `test_scheduled_canary_watchdogs.py` | Hardening: every scheduled canary self-tickets when it goes red (#420). |
 | `test_setup_static_guards.py` | Hardening tests #7 + #8: static guards on the blind-test setup. |
 | `test_shell_coverage_contract.py` | Hardening: the `shell-coverage` Makefile recipe stays a real gate (GATE-09). |
