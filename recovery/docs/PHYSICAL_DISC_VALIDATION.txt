@@ -82,6 +82,20 @@ PROCEDURE
     Confirm every restored file matches the STEP 1 manifest
     byte-for-byte (sha256sum -c).  This satisfies AC #2.
 
+  STEP 3b -- DISC SWAP WITHOUT ENTER (tier-1 auto-mount, #455)
+    Only if the archive spans two or more data discs.  Run tier-1
+    on a desktop that automounts optical media.  When it prompts for
+    the next disc, swap the disc and do NOT press ENTER.  Within a few
+    seconds of the desktop mounting it, tier-1 must print
+      new disc detected -- no ENTER needed.
+    and carry on.  CI only proves this against a directory renamed
+    into a mount parent, never a real drive.  So also note: how long
+    after the tray closed the message appeared, whether the prompt
+    stalled while the drive spun up, and whether a half-mounted disc
+    ever produced an error instead of waiting.  On a host with no
+    automounter, mount it by hand, press ENTER, and confirm the
+    prompt behaves exactly as before.
+
   STEP 4 -- PHYSICAL ECC DAMAGE + REPAIR (below threshold)
     Physically damage a SECOND copy below the RS03 redundancy
     threshold.  Realistic options, least to most destructive:
@@ -136,5 +150,6 @@ RUN LOG TEMPLATE (copy into tests/e2e/ when executed)
   burn tool + speed:  ____________________
   source manifest:    ____________________  (sha256 of sha list)
   STEP 3 blind restore byte-identical?   [ ] yes  [ ] no  notes: ____
+  STEP 3b swap found without ENTER?     [ ] yes  [ ] no  [ ] n/a  notes: ____
   STEP 4 below-threshold repair OK?      [ ] yes  [ ] no  notes: ____
   STEP 5 above-threshold failed loud?    [ ] yes  [ ] no  notes: ____
