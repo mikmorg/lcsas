@@ -416,8 +416,11 @@ PHYSICAL SWAP STEPS (single optical drive)
   5. If nothing happens, press ENTER at the prompt.  (On Windows,
      always press ENTER: the prompt does not look on its own there.)
   6. lcsas-restore rescans the mount directories and continues.
-     If the wrong disc was inserted it will re-prompt; eject and
-     retry with the correct disc.
+     It names each disc it finds by the label printed on it, e.g.
+         [lcsas-restore] mounted volume LCSAS_BD25_2026_0003 at /media/...
+     If the wrong disc was inserted it says
+         (still not found -- check the disc label and try again)
+     and keeps waiting; eject and retry with the correct disc.
   7. Repeat for each additional DATA disc as prompted.
 
 NOTE ON THE TEST RIG vs. REAL OPERATORS

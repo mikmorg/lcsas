@@ -98,6 +98,18 @@ typedef struct {
      * bare-metal initramfs path, where nothing mounts a disc unasked. */
     int  auto_mount;
     long poll_ms;
+
+    /* Discs whose volume_info.json label has been printed (#456): one
+     * entry per disc root found by the last refresh_discovered(), so a
+     * disc is named once per insertion, not on every poll tick.
+     * Locator-owned; freed in lcsas_disc_locator_free(). */
+    struct lcsas_seen_volume *seen_volumes;
+    size_t n_seen_volumes;
+    size_t cap_seen_volumes;
+
+    /* 1 while the cursor sits after the prompt's "> " (#456), so a line
+     * printed mid-wait starts on a fresh line and restores the "> ". */
+    int mid_prompt_line;
 } lcsas_disc_locator;
 
 /*
@@ -192,6 +204,9 @@ void lcsas_disc_locator_set_auto_mount(lcsas_disc_locator *l, int on);
  * On miss + interactive=1, prompts the user, re-scans, retries.
  *   - Returns 0 once found: after an ENTER, or with auto-detect on,
  *     as soon as a re-scan while waiting turns the pack up.
+ *   - Each re-scan of the mount parents names every disc not yet named
+ *     for its current insertion, by the label in its volume_info.json
+ *     (#456), on prompt_out.
  *   - Returns -1 if the user types 'q' to abort (or stdin hits EOF).
  */
 int lcsas_disc_locate_pack(lcsas_disc_locator *l,

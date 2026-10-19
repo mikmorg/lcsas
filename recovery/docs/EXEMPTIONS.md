@@ -66,31 +66,31 @@ catalog.c:213   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardco
 catalog.c:214   INTRACTABLE   "
 
 # disc_locator.c
-disc_locator.c:296   DEFERRED   consider_catalog copy_file-failure fallback (open the original); needs the copy to fail (e.g. a dir collision at cache/.locator-catalog.db) [#401]
-disc_locator.c:380   DEFERRED   refresh_discovered path-too-long warn; needs a real openable mount_parent name approaching PATH_MAX
-disc_locator.c:382   DEFERRED   "
-disc_locator.c:471   VOLATILE   copy_file fwrite error path; covered by test_disc_locator RLIMIT_FSIZE fs-full drain when a >=11%-free cache base exists (TMPDIR / /dev/shm / /tmp), uncovered otherwise [FMA-09]
-disc_locator.c:472   VOLATILE   "
-disc_locator.c:581   VOLATILE   drain_disc fs_critically_full warn; covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache base fs is <10% free [FMA-09]
-disc_locator.c:582   VOLATILE   "
-disc_locator.c:588   VOLATILE   "
-disc_locator.c:590   VOLATILE   "
-disc_locator.c:627   DEFENSIVE   drain_disc path-too-long defensive continue (prefix_dir overflow)
-disc_locator.c:629   DEFENSIVE   "
-disc_locator.c:636   DEFENSIVE   drain_disc path-too-long defensive continue (cache_prefix overflow)
-disc_locator.c:638   DEFENSIVE   "
-disc_locator.c:649   DEFENSIVE   drain_disc path-too-long defensive continue (src path overflow)
-disc_locator.c:651   DEFENSIVE   "
-disc_locator.c:656   DEFENSIVE   drain_disc path-too-long defensive continue (dst path overflow)
-disc_locator.c:658   DEFENSIVE   "
-disc_locator.c:771   DEFERRED   print_prompt catalog-has-pack-but-no-current-volume-mapping; needs a populated catalog fixture
-disc_locator.c:773   DEFERRED   print_prompt schema-skew branch (find_pack prepare failed, catalog written by a newer LCSAS); needs a catalog that opens but whose packs query fails [#401]
-disc_locator.c:777   DEFERRED   "
-disc_locator.c:778   DEFERRED   "
-disc_locator.c:779   DEFERRED   "
-disc_locator.c:780   DEFERRED   "
-disc_locator.c:782   DEFERRED   print_prompt catalog-has-no-record-of-this-pack-hash (fr>0); needs a valid catalog lacking the pack row
-disc_locator.c:945   DEFERRED   lcsas_disc_locate_pack cwd-under-meta chdir-to-root fallback; reachable by chdir into a meta subdir before the interactive path (mutates process cwd) [#401]
+disc_locator.c:331   DEFERRED   consider_catalog copy_file-failure fallback (open the original); needs the copy to fail (e.g. a dir collision at cache/.locator-catalog.db) [#401]
+disc_locator.c:562   DEFERRED   refresh_discovered path-too-long warn; needs a real openable mount_parent name approaching PATH_MAX
+disc_locator.c:564   DEFERRED   "
+disc_locator.c:666   VOLATILE   copy_file fwrite error path; covered by test_disc_locator RLIMIT_FSIZE fs-full drain when a >=11%-free cache base exists (TMPDIR / /dev/shm / /tmp), uncovered otherwise [FMA-09]
+disc_locator.c:667   VOLATILE   "
+disc_locator.c:776   VOLATILE   drain_disc fs_critically_full warn; covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache base fs is <10% free [FMA-09]
+disc_locator.c:777   VOLATILE   "
+disc_locator.c:783   VOLATILE   "
+disc_locator.c:785   VOLATILE   "
+disc_locator.c:822   DEFENSIVE   drain_disc path-too-long defensive continue (prefix_dir overflow)
+disc_locator.c:824   DEFENSIVE   "
+disc_locator.c:831   DEFENSIVE   drain_disc path-too-long defensive continue (cache_prefix overflow)
+disc_locator.c:833   DEFENSIVE   "
+disc_locator.c:844   DEFENSIVE   drain_disc path-too-long defensive continue (src path overflow)
+disc_locator.c:846   DEFENSIVE   "
+disc_locator.c:851   DEFENSIVE   drain_disc path-too-long defensive continue (dst path overflow)
+disc_locator.c:853   DEFENSIVE   "
+disc_locator.c:966   DEFERRED   print_prompt catalog-has-pack-but-no-current-volume-mapping; needs a populated catalog fixture
+disc_locator.c:968   DEFERRED   print_prompt schema-skew branch (find_pack prepare failed, catalog written by a newer LCSAS); needs a catalog that opens but whose packs query fails [#401]
+disc_locator.c:972   DEFERRED   "
+disc_locator.c:973   DEFERRED   "
+disc_locator.c:974   DEFERRED   "
+disc_locator.c:975   DEFERRED   "
+disc_locator.c:977   DEFERRED   print_prompt catalog-has-no-record-of-this-pack-hash (fr>0); needs a valid catalog lacking the pack row
+disc_locator.c:1151   DEFERRED   lcsas_disc_locate_pack cwd-under-meta chdir-to-root fallback; reachable by chdir into a meta subdir before the interactive path (mutates process cwd) [#401]
 
 # lcsas_io.c
 lcsas_io.c:22   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection

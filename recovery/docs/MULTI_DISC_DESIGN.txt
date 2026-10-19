@@ -24,6 +24,13 @@ WHAT HAS SHIPPED (as of Phase 21)
     shipped in lcsas-restore.
   * Catalog hint prompt (names the disc label, press ENTER + re-scan)
     shipped.
+  * Auto-detect (#455): the prompt re-scans every 2 s while it waits,
+    so a disc the OS mounts resumes the restore with no ENTER
+    (Linux/macOS).
+  * Mounted-disc label (#456): each disc a re-scan finds is named by
+    the label in the volume_info.json it already carries, so a wrong
+    disc is obvious ("mounted volume ... at ...", then "still not
+    found").  Design item C below, without a new file.
   * Single-drive relocation: restore.sh copies itself and the binary
     to RAM (/tmp) before prompting, so the meta-disc can be ejected.
   * See RECOVER.txt (MULTI-DISC RESTORE section) for the current
@@ -31,8 +38,8 @@ WHAT HAS SHIPPED (as of Phase 21)
     swap steps.
 
 The sections below describe the INTENDED DESIGN including features
-still unimplemented (disc_index.txt sidecar, .lcsas_volume_info,
-inotify auto-detection, etc.).  Do not treat them as current behavior.
+still unimplemented (disc_index.txt sidecar, the E7 UUID check, etc.).
+Do not treat them as current behavior.
 PRIORITY: P0 -- the highest-impact UX gap in the current workflow
 
 ────────────────────────────────────────────────────────────────────
@@ -306,6 +313,11 @@ We want THREE independent sources for "which disc contains pack X?":
        with the volume label + UUID, so when a disc is mounted,
        lcsas-restore can SCAN active mount points to learn what's
        actually inserted.
+       [LANDED as #456, without a new file: tier-1 reads the
+       volume_info.json every data disc already carries (JSON, from
+       staging/metadata.py::write_volume_info) and prints
+       "mounted volume <label> at <path>" once per insertion.  The
+       UUID is not compared (see E7).]
        Format: TOML or plain key=value:
            label = vol-042
            uuid = a1b2c3d4-...
@@ -406,6 +418,7 @@ E7. The disc has been re-burned with the same volume label but
     -> .lcsas_volume_info's UUID lets us distinguish.  If the
        expected UUID doesn't match, warn but continue searching
        (the pack might still happen to be there).
+       [Not implemented: #456 prints the label only.]
 
 E8. Disc is mounted but pack file is corrupted (read error).
     -> Currently bubbles up; with this design, we treat it as
@@ -580,6 +593,17 @@ WORKFLOW EXAMPLE (one-drive case)
   [lcsas-restore] new disc detected -- no ENTER needed.
   [lcsas-restore] found 4f3e2a1b9c8d...; continuing.
 
+  Each re-scan also names every newly mounted disc by its
+  volume_info.json label (#456).  A wrong disc is named and flagged,
+  and the prompt keeps waiting:
+
+  [lcsas-restore] mounted volume LCSAS_BD25_2027_0005 at /media/alice/...
+  (still not found -- check the disc label and try again)
+  >
+  [lcsas-restore] mounted volume LCSAS_BD25_2027_0003 at /media/alice/...
+  [lcsas-restore] new disc detected -- no ENTER needed.
+  [lcsas-restore] found 4f3e2a1b9c8d...; continuing.
+
 KNOWN LIMITATIONS
 ─────────────────
 
@@ -604,5 +628,4 @@ SEE ALSO
 
   DEFERRED_WORK.txt     Features from this design that remain
                         unimplemented (disc_index.txt sidecar,
-                        .lcsas_volume_info, inotify auto-detection,
                         E2E interactive tests, etc.).

@@ -134,6 +134,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_tier1_sparse.py` | Issue #193 — tier-1 must preserve sparseness of restored files. |
 | `test_tier1_target_full.py` | Issue #221 — tier-1 must surface ENOSPC on the target filesystem. |
 | `test_tier1_unit.py` | Issue #115: tier-1 C unit-test harness — fast, agent-free. |
+| `test_tier1_volume_label.py` | Hardening: tier-1 names each disc it finds by its label (#456). |
 | `test_tier1_vs_tier2_differential.py` | Phase 14: tier-1 ↔ tier-2 differential oracle. |
 | `test_tier1_wide_directory.py` | T1C-01: one very wide directory (5,000 entries in a single tree blob). |
 | `test_tier1_windows_wine.py` | Issue #118: tier-1 Windows cross-built binary coverage via wine. |

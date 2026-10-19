@@ -95,18 +95,24 @@ Prioritise only if field evidence shows catalog.db corruption events.
 *Effort:* Python writer ~30 LOC; C reader + locator wire-in ~150 LOC;
 test ~50 LOC.
 
-### 2. mounted-disc identification via volume_info.json — DEFERRED (P3)
+### 2. mounted-disc identification via volume_info.json — LANDED (#456, 2026-10)
 
-`volume_info.json` is already written to every staging root
-(`staging/metadata.py::write_volume_info`) and is consumed by the *Python*
-restore path (`meta/restore_single_drive.py::verify_disc`).  The **C**
-locator does not yet read it on a new mount to print
-`[lcsas-restore] mounted vol-XXX (…)`.  Low effort, low payoff; most useful
-once auto-mount (item 3) lands.  Uses the existing JSON — no new on-disc
-sidecar needed.
-
-*Effort:* C parser via existing `json_q` ~80 LOC; locator wire-in ~30 LOC;
-test ~60 LOC.
+`volume_info.json` is written to every staging root
+(`staging/metadata.py::write_volume_info`) and was read only by the *Python*
+restore path (`meta/restore_single_drive.py::verify_disc`).  Now each
+`refresh_discovered()` in `disc_locator.c` also reads it, through the
+existing `json_q`, for every disc root it visits, and prints
+`[lcsas-restore] mounted volume <label> at <path>` once per insertion.
+While the prompt polls (#455), a disc that isn't the one asked for is
+followed by `(still not found -- check the disc label and try again)`.
+The meta disc's file has no label and is named as the recovery disc.  An
+absent file is silent.  A bad one gets a one-line note and the disc is
+still searched.  Bad means unreadable, past 16 MiB, not a JSON object, or
+without a usable label.  The label is shown as printable ASCII only.  No
+new on-disc file, and the UUID is not compared against the catalog.
+Tests: `recovery/tests/test_disc_locator.c` and
+`tests/recovery_hardening/test_tier1_volume_label.py` (labels written by
+the real `write_volume_info`).
 
 ### 3. Auto-mount detection (eliminate the Enter press) — LANDED (#455, 2026-10)
 
@@ -141,11 +147,9 @@ per snapshot).  See the #350 discussion for the full rationale.
 
 ### Priority order for resuming
 
-- **P3:** volume_info.json wire-up (item 2) — low effort, low payoff;
-  more useful now that #455 picks a disc up with no Enter, since a
-  `mounted vol-XXX` line would confirm which disc it took.
 - **P4:** disc_index.txt sidecar (item 1) — pure defence in depth; defer
   indefinitely unless field evidence demands it.
+- Item 2 (volume_info.json mounted-disc id) landed in #456.
 - Item 3 (auto-mount detection) landed in #455.
 - Item 4 (snapshot-aware pick list) closed won't-fix per #350 — no longer
   in the queue.
