@@ -18,6 +18,7 @@
 #include <sys/statvfs.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <errno.h>
 
@@ -915,6 +916,210 @@ main(void)
             char rm[1024];
             snprintf(rm, sizeof rm, "rm -rf %s", cache_dir);
             (void)system(rm);
+        }
+    }
+
+    /* Auto-detect (#455), poll path: nothing is ever typed, and a disc
+     * that appears under a mount parent while the prompt waits is
+     * found by the poll, so the locate returns with no ENTER.  A child
+     * process renames a staged directory into the parent (atomic, like
+     * a mount).  stdin is a pipe whose write end stays open, so
+     * select() keeps timing out instead of seeing EOF.  alarm() turns
+     * a poll that never finds the disc into a failed test, not a hang. */
+    {
+        const char *hex2 =
+            "fe23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        unsigned char id2[32];
+        char parent[1024], staged[1024], disc[1024], p2[1024];
+        const char *parents[1];
+        const char *search[] = { tmpdir };
+        int pfd[2];
+        size_t k;
+        for (k = 0; k < 32; k++) {
+            unsigned int b;
+            sscanf(hex2 + 2 * k, "%2x", &b);
+            id2[k] = (unsigned char)b;
+        }
+        snprintf(parent, sizeof parent, "%s/automount_media", tmpdir);
+        snprintf(staged, sizeof staged, "%s/automount_staged", tmpdir);
+        snprintf(disc, sizeof disc, "%s/DISC_2", parent);
+        snprintf(p2, sizeof p2, "%s/data/fe", staged);
+        mkdir_recursive(parent);
+        mkdir_recursive(p2);
+        snprintf(p2, sizeof p2, "%s/data/fe/%s", staged, hex2);
+        write_pack(p2, "auto-mounted");
+        parents[0] = parent;
+        if (pipe(pfd) != 0) {
+            fprintf(stderr, "FAIL: pipe errno=%d\n", errno); fails++;
+        } else {
+            pid_t kid = fork();
+            if (kid == 0) {
+                struct timeval tv;
+                tv.tv_sec = 0;
+                tv.tv_usec = 300000;      /* let the prompt start waiting */
+                (void)select(0, NULL, NULL, NULL, &tv);
+                _exit(rename(staged, disc) == 0 ? 0 : 1);
+            } else {
+                FILE *in = fdopen(pfd[0], "r");
+                FILE *out = tmpfile();
+                char line[256];
+                int saw_hint = 0;
+                lcsas_disc_locator_init(&l, search, 1, NULL, 1);
+                lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+                if (in) l.prompt_in = in;
+                if (out) l.prompt_out = out;
+                l.poll_ms = 50;
+                alarm(20);
+                rc = lcsas_disc_locate_pack(&l, id2, found, sizeof found);
+                alarm(0);
+                if (rc != 0 || strstr(found, "DISC_2") == NULL) {
+                    fprintf(stderr,
+                            "FAIL: auto-detect poll rc=%d found=%s\n",
+                            rc, rc == 0 ? found : "(none)");
+                    fails++;
+                }
+                if (out) {
+                    rewind(out);
+                    while (fgets(line, sizeof line, out)) {
+                        if (strstr(line, "found without ENTER")) saw_hint = 1;
+                    }
+                    fclose(out);
+                    if (!saw_hint) {
+                        fprintf(stderr,
+                                "FAIL: auto-detect prompt lacks its hint line\n");
+                        fails++;
+                    }
+                }
+                lcsas_disc_locator_free(&l);
+                close(pfd[1]);
+                if (in) fclose(in); else close(pfd[0]);
+                (void)waitpid(kid, NULL, 0);
+            }
+        }
+    }
+
+    /* Auto-detect, typed-ahead answers: "\nq\n" arrives in ONE write.
+     * The poll must see the 'q' still waiting after the ENTER.  This
+     * pins the read(2)-not-stdio choice: fgetc would slurp the whole
+     * pipe into the FILE buffer on the ENTER, the next select() would
+     * then block on an empty pipe, and the 'q' would sit unseen (here:
+     * killed by alarm()). */
+    {
+        unsigned char missing[32];
+        const char *search[] = { tmpdir };
+        int pfd[2];
+        memset(missing, 0xEE, 32);
+        if (pipe(pfd) != 0) {
+            fprintf(stderr, "FAIL: pipe errno=%d\n", errno); fails++;
+        } else {
+            FILE *in = fdopen(pfd[0], "r");
+            FILE *out = fopen("/dev/null", "w");
+            if (write(pfd[1], "\nq\n", 3) != 3) {
+                fprintf(stderr, "FAIL: pipe write\n"); fails++;
+            }
+            lcsas_disc_locator_init(&l, search, 1, NULL, 1);
+            if (in) l.prompt_in = in;
+            if (out) l.prompt_out = out;
+            l.poll_ms = 50;
+            alarm(20);
+            rc = lcsas_disc_locate_pack(&l, missing, found, sizeof found);
+            alarm(0);
+            if (rc != -1 || l.misses != 2) {
+                fprintf(stderr,
+                        "FAIL: typed-ahead ENTER+q rc=%d misses=%lu "
+                        "(want -1, 2)\n", rc, l.misses);
+                fails++;
+            }
+            lcsas_disc_locator_free(&l);
+            close(pfd[1]);
+            if (in) fclose(in); else close(pfd[0]);
+            if (out) fclose(out);
+        }
+    }
+
+    /* --auto-mount off: the same answers go through stdio, unpolled,
+     * and the prompt does not claim discs are found without ENTER. */
+    {
+        unsigned char missing[32];
+        const char *search[] = { tmpdir };
+        int pfd[2];
+        memset(missing, 0xEF, 32);
+        if (pipe(pfd) != 0) {
+            fprintf(stderr, "FAIL: pipe errno=%d\n", errno); fails++;
+        } else {
+            FILE *in = fdopen(pfd[0], "r");
+            FILE *out = tmpfile();
+            char line[256];
+            int saw_hint = 0;
+            if (write(pfd[1], "\nq\n", 3) != 3) {
+                fprintf(stderr, "FAIL: pipe write\n"); fails++;
+            }
+            close(pfd[1]);
+            lcsas_disc_locator_init(&l, search, 1, NULL, 1);
+            lcsas_disc_locator_set_auto_mount(&l, 0);
+            if (in) l.prompt_in = in;
+            if (out) l.prompt_out = out;
+            alarm(20);
+            rc = lcsas_disc_locate_pack(&l, missing, found, sizeof found);
+            alarm(0);
+            if (rc != -1 || l.misses != 2) {
+                fprintf(stderr,
+                        "FAIL: auto-mount off ENTER+q rc=%d misses=%lu "
+                        "(want -1, 2)\n", rc, l.misses);
+                fails++;
+            }
+            if (out) {
+                rewind(out);
+                while (fgets(line, sizeof line, out)) {
+                    if (strstr(line, "found without ENTER")) saw_hint = 1;
+                }
+                fclose(out);
+                if (saw_hint) {
+                    fprintf(stderr,
+                            "FAIL: auto-mount off prompt still shows the "
+                            "auto-detect hint\n");
+                    fails++;
+                }
+            }
+            lcsas_disc_locator_free(&l);
+            if (in) fclose(in); else close(pfd[0]);
+        }
+    }
+
+    /* select() refusing the descriptor: polling switches itself off for
+     * the run and the answer is read the old way.  A FILE whose fd has
+     * been closed makes select() fail with EBADF; the stdio read then
+     * hits EOF, which aborts.  (No mount parents and no catalog, so
+     * nothing opens a file -- and could reuse the fd number -- before
+     * the select.) */
+    {
+        unsigned char missing[32];
+        const char *search[] = { tmpdir };
+        int pfd[2];
+        memset(missing, 0xED, 32);
+        if (pipe(pfd) != 0) {
+            fprintf(stderr, "FAIL: pipe errno=%d\n", errno); fails++;
+        } else {
+            FILE *in = fdopen(pfd[0], "r");
+            FILE *out = fopen("/dev/null", "w");
+            lcsas_disc_locator_init(&l, search, 1, NULL, 1);
+            if (in) l.prompt_in = in;
+            if (out) l.prompt_out = out;
+            l.poll_ms = 50;
+            close(pfd[0]);
+            alarm(20);
+            rc = lcsas_disc_locate_pack(&l, missing, found, sizeof found);
+            alarm(0);
+            if (rc != -1 || l.auto_mount != 0) {
+                fprintf(stderr,
+                        "FAIL: select-failure fallback rc=%d auto_mount=%d "
+                        "(want -1, 0)\n", rc, l.auto_mount);
+                fails++;
+            }
+            lcsas_disc_locator_free(&l);
+            close(pfd[1]);
+            if (in) fclose(in);
+            if (out) fclose(out);
         }
     }
 

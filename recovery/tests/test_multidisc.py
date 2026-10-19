@@ -35,6 +35,19 @@ sys.path.insert(0, str(RECOVERY.parent / "src"))
 import test_e2e  # type: ignore  (sibling fixture builder)
 
 
+def _insert_disc(src: Path, dst: Path, scratch: Path) -> None:
+    """Make ``src`` appear at ``dst`` all at once, the way a mount does.
+
+    The binary re-scans every 2 s while its prompt waits (#455), so a
+    copytree straight into a scanned path can be caught half-done -- a
+    truncated pack -- on a loaded host.  Copy into ``scratch``, which
+    the binary never scans, then rename(2) into place (atomic).
+    """
+    staged = scratch / f"inserting-{dst.name}"
+    shutil.copytree(str(src), str(staged))
+    os.rename(staged, dst)
+
+
 def _split_data(repo: Path) -> tuple[Path, Path]:
     """Move half the packs from repo/data/ into a sibling 'disc_b' folder.
 
@@ -212,7 +225,7 @@ def case_interactive_swap() -> int:
                     src = disc_b / "data"
                     dst = staging / "data"
                     if not dst.exists():
-                        shutil.copytree(str(src), str(dst))
+                        _insert_disc(src, dst, tmp)
                     # Brief delay to mimic human pressing Enter.
                     time.sleep(0.1)
                     try:
@@ -349,7 +362,7 @@ def case_single_drive_prompt_mentions_eject() -> int:
                     src = disc_b / "data"
                     dst = staging / "data"
                     if not dst.exists():
-                        shutil.copytree(str(src), str(dst))
+                        _insert_disc(src, dst, tmp)
                     time.sleep(0.1)
                     try:
                         assert proc.stdin is not None
@@ -574,7 +587,7 @@ def case_catalog_prompt_label() -> int:
                     src = disc_b / "data"
                     dst = staging / "data"
                     if not dst.exists():
-                        shutil.copytree(str(src), str(dst))
+                        _insert_disc(src, dst, tmp)
                     time.sleep(0.1)
                     try:
                         assert proc.stdin is not None

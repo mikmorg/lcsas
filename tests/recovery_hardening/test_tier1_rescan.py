@@ -120,6 +120,19 @@ def _build_split_fixture(tmp: Path) -> tuple[Path, Path, Path, Path, dict[str, b
     return repo, pwfile, disc_a, disc_b, files
 
 
+def _insert_disc(src: Path, dst: Path, scratch: Path) -> None:
+    """Make ``src`` appear at ``dst`` all at once, the way a mount does.
+
+    The binary re-scans every 2 s while its prompt waits (#455), so a
+    copytree straight into a scanned path can be caught half-done -- a
+    truncated pack -- on a loaded host.  Copy into ``scratch``, which
+    the binary never scans, then rename(2) into place (atomic).
+    """
+    staged = scratch / f"inserting-{dst.name}"
+    shutil.copytree(str(src), str(staged))
+    os.rename(staged, dst)
+
+
 def _verify_restore(target: Path, files: dict[str, bytes]) -> None:
     for name, content in files.items():
         got = (target / name).read_bytes()
@@ -182,9 +195,8 @@ def test_tier1_rediscovers_mount_parent_children_on_retry() -> None:
                     # "Insert disc_b" into the parent we told the binary
                     # to scan.  This child path was never in the startup
                     # --pack-search list.
-                    shutil.copytree(
-                        str(disc_b),
-                        str(mount_parent_dir / "LCSAS_DISC_B"),
+                    _insert_disc(
+                        disc_b, mount_parent_dir / "LCSAS_DISC_B", tmp,
                     )
                     time.sleep(0.1)
                     try:
@@ -344,7 +356,7 @@ def test_tier1_refreshes_catalog_on_retry() -> None:
                     src_data = disc_b / "data"
                     dst_data = pre_staged / "data"
                     if not dst_data.exists():
-                        shutil.copytree(str(src_data), str(dst_data))
+                        _insert_disc(src_data, dst_data, tmp)
                     time.sleep(0.1)
                     try:
                         assert proc.stdin is not None
@@ -498,7 +510,7 @@ def test_tier1_does_not_replace_caller_catalog_with_older_disc_catalog() -> None
                     src_data = disc_b / "data"
                     dst_data = pre_staged / "data"
                     if not dst_data.exists():
-                        shutil.copytree(str(src_data), str(dst_data))
+                        _insert_disc(src_data, dst_data, tmp)
                     time.sleep(0.1)
                     try:
                         assert proc.stdin is not None
@@ -610,9 +622,8 @@ def test_tier1_honors_lcsas_mount_dirs_env_var() -> None:
                     saw_env_parent_in_count.set()
                 if "is required for the next file" in line and not saw_prompt:
                     saw_prompt = True
-                    shutil.copytree(
-                        str(disc_b),
-                        str(env_mount_parent / "LCSAS_DISC_B"),
+                    _insert_disc(
+                        disc_b, env_mount_parent / "LCSAS_DISC_B", tmp,
                     )
                     time.sleep(0.1)
                     try:

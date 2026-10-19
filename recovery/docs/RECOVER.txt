@@ -408,9 +408,13 @@ PHYSICAL SWAP STEPS (single optical drive)
      (On macOS: drutil eject)
   3. Insert the DATA disc named in the prompt.
   4. Wait for the OS to auto-mount it (typically a few seconds).
+     On Linux and macOS lcsas-restore looks again every 2 seconds
+     while it waits, so once the disc is mounted it carries on by
+     itself ("new disc detected -- no ENTER needed").
      If auto-mount is disabled, mount it manually:
          sudo mount /dev/sr0 /mnt
-  5. Press ENTER at the prompt.
+  5. If nothing happens, press ENTER at the prompt.  (On Windows,
+     always press ENTER: the prompt does not look on its own there.)
   6. lcsas-restore rescans the mount directories and continues.
      If the wrong disc was inserted it will re-prompt; eject and
      retry with the correct disc.

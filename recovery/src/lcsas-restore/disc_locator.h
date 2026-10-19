@@ -87,6 +87,17 @@ typedef struct {
      * Use 100-500 on slow optical drives to keep the restore
      * interactive between drain calls. */
     int drain_chunk_packs;
+
+    /* Auto-detect (#455).  While the interactive prompt waits, re-scan
+     * the search paths and mount parents every `poll_ms` milliseconds,
+     * so a disc the OS mounts on its own resumes the restore with no
+     * ENTER.  ENTER and 'q' keep working throughout.
+     *   1 = on (default), 0 = wait for ENTER only (pre-#455 behaviour).
+     * POSIX only: a Windows console handle can't be select()ed, so
+     * there the prompt always waits for ENTER.  Nor does it help the
+     * bare-metal initramfs path, where nothing mounts a disc unasked. */
+    int  auto_mount;
+    long poll_ms;
 } lcsas_disc_locator;
 
 /*
@@ -162,6 +173,12 @@ void lcsas_disc_locator_set_cache_dir(lcsas_disc_locator *l,
                                       const char *cache_dir);
 
 /*
+ * Turn auto-detect (see `auto_mount` above) on (non-zero, the default)
+ * or off.  Only matters when the locator is interactive.
+ */
+void lcsas_disc_locator_set_auto_mount(lcsas_disc_locator *l, int on);
+
+/*
  * Locate the pack file containing the given 32-byte pack_id (the
  * SHA-256 of the pack's contents, used as its filename).
  *
@@ -173,8 +190,9 @@ void lcsas_disc_locator_set_cache_dir(lcsas_disc_locator *l,
  * On success returns 0 and fills `out_path` with the absolute path.
  * On miss + interactive=0, returns -1.
  * On miss + interactive=1, prompts the user, re-scans, retries.
- *   - Returns 0 once found.
- *   - Returns -1 if the user types 'q' to abort.
+ *   - Returns 0 once found: after an ENTER, or with auto-detect on,
+ *     as soon as a re-scan while waiting turns the pack up.
+ *   - Returns -1 if the user types 'q' to abort (or stdin hits EOF).
  */
 int lcsas_disc_locate_pack(lcsas_disc_locator *l,
                            const unsigned char pack_id[32],

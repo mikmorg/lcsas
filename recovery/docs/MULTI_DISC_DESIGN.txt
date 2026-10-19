@@ -179,8 +179,13 @@ NEW CLI FLAGS
                             on   = always prompt on missing pack
                             off  = fail fast (current behaviour)
 
-  --auto-mount {on,off}     Phase 2: watch standard mount points
-                            for new discs and proceed without Enter.
+  --auto-mount {on,off}     Landed in #455 (default on).  While the
+                            prompt waits, re-scan the search paths
+                            and mount parents every 2 s and proceed
+                            without Enter once the pack turns up.
+                            A select() poll on stdin, not inotify:
+                            Linux/macOS only; Windows always waits
+                            for Enter.
 
 DRIVER SCRIPT CHANGES
 
@@ -566,6 +571,13 @@ WORKFLOW EXAMPLE (one-drive case)
 
   (user ejects meta-disc, inserts data disc, presses ENTER)
 
+  [lcsas-restore] found 4f3e2a1b9c8d...; continuing.
+
+  With --auto-mount on (the default since #455) the prompt also says
+  "(A disc that mounts by itself is found without ENTER.)", and a disc
+  the OS mounts while it waits is picked up on the next 2 s re-scan:
+
+  [lcsas-restore] new disc detected -- no ENTER needed.
   [lcsas-restore] found 4f3e2a1b9c8d...; continuing.
 
 KNOWN LIMITATIONS

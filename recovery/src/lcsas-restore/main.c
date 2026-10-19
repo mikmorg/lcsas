@@ -100,6 +100,7 @@ usage(const char *argv0)
         "           [--pack-search DIR ...]\n"
         "           [--mount-parent DIR ...]\n"
         "           [--interactive {auto|on|off}]\n"
+        "           [--auto-mount {on|off}]\n"
         "           [--meta-disc DIR]\n"
         "\n"
         "Restore a restic-format repository.  --repo must point to an\n"
@@ -129,6 +130,12 @@ usage(const char *argv0)
         "    auto (default)  prompt if stdin is a TTY\n"
         "    on              always prompt + retry\n"
         "    off             always fail fast (old behaviour)\n"
+        "\n"
+        "--auto-mount on (default) re-scans every 2 s while the disc-swap\n"
+        "prompt waits, so a disc your desktop mounts by itself resumes\n"
+        "the restore with no ENTER; ENTER and 'q' still work.  off waits\n"
+        "for ENTER only.  Linux/macOS; on Windows the prompt always waits\n"
+        "for ENTER.\n"
         "\n"
         "--catalog opens the on-disc SQLite catalog (catalog.db) for\n"
         "informational logging at startup and for volume-label hints\n"
@@ -168,6 +175,7 @@ main(int argc, char **argv)
     const char *snapshot_arg = NULL;
     const char *catalog_path = NULL;
     const char *interactive_arg = "auto";
+    const char *auto_mount_arg = "on";
     const char *meta_disc = NULL;
     const char *pack_search[MAX_PACK_SEARCH];
     size_t n_pack_search = 0;
@@ -200,6 +208,7 @@ main(int argc, char **argv)
         else if (parse_arg("--snapshot", argc, argv, &i, &snapshot_arg) > 0) matched = 1;
         else if (parse_arg("--catalog",  argc, argv, &i, &catalog_path) > 0) matched = 1;
         else if (parse_arg("--interactive", argc, argv, &i, &interactive_arg) > 0) matched = 1;
+        else if (parse_arg("--auto-mount", argc, argv, &i, &auto_mount_arg) > 0) matched = 1;
         else if (parse_arg("--meta-disc", argc, argv, &i, &meta_disc) > 0) matched = 1;
         else if (parse_arg("--pack-search", argc, argv, &i, &tmp) > 0) {
             if (n_pack_search >= MAX_PACK_SEARCH) {
@@ -238,6 +247,12 @@ main(int argc, char **argv)
 
     if (!repo_path || !pwfile) {
         usage(argv[0]);
+        return 2;
+    }
+    if (strcmp(auto_mount_arg, "on") != 0
+            && strcmp(auto_mount_arg, "off") != 0) {
+        fprintf(stderr, "--auto-mount takes on or off, not '%s'\n",
+                auto_mount_arg);
         return 2;
     }
     if (!list_only && !list_pending_packs && !target) {
@@ -299,6 +314,8 @@ main(int argc, char **argv)
         if (env && *env) meta_disc = env;
     }
     if (meta_disc) lcsas_disc_locator_set_meta(&locator, meta_disc);
+    lcsas_disc_locator_set_auto_mount(&locator,
+                                      strcmp(auto_mount_arg, "on") == 0);
 
     /* Opt-in opportunistic pack cache.  When LCSAS_PACK_CACHE_DIR is
      * set, the locator copies the rest of each disc's data/ subtree
@@ -353,9 +370,9 @@ main(int argc, char **argv)
 
     if (verbose) {
         fprintf(stderr,
-                "[lcsas-restore] interactive=%s pack-search-dirs=%zu "
-                "mount-parents=%zu meta-disc=%s\n",
-                interactive ? "on" : "off", n_pack_search,
+                "[lcsas-restore] interactive=%s auto-mount=%s "
+                "pack-search-dirs=%zu mount-parents=%zu meta-disc=%s\n",
+                interactive ? "on" : "off", auto_mount_arg, n_pack_search,
                 n_mount_parents,
                 meta_disc ? meta_disc : "(none)");
     }

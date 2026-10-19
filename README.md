@@ -522,8 +522,10 @@ sh /mnt/restore.sh ~/restored/ latest
 # When a data disc is needed it prints a swap prompt:
 #   Insert the right disc and press ENTER to retry.
 #
-# Eject the current disc, insert the requested data disc, press Enter.
-# Repeat until the script prints "restore complete".
+# Eject the current disc and insert the requested data disc.  Once it
+# is mounted the restore carries on by itself (Linux/macOS; press Enter
+# if it doesn't, or on Windows).  Repeat until it prints
+# "restore complete".
 ```
 
 See [`recovery/docs/RECOVER.txt`](recovery/docs/RECOVER.txt) for the
