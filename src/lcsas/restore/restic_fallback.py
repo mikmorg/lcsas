@@ -247,6 +247,48 @@ def _constant_time_eq(a: bytes, b: bytes) -> bool:
 
 # ── Key File Parsing ─────────────────────────────────────────────
 
+# Limits on the key file's scrypt cost parameters (#470).  They are read
+# before any MAC check, so a corrupt or hostile key file must be refused
+# quickly rather than run for hours or exhaust memory.  The most
+# restic/rustic write is N=2^20, r=8, p=1 (2^23 work, ~1 GiB); these
+# allow 4x that work and 2 GiB in all.  Tier-1 uses the same limits
+# (recovery/src/lcsas-restore/scrypt.h); test_scrypt_limits_parity.py
+# keeps them equal.
+SCRYPT_MAX_WORK = 1 << 25   # N * r * p
+SCRYPT_MAX_MEM = 1 << 31    # 128 * r * (N + p + 3) bytes
+
+
+def _scrypt_maxmem(n: object, r: object, p: object) -> int:
+    """Check key-file scrypt parameters; return ``maxmem`` for hashlib.
+
+    Raises:
+        IntegrityError: a parameter is not an int, or the work or memory
+            limit is exceeded.  Not a password verdict: the key file is
+            corrupt, so the caller moves on.
+    """
+    # type() rather than isinstance(): JSON true/false load as bool, a
+    # subclass of int, and 32768.0 loads as float.
+    if type(n) is not int or type(r) is not int or type(p) is not int:
+        raise IntegrityError(
+            f"scrypt N, r or p is not an integer (N={n!r} r={r!r} p={p!r}); "
+            "corrupt key file?"
+        )
+    if (
+        n < 2 or n & (n - 1) or r < 1 or p < 1
+        or n * r * p > SCRYPT_MAX_WORK
+        or 128 * r * (n + p + 3) > SCRYPT_MAX_MEM
+    ):
+        raise IntegrityError(
+            f"scrypt parameters N={n} r={r} p={p} are out of range; "
+            "corrupt key file?"
+        )
+    # OpenSSL needs maxmem >= 128*r*(N + p + 2), which the check above
+    # guarantees.  hashlib refuses maxmem above INT_MAX, so the old
+    # 2 * 128*r*(N + p + 2) failed (ValueError) on a repo at restic's
+    # maximum, N=2^20 and r=8.
+    return min(max(128 * r * (n + p + 3), 2**25), 2**31 - 1)
+
+
 def _load_master_key(key_file: Path, password: bytes) -> MasterKey:
     """Parse a restic key file and derive the master key.
 
@@ -268,10 +310,13 @@ def _load_master_key(key_file: Path, password: bytes) -> MasterKey:
     n = key_doc.get("N", 32768)
     r = key_doc.get("r", 8)
     p = key_doc.get("p", 1)
+    try:
+        maxmem = _scrypt_maxmem(n, r, p)
+    except IntegrityError as e:
+        raise IntegrityError(f"key file {key_file}: {e}") from None
 
     derived = hashlib.scrypt(
-        password, salt=salt, n=n, r=r, p=p, dklen=64,
-        maxmem=max(128 * r * (n + p + 2) * 2, 2**25),  # ≥32 MB
+        password, salt=salt, n=n, r=r, p=p, dklen=64, maxmem=maxmem,
     )
 
     # Split derived key into AES encryption key + Poly1305 MAC keys

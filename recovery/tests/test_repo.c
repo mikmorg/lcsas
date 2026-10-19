@@ -22,6 +22,7 @@
 #include "lcsas_io.h"
 #include "aes.h"
 #include "poly1305.h"
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -292,6 +293,52 @@ main(void)
             fails++;
         }
         unlink("/tmp/lcsas_garbage_key.json");
+    }
+
+    /* ── #470: out-of-range or non-integer scrypt N/r/p ────────────── */
+    {
+        /* Each key file is refused before any scrypt runs, with the
+         * generic -1: the password was never tested, so the cascade must
+         * stay free to try tier 2.  Several of these passed #362's
+         * per-buffer bound and would have run for minutes (or asked for
+         * 2 GiB), so alarm() turns a regression into a failure. */
+        static const char *const params[] = {
+            "\"N\": 16384, \"r\": 8, \"p\": 1048576",    /* work, via p */
+            "\"N\": 2097152, \"r\": 8, \"p\": 1",        /* memory > 2 GiB */
+            "\"N\": 16384, \"r\": 67108864, \"p\": 1",   /* r over the cap */
+            "\"N\": 4294967298, \"r\": 8, \"p\": 1",     /* 2^32+2: N=2 on armv7 */
+            "\"N\": -32768, \"r\": 8, \"p\": 1",         /* negative */
+            "\"N\": 32768.0, \"r\": 8, \"p\": 1",        /* not an integer */
+            "\"N\": 16384, \"r\": 8, \"p\": \"1\""        /* p not a number */
+        };
+        const char *kpath = "/tmp/lcsas_kdf_range_key.json";
+        size_t i;
+        for (i = 0; i < sizeof params / sizeof params[0]; i++) {
+            lcsas_master_key bad;
+            FILE *f = fopen(kpath, "w");
+            if (!f) {
+                fprintf(stderr, "FAIL: cannot write %s\n", kpath);
+                fails++;
+                break;
+            }
+            fprintf(f, "{\"kdf\": \"scrypt\", %s, "
+                    "\"salt\": \"AAAAAAAAAAAAAAAAAAAAAA==\", "
+                    "\"data\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\"}",
+                    params[i]);
+            fclose(f);
+            alarm(20);
+            rc = lcsas_repo_load_key_file(
+                kpath, (const unsigned char *)FIXTURE_PASSWORD,
+                strlen(FIXTURE_PASSWORD), &bad);
+            alarm(0);
+            if (rc != -1) {
+                fprintf(stderr, "FAIL: key file with {%s} rc=%d, want -1 "
+                        "(refused, not a password verdict)\n", params[i], rc);
+                fails++;
+            }
+        }
+        unlink(kpath);
     }
 
     /* ── lcsas_repo_decrypt direct call ────────────────────────────── */

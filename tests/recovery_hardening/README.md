@@ -103,6 +103,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_space_preflight.py` | Hardening tests: restore-side free-space preflight [FMA-09]. |
 | `test_schedule_only_workflows.py` | Hardening: a scheduled workflow file holds a schedule and nothing else (#462). |
 | `test_scheduled_canary_watchdogs.py` | Hardening: every scheduled canary self-tickets when it goes red (#420). |
+| `test_scrypt_limits_parity.py` | Hardening: tier-1 and tier-3 refuse the same scrypt parameters (#470). |
 | `test_setup_static_guards.py` | Hardening tests #7 + #8: static guards on the blind-test setup. |
 | `test_shell_coverage_contract.py` | Hardening: the `shell-coverage` Makefile recipe stays a real gate (GATE-09). |
 | `test_standalone_zstandard_guard.py` | Hardening test: standalone_restorer.py's `import zstandard` guard. |

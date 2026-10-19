@@ -111,40 +111,40 @@ poly1305.c:149   INTRACTABLE   "
 poly1305.c:150   INTRACTABLE   "
 
 # repo.c
-repo.c:216   VOLATILE   keys-dir sort/init blocks; fixture-key readdir order decides which run is cold vs warm (inverse of the 254-256 swap body) - env-dependent, allowed either way
-repo.c:217   VOLATILE   "
-repo.c:218   VOLATILE   "
-repo.c:231   DEFERRED   key count exceeded sanity limit guard; needs >1M key files
-repo.c:232   DEFERRED   "
-repo.c:233   DEFERRED   "
-repo.c:461   DEFENSIVE   strip_v2_prefix 0-byte-plaintext return; decrypt rejects <33B input so pt_len>=1 always -> provably unreachable
-repo.c:462   DEFENSIVE   "
-repo.c:463   DEFENSIVE   "
-repo.c:598   DEFERRED   index count exceeded sanity limit guard; needs >1M index files
-repo.c:599   DEFERRED   "
-repo.c:600   DEFERRED   "
-repo.c:725   DEFENSIVE   load_index pass-2 TOCTOU guard for TOOBIG/ZSTD; pass-1 already fatals on the same static file set, unreachable single-threaded (kept as a guard)
-repo.c:726   DEFENSIVE   "
-repo.c:729   DEFENSIVE   "
-repo.c:731   DEFENSIVE   "
-repo.c:733   DEFENSIVE   "
-repo.c:735   DEFENSIVE   "
-repo.c:744   DEFENSIVE   load_index pass-2 index-too-large (-2); pass-1 parses the same file first with the same cap and fatals -> unreachable
-repo.c:747   DEFENSIVE   "
-repo.c:750   DEFENSIVE   load_index pass-2 invalid-JSON (<=0); pass-1 parses the same file first and fatals -> unreachable
-repo.c:752   DEFENSIVE   "
-repo.c:786   INTRACTABLE   blob_index_push realloc fail; malloc fault-inject blocked by the gcov runtime
-repo.c:787   INTRACTABLE   "
-repo.c:788   INTRACTABLE   "
-repo.c:1109   INTRACTABLE   read_blob pread() disc-disconnect EIO/ENXIO classifier; the fstat guard passed, so pread fails only on a real media error / shrink race - hardware/race only
-repo.c:1110   INTRACTABLE   "
-repo.c:1111   INTRACTABLE   "
-repo.c:1112   INTRACTABLE   "
-repo.c:1116   INTRACTABLE   "
-repo.c:1117   INTRACTABLE   "
-repo.c:1120   INTRACTABLE   read_blob pread generic-errno else-branch + shared exit; needs a non-classified errno from pread (hardware/race)
-repo.c:1123   INTRACTABLE   "
-repo.c:1125   INTRACTABLE   "
+repo.c:259   DEFERRED   key count exceeded sanity limit guard; needs >1M key files
+repo.c:260   DEFERRED   "
+repo.c:261   DEFERRED   "
+repo.c:282   VOLATILE   keys-dir name-sort swap body; runs only when readdir returns the fixture's key files out of order, which varies with the filesystem's directory-hash seed (one CI runner covers it, another doesn't) - env-dependent, allowed either way
+repo.c:283   VOLATILE   "
+repo.c:284   VOLATILE   "
+repo.c:489   DEFENSIVE   strip_v2_prefix 0-byte-plaintext return; decrypt rejects <33B input so pt_len>=1 always -> provably unreachable
+repo.c:490   DEFENSIVE   "
+repo.c:491   DEFENSIVE   "
+repo.c:626   DEFERRED   index count exceeded sanity limit guard; needs >1M index files
+repo.c:627   DEFERRED   "
+repo.c:628   DEFERRED   "
+repo.c:753   DEFENSIVE   load_index pass-2 TOCTOU guard for TOOBIG/ZSTD; pass-1 already fatals on the same static file set, unreachable single-threaded (kept as a guard)
+repo.c:754   DEFENSIVE   "
+repo.c:757   DEFENSIVE   "
+repo.c:759   DEFENSIVE   "
+repo.c:761   DEFENSIVE   "
+repo.c:763   DEFENSIVE   "
+repo.c:772   DEFENSIVE   load_index pass-2 index-too-large (-2); pass-1 parses the same file first with the same cap and fatals -> unreachable
+repo.c:775   DEFENSIVE   "
+repo.c:778   DEFENSIVE   load_index pass-2 invalid-JSON (<=0); pass-1 parses the same file first and fatals -> unreachable
+repo.c:780   DEFENSIVE   "
+repo.c:814   INTRACTABLE   blob_index_push realloc fail; malloc fault-inject blocked by the gcov runtime
+repo.c:815   INTRACTABLE   "
+repo.c:816   INTRACTABLE   "
+repo.c:1137   INTRACTABLE   read_blob pread() disc-disconnect EIO/ENXIO classifier; the fstat guard passed, so pread fails only on a real media error / shrink race - hardware/race only
+repo.c:1138   INTRACTABLE   "
+repo.c:1139   INTRACTABLE   "
+repo.c:1140   INTRACTABLE   "
+repo.c:1144   INTRACTABLE   "
+repo.c:1145   INTRACTABLE   "
+repo.c:1148   INTRACTABLE   read_blob pread generic-errno else-branch + shared exit; needs a non-classified errno from pread (hardware/race)
+repo.c:1151   INTRACTABLE   "
+repo.c:1153   INTRACTABLE   "
 
 # tree.c
 tree.c:252   DEFENSIVE   decode_node_mtime decode-string fail (lcsas_json_decode_string<0); fixture mtime fields are always well-formed

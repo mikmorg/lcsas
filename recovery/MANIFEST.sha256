@@ -13,7 +13,7 @@ c841ed8ec7f878757acd494713e72bc14d5c921044a6251c89459aee3bd74b3d  ./docs/AUDIT_F
 2dc36d5248cfa9b721166f3e8d3a916ce69e31c404750bfa8763df760d93149d  ./docs/CRYPTO.txt
 6c4fc38068d6c49396ef9dafdc9b85c2f0072429b589a3a825e11f97e39eb4e1  ./docs/DEFERRED_WORK.txt
 b435b3116ae3523ec15728302990972f8b870ca7dbd30fb77131419079064017  ./docs/ENV_VARS.txt
-9025f09bcd5ed18a9a5a38e8a96caf7a61f5af16785088c461c87c2300c5c5e2  ./docs/EXEMPTIONS.md
+8505803298d6090a5613ef1136ed4d58e7825953c76f874a753e945b58d143de  ./docs/EXEMPTIONS.md
 464d551a1130ee3c4ed429b146607759fc300bcfbccf4b2fb77bedaa63d4285d  ./docs/FORMAT.txt
 7260970c7ea3c23639ea9eea5aeb3504b137cf1dfe2ef7e6c7265d4e9391d391  ./docs/MULTI_DISC_DESIGN.txt
 910f0fc2d758382247490bc1db3f84f43796379be46086d2e618647dfce52a61  ./docs/PHYSICAL_DISC_VALIDATION.txt
@@ -292,7 +292,7 @@ f22c4d0db8ccf2237f0fb70c63ddbe0f9e741760d9225f87bd3e109b57d806fc  ./src/lcsas-re
 bc57d2dd40c61530d3a9dc3e60454a2177d9e08c457f83aa89231c9519f1db38  ./src/lcsas-restore/catalog.c
 b649bc3a6263202418e6cfd7c4962ab25e71c4aa693c15ec0b5c85264c1a7c6d  ./src/lcsas-restore/catalog.h
 4627f6d181599dfeb3728332a1cd4f481e81996da7b9ef3a9dbfac53a5a1056e  ./src/lcsas-restore/disc_locator.c
-ee623e70fd4b3df7ddeaab69f1bd495c6903bd48549b90530a47a0c428bb2f6d  ./src/lcsas-restore/disc_locator.h
+3f4b937bf5cd904baf5a3c204f7c0b69341b2b339ff14408d3adc84d5b5f900f  ./src/lcsas-restore/disc_locator.h
 ec4082af81aebc47f987d37bcbe26188897aca8279cfb0a4932ef3051178a1a5  ./src/lcsas-restore/hex.c
 80953b8e3d4771369f8827b8c1fc1560fce64866873b752196c6c802aa083181  ./src/lcsas-restore/hex.h
 48a98888551679dc12fab6ede2f590d52468043cc978889c4447d2070d7a3042  ./src/lcsas-restore/json_q.c
@@ -307,10 +307,10 @@ acf2475fa670283d175bce6cb0d644b5658ab6ef6b01f7e2a9c43bc7a29b5bc0  ./src/lcsas-re
 00a6aa88a7994a79952268059e39c61d40f81e374294bf61f1a27ac06762610c  ./src/lcsas-restore/poly1305.c
 80543511e8036d293ab28479c6ff70b35774857263ec9e1049d9b97d2ecd932a  ./src/lcsas-restore/poly1305.h
 1aa6de08217ecf30d21df70cc45a4a6083db5b50a86ee7de9e48cdc412b294d5  ./src/lcsas-restore/posix_compat.h
-dc2a170c7185d645c16ef99df1d0c46b44f494e29db84ef6faf44472f18318a2  ./src/lcsas-restore/repo.c
+f1ba7807eb1ffeb8f91c554c50a4c7cb30db4d37d1c74232ad62c64c774c7aad  ./src/lcsas-restore/repo.c
 a6e5155f4ee8e8e5ac5704bd8ffbad272f0709e2a9519751faa0608d951678ef  ./src/lcsas-restore/repo.h
-630a1a200aaade635afb96819ee39fb9396886ddedc5fa81dd9898fd0fdeb24f  ./src/lcsas-restore/scrypt.c
-766b1676df12e27529cf40d3bd9adbcdd63e44f2c47b046f181625d0fbdf315d  ./src/lcsas-restore/scrypt.h
+b63086788ec97d0822ed1f2573162bd996e482657a1a7f54c978bc1300e2e7e3  ./src/lcsas-restore/scrypt.c
+c90fec413513df313866f31172fec0e0499918b63e5516f3eac2b7ddbea9b70a  ./src/lcsas-restore/scrypt.h
 f93314a23bd33d186f8d2a77006b5368f9a15878c00553dc3fd301a295c16c07  ./src/lcsas-restore/sha256.c
 505af21011f54d41f3908f2666bc1ffc981e1228bbf3e414869e95a1dcf9865e  ./src/lcsas-restore/sha256.h
 bd9205ab078d733f2998b6349d0f31178ca30d2ae2e1713963aa99590d1e7a61  ./src/lcsas-restore/tree.c
@@ -352,9 +352,9 @@ c63dace2dfec98add7304857f853c4255a6d7b212212c9da324eac7d16635aaf  ./tests/test_k
 d8927399a835f172128a888a5775840e7bac6ce91f56edb4f6dcba24ba356697  ./tests/test_path.c
 2e15bf81a942c616dd632548af27d71538ff9a29185a575e95209f24a32667e9  ./tests/test_pbkdf2.c
 cbff877bd39cf61d88bea8930e1b82491b0dd5fc50979fde8b8ff7d51b5167e6  ./tests/test_poly1305.c
-49fdc07de12ff91afc5a0413075207de9554f039642108489be4443b6ccc5c9c  ./tests/test_repo.c
+61e0d726fddcfc20e29ec516c36789c196ff036cd6c3e33e06876b558972f16f  ./tests/test_repo.c
 d545bfb73d0183b9d7b3ca36f297f150bd7daf8362ca067351ca42f73692e751  ./tests/test_restore_bat_e2e.sh
-11d0000be102eae215cfc53d908e90065eab8ef93325f4951d03e8936987068d  ./tests/test_scrypt.c
+7baba94d7a044107a41fc70f9223f4b472ceba26f3e655d534a7ab36778db0e6  ./tests/test_scrypt.c
 64698e8e358ef76142c663aa7bbd45c3bf20c884cf344467888cb224366c4071  ./tests/test_sha256.c
 f3bb627caa064d73b696e5af2501ec9bcdedbead192ffd93c3cca5814e884795  ./tests/test_tree.c
 6a4dd4d8a67752f12e2e6b349843925307b5bae635a6dc9dd5d784808e7fa138  ./tests/test_zstd.c

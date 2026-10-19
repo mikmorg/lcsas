@@ -11,6 +11,7 @@ Issue traceability:
   - test_wrong_password_fails_with_clear_error   -> #219
   - test_truncated_pack_fails_with_clear_error   -> #220
   - test_wrong_snapshot_id_fails_with_clear_error -> #226
+  - test_out_of_range_kdf_is_refused_fast_not_a_password_verdict -> #470
 """
 
 from __future__ import annotations
@@ -227,6 +228,60 @@ def test_truncated_data_field_is_not_a_password_verdict(
     )
     assert "wrong password" not in (res.stdout + res.stderr).lower(), (
         f"truncated ciphertext must not read as a wrong password:\n"
+        f"{res.stderr}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("params", "note"),
+    [
+        ({"p": 1 << 20}, "parameters N=16384 r=8 p=1048576 are out of range"),
+        ({"N": 1 << 21}, "parameters N=2097152 r=8 p=1 are out of range"),
+        # 2^32 + 2: an unsigned long cast on armv7 would make this N=2,
+        # whose wrong key MAC-fails and reads as a wrong password.
+        ({"N": (1 << 32) + 2}, "parameters N=4294967298 r=8 p=1 are out of range"),
+        ({"N": 16384.0}, "N, r or p is not an integer"),
+    ],
+    ids=["work-cap", "memory-cap", "truncates-on-32-bit", "float"],
+)
+def test_out_of_range_kdf_is_refused_fast_not_a_password_verdict(
+    tmp_path: Path, params: dict[str, float], note: str,
+) -> None:
+    """#470: a key file's scrypt N/r/p are read before any MAC check.
+    Values past the work or memory cap (or not integers) are refused
+    before deriving, named in one line, and exit 1 so the cascade can try
+    tier 2.  Before the cap, the work-cap case ran scrypt for hours and
+    the memory-cap case asked for 2 GiB."""
+    import json
+
+    bin_path = _find_bin()
+    repo = tmp_path / "repo"
+    src = _require_fixture() / "keys"
+    (repo / "keys").mkdir(parents=True)
+    name = sorted(p.name for p in src.iterdir())[0]
+    obj = json.loads((src / name).read_text())
+    obj.update(params)
+    (repo / "keys" / name).write_text(json.dumps(obj))
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("does-not-matter")
+
+    res = _run(
+        bin_path,
+        "--repo", str(repo),
+        "--password-file", str(pwfile),
+        "--target", str(tmp_path / "restored"),
+        timeout=30,
+    )
+
+    assert res.returncode == 1, (
+        f"out-of-range KDF parameters must exit 1, got rc={res.returncode}; "
+        f"stderr:\n{res.stderr}"
+    )
+    assert f"key file {repo / 'keys' / name}: scrypt {note}" in res.stderr, (
+        f"no line naming the key file and its parameters:\n{res.stderr}"
+    )
+    assert "wrong password" not in (res.stdout + res.stderr).lower(), (
+        f"out-of-range parameters must not read as a wrong password:\n"
         f"{res.stderr}"
     )
 
