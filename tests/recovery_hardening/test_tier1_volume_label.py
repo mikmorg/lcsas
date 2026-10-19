@@ -158,7 +158,10 @@ def test_bad_or_missing_volume_info_never_blocks_restore(
     cmd, staged, mount_parent, target, files = _setup(tmp_path)
     info = staged / "volume_info.json"
     if content == "<directory>":
+        # Not empty: btrfs gives an empty directory st_size 0, which
+        # reads as an empty file instead of failing with EISDIR.
         info.mkdir()
+        (info / "entry").write_text("x")
     elif content is not None:
         info.write_text(content)
 

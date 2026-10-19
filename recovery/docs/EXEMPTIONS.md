@@ -99,8 +99,6 @@ lcsas_io.c:30   INTRACTABLE   lcsas_pread_exact unexpected-EOF EIO branch (#222 
 lcsas_io.c:31   INTRACTABLE   "
 lcsas_io.c:47   INTRACTABLE   EINTR retry in lcsas_write_exact write loop; needs racy signal injection
 lcsas_io.c:48   INTRACTABLE   "
-lcsas_io.c:82   INTRACTABLE   EINTR retry in lcsas_read_file read loop; needs racy signal injection
-lcsas_io.c:83   INTRACTABLE   "
 
 # main.c
 main.c:578   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)

@@ -1187,9 +1187,13 @@ main(void)
         memcpy(longlabel + 211, "\"}", 2);
         make_labelled_disc(parent, "VOL_LONGLABEL", longlabel);
         make_labelled_disc(parent, "VOL_NONE", NULL);
-        /* volume_info.json that is a directory: stat()s, can't be read. */
+        /* volume_info.json that is a directory: stat()s, can't be read.
+         * Not empty: btrfs gives an empty directory st_size 0, which
+         * would read as an empty file rather than fail with EISDIR. */
         snprintf(p, sizeof p, "%s/VOL_DIR/volume_info.json", parent);
         mkdir_recursive(p);
+        snprintf(p, sizeof p, "%s/VOL_DIR/volume_info.json/entry", parent);
+        write_pack(p, "x");
         /* Past the size cap: a sparse file, so nothing is written. */
         make_labelled_disc(parent, "VOL_BIG", "{}");
         snprintf(p, sizeof p, "%s/VOL_BIG/volume_info.json", parent);
