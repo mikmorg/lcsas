@@ -425,6 +425,66 @@ class TestKeyDerivation:
             _try_keys(tmp_path / "keys", b"wrong-password")
 
 
+class TestScryptParameterLimits:
+    """#470: the key file's scrypt N/r/p are refused, not run, when they
+    are not integers or exceed the work or memory cap.  They are read
+    before any MAC check, so a corrupt key file must not hang tier-3."""
+
+    @pytest.mark.parametrize(
+        ("n", "r", "p"),
+        [
+            (16384, 8, 1 << 20),     # work, via p
+            (1 << 21, 8, 1),         # memory just over 2 GiB
+            (1 << 22, 1, 9),         # work one step over the cap
+            (16, 1 << 22, 1),        # work, via r
+            (3, 8, 1),               # N not a power of two
+            (1, 8, 1),               # N below 2
+            (-32768, 8, 1),
+            (32768, 0, 1),
+            (32768, 8, 0),
+            (32768.0, 8, 1),         # float from JSON
+            (True, 8, 1),            # bool, an int subclass
+            (32768, "8", 1),
+            (32768, 8, None),
+        ],
+    )
+    def test_out_of_range_is_refused_fast(self, tmp_path, n, r, p):
+        import time
+
+        from lcsas.restore.restic_fallback import _load_master_key, _try_keys
+        mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
+        key_file = _make_key_file(mk, PASSWORD, tmp_path)
+        doc = json.loads(key_file.read_text())
+        doc.update(N=n, r=r, p=p)
+        key_file.write_text(json.dumps(doc))
+
+        start = time.monotonic()
+        with pytest.raises(IntegrityError, match=r"corrupt key file\?") as exc:
+            _load_master_key(key_file, PASSWORD)
+        assert str(key_file) in str(exc.value)
+        with pytest.raises(IntegrityError, match=r"corrupt key file\?"):
+            _try_keys(tmp_path / "keys", PASSWORD)
+        assert time.monotonic() - start < 5, "refused, but only after running"
+
+    @pytest.mark.parametrize(
+        ("n", "r", "p"),
+        [
+            (32768, 8, 1),           # restic default
+            (1 << 20, 8, 1),         # restic/rustic maximum, ~1 GiB
+            (1 << 22, 1, 8),         # work exactly at the cap
+            (1 << 23, 1, 1),         # 1 GiB with r=1
+            (1024, 8, 16),           # RFC 7914 vector 2
+        ],
+    )
+    def test_in_range_gets_a_maxmem_hashlib_accepts(self, n, r, p):
+        """The old 2 * 128*r*(N+p+2) exceeded INT_MAX at restic's own
+        maximum, which hashlib rejects with ValueError.  Only the limit
+        is checked here; the KDF itself is not run."""
+        from lcsas.restore.restic_fallback import _scrypt_maxmem
+        maxmem = _scrypt_maxmem(n, r, p)
+        assert 128 * r * (n + p + 2) <= maxmem <= 2**31 - 1
+
+
 # ── Full Restore Tests ──────────────────────────────────────────
 
 class TestPurePythonRestorer:

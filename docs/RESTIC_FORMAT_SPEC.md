@@ -60,7 +60,8 @@ derived_key = scrypt(password, salt, N=2^15, r=8, p=1, dkLen=64)
 ```
 
 - First 32 bytes → AES-256 encryption key
-- Last 32 bytes → HMAC-SHA-256 authentication key
+- Next 16 bytes → Poly1305-AES `k` (the AES-128 key that encrypts the nonce)
+- Last 16 bytes → Poly1305-AES `r`
 
 These derived keys decrypt the **master key** stored in the key file.
 The master key is then used for all subsequent encryption/decryption.
@@ -85,6 +86,16 @@ Each file in `keys/` is a JSON document:
 
 The `data` field contains the master key, encrypted with the
 password-derived key using AES-256-CTR + Poly1305-AES MAC.
+
+`N`, `r` and `p` are read before anything is authenticated, so LCSAS's
+own readers (tier-1 `lcsas-restore` and the tier-3 Python reader) refuse
+a key file whose parameters are out of range rather than derive with
+them (#470).  The work cap is `N·r·p ≤ 2^25`.  The memory cap is
+`128·r·(N + p + 3) ≤ 2 GiB`.  `N` must be a power of two of at least 2,
+and `r` and `p` at least 1.  All three must be JSON integers.  The most
+restic/rustic write is `N=2^20, r=8, p=1`.  A refused key file is reported
+as corrupt, never as a wrong password, so the restore can try another
+tier.
 
 ### 3.3 Master Key
 

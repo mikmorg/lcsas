@@ -192,6 +192,10 @@ target; e.g. r=2²⁵ → bs≡0), and on 64-bit with e.g. N=2⁶² r=8 → `bs*
 yielding a small alloc + massive OOB write. A tampered `keys/` file is precisely
 the pre-authentication surface tier-1 must survive. The Python side is
 DoS-bounded by `hashlib.scrypt` maxmem. Unfuzzed/untested.
+*[2026-10 correction (#470): the Python side was not bounded. It set
+`maxmem` from the file's own N/r/p. #362 fixed the C overflow but capped
+only each buffer's size, not the work. Both tiers now share a work cap and
+a total-memory cap.]*
 
 **M2. The completeness gate does not enforce what the docs promise.**
 `meta/required_contents.py:91-98` requires lcsas-restore / rustic-static /

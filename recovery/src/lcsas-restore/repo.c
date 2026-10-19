@@ -140,9 +140,37 @@ lcsas_repo_load_key_file(const char *path,
     encrypted = b64_decode_field((char *)file_buf, toks, data_idx, &encrypted_len);
     if (!salt || !encrypted) goto out;
 
-    if (n_idx >= 0) lcsas_json_decode_int((char *)file_buf, &toks[n_idx], &N);
-    if (r_idx >= 0) lcsas_json_decode_int((char *)file_buf, &toks[r_idx], &R);
-    if (p_idx >= 0) lcsas_json_decode_int((char *)file_buf, &toks[p_idx], &P);
+    /* Refuse out-of-range KDF parameters BEFORE deriving (#470).  They
+     * are read before any MAC check, so a corrupt or hostile key file
+     * could otherwise run scrypt for hours or exhaust memory.  Range-
+     * check the long long values before narrowing them: on 32-bit armv7
+     * an unsigned long cast would turn N = 2^32 + 2 into a valid N = 2,
+     * whose wrong key then MAC-fails and is reported as a wrong
+     * password, which stops the cascade.  A field that is present but
+     * not an integer (e.g. 32768.0) is refused the same way rather than
+     * silently replaced by the default.  The generic -1 lets the
+     * cascade try another tier. */
+    if ((n_idx >= 0
+            && lcsas_json_decode_int((char *)file_buf, &toks[n_idx], &N) != 0)
+        || (r_idx >= 0
+            && lcsas_json_decode_int((char *)file_buf, &toks[r_idx], &R) != 0)
+        || (p_idx >= 0
+            && lcsas_json_decode_int((char *)file_buf, &toks[p_idx], &P) != 0)) {
+        fprintf(stderr, "[lcsas-restore] key file %s: scrypt N, r or p is not "
+                "an integer (corrupt key file?); skipping it\n", path);
+        goto out;
+    }
+    if (N < 1 || R < 1 || P < 1
+        || N > (long long)LCSAS_SCRYPT_MAX_WORK
+        || R > (long long)LCSAS_SCRYPT_MAX_WORK
+        || P > (long long)LCSAS_SCRYPT_MAX_WORK
+        || !lcsas_scrypt_params_ok((unsigned long)N, (unsigned long)R,
+                                   (unsigned long)P)) {
+        fprintf(stderr, "[lcsas-restore] key file %s: scrypt parameters "
+                "N=%lld r=%lld p=%lld are out of range (corrupt key file?); "
+                "skipping it\n", path, N, R, P);
+        goto out;
+    }
 
     if (lcsas_scrypt(password, pw_len, salt, salt_len,
                      (unsigned long)N, (unsigned long)R, (unsigned long)P,

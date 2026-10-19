@@ -1,9 +1,12 @@
 /*
- * test_scrypt.c -- RFC 7914 §11 test vectors.
+ * test_scrypt.c -- RFC 7914 §11 test vectors, plus the cost-parameter
+ * limits (#362, #470).
  */
 #include "scrypt.h"
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 static int fails = 0;
 
@@ -89,6 +92,62 @@ int main(void)
         if (lcsas_scrypt((unsigned char *)"", 0, (unsigned char *)"", 0,
                          1024, 8, (1UL << 30), dk, 64) != -1) {
             fprintf(stderr, "FAIL scrypt accepted overflowing p\n"); fails++;
+        }
+    }
+
+    /* Issue #470: the limits themselves.  lcsas_scrypt_params_ok() is
+     * checked directly so the accepted edge cases (up to 128x restic's
+     * default work) never actually run. */
+    {
+        static const struct {
+            unsigned long N, r, p;
+            int want;
+            const char *what;
+        } c[] = {
+            { 32768, 8, 1, 1, "restic default" },
+            { 1UL << 20, 8, 1, 1, "restic/rustic maximum (1 GiB)" },
+            { 1UL << 22, 1, 8, 1, "work exactly at the cap" },
+            { 1UL << 22, 1, 9, 0, "work one step over the cap (p)" },
+            { 1UL << 16, 8, 1UL << 10, 0, "work cap via p (old code ran it)" },
+            { 1UL << 4, 1UL << 22, 1, 0, "work cap via r" },
+            { 1UL << 21, 8, 1, 0, "total memory just over 2 GiB" },
+            { 1UL << 23, 1, 1, 1, "total memory 1 GiB with r=1" },
+            { 1UL << 24, 1, 2, 0, "total memory over via N with r=1" },
+            { 2, 1, 1, 1, "smallest valid" },
+            { 1, 1, 1, 0, "N below 2" },
+            { 3, 1, 1, 0, "N not a power of two" },
+            { 16, 0, 1, 0, "r zero" },
+            { 16, 1, 0, 0, "p zero" },
+            { 2, 1UL << 25, 1, 0, "N*r past the work cap via r" },
+            { 2, (1UL << 25) + 1, 1, 0, "r alone past the work cap" },
+            { 1UL << 30, 1, 1, 0, "N alone past the work cap" }
+        };
+        size_t i;
+        for (i = 0; i < sizeof c / sizeof c[0]; i++) {
+            int got = lcsas_scrypt_params_ok(c[i].N, c[i].r, c[i].p);
+            if (got != c[i].want) {
+                fprintf(stderr, "FAIL params_ok(N=%lu, r=%lu, p=%lu) = %d, "
+                        "want %d (%s)\n", c[i].N, c[i].r, c[i].p, got,
+                        c[i].want, c[i].what);
+                fails++;
+            }
+        }
+    }
+
+    /* #470: a key file whose N/r/p passed #362's per-buffer bound but
+     * not the work cap (N=2^16, r=8, p=2^10: 64 MiB, 2^29 work) must be
+     * refused, not derived.  Before the cap this ran for minutes, so
+     * alarm() turns a regression into a failure instead of a hang. */
+    {
+        unsigned char dk[64];
+        int rc;
+        alarm(20);
+        rc = lcsas_scrypt((unsigned char *)"", 0, (unsigned char *)"", 0,
+                          1UL << 16, 8, 1UL << 10, dk, 64);
+        alarm(0);
+        if (rc != -1) {
+            fprintf(stderr, "FAIL scrypt ran past the work cap (rc=%d)\n", rc);
+            fails++;
         }
     }
 

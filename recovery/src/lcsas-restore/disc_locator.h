@@ -15,7 +15,9 @@
 #include <stddef.h>
 #include <stdio.h>
 
-typedef struct {
+/* Tagged so that `struct lcsas_disc_locator`, which repo.h and tree.h
+ * forward-declare, names this same type (#467). */
+typedef struct lcsas_disc_locator {
     /* Caller-provided list of paths (each is a directory expected to
      * contain a `data/` subdir with pack files, two-level or flat).
      * The locator BORROWS these pointers -- the caller owns the

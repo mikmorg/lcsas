@@ -1,10 +1,10 @@
 /*
  * scrypt.c -- RFC 7914 scrypt with Salsa20/8 core.
  *
- * Strict C89.  Allocates a single buffer of size 128 * r * (N + 2) at
- * entry; freed on exit.  For restic defaults (N=32768, r=8) this is
- * ~32 MiB plus a small scratch area -- acceptable for a recovery
- * binary that runs once.
+ * Strict C89.  Allocates 128 * r * (N + p + 3) bytes at entry (V, B and
+ * three scratch blocks), bounded by lcsas_scrypt_params_ok(); freed on
+ * exit.  For restic defaults (N=32768, r=8, p=1) this is ~32 MiB --
+ * acceptable for a recovery binary that runs once.
  *
  * Reference: RFC 7914 sections 3 (Salsa20/8), 4 (BlockMix), 5 (SMix),
  * 6 (scrypt).
@@ -13,13 +13,6 @@
 #include "pbkdf2.h"
 
 #include <stdlib.h>
-
-/* Upper bound on scrypt scratch memory (issue #362).  2 GiB is far above
- * any real restic/rustic work factor (their worst case is ~1 GiB at
- * N=2^20, r=8) yet fits unsigned long on every target -- C guarantees
- * unsigned long >= 32 bits, so 2^31 < ULONG_MAX and the bounded products
- * 128*r*N and 128*r*p cannot wrap. */
-#define SCRYPT_MAX_MEM (1UL << 31)
 
 #define U32 unsigned long
 
@@ -160,6 +153,33 @@ smix(unsigned char *B, unsigned long r, unsigned long N,
 }
 
 int
+lcsas_scrypt_params_ok(unsigned long N, unsigned long r, unsigned long p)
+{
+    unsigned long nr;
+    unsigned long bs;
+
+    if (N < 2 || (N & (N - 1)) != 0) return 0;
+    if (r == 0 || p == 0) return 0;
+
+    /* N, r and p come from the key file and reach here before any
+     * password/MAC check (#362), so bound them without ever multiplying
+     * unchecked values: C only promises unsigned long >= 32 bits, and on
+     * the 32-bit armv7 target an unchecked 128*r*N wraps into a small
+     * malloc followed by a huge out-of-bounds write.  Each product below
+     * is formed only once its factors are known to keep it in range. */
+    if (r > LCSAS_SCRYPT_MAX_WORK) return 0;
+    if (N > LCSAS_SCRYPT_MAX_WORK / r) return 0;
+    nr = N * r;                              /* <= 2^25 */
+    if (p > LCSAS_SCRYPT_MAX_WORK / nr) return 0;
+
+    /* Work is bounded, but that alone allows 4 GiB (#470).  N >= 2 means
+     * r <= 2^24, so bs <= 2^31 fits; N + p + 3 <= 2^25 + 2^24 + 3. */
+    bs = 128UL * r;
+    if (N + p + 3 > LCSAS_SCRYPT_MAX_MEM / bs) return 0;
+    return 1;
+}
+
+int
 lcsas_scrypt(const unsigned char *pw, size_t pwlen,
              const unsigned char *salt, size_t saltlen,
              unsigned long N, unsigned long r, unsigned long p,
@@ -174,24 +194,8 @@ lcsas_scrypt(const unsigned char *pw, size_t pwlen,
     unsigned long bs;
     int rc = 0;
 
-    if (N < 2 || (N & (N - 1)) != 0) return -1;
-    if (r == 0 || p == 0) return -1;
-
-    /* Bound the cost parameters so the size arithmetic below cannot
-     * overflow (issue #362).  N, r and p are read from the repository
-     * key file, which on a tampered disc is attacker-controlled and
-     * reaches this function BEFORE any password/MAC check.  Without a
-     * ceiling, `128 * r * N` (and `* p`) wrap unsigned long -- trivially
-     * on the 32-bit armv7 target -- yielding a small malloc followed by
-     * a huge out-of-bounds write inside smix.  Cap total scratch memory
-     * at SCRYPT_MAX_MEM, testing each factor by division so the check
-     * itself never multiplies.  restic/rustic never write N>2^20, r>8,
-     * p>1, so every real repository passes; anything larger is either a
-     * corrupt/hostile key file or an infeasible work factor. */
-    if (r > (SCRYPT_MAX_MEM / 128UL)) return -1;   /* 128*r cannot overflow */
+    if (!lcsas_scrypt_params_ok(N, r, p)) return -1;
     bs = 128UL * r;
-    if (N > (SCRYPT_MAX_MEM / bs)) return -1;       /* bs*N <= SCRYPT_MAX_MEM */
-    if (p > (SCRYPT_MAX_MEM / bs)) return -1;       /* bs*p <= SCRYPT_MAX_MEM */
 
     B = (unsigned char *)malloc(bs * p);
     V = (unsigned char *)malloc(bs * N);
