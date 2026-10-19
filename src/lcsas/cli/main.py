@@ -2841,7 +2841,7 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             "  2. verify the new volumes\n"
             "  3. then deprecate sources with: consolidate --deprecate %s",
             session.session_id,
-            " ".join(args.volume_ids),
+            " ".join(str(v) for v in args.volume_ids),
         )
 
     return 0
