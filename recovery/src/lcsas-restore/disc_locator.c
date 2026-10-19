@@ -13,9 +13,12 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #ifndef _WIN32
-#  include <unistd.h>      /* chdir */
+#  include <unistd.h>      /* chdir, read */
 #  include <dirent.h>
+#  include <errno.h>
+#  include <sys/select.h>  /* auto-detect poll (#455) */
 #  include <sys/statvfs.h>
+#  include <sys/time.h>
 #else
 #  include <direct.h>
 #  define chdir _chdir
@@ -51,6 +54,17 @@ lcsas_disc_locator_init(lcsas_disc_locator *l,
     l->cache_dir           = NULL;
     chunk_env = getenv("LCSAS_DRAIN_CHUNK_PACKS");
     l->drain_chunk_packs   = chunk_env ? atoi(chunk_env) : 0;
+    l->auto_mount          = 1;
+    /* 2 s: a desktop auto-mount takes a second or two, so a faster
+     * poll gains nothing, and each tick costs one readdir per mount
+     * parent plus a few stat()s per candidate disc. */
+    l->poll_ms             = 2000;
+}
+
+void
+lcsas_disc_locator_set_auto_mount(lcsas_disc_locator *l, int on)
+{
+    l->auto_mount = on ? 1 : 0;
 }
 
 void
@@ -686,6 +700,26 @@ scan_paths(lcsas_disc_locator *l, const char *hex,
 }
 
 /*
+ * Is the prompt polling for new discs while it waits (#455)?  Needs
+ * auto-detect on, a positive interval, and a prompt stream backed by a
+ * descriptor select() can take.  Never on Windows (see disc_locator.h).
+ */
+static int
+auto_detect_active(const lcsas_disc_locator *l)
+{
+#ifndef _WIN32
+    int fd;
+    if (!l->auto_mount || l->poll_ms <= 0 || l->prompt_in == NULL)
+        return 0;
+    fd = fileno(l->prompt_in);
+    return fd >= 0 && fd < FD_SETSIZE;
+#else
+    (void)l;
+    return 0;
+#endif
+}
+
+/*
  * Render one search-path candidate into the prompt's "Currently
  * searching:" block, truncating with a "..." prefix when too long.
  */
@@ -769,29 +803,102 @@ print_prompt(lcsas_disc_locator *l, const char *hex)
     }
     fputs("| Insert the right disc and press ENTER to retry.          |\n", o);
     fputs("| Type 'q' then ENTER to abort.                            |\n", o);
+    if (auto_detect_active(l)) {
+        fputs("| (A disc that mounts by itself is found without ENTER.)   |\n", o);
+    }
     fputs("+----------------------------------------------------------+\n", o);
     fputs("> ", o);
     fflush(o);
 }
 
 /*
- * Read one line from prompt_in.  Returns 0 if user pressed Enter,
- * -1 if user typed 'q'/'Q' to abort, or -1 on EOF.
+ * Next byte of the operator's answer.  With fd >= 0 (the auto-detect
+ * path) read(2) the descriptor directly: select() can't see bytes
+ * already sitting in a FILE buffer, so mixing the two would strand
+ * typed-ahead input -- a buffered 'q' would sit unseen while the poll
+ * waited on an empty pipe.  fd < 0 reads through stdio as before.
  */
 static int
-read_response(lcsas_disc_locator *l)
+next_answer_char(lcsas_disc_locator *l, int fd)
+{
+#ifndef _WIN32
+    if (fd >= 0) {
+        unsigned char ch;
+        ssize_t n;
+        do {
+            n = read(fd, &ch, 1);
+        } while (n < 0 && errno == EINTR);
+        return n == 1 ? (int)ch : EOF;
+    }
+#else
+    (void)fd;
+#endif
+    return fgetc(l->prompt_in);
+}
+
+/*
+ * Read one line of the operator's answer (see next_answer_char for
+ * `fd`).  Returns 0 if user pressed Enter, -1 if user typed 'q'/'Q'
+ * to abort, or -1 on EOF.
+ */
+static int
+read_response(lcsas_disc_locator *l, int fd)
 {
     int c;
     int abort_req = 0;
     if (l->prompt_in == NULL) return -1;
-    c = fgetc(l->prompt_in);
+    c = next_answer_char(l, fd);
     if (c == EOF) return -1;
     if (c == 'q' || c == 'Q') abort_req = 1;
     /* Consume the rest of the line. */
     while (c != EOF && c != '\n') {
-        c = fgetc(l->prompt_in);
+        c = next_answer_char(l, fd);
     }
     return abort_req ? -1 : 0;
+}
+
+/*
+ * Wait for the operator's answer to the prompt.  With auto-detect on
+ * (#455), re-scan for the missing pack every poll_ms while waiting, so
+ * a disc the OS mounts by itself resumes the restore with no ENTER.
+ * Returns 1 if a re-scan found the pack (out_path filled), otherwise
+ * read_response()'s 0 (ENTER) or -1 ('q' / EOF).
+ */
+static int
+wait_for_answer_or_disc(lcsas_disc_locator *l, const char *hex,
+                        char *out_path, size_t out_path_cap)
+{
+#ifndef _WIN32
+    int fd;
+
+    if (!auto_detect_active(l)) return read_response(l, -1);
+    fd = fileno(l->prompt_in);
+    for (;;) {
+        fd_set rfds;
+        struct timeval tv;
+        int n;
+
+        FD_ZERO(&rfds);
+        FD_SET(fd, &rfds);
+        tv.tv_sec  = l->poll_ms / 1000;
+        tv.tv_usec = (l->poll_ms % 1000) * 1000;
+        n = select(fd + 1, &rfds, NULL, NULL, &tv);
+        if (n > 0) return read_response(l, fd);
+        if (n < 0 && errno != EINTR) {
+            /* Not a select()able descriptor after all.  Stop polling
+             * for the rest of the run and block on the answer as
+             * before; nothing has gone through stdio's buffer yet, so
+             * switching to it loses no input. */
+            l->auto_mount = 0;
+            return read_response(l, -1);
+        }
+        refresh_discovered(l);
+        if (scan_paths(l, hex, out_path, out_path_cap)) return 1;
+    }
+#else
+    (void)hex; (void)out_path; (void)out_path_cap;
+    return read_response(l, -1);
+#endif
 }
 
 int
@@ -845,13 +952,24 @@ lcsas_disc_locate_pack(lcsas_disc_locator *l,
      * discoveries are already current; after Enter, refresh to catch
      * a disc the user mounted between prompt and keypress.  The
      * freshest catalog is re-picked at each refresh so hash->label
-     * hints stay accurate after a disc swap. */
+     * hints stay accurate after a disc swap.  With auto-detect on,
+     * the same refresh also runs every poll_ms while waiting. */
     for (;;) {
+        int answer;
+
         l->misses++;
         print_prompt(l, hex);
-        if (read_response(l) < 0) {
+        answer = wait_for_answer_or_disc(l, hex, out_path, out_path_cap);
+        if (answer < 0) {
             fprintf(stderr, "[lcsas-restore] aborted by user\n");
             return -1;
+        }
+        if (answer > 0) {
+            fprintf(l->prompt_out,
+                    "\n[lcsas-restore] new disc detected -- no ENTER "
+                    "needed.\n"
+                    "[lcsas-restore] found %.16s...; continuing.\n", hex);
+            return 0;
         }
         refresh_discovered(l);
         if (scan_paths(l, hex, out_path, out_path_cap)) {

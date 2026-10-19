@@ -104,8 +104,10 @@ prompt names the specific disc it wants:
 Insert the right disc and press ENTER to retry.
 ```
 
-Eject the current disc, insert the named one, press Enter.  If a
-physical disc is damaged, check whether you have a redundant copy at
+Eject the current disc and insert the named one.  On Linux and macOS
+the restore notices the disc once your computer has mounted it and
+carries on by itself; if nothing happens within a few seconds (or on
+Windows), press Enter.  If a physical disc is damaged, check whether you have a redundant copy at
 another storage location (the recommended practice is burning ≥2
 copies of every volume to separate locations; the catalog tracks
 every copy).

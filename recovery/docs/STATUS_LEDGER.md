@@ -108,17 +108,24 @@ sidecar needed.
 *Effort:* C parser via existing `json_q` ~80 LOC; locator wire-in ~30 LOC;
 test ~60 LOC.
 
-### 3. Auto-mount detection (eliminate the Enter press) — DEFERRED (P2)
+### 3. Auto-mount detection (eliminate the Enter press) — LANDED (#455, 2026-10)
 
-Notice a new mount and skip the manual Enter.  Requires inotify on
-`/media/$USER` + `/Volumes` (Linux/macOS), or heavier dbus/udisks2/
-DiskArbitration, or `/proc/mounts` polling.  **Not started** (no `inotify`
-or `--auto-mount` handling in `recovery/src/`).  The Enter press costs ~1 s
-per swap (<1 min across a 50-disc archive), and it does not help the
-bare-metal initramfs flow (no auto-mount daemon there), so it is not urgent.
+Notice a new mount and skip the manual Enter.  Done by polling rather
+than inotify/kevent/udisks: while the swap prompt waits, `disc_locator.c`
+`select()`s the prompt's stdin with a 2 s timeout and, on each timeout,
+re-runs the same `refresh_discovered()` + `scan_paths()` an Enter would.
+So a disc the desktop auto-mounts resumes the restore by itself, with
+no new mechanism per platform and nothing new to trust.  ENTER and `q`
+keep working throughout; the answer is read with `read(2)`, because
+`select()` can't see bytes already in a stdio buffer.
+`--auto-mount off` restores the Enter-only prompt.
 
-*Effort:* Linux inotify ~120 LOC + ~80 LOC test; macOS kevent ~100 LOC;
-Windows polling ~30 LOC.
+Limits: Linux/macOS only (a Windows console handle can't be
+`select()`ed, so the prompt there always waits for Enter), and it does
+not help the bare-metal initramfs flow, where nothing mounts a disc
+unasked.  Tier-3's Python prompt is unchanged.
+Tests: `recovery/tests/test_disc_locator.c` and
+`tests/recovery_hardening/test_tier1_auto_mount.py`.
 
 ### 4. Snapshot-aware pick list — CLOSED WON'T-FIX (issue #350, 2026-07-16)
 
@@ -134,11 +141,12 @@ per snapshot).  See the #350 discussion for the full rationale.
 
 ### Priority order for resuming
 
-- **P2:** Auto-mount detection (item 3) — quality-of-life; Linux/macOS only.
 - **P3:** volume_info.json wire-up (item 2) — low effort, low payoff;
-  useful once auto-mount lands.
+  more useful now that #455 picks a disc up with no Enter, since a
+  `mounted vol-XXX` line would confirm which disc it took.
 - **P4:** disc_index.txt sidecar (item 1) — pure defence in depth; defer
   indefinitely unless field evidence demands it.
+- Item 3 (auto-mount detection) landed in #455.
 - Item 4 (snapshot-aware pick list) closed won't-fix per #350 — no longer
   in the queue.
 
