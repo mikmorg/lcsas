@@ -15,6 +15,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    # actions: read is for the workflow-state check below.  Spelled out
+    # because a job-level block replaces the default token scopes, and a
+    # restricted default token has actions: none.
+    permissions:
+      contents: read
+      actions: read
+
     env:
       # Pinned rustic release. Update in lockstep with README "Development"
       # section so local devs and CI run identical versions.
@@ -25,6 +32,37 @@ jobs:
       RUSTIC_SHA256: "fb7b74a14418b2dd070360c9abb22607f8559bdd344a0adf1b33bc2e31f83f5f"
 
     steps:
+      - name: No workflow in this repo is switched off (#462)
+        # GitHub disables a workflow file that has a `schedule:` trigger
+        # after 60 days without repository activity.  A disabled file
+        # produces no runs, so nothing ever goes red and the #420
+        # watchdogs have nothing to report: the 2026-08-05 -> 10-15 quiet
+        # spell switched off seven canaries without a sound.  This job
+        # runs on every push and PR, so the first one after a quiet spell
+        # fails here, naming the fix.  Only files under .github/workflows/
+        # count (the API also lists GitHub's own dynamic workflows, e.g.
+        # the Copilot agent), and disabled_fork is a fork's normal state.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          off="$(gh api --paginate "repos/${{ github.repository }}/actions/workflows" \
+            --jq '.workflows[]
+                  | select(.path | startswith(".github/workflows/"))
+                  | select(.state == "disabled_inactivity"
+                           or .state == "disabled_manually")
+                  | "\(.state) \(.path)"')"
+          if [ -z "$off" ]; then
+            echo "no workflow under .github/workflows/ is disabled"; exit 0
+          fi
+          echo "Switched-off workflows (they run on no trigger at all):"
+          echo "$off" | sed 's/^/  /'
+          echo "$off" | while read -r state path; do
+            echo "::error::$path is $state -- re-enable with: gh workflow enable ${path##*/}"
+          done
+          echo "Then re-run this job.  Background: #462." >&2
+          exit 1
+
       - name: Checkout
         uses: actions/checkout@v4
 

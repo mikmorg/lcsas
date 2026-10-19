@@ -1,0 +1,70 @@
+name: bin-parity-weekly
+
+# The weekly toolchain-image-drift backstop for bin-parity (GATE-08): the
+# committed recovery binaries must still rebuild byte-identical even when
+# recovery/ is quiet.  The gate itself lives in bin-parity.yml; this file
+# only schedules it.
+#
+# WHY A SEPARATE FILE (#462): GitHub disables a workflow file that has a
+# `schedule:` trigger after 60 days without repository activity, and a
+# disabled file loses every trigger, not just the schedule.  While the
+# schedule lived in bin-parity.yml, a quiet spell (2026-08-05 -> 10-15)
+# switched off the REQUIRED `bin-parity-required` check with it, and every
+# PR sat BLOCKED behind green checks.  Split, a quiet spell can only switch
+# off this file; test.yml's workflow-state check then turns the next push
+# or PR red with the fix in the message.  Keep this file schedule-only:
+# test_schedule_only_workflows.py fails any scheduled file with PR or push
+# triggers.
+
+on:
+  schedule:
+    - cron: "37 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  bin-parity:
+    # Inside a called workflow `github.event_name` is the CALLER's, so
+    # bin-parity.yml's `changes` job sees `schedule` with no PR SHAs and
+    # always runs the gate, as the in-file schedule did.
+    uses: ./.github/workflows/bin-parity.yml
+
+  canary-watchdog:
+    # Uniform scheduled-canary watchdog (#420): scheduled-run failures
+    # only email the workflow author, and two canaries rotted for ~5
+    # weeks with a zero-issue backlog before anyone noticed (#418,
+    # #419).  Job-level on a fresh runner, cancelled-aware (a
+    # timeout-minutes kill is conclusion `cancelled`, invisible to
+    # failure()), explicit issues:write, no error swallowing.  needs:
+    # is load-bearing -- without it needs.*.result is empty and this
+    # job never fires.
+    runs-on: ubuntu-latest
+    needs: [bin-parity]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && (contains(needs.*.result, 'failure')
+          || contains(needs.*.result, 'cancelled'))
+    permissions:
+      issues: write
+    steps:
+      - name: File (or bump) the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          title="bin-parity: scheduled reproducibility check went red"
+          body="Scheduled bin-parity run went red (bin-parity: ${{ needs.bin-parity.result }}) on \`${{ github.sha }}\`.
+
+          The committed recovery binaries no longer rebuild byte-identical under the pinned toolchain (GATE-08) -- environment/toolchain drift has broken reproducibility even with no repo change.  June 2026's four consecutive red Mondays (the #408 unstripped-DWARF breakage) went unticketed; this watchdog exists so that cannot recur.  (A \`cancelled\` result usually means the job outgrew its timeout budget -- check step timings first.)
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          existing="$(gh issue list --state open \
+            --search "\"$title\" in:title" \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --label bug --body "$body"
+          fi
