@@ -1683,6 +1683,59 @@ class TestCmdConsolidate:
         assert result == 1
         assert "No terminal available" in caplog.text
 
+    def test_consolidate_execute_success_prints_next_steps(
+        self, tmp_path, capsys, caplog, monkeypatch
+    ):
+        """`--execute` confirmed and staged exits 0 and prints the session
+        to burn and the --deprecate command (#469).
+
+        The next-steps line used to join the int volume IDs directly, so
+        a successful stage ended in "Unexpected error" and exit 1 with
+        the sources already CONSOLIDATING.  Staging itself is stubbed:
+        only the handler's success path is under test.
+        """
+        from types import SimpleNamespace
+
+        from lcsas.db.connection import get_connection
+        from lcsas.db.volumes import get_volume_by_id
+
+        db = tmp_path / "test.db"
+        vol_ids = _seed_db_with_volumes(db, num_volumes=2, packs_per_volume=1)
+        cfg = _write_consolidate_config(tmp_path, db)
+
+        staged: list[list[str]] = []
+
+        def _fake_stage(self, media_type, pack_sha256s):
+            staged.append(list(pack_sha256s))
+            return SimpleNamespace(session_id="SESSION-469", manifests=[object()])
+
+        monkeypatch.setattr("builtins.input", lambda _prompt="": "yes")
+        monkeypatch.setattr(
+            "lcsas.burn.orchestrator.BurnOrchestrator.stage", _fake_stage
+        )
+        caplog.clear()
+
+        result = main([
+            "--config", cfg, "consolidate",
+            *[str(v) for v in vol_ids],
+            "--target-media", "BDXL100",
+            "--execute",
+        ])
+        assert result == 0, caplog.text
+        assert len(staged) == 1 and len(staged[0]) == 2
+        assert "Unexpected error" not in caplog.text
+        assert "burn session SESSION-469" in caplog.text
+        assert (
+            "consolidate --deprecate " + " ".join(str(v) for v in vol_ids)
+            in caplog.text
+        )
+        conn = get_connection(str(db))
+        try:
+            for vid in vol_ids:
+                assert get_volume_by_id(conn, vid).status == "CONSOLIDATING"
+        finally:
+            conn.close()
+
 
 class TestVerifyDiscIdentityAndEvidence:
     """FMA-03: ``lcsas verify <LABEL> --disc`` must prove the disc in
