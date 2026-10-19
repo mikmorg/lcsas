@@ -111,12 +111,12 @@ poly1305.c:149   INTRACTABLE   "
 poly1305.c:150   INTRACTABLE   "
 
 # repo.c
-repo.c:244   VOLATILE   keys-dir sort/init blocks; fixture-key readdir order decides which run is cold vs warm (inverse of the 254-256 swap body) - env-dependent, allowed either way
-repo.c:245   VOLATILE   "
-repo.c:246   VOLATILE   "
 repo.c:259   DEFERRED   key count exceeded sanity limit guard; needs >1M key files
 repo.c:260   DEFERRED   "
 repo.c:261   DEFERRED   "
+repo.c:282   VOLATILE   keys-dir name-sort swap body; runs only when readdir returns the fixture's key files out of order, which varies with the filesystem's directory-hash seed (one CI runner covers it, another doesn't) - env-dependent, allowed either way
+repo.c:283   VOLATILE   "
+repo.c:284   VOLATILE   "
 repo.c:489   DEFENSIVE   strip_v2_prefix 0-byte-plaintext return; decrypt rejects <33B input so pt_len>=1 always -> provably unreachable
 repo.c:490   DEFENSIVE   "
 repo.c:491   DEFENSIVE   "
