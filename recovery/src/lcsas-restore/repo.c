@@ -695,7 +695,7 @@ lcsas_repo_load_index(const char *repo_path,
             long t;
             long children = toks[sup_arr].size;
             long found = 0;
-            for (t = sup_arr + 1; found < children; t++) {
+            for (t = sup_arr + 1; t < ntoks && found < children; t++) {
                 if (toks[t].parent == sup_arr) {
                     if (toks[t].type == LCSAS_JSON_STRING
                             && toks[t].size <= 64) {
@@ -785,7 +785,7 @@ lcsas_repo_load_index(const char *repo_path,
             long pack_idx;
             long pack_count = toks[packs_arr].size;
             long p_found = 0;
-            for (pack_idx = packs_arr + 1; p_found < pack_count; pack_idx++) {
+            for (pack_idx = packs_arr + 1; pack_idx < ntoks && p_found < pack_count; pack_idx++) {
                 if (toks[pack_idx].parent == packs_arr
                         && toks[pack_idx].type == LCSAS_JSON_OBJECT) {
                     long id_i = lcsas_json_obj_get((char *)plain, toks, pack_idx, "id");
@@ -803,7 +803,7 @@ lcsas_repo_load_index(const char *repo_path,
                                          32, pack_id) != 0) continue;
                     if (toks[blobs_i].type != LCSAS_JSON_ARRAY) continue;
                     blob_count = toks[blobs_i].size;
-                    for (b_idx = blobs_i + 1; b_found < blob_count; b_idx++) {
+                    for (b_idx = blobs_i + 1; b_idx < ntoks && b_found < blob_count; b_idx++) {
                         if (toks[b_idx].parent == blobs_i
                                 && toks[b_idx].type == LCSAS_JSON_OBJECT) {
                             lcsas_blob_loc loc;

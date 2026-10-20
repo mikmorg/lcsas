@@ -24,6 +24,7 @@ typedef struct {
     size_t max_toks;
     long ntoks;
     long parent;
+    int depth;    /* open objects/arrays; capped at LCSAS_JSON_MAX_DEPTH */
 } parser;
 
 static int
@@ -216,8 +217,17 @@ static long parse_value(parser *p) {
     skip_ws(p);
     if (p->pos >= p->len) return -1;
     c = p->src[p->pos];
-    if (c == '{') return parse_object(p);
-    if (c == '[') return parse_array(p);
+    if (c == '{' || c == '[') {
+        /* parse_object/parse_array recurse back into parse_value, so
+         * without a cap the nesting depth is limited only by the token
+         * buffer -- which parse_alloc grows to len+1 (#487). */
+        long rc;
+        if (p->depth >= LCSAS_JSON_MAX_DEPTH) return -1;
+        p->depth++;
+        rc = c == '{' ? parse_object(p) : parse_array(p);
+        p->depth--;
+        return rc;
+    }
     if (c == '"') return parse_string(p);
     if (c == 't') return parse_literal(p, "true",  LCSAS_JSON_TRUE);
     if (c == 'f') return parse_literal(p, "false", LCSAS_JSON_FALSE);
@@ -234,7 +244,7 @@ lcsas_json_parse(const char *src, size_t len,
     long root;
     p.src = src; p.len = len; p.pos = 0;
     p.toks = toks; p.max_toks = max_toks;
-    p.ntoks = 0; p.parent = -1;
+    p.ntoks = 0; p.parent = -1; p.depth = 0;
 
     root = parse_value(&p);
     if (root < 0) return root;
@@ -272,9 +282,10 @@ lcsas_json_parse_alloc(const char *src, size_t len,
         lcsas_json_tok *toks;
         long rc;
 
-        /* calloc (zero-init): some call-site tok-walks read one slot
-         * past the last parsed token as a loop guard, and rely on that
-         * slot being zeroed rather than uninitialized heap. */
+        /* calloc (zero-init).  Every tok-walk must also bound itself by
+         * the returned count: a zeroed slot has start == 0, so it never
+         * satisfies a `start >= end` guard, and a buffer filled exactly
+         * to `cap` has no spare slot at all (T1C-04, #487). */
         toks = (lcsas_json_tok *)calloc(cap, sizeof(lcsas_json_tok));
         if (!toks) return -3;
 
