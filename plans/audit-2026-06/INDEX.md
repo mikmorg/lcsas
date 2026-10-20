@@ -20,7 +20,7 @@ ID -> commit table.
 
 ## Remaining partial / open plans
 
-None. Nothing is outstanding from this audit.
+None. FUP-03's Part 2 charter, which was still only a document when this index said so, was carried out on 2026-10-20 (#489).
 
 ## Plans kept in this directory (resolved, but referenced by path)
 
