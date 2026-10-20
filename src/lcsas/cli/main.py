@@ -1724,7 +1724,8 @@ def _report_unmanaged_staging(paths: list[Path]) -> None:
     )
     for p in paths:
         size = dir_size_bytes(p) if p.is_dir() else p.lstat().st_size
-        logger.warning(f"  {p}  ({size / 1e9:.2f} GB)")
+        shown = f"{size / 1e9:.2f} GB" if size >= 1e9 else f"{size / 1e6:.1f} MB"
+        logger.warning(f"  {p}  ({shown})")
 
 
 def cmd_staging_clean(args: argparse.Namespace) -> int:
