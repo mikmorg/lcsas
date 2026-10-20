@@ -5611,7 +5611,11 @@ def _verify_password_unlocks_repo(
     missing or empty ``keys/`` is an error (escrow is exactly where
     "probably fine" is wrong).
     """
-    from lcsas.restore.restic_fallback import IntegrityError, _try_keys
+    from lcsas.restore.restic_fallback import (
+        IntegrityError,
+        NoKeyUnlockedError,
+        _try_keys,
+    )
 
     if not keys_dir.is_dir():
         return (
@@ -5628,14 +5632,34 @@ def _verify_password_unlocks_repo(
         )
     try:
         _try_keys(keys_dir, password)
-    except IntegrityError:
-        n = sum(1 for p in keys_dir.iterdir() if p.is_file())
-        return (
+    except NoKeyUnlockedError as e:
+        damaged = "; ".join(why for _, why in e.corrupt)
+        if not e.rejected:
+            # #481: no key file could even be read, so this says nothing
+            # about the password.  Calling it "wrong" would send the owner
+            # hunting for a different password instead of the damage.
+            return (
+                f"cannot check the password for repository '{repo}': "
+                f"every key file under {keys_dir} is unreadable or corrupt "
+                f"({damaged}). Repair the mirror's keys/ before escrowing, "
+                "or pass --no-verify-repo to skip (dangerous)."
+            )
+        msg = (
             f"the password in this file does NOT unlock repository "
-            f"'{repo}' ({n} key file(s) checked under {keys_dir}). "
+            f"'{repo}' ({len(e.rejected)} key file(s) checked under "
+            f"{keys_dir}). "
+        )
+        if e.corrupt:
+            msg += (
+                f"{len(e.corrupt)} more could not be read, so were not "
+                f"checked: {damaged}. "
+            )
+        return msg + (
             "You were about to escrow a wrong password. If you really "
             "intend this, pass --no-verify-repo."
         )
+    except IntegrityError as e:
+        return f"cannot check the password for repository '{repo}': {e}"
     return None
 
 
