@@ -87,6 +87,35 @@ def smallest_fitting_medium_bytes(image_bytes: int) -> int:
     )
 
 
+def _require_augment_space(iso_path: Path) -> int:
+    """Pre-flight for both runners' ``augment_iso``.
+
+    The augmented temp image is padded up to a full medium, so budget the
+    padded size (not the raw ISO) plus a 1 MiB margin.  The raw-ISO budget
+    passed for a part-filled disc and then hit ENOSPC mid-augment (#485).
+
+    Returns:
+        The raw ISO size, for the caller's redundancy log line.
+
+    Raises:
+        OSError: too little free space, or the ISO fits no RS03 medium.
+    """
+    iso_size = iso_path.stat().st_size
+    try:
+        padded_size = smallest_fitting_medium_bytes(iso_size)
+    except ValueError as exc:
+        raise OSError(str(exc)) from exc
+    needed = padded_size + 1_048_576
+    disk_free = shutil.disk_usage(iso_path.parent).free
+    if disk_free < needed:
+        raise OSError(
+            f"Insufficient disk space to augment '{iso_path.name}': "
+            f"{disk_free:,} bytes free, {needed:,} bytes needed for the "
+            f"RS03 full-medium image."
+        )
+    return iso_size
+
+
 class DVDisasterRunner(Protocol):
     """Abstract interface for error correction code operations."""
 
@@ -139,15 +168,7 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
         if not iso_path.exists():
             raise FileNotFoundError(f"ISO file not found: {iso_path}")
 
-        # Pre-flight: verify there is enough free space for the temp copy.
-        iso_size = iso_path.stat().st_size
-        disk_free = shutil.disk_usage(iso_path.parent).free
-        # Need one full copy of the ISO plus a 1 MiB safety margin.
-        if disk_free < iso_size + 1_048_576:
-            raise OSError(
-                f"Insufficient disk space to create ECC temp copy of '{iso_path.name}': "
-                f"{disk_free:,} bytes free, {iso_size + 1_048_576:,} bytes needed."
-            )
+        iso_size = _require_augment_space(iso_path)
 
         tmp = iso_path.with_suffix(".iso.ecc.tmp")
         try:
@@ -300,20 +321,7 @@ class LcsasEccRunner(SubprocessRunnerBase):
         if not iso_path.exists():
             raise FileNotFoundError(f"ISO file not found: {iso_path}")
 
-        # Pre-flight: the augmented image is padded up to a full medium, so
-        # budget the padded size (not the raw ISO) plus a safety margin.
-        iso_size = iso_path.stat().st_size
-        try:
-            padded_size = smallest_fitting_medium_bytes(iso_size)
-        except ValueError as exc:
-            raise OSError(str(exc)) from exc
-        disk_free = shutil.disk_usage(iso_path.parent).free
-        if disk_free < padded_size + 1_048_576:
-            raise OSError(
-                f"Insufficient disk space to augment '{iso_path.name}': "
-                f"{disk_free:,} bytes free, {padded_size + 1_048_576:,} "
-                f"bytes needed for the RS03 full-medium image."
-            )
+        iso_size = _require_augment_space(iso_path)
 
         tmp = iso_path.with_suffix(".iso.ecc.tmp")
         cmd = [self._binary, "augment", str(iso_path), "--out", str(tmp)]
