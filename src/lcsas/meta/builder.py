@@ -2479,8 +2479,7 @@ class MetaVolumeBuilder:
         in one shot.
 
         See `docs/CROSS_PLATFORM_META_RFC.md` §6 Q6 for the gap
-        analysis and the Phase 21.11 / 21.12 follow-ups that close
-        the remaining targets.
+        analysis; Phase 21.11 / 21.12 closed the remaining targets.
         """
         # rust-triple → (short_arch_dir_name, lcsas-restore_filename)
         # Phase 21.12 closed the last open mapping; every approved
