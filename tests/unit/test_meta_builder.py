@@ -1365,6 +1365,28 @@ class TestMetaStartHereVariants:
             assert marker in bare, f"no-config variant missing {marker!r}"
         assert "Alice Archivist" not in bare
 
+    def test_start_here_tells_heir_what_to_do_when_blocked(self, meta_tree):
+        """UX_CONCERNS 004 (#490): a quarantined macOS copy or a noexec /
+        FAT copy on Linux refuses to run the binaries.  Both variants carry
+        the copy-then-run workaround, using the disc's own label."""
+        out, builder = meta_tree
+        content = (out / "START_HERE.txt").read_text(encoding="utf-8")
+        bare = builder._render_meta_start_here(None)
+        label = f"{builder._config.label_prefix}_META"
+        for text, label in ((content, label), (bare, "LCSAS_META")):
+            assert "IF THE COMPUTER REFUSES TO RUN IT" in text
+            for cmd in (
+                f"cp -R /Volumes/{label} ~/lcsas-meta",
+                "xattr -dr com.apple.quarantine ~/lcsas-meta",
+                f"cp -R /media/$USER/{label} ~/lcsas-meta",
+                "chmod -R u+x ~/lcsas-meta/recovery/bin",
+                "sh ~/lcsas-meta/restore.sh ~/restored",
+            ):
+                assert cmd in text, f"missing workaround command {cmd!r}"
+        # The copied tree must actually hold what the commands touch.
+        assert (out / "restore.sh").is_file()
+        assert (out / "recovery" / "bin").is_dir()
+
     def test_start_here_references_only_files_present(self, meta_tree):
         """Generic guard: every file START_HERE.txt names must exist on
         the built meta tree (catches the RESTORE_INSTRUCTIONS.txt class
