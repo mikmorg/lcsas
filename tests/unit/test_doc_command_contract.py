@@ -664,12 +664,13 @@ def test_no_stdin_password_claim_for_standalone() -> None:
 
 def test_architecture_md_no_phantom_disc_readback_claim() -> None:
     """BURN-02 doc gate: architecture.md must not claim a post-burn
-    full-disc per-pack SHA-256 read-back while it is unimplemented.
+    full-disc per-pack SHA-256 read-back.
 
-    Until the BURN-04 device read-back path exists, the implemented
-    verification chain is: staging-time content hash of every pack,
-    post-burn readability check, and on-demand
-    ``catalog validate --content`` for mounted discs.
+    The BURN-04 device read-back that exists (``burn/device_verify.py``)
+    hashes the whole burned image and compares it with the stage-time
+    ISO hash; it does not verify each pack individually.  Per-pack
+    verification is the staging-time content hash of every pack and the
+    on-demand ``catalog validate --content`` for mounted discs.
     """
     text = (REPO_ROOT / "docs" / "architecture.md").read_text()
     assert (

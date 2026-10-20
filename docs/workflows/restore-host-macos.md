@@ -185,10 +185,19 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   recovery from this meta-disc is *not* the path — use macOS Recovery
   Mode or a target-disk-mode dump first, then run the meta-disc
   restore on another Mac.
-- **Single-drive multi-disc swap UX** (the `INSERT DISC:` flow in
-  `tools/restore_single_drive.py`) is currently Linux-only.  On
-  macOS, mount all discs first (Finder will hold them all in
-  `/Volumes`) and run the non-interactive restore.
+- **Single-drive multi-disc swap:** tier 1 (`lcsas-restore`) has its
+  own swap prompt: it names the missing disc, waits for ENTER and
+  re-scans `/Volumes`, `/media`, `/mnt` and `/run/media` (since #455 it
+  also picks up a disc that mounts by itself; `--auto-mount off`
+  restores the Enter-only prompt).  No macOS CI leg exercises a swap
+  (`macos-tier1.yml` covers list-snapshots, a fixture restore, a
+  wrong-password failure and a keyshare combine), so for a first run
+  the safe path is still to mount all discs first (Finder will hold
+  them all in `/Volumes`) and run the non-interactive restore.  The
+  `INSERT DISC:` box is the older bash flow in `restore_legacy.sh`;
+  `tools/restore_single_drive.py` on the disc (source:
+  `src/lcsas/meta/restore_single_drive.py`) only builds the pick list
+  and ingests packs, and has no prompt of its own.
 - **Quarantine attribute:** macOS may attach `com.apple.quarantine` to
   files copied off an optical disc.  Restored files inherit it.
   Strip with `xattr -rd com.apple.quarantine ~/Restored` if needed.
@@ -214,4 +223,4 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
 | verify_iso ECC→SHA fallback | [covered] | `tests/unit/test_restore_executor.py::TestVerifyIsoFallback` (4 tests) |
 | Full end-to-end macOS restore | [gap] | Requires a macOS CI runner with optical hardware; not currently in CI |
 | `hdiutil` mount flow | [gap] | Manual operator step, not automated |
-| Apple Silicon binary execution | [gap] | We don't run the bundled aarch64-apple-darwin binaries from x86_64 Linux CI |
+| Apple Silicon binary execution | [covered] | `.github/workflows/macos-tier1.yml` runs the committed Mach-O binaries via `tests/recovery_hardening/test_tier1_macos_native.py` on `macos-14` (arm64) and `macos-15-intel` (x86_64) |

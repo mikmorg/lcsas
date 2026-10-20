@@ -9,8 +9,8 @@ LCSAS RECOVERY -- MULTI-DISC SWAP UX (DESIGN DOC)
 
 UX CONCERN ID: 005 (recovery/docs/UX_CONCERNS.txt)
 STATUS: Significant portions shipped; further work deferred.  See
-        DEFERRED_WORK.txt for the parking lot.  See RECOVER.txt for
-        current operator-facing procedure.
+        STATUS_LEDGER.md for the open / deferred items.  See
+        RECOVER.txt for current operator-facing procedure.
 PLATFORMS: all -- Linux, macOS, Windows
 
 ────────────────────────────────────────────────────────────────────
@@ -631,7 +631,9 @@ SEE ALSO
                         prompt text, physical swap steps, and the
                         LCSAS_PACK_CACHE_DIR cache knob.
 
-  DEFERRED_WORK.txt     Features from this design that remain
-                        unimplemented (E2E interactive tests, etc.)
-                        or were decided against (disc_index.txt
-                        sidecar, #457).
+  STATUS_LEDGER.md      Where the follow-ups to this design ended up:
+                        landed (auto-mount detection #455, mounted-
+                        disc volume label #456) or decided against
+                        (disc_index.txt sidecar, #457).  Its "Open /
+                        deferred" section replaced DEFERRED_WORK.txt,
+                        which is now a stub redirecting there.
