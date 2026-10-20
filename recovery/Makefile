@@ -1221,22 +1221,25 @@ fuzz-smoke: fuzz-json-smoke fuzz-b64-smoke fuzz-zstd-smoke fuzz-path-smoke fuzz-
 # Composite opt-in gate for changes touching recovery/src/lcsas-restore/.
 # NOT wired into the default `gate` — run explicitly:
 #
-#   make -C recovery audit-gate            # default threshold (75%)
+#   make -C recovery audit-gate            # default threshold (88%, see THRESHOLD below)
 #   make -C recovery audit-gate THRESHOLD=95   # aspirational 95% target
 #
 # Steps (in order):
 #   1. coverage-c    — gcov line coverage report (~2 min)
 #   2. sanitize      — ASan + UBSan + LSan gate  (~2 min, needs clang)
-#   3. fuzz-smoke    — 7 harnesses × 60 s        (~7 min, needs clang)
+#   3. fuzz-smoke    — 8 harnesses × 60 s        (~8 min, needs clang)
 #   4. coverage_check — per-file threshold check
 #
 # Expected to run in under 10 min on a 4-core dev machine.
 # See docs/AUDIT.md for full details and threshold rationale.
 #
 # Threshold rationale:
-#   75%  = current measured baseline (Phase 1 result)
-#   95%  = aspirational target (issue #162); blocked by malloc-failure
-#          branches that require fault injection to exercise (issue #165)
+#   88%  = regression floor (the THRESHOLD default below); the measured
+#          figure and the CI delta are in STATUS_LEDGER.md "Coverage posture"
+#   95%  = aspirational target (issue #162).  The malloc-failure branches
+#          are now exercised by fault injection (`make fault-inject`,
+#          issue #165, closed); what remains is the "Path forward" list
+#          in docs/EXEMPTIONS.md (the target itself: issue #488).
 #
 THRESHOLD ?= 88
 
@@ -1248,7 +1251,7 @@ audit-gate:
 	    --json $(abspath $(BUILD))/coverage.json
 	@echo "[audit-gate] Step 3/4: sanitize"
 	$(MAKE) sanitize
-	@echo "[audit-gate] Step 4/4: fuzz-smoke (7 harnesses × 60 s)"
+	@echo "[audit-gate] Step 4/4: fuzz-smoke (8 harnesses × 60 s)"
 	$(MAKE) fuzz-smoke
 	@echo "[audit-gate] PASS"
 

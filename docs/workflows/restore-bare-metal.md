@@ -170,7 +170,7 @@ The bare-metal path uses tiers 1–2 of the C/Rust cascade defined in `recovery/
   - `recovery/tests/test_multidisc.py::case_catalog_prompt_label` — proves the prompt text mentions the catalog's volume label (`recovery/tests/test_multidisc.py:524`).
 - Gaps:
   - No test covers > 2 simultaneously mounted discs.
-  - Auto-mount on disc insertion (the inotify/`WM_DEVICECHANGE` extension parked in `recovery/docs/MULTI_DISC_DESIGN.txt:69`–`recovery/docs/MULTI_DISC_DESIGN.txt:76`) is unimplemented; the prompt loop is strictly Enter-driven.
+  - Auto-mount on disc insertion landed in #455 as polling, not inotify/`WM_DEVICECHANGE`: while the swap prompt waits, tier 1 re-scans every 2 s, so a disc the desktop mounts resumes the restore without ENTER (`--auto-mount off` restores the Enter-only prompt; see `recovery/docs/STATUS_LEDGER.md`).  It does not help this initramfs flow, where nothing mounts a disc unasked, so the prompt is still effectively Enter-driven here.
   - The interaction between `restore.sh`'s auto-discovery and a partial mount (one disc mounted, others not yet) is exercised only by the catalog-freshest test, not specifically asserted.
 
 **Source refs:**

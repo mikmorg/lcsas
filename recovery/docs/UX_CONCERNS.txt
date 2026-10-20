@@ -75,7 +75,8 @@ MITIGATION:
 ────────────────────────────────────────────────────────────────────
 ID 003 -- No GUI launcher
 ────────────────────────────────────────────────────────────────────
-STATUS: DEFERRED
+STATUS: DEFERRED  (also a NON-GOAL in WINDOWS_RECOVERY_PLAN.txt: the
+        .bat console UX is the common-case answer on Windows)
 IMPACT: MEDIUM.  Average user in 2040 may have never used a
         terminal.  A double-clickable launcher (.app on macOS,
         .exe with prompt on Windows) lowers the barrier.
@@ -201,10 +202,16 @@ MITIGATION:
 ────────────────────────────────────────────────────────────────────
 ID 008 -- "Which disc do I start with" is undocumented
 ────────────────────────────────────────────────────────────────────
-STATUS: OPEN
+STATUS: CLOSED
+RESOLVED BY: START_HERE.txt (rendered by src/lcsas/meta/builder.py
+             _render_meta_start_here: "ONE of them will be labelled
+             <prefix>_META ... Start with it"), the "Insert the disc
+             labelled LCSAS_META" prompts in restore.sh (QUICK START)
+             and restore.bat (no-backup-set-found message), and the RECOVER.txt
+             MULTI-DISC RESTORE section (see ID 011).
 IMPACT: MEDIUM.  In a 50-disc archive, only one (the meta-volume)
-        is bootable / contains the toolchain.  The others are
-        data-only.  Picking the wrong one wastes time.
+        contains the toolchain.  The others are data-only.  Picking
+        the wrong one wastes time.
 
 MITIGATION:
   * Print clear "META" vs "DATA" labels on each disc (already done
@@ -311,11 +318,11 @@ MITIGATION:
 
 PRIORITISATION
 
-  P1 (next):           002, 008, 010
+  P1 (next):           002, 010
   P2 (when time):      004
   P3 (long-term):      003
   WONTFIX:             006 (cryptographic)
   MITIGATED:           001 (native Windows path shipped, UX-01),
                        007 (live-USB route documented + gated)
   RESOLVED:            009 (non-empty-target guard, UX-07)
-  CLOSED:              005, 011, 012
+  CLOSED:              005, 008, 011, 012
