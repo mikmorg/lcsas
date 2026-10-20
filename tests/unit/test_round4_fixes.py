@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
-from lcsas.burn.orchestrator import BurnOrchestrator
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.constants import STATUS_CONSOLIDATING, STATUS_VERIFIED
@@ -15,7 +13,6 @@ from lcsas.db.connection import get_memory_connection
 from lcsas.db.packs import register_pack
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
-from lcsas.db.sessions import create_session
 from lcsas.db.volume_packs import get_pack_ids_for_volume
 from lcsas.db.volumes import (
     create_volume,
@@ -77,56 +74,9 @@ class TestRound4Fixes:
         pack = get_pack_by_sha256(conn, pack_sha)
         assert pack is not None
 
-    # T24: burn_session marks PARTIAL when mid-burn failure (R4-C4)
-    def test_burn_session_marks_partial_on_mid_burn_failure(self, conn):
-        """
-        When a multi-volume burn fails on the second volume, the session
-        should be marked PARTIAL (not left in STAGED state).
-        """
-        # Create session with multiple volumes
-        session_id = create_session(conn, "TEST_TINY", "/tmp/staging").session_id
-
-        # Create two volumes and add to session
-        vol1_id = create_volume(
-            conn, "VOL_001", generate_uuid(), "TEST_TINY", 100000
-        ).volume_id
-        vol2_id = create_volume(
-            conn, "VOL_002", generate_uuid(), "TEST_TINY", 100000
-        ).volume_id
-
-        conn.execute(
-            "INSERT INTO session_volumes (session_id, volume_id, iso_path, iso_sha256) "
-            "VALUES (?, ?, ?, ?)",
-            (session_id, vol1_id, "/tmp/vol1.iso", "hash1"),
-        )
-        conn.execute(
-            "INSERT INTO session_volumes (session_id, volume_id, iso_path, iso_sha256) "
-            "VALUES (?, ?, ?, ?)",
-            (session_id, vol2_id, "/tmp/vol2.iso", "hash2"),
-        )
-        conn.commit()
-
-        # Mock xorriso and dvdisaster
-        xorriso_mock = MagicMock()
-        dvdisaster_mock = MagicMock()
-
-        # First volume succeeds, second fails
-        xorriso_mock.burn_iso.side_effect = [None, RuntimeError("Burn failed")]
-        xorriso_mock.verify_disc.return_value = True
-
-        config = _make_config_with_repos(conn)
-        BurnOrchestrator(conn, config, xorriso_mock, dvdisaster_mock)
-
-        # Simulate burn_session with failure on second volume
-        # (This is a simplified test since full orchestration is complex)
-        # The key assertion is that if burn fails partway through,
-        # PARTIAL status should be set before the exception is raised.
-
-        # For now, verify the infrastructure exists to mark PARTIAL
-        from lcsas.db.sessions import get_session, update_session_status
-        update_session_status(conn, session_id, "PARTIAL")
-        session = get_session(conn, session_id)
-        assert session.status == "PARTIAL"
+    # T24 (burn_session marks PARTIAL on a mid-burn failure, R4-C4) lives in
+    # test_burn_orchestrator.py::test_mid_session_burn_failure_marks_session_partial;
+    # the old copy set PARTIAL itself and asserted it (#494).
 
     # T25: Path traversal rejected in restic_fallback symlink check (R4-H2)
     def test_path_traversal_rejected_in_symlink_restoration(self, tmp_path):
