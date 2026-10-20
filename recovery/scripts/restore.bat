@@ -430,9 +430,21 @@ if not defined LCSAS_PW (
 
 REM Write password to a transient temp file (deleted on exit).
 set "PWFILE=%TEMP%\lcsas-pw-%RANDOM%-%TIME:~6,2%%TIME:~9,2%.txt"
-REM echo( prints its argument as-is: a bare `echo !LCSAS_PW!` treats a
-REM password of "on", "off" or "/?" as a command and writes nothing (#482).
-> "%PWFILE%" echo(!LCSAS_PW!
+REM `echo !LCSAS_PW!` runs a password of exactly "on", "off" or "/?" as
+REM an echo argument and writes no password (#482).  Those three go
+REM through `set /p`, which writes them as-is (without a newline).  Not
+REM `echo(`: Windows takes it, but wine writes a literal "(" and the
+REM wine tests drive this script.
+set "PW_PLAIN_ECHO=1"
+if /i "!LCSAS_PW!"=="on" set "PW_PLAIN_ECHO="
+if /i "!LCSAS_PW!"=="off" set "PW_PLAIN_ECHO="
+if "!LCSAS_PW!"=="/?" set "PW_PLAIN_ECHO="
+if defined PW_PLAIN_ECHO (
+    > "%PWFILE%" echo !LCSAS_PW!
+) else (
+    > "%PWFILE%" <nul set /p "=!LCSAS_PW!"
+)
+set "PW_PLAIN_ECHO="
 set "LCSAS_PW="
 
 REM Ensure the temp file is cleaned up no matter how we exit.
