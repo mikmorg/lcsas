@@ -327,10 +327,11 @@ MITIGATION:
 PRIORITISATION
 
   P1 (next):           002, 010
-  P2 (when time):      004
   P3 (long-term):      003
   WONTFIX:             006 (cryptographic)
   MITIGATED:           001 (native Windows path shipped, UX-01),
+                       004 (workaround documented, #490; code-side
+                            noexec detection is #496),
                        007 (live-USB route documented + gated)
   RESOLVED:            009 (non-empty-target guard, UX-07)
   CLOSED:              005, 008, 011, 012
