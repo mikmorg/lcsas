@@ -1,0 +1,8 @@
+# shellcheck -s sh findings accepted when the ratchet was added (#484).
+# Format: <file> <code> <count>.  Regenerate: scripts/shellcheck_gate.py --print recovery/scripts/*.sh
+recovery/scripts/restore.sh SC2004 1
+recovery/scripts/restore.sh SC2015 3
+recovery/scripts/restore.sh SC2034 1
+recovery/scripts/restore.sh SC2166 2
+recovery/scripts/restore.sh SC2317 19
+recovery/scripts/run_coverage_fault_inject.sh SC2086 1

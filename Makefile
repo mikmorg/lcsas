@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-tier3-qemu test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-split-docs blind-restore-windows blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e meta-gate
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-tier3-qemu test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-split-docs blind-restore-windows blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e meta-gate shellcheck
 
 # Default target: lint + typecheck + every test tier ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
@@ -10,6 +10,12 @@ dev:
 
 lint:
 	ruff check src/ tests/
+
+# POSIX-sh lint for the recovery scripts an heir runs (#484).  A ratchet:
+# fails on any finding not in scripts/shellcheck_baseline.txt, and on a
+# baseline entry that no longer matches (lower it when you fix one).
+shellcheck:
+	python3 scripts/shellcheck_gate.py recovery/scripts/*.sh
 
 lint-fix:
 	ruff check --fix src/ tests/
@@ -56,7 +62,7 @@ test-all: test-unit test-integration test-e2e test-recovery-hardening
 # Production build gate.  Composes lint + typecheck + the entire test
 # pyramid; the recovery-hardening tier is the final step.  Anything
 # that fails here blocks `git push`.
-gate: lint typecheck test-all shell-coverage
+gate: lint shellcheck typecheck test-all shell-coverage
 	@echo "build gate passed."
 
 coverage:
