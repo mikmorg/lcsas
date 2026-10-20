@@ -431,8 +431,9 @@ is in [docs/DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md).
 **For highly sensitive archives**, consider:
 
 - Using opaque repository names (e.g., `repo_a` instead of `medical_records`)
-- A future metadata-scrubbed catalog variant that strips paths and hostnames
-  (not yet implemented)
+- (A metadata-scrubbed on-disc catalog is deliberately not offered: it would
+  break catalog rebuild and only protect future discs. See
+  [DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md) §8.3.)
 - Physical security of stored media
 
 ---

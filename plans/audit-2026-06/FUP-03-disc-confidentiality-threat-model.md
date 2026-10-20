@@ -175,3 +175,4 @@ special hardware beyond this VM and one fresh rustic repo). Total ≈ 2.5 days.
 
 ---
 **Implemented:** 2026-06-14. Part 1 only, as planned: docs/DISC_CONFIDENTIALITY.md written + linked from ESTATE_PLANNING/SURVIVABILITY/TIERS.txt; START_HERE/KEY_INFO/RESTORE_INSTRUCTIONS wording fixed; passphrase guidance added to ESTATE_PLANNING + KEY_SHARE_FORMAT; settings.py example hint de-located; cmd_key_split weak-password warning (warn, never block); 4 new tests + docs-presence gate. Part 2 charter remains a document.
+**Part 2 done:** 2026-10-20 (#489): measured KDF parameters and guess costs (`tools/kdf_bench.py`, DISC_CONFIDENTIALITY.md §7), multi-tenant leakage, Shamir interplay, catalog-redaction decision and key-file metadata (§6, §8). Per-tenant volume separation and multi-owner KEY_INFO wording are product decisions on #491.
