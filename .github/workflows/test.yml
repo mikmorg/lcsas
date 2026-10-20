@@ -140,7 +140,22 @@ jobs:
         run: pytest tests/recovery_hardening/test_meta_bundling_completeness.py -v
 
       - name: Run integration tests
+        env:
+          PYTEST_ADDOPTS: --junitxml=/tmp/integration.xml
         run: make test-integration
+
+      - name: Integration skip floor
+        # #484: the integration tests self-skip when a tool is missing, so a
+        # CI image that drops rustic/xorriso/dvdisaster would keep this job
+        # green with nothing run.  2026-10-19 master push (run 39340823233):
+        # 51 passed / 12 skipped.  Floor = 45; re-baseline down only from a
+        # known-good run, never up to chase a flake.
+        run: python3 scripts/ci_min_passed.py /tmp/integration.xml --min-passed 45
+
+      - name: shellcheck ratchet (recovery/scripts/*.sh)
+        run: |
+          shellcheck --version
+          make shellcheck
 
       - name: Run e2e pipeline test (full scan→binpack→stage→ISO→ECC)
         # GATE-10: e2e_test.py used to hard-skip off /mnt/lcsas-data (the dev
@@ -168,9 +183,8 @@ jobs:
   # "this build is shippable" step, but until GATE-02 it never ran in
   # CI — restore.sh behavior was enforced purely by local discipline.
   # Separate job (parallel to `test`) so a hardening failure is legible
-  # at a glance.  test-e2e is deferred behind GATE-10 (it hard-skips
-  # off-host); see tests/recovery_hardening/test_ci_workflow_parity.py
-  # KNOWN_UNWIRED.
+  # at a glance.  (test-e2e is wired in the `test` job since GATE-10; see
+  # tests/recovery_hardening/test_ci_workflow_parity.py.)
   recovery-hardening:
     runs-on: ubuntu-latest
 
@@ -183,16 +197,12 @@ jobs:
       # stock restic (all installed below) let the aarch64/armv7/windows
       # committed-binary tests and the standard-tools compat gate actually
       # execute in CI, instead of skipping everywhere but the dev VM.
-      # RE-BASELINED (issue #366): 581 tests collected; recent CI runs report
-      # 550 passed / 26 skipped / 5 failed.  The Skip-rot floor step only runs
-      # when the suite step is green (0 failures), at which point passed is
-      # 581 - skips (~555); and even today 550 pass despite the 5 unrelated
-      # failures, so passed is >= 550 whenever this floor evaluates.  540
-      # (= 550 - 10) stays safely below that — never false-failing a PR —
-      # while catching a chunk of tests silently rotting to skips (e.g. a
-      # broken fixture or an uninstalled dep turning assertions into skips).
-      # Never raise it to chase a flake; re-baseline down only from a
-      # known-good run.
+      # Set at 540 when issue #366 re-baselined it (then ~550 passed).  The
+      # suite has grown since: 2026-10-19 on master, 667 passed / 25 skipped.
+      # 540 still never false-fails a PR while catching a chunk of tests
+      # silently rotting to skips (a broken fixture or an uninstalled dep
+      # turning assertions into skips).  Never raise it to chase a flake;
+      # re-baseline down only from a known-good run.
       FLOOR: "540"
 
     steps:
