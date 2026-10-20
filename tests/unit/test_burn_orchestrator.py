@@ -1476,3 +1476,57 @@ class TestOperatorProtocol:
         written = list(receipts_dir.glob(f"*{first_label}*Home_Shelf*.json"))
         assert written, "volume 1 receipt missing after mid-session crash"
 
+    def test_mid_session_burn_failure_marks_session_partial(self, multi_vol_env):
+        """R4-C4 (#494): disc 2 of N fails to burn.  The session is PARTIAL,
+        disc 1 keeps its VERIFIED status and its copy, and disc 2 goes back
+        to STAGING with no copy.  (This replaces round-4 T24, which set
+        PARTIAL itself and then asserted it.)"""
+        from lcsas.db.sessions import get_session
+        from lcsas.db.volume_copies import get_copies_for_volume
+
+        conn = multi_vol_env["conn"]
+        orch = _make_orch(multi_vol_env, FakeOperatorPrompt())
+        result = orch.stage()
+        assert len(result.manifests) >= 2, "fixture must stage several discs"
+        first, second = (m.volume_label for m in result.manifests[:2])
+
+        calls = {"n": 0}
+
+        def _burn(iso_path, device="/dev/sr0"):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("simulated burn failure on disc 2")
+
+        multi_vol_env["xorriso"].burn_iso = MagicMock(side_effect=_burn)
+        _wire_drive_identity(multi_vol_env["xorriso"])
+
+        with pytest.raises(RuntimeError, match="disc 2"):
+            orch.burn_session(result.session_id, "Home_Shelf",
+                              skip_burn=False, interactive=True)
+
+        assert get_session(conn, result.session_id).status == "PARTIAL"
+        by_label = {v.label: v for v in list_volumes(conn)}
+        assert by_label[first].status == "VERIFIED"
+        first_copies = get_copies_for_volume(conn, by_label[first].volume_id)
+        assert [c.location for c in first_copies] == ["Home_Shelf"]
+        assert by_label[second].status == "STAGING"
+        assert get_copies_for_volume(conn, by_label[second].volume_id) == []
+
+    def test_first_disc_burn_failure_does_not_mark_partial(self, multi_vol_env):
+        """Nothing burned yet, so the session is not PARTIAL."""
+        from lcsas.db.sessions import get_session
+
+        conn = multi_vol_env["conn"]
+        orch = _make_orch(multi_vol_env, FakeOperatorPrompt())
+        result = orch.stage()
+        before = get_session(conn, result.session_id).status
+        multi_vol_env["xorriso"].burn_iso = MagicMock(
+            side_effect=RuntimeError("simulated burn failure on disc 1"))
+        _wire_drive_identity(multi_vol_env["xorriso"])
+
+        with pytest.raises(RuntimeError, match="disc 1"):
+            orch.burn_session(result.session_id, "Home_Shelf",
+                              skip_burn=False, interactive=True)
+
+        assert get_session(conn, result.session_id).status == before != "PARTIAL"
+
