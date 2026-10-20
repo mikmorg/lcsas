@@ -317,7 +317,7 @@ lcsas_repo_load_keys_dir(const char *keys_dir,
      * exact); it only bites a hand-rolled restic MULTI-KEY repo whose
      * matching key tier-1 cannot parse, where a correct password would
      * be wrongly reported wrong.  That case is not produced by LCSAS
-     * and is tracked as a documented limitation on issue #399. */
+     * and is a documented limitation in TIERS.txt (#399, closed). */
     if (found)
         rc = 0;
     else if (saw_reject)
