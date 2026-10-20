@@ -68,6 +68,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_meta_bundling_completeness.py` | Hardening test #1: meta-disc tier-1 bundling completeness. |
 | `test_meta_completeness_367.py` | test_meta_completeness_367.py -- tiered meta completeness (issue #367). |
 | `test_multi_disc_design_header.py` | test_multi_disc_design_header.py -- static regression guard ensuring |
+| `test_multidisc_cases.py` | Run recovery/tests/test_multidisc.py's cases inside the hardening tier (#465). |
 | `test_no_boot_deadend_routing.py` | test_no_boot_deadend_routing.py -- static regression guard against the |
 | `test_no_bypass_check.py` | Unit tests for the blind-restore #13 bypass check. |
 | `test_no_unpinned_boot_artifacts.py` | BOOT-07: nothing executable reaches a meta-volume tree unpinned. |

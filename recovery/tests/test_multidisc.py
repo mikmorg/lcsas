@@ -27,7 +27,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 RECOVERY = HERE.parent
-BINARY = RECOVERY / "build" / "lcsas-restore"
+# LCSAS_RESTORE_BIN overrides the binary, like the hardening tests (#465).
+BINARY = Path(
+    os.environ.get("LCSAS_RESTORE_BIN") or RECOVERY / "build" / "lcsas-restore"
+)
 
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(RECOVERY.parent / "src"))
@@ -289,7 +292,12 @@ def case_single_drive_meta_exclusion() -> int:
         # --pack-search.  Without exclusion the run would succeed
         # (both discs visible); with exclusion the binary should fail
         # fast in --interactive off because the disc_a packs are now
-        # invisible.
+        # invisible.  Since #143 the exclusion applies only while the
+        # meta disc is LIVE (holds recovery/scripts/restore.sh), so plant
+        # that sentinel; without it nothing is excluded (#465).
+        sentinel = disc_a / "recovery" / "scripts" / "restore.sh"
+        sentinel.parent.mkdir(parents=True)
+        sentinel.write_text("#!/bin/sh\n")
         out = subprocess.run(
             [str(BINARY),
              "--repo", str(repo),
@@ -734,19 +742,25 @@ def case_single_drive_script_relocation() -> int:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# Every case, in run order.  tests/recovery_hardening/test_multidisc_cases.py
+# runs each one as its own test, so a new case must be listed here (#465).
+CASES = (
+    case_both_visible,
+    case_fail_fast,
+    case_interactive_swap,
+    case_single_drive_meta_exclusion,
+    case_single_drive_prompt_mentions_eject,
+    case_catalog_freshest_pick,
+    case_catalog_prompt_label,
+    case_single_drive_script_relocation,
+)
+
+
 def main() -> int:
     if not BINARY.exists():
         print(f"SKIP: {BINARY} not built", file=sys.stderr)
         return 0
-    fails = 0
-    fails += case_both_visible()
-    fails += case_fail_fast()
-    fails += case_interactive_swap()
-    fails += case_single_drive_meta_exclusion()
-    fails += case_single_drive_prompt_mentions_eject()
-    fails += case_catalog_freshest_pick()
-    fails += case_catalog_prompt_label()
-    fails += case_single_drive_script_relocation()
+    fails = sum(case() for case in CASES)
     if fails == 0:
         print("test_multidisc: OK")
         return 0
