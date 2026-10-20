@@ -1711,11 +1711,31 @@ def cmd_config_check(args: argparse.Namespace) -> int:
     return 1
 
 
+def _report_unmanaged_staging(paths: list[Path]) -> None:
+    """List staging entries ``staging clean`` won't touch (#486)."""
+    if not paths:
+        return
+    from lcsas.utils.fs import dir_size_bytes
+
+    logger.warning(
+        f"{len(paths)} item(s) under staging are not from a tracked session "
+        "and are NOT removed (even with --force).  Check each one and "
+        "delete it by hand if it is stale:"
+    )
+    for p in paths:
+        size = dir_size_bytes(p) if p.is_dir() else p.lstat().st_size
+        logger.warning(f"  {p}  ({size / 1e9:.2f} GB)")
+
+
 def cmd_staging_clean(args: argparse.Namespace) -> int:
     """Detect and remove orphaned staging directories."""
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
-    from lcsas.staging.cleanup import clean_orphaned_staging, detect_orphaned_staging
+    from lcsas.staging.cleanup import (
+        clean_orphaned_staging,
+        detect_orphaned_staging,
+        detect_unmanaged_staging,
+    )
 
     config = _load_config_opt(args)
     if config is None:
@@ -1731,6 +1751,7 @@ def cmd_staging_clean(args: argparse.Namespace) -> int:
     ) as conn:
         ensure_schema(conn)
         orphans = detect_orphaned_staging(config, conn)
+        _report_unmanaged_staging(detect_unmanaged_staging(config, conn))
 
         if not orphans:
             logger.info("No orphaned staging directories found.")

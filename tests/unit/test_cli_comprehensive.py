@@ -2247,6 +2247,63 @@ class TestOrphanedStagingCleanup:
         result = detect_orphaned_staging(cfg, conn)
         assert result == []
 
+    def test_unmanaged_entries_are_reported(self, tmp_path):
+        """#486: stray ISOs, legacy single-volume dirs and leftover ECC temp
+        files inside a tracked session are listed; session dirs aren't."""
+        from lcsas.config.settings import default_config
+        from lcsas.staging.cleanup import detect_unmanaged_staging
+
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        (staging / "LCSAS-TINY-0003.iso").write_bytes(b"iso")
+        (staging / "LCSAS-TINY-0003.iso.ecc.tmp").write_bytes(b"tmp")
+        (staging / "LCSAS-TINY-0003").mkdir()             # execute() layout
+        orphan = staging / "2025-01-01T00-00-00.000000+00-00-deadbeef"
+        orphan.mkdir()
+        active = staging / "2025-02-02T00-00-00.000000+00-00-cafef00d"
+        (active / "sub").mkdir(parents=True)
+        (active / "V1.iso").write_bytes(b"iso")
+        (active / "sub" / "V2.iso.ecc.tmp").write_bytes(b"killed augment")
+        cfg = default_config(tmp_path, staging, staging / "archive.db")
+        (staging / "archive.db").write_bytes(b"")          # catalog lives here
+        conn = _mem_conn()
+        conn.execute(
+            "INSERT INTO burn_sessions (session_id, media_type, status, staging_dir) "
+            "VALUES ('s1', 'TEST_TINY', 'STAGED', ?)",
+            (str(active),),
+        )
+        conn.commit()
+
+        found = {p.relative_to(staging).as_posix()
+                 for p in detect_unmanaged_staging(cfg, conn)}
+        assert found == {
+            "LCSAS-TINY-0003",
+            "LCSAS-TINY-0003.iso",
+            "LCSAS-TINY-0003.iso.ecc.tmp",
+            f"{active.name}/sub/V2.iso.ecc.tmp",
+        }
+
+    def test_staging_clean_reports_but_keeps_unmanaged(self, tmp_path, capsys):
+        cfg = _write_config(tmp_path)
+        conn = get_connection(tmp_path / "archive.db")
+        create_all(conn)
+        conn.close()
+        staging = tmp_path / "staging"
+        stray = staging / "LCSAS-TINY-0001.iso"
+        stray.write_bytes(b"x" * 10)
+        orphan = staging / "2025-01-01T00-00-00.000000+00-00-deadbeef"
+        orphan.mkdir()
+
+        rc = main(["--config", str(cfg), "staging", "clean", "--force"])
+        assert rc == 0
+        captured = capsys.readouterr()
+        text = captured.out + captured.err
+        assert stray.exists(), "an unattributed file must never be deleted"
+        assert not orphan.exists()
+        assert "NOT removed" in text
+        assert str(stray) in text
+        assert "Removed 1" in text
+
     def test_clean_orphaned(self, tmp_path):
         from lcsas.staging.cleanup import clean_orphaned_staging
 
