@@ -1372,8 +1372,8 @@ class TestMetaStartHereVariants:
         out, builder = meta_tree
         content = (out / "START_HERE.txt").read_text(encoding="utf-8")
         bare = builder._render_meta_start_here(None)
-        label = f"{builder._config.label_prefix}_META"
-        for text, label in ((content, label), (bare, "LCSAS_META")):
+        meta_label = f"{builder._config.label_prefix}_META"
+        for text, label in ((content, meta_label), (bare, "LCSAS_META")):
             assert "IF THE COMPUTER REFUSES TO RUN IT" in text
             for cmd in (
                 f"cp -R /Volumes/{label} ~/lcsas-meta",
