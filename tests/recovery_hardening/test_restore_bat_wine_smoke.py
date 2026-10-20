@@ -330,3 +330,58 @@ def test_missing_repo_reports_error(tmp_path: Path) -> None:
         "restore.bat did not report the missing-repo error under wine; "
         f"rc={res.returncode}\n--- output ---\n{res.stdout + res.stderr}"
     )
+
+
+def _fixture_meta(tmp_path: Path) -> tuple[dict[str, str], Path]:
+    """Prefix + E: mapped to a meta tree carrying the decryptable fixture
+    repo (password "test") and the committed Windows tier-1 binary."""
+    fixture_repo = REPO_ROOT / "recovery" / "tests" / "fixtures" / "repo"
+    if not RESTORE_EXE.is_file():
+        pytest.skip(f"{RESTORE_EXE} not present")
+    if not (fixture_repo / "keys").is_dir():
+        pytest.skip("fixture repo not generated; run gen_fixture.py")
+    prefix = tmp_path / "wineprefix"
+    env = _init_prefix(prefix)
+    meta = tmp_path / "meta"
+    _make_meta_tree(meta, repo_src=fixture_repo)
+    _map_drive(prefix, "e", meta)
+    return env, meta
+
+
+def test_target_path_with_parenthesis_restores(tmp_path: Path) -> None:
+    """#482: a ')' in the target path closed restore.bat's parenthesised
+    blocks early (%TARGET% expands before the block is parsed), so the
+    tier-1 block never ran.  "Documents (old)"-style names are common."""
+    env, meta = _fixture_meta(tmp_path)
+    res = _run_bat(
+        env, "e",
+        stdin_data="E:\\out (old)\\restored\n",
+        extra_env={"LCSAS_PW": "test"},
+    )
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, f"rc={res.returncode}\n--- output ---\n{out}"
+    assert "Recovery complete." in out, out
+    restored = non_marker_files(meta / "out (old)" / "restored")
+    assert restored, f"nothing restored under the ')' path:\n{out}"
+
+
+@pytest.mark.parametrize("password", ["on", 'pa"ss'], ids=["on", "quote"])
+def test_awkward_password_reaches_tier1_verbatim(
+    tmp_path: Path, password: str,
+) -> None:
+    """#482: "on"/"off" made `echo !LCSAS_PW!` toggle echo and write
+    nothing to the password file; a '"' broke the empty-password `if`.
+    Either way tier 1 never saw the password.  Both are wrong passwords
+    for the fixture, so reaching tier 1 intact means its exit 77."""
+    env, meta = _fixture_meta(tmp_path)
+    res = _run_bat(
+        env, "e",
+        stdin_data="E:\\restored\n",
+        extra_env={"LCSAS_PW": password},
+    )
+    out = res.stdout + res.stderr
+    assert res.returncode == 77, (
+        f"password {password!r} did not reach tier 1 as typed; "
+        f"rc={res.returncode}\n--- output ---\n{out}"
+    )
+    assert "could not decrypt the repository" in out.lower(), out
