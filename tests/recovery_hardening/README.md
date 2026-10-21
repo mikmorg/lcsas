@@ -80,6 +80,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_readme_simplification.py` | Hardening test: README_RESTORE simplification (Unit 5). |
 | `test_rebuild_docs.py` | test_rebuild_docs.py -- static regression guard for the mixed-age-discs |
 | `test_recovery_card_docs.py` | Hardening test: the single-key Recovery Card artifact + its references. |
+| `test_restore_auto_gaps.py` | test_restore_auto_gaps.py -- restore_auto.sh usage-error exits and repo-discovery layouts. |
 | `test_restore_auto_repo_select.py` | test_restore_auto_repo_select.py -- restore_auto.sh per-repo selection. |
 | `test_restore_bat_ecc_dispatch_wine.py` | FMT-01: restore.bat --check-disc ECC repair path, end-to-end under wine. |
 | `test_restore_bat_password_lifetime.py` | restore.bat temp-password-file lifetime (issue #384 review finding). |
