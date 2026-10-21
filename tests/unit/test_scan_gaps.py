@@ -517,7 +517,7 @@ class TestBulkRegisterSizeMismatch:
             "size mismatch', but DeltaAnalyzer.register_new_packs() drops packs "
             "already in the catalog BEFORE calling bulk_register(), so the "
             "warning is unreachable from `lcsas scan`: a pack truncated/altered "
-            "on the mirror after its first scan is never flagged. See #517 report."
+            "on the mirror after its first scan is never flagged. See #524."
         ),
     )
     def test_rescan_after_mirror_pack_changed_size_warns(self, tmp_path, capsys):

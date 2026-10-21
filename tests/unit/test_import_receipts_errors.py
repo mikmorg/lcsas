@@ -198,7 +198,7 @@ class TestMalformedReceiptFile:
             "receipt that is not valid UTF-8 (UTF-16 from PowerShell '>', binary "
             "garbage) raises UnicodeDecodeError, which escapes as 'Unexpected "
             "error' (rc 1) and aborts the whole batch; burn-iso-portable.md lists "
-            "'encoding error' among the skipped-with-a-warning cases. See #517 report."
+            "'encoding error' among the skipped-with-a-warning cases. See #522."
         ),
     )
     @pytest.mark.parametrize(
@@ -226,7 +226,7 @@ class TestMalformedReceiptFile:
             "json.load returned, so a receipt file whose JSON is null / a number "
             "/ true raises TypeError -> 'Unexpected error' (rc 1) and aborts the "
             "batch, instead of being skipped like '[]' and '\"str\"' are. "
-            "See #517 report."
+            "See #522."
         ),
     )
     @pytest.mark.parametrize("body", ["null", "42", "true"])
@@ -241,6 +241,30 @@ class TestMalformedReceiptFile:
 
         out = capsys.readouterr().out
         assert "Unexpected error" not in out
+        _assert_imported(db, "VOL_GOOD", "Offsite")
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "BUG: int(receipt['iso_size_bytes']) raises ValueError on a "
+            "non-numeric size -> 'Unexpected error' (rc 1), aborting the batch; "
+            "ensure_location() has already committed, leaving a stray locations "
+            "row. See #522."
+        ),
+    )
+    def test_non_numeric_size_is_skipped_and_writes_nothing(self, env, capsys):
+        tmp_path, cfg, db = env
+        before = _dump(db)
+        bad = _receipt(tmp_path, "badsize.json",
+                       {**_good("VOL_OTHER", "Vault_Q"), "iso_size_bytes": "abc"})
+        good = _receipt(tmp_path, "good.json", _good("VOL_GOOD"))
+
+        _run(cfg, bad, good)
+
+        out = capsys.readouterr().out
+        assert "Unexpected error" not in out
+        assert not [row for row in _dump(db)["locations"] if "Vault_Q" in row]
+        assert _dump(db)["volume_copies"] != before["volume_copies"]
         _assert_imported(db, "VOL_GOOD", "Offsite")
 
 

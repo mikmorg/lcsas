@@ -54,7 +54,7 @@ _LONG_MEDIA_TOKEN_BUG = pytest.mark.xfail(
         "('_BD25_2026_0001' = 15 chars) but CD700 / BDXL100 / MDISC100 have a "
         "5-char media token (16-char overhead), so a 17-char prefix passes "
         "validation and generate_volume_label() then raises at stage time. "
-        "See the #517 report."
+        "See #523."
     ),
 )
 
