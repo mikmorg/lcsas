@@ -59,16 +59,40 @@ if not exist "%RAMDIR%\recovery\scripts\" (
     goto :after_relocate
 )
 
+REM Find the recovery root on the disc the way :after_relocate does,
+REM for both places this script lives: recovery\scripts\restore.bat
+REM (the root is ..) and the copy at the disc root, E:\restore.bat (the
+REM root is recovery\).  Copying "%~dp0..\bin" was right only for the
+REM first: from E:\ it named E:\bin, the RAM copy got no binaries, and
+REM the restore.bat an heir double-clicks ended in "no working recovery
+REM method" (#531).
+set "SRC_ROOT="
+if exist "%~dp0..\bin\" for %%I in ("%~dp0..") do set "SRC_ROOT=%%~fI"
+if exist "%~dp0recovery\bin\" for %%I in ("%~dp0recovery") do set "SRC_ROOT=%%~fI"
+
 REM Mirror the on-disc layout in %RAMDIR%.  robocopy is preferred for
 REM long paths; fall back to xcopy.
 copy /Y "%~f0" "%RAMDIR%\recovery\scripts\restore.bat" >nul
-where robocopy >nul 2>nul
-if not errorlevel 1 (
-    robocopy "%~dp0..\bin" "%RAMDIR%\recovery\bin" /E /NFL /NDL /NJH /NJS /NC /NS /NP >nul
-) else (
-    xcopy /E /I /Y /Q "%~dp0..\bin"  "%RAMDIR%\recovery\bin\"  >nul 2>nul
+if defined SRC_ROOT (
+    where robocopy >nul 2>nul
+    if not errorlevel 1 (
+        robocopy "!SRC_ROOT!\bin" "!RAMDIR!\recovery\bin" /E /NFL /NDL /NJH /NJS /NC /NS /NP >nul
+    ) else (
+        xcopy /E /I /Y /Q "!SRC_ROOT!\bin" "!RAMDIR!\recovery\bin\" >nul 2>nul
+    )
+    if exist "!SRC_ROOT!\catalog.db" copy /Y "!SRC_ROOT!\catalog.db" "!RAMDIR!\recovery\catalog.db" >nul
 )
-if exist "%~dp0..\catalog.db" copy /Y "%~dp0..\catalog.db" "%RAMDIR%\recovery\catalog.db" >nul
+
+REM A copy with no programs in it could only fail.  Stay on the disc
+REM instead: the restore still works, but the disc cannot be ejected
+REM until it has finished.
+dir /s /b "%RAMDIR%\recovery\bin\*.exe" >nul 2>nul
+if errorlevel 1 (
+    echo [lcsas-restore] could not copy the recovery programs to !RAMDIR! -- staying on disc.
+    echo                 Do not eject this disc until the restore has finished.
+    rmdir /s /q "!RAMDIR!" 2>nul
+    goto :after_relocate
+)
 
 REM Carry the holographic repo metadata (keys/index/config/snapshots
 REM under metadata\<tenant>\) into RAM too.  Without this, the relocated
@@ -99,9 +123,14 @@ set "LCSAS_RELOCATED=%~d0\"
 REM cd out of the disc so the new cmd does not inherit it.
 cd /d %SystemDrive%\ >nul 2>nul
 
-REM Re-launch the relocated script.  /C exits cmd when done.
-call "%RAMDIR%\recovery\scripts\restore.bat" %*
-exit /b %ERRORLEVEL%
+REM Re-launch the relocated script.  The call and the exit MUST share
+REM one line: cmd reads a batch file a line at a time, from the disc, so
+REM a separate "exit /b" line would be read after the call returns --
+REM by then the heir may have ejected the disc, and cmd prints "The
+REM system cannot find the path specified." and exits 1 after a good
+REM restore (#532).  !ERRORLEVEL!, not %%ERRORLEVEL%%: the whole line is
+REM expanded before the call runs.
+call "%RAMDIR%\recovery\scripts\restore.bat" %* & exit /b !ERRORLEVEL!
 
 :after_relocate
 REM ----- Auto-discover recovery root from this script's location ----

@@ -226,18 +226,25 @@ data discs through the same drive.
    (`recovery/scripts/restore.bat:47`-`57`). If `mkdir` fails it falls
    back to running in-place
    (`recovery/scripts/restore.bat:53`-`56`).
-4. The bat copies itself with `copy /Y "%~f0"` and mirrors the binary
+4. The bat finds the recovery root on the disc for both copies of the
+   script (`..` from `recovery\scripts\restore.bat`, `recovery\` from
+   the disc-root `restore.bat`) (`recovery/scripts/restore.bat:62`-`71`),
+   copies itself with `copy /Y "%~f0"` and mirrors that root's `bin\`
    tree with `robocopy` (preferred — handles long paths), falling back
-   to `xcopy /E /I /Y /Q` if `robocopy` is absent
-   (`recovery/scripts/restore.bat:60`-`66`). If a catalog is on the
-   meta-disc it is copied too (`recovery/scripts/restore.bat:67`).
+   to `xcopy /E /I /Y /Q` if `robocopy` is absent; a `catalog.db` beside
+   `bin\` is copied too (`recovery/scripts/restore.bat:75`-`84`). If no
+   `.exe` reached the copy it removes the copy, says so, and stays on
+   the disc (the restore still works, but the disc cannot be ejected
+   until it finishes) (`recovery/scripts/restore.bat:89`-`95`).
 5. The user sees `[lcsas-restore] copied recovery files to %RAMDIR%` /
    `you may eject the recovery disc when the binary prompts for a data disc.`
-   (`recovery/scripts/restore.bat:69`-`71`). The script captures the
+   (`recovery/scripts/restore.bat:116`-`118`). The script captures the
    meta-disc drive letter into `LCSAS_RELOCATED` (e.g. `D:\`), `cd`s
    out of the disc to `%SystemDrive%\` so the new CMD does not inherit
    the disc cwd, and `call`s the relocated `restore.bat` with the same
-   args (`recovery/scripts/restore.bat:73`-`81`).
+   args. The `call` and the `exit /b` that returns its exit code share
+   one line, so nothing more is read from the disc after the relocated
+   copy finishes (`recovery/scripts/restore.bat:121`-`133`).
 6. The relocated copy runs everything from Workflow A steps 5-10. Now
    the meta-disc has no file handles outstanding, so the user can
    eject it when prompted and load the first data disc into the same
@@ -276,10 +283,13 @@ disk first.
 
 **Test coverage:** The relocation runs on a real `windows-latest` runner
 in `.github/workflows/windows-e2e.yml`: the steps *Relocation leg —
+restore.bat at the disc root (the heir's double-click)* and *Relocation leg —
 `recovery\scripts\restore.bat` layout* (copy made under `%TEMP%`, tier 1 run
-from the copy, restored tree byte-exact) and *Eject leg — relocated restore
-survives a meta-disc eject* (the meta ISO is dismounted once the relocated
-copy is up, and the restore still finishes byte-exact). The wine suite
+from the copy, restored tree byte-exact), and *Eject leg — relocated restore
+survives a meta-disc eject* (started from the disc-root `restore.bat`; the
+meta ISO is dismounted once the relocated copy is up, the restore still
+finishes byte-exact, the exit code is 0 and nothing tries to read the
+ejected disc). The wine suite
 (`tests/recovery_hardening/test_restore_bat_wine_smoke.py`) and the
 happy-path and wrong-password steps of `windows-e2e.yml` still set
 `LCSAS_NO_RELOCATE=1`; `recovery/tests/test_e2e_windows.sh` invokes the
@@ -290,25 +300,22 @@ happy-path and wrong-password steps of `windows-e2e.yml` still set
 What the real-runner legs found (the first run of the relocation leg
 surfaced the first item):
 
-- **The relocation is broken when started from the disc-root `restore.bat`
-  (the copy a user double-clicks).** The bin tree is copied from
-  `%~dp0..\bin`, which is `E:\bin` for `E:\restore.bat` (the binaries are in
-  `E:\recovery\bin`), so the RAM copy gets an empty `recovery\bin` and the
-  relocated script ends in `ERROR: no working recovery method on this
-  system` with exit code 1. From `E:\recovery\scripts\restore.bat` it works.
-  The windows-e2e step *Relocation leg — restore.bat at the disc root (the
-  heir's double-click)* asserts the working behaviour and is
-  `continue-on-error` until this is fixed (#531).
+- (Fixed, #531) **The relocation was broken when started from the
+  disc-root `restore.bat` (the copy a user double-clicks).** The bin tree
+  was copied from `%~dp0..\bin`, which is `E:\bin` for `E:\restore.bat`
+  (the binaries are in `E:\recovery\bin`), so the RAM copy got an empty
+  `recovery\bin` and the relocated script ended in `ERROR: no working
+  recovery method on this system` with exit code 1.
 - **What a working relocation leaves behind:** the copy
   `%TEMP%\lcsas-restore-<n>-<n>\` (about 40 files, 16.5 MB with the fixture
   meta tree) is never removed by `restore.bat`, and the script does not claim
   to remove it; it also prints `Access is denied.` once, from the
   writability probe on the read-only disc. The password file is deleted.
-- **After the meta disc is ejected,** the restore completes and is
-  byte-exact, but the outer `cmd` can no longer re-read its own
-  `restore.bat` (it sits on the ejected disc) and prints `The system cannot
-  find the path specified.` twice after the final "Press any key"; the exit
-  code is then 1 although the recovery succeeded (#532).
+- (Fixed, #532) **After the meta disc was ejected,** the restore completed
+  and was byte-exact, but the outer `cmd` then read its next line,
+  `exit /b %ERRORLEVEL%`, from the ejected disc: it printed `The system
+  cannot find the path specified.` twice after the final "Press any key"
+  and exited 1 although the recovery succeeded.
 
 Gaps: no test for `%TEMP%` exhaustion or for the `robocopy`/`xcopy`
 fallback; the eject leg uses `Dismount-DiskImage`, which detaches the image

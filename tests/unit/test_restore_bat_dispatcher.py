@@ -137,3 +137,58 @@ def test_restore_bat_warns_before_overwriting_nonempty_target():
     pw_at = content.find('set /p "LCSAS_PW=Password:')
     assert guard_at != -1 and pw_at != -1
     assert guard_at < pw_at, "non-empty-target guard must come before the password prompt"
+
+
+def _relocation_block(content: str) -> str:
+    start = content.index("if defined LCSAS_RELOCATED goto :after_relocate")
+    end = content.index("\n:after_relocate\n")
+    return content[start:end]
+
+
+def test_restore_bat_relocation_copies_bin_for_both_script_locations():
+    """#531: the meta disc carries restore.bat twice, at the disc root
+    (E:\\restore.bat, what the heir double-clicks) and at
+    recovery\\scripts\\.  The relocation used to mirror "%~dp0..\\bin",
+    which is E:\\bin from the root copy, so the RAM copy had no binaries
+    and the restore died with "no working recovery method".  The copy
+    must come from a root resolved for both layouts, and an empty copy
+    must not be launched.  windows-e2e's root relocation leg is the
+    functional proof; this is the cheap guard against a revert.
+    """
+    block = _relocation_block(RESTORE_BAT.read_text())
+    copies = [
+        line.strip() for line in block.splitlines()
+        if line.strip().startswith(("robocopy", "xcopy"))
+    ]
+    bin_copies = [c for c in copies if "recovery\\bin" in c]
+    assert bin_copies, "relocation no longer copies the bin tree"
+    for c in bin_copies:
+        assert "%~dp0..\\bin" not in c, f"bin copied from %~dp0..\\bin again: {c}"
+        assert "!SRC_ROOT!\\bin" in c, f"bin not copied from SRC_ROOT: {c}"
+
+    # Both layouts are probed before the first copy.
+    first_copy = block.index(bin_copies[0])
+    assert 0 <= block.find('if exist "%~dp0..\\bin\\"') < first_copy
+    assert 0 <= block.find('if exist "%~dp0recovery\\bin\\"') < first_copy
+
+    # A copy with no .exe falls back to running from the disc.
+    check = block.find('dir /s /b "%RAMDIR%\\recovery\\bin\\*.exe"')
+    assert check > first_copy, "no empty-copy check after the bin copy"
+    assert "goto :after_relocate" in block[check:block.index("copied recovery files to")]
+
+
+def test_restore_bat_relaunch_reads_nothing_more_from_the_disc():
+    """#532: cmd reads a batch file one line at a time.  With the exit on
+    the line after `call`, the outer instance read it from the meta disc
+    after the relocated copy returned; the heir had ejected that disc, so
+    a good restore ended in "The system cannot find the path specified."
+    and exit 1.  The call and the exit must share one line, and the exit
+    code must be read after the call runs (!ERRORLEVEL!, not %ERRORLEVEL%).
+    """
+    block = _relocation_block(RESTORE_BAT.read_text())
+    calls = [
+        line.strip() for line in block.splitlines()
+        if line.strip().startswith('call "%RAMDIR%\\recovery\\scripts\\restore.bat"')
+    ]
+    assert len(calls) == 1, calls
+    assert calls[0].endswith("%* & exit /b !ERRORLEVEL!"), calls[0]
