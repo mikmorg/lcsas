@@ -225,8 +225,9 @@ Other axes: N/A.
   verifies only the named repo is scanned and only its packs are registered.
 - `tests/unit/test_cli_scan.py::TestScanParser::test_scan_parser_with_repo_filter`
   covers argparse acceptance of multiple names.
-- **Gap:** No test covers the "unknown repo name" warning path
-  (`cmd_scan`).
+- `tests/unit/test_cli_comprehensive.py::TestCmdScan::test_scan_unknown_repo_warning`
+  covers the "unknown repo name" path: it warns, scans nothing, and the
+  command still exits 0 (so a typo'd `--repo` is not an error; see Gaps §7).
 
 **Source refs:** `scan_p` `--repo` in `build_parser()` (flag) · `cmd_scan`
 (filter application, both the pack-scan and snapshot loops).
@@ -263,10 +264,16 @@ rustic-on-PATH requirement (both checked inside the snapshot branch only).
 **Variant axes that apply:** Multi-tenant. Other axes: N/A.
 
 **Test coverage:**
-- Indirectly covered: the test fixture leaves `password_file` unset, which
-  triggers the same skip path inside the snapshot branch
-  (`tests/unit/test_cli_scan.py`, `cmd_scan`).
-- **Gap:** No dedicated test passes `--no-snapshots` explicitly.
+- The flag is passed explicitly by `tests/unit/test_cli_scan.py::TestPruneSyncGuards`
+  (all three tests), `tests/unit/test_cli_comprehensive.py::TestCmdScan::test_scan_registers_new_packs`
+  and `::test_scan_unknown_repo_warning`, and
+  `tests/unit/test_cli_e2e.py::TestInitRepoScanPipeline`. On a host
+  without rustic a regression that ignored the flag would make those
+  scans return 1 at the `check_binary_version` call.
+- **Gap:** No test asserts the skip itself: nothing checks that rustic is
+  not invoked or that existing `snapshots` rows are left untouched
+  (`TestCmdScan` in `tests/unit/test_cli_scan.py` still leaves
+  `password_file` unset).
 
 **Source refs:** `scan_p` `--no-snapshots` in `build_parser()` (flag) ·
 `cmd_scan` (`not getattr(args, "no_snapshots", False)` guard and the
@@ -330,9 +337,12 @@ mark them as pruned" step.
   `tests/unit/test_scanner_delta.py::TestBulkMarkPruned`.
 - The mass-prune guard and `--yes-prune` override are covered at the CLI
   level in `tests/unit/test_cli_scan.py`.
-- **Gap:** No CLI-level test exercises `--no-prune-sync` specifically; no
-  test asserts the prune-sync block runs in a default (sub-threshold) scan
-  and updates `is_pruned`.
+- `tests/unit/test_cli_scan.py::TestPruneSyncGuards::test_small_prune_still_automatic`
+  asserts the prune-sync block runs in a default (sub-threshold) scan and
+  flips `is_pruned`; `::test_partial_scan_does_not_mark_pruned` covers the
+  incomplete-scan guard.
+- **Gap:** No CLI-level test exercises `--no-prune-sync` itself (the flag's
+  skip path).
 
 **Source refs:** `scan_p` `--no-prune-sync` / `--yes-prune` in
 `build_parser()` (flags) · `cmd_scan` (guarded prune-sync block) ·
@@ -415,31 +425,48 @@ and the delta is computed per repo). Other axes: N/A.
 - **Misleading footer when `--repo` filters.** The total-scanned line says
   `across {len(config.repositories)} repos` even when `--repo` narrows the
   scan to one repo (`cmd_scan`). A filtered scan that visits one repo out of
-  five will still print "across 5 repos". Cosmetic only.
-- **No `--no-snapshots` CLI test.** The flag's skip path is only exercised
-  indirectly (via an unset `password_file`). A direct test would protect the
-  current behaviour.
+  five will still print "across 5 repos". Confirmed 2026-10-21 against a
+  three-repo config: `scan --repo a` printed `across 3 repos`. It is not
+  only the filter: the same count also includes repos skipped as "not
+  registered in DB (run 'repo add' first)", and `scan --repo bogus` (a repo
+  that is not in the config) scans nothing, prints `Total scanned: 0 packs
+  across 3 repos` and exits 0. The number is the configured total, not the
+  number of repos actually scanned. Cosmetic for the footer; the
+  exit-0-on-nothing-scanned part can hide a typo'd `--repo`.
+- **No `--no-snapshots` test of the skip itself.** The flag is passed by
+  many CLI tests (see §4), but none asserts that rustic is not invoked or
+  that existing `snapshots` rows are untouched.
 - **No `--no-prune-sync` CLI test.** The mass-prune `--yes-prune` override
-  *is* covered (`tests/unit/test_cli_scan.py`), but the `--no-prune-sync`
-  skip path is not.
-- **Size mismatch is non-fatal.** `bulk_register` logs a warning on size
-  mismatch but trusts the DB row (`src/lcsas/db/packs.py`). For a
-  content-addressed store this is the conservative choice, but no
-  observability surface (DB column, audit event) flags that a mismatch was
-  seen. Operators only see a log line.
-- **`detect_pruned` semantics when the mirror is *partly* missing.** A
-  partial mirror that raises read errors is now skipped for prune-sync
-  (`scan_result.errors` guard), and an over-threshold prune set requires
-  `--yes-prune` (BURN-09). But a mirror that reads cleanly yet is *silently*
-  missing a sub-threshold set of files will still flag those as pruned with
-  no further check. Use `--no-prune-sync` whenever a mirror's completeness
-  is uncertain.
+  and the default sub-threshold prune are covered
+  (`tests/unit/test_cli_scan.py::TestPruneSyncGuards`), but the
+  `--no-prune-sync` skip path is not.
+- **Size mismatch is non-fatal (intentional: pack names are content
+  hashes, so trusting the first-recorded size is the conservative choice).**
+  `bulk_register` logs a warning on size mismatch but trusts the DB row
+  (`src/lcsas/db/packs.py`). No observability surface (DB column, audit
+  event) flags that a mismatch was seen; operators only see a log line, and
+  no test asserts that warning (see §6).
+- **`detect_pruned` semantics when the mirror is *partly* missing
+  (intentional: a scan cannot tell "pruned" from "not mounted" below the
+  guards).** A partial mirror that raises read errors is now skipped for
+  prune-sync (`scan_result.errors` guard), and an over-threshold prune set
+  requires `--yes-prune` (BURN-09). But a mirror that reads cleanly yet is
+  *silently* missing a sub-threshold set of files will still flag those as
+  pruned with no further check. Use `--no-prune-sync` whenever a mirror's
+  completeness is uncertain.
 - **Snapshot listing failure is per-repo soft-fail.** If `rustic snapshots`
   raises for a given repo, the error is logged and the loop continues
   (snapshot block of `cmd_scan`). The overall scan still returns 0, which
-  can mask partial outages. No metric or audit-trail event is emitted.
-- **No integration test driving real `rustic backup`** as the upstream
-  event of a scan. Existing tests fabricate pack files directly on disk.
+  can mask partial outages. No metric or audit-trail event is emitted, and
+  no test covers the branch.
+- **No test drives `cmd_scan` against a real rustic repo.** The scanner and
+  `DeltaAnalyzer` are exercised against packs written by a real
+  `rustic`/`restic` backup (`tests/e2e/fixture_lib.py::build_windows_fixture`,
+  `tests/integration/test_disc_only_restore.py`,
+  `tests/integration/test_pure_python_restore.py`), but those call
+  `scan_mirror_packs` + `DeltaAnalyzer` directly. The unit tests of the
+  `lcsas scan` command itself fabricate pack files on disk, and nothing runs
+  `cmd_scan`'s snapshot block (`rustic snapshots --json`) against a real repo.
 
 ---
 
