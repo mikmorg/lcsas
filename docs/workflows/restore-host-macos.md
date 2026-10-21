@@ -207,12 +207,11 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   resumes), then the right disc with no input (the rescan finds it).
   The prompt only appears when `restore.sh` runs on a terminal; with
   stdin piped or redirected, a missing pack fails at once with
-  "pack not found".  Seen in that run: the first prompt may not name a
-  disc, and on macOS it can say "catalog could not be queried --
-  likely written by a newer LCSAS".  The catalog on the disc is a
-  WAL-mode SQLite file that cannot be opened in place on a read-only
-  volume; nothing is wrong with your discs, insert them one at a time
-  and the later prompts name the volume.  Mounting every disc first (Finder will hold them
+  "pack not found".  Discs burned before #534 was fixed carry a
+  WAL-mode catalog that cannot be opened in place on a read-only
+  volume, so with those the first prompt says "catalog could not be
+  queried -- likely written by a newer LCSAS" instead of naming a disc;
+  nothing is wrong with the discs, insert them one at a time.  Mounting every disc first (Finder will hold them
   all in `/Volumes`) and running the restore remains the simplest path
   for a first run, subject to the repository-picker entry below.  The
   `INSERT DISC:` box is the older bash flow in `restore_legacy.sh`;
