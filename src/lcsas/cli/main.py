@@ -2005,7 +2005,11 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
         iso_sha256 = sha256_file(iso_path)
         iso_size_bytes = iso_path.stat().st_size
 
-    label = args.label or iso_path.parent.name
+    # #514: the parent directory was the default label, but `lcsas stage`
+    # writes <session>/<LABEL>.iso, so that gave the session name and the
+    # identity check below then failed.  The ISO's PVD volume ID is the
+    # label it was mastered with, wherever the file sits.
+    label = args.label or _iso_volume_id(iso_path) or iso_path.parent.name
 
     # FUP-01 mitigation 2: blank-media pre-check (behind --verify). A disc
     # that already carries data is refused before the burn, not after.
@@ -2028,7 +2032,9 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
     runner.burn_iso(iso_path, device=device)
     logger.info("Burn complete.")
 
-    verify_passed = True
+    # None = not verified (--no-verify).  It used to default to True, so a
+    # disc never read back imported as VERIFIED (#514).
+    verify_passed: bool | None = None
     if args.verify:
         logger.info(f"Verifying disc on {device} ...")
         verify_passed = runner.verify_disc(device=device)
@@ -2069,10 +2075,34 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
             os.fsync(f.fileno())
         logger.info(f"Receipt written: {out_path}")
 
-    if args.verify and not verify_passed:
+    if verify_passed is False:
         return 1
 
     return 0
+
+
+def _iso_volume_id(iso_path: Path) -> str | None:
+    """The ISO 9660 primary volume descriptor's volume identifier, or None.
+
+    lcsas masters every image with its volume label as the PVD volume ID
+    (and burn-iso's identity check compares the burned disc against it),
+    so this names the volume whatever the file is called (#514).
+    """
+    try:
+        with open(iso_path, "rb") as f:
+            for sector in range(16, 48):          # descriptors from LBA 16
+                f.seek(sector * 2048)
+                desc = f.read(2048)
+                if len(desc) < 72 or desc[1:6] != b"CD001":
+                    return None
+                if desc[0] == 1:                  # primary volume descriptor
+                    vid = desc[40:72].decode("ascii", "replace").strip(" \x00")
+                    return vid or None
+                if desc[0] == 255:                # set terminator
+                    return None
+    except OSError:
+        return None
+    return None
 
 
 def cmd_location(args: argparse.Namespace) -> int:
@@ -2382,7 +2412,14 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     Also transitions volume status for receipts of STAGING volumes:
       - verify_passed=true  → STAGING → BURNING → VERIFIED (+ mark_closed)
       - verify_passed=false → STAGING → BURNING → BURNED
-    Already-VERIFIED volumes (re-burn to a new location) just get a copy added.
+      - verify_passed=null  → STAGING → BURNING → BURNED (burn-iso --no-verify:
+        a disc exists but was never read back, so it is not VERIFIED)
+    Already-VERIFIED volumes (re-burn to a new location) keep their status.
+
+    A copy is recorded for every receipt except verify_passed=false: a disc
+    that failed verification is not a copy (BURN-05, as burn_session does),
+    so that location still needs the volume.  A re-burn that failed gets a
+    VERIFY_FAIL_REBURN event instead (#514).
     """
     from lcsas.db.connection import locked_connection
     from lcsas.db.locations import ensure_location
@@ -2459,7 +2496,18 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
             # Advance status if this is the first burn (STAGING); otherwise
             # just add a copy (handles re-burns to additional locations).
-            verify_passed = bool(receipt.get("verify_passed", False))
+            # verify_passed is tri-state (#514): true, false (verify FAILED),
+            # null (not verified).  A receipt without the key predates the
+            # field: it keeps the old reading (status as failed, copy kept).
+            raw_verify = receipt.get("verify_passed", "missing")
+            if raw_verify == "missing":
+                logger.warning(
+                    f"Receipt '{receipt_file}' has no verify_passed field; "
+                    "treating the burn as unverified."
+                )
+            stated = raw_verify not in (None, "missing")
+            verify_passed = stated and bool(raw_verify)
+            verify_failed = stated and not bool(raw_verify)
             if vol.status == "STAGING":
                 update_status(conn, vol.volume_id, "BURNING", commit=False)
                 if verify_passed:
@@ -2473,25 +2521,49 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     )
                 else:
                     update_status(conn, vol.volume_id, "BURNED", commit=False)
-                    add_event(
-                        conn, vol.volume_id, "VERIFY_FAIL",
-                        location=receipt["location"],
-                        detail=f"Offline burn receipt: {Path(receipt_file).name}",
-                        commit=False,
-                    )
+                    if verify_failed or raw_verify == "missing":
+                        add_event(
+                            conn, vol.volume_id, "VERIFY_FAIL",
+                            location=receipt["location"],
+                            detail=f"Offline burn receipt: {Path(receipt_file).name}",
+                            commit=False,
+                        )
+            elif verify_failed:
+                add_event(
+                    conn, vol.volume_id, "VERIFY_FAIL_REBURN",
+                    location=receipt["location"],
+                    detail=f"Offline burn receipt: {Path(receipt_file).name}",
+                    commit=False,
+                )
 
-            receipt_size = receipt.get("iso_size_bytes")
-            add_volume_copy(
-                conn,
-                volume_id=vol.volume_id,
-                location=receipt["location"],
-                burn_date=receipt.get("burn_date", ""),
-                iso_sha256=receipt_hash or None,
-                iso_size_bytes=(
-                    int(receipt_size) if receipt_size is not None else None
-                ),
-                commit=False,
-            )
+            if verify_failed:
+                logger.warning(
+                    f"Receipt '{receipt_file}': the disc for "
+                    f"'{receipt['volume_label']}' FAILED verification at "
+                    f"{receipt['location']}.  No copy was recorded; that "
+                    "location still needs this volume.  Re-burn it."
+                )
+            else:
+                if raw_verify is None:
+                    logger.warning(
+                        f"Receipt '{receipt_file}': '{receipt['volume_label']}' "
+                        f"was burned at {receipt['location']} without "
+                        "verification (burn-iso --no-verify).  Recorded, but "
+                        "not as VERIFIED: check it with `lcsas verify "
+                        f"{receipt['volume_label']} --disc`."
+                    )
+                receipt_size = receipt.get("iso_size_bytes")
+                add_volume_copy(
+                    conn,
+                    volume_id=vol.volume_id,
+                    location=receipt["location"],
+                    burn_date=receipt.get("burn_date", ""),
+                    iso_sha256=receipt_hash or None,
+                    iso_size_bytes=(
+                        int(receipt_size) if receipt_size is not None else None
+                    ),
+                    commit=False,
+                )
 
             # Issue #18: persist receipt provenance (iso_sha256, session_id,
             # device, pack_ids) on the canonical catalog as a
@@ -2509,6 +2581,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                 # whichever path produced the receipt is preserved.
                 "pack_ids": list(receipt.get("pack_ids") or []),
                 "receipt_file": Path(receipt_file).name,
+                "verify_passed": None if raw_verify == "missing" else raw_verify,
             }
             add_event(
                 conn, vol.volume_id, "BURN_RECEIPT_IMPORTED",

@@ -302,6 +302,23 @@ class TestCmdBurnSession:
 # cmd_burn_iso (mock-based)
 # ===================================================================
 
+def _fake_iso(path: Path, volid: str) -> Path:
+    """A minimal ISO 9660 image: 16 empty sectors, a PVD with `volid`,
+    and a set terminator (enough for burn-iso's label inference)."""
+    pvd = bytearray(2048)
+    pvd[0] = 1
+    pvd[1:6] = b"CD001"
+    pvd[6] = 1
+    pvd[40:72] = volid.encode("ascii").ljust(32, b" ")
+    term = bytearray(2048)
+    term[0] = 255
+    term[1:6] = b"CD001"
+    term[6] = 1
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bytes(16 * 2048) + bytes(pvd) + bytes(term))
+    return path
+
+
 class TestCmdBurnIso:
     def test_burn_iso_missing_file(self, tmp_path, capsys):
         iso = tmp_path / "missing.iso"
@@ -340,6 +357,44 @@ class TestCmdBurnIso:
         assert result == 1
         out = capsys.readouterr().out
         assert "--location" in out
+
+    def test_burn_iso_label_defaults_to_the_iso_volume_id(self, tmp_path):
+        """#514: `lcsas stage` writes <session>/<LABEL>.iso, so the parent
+        dir is the session.  The default label is the ISO's PVD volume ID,
+        which the identity check also compares against."""
+        iso = _fake_iso(
+            tmp_path / "2026-10-21T00-00-00.000000+00-00-abcd1234"
+            / "LCSAS_TINY_0007.iso",
+            "LCSAS_TINY_0007",
+        )
+        out = tmp_path / "receipts"
+        out.mkdir()
+        with (
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.burn_iso"),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
+                  return_value=True),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.media_status",
+                  return_value=MediaStatus.BLANK),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.read_disc_volume_id",
+                  return_value="LCSAS_TINY_0007"),
+        ):
+            rc = main(["burn-iso", str(iso), "--emit-receipt", str(out),
+                       "--location", "Home"])
+        assert rc == 0
+        data = json.loads((out / "LCSAS_TINY_0007_Home.json").read_text())
+        assert data["volume_label"] == "LCSAS_TINY_0007"
+        assert data["verify_passed"] is True
+
+    def test_burn_iso_no_verify_records_null_not_true(self, tmp_path):
+        """#514: --no-verify used to write verify_passed: true, which import
+        then took as proof and promoted the volume to VERIFIED."""
+        iso = _fake_iso(tmp_path / "s" / "VOL_X.iso", "VOL_X")
+        out = tmp_path / "r.json"
+        with patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.burn_iso"):
+            rc = main(["burn-iso", str(iso), "--no-verify",
+                       "--emit-receipt", str(out), "--location", "Home"])
+        assert rc == 0
+        assert json.loads(out.read_text())["verify_passed"] is None
 
     def test_burn_iso_emits_receipt_with_label_inferred(self, tmp_path, capsys):
         """--emit-receipt produces a JSON file with parent-dir label."""
@@ -406,10 +461,15 @@ class TestCmdBurnIso:
         out_dir = tmp_path / "r"
         out_dir.mkdir()
 
+        # media_status is mocked like the sibling tests: unmocked, it reads
+        # the host's real /dev/sr0, and a loaded disc there (e.g. CDEmu
+        # after a blind-restore run) made this fail with "not blank".
         with (
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.burn_iso"),
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
                   return_value=False),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.media_status",
+                  return_value=MediaStatus.BLANK),
         ):
             result = main(["burn-iso", str(iso),
                            "--emit-receipt", str(out_dir),
@@ -579,6 +639,57 @@ class TestCmdCatalogImport:
         events = get_events_for_volume(conn, vol.volume_id, "VERIFY_FAIL")
         assert len(events) == 1
         conn.close()
+
+    @staticmethod
+    def _import(tmp_path, status, receipt):
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_514", "u514", "TEST_TINY", 1000, "Home", status)
+        conn.close()
+        r = tmp_path / "r.json"
+        r.write_text(json.dumps({"volume_label": "VOL_514", **receipt}))
+        rc = main(["--config", str(cfg), "catalog", "import-receipts", str(r)])
+        from lcsas.db.volume_copies import get_copies_for_volume
+        from lcsas.db.volume_events import get_events_for_volume
+        from lcsas.db.volumes import get_volume_by_label
+        conn = get_connection(db)
+        vol = get_volume_by_label(conn, "VOL_514")
+        copies = [c.location for c in get_copies_for_volume(conn, vol.volume_id)]
+        events = [e.event_type for e in get_events_for_volume(conn, vol.volume_id)]
+        conn.close()
+        return rc, vol, copies, events
+
+    def test_import_failed_first_burn_records_no_copy(self, tmp_path, capsys):
+        """#514 / BURN-05: a disc that failed verification is not a copy."""
+        rc, vol, copies, events = self._import(
+            tmp_path, "STAGING", {"location": "Vault", "verify_passed": False})
+        assert rc == 0
+        assert vol.status == "BURNED"
+        assert copies == []
+        assert "VERIFY_FAIL" in events
+        out = capsys.readouterr()
+        assert "FAILED verification" in out.out + out.err
+
+    def test_import_failed_reburn_records_event_not_copy(self, tmp_path):
+        rc, vol, copies, events = self._import(
+            tmp_path, "VERIFIED", {"location": "Offsite", "verify_passed": False})
+        assert rc == 0
+        assert vol.status == "VERIFIED"
+        assert "Offsite" not in copies
+        assert "VERIFY_FAIL_REBURN" in events
+
+    def test_import_unverified_burn_is_burned_not_verified(self, tmp_path):
+        """#514: verify_passed null (burn-iso --no-verify) is recorded as a
+        copy but never promotes the volume to VERIFIED."""
+        rc, vol, copies, events = self._import(
+            tmp_path, "STAGING", {"location": "Home", "verify_passed": None})
+        assert rc == 0
+        assert vol.status == "BURNED"
+        assert vol.closed_at is None
+        assert copies == ["Home"]
+        assert "VERIFY_PASS" not in events and "VERIFY_FAIL" not in events
 
     def test_import_reburn_only_adds_copy(self, tmp_path):
         """Already-VERIFIED volume: no status change, just a new copy."""
