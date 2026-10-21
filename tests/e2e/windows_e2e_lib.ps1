@@ -35,8 +35,11 @@ function Get-DataDiscs {
     foreach ($v in (Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'CD-ROM' })) {
         $l = [string]$v.DriveLetter
         if (Test-Path -LiteralPath "${l}:\data") {
-            $packs = @(Get-ChildItem -LiteralPath "${l}:\data" -Recurse -File -ErrorAction SilentlyContinue).Count
-            $found += [pscustomobject]@{ Drive = "${l}:"; Label = $v.FileSystemLabel; Packs = $packs }
+            $names = @(Get-ChildItem -LiteralPath "${l}:\data" -Recurse -File -ErrorAction SilentlyContinue |
+                       ForEach-Object { $_.Name })
+            $found += [pscustomobject]@{
+                Drive = "${l}:"; Label = $v.FileSystemLabel; Packs = $names.Count; Names = $names
+            }
         }
     }
     return $found
@@ -50,10 +53,19 @@ function Get-DataDiscs {
 function Assert-MultiDisc {
     param([int]$Minimum = 2)
     $discs = @(Get-DataDiscs | Where-Object { $_.Packs -gt 0 })
-    $discs | Format-Table -AutoSize | Out-String | Write-Host
+    $discs | Format-Table -Property Drive, Label, Packs -AutoSize | Out-String | Write-Host
     Write-Host "Mounted data discs holding packs: $($discs.Count)"
     if ($discs.Count -lt $Minimum) {
         throw "fixture spans only $($discs.Count) data disc(s); need >= $Minimum"
+    }
+    # No single disc may hold every pack, or one disc would suffice and the
+    # sweep would prove nothing.
+    $distinct = @($discs | ForEach-Object { $_.Names } | Sort-Object -Unique)
+    Write-Host "Distinct pack files across all data discs: $($distinct.Count)"
+    foreach ($d in $discs) {
+        if ($d.Packs -ge $distinct.Count) {
+            throw "$($d.Drive) alone holds all $($distinct.Count) packs; not a multi-disc fixture"
+        }
     }
 }
 
@@ -323,8 +335,11 @@ function Invoke-EjectLeg {
     # asserted; the contract is that the RESTORE finishes.
     if ($out -notmatch 'Recovery complete') { $problems.Add("'Recovery complete' banner missing after the eject") }
     if ($out -notmatch '\[lcsas-restore\] restore complete') { $problems.Add('tier-1 restore did not report completion after the eject') }
-    if ($out -match 'batch file cannot be found') {
-        Write-Host 'NOTE: the outer cmd reported "The batch file cannot be found." (its exit /b line sat on the ejected disc).'
+    if ($out -match 'The system cannot find the path specified') {
+        Write-Host 'NOTE: the outer cmd could not re-read restore.bat from the ejected disc after the relocated copy finished ("The system cannot find the path specified."); the restore itself completed.'
+    }
+    if ($rc -ne 0) {
+        Write-Host "NOTE: exit code is $rc although the restore completed (the outer instance's last line, exit /b %ERRORLEVEL%, lived on the ejected disc)."
     }
     Test-TreeAgainstManifest -Fixture $Fixture -Target $target -Problems $problems
 

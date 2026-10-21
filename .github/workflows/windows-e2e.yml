@@ -253,9 +253,22 @@ jobs:
       # bin tree under %TEMP%\lcsas-restore-N-N\recovery, re-execs the copy
       # and sets LCSAS_RELOCATED so the meta drive is excluded from the pack
       # search.  Started with cwd on the disc, like a double-click.
+      #
+      # KNOWN restore.bat BUG (found by this very step; #517): the relocation
+      # block mirrors the bin tree from "%~dp0..\bin".  That is right for
+      # recovery\scripts\restore.bat but WRONG for the copy surfaced at the
+      # disc root (E:\restore.bat, what the heir double-clicks): there %~dp0
+      # is E:\ and ..\bin resolves to E:\bin, which does not exist (the
+      # binaries are in E:\recovery\bin).  robocopy fails silently (>nul), the
+      # RAM copy gets an empty recovery\bin, and the relocated script ends in
+      # "ERROR: no working recovery method on this system" with exit code 1.
+      # So on a single-drive machine the root-level entry point cannot restore
+      # at all.  The next step shows the relocation MECHANICS are sound from
+      # recovery\scripts\.  restore.bat is being changed elsewhere (#506), so
+      # this step is continue-on-error until the bin-copy path is fixed;
+      # delete that line then, and it becomes a hard gate.
       - name: Relocation leg — restore.bat at the disc root (the heir's double-click)
-        id: reloc_root
-        continue-on-error: true  # TEMP-DIAG
+        continue-on-error: true
         shell: pwsh
         timeout-minutes: 10
         run: |
@@ -265,7 +278,6 @@ jobs:
             -BatRel 'restore.bat' -TargetName 'restored-reloc-root'
 
       - name: Relocation leg — recovery\scripts\restore.bat layout
-        continue-on-error: true  # TEMP-DIAG
         shell: pwsh
         timeout-minutes: 10
         run: |
@@ -336,7 +348,6 @@ jobs:
       # copy is up we Dismount-DiskImage the meta ISO and only then feed it
       # the target + password, so tier 1 runs entirely after the eject.
       - name: Eject leg — relocated restore survives a meta-disc eject
-        continue-on-error: true  # TEMP-DIAG
         shell: pwsh
         timeout-minutes: 10
         run: |
