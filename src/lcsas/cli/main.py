@@ -2482,11 +2482,24 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
         imported = 0
         for receipt_file in args.receipt_files:
+            # Every malformed receipt is skipped with a warning and the batch
+            # goes on (#522).  ValueError covers JSONDecodeError and the
+            # UnicodeDecodeError of a non-UTF-8 file (e.g. UTF-16 from a
+            # PowerShell `>` redirect).
             try:
                 with open(receipt_file, encoding="utf-8") as f:
                     receipt = json.load(f)
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning(f"Failed to read receipt '{receipt_file}': {e}, skipping.")
+            except (ValueError, OSError) as e:
+                logger.warning(
+                    f"Failed to read receipt '{receipt_file}': {e} "
+                    "(a receipt must be a UTF-8 JSON file), skipping."
+                )
+                continue
+            if not isinstance(receipt, dict):
+                logger.warning(
+                    f"Receipt '{receipt_file}' is not a JSON object "
+                    f"(got {type(receipt).__name__}), skipping."
+                )
                 continue
 
             # Validate required receipt fields
@@ -2494,6 +2507,27 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             if missing:
                 logger.warning(f"Receipt '{receipt_file}' missing keys: "
                                f"{', '.join(missing)}, skipping.")
+                continue
+            bad_fields = [
+                k for k in ("volume_label", "location")
+                if not isinstance(receipt[k], str) or not receipt[k].strip()
+            ]
+            raw_size = receipt.get("iso_size_bytes")
+            receipt_size: int | None = None
+            if raw_size is not None:
+                try:
+                    if isinstance(raw_size, bool):
+                        raise ValueError(raw_size)
+                    receipt_size = int(raw_size)
+                    if receipt_size < 0:
+                        raise ValueError(raw_size)
+                except (TypeError, ValueError):
+                    bad_fields.append("iso_size_bytes")
+            if bad_fields:
+                logger.warning(
+                    f"Receipt '{receipt_file}' has invalid "
+                    f"{', '.join(bad_fields)}, skipping."
+                )
                 continue
 
             vol = get_volume_by_label(conn, receipt["volume_label"])
@@ -2533,7 +2567,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                 rejected += 1
                 continue
 
-            ensure_location(conn, receipt["location"])
+            ensure_location(conn, receipt["location"], commit=False)
 
             # Advance status if this is the first burn (STAGING); otherwise
             # just add a copy (handles re-burns to additional locations).
@@ -2593,16 +2627,13 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                         "not as VERIFIED: check it with `lcsas verify "
                         f"{receipt['volume_label']} --disc`."
                     )
-                receipt_size = receipt.get("iso_size_bytes")
                 add_volume_copy(
                     conn,
                     volume_id=vol.volume_id,
                     location=receipt["location"],
                     burn_date=receipt.get("burn_date", ""),
                     iso_sha256=receipt_hash or None,
-                    iso_size_bytes=(
-                        int(receipt_size) if receipt_size is not None else None
-                    ),
+                    iso_size_bytes=receipt_size,
                     commit=False,
                 )
 
