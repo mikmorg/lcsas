@@ -639,16 +639,13 @@ def case_swap(
             if swaps == 0:
                 check_prompt_text(box)
                 if CATALOG_UNQUERYABLE_MARK in box:
-                    # Seen on macOS: catalog.db is a WAL-mode database and cannot
-                    # be queried in place on a read-only volume (the same on Linux
-                    # with `lcsas-restore --catalog` on a read-only directory), so
-                    # the first prompt carries tier 1's schema-skew text instead of
-                    # a volume hint.  Harmless to the restore; noted, not failed.
-                    print(
-                        "::warning title=swap prompt::the on-disc catalog.db could not be "
-                        "queried in place (read-only volume, WAL-mode database); the first "
-                        "prompt says 'likely written by a newer LCSAS' instead of naming a disc",
-                        flush=True,
+                    # #534: the on-disc catalog.db was a WAL-mode database, which
+                    # SQLite cannot open on a read-only volume, so the first prompt
+                    # said "likely written by a newer LCSAS" instead of naming a
+                    # disc.  The burn now writes it with a rollback journal.
+                    raise CheckError(
+                        "tier 1 could not query the on-disc catalog.db in place "
+                        f"(read-only volume); the first prompt says:\n{box}"
                     )
             named = labels_named(box, data_labels)
             free = [label for label in data_labels if label not in mounts.attached]

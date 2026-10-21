@@ -74,7 +74,9 @@ The end-to-end flow inside a single session:
    - `wal_checkpoint(TRUNCATE)` + `inject_catalog` flush the SQLite catalog
      and copy it into `staging_root/catalog.db` — the catalog is **always
      injected after volume registration is committed** so the disc reflects
-     its own existence.
+     its own existence. The copy is switched from WAL to a rollback journal
+     (`PRAGMA journal_mode=DELETE`), because SQLite cannot open a WAL
+     database on read-only media (#534).
    - `write_volume_info`, `write_restore_instructions`,
      `write_standalone_restorer`, `write_lcsas_source` (skipped for
      `TEST_*` media), `write_start_here`, `write_key_info`,
