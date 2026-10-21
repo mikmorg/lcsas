@@ -419,11 +419,9 @@ This is the `.packs` field of the `MirrorScanResult` returned by
   scans only log a warning on mismatch (`bulk_register`,
   `src/lcsas/db/packs.py`). This is intentional because pack SHA-256 is
   content-addressed, so size cannot legitimately change without a new hash.
-  Known bug #524: `lcsas scan` never reaches that warning, because
-  `DeltaAnalyzer.register_new_packs` drops packs already in the catalog
-  before it calls `bulk_register` (step 5), so a pack changed on the mirror
-  after its first scan is not flagged; the warning fires only when
-  `bulk_register` is called directly.
+  `DeltaAnalyzer.register_new_packs` (step 5) gives the same warning for
+  packs already in the catalog, which never reach `bulk_register`, so a
+  re-scan flags a pack truncated or altered on the mirror (#524).
 
 **Variant axes that apply:** Multi-tenant (each repo has its own `repo_id`,
 and the delta is computed per repo). Other axes: N/A.
@@ -446,11 +444,11 @@ and the delta is computed per repo). Other axes: N/A.
   warns once naming the pack and both sizes, the catalog keeps the
   first-recorded size, a matching size or a brand-new pack is silent, only
   the mismatching pack is reported, and a mismatch in a later 900-pack
-  batch is still detected.
-- **Gap:** the size-mismatch warning is unreachable from `lcsas scan`,
-  pinned by
-  `tests/unit/test_scan_gaps.py::TestBulkRegisterSizeMismatch::test_rescan_after_mirror_pack_changed_size_warns`
-  (strict xfail) — bug #524.
+  batch is still detected. Through `lcsas scan`,
+  `::test_rescan_after_mirror_pack_changed_size_warns` checks that a re-scan
+  warns once for a pack whose size changed on the mirror (#524), and
+  `::test_rescan_with_unchanged_sizes_does_not_warn` checks that an
+  unchanged re-scan is silent.
 
 **Source refs:**
 - `DeltaAnalyzer` (class · `register_new_packs` · `detect_pruned`) in
@@ -470,17 +468,14 @@ and the delta is computed per repo). Other axes: N/A.
   no longer a silent exit 0 (`cmd_scan`;
   `tests/unit/test_cli_comprehensive.py::TestCmdScan::test_scan_unknown_repo_warning`).
 - **Size mismatch is non-fatal (intentional: pack names are content
-  hashes, so trusting the first-recorded size is the conservative choice),
-  but `lcsas scan` never reports it (bug #524).**
-  `bulk_register` logs a warning on size mismatch but trusts the DB row
-  (`src/lcsas/db/packs.py`); the warning itself is asserted by
-  `tests/unit/test_scan_gaps.py::TestBulkRegisterSizeMismatch`. However
-  `DeltaAnalyzer.register_new_packs` filters out packs already in the
-  catalog before calling `bulk_register`, so a pack truncated or altered on
-  the mirror after its first scan is never flagged by `lcsas scan`; this is
-  pinned by `::test_rescan_after_mirror_pack_changed_size_warns` (strict
-  xfail). No observability surface (DB column, audit event) flags that a
-  mismatch was seen (see §6).
+  hashes, so trusting the first-recorded size is the conservative choice).**
+  A re-scan logs a warning for every already-registered pack whose size on
+  the mirror changed, and the catalog keeps the DB row
+  (`DeltaAnalyzer.register_new_packs` in `src/lcsas/packs/delta.py`, #524;
+  `bulk_register` in `src/lcsas/db/packs.py` warns the same way). No
+  observability surface (DB column, audit event) records that a mismatch was
+  seen; operators only see the log line (pinned by
+  `tests/unit/test_scan_gaps.py::TestBulkRegisterSizeMismatch::test_rescan_after_mirror_pack_changed_size_warns`).
 - **`detect_pruned` semantics when the mirror is *partly* missing
   (intentional: a scan cannot tell "pruned" from "not mounted" below the
   guards).** A partial mirror that raises read errors is now skipped for

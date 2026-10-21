@@ -510,16 +510,6 @@ class TestBulkRegisterSizeMismatch:
         assert len(hits) == 1
         assert _sha(950)[:16] in hits[0].getMessage()
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: backup-and-scan.md section 6 says a re-scan 'logs a warning on "
-            "size mismatch', but DeltaAnalyzer.register_new_packs() drops packs "
-            "already in the catalog BEFORE calling bulk_register(), so the "
-            "warning is unreachable from `lcsas scan`: a pack truncated/altered "
-            "on the mirror after its first scan is never flagged. See #524."
-        ),
-    )
     def test_rescan_after_mirror_pack_changed_size_warns(self, tmp_path, capsys):
         sha = _sha(7)
         env = _Env(tmp_path, on_disk=[sha])
@@ -530,4 +520,14 @@ class TestBulkRegisterSizeMismatch:
         (env.mirror / "data" / sha[:2] / sha).write_bytes(b"y" * 7)
         assert env.scan("--no-snapshots") == 0
 
-        assert "size mismatch" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "size mismatch" in out
+        assert sha[:16] in out
+        assert out.count("size mismatch") == 1
+
+    def test_rescan_with_unchanged_sizes_does_not_warn(self, tmp_path, capsys):
+        env = _Env(tmp_path, on_disk=[_sha(7), _sha(8)])
+        assert env.scan("--no-snapshots") == 0
+        assert env.scan("--no-snapshots") == 0
+
+        assert "size mismatch" not in capsys.readouterr().out
