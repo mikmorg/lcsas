@@ -1033,20 +1033,24 @@ for cand in "$RECOVERY/catalog.db" "$REPO/catalog.db" \
             "$RECOVERY/../catalog.db"; do
     catalog_consider "$cand"
 done
-# Mounted discs: /Volumes/* (macOS), /media/$USER/* /media/* /mnt/* (Linux).
-if [ -d /Volumes ]; then
-    for mnt in /Volumes/*; do
+# Mounted discs: the same LCSAS_MOUNT_DIRS walk as repo discovery and
+# the pack search, the mount dir itself included (a disc mounted AT
+# /mnt, as `sudo mount /dev/sr0 /mnt` does, #412).  This used its own
+# fixed list (/Volumes/* /media/$USER/* /media/* /mnt/*), so it missed
+# /run/media/$USER/* (udisks2 automounts on Fedora, Arch, ...) and a
+# disc at /mnt itself: no catalog, so no disc-swap hints and no size
+# for the free-space preflight.
+OLD_IFS="$IFS"; IFS=":"
+for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
+    IFS="$OLD_IFS"
+    if [ -z "$parent" ] || [ ! -d "$parent" ]; then IFS=":"; continue; fi
+    for mnt in "$parent" "$parent"/*; do
         [ -d "$mnt" ] || continue
         catalog_consider "$mnt/catalog.db"
     done
-fi
-for parent in "/media/$(id -un 2>/dev/null)" /media /mnt; do
-    [ -d "$parent" ] || continue
-    for mnt in "$parent"/*; do
-        [ -d "$mnt" ] || continue
-        catalog_consider "$mnt/catalog.db"
-    done
+    IFS=":"
 done
+IFS="$OLD_IFS"
 if [ -n "$catalog_pick" ]; then
     CATALOG_ARG="--catalog$NL$catalog_pick"
     printf '[lcsas-restore] using catalog %s\n' "$catalog_pick" >&2

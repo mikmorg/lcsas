@@ -90,6 +90,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_platform_detect.py` | Shell-coverage tests for OS/arch detection branches in restore.sh. |
 | `test_restore_sh_binary_corrupt.py` | Issue #223 — restore.sh detects present-but-corrupted tier binaries. |
 | `test_restore_sh_catalog_invalidation.py` | Hardening test: mtime-based locator-catalog cache invalidation in restore.sh (Issue #108). |
+| `test_restore_sh_catalog_pick.py` | restore.sh: which catalog.db it picks, and from where (#517 gaps). |
 | `test_restore_sh_ecc_dispatch.py` | Hardening tests: restore.sh --check-disc ECC dispatch [FMT-01]. |
 | `test_restore_sh_password_hygiene.py` | test_restore_sh_password_hygiene.py -- restore.sh password-file cleanup. |
 | `test_restore_sh_relocate.py` | Hardening tests: restore.sh relocation path (read-only SCRIPT_DIR). |
