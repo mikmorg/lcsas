@@ -27,6 +27,7 @@ on:
       - "src/lcsas/staging/metadata.py"
       - "recovery/bin/x86_64-windows/**"
       - "tests/e2e/fixture_lib.py"
+      - "tests/e2e/windows_e2e_lib.ps1"
       - ".github/workflows/windows-e2e.yml"
   workflow_dispatch:
   # The weekly run (windows-e2e-weekly.yml).
@@ -80,12 +81,46 @@ jobs:
       - name: Install LCSAS (editable, with dev deps)
         run: make dev
 
+      # Sizing (#517): fixture_lib's defaults (12 x 64 KiB) fit ONE TEST_TINY
+      # data disc, so the heir's multi-disc sweep was never exercised.  A
+      # TEST_TINY disc is 2 MiB with a ~700 KB holographic reserve (~1.3 MiB
+      # of packs), so 8 x 512 KiB (4 MiB of incompressible data) lands on
+      # four data discs.  Few, bigger files rather than many small ones:
+      # Defender real-time scanning on the windows runner is per-file.
       - name: Build Windows fixture (rustic repo + ISOs + manifest)
+        env:
+          FIXTURE_FILE_COUNT: "8"
+          FIXTURE_FILE_BYTES: "524288"
         run: |
           set -euo pipefail
           mkdir -p fixture-out
-          PYTHONPATH=src python3 tests/e2e/fixture_lib.py "$PWD/fixture-out" \
-            | tee fixture-out/artifacts.json
+          PYTHONPATH=src python3 - "$PWD/fixture-out" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+
+          sys.path.insert(0, "tests/e2e")
+          import fixture_lib
+
+          workdir = Path(sys.argv[1]).resolve()
+          fx = fixture_lib.build_windows_fixture(
+              workdir,
+              file_count=int(os.environ["FIXTURE_FILE_COUNT"]),
+              file_bytes=int(os.environ["FIXTURE_FILE_BYTES"]),
+          )
+          artifacts = {
+              "meta_iso": str(fx.meta_iso),
+              "data_isos": [str(p) for p in fx.data_isos],
+              "manifest": str(fx.manifest_path),
+              "password_file": str(fx.password_file),
+          }
+          (workdir / "artifacts.json").write_text(json.dumps(artifacts, indent=2))
+          print(json.dumps(artifacts, indent=2))
+          print(f"DATA_DISCS={len(fx.data_isos)}")
+          # The Windows multi-disc leg is meaningless on one disc.
+          assert len(fx.data_isos) >= 2, (
+              f"fixture produced {len(fx.data_isos)} data ISO(s); need >= 2"
+          )
+          PY
           # Flatten the produced artifacts into an upload dir.  data ISOs +
           # meta ISO live under fixture-out/iso_out/.
           mkdir -p upload
@@ -110,6 +145,15 @@ jobs:
     timeout-minutes: 20
 
     steps:
+      # Only for tests/e2e/windows_e2e_lib.ps1 (the multi-disc, relocation
+      # and eject legs).  `path: repo` keeps checkout's clean away from the
+      # downloaded fixture dir.
+      - name: Checkout test helpers
+        uses: actions/checkout@v4
+        with:
+          path: repo
+          sparse-checkout: tests/e2e
+
       - name: Download fixture artifact
         uses: actions/download-artifact@v4
         with:
@@ -188,6 +232,59 @@ jobs:
           if ($fail) { throw "restored tree does not match manifest" }
           Write-Host "Restored tree is byte-identical to manifest."
 
+      # ---- #517: multi-disc sweep ------------------------------------------
+      # The happy path above mounted EVERY ISO, so restore.bat's D..Z scan
+      # handed all the data discs to lcsas-restore.exe as --pack-search and
+      # the restore consumed packs from several of them with no swap prompt.
+      # restore.bat prints nothing about its --pack-search drives, and --repo
+      # (X:\metadata\win) holds no data\, so we assert it structurally: more
+      # than one mounted disc holds packs, and the byte-exact check above
+      # passed, so packs necessarily came from more than one disc.
+      - name: Multi-disc — the restore swept more than one data disc
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
+          Assert-MultiDisc -Minimum 2
+
+      # ---- #517: single-drive RAM relocation --------------------------------
+      # Same restore, but WITHOUT LCSAS_NO_RELOCATE, so the "Single-drive
+      # guard" block runs: it probes the (read-only) ISO, copies the script +
+      # bin tree under %TEMP%\lcsas-restore-N-N\recovery, re-execs the copy
+      # and sets LCSAS_RELOCATED so the meta drive is excluded from the pack
+      # search.  Started with cwd on the disc, like a double-click.
+      #
+      # KNOWN restore.bat BUG #531 (found by this very step; #517): the relocation
+      # block mirrors the bin tree from "%~dp0..\bin".  That is right for
+      # recovery\scripts\restore.bat but WRONG for the copy surfaced at the
+      # disc root (E:\restore.bat, what the heir double-clicks): there %~dp0
+      # is E:\ and ..\bin resolves to E:\bin, which does not exist (the
+      # binaries are in E:\recovery\bin).  robocopy fails silently (>nul), the
+      # RAM copy gets an empty recovery\bin, and the relocated script ends in
+      # "ERROR: no working recovery method on this system" with exit code 1.
+      # So on a single-drive machine the root-level entry point cannot restore
+      # at all.  The next step shows the relocation MECHANICS are sound from
+      # recovery\scripts\.  This step is continue-on-error until #531 is
+      # fixed; the fix deletes that line and the step becomes a hard gate.
+      - name: Relocation leg — restore.bat at the disc root (the heir's double-click)
+        continue-on-error: true
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = "Stop"
+          . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
+          Invoke-RelocationLeg -Fixture (Join-Path $PWD 'fixture') `
+            -BatRel 'restore.bat' -TargetName 'restored-reloc-root'
+
+      - name: Relocation leg — recovery\scripts\restore.bat layout
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = "Stop"
+          . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
+          Invoke-RelocationLeg -Fixture (Join-Path $PWD 'fixture') `
+            -BatRel 'recovery\scripts\restore.bat' -TargetName 'restored-reloc-nested'
+
       - name: Negative case — wrong password fails cleanly
         shell: pwsh
         run: |
@@ -242,6 +339,21 @@ jobs:
           # Without this, the step inherits the lingering $LASTEXITCODE=77
           # from the intentional wrong-password `cmd /c` and reports red.
           exit 0
+
+      # ---- #517: eject the meta disc after relocation ------------------------
+      # LAST before the dismount step, because it ejects the meta ISO (the
+      # wrong-password step re-finds the meta drive by scanning volumes).
+      # restore.bat blocks on a stdin pipe we hold open; once the relocated
+      # copy is up we Dismount-DiskImage the meta ISO and only then feed it
+      # the target + password, so tier 1 runs entirely after the eject.
+      - name: Eject leg — relocated restore survives a meta-disc eject
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = "Stop"
+          . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
+          Invoke-EjectLeg -Fixture (Join-Path $PWD 'fixture') `
+            -BatRel 'recovery\scripts\restore.bat' -TargetName 'restored-eject'
 
       - name: Dismount ISOs
         if: always()
