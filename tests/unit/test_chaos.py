@@ -272,8 +272,12 @@ class TestCorruptPackContents:
         repo, pw, pack_id = _build_repo(tmp_path)
         pack_path = repo / "data" / pack_id[:2] / pack_id
         data = bytearray(pack_path.read_bytes())
-        # Swap first two IV bytes
-        data[0], data[1] = data[1], data[0]
+        # Swap the first two IV bytes.  The IV is random, so 1 time in 256
+        # they are equal and a swap changes nothing: flip one instead.
+        if data[0] == data[1]:
+            data[0] ^= 0xFF
+        else:
+            data[0], data[1] = data[1], data[0]
         pack_path.write_bytes(bytes(data))
 
         restorer = PurePythonRestorer(repo, pw, strict=True)
