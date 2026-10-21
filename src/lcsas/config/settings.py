@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from lcsas.config.media import MediaType
+from lcsas.utils.labels import generate_volume_label
 
 _logger = logging.getLogger("lcsas")
 
@@ -392,14 +393,36 @@ def validate_config(config: LCSASConfig) -> list[str]:
         )
     else:
         # Pre-validate that the prefix won't produce labels exceeding 32 chars.
-        # Format: PREFIX_MEDIA_YYYY_NNNN — overhead is _BD25_2026_0001 = 15 (BD25 is most common)
-        _min_overhead = len("_BD25_2026_0001")
-        if len(config.label_prefix) + _min_overhead > 32:
+        # Ask the real generator: the media token's length varies (BD25 vs
+        # CD700 / BX100 / MD100), so a fixed BD25 overhead let a prefix pass
+        # here and then fail at stage time (#523).
+        media = config.default_media_type
+        try:
+            generate_volume_label(config.label_prefix, media.label_name, 1)
+        except ValueError:
             errors.append(
                 f"label_prefix '{config.label_prefix}' is too long "
-                f"({len(config.label_prefix)} chars); generated volume labels would "
-                f"exceed the ISO 9660 32-character limit. Use a shorter prefix."
+                f"({len(config.label_prefix)} chars) for {media.name}; generated "
+                f"volume labels would exceed the ISO 9660 32-character limit. "
+                f"Use a shorter prefix."
             )
+        else:
+            # `stage --media` / `burn --media` can pick another medium, so
+            # say up front which ones this prefix rules out.
+            too_long = []
+            for other in MediaType:
+                if other.is_test:
+                    continue
+                try:
+                    generate_volume_label(config.label_prefix, other.label_name, 1)
+                except ValueError:
+                    too_long.append(other.name)
+            if too_long:
+                _logger.warning(
+                    "label_prefix '%s' is too long for --media %s (32-character "
+                    "ISO 9660 label limit)",
+                    config.label_prefix, ", ".join(too_long),
+                )
 
     # Per-repo checks
     for name, repo in config.repositories.items():
