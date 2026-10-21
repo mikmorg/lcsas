@@ -53,8 +53,8 @@ airgapped sites, and split-machine "stage here, burn there" pipelines.
   for read-back verification — `src/lcsas/iso/xorriso.py`).
 - A target optical drive (`/dev/sr0` by default).
 - For receipt emission: a known **volume label** (defaults to the ISO's
-  parent directory name, which is *not* the volume label for an ISO as
-  `lcsas stage` lays it out — pass `--label`, see the Gaps section) and a
+  own PVD volume ID, i.e. the label it was mastered with, then to the
+  parent directory name for a non-ISO file — #514) and a
   **location tag** that names the physical
   destination of the disc (required when `--emit-receipt` is given —
   `cmd_burn_iso`).
@@ -146,15 +146,10 @@ command.
 
 **Gaps in coverage:**
 
-- No test exercises `--no-verify`; the receipt then records
-  `verify_passed: true` purely because no verify was attempted
-  (`verify_passed` is initialised `True` in `cmd_burn_iso` and only
-  flipped by an actual failed verify run). This is more than a missing
-  test: `catalog import-receipts` treats `verify_passed: true` on a
-  `STAGING` volume as proof and promotes it `STAGING` → `VERIFIED` and
-  closes it, so a disc that was never read back becomes `VERIFIED` in the
-  catalog. The semantics (record `null`/`unverified` instead) are
-  arguably wrong, not just untested.
+- (Resolved, #514) `--no-verify` records `verify_passed: null` (not
+  verified), and import keeps such a volume `BURNED`, never `VERIFIED`
+  (`TestCmdBurnIso::test_burn_iso_no_verify_records_null_not_true`,
+  `TestCmdCatalogImport::test_import_unverified_burn_is_burned_not_verified`).
 - No test asserts that the receipt file is `fsync()`-ed.
 - No test covers `--emit-receipt` pointing at a non-existent nested
   directory (the code calls `mkdir(parents=True, exist_ok=True)` —
@@ -215,15 +210,10 @@ its long-term-storage location (B).
    regardless of which host burns it.
 4. **On B — burn.** For each ISO, run `lcsas burn-iso <iso> --device
    /dev/srN --emit-receipt <receipts-dir> --location <site-name>
-   --label <volume_label> [--session <session-id>]`. **Pass `--label`
-   explicitly**, using the ISO's file name without `.iso` (that is the
-   label A used when staging). Left out, `--label` defaults to the ISO's
-   *parent directory name*, and `lcsas stage` writes the ISO as
-   `<staging>/<session>/<volume_label>.iso`, so the default is the
-   session directory's name. The post-burn identity check then fails
-   (`Disc in <dev> identifies as '<volume_label>' — expected
-   '<session dir>'. Wrong disc?`, exit 1, receipt `verify_passed: false`
-   under the wrong `volume_label`). Reproduced 2026-10-21; see Gaps.
+   [--label <volume_label>] [--session <session-id>]`. `--label` defaults
+   to the ISO's PVD volume ID, the label it was mastered with, so it can
+   be left out for ISOs from `lcsas stage` (#514; before that the default
+   was the session directory's name and the identity check failed).
    `--session` is free-form metadata that ends up in the receipt's
    `session_id` field; note that `cmd_catalog_import` does **not**
    consult it (it reads only `volume_label`, `location`,
@@ -613,11 +603,9 @@ and how the code responds today.
 ## Gaps
 
 The following are intentional or accidental gaps in the portable burn
-workflow as currently implemented. Most do not block the workflow, but
-three can leave the catalog wrong or fail a burn's verification (a
-failed-verify receipt recorded as a good copy, `--no-verify` receipts
-promoted to `VERIFIED`, and the default `--label`), so operators should
-read them before relying on the portable path:
+workflow as currently implemented. None of the open ones block the
+workflow (the three that could leave the catalog wrong were resolved in
+#514):
 
 - **(Resolved, issue #18) Receipt provenance is persisted on import.**
   The importer passes `iso_sha256` (and `iso_size_bytes`) through to
@@ -644,38 +632,16 @@ read them before relying on the portable path:
   consult it; it only cross-checks against prior
   `BURN_RECEIPT_IMPORTED` events for the same volume, so the *first*
   receipt for a volume is trusted).
-- **Failed-verify receipts are recorded as good copies, and re-burn
-  failures leave no event.** Confirmed 2026-10-21 by importing a receipt
-  with `verify_passed: false` into a scratch catalog (exit 0, `Imported 1
-  receipt(s).`). In `cmd_catalog_import` the `add_volume_copy` call runs
-  unconditionally, so on **both** paths the failed disc becomes an
-  `ACTIVE` `volume_copies` row carrying the receipt's `iso_sha256`:
-  - *Already-`VERIFIED` volume (re-burn):* volume stays `VERIFIED`, the
-    copy is recorded `ACTIVE` at the new location, and the only event is
-    `BURN_RECEIPT_IMPORTED`: no `VERIFY_FAIL` / `VERIFY_FAIL_REBURN` (the
-    failure-event branch lives inside the `vol.status == "STAGING"`
-    block).
-  - *`STAGING` volume (first burn):* volume goes to `BURNED` with a
-    `VERIFY_FAIL` event (as intended), but the `ACTIVE` copy is recorded
-    anyway.
-  The interactive burn path does the opposite on purpose: `BurnOrchestrator`
-  logs `VERIFY_FAIL_REBURN` for a failed re-burn and records **no** copy
-  (BURN-05: "a failed disc is not a copy", otherwise the ACTIVE-copy
-  location queries are satisfied and `stage --for-location` never
-  re-stages those packs). The receipt-import path has neither the event
-  nor the guard. The `BURN_RECEIPT_IMPORTED` event's `detail` also omits
-  `verify_passed`.
-- **`burn-iso --no-verify` writes `verify_passed: true`.** See the
-  coverage gap under `lcsas burn-iso`: an unverified burn is promoted to
-  `VERIFIED` on import.
-- **`burn-iso`'s default label is the ISO's parent directory name, which
-  is the session directory for a staged ISO.** `lcsas stage` writes
-  `<staging>/<session>/<volume_label>.iso`; omitting `--label` therefore
-  burns fine but then fails the PVD volume-ID identity check (exit 1,
-  `verify_passed: false`) and emits a receipt under the session
-  directory's name, which `import-receipts` cannot match to any volume.
-  Reproduced 2026-10-21. Workaround: always pass `--label <volume_label>`
-  (README's remote-burn example does not).
+- **(Resolved, #514) Failed and unverified receipts.** A receipt with
+  `verify_passed: false` no longer records a copy (BURN-05: a failed disc
+  is not a copy, so the location still needs the volume); a failed
+  re-burn of a `VERIFIED` volume records `VERIFY_FAIL_REBURN`, as
+  `BurnOrchestrator` does.  `verify_passed: null` (`--no-verify`) records
+  the copy but keeps the volume `BURNED`, not `VERIFIED`.  The
+  `BURN_RECEIPT_IMPORTED` detail carries `verify_passed`.
+- **(Resolved, #514) The default `--label`** is the ISO's PVD volume ID,
+  not the parent directory (which is the session directory for a staged
+  ISO).
 - **No batching guarantee (intentional: per-receipt commits keep a bad
   receipt from poisoning the rest, and re-running is idempotent).** Each
   receipt is committed individually (`cmd_catalog_import`), so a
