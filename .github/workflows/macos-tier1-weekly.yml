@@ -38,7 +38,7 @@ jobs:
     # failure()), explicit issues:write, no error swallowing.  needs:
     # is load-bearing -- without it needs.*.result is empty and this
     # job never fires.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [tier1]
     if: >-
       always() && github.event_name == 'schedule'

@@ -13,7 +13,10 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: that moved to 26.04 (2026-10-21), which
+    # drops qemu-user-static and ships a shellcheck the ratchet baseline
+    # doesn't match.  Moving is #538.  Same pin in every workflow.
+    runs-on: ubuntu-24.04
 
     # actions: read is for the workflow-state check below.  Spelled out
     # because a job-level block replaces the default token scopes, and a
@@ -186,7 +189,7 @@ jobs:
   # at a glance.  (test-e2e is wired in the `test` job since GATE-10; see
   # tests/recovery_hardening/test_ci_workflow_parity.py.)
   recovery-hardening:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     env:
       # Same pinned rustic as the `test` job — keep in lockstep.

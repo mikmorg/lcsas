@@ -38,7 +38,7 @@ jobs:
   # meta ISO + a SHA-256 manifest of the restorable tree.
   # ---------------------------------------------------------------------
   fixture:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     env:
