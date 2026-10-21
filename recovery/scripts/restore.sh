@@ -1139,7 +1139,13 @@ if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
        && [ -x "$_RESTORE_BIN_PROBE" ]; then
         # Parse "Total: N packs, X.X MB across M discs." -> X.X
         # (output captured -- must not leak onto the operator's tty).
-        _req_mb="$("$_RESTORE_BIN_PROBE" --catalog "$catalog_pick" \
+        # Tier 1's argument check wants --repo and --password-file even
+        # for --list-pending-packs, which reads neither (it exits before
+        # the key load); without them it printed usage, exited 2, and
+        # this fallback never produced a size (#535).  The password has
+        # not been asked for yet, so pass /dev/null.
+        _req_mb="$("$_RESTORE_BIN_PROBE" --repo "$REPO" \
+                       --password-file /dev/null --catalog "$catalog_pick" \
                        --list-pending-packs 2>/dev/null \
                    | awk '/^Total:/ {
                          for (i = 1; i < NF; i++)
