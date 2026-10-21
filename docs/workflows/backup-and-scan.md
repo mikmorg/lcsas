@@ -186,6 +186,12 @@ Other axes: N/A.
   is printed, the runner is never built and no snapshot rows are written.
 - `::test_repo_without_password_file_is_skipped_even_without_flag` (same
   class) pins the skip for a repo with no `password_file`.
+- `tests/integration/test_scan_real_repo.py` runs `lcsas scan` against a
+  real rustic repo (`rustic init` + backups, `repo add`, `scan`): every pack
+  rustic wrote is registered under its SHA-256 name and on-disk size, a
+  re-scan registers nothing, a later backup adds only its new packs, and
+  every snapshot rustic lists is persisted with its id, host, time, paths
+  and tags (requires `rustic`; self-skips otherwise).
 
 **Source refs:**
 - CLI: `scan_p` in `build_parser()` (parser) · `cmd_scan` (handler), both
@@ -489,14 +495,16 @@ and the delta is computed per repo). Other axes: N/A.
   (snapshot block of `cmd_scan`). The overall scan still returns 0, which
   can mask partial outages. No metric or audit-trail event is emitted, and
   no test covers the branch.
-- **No test drives `cmd_scan` against a real rustic repo.** The scanner and
-  `DeltaAnalyzer` are exercised against packs written by a real
-  `rustic`/`restic` backup (`tests/e2e/fixture_lib.py::build_windows_fixture`,
-  `tests/integration/test_disc_only_restore.py`,
-  `tests/integration/test_pure_python_restore.py`), but those call
-  `scan_mirror_packs` + `DeltaAnalyzer` directly. The unit tests of the
-  `lcsas scan` command itself fabricate pack files on disk, and nothing runs
-  `cmd_scan`'s snapshot block (`rustic snapshots --json`) against a real repo.
+- (Resolved, #536) Every snapshot used to be stored as one row with an
+  empty `snapshot_id`: rustic 0.11 groups `snapshots --json` output by
+  host/label/paths (`[{"group_key": …, "snapshots": […]}]`) and
+  `parse_snapshots_output` read each group as a snapshot, so
+  `restore exec --snapshot latest` resolved to `''`. The parser now
+  flattens group objects (and the older `[group_key, [snapshots]]` pairs),
+  skips id-less entries with a warning, and `scan` deletes the `''` rows an
+  earlier scan left (`delete_blank_snapshots`, `src/lcsas/db/snapshots.py`).
+  Found by `tests/integration/test_scan_real_repo.py` (#517), the first
+  test to run `cmd_scan`'s snapshot block against a real rustic repo.
 
 ---
 
