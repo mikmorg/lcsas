@@ -139,6 +139,12 @@ def test_restore_bat_warns_before_overwriting_nonempty_target():
     assert guard_at < pw_at, "non-empty-target guard must come before the password prompt"
 
 
+def _code_lines(text: str, comment_prefixes: tuple[str, ...] = ("REM",)) -> list[str]:
+    """Non-blank, non-comment lines of *text*, stripped."""
+    lines = (ln.strip() for ln in text.splitlines())
+    return [ln for ln in lines if ln and not ln.startswith(comment_prefixes)]
+
+
 def _relocation_block(content: str) -> str:
     start = content.index("if defined LCSAS_RELOCATED goto :after_relocate")
     end = content.index("\n:after_relocate\n")
@@ -188,7 +194,7 @@ def test_restore_bat_relaunch_reads_nothing_more_from_the_disc():
     and the LCSAS_RELOCATED sentinel belong on the same line.
     """
     block = _relocation_block(RESTORE_BAT.read_text())
-    code = [ln.strip() for ln in block.splitlines() if ln.strip() and not ln.strip().startswith("REM")]
+    code = _code_lines(block)
     assert code[-1] == (
         '(goto) 2>nul & cd /d %SystemDrive%\\ & set "LCSAS_RELOCATED=%~d0\\" '
         '& call "%RAMDIR%\\recovery\\scripts\\restore.bat" %*'
@@ -202,7 +208,7 @@ def test_restore_bat_takes_the_relocation_sentinel_out_of_the_callers_env():
     into its own setlocal scope and clear it outside, or a second run from
     the same prompt would skip relocation."""
     content = RESTORE_BAT.read_text()
-    code = [ln.strip() for ln in content.splitlines() if ln.strip() and not ln.strip().startswith(("REM", "@"))]
+    code = _code_lines(content, ("REM", "@"))
     assert code[0] == (
         'for %%R in ("%LCSAS_RELOCATED%") do (set "LCSAS_RELOCATED=" & '
         'setlocal enabledelayedexpansion & set "LCSAS_RELOCATED=%%~R")'
