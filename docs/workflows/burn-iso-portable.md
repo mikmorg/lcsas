@@ -161,12 +161,14 @@ command.
   verified), and import keeps such a volume `BURNED`, never `VERIFIED`
   (`TestCmdBurnIso::test_burn_iso_no_verify_records_null_not_true`,
   `TestCmdCatalogImport::test_import_unverified_burn_is_burned_not_verified`).
-- The label-inference tests (`test_burn_iso_emits_receipt_with_label_inferred`
-  and `_receipt_records_verify_failure`) put the ISO in a directory named
-  after the label (`ARCHIVE_TEST_0001/vol.iso`), a layout `lcsas stage`
-  never produces: it writes `<session>/<volume_label>.iso`, so the real
-  default label is the session directory name and the identity check
-  fails (see the Gaps section).
+- (Resolved, #514) The default label is the ISO's PVD volume ID, so a
+  staged `<session>/<volume_label>.iso` gets the right label:
+  `TestCmdBurnIso::test_burn_iso_label_defaults_to_the_iso_volume_id`.
+  The older label-inference tests
+  (`test_burn_iso_emits_receipt_with_label_inferred` and
+  `_receipt_records_verify_failure`) still use a label-named parent
+  directory (`ARCHIVE_TEST_0001/vol.iso`), which is now only the
+  fallback for an ISO without a readable PVD.
 
 **Source refs:**
 
@@ -481,9 +483,10 @@ behaviour.
   `pack_ids` are persisted as a `BURN_RECEIPT_IMPORTED` audit event
   (issue #18 — `cmd_catalog_import`), pinned by
   `TestCmdCatalogImport::test_import_persists_receipt_provenance` and
-  `::test_import_rejects_hash_mismatch`. No test asserts the failure-path
-  behaviour described under "Gaps" below (a `verify_passed: false`
-  receipt still records an ACTIVE copy).
+  `::test_import_rejects_hash_mismatch`. (Resolved, #514) A
+  `verify_passed: false` receipt records no copy:
+  `TestCmdCatalogImport::test_import_failed_first_burn_records_no_copy`
+  and `::test_import_failed_reburn_records_event_not_copy`.
 
 **Source refs:**
 
@@ -571,13 +574,12 @@ and how the code responds today.
     (`src/lcsas/db/volume_copies.py`).
 - **Net effect:** Idempotent except for the `burn_date` and `notes`
   fields on the copy, which take the latest receipt's values.
-- **Caveat:** If the second receipt has `verify_passed: false` and the
-  volume is already `VERIFIED`, the copy is **still** recorded (or
-  refreshed) with status `ACTIVE`, and no `VERIFY_FAIL` event is added —
-  a real verify failure on a re-burn to a new location would normally be
-  recorded only when the import enters the `STAGING` branch, which this
-  no longer is. The failed disc therefore shows up as a good copy at that
-  location. See "Gaps".
+- **Caveat (resolved, #514):** If the second receipt has
+  `verify_passed: false` and the volume is already `VERIFIED`, no copy is
+  recorded or refreshed for that location; a `VERIFY_FAIL_REBURN` event
+  is added instead, as `BurnOrchestrator` does, so the location still
+  shows as needing the volume
+  (`TestCmdCatalogImport::test_import_failed_reburn_records_event_not_copy`).
 
 ### Receipt arrives before the volume is in the catalog
 

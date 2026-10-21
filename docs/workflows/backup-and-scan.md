@@ -158,7 +158,7 @@ catalogued yet?" command.
   ```
   and a footer:
   ```
-  Total scanned: N packs across R repos
+  Total scanned: N packs across R repo(s)
   New packs registered: M
   Archive: T total, A archived, S staged, U unarchived
   ```
@@ -217,11 +217,11 @@ skipped (`cmd_scan`, "not found in config" branch).
 **Expected outcome:**
 - Only the named repo(s) are walked; other repos' packs and snapshots are
   untouched.
-- The footer still reports `across R repos` where R is `len(config.repositories)`
-  — i.e., the **configured** total, not the filtered count (`cmd_scan`).
-  This is mildly misleading; see Gaps §7.
-- Unknown repo names emit `"repository '<name>' not found in config, skipping."`
-  (`cmd_scan`).
+- The footer reports `across R repo(s)` where R is the number of repos
+  actually scanned, not the configured total (#516, `cmd_scan`).
+- An unknown repo name is an error: `"repository '<name>' not found in
+  config."`, then the configured names, and the command exits 1 before
+  scanning anything (#516, `cmd_scan`).
 
 **Variant axes that apply:** Multi-tenant (this *is* the per-tenant axis).
 Other axes: N/A.
@@ -232,8 +232,9 @@ Other axes: N/A.
 - `tests/unit/test_cli_scan.py::TestScanParser::test_scan_parser_with_repo_filter`
   covers argparse acceptance of multiple names.
 - `tests/unit/test_cli_comprehensive.py::TestCmdScan::test_scan_unknown_repo_warning`
-  covers the "unknown repo name" path: it warns, scans nothing, and the
-  command still exits 0 (so a typo'd `--repo` is not an error; see Gaps §7).
+  covers the "unknown repo name" path: it is an error (#516). The command
+  names the unknown repo, lists the configured ones, scans nothing and
+  exits 1.
 
 **Source refs:** `scan_p` `--repo` in `build_parser()` (flag) · `cmd_scan`
 (filter application, both the pack-scan and snapshot loops).
@@ -462,17 +463,12 @@ and the delta is computed per repo). Other axes: N/A.
 
 ## 7. Gaps & known issues
 
-- **Misleading footer when `--repo` filters.** The total-scanned line says
-  `across {len(config.repositories)} repos` even when `--repo` narrows the
-  scan to one repo (`cmd_scan`). A filtered scan that visits one repo out of
-  five will still print "across 5 repos". Confirmed 2026-10-21 against a
-  three-repo config: `scan --repo a` printed `across 3 repos`. It is not
-  only the filter: the same count also includes repos skipped as "not
-  registered in DB (run 'repo add' first)", and `scan --repo bogus` (a repo
-  that is not in the config) scans nothing, prints `Total scanned: 0 packs
-  across 3 repos` and exits 0. The number is the configured total, not the
-  number of repos actually scanned. Cosmetic for the footer; the
-  exit-0-on-nothing-scanned part can hide a typo'd `--repo`.
+- (Resolved, #516) The footer counts the repos actually scanned:
+  `Total scanned: N packs across M repo(s)`, plus `(K skipped, not
+  registered: …)` for configured repos that `repo add` never registered.
+  An unknown `--repo` name is an error (exit 1, configured names listed),
+  no longer a silent exit 0 (`cmd_scan`;
+  `tests/unit/test_cli_comprehensive.py::TestCmdScan::test_scan_unknown_repo_warning`).
 - **Size mismatch is non-fatal (intentional: pack names are content
   hashes, so trusting the first-recorded size is the conservative choice),
   but `lcsas scan` never reports it (bug #524).**
