@@ -175,11 +175,17 @@ Other axes: N/A.
 - `test_scan_prints_total_summary` — footer formatting.
 - Scanner specifics: `tests/unit/test_scanner_delta.py::TestScanner`
   (two-level layout, flat layout, missing `data/`, permission errors).
-- **Gap:** No unit test exercises the snapshot-persistence branch of
-  `cmd_scan`; the test config sets `password_file = ""`/`None` to skip that
-  branch (`tests/unit/test_cli_scan.py`).
-- **Gap:** No test covers the `rustic` binary-version check failure path
-  (the `check_binary_version` call in `cmd_scan`).
+- `tests/unit/test_scan_gaps.py::TestNoSnapshots::test_control_without_flag_checks_version_and_lists_snapshots`
+  covers the snapshot-persistence branch of `cmd_scan` with a configured
+  `password_file`: the rustic version is checked, the runner's snapshots
+  are listed for the repo and persisted (`Snapshots persisted: 1`). The
+  runner and version check are patched, so no real rustic is involved.
+- `tests/unit/test_scan_gaps.py::TestNoSnapshots::test_rustic_version_check_failure_aborts_scan_with_rc1`
+  covers the `rustic` binary-version check failure path (the
+  `check_binary_version` call in `cmd_scan`): the scan exits 1, the error
+  is printed, the runner is never built and no snapshot rows are written.
+- `::test_repo_without_password_file_is_skipped_even_without_flag` (same
+  class) pins the skip for a repo with no `password_file`.
 
 **Source refs:**
 - CLI: `scan_p` in `build_parser()` (parser) · `cmd_scan` (handler), both
@@ -270,10 +276,16 @@ rustic-on-PATH requirement (both checked inside the snapshot branch only).
   `tests/unit/test_cli_e2e.py::TestInitRepoScanPipeline`. On a host
   without rustic a regression that ignored the flag would make those
   scans return 1 at the `check_binary_version` call.
-- **Gap:** No test asserts the skip itself: nothing checks that rustic is
-  not invoked or that existing `snapshots` rows are left untouched
-  (`TestCmdScan` in `tests/unit/test_cli_scan.py` still leaves
-  `password_file` unset).
+- `tests/unit/test_scan_gaps.py::TestNoSnapshots` asserts the skip itself,
+  with a `password_file` configured (otherwise the snapshot loop would skip
+  the repo anyway and the flag would be unobservable) and a control run
+  without the flag proving the patched seams are live:
+  `::test_flag_never_touches_rustic` (version check not called, runner not
+  even constructed, no `Snapshots persisted` line, the pack scan still
+  runs), `::test_flag_leaves_existing_snapshot_rows_untouched` (a runner
+  that would rewrite and add rows changes nothing), and
+  `::test_flag_works_when_rustic_check_would_fail` (`scan --no-snapshots`
+  exits 0 with no rustic installed).
 
 **Source refs:** `scan_p` `--no-snapshots` in `build_parser()` (flag) ·
 `cmd_scan` (`not getattr(args, "no_snapshots", False)` guard and the
@@ -341,8 +353,16 @@ mark them as pruned" step.
   asserts the prune-sync block runs in a default (sub-threshold) scan and
   flips `is_pruned`; `::test_partial_scan_does_not_mark_pruned` covers the
   incomplete-scan guard.
-- **Gap:** No CLI-level test exercises `--no-prune-sync` itself (the flag's
-  skip path).
+- `tests/unit/test_scan_gaps.py::TestNoPruneSync` exercises `--no-prune-sync`
+  itself (the flag's skip path): packs missing from the mirror stay active,
+  with a control run of the same setup that does prune
+  (`::test_flag_keeps_packs_missing_from_mirror_active`,
+  `::test_control_same_setup_without_flag_does_prune`);
+  `DeltaAnalyzer.detect_pruned` is never consulted
+  (`::test_flag_means_detect_pruned_is_never_consulted`); the mass-prune
+  guard never fires and `--yes-prune` cannot resurrect the skipped block
+  (`::test_flag_bypasses_the_mass_prune_guard_too`); new packs are still
+  registered (`::test_flag_still_registers_new_packs`).
 
 **Source refs:** `scan_p` `--no-prune-sync` / `--yes-prune` in
 `build_parser()` (flags) · `cmd_scan` (guarded prune-sync block) ·
@@ -398,6 +418,11 @@ This is the `.packs` field of the `MirrorScanResult` returned by
   scans only log a warning on mismatch (`bulk_register`,
   `src/lcsas/db/packs.py`). This is intentional because pack SHA-256 is
   content-addressed, so size cannot legitimately change without a new hash.
+  Known bug #524: `lcsas scan` never reaches that warning, because
+  `DeltaAnalyzer.register_new_packs` drops packs already in the catalog
+  before it calls `bulk_register` (step 5), so a pack changed on the mirror
+  after its first scan is not flagged; the warning fires only when
+  `bulk_register` is called directly.
 
 **Variant axes that apply:** Multi-tenant (each repo has its own `repo_id`,
 and the delta is computed per repo). Other axes: N/A.
@@ -406,10 +431,25 @@ and the delta is computed per repo). Other axes: N/A.
 - `tests/unit/test_scanner_delta.py::TestDeltaAnalyzer` — register-new,
   skip-existing, unarchived totals, repo filtering, pruned detection.
 - `tests/unit/test_db_packs.py` — CRUD operations on the packs table.
-- **Gap:** No test exercises the SQLite-variable-batching path with
-  >900 packs in a single scan.
-- **Gap:** No test asserts the size-mismatch warning in `bulk_register`
-  (`src/lcsas/db/packs.py`).
+- `tests/unit/test_scan_gaps.py::TestBatchingBeyond900` exercises the
+  SQLite-variable-batching path with more than 900 packs, at the boundaries
+  (899, 900, 901) and over several batches (1800, 1801, 2500) for
+  `DeltaAnalyzer.register_new_packs`, `bulk_register`, `bulk_mark_pruned`,
+  `get_missing_packs` and `get_pick_list`, and end to end through
+  `lcsas scan` (1000 packs registered, then 950 pruned with `--yes-prune`).
+  The `sqlite_999_vars` fixture lowers each connection's variable limit to
+  the classic 999 and proves the cap is live, because a modern SQLite
+  accepts 32 766 variables and an unbatched query would otherwise pass.
+- `tests/unit/test_scan_gaps.py::TestBulkRegisterSizeMismatch` asserts the
+  size-mismatch warning in `bulk_register` (`src/lcsas/db/packs.py`): it
+  warns once naming the pack and both sizes, the catalog keeps the
+  first-recorded size, a matching size or a brand-new pack is silent, only
+  the mismatching pack is reported, and a mismatch in a later 900-pack
+  batch is still detected.
+- **Gap:** the size-mismatch warning is unreachable from `lcsas scan`,
+  pinned by
+  `tests/unit/test_scan_gaps.py::TestBulkRegisterSizeMismatch::test_rescan_after_mirror_pack_changed_size_warns`
+  (strict xfail) — bug #524.
 
 **Source refs:**
 - `DeltaAnalyzer` (class · `register_new_packs` · `detect_pruned`) in
@@ -433,19 +473,18 @@ and the delta is computed per repo). Other axes: N/A.
   across 3 repos` and exits 0. The number is the configured total, not the
   number of repos actually scanned. Cosmetic for the footer; the
   exit-0-on-nothing-scanned part can hide a typo'd `--repo`.
-- **No `--no-snapshots` test of the skip itself.** The flag is passed by
-  many CLI tests (see §4), but none asserts that rustic is not invoked or
-  that existing `snapshots` rows are untouched.
-- **No `--no-prune-sync` CLI test.** The mass-prune `--yes-prune` override
-  and the default sub-threshold prune are covered
-  (`tests/unit/test_cli_scan.py::TestPruneSyncGuards`), but the
-  `--no-prune-sync` skip path is not.
 - **Size mismatch is non-fatal (intentional: pack names are content
-  hashes, so trusting the first-recorded size is the conservative choice).**
+  hashes, so trusting the first-recorded size is the conservative choice),
+  but `lcsas scan` never reports it (bug #524).**
   `bulk_register` logs a warning on size mismatch but trusts the DB row
-  (`src/lcsas/db/packs.py`). No observability surface (DB column, audit
-  event) flags that a mismatch was seen; operators only see a log line, and
-  no test asserts that warning (see §6).
+  (`src/lcsas/db/packs.py`); the warning itself is asserted by
+  `tests/unit/test_scan_gaps.py::TestBulkRegisterSizeMismatch`. However
+  `DeltaAnalyzer.register_new_packs` filters out packs already in the
+  catalog before calling `bulk_register`, so a pack truncated or altered on
+  the mirror after its first scan is never flagged by `lcsas scan`; this is
+  pinned by `::test_rescan_after_mirror_pack_changed_size_warns` (strict
+  xfail). No observability surface (DB column, audit event) flags that a
+  mismatch was seen (see §6).
 - **`detect_pruned` semantics when the mirror is *partly* missing
   (intentional: a scan cannot tell "pruned" from "not mounted" below the
   guards).** A partial mirror that raises read errors is now skipped for
