@@ -25,7 +25,7 @@ on:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       relevant: ${{ steps.detect.outputs.relevant }}
     steps:
@@ -73,7 +73,7 @@ jobs:
     name: "Tier-1 audit gate (coverage + sanitize + fuzz-smoke)"
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
@@ -115,7 +115,7 @@ jobs:
   audit-gate-required:
     needs: [changes, audit-gate]
     if: always() && github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Gate verdict
         run: |
