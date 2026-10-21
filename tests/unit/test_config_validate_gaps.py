@@ -45,20 +45,6 @@ def _with(cfg: LCSASConfig, **changes) -> LCSASConfig:
     return LCSASConfig(**{**cfg.__dict__, **changes})
 
 
-# Media whose label token is 5 chars (CD700, BX100, MD100) rather than BD25's 4.
-_LONG_MEDIA_TOKEN = {"CD700", "BDXL100", "MDISC100"}
-_LONG_MEDIA_TOKEN_BUG = pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "BUG: validate_config sizes the label overhead for BD25 "
-        "('_BD25_2026_0001' = 15 chars) but CD700 / BDXL100 / MDISC100 have a "
-        "5-char media token (16-char overhead), so a 17-char prefix passes "
-        "validation and generate_volume_label() then raises at stage time. "
-        "See #523."
-    ),
-)
-
-
 def _errors_mentioning(errors: list[str], needle: str) -> list[str]:
     return [e for e in errors if needle in e]
 
@@ -163,10 +149,38 @@ class TestLabelPrefix:
         with pytest.raises(ValueError, match="exceeds ISO 9660"):
             generate_volume_label("A" * 18, MediaType.BD25.label_name, 1)
 
+    @pytest.mark.parametrize("media", ["CD700", "BDXL100", "MDISC100"])
+    def test_17_char_prefix_rejected_for_five_char_media_token(self, tmp_path, media):
+        """#523: CD700 / BX100 / MD100 leave one character less than BD25."""
+        cfg = _with(_base_config(tmp_path), label_prefix="A" * 17,
+                    default_media_type=MediaType[media])
+        too_long = _errors_mentioning(validate_config(cfg), "too long")
+        assert len(too_long) == 1
+        assert media in too_long[0]
+
+    def test_prefix_too_long_only_for_other_media_warns_not_errors(
+        self, tmp_path, caplog
+    ):
+        """BD25 is configured, but `stage --media CD700` would still fail."""
+        cfg = _with(_base_config(tmp_path), label_prefix="A" * 17)
+        with caplog.at_level(logging.WARNING, logger="lcsas"):
+            assert validate_config(cfg) == []
+        warned = [r.getMessage() for r in caplog.records if "--media" in r.getMessage()]
+        assert len(warned) == 1
+        for name in ("CD700", "BDXL100", "MDISC100"):
+            assert name in warned[0]
+        assert "BD25," not in warned[0]
+
+    def test_prefix_that_fits_every_medium_does_not_warn(self, tmp_path, caplog):
+        cfg = _with(_base_config(tmp_path), label_prefix="A" * 16)
+        with caplog.at_level(logging.WARNING, logger="lcsas"):
+            assert validate_config(cfg) == []
+        assert not [r for r in caplog.records if "--media" in r.getMessage()]
+
     @pytest.mark.parametrize(
         "media",
         [
-            pytest.param(m, marks=_LONG_MEDIA_TOKEN_BUG) if m.name in _LONG_MEDIA_TOKEN else m
+            m
             for m in MediaType
             if not m.is_test
         ],
