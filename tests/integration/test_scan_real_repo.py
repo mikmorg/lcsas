@@ -214,14 +214,6 @@ class TestScanRegistersRealPacks:
 # Snapshots: rustic snapshots --json -> snapshots table
 # ---------------------------------------------------------------------------
 
-_GROUPED_JSON_BUG = (
-    "BUG: parse_snapshots_output (src/lcsas/rustic/parser.py:72-76) treats the "
-    "top-level items of `rustic snapshots --json` as snapshots, but rustic "
-    "v0.11.2 emits GROUP objects ([{'group_key': ..., 'snapshots': [...]}]); "
-    "so each group becomes SnapshotInfo(snapshot_id='', hostname='', ...) "
-    "and cmd_scan upserts one junk row keyed '' (#536)"
-)
-
 
 class TestScanPersistsRealSnapshots:
     def test_scan_with_snapshots_enabled_succeeds_against_real_rustic(
@@ -235,7 +227,6 @@ class TestScanPersistsRealSnapshots:
             world.pack_files()
         )
 
-    @pytest.mark.xfail(strict=True, reason=_GROUPED_JSON_BUG)
     def test_every_rustic_snapshot_is_persisted_with_its_fields(self, world):
         expected = world.rustic_snapshots()
         assert len(expected) == 2
@@ -261,7 +252,6 @@ class TestScanPersistsRealSnapshots:
             assert json.loads(r["paths"]) == snap["paths"]
             assert json.loads(r["tags"]) == snap["tags"]
 
-    @pytest.mark.xfail(strict=True, reason=_GROUPED_JSON_BUG)
     def test_rescan_after_third_backup_adds_only_the_new_snapshot(self, world):
         assert world.lcsas("scan") == 0
         first = {r["snapshot_id"] for r in world.query("SELECT snapshot_id FROM snapshots")}
@@ -276,3 +266,23 @@ class TestScanPersistsRealSnapshots:
         now = {r["snapshot_id"] for r in world.query("SELECT snapshot_id FROM snapshots")}
         assert now == all_ids
         assert first < now  # the two original rows are still there
+
+    def test_scan_removes_the_empty_id_row_an_older_scan_left(self, world, capsys):
+        """#536: scans before the parser fix stored one row keyed ''."""
+        (repo,) = world.query("SELECT repo_id FROM repositories")
+        conn = get_connection(world.db)
+        try:
+            conn.execute(
+                "INSERT INTO snapshots (snapshot_id, repo_id, hostname, timestamp,"
+                " paths, tags, description) VALUES ('', ?, '', '', '[]', '[]', '')",
+                (repo["repo_id"],),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        assert world.lcsas("scan") == 0
+
+        ids = {r["snapshot_id"] for r in world.query("SELECT snapshot_id FROM snapshots")}
+        assert ids == {s["id"] for s in world.rustic_snapshots()}
+        assert "Removed 1 snapshot row(s) with an empty id" in capsys.readouterr().out

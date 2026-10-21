@@ -1403,7 +1403,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         # Persist snapshots (unless --no-snapshots)
         if not getattr(args, "no_snapshots", False):
             from lcsas.db.models import Snapshot
-            from lcsas.db.snapshots import bulk_upsert_snapshots
+            from lcsas.db.snapshots import bulk_upsert_snapshots, delete_blank_snapshots
             from lcsas.exceptions import BinaryError
             from lcsas.rustic.wrapper import SubprocessRusticRunner
             from lcsas.utils.subprocess import check_binary_version
@@ -1416,6 +1416,12 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
             runner = SubprocessRusticRunner(tmpdir=config.staging_path)
             total_snaps = 0
+            junk = delete_blank_snapshots(conn)
+            if junk:
+                logger.info(
+                    f"  Removed {junk} snapshot row(s) with an empty id left "
+                    "by an earlier scan (#536)."
+                )
 
             for repo_name, repo_cfg in config.repositories.items():
                 if repo_filter and repo_name not in repo_filter:
