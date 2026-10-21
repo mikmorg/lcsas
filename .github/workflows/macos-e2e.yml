@@ -26,11 +26,10 @@ name: macos-e2e
 #                     next disc each time: a wrong disc, the right disc with
 #                     ENTER, then the right disc with no input (#455 rescan).
 #
-# KNOWN restore.sh BUG, caught by this workflow: with two or more data discs
-# mounted, repo discovery offers the one tenant once per disc ("Multiple
-# repositories on this archive: 1) win 2) win ...") and exits 1 without a
-# terminal.  The legs above therefore set LCSAS_REPO=win, and one clearly
-# named, non-blocking step runs the heir's plain invocation without it.
+# This workflow caught #533: with two or more data discs mounted, repo
+# discovery offered the one tenant once per disc ("Multiple repositories on
+# this archive: 1) win 2) win ...") and exited 1 without a terminal.  The
+# happy path runs both ways: the heir's plain invocation and LCSAS_REPO=win.
 #
 # No `schedule:` here, on purpose (#462): GitHub disables a scheduled file after
 # 60 quiet days, PR trigger and all.  The repo's rule is that a weekly run lives
@@ -153,14 +152,9 @@ jobs:
         timeout-minutes: 10
         run: python3 tests/e2e/macos_restore_smoke.py happy "$PWD/fixture" --repo win
 
-      - name: "KNOWN BUG: restore.sh with every disc attached, no LCSAS_REPO (repo picker lists one tenant once per disc)"
-        # Expected to fail today (#533): the heir's plain invocation dies at a
-        # bogus "Multiple repositories" picker when >= 2 data discs are
-        # mounted (restore.sh keys repo candidates by path, and every data
-        # disc carries metadata/<tenant>/).  Reproduces on Linux too.  This
-        # step turns green by itself when restore.sh is fixed; then drop
-        # continue-on-error and the `--repo win` from the legs here.
-        continue-on-error: true
+      - name: restore.sh with every disc attached (happy path, no LCSAS_REPO)
+        # The heir's plain invocation.  Until #533 it died at a bogus
+        # "Multiple repositories" picker with >= 2 data discs mounted.
         timeout-minutes: 10
         run: python3 tests/e2e/macos_restore_smoke.py happy "$PWD/fixture"
 
