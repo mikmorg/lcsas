@@ -220,7 +220,7 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   `src/lcsas/meta/restore_single_drive.py`) only builds the pick list
   and ingests packs, and has no prompt of its own.
 - **Repository picker with two or more data discs mounted (open
-  `restore.sh` bug, found by `macos-e2e.yml` and not macOS-specific):**
+  `restore.sh` bug #533, found by `macos-e2e.yml` and not macOS-specific):**
   every data disc carries `metadata/<tenant>/`, and repo discovery
   de-duplicates by path, so with N data discs mounted a single-tenant
   archive is listed N times ("Multiple repositories on this archive:

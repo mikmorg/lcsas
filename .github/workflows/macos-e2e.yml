@@ -61,7 +61,7 @@ jobs:
   # a SHA-256 manifest of the restorable tree.
   # ---------------------------------------------------------------------
   fixture:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned like every workflow; see test.yml and #538
     timeout-minutes: 15
 
     env:
@@ -154,7 +154,7 @@ jobs:
         run: python3 tests/e2e/macos_restore_smoke.py happy "$PWD/fixture" --repo win
 
       - name: "KNOWN BUG: restore.sh with every disc attached, no LCSAS_REPO (repo picker lists one tenant once per disc)"
-        # Expected to fail today: the heir's plain invocation dies at a
+        # Expected to fail today (#533): the heir's plain invocation dies at a
         # bogus "Multiple repositories" picker when >= 2 data discs are
         # mounted (restore.sh keys repo candidates by path, and every data
         # disc carries metadata/<tenant>/).  Reproduces on Linux too.  This
