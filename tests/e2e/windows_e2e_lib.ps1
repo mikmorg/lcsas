@@ -332,7 +332,8 @@ function Invoke-EjectLeg {
     if (-not $ejected) { $problems.Add('the meta disc was never ejected') }
     # The outer instance's last line (`exit /b %ERRORLEVEL%`) lives on the
     # disc that was just ejected, so the exit status is reported, not
-    # asserted; the contract is that the RESTORE finishes.
+    # asserted; the contract is that the RESTORE finishes.  Bug #532: once
+    # that is fixed, the two NOTEs below become problems.
     if ($out -notmatch 'Recovery complete') { $problems.Add("'Recovery complete' banner missing after the eject") }
     if ($out -notmatch '\[lcsas-restore\] restore complete') { $problems.Add('tier-1 restore did not report completion after the eject') }
     if ($out -match 'The system cannot find the path specified') {

@@ -254,7 +254,7 @@ jobs:
       # and sets LCSAS_RELOCATED so the meta drive is excluded from the pack
       # search.  Started with cwd on the disc, like a double-click.
       #
-      # KNOWN restore.bat BUG (found by this very step; #517): the relocation
+      # KNOWN restore.bat BUG #531 (found by this very step; #517): the relocation
       # block mirrors the bin tree from "%~dp0..\bin".  That is right for
       # recovery\scripts\restore.bat but WRONG for the copy surfaced at the
       # disc root (E:\restore.bat, what the heir double-clicks): there %~dp0
@@ -264,9 +264,8 @@ jobs:
       # "ERROR: no working recovery method on this system" with exit code 1.
       # So on a single-drive machine the root-level entry point cannot restore
       # at all.  The next step shows the relocation MECHANICS are sound from
-      # recovery\scripts\.  restore.bat is being changed elsewhere (#506), so
-      # this step is continue-on-error until the bin-copy path is fixed;
-      # delete that line then, and it becomes a hard gate.
+      # recovery\scripts\.  This step is continue-on-error until #531 is
+      # fixed; the fix deletes that line and the step becomes a hard gate.
       - name: Relocation leg — restore.bat at the disc root (the heir's double-click)
         continue-on-error: true
         shell: pwsh

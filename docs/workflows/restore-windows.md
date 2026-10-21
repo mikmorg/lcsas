@@ -298,7 +298,7 @@ surfaced the first item):
   system` with exit code 1. From `E:\recovery\scripts\restore.bat` it works.
   The windows-e2e step *Relocation leg — restore.bat at the disc root (the
   heir's double-click)* asserts the working behaviour and is
-  `continue-on-error` until this is fixed.
+  `continue-on-error` until this is fixed (#531).
 - **What a working relocation leaves behind:** the copy
   `%TEMP%\lcsas-restore-<n>-<n>\` (about 40 files, 16.5 MB with the fixture
   meta tree) is never removed by `restore.bat`, and the script does not claim
@@ -308,7 +308,7 @@ surfaced the first item):
   byte-exact, but the outer `cmd` can no longer re-read its own
   `restore.bat` (it sits on the ejected disc) and prints `The system cannot
   find the path specified.` twice after the final "Press any key"; the exit
-  code is then 1 although the recovery succeeded.
+  code is then 1 although the recovery succeeded (#532).
 
 Gaps: no test for `%TEMP%` exhaustion or for the `robocopy`/`xcopy`
 fallback; the eject leg uses `Dismount-DiskImage`, which detaches the image
