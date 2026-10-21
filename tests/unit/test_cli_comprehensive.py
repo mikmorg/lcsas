@@ -164,7 +164,8 @@ class TestCmdScan:
         assert "Total scanned:" in out
 
     def test_scan_unknown_repo_warning(self, tmp_path, capsys):
-        """Scanning an unknown repo name produces a warning, not crash."""
+        """Scanning an unknown repo name is an error, not a crash (#516: it
+        used to exit 0 after scanning nothing)."""
         cfg = _write_config(tmp_path)
         db = tmp_path / "archive.db"
         conn = get_connection(db)
@@ -175,9 +176,10 @@ class TestCmdScan:
             "--config", str(cfg), "scan", "--repo", "nonexistent",
             "--no-snapshots",
         ])
-        assert result == 0
+        assert result == 1
         out = capsys.readouterr().out
         assert "not found in config" in out
+        assert "Configured repositories:" in out
 
 
 # ===================================================================

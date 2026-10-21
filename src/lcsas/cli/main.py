@@ -1316,12 +1316,22 @@ def cmd_scan(args: argparse.Namespace) -> int:
         repo_filter = set(args.repo) if args.repo else None
         total_new = 0
         total_scanned = 0
+        repos_scanned = 0
+        repos_unregistered: list[str] = []
+        snapshot_failures: list[str] = []
 
-        # Warn about unknown repo names
+        # An unknown --repo name is a typo, not a skip: scanning the rest and
+        # exiting 0 hid it (#516).
         if repo_filter:
             unknown = repo_filter - set(config.repositories.keys())
-            for name in sorted(unknown):
-                logger.warning(f"repository '{name}' not found in config, skipping.")
+            if unknown:
+                for name in sorted(unknown):
+                    logger.error(f"repository '{name}' not found in config.")
+                logger.error(
+                    "Configured repositories: "
+                    f"{', '.join(sorted(config.repositories)) or '(none)'}"
+                )
+                return 1
 
         for repo_name, repo_cfg in config.repositories.items():
             if repo_filter and repo_name not in repo_filter:
@@ -1333,12 +1343,14 @@ def cmd_scan(args: argparse.Namespace) -> int:
                     f"repository '{repo_name}' not registered in DB "
                     f"(run 'repo add' first), skipping."
                 )
+                repos_unregistered.append(repo_name)
                 continue
 
             mirror_path = repo_cfg.mirror_path
             scan_result = scan_mirror_packs(mirror_path)
             packs_on_disk = scan_result.packs
             total_scanned += len(packs_on_disk)
+            repos_scanned += 1
 
             analyzer = DeltaAnalyzer(conn, packs_on_disk, db_repo_id)
             new_packs = analyzer.register_new_packs()
@@ -1431,6 +1443,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                     logger.warning(
                         f"  {repo_name}: snapshot listing failed: {exc}"
                     )
+                    snapshot_failures.append(repo_name)
                     continue
                 db_snaps = [
                     Snapshot(
@@ -1452,8 +1465,20 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
         summary = get_archive_status_summary(conn)
 
+    # Count what was scanned, not what is configured (#516).
+    skipped = ""
+    if repos_unregistered:
+        skipped = (f" ({len(repos_unregistered)} skipped, not registered: "
+                   f"{', '.join(repos_unregistered)})")
     logger.info(f"\nTotal scanned: {total_scanned} packs across "
-               f"{len(config.repositories)} repos")
+               f"{repos_scanned} repo(s){skipped}")
+    if snapshot_failures:
+        # Pack registration, the scan's job, succeeded, so this stays a
+        # warning; but say so at the end, where it is read.
+        logger.warning(
+            f"Snapshot listing failed for: {', '.join(snapshot_failures)} "
+            "(packs were still registered; see the warnings above)."
+        )
     logger.info(f"New packs registered: {total_new}")
     logger.info(f"Archive: {summary['total']} total, "
                f"{summary['archived']} archived, "
