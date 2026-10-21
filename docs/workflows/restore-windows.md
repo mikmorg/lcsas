@@ -228,23 +228,26 @@ data discs through the same drive.
    (`recovery/scripts/restore.bat:53`-`56`).
 4. The bat finds the recovery root on the disc for both copies of the
    script (`..` from `recovery\scripts\restore.bat`, `recovery\` from
-   the disc-root `restore.bat`) (`recovery/scripts/restore.bat:62`-`71`),
+   the disc-root `restore.bat`) (`recovery/scripts/restore.bat:68`-`77`),
    copies itself with `copy /Y "%~f0"` and mirrors that root's `bin\`
    tree with `robocopy` (preferred — handles long paths), falling back
    to `xcopy /E /I /Y /Q` if `robocopy` is absent; a `catalog.db` beside
-   `bin\` is copied too (`recovery/scripts/restore.bat:75`-`84`). If no
+   `bin\` is copied too (`recovery/scripts/restore.bat:81`-`90`). If no
    `.exe` reached the copy it removes the copy, says so, and stays on
    the disc (the restore still works, but the disc cannot be ejected
-   until it finishes) (`recovery/scripts/restore.bat:89`-`95`).
+   until it finishes) (`recovery/scripts/restore.bat:95`-`101`).
 5. The user sees `[lcsas-restore] copied recovery files to %RAMDIR%` /
    `you may eject the recovery disc when the binary prompts for a data disc.`
-   (`recovery/scripts/restore.bat:116`-`118`). The script captures the
-   meta-disc drive letter into `LCSAS_RELOCATED` (e.g. `D:\`), `cd`s
-   out of the disc to `%SystemDrive%\` so the new CMD does not inherit
-   the disc cwd, and `call`s the relocated `restore.bat` with the same
-   args. The `call` and the `exit /b` that returns its exit code share
-   one line, so nothing more is read from the disc after the relocated
-   copy finishes (`recovery/scripts/restore.bat:121`-`133`).
+   (`recovery/scripts/restore.bat:122`-`124`). One line then ends the
+   copy on the disc with `(goto) 2>nul`, `cd`s to `%SystemDrive%\` (so
+   the relocated copy does not hold the disc as its cwd), sets
+   `LCSAS_RELOCATED` to the meta-disc drive letter (e.g. `D:\`) and
+   `call`s the relocated `restore.bat` with the same args
+   (`recovery/scripts/restore.bat:137`). Nothing is read from the disc
+   after that, so ejecting it cannot break the end of the run, and the
+   relocated copy's exit code is the script's. The relocated copy takes
+   `LCSAS_RELOCATED` into its own `setlocal` scope and out of the
+   caller's environment (`recovery/scripts/restore.bat:33`).
 6. The relocated copy runs everything from Workflow A steps 5-10. Now
    the meta-disc has no file handles outstanding, so the user can
    eject it when prompted and load the first data disc into the same
@@ -312,10 +315,13 @@ surfaced the first item):
   to remove it; it also prints `Access is denied.` once, from the
   writability probe on the read-only disc. The password file is deleted.
 - (Fixed, #532) **After the meta disc was ejected,** the restore completed
-  and was byte-exact, but the outer `cmd` then read its next line,
-  `exit /b %ERRORLEVEL%`, from the ejected disc: it printed `The system
-  cannot find the path specified.` twice after the final "Press any key"
-  and exited 1 although the recovery succeeded.
+  and was byte-exact, but the copy on the disc was still a running batch
+  file: when the `call` returned, `cmd` went back to it on the ejected
+  disc, printed `The system cannot find the path specified.` after the
+  final "Press any key" and exited 1 although the recovery succeeded.
+  Putting `exit /b` on the same line or in a `( )` block does not help
+  (measured on `windows-latest`); ending the disc copy with `(goto) 2>nul`
+  before the `call` does.
 
 Gaps: no test for `%TEMP%` exhaustion or for the `robocopy`/`xcopy`
 fallback; the eject leg uses `Dismount-DiskImage`, which detaches the image

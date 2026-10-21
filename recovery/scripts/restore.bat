@@ -24,7 +24,13 @@ REM bin\<arch>\lcsas-keyshare.exe -- see recovery/docs/
 REM RECOVER_WINDOWS.txt, "KEY SHARES (SPLIT PASSWORDS)".
 REM ====================================================================
 
-setlocal enabledelayedexpansion
+REM setlocal, taking LCSAS_RELOCATED (set by the copy on the disc when it
+REM relaunches this one, see the end of the guard below) into the local
+REM scope and out of the caller's environment.  The relaunch runs after
+REM the disc copy has ended, so it sets the variable in the caller's
+REM own environment; without this a later run from the same prompt
+REM would think it had already been relocated.
+for %%R in ("%LCSAS_RELOCATED%") do (set "LCSAS_RELOCATED=" & setlocal enabledelayedexpansion & set "LCSAS_RELOCATED=%%~R")
 
 REM ----- Single-drive guard: relocate to RAM before continuing ------
 REM
@@ -117,20 +123,18 @@ echo [lcsas-restore] copied recovery files to %RAMDIR%
 echo [lcsas-restore] you may eject the recovery disc when the binary
 echo                 prompts for a data disc.
 
-REM Capture the disc's drive letter (everything up to and including ":\").
-set "LCSAS_RELOCATED=%~d0\"
-
-REM cd out of the disc so the new cmd does not inherit it.
-cd /d %SystemDrive%\ >nul 2>nul
-
-REM Re-launch the relocated script.  The call and the exit MUST share
-REM one line: cmd reads a batch file a line at a time, from the disc, so
-REM a separate "exit /b" line would be read after the call returns --
-REM by then the heir may have ejected the disc, and cmd prints "The
-REM system cannot find the path specified." and exits 1 after a good
-REM restore (#532).  !ERRORLEVEL!, not %%ERRORLEVEL%%: the whole line is
-REM expanded before the call runs.
-call "%RAMDIR%\recovery\scripts\restore.bat" %* & exit /b !ERRORLEVEL!
+REM Re-launch the relocated copy, and end THIS one first.  While a batch
+REM file is running, cmd goes back to it when a `call` returns -- even
+REM with `exit /b` on the same line -- and by then the heir has ejected
+REM the disc it is on: "The system cannot find the path specified." and
+REM exit 1 after a good restore (#532).  `(goto) 2>nul` ends this batch
+REM at once; the rest of the line, already read and %%-expanded, still
+REM runs in the caller's context, and the exit code is the relocated
+REM copy's.  Ending the batch also undoes setlocal, which puts the cwd
+REM back on the disc (blocking Explorer's Eject), so cd off it here, and
+REM set LCSAS_RELOCATED (the disc's drive letter, e.g. "E:\") here too.
+REM Measured on windows-latest with every other placement of the exit.
+(goto) 2>nul & cd /d %SystemDrive%\ & set "LCSAS_RELOCATED=%~d0\" & call "%RAMDIR%\recovery\scripts\restore.bat" %*
 
 :after_relocate
 REM ----- Auto-discover recovery root from this script's location ----

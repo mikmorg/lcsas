@@ -178,17 +178,35 @@ def test_restore_bat_relocation_copies_bin_for_both_script_locations():
 
 
 def test_restore_bat_relaunch_reads_nothing_more_from_the_disc():
-    """#532: cmd reads a batch file one line at a time.  With the exit on
-    the line after `call`, the outer instance read it from the meta disc
-    after the relocated copy returned; the heir had ejected that disc, so
-    a good restore ended in "The system cannot find the path specified."
-    and exit 1.  The call and the exit must share one line, and the exit
-    code must be read after the call runs (!ERRORLEVEL!, not %ERRORLEVEL%).
+    """#532: while a batch file runs, cmd goes back to it when a `call`
+    returns, even with `exit /b` on the same line or in a ( ) block, so
+    after the heir ejected the meta disc a good restore ended in "The
+    system cannot find the path specified." and exit 1.  Measured on
+    windows-latest: only ending the disc copy with `(goto) 2>nul` BEFORE
+    the call avoids it and keeps the relocated copy's exit code.  Ending
+    the batch undoes setlocal (the cwd goes back to the disc), so the cd
+    and the LCSAS_RELOCATED sentinel belong on the same line.
     """
     block = _relocation_block(RESTORE_BAT.read_text())
-    calls = [
-        line.strip() for line in block.splitlines()
-        if line.strip().startswith('call "%RAMDIR%\\recovery\\scripts\\restore.bat"')
-    ]
-    assert len(calls) == 1, calls
-    assert calls[0].endswith("%* & exit /b !ERRORLEVEL!"), calls[0]
+    code = [ln.strip() for ln in block.splitlines() if ln.strip() and not ln.strip().startswith("REM")]
+    assert code[-1] == (
+        '(goto) 2>nul & cd /d %SystemDrive%\\ & set "LCSAS_RELOCATED=%~d0\\" '
+        '& call "%RAMDIR%\\recovery\\scripts\\restore.bat" %*'
+    ), code[-1]
+    assert not any(ln.startswith('call "%RAMDIR%') for ln in code), code
+
+
+def test_restore_bat_takes_the_relocation_sentinel_out_of_the_callers_env():
+    """#532: the relaunch sets LCSAS_RELOCATED in the CALLER's environment
+    (the disc copy has already ended).  The relocated copy must take it
+    into its own setlocal scope and clear it outside, or a second run from
+    the same prompt would skip relocation."""
+    content = RESTORE_BAT.read_text()
+    code = [ln.strip() for ln in content.splitlines() if ln.strip() and not ln.strip().startswith(("REM", "@"))]
+    assert code[0] == (
+        'for %%R in ("%LCSAS_RELOCATED%") do (set "LCSAS_RELOCATED=" & '
+        'setlocal enabledelayedexpansion & set "LCSAS_RELOCATED=%%~R")'
+    ), code[0]
+    assert "setlocal enabledelayedexpansion" not in code[1:], (
+        "a second setlocal would bring the caller's LCSAS_RELOCATED back"
+    )
