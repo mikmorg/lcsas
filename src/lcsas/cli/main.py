@@ -1694,15 +1694,31 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_config_check(args: argparse.Namespace) -> int:
     """Validate a TOML configuration file."""
-    from lcsas.config.settings import validate_config
+    import tomllib
+
+    from lcsas.config.settings import unknown_toml_keys, validate_config
 
     config = _load_config_opt(args)
     if config is None:
         logger.error("--config is required for config check.")
         return 1
     errors = validate_config(config)
+    # Every other command only warns about an unknown key, so a typo never
+    # blocks it; the check is where a typo must not read as "valid" (#515).
+    # load_config has already printed each one as a warning.
+    with open(args.config, "rb") as f:
+        if unknown_toml_keys(tomllib.load(f)):
+            errors.append(
+                "unknown sections or keys (listed above): fix the typo or "
+                "remove them"
+            )
 
     if not errors:
+        if not config.repositories:
+            logger.warning(
+                "No repositories configured yet: add a [repos.<name>] "
+                "section with a mirror_path."
+            )
         logger.info("Configuration is valid.")
         return 0
 

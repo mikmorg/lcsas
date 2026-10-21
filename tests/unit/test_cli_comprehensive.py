@@ -229,6 +229,53 @@ database = "/nonexistent/db/archive.db"
         out = capsys.readouterr().out
         assert "required" in out.lower()
 
+    # #515: a typo must not read as "valid".
+    def test_section_typo_fails_the_check(self, tmp_path, capsys):
+        cfg = _write_config(tmp_path, f"""
+[repo.family]
+mirror_path = "{tmp_path / 'mirror'}"
+""")
+        result = main(["--config", str(cfg), "config", "check"])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Unknown config sections" in out
+        assert "valid" not in out.lower().replace("invalid", "")
+
+    def test_repo_key_typo_fails_the_check(self, tmp_path, capsys):
+        cfg = _write_config(tmp_path, f"""
+[repos.family]
+mirror_path = "{tmp_path / 'mirror'}"
+passwrd_file = "/x"
+""")
+        assert main(["--config", str(cfg), "config", "check"]) == 1
+        out = capsys.readouterr().out
+        assert "Unknown [repos.family] keys" in out
+        assert out.count("Unknown [repos.family] keys") == 1
+
+    def test_missing_mirror_path_is_named(self, tmp_path, capsys):
+        """It used to be a bare KeyError: "Unexpected error: 'mirror_path'"."""
+        cfg = _write_config(tmp_path, """
+[repos.family]
+mirrorpath = "/x"
+""")
+        assert main(["--config", str(cfg), "config", "check"]) != 0
+        out = capsys.readouterr().out
+        assert "[repos.family] has no mirror_path" in out
+        assert "Unexpected error" not in out
+
+    def test_repo_that_is_not_a_table_is_named(self, tmp_path, capsys):
+        cfg = _write_config(tmp_path, """
+[repos]
+family = "/x"
+""")
+        assert main(["--config", str(cfg), "config", "check"]) != 0
+        assert "[repos.family] must be a table" in capsys.readouterr().out
+
+    def test_no_repos_is_valid_but_noted(self, tmp_path, capsys):
+        cfg = _write_config(tmp_path)
+        assert main(["--config", str(cfg), "config", "check"]) == 0
+        assert "No repositories configured yet" in capsys.readouterr().out
+
     def test_bad_ecc_redundancy(self, tmp_path, capsys):
         cfg = _write_config(tmp_path, "ecc_redundancy_pct = 200")
         result = main(["--config", str(cfg), "config", "check"])
