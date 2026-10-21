@@ -180,7 +180,12 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   binary as the primary path) holds on macOS, not just on the build
   host (see
   [`CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q6).
-- **Boot directly from the meta-disc:** Mac firmware doesn't boot ISO
+  This is no longer a gap: `.github/workflows/macos-tier1.yml` executes
+  the committed Mach-O binaries on `macos-14` (Apple Silicon) and
+  `macos-15-intel` (Intel) via
+  `tests/recovery_hardening/test_tier1_macos_native.py`.
+- **Boot directly from the meta-disc (intentional: no LCSAS disc is
+  bootable, BOOT-01):** Mac firmware doesn't boot ISO
   9660 on USB optical drives well.  If your Mac is fully bricked,
   recovery from this meta-disc is *not* the path — use macOS Recovery
   Mode or a target-disk-mode dump first, then run the meta-disc
@@ -193,12 +198,15 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   (`macos-tier1.yml` covers list-snapshots, a fixture restore, a
   wrong-password failure and a keyshare combine), so for a first run
   the safe path is still to mount all discs first (Finder will hold
-  them all in `/Volumes`) and run the non-interactive restore.  The
+  them all in `/Volumes`) and run the non-interactive restore.  (Still
+  open: the swap prompt is exercised on Linux, not on macOS.)  The
   `INSERT DISC:` box is the older bash flow in `restore_legacy.sh`;
   `tools/restore_single_drive.py` on the disc (source:
   `src/lcsas/meta/restore_single_drive.py`) only builds the pick list
   and ingests packs, and has no prompt of its own.
-- **Quarantine attribute:** macOS may attach `com.apple.quarantine` to
+- **Quarantine attribute (intentional: OS behaviour, with a documented
+  workaround; the heir-docs half is #490):** macOS may attach
+  `com.apple.quarantine` to
   files copied off an optical disc.  Restored files inherit it.
   Strip with `xattr -rd com.apple.quarantine ~/Restored` if needed.
 
@@ -221,6 +229,6 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
 | Intel Mac target selection | [covered] | same file — Darwin + x86_64 → x86_64-apple-darwin |
 | SHA-256 portable verifier | [covered] | `tests/unit/test_restore_executor.py::TestVerifyIsoSha256` (5 tests) |
 | verify_iso ECC→SHA fallback | [covered] | `tests/unit/test_restore_executor.py::TestVerifyIsoFallback` (4 tests) |
-| Full end-to-end macOS restore | [gap] | Requires a macOS CI runner with optical hardware; not currently in CI |
-| `hdiutil` mount flow | [gap] | Manual operator step, not automated |
+| Full end-to-end macOS restore (`restore.sh` journey) | [gap] | Binary-level restore is covered (`macos-tier1.yml`: list-snapshots, byte-identical fixture restore, wrong-password failure, keyshare combine), but nothing runs `restore.sh` on a macOS runner. The old reason given here ("requires optical hardware") was wrong: a hosted macOS runner can `hdiutil attach` a fixture ISO, as `windows-e2e.yml` does on `windows-latest`. Open; the manual real-Mac drill is #475 |
+| `hdiutil` mount flow | [gap] | Not automated (same gap as the row above); the manual real-Mac drill is #475 |
 | Apple Silicon binary execution | [covered] | `.github/workflows/macos-tier1.yml` runs the committed Mach-O binaries via `tests/recovery_hardening/test_tier1_macos_native.py` on `macos-14` (arm64) and `macos-15-intel` (x86_64) |
