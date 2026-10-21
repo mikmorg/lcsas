@@ -1222,7 +1222,7 @@ fuzz-smoke: fuzz-json-smoke fuzz-b64-smoke fuzz-zstd-smoke fuzz-path-smoke fuzz-
 # NOT wired into the default `gate` — run explicitly:
 #
 #   make -C recovery audit-gate            # default threshold (88%, see THRESHOLD below)
-#   make -C recovery audit-gate THRESHOLD=95   # aspirational 95% target
+#   make -C recovery audit-gate THRESHOLD=95   # optional stricter run (untracked)
 #
 # Steps (in order):
 #   1. coverage-c    — gcov line coverage report (~2 min)
@@ -1236,10 +1236,11 @@ fuzz-smoke: fuzz-json-smoke fuzz-b64-smoke fuzz-zstd-smoke fuzz-path-smoke fuzz-
 # Threshold rationale:
 #   88%  = regression floor (the THRESHOLD default below); the measured
 #          figure and the CI delta are in STATUS_LEDGER.md "Coverage posture"
-#   95%  = aspirational target (issue #162).  The malloc-failure branches
-#          are now exercised by fault injection (`make fault-inject`,
-#          issue #165, closed); what remains is the "Path forward" list
-#          in docs/EXEMPTIONS.md (the target itself: issue #488).
+#   95%  = an optional stricter local run, not a tracked goal (#488).
+#          What is enforced is the floor above plus the exact-match
+#          EXEMPTIONS.md fence: every uncovered line is listed with its
+#          reason, and every listed line must stay uncovered.  That is a
+#          stronger contract than any percentage.
 #
 THRESHOLD ?= 88
 

@@ -35,7 +35,7 @@ make -C recovery fuzz-smoke           # all eight × 60 s (~8 min)
 
 # Comprehensive audit gate (opt-in — NOT part of make gate):
 make -C recovery audit-gate           # coverage + sanitize + fuzz-smoke (~10 min)
-make -C recovery audit-gate THRESHOLD=95   # aspirational 95% target
+make -C recovery audit-gate THRESHOLD=95   # optional stricter run (untracked; #488)
 # Equivalent from repo root:
 make audit-gate
 ```
