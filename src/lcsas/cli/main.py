@@ -10,7 +10,7 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from lcsas import __version__
 from lcsas.log import get_logger, setup_logging
@@ -46,9 +46,37 @@ def _validate_config_or_exit(config: object, skip_staging: bool = False) -> bool
     return True
 
 
+# Options only the top-level parser knows; `lcsas scan --config x.toml`
+# is an argparse "unrecognized arguments" error.
+_TOP_LEVEL_OPTIONS = ("--config", "--db", "--lock-timeout", "--verbose", "-v")
+
+
+class _LcsasArgumentParser(argparse.ArgumentParser):
+    """Says where a misplaced top-level option goes (#517).
+
+    argparse reports ``lcsas scan --config x.toml`` as a bare
+    "unrecognized arguments: --config x.toml", which never says the flag
+    belongs before the subcommand.  The exit stays argparse's (status 2,
+    nothing run); only the message gains the hint.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        if message.startswith("unrecognized arguments:"):
+            given = {tok.split("=", 1)[0] for tok in message.split(":", 1)[1].split()}
+            misplaced = [opt for opt in _TOP_LEVEL_OPTIONS if opt in given]
+            if misplaced:
+                opts = " ".join(misplaced)
+                message += (
+                    f"\n{opts}: top-level option(s); put them before the "
+                    f"subcommand, e.g. 'lcsas {misplaced[0]} ... scan', "
+                    f"not 'lcsas scan {misplaced[0]} ...'"
+                )
+        super().error(message)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with all subcommands."""
-    parser = argparse.ArgumentParser(
+    parser = _LcsasArgumentParser(
         prog="lcsas",
         description="Linux Cold Storage Archival Suite — "
                     "orchestrates Rustic, Xorriso, and DVDisaster for optical archival.",

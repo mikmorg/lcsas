@@ -7,9 +7,9 @@ working form is ``lcsas --config foo.toml scan``.  Operators naturally write
 ``unrecognized arguments: --config foo.toml`` that never says the flag belongs
 before the subcommand ("Still open: usability only").
 
-These tests pin today's behaviour (a hard, early argparse exit 2 -- never a
-silent fallback to another catalog, never a half-run command) and carry the
-helpful behaviour as a strict xfail so that fixing the message flips it loudly.
+These tests pin the behaviour: a hard, early argparse exit 2 (never a silent
+fallback to another catalog, never a half-run command) whose message now says
+the flag is a top-level option that goes before the subcommand.
 """
 
 from __future__ import annotations
@@ -65,16 +65,7 @@ def test_config_before_the_subcommand_is_honoured(tmp_path, capsys, monkeypatch)
     assert "--config path does not exist" in out.out + out.err
 
 
-@pytest.mark.parametrize("argv", [_MISPLACED[0], _MISPLACED[2]])
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "open usability gap recorded in docs/workflows/init-and-config.md "
-        "(Notes & gaps) and #517: argparse's 'unrecognized arguments: --config "
-        "x.toml' does not say --config is a top-level flag that goes BEFORE "
-        "the subcommand"
-    ),
-)
+@pytest.mark.parametrize("argv", _MISPLACED)
 def test_error_tells_the_operator_config_goes_before_the_subcommand(
     argv, capsys, tmp_path, monkeypatch,
 ):
@@ -87,3 +78,23 @@ def test_error_tells_the_operator_config_goes_before_the_subcommand(
         err,
         re.IGNORECASE,
     ), err
+
+
+def test_misplaced_db_gets_the_same_hint(capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    code, err = _run_expecting_exit(["status", "--db", "x.db"], capsys)
+
+    assert code == 2
+    assert "--db: top-level option(s); put them before the subcommand" in err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_other_unrecognized_arguments_get_no_hint(capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+    code, err = _run_expecting_exit(["scan", "--no-such-flag"], capsys)
+
+    assert code == 2
+    assert "unrecognized arguments: --no-such-flag" in err
+    assert "top-level option" not in err
