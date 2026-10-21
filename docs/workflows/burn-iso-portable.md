@@ -411,8 +411,7 @@ produced by a live burn pipeline.
   asserted by `TestCmdCatalogImport::test_import_reburn_only_adds_copy`).
 - Bad / malformed / orphan receipts are skipped with warnings; the
   command still returns `0` in that case (the successful ones are
-  committed), except for the three shapes that abort the batch (bug #522,
-  see Gaps in coverage). It returns a **non-zero** exit code only when a receipt
+  committed). It returns a **non-zero** exit code only when a receipt
   is rejected for an `iso_sha256` mismatch against a prior
   `BURN_RECEIPT_IMPORTED` event (`cmd_catalog_import`).
 
@@ -460,24 +459,20 @@ behaviour.
   import both; an all-bad batch exits 0 and changes nothing; and an
   `iso_sha256` mismatch is the one non-zero exit (`rc == 1`) yet does not
   stop the rest of the batch (`::test_hash_mismatch_exits_nonzero_but_does_not_stop_the_batch`).
+- `tests/unit/test_import_receipts_errors.py::TestMalformedReceiptFile` also
+  pins the shapes that used to abort the whole batch (#522): a file that
+  is not valid UTF-8 (UTF-16 from a PowerShell `>`, binary garbage), JSON
+  that is `null`, a number or `true`, an `iso_size_bytes` that is not a
+  non-negative integer (which also must not leave a stray `locations`
+  row), and a non-string or blank `volume_label` / `location` are each
+  skipped and the later receipts still import
+  (`::test_undecodable_file_is_skipped_and_later_receipts_still_import`,
+  `::test_scalar_json_is_skipped_and_later_receipts_still_import`,
+  `::test_invalid_size_is_skipped_and_writes_nothing`,
+  `::test_non_string_or_blank_label_or_location_is_skipped`).
 
 **Gaps in coverage:**
 
-- Three bad-receipt shapes still abort the whole batch instead of being
-  skipped with a warning (`Unexpected error`, exit 1), because
-  `cmd_catalog_import` catches only `JSONDecodeError` and `OSError` and does
-  not validate types. Each is pinned in
-  `tests/unit/test_import_receipts_errors.py::TestMalformedReceiptFile` by a
-  strict xfail — bug #522:
-  - a file that is not valid UTF-8 (UTF-16 from a PowerShell `>`, binary
-    garbage) raises `UnicodeDecodeError`:
-    `::test_undecodable_file_is_skipped_and_later_receipts_still_import`;
-  - a receipt whose JSON is `null`, a number or `true` raises `TypeError` in
-    the required-key check (unlike `[]` and a bare string, which are
-    skipped): `::test_scalar_json_is_skipped_and_later_receipts_still_import`;
-  - a non-numeric `iso_size_bytes` raises `ValueError`, after
-    `ensure_location()` has already committed a stray `locations` row:
-    `::test_non_numeric_size_is_skipped_and_writes_nothing`.
 - (Resolved) `iso_sha256` and `iso_size_bytes` are persisted onto the
   `volume_copies` row, and `iso_sha256`, `session_id`, `device`, and
   `pack_ids` are persisted as a `BURN_RECEIPT_IMPORTED` audit event
@@ -594,17 +589,16 @@ and how the code responds today.
 
 ### Receipt JSON is corrupt or unreadable
 
-- **Symptom:** Truncated, empty or non-JSON file, missing path, permission
-  denied.
-- **Behaviour:** `JSONDecodeError` / `OSError` are caught
-  per-receipt; the file is skipped with a warning and the rest of the
-  batch continues (`cmd_catalog_import`; pinned by
+- **Symptom:** Truncated file, encoding error (e.g. UTF-16 from a
+  PowerShell `>` redirect), permission denied, JSON that is not an
+  object, a non-string or blank `volume_label` / `location`, or an
+  `iso_size_bytes` that is not a non-negative integer.
+- **Behaviour:** each of these is caught per receipt (`ValueError`,
+  which includes `JSONDecodeError` and `UnicodeDecodeError`, plus
+  `OSError` and the field checks). The file is skipped with a warning
+  and writes nothing, not even its location row. The rest of the batch
+  continues (`cmd_catalog_import`, #522; pinned by
   `tests/unit/test_import_receipts_errors.py::TestMalformedReceiptFile`).
-- **Known bug (#522):** a file that is not valid UTF-8 (UTF-16 from a
-  PowerShell `>`, binary garbage) is *not* skipped: it raises
-  `UnicodeDecodeError`, which escapes as `Unexpected error` (exit 1) and
-  aborts the rest of the batch; pinned by a strict xfail (see Gaps in
-  coverage under Receipt ingestion).
 - **Recovery:** Repair the file, or re-export it on B if the
   filesystem there is intact.
 

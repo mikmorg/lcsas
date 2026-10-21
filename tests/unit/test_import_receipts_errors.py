@@ -179,8 +179,14 @@ class TestMalformedReceiptFile:
         assert "Failed to read receipt" in capsys.readouterr().out
         assert _dump(db) == before
 
-    @pytest.mark.parametrize("body", ["[]", '"just a string"', "{}"])
-    def test_json_that_is_not_a_receipt_object_is_skipped(self, env, capsys, body):
+    @pytest.mark.parametrize(
+        ("body", "message"),
+        [("[]", "not a JSON object"), ('"just a string"', "not a JSON object"),
+         ("{}", "missing keys")],
+    )
+    def test_json_that_is_not_a_receipt_object_is_skipped(
+        self, env, capsys, body, message
+    ):
         tmp_path, cfg, db = env
         before = _dump(db)
 
@@ -188,19 +194,9 @@ class TestMalformedReceiptFile:
 
         out = capsys.readouterr().out
         assert rc == 0
-        assert "missing keys" in out
+        assert message in out
         assert _dump(db) == before
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: cmd_catalog_import only catches JSONDecodeError/OSError. A "
-            "receipt that is not valid UTF-8 (UTF-16 from PowerShell '>', binary "
-            "garbage) raises UnicodeDecodeError, which escapes as 'Unexpected "
-            "error' (rc 1) and aborts the whole batch; burn-iso-portable.md lists "
-            "'encoding error' among the skipped-with-a-warning cases. See #522."
-        ),
-    )
     @pytest.mark.parametrize(
         "raw",
         [b"\xff\xfe\x00\x01\x80garbage", '{"volume_label": "VOL_GOOD"}'.encode("utf-16")],
@@ -219,16 +215,6 @@ class TestMalformedReceiptFile:
         assert "Unexpected error" not in out
         _assert_imported(db, "VOL_GOOD", "Offsite")
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: the required-key check does `k not in receipt` on whatever "
-            "json.load returned, so a receipt file whose JSON is null / a number "
-            "/ true raises TypeError -> 'Unexpected error' (rc 1) and aborts the "
-            "batch, instead of being skipped like '[]' and '\"str\"' are. "
-            "See #522."
-        ),
-    )
     @pytest.mark.parametrize("body", ["null", "42", "true"])
     def test_scalar_json_is_skipped_and_later_receipts_still_import(
         self, env, capsys, body
@@ -243,29 +229,64 @@ class TestMalformedReceiptFile:
         assert "Unexpected error" not in out
         _assert_imported(db, "VOL_GOOD", "Offsite")
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "BUG: int(receipt['iso_size_bytes']) raises ValueError on a "
-            "non-numeric size -> 'Unexpected error' (rc 1), aborting the batch; "
-            "ensure_location() has already committed, leaving a stray locations "
-            "row. See #522."
-        ),
-    )
-    def test_non_numeric_size_is_skipped_and_writes_nothing(self, env, capsys):
+    @pytest.mark.parametrize("size", ["abc", -5, True, [2048], {"n": 1}, "2.5"])
+    def test_invalid_size_is_skipped_and_writes_nothing(self, env, capsys, size):
+        """#522: the bad receipt writes nothing -- not even its location row."""
         tmp_path, cfg, db = env
         before = _dump(db)
         bad = _receipt(tmp_path, "badsize.json",
-                       {**_good("VOL_OTHER", "Vault_Q"), "iso_size_bytes": "abc"})
+                       {**_good("VOL_OTHER", "Vault_Q"), "iso_size_bytes": size})
         good = _receipt(tmp_path, "good.json", _good("VOL_GOOD"))
 
-        _run(cfg, bad, good)
+        assert _run(cfg, bad, good) == 0
 
         out = capsys.readouterr().out
         assert "Unexpected error" not in out
+        assert "invalid iso_size_bytes" in out
         assert not [row for row in _dump(db)["locations"] if "Vault_Q" in row]
         assert _dump(db)["volume_copies"] != before["volume_copies"]
         _assert_imported(db, "VOL_GOOD", "Offsite")
+        conn = get_connection(db)
+        try:
+            other = get_volume_by_label(conn, "VOL_OTHER")
+            assert other is not None
+            assert get_copies_for_volume(conn, other.volume_id) == []
+        finally:
+            conn.close()
+
+    def test_digit_string_size_is_recorded_as_an_integer(self, env, capsys):
+        tmp_path, cfg, db = env
+        rc = _run(cfg, _receipt(tmp_path, "r.json",
+                                {**_good("VOL_GOOD"), "iso_size_bytes": "4096"}))
+
+        assert rc == 0
+        conn = get_connection(db)
+        try:
+            vol = get_volume_by_label(conn, "VOL_GOOD")
+            assert vol is not None
+            sizes = [c.iso_size_bytes for c in get_copies_for_volume(conn, vol.volume_id)]
+        finally:
+            conn.close()
+        assert sizes == [4096]
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("volume_label", 42), ("volume_label", ""), ("location", ["Offsite"]),
+         ("location", "   "), ("location", None)],
+    )
+    def test_non_string_or_blank_label_or_location_is_skipped(
+        self, env, capsys, field, value
+    ):
+        tmp_path, cfg, db = env
+        before = _dump(db)
+        bad = _receipt(tmp_path, "bad.json", {**_good("VOL_OTHER"), field: value})
+
+        assert _run(cfg, bad) == 0
+
+        out = capsys.readouterr().out
+        assert "Unexpected error" not in out
+        assert f"invalid {field}" in out
+        assert _dump(db) == before
 
 
 class TestMissingKeys:
