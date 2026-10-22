@@ -283,7 +283,8 @@ assembling required packs into a local cache and running
     (currently falls through to "pack not found" then alternate
     retry — the behaviour is correct but not regression-tested).
   - No test verifies the `ShutdownManager` cleans the temp cache on
-    SIGINT mid-ingest.
+    SIGINT mid-ingest (`ShutdownManager` itself is covered by
+    `tests/unit/test_shutdown.py`; the `restore exec` wiring is not).
   - No CLI-level test covers the `select_ecc_runner()` wiring inside
     `restore exec` (the selector itself is unit-tested in
     `tests/unit/test_dvdisaster.py`).
@@ -355,10 +356,14 @@ every required pack; ingestion logs `ingested N packs` per volume.
 - `tests/unit/test_multi_copy_restore.py::test_full_restore_workflow`
   exercises the multi-volume directory layout.
 
-  **Gaps:** No automated test for read-only NFS/SMB mounts; no test for
-  the "single drive, swap discs" pattern (would require a TTY
-  fixture); no test for handling auto-unmount when `udisks` releases a
-  disc mid-ingest.
+  **Gaps:** No automated test for read-only NFS/SMB mounts or for
+  `udisks` auto-unmounting a disc mid-ingest (intentional: both depend on
+  host mount infrastructure a CI container does not have). The "single
+  drive, swap discs" pattern is covered for the `restore.sh` path by
+  `tests/integration/test_interactive_restore.py` (a PTY plus loop-device
+  swaps; root, `rustic` and `xorriso` required) and for `restore exec`'s
+  alternate-disc prompts by the mocked-`input()` tests in
+  `tests/unit/test_cli_restore.py`.
 
 **Source refs:**
 - Ingest entry: `RestoreExecutor.ingest_volume()` in
@@ -426,12 +431,13 @@ failing rustic invocation.
   file and rely on the existence check.
 
   **Gaps:**
-  - No test asserts that the masked-stderr path is actually applied
-    (the masking code is exercised only indirectly when rustic
-    fails).
+  - The wrapper-level masking is covered:
+    `tests/unit/test_rustic_wrapper.py::TestPasswordPathMasking::test_exception_masks_password_path_in_stderr`
+    asserts the password path is masked in the raised exception. No
+    CLI-level test asserts it end to end through `restore exec`.
   - No test covers a `LCSAS_PASSWORD` env var because the feature does
     not exist — if added it would need both a wrapper change and a
-    dedicated test.
+    dedicated test (open product decision, #491).
   - No test rejects a password file with insecure permissions (e.g.
     world-readable `0644`). Today LCSAS just opens it.
 
@@ -503,7 +509,8 @@ rustic-decompression side, not on the disc-ingest side.
 
   **Gaps:**
   - No first-class `--include` / `--path` / `--filter` flag on
-    `lcsas restore exec` — partial restore is a workaround today.
+    `lcsas restore exec` — partial restore is a workaround today (open
+    product decision, #491).
   - No test exercising the "rustic-against-LCSAS-cache" pattern.
 
 **Source refs:**
@@ -594,8 +601,12 @@ readable.
   contract.
 
   **Gaps:**
-  - No test exercises the interactive `skip` keyword followed by
-    alternate-retry as one flow.
+  - The interactive `skip` keyword followed by alternate-retry as one
+    flow is covered by
+    `tests/unit/test_cli_restore.py::TestCmdRestoreExec::test_skip_primary_volume_triggers_alternate_prompt`
+    (RST-07; skipped when `rustic` is not installed), with
+    `::test_final_missing_error_names_volume_labels` covering the
+    all-skipped failure.
   - No test asserts the exact wall-clock behaviour of
     `--volume-dir` when an alternate label's directory is also
     missing — the code logs a warning and falls back to the parent
@@ -631,12 +642,16 @@ readable.
   and the `exec_p.add_argument("--password-file", ..., required=True)`
   declaration in the `restore exec` subparser of `build_parser()`
   ([`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
+  (Open product decision, not a deliberate non-goal: tracked in #491.)
 - **No path-filter flag for partial restore.** Snapshot id and target
   are the only arguments forwarded to rustic
   (`SubprocessRusticRunner.restore()` in
   [`src/lcsas/rustic/wrapper.py`](../../src/lcsas/rustic/wrapper.py)).
   Users must drive rustic directly against the LCSAS-built cache.
-- **ECC verification in `restore exec` needs an ISO file handle.**
+  (Open product decision: tracked in #491.)
+- **ECC verification in `restore exec` needs an ISO file handle
+  (intentional: RS03 verify/repair operates on a raw image, which a bare
+  mounted directory does not provide).**
   The CLI wires `RestoreExecutor(runner,
   ecc_runner=select_ecc_runner())` (FMT-01,
   `cmd_restore_exec()` in
@@ -648,10 +663,13 @@ readable.
   Packs ingested from a bare mounted directory get per-pack SHA-256
   verification only.
 - **Missing-disc + missing-catalog combination** is out of scope here
-  and handled by `lcsas restore standalone` — see
+  (intentional) and handled by `lcsas restore standalone` — see
   [`restore-disc-only.md`](restore-disc-only.md).
 - **No interactive password prompt** (rustic's `--password-command` is
-  not surfaced).
+  not surfaced). (Open product decision: tracked in #491. The
+  `restore.sh` tier-1 path does prompt.)
 - **No regression test for cache cleanup on SIGINT** during ingestion
   (despite the `ShutdownManager` wiring in `cmd_restore_exec()`,
   [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
+  `ShutdownManager` itself is unit-tested (`tests/unit/test_shutdown.py`),
+  but nothing signals a running `restore exec`. (Still open.)

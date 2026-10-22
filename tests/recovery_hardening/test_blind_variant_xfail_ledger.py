@@ -23,8 +23,6 @@ import datetime as dt
 import re
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BLIND_DIR = REPO_ROOT / "tests" / "e2e" / "cdemu_blind_restore"
 XFAIL_LIST = BLIND_DIR / "XFAIL.list"
@@ -106,20 +104,4 @@ def test_run_variant_reads_ledger_not_inline_default() -> None:
     assert bad is None, (
         "run_variant.sh reintroduced a hard-coded inline XFAIL default "
         f"({bad.group(0)!r}); the XFAIL set must come from XFAIL.list"
-    )
-
-
-def test_tier1_missing_is_tracked_against_issue_227() -> None:
-    """The plan's named subject -- tier1-missing -- must be in the ledger
-    tied to issue #227 until a live 15/15 promotion deletes it."""
-    entries = _ledger_entries()
-    matches = [raw for _, raw in entries if raw.split()[0] == "tier1-missing"]
-    if not matches:
-        pytest.skip(
-            "tier1-missing no longer in the ledger -- presumably promoted; "
-            "this guard is intentionally a skip, not a failure, post-promotion"
-        )
-    assert len(matches) == 1, f"duplicate tier1-missing entries: {matches}"
-    assert _ISSUE_RE.search(matches[0]) and "#227" in matches[0], (
-        f"tier1-missing must reference issue #227; got: {matches[0]!r}"
     )

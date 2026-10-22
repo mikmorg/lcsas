@@ -207,10 +207,17 @@ DESTINATION FOLDER NOTES
     typically C:\Users\<you>\Documents\restored.
 
   * If the original archive has more data than you have free disk
-    space, the restore will fail partway through.  Plan ahead -- the
-    summary message at the start of the run includes the recovery
-    root location but does not yet predict total size.  A future
-    version of the tool will add --estimate-size.
+    space, the restore will fail partway through.  restore.bat does
+    not check this for you (restore.sh on macOS/Linux does), so check
+    first.  With a data disc in drive E: (any disc carrying
+    catalog.db), open a Command Prompt at the META disc and run:
+
+        recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe ^
+            --catalog E:\catalog.db --list-pending-packs
+
+    Its last line reads "Total: N packs, X MB across M discs."  Make
+    sure the destination drive has at least X MB free, as shown in
+    File Explorer under "This PC".
 
   * Long paths: Windows historically limited paths to 260 characters.
     Modern Windows 10/11 supports longer paths if enabled in Group

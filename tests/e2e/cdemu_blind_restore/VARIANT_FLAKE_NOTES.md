@@ -128,15 +128,15 @@ improvisation = more verify checks tripped.
 ## Follow-ups from the tier1-tier2-missing investigation
 
 The two production fixes that promoted this variant (PR #285/#286)
-landed; these adjacent observations from the same investigation may
-still be open:
+landed, and so have both adjacent follow-ups from the same
+investigation:
 
-- **`no_bypass_check.py` should strip a leading `python3` / `python`**
-  alongside `sudo|sh|bash|exec` so a direct `python3
-  standalone_restorer.py` invocation is caught as a bypass
-  (PR #235 noted this).
-- **`restore.sh` could capture and echo tier-3 stderr before its own
-  exit** so the operator (and the test agent) sees the `ImportError`
-  instead of a silent session close — now pinned by
-  `tests/recovery_hardening/test_tier3_stderr_capture.py`; confirm the
-  blind path benefits.
+- **`no_bypass_check.py` strips a leading `python3` / `python`**
+  alongside `sudo|sh|bash|exec`, so a direct `python3
+  standalone_restorer.py` invocation is caught as a bypass — done
+  (#241; `WRAPPER_RE` in `no_bypass_check.py`).  The "false PASS"
+  described above is the pre-fix behaviour.
+- **`restore.sh` captures and echoes tier-3 stderr before its own
+  exit**, so the operator (and the test agent) sees the `ImportError`
+  instead of a silent session close — done (#240), pinned by
+  `tests/recovery_hardening/test_tier3_stderr_capture.py`.

@@ -14,7 +14,12 @@ from lcsas.db.repos import (
     register_repo,
     set_repo_status,
 )
-from lcsas.db.snapshots import delete_snapshots_for_repo, upsert_snapshot
+from lcsas.db.snapshots import (
+    delete_blank_snapshots,
+    delete_snapshots_for_repo,
+    get_snapshot,
+    upsert_snapshot,
+)
 
 
 class TestRegisterRepo:
@@ -111,8 +116,24 @@ class TestDeleteSnapshotsForRepo:
                         paths="/b", tags="", description="")
         count = delete_snapshots_for_repo(memory_db, "r_a")
         assert count == 1
-        from lcsas.db.snapshots import get_snapshot
         assert get_snapshot(memory_db, "sb") is not None
+
+
+class TestDeleteBlankSnapshots:
+    """#536: pre-fix scans stored rustic's snapshot groups as one '' row."""
+
+    def test_removes_only_the_empty_id_row(self, memory_db):
+        register_repo(memory_db, "r", "R", "/r")
+        for sid in ("", "real"):
+            upsert_snapshot(memory_db, snapshot_id=sid, repo_id="r",
+                            hostname="h", timestamp="2026-01-01T00:00:00Z",
+                            paths="[]", tags="[]", description="")
+        assert delete_blank_snapshots(memory_db) == 1
+        assert get_snapshot(memory_db, "") is None
+        assert get_snapshot(memory_db, "real") is not None
+
+    def test_nothing_to_remove(self, memory_db):
+        assert delete_blank_snapshots(memory_db) == 0
 
 
 class TestRepoStatus:

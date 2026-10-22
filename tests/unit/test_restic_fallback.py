@@ -1519,6 +1519,133 @@ class TestTryKeysErrorPaths:
             _try_keys(keys_dir, b"any-password")
 
 
+# ── Corrupt key files (#481) ─────────────────────────────────────
+
+
+def _corrupt_key_bytes(kind: str) -> bytes:
+    """Bytes of a damaged key file; each kind trips a different parser."""
+    salt = base64.b64encode(b"s" * 64).decode()
+    docs: dict[str, object] = {
+        "bad-b64-salt": {"salt": "abc", "N": 1024, "r": 8, "p": 1, "data": "AAAA"},
+        "salt-not-str": {"salt": 5, "N": 1024, "r": 8, "p": 1, "data": "AAAA"},
+        "missing-data": {"salt": salt, "N": 1024, "r": 8, "p": 1},
+        "not-an-object": [1, 2, 3],
+        "string-doc": "salt",
+        "scrypt-out-of-range": {"salt": salt, "N": 3, "r": 8, "p": 1, "data": "AAAA"},
+    }
+    if kind == "non-utf8":
+        return b'{"salt": "\xff\xfe", "data": "AAAA"}'
+    if kind == "truncated-json":
+        return b'{"salt": "c2FsdA==", "N": 10'
+    return json.dumps(docs[kind]).encode()
+
+
+CORRUPT_KINDS = [
+    "bad-b64-salt", "salt-not-str", "missing-data", "not-an-object",
+    "string-doc", "scrypt-out-of-range", "non-utf8", "truncated-json",
+]
+
+
+def _key_file_around(master_json: bytes, password: bytes, path: Path) -> None:
+    """Write a key file the password opens, carrying *master_json* as-is."""
+    salt = os.urandom(64)
+    derived = hashlib.scrypt(password, salt=salt, n=1024, r=8, p=1, dklen=64)
+    data = _encrypt_data(derived[:32], derived[32:48], derived[48:64], master_json)
+    path.write_text(json.dumps({
+        "N": 1024, "r": 8, "p": 1,
+        "salt": base64.b64encode(salt).decode(),
+        "data": base64.b64encode(data).decode(),
+    }))
+
+
+class TestCorruptKeyFiles:
+    """#481: a damaged key file is skipped, never mistaken for a wrong
+    password and never allowed to escape _try_keys.  Tier-1 already
+    skips one (repo.c); a bit-rotted file that sorts first must not hide
+    the good key behind it."""
+
+    @pytest.mark.parametrize("kind", CORRUPT_KINDS)
+    def test_corrupt_file_sorting_first_is_skipped(self, tmp_path, kind):
+        from lcsas.restore.restic_fallback import _try_keys
+        mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
+        good = _make_key_file(mk, PASSWORD, tmp_path)
+        bad = good.parent / "0000-corrupt"
+        bad.write_bytes(_corrupt_key_bytes(kind))
+        assert sorted(good.parent.iterdir())[0] == bad
+
+        recovered = _try_keys(good.parent, PASSWORD)
+        assert recovered == mk
+
+    @pytest.mark.parametrize("kind", CORRUPT_KINDS)
+    def test_corrupt_file_alone_is_reported_as_corrupt(self, tmp_path, kind):
+        from lcsas.restore.restic_fallback import (
+            KeyFileCorruptError,
+            NoKeyUnlockedError,
+            _load_master_key,
+            _try_keys,
+        )
+        keys = tmp_path / "keys"
+        keys.mkdir()
+        bad = keys / "0000-corrupt"
+        bad.write_bytes(_corrupt_key_bytes(kind))
+
+        with pytest.raises(KeyFileCorruptError, match=r"corrupt key file\?") as one:
+            _load_master_key(bad, PASSWORD)
+        assert str(bad) in str(one.value)
+
+        with pytest.raises(NoKeyUnlockedError) as exc:
+            _try_keys(keys, PASSWORD)
+        assert isinstance(exc.value, IntegrityError)
+        assert exc.value.rejected == []
+        assert [p for p, _ in exc.value.corrupt] == [bad]
+        assert "unreadable or corrupt" in str(exc.value)
+        assert "wrong password" not in str(exc.value)
+
+    def test_unreadable_file_is_skipped(self, tmp_path):
+        if os.geteuid() == 0:
+            pytest.skip("root reads a mode-000 file anyway")
+        from lcsas.restore.restic_fallback import _try_keys
+        mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
+        good = _make_key_file(mk, PASSWORD, tmp_path)
+        bad = good.parent / "0000-unreadable"
+        bad.write_text(good.read_text())
+        bad.chmod(0)
+        try:
+            assert _try_keys(good.parent, PASSWORD) == mk
+        finally:
+            bad.chmod(0o600)
+
+    def test_malformed_master_key_inside_is_corrupt(self, tmp_path):
+        """The MAC passes (right password) but the payload isn't a master
+        key: corrupt, not a wrong password."""
+        from lcsas.restore.restic_fallback import KeyFileCorruptError, _load_master_key
+        kf = tmp_path / "k"
+        _key_file_around(b'{"encrypt": "AAAA"}', PASSWORD, kf)
+        with pytest.raises(KeyFileCorruptError, match="password is right"):
+            _load_master_key(kf, PASSWORD)
+
+    def test_wrong_password_is_not_corrupt(self, tmp_path):
+        from lcsas.restore.restic_fallback import KeyFileCorruptError, _load_master_key
+        mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
+        kf = _make_key_file(mk, PASSWORD, tmp_path)
+        with pytest.raises(IntegrityError) as exc:
+            _load_master_key(kf, b"wrong-password")
+        assert not isinstance(exc.value, KeyFileCorruptError)
+
+    def test_wrong_password_with_a_corrupt_file_names_both(self, tmp_path):
+        from lcsas.restore.restic_fallback import NoKeyUnlockedError, _try_keys
+        mk = MasterKey(encrypt=MASTER_ENCRYPT, mac_k=MASTER_MAC_K, mac_r=MASTER_MAC_R)
+        good = _make_key_file(mk, PASSWORD, tmp_path)
+        bad = good.parent / "0000-corrupt"
+        bad.write_bytes(_corrupt_key_bytes("bad-b64-salt"))
+
+        with pytest.raises(NoKeyUnlockedError, match="wrong password") as exc:
+            _try_keys(good.parent, b"wrong-password")
+        assert exc.value.rejected == [good]
+        assert [p for p, _ in exc.value.corrupt] == [bad]
+        assert "1 more could not be read" in str(exc.value)
+
+
 # ── _decrypt_file Compression Tests ─────────────────────────────
 
 class TestDecryptFileCompressionPaths:
@@ -2280,6 +2407,49 @@ class TestCountFilesEdgeCases:
         # Request count for a tree blob that doesn't exist — should return 0
         count = restorer._count_files("f" * 64)
         assert count == 0
+
+
+class TestProgressPrePassReadError:
+    """#481: an unreadable tree blob (EIO from a scratched disc) must not
+    abort the restore in the progress pre-pass, which runs by default,
+    before _restore_tree's tolerant handling ever sees it."""
+
+    @staticmethod
+    def _eio_on_subdir_tree(restorer, monkeypatch):
+        import errno
+        real = restorer._read_blob
+
+        def read_blob(blob_id):
+            data = real(blob_id)
+            if b'"nested.txt"' in data:
+                raise OSError(errno.EIO, "Input/output error")
+            return data
+
+        monkeypatch.setattr(restorer, "_read_blob", read_blob)
+
+    def test_count_files_stops_at_the_unreadable_tree(self, tmp_path, monkeypatch):
+        repo = _build_test_repo(tmp_path)
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        restorer._ensure_loaded()
+        self._eio_on_subdir_tree(restorer, monkeypatch)
+        root = restorer._latest_snapshot().tree
+        assert restorer._count_files(root) == 1
+
+    def test_restore_with_progress_on_restores_the_rest(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LCSAS_PROGRESS", "1")
+        repo = _build_test_repo(tmp_path)
+        restorer = PurePythonRestorer(repo, password=PASSWORD)
+        assert restorer._progress_enabled
+        restorer._ensure_loaded()
+        self._eio_on_subdir_tree(restorer, monkeypatch)
+
+        target = tmp_path / "out"
+        restorer.restore(target=target)
+
+        assert (target / "hello.txt").read_bytes() == b"Hello, World!\n"
+        assert not (target / "subdir" / "nested.txt").exists()
+        assert restorer.failures == 1
+        assert "Input/output error" in (target / "RESTORE_FAILURES.txt").read_text()
 
 
 # ── _emit_progress Tests ─────────────────────────────────────────

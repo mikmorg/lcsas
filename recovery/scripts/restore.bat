@@ -167,7 +167,7 @@ if /i "%~1"=="--check-disc" (
     )
     set "ECC_BIN=%RECOVERY%\bin\%ARCH%\lcsas-ecc.exe"
     if not exist "!ECC_BIN!" (
-        echo ERROR: no lcsas-ecc.exe under %RECOVERY%\bin\%ARCH%\ --
+        echo ERROR: no lcsas-ecc.exe under !RECOVERY!\bin\%ARCH%\ --
         echo this meta disc cannot repair discs.  Try the newest META disc.
         pause
         exit /b 3
@@ -260,9 +260,9 @@ for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
 if !NCAND! equ 0 (
     echo ERROR: could not find an LCSAS backup set ^(a folder containing keys\ and index\^).
     echo Looked in:
-    echo    %RECOVERY%\repo
-    echo    %RECOVERY%
-    echo    %DISC_ROOT%\metadata\^<name^>\
+    echo    !RECOVERY!\repo
+    echo    !RECOVERY!
+    echo    !DISC_ROOT!\metadata\^<name^>\
     echo    D:\metadata\^<name^>\ .. Z:\metadata\^<name^>\
     echo.
     echo Insert the disc labelled LCSAS_META ^(or any LCSAS data disc^), wait
@@ -376,7 +376,7 @@ if exist "%TARGET%\" if not exist "%MARKER%" if not "%LCSAS_FORCE_NONEMPTY_TARGE
         echo.
         echo ==========================================================
         echo   WARNING: the folder
-        echo       %TARGET%
+        echo       !TARGET!
         echo   already contains files that do not look like a previous
         echo   LCSAS restore.  Restored files with the same names will
         echo   OVERWRITE what is there now.
@@ -395,7 +395,7 @@ if exist "%TARGET%\" if not exist "%MARKER%" if not "%LCSAS_FORCE_NONEMPTY_TARGE
 
 if not exist "%TARGET%" mkdir "%TARGET%" 2>nul
 if not exist "%TARGET%" (
-    echo ERROR: could not create %TARGET%
+    echo ERROR: could not create !TARGET!
     pause
     exit /b 1
 )
@@ -420,7 +420,9 @@ echo rebuild it first with bin\%ARCH%\lcsas-keyshare.exe -- see
 echo recovery\docs\RECOVER_WINDOWS.txt, "KEY SHARES (SPLIT PASSWORDS)".
 echo.
 set /p "LCSAS_PW=Password: "
-if "%LCSAS_PW%"=="" (
+REM `if not defined`, not `if "%LCSAS_PW%"==""`: a '"' in the password
+REM broke that comparison's syntax (#482).
+if not defined LCSAS_PW (
     echo ERROR: empty password
     pause
     exit /b 1
@@ -428,7 +430,21 @@ if "%LCSAS_PW%"=="" (
 
 REM Write password to a transient temp file (deleted on exit).
 set "PWFILE=%TEMP%\lcsas-pw-%RANDOM%-%TIME:~6,2%%TIME:~9,2%.txt"
-> "%PWFILE%" echo !LCSAS_PW!
+REM `echo !LCSAS_PW!` runs a password of exactly "on", "off" or "/?" as
+REM an echo argument and writes no password (#482).  Those three go
+REM through `set /p`, which writes them as-is (without a newline).  Not
+REM `echo(`: Windows takes it, but wine writes a literal "(" and the
+REM wine tests drive this script.
+set "PW_PLAIN_ECHO=1"
+if /i "!LCSAS_PW!"=="on" set "PW_PLAIN_ECHO="
+if /i "!LCSAS_PW!"=="off" set "PW_PLAIN_ECHO="
+if "!LCSAS_PW!"=="/?" set "PW_PLAIN_ECHO="
+if defined PW_PLAIN_ECHO (
+    > "%PWFILE%" echo !LCSAS_PW!
+) else (
+    > "%PWFILE%" <nul set /p "=!LCSAS_PW!"
+)
+set "PW_PLAIN_ECHO="
 set "LCSAS_PW="
 
 REM Ensure the temp file is cleaned up no matter how we exit.
@@ -462,8 +478,11 @@ if defined LCSAS_RELOCATED set "META_DISC_ARG=--meta-disc %LCSAS_RELOCATED%"
 
 REM Optional --catalog if a catalog.db is present.
 REM The meta-disc deliberately carries NO catalog.db (it would always
-REM be stale at burn time).  Scan every drive letter for catalog.db,
-REM keep whichever was most recently modified.
+REM be stale at burn time).  Scan every drive letter for catalog.db and
+REM keep the LAST one found (highest drive letter), not the newest:
+REM plain cmd has no locale-proof way to compare file times (#482).  It
+REM only feeds the disc-swap hints; with an older catalog, hints for
+REM packs burned after it say "no record", and the restore still works.
 set "CATALOG_ARG="
 set "CATALOG_PICK="
 if exist "%RECOVERY%\catalog.db" set "CATALOG_PICK=%RECOVERY%\catalog.db"
@@ -474,15 +493,15 @@ for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
     )
 )
 if defined CATALOG_PICK (
-    set "CATALOG_ARG=--catalog %CATALOG_PICK%"
-    echo [lcsas-restore] using catalog %CATALOG_PICK%
+    set "CATALOG_ARG=--catalog "!CATALOG_PICK!""
+    echo [lcsas-restore] using catalog !CATALOG_PICK!
 )
 
 REM ----- Tier 1: prebuilt lcsas-restore.exe -------------------------
 set "BIN=%RECOVERY%\bin\%ARCH%\lcsas-restore.exe"
 if exist "%BIN%" (
     echo.
-    echo [tier 1] running %BIN%
+    echo [tier 1] running !BIN!
     "%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --target "%TARGET%" --snapshot latest %PACK_SEARCH_ARGS% %CATALOG_ARG% %META_DISC_ARG%
     set "RC=!ERRORLEVEL!"
     REM %PWFILE% is deleted only on the TERMINAL branches below -- the
@@ -493,7 +512,7 @@ if exist "%BIN%" (
         del "%PWFILE%" 2>nul
         echo.
         echo ============================================================
-        echo  Recovery complete.  Files restored to: %TARGET%
+        echo  Recovery complete.  Files restored to: !TARGET!
         echo ============================================================
         pause
         exit /b 0
@@ -522,14 +541,14 @@ REM ----- Tier 2: vendored rustic-static.exe -------------------------
 set "BIN=%RECOVERY%\bin\%ARCH%\rustic-static.exe"
 if exist "%BIN%" (
     echo.
-    echo [tier 2] running %BIN%
+    echo [tier 2] running !BIN!
     "%BIN%" --repository "%REPO%" --password-file "%PWFILE%" restore latest "%TARGET%"
     set "RC=!ERRORLEVEL!"
     del "%PWFILE%" 2>nul
     if !RC! equ 0 (
         echo.
         echo ============================================================
-        echo  Recovery complete.  Files restored to: %TARGET%
+        echo  Recovery complete.  Files restored to: !TARGET!
         echo ============================================================
         pause
         exit /b 0

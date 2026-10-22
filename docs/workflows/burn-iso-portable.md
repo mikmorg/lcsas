@@ -53,7 +53,9 @@ airgapped sites, and split-machine "stage here, burn there" pipelines.
   for read-back verification — `src/lcsas/iso/xorriso.py`).
 - A target optical drive (`/dev/sr0` by default).
 - For receipt emission: a known **volume label** (defaults to the ISO's
-  parent directory name) and a **location tag** that names the physical
+  own PVD volume ID, i.e. the label it was mastered with, then to the
+  parent directory name for a non-ISO file — #514) and a
+  **location tag** that names the physical
   destination of the disc (required when `--emit-receipt` is given —
   `cmd_burn_iso`).
 - **No** config file, **no** database, **no** mirror access is required.
@@ -126,42 +128,47 @@ command.
 
 **Test coverage:**
 
-- `tests/unit/test_cli_comprehensive.py::TestCmdBurnIso::test_burn_iso_missing_file`
-  (`tests/unit/test_cli_comprehensive.py:303-306`) — missing-ISO bail-out.
-- `tests/unit/test_cli_comprehensive.py::TestCmdBurnIso::test_burn_iso_file_exists`
-  (`tests/unit/test_cli_comprehensive.py:308-321`) — happy path, runner
+- `tests/unit/test_cli_comprehensive.py::TestCmdBurnIso::test_burn_iso_missing_file` — missing-ISO bail-out.
+- `tests/unit/test_cli_comprehensive.py::TestCmdBurnIso::test_burn_iso_file_exists` — happy path, runner
   invoked, exit 0.
-- `tests/unit/test_cli_comprehensive.py::TestCmdBurnIso::test_burn_iso_emit_receipt_requires_location`
-  (`tests/unit/test_cli_comprehensive.py:323-333`) — guard for
+- `tests/unit/test_cli_comprehensive.py::TestCmdBurnIso::test_burn_iso_emit_receipt_requires_location` — guard for
   `--emit-receipt` without `--location`.
-- `tests/unit/test_cli_comprehensive.py::TestCmdBurnIso::test_burn_iso_emits_receipt_with_label_inferred`
-  (`tests/unit/test_cli_comprehensive.py:335-359`) — parent-dir label
+- `tests/unit/test_cli_comprehensive.py::TestCmdBurnIso::test_burn_iso_emits_receipt_with_label_inferred` — parent-dir label
   inference; receipt structure asserted (label, location,
   `verify_passed`, 64-char SHA-256).
-- `tests/unit/test_cli_comprehensive.py::TestCmdBurnIso::test_burn_iso_emits_receipt_with_explicit_label`
-  (`tests/unit/test_cli_comprehensive.py:361-379`) — `--label` overrides
+- `tests/unit/test_cli_comprehensive.py::TestCmdBurnIso::test_burn_iso_emits_receipt_with_explicit_label` — `--label` overrides
   inference; receipt path is honoured as a file (not a directory).
-- `tests/unit/test_cli_comprehensive.py::TestCmdBurnIso::test_burn_iso_receipt_records_verify_failure`
-  (`tests/unit/test_cli_comprehensive.py:381-403`) — failed verify still
+- `tests/unit/test_cli_comprehensive.py::TestCmdBurnIso::test_burn_iso_receipt_records_verify_failure` — failed verify still
   emits a receipt with `verify_passed: false` and exits 1.
-- `tests/unit/test_xorriso.py::test_burn_iso_args`
-  (`tests/unit/test_xorriso.py:50-61`) — underlying xorriso command
+- `tests/unit/test_xorriso.py::test_burn_iso_args` — underlying xorriso command
   shape.
-- `tests/unit/test_subprocess_timeouts.py::test_burn_iso_timeout_raises_runtime_error`
-  (`tests/unit/test_subprocess_timeouts.py:44-52`) — timeout handling.
+- `tests/unit/test_subprocess_timeouts.py::test_burn_iso_timeout_raises_runtime_error` — timeout handling.
+- `tests/unit/test_burn_iso_receipt_io.py::TestEmitReceiptCreatesParents` —
+  `--emit-receipt` into a directory tree that does not exist yet creates
+  every missing parent (`mkdir(parents=True)`) and writes the receipt at the
+  exact path given (`::test_nested_missing_dirs_are_created`), alongside a
+  single missing parent, an existing parent, overwriting an existing receipt
+  file, and a failed burn leaving no receipt and creating no directories.
+- `tests/unit/test_burn_iso_receipt_io.py::TestReceiptIsFsynced` — the receipt
+  file is `fsync()`-ed exactly once, after every byte has been flushed
+  (`::test_receipt_file_is_fsynced_with_all_data_already_flushed`); the same
+  holds for the receipt of a failed verify and for a receipt written into a
+  directory target, and no receipt requested means no `fsync`.
 
 **Gaps in coverage:**
 
-- No test exercises `--no-verify`; the receipt should then record
-  `verify_passed: true` purely on the basis that no verify was attempted
-  (this is the current code path — `verify_passed` is initialised `True`
-  and only flipped by an actual failed verify run, see
-  `cmd_burn_iso`). Reasonable people could disagree
-  on whether that semantics is correct.
-- No test asserts that the receipt file is `fsync()`-ed.
-- No test covers `--emit-receipt` pointing at a non-existent nested
-  directory (the code calls `mkdir(parents=True, exist_ok=True)` —
-  `cmd_burn_iso`).
+- (Resolved, #514) `--no-verify` records `verify_passed: null` (not
+  verified), and import keeps such a volume `BURNED`, never `VERIFIED`
+  (`TestCmdBurnIso::test_burn_iso_no_verify_records_null_not_true`,
+  `TestCmdCatalogImport::test_import_unverified_burn_is_burned_not_verified`).
+- (Resolved, #514) The default label is the ISO's PVD volume ID, so a
+  staged `<session>/<volume_label>.iso` gets the right label:
+  `TestCmdBurnIso::test_burn_iso_label_defaults_to_the_iso_volume_id`.
+  The older label-inference tests
+  (`test_burn_iso_emits_receipt_with_label_inferred` and
+  `_receipt_records_verify_failure`) still use a label-named parent
+  directory (`ARCHIVE_TEST_0001/vol.iso`), which is now only the
+  fallback for an ISO without a readable PVD.
 
 **Source refs:**
 
@@ -212,10 +219,10 @@ its long-term-storage location (B).
    regardless of which host burns it.
 4. **On B — burn.** For each ISO, run `lcsas burn-iso <iso> --device
    /dev/srN --emit-receipt <receipts-dir> --location <site-name>
-   [--label <override>] [--session <session-id>]`. The `--label`
-   defaults to the ISO's parent directory name, which matches the
-   label that A used when staging
-   (`cmd_burn_iso`), so it is usually safe to omit.
+   [--label <volume_label>] [--session <session-id>]`. `--label` defaults
+   to the ISO's PVD volume ID, the label it was mastered with, so it can
+   be left out for ISOs from `lcsas stage` (#514; before that the default
+   was the session directory's name and the identity check failed).
    `--session` is free-form metadata that ends up in the receipt's
    `session_id` field; note that `cmd_catalog_import` does **not**
    consult it (it reads only `volume_label`, `location`,
@@ -288,19 +295,22 @@ B.
 
 **Gaps in coverage:**
 
-- No integration test wires the full A → B → A loop end-to-end (stage
-  on a temp catalog, run `burn-iso` against the staged ISO, then
-  `catalog import-receipts` against a different temp catalog).
-- No test asserts that a remote-burn receipt carrying `session_id`
-  produces a session-correlatable audit trail; the session ID is
-  written into the receipt by `cmd_burn_iso` and is preserved verbatim
-  in the `BURN_RECEIPT_IMPORTED` audit event, but `cmd_catalog_import`
-  does **not** otherwise act on it — for status transitions it consults
-  only `volume_label`, `location`, `verify_passed`, `burn_date`,
-  `iso_sha256`, and `iso_size_bytes`.
-- No documented procedure for what to ship alongside ISOs (the
-  session.json manifest is a strong candidate but is not required for
-  burning).
+- No test chains the two halves end-to-end through the real handlers
+  (stage on a temp catalog, run `burn-iso --emit-receipt` against the
+  staged ISO, then `catalog import-receipts` against that catalog).
+  `tests/unit/test_cli_handlers.py::test_import_receipts_from_durable_dir`
+  replays receipts written by the *session* burn pipeline
+  (`BurnOrchestrator.burn_session`), not by `burn-iso`, so the
+  `burn-iso` receipt format is only pinned by the two halves' separate
+  unit tests, and the staged-ISO label mismatch described under Gaps went
+  unnoticed.
+- (Resolved) The `session_id` carried by a remote-burn receipt is
+  preserved verbatim in the `BURN_RECEIPT_IMPORTED` audit event and
+  asserted by `tests/unit/test_cli_comprehensive.py::TestCmdCatalogImport::test_import_persists_receipt_provenance`.
+  `cmd_catalog_import` does **not** otherwise act on it — for status
+  transitions it consults only `volume_label`, `location`,
+  `verify_passed`, `burn_date`, `iso_sha256`, and `iso_size_bytes`
+  (intentional: a session id is free-form metadata on the portable path).
 
 **Source refs:**
 
@@ -422,31 +432,56 @@ behaviour.
 
 **Test coverage:**
 
-- `tests/unit/test_cli_comprehensive.py::TestCmdCatalogImport::test_import_receipts_from_json`
-  (`tests/unit/test_cli_comprehensive.py:481-500`) — basic import path.
-- `tests/unit/test_cli_comprehensive.py::TestCmdCatalogImport::test_import_transitions_staging_to_verified`
-  (`tests/unit/test_cli_comprehensive.py:502-531`) — STAGING →
+- `tests/unit/test_cli_comprehensive.py::TestCmdCatalogImport::test_import_receipts_from_json` — basic import path.
+- `tests/unit/test_cli_comprehensive.py::TestCmdCatalogImport::test_import_transitions_staging_to_verified` — STAGING →
   VERIFIED with `VERIFY_PASS` event and `closed_at` set.
-- `tests/unit/test_cli_comprehensive.py::TestCmdCatalogImport::test_import_transitions_staging_to_burned_on_verify_fail`
-  (`tests/unit/test_cli_comprehensive.py:533-561`) — STAGING → BURNED
+- `tests/unit/test_cli_comprehensive.py::TestCmdCatalogImport::test_import_transitions_staging_to_burned_on_verify_fail` — STAGING → BURNED
   with `VERIFY_FAIL` event, `closed_at` left null.
-- `tests/unit/test_cli_comprehensive.py::TestCmdCatalogImport::test_import_reburn_only_adds_copy`
-  (`tests/unit/test_cli_comprehensive.py:563-590`) — already-VERIFIED
+- `tests/unit/test_cli_comprehensive.py::TestCmdCatalogImport::test_import_reburn_only_adds_copy` — already-VERIFIED
   volume keeps its status; just a copy row is added.
+- `tests/unit/test_import_receipts_errors.py::TestMalformedReceiptFile` — a
+  truncated, empty, non-JSON or trailing-comma file, a nonexistent path, a
+  directory in place of a receipt, and JSON that is not a receipt object
+  (`[]`, a bare string, `{}`) are each skipped with a warning, exit 0, and
+  leave the catalog tables unchanged.
+- `tests/unit/test_import_receipts_errors.py::TestMissingKeys` — a receipt
+  missing `volume_label`, `location` or both is skipped and the missing keys
+  are named (and only those); a receipt with just those two keys imports
+  (the other keys are optional).
+- `tests/unit/test_import_receipts_errors.py::TestOrphanReceipt` — a receipt
+  whose `volume_label` is not in the catalog is skipped, writes nothing
+  (not even its `location` row, and no volume is invented), and the label
+  match is exact, not a prefix match.
+- `tests/unit/test_import_receipts_errors.py::TestMixedBatch` — a batch
+  mixing good and bad receipts (malformed, missing keys, orphan,
+  nonexistent file), bad first or bad last, still imports the good receipt
+  and leaves no trace of the bad one; bad receipts sandwiching two good ones
+  import both; an all-bad batch exits 0 and changes nothing; and an
+  `iso_sha256` mismatch is the one non-zero exit (`rc == 1`) yet does not
+  stop the rest of the batch (`::test_hash_mismatch_exits_nonzero_but_does_not_stop_the_batch`).
+- `tests/unit/test_import_receipts_errors.py::TestMalformedReceiptFile` also
+  pins the shapes that used to abort the whole batch (#522): a file that
+  is not valid UTF-8 (UTF-16 from a PowerShell `>`, binary garbage), JSON
+  that is `null`, a number or `true`, an `iso_size_bytes` that is not a
+  non-negative integer (which also must not leave a stray `locations`
+  row), and a non-string or blank `volume_label` / `location` are each
+  skipped and the later receipts still import
+  (`::test_undecodable_file_is_skipped_and_later_receipts_still_import`,
+  `::test_scalar_json_is_skipped_and_later_receipts_still_import`,
+  `::test_invalid_size_is_skipped_and_writes_nothing`,
+  `::test_non_string_or_blank_label_or_location_is_skipped`).
 
 **Gaps in coverage:**
 
-- No test exercises a malformed JSON file or a missing-keys receipt
-  (the warning-and-skip path in `cmd_catalog_import`).
-- No test exercises an orphan receipt (`volume_label` unknown) —
-  `cmd_catalog_import`.
-- No test exercises a batch with **mixed** good/bad receipts to confirm
-  the bad ones do not poison the transaction.
-- `iso_sha256` and `iso_size_bytes` are now persisted onto the
+- (Resolved) `iso_sha256` and `iso_size_bytes` are persisted onto the
   `volume_copies` row, and `iso_sha256`, `session_id`, `device`, and
   `pack_ids` are persisted as a `BURN_RECEIPT_IMPORTED` audit event
-  (issue #18 — `cmd_catalog_import`). See "Gaps" below for the
-  remaining `pack_ids` limitation.
+  (issue #18 — `cmd_catalog_import`), pinned by
+  `TestCmdCatalogImport::test_import_persists_receipt_provenance` and
+  `::test_import_rejects_hash_mismatch`. (Resolved, #514) A
+  `verify_passed: false` receipt records no copy:
+  `TestCmdCatalogImport::test_import_failed_first_burn_records_no_copy`
+  and `::test_import_failed_reburn_records_event_not_copy`.
 
 **Source refs:**
 
@@ -534,11 +569,12 @@ and how the code responds today.
     (`src/lcsas/db/volume_copies.py`).
 - **Net effect:** Idempotent except for the `burn_date` and `notes`
   fields on the copy, which take the latest receipt's values.
-- **Caveat:** If the second receipt has `verify_passed: false` and the
-  volume is already `VERIFIED`, the copy is **still** refreshed but no
-  `VERIFY_FAIL` event is added — a real verify failure on a re-burn
-  to a new location would normally be recorded only when the import
-  enters the `STAGING` branch, which this no longer is. See "Gaps".
+- **Caveat (resolved, #514):** If the second receipt has
+  `verify_passed: false` and the volume is already `VERIFIED`, no copy is
+  recorded or refreshed for that location; a `VERIFY_FAIL_REBURN` event
+  is added instead, as `BurnOrchestrator` does, so the location still
+  shows as needing the volume
+  (`TestCmdCatalogImport::test_import_failed_reburn_records_event_not_copy`).
 
 ### Receipt arrives before the volume is in the catalog
 
@@ -553,10 +589,16 @@ and how the code responds today.
 
 ### Receipt JSON is corrupt or unreadable
 
-- **Symptom:** Truncated file, encoding error, permission denied.
-- **Behaviour:** `JSONDecodeError` / `OSError` are caught
-  per-receipt; the file is skipped with a warning and the rest of the
-  batch continues (`cmd_catalog_import`).
+- **Symptom:** Truncated file, encoding error (e.g. UTF-16 from a
+  PowerShell `>` redirect), permission denied, JSON that is not an
+  object, a non-string or blank `volume_label` / `location`, or an
+  `iso_size_bytes` that is not a non-negative integer.
+- **Behaviour:** each of these is caught per receipt (`ValueError`,
+  which includes `JSONDecodeError` and `UnicodeDecodeError`, plus
+  `OSError` and the field checks). The file is skipped with a warning
+  and writes nothing, not even its location row. The rest of the batch
+  continues (`cmd_catalog_import`, #522; pinned by
+  `tests/unit/test_import_receipts_errors.py::TestMalformedReceiptFile`).
 - **Recovery:** Repair the file, or re-export it on B if the
   filesystem there is intact.
 
@@ -592,7 +634,8 @@ and how the code responds today.
 
 - **Behaviour:** The receipt write uses `flush()` + `fsync()`
   (`cmd_burn_iso`), so a successful return from
-  `cmd_burn_iso` implies the receipt is durable on B's filesystem.
+  `cmd_burn_iso` implies the receipt is durable on B's filesystem
+  (pinned by `tests/unit/test_burn_iso_receipt_io.py::TestReceiptIsFsynced`).
 - **Caveat:** If power is lost **before** the write completes, no
   receipt exists; treat as "Missing receipt" above.
 
@@ -601,43 +644,52 @@ and how the code responds today.
 ## Gaps
 
 The following are intentional or accidental gaps in the portable burn
-workflow as currently implemented. None of them block the workflow,
-but operators should be aware:
+workflow as currently implemented. None of the open ones block the
+workflow (the three that could leave the catalog wrong were resolved in
+#514):
 
-- **ISO SHA-256, `session_id`, `device`, and `pack_ids` are persisted on
-  import via a `BURN_RECEIPT_IMPORTED` audit event (issue #18).** The
-  importer now both passes `iso_sha256` (and `iso_size_bytes`) through
-  to `add_volume_copy` and emits a `volume_events` row of type
-  `BURN_RECEIPT_IMPORTED` whose `detail` is a JSON blob containing all
-  four provenance fields. If a prior `BURN_RECEIPT_IMPORTED` event for
-  the same volume recorded a different `iso_sha256`, the incoming
-  receipt is **rejected** with a non-zero exit code and no spurious
-  event row is written. `pack_ids` is still **not emitted by standalone
-  `burn-iso`** — see "Standalone `burn-iso` receipts cannot register
-  pack membership" under Failure modes for the rationale.
+- **(Resolved, issue #18) Receipt provenance is persisted on import.**
+  The importer passes `iso_sha256` (and `iso_size_bytes`) through to
+  `add_volume_copy` and emits a `BURN_RECEIPT_IMPORTED` `volume_events`
+  row whose `detail` JSON carries `iso_sha256`, `session_id`, `device`
+  and `pack_ids`. A receipt whose `iso_sha256` differs from a prior
+  `BURN_RECEIPT_IMPORTED` event for the same volume is **rejected** with
+  a non-zero exit code and no event row (pinned by
+  `TestCmdCatalogImport::test_import_persists_receipt_provenance` and
+  `::test_import_rejects_hash_mismatch`). `pack_ids` is still **not
+  emitted by standalone `burn-iso`** (intentional: the burner host has
+  no catalog) — see "Standalone `burn-iso` receipts cannot register pack
+  membership" under Failure modes for the rationale.
 - **No "dry-run" / preview for `import-receipts`.** Operators cannot
   preview which receipts would be skipped, which volumes would
   transition, or which copies would be refreshed before committing.
+  (`import-receipts` takes only `receipt_files`; no `--dry-run` flag.)
 - **No CLI cross-check between receipt's `iso_sha256` and the
   staging-side ISO hash.** A receipt could be silently swapped for one
   from a different ISO and the import would not notice it differs from
   the session-time hash (the master catalog has the session-time hash
-  in `session_volumes` via `add_session_volume` —
-  `src/lcsas/burn/orchestrator.py` — but the import path does not
-  consult it; it only cross-checks against prior receipts for the same
-  volume).
-- **Re-burn verify failures aren't recorded.** A receipt with
-  `verify_passed: false` against an already-`VERIFIED` volume updates
-  the copy row but emits no `VERIFY_FAIL` event (the failure-event
-  branch lives inside the `vol.status == "STAGING"` block —
-  `cmd_catalog_import`). The interactive burn path *does*
-  log a `VERIFY_FAIL_REBURN` event for the equivalent case
-  (`src/lcsas/burn/orchestrator.py`); the receipt-import path
-  does not have parity.
-- **No batching guarantee.** Each receipt is committed individually
-  (`cmd_catalog_import`), so a `KeyboardInterrupt` mid-batch
-  leaves a partial import; this is benign because every operation is
-  idempotent on re-run, but worth documenting for operators.
+  in `session_volumes.iso_sha256`, written by `update_session_volume_iso`
+  in `BurnOrchestrator.stage` — but `cmd_catalog_import` does not
+  consult it; it only cross-checks against prior
+  `BURN_RECEIPT_IMPORTED` events for the same volume, so the *first*
+  receipt for a volume is trusted).
+- **(Resolved, #514) Failed and unverified receipts.** A receipt with
+  `verify_passed: false` no longer records a copy (BURN-05: a failed disc
+  is not a copy, so the location still needs the volume); a failed
+  re-burn of a `VERIFIED` volume records `VERIFY_FAIL_REBURN`, as
+  `BurnOrchestrator` does.  `verify_passed: null` (`--no-verify`) records
+  the copy but keeps the volume `BURNED`, not `VERIFIED`.  The
+  `BURN_RECEIPT_IMPORTED` detail carries `verify_passed`.
+- **(Resolved, #514) The default `--label`** is the ISO's PVD volume ID,
+  not the parent directory (which is the session directory for a staged
+  ISO).
+- **No batching guarantee (intentional: per-receipt commits keep a bad
+  receipt from poisoning the rest, and re-running is idempotent).** Each
+  receipt is committed individually (`cmd_catalog_import`), so a
+  `KeyboardInterrupt` mid-batch leaves a partial import; this is benign
+  because every operation is idempotent on re-run (a re-import adds
+  another `BURN_RECEIPT_IMPORTED` event), but worth documenting for
+  operators.
 
 ---
 
@@ -664,5 +716,8 @@ but operators should be aware:
   (`ensure_location`).
 - Hashing: `src/lcsas/utils/hashing.py` (`sha256_file`).
 - Tests: `tests/unit/test_cli_comprehensive.py` (`TestCmdBurnIso`,
-  `TestCmdCatalogImport`), `tests/unit/test_xorriso.py` (xorriso
+  `TestCmdCatalogImport`), `tests/unit/test_burn_iso_receipt_io.py`
+  (receipt parent directories and `fsync`),
+  `tests/unit/test_import_receipts_errors.py` (bad-receipt skipping and
+  mixed batches), `tests/unit/test_xorriso.py` (xorriso
   burn/verify), `tests/unit/test_subprocess_timeouts.py` (burn timeout).

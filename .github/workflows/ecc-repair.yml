@@ -34,7 +34,7 @@ on:
 
 jobs:
   ecc-repair:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Measured budget, not a guess (#419): the FMT-01 cross-conformance
     # pair made the suite outgrow the old 60-min limit -- the reverse
     # test (test_dvdisaster_repairs_lcsas_ecc_augmented_image) has the
