@@ -14,9 +14,10 @@ name: macos-tier1
 # restore, clean wrong-password failure, and a byte-exact keyshare combine.
 # Both matrix legs must pass.
 #
-# Gatekeeper note (UX_CONCERNS ID 004 stays open): a git-checkout binary has no
+# Gatekeeper note (UX_CONCERNS ID 004): a git-checkout binary has no
 # quarantine xattr, so this proves the binary is SOUND, not that a Finder
-# double-click works for an heir.
+# double-click works for an heir.  The documented quarantine workaround
+# (START_HERE.txt, RECOVER.txt; #490) is checked by the manual Mac drill (#475).
 #
 # No `schedule:` here, on purpose (#462): GitHub disables a scheduled file
 # after 60 quiet days, push and PR triggers and all, and the 2026-08-05 ->
