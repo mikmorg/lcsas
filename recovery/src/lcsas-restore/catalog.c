@@ -69,10 +69,10 @@ immutable_uri(const char *path)
  * then fails ("unable to open database file"): SQLite has to create
  * the -shm and -wal files beside it, and can't.  A disc never changes,
  * so read it as immutable (no locks, no -shm, no -wal), as the Python
- * readers do.  Only after a plain open's first query has failed:
- * immutable would also ignore a live -wal next to a catalog copied off
- * a running system.  Keeps the plain handle, and its error, when this
- * doesn't help.
+ * readers do.  Only after a plain open's first query has failed that
+ * way (see lcsas_catalog_open): immutable would also ignore a live
+ * -wal next to a catalog copied off a running system.  Keeps the plain
+ * handle, and its error, when this doesn't help.
  */
 static void
 reopen_immutable(lcsas_catalog *c, const char *path)
@@ -118,7 +118,14 @@ lcsas_catalog_open(const char *path)
         return NULL;
     }
     c->schema_version = lcsas_catalog_schema_version(c);
-    if (c->schema_version < 0) reopen_immutable(c, path);
+    /* The -shm SQLite can't create shows up as SQLITE_CANTOPEN on a
+     * read-only mount and SQLITE_READONLY in an unwritable directory.
+     * Nothing else (not a database, no such table) is helped by
+     * reopening, so don't spend a second open on it. */
+    rc = sqlite3_errcode(c->db);
+    if (c->schema_version < 0
+            && (rc == SQLITE_CANTOPEN || rc == SQLITE_READONLY))
+        reopen_immutable(c, path);
     return c;
 }
 

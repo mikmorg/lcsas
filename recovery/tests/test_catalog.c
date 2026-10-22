@@ -288,16 +288,24 @@ int main(void)
      * immutable, it reads.  The '%' and '#' in the path must survive the
      * URI.  (As root the directory stays writable and the plain open
      * works; the outcome is the same.)
+     *
+     * A second WAL database there has no schema_version table, so the
+     * immutable reopen doesn't help either: the catalog keeps the plain
+     * handle, and lookups fail with its read error, which is not skew.
+     * Not as root: there the plain handle reads, and the missing tables
+     * rightly count as skew.
      */
     {
         char ro_dir[256];
         char ro_path[300];
+        char nv_path[300];
         sqlite3 *w = NULL;
         lcsas_catalog *cw;
 
         snprintf(ro_dir, sizeof ro_dir, "/tmp/lcsas_catalog_test_ro %%#%ld",
                  (long)getpid());
         snprintf(ro_path, sizeof ro_path, "%s/catalog.db", ro_dir);
+        snprintf(nv_path, sizeof nv_path, "%s/noversion.db", ro_dir);
         mkdir(ro_dir, 0755);
         if (sqlite3_open(ro_path, &w) != SQLITE_OK
                 || exec_sql(w,
@@ -312,6 +320,14 @@ int main(void)
             fails++;
         }
         sqlite3_close(w);
+        w = NULL;
+        if (sqlite3_open(nv_path, &w) != SQLITE_OK
+                || exec_sql(w, "PRAGMA journal_mode=WAL;"
+                               "CREATE TABLE t (x INTEGER);") < 0) {
+            fprintf(stderr, "FAIL #543: no-version WAL setup\n");
+            fails++;
+        }
+        sqlite3_close(w);
         chmod(ro_dir, 0555);
         cw = lcsas_catalog_open(ro_path);
         if (!cw || lcsas_catalog_schema_version(cw) != 10
@@ -322,15 +338,26 @@ int main(void)
             fails++;
         }
         lcsas_catalog_close(cw);
+        cw = geteuid() != 0 ? lcsas_catalog_open(nv_path) : NULL;
+        if (geteuid() != 0
+                && (!cw || lcsas_catalog_find_pack(cw, "aa11", &pk) != -1
+                    || lcsas_catalog_error_is_skew(cw))) {
+            fprintf(stderr,
+                    "FAIL #543: no-version WAL catalog: want an open handle"
+                    " whose lookups fail, not as skew (got: %s)\n",
+                    cw ? lcsas_catalog_errmsg(cw) : "NULL");
+            fails++;
+        }
+        lcsas_catalog_close(cw);
         chmod(ro_dir, 0755);
         unlink(ro_path);
+        unlink(nv_path);
         rmdir(ro_dir);
     }
 
     /* A file that isn't a database: the open succeeds (SQLite reads
-     * lazily) and neither the plain nor the immutable handle can query
-     * it.  Lookups fail with SQLite's own message, and that is not
-     * skew. */
+     * the header lazily), there is no reopen (immutable can't help),
+     * and lookups fail with SQLite's own message, which is not skew. */
     {
         const char *bad_path = "/tmp/lcsas_catalog_test_bad.db";
         FILE *bf = fopen(bad_path, "wb");
