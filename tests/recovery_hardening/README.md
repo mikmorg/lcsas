@@ -91,6 +91,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_sh_binary_corrupt.py` | Issue #223 — restore.sh detects present-but-corrupted tier binaries. |
 | `test_restore_sh_catalog_invalidation.py` | Hardening test: mtime-based locator-catalog cache invalidation in restore.sh (Issue #108). |
 | `test_restore_sh_ecc_dispatch.py` | Hardening tests: restore.sh --check-disc ECC dispatch [FMT-01]. |
+| `test_restore_sh_nonexec_bins.py` | Hardening (#496): tier binaries that are present but can't be run. |
 | `test_restore_sh_password_hygiene.py` | test_restore_sh_password_hygiene.py -- restore.sh password-file cleanup. |
 | `test_restore_sh_relocate.py` | Hardening tests: restore.sh relocation path (read-only SCRIPT_DIR). |
 | `test_restore_sh_repo_flag.py` | Hardening test: --repo NAME flag on restore.sh (Issue #91). |
