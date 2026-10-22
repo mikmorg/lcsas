@@ -311,3 +311,65 @@ def test_disc_locator_mid_drain_fs_full_unlinks_truncated(tmp_path: Path) -> Non
         f"the roomy TMPDIR must let the RLIMIT case run for real.\n"
         f"stderr:\n{res.stderr}"
     )
+
+
+# ── restore.sh: the tier-1 fallback really yields a size (#535) ──────
+
+
+def _install_strict_stub(recovery: Path) -> Path:
+    """A stub with tier 1's real argument check: --list-pending-packs
+    without --repo DIR and --password-file FILE prints usage and exits 2
+    (main.c), else it prints a "Total:" line far larger than any disk."""
+    bin_dir = recovery / "bin" / HOST_TARGET
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    stub = bin_dir / "lcsas-restore"
+    stub.write_text(textwrap.dedent("""\
+        #!/bin/sh
+        printf '%s\\n' "$*" >> "$(dirname "$0")/argv.log"
+        repo=""; pw=""; lpp=0
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --repo) repo="$2"; shift ;;
+                --password-file) pw="$2"; shift ;;
+                --list-pending-packs) lpp=1 ;;
+            esac
+            shift
+        done
+        if [ -z "$repo" ] || [ -z "$pw" ]; then
+            echo "usage: lcsas-restore --repo DIR --password-file FILE ..." >&2
+            exit 2
+        fi
+        if [ "$lpp" = 1 ]; then
+            printf 'Total: 9 packs, 99999999.0 MB across 3 discs.\\n'
+            exit 0
+        fi
+        exit 0
+    """))
+    stub.chmod(0o755)
+    return stub
+
+
+def test_tier1_fallback_size_reaches_the_check(tmp_path: Path) -> None:
+    """#535: with no usable sqlite3 answer, the preflight asks tier 1's
+    --list-pending-packs for the size.  It called it without --repo and
+    --password-file, tier 1 printed usage and exited 2 (stderr dropped),
+    and the check silently passed.  A catalog the sqlite3 CLI cannot
+    query forces the fallback; a ~95 TB total must stop the run."""
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    stub = _install_strict_stub(recovery)
+    repo = _make_repo_skeleton(recovery / "metadata", "alpha")
+    (recovery / "catalog.db").write_bytes(b"not a database, sqlite3 cannot query it")
+
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored")],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        env=_env(), timeout=30, start_new_session=True,
+    )
+
+    calls = (stub.parent / "argv.log").read_text().splitlines()
+    lpp = [c for c in calls if "--list-pending-packs" in c]
+    assert lpp, f"the tier-1 fallback was never asked; calls: {calls}"
+    assert f"--repo {repo}" in lpp[0] and "--password-file /dev/null" in lpp[0], lpp[0]
+    assert res.returncode == 1, res.stderr
+    assert SIZING_SNIPPET in res.stderr, res.stderr
