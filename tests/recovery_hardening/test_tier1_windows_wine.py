@@ -40,6 +40,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.recovery_hardening._wine_helpers import stop_wineserver
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # ``LCSAS_RESTORE_BIN`` overrides the default location so the audit's
 # parallel-instrumented builds (coverage-c #150, sanitiser #152) can
@@ -87,7 +89,7 @@ WINE_ENV_BASE = {
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _wine_prefix_ready() -> None:
+def _wine_prefix_ready():
     """Provision WINEPREFIX before any wine test runs.
 
     Creates the prefix directory (its parent always exists, unlike the old
@@ -95,6 +97,7 @@ def _wine_prefix_ready() -> None:
     per-test invocations are fast and do not leak first-run init noise into
     asserted output.  No-op when the binary or wine is absent (tests skip)."""
     if not (_BIN_OK and _WINE_OK):
+        yield
         return
     os.makedirs(WINEPREFIX, exist_ok=True)
     init_env = {**os.environ, **WINE_ENV_BASE}
@@ -105,6 +108,9 @@ def _wine_prefix_ready() -> None:
             ["wine", "wineboot", "--init"],
             env=init_env, capture_output=True, timeout=180,
         )
+    yield
+    # Leave no server behind for the next tier's fresh prefixes (#453).
+    stop_wineserver(WINEPREFIX)
 
 
 def _run(*args: str, env: dict[str, str] | None = None,

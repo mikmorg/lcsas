@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator
+from typing import Any
 
 from lcsas.rustic.types import BackupResult, PruneResult, RestorePlan, SnapshotInfo
 
@@ -69,18 +71,56 @@ def parse_snapshots_output(output: str) -> list[SnapshotInfo]:
         data = [data]
 
     snapshots: list[SnapshotInfo] = []
-    for item in data:
-        if not isinstance(item, dict):
+    skipped = 0
+    for item, group in _iter_snapshot_dicts(data):
+        snapshot_id = item.get("id", item.get("short_id", "")) or ""
+        if not snapshot_id:
+            skipped += 1
             continue
         snapshots.append(SnapshotInfo(
-            snapshot_id=item.get("id", item.get("short_id", "")) or "",
+            snapshot_id=snapshot_id,
             timestamp=item.get("time", ""),
-            hostname=item.get("hostname", ""),
-            paths=item.get("paths", []),
+            hostname=item.get("hostname") or group.get("hostname", ""),
+            paths=item.get("paths") or group.get("paths", []),
             tags=item.get("tags", []),
         ))
+    if skipped:
+        _logger.warning(
+            "parse_snapshots_output: skipped %d entr%s with no snapshot id — "
+            "rustic output format may have changed",
+            skipped, "y" if skipped == 1 else "ies",
+        )
 
     return snapshots
+
+
+def _iter_snapshot_dicts(
+    data: list[object],
+) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
+    """Yield ``(snapshot, group_key)`` pairs from ``snapshots --json`` output.
+
+    restic (and rustic with grouping off) prints a flat list of snapshots.
+    rustic 0.11 groups by default: ``[{"group_key": {...}, "snapshots":
+    [...]}]``, and some older rustic releases printed ``[[group_key,
+    [snapshots]]]``.  A group object is not a snapshot (#536).
+    """
+    for item in data:
+        group: object
+        members: list[object]
+        if isinstance(item, dict) and isinstance(item.get("snapshots"), list):
+            group, members = item.get("group_key"), item["snapshots"]
+        elif (isinstance(item, list) and len(item) == 2
+              and isinstance(item[1], list)):
+            group, members = item[0], item[1]
+        elif isinstance(item, dict):
+            yield item, {}
+            continue
+        else:
+            continue
+        group_key = group if isinstance(group, dict) else {}
+        for snap in members:
+            if isinstance(snap, dict):
+                yield snap, group_key
 
 
 def parse_restore_plan_output(

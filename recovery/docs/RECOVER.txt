@@ -55,6 +55,40 @@ DECISION FLOW
              --password-file /tmp/pwfile \
              --target /tmp/restored
 
+IF THE COMPUTER REFUSES TO RUN THE TOOLS
+
+The programs on the disc are fine; a safety setting on the computer
+is in the way.  The fix is the same everywhere: copy the meta disc to
+a folder the computer lets you run programs from, and run the copy.
+It needs about 1 GB of free space; delete the copy afterwards.
+
+  macOS -- "cannot be opened because the developer cannot be
+  verified", or the restore stops with "Killed".  macOS has marked
+  the files as downloaded ("quarantine"), which happens after copying
+  them from a disc image or another computer:
+
+      cp -R /Volumes/<label> ~/lcsas-meta
+      xattr -dr com.apple.quarantine ~/lcsas-meta
+      sh ~/lcsas-meta/restore.sh ~/restored
+
+  Linux -- "Permission denied"; restore.sh reporting that the meta
+  disc "lacks all recovery binaries" with each tier "not executable"
+  although the files are there; or the restore quietly falling back
+  to the slow pure-Python tier 3.  The files sit on a filesystem that
+  may not run programs: a FAT/exFAT USB stick (it drops the
+  executable bit) or any mount with the "noexec" option:
+
+      cp -R /media/$USER/<label> ~/lcsas-meta
+      chmod -R u+x ~/lcsas-meta/recovery/bin
+      sh ~/lcsas-meta/restore.sh ~/restored
+
+A plain optical disc rarely needs this: restore.sh already copies
+itself and the binaries off a read-only disc into a temporary folder
+before running them.  It is for copies on USB sticks, downloaded disc
+images, and locked-down computers.  (The binaries carry no Apple or
+Microsoft developer signature, so a cautious OS treats them as
+software from an unknown source.)
+
 CASCADE DETAILS
 
 The restore.sh script tries these in order.  Tiers 1-2 share NO

@@ -7,7 +7,9 @@
  * drain, meta-disc exclusion, and miss-path (non-interactive).
  */
 #include "disc_locator.h"
+#include "catalog.h"
 #include "hex.h"
+#include "../vendored/sqlite/sqlite3.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -92,6 +94,91 @@ make_labelled_disc(const char *parent, const char *name, const char *json)
         snprintf(p, sizeof p, "%s/%s/volume_info.json", parent, name);
         write_pack(p, json);
     }
+}
+
+/* mkdir -p for paths up to 4 KiB (mkdir_recursive stops at 1 KiB). */
+static int
+mkdir_long(const char *path)
+{
+    char buf[4096];
+    size_t i, n = strlen(path);
+    if (n >= sizeof buf) return -1;
+    memcpy(buf, path, n + 1);
+    for (i = 1; i < n; i++) {
+        if (buf[i] == '/') {
+            buf[i] = '\0';
+            if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
+            buf[i] = '/';
+        }
+    }
+    if (mkdir(buf, 0755) != 0 && errno != EEXIST) return -1;
+    return 0;
+}
+
+/* Create (or replace) a SQLite catalog at `path` from `sql`. */
+static int
+make_catalog(const char *path, const char *sql)
+{
+    sqlite3 *db = NULL;
+    char *err = NULL;
+    int rc;
+    unlink(path);
+    if (sqlite3_open(path, &db) != SQLITE_OK) {
+        sqlite3_close(db);
+        return -1;
+    }
+    rc = sqlite3_exec(db, sql, NULL, NULL, &err);
+    if (rc != SQLITE_OK) {
+        fprintf(stderr, "make_catalog: %s\n", err ? err : "?");
+        sqlite3_free(err);
+    }
+    sqlite3_close(db);
+    return rc == SQLITE_OK ? 0 : -1;
+}
+
+/*
+ * One interactive miss for `missing` against the catalog at `cat_path`,
+ * answered with "q".  Returns 1 when the prompt printed `needle`.
+ */
+static int
+prompt_mentions(const char *search_dir, const char *cat_path,
+                const unsigned char *missing, const char *needle)
+{
+    const char *search[1];
+    lcsas_disc_locator l;
+    lcsas_catalog *cat;
+    int pfd[2];
+    FILE *in;
+    FILE *out;
+    char found[2048];
+    int hit = 0;
+
+    search[0] = search_dir;
+    cat = lcsas_catalog_open(cat_path);
+    if (!cat) return 0;
+    if (pipe(pfd) != 0) {
+        lcsas_catalog_close(cat);
+        return 0;
+    }
+    in = fdopen(pfd[0], "r");
+    out = tmpfile();
+    if (write(pfd[1], "q\n", 2) != 2) { /* in reads EOF instead: aborts too */ }
+    close(pfd[1]);
+    lcsas_disc_locator_init(&l, search, 1, cat, 1);
+    lcsas_disc_locator_set_auto_mount(&l, 0);
+    if (in) l.prompt_in = in;
+    if (out) l.prompt_out = out;
+    alarm(20);
+    (void)lcsas_disc_locate_pack(&l, missing, found, sizeof found);
+    alarm(0);
+    if (out) {
+        hit = count_lines_with(out, needle) > 0;
+        fclose(out);
+    }
+    lcsas_disc_locator_free(&l);
+    if (in) fclose(in); else close(pfd[0]);
+    lcsas_catalog_close(cat);
+    return hit;
 }
 
 static const char *
@@ -1448,6 +1535,199 @@ main(void)
                 close(pfd[1]);
             }
             if (out) fclose(out);
+        }
+    }
+
+    /* #488: print_prompt's catalog branches, from real catalogs.  The
+     * missing pack's hex is 64 x "ab". */
+    {
+        unsigned char missing[32];
+        char cat_path[1024];
+        const char *schema =
+            "CREATE TABLE schema_version(version INTEGER);"
+            "INSERT INTO schema_version VALUES(10);"
+            "CREATE TABLE packs(pack_id INTEGER PRIMARY KEY, sha256 TEXT,"
+            " size_bytes INTEGER, repo_id TEXT);"
+            "CREATE TABLE volumes(volume_id INTEGER PRIMARY KEY, label TEXT,"
+            " uuid TEXT, media_type TEXT, status TEXT);"
+            "CREATE TABLE volume_packs(volume_id INTEGER, pack_id INTEGER);";
+        char sql[2048];
+        memset(missing, 0xAB, 32);
+        snprintf(cat_path, sizeof cat_path, "%s_prompt_catalog.db", tmpdir);
+
+        /* The pack is known but sits on no current volume. */
+        snprintf(sql, sizeof sql, "%sINSERT INTO packs VALUES(1, '%s', 10, 'r');",
+                 schema,
+                 "abababababababababababababababababababababababababababababababab");
+        if (make_catalog(cat_path, sql) != 0
+                || !prompt_mentions(tmpdir, cat_path, missing,
+                                    "catalog has the pack, but no current volume mapping")) {
+            fprintf(stderr, "FAIL #488: no-volume-mapping prompt\n"); fails++;
+        }
+
+        /* A valid catalog with no row for this pack. */
+        snprintf(sql, sizeof sql, "%sINSERT INTO packs VALUES(1, '%s', 10, 'r');",
+                 schema,
+                 "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
+        if (make_catalog(cat_path, sql) != 0
+                || !prompt_mentions(tmpdir, cat_path, missing,
+                                    "catalog has no record of this pack hash")) {
+            fprintf(stderr, "FAIL #488: no-record prompt\n"); fails++;
+        }
+
+        /* Schema skew: the catalog opens but has no packs table, so the
+         * lookup's prepare fails (a catalog written by a newer LCSAS). */
+        if (make_catalog(cat_path,
+                         "CREATE TABLE schema_version(version INTEGER);"
+                         "INSERT INTO schema_version VALUES(99);") != 0
+                || !prompt_mentions(tmpdir, cat_path, missing,
+                                    "catalog could not be queried")) {
+            fprintf(stderr, "FAIL #488: schema-skew prompt\n"); fails++;
+        }
+        unlink(cat_path);
+    }
+
+    /* #488: consider_catalog falls back to opening the original when the
+     * copy into the cache fails.  A directory (with an entry, so unlink
+     * can't clear it) sits where the copy should go. */
+    {
+        char parent[1024];
+        char disc[1024];
+        char cat[1024];
+        char cache_dir[1024];
+        char blocker[1100];
+        const char *parents[1];
+        FILE *f;
+        snprintf(parent, sizeof parent, "%s_catfailparent", tmpdir);
+        snprintf(disc, sizeof disc, "%s/discA", parent);
+        snprintf(cat, sizeof cat, "%s/catalog.db", disc);
+        snprintf(cache_dir, sizeof cache_dir,
+                 "%s/lcsas_dl_catfail_%ld", roomy_base(), (long)getpid());
+        snprintf(blocker, sizeof blocker, "%s/.locator-catalog.db/x", cache_dir);
+        if (mkdir_recursive(disc) != 0 || mkdir_recursive(blocker) != 0) {
+            fprintf(stderr, "FAIL mkdir catfail fixture\n"); fails++;
+        }
+        f = fopen(cat, "wb");
+        if (f) { fputs("not a real catalog", f); fclose(f); }
+        parents[0] = parent;
+        lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+        lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+        lcsas_disc_locator_set_cache_dir(&l, cache_dir);
+        rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
+        (void)rc; /* the copy-failure fallback is the goal */
+        lcsas_disc_locator_free(&l);
+        {
+            char rm[1024];
+            snprintf(rm, sizeof rm, "rm -rf %s %s", parent, cache_dir);
+            (void)system(rm);
+        }
+    }
+
+    /* #488: refresh_discovered warns and skips an entry whose full path
+     * would not fit its 4 KiB buffer.  The mount parent is ~3.9 KB deep
+     * and holds a 250-byte name. */
+    {
+        char longparent[4096];
+        char name[251];
+        char here[4096];
+        const char *parents[1];
+        size_t n;
+        int made = 0;
+        n = (size_t)snprintf(longparent, sizeof longparent, "%s_long", tmpdir);
+        while (n + 201 < 3900) {
+            longparent[n++] = '/';
+            memset(longparent + n, 'd', 200);
+            n += 200;
+            longparent[n] = '\0';
+        }
+        memset(name, 'n', 250);
+        name[250] = '\0';
+        /* The entry's own absolute path is past PATH_MAX, so make it
+         * relative to the parent. */
+        if (mkdir_long(longparent) == 0 && getcwd(here, sizeof here)
+                && chdir(longparent) == 0) {
+            made = mkdir(name, 0755) == 0;
+            if (chdir(here) != 0) {
+                fprintf(stderr, "FAIL #488: chdir back from long path\n");
+                fails++;
+            }
+        }
+        if (!made) {
+            fprintf(stderr, "FAIL #488: long-path fixture (errno=%d)\n", errno);
+            fails++;
+        } else {
+            unsigned char miss[32];
+            memset(miss, 0xC5, 32);
+            parents[0] = longparent;
+            lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+            lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+            rc = lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+            if (rc != -1) {
+                fprintf(stderr, "FAIL #488: long-path miss rc=%d\n", rc); fails++;
+            }
+            lcsas_disc_locator_free(&l);
+        }
+        {
+            char rm[1024];
+            snprintf(rm, sizeof rm, "rm -rf %s_long", tmpdir);
+            (void)system(rm);
+        }
+    }
+
+    /* #488: before prompting, a cwd inside the meta disc is dropped to
+     * "/" so the drive can be ejected. */
+    {
+        char meta[1024];
+        char inner[1100];
+        char before[4096];
+        char after[4096];
+        const char *search[] = { tmpdir };
+        unsigned char miss[32];
+        int pfd[2];
+        snprintf(meta, sizeof meta, "%s_cwdmeta", tmpdir);
+        snprintf(inner, sizeof inner, "%s/inner", meta);
+        memset(miss, 0xC6, 32);
+        if (mkdir_recursive(inner) != 0 || !getcwd(before, sizeof before)
+                || pipe(pfd) != 0) {
+            fprintf(stderr, "FAIL #488: cwd-under-meta fixture\n"); fails++;
+        } else if (chdir(inner) != 0) {
+            fprintf(stderr, "FAIL #488: chdir inner\n"); fails++;
+            close(pfd[0]); close(pfd[1]);
+        } else {
+            FILE *in = fdopen(pfd[0], "r");
+            FILE *out = fopen("/dev/null", "w");
+            char real_meta[4096];
+            if (write(pfd[1], "q\n", 2) != 2) { /* EOF aborts as well */ }
+            close(pfd[1]);
+            /* getcwd() resolves symlinks (here /tmp may be one), so hand
+             * the locator the resolved path, as restore.sh does. */
+            if (!realpath(meta, real_meta)) {
+                snprintf(real_meta, sizeof real_meta, "%s", meta);
+            }
+            lcsas_disc_locator_init(&l, search, 1, NULL, 1);
+            lcsas_disc_locator_set_auto_mount(&l, 0);
+            lcsas_disc_locator_set_meta(&l, real_meta);
+            if (in) l.prompt_in = in;
+            if (out) l.prompt_out = out;
+            alarm(20);
+            rc = lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+            alarm(0);
+            if (!getcwd(after, sizeof after) || strcmp(after, "/") != 0) {
+                fprintf(stderr, "FAIL #488: cwd not dropped to / (now %s)\n",
+                        after);
+                fails++;
+            }
+            lcsas_disc_locator_free(&l);
+            if (in) fclose(in); else close(pfd[0]);
+            if (out) fclose(out);
+            if (chdir(before) != 0) {
+                fprintf(stderr, "FAIL #488: chdir back\n"); fails++;
+            }
+        }
+        {
+            char rm[1100];
+            snprintf(rm, sizeof rm, "rm -rf %s", meta);
+            (void)system(rm);
         }
     }
 

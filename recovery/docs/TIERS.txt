@@ -242,16 +242,19 @@ any architecture.
 
 TIER FALLBACK ON RUNTIME FAILURES
 
-The default cascade ``exec``s the first available tier, so a tier-1
-crash mid-restore aborts the run with no automatic fall-through.
-This matches the bare-minimum recovery story: tier 1 IS the
-recovery, and it has to work.
+The default cascade runs the first available tier as a subprocess (not
+``exec``, so restore.sh's EXIT trap can still shred the temporary
+password file -- issue #363) and exits with that tier's own status.
+A tier-1 crash mid-restore therefore aborts the run with no automatic
+fall-through.  This matches the bare-minimum recovery story: tier 1 IS
+the recovery, and it has to work.
 
 To make restore.sh walk the cascade on a tier-1 runtime failure
 (non-zero exit), set ``LCSAS_TIER_FALLBACK=1``.  Tiers 1 and 2 then
-run as subprocesses and fall through to the next tier on a non-zero
-exit code.  Tier 3 is always ``exec``'d (last resort, nothing to
-fall back to).  See ``RECOVER.txt`` ENVIRONMENT VARIABLES.
+fall through to the next tier on a non-zero exit code.  Tier 3 is
+always run as a subprocess too (its stderr is captured and replayed
+on failure -- issue #240); it is the last resort, so there is nothing
+to fall back to.  See ``RECOVER.txt`` ENVIRONMENT VARIABLES.
 
 EXCEPTION -- wrong password is TERMINAL (issue #384): when tier 1
 runs and exits 77, restore.sh and restore.bat STOP with a clear

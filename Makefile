@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-tier3-qemu test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-split-docs blind-restore-windows blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e meta-gate
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-tier3-qemu test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-split-docs blind-restore-windows blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e meta-gate shellcheck
 
 # Default target: lint + typecheck + every test tier ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
@@ -10,6 +10,12 @@ dev:
 
 lint:
 	ruff check src/ tests/
+
+# POSIX-sh lint for the recovery scripts an heir runs (#484).  A ratchet:
+# fails on any finding not in scripts/shellcheck_baseline.txt, and on a
+# baseline entry that no longer matches (lower it when you fix one).
+shellcheck:
+	python3 scripts/shellcheck_gate.py recovery/scripts/*.sh
 
 lint-fix:
 	ruff check --fix src/ tests/
@@ -56,7 +62,7 @@ test-all: test-unit test-integration test-e2e test-recovery-hardening
 # Production build gate.  Composes lint + typecheck + the entire test
 # pyramid; the recovery-hardening tier is the final step.  Anything
 # that fails here blocks `git push`.
-gate: lint typecheck test-all shell-coverage
+gate: lint shellcheck typecheck test-all shell-coverage
 	@echo "build gate passed."
 
 coverage:
@@ -150,7 +156,7 @@ blind-restore-teardown:
 #   tier1-missing        — meta lacks lcsas-restore; restore.sh's
 #                          LCSAS_TIER_FALLBACK=1 path skips tier 2 on
 #                          the multi-disc layout and falls to tier 3
-#                          (XFAIL pending live 15/15, issue #227).
+#                          (promoted out of XFAIL 2026-06-15, issue #227).
 #   tier1-tier2-missing  — meta lacks tier-1 AND tier-2; tier 3 takes
 #                          over (promoted cycle 9, 2026-05-28).
 #   single-tenant        — only the alpha repo exists; exercises the
@@ -263,11 +269,6 @@ fetch-recovery:
 verify-recovery:
 	sh recovery/scripts/fetch_upstream.sh --verify-only
 
-# Cross-build the tier-1 lcsas-restore binary for every target that
-# `RecoveryBuilder.cross_build` currently reaches via `zig cc` or
-# `<arch>-linux-musl-gcc` (Phase 21.10.b).  armv7 + macOS deferred.
-# Requires zig or musl-cross toolchains on PATH.  Skip targets you
-# can't build by overriding LCSAS_RECOVERY_ARCHES.
 gen-catalogue:
 	python3 tools/gen_hardening_catalogue.py
 
@@ -279,6 +280,11 @@ THRESHOLD ?= 88
 audit-gate:
 	$(MAKE) -C recovery audit-gate THRESHOLD=$(THRESHOLD)
 
+# Cross-build the tier-1 lcsas-restore binary for every approved target
+# (host, Linux x86_64/aarch64/armv7, Windows x86_64, macOS x86_64/arm64)
+# via `RecoveryBuilder.cross_build` (`zig cc` or `<arch>-linux-musl-gcc`).
+# Requires zig or musl-cross toolchains on PATH.  Skip targets you
+# can't build by overriding LCSAS_RECOVERY_ARCHES.
 build-recovery:
 	@arches="$${LCSAS_RECOVERY_ARCHES:-host x86_64 aarch64 armv7 x86_64-windows x86_64-macos aarch64-macos}"; \
 	for a in $$arches; do \

@@ -93,9 +93,12 @@ runs nine unit-test suites against canonical test vectors:
   test_path      path traversal safety
   test_json      JSON tokenizer + accessors
 
-All must pass.  An integration test against rustic-generated repos is
-deferred to Phase 2 (requires the rustic binary on PATH; see
-tests/integration/test_pure_python_restore.py for the fixture pattern).
+All must pass.  The Phase 2 end-to-end integration test is
+`make test-e2e` (tests/test_e2e.py): it builds a synthetic restic repo
+in Python (v1 and v2 layouts) and checks lcsas-restore extracts it
+byte-for-byte.  Tests against rustic-generated repos need the rustic
+binary on PATH and live in the source repository's tests/integration/
+(see test_pure_python_restore.py for the fixture pattern).
 
 VENDORED DEPENDENCIES
 

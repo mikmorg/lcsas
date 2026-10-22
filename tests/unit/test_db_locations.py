@@ -35,6 +35,19 @@ class TestLocationCRUD:
         loc = ensure_location(conn, "Offsite")
         assert loc.name == "Offsite"
 
+    def test_ensure_without_commit_rolls_back_with_the_caller(self, conn):
+        """#522: import-receipts keeps the insert in its per-receipt transaction."""
+        loc = ensure_location(conn, "Vault_Q", commit=False)
+        assert loc.name == "Vault_Q"
+        conn.rollback()
+        with pytest.raises(ValueError, match="not found"):
+            get_location(conn, "Vault_Q")
+
+    def test_ensure_commits_by_default(self, conn):
+        ensure_location(conn, "Vault_R")
+        conn.rollback()
+        assert get_location(conn, "Vault_R").name == "Vault_R"
+
     def test_list_locations(self, conn):
         create_location(conn, "A_Location")
         create_location(conn, "B_Location")

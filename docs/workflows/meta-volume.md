@@ -398,8 +398,12 @@ re-running the same command.
 - `tests/unit/test_meta_builder.py::TestSingleDriveBitsStandalone`
   (dispatcher, bash syntax, helper write).
 - `tests/integration/test_meta_volume_restore.py` covers the directory-mode
-  (`--isos`) path end-to-end; the interactive single-drive prompt loop is
-  not yet simulated (gap).
+  (`--isos`) path end-to-end. The interactive single-drive prompt loop is
+  simulated by `tests/integration/test_interactive_restore.py`, which
+  drives the production `restore.sh` through a pseudoterminal and swaps
+  discs by re-attaching ISOs to a loop device (needs root, `rustic` and
+  `xorriso`; self-skips without them). Tier 1's own swap prompt is covered
+  by `recovery/tests/test_multidisc.py::case_interactive_swap`.
 
 **Source refs:** `RESTORE_SCRIPT` / `RESTORE_AUTO_SCRIPT` constants and
 `_write_restore_script` (`src/lcsas/meta/builder.py`);
@@ -607,7 +611,7 @@ catalog policy (no `catalog.db`).
 | `lcsas meta verify` | `tests/unit/test_meta_builder.py` (manifest + required-contents) | — | None significant. |
 | Meta-disc inventory | `test_build_creates_directory_structure`, `test_bundled_*_works`, `test_start_here_generated`, `test_standalone_restorer_bundled`, `test_single_drive_helper_bundled` | `TestMetaVolumeRestore::test_meta_volume_has_all_tools` / `_has_source` / `_has_docs` | None significant. |
 | Cross-platform bundling | `TestBundleUpstreamBinaries` (5 tests), `test_restore_sh_dispatcher.py` | — | Per-target restore exercised in recovery-toolchain CI. |
-| Single-drive bootstrap | `test_single_drive_helper_bundled`, `test_restore_script_single_drive_default`, `TestSingleDriveBitsStandalone` | `TestMetaVolumeRestore` (directory mode only) | No interactive prompt-loop simulation. |
+| Single-drive bootstrap | `test_single_drive_helper_bundled`, `test_restore_script_single_drive_default`, `TestSingleDriveBitsStandalone` | `TestMetaVolumeRestore` (directory mode); `test_interactive_restore.py` (PTY + loop-device disc swaps, root-gated) | None significant. |
 | Catalog policy | Code inspection | `TestMetaVolumeRestore` exercises the holographic catalog implicitly | No direct `--reseed` precedence test. |
 | Source refresh | `test_no_pycache_in_source`, `test_no_incomplete_marker_after_build` | — | No idempotency / re-run test. |
 | Docs-vs-reality | `tests/unit/test_doc_command_contract.py` (`test_meta_build_flags_in_docs_exist`) | — | — |

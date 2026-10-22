@@ -555,8 +555,15 @@ hardware is rare in 2026 and rarer in 2040.  But the cost is small
 relative to the survivability win.
 
 ────────────────────────────────────────────────────────────────────
-PHASE W6 -- MULTI-DISC SWAP UX                       (planned; #4)
+PHASE W6 -- MULTI-DISC SWAP UX                  (SHIPPED 2026-10-19)
 ────────────────────────────────────────────────────────────────────
+
+STATUS (2026-10-20): SHIPPED.  The interactive swap prompt and
+disc-scan landed in Phase 21; the last pieces, auto-mount detection
+(#455) and the mounted-disc volume label (#456), closed on
+2026-10-19.  The disc_index.txt sidecar was decided against (#457).
+See recovery/docs/STATUS_LEDGER.md.  The paragraph below is the
+original planning note, kept as written.
 
 See recovery/docs/MULTI_DISC_DESIGN.txt for the full design.  This
 is the highest-impact UX work outstanding on the recovery path,

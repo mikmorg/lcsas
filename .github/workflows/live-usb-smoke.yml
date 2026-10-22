@@ -23,7 +23,7 @@ on:
 
 jobs:
   live-usb-smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # TCG worst case: the test's own internal deadline is 25 min of VM
     # time; leave headroom for the ISO download + fixture build.
     timeout-minutes: 90
@@ -114,7 +114,7 @@ jobs:
     # and cancelled-aware, so a timeout-kill (conclusion `cancelled`, for
     # which failure() is false -- the #419 blind spot) still triggers it on
     # a fresh runner.  See #420 for the fleet-wide pattern.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [live-usb-smoke]
     if: >-
       always() && github.event_name == 'schedule'

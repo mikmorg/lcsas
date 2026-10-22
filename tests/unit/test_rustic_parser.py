@@ -70,6 +70,54 @@ class TestParseSnapshots:
     def test_parse_invalid(self):
         assert parse_snapshots_output("broken") == []
 
+    # rustic 0.11.2 `snapshots --json`, trimmed: grouped by host/label/paths.
+    _RUSTIC_GROUPED = json.dumps([
+        {
+            "group_key": {"hostname": "vm-desk1", "label": "", "paths": ["/data"]},
+            "snapshots": [
+                {"time": "2026-10-21T01:58:53.8+00:00", "tree": "t1",
+                 "paths": ["/data"], "hostname": "vm-desk1", "tags": [],
+                 "id": "a" * 64},
+                {"time": "2026-10-21T02:10:00.0+00:00", "tree": "t2",
+                 "paths": ["/data"], "hostname": "vm-desk1", "tags": ["x"],
+                 "id": "b" * 64},
+            ],
+        },
+        {
+            "group_key": {"hostname": "laptop", "label": "", "paths": ["/home"]},
+            "snapshots": [{"time": "2026-10-20T00:00:00+00:00", "id": "c" * 64}],
+        },
+    ])
+
+    def test_rustic_grouped_output_is_flattened(self):
+        """#536: each group is not a snapshot; its members are."""
+        result = parse_snapshots_output(self._RUSTIC_GROUPED)
+        assert [s.snapshot_id for s in result] == ["a" * 64, "b" * 64, "c" * 64]
+        assert result[1].tags == ["x"]
+        assert result[0].timestamp == "2026-10-21T01:58:53.8+00:00"
+
+    def test_group_key_fills_in_missing_hostname_and_paths(self):
+        third = parse_snapshots_output(self._RUSTIC_GROUPED)[2]
+        assert third.hostname == "laptop"
+        assert third.paths == ["/home"]
+
+    def test_older_rustic_pair_form_is_flattened(self):
+        output = json.dumps([[{"hostname": "h", "paths": ["/p"]},
+                              [{"id": "d" * 64, "time": "t"}]]])
+        (snap,) = parse_snapshots_output(output)
+        assert (snap.snapshot_id, snap.hostname, snap.paths) == ("d" * 64, "h", ["/p"])
+
+    def test_entries_without_an_id_are_dropped_with_a_warning(self, caplog):
+        output = json.dumps([{"time": "t"}, {"id": "e" * 64, "time": "t"}])
+        with caplog.at_level("WARNING"):
+            result = parse_snapshots_output(output)
+        assert [s.snapshot_id for s in result] == ["e" * 64]
+        assert "no snapshot id" in caplog.text
+
+    def test_no_result_ever_has_an_empty_id(self):
+        output = json.dumps([{"group_key": {}, "snapshots": []}, {}, 3, "x", None])
+        assert parse_snapshots_output(output) == []
+
 
 class TestParseRestorePlan:
     def test_parse_with_packs(self):

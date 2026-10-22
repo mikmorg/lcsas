@@ -68,6 +68,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_meta_bundling_completeness.py` | Hardening test #1: meta-disc tier-1 bundling completeness. |
 | `test_meta_completeness_367.py` | test_meta_completeness_367.py -- tiered meta completeness (issue #367). |
 | `test_multi_disc_design_header.py` | test_multi_disc_design_header.py -- static regression guard ensuring |
+| `test_multidisc_cases.py` | Run recovery/tests/test_multidisc.py's cases inside the hardening tier (#465). |
 | `test_no_boot_deadend_routing.py` | test_no_boot_deadend_routing.py -- static regression guard against the |
 | `test_no_bypass_check.py` | Unit tests for the blind-restore #13 bypass check. |
 | `test_no_unpinned_boot_artifacts.py` | BOOT-07: nothing executable reaches a meta-volume tree unpinned. |
@@ -79,6 +80,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_readme_simplification.py` | Hardening test: README_RESTORE simplification (Unit 5). |
 | `test_rebuild_docs.py` | test_rebuild_docs.py -- static regression guard for the mixed-age-discs |
 | `test_recovery_card_docs.py` | Hardening test: the single-key Recovery Card artifact + its references. |
+| `test_restore_auto_gaps.py` | test_restore_auto_gaps.py -- restore_auto.sh usage-error exits and repo-discovery layouts. |
 | `test_restore_auto_repo_select.py` | test_restore_auto_repo_select.py -- restore_auto.sh per-repo selection. |
 | `test_restore_bat_ecc_dispatch_wine.py` | FMT-01: restore.bat --check-disc ECC repair path, end-to-end under wine. |
 | `test_restore_bat_password_lifetime.py` | restore.bat temp-password-file lifetime (issue #384 review finding). |
@@ -99,6 +101,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_sh_tmpfs_target_warns.py` | Hardening tests: RAM-backed (tmpfs) restore-target warning [BOOT-05]. |
 | `test_restore_sh_ux.py` | Hardening tests: restore.sh UX improvements (recommendations #3, #4, #8). |
 | `test_restore_sh_version_flag.py` | Hardening test: --version flag on restore.sh (Issue #96). |
+| `test_restore_shell_facade.py` | The blind agent's terminal must keep the restore's last lines. |
 | `test_restore_skips_tier2_on_multi_disc.py` | Hardening test (issue #227): restore.sh skips tier 2 when the |
 | `test_restore_space_preflight.py` | Hardening tests: restore-side free-space preflight [FMA-09]. |
 | `test_schedule_only_workflows.py` | Hardening: a scheduled workflow file holds a schedule and nothing else (#462). |
@@ -121,6 +124,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_tier1_fault_handling.py` | Tier-1 operator-error fault handling tests. |
 | `test_tier1_fault_inject.py` | Audit phase 6 (issue #165): malloc fault-injection sweep — zero crashes. |
 | `test_tier1_hardlinks.py` | Issue #192 -- tier-1 hardlink reconstruction. |
+| `test_tier1_index_walk_bounds.py` | Hardening: tier-1's index walks stay inside the parsed tokens (#487). |
 | `test_tier1_large_file.py` | T1C-01: one file with 40,000 content chunks (huge content array). |
 | `test_tier1_macos_native.py` | GATE-03: tier-1 macOS (Mach-O) binary execution coverage. |
 | `test_tier1_meta_disc_live.py` | Hardening test: tier-1 meta-disc exclusion respects a LIVE check. |

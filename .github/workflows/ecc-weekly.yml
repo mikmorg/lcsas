@@ -37,7 +37,7 @@ jobs:
     # runner, cancelled-aware, explicit issues:write, and no `|| true`:
     # if ticket-filing itself fails, this job fails loud.  Fleet-wide
     # pattern: #420.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [ecc-repair]
     if: >-
       always() && github.event_name == 'schedule'
