@@ -876,9 +876,15 @@ for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
 done
 IFS="$OLD_IFS"
 
-# De-duplicate REPO_CANDIDATES preserving order, then pick one.
+# De-duplicate REPO_CANDIDATES by tenant name (the last path
+# component), keeping the first copy found, then pick one.  Every
+# data disc carries metadata/<tenant>/ for every tenant, so keying on
+# the path listed one tenant once per mounted disc and turned a
+# single-tenant archive into a bogus "Multiple repositories" prompt
+# (#533).  First found = the meta disc's own copy when there is one;
+# --repo NAME resolves the same way, and restore.bat dedupes alike.
 REPO_CANDIDATES="$(printf '%s\n' "$REPO_CANDIDATES" \
-                  | awk 'NF && !seen[$0]++')"
+                  | awk -F/ 'NF && !seen[$NF]++')"
 
 # Count non-empty lines (printf "\n" | wc -l returns 1 — useless).
 # `grep -c` exits 1 when nothing matches; under `set -e` that would

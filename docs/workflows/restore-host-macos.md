@@ -112,11 +112,6 @@ hdiutil mount -nobrowse -mountpoint /Volumes/LCSAS_BD25_2026_0002 LCSAS_BD25_202
 sh /Volumes/LCSAS_META/restore.sh ~/Restored
 ```
 
-With two or more data discs mounted, `restore.sh` may first ask which
-repository to restore and list the same name several times; type `1`
-(or see the repository-picker entry under
-[Gaps](#gaps-and-known-limitations)).
-
 `hdiutil` is in the macOS base install — no Homebrew or App Store
 download needed.  When the restore is done, eject:
 
@@ -213,24 +208,19 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   queried -- likely written by a newer LCSAS" instead of naming a disc;
   nothing is wrong with the discs, insert them one at a time.  Mounting every disc first (Finder will hold them
   all in `/Volumes`) and running the restore remains the simplest path
-  for a first run, subject to the repository-picker entry below.  The
+  for a first run.  The
   `INSERT DISC:` box is the older bash flow in `restore_legacy.sh`;
   `tools/restore_single_drive.py` on the disc (source:
   `src/lcsas/meta/restore_single_drive.py`) only builds the pick list
   and ingests packs, and has no prompt of its own.
-- **Repository picker with two or more data discs mounted (open
-  `restore.sh` bug #533, found by `macos-e2e.yml` and not macOS-specific):**
-  every data disc carries `metadata/<tenant>/`, and repo discovery
-  de-duplicates by path, so with N data discs mounted a single-tenant
-  archive is listed N times ("Multiple repositories on this archive:
-  1) win  2) win ...").  At a terminal, typing `1` is correct (the
-  entries are the same repository).  Without a terminal the picker's
-  read fails and `restore.sh` exits 1 before asking for the password.
-  Name the repository to skip the picker: `sh restore.sh --repo NAME
-  ...` (or `LCSAS_REPO=NAME`), where NAME is the directory name under
-  `metadata/` on any data disc.  `macos-e2e.yml` runs the plain
-  invocation as a named, non-blocking "KNOWN BUG" step, so it turns
-  green by itself when this is fixed.
+- (Fixed, #533) **Repository picker with two or more data discs
+  mounted:** every data disc carries `metadata/<tenant>/`, and repo
+  discovery de-duplicated by path, so with N data discs mounted a
+  single-tenant archive was listed N times ("Multiple repositories on
+  this archive: 1) win  2) win ...") and a run without a terminal exited
+  1 at the picker.  Candidates are now de-duplicated by tenant name,
+  keeping the first copy found (the meta disc's own, when present), as
+  `restore.bat` does.  Found by `macos-e2e.yml`; not macOS-specific.
 - **Quarantine attribute (intentional: OS behaviour, with a documented
   workaround; the heir-docs half is #490):** macOS may attach
   `com.apple.quarantine` to
@@ -256,6 +246,6 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
 | Intel Mac target selection | [covered] | same file — Darwin + x86_64 → x86_64-apple-darwin |
 | SHA-256 portable verifier | [covered] | `tests/unit/test_restore_executor.py::TestVerifyIsoSha256` (5 tests) |
 | verify_iso ECC→SHA fallback | [covered] | `tests/unit/test_restore_executor.py::TestVerifyIsoFallback` (4 tests) |
-| Full end-to-end macOS restore (`restore.sh` journey) | [covered] | `.github/workflows/macos-e2e.yml` (driver `tests/e2e/macos_restore_smoke.py`) runs the real `restore.sh` off `hdiutil`-attached fixture ISOs on `macos-14` (arm64) and `macos-15-intel` (x86_64): all discs attached with the read-only relocate-to-RAM re-exec (byte-exact against the manifest), wrong password (exit 77, no partial tree), and a multi-disc swap prompt (4 data discs, 3 swaps: wrong disc, right disc with ENTER, right disc with no input). One known `restore.sh` bug is shown there as a non-blocking step: the repository picker with 2+ data discs mounted (see Gaps). A stock-hardware pass by a person is still the manual real-Mac drill, #475 |
+| Full end-to-end macOS restore (`restore.sh` journey) | [covered] | `.github/workflows/macos-e2e.yml` (driver `tests/e2e/macos_restore_smoke.py`) runs the real `restore.sh` off `hdiutil`-attached fixture ISOs on `macos-14` (arm64) and `macos-15-intel` (x86_64): all discs attached with the read-only relocate-to-RAM re-exec (byte-exact against the manifest), wrong password (exit 77, no partial tree), and a multi-disc swap prompt (4 data discs, 3 swaps: wrong disc, right disc with ENTER, right disc with no input). The all-discs-attached restore runs both as the heir's plain invocation and with `--repo`. A stock-hardware pass by a person is still the manual real-Mac drill, #475 |
 | `hdiutil` mount flow | [covered] | The same workflow attaches every ISO with `hdiutil attach -readonly -nobrowse -mountpoint /Volumes/<LABEL>`; the manual real-Mac drill is #475 |
 | Apple Silicon binary execution | [covered] | `.github/workflows/macos-tier1.yml` runs the committed Mach-O binaries via `tests/recovery_hardening/test_tier1_macos_native.py` on `macos-14` (arm64) and `macos-15-intel` (x86_64) |
