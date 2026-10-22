@@ -303,3 +303,81 @@ def test_pack_search_finds_disc_mounted_at_mount_dir_itself(
         f"a disc mounted AT the mount dir must be offered as --pack-search; "
         f"got {_arg_value(args, '--pack-search')!r}; all args: {args}"
     )
+
+
+# ── Holographic copies across discs (#533) ───────────────────────────
+
+
+def _mount_data_discs(mount_parent: Path, tenants_per_disc: list[list[str]]) -> list[Path]:
+    """Data discs under *mount_parent*, each carrying metadata/<tenant>/
+    for the given tenants (as every LCSAS data disc does)."""
+    discs = []
+    for i, tenants in enumerate(tenants_per_disc, start=1):
+        disc = mount_parent / f"LCSAS_TEST_TINY_2026_000{i}"
+        (disc / "data").mkdir(parents=True)
+        for tenant in tenants:
+            _make_repo_skeleton(disc / "metadata", tenant)
+        discs.append(disc)
+    return discs
+
+
+def test_one_tenant_on_several_mounted_discs_needs_no_picker(tmp_path: Path) -> None:
+    """#533: every data disc carries metadata/<tenant>/, and candidates
+    were de-duplicated by path, so four mounted discs listed a
+    single-tenant archive four times ("Multiple repositories: 1) win
+    2) win ...") and a run with no terminal exited 1 at that picker."""
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    _install_stub_binary(recovery, HOST_TARGET, "lcsas-restore")
+    meta_copy = _make_repo_skeleton(recovery / "metadata", "win")
+    mount_parent = tmp_path / "media"
+    _mount_data_discs(mount_parent, [["win"]] * 4)
+    target = tmp_path / "restored"
+
+    # Only the password on stdin: a picker would eat it as its answer.
+    res = _run_restore(recovery, target,
+                       env={"LCSAS_MOUNT_DIRS": str(mount_parent)})
+    assert res.returncode == 0, res.stderr
+    assert "Multiple repositories" not in res.stderr, res.stderr
+    # The first copy found (the meta disc's own) is the one used.
+    assert _arg_value(_stub_args(res.stdout), "--repo") == str(meta_copy)
+
+
+def test_one_tenant_on_data_discs_only_needs_no_picker(tmp_path: Path) -> None:
+    """#533 without a meta-disc copy: the first mounted disc's copy wins."""
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    _install_stub_binary(recovery, HOST_TARGET, "lcsas-restore")
+    mount_parent = tmp_path / "media"
+    discs = _mount_data_discs(mount_parent, [["win"]] * 3)
+    target = tmp_path / "restored"
+
+    res = _run_restore(recovery, target,
+                       env={"LCSAS_MOUNT_DIRS": str(mount_parent)})
+    assert res.returncode == 0, res.stderr
+    assert "Multiple repositories" not in res.stderr, res.stderr
+    assert _arg_value(_stub_args(res.stdout), "--repo") == str(
+        discs[0] / "metadata" / "win"
+    )
+
+
+def test_picker_lists_each_tenant_once_across_discs(tmp_path: Path) -> None:
+    """#533: two real tenants on three discs are offered once each, in
+    discovery order, and a number picks the tenant it is printed next to."""
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    _install_stub_binary(recovery, HOST_TARGET, "lcsas-restore")
+    mount_parent = tmp_path / "media"
+    discs = _mount_data_discs(
+        mount_parent, [["alpha", "bravo"], ["alpha", "bravo"], ["alpha", "bravo"]],
+    )
+    target = tmp_path / "restored"
+
+    res = _run_restore(recovery, target, repo_input="2",
+                       env={"LCSAS_MOUNT_DIRS": str(mount_parent)})
+    assert res.returncode == 0, res.stderr
+    menu = [ln.strip() for ln in res.stderr.splitlines() if ln.strip()[:3] in ("1) ", "2) ", "3) ")]
+    assert menu == ["1) alpha", "2) bravo"], res.stderr
+    assert _arg_value(_stub_args(res.stdout), "--repo") == str(
+        discs[0] / "metadata" / "bravo"
+    )

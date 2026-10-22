@@ -93,35 +93,30 @@ find_meta_mount() {
     printf '%s\n' "$1"
 }
 
+# Print this host's rust triple (the bin/<triple>/ dir restore.sh runs
+# from), or nothing when the platform isn't one we ship.  The same
+# matrix as the main dispatch below, minus its error exits: relocation
+# only uses it to copy less.
+_host_triple() {
+    _ht_m="$(uname -m 2>/dev/null)"
+    case "$(uname -s 2>/dev/null)" in
+        Linux)
+            case "$_ht_m" in
+                x86_64|amd64)      echo x86_64-unknown-linux-musl ;;
+                aarch64|arm64)     echo aarch64-unknown-linux-musl ;;
+                armv7*|armv6*|arm) echo armv7-unknown-linux-gnueabihf ;;
+            esac ;;
+        Darwin)
+            case "$_ht_m" in
+                arm64|aarch64)     echo aarch64-apple-darwin ;;
+                x86_64)            echo x86_64-apple-darwin ;;
+            esac ;;
+    esac
+}
+
 relocate_to_ram() {
     # $1 = original meta-disc mount root.
     orig_mount="$1"; shift
-    # Pick a writable scratch dir that is NOT inside the meta-disc.
-    ramdir=""
-    for cand in "${TMPDIR:-}" "${XDG_RUNTIME_DIR:-}" /tmp /run /var/tmp; do
-        [ -n "$cand" ] || continue
-        [ -d "$cand" ] || continue
-        [ -w "$cand" ] || continue
-        case "$cand" in "$orig_mount"|"$orig_mount"/*) continue;; esac
-        ramdir="$(mktemp -d "$cand/lcsas-restore.XXXXXX" 2>/dev/null || true)"
-        [ -n "$ramdir" ] && [ -d "$ramdir" ] && break
-        ramdir=""
-    done
-    if [ -z "$ramdir" ]; then
-        printf '[lcsas-restore] cannot find a writable dir to relocate to; ' >&2
-        printf 'continuing from %s (drive will be held)\n' "$orig_mount" >&2
-        return 1
-    fi
-
-    # Mirror the on-disc layout under $ramdir so the script's own
-    # AUTO_RECOVERY logic resolves $ramdir/recovery as RECOVERY.
-    mkdir -p "$ramdir/recovery/scripts" "$ramdir/recovery/bin"
-    cp -f "$SCRIPT" "$ramdir/recovery/scripts/restore.sh"
-    chmod +x "$ramdir/recovery/scripts/restore.sh"
-    if [ -f "$SCRIPT_DIR/detect_arch.sh" ]; then
-        cp -f "$SCRIPT_DIR/detect_arch.sh" "$ramdir/recovery/scripts/detect_arch.sh"
-        chmod +x "$ramdir/recovery/scripts/detect_arch.sh"
-    fi
     # Preserve the bin/ tree so tier-1/tier-2 still resolve.  The
     # script lives at one of two valid locations on the meta disc:
     #   (a) $META/restore.sh                — top-level entry; the
@@ -148,8 +143,79 @@ relocate_to_ram() {
             src_bin="$SCRIPT_DIR/../bin"
         fi
     fi
+    # Pick a scratch dir that is NOT inside the meta-disc, has room for
+    # the bin/ tree, and may run programs (#496).  A small tmpfs
+    # (/run/user/<uid> is 10% of RAM by default; the bin/ tree is
+    # ~750 MB) used to take a partial copy silently, and a "noexec" /tmp
+    # (common on hardened hosts) made every relocated tier fail with
+    # "Permission denied".  Either way the next candidate is tried,
+    # ending with $HOME.  The copy itself stays best-effort: one
+    # unreadable file on a scratched disc must not block relocation.
+    # Copy only this host's bin/<triple>/ (#508): restore.sh never reads
+    # another target's dir, and the whole tree is ~750 MB against ~130 MB
+    # for one target.  Unknown platform or no such dir: copy everything.
+    _copy_from="$src_bin"
+    _copy_to="bin"
+    _reloc_triple="${LCSAS_TARGET:-$(_host_triple)}"
+    if [ -n "$src_bin" ] && [ -n "$_reloc_triple" ] \
+       && [ -d "$src_bin/$_reloc_triple" ]; then
+        _copy_from="$src_bin/$_reloc_triple"
+        _copy_to="bin/$_reloc_triple"
+    fi
+    _bin_kb=""
+    [ -n "$src_bin" ] && _bin_kb="$(du -sk "$_copy_from" 2>/dev/null | awk '{print $1}')"
+    ramdir=""
+    for cand in "${TMPDIR:-}" "${XDG_RUNTIME_DIR:-}" /tmp /run /var/tmp \
+                "${HOME:-}"; do
+        [ -n "$cand" ] || continue
+        [ -d "$cand" ] || continue
+        [ -w "$cand" ] || continue
+        case "$cand" in "$orig_mount"|"$orig_mount"/*) continue;; esac
+        _free_kb="$(df -Pk "$cand" 2>/dev/null | awk 'NR==2 { print $4 }')"
+        case "$_bin_kb:$_free_kb" in
+            *[!0-9:]*|:*|*:) ;;
+            *)  if [ "$_free_kb" -lt "$_bin_kb" ]; then
+                    printf '[lcsas-restore] %s has %s KB free, the recovery ' "$cand" "$_free_kb" >&2
+                    printf 'binaries need %s KB; trying the next folder\n' "$_bin_kb" >&2
+                    continue
+                fi ;;
+        esac
+        ramdir="$(mktemp -d "$cand/lcsas-restore.XXXXXX" 2>/dev/null || true)"
+        if [ -z "$ramdir" ] || [ ! -d "$ramdir" ]; then
+            ramdir=""
+            continue
+        fi
+        printf '#!/bin/sh\nexit 0\n' > "$ramdir/.exec-probe" 2>/dev/null
+        chmod +x "$ramdir/.exec-probe" 2>/dev/null
+        if ! "$ramdir/.exec-probe" 2>/dev/null; then
+            rm -rf "$ramdir"
+            ramdir=""
+            continue
+        fi
+        rm -f "$ramdir/.exec-probe"
+        break
+    done
+    unset _bin_kb _free_kb _reloc_triple
+    if [ -z "$ramdir" ]; then
+        printf '[lcsas-restore] cannot find a writable dir to relocate to; ' >&2
+        printf 'continuing from %s (drive will be held)\n' "$orig_mount" >&2
+        return 1
+    fi
+
+    # Mirror the on-disc layout under $ramdir so the script's own
+    # AUTO_RECOVERY logic resolves $ramdir/recovery as RECOVERY.
+    mkdir -p "$ramdir/recovery/scripts" "$ramdir/recovery/$_copy_to"
     if [ -n "$src_bin" ]; then
-        cp -R "$src_bin/." "$ramdir/recovery/bin/" 2>/dev/null || true
+        cp -R "$_copy_from/." "$ramdir/recovery/$_copy_to/" 2>/dev/null || true
+        # A copy of the disc on a FAT/exFAT stick (or a noexec mount) can
+        # leave the binaries without their executable bits (#496).
+        chmod -R u+x "$ramdir/recovery/bin" 2>/dev/null || true
+    fi
+    cp -f "$SCRIPT" "$ramdir/recovery/scripts/restore.sh"
+    chmod +x "$ramdir/recovery/scripts/restore.sh"
+    if [ -f "$SCRIPT_DIR/detect_arch.sh" ]; then
+        cp -f "$SCRIPT_DIR/detect_arch.sh" "$ramdir/recovery/scripts/detect_arch.sh"
+        chmod +x "$ramdir/recovery/scripts/detect_arch.sh"
     fi
     # Catalog sidecar for prompt hints (small enough to copy).
     for cat_cand in \
@@ -222,6 +288,19 @@ if [ -z "${LCSAS_RELOCATED:-}" ] && [ "${LCSAS_NO_RELOCATE:-0}" != "1" ]; then
     # Fallback: probe for read-only / optical filesystem types.
     if [ "$relocate_needed" = "0" ] && [ ! -w "$SCRIPT_DIR" ]; then
         relocate_needed=1
+    fi
+    # #496: tier binaries that exist but can't be run from here (a
+    # FAT/exFAT copy has no executable bits; a noexec mount refuses
+    # them).  The relocated copy gets its bits back and an exec-able home.
+    if [ "$relocate_needed" = "0" ]; then
+        for _nx_bin in "$SCRIPT_DIR"/recovery/bin/*/lcsas-restore \
+                       "$SCRIPT_DIR"/../bin/*/lcsas-restore; do
+            if [ -s "$_nx_bin" ] && [ ! -x "$_nx_bin" ]; then
+                relocate_needed=1
+                break
+            fi
+        done
+        unset _nx_bin
     fi
     if [ "$relocate_needed" = "0" ] && command -v findmnt >/dev/null 2>&1; then
         fstype="$(findmnt -n -o FSTYPE --target "$SCRIPT_DIR" 2>/dev/null || true)"
@@ -681,11 +760,21 @@ TIER3_RC_FILE=""
 # Persistent exit-diagnostic log (issue #259).  Written on non-zero exit so
 # the failure is visible even after the tmux session dies.
 _restore_exit_log="/tmp/lcsas-restore-exit.$(date +%Y%m%d-%H%M%S-$$)"
+# shellcheck disable=SC2317  # runs from the EXIT/INT/TERM trap below
 _restore_exit_handler() {
     rc=$?
     [ -n "${TIER3_ERR:-}" ] && [ -f "${TIER3_ERR:-}" ] && rm -f "$TIER3_ERR"
     [ -n "${TIER3_RC_FILE:-}" ] && [ -f "${TIER3_RC_FILE:-}" ] && rm -f "$TIER3_RC_FILE"
     [ -n "${PWFILE_TMP:-}" ] && [ -f "${PWFILE_TMP:-}" ] && rm -f "$PWFILE_TMP"
+    # #508: a relocated copy (~130 MB of binaries) removes itself, or every
+    # run leaves one behind in /tmp or /run/user.  Only the directory
+    # relocate_to_ram made: $SCRIPT_DIR is <ramdir>/recovery/scripts.
+    if [ -n "${LCSAS_RELOCATED:-}" ]; then
+        _reloc_root="$(dirname "$(dirname "$SCRIPT_DIR")")"
+        case "$(basename "$_reloc_root")" in
+            lcsas-restore.??????) rm -rf "$_reloc_root" ;;
+        esac
+    fi
     if [ "$rc" -ne 0 ]; then
         printf '[restore.sh] EXIT rc=%d at line approx=%d\n' "$rc" "${LINENO:-0}" \
             >> "$_restore_exit_log" 2>/dev/null || true
@@ -787,9 +876,15 @@ for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
 done
 IFS="$OLD_IFS"
 
-# De-duplicate REPO_CANDIDATES preserving order, then pick one.
+# De-duplicate REPO_CANDIDATES by tenant name (the last path
+# component), keeping the first copy found, then pick one.  Every
+# data disc carries metadata/<tenant>/ for every tenant, so keying on
+# the path listed one tenant once per mounted disc and turned a
+# single-tenant archive into a bogus "Multiple repositories" prompt
+# (#533).  First found = the meta disc's own copy when there is one;
+# --repo NAME resolves the same way, and restore.bat dedupes alike.
 REPO_CANDIDATES="$(printf '%s\n' "$REPO_CANDIDATES" \
-                  | awk 'NF && !seen[$0]++')"
+                  | awk -F/ 'NF && !seen[$NF]++')"
 
 # Count non-empty lines (printf "\n" | wc -l returns 1 — useless).
 # `grep -c` exits 1 when nothing matches; under `set -e` that would
@@ -962,6 +1057,24 @@ if [ ! -x "$_RESTORE_BIN_PROBE" ] \
    && [ "$_have_stdtool" = "0" ] \
    && { [ "$_have_tier3_python" = "0" ] || [ "$_have_tier3_script" = "0" ]; }
 then
+    if [ -s "$_RESTORE_BIN_PROBE" ] || [ -s "$_RUSTIC_BIN_PROBE" ]; then
+        {
+            # #496: the binaries are here but this computer won't run
+            # them from this folder (FAT/exFAT copy without executable
+            # bits, or a noexec mount, with no runnable copy possible).
+            printf 'ERROR: the recovery programs are on this disc, but this computer\n'
+            printf 'will not run them from %s\n' "$RECOVERY/bin/$TARGET"
+            printf '(a USB-stick copy without "executable" permissions, or a folder\n'
+            printf 'mounted "noexec").  The disc itself is fine.  Copy the disc to\n'
+            printf 'your home folder and run the copy:\n\n'
+            printf '    cp -R <this disc> ~/lcsas-meta\n'
+            printf '    chmod -R u+x ~/lcsas-meta/recovery/bin\n'
+            printf '    sh ~/lcsas-meta/restore.sh <target folder>\n\n'
+            printf 'Exit code %d = no_recovery_binary_available.\n' \
+                   "$EXIT_NO_RECOVERY_BIN"
+        } >&2
+        exit "$EXIT_NO_RECOVERY_BIN"
+    fi
     {
         printf 'ERROR: meta disc lacks all recovery binaries -- verify disc integrity.\n'
         printf '\n'
@@ -1143,7 +1256,13 @@ if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
        && [ -x "$_RESTORE_BIN_PROBE" ]; then
         # Parse "Total: N packs, X.X MB across M discs." -> X.X
         # (output captured -- must not leak onto the operator's tty).
-        _req_mb="$("$_RESTORE_BIN_PROBE" --catalog "$catalog_pick" \
+        # Tier 1's argument check wants --repo and --password-file even
+        # for --list-pending-packs, which reads neither (it exits before
+        # the key load); without them it printed usage, exited 2, and
+        # this fallback never produced a size (#535).  The password has
+        # not been asked for yet, so pass /dev/null.
+        _req_mb="$("$_RESTORE_BIN_PROBE" --repo "$REPO" \
+                       --password-file /dev/null --catalog "$catalog_pick" \
                        --list-pending-packs 2>/dev/null \
                    | awk '/^Total:/ {
                          for (i = 1; i < NF; i++)
@@ -1511,6 +1630,10 @@ bin_preflight_ok() {
 if [ -x "$RESTORE_BIN" ] && ! bin_preflight_ok "$RESTORE_BIN"; then
     printf '[tier 1] %s is present but failed pre-flight ' "$RESTORE_BIN" >&2
     printf '(zero-byte / wrong arch / corrupted binary); skipping\n' >&2
+elif [ -s "$RESTORE_BIN" ] && [ ! -x "$RESTORE_BIN" ]; then
+    printf '[tier 1] %s is present but this computer will not run it ' "$RESTORE_BIN" >&2
+    printf '(no executable permission, or a noexec mount); skipping.  See ' >&2
+    printf 'START_HERE.txt "IF THE COMPUTER REFUSES TO RUN IT".\n' >&2
 elif [ -x "$RESTORE_BIN" ]; then
     printf '[tier 1] using prebuilt lcsas-restore (%s)\n' "$TARGET" >&2
     # Drop cwd outside the meta-disc before exec, so the kernel does

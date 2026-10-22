@@ -423,16 +423,11 @@ def check_relocated(output: str) -> None:
 def case_happy(
     fx: Fixture, mounts: Mounts, work: Path, timeout: int, repo: str | None
 ) -> None:
-    # Known restore.sh bug, found by this leg: every data disc carries
-    # metadata/<tenant>/ (the holographic layout), and repo discovery
-    # de-duplicates candidates by PATH, so with N data discs mounted a
-    # single-tenant archive is offered N identical "win" repositories
-    # ("Multiple repositories on this archive: 1) win 2) win ...").  With
-    # stdin closed the picker's read fails and restore.sh exits 1 before it
-    # asks for anything else.  `--repo win` (LCSAS_REPO) skips the picker, so
-    # the workflow runs this case twice: with `--repo` for everything else
-    # restore.sh does here, and without it as a named, non-blocking known-bug
-    # step.
+    # Every data disc carries metadata/<tenant>/ (the holographic layout).
+    # Until #533 repo discovery de-duplicated candidates by PATH, so with N
+    # data discs mounted a single-tenant archive was offered N identical
+    # "win" repositories and, with stdin closed, restore.sh exited 1 at the
+    # picker.  The workflow runs this case with and without `--repo win`.
     for iso in fx.all:
         mounts.attach(iso)
     target = work / "restored"
