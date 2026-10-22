@@ -59,8 +59,8 @@ permitted (ignored by the parser).
 <!-- EXEMPTIONS-FENCE-BEGIN -->
 ```
 # catalog.c
-catalog.c:310   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardcoded well-formed SELECT cannot fail without malloc inside SQLite (fault-inject cannot reach) or a catalog lacking the tables, which no --list-pending-packs test supplies
-catalog.c:311   INTRACTABLE   "
+catalog.c:317   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardcoded well-formed SELECT cannot fail without malloc inside SQLite (fault-inject cannot reach) or a catalog lacking the tables, which no --list-pending-packs test supplies
+catalog.c:318   INTRACTABLE   "
 
 # disc_locator.c
 disc_locator.c:666   VOLATILE   copy_file fwrite error path; covered by test_disc_locator RLIMIT_FSIZE fs-full drain when a >=11%-free cache base exists (TMPDIR / /dev/shm / /tmp), uncovered otherwise [FMA-09]
