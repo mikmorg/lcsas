@@ -118,10 +118,11 @@ def test_restore_bat_probes_holographic_metadata_layout():
 def test_restore_bat_warns_before_overwriting_nonempty_target():
     """UX-07: restore.bat must guard a non-empty, non-LCSAS target.
 
-    Functional .bat coverage rides INFRA-01's Windows e2e; until then
-    we assert the load-bearing strings are present: the hidden marker
-    filename, the YES confirmation prompt, the override env var, and the
-    distinct abort exit code (65).  The guard must sit BEFORE the
+    Functional .bat coverage lives in INFRA-01's Windows e2e
+    (``windows-e2e.yml``) and the local wine suite; this is the cheap
+    static check that the load-bearing strings are present: the hidden
+    marker filename, the YES confirmation prompt, the override env var,
+    and the distinct abort exit code (65).  The guard must sit BEFORE the
     password prompt so the heir is stopped before typing a secret.
     """
     content = RESTORE_BAT.read_text()

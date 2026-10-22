@@ -9,9 +9,10 @@ disciplined:
   * every exempt entry MUST carry an ``issue=#N`` reference;
   * every exempt entry MUST name a target bin-parity actually knows about
     (a dead exemption silently protects nothing);
-  * the macOS + Windows targets that are non-reproducible under the pinned
-    toolchain MUST be present (so dropping a line is a conscious, reviewed
-    promotion, not an accident);
+  * every target in ``EXPECTED_EXEMPT`` MUST be present (so dropping a line
+    is a conscious, reviewed promotion, not an accident).  ``EXPECTED_EXEMPT``
+    is empty since the #320 promotion, so today this pins nothing and every
+    committed target is byte-gated;
   * ``recovery/TOOLCHAIN`` must exist and pin a concrete ziglang version;
   * the bin-parity Makefile target + workflow must reference the ledger and
     the toolchain pin, so the gate can't be quietly decoupled from them.

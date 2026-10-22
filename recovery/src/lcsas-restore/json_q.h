@@ -39,9 +39,17 @@ typedef struct {
 } lcsas_json_tok;
 
 /*
+ * Deepest object/array nesting the tokenizer accepts (#487).  Restic's
+ * documents nest about five deep (an xattr inside a node inside "nodes");
+ * the cap keeps a file of nothing but '[' from recursing until the stack
+ * overflows.  Deeper input is rejected as invalid (-1).
+ */
+#define LCSAS_JSON_MAX_DEPTH 64
+
+/*
  * Tokenize `src` (length `len`).  Returns the number of tokens parsed
  * on success, or a negative value on error:
- *   -1: invalid JSON syntax
+ *   -1: invalid JSON syntax, or nesting deeper than LCSAS_JSON_MAX_DEPTH
  *   -2: ran out of tokens (caller must enlarge `toks`)
  *
  * Tokens are returned in document order: root is toks[0].

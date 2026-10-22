@@ -156,7 +156,7 @@ blind-restore-teardown:
 #   tier1-missing        — meta lacks lcsas-restore; restore.sh's
 #                          LCSAS_TIER_FALLBACK=1 path skips tier 2 on
 #                          the multi-disc layout and falls to tier 3
-#                          (XFAIL pending live 15/15, issue #227).
+#                          (promoted out of XFAIL 2026-06-15, issue #227).
 #   tier1-tier2-missing  — meta lacks tier-1 AND tier-2; tier 3 takes
 #                          over (promoted cycle 9, 2026-05-28).
 #   single-tenant        — only the alpha repo exists; exercises the
@@ -269,11 +269,6 @@ fetch-recovery:
 verify-recovery:
 	sh recovery/scripts/fetch_upstream.sh --verify-only
 
-# Cross-build the tier-1 lcsas-restore binary for every target that
-# `RecoveryBuilder.cross_build` currently reaches via `zig cc` or
-# `<arch>-linux-musl-gcc` (Phase 21.10.b).  armv7 + macOS deferred.
-# Requires zig or musl-cross toolchains on PATH.  Skip targets you
-# can't build by overriding LCSAS_RECOVERY_ARCHES.
 gen-catalogue:
 	python3 tools/gen_hardening_catalogue.py
 
@@ -285,6 +280,11 @@ THRESHOLD ?= 88
 audit-gate:
 	$(MAKE) -C recovery audit-gate THRESHOLD=$(THRESHOLD)
 
+# Cross-build the tier-1 lcsas-restore binary for every approved target
+# (host, Linux x86_64/aarch64/armv7, Windows x86_64, macOS x86_64/arm64)
+# via `RecoveryBuilder.cross_build` (`zig cc` or `<arch>-linux-musl-gcc`).
+# Requires zig or musl-cross toolchains on PATH.  Skip targets you
+# can't build by overriding LCSAS_RECOVERY_ARCHES.
 build-recovery:
 	@arches="$${LCSAS_RECOVERY_ARCHES:-host x86_64 aarch64 armv7 x86_64-windows x86_64-macos aarch64-macos}"; \
 	for a in $$arches; do \

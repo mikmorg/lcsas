@@ -130,3 +130,15 @@ def delete_snapshots_for_repo(conn: sqlite3.Connection, repo_id: str) -> int:
     )
     conn.commit()
     return cur.rowcount
+
+
+def delete_blank_snapshots(conn: sqlite3.Connection) -> int:
+    """Delete snapshot rows with an empty ``snapshot_id``; return the count.
+
+    Scans before #536 misparsed rustic's grouped ``snapshots --json`` and
+    stored every group as one row keyed ``''``.  No real snapshot has an
+    empty id, so these rows are always junk.
+    """
+    cur = conn.execute("DELETE FROM snapshots WHERE snapshot_id = ''")
+    conn.commit()
+    return cur.rowcount

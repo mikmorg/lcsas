@@ -175,6 +175,32 @@ class TestHolographicInjector:
 
         assert (staging_root / "catalog.db").read_text() == "fake db"
 
+    def test_inject_catalog_switches_a_wal_copy_to_a_rollback_journal(self, tmp_path):
+        """#534: a WAL catalog cannot be opened on a read-only disc."""
+        import sqlite3
+
+        staging_root = tmp_path / "staging"
+        staging_root.mkdir()
+        db_file = tmp_path / "archive.db"
+        conn = sqlite3.connect(db_file)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE t (x)")
+        conn.execute("INSERT INTO t VALUES (1)")
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+        HolographicInjector(staging_root).inject_catalog(db_file)
+        conn.close()
+
+        dst = staging_root / "catalog.db"
+        assert dst.read_bytes()[18:20] == b"\x01\x01"
+        assert sorted(p.name for p in staging_root.iterdir()) == ["catalog.db"]
+        ro = sqlite3.connect(f"file:{dst}?mode=ro", uri=True)
+        try:
+            assert ro.execute("SELECT x FROM t").fetchall() == [(1,)]
+        finally:
+            ro.close()
+
     def test_write_volume_info(self, tmp_path):
         staging_root = tmp_path / "staging"
         staging_root.mkdir()

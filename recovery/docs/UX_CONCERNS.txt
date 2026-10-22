@@ -75,7 +75,8 @@ MITIGATION:
 ────────────────────────────────────────────────────────────────────
 ID 003 -- No GUI launcher
 ────────────────────────────────────────────────────────────────────
-STATUS: DEFERRED
+STATUS: DEFERRED  (also a NON-GOAL in WINDOWS_RECOVERY_PLAN.txt: the
+        .bat console UX is the common-case answer on Windows)
 IMPACT: MEDIUM.  Average user in 2040 may have never used a
         terminal.  A double-clickable launcher (.app on macOS,
         .exe with prompt on Windows) lowers the barrier.
@@ -90,25 +91,33 @@ MITIGATION (proposed, deferred):
 ────────────────────────────────────────────────────────────────────
 ID 004 -- macOS Gatekeeper / Linux execstack refuses unsigned binary
 ────────────────────────────────────────────────────────────────────
-STATUS: OPEN
-IMPACT: MEDIUM.  On a fresh macOS, copying an unsigned executable
-        from a disc and running it triggers "could not be opened
-        because it is from an unidentified developer".  Users must
-        right-click -> Open or run xattr -d com.apple.quarantine.
-        Linux distros with execstack=noexec on /media will outright
-        refuse to execute the on-disc binary.
+STATUS: MITIGATED (workaround documented in START_HERE.txt and
+        RECOVER.txt "IF THE COMPUTER REFUSES TO RUN THE TOOLS", #490;
+        the binaries remain without a developer signature)
+IMPACT: MEDIUM.  On macOS, a quarantined copy of an unsigned
+        executable (files copied from a disc image or another
+        computer) triggers "cannot be opened because the developer
+        cannot be verified".  On Linux, a copy on a FAT/exFAT USB
+        stick loses its executable bits and a "noexec" mount refuses
+        to run anything; restore.sh then skips tiers 1-2 (falling to
+        the slow tier 3, or reporting that the disc "lacks all
+        recovery binaries").  A plain read-only optical disc is
+        mostly unaffected: restore.sh copies itself and the binaries
+        into a temporary folder before running them.
 
 MITIGATION:
-  * Document the macOS quarantine bypass in START_HERE.txt:
-        xattr -d com.apple.quarantine /Volumes/<DISC>/restore.command
-        sh /Volumes/<DISC>/restore.command
-  * Document the Linux execstack issue + workaround:
-        cp /media/<user>/<DISC>/recovery/bin/<arch>/lcsas-restore /tmp/
-        chmod +x /tmp/lcsas-restore
-        /tmp/lcsas-restore --repo ... --target ~/restored
+  * Done (#490): both docs tell the heir to copy the meta disc to
+    the home folder and run the copy, after
+        xattr -dr com.apple.quarantine ~/lcsas-meta     (macOS)
+        chmod -R u+x ~/lcsas-meta/recovery/bin          (Linux)
+    Checked on Linux against a real meta-volume copied to a
+    showexec FAT image: tiers 1-2 skipped from the stick, tier 1
+    restores byte-identically from the chmod'ed copy.  The macOS
+    wording is for the manual Mac drill (#475) to confirm.
   * Long term: codesign the macOS binary with an Apple Developer ID;
     sign the Windows .exe with Authenticode.  Both certificates
-    expire on 1-3 year cycles, so this is current-decade only.
+    expire on 1-3 year cycles, so this is current-decade only
+    (Authenticode is a NON-GOAL in WINDOWS_RECOVERY_PLAN.txt).
 
 ────────────────────────────────────────────────────────────────────
 ID 005 -- Multi-disc swap prompts are unclear
@@ -201,10 +210,16 @@ MITIGATION:
 ────────────────────────────────────────────────────────────────────
 ID 008 -- "Which disc do I start with" is undocumented
 ────────────────────────────────────────────────────────────────────
-STATUS: OPEN
+STATUS: CLOSED
+RESOLVED BY: START_HERE.txt (rendered by src/lcsas/meta/builder.py
+             _render_meta_start_here: "ONE of them will be labelled
+             <prefix>_META ... Start with it"), the "Insert the disc
+             labelled LCSAS_META" prompts in restore.sh (QUICK START)
+             and restore.bat (no-backup-set-found message), and the RECOVER.txt
+             MULTI-DISC RESTORE section (see ID 011).
 IMPACT: MEDIUM.  In a 50-disc archive, only one (the meta-volume)
-        is bootable / contains the toolchain.  The others are
-        data-only.  Picking the wrong one wastes time.
+        contains the toolchain.  The others are data-only.  Picking
+        the wrong one wastes time.
 
 MITIGATION:
   * Print clear "META" vs "DATA" labels on each disc (already done
@@ -311,11 +326,12 @@ MITIGATION:
 
 PRIORITISATION
 
-  P1 (next):           002, 008, 010
-  P2 (when time):      004
+  P1 (next):           002, 010
   P3 (long-term):      003
   WONTFIX:             006 (cryptographic)
   MITIGATED:           001 (native Windows path shipped, UX-01),
+                       004 (workaround documented, #490; code-side
+                            noexec detection is #496),
                        007 (live-USB route documented + gated)
   RESOLVED:            009 (non-empty-target guard, UX-07)
-  CLOSED:              005, 011, 012
+  CLOSED:              005, 008, 011, 012

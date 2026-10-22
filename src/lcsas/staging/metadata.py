@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
 import textwrap
 from collections.abc import Sequence
 from pathlib import Path
@@ -108,6 +109,24 @@ def _share_recovery_lines(
     ]
 
 
+_SQLITE_MAGIC = b"SQLite format 3\x00"
+
+
+def _use_rollback_journal(db: Path) -> None:
+    """Switch the SQLite file *db* from WAL to a rollback journal (#534)."""
+    conn = sqlite3.connect(db)
+    try:
+        mode = conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+    finally:
+        conn.close()
+    if str(mode).lower() != "delete":
+        raise RuntimeError(
+            f"could not switch {db} to a rollback journal "
+            f"(journal_mode is {mode!r}); a WAL catalog cannot be read "
+            "on a read-only disc"
+        )
+
+
 class HolographicInjector:
     """Injects repository metadata and catalog into a staging directory."""
 
@@ -173,9 +192,22 @@ class HolographicInjector:
                     )
 
     def inject_catalog(self, db_path: Path) -> None:
-        """Copy the SQLite archive catalog to the staging root."""
+        """Copy the SQLite archive catalog to the staging root.
+
+        The operator's catalog runs in WAL mode (``db/connection.py``) and
+        a byte copy keeps that mode in the file header.  SQLite cannot open
+        a WAL database on read-only media without ``immutable=1`` (it must
+        create the ``-shm``/``-wal`` files beside it), so tier 1's
+        disc-swap hints and a stock ``sqlite3`` could not read the catalog
+        on a burned disc (#534).  The copy is switched to a rollback
+        journal, which opens read-only anywhere.
+        """
         dst = self._root / "catalog.db"
         copy_file(db_path, dst)
+        with dst.open("rb") as fh:
+            is_sqlite = fh.read(len(_SQLITE_MAGIC)) == _SQLITE_MAGIC
+        if is_sqlite:
+            _use_rollback_journal(dst)
 
     def write_volume_info(
         self,

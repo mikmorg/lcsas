@@ -33,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.recovery_hardening._wine_helpers import stop_wineserver
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECOVERY = REPO_ROOT / "recovery"
 ECC_DIR = RECOVERY / "src" / "lcsas-ecc"
@@ -72,6 +74,16 @@ def _require_working_wineboot() -> None:
             )
         except OSError:
             pytest.skip("wine is not runnable on this host")
+        finally:
+            stop_wineserver(_td)
+
+
+@pytest.fixture(autouse=True)
+def _stop_test_wineserver(tmp_path: Path):
+    """Stop this test's wineserver before pytest removes its prefix (#453)."""
+    yield
+    stop_wineserver(tmp_path / "wineprefix")
+
 
 
 pytestmark = [

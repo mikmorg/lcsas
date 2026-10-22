@@ -54,7 +54,11 @@ DESIGN DECISIONS
 See ../plans/ in the LCSAS repository for the full design plan.
 Summary:
 
-  Architectures:   x86_64, aarch64, riscv64 (Phase 3)
+  Architectures:   six approved targets: Linux x86_64 / aarch64 / armv7
+                   (musl), Windows x86_64-gnu, macOS x86_64 / arm64.
+                   riscv64 is not shipped (no upstream rustic or
+                   CPython artifact yet; see docs/development/
+                   roadmap.md in the source repository).
   Bootstrap:       prebuilt + source; no compiler bundled
   Userland:        none vendored (BusyBox was planned, never added;
                    the boot stack is experimental -- see

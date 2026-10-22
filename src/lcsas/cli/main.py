@@ -10,7 +10,7 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from lcsas import __version__
 from lcsas.log import get_logger, setup_logging
@@ -46,9 +46,37 @@ def _validate_config_or_exit(config: object, skip_staging: bool = False) -> bool
     return True
 
 
+# Options only the top-level parser knows; `lcsas scan --config x.toml`
+# is an argparse "unrecognized arguments" error.
+_TOP_LEVEL_OPTIONS = ("--config", "--db", "--lock-timeout", "--verbose", "-v")
+
+
+class _LcsasArgumentParser(argparse.ArgumentParser):
+    """Says where a misplaced top-level option goes (#517).
+
+    argparse reports ``lcsas scan --config x.toml`` as a bare
+    "unrecognized arguments: --config x.toml", which never says the flag
+    belongs before the subcommand.  The exit stays argparse's (status 2,
+    nothing run); only the message gains the hint.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        if message.startswith("unrecognized arguments:"):
+            given = {tok.split("=", 1)[0] for tok in message.split(":", 1)[1].split()}
+            misplaced = [opt for opt in _TOP_LEVEL_OPTIONS if opt in given]
+            if misplaced:
+                opts = " ".join(misplaced)
+                message += (
+                    f"\n{opts}: top-level option(s); put them before the "
+                    f"subcommand, e.g. 'lcsas {misplaced[0]} ... scan', "
+                    f"not 'lcsas scan {misplaced[0]} ...'"
+                )
+        super().error(message)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with all subcommands."""
-    parser = argparse.ArgumentParser(
+    parser = _LcsasArgumentParser(
         prog="lcsas",
         description="Linux Cold Storage Archival Suite — "
                     "orchestrates Rustic, Xorriso, and DVDisaster for optical archival.",
@@ -1316,12 +1344,22 @@ def cmd_scan(args: argparse.Namespace) -> int:
         repo_filter = set(args.repo) if args.repo else None
         total_new = 0
         total_scanned = 0
+        repos_scanned = 0
+        repos_unregistered: list[str] = []
+        snapshot_failures: list[str] = []
 
-        # Warn about unknown repo names
+        # An unknown --repo name is a typo, not a skip: scanning the rest and
+        # exiting 0 hid it (#516).
         if repo_filter:
             unknown = repo_filter - set(config.repositories.keys())
-            for name in sorted(unknown):
-                logger.warning(f"repository '{name}' not found in config, skipping.")
+            if unknown:
+                for name in sorted(unknown):
+                    logger.error(f"repository '{name}' not found in config.")
+                logger.error(
+                    "Configured repositories: "
+                    f"{', '.join(sorted(config.repositories)) or '(none)'}"
+                )
+                return 1
 
         for repo_name, repo_cfg in config.repositories.items():
             if repo_filter and repo_name not in repo_filter:
@@ -1333,12 +1371,14 @@ def cmd_scan(args: argparse.Namespace) -> int:
                     f"repository '{repo_name}' not registered in DB "
                     f"(run 'repo add' first), skipping."
                 )
+                repos_unregistered.append(repo_name)
                 continue
 
             mirror_path = repo_cfg.mirror_path
             scan_result = scan_mirror_packs(mirror_path)
             packs_on_disk = scan_result.packs
             total_scanned += len(packs_on_disk)
+            repos_scanned += 1
 
             analyzer = DeltaAnalyzer(conn, packs_on_disk, db_repo_id)
             new_packs = analyzer.register_new_packs()
@@ -1391,7 +1431,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         # Persist snapshots (unless --no-snapshots)
         if not getattr(args, "no_snapshots", False):
             from lcsas.db.models import Snapshot
-            from lcsas.db.snapshots import bulk_upsert_snapshots
+            from lcsas.db.snapshots import bulk_upsert_snapshots, delete_blank_snapshots
             from lcsas.exceptions import BinaryError
             from lcsas.rustic.wrapper import SubprocessRusticRunner
             from lcsas.utils.subprocess import check_binary_version
@@ -1404,6 +1444,12 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
             runner = SubprocessRusticRunner(tmpdir=config.staging_path)
             total_snaps = 0
+            junk = delete_blank_snapshots(conn)
+            if junk:
+                logger.info(
+                    f"  Removed {junk} snapshot row(s) with an empty id left "
+                    "by an earlier scan (#536)."
+                )
 
             for repo_name, repo_cfg in config.repositories.items():
                 if repo_filter and repo_name not in repo_filter:
@@ -1431,6 +1477,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                     logger.warning(
                         f"  {repo_name}: snapshot listing failed: {exc}"
                     )
+                    snapshot_failures.append(repo_name)
                     continue
                 db_snaps = [
                     Snapshot(
@@ -1452,8 +1499,20 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
         summary = get_archive_status_summary(conn)
 
+    # Count what was scanned, not what is configured (#516).
+    skipped = ""
+    if repos_unregistered:
+        skipped = (f" ({len(repos_unregistered)} skipped, not registered: "
+                   f"{', '.join(repos_unregistered)})")
     logger.info(f"\nTotal scanned: {total_scanned} packs across "
-               f"{len(config.repositories)} repos")
+               f"{repos_scanned} repo(s){skipped}")
+    if snapshot_failures:
+        # Pack registration, the scan's job, succeeded, so this stays a
+        # warning; but say so at the end, where it is read.
+        logger.warning(
+            f"Snapshot listing failed for: {', '.join(snapshot_failures)} "
+            "(packs were still registered; see the warnings above)."
+        )
     logger.info(f"New packs registered: {total_new}")
     logger.info(f"Archive: {summary['total']} total, "
                f"{summary['archived']} archived, "
@@ -1694,15 +1753,31 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_config_check(args: argparse.Namespace) -> int:
     """Validate a TOML configuration file."""
-    from lcsas.config.settings import validate_config
+    import tomllib
+
+    from lcsas.config.settings import unknown_toml_keys, validate_config
 
     config = _load_config_opt(args)
     if config is None:
         logger.error("--config is required for config check.")
         return 1
     errors = validate_config(config)
+    # Every other command only warns about an unknown key, so a typo never
+    # blocks it; the check is where a typo must not read as "valid" (#515).
+    # load_config has already printed each one as a warning.
+    with open(args.config, "rb") as f:
+        if unknown_toml_keys(tomllib.load(f)):
+            errors.append(
+                "unknown sections or keys (listed above): fix the typo or "
+                "remove them"
+            )
 
     if not errors:
+        if not config.repositories:
+            logger.warning(
+                "No repositories configured yet: add a [repos.<name>] "
+                "section with a mirror_path."
+            )
         logger.info("Configuration is valid.")
         return 0
 
@@ -2005,7 +2080,11 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
         iso_sha256 = sha256_file(iso_path)
         iso_size_bytes = iso_path.stat().st_size
 
-    label = args.label or iso_path.parent.name
+    # #514: the parent directory was the default label, but `lcsas stage`
+    # writes <session>/<LABEL>.iso, so that gave the session name and the
+    # identity check below then failed.  The ISO's PVD volume ID is the
+    # label it was mastered with, wherever the file sits.
+    label = args.label or _iso_volume_id(iso_path) or iso_path.parent.name
 
     # FUP-01 mitigation 2: blank-media pre-check (behind --verify). A disc
     # that already carries data is refused before the burn, not after.
@@ -2028,7 +2107,9 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
     runner.burn_iso(iso_path, device=device)
     logger.info("Burn complete.")
 
-    verify_passed = True
+    # None = not verified (--no-verify).  It used to default to True, so a
+    # disc never read back imported as VERIFIED (#514).
+    verify_passed: bool | None = None
     if args.verify:
         logger.info(f"Verifying disc on {device} ...")
         verify_passed = runner.verify_disc(device=device)
@@ -2069,10 +2150,34 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
             os.fsync(f.fileno())
         logger.info(f"Receipt written: {out_path}")
 
-    if args.verify and not verify_passed:
+    if verify_passed is False:
         return 1
 
     return 0
+
+
+def _iso_volume_id(iso_path: Path) -> str | None:
+    """The ISO 9660 primary volume descriptor's volume identifier, or None.
+
+    lcsas masters every image with its volume label as the PVD volume ID
+    (and burn-iso's identity check compares the burned disc against it),
+    so this names the volume whatever the file is called (#514).
+    """
+    try:
+        with open(iso_path, "rb") as f:
+            for sector in range(16, 48):          # descriptors from LBA 16
+                f.seek(sector * 2048)
+                desc = f.read(2048)
+                if len(desc) < 72 or desc[1:6] != b"CD001":
+                    return None
+                if desc[0] == 1:                  # primary volume descriptor
+                    vid = desc[40:72].decode("ascii", "replace").strip(" \x00")
+                    return vid or None
+                if desc[0] == 255:                # set terminator
+                    return None
+    except OSError:
+        return None
+    return None
 
 
 def cmd_location(args: argparse.Namespace) -> int:
@@ -2382,7 +2487,14 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     Also transitions volume status for receipts of STAGING volumes:
       - verify_passed=true  → STAGING → BURNING → VERIFIED (+ mark_closed)
       - verify_passed=false → STAGING → BURNING → BURNED
-    Already-VERIFIED volumes (re-burn to a new location) just get a copy added.
+      - verify_passed=null  → STAGING → BURNING → BURNED (burn-iso --no-verify:
+        a disc exists but was never read back, so it is not VERIFIED)
+    Already-VERIFIED volumes (re-burn to a new location) keep their status.
+
+    A copy is recorded for every receipt except verify_passed=false: a disc
+    that failed verification is not a copy (BURN-05, as burn_session does),
+    so that location still needs the volume.  A re-burn that failed gets a
+    VERIFY_FAIL_REBURN event instead (#514).
     """
     from lcsas.db.connection import locked_connection
     from lcsas.db.locations import ensure_location
@@ -2404,11 +2516,24 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
         imported = 0
         for receipt_file in args.receipt_files:
+            # Every malformed receipt is skipped with a warning and the batch
+            # goes on (#522).  ValueError covers JSONDecodeError and the
+            # UnicodeDecodeError of a non-UTF-8 file (e.g. UTF-16 from a
+            # PowerShell `>` redirect).
             try:
                 with open(receipt_file, encoding="utf-8") as f:
                     receipt = json.load(f)
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning(f"Failed to read receipt '{receipt_file}': {e}, skipping.")
+            except (ValueError, OSError) as e:
+                logger.warning(
+                    f"Failed to read receipt '{receipt_file}': {e} "
+                    "(a receipt must be a UTF-8 JSON file), skipping."
+                )
+                continue
+            if not isinstance(receipt, dict):
+                logger.warning(
+                    f"Receipt '{receipt_file}' is not a JSON object "
+                    f"(got {type(receipt).__name__}), skipping."
+                )
                 continue
 
             # Validate required receipt fields
@@ -2416,6 +2541,27 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             if missing:
                 logger.warning(f"Receipt '{receipt_file}' missing keys: "
                                f"{', '.join(missing)}, skipping.")
+                continue
+            bad_fields = [
+                k for k in ("volume_label", "location")
+                if not isinstance(receipt[k], str) or not receipt[k].strip()
+            ]
+            raw_size = receipt.get("iso_size_bytes")
+            receipt_size: int | None = None
+            if raw_size is not None:
+                try:
+                    if isinstance(raw_size, bool):
+                        raise ValueError(raw_size)
+                    receipt_size = int(raw_size)
+                    if receipt_size < 0:
+                        raise ValueError(raw_size)
+                except (TypeError, ValueError):
+                    bad_fields.append("iso_size_bytes")
+            if bad_fields:
+                logger.warning(
+                    f"Receipt '{receipt_file}' has invalid "
+                    f"{', '.join(bad_fields)}, skipping."
+                )
                 continue
 
             vol = get_volume_by_label(conn, receipt["volume_label"])
@@ -2455,11 +2601,22 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                 rejected += 1
                 continue
 
-            ensure_location(conn, receipt["location"])
+            ensure_location(conn, receipt["location"], commit=False)
 
             # Advance status if this is the first burn (STAGING); otherwise
             # just add a copy (handles re-burns to additional locations).
-            verify_passed = bool(receipt.get("verify_passed", False))
+            # verify_passed is tri-state (#514): true, false (verify FAILED),
+            # null (not verified).  A receipt without the key predates the
+            # field: it keeps the old reading (status as failed, copy kept).
+            raw_verify = receipt.get("verify_passed", "missing")
+            if raw_verify == "missing":
+                logger.warning(
+                    f"Receipt '{receipt_file}' has no verify_passed field; "
+                    "treating the burn as unverified."
+                )
+            stated = raw_verify not in (None, "missing")
+            verify_passed = stated and bool(raw_verify)
+            verify_failed = stated and not bool(raw_verify)
             if vol.status == "STAGING":
                 update_status(conn, vol.volume_id, "BURNING", commit=False)
                 if verify_passed:
@@ -2473,25 +2630,46 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     )
                 else:
                     update_status(conn, vol.volume_id, "BURNED", commit=False)
-                    add_event(
-                        conn, vol.volume_id, "VERIFY_FAIL",
-                        location=receipt["location"],
-                        detail=f"Offline burn receipt: {Path(receipt_file).name}",
-                        commit=False,
-                    )
+                    if verify_failed or raw_verify == "missing":
+                        add_event(
+                            conn, vol.volume_id, "VERIFY_FAIL",
+                            location=receipt["location"],
+                            detail=f"Offline burn receipt: {Path(receipt_file).name}",
+                            commit=False,
+                        )
+            elif verify_failed:
+                add_event(
+                    conn, vol.volume_id, "VERIFY_FAIL_REBURN",
+                    location=receipt["location"],
+                    detail=f"Offline burn receipt: {Path(receipt_file).name}",
+                    commit=False,
+                )
 
-            receipt_size = receipt.get("iso_size_bytes")
-            add_volume_copy(
-                conn,
-                volume_id=vol.volume_id,
-                location=receipt["location"],
-                burn_date=receipt.get("burn_date", ""),
-                iso_sha256=receipt_hash or None,
-                iso_size_bytes=(
-                    int(receipt_size) if receipt_size is not None else None
-                ),
-                commit=False,
-            )
+            if verify_failed:
+                logger.warning(
+                    f"Receipt '{receipt_file}': the disc for "
+                    f"'{receipt['volume_label']}' FAILED verification at "
+                    f"{receipt['location']}.  No copy was recorded; that "
+                    "location still needs this volume.  Re-burn it."
+                )
+            else:
+                if raw_verify is None:
+                    logger.warning(
+                        f"Receipt '{receipt_file}': '{receipt['volume_label']}' "
+                        f"was burned at {receipt['location']} without "
+                        "verification (burn-iso --no-verify).  Recorded, but "
+                        "not as VERIFIED: check it with `lcsas verify "
+                        f"{receipt['volume_label']} --disc`."
+                    )
+                add_volume_copy(
+                    conn,
+                    volume_id=vol.volume_id,
+                    location=receipt["location"],
+                    burn_date=receipt.get("burn_date", ""),
+                    iso_sha256=receipt_hash or None,
+                    iso_size_bytes=receipt_size,
+                    commit=False,
+                )
 
             # Issue #18: persist receipt provenance (iso_sha256, session_id,
             # device, pack_ids) on the canonical catalog as a
@@ -2509,6 +2687,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                 # whichever path produced the receipt is preserved.
                 "pack_ids": list(receipt.get("pack_ids") or []),
                 "receipt_file": Path(receipt_file).name,
+                "verify_passed": None if raw_verify == "missing" else raw_verify,
             }
             add_event(
                 conn, vol.volume_id, "BURN_RECEIPT_IMPORTED",
@@ -5633,7 +5812,11 @@ def _verify_password_unlocks_repo(
     missing or empty ``keys/`` is an error (escrow is exactly where
     "probably fine" is wrong).
     """
-    from lcsas.restore.restic_fallback import IntegrityError, _try_keys
+    from lcsas.restore.restic_fallback import (
+        IntegrityError,
+        NoKeyUnlockedError,
+        _try_keys,
+    )
 
     if not keys_dir.is_dir():
         return (
@@ -5650,14 +5833,34 @@ def _verify_password_unlocks_repo(
         )
     try:
         _try_keys(keys_dir, password)
-    except IntegrityError:
-        n = sum(1 for p in keys_dir.iterdir() if p.is_file())
-        return (
+    except NoKeyUnlockedError as e:
+        damaged = "; ".join(why for _, why in e.corrupt)
+        if not e.rejected:
+            # #481: no key file could even be read, so this says nothing
+            # about the password.  Calling it "wrong" would send the owner
+            # hunting for a different password instead of the damage.
+            return (
+                f"cannot check the password for repository '{repo}': "
+                f"every key file under {keys_dir} is unreadable or corrupt "
+                f"({damaged}). Repair the mirror's keys/ before escrowing, "
+                "or pass --no-verify-repo to skip (dangerous)."
+            )
+        msg = (
             f"the password in this file does NOT unlock repository "
-            f"'{repo}' ({n} key file(s) checked under {keys_dir}). "
+            f"'{repo}' ({len(e.rejected)} key file(s) checked under "
+            f"{keys_dir}). "
+        )
+        if e.corrupt:
+            msg += (
+                f"{len(e.corrupt)} more could not be read, so were not "
+                f"checked: {damaged}. "
+            )
+        return msg + (
             "You were about to escrow a wrong password. If you really "
             "intend this, pass --no-verify-repo."
         )
+    except IntegrityError as e:
+        return f"cannot check the password for repository '{repo}': {e}"
     return None
 
 

@@ -124,7 +124,7 @@ libSystem. See [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md)
   interoperability.
 - **KEY-08 — Shamir key escrow:** the `key_escrow` table records a Shamir
   split (K/N threshold + SLIP-0039 identifier); `lcsas-keyshare` performs the
-  split/combine. Catalog at schema v9 includes this table.
+  split/combine. The catalog (schema v10) includes this table.
 
 ---
 

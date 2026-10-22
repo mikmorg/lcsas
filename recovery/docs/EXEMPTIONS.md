@@ -16,10 +16,9 @@ The `make coverage-c` target enforces both invariants via
 > **Scope note (KEY-06).** The line-by-line FENCE contract below and its
 > enforcement script cover `src/lcsas-restore/*.c` only.  The
 > `src/lcsas-keyshare/` combiner is *also* in the coverage-c gcovr report
-> (added in KEY-06) and under the fuzz + sanitize gates, but it is not yet
-> line-pinned in the FENCE block — its coverage posture is documented
-> narratively in the "lcsas-keyshare (SLIP-0039 combiner)" section at the
-> end of this file.
+> (added in KEY-06) and under the fuzz + sanitize gates.  It is not
+> line-pinned, by decision (#488): its contract is the narrative posture in
+> the "lcsas-keyshare (SLIP-0039 combiner)" section at the end of this file.
 
 ## Categories
 
@@ -66,9 +65,6 @@ catalog.c:213   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardco
 catalog.c:214   INTRACTABLE   "
 
 # disc_locator.c
-disc_locator.c:331   DEFERRED   consider_catalog copy_file-failure fallback (open the original); needs the copy to fail (e.g. a dir collision at cache/.locator-catalog.db) [#401]
-disc_locator.c:562   DEFERRED   refresh_discovered path-too-long warn; needs a real openable mount_parent name approaching PATH_MAX
-disc_locator.c:564   DEFERRED   "
 disc_locator.c:666   VOLATILE   copy_file fwrite error path; covered by test_disc_locator RLIMIT_FSIZE fs-full drain when a >=11%-free cache base exists (TMPDIR / /dev/shm / /tmp), uncovered otherwise [FMA-09]
 disc_locator.c:667   VOLATILE   "
 disc_locator.c:776   VOLATILE   drain_disc fs_critically_full warn; covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache base fs is <10% free [FMA-09]
@@ -83,14 +79,6 @@ disc_locator.c:844   DEFENSIVE   drain_disc path-too-long defensive continue (sr
 disc_locator.c:846   DEFENSIVE   "
 disc_locator.c:851   DEFENSIVE   drain_disc path-too-long defensive continue (dst path overflow)
 disc_locator.c:853   DEFENSIVE   "
-disc_locator.c:966   DEFERRED   print_prompt catalog-has-pack-but-no-current-volume-mapping; needs a populated catalog fixture
-disc_locator.c:968   DEFERRED   print_prompt schema-skew branch (find_pack prepare failed, catalog written by a newer LCSAS); needs a catalog that opens but whose packs query fails [#401]
-disc_locator.c:972   DEFERRED   "
-disc_locator.c:973   DEFERRED   "
-disc_locator.c:974   DEFERRED   "
-disc_locator.c:975   DEFERRED   "
-disc_locator.c:977   DEFERRED   print_prompt catalog-has-no-record-of-this-pack-hash (fr>0); needs a valid catalog lacking the pack row
-disc_locator.c:1151   DEFERRED   lcsas_disc_locate_pack cwd-under-meta chdir-to-root fallback; reachable by chdir into a meta subdir before the interactive path (mutates process cwd) [#401]
 
 # lcsas_io.c
 lcsas_io.c:22   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection
@@ -185,16 +173,19 @@ tree.c:1037   INTRACTABLE   tree_restore_recurse generic symlink()-fail catch-al
 
 The categories above are honest about *why* each line is uncovered:
 
-- **`DEFERRED`** entries are TRACTABLE — a test could reach them cheaply — but
-  the tests are not yet written.  The bulk of this work was completed in
-  **#401** (closed; 50 testable-but-exempt lines — including the `repo.c`
-  read-blob / decrypt / snapshot error paths — were converted to real
-  tests in ba3a93d).  The handful of `[#401]`-tagged rows still in the
-  fence above are the residue that stayed deferred.  The C unit harness
-  controls the master key (`test_repo.c enc_write`) and the blob metadata
-  (`lcsas_blob_loc`), so a decrypt-MAC-fail / hash-mismatch / corrupt-zstd
-  input is crafted by corrupting a valid blob — **no cryptographic primitive is
-  broken** (the earlier "AEAD prevents crafting" framing was wrong; #383).
+- **`DEFERRED`** entries are TRACTABLE but cost more than they are worth.
+  Since #488 the only ones left are the two `repo.c` sanity limits (more
+  than 1M key files, more than 1M index files): reaching them needs a
+  million-entry fixture, and that stays deferred by design.  Every
+  cheaply-testable row has been converted: **#401** turned 50 of them into
+  real tests (ba3a93d), and #488 the last eleven `disc_locator.c` rows
+  (`test_disc_locator.c`: the catalog-copy fallback, the path-too-long warn,
+  the three print_prompt catalog branches, and the cwd-under-meta chdir).
+  The C unit harness controls the master key (`test_repo.c enc_write`) and
+  the blob metadata (`lcsas_blob_loc`), so a decrypt-MAC-fail /
+  hash-mismatch / corrupt-zstd input is crafted by corrupting a valid blob:
+  **no cryptographic primitive is broken** (the earlier "AEAD prevents
+  crafting" framing was wrong; #383).
 - **`INTRACTABLE`** entries genuinely need infrastructure beyond the unit
   harness: the fault-tolerant gcov runtime cannot reach some `malloc`-failure
   branches (`repo.c blob_index_push`); `EINTR` retries in `lcsas_io.c` need
@@ -255,8 +246,11 @@ Coverage notes (NOT FENCE-enforced — narrative only):
   checkout without python3 skips Step 3d cleanly (non-fatal), so main.c
   may read low there — that is environment-dependent, not a regression.
 
-These files are deliberately not (yet) line-pinned in the FENCE block:
-`exemptions_check.py` is `lcsas-restore`-scoped, and widening the
-line-by-line contract to a second directory is tracked separately.  The
-gates above (fuzz + sanitize + CI trigger + the baseline presence check)
-are the active guards for the combiner.
+These files are deliberately not line-pinned in the FENCE block, and that
+is a decision, not a backlog item (#488).  The combiner is small and
+self-contained, fuzzed (`fuzz_slip39_mnemonic`) and sanitized, and its
+correctness proof is the byte-exact integration test against real cards
+(`tests/integration/test_keyshare_binary_cards.py`).  Widening
+`exemptions_check.py` to a second directory would add upkeep without
+guarding anything those don't.  The gates above (fuzz + sanitize + CI
+trigger + the baseline presence check) are the contract for the combiner.

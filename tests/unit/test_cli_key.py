@@ -797,6 +797,59 @@ class TestSplitVerifiesAtWrite:
         assert str(tmp_path / "mirror" / "keys") in err
         assert not out.exists() or not list(out.glob("*"))
 
+    # #481: a damaged key file in the mirror is not a wrong password.
+    _BAD_KEY = b'{"salt": "abc", "N": 1024, "r": 8, "p": 1, "data": "AAAA"}'
+
+    def test_split_corrupt_keys_are_not_called_a_wrong_password(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        cfg = _config_file(tmp_path)
+        keys_dir = tmp_path / "mirror" / "keys"
+        for kf in keys_dir.iterdir():
+            kf.write_bytes(self._BAD_KEY)
+        out = tmp_path / "shares"
+        rc = main([
+            "--config", str(cfg),
+            "key", "split", "--repo", "alpha",
+            "--out", str(out),
+        ])
+        assert rc == 1
+        err = capsys.readouterr().out
+        assert "unreadable or corrupt" in err
+        assert "does NOT unlock" not in err
+        assert "--no-verify-repo" in err
+        assert not out.exists() or not list(out.glob("*"))
+
+    def test_split_skips_a_corrupt_key_ahead_of_the_good_one(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        cfg = _config_file(tmp_path)
+        (tmp_path / "mirror" / "keys" / "0000-corrupt").write_bytes(self._BAD_KEY)
+        out = tmp_path / "shares"
+        rc = main([
+            "--config", str(cfg),
+            "key", "split", "--repo", "alpha",
+            "--out", str(out),
+        ])
+        assert rc == 0
+        assert "Wrote" in capsys.readouterr().out
+
+    def test_split_wrong_password_also_names_the_corrupt_key(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        cfg = _config_file(tmp_path, keys_password=b"the-REAL-password")
+        (tmp_path / "mirror" / "keys" / "0000-corrupt").write_bytes(self._BAD_KEY)
+        rc = main([
+            "--config", str(cfg),
+            "key", "split", "--repo", "alpha",
+            "--out", str(tmp_path / "shares"),
+        ])
+        assert rc == 1
+        err = capsys.readouterr().out
+        assert "does NOT unlock repository 'alpha' (1 key file(s) checked" in err
+        assert "1 more could not be read" in err
+        assert "0000-corrupt" in err
+
     def test_split_password_file_only_warns_unverified(
         self, tmp_path: Path, caplog
     ) -> None:

@@ -265,13 +265,15 @@ class TestNegativeConfig:
             load_config(config_file)
 
     def test_missing_required_mirror_path_key(self, tmp_path):
-        """A repo block without mirror_path should raise KeyError."""
+        """A repo block without mirror_path names the repo (#515).  It was a
+        bare KeyError, which the CLI showed as "Unexpected error: 'mirror_path'";
+        a ValueError becomes an actionable ConfigError, as for #429."""
         config_file = tmp_path / "bad.toml"
         config_file.write_text(textwrap.dedent("""\
             [repos.no_mirror]
             password_file = "/tmp/key.txt"
         """))
-        with pytest.raises(KeyError):
+        with pytest.raises(ValueError, match=r"\[repos.no_mirror\] has no mirror_path"):
             load_config(config_file)
 
     def test_missing_mirror_base_warns(self, tmp_path, caplog):

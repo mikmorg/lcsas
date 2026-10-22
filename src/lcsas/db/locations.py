@@ -65,13 +65,20 @@ def ensure_location(
     conn: sqlite3.Connection,
     name: str,
     description: str = "",
+    *,
+    commit: bool = True,
 ) -> Location:
-    """Get or create a location (race-safe via INSERT OR IGNORE)."""
+    """Get or create a location (race-safe via INSERT OR IGNORE).
+
+    ``commit=False`` leaves the insert in the caller's transaction, so a
+    later failure rolls it back with everything else.
+    """
     conn.execute(
         "INSERT OR IGNORE INTO locations (name, description) VALUES (?, ?)",
         (name, description),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return get_location(conn, name)
 
 

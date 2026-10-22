@@ -1,0 +1,177 @@
+name: macos-e2e
+
+# The macOS restore.sh journey (#517), the twin of windows-e2e.yml.
+#
+# A Mac heir mounts the discs under /Volumes and runs
+# `sh /Volumes/LCSAS_META/restore.sh`.  macos-tier1.yml proves the Mach-O
+# tier-1 binary runs; nothing proved the SCRIPT around it on macOS: the BSD
+# userland, repo and disc discovery under /Volumes, the single-drive
+# relocate-to-RAM re-exec off a read-only mount, the multi-disc swap prompt.
+# The old reason for leaving that open ("needs optical hardware") was wrong:
+# a hosted runner can `hdiutil attach` a fixture ISO exactly as the
+# windows-latest runner mounts one, so the discs here are real read-only
+# iso9660 volumes at /Volumes/<LABEL>.
+#
+# Two jobs, like windows-e2e.yml.  `fixture` (ubuntu) builds a real rustic
+# repo, FOUR data ISOs, the meta ISO and a SHA-256 manifest.  `restore`
+# (macos-14 arm64 + macos-15-intel x86_64) runs tests/e2e/macos_restore_smoke.py:
+#
+#   * happy path      every ISO attached, stdin closed, LCSAS_NO_RELOCATE unset
+#                     (the relocate-to-RAM path is part of the proof); the
+#                     restored tree is compared byte-for-byte with the manifest.
+#   * wrong password  exit 77, no tier-2 fall-through, no restored files.
+#   * swap prompt     only the meta ISO + one data ISO attached; the harness
+#                     answers tier 1's "insert the right disc" prompt on a pty
+#                     (tier 1 only prompts when stdin is a tty), attaching the
+#                     next disc each time: a wrong disc, the right disc with
+#                     ENTER, then the right disc with no input (#455 rescan).
+#
+# KNOWN restore.sh BUG, caught by this workflow: with two or more data discs
+# mounted, repo discovery offers the one tenant once per disc ("Multiple
+# repositories on this archive: 1) win 2) win ...") and exits 1 without a
+# terminal.  The legs above therefore set LCSAS_REPO=win, and one clearly
+# named, non-blocking step runs the heir's plain invocation without it.
+#
+# No `schedule:` here, on purpose (#462): GitHub disables a scheduled file after
+# 60 quiet days, PR trigger and all.  The repo's rule is that a weekly run lives
+# in a `*-weekly.yml` wrapper that calls this file (see windows-e2e-weekly.yml);
+# none exists for this workflow yet.  `workflow_call` is declared so adding one
+# is a one-file change.
+
+on:
+  pull_request:
+    paths:
+      - "recovery/scripts/**"
+      - "src/lcsas/meta/**"
+      - "src/lcsas/staging/metadata.py"
+      - "recovery/bin/aarch64-macos/**"
+      - "recovery/bin/x86_64-macos/**"
+      - "tests/e2e/fixture_lib.py"
+      - "tests/e2e/macos_restore_smoke.py"
+      - ".github/workflows/macos-e2e.yml"
+  workflow_dispatch: {}
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Job 1 (Linux): real rustic repo + 4 LCSAS data ISOs + meta ISO +
+  # a SHA-256 manifest of the restorable tree.
+  # ---------------------------------------------------------------------
+  fixture:
+    runs-on: ubuntu-24.04  # pinned like every workflow; see test.yml and #538
+    timeout-minutes: 15
+
+    env:
+      RUSTIC_VERSION: "0.11.2"
+      RUSTIC_ASSET: "rustic-v0.11.2-x86_64-unknown-linux-gnu.tar.gz"
+      RUSTIC_SHA256: "fb7b74a14418b2dd070360c9abb22607f8559bdd344a0adf1b33bc2e31f83f5f"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install rustic (pinned release tarball)
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          cd "$(mktemp -d)"
+          url="https://github.com/rustic-rs/rustic/releases/download/v${RUSTIC_VERSION}/${RUSTIC_ASSET}"
+          curl -fsSL -o rustic.tar.gz "$url"
+          actual=$(sha256sum rustic.tar.gz | awk '{print $1}')
+          if [ "$RUSTIC_SHA256" != "$actual" ]; then
+            echo "SHA256 mismatch: expected=$RUSTIC_SHA256 actual=$actual" >&2
+            exit 1
+          fi
+          tar -xzf rustic.tar.gz
+          install -m 0755 rustic "$HOME/.local/bin/rustic"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install xorriso
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorriso
+          xorriso -version
+
+      - name: Install LCSAS (editable, with dev deps)
+        run: make dev
+
+      - name: Build the multi-disc fixture (>= 3 data ISOs, so the swap prompt fires)
+        run: |
+          set -euo pipefail
+          PYTHONPATH=src python3 tests/e2e/macos_restore_smoke.py fixture \
+            "$PWD/fixture-work" "$PWD/upload"
+          ls -la upload/
+
+      - name: Upload fixture artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-fixture
+          path: upload/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------
+  # Job 2 (macOS): hdiutil-attach the ISOs, run restore.sh, verify.
+  # ---------------------------------------------------------------------
+  restore:
+    name: restore (${{ matrix.arch }})
+    needs: fixture
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Same labels as macos-tier1.yml (see its note on macos-15-intel's
+          # retirement).
+          - { runner: macos-15-intel, arch: x86_64 }
+          - { runner: macos-14,       arch: arm64  }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download fixture artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-fixture
+          path: fixture
+
+      - name: restore.sh with every disc attached (happy path, LCSAS_REPO=win)
+        timeout-minutes: 10
+        run: python3 tests/e2e/macos_restore_smoke.py happy "$PWD/fixture" --repo win
+
+      - name: "KNOWN BUG: restore.sh with every disc attached, no LCSAS_REPO (repo picker lists one tenant once per disc)"
+        # Expected to fail today (#533): the heir's plain invocation dies at a
+        # bogus "Multiple repositories" picker when >= 2 data discs are
+        # mounted (restore.sh keys repo candidates by path, and every data
+        # disc carries metadata/<tenant>/).  Reproduces on Linux too.  This
+        # step turns green by itself when restore.sh is fixed; then drop
+        # continue-on-error and the `--repo win` from the legs here.
+        continue-on-error: true
+        timeout-minutes: 10
+        run: python3 tests/e2e/macos_restore_smoke.py happy "$PWD/fixture"
+
+      - name: Wrong password fails cleanly (exit 77, no partial tree)
+        timeout-minutes: 10
+        run: python3 tests/e2e/macos_restore_smoke.py wrong-password "$PWD/fixture" --repo win
+
+      - name: Swap prompt (meta + one data disc attached, the rest hdiutil-attached on request)
+        timeout-minutes: 10
+        run: python3 tests/e2e/macos_restore_smoke.py swap "$PWD/fixture"
+
+      - name: Detach ISOs
+        if: always()
+        run: python3 tests/e2e/macos_restore_smoke.py detach-all "$PWD/fixture"
