@@ -24,7 +24,13 @@ REM bin\<arch>\lcsas-keyshare.exe -- see recovery/docs/
 REM RECOVER_WINDOWS.txt, "KEY SHARES (SPLIT PASSWORDS)".
 REM ====================================================================
 
-setlocal enabledelayedexpansion
+REM setlocal, taking LCSAS_RELOCATED (set by the copy on the disc when it
+REM relaunches this one, see the end of the guard below) into the local
+REM scope and out of the caller's environment.  The relaunch runs after
+REM the disc copy has ended, so it sets the variable in the caller's
+REM own environment; without this a later run from the same prompt
+REM would think it had already been relocated.
+for %%R in ("%LCSAS_RELOCATED%") do (set "LCSAS_RELOCATED=" & setlocal enabledelayedexpansion & set "LCSAS_RELOCATED=%%~R")
 
 REM ----- Single-drive guard: relocate to RAM before continuing ------
 REM
@@ -59,16 +65,40 @@ if not exist "%RAMDIR%\recovery\scripts\" (
     goto :after_relocate
 )
 
+REM Find the recovery root on the disc the way :after_relocate does,
+REM for both places this script lives: recovery\scripts\restore.bat
+REM (the root is ..) and the copy at the disc root, E:\restore.bat (the
+REM root is recovery\).  Copying "%~dp0..\bin" was right only for the
+REM first: from E:\ it named E:\bin, the RAM copy got no binaries, and
+REM the restore.bat an heir double-clicks ended in "no working recovery
+REM method" (#531).
+set "SRC_ROOT="
+if exist "%~dp0..\bin\" for %%I in ("%~dp0..") do set "SRC_ROOT=%%~fI"
+if exist "%~dp0recovery\bin\" for %%I in ("%~dp0recovery") do set "SRC_ROOT=%%~fI"
+
 REM Mirror the on-disc layout in %RAMDIR%.  robocopy is preferred for
 REM long paths; fall back to xcopy.
 copy /Y "%~f0" "%RAMDIR%\recovery\scripts\restore.bat" >nul
-where robocopy >nul 2>nul
-if not errorlevel 1 (
-    robocopy "%~dp0..\bin" "%RAMDIR%\recovery\bin" /E /NFL /NDL /NJH /NJS /NC /NS /NP >nul
-) else (
-    xcopy /E /I /Y /Q "%~dp0..\bin"  "%RAMDIR%\recovery\bin\"  >nul 2>nul
+if defined SRC_ROOT (
+    where robocopy >nul 2>nul
+    if not errorlevel 1 (
+        robocopy "!SRC_ROOT!\bin" "!RAMDIR!\recovery\bin" /E /NFL /NDL /NJH /NJS /NC /NS /NP >nul
+    ) else (
+        xcopy /E /I /Y /Q "!SRC_ROOT!\bin" "!RAMDIR!\recovery\bin\" >nul 2>nul
+    )
+    if exist "!SRC_ROOT!\catalog.db" copy /Y "!SRC_ROOT!\catalog.db" "!RAMDIR!\recovery\catalog.db" >nul
 )
-if exist "%~dp0..\catalog.db" copy /Y "%~dp0..\catalog.db" "%RAMDIR%\recovery\catalog.db" >nul
+
+REM A copy with no programs in it could only fail.  Stay on the disc
+REM instead: the restore still works, but the disc cannot be ejected
+REM until it has finished.
+dir /s /b "%RAMDIR%\recovery\bin\*.exe" >nul 2>nul
+if errorlevel 1 (
+    echo [lcsas-restore] could not copy the recovery programs to !RAMDIR! -- staying on disc.
+    echo                 Do not eject this disc until the restore has finished.
+    rmdir /s /q "!RAMDIR!" 2>nul
+    goto :after_relocate
+)
 
 REM Carry the holographic repo metadata (keys/index/config/snapshots
 REM under metadata\<tenant>\) into RAM too.  Without this, the relocated
@@ -93,15 +123,18 @@ echo [lcsas-restore] copied recovery files to %RAMDIR%
 echo [lcsas-restore] you may eject the recovery disc when the binary
 echo                 prompts for a data disc.
 
-REM Capture the disc's drive letter (everything up to and including ":\").
-set "LCSAS_RELOCATED=%~d0\"
-
-REM cd out of the disc so the new cmd does not inherit it.
-cd /d %SystemDrive%\ >nul 2>nul
-
-REM Re-launch the relocated script.  /C exits cmd when done.
-call "%RAMDIR%\recovery\scripts\restore.bat" %*
-exit /b %ERRORLEVEL%
+REM Re-launch the relocated copy, and end THIS one first.  While a batch
+REM file is running, cmd goes back to it when a `call` returns -- even
+REM with `exit /b` on the same line -- and by then the heir has ejected
+REM the disc it is on: "The system cannot find the path specified." and
+REM exit 1 after a good restore (#532).  `(goto) 2>nul` ends this batch
+REM at once; the rest of the line, already read and %%-expanded, still
+REM runs in the caller's context, and the exit code is the relocated
+REM copy's.  Ending the batch also undoes setlocal, which puts the cwd
+REM back on the disc (blocking Explorer's Eject), so cd off it here, and
+REM set LCSAS_RELOCATED (the disc's drive letter, e.g. "E:\") here too.
+REM Measured on windows-latest with every other placement of the exit.
+(goto) 2>nul & cd /d %SystemDrive%\ & set "LCSAS_RELOCATED=%~d0\" & call "%RAMDIR%\recovery\scripts\restore.bat" %*
 
 :after_relocate
 REM ----- Auto-discover recovery root from this script's location ----
