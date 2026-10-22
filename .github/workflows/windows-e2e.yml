@@ -254,20 +254,13 @@ jobs:
       # and sets LCSAS_RELOCATED so the meta drive is excluded from the pack
       # search.  Started with cwd on the disc, like a double-click.
       #
-      # KNOWN restore.bat BUG #531 (found by this very step; #517): the relocation
-      # block mirrors the bin tree from "%~dp0..\bin".  That is right for
-      # recovery\scripts\restore.bat but WRONG for the copy surfaced at the
-      # disc root (E:\restore.bat, what the heir double-clicks): there %~dp0
-      # is E:\ and ..\bin resolves to E:\bin, which does not exist (the
-      # binaries are in E:\recovery\bin).  robocopy fails silently (>nul), the
-      # RAM copy gets an empty recovery\bin, and the relocated script ends in
-      # "ERROR: no working recovery method on this system" with exit code 1.
-      # So on a single-drive machine the root-level entry point cannot restore
-      # at all.  The next step shows the relocation MECHANICS are sound from
-      # recovery\scripts\.  This step is continue-on-error until #531 is
-      # fixed; the fix deletes that line and the step becomes a hard gate.
+      # Both copies of the script are run: the one at the disc root
+      # (E:\restore.bat, what the heir double-clicks) and
+      # recovery\scripts\restore.bat.  Until #531 the root copy mirrored
+      # "%~dp0..\bin" = E:\bin, which does not exist, so its RAM copy had no
+      # binaries and ended in "no working recovery method" (this step found
+      # it, #517).
       - name: Relocation leg — restore.bat at the disc root (the heir's double-click)
-        continue-on-error: true
         shell: pwsh
         timeout-minutes: 10
         run: |
@@ -346,6 +339,7 @@ jobs:
       # restore.bat blocks on a stdin pipe we hold open; once the relocated
       # copy is up we Dismount-DiskImage the meta ISO and only then feed it
       # the target + password, so tier 1 runs entirely after the eject.
+      # Started from the disc-root restore.bat, the copy the heir runs.
       - name: Eject leg — relocated restore survives a meta-disc eject
         shell: pwsh
         timeout-minutes: 10
@@ -353,7 +347,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
           Invoke-EjectLeg -Fixture (Join-Path $PWD 'fixture') `
-            -BatRel 'recovery\scripts\restore.bat' -TargetName 'restored-eject'
+            -BatRel 'restore.bat' -TargetName 'restored-eject'
 
       - name: Dismount ISOs
         if: always()

@@ -10,7 +10,7 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from lcsas import __version__
 from lcsas.log import get_logger, setup_logging
@@ -46,9 +46,37 @@ def _validate_config_or_exit(config: object, skip_staging: bool = False) -> bool
     return True
 
 
+# Options only the top-level parser knows; `lcsas scan --config x.toml`
+# is an argparse "unrecognized arguments" error.
+_TOP_LEVEL_OPTIONS = ("--config", "--db", "--lock-timeout", "--verbose", "-v")
+
+
+class _LcsasArgumentParser(argparse.ArgumentParser):
+    """Says where a misplaced top-level option goes (#517).
+
+    argparse reports ``lcsas scan --config x.toml`` as a bare
+    "unrecognized arguments: --config x.toml", which never says the flag
+    belongs before the subcommand.  The exit stays argparse's (status 2,
+    nothing run); only the message gains the hint.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        if message.startswith("unrecognized arguments:"):
+            given = {tok.split("=", 1)[0] for tok in message.split(":", 1)[1].split()}
+            misplaced = [opt for opt in _TOP_LEVEL_OPTIONS if opt in given]
+            if misplaced:
+                opts = " ".join(misplaced)
+                message += (
+                    f"\n{opts}: top-level option(s); put them before the "
+                    f"subcommand, e.g. 'lcsas {misplaced[0]} ... scan', "
+                    f"not 'lcsas scan {misplaced[0]} ...'"
+                )
+        super().error(message)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with all subcommands."""
-    parser = argparse.ArgumentParser(
+    parser = _LcsasArgumentParser(
         prog="lcsas",
         description="Linux Cold Storage Archival Suite — "
                     "orchestrates Rustic, Xorriso, and DVDisaster for optical archival.",
@@ -5784,7 +5812,11 @@ def _verify_password_unlocks_repo(
     missing or empty ``keys/`` is an error (escrow is exactly where
     "probably fine" is wrong).
     """
-    from lcsas.restore.restic_fallback import IntegrityError, _try_keys
+    from lcsas.restore.restic_fallback import (
+        IntegrityError,
+        NoKeyUnlockedError,
+        _try_keys,
+    )
 
     if not keys_dir.is_dir():
         return (
@@ -5801,14 +5833,34 @@ def _verify_password_unlocks_repo(
         )
     try:
         _try_keys(keys_dir, password)
-    except IntegrityError:
-        n = sum(1 for p in keys_dir.iterdir() if p.is_file())
-        return (
+    except NoKeyUnlockedError as e:
+        damaged = "; ".join(why for _, why in e.corrupt)
+        if not e.rejected:
+            # #481: no key file could even be read, so this says nothing
+            # about the password.  Calling it "wrong" would send the owner
+            # hunting for a different password instead of the damage.
+            return (
+                f"cannot check the password for repository '{repo}': "
+                f"every key file under {keys_dir} is unreadable or corrupt "
+                f"({damaged}). Repair the mirror's keys/ before escrowing, "
+                "or pass --no-verify-repo to skip (dangerous)."
+            )
+        msg = (
             f"the password in this file does NOT unlock repository "
-            f"'{repo}' ({n} key file(s) checked under {keys_dir}). "
+            f"'{repo}' ({len(e.rejected)} key file(s) checked under "
+            f"{keys_dir}). "
+        )
+        if e.corrupt:
+            msg += (
+                f"{len(e.corrupt)} more could not be read, so were not "
+                f"checked: {damaged}. "
+            )
+        return msg + (
             "You were about to escrow a wrong password. If you really "
             "intend this, pass --no-verify-repo."
         )
+    except IntegrityError as e:
+        return f"cannot check the password for repository '{repo}': {e}"
     return None
 
 

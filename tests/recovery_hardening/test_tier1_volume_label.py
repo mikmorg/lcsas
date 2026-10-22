@@ -147,9 +147,12 @@ def test_enter_names_the_disc_it_rescanned(tmp_path: Path) -> None:
         ('["LCSAS_BD25_2026_0002"]', "is not valid JSON"),
         ('{"label": 2}', "has no usable label"),
         ("<directory>", "could not be read"),
+        # #487: unauthenticated and up to 16 MiB; with no nesting cap
+        # this recursed until the stack overflowed.
+        ("[" * 2_000_000, "is not valid JSON"),
     ],
     ids=["absent", "truncated", "not-an-object", "label-not-a-string",
-         "unreadable"],
+         "unreadable", "deeply-nested"],
 )
 def test_bad_or_missing_volume_info_never_blocks_restore(
     tmp_path: Path, content: str | None, note: str | None

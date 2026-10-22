@@ -330,18 +330,14 @@ function Invoke-EjectLeg {
     Write-Host "restore.bat exit code after the eject: $rc"
 
     if (-not $ejected) { $problems.Add('the meta disc was never ejected') }
-    # The outer instance's last line (`exit /b %ERRORLEVEL%`) lives on the
-    # disc that was just ejected, so the exit status is reported, not
-    # asserted; the contract is that the RESTORE finishes.  Bug #532: once
-    # that is fixed, the two NOTEs below become problems.
     if ($out -notmatch 'Recovery complete') { $problems.Add("'Recovery complete' banner missing after the eject") }
     if ($out -notmatch '\[lcsas-restore\] restore complete') { $problems.Add('tier-1 restore did not report completion after the eject') }
+    # #532: the outer instance used to read its `exit /b` from the ejected
+    # disc after the relocated copy returned, printing this and exiting 1.
     if ($out -match 'The system cannot find the path specified') {
-        Write-Host 'NOTE: the outer cmd could not re-read restore.bat from the ejected disc after the relocated copy finished ("The system cannot find the path specified."); the restore itself completed.'
+        $problems.Add('the outer cmd tried to read restore.bat from the ejected disc ("The system cannot find the path specified.")')
     }
-    if ($rc -ne 0) {
-        Write-Host "NOTE: exit code is $rc although the restore completed (the outer instance's last line, exit /b %ERRORLEVEL%, lived on the ejected disc)."
-    }
+    if ("$rc" -ne '0') { $problems.Add("exit code after a completed restore is $rc, not 0") }
     Test-TreeAgainstManifest -Fixture $Fixture -Target $target -Problems $problems
 
     $ramNew = @(Get-TempNames 'lcsas-restore-*' | Where-Object { $ramBefore -notcontains $_ })

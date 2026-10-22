@@ -24,7 +24,13 @@ REM bin\<arch>\lcsas-keyshare.exe -- see recovery/docs/
 REM RECOVER_WINDOWS.txt, "KEY SHARES (SPLIT PASSWORDS)".
 REM ====================================================================
 
-setlocal enabledelayedexpansion
+REM setlocal, taking LCSAS_RELOCATED (set by the copy on the disc when it
+REM relaunches this one, see the end of the guard below) into the local
+REM scope and out of the caller's environment.  The relaunch runs after
+REM the disc copy has ended, so it sets the variable in the caller's
+REM own environment; without this a later run from the same prompt
+REM would think it had already been relocated.
+for %%R in ("%LCSAS_RELOCATED%") do (set "LCSAS_RELOCATED=" & setlocal enabledelayedexpansion & set "LCSAS_RELOCATED=%%~R")
 
 REM ----- Single-drive guard: relocate to RAM before continuing ------
 REM
@@ -59,16 +65,40 @@ if not exist "%RAMDIR%\recovery\scripts\" (
     goto :after_relocate
 )
 
+REM Find the recovery root on the disc the way :after_relocate does,
+REM for both places this script lives: recovery\scripts\restore.bat
+REM (the root is ..) and the copy at the disc root, E:\restore.bat (the
+REM root is recovery\).  Copying "%~dp0..\bin" was right only for the
+REM first: from E:\ it named E:\bin, the RAM copy got no binaries, and
+REM the restore.bat an heir double-clicks ended in "no working recovery
+REM method" (#531).
+set "SRC_ROOT="
+if exist "%~dp0..\bin\" for %%I in ("%~dp0..") do set "SRC_ROOT=%%~fI"
+if exist "%~dp0recovery\bin\" for %%I in ("%~dp0recovery") do set "SRC_ROOT=%%~fI"
+
 REM Mirror the on-disc layout in %RAMDIR%.  robocopy is preferred for
 REM long paths; fall back to xcopy.
 copy /Y "%~f0" "%RAMDIR%\recovery\scripts\restore.bat" >nul
-where robocopy >nul 2>nul
-if not errorlevel 1 (
-    robocopy "%~dp0..\bin" "%RAMDIR%\recovery\bin" /E /NFL /NDL /NJH /NJS /NC /NS /NP >nul
-) else (
-    xcopy /E /I /Y /Q "%~dp0..\bin"  "%RAMDIR%\recovery\bin\"  >nul 2>nul
+if defined SRC_ROOT (
+    where robocopy >nul 2>nul
+    if not errorlevel 1 (
+        robocopy "!SRC_ROOT!\bin" "!RAMDIR!\recovery\bin" /E /NFL /NDL /NJH /NJS /NC /NS /NP >nul
+    ) else (
+        xcopy /E /I /Y /Q "!SRC_ROOT!\bin" "!RAMDIR!\recovery\bin\" >nul 2>nul
+    )
+    if exist "!SRC_ROOT!\catalog.db" copy /Y "!SRC_ROOT!\catalog.db" "!RAMDIR!\recovery\catalog.db" >nul
 )
-if exist "%~dp0..\catalog.db" copy /Y "%~dp0..\catalog.db" "%RAMDIR%\recovery\catalog.db" >nul
+
+REM A copy with no programs in it could only fail.  Stay on the disc
+REM instead: the restore still works, but the disc cannot be ejected
+REM until it has finished.
+dir /s /b "%RAMDIR%\recovery\bin\*.exe" >nul 2>nul
+if errorlevel 1 (
+    echo [lcsas-restore] could not copy the recovery programs to !RAMDIR! -- staying on disc.
+    echo                 Do not eject this disc until the restore has finished.
+    rmdir /s /q "!RAMDIR!" 2>nul
+    goto :after_relocate
+)
 
 REM Carry the holographic repo metadata (keys/index/config/snapshots
 REM under metadata\<tenant>\) into RAM too.  Without this, the relocated
@@ -93,15 +123,18 @@ echo [lcsas-restore] copied recovery files to %RAMDIR%
 echo [lcsas-restore] you may eject the recovery disc when the binary
 echo                 prompts for a data disc.
 
-REM Capture the disc's drive letter (everything up to and including ":\").
-set "LCSAS_RELOCATED=%~d0\"
-
-REM cd out of the disc so the new cmd does not inherit it.
-cd /d %SystemDrive%\ >nul 2>nul
-
-REM Re-launch the relocated script.  /C exits cmd when done.
-call "%RAMDIR%\recovery\scripts\restore.bat" %*
-exit /b %ERRORLEVEL%
+REM Re-launch the relocated copy, and end THIS one first.  While a batch
+REM file is running, cmd goes back to it when a `call` returns -- even
+REM with `exit /b` on the same line -- and by then the heir has ejected
+REM the disc it is on: "The system cannot find the path specified." and
+REM exit 1 after a good restore (#532).  `(goto) 2>nul` ends this batch
+REM at once; the rest of the line, already read and %%-expanded, still
+REM runs in the caller's context, and the exit code is the relocated
+REM copy's.  Ending the batch also undoes setlocal, which puts the cwd
+REM back on the disc (blocking Explorer's Eject), so cd off it here, and
+REM set LCSAS_RELOCATED (the disc's drive letter, e.g. "E:\") here too.
+REM Measured on windows-latest with every other placement of the exit.
+(goto) 2>nul & cd /d %SystemDrive%\ & set "LCSAS_RELOCATED=%~d0\" & call "%RAMDIR%\recovery\scripts\restore.bat" %*
 
 :after_relocate
 REM ----- Auto-discover recovery root from this script's location ----
@@ -167,7 +200,7 @@ if /i "%~1"=="--check-disc" (
     )
     set "ECC_BIN=%RECOVERY%\bin\%ARCH%\lcsas-ecc.exe"
     if not exist "!ECC_BIN!" (
-        echo ERROR: no lcsas-ecc.exe under %RECOVERY%\bin\%ARCH%\ --
+        echo ERROR: no lcsas-ecc.exe under !RECOVERY!\bin\%ARCH%\ --
         echo this meta disc cannot repair discs.  Try the newest META disc.
         pause
         exit /b 3
@@ -260,9 +293,9 @@ for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
 if !NCAND! equ 0 (
     echo ERROR: could not find an LCSAS backup set ^(a folder containing keys\ and index\^).
     echo Looked in:
-    echo    %RECOVERY%\repo
-    echo    %RECOVERY%
-    echo    %DISC_ROOT%\metadata\^<name^>\
+    echo    !RECOVERY!\repo
+    echo    !RECOVERY!
+    echo    !DISC_ROOT!\metadata\^<name^>\
     echo    D:\metadata\^<name^>\ .. Z:\metadata\^<name^>\
     echo.
     echo Insert the disc labelled LCSAS_META ^(or any LCSAS data disc^), wait
@@ -376,7 +409,7 @@ if exist "%TARGET%\" if not exist "%MARKER%" if not "%LCSAS_FORCE_NONEMPTY_TARGE
         echo.
         echo ==========================================================
         echo   WARNING: the folder
-        echo       %TARGET%
+        echo       !TARGET!
         echo   already contains files that do not look like a previous
         echo   LCSAS restore.  Restored files with the same names will
         echo   OVERWRITE what is there now.
@@ -395,7 +428,7 @@ if exist "%TARGET%\" if not exist "%MARKER%" if not "%LCSAS_FORCE_NONEMPTY_TARGE
 
 if not exist "%TARGET%" mkdir "%TARGET%" 2>nul
 if not exist "%TARGET%" (
-    echo ERROR: could not create %TARGET%
+    echo ERROR: could not create !TARGET!
     pause
     exit /b 1
 )
@@ -420,7 +453,9 @@ echo rebuild it first with bin\%ARCH%\lcsas-keyshare.exe -- see
 echo recovery\docs\RECOVER_WINDOWS.txt, "KEY SHARES (SPLIT PASSWORDS)".
 echo.
 set /p "LCSAS_PW=Password: "
-if "%LCSAS_PW%"=="" (
+REM `if not defined`, not `if "%LCSAS_PW%"==""`: a '"' in the password
+REM broke that comparison's syntax (#482).
+if not defined LCSAS_PW (
     echo ERROR: empty password
     pause
     exit /b 1
@@ -428,7 +463,21 @@ if "%LCSAS_PW%"=="" (
 
 REM Write password to a transient temp file (deleted on exit).
 set "PWFILE=%TEMP%\lcsas-pw-%RANDOM%-%TIME:~6,2%%TIME:~9,2%.txt"
-> "%PWFILE%" echo !LCSAS_PW!
+REM `echo !LCSAS_PW!` runs a password of exactly "on", "off" or "/?" as
+REM an echo argument and writes no password (#482).  Those three go
+REM through `set /p`, which writes them as-is (without a newline).  Not
+REM `echo(`: Windows takes it, but wine writes a literal "(" and the
+REM wine tests drive this script.
+set "PW_PLAIN_ECHO=1"
+if /i "!LCSAS_PW!"=="on" set "PW_PLAIN_ECHO="
+if /i "!LCSAS_PW!"=="off" set "PW_PLAIN_ECHO="
+if "!LCSAS_PW!"=="/?" set "PW_PLAIN_ECHO="
+if defined PW_PLAIN_ECHO (
+    > "%PWFILE%" echo !LCSAS_PW!
+) else (
+    > "%PWFILE%" <nul set /p "=!LCSAS_PW!"
+)
+set "PW_PLAIN_ECHO="
 set "LCSAS_PW="
 
 REM Ensure the temp file is cleaned up no matter how we exit.
@@ -462,8 +511,11 @@ if defined LCSAS_RELOCATED set "META_DISC_ARG=--meta-disc %LCSAS_RELOCATED%"
 
 REM Optional --catalog if a catalog.db is present.
 REM The meta-disc deliberately carries NO catalog.db (it would always
-REM be stale at burn time).  Scan every drive letter for catalog.db,
-REM keep whichever was most recently modified.
+REM be stale at burn time).  Scan every drive letter for catalog.db and
+REM keep the LAST one found (highest drive letter), not the newest:
+REM plain cmd has no locale-proof way to compare file times (#482).  It
+REM only feeds the disc-swap hints; with an older catalog, hints for
+REM packs burned after it say "no record", and the restore still works.
 set "CATALOG_ARG="
 set "CATALOG_PICK="
 if exist "%RECOVERY%\catalog.db" set "CATALOG_PICK=%RECOVERY%\catalog.db"
@@ -474,15 +526,15 @@ for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
     )
 )
 if defined CATALOG_PICK (
-    set "CATALOG_ARG=--catalog %CATALOG_PICK%"
-    echo [lcsas-restore] using catalog %CATALOG_PICK%
+    set "CATALOG_ARG=--catalog "!CATALOG_PICK!""
+    echo [lcsas-restore] using catalog !CATALOG_PICK!
 )
 
 REM ----- Tier 1: prebuilt lcsas-restore.exe -------------------------
 set "BIN=%RECOVERY%\bin\%ARCH%\lcsas-restore.exe"
 if exist "%BIN%" (
     echo.
-    echo [tier 1] running %BIN%
+    echo [tier 1] running !BIN!
     "%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --target "%TARGET%" --snapshot latest %PACK_SEARCH_ARGS% %CATALOG_ARG% %META_DISC_ARG%
     set "RC=!ERRORLEVEL!"
     REM %PWFILE% is deleted only on the TERMINAL branches below -- the
@@ -493,7 +545,7 @@ if exist "%BIN%" (
         del "%PWFILE%" 2>nul
         echo.
         echo ============================================================
-        echo  Recovery complete.  Files restored to: %TARGET%
+        echo  Recovery complete.  Files restored to: !TARGET!
         echo ============================================================
         pause
         exit /b 0
@@ -522,14 +574,14 @@ REM ----- Tier 2: vendored rustic-static.exe -------------------------
 set "BIN=%RECOVERY%\bin\%ARCH%\rustic-static.exe"
 if exist "%BIN%" (
     echo.
-    echo [tier 2] running %BIN%
+    echo [tier 2] running !BIN!
     "%BIN%" --repository "%REPO%" --password-file "%PWFILE%" restore latest "%TARGET%"
     set "RC=!ERRORLEVEL!"
     del "%PWFILE%" 2>nul
     if !RC! equ 0 (
         echo.
         echo ============================================================
-        echo  Recovery complete.  Files restored to: %TARGET%
+        echo  Recovery complete.  Files restored to: !TARGET!
         echo ============================================================
         pause
         exit /b 0
