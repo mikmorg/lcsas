@@ -52,12 +52,18 @@ case "${1:-}" in
         fi
         tmux kill-session -t "$SESSION" 2>/dev/null || true
         # remain-on-exit lets us read the final output after CMD exits.
-        tmux set-option -g remain-on-exit on 2>/dev/null || true
+        # It is set in the same tmux invocation as new-session: run on
+        # its own before any server exists, set-option just fails ("no
+        # server running"), so the first session of every run went
+        # without it.  When restore.sh exited, the pane, the session and
+        # the server went with it, taking "[lcsas-restore] restore
+        # complete" along, and `expect` saw only "ended unexpectedly".
         # Let tmux's own stderr flow directly to ours.  An earlier
         # version wrote to a fixed /tmp file which collided between
         # users (blind-agent runs as `lcsas-blind`; a prior root run
         # created the file with root-only perms).
-        if ! tmux new-session -d -s "$SESSION" -- "$@" >&2; then
+        if ! tmux start-server \; set-option -g remain-on-exit on \; \
+                new-session -d -s "$SESSION" -- "$@" >&2; then
             echo "[restore-shell] tmux new-session failed (see above)" >&2
             exit 1
         fi

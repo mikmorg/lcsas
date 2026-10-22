@@ -905,7 +905,8 @@ sanitize-run:
 	    pytest -q \
 	        ../tests/recovery_hardening/test_tier1_unit.py \
 	        ../tests/recovery_hardening/test_tier1_progress.py \
-	        ../tests/recovery_hardening/test_tier1_rescan.py
+	        ../tests/recovery_hardening/test_tier1_rescan.py \
+	        ../tests/recovery_hardening/test_tier1_index_walk_bounds.py
 	@echo "[sanitize] PASS: 0 ASan/UBSan/LSan findings"
 
 # ── Fuzz targets ──────────────────────────────────────────────────

@@ -282,6 +282,70 @@ Every uncov line has either:
 - a DEFENSIVE entry for safe-guard code that is provably unreachable
   given upstream invariants but kept for readability.
 
+## Parser bounds audit (2026-10-20, #487)
+
+A by-hand read of every index and length computation in the parsers that
+read on-disc bytes, prompted by H0 (#361: the xattr walk's out-of-bounds
+read, which fuzzing had not found).  Two defects were fixed; everything
+else holds for the reasons given.
+
+**Fixed**
+- `json_q.c`: no nesting cap.  `parse_value` recursed once per `[` or
+  `{`, bounded only by the token buffer, which `lcsas_json_parse_alloc`
+  grows to `len + 1`.  `volume_info.json` is read off the disc
+  unauthenticated (up to 16 MiB), and 200 KB of `[` overflowed Linux's
+  default 8 MiB stack (measured; Windows' 1 MiB default goes sooner).  Now `LCSAS_JSON_MAX_DEPTH` (64; restic nests ~5 deep)
+  rejects deeper input as invalid.  Tests: `test_json.c` (#487 block),
+  `test_tier1_volume_label.py[deeply-nested]`.
+- `repo.c` `load_index`: the `supersedes`, `packs` and `blobs` walks
+  counted only elements of the expected type and had no `ntoks` bound.
+  One odd element in the file's last array kept `found < count`
+  forever, and the walk ran past the parsed tokens.  A zeroed spare slot
+  has `start == 0`, so the `start >= end` guard never stopped it.  All
+  three now carry `t < ntoks`, the bound tree.c got in T1C-04.  Index
+  files are MAC-authenticated, so this needs a writer holding the key,
+  not bit rot.  Test: `test_tier1_index_walk_bounds.py`, which also runs
+  under ASan in `make sanitize`.
+
+**Checked, holds**
+- `json_q.c` tokenizer: every read is guarded by `pos < len`; an escape
+  checks `pos + 1 < len` before skipping two bytes; tokens are only
+  written through `alloc_tok`, which refuses at `max_toks`.
+- `lcsas_json_obj_get`: visits only direct children of a well-formed
+  object and stops when the declared pair count is reached, which
+  happens at the last pair's *value* token (it precedes that value's
+  nested tokens).  It never reads past the object.  It relies on tokens
+  from `lcsas_json_parse`, which are always consistent.
+- `lcsas_json_decode_string`: each write checks room for itself plus the
+  NUL; `\uXXXX` needs `i + 5 < end`.  `\u0000` can embed a NUL, and
+  tree.c's `decode_path_component` rejects any name whose `strlen`
+  differs from the decoded length.  Surrogate pairs decode as two 3-byte
+  sequences, not one 4-byte one.  Go's encoder never emits them for
+  valid UTF-8, so this only matters for hand-made input.
+- `lcsas_json_decode_int`: digits only; overflow is checked before the
+  multiply.
+- tree.c: the `nodes`, `content` and `extended_attributes` walks are
+  bounded by both `ntoks` and the element count.  Names decode into
+  `name_buf[1024]` with its size, and NUL, `..`-style and slash names are
+  refused.  A truncated `node_path` is fatal, never silently shortened.
+  Content ids must be exactly 64 hex characters.  An xattr value buffer
+  is sized `(enc_len + 3) / 4 * 3 + 8` from the encoded length before
+  decoding.
+- `b64.c`: lax by design.  It skips `=` and whitespace anywhere, drops
+  trailing sub-byte bits, and takes no destination length.  Both callers
+  size first: `repo.c b64_decode_field` (count pass, then
+  `malloc(n + 1)`) and the tree.c xattr path (above).  The key fields are
+  checked for their exact decoded lengths (32/16/16) right after
+  decoding, so lax input can't produce a short or long key.
+- `repo.c` key and master-key JSON use fixed 64-token arrays, which also
+  bound their nesting.  The snapshot `paths` walk stops at
+  `min(paths + 64, ntoks - 1)`.
+
+**Why fuzzing missed both:** libFuzzer's default input cap (4 KiB) can't
+nest deep enough to exhaust a stack.  `fuzz_json_parse` tokenises but
+never runs `repo.c`'s walks, and `fuzz_repo_strip_v2` covers only the
+v2 prefix.  Driving `load_index` would need an encrypted-index harness.
+
 ## Interpreting failures
 
 ### Coverage below threshold

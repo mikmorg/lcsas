@@ -2479,8 +2479,7 @@ class MetaVolumeBuilder:
         in one shot.
 
         See `docs/CROSS_PLATFORM_META_RFC.md` §6 Q6 for the gap
-        analysis and the Phase 21.11 / 21.12 follow-ups that close
-        the remaining targets.
+        analysis; Phase 21.11 / 21.12 closed the remaining targets.
         """
         # rust-triple → (short_arch_dir_name, lcsas-restore_filename)
         # Phase 21.12 closed the last open mapping; every approved
@@ -3144,6 +3143,28 @@ to recover the files on the LCSAS archive discs.
 
 {no_os_block}
 ╚══════════════════════════════════════════════════════════╝
+
+IF THE COMPUTER REFUSES TO RUN IT
+
+  The files on this disc are fine: a safety setting on the
+  computer is in the way.  Copy the disc to your home folder
+  and run the copy instead (it needs about 1 GB of space;
+  delete ~/lcsas-meta when the restore has finished).
+
+  macOS says "cannot be opened because the developer cannot
+  be verified", or the restore stops with "Killed":
+      cp -R /Volumes/{label} ~/lcsas-meta
+      xattr -dr com.apple.quarantine ~/lcsas-meta
+      sh ~/lcsas-meta/restore.sh ~/restored
+
+  Linux says "Permission denied", says this disc "lacks all
+  recovery binaries" although the files are there, or falls
+  back to the slow Python tier (tier 3).  That happens when
+  the files sit on a USB stick or another place that may not
+  run programs:
+      cp -R /media/$USER/{label} ~/lcsas-meta
+      chmod -R u+x ~/lcsas-meta/recovery/bin
+      sh ~/lcsas-meta/restore.sh ~/restored
 
 WHAT YOU NEED
 

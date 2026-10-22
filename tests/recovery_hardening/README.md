@@ -91,8 +91,10 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_sh_binary_corrupt.py` | Issue #223 — restore.sh detects present-but-corrupted tier binaries. |
 | `test_restore_sh_catalog_invalidation.py` | Hardening test: mtime-based locator-catalog cache invalidation in restore.sh (Issue #108). |
 | `test_restore_sh_ecc_dispatch.py` | Hardening tests: restore.sh --check-disc ECC dispatch [FMT-01]. |
+| `test_restore_sh_nonexec_bins.py` | Hardening (#496): tier binaries that are present but can't be run. |
 | `test_restore_sh_password_hygiene.py` | test_restore_sh_password_hygiene.py -- restore.sh password-file cleanup. |
 | `test_restore_sh_relocate.py` | Hardening tests: restore.sh relocation path (read-only SCRIPT_DIR). |
+| `test_restore_sh_relocate_cleanup.py` | Hardening (#508): relocation copies one target and cleans up after itself. |
 | `test_restore_sh_repo_flag.py` | Hardening test: --repo NAME flag on restore.sh (Issue #91). |
 | `test_restore_sh_stock_restic_tier.py` | test_restore_sh_stock_restic_tier.py -- restore.sh tier-2b dispatch. |
 | `test_restore_sh_target_guards.py` | Hardening tests: restore.sh target-safety guards [UX-07] + [BOOT-05]. |
@@ -101,6 +103,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_sh_tmpfs_target_warns.py` | Hardening tests: RAM-backed (tmpfs) restore-target warning [BOOT-05]. |
 | `test_restore_sh_ux.py` | Hardening tests: restore.sh UX improvements (recommendations #3, #4, #8). |
 | `test_restore_sh_version_flag.py` | Hardening test: --version flag on restore.sh (Issue #96). |
+| `test_restore_shell_facade.py` | The blind agent's terminal must keep the restore's last lines. |
 | `test_restore_skips_tier2_on_multi_disc.py` | Hardening test (issue #227): restore.sh skips tier 2 when the |
 | `test_restore_space_preflight.py` | Hardening tests: restore-side free-space preflight [FMA-09]. |
 | `test_schedule_only_workflows.py` | Hardening: a scheduled workflow file holds a schedule and nothing else (#462). |
@@ -123,6 +126,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_tier1_fault_handling.py` | Tier-1 operator-error fault handling tests. |
 | `test_tier1_fault_inject.py` | Audit phase 6 (issue #165): malloc fault-injection sweep — zero crashes. |
 | `test_tier1_hardlinks.py` | Issue #192 -- tier-1 hardlink reconstruction. |
+| `test_tier1_index_walk_bounds.py` | Hardening: tier-1's index walks stay inside the parsed tokens (#487). |
 | `test_tier1_large_file.py` | T1C-01: one file with 40,000 content chunks (huge content array). |
 | `test_tier1_macos_native.py` | GATE-03: tier-1 macOS (Mach-O) binary execution coverage. |
 | `test_tier1_meta_disc_live.py` | Hardening test: tier-1 meta-disc exclusion respects a LIVE check. |
