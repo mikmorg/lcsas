@@ -183,6 +183,35 @@ class IntegrityError(Exception):
     """MAC verification failed — data corrupted or wrong key."""
 
 
+class KeyFileCorruptError(IntegrityError):
+    """A key file could not be read or parsed (#481).
+
+    Not a password verdict: the file is unreadable, malformed, or carries
+    impossible scrypt parameters.  A subclass, so code that only catches
+    IntegrityError still treats it as a failed key.
+    """
+
+
+class NoKeyUnlockedError(IntegrityError):
+    """No key file in ``keys/`` gave up the master key (#481).
+
+    ``rejected`` lists the key files whose MAC check failed with this
+    password; ``corrupt`` pairs each unreadable or malformed one with
+    the reason.  Together they let a caller tell "wrong password" from
+    "the key files are damaged".
+    """
+
+    def __init__(
+        self,
+        message: str,
+        rejected: list[Path],
+        corrupt: list[tuple[Path, str]],
+    ) -> None:
+        super().__init__(message)
+        self.rejected = rejected
+        self.corrupt = corrupt
+
+
 class _NodeFailed(Exception):  # noqa: N818 — internal control-flow sentinel, not a public error
     """Internal: a single file node could not be restored.
 
@@ -300,21 +329,33 @@ def _load_master_key(key_file: Path, password: bytes) -> MasterKey:
         Decrypted MasterKey.
 
     Raises:
-        IntegrityError: Wrong password or corrupted key file.
+        KeyFileCorruptError: The key file is unreadable or malformed.
+        IntegrityError: The MAC check failed: wrong password, or a
+            corrupted ``data`` field (the two look the same).
     """
-    with open(key_file, encoding="utf-8") as f:
-        key_doc = json.load(f)
+    # Everything read from the file before the MAC check is untrusted.
+    # A bit-rotted or truncated key file raises OSError, ValueError
+    # (bad JSON, UTF-8 or base64), TypeError, KeyError or AttributeError
+    # (wrong shapes); all of it means "this file is damaged", never
+    # "wrong password", so _try_keys can move on to the next one (#481).
+    try:
+        with open(key_file, encoding="utf-8") as f:
+            key_doc = json.load(f)
+        salt = base64.b64decode(key_doc["salt"])
+        n = key_doc.get("N", 32768)
+        r = key_doc.get("r", 8)
+        p = key_doc.get("p", 1)
+        maxmem = _scrypt_maxmem(n, r, p)
+        encrypted_master = base64.b64decode(key_doc["data"])
+    except IntegrityError as e:
+        raise KeyFileCorruptError(f"key file {key_file}: {e}") from None
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as e:
+        raise KeyFileCorruptError(
+            f"key file {key_file}: unreadable or malformed "
+            f"({type(e).__name__}: {e}); corrupt key file?"
+        ) from None
 
     # Derive key-encryption key via scrypt
-    salt = base64.b64decode(key_doc["salt"])
-    n = key_doc.get("N", 32768)
-    r = key_doc.get("r", 8)
-    p = key_doc.get("p", 1)
-    try:
-        maxmem = _scrypt_maxmem(n, r, p)
-    except IntegrityError as e:
-        raise IntegrityError(f"key file {key_file}: {e}") from None
-
     derived = hashlib.scrypt(
         password, salt=salt, n=n, r=r, p=p, dklen=64, maxmem=maxmem,
     )
@@ -325,17 +366,22 @@ def _load_master_key(key_file: Path, password: bytes) -> MasterKey:
     kek_mac_r = derived[48:64]
 
     # Decrypt the master key
-    encrypted_master = base64.b64decode(key_doc["data"])
     master_json = _decrypt_authenticated(
         kek_encrypt, kek_mac_k, kek_mac_r, encrypted_master
     )
 
-    master = json.loads(master_json)
-    return MasterKey(
-        encrypt=base64.b64decode(master["encrypt"]),
-        mac_k=base64.b64decode(master["mac"]["k"]),
-        mac_r=base64.b64decode(master["mac"]["r"]),
-    )
+    try:
+        master = json.loads(master_json)
+        return MasterKey(
+            encrypt=base64.b64decode(master["encrypt"]),
+            mac_k=base64.b64decode(master["mac"]["k"]),
+            mac_r=base64.b64decode(master["mac"]["r"]),
+        )
+    except (ValueError, TypeError, KeyError, AttributeError) as e:
+        raise KeyFileCorruptError(
+            f"key file {key_file}: the password is right, but the master "
+            f"key inside is malformed ({type(e).__name__}: {e})"
+        ) from None
 
 
 def _try_keys(keys_dir: Path, password: bytes) -> MasterKey:
@@ -348,27 +394,45 @@ def _try_keys(keys_dir: Path, password: bytes) -> MasterKey:
     Returns:
         The first successfully decrypted MasterKey.
 
+    A damaged key file is skipped, like tier-1 does (``repo.c``), so a
+    bit-rotted file that sorts first can't hide a good one (#481).
+
     Raises:
-        IntegrityError: No key file could be decrypted.
+        IntegrityError: The keys directory is empty.
+        NoKeyUnlockedError: No key file could be decrypted.
     """
     key_files = sorted(keys_dir.iterdir())
     if not key_files:
         raise IntegrityError(f"No key files found in {keys_dir}")
 
-    last_error: Exception | None = None
+    rejected: list[Path] = []
+    corrupt: list[tuple[Path, str]] = []
     for kf in key_files:
         if not kf.is_file():
             continue
         try:
             return _load_master_key(kf, password)
-        except (IntegrityError, json.JSONDecodeError, KeyError) as e:
-            last_error = e
-            continue
+        except KeyFileCorruptError as e:
+            corrupt.append((kf, str(e)))
+        except IntegrityError:
+            rejected.append(kf)
 
-    raise IntegrityError(
-        f"Could not decrypt any key file in {keys_dir} — "
-        f"wrong password? Last error: {last_error}"
-    )
+    damaged = "; ".join(why for _, why in corrupt)
+    if corrupt and not rejected:
+        msg = (
+            f"No key file in {keys_dir} could be read: all {len(corrupt)} "
+            f"are unreadable or corrupt. {damaged}"
+        )
+    else:
+        msg = f"Could not decrypt any key file in {keys_dir} — wrong password?"
+        if rejected:
+            msg += f" ({len(rejected)} key file(s) rejected it)"
+        if corrupt:
+            msg += (
+                f" {len(corrupt)} more could not be read, so were not "
+                f"checked: {damaged}"
+            )
+    raise NoKeyUnlockedError(msg, rejected, corrupt)
 
 
 # ── Repository Reader ───────────────────────────────────────────
@@ -1369,9 +1433,11 @@ class PurePythonRestorer:
             try:
                 tree_data = self._read_blob(tid)
                 tree_doc = json.loads(tree_data)
-            except (KeyError, IntegrityError, json.JSONDecodeError):
-                # Corrupted or missing tree blob — give up the count;
-                # _restore_tree will surface the real error later.
+            except (IntegrityError, KeyError, OSError, json.JSONDecodeError):
+                # Corrupted, missing or unreadable (EIO) tree blob — give
+                # up the count; _restore_tree catches the same errors and
+                # records the failure.  Missing OSError here aborted the
+                # whole restore before the tolerant pass began (#481).
                 return total
             for node in tree_doc.get("nodes", []):
                 ntype = node.get("type", "file")

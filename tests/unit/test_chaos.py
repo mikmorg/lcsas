@@ -298,14 +298,32 @@ class TestMissingPacks:
 
         ``interactive=False`` opts out of the #234 disc-swap prompt loop
         -- this test pins the raise-on-miss contract for non-tty callers.
+        ``strict=True`` because the default tolerant mode (RST-03) records
+        the miss and continues; until #481 the progress pre-pass raised
+        before tolerant traversal began, which is what this test saw.
         """
         repo, pw, pack_id = _build_repo(tmp_path)
         pack_path = repo / "data" / pack_id[:2] / pack_id
         pack_path.unlink()
 
-        restorer = PurePythonRestorer(repo, pw, interactive=False)
+        restorer = PurePythonRestorer(repo, pw, interactive=False, strict=True)
         with pytest.raises(FileNotFoundError, match="Pack file not found"):
             restorer.restore(target=tmp_path / "out")
+
+    def test_pack_file_deleted_tolerant_records_and_finishes(
+        self, tmp_path, monkeypatch,
+    ):
+        """Default (tolerant) mode with progress on: the miss is recorded
+        in RESTORE_FAILURES.txt and restore() returns (#481)."""
+        monkeypatch.setenv("LCSAS_PROGRESS", "1")
+        repo, pw, pack_id = _build_repo(tmp_path)
+        (repo / "data" / pack_id[:2] / pack_id).unlink()
+
+        restorer = PurePythonRestorer(repo, pw, interactive=False)
+        restorer.restore(target=tmp_path / "out")
+        assert restorer.failures > 0
+        manifest = (tmp_path / "out" / "RESTORE_FAILURES.txt").read_text()
+        assert "Pack file not found" in manifest
 
     def test_entire_data_dir_missing(self, tmp_path):
         """Removing data/ entirely should raise FileNotFoundError."""
@@ -314,7 +332,7 @@ class TestMissingPacks:
         shutil.rmtree(repo / "data")
         (repo / "data").mkdir()  # recreate empty
 
-        restorer = PurePythonRestorer(repo, pw, interactive=False)
+        restorer = PurePythonRestorer(repo, pw, interactive=False, strict=True)
         with pytest.raises(FileNotFoundError, match="Pack file not found"):
             restorer.restore(target=tmp_path / "out")
 
@@ -359,7 +377,7 @@ class TestMissingIndexEntries:
             new_idx = json.dumps(idx_doc).encode()
             f.write_bytes(_encrypt_with_master(new_idx))
 
-        restorer = PurePythonRestorer(repo, pw, interactive=False)
+        restorer = PurePythonRestorer(repo, pw, interactive=False, strict=True)
         with pytest.raises(FileNotFoundError, match="Pack file not found"):
             restorer.restore(target=tmp_path / "out")
 
