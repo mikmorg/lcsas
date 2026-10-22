@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static int fails = 0;
@@ -188,6 +189,7 @@ int main(void)
         int saved_fd;
         fpos_t saved_pos;
         int rc6;
+        int skew6 = 0;
 
         unlink(v6_path);
         unlink(cap_path);
@@ -228,6 +230,7 @@ int main(void)
         rc6 = -2;
         if (cv6) {
             rc6 = lcsas_catalog_find_pack(cv6, "aa11", &pk);
+            skew6 = lcsas_catalog_error_is_skew(cv6);
             (void)lcsas_catalog_find_pack(cv6, "bb22", &pk);
             lcsas_catalog_close(cv6);
         }
@@ -247,6 +250,10 @@ int main(void)
             fprintf(stderr,
                 "FAIL: find_pack on v6/renamed column returned %d (want -1)\n",
                 rc6);
+            fails++;
+        }
+        if (!skew6) {
+            fprintf(stderr, "FAIL: a renamed column is not reported as skew\n");
             fails++;
         }
 
@@ -271,6 +278,167 @@ int main(void)
 
         unlink(v6_path);
         unlink(cap_path);
+    }
+
+    /* ── #543: a catalog that can't be read is not schema skew ───────
+     *
+     * A WAL-mode catalog in a directory SQLite can't write to, as on a
+     * read-only disc: the plain read-only open succeeds, but the first
+     * query fails because the -shm file can't be created.  Reopened as
+     * immutable, it reads.  The '%' and '#' in the path must survive the
+     * URI.  (As root the directory stays writable and the plain open
+     * works; the outcome is the same.)
+     */
+    {
+        char ro_dir[256];
+        char ro_path[300];
+        sqlite3 *w = NULL;
+        lcsas_catalog *cw;
+
+        snprintf(ro_dir, sizeof ro_dir, "/tmp/lcsas_catalog_test_ro %%#%ld",
+                 (long)getpid());
+        snprintf(ro_path, sizeof ro_path, "%s/catalog.db", ro_dir);
+        mkdir(ro_dir, 0755);
+        if (sqlite3_open(ro_path, &w) != SQLITE_OK
+                || exec_sql(w,
+                    "PRAGMA journal_mode=WAL;"
+                    "CREATE TABLE schema_version (version INTEGER);"
+                    "INSERT INTO schema_version VALUES (10);"
+                    "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY,"
+                    "  sha256 TEXT, size_bytes INTEGER, repo_id TEXT);"
+                    "INSERT INTO packs VALUES (1, 'aa11', 1024, 'repo-abc');")
+                   < 0) {
+            fprintf(stderr, "FAIL #543: WAL catalog setup\n");
+            fails++;
+        }
+        sqlite3_close(w);
+        chmod(ro_dir, 0555);
+        cw = lcsas_catalog_open(ro_path);
+        if (!cw || lcsas_catalog_schema_version(cw) != 10
+                || lcsas_catalog_find_pack(cw, "aa11", &pk) != 0
+                || pk.pack_id != 1) {
+            fprintf(stderr,
+                    "FAIL #543: WAL catalog in a read-only directory unread\n");
+            fails++;
+        }
+        lcsas_catalog_close(cw);
+        chmod(ro_dir, 0755);
+        unlink(ro_path);
+        rmdir(ro_dir);
+    }
+
+    /* A file that isn't a database: the open succeeds (SQLite reads
+     * lazily) and neither the plain nor the immutable handle can query
+     * it.  Lookups fail with SQLite's own message, and that is not
+     * skew. */
+    {
+        const char *bad_path = "/tmp/lcsas_catalog_test_bad.db";
+        FILE *bf = fopen(bad_path, "wb");
+        lcsas_catalog *cb;
+
+        if (bf) {
+            fputs("not an SQLite database, only text long enough to fill"
+                  " the 100-byte header that SQLite checks first.......\n",
+                  bf);
+            fclose(bf);
+        }
+        cb = lcsas_catalog_open(bad_path);
+        if (!cb) {
+            fprintf(stderr, "FAIL #543: open of a non-database returned NULL\n");
+            fails++;
+        } else {
+            if (lcsas_catalog_find_pack(cb, "aa11", &pk) != -1
+                    || lcsas_catalog_error_is_skew(cb)
+                    || strcmp(lcsas_catalog_errmsg(cb),
+                              "file is not a database") != 0) {
+                fprintf(stderr,
+                        "FAIL #543: non-database: want -1, not skew, "
+                        "\"file is not a database\"; got \"%s\"\n",
+                        lcsas_catalog_errmsg(cb));
+                fails++;
+            }
+            lcsas_catalog_close(cb);
+        }
+        unlink(bad_path);
+    }
+
+    /* A damaged page: both lookups prepare, then fail on their first
+     * step.  That is a read error (-1), not "no record" (1) or "on no
+     * volume" (0), and not skew.  The packs and volume_packs root pages
+     * are overwritten; schema_version's is left intact, so the open's
+     * probe still reads. */
+    {
+        const char *cor_path = "/tmp/lcsas_catalog_test_damaged.db";
+        sqlite3 *d = NULL;
+        sqlite3_stmt *st = NULL;
+        lcsas_catalog *cd;
+        unsigned char junk[512];
+        FILE *df;
+        int nroot = 0;
+        long roots[2] = { 0, 0 };
+
+        unlink(cor_path);
+        memset(junk, 0xFF, sizeof junk);
+        if (sqlite3_open(cor_path, &d) != SQLITE_OK
+                || exec_sql(d,
+                    "PRAGMA page_size=512;"
+                    "CREATE TABLE schema_version (version INTEGER);"
+                    "INSERT INTO schema_version VALUES (10);"
+                    "CREATE TABLE packs (pack_id INTEGER PRIMARY KEY,"
+                    "  sha256 TEXT, size_bytes INTEGER, repo_id TEXT);"
+                    "INSERT INTO packs VALUES (1, 'aa11', 1024, 'repo-abc');") < 0
+                || exec_sql(d,
+                    "CREATE TABLE volumes (volume_id INTEGER PRIMARY KEY,"
+                    "  label TEXT, uuid TEXT, media_type TEXT, status TEXT);"
+                    "INSERT INTO volumes VALUES"
+                    "  (1, 'vol-001', 'uuid-aaa', 'BD25', 'VERIFIED');"
+                    "CREATE TABLE volume_packs (volume_id INTEGER,"
+                    "  pack_id INTEGER);"
+                    "INSERT INTO volume_packs VALUES (1, 1);") < 0) {
+            fprintf(stderr, "FAIL #543: damaged-catalog setup\n");
+            fails++;
+        }
+        df = NULL;
+        if (sqlite3_prepare_v2(d,
+                "SELECT rootpage FROM sqlite_master"
+                " WHERE name IN ('packs', 'volume_packs')",
+                -1, &st, NULL) == SQLITE_OK) {
+            df = fopen(cor_path, "r+b");
+            while (df && sqlite3_step(st) == SQLITE_ROW) {
+                long root = (long)sqlite3_column_int(st, 0);
+                fseek(df, (root - 1) * 512L, SEEK_SET);
+                if (root > 1 && nroot < 2
+                        && fwrite(junk, 1, sizeof junk, df) == sizeof junk)
+                    roots[nroot++] = root;
+            }
+        }
+        sqlite3_finalize(st);
+        sqlite3_close(d);
+        if (df) fclose(df);
+        if (nroot != 2) {
+            fprintf(stderr, "FAIL #543: damaged %d root pages (want 2):"
+                    " %ld %ld\n", nroot, roots[0], roots[1]);
+            fails++;
+        }
+        cd = lcsas_catalog_open(cor_path);
+        if (!cd) {
+            fprintf(stderr, "FAIL #543: open of a damaged catalog returned NULL\n");
+            fails++;
+        } else {
+            int fr = lcsas_catalog_find_pack(cd, "aa11", &pk);
+            int fskew = lcsas_catalog_error_is_skew(cd);
+            int nv = lcsas_catalog_volumes_for_pack(cd, 1, vols, 8);
+            int vskew = lcsas_catalog_error_is_skew(cd);
+            if (fr != -1 || fskew || nv != -1 || vskew) {
+                fprintf(stderr,
+                        "FAIL #543: damaged page: find_pack %d (skew %d),"
+                        " volumes_for_pack %d (skew %d); want -1, -1, no"
+                        " skew\n", fr, fskew, nv, vskew);
+                fails++;
+            }
+            lcsas_catalog_close(cd);
+        }
+        unlink(cor_path);
     }
 
     if (fails == 0) printf("test_catalog: OK\n");

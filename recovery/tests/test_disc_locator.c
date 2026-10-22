@@ -1584,6 +1584,39 @@ main(void)
                                     "catalog could not be queried")) {
             fprintf(stderr, "FAIL #488: schema-skew prompt\n"); fails++;
         }
+
+        /* #543: the pack is known, but the volume tables are missing, so
+         * the second lookup's prepare fails.  That is skew too. */
+        snprintf(sql, sizeof sql,
+                 "CREATE TABLE schema_version(version INTEGER);"
+                 "INSERT INTO schema_version VALUES(10);"
+                 "CREATE TABLE packs(pack_id INTEGER PRIMARY KEY, sha256 TEXT,"
+                 " size_bytes INTEGER, repo_id TEXT);"
+                 "INSERT INTO packs VALUES(1, '%s', 10, 'r');",
+                 "abababababababababababababababababababababababababababababababab");
+        if (make_catalog(cat_path, sql) != 0
+                || !prompt_mentions(tmpdir, cat_path, missing,
+                                    "catalog could not be queried")) {
+            fprintf(stderr, "FAIL #543: no-volume-tables prompt\n"); fails++;
+        }
+
+        /* #543: a catalog that is not a database at all can't be read.
+         * The prompt says so, and why, and does not send the heir after
+         * a newer LCSAS. */
+        {
+            FILE *g = fopen(cat_path, "wb");
+            if (g) {
+                fputs("not an SQLite database, only text long enough to"
+                      " fill the 100-byte header SQLite checks first.....\n",
+                      g);
+                fclose(g);
+            }
+        }
+        if (!prompt_mentions(tmpdir, cat_path, missing,
+                             "Reason: file is not a database")
+                || prompt_mentions(tmpdir, cat_path, missing, "newer LCSAS")) {
+            fprintf(stderr, "FAIL #543: unreadable-catalog prompt\n"); fails++;
+        }
         unlink(cat_path);
     }
 

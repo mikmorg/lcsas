@@ -78,7 +78,9 @@ PROMPT_END_RE = re.compile(r"\+-{20,}\+\s*\n> ")
 LIVES_ON_RE = re.compile(
     r"It lives on volume\(s\):(?P<body>.*?)Currently searching:", re.S
 )
-CATALOG_UNQUERYABLE_MARK = "catalog could not be queried"
+# Both catalog-failure wordings: "could not be queried" (schema skew) and,
+# since #543, "could not be read".
+CATALOG_UNQUERYABLE_MARK = "catalog could not be"
 STILL_MISSING_MARK = "(still not found"
 AUTO_DETECT_MARK = "new disc detected -- no ENTER needed"
 PACK_PREFIX_RE = re.compile(r"Pack ([0-9a-f]{16})\.\.\.")
@@ -637,7 +639,8 @@ def case_swap(
                     # #534: the on-disc catalog.db was a WAL-mode database, which
                     # SQLite cannot open on a read-only volume, so the first prompt
                     # said "likely written by a newer LCSAS" instead of naming a
-                    # disc.  The burn now writes it with a rollback journal.
+                    # disc.  The burn now writes it with a rollback journal (#542),
+                    # and tier 1 reads a WAL one as immutable (#543).
                     raise CheckError(
                         "tier 1 could not query the on-disc catalog.db in place "
                         f"(read-only volume); the first prompt says:\n{box}"
