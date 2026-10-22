@@ -160,6 +160,42 @@ class TestDVDisasterMocked:
             runner.augment_iso(iso)
 
     @patch("lcsas.ecc.dvdisaster.subprocess.run")
+    def test_augment_budgets_the_padded_medium_not_the_raw_iso(
+        self, mock_run, tmp_path,
+    ):
+        """#485: free space between the raw ISO and the padded RS03 image
+        must be refused up front, before the temp copy or dvdisaster."""
+        from lcsas.ecc.dvdisaster import smallest_fitting_medium_bytes
+
+        iso = tmp_path / "part-filled.iso"
+        iso.write_bytes(b"\x00" * 1024)
+        padded = smallest_fitting_medium_bytes(1024)
+        free = 1024 + 2 * 1_048_576          # plenty for a raw-size copy
+        assert free < padded                 # but far short of the pad
+        with (
+            patch(
+                "lcsas.ecc.dvdisaster.shutil.disk_usage",
+                return_value=MagicMock(free=free),
+            ),
+            pytest.raises(OSError, match=f"{padded + 1_048_576:,} bytes needed"),
+        ):
+            SubprocessDVDisasterRunner().augment_iso(iso)
+        mock_run.assert_not_called()
+        assert not iso.with_suffix(".iso.ecc.tmp").exists()
+
+    def test_augment_iso_beyond_every_medium_is_refused(self, tmp_path):
+        iso = tmp_path / "huge.iso"
+        iso.write_bytes(b"\x00" * 1024)
+        with (
+            patch(
+                "lcsas.ecc.dvdisaster.smallest_fitting_medium_bytes",
+                side_effect=ValueError("image exceeds the largest RS03 medium"),
+            ),
+            pytest.raises(OSError, match="largest RS03 medium"),
+        ):
+            SubprocessDVDisasterRunner().augment_iso(iso)
+
+    @patch("lcsas.ecc.dvdisaster.subprocess.run")
     def test_augment_succeeds_when_sufficient_disk_space(self, mock_run, tmp_path):
         """augment_iso proceeds normally when disk space is adequate."""
         mock_run.return_value = MagicMock(returncode=0)

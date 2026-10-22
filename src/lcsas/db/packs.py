@@ -150,12 +150,25 @@ def bulk_register(
             # Detect size mismatch (INSERT OR IGNORE skipped this pack)
             if (r["sha256"] in expected_sizes and
                     r["size_bytes"] != expected_sizes[r["sha256"]]):
-                _logger.warning(
-                    "Pack %s has size mismatch (DB has %d bytes, found %d bytes). "
-                    "Catalog will use existing size.",
-                    r["sha256"][:16], r["size_bytes"], expected_sizes[r["sha256"]],
+                warn_size_mismatch(
+                    r["sha256"], r["size_bytes"], expected_sizes[r["sha256"]]
                 )
     return [pack_map[sha] for sha in sha_list]
+
+
+def warn_size_mismatch(sha256: str, db_size: int, found_size: int) -> None:
+    """Log that a known pack's on-disk size no longer matches the catalog.
+
+    Pack names are content hashes, so the first-recorded size is trusted
+    and the catalog is left alone; a different size means the file on the
+    mirror was truncated or altered after it was first registered.
+    """
+    _logger.warning(
+        "Pack %s has size mismatch (DB has %d bytes, found %d bytes). "
+        "Catalog will use existing size; the mirror copy may be truncated "
+        "or damaged.",
+        sha256[:16], db_size, found_size,
+    )
 
 
 def list_packs(

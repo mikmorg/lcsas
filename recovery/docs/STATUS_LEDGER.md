@@ -195,9 +195,13 @@ Every uncovered line is line-pinned and categorised in `EXEMPTIONS.md`
 `exemptions_check.py`.  Per-file numbers and the threshold rationale live
 in `AUDIT.md`; this ledger does not duplicate them.
 
-Aspirational target: 95%.  The path forward (fault-tolerant gcov runtime
-patch, EINTR-injection wrapper, AEAD-corruption fixtures, 1M+ file
-fixtures) is documented under "Path forward" in `EXEMPTIONS.md`.
+95% is not a tracked goal (#488).  The enforced contract is the 88% floor
+plus the exact-match fence: every uncovered line is justified in
+`EXEMPTIONS.md`, and any newly covered or newly uncovered line fails the
+gate.  What would raise the number further (a fault-tolerant gcov runtime
+patch, an EINTR-injection wrapper, million-entry fixtures) is listed under
+"Path forward" in `EXEMPTIONS.md`.  `THRESHOLD=95` remains as an optional
+stricter local run.
 
 ---
 

@@ -15,6 +15,8 @@ the stale catalog.
 
 from __future__ import annotations
 
+import os
+import shutil
 import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -189,3 +191,68 @@ class TestStalenessDisclosure:
             assert "catalog was written BEFORE this disc" in text
             assert "the catalog on any NEWER disc" in text
             assert "printed receipt" in text
+
+
+def _journal_header(db: Path) -> tuple[int, int]:
+    """SQLite header bytes 18/19 (write/read format): 1 = rollback, 2 = WAL."""
+    header = db.read_bytes()[:20]
+    return header[18], header[19]
+
+
+def _read_only_copy(src: Path, where: Path) -> Path:
+    """*src* copied alone into a directory nothing can write to (a disc)."""
+    where.mkdir()
+    dst = where / "catalog.db"
+    shutil.copyfile(src, dst)
+    where.chmod(0o555)
+    return dst
+
+
+class TestOnDiscCatalogOpensOnReadOnlyMedia:
+    """#534: the hot DB runs in WAL mode, and a byte copy kept it.  SQLite
+    cannot open a WAL database on read-only media (it must create -shm and
+    -wal beside it), so tier 1's disc-swap hints and a stock sqlite3 could
+    not read the catalog on a burned disc."""
+
+    def test_staged_catalog_uses_a_rollback_journal(self, staged):
+        assert _journal_header(staged["config"].db_path) == (2, 2), (
+            "fixture: the hot DB should be in WAL mode"
+        )
+        for manifest in staged["result"].manifests:
+            catalog = manifest.staging_path / "catalog.db"
+            assert _journal_header(catalog) == (1, 1), manifest.volume_label
+            sidecars = sorted(
+                p.name for p in manifest.staging_path.iterdir()
+                if p.name.startswith("catalog.db") and p.name != "catalog.db"
+            )
+            assert sidecars == [], f"would be burned onto the disc: {sidecars}"
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+    def test_staged_catalog_opens_read_only_from_a_read_only_directory(
+        self, staged, tmp_path,
+    ):
+        manifest = staged["result"].manifests[0]
+        disc = _read_only_copy(manifest.staging_path / "catalog.db", tmp_path / "disc")
+        # Control: the hot DB copied the old way (byte copy, WAL header).
+        old = _read_only_copy(staged["config"].db_path, tmp_path / "old-disc")
+        try:
+            conn = sqlite3.connect(f"file:{old}?mode=ro", uri=True)
+            try:
+                with pytest.raises(sqlite3.OperationalError):
+                    conn.execute("SELECT COUNT(*) FROM volumes").fetchone()
+            finally:
+                conn.close()
+
+            conn = sqlite3.connect(f"file:{disc}?mode=ro", uri=True)
+            try:
+                row = conn.execute(
+                    "SELECT status FROM volumes WHERE label = ?",
+                    (manifest.volume_label,),
+                ).fetchone()
+            finally:
+                conn.close()
+            assert row == ("STAGING",)
+            assert sorted(p.name for p in disc.parent.iterdir()) == ["catalog.db"]
+        finally:
+            for d in (disc.parent, old.parent):
+                d.chmod(0o755)

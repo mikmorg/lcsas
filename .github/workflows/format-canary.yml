@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   canary:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -84,7 +84,7 @@ jobs:
     # runner, cancelled-aware, explicit issues:write, no error
     # swallowing.  needs: is load-bearing -- without it needs.*.result
     # is empty and this job never fires.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [canary]
     if: >-
       always() && github.event_name == 'schedule'

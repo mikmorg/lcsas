@@ -157,6 +157,8 @@ class TestCmdScan:
         out = capsys.readouterr().out
         assert "alpha:" in out
         assert "beta:" not in out
+        # #516: the footer counts the repos scanned, not those configured.
+        assert "across 1 repo(s)" in out
 
         # Only alpha's pack should be registered
         conn = get_connection(db_path)
@@ -164,6 +166,27 @@ class TestCmdScan:
         packs = list_packs(conn)
         conn.close()
         assert len(packs) == 1
+
+    def test_scan_footer_names_unregistered_repos(self, tmp_path, capsys):
+        """#516: a configured but unregistered repo is skipped; the footer
+        says so instead of counting it as scanned."""
+        db_path = tmp_path / "archive.db"
+        mirror_a = _make_mirror(tmp_path, "alpha", ["a2" * 32])
+        mirror_b = _make_mirror(tmp_path, "beta", ["b2" * 32])
+        config_path = _write_config(
+            tmp_path, db_path, {"alpha": mirror_a, "beta": mirror_b}
+        )
+        main(["init", "--db-path", str(db_path)])
+        conn = get_connection(db_path)
+        create_all(conn)
+        register_repo(conn, "alpha", "alpha", str(mirror_a), "")
+        conn.close()
+
+        result = main(["--config", str(config_path), "--db", str(db_path),
+                       "scan", "--no-snapshots"])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "across 1 repo(s) (1 skipped, not registered: beta)" in out
 
     def test_scan_empty_mirror(self, tmp_path, capsys):
         """Scanning a mirror with no packs reports zero."""

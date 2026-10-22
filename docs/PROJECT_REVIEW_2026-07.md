@@ -353,6 +353,11 @@ are precisely the seams where wiring is missing or stale.
 | C9 | Coverage as proxy | **PARTIAL** | Differential + interop legs added; breadth metric still not headline |
 | C10 | CI fragility (shared state) | **PARTIAL** | #327 fixed; single-machine risk remains |
 
+*[2026-10-20 correction (C5, #320): closed, not open. PR #411 (merged 2026-07-11) put the
+Mach-O and PE builds under the bin-parity byte-identity gate with zero exemptions
+(`recovery/BIN_PARITY_EXEMPT` is empty), and bin-parity is green. The C5 row above is the
+state at the time of this review.]*
+
 ---
 
 ## 7. Recommendations (prioritized)

@@ -57,21 +57,24 @@ on hardware that only gets faster. There is no rate limit, no lockout, no
 server to take offline. The Key Derivation Function is the only speed bump:
 
 ```
-scrypt(password, salt, N=2^15 (32768), r=8, p=1, dkLen=64)
+scrypt(password, salt, N, r, p, dkLen=64)
 ```
 
-(See `docs/RESTIC_FORMAT_SPEC.md` §3.1; the live key files record `N=32768`.)
-scrypt at these parameters costs on the order of tens of milliseconds per
-guess on a CPU and is memory-hard, which blunts GPU/ASIC speedups — but it is
-*not* a substitute for password entropy over a multi-decade horizon.
+Each key file records its own `N`, `r`, `p` (see `docs/RESTIC_FORMAT_SPEC.md`
+§3). Measured 2026-10-20 (§7): **rustic 0.11.2, which writes LCSAS's
+repositories, records `N=2^17` (131072), `r=8`, `p=1`**, i.e. 128 MiB of memory
+and about 0.7 s of one CPU core per guess. restic 0.19 calibrates per host and
+wrote `N=2^15`, `r=8` with `p=1` or `p=2` (32 MiB, 0.17–0.31 s). Being
+memory-hard blunts GPU/ASIC speedups, but it is *not* a substitute for password
+entropy over a multi-decade horizon.
 
-### Entropy guidance (order-of-magnitude; see §7 for measured numbers)
+### Entropy guidance (from the measurements in §7)
 
-| Password entropy | Practical resistance to offline guessing |
+| Password entropy | Cost to search half the space at rustic's parameters (§7) |
 |---|---|
-| ~40 bits (e.g. a short human-chosen password) | hours-to-days on a 2026 GPU rig — treat as **broken** |
-| ~60 bits | resists casual attack today; erodes with hardware over decades |
-| **≥ 90 bits** (≈ 7+ EFF-diceware words) | **out of reach through the 2060s** under any plausible scaling — recommended |
+| ~40 bits (e.g. a short human-chosen password) | ~10^4 core-years: about a year for a ten-thousand-core attacker today, and cheaper every decade. Treat as **broken** over the archive's lifetime |
+| ~60 bits | ~10^10 core-years: out of reach today; erodes with hardware over decades |
+| **≥ 90 bits** (≈ 7+ EFF-diceware words) | ~10^19 core-years: **out of reach through the 2060s** under any plausible scaling. Recommended |
 
 **Recommendation:** generate the password — do not invent it. Use a
 **diceware passphrase of 7 or more words** (≈ 90 bits) or an equivalent random
@@ -118,19 +121,87 @@ deliberately chosen over confidentiality of the metadata and the wrapped
 - The plaintext catalog is metadata, not file contents.
 
 Any future "sanitized on-disc catalog" option would affect **newly burned
-discs only** — every already-burned disc carries the full plaintext catalog
-forever. See the follow-up audit charter in the FUP-03 plan
-(`plans/audit-2026-06/FUP-03-disc-confidentiality-threat-model.md`).
+discs only**: every already-burned disc carries the full plaintext catalog
+forever. The decision not to offer one is recorded in §8.3.
 
-The key files' plaintext `username`/`hostname` are part of restic's
-content-addressed key artifact; scrubbing them at inject time is examined in
-the charter (likely infeasible without breaking content addressing).
+Key files and their plaintext `username`/`hostname`: rustic 0.11.2 writes
+**neither** field (measured, §7), so a repository LCSAS created carries none.
+Only a repository first initialised by restic does (restic 0.19 writes
+`username`, `hostname` and `created`). Rewriting those bytes would change the
+file's SHA-256, which restic uses as the file's name, so a scrub means renaming
+every key file on every future disc. It isn't done.
 
 ## 7. Verified numbers
 
-> _Reserved for the FUP-03 Part 2 charter._ The KDF parameters quoted above
-> are from `docs/RESTIC_FORMAT_SPEC.md`; the entropy table in §3 is
-> order-of-magnitude guidance. A measured pass (read the KDF params the live
-> rustic writer actually records in fresh key files, benchmark guesses/sec on
-> current hardware, and derive the table from data) will replace the guidance
-> table here. Charter benchmark tooling will land under `tools/`.
+Measured 2026-10-20 with `tools/kdf_bench.py` (FUP-03 Part 2, #489). The
+parameters come from key files freshly written by `rustic init` (v0.11.2;
+two repos, both identical) and `restic init` (v0.19.0; three repos, which
+calibrated to `p=1` once and `p=2` twice). Each value below is the fastest of
+seven guesses on **one core** of an Intel Westmere E56xx (2010-era) VM, using
+OpenSSL's scrypt through Python `hashlib`. A modern core is a few times
+faster. An attacker multiplies by the cores, or the memory bandwidth, they can
+afford.
+
+| writer | N | r | p | memory/guess | s/guess | guesses/core-s |
+|---|---|---|---|---|---|---|
+| rustic 0.11 (LCSAS) | 131072 | 8 | 1 | 128 MiB | 0.706 | 1.4 |
+| restic 0.19 (calibrated) | 32768 | 8 | 1 | 32 MiB | 0.170 | 5.9 |
+| restic 0.19 (calibrated) | 32768 | 8 | 2 | 32 MiB | 0.312 | 3.2 |
+
+Core-years to search **half** of a password space (the expected cost):
+
+| entropy | guesses | rustic N=2^17 | restic N=2^15, p=1 |
+|---|---|---|---|
+| 40 bits | 5.5e11 | 1.2e4 | 3.0e3 |
+| 50 bits | 5.6e14 | 1.3e7 | 3.0e6 |
+| 60 bits | 5.8e17 | 1.3e10 | 3.1e9 |
+| 70 bits | 5.9e20 | 1.3e13 | 3.2e12 |
+| 80 bits | 6.0e23 | 1.4e16 | 3.3e15 |
+| 90 bits | 6.2e26 | 1.4e19 | 3.3e18 |
+
+Re-run with `tools/kdf_bench.py` (defaults), `--params N,r,p`, or
+`--keys-dir <repo>/keys` for the parameters a given repository actually
+records.
+
+## 8. Findings from the Part 2 audit (2026-10-20, #489)
+
+### 8.1 Multi-tenant leakage
+
+In a multi-tenant archive, **every disc carries every tenant's** catalog rows:
+repository names and mirror paths, every snapshot's hostname, paths, tags and
+description, locations, and the volume map. It also carries every tenant's
+wrapped keys. So a disc that one tenant keeps exposes all the others' metadata,
+and lets its holder brute-force any other tenant's password offline (§3).
+Volumes are shared, so no binpack setting changes that today.
+
+`KEY_INFO.txt` says "If you have only one key file, it likely works for all
+repositories (common setup)". That is true for one owner with one password. It
+is the wrong default to suggest when tenants are different people: a shared
+password makes one tenant's compromise everyone's. Two options are product
+decisions, tracked on #491:
+- per-tenant volume separation as a binpack constraint;
+- `KEY_INFO.txt` wording for multi-owner archives.
+
+### 8.2 Shamir share cards and discs
+
+SLIP-0039 is Shamir sharing: any **K−1 cards reveal nothing** about the
+password. A disc adds only the wrapped key, which still needs that password.
+So K−1 cards plus any number of discs leave an attacker exactly where §3 puts
+them. `KEY_SHARE_FORMAT.md` on the disc documents a public standard, and
+knowing the format weakens nothing. The one real risk is a card stored *with* a
+disc; §5 and `ESTATE_PLANNING.md` already forbid that.
+
+### 8.3 Decision: keep the full catalog on every disc
+
+Decided per the charter's default ("keep full catalog, document it"). A
+redacted on-disc catalog would cost restorability:
+- `db/rebuild.py` rebuilds a lost master catalog from discs by merging their
+  `locations`, `volume_events` and snapshot rows (descriptions included).
+  Redacting them means a rebuilt catalog no longer knows where the other copies
+  live or what happened to each volume.
+- The swap prompts and restore planning need the pack → volume map.
+- Every disc already burned keeps the full catalog anyway (§6).
+
+The mitigations stay as they are: opaque repository and location names, and
+custodian-style `key_storage_hints` (§5). Revisit only as an explicit opt-in if
+an owner needs per-disc metadata confidentiality.

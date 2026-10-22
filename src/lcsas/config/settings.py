@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from lcsas.config.media import MediaType
+from lcsas.utils.labels import generate_volume_label
 
 _logger = logging.getLogger("lcsas")
 
@@ -96,8 +97,15 @@ def _xdg_db_path() -> str:
     return str(Path.home() / ".local" / "share" / "lcsas" / "archive.db")
 
 
-def _validate_toml_keys(raw: dict[str, Any]) -> None:
-    """Warn about unknown TOML sections or keys (likely typos)."""
+def unknown_toml_keys(raw: dict[str, Any]) -> list[str]:
+    """Describe unknown TOML sections or keys (likely typos), one per line.
+
+    load_config only warns about these, so a typo never blocks a command.
+    `lcsas config check` treats them as errors (#515): a `[repo.x]`
+    instead of `[repos.x]` otherwise reads as "valid" and `scan` quietly
+    scans nothing.
+    """
+    found: list[str] = []
 
     known_sections = {"paths", "defaults", "repos", "survivability"}
     known_paths = {"mirror_base", "staging", "database"}
@@ -115,28 +123,34 @@ def _validate_toml_keys(raw: dict[str, Any]) -> None:
 
     unknown_sections = set(raw.keys()) - known_sections
     if unknown_sections:
-        _logger.warning("Unknown config sections: %s (typo?)", sorted(unknown_sections))
+        found.append(f"Unknown config sections: {sorted(unknown_sections)} (typo?)")
 
     unknown_paths = set(raw.get("paths", {}).keys()) - known_paths
     if unknown_paths:
-        _logger.warning("Unknown [paths] keys: %s (typo?)", sorted(unknown_paths))
+        found.append(f"Unknown [paths] keys: {sorted(unknown_paths)} (typo?)")
 
     unknown_defaults = set(raw.get("defaults", {}).keys()) - known_defaults
     if unknown_defaults:
-        _logger.warning("Unknown [defaults] keys: %s (typo?)", sorted(unknown_defaults))
+        found.append(f"Unknown [defaults] keys: {sorted(unknown_defaults)} (typo?)")
 
     unknown_survive = set(raw.get("survivability", {}).keys()) - known_survive
     if unknown_survive:
-        _logger.warning("Unknown [survivability] keys: %s (typo?)", sorted(unknown_survive))
+        found.append(f"Unknown [survivability] keys: {sorted(unknown_survive)} (typo?)")
 
     for repo_name, repo_cfg in raw.get("repos", {}).items():
         if isinstance(repo_cfg, dict):
             unknown_repo = set(repo_cfg.keys()) - known_repo_keys
             if unknown_repo:
-                _logger.warning(
-                    "Unknown [repos.%s] keys: %s (typo?)",
-                    repo_name, sorted(unknown_repo),
+                found.append(
+                    f"Unknown [repos.{repo_name}] keys: {sorted(unknown_repo)} (typo?)"
                 )
+    return found
+
+
+def _validate_toml_keys(raw: dict[str, Any]) -> None:
+    """Warn about unknown TOML sections or keys (likely typos)."""
+    for message in unknown_toml_keys(raw):
+        _logger.warning("%s", message)
 
 
 def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
@@ -205,6 +219,15 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
 
     repos: dict[str, RepositoryConfig] = {}
     for repo_name, repo_cfg in raw.get("repos", {}).items():
+        # Named errors, not a bare KeyError from repo_cfg["mirror_path"]
+        # ("Unexpected error: 'mirror_path'", #515).  _load_config_opt
+        # turns the ValueError into an actionable ConfigError.
+        if not isinstance(repo_cfg, dict):
+            raise ValueError(
+                f"[repos.{repo_name}] must be a table with a mirror_path"
+            )
+        if "mirror_path" not in repo_cfg:
+            raise ValueError(f"[repos.{repo_name}] has no mirror_path (required)")
         pw_file = repo_cfg.get("password_file")
         repos[repo_name] = RepositoryConfig(
             name=repo_name,
@@ -370,14 +393,36 @@ def validate_config(config: LCSASConfig) -> list[str]:
         )
     else:
         # Pre-validate that the prefix won't produce labels exceeding 32 chars.
-        # Format: PREFIX_MEDIA_YYYY_NNNN — overhead is _BD25_2026_0001 = 15 (BD25 is most common)
-        _min_overhead = len("_BD25_2026_0001")
-        if len(config.label_prefix) + _min_overhead > 32:
+        # Ask the real generator: the media token's length varies (BD25 vs
+        # CD700 / BX100 / MD100), so a fixed BD25 overhead let a prefix pass
+        # here and then fail at stage time (#523).
+        media = config.default_media_type
+        try:
+            generate_volume_label(config.label_prefix, media.label_name, 1)
+        except ValueError:
             errors.append(
                 f"label_prefix '{config.label_prefix}' is too long "
-                f"({len(config.label_prefix)} chars); generated volume labels would "
-                f"exceed the ISO 9660 32-character limit. Use a shorter prefix."
+                f"({len(config.label_prefix)} chars) for {media.name}; generated "
+                f"volume labels would exceed the ISO 9660 32-character limit. "
+                f"Use a shorter prefix."
             )
+        else:
+            # `stage --media` / `burn --media` can pick another medium, so
+            # say up front which ones this prefix rules out.
+            too_long = []
+            for other in MediaType:
+                if other.is_test:
+                    continue
+                try:
+                    generate_volume_label(config.label_prefix, other.label_name, 1)
+                except ValueError:
+                    too_long.append(other.name)
+            if too_long:
+                _logger.warning(
+                    "label_prefix '%s' is too long for --media %s (32-character "
+                    "ISO 9660 label limit)",
+                    config.label_prefix, ", ".join(too_long),
+                )
 
     # Per-repo checks
     for name, repo in config.repositories.items():

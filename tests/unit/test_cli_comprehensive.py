@@ -164,7 +164,8 @@ class TestCmdScan:
         assert "Total scanned:" in out
 
     def test_scan_unknown_repo_warning(self, tmp_path, capsys):
-        """Scanning an unknown repo name produces a warning, not crash."""
+        """Scanning an unknown repo name is an error, not a crash (#516: it
+        used to exit 0 after scanning nothing)."""
         cfg = _write_config(tmp_path)
         db = tmp_path / "archive.db"
         conn = get_connection(db)
@@ -175,9 +176,10 @@ class TestCmdScan:
             "--config", str(cfg), "scan", "--repo", "nonexistent",
             "--no-snapshots",
         ])
-        assert result == 0
+        assert result == 1
         out = capsys.readouterr().out
         assert "not found in config" in out
+        assert "Configured repositories:" in out
 
 
 # ===================================================================
@@ -228,6 +230,53 @@ database = "/nonexistent/db/archive.db"
         assert result == 1
         out = capsys.readouterr().out
         assert "required" in out.lower()
+
+    # #515: a typo must not read as "valid".
+    def test_section_typo_fails_the_check(self, tmp_path, capsys):
+        cfg = _write_config(tmp_path, f"""
+[repo.family]
+mirror_path = "{tmp_path / 'mirror'}"
+""")
+        result = main(["--config", str(cfg), "config", "check"])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Unknown config sections" in out
+        assert "valid" not in out.lower().replace("invalid", "")
+
+    def test_repo_key_typo_fails_the_check(self, tmp_path, capsys):
+        cfg = _write_config(tmp_path, f"""
+[repos.family]
+mirror_path = "{tmp_path / 'mirror'}"
+passwrd_file = "/x"
+""")
+        assert main(["--config", str(cfg), "config", "check"]) == 1
+        out = capsys.readouterr().out
+        assert "Unknown [repos.family] keys" in out
+        assert out.count("Unknown [repos.family] keys") == 1
+
+    def test_missing_mirror_path_is_named(self, tmp_path, capsys):
+        """It used to be a bare KeyError: "Unexpected error: 'mirror_path'"."""
+        cfg = _write_config(tmp_path, """
+[repos.family]
+mirrorpath = "/x"
+""")
+        assert main(["--config", str(cfg), "config", "check"]) != 0
+        out = capsys.readouterr().out
+        assert "[repos.family] has no mirror_path" in out
+        assert "Unexpected error" not in out
+
+    def test_repo_that_is_not_a_table_is_named(self, tmp_path, capsys):
+        cfg = _write_config(tmp_path, """
+[repos]
+family = "/x"
+""")
+        assert main(["--config", str(cfg), "config", "check"]) != 0
+        assert "[repos.family] must be a table" in capsys.readouterr().out
+
+    def test_no_repos_is_valid_but_noted(self, tmp_path, capsys):
+        cfg = _write_config(tmp_path)
+        assert main(["--config", str(cfg), "config", "check"]) == 0
+        assert "No repositories configured yet" in capsys.readouterr().out
 
     def test_bad_ecc_redundancy(self, tmp_path, capsys):
         cfg = _write_config(tmp_path, "ecc_redundancy_pct = 200")
@@ -302,6 +351,23 @@ class TestCmdBurnSession:
 # cmd_burn_iso (mock-based)
 # ===================================================================
 
+def _fake_iso(path: Path, volid: str) -> Path:
+    """A minimal ISO 9660 image: 16 empty sectors, a PVD with `volid`,
+    and a set terminator (enough for burn-iso's label inference)."""
+    pvd = bytearray(2048)
+    pvd[0] = 1
+    pvd[1:6] = b"CD001"
+    pvd[6] = 1
+    pvd[40:72] = volid.encode("ascii").ljust(32, b" ")
+    term = bytearray(2048)
+    term[0] = 255
+    term[1:6] = b"CD001"
+    term[6] = 1
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bytes(16 * 2048) + bytes(pvd) + bytes(term))
+    return path
+
+
 class TestCmdBurnIso:
     def test_burn_iso_missing_file(self, tmp_path, capsys):
         iso = tmp_path / "missing.iso"
@@ -340,6 +406,44 @@ class TestCmdBurnIso:
         assert result == 1
         out = capsys.readouterr().out
         assert "--location" in out
+
+    def test_burn_iso_label_defaults_to_the_iso_volume_id(self, tmp_path):
+        """#514: `lcsas stage` writes <session>/<LABEL>.iso, so the parent
+        dir is the session.  The default label is the ISO's PVD volume ID,
+        which the identity check also compares against."""
+        iso = _fake_iso(
+            tmp_path / "2026-10-21T00-00-00.000000+00-00-abcd1234"
+            / "LCSAS_TINY_0007.iso",
+            "LCSAS_TINY_0007",
+        )
+        out = tmp_path / "receipts"
+        out.mkdir()
+        with (
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.burn_iso"),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
+                  return_value=True),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.media_status",
+                  return_value=MediaStatus.BLANK),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.read_disc_volume_id",
+                  return_value="LCSAS_TINY_0007"),
+        ):
+            rc = main(["burn-iso", str(iso), "--emit-receipt", str(out),
+                       "--location", "Home"])
+        assert rc == 0
+        data = json.loads((out / "LCSAS_TINY_0007_Home.json").read_text())
+        assert data["volume_label"] == "LCSAS_TINY_0007"
+        assert data["verify_passed"] is True
+
+    def test_burn_iso_no_verify_records_null_not_true(self, tmp_path):
+        """#514: --no-verify used to write verify_passed: true, which import
+        then took as proof and promoted the volume to VERIFIED."""
+        iso = _fake_iso(tmp_path / "s" / "VOL_X.iso", "VOL_X")
+        out = tmp_path / "r.json"
+        with patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.burn_iso"):
+            rc = main(["burn-iso", str(iso), "--no-verify",
+                       "--emit-receipt", str(out), "--location", "Home"])
+        assert rc == 0
+        assert json.loads(out.read_text())["verify_passed"] is None
 
     def test_burn_iso_emits_receipt_with_label_inferred(self, tmp_path, capsys):
         """--emit-receipt produces a JSON file with parent-dir label."""
@@ -406,10 +510,15 @@ class TestCmdBurnIso:
         out_dir = tmp_path / "r"
         out_dir.mkdir()
 
+        # media_status is mocked like the sibling tests: unmocked, it reads
+        # the host's real /dev/sr0, and a loaded disc there (e.g. CDEmu
+        # after a blind-restore run) made this fail with "not blank".
         with (
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.burn_iso"),
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.verify_disc",
                   return_value=False),
+            patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.media_status",
+                  return_value=MediaStatus.BLANK),
         ):
             result = main(["burn-iso", str(iso),
                            "--emit-receipt", str(out_dir),
@@ -579,6 +688,57 @@ class TestCmdCatalogImport:
         events = get_events_for_volume(conn, vol.volume_id, "VERIFY_FAIL")
         assert len(events) == 1
         conn.close()
+
+    @staticmethod
+    def _import(tmp_path, status, receipt):
+        cfg = _write_config(tmp_path)
+        db = tmp_path / "archive.db"
+        conn = get_connection(db)
+        create_all(conn)
+        create_volume(conn, "VOL_514", "u514", "TEST_TINY", 1000, "Home", status)
+        conn.close()
+        r = tmp_path / "r.json"
+        r.write_text(json.dumps({"volume_label": "VOL_514", **receipt}))
+        rc = main(["--config", str(cfg), "catalog", "import-receipts", str(r)])
+        from lcsas.db.volume_copies import get_copies_for_volume
+        from lcsas.db.volume_events import get_events_for_volume
+        from lcsas.db.volumes import get_volume_by_label
+        conn = get_connection(db)
+        vol = get_volume_by_label(conn, "VOL_514")
+        copies = [c.location for c in get_copies_for_volume(conn, vol.volume_id)]
+        events = [e.event_type for e in get_events_for_volume(conn, vol.volume_id)]
+        conn.close()
+        return rc, vol, copies, events
+
+    def test_import_failed_first_burn_records_no_copy(self, tmp_path, capsys):
+        """#514 / BURN-05: a disc that failed verification is not a copy."""
+        rc, vol, copies, events = self._import(
+            tmp_path, "STAGING", {"location": "Vault", "verify_passed": False})
+        assert rc == 0
+        assert vol.status == "BURNED"
+        assert copies == []
+        assert "VERIFY_FAIL" in events
+        out = capsys.readouterr()
+        assert "FAILED verification" in out.out + out.err
+
+    def test_import_failed_reburn_records_event_not_copy(self, tmp_path):
+        rc, vol, copies, events = self._import(
+            tmp_path, "VERIFIED", {"location": "Offsite", "verify_passed": False})
+        assert rc == 0
+        assert vol.status == "VERIFIED"
+        assert "Offsite" not in copies
+        assert "VERIFY_FAIL_REBURN" in events
+
+    def test_import_unverified_burn_is_burned_not_verified(self, tmp_path):
+        """#514: verify_passed null (burn-iso --no-verify) is recorded as a
+        copy but never promotes the volume to VERIFIED."""
+        rc, vol, copies, events = self._import(
+            tmp_path, "STAGING", {"location": "Home", "verify_passed": None})
+        assert rc == 0
+        assert vol.status == "BURNED"
+        assert vol.closed_at is None
+        assert copies == ["Home"]
+        assert "VERIFY_PASS" not in events and "VERIFY_FAIL" not in events
 
     def test_import_reburn_only_adds_copy(self, tmp_path):
         """Already-VERIFIED volume: no status change, just a new copy."""
@@ -2246,6 +2406,63 @@ class TestOrphanedStagingCleanup:
 
         result = detect_orphaned_staging(cfg, conn)
         assert result == []
+
+    def test_unmanaged_entries_are_reported(self, tmp_path):
+        """#486: stray ISOs, legacy single-volume dirs and leftover ECC temp
+        files inside a tracked session are listed; session dirs aren't."""
+        from lcsas.config.settings import default_config
+        from lcsas.staging.cleanup import detect_unmanaged_staging
+
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        (staging / "LCSAS-TINY-0003.iso").write_bytes(b"iso")
+        (staging / "LCSAS-TINY-0003.iso.ecc.tmp").write_bytes(b"tmp")
+        (staging / "LCSAS-TINY-0003").mkdir()             # execute() layout
+        orphan = staging / "2025-01-01T00-00-00.000000+00-00-deadbeef"
+        orphan.mkdir()
+        active = staging / "2025-02-02T00-00-00.000000+00-00-cafef00d"
+        (active / "sub").mkdir(parents=True)
+        (active / "V1.iso").write_bytes(b"iso")
+        (active / "sub" / "V2.iso.ecc.tmp").write_bytes(b"killed augment")
+        cfg = default_config(tmp_path, staging, staging / "archive.db")
+        (staging / "archive.db").write_bytes(b"")          # catalog lives here
+        conn = _mem_conn()
+        conn.execute(
+            "INSERT INTO burn_sessions (session_id, media_type, status, staging_dir) "
+            "VALUES ('s1', 'TEST_TINY', 'STAGED', ?)",
+            (str(active),),
+        )
+        conn.commit()
+
+        found = {p.relative_to(staging).as_posix()
+                 for p in detect_unmanaged_staging(cfg, conn)}
+        assert found == {
+            "LCSAS-TINY-0003",
+            "LCSAS-TINY-0003.iso",
+            "LCSAS-TINY-0003.iso.ecc.tmp",
+            f"{active.name}/sub/V2.iso.ecc.tmp",
+        }
+
+    def test_staging_clean_reports_but_keeps_unmanaged(self, tmp_path, capsys):
+        cfg = _write_config(tmp_path)
+        conn = get_connection(tmp_path / "archive.db")
+        create_all(conn)
+        conn.close()
+        staging = tmp_path / "staging"
+        stray = staging / "LCSAS-TINY-0001.iso"
+        stray.write_bytes(b"x" * 10)
+        orphan = staging / "2025-01-01T00-00-00.000000+00-00-deadbeef"
+        orphan.mkdir()
+
+        rc = main(["--config", str(cfg), "staging", "clean", "--force"])
+        assert rc == 0
+        captured = capsys.readouterr()
+        text = captured.out + captured.err
+        assert stray.exists(), "an unattributed file must never be deleted"
+        assert not orphan.exists()
+        assert "NOT removed" in text
+        assert str(stray) in text
+        assert "Removed 1" in text
 
     def test_clean_orphaned(self, tmp_path):
         from lcsas.staging.cleanup import clean_orphaned_staging

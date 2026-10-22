@@ -7,9 +7,11 @@ name: ecc-repair
 # push/PR suite. Two triggers opt in explicitly:
 #   - the weekly run (ecc-weekly.yml calls this file) bounds toolchain/
 #     environment-drift regressions to days;
-#   - pull_request on the ECC wrapper paths gives immediate coverage to the
+#   - pull_request on the ECC paths gives immediate coverage to the
 #     highest-risk edits (argument drift, wrong image targeted, redundancy
-#     semantics) without waiting for Monday.
+#     semantics) without waiting for Monday.  That includes the tier-1 RS03
+#     codec (recovery/src/lcsas-ecc) and the ISO/burn layout the proof
+#     builds on (#484); not wider, since the run takes ~80 min.
 # See plans/audit-2026-06/GATE-05-schedule-ecc-repair-proof-ci.md.
 #
 # No `schedule:` here, on purpose (#462): GitHub disables a scheduled file
@@ -21,6 +23,9 @@ on:
   pull_request:
     paths:
       - "src/lcsas/ecc/**"
+      - "recovery/src/lcsas-ecc/**"
+      - "src/lcsas/iso/**"
+      - "src/lcsas/burn/**"
       - "tests/integration/test_ecc_repair.py"
       - ".github/workflows/ecc-repair.yml"
   workflow_dispatch: {}
@@ -29,7 +34,7 @@ on:
 
 jobs:
   ecc-repair:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Measured budget, not a guess (#419): the FMT-01 cross-conformance
     # pair made the suite outgrow the old 60-min limit -- the reverse
     # test (test_dvdisaster_repairs_lcsas_ecc_augmented_image) has the

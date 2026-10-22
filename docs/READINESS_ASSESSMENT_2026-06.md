@@ -80,6 +80,11 @@ binaries are committed and *exempt* from the byte-identity gate. That means the 
 heir actually runs cannot be reproducibly tied to the audited C source — a supply-chain /
 trust gap exactly where trust matters most. (The Linux musl bins *are* reproducible; the
 gap is macOS + Windows.)
+*[2026-10-20 correction (#320): closed. PR #411 (merged 2026-07-11) put the Mach-O and
+PE builds under the bin-parity byte-identity gate with zero exemptions
+(`recovery/BIN_PARITY_EXEMPT` is empty), and bin-parity is green. `lcsas-restore`,
+`lcsas-keyshare` and `lcsas-ecc` for every approved target are now rebuilt and
+byte-compared against the committed binaries.]*
 
 ### C6 — Custom crypto, single author, no external audit.
 AES-CTR, Poly1305, scrypt, and SLIP-0039 are re-implemented in *both* pure Python and
@@ -132,6 +137,7 @@ less trustworthy than it sounds.
    implementations — the two places a single bug is unrecoverable. (C6.)
 5. **Close the reproducible-build gap** for macOS/Windows bins, or stop committing them
    and document that those targets are build-from-source-only at recovery time. (C5.)
+   *[2026-10-20 correction: done in PR #411 (#320); see the C5 note above.]*
 6. **Promote differential-testing breadth to a headline metric** (corpus size, % of
    restore decisions cross-checked across tiers), above line coverage. (C9.)
 7. **Stabilize the CI substrate** (disk, concurrency, deterministic gates) before trusting
