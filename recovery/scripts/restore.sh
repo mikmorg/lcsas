@@ -93,6 +93,27 @@ find_meta_mount() {
     printf '%s\n' "$1"
 }
 
+# Print this host's rust triple (the bin/<triple>/ dir restore.sh runs
+# from), or nothing when the platform isn't one we ship.  The same
+# matrix as the main dispatch below, minus its error exits: relocation
+# only uses it to copy less.
+_host_triple() {
+    _ht_m="$(uname -m 2>/dev/null)"
+    case "$(uname -s 2>/dev/null)" in
+        Linux)
+            case "$_ht_m" in
+                x86_64|amd64)      echo x86_64-unknown-linux-musl ;;
+                aarch64|arm64)     echo aarch64-unknown-linux-musl ;;
+                armv7*|armv6*|arm) echo armv7-unknown-linux-gnueabihf ;;
+            esac ;;
+        Darwin)
+            case "$_ht_m" in
+                arm64|aarch64)     echo aarch64-apple-darwin ;;
+                x86_64)            echo x86_64-apple-darwin ;;
+            esac ;;
+    esac
+}
+
 relocate_to_ram() {
     # $1 = original meta-disc mount root.
     orig_mount="$1"; shift
@@ -130,8 +151,19 @@ relocate_to_ram() {
     # "Permission denied".  Either way the next candidate is tried,
     # ending with $HOME.  The copy itself stays best-effort: one
     # unreadable file on a scratched disc must not block relocation.
+    # Copy only this host's bin/<triple>/ (#508): restore.sh never reads
+    # another target's dir, and the whole tree is ~750 MB against ~130 MB
+    # for one target.  Unknown platform or no such dir: copy everything.
+    _copy_from="$src_bin"
+    _copy_to="bin"
+    _reloc_triple="${LCSAS_TARGET:-$(_host_triple)}"
+    if [ -n "$src_bin" ] && [ -n "$_reloc_triple" ] \
+       && [ -d "$src_bin/$_reloc_triple" ]; then
+        _copy_from="$src_bin/$_reloc_triple"
+        _copy_to="bin/$_reloc_triple"
+    fi
     _bin_kb=""
-    [ -n "$src_bin" ] && _bin_kb="$(du -sk "$src_bin" 2>/dev/null | awk '{print $1}')"
+    [ -n "$src_bin" ] && _bin_kb="$(du -sk "$_copy_from" 2>/dev/null | awk '{print $1}')"
     ramdir=""
     for cand in "${TMPDIR:-}" "${XDG_RUNTIME_DIR:-}" /tmp /run /var/tmp \
                 "${HOME:-}"; do
@@ -163,7 +195,7 @@ relocate_to_ram() {
         rm -f "$ramdir/.exec-probe"
         break
     done
-    unset _bin_kb _free_kb
+    unset _bin_kb _free_kb _reloc_triple
     if [ -z "$ramdir" ]; then
         printf '[lcsas-restore] cannot find a writable dir to relocate to; ' >&2
         printf 'continuing from %s (drive will be held)\n' "$orig_mount" >&2
@@ -172,9 +204,9 @@ relocate_to_ram() {
 
     # Mirror the on-disc layout under $ramdir so the script's own
     # AUTO_RECOVERY logic resolves $ramdir/recovery as RECOVERY.
-    mkdir -p "$ramdir/recovery/scripts" "$ramdir/recovery/bin"
+    mkdir -p "$ramdir/recovery/scripts" "$ramdir/recovery/$_copy_to"
     if [ -n "$src_bin" ]; then
-        cp -R "$src_bin/." "$ramdir/recovery/bin/" 2>/dev/null || true
+        cp -R "$_copy_from/." "$ramdir/recovery/$_copy_to/" 2>/dev/null || true
         # A copy of the disc on a FAT/exFAT stick (or a noexec mount) can
         # leave the binaries without their executable bits (#496).
         chmod -R u+x "$ramdir/recovery/bin" 2>/dev/null || true
@@ -728,11 +760,21 @@ TIER3_RC_FILE=""
 # Persistent exit-diagnostic log (issue #259).  Written on non-zero exit so
 # the failure is visible even after the tmux session dies.
 _restore_exit_log="/tmp/lcsas-restore-exit.$(date +%Y%m%d-%H%M%S-$$)"
+# shellcheck disable=SC2317  # runs from the EXIT/INT/TERM trap below
 _restore_exit_handler() {
     rc=$?
     [ -n "${TIER3_ERR:-}" ] && [ -f "${TIER3_ERR:-}" ] && rm -f "$TIER3_ERR"
     [ -n "${TIER3_RC_FILE:-}" ] && [ -f "${TIER3_RC_FILE:-}" ] && rm -f "$TIER3_RC_FILE"
     [ -n "${PWFILE_TMP:-}" ] && [ -f "${PWFILE_TMP:-}" ] && rm -f "$PWFILE_TMP"
+    # #508: a relocated copy (~130 MB of binaries) removes itself, or every
+    # run leaves one behind in /tmp or /run/user.  Only the directory
+    # relocate_to_ram made: $SCRIPT_DIR is <ramdir>/recovery/scripts.
+    if [ -n "${LCSAS_RELOCATED:-}" ]; then
+        _reloc_root="$(dirname "$(dirname "$SCRIPT_DIR")")"
+        case "$(basename "$_reloc_root")" in
+            lcsas-restore.??????) rm -rf "$_reloc_root" ;;
+        esac
+    fi
     if [ "$rc" -ne 0 ]; then
         printf '[restore.sh] EXIT rc=%d at line approx=%d\n' "$rc" "${LINENO:-0}" \
             >> "$_restore_exit_log" 2>/dev/null || true

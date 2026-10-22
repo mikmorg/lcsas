@@ -94,6 +94,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_sh_nonexec_bins.py` | Hardening (#496): tier binaries that are present but can't be run. |
 | `test_restore_sh_password_hygiene.py` | test_restore_sh_password_hygiene.py -- restore.sh password-file cleanup. |
 | `test_restore_sh_relocate.py` | Hardening tests: restore.sh relocation path (read-only SCRIPT_DIR). |
+| `test_restore_sh_relocate_cleanup.py` | Hardening (#508): relocation copies one target and cleans up after itself. |
 | `test_restore_sh_repo_flag.py` | Hardening test: --repo NAME flag on restore.sh (Issue #91). |
 | `test_restore_sh_stock_restic_tier.py` | test_restore_sh_stock_restic_tier.py -- restore.sh tier-2b dispatch. |
 | `test_restore_sh_target_guards.py` | Hardening tests: restore.sh target-safety guards [UX-07] + [BOOT-05]. |
