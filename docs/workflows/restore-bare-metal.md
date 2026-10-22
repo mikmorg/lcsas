@@ -169,9 +169,9 @@ The bare-metal path uses tiers 1–2 of the C/Rust cascade defined in `recovery/
   - `recovery/tests/test_multidisc.py::case_catalog_freshest_pick` — proves the mtime-based freshest-catalog selector (`recovery/tests/test_multidisc.py:446`).
   - `recovery/tests/test_multidisc.py::case_catalog_prompt_label` — proves the prompt text mentions the catalog's volume label (`recovery/tests/test_multidisc.py:524`).
 - Gaps:
-  - No test covers > 2 simultaneously mounted discs.
+  - Tier 1's own multi-disc cases (`recovery/tests/test_multidisc.py`) use two discs. At the `restore.sh` layer, `tests/recovery_hardening/test_restore_sh_catalog_pick.py` mounts three: every one becomes a `--pack-search` source and the newest `catalog.db` is passed as `--catalog`.
   - Auto-mount on disc insertion landed in #455 as polling, not inotify/`WM_DEVICECHANGE`: while the swap prompt waits, tier 1 re-scans every 2 s, so a disc the desktop mounts resumes the restore without ENTER (`--auto-mount off` restores the Enter-only prompt; see `recovery/docs/STATUS_LEDGER.md`).  It does not help this initramfs flow, where nothing mounts a disc unasked, so the prompt is still effectively Enter-driven here.
-  - The interaction between `restore.sh`'s auto-discovery and a partial mount (one disc mounted, others not yet) is exercised only by the catalog-freshest test, not specifically asserted.
+  - A partial mount (one disc of a set mounted, the others not yet) is asserted by `tests/recovery_hardening/test_restore_sh_catalog_pick.py::test_partial_mount_uses_only_the_disc_that_is_mounted`: only that disc is searched and its catalog is used.
 
 **Source refs:**
 - Pack search auto-discovery: `recovery/scripts/restore.sh:267`–`recovery/scripts/restore.sh:304`
@@ -290,7 +290,8 @@ This sub-workflow is materially different from the multi-drive case and is the *
   - `tests/recovery_hardening/test_restore_sh_tier1_missing_multidisc.py` (GATE-06) drives `restore.sh` end-to-end through tier 3 (tier 1 absent, tier 2 skipped on a multi-disc archive, `standalone_restorer.py` completes) to a byte-identical tree; it needs `rustic` and `zstandard` and skips honestly without them. `test_tier3_invocation.py`, `test_tier3_pythonpath.py` and `test_tier_fallback.py` pin the tier-3 dispatch details. (The bare-path test still forces tier 3 off with `LCSAS_ALLOW_PYTHON_TIER=0`, by design.)
   - The arch-detection dispatcher has a negative test: `tests/unit/test_restore_sh_dispatcher.py::test_dispatcher_rejects_unsupported`. (Resolved; this gap is closed.)
   - The `$LCSAS_PASSWORD` env path (the password-file block of `restore.sh`) is exercised by `tests/recovery_hardening/test_restore_sh_password_hygiene.py` and `recovery/tests/test_multidisc.py::case_single_drive_script_relocation`, among others. (Resolved; this gap is closed.)
-  - The freshest-catalog selector (`catalog_consider`) picks by `stat` mtime, so a disc with a clock-skewed mtime can win or lose wrongly; no test pins this corner. (Still open.)
+  - The freshest-catalog selector (`catalog_consider`) picks by `stat` mtime, so a disc with a clock-skewed mtime can win or lose wrongly; on an exact tie the first catalog in scan order is kept (pinned by `test_restore_sh_catalog_pick.py::test_mtime_tie_keeps_the_first_catalog_in_scan_order`). (Intentional: mtime is the only freshness signal available without a sqlite3 CLI; the restore does not depend on the pick, only the disc-swap hints and the free-space estimate do.)
+  - (Fixed) `catalog_consider` scanned its own fixed list (`/Volumes/*`, `/media/$USER/*`, `/media/*`, `/mnt/*`), not `LCSAS_MOUNT_DIRS`, so it missed discs under `/run/media/$USER/` (udisks2 automounts on Fedora, Arch, ...) and a disc mounted at the mount dir itself (`sudo mount /dev/sr0 /mnt`): no catalog, so no disc-swap hints and no size for the free-space preflight. It now walks the same list as repo discovery and the pack search, each mount dir included.
 
 **Source refs:**
 - File header / cascade definition: `recovery/scripts/restore.sh:1`–`recovery/scripts/restore.sh:30`
