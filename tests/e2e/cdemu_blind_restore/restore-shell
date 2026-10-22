@@ -17,10 +17,18 @@
 #       immediately; CMD runs in the background.
 #
 #   restore-shell expect REGEX [TIMEOUT_SECS]
-#       Poll the pane until REGEX (extended grep) matches OR timeout.
-#       On match:        prints the full current pane, exits 0.
-#       On timeout:      prints the full current pane, exits 1.
-#       On session-gone: prints whatever was captured, exits 2.
+#       Poll until REGEX (extended grep) matches NEW output: output
+#       written after what the last successful expect returned.  A
+#       prompt you already answered can't match again.
+#       Prints the new output in every case (none if nothing new);
+#       `screen` shows the whole pane.
+#       On match:        exits 0.  The output it printed now counts
+#                        as seen.
+#       On timeout:      exits 1.  Nothing counts as seen, so a retry
+#                        with another REGEX still finds it.
+#       On CMD exit:     no new output matched and CMD has exited:
+#                        exits 2.
+#       On session-gone: exits 2.
 #       Default timeout: 60 s.  Each poll is 1 s apart.
 #
 #   restore-shell send TEXT
@@ -62,7 +70,12 @@ case "${1:-}" in
         # version wrote to a fixed /tmp file which collided between
         # users (blind-agent runs as `lcsas-blind`; a prior root run
         # created the file with root-only perms).
+        # history-limit: expect finds new output by absolute row
+        # (scrollback + screen), and a full scrollback drops its oldest
+        # rows, shifting every row after them.  It applies to panes
+        # created after it is set, so it goes before new-session.
         if ! tmux start-server \; set-option -g remain-on-exit on \; \
+                set-option -g history-limit 50000 \; \
                 new-session -d -s "$SESSION" -- "$@" >&2; then
             echo "[restore-shell] tmux new-session failed (see above)" >&2
             exit 1
@@ -79,22 +92,68 @@ case "${1:-}" in
             echo "[restore-shell] expect: missing REGEX" >&2
             exit 2
         fi
+        # Only output written after the last match counts (#551).  The
+        # whole pane used to: after a disc swap and `send ""`, the box
+        # of the prompt just answered was still on screen, so
+        # `expect 'Insert the right disc'` matched it at once, before
+        # the binary had even re-scanned, and the agent swapped again
+        # for a prompt that never came.
+        #
+        # A match stores the cursor's position in the session option
+        # @restore_shell_mark as "ROW COL".  ROW counts from the top of
+        # the scrollback (history_size + cursor_y), so it survives
+        # scrolling.  COL drops the part of that row already returned:
+        # the cursor usually sits after a prompt such as "Password: ",
+        # which must not match a second time.
+        #
+        # send does NOT move the mark.  The disc-swap prompt finds a
+        # disc that mounts by itself without ENTER, so the restore can
+        # resume and print its next box, or "restore complete", before
+        # the agent's `send ""` runs.  A mark taken at send would hide
+        # that output.
         deadline=$(( $(date +%s) + timeout ))
-        out=""
-        while [ "$(date +%s)" -lt "$deadline" ]; do
-            if ! out=$(tmux capture-pane -t "$SESSION" -p 2>/dev/null); then
-                printf '%s\n' "$out"
+        while :; do
+            # One tmux call, so the state line and the capture describe
+            # the same instant: the server runs a client's commands back
+            # to back, reading no pane output in between.
+            if ! snap=$(tmux display-message -p -t "$SESSION" \
+                    '#{pane_dead} #{history_size} #{cursor_y} #{cursor_x} #{@restore_shell_mark}' \; \
+                    capture-pane -p -t "$SESSION" -S - -E - 2>/dev/null); then
                 echo "[restore-shell] session $SESSION ended unexpectedly" >&2
                 exit 2
             fi
-            if printf '%s' "$out" | grep -qE "$pattern"; then
-                printf '%s\n' "$out"
+            # shellcheck disable=SC2046  # split the state line on purpose
+            set -- $(printf '%s\n' "$snap" | sed -n 1p)
+            dead=$1
+            here="$(( $2 + $3 )) $4"
+            mark_row=${5:-0}
+            mark_col=${6:-0}
+            new=$(printf '%s\n' "$snap" | awk -v r="$mark_row" -v c="$mark_col" '
+                NR == 1 { next }
+                NR - 2 == r { $0 = substr($0, c + 1); if ($0 == "") next }
+                NR - 2 >= r')
+            if printf '%s\n' "$new" | grep -qE -e "$pattern"; then
+                tmux set-option -t "$SESSION" @restore_shell_mark "$here" \
+                    2>/dev/null
+                printf '%s\n' "$new"
                 exit 0
             fi
+            # A dead pane (remain-on-exit) never prints again, so stop
+            # waiting.  Print the new output, not the pane: tmux scrolls
+            # a line into the scrollback when it marks the pane dead.
+            if [ "$dead" = 1 ]; then
+                printf '%s\n' "$new"
+                printf '[restore-shell] the command in session %s has exited (status %s); no new output matched: %s\n' \
+                    "$SESSION" \
+                    "$(tmux display-message -p -t "$SESSION" '#{pane_dead_status}' 2>/dev/null)" \
+                    "$pattern" >&2
+                exit 2
+            fi
+            [ "$(date +%s)" -lt "$deadline" ] || break
             sleep 1
         done
-        printf '%s\n' "$out"
-        printf '[restore-shell] timeout (%ss) waiting for: %s\n' \
+        printf '%s\n' "$new"
+        printf '[restore-shell] timeout (%ss): no new output matched: %s\n' \
             "$timeout" "$pattern" >&2
         exit 1
         ;;
