@@ -40,15 +40,17 @@ QUICK REFERENCE — complete command sequence (do exactly this)
     You DO NOT need to know tmux.  Every
     interaction is one command:
 
-      restore-shell expect REGEX [SECS]   wait for prompt, print pane
+      restore-shell expect REGEX [SECS]   wait for new output, print it
       restore-shell send TEXT             type TEXT + ENTER
       restore-shell send-raw TEXT         type TEXT (no ENTER)
       restore-shell screen                show current pane
       restore-shell quit                  shut it down
 
     `expect` polls once per second, exits 0 on match, 1 on timeout
-    (default 60 s), 2 if the session died unexpectedly.  Pass a
-    regex that matches any of the next interesting states.
+    (default 60 s), 2 if the command has exited.  It matches only
+    output newer than its last match, so a prompt you already
+    answered can't match again.  Pass a regex that matches any
+    of the next interesting states.
 
   Step 4 — answer the prompts:
 
