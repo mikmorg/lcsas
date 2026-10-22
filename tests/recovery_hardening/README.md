@@ -124,6 +124,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_tier1_fault_handling.py` | Tier-1 operator-error fault handling tests. |
 | `test_tier1_fault_inject.py` | Audit phase 6 (issue #165): malloc fault-injection sweep — zero crashes. |
 | `test_tier1_hardlinks.py` | Issue #192 -- tier-1 hardlink reconstruction. |
+| `test_tier1_index_walk_bounds.py` | Hardening: tier-1's index walks stay inside the parsed tokens (#487). |
 | `test_tier1_large_file.py` | T1C-01: one file with 40,000 content chunks (huge content array). |
 | `test_tier1_macos_native.py` | GATE-03: tier-1 macOS (Mach-O) binary execution coverage. |
 | `test_tier1_meta_disc_live.py` | Hardening test: tier-1 meta-disc exclusion respects a LIVE check. |

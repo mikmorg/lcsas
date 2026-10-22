@@ -367,6 +367,62 @@ int main(void)
         }
     }
 
+    /* #487: nesting is capped at LCSAS_JSON_MAX_DEPTH.  Exactly the cap
+     * parses; one deeper is invalid (-1); and a huge run of '[' fed to
+     * the growing parser fails fast instead of overflowing the stack. */
+    {
+        static lcsas_json_tok toks[2 * LCSAS_JSON_MAX_DEPTH + 4];
+        char src[8 * LCSAS_JSON_MAX_DEPTH + 16];
+        int depth;
+        for (depth = LCSAS_JSON_MAX_DEPTH; depth <= LCSAS_JSON_MAX_DEPTH + 1;
+                depth++) {
+            long want_ok = depth <= LCSAS_JSON_MAX_DEPTH;
+            long rc;
+            memset(src, '[', (size_t)depth);
+            memset(src + depth, ']', (size_t)depth);
+            src[2 * depth] = '\0';
+            rc = lcsas_json_parse(src, (size_t)(2 * depth), toks,
+                                  sizeof toks / sizeof toks[0]);
+            if (want_ok ? rc != depth : rc != -1) {
+                fprintf(stderr, "FAIL #487 array depth %d rc=%ld\n", depth, rc);
+                fails++;
+            }
+        }
+        /* Objects count too: {"a":{"a":...}} one past the cap. */
+        {
+            size_t n = 0;
+            int i;
+            long rc;
+            for (i = 0; i <= LCSAS_JSON_MAX_DEPTH; i++) {
+                memcpy(src + n, "{\"a\":", 5); n += 5;
+            }
+            src[n++] = '1';
+            for (i = 0; i <= LCSAS_JSON_MAX_DEPTH; i++) src[n++] = '}';
+            rc = lcsas_json_parse(src, n, toks, sizeof toks / sizeof toks[0]);
+            if (rc != -1) {
+                fprintf(stderr, "FAIL #487 object depth rc=%ld\n", rc);
+                fails++;
+            }
+        }
+        {
+            size_t big = (size_t)4 * 1024 * 1024;
+            char *deep = (char *)malloc(big);
+            lcsas_json_tok *grown = NULL;
+            long rc;
+            if (!deep) { fprintf(stderr, "FAIL #487 malloc\n"); fails++; }
+            else {
+                memset(deep, '[', big);
+                rc = lcsas_json_parse_alloc(deep, big, &grown, 64);
+                if (rc != -1 || grown != NULL) {
+                    fprintf(stderr, "FAIL #487 4 MiB of '[' rc=%ld\n", rc);
+                    fails++;
+                }
+                free(grown);
+                free(deep);
+            }
+        }
+    }
+
     if (fails == 0) printf("test_json: OK\n");
     return fails ? 1 : 0;
 }
