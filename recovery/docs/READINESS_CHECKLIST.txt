@@ -244,8 +244,9 @@ JOURNEY DRILL LOG  (one line per blind-restore variant, per meta build)
 ────────────────────────────────────────────────────────────────────
 
 The blind-restore drills (make blind-restore-*) are the only end-to-end
-proof that an HEIR can actually recover.  They are opt-in and cost ~$5
-each, so they do NOT run in CI — which means the only record that they
+proof that an HEIR can actually recover.  They are opt-in and spend real
+API money (USD 0.2-0.7 per default haiku run, measured 2026-10),
+so they do NOT run in CI — which means the only record that they
 ran at all is this log.  Update it on every meta-disc build: one dated
 row per variant.  An empty or stale row is itself the finding.
 

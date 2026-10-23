@@ -108,7 +108,8 @@ clean:
 blind-restore:
 	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
 		echo "ERROR: make blind-restore spawns a real Claude sub-agent and" >&2; \
-		echo "       typically costs USD ~5 per run.  This target is NOT run" >&2; \
+		echo "       spends real API money (USD 0.2-0.7 per haiku run," >&2; \
+		echo "       measured 2026-10).  This target is NOT run" >&2; \
 		echo "       on every commit.  To proceed, re-invoke with:" >&2; \
 		echo "" >&2; \
 		echo "         LCSAS_BLIND_ACK_COST=1 make blind-restore" >&2; \
@@ -169,15 +170,16 @@ blind-restore-teardown:
 #                          cycle 7).
 #
 # XFAIL set lives in the ledger tests/e2e/cdemu_blind_restore/XFAIL.list
-# (GATE-06); run_variant.sh reads it.  Each variant costs ~$5 of blind-
-# test compute; remove a variant's line from the ledger once a green
+# (GATE-06); run_variant.sh reads it.  Each variant is one blind run
+# (real API spend; variant costs are unmeasured); remove a variant's line from the ledger once a green
 # 15/15 score has been recorded (a 15/15 while still listed is a strict
 # XPASS — run_variant.sh exits 1 to force the cleanup).
 #
-# Cost: ~$5 per variant × 5 = ~$25 per full sweep.
+# Cost: five blind runs per full sweep.  The default run measured
+# USD 0.2-0.7 on haiku (2026-10).
 blind-restore-variants:
 	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
-		echo "ERROR: blind-restore-variants costs USD ~5 per variant (~\$25 today)." >&2; \
+		echo "ERROR: blind-restore-variants spawns 5 real Claude sub-agents (real API spend)." >&2; \
 		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
 		exit 1; \
 	fi
@@ -189,8 +191,8 @@ blind-restore-variants:
 	done
 	@echo "blind-restore-variants: all variants PASS"
 
-# Key-escrow Phase 3 blind variants.  Each costs ~$5 of blind-test
-# compute (same cost guard as blind-restore-variants).
+# Key-escrow Phase 3 blind variants.  Each is one blind run (same cost
+# guard as blind-restore-variants).
 #
 #   blind-restore-single-key  — K3.1: explicit single-key baseline
 #                               (alias of default; plaintext password).
@@ -199,7 +201,7 @@ blind-restore-variants:
 #                               (variant split-key-2of5) before restoring.
 blind-restore-single-key:
 	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
-		echo "ERROR: blind-restore-single-key costs USD ~5." >&2; \
+		echo "ERROR: blind-restore-single-key spawns a real Claude sub-agent (real API spend)." >&2; \
 		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
 		exit 1; \
 	fi
@@ -209,7 +211,7 @@ blind-restore-single-key:
 
 blind-restore-split-2of5:
 	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
-		echo "ERROR: blind-restore-split-2of5 costs USD ~5." >&2; \
+		echo "ERROR: blind-restore-split-2of5 spawns a real Claude sub-agent (real API spend)." >&2; \
 		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
 		exit 1; \
 	fi
@@ -227,7 +229,7 @@ blind-restore-split-2of5:
 # restore.sh changes: 15/15 twice consecutively before merge.
 blind-restore-split-docs:
 	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
-		echo "ERROR: blind-restore-split-docs costs USD ~5." >&2; \
+		echo "ERROR: blind-restore-split-docs spawns a real Claude sub-agent (real API spend)." >&2; \
 		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
 		exit 1; \
 	fi
@@ -237,7 +239,7 @@ blind-restore-split-docs:
 
 # UX-08 layer 3: the Windows heir journey end-to-end through
 # recovery/scripts/restore.bat under wine (the discs are presented as a
-# directory tree — Windows has no cdemu/vhba).  Same ~$5 cost guard as its
+# directory tree — Windows has no cdemu/vhba).  Same cost guard as its
 # siblings.  haiku-only per project policy; record the score in
 # recovery/docs/READINESS_CHECKLIST.txt (JOURNEY DRILL LOG) after each run.
 #
@@ -249,7 +251,7 @@ blind-restore-split-docs:
 # runs recovery/tests/test_restore_bat_e2e.sh when wine is present).
 blind-restore-windows:
 	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
-		echo "ERROR: blind-restore-windows costs USD ~5." >&2; \
+		echo "ERROR: blind-restore-windows spawns a real Claude sub-agent (real API spend)." >&2; \
 		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
 		exit 1; \
 	fi

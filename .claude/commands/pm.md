@@ -226,7 +226,8 @@ regression in one, file an issue instead of redoing the work.
   touches the restore path.  If the blind run is red, comment
   on the PR with the diagnosis and pause — ask the user.
 - **Do NOT bypass `LCSAS_BLIND_ACK_COST=1`.**  That guardrail
-  exists because each run is ~$5.  Don't override it.
+  exists because each run spends real API money (USD 0.2–0.7
+  per haiku run, measured 2026-10).  Don't override it.
 - **Do NOT touch `recovery/UPSTREAM.sha256`** or any pinned
   upstream binary hashes without explicit user approval.
 - **Do NOT delete tests** that aren't in the worktree you

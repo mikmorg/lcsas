@@ -67,7 +67,8 @@ same durability contract as `lcsas-restore` (tier 1).
 
 ## Phase 4 — Iterate to perfect score (autonomous within the phase)
 
-> Blind runs cost ~$5 each and spawn a real haiku sub-agent. The driver MUST hold a
+> Blind runs spend real API money (the default run measured USD 0.2–0.7, 2026-10) and
+> spawn a real haiku sub-agent. The driver MUST hold a
 > standing `LCSAS_BLIND_ACK_COST=1` user acknowledgement (see SKILL.md) and bound the loop.
 
 - [x] **K4.1** `blind-restore-single-key` → **15/15** (deliberate, committed code). deps: K3.1
