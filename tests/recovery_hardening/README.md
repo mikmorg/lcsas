@@ -119,6 +119,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_tier1_aarch64_qemu.py` | Issue #107: tier-1 aarch64 cross-built binary coverage via qemu-user. |
 | `test_tier1_armv7_qemu.py` | Issue #119: tier-1 armv7 cross-built binary coverage via qemu-user. |
 | `test_tier1_auto_mount.py` | Hardening: tier-1 picks up a newly mounted disc without ENTER (#455). |
+| `test_tier1_catalog_unreadable.py` | Hardening: tier 1 reads WAL catalogs off read-only media; unreadable isn't skew (#543). |
 | `test_tier1_coverage_baseline.py` | Opt-in gate: make coverage-c must complete without error. |
 | `test_tier1_deep_tree.py` | T1C-04: tier-1 tree-walk recursion-depth cap. |
 | `test_tier1_dense_index.py` | T1C-01: one dense index file the old fixed-cap parser could not read. |

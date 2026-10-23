@@ -1,5 +1,7 @@
-"""Hardening: tier 1 reads a WAL catalog on read-only media, and doesn't
-blame a newer LCSAS for a catalog it can't read (#543).
+"""Hardening: tier 1 reads WAL catalogs off read-only media; unreadable isn't skew (#543).
+
+Tier 1 reads a WAL catalog on read-only media, and doesn't blame a newer
+LCSAS for a catalog it can't read.
 
 #534 found discs whose catalog.db was a WAL-mode database.  SQLite opens
 one read-only, but the first query then fails on a read-only volume:
