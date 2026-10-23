@@ -333,6 +333,22 @@ jobs:
           # from the intentional wrong-password `cmd /c` and reports red.
           exit 0
 
+      # #545: the relaunch line removes the relocated copy after it returns.
+      # Commands after the `call` can replace its exit code, and every
+      # other relocated leg expects 0, so this one checks that a wrong
+      # password still exits 77 through the relocation, with no copy left.
+      - name: Relocated wrong password — exit 77 survives the cleanup
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = "Stop"
+          . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
+          Invoke-RelocatedWrongPasswordLeg -BatRel 'restore.bat' `
+            -TargetName 'restored-reloc-wrong'
+          # The leg throws on any failure; without this the step inherits
+          # the intended $LASTEXITCODE=77 and reports red.
+          exit 0
+
       # ---- #517: eject the meta disc after relocation ------------------------
       # LAST before the dismount step, because it ejects the meta ISO (the
       # wrong-password step re-finds the meta drive by scanning volumes).

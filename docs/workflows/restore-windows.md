@@ -243,9 +243,10 @@ data discs through the same drive.
    the relocated copy does not hold the disc as its cwd), sets
    `LCSAS_RELOCATED` to the meta-disc drive letter (e.g. `D:\`) and
    `call`s the relocated `restore.bat` with the same args
-   (`recovery/scripts/restore.bat:137`). Nothing is read from the disc
-   after that, so ejecting it cannot break the end of the run, and the
-   relocated copy's exit code is the script's. The relocated copy takes
+   (`recovery/scripts/restore.bat:145`). Nothing is read from the disc
+   after that, so ejecting it cannot break the end of the run. When the
+   relocated copy returns, the same line removes `%RAMDIR%` and hands
+   back the copy's exit code with `cmd /c exit` (#545). The relocated copy takes
    `LCSAS_RELOCATED` into its own `setlocal` scope and out of the
    caller's environment (`recovery/scripts/restore.bat:33`).
 6. The relocated copy runs everything from Workflow A steps 5-10. Now
@@ -309,11 +310,14 @@ surfaced the first item):
   (the binaries are in `E:\recovery\bin`), so the RAM copy got an empty
   `recovery\bin` and the relocated script ended in `ERROR: no working
   recovery method on this system` with exit code 1.
-- **What a working relocation leaves behind:** the copy
+- (Fixed, #545) **What a working relocation leaves behind:** the copy
   `%TEMP%\lcsas-restore-<n>-<n>\` (about 40 files, 16.5 MB with the fixture
-  meta tree) is never removed by `restore.bat`, and the script does not claim
-  to remove it; it also prints `Access is denied.` once, from the
-  writability probe on the read-only disc. The password file is deleted.
+  meta tree) was never removed. The disc copy's relaunch line now removes
+  it when the relocated copy returns, keeping that copy's exit code, and
+  the relocation, eject and relocated wrong-password legs fail if one is
+  left. A copy is still left if the window is closed mid-restore. The
+  script also prints `Access is denied.` once, from the writability probe
+  on the read-only disc. The password file is deleted.
 - (Fixed, #532) **After the meta disc was ejected,** the restore completed
   and was byte-exact, but the copy on the disc was still a running batch
   file: when the `call` returned, `cmd` went back to it on the ejected
@@ -518,22 +522,28 @@ Windows workflow inherits. Source refs in parentheses.
     nothing about its `--pack-search` drives and `--repo` carries no `data\`,
     so with the byte-exact check this is the proof that packs came from
     several discs.
-  - *Relocation leg — `recovery\scripts\restore.bat` layout*: the same
-    restore without `LCSAS_NO_RELOCATE`, started with its cwd on the disc.
-    It requires the `copied recovery files to` message, a tier-1 binary that
-    ran from the `%TEMP%` copy, exit 0, a byte-exact tree and no password file
-    left in `%TEMP%`, and reports what the script leaves behind.
   - *Relocation leg — restore.bat at the disc root (the heir's
-    double-click)*: the same from `E:\restore.bat`. It currently FAILS (see
-    the Workflow B coverage note) and is `continue-on-error`.
+    double-click)*: the same restore from `E:\restore.bat` without
+    `LCSAS_NO_RELOCATE`, started with its cwd on the disc. It requires the
+    `copied recovery files to` message, a tier-1 binary that ran from the
+    `%TEMP%` copy, exit 0, a byte-exact tree, and neither the password file
+    nor the copy left in `%TEMP%` (#545).
+  - *Relocation leg — `recovery\scripts\restore.bat` layout*: the same from
+    the other copy of the script.
   - *Negative case — wrong password fails cleanly*: requires exit 77, no
     tier-2 fall-through, the "could not decrypt the repository" banner and no
     partial tree left behind.
+  - *Relocated wrong password — exit 77 survives the cleanup*: the negative
+    case without `LCSAS_NO_RELOCATE`, from the disc root. It requires the
+    relocation, exit 77 through it, the banner, no tier-2 fall-through, no
+    partial tree and no copy left (#545). The other relocated legs expect 0,
+    which an exit code lost on the relaunch line would also give.
   - *Eject leg — relocated restore survives a meta-disc eject*: `restore.bat`
     runs with a stdin pipe held open; once the relocated copy is up the meta
     ISO is dismounted, and only then are the target and password fed in, so
-    tier 1 runs entirely after the eject. Requires "Recovery complete" and a
-    byte-exact tree; the exit code is reported, not asserted.
+    tier 1 runs entirely after the eject. Requires "Recovery complete", exit
+    0, no "The system cannot find the path specified." (#532), a byte-exact
+    tree and no copy left in `%TEMP%`.
 - `tests/recovery_hardening/test_restore_bat_wine_smoke.py` runs the real
   `restore.bat` through wine's `cmd` against fake meta and data trees on
   mapped drive letters: `test_happy_path_discovers_repo_and_invokes_tier1`,

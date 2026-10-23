@@ -134,7 +134,15 @@ REM copy's.  Ending the batch also undoes setlocal, which puts the cwd
 REM back on the disc (blocking Explorer's Eject), so cd off it here, and
 REM set LCSAS_RELOCATED (the disc's drive letter, e.g. "E:\") here too.
 REM Measured on windows-latest with every other placement of the exit.
-(goto) 2>nul & cd /d %SystemDrive%\ & set "LCSAS_RELOCATED=%~d0\" & call "%RAMDIR%\recovery\scripts\restore.bat" %*
+REM
+REM When the relocated copy returns, remove it (#545): nothing is reading
+REM %RAMDIR% any more, and the cwd is off it.  A command after the `call`
+REM replaces its exit code (a trailing `set` turned 7 into 0), so keep
+REM the code in LCSAS_RC first and end with `cmd /c exit` to hand it
+REM back.  `call` expands %%ERRORLEVEL%% after the copy has returned;
+REM the child cmd expands %%LCSAS_RC%%.  Not `exit`, which would close
+REM the prompt window of an heir who started this from one.
+(goto) 2>nul & cd /d %SystemDrive%\ & set "LCSAS_RELOCATED=%~d0\" & call "%RAMDIR%\recovery\scripts\restore.bat" %* & call set "LCSAS_RC=%%ERRORLEVEL%%" & rmdir /s /q "%RAMDIR%" 2>nul & cmd /c exit %%LCSAS_RC%%
 
 :after_relocate
 REM ----- Auto-discover recovery root from this script's location ----
