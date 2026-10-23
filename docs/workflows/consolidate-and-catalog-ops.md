@@ -674,8 +674,9 @@ DEPRECATED    → DESTROYED
 DESTROYED     → (terminal)
 ```
 
-(`BURNED → BURNING` is the re-burn retry after a failed post-burn
-verify.)  The CHECK constraint in the schema (currently v10) enumerates
+(`BURNED → BURNING` is the re-burn of a BURNED volume with no copy,
+which a failed post-burn verify left behind before #483.  Since #483 a
+failed verify returns the volume to `STAGING`.)  The CHECK constraint in the schema (currently v10) enumerates
 the legal statuses (`src/lcsas/db/schema.py`).  The `CONSOLIDATING`
 status was added by the v4→v5 migration in the same module.
 
@@ -684,7 +685,8 @@ status was added by the v4→v5 migration in the same module.
 | From → To                      | Trigger                                            | Source                                          |
 | ------------------------------ | -------------------------------------------------- | ----------------------------------------------- |
 | `STAGING → BURNING → VERIFIED` | `catalog import-receipts` w/ `verify_passed=true` (offline-burn receipt) | `cmd_catalog_import`   |
-| `STAGING → BURNING → BURNED`   | `catalog import-receipts` w/ `verify_passed=false` | `cmd_catalog_import`                            |
+| `STAGING → BURNING → BURNED`   | `catalog import-receipts` w/ `verify_passed=null` (`burn-iso --no-verify`) | `cmd_catalog_import`   |
+| stays `STAGING`                | `catalog import-receipts` w/ `verify_passed=false` (#483) | `cmd_catalog_import`                     |
 | `BURNED → VERIFIED`            | `lcsas verify --mark-verified`                     | `cmd_verify` in `src/lcsas/cli/main.py`         |
 | `VERIFIED → CONSOLIDATING`     | `lcsas consolidate --execute` (just before staging) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |
 | `CONSOLIDATING → VERIFIED`     | Staging failure during `--execute` (auto-rollback) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |

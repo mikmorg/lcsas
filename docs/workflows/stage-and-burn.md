@@ -99,8 +99,11 @@ The end-to-end flow inside a single session:
    - `xorriso burn_iso` writes the ISO to `/dev/srN`
      (`SubprocessXorrisoRunner.burn_iso`).
    - `verify_disc` reads the disc back and compares against the ISO
-     (`SubprocessXorrisoRunner.verify_disc`); on pass, transition `BURNED →
-     VERIFIED`; on fail, stop at `BURNED` and emit a `VERIFY_FAIL` event.
+     (`SubprocessXorrisoRunner.verify_disc`); on pass, transition `BURNING →
+     VERIFIED`; on fail, emit a `VERIFY_FAIL` event and return the volume
+     to `STAGING` (#483), so its packs are unarchived again and the next
+     `lcsas stage` offers them.  No copy is recorded for a failed disc
+     (BURN-05) and the session ends `PARTIAL`.
    - `add_volume_copy` records the location + burn timestamp.
    - Emit a `BurnReceipt` JSON to `<session_dir>/receipts/`.
    - On success, delete the ISO file to reclaim staging space.
