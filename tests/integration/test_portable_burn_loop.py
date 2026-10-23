@@ -321,11 +321,12 @@ def test_second_burn_at_another_site_only_adds_a_copy(site_a, site_b):
     assert len(site_a.events("BURN_RECEIPT_IMPORTED")) == 2
 
 
-def test_failed_readback_verify_imports_as_burned_with_no_copy(site_a, site_b):
-    """Doc "Partial burn that passes write but fails verify" (as of #514):
-    burn-iso exits 1 but still writes the receipt; on A the volume becomes
-    BURNED (never VERIFIED), VERIFY_FAIL is logged, and no copy is recorded
-    because a failed disc is not a copy."""
+def test_failed_readback_verify_imports_as_staging_with_no_copy(site_a, site_b):
+    """Doc "Partial burn that passes write but fails verify": burn-iso exits 1
+    but still writes the receipt.  On A the volume stays STAGING (#483; it
+    never reaches BURNED or VERIFIED), VERIFY_FAIL is logged, and no copy is
+    recorded, because a failed disc is not a copy (#514).  Its packs are
+    still unarchived, so the next ``lcsas stage`` offers them again."""
     rc, receipt_path, _burn = site_b.burn(
         session=site_a.session_id, location=_SITE,
         disc_id=_pvd_volume_id(site_b.iso), verify=False,
@@ -337,7 +338,7 @@ def test_failed_readback_verify_imports_as_burned_with_no_copy(site_a, site_b):
 
     assert site_a.lcsas("catalog", "import-receipts", str(receipt_path)) == 0
 
-    assert site_a.volume()["status"] == "BURNED"
+    assert site_a.volume()["status"] == "STAGING"
     assert site_a.volume()["closed_at"] is None
     assert site_a.copies() == []
     (failed,) = site_a.events("VERIFY_FAIL")
@@ -345,6 +346,17 @@ def test_failed_readback_verify_imports_as_burned_with_no_copy(site_a, site_b):
     assert site_a.events("VERIFY_PASS") == []
     provenance = json.loads(site_a.events("BURN_RECEIPT_IMPORTED")[0]["detail"])
     assert provenance["verify_passed"] is False
+
+    # The failed disc's packs go back to the pool: a second stage takes them.
+    failed_packs = {r["pack_id"] for r in site_a.query(
+        "SELECT vp.pack_id FROM volume_packs vp JOIN volumes v USING (volume_id) "
+        "WHERE v.label = ?", site_a.label)}
+    assert failed_packs
+    assert site_a.lcsas("stage") == 0
+    restaged = {r["pack_id"] for r in site_a.query(
+        "SELECT vp.pack_id FROM volume_packs vp JOIN volumes v USING (volume_id) "
+        "WHERE v.label != ?", site_a.label)}
+    assert failed_packs <= restaged
 
 
 def test_wrong_disc_in_the_drive_is_caught_by_the_staged_label(site_a, site_b):
@@ -363,5 +375,5 @@ def test_wrong_disc_in_the_drive_is_caught_by_the_staged_label(site_a, site_b):
     assert receipt["verify_passed"] is False
 
     assert site_a.lcsas("catalog", "import-receipts", str(receipt_path)) == 0
-    assert site_a.volume()["status"] == "BURNED"
+    assert site_a.volume()["status"] == "STAGING"  # #483
     assert site_a.copies() == []

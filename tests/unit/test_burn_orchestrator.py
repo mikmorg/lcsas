@@ -1113,6 +1113,85 @@ class TestBurnSession:
         assert "VERIFY_FAIL_REBURN" in {e.event_type for e in events}
 
 
+# =========================================================================
+# #483: a failed post-burn verify leaves the same state on both burn paths
+# =========================================================================
+
+
+class TestFailedVerifyParity:
+    """#483: execute() put a volume whose disc failed post-burn verification
+    back to STAGING, while burn_session() left it BURNED.  BURNED is durable
+    (FMA-01), so after a failed session burn the packs counted as archived
+    with no verified disc behind them, and ``lcsas stage`` never offered
+    them again.  Both paths now return the volume to STAGING, record no
+    copy, and put its packs back in the unarchived pool."""
+
+    @staticmethod
+    def _failing_orch(orch_env, failure):
+        """The orchestrator whose next post-burn verify fails as *failure*."""
+        xorriso = orch_env["xorriso"]
+        if failure == "readback":
+            xorriso.verify_disc = MagicMock(return_value=False)
+        elif failure == "wrong_disc":
+            xorriso.read_disc_volume_id = MagicMock(return_value="SOME_OTHER_DISC")
+        else:  # hash_mismatch: readable, right label, wrong bytes
+            return BurnOrchestrator(
+                orch_env["config"], orch_env["conn"], xorriso,
+                orch_env["dvdisaster"],
+                device_reader=lambda device, length: "0" * 64,
+                prompt=NullOperatorPrompt(),
+            )
+        return orch_env["orch"]
+
+    def _via_execute(self, orch_env, failure) -> list[int]:
+        orch = self._failing_orch(orch_env, failure)
+        config = orch_env["config"]
+        config.db_path.parent.mkdir(parents=True, exist_ok=True)
+        config.db_path.write_bytes(b"x")
+        manifest = orch.prepare()
+        with pytest.raises(ValueError, match="verification failed|identifies as"):
+            orch.execute(manifest, skip_burn=False)
+        return [manifest.volume_id]
+
+    def _via_burn_session(self, orch_env, failure) -> list[int]:
+        orch = self._failing_orch(orch_env, failure)
+
+        def fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
+            output_iso.write_bytes(b"fake-iso-data")
+
+        orch_env["xorriso"].create_iso.side_effect = fake_create_iso
+        session_id = orch.stage().session_id
+        receipts = orch.burn_session(
+            session_ref=session_id, location="Home_Shelf", skip_burn=False,
+        )
+        assert receipts
+        assert not any(r.verify_passed for r in receipts)
+        return [r.volume_id for r in receipts]
+
+    @pytest.mark.parametrize("failure", ["readback", "wrong_disc", "hash_mismatch"])
+    @pytest.mark.parametrize("path", ["execute", "burn_session"])
+    def test_failed_verify_returns_the_volume_to_staging(
+        self, orch_env, path, failure,
+    ):
+        from lcsas.db.volume_copies import get_copies_for_volume
+
+        conn = orch_env["conn"]
+        burn = self._via_execute if path == "execute" else self._via_burn_session
+        volume_ids = burn(orch_env, failure)
+
+        unarchived = {p.pack_id for p in get_unarchived_packs(conn)}
+        for volume_id in volume_ids:
+            vol = get_volume_by_id(conn, volume_id)
+            assert vol.status == "STAGING", (path, failure)
+            assert vol.closed_at is None
+            assert get_copies_for_volume(conn, volume_id) == []
+            pack_ids = get_pack_ids_for_volume(conn, volume_id)
+            assert pack_ids
+            assert set(pack_ids) <= unarchived, (
+                "a failed disc's packs must go back to the stage pool"
+            )
+
+
 class TestReburnVerifyFailOnV5Catalog:
     """FMA-02: a catalog still on schema v5 (v4-era volume_events CHECK,
     no VERIFY_FAIL_REBURN) crashed with IntegrityError exactly when a bad

@@ -25,8 +25,9 @@ logger = logging.getLogger(__name__)
 VALID_TRANSITIONS: dict[str, set[str]] = {
     STATUS_STAGING:         {STATUS_BURNING, STATUS_DEPRECATED, STATUS_DESTROYED},
     STATUS_BURNING:         {STATUS_BURNED, STATUS_VERIFIED, STATUS_STAGING, STATUS_DESTROYED},
-    # BURNED → BURNING: re-burn retry after a failed post-burn verify
-    # (the failed disc recorded no copy — BURN-05).
+    # BURNED → BURNING: re-burn of a BURNED volume with no copy, which a
+    # failed post-burn verify left behind before #483 (BURN-05); since
+    # #483 a failed verify returns the volume to STAGING instead.
     STATUS_BURNED:          {STATUS_BURNING, STATUS_VERIFIED, STATUS_STAGING, STATUS_DESTROYED},
     STATUS_VERIFIED:        {STATUS_DEPRECATED, STATUS_DESTROYED, STATUS_CONSOLIDATING},
     STATUS_CONSOLIDATING:   {STATUS_DEPRECATED, STATUS_VERIFIED},
