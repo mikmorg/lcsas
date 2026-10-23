@@ -48,7 +48,8 @@ just do them without prompting."** So:
    `make shell-coverage` stays green (restore.sh itself is byte-for-byte unchanged per the
    K2.2 design — the combiner is a pre-step, not a restore.sh branch); `make audit-gate`
    green for any C combiner (EXEMPTIONS contract — every uncovered line documented).
-3. **Blind runs: haiku only, and they cost ~$5 each.** Never use sonnet/opus for a blind
+3. **Blind runs: haiku only, and each one spends real API money** (the default run measured
+   USD 0.2–0.7 on haiku, 2026-10). Never use sonnet/opus for a blind
    gate run. `LCSAS_BLIND_ACK_COST=1` is pre-authorized by the 2026-05-31 standing
    authorization (see Autonomy policy) — recorded in the Driver log. Bound the loop — see
    Phase 4 below.
@@ -99,7 +100,7 @@ Only enter after Phases 0–3 are `[x]` and the user has given `LCSAS_BLIND_ACK_
 ```
 for variant in [single-key, split-key-2of5]:        # K4.1 then K4.2
     loop:
-        run:  LCSAS_BLIND_ACK_COST=1 make blind-restore-<variant>   # haiku, ~$5, ~20 min
+        run:  LCSAS_BLIND_ACK_COST=1 make blind-restore-<variant>   # haiku, real API spend, ~20 min
         read: the run dir's verify.sh output + transcript.jsonl
         if SCORE == 15/15:  break
         diagnose the failing criterion (which of the 15), fix via a worktree agent
