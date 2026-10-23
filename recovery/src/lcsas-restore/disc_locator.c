@@ -932,6 +932,27 @@ print_search_path(FILE *o, const char *p)
 }
 
 /*
+ * The prompt's lines for a catalog lookup that failed.  Blame a newer
+ * LCSAS only for schema skew (#543).  A WAL catalog on read-only media,
+ * or a damaged copy, used to get that wording too, sending the heir
+ * after a newer meta disc when theirs was the right one.
+ */
+static void
+print_catalog_error(FILE *o, lcsas_catalog *cat)
+{
+    if (lcsas_catalog_error_is_skew(cat)) {
+        fputs("| (catalog could not be queried -- likely written by a     |\n", o);
+        fputs("|  newer LCSAS; disc-swap hints unavailable. Insert discs  |\n", o);
+        fputs("|  one at a time when prompted, or use the restore tools   |\n", o);
+        fputs("|  from the NEWEST meta disc in this set.)                 |\n", o);
+    } else {
+        fputs("| (catalog could not be read, so no disc-swap hints.       |\n", o);
+        fprintf(o, "|  Reason: %-47.47s |\n", lcsas_catalog_errmsg(cat));
+        fputs("|  Insert discs one at a time when prompted.)              |\n", o);
+    }
+}
+
+/*
  * Print an interactive prompt naming the missing pack, using the
  * catalog (if any) to suggest a volume label.
  */
@@ -962,20 +983,16 @@ print_prompt(lcsas_disc_locator *l, const char *hex)
                         fprintf(o, "|   %-54s |\n", vols[j].label);
                     }
                 }
-            } else {
+            } else if (n == 0) {
                 fputs("| (catalog has the pack, but no current volume mapping)    |\n", o);
+            } else {
+                fr = -1;
             }
-        } else if (fr < 0) {
-            /* Query error -- almost always schema skew: the catalog was
-             * written by a newer LCSAS that renamed/dropped a column this
-             * binary queries.  Do NOT claim "no record": we never asked. */
-            fputs("| (catalog could not be queried -- likely written by a     |\n", o);
-            fputs("|  newer LCSAS; disc-swap hints unavailable. Insert discs  |\n", o);
-            fputs("|  one at a time when prompted, or use the restore tools   |\n", o);
-            fputs("|  from the NEWEST meta disc in this set.)                 |\n", o);
-        } else {
+        } else if (fr > 0) {
             fputs("| (catalog has no record of this pack hash)                |\n", o);
         }
+        /* A query error.  Do NOT claim "no record": we never asked. */
+        if (fr < 0) print_catalog_error(o, cat);
     } else {
         fputs("| (no --catalog supplied; cannot suggest a volume)         |\n", o);
     }

@@ -31,7 +31,9 @@ typedef struct {
 } lcsas_catalog_volume;
 
 /*
- * Open a catalog file (read-only).  Returns NULL on error.
+ * Open a catalog file (read-only).  Returns NULL on error.  When the
+ * first query on a plain read-only open fails (a WAL-mode catalog on
+ * read-only media), it is reopened as immutable (#543).
  */
 lcsas_catalog *lcsas_catalog_open(const char *path);
 
@@ -50,11 +52,12 @@ int lcsas_catalog_schema_version(lcsas_catalog *c);
  * Look up a pack by its SHA-256 hex string.  Tri-state return:
  *    0  = found (out is populated)
  *    1  = not found (a genuine miss against a readable v5 surface)
- *   -1  = query error (e.g. the catalog was written by a newer LCSAS
- *         that renamed/dropped a frozen column -- see the schema-skew
- *         warning emitted to stderr).  Callers MUST distinguish -1 from
- *         1: a -1 means "could not ask", not "asked and the pack isn't
- *         cataloged".
+ *   -1  = query error: the catalog was written by a newer LCSAS that
+ *         renamed/dropped a frozen column (see the schema-skew warning
+ *         emitted to stderr), or it could not be read at all.
+ *         lcsas_catalog_error_is_skew tells the two apart.  Callers MUST
+ *         distinguish -1 from 1: a -1 means "could not ask", not "asked
+ *         and the pack isn't cataloged".
  *
  * The queried column set is the TIER-1 FROZEN SURFACE pinned in
  * src/lcsas/db/schema.py / tests/unit/test_schema_v5_columns_frozen.py.
@@ -65,11 +68,25 @@ int lcsas_catalog_find_pack(lcsas_catalog *c, const char *sha256_hex,
 /*
  * Given a pack_id, list volumes that contain it.  Writes up to
  * max_vols entries into `out`; returns the number written (>= 0), or -1
- * on query error (schema skew -- a warning is emitted to stderr).
+ * on query error (as for lcsas_catalog_find_pack).
  */
 int lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
                                    lcsas_catalog_volume *out,
                                    size_t max_vols);
+
+/*
+ * After a -1 from a lookup, before any other catalog call: SQLite's
+ * message for the failure ...
+ */
+const char *lcsas_catalog_errmsg(lcsas_catalog *c);
+
+/*
+ * ... and whether it is schema skew: the query named a table or column
+ * the catalog lacks, as when a newer LCSAS renamed or dropped one.  0
+ * means the catalog could not be read (damaged, or unreadable where it
+ * sits), which is no reason to look for a newer meta disc.
+ */
+int lcsas_catalog_error_is_skew(lcsas_catalog *c);
 
 /*
  * Print a one-line summary to stderr for human-readable recovery
