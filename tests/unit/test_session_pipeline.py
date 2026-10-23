@@ -585,9 +585,13 @@ class TestBurnSession:
             assert len(events) >= 1
             assert "Post-burn read-back" in events[0].detail
 
-    def test_burn_session_verify_fail_stays_burned(self, env):
-        """When verify fails, volume stays BURNED and event is recorded."""
+    def test_burn_session_verify_fail_returns_to_staging(self, env):
+        """When verify fails, the volume goes back to STAGING (#483), no
+        copy is recorded, the event is, and the packs are unarchived again."""
+        from lcsas.db.queries import get_unarchived_packs
+        from lcsas.db.volume_copies import get_copies_for_volume
         from lcsas.db.volume_events import get_events_for_volume
+        from lcsas.db.volume_packs import get_pack_ids_for_volume
         conn = env["conn"]
         orch = env["orch"]
         xorriso = env["xorriso"]
@@ -605,10 +609,13 @@ class TestBurnSession:
         receipts = orch.burn_session(result.session_id, "Home_Shelf",
                                      skip_burn=False)
 
+        unarchived = {p.pack_id for p in get_unarchived_packs(conn)}
         for receipt in receipts:
             assert receipt.verify_passed is False
             vol = get_volume_by_id(conn, receipt.volume_id)
-            assert vol.status == "BURNED"
+            assert vol.status == "STAGING"
+            assert get_copies_for_volume(conn, receipt.volume_id) == []
+            assert set(get_pack_ids_for_volume(conn, receipt.volume_id)) <= unarchived
 
             events = get_events_for_volume(conn, receipt.volume_id, "VERIFY_FAIL")
             assert len(events) >= 1
@@ -724,7 +731,7 @@ class TestDeviceHashVerify:
         for receipt in receipts:
             assert receipt.verify_passed is False
             vol = get_volume_by_id(conn, receipt.volume_id)
-            assert vol.status == "BURNED"
+            assert vol.status == "STAGING"  # #483
 
             events = get_events_for_volume(conn, receipt.volume_id, "VERIFY_FAIL")
             assert any("hash mismatch" in e.detail for e in events)
@@ -832,8 +839,8 @@ class TestDeviceHashVerify:
                    for r in caplog.records)
         events = get_events_for_volume(conn, sv.volume_id, "VERIFY_FAIL")
         assert any("no recorded ISO size" in e.detail for e in events)
-        # False from the verify step keeps the volume at BURNED in
-        # burn_session (proven by test_burn_session_verify_fail_stays_burned).
+        # False from the verify step returns the volume to STAGING in
+        # burn_session (test_burn_session_verify_fail_returns_to_staging).
 
     def test_burn_verify_rejects_wrong_volume_id(self, env):
         """FMA-03: a readable disc whose PVD Volume ID is not this
@@ -859,7 +866,7 @@ class TestDeviceHashVerify:
         for receipt in receipts:
             assert receipt.verify_passed is False
             vol = get_volume_by_id(conn, receipt.volume_id)
-            assert vol.status == "BURNED"
+            assert vol.status == "STAGING"  # #483
 
             events = get_events_for_volume(conn, receipt.volume_id,
                                            "VERIFY_FAIL")

@@ -1028,8 +1028,13 @@ class BurnOrchestrator:
                         update_status(self._conn, sv.volume_id, "VERIFIED", commit=False)
                         mark_closed(self._conn, sv.volume_id, commit=False)
                     else:
-                        # Stay at BURNED — user must investigate / re-burn
-                        update_status(self._conn, sv.volume_id, "BURNED", commit=False)
+                        # Back to STAGING, as execute() does (#483).  A disc
+                        # that failed verification is not a copy (BURN-05), and
+                        # BURNED would count its packs as archived (FMA-01's
+                        # DURABLE_VOLUME_STATUSES) with no verified disc behind
+                        # them.  STAGING returns them to the unarchived pool;
+                        # the VERIFY_FAIL event keeps the attempt.
+                        update_status(self._conn, sv.volume_id, "STAGING", commit=False)
                 else:
                     # Re-burn case: volume stays VERIFIED (it passed before)
                     # Record the verify failure for this location's copy
@@ -1447,10 +1452,11 @@ class BurnOrchestrator:
         durable disc copy — cleaning them would strand their packs as
         falsely 'archived'.
 
-        That is any STAGING/BURNING volume (never burned) OR a BURNED
-        volume with zero ``volume_copies`` rows: burned, but its post-burn
-        verification failed so no verified copy was ever recorded and no
-        durable disc exists (#369).  A volume with any copy row corresponds
+        That is any STAGING/BURNING volume (never burned, or burned but
+        failed its post-burn verification, #483) OR a BURNED volume with
+        zero ``volume_copies`` rows: a catalog from before #483, when a
+        failed verify left the volume BURNED with no copy, so no durable
+        disc exists (#369).  A volume with any copy row corresponds
         to a physical disc (however stale its status) and is never deleted
         by clean/abort (FMA-01).
         """

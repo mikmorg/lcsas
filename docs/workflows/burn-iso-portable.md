@@ -435,8 +435,8 @@ behaviour.
 - `tests/unit/test_cli_comprehensive.py::TestCmdCatalogImport::test_import_receipts_from_json` — basic import path.
 - `tests/unit/test_cli_comprehensive.py::TestCmdCatalogImport::test_import_transitions_staging_to_verified` — STAGING →
   VERIFIED with `VERIFY_PASS` event and `closed_at` set.
-- `tests/unit/test_cli_comprehensive.py::TestCmdCatalogImport::test_import_transitions_staging_to_burned_on_verify_fail` — STAGING → BURNED
-  with `VERIFY_FAIL` event, `closed_at` left null.
+- `tests/unit/test_cli_comprehensive.py::TestCmdCatalogImport::test_import_keeps_staging_on_verify_fail` — the volume
+  stays STAGING (#483) with a `VERIFY_FAIL` event, `closed_at` left null.
 - `tests/unit/test_cli_comprehensive.py::TestCmdCatalogImport::test_import_reburn_only_adds_copy` — already-VERIFIED
   volume keeps its status; just a copy row is added.
 - `tests/unit/test_import_receipts_errors.py::TestMalformedReceiptFile` — a
@@ -526,12 +526,14 @@ and how the code responds today.
   receipt is **still written** with `verify_passed: false`; the
   process exits 1 (`cmd_burn_iso`). The disc is physically present
   but suspect.
-- **Catalog impact on import:** `STAGING → BURNED` (not VERIFIED), a
-  `VERIFY_FAIL` audit event is appended, and a `volume_copies` row is
-  still added — so the operator can see the disc exists at the
-  location but is known-bad
+- **Catalog impact on import:** the volume stays `STAGING` (#483, as
+  `burn_session` does) and a `VERIFY_FAIL` audit event is appended.
+  No `volume_copies` row is added (BURN-05, #514): a disc that failed
+  verification is not a copy, so its packs stay in the unarchived pool
+  and the next `lcsas stage` offers them again
   (`cmd_catalog_import`;
-  `TestCmdCatalogImport::test_import_transitions_staging_to_burned_on_verify_fail`).
+  `TestCmdCatalogImport::test_import_keeps_staging_on_verify_fail`,
+  `::test_import_failed_first_burn_records_no_copy`).
 - **Recovery:** Investigate the disc (mount and run `lcsas catalog
   validate` — `cmd_catalog_validate`; or use `lcsas verify
   --disc`); if irrecoverable, re-burn a replacement and re-import its

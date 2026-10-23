@@ -156,8 +156,9 @@ def test_verify_disc_device_hash_pass_then_byte_flip_fails(
     iso_hash = sha256_file(iso_path)
     iso_size = iso_path.stat().st_size
 
-    # 2. Fresh catalog with the volume registered the way stage() +
-    #    burn_session() record it (BURNED, hash + size on the session row).
+    # 2. Fresh catalog with the volume registered as burned but not yet
+    #    read back (BURNED, as an imported `burn-iso --no-verify` receipt
+    #    leaves it), hash + size on the session row as stage() records them.
     db_path = tmp_path / "archive.db"
     conn = get_connection(db_path)
     create_all(conn)

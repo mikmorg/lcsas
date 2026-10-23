@@ -2486,7 +2486,8 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
     Also transitions volume status for receipts of STAGING volumes:
       - verify_passed=true  → STAGING → BURNING → VERIFIED (+ mark_closed)
-      - verify_passed=false → STAGING → BURNING → BURNED
+      - verify_passed=false → stays STAGING, VERIFY_FAIL event (#483, as
+        burn_session does: the packs go back to the unarchived pool)
       - verify_passed=null  → STAGING → BURNING → BURNED (burn-iso --no-verify:
         a disc exists but was never read back, so it is not VERIFIED)
     Already-VERIFIED volumes (re-burn to a new location) keep their status.
@@ -2617,7 +2618,17 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             stated = raw_verify not in (None, "missing")
             verify_passed = stated and bool(raw_verify)
             verify_failed = stated and not bool(raw_verify)
-            if vol.status == "STAGING":
+            if vol.status == "STAGING" and verify_failed:
+                # #483: a disc that failed verification leaves the volume
+                # STAGING, as burn_session does, so its packs stay in the
+                # unarchived pool.  The event records the attempt.
+                add_event(
+                    conn, vol.volume_id, "VERIFY_FAIL",
+                    location=receipt["location"],
+                    detail=f"Offline burn receipt: {Path(receipt_file).name}",
+                    commit=False,
+                )
+            elif vol.status == "STAGING":
                 update_status(conn, vol.volume_id, "BURNING", commit=False)
                 if verify_passed:
                     update_status(conn, vol.volume_id, "VERIFIED", commit=False)
@@ -2630,7 +2641,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     )
                 else:
                     update_status(conn, vol.volume_id, "BURNED", commit=False)
-                    if verify_failed or raw_verify == "missing":
+                    if raw_verify == "missing":
                         add_event(
                             conn, vol.volume_id, "VERIFY_FAIL",
                             location=receipt["location"],

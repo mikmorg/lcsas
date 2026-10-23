@@ -659,8 +659,9 @@ class TestCmdCatalogImport:
         assert len(events) == 1
         conn.close()
 
-    def test_import_transitions_staging_to_burned_on_verify_fail(self, tmp_path):
-        """Receipt with verify_passed=false promotes STAGING → BURNED (not VERIFIED)."""
+    def test_import_keeps_staging_on_verify_fail(self, tmp_path):
+        """Receipt with verify_passed=false leaves the volume STAGING (#483,
+        as burn_session does) and records the VERIFY_FAIL event."""
         cfg = _write_config(tmp_path)
         db = tmp_path / "archive.db"
         conn = get_connection(db)
@@ -682,7 +683,7 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         from lcsas.db.volumes import get_volume_by_label
         vol = get_volume_by_label(conn, "VOL_101")
-        assert vol.status == "BURNED"
+        assert vol.status == "STAGING"
         assert vol.closed_at is None  # not closed on failure
         from lcsas.db.volume_events import get_events_for_volume
         events = get_events_for_volume(conn, vol.volume_id, "VERIFY_FAIL")
@@ -711,11 +712,12 @@ class TestCmdCatalogImport:
         return rc, vol, copies, events
 
     def test_import_failed_first_burn_records_no_copy(self, tmp_path, capsys):
-        """#514 / BURN-05: a disc that failed verification is not a copy."""
+        """#514 / BURN-05: a disc that failed verification is not a copy,
+        and (#483) the volume stays STAGING so its packs stay unarchived."""
         rc, vol, copies, events = self._import(
             tmp_path, "STAGING", {"location": "Vault", "verify_passed": False})
         assert rc == 0
-        assert vol.status == "BURNED"
+        assert vol.status == "STAGING"
         assert copies == []
         assert "VERIFY_FAIL" in events
         out = capsys.readouterr()
