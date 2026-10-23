@@ -195,11 +195,31 @@ def test_restore_bat_relaunch_reads_nothing_more_from_the_disc():
     """
     block = _relocation_block(RESTORE_BAT.read_text())
     code = _code_lines(block)
-    assert code[-1] == (
+    assert code[-1].startswith(
         '(goto) 2>nul & cd /d %SystemDrive%\\ & set "LCSAS_RELOCATED=%~d0\\" '
-        '& call "%RAMDIR%\\recovery\\scripts\\restore.bat" %*'
+        '& call "%RAMDIR%\\recovery\\scripts\\restore.bat" %* & '
     ), code[-1]
     assert not any(ln.startswith('call "%RAMDIR%') for ln in code), code
+
+
+def test_restore_bat_relaunch_removes_the_copy_and_keeps_its_exit_code():
+    """#545: every relocated run left its copy, tens of MB, in %TEMP%.
+    The disc copy's relaunch line removes it once the relocated copy
+    returns.  Any command after the `call` replaces the exit code (a
+    trailing `set` turned 7 into 0 on windows-latest), so the code is
+    kept first and handed back by `cmd /c exit` as the very last
+    command.  windows-e2e's relocated wrong-password leg is the
+    functional proof (exit 77 through the relocation, no copy left);
+    this guards the order.
+    """
+    line = _code_lines(_relocation_block(RESTORE_BAT.read_text()))[-1]
+    cmds = [c.strip() for c in line.split(" & ")]
+    call = cmds.index('call "%RAMDIR%\\recovery\\scripts\\restore.bat" %*')
+    assert cmds[call + 1:] == [
+        'call set "LCSAS_RC=%%ERRORLEVEL%%"',
+        'rmdir /s /q "%RAMDIR%" 2>nul',
+        "cmd /c exit %%LCSAS_RC%%",
+    ], cmds
 
 
 def test_restore_bat_takes_the_relocation_sentinel_out_of_the_callers_env():

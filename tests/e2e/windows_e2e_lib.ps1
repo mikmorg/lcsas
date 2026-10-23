@@ -102,7 +102,7 @@ function Test-TreeAgainstManifest {
     else { Write-Host "Restored tree is byte-identical to manifest ($($expected.Count) files)." }
 }
 
-# Describe the relocated copy restore.bat leaves under %TEMP%.
+# Describe a relocated copy found under %TEMP%.
 function Write-RamDirReport {
     param([string]$RamDir)
     $files = @(Get-ChildItem -LiteralPath $RamDir -Recurse -File -Force -ErrorAction SilentlyContinue)
@@ -111,6 +111,22 @@ function Write-RamDirReport {
     foreach ($d in (Get-ChildItem -LiteralPath $RamDir -Recurse -Directory -Depth 2 -ErrorAction SilentlyContinue)) {
         $n = @(Get-ChildItem -LiteralPath $d.FullName -Recurse -File -Force -ErrorAction SilentlyContinue).Count
         Write-Host ("  {0}  ({1} files)" -f $d.FullName.Substring($RamDir.Length), $n)
+    }
+}
+
+# #545: restore.bat removes its relocated copy.  Fail on any new one, and
+# remove it so a later leg starts clean.
+function Assert-NoRamDirLeft {
+    param(
+        [string[]]$New,
+        [System.Collections.Generic.List[string]]$Problems
+    )
+    foreach ($n in $New) {
+        $dir = Join-Path $env:TEMP $n
+        Write-Host "LEFT BEHIND by restore.bat: $dir"
+        Write-RamDirReport -RamDir $dir
+        $Problems.Add("restore.bat left its relocated copy behind: $dir")
+        Remove-Item -Recurse -Force -LiteralPath $dir -ErrorAction SilentlyContinue
     }
 }
 
@@ -132,9 +148,9 @@ function Get-TempNames {
 # ---------------------------------------------------------------------
 # Leg: restore.bat WITHOUT LCSAS_NO_RELOCATE, started with its cwd on the
 # disc exactly as a double-click does.  Asserts that the relocation
-# happened, that the tier-1 binary ran from the relocated copy, and that
-# the restored tree is byte-exact.  Reports (does not fail on) what the
-# script leaves behind in %TEMP%.
+# happened, that the tier-1 binary ran from the relocated copy, that the
+# restored tree is byte-exact, and that the script removed the copy and
+# its password file from %TEMP% (#545).
 # ---------------------------------------------------------------------
 function Invoke-RelocationLeg {
     param(
@@ -184,14 +200,10 @@ function Invoke-RelocationLeg {
     if ($m.Success) {
         $ramDir = $m.Groups[1].Value.Trim()
         Write-Host "Relocation message seen; RAMDIR = $ramDir"
+        # #545: the relaunch line removes the copy once it returns.
         if (Test-Path -LiteralPath $ramDir) {
             Write-RamDirReport -RamDir $ramDir
-            $exe = Join-Path $ramDir 'recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe'
-            if (-not (Test-Path -LiteralPath $exe)) {
-                $problems.Add("relocated copy has no lcsas-restore.exe at $exe (the bin tree was not mirrored)")
-            }
-        } else {
-            $problems.Add("relocation message named $ramDir but it does not exist")
+            $problems.Add("the relocated copy $ramDir is still there after the run")
         }
     } else {
         $problems.Add("no 'copied recovery files to' message: the relocation did not happen")
@@ -199,13 +211,16 @@ function Invoke-RelocationLeg {
     $ramNew = @(Get-TempNames 'lcsas-restore-*' | Where-Object { $ramBefore -notcontains $_ })
     Write-Host "New lcsas-restore-* dirs under %TEMP% after the run: $($ramNew -join ', ')"
 
-    # 2. the tier-1 binary that ran came from the relocated copy.
+    # 2. the tier-1 binary that ran came from the relocated copy, so the
+    #    bin tree was mirrored (the copy is gone by now to look in).
     $t1 = [regex]::Match($out, '\[tier 1\] running (.+)')
     if ($t1.Success) {
         Write-Host "Tier-1 binary: $($t1.Groups[1].Value.Trim())"
         if ($t1.Groups[1].Value -notmatch 'lcsas-restore-\d+-\d+') {
             $problems.Add('tier-1 binary did not run from the relocated copy')
         }
+    } else {
+        $problems.Add("no '[tier 1] running' line: the relocated copy had no lcsas-restore.exe (the bin tree was not mirrored)")
     }
 
     # 3. completion + exit status + byte-exact tree.
@@ -213,19 +228,82 @@ function Invoke-RelocationLeg {
     if ($out -notmatch 'Recovery complete') { $problems.Add("'Recovery complete' banner missing") }
     Test-TreeAgainstManifest -Fixture $Fixture -Target $target -Problems $problems
 
-    # 4. what the script leaves behind (report; the script does not claim to
-    #    clean the relocated copy, so that is not a failure).
+    # 4. nothing left behind in %TEMP%: the password file, or the copy (#545).
     $pwLeft = @(Get-TempNames 'lcsas-pw-*' | Where-Object { $pwBefore -notcontains $_ })
     if ($pwLeft.Count -gt 0) { $problems.Add("password file(s) left in %TEMP%: $($pwLeft -join ', ')") }
-    foreach ($n in $ramNew) {
-        Write-Host "LEFT BEHIND by restore.bat (not cleaned up): $(Join-Path $env:TEMP $n)"
-        Remove-Item -Recurse -Force -LiteralPath (Join-Path $env:TEMP $n) -ErrorAction SilentlyContinue
-    }
+    Assert-NoRamDirLeft -New $ramNew -Problems $problems
 
     if ($problems.Count -gt 0) {
         throw ("relocation leg failed:`n  - " + ($problems -join "`n  - "))
     }
-    Write-Host 'Relocation leg passed: copy made, tier 1 ran from it, tree byte-exact.'
+    Write-Host 'Relocation leg passed: copy made, tier 1 ran from it, tree byte-exact, copy removed.'
+}
+
+# ---------------------------------------------------------------------
+# Leg (#545): the wrong-password case of the windows-e2e.yml step, but
+# relocated.  The relaunch line now runs commands after the relocated copy
+# returns, and any of them can replace its exit code, so a failure must
+# still come back as 77 through the relocation, with the copy removed.
+# Every other relocated leg expects 0, which a lost exit code also gives.
+# ---------------------------------------------------------------------
+function Invoke-RelocatedWrongPasswordLeg {
+    param(
+        [string]$BatRel,
+        [string]$TargetName
+    )
+    $ErrorActionPreference = 'Stop'
+    $PSNativeCommandUseErrorActionPreference = $false
+    Remove-Item Env:LCSAS_NO_RELOCATE -ErrorAction SilentlyContinue
+    Remove-Item Env:LCSAS_RELOCATED -ErrorAction SilentlyContinue
+
+    $meta = Find-MetaDrive
+    if (-not $meta) { throw 'meta ISO not mounted (no drive holds restore.bat)' }
+    $bat = "${meta}:\$BatRel"
+
+    $target = Join-Path $env:RUNNER_TEMP $TargetName
+    if (Test-Path -LiteralPath $target) { Remove-Item -Recurse -Force -LiteralPath $target }
+    New-Item -ItemType Directory -Force -Path $target | Out-Null
+    $answers = Join-Path $env:RUNNER_TEMP "answers-$TargetName.txt"
+    @($target, 'definitely-the-wrong-password', '', '', '', '', '', '') |
+        Set-Content -Path $answers -Encoding ascii
+    $outFile = Join-Path $env:RUNNER_TEMP "out-$TargetName.txt"
+
+    $ramBefore = Get-TempNames 'lcsas-restore-*'
+    $pwBefore  = Get-TempNames 'lcsas-pw-*'
+
+    Write-Host "Running relocated, wrong password (cwd ${meta}:\): $bat"
+    Push-Location -LiteralPath "${meta}:\"
+    try {
+        cmd /c "`"$bat`" < `"$answers`" > `"$outFile`" 2>&1"
+        $rc = $LASTEXITCODE
+    } finally { Pop-Location }
+    $out = Get-Content $outFile -Raw
+    Write-Host '----- restore.bat output -----'
+    Write-Host $out
+    Write-Host '----- end output -----'
+    Write-Host "relocated wrong-password exit code: $rc"
+
+    $problems = New-Object 'System.Collections.Generic.List[string]'
+    if ($out -notmatch 'copied recovery files to') {
+        $problems.Add("no 'copied recovery files to' message: the relocation did not happen")
+    }
+    if ($rc -ne 77) { $problems.Add("exit code $rc through the relocation (want 77, as without it)") }
+    if ($out -notmatch 'could not decrypt the repository') { $problems.Add('wrong-password banner missing') }
+    if ($out -match 'trying tier 2') { $problems.Add('fell through to tier 2 on a wrong password') }
+    $restored = @(Get-ChildItem -Path $target -Recurse -File -Force -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Name -ne '.lcsas-restore-marker' })
+    if ($restored.Count -gt 0) {
+        $problems.Add("left a partial tree behind: $($restored.FullName -join ', ')")
+    }
+    $pwLeft = @(Get-TempNames 'lcsas-pw-*' | Where-Object { $pwBefore -notcontains $_ })
+    if ($pwLeft.Count -gt 0) { $problems.Add("password file(s) left in %TEMP%: $($pwLeft -join ', ')") }
+    $ramNew = @(Get-TempNames 'lcsas-restore-*' | Where-Object { $ramBefore -notcontains $_ })
+    Assert-NoRamDirLeft -New $ramNew -Problems $problems
+
+    if ($problems.Count -gt 0) {
+        throw ("relocated wrong-password leg failed:`n  - " + ($problems -join "`n  - "))
+    }
+    Write-Host 'Relocated wrong-password leg passed: exit 77 through the relocation, copy removed.'
 }
 
 # ---------------------------------------------------------------------
@@ -341,10 +419,7 @@ function Invoke-EjectLeg {
     Test-TreeAgainstManifest -Fixture $Fixture -Target $target -Problems $problems
 
     $ramNew = @(Get-TempNames 'lcsas-restore-*' | Where-Object { $ramBefore -notcontains $_ })
-    foreach ($n in $ramNew) {
-        Write-Host "LEFT BEHIND by restore.bat (not cleaned up): $(Join-Path $env:TEMP $n)"
-        Remove-Item -Recurse -Force -LiteralPath (Join-Path $env:TEMP $n) -ErrorAction SilentlyContinue
-    }
+    Assert-NoRamDirLeft -New $ramNew -Problems $problems
 
     if ($problems.Count -gt 0) {
         throw ("eject leg failed:`n  - " + ($problems -join "`n  - "))
