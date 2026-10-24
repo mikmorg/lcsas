@@ -1551,6 +1551,48 @@ class TestCmdMetaVerify:
         assert "EXTRA" in caplog.text
         assert "stowaway.txt" in caplog.text
 
+    def test_strict_skips_the_docs_manifest(self, tmp_path, caplog):
+        """`--strict` must not count recovery/docs/MANIFEST.sha256 as an
+        extra.  `make -C recovery manifest` excludes both manifests from
+        MANIFEST.sha256 by rule (a manifest cannot list itself), so every
+        real build ships docs/MANIFEST.sha256 unlisted; counting it made
+        `make meta-gate` fail on every build since #432."""
+        from lcsas.meta.required_contents import required_meta_paths
+
+        # List the contract stubs under recovery/ so the only unlisted
+        # file is the docs manifest.
+        listed = {
+            rel[len("recovery/"):]: b"contract-stub\n"
+            for rel in required_meta_paths()
+            if rel.startswith("recovery/")
+        }
+        out = self._make_meta(tmp_path, {"VERSION": b"21.8\n", **listed})
+        (out / "recovery" / "docs").mkdir(exist_ok=True)
+        (out / "recovery" / "docs" / "MANIFEST.sha256").write_bytes(
+            b"0" * 64 + b"  ./START_HERE.txt\n"
+        )
+        caplog.clear()
+
+        result = main(["meta", "verify", str(out), "--strict"])
+        assert result == 0, caplog.text
+        assert "EXTRA" not in caplog.text
+
+    def test_strict_still_flags_other_docs_files(self, tmp_path, caplog):
+        """Only the docs manifest itself is exempt: any other unlisted
+        file under recovery/docs/ is still an extra."""
+        out = self._make_meta(tmp_path, {
+            "VERSION": b"21.8\n",
+        })
+        (out / "recovery" / "docs").mkdir(exist_ok=True)
+        (out / "recovery" / "docs" / "MANIFEST.sha256").write_bytes(b"")
+        (out / "recovery" / "docs" / "stowaway.txt").write_bytes(b"x\n")
+        caplog.clear()
+
+        result = main(["meta", "verify", str(out), "--strict"])
+        assert result == 1
+        assert "docs/stowaway.txt" in caplog.text
+        assert "docs/MANIFEST.sha256" not in caplog.text
+
     def test_extras_ignored_without_strict(self, tmp_path, caplog):
         """Without --strict, an extra file under recovery/ is allowed.
 

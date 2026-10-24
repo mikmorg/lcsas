@@ -3903,6 +3903,12 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
     return 0
 
 
+# The two manifests under recovery/ that MANIFEST.sha256 never lists: the
+# curation rule in recovery/Makefile excludes both (a manifest cannot list
+# itself), so --strict must not count either as an extra.
+_UNLISTED_MANIFESTS = frozenset({"MANIFEST.sha256", "docs/MANIFEST.sha256"})
+
+
 def cmd_meta_verify(args: argparse.Namespace) -> int:
     """Audit a built meta-volume against its recovery/MANIFEST.sha256.
 
@@ -3970,7 +3976,7 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
             if not path.is_file():
                 continue
             rel = path.relative_to(recovery_root).as_posix()
-            if rel == "MANIFEST.sha256":
+            if rel in _UNLISTED_MANIFESTS:
                 continue
             if rel not in listed:
                 extras.append(rel)
