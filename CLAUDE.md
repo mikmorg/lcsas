@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Two sessions, two machines.** The lab session (vm-desk1) owns code and the heavy gates. The field session owns real hardware: release drills, real backups and burns. If you are the field session, read [`.claude/HANDOFF.md`](.claude/HANDOFF.md) before doing anything else.
+
 ## Commands
 
 ```bash
