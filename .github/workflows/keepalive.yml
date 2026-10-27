@@ -1,0 +1,138 @@
+name: keepalive
+
+# Keeps the scheduled canaries switched on through quiet spells (#462).
+#
+# GitHub disables a workflow file that has a `schedule:` trigger after 60
+# days without repository activity in a public repo, and nothing reports
+# it: a disabled file produces no run, so the #420 watchdogs never fire.
+# The 2026-08-05 -> 10-15 quiet spell switched off seven canaries that way.
+# A push to the default branch is the one thing known to restart the clock
+# (#462 has a public counter-example where API calls to `enable` an active
+# workflow did not), so once master has gone KEEPALIVE_AFTER_DAYS without a
+# commit, this job pushes one empty commit to it.  In a month with any
+# merge it pushes nothing.  Its own push restarts this file's clock too.
+#
+# WHY A TOKEN SECRET AND NOT GITHUB_TOKEN: master requires status checks,
+# and a direct push skips them only as an admin, which GITHUB_TOKEN is not.
+# A GITHUB_TOKEN push would also start no workflows, so test.yml's
+# workflow-state check would not run on the keepalive commit.  A push with
+# this token does start test.yml.
+#
+# KEEPALIVE_TOKEN is the owner's fine-grained personal access token:
+#   - resource owner mikmorg; repository access: only lcsas
+#   - repository permissions: Contents "Read and write" (Metadata
+#     "Read-only" comes with it); nothing else
+#   - an expiry date, renewed before it lapses
+# Store it with `gh secret set KEEPALIVE_TOKEN -R mikmorg/lcsas`, then run
+# `gh workflow run keepalive.yml -f force=true` to prove it can push.
+#
+# Every run checks the token can still push, even when no commit is due,
+# so a missing or expired token turns the weekly run red and
+# canary-watchdog files an issue weeks before the 60-day cutoff.
+
+on:
+  schedule:
+    - cron: "41 3 * * 4"         # Thursdays 03:41 UTC
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Push the keepalive commit even if master is recent (proves the token)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      # Well inside GitHub's 60 days: with a weekly schedule, a failed or
+      # dropped run still leaves several more tries before the cutoff.
+      KEEPALIVE_AFTER_DAYS: "30"
+      # Spelled out: a schedule event's payload carries no repository
+      # object, so github.event.repository.default_branch is empty there.
+      BRANCH: master
+
+    steps:
+      - name: KEEPALIVE_TOKEN is set
+        env:
+          TOKEN: ${{ secrets.KEEPALIVE_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::secret KEEPALIVE_TOKEN is not set -- recipe at the top of .github/workflows/keepalive.yml (#462)"
+            exit 1
+          fi
+
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BRANCH }}
+          token: ${{ secrets.KEEPALIVE_TOKEN }}
+
+      - name: The token can still push
+        # A dry run still fetches the refs from git-receive-pack, which
+        # needs a live token with write access.  Branch protection is only
+        # checked by the real push below.
+        run: git push --dry-run origin "HEAD:refs/heads/$BRANCH"
+
+      - name: Push an empty commit if master has gone quiet
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          last="$(git log -1 --format=%ct)"
+          age_days=$(( ($(date +%s) - last) / 86400 ))
+          echo "last commit on $BRANCH: $(git log -1 --format='%h %cI') ($age_days days ago)"
+          if [ "$age_days" -lt "$KEEPALIVE_AFTER_DAYS" ] && [ "$FORCE" != "true" ]; then
+            echo "under $KEEPALIVE_AFTER_DAYS days; no keepalive commit needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty \
+            -m "chore: keepalive push for the scheduled workflows (#462)" \
+            -m "Master had no commit for $age_days days.  GitHub disables scheduled workflows in a public repo after 60 days without activity; this empty commit restarts that clock.  Pushed by .github/workflows/keepalive.yml."
+          git push origin "HEAD:refs/heads/$BRANCH"
+          echo "pushed $(git rev-parse --short HEAD) to $BRANCH"
+
+  canary-watchdog:
+    # Uniform scheduled-canary watchdog (#420), same shape as the
+    # *-weekly.yml wrappers: job-level on a fresh runner, cancelled-aware
+    # (a timeout-minutes kill is conclusion `cancelled`, invisible to
+    # failure()), explicit issues:write, no error swallowing.  needs: is
+    # load-bearing -- without it needs.*.result is empty and this job
+    # never fires.
+    runs-on: ubuntu-24.04
+    needs: [keepalive]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && (contains(needs.*.result, 'failure')
+          || contains(needs.*.result, 'cancelled'))
+    permissions:
+      issues: write
+    steps:
+      - name: File (or bump) the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          title="keepalive: the weekly push check failed, so quiet spells can switch off the canaries again"
+          body="Scheduled keepalive run went red (${{ needs.keepalive.result }}) on \`${{ github.sha }}\`.
+
+          Usually KEEPALIVE_TOKEN is missing, expired or has lost write access; the run log names the step that failed.  Until it is fixed nothing pushes to master during a quiet spell, and after 60 days without a commit GitHub switches off every scheduled canary without a sound (#462).  Renew the token (recipe at the top of .github/workflows/keepalive.yml), store it with \`gh secret set KEEPALIVE_TOKEN -R ${{ github.repository }}\`, then run \`gh workflow run keepalive.yml -f force=true\`.
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          existing="$(gh issue list --state open \
+            --search "\"$title\" in:title" \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --label bug --body "$body"
+          fi
