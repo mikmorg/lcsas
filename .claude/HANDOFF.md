@@ -174,3 +174,8 @@ The channel between the sessions is **GitHub issues** (`gh`, repo
   blind runs and the cross-builds to the lab.
 - **Remotes:** clone from GitHub. The lab also mirrors to a private
   remote on home2; you don't need it.
+- **Bot commits on master are expected.** After 30 days with no commit,
+  `.github/workflows/keepalive.yml` pushes an empty
+  `chore: keepalive push ...` commit as github-actions[bot], so GitHub
+  doesn't switch off the scheduled canaries (#462). `git pull --ff-only`
+  takes it like any other commit.

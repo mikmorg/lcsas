@@ -60,6 +60,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_format_canary.py` | FMT-03 format canary: round-trip LATEST rustic through the pinned readers. |
 | `test_format_txt_path_safety.py` | Hardening test: FORMAT.txt PATH SAFETY must match binary behaviour. |
 | `test_initramfs_manifest_sources.py` | BOOT-02: build_initramfs.sh must hard-fail on missing sources. |
+| `test_keepalive_workflow.py` | Hardening: a quiet spell can't switch off the scheduled canaries (#462). |
 | `test_keyshare_docs.py` | test_keyshare_docs.py -- static guard: heir docs name the C combiner [KEY-05]. |
 | `test_last_verified_writer_exists.py` | Hardening test: volume_copies.last_verified_at must have a writer. |
 | `test_live_usb_procedure_docs.py` | test_live_usb_procedure_docs.py -- static doc-pinning gate for the |
