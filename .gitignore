@@ -51,6 +51,10 @@ lcsas-test
 # Claude Code worker worktrees (local scratch only)
 .claude/worktrees/
 
+# Claude Code's scheduler lock: per-session runtime state, rewritten by
+# every session that schedules a task
+.claude/scheduled_tasks.lock
+
 # SQLite in-memory sentinel — never a real file
 :memory:
 :memory:.lock
