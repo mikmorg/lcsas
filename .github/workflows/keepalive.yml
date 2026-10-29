@@ -45,7 +45,6 @@ permissions:
 
 concurrency:
   group: keepalive
-  cancel-in-progress: false
 
 jobs:
   keepalive:
@@ -86,8 +85,7 @@ jobs:
           FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
-          last="$(git log -1 --format=%ct)"
-          age_days=$(( ($(date +%s) - last) / 86400 ))
+          age_days=$(( ($(date +%s) - $(git log -1 --format=%ct)) / 86400 ))
           echo "last commit on $BRANCH: $(git log -1 --format='%h %cI') ($age_days days ago)"
           if [ "$age_days" -lt "$KEEPALIVE_AFTER_DAYS" ] && [ "$FORCE" != "true" ]; then
             echo "under $KEEPALIVE_AFTER_DAYS days; no keepalive commit needed"
@@ -99,7 +97,6 @@ jobs:
             -m "chore: keepalive push for the scheduled workflows (#462)" \
             -m "Master had no commit for $age_days days.  GitHub disables scheduled workflows in a public repo after 60 days without activity; this empty commit restarts that clock.  Pushed by .github/workflows/keepalive.yml."
           git push origin "HEAD:refs/heads/$BRANCH"
-          echo "pushed $(git rev-parse --short HEAD) to $BRANCH"
 
   canary-watchdog:
     # Uniform scheduled-canary watchdog (#420), same shape as the
