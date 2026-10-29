@@ -25,8 +25,8 @@ the code. Written 2026-10-24 by the lab session at the hand-over.
   - #475: a manual macOS restore
   - #476 (manual Windows) is related but doesn't gate the release.
   - #477 (an independent crypto review) is the owner's decision, not a gate.
-- Other open issues are lab-side or owner decisions: #462, #479, #491,
-  #538, #559, #562.
+- Other open issues are lab-side or owner decisions: #479, #491, #538,
+  #559, #562.
 
 ## Hard rules
 
@@ -174,9 +174,3 @@ The channel between the sessions is **GitHub issues** (`gh`, repo
   blind runs and the cross-builds to the lab.
 - **Remotes:** clone from GitHub. The lab also mirrors to a private
   remote on home2; you don't need it.
-- **Bot commits on master are expected.** Once master has gone
-  `KEEPALIVE_AFTER_DAYS` (about a month) without a commit,
-  `.github/workflows/keepalive.yml` pushes an empty
-  `chore: keepalive push ...` commit as github-actions[bot], so GitHub
-  doesn't switch off the scheduled canaries (#462). `git pull --ff-only`
-  takes it like any other commit.
