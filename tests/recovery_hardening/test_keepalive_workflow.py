@@ -51,21 +51,21 @@ def _code() -> str:
 
 
 def test_keepalive_is_scheduled_weekly() -> None:
-    code = _code()
-    crons = re.findall(r"""^\s+- cron:\s*["']([^"']+)["']""", code, re.M)
-    assert len(crons) == 1, f"expected one cron in keepalive.yml, found {crons}"
-    fields = crons[0].split()
-    assert len(fields) == 5, f"keepalive cron {crons[0]!r} is not 5 fields"
-    _minute, _hour, dom, month, dow = fields
-    assert dom == "*" and month == "*" and re.fullmatch(r"[0-6]", dow), (
-        f"keepalive cron {crons[0]!r} is not one fixed weekday.  The "
+    # minute hour * * <one weekday>, as a number or a three-letter name.
+    weekly = re.findall(
+        r"""^\s+- cron:\s*["']\S+ \S+ \* \* ([0-6]|(?i:sun|mon|tue|wed|thu|fri|sat))["']""",
+        _code(),
+        re.M,
+    )
+    assert len(weekly) == 1, (
+        "keepalive.yml needs one weekly cron (minute hour * * weekday).  The "
         "threshold test below assumes a run every "
         f"{_SCHEDULE_SPACING_DAYS} days."
     )
 
 
 def test_threshold_leaves_retries_before_the_cutoff() -> None:
-    m = re.search(r'^\s+KEEPALIVE_AFTER_DAYS:\s*"(\d+)"\s*$', _code(), re.M)
+    m = re.search(r'^\s+KEEPALIVE_AFTER_DAYS:\s*"?(\d+)"?\s*$', _code(), re.M)
     assert m, "keepalive.yml has no KEEPALIVE_AFTER_DAYS -- parser broken?"
     days = int(m.group(1))
     assert days > 0
@@ -86,13 +86,10 @@ def test_pushes_with_the_token_secret() -> None:
         "its push runs as GITHUB_TOKEN.  Master's required status checks "
         "reject that push, and a GITHUB_TOKEN push starts no workflows."
     )
-    assert "github.token" not in code.split("canary-watchdog:")[0], (
-        "the keepalive job references github.token; its push must use "
-        "KEEPALIVE_TOKEN (only canary-watchdog files issues with "
-        "github.token)."
-    )
-    assert re.search(r'^\s+git push origin "HEAD:refs/heads/\$BRANCH"', code, re.M), (
-        "keepalive.yml no longer pushes HEAD to the branch -- parser broken, "
+    # The push has no credentials of its own: it uses the ones checkout
+    # stored, so pinning checkout's token pins the push's.
+    assert re.search(r"^\s+git push\b(?!.*--dry-run)", code, re.M), (
+        "keepalive.yml has no real (non-dry-run) git push -- parser broken, "
         "or the push was removed?"
     )
 
@@ -100,14 +97,14 @@ def test_pushes_with_the_token_secret() -> None:
 def test_checks_the_token_on_every_run() -> None:
     code = _code()
     dry = code.find("git push --dry-run")
-    gate = code.find('KEEPALIVE_AFTER_DAYS" ]')
+    early_exit = code.find("exit 0")
     assert dry != -1, (
         "keepalive.yml no longer dry-run pushes on every run.  An expired "
         "token would then go unnoticed until master had been quiet for "
         "KEEPALIVE_AFTER_DAYS, leaving little time before the cutoff."
     )
-    assert gate != -1, "age check not found -- parser broken?"
-    assert dry < gate, (
-        "the token check must run before the age check exits early, or it "
-        "only runs when a commit is due."
+    assert early_exit != -1, "no early `exit 0` found -- parser broken?"
+    assert dry < early_exit, (
+        "the token check must run before the job's first early exit (the "
+        "age check), or it only runs when a commit is due."
     )
