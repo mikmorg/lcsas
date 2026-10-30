@@ -412,6 +412,7 @@ class BurnOrchestrator:
         staging_root: Path,
         iso_output: Path | None = None,
         session_id: str | None = None,
+        burn_session_position: tuple[int, int] | None = None,
     ) -> BurnManifest:
         """Build staging dir, register volume, inject metadata, optionally create ISO.
 
@@ -436,6 +437,9 @@ class BurnOrchestrator:
             session_id: If set, link the volume into session_volumes in
                 the SAME transaction that creates it, so no crash can
                 leave a volume row invisible to ``burn_session``.
+            burn_session_position: ``(N, M)`` when this is volume N of the
+                M volumes ``stage`` builds in one burn session; printed in
+                the disc's VOLUME_INFO.txt.  ``None`` from ``prepare``.
 
         Returns:
             BurnManifest describing the staged volume.
@@ -546,7 +550,10 @@ class BurnOrchestrator:
 
             # 5. Write volume info files
             vol = get_volume_by_id(self._conn, volume.volume_id)
-            injector.write_volume_info(vol, packs=selected_packs)
+            injector.write_volume_info(
+                vol, packs=selected_packs,
+                burn_session_position=burn_session_position,
+            )
             injector.write_restore_instructions()
             injector.write_standalone_restorer()
             if not media_type.is_test:
@@ -897,6 +904,7 @@ class BurnOrchestrator:
                 staging_root=staging_root,
                 iso_output=iso_path,
                 session_id=session_id,
+                burn_session_position=(i + 1, len(volume_plans)),
             )
 
             # Compute ISO hash + byte length and record them on the

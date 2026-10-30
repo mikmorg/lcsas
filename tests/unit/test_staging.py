@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -699,3 +700,181 @@ class TestStagePackContentVerification:
 
         assert staged == 1
         assert dst.read_bytes() == content
+
+
+# ── #491 (UX_CONCERNS 010): plain-text VOLUME_INFO.txt on every data disc ──
+
+
+def _volume(created_at: str = "2026-10-30 12:34:56") -> Volume:
+    return Volume(
+        volume_id=7, label="LCSAS_BD25_2026_0003", uuid="u-3",
+        media_type="BD25", capacity_bytes=25_025_314_816,
+        used_bytes=0, location="Home", status="STAGING",
+        created_at=created_at, closed_at=None, verified_at=None,
+    )
+
+
+def _packs() -> list[Pack]:
+    return [
+        Pack(pack_id=1, sha256="a" * 64, size_bytes=2_000_000_000,
+             repo_id="family", is_pruned=False, created_at=""),
+        Pack(pack_id=2, sha256="b" * 64, size_bytes=500_000_000,
+             repo_id="family", is_pruned=False, created_at=""),
+        Pack(pack_id=3, sha256="c" * 64, size_bytes=1_500_000,
+             repo_id="work", is_pruned=False, created_at=""),
+    ]
+
+
+class TestVolumeInfoTxt:
+    def test_written_with_the_json(self, tmp_path):
+        """write_volume_info writes the text twin next to volume_info.json."""
+        from lcsas import __version__
+
+        root = tmp_path / "staging"
+        root.mkdir()
+        HolographicInjector(root).write_volume_info(
+            _volume(), packs=_packs(), burn_session_position=(2, 3),
+        )
+        assert (root / "volume_info.json").is_file()
+        text = (root / "VOLUME_INFO.txt").read_text(encoding="utf-8")
+
+        assert "Label:         LCSAS_BD25_2026_0003" in text
+        assert "Volume:        2 of 3 in its burn session" in text
+        assert "Prepared on:   2026-10-30 12:34:56 UTC" in text
+        assert f"Made with:     LCSAS version {__version__}" in text
+        assert "Media type:    BD25 (25.0 GB BD-R)" in text
+        assert "family (2 packs, 2.5 GB)" in text
+        assert "work (1 pack, 1.5 MB)" in text
+        assert "Packs:         3 packs, 2.5 GB in all" in text
+        assert "START_HERE.txt" in text
+        # Written at staging time: it must not claim a burn date.
+        assert "burned on" not in text.lower()
+        assert "before the disc was burned" in " ".join(text.split())
+
+    def test_session_position_unknown(self, tmp_path):
+        """Without a burn session (prepare) the Volume line is left out."""
+        root = tmp_path / "staging"
+        root.mkdir()
+        HolographicInjector(root).write_volume_info(_volume(), packs=_packs())
+        text = (root / "VOLUME_INFO.txt").read_text(encoding="utf-8")
+        assert "Volume:" not in text
+        assert "burn session" not in text
+        # The lines around it are still there.
+        assert "Label:         LCSAS_BD25_2026_0003\n  Prepared on:" in text
+
+    def test_no_packs_and_unknown_media(self, tmp_path):
+        """Callers that pass no packs still get a readable file."""
+        root = tmp_path / "staging"
+        root.mkdir()
+        vol = dataclasses.replace(
+            _volume(created_at="2026-01-01"), media_type="FUTURE_DISC",
+        )
+        HolographicInjector(root).write_volume_info(vol)
+        text = (root / "VOLUME_INFO.txt").read_text(encoding="utf-8")
+        assert "Media type:    FUTURE_DISC" in text
+        assert "Prepared on:   2026-01-01\n" in text  # not a full timestamp: no UTC
+        assert "Packs:         (not listed in this file)" in text
+
+    def test_start_here_and_instructions_mention_it(self, tmp_path):
+        root = tmp_path / "staging"
+        root.mkdir()
+        config = LCSASConfig(
+            mirror_base_path=tmp_path / "mirror",
+            staging_path=tmp_path / "staging",
+            db_path=tmp_path / "db.db",
+        )
+        injector = HolographicInjector(root)
+        injector.write_start_here(config)
+        injector.write_restore_instructions()
+        assert "VOLUME_INFO.txt" in (root / "START_HERE.txt").read_text()
+        assert "VOLUME_INFO.txt" in (root / "RESTORE_INSTRUCTIONS.txt").read_text()
+
+
+# ── #491 item 11: PASSWORD_INFO.txt says "one password" only when true ──
+
+
+def _key_info(tmp_path: Path, files: dict[str, Path | None]) -> str:
+    root = tmp_path / "staging"
+    root.mkdir()
+    config = LCSASConfig(
+        mirror_base_path=tmp_path / "mirror",
+        staging_path=tmp_path / "staging",
+        db_path=tmp_path / "db.db",
+        repositories={
+            name: RepositoryConfig(
+                name=name, mirror_path=tmp_path / "mirror" / name, password_file=pw,
+            )
+            for name, pw in files.items()
+        },
+    )
+    HolographicInjector(root).write_key_info(config)
+    return " ".join((root / "PASSWORD_INFO.txt").read_text().split())
+
+
+_SHARED = "uses the same password file"
+_OWN = "Each repository listed above has its own password file."
+_NEED = "You need the password of the repository you want to restore."
+
+
+class TestPasswordInfoSharedSentence:
+    def test_shared_file_says_one_password_opens_all(self, tmp_path):
+        text = _key_info(tmp_path, {
+            "family": Path("/keys/archive.key"),
+            "work": Path("/keys/archive.key"),
+        })
+        assert _SHARED in text
+        assert "opens all of them" in text
+        assert _OWN not in text
+
+    def test_shared_file_compared_after_normalising(self, tmp_path):
+        text = _key_info(tmp_path, {
+            "family": Path("/keys/archive.key"),
+            "work": Path("/keys/./sub/../archive.key"),
+        })
+        assert _SHARED in text
+
+    def test_different_files_say_each_has_its_own(self, tmp_path):
+        text = _key_info(tmp_path, {
+            "family": Path("/keys/family.key"),
+            "work": Path("/keys/work.key"),
+        })
+        assert _OWN in text
+        assert "the password of the repository you want to restore" in text
+        assert _SHARED not in text
+        # The old unconditional sentence is gone.
+        assert "likely works for all" not in text
+
+    def test_same_file_name_in_different_folders_is_not_shared(self, tmp_path):
+        text = _key_info(tmp_path, {
+            "family": Path("/home/alice/pw.txt"),
+            "work": Path("/home/bob/pw.txt"),
+        })
+        assert _OWN in text
+        assert _SHARED not in text
+
+    def test_unconfigured_file_claims_nothing(self, tmp_path):
+        """A repository with no password file set proves neither claim."""
+        text = _key_info(tmp_path, {
+            "family": Path("/keys/archive.key"),
+            "work": None,
+        })
+        assert _NEED in text
+        assert _OWN not in text
+        assert _SHARED not in text
+
+    def test_partly_shared_files_claim_nothing(self, tmp_path):
+        """Two repositories share a file and a third has its own."""
+        text = _key_info(tmp_path, {
+            "family": Path("/keys/archive.key"),
+            "photos": Path("/keys/archive.key"),
+            "work": Path("/keys/work.key"),
+        })
+        assert _NEED in text
+        assert _OWN not in text
+        assert _SHARED not in text
+
+    def test_single_repository_has_no_note(self, tmp_path):
+        text = _key_info(tmp_path, {"family": Path("/keys/archive.key")})
+        assert "NOTE:" not in text
+        assert _OWN not in text
+        assert _SHARED not in text

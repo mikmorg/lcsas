@@ -302,6 +302,7 @@ After burning, each disc contains:
 - **`metadata/`** — repository metadata: Rustic index, keys, snapshots (per repository)
 - **`catalog.db`** — the disc catalog: a SQLite copy of the catalog, current as of this disc's burn
 - **`volume_info.json`** — volume identity (label, UUID, media type)
+- **`VOLUME_INFO.txt`** — the same in plain text for an heir: label, place in its burn session, when it was prepared, LCSAS version, repositories, pack count and size
 - **RS03 ECC layer** — DVDisaster error correction protecting the full ISO image
 
 ### Location Management
@@ -481,9 +482,11 @@ The **meta disc** solves this by bundling *everything* needed for a restore onto
 | `recovery/docs/` | On-disc recovery manual (`RECOVER.txt`, `TIERS.txt`, `ENV_VARS.txt`, …) |
 | `restore.sh` | Interactive restore script — start here |
 | `restore.bat` | Windows entry point |
-| `restore_auto.sh` | Non-interactive variant for automation |
+| `recovery/scripts/restore-auto.sh` | Non-interactive variant for automation (off the disc root, so heirs see one restore script) |
+| `recovery/scripts/restore_legacy.sh` | Superseded flag-style bash driver, kept for compatibility |
 | `standalone_restorer.py` | Tier-3 Python reader (requires only Python 3.10+) |
 | `README_RESTORE.md` | Human-readable step-by-step restore instructions |
+| `VOLUME_INFO.txt` | Plain-text note: this is the meta disc, when it was built, the LCSAS version |
 | `volume_info.json` | Machine-readable details of this disc |
 
 ### Building a Meta Disc

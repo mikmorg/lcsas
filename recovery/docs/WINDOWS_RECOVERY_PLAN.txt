@@ -24,8 +24,8 @@ TARGET PATFORMS (in priority order)
 
   REJECTED platforms:
     Windows XP / Vista / unpatched 7  -- UCRT is not available.
-    Workaround for these: a separate msvcrt-linked binary (see
-    "Phase W5 -- legacy msvcrt build" below).
+    A separate msvcrt-linked binary for these was decided against
+    (see "Phase W5 -- legacy msvcrt build" below).
 
 ────────────────────────────────────────────────────────────────────
 PART 1 -- SOURCE PORTABILITY (lcsas-restore.exe)
@@ -390,6 +390,8 @@ NON-GOALS
     1-3 years and cost money; long-term archival is incompatible
     with cert-rotation.  SmartScreen will show a warning; documented.
   * Anti-virus whitelisting.  Same reasoning.
+  * A legacy msvcrt .exe for Windows XP / Vista / unpatched 7.
+    Decided against in #491; see Phase W5 below.
 
 ────────────────────────────────────────────────────────────────────
 PHASING
@@ -419,8 +421,15 @@ Phase W4 -- aarch64-windows + manual real-VM checklist (deferred):
   * Document the manual Windows-VM test protocol
 
 ────────────────────────────────────────────────────────────────────
-PHASE W5 -- LEGACY MSVCRT BUILD  (planned; not yet started)
+PHASE W5 -- LEGACY MSVCRT BUILD              (DECIDED AGAINST, #491)
 ────────────────────────────────────────────────────────────────────
+
+Decided against (#491): Windows 10 1709+ is the support floor.  On
+an unpatched 7 the heir installs KB2999226; on XP or Vista the heir
+moves the discs to a newer Windows, Linux or macOS machine
+(RECOVER_WINDOWS.txt, options A-C).  The Python reader is no way round
+it: it needs Python 3.10, which does not install on Windows 7 or older.
+Moved to NON-GOALS above.  The plan below is kept as written.
 
 PROBLEM
 

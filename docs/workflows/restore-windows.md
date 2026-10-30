@@ -362,8 +362,8 @@ need it.
 
 **Prerequisites:**
 
-- Any Windows that still runs Python 3.6 – 3.12
-  (`recovery/docs/RECOVER_WINDOWS.txt`).
+- Any Windows that runs Python 3.10 or newer, which rules out
+  Windows 7 and older (`recovery/docs/RECOVER_WINDOWS.txt`).
 - Python 3 installed from python.org (which adds `python` and `py`
   to `PATH` by default).
 - `standalone_restorer.py` on the meta disc (it is bundled by the
@@ -431,10 +431,12 @@ still apply.
 **Test coverage:** The Python reader is exercised by the
 Linux-side pytest suite (`src/lcsas/restore/restic_fallback.py`); there is
 no automated Wine/Windows test of the manual invocation path. The
-`Phase W5 — legacy msvcrt build` documented at
-`recovery/docs/WINDOWS_RECOVERY_PLAN.txt` is the long-term plan to
-give XP/Vista a native binary path, but it is not yet implemented (build
-or non-goal is an open decision, #491).
+`Phase W5 — legacy msvcrt build` in
+`recovery/docs/WINDOWS_RECOVERY_PLAN.txt` (a native binary for XP/Vista)
+is not planned: it was decided against in #491. This path does not
+replace it, because Python 3.10 does not install on Windows 7 or older.
+Heirs on those systems move the discs to a newer machine, or on
+Windows 7 install KB2999226.
 
 **Source refs:** `standalone_restorer.py` (root of the meta disc),
 `recovery/docs/RECOVER_WINDOWS.txt` (heir-facing manual restore
@@ -587,10 +589,11 @@ Windows workflow inherits. Source refs in parentheses.
   1709+ is the stated support floor).** Windows XP/Vista/unpatched 7 are
   listed as REJECTED platforms in `recovery/docs/WINDOWS_RECOVERY_PLAN.txt`;
   Phase W5 there (an msvcrt-linked binary and a Wine-with-UCRT-disabled
-  harness) is "planned; not yet started" and awaits a build-or-non-goal
-  decision (#491). Until then heirs on those systems are pushed to the
+  harness) was decided against (#491) and is listed as a non-goal. Heirs
+  on those systems move the discs to a newer host. The
   [manual Python fallback](#manual-python-fallback-not-orchestrated-by-restorebat)
-  or to move the disc to a newer host.
+  (tier 3) is no way round it: it needs Python 3.10, which does not
+  install on Windows 7 or older.
 - **No automated test of SmartScreen / antivirus interactions
   (intentional: heir-driven, cannot be CI-tested).** The documented "Run
   anyway" / quarantine-restore steps in `recovery/docs/RECOVER_WINDOWS.txt`

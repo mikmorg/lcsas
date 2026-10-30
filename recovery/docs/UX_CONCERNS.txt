@@ -57,7 +57,9 @@ MITIGATION (DONE -- UX-01 / INFRA-01):
 ────────────────────────────────────────────────────────────────────
 ID 002 -- /restore.sh is one file among many at disc root
 ────────────────────────────────────────────────────────────────────
-STATUS: OPEN
+STATUS: CLOSED (#491)
+RESOLVED BY: #491 -- restore-auto.sh and restore_legacy.sh moved off
+             the disc root, under recovery/scripts/.
 IMPACT: MEDIUM.  Heir opens disc in file explorer, sees
         15-20 files (README, README_RESTORE, restore.sh,
         restore-auto.sh, restore_legacy.sh, restore_c89.sh,
@@ -253,11 +255,18 @@ MITIGATION:
     decrypt + hash-check every blob but never write to disk, print a
     summary.  A read-only dry run is a binary feature, out of scope
     for the driver-level guard above.
+    Decided against (#491): restore already authenticates every
+    blob, and `lcsas verify` reads a disc back.
 
 ────────────────────────────────────────────────────────────────────
 ID 010 -- Disc-creation date and original-archive context are opaque
 ────────────────────────────────────────────────────────────────────
-STATUS: OPEN
+STATUS: CLOSED (#491)
+RESOLVED BY: #491 -- every data disc and the meta disc carry a
+             plain-text VOLUME_INFO.txt.  On a data disc it gives the
+             label, the date the volume was prepared (not burned), the
+             LCSAS version and the repositories; START_HERE.txt points
+             to it.
 IMPACT: LOW.  The heir sees a pile of discs and cannot tell
         when they were burned, by whom, with what software version,
         or for what purpose ("photos? business records? both?").
@@ -327,7 +336,7 @@ MITIGATION:
 
 PRIORITISATION
 
-  P1 (next):           002, 010
+  P1 (next):           none
   P3 (long-term):      003
   WONTFIX:             006 (cryptographic)
   MITIGATED:           001 (native Windows path shipped, UX-01),
@@ -335,4 +344,4 @@ PRIORITISATION
                             noexec detection is #496),
                        007 (live-USB route documented + gated)
   RESOLVED:            009 (non-empty-target guard, UX-07)
-  CLOSED:              005, 008, 011, 012
+  CLOSED:              002, 005, 008, 010, 011, 012

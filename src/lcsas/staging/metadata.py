@@ -110,6 +110,133 @@ def _share_recovery_lines(
     ]
 
 
+def _human_bytes(n: int) -> str:
+    """A byte count in the units an heir reads on a disc box (GB, MB, KB)."""
+    for unit, size in (("GB", 10**9), ("MB", 10**6), ("KB", 10**3)):
+        if n >= size:
+            return f"{n / size:.1f} {unit}"
+    return f"{n:,} bytes"
+
+
+def _packs_text(count: int) -> str:
+    return f"{count:,} pack" if count == 1 else f"{count:,} packs"
+
+
+def _media_type_text(name: str) -> str:
+    """``BD25`` -> ``BD25 (25.0 GB BD-R)``; an unknown name is shown as is."""
+    try:
+        media = MediaType[name]
+    except KeyError:
+        return name
+    return f"{name} ({_human_bytes(media.capacity_bytes)} {media.family})"
+
+
+def render_volume_info_txt(
+    volume: Volume,
+    packs: Sequence[Pack] = (),
+    burn_session_position: tuple[int, int] | None = None,
+) -> str:
+    """The text of a data disc's VOLUME_INFO.txt (#491, UX 010).
+
+    ``volume_info.json`` says the same for programs; this is for an heir
+    who cannot read JSON.  It uses only what ``write_volume_info`` already
+    has.  It is written while the volume is staged, BEFORE the burn, so
+    the date is when the volume was prepared, never when a disc was burned.
+
+    ``burn_session_position`` is ``(N, M)``: this is volume N of the M
+    volumes staged together in its burn session.  ``None`` (no burn
+    session, as in ``prepare``) leaves the line out.
+    """
+    from lcsas import __version__
+
+    # Only stage() knows the volume's place in its burn session; prepare()
+    # stages one volume with no session, so the line is left out.
+    place_line = ""
+    if burn_session_position is not None:
+        n, m = burn_session_position
+        place_line = f"  Volume:        {n} of {m} in its burn session\n"
+
+    prepared = volume.created_at or "(not recorded)"
+    # The catalog stamps rows with SQLite CURRENT_TIMESTAMP, which is UTC.
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", prepared):
+        prepared += " UTC"
+
+    pad = " " * 17
+    if packs:
+        per_repo: dict[str, list[int]] = {}
+        for p in packs:
+            if p.repo_id:
+                count_bytes = per_repo.setdefault(p.repo_id, [0, 0])
+                count_bytes[0] += 1
+                count_bytes[1] += p.size_bytes
+        repo_rows = [
+            f"{repo} ({_packs_text(count)}, {_human_bytes(size)})"
+            for repo, (count, size) in sorted(per_repo.items())
+        ] or ["(not recorded)"]
+        repo_text = f"\n{pad}".join(repo_rows)
+        total = sum(p.size_bytes for p in packs)
+        pack_text = f"{_packs_text(len(packs))}, {_human_bytes(total)} in all"
+    else:
+        repo_text = "(not listed in this file)"
+        pack_text = "(not listed in this file)"
+
+    return (
+        "ABOUT THIS DISC\n"
+        "===============\n"
+        "\n"
+        "This disc is part of an LCSAS backup archive.  Every disc with\n"
+        "the same label holds the same data, so any one of them will do.\n"
+        "\n"
+        f"  Label:         {volume.label}\n"
+        f"{place_line}"
+        f"  Prepared on:   {prepared}\n"
+        f"  Made with:     LCSAS version {__version__}\n"
+        f"  Media type:    {_media_type_text(volume.media_type)}\n"
+        f"  Repositories:  {repo_text}\n"
+        f"  Packs:         {pack_text}\n"
+        "\n"
+        "This file was written when the volume was prepared, before the\n"
+        "disc was burned.\n"
+        "\n"
+        "To get your files back, read START_HERE.txt on this disc first.\n"
+        "volume_info.json describes this disc for computer programs.\n"
+    )
+
+
+def _password_note(config: LCSASConfig) -> list[str]:
+    """PASSWORD_INFO.txt's NOTE on how the repositories' passwords relate.
+
+    It may tell the heir that one password opens every repository only
+    when the config proves it (#491): two or more repositories, each with
+    a configured ``password_file``, all naming the same file.  Likewise it
+    says each has its own password file only when all are configured and
+    no two are the same.  Anything else gets the claim-free sentence, and
+    a single repository needs no note.  Paths are compared in full (two
+    files can share a name), normalised lexically only: the config loader
+    already made them absolute, and touching the filesystem here could
+    hang on a stale mount (#427).
+    """
+    files = [repo.password_file for repo in config.repositories.values()]
+    if len(files) < 2:
+        return []
+    known = [os.path.normpath(str(f)) for f in files if f is not None]
+    if len(known) == len(files) and len(set(known)) == 1:
+        return [
+            "NOTE: Every repository listed above uses the same",
+            "password file, so its one password opens all of them.",
+        ]
+    if len(known) == len(files) and len(set(known)) == len(known):
+        return [
+            "NOTE: Each repository listed above has its own password",
+            "file.  You need the password of the repository you want",
+            "to restore.",
+        ]
+    return [
+        "NOTE: You need the password of the repository you want to",
+        "restore.",
+    ]
+
+
 _SQLITE_MAGIC = b"SQLite format 3\x00"
 
 
@@ -214,11 +341,13 @@ class HolographicInjector:
         self,
         volume: Volume,
         packs: Sequence[Pack] = (),
+        burn_session_position: tuple[int, int] | None = None,
     ) -> None:
-        """Write a self-describing JSON file to the staging root.
+        """Write volume_info.json and VOLUME_INFO.txt to the staging root.
 
         This allows any disc to identify itself and its contents
-        without consulting the catalog.
+        without consulting the catalog.  The JSON is for programs; the
+        plain-text twin says the same for an heir (#491).
 
         Args:
             volume: The volume record.
@@ -226,6 +355,9 @@ class HolographicInjector:
                 provided, the JSON includes ``pack_count``,
                 ``total_bytes``, ``repositories``, and
                 ``sha256_manifest``.
+            burn_session_position: Optional ``(N, M)``: this is volume N
+                of the M volumes in its burn session.  Only the text
+                file shows it.
         """
         # This file (like the disc catalog) is written BEFORE the burn:
         # ``status`` is always STAGING here, and the catalog's
@@ -255,6 +387,12 @@ class HolographicInjector:
         info_path = self._root / "volume_info.json"
         with open(info_path, "w", encoding="utf-8") as f:
             json.dump(info, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+
+        text = render_volume_info_txt(volume, packs, burn_session_position)
+        with open(self._root / "VOLUME_INFO.txt", "w", encoding="utf-8") as f:
+            f.write(text)
             f.flush()
             os.fsync(f.fileno())
 
@@ -401,6 +539,7 @@ DISC CONTENTS
   data/                     Pack files (encrypted, each named by its SHA-256)
   metadata/                 Repository index, snapshot, and key files
   catalog.db                Disc catalog (SQLite), as of this disc's burn
+  VOLUME_INFO.txt           This disc's label and contents, in plain text
   volume_info.json          Machine-readable volume identity and manifest
   START_HERE.txt            Plain-language description of this archive
   PASSWORD_INFO.txt         Which password each repository needs
@@ -516,6 +655,9 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
 
               Contents: {description}
             {repo_lines}
+              VOLUME_INFO.txt on this disc gives this disc's label,
+              when it was prepared, and what it holds.
+
             {{SPLIT_BLOCK}}
             HOW TO GET YOUR FILES BACK
             --------------------------
@@ -636,10 +778,13 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
             lines.append(config.key_storage_hints)
             lines.append("")
 
-        lines.append("NOTE: Each repository requires its own password.")
-        lines.append("If you have only one password file, it likely works for all")
-        lines.append("repositories (common setup).")
-        lines.append("")
+        # #491: say that one password opens every repository ONLY when the
+        # config proves it.  Otherwise the sentence sends an heir to try one
+        # password on repositories it does not open.
+        note = _password_note(config)
+        if note:
+            lines.extend(note)
+            lines.append("")
         lines.append("ABOUT THE PASSWORD AND THESE DISCS")
         lines.append("----------------------------------")
         lines.append("Your password is NOT written on any disc.  The discs DO")

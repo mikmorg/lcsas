@@ -181,9 +181,14 @@ volumes, so no binpack setting changes that.
 That is why an archive has one owner, who holds every repository's password.
 People who need privacy from each other keep separate archives.
 
-`PASSWORD_INFO.txt` tells the heir that a single password file likely works
-for every repository (the common setup). That is true for one owner with one
-password. Its wording is tracked on #491.
+A binpack setting that keeps each repository on its own volumes was proposed.
+Decided against (#491): each repository is encrypted with its own password,
+keeping repositories on separate discs costs extra discs, and people who need
+privacy from each other keep separate archives.
+
+`PASSWORD_INFO.txt` says that one password opens every repository only when
+every repository names the same password file. Otherwise it says that each
+repository has its own password (#491).
 
 ### 8.2 Shamir share cards and discs
 

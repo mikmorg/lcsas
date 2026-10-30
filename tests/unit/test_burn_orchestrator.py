@@ -171,6 +171,11 @@ class TestPrepare:
         assert len(manifest.selected_packs) > 0
         assert manifest.staging_path.is_dir()
         assert manifest.media_type == MediaType.TEST_TINY
+        # prepare() makes no burn session, so VOLUME_INFO.txt has no
+        # "Volume: N of M" line (#491).
+        info = (manifest.staging_path / "VOLUME_INFO.txt").read_text()
+        assert manifest.volume_label in info
+        assert "Volume:" not in info
 
         # Volume should exist in DB with STAGING status
         vol = get_volume_by_id(conn, manifest.volume_id)
@@ -775,6 +780,30 @@ class TestStage:
 
         orch.stage()
         assert checked["session_dir_seen"], "session dir was never created"
+
+    def test_stage_passes_burn_session_position(self, orch_env, monkeypatch):
+        """#491: VOLUME_INFO.txt gets "volume N of M" from stage()."""
+        from lcsas.staging.metadata import HolographicInjector
+
+        seen: list[tuple[int, int] | None] = []
+        real = HolographicInjector.write_volume_info
+
+        def spy(self, volume, packs=(), burn_session_position=None):
+            seen.append(burn_session_position)
+            return real(self, volume, packs=packs,
+                        burn_session_position=burn_session_position)
+
+        monkeypatch.setattr(HolographicInjector, "write_volume_info", spy)
+
+        def fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
+            output_iso.write_bytes(b"fake-iso-data")
+
+        orch_env["xorriso"].create_iso.side_effect = fake_create_iso
+        result = orch_env["orch"].stage()
+
+        n = len(result.manifests)
+        assert n >= 1
+        assert seen == [(i + 1, n) for i in range(n)]
 
     def test_stage_with_repo_filter(self, orch_env):
         """stage() with repo_ids filter only stages packs from that repo."""

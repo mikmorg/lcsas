@@ -317,7 +317,7 @@ If you have more than one disc with the same label (as is the
 default), they are bit-identical.  Any one working disc is enough.
 To check which disc you are using:
 
-  cat /mnt/volume_label.txt    # human-readable label
+  cat /mnt/VOLUME_INFO.txt     # label and contents, plain text
   sha256sum /mnt/MANIFEST.sha256
 
 SUPPORT
