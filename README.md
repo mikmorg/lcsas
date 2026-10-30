@@ -435,7 +435,7 @@ Record a disc you destroyed with `copy destroy`, and one you cannot find with `c
 
 ```bash
 lcsas --config /etc/lcsas/config.toml \
-  copy destroy --lost ARCHIVE_MDISC100_0001 Offsite_Safe
+  copy destroy --lost ARCHIVE_MD100_2026_0001 Offsite_Safe
 ```
 
 #### Restoring a Single Directory
