@@ -184,7 +184,7 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   host (see
   [`CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q6).
   This is no longer a gap: `.github/workflows/macos-tier1.yml` executes
-  the committed Mach-O binaries on `macos-14` (Apple Silicon) and
+  the committed Mach-O binaries on `macos-15` (Apple Silicon) and
   `macos-15-intel` (Intel) via
   `tests/recovery_hardening/test_tier1_macos_native.py`.
 - **Boot directly from the meta disc (intentional: no LCSAS disc is
@@ -198,7 +198,7 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   re-scans `/Volumes`, `/media`, `/mnt` and `/run/media` (since #455 it
   also picks up a disc that mounts by itself; `--auto-mount off`
   restores the Enter-only prompt).  This is exercised on macOS:
-  `.github/workflows/macos-e2e.yml` (`macos-14` and `macos-15-intel`)
+  `.github/workflows/macos-e2e.yml` (`macos-15` and `macos-15-intel`)
   `hdiutil attach`es the meta ISO and one data ISO, starts `restore.sh`
   on a terminal, and answers each prompt by attaching a wrong disc
   (ENTER: "still not found"), then the right disc (ENTER: the restore
@@ -250,6 +250,6 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
 | Intel Mac target selection | [covered] | same file — Darwin + x86_64 → x86_64-apple-darwin |
 | SHA-256 portable verifier | [covered] | `tests/unit/test_restore_executor.py::TestVerifyIsoSha256` (5 tests) |
 | verify_iso ECC→SHA fallback | [covered] | `tests/unit/test_restore_executor.py::TestVerifyIsoFallback` (4 tests) |
-| Full end-to-end macOS restore (`restore.sh` journey) | [covered] | `.github/workflows/macos-e2e.yml` (driver `tests/e2e/macos_restore_smoke.py`) runs the real `restore.sh` off `hdiutil`-attached fixture ISOs on `macos-14` (arm64) and `macos-15-intel` (x86_64): all discs attached with the read-only relocate-to-RAM re-exec (byte-exact against the manifest), wrong password (exit 77, no partial tree), and a multi-disc swap prompt (4 data discs, 3 swaps: wrong disc, right disc with ENTER, right disc with no input). The all-discs-attached restore runs both as the heir's plain invocation and with `--repo`. A stock-hardware pass by a person is still the manual real-Mac drill, #475 |
+| Full end-to-end macOS restore (`restore.sh` journey) | [covered] | `.github/workflows/macos-e2e.yml` (driver `tests/e2e/macos_restore_smoke.py`) runs the real `restore.sh` off `hdiutil`-attached fixture ISOs on `macos-15` (arm64) and `macos-15-intel` (x86_64): all discs attached with the read-only relocate-to-RAM re-exec (byte-exact against the manifest), wrong password (exit 77, no partial tree), and a multi-disc swap prompt (4 data discs, 3 swaps: wrong disc, right disc with ENTER, right disc with no input). The all-discs-attached restore runs both as the heir's plain invocation and with `--repo`. A stock-hardware pass by a person is still the manual real-Mac drill, #475 |
 | `hdiutil` mount flow | [covered] | The same workflow attaches every ISO with `hdiutil attach -readonly -nobrowse -mountpoint /Volumes/<LABEL>`; the manual real-Mac drill is #475 |
-| Apple Silicon binary execution | [covered] | `.github/workflows/macos-tier1.yml` runs the committed Mach-O binaries via `tests/recovery_hardening/test_tier1_macos_native.py` on `macos-14` (arm64) and `macos-15-intel` (x86_64) |
+| Apple Silicon binary execution | [covered] | `.github/workflows/macos-tier1.yml` runs the committed Mach-O binaries via `tests/recovery_hardening/test_tier1_macos_native.py` on `macos-15` (arm64) and `macos-15-intel` (x86_64) |

@@ -60,7 +60,7 @@ jobs:
           #   arch -x86_64 recovery/bin/x86_64-macos/lcsas-restore ...
           # which still proves the Mach-O loads and runs.
           - { runner: macos-15-intel, arch: x86_64 }
-          - { runner: macos-14,       arch: arm64  }
+          - { runner: macos-15,       arch: arm64  }
     runs-on: ${{ matrix.runner }}
 
     steps:
