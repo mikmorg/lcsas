@@ -129,7 +129,7 @@ from the owner's config and catalog:
   sh recovery/scripts/fetch_upstream.sh`.
 - **Then** run `lcsas meta verify --strict <out>`, which must PASS.
 - **Master, burn and record it.** The docs give this step only in outline:
-  see `docs/workflows/meta-volume.md`, "Refresh the meta-disc when LCSAS
+  see `docs/workflows/meta-disc.md`, "Refresh the meta-disc when LCSAS
   source changes", steps 4–6.
   - Steps 4–6 cover mastering the tree with xorriso (optionally with RS03
     ECC), recording the disc in the catalog by hand, and retiring the old
@@ -148,7 +148,7 @@ The channel between the sessions is **GitHub issues** (`gh`, repo
   `sha256sum -c` output, transcripts.
 - You can land small changes outside the restore path yourself, under
   rule 4: drill logs, CLI messages, non-heir docs.
-  - Heir-facing docs include START_HERE, KEY_INFO, RECOVER_*.txt,
+  - Heir-facing docs include START_HERE, PASSWORD_INFO, RECOVER_*.txt,
     `recovery/docs/`, and the restore guides.
   - For those, open the PR and add the label, because the blind drills
     must re-run after they change.

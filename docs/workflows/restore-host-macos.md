@@ -60,13 +60,13 @@ the meta-volume; this doc is the operator-facing companion.
    - `LCSAS_PWFILE=/path/to/key.txt sh restore.sh ~/Restored`
 
    If the archive's password was **split** into SLIP-0039 key shares
-   (`KEY_INFO.txt` on the disc says so), rebuild it first with the
+   (`PASSWORD_INFO.txt` on the disc says so), rebuild it first with the
    bundled combiner — primary path is the static
    `recovery/bin/aarch64-apple-darwin/lcsas-keyshare` (or the
    `x86_64-apple-darwin` build on Intel); the Python fallback is
    `keyshare_combine.py` run under the meta-disc's bundled CPython at
    `recovery/bin/<platform>/python/bin/python3`.  See
-   [`docs/KEY_SHARE_FORMAT.md`](../KEY_SHARE_FORMAT.md) for the share
+   [`docs/SHARE_FORMAT.md`](../SHARE_FORMAT.md) for the share
    format and [`docs/guides/recovery-runbook.md`](../guides/recovery-runbook.md) for
    the full operator runbook.
 

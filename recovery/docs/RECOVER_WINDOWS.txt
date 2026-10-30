@@ -167,7 +167,7 @@ KEY SHARES (SPLIT PASSWORDS) -- rebuild the password first
 ────────────────────────────────────────────────────────────────────
 
 Some archives split the password into N share cards (any K of them
-reconstruct it; fewer than K reveal nothing).  KEY_INFO.txt on any
+reconstruct it; fewer than K reveal nothing).  PASSWORD_INFO.txt on any
 disc states whether this archive used split keys and the K/N in
 effect.  If it did, rebuild the password BEFORE running restore.bat:
 
@@ -196,7 +196,7 @@ use the pure-Python fallback at the disc root:
                python D:\keyshare_combine.py ^
                    C:\Users\me\card1.txt C:\Users\me\card2.txt
 
-Format + re-implementation details: docs/KEY_SHARE_FORMAT.md on the
+Format + re-implementation details: docs/SHARE_FORMAT.md on the
 meta disc.
 
 ────────────────────────────────────────────────────────────────────

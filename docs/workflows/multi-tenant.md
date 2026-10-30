@@ -73,7 +73,7 @@ log line `Registered repository '<name>' (id: <uuid>)`. Subsequent
   - No CLI-level test asserts `encryption_key_id` is populated from a
     real `keys/` layout.
   - No test rejects/warns when `mirror_path` has no `keys/` — the
-    empty `encryption_key_id` silently breaks later `KEY_INFO.txt`.
+    empty `encryption_key_id` silently breaks later `PASSWORD_INFO.txt`.
 
 **Source refs:**
 
@@ -138,7 +138,7 @@ opposed to merely unmounted right now. LCSAS cannot tell those two apart
 from `mirror_path` alone, and the difference matters: `lcsas meta build`
 **fails** when a live repo whose packs are on discs got no Rustic keys
 bundled, and retiring is what exempts a repo whose mirror is legitimately
-gone (see [meta-volume.md](meta-volume.md#key-gate-when-a-missing-repo-key-fails-the-build)).
+gone (see [meta-disc.md](meta-disc.md#key-gate-when-a-missing-repo-key-fails-the-build)).
 Retiring is how an operator answers that question once, in the catalog,
 instead of passing an override flag on every build.
 
@@ -298,7 +298,7 @@ operator's filesystem — never in staging or on disc.
    password-encrypted. (`HolographicInjector.inject_metadata` in
    `src/lcsas/staging/metadata.py`, `METADATA_SUBDIRS` in
    `src/lcsas/utils/pack_layout.py`)
-3. `HolographicInjector.write_key_info` renders `KEY_INFO.txt` listing
+3. `HolographicInjector.write_key_info` renders `PASSWORD_INFO.txt` listing
    each repo's key ID and key filename for the human reader.
    (`HolographicInjector.write_key_info` in `src/lcsas/staging/metadata.py`)
 4. `SubprocessRusticRunner._run` passes `--password-file <path>` per
@@ -310,7 +310,7 @@ operator's filesystem — never in staging or on disc.
 
 - Every disc carries a `metadata/<repo_id>/` subtree for every
   registered repo, regardless of which repos have packs on this disc.
-- `KEY_INFO.txt` names each repo's key ID and key filename — never the
+- `PASSWORD_INFO.txt` names each repo's key ID and key filename — never the
   password.
 - Rustic error logs never include the password file path.
 
@@ -340,7 +340,7 @@ operator's filesystem — never in staging or on disc.
 - Mirror-path enumeration: `BurnOrchestrator._get_mirror_paths` in `src/lcsas/burn/orchestrator.py`
 - Metadata injection: `HolographicInjector.inject_metadata` in `src/lcsas/staging/metadata.py`
 - Metadata subdir list: `METADATA_SUBDIRS` in `src/lcsas/utils/pack_layout.py`
-- KEY_INFO renderer: `HolographicInjector.write_key_info` in `src/lcsas/staging/metadata.py`
+- PASSWORD_INFO renderer: `HolographicInjector.write_key_info` in `src/lcsas/staging/metadata.py`
 - Rustic password handling: `SubprocessRusticRunner._run` in `src/lcsas/rustic/wrapper.py`
 - Password masking: `mask_password_path` in `src/lcsas/log.py`
 
@@ -386,7 +386,7 @@ LCSAS does not enforce password distinctness.
 **Non-guarantees (known gaps):**
 
 - **Existence side-channel:** every disc names every registered repo
-  in `KEY_INFO.txt` / `CONFIG_SUMMARY.txt` and carries a
+  in `PASSWORD_INFO.txt` / `CONFIG_SUMMARY.txt` and carries a
   `metadata/<repo_id>/` subtree even with zero packs from that repo.
   One disc reveals all tenant names.
   (`HolographicInjector.write_key_info` and

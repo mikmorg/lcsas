@@ -222,7 +222,7 @@ blind-restore-split-2of5:
 # KEY-04: docs-driven split-key acceptance gate.  Unlike split-key-2of5
 # (a tooling smoke that spoon-feeds the command sequence), this variant
 # ships a scenario-only prompt + production -card.txt artifacts, so the
-# agent must derive every command from the on-disc START_HERE/KEY_INFO
+# agent must derive every command from the on-disc START_HERE/PASSWORD_INFO
 # instructions.  haiku-only, same cost guard.  NOT XFAIL'd: until
 # KEY-01/02/05 land it is expected to fail at STEP 1/STEP 2, and that
 # failure is the signal.  Acceptance gate for heir-doc / keyshare /

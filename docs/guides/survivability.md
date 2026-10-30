@@ -84,7 +84,7 @@ The modern `restore.sh` prompts interactively for a single password per
 invocation; the legacy `restore_legacy.sh` accepts a single `--key`
 argument.  Neither path lets you specify per-repo keys in one run.
 
-**Fix:** Write `KEY_INFO.txt` listing each repo, its human description,
+**Fix:** Write `PASSWORD_INFO.txt` listing each repo, its human description,
 and which key file it needs.  Derive from config.
 
 ### 1.6 Placeholder URL in RESTORE_INSTRUCTIONS.txt — P1 ✅ (resolved)
@@ -262,7 +262,7 @@ The modern `restore.sh` prompts for one password per invocation
 (re-run once per repo); the legacy `restore_legacy.sh` accepts a
 single `--key` flag.  Neither maps keys to repos on disc.
 
-**Fix:** `KEY_INFO.txt` (§1.5) and enhance the entry-point scripts to
+**Fix:** `PASSWORD_INFO.txt` (§1.5) and enhance the entry-point scripts to
 loop over repos with per-repo keys.
 
 ### 3.3 Config file not backed up to disc — P2 ✅
@@ -345,7 +345,7 @@ advice.  Included on both data and meta volumes.
 | 1.2 | Archive description field | P0 | ✅ Done (config.archive_description) |
 | 1.3 | Key storage hints on disc | P0 | ✅ Done (config.key_storage_hints) |
 | 1.4 | "Get a tech person" advice | P1 | ✅ Done (in START_HERE + RESTORE_INSTRUCTIONS) |
-| 1.5 | Key-to-repo mapping (KEY_INFO.txt) | P1 | ✅ Done |
+| 1.5 | Key-to-repo mapping (PASSWORD_INFO.txt) | P1 | ✅ Done |
 | 1.6 | Fix placeholder URL | P1 | ✅ Done (removed placeholder) |
 | 1.7 | README_RESTORE as plain text | P2 | ✅ Done |
 | 1.8 | Estate planning guidance | P2 | ✅ Done |

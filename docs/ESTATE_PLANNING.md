@@ -71,7 +71,7 @@ This document provides a checklist and templates to make that possible.
   - Generate one with `lcsas --config lcsas.toml key card --repo <name>`
     (the password is never printed; the card carries a transcription
     check code so a hand-copied password can be verified later), or
-  - Fill in `docs/RECOVERY_CARD.txt` by hand.
+  - Fill in `docs/PASSWORD_CARD.txt` by hand.
   - Store each card with that location's physical records — never with
     the discs (key/data separation).
 
@@ -99,7 +99,7 @@ toward recoverability — the dominant risk for a backup is *loss*, not theft.
 - [ ] **Mark the archive as split** so the discs print share instructions —
   set `key_split = true` (and your `key_threshold` / `key_shares`) under
   `[defaults]` in `lcsas.toml` (see §4). When split, every disc's
-  `KEY_INFO.txt` and `START_HERE.txt` tell the heir to **first reconstruct
+  `PASSWORD_INFO.txt` and `START_HERE.txt` tell the heir to **first reconstruct
   the password, then restore normally**.
 
   > **Drift guard (KEY-08).** `lcsas stage` aborts if `key_split` / `key_threshold`
@@ -135,7 +135,7 @@ toward recoverability — the dominant risk for a backup is *loss*, not theft.
      `Password:` prompt — exactly the single-key flow.
 
   The share format and a from-scratch re-implementation guide are in
-  `docs/KEY_SHARE_FORMAT.md`, bundled on every meta-volume.
+  `docs/SHARE_FORMAT.md`, bundled on every meta-volume.
 
 #### ROTATION — when you change the repository password
 
@@ -237,7 +237,7 @@ key_shares = 5         # N: share cards produced
 
 This information is automatically written to `START_HERE.txt` on every
 disc you burn — so your heirs can read it even without this document.
-When `key_split = true`, each disc's `START_HERE.txt` and `KEY_INFO.txt`
+When `key_split = true`, each disc's `START_HERE.txt` and `PASSWORD_INFO.txt`
 also include the two-step share-reconstruction pre-step.
 
 ### 5. Periodic Maintenance
@@ -267,7 +267,7 @@ also include the two-step share-reconstruction pre-step.
 |------|---------|
 | `START_HERE.txt` | Plain-language guide for non-technical users |
 | `RESTORE_INSTRUCTIONS.txt` | Step-by-step technical restore procedure |
-| `KEY_INFO.txt` | Which encryption key(s) are needed |
+| `PASSWORD_INFO.txt` | Which encryption key(s) are needed |
 | `volume_info.json` | Machine-readable disc identity |
 | `catalog.db` | SQLite database of all pack locations |
 | `data/` | Encrypted backup data (pack files) |

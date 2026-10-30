@@ -75,7 +75,7 @@ subcommand. `--output` / `-o` is required.
 - Optional `--project-root` if not auto-detecting from the installed
   package.
 - Optional `--config TOML` so survivability fields populate
-  `START_HERE.txt`, `KEY_INFO.txt`, and `CONFIG_SUMMARY.txt`.
+  `START_HERE.txt`, `PASSWORD_INFO.txt`, and `CONFIG_SUMMARY.txt`.
 - Optional `--db` (or `config.db_path`) to seed per-repo Rustic metadata.
 - The cross-built recovery binaries under `recovery/bin/<arch>/` and the
   pinned upstream cache (run `make build-recovery` — which also runs the
@@ -136,7 +136,7 @@ subcommand. `--output` / `-o` is required.
        bundled-tool list, tool versions, timestamps, and `repo_metadata`
        (which catalogued repos' keys this disc does — and does not —
        carry).
-   13. `_write_start_here` — write `START_HERE.txt`, plus `KEY_INFO.txt`,
+   13. `_write_start_here` — write `START_HERE.txt`, plus `PASSWORD_INFO.txt`,
        `CONFIG_SUMMARY.txt` (config builds), and `DISC_CARE.txt` via the
        `HolographicInjector`.
 3. The `.incomplete` marker is removed once every stage succeeds.
@@ -267,7 +267,7 @@ required-contents contract (`required_meta_paths`,
 | `standalone_restorer.py` | `_bundle_standalone_restorer` | Pure-Python restic decoder (tier-3) when no binary works. |
 | `keyshare_combine.py` | `_bundle_keyshare_combiner` | stdlib-only SLIP-0039 share combiner (split-key heir pre-step). |
 | `README_RESTORE.md` / `README_RESTORE.txt` | `_write_readme` / `_write_readme_txt` | Human-readable restore instructions. |
-| `START_HERE.txt`, `KEY_INFO.txt`, `CONFIG_SUMMARY.txt`, `DISC_CARE.txt` | `_write_start_here` (via `HolographicInjector`) | Plain-language guidance for non-technical recovery operators. |
+| `START_HERE.txt`, `PASSWORD_INFO.txt`, `CONFIG_SUMMARY.txt`, `DISC_CARE.txt` | `_write_start_here` (via `HolographicInjector`) | Plain-language guidance for non-technical recovery operators. |
 | `recovery/bin/<target>/lcsas-restore` | `_bundle_tier1_binaries` | Tier-1 C89 reader, per APPROVED_TARGET (`.exe` on Windows). |
 | `recovery/bin/<target>/rustic-static` | `_bundle_upstream_binaries` | Tier-2 pinned upstream rustic, per target. |
 | `recovery/bin/<target>/lcsas-ecc` | `_bundle_tier1_binaries` | **FMT-01:** in-house RS03 verify/repair, per target. Required, not optional. |

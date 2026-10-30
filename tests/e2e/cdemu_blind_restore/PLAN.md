@@ -603,7 +603,7 @@ Two split-key blind variants now coexist with different jobs:
   *acceptance gate*. Scenario-only prompt: the agent is told to insert
   `LCSAS_META` and follow the on-disc instructions, and is handed 2
   production `-card.txt` artifacts. It must derive every command from the
-  burned START_HERE / KEY_INFO text and parse the real cards. This is the
+  burned START_HERE / PASSWORD_INFO text and parse the real cards. This is the
   only variant that proves the heir's actual journey.
 
 **Acceptance policy.** Any PR that changes the heir-facing recovery

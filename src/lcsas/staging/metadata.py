@@ -104,7 +104,7 @@ def _share_recovery_lines(
         "  is the STEP 1 pre-step that turns your share cards back into the",
         "  password.",
         "",
-        "  Format + re-implementation details: docs/KEY_SHARE_FORMAT.md.",
+        "  Format + re-implementation details: docs/SHARE_FORMAT.md.",
         "",
     ]
 
@@ -401,7 +401,7 @@ DISC CONTENTS
   catalog.db       Archive catalog (SQLite — cumulative as of this volume)
   volume_info.json Machine-readable volume identity and manifest
   START_HERE.txt   Plain-language description of this archive
-  KEY_INFO.txt     Which encryption key(s) are needed for each repository
+  PASSWORD_INFO.txt     Which encryption key(s) are needed for each repository
   CONFIG_SUMMARY.txt  Archive configuration snapshot
   DISC_CARE.txt    Storage and handling guidance for optical media
   standalone_restorer.py  Pure-Python restore script (no binaries needed)
@@ -495,7 +495,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
                         sh /mnt/restore.sh --target ~/restored
 
                   Fewer than {k} cards reveal nothing.  Details are in
-                  KEY_INFO.txt and docs/KEY_SHARE_FORMAT.md.
+                  PASSWORD_INFO.txt and docs/SHARE_FORMAT.md.
                 """)
             # Indent to match the surrounding START_HERE section headers.
             split_block = textwrap.indent(split_block, "          ")
@@ -594,7 +594,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
         config: LCSASConfig,
         escrow_override: tuple[int, int] | None = None,
     ) -> None:
-        """Write KEY_INFO.txt mapping repositories to their key requirements.
+        """Write PASSWORD_INFO.txt mapping repositories to their key requirements.
 
         Args:
             config: LCSAS configuration with repository definitions.
@@ -649,7 +649,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
         if config.key_split:
             lines.extend(_share_recovery_lines(config, escrow_override))
 
-        path = self._root / "KEY_INFO.txt"
+        path = self._root / "PASSWORD_INFO.txt"
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
             f.flush()

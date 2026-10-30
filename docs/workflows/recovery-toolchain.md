@@ -8,7 +8,7 @@ keeps it durable.  It is driven by `lcsas recovery {build,test,manifest,verify}`
 (`src/lcsas/recovery/build.py`).  For the wider architecture and the
 holographic-catalog model, see [`docs/architecture.md`](../architecture.md).
 
-Sibling docs: [`docs/workflows/meta-volume.md`](meta-volume.md) (how
+Sibling docs: [`docs/workflows/meta-disc.md`](meta-disc.md) (how
 these binaries get bundled onto a rescue disc),
 [`docs/workflows/verify-and-audit.md`](verify-and-audit.md) (the
 disc-integrity / ECC verify flow), and the on-disc tier doc
@@ -319,7 +319,7 @@ which are reproducible-but-rebuildable).  Exit 0.
 separately in `recovery/UPSTREAM.sha256`; the meta-volume's bundled
 copy is audited by `lcsas meta verify` against the merged
 `recovery/MANIFEST.sha256` on the built volume (see
-[`meta-volume.md`](meta-volume.md)).
+[`meta-disc.md`](meta-disc.md)).
 
 **Source refs:** `cmd_recovery` (`src/lcsas/cli/main.py`);
 `RecoveryBuilder.write_manifest` (`src/lcsas/recovery/build.py`);

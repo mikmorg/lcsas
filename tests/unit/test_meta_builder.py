@@ -1396,7 +1396,7 @@ class TestMetaStartHereVariants:
 
         refs: set[str] = set()
         for pattern in (
-            # Doc paths: recovery/docs/RECOVER.txt, docs/KEY_SHARE_FORMAT.md,
+            # Doc paths: recovery/docs/RECOVER.txt, docs/SHARE_FORMAT.md,
             # and bare UPPER_CASE.txt files at the disc root.
             r"(?:[A-Za-z0-9_./-]+/)?[A-Z][A-Z0-9_]*\.(?:txt|md)",
             r"(?:[A-Za-z0-9_./$-]+/)?restore\.(?:sh|bat)",

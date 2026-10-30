@@ -1846,7 +1846,7 @@ class MetaVolumeBuilder:
                 (musl) rustic binary.  Bundled as ``tools/bin/rustic-static``
                 to provide a glibc-independent fallback.
             config: Optional LCSAS configuration.  When provided,
-                START_HERE.txt and KEY_INFO.txt are generated on the
+                START_HERE.txt and PASSWORD_INFO.txt are generated on the
                 meta-volume using the survivability fields.
         """
         self._output = output_dir
@@ -3098,11 +3098,11 @@ class MetaVolumeBuilder:
                 )
                 key_hints_block = f"    Where to find the password:\n{hints}\n"
             key_info_line = (
-                "  * KEY_INFO.txt on this disc lists which key unlocks\n"
+                "  * PASSWORD_INFO.txt on this disc lists which key unlocks\n"
                 "    which repository.\n"
             )
             if config.key_split:
-                # Same split-key pre-step text as KEY_INFO.txt — one
+                # Same split-key pre-step text as PASSWORD_INFO.txt — one
                 # source so the doc-contract gates cover both.
                 split_block = (
                     "\n" + "\n".join(_share_recovery_lines(config)).rstrip() + "\n"

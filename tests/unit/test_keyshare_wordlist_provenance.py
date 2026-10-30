@@ -1,6 +1,6 @@
 """Provenance guards for the SLIP-0039 wordlist (KEY-10).
 
-``docs/KEY_SHARE_FORMAT.md`` embeds the SHA-256 of ``wordlist.txt`` so a
+``docs/SHARE_FORMAT.md`` embeds the SHA-256 of ``wordlist.txt`` so a
 future engineer can verify the exact bytes from the spec alone (the
 ``recovery/``-rooted MANIFEST intentionally does not pin keyshare
 artifacts — they live under ``src/`` and are copied at meta-build time).
@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SPEC = REPO_ROOT / "docs" / "KEY_SHARE_FORMAT.md"
+SPEC = REPO_ROOT / "docs" / "SHARE_FORMAT.md"
 WORDLIST_TXT = REPO_ROOT / "src" / "lcsas" / "keyshare" / "wordlist.txt"
 WORDLIST_C = REPO_ROOT / "recovery" / "src" / "lcsas-keyshare" / "wordlist.c"
 
@@ -26,11 +26,11 @@ def test_spec_embedded_hash_matches_wordlist_txt() -> None:
     match = re.search(
         r"SHA-256 of `wordlist\.txt`[^`]*`([0-9a-f]{64})`", spec
     )
-    assert match is not None, "KEY_SHARE_FORMAT.md must embed the wordlist SHA-256"
+    assert match is not None, "SHARE_FORMAT.md must embed the wordlist SHA-256"
     actual = hashlib.sha256(WORDLIST_TXT.read_bytes()).hexdigest()
     assert match.group(1) == actual, (
         f"doc-embedded hash {match.group(1)} != sha256(wordlist.txt) {actual}; "
-        "update KEY_SHARE_FORMAT.md §5 if the wordlist legitimately changed"
+        "update SHARE_FORMAT.md §5 if the wordlist legitimately changed"
     )
 
 
@@ -64,4 +64,4 @@ def test_spec_no_longer_claims_manifest_pinning() -> None:
     spec = SPEC.read_text()
     assert not re.search(
         r"pinned in\s+`?recovery/MANIFEST\.sha256`?", spec
-    ), "KEY_SHARE_FORMAT.md must not claim keyshare artifacts are MANIFEST-pinned"
+    ), "SHARE_FORMAT.md must not claim keyshare artifacts are MANIFEST-pinned"

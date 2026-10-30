@@ -159,7 +159,7 @@ MITIGATION (organizational, not technical):
     (safe deposit box, with a lawyer, in an estate planning
     document, or in a Sharmir-secret-shared multi-person scheme).
   * IMPLEMENTED (KEY-09): paper-printable "Recovery Card" shipped as
-    docs/RECOVERY_CARD.txt (static fill-in template) plus a generator
+    docs/PASSWORD_CARD.txt (static fill-in template) plus a generator
     `lcsas --config lcsas.toml key card --repo R` that renders the card
     with a transcription CHECK CODE (first 4 hex of SHA-256(password);
     the password itself is never printed). An owner/heir verifies a

@@ -383,7 +383,7 @@ class TestHolographicInjector:
         injector.write_restore_instructions()
 
         start_here = (staging_root / "START_HERE.txt").read_text()
-        key_info = (staging_root / "KEY_INFO.txt").read_text()
+        key_info = (staging_root / "PASSWORD_INFO.txt").read_text()
         restore = (staging_root / "RESTORE_INSTRUCTIONS.txt").read_text()
 
         for txt in (start_here, key_info, restore):
@@ -399,7 +399,7 @@ class TestHolographicInjector:
         assert "guess" in restore.lower()
 
     def test_write_key_info_with_repos(self, tmp_path):
-        """KEY_INFO.txt lists repos and key file names."""
+        """PASSWORD_INFO.txt lists repos and key file names."""
         staging_root = tmp_path / "staging"
         staging_root.mkdir()
 
@@ -425,7 +425,7 @@ class TestHolographicInjector:
         injector = HolographicInjector(staging_root)
         injector.write_key_info(config)
 
-        txt = (staging_root / "KEY_INFO.txt").read_text()
+        txt = (staging_root / "PASSWORD_INFO.txt").read_text()
         assert "family" in txt
         assert "work" in txt
         assert "key-001" in txt
@@ -433,7 +433,7 @@ class TestHolographicInjector:
         assert "safe deposit box" in txt
 
     def test_write_key_info_no_repos(self, tmp_path):
-        """KEY_INFO.txt handles empty repositories gracefully."""
+        """PASSWORD_INFO.txt handles empty repositories gracefully."""
         staging_root = tmp_path / "staging"
         staging_root.mkdir()
 
@@ -446,7 +446,7 @@ class TestHolographicInjector:
         injector = HolographicInjector(staging_root)
         injector.write_key_info(config)
 
-        txt = (staging_root / "KEY_INFO.txt").read_text()
+        txt = (staging_root / "PASSWORD_INFO.txt").read_text()
         assert "KEY INFORMATION" in txt
         assert "No repositories" in txt
 

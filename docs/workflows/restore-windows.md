@@ -46,14 +46,14 @@ Windows host, which is not guaranteed for the headless-recovery
 scenario the script targets); users who need it invoke
 `standalone_restorer.py` manually (see [Manual Python fallback](#manual-python-fallback-not-orchestrated-by-restorebat)).
 
-**Split-key archives:** if `KEY_INFO.txt` says the password was split
+**Split-key archives:** if `PASSWORD_INFO.txt` says the password was split
 into SLIP-0039 key shares, rebuild it **first** with the bundled
 combiner before running `restore.bat`. The primary tool is the static
 `bin\x86_64-pc-windows-gnu\lcsas-keyshare.exe` (the .bat prints this
 hint at the password prompt); the Python fallback is
 `keyshare_combine.py` run under the meta-disc's bundled CPython. See
 `recovery/docs/RECOVER_WINDOWS.txt` ("KEY SHARES (SPLIT PASSWORDS)"),
-[`docs/KEY_SHARE_FORMAT.md`](../KEY_SHARE_FORMAT.md), and
+[`docs/SHARE_FORMAT.md`](../SHARE_FORMAT.md), and
 [`docs/guides/recovery-runbook.md`](../guides/recovery-runbook.md).
 
 | Tier | What runs                                              | Status on Windows |

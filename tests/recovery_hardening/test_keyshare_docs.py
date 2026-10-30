@@ -14,7 +14,7 @@ documented way forward.
 
 These tests pin the key-share pre-step into the four static surfaces an heir
 can reach (RECOVER.txt, RECOVER_WINDOWS.txt, restore.bat, RECOVERY_GUIDE.md).
-The rendered START_HERE.txt / KEY_INFO.txt ordering is pinned separately by
+The rendered START_HERE.txt / PASSWORD_INFO.txt ordering is pinned separately by
 tests/unit/test_staging_metadata.py.
 
 Tests are intentionally static (Path.read_text assertions only) — they add
@@ -98,20 +98,20 @@ def test_restore_bat_points_split_key_users_at_keyshare():
         "restore.bat does not mention lcsas-keyshare.exe. Split-key users "
         "reach the Password: prompt with no pointer to the share combiner."
     )
-    assert "KEY_INFO.txt" in _RESTORE_BAT, (
-        "restore.bat does not point users at KEY_INFO.txt (which says "
+    assert "PASSWORD_INFO.txt" in _RESTORE_BAT, (
+        "restore.bat does not point users at PASSWORD_INFO.txt (which says "
         "whether the archive's password is split)."
     )
 
 
 def test_recovery_guide_has_split_key_prestep():
     """The printable RECOVERY_GUIDE.md must carry the conditional
-    'if KEY_INFO.txt says the password is split' pre-step."""
+    'if PASSWORD_INFO.txt says the password is split' pre-step."""
     assert "lcsas-keyshare" in _GUIDE, (
         "docs/RECOVERY_GUIDE.md (the printed-binder guide) does not name "
         "the lcsas-keyshare combiner for split-key archives."
     )
-    assert "KEY_INFO.txt" in _GUIDE, (
-        "docs/RECOVERY_GUIDE.md does not tell readers KEY_INFO.txt is "
+    assert "PASSWORD_INFO.txt" in _GUIDE, (
+        "docs/RECOVERY_GUIDE.md does not tell readers PASSWORD_INFO.txt is "
         "where to check whether the password was split."
     )

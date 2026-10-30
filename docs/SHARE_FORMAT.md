@@ -117,7 +117,7 @@ re-implementation must pass all 45. The pieces:
 - **Secret constraints.** SLIP-0039 master secrets are even-length and ≥128
   bits. LCSAS encodes the (possibly shorter) repository password into a valid
   master secret at the CLI layer (`lcsas key split`); the inverse decoding is
-  applied after reconstruction. See `KEY_INFO.txt` on the disc for whether an
+  applied after reconstruction. See `PASSWORD_INFO.txt` on the disc for whether an
   archive used split keys and the K/N in effect.
 - **Verify-at-split.** `lcsas key split` authenticates the password against the
   repo's real `keys/` files (pure-Python scrypt + Poly1305) and round-trips the

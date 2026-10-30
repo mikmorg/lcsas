@@ -18,7 +18,7 @@ the share cards.  How to do that, and how to run the restore, is NOT
 written here: insert the disc labelled LCSAS_META, read the instructions
 you find on it, and follow them.  The disc tells you everything — which
 program rebuilds the password, how to feed it the cards, and how to drive
-the restore.  Read the on-disc START_HERE / KEY_INFO / README text and do
+the restore.  Read the on-disc START_HERE / PASSWORD_INFO / README text and do
 what it says.
 
 You are sitting in front of a single optical drive at /dev/sr0 with a

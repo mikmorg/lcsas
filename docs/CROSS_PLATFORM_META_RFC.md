@@ -286,7 +286,7 @@ tests before merge.
 7. **README + workflow doc refresh.**  Replace the §"Platform
    Limitations" section in `README.md` with the new supported matrix.
    Add a "Cross-platform recovery" subsection to
-   `docs/workflows/meta-volume.md`.
+   `docs/workflows/meta-disc.md`.
 
 ## 6. Resolved questions
 
@@ -429,7 +429,7 @@ supports three reachable targets for the C89 binary today:
 **Decision** (binding the Phase 21.10 plan):
 
 1. **Phase 21.10.a** — ✅ SHIPPED 2026-05-17 (commit `000dee2`).
-   Docs honesty pass: README, this RFC, meta-volume.md, and
+   Docs honesty pass: README, this RFC, meta-disc.md, and
    restore-host-macos.md all acknowledged the gap.
 2. **Phase 21.10.b** — ✅ SHIPPED 2026-05-17.  `MetaVolumeBuilder._bundle_tier1_binaries`
    maps the 3 reachable rust-triples to `cross_build`'s short-arch
@@ -537,7 +537,7 @@ slice that proved the design:
    has been regenerated to include the new per-target trees.
 8. **Docs refresh** — rewrite `README.md` §"Platform Limitations" to
    describe the new supported matrix.  Add a "Cross-platform
-   recovery" subsection to `docs/workflows/meta-volume.md`.  Update
+   recovery" subsection to `docs/workflows/meta-disc.md`.  Update
    `docs/architecture.md` if its meta-volume section drifts.
 9. **`recovery/MANIFEST.sha256` regen** — the meta-builder must
    merge `MANIFEST.sha256` + `UPSTREAM.sha256` into a single

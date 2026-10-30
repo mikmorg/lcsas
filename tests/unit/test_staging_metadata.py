@@ -2,7 +2,7 @@
 
 Phase 5 shipped a tier-1-grade static combiner (``lcsas-keyshare``)
 on all six targets precisely so split-key reconstruction needs no
-Python — but the rendered heir docs (START_HERE.txt, KEY_INFO.txt)
+Python — but the rendered heir docs (START_HERE.txt, PASSWORD_INFO.txt)
 named only ``python3 keyshare_combine.py``.  If python3 won't run —
 the very scenario the tier-1 design exists for — the heir had no
 documented fallback.  These tests pin the tier ordering: the static
@@ -38,7 +38,7 @@ def _config(tmp_path: Path, *, key_split: bool) -> LCSASConfig:
 
 
 def _render(tmp_path: Path, *, key_split: bool) -> dict[str, str]:
-    """Render START_HERE.txt + KEY_INFO.txt for the given key mode."""
+    """Render START_HERE.txt + PASSWORD_INFO.txt for the given key mode."""
     root = tmp_path / ("split" if key_split else "single")
     root.mkdir()
     injector = HolographicInjector(root)
@@ -47,7 +47,7 @@ def _render(tmp_path: Path, *, key_split: bool) -> dict[str, str]:
     injector.write_key_info(config)
     return {
         name: (root / name).read_text(encoding="utf-8")
-        for name in ("START_HERE.txt", "KEY_INFO.txt")
+        for name in ("START_HERE.txt", "PASSWORD_INFO.txt")
     }
 
 
@@ -113,7 +113,7 @@ def test_kn_comes_from_recorded_split_not_config(tmp_path: Path) -> None:
     config = _config(tmp_path, key_split=True)  # config = 2-of-5
     injector.write_start_here(config, escrow_override=(3, 5))
     injector.write_key_info(config, escrow_override=(3, 5))
-    for name in ("START_HERE.txt", "KEY_INFO.txt"):
+    for name in ("START_HERE.txt", "PASSWORD_INFO.txt"):
         text = (root / name).read_text(encoding="utf-8")
         assert "any 3" in text.lower(), (
             f"{name}: rendered K must come from the record (3), not config (2)"

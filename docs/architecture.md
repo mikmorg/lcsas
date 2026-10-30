@@ -206,7 +206,7 @@ key_escrow (
 > The `key_escrow` table records *that* a repository key was split into a
 > K-of-N SLIP-0039 set (and when) — it never stores the shares or the key
 > itself. Share words live only on the printed recovery cards. See the
-> key-share format spec ([docs/KEY_SHARE_FORMAT.md](KEY_SHARE_FORMAT.md))
+> key-share format spec ([docs/SHARE_FORMAT.md](SHARE_FORMAT.md))
 > and the `keyshare/` package.
 
 ### Volume Lifecycle States

@@ -21,7 +21,7 @@ You need **three things** to restore your files:
 > giving up: home safe, bank safe deposit box, attorney's office,
 > shared password manager.
 
-> **Password split into share cards?**  If `KEY_INFO.txt` on any disc
+> **Password split into share cards?**  If `PASSWORD_INFO.txt` on any disc
 > says the password is split, you must reconstruct it first: gather
 > the stated number of share cards (printed pages titled "LCSAS KEY
 > SHARE") and run the combiner bundled on the META disc —
@@ -89,7 +89,7 @@ sudo mount -o remount,exec /mnt
 - Double-check you're using the correct password for the tenant you
   selected at the `Repository:` prompt.
 - If the archive has multiple repositories, they may use different
-  passwords.  Check `KEY_INFO.txt` on any disc for which password
+  passwords.  Check `PASSWORD_INFO.txt` on any disc for which password
   goes with which repository.
 - If you have the password in a file (e.g. on a USB drive), set
   `LCSAS_PWFILE=/path/to/file` before launching `restore.sh` to skip
@@ -167,7 +167,7 @@ Every LCSAS data disc contains:
 ```
 LCSAS_BD25_2026_0001.iso
 ├── START_HERE.txt           Read this first (plain English)
-├── KEY_INFO.txt             Which password unlocks which repository
+├── PASSWORD_INFO.txt             Which password unlocks which repository
 ├── CONFIG_SUMMARY.txt       Archive settings snapshot
 ├── DISC_CARE.txt            How to store discs safely
 ├── standalone_restorer.py   Python restore tool (no dependencies)

@@ -273,7 +273,7 @@ in turn; you only need ONE valid password.
 KEY SHARES (SPLIT PASSWORDS)
 
 Some archives split the repository password into N share cards (any
-K of them reconstruct it; fewer than K reveal nothing).  KEY_INFO.txt
+K of them reconstruct it; fewer than K reveal nothing).  PASSWORD_INFO.txt
 on any disc states whether this archive used split keys and the K/N
 in effect.  If it did, reconstruct the password BEFORE running the
 normal cascade:
@@ -305,7 +305,7 @@ normal cascade:
 
          sh /mnt/restore.sh --key repo.key --target /tmp/restored
 
-Format + re-implementation details: docs/KEY_SHARE_FORMAT.md on the
+Format + re-implementation details: docs/SHARE_FORMAT.md on the
 meta disc.
 
 DISC MIRRORING

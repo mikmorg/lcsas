@@ -37,7 +37,7 @@ multi-tenant, recovery-toolchain) are called out as such in their detail files.
 | restore-windows | [workflows/restore-windows.md](workflows/restore-windows.md) | `restore.bat` end-to-end from a Windows host. |
 | restore-disc-only | [workflows/restore-disc-only.md](workflows/restore-disc-only.md) | Tier-3 pure-Python single-disc restore. |
 | recovery-toolchain | [workflows/recovery-toolchain.md](workflows/recovery-toolchain.md) | `recovery build/test/manifest/verify`, cross-arch. |
-| meta-volume | [workflows/meta-volume.md](workflows/meta-volume.md) | Disaster-recovery disc (not bootable) with bundled binaries + source. |
+| meta-volume | [workflows/meta-disc.md](workflows/meta-disc.md) | Disaster-recovery disc (not bootable) with bundled binaries + source. |
 | consolidate-and-catalog-ops | [workflows/consolidate-and-catalog-ops.md](workflows/consolidate-and-catalog-ops.md) | `consolidate` plus `catalog validate/rebuild`. |
 | verify-and-audit | [workflows/verify-and-audit.md](workflows/verify-and-audit.md) | `verify`, `status`, `session list`. |
 

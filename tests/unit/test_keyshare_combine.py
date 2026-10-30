@@ -7,7 +7,7 @@ Covers:
       the survives-even-if-the-rest-is-broken contract);
   (b) the meta bundler ships the keyshare package + wordlist + the
       combiner script;
-  (c) KEY_INFO / START_HERE show the split-key pre-step for a split
+  (c) PASSWORD_INFO / START_HERE show the split-key pre-step for a split
       archive and hide it for a single-key archive.
 
 Targets 100% line coverage of ``lcsas.meta.keyshare_combine`` and the new
@@ -386,7 +386,7 @@ class TestBundlerShipsKeyshare:
         assert (dest / "slip39.py").is_file()
 
 
-# ── (c) KEY_INFO / START_HERE gating ────────────────────────────────
+# ── (c) PASSWORD_INFO / START_HERE gating ────────────────────────────────
 
 
 class TestHeirDocGating:
@@ -407,12 +407,12 @@ class TestHeirDocGating:
         root = tmp_path / "stage"
         root.mkdir()
         HolographicInjector(root).write_key_info(config)
-        txt = (root / "KEY_INFO.txt").read_text()
+        txt = (root / "PASSWORD_INFO.txt").read_text()
         assert "SPLIT KEY" in txt
         assert "keyshare_combine.py" in txt
         assert "any 2" in txt
         assert "5 share cards" in txt
-        assert "docs/KEY_SHARE_FORMAT.md" in txt
+        assert "docs/SHARE_FORMAT.md" in txt
 
     def test_key_info_single_key_hides_prestep(self, tmp_path):
         config = _base_config(
@@ -428,7 +428,7 @@ class TestHeirDocGating:
         root = tmp_path / "stage"
         root.mkdir()
         HolographicInjector(root).write_key_info(config)
-        txt = (root / "KEY_INFO.txt").read_text()
+        txt = (root / "PASSWORD_INFO.txt").read_text()
         assert "SPLIT KEY" not in txt
         assert "keyshare_combine.py" not in txt
 

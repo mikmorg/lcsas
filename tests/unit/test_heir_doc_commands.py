@@ -1,7 +1,7 @@
 """Contract gate: heir docs reference only real restore.sh flags [KEY-02].
 
 Every ``--flag`` that the generated heir-facing docs (START_HERE.txt,
-KEY_INFO.txt), the bundled ``keyshare_combine.py`` header, and
+PASSWORD_INFO.txt), the bundled ``keyshare_combine.py`` header, and
 ``docs/ESTATE_PLANNING.md`` attach to a ``restore.sh`` command must be
 a flag that ``recovery/scripts/restore.sh`` actually accepts.  A
 phantom flag silently became a positional argument before restore.sh
@@ -73,7 +73,7 @@ def _split_config(tmp_path: Path) -> LCSASConfig:
 
 @pytest.fixture()
 def rendered_docs(tmp_path: Path) -> dict[str, str]:
-    """Render START_HERE.txt + KEY_INFO.txt with key_split=True."""
+    """Render START_HERE.txt + PASSWORD_INFO.txt with key_split=True."""
     root = tmp_path / "staging"
     root.mkdir()
     injector = HolographicInjector(root)
@@ -84,7 +84,7 @@ def rendered_docs(tmp_path: Path) -> dict[str, str]:
         "START_HERE.txt": (root / "START_HERE.txt").read_text(
             encoding="utf-8"
         ),
-        "KEY_INFO.txt": (root / "KEY_INFO.txt").read_text(encoding="utf-8"),
+        "PASSWORD_INFO.txt": (root / "PASSWORD_INFO.txt").read_text(encoding="utf-8"),
     }
 
 

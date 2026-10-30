@@ -18,7 +18,7 @@ Sibling recovery tiers (more capable, prefer them when available):
 - `docs/workflows/restore-host-linux.md` — full LCSAS install on Linux
 - `docs/workflows/restore-bare-metal.md` — boot the meta-volume
 - `docs/workflows/restore-windows.md` — Windows host with rustic.exe
-- `docs/workflows/meta-volume.md` — bootable disaster-recovery disc
+- `docs/workflows/meta-disc.md` — bootable disaster-recovery disc
 
 ---
 
@@ -89,10 +89,10 @@ of each ISO contains:
 | `volume_info.json` | written by `write_volume_info()` | UUID, label, pack manifest. |
 | `standalone_restorer.py` | written by `write_standalone_restorer()` | The pure-Python restorer (this document's hero). |
 | `RESTORE_INSTRUCTIONS.txt` | written by `write_restore_instructions()` | Plain-text steps for a human. |
-| `START_HERE.txt`, `KEY_INFO.txt`, `CONFIG_SUMMARY.txt`, `DISC_CARE.txt` | survivability docs (`write_start_here()`, `write_key_info()`, `write_config_summary()`, `write_disc_care()`) | Onboarding for a non-technical finder. |
+| `START_HERE.txt`, `PASSWORD_INFO.txt`, `CONFIG_SUMMARY.txt`, `DISC_CARE.txt` | survivability docs (`write_start_here()`, `write_key_info()`, `write_config_summary()`, `write_disc_care()`) | Onboarding for a non-technical finder. |
 | `lcsas_src/restore/`, `lcsas_src/utils/`, `lcsas_src/db/` | `write_lcsas_source()` | The LCSAS source subpackages (for inspection or re-running). |
 
-The encryption key (`KEY_INFO.txt` lists which one) is **never** on the
+The encryption key (`PASSWORD_INFO.txt` lists which one) is **never** on the
 disc; the operator must supply it
 (stated in the text written by
 `HolographicInjector.write_restore_instructions()`).
@@ -739,7 +739,7 @@ This path deliberately trades capability for portability. It **cannot**:
 
 If you need cross-disc reconstruction or pack repair, escalate to
 Tier 1 or Tier 2 (`docs/workflows/restore-host-linux.md`,
-`docs/workflows/meta-volume.md`) — both still leverage the same
+`docs/workflows/meta-disc.md`) — both still leverage the same
 holographic catalog this tier relies on.
 
 ---

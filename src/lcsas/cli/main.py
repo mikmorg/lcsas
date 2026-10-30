@@ -3643,7 +3643,7 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
     """Build a self-contained meta-volume with all restore tools."""
     from lcsas.meta.builder import MetaBuildError, MetaVolumeBuilder
 
-    # Load config for survivability fields (START_HERE.txt, KEY_INFO.txt).
+    # Load config for survivability fields (START_HERE.txt, PASSWORD_INFO.txt).
     # A broken config downgrades those fields; it must not block the build,
     # so this is the one caller that swallows the error.
     config = None

@@ -51,7 +51,7 @@ class LCSASConfig:
     key_threshold: int = 2          # K: shares needed to reconstruct
     key_shares: int = 5             # N: total shares produced
     # Whether THIS archive's password is actually split into shares.  Gates
-    # the heir-facing share-recovery instructions (KEY_INFO / START_HERE):
+    # the heir-facing share-recovery instructions (PASSWORD_INFO / START_HERE):
     # K/N always carry defaults, so they alone don't indicate a real split.
     key_split: bool = False
 

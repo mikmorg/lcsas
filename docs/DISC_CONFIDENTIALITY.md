@@ -33,7 +33,7 @@ multi-tenant archive, the following in the clear:
   `hostname`** of the machine that created the repo (a content-addressed
   artifact; see §6).
 - **The owner's `key_storage_hints`**, printed verbatim into `START_HERE.txt`
-  and `KEY_INFO.txt` on every disc.
+  and `PASSWORD_INFO.txt` on every disc.
 
 In short: a single disc reveals your whole backup *topology and metadata*, and
 hands the attacker the locked vault door (the wrapped keys) to attack offline
@@ -174,20 +174,20 @@ wrapped keys. So a disc that one tenant keeps exposes all the others' metadata,
 and lets its holder brute-force any other tenant's password offline (§3).
 Volumes are shared, so no binpack setting changes that today.
 
-`KEY_INFO.txt` says "If you have only one key file, it likely works for all
+`PASSWORD_INFO.txt` says "If you have only one key file, it likely works for all
 repositories (common setup)". That is true for one owner with one password. It
 is the wrong default to suggest when tenants are different people: a shared
 password makes one tenant's compromise everyone's. Two options are product
 decisions, tracked on #491:
 - per-tenant volume separation as a binpack constraint;
-- `KEY_INFO.txt` wording for multi-owner archives.
+- `PASSWORD_INFO.txt` wording for multi-owner archives.
 
 ### 8.2 Shamir share cards and discs
 
 SLIP-0039 is Shamir sharing: any **K−1 cards reveal nothing** about the
 password. A disc adds only the wrapped key, which still needs that password.
 So K−1 cards plus any number of discs leave an attacker exactly where §3 puts
-them. `KEY_SHARE_FORMAT.md` on the disc documents a public standard, and
+them. `SHARE_FORMAT.md` on the disc documents a public standard, and
 knowing the format weakens nothing. The one real risk is a card stored *with* a
 disc; §5 and `ESTATE_PLANNING.md` already forbid that.
 

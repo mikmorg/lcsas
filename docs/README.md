@@ -21,7 +21,7 @@ How the bytes on a disc are laid out, encrypted, and protected:
   format (the encrypted, deduplicated blobs LCSAS archives).
 - [DVDISASTER_RS03_FORMAT.md](DVDISASTER_RS03_FORMAT.md) — DVDisaster RS03 error-correction
   layer wrapped around every burned image.
-- [KEY_SHARE_FORMAT.md](KEY_SHARE_FORMAT.md) — SLIP-0039 Shamir key-share
+- [SHARE_FORMAT.md](SHARE_FORMAT.md) — SLIP-0039 Shamir key-share
   format used by the `keyshare` package and `lcsas key` escrow.
 - [DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md) — what a
   disc does and does not reveal to someone who finds it.
@@ -39,7 +39,7 @@ Task-oriented walkthroughs for running and recovering an archive:
 - [RECOVERY_GUIDE.md](RECOVERY_GUIDE.md) — emergency router to the OS-specific
   recovery path (Linux, macOS, Windows, bare-metal, disc-only fallback).
 - [ESTATE_PLANNING.md](ESTATE_PLANNING.md) — handing the archive to an heir.
-- [RECOVERY_CARD.txt](RECOVERY_CARD.txt) — printable fill-in-the-blanks
+- [PASSWORD_CARD.txt](PASSWORD_CARD.txt) — printable fill-in-the-blanks
   recovery-card template, one per storage location (never stored with the
   discs — key and data stay physically apart).
 - [RUNBOOK_migration_recovery.md](RUNBOOK_migration_recovery.md) — runbook for
