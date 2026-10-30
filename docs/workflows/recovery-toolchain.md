@@ -322,6 +322,18 @@ copy is audited by `lcsas meta verify` against the merged
 `recovery/MANIFEST.sha256` in the built meta disc tree (see
 [`meta-disc.md`](meta-disc.md)).
 
+**What goes onto the meta disc:** the committed
+`recovery/MANIFEST.sha256`, written by `make -C recovery manifest`, lists
+the git-tracked files under `recovery/` (minus `bin/` and the two
+manifests), and `lcsas meta build` bundles the same set: from a git
+checkout it copies only the tracked files, plus `recovery/bin/` as it
+stands. Untracked files, such as the fuzzer output a local
+`make audit-gate` adds to `recovery/fuzz/corpus/`, never reach the disc,
+so `lcsas meta verify --strict` passes even when the checkout has them
+(#562). Tracked files are copied with any local edits, so build a meta
+disc you will burn from a clean checkout of the release; that keeps the
+disc reproducible.
+
 **Source refs:** `cmd_recovery` (`src/lcsas/cli/main.py`);
 `RecoveryBuilder.write_manifest` (`src/lcsas/recovery/build.py`);
 `recovery/MANIFEST.sha256`; `recovery/UPSTREAM.sha256`.

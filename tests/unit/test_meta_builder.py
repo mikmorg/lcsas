@@ -278,6 +278,14 @@ class TestMetaVolumeBuilder:
             f"MANIFEST rows mismatch their on-disc files: {mismatches}"
         )
 
+    def test_full_build_leaves_no_unlisted_recovery_files(self):
+        """Issue #562: a full build from this checkout must not trip the
+        build-time EXTRA warning, even though later build steps still
+        write into recovery/ after it is bundled."""
+        if not (self.output / "recovery" / "MANIFEST.sha256").is_file():
+            pytest.skip("build produced no recovery/MANIFEST.sha256")
+        assert self._builder.unlisted_recovery_files() == []
+
     def test_build_creates_directory_structure(self):
         """Build a meta disc tree and verify all expected components."""
         # Restore script
@@ -1673,6 +1681,275 @@ class TestBundleRecoveryToolchainArtifacts:
         # Stale file gone (tree was replaced), real script present.
         assert not (out / "recovery" / "stale.txt").exists()
         assert (out / "recovery" / "scripts" / "restore.sh").is_file()
+
+
+# ── recovery/ bundling: tracked files only (#562) ────────────────────
+
+_REAL_RECOVERY = Path(__file__).resolve().parents[2] / "recovery"
+_HEX_JUNK = "0123456789abcdef0123456789abcdef01234567"
+# A tracked, hex-named fixture outside fuzz/: the fallback filter must
+# not mistake it for fuzzer output.
+_FIXTURE_INDEX = "b847b092ac89785623bfdf15ce02ce96de3656f321b1f2d8d8b4a9c0da325962"
+
+# Files the fixture tracks in git, as recovery/ does.  real_tree.json is a
+# curated corpus input that is NOT named seed_*.
+_AUTHORED = {
+    "Makefile": b"all:\n",
+    "VERSION": b"1.0\n",
+    "scripts/restore.sh": b"#!/bin/sh\necho restore\n",
+    "scripts/restore.bat": b"@echo off\r\n",
+    "docs/TIERS.txt": b"tiers\n",
+    "fuzz/corpus/json/seed_object": b"{}",
+    "fuzz/corpus/tree/real_tree.json": b'{"nodes": []}',
+    "fuzz/crashes/json/.gitkeep": b"",
+    f"tests/fixtures/repo/index/{_FIXTURE_INDEX}": b"index",
+}
+
+# Untracked files a local `make audit-gate` and builds leave behind; none
+# may reach the meta disc.
+_JUNK = (
+    f"fuzz/corpus/json/{_HEX_JUNK}",
+    "fuzz/corpus/tree/deadbeefcafef00d",
+    "fuzz/crashes/json/crash_0001",
+    "scripts/__pycache__/helper.cpython-312.pyc",
+    "build/x86_64/main.o",
+)
+
+_CURATED = (
+    "fuzz/corpus/json/seed_object",
+    "fuzz/corpus/tree/real_tree.json",
+    "fuzz/crashes/json/.gitkeep",
+    f"tests/fixtures/repo/index/{_FIXTURE_INDEX}",
+)
+
+
+def _sha256(data: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+def _clean_git_env() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
+# A developer's global ignore file (core.excludesFile) must not change
+# what these tests see; only the repository's own .gitignore files count.
+_NO_GLOBAL_EXCLUDES = ("-c", "core.excludesFile=/dev/null")
+
+
+def _git(*args: str, cwd: Path) -> None:
+    subprocess.run(
+        ["git", *_NO_GLOBAL_EXCLUDES, *args], cwd=cwd, env=_clean_git_env(),
+        check=True, capture_output=True,
+    )
+
+
+def _make_recovery_source(root: Path) -> Path:
+    """Write an authored recovery/ tree under *root*, manifests included.
+
+    MANIFEST.sha256 follows the recovery/Makefile curation rule (every
+    authored file except bin/ and the two manifests); docs/MANIFEST.sha256
+    covers docs/ as the Makefile's find sweep does.
+    """
+    rec = root / "recovery"
+    files = dict(_AUTHORED)
+    # The real ignore rules, so the fixture's git sees what recovery/'s does.
+    files["fuzz/.gitignore"] = (_REAL_RECOVERY / "fuzz" / ".gitignore").read_bytes()
+    files[".gitignore"] = (_REAL_RECOVERY / ".gitignore").read_bytes()
+    for rel, data in files.items():
+        (rec / rel).parent.mkdir(parents=True, exist_ok=True)
+        (rec / rel).write_bytes(data)
+    (rec / "scripts" / "restore.sh").chmod(0o755)
+    (rec / "docs" / "MANIFEST.sha256").write_text(
+        f"{_sha256(_AUTHORED['docs/TIERS.txt'])}  ./TIERS.txt\n"
+    )
+    (rec / "MANIFEST.sha256").write_text("".join(
+        f"{_sha256(data)}  ./{rel}\n" for rel, data in sorted(files.items())
+    ))
+    (rec / "bin" / "x86_64").mkdir(parents=True)
+    (rec / "bin" / "x86_64" / "lcsas-restore").write_bytes(b"\x7fELF restore")
+    return rec
+
+
+def _add_untracked(rec: Path) -> None:
+    """Drop the junk, a stray note, and untracked files under bin/.
+
+    bin/ holds the required-contents binary stubs so a strict verify of
+    the bundled tree can pass; bin/ is bundled as it stands and its
+    manifest rows are regenerated, so untracked files there are fine.
+    """
+    from lcsas.meta.required_contents import required_meta_paths
+
+    for rel in (*_JUNK, "notes.txt", "bin/x86_64/lcsas-init"):
+        (rec / rel).parent.mkdir(parents=True, exist_ok=True)
+        (rec / rel).write_bytes(b"untracked\n")
+    for rel in required_meta_paths():
+        if rel.startswith("recovery/bin/"):
+            stub = rec / rel[len("recovery/"):]
+            stub.parent.mkdir(parents=True, exist_ok=True)
+            stub.write_bytes(b"contract-stub\n")
+
+
+def _stub_root_contents(out: Path) -> None:
+    """Lay down the required meta disc files outside recovery/."""
+    from lcsas.meta.required_contents import required_meta_paths
+
+    for rel in required_meta_paths():
+        path = out / rel
+        if rel == "tools":
+            path.mkdir(parents=True, exist_ok=True)
+        elif not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"contract-stub\n")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+class TestRecoveryBundleTrackedOnly:
+    """Issue #562: a meta build from a checkout with fuzzer output in
+    recovery/fuzz/corpus/ must not carry it, and must pass a strict
+    verify."""
+
+    def test_git_checkout_bundles_only_tracked_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        from lcsas.cli.main import main
+
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "no-cache"))
+        proj = tmp_path / "proj"
+        rec = _make_recovery_source(proj)
+        _git("init", "-q", cwd=proj)
+        _git("add", "-A", cwd=proj)
+        _add_untracked(rec)
+
+        out = tmp_path / "meta"
+        b = MetaVolumeBuilder(out, project_root=proj, recovery_dir=rec)
+        with caplog.at_level(logging.WARNING, logger="lcsas.meta.builder"):
+            b._bundle_recovery_toolchain_artifacts()
+        assert "cannot list the tracked files" not in caplog.text
+
+        bundled = out / "recovery"
+        for rel in (*_JUNK, "notes.txt"):
+            assert not (bundled / rel).exists(), f"untracked {rel} bundled"
+        for rel in _CURATED:
+            assert (bundled / rel).is_file(), f"tracked {rel} not bundled"
+        assert (bundled / "docs" / "MANIFEST.sha256").is_file()
+        # The tracked script keeps its exec bit (copy2, not a bare copy).
+        assert os.access(bundled / "scripts" / "restore.sh", os.X_OK)
+        # bin/ goes on as it stands, untracked files included.
+        assert (bundled / "bin" / "x86_64" / "lcsas-restore").is_file()
+        assert (bundled / "bin" / "x86_64" / "lcsas-init").is_file()
+
+        assert b.unlisted_recovery_files() == []
+        _stub_root_contents(out)
+        caplog.clear()
+        assert main(["meta", "verify", str(out), "--strict"]) == 0, caplog.text
+        assert "EXTRA" not in caplog.text
+
+    def test_outside_git_skips_fuzzer_output_and_warns(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        monkeypatch.setenv("LCSAS_RECOVERY_CACHE", str(tmp_path / "no-cache"))
+        # Keep git from finding any git repository above the fixture.
+        monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+        proj = tmp_path / "proj"
+        rec = _make_recovery_source(proj)
+        _add_untracked(rec)
+
+        out = tmp_path / "meta"
+        b = MetaVolumeBuilder(out, project_root=proj, recovery_dir=rec)
+        with caplog.at_level(logging.WARNING, logger="lcsas.meta.builder"):
+            b._bundle_recovery_toolchain_artifacts()
+        assert "cannot list the tracked files" in caplog.text
+        assert "meta verify --strict" in caplog.text
+
+        bundled = out / "recovery"
+        for rel in _JUNK:
+            assert not (bundled / rel).exists(), f"{rel} bundled"
+        for rel in _CURATED:
+            assert (bundled / rel).is_file(), f"curated {rel} dropped"
+        # Without git, a stray file that is not known debris still goes on
+        # the disc; the build-time check names it.
+        assert (bundled / "notes.txt").is_file()
+        assert b.unlisted_recovery_files() == ["notes.txt"]
+
+    def test_unlisted_recovery_files_empty_without_manifest(
+        self, tmp_path: Path,
+    ):
+        out = tmp_path / "meta"
+        (out / "recovery").mkdir(parents=True)
+        (out / "recovery" / "stray.txt").write_text("x\n")
+        b = MetaVolumeBuilder(out, project_root=tmp_path)
+        assert b.unlisted_recovery_files() == []
+
+    def test_fallback_filter_matches_fuzz_gitignore(self):
+        """The fallback's fuzzer-output rule must agree with git's reading
+        of recovery/fuzz/.gitignore, and drop no tracked file."""
+        from pathlib import PurePosixPath
+
+        tracked, why = _builder_mod._git_tracked_files(_REAL_RECOVERY)
+        if tracked is None:
+            pytest.skip(f"recovery/ is not a git checkout: {why}")
+        dropped = [
+            rel for rel in tracked
+            if _builder_mod._is_fuzz_output(PurePosixPath(rel))
+        ]
+        assert not dropped, f"fallback would drop tracked files: {dropped}"
+
+        for rel in (
+            f"fuzz/corpus/json/{_HEX_JUNK}",
+            "fuzz/corpus/zstd/0a1b2c3d",
+            "fuzz/corpus/tree/deadbee",          # only 7 hex digits
+            "fuzz/corpus/json/seed_object",
+            "fuzz/corpus/tree/real_tree.json",
+            "fuzz/corpus/rs03/bare_header.bin",
+            "fuzz/crashes/json/crash_0001",
+            "fuzz/crashes/json/a1",
+            "fuzz/crashes/json/.gitkeep",
+            f"tests/fixtures/repo/index/{_FIXTURE_INDEX}",
+        ):
+            proc = subprocess.run(
+                ["git", "-C", str(_REAL_RECOVERY), *_NO_GLOBAL_EXCLUDES,
+                 "check-ignore", "--no-index", "-q", rel],
+                env=_clean_git_env(), capture_output=True, check=False,
+            )
+            assert proc.returncode in (0, 1), proc.stderr
+            git_ignores = proc.returncode == 0
+            ours = _builder_mod._is_fuzz_output(PurePosixPath(rel))
+            assert ours == git_ignores, (
+                f"{rel}: git ignores={git_ignores}, fallback skips={ours}"
+            )
+
+
+def test_meta_build_warns_about_files_the_manifest_omits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Issue #562 option 3: `meta build` names the files a strict verify
+    would call EXTRA, at build time."""
+    from lcsas.cli.main import main
+
+    def fake_build(self: MetaVolumeBuilder) -> Path:
+        rec = self.output_dir / "recovery"
+        rec.mkdir(parents=True)
+        version = b"1.0\n"
+        (rec / "VERSION").write_bytes(version)
+        (rec / "stowaway.txt").write_bytes(b"x\n")
+        (rec / "MANIFEST.sha256").write_text(f"{_sha256(version)}  ./VERSION\n")
+        return self.output_dir
+
+    monkeypatch.setattr(MetaVolumeBuilder, "build", fake_build)
+    monkeypatch.setattr(
+        MetaVolumeBuilder, "missing_required_contents", lambda self: [],
+    )
+    monkeypatch.setattr(
+        MetaVolumeBuilder, "missing_recommended_contents", lambda self: [],
+    )
+    caplog.clear()
+    assert main(["meta", "build", "--output", str(tmp_path / "meta")]) == 0
+    assert "does not list" in caplog.text
+    assert "stowaway.txt" in caplog.text
 
 
 class TestRegenerateRecoveryManifestComments:
