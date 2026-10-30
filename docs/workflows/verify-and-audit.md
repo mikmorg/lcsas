@@ -27,7 +27,12 @@ For the meaning of status strings (`STAGING`, `BURNING`, `BURNED`,
 `VERIFY_FAIL`, `VERIFY_FAIL_REBURN`, `ECC_REPAIR`, `LOCATION_MOVE`,
 `CONDITION_CHECK`, `BURN_RECEIPT_IMPORTED`, `NOTE`), see
 `src/lcsas/db/volume_events.py` (`VALID_EVENT_TYPES`) and the schema in
-`src/lcsas/db/schema.py` (schema v10).
+`src/lcsas/db/schema.py` (schema v10).  Owner displays also show
+`LOST`, which is never stored: a lost volume (a burned volume with no disc
+left in service) is recorded as `DEPRECATED` plus an `auto-deprecated:`
+`NOTE` event, and `get_lost_volume_ids` in `src/lcsas/db/queries.py` is the
+one place that decides it
+([ADR 0003](../adr/0003-lost-volumes-are-not-a-schema-state.md)).
 
 ## Table of contents
 
@@ -216,12 +221,12 @@ For the meaning of status strings (`STAGING`, `BURNING`, `BURNED`,
 2. Dispatch: `args.command == "status"` → `cmd_status` (`src/lcsas/cli/main.py`).
 3. `cmd_status` opens an existing catalog via `_open_existing_catalog` (read-only; errors if uninitialized).
 4. If `--stale-copies`, delegate to `_print_stale_copies` (FMA-05) and return. If `--redundancy`, delegate to `_print_redundancy_report` (FMA-08) and return.
-5. Otherwise: query `get_archive_status_summary`, `list_volumes`, partial sessions, the FMA-08 single-disc volumes (`get_redundancy_report` with `min_copies=2`), per-volume "needs re-burn" events, and `find_stale_copies`.
+5. Otherwise: query `get_archive_status_summary`, `list_volumes`, the lost volumes (`get_lost_volume_ids`), partial sessions, the FMA-08 single-disc volumes (`get_redundancy_report` with `min_copies=2`), per-volume "needs re-burn" events, and `find_stale_copies`.
 6. Print the pack-stats line, the per-volume table, and any **WARNING** lines: staged-never-burned packs, PARTIAL sessions, volumes needing re-burn, single-disc packs (→ `status --redundancy`), and stale discs (→ `status --stale-copies` / `verify --all --disc`).
 7. Return `0`.
 
 **Expected outcome:**
-- A `Packs:` line (total / archived / staged / unarchived / pruned), a `Volumes: N total` line, then one fixed-width row per volume: `<label:25> <media_type:10> <status:10> <location>`, followed by any risk warnings.
+- A `Packs:` line (total / archived / staged / unarchived / pruned), a `Volumes: N total` line (`N total (M lost)` when any volume is lost), then one fixed-width row per volume: `<label:25> <media_type:10> <status:10> <location>`, followed by any risk warnings. The status column shows `LOST` for a lost volume and the recorded status otherwise, so a volume deprecated by consolidation still shows `DEPRECATED`. A lost volume's packs count as unarchived (the next `lcsas stage` burns them again), never as staged.
 - Exit `0` (read-only; the only failure is a missing/uninitialized catalog).
 
 **Variant axes that apply:**

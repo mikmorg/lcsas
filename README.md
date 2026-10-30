@@ -431,6 +431,13 @@ lcsas --config /etc/lcsas/config.toml \
 # Pick list now points to offsite discs instead
 ```
 
+Record a disc you destroyed with `copy destroy`, and one you cannot find with `copy destroy --lost`: both get the disc status `DESTROYED`, and the volume's events say which. A lost disc may be in a stranger's hands, so the command reminds you that it carries the disc catalog and the locked key files (see [docs/DISC_CONFIDENTIALITY.md](docs/DISC_CONFIDENTIALITY.md)). When the last in-service disc of a volume goes, the volume is lost: `lcsas status` shows it as `LOST` (the catalog records `DEPRECATED`), and the command lists the packs now only in the mirror, which the next `lcsas stage` burns again, and, loudly, any pack that was also pruned from the mirror, which neither the mirror nor any disc in service holds any more.
+
+```bash
+lcsas --config /etc/lcsas/config.toml \
+  copy destroy --lost ARCHIVE_MD100_2026_0001 Offsite_Safe
+```
+
 #### Restoring a Single Directory
 
 Rustic supports path-based filters at restore time:

@@ -59,9 +59,13 @@ Task-oriented walkthroughs for running an archive and restoring from it:
   roadmap.
 - [CROSS_PLATFORM_META_RFC.md](CROSS_PLATFORM_META_RFC.md)
   — RFC for cross-platform meta disc / tier-1 recovery-binary coverage.
-- [adr/](adr/) — architecture decision records (e.g.
-  [adr/0001](adr/0001-audit-gate-exemptions-reconciliation.md), audit-gate
-  exemptions reconciliation).
+- [adr/](adr/) — architecture decision records:
+  - [0001](adr/0001-audit-gate-exemptions-reconciliation.md) — audit-gate
+    exemptions reconciliation.
+  - [0002](adr/0002-tier-means-only-a-recovery-tier.md) — "tier" means only
+    a recovery tier; storage stages are named, disc sizes are media types.
+  - [0003](adr/0003-lost-volumes-are-not-a-schema-state.md) — lost volumes
+    are recorded as DEPRECATED and shown as LOST; no schema change.
 
 ## Point-in-time reports
 

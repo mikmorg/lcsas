@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from typing import Any
+from collections.abc import Collection
+from typing import Any, NamedTuple
 
+from lcsas.constants import AUTO_DEPRECATED_NOTE_PREFIX, DISPLAY_STATUS_LOST
 from lcsas.db.models import Pack, Snapshot, Volume
 from lcsas.db.packs import _row_to_pack
 from lcsas.db.snapshots import _row_to_snapshot
@@ -32,6 +34,74 @@ _HAS_DURABLE_LINK = f"""EXISTS (
     WHERE vp.pack_id = p.pack_id
       AND v.status IN {_DURABLE_SQL}
 )"""
+
+# Q33 / ADR 0003: the ONE definition of a lost volume, "a burned volume
+# with no disc left in service".  Boolean SQL over a ``volumes`` row
+# aliased ``v``; every owner display goes through get_lost_volume_ids().
+#
+# Lost = the volume has disc records, none of them ACTIVE, and either
+#   (a) its recorded status still claims a disc (BURNED/VERIFIED/
+#       CONSOLIDATING: a catalog from before BURN-10, or status/disc
+#       drift), or
+#   (b) it is DEPRECATED because its last in-service disc went: the
+#       auto-deprecation NOTE written by lcsas.db.volume_copies.
+# A volume deprecated by consolidation gets a "Status changed: ... →
+# DEPRECATED" note from update_status() instead, so it stays DEPRECATED
+# even after its discs are later recorded deprecated or destroyed.
+# Zero disc records is a legacy volume that counts by status alone, so
+# it is never lost; nor is a DESTROYED or never-burned STAGING/BURNING one.
+_LOST_VOLUME_SQL = f"""(
+    EXISTS (SELECT 1 FROM volume_copies lc
+            WHERE lc.volume_id = v.volume_id)
+    AND NOT EXISTS (SELECT 1 FROM volume_copies lc
+                    WHERE lc.volume_id = v.volume_id
+                      AND lc.status = 'ACTIVE')
+    AND (
+        v.status IN {_DURABLE_SQL}
+        OR (v.status = 'DEPRECATED' AND EXISTS (
+            SELECT 1 FROM volume_events le
+            WHERE le.volume_id = v.volume_id
+              AND le.event_type = 'NOTE'
+              AND substr(le.detail, 1, {len(AUTO_DEPRECATED_NOTE_PREFIX)})
+                  = '{AUTO_DEPRECATED_NOTE_PREFIX}'
+        ))
+    )
+)"""
+
+
+def get_lost_volume_ids(conn: sqlite3.Connection) -> frozenset[int]:
+    """Return the ids of every lost volume (Q33, ADR 0003).
+
+    A lost volume is a burned volume with no disc left in service.  The
+    catalog has no LOST status: see ``_LOST_VOLUME_SQL`` for how one is
+    told apart from a volume deprecated by consolidation.  One query for
+    the whole catalog, so list displays avoid a query per volume.
+    """
+    rows = conn.execute(
+        f"SELECT v.volume_id FROM volumes v WHERE {_LOST_VOLUME_SQL}"
+    ).fetchall()
+    return frozenset(int(r[0]) for r in rows)
+
+
+def volume_display_status(volume: Volume, lost_ids: Collection[int]) -> str:
+    """Return the status word an owner display shows for *volume*.
+
+    ``LOST`` for a lost volume (its recorded status is usually DEPRECATED),
+    otherwise the recorded status unchanged.  *lost_ids* comes from
+    :func:`get_lost_volume_ids`.
+    """
+    if volume.volume_id in lost_ids:
+        return DISPLAY_STATUS_LOST
+    return volume.status
+
+
+class LostVolumePacks(NamedTuple):
+    """The packs a lost volume leaves on no disc (see get_lost_volume_packs)."""
+
+    # Still in the mirror: the next ``lcsas stage`` burns them again.
+    mirror_only: list[Pack]
+    # Pruned from the mirror too: no disc and no mirror holds them.
+    gone: list[Pack]
 
 
 def get_unarchived_packs(
@@ -696,6 +766,40 @@ def get_durable_volumes_without_active_copies(
     return [_row_to_volume(r) for r in rows]
 
 
+def get_lost_volume_packs(
+    conn: sqlite3.Connection,
+    volume_id: int,
+) -> LostVolumePacks:
+    """Return the packs of a volume that no durable volume holds any more.
+
+    Called when a volume's last in-service disc is recorded gone (Q33).
+    Uses the stage pool's own rule (``_HAS_DURABLE_LINK``, the one in
+    :func:`get_unarchived_packs`), so ``mirror_only`` is exactly what the
+    next ``lcsas stage`` burns again.  ``gone`` holds the pruned packs
+    with no durable holder: no disc and no mirror has them any more, so
+    any snapshot that still needs one (an older one that survives only
+    in older disc catalogs) can no longer be fully restored.
+
+    The volume itself counts as a holder while its recorded status is
+    still BURNED/VERIFIED/CONSOLIDATING (status/disc drift; ``lcsas
+    catalog reconcile`` reports it), so both lists are then empty: the
+    stage pool does not pick those packs up either.
+    """
+    rows = conn.execute(
+        f"""SELECT p.* FROM packs p
+            JOIN volume_packs vpl ON vpl.pack_id = p.pack_id
+            WHERE vpl.volume_id = ?
+              AND NOT {_HAS_DURABLE_LINK}
+            ORDER BY p.repo_id, p.sha256""",
+        (volume_id,),
+    ).fetchall()
+    packs = [_row_to_pack(r) for r in rows]
+    return LostVolumePacks(
+        mirror_only=[p for p in packs if not p.is_pruned],
+        gone=[p for p in packs if p.is_pruned],
+    )
+
+
 def get_volume_pack_stats_by_repo(
     conn: sqlite3.Connection,
     volume_id: int,
@@ -722,9 +826,13 @@ def get_archive_status_summary(
 
     - ``archived``   — linked to at least one durable (BURNED/VERIFIED/
       CONSOLIDATING) volume: the pack is on a disc that exists.
-    - ``staged``     — linked only to STAGING/BURNING volumes: claimed by
-      a burn-in-progress (or a ghost volume), NOT yet on any disc.
-    - ``unarchived`` — no volume links at all.
+    - ``staged``     — no durable link, but linked to a STAGING/BURNING
+      volume: claimed by a burn-in-progress (or a ghost volume), NOT yet
+      on any disc.
+    - ``unarchived`` — on no volume, or only on volumes out of service
+      (deprecated, lost or destroyed).  The next ``lcsas stage`` picks
+      these up, the same rule as :func:`get_unarchived_packs`.  A lost
+      volume's packs land here, not in ``staged`` (Q33).
     """
     row = conn.execute(
         f"""SELECT
@@ -737,7 +845,10 @@ def get_archive_status_summary(
                      AND v.status IN {_DURABLE_SQL}
                ) THEN 1 ELSE 0 END) as archived,
                SUM(CASE WHEN is_pruned = 0 AND EXISTS (
-                   SELECT 1 FROM volume_packs vp WHERE vp.pack_id = packs.pack_id
+                   SELECT 1 FROM volume_packs vp
+                   JOIN volumes v ON v.volume_id = vp.volume_id
+                   WHERE vp.pack_id = packs.pack_id
+                     AND v.status IN ('STAGING', 'BURNING')
                ) AND NOT EXISTS (
                    SELECT 1 FROM volume_packs vp
                    JOIN volumes v ON v.volume_id = vp.volume_id
@@ -745,7 +856,10 @@ def get_archive_status_summary(
                      AND v.status IN {_DURABLE_SQL}
                ) THEN 1 ELSE 0 END) as staged,
                SUM(CASE WHEN is_pruned = 0 AND NOT EXISTS (
-                   SELECT 1 FROM volume_packs vp WHERE vp.pack_id = packs.pack_id
+                   SELECT 1 FROM volume_packs vp
+                   JOIN volumes v ON v.volume_id = vp.volume_id
+                   WHERE vp.pack_id = packs.pack_id
+                     AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
                ) THEN 1 ELSE 0 END) as unarchived
            FROM packs"""
     ).fetchone()

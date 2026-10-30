@@ -260,10 +260,12 @@ created; the disc retains its `burn_date`, `iso_sha256`, and
 ## `lcsas copy deprecate` / `lcsas copy destroy`
 
 **Purpose:** Record the *fate* of a single disc when it is damaged, taken
-out of service, or lost. `deprecate` marks a disc as out of service but
-still present; `destroy` marks it as gone. Both mutate one `volume_copies`
-row (by `(volume_label, location)`), leaving discs at other locations
-untouched.
+out of service, destroyed, or lost. `deprecate` marks a disc as out of
+service but still present (a deprecated disc); `destroy` marks it as gone.
+`destroy --lost` marks a disc whose whereabouts are unknown (a lost disc):
+it is recorded with the same `DESTROYED` disc status, and the volume's
+events say "lost". All three mutate one `volume_copies` row (by
+`(volume_label, location)`), leaving discs at other locations untouched.
 
 **Prerequisites:**
 - `--config` with a writable catalog.
@@ -273,37 +275,57 @@ untouched.
 
 **Steps:**
 1. Parser registers `copy deprecate <volume_label> <location>` and
-   `copy destroy <volume_label> <location>` (both positional)
+   `copy destroy [--lost] <volume_label> <location>` (both positional)
    in `build_parser()`.
 2. `cmd_copy` resolves the label with `get_volume_by_label`; a missing
    label logs an error and returns 1.
 3. It dispatches to `deprecate_copy(conn, volume_id, location)` or
-   `destroy_copy(conn, volume_id, location)`
+   `destroy_copy(conn, volume_id, location, lost=...)`
    (`src/lcsas/db/volume_copies.py`), which flip the disc's `status` to
-   `DEPRECATED` / `DESTROYED`. A `ValueError` (no matching disc — no
-   `ACTIVE` disc for `deprecate`, no disc row at all for `destroy`) is
-   logged and returns 1.
-4. **Auto-demotion:** if that was the volume's *last* `ACTIVE` disc,
-   the helper returns a "demoted" flag and the volume is now a lost
-   volume: its recorded state drops to `DEPRECATED`. `cmd_copy` then warns
-   that the volume's packs now count in `lcsas status` / the redundancy
-   report and suggests re-burning via
-   `lcsas stage --for-location <location>`.
+   `DEPRECATED` / `DESTROYED` and write one `NOTE` event for the disc:
+   `disc at <location> recorded as deprecated (out of service)`,
+   `... recorded as destroyed` or `... recorded as lost (whereabouts
+   unknown)`. That note is the only place a lost disc differs from a
+   destroyed one (Q38; no schema change). A `ValueError` (no matching
+   disc — no `ACTIVE` disc for `deprecate`, no disc row at all for
+   `destroy`) is logged and returns 1.
+4. **Lost disc:** with `--lost`, `cmd_copy` warns that the disc may be in
+   a stranger's hands: like every data disc it carries the disc catalog in
+   plain text and every repository's locked key files, so whoever has it
+   can try to guess the passwords offline (see
+   [`DISC_CONFIDENTIALITY.md`](../DISC_CONFIDENTIALITY.md)).
+5. **Lost volume:** if that was the volume's *last* in-service disc, the
+   volume is now a lost volume. The catalog records it as `DEPRECATED`
+   plus a `NOTE` event starting `auto-deprecated:` (there is no `LOST`
+   status, see [ADR 0003](../adr/0003-lost-volumes-are-not-a-schema-state.md)),
+   and every owner display shows it as `LOST`. `cmd_copy` warns and lists,
+   by repository:
+   - the packs that are now on no disc in service, only in the mirror
+     (`get_lost_volume_packs` in `src/lcsas/db/queries.py`, the same rule
+     as the `lcsas stage` pool): the next `lcsas stage` burns them again
+     onto a new volume;
+   - separately, as `DATA LOSS`, any pack that was also pruned from the
+     mirror: neither the mirror nor any disc in service holds it, so an
+     older snapshot that still needs it can no longer be fully restored.
+
+   It then suggests `lcsas stage --for-location <location>` to bring that
+   location back up to date.
 
 **Expected outcome:** One `volume_copies` row transitions to
-`DEPRECATED` / `DESTROYED`. Losing the last `ACTIVE` disc auto-demotes
-the volume to `DEPRECATED` (a lost volume) so the redundancy report and the
-deprecation guard stop counting it as a replica.
+`DEPRECATED` / `DESTROYED` and one `NOTE` event records the disc's fate.
+Losing the last in-service disc makes the volume a lost volume (recorded
+`DEPRECATED`, shown `LOST`), so the redundancy report and the deprecation
+guard stop counting it, and its packs re-enter the next `lcsas stage`.
 
 **Variant axes that apply:**
 - Multi-copy — the command is only meaningful once a volume has discs
-  at several locations; with a single disc, `destroy` triggers the
-  auto-demotion warning.
+  at several locations; with a single disc, `destroy` makes the volume
+  a lost volume.
 - Multi-repository — operates on a volume label, independent of repository.
 
 **Source refs:**
-- `build_parser()` (`copy` subparser), `cmd_copy`
-  (`src/lcsas/cli/main.py`)
+- `build_parser()` (`copy` subparser), `cmd_copy`,
+  `_print_lost_volume_packs` (`src/lcsas/cli/main.py`)
 - `src/lcsas/db/volume_copies.py` (`deprecate_copy`, `destroy_copy`)
 
 ---
@@ -445,7 +467,10 @@ Key behaviours derived from the schema (the `locations` and
   resurrects a deprecated disc's row.
 - Volumes can transition through their own lifecycle
   (`STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED`)
-  independently of their discs' statuses. A `VERIFIED` volume re-burned
+  independently of their discs' statuses, with one exception: when a
+  volume's last in-service disc is recorded gone, the volume becomes a
+  lost volume, recorded as `DEPRECATED` and shown as `LOST`
+  ([ADR 0003](../adr/0003-lost-volumes-are-not-a-schema-state.md)). A `VERIFIED` volume re-burned
   to a new location stays `VERIFIED`; only the new disc starts fresh
   (the `is_reburn` path in `BurnOrchestrator.burn_session()`,
   `src/lcsas/burn/orchestrator.py`).
@@ -533,9 +558,11 @@ operating LCSAS in a multi-location production setup:
    The catalog layer's `deprecate_copy` / `destroy_copy`
    (`src/lcsas/db/volume_copies.py`) are wired into the CLI as
    `lcsas copy deprecate` and `lcsas copy destroy` (`cmd_copy` in
-   `src/lcsas/cli/main.py`). Marking a damaged or lost disc no longer
-   requires a Python REPL or direct SQL — see the
-   [`lcsas copy`](#lcsas-copy-deprecate--lcsas-copy-destroy) section.
+   `src/lcsas/cli/main.py`). Marking a damaged, destroyed or lost disc
+   (`copy destroy --lost`) no longer requires a Python REPL or direct
+   SQL — see the [`lcsas copy`](#lcsas-copy-deprecate--lcsas-copy-destroy)
+   section. `location move` never takes a disc out of service, so only
+   `lcsas copy` can make a volume a lost volume.
 
 10. **`media_serial` is captured in `volume_copies` but not surfaced.**
     The schema reserves `media_serial` and `last_verified_at` columns
