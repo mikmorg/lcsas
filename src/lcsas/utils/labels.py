@@ -55,8 +55,9 @@ def generate_volume_label(
 ) -> str:
     """Generate a human-readable volume label.
 
-    Format: {PREFIX}_{MEDIA}_{YYYY}_{SEQ:04d}
-    Example: LCSAS_BD_2026_0001
+    Format: {PREFIX}_{MEDIA}_{YYYY}_{SEQ:04d}, where MEDIA is the media
+    type's ``label_name`` with MDISC shortened to MD and BDXL to BX.
+    Examples: LCSAS_BD25_2026_0001 (BD25), LCSAS_MD100_2026_0003 (MDISC100)
 
     Sequence numbers use 4 digits (up to 9999) and grow automatically
     beyond that if needed.
@@ -96,7 +97,7 @@ def generate_session_id() -> str:
 def next_seq_num(existing_labels: list[str], prefix: str = "LCSAS") -> int:
     """Determine the next sequence number based on existing volume labels.
 
-    Parses labels matching the format PREFIX_*_YYYY_NNN and returns max + 1.
+    Parses labels matching the format PREFIX_*_YYYY_SEQ and returns max + 1.
     Returns 1 if no matching labels exist.
     """
     max_seq = 0

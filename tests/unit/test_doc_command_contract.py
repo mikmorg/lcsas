@@ -692,3 +692,351 @@ def test_disc_confidentiality_doc_present_and_linked() -> None:
     assert "DISC_CONFIDENTIALITY.md" in estate, (
         "docs/ESTATE_PLANNING.md must reference DISC_CONFIDENTIALITY.md"
     )
+
+
+# ────────────────────────────────────────────────────────────────────
+#  Commands named by the CLI's own help and messages, the README and
+#  doc code blocks; label examples everywhere
+# ────────────────────────────────────────────────────────────────────
+
+# Strings under src/ where "lcsas" is the program named in prose, not the
+# start of a command: (file suffix, phrase).
+_PROSE_LCSAS_MENTIONS: set[tuple[str, str]] = {
+    ("src/lcsas/db/connection.py", "another lcsas command"),
+    ("src/lcsas/db/connection.py", "another lcsas process"),
+}
+
+
+def _subparsers_of(parser: argparse.ArgumentParser) -> argparse._SubParsersAction | None:
+    return next(
+        (a for a in parser._actions if isinstance(a, argparse._SubParsersAction)),
+        None,
+    )
+
+
+def _phantom_subcommand(tokens: list[str]) -> str | None:
+    """Walk doc-quoted ``lcsas`` args down the real subcommand tree; describe
+    the first word that names no subcommand, or return None.
+
+    Flags (and the values they take) are skipped wherever they stand;
+    ``_lcsas_parser_walk`` checks them.  The walk stops, satisfied, at the
+    first token that is not a bare lowercase word (``<label>``, a path,
+    ``...``) or at a command with no subcommands of its own, whose
+    positionals cannot be judged from prose.
+    """
+    from lcsas.cli.main import build_parser
+
+    parser: argparse.ArgumentParser = build_parser()
+    path = ["lcsas"]
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i].strip("`'\",.;:()[]")
+        if tok.startswith("-"):
+            opts = {opt: a for a in parser._actions for opt in a.option_strings}
+            action = opts.get(tok.split("=", 1)[0])
+            takes_value = action is not None and action.nargs != 0 and "=" not in tok
+            i += 2 if takes_value else 1
+            continue
+        sub = _subparsers_of(parser)
+        if sub is None or not re.fullmatch(r"[a-z][a-z0-9-]*", tok):
+            return None
+        if tok not in sub.choices:
+            return f"`{' '.join(path)}` has no subcommand {tok!r}"
+        parser = sub.choices[tok]
+        path.append(tok)
+        i += 1
+    return None
+
+
+def _cli_help_texts() -> list[tuple[str, str]]:
+    """``(where, text)`` for every help, description and epilog string in
+    the real argparse tree, including each subcommand's one-line help."""
+    from lcsas.cli.main import build_parser
+
+    texts: list[tuple[str, str]] = []
+
+    def walk(parser: argparse.ArgumentParser, path: str) -> None:
+        for attr in ("description", "epilog"):
+            value = getattr(parser, attr)
+            if value:
+                texts.append((f"{path} ({attr})", value))
+        for action in parser._actions:
+            if action.help and action.help != argparse.SUPPRESS:
+                name = "/".join(action.option_strings) or action.dest
+                texts.append((f"{path} {name}", action.help))
+            if isinstance(action, argparse._SubParsersAction):
+                for choice in action._choices_actions:
+                    if choice.help:
+                        texts.append((f"{path} {choice.dest}", choice.help))
+                for name, sub in action.choices.items():
+                    walk(sub, f"{path} {name}")
+
+    walk(build_parser(), "help: lcsas")
+    return texts
+
+
+def _src_string_literals(*, docstrings: bool) -> list[tuple[str, str]]:
+    """``(file:line, text)`` for every string literal under ``src/lcsas``.
+
+    F-strings are rendered with ``<value>`` standing in for each field, so
+    a command split by a ``{...}`` still reads as one command.
+    """
+    found: list[tuple[str, str]] = []
+    for path in sorted((REPO_ROOT / "src" / "lcsas").rglob("*.py")):
+        rel = path.relative_to(REPO_ROOT)
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        skip: set[int] = set()
+        if not docstrings:
+            for node in ast.walk(tree):
+                if isinstance(
+                    node,
+                    ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
+                ):
+                    first = node.body[0] if node.body else None
+                    if (
+                        isinstance(first, ast.Expr)
+                        and isinstance(first.value, ast.Constant)
+                        and isinstance(first.value.value, str)
+                    ):
+                        skip.add(id(first.value))
+        # ast.walk is breadth-first, so a JoinedStr is seen before its parts.
+        for node in ast.walk(tree):
+            if isinstance(node, ast.JoinedStr):
+                skip.update(id(part) for part in node.values)
+                text = "".join(
+                    part.value if isinstance(part, ast.Constant) else "<value>"
+                    for part in node.values
+                )
+            elif (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and id(node) not in skip
+            ):
+                text = node.value
+            else:
+                continue
+            found.append((f"{rel}:{node.lineno}", text))
+    return found
+
+
+def _fenced_code(text: str) -> str:
+    """Keep only the lines inside Markdown ``` fences; every other line is
+    blanked so line numbers still match the file."""
+    out: list[str] = []
+    inside = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            inside = not inside
+            out.append("")
+            continue
+        out.append(line if inside else "")
+    return "\n".join(out)
+
+
+def _lcsas_command_problems(corpus: list[tuple[str, str]]) -> tuple[list[str], int]:
+    """Check every ``lcsas ...`` command in *corpus* for phantom
+    subcommands and misplaced or unknown flags.
+
+    Returns the problems found and how many commands were checked.
+    """
+    problems: list[str] = []
+    checked = 0
+    for where, text in corpus:
+        for suffix, phrase in _PROSE_LCSAS_MENTIONS:
+            if where.split(":", 1)[0].endswith(suffix):
+                text = text.replace(phrase, "")
+        for lineno, cmd in _extract_lcsas_commands(text):
+            checked += 1
+            tokens = cmd.split()
+            found = _lcsas_parser_walk(tokens)
+            phantom = _phantom_subcommand(tokens)
+            if phantom:
+                found.insert(0, phantom)
+            problems.extend(f"{where} (line {lineno}): {p} | lcsas {cmd}" for p in found)
+    return problems, checked
+
+
+def test_phantom_subcommand_walker_self_check() -> None:
+    """The walker must catch a phantom subcommand at any depth and accept
+    real paths, or the gates below silently pass."""
+    assert _phantom_subcommand(["catalog", "locations", "<label>"])
+    assert _phantom_subcommand(["migrate"])
+    assert _phantom_subcommand(["restore", "instead."])
+    assert not _phantom_subcommand(["volume", "impact", "<label>"])
+    assert not _phantom_subcommand(["--config", "x.toml", "key", "split", "--repo", "family"])
+    assert not _phantom_subcommand(["verify", "LCSAS_BD25_2026_0001", "--disc"])
+
+
+def test_lcsas_commands_in_cli_help_and_messages_exist() -> None:
+    """Every ``lcsas ...`` command named in the CLI's help, descriptions,
+    epilogs and the messages and generated text under ``src/`` must use
+    real subcommands, with each flag accepted where it stands.
+
+    Red-first catches: a failed disc read told owners to run
+    ``lcsas catalog locations <label>`` (no such subcommand); a key split
+    warning said ``lcsas migrate``; DISC_CARE.txt, burned on every disc,
+    quoted ``lcsas verify --isos`` (no such flag); and two key messages put
+    ``--config`` after the subcommand, which argparse rejects.  Docstrings
+    are left out: they may show a wrong command on purpose.
+    """
+    corpus = _cli_help_texts() + _src_string_literals(docstrings=False)
+    problems, checked = _lcsas_command_problems(corpus)
+    # Extractor self-check: help and messages name dozens of commands.
+    assert checked >= 30, f"only {checked} lcsas commands found — extractor broken?"
+    assert not problems, (
+        "CLI help or messages name lcsas commands the real CLI rejects:\n"
+        + "\n".join(problems)
+    )
+
+
+def test_lcsas_commands_in_readme_and_doc_code_blocks_exist() -> None:
+    """Every ``lcsas ...`` command in a fenced code block of README.md or
+    ``docs/**/*.md`` must use real subcommands and flags.
+
+    Prose is not checked: it may name a command in order to say that it
+    does not exist (``there is no `lcsas events` CLI``).
+    """
+    docs = [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").rglob("*.md"))]
+    corpus = [
+        (str(doc.relative_to(REPO_ROOT)), _fenced_code(doc.read_text(encoding="utf-8")))
+        for doc in docs
+    ]
+    problems, checked = _lcsas_command_problems(corpus)
+    assert checked >= 30, f"only {checked} lcsas commands found — extractor broken?"
+    assert not problems, (
+        "doc code blocks name lcsas commands the real CLI rejects:\n"
+        + "\n".join(problems)
+    )
+
+
+# Label-shaped text that is not an example of a generated label:
+# (file suffix, text).
+_LABEL_ALLOWLIST: set[tuple[str, str]] = {
+    # Quotes, verbatim, the directory name a burn-iso test fixture uses.
+    ("docs/workflows/burn-iso-portable.md", "ARCHIVE_TEST_0001"),
+}
+
+
+def _label_media_tokens() -> dict[str, str]:
+    """Media token as it appears in a generated label, per media type,
+    taken from the real generator (``MDISC100`` -> ``MD100``)."""
+    from lcsas.config.media import MediaType
+    from lcsas.utils.labels import generate_volume_label
+
+    tokens: dict[str, str] = {}
+    for media in MediaType:
+        label = generate_volume_label("P", media.label_name, 1)
+        tokens[media.name] = label[len("P_"):].rsplit("_", 2)[0]
+    return tokens
+
+
+def test_label_examples_match_the_generator() -> None:
+    """Every volume label example in CLI help, ``src/`` strings
+    (docstrings included), README.md and the docs must be one that
+    ``generate_volume_label`` can produce: ``{PREFIX}_{MEDIA}_{YYYY}_{SEQ}``
+    with the media token shortened as the generator does and SEQ of at
+    least four digits.
+
+    Red-first catch: the CLI help and README showed
+    ``ARCHIVE_MDISC100_0001`` (no year, unshortened media) and
+    ``ARCHIVE_MD_2026_001``; labels.py's own docstring showed
+    ``LCSAS_BD_2026_0001`` for BD25.
+    """
+    tokens = _label_media_tokens()
+    assert tokens["MDISC100"] == "MD100" and tokens["BD25"] == "BD25"
+    alternation = "|".join(
+        re.escape(t) for t in sorted(set(tokens.values()), key=len, reverse=True)
+    )
+    valid = re.compile(rf"[A-Z0-9][A-Z0-9_]*?_(?:{alternation})_\d{{4}}_\d{{4,}}")
+    # Loose on purpose, to catch stale shapes too: any upper-case word that
+    # carries a media-ish token (full name, short form or bare family) and
+    # ends in a number.
+    cores = {*tokens, *tokens.values(), "BD", "MD", "BX", "CD", "MDISC", "BDXL", "TEST"}
+    core_alt = "|".join(re.escape(c) for c in sorted(cores, key=len, reverse=True))
+    candidate = re.compile(
+        rf"\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*?_(?:{core_alt})(?:_[A-Z0-9]+)*?_\d{{3,}}\b"
+    )
+
+    corpus = _cli_help_texts() + _src_string_literals(docstrings=True)
+    for doc in [REPO_ROOT / "README.md", *_all_docs()]:
+        corpus.append((str(doc.relative_to(REPO_ROOT)), doc.read_text(encoding="utf-8")))
+
+    bad = []
+    seen = 0
+    from_help = 0
+    for where, text in corpus:
+        for match in candidate.finditer(text):
+            label = match.group(0)
+            if any(
+                where.split(":", 1)[0].endswith(suffix) and label == allowed
+                for suffix, allowed in _LABEL_ALLOWLIST
+            ):
+                continue
+            seen += 1
+            from_help += where.startswith("help:")
+            if not valid.fullmatch(label):
+                line = text.count("\n", 0, match.start()) + 1
+                bad.append(f"{where} (line {line}): {label}")
+    assert from_help >= 1, "self-check: no label example found in the CLI help"
+    assert seen >= 10, f"self-check: only {seen} label examples found — scanner broken?"
+    assert not bad, (
+        "label examples the generator cannot produce "
+        "(expected {PREFIX}_{MEDIA}_{YYYY}_{SEQ}, e.g. LCSAS_BD25_2026_0001):\n"
+        + "\n".join(bad)
+    )
+
+
+def test_session_list_status_help_names_the_schema_statuses() -> None:
+    """``lcsas session list --status`` help must name exactly the burn
+    session statuses the schema allows, and the session-list line in
+    stage-and-burn.md must match it.
+
+    Red-first catch: the help and the doc offered ABORTED, which the
+    schema's CHECK rejects (an aborted burn session is recorded as CLEANED).
+    """
+    from lcsas.cli.main import build_parser
+    from lcsas.db.schema import SQL_CREATE_BURN_SESSIONS
+
+    check = re.search(r"CHECK \(status IN \(([^)]*)\)\)", SQL_CREATE_BURN_SESSIONS)
+    assert check, "self-check: burn_sessions status CHECK not found"
+    statuses = re.findall(r"'([A-Z]+)'", check.group(1))
+    assert len(statuses) >= 4
+
+    root_sub = _subparsers_of(build_parser())
+    assert root_sub is not None
+    session_sub = _subparsers_of(root_sub.choices["session"])
+    assert session_sub is not None
+    sess_list = session_sub.choices["list"]
+    help_text = next(a.help for a in sess_list._actions if "--status" in a.option_strings)
+    named = re.findall(r"\b[A-Z]{4,}\b", help_text.split(".")[0])
+    assert named == statuses, f"--status help names {named}, schema allows {statuses}"
+
+    doc = (REPO_ROOT / "docs" / "workflows" / "stage-and-burn.md").read_text(encoding="utf-8")
+    line = re.search(r"`lcsas session list \[--status <([A-Z|]+)>\]`", doc)
+    assert line, "self-check: session list line not found in stage-and-burn.md"
+    assert line.group(1).split("|") == statuses
+
+
+def test_repo_flag_help_says_names_not_ids() -> None:
+    """Every ``--repo`` flag takes repository names; no help text may
+    call them IDs."""
+    from lcsas.cli.main import build_parser
+
+    seen = 0
+
+    def walk(parser: argparse.ArgumentParser, path: str) -> list[str]:
+        bad: list[str] = []
+        nonlocal seen
+        for action in parser._actions:
+            if "--repo" in action.option_strings:
+                seen += 1
+                if re.search(r"\bIDs?\b", action.help or ""):
+                    bad.append(f"{path}: {action.help}")
+            if isinstance(action, argparse._SubParsersAction):
+                for name, sub in action.choices.items():
+                    bad.extend(walk(sub, f"{path} {name}"))
+        return bad
+
+    bad = walk(build_parser(), "lcsas")
+    assert seen >= 5, f"self-check: only {seen} --repo flags found"
+    assert not bad, "--repo help calls repository names IDs:\n" + "\n".join(bad)

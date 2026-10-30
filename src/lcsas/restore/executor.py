@@ -226,8 +226,8 @@ class RestoreExecutor:
                     "different location (such as an offsite safe). "
                     "Every volume in this archive is typically burned "
                     "to multiple discs across locations — run "
-                    "`lcsas catalog locations <volume_label>` to list "
-                    "them."
+                    "`lcsas volume impact <label>` to list every disc "
+                    "of that volume and where it is kept."
                 ),
             )
 

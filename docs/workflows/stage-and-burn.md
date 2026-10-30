@@ -577,11 +577,12 @@ The pipeline is interrupt-safe in three places:
 
 ### Listing and inspecting sessions
 
-`lcsas session list [--status <STAGED|COMPLETE|PARTIAL|ABORTED>]`
+`lcsas session list [--status <STAGED|PARTIAL|COMPLETE|CLEANED>]`
 (`cmd_session_list`) prints the session table — useful to find a session id
 to resume against. To discard a never-burned session entirely (deleting its
 volumes and returning their packs to the unarchived pool), use
-`lcsas session abort [<id|latest>]` (`cmd_session_abort`).
+`lcsas session abort [<id|latest>]` (`cmd_session_abort`); the aborted
+burn session is recorded as `CLEANED`.
 
 ### Cleaning a session
 

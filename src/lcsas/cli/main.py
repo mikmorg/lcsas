@@ -195,9 +195,13 @@ def build_parser() -> argparse.ArgumentParser:
     # --- burn ---
     burn_p = subparsers.add_parser("burn", help="Burn staged ISOs to disc.")
     burn_p.add_argument("--media", type=str, default=None,
-                        help="Media type (BD25, MDISC100, TEST_TINY, etc.).")
+                        help="Accepted but ignored: a burn session keeps the "
+                             "media type it was staged with (set it with "
+                             "`lcsas stage --media`).")
     burn_p.add_argument("--repo", type=str, default=None, nargs="*",
-                        help="Specific repository IDs to burn.")
+                        help="Accepted but ignored: a burn session burns every "
+                             "volume it was staged with (choose repositories "
+                             "with `lcsas stage --repo`).")
     burn_p.add_argument("--session", type=str, required=True,
                         help="Burn a previously staged session (ID or 'latest'). "
                              "Required; use `lcsas stage` first to create a session.")
@@ -235,7 +239,7 @@ def build_parser() -> argparse.ArgumentParser:
     stage_p.add_argument("--for-location", type=str, default=None,
                          help="Stage only packs missing at this location.")
     stage_p.add_argument("--repo", type=str, default=None, nargs="*",
-                         help="Specific repository IDs to stage.")
+                         help="Names of the repositories to stage (default: all).")
     stage_p.add_argument("--clean", action="store_true",
                          help="Clean up staged ISOs for a session.")
     stage_p.add_argument("--force", action="store_true",
@@ -310,7 +314,7 @@ def build_parser() -> argparse.ArgumentParser:
     loc_move_p = loc_sub.add_parser("move",
                                     help="Record a disc moving between locations.")
     loc_move_p.add_argument("volume_label",
-                            help="Volume label (e.g. ARCHIVE_MDISC100_0001).")
+                            help="Volume label (e.g. LCSAS_BD25_2026_0001).")
     loc_move_p.add_argument("--from", dest="from_location", required=True,
                             help="Source location.")
     loc_move_p.add_argument("--to", dest="to_location", required=True,
@@ -328,7 +332,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Record a disc as deprecated (e.g. damaged, or its volume deprecated).",
     )
     copy_dep_p.add_argument("volume_label",
-                            help="Volume label (e.g. ARCHIVE_MDISC100_0001).")
+                            help="Volume label (e.g. LCSAS_BD25_2026_0001).")
     copy_dep_p.add_argument("location",
                             help="Location holding the disc (e.g. Home_Shelf).")
 
@@ -337,7 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Record a disc as destroyed or lost.",
     )
     copy_des_p.add_argument("volume_label",
-                            help="Volume label (e.g. ARCHIVE_MDISC100_0001).")
+                            help="Volume label (e.g. LCSAS_BD25_2026_0001).")
     copy_des_p.add_argument("location",
                             help="Location that held the disc (e.g. Home_Shelf).")
 
@@ -353,7 +357,7 @@ def build_parser() -> argparse.ArgumentParser:
              "this volume fails? (FMA-08)",
     )
     vol_impact_p.add_argument("volume_label",
-                              help="Volume label (e.g. ARCHIVE_MDISC100_0001).")
+                              help="Volume label (e.g. LCSAS_BD25_2026_0001).")
     vol_impact_p.add_argument(
         "--snapshots", action="store_true", default=False,
         help="Also list snapshots referencing at-risk packs (needs the "
@@ -557,7 +561,8 @@ def build_parser() -> argparse.ArgumentParser:
     sess_list_p = session_sub.add_parser("list", help="List all burn sessions.")
     sess_list_p.add_argument(
         "--status", type=str, default=None,
-        help="Filter by status (STAGED, COMPLETE, PARTIAL, ABORTED).",
+        help="Filter by status (STAGED, PARTIAL, COMPLETE, CLEANED). "
+             "An aborted burn session is recorded as CLEANED.",
     )
     sess_abort_p = session_sub.add_parser(
         "abort",
@@ -3011,7 +3016,7 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
                 return 0
         except EOFError:
             logger.error("No terminal available for confirmation (redirected input).")
-            logger.error("Run interactively or use lcsas restore instead.")
+            logger.error("Run it again from a terminal so it can ask for confirmation.")
             return 1
 
         # Execute: stage the active packs via the burn orchestrator
@@ -6056,8 +6061,9 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     elif config is None:
         logger.warning(
             "No --config given: the password was NOT verified against any "
-            "repository. Run `lcsas key verify --config ... --password-file "
-            "%s` once the mirror is reachable.", repo_pw_file,
+            "repository. Run `lcsas --config ... key verify --repo %s "
+            "--password-file %s` once the mirror is reachable.",
+            args.repo, repo_pw_file,
         )
     else:
         repo_cfg = config.repositories.get(args.repo)
@@ -6144,8 +6150,9 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         except Exception as e:  # noqa: BLE001 - cards are written; don't fail the split
             logger.warning(
                 "Split succeeded but recording it in the catalog failed: %s. "
-                "Run 'lcsas migrate' then re-run 'lcsas key split' so burn "
-                "drift-checking works.", e,
+                "Once the catalog is reachable, re-run 'lcsas --config ... "
+                "key split --repo %s' so burn drift-checking works.",
+                e, args.repo,
             )
     else:
         logger.warning(

@@ -159,7 +159,8 @@ def test_recovery_docs_lcsas_invocations_exist_in_argparse_tree():
 def test_validator_accepts_root_flags_before_subcommand():
     """`lcsas --db <catalog> burn --media MDISC100 ...` is a legal shape —
     --db is a root-parser flag consumed before the subcommand (regression:
-    checkpoint A, 2026-06; PHYSICAL_DISC_VALIDATION.txt:59 is correct)."""
+    checkpoint A, 2026-06, from a since-reworded PHYSICAL_DISC_VALIDATION.txt
+    line)."""
     assert _validate(["--db", "<catalog>", "burn", "--media", "MDISC100", "..."]) == []
     assert _validate(["--verbose", "status"]) == []
     # Phantom root flags are still caught.

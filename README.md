@@ -234,8 +234,8 @@ lcsas --config /etc/lcsas/config.toml \
 # Output:
 #   Session: 2026-02-14T19:30:00+00:00
 #   Staged 2 volumes:
-#     /mnt/staging/.../ARCHIVE_MD_2026_001.iso  (94.2 GB, 47 packs)
-#     /mnt/staging/.../ARCHIVE_MD_2026_002.iso  (31.8 GB, 16 packs)
+#     /mnt/staging/.../ARCHIVE_MD100_2026_0001.iso  (94.2 GB, 47 packs)
+#     /mnt/staging/.../ARCHIVE_MD100_2026_0002.iso  (31.8 GB, 16 packs)
 #   Manifest: /mnt/staging/.../session.json
 
 # ── Optional: Remote / Deferred Burning ──
@@ -247,10 +247,10 @@ lcsas --config /etc/lcsas/config.toml \
 #
 #   # On the burner machine (no catalog needed). --emit-receipt
 #   # writes a burn-receipt JSON; --location is required with it:
-#   lcsas burn-iso /tmp/session/ARCHIVE_MD_2026_001.iso \
+#   lcsas burn-iso /tmp/session/ARCHIVE_MD100_2026_0001.iso \
 #     --device /dev/sr0 \
 #     --emit-receipt /tmp/session/receipts/ --location Home_Shelf
-#   lcsas burn-iso /tmp/session/ARCHIVE_MD_2026_002.iso \
+#   lcsas burn-iso /tmp/session/ARCHIVE_MD100_2026_0002.iso \
 #     --device /dev/sr0 \
 #     --emit-receipt /tmp/session/receipts/ --location Home_Shelf
 #
@@ -270,8 +270,8 @@ lcsas --config /etc/lcsas/config.toml \
 lcsas --config /etc/lcsas/config.toml \
   burn --session latest --location Home_Shelf
 
-# Burns ARCHIVE_MD_2026_001.iso → [insert blank disc] → burning → done
-# Burns ARCHIVE_MD_2026_002.iso → [insert blank disc] → burning → done
+# Burns ARCHIVE_MD100_2026_0001.iso → [insert blank disc] → burning → done
+# Burns ARCHIVE_MD100_2026_0002.iso → [insert blank disc] → burning → done
 # Catalog updated: each pack now has 1 archived copy @ Home_Shelf.
 
 # ── Step 5: Burn the Offsite Safe discs ──
@@ -321,7 +321,7 @@ lcsas --config /etc/lcsas/config.toml location list
 # ── Record that a disc has moved between locations ──
 
 lcsas --config /etc/lcsas/config.toml \
-  location move ARCHIVE_MD_2026_003 --from Home_Shelf --to Offsite_Safe
+  location move ARCHIVE_MD100_2026_0003 --from Home_Shelf --to Offsite_Safe
 
 # ── Show which packs a location is missing ──
 
@@ -380,9 +380,9 @@ lcsas --config /etc/lcsas/config.toml \
 # Output:
 #   Restore Pick List for snapshot abc123def456
 #   ─────────────────────────────────────────────
-#   ARCHIVE_MDISC100_0001  12 packs  (2.3 GB)
-#   ARCHIVE_MDISC100_0003   8 packs  (1.7 GB)
-#   ARCHIVE_MDISC100_0005   3 packs  (0.4 GB)
+#   ARCHIVE_MD100_2026_0001  12 packs  (2.3 GB)
+#   ARCHIVE_MD100_2026_0003   8 packs  (1.7 GB)
+#   ARCHIVE_MD100_2026_0005   3 packs  (0.4 GB)
 #   ─────────────────────────────────────────────
 #   Total: 23 packs across 3 volumes
 #   Missing packs: 0
@@ -413,17 +413,17 @@ lcsas --config /etc/lcsas/config.toml \
 
 #### Restoring from Offsite Discs
 
-If your home shelf discs are lost or damaged, the offsite discs work identically. LCSAS pick lists know about every disc of each volume — if the home disc of `ARCHIVE_MDISC100_0001` is destroyed, the offsite disc is automatically used instead.
+If your home shelf discs are lost or damaged, the offsite discs work identically. LCSAS pick lists know about every disc of each volume — if the home disc of `ARCHIVE_MD100_2026_0001` is destroyed, the offsite disc is automatically used instead.
 
 ```bash
 # Check the damaged home disc
 lcsas --config /etc/lcsas/config.toml \
-  verify ARCHIVE_MDISC100_0001
+  verify ARCHIVE_MD100_2026_0001
 # → If verification fails, a VERIFY_FAIL event is recorded in the
 #   volume's audit trail. Taking the disc out of service is a
 #   separate, explicit step:
 lcsas --config /etc/lcsas/config.toml \
-  copy deprecate ARCHIVE_MDISC100_0001 Home_Shelf
+  copy deprecate ARCHIVE_MD100_2026_0001 Home_Shelf
 
 # Re-plan — LCSAS routes to surviving offsite discs
 lcsas --config /etc/lcsas/config.toml \

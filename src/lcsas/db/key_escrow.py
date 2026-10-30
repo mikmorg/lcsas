@@ -135,7 +135,7 @@ def detect_escrow_drift(
                     f"key_split=true {config_threshold}-of-{config_shares} but "
                     f"the catalog records no split for this repository. Discs would "
                     f"print instructions to gather share cards that were never "
-                    f"made. Re-run 'lcsas key split --config ... --repo "
+                    f"made. Re-run 'lcsas --config ... key split --repo "
                     f"{repo_id}' or set key_split=false under [defaults]."
                 )
             if (record.threshold, record.shares) != (
