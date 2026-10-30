@@ -4,45 +4,62 @@ Two Claude Code sessions share this project, on two machines. Read this
 if you are the **field session**: the one with the optical writer, the
 real discs and the real data. The root `CLAUDE.md` covers architecture
 and commands; this file covers your role and what you can't learn from
-the code. Written 2026-10-24 by the lab session at the hand-over.
+the code. Written 2026-10-24 by the lab session at the hand-over;
+updated 2026-10-30 with the owner's decisions from the grilling session.
+The words in this file follow `CONTEXT.md`, the project glossary.
 
 | | **Lab** (vm-desk1, the VM on home2) | **Field** (you) |
 |---|---|---|
-| Does | code changes, CI follow-up, heavy gates: blind-restore runs, cross-builds and bin-parity, `make audit-gate`, `make meta-gate`, CDEmu drills | release drills on real hardware, real backups and burns, the owner's meta disc, findings |
+| Does | code changes, CI follow-up, heavy gates: blind-restore runs, cross-builds and bin-parity, `make audit-gate`, `make meta-gate`, CDEmu drills | release drills on real hardware, real backups (and, after final, real burns and the owner's meta disc), findings |
 | Doesn't | touch real media or real data (it has no writer) | run heavy gates; land restore-path code |
 
 ## Where things stand
 
-- **`v1.0.0-rc2`** is tagged at `b033cb6`, an annotated tag; read it with
-  `git tag -n99 v1.0.0-rc2`. It is the build every drill runs against.
-  Record `v1.0.0-rc2 (b033cb6)` in every drill result.
+- **The drills wait for `v1.0.0-rc3`.** On 2026-10-30 the owner decided
+  the glossary (`CONTEXT.md`) and the other rc3 fixes land BEFORE any
+  drill, so the drills test the final wording. The lab is building rc3
+  now and will post the tag on tracker #478. Don't drill `v1.0.0-rc2`
+  (`b033cb6`). Record the tag and commit of the rc you drilled (rc3, or a
+  later rc after a fix) in every drill result.
 - At rc2, all 8 runnable blind-restore variants scored 16/16 (the drill log
-  in `recovery/docs/READINESS_CHECKLIST.txt`), and the release meta volume
-  passed `meta verify --strict`. CI is green.
-- **v1.0.0 final waits on three human/hardware gates** (tracker #478):
+  in `recovery/docs/READINESS_CHECKLIST.txt`). rc3 gets the same full
+  sweep and a clean meta disc rebuild before it is tagged.
+- **v1.0.0 final waits on four human/hardware gates** (tracker #478):
   - #473: physical BD-R and M-DISC burn → damage → repair → restore
-  - #474: a cold restore by a real non-technical person
+  - #474: a cold restore by a non-technical stand-in (see below)
   - #475: a manual macOS restore
-  - #476 (manual Windows) is related but doesn't gate the release.
-  - #477 (an independent crypto review) is the owner's decision, not a gate.
-- Other open issues are lab-side or owner decisions: #479, #491, #538,
-  #559, #562.
+  - #476: a manual Windows restore. This is now a gate (owner, 2026-10-30).
+- **Decided, not gates:** v1.0 ships without an independent crypto
+  review. The lab adds a disclosure to README and ESTATE_PLANNING, naming
+  stock restic (tier 2b) as the hedge, and that closes #477. CI stays on
+  Ubuntu 24.04 for v1.0; #538 stays open for after it.
+- **What "final" means:** when every gate has passed on one rc and the
+  owner says go, the lab tags v1.0.0 on master if master's restore path
+  (rule 3) is unchanged since that rc; otherwise it cuts another rc and
+  the affected drills run again.
+- Other open issues are lab-side: #479 (retire it once #476 passes),
+  #491 (three of its items land in rc3; location remove/rename comes
+  after), #559, #562, #569.
 
 ## Hard rules
 
-1. **The repo is PUBLIC.** Never commit a real catalog, password, key
+1. **The repo is PUBLIC.** Never commit a real catalog, password,
    share, share card, mirror path, hostname or serial, or a drill
    participant's name. Run logs and transcripts use roles ("the
-   participant") and placeholder paths. Real catalogs, keys and staging
-   trees live outside the checkout.
+   participant") and placeholder paths. Real catalogs, password files and
+   staging areas live outside the checkout.
 2. **Never touch** `recovery/UPSTREAM.sha256`, or `verify.sh`
    (`tests/e2e/cdemu_blind_restore/`). Never delete tests you didn't
    write.
-3. **Don't land restore-path changes.** A change to `recovery/src`,
-   `recovery/scripts`, `src/lcsas/restore` or `src/lcsas/meta` needs a
-   haiku blind-restore run, and `recovery/src` also needs its committed
-   binaries rebuilt (the bin-parity recipe). Only the lab can do either.
-   File the issue, or push the branch, and hand it over (see Hand-back below).
+3. **Don't land restore-path changes.** The restore path is everything
+   that ends up on a disc or a printed card: all of `recovery/`,
+   `src/lcsas/restore`, `src/lcsas/meta`, `src/lcsas/staging`, and the
+   card text (`lcsas estate card`, `lcsas key card`, `lcsas key split`,
+   and the `docs/PASSWORD_CARD.txt` template).
+   A change there needs a haiku blind-restore run, and `recovery/src` also
+   needs its committed binaries rebuilt (the bin-parity recipe). Only the
+   lab can do either. File the issue, or push the branch, and hand it over
+   (see Hand-back below).
 4. **Merges.** Merge-commit only, never `--admin`, and only on green CI.
    The lab's standing permission to merge on its own doesn't carry over
    to you: merge only when the owner says so in your session.
@@ -52,33 +69,52 @@ the code. Written 2026-10-24 by the lab session at the hand-over.
 
 ## Your work
 
-### Drills against rc2
+### Drills against the current rc (rc3 first)
 
+- **Drill discs hold test data only.** No real data is burned until
+  v1.0.0 final (owner, 2026-10-30). Burn drill discs from a test corpus
+  with nothing personal in it, using a separate drill config and catalog
+  (`lcsas --config <drill.toml> --db <drill.db> …`), never the real ones,
+  so no drill volume lands in the master catalog.
 - **#473 (physical disc):** follow `recovery/docs/PHYSICAL_DISC_VALIDATION.txt`,
   steps 1–5:
-  - Steps 1–2 burn a real volume. Size it so the RS03-padded image fits the
-    disc, and capture a sha256 manifest of the sources first.
+  - Steps 1–2 build a volume from the test corpus on the real media type,
+    and burn it. Size it so the RS03-padded image fits the disc, and
+    capture a sha256 manifest of the sources first.
   - Step 3 restores blind from the real mount; Step 3b is the disc swap
     without ENTER (#455), on a desktop that automounts.
   - Steps 4–5 damage a disc below, then above, the ECC threshold.
   - Fill in the RUN LOG TEMPLATE at the end of that file and commit it
     under `tests/e2e/`, with no personal data (rule 1).
-- **#474 (non-technical person):** give them the discs, the printed cards
-  and nothing else. Observe; don't help. Write down, in their words, where
-  they got stuck, and the time per step. Findings go on the issue. Fixes
-  are usually heir-doc PRs.
+- **#474 (non-technical person):** the owner's heir does NOT take this
+  drill. Use a stand-in: someone non-technical, who is not the heir, on
+  the same kind of computer the heir would use. Each re-run needs a new
+  stand-in, since someone who has seen the docs is no longer cold. Give
+  them the drill discs, the cards printed for the drill's test archive
+  and nothing else. Observe; don't help. Write down where they got stuck,
+  in their words, and the time per step. Refer to them by role only (rule 1). Findings go on the issue;
+  fixes are usually heir-doc PRs. The real heir walks through it once
+  after final.
 - **#475 (macOS) and #476 (Windows):** walk through
   `docs/workflows/restore-host-macos.md` / `recovery/docs/RECOVER_WINDOWS.txt` the way
   an heir would. Capture every OS prompt (Gatekeeper, quarantine,
   SmartScreen, Defender, UAC) and every place the docs and the screen
   disagree.
 - **If a drill fails:** comment on its issue with the build, what
-  happened and the evidence, and file a bug. The lab fixes it, sweeps the
-  blind variants and cuts rc3. Then rerun only the affected drills on rc3.
-  **When all three gates pass on one rc,** the owner decides on v1.0.0
-  final.
+  happened and the evidence, and file a bug. The lab fixes it, sweeps all
+  the blind variants, rebuilds the meta disc cleanly and cuts the next rc.
+  Then rerun the failed drill, plus any drill whose path the fix changed.
+  **When all four gates pass on one rc,** the lab tags final as described
+  under "Where things stand".
 
-### Real backups
+### Real data before final
+
+**No real burns until v1.0.0 final** (owner, 2026-10-30). Before final you
+may set up the real config, back real data up into the mirror, and run
+`lcsas scan`. Stop there: no `lcsas stage`, `burn` or `burn-iso` with real
+data. After final, the rest of this section applies. (Lab advice, not an
+owner rule: wait until final to split the real password too, so the share
+cards print with the final wording.)
 
 Read these in order: `docs/workflows/init-and-config.md` →
 `backup-and-scan.md` → `stage-and-burn.md` → `verify-and-audit.md` →
@@ -94,48 +130,53 @@ Things the docs state, but that cost real time to learn:
   M-DISC and BD-R of the same size are separate types. TEST_TINY is for
   tests only.
 - **A failed post-burn verify returns the volume to STAGING** (#483). No
-  copy is recorded, and the next `lcsas stage` offers its packs again.
+  disc is recorded, and the next `lcsas stage` offers its packs again.
   Re-burn with the command the error prints
   (`lcsas burn --session … --location …`).
-- **Receipts:** a disc that failed verification is never a copy (BURN-05).
-  `burn-iso --no-verify` records BURNED, not VERIFIED. Promote it with
-  `lcsas verify <label> --disc`, which reads the disc, not the ISO file.
+- **Burn receipts:** a disc that failed verification is never recorded
+  (BURN-05). `burn-iso --no-verify` records BURNED, not VERIFIED. Promote
+  it with `lcsas verify <label> --disc`, which reads the disc back, not
+  the ISO image.
 - **`optical_device`** isn't checked by `config check`. A typo shows up
   only at burn time.
-- **Keys:**
-  - `lcsas key split` makes SLIP-0039 share cards; run `lcsas key verify`
-    each year.
-  - `key_storage_hints` is printed **verbatim on every disc**, so it names a
-    custodian, never the password (ESTATE_PLANNING.md).
+- **Passwords and shares:**
+  - `lcsas key split` splits a password into SLIP-0039 share cards; run
+    `lcsas key verify` each year.
+  - `key_storage_hints` is printed **verbatim on every disc**, so it says
+    who keeps the password, never the password itself (ESTATE_PLANNING.md).
   - Share cards and passwords never go into the repo or into an issue.
-- **Recovery cards:** `lcsas estate card` covers the whole archive;
-  `lcsas key card` is for an unsplit key.
+- **Cards:** `lcsas estate card` prints the estate card (the whole archive,
+  no secret, kept with the discs); `lcsas key card` prints a password card
+  for a password that is not split (never kept with the discs).
 
-### The owner's meta disc
+### The owner's meta disc (after final)
 
-The rc2 meta volume on vm-desk1 is a **generic** build, with no catalog
-and no repo keys. The disc the owner keeps must be built on your machine,
+The owner's own meta disc waits for v1.0.0 final (owner, 2026-10-30).
+The meta disc the lab builds for each rc is a **generic** build with no
+repository metadata. The disc the owner keeps must be built on your machine,
 from the owner's config and catalog:
 
 - **Build from a clean checkout of the tag.** Use a detached
-  `git worktree add --detach <dir> v1.0.0-rc2`, and run that worktree's
+  `git worktree add --detach <dir> v1.0.0`, and run that worktree's
   own code: `PYTHONPATH=<dir>/src python3 -m lcsas … meta build
   --project-root <dir> --output <out>`. The builder copies `recovery/` as
   it stands, gitignored files included (#562).
-- **The key gate (#437):** the build fails if a live repo's keys are
-  missing, and `--allow-incomplete` doesn't override that.
+- **The key gate (#437):** the build fails if an active repository's
+  keys are missing, and `--allow-incomplete` doesn't override that.
 - **The upstream cache** has to be populated first, ~1 GB, all pinned by
   hash: `make fetch-recovery`, or `LCSAS_RECOVERY_CACHE=<dir>
   sh recovery/scripts/fetch_upstream.sh`.
 - **Then** run `lcsas meta verify --strict <out>`, which must PASS.
-- **Master, burn and record it.** The docs give this step only in outline:
-  see `docs/workflows/meta-disc.md`, "Refresh the meta-disc when LCSAS
-  source changes", steps 4–6.
+- **Master and burn it.** The docs give this step only in outline: see
+  `docs/workflows/meta-disc.md`, "Refresh the meta disc when LCSAS source
+  changes", steps 4–6.
   - Steps 4–6 cover mastering the tree with xorriso (optionally with RS03
-    ECC), recording the disc in the catalog by hand, and retiring the old
-    disc.
+    ECC) and keeping the older meta discs. Nothing is recorded in the
+    catalog: the meta disc is not a volume.
   - `master_iso()` in `tests/e2e/fixture_lib.py` is a working xorriso call.
-- **Rebuild the owner's meta disc** after every rc or release.
+- **Rebuild the owner's meta disc** after every release. Keep the old
+  ones with the discs: an heir uses the newest meta disc, and falls back
+  to the one burned closest in date to the data discs.
 
 ## Hand-back to the lab
 
@@ -148,8 +189,8 @@ The channel between the sessions is **GitHub issues** (`gh`, repo
   `sha256sum -c` output, transcripts.
 - You can land small changes outside the restore path yourself, under
   rule 4: drill logs, CLI messages, non-heir docs.
-  - Heir-facing docs include START_HERE, PASSWORD_INFO, RECOVER_*.txt,
-    `recovery/docs/`, and the restore guides.
+  - Heir-facing text includes START_HERE, PASSWORD_INFO, VOLUME_INFO,
+    RECOVER_*.txt, `recovery/docs/`, the restore guides and the card text.
   - For those, open the PR and add the label, because the blind drills
     must re-run after they change.
   - Any file under `recovery/` also needs `make -C recovery manifest`,

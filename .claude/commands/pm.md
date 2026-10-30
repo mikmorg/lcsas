@@ -74,11 +74,11 @@ Prefer (in order):
 1. Any `severity:high` open
 2. Any issue tagged `area:tests` (boosts coverage)
 3. Any `area:production-tier1` (the restore process focus)
-4. Anything with `area:docs` linked from an operator-reported gap
+4. Anything with `area:docs` linked from an owner-reported gap
 
 Skip issues tagged `wontfix`, `confer-later`, or already with an
 assignee.  If only docs issues remain, do those — silent
-operator-facing gaps are still real.
+owner-facing gaps are still real.
 
 ### Step 3 — Plan in detail
 
@@ -116,9 +116,11 @@ The worker template (paste verbatim at the end of every prompt):
 ```
 After implementing the change:
 1. Run `make gate` — must be green.
-2. If the change touches recovery/scripts/, recovery/src/,
-   src/lcsas/restore/, src/lcsas/meta/, or any
-   tests/recovery_hardening/test_tier* file, also rebuild via
+2. If the change touches the restore path (all of recovery/,
+   src/lcsas/restore/, src/lcsas/meta/, src/lcsas/staging/, the card
+   text: the *_card_text functions in src/lcsas/cli/main.py and
+   docs/PASSWORD_CARD.txt) or any tests/recovery_hardening/test_tier*
+   file, also rebuild via
    `lcsas recovery build --arch x86_64 --cc "zig cc -target x86_64-linux-musl"`
    and re-run `pytest tests/recovery_hardening/ -q`.
 3. Skill: simplify — review your diff for unnecessary code.
@@ -146,11 +148,13 @@ When each worker reports back:
    rebased branch.
 4. **If the change touches the restore path** (see file list
    above): also run `LCSAS_BLIND_ACK_COST=1 make blind-restore`
-   wrapped in `timeout 2700`.  Must score 15/15.  If it
+   wrapped in `timeout 2700`.  Must score 16/16.  If it
    doesn't, the PR doesn't ship.  Surface the failure to the
-   user; do not merge a red blind run.
-5. **Merge**: `gh pr merge <num> --merge --admin`.  Sync
-   `github` and `origin` (mirror remote).
+   user; do not merge a red blind run.  (One-time exception for
+   the rc3 batch only: one combined sweep on master before the
+   rc3 tag instead; see the autopilot Policy block.)
+5. **Merge**: `gh pr merge <num> --merge` on green CI (never
+   `--admin`).  Sync `github` and `origin` (mirror remote).
 6. **Cross-PR retest (Issue #99 lesson):** If other PRs from the same
    batch are still open, immediately rebase each against the now-updated
    master and re-run `make test-recovery-hardening`.  A PR that passed
@@ -245,7 +249,7 @@ At the end of each cycle, summarize:
 - Issues closed: list + PR links
 - Issues filed: list + GH numbers
 - Coverage delta (Δ% restore-path coverage)
-- Cost burned this cycle (sum of blind runs × $5)
+- Cost burned this cycle (sum of blind runs; about $0.2–0.7 each on haiku)
 - Blockers needing user input
 
 Keep it under ~150 words.  The user can drill into any specific

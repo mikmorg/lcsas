@@ -14,9 +14,21 @@ run to *landed* or *escalated*, never to half-done.
   2026-07; the `--admin` era is over per #414's required-check shape).
   Any red = fix forward on the branch; if that stalls, escalate.  A new
   red is never waved through.
-- **Blind-restore gate:** haiku model, `LCSAS_BLIND_ACK_COST=1`, only when
-  the change touches the restore path (recovery/src, recovery/scripts,
-  src/lcsas/restore, src/lcsas/meta).  Tests+docs-only changes skip it.
+- **Restore path** (owner, 2026-10-30, Q13): everything that ends up on a
+  disc or a printed card — all of `recovery/`, `src/lcsas/restore`,
+  `src/lcsas/meta`, `src/lcsas/staging`, and the card text
+  (`lcsas estate card` / `key card` / `key split` output:
+  `_estate_card_text`, `_recovery_card_text`, `_share_card_text` in
+  `src/lcsas/cli/main.py`, plus the `docs/PASSWORD_CARD.txt` template).
+- **Blind-restore gate:** haiku model, `LCSAS_BLIND_ACK_COST=1`, per PR,
+  only when the change touches the restore path.  Changes outside it
+  skip it.
+  **rc3 exception** (owner, 2026-10-30; one-time, not the standing rule):
+  restore-path PRs in the rc3 batch may merge on green CI without a
+  per-PR blind run; ONE combined haiku sweep of every runnable variant
+  (the eight in the `recovery/docs/READINESS_CHECKLIST.txt` drill log)
+  then runs on master before `v1.0.0-rc3` is tagged, and a red sweep
+  blocks the tag until fixed.
 - **Committed binaries:** any `recovery/src/**` C change regenerates the
   affected committed bins via the bin_parity recipe (drive
   `bin_parity.rebuild` + copy, then `bin_parity.py` must PASS).
