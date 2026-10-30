@@ -39,7 +39,7 @@ The words in this file follow `CONTEXT.md`, the project glossary.
   the affected drills run again.
 - Other open issues are lab-side: #479 (retire it once #476 passes),
   #491 (three of its items land in rc3; location remove/rename comes
-  after), #559, #562, #569.
+  after), #569. #559, #562 and #571 are fixed in rc3.
 
 ## Hard rules
 
@@ -159,8 +159,9 @@ from the owner's config and catalog:
 - **Build from a clean checkout of the tag.** Use a detached
   `git worktree add --detach <dir> v1.0.0`, and run that worktree's
   own code: `PYTHONPATH=<dir>/src python3 -m lcsas … meta build
-  --project-root <dir> --output <out>`. The builder copies `recovery/` as
-  it stands, gitignored files included (#562).
+  --project-root <dir> --output <out>`. From a git checkout the builder
+  bundles only the git-tracked files under `recovery/` (#562), but it
+  copies them with any local edits, so build from the clean worktree.
 - **The key gate (#437):** the build fails if an active repository's
   keys are missing, and `--allow-incomplete` doesn't override that.
 - **The upstream cache** has to be populated first, ~1 GB, all pinned by
