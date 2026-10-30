@@ -2,9 +2,9 @@
 
 The Stage & Burn pipeline is the heart of LCSAS: the workflow that turns
 unarchived pack files in the Rustic mirror into permanent, self-describing
-optical volumes. It is also the highest-traffic surface of the tool —
+volumes on optical discs. It is also the highest-traffic surface of the tool —
 every routine archival cycle runs through these two commands, and almost every
-"variant axis" (media type, multi-tenant, multi-copy, ECC on/off, etc.)
+"variant axis" (media type, multi-repository, multi-copy, ECC on/off, etc.)
 crosses through them.
 
 The pipeline is implemented as a single orchestrator
@@ -12,15 +12,15 @@ The pipeline is implemented as a single orchestrator
 `stage()` plans volumes via First-Fit-Decreasing bin-packing
 (`first_fit_decreasing` in `src/lcsas/binpack/algorithm.py`), builds a
 hardlinked staging tree (`StagingBuilder.stage_packs` in
-`src/lcsas/staging/builder.py`), injects the **holographic catalog** —
-SQLite catalog + per-repo Rustic metadata — onto every disc
+`src/lcsas/staging/builder.py`), injects the **disc catalog** (a copy of
+the SQLite catalog) and the repository metadata of each repository onto every disc
 (`HolographicInjector.inject_metadata` in `src/lcsas/staging/metadata.py`),
 masters an ISO via xorriso
 (`SubprocessXorrisoRunner.create_iso` in `src/lcsas/iso/xorriso.py`), and
 augments it with DVDisaster RS03 ECC (`SubprocessDVDisasterRunner.augment_iso`
 in `src/lcsas/ecc/dvdisaster.py`). `burn_session()` then
 streams each ISO to the optical device, reads the disc back to verify, and
-records a copy in the catalog.
+records the disc in the catalog.
 
 A burn **session** is the unit of resumability. Staging writes a row to the
 `burn_sessions` table with status `STAGED`, plus one `session_volumes` row per
@@ -48,7 +48,7 @@ the catalog records intact so the volumes remain referenceable.
 The end-to-end flow inside a single session:
 
 1. **Gather packs** — `BurnOrchestrator._gather_packs_for_staging`
-   queries the catalog for unarchived packs, optionally filtered by repo
+   queries the catalog for unarchived packs, optionally filtered by repository
    and/or "missing at location".
 2. **Bin-pack** — `_multi_bin_pack` wraps `first_fit_decreasing`
    (`src/lcsas/binpack/algorithm.py`), producing one volume plan per disc
@@ -66,7 +66,7 @@ The end-to-end flow inside a single session:
    - `StagingBuilder.initialize` + `stage_packs` hardlinks pack files from
      the Rustic mirror into `staging_root/data/<aa>/<aabbcc…>`
      (`src/lcsas/staging/builder.py`).
-   - `HolographicInjector.inject_metadata` copies each repo's `index/`,
+   - `HolographicInjector.inject_metadata` copies each repository's `index/`,
      `snapshots/`, `keys/`, and `config` into `metadata/<repo_id>/`
      (`src/lcsas/staging/metadata.py`).
    - `create_volume` + `bulk_link_packs` + `update_used_bytes` register the
@@ -75,8 +75,8 @@ The end-to-end flow inside a single session:
      and copy it into `staging_root/catalog.db` — the catalog is **always
      injected after volume registration is committed** so the disc reflects
      its own existence. The copy is switched from WAL to a rollback journal
-     (`PRAGMA journal_mode=DELETE`), because SQLite cannot open a WAL
-     database on read-only media (#534).
+     (`PRAGMA journal_mode=DELETE`), because SQLite cannot open a WAL-mode
+     file on read-only media (#534).
    - `write_volume_info`, `write_restore_instructions`,
      `write_standalone_restorer`, `write_lcsas_source` (skipped for
      `TEST_*` media), `write_start_here`, `write_key_info`,
@@ -93,7 +93,8 @@ The end-to-end flow inside a single session:
      `media_type.capacity_bytes`.
    - `sha256_file(iso)` is computed and stored on the session-volume row.
 6. **Write session manifest** — `session.json` lists volume ids, labels,
-   uuids, ISO paths, and pack ids (`BurnOrchestrator.stage`).
+   uuids, ISO paths, and pack row numbers (`pack_ids`)
+   (`BurnOrchestrator.stage`).
 7. **Burn (separate phase, `burn_session`)** — for each session-volume:
    - Transition `STAGING → BURNING` (`BurnOrchestrator.burn_session`).
    - `xorriso burn_iso` writes the ISO to `/dev/srN`
@@ -102,11 +103,11 @@ The end-to-end flow inside a single session:
      (`SubprocessXorrisoRunner.verify_disc`); on pass, transition `BURNING →
      VERIFIED`; on fail, emit a `VERIFY_FAIL` event and return the volume
      to `STAGING` (#483), so its packs are unarchived again and the next
-     `lcsas stage` offers them.  No copy is recorded for a failed disc
+     `lcsas stage` offers them.  A failed disc is not recorded
      (BURN-05) and the session ends `PARTIAL`.
    - `add_volume_copy` records the location + burn timestamp.
    - Emit a `BurnReceipt` JSON to `<session_dir>/receipts/`.
-   - On success, delete the ISO file to reclaim staging space.
+   - On success, delete the ISO file to reclaim space in the staging area.
 8. **Finalize session** — `update_session_status(... "COMPLETE")` on success,
    `PARTIAL` if any volume failed mid-session
    (`BurnOrchestrator.burn_session`).
@@ -149,15 +150,15 @@ machines, or when staging in advance for an unattended burn.
    against the `MediaType` enum (unknown values are rejected with a list of
    valid types in `cmd_stage`).
 3. `--repo <name>...` — optional restriction to specific repositories
-   (repo *names*, mapped to repo_ids by `_resolve_repo_names_to_ids`).
+   (repository *names*, mapped to repo_ids by `_resolve_repo_names_to_ids`).
 4. `--for-location <name>` — stage packs missing at that location only;
    routes through `get_unarchived_or_missing_at_location`
    (`BurnOrchestrator._gather_packs_for_staging`).
 5. `--dry-run` / `-n` — compute the bin-pack plan and report it, then exit
-   without touching staging, the catalog, or the disc
+   without touching the staging area, the catalog, or the disc
    (`BurnOrchestrator.stage`).
 6. `--allow-escrow-drift` — proceed even when `lcsas.toml`'s `key_split`/K/N
-   disagrees with the recorded escrow split (KEY-08); the override is logged
+   disagrees with the recorded split (KEY-08); the override is logged
    as a volume event. Without it, an `EscrowDriftError` aborts the stage so a
    disc never prints share instructions that contradict the real split
    (`cmd_stage`).
@@ -178,20 +179,21 @@ labels (`<prefix>_<media_label>_<seq>`) generated via
 **Variant axes that apply:**
 
 - **Media type** — all production and TEST_* media supported.
-- **Multi-tenant** — packs from multiple repos co-mingle on one volume;
-  metadata is injected per-repo under `metadata/<repo_id>/`.
+- **Multi-repository** — packs from several repositories co-mingle on one
+  volume; repository metadata is injected per repository under
+  `metadata/<repo_id>/`.
 - **Optical drive count** — not relevant (no burn here).
 - **Multi-copy** — irrelevant for `stage`; the resulting session can later
   be burned to multiple locations.
 - **ECC** — always applied for production media; implicitly skipped for
-  TEST_* media (no user-facing toggle).
-- **Recovery tier** — staging only writes to Tier 1 (WARM staging SSD/HDD).
+  TEST_* media (no owner-facing toggle).
+- **Storage stage** — staging only writes to the staging area.
 
 **Test coverage:**
 
 - `tests/unit/test_session_pipeline.py::TestStage*` — happy path,
-  multi-volume, repo filter, `for_location`, pack hash filter,
-  per-repo metadata injection.
+  multi-volume, repository filter, `for_location`, pack ID filter,
+  repository metadata injection.
 - `tests/unit/test_binpack.py` — FFD algorithm correctness and oversize
   detection.
 - `tests/unit/test_staging.py` — `StagingBuilder` hardlink + missing-pack
@@ -210,8 +212,8 @@ labels (`<prefix>_<media_label>_<seq>`) generated via
 `SubprocessXorrisoRunner.create_iso` in `src/lcsas/iso/xorriso.py`;
 `SubprocessDVDisasterRunner.augment_iso` in `src/lcsas/ecc/dvdisaster.py`.
 
-See also [`docs/architecture.md`](../architecture.md) for the storage-tier
-and holographic-catalog model.
+See also [`docs/architecture.md`](../architecture.md) for the storage-stage
+and disc-catalog model.
 
 ---
 
@@ -238,7 +240,7 @@ the same volumes to a different location.
 
 1. `lcsas --config <path> burn --session <id|latest> --location <name>`
    — dispatched to `cmd_burn_session`.
-2. `--location <name>` — physical-location tag for the recorded copy. Unknown
+2. `--location <name>` — physical-location tag for the recorded disc. Unknown
    location names are **rejected** (typo guard) unless you also pass
    `--create-location`, or pre-register with `lcsas location add`
    (`resolve_location` in `cmd_burn_session`). Defaults to
@@ -253,7 +255,7 @@ the same volumes to a different location.
    `BurnOrchestrator.burn_session`).
 
 **Expected outcome:** Each volume in the session is burned + verified +
-recorded as a copy at the requested location. Re-burns (a volume already
+recorded as a disc at the requested location. Re-burns (a volume already
 `VERIFIED`) skip the status transitions and simply add another
 `volume_copies` row (`BurnOrchestrator.burn_session`). Verify
 failures on re-burns emit `VERIFY_FAIL_REBURN` events without rolling the
@@ -267,7 +269,7 @@ volume backward (`BurnOrchestrator.burn_session`).
 - **Optical drive count** — `--device` lets multiple physical drives
   share work; one process per drive.
 - **ECC** — already baked into the staged ISOs; nothing to do at burn time.
-- **Recovery tier** — produces Tier 2 (COLD) media.
+- **Storage stage** — produces discs.
 
 **Test coverage:**
 
@@ -319,7 +321,7 @@ use `lcsas stage --dry-run` instead (next section).
 
 - **Media type** — inherited from the staged session.
 - **ECC** — not exercised in dry-run (no ISOs are mastered).
-- **Recovery tier** — none; planning only.
+- **Storage stage** — none; planning only.
 
 **Test coverage:**
 
@@ -348,7 +350,7 @@ committing to a full stage.
 **Expected outcome:** Per-volume plan printed, no session created, no
 staging directories, no catalog mutation.
 
-**Variant axes that apply:** Media type (all), repo filter (`--repo`),
+**Variant axes that apply:** Media type (all), repository filter (`--repo`),
 location filter (`--for-location`). No ISO is produced.
 
 **Test coverage:** `tests/unit/test_session_pipeline.py` exercises the
@@ -365,7 +367,7 @@ location filter (`--for-location`). No ISO is produced.
 physical location**, then burn them. The classic "Offsite_Safe is six
 months out of date — catch it up" workflow. Note: in the CLI the flag is
 `--for-location` on `stage`; the corresponding `lcsas burn --location`
-tags the burned copies for that physical location but does not influence
+tags the burned discs for that physical location but does not influence
 pack selection (selection is fixed at stage time).
 
 **Prerequisites:**
@@ -400,7 +402,7 @@ transparently (re-burning a `VERIFIED` volume only adds a new
 
 - **Multi-copy** — primary use case.
 - **Media type** — all.
-- **Multi-tenant** — combine `--for-location` with `--repo` to restrict
+- **Multi-repository** — combine `--for-location` with `--repo` to restrict
   further (`BurnOrchestrator._gather_packs_for_staging`). See also
   [`docs/workflows/multi-tenant.md`](multi-tenant.md).
 
@@ -449,7 +451,7 @@ The orchestrator's media handling rules:
 
 | Media   | `capacity_bytes` | `ecc_overhead_pct` | `usable_bytes` | ECC step | Notes |
 |---------|------------------|--------------------|----------------|----------|-------|
-| `CD700`    | 737,280,000       | 15 | ~626.7 MB | RS03 augment | 80-min CD-R. Bounded collections and realistic-size testing only — the holographic catalog grows with the archive and eventually will not fit; CD-R dye also rots far sooner than BD-R HTL or M-Disc. |
+| `CD700`    | 737,280,000       | 15 | ~626.7 MB | RS03 augment | 80-min CD-R. Bounded collections and realistic-size testing only — the disc catalog grows with the archive and eventually will not fit; CD-R dye also rots far sooner than BD-R HTL or M-Disc. |
 | `BD25`     | 25,025,314,816    | 15 | ~21.27 GB | RS03 augment | Single-layer BD-R. |
 | `BD50`     | 50,050,629,632    | 15 | ~42.54 GB | RS03 augment | Dual-layer BD-R. |
 | `BDXL100`  | 100,103,356,416   | 15 | ~85.09 GB | RS03 augment | Triple-layer BDXL. |
@@ -460,7 +462,7 @@ The orchestrator's media handling rules:
 Every production capacity above is a rung on dvdisaster's RS03 medium ladder
 (`RS03_MEDIUM_LADDER_BYTES`). Media types must not be added off the ladder: an
 off-rung capacity pads up to the next rung, burning a disc mostly full of
-padding. Same-capacity tiers (M-Disc vs BD-R) must also differ in the enum's
+padding. Same-capacity media types (M-Disc vs BD-R) must also differ in the enum's
 `family` field, or `Enum` collapses them into aliases.
 
 ### Test media
@@ -472,7 +474,7 @@ padding. Same-capacity tiers (M-Disc vs BD-R) must also differ in the enum's
 ### ECC behaviour, explicitly
 
 The DVDisaster step is **always applied** to production media (any
-`MediaType` whose `ecc_overhead_pct > 0`). There is no user-facing flag
+`MediaType` whose `ecc_overhead_pct > 0`). There is no flag
 to bypass it — production archives without ECC cannot survive a single
 read error and were judged a vestigial misfeature (see GH-36).
 
@@ -507,7 +509,7 @@ from hitting a `dvdisaster` failure.
 | `BDXL100`   | No automated coverage. |
 | `MDISC25`   | No automated coverage. |
 | `MDISC100`  | No automated coverage. |
-| `TEST_TINY` | Heavy coverage in `test_session_pipeline.py` (including multi-volume, multi-tenant), `test_burn_orchestrator.py`, `test_staging.py`, `test_binpack.py`, `test_config.py`; end-to-end coverage via `tests/integration/test_disc_only_restore.py`. |
+| `TEST_TINY` | Heavy coverage in `test_session_pipeline.py` (including multi-volume, multi-repository), `test_burn_orchestrator.py`, `test_staging.py`, `test_binpack.py`, `test_config.py`; end-to-end coverage via `tests/integration/test_disc_only_restore.py`. |
 
 ---
 
@@ -534,7 +536,7 @@ Volume statuses (set by `update_status` / `mark_closed`):
   (`BurnOrchestrator._stage_single_volume`, `BurnOrchestrator.burn_session`).
 - **`BURNING`** — set immediately before `xorriso burn_iso`.
 - **`BURNED`** — set when a burn completes but post-burn `verify_disc`
-  fails. The volume holds at `BURNED` so the operator can investigate
+  fails. The volume holds at `BURNED` so the owner can investigate
   (`BurnOrchestrator.burn_session`).
 - **`VERIFIED`** — burn + verify passed; volume is closed via `mark_closed`
   (`BurnOrchestrator.burn_session`).
@@ -552,7 +554,7 @@ The pipeline is interrupt-safe in three places:
    partial volumes' packs are linked but the volumes are still `STAGING`
    so `get_unarchived_packs` excludes them via `volume_packs`). Today
    there is no "resume this STAGED session" command; the recommended
-   recovery is `lcsas stage --clean --session <id>` to discard the
+   fix is `lcsas stage --clean --session <id>` to discard the
    partial session (`cmd_stage`, `BurnOrchestrator.clean_session`) and then
    re-stage.
 2. **Inside `burn_session()` between volumes** — if volume 3 of 5 fails,
@@ -561,10 +563,10 @@ The pipeline is interrupt-safe in three places:
    `lcsas burn --session <id> --location <name>`. `burn_session` iterates
    all `session_volumes` rows and the orchestrator's re-burn logic
    (`BurnOrchestrator.burn_session`) treats `VERIFIED` volumes as
-   "already done, just add another copy" — so the second invocation will
-   re-burn volumes 1-2 to the same location (recording a second copy,
+   "already done, just add another disc" — so the second invocation will
+   re-burn volumes 1-2 to the same location (recording a second disc,
    which is harmless) and complete 3-5. To avoid re-burning 1-2, the
-   operator currently has to manually identify the failed volume and
+   owner currently has to manually identify the failed volume and
    re-stage just that volume; this is a documented sharp edge.
 3. **Inside a single volume's burn** — if `xorriso burn_iso` or
    `verify_disc` raises, the volume transitions back to `STAGING` and the
@@ -597,12 +599,12 @@ rows; the disc remains the source of truth.
 | Axis | `stage` | `burn --session` | `burn --dry-run` | `stage --for-location` |
 |------|---------|------------------|------------------|------------------------|
 | Media type | All supported | Inherited from session | Inherited from session | All |
-| Multi-tenant | `--repo` filter; per-repo metadata injection | n/a (session already includes repo selection) | n/a (no-op) | `--repo` + `--for-location` combined |
+| Multi-repository | `--repo` filter; per-repo metadata injection | n/a (session already includes repo selection) | n/a (no-op) | `--repo` + `--for-location` combined |
 | OS | Linux | Linux | Linux | Linux |
 | Optical drive count | n/a (no burn) | 1 (`--device`) | n/a | n/a (stage only) |
 | Multi-copy | n/a | **Primary mechanism** — call once per location with same `--session` | n/a | Stage once; burn per location |
 | ECC | Always on for production media; implicit skip for TEST_* | Already baked into staged ISOs | n/a (no-op) | Always on for production media; implicit skip for TEST_* |
-| Recovery tier | Tier 1 (WARM) only | Tier 1 → Tier 2 | None | Tier 1 (WARM) only |
+| Storage stage | Staging area only | Staging area → discs | None | Staging area only |
 
 ---
 
@@ -617,8 +619,8 @@ Primary unit tests for this pipeline:
   rejection, manifest rollback, and an assertion that ECC IS invoked on
   production media (4 references to `TEST_TINY`).
 - `tests/unit/test_session_pipeline.py` — the broadest coverage: stage
-  (single & multi-volume, multi-tenant, `for_location`,
-  pack-sha256 filter, implicit ECC skip on TEST_TINY), burn_session (happy path, latest resolution,
+  (single & multi-volume, multi-repository, `for_location`,
+  pack ID filter, implicit ECC skip on TEST_TINY), burn_session (happy path, latest resolution,
   multi-location, verify-pass/fail event recording, receipt JSON shape,
   session status transitions, ISO cleanup), clean_session, repeated
   re-burn semantics (12+ references to `TEST_TINY`).
@@ -630,7 +632,7 @@ Primary unit tests for this pipeline:
 - `tests/unit/test_dvdisaster.py` — `SubprocessDVDisasterRunner` command
   construction and atomic-replace semantics.
 - `tests/unit/test_db_sessions.py` — `burn_sessions` and `session_volumes` CRUD.
-- `tests/unit/test_db_volume_copies.py` — multi-location copy tracking.
+- `tests/unit/test_db_volume_copies.py` — multi-location disc tracking.
 - `tests/unit/test_db_volume_events.py` — `VERIFY_PASS` / `VERIFY_FAIL`
   audit trail.
 - `tests/unit/test_parser_staging_labels.py` — disc label generation.
@@ -648,13 +650,13 @@ Primary unit tests for this pipeline:
 3. **Cross-drive parallel burn** — no test fixture instantiates two
    `XorrisoRunner` fakes binding to different `/dev/srN` paths.
 4. **Re-stage of a `PARTIAL` session** — no test asserts the "discard then
-   re-stage" recovery path is correct when the partial session contains
+   re-stage" fix is correct when the partial session contains
    already-`VERIFIED` volumes.
 5. **Test media + real DVDisaster** — `TEST_TINY` carries
    `ecc_overhead_pct == 0`, which the orchestrator interprets as
    "implicitly skip ECC", so `dvdisaster` is never invoked for it.
    Production media always invoke `dvdisaster`; there is no longer a
-   user-facing bypass flag.
+   bypass flag.
 
 ### Consolidated source refs
 

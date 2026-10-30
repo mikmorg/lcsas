@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """LCSAS single-drive disc-swap restore helper.
 
-Bundled on the meta volume by ``lcsas meta build``. Drives the
+Bundled on the meta disc by ``lcsas meta build``. Drives the
 three-phase restore loop that lets a single optical drive restore
 a repository by physically swapping discs between invocations.
 
 Pure stdlib. Does NOT import the ``lcsas`` package, so it still runs
 if the bundled source tree is incomplete or this script is copied off
-the meta volume onto an unrelated system.
+the meta disc onto an unrelated system.
 
 Phases:
     bootstrap
         Read the catalog on a currently-mounted disc, build a pick
         list of every live pack belonging to the target repository
         (grouped by its primary volume), seed the restore cache with
-        repo metadata from this disc, and write ``pick-list.json``
+        repository metadata from this disc, and write ``pick-list.json``
         into the cache. Emits the same JSON on stdout for the caller.
 
     ingest
@@ -31,7 +31,7 @@ invoking ``rustic restore`` against the assembled cache once
 ``finalize`` returns 0.
 
 Pack selection is conservative: every non-pruned pack belonging to
-the repo is included. This may ingest more packs than a specific
+the repository is included. This may ingest more packs than a specific
 snapshot strictly needs, but it guarantees correctness without
 depending on a rustic binary during the planning phase.
 """
@@ -113,8 +113,8 @@ def _build_pick_list(conn: sqlite3.Connection, repo_id: str) -> dict[str, Any]:
 
     A pack may live on multiple discs. We assign it to the
     lexicographically-smallest volume label and record the rest as
-    alternates. The caller walks volumes in sorted order; the agent
-    only has to visit each primary disc once.
+    alternates. The caller walks volumes in sorted order; the heir
+    only has to insert each primary disc once.
     """
     placeholders = ",".join("?" for _ in _LIVE_VOLUME_STATUSES)
     rows = conn.execute(
@@ -170,16 +170,16 @@ def _seed_metadata(mount: Path, cache: Path, repo_id: str) -> None:
     if not src.is_dir():
         # The mount path may itself be the metadata root (when bootstrap
         # is sourced from the meta disc, which carries metadata/<repo_id>
-        # at the root next to catalog.db).
+        # at its root but holds no catalog).
         alt = mount / repo_id
         if alt.is_dir():
             src = alt
     if not src.is_dir():
         raise SystemExit(
-            f"ERROR: metadata for repo {repo_id} not found on this disc "
-            f"(looked for {src}). Every LCSAS data disc carries a metadata "
-            f"copy — either this is not an LCSAS disc, or this repository "
-            f"has no data on it yet."
+            f"ERROR: metadata for repository {repo_id} not found on this "
+            f"disc (looked for {src}). Every LCSAS data disc carries a copy "
+            f"of the repository metadata — either this is not an LCSAS disc, "
+            f"or this repository has no data on it yet."
         )
     (cache / "data").mkdir(parents=True, exist_ok=True)
     for subdir in METADATA_SUBDIRS:
@@ -228,7 +228,7 @@ def phase_bootstrap(args: argparse.Namespace) -> int:
                 _resolve_repo(conn, args.repo)
             except SystemExit:
                 print(
-                    "ERROR: repo not found in new catalog — keeping "
+                    "ERROR: repository not found in new catalog — keeping "
                     "existing metadata",
                     file=sys.stderr,
                 )
@@ -270,9 +270,9 @@ def _load_pick_list(cache: Path) -> dict[str, Any]:
 
 
 def verify_disc(mount: Path, expected_label: str) -> bool:
-    """Quick pre-check: parse volume_info.json and verify the label matches.
+    """Quick pre-check: parse volume_info.json and check the label matches.
 
-    Returns True if verification passes or no volume_info.json exists.
+    Returns True if the check passes or no volume_info.json exists.
     Prints a warning and returns False on mismatch.
     """
     info_path = mount / "volume_info.json"
@@ -304,7 +304,7 @@ def phase_ingest(args: argparse.Namespace) -> int:
 
     if getattr(args, "verify_disc", False) and not verify_disc(mount, disc_label):
         print(
-            f"  {disc_label}: disc verification failed — skipping ingest",
+            f"  {disc_label}: disc label check failed — skipping ingest",
             file=sys.stderr,
         )
         return 2
@@ -488,11 +488,15 @@ def phase_finalize(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         print(
-            "  The restore cannot complete with the available media.",
+            "  The restore cannot complete with the discs available.",
             file=sys.stderr,
         )
         print(
-            "  Contact your backup administrator.",
+            "  If you have another disc with the same label as a damaged one",
+            file=sys.stderr,
+        )
+        print(
+            "  (for example, from another location), insert it and run again.",
             file=sys.stderr,
         )
 
@@ -532,7 +536,7 @@ def main(argv: list[str] | None = None) -> int:
 
     ip.add_argument(
         "--verify-disc", action="store_true", default=False,
-        help="Verify volume_info.json on disc before ingesting",
+        help="Check the label in volume_info.json on the disc before ingesting",
     )
 
     fp = sub.add_parser(

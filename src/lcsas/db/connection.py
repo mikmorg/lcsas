@@ -31,13 +31,13 @@ def set_lock_holder_label(label: str) -> None:
 
 
 def get_connection(db_path: Path | str) -> sqlite3.Connection:
-    """Open a connection to the archive catalog database.
+    """Open a connection to the archive catalog.
 
     Enables WAL mode, foreign keys, busy_timeout, and uses Row factory
     for dict-like access to query results.  Sets the file to owner-only
     permissions (0600) on first creation.
 
-    Database files are created with owner-only permissions atomically
+    Catalog files are created with owner-only permissions atomically
     by using ``os.open()`` with ``O_CREAT | O_EXCL`` so the file is
     never world-readable even for an instant.
     """
@@ -64,8 +64,8 @@ def get_connection(db_path: Path | str) -> sqlite3.Connection:
         result = conn.execute("PRAGMA quick_check(1);").fetchone()
         if result is not None and result[0] != "ok":
             raise RuntimeError(
-                f"Database integrity check failed for '{db_path}': {result[0]}. "
-                "The database may be corrupted. Restore from backup before continuing."
+                f"Catalog integrity check failed for '{db_path}': {result[0]}. "
+                "The catalog may be corrupted. Restore it from backup before continuing."
             )
     except Exception:
         conn.close()
@@ -102,7 +102,7 @@ def locked_connection(
     exclusive: bool = True,
     timeout: float | None = None,
 ) -> Generator[sqlite3.Connection, None, None]:
-    """Context manager that acquires a file lock around a DB connection.
+    """Context manager that acquires a file lock around a catalog connection.
 
     Acquires an ``fcntl.flock(LOCK_EX)`` on ``<db_path>.lock`` before
     opening the SQLite connection and releases it on exit (including on
@@ -111,7 +111,7 @@ def locked_connection(
     Parameters
     ----------
     db_path:
-        Path to the SQLite database file.
+        Path to the catalog's SQLite file.
     exclusive:
         If *True* (default), use ``LOCK_EX``; otherwise ``LOCK_SH``.
     timeout:

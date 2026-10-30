@@ -2,7 +2,7 @@
 
 Supports two modes:
   1. Legacy single-volume: prepare() → execute() (one volume at a time)
-  2. Session-based: stage() → burn_session() (multi-volume, multi-copy)
+  2. Burn session: stage() → burn_session() (multi-volume, multi-copy)
 """
 
 from __future__ import annotations
@@ -105,7 +105,7 @@ class AbortSummary:
 
 @dataclass
 class BurnReceipt:
-    """Receipt emitted after burning a single volume."""
+    """Burn receipt for one disc, emitted after burning it."""
 
     volume_label: str
     volume_id: int
@@ -117,8 +117,8 @@ class BurnReceipt:
     verify_passed: bool
     pack_count: int
     pack_ids: list[int] = field(default_factory=list)
-    # Post-ECC ISO byte length — travels with the hash so an imported
-    # receipt (or a catalog rebuilt from disc copies) can still device-
+    # Post-ECC ISO byte length — travels with the hash so an imported burn
+    # receipt (or a catalog rebuilt from the discs) can still device-
     # verify the disc after the ISO file is gone (FMA-03).
     iso_size_bytes: int | None = None
 
@@ -144,7 +144,7 @@ class BurnOrchestrator:
         self._conn = conn
         self._xorriso = xorriso
         self._dvdisaster = dvdisaster
-        # FUP-01: injectable operator-interaction seam.  Defaults to the
+        # FUP-01: injectable owner-interaction seam.  Defaults to the
         # TTY-backed console prompt; unit tests pass a recording fake and
         # `burn_session(interactive=False)` swaps in a no-op.
         self._prompt = prompt or ConsoleOperatorPrompt()
@@ -152,7 +152,7 @@ class BurnOrchestrator:
         # injection pattern used for xorriso/dvdisaster: reads N bytes
         # from a device and returns the hex SHA-256.
         self._device_reader = device_reader
-        # KEY-08 escape hatch: skip the key-escrow drift abort (logged as a
+        # KEY-08 escape hatch: skip the split drift abort (logged as a
         # volume event on each staged volume).  For multi-config edge cases.
         self._allow_escrow_drift = allow_escrow_drift
 
@@ -164,11 +164,11 @@ class BurnOrchestrator:
         """Identify unarchived packs and prepare a staging directory.
 
         Steps:
-          1. Query unarchived packs (all repos or specific ones).
+          1. Query unarchived packs (all repositories or specific ones).
           2. Bin-pack them to fit the target media.
           3. Build staging directory with hardlinked packs.
-          4. Inject holographic metadata.
-          5. Register volume in DB with STAGING status.
+          4. Inject repository metadata.
+          5. Register volume in the catalog with STAGING status.
 
         Returns:
             BurnManifest describing the prepared burn.
@@ -220,8 +220,8 @@ class BurnOrchestrator:
         selected_packs = [p for p in all_unarchived if p.sha256 in selected_hashes]
         total_bytes = sum(s for _, s in selected_items)
 
-        # FMT-03: prove participating repos decode with the pinned recovery
-        # readers before staging anything to disk or catalog.
+        # FMT-03: prove participating repositories decode with the pinned
+        # recovery readers before staging anything to disk or catalog.
         self._format_preflight(
             sorted({p.repo_id for p in selected_packs})
         )
@@ -387,13 +387,13 @@ class BurnOrchestrator:
     def abort(self, manifest: BurnManifest) -> None:
         """Clean up a failed or cancelled burn operation.
 
-        Removes staging directory and reverts DB state.
+        Removes staging directory and reverts catalog state.
         """
         # Remove volume_packs links and the volume itself
         from lcsas.db.volumes import delete_volume
         delete_volume(self._conn, manifest.volume_id)
 
-        # Clean up staging
+        # Clean up the staging directory
         safe_remove_tree(manifest.staging_path)
         if manifest.iso_path and manifest.iso_path.exists():
             manifest.iso_path.unlink()
@@ -441,8 +441,9 @@ class BurnOrchestrator:
         builder.initialize()
 
         mirror_paths = self._get_mirror_paths()
-        # Group packs by repo so we look for each pack only in its own mirror.
-        # This avoids MissingPacksError when multiple repos share a volume.
+        # Group packs by repository so we look for each pack only in its own
+        # mirror.  This avoids MissingPacksError when multiple repositories
+        # share a volume.
         from collections import defaultdict
         packs_by_repo: dict[str, list[Pack]] = defaultdict(list)
         for p in selected_packs:
@@ -468,12 +469,12 @@ class BurnOrchestrator:
         # staging tree before anything is written to the catalog.
         builder.assert_staged_complete(selected_packs)
 
-        # 2. Inject holographic metadata — strict for repos with packs on
-        #    this volume (the disc must stay self-describing for them).
+        # 2. Inject repository metadata — strict for repositories with packs
+        #    on this volume (the disc must stay self-describing for them).
         injector = HolographicInjector(staging_root)
         injector.inject_metadata(mirror_paths, required_repos=set(packs_by_repo))
 
-        # 3. Register volume in DB (atomic transaction)
+        # 3. Register volume in the catalog (atomic transaction)
         volume = create_volume(
             self._conn,
             label=vol_label,
@@ -490,12 +491,12 @@ class BurnOrchestrator:
         update_used_bytes(self._conn, volume.volume_id, total_bytes, commit=False)
         if drift_msg is not None:
             # Escape hatch was used: audit that this disc was staged despite
-            # key-escrow drift, in the same transaction as the volume row.
+            # split drift, in the same transaction as the volume row.
             add_event(
                 self._conn,
                 volume.volume_id,
                 "NOTE",
-                detail=f"KEY-08 escrow drift override: {drift_msg}",
+                detail=f"KEY-08 split drift override: {drift_msg}",
                 commit=False,
             )
         if session_id is not None and iso_output is not None:
@@ -521,22 +522,22 @@ class BurnOrchestrator:
         # multi-minute dvdisaster run also compensates.  The staging tree
         # is left on disk for diagnosis (abort/clean removes it).
         try:
-            # 4. Inject catalog AFTER DB commit.
+            # 4. Inject the disc catalog AFTER the catalog commit.
             #    Checkpoint WAL so all committed data is in the main .db
-            #    file, then copy it to staging, keeping DB and disc catalog
-            #    in sync.
+            #    file, then copy it to the staging area, keeping the master
+            #    catalog and the disc catalog in sync.
             try:
                 self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 injector.inject_catalog(self._config.db_path)
             except Exception as exc:
                 _logger.error(
-                    "Catalog injection into staging failed; rolling back volume "
-                    "registration for %s: %s",
+                    "Catalog injection into the staging area failed; rolling "
+                    "back volume registration for %s: %s",
                     vol_label, exc,
                 )
                 raise RuntimeError(
-                    f"Failed to inject catalog into staging for volume {vol_label}. "
-                    f"Volume registration has been rolled back."
+                    f"Failed to inject catalog into the staging area for volume "
+                    f"{vol_label}. Volume registration has been rolled back."
                 ) from exc
 
             # 5. Write volume info files
@@ -609,19 +610,20 @@ class BurnOrchestrator:
         )
 
     def _format_preflight(self, repo_ids: list[str]) -> None:
-        """Prove every participating repo is readable by the pinned readers.
+        """Prove every participating repository is readable by the pinned readers.
 
-        FMT-03: before any ISO is mastered, decode-prove each repo with the
-        tier-3 :class:`PurePythonRestorer` (config version 1-2 + index + one
-        blob).  A repo whose live rustic has outrun the pinned recovery
-        readers (e.g. a future v3 format) is refused here, so no disc that no
-        shipped reader can open is ever burned.
+        FMT-03: before any ISO is mastered, decode-prove each repository with
+        the tier-3 Python reader, :class:`PurePythonRestorer` (config version
+        1-2 + index + one blob).  A repository whose live rustic has outrun
+        the pinned recovery readers (e.g. a future v3 format) is refused here,
+        so no disc that no shipped reader can open is ever burned.
 
-        A repo with no ``password_file`` configured cannot be decode-proven;
-        it is refused unless ``allow_unverified_repo_format`` is set.  The DB
-        repo is matched to its ``RepositoryConfig`` by mirror_path (the
-        authoritative join: the DB ``name`` may be title-cased / differ from
-        the config key), falling back to name.
+        A repository with no ``password_file`` configured cannot be
+        decode-proven; it is refused unless ``allow_unverified_repo_format``
+        is set.  The catalog's repository is matched to its
+        ``RepositoryConfig`` by mirror_path (the authoritative join: the
+        catalog ``name`` may be title-cased / differ from the config key),
+        falling back to name.
         """
         from lcsas.burn.format_preflight import (
             FormatDriftError,
@@ -657,9 +659,9 @@ class BurnOrchestrator:
     def _match_repo_config(
         self, db_name: str, db_mirror_path: str,
     ) -> RepositoryConfig | None:
-        """Find the RepositoryConfig for a DB repo, joining on mirror_path.
+        """Find the RepositoryConfig for a catalog repository, joining on mirror_path.
 
-        mirror_path is the authoritative join (the DB ``name`` may be
+        mirror_path is the authoritative join (the catalog ``name`` may be
         title-cased relative to the config key, as in `lcsas repo add`).
         Falls back to an exact then case-insensitive name match.
         """
@@ -681,12 +683,13 @@ class BurnOrchestrator:
         return None
 
     def _get_mirror_paths(self) -> dict[str, Path]:
-        """Build a dict of {repo_id: mirror_path} from database repositories."""
+        """Build a dict of {repo_id: mirror_path} from the catalog's repositories."""
         paths: dict[str, Path] = {}
         for repo in list_repos(self._conn):
             paths[repo.repo_id] = Path(repo.mirror_path)
 
-        # Fallback: if no repos in DB, use mirror_base_path as "default"
+        # Fallback: if no repositories in the catalog, use mirror_base_path
+        # as "default"
         if not paths:
             paths["default"] = self._config.mirror_base_path
 
@@ -717,9 +720,9 @@ class BurnOrchestrator:
         """K/N to render on this volume's disc text, from the record when present.
 
         A recorded split is the authoritative source for the heir-facing K/N
-        (KEY-08); falls back to None (caller uses config) when no repo on the
-        volume has a record.  If the staged repos carry different recorded
-        splits, the first by repo_id wins — the drift preflight already blocked
+        (KEY-08); falls back to None (caller uses config) when no repository
+        on the volume has a record.  If the staged repositories carry different
+        recorded splits, the first by repo_id wins — the drift preflight already blocked
         any config/record disagreement, and mixed-split archives are out of
         scope for the single archive-wide split block.
         """
@@ -730,7 +733,7 @@ class BurnOrchestrator:
         return None
 
     # =================================================================
-    # Session-based staging and burning (multi-volume, multi-copy)
+    # Burn sessions: staging and burning (multi-volume, multi-copy)
     # =================================================================
 
     def stage(
@@ -744,7 +747,7 @@ class BurnOrchestrator:
         """Stage all unarchived packs into ISOs, creating a burn session.
 
         Handles multi-volume scenarios: if data exceeds one disc, multiple
-        volumes and ISOs are created within a single session.
+        volumes and ISOs are created within a single burn session.
 
         ECC is applied automatically for production media (any ``MediaType``
         with ``ecc_overhead_pct > 0``). Test media (``TEST_TINY``, 0%
@@ -756,11 +759,11 @@ class BurnOrchestrator:
             media_type: Target media type (defaults to config).
             for_location: If set, stage only packs missing at this location.
             repo_ids: Optional filter to specific repositories.
-            pack_sha256s: If set, stage only packs with these SHA-256 hashes.
+            pack_sha256s: If set, stage only packs with these pack IDs.
             dry_run: If True, compute the plan but skip all side effects.
 
         Returns:
-            StageResult with session ID, manifests, and ISO paths.
+            StageResult with burn session ID, manifests, and ISO paths.
         """
         from lcsas.log import get_logger
         logger = get_logger()
@@ -802,20 +805,20 @@ class BurnOrchestrator:
                 iso_paths=[],
             )
 
-        # FMT-03: prove every participating repo decodes with the pinned
-        # recovery readers BEFORE any session/staging/ISO side effect.  A repo
-        # whose live rustic has outrun the readers (e.g. a v3 format) is
-        # refused here, never burned.
+        # FMT-03: prove every participating repository decodes with the pinned
+        # recovery readers BEFORE any burn-session/staging/ISO side effect.  A
+        # repository whose live rustic has outrun the readers (e.g. a v3
+        # format) is refused here, never burned.
         participating_repos = {p.repo_id for _packs, _b in volume_plans
                                for p in _packs}
         self._format_preflight(sorted(participating_repos))
 
         # 3. Disk space pre-flight check [BURN-07]
-        # Per volume we hold the staging tree (packs + holographic
-        # metadata) AND its ISO — ISOs persist for the whole session
-        # (BURN-06), so the padded ISO sizes are SUMMED, not maxed.  On
-        # ECC media (ecc_overhead_pct > 0) dvdisaster's RS03 augmented
-        # mode pads each ISO up to the smallest fitting medium (a 1 GB
+        # Per volume we hold the staging tree (packs + disc catalog +
+        # repository metadata) AND its ISO — ISOs persist for the whole
+        # burn session (BURN-06), so the padded ISO sizes are SUMMED, not
+        # maxed.  On ECC media (ecc_overhead_pct > 0) dvdisaster's RS03
+        # augmented mode pads each ISO up to the smallest fitting medium (a 1 GB
         # ISO becomes a 4.7 GB DVD image), and augment_iso additionally
         # duplicates the ISO while augmenting — budget one extra copy of
         # the largest padded ISO.
@@ -838,14 +841,14 @@ class BurnOrchestrator:
             avail_gb = staging_usage.free / 1e9
             need_gb = required_bytes / 1e9
             raise OSError(
-                f"Insufficient disk space for staging: "
+                f"Insufficient disk space in the staging area: "
                 f"{avail_gb:.1f} GB available, ~{need_gb:.1f} GB needed "
                 f"including RS03 medium padding "
                 f"(at {self._config.staging_path})"
             )
 
-        # 4. Create session.  FUP-02: commit the burn_sessions row BEFORE the
-        # directory exists on disk.  Invariant: any session-named dir on disk
+        # 4. Create the burn session.  FUP-02: commit the burn_sessions row
+        # BEFORE the directory exists on disk.  Invariant: any session-named dir on disk
         # has a non-CLEANED row (never flagged orphan by staging-clean); the
         # only other window is a row with no dir (a crash between commit and
         # mkdir), which detect_orphaned_staging already ignores and
@@ -934,15 +937,15 @@ class BurnOrchestrator:
         skip_burn: bool = False,
         interactive: bool = True,
     ) -> list[BurnReceipt]:
-        """Burn all ISOs in a session to disc, tagged with a location.
+        """Burn all ISOs in a burn session to disc, tagged with a location.
 
         Args:
-            session_ref: Session ID or 'latest'.
-            location: Physical location tag for this copy.
+            session_ref: Burn session ID or 'latest'.
+            location: The location where the discs burned now will be kept.
             device: Optical device (overrides config).
             skip_burn: If True, skip physical burn (for testing).
             interactive: If True (default), pause before each physical
-                burn so the operator can load a blank disc, and after each
+                burn so the owner can load a blank disc, and after each
                 verified burn eject the tray and print the label to write.
                 Forced off when ``skip_burn`` is set (no disc is touched).
 
@@ -970,7 +973,7 @@ class BurnOrchestrator:
             iso_path = Path(sv.iso_path)
             vol = get_volume_by_id(self._conn, sv.volume_id)
 
-            # FUP-01: operator checkpoint + blank-media pre-check BEFORE
+            # FUP-01: owner checkpoint + blank-media pre-check BEFORE
             # the physical burn.  Both are no-ops under skip_burn.
             if not skip_burn:
                 prompt.checkpoint(
@@ -984,14 +987,14 @@ class BurnOrchestrator:
                     f"ISO file missing for volume {vol.label}: {iso_path}. "
                     f"The session's staging area was cleaned "
                     f"('lcsas stage --clean') or the file was removed "
-                    f"manually. To burn another copy, re-stage for the "
+                    f"manually. To burn another disc, re-stage for the "
                     f"target location: "
                     f"lcsas stage --for-location {location} && "
                     f"lcsas burn --session latest --location {location}"
                 )
 
             # For multi-location re-burns, skip status transitions if
-            # the volume is already VERIFIED (just add another copy).
+            # the volume is already VERIFIED (just add another disc).
             is_reburn = vol.status == "VERIFIED"
 
             if not is_reburn:
@@ -1024,12 +1027,12 @@ class BurnOrchestrator:
 
                 if not is_reburn:
                     if verify_passed:
-                        # Finalize volume status (atomic: status + close + copy)
+                        # Finalize volume status (atomic: status + close + disc row)
                         update_status(self._conn, sv.volume_id, "VERIFIED", commit=False)
                         mark_closed(self._conn, sv.volume_id, commit=False)
                     else:
                         # Back to STAGING, as execute() does (#483).  A disc
-                        # that failed verification is not a copy (BURN-05), and
+                        # that failed verification is not recorded (BURN-05), and
                         # BURNED would count its packs as archived (FMA-01's
                         # DURABLE_VOLUME_STATUSES) with no verified disc behind
                         # them.  STAGING returns them to the unarchived pool;
@@ -1037,7 +1040,7 @@ class BurnOrchestrator:
                         update_status(self._conn, sv.volume_id, "STAGING", commit=False)
                 else:
                     # Re-burn case: volume stays VERIFIED (it passed before)
-                    # Record the verify failure for this location's copy
+                    # Record the verify failure for this location's disc
                     if not verify_passed:
                         add_event(
                             self._conn, sv.volume_id, "VERIFY_FAIL_REBURN",
@@ -1047,9 +1050,9 @@ class BurnOrchestrator:
                         )
 
                 if verify_passed:
-                    # Record copy at location, with the verification
+                    # Record the disc at its location, with the verification
                     # evidence (BURN-04: previously iso_sha256 was omitted —
-                    # every copy row got NULL, and a re-burn UPSERT blanked
+                    # every disc row got NULL, and a re-burn UPSERT blanked
                     # any stored hash; last_verified_at was never written).
                     add_volume_copy(
                         self._conn,
@@ -1061,14 +1064,14 @@ class BurnOrchestrator:
                         commit=False,
                     )
                 else:
-                    # BURN-05: a failed disc is not a copy. Recording one
-                    # would satisfy the ACTIVE-copy location queries and
+                    # BURN-05: a failed disc is not recorded. Recording one
+                    # would satisfy the ACTIVE-disc location queries and
                     # `stage --for-location` would never re-stage these
-                    # packs — a phantom copy in the catalog forever. The
+                    # packs — a phantom disc in the catalog forever. The
                     # VERIFY_FAIL event above carries the location for
                     # the audit trail.
                     _logger.error(
-                        "Burn at %s FAILED verification for %s. NO copy "
+                        "Burn at %s FAILED verification for %s. NO disc "
                         "was recorded — this location still needs this "
                         "volume. Inspect the disc/drive and re-run: "
                         "lcsas burn --session %s --location %s",
@@ -1076,7 +1079,7 @@ class BurnOrchestrator:
                     )
                 self._conn.commit()
 
-                # Build receipt
+                # Build the burn receipt
                 from lcsas.db.volume_packs import get_pack_ids_for_volume
                 pack_ids = get_pack_ids_for_volume(self._conn, sv.volume_id)
 
@@ -1095,10 +1098,10 @@ class BurnOrchestrator:
                 )
                 receipts.append(receipt)
 
-                # FUP-01: persist this disc's receipt NOW (durable, beside
-                # the catalog DB), not only in the end-of-session sweep — a
-                # mid-session crash then still leaves a receipt for every
-                # disc actually burned.  The end-of-session writes below
+                # FUP-01: persist this disc's burn receipt NOW (durable,
+                # beside the master catalog), not only in the end-of-session
+                # sweep — a mid-session crash then still leaves a burn receipt
+                # for every disc actually burned.  The end-of-session writes below
                 # are idempotent re-writes of the same files.
                 self._write_durable_receipts([receipt], location)
 
@@ -1114,13 +1117,13 @@ class BurnOrchestrator:
                         exc_info=True,
                     )
                     raise original_exc from cleanup_exc
-                # If at least one volume was burned, mark session PARTIAL
+                # If at least one volume was burned, mark the burn session PARTIAL
                 if receipts:
                     update_session_status(self._conn, session_id, "PARTIAL")
                 raise original_exc
 
             # FUP-01: after a verified burn, eject the tray (best-effort)
-            # and tell the operator exactly what to write on the disc — the
+            # and tell the owner exactly what to write on the disc — the
             # hand-written label is the only link from a physical disc back
             # to the catalog decades later.  Skipped on a failed verify
             # (the disc is suspect) and under skip_burn (no disc).
@@ -1133,25 +1136,26 @@ class BurnOrchestrator:
                 self._prompt_labeling(prompt, vol.label, location)
 
             # BURN-06: the ISO is deliberately NOT deleted here. The
-            # documented multi-copy flow re-burns the same session at a
+            # documented multi-copy flow re-burns the same burn session at a
             # second location, which needs the ISO intact. Deletion is
             # the explicit `clean_session` / `abort_session` step.
 
-        # Update session status — any failed verify leaves the session
-        # PARTIAL so it can never masquerade as a completed copy set;
-        # re-running the burn at the same location is the recovery
-        # path.  [BURN-05]
+        # Update burn session status — any failed verify leaves the burn
+        # session PARTIAL so it can never masquerade as a completed set of
+        # discs; re-running the burn at the same location is the way to
+        # retry.  [BURN-05]
         any_failed = any(not r.verify_passed for r in receipts)
         update_session_status(
             self._conn, session_id, "PARTIAL" if any_failed else "COMPLETE",
         )
 
-        # Write receipts JSON — once into the session staging tree (a
+        # Write burn receipts JSON — once into the session staging tree (a
         # convenience duplicate that dies with `stage --clean`) and once
-        # durably beside the catalog DB.  The on-disc catalog of this
-        # session was mastered BEFORE this burn, so the durable copy is
-        # the only record of where this session's discs went that
-        # survives both clean_session and a hot-DB loss.  [BURN-08]
+        # durably beside the master catalog.  The disc catalog of this
+        # burn session was mastered BEFORE this burn, so the durable file is
+        # the only record of where this burn session's discs went that
+        # survives both clean_session and the loss of the master catalog.
+        # [BURN-08]
         session_vols_info = get_session_volumes(self._conn, session_id)
         if session_vols_info:
             session_dir = Path(session_vols_info[0].iso_path).parent
@@ -1164,7 +1168,7 @@ class BurnOrchestrator:
         """Refuse to burn onto a disc that already carries data (FUP-01).
 
         Converts the "forgot to swap the just-burned disc" mistake from a
-        raw CalledProcessError + PARTIAL session into a clean, retryable
+        raw CalledProcessError + PARTIAL burn session into a clean, retryable
         error BEFORE any burn or status transition.  ``unknown`` (an odd
         drive we cannot classify) warns and proceeds rather than bricking
         the burn; ``no_media`` is left to ``burn_iso``'s own diagnostics.
@@ -1184,7 +1188,7 @@ class BurnOrchestrator:
     def _prompt_labeling(
         self, prompt: OperatorPrompt, label: str, location: str,
     ) -> None:
-        """Tell the operator what to hand-write on the disc just burned."""
+        """Tell the owner what to hand-write on the disc just burned."""
         prompt.checkpoint(
             "Burn VERIFIED. Remove the disc and write on it now, with a "
             "soft felt-tip marker:\n"
@@ -1322,16 +1326,16 @@ class BurnOrchestrator:
         *,
         force: bool = False,
     ) -> None:
-        """Remove staged ISOs and staging directories for a session.
+        """Remove staged ISOs and staging directories for a burn session.
 
-        Refuses to clean a session whose volumes were never burned: the
+        Refuses to clean a burn session whose volumes were never burned: the
         ISOs/staging tree are the only burnable artifacts, while the catalog
         would keep claiming the packs "archived" on phantom STAGING volumes.
         With ``force=True`` those volumes are deleted first, returning their
         packs to the unarchived pool, then cleaning proceeds.
 
         The burn receipts inside the staging tree die here too — that is
-        fine: they are duplicates of the durable copies under
+        fine: they are duplicates of the durable files under
         ``<db dir>/receipts/`` (:meth:`_write_durable_receipts`), which
         this method never touches.  [BURN-08]
         """
@@ -1343,7 +1347,7 @@ class BurnOrchestrator:
             labels = ", ".join(label for _vid, label in strandable)
             raise ValueError(
                 f"Session {session_id} has {len(strandable)} volume(s) with "
-                f"no verified disc copy ({labels}) — never burned, or burned "
+                f"no verified disc ({labels}) — never burned, or burned "
                 f"but post-burn verification failed. Cleaning now would "
                 f"permanently strand their packs as falsely 'archived'. "
                 f"Re-burn the session ('lcsas burn --session {session_id}'), "
@@ -1355,7 +1359,7 @@ class BurnOrchestrator:
         for vid, label in strandable:
             reclaim = self._reclaim_summary([vid])
             _logger.info(
-                "Volume %s has no verified disc copy — deleting; %d pack(s) "
+                "Volume %s has no verified disc — deleting; %d pack(s) "
                 "return to the unarchived pool",
                 label, reclaim.packs_reclaimed,
             )
@@ -1379,11 +1383,11 @@ class BurnOrchestrator:
         update_session_status(self._conn, session_id, "CLEANED")
 
     def abort_session(self, session_ref: str = "latest") -> AbortSummary:
-        """Abort a never-burned session: reclaim its packs, then clean it.
+        """Abort a never-burned burn session: reclaim its packs, then clean it.
 
-        Deletes the session's STAGING/BURNING volumes (returning their packs
+        Deletes the burn session's STAGING/BURNING volumes (returning their packs
         to the unarchived pool so the next `lcsas stage` picks them up),
-        removes the ISOs and staging tree, and marks the session CLEANED.
+        removes the ISOs and staging tree, and marks the burn session CLEANED.
         """
         from lcsas.log import get_logger
         logger = get_logger()
@@ -1409,7 +1413,7 @@ class BurnOrchestrator:
     def abort_volume(self, label: str) -> AbortSummary:
         """Delete a single stranded never-burned volume by label.
 
-        Covers volumes with no session (crash-window strandings from old
+        Covers volumes with no burn session (crash-window strandings from old
         catalogs).  Refuses anything not in STAGING/BURNING.
         """
         from lcsas.db.volumes import get_volume_by_label
@@ -1430,7 +1434,7 @@ class BurnOrchestrator:
         ).fetchone()
         if has_copy is not None:
             raise ValueError(
-                f"Volume {label} has recorded copies — a physical disc "
+                f"Volume {label} has a recorded disc — a burned disc "
                 f"exists, refusing to abort it."
             )
 
@@ -1448,16 +1452,16 @@ class BurnOrchestrator:
     def _strandable_session_volumes(
         self, session_id: str
     ) -> list[tuple[int, str]]:
-        """Return (volume_id, label) for a session's volumes that have NO
-        durable disc copy — cleaning them would strand their packs as
+        """Return (volume_id, label) for a burn session's volumes that have NO
+        recorded disc — cleaning them would strand their packs as
         falsely 'archived'.
 
         That is any STAGING/BURNING volume (never burned, or burned but
         failed its post-burn verification, #483) OR a BURNED volume with
         zero ``volume_copies`` rows: a catalog from before #483, when a
-        failed verify left the volume BURNED with no copy, so no durable
-        disc exists (#369).  A volume with any copy row corresponds
-        to a physical disc (however stale its status) and is never deleted
+        failed verify left the volume BURNED with no disc row, so no durable
+        disc exists (#369).  A volume with any ``volume_copies`` row
+        corresponds to a disc (however stale its status) and is never deleted
         by clean/abort (FMA-01).
         """
         rows = self._conn.execute(
@@ -1523,7 +1527,7 @@ class BurnOrchestrator:
                 all_packs = get_unarchived_packs(self._conn)
             packs = all_packs
 
-        # Apply repo filter if both for_location and repo_ids specified
+        # Apply repository filter if both for_location and repo_ids specified
         if for_location and repo_ids:
             packs = [p for p in packs if p.repo_id in repo_ids]
 
@@ -1602,7 +1606,7 @@ class BurnOrchestrator:
         session_dir: Path,
         manifests: list[BurnManifest],
     ) -> Path:
-        """Write session.json manifest to the session directory."""
+        """Write session.json manifest to the burn session directory."""
         manifest_data = {
             "session_id": session_id,
             "created_at": datetime.now(UTC).isoformat(),
@@ -1659,11 +1663,11 @@ class BurnOrchestrator:
         session_dir: Path,
         location: str,
     ) -> list[Path]:
-        """Write burn receipt JSON files into the session staging tree.
+        """Write burn receipt JSON files into the burn session's staging tree.
 
         These are convenience duplicates only: ``clean_session`` removes
         them along with the staging tree.  The permanent record is the
-        copy under ``<db dir>/receipts/`` written by
+        file under ``<db dir>/receipts/`` written by
         :meth:`_write_durable_receipts`.  [BURN-08]
         """
         receipts_dir = session_dir / "receipts"
@@ -1684,15 +1688,15 @@ class BurnOrchestrator:
         receipts: list[BurnReceipt],
         location: str,
     ) -> list[Path]:
-        """Persist burn receipts beside the catalog DB.  [BURN-08]
+        """Persist burn receipts beside the master catalog.  [BURN-08]
 
-        Every disc of a session carries a catalog mastered BEFORE the
-        session's burns, so the on-disc catalog can never say where the
-        newest discs' copies are kept.  These files — on the (backed-up)
-        catalog volume, outside the staging tree — are the durable
-        record of that provenance, and are what
+        Every disc of a burn session carries a disc catalog mastered BEFORE
+        the burn session's burns, so the disc catalog can never say where
+        the newest discs are kept.  These files — on the (backed-up)
+        drive that holds the master catalog, outside the staging area — are
+        the durable record of that provenance, and are what
         ``lcsas catalog import-receipts <db dir>/receipts/*.json``
-        replays onto a rebuilt hot DB.
+        replays onto a rebuilt master catalog.
         """
         receipts_dir = self._config.db_path.parent / "receipts"
         ensure_dir(receipts_dir)
@@ -1707,7 +1711,7 @@ class BurnOrchestrator:
             )
             self._dump_receipt(receipt, receipt_path)
             _logger.info(
-                "Receipt: %s — print it and file it with the disc.",
+                "Burn receipt: %s — print it and file it with the disc.",
                 receipt_path,
             )
             paths.append(receipt_path)

@@ -54,9 +54,9 @@ def add_volume_copy(
     media_serial: str = "",
     commit: bool = True,
 ) -> VolumeCopy:
-    """Record a physical copy of a volume at a location.
+    """Record a disc of a volume at a location.
 
-    If a copy already exists at this location (re-burn), the burn_date,
+    If a disc is already recorded at this location (re-burn), the burn_date,
     notes, and verification evidence are updated in-place: the row
     describes the NEW disc, so a stale ``last_verified_at`` from the
     replaced disc must not survive the re-burn.
@@ -99,18 +99,18 @@ def add_volume_copy(
     ).fetchone()
     if row is None:
         raise RuntimeError(
-            f"Failed to insert/update volume copy for volume {volume_id} at {location}"
+            f"Failed to insert/update the disc record for volume {volume_id} at {location}"
         )
     return _row_to_copy(row)
 
 
 def get_volume_copy(conn: sqlite3.Connection, copy_id: int) -> VolumeCopy:
-    """Get a volume copy by its ID."""
+    """Get a disc record by its ID."""
     row = conn.execute(
         "SELECT * FROM volume_copies WHERE id = ?", (copy_id,)
     ).fetchone()
     if row is None:
-        raise ValueError(f"Volume copy {copy_id} not found")
+        raise ValueError(f"Disc record {copy_id} not found")
     return _row_to_copy(row)
 
 
@@ -119,7 +119,7 @@ def get_copies_for_volume(
     volume_id: int,
     active_only: bool = True,
 ) -> list[VolumeCopy]:
-    """Get all copies of a specific volume."""
+    """Get all discs recorded for a specific volume."""
     if active_only:
         rows = conn.execute(
             "SELECT * FROM volume_copies WHERE volume_id = ? AND status = 'ACTIVE'",
@@ -141,13 +141,13 @@ def get_iso_sha256_for_label(
 
     Phase 21.3 helper for the portable verifier.  Looks first at
     ``volume_copies`` (one row per location, written at burn time when
-    a copy lands at a location), then falls back to the most recent
+    a disc lands at a location), then falls back to the most recent
     ``session_volumes`` row for the same volume (covers the staged-but-
     not-yet-burned-to-a-location case).
 
     Returns the first non-null hash found.  Returns ``None`` if the
     volume label is unknown OR none of its records carry a hash
-    (older v3 catalogs, or copies recorded before Phase 13).
+    (older v3 catalogs, or discs recorded before Phase 13).
     """
     from lcsas.db.volumes import get_volume_by_label
 
@@ -182,7 +182,7 @@ def get_copies_at_location(
     location: str,
     active_only: bool = True,
 ) -> list[VolumeCopy]:
-    """Get all volume copies at a specific location."""
+    """Get all discs recorded at a specific location."""
     if active_only:
         rows = conn.execute(
             "SELECT * FROM volume_copies WHERE location = ? AND status = 'ACTIVE'",
@@ -219,12 +219,12 @@ def move_volume_copy(
         )
     except sqlite3.IntegrityError:
         raise ValueError(
-            f"A copy of volume {volume_id} already exists at '{to_location}'. "
-            f"The disc cannot be moved there without first removing the existing copy."
+            f"A disc of volume {volume_id} is already recorded at '{to_location}'. "
+            f"The disc cannot be moved there without first removing that disc record."
         ) from None
     if result.rowcount == 0:
         raise ValueError(
-            f"No active copy of volume {volume_id} at '{from_location}'"
+            f"No in-service disc of volume {volume_id} at '{from_location}'"
         )
     # Audit trail: record the move as a LOCATION_MOVE event. The new location
     # goes in the dedicated `location` column; from/to are also serialised
@@ -248,7 +248,7 @@ def touch_last_verified(
     *,
     commit: bool = True,
 ) -> bool:
-    """Stamp ``last_verified_at = now`` on the ACTIVE copy at a location.
+    """Stamp ``last_verified_at = now`` on the ACTIVE disc at a location.
 
     Returns True if a row was updated (BURN-04: re-verification evidence
     for the disc-rot re-check cadence).
@@ -270,11 +270,11 @@ def find_stale_copies(
     *,
     now: datetime | None = None,
 ) -> list[tuple[str, str, str | None]]:
-    """ACTIVE copies whose ``last_verified_at`` is NULL or too old.
+    """ACTIVE discs whose ``last_verified_at`` is NULL or too old.
 
     Disc-rot re-verification cadence (FMA-05): returns
     ``(label, location, last_verified_at)`` tuples, never-verified
-    (NULL) first, then oldest first.  Copies of DEPRECATED/DESTROYED
+    (NULL) first, then oldest first.  Discs of DEPRECATED/DESTROYED
     volumes are excluded — those discs are already out of service.
 
     Timestamps are ISO-8601 UTC strings written by this module, so a
@@ -304,12 +304,12 @@ def _demote_volume_if_last_copy_lost(
     location: str,
     action: str,
 ) -> bool:
-    """Demote the volume to DEPRECATED when its last ACTIVE copy is gone.
+    """Record the volume as DEPRECATED (lost) when its last ACTIVE disc is gone.
 
     Replica truth (BURN-10): a volume is a live replica iff it has >=1
-    ACTIVE copy — except a volume with zero copy rows at all, which
-    counts by status alone (legacy).  A volume whose copy rows exist but
-    none are ACTIVE must therefore lose its durable status, or the
+    ACTIVE disc — except a volume with zero ``volume_copies`` rows at all,
+    which counts by status alone (legacy).  A volume whose disc rows exist
+    but none are ACTIVE must therefore lose its durable status, or the
     redundancy report and deprecation guard keep treating a destroyed
     disc as a valid replica.
 
@@ -339,7 +339,7 @@ def _demote_volume_if_last_copy_lost(
     add_event(
         conn, volume_id, "NOTE",
         location=location,
-        detail=f"auto-deprecated: last physical copy {action} at {location}",
+        detail=f"auto-deprecated: last in-service disc {action} at {location}",
         commit=False,
     )
     return True
@@ -350,10 +350,10 @@ def deprecate_copy(
     volume_id: int,
     location: str,
 ) -> bool:
-    """Mark a volume copy as deprecated (e.g. disc damaged).
+    """Mark a disc as deprecated (e.g. damaged).
 
-    Raises ValueError if no ACTIVE copy exists at the location.  Returns
-    True when this was the volume's last ACTIVE copy and the volume
+    Raises ValueError if no ACTIVE disc is recorded at the location.
+    Returns True when this was the volume's last ACTIVE disc and the volume
     itself was auto-demoted to DEPRECATED (BURN-10).
     """
     result = conn.execute(
@@ -363,7 +363,7 @@ def deprecate_copy(
     )
     if result.rowcount == 0:
         raise ValueError(
-            f"No active copy of volume {volume_id} at '{location}'"
+            f"No in-service disc of volume {volume_id} at '{location}'"
         )
     demoted = _demote_volume_if_last_copy_lost(
         conn, volume_id, location, "deprecated"
@@ -377,10 +377,10 @@ def destroy_copy(
     volume_id: int,
     location: str,
 ) -> bool:
-    """Mark a volume copy as destroyed.
+    """Mark a disc as destroyed.
 
-    Raises ValueError if no copy row exists at the location.  Returns
-    True when this was the volume's last ACTIVE copy and the volume
+    Raises ValueError if no disc is recorded at the location.  Returns
+    True when this was the volume's last ACTIVE disc and the volume
     itself was auto-demoted to DEPRECATED (BURN-10).
     """
     result = conn.execute(
@@ -390,7 +390,7 @@ def destroy_copy(
     )
     if result.rowcount == 0:
         raise ValueError(
-            f"No copy of volume {volume_id} recorded at '{location}'"
+            f"No disc of volume {volume_id} recorded at '{location}'"
         )
     demoted = _demote_volume_if_last_copy_lost(
         conn, volume_id, location, "destroyed"

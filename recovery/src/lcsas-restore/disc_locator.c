@@ -230,8 +230,8 @@ path_under(const char *path, const char *meta)
 /*
  * Return non-zero iff the meta disc is *still mounted* at `meta`.
  *
- * The meta-disc exclusion (`path_under(p, meta)` at three call sites
- * below) must NOT persist after the operator ejects the meta disc and
+ * The meta disc exclusion (`path_under(p, meta)` at three call sites
+ * below) must NOT persist after the heir ejects the meta disc and
  * mounts a data disc at the same mount point.  Otherwise the binary
  * blacklists `/mnt` for the rest of the run and the swap prompt loops
  * forever (issue #143).
@@ -239,7 +239,7 @@ path_under(const char *path, const char *meta)
  * Cheap liveness test: probe a sentinel file that exists on the meta
  * disc but never on a data disc.  `recovery/scripts/restore.sh` is
  * written by `_bundle_recovery_toolchain_artifacts` (meta builder) and
- * the holographic metadata injector that populates data discs does NOT
+ * `HolographicInjector` (which fills data discs) does NOT
  * write a `recovery/` directory.  `access(F_OK)` is the minimum-cost
  * stat-like check (no fd, no open).
  *
@@ -305,7 +305,7 @@ push_discovered(lcsas_disc_locator *l, const char *path)
  * **copy the catalog into the cache dir** and open the copy.  The
  * original is touched only during the copy.  Fallback when no cache
  * dir is configured: open the original in-place (legacy behaviour;
- * the operator gets the mount-busy friction).
+ * the heir gets the mount-busy friction).
  */
 static void
 consider_catalog(lcsas_disc_locator *l, const char *path)
@@ -362,7 +362,7 @@ effective_catalog(lcsas_disc_locator *l)
 }
 
 /*
- * Start a line of output on the operator stream.  While the prompt
+ * Start a line of output on the prompt stream.  While the prompt
  * waits, the cursor sits after its "> ", so a line printed then (a poll
  * tick's find) needs a newline first.
  */
@@ -391,7 +391,7 @@ json_string_field(const char *src, const lcsas_json_tok *toks,
 
 /*
  * Print the one line that names the disc at `root` from its
- * volume_info.json: the label LCSAS gave it, the meta (recovery) disc,
+ * volume_info.json: the label LCSAS gave it, the meta disc,
  * or why the file could not be used.  A bad file only costs the label;
  * the disc is searched for packs either way.
  */
@@ -424,13 +424,13 @@ describe_volume(lcsas_disc_locator *l, const char *root,
             if ((unsigned char)*c < 0x20 || (unsigned char)*c > 0x7e)
                 *c = '?';
         }
-        fprintf(o, "[lcsas-restore] mounted volume %s at %s\n",
+        fprintf(o, "[lcsas-restore] mounted the disc labelled %s at %s\n",
                 label, root);
     } else if (json_string_field((const char *)buf, toks, "type",
                                  kind, sizeof kind)
                && strcmp(kind, "meta") == 0) {
         /* The meta disc's volume_info.json has no label. */
-        fprintf(o, "[lcsas-restore] mounted the recovery (meta) disc "
+        fprintf(o, "[lcsas-restore] mounted the META disc "
                    "at %s\n", root);
     } else {
         why = "has no usable label";
@@ -520,7 +520,7 @@ refresh_discovered(lcsas_disc_locator *l)
         l->seen_volumes[i].seen = 0;
     }
 
-    /* Liveness check once per refresh -- if the operator ejects the
+    /* Liveness check once per refresh -- if the heir ejects the
      * meta disc partway through, the worst case is a single stale
      * decision; the next refresh re-evaluates. */
     meta_live = l->meta_disc && meta_disc_is_live(l->meta_disc);
@@ -570,8 +570,8 @@ refresh_discovered(lcsas_disc_locator *l)
             push_discovered(l, child);
             announced += announce_volume(l, child);
 
-            /* Look for a catalog.db at the disc root (LCSAS holographic
-             * layout) -- pick the freshest one we can open. */
+            /* Look for a catalog.db (an LCSAS disc catalog) at the disc
+             * root -- pick the freshest one we can open. */
             rc = snprintf(child, sizeof child, "%s/%s/catalog.db",
                           parent, name);
             if (rc > 0 && (size_t)rc < sizeof child) {
@@ -626,7 +626,7 @@ try_one_path(const char *root, const char *hex,
 }
 
 /*
- * Try a single search candidate, honouring the meta-disc exclusion.
+ * Try a single search candidate, skipping anything on the meta disc.
  * Returns 1 on hit (with out_path populated), 0 otherwise.
  */
 static int
@@ -686,7 +686,7 @@ copy_file(const char *src, const char *dst)
  * Return non-zero if the filesystem hosting `path` is below
  * `min_free_pct` percent free.  Conservative on stat failure
  * (returns 0 — assume OK).  Posts a one-line stderr warning on
- * threshold crossing so the operator sees it once.
+ * threshold crossing so the heir sees it once.
  */
 static int
 fs_critically_full(const char *path, int min_free_pct)
@@ -944,7 +944,7 @@ print_catalog_error(FILE *o, lcsas_catalog *cat)
         fputs("| (catalog could not be queried -- likely written by a     |\n", o);
         fputs("|  newer LCSAS; disc-swap hints unavailable. Insert discs  |\n", o);
         fputs("|  one at a time when prompted, or use the restore tools   |\n", o);
-        fputs("|  from the NEWEST meta disc in this set.)                 |\n", o);
+        fputs("|  from the NEWEST META disc you have.)                    |\n", o);
     } else {
         fputs("| (catalog could not be read, so no disc-swap hints.       |\n", o);
         fprintf(o, "|  Reason: %-47.47s |\n", lcsas_catalog_errmsg(cat));
@@ -976,7 +976,7 @@ print_prompt(lcsas_disc_locator *l, const char *hex)
             int n = lcsas_catalog_volumes_for_pack(
                         cat, pk.pack_id, vols, 8);
             if (n > 0) {
-                fputs("| It lives on volume(s):                                   |\n", o);
+                fputs("| It is on any disc labelled:                              |\n", o);
                 {
                     int j;
                     for (j = 0; j < n; j++) {
@@ -984,17 +984,17 @@ print_prompt(lcsas_disc_locator *l, const char *hex)
                     }
                 }
             } else if (n == 0) {
-                fputs("| (catalog has the pack, but no current volume mapping)    |\n", o);
+                fputs("| (catalog has the pack, but lists no disc for it)         |\n", o);
             } else {
                 fr = -1;
             }
         } else if (fr > 0) {
-            fputs("| (catalog has no record of this pack hash)                |\n", o);
+            fputs("| (catalog has no record of this pack ID)                  |\n", o);
         }
         /* A query error.  Do NOT claim "no record": we never asked. */
         if (fr < 0) print_catalog_error(o, cat);
     } else {
-        fputs("| (no --catalog supplied; cannot suggest a volume)         |\n", o);
+        fputs("| (no --catalog supplied; cannot suggest a disc)           |\n", o);
     }
 
     fputs("|                                                          |\n", o);
@@ -1008,8 +1008,8 @@ print_prompt(lcsas_disc_locator *l, const char *hex)
 
     fputs("|                                                          |\n", o);
     if (l->meta_disc) {
-        fputs("| Single-drive recovery: if your machine has only ONE      |\n", o);
-        fputs("| optical drive, eject the RECOVERY disc first, then       |\n", o);
+        fputs("| Single-drive restore: if your machine has only ONE       |\n", o);
+        fputs("| optical drive, eject the META disc first, then           |\n", o);
         fputs("| insert the disc named above into the SAME drive.         |\n", o);
         fputs("|                                                          |\n", o);
     }
@@ -1025,7 +1025,7 @@ print_prompt(lcsas_disc_locator *l, const char *hex)
 }
 
 /*
- * Next byte of the operator's answer.  With fd >= 0 (the auto-detect
+ * Next byte of the heir's answer.  With fd >= 0 (the auto-detect
  * path) read(2) the descriptor directly: select() can't see bytes
  * already sitting in a FILE buffer, so mixing the two would strand
  * typed-ahead input -- a buffered 'q' would sit unseen while the poll
@@ -1050,8 +1050,8 @@ next_answer_char(lcsas_disc_locator *l, int fd)
 }
 
 /*
- * Read one line of the operator's answer (see next_answer_char for
- * `fd`).  Returns 0 if user pressed Enter, -1 if user typed 'q'/'Q'
+ * Read one line of the heir's answer (see next_answer_char for
+ * `fd`).  Returns 0 if the heir pressed Enter, -1 if they typed 'q'/'Q'
  * to abort, or -1 on EOF.
  */
 static int
@@ -1072,7 +1072,7 @@ read_response(lcsas_disc_locator *l, int fd)
 }
 
 /*
- * Wait for the operator's answer to the prompt.  With auto-detect on
+ * Wait for the heir's answer to the prompt.  With auto-detect on
  * (#455), re-scan for the missing pack every poll_ms while waiting, so
  * a disc the OS mounts by itself resumes the restore with no ENTER.
  * Returns 1 if a re-scan found the pack (out_path filled), otherwise
@@ -1139,7 +1139,7 @@ lcsas_disc_locate_pack(lcsas_disc_locator *l,
     if (scan_paths(l, hex, out_path, out_path_cap)) return 0;
 
     /* Discover any newly-mounted discs before giving up.  Also
-     * re-picks the freshest catalog -- if the user inserted the
+     * re-picks the freshest catalog -- if the heir inserted the
      * right disc just before the first read, we may find the pack
      * without ever prompting. */
     if (l->n_mount_parents > 0) {
@@ -1152,9 +1152,9 @@ lcsas_disc_locate_pack(lcsas_disc_locator *l,
         return -1;
     }
 
-    /* Before we block on user input, make sure the process is not
-     * holding the meta-disc captive via its current working directory.
-     * If cwd is anywhere under meta_disc, drop to "/" so the user can
+    /* Before we block on the heir's input, make sure the process is not
+     * holding the meta disc captive via its current working directory.
+     * If cwd is anywhere under meta_disc, drop to "/" so the heir can
      * eject. */
     if (l->meta_disc) {
         char cwd[4096];
@@ -1173,8 +1173,8 @@ lcsas_disc_locate_pack(lcsas_disc_locator *l,
 
     /* Interactive: prompt-and-retry loop.  Prompt with whatever
      * discoveries are already current; after Enter, refresh to catch
-     * a disc the user mounted between prompt and keypress.  The
-     * freshest catalog is re-picked at each refresh so hash->label
+     * a disc the heir mounted between prompt and keypress.  The
+     * freshest catalog is re-picked at each refresh so pack->label
      * hints stay accurate after a disc swap.  With auto-detect on,
      * the same refresh also runs every poll_ms while waiting. */
     for (;;) {

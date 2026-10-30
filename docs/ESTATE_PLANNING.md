@@ -1,6 +1,6 @@
 # LCSAS — Estate Planning for Digital Archives
 
-> A guide for archivists who want their data to survive them.
+> A guide for archive owners who want their data to survive them.
 
 ---
 
@@ -23,7 +23,7 @@ This document provides a checklist and templates to make that possible.
   - Archive name (e.g. "Smith Family Archive")
   - Volume label (printed on the disc by LCSAS, e.g. `LCSAS_BD25_2026_0001`)
   - Date burned
-  - "META" on the meta-volume disc (this is the rescue disc)
+  - "META" on the meta disc (the disc that carries the recovery tools)
 
 - [ ] **Store discs in a binder or case**
   - Use a disc binder with individual sleeves (not spindle stacking)
@@ -32,15 +32,16 @@ This document provides a checklist and templates to make that possible.
   - Avoid attics, basements, and areas with temperature swings
 
 - [ ] **Maintain a paper manifest**
-  - Generate a one-page whole-archive **Recovery Card** with
+  - Generate a one-page whole-archive **estate card** with
     `lcsas --config lcsas.toml estate card --output card.txt` — it fills in
-    the owner, repositories, disc count (from the catalog), key scheme, and
-    the literal first command an heir runs per operating system. No password
-    is printed. Store this sheet WITH the disc binder.
+    the owner, repositories, disc count (from the catalog), whether the
+    password is split, and the literal first command an heir runs per
+    operating system. No password is printed. Store this sheet WITH the disc
+    binder.
   - Or print a list of all disc labels and what they contain by hand.
   - Update it each time you burn new discs.
 
-### 2. Encryption Key Management
+### 2. Password Management
 
 - [ ] **Choose the password like it WILL be brute-forced.** Every burned disc
   carries the password-locked key files forever, so a thief who steals any one
@@ -53,35 +54,36 @@ This document provides a checklist and templates to make that possible.
   threat model, the entropy table, and why changing the password later does
   nothing for discs already burned.
 
-- [ ] **Store the encryption key in multiple locations**:
+- [ ] **Store the password in several places**:
   - Paper printout in a fireproof safe at home
   - USB drive in a bank safe deposit box
-  - Password manager entry (shared vault or with beneficiary access)
+  - Password manager entry (shared, or with emergency access for an heir)
   - Sealed envelope with your attorney or executor
 
-- [ ] **Label the key clearly**:
-  - "LCSAS Archive Encryption Key"
+- [ ] **Label the password clearly**:
+  - "LCSAS Archive Password"
   - "Required to access backup discs labeled LCSAS_*"
   - Include the date and which repositories it unlocks
 
-- [ ] **NEVER store the key on an archive disc**
-  (The whole point of encryption is separation of key and data)
+- [ ] **NEVER store the password on an archive disc**
+  (The whole point of encryption is keeping the password and the data apart)
 
-- [ ] **Print a Recovery Card per storage location**:
+- [ ] **Print a password card for each place you keep the password**:
   - Generate one with `lcsas --config lcsas.toml key card --repo <name>`
     (the password is never printed; the card carries a transcription
-    check code so a hand-copied password can be verified later), or
-  - Fill in `docs/RECOVERY_CARD.txt` by hand.
-  - Store each card with that location's physical records — never with
-    the discs (key/data separation).
+    check code so a hand-copied password can be checked later), or
+  - Fill in `docs/PASSWORD_CARD.txt` by hand.
+  - Store each card with that place's physical records — never with
+    the discs (password/data separation).
 
-#### Option: Split the key into share cards (Shamir / SLIP-0039)
+#### Option: Split the password into share cards (Shamir / SLIP-0039)
 
-A single key copy is a single point of failure: lose it and the archive is
-gone forever; let the wrong person find it and the archive is exposed. LCSAS
-can instead **split the password into N share cards such that any K
-reconstruct it and any K−1 reveal nothing** (default **2-of-5**). This biases
-toward recoverability — the dominant risk for a backup is *loss*, not theft.
+A single copy of the password is a single point of failure: lose it and the
+archive is gone forever; let the wrong person find it and the archive is
+exposed. LCSAS can instead **split the password into N share cards such that
+any K reconstruct it and any K−1 reveal nothing** (default **2-of-5**). This
+biases toward restorability — the dominant risk for a backup is *loss*, not
+theft.
 
 - [ ] **Split the password** once your archive is configured:
 
@@ -89,9 +91,10 @@ toward recoverability — the dominant risk for a backup is *loss*, not theft.
   lcsas --config lcsas.toml key split --repo REPO
   ```
 
-  This writes `N` share files plus a plain-language **card** for each. Hand
-  the cards to separate trusted holders / locations (e.g. three relatives,
-  one safe deposit box, one attorney). No single holder can read the archive.
+  This writes `N` share files plus a plain-language **share card** for each.
+  Hand the cards to separate trusted share holders or places (e.g. three
+  relatives, one safe deposit box, one attorney). No single share holder can
+  read the archive.
   With `--config`, the split's **K/N and identifier are recorded in the
   catalog** so disc instructions can be derived from the split you actually
   performed (and the next-step reminder is printed).
@@ -99,7 +102,7 @@ toward recoverability — the dominant risk for a backup is *loss*, not theft.
 - [ ] **Mark the archive as split** so the discs print share instructions —
   set `key_split = true` (and your `key_threshold` / `key_shares`) under
   `[defaults]` in `lcsas.toml` (see §4). When split, every disc's
-  `KEY_INFO.txt` and `START_HERE.txt` tell the heir to **first reconstruct
+  `PASSWORD_INFO.txt` and `START_HERE.txt` tell the heir to **first reconstruct
   the password, then restore normally**.
 
   > **Drift guard (KEY-08).** `lcsas stage` aborts if `key_split` / `key_threshold`
@@ -122,7 +125,7 @@ toward recoverability — the dominant risk for a backup is *loss*, not theft.
      recovery/bin/<machine>/lcsas-keyshare <card1> <card2>
      ```
 
-     If that binary won't run on the host, the pure-Python fallback is
+     If that binary won't run on the host, the Python fallback is
      equivalent:
 
      ```
@@ -132,42 +135,42 @@ toward recoverability — the dominant risk for a backup is *loss*, not theft.
      Either one prints the password (and nothing else).
 
   2. Run the normal restore (`restore.sh`) and enter that password at the
-     `Password:` prompt — exactly the single-key flow.
+     `Password:` prompt — exactly as when the password is not split.
 
   The share format and a from-scratch re-implementation guide are in
-  `docs/KEY_SHARE_FORMAT.md`, bundled on every meta-volume.
+  `docs/SHARE_FORMAT.md`, bundled on every meta disc.
 
 #### ROTATION — when you change the repository password
 
-Re-keying the repository (changing the password, or `rustic key` rotation)
+Changing the repository password (for example by a `rustic key` rotation)
 **invalidates every distributed share card immediately.** The shares
-reconstruct the *old* password, which no longer unlocks the repo — and
-nothing in the cards themselves says so. A holder cannot tell a current card
-from a void one by looking at it.
+reconstruct the *old* password, which no longer unlocks the repository — and
+nothing in the cards themselves says so. A share holder cannot tell a current
+card from a void one by looking at it.
 
-`lcsas key split` defaults to verifying the password against the repo's real
-key files before writing any card, and re-checks the written cards round-trip,
-so it will refuse to escrow a password that does not unlock the repo. But
-that protects the *moment of splitting* — it cannot reach cards already in the
-field after a later re-key.
+`lcsas key split` defaults to checking the password against the repository's
+real key files before writing any card, and re-checks the written cards
+round-trip, so it will refuse to split a password that does not unlock the
+repository. But that protects the *moment of splitting* — it cannot reach
+cards already in the field after a later password change.
 
-Procedure after any re-key:
+Procedure after any password change:
 
 1. **Re-split** with the new password: `lcsas --config ... key split --repo R`.
    Each card is stamped with `Split on : <date>` and a `Split ID : NNNNN`
    (the SLIP-0039 identifier, shared by all cards of one split, different
    between splits) so you can tell card generations apart in the binder.
-2. **Redistribute** the new cards to the same holders/locations.
+2. **Redistribute** the new cards to the same share holders and places.
 3. **Recall and destroy** the superseded cards (shred / incinerate). Note the
    superseded `Split ID` in your estate notes so a stray old card is
    recognisable as void.
 4. **Confirm** the new cards work end-to-end:
    `lcsas --config ... key verify --repo R --share-file CARD1 --share-file CARD2`
-   (any K). Exit 0 + an `OK:` line means the new escrow is good.
+   (any K). Exit 0 + an `OK:` line means the new split is good.
 
 The annual READINESS drill (`recovery/docs/READINESS_CHECKLIST.txt`,
-"ENCRYPTION KEY REDUNDANCY") runs that same `lcsas key verify` so a silent
-rotation drift is caught within a year, not at recovery.
+"PASSWORD REDUNDANCY") runs that same `lcsas key verify` so a silent
+rotation drift is caught within a year, not at restore time.
 
 ### 3. Letter to Heirs
 
@@ -185,12 +188,13 @@ files — family photos, financial records, creative work, etc.].
 
 To access the files on these discs:
 
-1. Find the encryption key:
+1. Find the password:
    [Describe WHERE you stored it — "the blue USB drive in the home
    safe", "sealed envelope at Smith & Jones Law Firm", etc.]
 
-2. Find the META disc in this binder.  It contains all the software
-   needed to restore the files.
+2. Find the newest META disc in this binder.  It contains all the software
+   needed to restore the files.  If its tools will not run, use the META
+   disc burned closest in date to the data discs instead.
 
 3. Insert the META disc into any computer — Windows, macOS, or Linux
    all work.  Open the file called START_HERE.txt — it has
@@ -201,11 +205,11 @@ To access the files on these discs:
    the META disc, or the printed copy in this binder.
 
 5. If you are not comfortable doing this yourself, take ALL the discs
-   AND the encryption key to a computer professional.  The instructions
+   AND the password to a computer professional.  The instructions
    are on the discs — they don't need to know this system.
 
-Important: WITHOUT the encryption key, the data CANNOT be recovered.
-Keep the key safe but accessible to someone you trust.
+Important: WITHOUT the password, the data CANNOT be restored.
+Keep the password safe but accessible to someone you trust.
 
 With love,
 [Your name]
@@ -237,7 +241,7 @@ key_shares = 5         # N: share cards produced
 
 This information is automatically written to `START_HERE.txt` on every
 disc you burn — so your heirs can read it even without this document.
-When `key_split = true`, each disc's `START_HERE.txt` and `KEY_INFO.txt`
+When `key_split = true`, each disc's `START_HERE.txt` and `PASSWORD_INFO.txt`
 also include the two-step share-reconstruction pre-step.
 
 ### 5. Periodic Maintenance
@@ -249,13 +253,13 @@ also include the two-step share-reconstruction pre-step.
   lcsas verify --all
   ```
   Add `--disc` to read the physical discs from the drive instead of the
-  staged ISO files, or verify one volume at a time with
+  ISO images in the staging area, or verify one volume at a time with
   `lcsas verify <LABEL> --iso /path/to/<LABEL>.iso`.
-- [ ] **Update your letter** when you burn new discs or change key storage
+- [ ] **Update your letter** when you burn new discs or move the password
 - [ ] **Tell someone trusted** that these discs exist and where to find them
 - [ ] **Keep a Blu-ray drive available** — as optical drives disappear from
   consumer hardware, you may need to buy a USB Blu-ray drive separately
-- [ ] **If your archive uses 100 GB BDXL media, verify the stored drive is
+- [ ] **If your archive uses 100 GB BDXL media, check the stored drive is
   BDXL-capable** — many ordinary BD drives are NOT, and a non-BDXL drive
   reads none of the 100 GB discs
 
@@ -265,15 +269,15 @@ also include the two-step share-reconstruction pre-step.
 
 | File | Purpose |
 |------|---------|
-| `START_HERE.txt` | Plain-language guide for non-technical users |
+| `START_HERE.txt` | Plain-language guide for heirs |
 | `RESTORE_INSTRUCTIONS.txt` | Step-by-step technical restore procedure |
-| `KEY_INFO.txt` | Which encryption key(s) are needed |
+| `PASSWORD_INFO.txt` | Which password unlocks which repository |
 | `volume_info.json` | Machine-readable disc identity |
-| `catalog.db` | SQLite database of all pack locations |
+| `catalog.db` | Disc catalog (SQLite): which volume holds each pack |
 | `data/` | Encrypted backup data (pack files) |
 | `metadata/` | Repository metadata (index, snapshots, keys) |
 
-The **meta-volume** additionally contains:
+The **meta disc** holds no catalog. It contains:
 
 | File | Purpose |
 |------|---------|

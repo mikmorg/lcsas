@@ -52,7 +52,7 @@ def add_event(
         One of VERIFY_PASS, VERIFY_FAIL, VERIFY_FAIL_REBURN, ECC_REPAIR,
         LOCATION_MOVE, CONDITION_CHECK, NOTE, BURN_RECEIPT_IMPORTED.
     location:
-        Optional storage location associated with this event.
+        Optional location associated with this event.
     detail:
         Free-text detail (e.g. JSON with failed pack list).
     event_date:

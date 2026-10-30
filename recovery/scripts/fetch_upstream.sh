@@ -4,7 +4,7 @@
 # Reads recovery/UPSTREAM.sha256 (the pinned upstream manifest) and downloads
 # every listed artifact into ~/.cache/lcsas/recovery-binaries/, verifying each
 # file's SHA-256 against the manifest hash.  Idempotent: a warm cache produces
-# no network traffic.  Air-gapped operators can rsync the cache directory
+# no network traffic.  Air-gapped owners can rsync the cache directory
 # between machines.
 #
 # Layout of the cache:
@@ -100,7 +100,7 @@ PYTHON_BASE="https://github.com/astral-sh/python-build-standalone/releases/downl
 # dvdisaster has no source-tarball release asset; GitHub serves a stable
 # per-tag source archive from codeload.  The manifest filename embeds the
 # tag, so we strip the leading "dvdisaster-" and trailing ".tar.gz" to
-# recover the tag (e.g. dvdisaster-0.79.10-pl6.tar.gz → v0.79.10-pl6).
+# get the tag back (e.g. dvdisaster-0.79.10-pl6.tar.gz → v0.79.10-pl6).
 DVDISASTER_CODELOAD="https://codeload.github.com/speed47/dvdisaster/tar.gz/refs/tags"
 
 resolve_url() {

@@ -9,7 +9,7 @@ to search half of a password space of a given entropy.
 Usage:
     tools/kdf_bench.py                      # rustic + restic defaults
     tools/kdf_bench.py --params 131072,8,1  # one N,r,p triple
-    tools/kdf_bench.py --keys-dir REPO/keys # the params a repo records
+    tools/kdf_bench.py --keys-dir REPO/keys # the params a repository records
 
 Single-threaded on purpose: an attacker's throughput is this rate times
 the cores (or memory bandwidth) they can afford.  scrypt at these

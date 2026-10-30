@@ -462,7 +462,7 @@ class TestBulkRegisterSizeMismatch:
         assert len(hits) == 1
         msg = hits[0].getMessage()
         assert sha[:16] in msg
-        assert "DB has 1024 bytes" in msg
+        assert "catalog has 1024 bytes" in msg
         assert "found 2048 bytes" in msg
         # The catalog trusts the first-recorded size (documented, intentional).
         assert [p.size_bytes for p in result] == [1024]

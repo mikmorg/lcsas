@@ -1,6 +1,6 @@
-"""SLIP-0039 Shamir Secret Sharing for LCSAS key escrow.
+"""SLIP-0039 Shamir Secret Sharing for LCSAS password splits.
 
-Pure-Python, stdlib-only.  Splits a master secret (in LCSAS, a per-repo
+Pure-Python, stdlib-only.  Splits a master secret (in LCSAS, a repository's
 password) into ``N`` checksummed word-mnemonic shares with a ``K``-of-``N``
 threshold; any ``K`` shares reconstruct the secret, ``K-1`` reveal nothing.
 

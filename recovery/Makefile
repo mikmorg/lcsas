@@ -333,7 +333,7 @@ test-e2e: $(BUILD)/lcsas-restore
 	python3 tests/test_e2e.py
 
 test-bare-path: $(BUILD)/lcsas-restore
-	@echo "==> bare-path Python-free recovery"
+	@echo "==> bare-path Python-free restore"
 	@sh tests/test_bare_path.sh
 
 test-windows: bin/x86_64-windows/lcsas-restore.exe
@@ -462,9 +462,9 @@ windows: bin/x86_64-windows/lcsas-restore.exe
 #   * lcsas-iso9660 (ISO mastering helper) and lcsas-init (Linux PID 1)
 #     are not produced for macOS — they're either redundant on Darwin
 #     (the kernel handles ISO mounts natively) or Linux-only.
-#   * Notarization / codesigning is the operator's responsibility if
+#   * Notarization / codesigning is the owner's responsibility if
 #     they want Gatekeeper to bless the binary.  Unsigned binaries
-#     still run if the operator opens them once via Finder + "Open
+#     still run if the heir opens them once via Finder + "Open
 #     anyway" or unsets the quarantine attribute.
 
 bin/x86_64-macos/lcsas-restore:
@@ -490,7 +490,7 @@ bin/aarch64-macos/lcsas-restore:
 macos: bin/x86_64-macos/lcsas-restore bin/aarch64-macos/lcsas-restore
 
 # ── lcsas-keyshare per-arch cross builds ──────────────────────────
-# The SLIP-0039 combiner, so split-key reconstruction is python-free on
+# The SLIP-0039 combiner, so rebuilding a split password is python-free on
 # every approved tier-1 target.  Built with zig cc; the combiner links
 # ONLY the C89 recovery crypto primitives (sha256/pbkdf2/hex) — no
 # vendored sqlite/zstd — so it needs neither VENDOR_CFLAGS nor an
@@ -822,7 +822,7 @@ open('$(abspath $(BUILD))/coverage.txt', 'w').write(line + '\n')"
 #
 #   "Files we author" == "files tracked by git under recovery/", minus:
 #     * bin/           -- built artifacts, not source.  Their integrity
-#                         is covered by bin-parity, and the meta-volume
+#                         is covered by bin-parity, and the meta disc
 #                         builder regenerates ./bin/ rows per-target at
 #                         burn time (meta/builder.py
 #                         _regenerate_recovery_manifest).  Keeping them

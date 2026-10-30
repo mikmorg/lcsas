@@ -1,7 +1,7 @@
-"""Meta-volume builder — assembles a self-contained rescue volume.
+"""Meta disc builder — assembles the tree for a self-contained meta disc.
 
-A meta-volume contains everything needed to restore data from LCSAS
-archive discs, minus only the encryption key file:
+A meta disc contains everything needed to restore data from LCSAS
+archive discs, minus only the password:
 
 * Portable copies of ``rustic``, ``xorriso``, and ``python3``
   with all required shared libraries.
@@ -44,7 +44,7 @@ _logger = logging.getLogger(__name__)
 
 
 class MetaBuildError(Exception):
-    """A meta-volume could not be built completely / safely."""
+    """A meta disc could not be built completely / safely."""
 
 
 _REQUIRED_TOOLS = ("rustic", "xorriso")
@@ -55,7 +55,7 @@ _SOURCE_ITEMS = ("src",)
 _DOC_ITEMS = ("docs", "README.md", "pyproject.toml")
 
 # FMT-02: the pinned dvdisaster RS03 source tarball is bundled on every
-# meta-volume so a future engineer can re-implement RS03 repair from the
+# meta disc so a future engineer can re-implement RS03 repair from the
 # exact source docs/DVDISASTER_RS03_FORMAT.md transcribes.  The filename
 # is the single source of truth in recovery/UPSTREAM.sha256
 # (category ``dvdisaster/src/``); we read it from there rather than
@@ -193,9 +193,9 @@ def _get_tool_version(tool_path: Path) -> str:
 # Compatibility status: this bash heredoc is the LEGACY driver.  When
 # ``recovery/scripts/restore.sh`` (the POSIX-sh / 3-tier driver) is
 # available — which is normally the case — meta-builder writes it as
-# the meta-volume's primary ``/restore.sh`` and this heredoc is
-# written alongside as ``/restore_legacy.sh`` for operators who still
-# want the explicit ``--key/--isos/--target`` flag interface.
+# the meta disc's primary ``/restore.sh`` and this heredoc is
+# written alongside as ``/restore_legacy.sh`` for anyone who still
+# wants the explicit ``--key/--isos/--target`` flag interface.
 #
 # Two integration tests pin to this legacy contract:
 #   * tests/integration/test_meta_volume_restore.py — exercises full
@@ -209,10 +209,10 @@ RESTORE_SCRIPT = r'''#!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════
 #  LCSAS Disc-Only Restore — bootstrap script
 #
-#  Restores data from LCSAS archive volumes using ONLY:
-#    1. This meta-volume  (tools + source)
-#    2. The data-volume discs (or ISOs)
-#    3. Your encryption key file
+#  Restores data from LCSAS archive discs using ONLY:
+#    1. This meta disc  (tools + source)
+#    2. The data discs (or their ISO images)
+#    3. Your password file
 #
 #  Two modes:
 #    Single-drive (DEFAULT) — models the disaster scenario: you own one
@@ -220,13 +220,13 @@ RESTORE_SCRIPT = r'''#!/usr/bin/env bash
 #      each disc by label, reads it in place, and ingests only the
 #      packs needed for the target repository.
 #
-#        ./restore.sh --key KEY_FILE --target TARGET [--repo REPO]
+#        ./restore.sh --key PASSWORD_FILE --target TARGET [--repo REPO]
 #                     [--drive /dev/sr0] [--snapshot ID]
 #
-#    Directory (opt-in, legacy) — you already have every ISO on disk.
-#      Script extracts them all and runs the classic flow.
+#    Directory (opt-in, legacy) — you already have every ISO image on
+#      disk. Script extracts them all and runs the classic flow.
 #
-#        ./restore.sh --key KEY_FILE --isos ISO_DIR --target TARGET
+#        ./restore.sh --key PASSWORD_FILE --isos ISO_DIR --target TARGET
 #                     [--repo REPO] [--snapshot ID]
 #
 #  Rustic binary cascade:
@@ -254,7 +254,7 @@ elif command -v restic &>/dev/null; then
     RUSTIC="$(command -v restic)"
 fi
 
-# ── Resolve Python + standalone restorer (fallback) ─────────────
+# ── Resolve Python + standalone_restorer.py (tier-3 fallback) ──
 PYTHON=""
 STANDALONE=""
 if [[ -x "${TOOLS}/bin/python3" ]]; then
@@ -263,7 +263,7 @@ elif command -v python3 &>/dev/null; then
     PYTHON="$(command -v python3)"
 fi
 
-# Look for standalone_restorer.py shipped on meta-volume, then
+# Look for standalone_restorer.py shipped on the meta disc, then
 # inside any extracted data disc (it's placed on every disc).
 if [[ -f "$SCRIPT_DIR/standalone_restorer.py" ]]; then
     STANDALONE="$SCRIPT_DIR/standalone_restorer.py"
@@ -318,10 +318,10 @@ extract_iso() {
 # ── Usage ────────────────────────────────────────────────────────
 usage() {
     cat <<EOF
-LCSAS Disaster Recovery Restore
+LCSAS Restore
 
 Single-drive mode (DEFAULT):
-  ./restore.sh --key KEY_FILE --target TARGET [--repo NAME]
+  ./restore.sh --key PASSWORD_FILE --target TARGET [--repo NAME]
                [--drive /dev/sr0] [--snapshot ID]
 
   Insert any LCSAS archive disc into the drive. The script reads
@@ -329,18 +329,18 @@ Single-drive mode (DEFAULT):
   the repository onto disk. Only one disc is mounted at a time.
 
 Directory mode (opt-in, legacy):
-  ./restore.sh --key KEY_FILE --isos ISO_DIR --target TARGET
+  ./restore.sh --key PASSWORD_FILE --isos ISO_DIR --target TARGET
                [--repo NAME] [--snapshot ID]
 
-  Use when every data-volume ISO is already on disk.
+  Use when the ISO image of every data disc is already on disk.
 
 Options:
-  --key FILE        (required) Path to the encryption key file
+  --key FILE        (required) Path to the password file
   --target DIR      (required) Where to restore files
-  --repo NAME       Repository (a.k.a. tenant) to restore
+  --repo NAME       Repository to restore
   --snapshot ID     Snapshot to restore (default: latest)
   --drive DEV       Optical drive in single-drive mode (default: /dev/sr0)
-  --isos DIR        Opt-in: directory of data-volume ISOs (legacy mode)
+  --isos DIR        Opt-in: directory of ISO images (legacy mode)
   --work-dir DIR    Temp directory (default: auto)
   -h, --help        Show this help
 EOF
@@ -371,7 +371,7 @@ done
 
 [[ -z "$KEY_FILE" ]] && { echo "ERROR: --key is required";    usage; exit 1; }
 [[ -z "$TARGET" ]]   && { echo "ERROR: --target is required"; usage; exit 1; }
-[[ ! -f "$KEY_FILE" ]] && { echo "ERROR: Key file not found: $KEY_FILE"; exit 1; }
+[[ ! -f "$KEY_FILE" ]] && { echo "ERROR: Password file not found: $KEY_FILE"; exit 1; }
 
 # Mode selection: --isos present → directory mode; else single-drive.
 MODE="single-drive"
@@ -380,12 +380,12 @@ if [[ -n "$ISO_DIR" ]]; then
     [[ ! -d "$ISO_DIR" ]] && { echo "ERROR: ISO directory not found: $ISO_DIR"; exit 1; }
 fi
 
-# ── Verify at least one restore method is available ─────────────
+# ── Check at least one restore method is available ──────────────
 USE_PYTHON_FALLBACK=0
 if [[ -z "$RUSTIC" ]]; then
     if [[ -n "$PYTHON" ]] && [[ -n "$STANDALONE" ]]; then
         echo "  WARNING: No rustic/restic binary found."
-        echo "  Falling back to pure-Python restorer (slower but functional)."
+        echo "  Falling back to the Python reader (slower but functional)."
         echo "  Using: $PYTHON $STANDALONE"
         USE_PYTHON_FALLBACK=1
     else
@@ -423,16 +423,16 @@ _cleanup() {
 trap _cleanup EXIT
 
 echo "═══════════════════════════════════════════════════"
-echo "  LCSAS Disaster Recovery Restore  ($MODE mode)"
+echo "  LCSAS Restore  ($MODE mode)"
 echo "═══════════════════════════════════════════════════"
-echo "  Key:       $KEY_FILE"
+echo "  Password file:  $KEY_FILE"
 if [[ "$MODE" == "single-drive" ]]; then
-    echo "  Drive:     $DRIVE"
+    echo "  Drive:          $DRIVE"
 else
-    echo "  ISOs:      $ISO_DIR"
+    echo "  ISO images:     $ISO_DIR"
 fi
-echo "  Target:    $TARGET"
-echo "  Work dir:  $WORK_DIR"
+echo "  Target:         $TARGET"
+echo "  Work dir:       $WORK_DIR"
 echo ""
 
 # ═════════════════════════════════════════════════════════════════
@@ -557,9 +557,9 @@ with open(sys.argv[1]) as f:
     CACHE_DIR="$WORK_DIR/cache"
     mkdir -p "$CACHE_DIR"
 
-    # Phase 1 — bootstrap. The meta disc carries Rustic metadata
+    # Phase 1 — bootstrap. The meta disc carries repository metadata
     # (keys, config) but NO catalog — it would always be stale.
-    # The operator inserts any data disc and we bootstrap from its
+    # The heir inserts any data disc and we bootstrap from its
     # catalog. If a later disc has a fresher catalog, we upgrade
     # organically during Phase 2.
     echo ""
@@ -570,7 +570,9 @@ with open(sys.argv[1]) as f:
         BOOTSTRAP_META="$SCRIPT_DIR/metadata"
     fi
     echo "  Insert any LCSAS archive disc to begin."
-    echo "  (Tip: the highest-numbered disc has the freshest catalog.)"
+    echo "  (Tip: start with the disc whose label is newest: the latest"
+    echo "  year, then the highest number. Its catalog is the fullest,"
+    echo "  so you will need fewer disc swaps.)"
     prompt_insert ""
     CATALOG="$MNT/catalog.db"
     if [[ ! -f "$CATALOG" ]]; then
@@ -666,8 +668,8 @@ print(s.get("packs_ingested", 0))
         # ── Organic catalog upgrade ──
         # If this data disc has a fresher catalog than the one we
         # bootstrapped from, re-bootstrap to get an updated pick list.
-        # This handles the common case where the meta disc was burned
-        # before the last data discs and its catalog is stale.
+        # This handles the common case where the first disc inserted
+        # was not a disc of the newest volume, so its catalog is stale.
         DISC_CATALOG="$MNT/catalog.db"
         if [[ -f "$DISC_CATALOG" ]]; then
             DISC_FRESH="$("$PYTHON" -c "
@@ -729,7 +731,7 @@ print(s.get("packs_ingested", 0))
     eject_drive
     reset_title
 
-    # Phase 3 — verify completeness and integrity.
+    # Phase 3 — check completeness and integrity.
     echo ""
     echo "--- Phase 3: Finalize ---"
     "$PYTHON" "$HELPER" finalize --cache "$CACHE_DIR" --verify-integrity
@@ -737,8 +739,9 @@ print(s.get("packs_ingested", 0))
     if [[ $FINALIZE_RC -eq 3 ]]; then
         echo ""
         echo "FATAL: some packs have no remaining alternate discs."
-        echo "       This restore cannot complete with the available media."
-        echo "       Contact your backup administrator."
+        echo "       This restore cannot complete with the discs available."
+        echo "       If you have another disc with the same label as a damaged"
+        echo "       one (for example, from another location), insert it and run again."
         exit 3
     elif [[ $FINALIZE_RC -ne 0 ]]; then
         echo ""
@@ -817,7 +820,7 @@ for vol_dir in $(find "$EXTRACT_DIR" -mindepth 1 -maxdepth 1 -type d | sort); do
 done
 
 if [[ -z "$LATEST_VOL" ]]; then
-    echo "ERROR: No volume with metadata/ directory found"
+    echo "ERROR: No ISO image with a metadata/ directory found"
     exit 1
 fi
 
@@ -829,7 +832,7 @@ for repo_dir in "$LATEST_VOL/metadata"/*/; do
     [[ ! -d "$repo_dir" ]] && continue
     repo_name="$(basename "$repo_dir")"
     REPOS+=("$repo_name")
-    echo "  Found repo: $repo_name"
+    echo "  Found repository: $repo_name"
 done
 
 if [[ -n "$REPO" ]]; then
@@ -890,7 +893,7 @@ for repo in "${REPOS[@]}"; do
             dst="$CACHE_DIR/data/$prefix/$sha"
             if [[ ! -f "$dst" ]]; then
                 cp "$pack" "$dst"
-                # Verify SHA-256 of copied pack matches its filename
+                # Check that the SHA-256 of the copied pack matches its filename
                 actual_sha="$(sha256sum "$dst" | cut -d' ' -f1)"
                 if [[ "$actual_sha" != "$sha" ]]; then
                     echo "    ✗ SHA-256 MISMATCH: $sha (got $actual_sha)"
@@ -904,12 +907,12 @@ for repo in "${REPOS[@]}"; do
         done
     done
     if [[ $PACK_ERRORS -gt 0 ]]; then
-        echo "    WARNING: $PACK_ERRORS packs failed SHA-256 verification"
-        echo "    Some data discs may be damaged — try redundant copies"
+        echo "    WARNING: $PACK_ERRORS packs failed the SHA-256 check"
+        echo "    Some data discs may be damaged — try another disc with the same label"
     fi
-    echo "    Ingested $PACK_COUNT packs from $ISO_COUNT volumes"
+    echo "    Ingested $PACK_COUNT packs from $ISO_COUNT ISO images"
 
-    # ── Verify all required packs were ingested ───────────────
+    # ── Check all required packs were ingested ────────────────
     # Count index entries to estimate expected pack count
     EXPECTED_PACKS=0
     if [[ -d "$CACHE_DIR/index" ]]; then
@@ -928,8 +931,8 @@ for repo in "${REPOS[@]}"; do
     mkdir -p "$REPO_TARGET"
 
     if [[ "$USE_PYTHON_FALLBACK" -eq 1 ]]; then
-        # ── Pure-Python restore via standalone_restorer.py ─────
-        # Find standalone_restorer.py — meta-volume copy (already resolved)
+        # ── Python-reader (tier 3) restore via standalone_restorer.py ─
+        # Find standalone_restorer.py — meta disc copy (already resolved)
         # or search extracted data discs for a copy
         SR="$STANDALONE"
         if [[ -z "$SR" ]]; then
@@ -1012,15 +1015,15 @@ RESTORE_AUTO_SCRIPT = r'''#!/usr/bin/env bash
 #    • AI agent-driven restores
 #    • CI/CD test harnesses
 #
-#  Disc loading is delegated to a user-supplied command via --disc-cmd.
+#  Disc loading is delegated to a caller-supplied command via --disc-cmd.
 #  The command is called as:  $DISC_CMD insert <LABEL>
 #                              $DISC_CMD eject
 #
-#  If --disc-cmd is omitted, the script assumes the operator will
-#  load discs externally and waits for the drive to become readable.
+#  If --disc-cmd is omitted, the script assumes the discs will be
+#  loaded externally and waits for the drive to become readable.
 #
 #  Usage:
-#    ./restore-auto.sh --key KEY_FILE --target TARGET --repo NAME \
+#    ./restore-auto.sh --key PASSWORD_FILE --target TARGET --repo NAME \
 #                      [--drive /dev/sr0] [--disc-cmd CMD] \
 #                      [--snapshot ID] [--work-dir DIR]
 # ═══════════════════════════════════════════════════════════════════
@@ -1044,7 +1047,7 @@ elif command -v restic &>/dev/null; then
     RUSTIC="$(command -v restic)"
 fi
 
-# ── Resolve Python + standalone restorer (fallback) ─────────────
+# ── Resolve Python + standalone_restorer.py (tier-3 fallback) ──
 PYTHON=""
 STANDALONE=""
 if [[ -x "${TOOLS}/bin/python3" ]]; then
@@ -1062,14 +1065,14 @@ usage() {
 LCSAS Non-Interactive Restore (automated disc-swap)
 
 Usage:
-  ./restore-auto.sh --key KEY_FILE --target TARGET --repo NAME \\
+  ./restore-auto.sh --key PASSWORD_FILE --target TARGET --repo NAME \\
                     [--drive /dev/sr0] [--disc-cmd CMD] \\
                     [--snapshot ID] [--work-dir DIR]
 
 Options:
-  --key FILE        (required) Path to the encryption key file
+  --key FILE        (required) Path to the password file
   --target DIR      (required) Where to restore files
-  --repo NAME       (required) Repository (tenant) to restore
+  --repo NAME       (required) Repository to restore
   --snapshot ID     Snapshot to restore (default: latest)
   --drive DEV       Optical drive device (default: /dev/sr0)
   --disc-cmd CMD    Command to load/eject discs. Called as:
@@ -1107,7 +1110,7 @@ done
 [[ -z "$KEY_FILE" ]] && { echo "ERROR: --key is required";    usage; exit 1; }
 [[ -z "$TARGET" ]]   && { echo "ERROR: --target is required"; usage; exit 1; }
 [[ -z "$REPO" ]]     && { echo "ERROR: --repo is required";   usage; exit 1; }
-[[ ! -f "$KEY_FILE" ]] && { echo "ERROR: Key file not found: $KEY_FILE"; exit 1; }
+[[ ! -f "$KEY_FILE" ]] && { echo "ERROR: Password file not found: $KEY_FILE"; exit 1; }
 
 # ── Python required for non-interactive mode ─────────────────────
 if [[ -z "$PYTHON" ]]; then
@@ -1120,12 +1123,12 @@ if [[ ! -f "$HELPER" ]]; then
     exit 1
 fi
 
-# ── Verify at least one restore method is available ──────────────
+# ── Check at least one restore method is available ───────────────
 USE_PYTHON_FALLBACK=0
 if [[ -z "$RUSTIC" ]]; then
     if [[ -n "$PYTHON" ]] && [[ -n "$STANDALONE" ]]; then
         echo "  WARNING: No rustic/restic binary found."
-        echo "  Falling back to pure-Python restorer (slower)."
+        echo "  Falling back to the Python reader (slower)."
         USE_PYTHON_FALLBACK=1
     else
         echo "ERROR: No rustic/restic binary and no Python fallback."
@@ -1209,7 +1212,7 @@ load_disc() {
         fi
         sleep 2
     done
-    # Verify label if possible.
+    # Check label if possible.
     local got
     got="$(disc_label)"
     if [[ -n "$got" ]] && [[ "$got" != "$label" ]]; then
@@ -1231,12 +1234,12 @@ eject_disc() {
 echo "═══════════════════════════════════════════════════"
 echo "  LCSAS Non-Interactive Restore"
 echo "═══════════════════════════════════════════════════"
-echo "  Key:       $KEY_FILE"
-echo "  Drive:     $DRIVE"
-echo "  Target:    $TARGET"
-echo "  Repo:      $REPO"
-echo "  Disc cmd:  ${DISC_CMD:-<manual>}"
-echo "  Work dir:  $WORK_DIR"
+echo "  Password file:  $KEY_FILE"
+echo "  Drive:          $DRIVE"
+echo "  Target:         $TARGET"
+echo "  Repo:           $REPO"
+echo "  Disc cmd:       ${DISC_CMD:-<manual>}"
+echo "  Work dir:       $WORK_DIR"
 echo ""
 
 CACHE_DIR="$WORK_DIR/cache"
@@ -1244,7 +1247,7 @@ mkdir -p "$CACHE_DIR"
 
 # ── Seed keys/config from meta disc if available ─────────────────
 if [[ -d "$SCRIPT_DIR/metadata" ]]; then
-    echo "  Seeding repo metadata from meta disc..."
+    echo "  Seeding repository metadata from the meta disc..."
 fi
 
 # ═════════════════════════════════════════════════════════════════
@@ -1254,9 +1257,9 @@ echo ""
 echo "--- Phase 1: Bootstrap ---"
 echo "  Need any data disc to read the catalog."
 
-# Try to find the highest-numbered disc by reading volume_info.json
-# from whatever disc is loaded. If no disc is loaded, request the
-# first disc alphabetically (the caller/disc-cmd handles it).
+# Prefer a disc of the newest volume (the latest year in its label,
+# then the highest number): its catalog is the fullest, so fewer disc
+# swaps are needed. Any data disc still works.
 FIRST_DISC="${FIRST_DISC:-}"
 
 # If FIRST_DISC is set from env, load and mount it.
@@ -1280,7 +1283,8 @@ fi
 # Auto-discover the highest-numbered data disc from disc-cmd.
 if [[ -z "$FIRST_DISC" ]] && [[ -n "$DISC_CMD" ]]; then
     echo "  No disc loaded — discovering available data discs..."
-    # Get the last LCSAS_CD_* label (highest-numbered = freshest catalog).
+    # Get the last LCSAS_CD_* label in sort order: the newest volume
+    # (latest year, then highest number), whose catalog is the fullest.
     FIRST_DISC="$($DISC_CMD list 2>/dev/null | grep '^LCSAS_CD_' | sort | tail -1 || true)"
     if [[ -n "$FIRST_DISC" ]]; then
         echo "  Auto-selected: $FIRST_DISC"
@@ -1407,7 +1411,7 @@ echo "--- Phase 3: Finalize ---"
 "$PYTHON" "$HELPER" finalize --cache "$CACHE_DIR" --verify-integrity
 FINALIZE_RC=$?
 if [[ $FINALIZE_RC -eq 3 ]]; then
-    echo "FATAL: unrecoverable missing packs."
+    echo "FATAL: some packs have no remaining alternate discs."
     exit 3
 elif [[ $FINALIZE_RC -ne 0 ]]; then
     echo "ERROR: cache incomplete — re-run with missing discs."
@@ -1448,13 +1452,13 @@ echo "════════════════════════�
 
 
 README_RESTORE = '''\
-# LCSAS Disaster Recovery — Restore from Discs
+# LCSAS — Restore from Discs
 
-This volume contains everything you need to restore data archived by
-**LCSAS** (Linux Cold Storage Archival Suite) from optical discs or ISOs.
-The **only** thing you must provide is your **encryption key file**.
+This disc contains everything you need to restore data archived by
+**LCSAS** (Linux Cold Storage Archival Suite) from optical discs or ISO
+images. The **only** thing you must provide is your **password**.
 
-## What's on This Volume
+## What's on This Disc
 
 | Path | Description |
 |---|---|
@@ -1465,13 +1469,12 @@ The **only** thing you must provide is your **encryption key file**.
 | `restore-auto.sh` | Non-interactive restore (automation only; use restore.sh instead) |
 | `restore_legacy.sh` | Older Bash driver kept for back-compat — superseded by `restore.sh`. |
 | `README_RESTORE.md` | This file |
-| `volume_info.json` | Machine-readable volume metadata (includes tool versions) |
+| `volume_info.json` | Machine-readable details of this disc (includes tool versions) |
 
 ## Terminology
 
-A **repository** (sometimes called a **tenant**) is one encrypted backup
-dataset. Archives may hold several repositories side by side. Pass the
-repository name to `--repo`.
+A **repository** is one encrypted backup dataset. Archives may hold
+several repositories side by side. Pass the repository name to `--repo`.
 
 ## Single-Drive Mode (DEFAULT)
 
@@ -1479,7 +1482,7 @@ This is the disaster scenario: you own one optical drive and a stack of
 archive discs. You do **not** need to rip every disc up front — the
 script walks you through the restore one disc at a time.
 
-### 1. Mount the meta-volume and run the restore
+### 1. Mount the meta disc and run the restore
 
 ```sh
 sudo mount /dev/sr0 /mnt
@@ -1488,7 +1491,7 @@ sh /mnt/restore.sh ~/restored/ latest
 
 `restore.sh` detects that it is running off a read-only optical disc
 and copies itself (plus the recovery binaries) into RAM automatically,
-so you can eject the meta-volume when the binary first prompts for a
+so you can eject the meta disc when the binary first prompts for a
 data disc — no manual `cp -r` step is needed.
 
 > **Advanced override:** set `LCSAS_NO_RELOCATE=1` in the environment
@@ -1503,19 +1506,20 @@ The two positional arguments are:
 | 2 | `SNAPSHOT_ID` or the word `latest` | `latest` |
 
 The script auto-discovers the repository metadata from the meta
-volume itself (`metadata/<tenant>/`), so you do **not** need to
+disc itself (`metadata/<repo>/`), so you do **not** need to
 insert a data disc before starting — the script will prompt you
 for each one as the recovery binary needs it.  The script will:
 
 1. List the repositories on this archive.  If more than one
-   tenant is present, it prints `Repository:` and waits for you
-   to **type the tenant name** (`alpha`, `bravo`, …) and press
-   Enter.  Single-tenant archives skip this prompt.  You can
-   also set `LCSAS_REPO=<name>` in the environment to preselect.
-2. Print `Password:` and wait for the encryption password on
-   stdin.  **Type the contents of your key file** and press
-   Enter.  The password is read in the clear (POSIX-sh has no
-   silent-read); do not pipe it from `echo` — type it.
+   repository is present, it prints `Repository:` and waits for
+   you to **type the repository name** (`alpha`, `bravo`, …) and
+   press Enter.  Archives with a single repository skip this
+   prompt.  You can also set `LCSAS_REPO=<name>` in the
+   environment to preselect.
+2. Print `Password:` and wait for the password on stdin.
+   **Type your password** and press Enter.  The password is
+   read in the clear (POSIX-sh has no silent-read); do not
+   pipe it from `echo` — type it.
 3. `exec` the highest-priority recovery tier available
    (`bin/<arch>/lcsas-restore` → `bin/<arch>/rustic-static` →
    bundled CPython + `standalone_restorer.py`).  Only one tier
@@ -1525,7 +1529,7 @@ for each one as the recovery binary needs it.  The script will:
    on stderr.  **Swap the disc in your optical drive and press Enter.**
    Repeat until the binary prints `RESTORE COMPLETE` and exits 0.
 
-> **Single-terminal operators.** You do not need tmux or a second SSH
+> **Working from a single terminal.** You do not need tmux or a second SSH
 > session to handle disc swaps — a normal single-terminal flow works.
 > When the binary prompts to swap a disc:
 >
@@ -1544,24 +1548,26 @@ re-run the same command — the pack cache under the work directory
 persists across runs.
 
 > **Tip:** if you mount a data disc at `/mnt` (or `/media/...`)
-> before starting, the recovery binary uses its on-disc catalog
+> before starting, the recovery binary uses that disc's catalog
 > for friendlier disc-swap prompts (it prints the disc *label*
-> rather than the pack hash) and skips re-prompting for packs
-> already on the mounted disc.
+> rather than the pack ID) and skips re-prompting for packs
+> already on the mounted disc.  Best is the disc whose label is
+> newest (the latest year, then the highest number): its catalog
+> is the fullest.
 
-> **Automation / CI only.** Human operators recovering from disaster
+> **Automation / CI only.** Heirs restoring after a disaster
 > must use the interactive `restore.sh` above. The non-interactive
 > driver `restore-auto.sh` exists only for scripted pipelines —
 > see Appendix A.
 
 ## Directory Mode (opt-in, legacy)
 
-If you already have every data-volume ISO on disk (e.g. pre-rsynced to
-a NAS) you can side-load them via the legacy bash driver
+If you already have the ISO image of every data disc on disk (e.g.
+pre-rsynced to a NAS) you can side-load them via the legacy bash driver
 (`restore_legacy.sh`):
 
 ```bash
-./restore_legacy.sh --key /path/to/keyfile.txt \\
+./restore_legacy.sh --key /path/to/password.txt \\
                     --isos /path/to/iso/directory/ \\
                     --target ~/restored/
 ```
@@ -1599,7 +1605,7 @@ export PYTHONPATH="$(pwd)/lcsas/src"
 
 ## Notes
 
-- **Pure-Python fallback:** If no rustic/restic binary works on your system,
+- **Python reader fallback (tier 3):** If no rustic/restic binary works on your system,
   `restore.sh` will automatically fall back to `standalone_restorer.py` which
   requires only Python 3.10+ (no compiled extensions).  This is slower (~1 MB/s)
   but functional.  For zstd-compressed repositories (rustic v2 default), the
@@ -1612,22 +1618,21 @@ export PYTHONPATH="$(pwd)/lcsas/src"
   so a re-run picks up where the previous attempt stopped.  Do **not**
   rely on a partially-restored target directory.
 
-## What Is NOT on This Volume
+## What Is NOT on This Disc
 
-**Your encryption key file** — you must provide this yourself.
-Without the key file, the encrypted backup data cannot be decrypted.
+**Your password** — you must provide this yourself.
+Without the password, the encrypted backup data cannot be decrypted.
 
-> **Important:** Store your key file securely and *separately* from
-> your backup discs. Consider printing it on paper and storing in a
-> fireproof safe, or splitting it across multiple secure locations.
+> **Important:** Store your password securely and *separately* from
+> your backup discs. Consider writing it on a password card kept in a
+> fireproof safe, or splitting it into shares kept in different places.
 
 ## About LCSAS
 
 Linux Cold Storage Archival Suite orchestrates Rustic (restic-compatible) backup
 repositories onto optical media (Blu-ray, M-DISC) for long-term archival
-storage. Every data disc is self-describing ("holographic"),
-carrying full repository metadata so that any disc can bootstrap a restore
-independently.
+storage. Every data disc is self-describing, carrying full repository
+metadata so that any disc can bootstrap a restore independently.
 
 See `docs/architecture.md` for the complete system architecture, and
 `docs/RESTIC_FORMAT_SPEC.md` for the data format specification.
@@ -1638,17 +1643,17 @@ See `docs/architecture.md` for the complete system architecture, and
 
 > Skip this section unless you are scripting LCSAS into a CI
 > pipeline, a backup-validation harness, or another fully
-> automated environment. Human operators recovering from disaster
+> automated environment. Heirs restoring after a disaster
 > should use `restore.sh` (Single-Drive Mode above).
 
 `restore-auto.sh` runs the same four phases as `restore.sh`
 (bootstrap, ingest, finalize, rustic restore) but never calls
 `read` and never waits for keyboard input.  It is the right tool
 for an environment where another process can mechanically swap
-discs and feed in the key file.
+discs and feed in the password file.
 
 ```bash
-./restore-auto.sh --key /path/to/keyfile.txt \\
+./restore-auto.sh --key /path/to/password.txt \\
                   --target ~/restored/ \\
                   --repo REPO_NAME \\
                   --disc-cmd "disc-loader"
@@ -1656,7 +1661,7 @@ discs and feed in the key file.
 
 | Option | Description |
 |---|---|
-| `--key FILE` | **(required)** Encryption key file |
+| `--key FILE` | **(required)** Password file |
 | `--target DIR` | **(required)** Restore destination |
 | `--repo NAME` | **(required)** Repository to restore |
 | `--disc-cmd CMD` | Robotic loader command (`CMD insert LABEL` / `CMD eject`). |
@@ -1761,10 +1766,10 @@ def _is_dir_bounded(
 
 @dataclass(frozen=True)
 class RepoMetadataResult:
-    """Outcome of bundling one catalogued repo's Rustic metadata.
+    """Outcome of bundling one catalogued repository's metadata.
 
-    ``bundled`` False means this meta-volume carries no keys for the
-    repo — its packs cannot be decrypted from this disc alone.  That is
+    ``bundled`` False means this meta disc carries no keys for the
+    repository — its packs cannot be decrypted from this disc alone.  That is
     a survivable, deliberate state (a deregistered repo, a mirror that
     is offline at build time), but never a silent one: it is warned to
     the log and recorded in ``volume_info.json`` on the disc.
@@ -1791,7 +1796,7 @@ class RepoMetadataResult:
 
 
 class MetaVolumeBuilder:
-    """Assembles a self-contained rescue volume.
+    """Assembles the tree for a self-contained meta disc.
 
     Usage::
 
@@ -1799,7 +1804,7 @@ class MetaVolumeBuilder:
         meta_root = builder.build()
         # meta_root is ready for ISO mastering via xorriso
 
-    The meta-volume layout::
+    The meta disc layout::
 
         output_dir/
         ├── tools/
@@ -1816,7 +1821,7 @@ class MetaVolumeBuilder:
     # python-build-standalone publishes Windows CPython only for the
     # *-msvc triple, while rustic/restic ship *-gnu — so UPSTREAM.sha256
     # pins the Windows python under x86_64-pc-windows-msvc (see its
-    # header note "PBS don't ship gnu").  The per-target staging loop
+    # header note "PBS don't ship gnu").  The per-target copy loop
     # iterates rust triples keyed to rustic; this override remaps ONLY
     # the python cache lookup so the Windows python is actually found
     # on a freshly-fetched cache (#404).
@@ -1839,15 +1844,15 @@ class MetaVolumeBuilder:
     ) -> None:
         """
         Args:
-            output_dir: Where to build the meta-volume directory tree.
+            output_dir: Where to build the meta disc directory tree.
             project_root: Root of the LCSAS project (containing ``src/``).
-                If *None*, auto-detected from this module's location.
+                If *None*, auto-detected from this module's path.
             static_rustic_path: Optional path to a statically-linked
                 (musl) rustic binary.  Bundled as ``tools/bin/rustic-static``
                 to provide a glibc-independent fallback.
             config: Optional LCSAS configuration.  When provided,
-                START_HERE.txt and KEY_INFO.txt are generated on the
-                meta-volume using the survivability fields.
+                START_HERE.txt and PASSWORD_INFO.txt are generated on the
+                meta disc using the survivability fields.
         """
         self._output = output_dir
         self._static_rustic_path = static_rustic_path
@@ -1856,7 +1861,7 @@ class MetaVolumeBuilder:
         self._bundle_recovery_toolchain = bundle_recovery_toolchain
         self._allow_no_zstd = allow_no_zstd
         self._allow_no_dvdisaster_source = allow_no_dvdisaster_source
-        # #437: the operator accepted a known key gap for this build.  The
+        # #437: the owner accepted a known key gap for this build.  The
         # exit-code policy lives in cmd_meta_build, but the flag has to
         # reach the builder because _write_volume_info runs inside build()
         # — the disc itself must carry the fact that gaps were accepted.
@@ -1868,8 +1873,8 @@ class MetaVolumeBuilder:
         # every target, so a False here is a speed note, not a gap.)
         self._native_zstd_bundled = False
         # Per-repo outcome of _bundle_metadata (#435).  Empty until it
-        # runs; stays empty when there is no catalog to read (a
-        # no-catalog meta disc bundles no repo metadata by design).
+        # runs; stays empty when there is no catalog to read (such a
+        # build bundles no repository metadata by design).
         self._metadata_results: list[RepoMetadataResult] = []
 
         if project_root is None:
@@ -1892,16 +1897,16 @@ class MetaVolumeBuilder:
         return self._project_root
 
     def build(self) -> Path:
-        """Build the complete meta-volume.
+        """Build the complete meta disc tree.
 
         Returns:
-            Path to the meta-volume root directory.
+            Path to the meta disc root directory.
         """
         self._output.mkdir(parents=True, exist_ok=True)
 
         # Mark incomplete until all steps succeed
         incomplete_marker = self._output / ".incomplete"
-        incomplete_marker.write_text("Meta-volume build in progress\n")
+        incomplete_marker.write_text("Meta disc build in progress\n")
 
         self._bundle_tools()
         self._bundle_source()
@@ -1941,10 +1946,10 @@ class MetaVolumeBuilder:
                     missing.append(rel)
             elif not target.is_file():
                 missing.append(rel)
-        # Per-repo metadata keys (issue #367): each tenant staged under
-        # metadata/<repo>/ must carry its keys/ subtree — without a repo's
-        # key its packs cannot be decrypted, so a missing keys/ is
-        # restore-blocking, not a hedge.
+        # Per-repo metadata keys (issue #367): each repository copied under
+        # metadata/<repo>/ must carry its keys/ subtree — without a
+        # repository's keys its packs cannot be decrypted, so a missing
+        # keys/ is restore-blocking, not a hedge.
         metadata_root = self._output / "metadata"
         if metadata_root.is_dir():
             for repo_dir in sorted(metadata_root.iterdir()):
@@ -1958,7 +1963,7 @@ class MetaVolumeBuilder:
         Issue #367: stock restic (the tier-2b "standard tools" hedge) and
         lcsas-keyshare (the SLIP-0039 combiner).  Absence WARNS but does not
         fail the completeness gate — a disc carrying the tier-1 lcsas-restore
-        and the tier-3 CPython path is still fully recoverable without them.
+        and the tier-3 CPython path can still restore fully without them.
         """
         from lcsas.meta.required_contents import recommended_meta_paths
         return [
@@ -1991,13 +1996,13 @@ class MetaVolumeBuilder:
         # Bundle the native ``zstandard`` package for fast tier-3 restore
         # of zstd-compressed repos (rustic v2 default).  This copies the
         # BUILD HOST's arch/CPython-specific C extension, so it only helps
-        # recovery hosts that match.  Cross-target / future-CPython hosts
+        # restore hosts that match.  Cross-target / future-CPython hosts
         # fall back to the bundled pure-Python decoder
         # (``lcsas.restore._zstd_pure``), which is slower but always works.
         #
         # RST-04: if the build host has no ``zstandard`` at all the native
         # copy is silently absent; fail loud unless explicitly allowed, so
-        # an operator who WANTED the fast path isn't surprised by a
+        # an owner who WANTED the fast path isn't surprised by a
         # pure-Python-only meta disc.
         self._native_zstd_bundled = (
             bundler.bundle_python_package("zstandard") is not None
@@ -2005,7 +2010,7 @@ class MetaVolumeBuilder:
         if not self._native_zstd_bundled and not self._allow_no_zstd:
             raise MetaBuildError(
                 "zstandard is not installed on the build host — the fast "
-                "tier-3 restore path for zstd-compressed (default) repos "
+                "tier-3 restore path for zstd-compressed (default) repositories "
                 "would not be bundled. The pure-Python decoder still works "
                 "(slower), but if you want the native fast path, install it "
                 "(pip install zstandard). Pass --allow-no-zstd to build "
@@ -2014,7 +2019,7 @@ class MetaVolumeBuilder:
 
         # Bundle the stdlib-only SLIP-0039 keyshare package (+ wordlist.txt)
         # so the standalone keyshare_combine.py pre-step can reconstruct a
-        # split repo password.  Lands as top-level ``keyshare`` under the
+        # split repository password.  Lands as top-level ``keyshare`` under the
         # bundled stdlib (importlib resolves it to .../lcsas/keyshare).
         bundler.bundle_python_package("lcsas.keyshare")
 
@@ -2046,7 +2051,7 @@ class MetaVolumeBuilder:
     # ── Source bundling ──────────────────────────────────────────
 
     def _bundle_source(self) -> None:
-        """Copy the LCSAS source tree into the meta-volume."""
+        """Copy the LCSAS source tree into the meta disc tree."""
         lcsas_dir = self._output / "lcsas"
 
         for item_name in _SOURCE_ITEMS:
@@ -2070,7 +2075,7 @@ class MetaVolumeBuilder:
                 shutil.copy2(str(src), str(dst))
 
     def _bundle_docs(self) -> None:
-        """Copy documentation into the meta-volume."""
+        """Copy documentation into the meta disc tree."""
         for item_name in _DOC_ITEMS:
             src = self._project_root / item_name
             dst = self._output / item_name
@@ -2091,11 +2096,11 @@ class MetaVolumeBuilder:
 
         ``docs/DVDISASTER_RS03_FORMAT.md`` is only re-implementable
         against the *exact* source it transcribes; that source must
-        therefore travel on the rescue disc, not at a dormant GitHub URL.
+        therefore travel on the meta disc, not at a dormant GitHub URL.
         The tarball is pinned in ``recovery/UPSTREAM.sha256`` (category
         ``dvdisaster/src/``) and fetched into the recovery cache by
         ``recovery/scripts/fetch_upstream.sh``; here we copy it to
-        ``tools/src/`` on the meta-volume.
+        ``tools/src/`` on the meta disc.
 
         Fail loud if the tarball is pinned but absent from the cache —
         a meta disc whose RS03 spec points at source that isn't on the
@@ -2140,9 +2145,9 @@ class MetaVolumeBuilder:
     # ── Script / doc generation ──────────────────────────────────
 
     def _bundle_standalone_restorer(self) -> None:
-        """Place standalone_restorer.py at the meta-volume root.
+        """Place standalone_restorer.py at the meta disc root.
 
-        This provides a pure-Python restore path when no rustic/restic
+        This provides the tier-3 Python restore path when no rustic/restic
         binary is available.  The script is auto-generated from the
         LCSAS source modules and has zero external dependencies
         (except optional ``zstandard`` for zstd-compressed repos).
@@ -2154,7 +2159,7 @@ class MetaVolumeBuilder:
         os.chmod(str(restorer_path), 0o755)
 
     def _bundle_restore_helper(self) -> None:
-        """Copy restore_single_drive.py into the meta-volume tools/ dir.
+        """Copy restore_single_drive.py into the meta disc's tools/ dir.
 
         The helper is a stdlib-only Python driver for the single-drive
         disc-swap restore flow. ``restore.sh`` shells out to it for the
@@ -2172,10 +2177,10 @@ class MetaVolumeBuilder:
         os.chmod(str(dst), 0o755)
 
     def _bundle_keyshare_combiner(self) -> None:
-        """Place keyshare_combine.py at the meta-volume root.
+        """Place keyshare_combine.py at the meta disc root.
 
         This standalone, stdlib-only pre-step reconstructs a SLIP-0039
-        split repo password (any K of N shares) and prints it so an heir
+        split repository password (any K of N shares) and prints it so an heir
         can feed it to the normal restore flow.  It imports ONLY the
         bundled ``lcsas.keyshare`` package, so reconstruction survives
         even if the rest of LCSAS is broken.
@@ -2186,7 +2191,7 @@ class MetaVolumeBuilder:
         is rooted at, and ``find``-verified against, the ``recovery/``
         tree (the tier-1 C binary, vendored sqlite/zstd, recovery
         scripts).  These two artifacts live in the main ``src/`` tree
-        and are copied onto the meta-volume at build time -- exactly like
+        and are copied onto the meta disc at build time -- exactly like
         ``standalone_restorer.py`` and ``restore_single_drive.py``, which
         are likewise absent from that manifest.  They are pinned by git
         (every ``src/`` file is version-controlled) and the wordlist is
@@ -2206,7 +2211,7 @@ class MetaVolumeBuilder:
         os.chmod(str(dst), 0o755)
 
     def _bundle_recovery_toolchain_artifacts(self) -> None:
-        """Bundle the C89 + POSIX-sh recovery toolchain onto the meta-volume.
+        """Bundle the C89 + POSIX-sh recovery toolchain onto the meta disc.
 
         Layout produced under ``output_dir/recovery/``::
 
@@ -2224,7 +2229,7 @@ class MetaVolumeBuilder:
 
         Missing per-arch binaries are silently skipped; the recovery
         cascade falls through to the vendored ``rustic-static`` (tier 2)
-        and ultimately the pure-Python fallback (tier 3) when the
+        and ultimately the Python reader (tier 3) when the
         prebuilt binary is absent.  See ``recovery/scripts/restore.sh``.
         """
         src = self._recovery_dir
@@ -2243,7 +2248,7 @@ class MetaVolumeBuilder:
             ),
         )
 
-        # Mirror the new POSIX restore.sh at the meta-volume root so
+        # Copy the new POSIX restore.sh to the meta disc root so
         # existing automation that looks for /restore.sh finds the new
         # driver too.  (The legacy bash heredoc is still written by
         # _write_restore_script for backward compat.)
@@ -2253,8 +2258,8 @@ class MetaVolumeBuilder:
             shutil.copy2(str(new_restore), str(top_link))
             os.chmod(str(top_link), 0o755)
 
-        # Surface restore.bat at the meta-volume root so Windows users
-        # who plug in the disc see "restore.bat" in File Explorer and
+        # Surface restore.bat at the meta disc root so Windows heirs
+        # who insert the disc see "restore.bat" in File Explorer and
         # can double-click it without descending into recovery/scripts/.
         new_bat = dst / "scripts" / "restore.bat"
         if new_bat.is_file():
@@ -2273,23 +2278,23 @@ class MetaVolumeBuilder:
         # for the same reason as the upstream bundler.
         self._bundle_tier1_binaries(dst)
 
-        # Phase 21.4: regenerate the meta-volume's recovery/MANIFEST.sha256
+        # Phase 21.4: regenerate the meta disc's recovery/MANIFEST.sha256
         # so every bundled binary (tier 1 from _bundle_tier1_binaries,
         # tier 2 + 3 from _bundle_upstream_binaries) is part of the
-        # single integrity manifest an operator can `sha256sum -c`
+        # single integrity manifest an heir can `sha256sum -c`
         # against.  Must run after BOTH bundlers, so it stays here at
         # the orchestrator level rather than inside either bundler.
         self._regenerate_recovery_manifest(dst)
 
     def _verify_cached_upstream_archives(self, cache_root: Path) -> None:
         """Re-verify every PRESENT cached upstream archive against
-        recovery/UPSTREAM.sha256 before staging (issue #372).
+        recovery/UPSTREAM.sha256 before copying (issue #372).
 
         fetch_upstream.sh verifies on download, but a cache entry can rot or
         be tampered with between fetch and burn.  Raise MetaBuildError on the
         first hash mismatch so a corrupted rustic/restic/python never reaches
         a burned disc.  Absent archives are skipped — a partial cache is a
-        legitimate single-arch build, and the per-target staging loop already
+        legitimate single-arch build, and the per-target copy loop already
         skips absent targets — so this fails only on genuine corruption.
         """
         import hashlib
@@ -2307,7 +2312,7 @@ class MetaVolumeBuilder:
             expected, relpath = parts[0], parts[1]
             cached = cache_root / relpath
             if not cached.is_file():
-                continue  # partial cache — the staging loop skips it too
+                continue  # partial cache — the copy loop skips it too
             digest = hashlib.sha256()
             with cached.open("rb") as fh:
                 for chunk in iter(lambda: fh.read(1 << 20), b""):
@@ -2347,7 +2352,7 @@ class MetaVolumeBuilder:
             return  # No cache → meta build still works for single-arch path.
 
         # Issue #372 — supply-chain: re-verify the cached upstream archives
-        # against recovery/UPSTREAM.sha256 BEFORE staging anything onto the
+        # against recovery/UPSTREAM.sha256 BEFORE copying anything onto the
         # disc.  fetch_upstream.sh verifies on download, but a cache entry
         # could rot or be tampered with between fetch and burn; catch that
         # here rather than shipping a corrupted rustic/restic/python.  Only
@@ -2460,20 +2465,20 @@ class MetaVolumeBuilder:
         Phase 21.10.b closes the naming gap at bundle time: for every
         approved rust-triple target whose short-arch mapping has a
         pre-built lcsas-restore in the source recovery tree, copy it
-        into the meta volume under the rust-triple path.  Targets
+        into the meta disc tree under the rust-triple path.  Targets
         without a mapping (`armv7`, the two macOS targets) are
         skipped silently; targets whose short-arch directory is
-        empty are also skipped (operator hasn't built that arch yet).
+        empty are also skipped (owner hasn't built that arch yet).
 
         KEY-05 extends the same relocation to ``lcsas-keyshare[.exe]``
-        (the static split-key combiner): the heir-facing Windows docs
+        (the static share combiner): the heir-facing Windows docs
         name a single on-disc bin dir per target, so the combiner must
         live next to lcsas-restore under the rust triple.  The
         short-arch copies remain on disc too (the whole source
         ``recovery/`` tree is copied verbatim by
         ``_bundle_recovery_toolchain_artifacts``).
 
-        Operators trigger the underlying cross-builds with
+        The owner triggers the underlying cross-builds with
         ``lcsas recovery build --arch <short-arch>`` for each desired
         target, or `make build-recovery` to do all reachable targets
         in one shot.
@@ -2503,7 +2508,7 @@ class MetaVolumeBuilder:
             if mapping is None:
                 continue
             short_arch, exe_name = mapping
-            # KEY-05: the static key-share combiner is part of the
+            # KEY-05: the static share combiner is part of the
             # tier-1 binary family — relocate it next to lcsas-restore
             # so the heir docs can name one on-disc Windows path
             # (bin\<rust-triple>\lcsas-keyshare.exe).
@@ -2516,7 +2521,7 @@ class MetaVolumeBuilder:
             # (required_target_paths → missing_required_contents) FAILS
             # LOUD if any target's lcsas-ecc is absent, so a bare
             # skip-if-absent here can never produce a silently incomplete
-            # rescue disc (mirrors how lcsas-restore completeness is
+            # meta disc (mirrors how lcsas-restore completeness is
             # enforced).
             suffix = ".exe" if exe_name.endswith(".exe") else ""
             for name in (
@@ -2542,7 +2547,7 @@ class MetaVolumeBuilder:
         The source-tree MANIFEST already covers files we author (C
         source, scripts, docs, vendored sqlite/zstd, …).  This step
         adds the per-target rustic + python tree rooted at
-        ``bin/<target>/`` so the meta-volume ships with a single
+        ``bin/<target>/`` so the meta disc ships with a single
         integrity manifest covering everything under ``recovery/``.
 
         Idempotent: re-running rewrites the file in place; the source
@@ -2600,20 +2605,20 @@ class MetaVolumeBuilder:
         manifest_path.write_text(merged)
 
     def _bundle_metadata(self) -> None:
-        """Copy per-repo Rustic metadata (keys, config, index, snapshots) onto the meta volume.
+        """Copy each repository's metadata (keys, config, index, snapshots) onto the meta disc.
 
         The meta disc does NOT carry a catalog.db — it would always be
         stale (pre-dating data discs burned after the meta disc).
         Instead, the restore script bootstraps from the catalog on the
-        first data disc the operator inserts, and upgrades organically
+        first data disc the heir inserts, and upgrades organically
         when it encounters a fresher catalog on a later disc.
 
-        We do bundle Rustic metadata (keys, config, index, snapshots)
+        We do bundle repository metadata (keys, config, index, snapshots)
         because keys are needed to decrypt packs and don't go stale.
 
         A repo whose mirror is unreachable is skipped rather than fatal
         — a stale catalog row (a deregistered repo, a mirror offline at
-        build time) must not block a rescue disc.  But the skip is
+        build time) must not block a meta disc.  But the skip is
         recorded, not silent (#435): every outcome lands in
         ``metadata_results``, which the log, the build summary, and
         ``volume_info.json`` on the disc all report.
@@ -2729,7 +2734,7 @@ class MetaVolumeBuilder:
 
         ``volumes.status != 'DESTROYED'`` is the same filter the tier-1 C
         reader applies (see ``TIER1_FROZEN_SURFACE`` in db/schema.py), so
-        the key gate and the recovery reader agree on what "data that
+        the key gate and the C reader agree on what "data that
         still exists" means.
 
         Deliberately NOT filtered on ``packs.is_pruned``: is_pruned is not
@@ -2738,7 +2743,7 @@ class MetaVolumeBuilder:
         on-disc packs are pruned therefore still needs its keys.
 
         Missing tables yield an empty mapping rather than raising — a
-        catalog oddity must never block a rescue disc, and hand-rolled
+        catalog oddity must never block a meta disc, and hand-rolled
         minimal catalogs (tests, partial legacy catalogs) may carry
         ``repositories`` alone.
         """
@@ -2770,11 +2775,11 @@ class MetaVolumeBuilder:
         self, repo_id: str, mirror_path: str, detail: str,
         retired: bool = False, packs_on_discs: int = 0,
     ) -> None:
-        """Log and record a repo whose Rustic metadata was NOT bundled."""
+        """Log and record a repository whose metadata was NOT bundled."""
         _logger.warning(
-            "Meta-volume: NO Rustic metadata bundled for repo '%s' "
-            "(mirror %s): %s — this disc carries no keys for that repo, so "
-            "its packs cannot be decrypted from the meta-volume alone.",
+            "Meta disc: NO repository metadata bundled for repo '%s' "
+            "(mirror %s): %s — this disc carries no keys for that repository, "
+            "so its packs cannot be decrypted from the meta disc alone.",
             repo_id, mirror_path or "<unset>", detail,
         )
         self._metadata_results.append(
@@ -2794,7 +2799,7 @@ class MetaVolumeBuilder:
         return list(self._metadata_results)
 
     def _write_restore_script(self) -> None:
-        """Install the meta-volume's top-level ``restore.sh``.
+        """Install the meta disc's top-level ``restore.sh``.
 
         Behavior:
 
@@ -2833,11 +2838,11 @@ class MetaVolumeBuilder:
             )
             _write_and_sync(script_path, _content)
             # Stash the legacy bash driver alongside for compatibility /
-            # for users who specifically want it.  Off the bare path.
+            # for anyone who specifically wants it.  Off the bare path.
             legacy = self._output / "restore_legacy.sh"
             _write_and_sync(legacy, RESTORE_SCRIPT)
             os.chmod(str(legacy), 0o755)
-            # Replace the inner copy with a redirect so operators (and
+            # Replace the inner copy with a redirect so heirs (and
             # agents) who navigate into recovery/scripts/ land on the
             # canonical root-level entry, not a silent duplicate.
             # "$(dirname "$0")/../../restore.sh" resolves to /mnt/restore.sh
@@ -2919,7 +2924,7 @@ class MetaVolumeBuilder:
         _write_and_sync(self._output / "README_RESTORE.txt", txt)
 
     def _write_volume_info(self) -> None:
-        """Write self-describing volume metadata."""
+        """Write self-describing metadata for the meta disc."""
         # Determine which optional tools were actually bundled
         tools_bin = self._output / "tools" / "bin"
         bundled_tools = list(_REQUIRED_TOOLS) + ["python3"]
@@ -2944,7 +2949,7 @@ class MetaVolumeBuilder:
 
         info = {
             "type": "meta",
-            "description": "LCSAS rescue volume — tools + source for disaster recovery",
+            "description": "LCSAS meta disc — tools + source for restoring the archive",
             "created_at": datetime.now(UTC).isoformat(),
             "platform": f"linux-{os.uname().machine}",
             "python_version": (
@@ -2974,17 +2979,17 @@ class MetaVolumeBuilder:
                 ),
                 "pure_python_zstd": True,
             },
-            # Which catalogued repos' Rustic metadata (keys/, config,
+            # Which catalogued repositories' metadata (keys/, config,
             # index, snapshots) this disc actually carries (#435).  A
             # repo listed under ``not_bundled`` has NO keys here — its
             # packs cannot be decrypted from this disc alone.  Both
             # lists are empty on a no-catalog build, which bundles no
-            # repo metadata by design.
+            # repository metadata by design.
             # ``acknowledged`` is true when this disc was built with
-            # --allow-missing-metadata (#437): the operator was told a
+            # --allow-missing-metadata (#437): the owner was told a
             # live repo's keys are absent and chose to master it anyway.
             # Recorded here so the *disc* carries that fact — years later
-            # a recovering heir can tell an accepted gap from a defect.
+            # a restoring heir can tell an accepted gap from a defect.
             "repo_metadata": {
                 "acknowledged": self._allow_missing_metadata,
                 "bundled": [
@@ -3003,8 +3008,8 @@ class MetaVolumeBuilder:
                 ],
             },
             "requires": {
-                "key_file": "User must provide the encryption key file",
-                "data_isos": "LCSAS data-volume ISO files",
+                "key_file": "The repository's password (typed, or in a password file)",
+                "data_isos": "LCSAS data discs or their ISO images",
             },
         }
         info_path = self._output / "volume_info.json"
@@ -3014,7 +3019,7 @@ class MetaVolumeBuilder:
             os.fsync(f.fileno())
 
     def _write_start_here(self) -> None:
-        """Write START_HERE.txt to the meta-volume.
+        """Write START_HERE.txt to the meta disc.
 
         One renderer serves both build variants (UX-05): the
         production (config) build gets the same per-OS dispatch and
@@ -3035,14 +3040,14 @@ class MetaVolumeBuilder:
         _write_and_sync(self._output / "START_HERE.txt", text)
 
     def _render_meta_start_here(self, config: LCSASConfig | None) -> str:
-        """Render the meta-volume's START_HERE.txt text (UX-05).
+        """Render the meta disc's START_HERE.txt text (UX-05).
 
         The document always carries the per-OS dispatch (Windows /
         macOS / Linux) with mount-path-qualified commands and the
         honest no-OS routing (UX-03).  When *config* is given, the
-        survivability fields (owner, description, key-storage hints,
-        technical contact) and the split-key pre-step are merged in.
-        Every file the text references must exist on the meta-volume
+        survivability fields (owner, description, password-storage hints,
+        technical contact) and the share-combining pre-step are merged in.
+        Every file the text references must exist on the meta disc
         (guarded by tests/unit/test_meta_builder.py).
         """
         from lcsas.staging.metadata import _share_recovery_lines
@@ -3098,11 +3103,11 @@ class MetaVolumeBuilder:
                 )
                 key_hints_block = f"    Where to find the password:\n{hints}\n"
             key_info_line = (
-                "  * KEY_INFO.txt on this disc lists which key unlocks\n"
-                "    which repository.\n"
+                "  * PASSWORD_INFO.txt on this disc lists which password\n"
+                "    unlocks which repository.\n"
             )
             if config.key_split:
-                # Same split-key pre-step text as KEY_INFO.txt — one
+                # Same share-combining pre-step text as PASSWORD_INFO.txt — one
                 # source so the doc-contract gates cover both.
                 split_block = (
                     "\n" + "\n".join(_share_recovery_lines(config)).rstrip() + "\n"
@@ -3119,8 +3124,8 @@ class MetaVolumeBuilder:
 ║                    START HERE                           ║
 ╚══════════════════════════════════════════════════════════╝
 
-This is the LCSAS META-VOLUME — it contains everything needed
-to recover the files on the LCSAS archive discs.
+This is the LCSAS META disc — it contains everything needed
+to restore the files on the LCSAS archive discs.
 
 {about_block}╔══ Pick the section for your operating system ═══════════╗
 
@@ -3168,8 +3173,9 @@ IF THE COMPUTER REFUSES TO RUN IT
 
 WHAT YOU NEED
 
-  * The password for this archive (the original owner should
-    have written it down separately from the discs).
+  * The password for the repository you want to restore (the
+    owner should have written it down separately from the
+    discs).
 {key_hints_block}{key_info_line}  * Enough free disk space on your computer for the restored
     files.  Typical archives are 10 GB to several TB.
   * A USB Blu-ray reader (or any optical drive that can read
@@ -3177,16 +3183,21 @@ WHAT YOU NEED
 {split_block}
 WHAT HAPPENS IF YOU LOSE THE PASSWORD
 
-  The data is unrecoverable.  This is by design — the password
-  is the only key to the encryption.  There is no back door,
-  no vendor recovery service, no master key held anywhere.
+  The data cannot be restored.  This is by design — only the
+  password unlocks the encryption.  There is no back door, no
+  spare copy of the password held anywhere, and no company or
+  service can unlock it for you.
 
 INHERITED A WHOLE STACK OF DISCS?
 
-  Look at the disc labels.  ONE of them will be labelled
-  {label} (or similar) — that is THIS disc.  Start with it.
-  The recovery process will tell you which numbered data disc
-  to insert next.
+  Look at the disc labels.  At least one of them will be
+  labelled {label} (or similar): a META disc like this one.
+  Start with it.  If there are several, use the newest; if
+  that one fails, use the one burned closest in date to the
+  data discs.  Any data disc can go in first, but a disc of the
+  newest volume (the latest year in its label, then the highest
+  number) has the fullest catalog.  The restore will tell you
+  which data disc to insert next.
 
 NEED HELP?
 

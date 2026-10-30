@@ -62,7 +62,7 @@ class RestoreExecutor:
            repair bit-rot).
         2. SHA-256 compare against ``expected_sha256`` if supplied
            (Phase 21.2.b — portable, detect-only fallback used on
-           macOS / Windows recovery hosts where dvdisaster isn't
+           macOS / Windows restore hosts where dvdisaster isn't
            bundled).
         3. Skip with a "not verified" log when neither is available.
 
@@ -160,15 +160,15 @@ class RestoreExecutor:
         Args:
             cache_dir: The local restore cache directory.
             volume_mount: Path where the disc is mounted.
-            required_packs: SHA-256 hashes of packs to copy from this volume.
+            required_packs: Pack IDs of the packs to copy from this volume.
             verify: If True (default), verify SHA-256 of copied packs.
-            collect_failures: If True, collect corrupt/missing pack hashes in
+            collect_failures: If True, collect corrupt/missing pack IDs in
                 IngestionResult.failed instead of raising PackCorruptionError.
             iso_path: Optional path to the underlying ISO file backing this
                 mount.  When supplied along with a configured ECC runner, the
                 ISO's DVDisaster RS03 ECC is verified (and repaired if needed)
-                before any pack is read — recovers transparently from bit-rot
-                that lies within the recovery margin.
+                before any pack is read — repairs bit-rot transparently when
+                it lies within the repair margin.
             media_type: Optional media type of the volume.  Currently used
                 only for diagnostics; ECC verify is always attempted when an
                 ECC runner and ``iso_path`` are supplied.
@@ -176,19 +176,19 @@ class RestoreExecutor:
                 (Phase 21.3 — sourced from ``session_volumes.iso_sha256`` or
                 ``volume_copies.iso_sha256``).  When supplied without an ECC
                 runner, the verifier falls back to a portable SHA-256 compare
-                (detect-only; cannot repair) — covers macOS / Windows recovery
+                (detect-only; cannot repair) — covers macOS / Windows restore
                 hosts where DVDisaster isn't bundled.
 
         Returns:
-            IngestionResult with ingested count and (optionally) failed hashes.
+            IngestionResult with ingested count and (optionally) failed pack IDs.
 
         Raises:
             PackCorruptionError: When a copied pack fails hash verification
                 and collect_failures is False.
             RestoreError: When ISO verification fails — either ECC verify+repair
                 both failed (Linux path) or the SHA-256 mismatched (portable
-                fallback path).  Points the operator at an alternate copy
-                from a different location either way.
+                fallback path).  Either way, its hint points to another disc
+                of this volume at a different location.
         """
         # ── ISO integrity check before reading any pack ─────────────
         # Issue #20 + Phase 21.3: verify the mounted ISO's integrity
@@ -210,7 +210,7 @@ class RestoreExecutor:
                 msg = (
                     f"ECC verification and repair both failed for "
                     f"'{iso_path.name}'. The disc is damaged beyond "
-                    f"DVDisaster RS03's recovery margin."
+                    f"DVDisaster RS03's repair margin."
                 )
             else:
                 msg = (
@@ -222,8 +222,8 @@ class RestoreExecutor:
             raise RestoreError(
                 msg,
                 recovery_hint=(
-                    "Try an alternate copy of this volume from a "
-                    "different location (off-site / cold-vault). "
+                    "Try another disc with the same label from a "
+                    "different location (such as an offsite safe). "
                     "Every volume in this archive is typically burned "
                     "to multiple discs across locations — run "
                     "`lcsas catalog locations <volume_label>` to list "
@@ -347,17 +347,17 @@ class RestoreExecutor:
     ) -> list[str]:
         """Check that every required pack is present in the cache.
 
-        Walks ``cache_dir/data/`` looking for each SHA-256 hash in the
+        Walks ``cache_dir/data/`` looking for each pack ID in the
         two-level layout (``data/<prefix>/<sha256>``).
 
         Args:
             cache_dir: The assembled restore cache directory.
-            required_packs: SHA-256 hashes of every pack the restore needs.
+            required_packs: Pack IDs of every pack the restore needs.
             verify_hashes: If True, re-verify the SHA-256 of each cached
                 pack — catches corruption after ingest.
 
         Returns:
-            List of missing or corrupted SHA-256 hashes (empty if complete).
+            List of missing or corrupted pack IDs (empty if complete).
         """
         data_dir = cache_dir / "data"
         missing: list[str] = []
@@ -380,14 +380,14 @@ def verify_iso_sha256(iso_path: Path, expected_sha256: str) -> bool:
     """Portable ISO verifier — compares SHA-256 against an expected hash.
 
     Phase 21.2.b helper: detects corruption without needing xorriso or
-    dvdisaster on the recovery host.  Cannot repair (that's still
+    dvdisaster on the restore host.  Cannot repair (that's still
     DVDisaster's job during the Linux burn flow); this is detect-only,
-    which is exactly the right shape for macOS / Windows recovery
+    which is exactly the right shape for macOS / Windows restore
     hosts where neither ECC tool is bundled.
 
     The ``expected_sha256`` value normally comes from the
     ``session_volumes.iso_sha256`` column written at burn time
-    (``src/lcsas/db/sessions.py``) or from a per-volume receipt
+    (``src/lcsas/db/sessions.py``) or from a burn receipt's
     JSON.  Case-insensitive compare so hex strings from different
     sources match cleanly.
     """

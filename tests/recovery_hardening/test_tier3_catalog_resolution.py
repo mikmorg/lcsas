@@ -2,7 +2,7 @@
 
 Tier-1's ``lcsas-restore`` resolves the missing pack hash to a volume
 label via the holographic SQLite catalog burned onto every disc and
-prints an ``It lives on volume(s):`` block (see
+prints an ``It is on any disc labelled:`` block (see
 ``recovery/src/lcsas-restore/disc_locator.c::print_prompt``).  Until
 issue #248 the tier-3 standalone restorer printed only the pack hash
 with the legacy ``(no catalog available)`` line, leaving operators (and
@@ -22,7 +22,7 @@ This module pins the three branches the framed prompt must drive when
   * **Catalog present but pack absent** -- mirrors tier-1's behaviour
     when ``lcsas_catalog_find_pack`` returns no match
     (``disc_locator.c:739``): the prompt prints
-    ``(catalog has no record of this pack hash)``.
+    ``(catalog has no record of this pack ID)``.
 
 We test by driving ``PurePythonRestorer._print_swap_prompt`` directly
 through ``capsys`` -- no rustic / xorriso required, so this runs
@@ -80,7 +80,7 @@ def _make_catalog(
         map_to_volume: When True (default), insert a ``volume_packs``
             row linking the pack to the volume.  When False, the pack
             row is present but no volume mapping exists -- pins the
-            ``(catalog has the pack, but no current volume mapping)``
+            ``(catalog has the pack, but lists no disc for it)``
             branch in ``disc_locator.c::print_prompt``.
     """
     conn = sqlite3.connect(path)
@@ -160,7 +160,7 @@ def test_prompt_includes_volume_label_when_catalog_supplied(
     tmp_path: Path, capsys
 ) -> None:
     """Happy path: with a catalog that maps the pack to a volume, the
-    framed prompt prints an ``It lives on volume(s):`` block in the
+    framed prompt prints an ``It is on any disc labelled:`` block in the
     same shape tier-1 emits.
 
     The shape-match is what lets the blind-restore test agent's pattern
@@ -177,8 +177,8 @@ def test_prompt_includes_volume_label_when_catalog_supplied(
     restorer._print_swap_prompt(_PACK_HASH_PRESENT)
 
     captured = capsys.readouterr().err
-    assert "It lives on volume(s):" in captured, (
-        "framed prompt is missing the tier-1 'It lives on volume(s):' line; "
+    assert "It is on any disc labelled:" in captured, (
+        "framed prompt is missing the tier-1 'It is on any disc labelled:' line; "
         f"stderr was:\n{captured}"
     )
     assert _VOLUME_LABEL in captured, (
@@ -207,10 +207,10 @@ def test_prompt_falls_back_when_no_catalog_supplied(
     restorer._print_swap_prompt(_PACK_HASH_PRESENT)
 
     captured = capsys.readouterr().err
-    assert "(tier-3 standalone restorer: no catalog available)" in captured, (
+    assert "(tier-3 Python reader: no catalog available)" in captured, (
         f"expected legacy fallback line in framed prompt; stderr was:\n{captured}"
     )
-    assert "It lives on volume(s):" not in captured, (
+    assert "It is on any disc labelled:" not in captured, (
         f"unexpected catalog-success line in no-catalog prompt; stderr was:\n{captured}"
     )
 
@@ -221,7 +221,7 @@ def test_prompt_reports_unknown_pack_when_catalog_lacks_record(
     """Mirrors tier-1: when the catalog is supplied but the pack hash
     isn't in ``packs`` at all (``lcsas_catalog_find_pack`` returns no
     match in ``disc_locator.c:738``), the framed prompt must print
-    ``(catalog has no record of this pack hash)``.
+    ``(catalog has no record of this pack ID)``.
 
     This is the third branch operators and the test agent's pattern
     matchers need to disambiguate ("the catalog can't help you here,
@@ -238,11 +238,11 @@ def test_prompt_reports_unknown_pack_when_catalog_lacks_record(
     restorer._print_swap_prompt(_PACK_HASH_ABSENT)
 
     captured = capsys.readouterr().err
-    assert "(catalog has no record of this pack hash)" in captured, (
-        "expected 'catalog has no record of this pack hash' branch in "
+    assert "(catalog has no record of this pack ID)" in captured, (
+        "expected 'catalog has no record of this pack ID' branch in "
         f"framed prompt; stderr was:\n{captured}"
     )
-    assert "It lives on volume(s):" not in captured, (
+    assert "It is on any disc labelled:" not in captured, (
         "unexpected volume-label line for a pack absent from the catalog; "
         f"stderr was:\n{captured}"
     )
@@ -270,7 +270,7 @@ def test_prompt_handles_corrupt_catalog_gracefully(
     restorer._print_swap_prompt(_PACK_HASH_PRESENT)
 
     captured = capsys.readouterr().err
-    assert "(tier-3 standalone restorer: no catalog available)" in captured, (
+    assert "(tier-3 Python reader: no catalog available)" in captured, (
         "corrupt catalog must degrade to the legacy line; "
         f"stderr was:\n{captured}"
     )
@@ -286,7 +286,7 @@ def test_lookup_volume_labels_returns_no_volume_mapping_state(
     This is the rare-but-real case where a pack was registered in the
     catalog (e.g. mid-burn) but never bound to a volume copy.  The
     framed prompt translates this to
-    ``(catalog has the pack, but no current volume mapping)``.
+    ``(catalog has the pack, but lists no disc for it)``.
     """
     catalog = tmp_path / "catalog.db"
     _make_catalog(

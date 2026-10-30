@@ -1,6 +1,6 @@
 .PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-tier3-qemu test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-split-docs blind-restore-windows blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e meta-gate shellcheck
 
-# Default target: lint + typecheck + every test tier ending with the
+# Default target: lint + typecheck + every test level ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
 # gate; CI uses the same path.
 .DEFAULT_GOAL := gate
@@ -54,13 +54,13 @@ test-tier3-qemu:
 	LCSAS_ZSTD_QEMU=1 pytest \
 		tests/recovery_hardening/test_tier3_zstd_qemu.py -v
 
-# Full test suite.  Recovery-hardening runs LAST: every other tier
+# Full test suite.  Recovery-hardening runs LAST: every other level
 # (unit/integration/e2e) must succeed first; the hardening checks are
 # the final gate that says "this build is shippable."
 test-all: test-unit test-integration test-e2e test-recovery-hardening
 
 # Production build gate.  Composes lint + typecheck + the entire test
-# pyramid; the recovery-hardening tier is the final step.  Anything
+# pyramid; the recovery-hardening level is the final step.  Anything
 # that fails here blocks `git push`.
 gate: lint shellcheck typecheck test-all shell-coverage
 	@echo "build gate passed."
@@ -151,7 +151,7 @@ blind-restore-teardown:
 
 # Adversarial blind-restore variants (issue #214).  Loops the blind
 # test through fixtures that force each recovery-cascade fallback
-# path or stress an unusual tenant topology.  Currently shipping 5
+# path or stress an unusual repository topology.  Currently shipping 5
 # variants:
 #
 #   tier1-missing        — meta lacks lcsas-restore; restore.sh's
@@ -160,10 +160,10 @@ blind-restore-teardown:
 #                          (promoted out of XFAIL 2026-06-15, issue #227).
 #   tier1-tier2-missing  — meta lacks tier-1 AND tier-2; tier 3 takes
 #                          over (promoted cycle 9, 2026-05-28).
-#   single-tenant        — only the alpha repo exists; exercises the
+#   single-tenant        — only the alpha repository exists; exercises the
 #                          no-prompt fast path (promoted cycle 8).
 #   5-tenant             — alpha + bravo + charlie + delta + echo;
-#                          stress-tests the multi-tenant prompt
+#                          stress-tests the repository-selection prompt
 #                          (promoted cycle 7).
 #   no-catalog           — every data disc lacks catalog.db; forces
 #                          the hash-only swap-prompt path (promoted
@@ -191,10 +191,10 @@ blind-restore-variants:
 	done
 	@echo "blind-restore-variants: all variants PASS"
 
-# Key-escrow Phase 3 blind variants.  Each is one blind run (same cost
-# guard as blind-restore-variants).
+# Password-split (key-escrow plan) Phase 3 blind variants.  Each is one
+# blind run (same cost guard as blind-restore-variants).
 #
-#   blind-restore-single-key  — K3.1: explicit single-key baseline
+#   blind-restore-single-key  — K3.1: explicit unsplit-password baseline
 #                               (alias of default; plaintext password).
 #   blind-restore-split-2of5  — K3.2: agent gets only 5 SLIP-0039 share
 #                               cards and must reconstruct the password
@@ -219,10 +219,10 @@ blind-restore-split-2of5:
 	    || { echo "FAIL: variant split-key-2of5" >&2; $(MAKE) blind-restore-teardown; exit 1; }
 	$(MAKE) blind-restore-teardown
 
-# KEY-04: docs-driven split-key acceptance gate.  Unlike split-key-2of5
+# KEY-04: docs-driven split-password acceptance gate.  Unlike split-key-2of5
 # (a tooling smoke that spoon-feeds the command sequence), this variant
 # ships a scenario-only prompt + production -card.txt artifacts, so the
-# agent must derive every command from the on-disc START_HERE/KEY_INFO
+# agent must derive every command from the on-disc START_HERE/PASSWORD_INFO
 # instructions.  haiku-only, same cost guard.  NOT XFAIL'd: until
 # KEY-01/02/05 land it is expected to fail at STEP 1/STEP 2, and that
 # failure is the signal.  Acceptance gate for heir-doc / keyshare /
@@ -243,7 +243,7 @@ blind-restore-split-docs:
 # siblings.  haiku-only per project policy; record the score in
 # recovery/docs/READINESS_CHECKLIST.txt (JOURNEY DRILL LOG) after each run.
 #
-# Hard dependency: UX-01 (restore.bat repo discovery) + INFRA-01 (windows
+# Hard dependency: UX-01 (restore.bat repository discovery) + INFRA-01 (windows
 # fixture builder + agent prompt).  Until both land the windows variant
 # exits non-zero with that reason rather than scoring broken plumbing — so
 # this target will FAIL loud, by design, until its prerequisites merge.
@@ -294,14 +294,14 @@ build-recovery:
 		lcsas recovery build --arch "$$a" || exit 1; \
 	done
 	@# Also (re)build the lcsas-keyshare SLIP-0039 combiner for all 6
-	@# approved tier-1 targets, so split-key reconstruction stays
+	@# approved tier-1 targets, so rebuilding a split password stays
 	@# python-free everywhere and the bins don't drift from source.
 	@echo "==> make -C recovery keyshare-arches"
 	$(MAKE) -C recovery keyshare-arches
 
 # RST-05 release-prep gate: provision the full per-target binary set
 # (upstream rustic/python + tier-1 lcsas-restore + keyshare), build a
-# meta-volume, and prove it satisfies the required-contents contract via
+# meta disc, and prove it satisfies the required-contents contract via
 # both the build gate (default --require-complete) and `meta verify`.
 # Fails if any required artifact is absent.  Requires the zig/qemu
 # toolchains + network for fetch-recovery.  CI wiring (tags/scheduled) is
@@ -312,7 +312,7 @@ meta-gate: fetch-recovery build-recovery
 	lcsas meta build --output "$(META_GATE_DIR)"
 	@echo "==> lcsas meta verify --strict $(META_GATE_DIR)"
 	lcsas meta verify --strict "$(META_GATE_DIR)"
-	@echo "==> built meta-volume satisfies required-contents contract"
+	@echo "==> built meta disc satisfies required-contents contract"
 	LCSAS_META_BUILT_DIR="$(META_GATE_DIR)" pytest \
 		tests/recovery_hardening/test_meta_bundling_completeness.py::test_built_meta_volume_satisfies_required_contents -v
 	@echo "meta-gate PASSED"

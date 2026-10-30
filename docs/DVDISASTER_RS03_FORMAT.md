@@ -1,9 +1,9 @@
 # dvdisaster RS03 Error Correction Format
 
-> Bundled with LCSAS archive volumes for long-term survivability.
+> Bundled on every LCSAS meta disc for long-term survivability.
 > This document specifies the RS03 format that LCSAS's OWN in-house
 > ECC tool — `lcsas-ecc` (a C89 RS03 verify/repair decoder, cross-built
-> for all six approved targets and bundled on every meta-volume, see
+> for all six approved targets and bundled on every meta disc, see
 > `recovery/src/lcsas-ecc/`) — implements.  It also lets any future
 > programmer re-implement RS03 verification/repair from scratch should
 > both `lcsas-ecc` and the abandoned upstream `dvdisaster` binary be
@@ -14,7 +14,7 @@
 > Source of record: the pinned dvdisaster source tarball
 > (`dvdisaster/src/dvdisaster-0.79.10-pl6.tar.gz`, pinned in
 > `recovery/UPSTREAM.sha256`, GPL v3), which LCSAS ships and audits on
-> every meta-volume under `tools/src/` — not a third-party download.
+> every meta disc under `tools/src/` — not a third-party download.
 > The corresponding public mirror of that source is
 > [github.com/speed47/dvdisaster](https://github.com/speed47/dvdisaster).
 > (Upstream dvdisaster is abandoned — last release 2020 — so no
@@ -28,8 +28,8 @@
 > `src/rs03-common.c`, `src/endian.c`) and verified against the real
 > binary's `dvdisaster -t` output (see
 > `tests/integration/test_rs03_doc_conformance.py`). The source tarball
-> itself is bundled on every meta-volume under `tools/src/`, so a future
-> engineer holding only a rescue disc has both this spec and the code it
+> itself is bundled on every meta disc under `tools/src/`, so a future
+> engineer holding only a meta disc has both this spec and the code it
 > describes.
 >
 > Last updated: 2026-06-13
@@ -407,7 +407,7 @@ If dvdisaster is no longer available, a replacement tool needs to:
 ### Reference Sources
 
 The authoritative reference is the pinned dvdisaster source itself,
-**bundled on this meta-volume** at
+**bundled on this meta disc** at
 `tools/src/dvdisaster-0.79.10-pl6.tar.gz` (GPLv3) and pinned by SHA-256
 in `recovery/UPSTREAM.sha256`.  The load-bearing files are:
 
@@ -440,6 +440,6 @@ dvdisaster's parity.
   data appears after the filesystem boundary
 - Pack files inside the ISO are also protected by SHA-256 content
   hashing, providing an additional integrity layer
-- If a pack file's SHA-256 doesn't match after extraction, the disc
-  may be damaged — repair with `lcsas-ecc fix <image>` (or the upstream
-  `dvdisaster -f`) first, then re-extract
+- If a pack file's SHA-256 doesn't match its pack ID after extraction,
+  the disc may be damaged — repair with `lcsas-ecc fix <image>` (or the
+  upstream `dvdisaster -f`) first, then re-extract

@@ -1343,7 +1343,7 @@ class TestEscrowDrift:
         manifest = orch.prepare()  # drift present, but override set
         events = get_events_for_volume(orch_env["conn"], manifest.volume_id)
         notes = [e for e in events if e.event_type == "NOTE"]
-        assert any("KEY-08 escrow drift override" in e.detail for e in notes)
+        assert any("KEY-08 split drift override" in e.detail for e in notes)
 
 
 # =========================================================================

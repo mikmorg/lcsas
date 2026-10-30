@@ -144,7 +144,7 @@ static int rs1024_verify(const unsigned int *data, size_t n, int extendable)
 /* Minimum token length eligible for prefix expansion.  The SLIP-0039
  * wordlist guarantees every word is uniquely identified by its first 4
  * letters, so any token of length >= 4 that prefix-matches exactly one
- * word resolves unambiguously (KEY_SHARE_FORMAT.md §2). */
+ * word resolves unambiguously (SHARE_FORMAT.md §2). */
 #define MIN_PREFIX_LEN 4
 
 /* Compare token (`w`, length `len`) against wordlist entry `cand` as a

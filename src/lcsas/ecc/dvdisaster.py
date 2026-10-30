@@ -69,7 +69,7 @@ def smallest_fitting_medium_bytes(image_bytes: int) -> int:
 
     RS03 augmented mode grows the image to the smallest medium on
     :data:`RS03_MEDIUM_LADDER_BYTES` that fits it; the burn pre-flight
-    must budget staging space for the *padded* size, not the raw ISO.
+    must budget staging-area space for the *padded* size, not the raw ISO.
     This is an upper bound: dvdisaster rounds the augmented image down
     to whole RS03 layers (multiples of 255 sectors), so the real result
     lands slightly under the nominal medium size (observed: a CD-sized
@@ -270,9 +270,9 @@ class SubprocessDVDisasterRunner(SubprocessRunnerBase):
 class LcsasEccRunner(SubprocessRunnerBase):
     """In-house RS03 verify/repair via the bundled ``lcsas-ecc`` binary.
 
-    Implements the :class:`DVDisasterRunner` protocol so operator-side
+    Implements the :class:`DVDisasterRunner` protocol so owner-side
     ``lcsas verify`` / ``restore exec`` keep working when no dvdisaster is
-    installed — the same C89 RS03 codec that ships on the meta-volume
+    installed — the same C89 RS03 codec that ships on the meta disc's
     tier-1 path (FMT-01).  As of FMT-01 phase 2 it *also* encodes
     (``augment_iso``), so the burn pipeline can run dvdisaster-free.  The
     format is identical to dvdisaster's, so this reads/repairs/writes any
@@ -427,7 +427,7 @@ def select_ecc_runner(
     require_augment: bool = False,
     tmpdir: Path | None = None,
 ) -> DVDisasterRunner | None:
-    """Pick the ECC runner for an operator-side verify/repair path (FMT-01).
+    """Pick the ECC runner for an owner-side verify/repair path (FMT-01).
 
     Selection order:
 
@@ -435,7 +435,7 @@ def select_ecc_runner(
        encode *and* decode and is the byte-exact tool that wrote the
        parity, so prefer it whenever present.
     2. Otherwise the in-house ``lcsas-ecc`` binary if it is on ``PATH`` —
-       the same C89 RS03 codec that ships on the meta-volume.  As of
+       the same C89 RS03 codec that ships on the meta disc.  As of
        FMT-01 phase 2 it covers *both* encode (``augment``) and decode
        (verify/repair), so a host without dvdisaster can still write *and*
        spend RS03 parity instead of skipping ECC entirely.  This is the
@@ -452,7 +452,7 @@ def select_ecc_runner(
     neither encoder is on ``PATH``.
 
     Criticality asymmetry (why ``lcsas-ecc augment`` is *not* perf-tuned):
-    encode runs at WRITE time, on the operator's machine, which has
+    encode runs at WRITE time, on the owner's machine, which has
     dvdisaster (the preferred, fast encoder); the in-house augment is a
     correctness fallback / defence-in-depth, not on the durability-critical
     path.  Only DECODE (verify/repair) is durability-critical -- it runs at

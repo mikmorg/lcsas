@@ -1,8 +1,8 @@
 """Device read-back hashing for post-burn verification (BURN-04).
 
 VERIFIED is the catalog's strongest durability claim — deprecation
-safety trusts it when deciding whether the last replica of a pack may
-be retired.  ``xorriso -check_media`` alone is a readability smoke
+safety trusts it when deciding whether the last volume holding a pack
+may be deprecated.  ``xorriso -check_media`` alone is a readability smoke
 test: any readable disc sitting in the drive passes it.  This module
 provides the evidence step: read back exactly the mastered image's
 byte length from the device and compare its SHA-256 against the hash

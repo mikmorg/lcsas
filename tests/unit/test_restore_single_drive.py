@@ -845,7 +845,7 @@ def test_reseed_fails_gracefully_on_missing_repo(tmp_path, capsys):
     # Original metadata should be untouched.
     assert (cache / "index" / "marker").read_text() == original_index
     err = capsys.readouterr().err
-    assert "repo not found" in err
+    assert "repository not found" in err
 
 
 # ---------------------------------------------------------------------------
@@ -903,7 +903,7 @@ def test_seed_metadata_raises_when_metadata_absent(tmp_path):
     cache = tmp_path / "cache"
     with pytest.raises(SystemExit) as exc:
         helper._seed_metadata(mount, cache, REPO_ID)
-    assert "metadata for repo" in str(exc.value)
+    assert "metadata for repository" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
@@ -1017,7 +1017,7 @@ def test_ingest_aborts_when_verify_disc_fails(tmp_path, capsys):
     ])
     assert rc == 2
     err = capsys.readouterr().err
-    assert "disc verification failed" in err
+    assert "disc label check failed" in err
     # Nothing should have been copied.
     assert not (cache / "data" / sha[:2] / sha).exists()
 

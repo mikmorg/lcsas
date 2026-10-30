@@ -27,14 +27,14 @@
  *   on              always prompt and retry
  *   off             always fail fast
  *
- * --catalog opens the on-disc SQLite catalog (catalog.db); used both
- * for informational logging at startup and for volume-label hints
+ * --catalog opens a disc catalog (catalog.db, SQLite); used both
+ * for informational logging at startup and for disc-label hints
  * in interactive disc-swap prompts.
  *
- * --meta-disc identifies the recovery medium's mount point.  The
+ * --meta-disc identifies the meta disc's mount point.  The
  * locator excludes that path from pack searches and refuses to keep
- * the cwd inside it, so a user with a SINGLE optical drive can eject
- * the recovery disc and reuse the same drive for data discs.
+ * the cwd inside it, so an heir with a SINGLE optical drive can eject
+ * the meta disc and reuse the same drive for data discs.
  */
 #include "repo.h"
 #include "tree.h"
@@ -105,7 +105,7 @@ usage(const char *argv0)
         "\n"
         "Restore a restic-format repository.  --repo must point to an\n"
         "assembled tree (with subdirs keys/, index/, snapshots/, data/).\n"
-        "Use scripts/restore.sh to assemble an on-disc LCSAS repo first.\n"
+        "Use scripts/restore.sh to assemble one from LCSAS discs first.\n"
         "\n"
         "--list-pending-packs requires --catalog.  Prints a summary of\n"
         "which discs you will need and how many packs each holds, then\n"
@@ -137,16 +137,16 @@ usage(const char *argv0)
         "for ENTER only.  Linux/macOS; on Windows the prompt always waits\n"
         "for ENTER.\n"
         "\n"
-        "--catalog opens the on-disc SQLite catalog (catalog.db) for\n"
-        "informational logging at startup and for volume-label hints\n"
+        "--catalog opens a disc catalog (catalog.db, SQLite) for\n"
+        "informational logging at startup and for disc-label hints\n"
         "in interactive disc-swap prompts.  On each retry the locator\n"
         "also probes any newly-mounted disc for a catalog.db and uses\n"
-        "the freshest one it can open for hash->label resolution.\n"
+        "the freshest one it can open to name the disc for each pack.\n"
         "\n"
-        "--meta-disc names the mount point of the recovery / meta disc.\n"
+        "--meta-disc names the mount point of the meta disc.\n"
         "The locator excludes that path from pack searches and drops\n"
-        "any cwd inside it before prompting, so a user with one optical\n"
-        "drive can eject the recovery disc and reuse the same drive\n"
+        "any cwd inside it before prompting, so an heir with one optical\n"
+        "drive can eject the meta disc and reuse the same drive\n"
         "for data discs.  Driver scripts set this automatically.\n",
         argv0);
 }
@@ -408,8 +408,8 @@ main(int argc, char **argv)
              * Name all the plausible causes so a heir with a present
              * but bit-rotted key file is not misdirected to a
              * directory-permissions problem (#384 review round 3). */
-            fprintf(stderr, "ERROR: could not read or decrypt any repo key "
-                            "file under %s\n"
+            fprintf(stderr, "ERROR: could not read or decrypt any repository "
+                            "key file under %s\n"
                             "       (keys directory missing/unreadable, no "
                             "key files, or a key file is corrupt)\n",
                     keys_dir);
@@ -565,7 +565,7 @@ main(int argc, char **argv)
     }
     if (sidx < 0) {
         fprintf(stderr, "ERROR: snapshot not found: %s\n",
-                snapshot_arg ? snapshot_arg : "(none -- empty repo)");
+                snapshot_arg ? snapshot_arg : "(none -- empty repository)");
         goto out;
     }
 
@@ -592,7 +592,7 @@ main(int argc, char **argv)
         int tree_rc;
         /* total_blob_hint is the loaded index size -- an upper bound
          * on what this snapshot can reference.  We surface that
-         * explicitly so the operator isn't misled by the denominator. */
+         * explicitly so the heir isn't misled by the denominator. */
         lcsas_progress_init(&progress, (unsigned long long)ix.count);
         fprintf(stderr,
                 "[lcsas-restore] progress: 0/%llu blobs, 0 MB"

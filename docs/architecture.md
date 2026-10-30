@@ -15,26 +15,26 @@
 LCSAS orchestrates the archival of **Rustic** (restic-compatible) repository data
 onto cold optical storage media (Blu-ray, M-DISC) — producing self-describing,
 error-corrected, verifiable volumes that can be restored independently without
-access to any central server or catalog.
+access to any central server or the master catalog.
 
 ### Core Design Tenets
 
 | Tenet | Description |
 |---|---|
-| **Content-addressable** | Every pack file is identified by its SHA-256 hash; deduplication and verification are intrinsic |
-| **Holographic metadata** | Each volume carries everything needed to restore from it alone: index files, snapshot manifests, encryption keys, and a catalog snapshot |
-| **Multi-tenant** | Multiple Rustic repositories (family, work, friends, etc.) share volumes; the catalog tracks per-repo ownership |
+| **Content-addressable** | Every pack file is identified by its pack ID (the SHA-256 of its contents); deduplication and integrity checks are intrinsic |
+| **Self-describing discs** | Each disc carries everything needed to restore from it alone: repository metadata (index, snapshot and key files) and a disc catalog |
+| **Multi-repository** | Several Rustic repositories (family, work, etc.) share volumes; the catalog records which repository each pack belongs to |
 | **Immutable media** | Write-once optical media guarantees bitrot resistance; ECC (RS03 via dvdisaster) adds a second defence layer |
-| **Decentralized** | No server dependency; the SQLite catalog is replicated onto every volume and can be rebuilt from any set of volumes |
+| **Decentralized** | No server dependency; the SQLite catalog is burned onto every disc as its disc catalog and can be rebuilt from any set of volumes |
 
 ---
 
-## 2. Storage Tier Model
+## 2. Storage Stages
 
 ```
-Tier 0 — HOT         NAS / local disk (Rustic mirrors, active repos)
-Tier 1 — WARM        Staging area on fast SSD/HDD (temporary, pre-burn)
-Tier 2 — COLD        Optical media (permanent archive)
+Mirror          NAS / local disk (live Rustic copy of each repository)
+Staging area    Fast SSD/HDD (temporary; ISO images assembled before burning)
+Discs           Optical media (permanent archive)
 ```
 
 ### Supported Media Types
@@ -59,7 +59,7 @@ A Rustic repository contains:
 ```
 repo/
 ├── config              # Repository ID + encryption params
-├── keys/               # Encryption key files
+├── keys/               # Locked key files (the password opens them)
 ├── index/              # Pack-to-blob mapping
 ├── snapshots/          # Snapshot manifests (JSON)
 ├── data/               # Pack files (content-addressed blobs)
@@ -72,8 +72,8 @@ repo/
 ```
 
 **Pack files** are the atomic unit of archival. Each pack:
-- Contains one or more compressed, encrypted blobs (file chunks, tree nodes, etc.)
-- Is identified by its SHA-256 content hash
+- Contains one or more compressed, encrypted blobs (file data, tree nodes, etc.)
+- Is identified by its pack ID: the SHA-256 of its contents
 - Is immutable once written
 - Ranges from ~4 MB to ~100 MB in typical configurations
 
@@ -92,7 +92,7 @@ The catalog is at **schema version 10** (`CURRENT_SCHEMA_VERSION` in
 -- Tracks schema migrations
 schema_version (version INTEGER)
 
--- Physical media volumes
+-- Volumes (one per label; each burned onto zero or more discs)
 volumes (
     volume_id    INTEGER PRIMARY KEY AUTOINCREMENT,
     label        TEXT UNIQUE NOT NULL,
@@ -107,7 +107,7 @@ volumes (
     verified_at  DATETIME
 )
 
--- Logical repositories (multi-tenant)
+-- Repositories (several share the same volumes)
 repositories (
     repo_id          TEXT PRIMARY KEY,
     name             TEXT NOT NULL,
@@ -144,14 +144,14 @@ snapshots (
     description  TEXT
 )
 
--- Named physical storage locations
+-- Locations (named places where discs are kept)
 locations (
     name         TEXT PRIMARY KEY,
     created_at   DATETIME,
     description  TEXT
 )
 
--- Per-location copies of a volume (multi-copy tracking)
+-- Discs: each burned disc of a volume, at most one per location
 volume_copies (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     volume_id    INTEGER REFERENCES volumes,
@@ -165,7 +165,7 @@ volume_copies (
     UNIQUE(volume_id, location)
 )
 
--- Burn session batching
+-- Burn sessions
 burn_sessions (
     session_id   TEXT PRIMARY KEY,
     created_at   DATETIME,
@@ -193,7 +193,7 @@ volume_events (
     detail       TEXT
 )
 
--- Recorded Shamir/SLIP-0039 key split per repo (KEY-08)
+-- Recorded Shamir/SLIP-0039 password split per repository (KEY-08)
 key_escrow (
     repo_id      TEXT PRIMARY KEY REFERENCES repositories,
     threshold    INTEGER NOT NULL, -- K in a K-of-N split
@@ -203,10 +203,10 @@ key_escrow (
 )
 ```
 
-> The `key_escrow` table records *that* a repository key was split into a
-> K-of-N SLIP-0039 set (and when) — it never stores the shares or the key
-> itself. Share words live only on the printed recovery cards. See the
-> key-share format spec ([docs/KEY_SHARE_FORMAT.md](KEY_SHARE_FORMAT.md))
+> The `key_escrow` table records *that* a repository's password was split into
+> a K-of-N SLIP-0039 set (and when) — it never stores the shares or the
+> password itself. Share words live only on the printed share cards. See the
+> share format spec ([docs/SHARE_FORMAT.md](SHARE_FORMAT.md))
 > and the `keyshare/` package.
 
 ### Volume Lifecycle States
@@ -234,16 +234,16 @@ data loss.
 ## 4. Burn Pipeline
 
 The burn pipeline is the central workflow — transforming unarchived packs into
-verified, self-describing cold storage volumes.
+verified, self-describing volumes burned onto discs.
 
 ### Pipeline Stages
 
 ```
-1. SCAN        Scan Rustic mirror for pack files, record SHA-256 + size
+1. SCAN        Scan Rustic mirror for pack files, record pack ID + size
 2. DELTA       Compare scanned packs against catalog → identify unarchived
 3. BINPACK     First-fit-decreasing to fill a volume (capacity - ECC - metadata reserve)
-4. STAGE       Hardlink (or copy) selected packs into staging directory
-5. METADATA    Inject holographic metadata (index, snapshots, keys, config, catalog)
+4. STAGE       Hardlink (or copy) selected packs into the staging area
+5. METADATA    Inject repository metadata (index, snapshots, keys, config) + disc catalog
 6. ISO         Create ISO 9660 image (Rock Ridge + Joliet, ISO level 3) via xorriso
 7. ECC         Augment ISO with RS03 error correction via dvdisaster
 8. BURN        Write to physical media via cdrecord (DAO mode)
@@ -251,19 +251,19 @@ verified, self-describing cold storage volumes.
 10. CATALOG    Update SQLite: create volume record, link packs, mark closed
 ```
 
-### Staging Directory Layout
+### Staging Area Layout (one volume)
 
 ```
 LCSAS_BD_2026_003/
 ├── data/                          # Pack files (hardlinked from mirror)
 │   ├── aa/                        # Two-level layout (first 2 hex chars)
-│   │   ├── aabbccdd...            # Full SHA-256 hash as filename
+│   │   ├── aabbccdd...            # Full pack ID as filename
 │   │   └── ...
 │   ├── bb/
 │   │   └── ...
 │   └── ...
 ├── metadata/
-│   ├── family/                    # Per-repo metadata
+│   ├── family/                    # Repository metadata, one folder per repository
 │   │   ├── config
 │   │   ├── index/
 │   │   ├── keys/
@@ -273,7 +273,7 @@ LCSAS_BD_2026_003/
 │       ├── index/
 │       ├── keys/
 │       └── snapshots/
-├── catalog.db                     # SQLite catalog snapshot
+├── catalog.db                     # Disc catalog (SQLite)
 └── volume_info.json               # Volume identity + manifest
 ```
 
@@ -301,36 +301,40 @@ LCSAS_BD_2026_003/
 
 ### Phase 1: Plan
 
-1. User provides a snapshot ID (or list of pack hashes)
+1. Start from a snapshot ID (or a list of pack IDs)
 2. `rustic restore --dry-run` determines required packs
-3. `RestorePlanner` maps pack hashes → volume labels via catalog
+3. `RestorePlanner` maps pack IDs → volume labels via catalog
 4. Generates a **pick list**: which volumes to load, in what order (minimize disc swaps)
 
 ### Phase 2: Execute
 
-1. User inserts volumes per pick list
+1. Insert a disc of each volume on the pick list
 2. System reads packs from disc into a local **pack cache**
 3. Once all required packs are cached, `rustic restore` runs against the reconstructed mirror
 4. Cache is cleaned up after successful restore
 
-### Disaster Recovery (No Catalog)
+### Restoring Without the Master Catalog
 
-Each disc's ``catalog.db`` is a **cumulative snapshot** — the catalog
-injected onto volume N contains all records from volumes 1 through N
-(injected *after* the DB commit for volume N itself).  This means:
+Each disc's ``catalog.db`` is its **disc catalog**, and it is cumulative —
+the catalog injected onto volume N contains all records from volumes 1
+through N (injected *after* the catalog commit for volume N itself).
+This means:
 
-* **The highest-numbered disc's catalog is always the most complete.**
+* **The newest volume's discs carry the most complete disc catalog.**
+  The newest volume has the latest year in its label, then the highest
+  number. A disc burned later to replace a damaged disc of an old volume
+  carries that old volume's catalog, so go by the label, not the burn date.
 * No catalog merging is required — simply adopt the newest ``catalog.db``
-  as the authoritative master.
+  as the master catalog.
 
-Recovery procedure:
+Procedure:
 
-1. Insert any LCSAS volume (ideally the highest-numbered one available)
-2. Copy ``catalog.db`` from the volume to a local path
+1. Insert any LCSAS data disc (ideally a disc of the newest volume available)
+2. Copy ``catalog.db`` from the disc to a local path
 3. This catalog already knows every volume and pack created up to and
    including that volume — no additional merge step is needed
-4. If you only have older volumes, the catalog will be missing records
-   for volumes produced *after* that disc was burned, but all prior
+4. If you only have discs of older volumes, the catalog will be missing
+   records for volumes made *after* that volume, but all prior
    data is fully described
 
 ---
@@ -344,19 +348,19 @@ cycle removes old snapshots. Consolidation reclaims space:
 2. **Plan** — collect all *active* packs from source volumes, estimate target volume count
 3. **Re-burn** — run the standard burn pipeline with the active pack set
 4. **Deprecate** — mark source volumes as DEPRECATED (do not physically destroy yet)
-5. **Verify** — confirm all active packs now exist on new volumes with ≥2 copies
+5. **Check** — confirm all active packs now exist on new volumes with ≥2 copies
 
 ---
 
-## 7. Multi-Tenant Encryption Model
+## 7. Multi-Repository Encryption Model
 
 Each repository maintains its own encryption independently:
 
 - Rustic encrypts all data at the repository level before pack files are written
 - LCSAS handles only opaque, pre-encrypted pack files
-- Per-repo `keys/` directory is included in holographic metadata
+- Each repository's `keys/` directory is included in its repository metadata
 - Password files are referenced in config but never stored in the catalog
-- A single volume may contain packs from multiple repos — each repo's keys decode only its own data
+- A single volume may contain packs from several repositories — each repository's keys decode only its own data
 
 ---
 
@@ -369,22 +373,22 @@ Each repository maintains its own encryption independently:
 - Write path: `ecc/dvdisaster.py` wraps the dvdisaster binary to augment ISOs
 - Bare-metal read/repair path: the in-house C89 `lcsas-ecc` tool (FMT-01,
   `recovery/src/lcsas-ecc/`) reads and repairs the same RS03 format with **no
-  dvdisaster binary required** — keeping the durable recovery path
+  dvdisaster binary required** — keeping the durable restore path
   dependency-free
 - Typical overhead: 15% for optical media
-- Enables recovery from surface scratches, partial media degradation
+- Repairs damage from surface scratches and partial media degradation
 - Format details: [docs/DVDISASTER_RS03_FORMAT.md](DVDISASTER_RS03_FORMAT.md)
 
 ### Redundancy Strategy
 
-- Critical packs should exist on ≥2 physical volumes
-- The `redundancy_report` query identifies packs with fewer than N copies
-- Consolidation naturally creates additional copies of surviving packs
+- Critical packs should exist on ≥2 in-service discs
+- The `redundancy_report` query identifies packs on fewer than N in-service discs
+- Consolidation naturally puts surviving packs on additional discs
 
 ### Verification
 
-- Staging-time: every selected pack is fully read and its SHA-256
-  verified against the catalog hash before the ISO is mastered; a
+- Stage time: every selected pack is fully read and its SHA-256
+  checked against its pack ID in the catalog before the ISO is mastered; a
   corrupt mirror pack aborts the stage before anything is written to
   the catalog (`CorruptPacksError`)
 - Post-burn: media readability check (`xorriso -check_media`) plus a
@@ -392,9 +396,9 @@ Each repository maintains its own encryption independently:
   implemented in `burn/orchestrator.py`); re-run on demand with
   `lcsas verify <label> --disc`
 - On demand: `lcsas catalog validate <mounted-disc> --content` re-reads
-  every pack file on a mounted disc and verifies its SHA-256 against
-  the filename hash
-- Periodic: `dvdisaster --verify` on stored volumes
+  every pack file on a mounted disc and checks its SHA-256 against
+  the pack ID in its filename
+- Periodic: `dvdisaster --verify` on stored discs
 - Catalog cross-check: compare mirror packs against catalog records
 
 ---
@@ -403,10 +407,10 @@ Each repository maintains its own encryption independently:
 
 ### Catalog Encryption Tradeoff
 
-The SQLite catalog database is **intentionally unencrypted** and embedded on
+The SQLite catalog is **intentionally unencrypted** and embedded on
 every disc as `catalog.db`. This is a deliberate design decision enabling
-**self-describing recovery** — any single disc can bootstrap the entire archive
-without needing the encryption key, external tools, or prior knowledge.
+**self-describing discs** — any single disc can bootstrap the entire archive
+without needing the password, external tools, or prior knowledge.
 
 **What is exposed in the catalog:**
 
@@ -414,14 +418,14 @@ without needing the encryption key, external tools, or prior knowledge.
 - Hostnames that produced each backup
 - Snapshot timestamps
 - Repository identifiers and mirror paths
-- Volume labels, locations, and pack SHA-256 hashes
+- Volume labels, locations, and pack IDs (SHA-256 hashes)
 
 **What remains encrypted:**
 
 - All pack file contents (encrypted by Rustic/restic before LCSAS handles them)
 - File contents, directory trees, and blob data within packs
-- Encryption keys (stored on-disc in per-repo `keys/` directories, themselves
-  requiring the repository password to unlock)
+- Keys (stored on-disc in each repository's `keys/` directory, themselves
+  requiring the repository's password to unlock)
 
 **Implication:** An attacker with physical access to a disc can learn *what*
 was backed up (file paths, timestamps, hostnames) but cannot read *any* file
@@ -431,7 +435,7 @@ is in [docs/DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md).
 **For highly sensitive archives**, consider:
 
 - Using opaque repository names (e.g., `repo_a` instead of `medical_records`)
-- (A metadata-scrubbed on-disc catalog is deliberately not offered: it would
+- (A metadata-scrubbed disc catalog is deliberately not offered: it would
   break catalog rebuild and only protect future discs. See
   [DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md) §8.3.)
 - Physical security of stored media
@@ -440,19 +444,19 @@ is in [docs/DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md).
 
 ## 8.6 Multi-Location Tracking
 
-Volumes can be burned in multiple copies, each stored at a different physical
-location. The `locations` table names storage sites, and `volume_copies`
-tracks per-location copies with independent status, verification timestamps,
-and ISO checksums.
+A volume can be burned onto several discs, each kept at a different
+location. The `locations` table names the places where discs are kept, and
+`volume_copies` tracks each disc (one per location) with its own status,
+verification timestamp, and ISO image checksum.
 
 ```
 lcsas location add "Safe_Deposit_Box" --description "Bank vault, Box 42"
 ```
 
-Burning the same session once per location (`lcsas burn --session latest
+Burning the same burn session once per location (`lcsas burn --session latest
 --location Home_Shelf`, then again with `--location Safe_Deposit_Box`)
-records each physical copy independently. The `redundancy_report` query
-shows packs across all active copies at all locations.
+records each disc separately. The `redundancy_report` query
+counts each pack's in-service discs across all locations.
 
 ---
 
@@ -466,7 +470,7 @@ individual volume operations:
    creates ISOs, and optionally applies ECC
 3. Each generated volume is linked via `session_volumes` with its ISO path
    and SHA-256
-4. Sessions progress through states: `STAGED → PARTIAL → COMPLETE → CLEANED`
+4. Burn sessions progress through states: `STAGED → PARTIAL → COMPLETE → CLEANED`
 
 This decouples ISO preparation from physical burning — ISOs can be created
 on one machine and burned on another via `lcsas burn-iso`.
@@ -481,9 +485,9 @@ The restore pipeline handles degraded scenarios gracefully:
   pack (`PackSource` dataclass with volume + location + priority)
 - **Failure collection**: `ingest_volume()` can operate in `collect_failures`
   mode, recording which packs failed from a volume without aborting
-- **Cross-location restore**: Packs can be sourced from any location where
-  a copy exists; the planner minimizes disc swaps across locations
-- **Pure-Python fallback**: If Rustic/restic is unavailable, a built-in
+- **Cross-location restore**: Packs can be read from a disc at any
+  location; the planner minimizes disc swaps across locations
+- **Python fallback**: If Rustic/restic is unavailable, a built-in
   Python implementation (`restic_fallback.py`) can decrypt and restore files
   using only stdlib (AES-CTR, scrypt, zstd decompression)
 
@@ -516,13 +520,13 @@ lcsas/
 ├── rustic/          # Subprocess wrapper (Protocol), JSON parsers
 ├── iso/             # Xorriso wrapper (Protocol) — ISO mastering
 ├── ecc/             # DVDisaster RS03 wrapper (Protocol) — ECC augmentation
-├── staging/         # Staging directory builder, holographic metadata injector
+├── staging/         # Staging area builder, repository metadata + disc catalog injector
 ├── burn/            # Burn orchestrator (pipeline conductor)
-├── restore/         # Pick-list planner, restore executor, pure-Python fallback
+├── restore/         # Pick-list planner, restore executor, Python fallback
 ├── consolidate/     # Volume merger, deprecation
-├── meta/            # Meta-volume builder (bundled per-target tools, source, restore.sh)
+├── meta/            # Meta disc builder (bundled per-target tools, source, restore.sh)
 ├── recovery/        # Recovery-bundle build driver for the tier-1/2/3 cascade
-├── keyshare/        # SLIP-0039 share split/recombine, codec, printed recovery cards
+├── keyshare/        # SLIP-0039 share split/recombine, codec, printed share cards
 ├── cli/             # argparse CLI entry point (22 top-level + 33 nested subcommands)
 ├── constants.py     # Shared constants
 ├── exceptions.py    # Typed exception hierarchy
@@ -531,8 +535,8 @@ lcsas/
 
 > Two of these — `recovery/` and `keyshare/` — back the durability story
 > beyond the burn pipeline. `recovery/` drives the build of the
-> meta-volume's three-tier restore cascade (see §9.10); `keyshare/`
-> implements the SLIP-0039 K-of-N key split whose ledger is the
+> meta disc's three-tier restore cascade (see §9.10); `keyshare/`
+> implements the SLIP-0039 K-of-N password split whose ledger is the
 > `key_escrow` table (see §3). The in-tree C89 recovery tools live
 > separately under the repo-root `recovery/src/` tree (`lcsas-restore`,
 > `lcsas-ecc`, `lcsas-keyshare`, `lcsas-iso9660`, `lcsas-init`).
@@ -542,12 +546,12 @@ lcsas/
 | Pattern | Usage |
 |---------|-------|
 | **Protocol classes** | `RusticRunner`, `XorrisoRunner`, `DVDisasterRunner` — swap real subprocess implementations for mocks |
-| **Frozen dataclasses** | All DB models are immutable value objects |
+| **Frozen dataclasses** | All catalog models are immutable value objects |
 | **Pure parsers** | JSON parsing functions are separated from subprocess invocation for independent testing |
 | **Hardlink staging** | Packs are hardlinked (not copied) from mirror for zero-cost staging on same filesystem |
 | **WAL mode** | SQLite uses WAL journal for safe concurrent reads |
-| **Locked connections** | Write operations use `locked_connection()` context manager for exclusive DB access |
-| **XDG paths** | Default database path follows XDG Base Directory specification (`~/.local/share/lcsas/archive.db`) |
+| **Locked connections** | Write operations use `locked_connection()` context manager for exclusive catalog access |
+| **XDG paths** | Default catalog path follows XDG Base Directory specification (`~/.local/share/lcsas/archive.db`) |
 
 ---
 
@@ -565,7 +569,7 @@ and restored by the other without conversion.
 
 **Rustic is the primary tool** for all LCSAS write-path operations (backup,
 prune, forget). On the *restore* side the durable path is **not** rustic:
-the meta-volume cascade leads with our in-house C89 `lcsas-restore`
+the meta disc's cascade leads with our in-house C89 `lcsas-restore`
 (tier 1), falls back to the pinned upstream `rustic-static` (tier 2), and
 finally to bundled CPython + `standalone_restorer.py` (tier 3). See
 "Recovery Cascade" below.
@@ -584,8 +588,8 @@ finally to bundled CPython + `standalone_restorer.py` (tier 3). See
 
 ### Recovery Cascade Order
 
-The `restore.sh` script (`recovery/scripts/restore.sh`) on each meta-volume
-dispatches three durability tiers, documented in `recovery/docs/TIERS.txt`:
+The `restore.sh` script (`recovery/scripts/restore.sh`) on each meta disc
+dispatches three recovery tiers, documented in `recovery/docs/TIERS.txt`:
 
 | Tier | Binary | Intent |
 |---|---|---|
@@ -630,13 +634,13 @@ dataclasses. A `restore_dry_run` compatibility note: restic uses `--dry-run`
 while rustic uses `--dry-run` as well, but field names in the output may vary.
 The parser gracefully handles both.
 
-### Data Disc Standalone Restorer
+### Python Reader on Every Data Disc
 
 Every data disc also carries `standalone_restorer.py` — a self-contained
 single-file Python script (generated by `standalone_builder.py`) that combines
 `_aes_pure.py` and `restic_fallback.py` with zero external dependencies.
 This ensures any single data disc can be restored with only a Python 3.10+
-interpreter, even without rustic, restic, or the meta-volume.
+interpreter, even without rustic, restic, or the meta disc.
 
 ---
 
@@ -648,7 +652,7 @@ representative, not exhaustive — run `lcsas --help` (or read
 `cli/main.py`) for the authoritative, current command surface.
 
 ```
-lcsas init          [--db-path PATH]              Initialize catalog database
+lcsas init          [--db-path PATH]              Initialize the catalog
 lcsas repo add      NAME MIRROR_PATH               Register a repository
 lcsas repo list                                    List registered repositories
 lcsas repo remove   REPO_ID [--force]              Remove a repository and its packs
@@ -664,12 +668,12 @@ lcsas burn-iso      ISO_PATH [--device DEV]        Burn a pre-built ISO to disc
                     [--emit-receipt PATH]           (cross-machine workflow)
                     [--label LABEL --location LOC]
 lcsas restore plan  SNAPSHOT_ID --repo REPO        Generate restore pick list
-lcsas restore exec  SNAPSHOT_ID TARGET_DIR         Execute restore from volumes
+lcsas restore exec  SNAPSHOT_ID TARGET_DIR         Execute restore from discs
                     --repo REPO --password-file F
 lcsas consolidate   VOL_IDS... --target-media TYPE Plan/execute consolidation
-                    [--execute] [--deprecate]       (--deprecate retires sources
+                    [--execute] [--deprecate]       (--deprecate deprecates sources
                                                     after a successful --execute)
-lcsas location add  NAME [--description DESC]      Register a storage location
+lcsas location add  NAME [--description DESC]      Register a location
 lcsas verify        [LABEL] [--disc] [--all]       Verify volume integrity
 lcsas catalog import-receipts RECEIPT_FILES...     Import burn receipts
 ```

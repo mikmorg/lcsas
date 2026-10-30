@@ -98,7 +98,7 @@ class VolumeMerger:
 
         This is the second step of a two-phase consolidation.  Call
         :meth:`mark_sources_consolidating` *before* starting the burn so
-        that a crash leaves volumes in a recognisable recovery state rather
+        that a crash leaves volumes in a recognisable interrupted state rather
         than silently ACTIVE.
         """
         for vid in source_volume_ids:
@@ -111,8 +111,8 @@ class VolumeMerger:
     ) -> None:
         """Transition source volumes to CONSOLIDATING before the burn starts.
 
-        Marking volumes CONSOLIDATING before the burn provides a recovery
-        marker: if the process crashes, operators can inspect the catalog
+        Marking volumes CONSOLIDATING before the burn provides a crash
+        marker: if the process crashes, the owner can inspect the catalog
         and either re-run the burn (transition back to VERIFIED) or
         complete the deprecation manually, rather than finding volumes
         silently stuck as ACTIVE with no indication of intent.

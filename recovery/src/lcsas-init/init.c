@@ -4,7 +4,7 @@
  * Tasks:
  *   1. Mount /proc, /sys, /dev (devtmpfs).
  *   2. Create /run, /tmp tmpfs mounts.
- *   3. Find the recovery medium (CD/DVD/BD) and mount it RO at /mnt.
+ *   3. Find the meta disc (CD/DVD/BD) and mount it RO at /mnt.
  *   4. exec /mnt/recovery/scripts/restore.sh or drop to a busybox shell.
  *
  * Strict C89.  No libc dependencies beyond mount(2), execve(2),
@@ -53,7 +53,7 @@ ensure_dir(const char *path)
  *
  * KNOWN LIMITATION (BOOT-06): only optical nodes are probed.  The
  * bootable image is isohybrid'd so it can be written to a USB stick,
- * but booted that way the medium is /dev/sdX -- never probed -- and
+ * but booted that way the stick is /dev/sdX -- never probed -- and
  * boot dead-ends at the shell in main().  Inert while the boot path
  * is quarantined; any revival must implement the sentinel-scan fix
  * specified in experimental/boot/README.md ("BOOT-06: sentinel-scan
@@ -73,12 +73,12 @@ try_discs(const char *mount_point)
         /* Try iso9660 first, then udf. */
         if (try_mount(candidates[i], mount_point, "iso9660",
                       MS_RDONLY, NULL) == 0) {
-            log_msg("mounted recovery medium (iso9660)");
+            log_msg("mounted meta disc (iso9660)");
             return 0;
         }
         if (try_mount(candidates[i], mount_point, "udf",
                       MS_RDONLY, NULL) == 0) {
-            log_msg("mounted recovery medium (udf)");
+            log_msg("mounted meta disc (udf)");
             return 0;
         }
     }
@@ -119,7 +119,7 @@ main(int argc, char **argv)
     try_mount("tmpfs", "/tmp", "tmpfs", 0, "mode=1777,size=256m");
     ensure_dir("/mnt");
 
-    /* ── Find and mount the recovery medium. ── */
+    /* ── Find and mount the meta disc. ── */
     if (try_discs("/mnt") < 0) {
         log_msg("WARNING: no optical disc found; dropping to shell");
         execl("/bin/busybox", "busybox", "sh", (char *)NULL);
@@ -130,9 +130,9 @@ main(int argc, char **argv)
 
     /* ── Hand off to restore.sh. ── */
     if (file_exists("/mnt/recovery/scripts/restore.sh")) {
-        /* Tell restore.sh exactly where the meta-disc is mounted so
+        /* Tell restore.sh exactly where the meta disc is mounted so
          * its relocate-to-RAM block records the right exclusion path
-         * for the locator -- essential for single-drive recovery. */
+         * for the locator -- essential for a single-drive restore. */
         setenv("LCSAS_META_DISC", "/mnt", 1);
         /* cwd is the initramfs root.  Make doubly sure we are NOT
          * inside /mnt before exec, so the new process cannot pin

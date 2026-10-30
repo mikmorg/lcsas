@@ -1,17 +1,17 @@
-LCSAS RECOVERY TOOLCHAIN -- ON-DISC OPERATOR MANUAL
+LCSAS RECOVERY TOOLCHAIN -- ON-DISC RESTORE MANUAL
 =======================================================
 
 PURPOSE
 
 This document describes how to restore files from an LCSAS optical
-archive using only the tools bundled on the recovery medium.  It
-assumes nothing about the recovery environment beyond a working
+archive using only the tools bundled on the meta disc.  It assumes
+nothing about the computer you restore on beyond a working
 POSIX-like OS with shell access.
 
 PREREQUISITES
 
 You will need:
-  - The LCSAS recovery medium (BD-R / DVD).
+  - The LCSAS meta disc (BD-R / DVD), labelled LCSAS_META.
   - The repository password (set when the archive was created).
   - A target directory with free space of AT LEAST the archive size
     (the size shown by `lcsas restore plan`, or the snapshot size) on
@@ -28,8 +28,8 @@ DECISION FLOW
             (The LCSAS discs themselves are NOT bootable.)
      YES -> Continue.
 
-  Q: Can you mount the recovery medium as an ISO9660 filesystem?
-     NO  -> See "PHYSICAL RECOVERY" below.
+  Q: Can you mount the meta disc as an ISO9660 filesystem?
+     NO  -> See "REPAIRING A DAMAGED DISC" below.
      YES -> mount it read-only:
 
          mount -o ro /dev/sr0 /mnt                 (block device)
@@ -45,10 +45,10 @@ DECISION FLOW
        /tmp/restored.  The script auto-detects architecture and falls
        back through the cascade if the primary binary is missing.
 
-     NO  -> fall back to the pure-Python restorer (Tier 3) from a
+     NO  -> fall back to the Python reader (tier 3) from a
             data disc that ships its own standalone_restorer.py.
             You first need to assemble a pack cache from the disc
-            (see "MANUAL CACHE ASSEMBLY" below), then run:
+            (see "Manual pack assembly" in docs/TROUBLESHOOTING.md), then run:
 
          python3 /mnt/standalone_restorer.py \
              --repo /tmp/cache \
@@ -74,8 +74,8 @@ It needs about 1 GB of free space; delete the copy afterwards.
   Linux -- "Permission denied"; restore.sh reporting that the meta
   disc "lacks all recovery binaries" with each tier "not executable"
   although the files are there; or the restore quietly falling back
-  to the slow pure-Python tier 3.  The files sit on a filesystem that
-  may not run programs: a FAT/exFAT USB stick (it drops the
+  to the slow Python reader (tier 3).  The files sit on a filesystem
+  that may not run programs: a FAT/exFAT USB stick (it drops the
   executable bit) or any mount with the "noexec" option:
 
       cp -R /media/$USER/<label> ~/lcsas-meta
@@ -92,7 +92,7 @@ software from an unknown source.)
 CASCADE DETAILS
 
 The restore.sh script tries these in order.  Tiers 1-2 share NO
-Python dependency; the BARE MINIMUM recovery path ends after tier 2.
+Python dependency; the BARE MINIMUM restore path ends after tier 2.
 
   Tier 1.  bin/<arch>/lcsas-restore    prebuilt static C89 binary
                                        (fastest; depends only on
@@ -104,30 +104,31 @@ Python dependency; the BARE MINIMUM recovery path ends after tier 2.
 
   Tier 2b. bin/<arch>/restic           stock upstream restic/rustic --
            (or restic/rustic on PATH)  an independent, widely-audited
-                                       reader of the SAME repo format,
-                                       using ZERO LCSAS code.  Tried
-                                       before the Python last resort so
-                                       an heir who cannot run, or does
-                                       not trust, our binaries still
-                                       gets an automatic restore.  Needs
-                                       a single-repo data/ tree (skipped
-                                       on the multi-disc holographic
+                                       reader of the SAME repository
+                                       format, using ZERO LCSAS code.
+                                       Tried before the Python last
+                                       resort so an heir who cannot
+                                       run, or does not trust, our
+                                       binaries still gets an automatic
+                                       restore.  Needs a data/ tree that
+                                       holds a single repository
+                                       (skipped on the multi-disc
                                        layout).  Full manual equivalent:
                                        RESTORE_STANDARD_TOOLS.txt.
   ─────────────────────────────────────────────────────────────────
   ^^ BARE MINIMUM PATH (zero Python).  If your future system has a
      working CPU and a kernel that can load a static binary, the
-     data is recoverable.
+     data can be restored.
   ─────────────────────────────────────────────────────────────────
 
-  Tier 3.  standalone_restorer.py      pure-Python LAST RESORT
+  Tier 3.  standalone_restorer.py      the Python reader, LAST RESORT
                                        (only invoked if every C/Rust
                                        option failed; skip entirely
                                        with LCSAS_ALLOW_PYTHON_TIER=0)
 
-If all three fail, you have a hardware/environment problem.  See
-"PHYSICAL RECOVERY" below.  See docs/TIERS.txt for the full design
-rationale.
+If every tier fails, you have a hardware/environment problem.  See
+"REPAIRING A DAMAGED DISC" below.  See docs/TIERS.txt for the full
+design rationale.
 
 Before dispatching to a tier, restore.sh pre-flights each binary
 with a size check plus a `--help` dry-run.
@@ -139,7 +140,7 @@ This is NORMAL, not a fatal error -- restore.sh then falls through to
 the next available tier.  The pre-flight exists because POSIX `sh`
 will exec an empty file as a no-op script that exits 0, so without
 this guard a bit-rotted tier-1 binary would silently claim success
-and the operator would get nothing.
+and you would get nothing.
 
 LIST AVAILABLE SNAPSHOTS
 
@@ -164,12 +165,13 @@ setup automatically.  To run the underlying binary directly without
 restore.sh, see the --repo / --password-file / --target / --snapshot
 flag set documented in lcsas-restore --help.
 
-VERIFY YOUR RESTORE
+CHECKING YOUR RESTORE
 
-Every blob is verified against its SHA-256 hash during restore.  If
-any blob fails verification, lcsas-restore exits non-zero with a
-message identifying the bad blob.  Re-run the restore against a
-different disc copy (LCSAS maintains multiple copies of each volume).
+Every blob is authenticated and checked against its SHA-256 hash
+during restore.  If any blob fails, lcsas-restore exits non-zero with
+a message identifying the bad blob.  Re-run the restore with another
+disc that has the same label (LCSAS burns more than one disc with
+each label).
 
 TARGET FILESYSTEM LIMITATIONS (FAT32 / EXFAT / SMB)
 
@@ -182,7 +184,7 @@ output is intentionally LOSSY on these filesystems: symlinks are
 dropped, and POSIX modes / ownership may also degrade silently.
 This is by design, not a corruption indicator -- the alternative
 (materialising the symlink target as a regular file containing the
-link string) would silently rewrite operator data.
+link string) would silently rewrite the restored data.
 To preserve symlinks and POSIX metadata, restore to an ext4 / xfs /
 btrfs / APFS / NTFS target instead.
 
@@ -215,7 +217,7 @@ a NEW, empty folder.  To proceed non-interactively (no terminal to
 type YES on), set LCSAS_FORCE_NONEMPTY_TARGET=1.  A declined prompt
 exits with code 65 and writes nothing.
 
-PHYSICAL RECOVERY (CORRUPT MEDIUM)
+REPAIRING A DAMAGED DISC
 
 If the disc returns I/O errors:
 
@@ -254,32 +256,33 @@ If the disc returns I/O errors:
      repair rather than handing back a silently-broken image.  Treat
      ANY read error as a signal to re-burn -- do not wait.
 
-  3. After ECC repair, mount the recovered ISO and continue with the
+  3. After ECC repair, mount the repaired image and continue with the
      normal cascade above.  (Tier 1 also re-checks every blob it reads
      with a Poly1305 MAC + SHA-256 hash and rejects corrupt data, so a
      repair that didn't fully take is caught, never silently restored.)
 
 PASSWORD RECOVERY
 
-There is no password recovery path unless the archive used split
-keys -- see "KEY SHARES (SPLIT PASSWORDS)" below.  The password
-directly seeds the scrypt KDF that derives the master key encryption
-key.  If you have lost the password (and hold no share cards), the
-data is cryptographically unrecoverable.
+There is no password recovery path unless the archive split its
+password into shares -- see "SHARE CARDS (SPLIT PASSWORDS)" below.
+The password directly seeds the scrypt KDF that derives the master
+key encryption key.  If you have lost the password (and hold no
+share cards), the data cannot be decrypted by anyone.
 
 If multiple key files exist under repo/keys/, lcsas-restore tries each
 in turn; you only need ONE valid password.
 
-KEY SHARES (SPLIT PASSWORDS)
+SHARE CARDS (SPLIT PASSWORDS)
 
-Some archives split the repository password into N share cards (any
-K of them reconstruct it; fewer than K reveal nothing).  KEY_INFO.txt
-on any disc states whether this archive used split keys and the K/N
-in effect.  If it did, reconstruct the password BEFORE running the
-normal cascade:
+Some archives split the repository password into N shares, each on
+its own share card (any K of them rebuild it; fewer than K reveal
+nothing).  PASSWORD_INFO.txt on any disc states whether this
+archive's password was split and the K and N in effect.  If it was,
+rebuild the password BEFORE running the normal cascade:
 
-  1. Gather any K share cards (printed pages titled
-     "LCSAS KEY SHARE", or the share text files).
+  1. Gather any K share cards (printed pages with "SHARE CARD" in
+     the title -- older cards are titled "LCSAS KEY SHARE" -- or the
+     share text files).
 
   2. On the meta disc, run the static combiner for your machine:
 
@@ -291,35 +294,35 @@ normal cascade:
      rust triples, e.g. x86_64-unknown-linux-musl for a 64-bit PC,
      aarch64-unknown-linux-musl for 64-bit ARM).  Windows ships
      lcsas-keyshare.exe -- see RECOVER_WINDOWS.txt,
-     "KEY SHARES (SPLIT PASSWORDS)".
+     "SHARE CARDS (SPLIT PASSWORDS)".
 
   3. If the binary will not run on your host, use the bundled
-     pure-Python fallback at the disc root:
+     Python fallback at the disc root:
 
          python3 /mnt/keyshare_combine.py \
              card1.txt card2.txt > repo.key
 
   4. Continue with the normal cascade above.  Type the
-     reconstructed password at the  Password:  prompt, or pass the
-     saved file:
+     rebuilt password at the  Password:  prompt, or pass the
+     saved password file:
 
          sh /mnt/restore.sh --key repo.key --target /tmp/restored
 
-Format + re-implementation details: docs/KEY_SHARE_FORMAT.md on the
+Format + re-implementation details: docs/SHARE_FORMAT.md on the
 meta disc.
 
-DISC MIRRORING
+DISCS WITH THE SAME LABEL
 
-If you have multiple copies of an LCSAS volume (as is the default),
-they are bit-identical.  Any single working copy is sufficient.  To
-verify which disc you are using:
+If you have more than one disc with the same label (as is the
+default), they are bit-identical.  Any one working disc is enough.
+To check which disc you are using:
 
   cat /mnt/volume_label.txt    # human-readable label
   sha256sum /mnt/MANIFEST.sha256
 
 SUPPORT
 
-This is offline, after-the-fact recovery.  There is no support phone
+This is an offline, after-the-fact restore.  There is no support phone
 number, no vendor.  The instructions in this file, the C source under
 src/, and the documents under docs/ are everything you need.
 
@@ -338,7 +341,7 @@ EXIT CODES
 Exit 64 means every tier (1, 2, 2b, AND 3) was missing or unrunnable on
 the current meta disc, before any password was prompted.
 This is most likely on a corrupted meta disc (all binaries lost to
-bit-rot) or a wrong-arch host (e.g. an aarch64 meta disc booted on
+bit-rot) or a wrong-arch host (e.g. an aarch64 meta disc used on
 an x86_64 machine when LCSAS_TARGET was not overridden).
 The diagnostic that precedes the exit names each missing tier with
 its expected path; cross-reference those paths against the meta
@@ -347,7 +350,7 @@ disc contents to confirm which is the case.
 ENVIRONMENT VARIABLES
 
 These tune restore.sh's behaviour from the calling shell.  Most
-operators do not need any of them.  Set them with `export NAME=value`
+heirs do not need any of them.  Set them with `export NAME=value`
 before invoking restore.sh.
 
   LCSAS_TIER_FALLBACK=1
@@ -368,14 +371,14 @@ before invoking restore.sh.
       binary is absent or won't run (bit rot, wrong arch), the
       cascade starts directly at tier 2, which has no distinct
       wrong-password stop -- a wrong password there may leave a
-      partial tree in the target.  This is recoverable, not
+      partial tree in the target.  This is fixable, not
       dangerous: fix the password, delete the target directory,
       and re-run; restores are idempotent.
 
   LCSAS_ALLOW_PYTHON_TIER=0
       Disable tier 3 entirely, even if python3 and
       standalone_restorer.py are present.  Use this when you want a
-      hard guarantee that the recovery never touches Python.  If
+      hard guarantee that the restore never touches Python.  If
       tiers 1 and 2 both fail to start, restore.sh exits 64.
 
   LCSAS_PACK_CACHE_DIR=<path>|auto|<empty>
@@ -392,16 +395,26 @@ LCSAS_MOUNT_DIRS, LCSAS_NO_RELOCATE, and LCSAS_PROGRESS.
 MULTI-DISC RESTORE
 
 An LCSAS archive typically spans multiple optical discs: one META disc
-that carries the recovery toolchain and holographic catalog, plus
-several DATA discs that hold the encrypted pack files.  The recovery
-cascade handles swaps interactively — but the operator must know what
-to expect and what to do.
+that carries the recovery tools, plus several DATA discs that hold the
+encrypted pack files and a copy of the catalog.  The recovery tools
+handle swaps interactively — but you must know what to expect and
+what to do.
 
 WHICH DISC DO I START WITH?
 
-Always start with the META disc — the one labelled LCSAS_META.  It is
-the only disc that contains the recovery binaries (bin/<arch>/), the
-catalog, and restore.sh.
+Run the tools from the META disc — the one labelled LCSAS_META.  It
+carries the recovery binaries (bin/<arch>/) and restore.sh.  It holds
+no catalog.  If you have more than one META disc, use the newest one;
+every META disc can read every data disc.  If the newest one fails,
+try the META disc burned closest in date to the data discs.
+
+For the first DATA disc, insert a disc with the NEWEST label: the
+latest year in the label, then the highest number (for example,
+LCSAS_BD25_2027_0014 comes before LCSAS_BD25_2026_0009).  Its catalog
+is the fullest, so the restore needs fewer disc swaps.  Any data disc
+still works.  Go by the label, not by when a disc was burned: a disc
+burned later to replace a damaged one keeps the old label and still
+carries the old catalog.
 
   1. Insert the META disc and mount it:
          sudo mount /dev/sr0 /mnt
@@ -410,10 +423,11 @@ catalog, and restore.sh.
   3. restore.sh copies itself and the binary into RAM (/tmp) so the
      META disc can later be ejected.  You will see:
          [lcsas-restore] copied recovery binaries to /tmp/lcsas-restore.Xxxx
-         [lcsas-restore] you may eject the recovery disc when the
+         [lcsas-restore] you may eject the meta disc when the
                          binary prompts for a data disc.
   4. When the binary has loaded the index and needs a pack that lives
-     on a DATA disc it pauses and prints a prompt (see below).
+     on a DATA disc it pauses and prints a prompt (see below).  Insert
+     a disc with the newest label first, as described above.
 
 WHAT THE SWAP PROMPT LOOKS LIKE
 
@@ -423,16 +437,16 @@ mounted disc it prints (to stderr):
   +----------------------------------------------------------+
   | Pack ... is required for the next file.                  |
   | ...                                                      |
-  | Single-drive recovery: if your machine has only ONE      |
-  | optical drive, eject the RECOVERY disc first, then       |
+  | Single-drive restore: if your machine has only ONE       |
+  | optical drive, eject the META disc first, then           |
   | insert the disc named above into the SAME drive.         |
   | Insert the right disc and press ENTER to retry.          |
   +----------------------------------------------------------+
 
-The catalog hint lines will name the specific DATA disc (e.g. "vol-042
-Family Photos 2027 vol 3/8") when a catalog.db is available on a
+The catalog hint lines will name the label of the DATA disc you need
+(e.g. "LCSAS_BD25_2026_0003") when a catalog.db is available on a
 mounted disc.  If no catalog is present the prompt shows only the pack
-hash and asks you to try each DATA disc in turn.
+ID and asks you to try each DATA disc in turn.
 
 PHYSICAL SWAP STEPS (single optical drive)
 
@@ -451,19 +465,20 @@ PHYSICAL SWAP STEPS (single optical drive)
      always press ENTER: the prompt does not look on its own there.)
   6. lcsas-restore rescans the mount directories and continues.
      It names each disc it finds by the label printed on it, e.g.
-         [lcsas-restore] mounted volume LCSAS_BD25_2026_0003 at /media/...
+         [lcsas-restore] mounted the disc labelled LCSAS_BD25_2026_0003 at /media/...
      If the wrong disc was inserted it says
          (still not found -- check the disc label and try again)
      and keeps waiting; eject and retry with the correct disc.
   7. Repeat for each additional DATA disc as prompted.
 
-NOTE ON THE TEST RIG vs. REAL OPERATORS
+NOTE ON THE TEST RIG vs. A REAL RESTORE
 
 Automated tests use a setuid C wrapper called disc-loader to simulate
-disc swaps without human interaction.  Real operators must perform the
-eject/insert step manually.  A passing test therefore does NOT guarantee
-that the UX is smooth for a live operator — this section exists because
-the test rig hid the gap for some time (see UX_CONCERNS.txt ID 011).
+disc swaps without human interaction.  In a real restore you must do
+the eject/insert step by hand.  A passing test therefore does NOT
+guarantee that the UX is smooth for a real heir — this section exists
+because the test rig hid the gap for some time (see UX_CONCERNS.txt
+ID 011).
 
 EXPECTED SWAP COUNT (FIRST-CONTACT COST)
 
@@ -471,9 +486,9 @@ Even with the pack cache enabled, the first contact with each DATA disc
 always requires a physical swap — one swap per disc, minimum.  For an
 archive spread across N data discs, expect at least N swap prompts.
 With the cache active each disc is needed only once (O(N) total swaps);
-subsequent sessions find all packs in cache and need no disc at all.
+later restore runs find all packs in cache and need no disc at all.
 Without the cache, the same disc may be requested multiple times within
-a single restore session.
+a single restore run.
 
 REDUCING SWAP FREQUENCY WITH THE PACK CACHE
 
@@ -481,7 +496,7 @@ By default restore.sh allocates an opportunistic pack cache under /tmp
 (LCSAS_PACK_CACHE_DIR=auto).  When lcsas-restore first reads a pack
 from a DATA disc it copies the entire data/ subtree of that disc into
 the cache.  Subsequent packs from the same disc are served from the
-local cache, not the physical medium, so each DATA disc typically needs
+local cache, not the disc, so each DATA disc typically needs
 to be inserted only ONCE regardless of how many packs it contributes
 to the restore.
 
@@ -493,11 +508,11 @@ to the restore.
 IF YOU HAVE ONLY ONE OPTICAL DRIVE
 
 You do NOT need two Blu-ray drives.  restore.sh detects that it is
-running from a read-only mount (the meta-disc), copies itself plus
+running from a read-only mount (the meta disc), copies itself plus
 the binary tree to a writable directory (/tmp by default), and
 re-executes from there.  After this relocation, no file handles
-remain on the meta-disc, so when the binary prompts for a data
-disc you can eject the meta-disc and insert the data disc into
+remain on the meta disc, so when the binary prompts for a data
+disc you can eject the meta disc and insert the data disc into
 the same drive.
 
 The prompt explicitly tells you when to swap:
@@ -505,8 +520,8 @@ The prompt explicitly tells you when to swap:
   +----------------------------------------------------------+
   | Pack ... is required for the next file.                  |
   | ...                                                      |
-  | Single-drive recovery: if your machine has only ONE      |
-  | optical drive, eject the RECOVERY disc first, then       |
+  | Single-drive restore: if your machine has only ONE       |
+  | optical drive, eject the META disc first, then           |
   | insert the disc named above into the SAME drive.         |
   | Insert the right disc and press ENTER to retry.          |
   +----------------------------------------------------------+
@@ -517,61 +532,64 @@ development).
 
 REBUILDING THE MASTER CATALOG FROM MIXED-AGE DISCS
 
-Every LCSAS disc carries a full copy of the catalog as it existed at
-burn time (the holographic catalog).  If the master catalog is lost,
-rebuild it from any pile of discs:
+Every LCSAS data disc carries a disc catalog: a full copy of the
+catalog as it was when that disc was burned.  (The meta disc holds no
+catalog.)  If the master catalog is lost, rebuild it from any pile of
+data discs:
 
     lcsas catalog rebuild --output master.db /mnt/disc1 /mnt/disc2 ...
 
-CAVEAT: on-disc catalogs are frozen at burn time, so a box of discs
+CAVEAT: disc catalogs are frozen at burn time, so a box of discs
 burned over several years contains CONFLICTING views of the archive.
-A disc burned before a volume was deprecated or destroyed still
-records that volume as VERIFIED.
+A disc burned before a volume was recorded as DEPRECATED or DESTROYED
+still records that volume as VERIFIED.
 
 The rebuild handles this automatically: discs are merged NEWEST-FIRST
 (freshness is taken from the catalog.db file timestamp and the newest
-volume record inside it), and the freshest catalog's view wins —
-including downgrades to DEPRECATED or DESTROYED.  A destroyed volume
-is never silently resurrected by an older disc.  Feed order does not
-matter; the same pile of discs produces the same master catalog
-regardless of the order you list them.
+volume record inside it), and the freshest disc catalog's view wins —
+including downgrades to DEPRECATED or DESTROYED.  A volume recorded
+as DESTROYED is never silently resurrected by an older disc.  Feed
+order does not matter; the same pile of discs produces the same
+master catalog regardless of the order you list them.
 
-When an older disc claims a volume is MORE alive than the newest
+When an older disc claims a volume is MORE alive than the newest disc
 catalog records, the rebuild keeps the newer status and prints a
 warning naming the volume:
 
     volume <label>: an older disc catalog records VERIFIED but a
     newer one records DESTROYED — keeping DESTROYED. ...
 
-If you physically hold a disc named in such a warning, it may still
-be readable despite what the catalog says — check it with:
+If you hold a disc with the label named in such a warning, it may
+still be readable despite what the catalog says — check it with:
 
     lcsas verify <label> --disc
 
 A restore plan generated from the rebuilt catalog will list packs
-that exist only on deprecated/destroyed volumes separately, so you
-know which data depends on discs that may no longer exist.
+that exist only on volumes recorded as DEPRECATED or DESTROYED
+separately, so you know which data depends on discs that may no
+longer exist.
 
-CAVEAT: the NEWEST session's volumes look unfinished after a rebuild.
-A disc's holographic catalog is copied onto it at STAGING time, before
-the burn happens, so a disc cannot record its own burn.  The very
-latest session therefore appears in a disc-rebuilt catalog as STAGING
-volumes with no locations and no verification history, and the newest
-discs' ISO hashes may be absent.  This is EXPECTED, not corruption:
-restore still works (the packs are on the discs).  What is missing is
-operational metadata — where copies live and what was verified.  To
-re-establish it, run:
+CAVEAT: the NEWEST burn session's volumes look unfinished after a
+rebuild.  A disc catalog is copied onto its disc at STAGING time,
+before the burn happens, so a disc cannot record its own burn.  The
+very latest burn session therefore appears in a rebuilt catalog as
+STAGING volumes with no locations and no verify history, and the
+newest discs' ISO image hashes may be absent.  This is EXPECTED, not
+corruption: restore still works (the packs are on the discs).  What
+is missing is the record of where each disc is kept and which discs
+were verified.  To re-establish it, run:
 
     lcsas verify <label> --disc
 
-for each fresh disc you hold; this records the copy at its location
-with a fresh verification.  Older sessions are unaffected — their
-burn provenance was captured on later discs and is merged back in
-(volume_events, burn_sessions, and session_volumes all survive the
-rebuild).
+for each disc of that burn session you hold; this records the disc
+at its location with a fresh verify.  Older burn sessions are
+unaffected — their burn records were captured on later discs and are
+merged back in (volume_events, burn_sessions, and session_volumes all
+survive the rebuild).
 
-OPERATOR HABIT: keep the latest session's receipts/ JSON files with
-your printed estate papers.  After a rebuild they re-ingest the burn
-locations and ISO hashes for the newest discs in one step:
+OWNER HABIT: keep the latest burn session's burn receipt files
+(receipts/*.json) with your printed estate papers.  After a rebuild
+they re-load where the newest discs went and their ISO image hashes
+in one step:
 
     lcsas catalog import-receipts /path/to/receipts/*.json

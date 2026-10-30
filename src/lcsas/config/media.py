@@ -12,15 +12,16 @@ class MediaType(Enum):
 
     capacity_bytes: usable raw capacity of the media.
     ecc_overhead_pct: percentage of capacity reserved for DVDisaster ECC data.
-    family: operator-facing media family ("BD-R", "M-DISC", ...).
+    family: owner-facing media family ("BD-R", "M-DISC", ...).
 
-    The ``family`` field is not decoration.  M-Disc tiers share exact byte
-    capacities with their BD-R counterparts, and a plain ``Enum`` collapses
-    members with identical values into aliases -- which silently made
-    ``MediaType.MDISC25 is MediaType.BD25`` true, so M-Disc volumes were
-    labelled ``BD25``/``BDXL100`` and the MDISC tiers never appeared when the
-    CLI listed valid media types.  Keeping ``family`` distinct keeps every
-    tier a real member.  Any future same-capacity tier must differ here too.
+    The ``family`` field is not decoration.  M-Disc media types share exact
+    byte capacities with their BD-R counterparts, and a plain ``Enum``
+    collapses members with identical values into aliases -- which silently
+    made ``MediaType.MDISC25 is MediaType.BD25`` true, so M-Disc volumes were
+    labelled ``BD25``/``BDXL100`` and the MDISC media types never appeared
+    when the CLI listed valid media types.  Keeping ``family`` distinct keeps
+    every media type a real member.  Any future same-capacity media type
+    must differ here too.
 
     Every production capacity below is a rung on dvdisaster's RS03 medium
     ladder (``RS03_MEDIUM_LADDER_BYTES`` in lcsas/ecc/dvdisaster.py).  That
@@ -42,19 +43,19 @@ class MediaType(Enum):
 
     # Testing media (tiny volumes for automated tests).
     #
-    # Sized so a freshly-staged TEST_TINY ISO (with the full holographic
-    # injection — SQLite catalog + per-repo Rustic metadata + ISO 9660
-    # padding) still has a few hundred KB of pack-data headroom.  The 1 MB
-    # cap was raised to 2 MB in #142: an empty catalog alone is ~144 KB,
-    # the standalone restorer is ~44 KB, and xorriso's ISO 9660 overhead
+    # Sized so a freshly-staged TEST_TINY ISO (with the full injection —
+    # disc catalog + each repository's metadata + ISO 9660 padding) still
+    # has a few hundred KB of pack-data headroom.  The 1 MB cap was raised
+    # to 2 MB in #142: an empty catalog alone is ~144 KB, the tier-3
+    # Python reader is ~44 KB, and xorriso's ISO 9660 overhead
     # adds ~600 KB on small staging trees with many small files.  That put
     # the bare-minimum ISO right at the 1 MB ceiling with zero pack budget,
-    # which broke e2e on dev hosts every time the catalog or restorer grew.
+    # which broke e2e on dev hosts every time the catalog or reader grew.
     TEST_TINY = (2_097_152, 0, "TEST")              # 2 MB — fast unit tests
 
     # CD700 note — two things to know before choosing it.
     #
-    # Sizing: the holographic catalog is copied onto EVERY disc and grows
+    # Sizing: the disc catalog is copied onto EVERY disc and grows
     # with the whole archive, while ``metadata_reserve_mb`` (default 100 MB)
     # is subtracted from every volume's pack budget.  Against CD700's
     # 626 MB usable that default eats ~17%, leaving ~522 MB of packs per
@@ -89,7 +90,7 @@ class MediaType(Enum):
 
     @property
     def family(self) -> str:
-        """Operator-facing media family, e.g. ``"M-DISC DL"``."""
+        """Owner-facing media family, e.g. ``"M-DISC DL"``."""
         return self._family
 
     @property

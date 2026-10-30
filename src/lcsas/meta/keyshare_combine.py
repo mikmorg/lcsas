@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # ═══════════════════════════════════════════════════════════════════
-#  LCSAS Standalone Key-Share Combiner
+#  LCSAS Standalone Share Combiner
 #
-#  Reconstructs the repository password from SLIP-0039 key shares so an
+#  Reconstructs the repository password from SLIP-0039 shares so an
 #  heir can feed it to the normal restore (restore.sh -> "Password:").
 #
 #  This is a PRE-STEP, not a restore.  It depends ONLY on the bundled
@@ -32,13 +32,13 @@
 #  to stderr and exits non-zero (the password is never partially
 #  printed).
 # ═══════════════════════════════════════════════════════════════════
-"""Standalone SLIP-0039 key-share combiner for the LCSAS meta-volume.
+"""Standalone SLIP-0039 share combiner for the LCSAS meta disc.
 
 Reads share mnemonics from file paths given on the command line and/or
 from stdin (one mnemonic per line), reconstructs the repository
 password, and writes it to stdout as raw bytes.
 
-The only LCSAS dependency is :mod:`lcsas.keyshare`.  On the meta-volume
+The only LCSAS dependency is :mod:`lcsas.keyshare`.  On the meta disc
 that package is bundled at the top level (importable as ``keyshare``);
 in a normal source checkout it is importable as ``lcsas.keyshare``.
 Both import forms are tried so the same script works in either layout.
@@ -50,10 +50,10 @@ import sys
 from pathlib import Path
 
 # ── Make the bundled keyshare package importable ─────────────────────
-# On the meta-volume the ``keyshare`` package is bundled by the builder's
+# On the meta disc the ``keyshare`` package is bundled by the builder's
 # ``bundle_python_package("lcsas.keyshare")`` under
 # ``tools/lib/pythonX.Y/keyshare`` (it lands top-level, not as
-# ``lcsas.keyshare``).  This script itself sits at the meta-volume root.
+# ``lcsas.keyshare``).  This script itself sits at the meta disc's root.
 # Add both the script's own directory AND any bundled-stdlib dir(s) to
 # sys.path so a bare ``python3 keyshare_combine.py`` resolves the package
 # without PYTHONPATH or ambient setup.  In a dev/source tree the glob is
@@ -73,8 +73,8 @@ try:  # source checkout / dev: lcsas.keyshare
         is_mnemonic_line,
         recover_secret,
     )
-except ImportError:  # pragma: no cover - meta-volume top-level bundle path
-    # On the meta-volume the package is bundled as top-level ``keyshare``.
+except ImportError:  # pragma: no cover - meta disc top-level bundle path
+    # On the meta disc the package is bundled as top-level ``keyshare``.
     # This branch is unreachable in-process (lcsas is always importable in
     # the dev/test tree); it is exercised by the subprocess isolation test
     # in tests/unit/test_keyshare_combine.py with ``lcsas`` blocked.
@@ -125,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python3 keyshare_combine.py SHARE_FILE [SHARE_FILE ...]\n"
             "       cat share1 share2 | python3 keyshare_combine.py\n"
             "\n"
-            "Reconstructs the archive password from any K SLIP-0039 key\n"
+            "Reconstructs the repository password from any K SLIP-0039\n"
             "shares and writes it (raw bytes, no newline) to stdout.\n"
         )
         return 0
@@ -170,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
         password = decode_master_secret(master_secret)
     except KeyShareError as exc:
         sys.stderr.write(
-            f"error: could not reconstruct the password: {exc}\n"
+            f"error: could not rebuild the password: {exc}\n"
             "Check that you supplied at least K shares from the SAME archive\n"
             "and that every word was transcribed correctly.\n"
         )

@@ -1,14 +1,15 @@
 LCSAS RECOVERY TOOLCHAIN -- CRYPTOGRAPHIC PRIMITIVES
 ======================================================
 
-This document specifies every cryptographic primitive used in LCSAS
-recovery, with enough detail that an implementer could reconstruct the
-binary from this file alone.  Each section includes a test vector.
+This document specifies every cryptographic primitive used by the
+LCSAS recovery tools, with enough detail that an implementer could
+reconstruct the binary from this file alone.  Each section includes a
+test vector.
 
 REFERENCES
 
   Every spec referenced below is also bundled in plain text under
-  recovery/specs/ on every recovery medium.  See recovery/specs/README.txt
+  recovery/specs/ on every meta disc.  See recovery/specs/README.txt
   for the full inventory and the mapping from spec -> implementation.
 
   FIPS 180-4   Secure Hash Standard (SHA-2 family)
@@ -56,7 +57,7 @@ THE LCSAS CIPHER STACK
   plaintext  (zstd-decompressed if v2)
      |  SHA-256
      v
-  verify against blob_id
+  check against blob_id
 
 SHA-256
 
@@ -195,7 +196,7 @@ SCRYPT
 
 KEY DERIVATION CHAIN (LCSAS / restic)
 
-  1. User provides password (UTF-8 bytes, trailing newline stripped).
+  1. Read the password (UTF-8 bytes, trailing newline stripped).
   2. Read key file as JSON; decode "salt" (base64), read N/r/p (default
      N=32768, r=8, p=1).
   3. scrypt(password, salt, N, r, p, dklen=64) -> derived 64 bytes.
@@ -210,6 +211,6 @@ KEY DERIVATION CHAIN (LCSAS / restic)
 BLOB INTEGRITY
 
   Each blob has a SHA-256-derived ID.  After decryption (and
-  optional zstd decompression in v2 repos), the implementation
-  computes SHA-256 of the plaintext and verifies it equals the
-  blob's claimed ID.  If not, ABORT.
+  optional zstd decompression in v2 repositories), the
+  implementation computes SHA-256 of the plaintext and checks that it
+  equals the blob's claimed ID.  If not, ABORT.

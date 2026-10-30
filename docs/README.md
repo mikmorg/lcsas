@@ -10,8 +10,9 @@ home; start here and follow the link that matches what you need.
 ## Architecture
 
 - [architecture.md](architecture.md) — synthesized
-  architecture reference: storage-tier model, burn pipeline, holographic
-  catalog, multi-tenancy, and the recovery cascade.
+  architecture reference: storage stages (mirror, staging area, discs),
+  burn pipeline, disc catalog, multiple repositories, and the recovery
+  cascade.
 
 ## On-disc formats
 
@@ -21,29 +22,30 @@ How the bytes on a disc are laid out, encrypted, and protected:
   format (the encrypted, deduplicated blobs LCSAS archives).
 - [DVDISASTER_RS03_FORMAT.md](DVDISASTER_RS03_FORMAT.md) — DVDisaster RS03 error-correction
   layer wrapped around every burned image.
-- [KEY_SHARE_FORMAT.md](KEY_SHARE_FORMAT.md) — SLIP-0039 Shamir key-share
-  format used by the `keyshare` package and `lcsas key` escrow.
+- [SHARE_FORMAT.md](SHARE_FORMAT.md) — SLIP-0039 Shamir share
+  format used by the `keyshare` package and the `lcsas key` commands
+  to split a password.
 - [DISC_CONFIDENTIALITY.md](DISC_CONFIDENTIALITY.md) — what a
   disc does and does not reveal to someone who finds it.
 
-## Operator guides
+## Guides
 
-Task-oriented walkthroughs for running and recovering an archive:
+Task-oriented walkthroughs for running an archive and restoring from it:
 
 - [guides/recovery-runbook.md](guides/recovery-runbook.md) — step-by-step
-  disaster-recovery runbook.
+  restore runbook.
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — diagnosing and
   fixing common failures.
 - [guides/survivability.md](guides/survivability.md) — durability rationale:
   why the cascade and disc-integrity layers survive decades.
 - [RECOVERY_GUIDE.md](RECOVERY_GUIDE.md) — emergency router to the OS-specific
-  recovery path (Linux, macOS, Windows, bare-metal, disc-only fallback).
+  restore path (Linux, macOS, Windows, bare-metal, disc-only fallback).
 - [ESTATE_PLANNING.md](ESTATE_PLANNING.md) — handing the archive to an heir.
-- [RECOVERY_CARD.txt](RECOVERY_CARD.txt) — printable fill-in-the-blanks
-  recovery-card template, one per storage location (never stored with the
-  discs — key and data stay physically apart).
+- [PASSWORD_CARD.txt](PASSWORD_CARD.txt) — printable fill-in-the-blanks
+  password-card template for one repository's password (never kept with
+  the discs — password and data stay physically apart).
 - [RUNBOOK_migration_recovery.md](RUNBOOK_migration_recovery.md) — runbook for
-  recovering a catalog wedged by an interrupted schema migration.
+  repairing a catalog wedged by an interrupted schema migration.
 
 ## Workflows
 
@@ -56,14 +58,14 @@ Task-oriented walkthroughs for running and recovering an archive:
 - [development/roadmap.md](development/roadmap.md) — phased development plan and
   roadmap.
 - [CROSS_PLATFORM_META_RFC.md](CROSS_PLATFORM_META_RFC.md)
-  — RFC for cross-platform meta-volume / tier-1 recovery-binary coverage.
+  — RFC for cross-platform meta disc / tier-1 recovery-binary coverage.
 - [adr/](adr/) — architecture decision records (e.g.
   [adr/0001](adr/0001-audit-gate-exemptions-reconciliation.md), audit-gate
   exemptions reconciliation).
 
 ## Point-in-time reports
 
-Historical snapshots, preserved as written (not living documents):
+Historical reports, preserved as written (not living documents):
 
 - [PROJECT_REVIEW_2026-07.md](PROJECT_REVIEW_2026-07.md) — full-project
   review at `f181f11` (2026-07-01) that seeded the #361–#415 remediation.
@@ -72,12 +74,12 @@ Historical snapshots, preserved as written (not living documents):
 
 ## On-disc recovery manuals
 
-Plain-text manuals burned onto every meta-volume and followed literally by an
+Plain-text manuals burned onto every meta disc and followed literally by an
 heir on a machine with nothing else installed:
 
 - [../recovery/docs/](../recovery/docs/) — `RECOVER.txt`, `TIERS.txt`,
   `ENV_VARS.txt`, `PHYSICAL_DISC_VALIDATION.txt`, and the rest of the on-disc
-  operator manual.
+  recovery manual.
 
 ## Project root
 

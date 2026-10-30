@@ -1,14 +1,14 @@
-LCSAS RECOVERY -- WINDOWS RECOVERY PATH (PLAN)
-================================================
+LCSAS RECOVERY -- WINDOWS RESTORE PATH (PLAN)
+=============================================
 
 GOAL
 
-Provide a recovery workflow on a stock Windows 10/11 laptop that
+Provide a restore workflow on a stock Windows 10/11 laptop that
 requires NO additional installation (no WSL, no Python, no Cygwin,
 no admin rights for the common case).
 
-Target user: an average inheritor with a Windows laptop, a USB BD
-reader, the meta-volume disc, and the password.  No technical
+Who it is for: an average heir with a Windows laptop, a USB BD
+reader, the meta disc, and the password.  No technical
 expertise beyond "double-click an icon" and "type a password".
 
 TARGET PATFORMS (in priority order)
@@ -263,7 +263,7 @@ script is authoritative; this sketch is kept for design history.
 DESIGN NOTES
 
 * `pause` at the end so the console doesn't auto-close when the
-  user double-clicks the .bat (otherwise they see nothing).
+  heir double-clicks the .bat (otherwise they see nothing).
 * `set /p` to prompt for path + password.  Password is visible
   while typing (CMD has no `read -s` equivalent without PowerShell).
   For privacy, document a PowerShell alternative.
@@ -279,7 +279,7 @@ PART 4 -- DOCUMENTATION
 NEW FILES
 
   recovery/docs/RECOVER_WINDOWS.txt
-    Step-by-step Windows recovery walkthrough.  Includes:
+    Step-by-step Windows restore walkthrough.  Includes:
     * Plug in USB BD reader, insert disc.
     * Find the disc drive letter (usually D: or E:).
     * Open File Explorer to the disc.
@@ -323,15 +323,15 @@ ON THE LINUX HOST (CI / local)
 
 ON A REAL WINDOWS VM (manual, recurring)
 
-  Document a manual checklist for periodic verification:
+  Document a manual checklist for periodic re-testing:
 
     [ ] Fresh Windows 10/11 VM, no admin elevation.
-    [ ] Insert ISO of meta-volume.
+    [ ] Insert the meta disc's ISO image.
     [ ] File Explorer shows START_HERE.txt at root.
     [ ] Double-click restore.bat -> SmartScreen warning -> "Run anyway".
     [ ] Password prompt appears.
-    [ ] Recovery completes; files in Documents\restored.
-    [ ] Byte-equal verification against source.
+    [ ] Restore completes; files in Documents\restored.
+    [ ] Byte-equal comparison against source.
 
 ────────────────────────────────────────────────────────────────────
 PART 6 -- INTEGRATION WITH PYTHON ORCHESTRATOR
@@ -353,7 +353,7 @@ src/lcsas/meta/builder.py
 
   Update _bundle_recovery_toolchain_artifacts() to also copy
   bin/x86_64-windows/lcsas-restore.exe (source-tree, build-host
-  layout) + restore.bat to the meta-volume.  The bundler renames
+  layout) + restore.bat to the meta disc.  The bundler renames
   the directory to the rust target triple on the disc:
   bin\x86_64-pc-windows-gnu\lcsas-restore.exe.
 
@@ -366,20 +366,20 @@ src/lcsas/cli/main.py
 PART 7 -- KNOWN LIMITATIONS / NON-GOALS
 ────────────────────────────────────────────────────────────────────
 
-OUT OF SCOPE for the Windows recovery path:
+OUT OF SCOPE for the Windows restore path:
 
   * Symlink restoration.  Windows symlinks require SeCreateSymbolic
     LinkPrivilege; we don't try to acquire it.  Symlinks become a
-    text file containing the target path (a marker the user can
+    text file containing the target path (a marker the heir can
     inspect manually).
   * Owner/group/UID/GID restoration.  Windows doesn't have these.
   * Extended attributes.  Windows alternate-data-streams are not
     populated.
-  * Hardlinks across volumes.  Windows hardlinks need same-volume
+  * Hardlinks across drives.  Windows hardlinks need same-drive
     semantics; we silently copy instead.
   * UEFI boot from disc on Windows hardware.  Windows boot loader
-    cannot chain to ISO9660 directly; this is a meta-volume-only
-    issue.  Workaround: user boots a Linux live USB if they need
+    cannot chain to ISO9660 directly; this only affects the meta
+    disc.  Workaround: the heir boots a Linux live USB if they need
     to boot from disc.
 
 NON-GOALS
@@ -416,7 +416,7 @@ Phase W3 -- orchestrator integration (1 day):
 
 Phase W4 -- aarch64-windows + manual real-VM checklist (deferred):
   * Cross-build aarch64-windows .exe
-  * Document the manual Windows-VM verification protocol
+  * Document the manual Windows-VM test protocol
 
 ────────────────────────────────────────────────────────────────────
 PHASE W5 -- LEGACY MSVCRT BUILD  (planned; not yet started)
@@ -436,7 +436,7 @@ This excludes:
   * Windows XP / Vista entirely (no UCRT, ever).
   * Unpatched Windows 7 / 8 / 8.1 (KB2999226 missing).
 
-For an inheritor in 2040 dusting off a 2010-era Windows 7 box with
+For an heir in 2040 dusting off a 2010-era Windows 7 box with
 no internet to download Windows Updates, the .exe simply won't load.
 
 GOAL
@@ -447,7 +447,7 @@ Windows 95.  This binary has fewer features (no UCRT goodies) and
 slightly different behaviour, but runs on every 32/64-bit Windows
 from XP onward.
 
-Layout on the meta-volume (on-disc dirs use the rust target
+Layout on the meta disc (on-disc dirs use the rust target
 triple, per Phase 21.1):
 
   recovery/
@@ -481,7 +481,7 @@ OPTION 2: Build a 32-bit i686-windows binary alongside the 64-bit
   one.  The 32-bit binary auto-selects msvcrt.dll on older Windows
   for ABI reasons (the 64-bit UCRT split happened in 2015).
   Trade-off: 32-bit binary cannot mmap >4 GB files; for typical
-  recovery workflows this doesn't matter (we never mmap whole packs).
+  restore workflows this doesn't matter (we never mmap whole packs).
 
 OPTION 3: Static-link a UCRT-compatible CRT into the .exe itself.
   Tools like `crt-static-msvcrt` or the EnterpriseWDK approach can
@@ -575,8 +575,8 @@ is well-understood by users.
 SUCCESS CRITERIA
 ────────────────────────────────────────────────────────────────────
 
-A Windows 10/11 user, given the meta-volume disc and the password,
-can recover their files by:
+An heir on Windows 10/11, given the meta disc and the password,
+can restore the files by:
 
   1. Plugging in a USB BD reader.
   2. Inserting the disc.
@@ -587,5 +587,5 @@ can recover their files by:
 
 No additional installation, no admin rights, no terminal expertise.
 
-Verified by Wine-based automated test in CI; manually re-verified
+Tested by a Wine-based automated test in CI; manually re-tested
 on a real Windows 10/11 VM at each major release.

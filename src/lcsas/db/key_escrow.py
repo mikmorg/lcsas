@@ -1,9 +1,9 @@
 """CRUD for the key_escrow table — durable record of `lcsas key split` (KEY-08).
 
-Whether burned discs print share-recovery instructions, and the K/N they
-claim, used to come solely from hand-edited ``lcsas.toml`` fields.  This table
-records the split that was *actually* performed so disc text can be derived
-from it and the burn pipeline can abort on config drift.
+Whether burned discs print instructions for combining shares, and the K/N
+they claim, used to come solely from hand-edited ``lcsas.toml`` fields.
+This table records the split that was *actually* performed so disc text can
+be derived from it and the burn pipeline can abort on config drift.
 
 The table is optional on read paths: it arrived at schema v9, and v≤8 disc
 catalogs (and any catalog opened before ``migrate()`` runs) may lack it.
@@ -48,8 +48,9 @@ def record_split(
 ) -> KeyEscrow:
     """Record (or replace, on rotation) the split state for *repo_id*.
 
-    Replace-on-conflict means re-splitting a repo overwrites the prior
-    record — the newest split is the one heirs should follow.
+    Replace-on-conflict means re-splitting a repository's password
+    overwrites the prior record — the newest split is the one heirs should
+    follow.
     """
     if split_at is None:
         split_at = datetime.now(UTC).isoformat()
@@ -116,22 +117,23 @@ def detect_escrow_drift(
     """Return an actionable drift message, or None if config and records agree.
 
     The TOML carries one archive-wide ``key_split``/``key_threshold``/
-    ``key_shares``; splits are recorded per repo.  For each repo being burned:
+    ``key_shares``; splits are recorded per repository.  For each repository
+    being burned:
 
     - config says split, no record (or K/N mismatch) → drift.
     - record exists, config says ``key_split=false`` → drift (the heir would
-      be told to find a single key that was superseded by the split).
+      be told to find a single password that was superseded by the split).
 
-    A repo with neither a record nor ``key_split`` is consistent (no split).
+    A repository with neither a record nor ``key_split`` is consistent (no split).
     """
     for repo_id in sorted(set(repo_ids)):
         record = get_split(conn, repo_id)
         if config_split:
             if record is None:
                 return (
-                    f"key escrow drift for repo '{repo_id}': lcsas.toml says "
+                    f"password split drift for repository '{repo_id}': lcsas.toml says "
                     f"key_split=true {config_threshold}-of-{config_shares} but "
-                    f"the catalog records no split for this repo. Discs would "
+                    f"the catalog records no split for this repository. Discs would "
                     f"print instructions to gather share cards that were never "
                     f"made. Re-run 'lcsas key split --config ... --repo "
                     f"{repo_id}' or set key_split=false under [defaults]."
@@ -140,7 +142,7 @@ def detect_escrow_drift(
                 config_threshold, config_shares
             ):
                 return (
-                    f"key escrow drift for repo '{repo_id}': lcsas.toml says "
+                    f"password split drift for repository '{repo_id}': lcsas.toml says "
                     f"key_split=true {config_threshold}-of-{config_shares} but "
                     f"the catalog records a {record.threshold}-of-"
                     f"{record.shares} split on {record.split_at}. Discs would "
@@ -150,11 +152,11 @@ def detect_escrow_drift(
         else:
             if record is not None:
                 return (
-                    f"key escrow drift for repo '{repo_id}': lcsas.toml says "
+                    f"password split drift for repository '{repo_id}': lcsas.toml says "
                     f"key_split=false but the catalog records a "
                     f"{record.threshold}-of-{record.shares} split on "
                     f"{record.split_at}. Discs would tell the heir to find a "
-                    f"single key that was superseded by that split. Set "
+                    f"single password that was superseded by that split. Set "
                     f"key_split=true (key_threshold={record.threshold}, "
                     f"key_shares={record.shares}) under [defaults], or run "
                     f"'lcsas key combine' to undo the split."

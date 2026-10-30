@@ -2,8 +2,8 @@
 """Manual single-drive restore smoke test.
 
 Builds a tiny synthetic repository, runs the LCSAS burn pipeline against
-it to produce a handful of small ISO files, builds the production
-meta volume + ISO, and then drives the production ``restore.sh`` in
+it to produce a handful of small ISO images, builds the production
+meta disc + ISO image, and then drives the production ``restore.sh`` in
 single-drive mode against a cdemu-backed virtual drive — swapping discs
 by hand between phases.
 
@@ -189,7 +189,7 @@ def build_meta_disc() -> None:
 
     builder = MetaVolumeBuilder(META_STAGE)
     builder.build()
-    print(f"  meta volume staged at {META_STAGE}")
+    print(f"  meta disc staged at {META_STAGE}")
 
     sh([
         "xorriso", "-as", "mkisofs",
@@ -212,7 +212,7 @@ def cdemu(*args: str) -> None:
 
 def run_restore(iso_files: list[Path]) -> int:
     """Spawn restore.sh under expect-style driving so each disc-swap
-    prompt triggers a cdemu swap to the next volume.
+    prompt triggers a cdemu swap to the next disc.
 
     Rather than write an expect script, we drive restore.sh manually
     from Python: it reads the pick list, we watch stderr for the
@@ -335,7 +335,7 @@ def main() -> int:
     if len(iso_files) < 2:
         print("\n[smoke] WARNING: only 1 disc — swap loop not exercised")
 
-    banner("4. build production meta volume + ISO")
+    banner("4. build production meta disc + ISO")
     build_meta_disc()
 
     banner("5. drive restore.sh via cdemu")

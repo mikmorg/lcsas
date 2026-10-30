@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 VALID_TRANSITIONS: dict[str, set[str]] = {
     STATUS_STAGING:         {STATUS_BURNING, STATUS_DEPRECATED, STATUS_DESTROYED},
     STATUS_BURNING:         {STATUS_BURNED, STATUS_VERIFIED, STATUS_STAGING, STATUS_DESTROYED},
-    # BURNED → BURNING: re-burn of a BURNED volume with no copy, which a
+    # BURNED → BURNING: re-burn of a BURNED volume with no disc, which a
     # failed post-burn verify left behind before #483 (BURN-05); since
     # #483 a failed verify returns the volume to STAGING instead.
     STATUS_BURNED:          {STATUS_BURNING, STATUS_VERIFIED, STATUS_STAGING, STATUS_DESTROYED},
@@ -251,16 +251,16 @@ def check_deprecation_safe(
     conn: sqlite3.Connection,
     volume_id: int,
 ) -> list[str]:
-    """Return pack SHA-256s that would become unreplicated if this volume is deprecated.
+    """Return pack IDs that would become unreplicated if this volume is deprecated.
 
     A pack is "at risk" if it exists on this volume but on NO other volume
     that is a live replica.
 
     Replica truth (BURN-10): a volume is a live replica iff it has >=1
-    ACTIVE row in ``volume_copies`` — except a volume with zero copy rows
-    at all, which counts by status alone (legacy: volumes burned before
-    copies were recorded, skip_burn fixtures, catalogs rebuilt from old
-    discs). A BURNED/VERIFIED volume whose every copy is
+    ACTIVE row in ``volume_copies`` — except a volume with zero
+    ``volume_copies`` rows at all, which counts by status alone (legacy:
+    volumes burned before discs were recorded, skip_burn fixtures, catalogs
+    rebuilt from old discs). A BURNED/VERIFIED volume whose every disc is
     DEPRECATED/DESTROYED is dead and must NOT count.
 
     Thin wrapper over ``get_at_risk_packs_for_volume`` (``db/queries.py``)

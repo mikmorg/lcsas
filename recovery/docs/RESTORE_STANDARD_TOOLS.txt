@@ -1,5 +1,5 @@
 ================================================================================
-RESTORE WITH STANDARD TOOLS  --  the "trust nothing we shipped" recovery path
+RESTORE WITH STANDARD TOOLS  --  the "trust nothing we shipped" restore path
 ================================================================================
 
 This is a RECOVERY TIER that uses ONLY widely-available, externally-audited
@@ -10,14 +10,15 @@ just want an independent second opinion that your data is intact.
 It works because LCSAS stores your data in the *restic* backup format and
 splits the password (if split) with the *SLIP-0039* standard.  Both are
 implemented by mature, audited, third-party tools you can get anywhere.  This
-has been verified end-to-end: stock restic restores an LCSAS disc byte-for-byte.
+has been tested end-to-end: stock restic restores an LCSAS disc byte-for-byte.
 
 WHAT YOU NEED
 -------------
   * All the data discs for the archive (or one disc per distinct LABEL -- the
-    metadata is copied onto every disc, so any single disc carries it).
-  * The repository password, OR (if the archive was split) at least K of the
-    N recovery cards.
+    repository metadata is copied onto every disc, so any single disc
+    carries it).
+  * The repository password, OR (if the password was split) at least K of the
+    N share cards.
   * A computer.  A stock restic binary AND a rustic binary are bundled on this
     disc under recovery/bin/<your-machine>/ (restic, restic.exe, rustic) -- so
     you need no internet.  You may also install restic fresh (below) if you'd
@@ -40,7 +41,7 @@ EITHER tool -- use whichever you can run:
                                                 NO dvdisaster.  (Or simply:
                                                 sh restore.sh --check-disc disc.iso)
 
-OPTIONAL EXTRA HEDGE (par2): LCSAS does not ship par2 recovery data -- RS03
+OPTIONAL EXTRA HEDGE (par2): LCSAS does not ship par2 repair data -- RS03
 already protects every disc and is repairable by the two tools above, so par2
 would only duplicate it (and cannot protect itself if stored on the same disc).
 If you want a third, actively-maintained tool in reserve, create your OWN par2
@@ -62,13 +63,16 @@ names under any disc's  metadata/  directory ARE the repository ids.  Then:
     mkdir -p "$REPO/data"
 
     # 2a. Merge the pack files from EVERY disc into one data/ tree.
-    #     (The data/<xx>/<hash> layout is restic's native layout; merging is
-    #      just copying -- identical files on two discs are harmless.)
+    #     (The data/<xx>/<pack-id> layout is restic's native layout; merging
+    #      is just copying -- identical files on two discs are harmless.)
     for d in /mnt/disc1 /mnt/disc2 /mnt/disc3 ; do        # list ALL your discs
         cp -rn "$d"/data/* "$REPO/data/"
     done
 
-    # 2b. Copy the repo metadata from ANY ONE disc (it is identical on all).
+    # 2b. Copy the repository metadata from ONE disc.  Use a disc with
+    #     the NEWEST label (latest year in the label, then highest
+    #     number): its snapshot list is the newest.  Here that disc is
+    #     /mnt/disc1.
     R=<repository-id>                                      # e.g. the folder name
     cp -r /mnt/disc1/metadata/$R/index      "$REPO/index"
     cp -r /mnt/disc1/metadata/$R/snapshots  "$REPO/snapshots"
@@ -82,7 +86,7 @@ STEP 3 -- get the repository password
 --------------------------------------------------------------------------------
 3a. SINGLE PASSWORD (most archives): you already have it.  Skip to step 4.
 
-3b. SPLIT PASSWORD (you have recovery cards): reconstruct it with the standard
+3b. SPLIT PASSWORD (you have share cards): rebuild it with the standard
     SLIP-0039 tool -- Trezor's reference "shamir-mnemonic" (pip install
     shamir-mnemonic), or the lcsas-keyshare / keyshare_combine.py copies on this
     disc.  Any K of your N cards work.  With the reference tool:
@@ -93,7 +97,7 @@ STEP 3 -- get the repository password
             "card one words ...",      # paste K cards, one string each
             "card two words ...",
         ]
-        ms = combine_mnemonics(cards)          # recovers the "master secret"
+        ms = combine_mnemonics(cards)          # rebuilds the "master secret"
         n  = int.from_bytes(ms[:2], "big")     # LCSAS wraps the password as:
         pw = ms[2:2+n]                          #   [2-byte big-endian length][password][zero pad]
         open("/tmp/repo.pw","wb").write(pw)
@@ -101,8 +105,13 @@ STEP 3 -- get the repository password
         PY
 
     (lcsas-keyshare / keyshare_combine.py do the unwrap for you and print the
-     password directly -- see RECOVER.txt.  The snippet above is the pure
-     standard-tool path.)
+     password directly -- the binary first, the Python fallback if it will
+     not run:
+
+        recovery/bin/<your-machine>/lcsas-keyshare <card1> <card2> ...
+        python3 keyshare_combine.py <card1> <card2> ...
+
+     See RECOVER.txt.  The snippet above is the pure standard-tool path.)
 
 --------------------------------------------------------------------------------
 STEP 4 -- restore with stock restic
@@ -127,10 +136,10 @@ NOTES
 --------------------------------------------------------------------------------
   * This path needs NOTHING from LCSAS: not lcsas-restore, not the Python
     fallback, not the SQLite catalog.  Just the discs + the password.
-  * Verified with restic 0.19.0; any restic that supports repository format v2
+  * Tested with restic 0.19.0; any restic that supports repository format v2
     (restic 0.14+ / 2022 onward) works, because LCSAS writes restic v2.
-  * If restic reports a wrong password, you reconstructed the wrong cards or the
-    wrong K -- re-check step 3.  If it reports missing packs, you have not
+  * If restic reports a wrong password, you rebuilt it from the wrong cards or
+    the wrong K -- re-check step 3.  If it reports missing packs, you have not
     mounted every disc -- repeat step 2a for the missing ones.
   * This is one of several recovery tiers.  See TIERS.txt for the full cascade
     and RECOVER.txt for the guided (LCSAS-tool) path.

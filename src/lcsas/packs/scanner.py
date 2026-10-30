@@ -10,7 +10,7 @@ from pathlib import Path
 
 _logger = logging.getLogger(__name__)
 
-# Pack filenames in Rustic repos are 64-char lowercase hex (SHA-256).
+# Pack filenames in Rustic repositories are 64-char lowercase hex (the pack ID).
 _PACK_NAME_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -59,7 +59,7 @@ def scan_mirror_packs(mirror_path: Path) -> MirrorScanResult:
 
     Returns:
         MirrorScanResult with ``packs`` mapping pack filename (the
-        SHA-256 hash) to file size in bytes, and ``errors`` listing
+        pack ID) to file size in bytes, and ``errors`` listing
         every path that could not be read (a non-empty list marks the
         scan as incomplete — see the dataclass docstring).
     """

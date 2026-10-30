@@ -51,7 +51,7 @@ def get_pack_ids_for_volume(
     conn: sqlite3.Connection,
     volume_id: int,
 ) -> list[int]:
-    """Return all pack IDs associated with a given volume."""
+    """Return the ``pack_id`` row ids of all packs on a given volume."""
     rows = conn.execute(
         "SELECT pack_id FROM volume_packs WHERE volume_id = ?",
         (volume_id,),

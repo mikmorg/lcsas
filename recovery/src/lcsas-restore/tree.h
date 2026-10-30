@@ -31,7 +31,7 @@ extern int lcsas_tree_max_depth;
  * "N/M" lines.  We use the loaded index size (lcsas_blob_index.count)
  * as the hint; it overstates by including blobs the snapshot does not
  * reference, but a pre-walk would double tree-blob I/O for no real
- * UX gain (this exists to reassure the operator that work is happening,
+ * UX gain (this exists to reassure the heir that work is happening,
  * not to be a precise ETA).
  *
  * Zero-init via {0} disables progress reporting.  Field `enabled` must

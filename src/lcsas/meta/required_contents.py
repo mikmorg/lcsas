@@ -1,17 +1,17 @@
-"""Required-contents contract for the meta-volume (RST-05).
+"""Required-contents contract for the meta disc (RST-05).
 
-A meta-volume is the rescue disc: per-target tier-1 binaries
+The meta disc carries per-target tier-1 binaries
 (``lcsas-restore``), the upstream ``rustic-static`` hedge, bundled
-CPython trees, the key-share combiner, and the restore scripts an heir
+CPython trees, the share combiner, and the restore scripts an heir
 double-clicks.  Historically every per-target artifact was treated as
 *optional* — a missing binary was a silent ``continue``, and
 ``_regenerate_recovery_manifest`` then rebuilt the manifest from whatever
 happened to be present, so ``lcsas meta verify`` validated an incomplete
-bundle as PASS.  An operator could burn a "rescue" disc missing the
+bundle as PASS.  An owner could burn a meta disc missing the
 Windows / macOS / aarch64 binaries with zero failing gate.
 
 This module is the single source of truth for *what a complete
-meta-volume must contain*.  It is imported by:
+meta disc must contain*.  It is imported by:
 
 * ``meta/builder.py`` — the ``_bundle_tier1_binaries`` target map, and
   the post-build completeness gate (``cmd_meta_build --require-complete``).
@@ -28,13 +28,15 @@ root-level restore artifacts.  Older meta discs that predate this contract
 will (correctly) report ABSENT for targets they never shipped — that is
 the desired honest signal, not a false alarm.
 
-Two tiers (issue #367):
+Two levels (issue #367):
 
-* **Required** (``required_meta_paths`` + per-repo ``metadata/<repo>/keys``)
-  — restore-BLOCKING.  Missing any of these fails ``--require-complete``.
+* **Required** (``required_meta_paths`` + per-repository
+  ``metadata/<repo>/keys``) — restore-BLOCKING.  Missing any of these fails
+  ``--require-complete``.
 * **Recommended** (``recommended_meta_paths``: stock restic tier-2b hedge,
-  lcsas-keyshare) — WARNS but does not fail: a disc with tier-1 + tier-3 is
-  still recoverable, and stock restic legitimately absents on a cold cache.
+  lcsas-keyshare) — WARNS but does not fail: a disc with tier 1 + tier 3
+  still allows a restore, and stock restic is legitimately absent when the
+  upstream cache is empty.
 """
 
 from __future__ import annotations
@@ -54,7 +56,7 @@ APPROVED_TARGETS: tuple[str, ...] = (
 # Windows targets carry .exe suffixes; everything else is bare.
 _WINDOWS_TARGETS = frozenset({"x86_64-pc-windows-gnu"})
 
-# Root-level artifacts every complete meta-volume must carry.  These live
+# Root-level artifacts every complete meta disc must carry.  These live
 # outside recovery/ (so the recovery/ manifest never covers them) but are
 # load-bearing for the restore flow an heir actually uses.
 _ROOT_ARTIFACTS: tuple[str, ...] = (
@@ -97,7 +99,7 @@ def python_tree_marker(target: str) -> str:
 
 
 def required_target_paths(target: str) -> list[str]:
-    """Relative paths a complete meta-volume must contain for one target."""
+    """Relative paths a complete meta disc must contain for one target."""
     return [
         f"recovery/bin/{target}/{_tier1_exe(target)}",
         f"recovery/bin/{target}/{_rustic_name(target)}",
@@ -107,7 +109,7 @@ def required_target_paths(target: str) -> list[str]:
 
 
 def required_meta_paths() -> list[str]:
-    """Every relative path a complete meta-volume must contain.
+    """Every relative path a complete meta disc must contain.
 
     Ordered targets-first (grouped per triple), then root artifacts, so
     callers can report missing items grouped by target.
@@ -128,19 +130,19 @@ def _keyshare_name(target: str) -> str:
 
 
 def recommended_target_paths(target: str) -> list[str]:
-    """Relative paths a complete meta-volume is RECOMMENDED to bundle for
+    """Relative paths a complete meta disc is RECOMMENDED to bundle for
     one target (issue #367).
 
     Unlike ``required_target_paths`` these are hedges, not restore-blockers:
-    a disc with the tier-1 ``lcsas-restore`` and the tier-3 CPython path is
-    still fully recoverable without them, so their absence WARNS rather than
+    a disc with the tier-1 ``lcsas-restore`` and the tier-3 CPython path
+    still allows a full restore without them, so their absence WARNS rather than
     fails the completeness gate.
 
     * stock ``restic`` — the tier-2b "standard tools" hedge, sourced from the
       upstream cache (``recovery/UPSTREAM.sha256``), so it is legitimately
-      absent on a cold-cache build.
-    * ``lcsas-keyshare`` — the SLIP-0039 combiner, only needed to reconstruct
-      a K-of-N split repo password.
+      absent on a build whose upstream cache is empty.
+    * ``lcsas-keyshare`` — the SLIP-0039 combiner, only needed to rebuild
+      a password that was split into K-of-N shares.
     """
     return [
         f"recovery/bin/{target}/{_restic_name(target)}",
@@ -149,7 +151,7 @@ def recommended_target_paths(target: str) -> list[str]:
 
 
 def recommended_meta_paths() -> list[str]:
-    """Every relative path a complete meta-volume is recommended to bundle.
+    """Every relative path a complete meta disc is recommended to bundle.
 
     Absence WARNS but does not fail ``--require-complete`` (see
     ``recommended_target_paths``).
@@ -161,20 +163,20 @@ def recommended_meta_paths() -> list[str]:
 
 
 def is_per_repo_keys_gap(path: str) -> bool:
-    """True if ``path`` names a per-repo ``metadata/<repo>/keys`` entry.
+    """True if ``path`` names a per-repository ``metadata/<repo>/keys`` entry.
 
     ``MetaVolumeBuilder.missing_required_contents()`` appends these
-    (issue #367) when a bundled repo's metadata carries no ``keys/``
+    (issue #367) when a bundled repository's metadata carries no ``keys/``
     subtree — a survivability gap distinct from the rest of that list
     (missing per-target binaries / root restore artifacts). Issue #443:
     ``cmd_meta_build`` uses this predicate to route the two kinds of gap
     to different overrides — ``--allow-incomplete`` for everything else,
     ``--allow-missing-metadata`` for this one, matching the #437 key gate
-    it shares its failure mode with ("this meta-volume cannot decrypt
-    repo X").
+    it shares its failure mode with ("this meta disc cannot decrypt
+    repository X").
 
     Matched precisely rather than by substring: exactly three path
-    segments, ``metadata`` / ``<repo>`` / ``keys`` — a repo id cannot
+    segments, ``metadata`` / ``<repo>`` / ``keys`` — a repository ID cannot
     itself contain ``/`` in practice, but this stays exact rather than
     relying on that.
     """
@@ -187,7 +189,7 @@ def is_per_repo_keys_gap(path: str) -> bool:
     )
 
 
-# Human-facing note printed by both gates so an operator understands an
+# Human-facing note printed by both gates so the owner understands an
 # ABSENT verdict against an older disc is expected, not a defect.
 VINTAGE_NOTE = (
     "this check reflects the 2026-06 required-contents contract; older "

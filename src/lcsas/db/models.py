@@ -1,6 +1,6 @@
-"""Pure data models for LCSAS database entities.
+"""Pure data models for LCSAS catalog entities.
 
-These are plain dataclasses with no database logic — they serve as
+These are plain dataclasses with no catalog logic — they serve as
 value objects passed between modules.
 """
 
@@ -11,7 +11,10 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Volume:
-    """A physical media volume (optical disc)."""
+    """A volume: a set of packs mastered together under one label.
+
+    A volume exists as one ISO image and as zero or more discs.
+    """
 
     volume_id: int
     label: str
@@ -28,7 +31,7 @@ class Volume:
 
 @dataclass(frozen=True)
 class Pack:
-    """An encrypted data pack (chunk container)."""
+    """One encrypted pack file from a repository."""
 
     pack_id: int
     sha256: str
@@ -40,7 +43,7 @@ class Pack:
 
 @dataclass(frozen=True)
 class Repository:
-    """A logical backup repository (tenant)."""
+    """One backup repository, with its own password."""
 
     repo_id: str
     name: str
@@ -76,7 +79,7 @@ class VolumePack:
 
 @dataclass(frozen=True)
 class Location:
-    """A physical storage location (e.g. Home_Shelf, Offsite_Safe)."""
+    """A named place where discs are kept (e.g. Home_Shelf, Offsite_Safe)."""
 
     name: str
     created_at: str
@@ -85,7 +88,7 @@ class Location:
 
 @dataclass(frozen=True)
 class VolumeCopy:
-    """A physical copy of a volume at a specific location."""
+    """One burned disc of a volume, kept at a specific location."""
 
     id: int
     volume_id: int
@@ -104,7 +107,7 @@ class VolumeCopy:
 
 @dataclass(frozen=True)
 class BurnSession:
-    """A staging session grouping volumes for burning."""
+    """A burn session: the volumes staged and burned together in one run."""
 
     session_id: str
     created_at: str
@@ -115,7 +118,7 @@ class BurnSession:
 
 @dataclass(frozen=True)
 class SessionVolume:
-    """Association between a session and a volume with its ISO path."""
+    """Association between a burn session and a volume, with its ISO image path."""
 
     session_id: str
     volume_id: int
@@ -129,7 +132,7 @@ class SessionVolume:
 
 @dataclass(frozen=True)
 class VolumeEvent:
-    """A lifecycle event for a volume (verification, ECC repair, etc.)."""
+    """A lifecycle event for a volume (a verify, an ECC repair, etc.)."""
 
     event_id: int
     volume_id: int

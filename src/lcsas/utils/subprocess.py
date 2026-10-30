@@ -103,7 +103,7 @@ class SubprocessRunnerBase:
         """Raise RuntimeError if the binary is not found on PATH.
 
         Call this as a preflight check before any heavy operation so the
-        user gets a clear message immediately rather than deep inside a
+        owner gets a clear message immediately rather than deep inside a
         pipeline.
         """
         if shutil.which(self._binary) is None:

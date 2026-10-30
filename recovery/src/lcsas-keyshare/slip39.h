@@ -2,7 +2,7 @@
  * slip39.h -- C89 SLIP-0039 share combiner + LCSAS password codec.
  *
  * Tier-1-grade pure-C port of src/lcsas/keyshare/slip39.py and
- * src/lcsas/keyshare/codec.py.  Recovers an LCSAS repository password
+ * src/lcsas/keyshare/codec.py.  Rebuilds an LCSAS repository password
  * from a set of SLIP-0039 mnemonic shares with no python3 dependency.
  *
  * Algorithm: SLIP-0039 (https://github.com/satoshilabs/slips/blob/
@@ -114,7 +114,7 @@ int lcsas_keyshare_extract(const char *text, char *out, size_t cap,
 
 /*
  * Validate ONE share mnemonic independently of the rest of the set, for
- * actionable per-share diagnostics before recovery is attempted.  Checks,
+ * actionable per-share diagnostics before the shares are combined.  Checks,
  * in order: every token resolves to a wordlist word (full word, or a
  * unique 4+-letter prefix); the word count is a valid share length; and
  * the per-share RS1024 checksum verifies.
@@ -127,7 +127,7 @@ int lcsas_keyshare_extract(const char *text, char *out, size_t cap,
  *
  * A pass here means the share is internally consistent; it does NOT mean
  * the share belongs to the same split as the others — that mismatch only
- * surfaces during recovery.
+ * surfaces when the shares are combined.
  */
 int lcsas_keyshare_check_share(const char *mnemonic,
                                char *errbuf, size_t errcap);

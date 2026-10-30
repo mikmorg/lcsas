@@ -1,6 +1,6 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║  DESIGN DOCUMENT — describes intended future UX, not current     ║
-║  behavior.  For operator instructions, see RECOVER.txt           ║
+║  behavior.  For restore instructions, see RECOVER.txt            ║
 ║  (MULTI-DISC RESTORE section).                                   ║
 ╚══════════════════════════════════════════════════════════════════╝
 
@@ -10,7 +10,7 @@ LCSAS RECOVERY -- MULTI-DISC SWAP UX (DESIGN DOC)
 UX CONCERN ID: 005 (recovery/docs/UX_CONCERNS.txt)
 STATUS: Significant portions shipped; further work deferred.  See
         STATUS_LEDGER.md for the open / deferred items.  See
-        RECOVER.txt for current operator-facing procedure.
+        RECOVER.txt for current heir-facing procedure.
 PLATFORMS: all -- Linux, macOS, Windows
 
 ────────────────────────────────────────────────────────────────────
@@ -29,12 +29,12 @@ WHAT HAS SHIPPED (as of Phase 21)
     (Linux/macOS).
   * Mounted-disc label (#456): each disc a re-scan finds is named by
     the label in the volume_info.json it already carries, so a wrong
-    disc is obvious ("mounted volume ... at ...", then "still not
-    found").  Design item C below, without a new file.
+    disc is obvious ("mounted the disc labelled ... at ...", then
+    "still not found").  Design item C below, without a new file.
   * Single-drive relocation: restore.sh copies itself and the binary
-    to RAM (/tmp) before prompting, so the meta-disc can be ejected.
+    to RAM (/tmp) before prompting, so the meta disc can be ejected.
   * See RECOVER.txt (MULTI-DISC RESTORE section) for the current
-    operator-facing procedure including exact prompt text and physical
+    heir-facing procedure including exact prompt text and physical
     swap steps.
 
 The sections below describe the INTENDED DESIGN, including parts still
@@ -48,7 +48,7 @@ PROBLEM STATEMENT
 
 An LCSAS archive of any meaningful size spans MULTIPLE optical discs.
 A 1 TB Rustic-deduplicated source set typically produces a meta
-volume (one disc with tools + indices) plus 4-50 data discs (each
+disc (tools + indices) plus 4-50 data discs (each
 ~25-100 GB of encrypted packs).  At restore time the recovery tool
 must read pack files that physically live on many different discs.
 
@@ -61,22 +61,22 @@ CURRENT BEHAVIOUR (broken)
       pack not found: <64-hex-pack-id>
       ERROR: tree restore failed
 
-  ... and exits non-zero.  The user has no information about which
+  ... and exits non-zero.  The heir has no information about which
   physical disc to insert next, no opportunity to insert it, and no
   way to resume.  The only workaround is the "manually merge all
   data/ trees into one directory before running" workflow documented
-  in RECOVER_WINDOWS.txt -- which requires the user to copy every
+  in RECOVER_WINDOWS.txt -- which requires the heir to copy every
   disc's contents to local disk first, which defeats the point of
   the multi-disc layout (it requires having free disk space larger
   than the entire archive).
 
 DESIRED BEHAVIOUR
 
-  When a required pack is not in any currently-known location:
+  When a required pack is not on any currently-known search path:
 
     1.  Pause restore (do NOT exit).
-    2.  Look up the pack in the on-disc catalog.db (or a plain-text
-        sidecar) to find which volume label contains it.
+    2.  Look up the pack in the disc catalog, catalog.db (or a
+        plain-text sidecar), to find which volume label contains it.
     3.  Print a clear prompt:
 
            ╔══════════════════════════════════════════════════╗
@@ -115,14 +115,14 @@ ARCHITECTURE
 
 NEW MODULE: src/lcsas-restore/disc_locator.{c,h}
 
-Responsibility: given a pack hash, return the absolute filesystem
+Responsibility: given a pack ID, return the absolute filesystem
 path to that pack file on whatever discs are currently mounted.
 Backed by:
 
   * A list of search paths (provided by CLI flags / driver script).
   * An optional catalog handle (already wired via --catalog) for
     volume-label hints.
-  * A user-prompt callback that lets the caller block on stdin and
+  * A prompt callback that lets the caller block on stdin and
     re-scan.
 
 API (struct fields are illustrative):
@@ -140,8 +140,8 @@ API (struct fields are illustrative):
    * Locate the pack file containing a blob with the given pack_id.
    * Returns the full path in `out_path` (caller-allocated buffer)
    * on success.  On miss with interactive == 0, returns -1.  On
-   * miss with interactive == 1, prompts the user via prompt_in/out
-   * and retries until the pack is found or the user aborts.
+   * miss with interactive == 1, prompts the heir via prompt_in/out
+   * and retries until the pack is found or the heir aborts.
    */
   int lcsas_disc_locate_pack(lcsas_disc_locator *loc,
                              const unsigned char pack_id[32],
@@ -172,10 +172,10 @@ CALL-SITE CHANGES IN repo.c
 
 NEW CLI FLAGS
 
-  --pack-search PATH        Additional location to search for packs.
+  --pack-search PATH        Additional directory to search for packs.
                             Repeatable.  Defaults to:
                               <repo>/data
-                              (the existing single-repo behaviour)
+                              (the existing single-repository behaviour)
 
   --catalog FILE            Already exists.  Now used at run time for
                             the volume-label hint (not just at
@@ -251,7 +251,7 @@ Adding to disc_locator.c:
                                                      vols, 8);
               if (n > 0) {
                   fprintf(l->prompt_out,
-                          "║ It lives on volume(s):\n");
+                          "║ It is on any disc labelled:\n");
                   for (int i = 0; i < n; i++) {
                       fprintf(l->prompt_out, "║   %s\n",
                               vols[i].label);
@@ -263,7 +263,7 @@ Adding to disc_locator.c:
           }
       } else {
           fprintf(l->prompt_out,
-                  "║ (no --catalog provided; cannot suggest volume)\n");
+                  "║ (no --catalog provided; cannot suggest a disc)\n");
       }
 
       fprintf(l->prompt_out,
@@ -309,7 +309,7 @@ We want THREE independent sources for "which disc contains pack X?":
        of 100,000 packs across 50 discs, that's 5 MB total spread
        across discs.  Acceptable.
        [NOT BUILT, by decision (#457): without catalog.db the prompt
-       falls back to the pack hash and the restore still completes
+       falls back to the pack ID and the restore still completes
        (the blind-restore no-catalog variant), and #456 names each
        disc as it mounts.  STATUS_LEDGER.md item 1 lists the evidence
        that would reopen it.]
@@ -321,8 +321,8 @@ We want THREE independent sources for "which disc contains pack X?":
        [LANDED as #456, without a new file: tier-1 reads the
        volume_info.json every data disc already carries (JSON, from
        staging/metadata.py::write_volume_info) and prints
-       "mounted volume <label> at <path>" once per insertion.  The
-       UUID is not compared (see E7).]
+       "mounted the disc labelled <label> at <path>" once per
+       insertion.  The UUID is not compared (see E7).]
        Format: TOML or plain key=value:
            label = vol-042
            uuid = a1b2c3d4-...
@@ -330,7 +330,7 @@ We want THREE independent sources for "which disc contains pack X?":
            burned_at = 2027-04-15T10:00:00Z
            contains_packs = 12345
 
-When the user is prompted for "vol-042", we tell them BOTH the
+When the heir is prompted for "vol-042", we tell them BOTH the
 human-readable label ("Family Photos 2027 vol 3/8") AND the UUID
 (in case the same label was reused).
 
@@ -339,16 +339,16 @@ PYTHON ORCHESTRATOR CHANGES
 ────────────────────────────────────────────────────────────────────
 
 src/lcsas/burn/orchestrator.py:
-  At burn time, after staging is complete:
+  At burn time, once the volume is assembled in the staging area:
     1. For every pack in the volume:
-       write `disc_index.txt` lines: <pack_hash>  <label>  <uuid>
-    2. Write `.lcsas_volume_info` at staging root.
+       write `disc_index.txt` lines: <pack-id>  <label>  <uuid>
+    2. Write `.lcsas_volume_info` at the volume's staging-area root.
 
 src/lcsas/meta/builder.py:
-  Bundle the meta-volume's `catalog.db` snapshot as usual.  Note:
-  the meta-volume's catalog is intentionally stale (pre-dates later
-  data discs).  This is documented and OK -- the recovery cascade
-  uses whichever catalog is FRESHEST among currently-mounted discs.
+  Bundle no `catalog.db`: the meta disc holds no catalog, since a
+  copy there would always be stale (pre-dating later data discs).
+  The recovery cascade uses whichever disc catalog is FRESHEST
+  among currently-mounted discs.
 
 src/lcsas-restore/main.c:
   At startup, if --catalog is given, load it.  Also scan
@@ -366,25 +366,25 @@ UNIT (recovery/tests/test_disc_locator.c):
   * Call with a pack that exists in neither and interactive=off --
     assert -1.
   * Mock prompt_in with a string containing "\n" -- assert that
-    after a re-scan the pack is found (simulate user inserting disc
+    after a re-scan the pack is found (simulate an heir inserting a disc
     between prompt and Enter).
   * Mock prompt_in with "q\n" -- assert abort returns -1.
   * With --catalog set, assert the prompt includes the volume label.
 
 E2E (implemented in recovery/tests/test_multidisc.py):
-  * Build a synthetic restic repo with 4 packs.
+  * Build a synthetic restic repository with 4 packs.
   * Split into two "discs": packs 1+2 on disc A, packs 3+4 on disc B.
   * Build a tiny catalog.db with both volumes.
   * Run lcsas-restore --repo discA --pack-search discB --catalog cat.db
     against a restic tree that needs blobs from both discs.
-  * Verify all files restored byte-equal.
+  * Assert all files restored byte-equal.
 
 INTERACTIVE E2E (implemented in recovery/tests/test_multidisc.py):
   * Same fixture, but pass packs from disc B's data only AFTER
     receiving the prompt.
   * Use a Python subprocess to spawn lcsas-restore with a pty,
     watch for the prompt regex, mv files into place, send "\n".
-  * Assert recovery completes.
+  * Assert the restore completes.
   * Assert the prompt text mentions "vol-002" (the catalog's
     label for disc B).
 
@@ -397,21 +397,21 @@ E1. Same pack exists on multiple discs (LCSAS supports replicated
     -> lcsas_disc_locate_pack returns the FIRST one found, in
        search-path order.  No prompt.
 
-E2. The user inserts the wrong disc and presses Enter.
+E2. The heir inserts the wrong disc and presses Enter.
     -> Re-scan does not find the pack.  Prompt re-fires with
        "(not the right disc; pack still missing)".
 
-E3. The user presses Enter without inserting anything.
+E3. The heir presses Enter without inserting anything.
     -> Same as E2.
 
-E4. The catalog says the pack is on vol-042, but the user knows
-    vol-042 was destroyed.
-    -> Tell the user (catalog status field == 'DESTROYED').  Look
-       for replicas: "Other copies known: vol-042-bk, vol-099".
+E4. The catalog says the pack is on vol-042, but the heir knows
+    the vol-042 disc was destroyed.
+    -> Tell the heir (catalog status field == 'DESTROYED').  Look
+       for replicas: "Other discs known: vol-042-bk, vol-099".
 
 E5. No catalog provided at all.
-    -> Prompt just shows the pack hash and says "(no catalog -- you
-       must know which disc contains pack <hash>)".
+    -> Prompt just shows the pack ID and says "(no catalog -- you
+       must know which disc contains pack <id>)".
 
 E6. Restore is being run non-interactively (stdin is /dev/null or
     a closed pipe).
@@ -429,7 +429,7 @@ E8. Disc is mounted but pack file is corrupted (read error).
     -> Currently bubbles up; with this design, we treat it as
        "not found" and re-prompt.
 
-E9. The user presses Ctrl+C during the prompt.
+E9. The heir presses Ctrl+C during the prompt.
     -> Default SIGINT handler is fine; cleanup tmp files.
 
 E10. Two discs share the same pack ID by accident (HASH COLLISION).
@@ -449,7 +449,7 @@ WORKFLOW EXAMPLE (after this lands)
   ╔══════════════════════════════════════════════════════════╗
   ║ Pack 4f3e2a1b9c8d... is needed for the next file.       ║
   ║                                                          ║
-  ║ It lives on volume(s):                                   ║
+  ║ It is on any disc labelled:                              ║
   ║   vol-002 (Family Photos 2027 vol 1/8)                  ║
   ║                                                          ║
   ║ Currently mounted:                                       ║
@@ -459,7 +459,7 @@ WORKFLOW EXAMPLE (after this lands)
   ╚══════════════════════════════════════════════════════════╝
   > _
 
-  (user swaps disc)
+  (heir swaps disc)
 
   [lcsas-restore] detected new mount: /Volumes/LCSAS_002
   [lcsas-restore] continuing restore...
@@ -468,7 +468,7 @@ WORKFLOW EXAMPLE (after this lands)
   ╔══════════════════════════════════════════════════════════╗
   ║ Pack 9a8b7c6d5e4f... is needed for the next file.       ║
   ║                                                          ║
-  ║ It lives on volume(s):                                   ║
+  ║ It is on any disc labelled:                              ║
   ║   vol-003 (Family Photos 2027 vol 2/8)                  ║
   ...
 
@@ -495,16 +495,16 @@ COMPATIBILITY
     Without --pack-search, behaviour is identical to today's.
   * Existing burned discs do NOT have disc_index.txt or
     .lcsas_volume_info.  The implementation gracefully handles
-    their absence (catalog-only hints; or hash-only if no catalog).
+    their absence (catalog-only hints; or pack ID only if no catalog).
   * Existing tests pass unchanged.
 
 ────────────────────────────────────────────────────────────────────
-SINGLE-DRIVE RECOVERY (added)
+SINGLE-DRIVE RESTORE (added)
 ────────────────────────────────────────────────────────────────────
 
-Without explicit handling, a user with only ONE optical drive cannot
-swap from the meta-disc to a data disc: the running script + binary
-hold the meta-disc captive (via the loader's mmap of /mnt/...).  The
+Without explicit handling, an heir with only ONE optical drive cannot
+swap from the meta disc to a data disc: the running script + binary
+hold the meta disc captive (via the loader's mmap of /mnt/...).  The
 disc cannot be ejected while it has open file descriptors.
 
 LCSAS releases the drive in three coordinated steps:
@@ -513,7 +513,7 @@ LCSAS releases the drive in three coordinated steps:
      else.  They copy themselves + the bin/<arch>/ tree to a writable
      scratch dir (under /tmp, /run, %TEMP%, etc.), set the sentinel
      env var LCSAS_RELOCATED=<original meta mount>, and re-exec from
-     the scratch dir.  The original meta-disc is now no longer
+     the scratch dir.  The original meta disc is now no longer
      opened by sh/cmd.exe -- only by lcsas-restore, which holds
      scoped open/close FDs on individual files (see
      repo.c::lcsas_repo_read_blob).
@@ -530,22 +530,22 @@ LCSAS releases the drive in three coordinated steps:
          (otherwise a path under /mnt/... would re-fopen the disc on
          every retry);
        - returns no paths under it;
-       - chdir("/")s before blocking on the user prompt, so any
+       - chdir("/")s before blocking on the prompt, so any
          cwd inside /mnt is dropped.
 
 The interactive prompt also gains a line:
 
-     | Single-drive recovery: if your machine has only ONE      |
-     | optical drive, eject the RECOVERY disc first, then       |
+     | Single-drive restore: if your machine has only ONE       |
+     | optical drive, eject the META disc first, then           |
      | insert the disc named above into the SAME drive.         |
 
-so the one-drive user knows the swap procedure.
+so the one-drive heir knows the swap procedure.
 
 OPEN-FD LIFECYCLE
 ─────────────────
 
-For complete drive release, every file handle on the meta-disc must
-be closed before the user is prompted.  The audit:
+For complete drive release, every file handle on the meta disc must
+be closed before the heir is prompted.  The audit:
 
   - sh / cmd.exe: holds the script.  Released after `exec` to the
     relocated copy.
@@ -557,7 +557,7 @@ be closed before the user is prompted.  The audit:
   - pack files: open+close in lcsas_repo_read_blob (line 748 /
     756).  No long-lived FDs.
 
-After step 3 (locator entry) the meta-disc has zero open FDs and
+After step 3 (locator entry) the meta disc has zero open FDs and
 can be ejected.
 
 WORKFLOW EXAMPLE (one-drive case)
@@ -565,7 +565,7 @@ WORKFLOW EXAMPLE (one-drive case)
 
   $ sh /mnt/recovery/scripts/restore.sh ~/restored
   [lcsas-restore] copied recovery binaries to /tmp/lcsas-restore.X9k2
-  [lcsas-restore] you may eject the recovery disc when the binary
+  [lcsas-restore] you may eject the meta disc when the binary
                   prompts for a data disc.
   [tier 1] using prebuilt lcsas-restore (x86_64)
   [lcsas-restore] master key loaded
@@ -575,19 +575,19 @@ WORKFLOW EXAMPLE (one-drive case)
 
   +----------------------------------------------------------+
   | Pack 4f3e2a1b9c8d... is required for the next file.       |
-  | (catalog has no record of this pack hash)                |
+  | (catalog has no record of this pack ID)                  |
   |                                                          |
   | Currently searching: ...                                 |
   |                                                          |
-  | Single-drive recovery: if your machine has only ONE      |
-  | optical drive, eject the RECOVERY disc first, then       |
+  | Single-drive restore: if your machine has only ONE       |
+  | optical drive, eject the META disc first, then           |
   | insert the disc named above into the SAME drive.         |
   |                                                          |
   | Insert the right disc and press ENTER to retry.          |
   +----------------------------------------------------------+
   > _
 
-  (user ejects meta-disc, inserts data disc, presses ENTER)
+  (heir ejects meta disc, inserts data disc, presses ENTER)
 
   [lcsas-restore] found 4f3e2a1b9c8d...; continuing.
 
@@ -602,10 +602,10 @@ WORKFLOW EXAMPLE (one-drive case)
   volume_info.json label (#456).  A wrong disc is named and flagged,
   and the prompt keeps waiting:
 
-  [lcsas-restore] mounted volume LCSAS_BD25_2027_0005 at /media/alice/...
+  [lcsas-restore] mounted the disc labelled LCSAS_BD25_2027_0005 at /media/alice/...
   (still not found -- check the disc label and try again)
   >
-  [lcsas-restore] mounted volume LCSAS_BD25_2027_0003 at /media/alice/...
+  [lcsas-restore] mounted the disc labelled LCSAS_BD25_2027_0003 at /media/alice/...
   [lcsas-restore] new disc detected -- no ENTER needed.
   [lcsas-restore] found 4f3e2a1b9c8d...; continuing.
 
@@ -614,11 +614,11 @@ KNOWN LIMITATIONS
 
   - macOS bare-disc boot path is not in scope; the host-OS path on
     macOS still works (restore.sh relocates to /tmp).
-  - On Windows, %~d0 is sampled at .bat launch.  After the user
+  - On Windows, %~d0 is sampled at .bat launch.  After the heir
     ejects, the same drive letter may rebind to the data disc; we
-    record the meta-disc path BEFORE the eject prompt, so the
+    record the meta disc path BEFORE the eject prompt, so the
     locator excludes the original letter even if it later names a
-    different volume.
+    different disc.
   - Set LCSAS_NO_RELOCATE=1 to suppress relocation (for dev/test
     workflows running the script from a writable checkout).
 
@@ -626,7 +626,7 @@ KNOWN LIMITATIONS
 SEE ALSO
 ────────────────────────────────────────────────────────────────────
 
-  RECOVER.txt           Current operator-facing procedure, including
+  RECOVER.txt           Current heir-facing procedure, including
                         the MULTI-DISC RESTORE section with exact
                         prompt text, physical swap steps, and the
                         LCSAS_PACK_CACHE_DIR cache knob.

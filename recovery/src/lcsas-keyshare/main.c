@@ -6,13 +6,13 @@
  *   lcsas-keyshare [--passphrase X] < shares.txt   (one mnemonic per line)
  *
  * Each SHARE_FILE is a bare mnemonic file OR a printed share card (the
- * {repo}-share-N-card.txt artifact a holder is handed): the share words
+ * {repo}-share-N-card.txt artifact a share holder is handed): the share words
  * are recognised by their content, so card header lines and prose are
  * ignored.  When no files are given, mnemonics are read from stdin; each
  * line whose tokens are all wordlist words is one share, others (blanks,
  * card prose) are skipped, so `cat card1 card2 | lcsas-keyshare` works.
  *
- * The recovered LCSAS repository PASSWORD is written to stdout as raw
+ * The rebuilt LCSAS repository PASSWORD is written to stdout as raw
  * bytes with NO trailing newline.  Any failure prints a message to
  * stderr and exits non-zero WITHOUT printing a partial password.
  *
@@ -136,7 +136,7 @@ static size_t copy_candidate_line(const char *text, char *buf, size_t cap)
  * On a strict-extraction failure, falls back to copying the most
  * token-dense line into `buf` (lowercased) so the per-share pre-pass in
  * main() can name the offending word.  Returns 0 (lets the caller run
- * diagnostics) when a candidate line was recovered, else nonzero (no
+ * diagnostics) when a candidate line was found, else nonzero (no
  * plausible share line at all). */
 static int read_file_mnemonic(const char *path, char *buf, size_t cap)
 {
@@ -163,7 +163,7 @@ static int read_file_mnemonic(const char *path, char *buf, size_t cap)
         return 0;
     }
 
-    /* Strict extraction failed.  If a token-dense line exists, recover it
+    /* Strict extraction failed.  If a token-dense line exists, keep it
      * for diagnosis (the pre-pass will name the bad word); otherwise the
      * file genuinely has no share line. */
     if (copy_candidate_line(filebuf, buf, cap) > 0) {
@@ -245,7 +245,7 @@ int main(int argc, char **argv)
             }
             mnemonics[n] = storage[n];
             {
-                /* Record the source file path as this share's label, for
+                /* Record the source file path as this share's name, for
                  * per-share diagnostics below. */
                 const char *path = argv[argi];
                 size_t j = 0;
@@ -314,7 +314,7 @@ int main(int argc, char **argv)
                                         pw, &pwlen) != 0) {
         /* Every share is internally valid, so the failure is a set-level
          * problem: too few shares, or shares from different splits. */
-        fprintf(stderr, "lcsas-keyshare: failed to recover the password "
+        fprintf(stderr, "lcsas-keyshare: failed to rebuild the password "
                         "(insufficient, corrupt, or mismatched shares)\n");
         fprintf(stderr, "lcsas-keyshare: supply at least K shares from the "
                         "SAME archive (same Split ID on every card)\n");

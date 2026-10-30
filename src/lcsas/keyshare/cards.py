@@ -1,10 +1,10 @@
-"""Extract a share mnemonic from a bare mnemonic file or a printed card.
+"""Extract a share mnemonic from a bare mnemonic file or a printed share card.
 
 ``lcsas key split`` writes two artifacts per share: a bare mnemonic file
-(``{repo}-share-N.txt``, words only) and a plain-language printable *card*
-(``{repo}-share-N-card.txt``) with header lines, prose, and the mnemonic
-under a "THE SHARE WORDS" heading.  The card is the artifact an owner is
-told to hand to holders, so every combiner must accept it.
+(``{repo}-share-N.txt``, words only) and a plain-language printable *share
+card* (``{repo}-share-N-card.txt``) with header lines, prose, and the mnemonic
+under a "THE SHARE WORDS" heading.  The share card is the artifact an owner is
+told to hand to share holders, so every combiner must accept it.
 
 The extractor identifies the share by its cryptographic content rather
 than by the card's prose framing: a line is a *mnemonic line* iff it is
@@ -16,8 +16,8 @@ on header text — keeps this working across card-format drift, partial
 photocopies, and re-typed files.
 
 This module is stdlib-only and imports only :mod:`lcsas.keyshare.wordlist`
-so it ships in the meta-volume bundle and works under both the
-``lcsas.keyshare`` (dev/source) and top-level ``keyshare`` (meta-volume)
+so it ships in the meta disc bundle and works under both the
+``lcsas.keyshare`` (dev/source) and top-level ``keyshare`` (meta disc)
 import layouts.
 """
 
@@ -39,8 +39,8 @@ def is_mnemonic_line(line: str) -> bool:
     """Return True iff *line* is a non-blank line of only wordlist words.
 
     Tokens are matched case-insensitively against the SLIP-0039 wordlist.
-    A blank line (or one with any non-wordlist token, e.g. a card header
-    or prose) returns False.
+    A blank line (or one with any non-wordlist token, e.g. a share card
+    header or prose) returns False.
     """
     tokens = line.split()
     if not tokens:

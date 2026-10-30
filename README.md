@@ -1,20 +1,20 @@
 # LCSAS — Linux Cold Storage Archival Suite
 
-Durable, offline-first cold archival for Linux — built so data stays recoverable for decades, by a non-specialist, with no cloud provider and no central server. Orchestrates **Rustic** (content-defined chunking), **Xorriso** (ISO mastering), and **DVDisaster** (error correction) to write deduplicated, encrypted data packs onto optical media (BD-R, M-Disc). Scales to archives of hundreds of discs across multiple repositories.
+Durable, offline-first cold archival for Linux — built so data stays restorable for decades, by a non-specialist, with no cloud provider and no central server. Orchestrates **Rustic** (content-defined chunking), **Xorriso** (ISO mastering), and **DVDisaster** (error correction) to write deduplicated, encrypted data packs onto optical discs (BD-R, M-Disc). Scales to archives of hundreds of discs across multiple repositories.
 
 > **🚨 In an emergency and need to restore data?**
 > Start at **[docs/RECOVERY_GUIDE.md](docs/RECOVERY_GUIDE.md)** — it
 > routes you to the right OS-specific walkthrough (Linux, macOS,
-> Windows, bare-metal, or disc-only Python fallback) in one click.
+> Windows, bare-metal, or disc-only Python reader) in one click.
 
 ## Key Capabilities
 
 - **Infinite Incrementalism** — CDC ensures file moves/renames consume zero additional storage payload
-- **Multi-Tenant Isolation** — distinct datasets encrypted with different keys coexist on the same disc
-- **Holographic Indexing** — every disc carries a complete SQLite catalog of the entire archive
-- **Local Mirror Strategy** — permanent hot tier enables instant consolidation without retrieving offsite media
+- **Per-Repository Isolation** — repositories, each encrypted under its own password, share the same discs
+- **A Catalog on Every Disc** — every disc carries a disc catalog: a SQLite copy of the catalog, current as of that disc's burn
+- **Local Mirror Strategy** — the mirror stays on local disk, so consolidation needs no offsite discs
 - **Bit-Rot Immunity** — DVDisaster RS03 error correction wraps every ISO image
-- **Self-Contained Disaster Recovery** — meta-volume bundles portable tools + source so any disc set plus a key file restores without system dependencies
+- **Self-Contained Restore** — the meta disc bundles portable tools + source so the discs plus the password are enough to restore, with no system dependencies
 
 ## Quick Start
 
@@ -32,7 +32,7 @@ make test-all
 ## Documentation
 
 Start at the **[documentation index](docs/README.md)** — it routes to the
-architecture reference, on-disc formats, operator guides, the workflow
+architecture reference, on-disc formats, owner and heir guides, the workflow
 matrix, and the on-disc recovery manuals.
 
 The full synthesized architecture reference lives at
@@ -48,32 +48,32 @@ src/lcsas/
 ├── rustic/       # Rustic subprocess wrapper (Protocol-based)
 ├── packs/        # Pack scanner and delta analysis
 ├── binpack/      # First-fit-decreasing bin packing algorithm
-├── staging/      # Staging directory builder, holographic metadata
+├── staging/      # Staging-area builder, disc catalog + repository metadata
 ├── iso/          # Xorriso ISO creation wrapper
 ├── ecc/          # DVDisaster ECC wrapper
 ├── burn/         # Burn orchestrator (full pipeline)
-├── restore/      # Restore planner, executor, pure-Python fallback
+├── restore/      # Restore planner, executor, Python reader (tier 3)
 ├── consolidate/  # Volume merger / consolidation
-├── meta/         # Meta-volume builder (disaster recovery toolkit)
+├── meta/         # Meta disc builder (recovery tools)
 ├── recovery/     # C89 recovery-binary cross-compilation harness (tier-1)
-├── keyshare/     # Pure-Python SLIP-0039 Shamir key splitting
+├── keyshare/     # Pure-Python SLIP-0039 Shamir password splitting
 └── utils/        # Hashing, filesystem helpers, label generation
 ```
 
 ## Usage Guide
 
-This walkthrough covers a realistic home archival scenario: two family members and two personal directories, backed up onto M-Disc with two physical copies each (one at home, one offsite), with monthly incrementals.
+This walkthrough covers a realistic home archival scenario: two family members and two personal directories, backed up onto M-Disc with two copies of every volume (one disc at home, one offsite), with monthly incrementals.
 
 ### Scenario
 
-| Directory | Repository | Encryption Key |
+| Directory | Repository | Password File |
 |-----------|-----------|----------------|
 | `/srv/family1` | `family` | `/root/keys/family.key` |
 | `/srv/family2` | `family` | `/root/keys/family.key` |
 | `/srv/personal1` | `personal` | `/root/keys/personal.key` |
 | `/srv/personal2` | `personal` | `/root/keys/personal.key` |
 
-Both repos write to 100 GB M-Discs. Each burn cycle produces two copies — one for the home shelf, one for an offsite safe.
+Both repositories write to 100 GB M-Discs. Each burn cycle produces two discs of every volume — one for the home shelf, one for an offsite safe.
 
 ### 1. Install and Initialize
 
@@ -81,47 +81,47 @@ Both repos write to 100 GB M-Discs. Each burn cycle produces two copies — one 
 # Install LCSAS
 pip install -e .
 
-# Initialize the archive catalog
+# Initialize the master catalog
 lcsas init --db-path /var/lib/lcsas/archive.db
 ```
 
-### 2. Create Encryption Keys
+### 2. Create Password Files
 
-Each repository gets its own key so that compromise of one key does not expose the other dataset.
+Each repository gets its own password so that compromise of one password does not expose the other repository.
 
 ```bash
-# Generate separate keys
+# Generate a separate password file for each repository
 mkdir -p /root/keys
 dd if=/dev/urandom bs=64 count=1 2>/dev/null | base64 > /root/keys/family.key
 dd if=/dev/urandom bs=64 count=1 2>/dev/null | base64 > /root/keys/personal.key
 chmod 600 /root/keys/*.key
 ```
 
-### Key Backup (Critical)
+### Password Backup (Critical)
 
-**Your encryption keys are the single point of total failure.** If the keys are
-lost, all archived data is permanently unrecoverable — no matter how many disc
-copies exist. Back up keys to at least two of the following:
+**Your passwords are the single point of total failure.** If the passwords are
+lost, all archived data can never be restored — no matter how many discs
+exist. Back up each password to at least two of the following:
 
-- **Paper key** — `base64` the key file, print it, laminate, store in a safe
+- **Paper copy** — `base64` the password file, print it, laminate, store in a safe
 - **Separate USB drive** — store in a fire-rated safe or safe deposit box
 - **Cryptosteel / Coldcard** — metal seed backup resistant to fire and flood
 - **Trusted family member** — sealed envelope at a relative's home
 
-Keys must **never** be stored on the same media as the archive data. The
-meta-volume intentionally excludes key files.
+Passwords must **never** be stored on the same discs as the archive data. The
+meta disc intentionally excludes password files.
 
 ### 3. Initialize Rustic Repositories (Local Mirrors)
 
-LCSAS uses Rustic to create deduplicated, encrypted local mirrors. Each mirror is a permanent hot tier that persists on your server.
+LCSAS uses Rustic to create deduplicated, encrypted local mirrors. Each mirror is your permanent live copy of a repository and stays on your server.
 
 ```bash
-# Family mirror — one repo backing up two source directories
+# Family mirror — one repository backing up two source directories
 rustic init \
   --repo /mnt/mirror/family \
   --password-file /root/keys/family.key
 
-# Personal mirror — separate encryption key
+# Personal mirror — separate password file
 rustic init \
   --repo /mnt/mirror/personal \
   --password-file /root/keys/personal.key
@@ -156,26 +156,26 @@ mirror_path   = "/mnt/mirror/personal"
 password_file = "/root/keys/personal.key"
 ```
 
-#### How LCSAS Passes Keys to Rustic
+#### How LCSAS Passes Passwords to Rustic
 
 Each `[repos.<name>]` block declares a `password_file` path. LCSAS reads
 this path once per operation and forwards it to `rustic` via the
 `--password-file` flag for every subprocess invocation (backup, scan,
 restore, etc.). The archival CLI honors **no** `$LCSAS_PASSWORD` or
-`$RESTIC_PASSWORD` environment variable: key location is config-driven
-so the same `config.toml` is reproducible across machines and the CLI
-never accepts secret material on the command line or via the
-environment. (The disaster-recovery script on the meta-volume is the
+`$RESTIC_PASSWORD` environment variable: where each password file lives
+is set in the config, so the same `config.toml` is reproducible across
+machines and the CLI never accepts secret material on the command line
+or via the environment. (The restore script on the meta disc is the
 one exception — `restore.sh` accepts `LCSAS_PASSWORD` to skip its
 interactive prompt; see `recovery/docs/ENV_VARS.txt`.)
 
 The `password_file` value is the only supported way to tell LCSAS where
-a repo's key lives. The file itself must already exist on disk and be
-readable by the user running `lcsas` — see
-[Key Backup (Critical)](#key-backup-critical) above for how to generate,
-store, and back up the key files this field points to. Key files are
-deliberately excluded from the meta-volume, so a separate backup is
-mandatory.
+a repository's password file lives. The file itself must already exist
+on disk and be readable by the user running `lcsas` — see
+[Password Backup (Critical)](#password-backup-critical) above for how
+to generate, store, and back up the password files this field points
+to. Password files are deliberately excluded from the meta disc, so a
+separate backup is mandatory.
 
 ### 5. Register Repositories
 
@@ -186,7 +186,7 @@ lcsas --config /etc/lcsas/config.toml \
 lcsas --config /etc/lcsas/config.toml \
   repo add personal /mnt/mirror/personal
 
-# Verify
+# Check
 lcsas --config /etc/lcsas/config.toml repo list
 ```
 
@@ -197,13 +197,13 @@ Run this each month. Rustic's CDC (content-defined chunking) means only changed 
 ```bash
 # ── Step 1: Back up source directories into their Rustic mirrors ──
 
-# Family: two directories, one encrypted repo
+# Family: two directories, one encrypted repository
 rustic backup \
   --repo /mnt/mirror/family \
   --password-file /root/keys/family.key \
   /srv/family1 /srv/family2
 
-# Personal: two directories, separate key
+# Personal: two directories, separate password file
 rustic backup \
   --repo /mnt/mirror/personal \
   --password-file /root/keys/personal.key \
@@ -212,18 +212,18 @@ rustic backup \
 # ── Step 2: Scan mirrors for new packs ──
 #
 # LCSAS detects new packs created by the backup and registers them
-# in the archive catalog. Only genuinely new data is flagged for archival.
+# in the master catalog. Only genuinely new data is flagged for archival.
 
 lcsas --config /etc/lcsas/config.toml scan
 
 lcsas --config /etc/lcsas/config.toml status
-# Output shows unarchived pack count per repo
+# Output shows unarchived pack count per repository
 
 # ── Step 3: Stage volumes ──
 #
-# Bin-packs all unarchived packs across both repos into ISOs sized
-# for M-Disc. If data exceeds one disc, multiple volumes are created.
-# Each ISO includes holographic catalog and RS03 ECC.
+# Bin-packs all unarchived packs across both repositories into ISO images
+# sized for M-Disc. If data exceeds one disc, multiple volumes are created.
+# Each ISO image includes the disc catalog and RS03 ECC.
 #
 # Staging decouples ISO creation from burning — the machine holding
 # the data need not have an optical drive.
@@ -240,12 +240,12 @@ lcsas --config /etc/lcsas/config.toml \
 
 # ── Optional: Remote / Deferred Burning ──
 #
-# If the archival machine lacks an optical drive, copy the session
+# If the archival machine lacks an optical drive, copy the burn session
 # to a machine that has one:
 #
 #   rsync -avP /mnt/staging/<session>/ burner:/tmp/session/
 #
-#   # On the burner machine (no catalog DB needed). --emit-receipt
+#   # On the burner machine (no catalog needed). --emit-receipt
 #   # writes a burn-receipt JSON; --location is required with it:
 #   lcsas burn-iso /tmp/session/ARCHIVE_MD_2026_001.iso \
 #     --device /dev/sr0 \
@@ -259,13 +259,13 @@ lcsas --config /etc/lcsas/config.toml \
 #   lcsas --config /etc/lcsas/config.toml \
 #     catalog import-receipts /tmp/receipts/*.json
 
-# ── Step 4: Burn Copy 1 (Home Shelf) ──
+# ── Step 4: Burn the Home Shelf discs ──
 #
-# Burns all ISOs in the current session. LCSAS prompts for disc
-# insertion between volumes. The --location tag records where this
-# physical copy is stored. The staged ISOs persist after burning —
-# they are kept until Step 6 so additional copies can be burned
-# without re-staging.
+# Burns all ISO images in the current burn session. LCSAS prompts for
+# disc insertion between volumes. The --location tag records where
+# these discs are kept. The staged ISO images persist after burning —
+# they are kept until Step 6 so more discs can be burned without
+# re-staging.
 
 lcsas --config /etc/lcsas/config.toml \
   burn --session latest --location Home_Shelf
@@ -274,41 +274,41 @@ lcsas --config /etc/lcsas/config.toml \
 # Burns ARCHIVE_MD_2026_002.iso → [insert blank disc] → burning → done
 # Catalog updated: each pack now has 1 archived copy @ Home_Shelf.
 
-# ── Step 5: Burn Copy 2 (Offsite Safe) ──
+# ── Step 5: Burn the Offsite Safe discs ──
 #
-# Burns the same staged ISOs again. No re-staging, no re-scan.
-# Same session, different physical location tag.
+# Burns the same staged ISO images again. No re-staging, no re-scan.
+# Same burn session, different location tag.
 
 lcsas --config /etc/lcsas/config.toml \
   burn --session latest --location Offsite_Safe
 
 # Catalog updated: each pack now has 2 archived copies.
 
-# ── Step 6: Clean up staging ──
+# ── Step 6: Clean up the staging area ──
 #
-# Remove staged ISOs after all copies are burned.
+# Remove staged ISO images after all discs are burned.
 
 lcsas --config /etc/lcsas/config.toml \
   stage --clean --session latest
 
-# ── Step 7: Verify ──
+# ── Step 7: Check status ──
 
 lcsas --config /etc/lcsas/config.toml status
 # All packs archived, 0 unarchived. Each pack shows 2 copies.
 ```
 
 After burning, each disc contains:
-- **`data/`** — encrypted pack files from both repos
-- **`metadata/`** — Rustic index, keys, snapshots (per repo)
-- **`catalog.db`** — complete SQLite catalog of the entire archive (holographic)
-- **`volume_info.json`** — disc identity (label, UUID, media type)
-- **RS03 ECC layer** — DVDisaster error correction protecting the full ISO
+- **`data/`** — encrypted pack files from both repositories
+- **`metadata/`** — repository metadata: Rustic index, keys, snapshots (per repository)
+- **`catalog.db`** — the disc catalog: a SQLite copy of the catalog, current as of this disc's burn
+- **`volume_info.json`** — volume identity (label, UUID, media type)
+- **RS03 ECC layer** — DVDisaster error correction protecting the full ISO image
 
 ### Location Management
 
-LCSAS tracks where each physical disc copy lives. Volumes can be moved
-between locations, and you can sync a location to ensure it has copies
-of all archived packs.
+LCSAS tracks where each disc is kept. Discs can be moved between
+locations, and you can sync a location to make sure its discs hold
+every archived pack.
 
 ```bash
 # ── List all known locations and their volume counts ──
@@ -354,8 +354,8 @@ lcsas --config /etc/lcsas/config.toml \
 
 ### 7. Restoring All of Family
 
-To recover the `family` repository (both `/srv/family1` and `/srv/family2`), you need:
-1. The encryption key (`/root/keys/family.key`)
+To restore the `family` repository (both `/srv/family1` and `/srv/family2`), you need:
+1. The password file (`/root/keys/family.key`)
 2. Any subset of discs that collectively contain all the family packs
 
 LCSAS generates a **pick list** telling you exactly which discs to retrieve.
@@ -371,8 +371,8 @@ rustic snapshots \
 
 # ── Step 2: Generate a restore pick list ──
 #
-# This queries the archive catalog to map the snapshot's required
-# packs to physical disc labels.
+# This queries the master catalog to map the snapshot's required
+# packs to disc labels.
 
 lcsas --config /etc/lcsas/config.toml \
   restore plan abc123def456 --repo family
@@ -387,9 +387,9 @@ lcsas --config /etc/lcsas/config.toml \
 #   Total: 23 packs across 3 volumes
 #   Missing packs: 0
 #
-# Either copy (Home Shelf or Offsite Safe) works — the catalog
-# tracks redundant copies automatically. If a disc is damaged,
-# LCSAS routes to the surviving copy.
+# Either disc (Home Shelf or Offsite Safe) works — the catalog
+# tracks every disc of each volume. If a disc is damaged,
+# LCSAS routes to a surviving disc.
 
 # ── Step 3: Mount the discs and execute restore ──
 #
@@ -402,7 +402,7 @@ lcsas --config /etc/lcsas/config.toml \
   --repo family --password-file /root/keys/family.key
 
 # LCSAS will:
-#   1. Prepare a restore cache with Rustic metadata
+#   1. Prepare a restore cache with the repository metadata
 #   2. Prompt you to insert each disc from the pick list
 #   3. Ingest required packs from each disc (skips packs already cached)
 #   4. Run `rustic restore` against the assembled cache
@@ -411,24 +411,24 @@ lcsas --config /etc/lcsas/config.toml \
 # exactly as it was at snapshot abc123def456.
 ```
 
-#### Restoring from Offsite Copies
+#### Restoring from Offsite Discs
 
-If your home shelf discs are lost or damaged, the offsite copies work identically. LCSAS pick lists are aware of all volume copies — if the home copy of `ARCHIVE_MDISC100_0001` is destroyed, the offsite copy is automatically used instead.
+If your home shelf discs are lost or damaged, the offsite discs work identically. LCSAS pick lists know about every disc of each volume — if the home disc of `ARCHIVE_MDISC100_0001` is destroyed, the offsite disc is automatically used instead.
 
 ```bash
-# Check the damaged home copy
+# Check the damaged home disc
 lcsas --config /etc/lcsas/config.toml \
   verify ARCHIVE_MDISC100_0001
 # → If verification fails, a VERIFY_FAIL event is recorded in the
-#   volume's audit trail. Retiring the copy is a separate, explicit
-#   step:
+#   volume's audit trail. Taking the disc out of service is a
+#   separate, explicit step:
 lcsas --config /etc/lcsas/config.toml \
   copy deprecate ARCHIVE_MDISC100_0001 Home_Shelf
 
-# Re-plan — LCSAS routes to surviving offsite copies
+# Re-plan — LCSAS routes to surviving offsite discs
 lcsas --config /etc/lcsas/config.toml \
   restore plan abc123def456 --repo family
-# Pick list now points to offsite copies instead
+# Pick list now points to offsite discs instead
 ```
 
 #### Restoring a Single Directory
@@ -453,53 +453,53 @@ rustic restore abc123def456 \
 | LCSAS stage | Monthly | Bin-pack → stage → ISO → ECC |
 | LCSAS burn (×N) | Monthly | Burn staged ISOs, once per location |
 | Location sync | As needed | Stage + burn delta for a location that's fallen behind |
-| Location move | As needed | Record that a disc moved between physical locations |
-| Store offsite copy | Monthly | Carry discs to safe deposit / relative's house |
-| LCSAS status | Anytime | Verify all packs archived, check redundancy per location |
+| Location move | As needed | Record that a disc moved between locations |
+| Store offsite discs | Monthly | Carry discs to safe deposit / relative's house |
+| LCSAS status | Anytime | Check all packs archived, check redundancy per location |
 | Restore | When needed | Pick list → mount discs → cache assembly → Rustic restore |
 
-## Disaster Recovery (Meta-Volume)
+## Restoring After a Disaster (Meta Disc)
 
-LCSAS archive discs are encrypted and deduplicated — restoring from them requires `rustic`, `xorriso`, Python, and the LCSAS source code. If your archival machine is lost, those tools may not be available on the recovery machine.
+LCSAS archive discs are encrypted and deduplicated — restoring from them requires `rustic`, `xorriso`, Python, and the LCSAS source code. If your archival machine is lost, those tools may not be available on the machine you restore on.
 
-The **meta-volume** solves this by bundling *everything* needed for restore onto a single supplementary disc burned alongside your data volumes at each storage location. The **only** thing not included is your encryption key file, which must be stored separately.
+The **meta disc** solves this by bundling *everything* needed for a restore onto a single extra disc, burned alongside your data volumes and kept at each location. The **only** thing not included is your password, which must be stored separately.
 
-### What's on a Meta-Volume
+### What's on a Meta Disc
 
 | Path | Contents |
 |------|----------|
 | `tools/bin/<target>/` | Per-platform tier-1 (`lcsas-restore`) + tier-2 (`rustic-static`) binaries for six targets: Linux x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows x86_64-gnu.  See [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md). |
 | `tools/lib/` | Shared libraries for the bundled CPython interpreter (tier-3 fallback) |
 | `lcsas/src/` | Complete LCSAS source code (zero pip dependencies) |
-| `recovery/docs/` | On-disc operator manual (`RECOVER.txt`, `TIERS.txt`, `ENV_VARS.txt`, …) |
-| `restore.sh` | Interactive recovery script — start here |
+| `recovery/docs/` | On-disc recovery manual (`RECOVER.txt`, `TIERS.txt`, `ENV_VARS.txt`, …) |
+| `restore.sh` | Interactive restore script — start here |
 | `restore.bat` | Windows entry point |
 | `restore_auto.sh` | Non-interactive variant for automation |
-| `standalone_restorer.py` | Tier-3 pure-Python fallback (requires only Python 3.10+) |
-| `README_RESTORE.md` | Human-readable step-by-step recovery instructions |
-| `volume_info.json` | Machine-readable volume metadata |
+| `standalone_restorer.py` | Tier-3 Python reader (requires only Python 3.10+) |
+| `README_RESTORE.md` | Human-readable step-by-step restore instructions |
+| `volume_info.json` | Machine-readable details of this disc |
 
-### Building a Meta-Volume
+### Building a Meta Disc
 
 ```bash
-# Build the meta-volume contents into a staging directory
+# Build the meta disc contents into a directory in the staging area
 lcsas meta build --output /mnt/staging/meta
 
 # Optionally specify the project root (auto-detected by default)
 lcsas meta build --output /mnt/staging/meta --project-root /opt/lcsas
 ```
 
-The output directory can then be mastered to ISO and burned alongside your data volumes at each storage location.
+The output directory can then be mastered to an ISO image and burned alongside your data volumes, with one meta disc kept at each location.
 
 ### Restoring from Discs Only
 
 In a disaster scenario, you have:
-1. The physical data discs (or their ISO images)
-2. The meta-volume disc (or its ISO image)
-3. Your encryption password (stored separately, e.g. in a safe)
+1. The data discs (or their ISO images)
+2. The meta disc (or its ISO image)
+3. Your password (stored separately, e.g. in a safe)
 
 No system-installed `rustic`, `xorriso`, or LCSAS is required — everything is
-on the meta-volume.
+on the meta disc.
 
 #### Physical Disc Swap (the normal path)
 
@@ -514,9 +514,9 @@ sudo mount /dev/sr0 /mnt
 #    for each data disc as it needs them
 sh /mnt/restore.sh ~/restored/ latest
 
-# With multiple repos on the archive the script prints a numbered menu:
+# With multiple repositories on the archive the script prints a numbered menu:
 #   Choose a repository (number or name): <pick one and press Enter>
-# (single-repo archives skip the prompt), then:
+# (single-repository archives skip the prompt), then:
 #   Password:   <type your password and press Enter>
 #
 # When a data disc is needed it prints a swap prompt:
@@ -529,7 +529,7 @@ sh /mnt/restore.sh ~/restored/ latest
 ```
 
 See [`recovery/docs/RECOVER.txt`](recovery/docs/RECOVER.txt) for the
-complete operator guide, including the physical swap steps and all
+complete restore guide, including the disc swap steps and all
 environment variables.
 
 #### Restoring from ISO Images (no optical drive)
@@ -554,8 +554,8 @@ sudo mount -o loop lcsas_data_0001.iso /mnt
 
 ### Supported recovery platforms
 
-The meta-volume can carry prebuilt recovery binaries for six target
-platforms.  The supported matrix (cross-platform meta-volume work
+The meta disc can carry prebuilt recovery binaries for six target
+platforms.  The supported matrix (cross-platform meta disc work
 landed across Phase 21.1–21.12 — see [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md)):
 
 | Target | OS | Notes |
@@ -565,18 +565,18 @@ landed across Phase 21.1–21.12 — see [`docs/CROSS_PLATFORM_META_RFC.md`](doc
 | `armv7-unknown-linux-gnueabihf` | Linux 32-bit ARM | Raspberry Pi 1/2/3/Zero |
 | `aarch64-apple-darwin` | macOS Apple Silicon | native |
 | `x86_64-apple-darwin` | macOS Intel | native |
-| `x86_64-pc-windows-gnu` | Windows x86_64 | recovery via `restore.bat` |
+| `x86_64-pc-windows-gnu` | Windows x86_64 | restore via `restore.bat` |
 
-For each target the meta-volume bundles upstream-pinned binaries:
+For each target the meta disc bundles upstream-pinned binaries:
 
 - **Tier 2 — `rustic`** (from the
   [upstream release matrix](https://github.com/rustic-rs/rustic/releases))
 - **Tier 3 — stripped CPython 3.12 interpreter** (from
   [python-build-standalone](https://github.com/astral-sh/python-build-standalone/releases))
-  for the pure-Python recovery path
+  for the Python reader
 
 Both are pinned by SHA-256 in [`recovery/UPSTREAM.sha256`](recovery/UPSTREAM.sha256)
-and downloaded with `make fetch-recovery` before building a meta-volume.
+and downloaded with `make fetch-recovery` before building a meta disc.
 The cache lives at `~/.cache/lcsas/recovery-binaries/` (override with
 `$LCSAS_RECOVERY_CACHE`) and is reused across rebuilds — the first build
 is the only one that needs network.
@@ -586,10 +586,10 @@ make fetch-recovery   # one-time: ~600 MB download (6 targets × rustic + python
 lcsas meta build --output /mnt/staging/meta
 ```
 
-If you skip `make fetch-recovery`, the meta-volume falls back to a
+If you skip `make fetch-recovery`, the meta disc falls back to a
 single-arch build that only contains binaries for the host architecture
-(today's behavior).  Cross-arch recovery on that meta-volume requires
-the recipient to install `rustic` + `python3` from the target
+(today's behavior).  A cross-arch restore from that meta disc requires
+the heir to install `rustic` + `python3` from the target
 platform's package manager.
 
 ### Tier 1 (`lcsas-restore`) cross-platform coverage
@@ -608,9 +608,9 @@ the **primary** recovery tool because C89 has been ABI-stable for
 35 years and our binary depends only on a working libc.  Tier 2
 exists as a hedge in case our binary won't run for some reason.
 
-**Building tier-1 binaries for your meta-volume.**  The bundler
+**Building tier-1 binaries for your meta disc.**  The bundler
 copies cross-built `lcsas-restore` binaries from
-`recovery/bin/<short-arch>/` into the meta-volume's per-target
+`recovery/bin/<short-arch>/` into the meta disc's per-target
 directories.  Trigger the cross-builds yourself with:
 
 ```bash
@@ -642,7 +642,7 @@ The Windows and macOS targets always use `zig cc` (via the
 `python3 -m ziglang cc` Python wheel — `pip install ziglang` if it
 isn't present).  Notably, the macOS targets do **not** require
 the Apple SDK: zig bundles enough libSystem definitions to link
-Mach-O executables for both Apple Silicon and Intel.  Operator
+Mach-O executables for both Apple Silicon and Intel.  The owner
 must still notarize or codesign the binary themselves if they
 want macOS Gatekeeper to bless it; unsigned binaries still run
 via Finder's "Open anyway" path.
@@ -665,24 +665,24 @@ in [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md) §6 Q1):
   `lcsas-restore` CLI can already cross-build for `riscv64` —
   `lcsas recovery build --arch riscv64` — but riscv64 is not one of the
   six approved bundled targets.)
-- **i686** (32-bit x86) — upstream ships it but the cold-storage
-  recovery audience for 32-bit x86 in 2026+ is vanishingly small.
-- **FreeBSD / OpenBSD** — no upstream rustic.  Recipient must install
+- **i686** (32-bit x86) — upstream ships it but the number of heirs
+  restoring on 32-bit x86 in 2026+ is vanishingly small.
+- **FreeBSD / OpenBSD** — no upstream rustic.  The heir must install
   `rustic` from ports.
-- **Windows ARM64** — no upstream rustic.  Recipient must install
+- **Windows ARM64** — no upstream rustic.  The heir must install
   `rustic` via winget or similar.
 
-The recovery driver (`recovery/scripts/restore.sh`) auto-detects the
-recovery host's `(uname -s, uname -m)` and selects the right
+The restore driver (`recovery/scripts/restore.sh`) auto-detects the
+restoring host's `(uname -s, uname -m)` and selects the right
 `bin/<target>/` subtree.  Override with `$LCSAS_TARGET=<target-triple>`
 if auto-detection misfires (e.g. when running under QEMU or chroot).
 
 ### Operational Recommendation
 
-Rebuild and burn an updated meta-volume whenever you upgrade LCSAS or system tools. Include one meta-volume at **every** storage location so that any single location's discs plus the key file are sufficient for full recovery.
+Rebuild and burn an updated meta disc whenever you upgrade LCSAS or system tools. Keep one meta disc at **every** location so that any single location's discs plus the password are enough for a full restore.
 
 ```bash
-# Typical burn cycle: data volumes + meta-volume
+# Typical burn cycle: data volumes + meta disc
 lcsas stage --media MDISC100
 lcsas meta build --output /mnt/staging/meta
 # Master meta/ to ISO, then burn both data and meta ISOs

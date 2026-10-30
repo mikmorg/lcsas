@@ -12,22 +12,22 @@ REM   Tier 1.  bin\<arch>\lcsas-restore.exe   (prebuilt, static)
 REM   Tier 2.  bin\<arch>\rustic-static.exe   (vendored cross-check)
 REM
 REM If both tiers are missing or fail, the script exits non-zero with a
-REM clear error including a manual-recovery hint.  The pure-Python
-REM standalone restorer ships on the disc but is NOT orchestrated from
+REM clear error including a manual-restore hint.  The tier-3 Python
+REM reader ships on the disc but is NOT orchestrated from
 REM this .bat (it would depend on a Python install that is not
-REM guaranteed on headless-recovery Windows hosts); see
+REM guaranteed on a Windows host used for a restore); see
 REM recovery/docs/RECOVER_WINDOWS.txt for the manual invocation.
 REM
-REM Split-key archives: if KEY_INFO.txt says the password is split
+REM Split-password archives: if PASSWORD_INFO.txt says the password is split
 REM into share cards, rebuild it FIRST with the bundled combiner
 REM bin\<arch>\lcsas-keyshare.exe -- see recovery/docs/
-REM RECOVER_WINDOWS.txt, "KEY SHARES (SPLIT PASSWORDS)".
+REM RECOVER_WINDOWS.txt, "SHARE CARDS (SPLIT PASSWORDS)".
 REM ====================================================================
 
 REM setlocal, taking LCSAS_RELOCATED (set by the copy on the disc when it
 REM relaunches this one, see the end of the guard below) into the local
 REM scope and out of the caller's environment.  The relaunch runs after
-REM the disc copy has ended, so it sets the variable in the caller's
+REM the copy on the disc has ended, so it sets the variable in the caller's
 REM own environment; without this a later run from the same prompt
 REM would think it had already been relocated.
 for %%R in ("%LCSAS_RELOCATED%") do (set "LCSAS_RELOCATED=" & setlocal enabledelayedexpansion & set "LCSAS_RELOCATED=%%~R")
@@ -35,13 +35,13 @@ for %%R in ("%LCSAS_RELOCATED%") do (set "LCSAS_RELOCATED=" & setlocal enabledel
 REM ----- Single-drive guard: relocate to RAM before continuing ------
 REM
 REM If this .bat is being interpreted from a read-only optical disc,
-REM cmd.exe holds the file open and the user cannot eject -- fatal
+REM cmd.exe holds the file open and the heir cannot eject -- fatal
 REM for anybody with only ONE optical drive.  Detect that case and
 REM re-launch ourselves from %TEMP% after copying the script + binary
-REM tree to a writable location.  Subsequent disc swaps then work.
+REM tree to a writable folder.  Subsequent disc swaps then work.
 REM
 REM LCSAS_RELOCATED is the sentinel: when set, we are the in-RAM
-REM copy and its value is the original meta-disc drive letter.
+REM copy and its value is the original meta disc drive letter.
 
 if defined LCSAS_RELOCATED goto :after_relocate
 if /i "%LCSAS_NO_RELOCATE%"=="1" goto :after_relocate
@@ -76,7 +76,7 @@ set "SRC_ROOT="
 if exist "%~dp0..\bin\" for %%I in ("%~dp0..") do set "SRC_ROOT=%%~fI"
 if exist "%~dp0recovery\bin\" for %%I in ("%~dp0recovery") do set "SRC_ROOT=%%~fI"
 
-REM Mirror the on-disc layout in %RAMDIR%.  robocopy is preferred for
+REM Recreate the on-disc layout in %RAMDIR%.  robocopy is preferred for
 REM long paths; fall back to xcopy.
 copy /Y "%~f0" "%RAMDIR%\recovery\scripts\restore.bat" >nul
 if defined SRC_ROOT (
@@ -100,8 +100,8 @@ if errorlevel 1 (
     goto :after_relocate
 )
 
-REM Carry the holographic repo metadata (keys/index/config/snapshots
-REM under metadata\<tenant>\) into RAM too.  Without this, the relocated
+REM Carry the repository metadata (keys/index/config/snapshots
+REM under metadata\<repo>\) into RAM too.  Without this, the relocated
 REM copy's %RECOVERY%\metadata\* probe finds nothing once the meta disc
 REM is ejected and discovery fails -- defeating the whole point of
 REM relocating.  metadata\ is small (KBs-low MBs), safe for %TEMP%.
@@ -120,7 +120,7 @@ if defined META_SRC (
 )
 
 echo [lcsas-restore] copied recovery files to %RAMDIR%
-echo [lcsas-restore] you may eject the recovery disc when the binary
+echo [lcsas-restore] you may eject the meta disc when the binary
 echo                 prompts for a data disc.
 
 REM Re-launch the relocated copy, and end THIS one first.  While a batch
@@ -145,7 +145,7 @@ REM the prompt window of an heir who started this from one.
 (goto) 2>nul & cd /d %SystemDrive%\ & set "LCSAS_RELOCATED=%~d0\" & call "%RAMDIR%\recovery\scripts\restore.bat" %* & call set "LCSAS_RC=%%ERRORLEVEL%%" & rmdir /s /q "%RAMDIR%" 2>nul & cmd /c exit %%LCSAS_RC%%
 
 :after_relocate
-REM ----- Auto-discover recovery root from this script's location ----
+REM ----- Auto-discover recovery root from this script's path --------
 set "SCRIPT_DIR=%~dp0"
 set "RECOVERY="
 if exist "%SCRIPT_DIR%..\bin" set "RECOVERY=%SCRIPT_DIR%.."
@@ -190,7 +190,7 @@ if "%ARCH%"=="" (
 
 REM ----- --check-disc: scratched-disc repair path [FMT-01] ----------
 REM The Windows equivalent of restore.sh --check-disc.  Runs the bundled
-REM in-house RS03 ECC tool (lcsas-ecc.exe) on a disc image to verify and,
+REM in-house RS03 ECC tool (lcsas-ecc.exe) on a disc image to check it and,
 REM on damage, offer/perform an in-place repair using the burned parity.
 REM No externally installed dvdisaster is required.  Usage:
 REM     restore.bat --check-disc C:\path\to\disc.iso
@@ -255,7 +255,7 @@ if /i "%~1"=="--check-disc" (
     )
     if !FRC! equ 1 (
         echo [check-disc] damage exceeded the available ECC parity; some
-        echo sectors are uncorrectable.  Try another copy of this disc.
+        echo sectors are uncorrectable.  Try another disc with the same label.
         pause
         exit /b 1
     )
@@ -264,15 +264,15 @@ if /i "%~1"=="--check-disc" (
     exit /b 3
 )
 
-REM ----- Find the restic repo ---------------------------------------
-REM A restic repo is any directory holding both keys\ and index\.  The
-REM holographic layout LCSAS burns puts a per-tenant repo under
-REM metadata\<tenant>\ on EVERY disc (meta and data).  restore.bat is
+REM ----- Find the restic repository ---------------------------------
+REM A restic repository is any directory holding both keys\ and index\.  The
+REM layout LCSAS burns puts each repository's metadata under
+REM metadata\<repo>\ on EVERY disc (meta disc and data discs).  restore.bat is
 REM surfaced at the disc root, so %RECOVERY% is <disc>\recovery and the
-REM repo material is one level up at <disc>\metadata\<tenant>\ and on any
-REM other mounted disc at <drive>:\metadata\<tenant>\.  This mirrors
+REM repository metadata is one level up at <disc>\metadata\<repo>\ and on any
+REM other mounted disc at <drive>:\metadata\<repo>\.  This follows
 REM restore.sh's candidate model (legacy direct layouts first, then the
-REM holographic layout on this volume, then every other mounted disc).
+REM metadata\ layout on this disc, then every other mounted disc).
 REM Canonicalise DISC_ROOT (drop the trailing "\.." so later globs and
 REM error text are clean, and so interpreters that choke on "..\" path
 REM segments still enumerate metadata\).
@@ -281,19 +281,19 @@ set "REPO="
 set "NCAND=0"
 
 REM add_candidate <path>: if <path>\keys and <path>\index both exist and
-REM its tenant name (last path component) is new, record it.
+REM its repository name (last path component) is new, record it.
 REM Implemented inline via the :add_cand label because CMD has no funcs.
 
 REM -- Legacy direct layouts (cheap; keep first for old discs).
 call :add_cand "%RECOVERY%\repo"
 call :add_cand "%RECOVERY%"
-REM -- Holographic layout on this volume (disc root and relocated RAM dir).
-REM    `dir /ad /b` enumerates the tenant subdirs; it is portable across
+REM -- Repository metadata on this disc (disc root and relocated RAM dir).
+REM    `dir /ad /b` enumerates the repository subdirs; it is portable across
 REM    CMD interpreters where `for /d` globbing is unreliable.
 call :scan_metadata "%DISC_ROOT%\metadata"
 call :scan_metadata "%RECOVERY%\metadata"
-REM -- Holographic layout on every other mounted disc (data discs carry
-REM    metadata\<tenant>\ too).
+REM -- Repository metadata on every other mounted disc (data discs carry
+REM    metadata\<repo>\ too).
 for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
     call :scan_metadata "%%L:\metadata"
 )
@@ -312,7 +312,7 @@ if !NCAND! equ 0 (
     exit /b 1
 )
 
-REM -- Select the tenant.  (goto-based; labels must NOT live inside a
+REM -- Select the repository.  (goto-based; labels must NOT live inside a
 REM parenthesised block, so the multi-candidate prompt is its own loop.)
 REM See the :add_cand portability note re: %%NCAND%% / `call set`.
 set "REPO="
@@ -355,8 +355,8 @@ goto :repo_selected
 
 :add_cand
 REM %~1 = candidate dir.  Validity: keys\ and index\ both present.
-REM De-dup by tenant name (last path component); first hit wins so the
-REM meta-disc / earlier-scanned copy is preferred.
+REM De-dup by repository name (last path component); first hit wins so the
+REM meta disc / earlier-scanned copy is preferred.
 REM
 REM Portability note: the for-range uses %%NCAND%% (plain expansion, set
 REM before the loop) and dereferences CAND_NAME_<n> via `call set`.  Both
@@ -378,7 +378,7 @@ goto :eof
 
 :scan_metadata
 REM %~1 = a "...\metadata" dir.  Enumerate its immediate subdirs (one per
-REM tenant) and offer each as a candidate.  `dir /ad /b` is used instead
+REM repository) and offer each as a candidate.  `dir /ad /b` is used instead
 REM of `for /d` globbing because the latter is unreliable across CMD
 REM interpreters (notably wine), whereas `dir /ad /b` lists bare names
 REM consistently.  Absent dir -> dir errors -> nothing enumerated.
@@ -392,7 +392,7 @@ REM ----- Ask for target directory -----------------------------------
 set "DEFAULT_TARGET=%USERPROFILE%\Documents\restored"
 echo.
 echo ============================================================
-echo                LCSAS Recovery (Windows)
+echo                 LCSAS Restore (Windows)
 echo ============================================================
 echo.
 echo Recovery root: %RECOVERY%
@@ -456,9 +456,9 @@ REM CMD has no `read -s` equivalent, so the password is visible while
 REM typing.  For privacy, run from PowerShell with Read-Host -AsSecure
 REM (documented in RECOVER_WINDOWS.txt).
 echo.
-echo If KEY_INFO.txt says the password is SPLIT into share cards,
+echo If PASSWORD_INFO.txt says the password is SPLIT into share cards,
 echo rebuild it first with bin\%ARCH%\lcsas-keyshare.exe -- see
-echo recovery\docs\RECOVER_WINDOWS.txt, "KEY SHARES (SPLIT PASSWORDS)".
+echo recovery\docs\RECOVER_WINDOWS.txt, "SHARE CARDS (SPLIT PASSWORDS)".
 echo.
 set /p "LCSAS_PW=Password: "
 REM `if not defined`, not `if "%LCSAS_PW%"==""`: a '"' in the password
@@ -492,11 +492,11 @@ REM Ensure the temp file is cleaned up no matter how we exit.
 REM (CMD has no real trap; we delete after each branch.)
 
 REM ----- Auto-discover other mounted discs ---------------------------
-REM When packs are split across multiple LCSAS volumes, the user may
+REM When packs are split across multiple LCSAS volumes, the heir may
 REM have several discs mounted simultaneously.  Scan drive letters D-Z
 REM and pass each one that contains a data\ subdir as --pack-search.
-REM Skip the meta-disc drive (LCSAS_RELOCATED) so single-drive
-REM recovery can free the drive for data discs.
+REM Skip the meta disc drive (LCSAS_RELOCATED) so a single-drive
+REM restore can free the drive for data discs.
 
 set "PACK_SEARCH_ARGS="
 for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
@@ -518,7 +518,7 @@ set "META_DISC_ARG="
 if defined LCSAS_RELOCATED set "META_DISC_ARG=--meta-disc %LCSAS_RELOCATED%"
 
 REM Optional --catalog if a catalog.db is present.
-REM The meta-disc deliberately carries NO catalog.db (it would always
+REM The meta disc deliberately carries NO catalog.db (it would always
 REM be stale at burn time).  Scan every drive letter for catalog.db and
 REM keep the LAST one found (highest drive letter), not the newest:
 REM plain cmd has no locale-proof way to compare file times (#482).  It
@@ -553,7 +553,7 @@ if exist "%BIN%" (
         del "%PWFILE%" 2>nul
         echo.
         echo ============================================================
-        echo  Recovery complete.  Files restored to: !TARGET!
+        echo  Restore complete.  Files restored to: !TARGET!
         echo ============================================================
         pause
         exit /b 0
@@ -570,7 +570,7 @@ if exist "%BIN%" (
         echo.
         echo ============================================================
         echo  ERROR: could not decrypt the repository with that password.
-        echo  Check the password ^(and any split-key shares^) and re-run.
+        echo  Check the password ^(and any share cards^) and re-run.
         echo ============================================================
         pause
         goto :wrong_password
@@ -589,7 +589,7 @@ if exist "%BIN%" (
     if !RC! equ 0 (
         echo.
         echo ============================================================
-        echo  Recovery complete.  Files restored to: !TARGET!
+        echo  Restore complete.  Files restored to: !TARGET!
         echo ============================================================
         pause
         exit /b 0
@@ -606,7 +606,7 @@ echo  Looked for:
 echo    %RECOVERY%\bin\%ARCH%\lcsas-restore.exe
 echo    %RECOVERY%\bin\%ARCH%\rustic-static.exe
 echo.
-echo  A manual recovery path using the on-disc standalone restorer
+echo  A manual restore with the tier-3 Python reader on the disc
 echo  (requires a Python 3 install on this host) is described in
 echo  %RECOVERY%\docs\RECOVER_WINDOWS.txt -- this .bat does not
 echo  launch it for you.

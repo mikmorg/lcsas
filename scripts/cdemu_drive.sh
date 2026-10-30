@@ -5,7 +5,7 @@
 # Drives a single emulated SCSI CD/DVD-ROM via cdemu-daemon so the LCSAS
 # restore path can be exercised against /dev/sr0 without real hardware.
 #
-# Models the realistic single-drive case: the restorer has exactly one
+# Models the realistic single-drive case: the heir has exactly one
 # optical drive and must swap discs between volumes.
 #
 # Subcommands:
@@ -13,7 +13,7 @@
 #   start        Make sure vhba is loaded and cdemu-daemon user service is up
 #   stop         Stop cdemu-daemon user service
 #   status       Show device + loaded image
-#   load <iso>   Insert an ISO into the virtual drive
+#   load <iso>   Insert an ISO image into the virtual drive
 #   unload       Eject the virtual drive
 #   swap <iso>   unload then load (the typical restore inner loop)
 #   device       Print the kernel device node (e.g. /dev/sr0)
@@ -108,8 +108,8 @@ cmd_start() {
   # udev rule wasn't applied — e.g. vhba was loaded BEFORE the rule
   # was installed, common after a one-shot `modprobe vhba`), the
   # daemon will fail with `Permission denied!` deep in libMirage.
-  # Detect it here and print the exact fix command rather than letting
-  # the operator chase a cryptic systemctl failure.
+  # Detect it here and print the exact fix command rather than leaving
+  # you to chase a cryptic systemctl failure.
   if [[ ! -r /dev/vhba_ctl || ! -w /dev/vhba_ctl ]]; then
     err "/dev/vhba_ctl: $USER lacks rw permission."
     err "  current owner/mode: $(stat -c '%U:%G %a' /dev/vhba_ctl 2>/dev/null)"

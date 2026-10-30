@@ -2,7 +2,7 @@
 
 > Forward-looking roadmap plus a concise record of completed work.  For the
 > living architecture reference see [`../architecture.md`](../architecture.md);
-> for the cross-platform meta-volume design see
+> for the cross-platform meta disc design see
 > [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md).
 
 LCSAS (Linux Cold Storage Archival Suite) orchestrates Rustic, Xorriso, and
@@ -10,33 +10,33 @@ DVDisaster to write deduplicated, encrypted data packs onto optical media
 (BD-R, M-Disc). Core capabilities:
 
 - **CDC-based infinite incrementalism** via Rustic (zero-cost renames/moves)
-- **Multi-tenant encryption isolation** (per-repo keys, shared physical media)
-- **Holographic indexing** (complete SQLite catalog on every disc)
-- **Multi-copy location tracking** (burn N copies, each tagged to a location)
+- **Per-repository encryption isolation** (each repository has its own keys; repositories share discs)
+- **Disc catalogs** (complete SQLite catalog on every disc)
+- **Multi-location tracking** (burn N copies of a volume, each disc tagged to a location)
 - **Session-based multi-volume staging** (decouple ISO creation from burning)
 - **DVDisaster RS03 ECC** (image-level error correction, always-on for production media)
 - **3-tier recovery cascade** (in-house C `lcsas-restore` → pinned upstream
-  `rustic-static` → pure-Python `standalone_restorer.py`; tiers 1–2 are Python-free)
-- **Shamir key escrow** (recorded K/N + SLIP-0039 split; `key_escrow` table, KEY-08)
+  `rustic-static` → the Python reader `standalone_restorer.py`; tiers 1–2 are Python-free)
+- **Shamir password split** (recorded K/N + SLIP-0039 split; `key_escrow` table, KEY-08)
 
 The codebase has zero runtime pip dependencies (pure stdlib; `zstandard` is
-optional for the pure-Python tier-3 fallback). Catalog schema is at **v10**.
+optional for the tier-3 Python reader). Catalog schema is at **v10**.
 
 ---
 
 ## 1. Forward roadmap
 
 Items below are deferred beyond the work already shipped and are listed
-roughly in descending order of "addresses a real limitation users have hit."
+roughly in descending order of "addresses a real limitation owners have hit."
 
 | Item | Status | Notes |
 |---|---|---|
-| **RISC-V meta-volume target** | Blocked on upstream | `riscv64gc-*` has no upstream rustic / python-build-standalone artifact yet. Add when upstream ships. See [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q1. |
+| **RISC-V meta disc target** | Blocked on upstream | `riscv64gc-*` has no upstream rustic / python-build-standalone artifact yet. Add when upstream ships. See [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q1. |
 | **Windows ARM64 (`aarch64-pc-windows-msvc`)** | Blocked on upstream | No upstream rustic artifact. Non-goal until it lands. |
 | **FreeBSD / OpenBSD targets** | Deferred | No upstream rustic artifact; different binary formats. |
-| **Cloud tier (S3/rclone)** | Out of scope | Architectural extension; would grow the storage-tier model from HOT/WARM/COLD to HOT/WARM/COLD/REMOTE. |
+| **Cloud storage (S3/rclone)** | Out of scope | Architectural extension; would add a fourth storage stage (remote) after the mirror, the staging area and the discs. |
 | **Multi-session optical writing** | Out of scope | Adds complexity; the current whole-disc model is simpler and sufficient. |
-| **Dashboard / rich status TUI** | Out of scope | `lcsas status` and `verify --all` are sufficient for operator use. |
+| **Dashboard / rich status TUI** | Out of scope | `lcsas status` and `verify --all` are sufficient for owner use. |
 | **Email / webhook notifications** | Out of scope | External orchestration (cron, systemd timers) can handle this. |
 
 ---
@@ -83,8 +83,8 @@ Key Phase 12–20 design decisions retained for traceability:
   `--mark-failed` support burning on machine A and verifying on machine B.
 - **Backward-compatible restore** (A6): the executor retains a
   flat-then-two-level pack search so pre-Phase-17 discs remain readable.
-- **Catalog merge** (S3): skipped — the holographic design (latest disc holds
-  the cumulative catalog) makes it unnecessary in practice.
+- **Catalog merge** (S3): skipped — the disc-catalog design (the newest
+  volume's discs hold the cumulative catalog) makes it unnecessary in practice.
 - **LTO tape I/O** (O2): dropped; LTO support was removed. Media is optical-only.
 
 ### Post-Phase-20 cleanup wave
@@ -92,14 +92,14 @@ Key Phase 12–20 design decisions retained for traceability:
 Follow-up PRs covered: location-event audit, `--config` flag honoring,
 receipt-provenance persistence, unknown-`--location` rejection, ECC
 verify-or-repair on mounted ISOs, LTO removal, test-media simplification,
-`lcsas db export` removal (redundant with holographic injection), recovery
+`lcsas db export` removal (redundant with the disc catalog on every disc), recovery
 cascade collapse from 5 tiers to 3, vestigial-flag removal (`--key-file`,
 `--skip-ecc`), always-on ECC for production media, `cmd_burn_legacy` removal,
 and a GitHub Actions test workflow exercising real rustic.
 
-### Phase 21 — cross-platform meta-volume (SHIPPED 2026-05-17)
+### Phase 21 — cross-platform meta disc (SHIPPED 2026-05-17)
 
-Phases 21.1–21.12 delivered the full cross-platform meta-volume. All three
+Phases 21.1–21.12 delivered the full cross-platform meta disc. All three
 recovery tiers now cover **all six approved targets**:
 
 - `x86_64-unknown-linux-musl`
@@ -122,7 +122,7 @@ libSystem. See [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md)
   recovery toolchain) for the recovery-side path, rather than depending on the
   upstream dvdisaster binary. Validated against the real dvdisaster binary for
   interoperability.
-- **KEY-08 — Shamir key escrow:** the `key_escrow` table records a Shamir
+- **KEY-08 — Shamir password split:** the `key_escrow` table records a Shamir
   split (K/N threshold + SLIP-0039 identifier); `lcsas-keyshare` performs the
   split/combine. The catalog (schema v10) includes this table.
 
@@ -135,7 +135,7 @@ libSystem. See [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md)
 - [x] `ruff check` passes
 - [x] `mypy --strict` passes
 - [x] Changes committed with a descriptive commit message
-- [x] README / workflow docs updated when user-facing behavior changes
+- [x] README / workflow docs updated when owner- or heir-facing behavior changes
 
 ---
 
@@ -145,7 +145,7 @@ After each phase:
 
 1. Full test suite green (`make test-all`).
 2. New tests cover every changed function.
-3. Integration tests verify end-to-end flows (gated on rustic/xorriso/dvdisaster).
+3. Integration tests exercise end-to-end flows (gated on rustic/xorriso/dvdisaster).
 4. `ruff check src/ tests/` — no lint regressions; `mypy --strict` clean.
 5. For burn/restore-affecting changes: a manual burn + verify + restore on
    real BD-R media (the hardware drill in

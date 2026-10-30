@@ -129,7 +129,7 @@ def parse_restore_plan_output(
 ) -> RestorePlan:
     """Parse the JSON output of ``rustic restore --dry-run --json``.
 
-    Extracts the list of pack hashes required for the restore.
+    Extracts the list of pack IDs required for the restore.
     """
     try:
         data = json.loads(output)

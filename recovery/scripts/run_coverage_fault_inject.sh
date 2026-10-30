@@ -37,7 +37,7 @@ if [ ! -x "$LIB" ]; then
 fi
 
 # `timeout` (coreutils) caps each injected run; degrade gracefully if it
-# is missing (e.g. a minimal recovery host) rather than aborting the sweep.
+# is missing (e.g. a minimal restore host) rather than aborting the sweep.
 if command -v timeout >/dev/null 2>&1; then
     TIMEOUT="timeout ${PER_RUN_TIMEOUT}"
 else

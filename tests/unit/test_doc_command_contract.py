@@ -409,7 +409,7 @@ def _rendered_heir_docs(tmp_path: Path) -> dict[str, str]:
         f"<data-disc>/{name}": (root / name).read_text(encoding="utf-8")
         for name in (
             "START_HERE.txt",
-            "KEY_INFO.txt",
+            "PASSWORD_INFO.txt",
             "RESTORE_INSTRUCTIONS.txt",
         )
     }
@@ -443,7 +443,7 @@ def test_restore_sh_doc_commands_use_only_real_flags(tmp_path: Path) -> None:
     parser accepts (UX-02).
 
     This is the gate that kills the phantom-flag class of failure:
-    KEY_INFO.txt shipped ``./restore.sh --target ~/restored`` for a
+    PASSWORD_INFO.txt shipped ``./restore.sh --target ~/restored`` for a
     long time while restore.sh accepted no such flag, dead-ending the
     heir right after the hardest step (password reconstruction).
     """
@@ -476,7 +476,7 @@ def test_restore_sh_doc_commands_use_only_real_flags(tmp_path: Path) -> None:
                         f"{flag}: restore.sh {cmd}"
                     )
     # Extractor self-check: the corpus is known to contain flagged
-    # restore.sh commands (e.g. KEY_INFO's --target STEP 2); a count
+    # restore.sh commands (e.g. PASSWORD_INFO's --target STEP 2); a count
     # of zero means the scanner broke, not that the docs are clean.
     assert flagged_commands >= 3, (
         f"extractor self-check: only {flagged_commands} restore.sh "
@@ -608,7 +608,7 @@ def test_split_key_python_fallback_matches_bundle_layout(tmp_path: Path) -> None
     docs = _rendered_heir_docs(tmp_path)
     for name in (
         "<data-disc>/START_HERE.txt",
-        "<data-disc>/KEY_INFO.txt",
+        "<data-disc>/PASSWORD_INFO.txt",
         "<meta>/START_HERE.txt",
     ):
         text = docs[name]

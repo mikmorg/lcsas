@@ -41,11 +41,11 @@ typedef struct lcsas_disc_locator {
     FILE *prompt_in;
     FILE *prompt_out;
 
-    /* Optional: the mount point of the recovery / meta disc.  When set,
+    /* Optional: the mount point of the meta disc.  When set,
      * the locator never opens files under this path or returns paths
-     * inside it, so the user can eject the meta-disc with a single
+     * inside it, so the heir can eject the meta disc with a single
      * optical drive and re-use the same drive for data discs.  May be
-     * NULL when single-drive recovery is not a concern. */
+     * NULL when a single-drive restore is not a concern. */
     const char *meta_disc;
 
     /* Misses counter for diagnostics. */
@@ -128,9 +128,9 @@ void lcsas_disc_locator_init(lcsas_disc_locator *l,
                              int interactive);
 
 /*
- * Mark `meta_disc` as the recovery medium so the locator (a) never
+ * Mark `meta_disc` as the meta disc so the locator (a) never
  * lists it as a candidate pack source and (b) cd()'s out of it before
- * prompting, so a one-drive user can eject and swap discs.  `meta_disc`
+ * prompting, so a one-drive heir can eject and swap discs.  `meta_disc`
  * is borrowed; the caller must keep it alive for the locator's
  * lifetime.  Pass NULL to clear.
  */
@@ -203,13 +203,13 @@ void lcsas_disc_locator_set_auto_mount(lcsas_disc_locator *l, int on);
  *
  * On success returns 0 and fills `out_path` with the absolute path.
  * On miss + interactive=0, returns -1.
- * On miss + interactive=1, prompts the user, re-scans, retries.
+ * On miss + interactive=1, prompts the heir, re-scans, retries.
  *   - Returns 0 once found: after an ENTER, or with auto-detect on,
  *     as soon as a re-scan while waiting turns the pack up.
  *   - Each re-scan of the mount parents names every disc not yet named
  *     for its current insertion, by the label in its volume_info.json
  *     (#456), on prompt_out.
- *   - Returns -1 if the user types 'q' to abort (or stdin hits EOF).
+ *   - Returns -1 if the heir types 'q' to abort (or stdin hits EOF).
  */
 int lcsas_disc_locate_pack(lcsas_disc_locator *l,
                            const unsigned char pack_id[32],

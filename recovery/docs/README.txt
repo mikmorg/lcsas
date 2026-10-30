@@ -14,16 +14,16 @@ QUICK START
   # Run tests:
   make test
 
-  # Restore from a recovery medium:
+  # Restore from a meta disc:
   sh scripts/restore.sh /path/to/recovery /path/to/target
 
 DOCUMENTATION
 
   BUILD.txt           -- compilation and cross-compilation
-  RECOVER.txt         -- macOS / Linux manual recovery walkthrough
-  RECOVER_WINDOWS.txt -- Windows recovery walkthrough
+  RECOVER.txt         -- macOS / Linux manual restore walkthrough
+  RECOVER_WINDOWS.txt -- Windows restore walkthrough
   TIERS.txt           -- recovery tier hierarchy + Python-free guarantee
-  BOOT.txt            -- no-OS recovery procedure (live-USB; the
+  BOOT.txt            -- no-OS restore procedure (live-USB; the
                          discs themselves are NOT bootable)
   FORMAT.txt          -- on-disc data formats (restic + LCSAS)
   CRYPTO.txt          -- cryptographic primitives with test vectors
@@ -35,7 +35,7 @@ SOURCE LAYOUT
     sha256, aes, pbkdf2, poly1305, scrypt  -- crypto
     io, b64, hex, path                     -- support
     json_q                                  -- JSON tokenizer
-    repo                                    -- restic repo reader
+    repo                                    -- restic repository reader
     tree                                    -- recursive restorer
     main                                    -- CLI
 
@@ -71,20 +71,21 @@ PHASE STATUS
 
   Phase 1 (MVP):  COMPLETE
     - All cryptographic primitives implemented and tested.
-    - Restic v1 repo restore working.
+    - Restic v1 repository restore working.
     - POSIX-sh driver scripts.
     - Plain-text docs.
 
   Phase 2 (Hardening): COMPLETE
-    - zstd 1.5.6 vendored; restic v2 (compressed) repos restore round-trip.
-    - SQLite 3.46.0 vendored; on-disc catalog query module (catalog.c).
+    - zstd 1.5.6 vendored; restic v2 (compressed) repositories restore
+      round-trip.
+    - SQLite 3.46.0 vendored; disc catalog query module (catalog.c).
     - lcsas-iso9660 mini-reader (no kernel mount-loop needed).
     - lcsas-init C89 init for the live-boot initramfs.  (The C89 init
       source exists, but no userland or kernel was ever built; the
       live-boot stack itself was dropped -- see the Phase 3 note.)
     - Reproducible-build verification (make repro-check).
     - End-to-end integration test against a Python-built synthetic
-      restic repo, covering both v1 and v2 layouts.
+      restic repository, covering both v1 and v2 layouts.
 
   Phase 3 (Multi-arch + FreeBSD): SOURCE COMPLETE
     - Cross-compile Makefile targets for aarch64 / riscv64 (using
@@ -99,5 +100,5 @@ PHASE STATUS
     assembly) were DROPPED in 2026: the boot stack was never built
     and no LCSAS disc was ever bootable.  The scaffolding is
     quarantined under ../experimental/boot/ in the source repository;
-    the no-OS recovery path is now a current live-Linux USB stick.
+    the no-OS restore path is now a current live-Linux USB stick.
     See docs/BOOT.txt.

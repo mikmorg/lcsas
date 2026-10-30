@@ -13,7 +13,7 @@ _logger = logging.getLogger(__name__)
 
 
 class DeltaAnalyzer:
-    """Compares packs on disk (scanner result) against the catalog DB.
+    """Compares packs on disk (scanner result) against the catalog.
 
     Identifies new packs to register and unarchived packs to burn.
     """
@@ -29,7 +29,7 @@ class DeltaAnalyzer:
         self._repo_id = repo_id
 
     def register_new_packs(self) -> list[Pack]:
-        """Register packs found on disk but not yet in the database.
+        """Register packs found on disk but not yet in the catalog.
 
         Uses bulk_register() for efficient batch insertion (2 queries
         instead of 2N). Returns list of newly registered Pack objects.
@@ -78,7 +78,7 @@ class DeltaAnalyzer:
         return bulk_register(self._conn, new_tuples)
 
     def get_unarchived(self) -> list[Pack]:
-        """Return packs in the DB not yet assigned to any volume."""
+        """Return packs in the catalog not yet assigned to any volume."""
         return get_unarchived_packs(self._conn, self._repo_id)
 
     def get_total_unarchived_bytes(self) -> int:
@@ -90,9 +90,9 @@ class DeltaAnalyzer:
         return self.get_total_unarchived_bytes() >= usable_capacity
 
     def detect_pruned(self) -> list[Pack]:
-        """Find packs in the DB that are no longer present on the mirror.
+        """Find packs in the catalog that are no longer present on the mirror.
 
-        Returns active (non-pruned) packs whose SHA-256 is absent from
+        Returns active (non-pruned) packs whose pack ID is absent from
         the scanner_result.  These are packs that rustic has pruned from
         the local mirror but are still tracked as active in the catalog.
         """
@@ -104,8 +104,9 @@ class DeltaAnalyzer:
             # No scanner data — cannot detect pruned packs
             if all_active:
                 _logger.warning(
-                    "Mirror scan returned no packs but DB has %d active pack(s) for this repo — "
-                    "skipping prune detection (is the mirror path correct? permission error?)",
+                    "Mirror scan returned no packs but the catalog has %d active pack(s) "
+                    "for this repository — skipping prune detection (is the mirror path "
+                    "correct? permission error?)",
                     len(all_active),
                 )
             return []

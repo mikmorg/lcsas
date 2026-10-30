@@ -3086,12 +3086,12 @@ class TestDiscoverCatalogDedup:
 
 class TestSwapPromptCatalogStates:
     def test_hit_but_no_volume_mapping_line(self, tmp_path: Path, capsys):
-        # Catalog knows the pack but has no current volume mapping ->
+        # Catalog knows the pack but lists no disc for it ->
         # the dedicated prompt line (restic_fallback.py:958).
         r = _bare_restorer(tmp_path)
         r._lookup_volume_labels = lambda pid: ([], r._CATALOG_HIT_NO_VOLS)
         r._print_swap_prompt("a" * 32)
-        assert "no current volume mapping" in capsys.readouterr().err
+        assert "lists no disc for it" in capsys.readouterr().err
 
 
 class TestInteractiveFindPackPath:

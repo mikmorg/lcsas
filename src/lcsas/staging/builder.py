@@ -30,7 +30,7 @@ class MissingPacksError(Exception):
 
 
 class CorruptPacksError(Exception):
-    """Raised when a staged pack's bytes do not hash to its filename SHA-256.
+    """Raised when a staged pack's bytes do not hash to its pack ID (its filename).
 
     This means the mirror copy itself is corrupt (bit-rot, truncated
     replication, filesystem bug) — burning would replicate the corruption
@@ -41,10 +41,10 @@ class CorruptPacksError(Exception):
         shorts = ", ".join(expected[:12] for expected, _actual in corrupt[:5])
         super().__init__(
             f"{len(corrupt)} pack(s) on the mirror are CORRUPT (content does "
-            f"not match filename hash): {shorts}"
+            f"not match the pack ID in the filename): {shorts}"
             + ("..." if len(corrupt) > 5 else "")
-            + ". The mirror copy is the only hot copy — do NOT delete it. "
-            "Run 'rustic check --read-data' on the repo and re-replicate "
+            + ". The mirror holds the only live copy — do NOT delete it. "
+            "Run 'rustic check --read-data' on the repository and re-replicate "
             "the mirror, then re-run 'lcsas stage'. "
             "Nothing was written to the catalog."
         )
@@ -52,11 +52,11 @@ class CorruptPacksError(Exception):
 
 
 class MirrorUnavailableError(MissingPacksError):
-    """A repo's mirror (or its ``data/`` dir) is absent while packs from it
-    were selected for staging.
+    """A repository's mirror (or its ``data/`` dir) is absent while packs
+    from it were selected for staging.
 
     Subclasses :class:`MissingPacksError` so existing handlers keep working,
-    but carries its own user-facing message.
+    but carries its own message for the owner.
     """
 
     def __init__(
@@ -74,7 +74,7 @@ class MirrorUnavailableError(MissingPacksError):
         # Bypass MissingPacksError.__init__: this error formats its own message.
         Exception.__init__(
             self,
-            f"Mirror for repo '{repo_id}' is unavailable ({where}): {what}. "
+            f"Mirror for repository '{repo_id}' is unavailable ({where}): {what}. "
             "Is the NAS mounted? Nothing was written to the catalog; "
             "fix the mirror and re-run 'lcsas stage'.",
         )
@@ -86,16 +86,16 @@ class MirrorUnavailableError(MissingPacksError):
 class StagingBuilder:
     """Assembles a staging directory tree ready for ISO mastering.
 
-    The staging tree layout mirrors what will appear on the optical disc:
+    The staging tree layout matches what will appear on the disc:
         staging_root/
         ├── data/                  # Pack files (hardlinked from mirror)
-        ├── metadata/              # Holographic metadata (per-repo)
+        ├── metadata/              # Repository metadata (per repository)
         │   └── <repo_id>/
         │       ├── index/
         │       ├── snapshots/
         │       ├── keys/
         │       └── config
-        ├── catalog.db             # SQLite archive catalog
+        ├── catalog.db             # Disc catalog (SQLite)
         └── volume_info.json       # Self-describing volume metadata
     """
 
@@ -129,12 +129,12 @@ class StagingBuilder:
         Uses a single pass: each pack is located, validated, and hardlinked
         atomically before moving to the next one.  This eliminates the race
         window that exists in a two-pass approach where a pack could be
-        deleted between verification and staging.
+        deleted between the check and staging.
 
-        Every staged pack is fully read and its SHA-256 verified against
-        the catalog hash (the filename).  The dst is a hardlink to the
-        mirror inode, so this verifies the actual mirror bytes — the only
-        hot copy — before they are replicated to every disc (BURN-02).
+        Every staged pack is fully read and its SHA-256 checked against
+        its pack ID (the filename).  The dst is a hardlink to the
+        mirror inode, so this checks the actual mirror bytes — the only
+        live copy — before they are replicated to every disc (BURN-02).
 
         Args:
             packs: List of Pack objects to stage.
@@ -145,7 +145,7 @@ class StagingBuilder:
 
         Raises:
             CorruptPacksError: If any pack's content does not hash to its
-                catalog SHA-256 (the mirror copy is corrupt).
+                pack ID (the mirror copy is corrupt).
             MissingPacksError: If any pack cannot be found, is a symlink, or
                 cannot be hardlinked/copied into staging.
         """
@@ -178,13 +178,13 @@ class StagingBuilder:
             ensure_dir(dst.parent)
 
             if dst.exists():
-                # Verify existing staged file matches expected size
+                # Check existing staged file matches expected size
                 # (guards against partial stages from prior failed runs)
                 dst_size = dst.stat().st_size if dst.exists() else 0
                 if dst_size == pack.size_bytes:
                     # Content check regardless of size — bit-flips don't
                     # change st_size and we are about to burn these bytes
-                    # to every copy at every location (BURN-02).
+                    # to every disc at every location (BURN-02).
                     dst_hash = sha256_file(dst)
                     if dst_hash == pack.sha256:
                         # File is valid
@@ -221,8 +221,8 @@ class StagingBuilder:
                 missing.append(short)
                 continue
 
-            # Verify content: dst is a hardlink to the mirror inode, so this
-            # reads and authenticates the actual mirror bytes.
+            # Check content: dst is a hardlink to the mirror inode, so this
+            # reads and checks the actual mirror bytes.
             dst_hash = sha256_file(dst)
             if dst_hash != pack.sha256:
                 _logger.error(

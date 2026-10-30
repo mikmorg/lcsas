@@ -6,7 +6,7 @@
 # recovery/UPSTREAM.sha256 pins as the tier-2 recovery reader.  Using it to
 # WRITE the mirror keeps the writer aligned with the pinned recovery readers,
 # which matters because allow_unverified_repo_format defaults to false: burn
-# refuses to master discs from a repo it cannot prove those readers can open.
+# refuses to master discs from a repository it cannot prove those readers can open.
 #
 # Paths are mounted at identical locations inside the container, so every path
 # you type means the same thing in and out.
@@ -16,13 +16,13 @@
 #
 # Environment overrides:
 #   LCSAS_IMAGE  container image                     (default: lcsas:host-a)
-#   LCSAS_ROOT   read-write mount; mirror + staging  (default: /srv/lcsas)
+#   LCSAS_ROOT   rw mount: mirror + staging area     (default: /srv/lcsas)
 #   LCSAS_SRC    space-separated read-only source paths (default: /srv/data)
 #
 # LCSAS_ROOT is a single mount on purpose.  staging/builder.py hardlinks packs
 # out of the mirror, and utils/fs.py silently falls back to a full copy on
-# EXDEV — mounting mirror and staging separately makes the container see two
-# devices and copy every volume in full.  Keep both under one root.
+# EXDEV — mounting the mirror and the staging area separately makes the container
+# see two devices and copy every volume in full.  Keep both under one root.
 
 set -euo pipefail
 

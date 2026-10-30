@@ -2,16 +2,16 @@
 
 The burn pipeline treats pack files as opaque bytes; nothing else in the
 pipeline ever checks the repository format version, KDF, or compression
-framing.  Meanwhile the *writer* is whatever rustic the operator has on the
+framing.  Meanwhile the *writer* is whatever rustic the owner has on the
 NAS, while every shipped recovery tier hard-codes restic/rustic v1/v2
 semantics.  If a future rustic migrates the mirror to a v3 format, every disc
 burned afterward would be undecodable by all three recovery tiers — and the
-operator's live test-restores would keep passing because they use the same
+owner's live test-restores would keep passing because they use the same
 live rustic that wrote the data.  The drift is silently masked.
 
 This module proves, *before any ISO is mastered*, that the mirror still
 decodes with the pinned readers.  It uses :class:`PurePythonRestorer` — the
-tier-3 code — because it is the one reader importable in a plain
+tier-3 Python reader — because it is the one reader importable in a plain
 ``pip install lcsas`` (the tier-1 C binaries are not shipped with the wheel)
 and it exercises the same v1/v2 assumptions tier-1 hard-codes:
 
@@ -34,9 +34,9 @@ from lcsas.restore.restic_fallback import IntegrityError, PurePythonRestorer
 _logger = logging.getLogger(__name__)
 
 # Frozen contract: the repository format versions every recovery tier
-# (tier-1 C reader, tier-2 pinned rustic, tier-3 PurePythonRestorer) can
+# (tier-1 C reader, tier-2 pinned rustic, tier-3 Python reader) can
 # decode.  v1 and v2 only.  Bumping this is a deliberate cross-tier change,
-# not an operator-side rustic upgrade — see docs/RESTIC_FORMAT_SPEC.md.
+# not an owner-side rustic upgrade — see docs/RESTIC_FORMAT_SPEC.md.
 SUPPORTED_REPO_VERSIONS = (1, 2)
 
 
@@ -44,7 +44,7 @@ class FormatDriftError(Exception):
     """The mirror cannot be proven restorable by the pinned recovery readers.
 
     Raised by :func:`check_repo_recoverable` when the repository format has
-    drifted past what the shipped restore tiers understand, when no password
+    drifted past what the shipped recovery tiers understand, when no password
     is available to prove decodability, or when the in-process decode proof
     itself fails.  The orchestrator refuses to burn on this error.
     """
@@ -61,7 +61,7 @@ def check_repo_recoverable(mirror_path: Path, password_file: Path) -> None:
 
     Raises:
         FormatDriftError: config version unsupported, an unknown compression
-            framing byte was sampled, the password cannot unlock the repo, or
+            framing byte was sampled, the password cannot unlock the repository, or
             the index/blob decode proof failed.
     """
     if not password_file.exists():
@@ -95,19 +95,19 @@ def check_repo_recoverable(mirror_path: Path, password_file: Path) -> None:
             f"repository at {mirror_path} is format version {version}; the "
             f"pinned recovery readers support versions "
             f"{'-'.join(str(v) for v in SUPPORTED_REPO_VERSIONS)}. Discs "
-            f"burned now would be unreadable by every bundled restore tier. "
+            f"burned now would be unreadable by every bundled recovery tier. "
             f"Refusing to burn. See docs/RESTIC_FORMAT_SPEC.md."
         )
 
     # Steps 2 & 3 — load the index and decode one blob end-to-end (crypto +
-    # MAC + content hash + compression framing).  An empty repo (no index or
+    # MAC + content hash + compression framing).  An empty repository (no index or
     # no blobs yet) cannot be decode-proven, but its version is already known
     # good, so we proceed and log that the byte-level proof was skipped.
     try:
         restorer._load_index()
     except FileNotFoundError:
         _logger.info(
-            "repo at %s has no index yet — decode proof skipped (version "
+            "repository at %s has no index yet — decode proof skipped (version "
             "%s is a supported format)", mirror_path, version,
         )
         return
@@ -116,14 +116,14 @@ def check_repo_recoverable(mirror_path: Path, password_file: Path) -> None:
             f"repository at {mirror_path} (version {version}) has an index "
             f"the pinned readers cannot decode: {exc}. This usually means an "
             f"unknown compression or crypto framing — discs burned now would "
-            f"be unreadable by every bundled restore tier. Refusing to burn. "
+            f"be unreadable by every bundled recovery tier. Refusing to burn. "
             f"See docs/RESTIC_FORMAT_SPEC.md."
         ) from exc
 
     blob_index = restorer._blob_index
     if not blob_index:
         _logger.info(
-            "repo at %s has no blobs yet — blob decode proof skipped "
+            "repository at %s has no blobs yet — blob decode proof skipped "
             "(version %s + index decoded cleanly)", mirror_path, version,
         )
         return
@@ -136,7 +136,7 @@ def check_repo_recoverable(mirror_path: Path, password_file: Path) -> None:
             f"repository at {mirror_path} (version {version}) has a blob the "
             f"pinned readers cannot decode: {exc}. This usually means an "
             f"unknown compression framing — discs burned now would be "
-            f"unreadable by every bundled restore tier. Refusing to burn. "
+            f"unreadable by every bundled recovery tier. Refusing to burn. "
             f"See docs/RESTIC_FORMAT_SPEC.md."
         ) from exc
 
@@ -147,7 +147,7 @@ def check_repo_recoverable(mirror_path: Path, password_file: Path) -> None:
 
 
 def _read_config_version(restorer: PurePythonRestorer, mirror_path: Path) -> int:
-    """Decrypt + parse the repo ``config`` and return its ``version`` as int.
+    """Decrypt + parse the repository ``config`` and return its ``version`` as int.
 
     Raises FormatDriftError if the config is absent, undecryptable, or carries
     a non-integer version.

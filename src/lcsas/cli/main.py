@@ -105,9 +105,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # --- init ---
-    init_p = subparsers.add_parser("init", help="Initialize LCSAS database and config.")
+    init_p = subparsers.add_parser("init", help="Initialize the LCSAS catalog and config.")
     init_p.add_argument("--db-path", type=Path, default=None,
-                        help="Path for the SQLite database. "
+                        help="Path for the SQLite catalog file. "
                              "Overrides --config's [paths].database when set.")
 
     # --- repo ---
@@ -162,7 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan_p.add_argument(
         "--yes-prune", action="store_true", default=False,
         help="Confirm a mass-prune: allow one scan to mark more than "
-             "max(10, 20%% of a repo's active packs) as pruned.",
+             "max(10, 20%% of a repository's active packs) as pruned.",
     )
 
     # --- pack ---
@@ -175,20 +175,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pack_unprune_p.add_argument(
         "sha256",
-        help="SHA-256 of the pack (a unique prefix is accepted).",
+        help="Pack ID: the pack's SHA-256 (a unique prefix is accepted).",
     )
 
     # --- status ---
     status_p = subparsers.add_parser("status", help="Show archive status summary.")
     status_p.add_argument("--stale-copies", action="store_true", default=False,
-                          help="List physical copies never verified or not "
+                          help="List discs never verified or not "
                                "verified within the threshold (FMA-05).")
     status_p.add_argument("--older-than-days", type=int, default=365,
                           help="Staleness threshold in days for --stale-copies "
                                "and the summary warning (default: 365).")
     status_p.add_argument("--redundancy", action="store_true", default=False,
                           help="Blast-radius report: under-replicated packs "
-                               "grouped by the disc holding them (FMA-08).")
+                               "grouped by the volume holding them (FMA-08).")
     status_p.add_argument("--min-copies", type=int, default=2,
                           help="Copy threshold for --redundancy (default: 2).")
 
@@ -202,7 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Burn a previously staged session (ID or 'latest'). "
                              "Required; use `lcsas stage` first to create a session.")
     burn_p.add_argument("--location", type=str, default=None,
-                        help="Physical location tag for this copy. Must "
+                        help="Location where these discs are kept. Must "
                              "already be registered (use `lcsas location "
                              "add` first or pass --create-location).")
     burn_p.add_argument("--create-location", action="store_true", default=False,
@@ -212,7 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
     burn_p.add_argument("--device", type=str, default=None,
                         help="Optical device path (overrides config).")
     burn_p.add_argument("--no-prompt", action="store_true", default=False,
-                        help="Do not pause between discs for the operator "
+                        help="Do not pause between discs for the owner "
                              "(for scripted/cdemu runs). Without this, a "
                              "multi-disc burn pauses before each disc to load "
                              "a blank and after each to write the label.")
@@ -245,7 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     stage_p.add_argument("--session", type=str, default=None,
                          help="Session ID (for --clean).")
     stage_p.add_argument("--dry-run", "-n", action="store_true", default=False,
-                         help="Show staging plan without creating ISOs or DB rows.")
+                         help="Show staging plan without creating ISOs or catalog rows.")
     stage_p.add_argument("--allow-escrow-drift", action="store_true", default=False,
                          help="Proceed even if lcsas.toml's key_split/K/N "
                               "disagrees with the recorded split (KEY-08). "
@@ -256,7 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
     # --- burn-iso ---
     burniso_p = subparsers.add_parser(
         "burn-iso",
-        help="Burn a single ISO file (standalone, no DB access required).",
+        help="Burn a single ISO file (standalone, no catalog access required).",
         description=(
             "Burn a single ISO to disc. Useful for split-machine workflows: "
             "stage on one machine, transfer ISOs to a faster burner, then "
@@ -282,10 +282,10 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Optional session ID to record in the receipt.")
 
     # --- staging ---
-    staging_p = subparsers.add_parser("staging", help="Staging directory management.")
+    staging_p = subparsers.add_parser("staging", help="Manage the staging area.")
     staging_sub = staging_p.add_subparsers(dest="staging_command")
     staging_clean_p = staging_sub.add_parser(
-        "clean", help="Remove orphaned staging directories.",
+        "clean", help="Remove orphaned directories from the staging area.",
     )
     staging_clean_p.add_argument(
         "--force", action="store_true", default=False,
@@ -293,12 +293,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # --- location ---
-    loc_p = subparsers.add_parser("location", help="Manage physical storage locations.")
+    loc_p = subparsers.add_parser("location", help="Manage the locations where discs are kept.")
     loc_sub = loc_p.add_subparsers(dest="location_command")
 
     loc_sub.add_parser("list", help="List all locations and their status.")
 
-    loc_add_p = loc_sub.add_parser("add", help="Register a new storage location.")
+    loc_add_p = loc_sub.add_parser("add", help="Register a new location.")
     loc_add_p.add_argument("name", help="Location name (e.g. Offsite_Safe).")
     loc_add_p.add_argument("--description", type=str, default="",
                            help="Optional description.")
@@ -319,27 +319,27 @@ def build_parser() -> argparse.ArgumentParser:
     # --- copy ---
     copy_p = subparsers.add_parser(
         "copy",
-        help="Record the fate of physical disc copies (deprecate/destroy).",
+        help="Record the fate of a disc (deprecate/destroy).",
     )
     copy_sub = copy_p.add_subparsers(dest="copy_command")
 
     copy_dep_p = copy_sub.add_parser(
         "deprecate",
-        help="Record a disc copy as deprecated (e.g. damaged, retired).",
+        help="Record a disc as deprecated (e.g. damaged, or its volume deprecated).",
     )
     copy_dep_p.add_argument("volume_label",
                             help="Volume label (e.g. ARCHIVE_MDISC100_0001).")
     copy_dep_p.add_argument("location",
-                            help="Location holding the copy (e.g. Home_Shelf).")
+                            help="Location holding the disc (e.g. Home_Shelf).")
 
     copy_des_p = copy_sub.add_parser(
         "destroy",
-        help="Record a disc copy as destroyed or lost.",
+        help="Record a disc as destroyed or lost.",
     )
     copy_des_p.add_argument("volume_label",
                             help="Volume label (e.g. ARCHIVE_MDISC100_0001).")
     copy_des_p.add_argument("location",
-                            help="Location that held the copy (e.g. Home_Shelf).")
+                            help="Location that held the disc (e.g. Home_Shelf).")
 
     # --- volume ---
     volume_p = subparsers.add_parser(
@@ -349,7 +349,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     vol_impact_p = volume_sub.add_parser(
         "impact",
-        help="Blast radius: what becomes unrestorable if every copy of "
+        help="Blast radius: what becomes unrestorable if every disc of "
              "this volume fails? (FMA-08)",
     )
     vol_impact_p.add_argument("volume_label",
@@ -358,7 +358,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--snapshots", action="store_true", default=False,
         help="Also list snapshots referencing at-risk packs (needs the "
              "live mirror, the rustic binary, and --config with the "
-             "repo's password_file).",
+             "repository's password_file).",
     )
 
     # --- catalog ---
@@ -371,7 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     cat_validate_p = cat_sub.add_parser(
         "validate",
-        help="Cross-check a mounted disc's data files against its embedded catalog.",
+        help="Cross-check a mounted disc's data files against its disc catalog.",
     )
     cat_validate_p.add_argument(
         "disc",
@@ -383,7 +383,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Also read every pack file on the disc and verify its SHA-256 "
-             "against the filename hash (detects bit-rot; reads the full "
+             "against the pack ID in its filename (detects bit-rot; reads the full "
              "data payload of the disc).",
     )
 
@@ -391,7 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
         "reconcile",
         help="Report (and optionally fix) catalog/physical disagreements: "
              "ghost volumes that were never burned, and durable volumes "
-             "with no ACTIVE copy record.",
+             "with no ACTIVE disc recorded.",
     )
     cat_reconcile_p.add_argument(
         "--fix", action="store_true", default=False,
@@ -411,7 +411,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     cat_rebuild_p = cat_sub.add_parser(
         "rebuild",
-        help="Rebuild master catalog by merging disc-embedded holographic catalogs.",
+        help="Rebuild the master catalog by merging disc catalogs.",
     )
     cat_rebuild_p.add_argument(
         "disc_dirs",
@@ -473,7 +473,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Restore from a mounted or extracted LCSAS disc without any config "
             "file or live mirror. Works offline from any disc that contains "
             "catalog.db and the repository metadata. "
-            "Falls back to pure-Python restore if rustic is not available."
+            "Falls back to the tier-3 Python reader if rustic is not available."
         ),
     )
     fromdisc_p.add_argument(
@@ -486,11 +486,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fromdisc_p.add_argument(
         "--password-file", type=Path, required=True,
-        help="Path to the repository encryption key / password file.",
+        help="Path to the repository password file.",
     )
     fromdisc_p.add_argument(
         "--repo", type=str, default=None,
-        help="Repository name to restore (auto-selected if only one repo on disc).",
+        help="Repository name to restore (auto-selected if only one repository is on the disc).",
     )
     fromdisc_p.add_argument(
         "--snapshot", type=str, default="latest",
@@ -498,7 +498,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fromdisc_p.add_argument(
         "--volume-dir", type=Path, default=None,
-        help="Directory containing all pre-extracted disc volumes for batch restore.",
+        help="Directory containing all pre-extracted volumes (no disc prompts).",
     )
     fromdisc_p.add_argument(
         "--catalog", type=Path, default=None,
@@ -542,14 +542,14 @@ def build_parser() -> argparse.ArgumentParser:
     verify_p.add_argument("--detail", default="",
                           help="Detail text for --mark-verified/--mark-failed event.")
     verify_p.add_argument("--all", action="store_true", default=False, dest="verify_all",
-                          help="Verify all BURNED/VERIFIED volumes (batch mode). "
-                               "Combine with --disc to re-verify physical discs "
-                               "copy-by-copy, stamping last_verified_at.")
+                          help="Verify all BURNED/VERIFIED volumes in one run. "
+                               "Combine with --disc to re-verify each disc "
+                               "one at a time, stamping last_verified_at.")
     verify_p.add_argument("--location", default=None,
-                          help="Filter --all to copies/volumes at this location; "
-                               "with single-volume --disc, stamp the copy at "
+                          help="Filter --all to discs/volumes at this location; "
+                               "with single-volume --disc, stamp the disc at "
                                "this location (defaults to the volume's only "
-                               "ACTIVE copy when unambiguous).")
+                               "ACTIVE disc when unambiguous).")
 
     # --- session ---
     session_p = subparsers.add_parser("session", help="Manage burn sessions.")
@@ -582,17 +582,17 @@ def build_parser() -> argparse.ArgumentParser:
     # --- meta ---
     meta_p = subparsers.add_parser(
         "meta",
-        help="Build a self-contained rescue volume (tools + source).",
+        help="Build a self-contained meta disc (recovery tools + source).",
     )
     meta_sub = meta_p.add_subparsers(dest="meta_command")
 
     meta_build = meta_sub.add_parser(
         "build",
-        help="Build a meta-volume directory with all restore tools.",
+        help="Build a meta disc directory with all the recovery tools.",
     )
     meta_build.add_argument(
         "--output", "-o", type=Path, required=True,
-        help="Output directory for the meta-volume.",
+        help="Output directory for the meta disc.",
     )
     meta_build.add_argument(
         "--project-root", type=Path, default=None,
@@ -603,7 +603,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Build even if the native 'zstandard' package is missing on "
             "this host. The bundled pure-Python zstd decoder still enables "
-            "tier-3 restore of compressed repos (slower); without this flag "
+            "tier-3 restore of compressed repositories (slower); without this flag "
             "the build fails loud so the missing fast path is not a "
             "surprise."
         ),
@@ -615,46 +615,46 @@ def build_parser() -> argparse.ArgumentParser:
             "absent from the recovery cache. Without this flag the build "
             "fails loud, because docs/DVDISASTER_RS03_FORMAT.md is only "
             "re-implementable against the source it transcribes — that "
-            "source must travel on the disc. Run "
+            "source must travel on the meta disc. Run "
             "`sh recovery/scripts/fetch_upstream.sh` to populate the cache."
         ),
     )
     meta_build.add_argument(
         "--allow-incomplete", action="store_true",
         help=(
-            "Permit a meta-volume missing per-target binaries or root "
+            "Permit a meta disc missing per-target binaries or root "
             "restore artifacts (single-arch developer builds). By default "
             "the build fails loud and lists every missing artifact so an "
-            "incomplete 'rescue' disc never ships unnoticed (RST-05)."
+            "incomplete meta disc never ships unnoticed (RST-05)."
         ),
     )
     meta_build.add_argument(
         "--allow-missing-metadata", action="store_true",
         help=(
-            "Permit a meta-volume that carries no Rustic keys for a live "
-            "repo whose packs are on discs. By default that fails the "
-            "build (#437) — the disc could not decrypt that repo. Deliberately "
+            "Permit a meta disc that carries no Rustic keys for a live "
+            "repository whose packs are on discs. By default that fails the "
+            "build (#437) — the disc could not decrypt that repository. Deliberately "
             "separate from --allow-incomplete, which means 'dev build lacking "
             "per-target binaries': a habitual flag must not silence a "
-            "survivability gap. The acknowledgement is recorded on the disc "
+            "survivability gap. The acknowledgement is recorded on the meta disc "
             "in volume_info.json."
         ),
     )
 
     meta_verify = meta_sub.add_parser(
         "verify",
-        help="Audit a built meta-volume against its recovery/MANIFEST.sha256.",
+        help="Audit a built meta disc against its recovery/MANIFEST.sha256.",
         description=(
             "Reads every file listed in <output>/recovery/MANIFEST.sha256 "
             "and confirms each one's SHA-256 matches.  Reports missing "
             "files, mismatched hashes, and (when --strict) any files "
             "present under recovery/ that aren't listed in the manifest. "
-            "Exits 0 when the meta-volume is intact, 1 on any issue."
+            "Exits 0 when the meta disc is intact, 1 on any issue."
         ),
     )
     meta_verify.add_argument(
         "output", type=Path,
-        help="The meta-volume directory built by `lcsas meta build`.",
+        help="The meta disc directory built by `lcsas meta build`.",
     )
     meta_verify.add_argument(
         "--strict", action="store_true",
@@ -719,16 +719,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Verify reproducible build: builds twice, byte-compares output.",
     )
 
-    # --- key (Shamir / SLIP-0039 key escrow) ---
+    # --- key (Shamir / SLIP-0039 password split) ---
     key_p = subparsers.add_parser(
         "key",
-        help="Split / combine a repo password into SLIP-0039 key shares.",
+        help="Split a repository password into SLIP-0039 shares, or combine them.",
     )
     key_sub = key_p.add_subparsers(dest="key_command")
 
     key_split = key_sub.add_parser(
         "split",
-        help="Split a repo password into K-of-N recoverable key shares.",
+        help="Split a repository password into K-of-N shares.",
     )
     key_split.add_argument(
         "--repo", required=True,
@@ -744,7 +744,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     key_split.add_argument(
         "--password-file", type=Path, default=None,
-        help="Read the password from this file instead of the repo's "
+        help="Read the password from this file instead of the repository's "
              "configured password_file.",
     )
     key_split.add_argument(
@@ -753,15 +753,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     key_split.add_argument(
         "--no-verify-repo", action="store_true",
-        help="Skip checking that the password actually unlocks the repo's "
-             "key files. Escrowing an unverified password is dangerous; use "
+        help="Skip checking that the password actually unlocks the repository's "
+             "key files. Splitting an unchecked password is dangerous; use "
              "only when the mirror's keys/ is unavailable at split time.",
     )
 
     key_verify = key_sub.add_parser(
         "verify",
-        help="Verify that shares/a password actually unlock a repository "
-             "(annual key drill).",
+        help="Check that shares/a password actually unlock a repository "
+             "(annual password drill).",
     )
     key_verify.add_argument(
         "--repo", required=True,
@@ -781,7 +781,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     key_combine = key_sub.add_parser(
         "combine",
-        help="Reconstruct a repo password from K key-share mnemonics.",
+        help="Reconstruct a repository password from K share mnemonics.",
     )
     key_combine.add_argument(
         "--share-file", action="append", default=None, dest="share_files",
@@ -796,7 +796,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     key_card = key_sub.add_parser(
         "card",
-        help="Print a paper Recovery Card for the DEFAULT (single-key) "
+        help="Print a paper password card for the DEFAULT (unsplit) "
              "archive — for owners who do NOT split the password.",
     )
     key_card.add_argument(
@@ -818,7 +818,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     key_card.add_argument(
         "--check", type=Path, default=None, metavar="PASSWORD_FILE",
-        help="Verify mode: recompute the check code from a typed-in password "
+        help="Check mode: recompute the check code from a typed-in password "
              "file and print MATCH/MISMATCH against the code on the card. "
              "Requires --code.",
     )
@@ -830,13 +830,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     estate_p = subparsers.add_parser(
         "estate",
-        help="Estate-planning artifacts (whole-archive Recovery Card).",
+        help="Estate-planning artifacts (the whole-archive estate card).",
     )
     estate_sub = estate_p.add_subparsers(dest="estate_command")
     estate_card = estate_sub.add_parser(
         "card",
-        help="Generate a one-page whole-archive Recovery Card: owner, "
-             "repositories, disc inventory, key scheme, and the literal "
+        help="Generate the one-page estate card for the whole archive: owner, "
+             "repositories, disc inventory, whether the password is split, and the literal "
              "first command an heir runs.",
     )
     estate_card.add_argument(
@@ -894,7 +894,7 @@ def _load_config_opt(args: argparse.Namespace) -> LCSASConfig | None:
     except ValueError as e:
         # load_config rejects bad *values* with ValueError — today only an
         # unknown [defaults].media_type, which already names the valid set
-        # in its message.  Without this arm a plain typo in the operator's
+        # in its message.  Without this arm a plain typo in the owner's
         # TOML reaches main()'s generic handler and is reported as
         # "Unexpected error:", which reads like an internal crash rather
         # than the one-word fix it is (#429).
@@ -908,7 +908,7 @@ def _resolve_db_path(
     args: argparse.Namespace,
     config: object | None = None,
 ) -> Path:
-    """Resolve the database path from CLI args, config, or default.
+    """Resolve the catalog path from CLI args, config, or default.
 
     Priority: ``--db`` flag > config ``[paths].database`` > ``archive.db``
     relative to the current working directory.
@@ -918,7 +918,7 @@ def _resolve_db_path(
     still honours ``--config``, because a handler that forgets to load one
     must not end up addressing a *different* catalog than the rest of the
     CLI — that silently creates an empty ``archive.db`` in whatever
-    directory the operator happened to be standing in, while ``scan`` and
+    directory the owner happened to be standing in, while ``scan`` and
     ``stage`` keep using the configured path.
     """
     if getattr(args, "db", None):
@@ -940,7 +940,7 @@ def _resolve_device(
 
     Commands that resolve a device must leave ``--device`` defaulting to
     ``None`` in the parser; a hard-coded parser default is indistinguishable
-    from an operator choice here and would shadow the configured drive.
+    from an owner's choice here and would shadow the configured drive.
     """
     device = getattr(args, "device", None)
     if device:
@@ -991,7 +991,7 @@ def _open_existing_catalog(db_path: Path | str) -> sqlite3.Connection:
     Read-only commands must NOT create the catalog as a side effect (that
     masks a missing/mistyped path and writes outside the lock).  This opens
     an existing catalog and verifies its schema without migrating it; an
-    uninitialized path raises :class:`CatalogError` telling the operator to
+    uninitialized path raises :class:`CatalogError` telling the owner to
     run ``lcsas init``.
     """
     from lcsas.db.connection import get_connection
@@ -1018,7 +1018,7 @@ def _resolve_repo_names_to_ids(
     conn: sqlite3.Connection,
     names: list[str] | None,
 ) -> list[str] | None:
-    """Map user-facing repo *names* to DB repo_ids (UUIDs).
+    """Map owner-facing repository *names* to catalog repo_ids (UUIDs).
 
     Returns ``None`` when *names* is ``None`` (no filter).  Logs a
     warning for names that don't map to any registered repository.
@@ -1032,21 +1032,21 @@ def _resolve_repo_names_to_ids(
     for n in names:
         rid = name_to_id.get(n)
         if rid is None:
-            logger.warning(f"repository '{n}' not registered in DB, skipping.")
+            logger.warning(f"repository '{n}' not registered in the catalog, skipping.")
         else:
             ids.append(rid)
     if not ids:
         raise ValueError(
-            f"None of the specified repositories exist in the DB: "
+            f"None of the specified repositories exist in the catalog: "
             f"{', '.join(names)}"
         )
     return ids
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    """Initialize the LCSAS database.
+    """Initialize the LCSAS catalog.
 
-    Resolution order for the catalog DB path:
+    Resolution order for the catalog path:
       1. ``--db-path`` on ``init`` (when provided)
       2. global ``--db``
       3. ``paths.database`` from the TOML config (``--config``)
@@ -1067,7 +1067,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         db_path, timeout=_resolve_lock_timeout(args)
     ) as conn:
         ensure_schema(conn)
-    logger.info(f"Initialized LCSAS database at {db_path}")
+    logger.info(f"Initialized the LCSAS catalog at {db_path}")
     return 0
 
 
@@ -1086,7 +1086,7 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
         repo_id = generate_uuid()
         mirror = args.mirror_path.resolve()
 
-        # Auto-detect the encryption key ID from the repo's keys/ dir
+        # Auto-detect the key ID from the repository's keys/ dir
         key_ids = read_repo_key_ids(mirror)
         encryption_key_id = key_ids[0] if key_ids else ""
 
@@ -1133,9 +1133,9 @@ def _cmd_repo_set_status(
     pack and snapshot history, this only flips a flag and is reversible
     with the opposite verb.
 
-    Returns ``(exit_code, repo_name)``; *repo_name* is None when the repo
-    could not be resolved, so callers can key follow-up advice off the
-    repo's config name without re-opening the catalog.
+    Returns ``(exit_code, repo_name)``; *repo_name* is None when the
+    repository could not be resolved, so callers can base follow-up advice
+    on its config name without re-opening the catalog.
     """
     from lcsas.db.connection import locked_connection
     from lcsas.db.repos import get_repo, set_repo_status
@@ -1166,17 +1166,17 @@ def _cmd_repo_set_status(
 
 
 def _warn_if_still_in_config(args: argparse.Namespace, repo_name: str) -> None:
-    """Warn when a just-retired repo is still a live ``[repos.*]`` block.
+    """Warn when a just-retired repository is still a live ``[repos.*]`` block.
 
     Retirement is a CATALOG fact; mirror-existence validation is a CONFIG
     one (``validate_config`` in config/settings.py makes a missing
     ``mirror_path`` a hard error, and scan/burn/verify/status gate on it
-    via ``_validate_config_or_exit``).  So an operator who follows the
+    via ``_validate_config_or_exit``).  So an owner who follows the
     meta-build key gate's advice — "`lcsas repo retire <id>` if a mirror
     is gone for good" — gets a clean `meta build` and then walks into a
     hard config error on their next `scan`, because the dead mirror is
-    still listed in lcsas.toml.  Close that loop here, where the operator
-    actually is, rather than leaving it to be discovered mid-recovery.
+    still listed in lcsas.toml.  Close that loop here, where the owner
+    actually is, rather than leaving it to be discovered mid-restore.
 
     Advisory only: a config that is absent or unparseable must never turn
     a successful retirement into a failure — the catalog write already
@@ -1292,8 +1292,8 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
             pruned = bulk_mark_pruned(conn, pack_ids)
             logger.info(f"Marked {pruned} pack(s) as pruned.")
 
-        # Delete packs (including pruned), snapshots, then the repo itself.
-        # Packs must be removed before the repo to satisfy FK constraints.
+        # Delete packs (including pruned), snapshots, then the repository itself.
+        # Packs must be removed before the repository to satisfy FK constraints.
         all_packs = list_packs(conn, repo_id=repo.repo_id, include_pruned=True)
         if all_packs:
             all_pack_ids = [p.pack_id for p in all_packs]
@@ -1338,7 +1338,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     ) as conn:
         ensure_schema(conn)
 
-        # Map config repo names → DB repo_ids (UUIDs)
+        # Map config repository names → catalog repo_ids (UUIDs)
         repos_db = {r.name: r.repo_id for r in list_repos(conn)}
 
         repo_filter = set(args.repo) if args.repo else None
@@ -1368,7 +1368,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
             db_repo_id = repos_db.get(repo_name)
             if db_repo_id is None:
                 logger.warning(
-                    f"repository '{repo_name}' not registered in DB "
+                    f"repository '{repo_name}' not registered in the catalog "
                     f"(run 'repo add' first), skipping."
                 )
                 repos_unregistered.append(repo_name)
@@ -1395,7 +1395,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                     logger.warning(
                         f"    Scan of {repo_name} was INCOMPLETE "
                         f"({len(scan_result.errors)} unreadable path(s)) — "
-                        f"prune-sync skipped for this repo. "
+                        f"prune-sync skipped for this repository. "
                         f"Fix permissions/mount and re-scan."
                     )
                 else:
@@ -1464,7 +1464,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 repo_id = repos_db.get(repo_name)
                 if repo_id is None:
                     logger.warning(
-                        f"  {repo_name}: not registered in DB, skipping snapshots"
+                        f"  {repo_name}: not registered in the catalog, skipping snapshots"
                     )
                     continue
 
@@ -1537,7 +1537,7 @@ def cmd_pack_unprune(args: argparse.Namespace) -> int:
 
     with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
-        # substr() prefix match: immune to LIKE wildcards in user input.
+        # substr() prefix match: immune to LIKE wildcards in typed input.
         rows = conn.execute(
             "SELECT pack_id, sha256, is_pruned FROM packs "
             "WHERE substr(sha256, 1, ?) = ? ORDER BY sha256",
@@ -1570,7 +1570,7 @@ def cmd_pack_unprune(args: argparse.Namespace) -> int:
 
 
 def _print_stale_copies(conn: sqlite3.Connection, older_than_days: int) -> int:
-    """Report ACTIVE copies overdue for disc re-verification (FMA-05)."""
+    """Report ACTIVE discs overdue for re-verification (FMA-05)."""
     from datetime import UTC, datetime
 
     from lcsas.db.volume_copies import find_stale_copies
@@ -1578,13 +1578,13 @@ def _print_stale_copies(conn: sqlite3.Connection, older_than_days: int) -> int:
     stale = find_stale_copies(conn, older_than_days)
     if not stale:
         logger.info(
-            f"All ACTIVE copies verified within the last "
+            f"All ACTIVE discs verified within the last "
             f"{older_than_days} days."
         )
         return 0
     now = datetime.now(UTC)
     logger.info(
-        f"{len(stale)} cop(ies) not verified in the last "
+        f"{len(stale)} disc(s) not verified in the last "
         f"{older_than_days} days:"
     )
     for label, location, last_verified_at in stale:
@@ -1599,10 +1599,10 @@ def _print_stale_copies(conn: sqlite3.Connection, older_than_days: int) -> int:
 
 
 def _print_redundancy_report(conn: sqlite3.Connection, min_copies: int) -> int:
-    """Blast-radius view: under-replicated packs grouped by disc (FMA-08).
+    """Blast-radius view: under-replicated packs grouped by volume (FMA-08).
 
     Answers "which discs are single points of failure, and for how much
-    data?" from the catalog alone.  Per-disc detail (repos, snapshots)
+    data?" from the catalog alone.  Per-volume detail (repositories, snapshots)
     lives in ``lcsas volume impact <LABEL>``.
     """
     from lcsas.db.models import Pack, Volume
@@ -1641,15 +1641,15 @@ def _print_redundancy_report(conn: sqlite3.Connection, min_copies: int) -> int:
         packs = by_volume[vol_id]
         sole = [p for p in packs if len(live_map[p.pack_id]) == 1]
         locs = sorted({c.location for c in get_copies_for_volume(conn, vol_id)})
-        loc_str = ", ".join(locs) if locs else "<no ACTIVE copy recorded>"
+        loc_str = ", ".join(locs) if locs else "<no ACTIVE disc recorded>"
         logger.info("")
-        logger.info(f"  {v.label}  [{v.status}]  ACTIVE copies at: {loc_str}")
+        logger.info(f"  {v.label}  [{v.status}]  ACTIVE discs at: {loc_str}")
         if sole:
             sole_bytes = sum(p.size_bytes for p in sole)
             logger.info(
                 f"    only durable holder of {len(sole)} pack(s) "
-                f"({sole_bytes / 1e9:.2f} GB) — lose every copy of this "
-                f"disc and they are gone"
+                f"({sole_bytes / 1e9:.2f} GB) — lose every disc of this "
+                f"volume and they are gone"
             )
         if len(packs) > len(sole):
             logger.info(
@@ -1664,7 +1664,7 @@ def _print_redundancy_report(conn: sqlite3.Connection, min_copies: int) -> int:
             sum(p.size_bytes for p in on_no_disc) / 1e9,
         )
     logger.info("")
-    logger.info("Per-disc blast radius: lcsas volume impact <LABEL>")
+    logger.info("Per-volume blast radius: lcsas volume impact <LABEL>")
     return 0
 
 
@@ -1692,14 +1692,14 @@ def cmd_status(args: argparse.Namespace) -> int:
         summary = get_archive_status_summary(conn)
         volumes = list_volumes(conn)
         partial_sessions = list_sessions(conn, status_filter="PARTIAL")
-        # FMA-08: packs that live on exactly one physical disc.  Packs in
+        # FMA-08: packs that live on exactly one disc.  Packs in
         # the <2-copies report with at least one live holder are on one
         # disc; zero-holder packs are the unarchived/staged buckets above.
         under = get_redundancy_report(conn, min_copies=2)
         live_map = get_live_volumes_for_packs(conn, [p.pack_id for p in under])
         single_disc_packs = [p for p in under if live_map.get(p.pack_id)]
         # BURN-05: a volume whose latest event is a verify failure has no
-        # copy recorded for that burn — it needs a re-burn at the location.
+        # disc recorded for that burn — it needs a re-burn at the location.
         needs_reburn: list[tuple[str, str]] = []
         for v in volumes:
             ev = get_latest_event(conn, v.volume_id)
@@ -1728,7 +1728,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     for s in partial_sessions:
         logger.warning(
             "WARNING: session %s is PARTIAL — at least one burn failed "
-            "verification and recorded no copy. Re-run: "
+            "verification and recorded no disc. Re-run: "
             "lcsas burn --session %s --location <location>",
             s.session_id, s.session_id,
         )
@@ -1743,7 +1743,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         )
     if stale_count > 0:
         logger.warning(
-            "WARNING: %d physical cop(ies) not verified in the last %d "
+            "WARNING: %d disc(s) not verified in the last %d "
             "days — run 'lcsas status --stale-copies' to list them and "
             "'lcsas verify --all --disc' to re-verify.",
             stale_count, args.older_than_days,
@@ -1787,13 +1787,13 @@ def cmd_config_check(args: argparse.Namespace) -> int:
 
 
 def _report_unmanaged_staging(paths: list[Path]) -> None:
-    """List staging entries ``staging clean`` won't touch (#486)."""
+    """List staging-area entries ``staging clean`` won't touch (#486)."""
     if not paths:
         return
     from lcsas.utils.fs import dir_size_bytes
 
     logger.warning(
-        f"{len(paths)} item(s) under staging are not from a tracked session "
+        f"{len(paths)} item(s) in the staging area are not from a tracked session "
         "and are NOT removed (even with --force).  Check each one and "
         "delete it by hand if it is stale:"
     )
@@ -1804,7 +1804,7 @@ def _report_unmanaged_staging(paths: list[Path]) -> None:
 
 
 def cmd_staging_clean(args: argparse.Namespace) -> int:
-    """Detect and remove orphaned staging directories."""
+    """Detect and remove orphaned directories in the staging area."""
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
     from lcsas.staging.cleanup import (
@@ -1830,10 +1830,10 @@ def cmd_staging_clean(args: argparse.Namespace) -> int:
         _report_unmanaged_staging(detect_unmanaged_staging(config, conn))
 
         if not orphans:
-            logger.info("No orphaned staging directories found.")
+            logger.info("No orphaned directories found in the staging area.")
             return 0
 
-        logger.info(f"Found {len(orphans)} orphaned staging directory(ies):")
+        logger.info(f"Found {len(orphans)} orphaned directory(ies) in the staging area:")
         for p in orphans:
             logger.info(f"  {p}")
 
@@ -1850,7 +1850,7 @@ def cmd_staging_clean(args: argparse.Namespace) -> int:
             orphans = [p for p in orphans if p in still_orphaned]
 
         removed = clean_orphaned_staging(orphans)
-    logger.info(f"Removed {removed} orphaned staging directory(ies).")
+    logger.info(f"Removed {removed} orphaned directory(ies) from the staging area.")
     return 0
 
 
@@ -1975,7 +1975,7 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
 
         location = args.location or config.default_location
         # Issue #19: reject unknown --location names rather than silently
-        # auto-creating a phantom row. Users opt into creation with
+        # auto-creating a phantom row. Owners opt into creation with
         # --create-location (or by pre-registering via `location add`).
         from lcsas.db.locations import UnknownLocationError, resolve_location
         try:
@@ -2022,13 +2022,13 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
             logger.info(f"  {r.volume_label} → {r.pack_count} packs")
         else:
             logger.error(
-                f"  {r.volume_label} → VERIFY FAILED — no copy recorded; "
+                f"  {r.volume_label} → VERIFY FAILED — no disc recorded; "
                 f"needs re-burn at {location}"
             )
     failed = [r for r in receipts if not r.verify_passed]
     if failed:
         # BURN-05: the session stays PARTIAL; re-burning at the same
-        # location records the copy normally once verification passes.
+        # location records the disc normally once verification passes.
         logger.error(
             "%d volume(s) failed verification — session %s is PARTIAL. "
             "Inspect the disc/drive and re-run: "
@@ -2041,7 +2041,7 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
     # locations; cleanup is the explicit `stage --clean` step.
     logger.info(
         "ISOs retained for additional copies. After burning all "
-        "locations, free the staging space with: lcsas stage --clean"
+        "locations, free the staging area with: lcsas stage --clean"
     )
     return 0
 
@@ -2066,7 +2066,7 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
     # burn-iso is the portable half of the split workflow: it needs no
     # CATALOG, so it never opens one.  It does still read config — via
     # _resolve_device, which falls back to `--config`'s optical_device so
-    # an operator who recorded the drive there need not repeat it as
+    # an owner who recorded the drive there need not repeat it as
     # --device on every burn.  That read happens only when --device was
     # not given and only when --config was: --device short-circuits
     # first, and _load_config_opt returns None without a --config.
@@ -2235,7 +2235,7 @@ def cmd_location(args: argparse.Namespace) -> int:
             logger.info(f"  Packs archived here: {len(at_loc)}")
             logger.info(f"  Packs missing: {len(missing)}")
             if missing:
-                # Group by repo
+                # Group by repository
                 by_repo: dict[str, list[Any]] = {}
                 for p in missing:
                     repo = p.repo_id or "unknown"
@@ -2262,10 +2262,10 @@ def cmd_location(args: argparse.Namespace) -> int:
 
 
 def cmd_copy(args: argparse.Namespace) -> int:
-    """Record a physical disc copy as deprecated or destroyed (BURN-10).
+    """Record a disc as deprecated or destroyed (BURN-10).
 
     This is the supported way to tell the catalog a disc is gone.  When
-    the last ACTIVE copy of a volume is lost the volume auto-demotes to
+    a volume's last ACTIVE disc is gone the volume auto-demotes to
     DEPRECATED, so the redundancy report and the deprecation guard stop
     counting it as a replica.
     """
@@ -2294,12 +2294,12 @@ def cmd_copy(args: argparse.Namespace) -> int:
             logger.error(str(exc))
             return 1
         logger.info(
-            f"Recorded copy of {args.volume_label} at {args.location} "
+            f"Recorded the disc of {args.volume_label} at {args.location} "
             f"as {verb.upper()}."
         )
         if demoted:
             logger.warning(
-                "%s has no ACTIVE copies left — volume auto-deprecated. "
+                "%s has no ACTIVE discs left — volume auto-deprecated. "
                 "Its packs now count in 'lcsas status' / the redundancy "
                 "report; re-burn with: lcsas stage --for-location %s",
                 args.volume_label, args.location,
@@ -2348,7 +2348,7 @@ def _print_snapshot_impact(
         repo_cfg = config.repositories.get(name)
         if repo_cfg is None or repo_cfg.password_file is None:
             logger.warning(
-                "repo %s: %s (repo or password_file missing from "
+                "repo %s: %s (repository or password_file missing from "
                 "--config).", name, degrade,
             )
             continue
@@ -2400,7 +2400,7 @@ def _print_snapshot_impact(
 
 
 def cmd_volume_impact(args: argparse.Namespace) -> int:
-    """Blast radius for one disc: what is lost if ALL its copies fail?
+    """Blast radius for one volume: what is lost if ALL its discs fail?
 
     Pack-level (catalog-only) report always prints; ``--snapshots`` adds
     the snapshot-level view when the live mirror is available (FMA-08).
@@ -2432,7 +2432,7 @@ def cmd_volume_impact(args: argparse.Namespace) -> int:
         logger.info(f"Volume {vol.label}  [{vol.status}]  {vol.media_type}")
         if not any(c.status == "ACTIVE" for c in copies):
             logger.warning(
-                "  No ACTIVE physical copies recorded — this disc may "
+                "  No ACTIVE discs recorded — this volume may "
                 "already be lost."
             )
         now = datetime.now(UTC)
@@ -2442,13 +2442,13 @@ def cmd_volume_impact(args: argparse.Namespace) -> int:
                 age = f"last verified {days} day(s) ago ({c.last_verified_at[:10]})"
             else:
                 age = "never verified"
-            logger.info(f"  copy at {c.location:<20} [{c.status}]  {age}")
+            logger.info(f"  disc at {c.location:<20} [{c.status}]  {age}")
 
         logger.info("")
         if not at_risk:
             logger.info(
-                "Blast radius: NONE — every pack on this volume has "
-                "another live copy."
+                "Blast radius: NONE — every pack on this volume is also "
+                "on another live volume."
             )
             return 0
 
@@ -2457,7 +2457,7 @@ def cmd_volume_impact(args: argparse.Namespace) -> int:
             by_repo.setdefault(p.repo_id, []).append(p)
         total = sum(p.size_bytes for p in at_risk)
         logger.warning(
-            "Blast radius: if every copy of %s fails, %d pack(s) "
+            "Blast radius: if every disc of %s fails, %d pack(s) "
             "(%.2f GB) become unrestorable:",
             vol.label, len(at_risk), total / 1e9,
         )
@@ -2492,8 +2492,8 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
         a disc exists but was never read back, so it is not VERIFIED)
     Already-VERIFIED volumes (re-burn to a new location) keep their status.
 
-    A copy is recorded for every receipt except verify_passed=false: a disc
-    that failed verification is not a copy (BURN-05, as burn_session does),
+    A disc is recorded for every receipt except verify_passed=false: a disc
+    that failed verification is not recorded (BURN-05, as burn_session does),
     so that location still needs the volume.  A re-burn that failed gets a
     VERIFY_FAIL_REBURN event instead (#514).
     """
@@ -2517,7 +2517,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
         imported = 0
         for receipt_file in args.receipt_files:
-            # Every malformed receipt is skipped with a warning and the batch
+            # Every malformed receipt is skipped with a warning and the import
             # goes on (#522).  ValueError covers JSONDecodeError and the
             # UnicodeDecodeError of a non-UTF-8 file (e.g. UTF-16 from a
             # PowerShell `>` redirect).
@@ -2605,10 +2605,10 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             ensure_location(conn, receipt["location"], commit=False)
 
             # Advance status if this is the first burn (STAGING); otherwise
-            # just add a copy (handles re-burns to additional locations).
+            # just record the disc (handles re-burns to additional locations).
             # verify_passed is tri-state (#514): true, false (verify FAILED),
             # null (not verified).  A receipt without the key predates the
-            # field: it keeps the old reading (status as failed, copy kept).
+            # field: it keeps the old reading (status as failed, disc kept).
             raw_verify = receipt.get("verify_passed", "missing")
             if raw_verify == "missing":
                 logger.warning(
@@ -2660,7 +2660,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                 logger.warning(
                     f"Receipt '{receipt_file}': the disc for "
                     f"'{receipt['volume_label']}' FAILED verification at "
-                    f"{receipt['location']}.  No copy was recorded; that "
+                    f"{receipt['location']}.  No disc was recorded; that "
                     "location still needs this volume.  Re-burn it."
                 )
             else:
@@ -2683,7 +2683,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                 )
 
             # Issue #18: persist receipt provenance (iso_sha256, session_id,
-            # device, pack_ids) on the canonical catalog as a
+            # device, pack_ids) on the master catalog as a
             # BURN_RECEIPT_IMPORTED audit event. Captures all four fields
             # from the receipt JSON so later "which device burned this?"
             # and "does the disc hash match the recorded one?" queries can
@@ -2717,7 +2717,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
 
 def cmd_catalog_validate(args: argparse.Namespace) -> int:
-    """Cross-check a mounted disc's data files against its embedded catalog."""
+    """Cross-check a mounted disc's data files against its disc catalog."""
     from lcsas.db.verify import validate_disc
 
     disc_path = args.disc
@@ -2755,7 +2755,7 @@ def cmd_catalog_validate(args: argparse.Namespace) -> int:
     if result.corrupt_on_disc:
         logger.error(
             "%d pack file(s) on disc are CORRUPT "
-            "(content does not match filename hash):",
+            "(content does not match the pack ID in the filename):",
             len(result.corrupt_on_disc),
         )
         for sha in result.corrupt_on_disc:
@@ -2781,11 +2781,11 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
 
     1. Ghost volumes — STAGING/BURNING with zero ``volume_copies`` rows,
        older than the cutoff.  These claim packs but correspond to no
-       physical disc; restore pick lists offer them by label and an heir
+       disc at all; restore pick lists offer them by label and an heir
        would hunt for a disc that never existed.  ``--fix`` deletes them
        (the migration path for catalogs predating the FMA-01 semantics).
-    2. Durable volumes without an ACTIVE copy — status says a disc exists
-       but no copy record backs it.  Report-only.
+    2. Durable volumes without an ACTIVE disc — status says a disc exists
+       but no disc record backs it.  Report-only.
     """
     from lcsas.db.connection import locked_connection
     from lcsas.db.queries import (
@@ -2807,8 +2807,8 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
 
         if drifted:
             logger.warning(
-                "%d volume(s) have a durable status but no ACTIVE copy "
-                "record (status/copies drift — investigate, not auto-fixed):",
+                "%d volume(s) have a durable status but no ACTIVE disc "
+                "recorded (status/disc drift — investigate, not auto-fixed):",
                 len(drifted),
             )
             for v in drifted:
@@ -2889,7 +2889,7 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
 
 
 def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
-    """Rebuild master catalog by merging disc-embedded holographic catalogs."""
+    """Rebuild the master catalog by merging disc catalogs."""
     from lcsas.db.rebuild import rebuild_catalog
 
     disc_dirs = [Path(d) for d in args.disc_dirs]
@@ -3075,7 +3075,7 @@ def _verify_disc_against_recorded_hash(
     evidence for a volume that carries a hash).
 
     Hash + length come from ``session_volumes`` (written at stage time),
-    falling back to ``volume_copies`` — the copy rows survive receipt
+    falling back to ``volume_copies`` — the disc rows survive receipt
     import and catalog rebuild from disc, where session_volumes does
     not (FMA-03).
     """
@@ -3099,7 +3099,7 @@ def _verify_disc_against_recorded_hash(
                 iso_size = iso_file.stat().st_size
     else:
         # Rebuilt / receipt-imported catalog: session_volumes is empty
-        # but the copy rows carry the evidence (schema v8, FMA-03).
+        # but the volume_copies rows carry the evidence (schema v8, FMA-03).
         copy_row = conn.execute(
             "SELECT iso_sha256, iso_size_bytes FROM volume_copies "
             "WHERE volume_id = ? AND iso_sha256 IS NOT NULL AND iso_sha256 != '' "
@@ -3153,7 +3153,7 @@ def _check_disc_for_volume(
 
     Returns ``"PASS"``, ``"FAIL"``, or ``"WRONG_DISC"``.  WRONG_DISC
     means the disc in the drive is not (provably) this volume — that is
-    operator error, not evidence about the volume's burned copy, so
+    the owner's mistake, not evidence about the volume's burned disc, so
     callers must record NOTHING for it.
     """
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
@@ -3193,7 +3193,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     Supports three modes:
     - Physical/ISO verification: check media integrity (default)
     - Manual marking: --mark-verified / --mark-failed for remote workflows
-    - Batch: --all to verify all BURNED/VERIFIED volumes
+    - All volumes: --all to verify every BURNED/VERIFIED volume
     """
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema
@@ -3206,7 +3206,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
 
-        # --- Batch mode: verify --all ---
+        # --- All volumes: verify --all ---
         if args.verify_all:
             if args.disc:
                 return _verify_all_disc(conn, args, device)
@@ -3214,7 +3214,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
         # --- Single volume mode ---
         if not args.volume_label:
-            logger.error("Volume label required (or use --all for batch mode).")
+            logger.error("Volume label required (or use --all to verify every volume).")
             return 1
 
         vol = get_volume_by_label(conn, args.volume_label)
@@ -3276,8 +3276,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 touch_last_verified,
             )
 
-            # FMA-05: resolve which copy this disc IS before touching
-            # the device — with several ACTIVE copies the operator must
+            # FMA-05: resolve which disc this IS before touching
+            # the device — with several ACTIVE discs the owner must
             # say which one is in the drive, or the stamp would assert
             # freshness for a disc that was never read.
             stamp_location = args.location
@@ -3288,7 +3288,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 elif len(active) > 1:
                     locs = ", ".join(sorted(c.location for c in active))
                     logger.error(
-                        f"Volume {vol.label} has ACTIVE copies at {locs} — "
+                        f"Volume {vol.label} has ACTIVE discs at {locs} — "
                         f"pass --location to record which disc is being "
                         f"verified."
                     )
@@ -3296,8 +3296,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
             logger.info(f"Verifying disc on {device} ...")
             # FMA-03: identity gate first.  If the disc in the drive is
             # not this volume (or carries no readable Volume ID), record
-            # NOTHING — a wrong disc is operator error, not evidence
-            # about this volume's burned copy.
+            # NOTHING — a wrong disc is owner error, not evidence
+            # about this volume's burned discs.
             outcome = _check_disc_for_volume(
                 conn, vol.volume_id, vol.label, device,
             )
@@ -3307,7 +3307,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
             if passed:
                 if stamp_location is None:
                     logger.warning(
-                        f"  No ACTIVE copy of {vol.label} recorded — "
+                        f"  No ACTIVE disc of {vol.label} recorded — "
                         f"last_verified_at not stamped"
                     )
                 # Stamp uncommitted: the add_event() below commits it
@@ -3316,11 +3316,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
                     conn, vol.volume_id, stamp_location, commit=False,
                 ):
                     logger.info(
-                        f"  Stamped last_verified_at on copy at {stamp_location}"
+                        f"  Stamped last_verified_at on the disc at {stamp_location}"
                     )
                 else:
                     logger.warning(
-                        f"  No ACTIVE copy of {vol.label} at {stamp_location} — "
+                        f"  No ACTIVE disc of {vol.label} at {stamp_location} — "
                         f"last_verified_at not updated"
                     )
         else:
@@ -3382,7 +3382,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any) -> int:
-    """Batch-verify all BURNED/VERIFIED volumes, optionally at a location."""
+    """Verify all BURNED/VERIFIED volumes in one run, optionally at a location."""
     from lcsas.db.volume_copies import get_copies_for_volume
     from lcsas.db.volume_events import add_event
     from lcsas.db.volumes import list_volumes, update_status
@@ -3392,7 +3392,7 @@ def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any)
     candidates = vols_burned + vols_verified
 
     if args.location:
-        # Filter to volumes with a copy at the given location
+        # Filter to volumes with a disc at the given location
         filtered = []
         for vol in candidates:
             copies = get_copies_for_volume(conn, vol.volume_id)
@@ -3437,7 +3437,7 @@ def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any)
         if not row or not row["iso_path"]:
             # FMA-05: burn_session() deletes the ISO after a verified
             # burn — for a burned volume this is the NORMAL state, so
-            # point at the physical-disc batch mode instead of leaving
+            # point at the disc mode (--all --disc) instead of leaving
             # a bare skip.
             logger.info(
                 f"  {vol.label}: ISO deleted after burn — use "
@@ -3494,14 +3494,14 @@ def _verify_all(conn: sqlite3.Connection, args: argparse.Namespace, config: Any)
 def _verify_all_disc(
     conn: sqlite3.Connection, args: argparse.Namespace, device: str,
 ) -> int:
-    """Batch re-verify physical discs copy-by-copy (FMA-05).
+    """Re-verify every in-service disc, one at a time (FMA-05).
 
-    Iterates ACTIVE copies of BURNED/VERIFIED volumes (optionally
-    filtered to --location), prompting the operator to insert each
-    disc.  A PASS stamps ``last_verified_at`` on the copy (committed
+    Iterates ACTIVE discs of BURNED/VERIFIED volumes (optionally
+    filtered to --location), prompting the owner to insert each
+    disc.  A PASS stamps ``last_verified_at`` on the disc's row (committed
     atomically with its VERIFY_PASS event); a FAIL records VERIFY_FAIL
     and leaves the stamp untouched; a wrong disc in the drive records
-    nothing (FMA-03: operator error is not evidence).
+    nothing (FMA-03: owner error is not evidence).
     """
     from lcsas.db.volume_copies import touch_last_verified
     from lcsas.db.volume_events import add_event
@@ -3519,10 +3519,10 @@ def _verify_all_disc(
         params,
     ).fetchall()
     if not rows:
-        logger.info("No ACTIVE copies to verify.")
+        logger.info("No ACTIVE discs to verify.")
         return 0
 
-    logger.info(f"Re-verifying {len(rows)} physical cop(ies) on {device}")
+    logger.info(f"Re-verifying {len(rows)} disc(s) on {device}")
     results: list[tuple[str, str, str]] = []
     quit_early = False
     for row in rows:
@@ -3551,8 +3551,8 @@ def _verify_all_disc(
             touch_last_verified(conn, row["volume_id"], location, commit=False)
             add_event(conn, row["volume_id"], "VERIFY_PASS",
                       location=location, detail="Batch disc verify")
-            logger.info(f"  Stamped last_verified_at on copy at {location}")
-            # Re-read status: an earlier copy of the same volume may
+            logger.info(f"  Stamped last_verified_at on the disc at {location}")
+            # Re-read status: an earlier disc of the same volume may
             # already have promoted it in this run.
             if get_volume_by_id(conn, row["volume_id"]).status == "BURNED":
                 update_status(conn, row["volume_id"], "VERIFIED")
@@ -3563,7 +3563,7 @@ def _verify_all_disc(
                       location=location, detail="Batch disc verify")
             results.append((label, location, "FAIL"))
         else:
-            # WRONG_DISC: nothing recorded; the copy stays unverified.
+            # WRONG_DISC: nothing recorded; the disc stays unverified.
             results.append((label, location, "SKIPPED"))
 
     logger.info("Batch disc verification results:")
@@ -3640,10 +3640,10 @@ def cmd_recovery(args: argparse.Namespace) -> int:
 
 
 def cmd_meta_build(args: argparse.Namespace) -> int:
-    """Build a self-contained meta-volume with all restore tools."""
+    """Build a self-contained meta disc with all the recovery tools."""
     from lcsas.meta.builder import MetaBuildError, MetaVolumeBuilder
 
-    # Load config for survivability fields (START_HERE.txt, KEY_INFO.txt).
+    # Load config for survivability fields (START_HERE.txt, PASSWORD_INFO.txt).
     # A broken config downgrades those fields; it must not block the build,
     # so this is the one caller that swallows the error.
     config = None
@@ -3675,7 +3675,7 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
         ),
     )
 
-    logger.info(f"Building meta-volume in {output} ...")
+    logger.info(f"Building meta disc in {output} ...")
     try:
         builder.build()
     except FileNotFoundError as e:
@@ -3687,8 +3687,8 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
         return 1
 
     # RST-05: required-contents completeness gate (default ON).  A
-    # meta-volume missing per-target binaries or root restore artifacts
-    # is an incomplete rescue disc; fail loud unless --allow-incomplete.
+    # meta disc missing per-target binaries or root restore artifacts
+    # is incomplete; fail loud unless --allow-incomplete.
     #
     # Issue #443: the per-repo metadata/<repo>/keys entries (#367) are
     # split out of that gate. "--allow-incomplete" means "dev build
@@ -3710,7 +3710,7 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
         if other_missing:
             if getattr(args, "allow_incomplete", False):
                 logger.warning(
-                    "Meta-volume is INCOMPLETE (%d required artifact(s) "
+                    "Meta disc is INCOMPLETE (%d required artifact(s) "
                     "missing) — building anyway because --allow-incomplete "
                     "was given. Missing: %s",
                     len(other_missing), ", ".join(other_missing),
@@ -3718,7 +3718,7 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
             else:
                 from lcsas.meta.required_contents import APPROVED_TARGETS
                 logger.error(
-                    "Meta-volume is INCOMPLETE — %d required artifact(s) "
+                    "Meta disc is INCOMPLETE — %d required artifact(s) "
                     "missing:", len(other_missing),
                 )
                 for target in APPROVED_TARGETS:
@@ -3752,7 +3752,7 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
             )
             if getattr(args, "allow_missing_metadata", False):
                 logger.warning(
-                    "ACKNOWLEDGED: %d repo(s) bundled onto this meta-volume "
+                    "ACKNOWLEDGED: %d repo(s) bundled onto this meta disc "
                     "have NO keys/ in their metadata — building anyway "
                     "because --allow-missing-metadata was given. This disc "
                     "CANNOT decrypt: %s",
@@ -3764,8 +3764,8 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
                 )
             else:
                 logger.error(
-                    "Meta-volume is missing metadata/<repo>/keys for %d "
-                    "repo(s) — this rescue disc could not decrypt them: %s",
+                    "Meta disc is missing metadata/<repo>/keys for %d "
+                    "repo(s) — this meta disc could not decrypt them: %s",
                     len(keys_missing), ", ".join(repo_ids),
                 )
                 logger.error(
@@ -3788,37 +3788,37 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
         if gate_failed:
             return 1
 
-    # Issue #367: recommended-contents advisory (WARN only).  A meta-volume
-    # missing the tier-2b restic hedge or lcsas-keyshare is still
-    # recoverable via tier-1 + tier-3, so warn rather than fail — and stock
+    # Issue #367: recommended-contents advisory (WARN only).  A meta disc
+    # missing the tier-2b restic hedge or lcsas-keyshare can still
+    # restore via tier 1 + tier 3, so warn rather than fail — and stock
     # restic comes from the upstream cache, so it is legitimately absent on
     # a cold-cache build.
     recommended_missing = builder.missing_recommended_contents()
     if recommended_missing:
         logger.warning(
-            "Meta-volume is missing %d RECOMMENDED artifact(s) (still "
-            "recoverable without them — stock restic tier-2b hedge and/or "
+            "Meta disc is missing %d RECOMMENDED artifact(s) (it can still "
+            "restore without them — stock restic tier-2b hedge and/or "
             "lcsas-keyshare): %s",
             len(recommended_missing), ", ".join(recommended_missing),
         )
 
     # Issue #435: state which repos' Rustic keys this disc carries.  An
     # unreachable mirror is skipped by design (a stale catalog row must
-    # not block a rescue disc) — but shipping a meta-volume that cannot
-    # decrypt a repo has to be a decision the operator sees, not an
-    # accident discovered during a recovery.
+    # not block a meta disc) — but shipping a meta disc that cannot
+    # decrypt a repository has to be a decision the owner sees, not an
+    # accident discovered during a restore.
     results = builder.metadata_results
     if results:
         bundled = [r for r in results if r.bundled]
         skipped = [r for r in results if not r.bundled]
         logger.info(
-            "Rustic metadata bundled for %d of %d catalogued repo(s): %s",
+            "Repository metadata bundled for %d of %d catalogued repo(s): %s",
             len(bundled), len(results),
             ", ".join(r.repo_id for r in bundled) or "(none)",
         )
         if skipped:
             logger.warning(
-                "%d repo(s) have NO keys on this meta-volume: %s — their "
+                "%d repo(s) have NO keys on this meta disc: %s — their "
                 "packs cannot be decrypted from this disc alone. Mount the "
                 "mirror(s) and rebuild if that is not what you want.",
                 len(skipped), ", ".join(r.repo_id for r in skipped),
@@ -3826,12 +3826,12 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
 
         # Issue #437: the key gate.  Reporting alone (#436) still lets a
         # build script that only checks the exit code master and burn a
-        # disc that cannot decrypt a tenant's packs.  Fail the build —
+        # disc that cannot decrypt a repository's packs.  Fail the build —
         # but ONLY for a gap that is genuinely a survivability defect:
         #
         #   * has packs on a volume that still exists  (data is out there
         #     right now that needs these keys), AND
-        #   * is not retired  (the operator has not said the mirror is
+        #   * is not retired  (the owner has not said the mirror is
         #     gone for good — `lcsas repo retire`), AND
         #   * got no keys bundled.
         #
@@ -3849,7 +3849,7 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
             if getattr(args, "allow_missing_metadata", False):
                 logger.warning(
                     "ACKNOWLEDGED: %d repo(s) with packs on discs have NO "
-                    "keys on this meta-volume — building anyway because "
+                    "keys on this meta disc — building anyway because "
                     "--allow-missing-metadata was given. This disc CANNOT "
                     "decrypt: %s",
                     len(gaps),
@@ -3864,8 +3864,8 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
                 )
             else:
                 logger.error(
-                    "Meta-volume carries NO Rustic keys for %d repo(s) whose "
-                    "packs are on discs that still exist — this rescue disc "
+                    "Meta disc carries NO Rustic keys for %d repo(s) whose "
+                    "packs are on discs that still exist — this meta disc "
                     "could not decrypt them:", len(gaps),
                 )
                 for r in gaps:
@@ -3893,13 +3893,13 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
                 )
                 return 1
 
-    logger.info(f"Meta-volume built successfully at {output}")
+    logger.info(f"Meta disc built successfully at {output}")
     logger.info("Contents:")
     logger.info("  tools/          Portable rustic, xorriso, python3 + libraries")
     logger.info("  lcsas/          LCSAS source code")
     logger.info("  restore.sh      Bootstrap restore script")
     logger.info("  README_RESTORE.md  Restore instructions")
-    logger.info("  START_HERE.txt  Plain-language guide for non-technical users")
+    logger.info("  START_HERE.txt  Plain-language guide for heirs")
     return 0
 
 
@@ -3910,13 +3910,13 @@ _UNLISTED_MANIFESTS = frozenset({"MANIFEST.sha256", "docs/MANIFEST.sha256"})
 
 
 def cmd_meta_verify(args: argparse.Namespace) -> int:
-    """Audit a built meta-volume against its recovery/MANIFEST.sha256.
+    """Audit a built meta disc against its recovery/MANIFEST.sha256.
 
     Phase 21.8.  Mirrors `make verify-recovery` (which audits the
     upstream-binary cache on the build host) but operates on the
     output of `lcsas meta build` — useful for catching bit-rot on
-    a meta-volume directory before it's mastered into an ISO, or
-    for periodic disc-health checks on a mounted meta-disc.
+    a meta disc directory before it's mastered into an ISO, or
+    for periodic disc-health checks on a mounted meta disc.
     """
     import hashlib
 
@@ -3924,7 +3924,7 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
     manifest_path = out / "recovery" / "MANIFEST.sha256"
     if not manifest_path.is_file():
         logger.error(
-            "No recovery/MANIFEST.sha256 under %s — is this really a meta-volume?",
+            "No recovery/MANIFEST.sha256 under %s — is this really a meta disc?",
             out,
         )
         return 1
@@ -3984,7 +3984,7 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
     # RST-05: required-contents check, independent of the manifest.  The
     # manifest is regenerated from whatever was bundled, so it cannot
     # catch a *never-bundled* target — this contract check can.  Rooted
-    # at the meta-volume output dir (not recovery/), so it also covers the
+    # at the meta disc output dir (not recovery/), so it also covers the
     # root-level restore artifacts that live outside recovery/.
     from lcsas.meta.required_contents import VINTAGE_NOTE, required_meta_paths
     absent: list[str] = []
@@ -4006,12 +4006,12 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
     for rel in sorted(extras):
         logger.error("  EXTRA    %s  (present on disk but absent from manifest)", rel)
     for rel in sorted(absent):
-        logger.error("  ABSENT   %s  (required by the meta-volume contract)", rel)
+        logger.error("  ABSENT   %s  (required by the meta disc contract)", rel)
 
     total_issues = len(missing) + len(mismatched) + len(extras) + len(absent)
     if total_issues:
         logger.error(
-            "Meta-volume verify FAILED: %d issue(s) "
+            "Meta disc verify FAILED: %d issue(s) "
             "(%d missing, %d mismatched, %d extra, %d absent).",
             total_issues, len(missing), len(mismatched), len(extras), len(absent),
         )
@@ -4020,7 +4020,7 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
         return 1
 
     logger.info(
-        "Meta-volume verify PASSED: %d files match recovery/MANIFEST.sha256; "
+        "Meta disc verify PASSED: %d files match recovery/MANIFEST.sha256; "
         "all required-contents artifacts present.",
         checked,
     )
@@ -4054,7 +4054,7 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
             )
             return 1
 
-        # Get required pack hashes via rustic dry-run
+        # Get required pack IDs via rustic dry-run
         from lcsas.utils.subprocess import check_binary_version
         try:
             check_binary_version("rustic", min_version=(0, 9, 0))
@@ -4115,7 +4115,7 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
             "\n  WARNING: volume %s was staged but has no record of ever "
             "being burned. If you cannot find this disc, it may never have "
             "existed. The %d pack(s) it lists may only exist on the "
-            "original NAS mirror.",
+            "mirror.",
             label, len(hashes),
         )
 
@@ -4144,7 +4144,7 @@ def cmd_restore_plan(args: argparse.Namespace) -> int:
 def _find_sibling_iso(vol_dir: Path, label: str) -> Path | None:
     """Locate ``<label>.iso`` near a pre-extracted volume directory.
 
-    Phase 21.6 helper.  When operators extract a stack of LCSAS ISOs
+    Phase 21.6 helper.  When a stack of LCSAS ISOs is extracted
     into a single directory (the ``--volume-dir`` mode), the original
     ``.iso`` files often live alongside the extracted trees:
 
@@ -4160,7 +4160,7 @@ def _find_sibling_iso(vol_dir: Path, label: str) -> Path | None:
 
     Returns the first existing candidate path, or ``None`` if no ISO
     is reachable — in which case the caller skips the integrity check
-    (degraded but not fatal — packs still get hash-verified
+    (degraded but not fatal — packs still get hash-checked
     individually during copy).
     """
     candidates = (
@@ -4255,7 +4255,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
 
         runner = SubprocessRusticRunner(tmpdir=config.staging_path)
 
-        # Get required pack hashes
+        # Get required pack IDs
         plan = runner.restore_dry_run(
             snapshot_id=args.snapshot_id,
             repo_path=repo_cfg.mirror_path,
@@ -4266,9 +4266,9 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         planner = RestorePlanner(conn)
         pick_list = planner.generate_pick_list_v2(plan.required_pack_hashes)
 
-        # Phase 21.6: snapshot per-volume ISO SHA-256 hashes while
+        # Phase 21.6: capture per-volume ISO SHA-256 hashes while
         # the catalog conn is still open so the ingest loop below
-        # can pass them to ingest_volume.  When the operator's
+        # can pass them to ingest_volume.  When the owner's
         # vol_dir holds the original .iso files next to the
         # extracted contents, ingest_volume will SHA-verify each
         # one before reading its packs — same protection as
@@ -4293,7 +4293,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
             "WARNING: volume %s was staged but has no record of ever being "
             "burned. If you cannot find this disc, it may never have "
             "existed. The %d pack(s) it lists may only exist on the "
-            "original NAS mirror.",
+            "mirror.",
             label, len(hashes),
         )
 
@@ -4302,7 +4302,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                      f"found in any volume.")
         return 1
 
-    # Build alternates lookup: sha256 -> [alt_labels]
+    # Build alternates lookup: pack ID -> [alt_labels]
     alternates_map: dict[str, list[str]] = {}
     primary_labels: dict[str, str] = {}
     for label, sources in pick_list.volumes.items():
@@ -4366,7 +4366,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
         from lcsas.ecc.dvdisaster import select_ecc_runner
         executor = RestoreExecutor(runner, ecc_runner=select_ecc_runner())
 
-        # Prepare cache with metadata from the repo mirror
+        # Prepare cache with repository metadata from the mirror
         metadata_source = repo_cfg.mirror_path
         executor.prepare_cache(cache_dir, metadata_source)
 
@@ -4403,8 +4403,8 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     )
                     all_failed.extend(result.failed)
 
-            # Retry failed packs from alternate volumes.  Prune against
-            # the cache first: never fail a restore whose cache is
+            # Retry failed packs from alternate volumes.  Drop packs the
+            # cache already holds first: never fail a restore whose cache is
             # already complete (RST-01 — keeps the invariant uniform
             # across the disc-only and config-driven restore paths).
             all_failed = _prune_recovered(cache_dir, all_failed)
@@ -4423,10 +4423,10 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     where = _disc_summary_for_packs(pick_list, still_failed)
                     raise PackCorruptionError(
                         f"{len(still_failed)} pack(s) could not be "
-                        f"recovered.{where}"
+                        f"retrieved.{where}"
                     )
         else:
-            # Interactive: prompt user to mount each volume
+            # Interactive: prompt the owner to mount a disc of each volume
             if not sys.stdin.isatty():
                 logger.error(
                     "Interactive restore requires a TTY. "
@@ -4438,13 +4438,13 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                 pack_hashes = [s.pack.sha256 for s in sources]
                 while True:
                     mount_path = input(
-                        f"\nMount volume '{label}' and enter mount path "
+                        f"\nMount disc '{label}' and enter mount path "
                         f"(or 'skip' to skip): "
                     ).strip()
                     if mount_path.lower() == "skip":
                         logger.info(f"  Skipping {label}")
                         # RST-07: enqueue the skipped disc's packs so the
-                        # alternates retry can offer redundant copies.
+                        # alternates retry can offer other volumes.
                         all_failed.extend(pack_hashes)
                         break
                     vol_path = Path(mount_path)
@@ -4491,11 +4491,11 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
                     where = _disc_summary_for_packs(pick_list, still_failed)
                     raise PackCorruptionError(
                         f"{len(still_failed)} pack(s) could not be "
-                        f"recovered.{where}"
+                        f"retrieved.{where}"
                     )
 
         # ── Post-ingest completeness check ──────────────────────────
-        # Verify every required pack was actually ingested before
+        # Check every required pack was actually ingested before
         # running rustic, which would fail with an opaque error.
         all_required = plan.required_pack_hashes
         missing = RestoreExecutor.verify_cache_completeness(
@@ -4508,7 +4508,7 @@ def cmd_restore_exec(args: argparse.Namespace) -> int:
             )
             _report_missing_by_label(pick_list, missing)
             logger.error(
-                "\nRestore cannot proceed — mount the missing volumes "
+                "\nRestore cannot proceed — mount the missing discs "
                 "and retry, or check for damaged discs."
             )
             return 1
@@ -4536,15 +4536,15 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
     """Restore from optical discs without a config file or mirror.
 
     Reads ``catalog.db`` and repository metadata directly from a mounted
-    or extracted disc.  No ``--config``, local mirror, or original
-    database required — everything needed is embedded on each disc.
+    or extracted disc.  No ``--config``, local mirror, or master
+    catalog required — everything needed is embedded on each disc.
 
     Typical usage::
 
         lcsas restore standalone /mnt/disc1 ~/restored/ \\
             --password-file ~/secret.key
 
-    For batch (scripted) restores with pre-extracted discs::
+    For scripted restores with pre-extracted discs::
 
         lcsas restore standalone /tmp/disc1 ~/restored/ \\
             --password-file ~/secret.key \\
@@ -4674,7 +4674,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
         executor.prepare_cache(cache_dir, disc_meta)
 
         if not rustic_available:
-            # Auto-fallback: use the pure-Python restorer bundled with LCSAS.
+            # Auto-fallback: use the Python reader (tier 3) bundled with LCSAS.
             # Link the disc data dir into the cache so PurePythonRestorer can
             # find the pack files without copying gigabytes.
             from lcsas.restore.restic_fallback import PurePythonRestorer
@@ -4702,7 +4702,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                 return 1
 
             logger.warning(
-                "rustic binary not found — falling back to pure-Python restorer.\n"
+                "rustic binary not found — falling back to the Python reader (tier 3).\n"
                 "  This is ~100x slower and only reads packs from the mounted disc.\n"
                 "  For multi-disc snapshots, mount all discs and copy their data/ "
                 "directories into %s/data/ before running.",
@@ -4717,22 +4717,22 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
             try:
                 meta = restorer.restore(target=target, snapshot_id=snap_arg)
             except Exception as exc:
-                # Setup-level failure (bad key, missing repo) — fail fast.
-                logger.error("Pure-Python restore failed: %s", exc)
+                # Setup-level failure (wrong password, missing repo) — fail fast.
+                logger.error("Python reader restore failed: %s", exc)
                 return 1
             if restorer.failures:
                 # Tolerant traversal skipped one or more files; the bulk
                 # of the data is restored and a manifest lists the rest.
                 logger.error(
-                    "Pure-Python restore finished with %d skipped file(s). "
+                    "Python reader restore finished with %d skipped file(s). "
                     "See %s/RESTORE_FAILURES.txt; the rest of your data is "
                     "intact. Re-run from a newer meta disc or an undamaged "
-                    "copy of the affected disc to recover them.",
+                    "disc of the affected volume to restore them.",
                     restorer.failures, target,
                 )
                 return 2
             logger.info(
-                "Restore complete (pure-Python fallback). Snapshot: %s, "
+                "Restore complete (Python reader fallback). Snapshot: %s, "
                 "hostname: %s",
                 meta.snapshot_id, meta.hostname,
             )
@@ -4781,7 +4781,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                 "rustic/restic binary not found.\n"
                 "Install rustic (https://rustic.cli.rs/) or "
                 "restic (https://restic.net/),\n"
-                "or use the standalone restorer bundled on the disc:\n"
+                "or use the Python reader (tier 3) bundled on the disc:\n"
                 "  python3 %s/standalone_restorer.py "
                 "--password-file %s --target %s",
                 disc_path, args.password_file, args.target_path,
@@ -4790,7 +4790,8 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
         except Exception as exc:
             logger.error(
                 "Failed to determine required packs: %s\n"
-                "Verify the password file is correct and disc metadata is intact.",
+                "Check the password file is correct and the disc's repository "
+                "metadata is intact.",
                 exc,
             )
             return 1
@@ -4826,7 +4827,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                 "%d required pack(s) not found in the disc catalog. "
                 "If these packs are on other discs not yet mounted, "
                 "add them via --disc-dir and re-run.%s\n"
-                "  Missing hashes: %s%s",
+                "  Missing pack IDs: %s%s",
                 len(pick_list.missing_packs),
                 deprecated_hint,
                 missing_preview,
@@ -4846,7 +4847,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
         all_failed: list[str] = []
 
         if args.volume_dir:
-            # Batch mode: all discs pre-extracted into a directory tree.
+            # Non-interactive mode: all discs pre-extracted into a directory tree.
             vol_dir = args.volume_dir
 
             # Always try the initial --disc path first.
@@ -4880,7 +4881,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
 
             # The cache is the source of truth: packs that live on a
             # later disc were seeded into all_failed by the initial-disc
-            # ingest, then ingested for real in the loop above.  Prune
+            # ingest, then ingested for real in the loop above.  Drop
             # them before any retry/raise so a multi-disc snapshot whose
             # cache is complete never falsely fails (RST-01).
             all_failed = _prune_recovered(cache_dir, all_failed)
@@ -4895,11 +4896,11 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                     where = _disc_summary_for_packs(pick_list, still_failed)
                     raise PackCorruptionError(
                         f"{len(still_failed)} pack(s) could not be "
-                        f"recovered.{where}"
+                        f"retrieved.{where}"
                     )
 
         else:
-            # Interactive mode: prompt user to mount each disc.
+            # Interactive mode: prompt for each disc to be mounted.
             if not sys.stdin.isatty():
                 logger.error(
                     "Interactive restore requires a TTY.\n"
@@ -4908,7 +4909,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                 )
                 return 1
 
-            # First: ingest from the initial disc provided by the user.
+            # First: ingest from the initial disc named on the command line.
             logger.info("\nIngesting packs from initial disc...")
             result = executor.ingest_volume(
                 cache_dir, disc_path, plan.required_pack_hashes,
@@ -4942,7 +4943,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                         if mount_path.lower() == "skip":
                             logger.info("  Skipping %s", label)
                             # RST-07: enqueue the skipped disc's packs so
-                            # the alternates retry can offer redundant copies.
+                            # the alternates retry can offer other volumes.
                             all_failed.extend(pack_hashes)
                             break
                         vol_path = Path(mount_path)
@@ -4978,7 +4979,7 @@ def cmd_restore_from_disc(args: argparse.Namespace) -> int:
                     where = _disc_summary_for_packs(pick_list, still_failed)
                     raise PackCorruptionError(
                         f"{len(still_failed)} pack(s) could not be "
-                        f"recovered.{where}"
+                        f"retrieved.{where}"
                     )
 
         # Completeness check before running rustic.
@@ -5034,9 +5035,9 @@ def _retry_from_alternates_batch(
     verify: bool = True,
     iso_shas: dict[str, str | None] | None = None,
 ) -> list[str]:
-    """Retry failed packs from alternate volumes (batch/non-interactive).
+    """Retry failed packs from alternate volumes (non-interactive).
 
-    Returns list of packs that could not be recovered.
+    Returns list of packs that could not be retrieved.
 
     Phase 21.7: ``iso_shas`` is the same per-label SHA-256 dict
     computed once in cmd_restore_exec from the catalog.  When
@@ -5044,7 +5045,7 @@ def _retry_from_alternates_batch(
     (against the sibling .iso file, if present) before its packs
     are read — so a corrupt alternate that would otherwise silently
     spread bad packs into the cache is rejected up front, with the
-    standard "try another location" recovery hint.
+    standard "try another location" hint.
     """
     remaining = list(failed_packs)
 
@@ -5075,7 +5076,7 @@ def _retry_from_alternates_batch(
             iso_path=alt_iso, expected_sha256=alt_sha,
         )
         if result.ingested:
-            logger.info(f"  Recovered {result.ingested} packs from {alt_label}")
+            logger.info(f"  Retrieved {result.ingested} packs from {alt_label}")
         recovered = set(packs_on_alt) - set(result.failed)
         remaining = [sha for sha in remaining if sha not in recovered]
 
@@ -5095,16 +5096,16 @@ def _retry_from_alternates_interactive(
 ) -> list[str]:
     """Retry failed packs from alternate volumes (interactive).
 
-    Prompts user to mount alternate volumes. Returns unrecoverable packs.
+    Prompts for a disc of each alternate volume. Returns packs still missing.
 
     Phase 21.9: ``iso_dir`` + ``iso_shas`` activate the same SHA-256
-    verify-or-die check that the --volume-dir batch path gets.  When
+    verify-or-die check that the --volume-dir path gets.  When
     both are supplied, the alternate volume's <label>.iso under
     ``iso_dir`` is hashed against the catalog-recorded SHA before its
     packs are read.  Defaults are None for backward-compat — direct
     callers without iso info continue to work unchanged.
 
-    RST-07: ``primary_labels`` maps each pack sha to the disc it was
+    RST-07: ``primary_labels`` maps each pack ID to the disc it was
     originally assigned to (the one skipped/failed), so the prompt can
     explain *why* the alternate is being offered.
     """
@@ -5153,7 +5154,7 @@ def _retry_from_alternates_interactive(
             iso_path=alt_iso, expected_sha256=alt_sha,
         )
         if result.ingested:
-            logger.info(f"  Recovered {result.ingested} packs from {alt_label}")
+            logger.info(f"  Retrieved {result.ingested} packs from {alt_label}")
         recovered = set(packs_on_alt) - set(result.failed)
         remaining = [sha for sha in remaining if sha not in recovered]
 
@@ -5178,8 +5179,8 @@ def _prune_recovered(cache_dir: Path, failed: list[str]) -> list[str]:
     """Drop packs already present + valid in the cache (deduped).
 
     The cache is the source of truth: a pack ingested from any volume is
-    recovered no matter which disc reported it as "not found on this
-    volume".  Pruning ``failed`` against the cache before any retry/raise
+    in hand no matter which disc reported it as "not found on this
+    volume".  Filtering ``failed`` against the cache before any retry/raise
     is what prevents a multi-disc snapshot from falsely failing — packs
     that live on a *later* disc are seeded into ``failed`` by the initial
     ingest, then ingested for real later in the loop, but nothing else
@@ -5198,7 +5199,7 @@ def _disc_summary_for_packs(pick_list: Any, packs: list[str]) -> str:
 
     Used in the raised-error path so a genuine failure names both the disc
     the packs were assigned to and any alternate that also holds them —
-    not only opaque SHA-256 hashes.  [RST-07]
+    not only opaque pack IDs.  [RST-07]
     """
     label_map = _labels_for_packs(pick_list, packs)
     primaries = sorted({labels[0] for labels in label_map.values() if labels})
@@ -5209,7 +5210,7 @@ def _disc_summary_for_packs(pick_list: Any, packs: list[str]) -> str:
         return ""
     msg = f" They live on disc(s): {', '.join(primaries)}."
     if alternates:
-        msg += f" Redundant copies are on: {', '.join(alternates)}."
+        msg += f" Other discs that also hold them: {', '.join(alternates)}."
     msg += " Re-mount those discs (check for damage) and retry."
     return msg
 
@@ -5217,7 +5218,7 @@ def _disc_summary_for_packs(pick_list: Any, packs: list[str]) -> str:
 def _labels_for_packs(
     pick_list: Any, hashes: list[str]
 ) -> dict[str, list[str]]:
-    """Map each pack SHA-256 to ``[primary_label, *alternates]``.
+    """Map each pack ID to ``[primary_label, *alternates]``.
 
     Works on a ``PickListV2`` (``volumes`` holds ``PackSource`` entries
     carrying ``.alternates``).  Packs not in any source come back absent
@@ -5240,15 +5241,15 @@ def _labels_for_packs(
 
 
 def _report_missing_by_label(pick_list: Any, missing: list[str]) -> None:
-    """Log a completeness failure grouped by disc label, not by hash.
+    """Log a completeness failure grouped by disc label, not by pack ID.
 
     Names the disc each missing pack lives on plus its alternates and any
-    deprecated/destroyed sources, so the operator knows which discs to
-    re-mount.  Raw SHA-256 hashes are demoted to debug level.  [RST-07]
+    deprecated/destroyed sources, so the person restoring knows which discs
+    to re-mount.  Raw pack IDs are demoted to debug level.  [RST-07]
     """
     label_map = _labels_for_packs(pick_list, missing)
 
-    # sha -> deprecated/destroyed labels that still hold it (physically
+    # pack ID -> deprecated/destroyed labels that still hold it (physically
     # retrievable but not active in the catalog).
     depr_for: dict[str, list[str]] = {}
     for dlabel, dhashes in pick_list.deprecated_disc_labels.items():
@@ -5441,7 +5442,7 @@ def _write_private_file(path: Path, data: bytes) -> None:
     """Write *data* to *path* with owner-only (0600) permissions, TOCTOU-safe.
 
     The file is created with ``O_CREAT | O_EXCL`` and mode 0600 so it is never
-    even briefly readable by other users (mirrors ``db/connection.py``).  An
+    even briefly readable by other accounts (mirrors ``db/connection.py``).  An
     existing file is a hard error rather than a silent overwrite — share files
     are sensitive and clobbering them could destroy the only copy.
     """
@@ -5461,14 +5462,14 @@ def _share_card_text(
     split_date: str,
     split_id: int,
 ) -> str:
-    """Build a plain-language printable 'share card' for one key share.
+    """Build a plain-language printable 'share card' for one share.
 
     The ``Split on`` date and ``Split ID`` (SLIP-0039 identifier, shared by
-    every card of one split) let a holder spot a superseded card set after a
-    re-key — see docs/ESTATE_PLANNING.md "ROTATION".
+    every card of one split) let a share holder spot a superseded card set
+    after a new split — see docs/ESTATE_PLANNING.md "ROTATION".
     """
     return (
-        "================ LCSAS KEY SHARE ================\n"
+        "=============== LCSAS SHARE CARD ===============\n"
         f"Repository : {repo}\n"
         f"Share      : {index} of {count}\n"
         f"Split on   : {split_date}\n"
@@ -5476,19 +5477,21 @@ def _share_card_text(
         "\n"
         "WHAT THIS IS\n"
         "  This card holds ONE share of the password that unlocks the\n"
-        f"  '{repo}' backup archive.  The password was split into {count}\n"
+        f"  repository '{repo}'.  The password was split into {count}\n"
         "  shares using Shamir Secret Sharing (SLIP-0039).\n"
         "\n"
         "HOW TO USE IT\n"
         f"  You need ANY {threshold} of the {count} shares to rebuild the\n"
         "  password.  Fewer than that reveal NOTHING about it.  Gather at\n"
-        f"  least {threshold} share cards and run:\n"
-        "      lcsas key combine --share-file <share1> --share-file <share2> ...\n"
-        "  (or follow the recovery disc's instructions).\n"
+        f"  least {threshold} share cards and, on the META disc, run:\n"
+        "      recovery/bin/<machine>/lcsas-keyshare <card1> <card2> ...\n"
+        "  If that program will not run, the fallback is:\n"
+        "      python3 keyshare_combine.py <card1> <card2> ...\n"
+        "  (or follow the META disc's instructions).\n"
         "\n"
         "  Other people each hold one of the remaining shares.  Losing more\n"
-        f"  than {count - threshold} of the {count} shares means the archive\n"
-        "  password can never be recovered.\n"
+        f"  than {count - threshold} of the {count} shares means the\n"
+        "  password can never be rebuilt.\n"
         "\n"
         "THE SHARE WORDS (keep every word, in order)\n"
         f"  {mnemonic}\n"
@@ -5520,7 +5523,7 @@ def _recovery_card_text(
     label_prefix: str,
     check_code: str | None,
 ) -> str:
-    """Build a paper Recovery Card for a DEFAULT (single-key) archive.
+    """Build a paper password card for a DEFAULT archive (password not split).
 
     Mirrors the visual style of ``_share_card_text``.  The password itself
     is NEVER rendered — the owner writes it by hand into the PASSWORD box.
@@ -5529,17 +5532,17 @@ def _recovery_card_text(
     """
     hints = storage_hints if storage_hints else "(fill in where copies are kept)"
     lines = [
-        "=============== LCSAS RECOVERY CARD ===============",
-        f"Repository : {repo}",
-        f"Key file   : {key_file_name}",
-        f"Made on    : {card_date}",
-        f"Discs      : labeled {label_prefix}_*",
+        "=============== LCSAS PASSWORD CARD ===============",
+        f"Repository    : {repo}",
+        f"Password file : {key_file_name}",
+        f"Made on       : {card_date}",
+        f"Discs         : labeled {label_prefix}_*",
         "",
         "WHAT THIS IS",
         "  This card records the password that unlocks the",
-        f"  '{repo}' backup archive.  WITHOUT it the discs cannot",
-        "  be decrypted — there is no recovery.  Store this card",
-        "  physically SEPARATE from the discs (key/data separation).",
+        f"  repository '{repo}'.  WITHOUT it the discs cannot",
+        "  be decrypted — nobody can restore the files.  Store",
+        "  this card physically SEPARATE from the discs.",
         "",
         "THE PASSWORD (write it here by hand — do NOT type it into a",
         "computer to print this card)",
@@ -5553,7 +5556,7 @@ def _recovery_card_text(
         "",
         "HOW TO USE IT",
         "  Mount any archive disc and follow START_HERE.txt; supply",
-        f"  the password above as the key for repository '{repo}'.",
+        f"  the password above for repository '{repo}'.",
     ]
     if check_code is not None:
         lines += [
@@ -5572,8 +5575,8 @@ def _recovery_card_text(
 
 
 def cmd_key_card(args: argparse.Namespace) -> int:
-    """Print (or verify) a paper Recovery Card for a single-key archive."""
-    # ── Verify mode: recompute the check code from a typed password file ──
+    """Print (or check) a paper password card for an archive whose password is not split."""
+    # ── Check mode: recompute the check code from a typed password file ───
     if args.check is not None:
         if args.code is None:
             logger.error("--check requires --code (the code printed on the card).")
@@ -5593,7 +5596,7 @@ def cmd_key_card(args: argparse.Namespace) -> int:
         return 1
 
     if args.code is not None:
-        logger.error("--code is only valid with --check (verify mode).")
+        logger.error("--code is only valid with --check (check mode).")
         return 1
 
     # ── Render mode ──────────────────────────────────────────────────────
@@ -5602,7 +5605,7 @@ def cmd_key_card(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required to render a recovery card.")
+        logger.error("--config is required to render a password card.")
         return 1
 
     repo_name = args.repo
@@ -5650,7 +5653,7 @@ def cmd_key_card(args: argparse.Namespace) -> int:
 
     if args.out is not None:
         _write_private_file(args.out, card.encode("utf-8"))
-        print(f"Wrote recovery card for repo '{repo_name}' to {args.out}")
+        print(f"Wrote password card for repo '{repo_name}' to {args.out}")
         print(
             "  Mode 0600. The password is NOT on the card — write it in by "
             "hand and store the card separate from the discs.",
@@ -5675,14 +5678,14 @@ def _estate_card_text(
     disc_count: int | None,
     card_date: str,
 ) -> str:
-    """Build the one-page whole-archive Recovery Card (UX-09).
+    """Build the one-page whole-archive estate card (UX-09).
 
-    Unlike the per-repo ``key card`` (which records ONE password), this is
-    the heir's starting sheet for the entire estate: who owns it, what is on
-    the discs, how many discs there are, how the key is stored, and the
-    literal first command to run.  No secret is ever printed.  Every field
-    degrades to a fill-in blank when its source (config or catalog) is
-    absent, so the card is always printable.
+    Unlike the per-repo password card (``key card``, which records ONE
+    password), this is the heir's starting sheet for the entire estate: who
+    owns it, what is on the discs, how many discs there are, how the password
+    is stored, and the literal first command to run.  No secret is ever
+    printed.  Every field degrades to a fill-in blank when its source
+    (config or catalog) is absent, so the card is always printable.
     """
     blank = "______________________________"
 
@@ -5696,7 +5699,7 @@ def _estate_card_text(
         disc_line = f"{disc_count} disc(s), labeled {label_prefix}_*"
 
     lines = [
-        "============== LCSAS RECOVERY CARD (ARCHIVE) ==============",
+        "=================== LCSAS ESTATE CARD ====================",
         f"Owner       : {or_blank(owner)}",
         f"Description : {or_blank(description)}",
         f"Made on     : {card_date}",
@@ -5704,34 +5707,35 @@ def _estate_card_text(
         "WHAT THIS IS",
         "  This is the starting sheet for an entire LCSAS backup",
         "  archive.  Keep it WITH the discs; keep the password(s)",
-        "  SOMEWHERE ELSE (key/data separation).  WITHOUT the",
-        "  password the discs cannot be decrypted — there is no",
-        "  recovery.",
+        "  SOMEWHERE ELSE.  WITHOUT the password the discs cannot",
+        "  be decrypted — nobody can restore the files.",
         "",
         "WHAT IS ON THE DISCS",
         f"  Repositories : {repos_line}",
         f"  Discs        : {disc_line}",
         "",
-        "WHERE THE KEY IS KEPT",
+        "WHERE THE PASSWORD IS KEPT",
         f"  {or_blank(key_storage_hints)}",
     ]
     if key_split:
         lines += [
             "",
-            "THE KEY IS SPLIT INTO SHARE CARDS",
+            "THE PASSWORD IS SPLIT INTO SHARE CARDS",
             f"  Any {key_threshold} of {key_shares} share cards reconstruct the",
             "  password; fewer reveal nothing.  Share holders:",
             "    1. ______________________   2. ______________________",
             "    3. ______________________   4. ______________________",
             "    5. ______________________",
             "  Gather any K share cards and, on the LCSAS_META disc, run:",
+            "      recovery/bin/<machine>/lcsas-keyshare <card1> <card2>",
+            "  If that program will not run, the fallback is:",
             "      python3 keyshare_combine.py <card1> <card2>",
             "  It prints the password; enter it at the restore prompt.",
         ]
     lines += [
         "",
-        "FIRST STEP — recover the files",
-        "  Insert the META disc, then for your computer:",
+        "FIRST STEP — restore the files",
+        "  Insert the newest META disc, then for your computer:",
         "    Windows : open the LCSAS_META disc and double-click",
         "              restore.bat",
         "    macOS   : open Terminal and run",
@@ -5753,7 +5757,7 @@ def _estate_card_text(
 
 
 def cmd_estate_card(args: argparse.Namespace) -> int:
-    """Generate the whole-archive Recovery Card (UX-09).
+    """Generate the whole-archive estate card (UX-09).
 
     Reads survivability fields from the config and, when a catalog is
     reachable, the burned-disc count.  Never fails on a missing/old
@@ -5764,7 +5768,7 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
 
     config = _load_config_opt(args)
     if config is None:
-        logger.error("--config is required to generate an estate Recovery Card.")
+        logger.error("--config is required to generate an estate card.")
         return 1
 
     disc_count: int | None = None
@@ -5782,7 +5786,7 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
         conn = get_connection(db_path)
         try:
             ensure_schema(conn)
-            # Count discs that physically exist (burned and beyond), not
+            # Count volumes that were burned (burned and beyond), not
             # in-progress STAGING/BURNING volumes an heir won't hold, nor
             # DESTROYED ones that no longer exist.
             burned = {STATUS_BURNED, STATUS_VERIFIED, STATUS_DEPRECATED}
@@ -5808,7 +5812,7 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
 
     if args.output is not None:
         args.output.write_text(card, encoding="utf-8")
-        print(f"Wrote whole-archive Recovery Card to {args.output}")
+        print(f"Wrote estate card to {args.output}")
         print(
             "  Store this sheet WITH the discs; store the password "
             "SOMEWHERE ELSE.",
@@ -5826,7 +5830,7 @@ def _verify_password_unlocks_repo(
 
     Returns ``None`` on success; otherwise a human-readable error string
     naming the repo, the keys dir, and how to override.  Fails closed: a
-    missing or empty ``keys/`` is an error (escrow is exactly where
+    missing or empty ``keys/`` is an error (a split is exactly where
     "probably fine" is wrong).
     """
     from lcsas.restore.restic_fallback import (
@@ -5840,7 +5844,7 @@ def _verify_password_unlocks_repo(
             f"keys directory not found for repository '{repo}': {keys_dir}. "
             "Cannot verify that the password unlocks the repo. Make the "
             "mirror's keys/ reachable, or pass --no-verify-repo to skip "
-            "(escrowing an unverified password is dangerous)."
+            "(splitting an unchecked password is dangerous)."
         )
     if not any(p.is_file() for p in keys_dir.iterdir()):
         return (
@@ -5859,7 +5863,7 @@ def _verify_password_unlocks_repo(
             return (
                 f"cannot check the password for repository '{repo}': "
                 f"every key file under {keys_dir} is unreadable or corrupt "
-                f"({damaged}). Repair the mirror's keys/ before escrowing, "
+                f"({damaged}). Repair the mirror's keys/ before splitting, "
                 "or pass --no-verify-repo to skip (dangerous)."
             )
         msg = (
@@ -5873,7 +5877,7 @@ def _verify_password_unlocks_repo(
                 f"checked: {damaged}. "
             )
         return msg + (
-            "You were about to escrow a wrong password. If you really "
+            "You were about to split a wrong password. If you really "
             "intend this, pass --no-verify-repo."
         )
     except IntegrityError as e:
@@ -5972,7 +5976,7 @@ def _warn_if_weak_password(password: bytes) -> None:
 
 
 def cmd_key_split(args: argparse.Namespace) -> int:
-    """Split a repository password into K-of-N SLIP-0039 key shares."""
+    """Split a repository password into K-of-N SLIP-0039 shares."""
     from datetime import date
 
     from lcsas.keyshare import (
@@ -6020,8 +6024,8 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         logger.error("Password file does not exist: %s", repo_pw_file)
         return 1
 
-    # Read the password and drop a single trailing newline (key files often
-    # have one; rustic's --password-file ignores it).
+    # Read the password and drop a single trailing newline (password files
+    # often have one; rustic's --password-file ignores it).
     password = repo_pw_file.read_bytes().rstrip(b"\n")
 
     # Weak-password advisory (FUP-03).  Every burned disc carries the
@@ -6146,7 +6150,7 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     else:
         logger.warning(
             "No --config given: the split was NOT recorded in any catalog, so "
-            "burn-time key-escrow drift checking is unavailable. Re-run with "
+            "burn-time split drift checking is unavailable. Re-run with "
             "--config once the catalog is reachable.",
         )
 
@@ -6156,7 +6160,7 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     )
     print(
         "  Each share and its plain-language card is mode 0600.\n"
-        f"  Distribute the {shares} shares to separate holders/locations."
+        f"  Give the {shares} shares to separate share holders."
     )
     print(
         f"NEXT STEP: set key_split = true (and key_threshold = {threshold}, "
@@ -6172,7 +6176,7 @@ def cmd_key_split(args: argparse.Namespace) -> int:
 
 
 def cmd_key_combine(args: argparse.Namespace) -> int:
-    """Reconstruct a repository password from K SLIP-0039 key-share mnemonics."""
+    """Reconstruct a repository password from K SLIP-0039 share mnemonics."""
     from lcsas.keyshare import (
         KeyShareError,
         check_share,
@@ -6260,7 +6264,7 @@ def cmd_key_combine(args: argparse.Namespace) -> int:
 def cmd_key_verify(args: argparse.Namespace) -> int:
     """Verify that shares (or a password file) unlock a repository.
 
-    The annual key drill (recovery/docs/READINESS_CHECKLIST.txt): reconstruct
+    The annual password drill (recovery/docs/READINESS_CHECKLIST.txt): reconstruct
     the password from the supplied shares/cards (or read --password-file), then
     authenticate it against the repo's real ``keys/`` files.  Exit code is the
     contract — rc 0 only when the password actually unlocks the repo.
@@ -6381,7 +6385,7 @@ def cmd_session_list(args: argparse.Namespace) -> int:
 
 
 def cmd_session_abort(args: argparse.Namespace) -> int:
-    """Abort a never-burned session (or one stranded volume), reclaiming packs."""
+    """Abort a never-burned burn session (or one stranded volume), reclaiming packs."""
     from lcsas.burn.orchestrator import BurnOrchestrator
     from lcsas.db.connection import locked_connection
     from lcsas.db.schema import ensure_schema

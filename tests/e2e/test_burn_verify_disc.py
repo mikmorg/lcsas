@@ -322,7 +322,7 @@ def test_verify_disc_wrong_disc_records_nothing(cdemu_device, tmp_path):
         (vol_id,),
     ).fetchone()[0]
     assert n_events == events_before, (
-        "wrong disc is operator error — nothing recorded"
+        "wrong disc is owner error — nothing recorded"
     )
     conn.close()
 

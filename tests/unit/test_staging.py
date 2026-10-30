@@ -1,4 +1,4 @@
-"""Tests for staging builder and holographic metadata injection."""
+"""Tests for staging builder and repository metadata / disc catalog injection."""
 
 from __future__ import annotations
 
@@ -277,7 +277,7 @@ class TestHolographicInjector:
         injector.write_restore_instructions()
 
         txt = (staging_root / "RESTORE_INSTRUCTIONS.txt").read_text()
-        assert "LCSAS Data Volume" in txt
+        assert "LCSAS Data Disc" in txt
         assert "encryption PASSWORD" in txt
         assert "rustic" in txt
 
@@ -335,7 +335,7 @@ class TestHolographicInjector:
         assert "Paper copy in the home safe" in txt
         assert "Jane Smith" in txt
         assert "START HERE" in txt
-        assert "ENCRYPTION KEY" in txt
+        assert "WITHOUT THE PASSWORD" in txt
         assert "family" in txt  # repo name
 
     def test_write_start_here_defaults(self, tmp_path):
@@ -354,11 +354,11 @@ class TestHolographicInjector:
 
         txt = (staging_root / "START_HERE.txt").read_text()
         assert "START HERE" in txt
-        assert "ENCRYPTION KEY" in txt
+        assert "WITHOUT THE PASSWORD" in txt
         assert "computer professional" in txt
 
     def test_start_here_and_key_info_password_wording(self, tmp_path):
-        """FUP-03: the three heir-facing files must not claim the key is
+        """FUP-03: the three heir-facing files must not claim the password is
         'NOT on any disc (for security)' and must carry the new
         password-locked-key-files + offline-guessing warning."""
         staging_root = tmp_path / "staging"
@@ -383,7 +383,7 @@ class TestHolographicInjector:
         injector.write_restore_instructions()
 
         start_here = (staging_root / "START_HERE.txt").read_text()
-        key_info = (staging_root / "KEY_INFO.txt").read_text()
+        key_info = (staging_root / "PASSWORD_INFO.txt").read_text()
         restore = (staging_root / "RESTORE_INSTRUCTIONS.txt").read_text()
 
         for txt in (start_here, key_info, restore):
@@ -399,7 +399,7 @@ class TestHolographicInjector:
         assert "guess" in restore.lower()
 
     def test_write_key_info_with_repos(self, tmp_path):
-        """KEY_INFO.txt lists repos and key file names."""
+        """PASSWORD_INFO.txt lists repos and password file names."""
         staging_root = tmp_path / "staging"
         staging_root.mkdir()
 
@@ -425,7 +425,7 @@ class TestHolographicInjector:
         injector = HolographicInjector(staging_root)
         injector.write_key_info(config)
 
-        txt = (staging_root / "KEY_INFO.txt").read_text()
+        txt = (staging_root / "PASSWORD_INFO.txt").read_text()
         assert "family" in txt
         assert "work" in txt
         assert "key-001" in txt
@@ -433,7 +433,7 @@ class TestHolographicInjector:
         assert "safe deposit box" in txt
 
     def test_write_key_info_no_repos(self, tmp_path):
-        """KEY_INFO.txt handles empty repositories gracefully."""
+        """PASSWORD_INFO.txt handles empty repositories gracefully."""
         staging_root = tmp_path / "staging"
         staging_root.mkdir()
 
@@ -446,8 +446,8 @@ class TestHolographicInjector:
         injector = HolographicInjector(staging_root)
         injector.write_key_info(config)
 
-        txt = (staging_root / "KEY_INFO.txt").read_text()
-        assert "KEY INFORMATION" in txt
+        txt = (staging_root / "PASSWORD_INFO.txt").read_text()
+        assert "PASSWORD INFORMATION" in txt
         assert "No repositories" in txt
 
     def test_write_config_summary_with_repos(self, tmp_path):
@@ -563,10 +563,10 @@ class TestPartialStagedPack:
 
 
 class TestStagePackContentVerification:
-    """BURN-02: every staged pack's bytes must hash to its catalog SHA-256.
+    """BURN-02: every staged pack's bytes must hash to its pack ID.
 
     The dst is a hardlink to the mirror inode, so the staging-time hash
-    verifies the actual mirror bytes — the only hot copy — before they
+    checks the actual mirror bytes — the only live copy — before they
     are replicated to every disc at every location.
     """
 

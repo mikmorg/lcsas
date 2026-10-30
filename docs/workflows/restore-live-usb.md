@@ -1,6 +1,6 @@
-# Live-USB Recovery (No Working Operating System)
+# Live-USB Restore (No Working Operating System)
 
-> The *no-OS* recovery journey: the operator (or heir) has the LCSAS
+> The *no-OS* restore journey: the heir (or the owner) has the LCSAS
 > discs but no computer with a working operating system. **LCSAS discs
 > are NOT bootable** — the route is any other working computer, or a
 > current live-Linux USB stick booted on the dead machine. This is the
@@ -17,7 +17,7 @@ Sibling docs for gentler scenarios:
 
 - `docs/workflows/restore-host-linux.md` — working Linux host
 - `docs/workflows/restore-windows.md` — working Windows host
-- `docs/workflows/restore-disc-only.md` — single-disc spot recovery
+- `docs/workflows/restore-disc-only.md` — single-disc spot restore
 - `docs/workflows/recovery-toolchain.md` — binary cascade architecture
 
 ---
@@ -25,8 +25,9 @@ Sibling docs for gentler scenarios:
 ## Option 1 — Use any other computer
 
 Any working computer with an optical drive (internal or USB) can run
-the recovery: a friend's machine, a library computer, a second-hand
-laptop. Insert the META disc, open `START_HERE.txt`, and follow the
+the restore: a friend's machine, a library computer, a second-hand
+laptop. Insert the newest META disc (if its tools fail, the one burned
+closest in date to your data discs), open `START_HERE.txt`, and follow the
 section for that machine's operating system (Windows → `restore.bat` /
 `RECOVER_WINDOWS.txt`; macOS or Linux → `restore.sh` / `RECOVER.txt`).
 
@@ -46,7 +47,7 @@ on the dead machine (internal or USB).
    power-on (commonly F12, F2, Esc, or Del) and pick the USB stick.
 4. Choose **"Try Ubuntu"** (run without installing). You now have a
    full Linux desktop running from RAM.
-5. Insert the LCSAS META disc. Most live systems auto-mount it when you
+5. Insert the newest LCSAS META disc. Most live systems auto-mount it when you
    click the disc in the file manager; otherwise:
 
    ```sh
@@ -54,15 +55,18 @@ on the dead machine (internal or USB).
    sudo mount -o ro /dev/sr0 /mnt
    ```
 
-6. Run the recovery:
+6. Run the restore:
 
    ```sh
    sh /mnt/recovery/scripts/restore.sh /home/ubuntu/restored latest
    ```
 
-   The script prompts for the archive password and walks through data
-   disc swaps; `recovery/docs/RECOVER.txt` on the disc is the full
-   operator manual from this point.
+   The script prompts for the password and walks through data
+   disc swaps. For the first data disc, pick the one with the newest
+   label (the latest year, then the highest number): its disc catalog
+   is the fullest, so you swap discs less often; any data disc works.
+   `recovery/docs/RECOVER.txt` on the disc is the full manual from
+   this point.
 7. **Copy the restored files to a real disk before powering off** — a
    live system's home directory lives in RAM. Either copy out of
    `/home/ubuntu/restored`, or pass a path on a mounted disk as the

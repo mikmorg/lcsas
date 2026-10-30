@@ -62,7 +62,7 @@ def first_fit_decreasing(
     # larger than a single ISO 9660 extent (4 GiB - 2 KiB) is stored across
     # multiple extents, which Windows' native CDFS mount silently truncates.
     # ISO mastering hard-rejects these (iso.xorriso); warn at plan time too so
-    # the operator hears about it before staging completes.
+    # the owner hears about it before staging completes.
     multiextent = [
         (iid, sz) for iid, sz in sorted_items if sz > _ISO_MAX_FILE_BYTES
     ]

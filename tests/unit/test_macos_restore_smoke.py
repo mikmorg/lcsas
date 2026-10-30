@@ -26,19 +26,20 @@ _spec.loader.exec_module(smoke)
 
 LABELS = [f"LCSAS_TEST_TINY_2026_000{n}" for n in range(1, 5)]
 
-# Captured from a macos-14 run (paths shortened).  Hint-less first prompt, then
-# one that names the volume.
+# Captured from a macos-14 run (paths shortened), with the wording updated to
+# the current disc_locator.c strings.  Hint-less first prompt, then one that
+# names the disc.
 BOX_NO_HINT = """\
 +----------------------------------------------------------+
 | Pack c3e2247d2646d9f7... is required for the next file.       |
-| (catalog has the pack, but no current volume mapping)    |
+| (catalog has the pack, but lists no disc for it)         |
 |                                                          |
 | Currently searching:                                     |
 |   /Volumes/LCSAS_TEST_TINY_2026_0001                     |
 |   /Volumes                                               |
 |                                                          |
-| Single-drive recovery: if your machine has only ONE      |
-| optical drive, eject the RECOVERY disc first, then       |
+| Single-drive restore: if your machine has only ONE       |
+| optical drive, eject the META disc first, then           |
 | insert the disc named above into the SAME drive.         |
 |                                                          |
 | Insert the right disc and press ENTER to retry.          |
@@ -48,8 +49,8 @@ BOX_NO_HINT = """\
 > """
 
 BOX_HINT = BOX_NO_HINT.replace(
-    "| (catalog has the pack, but no current volume mapping)    |\n",
-    "| It lives on volume(s):                                   |\n"
+    "| (catalog has the pack, but lists no disc for it)         |\n",
+    "| It is on any disc labelled:                              |\n"
     "|   LCSAS_TEST_TINY_2026_0003                              |\n",
 ).replace("c3e2247d2646d9f7", "3895a5111808328e")
 
@@ -73,7 +74,7 @@ def test_last_box_starts_at_the_pack_line_and_ends_at_the_prompt() -> None:
 
 def test_labels_named_reads_only_the_lives_on_section() -> None:
     # The "Currently searching" list names attached volumes; those must not
-    # be mistaken for the disc the pack lives on.
+    # be mistaken for the disc the "It is on any disc labelled:" section names.
     assert smoke.labels_named(BOX_NO_HINT, LABELS) == []
     assert smoke.labels_named(BOX_HINT, LABELS) == [LABELS[2]]
 

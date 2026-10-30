@@ -21,7 +21,7 @@ This module pins three behaviours of the auto-discovery code path:
 
   * **Catalog at the disc root** -- a synthetic mount-root containing
     ``catalog.db`` triggers auto-discovery on the first prompt fire,
-    surfacing the tier-1 ``It lives on volume(s):`` shape WITHOUT any
+    surfacing the tier-1 ``It is on any disc labelled:`` shape WITHOUT any
     ``--catalog`` flag.
 
   * **Catalog discoverable via parent traversal** -- when a caller
@@ -140,7 +140,7 @@ def _make_restorer(
 def test_auto_discover_catalog_at_mount_root(tmp_path: Path, capsys) -> None:
     """When ``--catalog`` was NOT supplied but a mount root carries
     ``catalog.db``, the disc-swap prompt must auto-discover it and emit
-    the tier-1 ``It lives on volume(s):`` block.
+    the tier-1 ``It is on any disc labelled:`` block.
 
     This is the central #253 scenario: ``restore.sh``'s startup scan
     found no catalog (no data disc yet mounted), so it execs tier-3
@@ -156,7 +156,7 @@ def test_auto_discover_catalog_at_mount_root(tmp_path: Path, capsys) -> None:
     restorer._print_swap_prompt(_PACK_HASH)
 
     stderr = capsys.readouterr().err
-    assert "It lives on volume(s):" in stderr, (
+    assert "It is on any disc labelled:" in stderr, (
         "auto-discovered catalog did not surface the tier-1 disc-label "
         f"block; stderr was:\n{stderr}"
     )
@@ -191,7 +191,7 @@ def test_auto_discover_catalog_via_parent_traversal(
     restorer._print_swap_prompt(_PACK_HASH)
 
     stderr = capsys.readouterr().err
-    assert "It lives on volume(s):" in stderr, (
+    assert "It is on any disc labelled:" in stderr, (
         "parent-traversal discovery failed -- catalog at "
         f"<root>/../catalog.db was not located.  Stderr:\n{stderr}"
     )
@@ -220,7 +220,7 @@ def test_auto_discover_picks_up_catalog_appearing_mid_restore(
     # Prompt 1: no catalog yet.  Legacy fallback line expected.
     restorer._print_swap_prompt(_PACK_HASH)
     first = capsys.readouterr().err
-    assert "(tier-3 standalone restorer: no catalog available)" in first, (
+    assert "(tier-3 Python reader: no catalog available)" in first, (
         "expected legacy fallback line on FIRST prompt (catalog not yet "
         f"reachable); stderr was:\n{first}"
     )
@@ -235,7 +235,7 @@ def test_auto_discover_picks_up_catalog_appearing_mid_restore(
     # Prompt 2: discovery must succeed THIS time.
     restorer._print_swap_prompt(_PACK_HASH)
     second = capsys.readouterr().err
-    assert "It lives on volume(s):" in second, (
+    assert "It is on any disc labelled:" in second, (
         "auto-discovery did not pick up the newly-mounted catalog on the "
         f"second prompt; stderr was:\n{second}"
     )
@@ -311,7 +311,7 @@ def test_auto_discover_returns_none_when_no_catalog_anywhere(
 
     restorer._print_swap_prompt(_PACK_HASH)
     stderr = capsys.readouterr().err
-    assert "(tier-3 standalone restorer: no catalog available)" in stderr
+    assert "(tier-3 Python reader: no catalog available)" in stderr
 
 
 def test_discover_catalog_probes_recovery_subpath(tmp_path: Path) -> None:

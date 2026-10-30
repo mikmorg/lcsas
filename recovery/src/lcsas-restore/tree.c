@@ -10,8 +10,8 @@
  * children return), so depth is bounded to keep the walk inside the
  * default 8 MB stack: recursion is capped at lcsas_tree_max_depth
  * (default 1000) and a deeper tree fails loud with a named error
- * instead of a SIGSEGV (T1C-04).  Operators with a genuinely deeper
- * layout raise LCSAS_MAX_TREE_DEPTH and the stack ulimit, or fall
+ * instead of a SIGSEGV (T1C-04).  An heir with a genuinely deeper
+ * layout raises LCSAS_MAX_TREE_DEPTH and the stack ulimit, or falls
  * back to tier-2 (rustic).
  */
 #include "tree.h"
@@ -32,7 +32,7 @@
  * call surface (sys/xattr.h with different fn signatures, plus
  * com.apple.* namespace semantics) and the zig cross-build SDK
  * doesn't ship the header anyway; Windows has no xattr concept.
- * Both are excluded by default.  Operators on a platform with
+ * Both are excluded by default.  A build for a platform with
  * Linux-style xattrs but a non-Linux predefined macro can pass
  * `-DLCSAS_FORCE_XATTR` to opt back in; pass `-DLCSAS_NO_XATTR` to
  * force the no-op stub on any platform.  The restore still works
@@ -305,8 +305,8 @@ write_blob_sparse(int fd, const unsigned char *buf, size_t len)
  * Restic stores uid/gid as integer fields on every tree node.  Only
  * root (or a process with CAP_CHOWN) can actually change ownership;
  * non-root attempts return EPERM.  We silently no-op when geteuid()
- * != 0 so non-root recovery still works — the restored files end up
- * owned by the recovery user, matching the documented behaviour.
+ * != 0 so a non-root restore still works — the restored files end up
+ * owned by the account running it, matching the documented behaviour.
  *
  * Use lchown() (NOT chown) so the symlink's own uid/gid is set, not
  * the target's.  For files/dirs the two are equivalent.
@@ -479,7 +479,7 @@ void
 lcsas_progress_finish(const lcsas_progress *p)
 {
     if (!p || !p->enabled) return;
-    /* Always emit a final line so the operator sees the closing count
+    /* Always emit a final line so the heir sees the closing count
      * even if the last tick already fired exactly at completion. */
     emit_progress_line(p);
 }
@@ -509,14 +509,14 @@ restore_file_node(const char *repo_path,
      * restored.  We compare the on-disk file size against the "size"
      * field recorded in the snapshot tree node.  If they match we
      * assume the file is intact and return early, exactly as rustic
-     * does by default on the Python/rustic tier.
+     * (tier 2) does by default.
      *
      * lcsas_create_file() opens with O_TRUNC, so the check MUST come
      * before that call or we would clobber the file unconditionally.
      *
      * Issue #192 — on a hit, register the path in the hardlink map
      * so subsequent occurrences of the same inode can link() to it.
-     * Otherwise a partial-resume restore would never recover the
+     * Otherwise a partial-resume restore would never restore the
      * hardlinks even though the first occurrence was already on disk. */
     {
         long size_idx = lcsas_json_obj_get(src, toks, node_idx, "size");
@@ -621,7 +621,7 @@ restore_file_node(const char *repo_path,
     }
     if (fd < 0) {
         /* Issue #221 — classify ENOSPC / EDQUOT explicitly so the
-         * operator knows the target filesystem ran out of room
+         * heir knows the target filesystem ran out of room
          * rather than seeing a generic "file restore failed". */
         int saved_errno = errno;
         if (saved_errno == ENOSPC || saved_errno == EDQUOT) {
@@ -684,7 +684,7 @@ restore_file_node(const char *repo_path,
                      * specifically; this is the dominant
                      * environmental failure on a long restore.
                      * `bytes_written` (from the post-fail seek
-                     * position) tells the operator how far the
+                     * position) tells the heir how far the
                      * restore got before the target filled. */
                     int saved_errno = errno;
                     if (saved_errno == ENOSPC || saved_errno == EDQUOT) {
@@ -818,13 +818,13 @@ tree_restore_recurse(const char *repo_path,
     /* Trees can be large; grow the token buffer on demand (T1C-01).
      * The 1024-token start keeps the per-recursion-frame heap small
      * (~40 KB) for typical directories while still scaling to wide
-     * folders / long chunk lists. */
+     * folders / long blob lists. */
     ntoks = lcsas_json_parse_alloc((const char *)blob, blob_len, &toks, 1024);
     if (ntoks == -2) {
         fprintf(stderr,
                 "ERROR: tree blob %.64s is too large for tier-1 (a directory "
                 "with very many entries,\n       or a file with very many "
-                "chunks); use tier-2 (rustic)\n", tree_id_hex);
+                "blobs); use tier-2 (rustic)\n", tree_id_hex);
         free(blob);
         return -1;
     }
@@ -1025,7 +1025,7 @@ tree_restore_recurse(const char *repo_path,
                              * store symlinks at all; symlink(2) returns
                              * EPERM / EOPNOTSUPP / ENOSYS depending on
                              * the filesystem driver.  Emit a clearer
-                             * warning per affected node so the operator
+                             * warning per affected node so the heir
                              * understands the lossy aspect of restoring
                              * to a non-POSIX target, and continue with
                              * the rest of the tree rather than aborting. */

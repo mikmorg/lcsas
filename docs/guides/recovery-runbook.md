@@ -1,8 +1,8 @@
-# LCSAS Disaster Recovery — Linux End-to-End Runbook
+# LCSAS — Linux End-to-End Restore Runbook
 
 > **New here?** Start at [RECOVERY_GUIDE.md](../RECOVERY_GUIDE.md) — the
 > short entry-point that routes you to the right walkthrough for your OS
-> and situation. This runbook is the **detailed Linux + META-disc**
+> and situation. This runbook is the **detailed Linux + META disc**
 > walkthrough it points to. For macOS, Windows, live-USB, or disc-only
 > (no META disc) restores, follow the per-OS workflow linked from that
 > guide instead.
@@ -12,8 +12,8 @@
 > `LCSAS_META` + `LCSAS_TEST_TINY_2026_XXXX` (or `LCSAS_BD25_…` /
 > `LCSAS_CD_…` for production media), a working Linux laptop with
 > an optical drive, and the encryption password for at least one
-> tenant repository.  This document walks you through restoring,
-> command by command.
+> repository.  This document walks you through restoring, command
+> by command.
 
 If anything below behaves differently from what's described, jump
 to [troubleshooting.md](../TROUBLESHOOTING.md).
@@ -36,8 +36,12 @@ You need:
      rule of thumb: budget 2.5× the source size.
 2. **The discs.**  At minimum the `LCSAS_META` disc plus one
    data disc.  In practice you'll need every data disc; the
-   restore script will tell you which ones.
-3. **The encryption password** for the tenant you're restoring.
+   restore script will tell you which ones.  For the first data
+   disc, pick the one with the newest label: the latest year in
+   the label, then the highest number.  Its disc catalog is the
+   fullest, so you swap discs less often.  Any data disc still
+   works.
+3. **The encryption password** for the repository you're restoring.
    The meta disc itself does NOT contain the password (intentionally
    — that would defeat the encryption).  You're expected to have
    it stored separately: paper, password manager, etc.
@@ -55,7 +59,9 @@ ls /mnt
 You should see, among other things, `restore.sh` and
 `README_RESTORE.md`.  If the disc is labelled `LCSAS_TEST_TINY_…`
 or similar, eject it and find the one labelled `LCSAS_META` first —
-that's the recovery toolchain.
+that's the recovery toolchain.  If you have more than one
+`LCSAS_META` disc, use the newest; if its tools fail, use the one
+burned closest in date to your data discs.
 
 > The meta disc is the smallest one in your stack (~50–200 MB).
 > Don't confuse it with the data discs (each one ~25 GB on BD25
@@ -63,7 +69,7 @@ that's the recovery toolchain.
 
 ---
 
-## Step 2 — Run the recovery script
+## Step 2 — Run the restore script
 
 ```sh
 sh /mnt/restore.sh ~/restored/ latest
@@ -79,8 +85,9 @@ That's it.  Two positional arguments:
 The script will:
 
 - Copy itself into RAM so you can eject the meta disc safely.
-- Auto-discover repository metadata (per-tenant `keys/` + `index/`
-  pairs) on the meta disc and on any currently-mounted data disc.
+- Auto-discover repository metadata (per-repository `keys/` +
+  `index/` pairs) on the meta disc and on any currently-mounted data
+  disc.
 
 ---
 
@@ -88,9 +95,9 @@ The script will:
 
 You'll see up to three prompts in sequence:
 
-### `Repository:` (only on multi-tenant archives)
+### `Repository:` (only on archives with several repositories)
 
-If your archive has more than one tenant (e.g. `alpha` and `bravo`),
+If your archive has more than one repository (e.g. `alpha` and `bravo`),
 the script lists them and asks you to choose:
 
 ```
@@ -107,7 +114,7 @@ environment before launching the script.
 
 ### `Password:`
 
-Type the encryption password for the chosen tenant.  The script
+Type the encryption password for the chosen repository.  The script
 reads stdin in the clear (POSIX-sh has no silent-read) — that's
 expected.  If you'd rather not type it visibly, you can put it in
 a file and set `LCSAS_PWFILE=/path/to/file`.
@@ -144,12 +151,12 @@ The binary prints periodic progress on stderr:
 ```
 
 When you see `RESTORE COMPLETE`, your files are at the path you
-gave as `TARGET_DIR` (e.g. `~/restored/`).  Verify with
+gave as `TARGET_DIR` (e.g. `~/restored/`).  Check with
 `ls -laR ~/restored/`.
 
 ---
 
-## Step 5 — Verify the restore
+## Step 5 — Check the restore
 
 Two cheap sanity checks anyone can do without rustic / lcsas
 expertise:
@@ -162,7 +169,7 @@ find ~/restored -type f | wc -l
 ls -la ~/restored/path/to/known/file
 ```
 
-If your operator kept a `manifest.sha256` of the original data
+If the owner kept a `manifest.sha256` of the original data
 (highly recommended; see "Production-readiness checklist" in the
 README), compare:
 
@@ -172,9 +179,9 @@ README), compare:
 
 ---
 
-## Restoring multiple tenants
+## Restoring several repositories
 
-Run the recovery script once per tenant:
+Run the restore script once per repository:
 
 ```sh
 sh /mnt/restore.sh ~/restored-alpha/ latest    # answer 'alpha'
@@ -183,7 +190,7 @@ sh /mnt/restore.sh ~/restored-bravo/ latest    # answer 'bravo'
 
 Each invocation builds its own pack cache under
 `${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>/`.  These persist until you
-delete them.  If you're restoring multiple tenants in sequence, you
+delete them.  If you're restoring several repositories in sequence, you
 can speed up runs 2–N by re-pointing them at a shared cache:
 
 ```sh
@@ -198,7 +205,7 @@ The second run finds most packs already cached from the first run.
 
 ---
 
-## Single-drive operators (most common case)
+## One optical drive (most common case)
 
 If you have only one optical drive, you'll be doing the eject /
 insert / press-Enter dance for each unique disc.  The pack cache
@@ -212,7 +219,7 @@ If `/tmp` is constrained, see the cache-size warnings in
 
 ---
 
-## Multi-drive operators (faster)
+## Several optical drives (faster)
 
 If you have multiple optical drives or are restoring from pre-ripped
 ISO files on disk:
@@ -256,19 +263,19 @@ ships fallback paths:
   interactive disc-swap prompts — point it at a tree that already holds
   every pack.  See Appendix A in `README_RESTORE.md`.
 - **`restore_legacy.sh`** — the older Bash driver, written to the
-  meta-disc alongside `restore.sh`.  Different flag UX:
-  `./restore_legacy.sh --key <keyfile> --target <dir> [--isos <dir>]
+  meta disc alongside `restore.sh`.  Different flag UX:
+  `./restore_legacy.sh --key <password-file> --target <dir> [--isos <dir>]
   [--repo <name>] [--snapshot <id>]`.  Useful when you already
   have every ISO extracted to disk (pass `--isos`).
 - **Direct invocation of the upstream rustic binary** at
   `tools/bin/rustic-static`.  Requires you to manually assemble
   the pack tree (see [troubleshooting.md](../TROUBLESHOOTING.md#manual-pack-assembly-last-resort-tier-3-fallback)).
-- **Pure-Python `standalone_restorer.py`** (slowest, ~1 MB/s).
-  Requires only Python 3.10+ + standard library.  Run with
+- **Tier 3, the Python reader (`standalone_restorer.py`)** (slowest,
+  ~1 MB/s).  Requires only Python 3.10+ + standard library.  Run with
   `--repo /path/to/assembled/repo --password-file <file>
   --target <dir>`.
 
-All four are documented in the per-meta-disc `README_RESTORE.md`.
+All four are documented in `README_RESTORE.md` on the meta disc.
 
 ---
 
@@ -276,10 +283,10 @@ All four are documented in the per-meta-disc `README_RESTORE.md`.
 
 If every recovery tier on the meta disc fails, the disc layout is
 documented in `docs/RESTIC_FORMAT_SPEC.md` (also bundled on the
-meta disc).  A programmer with that document, the encryption key,
-and the data discs can decrypt and reassemble the original files
+meta disc).  A programmer with that document, the password, and
+the data discs can decrypt and reassemble the original files
 from scratch in any language.
 
 This is the "50-year survivability" guarantee: the format is
 fully specified and the bytes on the disc are forever decryptable
-given the key.
+given the password.

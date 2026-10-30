@@ -1,8 +1,8 @@
-"""Pure-Python restic repository restore — last-resort fallback.
+"""Tier 3, the Python reader: restic repository restore, the last resort.
 
 This module implements a *complete* restic repository reader using only
 Python 3 standard-library primitives (plus the vendored ``_aes_pure``
-module).  It exists so that data can be recovered even when the
+module).  It exists so that data can be restored even when the
 ``rustic`` and ``restic`` binaries cannot execute — e.g., on a future
 CPU architecture or after ABI changes have rendered all bundled native
 tools unusable.
@@ -58,7 +58,7 @@ from lcsas.restore._aes_pure import (
 
 # ── Progress reporting tunables ──────────────────────────────────
 #
-# Tier-3 restore is slow (~1 MB/s).  An operator watching a quiet
+# Tier-3 restore is slow (~1 MB/s).  An heir watching a quiet
 # terminal can't tell "frozen" from "still working", so we emit a
 # periodic status line whenever EITHER threshold is reached:
 #
@@ -66,7 +66,7 @@ from lcsas.restore._aes_pure import (
 #   * _PROGRESS_BYTES_INTERVAL bytes have been written since last emit.
 #
 # These are module-level so tests can monkeypatch them down to fire
-# on a tiny synthetic repo.  Set environment variable LCSAS_PROGRESS=0
+# on a tiny synthetic repository.  Set environment variable LCSAS_PROGRESS=0
 # to silence progress output entirely.
 _PROGRESS_FILES_INTERVAL = 50
 _PROGRESS_BYTES_INTERVAL = 64 * 1024 * 1024  # 64 MiB
@@ -106,7 +106,7 @@ try:
 except ImportError:
     # No native zstandard: fall back to the vendored pure-Python zstd
     # decompressor.  It is ~100x slower but stdlib-only, so tier-3 restore
-    # of zstd-compressed (rustic v2 default) repos still works on any
+    # of zstd-compressed (rustic v2 default) repositories still works on any
     # architecture / CPython minor with nothing pre-installed.  This is the
     # whole point of tier 3 — see RST-04.
     from lcsas.restore._zstd_pure import ZstdError as _PureZstdError
@@ -313,7 +313,7 @@ def _scrypt_maxmem(n: object, r: object, p: object) -> int:
         )
     # OpenSSL needs maxmem >= 128*r*(N + p + 2), which the check above
     # guarantees.  hashlib refuses maxmem above INT_MAX, so the old
-    # 2 * 128*r*(N + p + 2) failed (ValueError) on a repo at restic's
+    # 2 * 128*r*(N + p + 2) failed (ValueError) on a repository at restic's
     # maximum, N=2^20 and r=8.
     return min(max(128 * r * (n + p + 3), 2**25), 2**31 - 1)
 
@@ -461,7 +461,7 @@ class SnapshotMeta:
 
 
 class PurePythonRestorer:
-    """Pure-Python restic repository restore engine.
+    """Tier 3, the Python reader: a restic repository restore engine.
 
     This is a *last-resort* fallback.  Use ``rustic`` or ``restic``
     whenever possible — they are orders of magnitude faster.
@@ -505,12 +505,12 @@ class PurePythonRestorer:
                 this from ``--interactive on|off|auto`` (auto = isatty);
                 see ``standalone_builder.py``.
             catalog_path: Optional **explicit override** path to an LCSAS
-                holographic ``catalog.db``.  When supplied, the disc-swap
-                prompt resolves the missing pack hash to one or more volume
+                disc catalog (``catalog.db``).  When supplied, the disc-swap
+                prompt resolves the missing pack ID to one or more volume
                 labels via the catalog and prints them in the SAME framed
                 shape that tier-1 emits (see
                 ``recovery/src/lcsas-restore/disc_locator.c::print_prompt``).
-                Operators (and the blind-restore test agent's pattern matcher)
+                Heirs (and the blind-restore test agent's pattern matcher)
                 rely on that exact phrasing.  A missing, corrupt, or locked
                 catalog falls back to the legacy "(no catalog available)"
                 line; lookups never raise.
@@ -518,8 +518,8 @@ class PurePythonRestorer:
                 When ``None`` (the default), the restorer auto-discovers a
                 ``catalog.db`` lazily from ``pack_search_paths``: each
                 disc-swap prompt cycle re-scans the mount roots so a catalog
-                that becomes reachable mid-restore (e.g. the operator just
-                inserted a data disc that carries the holographic catalog)
+                that becomes reachable mid-restore (e.g. the heir just
+                inserted a data disc that carries a disc catalog)
                 is picked up on the next prompt fire.  See ``_discover_catalog``
                 for the search order.  This addresses issue #253 -- without
                 it, ``restore.sh``'s one-shot catalog-pick scan misses any
@@ -533,7 +533,7 @@ class PurePythonRestorer:
                 under the target and exposes the count via ``.failures``.
                 If True, the legacy raise-first contract is preserved:
                 the first such error aborts the restore.  Tier 3 (the
-                last-resort restorer) defaults to tolerant; callers that
+                Python reader) defaults to tolerant; callers that
                 want all-or-nothing semantics opt in explicitly.
         """
         self.repo_path = repo_path
@@ -568,7 +568,7 @@ class PurePythonRestorer:
 
         # Progress reporting state — reset at the top of every
         # restore() call.  _progress_enabled is read from the env once
-        # at construction so the operator can silence output with
+        # at construction so the heir can silence output with
         # LCSAS_PROGRESS=0 without re-reading the env per file.
         self._progress_enabled: bool = (
             os.environ.get("LCSAS_PROGRESS", "1") != "0"
@@ -631,7 +631,7 @@ class PurePythonRestorer:
         self._restore_tree(snap.tree, target)
 
         # Force a final 100% line so the last reported count matches
-        # the total — otherwise the operator sees e.g. 47/50 and
+        # the total — otherwise the heir sees e.g. 47/50 and
         # wonders if the last 3 files were skipped.
         self._emit_progress(force=True)
 
@@ -668,10 +668,10 @@ class PurePythonRestorer:
         """
         manifest = target / "RESTORE_FAILURES.txt"
         lines = [
-            "LCSAS pure-Python restore — files that could NOT be restored.",
+            "LCSAS tier-3 restore (the Python reader) — files that could NOT be restored.",
             "Every OTHER file in this directory restored successfully.",
-            "Re-running tier-3 from a newer meta disc, or re-mounting an",
-            "undamaged copy of the affected disc, is the remedy.",
+            "Re-running tier 3 from a newer meta disc, or mounting another",
+            "undamaged disc with the same label, is the remedy.",
             "",
             "path\treason\tblob_id",
         ]
@@ -732,7 +732,7 @@ class PurePythonRestorer:
           - ``\\x00``  → uncompressed (strip the prefix)
           - ``\\x01``  → zstd-compressed (strip the prefix, decompress)
           - ``\\x02``  → zstd-compressed (strip the prefix, decompress)
-          - ``{``       → v1 repo, raw JSON, no prefix
+          - ``{``       → v1 repository, raw JSON, no prefix
 
         After the prefix byte the data is either raw JSON or a
         zstd frame (magic ``\\x28\\xB5\\x2F\\xFD``).
@@ -847,14 +847,14 @@ class PurePythonRestorer:
     # ── Blob Reading ─────────────────────────────────────────────
 
     # Max prompt iterations before giving up (bounded loop -- if the
-    # operator can't get the right disc into the drive after this many
+    # heir can't get the right disc into the drive after this many
     # tries, something else is wrong and the restore should fail loudly).
     _DISC_SWAP_MAX_RETRIES = 50
 
     def _scan_pack_search_paths(self, pack_id: str) -> Path | None:
         """Search every configured root for the named pack.
 
-        Each root is probed for both the LCSAS holographic ``data/<XX>/<hex>``
+        Each root is probed for both the LCSAS data-disc ``data/<XX>/<hex>``
         / ``data/<hex>`` layout AND the legacy "root IS the data dir"
         layout (``<XX>/<hex>`` / ``<hex>``).  Returns the first hit or None.
         """
@@ -874,7 +874,7 @@ class PurePythonRestorer:
     # Sentinels returned by _lookup_volume_labels to disambiguate the
     # three catalog states the framed prompt needs to print, mirroring
     # the branches in disc_locator.c::print_prompt:
-    #   * labels = non-empty list  -> "It lives on volume(s):" + each label
+    #   * labels = non-empty list  -> "It is on any disc labelled:" + each label
     #   * labels = []  and  catalog is reachable  -> _CATALOG_HIT_NO_VOLS
     #   * labels = []  and  pack is NOT in catalog -> _CATALOG_MISS
     #   * lookup_volume_labels returned None       -> no catalog (legacy line)
@@ -882,10 +882,10 @@ class PurePythonRestorer:
     _CATALOG_MISS = "miss"
 
     def _discover_catalog(self) -> Path | None:
-        """Walk pack search paths looking for a holographic ``catalog.db``.
+        """Walk pack search paths looking for a disc catalog (``catalog.db``).
 
         The LCSAS ``HolographicInjector`` stamps ``catalog.db`` at the
-        staging root (see ``staging/metadata.py::inject_catalog``), so on a
+        ISO image root (see ``staging/metadata.py::inject_catalog``), so on a
         mounted data disc the file lives at ``<mount-root>/catalog.db``.
         Callers (notably ``restore.sh``) may pass either the disc root
         (``--mount-point /mnt``) OR the disc's data subdir
@@ -893,18 +893,18 @@ class PurePythonRestorer:
         points in tier-3's ``--mount-point`` flags, but the legacy default
         of ``repo_path/data`` still bottoms out one level deep.  So we
         probe both the root itself AND its parent (up to one level), and
-        also a ``recovery/`` subpath for the meta-disc layout where the
-        catalog might be tucked under ``recovery/``.
+        also a ``recovery/`` subpath (a local recovery tree laid out like
+        the meta disc's; the meta disc itself holds no catalog).
 
         Probe order (first existing hit wins, stable across calls):
 
-          1. ``<root>/catalog.db``         -- disc root, normal holographic layout
+          1. ``<root>/catalog.db``         -- disc root, normal data-disc layout
           2. ``<root>/../catalog.db``      -- root passed as ``data/`` subdir
-          3. ``<root>/recovery/catalog.db``-- meta-disc local-recovery-tree
+          3. ``<root>/recovery/catalog.db``-- local recovery tree
 
         Returns ``None`` if nothing is found.  Issue #253: this enables the
         catalog hint to materialise on the FIRST disc-swap retry after the
-        operator inserts a data disc -- restore.sh's one-shot startup scan
+        heir inserts a data disc -- restore.sh's one-shot startup scan
         cannot, because no data disc is mounted yet at that point.
         """
         seen: set[Path] = set()
@@ -931,7 +931,7 @@ class PurePythonRestorer:
     def _lookup_volume_labels(
         self, pack_id: str,
     ) -> tuple[list[str], str] | None:
-        """Resolve a pack hex hash to the volume labels that carry it.
+        """Resolve a pack ID to the labels of the volumes that carry it.
 
         Returns
         -------
@@ -951,7 +951,7 @@ class PurePythonRestorer:
         ``catalog.db``.  On first hit the path is cached on the instance
         so subsequent prompt frames don't re-stat the disc; on miss we
         return ``None`` and try again on the next call -- letting a
-        catalog that materialises mid-restore (after the operator inserts
+        catalog that materialises mid-restore (after the heir inserts
         a data disc) be picked up on the next swap prompt.
 
         The catalog is opened read-only.  Any sqlite3 error is swallowed
@@ -998,8 +998,8 @@ class PurePythonRestorer:
                 labels = [row[0] for row in cur.fetchall()]
                 if labels:
                     return labels, ""
-                # Pack hash present in the catalog but no volume mapping?
-                # Disambiguate that from "pack hash absent from catalog".
+                # Pack ID present in the catalog but no volume mapping?
+                # Disambiguate that from "pack ID absent from catalog".
                 cur = conn.execute(
                     "SELECT 1 FROM packs WHERE sha256 = ? LIMIT 1",
                     (pack_id,),
@@ -1015,13 +1015,13 @@ class PurePythonRestorer:
                 conn.close()
         except sqlite3.Error:
             # Corrupt / locked / missing-tables catalog: treat as "no
-            # catalog" so the operator at least sees the legacy prompt.
+            # catalog" so the heir at least sees the legacy prompt.
             #
             # If this catalog was auto-discovered (vs. an explicit
             # --catalog override), invalidate the cache so the NEXT
             # prompt cycle gets to re-scan the mount roots and possibly
             # find a different, healthier catalog on a later-inserted
-            # disc.  An explicit override stays cached -- the operator
+            # disc.  An explicit override stays cached -- the heir
             # asked for THAT catalog and we won't silently substitute.
             if was_auto_discovered:
                 self.catalog_path = None
@@ -1056,11 +1056,11 @@ class PurePythonRestorer:
 
         cat_result = self._lookup_volume_labels(pack_id)
         if cat_result is None:
-            # No --catalog supplied (or catalog unreadable).  Preserve
-            # the legacy line so backwards-compat callers / tests that
-            # match on it still pass.
+            # No --catalog supplied (or catalog unreadable).  Keep the
+            # legacy "no catalog available" wording so backwards-compat
+            # callers / tests that match on it still pass.
             lines.append(
-                "| (tier-3 standalone restorer: no catalog available)       |"
+                "| (tier-3 Python reader: no catalog available)             |"
             )
         else:
             labels, status = cat_result
@@ -1069,17 +1069,17 @@ class PurePythonRestorer:
                 # blind-restore agent's pattern matcher can't tell tiers
                 # apart on this line.
                 lines.append(
-                    "| It lives on volume(s):                                   |"
+                    "| It is on any disc labelled:                              |"
                 )
                 lines.extend(self._frame_indented(lbl) for lbl in labels)
             elif status == self._CATALOG_HIT_NO_VOLS:
                 lines.append(
-                    "| (catalog has the pack, but no current volume mapping)    |"
+                    "| (catalog has the pack, but lists no disc for it)         |"
                 )
             else:
-                # _CATALOG_MISS -- pack hash not in catalog at all.
+                # _CATALOG_MISS -- pack ID not in catalog at all.
                 lines.append(
-                    "| (catalog has no record of this pack hash)                |"
+                    "| (catalog has no record of this pack ID)                  |"
                 )
 
         lines.extend([
@@ -1164,7 +1164,7 @@ class PurePythonRestorer:
 
         plaintext = self._decrypt(encrypted)
 
-        # Handle zstd compression.  The restic repo-v2 index contract is
+        # Handle zstd compression.  The restic repository-v2 index contract is
         # the discriminator: a blob is compressed iff its index entry
         # carries `uncompressed_length`.  Auto-compression stores
         # incompressible blobs (e.g. an archived `.zst` file) UNcompressed,
@@ -1179,7 +1179,7 @@ class PurePythonRestorer:
                 plaintext[:4] == _ZSTD_MAGIC
                 and hashlib.sha256(plaintext).hexdigest() != blob_id
             ):
-                # Index silent (v1 repo / legacy index): the raw SHA-256 is
+                # Index silent (v1 repository / legacy index): the raw SHA-256 is
                 # authoritative.  Only decompress if the raw bytes do not
                 # already hash to the blob id.
                 plaintext = _decompress_zstd(
@@ -1362,7 +1362,7 @@ class PurePythonRestorer:
         """Extract a file from its content blobs.
 
         Writes to a sibling ``.lcsas-partial`` file and only
-        ``os.replace``s it onto the final path once every chunk has been
+        ``os.replace``s it onto the final path once every content blob has been
         written and metadata applied — so an exception mid-file never
         leaves a truncated file at the final path, and a re-run is
         idempotent.  On failure the partial is unlinked, the failure is
@@ -1419,7 +1419,7 @@ class PurePythonRestorer:
 
         Only tree blobs are read (which are typically a small
         fraction of total bytes), so this is cheap even on large
-        repos.  Used to provide N/M-style progress reporting.
+        repositories.  Used to provide N/M-style progress reporting.
         """
         total = 0
         # Iterative DFS to avoid recursion-depth limits on deep trees.
@@ -1566,7 +1566,7 @@ def _parse_timestamp(ts: str) -> float:
 
     try:
         # noqa UP017: datetime.UTC is 3.11+; this file is concatenated into
-        # the 3.10-floor standalone restorer, so timezone.utc is required.
+        # ``standalone_restorer.py`` (Python 3.10 floor), so timezone.utc is required.
         dt = datetime.fromisoformat(ts).replace(tzinfo=timezone.utc)  # noqa: UP017
     except ValueError:
         # Last resort: basic parse

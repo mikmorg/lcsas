@@ -9,33 +9,33 @@ tier still gets you to the same outcome: plaintext files on disk.
 
 Tiers 1-2 are the BARE MINIMUM PATH.  They share zero dependencies
 beyond a kernel and a static libc baked into the binary.  If your
-future system has those two things and one working CPU, the data is
-recoverable.
+future system has those two things and one working CPU, the data can
+be restored.
 
 Tier 3 is the OPTIONAL OVERFLOW.  It only runs if every C-based
-option failed AND the user has not opted out via
+option failed AND the heir has not opted out via
 LCSAS_ALLOW_PYTHON_TIER=0.
 
 THE TIERS
 
-  ┌────┬─────────────────────────────┬────────────────────────────┐
+  ┌────┬──────────────────────────────┬─────────────────────────────┐
   │ #  │ Implementation               │ Runtime dependencies        │
-  ├────┼─────────────────────────────┼────────────────────────────┤
-  │ 1  │ Prebuilt lcsas-restore       │ kernel + libc (static)      │
+  ├────┼──────────────────────────────┼─────────────────────────────┤
+  │ 1  │ C reader (prebuilt)          │ kernel + libc (static)      │
   │    │ bin/<arch>/lcsas-restore     │ (musl baked in)             │
-  ├────┼─────────────────────────────┼────────────────────────────┤
-  │ 2  │ Vendored rustic-static       │ kernel + libc (static)      │
+  ├────┼──────────────────────────────┼─────────────────────────────┤
+  │ 2  │ rustic (vendored static)     │ kernel + libc (static)      │
   │    │ bin/<arch>/rustic-static     │                             │
-  ╞════╪═════════════════════════════╪════════════════════════════╡
-  │ B  │   BARE MINIMUM PATH ENDS HERE                             │
-  ╞════╪═════════════════════════════╪════════════════════════════╡
-  │ 3  │ Pure-Python standalone_      │ python3 (>=3.10)            │
-  │    │ restorer.py                  │ stdlib only (no pip needed) │
-  └────┴─────────────────────────────┴────────────────────────────┘
+  ╞════╪══════════════════════════════╪═════════════════════════════╡
+  │ B  │   BARE MINIMUM PATH ENDS HERE                              │
+  ╞════╪══════════════════════════════╪═════════════════════════════╡
+  │ 3  │ Python reader                │ python3 (>=3.10)            │
+  │    │ standalone_restorer.py       │ stdlib only (no pip needed) │
+  └────┴──────────────────────────────┴─────────────────────────────┘
 
 DESIGN INVARIANT
 
-The bare-minimum path (tiers 1-2) is verified Python-free by
+The bare-minimum path (tiers 1-2) is proven Python-free by
 ``recovery/tests/test_bare_path.sh``:
 
   1. Statically inspect ``scripts/restore.sh`` -- the slice from
@@ -43,16 +43,17 @@ The bare-minimum path (tiers 1-2) is verified Python-free by
      ``python`` or ``.py`` reference (in executable code; comments
      are skipped).
 
-  2. Build a synthetic restic repo.  Strip every python interpreter
-     from PATH by prepending a shim directory that exits 127 for
-     anything named ``python*``.  Set ``LCSAS_ALLOW_PYTHON_TIER=0``.
-     Invoke ``scripts/restore.sh``.  Verify recovery succeeds.
+  2. Build a synthetic restic repository.  Strip every python
+     interpreter from PATH by prepending a shim directory that exits
+     127 for anything named ``python*``.  Set
+     ``LCSAS_ALLOW_PYTHON_TIER=0``.  Invoke ``scripts/restore.sh``.
+     Check that the restore succeeds.
 
   Run as: ``make -C recovery test-bare-path``
 
 OPTING OUT OF TIER 3
 
-If you want a hard guarantee that the recovery never touches Python:
+If you want a hard guarantee that the restore never touches Python:
 
   LCSAS_ALLOW_PYTHON_TIER=0 sh /restore.sh /mnt/recovery /tmp/restored
 
@@ -64,23 +65,23 @@ TIER-2 ON MULTI-DISC ARCHIVES
 Tier 2 (rustic-static) skips itself entirely on multi-disc archives
 because rustic cannot drive the LCSAS disc-swap protocol -- it
 expects every pack to live under a single ``$REPO/data/`` tree.
-When restore.sh detects the multi-disc layout (no ``data/`` subdir
-on the meta-disc-resident repo), it prints a one-line skip
-diagnostic and falls through directly to tier 3.
+When restore.sh detects the multi-disc layout (the repository
+metadata on the meta disc has no ``data/`` subdir), it prints a
+one-line skip diagnostic and falls through directly to tier 3.
 
 On a multi-disc archive the effective cascade is therefore
 TIER 1 -> TIER 3; tier 2 is a single-disc-only fallback.
-Operators with a multi-disc archive should treat tier 1 as the
+An heir with a multi-disc archive should treat tier 1 as the
 primary AND the only practical pre-Python fallback.
 
 TIER 2b: STOCK RESTIC / RUSTIC (INDEPENDENT AUDITED READER)
 
 After tier 2, restore.sh automatically tries a stock restic (the
 cryptographically-audited Go original) -- the per-target copy bundled
-at bin/<arch>/restic, or any restic/rustic on the operator's PATH --
+at bin/<arch>/restic, or any restic/rustic on the heir's PATH --
 before falling through to the Python tier.  restic is a fully
 independent implementation that restores the same repository
-byte-identically (proven by test_stock_restic_compat.py), so a heir
+byte-identically (proven by test_stock_restic_compat.py), so an heir
 who cannot run, or does not trust, the binaries we shipped still gets
 an automatic restore using only widely-audited third-party tools.
 Like tier 2 it needs a single-disc $REPO/data/ tree; the fully MANUAL
@@ -105,10 +106,10 @@ fails pre-flight and is skipped with the diagnostic:
 The cascade then advances to the next available tier.  This guard
 exists because POSIX ``sh`` execs an empty file as a no-op script
 that exits 0 -- without the pre-flight, a bit-rotted tier-1 binary
-would silently claim success and the operator would get nothing.
+would silently claim success and the heir would get nothing.
 
 See ``RECOVER.txt`` (CASCADE DETAILS, pre-flight paragraph) for the
-operator-facing version of this note.
+heir-facing version of this note.
 
 DISC-INTEGRITY LAYER (BENEATH THE TIERS)
 
@@ -118,7 +119,7 @@ guards applied before/within any tier:
 
   * RS03 ECC parity (~15% of capacity), wrapped around every burned
     image, repairs bit-rotted / scratched sectors back to their
-    original bytes.  The parity is spent at recovery time by the
+    original bytes.  The parity is spent at restore time by the
     BUNDLED in-house repair tool ``lcsas-ecc`` -- a small C89 RS03
     decoder cross-built for all six approved targets and shipped on the
     meta disc next to ``lcsas-restore`` -- so the repair half of this
@@ -126,8 +127,8 @@ guards applied before/within any tier:
     heir-facing entry point is ``restore.sh --check-disc <image>``
     (``restore.bat --check-disc`` on Windows): it runs
     ``lcsas-ecc verify`` and, on damage, offers ``lcsas-ecc fix``.
-    The parity format is dvdisaster's RS03, unchanged, so a newer meta
-    disc's ``lcsas-ecc`` repairs the entire already-burned back-catalog.
+    The parity format is dvdisaster's RS03, unchanged, so the newest
+    meta disc's ``lcsas-ecc`` repairs every disc already burned.
   * The tier-1 binary then authenticates every blob (Poly1305 MAC +
     SHA-256 content hash) and REFUSES corrupt data rather than
     propagating it -- so disc corruption is either repaired by ECC or
@@ -147,7 +148,7 @@ decoder reads dvdisaster-written parity:
     confirm every file extracts byte-for-byte identical.
   * test_rs03_fails_loud_when_damage_exceeds_capacity -- damage beyond
     the ECC correction capacity makes repair REPORT FAILURE (no silent
-    partial restore), so recovery aborts instead of trusting an
+    partial restore), so the restore aborts instead of trusting an
     un-repairable disc.
 
 The physical-media half (a real burned disc read by a real optical
@@ -156,15 +157,16 @@ in ``recovery/docs/PHYSICAL_DISC_VALIDATION.txt``.
 
 CONFIDENTIALITY (what a STOLEN disc gives an adversary): the integrity
 guards above keep the bytes intact and authentic; they do NOT keep them
-SECRET.  Every disc carries the full plaintext catalog and every repo's
-password-locked key files, so the password is the only thing protecting
-your data against unlimited offline guessing.  The stolen-disc threat
-model, the entropy guidance, and the no-rotation reality are documented
-in ``docs/DISC_CONFIDENTIALITY.md`` (bundled on every meta-volume).
+SECRET.  Every data disc carries its full disc catalog in plaintext,
+and every disc carries every repository's password-locked key files, so
+the password is the only thing protecting your data against unlimited
+offline guessing.  The stolen-disc threat model, the entropy guidance,
+and the no-rotation reality are documented in
+``docs/DISC_CONFIDENTIALITY.md`` (bundled on every meta disc).
 
 TIER 3: SKIP-AND-CONTINUE ON A BAD BLOB
 
-Tier 3 (the pure-Python standalone_restorer.py, last resort) is
+Tier 3 (the Python reader, standalone_restorer.py, last resort) is
 TOLERANT by default: a single corrupt blob, a missing index entry, or
 a disc that stays unreadable after the disc-swap retries are exhausted
 records ONE failure and the restore CONTINUES, instead of aborting the
@@ -173,7 +175,7 @@ on the last-resort tier -- one bad blob must not cost the heir 99.9%
 of an otherwise-intact family archive.
 
   * Files are written to a sibling ``.lcsas-partial`` file and only
-    renamed onto the final path after the last chunk -- so a truncated
+    renamed onto the final path after the last blob -- so a truncated
     file is NEVER left at a final restore path, and re-running is
     idempotent.
   * After traversal, ``RESTORE_FAILURES.txt`` is written under the
@@ -181,16 +183,17 @@ of an otherwise-intact family archive.
     plain-English summary line is printed ("Restored N of M files ...").
   * Exit code 2 means "finished, but K file(s) were skipped" (distinct
     from exit 1, a setup-level failure like a bad password or missing
-    repo).  The generated script prints a plain-English message, never
-    a raw Python traceback, for any outcome.
+    repository).  The generated script prints a plain-English message,
+    never a raw Python traceback, for any outcome.
 
 NOTE for ALREADY-BURNED data discs: standalone_restorer.py is
 generated from the LCSAS source, so newer meta discs carry this
 behaviour automatically, but data discs burned BEFORE this change ship
 the older abort-on-first-error script forever.  The remedy is to run
-tier 3 from a NEWER meta disc against those old data discs -- the
-restorer reads the data discs' packs, the script comes from the meta
-disc.
+tier 3 from the NEWEST meta disc against those old data discs -- the
+packs come from the data discs, the script comes from the meta disc.
+An heir always starts from the newest meta disc: every generation of
+meta disc reads every disc.
 
 TIER 3: SYMLINK POLICY (deliberate divergence from restic)
 
@@ -210,26 +213,27 @@ planting an escape.  In-tree relative symlinks restore normally.
 
 NOTE for ALREADY-BURNED data discs: the same generation rule applies --
 discs burned before RST-06 carry a dead guard that created escaping
-links; recover those from a newer meta disc to get the skip behaviour.
+links; restore those from the newest meta disc to get the skip
+behaviour.
 
 TIER 3: ZSTD DECOMPRESSION (rustic v2 default)
 
-rustic v2 repos are zstd-compressed by default, so tier 3 MUST be able
-to decompress zstd to be useful.  Two backends, fast-path first:
+rustic v2 repositories are zstd-compressed by default, so tier 3 MUST
+be able to decompress zstd to be useful.  Two backends, fast-path first:
 
   * Native ``zstandard`` C extension, when present.  ~100x faster, but
     arch- and CPython-minor-specific: the meta builder bundles only the
     BUILD HOST's copy (tools/lib/pythonX.Y/zstandard), so it helps only
-    a recovery host that matches that arch + CPython minor.
+    a restore host that matches that arch + CPython minor.
   * Pure-Python decoder (lcsas.restore._zstd_pure), the fallback.  It is
-    stdlib-only and ships in the LCSAS source on every meta-volume AND
+    stdlib-only and ships in the LCSAS source on every meta disc AND
     inlined into the per-disc standalone_restorer.py, so it works under
     ANY of the bundled per-target CPython interpreters (all six approved
     targets) and on any future CPython -- slower, but always available.
     A startup log line notes the slow path; install 'zstandard' for the
     fast one.
 
-The build records native-zstd capability per meta-volume in
+The build records native-zstd capability per meta disc in
 volume_info.json ("zstd_support"); ``lcsas meta build`` fails loud if
 the build host has no native zstandard (pass --allow-no-zstd to accept
 the pure-Python-only fast-path gap).
@@ -246,8 +250,8 @@ The default cascade runs the first available tier as a subprocess (not
 ``exec``, so restore.sh's EXIT trap can still shred the temporary
 password file -- issue #363) and exits with that tier's own status.
 A tier-1 crash mid-restore therefore aborts the run with no automatic
-fall-through.  This matches the bare-minimum recovery story: tier 1 IS
-the recovery, and it has to work.
+fall-through.  This matches the bare-minimum restore story: tier 1 IS
+the restore, and it has to work.
 
 To make restore.sh walk the cascade on a tier-1 runtime failure
 (non-zero exit), set ``LCSAS_TIER_FALLBACK=1``.  Tiers 1 and 2 then
@@ -274,9 +278,9 @@ A conclusive reject stays terminal even if keys/ also holds a stray or
 corrupt file -- otherwise a wrong password plus one bit-rotted key
 would fall through and let tier 2 leave a partial tree, the exact harm
 this guards against.  The case this trades away -- a hand-rolled
-restic MULTI-KEY repo where the key matching the password is the one
-tier-1 cannot parse -- is not produced by LCSAS (one key file per
-repo) and is a documented limitation on issue #399.
+restic MULTI-KEY repository where the key matching the password is the
+one tier-1 cannot parse -- is not produced by LCSAS (one key file per
+repository) and is a documented limitation on issue #399.
 
 Scope: this guard lives in tier 1; if tier 1 is absent or skipped by
 pre-flight, a wrong password is only detected by a later tier, which
@@ -290,13 +294,13 @@ Python is a healthy ecosystem today, but at a 50-year horizon:
     collector, ABI, and standard library multiple times in 30 years.
     Source written today may not parse under a hypothetical Python
     of 2076.
-  * Python's stdlib provides scrypt and HMAC -- but the
-    standalone_restorer also requires dataclasses, ``from __future__
-    import annotations`` semantics, and pathlib edge cases that
-    pin the minimum at Python 3.10 (the generated restorer exits with
-    a clear message on anything older).  That single ecosystem version
-    pin is itself a risk.
-  * The interpreter binary on the recovery medium depends on
+  * Python's stdlib provides scrypt and HMAC -- but the Python reader
+    also requires dataclasses, ``from __future__ import annotations``
+    semantics, and pathlib edge cases that pin the minimum at
+    Python 3.10 (the generated script exits with a clear message on
+    anything older).  That single ecosystem version pin is itself a
+    risk.
+  * The interpreter binary on the meta disc depends on
     glibc / musl + dozens of optional shared libraries (ssl, expat,
     libffi, etc.).  Static-link is possible but uncommon.
 
@@ -314,7 +318,7 @@ The cascade's design intent is that tier 1 -- our own lcsas-restore
 binary built from C89 source against vendored sqlite + zstd -- is
 the PRIMARY recovery tool.  Tier 2 (upstream rustic-static) exists
 as a hedge in case our binary won't run for some reason on a
-particular host; tier 3 (Python) is an emergency overflow.
+particular host; tier 3 (the Python reader) is an emergency overflow.
 
 "Vendored" matters here.  We distinguish two senses of "third
 party":
@@ -333,9 +337,9 @@ party":
     upstream's CI did.  Runtime dependencies are explicit fallbacks
     (tiers 2 and 3); the bare path stays clean of them.
 
-The intent: a recipient with nothing but a working CPU, a kernel,
-a libc, and the lcsas-restore binary off the meta-volume should be
-able to recover.  No `pip install`, no package manager, no upstream
+The intent: an heir with nothing but a working CPU, a kernel,
+a libc, and the lcsas-restore binary off the meta disc should be
+able to restore.  No `pip install`, no package manager, no upstream
 release matrix that still needs to exist in 2076.  That's why
 tier 1 deserves the cross-compile work even though Phase 21 shipped
 the tier-2 cross-bundle as a shortcut -- see
@@ -350,13 +354,13 @@ the prebuilt binaries and the Python fallback:
     PATH (cc/gcc/clang/tcc/pcc) plus POSIX make.
   * Rebuild rustic from vendored Rust source via cargo.
 
-Both required a recipient who has a working toolchain (C or Rust)
+Both required an heir who has a working toolchain (C or Rust)
 but does NOT have the prebuilt static binaries shipped on the same
 disc AND refuses to fall back to Python.  That intersection is
 effectively empty: anyone with a C compiler can run a static
-binary, and anyone with Python can run the pure-Python restorer.
+binary, and anyone with Python can run the Python reader.
 Removing the rebuild tiers shrinks the cascade from 5 layers to 3
-without sacrificing any reachable recovery scenario.
+without sacrificing any reachable restore scenario.
 
 DEPENDENCY CHAIN AT A GLANCE
 

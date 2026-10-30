@@ -7,14 +7,14 @@
 ## Mission Statement
 
 LCSAS's most important goal is simple, full restoration of the most
-recent snapshot by a **less-technical user**, in the case of the
-**death of the author and archivist**.  The system must remain
-recoverable over an estimated **50-year term**.
+recent snapshot by a **less-technical heir**, in the case of the
+**death of the author and owner**.  The system must remain
+restorable over an estimated **50-year term**.
 
 Everything in this document is evaluated against that single objective.
 
-> **Confidentiality counterpart.** This audit optimizes for *recovery*. The
-> mirror-image concern — what a thief who steals a single disc gets, and the
+> **Confidentiality counterpart.** This audit optimizes for *restoring*. The
+> opposite concern — what a thief who steals a single disc gets, and the
 > password entropy that is the only thing protecting your data — is documented
 > in [DISC_CONFIDENTIALITY.md](../DISC_CONFIDENTIALITY.md). The hint examples
 > below predate that threat model; write `key_storage_hints` to name a
@@ -33,16 +33,16 @@ know what Linux, encryption, or a "repository" is.
 **Current state:** Data discs have `RESTORE_INSTRUCTIONS.txt` which
 opens with *"This disc is part of an LCSAS (Linux Cold Storage Archival
 Suite) archive.  It contains encrypted, deduplicated backup pack
-files..."* — technically accurate, humanly useless.  Meta-volumes have
+files..."* — technically accurate, humanly useless.  Meta discs have
 `README_RESTORE.md` (Markdown, requires rendering for readability).
 Neither file explains in plain terms what the data IS.
 
 **Fix:** Add a configurable `START_HERE.txt` on every disc (data AND
 meta) written in plain English:
 - What these discs are ("backup copies of family files created by [NAME]")
-- That an encryption key is required and where it might be found
+- That a password is required and where it might be found
 - That a technical person can help with restoration
-- What a "meta-volume" is and which disc it is
+- What the "meta disc" is and which disc it is
 - Contact info for someone who can help
 
 Requires: new config fields `archive_owner`, `archive_description`,
@@ -57,11 +57,11 @@ a human-readable archive description.
 **Fix:** Add `archive_description` to config, embed in `START_HERE.txt`
 and `volume_info.json`.
 
-### 1.3 No "where is the key" hint on disc — P0 ✅ (resolved)
+### 1.3 No "where is the password" hint on disc — P0 ✅ (resolved)
 
-**Current state:** `RESTORE_INSTRUCTIONS.txt` says the key is *"NOT
-stored on any disc for security"* but never says WHERE the archivist
-put it.  Key storage strategy exists only in the archivist's head.
+**Current state:** `RESTORE_INSTRUCTIONS.txt` says the password is *"NOT
+stored on any disc for security"* but never says WHERE the owner
+put it.  Password storage strategy exists only in the owner's head.
 
 **Fix:** Add `key_storage_hints` to config (e.g. "Paper copy in the
 home safe, USB copy in safe deposit box #1234 at First National Bank").
@@ -71,21 +71,22 @@ Embed in `START_HERE.txt`.
 
 **Current state:** Neither `RESTORE_INSTRUCTIONS.txt` nor
 `README_RESTORE.md` says *"If these instructions are confusing, take
-all the discs plus the key to a computer professional."*
+all the discs plus the password to a computer professional."*
 
 **Fix:** Add this guidance to `START_HERE.txt` and
 `RESTORE_INSTRUCTIONS.txt`.
 
-### 1.5 No key-to-repo mapping on disc — P1 ✅ (resolved)
+### 1.5 No password-to-repository mapping on disc — P1 ✅ (resolved)
 
-**Current state:** If the archivist used different keys per repo,
-nothing on disc tells the user which key goes with which repo.
-The modern `restore.sh` prompts interactively for a single password per
-invocation; the legacy `restore_legacy.sh` accepts a single `--key`
-argument.  Neither path lets you specify per-repo keys in one run.
+**Current state:** If the owner used different passwords per
+repository, nothing on disc tells the heir which password goes with
+which repository.  The modern `restore.sh` prompts interactively for a
+single password per invocation; the legacy `restore_legacy.sh` accepts
+a single `--key` argument.  Neither path lets you specify
+per-repository passwords in one run.
 
-**Fix:** Write `KEY_INFO.txt` listing each repo, its human description,
-and which key file it needs.  Derive from config.
+**Fix:** Write `PASSWORD_INFO.txt` listing each repository, its human
+description, and which password file it needs.  Derive from config.
 
 ### 1.6 Placeholder URL in RESTORE_INSTRUCTIONS.txt — P1 ✅ (resolved)
 
@@ -111,7 +112,7 @@ tables to aligned text.
 
 ### 1.8 No disc labeling / estate planning guidance — P2 ✅
 
-**Current state:** No documentation tells the archivist to physically
+**Current state:** No documentation tells the owner to physically
 label discs, maintain a paper manifest, or include a "letter to heirs"
 in the disc binder.
 
@@ -120,13 +121,13 @@ in the disc binder.
 **Resolution:** Created `docs/ESTATE_PLANNING.md` with a printable
 checklist, letter-to-heirs template, disc labeling conventions,
 periodic verification schedule, and config examples.  Bundled on
-meta-volume automatically via `_DOC_ITEMS`.
+the meta disc automatically via `_DOC_ITEMS`.
 
 ---
 
 ## 2. Bundled Tools Architecture
 
-These concerns relate to whether the meta-volume's bundled tools will
+These concerns relate to whether the meta disc's bundled tools will
 still function in 10, 25, or 50 years.
 
 ### 2.1 ELF binaries are architecture-locked — P0 ✅ (resolved)
@@ -141,7 +142,7 @@ support indefinitely.
 
 **Fix:** Bundle a statically-linked musl `rustic` binary (`rustic-static`)
 that eliminates glibc dependency entirely.  Add `--static-rustic` option
-to meta-volume builder.
+to the meta disc builder.
 
 ### 2.2 glibc ABI dependency — P0 ✅ (resolved)
 
@@ -161,7 +162,7 @@ the critical-path tool.  xorriso dependency is being eliminated from
 `rustic` or `xorriso` versions.
 
 **Fix:** Run `rustic --version`, `xorriso --version`, `dvdisaster
---version` during meta-volume build.  Record in `volume_info.json`
+--version` during the meta disc build.  Record in `volume_info.json`
 under `tool_versions`.
 
 ### 2.4 xorriso dependency in restore.sh — P1 ✅ (resolved)
@@ -180,7 +181,7 @@ ISO 9660 is kernel-native on every Linux — no userspace tool needed.
 dvdisaster.  If ECC repair is needed in 50 years, the format would need
 reverse-engineering unless the bundled binary still works.
 
-**Fix:** Bundle the RS03 format documentation on the meta-volume.
+**Fix:** Bundle the RS03 format documentation on the meta disc.
 Long-term: consider a pure-Python RS03 decoder.
 
 **Resolution (FMT-02):** The abandonment risk is closed by three
@@ -189,7 +190,7 @@ concrete things, not just "docs written":
 1. **Source pinned + bundled.** The exact dvdisaster 0.79.x source
    tarball is pinned by SHA-256 in `recovery/UPSTREAM.sha256`
    (`dvdisaster/src/`), fetched by `fetch_upstream.sh`, and bundled on
-   every meta-volume under `tools/src/` (fail-loud if missing — see
+   every meta disc under `tools/src/` (fail-loud if missing — see
    `MetaVolumeBuilder._bundle_dvdisaster_source`).  The code that
    defines the format now travels with the disc.
 2. **Spec is definitive, not hand-wavy.** `docs/DVDISASTER_RS03_FORMAT.md`
@@ -202,7 +203,7 @@ concrete things, not just "docs written":
    punts to "consult the source code".
 3. **In-house decoder (FMT-01).** The C89 `recovery/src/lcsas-ecc/`
    decoder, built against this spec, will be the durable repair path so
-   recovery does not depend on the dvdisaster binary running.
+   a restore does not depend on the dvdisaster binary running.
 
 A 2050 engineer holding a damaged disc, this spec, and the bundled
 source can re-implement RS03 repair.  Bundled via
@@ -218,9 +219,9 @@ binary format, encryption scheme, or key derivation.
 **Fix:** Create `docs/RESTIC_FORMAT_SPEC.md` documenting the repository
 format (directory structure, key file JSON + scrypt KDF, AES-256-CTR
 encryption, pack binary format, index JSON, snapshot JSON).  Bundle on
-every meta-volume.  Long-term: implement pure-Python restore fallback.
+every meta disc.  Long-term: implement a Python restore fallback (tier 3).
 
-### 2.7 No pure-Python restore fallback — P2 ✅
+### 2.7 No Python restore fallback (tier 3) — P2 ✅
 
 **Current state:** If both `rustic` and `rustic-static` fail to
 execute, there is no way to decrypt and restore data without finding a
@@ -244,30 +245,30 @@ end-to-end restore of a synthetic repository.
 
 ---
 
-## 3. Key Management
+## 3. Password Management
 
-### 3.1 Key loss = total data loss — P0 (documented, not solvable)
+### 3.1 Password loss = total data loss — P0 (documented, not solvable)
 
-**Current state:** Acknowledged in README.md: *"Your encryption keys
-are the single point of total failure."*  But this warning is NOT on
+**Current state:** Acknowledged in README.md: *"Your passwords are
+the single point of total failure."*  But this warning is NOT on
 any disc.
 
 **Partial fix:** `START_HERE.txt` (§1.1) will include this warning and
-key location hints.
+hints about where the password is kept.
 
-### 3.2 Multi-repo key confusion — P1 ✅ (resolved)
+### 3.2 Multi-repository password confusion — P1 ✅ (resolved)
 
-**Current state:** Different repos may use different key files.
-The modern `restore.sh` prompts for one password per invocation
-(re-run once per repo); the legacy `restore_legacy.sh` accepts a
-single `--key` flag.  Neither maps keys to repos on disc.
+**Current state:** Different repositories may use different password
+files.  The modern `restore.sh` prompts for one password per invocation
+(re-run once per repository); the legacy `restore_legacy.sh` accepts a
+single `--key` flag.  Neither maps passwords to repositories on disc.
 
-**Fix:** `KEY_INFO.txt` (§1.5) and enhance the entry-point scripts to
-loop over repos with per-repo keys.
+**Fix:** `PASSWORD_INFO.txt` (§1.5) and enhance the entry-point scripts to
+loop over repositories with per-repository passwords.
 
 ### 3.3 Config file not backed up to disc — P2 ✅
 
-**Current state:** `config.toml` contains repo-to-key-file mappings
+**Current state:** `config.toml` contains repository-to-password-file mappings
 and archive configuration but is never written to any disc.
 
 **Fix:** Include a sanitized config summary (without filesystem paths)
@@ -275,9 +276,9 @@ on each disc.
 
 **Resolution:** `HolographicInjector.write_config_summary()` writes
 `CONFIG_SUMMARY.txt` with media type, ECC redundancy, label prefix,
-survivability fields, and repo names + key IDs.  Filesystem paths
+survivability fields, and repository names + key IDs.  Filesystem paths
 are intentionally omitted (host-specific, useless on a standalone
-disc).  Called from both orchestrator paths and the meta-volume
+disc).  Called from both orchestrator paths and the meta disc
 builder.
 
 ---
@@ -295,20 +296,20 @@ Windows' native CDFS driver (the `Mount-DiskImage` path behind
 `restore.bat`) does not reassemble multi-extent files — the heir
 sees a silently truncated file.  LCSAS closes this at the mastering
 choke point: `iso/xorriso.py` raises `OversizeFileError` for any
-file over the single-extent limit (both data and meta volumes), and
+file over the single-extent limit (both data volumes and the meta disc), and
 the bin-packer warns at plan time.  See
 `recovery/docs/RECOVER_WINDOWS.txt` for the 7-Zip extraction
 workaround on any pre-guard disc.
 
 ### 4.2 Filename compatibility — ✅ Low risk
 
-Pack files named by SHA-256 hex (64 lowercase hex chars).  Volume
+Pack files named by pack ID (SHA-256, 64 lowercase hex chars).  Volume
 labels use `[A-Z0-9_]`.  Both are valid on all OSes.
 
 ### 4.3 No media storage guidance on disc — P3 ✅
 
 **Current state:** No guidance about storage conditions (cool,
-dark, vertical orientation) on any disc or in user docs.
+dark, vertical orientation) on any disc or in the docs.
 
 **Fix:** Add to `START_HERE.txt` or `DISC_CARE.txt`.
 
@@ -317,7 +318,7 @@ standalone `DISC_CARE.txt` covering handling, storage (vertical,
 binder sleeves), environment (15–25 °C, 30–50 % RH, dark),
 media longevity (M-DISC 1000+ yr, BD-R HTL 50–100 yr, DVD-R
 10–50 yr), periodic verification schedule, and drive availability
-advice.  Included on both data and meta volumes.
+advice.  Included on both data volumes and the meta disc.
 
 ---
 
@@ -325,14 +326,14 @@ advice.  Included on both data and meta volumes.
 
 | Failure Mode | Risk | Impact | Current Mitigation | Gap? |
 |---|---|---|---|---|
-| Key file lost | Medium | Total loss | README advises backup | Key hints not on disc |
+| Password lost | Medium | Total loss | README advises backup | Storage hints not on disc |
 | Family doesn't know discs exist | High | Total loss | None | No estate guidance |
-| Meta-volume lost | Low | Harder restore | Manual procedure in RESTORE_INSTRUCTIONS | Requires expertise |
-| x86_64 obsolete | Low (50yr) | Meta-volume ELF fails | None → static musl binary | In progress |
+| Meta disc lost | Low | Harder restore | Manual procedure in RESTORE_INSTRUCTIONS | Requires expertise |
+| x86_64 obsolete | Low (50yr) | Meta disc ELF fails | None → static musl binary | In progress |
 | glibc ABI break | Medium (50yr) | Dynamic ELF fails | None → static musl binary | In progress |
 | Rustic project abandoned | Possible | Must find compatible tool | None → format spec on disc | In progress |
 | Blu-ray drive unavailable | Medium | Can't read disc | None | No guidance |
-| Wrong key for repo | Medium | Confusing error | None | No mapping on disc |
+| Wrong password for repository | Medium | Confusing error | None | No mapping on disc |
 | Data disc bit-rot | Low (M-DISC) | Pack loss | RS03 ECC + SHA-256 | dvdisaster binary |
 
 ---
@@ -343,9 +344,9 @@ advice.  Included on both data and meta volumes.
 |---|---------|----------|--------|
 | 1.1 | START_HERE.txt on every disc | P0 | ✅ Done |
 | 1.2 | Archive description field | P0 | ✅ Done (config.archive_description) |
-| 1.3 | Key storage hints on disc | P0 | ✅ Done (config.key_storage_hints) |
+| 1.3 | Password storage hints on disc | P0 | ✅ Done (config.key_storage_hints) |
 | 1.4 | "Get a tech person" advice | P1 | ✅ Done (in START_HERE + RESTORE_INSTRUCTIONS) |
-| 1.5 | Key-to-repo mapping (KEY_INFO.txt) | P1 | ✅ Done |
+| 1.5 | Password-to-repository mapping (PASSWORD_INFO.txt) | P1 | ✅ Done |
 | 1.6 | Fix placeholder URL | P1 | ✅ Done (removed placeholder) |
 | 1.7 | README_RESTORE as plain text | P2 | ✅ Done |
 | 1.8 | Estate planning guidance | P2 | ✅ Done |
@@ -355,8 +356,8 @@ advice.  Included on both data and meta volumes.
 | 2.4 | Eliminate xorriso from restore.sh | P1 | ✅ Done (mount → 7z → xorriso cascade) |
 | 2.5 | dvdisaster RS03 format docs | P2 | ✅ Done |
 | 2.6 | Restic format spec on disc | P0 | ✅ Done (docs/RESTIC_FORMAT_SPEC.md) |
-| 2.7 | Pure-Python restore fallback | P2 | ✅ Done |
-| 3.1 | Key loss warning on disc | P0 | ✅ Done (via 1.1) |
-| 3.2 | Multi-repo key mapping | P1 | ✅ Done (via 1.5) |
+| 2.7 | Python restore fallback (tier 3) | P2 | ✅ Done |
+| 3.1 | Password loss warning on disc | P0 | ✅ Done (via 1.1) |
+| 3.2 | Multi-repository password mapping | P1 | ✅ Done (via 1.5) |
 | 3.3 | Config backup to disc | P2 | ✅ Done |
 | 4.3 | Media storage guidance | P3 | ✅ Done |

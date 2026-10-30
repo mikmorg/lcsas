@@ -1416,7 +1416,7 @@ class TestCmdMetaBuild:
 
 
 class TestCmdMetaVerify:
-    """Phase 21.8 — `lcsas meta verify <dir>` audits a built meta-volume
+    """Phase 21.8 — `lcsas meta verify <dir>` audits a built meta disc
     against its recovery/MANIFEST.sha256."""
 
     def _populate_required_contents(self, out):
@@ -1733,7 +1733,7 @@ class TestCmdMetaBuildGate:
         # Still exit 0: a stale catalog row must not block a rescue disc.
         assert result == 0
         assert "bundled for 1 of 2 catalogued repo(s): family" in caplog.text
-        assert "NO keys on this meta-volume: gone" in caplog.text
+        assert "NO keys on this meta disc: gone" in caplog.text
         assert (out / "metadata" / "family" / "keys" / "k0").is_file()
 
 
@@ -1746,7 +1746,7 @@ class TestCmdMetaBuildKeyGate:
     discs got no Rustic keys bundled.
 
     Reporting alone (#436) still lets a build script that only checks the
-    exit code master and burn a disc that cannot decrypt a tenant. But a
+    exit code master and burn a disc that cannot decrypt a repository. But a
     blanket hard-fail is undecidable — LCSAS cannot tell "mirror
     unmounted right now" from "mirror gone for good" — so the gate is
     narrowed to a gap that is genuinely a survivability defect:
@@ -1856,7 +1856,7 @@ class TestCmdMetaBuildKeyGate:
         assert rc == 0
         assert "could not decrypt" not in caplog.text
         # ...but it is still REPORTED, per #436.
-        assert "NO keys on this meta-volume: family" in caplog.text
+        assert "NO keys on this meta disc: family" in caplog.text
 
     def test_silent_for_repo_with_no_packs(
         self, tmp_path, monkeypatch, caplog
@@ -1972,8 +1972,8 @@ class TestCmdMetaBuildKeyGate:
 class TestCmdMetaBuildPerRepoKeysNotAllowIncomplete:
     """#443: `missing_required_contents()`'s per-repo ``metadata/<repo>/
     keys`` entries (#367 — a mirror WAS reachable and bundled, but had no
-    ``keys/``) are the SAME failure as #437's key gate ("this meta-volume
-    cannot decrypt repo X"), just reached a different way (mirror
+    ``keys/``) are the SAME failure as #437's key gate ("this meta disc
+    cannot decrypt repository X"), just reached a different way (mirror
     unreachable vs. mirror reachable-but-keyless). ``--allow-incomplete``
     means "dev build lacking per-target binaries" and must not double as
     an override for either shape of that gap — only

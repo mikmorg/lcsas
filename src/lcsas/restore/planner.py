@@ -29,14 +29,14 @@ class PackSource:
 class PickList:
     """A restore plan mapping volumes to needed packs.
 
-    Tells the user which discs to retrieve and what packs to copy.
+    Lists the discs to retrieve and the packs to copy from each.
     """
 
     volumes: dict[str, list[Pack]]   # {volume_label: [Pack, ...]}
-    missing_packs: list[str]         # SHA-256 hashes with no known active volume
+    missing_packs: list[str]         # pack IDs with no known active volume
     total_packs: int = 0
     total_bytes: int = 0
-    # Packs only on DEPRECATED/DESTROYED volumes — may still be physically recoverable.
+    # Packs only on DEPRECATED/DESTROYED volumes — a disc holding them may still exist.
     # {volume_label: [sha256, ...]}
     deprecated_disc_labels: dict[str, list[str]] = field(default_factory=dict)
     # Selected volumes with no record of ever being burned (STAGING/BURNING,
@@ -56,7 +56,7 @@ class PickListV2:
     missing_packs: list[str]
     total_packs: int = 0
     total_bytes: int = 0
-    # Packs only on DEPRECATED/DESTROYED volumes — may still be physically recoverable.
+    # Packs only on DEPRECATED/DESTROYED volumes — a disc holding them may still exist.
     # {volume_label: [sha256, ...]}
     deprecated_disc_labels: dict[str, list[str]] = field(default_factory=dict)
     # Selected volumes with no record of ever being burned (STAGING/BURNING,
@@ -65,7 +65,7 @@ class PickListV2:
 
 
 class RestorePlanner:
-    """Generate restore pick lists from required pack hashes."""
+    """Generate restore pick lists from required pack IDs."""
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
@@ -74,7 +74,7 @@ class RestorePlanner:
         self,
         required_pack_hashes: list[str],
     ) -> PickList:
-        """Given required pack hashes, return a PickList.
+        """Given required pack IDs, return a PickList.
 
         Maps each pack to a volume, identifies any packs that cannot
         be found in the catalog.

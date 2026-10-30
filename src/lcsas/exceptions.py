@@ -1,6 +1,6 @@
 """LCSAS exception hierarchy.
 
-All user-facing errors inherit from ``LcsasError`` so the CLI can catch them
+All errors meant for the owner inherit from ``LcsasError`` so the CLI can catch them
 cleanly and print a friendly message without a traceback, reserving full
 tracebacks for unexpected internal errors only.
 """
@@ -12,7 +12,7 @@ class LcsasError(Exception):
     """Base class for all LCSAS operational errors.
 
     Carries an optional *recovery_hint* that the CLI prints after the
-    error message to guide the operator towards resolution.
+    error message to guide the owner towards resolution.
     """
 
     def __init__(self, message: str, recovery_hint: str = "") -> None:
@@ -41,13 +41,13 @@ class CatalogError(LcsasError):
 
 
 class StagingError(LcsasError):
-    """Error assembling the staging directory."""
+    """Error assembling a volume's tree in the staging area."""
 
 
 class CatalogLockTimeout(LcsasError):  # noqa: N818 - "Timeout" reads as the error
     """Timed out waiting to acquire the catalog file lock.
 
     The CLI maps this to exit code 75 (``EX_TEMPFAIL``) so scripts can
-    retry; the message names the holder so the operator knows what to wait
+    retry; the message names the holder so the owner knows what to wait
     on (and not to kill it — it may be mid-burn).
     """

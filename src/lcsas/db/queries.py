@@ -17,9 +17,9 @@ _logger = logging.getLogger(__name__)
 _SQLITE_BATCH = 900
 
 # FMA-01: a pack is "archived" only when it is linked to a volume in one of
-# these statuses — i.e. a disc that physically exists.  STAGING/BURNING
-# volumes are an intent, not a copy.  CONSOLIDATING is durable because it is
-# only entered from VERIFIED (the disc exists).
+# these statuses — i.e. a volume with a disc that physically exists.
+# STAGING/BURNING volumes are an intent, not a disc.  CONSOLIDATING is
+# durable because it is only entered from VERIFIED (the disc exists).
 DURABLE_VOLUME_STATUSES = ("BURNED", "VERIFIED", "CONSOLIDATING")
 
 # SQL literal list built once from the single source of truth above.
@@ -40,9 +40,9 @@ def get_unarchived_packs(
 ) -> list[Pack]:
     """Return non-pruned packs with no link to a durable (burned) volume.
 
-    These are packs sitting on the Local Mirror that need to be burned.
+    These are packs sitting on the mirror that need to be burned.
     Packs linked only to STAGING/BURNING volumes count as unarchived:
-    a volume that was never burned is not a copy, so its packs must
+    a volume that was never burned has no disc, so its packs must
     reappear in the default ``lcsas stage`` pool (FMA-01).  A pack with
     at least one durable link stays archived (no double-burning).
     """
@@ -131,9 +131,9 @@ def get_pick_list(
 ) -> dict[str, list[Pack]]:
     """Generate a restore 'pick list': map volume labels to needed packs.
 
-    Given a list of required pack SHA-256 hashes (from a restore dry-run),
-    returns a dict of {volume_label: [Pack, ...]} telling the user which
-    discs to retrieve.
+    Given a list of required pack IDs (from a restore dry-run),
+    returns a dict of {volume_label: [Pack, ...]} saying which discs to
+    fetch.
 
     Prefers non-DEPRECATED/DESTROYED volumes. If a pack exists on multiple
     volumes, prefers durable (BURNED/VERIFIED/CONSOLIDATING) volumes over
@@ -141,17 +141,17 @@ def get_pick_list(
     (if specified) to minimise disc-swapping across locations. Falls back
     to alphabetical order.
 
-    STAGING/BURNING volumes are deliberately NOT excluded: every on-disc
-    holographic catalog lists its own volume as STAGING (the catalog is
+    STAGING/BURNING volumes are deliberately NOT excluded: every disc
+    catalog lists its own volume as STAGING (the catalog is
     copied at staging time), so excluding them would break every restore
     that runs against a disc-rebuilt catalog (FMA-01/FMA-10).  Use
     :func:`get_unconfirmed_volume_labels` to warn about selected volumes
     that have no record of ever being burned.
 
     Args:
-        conn: DB connection.
+        conn: catalog connection.
         pack_sha256_list: SHA-256 hashes of required packs.
-        preferred_location: Optional storage location to prefer (e.g.
+        preferred_location: Optional location to prefer (e.g.
             ``"Home_Shelf"``).  Volumes at this location are chosen
             over volumes elsewhere when both carry the same pack.
     """
@@ -159,8 +159,8 @@ def get_pick_list(
         return {}
 
     if preferred_location:
-        # Warn if the preferred location doesn't exist in the DB so the
-        # user gets feedback rather than silently falling back to any volume.
+        # Warn if the preferred location doesn't exist in the catalog so the
+        # caller gets feedback rather than silently falling back to any volume.
         row = conn.execute(
             "SELECT 1 FROM locations WHERE name = ? LIMIT 1",
             (preferred_location,),
@@ -232,7 +232,7 @@ def get_pick_list_with_alternates(
 ) -> dict[str, dict[str, Any]]:
     """Generate a pick list with alternate volumes for each pack.
 
-    Returns a dict keyed by pack SHA-256:
+    Returns a dict keyed by pack ID:
         {sha256: {"pack": Pack, "primary_label": str,
                   "primary_volume_id": int, "alternates": [str, ...]}}
 
@@ -247,7 +247,7 @@ def get_pick_list_with_alternates(
     if not pack_sha256_list:
         return {}
 
-    # Group by pack sha256: first row = primary, rest = alternates.
+    # Group by pack ID: first row = primary, rest = alternates.
     # Process in batches to avoid SQLite variable limit.
     result: dict[str, dict[str, Any]] = {}
 
@@ -305,8 +305,8 @@ def get_unconfirmed_volume_labels(
 
     A volume is "unconfirmed" when its status is STAGING/BURNING and it
     has zero ``volume_copies`` rows: the catalog has no evidence the disc
-    was ever written.  Pick lists still offer such volumes (an on-disc
-    holographic catalog always lists its own volume as STAGING), but the
+    was ever written.  Pick lists still offer such volumes (a disc
+    catalog always lists its own volume as STAGING), but the
     restore planner must warn that the disc may never have existed
     (FMA-01).
     """
@@ -340,12 +340,12 @@ def get_missing_packs(
     A pack is considered missing if:
     - It is not in the catalog at all, or
     - It has no volume assignment, or
-    - All of its volumes are DEPRECATED or DESTROYED (physically gone).
+    - All of its volumes are DEPRECATED or DESTROYED (out of service).
 
     Packs that exist only on DEPRECATED/DESTROYED volumes are included here
-    so callers treat them as unrestorable from normal storage.  Use
+    so callers treat them as unrestorable from in-service discs.  Use
     :func:`get_deprecated_only_packs` to identify which deprecated discs
-    might still be physically recoverable.
+    might still exist and be readable.
     """
     if not pack_sha256_list:
         return []
@@ -362,12 +362,12 @@ def get_missing_packs(
             batch,
         ).fetchall()}
 
-        # Packs not even in the DB
+        # Packs not even in the catalog
         for h in batch:
             if h not in archived:
                 missing.append(h)
 
-        # Packs in DB but with no active (non-DEPRECATED/DESTROYED) volume
+        # Packs in the catalog but with no active (non-DEPRECATED/DESTROYED) volume
         no_active_volume = conn.execute(
             f"""SELECT p.sha256 FROM packs p
                 WHERE p.sha256 IN ({placeholders})
@@ -392,13 +392,13 @@ def get_deprecated_only_packs(
 ) -> dict[str, list[str]]:
     """Return deprecated/destroyed volume labels that hold packs from the list.
 
-    These are packs that cannot be restored from active storage, but whose
-    physical discs *may* still be retrievable if the operator has kept them.
+    These are packs that cannot be restored from in-service discs, but whose
+    discs *may* still be retrievable if the owner has kept them.
 
     Returns:
         ``{volume_label: [sha256, ...]}`` — deprecated/destroyed volumes
         mapped to the packs they hold that are required for the restore.
-        Only includes packs that have NO active-volume copy.
+        Only includes packs on NO active (non-DEPRECATED/DESTROYED) volume.
     """
     if not pack_sha256_list:
         return {}
@@ -499,16 +499,16 @@ def get_redundancy_report(
     conn: sqlite3.Connection,
     min_copies: int = 2,
 ) -> list[Pack]:
-    """Return non-pruned packs with fewer than min_copies physical copies.
+    """Return non-pruned packs on fewer than min_copies in-service discs.
 
     Useful for ensuring every pack is stored on at least N discs.
 
     Replica truth (BURN-10/FMA-08): redundancy is counted in ACTIVE
-    ``volume_copies`` rows, not volume rows — two ACTIVE copies of one
-    volume are two discs, and a volume whose every physical copy is
-    DEPRECATED/DESTROYED contributes nothing.  A volume with zero copy
-    rows at all counts as one disc by status alone (legacy: volumes
-    burned before copies were recorded, skip_burn fixtures, catalogs
+    ``volume_copies`` rows, not volume rows — two ACTIVE rows for one
+    volume are two discs, and a volume whose every disc is
+    DEPRECATED/DESTROYED contributes nothing.  A volume with zero
+    ``volume_copies`` rows counts as one disc by status alone (legacy:
+    volumes burned before discs were recorded, skip_burn fixtures, catalogs
     rebuilt from old discs).
     """
     rows = conn.execute(
@@ -543,9 +543,9 @@ def get_live_volumes_for_packs(
 
     Live replica truth matches :func:`get_redundancy_report`: the volume
     is not DEPRECATED/DESTROYED and has >=1 ACTIVE ``volume_copies`` row
-    (or zero copy rows at all — legacy).  Companion to the redundancy
-    report: groups its under-replicated packs by the disc(s) actually
-    holding them.
+    (or zero ``volume_copies`` rows at all — legacy).  Companion to the
+    redundancy report: groups its under-replicated packs by the volume(s)
+    actually holding them.
     """
     result: dict[int, list[Volume]] = {}
     for batch_start in range(0, len(pack_ids), _SQLITE_BATCH):
@@ -578,11 +578,11 @@ def get_at_risk_packs_for_volume(
 ) -> list[Pack]:
     """Return packs whose ONLY live replica is the given volume (FMA-08).
 
-    The blast radius of a disc: lose every physical copy of this volume
-    and these packs are gone.  Replica truth matches
+    The blast radius of a volume: lose every disc of this volume and
+    these packs are gone.  Replica truth matches
     ``check_deprecation_safe`` (``db/volumes.py``): another volume counts
     iff it is BURNED/VERIFIED and has >=1 ACTIVE ``volume_copies`` row
-    (or zero copy rows at all — legacy).
+    (or zero ``volume_copies`` rows at all — legacy).
     """
     rows = conn.execute(
         """SELECT p.*
@@ -619,7 +619,7 @@ def get_packs_stranded_on_unburned_volumes(
     Since FMA-01 such packs DO reappear in the ``lcsas stage`` pool
     (STAGING/BURNING links are no longer "archived"), but the dead claims
     still clutter the catalog and mislead restore pick lists.  This
-    surfaces those packs so the operator can run ``lcsas session abort``,
+    surfaces those packs so the owner can run ``lcsas session abort``,
     ``lcsas stage --clean --force`` or ``lcsas catalog reconcile --fix``.
 
     The age cutoff (default 24 h) avoids flagging volumes that are simply
@@ -650,11 +650,11 @@ def get_ghost_volumes(
     conn: sqlite3.Connection,
     older_than_hours: int = 24,
 ) -> list[Volume]:
-    """Return stale never-burned volumes: STAGING/BURNING with zero copies.
+    """Return stale never-burned volumes: STAGING/BURNING with zero discs.
 
     A ghost volume claims packs in the catalog but corresponds to no
-    physical disc (no ``volume_copies`` row was ever recorded).  The age
-    cutoff (default 24 h) avoids flagging sessions that are simply
+    disc (no ``volume_copies`` row was ever recorded).  The age cutoff
+    (default 24 h) avoids flagging burn sessions that are simply
     mid-pipeline.  ``lcsas catalog reconcile --fix`` deletes these.
     """
     modifier = f"-{int(older_than_hours)} hours"
@@ -675,12 +675,13 @@ def get_ghost_volumes(
 def get_durable_volumes_without_active_copies(
     conn: sqlite3.Connection,
 ) -> list[Volume]:
-    """Return volumes whose durable status disagrees with their copy records.
+    """Return volumes whose durable status disagrees with their disc records.
 
     A volume marked BURNED/VERIFIED/CONSOLIDATING should have at least one
     ACTIVE ``volume_copies`` row; one without is either a partially
-    recorded burn or a copy-tracking bug (feeds the FMA-04/BURN-10
-    volume-status/copies reconciliation).  Report-only — never auto-fixed.
+    recorded burn or a disc-tracking bug (feeds the FMA-04/BURN-10
+    volume-status/disc-record reconciliation).  Report-only — never
+    auto-fixed.
     """
     rows = conn.execute(
         f"""SELECT v.* FROM volumes v
@@ -699,7 +700,7 @@ def get_volume_pack_stats_by_repo(
     conn: sqlite3.Connection,
     volume_id: int,
 ) -> list[tuple[str, int, int]]:
-    """Return ``(repo_id, pack_count, total_bytes)`` per repo for a volume."""
+    """Return ``(repo_id, pack_count, total_bytes)`` per repository for a volume."""
     rows = conn.execute(
         """SELECT p.repo_id, COUNT(*), COALESCE(SUM(p.size_bytes), 0)
            FROM packs p
@@ -763,7 +764,7 @@ def get_unarchived_or_missing_at_location(
     conn: sqlite3.Connection,
     location: str,
 ) -> list[Pack]:
-    """Return packs that either have no volume at all OR have no ACTIVE copy
+    """Return packs that either have no volume at all OR have no ACTIVE disc
     at the specified location. This is the full set needed to bring a
     location completely up to date.
     """
@@ -792,7 +793,7 @@ def get_packs_at_location(
     conn: sqlite3.Connection,
     location: str,
 ) -> set[int]:
-    """Return set of pack IDs that have at least one ACTIVE copy at location."""
+    """Return the ``pack_id`` row ids of packs with an ACTIVE disc at location."""
     rows = conn.execute(
         """SELECT DISTINCT vp.pack_id
            FROM volume_packs vp
@@ -808,7 +809,7 @@ def get_packs_missing_at_location(
     conn: sqlite3.Connection,
     location: str,
 ) -> list[Pack]:
-    """Return packs that have been archived but have no ACTIVE copy at location.
+    """Return packs that have been archived but have no ACTIVE disc at location.
 
     This identifies packs that need to be staged and burned for a location
     to bring it up to date.

@@ -11,7 +11,7 @@ _UNSAFE_PATTERN = re.compile(r'[/\\]|\.\.|[\x00]')
 
 
 def sanitize_name(value: str, field: str = "name") -> str:
-    """Sanitize a user-provided name for use in filenames or DB fields.
+    """Sanitize an owner-provided name for use in filenames or catalog fields.
 
     Rejects:
       - Null bytes
@@ -21,7 +21,7 @@ def sanitize_name(value: str, field: str = "name") -> str:
       - Strings exceeding 128 characters
 
     Args:
-        value: The raw user input.
+        value: The raw input as typed.
         field: Field name for error messages (e.g. ``"location"``).
 
     Returns:
@@ -84,7 +84,7 @@ def generate_uuid() -> str:
 
 
 def generate_session_id() -> str:
-    """Generate a collision-safe session ID.
+    """Generate a collision-safe burn session ID.
 
     Format: ISO timestamp (microseconds) + short UUID suffix.
     """

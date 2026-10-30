@@ -1,4 +1,4 @@
-"""Build a self-contained standalone restorer from source modules.
+"""Build tier 3, the Python reader (``standalone_restorer.py``), from source modules.
 
 Concatenates ``_aes_pure.py`` and ``restic_fallback.py`` into a single
 file that can be placed on every data disc.  The output has no imports
@@ -15,7 +15,7 @@ Usage::
 The generated script supports CLI usage::
 
     python3 standalone_restorer.py --repo /path/to/cache \\
-        --password-file key.txt --target /output
+        --password-file password.txt --target /output
 """
 
 from __future__ import annotations
@@ -137,26 +137,27 @@ def _strip_header(source: str) -> list[str]:
 _HEADER = textwrap.dedent("""\
     #!/usr/bin/env python3
     # ═══════════════════════════════════════════════════════════════════
-    #  LCSAS Standalone Pure-Python Restorer
+    #  LCSAS Python reader (recovery tier 3)
     #
     #  This file is AUTO-GENERATED from:
     #    - src/lcsas/restore/_aes_pure.py   (AES-256-CTR implementation)
     #    - src/lcsas/restore/_zstd_pure.py  (pure-Python zstd decompressor)
-    #    - src/lcsas/restore/restic_fallback.py  (restic repo reader)
+    #    - src/lcsas/restore/restic_fallback.py  (restic repository reader)
     #
     #  It restores data from a restic/rustic repository using ONLY
     #  Python 3 standard library.  zstd-compressed (rustic v2 default)
-    #  repos decompress via the bundled pure-Python decoder; the optional
-    #  'zstandard' package is used instead when present (~100x faster).
+    #  repositories decompress via the bundled pure-Python decoder; the
+    #  optional 'zstandard' package is used instead when present (~100x
+    #  faster).
     #
     #  Usage:
     #    python3 standalone_restorer.py --repo /path/to/cache \\\\
-    #        --password-file key.txt --target /path/to/output
+    #        --password-file password.txt --target /path/to/output
     #
     #  NO pip packages, NO native binaries, NO internet required.
-    #  (zstandard pip package needed only for zstd-compressed repos)
+    #  (zstandard pip package needed only for zstd-compressed repositories)
     #
-    #  Performance: ~1 MB/s — acceptable for emergency recovery.
+    #  Performance: ~1 MB/s — acceptable for an emergency restore.
     #
     #  Requires Python 3.10 or newer (stdlib only).
     # ═══════════════════════════════════════════════════════════════════
@@ -168,7 +169,7 @@ _HEADER = textwrap.dedent("""\
         sys.exit(
             "This restore script needs Python 3.10 or newer. "
             f"You are running {sys.version.split()[0]}. "
-            "Use the bundled python3 from the recovery disc instead "
+            "Use the bundled python3 from the meta disc instead "
             "(see START_HERE.txt)."
         )
 
@@ -182,10 +183,10 @@ _CLI_BLOCK = textwrap.dedent("""\
         import argparse
 
         parser = argparse.ArgumentParser(
-            description="LCSAS standalone pure-Python restic/rustic repo restorer",
+            description="LCSAS tier-3 Python reader: restores a restic/rustic repository",
             epilog=(
                 "Place this script on every data disc so that data can be "
-                "recovered even without the meta-volume or any native binaries."
+                "restored even without the meta disc or any native binaries."
             ),
         )
         parser.add_argument(
@@ -194,7 +195,7 @@ _CLI_BLOCK = textwrap.dedent("""\
         )
         parser.add_argument(
             "--password-file", required=True,
-            help="Path to the encryption key/password file",
+            help="Path to the password file",
         )
         parser.add_argument(
             "--target", required=True,
@@ -232,12 +233,12 @@ _CLI_BLOCK = textwrap.dedent("""\
         parser.add_argument(
             "--catalog", default=None,
             help=(
-                "Path to an LCSAS holographic catalog.db.  When supplied, "
-                "the disc-swap prompt resolves the missing pack hash to "
-                "human-readable volume label(s), matching the framed "
-                "prompt printed by tier-1's lcsas-restore.  A missing or "
+                "Path to an LCSAS disc catalog (catalog.db).  When supplied, "
+                "the disc-swap prompt resolves the missing pack ID to "
+                "the label(s) of the discs that hold it, matching the framed "
+                "prompt printed by tier 1's lcsas-restore.  A missing or "
                 "corrupt catalog falls back silently to the legacy "
-                "hash-only prompt."
+                "prompt that shows only the pack ID."
             ),
         )
 
@@ -258,8 +259,8 @@ _CLI_BLOCK = textwrap.dedent("""\
 
         mount_points: list[Path] | None = None
         if args.mount_point:
-            # Search the repo's own data/ first, then each mount point in
-            # operator-given order.
+            # Search the repository's own data/ first, then each mount point
+            # in the order given.
             mount_points = [repo_path / "data"] + [Path(m) for m in args.mount_point]
 
         # --catalog is optional; a missing path is treated the same as
@@ -275,7 +276,7 @@ _CLI_BLOCK = textwrap.dedent("""\
             else:
                 print(
                     f"[lcsas-restore] --catalog {cand} not found; "
-                    "prompts will fall back to hash-only.",
+                    "prompts will show only the pack ID.",
                     file=sys.stderr,
                 )
 
@@ -311,7 +312,7 @@ _CLI_BLOCK = textwrap.dedent("""\
         # recorded, the rest of the data is restored, and the count is
         # surfaced via restorer.failures with a RESTORE_FAILURES.txt
         # manifest under the target.  Setup-level errors (bad password,
-        # missing/corrupt repo) still fail fast with exit 1 and no
+        # missing/corrupt repository) still fail fast with exit 1 and no
         # traceback.
         try:
             restorer.restore(target=target, snapshot_id=args.snapshot)
@@ -331,9 +332,9 @@ _CLI_BLOCK = textwrap.dedent("""\
             print(
                 f"[lcsas-restore] {restorer.failures} file(s) could NOT be "
                 f"restored. See {target}/RESTORE_FAILURES.txt for the list.\\n"
-                "  The rest of your data restored successfully. To recover the "
-                "skipped files, re-run from a newer meta disc or an undamaged "
-                "copy of the affected disc.",
+                "  The rest of your data restored successfully. To restore the "
+                "skipped files, re-run from a newer meta disc or from another "
+                "undamaged disc with the same label.",
                 file=sys.stderr,
             )
             sys.exit(2)
