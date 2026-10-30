@@ -26,7 +26,7 @@ dev = [
     "mypy>=1.10",
     # zstandard is optional at RUNTIME (CLAUDE.md "Zero runtime dependencies")
     # but mandatory in the dev/CI environment: the integration suite exercises
-    # the tier-3 pure-Python restorer against real rustic v2 blobs, which are
+    # the tier-3 Python reader against real rustic v2 blobs, which are
     # zstd-compressed.  Pinned here, not in base deps, on purpose.  See #141.
     "zstandard>=0.22",
 ]
@@ -37,7 +37,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 # Bundle the official SLIP-0039 wordlist with the keyshare package so the
 # combiner works from an installed wheel / sdist (loaded via importlib path at
-# runtime).  Critical for the meta-volume standalone combiner (Phase 2 K2.1).
+# runtime).  Critical for the standalone combiner on the meta disc (Phase 2 K2.1).
 "lcsas.keyshare" = ["wordlist.txt"]
 
 [tool.pytest.ini_options]

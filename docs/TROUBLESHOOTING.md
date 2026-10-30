@@ -1,6 +1,6 @@
-# LCSAS Recovery — Troubleshooting
+# LCSAS Restore — Troubleshooting
 
-Common errors operators hit during disaster recovery, with the
+Common errors people hit during a restore after a disaster, with the
 shortest known fix.  If your error isn't here, file an issue
 quoting the exact command and message.
 
@@ -28,16 +28,16 @@ all else fails.
 
 ---
 
-## `no restic repo found under /tmp/lcsas-meta/recovery`
+## `no restic repository found.`
 
 **Cause**: the script looked for `keys/` + `index/` in the legacy
-location only.  Means either (a) the meta disc you have is a
+path only.  Means either (a) the meta disc you have is a
 pre-Phase-22 build, OR (b) you're invoking the wrong recovery
 script.
 
 **Fix**: insert any data disc into the drive and mount it at
-`/mnt`.  The script's `metadata/<tenant>/` auto-discovery (added
-in PR #83) finds the per-tenant repo metadata on any data disc:
+`/mnt`.  The script's `metadata/<repo>/` auto-discovery (added
+in PR #83) finds each repository's metadata on any data disc:
 
 ```sh
 sudo mount /dev/sr0 /mnt
@@ -45,7 +45,7 @@ sh restore.sh ~/restored/ latest
 ```
 
 If you have NO data disc yet and only the meta disc, the meta
-disc itself carries per-tenant metadata under `metadata/<tenant>/`
+disc itself carries repository metadata under `metadata/<repo>/`
 — the script will find it there too.
 
 ---
@@ -94,15 +94,15 @@ or use a fresher meta disc.  The fix has been in master since
 
 ---
 
-## `INSERT DISC: <hash>` (hex hash, no friendly label)
+## `INSERT DISC: <hash>` (hex pack ID, no friendly label)
 
 **Cause**: no `--catalog` was supplied to tier-1, so the binary
-can't translate pack-hash → disc label.  Happens when you haven't
+can't translate pack ID → disc label.  Happens when you haven't
 mounted any data disc that carries a catalog.
 
-**Fix**: mount any data disc.  Each data disc carries a
-holographic copy of the catalog at `<disc-root>/catalog.db`.  The
-script auto-discovers it and re-picks whichever copy is freshest.
+**Fix**: mount any data disc.  Each data disc carries a disc
+catalog at `<disc-root>/catalog.db`.  The script auto-discovers
+it and re-picks whichever disc catalog is freshest.
 
 ```sh
 sudo mount /dev/sr0 /mnt
@@ -135,23 +135,23 @@ LCSAS_PACK_CACHE_DIR= sh restore.sh ~/restored/ latest
 
 ---
 
-## Multi-tenant: typed the wrong tenant name
+## Several repositories: typed the wrong repository name
 
 **Cause**: typed `albha` instead of `alpha` at the
 `Repository:` prompt.
 
-**Fix**: the script exits 1 with the available tenant list.  Just
-re-run.  The `Repository:` prompt only appears on archives with
-more than one tenant.
+**Fix**: the script exits 1 with the list of available
+repositories.  Just re-run.  The `Repository:` prompt only appears
+on archives with more than one repository.
 
 ---
 
 ## The agent / script gives up before completing
 
 **Cause**: hit max-turns (test fixture) or exhausted patience
-(real operator).
+(real heir).
 
-**Fix**: the restore is idempotent over rustic-format repos —
+**Fix**: the restore is idempotent over rustic-format repositories —
 just re-run.  The pack cache survives across runs, so the second
 attempt benefits from any draining done in the first attempt:
 
@@ -183,11 +183,11 @@ mv ~/restored/var/lib/foo/* /var/lib/foo/
 ## Manual pack assembly (last-resort tier-3 fallback)
 
 If `restore.sh` is broken in some way you can't fix and you have
-to manually assemble a rustic-format repo by hand:
+to manually assemble a rustic-format repository by hand:
 
 1. Pick a writable directory `$R` (call it `/tmp/manual-repo`).
 2. Copy `keys/`, `index/`, `snapshots/` from any data disc's
-   `metadata/<tenant>/` into `$R/`.
+   `metadata/<repo>/` into `$R/`.
 3. For every data disc, mount it and copy `data/` into `$R/data/`
    (or `cp -r` over the existing tree; both directories are
    content-addressed so identical packs merge cleanly).
@@ -232,13 +232,13 @@ holder-identity stamp the next waiter would have read.
 
 The on-disc data format is documented in
 `docs/RESTIC_FORMAT_SPEC.md`.  A programmer with that document,
-your encryption key, and the data discs can decrypt and rebuild
+your password, and the data discs can decrypt and rebuild
 the original files from scratch in any language — Python, Go,
 Rust, C, anything.  No LCSAS binaries required.
 
 This is the "50-year survivability" guarantee.  The format won't
-rot; the bytes on the disc are forever decryptable given the key
-+ the spec.
+rot; the bytes on the disc are forever decryptable given the
+password + the spec.
 
 If you've reached this point, file an issue describing what you
-tried.  We want to make sure the next operator doesn't.
+tried.  We want to make sure the next heir doesn't.

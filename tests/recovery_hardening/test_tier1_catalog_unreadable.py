@@ -115,7 +115,7 @@ def test_wal_catalog_on_unwritable_media_names_the_volume(tmp_path: Path) -> Non
     finally:
         disc.chmod(0o755)
     assert "could not be" not in out, f"the WAL catalog was not read:\n{out}"
-    assert "It lives on volume(s):" in out and _LABEL_B in out, (
+    assert "It is on any disc labelled:" in out and _LABEL_B in out, (
         f"the prompt did not name the volume from the catalog:\n{out}"
     )
 

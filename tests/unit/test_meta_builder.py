@@ -1,4 +1,4 @@
-"""Unit tests for the meta-volume builder and tool bundler."""
+"""Unit tests for the meta disc builder and tool bundler."""
 
 from __future__ import annotations
 
@@ -198,7 +198,7 @@ class TestToolBundler:
     not resolve_binary("xorriso"), reason="xorriso not installed"
 )
 class TestMetaVolumeBuilder:
-    """Tests for the full meta-volume build.
+    """Tests for the full meta disc build.
 
     The build is expensive (~200 MB of bundled tools), so a single
     class-scoped fixture is shared across all tests instead of
@@ -207,7 +207,7 @@ class TestMetaVolumeBuilder:
 
     @pytest.fixture(autouse=True, scope="class")
     def _build_meta(self, tmp_path_factory):
-        """Build the meta-volume once for all tests in this class."""
+        """Build the meta disc tree once for all tests in this class."""
         base = tmp_path_factory.mktemp("meta_builder")
         output = base / "meta"
         # allow_no_dvdisaster_source: this fixture asserts nothing about
@@ -279,7 +279,7 @@ class TestMetaVolumeBuilder:
         )
 
     def test_build_creates_directory_structure(self):
-        """Build a meta-volume and verify all expected components."""
+        """Build a meta disc tree and verify all expected components."""
         # Restore script
         assert (self.output / "restore.sh").is_file()
         assert os.access(str(self.output / "restore.sh"), os.X_OK)
@@ -323,7 +323,7 @@ class TestMetaVolumeBuilder:
             assert (self.output / "docs").is_dir()
 
     def test_restic_format_spec_bundled(self):
-        """The restic format specification must be on every meta-volume."""
+        """The restic format specification must be on every meta disc."""
         spec = self.output / "docs" / "RESTIC_FORMAT_SPEC.md"
         assert spec.is_file(), "RESTIC_FORMAT_SPEC.md not bundled"
         content = spec.read_text()
@@ -416,15 +416,15 @@ class TestMetaVolumeBuilder:
         )
 
     def test_start_here_generated(self):
-        """Meta-volume should have a START_HERE.txt file.
+        """The meta disc should have a START_HERE.txt file.
 
         The fixture builds without an LCSASConfig, so the minimal
-        START_HERE generator is used (no per-tenant key info).  We
+        START_HERE generator is used (no per-repository password info).  We
         only validate the title block and that operating-system
         sections are present so the doc is usable.
         """
         path = self.output / "START_HERE.txt"
-        assert path.is_file(), "START_HERE.txt not generated on meta-volume"
+        assert path.is_file(), "START_HERE.txt not generated on meta disc"
         content = path.read_text()
         assert "START HERE" in content
         # The minimal version covers OS-specific entry points.
@@ -459,9 +459,9 @@ class TestMetaVolumeBuilder:
         )
 
     def test_readme_restore_txt_generated(self):
-        """Meta-volume should have a plain-text README_RESTORE.txt."""
+        """The meta disc should have a plain-text README_RESTORE.txt."""
         path = self.output / "README_RESTORE.txt"
-        assert path.is_file(), "README_RESTORE.txt not generated on meta-volume"
+        assert path.is_file(), "README_RESTORE.txt not generated on meta disc"
         content = path.read_text()
         # Should not contain Markdown formatting artifacts
         assert "## " not in content
@@ -470,17 +470,17 @@ class TestMetaVolumeBuilder:
         assert len(content) > 100
 
     def test_disc_care_txt_generated(self):
-        """Meta-volume should have a DISC_CARE.txt file."""
+        """The meta disc should have a DISC_CARE.txt file."""
         path = self.output / "DISC_CARE.txt"
-        assert path.is_file(), "DISC_CARE.txt not generated on meta-volume"
+        assert path.is_file(), "DISC_CARE.txt not generated on meta disc"
         content = path.read_text()
         assert "DISC CARE" in content
         assert "M-DISC" in content
 
     def test_standalone_restorer_bundled(self):
-        """standalone_restorer.py must be present at the meta-volume root."""
+        """standalone_restorer.py must be present at the meta disc root."""
         sr = self.output / "standalone_restorer.py"
-        assert sr.is_file(), "standalone_restorer.py not bundled on meta-volume"
+        assert sr.is_file(), "standalone_restorer.py not bundled on meta disc"
         content = sr.read_text()
         # Should contain the CLI entry point
         assert "def _cli_main" in content
@@ -509,7 +509,7 @@ class TestMetaVolumeBuilder:
         The legacy bash driver retains the explicit check.
         """
         legacy = self.output / "restore_legacy.sh"
-        assert legacy.is_file(), "restore_legacy.sh not bundled on meta-volume"
+        assert legacy.is_file(), "restore_legacy.sh not bundled on meta disc"
         content = legacy.read_text()
         assert "ACTUAL_PACKS" in content, (
             "restore_legacy.sh missing post-ingest pack count check"
@@ -552,17 +552,17 @@ class TestMetaVolumeBuilder:
         assert "finalize" in content
 
     def test_keyshare_combiner_and_package_bundled(self):
-        """K2.4(b): the production build ships the split-key combiner.
+        """K2.4(b): the production build ships the share combiner.
 
         Asserts the real ``build()`` output (not a direct helper call)
-        carries (1) ``keyshare_combine.py`` at the meta-volume root, and
+        carries (1) ``keyshare_combine.py`` at the meta disc root, and
         (2) the ``keyshare`` package + its ``wordlist.txt`` under the
         bundled stdlib — the two halves the heir pre-step needs.
         """
         import sys as _sys
 
         combiner = self.output / "keyshare_combine.py"
-        assert combiner.is_file(), "keyshare_combine.py not at meta-volume root"
+        assert combiner.is_file(), "keyshare_combine.py not at meta disc root"
         assert os.access(str(combiner), os.X_OK)
 
         version = f"python{_sys.version_info.major}.{_sys.version_info.minor}"
@@ -593,7 +593,7 @@ class TestMetaVolumeBuilder:
 
 class TestSingleDriveBitsStandalone:
     """Validate single-drive helper bundling and restore.sh content
-    without invoking the full meta-volume build (which needs rustic).
+    without invoking the full meta disc build (which needs rustic).
     """
 
     def test_restore_script_constant_has_single_drive_dispatch(self):
@@ -712,7 +712,7 @@ class TestBundleUpstreamBinaries:
 
     def test_unknown_targets_in_cache_are_ignored(self, tmp_path, monkeypatch):
         """Bundler iterates the *approved* target list, not the cache —
-        random extra directories don't leak into the meta volume."""
+        random extra directories don't leak into the meta disc."""
         from lcsas.meta.builder import MetaVolumeBuilder
         cache_root = tmp_path / "cache"
         # Pollute the cache with an unapproved target.
@@ -755,7 +755,7 @@ class TestBundleUpstreamBinaries:
 
     def test_all_six_targets_round_trip(self, tmp_path, monkeypatch):
         """When the cache holds every approved target, every target's
-        bin/ subtree appears on the meta volume."""
+        bin/ subtree appears on the meta disc."""
         from lcsas.meta.builder import MetaVolumeBuilder
         cache_root = tmp_path / "cache"
         targets = [
@@ -784,7 +784,7 @@ class TestBundleUpstreamBinaries:
     ):
         """End-to-end: call the orchestrating method, not the bundler
         helper directly, and confirm a synthetic multi-arch cache lands
-        on the meta-volume in the expected location.
+        on the meta disc in the expected location.
 
         This is the Phase 21.1.e integration check: proves the cache →
         ``_bundle_recovery_toolchain_artifacts`` → ``_bundle_upstream_binaries``
@@ -892,7 +892,7 @@ class TestBundleTier1Binaries:
         )
 
     def test_linux_targets_mapped_and_copied(self, tmp_path):
-        """Source has x86_64 + aarch64 short-arch builds → meta volume
+        """Source has x86_64 + aarch64 short-arch builds → meta disc
         gets x86_64-unknown-linux-musl + aarch64-unknown-linux-musl
         copies."""
         from lcsas.meta.builder import MetaVolumeBuilder
@@ -913,7 +913,7 @@ class TestBundleTier1Binaries:
         assert (recovery_dst / "bin" / "aarch64-unknown-linux-musl" / "lcsas-restore").is_file()
 
     def test_windows_target_mapped_with_exe_suffix(self, tmp_path):
-        """Source has x86_64-windows/lcsas-restore.exe → meta volume
+        """Source has x86_64-windows/lcsas-restore.exe → meta disc
         gets bin/x86_64-pc-windows-gnu/lcsas-restore.exe."""
         from lcsas.meta.builder import MetaVolumeBuilder
 
@@ -970,7 +970,7 @@ class TestBundleTier1Binaries:
     def test_unmapped_short_arch_names_skipped(self, tmp_path):
         """Short-arch names NOT in the tier1_map (e.g. typo, or some
         future arch we haven't yet wired) are ignored even if the
-        source recovery/bin had them.  Guards against an operator
+        source recovery/bin had them.  Guards against an owner
         dropping a hand-built file into recovery/bin/<short> and
         being surprised it shipped without the cross-compile audit
         trail.
@@ -1021,7 +1021,7 @@ class TestBundleTier1Binaries:
 
     def test_armv7_now_mapped(self, tmp_path):
         """Phase 21.11 promotion guard: armv7 source → armv7-unknown-
-        linux-gnueabihf rust-triple landing on the meta volume.
+        linux-gnueabihf rust-triple landing on the meta disc.
         Symmetric with test_linux_targets_mapped_and_copied but
         ensures the new armv7 mapping specifically works."""
         from lcsas.meta.builder import MetaVolumeBuilder
@@ -1102,11 +1102,11 @@ class TestBundleTier1Binaries:
 
 class TestRegenerateRecoveryManifest:
     """Tests for the merged-manifest step that integrates bundled
-    upstream binaries into recovery/MANIFEST.sha256 on the meta volume.
+    upstream binaries into recovery/MANIFEST.sha256 on the meta disc.
     """
 
     def _seed_meta_recovery(self, tmp_path, *, with_manifest=True):
-        """Build a synthetic meta-volume recovery/ subtree.
+        """Build a synthetic meta disc recovery/ subtree.
 
         Returns (output, recovery_dst).  The source recovery/MANIFEST
         carries one pre-existing entry so we can assert it survives.
@@ -1421,13 +1421,13 @@ class TestMetaStartHereVariants:
         )
 
     def test_start_here_split_block_present_when_key_split(self, meta_tree):
-        """key_split=True → the split-key pre-step appears, free of
-        phantom restore.sh flags (UX-02 contract); single-key configs
-        must not show it."""
+        """key_split=True → the split-password pre-step appears, free of
+        phantom restore.sh flags (UX-02 contract); configs whose password
+        is not split must not show it."""
         out, builder = meta_tree
         content = (out / "START_HERE.txt").read_text(encoding="utf-8")
 
-        assert "SPLIT KEY — YOUR PASSWORD IS IN SHARE CARDS" in content
+        assert "SPLIT PASSWORD — YOUR PASSWORD IS IN SHARE CARDS" in content
         assert "keyshare_combine.py" in content
 
         # Every --flag attached to a restore.sh command must be one
@@ -1450,7 +1450,7 @@ class TestMetaStartHereVariants:
         )
         bare = builder._render_meta_start_here(single_key)
         assert "SHARE CARDS" not in bare, (
-            "single-key archive must not show split-key instructions"
+            "an unsplit-password archive must not show split-password instructions"
         )
 
 
@@ -1463,7 +1463,7 @@ class TestZstdBundleGuard:
     The native ``zstandard`` C extension is the FAST tier-3 path; the
     pure-Python decoder (lcsas.restore._zstd_pure) always ships, so the
     failure is about not silently shipping a slow-only disc when the
-    operator could have had the fast path.
+    owner could have had the fast path.
     """
 
     @staticmethod
@@ -1940,7 +1940,7 @@ class TestBundleMetadata:
         assert all(r.retired is False for r in b.metadata_results)
 
     def test_tolerates_a_catalog_with_no_pack_tables(self, tmp_path: Path):
-        """A catalog oddity must never block a rescue disc: a minimal
+        """A catalog oddity must never block a meta disc build: a minimal
         catalog carrying `repositories` alone yields 0, not an exception."""
         db, _mirror = self._two_repo_catalog(tmp_path)
         out = tmp_path / "out"

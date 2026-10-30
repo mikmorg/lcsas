@@ -225,7 +225,9 @@ function Invoke-RelocationLeg {
 
     # 3. completion + exit status + byte-exact tree.
     if ($rc -ne 0) { $problems.Add("restore.bat exit code $rc (want 0)") }
-    if ($out -notmatch 'Recovery complete') { $problems.Add("'Recovery complete' banner missing") }
+    # Case-sensitive: tier 1's own "[lcsas-restore] restore complete" line
+    # (also in $out via 2>&1) must not stand in for restore.bat's banner.
+    if ($out -cnotmatch 'Restore complete') { $problems.Add("'Restore complete' banner missing") }
     Test-TreeAgainstManifest -Fixture $Fixture -Target $target -Problems $problems
 
     # 4. nothing left behind in %TEMP%: the password file, or the copy (#545).
@@ -408,7 +410,8 @@ function Invoke-EjectLeg {
     Write-Host "restore.bat exit code after the eject: $rc"
 
     if (-not $ejected) { $problems.Add('the meta disc was never ejected') }
-    if ($out -notmatch 'Recovery complete') { $problems.Add("'Recovery complete' banner missing after the eject") }
+    # Case-sensitive, as in Invoke-RelocationLeg: the banner, not tier 1's line.
+    if ($out -cnotmatch 'Restore complete') { $problems.Add("'Restore complete' banner missing after the eject") }
     if ($out -notmatch '\[lcsas-restore\] restore complete') { $problems.Add('tier-1 restore did not report completion after the eject') }
     # #532: the outer instance used to read its `exit /b` from the ejected
     # disc after the relocated copy returned, printing this and exiting 1.

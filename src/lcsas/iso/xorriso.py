@@ -20,7 +20,7 @@ class MediaStatus(StrEnum):
     """State of the optical medium loaded in a drive (FUP-01).
 
     Distinguishes "safe to burn onto" (``blank``/``appendable``) from
-    "already carries data" (``closed``) so a multi-disc session refuses
+    "already carries data" (``closed``) so a multi-disc burn session refuses
     to overwrite the disc just burned instead of failing mid-burn.
     ``unknown`` covers drives whose -toc output we cannot classify — the
     caller warns and proceeds rather than bricking an odd drive.
@@ -53,7 +53,7 @@ class OversizeFileError(Exception):
 def _translate_burn_error(stderr: str, device: str) -> None:
     """Log a human-readable explanation for common xorriso burn failures.
 
-    Called when ``burn_iso`` raises CalledProcessError so the operator gets
+    Called when ``burn_iso`` raises CalledProcessError so the owner gets
     an actionable message before the raw exception propagates.
     """
     low = stderr.lower()

@@ -286,11 +286,11 @@ class TestSplitCombineRoundTrip:
             "--password-file", str(pw_file), "--out", str(out),
         ])
         card = (out / "alpha-share-1-card.txt").read_text()
-        assert "LCSAS KEY SHARE" in card
+        assert "LCSAS SHARE CARD" in card
         assert "Share      : 1 of 5" in card
         assert "ANY 2 of the 5" in card
         assert "Other people each hold" in card
-        assert "can never be recovered" in card
+        assert "can never be rebuilt" in card
 
 
 # --------------------------------------------------------------------------
@@ -1041,7 +1041,7 @@ class TestKeyVerify:
 
 
 # --------------------------------------------------------------------------
-# KEY-09: single-key Recovery Card (`lcsas key card`)
+# KEY-09: password card (`lcsas key card`)
 # --------------------------------------------------------------------------
 
 class TestKeyCard:
@@ -1058,7 +1058,7 @@ class TestKeyCard:
         ])
         assert rc == 0
         out = capsys.readouterr().out
-        # Card carries the repo name, key file name, hints, a date, and code.
+        # Card carries the repo name, password file name, hints, a date, and code.
         assert "alpha" in out
         assert "alpha.pw" in out          # repo_cfg.password_file.name
         assert "Safe at home; bank box #7" in out

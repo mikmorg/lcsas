@@ -1,4 +1,4 @@
-"""Catalog rebuild — merge disc-embedded catalogs into a new master database."""
+"""Catalog rebuild — merge disc catalogs into a new master catalog."""
 
 from __future__ import annotations
 
@@ -59,9 +59,10 @@ def _parse_timestamp(value: object) -> float | None:
 def _source_freshness(catalog_db: Path) -> float:
     """Freshness ordinal for a disc catalog (bigger = newer).
 
-    Max of the catalog file's mtime (preserved by Rock Ridge on the ISO)
-    and ``MAX(volumes.created_at)`` inside the DB — the row-derived value
-    guards against copies that mangled the mtime (FMA-06).
+    Max of the catalog file's mtime (preserved by Rock Ridge in the ISO
+    image) and ``MAX(volumes.created_at)`` inside the catalog — the
+    row-derived value guards against copying that mangled the mtime
+    (FMA-06).
     """
     freshness = catalog_db.stat().st_mtime
     try:
@@ -135,7 +136,7 @@ def _merge_one_disc(
     if warnings is None:
         warnings = []
 
-    # Use a safe alias to avoid conflicts with other attached DBs.
+    # Use a safe alias to avoid conflicts with other attached catalogs.
     alias = "src"
     target.execute(f"ATTACH DATABASE ? AS {alias}", (str(source_db),))
     try:
@@ -143,16 +144,16 @@ def _merge_one_disc(
         #
         # `status` (schema v10) must travel with the row.  Discs are merged
         # freshest-first and this is INSERT OR IGNORE, so the freshest
-        # catalog that mentions a repo owns its status — the same rule
+        # catalog that mentions a repository owns its status — the same rule
         # volumes follow below.  Dropping the column instead would silently
-        # resurrect every retired repo as 'active' (the table default), and
-        # the next `lcsas meta build` would then hard-fail on a repo the
-        # operator had already retired (#437) — right after the catalog loss
+        # resurrect every retired repository as 'active' (the table default),
+        # and the next `lcsas meta build` would then hard-fail on a repository
+        # the owner had already retired (#437) — right after the catalog loss
         # that made a rebuild necessary.  The disc is the record; preserve
         # what it recorded.
         #
         # A v≤9 disc catalog has no such column, so probe before selecting
-        # it: those repos pre-date retirement and are therefore active.
+        # it: those repositories pre-date retirement and are therefore active.
         src_repo_cols = {
             r[1] for r in target.execute(
                 f"PRAGMA {alias}.table_info(repositories)"
@@ -260,8 +261,8 @@ def _merge_one_disc(
                 warnings.append(
                     f"volume {label}: an older disc catalog records "
                     f"{src_status} but a newer one records {tgt_status} — "
-                    f"keeping {tgt_status}. If you physically hold this "
-                    f"disc, verify it with 'lcsas verify {label} --disc'."
+                    f"keeping {tgt_status}. If you physically hold a disc of "
+                    f"this volume, verify it with 'lcsas verify {label} --disc'."
                 )
 
         # 5. snapshots — keyed on snapshot_id
@@ -278,8 +279,8 @@ def _merge_one_disc(
         counts["snapshots"] = cur.rowcount
 
         # 6. volume_packs — keyed on (volume_id, pack_id).
-        #    We must translate IDs from the source DB since auto-increment IDs
-        #    differ between databases.  Join on natural keys (uuid, sha256).
+        #    We must translate IDs from the source catalog since auto-increment
+        #    IDs differ between catalogs.  Join on natural keys (uuid, sha256).
         cur = target.execute(
             f"""
             INSERT OR IGNORE INTO volume_packs (volume_id, pack_id)
@@ -296,8 +297,8 @@ def _merge_one_disc(
         # 7. volume_copies — keyed on (volume_id, location).
         #    iso_size_bytes arrived in schema v8 (FMA-03); disc catalogs
         #    burned before that lack the column, so select it only when
-        #    the source actually has it (holographic snapshots are
-        #    frozen forever — they can never be migrated in place).
+        #    the source actually has it (disc catalogs are frozen
+        #    forever — they can never be migrated in place).
         src_copy_cols = {
             r[1] for r in target.execute(
                 f"PRAGMA {alias}.table_info(volume_copies)"
@@ -323,7 +324,7 @@ def _merge_one_disc(
         counts["volume_copies"] = cur.rowcount
 
         # 8. Provenance/audit tables (FMA-10).  These arrived after the
-        #    earliest holographic catalogs, so a disc burned before them
+        #    earliest disc catalogs, so a disc burned before them
         #    simply lacks the table; probe sqlite_master and skip the
         #    merge for that disc rather than failing the whole rebuild.
         src_tables = {
@@ -333,7 +334,7 @@ def _merge_one_disc(
         }
 
         # 8a. volume_events — keyed on (volume uuid, event_type, event_date).
-        #     The event_id autoincrement differs across DBs, so translate
+        #     The event_id autoincrement differs across catalogs, so translate
         #     volume_id via uuid and let INSERT OR IGNORE dedupe on the
         #     natural triple (enforced by the unique index below at write
         #     time; here we guard with NOT EXISTS since the live schema's
@@ -417,10 +418,10 @@ def rebuild_catalog(
     disc_paths: list[Path],
     output_db: Path,
 ) -> RebuildResult:
-    """Merge holographic catalogs from *disc_paths* into *output_db*.
+    """Merge the disc catalogs from *disc_paths* into *output_db*.
 
     Each entry in *disc_paths* should be a mounted LCSAS disc directory
-    containing a ``catalog.db`` file.  The output DB is created if it does
+    containing a ``catalog.db`` file.  The output catalog is created if it does
     not already exist (useful for building a fresh master catalog from scratch),
     or data is merged into the existing file.
 
@@ -447,7 +448,7 @@ def rebuild_catalog(
 
     result = RebuildResult()
 
-    # Ensure the output DB is initialised with the current schema.
+    # Ensure the output catalog is initialised with the current schema.
     # Source disc catalogs are ATTACHed read-only below and are never
     # migrated — only the output catalog goes through ensure_schema.
     conn = get_connection(output_db)

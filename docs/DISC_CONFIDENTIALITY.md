@@ -1,42 +1,45 @@
 # Disc confidentiality — the stolen-disc threat model
 
-> **One-line version:** A thief holding any single LCSAS disc gets the entire
-> archive *catalog* in plaintext and every repository's *password-locked* key
-> files. They do **not** get your file contents unless they also guess your
-> password. The only thing standing between a stolen disc and your data is the
-> strength of that password — so make it long and random, and choose escrow
-> locations as if every disc carries this inventory, because it does.
+> **One-line version:** A thief holding any single LCSAS data disc gets the
+> archive's whole *catalog* in plaintext and every repository's
+> *password-locked* key files. They do **not** get your file contents unless
+> they also guess your password. The only thing standing between a stolen disc
+> and your data is the strength of that password — so make it long and random,
+> and choose where discs and cards are kept as if every disc carries this
+> inventory; every data disc does.
 
 This document is the deliberate, written threat model for **confidentiality**
 of a burned LCSAS disc (restorability findings live elsewhere). It exists so
-that an owner choosing where to store discs and key cards can weigh the
+that an owner choosing where to store discs and cards can weigh the
 tradeoff with eyes open. It is referenced from `docs/ESTATE_PLANNING.md`,
 `docs/guides/survivability.md`, and `recovery/docs/TIERS.txt`, and is bundled on
-every meta-volume.
+every meta disc.
 
 ---
 
 ## 1. What someone holding ONE disc learns (plaintext)
 
-Every data disc *and* the meta disc carry, for **every tenant** in a
-multi-tenant archive, the following in the clear:
+Every data disc carries, for **every repository** in the archive, the
+following in the clear. The meta disc carries the same key files and
+`key_storage_hints`, but no catalog.
 
-- **The complete archive catalog** (`catalog.db`, a SQLite database burned
-  verbatim onto every disc). That includes:
+- **The disc catalog** (`catalog.db`, a SQLite copy of the whole catalog
+  burned verbatim onto every data disc, current as of that disc's burn). That
+  includes:
   - every snapshot's **hostname, backup paths, tags, and description**;
   - every repository's **name and mirror path**;
-  - every **location name** and the full **volume-copies map** — i.e. where
-    every other copy of every other disc is stored;
+  - every **location name** and the full map of **which disc is where** —
+    i.e. where every other disc is kept;
   - the **volume_events audit trail**.
 - **Every repository's rustic `keys/` directory** — the scrypt-wrapped master
   keys. The key-file JSON additionally carries the **plaintext `username` and
-  `hostname`** of the machine that created the repo (a content-addressed
+  `hostname`** of the machine that created the repository (a content-addressed
   artifact; see §6).
 - **The owner's `key_storage_hints`**, printed verbatim into `START_HERE.txt`
   and `PASSWORD_INFO.txt` on every disc.
 
 In short: a single disc reveals your whole backup *topology and metadata*, and
-hands the attacker the locked vault door (the wrapped keys) to attack offline
+hands the attacker the locked door (the wrapped keys) to attack offline
 at leisure.
 
 ## 2. What they do NOT get
@@ -47,7 +50,7 @@ at leisure.
 - **The password itself.** It is never written to any disc.
 
 So the entire confidentiality of your *data* reduces to one question: can the
-attacker recover the password?
+attacker guess the password?
 
 ## 3. The single defense: password entropy vs. offline guessing
 
@@ -90,18 +93,18 @@ files remain valid forever and reconstruct the *old* password. There is no
 "revoke" for an already-burned disc.
 
 The only true revocation for a leaked or weak password is the **physical
-destruction of every copy of every disc** that carries the affected key files.
+destruction of every disc** that carries the affected key files.
 Plan accordingly: the password you burn is, in practice, the password those
 discs will carry for their entire physical lifetime (100+ years for M-Disc).
 
-## 5. Escrow and card-placement guidance
+## 5. Where to keep discs and cards
 
 - **Treat every disc as carrying the full inventory in §1** when choosing
-  offsite or escrow locations. A disc in a given place exposes that place to
-  whatever §1 reveals.
-- **Never store a key-share card (or the password, or a recovery card) *with*
-  a disc.** Key/data separation is the whole point: a thief who gets both a
-  disc and a card (above threshold) has everything.
+  offsite locations or places for cards. A disc in a given place exposes that
+  place to whatever §1 reveals.
+- **Never store a share card (or the password, or a password card) *with*
+  a disc.** Password/data separation is the whole point: a thief who gets both
+  a disc and the password (a password card, or K share cards) has everything.
 - **`key_storage_hints` is printed on every disc.** Write it so an heir can
   *locate* the password without a thief being *handed* it — name a custodian,
   not a findable cache. Good: "Sealed envelope with the family attorney (see
@@ -109,20 +112,20 @@ discs will carry for their entire physical lifetime (100+ years for M-Disc).
 
 ## 6. Why the keys are on every disc anyway (a documented decision)
 
-The wrapped key files and the full catalog ride on every disc **on purpose**:
-it is the *holographic single-disc-recovery* property. An heir who finds any
-one disc — plus the password — can restore, with no central server and no
-other disc required. For this system, **restorability is the bar**, and it is
-deliberately chosen over confidentiality of the metadata and the wrapped
-(not bare) keys. This is a tradeoff made with intent, not an accident:
+The wrapped key files ride on every disc, and the full catalog on every data
+disc, **on purpose**: it is the *single-disc restore* property. An heir who
+finds any one data disc — plus the password — can restore, with no central
+server and no other disc required. For this system, **restorability is the
+bar**, and it is deliberately chosen over confidentiality of the metadata
+and the wrapped (not bare) keys. This is a tradeoff made with intent, not an accident:
 
 - The bare key is *never* exposed; only the scrypt-wrapped form is, and it is
   only as weak as the password protecting it (§3).
 - The plaintext catalog is metadata, not file contents.
 
-Any future "sanitized on-disc catalog" option would affect **newly burned
-discs only**: every already-burned disc carries the full plaintext catalog
-forever. The decision not to offer one is recorded in §8.3.
+Any future "sanitized disc catalog" option would affect **newly burned
+discs only**: every already-burned data disc carries the full plaintext
+catalog forever. The decision not to offer one is recorded in §8.3.
 
 Key files and their plaintext `username`/`hostname`: rustic 0.11.2 writes
 **neither** field (measured, §7), so a repository LCSAS created carries none.
@@ -131,13 +134,14 @@ Only a repository first initialised by restic does (restic 0.19 writes
 file's SHA-256, which restic uses as the file's name, so a scrub means renaming
 every key file on every future disc. It isn't done.
 
-## 7. Verified numbers
+## 7. Measured numbers
 
 Measured 2026-10-20 with `tools/kdf_bench.py` (FUP-03 Part 2, #489). The
 parameters come from key files freshly written by `rustic init` (v0.11.2;
-two repos, both identical) and `restic init` (v0.19.0; three repos, which
-calibrated to `p=1` once and `p=2` twice). Each value below is the fastest of
-seven guesses on **one core** of an Intel Westmere E56xx (2010-era) VM, using
+two repositories, both identical) and `restic init` (v0.19.0; three
+repositories, which calibrated to `p=1` once and `p=2` twice). Each value
+below is the fastest of seven guesses on **one core** of an Intel Westmere
+E56xx (2010-era) VM, using
 OpenSSL's scrypt through Python `hashlib`. A modern core is a few times
 faster. An attacker multiplies by the cores, or the memory bandwidth, they can
 afford.
@@ -165,42 +169,41 @@ records.
 
 ## 8. Findings from the Part 2 audit (2026-10-20, #489)
 
-### 8.1 Multi-tenant leakage
+### 8.1 Repositories of different people
 
-In a multi-tenant archive, **every disc carries every tenant's** catalog rows:
-repository names and mirror paths, every snapshot's hostname, paths, tags and
-description, locations, and the volume map. It also carries every tenant's
-wrapped keys. So a disc that one tenant keeps exposes all the others' metadata,
-and lets its holder brute-force any other tenant's password offline (§3).
-Volumes are shared, so no binpack setting changes that today.
+**Every data disc carries every repository's** catalog rows: repository names
+and mirror paths, every snapshot's hostname, paths, tags and description,
+locations, and the volume map. It also carries every repository's wrapped
+keys. So whoever holds one data disc sees every repository's metadata, and can
+brute-force any repository's password offline (§3). Repositories share
+volumes, so no binpack setting changes that.
 
-`PASSWORD_INFO.txt` says "If you have only one key file, it likely works for all
-repositories (common setup)". That is true for one owner with one password. It
-is the wrong default to suggest when tenants are different people: a shared
-password makes one tenant's compromise everyone's. Two options are product
-decisions, tracked on #491:
-- per-tenant volume separation as a binpack constraint;
-- `PASSWORD_INFO.txt` wording for multi-owner archives.
+That is why an archive has one owner, who holds every repository's password.
+People who need privacy from each other keep separate archives.
+
+`PASSWORD_INFO.txt` tells the heir that a single password file likely works
+for every repository (the common setup). That is true for one owner with one
+password. Its wording is tracked on #491.
 
 ### 8.2 Shamir share cards and discs
 
 SLIP-0039 is Shamir sharing: any **K−1 cards reveal nothing** about the
 password. A disc adds only the wrapped key, which still needs that password.
 So K−1 cards plus any number of discs leave an attacker exactly where §3 puts
-them. `SHARE_FORMAT.md` on the disc documents a public standard, and
+them. `SHARE_FORMAT.md` on the meta disc documents a public standard, and
 knowing the format weakens nothing. The one real risk is a card stored *with* a
 disc; §5 and `ESTATE_PLANNING.md` already forbid that.
 
-### 8.3 Decision: keep the full catalog on every disc
+### 8.3 Decision: keep the full catalog on every data disc
 
 Decided per the charter's default ("keep full catalog, document it"). A
-redacted on-disc catalog would cost restorability:
+redacted disc catalog would cost restorability:
 - `db/rebuild.py` rebuilds a lost master catalog from discs by merging their
   `locations`, `volume_events` and snapshot rows (descriptions included).
-  Redacting them means a rebuilt catalog no longer knows where the other copies
-  live or what happened to each volume.
+  Redacting them means a rebuilt catalog no longer knows where the other discs
+  are kept or what happened to each volume.
 - The swap prompts and restore planning need the pack → volume map.
-- Every disc already burned keeps the full catalog anyway (§6).
+- Every data disc already burned keeps the full catalog anyway (§6).
 
 The mitigations stay as they are: opaque repository and location names, and
 custodian-style `key_storage_hints` (§5). Revisit only as an explicit opt-in if

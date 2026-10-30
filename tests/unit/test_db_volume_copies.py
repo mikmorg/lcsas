@@ -138,7 +138,7 @@ class TestVolumeCopyCRUD:
         assert "Moved from Home_Shelf" in copies[0].notes
 
     def test_move_nonexistent_raises(self, conn, volume):
-        with pytest.raises(ValueError, match="No active copy"):
+        with pytest.raises(ValueError, match="No in-service disc"):
             move_volume_copy(conn, volume.volume_id, "Home_Shelf", "Offsite_Safe")
 
     def test_move_emits_location_move_event(self, conn, volume):
@@ -235,11 +235,11 @@ class TestLastCopyAutoDemotion:
 
     def test_destroy_unknown_location_raises(self, conn, volume):
         """No copy row at the location → loud failure, not a silent no-op."""
-        with pytest.raises(ValueError, match="No copy"):
+        with pytest.raises(ValueError, match="No disc"):
             destroy_copy(conn, volume.volume_id, "Home_Shelf")
 
     def test_deprecate_unknown_location_raises(self, conn, volume):
-        with pytest.raises(ValueError, match="No active copy"):
+        with pytest.raises(ValueError, match="No in-service disc"):
             deprecate_copy(conn, volume.volume_id, "Home_Shelf")
 
 

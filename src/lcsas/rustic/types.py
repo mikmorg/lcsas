@@ -30,7 +30,7 @@ class SnapshotInfo:
 
 @dataclass(frozen=True)
 class RestorePlan:
-    """Result of a restore dry-run: the list of required pack hashes."""
+    """Result of a restore dry-run: the list of required pack IDs."""
 
     snapshot_id: str
     required_pack_hashes: list[str] = field(default_factory=list)

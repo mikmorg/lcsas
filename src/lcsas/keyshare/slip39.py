@@ -12,7 +12,7 @@ HMAC-SHA256), the HMAC-SHA256 digest share-integrity check, and the grouped
 
 This module is deliberately self-contained and depends only on the Python
 standard library (``hashlib``, ``hmac``, ``secrets``) plus the bundled wordlist,
-so it can be shipped as a standalone combiner on the LCSAS meta-volume.  It does
+so it can be shipped as a standalone combiner on the LCSAS meta disc.  It does
 *not* import the rest of ``lcsas``.
 
 Algorithm ported from the MIT-licensed reference implementation
@@ -862,7 +862,7 @@ def check_share(mnemonic: str) -> str | None:
 
     A pass means the share is internally consistent; it does *not* mean the
     share belongs to the same split as the others (that mismatch surfaces only
-    during recovery).
+    when the shares are combined).
     """
     tokens = mnemonic.split()
     indices: list[int] = []

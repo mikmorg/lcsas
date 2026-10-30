@@ -63,9 +63,9 @@ lcsas_repo_decrypt(const lcsas_master_key *key,
     lcsas_aes128_encrypt(&mac_kk, iv, s);
     lcsas_poly1305_mac(key->mac_r, s, ct, ct_len, tag);
     /* Authentication failure: the derived key did not produce the
-     * stored tag -- the one condition that genuinely means "this key
-     * (password) is wrong".  Distinct code so key-file loading can
-     * tell a rejected password from a malformed ciphertext. */
+     * stored tag -- the one condition that means "wrong key" (for a
+     * key file, "wrong password").  Distinct code so key-file loading
+     * can tell a rejected password from a malformed ciphertext. */
     if (lcsas_ct_memcmp(tag, mac, 16) != 0)
         return LCSAS_REPO_ERR_MAC;
 
@@ -556,7 +556,7 @@ parse_blob_entry(const char *src,
     /* Range-validate before these values reach need_end/malloc/pread in
      * read_blob.  off+len must not overflow long long, and len must be a
      * plausible blob size.  A failure here is a per-entry skip in pass-2
-     * (silent continue); print so the operator can see the bad entry. */
+     * (silent continue); print so the heir can see the bad entry. */
     if (off < 0 || len <= 0 || len > LCSAS_BLOB_LEN_MAX
             || off > LLONG_MAX - len) {
         fprintf(stderr,
@@ -656,7 +656,7 @@ lcsas_repo_load_index(const char *repo_path,
                  * exceeded, or malformed zstd): the index — and every
                  * blob it described — would silently vanish, surfacing
                  * later as a cryptic "blob not in index".  Fail BEFORE
-                 * any restore I/O so the operator can switch to tier-2. */
+                 * any restore I/O so the heir can switch to tier-2. */
                 if (why == LCSAS_DEC_TOOBIG) {
                     fprintf(stderr,
                             "ERROR: index file %s exceeds the 256 MiB "
@@ -748,7 +748,7 @@ lcsas_repo_load_index(const char *repo_path,
             if (why == LCSAS_DEC_TOOBIG || why == LCSAS_DEC_ZSTD) {
                 /* Pass 1 already fails loud on these, so pass 2 should
                  * never reach here for a cap/zstd file; keep the fatal
-                 * branch anyway in case the on-disc set changed between
+                 * branch anyway in case the index files changed between
                  * passes (TOCTOU) rather than half-loading the index. */
                 if (why == LCSAS_DEC_TOOBIG) {
                     fprintf(stderr,
@@ -1069,7 +1069,7 @@ lcsas_repo_read_blob(const char *repo_path,
 
     /* Fall through to the disc locator if the primary repo doesn't
      * have it.  The locator may scan additional mount points and may
-     * prompt the user interactively. */
+     * prompt the heir interactively. */
     if (!found && extra_locator != NULL) {
         if (lcsas_disc_locate_pack(extra_locator, loc->pack_id,
                                    path, sizeof path) == 0) {
@@ -1089,7 +1089,7 @@ lcsas_repo_read_blob(const char *repo_path,
          * disc was found by stat() above but ejected before we
          * opened it), EIO (media error), ENXIO (no such device —
          * the cdemu / USB drive vanished), or EACCES.  Without
-         * this hint the operator sees "blob not in index"-shaped
+         * this hint the heir sees "blob not in index"-shaped
          * silence and has no idea the drive went away. */
         int saved_errno = errno;
         if (saved_errno == ENOENT || saved_errno == EIO
@@ -1105,7 +1105,7 @@ lcsas_repo_read_blob(const char *repo_path,
     /* Issue #220 — surface a clear diagnostic when the on-disc pack
      * is shorter than what the index says we need.  Without this the
      * pread short-read just becomes a generic "tree restore failed"
-     * far up the call stack and operators can't tell whether the disc
+     * far up the call stack and heirs can't tell whether the disc
      * is unreadable, the catalog is stale, or the pack itself was
      * truncated during burn/copy.  We fstat first so the message can
      * name the actual on-disc size vs. the index-declared end offset. */

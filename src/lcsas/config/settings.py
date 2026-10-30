@@ -24,9 +24,9 @@ class LCSASConfig:
     """
 
     # Core paths
-    mirror_base_path: Path          # Root of local mirror repos (Tier 1)
-    staging_path: Path              # Transient staging area (Tier 2)
-    db_path: Path                   # Path to archive_master.db
+    mirror_base_path: Path          # Root of the local mirrors
+    staging_path: Path              # The staging area
+    db_path: Path                   # The master catalog (archive.db by default)
 
     # Defaults
     default_media_type: MediaType = MediaType.BD25
@@ -45,22 +45,22 @@ class LCSASConfig:
     # Metadata overhead reserved during bin packing (bytes)
     metadata_reserve_bytes: int = 104_857_600  # 100 MB
 
-    # ── Key escrow (Shamir / SLIP-0039) defaults ─────────────────
+    # ── Password split (Shamir / SLIP-0039) defaults ─────────────
     # Default K-of-N split parameters for `lcsas key split`.  Bias toward
-    # recoverability (a backup's dominant risk is loss, not theft).
+    # restorability (a backup's dominant risk is loss, not theft).
     key_threshold: int = 2          # K: shares needed to reconstruct
     key_shares: int = 5             # N: total shares produced
     # Whether THIS archive's password is actually split into shares.  Gates
-    # the heir-facing share-recovery instructions (PASSWORD_INFO / START_HERE):
+    # the heir-facing share-combining instructions (PASSWORD_INFO / START_HERE):
     # K/N always carry defaults, so they alone don't indicate a real split.
     key_split: bool = False
 
     # ── Format-drift gate (FMT-03) ───────────────────────────────
-    # Burn refuses to master discs from a repo it cannot prove restorable by
-    # the pinned recovery readers (config version 1-2 + an in-process decode
-    # proof).  Set true to burn anyway when a repo has no password_file
-    # configured — strongly discouraged: such discs are unverified at burn
-    # time and may be unrestorable.
+    # Burn refuses to master discs from a repository it cannot prove
+    # restorable by the pinned recovery readers (config version 1-2 + an
+    # in-process decode proof).  Set true to burn anyway when a repository
+    # has no password_file configured — strongly discouraged: such discs are
+    # unproven at burn time and may be unrestorable.
     allow_unverified_repo_format: bool = False
 
     # Repository definitions (populated from config file)
@@ -68,7 +68,7 @@ class LCSASConfig:
 
     # ── Survivability / human documentation fields ───────────────
     # These appear on START_HERE.txt on every disc to help a non-
-    # technical person understand the archive after the archivist's death.
+    # technical person understand the archive after the owner's death.
     archive_owner: str = ""
     archive_description: str = ""
     key_storage_hints: str = ""
@@ -77,7 +77,7 @@ class LCSASConfig:
 
 @dataclass(frozen=True)
 class RepositoryConfig:
-    """Configuration for a single backup repository (tenant)."""
+    """Configuration for a single backup repository."""
 
     name: str
     mirror_path: Path               # e.g. /mnt/mirror/family
@@ -86,7 +86,7 @@ class RepositoryConfig:
 
 
 def _xdg_db_path() -> str:
-    """Return XDG-compliant default database path.
+    """Return the XDG-compliant default master catalog path.
 
     Uses ``$XDG_DATA_HOME/lcsas/archive.db``, falling back to
     ``~/.local/share/lcsas/archive.db``.
@@ -176,7 +176,7 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         archive_description = "Family photos, videos, and documents 2000-2025"
         # The hint is printed verbatim on EVERY disc, so it must point an heir
         # to the password without handing it to a disc thief — name a custodian,
-        # not a findable location.  See docs/DISC_CONFIDENTIALITY.md.
+        # not a findable place.  See docs/DISC_CONFIDENTIALITY.md.
         key_storage_hints = "Sealed envelope with the family attorney (see my will)"
         technical_contact = "Jane Doe (jane@example.com) or any Linux-savvy IT professional"
 
@@ -236,7 +236,7 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
             encryption_key_id=repo_cfg.get("encryption_key_id", ""),
         )
 
-    # NB: loading a config deliberately performs no I/O on the repo paths.
+    # NB: loading a config deliberately performs no I/O on the repository paths.
     # A missing mirror_path / password_file is reported by validate_config()
     # as a hard error, and every command that actually reads a mirror (scan,
     # stage, burn, restore plan/exec) gates on it via _validate_config_or_exit
@@ -424,7 +424,7 @@ def validate_config(config: LCSASConfig) -> list[str]:
                     config.label_prefix, ", ".join(too_long),
                 )
 
-    # Per-repo checks
+    # Per-repository checks
     for name, repo in config.repositories.items():
         if not repo.mirror_path.exists():
             errors.append(
@@ -443,7 +443,8 @@ def validate_config(config: LCSASConfig) -> list[str]:
 
     # Check for critical path overlaps that could cause data loss during cleanup.
     # Specifically: staging_path and mirror_base_path must be separate
-    # (cleanup routines would destroy mirrors if staging is a subdir of mirror).
+    # (cleanup routines would destroy mirrors if the staging area is inside a
+    # mirror).
     try:
         staging_real = config.staging_path.resolve()
         mirror_real = config.mirror_base_path.resolve()
@@ -455,7 +456,7 @@ def validate_config(config: LCSASConfig) -> list[str]:
             errors.append(
                 f"staging_path and mirror_base_path cannot overlap: "
                 f"{staging_real} vs {mirror_real} "
-                f"(staging cleanup would affect mirrors)"
+                f"(cleaning the staging area would affect mirrors)"
             )
     except (OSError, RuntimeError):
         # Path resolution failed (e.g., due to symlink issues)

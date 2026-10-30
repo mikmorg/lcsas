@@ -45,7 +45,7 @@ def register_pack(
     if result is None:
         raise RuntimeError(
             f"Pack {sha256} should exist after INSERT OR IGNORE but was not found. "
-            "This indicates a database integrity issue."
+            "This indicates a catalog integrity issue."
         )
     return result
 
@@ -69,7 +69,7 @@ def get_pack_by_sha256(conn: sqlite3.Connection, sha256: str) -> Pack | None:
 
 
 def mark_pruned(conn: sqlite3.Connection, pack_id: int) -> None:
-    """Mark a pack as logically pruned (still on WORM media, but dead)."""
+    """Mark a pack as pruned (gone from the mirror, but may still be on discs)."""
     conn.execute(
         "UPDATE packs SET is_pruned = 1 WHERE pack_id = ?", (pack_id,)
     )
@@ -77,9 +77,9 @@ def mark_pruned(conn: sqlite3.Connection, pack_id: int) -> None:
 
 
 def unmark_pruned(conn: sqlite3.Connection, pack_id: int) -> None:
-    """Restore a wrongly-pruned pack to the active pool (BURN-09).
+    """Return a wrongly-pruned pack to the active pool (BURN-09).
 
-    Inverse of mark_pruned — the recovery tool for prune-sync mistakes
+    Inverse of mark_pruned — the fix for prune-sync mistakes
     (e.g. a partially-unavailable mirror scanned as if packs were gone).
     """
     conn.execute(
@@ -164,9 +164,9 @@ def warn_size_mismatch(sha256: str, db_size: int, found_size: int) -> None:
     mirror was truncated or altered after it was first registered.
     """
     _logger.warning(
-        "Pack %s has size mismatch (DB has %d bytes, found %d bytes). "
-        "Catalog will use existing size; the mirror copy may be truncated "
-        "or damaged.",
+        "Pack %s has size mismatch (catalog has %d bytes, found %d bytes). "
+        "Catalog will use existing size; the pack file on the mirror may be "
+        "truncated or damaged.",
         sha256[:16], db_size, found_size,
     )
 
@@ -176,7 +176,7 @@ def list_packs(
     repo_id: str | None = None,
     include_pruned: bool = False,
 ) -> list[Pack]:
-    """List packs, optionally filtered by repo and prune status."""
+    """List packs, optionally filtered by repository and prune status."""
     conditions: list[str] = []
     params: list[str | int] = []
 

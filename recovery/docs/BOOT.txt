@@ -16,7 +16,7 @@ discs.  There are two ways to get one.
 OPTION 1 -- USE ANY OTHER COMPUTER
 
 Any working computer with an optical drive (internal or USB) can run
-the recovery.  A friend's machine, a library computer, a second-hand
+the restore.  A friend's machine, a library computer, a second-hand
 laptop -- anything running Windows, macOS, or Linux works.
 
 Once you have one, go back to START_HERE.txt on this disc and follow
@@ -58,19 +58,19 @@ to prepare the stick) and a USB stick of 8 GB or more.
          sudo mkdir -p /mnt
          sudo mount -o ro /dev/sr0 /mnt
 
-  6. Run the recovery (in a terminal):
+  6. Run the restore (in a terminal):
 
          sh /mnt/recovery/scripts/restore.sh /home/ubuntu/restored latest
 
-     This prompts for the archive password and walks you through
-     inserting data discs.  From here, RECOVER.txt on this disc is
-     the full operator manual.
+     This prompts for the password and walks you through inserting
+     data discs.  From here, RECOVER.txt on this disc is the full
+     manual.
 
   7. Restored files land in /home/ubuntu/restored, which lives in
      RAM on a live system.  Copy them to a real disk (USB drive,
      internal disk) before powering off, or pass a path on a
-     mounted disk as the target instead.  Best practice in a
-     live-USB session: plug in an external drive and restore
+     mounted disk as the target instead.  Best practice on a
+     live-USB system: plug in an external drive and restore
      directly to a directory on it, not the live system's home
      folder -- restore.sh detects a RAM-backed target and asks for
      confirmation before continuing.
@@ -89,7 +89,7 @@ current one never does.
 
 WHAT IS ON THE DISC
 
-The recovery medium bundles prebuilt static recovery binaries for
+The meta disc bundles prebuilt static recovery binaries for
 several architectures (recovery/bin/<arch>/), the complete C source
 to rebuild them (recovery/src/), and plain-text documentation
 (recovery/docs/).  It does not bundle an operating system, a C

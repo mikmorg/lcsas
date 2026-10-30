@@ -1,15 +1,16 @@
 # Recovery Toolchain Build & Manifest
 
 The **recovery toolchain** is the in-house C89 + POSIX-sh tier-1
-restore path, plus the cross-build, manifest, and verify tooling that
-keeps it durable.  It is driven by `lcsas recovery {build,test,manifest,verify}`
+restore path, plus the cross-build, manifest, and reproducible-build
+tooling that keeps it durable.  It is driven by
+`lcsas recovery {build,test,manifest,verify}`
 (`cmd_recovery` in `src/lcsas/cli/main.py`) over the on-disk
 `recovery/` build tree, orchestrated by `RecoveryBuilder`
 (`src/lcsas/recovery/build.py`).  For the wider architecture and the
-holographic-catalog model, see [`docs/architecture.md`](../architecture.md).
+disc catalog model, see [`docs/architecture.md`](../architecture.md).
 
 Sibling docs: [`docs/workflows/meta-disc.md`](meta-disc.md) (how
-these binaries get bundled onto a rescue disc),
+these binaries get bundled onto the meta disc),
 [`docs/workflows/verify-and-audit.md`](verify-and-audit.md) (the
 disc-integrity / ECC verify flow), and the on-disc tier doc
 `recovery/docs/TIERS.txt`.
@@ -19,8 +20,8 @@ disc-integrity / ECC verify flow), and the on-disc tier doc
 LCSAS is built on a strict **zero runtime dependencies** rule
 (`CLAUDE.md`): the Python codebase uses only the standard library
 plus an optional `zstandard`, so a fresh machine can decrypt and
-extract a Rustic repo with nothing but a Python 3 interpreter
-(`src/lcsas/restore/restic_fallback.py`).  The meta-volume goes
+extract a Rustic repository with nothing but a Python 3 interpreter
+(`src/lcsas/restore/restic_fallback.py`).  The meta disc goes
 further — it bundles static binaries (rustic, xorriso, python3, and
 our own tier-1 binaries) so a bare machine with no network and no
 package manager can still drive the full restore pipeline.
@@ -49,8 +50,8 @@ Python, no third-party shared library.  The `recovery/` tree gives us:
    (`SOURCE_DATE_EPOCH` pinned) so each artefact's SHA-256 is stable
    across rebuilds.
 4. A **SHA-256 manifest** (`recovery/MANIFEST.sha256`) covering the
-   source + scripts that ships on every meta-disc, so an operator
-   restoring decades from now can verify nothing has bit-rotted or
+   source + scripts that ships on every meta disc, so an heir
+   restoring decades from now can check that nothing has bit-rotted or
    been tampered with.
 
 The full tier cascade is documented on-disc at
@@ -125,7 +126,7 @@ The `--arch` choices are `host` plus the eight
 | `x86_64-macos`   | `zig cc -target x86_64-macos` | Mach-O; no `-static`; no `lcsas-iso9660`/`lcsas-init` |
 | `aarch64-macos`  | `zig cc -target aarch64-macos` | Mach-O; no `-static`; no `lcsas-iso9660`/`lcsas-init` |
 
-Of these, **six are the APPROVED_TARGETS** the meta-volume's
+Of these, **six are the APPROVED_TARGETS** the meta disc's
 required-contents contract demands a tier-1 binary for
 (`src/lcsas/meta/required_contents.py`): the three Linux musl targets
 (`x86_64`, `aarch64`, `armv7`), the two macOS targets, and
@@ -147,7 +148,7 @@ Source refs: `RecoveryBuilder.SUPPORTED_ARCHES`,
 its companions, incl. `lcsas-ecc`) for one target — the host arch by
 default, or a cross-target via `--arch`.  This is what a release
 engineer runs to populate `recovery/bin/<arch>/` before bundling a
-meta-disc.  Recovery *operators* never rebuild at restore time: if a
+meta disc.  *Heirs* never rebuild at restore time: if a
 bundled binary won't run, the on-disc cascade falls through to the
 next tier.
 
@@ -219,7 +220,7 @@ manifest — run `lcsas recovery manifest` for that.  Exit code 0.
 **Test coverage:**
 
 - The cross-build path is exercised in CI by the recovery-build /
-  audit-gate workflows (zig cc, with qemu/wine verify for the
+  audit-gate workflows (zig cc, with qemu/wine checks for the
   non-host targets); see `recovery/docs/READINESS_CHECKLIST.txt`.
 - C-side behaviour is covered by `make -C recovery test`
   (see [`recovery test`](#lcsas-recovery-test--run-the-recovery-test-suite)).
@@ -235,7 +236,7 @@ per-arch `bin/<arch>/lcsas-*` rules); `recovery/docs/BUILD.txt`.
 
 **Purpose:** Run the recovery toolchain's own test suite — the C unit
 tests plus the round-trip gates that prove a freshly built
-`lcsas-restore` decrypts a known fixture repo and emits the expected
+`lcsas-restore` decrypts a known fixture repository and emits the expected
 plaintext, and that the bare (Python-free) path works.  This is the
 "does this binary actually do what it claims" check the manifest alone
 cannot provide.
@@ -253,7 +254,7 @@ build` first) and a host `make`/`cc`.
 3. The Makefile `test` target builds and runs the C unit tests and
    the round-trip / bare-path gates under `recovery/tests/`
    (e.g. `test_bare_path.sh`, which strips every `python*` from PATH
-   and asserts recovery still succeeds via tiers 1–2).
+   and asserts the restore still succeeds via tiers 1–2).
 4. A non-zero exit from `make test` propagates up; the CLI prints
    `recovery tests: OK` on success.
 
@@ -284,7 +285,7 @@ bare-path gate referenced in `recovery/docs/TIERS.txt`.
 result to `recovery/MANIFEST.sha256` (one `sha256sum`-format line per
 file, sorted by path).  The manifest covers the **source + scripts**
 we ship and audit — it deliberately **excludes** the transient
-`build/` tree — so an operator decades from now can confirm the C
+`build/` tree — so an heir decades from now can confirm the C
 source they're about to compile hasn't bit-rotted or been tampered
 with.
 
@@ -311,14 +312,14 @@ which are reproducible-but-rebuildable).  Exit 0.
 **Variant axes that apply:**
 
 - Target architecture: n/a — the manifest is arch-independent source.
-- Recovery tier: produces the artefact the meta-disc ships so a future
-  operator can audit the source before rebuilding **Tier 1**.
+- Recovery tier: produces the artefact the meta disc ships so a future
+  heir can audit the source before rebuilding **Tier 1**.
 - Reproducibility: the manifest is itself deterministic (sorted walk).
 
 **Note:** upstream opaque binaries (rustic, CPython) are pinned
-separately in `recovery/UPSTREAM.sha256`; the meta-volume's bundled
+separately in `recovery/UPSTREAM.sha256`; the meta disc's bundled
 copy is audited by `lcsas meta verify` against the merged
-`recovery/MANIFEST.sha256` on the built volume (see
+`recovery/MANIFEST.sha256` in the built meta disc tree (see
 [`meta-disc.md`](meta-disc.md)).
 
 **Source refs:** `cmd_recovery` (`src/lcsas/cli/main.py`);
@@ -333,7 +334,7 @@ copy is audited by `lcsas meta verify` against the merged
 build it twice and byte-compare the output.  Without this the SHA-256
 manifest would be worthless: any innocuous variation (timestamp, debug
 path, build-id) would invalidate the recorded hashes on every rebuild,
-and an operator could not distinguish an expected rebuild from
+and an heir could not distinguish an expected rebuild from
 tampering.
 
 **Prerequisites:** A host toolchain (`make`, `cc`) able to build the
@@ -370,8 +371,8 @@ non-zero (the make target's code) otherwise.
 **Purpose:** Define how the on-disc dispatcher (`recovery/scripts/restore.sh`,
 or `restore.bat` on Windows) chooses *which* tool reads the bytes.
 There is **no bootable live environment** (the Alpine live stack was
-removed — BOOT-07; LCSAS discs are NOT bootable).  The operator runs
-`restore.sh` from a meta-disc mounted on an existing OS — or, on a
+removed — BOOT-07; LCSAS discs are NOT bootable).  The heir runs
+`restore.sh` from a meta disc mounted on an existing OS — or, on a
 machine with no OS at all, from any other computer / a live Linux USB
 (see `recovery/docs/BOOT.txt`).  The dispatcher tries the tiers in
 order and stops at the first that succeeds.  The canonical text ships
@@ -382,7 +383,7 @@ on-disc at `recovery/docs/TIERS.txt`.
 | 1 (primary)    | `recovery/bin/<arch>/lcsas-restore`   | Our in-house C89 reader (vendored sqlite+zstd)         | kernel + static libc      |
 | 2 (fallback)   | `recovery/bin/<arch>/rustic-static`   | Pinned upstream static `rustic`                        | kernel + static libc      |
 | — | **BARE-MINIMUM PATH ENDS HERE** (tiers 1–2 are Python-free) | | |
-| 3 (last resort)| bundled CPython + `standalone_restorer.py` | Pure-Python AES/zstd restorer                     | python3 ≥ 3.7 (stdlib only)|
+| 3 (last resort)| bundled CPython + `standalone_restorer.py` | The Python reader (AES/zstd)                      | python3 ≥ 3.7 (stdlib only)|
 
 **Steps (`restore.sh` chooses a tier):**
 
@@ -397,9 +398,9 @@ on-disc at `recovery/docs/TIERS.txt`.
    the same arch (`recovery/UPSTREAM.sha256`).  Same kernel + libc
    baseline; a hedge in case tier 1 won't run on a given host.
 4. **Tier 3** — last resort: the bundled CPython runs
-   `standalone_restorer.py` (the pure-Python AES/zstd decoder).  Gated
-   by `LCSAS_ALLOW_PYTHON_TIER` (default 1); set it to `0` to forbid
-   the Python tier entirely so recovery is provably C-only.
+   `standalone_restorer.py` (the Python reader, an AES/zstd decoder).
+   Gated by `LCSAS_ALLOW_PYTHON_TIER` (default 1); set it to `0` to forbid
+   the Python tier entirely so the restore is provably C-only.
 
 Beneath the cascade sits the **disc-integrity layer**: DVDisaster RS03
 ECC (or the in-house `lcsas-ecc`, FMT-01) repairs bit-rotted sectors
@@ -410,7 +411,7 @@ never silently restored.  See
 `recovery/docs/TIERS.txt` "DISC-INTEGRITY LAYER".
 
 **Expected outcome:** the first tier that succeeds yields a working
-restore.  If all fail, the operator has a hardware or environment
+restore.  If all fail, the heir has a hardware or environment
 problem (`recovery/docs/RECOVER.txt`).
 
 **Variant axes that apply:**
@@ -426,8 +427,8 @@ problem (`recovery/docs/RECOVER.txt`).
   (`make -C recovery test-bare-path`).
 - No-dvdisaster ECC self-repair (FMT-01):
   `tests/e2e/test_ecc_selfrepair_no_dvdisaster.py`.
-- Tier 3 pure-Python fallback: `tests/unit/test_restic_fallback.py`
-  and the standalone-restorer integration tests.
+- Tier 3 (the Python reader): `tests/unit/test_restic_fallback.py`
+  and the `standalone_restorer.py` integration tests.
 - Docs-vs-reality gate: `tests/recovery_hardening/test_boot_docs_reality.py`
   (no phantom `lcsas` subcommands/flags in `recovery/docs/`).
 
@@ -460,7 +461,7 @@ standalone equivalent used by tests and tooling.
    - Windows (`restore.bat`) → `x86_64-windows`
 3. Override with `$LCSAS_TARGET=<arch>` if auto-detection misfires
    (chroot, foreign-arch emulator, unusual `uname`).
-4. Unknown pairs fail with a diagnostic so the operator can pick a
+4. Unknown pairs fail with a diagnostic so the heir can pick a
    target explicitly.
 
 **Expected outcome:** a single target line and exit 0, or a diagnostic
@@ -492,12 +493,12 @@ the full `(OS, machine)` matrix and explicit rejections.
 
 | Area | Test |
 |------|------|
-| Cross-build / per-arch binaries | recovery-build + audit-gate CI (zig cc + qemu/wine verify); `recovery/docs/READINESS_CHECKLIST.txt` |
+| Cross-build / per-arch binaries | recovery-build + audit-gate CI (zig cc + qemu/wine checks); `recovery/docs/READINESS_CHECKLIST.txt` |
 | C-side behaviour | `make -C recovery test` (`RecoveryBuilder.run_tests`) |
 | Bare (Python-free) path | `recovery/tests/test_bare_path.sh` (`make -C recovery test-bare-path`) |
 | In-house RS03 ECC (FMT-01) | `tests/e2e/test_ecc_selfrepair_no_dvdisaster.py` + cross-conformance vs dvdisaster |
 | Reproducibility | `make -C recovery repro-check` (`lcsas recovery verify`) |
-| Tier-3 pure-Python | `tests/unit/test_restic_fallback.py` + standalone-restorer integration |
+| Tier 3 (the Python reader) | `tests/unit/test_restic_fallback.py` + `standalone_restorer.py` integration |
 | Arch dispatcher | `tests/unit/test_restore_sh_dispatcher.py` |
 | Docs-vs-reality | `tests/recovery_hardening/test_boot_docs_reality.py` |
 
@@ -519,11 +520,11 @@ the full `(OS, machine)` matrix and explicit rejections.
 - `recovery/scripts/restore.sh` / `restore.bat` / `detect_arch.sh` —
   the on-disc tier dispatchers.
 - `recovery/docs/TIERS.txt`, `recovery/docs/BUILD.txt`,
-  `recovery/docs/RECOVER.txt` — on-disc operator/tier docs.
+  `recovery/docs/RECOVER.txt` — on-disc restore/tier docs.
 - `APPROVED_TARGETS` (`src/lcsas/meta/required_contents.py`) — the six
-  targets the meta-volume contract requires a tier-1 binary for.
+  targets the meta disc contract requires a tier-1 binary for.
 - `src/lcsas/restore/restic_fallback.py` /
-  `src/lcsas/restore/standalone_builder.py` — Tier 3 pure-Python path.
+  `src/lcsas/restore/standalone_builder.py` — Tier 3, the Python reader.
 - [`docs/architecture.md`](../architecture.md) — system overview;
   [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6
   Q6 — cross-platform tier-1 rationale.

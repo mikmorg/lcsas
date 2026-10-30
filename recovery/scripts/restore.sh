@@ -1,7 +1,7 @@
 #!/bin/sh
 # restore.sh -- POSIX-sh driver for the LCSAS recovery cascade.
 #
-# Bare-minimum recovery is prebuilt static binaries + POSIX sh ONLY.
+# Bare-minimum restore is prebuilt static binaries + POSIX sh ONLY.
 # Python is NOT on the bare path; it lives on a separate tier (3) that
 # is only reached when every C-based option has failed.
 #
@@ -29,7 +29,7 @@
 #
 # Documented exit codes:
 #   0    success
-#   1    generic failure (no repo, unsupported OS/arch, etc.)
+#   1    generic failure (no repository, unsupported OS/arch, etc.)
 #   2    usage error
 #   64   no recovery binary available at any tier (issue #225)
 
@@ -51,7 +51,7 @@ if [ -n "${LCSAS_SHELL_TRACE:-}" ]; then
     set -x
 fi
 
-# Stamped at meta-volume build time by src/lcsas/meta/builder.py.
+# Stamped at meta disc build time by src/lcsas/meta/builder.py.
 LCSAS_RESTORE_BUILD_SHA="@@BUILD_SHA@@"
 LCSAS_RESTORE_BUILD_DATE="@@BUILD_DATE@@"
 
@@ -65,16 +65,16 @@ SCRIPT_DIR="$(dirname "$SCRIPT")"
 
 # ── Single-drive guard: relocate to RAM before going further ──────
 #
-# If this script is being interpreted off a read-only optical medium
-# (the meta-disc), `sh` keeps an open file descriptor on it and the
-# user cannot eject -- which is fatal for anybody with only ONE
+# If this script is being interpreted off a read-only optical disc
+# (the meta disc), `sh` keeps an open file descriptor on it and the
+# heir cannot eject -- which is fatal for anybody with only ONE
 # optical drive.  Detect that case and re-exec ourselves from a
 # writable directory after copying the script + the chosen binary
 # tier into RAM (or any host writable dir).  Subsequent disc swaps
 # then operate freely.
 #
 # LCSAS_RELOCATED is the sentinel: when set, we are the in-RAM copy
-# and its value is the path of the original meta-disc mount.
+# and its value is the path of the original meta disc mount.
 
 find_meta_mount() {
     # Print the filesystem mount point covering "$1" on stdout.
@@ -115,7 +115,7 @@ _host_triple() {
 }
 
 relocate_to_ram() {
-    # $1 = original meta-disc mount root.
+    # $1 = original meta disc mount root.
     orig_mount="$1"; shift
     # Preserve the bin/ tree so tier-1/tier-2 still resolve.  The
     # script lives at one of two valid locations on the meta disc:
@@ -134,7 +134,7 @@ relocate_to_ram() {
         # Cheap sanity check: the recovery bin/ has per-target
         # subdirs (e.g. x86_64-unknown-linux-musl/).  Host /bin
         # does not.  If neither pattern is present, skip the copy
-        # so the operator gets the actionable "no recovery method
+        # so the heir gets the actionable "no recovery method
         # available" message later rather than a silent flat copy
         # of /bin into the ramdir.
         if ls -d "$SCRIPT_DIR/../bin"/*-*-* >/dev/null 2>&1 \
@@ -143,7 +143,7 @@ relocate_to_ram() {
             src_bin="$SCRIPT_DIR/../bin"
         fi
     fi
-    # Pick a scratch dir that is NOT inside the meta-disc, has room for
+    # Pick a scratch dir that is NOT inside the meta disc, has room for
     # the bin/ tree, and may run programs (#496).  A small tmpfs
     # (/run/user/<uid> is 10% of RAM by default; the bin/ tree is
     # ~750 MB) used to take a partial copy silently, and a "noexec" /tmp
@@ -262,12 +262,12 @@ relocate_to_ram() {
     unset _zstd_src _zstd_pyver
 
     printf '[lcsas-restore] copied recovery binaries to %s\n' "$ramdir" >&2
-    printf '[lcsas-restore] you may eject the recovery disc when the ' >&2
+    printf '[lcsas-restore] you may eject the meta disc when the ' >&2
     printf 'binary prompts for a data disc.\n' >&2
 
     LCSAS_RELOCATED="$orig_mount"
     export LCSAS_RELOCATED
-    # cd outside the meta-disc so the new sh inherits a safe cwd.
+    # cd outside the meta disc so the new sh inherits a safe cwd.
     cd / 2>/dev/null || true
     # Re-exec the relocated script with the SAME positional args.
     exec "$ramdir/recovery/scripts/restore.sh" "$@"
@@ -279,7 +279,7 @@ relocate_to_ram() {
 if [ -z "${LCSAS_RELOCATED:-}" ] && [ "${LCSAS_NO_RELOCATE:-0}" != "1" ]; then
     relocate_needed=0
     # Strongest signal: the caller (lcsas-init or a test harness)
-    # explicitly named the meta-disc and we are running inside it.
+    # explicitly named the meta disc and we are running inside it.
     if [ -n "${LCSAS_META_DISC:-}" ]; then
         case "$SCRIPT_DIR" in
             "$LCSAS_META_DISC"|"$LCSAS_META_DISC"/*) relocate_needed=1 ;;
@@ -322,7 +322,7 @@ if [ -z "${LCSAS_RELOCATED:-}" ] && [ "${LCSAS_NO_RELOCATE:-0}" != "1" ]; then
     fi
 fi
 
-# Record the meta-disc mount so we can pass it on to lcsas-restore.
+# Record the meta disc mount so we can pass it on to lcsas-restore.
 # Prefer the post-relocation sentinel; fall back to an explicit env
 # var (e.g. set by lcsas-init); otherwise leave empty.
 META_DISC="${LCSAS_RELOCATED:-${LCSAS_META_DISC:-}}"
@@ -343,12 +343,12 @@ TARGET_FROM_POS=0
 SNAP="latest"
 # --check-disc IMAGE: the heir-facing "my disc is scratched" path.  When
 # set, restore.sh runs the bundled in-house RS03 ECC tool (lcsas-ecc) on
-# IMAGE to verify and, on damage, offer/perform a repair -- then exits.
-# No password, no repo discovery, no restore.  [FMT-01]
+# IMAGE to check and, on damage, offer/perform a repair -- then exits.
+# No password, no repository discovery, no restore.  [FMT-01]
 CHECK_DISC_IMG=""
 
 # Flag parsing: strip named flags before positional-arg parsing so
-# operators can write `sh restore.sh --repo alpha RECOVERY TARGET` or
+# heirs can write `sh restore.sh --repo alpha RECOVERY TARGET` or
 # `sh restore.sh --help` without knowing about LCSAS_* env vars.
 # The `*) break ;;` stops the loop at the first non-flag argument so
 # the existing positional-arg if/elif block below still works unchanged.
@@ -383,8 +383,8 @@ QUICK START:
   TARGET_DIR is where to write restored files (default: /tmp/restored).
 
 FLAGS AND ENVIRONMENT VARIABLES:
-  --repo NAME             Repository / tenant name (same as LCSAS_REPO=NAME).
-                          Skips the multi-tenant selection prompt.
+  --repo NAME             Repository name (same as LCSAS_REPO=NAME).
+                          Skips the repository selection prompt.
   --target DIR            Where to write restored files.  Equivalent to
                           the positional TARGET_DIR; give one or the
                           other, not both.
@@ -392,18 +392,18 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           (same as LCSAS_PWFILE=FILE).  Skips the
                           Password: prompt.
   --version               Print the build commit SHA and date, then exit.
-  LCSAS_PASSWORD          Encryption password (skips the Password: prompt).
+  LCSAS_PASSWORD          Repository password (skips the Password: prompt).
                           Mutually exclusive with LCSAS_PWFILE.
   LCSAS_PWFILE            Path to a file whose contents are the password.
                           Read instead of prompting; preserves any
                           trailing newline in the file.
-  LCSAS_REPO              Repository / tenant name to restore.  Skips
-                          the multi-tenant prompt on archives with
-                          more than one repo.
+  LCSAS_REPO              Repository name to restore.  Skips the
+                          repository prompt on archives with more
+                          than one repository.
   LCSAS_TARGET            Override the auto-detected rust-triple (e.g.
                           force x86_64-unknown-linux-musl on a host
                           where uname -m misreports).
-  LCSAS_META_DISC         Mount point of the recovery / meta disc.
+  LCSAS_META_DISC         Mount point of the meta disc.
                           Tells the tier-1 binary not to look for
                           packs there and to chdir out before prompts.
                           Auto-detected via mtab when omitted.
@@ -463,8 +463,8 @@ FLAGS AND ENVIRONMENT VARIABLES:
   LCSAS_PROGRESS          0 → silence the periodic tier-3 progress
                           stderr lines.  Default ON.
 
-Most operators don't need any of these.  See the meta disc's
-README_RESTORE.md and TROUBLESHOOTING.md for the operator-friendly
+Most heirs don't need any of these.  See the meta disc's
+README_RESTORE.md and TROUBLESHOOTING.md for the heir-friendly
 walkthrough.
 EOF
             exit 0 ;;
@@ -506,13 +506,13 @@ done
 # Self-contained "my disc is scratched" entry point.  Resolves the
 # recovery root + per-target triple, locates the bundled in-house
 # lcsas-ecc binary, runs `lcsas-ecc verify`, and -- on damage (exit
-# 1) -- offers/performs `lcsas-ecc fix`.  Never touches the repo,
-# password, or restore machinery; exits when done.
+# 1) -- offers/performs `lcsas-ecc fix`.  Never touches the
+# repository, password, or restore machinery; exits when done.
 #
 # Exit codes mirror the wrapped tool plus a couple of script-local
 # ones:
 #   0   disc clean, or damage fully repaired
-#   1   damage remained uncorrectable after fix (or user declined fix)
+#   1   damage remained uncorrectable after fix (or heir declined fix)
 #   2   image has no RS03 ECC header (nothing to check/repair)
 #   3   usage / I-O error (missing image, no lcsas-ecc binary)
 if [ -n "$CHECK_DISC_IMG" ]; then
@@ -572,7 +572,7 @@ if [ -n "$CHECK_DISC_IMG" ]; then
         printf 'restore.sh: --check-disc: no lcsas-ecc binary found under ' >&2
         printf '%s/bin/%s/ -- this meta disc cannot repair discs.\n' \
                "$cd_recovery" "$cd_triple" >&2
-        printf 'Try the newest META disc in the set (its tooling can repair ' >&2
+        printf 'Try the newest META disc you have (its tooling can repair ' >&2
         printf 'older data discs).\n' >&2
         exit 3
     fi
@@ -628,7 +628,7 @@ if [ -n "$CHECK_DISC_IMG" ]; then
         1)
             printf '[check-disc] damage exceeded the available ECC parity; ' >&2
             printf 'some sectors are uncorrectable.\n' >&2
-            printf 'Try another copy of this disc if one exists.\n' >&2
+            printf 'Try another disc with the same label if one exists.\n' >&2
             exit 1 ;;
         *)
             printf '[check-disc] repair failed (exit %d).\n' "$cd_fix_rc" >&2
@@ -672,7 +672,7 @@ EOF
 fi
 
 # --target DIR (flag) and a positional TARGET_DIR are mutually
-# exclusive -- with both present we cannot tell which the operator
+# exclusive -- with both present we cannot tell which the heir
 # meant, so refuse rather than guess.
 if [ -n "$TARGET_FLAG" ]; then
     if [ "$TARGET_FROM_POS" = "1" ]; then
@@ -684,7 +684,7 @@ fi
 
 # ── Target detection (arch + OS) ──────────────────────────────────
 #
-# Picks one of the six targets bundled by the meta-builder (see
+# Picks one of the six targets bundled by the meta disc builder (see
 # docs/CROSS_PLATFORM_META_RFC.md §3 and recovery/UPSTREAM.sha256):
 #
 #   x86_64-unknown-linux-musl        Linux x86_64
@@ -703,10 +703,10 @@ else
 fi
 OS="$(uname -s 2>/dev/null || printf 'Linux\n')"
 
-# IMPORTANT: $TARGET above is the *user-supplied restore directory*
+# IMPORTANT: $TARGET above is the *caller-supplied restore directory*
 # (positional arg 1 or 2).  From here on we need a separate name for
 # the per-platform rust-triple that selects which binary to dispatch
-# to under recovery/bin/.  Stuff the user's TARGET into TARGET_DIR
+# to under recovery/bin/.  Stuff the caller's TARGET into TARGET_DIR
 # and free up TARGET to hold the triple — which the rest of the
 # script reads when computing $RESTORE_BIN / $RUSTIC_BIN paths.
 TARGET_DIR="$TARGET"
@@ -791,18 +791,18 @@ trap _restore_exit_handler EXIT INT TERM
 
 # ── Repo discovery ────────────────────────────────────────────────
 #
-# A restic-format repo is a directory containing keys/ and index/
-# subdirs.  The historical layout placed it directly at
+# A restic-format repository is a directory containing keys/ and
+# index/ subdirs.  The historical layout placed it directly at
 # ${RECOVERY}/repo (used by restore_legacy.sh).  Modern LCSAS
-# archives instead carry per-tenant repos under metadata/<tenant>/
-# on every disc — the "holographic" layout where the meta disc and
-# every data disc both ship the repo metadata for every backed-up
-# tenant.  Probe both layouts, plus any currently-mounted disc.
+# archives instead carry each repository's metadata under
+# metadata/<repo>/ on every disc — the layout where the meta disc
+# and every data disc both ship the repository metadata for every
+# backed-up repository.  Probe both layouts, plus any mounted disc.
 #
-# When multiple candidate repos are found (typical: a multi-tenant
-# archive), the LCSAS_REPO environment variable selects one by
-# tenant name.  If exactly one candidate exists we use it;
-# otherwise we list and exit with a helpful hint.
+# When multiple candidate repositories are found (typical: a
+# multi-repository archive), the LCSAS_REPO environment variable
+# selects one by repository name.  If exactly one candidate exists
+# we use it; otherwise we list and exit with a helpful hint.
 
 REPO=""
 REPO_CANDIDATES=""
@@ -817,14 +817,14 @@ $1"
 # Direct layouts (legacy).
 add_repo_candidate "$RECOVERY/repo"
 add_repo_candidate "$RECOVERY"
-# Holographic layout — per-tenant under metadata/<name>/.
+# Repository metadata — one per repository under metadata/<name>/.
 for cand in "$RECOVERY/metadata"/*; do
     [ -d "$cand" ] || continue
     add_repo_candidate "$cand"
 done
 # Any currently-mounted archive disc (the same directories the
 # pack-search scan below uses).  We add the repos themselves here
-# so a user can run `sh restore.sh` immediately after mounting a
+# so an heir can run `sh restore.sh` immediately after mounting a
 # single data disc — no manual symlink dance required.
 #
 # The set of directories scanned is overridable via LCSAS_MOUNT_DIRS
@@ -841,7 +841,7 @@ LCSAS_MOUNT_DIRS_EFFECTIVE="${LCSAS_MOUNT_DIRS-$LCSAS_MOUNT_DIRS_DEFAULT}"
 export LCSAS_MOUNT_DIRS="$LCSAS_MOUNT_DIRS_EFFECTIVE"
 
 # Opportunistic pack cache.  ON by default — without it the tier-1
-# binary asks the operator to swap discs once per blob in the worst
+# binary asks the heir to swap discs once per blob in the worst
 # case (the v3 blind run took 16 swaps for 3 discs).  With it, the
 # rest of each disc's data/ subtree is drained into a local cache
 # on first contact; subsequent packs from the same disc resolve
@@ -850,8 +850,8 @@ export LCSAS_MOUNT_DIRS="$LCSAS_MOUNT_DIRS_EFFECTIVE"
 # Three equivalent values:
 #   LCSAS_PACK_CACHE_DIR=/abs/path   use that path (advanced)
 #   LCSAS_PACK_CACHE_DIR=auto        auto-allocate under $TMPDIR
-#   LCSAS_PACK_CACHE_DIR=            (empty) disable — disk-
-#                                    constrained operators only
+#   LCSAS_PACK_CACHE_DIR=            (empty) disable — hosts short
+#                                    on disk space only
 #
 # Default when UNSET: auto.  Default when explicitly empty: off.
 if [ "${LCSAS_PACK_CACHE_DIR-auto}" = "auto" ]; then
@@ -876,13 +876,13 @@ for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
 done
 IFS="$OLD_IFS"
 
-# De-duplicate REPO_CANDIDATES by tenant name (the last path
+# De-duplicate REPO_CANDIDATES by repository name (the last path
 # component), keeping the first copy found, then pick one.  Every
-# data disc carries metadata/<tenant>/ for every tenant, so keying on
-# the path listed one tenant once per mounted disc and turned a
-# single-tenant archive into a bogus "Multiple repositories" prompt
-# (#533).  First found = the meta disc's own copy when there is one;
-# --repo NAME resolves the same way, and restore.bat dedupes alike.
+# data disc carries metadata/<repo>/ for every repository, so keying
+# on the path listed one repository once per mounted disc and turned
+# a single-repository archive into a bogus "Multiple repositories"
+# prompt (#533).  First found = the meta disc's own copy when there
+# is one; --repo NAME resolves the same way; restore.bat dedupes alike.
 REPO_CANDIDATES="$(printf '%s\n' "$REPO_CANDIDATES" \
                   | awk -F/ 'NF && !seen[$NF]++')"
 
@@ -893,14 +893,14 @@ REPO_COUNT="$(printf '%s\n' "$REPO_CANDIDATES" | grep -c '^.' || true)"
 case "$REPO_COUNT" in
     0)
         cat >&2 <<EOF
-no restic repo found.
+no restic repository found.
 
 The recovery script looked for a directory with keys/ and index/
 subdirs under:
 
   - $RECOVERY/repo
   - $RECOVERY
-  - $RECOVERY/metadata/*/    (the holographic layout LCSAS uses)
+  - $RECOVERY/metadata/*/    (the layout LCSAS uses)
   - /mnt/metadata/*/         and any other currently-mounted disc
 
 If you have a data disc, insert it and mount it (typically:
@@ -912,11 +912,11 @@ EOF
         REPO="$(printf '%s\n' "$REPO_CANDIDATES" | head -n 1)"
         ;;
     *)
-        # Multi-tenant archive.  Honour LCSAS_REPO if it matches a
+        # Multi-repository archive.  Honour LCSAS_REPO if it matches a
         # candidate's basename (`alpha`, `bravo`, ...); otherwise
-        # prompt the operator to pick one.
+        # prompt the heir to pick one.
         #
-        # REPO_CANDIDATES is newline-separated and a repo path can contain
+        # REPO_CANDIDATES is newline-separated and a repository path can contain
         # spaces (e.g. a disc auto-mounted at /media/user/DISC LABEL 1), so
         # split ONLY on newlines here — default IFS word-splitting would
         # shatter such a path into bogus candidates (issue #364).  The
@@ -988,17 +988,17 @@ printf '[restore.sh] using repository %s\n' "$REPO" >&2
 
 # ── No-recovery-binary guard (issue #225) ─────────────────────────
 #
-# Surface the unrecoverable-state error BEFORE we prompt for a
-# password (otherwise the operator types a secret into the void) and
+# Surface the dead-end error BEFORE we prompt for a
+# password (otherwise the heir types a secret into the void) and
 # BEFORE we walk the rest of the discovery code.  The message lists
 # exactly which tier is missing what, includes a distinct exit code
-# (64), and points at the manual-recovery docs.
+# (64), and points at the manual-restore docs.
 
 EXIT_NO_RECOVERY_BIN=64
 
 # Compute paths the same way the tier-dispatch block does so the
-# diagnostic shows the operator the EXACT path the script looked at.
-# $TARGET is the rust-triple at this point; the user-supplied target
+# diagnostic shows the heir the EXACT path the script looked at.
+# $TARGET is the rust-triple at this point; the caller-supplied target
 # directory was renamed to $TARGET_DIR earlier.
 _RESTORE_BIN_PROBE="$RECOVERY/bin/$TARGET/lcsas-restore"
 _RUSTIC_BIN_PROBE="$RECOVERY/bin/$TARGET/rustic-static"
@@ -1076,7 +1076,7 @@ then
         exit "$EXIT_NO_RECOVERY_BIN"
     fi
     {
-        printf 'ERROR: meta disc lacks all recovery binaries -- verify disc integrity.\n'
+        printf 'ERROR: meta disc lacks all recovery binaries -- check disc integrity.\n'
         printf '\n'
         printf 'Missing components (no tier is runnable on this host):\n'
         printf '  tier 1: %s -- not executable\n' "$_RESTORE_BIN_PROBE"
@@ -1095,10 +1095,10 @@ then
             fi
         fi
         printf '\n'
-        printf 'This meta disc cannot be used for recovery.  Try another\n'
-        printf 'copy of the meta disc (recovery is holographic -- every meta\n'
-        printf 'copy is interchangeable).  If no other copies exist, see\n'
-        printf '%s/docs/RECOVER.txt for manual recovery instructions.\n' "$RECOVERY"
+        printf 'This meta disc cannot be used to restore.  Try another\n'
+        printf 'meta disc: the newest one first, then the one burned\n'
+        printf 'closest in date to the data discs.  If none works, see\n'
+        printf '%s/docs/RECOVER.txt for manual restore instructions.\n' "$RECOVERY"
         printf '\n'
         printf 'Exit code %d = no_recovery_binary_available.\n' \
                "$EXIT_NO_RECOVERY_BIN"
@@ -1121,7 +1121,7 @@ NL='
 # space preflight below [FMA-09] (which is why this block runs BEFORE
 # the password prompt).
 #
-# The meta-disc deliberately carries NO catalog.db (it would always be
+# The meta disc deliberately carries NO catalog.db (it would always be
 # stale at burn time -- see src/lcsas/meta/builder.py).  So we scan
 # every currently-mounted data disc and pick the FRESHEST catalog by
 # mtime, falling back to the recovery tree if nothing better is found.
@@ -1169,7 +1169,7 @@ if [ -n "$catalog_pick" ]; then
     printf '[lcsas-restore] using catalog %s\n' "$catalog_pick" >&2
 fi
 
-# If the operator is using a persistent (non-auto) pack cache, the
+# If the heir is using a persistent (non-auto) pack cache, the
 # locator-catalog cached there may be stale when the source catalog
 # advances (e.g. a new data disc was added to the archive).  Delete
 # the stale copy so the binary re-derives it from the fresh catalog.
@@ -1188,11 +1188,11 @@ fi
 
 # ── Free-space preflight [FMA-09] ─────────────────────────────────
 #
-# The burn side checks staging space before writing a byte; mirror
+# The burn side checks staging-area space before writing a byte; mirror
 # that on the restore side BEFORE the password / disc prompts so a
 # too-small target fails in one obvious line, not via ENOSPC after a
 # long disc-swapping session.  Required bytes come from the catalog:
-# the exact per-tenant pack sum when a sqlite3 CLI is on PATH, else
+# the exact per-repository pack sum when a sqlite3 CLI is on PATH, else
 # the tier-1 binary's --list-pending-packs total (a slight over-
 # estimate when packs live on several discs).  When neither tool can
 # run, the check is SKIPPED -- never block a restore on a missing
@@ -1255,7 +1255,7 @@ if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
     if [ "$required_kb" -eq 0 ] && [ -n "$catalog_pick" ] \
        && [ -x "$_RESTORE_BIN_PROBE" ]; then
         # Parse "Total: N packs, X.X MB across M discs." -> X.X
-        # (output captured -- must not leak onto the operator's tty).
+        # (output captured -- must not leak onto the heir's tty).
         # Tier 1's argument check wants --repo and --password-file even
         # for --list-pending-packs, which reads neither (it exits before
         # the key load); without them it printed usage, exited 2, and
@@ -1307,13 +1307,13 @@ fi
 #
 # Writing into a folder that already holds the heir's OWN files (same
 # names) silently overwrites live data with decades-old archive
-# content -- the one place in the journey where a confused operator
+# content -- the one place in the journey where a confused heir
 # loses CURRENT data rather than just failing a restore.  Warn here,
 # BEFORE the password prompt, so the heir is stopped before typing a
 # secret.
 #
 # A hard refusal would be wrong: re-running into the SAME target is the
-# supported recovery from an interrupted restore (RECOVER.txt RETRY
+# supported way to resume an interrupted restore (RECOVER.txt RETRY
 # SAFETY -- idempotent resume).  So we warn only when the target is
 # non-empty AND lacks our marker file.  After confirmation/creation we
 # drop a hidden zero-byte marker, so every subsequent re-run is silent.
@@ -1350,7 +1350,7 @@ fi
 mkdir -p "$TARGET_DIR"
 : > "$MARKER" 2>/dev/null || true
 
-# ── Password file (now that we know which repo we're decrypting) ──
+# ── Password file (now that we know which repository we decrypt) ──
 
 PWFILE="${LCSAS_PWFILE:-}"
 if [ -z "$PWFILE" ]; then
@@ -1361,7 +1361,7 @@ if [ -z "$PWFILE" ]; then
         printf '%s\n' "$LCSAS_PASSWORD" > "$PWFILE"
     else
         printf 'Password: ' >&2
-        # Disable terminal echo so the passphrase is not shown on screen
+        # Disable terminal echo so the password is not shown on screen
         # or left in scrollback (issue #363).  Save/restore the tty state
         # and emit the newline the (now-invisible) Enter didn't produce.
         # Guarded for the non-tty case (stty -g fails → skip).
@@ -1454,9 +1454,9 @@ tmpfs|ramfs)
     ;;
 esac
 
-# ── Auto-discover other mounted discs for multi-disc recovery ─────
+# ── Auto-discover other mounted discs for multi-disc restore ──────
 #
-# When packs are split across multiple LCSAS volumes, the user may
+# When packs are split across multiple LCSAS volumes, the heir may
 # have several discs mounted simultaneously.  We scan the usual mount
 # points on macOS, Linux, and BSD and pass each as --pack-search to
 # the recovery binary.
@@ -1464,8 +1464,8 @@ esac
 PACK_SEARCH_ARGS=""
 add_pack_search() {
     # $1: a path that might contain restic data.
-    # Skip anything under the meta-disc -- a single-drive user cannot
-    # rely on the meta-disc as a pack source AND eject it.
+    # Skip anything under the meta disc -- a single-drive heir cannot
+    # rely on the meta disc as a pack source AND eject it.
     if [ -n "${META_DISC:-}" ]; then
         case "$1" in
             "$META_DISC"|"$META_DISC"/*) return ;;
@@ -1490,7 +1490,7 @@ for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
     [ -n "$parent" ] && [ -d "$parent" ] || { IFS=":"; continue; }
     for mnt in "$parent"/*; do
         [ -d "$mnt" ] || continue
-        # Don't list the recovery medium itself again.
+        # Don't list the recovery folder itself again.
         [ "$mnt" = "$RECOVERY" ] && continue
         add_pack_search "$mnt"
     done
@@ -1509,10 +1509,10 @@ IFS="$OLD_IFS"
 # $REPO doesn't itself carry a data/ subdir (i.e. it's not a legacy
 # self-contained repo).  Without this, the recovery binary will
 # eventually fail with a less actionable "no packs found" message
-# after the operator has already typed a password.
+# after the heir has already typed a password.
 #
-# EXCEPTION (single-drive flow): when META_DISC is set, the operator
-# started by mounting the meta-disc.  They are about to be asked to
+# EXCEPTION (single-drive flow): when META_DISC is set, the heir
+# started by mounting the meta disc.  They are about to be asked to
 # swap to a data disc -- that hand-off is the recovery binary's job
 # via its framed "Insert the right disc and press ENTER to retry."
 # prompt.  Hard-exiting here would short-circuit that loop with the
@@ -1536,7 +1536,7 @@ EOF
     exit 1
 fi
 
-# Pass the meta-disc path through so the C-side locator excludes it
+# Pass the meta disc path through so the C-side locator excludes it
 # from its own search list and drops cwd outside of it before prompts.
 META_DISC_ARG=""
 if [ -n "${META_DISC:-}" ]; then
@@ -1546,7 +1546,7 @@ fi
 # ── Session log helper ───────────────────────────────────────────
 #
 # Append one ISO-8601 UTC line to $HOME/.lcsas-restore-log so a
-# repeat operator can see what worked last time.  Silently skipped
+# returning heir can see what worked last time.  Silently skipped
 # when $HOME is unset/empty or not writable -- the log is a
 # convenience, never a precondition for restore success.
 #
@@ -1585,12 +1585,12 @@ write_session_log() {
 # Each tier is tried in priority order.  The default behavior is to
 # `exec` the first available binary — once tier 1 starts, the shell
 # is gone and there is no fall-through if tier 1 crashes mid-restore.
-# That matches the bare-minimum recovery story: tier 1 IS the
-# recovery, and it has to work.
+# That matches the bare-minimum restore story: tier 1 IS the
+# restore, and it has to work.
 #
 # Opt-in fallback (LCSAS_TIER_FALLBACK=1): run the tier as a
 # subprocess, capture exit code, and fall through to the next tier
-# on non-zero.  Useful when the operator suspects a bug in a higher
+# on non-zero.  Useful when the heir suspects a bug in a higher
 # tier and wants the script to walk the cascade for them.  Tier 3 is
 # always `exec`'d (it's the last resort — nothing to fall back to).
 
@@ -1605,7 +1605,7 @@ FALLBACK="${LCSAS_TIER_FALLBACK:-0}"
 #
 #   1. Zero-byte file.  POSIX shells "exec" an empty file as a no-op
 #      script that exits 0 -- so without a size check, a corrupted
-#      tier 1 silently claims success and the operator gets nothing.
+#      tier 1 silently claims success and the heir gets nothing.
 #   2. Wrong-arch binary (Linux ELF on macOS, Windows PE on Linux).
 #      `exec` returns 126 ("not executable") and the shell exits;
 #      under default semantics that aborts the cascade entirely.
@@ -1636,7 +1636,7 @@ elif [ -s "$RESTORE_BIN" ] && [ ! -x "$RESTORE_BIN" ]; then
     printf 'START_HERE.txt "IF THE COMPUTER REFUSES TO RUN IT".\n' >&2
 elif [ -x "$RESTORE_BIN" ]; then
     printf '[tier 1] using prebuilt lcsas-restore (%s)\n' "$TARGET" >&2
-    # Drop cwd outside the meta-disc before exec, so the kernel does
+    # Drop cwd outside the meta disc before exec, so the kernel does
     # not hold it through the exec barrier.
     [ -n "${META_DISC:-}" ] && cd / 2>/dev/null || true
     # Build the pack-search / catalog / meta-disc flag list as positional
@@ -1664,9 +1664,9 @@ elif [ -x "$RESTORE_BIN" ]; then
         # later tier can leave a partial tree behind before it rejects
         # the password (issue #384).  Stop with a clear message.
         if [ $tier1_rc -eq 77 ]; then
-            printf '[tier 1] wrong password: a repo key rejected it, and the\n'  >&2
-            printf '        other tiers use the same keys, so not retrying.\n'    >&2
-            printf '        Check the password (and any split-key shares).\n'     >&2
+            printf '[tier 1] wrong password: a repository key rejected it, and the\n'  >&2
+            printf '        other tiers use the same keys, so not retrying.\n'         >&2
+            printf '        Check the password (and any share cards).\n'               >&2
             exit 77
         fi
         printf '[tier 1] exited %d, falling through to tier 2\n' \
@@ -1690,11 +1690,11 @@ fi
 # ── Tier 2: vendored rustic-static (no Python) ────────────────────
 #
 # rustic-static expects ALL packs to live in $REPO/data/ on the local
-# filesystem.  It has no concept of LCSAS's holographic multi-disc
+# filesystem.  It has no concept of LCSAS's multi-disc
 # layout where packs are spread across N data discs that need to be
 # swapped through one drive (issue #227).  Skip tier 2 entirely when
 # the resolved repo doesn't carry its own data/ subtree -- the
-# operator gets the tier-3 prompt (which DOES understand the disc-
+# heir gets the tier-3 prompt (which DOES understand the disc-
 # swap protocol via standalone_restorer.py) instead of a cryptic
 # rustic "pack not found" error after the meta disc is ejected.
 
@@ -1735,8 +1735,8 @@ fi
 # vendored rustic-static so a heir who cannot run -- or does not trust --
 # the binaries we shipped still gets an AUTOMATIC, no-LCSAS-code restore
 # before the Python last resort.  Prefers the per-target stock restic
-# bundled on the meta-volume (recovery/bin/<arch>/restic), then any
-# restic or rustic on the operator's PATH.  Same on-disc-repo requirement
+# bundled on the meta disc (recovery/bin/<arch>/restic), then any
+# restic or rustic on the heir's PATH.  Same on-disc-repository requirement
 # as tier 2 (it cannot drive the multi-disc swap), so skip when $REPO has
 # no local data/.  The fully manual equivalent is
 # recovery/docs/RESTORE_STANDARD_TOOLS.txt.
@@ -1841,7 +1841,7 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         # "--pack-search <root>" per inserted data disc.  Rewrite to
         # tier-3's flag name.
         #
-        # In addition, since the operator typically inserts data discs
+        # In addition, since the heir typically inserts data discs
         # one at a time after the prompt fires (the first disc may not
         # be mounted when restore.sh started), we ALSO pass each
         # LCSAS_MOUNT_DIRS entry directly as --mount-point so the swap
@@ -1877,7 +1877,7 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         # top (guarded by try/ImportError -> _HAS_ZSTD=False, so a
         # truly-missing zstandard does NOT crash the script -- it
         # only fails when a zstd-compressed blob is decompressed).
-        # But every real LCSAS repo IS zstd-compressed (rustic v2
+        # But every real LCSAS repository IS zstd-compressed (rustic v2
         # default), so the guard's fallback path would die on the
         # FIRST pack; tier 3 must find zstandard to succeed.
         #
@@ -1912,28 +1912,28 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
 
         # --interactive on: blind-harness redirects stdin, so isatty()
         # would return false and 'auto' would suppress the prompt.  We
-        # want the prompt FIRED so the agent (or operator) can swap
+        # want the prompt FIRED so the agent (or heir) can swap
         # discs via the canonical LCSAS protocol.
         #
         # Issue #248 -- pass the catalog through so tier-3's framed
-        # prompt can resolve pack hashes to volume labels in the
+        # prompt can resolve pack IDs to volume labels in the
         # SAME shape tier-1 prints.  $CATALOG_ARG was resolved
         # earlier (~line 796) and reused here verbatim; empty when
-        # no catalog is reachable -- the standalone restorer then
+        # no catalog is reachable -- the Python reader then
         # falls back to its legacy "(no catalog available)" line.
         write_session_log 3
         # Issue #240 -- capture tier-3 stderr and echo on failure.
         # Issue #248 -- thread $CATALOG_ARG so tier-3's swap prompt
-        #               resolves pack hashes to volume labels.
+        #               resolves pack IDs to volume labels.
         #
         # Previously this was `exec "$PYBIN" "$PYREST" ...` which
         # replaces the shell process and inherits the Python exit code
         # silently.  When tier-3 crashes at startup (e.g. ImportError,
-        # missing PYTHONPATH), the operator sees only a numeric exit
+        # missing PYTHONPATH), the heir sees only a numeric exit
         # and the traceback vanishes.
         #
         # We now run tier-3 as a subprocess, tee stderr to both the
-        # operator's terminal AND a capture file, then on non-zero exit
+        # heir's terminal AND a capture file, then on non-zero exit
         # replay the captured stderr with a labelled separator so the
         # failure mode is unambiguous in agent transcripts.
         #
@@ -1945,11 +1945,11 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         #    the surrounding brace group).  `tee` then writes one copy
         #    to TIER3_ERR and one copy back to the real stderr (`>&2`).
         #  * POSIX sh has no `PIPESTATUS` / `pipefail`, so the Python
-        #    process's exit code cannot be recovered from `$?` after
+        #    process's exit code cannot be read from `$?` after
         #    the pipeline (that reads `tee`'s rc).  We relay the rc
         #    through a second temp file written by the inner brace
         #    group.
-        #  * stdin is NOT touched -- the operator's disc-swap prompt
+        #  * stdin is NOT touched -- the heir's disc-swap prompt
         #    (`restic_fallback.py::_print_swap_prompt`) still blocks
         #    on stdin in real time; `tee` only sits in front of stderr.
         TIER3_ERR=$(mktemp /tmp/lcsas-tier3-err.XXXXXX)
@@ -1999,12 +1999,12 @@ fi
 cat >&2 <<EOF
 ERROR: no recovery method available.
 
-The bare-minimum recovery path (tiers 1-2) needs ONE of:
+The bare-minimum restore path (tiers 1-2) needs ONE of:
   * a prebuilt $RESTORE_BIN
   * a prebuilt $RUSTIC_BIN
 
 The optional Python tier (tier 3) needs python3 and standalone_restorer.py.
 
-See $RECOVERY/docs/RECOVER.txt for manual recovery instructions.
+See $RECOVERY/docs/RECOVER.txt for manual restore instructions.
 EOF
 exit 1

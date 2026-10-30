@@ -1,6 +1,6 @@
 # Restic Repository Format Specification
 
-> Bundled with LCSAS archive volumes for long-term survivability.
+> Bundled on every LCSAS meta disc for long-term survivability.
 > This document enables a future programmer to write a compatible
 > decoder if the `rustic` and `restic` binaries are no longer available.
 >
@@ -17,7 +17,7 @@ A restic repository stores deduplicated, encrypted backup data.  Files
 are split into variable-length **blobs** (using content-defined chunking),
 which are grouped into **pack files**.  The repository is entirely
 self-contained — given the repository directory and the correct
-password, all data can be recovered.
+password, all data can be restored.
 
 LCSAS archives distribute repository data across optical discs but
 preserve the repository structure exactly.  Each disc contains:
@@ -52,8 +52,9 @@ repository/
 
 ### 3.1 Key Derivation
 
-The user provides a password (or password file).  Key derivation uses
-**scrypt** (RFC 7914) to derive a 64-byte key from the password:
+Whoever opens the repository provides the password (or a password
+file).  Key derivation uses **scrypt** (RFC 7914) to derive a 64-byte
+key from the password:
 
 ```
 derived_key = scrypt(password, salt, N=2^15, r=8, p=1, dkLen=64)
@@ -191,7 +192,7 @@ compression is enabled:
 A pack blob is zstd-compressed **if and only if** its index entry carries
 an `uncompressed_length` field (see §5).  This is the authoritative
 discriminator.  Decompress to exactly `uncompressed_length` bytes, then
-verify the SHA-256 of the result against the blob id.
+check the SHA-256 of the result against the blob id.
 
 **Do NOT infer compression from the leading bytes.**  Restic/Rustic "auto"
 compression stores incompressible blobs *uncompressed*; an archived file
@@ -215,7 +216,7 @@ blob id, the blob is uncompressed; only otherwise attempt decompression.
 ## 5. Index Files
 
 Each file in `index/` is an encrypted JSON document.  Decrypted, it
-maps blob IDs to their pack file locations:
+maps blob IDs to their positions in pack files:
 
 ```json
 {
@@ -342,12 +343,12 @@ key.  Decrypted:
 
 **Frozen, gated contract (FMT-03):** versions 1 and 2 are the *only* formats
 every shipped recovery tier (tier-1 C reader, tier-2 pinned rustic, tier-3
-PurePythonRestorer) can decode. The burn pipeline runs a format preflight
+Python reader) can decode. The burn pipeline runs a format preflight
 (`src/lcsas/burn/format_preflight.py`) that decode-proves each mirror — config
-version + one index + one blob — before any disc is mastered, and **refuses to
-burn** a repo whose live writer has migrated past version 2. Bumping the
-supported set is a deliberate cross-tier change (update
-`SUPPORTED_REPO_VERSIONS` and all three readers together), not an operator-side
+version + one index + one blob — before any volume is mastered, and **refuses
+to burn** a repository whose live writer has migrated past version 2. Bumping
+the supported set is a deliberate cross-tier change (update
+`SUPPORTED_REPO_VERSIONS` and all three readers together), not an owner-side
 rustic upgrade.
 
 ---
@@ -380,7 +381,7 @@ by implementing these steps:
    - Decrypt the `data` field using AES-256-CTR + Poly1305
    - Parse the resulting JSON to get the master `encrypt` and `mac` keys
 
-2. **Decrypt the config** to verify the repository ID and version
+2. **Decrypt the config** to check the repository ID and version
 
 3. **Decrypt all index files** → build a mapping of
    `blob_id → (pack_file, offset, length)`
@@ -389,13 +390,13 @@ by implementing these steps:
    → get the root tree blob ID
 
 5. **Resolve the tree recursively**:
-   - For each tree blob: look up its pack location in the index,
+   - For each tree blob: look up its pack and offset in the index,
      read from the pack file, decrypt, parse JSON
    - For each file node: look up each content blob, decrypt,
      optionally decompress (zstd), concatenate → write file
    - For each directory node: recurse into subtree
 
-6. **Verify** with SHA-256: the blob ID equals the SHA-256 of the
+6. **Check** with SHA-256: the blob ID equals the SHA-256 of the
    decrypted (and decompressed) blob content
 
 ### Required Cryptographic Primitives
@@ -418,18 +419,18 @@ volumes.  The layout per disc is:
 
 ```
 disc_root/
-├── data/                    # Pack files from one or more repos
+├── data/                    # Pack files from one or more repositories
 │   ├── <sha256_hash>        # Flat layout (full hash = filename)
 │   └── ...
-├── metadata/                # Full repo metadata (ALL repos)
+├── metadata/                # Repository metadata (ALL repositories)
 │   └── <repo_id>/
 │       ├── config
 │       ├── index/
 │       ├── keys/
 │       └── snapshots/
-├── catalog.db               # SQLite: which packs are on which discs
+├── catalog.db               # SQLite: which packs are on which volumes
 ├── volume_info.json         # Machine-readable disc manifest
-└── RESTORE_INSTRUCTIONS.txt # Human-readable recovery guide
+└── RESTORE_INSTRUCTIONS.txt # Human-readable restore instructions
 ```
 
 To reconstruct a repository from discs:
@@ -439,4 +440,4 @@ To reconstruct a repository from discs:
    (where `<prefix>` is the first 2 hex chars of the filename)
 3. Point rustic/restic at the temporary directory as a repository
 
-This is exactly what `restore.sh` on the meta-volume automates.
+This is exactly what `restore.sh` on the meta disc automates.

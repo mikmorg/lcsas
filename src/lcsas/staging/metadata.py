@@ -1,7 +1,7 @@
-"""Holographic metadata injection for staging directories.
+"""Repository metadata and disc catalog injection for staging directories.
 
-Every optical disc includes a complete copy of all repository metadata
-and the archive catalog, enabling recovery from any single disc.
+Every data disc includes a complete copy of all repository metadata and
+the catalog, so a restore can start from any single data disc.
 """
 
 from __future__ import annotations
@@ -27,15 +27,16 @@ from lcsas.utils.pack_layout import METADATA_SUBDIRS
 
 _logger = logging.getLogger(__name__)
 
-# Repository subdirectories that constitute "hot" metadata
+# Repository subdirectories that make up the repository metadata
 _METADATA_DIRS = list(METADATA_SUBDIRS)
 _METADATA_FILES = ["config"]
 
-# Empirical lower-bound reserve for a single-repo fixture's holographic
-# injection on TEST_TINY-class media.  The injected payload is dominated
-# by the SQLite catalog skeleton + per-repo Rustic index/snapshots/keys
-# + ISO 9660 filesystem overhead — together that's about 650-700 KB even
-# for a 1-repo / few-packs fixture.  Production deployments don't care
+# Empirical lower-bound reserve for the repository metadata and disc
+# catalog injected for a single-repository fixture on TEST_TINY-class
+# media.  The injected payload is dominated by the SQLite catalog skeleton
+# + each repository's Rustic index/snapshots/keys + ISO 9660 filesystem
+# overhead — together that's about 650-700 KB even for a 1-repository /
+# few-packs fixture.  Production deployments don't care
 # (the LCSASConfig default of 100 MB swamps it), but test fixtures that
 # materialize an ISO on the 2 MB TEST_TINY media MUST budget at least
 # this much in ``metadata_reserve_bytes`` or the staging directory will
@@ -46,12 +47,12 @@ MIN_HOLOGRAPHIC_RESERVE_BYTES = 700_000
 def _share_recovery_lines(
     config: LCSASConfig, escrow_override: tuple[int, int] | None = None
 ) -> list[str]:
-    """Plain-language split-key recovery steps for the heir.
+    """Plain-language steps for the heir to rebuild a split password.
 
     Only emitted when ``config.key_split`` is set (i.e. this archive's
     password was actually split into shares).  Names the K/N in effect
-    and points at the standalone combiner pre-step bundled on the
-    meta-volume.
+    and points at the standalone share combiner pre-step bundled on the
+    meta disc.
 
     ``escrow_override`` is the (K, N) of the recorded split (KEY-08); when
     present it overrides the config values so disc text reflects the split
@@ -61,15 +62,15 @@ def _share_recovery_lines(
         config.key_threshold, config.key_shares
     )
     return [
-        "SPLIT KEY — YOUR PASSWORD IS IN SHARE CARDS",
-        "-------------------------------------------",
+        "SPLIT PASSWORD — YOUR PASSWORD IS IN SHARE CARDS",
+        "------------------------------------------------",
         f"This archive's password is SPLIT into {n} share cards.  You need",
         f"any {k} of them.  Fewer than {k} cards reveal nothing.",
         "",
         "Reconstruct the password in TWO steps:",
         "",
         f"  STEP 1 (pre-step): gather any {k} share cards.  On the",
-        "  META-VOLUME disc, run the share combiner for your machine:",
+        "  META disc, run the share combiner for your machine:",
         "",
         "      recovery/bin/<machine>/lcsas-keyshare <card1> <card2>",
         "",
@@ -80,7 +81,7 @@ def _share_recovery_lines(
         "      python3 keyshare_combine.py <card1> <card2>",
         "",
         "  If python3 is not installed, use the copy bundled on the",
-        "  META-VOLUME disc — <platform> is the folder under",
+        "  META disc — <platform> is the folder under",
         "  recovery/bin/ that names your machine (for most PCs that is",
         "  x86_64-unknown-linux-musl):",
         "",
@@ -100,7 +101,7 @@ def _share_recovery_lines(
         "  When restore.sh shows the  Password:  prompt, type the password",
         "  from STEP 1 (or pass the saved file with --key repo.key).",
         "",
-        "  The single-key restore flow is UNCHANGED — the only extra work",
+        "  The restore itself is UNCHANGED — the only extra work",
         "  is the STEP 1 pre-step that turns your share cards back into the",
         "  password.",
         "",
@@ -144,12 +145,12 @@ class HolographicInjector:
         Args:
             mirror_paths: Dict of {repo_id: mirror_root_path}.
                 Each mirror_root should contain index/, snapshots/, keys/, config.
-            required_repos: Repo IDs that have packs on this volume.  For
-                these, a mirror_root lacking ALL of ``config`` + ``keys``
+            required_repos: IDs of the repositories that have packs on this
+                volume.  For these, a mirror_root lacking ALL of ``config`` + ``keys``
                 (the minimum for the disc to be self-describing) raises
                 :class:`MirrorUnavailableError` instead of being silently
                 skipped; any other missing metadata piece is logged as a
-                warning.  Repos not listed keep the lenient skip.
+                warning.  Repositories not listed keep the lenient skip.
         """
         required = required_repos or set()
         for repo_id, mirror_root in mirror_paths.items():
@@ -176,7 +177,7 @@ class HolographicInjector:
                     copy_tree(src, repo_meta_dir / subdir_name)
                 elif repo_id in required:
                     _logger.warning(
-                        "Repo '%s': metadata dir %s missing from mirror — "
+                        "Repository '%s': metadata dir %s missing from mirror — "
                         "not injected onto this volume.", repo_id, src,
                     )
 
@@ -187,16 +188,16 @@ class HolographicInjector:
                     copy_file(src, repo_meta_dir / fname)
                 elif repo_id in required:
                     _logger.warning(
-                        "Repo '%s': metadata file %s missing from mirror — "
+                        "Repository '%s': metadata file %s missing from mirror — "
                         "not injected onto this volume.", repo_id, src,
                     )
 
     def inject_catalog(self, db_path: Path) -> None:
-        """Copy the SQLite archive catalog to the staging root.
+        """Copy the master catalog to the staging root as the disc catalog.
 
-        The operator's catalog runs in WAL mode (``db/connection.py``) and
-        a byte copy keeps that mode in the file header.  SQLite cannot open
-        a WAL database on read-only media without ``immutable=1`` (it must
+        The owner's master catalog runs in WAL mode (``db/connection.py``)
+        and a byte copy keeps that mode in the file header.  SQLite cannot
+        open a WAL-mode file on read-only media without ``immutable=1`` (it must
         create the ``-shm``/``-wal`` files beside it), so tier 1's
         disc-swap hints and a stock ``sqlite3`` could not read the catalog
         on a burned disc (#534).  The copy is switched to a rollback
@@ -217,7 +218,7 @@ class HolographicInjector:
         """Write a self-describing JSON file to the staging root.
 
         This allows any disc to identify itself and its contents
-        without consulting the database.
+        without consulting the catalog.
 
         Args:
             volume: The volume record.
@@ -226,14 +227,14 @@ class HolographicInjector:
                 ``total_bytes``, ``repositories``, and
                 ``sha256_manifest``.
         """
-        # This file (like the on-disc catalog) is a PRE-BURN snapshot:
+        # This file (like the disc catalog) is written BEFORE the burn:
         # ``status`` is always STAGING here, and the catalog's
         # ``volumes.location`` column for this volume holds the
         # *intended first location* (the configured default at create
-        # time), never a burn confirmation.  Actual burn locations live
-        # in ``volume_copies`` on the operator's hot DB and in the
-        # durable burn receipts (``<db dir>/receipts/``) — deliberately
-        # NO location field is written here.  [BURN-08]
+        # time), never a burn confirmation.  Where each disc actually
+        # went lives in ``volume_copies`` in the owner's master catalog
+        # and in the durable burn receipts (``<db dir>/receipts/``) —
+        # deliberately NO location field is written here.  [BURN-08]
         info: dict[str, Any] = {
             "uuid": volume.uuid,
             "label": volume.label,
@@ -285,9 +286,9 @@ class HolographicInjector:
                 )
 
     def write_standalone_restorer(self) -> None:
-        """Write a self-contained pure-Python restorer to the staging root.
+        """Write the tier 3 Python reader to the staging root.
 
-        This file is generated from ``_aes_pure.py`` and
+        This file (``standalone_restorer.py``) is generated from ``_aes_pure.py`` and
         ``restic_fallback.py`` and has zero dependencies on the
         ``lcsas`` package.  It provides a last-resort restore path
         that works with nothing but Python 3.10+ stdlib.
@@ -304,18 +305,18 @@ class HolographicInjector:
 
         This file is placed on every data disc so that anyone who finds
         a disc alone can understand what it contains and what is needed
-        to recover data from it.
+        to restore data from it.
         """
         text = """\
-LCSAS Data Volume — Restore Instructions
-=========================================
+LCSAS Data Disc — Restore Instructions
+======================================
 
 This disc is part of an LCSAS (Linux Cold Storage Archival Suite) archive.
-It contains encrypted, deduplicated backup pack files and a snapshot of
-the archive catalog database.
+It contains encrypted, deduplicated backup pack files and a copy of the
+archive's catalog.
 
 IMPORTANT: If these instructions are confusing, take ALL the discs plus
-the encryption key to a computer professional.  Any Linux system
+the password to a computer professional.  Any Linux system
 administrator or IT professional should be able to follow these steps.
 See START_HERE.txt on this disc for more context about this archive.
 
@@ -327,19 +328,20 @@ WHAT YOU NEED TO RESTORE
    disc.  The discs DO carry password-locked key files — that is what the
    password opens.  Anyone holding a disc can try password guesses against
    those key files forever, so the password must be long and random.
-   See docs/DISC_CONFIDENTIALITY.md (on the meta-volume) for the full
+   See docs/DISC_CONFIDENTIALITY.md (on the meta disc) for the full
    stolen-disc threat model.
-3. The LCSAS meta-volume disc (contains all required tools), OR:
+3. The LCSAS meta disc (contains all required tools), OR:
    - rustic (https://rustic.cli.rs/) or restic (https://restic.net/)
    - Python 3.10+ and the LCSAS source code
 
-HOW TO RESTORE (with meta-volume)
-----------------------------------
+HOW TO RESTORE (with the meta disc)
+-----------------------------------
 
-If you have the LCSAS meta-volume disc, insert it and mount it,
-then run the interactive restore script.  It will prompt you for
-the repository name (if multi-tenant), the encryption password, and
-will pause for each data disc as it needs them.
+If you have the LCSAS meta disc (use the newest one if you have
+several), insert it and mount it, then run the interactive restore
+script.  It will prompt you for the repository name (if there is
+more than one), the encryption password, and will pause for each
+data disc as it needs them.
 
     sudo mount /dev/sr0 /mnt
     sh /mnt/restore.sh ~/restored/ latest
@@ -348,19 +350,19 @@ When prompted, eject the current disc, insert the named data disc,
 and press Enter.  Repeat until you see "RESTORE COMPLETE".
 
 If you prefer a password file over the interactive prompt, set
-LCSAS_PWFILE=/path/to/key.txt before invoking restore.sh.
+LCSAS_PWFILE=/path/to/password.txt before invoking restore.sh.
 
 HOW TO RESTORE (pure Python — no native binaries needed)
 ---------------------------------------------------------
 
 If no rustic/restic binary works (wrong architecture, missing libs):
 
-  1. Extract ISOs as described below.
+  1. Extract the ISO images as described below.
   2. Assemble a cache directory (copy metadata + packs — see manual steps).
-  3. Run the standalone restorer included on this disc:
+  3. Run the Python reader included on this disc:
 
        python3 standalone_restorer.py --repo /tmp/cache \\
-           --password-file /path/to/keyfile --target /path/to/output
+           --password-file /path/to/password.txt --target /path/to/output
 
   This script requires only Python 3.10+ standard library.
   For zstd-compressed repositories, also install: pip install zstandard
@@ -368,7 +370,7 @@ If no rustic/restic binary works (wrong architecture, missing libs):
 HOW TO RESTORE (manual)
 ------------------------
 
-1. Extract ISOs (multiple options — use whichever works):
+1. Extract the ISO images (multiple options — use whichever works):
        # Option A: mount directly (requires root)
        sudo mount -o loop,ro VOLUME.iso /mnt/disc
        # Option B: use 7z
@@ -387,28 +389,28 @@ HOW TO RESTORE (manual)
            cp "$f" /tmp/cache/data/$prefix/$sha
        done
 
-4. Copy metadata (index, snapshots, keys, config) from any volume:
+4. Copy metadata (index, snapshots, keys, config) from any disc:
        cp -r /tmp/vol1/metadata/REPO_NAME/* /tmp/cache/
 
 5. Restore:
-       rustic restore latest -r /tmp/cache --password-file keyfile --target /output
+       rustic restore latest -r /tmp/cache --password-file password.txt --target /output
 
 DISC CONTENTS
 --------------
 
-  data/            Pack files (encrypted, content-addressable by SHA-256)
-  metadata/        Repository index, snapshot, and key files
-  catalog.db       Archive catalog (SQLite — cumulative as of this volume)
-  volume_info.json Machine-readable volume identity and manifest
-  START_HERE.txt   Plain-language description of this archive
-  PASSWORD_INFO.txt     Which encryption key(s) are needed for each repository
-  CONFIG_SUMMARY.txt  Archive configuration snapshot
-  DISC_CARE.txt    Storage and handling guidance for optical media
-  standalone_restorer.py  Pure-Python restore script (no binaries needed)
+  data/                     Pack files (encrypted, each named by its SHA-256)
+  metadata/                 Repository index, snapshot, and key files
+  catalog.db                Disc catalog (SQLite), as of this disc's burn
+  volume_info.json          Machine-readable volume identity and manifest
+  START_HERE.txt            Plain-language description of this archive
+  PASSWORD_INFO.txt         Which password each repository needs
+  CONFIG_SUMMARY.txt        Archive configuration summary
+  DISC_CARE.txt             Storage and handling guidance for optical media
+  standalone_restorer.py    Python restore script (no binaries needed)
   RESTORE_INSTRUCTIONS.txt  This file
 
 For the encryption/pack file format specification, see
-docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
+docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
 """
         path = self._root / "RESTORE_INSTRUCTIONS.txt"
         with open(path, "w", encoding="utf-8") as f:
@@ -425,21 +427,21 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
 
         This file is written in simple English for a non-technical
         person (e.g. a family member who finds these discs after the
-        archivist's death).
+        owner's death).
 
         Args:
             config: LCSAS configuration with survivability fields.
             escrow_override: (K, N) of the recorded split (KEY-08); when set,
-                overrides the config's K/N in the share-recovery block.
+                overrides the config's K/N in the split-password block.
         """
         owner = config.archive_owner or "the person who created this archive"
         description = config.archive_description or (
             "digital files backed up using LCSAS (Linux Cold Storage Archival Suite)"
         )
         key_hints = config.key_storage_hints or (
-            "The archive creator should have stored the key in a safe place.\n"
+            "The archive's owner should have stored the password in a safe place.\n"
             "  Check for a USB drive, paper printout, or password manager entry\n"
-            "  labeled 'LCSAS', 'backup key', or 'archive key'."
+            "  labeled 'LCSAS', 'backup password', or 'archive password'."
         )
         contact = config.technical_contact or (
             "Any Linux system administrator or IT professional should be\n"
@@ -452,8 +454,9 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
             repo_names = ", ".join(sorted(config.repositories.keys()))
             repo_lines = f"\n  Repositories on these discs: {repo_names}\n"
 
-        # Split-key archives need an extra "reconstruct the password first"
-        # pre-step.  Single-key archives must NOT show share instructions.
+        # Archives with a split password need an extra "rebuild the password
+        # first" pre-step.  Archives whose password is not split must NOT
+        # show share instructions.
         split_block = ""
         if config.key_split:
             k, n = escrow_override if escrow_override is not None else (
@@ -536,33 +539,34 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
                  (or someone who can help you use one).
 
             IMPORTANT: If this is confusing, take ALL the discs and the
-            encryption key to a computer professional.  They do NOT need
+            password to a computer professional.  They do NOT need
             to understand this system — the instructions are on the discs.
 
               Who can help:
               {contact}
 
-            WARNING: WITHOUT THE ENCRYPTION KEY, THE DATA ON THESE DISCS
-            CANNOT BE RECOVERED.  EVER.  BY ANYONE.  Keep the key safe.
+            WARNING: WITHOUT THE PASSWORD, THE DATA ON THESE DISCS
+            CANNOT BE RESTORED.  EVER.  BY ANYONE.  Keep the password safe.
 
             WHAT TO DO NEXT
             ----------------
 
               - Look for a disc labeled "META" — it contains the recovery
                 tools and a script called restore.sh that automates
-                everything.
+                everything.  If you find more than one, use the newest.
 
-              - If you cannot find the meta-volume disc, the file
+              - If you cannot find the meta disc, the file
                 RESTORE_INSTRUCTIONS.txt on this disc has step-by-step
-                manual recovery instructions.
+                manual restore instructions.
 
             ABOUT THIS DISC'S CATALOG
             -------------------------
 
               NOTE: this disc's catalog was written BEFORE this disc
-              was burned.  It cannot list where THIS batch's copies
-              are stored.  Check the printed receipt filed with the
-              discs, or the catalog on any NEWER disc.
+              was burned.  It cannot list where the discs burned with
+              this one are kept.  Check the printed receipt filed with
+              the discs, or the catalog on any NEWER disc (one whose
+              label has a later year or a higher number).
 
             DISC CARE
             ---------
@@ -594,19 +598,19 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
         config: LCSASConfig,
         escrow_override: tuple[int, int] | None = None,
     ) -> None:
-        """Write PASSWORD_INFO.txt mapping repositories to their key requirements.
+        """Write PASSWORD_INFO.txt mapping repositories to their passwords.
 
         Args:
             config: LCSAS configuration with repository definitions.
             escrow_override: (K, N) of the recorded split (KEY-08); when set,
-                overrides the config's K/N in the share-recovery section.
+                overrides the config's K/N in the split-password section.
         """
         lines = [
-            "KEY INFORMATION",
-            "===============",
+            "PASSWORD INFORMATION",
+            "====================",
             "",
             "This file lists each backup repository on these discs and",
-            "which encryption key is needed to access it.",
+            "which password is needed to open it.",
             "",
         ]
 
@@ -620,20 +624,20 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
                     lines.append(f"  Key ID: {repo.encryption_key_id}")
                 if repo.password_file:
                     lines.append(
-                        f"  Key file name: {repo.password_file.name}"
+                        f"  Password file name: {repo.password_file.name}"
                     )
                 else:
-                    lines.append("  Key file: (not specified in config)")
+                    lines.append("  Password file: (not specified in config)")
                 lines.append("")
 
         if config.key_storage_hints:
-            lines.append("WHERE TO FIND THE KEY(S)")
-            lines.append("-----------------------")
+            lines.append("WHERE TO FIND THE PASSWORD(S)")
+            lines.append("-----------------------------")
             lines.append(config.key_storage_hints)
             lines.append("")
 
-        lines.append("NOTE: Each repository requires its own encryption key.")
-        lines.append("If you have only one key file, it likely works for all")
+        lines.append("NOTE: Each repository requires its own password.")
+        lines.append("If you have only one password file, it likely works for all")
         lines.append("repositories (common setup).")
         lines.append("")
         lines.append("ABOUT THE PASSWORD AND THESE DISCS")
@@ -643,7 +647,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
         lines.append("password opens.  Anyone who holds a disc can try password")
         lines.append("guesses against it forever, so the password must be long")
         lines.append("and random.  See docs/DISC_CONFIDENTIALITY.md (on the")
-        lines.append("meta-volume) for the full stolen-disc threat model.")
+        lines.append("meta disc) for the full stolen-disc threat model.")
         lines.append("")
 
         if config.key_split:
@@ -712,10 +716,10 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta-volume disc.
 
         Args:
             config: LCSAS configuration.  When the archive's
-                ``default_media_type`` is a 100 GB BDXL tier
+                ``default_media_type`` is a 100 GB BDXL media type
                 (``BDXL100`` / ``MDISC100``), the DRIVE AVAILABILITY
                 section leads with a hard warning that a BDXL-capable
-                drive is mandatory.  ``None`` (meta-volume callers
+                drive is mandatory.  ``None`` (meta disc callers
                 without config) yields only the generic BDXL caveat.
         """
         uses_bdxl = config is not None and config.default_media_type in (
@@ -766,10 +770,10 @@ MEDIA LONGEVITY
 
   Durability comes from REDUNDANCY and RE-BURN CADENCE (see
   PERIODIC VERIFICATION), not from media choice.  More copies
-  and offsite sets move the needle far more than any disc brand.
+  and more locations move the needle far more than any disc brand.
 
   - M-DISC: manufacturer-rated 1000+ years.  This rating is
-    vendor marketing that cannot be independently verified
+    vendor marketing that cannot be independently confirmed
     (the manufacturer is defunct); the recording layer is
     similar to standard BD-R HTL (50-100 years).  Treat
     M-DISC as a good BD-R HTL, not as immortal.
@@ -788,8 +792,8 @@ PERIODIC VERIFICATION
   - Every 2-5 years: spot-check a few discs
   - Every 5-10 years: full verify of all discs
   - If ANY disc shows read errors, consider re-burning ALL
-    data to fresh media (media in the same batch may be
-    degrading similarly)
+    data to fresh media (discs from the same media batch may
+    be degrading similarly)
 
   Use the LCSAS verify command:
 
@@ -815,7 +819,7 @@ DRIVE AVAILABILITY
   As optical drives disappear from consumer hardware:
 
   - Keep at least one USB Blu-ray drive in your disc binder
-    or storage location.
+    or wherever the discs are kept.
   - 100 GB discs (BDXL / M-DISC 100) require a BDXL-capable
     drive.  Many BD drives are NOT BDXL-capable -- check the
     spec sheet before buying a replacement.

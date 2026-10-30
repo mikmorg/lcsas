@@ -2,7 +2,7 @@
  * catalog.c -- SQLite catalog reader.
  *
  * Wraps the vendored SQLite amalgamation (vendored/sqlite/sqlite3.h).
- * Read-only access: never opens a database for writing.
+ * Read-only access: never opens a catalog for writing.
  *
  * Schema version 5.  See docs/FORMAT.txt for the full schema.
  */
@@ -20,7 +20,7 @@
  * tests/unit/test_schema_v5_columns_frozen.py.  A catalog whose version
  * exceeds this may have renamed/dropped a column tier-1 queries; we warn
  * once and surface query errors as errors (not misses) so the heir is
- * told to prefer same-generation tooling.
+ * told to prefer the tools on the newest meta disc.
  */
 #define LCSAS_TIER1_SCHEMA_MAX 5
 
@@ -144,7 +144,7 @@ warn_schema_skew_once(lcsas_catalog *c)
         fprintf(stderr,
             "[catalog] schema v%d is newer than this recovery binary "
             "(supports v%d). Disc-swap hints may be missing -- prefer the "
-            "restore tooling from the same-generation META disc, or proceed "
+            "restore tools from the NEWEST META disc, or proceed "
             "and insert discs when prompted.\n",
             c->schema_version, LCSAS_TIER1_SCHEMA_MAX);
         c->skew_warned = 1;
@@ -284,13 +284,13 @@ lcsas_catalog_volumes_for_pack(lcsas_catalog *c, long long pack_id,
  * (The Python planner is no different -- restore/planner.py takes the pack
  * list as INPUT, sourced from a rustic dry-run, and uses the catalog only
  * for the pack->disc half.)  Giving the durable tier-1 binary a per-snapshot
- * preview would mean either enlarging the holographically-burned catalog
+ * preview would mean either enlarging the disc catalog
  * with a snapshot_packs table (paid on every disc) or adding a repo
  * index-walk in C89 to the 50-year path -- both taxing the "minimal durable
  * binary" thesis to save disc fetches on a multi-hundred-disc restore.
  * Deliberately declined: correctness is unaffected (the over-broad list
  * still restores the right data) and the per-snapshot optimisation stays a
- * tier-3 (rustic) capability.  See issue #350 for the full analysis. */
+ * tier-2 (rustic) capability.  See issue #350 for the full analysis. */
 int
 lcsas_catalog_print_pending_packs(lcsas_catalog *c)
 {
@@ -302,7 +302,7 @@ lcsas_catalog_print_pending_packs(lcsas_catalog *c)
     double mb;
 
     /* Group all packs by volume label, ordered by pack count desc.
-     * Column names verified from lcsas_catalog_find_pack /
+     * Column names taken from lcsas_catalog_find_pack /
      * lcsas_catalog_volumes_for_pack.  Mirror the DESTROYED filter. */
     rc = sqlite3_prepare_v2(c->db,
             "SELECT v.label, COUNT(p.pack_id), SUM(p.size_bytes) "

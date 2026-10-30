@@ -64,10 +64,10 @@ def copy_tree(src: Path, dst: Path) -> None:
 
     Uses a three-step sequence (copy to temp → move old to backup → move temp
     to dst → delete backup). A crash between the move steps can leave dst absent
-    and backup (.copy_old) present; callers should detect and recover from
+    and backup (.copy_old) present; callers should detect and handle
     leftover .copy_old directories at startup.
 
-    Handles read-only source files/dirs (e.g. from rustic repos).
+    Handles read-only source files/dirs (e.g. from rustic repositories).
     """
     tmp_dst = dst.with_name(dst.name + ".copy_tmp")
     old_dst = dst.with_name(dst.name + ".copy_old")
@@ -130,7 +130,7 @@ def safe_remove_tree(path: Path) -> None:
 
 
 def read_repo_key_ids(repo_path: Path) -> list[str]:
-    """Read encryption key IDs from a rustic/restic repository.
+    """Read key IDs from a rustic/restic repository.
 
     Key IDs are the filenames in the ``keys/`` subdirectory.
 

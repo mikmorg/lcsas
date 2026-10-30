@@ -65,7 +65,7 @@ class RecoveryBuilder:
     # Per-arch default cross-compiler.  Most musl-cross-make
     # toolchains follow the <arch>-linux-musl-gcc pattern, but
     # armv7 uses the hardfloat EABI variant (musleabihf) so the
-    # naming differs.  Operators can always override with --cc.
+    # naming differs.  The owner can always override with --cc.
     _DEFAULT_CC = {
         "x86_64":  "x86_64-linux-musl-gcc",
         "aarch64": "aarch64-linux-musl-gcc",

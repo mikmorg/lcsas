@@ -1,7 +1,7 @@
 /*
  * repo.h -- restic repository reader.
  *
- * Loads the master key by decrypting a key file with the user's
+ * Loads the master key by decrypting a key file with the repository's
  * password; loads index and snapshot lists; provides blob lookup and
  * decryption.
  *
@@ -39,7 +39,7 @@ int lcsas_repo_decrypt(const lcsas_master_key *key,
 /*
  * Distinct failure code returned by lcsas_repo_decrypt on a Poly1305
  * MAC mismatch -- the one decrypt outcome that means "this key did not
- * authenticate the ciphertext" (i.e. wrong password/key), as opposed
+ * authenticate the ciphertext" (e.g. a wrong password), as opposed
  * to the generic -1 it returns for a structurally too-short input
  * where no MAC is ever computed.  Same numeric value as
  * LCSAS_REPO_ERR_WRONG_PASSWORD: at the key-file layer a MAC mismatch
@@ -152,7 +152,7 @@ long lcsas_snapshot_latest(const lcsas_snapshot_list *l);
 long lcsas_snapshot_find(const lcsas_snapshot_list *l, const char *id);
 
 /*
- * Read, decrypt, and verify a blob.  Returns malloc'd buffer in *out
+ * Read, decrypt, and authenticate a blob.  Returns malloc'd buffer in *out
  * (caller frees) and length in *out_len.  Returns 0 on success.
  *
  * `repo_path` is searched first (back-compat single-disc behaviour).

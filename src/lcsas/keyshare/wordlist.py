@@ -7,7 +7,7 @@ the file-order index of each word, so the order is load-bearing and must match
 the published list byte-for-byte.
 
 This module is intentionally self-contained (stdlib only) so the combiner can be
-bundled standalone on the meta-volume.
+bundled standalone on the meta disc.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ if len(WORDLIST) != 1024:  # pragma: no cover - guards against a corrupted bundl
 _WORD_TO_INDEX: dict[str, int] = {word: index for index, word in enumerate(WORDLIST)}
 
 # Every SLIP-0039 word is uniquely identified by its first four letters
-# (docs/SHARE_FORMAT.md §2), so a heir may type just that prefix.  This
+# (docs/SHARE_FORMAT.md §2), so an heir may type just that prefix.  This
 # maps each 4-letter prefix to its word index; a full-word match always wins
 # (exact lookups go through _WORD_TO_INDEX first).  The uniqueness invariant
 # is asserted here so a corrupted bundle fails loudly rather than silently

@@ -273,7 +273,7 @@ def case_interactive_swap() -> int:
 #   - Checking that lcsas-restore --meta-disc <META> excludes a
 #     --pack-search under <META> (no pack found in the data dir
 #     that happens to also be under META).
-#   - Checking that the prompt mentions "eject the RECOVERY disc"
+#   - Checking that the prompt mentions "eject the META disc"
 #     when --meta-disc is set.
 # ──────────────────────────────────────────────────────────────────
 
@@ -326,7 +326,7 @@ def case_single_drive_meta_exclusion() -> int:
 
 def case_single_drive_prompt_mentions_eject() -> int:
     """When --meta-disc is set and an interactive prompt fires, the
-    rendered box mentions 'eject the RECOVERY disc' to coach the
+    rendered box mentions 'eject the META disc' to coach the
     one-drive user."""
     tmp = Path(tempfile.mkdtemp(prefix="lcsas_mdisc_eject_"))
     try:
@@ -363,7 +363,7 @@ def case_single_drive_prompt_mentions_eject() -> int:
                 if not line:
                     break
                 sys.stderr.write(line)
-                if "eject the RECOVERY disc" in line:
+                if "eject the META disc" in line:
                     saw_eject_hint.set()
                 if "is required for the next file" in line and not saw_prompt:
                     saw_prompt = True
@@ -390,7 +390,7 @@ def case_single_drive_prompt_mentions_eject() -> int:
                   file=sys.stderr)
             return 1
         if not saw_eject_hint.is_set():
-            print("FAIL (eject-hint): prompt did not mention 'eject the RECOVERY disc'",
+            print("FAIL (eject-hint): prompt did not mention 'eject the META disc'",
                   file=sys.stderr)
             return 1
         if rc != 0:
@@ -720,7 +720,7 @@ def case_single_drive_script_relocation() -> int:
             print("FAIL (script-relocation): no 'copied recovery binaries' "
                   "message in log", file=sys.stderr)
             return 1
-        if "you may eject the recovery disc" not in log:
+        if "you may eject the meta disc" not in log:
             print("FAIL (script-relocation): no eject-hint in log",
                   file=sys.stderr)
             return 1

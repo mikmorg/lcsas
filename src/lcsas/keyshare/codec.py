@@ -15,7 +15,7 @@ exact, byte-for-byte reversible encoding:
 The length prefix means the trailing zero padding (and any zero bytes that
 are legitimately part of the password) survive the round-trip unambiguously.
 
-This codec lives in the ``keyshare`` package on purpose: the recovery path
+This codec lives in the ``keyshare`` package on purpose: the share combiner
 (Phase 2) decodes a reconstructed master secret back into the password
 standalone, with nothing imported but this package.
 """
@@ -43,7 +43,7 @@ def encode_master_secret(pw: bytes) -> bytes:
     """
     if len(pw) > _MAX_PASSWORD_LEN:
         raise KeyShareError(
-            f"Password is too long to escrow: {len(pw)} bytes "
+            f"Password is too long to split: {len(pw)} bytes "
             f"(maximum {_MAX_PASSWORD_LEN})."
         )
     body = len(pw).to_bytes(_LENGTH_PREFIX_BYTES, "big") + pw
@@ -53,7 +53,7 @@ def encode_master_secret(pw: bytes) -> bytes:
 
 
 def decode_master_secret(ms: bytes) -> bytes:
-    """Recover the original password from a framed master secret.
+    """Extract the original password from a framed master secret.
 
     Inverse of :func:`encode_master_secret`:
     ``decode_master_secret(encode_master_secret(pw)) == pw`` for every

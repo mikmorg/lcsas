@@ -8,11 +8,12 @@ from lcsas.db.models import Repository
 
 # Valid values for ``repositories.status`` (schema v10).
 #
-#   active   — the repo is live; its mirror is expected to be reachable and
-#              `lcsas meta build` requires its Rustic keys to be bundled.
+#   active   — the repository is live; its mirror is expected to be
+#              reachable and `lcsas meta build` requires its Rustic keys to
+#              be bundled.
 #   retired  — the mirror is gone for good.  The catalog row must stay
 #              (its packs are on burned discs and `repo remove --force`
-#              would destroy that pack/snapshot history), but the operator
+#              would destroy that pack/snapshot history), but the owner
 #              has said so explicitly, so the meta-build key gate skips it.
 #
 # Enforced here rather than by a SQL CHECK: SQLite cannot retro-apply a
@@ -30,8 +31,8 @@ def _row_to_repo(row: sqlite3.Row) -> Repository:
     except (IndexError, KeyError):
         created_at = ""
     # status is absent on catalogs older than v10 (including read-only
-    # on-disc catalogs, which are never migrated in place) — those repos
-    # pre-date retirement and are therefore active.
+    # disc catalogs, which are never migrated in place) — those
+    # repositories pre-date retirement and are therefore active.
     try:
         status = row["status"]
     except (IndexError, KeyError):
@@ -82,7 +83,7 @@ def list_repos(conn: sqlite3.Connection) -> list[Repository]:
 def set_repo_status(
     conn: sqlite3.Connection, repo_id: str, status: str
 ) -> Repository:
-    """Set a repository's lifecycle status.  Returns the updated repo.
+    """Set a repository's lifecycle status.  Returns the updated repository.
 
     Raises:
         ValueError: If *status* is not one of :data:`REPO_STATUSES`, or if

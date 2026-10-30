@@ -9,12 +9,12 @@ This script exercises the full LCSAS pipeline against a real filesystem
 Phases:
   1. Generate synthetic test data
   2. Initialize two rustic repositories (family, work)
-  3. Back up test data into both repos
+  3. Back up test data into both repositories
   4. Initialize the LCSAS catalog
-  5. Scan + register packs from both repos
-  6. Run the burn pipeline → produce ISO files (no physical disc)
-  7. Mount ISOs and verify holographic metadata
-  8. Restore from the repos and verify data integrity
+  5. Scan + register packs from both repositories
+  6. Run the burn pipeline → produce ISO images (no physical disc)
+  7. Mount ISO images and check the disc catalog + repository metadata
+  8. Restore from the repositories and check data integrity
   9. Report summary
 
 Prerequisites:
@@ -53,10 +53,11 @@ PASSWORD_FILE = DB_DIR / "test_password.txt"
 MEDIA_TYPE = "TEST_TINY"
 
 # Number of test files per "dataset" directory.
-# Sizes are kept small so packs + holographic metadata fit inside TEST_TINY
-# (1 MB).  The metadata injection (SQLite catalog + per-repo Rustic index /
-# snapshots / keys) is ~700 KB for this fixture, leaving ~300 KB usable for
-# pack data per volume.  Keep total pack data under that budget.
+# Sizes are kept small so packs + the disc catalog and repository metadata
+# fit inside TEST_TINY (1 MB).  The metadata injection (SQLite catalog + each
+# repository's index / snapshot / key files) is ~700 KB for this fixture,
+# leaving ~300 KB usable for pack data per volume.  Keep total pack data
+# under that budget.
 NUM_FILES = 8
 FILE_SIZE_RANGE = (256, 4_000)  # 256 B to 4 KB
 
@@ -190,7 +191,7 @@ def generate_test_data() -> dict[str, dict[str, str]]:
 # ── Phase 2: Initialize Rustic Repositories ──────────────────────────────────
 
 def init_rustic_repos() -> dict[str, Path]:
-    """Initialize two rustic repos (family, work) in the mirror directory.
+    """Initialize two rustic repositories (family, work) in the mirror directory.
 
     Returns:
         Dict of {repo_name: repo_path}
@@ -207,7 +208,7 @@ def init_rustic_repos() -> dict[str, Path]:
         repos[repo_name] = repo_path
 
         if (repo_path / "config").exists():
-            warn(f"{repo_name} repo already initialized — reinitializing")
+            warn(f"{repo_name} repository already initialized — reinitializing")
             # rustic creates read-only files; fix perms before removing
             subprocess.run(["chmod", "-R", "u+rwX", str(repo_path)],
                            capture_output=True)
@@ -245,12 +246,12 @@ def init_rustic_repos() -> dict[str, Path]:
 # ── Phase 3: Back Up Test Data ────────────────────────────────────────────────
 
 def backup_data(repos: dict[str, Path]) -> dict[str, str]:
-    """Back up test data into the rustic repos.
+    """Back up test data into the rustic repositories.
 
     Returns:
         Dict of {repo_name: snapshot_id}
     """
-    banner("Phase 3: Backing Up Test Data into Rustic Repos")
+    banner("Phase 3: Backing Up Test Data into Rustic Repositories")
 
     snapshot_ids: dict[str, str] = {}
     data_map = {
@@ -305,7 +306,7 @@ def init_catalog() -> sqlite3.Connection:
     from lcsas.db.repos import register_repo
     register_repo(conn, "family", "Family Photos", str(MIRROR_DIR / "family"))
     register_repo(conn, "work", "Work Documents", str(MIRROR_DIR / "work"))
-    info("Registered repos: family, work")
+    info("Registered repositories: family, work")
 
     return conn
 
@@ -313,7 +314,7 @@ def init_catalog() -> sqlite3.Connection:
 # ── Phase 5: Scan + Register Packs ───────────────────────────────────────────
 
 def scan_and_register(conn: sqlite3.Connection, repos: dict[str, Path]) -> int:
-    """Scan both rustic repos and register their packs in the catalog.
+    """Scan both rustic repositories and register their packs in the catalog.
 
     Returns:
         Total number of packs registered.
@@ -343,12 +344,12 @@ def scan_and_register(conn: sqlite3.Connection, repos: dict[str, Path]) -> int:
 # ── Phase 6: Burn Pipeline (ISO-only) ────────────────────────────────────────
 
 def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
-    """Run the burn pipeline to produce ISO files (skip physical burn).
+    """Run the burn pipeline to produce ISO images (skip physical burn).
 
     Keeps burning until all unarchived packs are consumed.
 
     Returns:
-        List of ISO file paths created.
+        List of ISO image paths created.
     """
     banner("Phase 6: Burn Pipeline (ISO-only)")
 
@@ -375,7 +376,7 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
     if mt.is_test and has_dvdisaster:
         info("Skipping ECC for test media (dvdisaster minimum image exceeds test capacity)")
 
-    # Build config with repo definitions
+    # Build config with repository definitions
     repo_configs = {
         "family": RepositoryConfig(
             name="family",
@@ -466,7 +467,7 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
 # ── Phase 7: Verify ISO Contents ─────────────────────────────────────────────
 
 def verify_isos(iso_files: list[Path]) -> bool:
-    """Mount each ISO (via loop) and verify its holographic metadata."""
+    """Mount each ISO image (via loop) and check its disc catalog + repository metadata."""
     banner("Phase 7: Verifying ISO Contents")
 
     if not iso_files:
@@ -582,7 +583,7 @@ def test_restore(
     snapshot_ids: dict[str, str],
     original_manifests: dict[str, dict[str, str]],
 ) -> bool:
-    """Restore from rustic repos and verify file integrity against originals."""
+    """Restore from rustic repositories and verify file integrity against originals."""
     banner("Phase 9: Restore & Verify Data Integrity")
 
     all_ok = True
@@ -661,13 +662,13 @@ def create_redundant_copies(
 ) -> list[Path]:
     """Re-burn all archived packs to new volumes for redundancy.
 
-    Manually links existing packs to new volumes and creates ISOs,
-    simulating a second copy for disaster recovery.
+    Manually links existing packs to new volumes and creates ISO images,
+    simulating a second copy of every pack for a restore after a disaster.
 
     Returns:
-        List of redundant ISO file paths.
+        List of redundant ISO image paths.
     """
-    banner("Phase 10: Create Redundant Volume Copies")
+    banner("Phase 10: Create Redundant Volumes")
 
     from lcsas.config.media import MediaType
     from lcsas.db.queries import get_packs_for_volume
@@ -682,7 +683,7 @@ def create_redundant_copies(
 
     # Get all existing verified volumes
     existing_vols = [v for v in list_volumes(conn) if v.status == "VERIFIED"]
-    info(f"Found {len(existing_vols)} verified volumes to create redundant copies of")
+    info(f"Found {len(existing_vols)} verified volumes to duplicate")
 
     redundant_isos: list[Path] = []
 
@@ -691,7 +692,7 @@ def create_redundant_copies(
         if not orig_packs:
             continue
 
-        # Create a new volume as a redundant copy
+        # Create a new volume as a duplicate
         dup_label = f"{orig_vol.label}_DUP"
         dup_vol = create_volume(
             conn,
@@ -706,7 +707,7 @@ def create_redundant_copies(
         # Link same packs to the new volume
         bulk_link_packs(conn, dup_vol.volume_id, [p.pack_id for p in orig_packs])
 
-        info(f"  {dup_label}: {len(orig_packs)} packs (redundant copy of {orig_vol.label})")
+        info(f"  {dup_label}: {len(orig_packs)} packs (duplicate of {orig_vol.label})")
 
         # Find the original ISO's staging dir or use the ISO to copy packs
         # We'll create a new staging directory from the original mirror data
@@ -714,7 +715,7 @@ def create_redundant_copies(
         builder = StagingBuilder(staging_root)
         builder.initialize()
 
-        # Stage each repo's packs from its own mirror data directory.
+        # Stage each repository's packs from its own mirror data directory.
         # stage_packs raises if it can't find every listed pack, so we have
         # to partition by repo_id rather than passing the full pack list
         # to every mirror.
@@ -728,8 +729,8 @@ def create_redundant_copies(
 
         # Create ISO.  Walk the full STAGING → BURNING → BURNED → VERIFIED
         # transition chain so the lifecycle gate accepts each step (no
-        # force=True shortcut, since the e2e test is meant to mirror real
-        # operator flow as closely as possible).
+        # force=True shortcut, since the e2e test is meant to follow the
+        # owner's real flow as closely as possible).
         iso_path = ISO_DIR / f"{dup_label}.iso"
         try:
             xorriso.create_iso(staging_root, iso_path, dup_label)
@@ -756,8 +757,8 @@ def test_iso_restore(
 ) -> bool:
     """Extract packs from ISOs, assemble restore cache, restore, verify.
 
-    Tests restoring from archived ISOs (not from the original mirror),
-    which is the real disaster-recovery scenario.
+    Tests restoring from archived ISO images (not from the original mirror),
+    which is the real after-a-disaster scenario.
     """
     banner("Phase 11: Restore from ISOs & Verify Integrity")
 
@@ -836,11 +837,11 @@ def test_iso_restore(
     if integrity_ok:
         packs_with_copies = sum(1 for h in pack_hashes.values() if len(h) > 1)
         info(f"Pack integrity verified: {len(pack_hashes)} unique packs, "
-             f"{packs_with_copies} with redundant copies")
+             f"{packs_with_copies} on more than one volume")
     else:
         all_ok = False
 
-    # Step 3: For each repo, build restore cache from ISOs and restore
+    # Step 3: For each repository, build restore cache from ISOs and restore
     restore_map = {
         "family": "family_photos",
         "work": "work_docs",
@@ -1011,7 +1012,7 @@ def main() -> int:
     # Phase 9
     restore_ok = test_restore(repos, snapshot_ids, manifests)
 
-    # Phase 10: Create redundant copies
+    # Phase 10: Create redundant volumes
     redundant_isos = create_redundant_copies(conn, iso_files)
     info(f"Redundant ISOs created: {len(redundant_isos)}")
     all_iso_files = iso_files + redundant_isos
@@ -1035,13 +1036,13 @@ def main() -> int:
 
     results = {
         "Test data generation": True,
-        "Rustic repos initialized": bool(repos),
+        "Rustic repositories initialized": bool(repos),
         "Backups completed": bool(snapshot_ids),
         "Packs registered": total_packs > 0,
         "ISOs created": len(iso_files) > 0,
         "ISO verification": isos_ok,
-        "Restore (from repos)": restore_ok,
-        "Redundant copies created": len(redundant_isos) > 0,
+        "Restore (from repositories)": restore_ok,
+        "Redundant volumes created": len(redundant_isos) > 0,
         "Restore (from ISOs)": iso_restore_ok,
         "Redundancy verification": redundancy_ok,
     }

@@ -1,12 +1,12 @@
 /*
- * catalog.h -- SQLite catalog reader for the LCSAS holographic catalog.
+ * catalog.h -- SQLite catalog reader for the LCSAS disc catalog.
  *
- * Provides volume-to-pack lookup: given a pack hash, return the volume
- * label (and disc copy locations) where that pack can be found.  This
- * drives the disc-swap prompts during multi-volume recovery.
+ * Provides volume-to-pack lookup: given a pack ID, return the label of
+ * each volume that holds it (and where its discs are kept).  This
+ * drives the disc-swap prompts during a multi-disc restore.
  *
  * Schema version 5 (see src/lcsas/db/schema.py).  Catalog files are
- * named "catalog.db" and live at the root of every burned volume.
+ * named "catalog.db" and live at the root of every data disc.
  */
 #ifndef LCSAS_CATALOG_H
 #define LCSAS_CATALOG_H
@@ -89,7 +89,7 @@ const char *lcsas_catalog_errmsg(lcsas_catalog *c);
 int lcsas_catalog_error_is_skew(lcsas_catalog *c);
 
 /*
- * Print a one-line summary to stderr for human-readable recovery
+ * Print a one-line summary to stderr for human-readable restore
  * progress (used by the CLI in verbose mode).
  */
 void lcsas_catalog_describe(lcsas_catalog *c);
@@ -98,7 +98,7 @@ void lcsas_catalog_describe(lcsas_catalog *c);
  * Print a "pending packs by disc" summary to stdout, then exit.
  * Groups all packs (catalog-wide) by volume label, sorted by pack
  * count descending.  This is the --list-pending-packs path: it gives
- * the operator a preview of which discs they will need to insert
+ * the heir a preview of which discs they will need to insert
  * before any actual restore begins.
  *
  * Returns 0 on success, -1 on SQL error.

@@ -1,4 +1,4 @@
-"""Tests for the whole-archive Recovery Card generator (UX-09).
+"""Tests for the whole-archive estate card generator (UX-09).
 
 Drives the real CLI ``lcsas estate card`` entry point and the underlying
 ``_estate_card_text`` builder.  Covers:
@@ -149,7 +149,7 @@ def test_cli_non_split_to_stdout(tmp_path: Path, capsys) -> None:
     rc = main(["--config", str(cfg), "estate", "card"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "LCSAS RECOVERY CARD (ARCHIVE)" in out
+    assert "LCSAS ESTATE CARD" in out
     assert "share cards reconstruct" not in out
 
 

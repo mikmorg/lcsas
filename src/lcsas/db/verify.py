@@ -21,9 +21,9 @@ class CatalogValidationResult:
         volume_label: Volume label from the disc catalog, or '' if unknown.
         catalog_pack_count: Number of packs registered for this volume in the catalog.
         disc_pack_count: Number of pack files found on disc.
-        missing_from_disc: Pack SHA-256 hashes listed in the catalog but absent on disc.
-        orphaned_on_disc: Pack SHA-256 hashes found on disc but absent from the catalog.
-        corrupt_on_disc: Pack SHA-256 hashes whose on-disc content does not
+        missing_from_disc: Pack IDs listed in the catalog but absent on disc.
+        orphaned_on_disc: Pack IDs found on disc but absent from the catalog.
+        corrupt_on_disc: Pack IDs whose on-disc content does not
             hash to the filename (content mode only).
         ok: True if the disc and catalog are perfectly in sync.
     """
@@ -46,7 +46,7 @@ class CatalogValidationResult:
 
 
 def _collect_disc_pack_paths(data_dir: Path) -> dict[str, Path]:
-    """Walk the data/ directory and map pack SHA-256 hashes to file paths.
+    """Walk the data/ directory and map pack IDs to file paths.
 
     Handles both flat (data/HASH) and two-level (data/ab/abcdef...) layouts.
     Files that do not look like SHA-256 hashes (64 hex chars) are skipped.
@@ -70,22 +70,22 @@ def _collect_disc_pack_paths(data_dir: Path) -> dict[str, Path]:
 
 
 def _collect_disc_packs(data_dir: Path) -> set[str]:
-    """Walk the data/ directory and collect all pack SHA-256 hashes."""
+    """Walk the data/ directory and collect all pack IDs."""
     return set(_collect_disc_pack_paths(data_dir))
 
 
 def validate_disc(disc_path: Path, *, content: bool = False) -> CatalogValidationResult:
-    """Cross-check the catalog embedded on *disc_path* against its data files.
+    """Cross-check the disc catalog on *disc_path* against its data files.
 
     Opens ``catalog.db`` from the root of *disc_path*, queries the
-    ``volume_packs`` and ``packs`` tables to find which pack SHA-256 hashes
+    ``volume_packs`` and ``packs`` tables to find which pack IDs
     belong to volumes whose data lives on this disc, then walks the ``data/``
     directory to collect the pack files actually present.
 
     Args:
         disc_path: Path to a mounted LCSAS disc (e.g. ``/mnt/disc``).
         content: When True, additionally read every pack file on disc and
-            verify its SHA-256 against the filename hash, reporting
+            check its SHA-256 against the filename hash, reporting
             mismatches in ``corrupt_on_disc``.  Reads the full data
             payload of the disc (BURN-02 spot-check).
 
@@ -107,7 +107,7 @@ def validate_disc(disc_path: Path, *, content: bool = False) -> CatalogValidatio
     if not data_dir.is_dir():
         raise ValueError(
             f"No data/ directory found at {disc_path}. "
-            f"The disc layout may be corrupted or this is not a data volume."
+            f"The disc layout may be corrupted or this is not a data disc."
         )
 
     result = CatalogValidationResult(disc_path=disc_path)
@@ -119,7 +119,7 @@ def validate_disc(disc_path: Path, *, content: bool = False) -> CatalogValidatio
     result.disc_pack_count = len(disc_hashes)
 
     if content:
-        # Read every pack on disc and verify its content hashes to its name.
+        # Read every pack on disc and check its content hashes to its name.
         _logger.info(
             "Content verification: hashing %d pack file(s) on disc...",
             len(disc_pack_paths),
@@ -207,7 +207,7 @@ def validate_disc(disc_path: Path, *, content: bool = False) -> CatalogValidatio
     except sqlite3.OperationalError as exc:
         # Could be locked (another process), corrupted, or permissions
         raise ValueError(
-            f"Could not read catalog from {catalog_db} — database may be locked "
+            f"Could not read catalog from {catalog_db} — the catalog may be locked "
             f"or inaccessible: {exc}"
         ) from exc
     finally:

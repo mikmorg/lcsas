@@ -5,7 +5,7 @@ LCSAS archive healthy across years (or decades) of operation.  The burn
 pipeline is responsible for getting data *onto* discs; these workflows
 are responsible for keeping that on-disc fleet coherent with the
 catalog, reducing slot count as data is pruned, and walking volumes
-through their controlled retirement.
+through their controlled path to deprecation and destruction.
 
 ## The maintenance lifecycle
 
@@ -20,24 +20,24 @@ A healthy LCSAS archive evolves through three overlapping phases:
    `is_pruned=1`.  Over months and years discs become "swiss cheese":
    they still occupy a slot but only a small fraction of their bytes
    are still live data.  `consolidate` is the response — it migrates
-   the surviving packs onto a smaller number of fresh discs so the
-   sparsely-populated originals can be retired.
-3. **Retirement.**  Each physical disc walks through a strict status
+   the surviving packs onto a smaller number of fresh volumes so the
+   sparsely-populated originals can be deprecated.
+3. **Deprecation.**  Each volume walks through a strict status
    ladder.  `STAGING → BURNING → BURNED → VERIFIED → DEPRECATED →
    DESTROYED` (the `VALID_TRANSITIONS` table in
    `src/lcsas/db/volumes.py`).  Each step is its own catalog
    transition with its own audit-trail entry in `volume_events`;
-   nothing is implicit.  In a multi-copy archive, the same volume can
-   be DEPRECATED at one location while still ACTIVE at another (the
-   `volume_copies.status` column tracks per-location lifecycle —
+   nothing is implicit.  In a multi-copy archive, a volume's disc can
+   be DEPRECATED at one location while its disc at another is still
+   ACTIVE (the `volume_copies.status` column tracks per-location lifecycle —
    `src/lcsas/db/schema.py`).
 
-Catalog integrity is the connective tissue.  The "holographic catalog"
+Catalog integrity is the connective tissue.  The disc catalog
 design (`src/lcsas/staging/metadata.py`) means every disc carries a
-full SQLite copy at burn time, so the master catalog can always be
-rebuilt from any reasonably-recent disc set (`lcsas catalog rebuild`).
+full copy of the catalog as of its burn, so the master catalog can always be
+rebuilt from any reasonably recent set of discs (`lcsas catalog rebuild`).
 `lcsas catalog reconcile` reports catalog/physical-state drift (ghost
-volumes that were never burned; durable volumes with no ACTIVE copy),
+volumes that were never burned; durable volumes with no ACTIVE disc),
 and periodic `lcsas catalog validate` against random discs detects
 silent rot — pack files lost to media decay, content that no longer
 hashes to its filename (`--content`), or catalog entries that have
@@ -75,7 +75,7 @@ packs will require, without touching any state.
 **Steps:**
 1. Parse `volume_ids` (positional, one or more) and `--target-media`
    (default `MDISC100`) from the CLI (`build_parser()`).
-2. Open a locked DB connection and ensure schema is current
+2. Open a locked catalog connection and ensure schema is current
    (`cmd_consolidate`).
 3. Resolve `--target-media` to a `MediaType`; reject unknown names
    with the list of valid types (`cmd_consolidate`).
@@ -108,7 +108,7 @@ packs will require, without touching any state.
 
 **Expected outcome:**
 - No catalog mutations.  No status transitions.  No staging.
-- Operator sees pack count, total bytes, and target-disc count to
+- The owner sees pack count, total bytes, and target-volume count to
   decide whether the consolidation is worth running.
 - Exit code 0 on success, 1 only on argument errors (bad media type
   or missing volume).
@@ -118,18 +118,18 @@ packs will require, without touching any state.
   member (`BD25`, `MDISC100`, `BDXL100`, `TEST_TINY` —
   `src/lcsas/config/media.py`).  Bigger targets mean fewer
   output volumes; ECC overhead is media-specific.
-- **Multi-tenant** — packs from multiple repos can be in the same
-  plan; `get_packs_only_on_volumes` does not filter by `repo_id`
-  (`src/lcsas/db/queries.py`).  All repos' active packs
+- **Multi-repository** — packs from several repositories can be in the
+  same plan; `get_packs_only_on_volumes` does not filter by `repo_id`
+  (`src/lcsas/db/queries.py`).  Every repository's active packs
   flow through together.
 - **Optical-drive count** — irrelevant for the plan-only step
   (no I/O).
 - **Multi-copy** — the plan looks at *catalog* membership, not at
-  which physical copies exist.  Operators with `volume_copies` at
+  which discs exist.  An owner with discs at
   multiple locations should consult `volume_copies` separately
   before deprecating.
-- **Recovery tier** — pure HOT-tier operation (reads catalog +
-  Rustic mirror — no disc access).
+- **Storage stage** — the master catalog and the mirror only (reads
+  the master catalog + Rustic mirror — no disc access).
 
 **Test coverage:**
 - `tests/unit/test_consolidate.py::TestVolumeMerger::test_plan_consolidation`
@@ -150,7 +150,7 @@ packs will require, without touching any state.
 
 **Purpose:**  Mark source volumes `CONSOLIDATING`, stage the surviving
 packs into a fresh burn session (one or more new volumes on the target
-media), and hand the operator the session ID to burn.  Does **not**
+media), and hand the owner the session ID to burn.  Does **not**
 deprecate the sources — that is a separate, post-verification step.
 
 **Prerequisites:**
@@ -170,7 +170,7 @@ deprecate the sources — that is a separate, post-verification step.
 2. `--deprecate` and `--execute` are mutually exclusive; reject both
    set (`cmd_consolidate`).
 3. Confirm config is loaded; abort otherwise (`cmd_consolidate`).
-4. Prompt the operator for `yes` confirmation; abort on anything
+4. Prompt the owner for `yes` confirmation; abort on anything
    else, error on `EOFError` (non-interactive stdin —
    `cmd_consolidate`).
 5. Build a `BurnOrchestrator` with the xorriso/dvdisaster runners
@@ -178,10 +178,10 @@ deprecate the sources — that is a separate, post-verification step.
 6. Call `merger.mark_sources_consolidating(volume_ids)` to flip every
    source from `VERIFIED → CONSOLIDATING` *before* staging
    (`cmd_consolidate`, `src/lcsas/consolidate/merger.py`).  This is the
-   crash-recovery marker — if the process dies mid-burn, operators can
+   crash-safety marker — if the process dies mid-burn, the owner can
    see intent in the catalog rather than finding `ACTIVE` volumes that
    look unrelated to any in-flight work.
-7. Build a SHA-256 list from `plan.active_packs` and call
+7. Build a list of pack IDs from `plan.active_packs` and call
    `orch.stage(media_type, pack_sha256s=...)` (`cmd_consolidate`).
 8. **On staging failure:** call `merger.abort_consolidation` to revert
    every source `CONSOLIDATING → VERIFIED`, log with `exc_info`, and
@@ -194,7 +194,7 @@ deprecate the sources — that is a separate, post-verification step.
 - Every source volume is in `CONSOLIDATING` status.
 - A new burn session exists with one or more `STAGING` volumes
   containing exactly the source set's active packs.
-- The operator gets a printed next-step list ending in
+- The owner gets a printed next-step list ending in
   `consolidate --deprecate <ids>`.
 - Source `volume_copies` rows are untouched (deprecation happens
   later).
@@ -204,16 +204,16 @@ deprecate the sources — that is a separate, post-verification step.
 **Variant axes that apply:**
 - **Media type** — bigger targets → fewer volumes_needed but a
   single failed disc loses more data; consider redundancy.
-- **Multi-tenant** — staged volumes carry packs from any number of
-  repos; the holographic injector embeds the full catalog +
-  per-repo Rustic metadata on every disc
+- **Multi-repository** — staged volumes carry packs from any number of
+  repositories; `HolographicInjector` embeds the disc catalog and the
+  repository metadata of every repository on every disc
   (`src/lcsas/staging/metadata.py`).
 - **Optical-drive count** — affects only the downstream `burn`
   step.
 - **Multi-copy** — staging produces new volumes that need their
-  own multi-copy schedule.  The pre-existing copies of the source
+  own multi-copy schedule.  The existing discs of the source
   volumes are not touched here.
-- **Recovery tier** — HOT (catalog) + WARM (staging tree) tiers.
+- **Storage stage** — the staging area (plus the master catalog).
   No optical I/O until the next `burn`.
 
 **Test coverage:**
@@ -235,7 +235,7 @@ deprecate the sources — that is a separate, post-verification step.
 ## `lcsas consolidate --deprecate`
 
 **Purpose:**  After the consolidated target volumes are burned **and
-verified**, retire the original source volumes by transitioning them
+verified**, deprecate the original source volumes by transitioning them
 `CONSOLIDATING → DEPRECATED` (or, if `--execute` was never used,
 `VERIFIED → DEPRECATED`).  This is the final, safe step of the
 two-phase consolidation.
@@ -252,7 +252,7 @@ two-phase consolidation.
   (`VALID_TRANSITIONS` in `src/lcsas/db/volumes.py`).
 
 **Steps:**
-1. Parse args; resolve DB path; build a `VolumeMerger`
+1. Parse args; resolve the catalog path; build a `VolumeMerger`
    (`cmd_consolidate`).
 2. Build the plan as in the dry-run path (the plan is constructed
    before the `--deprecate` branch — `cmd_consolidate`).
@@ -293,18 +293,18 @@ two-phase consolidation.
 
 **Variant axes that apply:**
 - **Media type** — irrelevant.
-- **Multi-tenant** — the safety check spans repos; a pack only on
-  this volume and another repo's volume still counts as replicated.
+- **Multi-repository** — the safety check spans repositories; a pack only
+  on this volume and another repository's volume still counts as replicated.
 - **Optical-drive count** — irrelevant.
 - **Multi-copy** — *critical*: `update_status` changes only the
   `volumes.status` row, not `volume_copies`.  In an N-location
-  archive, each physical copy needs its own
+  archive, each disc needs its own
   `lcsas copy deprecate <volume_label> <location>` /
   `lcsas copy destroy <volume_label> <location>` call (which call
   `deprecate_copy` / `destroy_copy` in
   `src/lcsas/db/volume_copies.py`).  `consolidate --deprecate` does
   **not** propagate the lifecycle to `volume_copies` automatically.
-- **Recovery tier** — HOT only.
+- **Storage stage** — none (master catalog only).
 
 **Test coverage:**
 - `tests/unit/test_consolidate.py::TestVolumeMerger::test_deprecate_sources`
@@ -314,8 +314,8 @@ two-phase consolidation.
   the deprecation-safety refusal at the CLI layer is untested.
 - **Gap:** no test covers the multi-copy fan-out — i.e., what
   happens to `volume_copies` rows when a `DEPRECATED` volume still
-  has `ACTIVE` copies at remote sites.  `consolidate --deprecate` does
-  not call `deprecate_copy`/`destroy_copy` itself; the operator drives
+  has `ACTIVE` discs at other locations.  `consolidate --deprecate` does
+  not call `deprecate_copy`/`destroy_copy` itself; the owner drives
   those via `lcsas copy deprecate`/`destroy`.
 
 **Source refs:**
@@ -330,7 +330,7 @@ two-phase consolidation.
 ## `lcsas catalog validate`
 
 **Purpose:**  Cross-check a mounted (or extracted) LCSAS disc's
-`data/` directory against the `catalog.db` embedded on the same disc.
+`data/` directory against the disc catalog (`catalog.db`) on the same disc.
 Detects missing pack files (media decay, accidental deletion) and
 orphaned pack files (catalog drift, partial restores).  With
 `--content`, additionally reads every pack on disc and flags any whose
@@ -357,7 +357,7 @@ content no longer hashes to its filename (CORRUPT).
       two-level (`data/ab/abcdef…`) layouts (`src/lcsas/db/verify.py`).
    4. If `volume_info.json` exists at the disc root, read its
       `sha256_manifest` for the expected set.  If the manifest is
-      absent or missing, fall back to querying the embedded
+      absent or missing, fall back to querying the disc
       catalog: find every volume that contains any disc-present
       pack, then collect that volume's full pack list
       (`src/lcsas/db/verify.py`).
@@ -367,7 +367,7 @@ content no longer hashes to its filename (CORRUPT).
       not hash to its filename in `corrupt_on_disc`
       (`src/lcsas/db/verify.py`).
 4. Log per-category results (volume label, pack counts, then each
-   missing/orphaned/corrupt SHA) (`cmd_catalog_validate`).
+   missing/orphaned/corrupt pack ID) (`cmd_catalog_validate`).
 5. Return 0 if `result.ok` (all three sets empty), 1 otherwise
    (`cmd_catalog_validate`).
 
@@ -377,22 +377,22 @@ content no longer hashes to its filename (CORRUPT).
   of sync (CORRUPT only appears under `--content`).
 - No mutations to the master catalog or to the disc itself.
 - No automatic `volume_events` recording — if a `VERIFY_FAIL` should
-  be logged, the operator must run `lcsas verify --mark-failed` as a
+  be logged, the owner must run `lcsas verify --mark-failed` as a
   follow-up.
 
 **Variant axes that apply:**
 - **Media type** — works on any disc; the two-level pack layout is
   the convention for large media (MDISC100, BDXL100).
-- **Multi-tenant** — the embedded `catalog.db` contains every repo
-  the disc carries; the query filters by which packs are present, so
-  multi-repo discs are handled transparently.
+- **Multi-repository** — the disc catalog (`catalog.db`) contains every
+  repository the disc carries; the query filters by which packs are
+  present, so multi-repository discs are handled transparently.
 - **Optical-drive count** — one drive at a time; the command takes a
   filesystem path, not a device — mounting/extraction is upstream.
-- **Multi-copy** — validates exactly one physical copy at a time.
-  Each location's copy of the same volume must be validated
+- **Multi-copy** — validates exactly one disc at a time.
+  Each location's disc of the same volume must be validated
   independently.
-- **Recovery tier** — COLD (reads optical media) + HOT (reads its
-  own embedded catalog).  Does not touch the master HOT catalog.
+- **Storage stage** — the discs only (reads the disc and its
+  own disc catalog).  Does not touch the master catalog.
 
 **Test coverage:**
 - `tests/unit/test_db_verify.py::TestCollectDiscPacks` (flat +
@@ -402,7 +402,7 @@ content no longer hashes to its filename (CORRUPT).
   detection.
 - **Gap:** no test verifies that a `VERIFY_FAIL`/`VERIFY_PASS`
   event is *automatically* written to `volume_events` on
-  validate — because the command does not write one.  Operators
+  validate — because the command does not write one.  The owner
   must couple this with `lcsas verify --mark-verified|--mark-failed`.
 
 **Source refs:**
@@ -422,8 +422,8 @@ catalog and physical reality (FMA-01).  Two independent checks:
    correspond to no physical disc; a restore pick list would offer them
    by label and an heir would hunt for a disc that never existed.
    `--fix` deletes them and returns their packs to the unarchived pool.
-2. **Durable volumes without an ACTIVE copy** — status says a disc
-   exists but no copy record backs it (status/copies drift).
+2. **Durable volumes without an ACTIVE disc** — status says a disc
+   exists but no disc record backs it (status/`volume_copies` drift).
    Report-only; never auto-fixed.
 
 **Prerequisites:**
@@ -435,13 +435,13 @@ catalog and physical reality (FMA-01).  Two independent checks:
 1. Argparse routes `lcsas catalog reconcile [--fix] [--yes]
    [--older-than-hours N]` to `cmd_catalog_reconcile`
    (`build_parser()`).  `--older-than-hours` defaults to **24**.
-2. Open a locked DB connection and ensure schema is current
+2. Open a locked catalog connection and ensure schema is current
    (`cmd_catalog_reconcile`).
 3. Query `get_durable_volumes_without_active_copies` and warn for each
    drifted volume (report-only) (`src/lcsas/db/queries.py`).
 4. Query `get_ghost_volumes(conn, older_than_hours)`; if none, log the
    all-clear and return 0 (`src/lcsas/db/queries.py`).
-5. For each ghost, tally per-repo pack/byte stats via
+5. For each ghost, tally per-repository pack/byte stats via
    `get_volume_pack_stats_by_repo` and warn
    (`src/lcsas/db/queries.py`).
 6. Without `--fix`: print the `--fix` hint and return **1** (ghosts
@@ -457,15 +457,15 @@ catalog and physical reality (FMA-01).  Two independent checks:
   own).
 - `--fix` run: ghost volumes deleted, their packs returned to the
   unarchived pool (re-selectable by a later `lcsas stage`).
-- The drift check (durable-without-ACTIVE-copy) is never auto-fixed —
-  it always requires operator investigation.
+- The drift check (durable-without-ACTIVE-disc) is never auto-fixed —
+  it always requires the owner to investigate.
 
 **Variant axes that apply:**
-- **Multi-tenant** — ghost pack stats are reported per repo.
-- **Multi-copy** — the durable-without-ACTIVE-copy check is exactly
+- **Multi-repository** — ghost pack stats are reported per repository.
+- **Multi-copy** — the durable-without-ACTIVE-disc check is exactly
   the multi-copy drift detector: a volume whose `volume_copies` rows
   are all DEPRECATED/DESTROYED (or absent) despite a durable status.
-- **Recovery tier** — HOT only (catalog-only).
+- **Storage stage** — none (master catalog only).
 
 **Source refs:**
 - `build_parser()` (argparse) in `src/lcsas/cli/main.py`
@@ -477,18 +477,18 @@ catalog and physical reality (FMA-01).  Two independent checks:
 
 ## `lcsas catalog rebuild`
 
-**Purpose:**  Reconstruct the master catalog from one or more mounted
-discs' embedded holographic catalogs.  This is the disaster-recovery
-path when the HOT-tier master DB is lost or corrupted — every disc
-carries a self-describing SQLite snapshot, so re-merging any
-sufficiently recent set of them restores the master.
+**Purpose:**  Reconstruct the master catalog from the disc catalogs of
+one or more mounted discs.  This is the rebuild path for when the
+master catalog is lost or corrupted — every disc carries its own
+disc catalog, so re-merging any sufficiently recent set of them
+rebuilds the master.
 
 `--output` is **required**.
 
 **Prerequisites:**
 - One or more disc directories mounted/extracted; each contains a
   readable `catalog.db` at its root (`src/lcsas/db/rebuild.py`).
-- Write access to the `--output` DB path (created if missing, or
+- Write access to the `--output` catalog path (created if missing, or
   merged into if it already exists — `src/lcsas/db/rebuild.py`).
 - SQLite ≥ 3.33.0 is *not* strictly required (the implementation
   uses explicit loops instead of `UPDATE...FROM` —
@@ -512,12 +512,12 @@ sufficiently recent set of them restores the master.
       1. Skip discs lacking `catalog.db`; record the skip in
          `RebuildResult.errors` and bump `discs_skipped`.
       2. Call `_merge_one_disc(...)` (`src/lcsas/db/rebuild.py`).  This
-         ATTACHes the source DB and runs INSERT-OR-IGNORE passes over
+         ATTACHes the source catalog and runs INSERT-OR-IGNORE passes over
          `repositories` (keyed on `repo_id`), `locations` (`name`),
          `packs` (`sha256`), `volumes` (`uuid`), `snapshots`
          (`snapshot_id`), `volume_packs` and `volume_copies` (both
          **ID-translated** via `uuid`/`sha256` joins because
-         auto-increment IDs differ between DBs), plus the audit tables
+         auto-increment IDs differ between catalogs), plus the audit tables
          `volume_events`, `burn_sessions`, and `session_volumes`.
          Because discs are merged newest-first, INSERT-OR-IGNORE keeps
          the freshest catalog's row for each natural key.
@@ -536,37 +536,37 @@ sufficiently recent set of them restores the master.
    4. Append a summary warning if staler discs disagreed on
       `is_pruned`, then return a `RebuildResult`
       (`src/lcsas/db/rebuild.py`).
-4. Log a per-table summary (discs processed/skipped; repos, volumes,
-   packs, snapshots merged) and any `RebuildResult.warnings`
+4. Log a per-table summary (discs processed/skipped; repositories,
+   volumes, packs, snapshots merged) and any `RebuildResult.warnings`
    (`cmd_catalog_rebuild`).
 5. Log each error if any occurred; return 1 in that case, 0
    otherwise (`cmd_catalog_rebuild`).
 
 **Expected outcome:**
 - A populated SQLite catalog at `--output` containing every
-  natural-key-unique repo, volume, pack, snapshot, `volume_pack`,
+  natural-key-unique repository, volume, pack, snapshot, `volume_pack`,
   and `volume_copy` from every successfully-merged disc.
 - Volume statuses converge to the **freshest** observed view, not the
   most-alive one — downgrades stick and destroyed volumes are never
   resurrected (FMA-06).  Resurrection-hazard disagreements surface as
   `RebuildResult.warnings`.
 - Exit 0 if all discs merged; 1 if any disc was skipped or errored
-  (master DB still contains successfully-merged data).
+  (master catalog still contains successfully-merged data).
 
 **Variant axes that apply:**
 - **Media type** — irrelevant.
-- **Multi-tenant** — repos are merged on `repo_id`; multi-tenant
-  archives reconstruct cleanly even when individual discs carry
-  only a subset of the repos.
-- **Optical-drive count** — affects only how quickly operators can
+- **Multi-repository** — repositories are merged on `repo_id`;
+  multi-repository archives reconstruct cleanly even when individual
+  discs carry only a subset of the repositories.
+- **Optical-drive count** — affects only how quickly the owner can
   mount discs sequentially (or in parallel with multiple drives).
   The rebuild itself is single-threaded
   (`src/lcsas/db/rebuild.py`).
 - **Multi-copy** — `volume_copies` is keyed on `(volume_id,
-  location)`, so merging discs from multiple sites coalesces all
-  known copies of each volume.
-- **Recovery tier** — COLD → HOT.  The output is a fresh HOT-tier
-  catalog usable to drive future scan/burn/restore.
+  location)`, so merging discs from multiple locations coalesces all
+  known discs of each volume.
+- **Storage stage** — the discs → the master catalog.  The output is a
+  fresh master catalog usable to drive future scan/burn/restore.
 
 **Test coverage:**
 - `tests/unit/test_db_rebuild.py::TestRebuildMerge::test_merge_simple_volumes`
@@ -586,7 +586,7 @@ sufficiently recent set of them restores the master.
   merge (FMA-06): the fresh DESTROYED status is kept and a warning is
   emitted.  This replaces the old liveness-rank behavior that could
   silently resurrect destroyed records.
-- **Gap:** no test covers merging when the target DB already
+- **Gap:** no test covers merging when the target catalog already
   contains rows the source disagrees with on *non-status* columns
   (e.g. `repositories.name` drift) — INSERT OR IGNORE silently
   retains the existing (newest-first) value.
@@ -604,10 +604,10 @@ sufficiently recent set of them restores the master.
 
 ## `lcsas volume impact`
 
-**Purpose:**  Blast-radius report for a single disc (FMA-08): if
-**every** copy of this volume failed, what becomes unrestorable?
-Answers "is it safe to lose this disc?" before retiring or destroying
-it.
+**Purpose:**  Blast-radius report for a single volume (FMA-08): if
+**every** disc of this volume failed, what becomes unrestorable?
+Answers "is it safe to lose these discs?" before taking them out of
+service or destroying them.
 
 **Prerequisites:**
 - Master catalog reachable (`--db` / config `db_path`).
@@ -620,33 +620,35 @@ it.
    to `cmd_volume_impact` (`build_parser()`).
 2. Resolve the volume by label; error 1 if not found
    (`cmd_volume_impact`).
-3. List all `volume_copies` (active and not); warn if no ACTIVE copy
-   is recorded (the disc may already be lost).  Print each copy's
+3. List all `volume_copies` (active and not); warn if no ACTIVE disc
+   is recorded (the volume may already be lost).  Print each disc's
    location, status, and last-verified age (`cmd_volume_impact`).
-4. Compute the at-risk packs — packs on this volume with **no other
-   live copy** — via `get_at_risk_packs_for_volume`
+4. Compute the at-risk packs — packs on this volume that no live disc
+   of **any other volume** holds — via `get_at_risk_packs_for_volume`
    (`src/lcsas/db/queries.py`).
 5. If nothing is at risk, log "Blast radius: NONE" and return 0.
    Otherwise warn with the total pack count / GB, broken down per
-   repo (`cmd_volume_impact`).
+   repository (`cmd_volume_impact`).
 6. With `--snapshots`, additionally print which snapshots each
-   repo's at-risk packs would break (`_print_snapshot_impact`).
+   repository's at-risk packs would break (`_print_snapshot_impact`).
 
 **Expected outcome:**
 - Pack-level (catalog-only) report always prints; exit 0.
-- "Blast radius: NONE" when every pack has another live copy.
-- Otherwise a per-repo at-risk pack/byte report, plus the
+- "Blast radius: NONE" when every pack is also on a live disc of
+  another volume.
+- Otherwise a per-repository at-risk pack/byte report, plus the
   snapshot-level view when `--snapshots` is given and the mirror is
   reachable.
 - No catalog mutations.
 
 **Variant axes that apply:**
-- **Multi-tenant** — at-risk packs are grouped and reported per repo.
+- **Multi-repository** — at-risk packs are grouped and reported per
+  repository.
 - **Multi-copy** — *central to this command*: "at risk" means no
-  **other** ACTIVE copy of the pack exists anywhere; redundant copies
-  shrink the blast radius to zero.
-- **Recovery tier** — HOT (catalog) always; HOT mirror also read when
-  `--snapshots` is requested.
+  ACTIVE disc of any **other** volume holds the pack; redundancy on
+  other volumes shrinks the blast radius to zero.
+- **Storage stage** — the master catalog always; the mirror is also
+  read when `--snapshots` is requested.
 
 **Source refs:**
 - `build_parser()` (argparse) in `src/lcsas/cli/main.py`
@@ -660,7 +662,7 @@ reporting (FMA-08).
 
 ## Volume lifecycle state transitions
 
-LCSAS encodes the disc lifecycle as a finite-state machine, enforced
+LCSAS encodes the volume lifecycle as a finite-state machine, enforced
 at the catalog layer.  The full transition table is the
 `VALID_TRANSITIONS` dict in `src/lcsas/db/volumes.py`:
 
@@ -674,7 +676,7 @@ DEPRECATED    → DESTROYED
 DESTROYED     → (terminal)
 ```
 
-(`BURNED → BURNING` is the re-burn of a BURNED volume with no copy,
+(`BURNED → BURNING` is the re-burn of a BURNED volume with no disc recorded,
 which a failed post-burn verify left behind before #483.  Since #483 a
 failed verify returns the volume to `STAGING`.)  The CHECK constraint in the schema (currently v10) enumerates
 the legal statuses (`src/lcsas/db/schema.py`).  The `CONSOLIDATING`
@@ -701,7 +703,7 @@ unreplicated (`src/lcsas/db/volumes.py`).  Pass `force=True` to
 override (logged at WARNING — `src/lcsas/db/volumes.py`).
 
 **Per-location lifecycle (`volume_copies`):** independently from the
-volume-wide status above, each physical copy has its own status of
+volume-wide status above, each disc has its own status of
 `ACTIVE`/`DEPRECATED`/`DESTROYED` (`src/lcsas/db/schema.py`).  Helpers
 `deprecate_copy(conn, volume_id, location)` and
 `destroy_copy(conn, volume_id, location)` toggle these
@@ -709,14 +711,14 @@ volume-wide status above, each physical copy has its own status of
 `lcsas copy deprecate <volume_label> <location>` /
 `lcsas copy destroy <volume_label> <location>`.  *The deprecation
 triggered by `consolidate --deprecate` does NOT cascade into
-`volume_copies`* — operators with multi-copy archives must run
+`volume_copies`* — an owner with a multi-copy archive must run
 `lcsas copy deprecate`/`destroy` per location separately.
 
 **Gaps for this section:**
 - No first-class `lcsas destroy <volume>` command exists for the
   *volume-wide* `DEPRECATED → DESTROYED` edge; it is only reachable by
-  directly calling `update_status` (e.g. from a script).  (Per-copy
-  destruction is recorded via `lcsas copy destroy`.)
+  directly calling `update_status` (e.g. from a script).  (Destroying
+  one disc is recorded via `lcsas copy destroy`.)
 - `consolidate --deprecate` does not propagate a volume-level
   DEPRECATED status to the matching `volume_copies` rows.
 - No test asserts that a forced `DESTROYED → *` (terminal-state)
@@ -755,12 +757,12 @@ and `update_status` (`src/lcsas/db/volumes.py`).  Queries:
 **Gaps:**
 - `lcsas catalog validate` does **not** automatically record a
   `VERIFY_PASS`/`VERIFY_FAIL` against the validated volume.  An
-  operator running it as a periodic media-rot check must follow up
+  owner running it as a periodic media-rot check must follow up
   with `lcsas verify --mark-verified`/`--mark-failed` to leave an
   audit trail.
 - `lcsas catalog rebuild` does not record a synthetic event marking
-  "catalog reconstructed from disc set" — there is no first-class
-  way to query when the master DB was last rebuilt other than its
+  "catalog reconstructed from discs" — there is no first-class
+  way to query when the master catalog was last rebuilt other than its
   filesystem mtime.
 
 **Source refs:**

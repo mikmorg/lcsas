@@ -1,30 +1,32 @@
-# Workflows: Meta-Volume (Self-Contained Rescue Disc)
+# Workflows: Meta Disc (Self-Contained Recovery Tools)
 
-The **meta-volume** is the *entry point* for worst-case LCSAS recovery: the
+The **meta disc** is the *entry point* for a worst-case LCSAS restore: the
 machine that owned the archive is gone, the operating system is gone, the
 LCSAS source tree is gone, and the only artifacts left in the world are:
 
-1. One or more **data discs** (BD25 / MDISC100 / BDXL100 — each holographic).
-2. The **meta-disc** described in this document.
-3. The operator's **encryption key file** (deliberately *not* on any disc).
+1. One or more **data discs** (BD25 / MDISC100 / BDXL100 — each with its
+   own disc catalog).
+2. The **meta disc** described in this document.
+3. The owner's **password** (deliberately *not* on any disc).
 
-A meta-disc is a single optical (typically BD25 or MDISC100 — the smaller
-media tiers, because the rescue payload is small) that carries *everything
-else needed to drive a restore*: per-target static tool binaries
+A meta disc is a single optical disc (typically BD25 or MDISC100 — the
+smaller media types, because the recovery tools are small) that carries
+*everything else needed to drive a restore*: per-target static tool binaries
 (`rustic`, `xorriso`, `python3`, `dvdisaster` if present, plus our own
-tier-1 binaries), the LCSAS Python source tree, a pure-Python
-`standalone_restorer.py` fallback, the `restore_single_drive.py` stdlib
+tier-1 binaries), the LCSAS Python source tree, the Python reader
+`standalone_restorer.py` (tier 3), the `restore_single_drive.py` stdlib
 helper, the SLIP-0039 `keyshare_combine.py`, and the orchestrating
 `restore.sh` / `restore_auto.sh` / `restore.bat` scripts.
 
 **LCSAS discs are NOT bootable.** The Alpine live-boot stack was removed
 (BOOT-07); there is no kernel, no initramfs, no GRUB/isolinux, and no boot
-wizard. The meta-disc is a *data ISO* that the operator mounts on an
-existing OS. If the target machine has no OS at all, the operator uses any
-other computer — a friend's, a library's, a second-hand laptop — or makes a
-live Linux USB and runs `restore.sh` from there (see `recovery/docs/BOOT.txt`).
+wizard. The meta disc is an ordinary *non-bootable* disc that the heir
+mounts on an existing OS. If the target machine has no OS at all, the heir
+uses any other computer — a friend's, a library's, a second-hand laptop —
+or makes a live Linux USB and runs `restore.sh` from there (see
+`recovery/docs/BOOT.txt`).
 
-The meta-disc *deliberately omits* `catalog.db`; see
+The meta disc *deliberately omits* `catalog.db`; see
 [Catalog Policy](#catalog-policy-why-no-catalogdb-on-the-meta-disc) below.
 
 Sibling docs: [`docs/workflows/recovery-toolchain.md`](recovery-toolchain.md)
@@ -35,25 +37,25 @@ Sibling docs: [`docs/workflows/recovery-toolchain.md`](recovery-toolchain.md)
 
 ## Table of Contents
 
-- [Workflow: `lcsas meta build` — produce the meta-volume tree](#workflow-lcsas-meta-build--produce-the-meta-volume-tree)
-- [Cross-platform recovery (the six APPROVED_TARGETS)](#cross-platform-recovery-the-six-approved_targets)
-- [Inventory: what lives on a meta-disc](#inventory-what-lives-on-a-meta-disc)
-- [Workflow: `lcsas meta verify` — audit a built meta-volume](#workflow-lcsas-meta-verify--audit-a-built-meta-volume)
-- [Workflow: Single-drive bootstrap (meta-disc occupies the only drive)](#workflow-single-drive-bootstrap-meta-disc-occupies-the-only-drive)
-- [Catalog policy: why no `catalog.db` on the meta-disc](#catalog-policy-why-no-catalogdb-on-the-meta-disc)
-- [Workflow: Refresh the meta-disc when LCSAS source changes](#workflow-refresh-the-meta-disc-when-lcsas-source-changes)
+- [Workflow: `lcsas meta build` — produce the meta disc tree](#workflow-lcsas-meta-build--produce-the-meta-disc-tree)
+- [Cross-platform recovery tools (the six APPROVED_TARGETS)](#cross-platform-recovery-tools-the-six-approved_targets)
+- [Inventory: what lives on a meta disc](#inventory-what-lives-on-a-meta-disc)
+- [Workflow: `lcsas meta verify` — audit a built meta disc](#workflow-lcsas-meta-verify--audit-a-built-meta-disc)
+- [Workflow: Single-drive bootstrap (meta disc occupies the only drive)](#workflow-single-drive-bootstrap-meta-disc-occupies-the-only-drive)
+- [Catalog policy: why no `catalog.db` on the meta disc](#catalog-policy-why-no-catalogdb-on-the-meta-disc)
+- [Workflow: Refresh the meta disc when LCSAS source changes](#workflow-refresh-the-meta-disc-when-lcsas-source-changes)
 - [Variant axes summary](#variant-axes-summary)
 - [Test coverage summary](#test-coverage-summary)
 
 ---
 
-## Workflow: `lcsas meta build` — produce the meta-volume tree
+## Workflow: `lcsas meta build` — produce the meta disc tree
 
-**Purpose:** Assemble the self-contained rescue volume — bundled tools,
+**Purpose:** Assemble the self-contained meta disc — bundled tools,
 LCSAS source, documentation, restore scripts, the recovery toolchain
-artifacts (per-target tier-1/2/3 binaries), optional Rustic per-repo
+artifacts (per-target tier-1/2/3 binaries), optional repository
 metadata, and the survivability docs — into an output directory ready
-for ISO mastering.
+for mastering into an ISO image.
 
 **Synopsis:**
 
@@ -76,7 +78,7 @@ subcommand. `--output` / `-o` is required.
   package.
 - Optional `--config TOML` so survivability fields populate
   `START_HERE.txt`, `PASSWORD_INFO.txt`, and `CONFIG_SUMMARY.txt`.
-- Optional `--db` (or `config.db_path`) to seed per-repo Rustic metadata.
+- Optional `--db` (or `config.db_path`) to seed the repository metadata.
 - The cross-built recovery binaries under `recovery/bin/<arch>/` and the
   pinned upstream cache (run `make build-recovery` — which also runs the
   keyshare cross-builds — and `sh recovery/scripts/fetch_upstream.sh`) for a
@@ -88,7 +90,7 @@ subcommand. `--output` / `-o` is required.
 
 1. CLI parses `lcsas meta build` and dispatches to `cmd_meta_build`
    (`src/lcsas/cli/main.py`), which resolves `--output`, optional
-   `--config`, and the catalog DB, then constructs `MetaVolumeBuilder`.
+   `--config`, and the catalog, then constructs `MetaVolumeBuilder`.
 2. `MetaVolumeBuilder.build` creates the output directory, drops a
    `.incomplete` marker, and runs each stage in order
    (`MetaVolumeBuilder.build`, `src/lcsas/meta/builder.py`):
@@ -101,31 +103,34 @@ subcommand. `--output` / `-o` is required.
    4. `_bundle_dvdisaster_source` — bundle the pinned dvdisaster RS03
       source tarball (the format spec is only re-implementable against
       the source it transcribes; gated by `--allow-no-dvdisaster-source`).
-   5. `_bundle_standalone_restorer` — generate the pure-Python single-file
-      `standalone_restorer.py` at the meta root (tier-3 fallback).
+   5. `_bundle_standalone_restorer` — generate the single-file Python
+      reader `standalone_restorer.py` at the meta root (tier 3).
    6. `_bundle_restore_helper` — copy `restore_single_drive.py` into
       `tools/`.
    7. `_bundle_keyshare_combiner` — copy the stdlib-only SLIP-0039
-      `keyshare_combine.py` (+ wordlist) for the split-key heir pre-step.
-   8. `_bundle_metadata` — if a catalog DB was provided, copy per-repo
-      Rustic `config`, `keys`, `index`, and `snapshots` into
-      `metadata/<repo_id>/`. This stage *does not* copy `catalog.db` —
-      see the policy section. A repo whose `mirror_path` is unreachable
-      is **skipped, not fatal** (a stale catalog row must not block a
-      rescue disc) — but never silently (#435): the skip is warned with
-      the repo id and path, counted in the build summary
+      `keyshare_combine.py` (+ wordlist) for the heir's share-combining
+      pre-step when a password was split.
+   8. `_bundle_metadata` — if a catalog was provided, copy each
+      repository's metadata (Rustic `config`, `keys`, `index`, and
+      `snapshots`) into `metadata/<repo_id>/`. This stage *does not* copy
+      `catalog.db` — see the policy section. A repository whose
+      `mirror_path` is unreachable is **skipped, not fatal** (a stale
+      catalog row must not block a meta disc) — but never silently (#435):
+      the skip is warned with the repository ID and path, counted in the
+      build summary
       (`Rustic metadata bundled for N of M catalogued repo(s)`), and
       recorded on the disc under `volume_info.json` →
       `repo_metadata.not_bundled`. Reachability is probed in a
       short-lived child process with a 5 s bound, so a stale NFS/CIFS
       mount costs five seconds instead of hanging the build (the
-      catalog-side twin of #427). This stage also records, per repo,
-      whether it is `retired` and how many of its packs sit on volumes
-      that still exist — the two facts the key gate below decides on.
+      catalog-side twin of #427). This stage also records, per
+      repository, whether it is `retired` and how many of its packs sit
+      on volumes that still exist — the two facts the key gate below
+      decides on.
    9. `_bundle_recovery_toolchain_artifacts` — copy the recovery `bin/`
       tree (per-target `lcsas-restore`, `rustic-static`, **`lcsas-ecc`**,
       and the bundled CPython) and merge `recovery/MANIFEST.sha256`
-      onto the volume (`_bundle_upstream_binaries` + `_bundle_tier1_binaries`).
+      onto the meta disc (`_bundle_upstream_binaries` + `_bundle_tier1_binaries`).
    10. `_write_restore_script` / `_write_restore_auto_script` — render
        `recovery/scripts/restore.sh` and `restore_auto.sh` (plus
        `restore.bat` on the Windows path) from the in-source script
@@ -134,8 +139,8 @@ subcommand. `--output` / `-o` is required.
        and a plain-text twin.
    12. `_write_volume_info` — write `volume_info.json` with `type: "meta"`,
        bundled-tool list, tool versions, timestamps, and `repo_metadata`
-       (which catalogued repos' keys this disc does — and does not —
-       carry).
+       (which catalogued repositories' keys this disc does — and does
+       not — carry).
    13. `_write_start_here` — write `START_HERE.txt`, plus `PASSWORD_INFO.txt`,
        `CONFIG_SUMMARY.txt` (config builds), and `DISC_CARE.txt` via the
        `HolographicInjector`.
@@ -147,10 +152,10 @@ subcommand. `--output` / `-o` is required.
    every gap grouped by `APPROVED_TARGET` — unless `--allow-incomplete`
    was passed (single-arch developer builds).
 5. The output directory is then handed to `xorriso` (out of band; not
-   part of `meta build` itself) to master into an ISO, optionally with
-   DVDisaster RS03 ECC, and burned the same way as data discs.
+   part of `meta build` itself) to master into an ISO image, optionally
+   with DVDisaster RS03 ECC, and burned the same way as data discs.
 
-**Expected outcome:** `args.output` contains a complete meta-volume tree,
+**Expected outcome:** `args.output` contains a complete meta disc tree,
 no `.incomplete` marker, and a `volume_info.json` whose `type` field is
 `"meta"`. With a populated recovery `bin/` tree the RST-05 gate passes.
 The directory is ready to feed to `xorriso` for ISO mastering.
@@ -159,11 +164,11 @@ The directory is ready to feed to `xorriso` for ISO mastering.
 - **Media type:** BD25 or MDISC100 in practice — the meta payload is small
   (a few hundred MB of tools + source + docs + per-target binaries).
 - **Optical drive count:** *biggest behavior difference* at restore time.
-  With multiple drives, leave the meta-disc in one drive and rotate data
+  With multiple drives, leave the meta disc in one drive and rotate data
   discs through the other(s); with a single drive, self-extract the
-  meta-disc first — see [Single-drive bootstrap](#workflow-single-drive-bootstrap-meta-disc-occupies-the-only-drive).
-- **Recovery tier:** the meta-disc is always tier-2 cold storage; each
-  refresh re-bundles tools and source from a hot project tree.
+  meta disc first — see [Single-drive bootstrap](#workflow-single-drive-bootstrap-meta-disc-occupies-the-only-drive).
+- **Storage stage:** the meta disc is always one of the discs; each
+  refresh re-bundles tools and source from the current project tree.
 - **Completeness:** default builds enforce the full per-target contract
   (RST-05); `--allow-incomplete` permits a single-arch dev build.
 
@@ -173,9 +178,9 @@ The directory is ready to feed to `xorriso` for ISO mastering.
   present, START_HERE / disc-care files generated, `standalone_restorer.py`
   shipped, `restore_single_drive.py` shipped, single-drive defaults wired,
   no `.incomplete` marker after build; `TestBundleUpstreamBinaries`).
-- `tests/integration/test_meta_volume_restore.py` end-to-end (build
-  meta-volume, nuke everything else, restore using ONLY the meta-volume's
-  bundled tools, verify byte-for-byte file hashes).
+- `tests/integration/test_meta_volume_restore.py` end-to-end (build a
+  meta disc, nuke everything else, restore using ONLY the meta disc's
+  bundled tools, check byte-for-byte file hashes).
 - Contract gates: `tests/unit/test_doc_command_contract.py`
   (`test_meta_build_flags_in_docs_exist`) holds every doc-quoted
   `meta build` option to the real subparser.
@@ -189,9 +194,9 @@ The directory is ready to feed to `xorriso` for ISO mastering.
 
 ---
 
-## Cross-platform recovery (the six APPROVED_TARGETS)
+## Cross-platform recovery tools (the six APPROVED_TARGETS)
 
-A complete meta-volume bundles, **per approved target**, the full tier
+A complete meta disc bundles, **per approved target**, the full tier
 stack: tier-1 `lcsas-restore` (our C89 reader), tier-2 `rustic-static`,
 tier-3 a bundled CPython, and the in-house **`lcsas-ecc`** RS03
 verify/repair tool (FMT-01). `required_meta_paths()`
@@ -218,10 +223,10 @@ lcsas meta build --output ./meta  # bundle every target with a cached binary
 ```
 
 `fetch_upstream.sh` verifies SHA-256 against `recovery/UPSTREAM.sha256` and
-short-circuits when the cache is warm; air-gapped operators can rsync the
+short-circuits when the cache is warm; air-gapped owners can rsync the
 cache between hosts.
 
-**At recovery time**, `recovery/scripts/restore.sh` auto-detects
+**At restore time**, `recovery/scripts/restore.sh` auto-detects
 `(uname -s, uname -m)` and picks the right `recovery/bin/<arch>/` subtree.
 Override with `$LCSAS_TARGET=<arch>` if auto-detection misfires (chroot,
 foreign-arch emulator, unusual uname). See
@@ -246,7 +251,7 @@ but are not part of the required-contents contract. See
 
 ---
 
-## Inventory: what lives on a meta-disc
+## Inventory: what lives on a meta disc
 
 Authoritative sources: `MetaVolumeBuilder.build` and the layout docstring
 on `MetaVolumeBuilder` (`src/lcsas/meta/builder.py`), plus the
@@ -259,31 +264,32 @@ required-contents contract (`required_meta_paths`,
 | `tools/bin/xorriso` | `_bundle_tools` | ISO authoring / extraction. |
 | `tools/bin/dvdisaster` (optional) | `_bundle_tools` | RS03 ECC tool (only if found on PATH). |
 | `tools/bin/python3` + `tools/lib/...` | `_bundle_tools` | Portable CPython interpreter + stdlib + shared libs. |
-| `tools/lib/python/zstandard/` (optional) | `_bundle_tools` | Native zstd decoder for rustic v2 repos. |
+| `tools/lib/python/zstandard/` (optional) | `_bundle_tools` | Native zstd decoder for rustic v2 repositories. |
 | `tools/restore_single_drive.py` | `_bundle_restore_helper` | stdlib-only single-drive disc-swap helper. |
 | `lcsas/src/lcsas/` | `_bundle_source` | LCSAS Python package source (no external deps). |
 | `docs/`, `README.md`, `pyproject.toml` | `_bundle_docs` | Project docs including the restic-format spec for last-resort decoding. |
 | `recovery/scripts/restore.sh`, `restore_auto.sh`, `restore.bat` | `_write_restore_script` / `_write_restore_auto_script` | Tier dispatchers (single-drive default + scripted + Windows). |
-| `standalone_restorer.py` | `_bundle_standalone_restorer` | Pure-Python restic decoder (tier-3) when no binary works. |
-| `keyshare_combine.py` | `_bundle_keyshare_combiner` | stdlib-only SLIP-0039 share combiner (split-key heir pre-step). |
+| `standalone_restorer.py` | `_bundle_standalone_restorer` | The Python reader (tier 3), for when no binary works. |
+| `keyshare_combine.py` | `_bundle_keyshare_combiner` | stdlib-only SLIP-0039 share combiner (heir pre-step when a password was split). |
 | `README_RESTORE.md` / `README_RESTORE.txt` | `_write_readme` / `_write_readme_txt` | Human-readable restore instructions. |
-| `START_HERE.txt`, `PASSWORD_INFO.txt`, `CONFIG_SUMMARY.txt`, `DISC_CARE.txt` | `_write_start_here` (via `HolographicInjector`) | Plain-language guidance for non-technical recovery operators. |
+| `START_HERE.txt`, `PASSWORD_INFO.txt`, `CONFIG_SUMMARY.txt`, `DISC_CARE.txt` | `_write_start_here` (via `HolographicInjector`) | Plain-language guidance for non-technical heirs. |
 | `recovery/bin/<target>/lcsas-restore` | `_bundle_tier1_binaries` | Tier-1 C89 reader, per APPROVED_TARGET (`.exe` on Windows). |
 | `recovery/bin/<target>/rustic-static` | `_bundle_upstream_binaries` | Tier-2 pinned upstream rustic, per target. |
 | `recovery/bin/<target>/lcsas-ecc` | `_bundle_tier1_binaries` | **FMT-01:** in-house RS03 verify/repair, per target. Required, not optional. |
 | `recovery/bin/<target>/python/...` | `_bundle_upstream_binaries` | Tier-3 bundled CPython tree, per target. |
 | `recovery/MANIFEST.sha256` | merged by `_bundle_recovery_toolchain_artifacts` | SHA-256 of the bundled recovery source/scripts (audited by `lcsas meta verify`). |
-| `metadata/<repo_id>/{config,keys,index,snapshots}` (optional) | `_bundle_metadata` | Per-repo Rustic state that *doesn't* go stale (keys decrypt any future pack). A repo whose mirror was unreachable at build time is absent here — and named in the build summary and in `volume_info.json` (#435), and fails the build outright if it is a live repo with packs on discs (#437). |
-| `volume_info.json` | `_write_volume_info` | `type: "meta"` + bundled-tool inventory + tool versions + `repo_metadata` (repos whose keys are / are not on this disc, each with its `retired` flag and `packs_on_discs` count, plus `acknowledged` — whether the build was waved through with `--allow-missing-metadata`). |
+| `metadata/<repo_id>/{config,keys,index,snapshots}` (optional) | `_bundle_metadata` | Per-repository Rustic state that *doesn't* go stale (keys decrypt any future pack). A repository whose mirror was unreachable at build time is absent here — and named in the build summary and in `volume_info.json` (#435), and fails the build outright if it is a live repository with packs on discs (#437). |
+| `volume_info.json` | `_write_volume_info` | `type: "meta"` + bundled-tool inventory + tool versions + `repo_metadata` (repositories whose keys are / are not on this disc, each with its `retired` flag and `packs_on_discs` count, plus `acknowledged` — whether the build was waved through with `--allow-missing-metadata`). |
 | **NOT present:** `catalog.db` | — | Deliberately absent — see [Catalog policy](#catalog-policy-why-no-catalogdb-on-the-meta-disc). |
 | **NOT present:** any kernel / initramfs / GRUB / isolinux / boot wizard | — | LCSAS discs are NOT bootable (the Alpine live stack was removed, BOOT-07). |
 
 ---
 
-## Workflow: `lcsas meta verify` — audit a built meta-volume
+## Workflow: `lcsas meta verify` — audit a built meta disc
 
-**Purpose:** Confirm a built meta-volume directory (or a mounted meta-disc)
-is intact and complete before — or long after — it is mastered into an ISO.
+**Purpose:** Confirm a built meta disc directory (or a mounted meta disc)
+is intact and complete before — or long after — it is mastered into an
+ISO image.
 
 **Synopsis:**
 
@@ -303,17 +309,17 @@ lcsas meta verify <output-dir> [--strict]
    artifact (a never-bundled target the manifest can't catch). The
    `VINTAGE_NOTE` explains that an ABSENT verdict against an older disc may
    be expected.
-5. Exit 0 when the meta-volume is intact and complete; exit 1 on any
+5. Exit 0 when the meta disc is intact and complete; exit 1 on any
    issue.
 
-**Expected outcome:** `Meta-volume verify PASSED: N files match …; all
-required-contents artifacts present.` on a clean volume; a per-issue
+**Expected outcome:** `Meta disc verify PASSED: N files match …; all
+required-contents artifacts present.` on a clean meta disc; a per-issue
 listing and exit 1 otherwise.
 
 This mirrors `make verify-recovery` (which audits the *build-host* upstream
 cache) but operates on the output of `lcsas meta build` — useful for
-catching bit-rot on a meta-volume before mastering, or periodic
-disc-health checks on a mounted meta-disc. See
+catching bit-rot on a meta disc tree before mastering, or periodic
+disc-health checks on a mounted meta disc. See
 [`verify-and-audit.md`](verify-and-audit.md) for the full integrity story.
 
 **Source refs:** `cmd_meta_verify` (`src/lcsas/cli/main.py`);
@@ -321,24 +327,24 @@ disc-health checks on a mounted meta-disc. See
 
 ---
 
-## Workflow: Single-drive bootstrap (meta-disc occupies the only drive)
+## Workflow: Single-drive bootstrap (meta disc occupies the only drive)
 
 **Purpose:** Handle the worst-case hardware configuration: one optical
-drive, a stack of data discs, and the meta-disc. The meta-disc occupies
+drive, a stack of data discs, and the meta disc. The meta disc occupies
 the drive at the start, so it must self-extract everything it needs onto
-disk *before* the drive is freed to accept data discs. (This is a software
-extraction step on a running OS — the disc is not bootable.)
+local disk *before* the drive is freed to accept data discs. (This is a
+software extraction step on a running OS — the disc is not bootable.)
 
 **Prerequisites:**
-- A meta-disc and the host's existing OS (or a live Linux USB).
-- Enough RAM/local disk to hold a working copy of the meta-volume payload
+- A meta disc and the host's existing OS (or a live Linux USB).
+- Enough RAM/local disk to hold a working copy of the meta disc's files
   (a few hundred MB).
-- The encryption key file from external media (USB stick, paper-typed key).
+- The password (a password file on a USB stick, or typed in from paper).
 
 **Steps:**
 
-1. Mount the meta-disc at `/mnt/meta` on the running OS.
-2. **Copy the meta-volume off the disc** so the drive can be freed
+1. Mount the meta disc at `/mnt/meta` on the running OS.
+2. **Copy the meta disc's files to local disk** so the drive can be freed
    (`README_RESTORE.md` Step 1 of single-drive mode):
    ```bash
    sudo mount /dev/sr0 /mnt/meta
@@ -346,11 +352,12 @@ extraction step on a running OS — the disc is not bootable.)
    cd /tmp/lcsas-meta
    sudo umount /mnt/meta
    ```
-3. **Eject the meta-disc.** `restore.sh` uses the optical drive as the
+3. **Eject the meta disc.** `restore.sh` uses the optical drive as the
    data-disc loader; its prompt loop unmounts + ejects before asking the
-   operator to swap discs.
-4. **Insert any data disc** (the highest-numbered, if known, minimises the
-   chance of needing a catalog upgrade mid-loop).
+   heir to swap discs.
+4. **Insert a disc of the newest volume** — the latest year in the label,
+   then the highest number. Its disc catalog is the fullest, so the
+   restore needs fewer disc swaps. Any data disc still works.
 5. Run from the extracted copy (single-drive mode is the default;
    interactive prompts):
    ```bash
@@ -364,18 +371,18 @@ extraction step on a running OS — the disc is not bootable.)
    list describing every data disc the restore will visit.
 7. Phase 2 (ingest) walks the volume list. For each volume it ejects the
    current disc, prompts for the wanted disc, then copies every needed pack
-   into the cache, verifying SHA-256 on each copy. If a newly-inserted disc
-   carries a *fresher* catalog (`MAX(created_at)`), it re-runs
+   into the cache, checking each copied pack's SHA-256. If a newly-inserted
+   disc carries a *fresher* disc catalog (`MAX(created_at)`), it re-runs
    `bootstrap --reseed` and refreshes the pick list mid-loop.
-8. Phase 3 (finalize) verifies every required pack is present and intact in
-   the cache, classifying any missing pack as recoverable (alternate disc
-   available) or unrecoverable.
+8. Phase 3 (finalize) checks that every required pack is present and intact
+   in the cache, classifying any missing pack as `RECOVERABLE` (another disc
+   holds it) or `UNRECOVERABLE`.
 9. After finalize succeeds, the wrapper invokes `rustic restore` (or, if no
    rustic binary works, `standalone_restorer.py`) against the assembled
    cache to write files into the target.
 
 **Expected outcome:** The restore completes against the assembled cache;
-the optical drive holds the meta-disc only at the very start and is free
+the optical drive holds the meta disc only at the very start and is free
 for data discs afterward. State persists in
 `$CACHE_DIR/restore-state.json` so an interrupted restore can be resumed by
 re-running the same command.
@@ -384,13 +391,13 @@ re-running the same command.
 - **Media type:** the data-disc media type determines swap count, not the
   bootstrap mechanism.
 - **Optical drive count:** **single-drive is the only configuration where
-  this bootstrap matters** — with multiple drives the meta-disc never needs
+  this bootstrap matters** — with multiple drives the meta disc never needs
   to leave its drive.
-- **Recovery tier:** the cache lives on tier-1 (warm) local disk and is
-  populated from tier-2 (cold) discs.
-- **Repository selection:** running without a repo makes
+- **Storage stage:** the cache lives on the restoring computer's local disk
+  and is filled from the discs.
+- **Repository selection:** running without a repository makes
   `restore_single_drive.py bootstrap` list available repositories and exit
-  so the operator can pick one.
+  so the heir can pick one.
 
 **Test coverage:**
 - `tests/unit/test_meta_builder.py::TestMetaVolumeBuilder::test_single_drive_helper_bundled`
@@ -413,8 +420,8 @@ re-running the same command.
 
 ## Key gate: when a missing repo key FAILS the build
 
-**Policy:** `lcsas meta build` exits **1** when a catalogued repo satisfies
-all three of:
+**Policy:** `lcsas meta build` exits **1** when a catalogued repository
+satisfies all three of:
 
 1. it has packs on at least one volume whose `status != 'DESTROYED'`, **and**
 2. it is not `retired` (`repositories.status`, schema v10), **and**
@@ -424,34 +431,34 @@ Everything else keeps the #436 behaviour exactly — reported, exit 0.
 
 **Why a gate at all:** #436 made the gap loud, but a build script that
 only checks the exit code would still master and burn a disc that cannot
-decrypt a tenant's packs. Burning a disc you cannot prove restorable is
+decrypt a repository's packs. Burning a disc you cannot prove restorable is
 the thing this gate exists to prevent.
 
 **Why it is narrowed, not blanket:** LCSAS cannot tell "mirror
 temporarily unmounted" from "mirror gone for good" using `mirror_path`
 alone. A blanket rule would fire on every routine build in an estate
-with one long-dead repo, get pasted into the build script permanently,
+with one long-dead repository, get pasted into the build script permanently,
 and thereafter read as "checked" while checking nothing. So the gate
 derives from *packs on discs* — data that exists right now and needs
 these keys — mirroring `HolographicInjector.inject_metadata`'s existing
-rule (`src/lcsas/staging/metadata.py`): a repo with data *here* hard-fails,
+rule (`src/lcsas/staging/metadata.py`): a repository with data *here* hard-fails,
 everything else skips.
 
 **What is deliberately NOT gated:**
 
 | Case | Why exempt |
 |---|---|
-| No catalog at all | `_bundle_metadata` returns early, so a no-catalog disc bundles **zero** repos — a supported, tested configuration (the blind-restore fixture builds one). A rule that failed 2-of-3 repos while passing 0-of-3 would not be defensible. |
-| Retired repo | The operator has stated the mirror is gone for good via `lcsas repo retire` — see [multi-tenant.md](multi-tenant.md#retire-a-repository-lcsas-repo-retire). |
-| Repo with zero packs on discs | Nothing out there needs its keys yet (empty or freshly-registered repo). |
+| No catalog at all | `_bundle_metadata` returns early, so a build without a catalog bundles **zero** repositories — a supported, tested configuration (the blind-restore fixture builds one). A rule that failed 2-of-3 repositories while passing 0-of-3 would not be defensible. |
+| Retired repository | The owner has stated the mirror is gone for good via `lcsas repo retire` — see [multi-tenant.md](multi-tenant.md#retire-a-repository-lcsas-repo-retire). |
+| Repository with zero packs on discs | Nothing out there needs its keys yet (empty or freshly registered repository). |
 | Packs only on `DESTROYED` volumes | Same filter the tier-1 C reader uses (`TIER1_FROZEN_SURFACE` in `src/lcsas/db/schema.py`), so gate and reader agree on what "data that still exists" means. |
 
 `packs.is_pruned` is deliberately **not** filtered: `is_pruned` is not part
 of the tier-1 frozen surface, so tier-1 will restore a pruned pack that is
-still on a disc. A repo whose on-disc packs are all pruned still needs its
-keys.
+still on a disc. A repository whose on-disc packs are all pruned still
+needs its keys.
 
-**The way out:** the error names the offending repos and offers all three
+**The way out:** the error names the offending repositories and offers all three
 remedies — mount the mirror and rebuild, `lcsas repo retire <repo_id>`, or
 `--allow-missing-metadata` for this build. That last one is a **new flag,
 deliberately not `--allow-incomplete`**: `--allow-incomplete` means "dev
@@ -463,17 +470,17 @@ that the gap was accepted — years later an heir can tell an accepted gap
 from a defect, long after the build log is gone.
 
 **Note:** `lcsas repo remove --force` is *not* a remedy. It deletes the
-repo's packs and snapshots from the catalog; an operator whose data is on
+repository's packs and snapshots from the catalog; an owner whose data is on
 burned discs must never be pushed toward it to quiet a gate. That is why
 retirement exists.
 
 **The other shape of the same gap (#367 / #443):** this gate covers a
-mirror that was **unreachable** at build time, so the repo never gets
+mirror that was **unreachable** at build time, so the repository never gets
 bundled at all. But the RST-05 completeness gate (`missing_required_contents()`,
-[above](#workflow-lcsas-meta-build--produce-the-meta-volume-tree)) can
+[above](#workflow-lcsas-meta-build--produce-the-meta-disc-tree)) can
 *also* fail a build for a mirror that **was** reachable and bundled but
 whose `keys/` subtree was itself absent — `metadata/<repo>/keys`. Both
-are the identical failure ("this meta-volume cannot decrypt repo X"),
+are the identical failure ("this meta disc cannot decrypt repository X"),
 just reached by different routes, so both answer to the same valve:
 `--allow-missing-metadata` only. `--allow-incomplete` covers neither.
 
@@ -488,43 +495,46 @@ the exit-code decision in `cmd_meta_build` (`src/lcsas/cli/main.py`).
 
 ---
 
-## Catalog policy: why no `catalog.db` on the meta-disc
+## Catalog policy: why no `catalog.db` on the meta disc
 
-**Policy:** `_bundle_metadata` deliberately copies Rustic per-repo metadata
-(`config`, `keys`, `index`, `snapshots`) but **never** copies the LCSAS
-catalog (`catalog.db`). The decision is documented in the docstring of
+**Policy:** `_bundle_metadata` deliberately copies each repository's
+metadata (`config`, `keys`, `index`, `snapshots`) but **never** copies the
+LCSAS catalog (`catalog.db`). The decision is documented in the docstring of
 `_bundle_metadata` (`src/lcsas/meta/builder.py`):
 
 > The meta disc does NOT carry a catalog.db — it would always be stale
 > (pre-dating data discs burned after the meta disc). Instead, the restore
-> script bootstraps from the catalog on the first data disc the operator
+> script bootstraps from the catalog on the first data disc the heir
 > inserts, and upgrades organically when it encounters a fresher catalog on
-> a later disc. We do bundle Rustic metadata (keys, config, index,
+> a later disc. We do bundle repository metadata (keys, config, index,
 > snapshots) because keys are needed to decrypt packs and don't go stale.
 
-**Why it works:** every data disc is *holographic* — the
+**Why it works:** every data disc carries a disc catalog — the
 `HolographicInjector` (`src/lcsas/staging/metadata.py`) burns a complete
-`catalog.db` snapshot onto every data disc at burn time. Therefore:
+copy of the catalog (`catalog.db`) onto every data disc at burn time.
+Therefore:
 
 1. Any data disc is sufficient to seed the restore. The bootstrap phase of
-   `restore.sh` reads `catalog.db` off whichever disc the operator inserts
+   `restore.sh` reads `catalog.db` off whichever disc the heir inserts
    first.
-2. Older discs carry older catalogs; newer discs carry newer catalogs. A
-   freshness token (`MAX(created_at) FROM volumes`) orders them.
+2. Discs of older volumes carry older disc catalogs; discs of newer
+   volumes carry newer ones (a disc burned later to replace a disc of an
+   old volume carries that old volume's catalog). A freshness token
+   (`MAX(created_at) FROM volumes`) orders them.
 3. During Phase 2 (ingest), every newly-inserted disc's freshness token is
    compared against the bootstrap catalog's. If a disc has a *fresher*
    catalog, `restore.sh` re-runs `bootstrap --reseed` to replace the
    in-cache metadata and re-emit the pick list. Volumes burned *after* the
-   meta-disc appear in the updated list and get visited later in the same
+   meta disc appear in the updated list and get visited later in the same
    loop.
 4. The non-interactive `restore_auto.sh` performs the same organic upgrade,
-   optionally auto-selecting the highest-labeled disc first to minimise the
-   number of upgrades needed.
+   optionally auto-selecting the disc with the newest label first to
+   minimise the number of upgrades needed.
 
-**Net effect:** the meta-disc never goes stale in a way that matters.
-Rustic keys never go stale (a 2020-burnt meta-disc can still decrypt a
+**Net effect:** the meta disc never goes stale in a way that matters.
+Rustic keys never go stale (a 2020-burnt meta disc can still decrypt a
 2030-burnt pack with the same key file), and the catalog gap is bridged by
-the holographic copy on the freshest data disc.
+the disc catalog on the freshest data disc.
 
 **Source refs:** `_bundle_metadata` (`src/lcsas/meta/builder.py`);
 `RESTORE_SCRIPT` / `RESTORE_AUTO_SCRIPT` (`src/lcsas/meta/builder.py`,
@@ -534,11 +544,11 @@ catalog-upgrade glue); `src/lcsas/meta/restore_single_drive.py`
 
 ---
 
-## Workflow: Refresh the meta-disc when LCSAS source changes
+## Workflow: Refresh the meta disc when LCSAS source changes
 
-**Purpose:** Re-mint the meta-disc so it carries the latest LCSAS code,
+**Purpose:** Re-mint the meta disc so it carries the latest LCSAS code,
 bumped tool versions, freshly cross-built tier-1 binaries, and (if
-newly-added repos exist) updated per-repo Rustic metadata.
+newly-added repositories exist) updated repository metadata.
 
 **Prerequisites:**
 - A development checkout of LCSAS with the desired source revision.
@@ -557,23 +567,23 @@ newly-added repos exist) updated per-repo Rustic metadata.
    and must come *before* the subcommand). The full pipeline regenerates
    `lcsas/src/` from the current project root and re-renders all in-source
    script constants.
-4. Master the directory into an ISO with `xorriso` (optionally RS03-ECC it)
-   and burn it the same way as a data disc.
-5. Record the new meta-disc as a `volumes.type='meta'` row in the catalog
-   so the holographic catalog on future data discs knows about it. (This is
-   a manual `INSERT` or external script — `meta build` itself does not
-   write to `catalog.db`.)
-6. Retire the previous meta-disc(s) per estate-planning policy
-   (`docs/ESTATE_PLANNING.md`).
+4. Master the directory into an ISO image with `xorriso` (optionally
+   RS03-ECC it) and burn it the same way as a data disc.
+5. Nothing is recorded in the catalog: the meta disc is not a volume, and
+   `meta build` never writes to the master catalog.
+6. Keep the previous meta disc(s) with the other discs: an heir uses the
+   newest, and if its tools fail, the one burned closest in date to the
+   data discs (`docs/ESTATE_PLANNING.md`).
 
-**Expected outcome:** A new meta-disc carrying the current LCSAS source, the
+**Expected outcome:** A new meta disc carrying the current LCSAS source, the
 same `volume_info.json` schema with a newer `created_at`, and the same
 catalog policy (no `catalog.db`).
 
 **Variant axes that apply:**
 - **Media type:** unchanged — BD25/MDISC100 in practice.
 - **Optical drive count:** unaffected — refresh runs on a workstation.
-- **Recovery tier:** source artifact is hot (dev tree); output is tier-2.
+- **Storage stage:** the input is the development tree; the output is one
+  of the discs.
 - **Cadence:** driven by LCSAS releases, key rotation, or per-disc
   `volume_events` review; not a per-burn-session activity.
 
@@ -595,8 +605,8 @@ catalog policy (no `catalog.db`).
 | Axis | Values | Where it matters |
 |---|---|---|
 | Media type | BD25, MDISC100 (typical), TEST_TINY (CI) | `lcsas meta build` output size and mastering choice (`src/lcsas/config/media.py`). |
-| Optical drive count | 1 (must self-extract before swap) vs ≥2 (meta-disc stays loaded) | **Biggest behavior difference** — see [Single-drive bootstrap](#workflow-single-drive-bootstrap-meta-disc-occupies-the-only-drive). |
-| Recovery tier | Tier-2 cold (the disc), Tier-1 warm (extracted copy + cache) | Drives how the operator stages tools before swapping discs. |
+| Optical drive count | 1 (must self-extract before swap) vs ≥2 (meta disc stays loaded) | **Biggest behavior difference** — see [Single-drive bootstrap](#workflow-single-drive-bootstrap-meta-disc-occupies-the-only-drive). |
+| Storage stage | The discs (the meta disc itself), local disk (extracted copy + cache) | Drives how the heir copies tools off before swapping discs. |
 | Completeness (RST-05) | full per-target contract vs `--allow-incomplete` dev build | `missing_required_contents()` (`src/lcsas/meta/builder.py`). |
 | Target arch at restore | one of the six APPROVED_TARGETS | `restore.sh` `(uname -s, uname -m)` dispatch; `$LCSAS_TARGET` override. |
 | Catalog freshness | Bootstrap-from-first-disc vs organic upgrade on fresher discs | `src/lcsas/meta/restore_single_drive.py`. |
@@ -609,9 +619,9 @@ catalog policy (no `catalog.db`).
 |---|---|---|---|
 | `lcsas meta build` | `tests/unit/test_meta_builder.py::TestMetaVolumeBuilder`, `::TestBundleUpstreamBinaries` | `tests/integration/test_meta_volume_restore.py` | No `--db`-populated `metadata/` assertion. |
 | `lcsas meta verify` | `tests/unit/test_meta_builder.py` (manifest + required-contents) | — | None significant. |
-| Meta-disc inventory | `test_build_creates_directory_structure`, `test_bundled_*_works`, `test_start_here_generated`, `test_standalone_restorer_bundled`, `test_single_drive_helper_bundled` | `TestMetaVolumeRestore::test_meta_volume_has_all_tools` / `_has_source` / `_has_docs` | None significant. |
+| Meta disc inventory | `test_build_creates_directory_structure`, `test_bundled_*_works`, `test_start_here_generated`, `test_standalone_restorer_bundled`, `test_single_drive_helper_bundled` | `TestMetaVolumeRestore::test_meta_volume_has_all_tools` / `_has_source` / `_has_docs` | None significant. |
 | Cross-platform bundling | `TestBundleUpstreamBinaries` (5 tests), `test_restore_sh_dispatcher.py` | — | Per-target restore exercised in recovery-toolchain CI. |
 | Single-drive bootstrap | `test_single_drive_helper_bundled`, `test_restore_script_single_drive_default`, `TestSingleDriveBitsStandalone` | `TestMetaVolumeRestore` (directory mode); `test_interactive_restore.py` (PTY + loop-device disc swaps, root-gated) | None significant. |
-| Catalog policy | Code inspection | `TestMetaVolumeRestore` exercises the holographic catalog implicitly | No direct `--reseed` precedence test. |
+| Catalog policy | Code inspection | `TestMetaVolumeRestore` exercises the disc catalog implicitly | No direct `--reseed` precedence test. |
 | Source refresh | `test_no_pycache_in_source`, `test_no_incomplete_marker_after_build` | — | No idempotency / re-run test. |
 | Docs-vs-reality | `tests/unit/test_doc_command_contract.py` (`test_meta_build_flags_in_docs_exist`) | — | — |

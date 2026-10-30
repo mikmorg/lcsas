@@ -255,7 +255,7 @@ class ToolBundler:
     # ── Python package bundling ──────────────────────────────────
 
     def bundle_python_package(self, package_name: str) -> Path | None:
-        """Bundle an installed Python package into the meta-volume.
+        """Bundle an installed Python package onto the meta disc.
 
         Copies the package directory (including C extensions and their
         shared libs) into the bundled Python's ``lib/pythonX.Y/``
@@ -297,14 +297,14 @@ class ToolBundler:
 
         return dest
 
-    # Packages that are safe to bundle into the meta-volume.
+    # Packages that are safe to bundle onto the meta disc.
     #
     # ``lcsas.keyshare`` is the stdlib-only SLIP-0039 split/combine module
     # (plus its ``wordlist.txt`` package_data).  It is bundled so the
-    # standalone ``keyshare_combine.py`` pre-step can reconstruct a split
-    # repo password on the meta-volume.  Because ``import_module`` resolves
-    # ``lcsas.keyshare`` to the ``.../lcsas/keyshare`` directory, it lands as
-    # the top-level package ``keyshare`` on the meta-volume.
+    # standalone ``keyshare_combine.py`` pre-step can rebuild a split
+    # repository password from the meta disc.  Because ``import_module``
+    # resolves ``lcsas.keyshare`` to the ``.../lcsas/keyshare`` directory, it
+    # lands as the top-level package ``keyshare`` on the meta disc.
     _BUNDLEABLE_PACKAGES: frozenset[str] = frozenset(
         {"zstandard", "lcsas.keyshare"}
     )

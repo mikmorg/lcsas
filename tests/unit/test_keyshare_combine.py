@@ -1,4 +1,4 @@
-"""Phase 2 (K2.4) tests for the standalone key-share combiner.
+"""Phase 2 (K2.4) tests for the standalone share combiner.
 
 Covers:
   (a) the standalone ``keyshare_combine.py`` reconstructs a real 2-of-5
@@ -7,8 +7,8 @@ Covers:
       the survives-even-if-the-rest-is-broken contract);
   (b) the meta bundler ships the keyshare package + wordlist + the
       combiner script;
-  (c) PASSWORD_INFO / START_HERE show the split-key pre-step for a split
-      archive and hide it for a single-key archive.
+  (c) PASSWORD_INFO / START_HERE show the split-password pre-step for a
+      split archive and hide it for an archive whose password is not split.
 
 Targets 100% line coverage of ``lcsas.meta.keyshare_combine`` and the new
 ``_bundle_keyshare_combiner`` / ``_share_recovery_lines`` / split-gating
@@ -114,7 +114,7 @@ class TestCombinerInProcess:
         rc = keyshare_combine.main([str(f1)])
 
         assert rc == 1
-        assert "could not reconstruct the password" in capsys.readouterr().err
+        assert "could not rebuild the password" in capsys.readouterr().err
 
     def test_default_argv_used_when_none(self, monkeypatch, capsys):
         """argv=None falls through to sys.argv[1:]."""
@@ -130,7 +130,7 @@ class TestCombinerInProcess:
         """KEY-01: the heir-facing -card.txt artifacts reconstruct.
 
         Generates real cards via ``lcsas key split`` (the exact artifact a
-        holder is handed and told to pass to ``keyshare_combine.py``) and
+        share holder is handed and told to pass to ``keyshare_combine.py``) and
         feeds the cards — not the bare share files — to the combiner.
         """
         from lcsas.cli.main import main as cli_main
@@ -208,8 +208,8 @@ class TestCombinerInProcess:
 class TestCombinerIsolation:
     """The combiner reconstructs with ONLY the keyshare package importable.
 
-    Replicates the EXACT meta-volume layout the builder produces:
-    ``keyshare_combine.py`` at the meta-volume root and the bundled
+    Replicates the EXACT meta disc layout the builder produces:
+    ``keyshare_combine.py`` at the meta disc root and the bundled
     ``keyshare`` package under ``tools/lib/pythonX.Y/`` (where
     ``bundle_python_package`` lands it).  The script is run as a
     subprocess with NO PYTHONPATH and ``lcsas`` actively blocked, so it
@@ -408,7 +408,7 @@ class TestHeirDocGating:
         root.mkdir()
         HolographicInjector(root).write_key_info(config)
         txt = (root / "PASSWORD_INFO.txt").read_text()
-        assert "SPLIT KEY" in txt
+        assert "SPLIT PASSWORD" in txt
         assert "keyshare_combine.py" in txt
         assert "any 2" in txt
         assert "5 share cards" in txt
@@ -429,7 +429,7 @@ class TestHeirDocGating:
         root.mkdir()
         HolographicInjector(root).write_key_info(config)
         txt = (root / "PASSWORD_INFO.txt").read_text()
-        assert "SPLIT KEY" not in txt
+        assert "SPLIT PASSWORD" not in txt
         assert "keyshare_combine.py" not in txt
 
     def test_start_here_split_shows_prestep(self, tmp_path):
@@ -459,7 +459,7 @@ class TestHeirDocGating:
         assert "SHARE CARDS" not in txt
         assert "keyshare_combine.py" not in txt
         assert "SPLIT_BLOCK" not in txt
-        # The normal single-key content is intact and not mangled.
+        # The normal content for an unsplit password is intact and not mangled.
         assert "HOW TO GET YOUR FILES BACK" in txt
 
 

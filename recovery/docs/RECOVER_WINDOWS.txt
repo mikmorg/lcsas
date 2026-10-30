@@ -1,12 +1,12 @@
-LCSAS RECOVERY ON WINDOWS -- STEP BY STEP
-============================================
+LCSAS RESTORE ON WINDOWS -- STEP BY STEP
+========================================
 
 WHO THIS IS FOR
 
 You are running Windows 10 (version 1709 / October 2017 or later)
-or Windows 11.  You have inherited a collection of LCSAS recovery
-discs and you want to read the files on them.  You have the
-password for the archive.
+or Windows 11.  You have inherited a collection of LCSAS discs and
+you want to read the files on them.  You have the password for the
+archive.
 
 WHY 1709?
 
@@ -38,7 +38,9 @@ QUICK START (90 SECONDS)
 ────────────────────────────────────────────────────────────────────
 
   1. Plug in your USB Blu-ray reader.
-  2. Insert the disc labelled "LCSAS_META" (or any meta-volume disc).
+  2. Insert the meta disc (labelled "LCSAS_META").  If you have
+     several, use the newest; if that fails, use the one burned
+     closest in date to your data discs.
   3. Open File Explorer.  The disc should appear under "This PC" as
      a drive (typically D:, E:, or F:).
   4. Open the disc.
@@ -47,16 +49,19 @@ QUICK START (90 SECONDS)
         - press Enter to accept the default restore folder
           (Documents\restored), OR type a folder of your choosing.
         - type the password and press Enter.
-  7. Wait.  When the script says "Recovery complete", the files are
+  7. Wait.  When the script says "Restore complete", the files are
      in the folder you chose.
 
 If you have multiple discs, the script will tell you when to swap.
 
 You do NOT need two Blu-ray drives.  Before the prompt, restore.bat
-copies itself and the binary tree from the meta-disc into %TEMP%
+copies itself and the binary tree from the meta disc into %TEMP%
 and re-launches from there.  After that copy, no file handles
-remain on the meta-disc, so you can eject the recovery disc and
-insert each data disc into the same drive when prompted.
+remain on the meta disc, so you can eject it and insert each data
+disc into the same drive when prompted.  Start with the data disc
+whose label is newest (the latest year, then the highest number):
+its catalog is the fullest, so you will swap discs less often.
+Any data disc still works.
 
 ────────────────────────────────────────────────────────────────────
 FILES LARGER THAN 4 GiB (multi-extent ISO 9660 limitation)
@@ -69,12 +74,12 @@ stores such a file as multiple "extents", and the native Windows
 driver reads only the first one: the file appears TRUNCATED with no
 error message.
 
-LCSAS refuses to master a disc containing a file this large (the
-ISO build aborts with an "OversizeFileError" naming the file), so a
-disc produced by an up-to-date LCSAS should never trigger this.  But
-if you are reading an older disc and a recovered file looks
-truncated AND the binary did NOT report a hash mismatch, suspect
-this limitation.
+LCSAS refuses to master an ISO image containing a file this large
+(the ISO build aborts with an "OversizeFileError" naming the file),
+so a disc produced by an up-to-date LCSAS should never trigger
+this.  But if you are reading an older disc and a restored file
+looks truncated AND the binary did NOT report a hash mismatch,
+suspect this limitation.
 
 WORKAROUND: do not read the over-large file through the mounted
 disc.  Instead copy the entire .iso image to a local disk and
@@ -84,12 +89,12 @@ Manager -> Extract, then run restore.bat against the extracted
 folder instead of the mounted drive.
 
 ────────────────────────────────────────────────────────────────────
-VERIFY THE BINARY BEFORE RUNNING IT (recommended for paranoid users)
+CHECK THE BINARY BEFORE RUNNING IT (optional, for the cautious)
 ────────────────────────────────────────────────────────────────────
 
 Every file on the disc has a SHA-256 hash recorded in
 recovery\MANIFEST.sha256.  Before double-clicking restore.bat, you
-can verify both the script and the binary against the manifest
+can check both the script and the binary against the manifest
 using Windows' built-in certutil tool.  No third-party software
 required.
 
@@ -136,7 +141,7 @@ To proceed:
 
 If your antivirus quarantines lcsas-restore.exe, restore it from
 the antivirus's quarantine UI.  The binary's SHA-256 is recorded in
-recovery\MANIFEST.sha256 on the disc; you can verify by hand:
+recovery\MANIFEST.sha256 on the disc; you can check it by hand:
 
     certutil -hashfile recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe SHA256
 
@@ -163,21 +168,22 @@ The password file should contain only the password, no trailing
 newline.
 
 ────────────────────────────────────────────────────────────────────
-KEY SHARES (SPLIT PASSWORDS) -- rebuild the password first
+SHARE CARDS (SPLIT PASSWORDS) -- rebuild the password first
 ────────────────────────────────────────────────────────────────────
 
-Some archives split the password into N share cards (any K of them
-reconstruct it; fewer than K reveal nothing).  PASSWORD_INFO.txt on any
-disc states whether this archive used split keys and the K/N in
-effect.  If it did, rebuild the password BEFORE running restore.bat:
+Some archives split the password into N shares, one per share card
+(any K of them rebuild it; fewer than K reveal nothing).
+PASSWORD_INFO.txt on any disc states whether the password was split,
+and the K and N.  If it was, rebuild the password BEFORE running
+restore.bat:
 
-  STEP 1.  Gather any K share cards (printed pages titled
-           "LCSAS KEY SHARE").  If you only have paper, retype each
-           card into its own text file, e.g. C:\Users\me\card1.txt
-           and C:\Users\me\card2.txt.
+  STEP 1.  Gather any K share cards (printed pages headed
+           "LCSAS KEY SHARE" or "SHARE CARD").  If you only have
+           paper, retype each card into its own text file, e.g.
+           C:\Users\me\card1.txt and C:\Users\me\card2.txt.
 
-  STEP 2.  Open a Command Prompt at the disc root (e.g. D:) and run
-           the bundled combiner:
+  STEP 2.  Open a Command Prompt at the meta disc root (e.g. D:)
+           and run the bundled combiner:
 
                recovery\bin\x86_64-pc-windows-gnu\lcsas-keyshare.exe ^
                    C:\Users\me\card1.txt C:\Users\me\card2.txt
@@ -190,8 +196,8 @@ effect.  If it did, rebuild the password BEFORE running restore.bat:
            password at its "Password:" prompt.
 
 If lcsas-keyshare.exe will not run on your host, install Python 3
-(see "MANUAL PYTHON RECOVERY" below for the python.org steps) and
-use the pure-Python fallback at the disc root:
+(see "MANUAL PYTHON RESTORE" below for the python.org steps) and
+use the pure-Python fallback at the meta disc root:
 
                python D:\keyshare_combine.py ^
                    C:\Users\me\card1.txt C:\Users\me\card2.txt
@@ -209,8 +215,9 @@ DESTINATION FOLDER NOTES
   * If the original archive has more data than you have free disk
     space, the restore will fail partway through.  restore.bat does
     not check this for you (restore.sh on macOS/Linux does), so check
-    first.  With a data disc in drive E: (any disc carrying
-    catalog.db), open a Command Prompt at the META disc and run:
+    first.  Put the data disc whose label is newest (the latest
+    year, then the highest number; its catalog is the fullest) in
+    drive E:, open a Command Prompt at the META disc and run:
 
         recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe ^
             --catalog E:\catalog.db --list-pending-packs
@@ -257,7 +264,7 @@ CASE C.  "lcsas-restore.exe is not recognized as an internal or
          external command."
          restore.bat looks for the .exe under
          recovery\bin\x86_64-pc-windows-gnu\.  If that path is empty
-         on your disc, the disc was built without the Windows binary.
+         on your meta disc, it was built without the Windows binary.
          Options:
 
            (a) Cross-build on another machine and copy the .exe in.
@@ -277,24 +284,24 @@ CASE C.  "lcsas-restore.exe is not recognized as an internal or
                    sh /mnt/d/recovery/scripts/restore.sh /mnt/d ~/restored
                (replace /mnt/d with your disc mount point inside WSL).
 
-           (c) Use the standalone Python restorer (manual; this is
-               NOT chained from restore.bat any more -- see "MANUAL
-               PYTHON RECOVERY" below for details).  Install Python
-               from python.org, then run:
+           (c) Use the Python reader (manual; this is NOT chained
+               from restore.bat any more -- see "MANUAL PYTHON
+               RESTORE" below for details).  Install Python from
+               python.org, then run:
                    python D:\standalone_restorer.py ^
                        --repo D:\metadata\<name> ^
                        --password-file C:\path\to\pw.txt ^
                        --target C:\Users\me\restored ^
                        --mount-point E:\
-               See "MANUAL PYTHON RECOVERY" below for what <name>,
+               See "MANUAL PYTHON RESTORE" below for what <name>,
                the password file and --mount-point mean.
 
-CASE D.  Recovery completes but some files appear truncated.
+CASE D.  The restore completes but some files appear truncated.
          File a bug report with the SHA-256 of the affected file
          and the disc serial number.  This should not happen --
-         every blob is verified against its SHA-256 hash before
-         being written.  A truncation almost certainly means a
-         bug in the tool.
+         every blob is authenticated and checked against its
+         SHA-256 hash before being written.  A truncation almost
+         certainly means a bug in the tool.
 
 ────────────────────────────────────────────────────────────────────
 PRIVACY / SECURITY
@@ -336,15 +343,15 @@ TROUBLESHOOTING -- error messages
    -> Same as above -- need the disc with that pack.
 
 "ERROR: bad zstd blob size"
-   -> Data corruption on the disc.  Try a different copy of the
-      disc.  LCSAS archives are normally burned with redundant
-      copies; one should be readable.
+   -> Data corruption on the disc.  Try another disc with the same
+      label.  LCSAS archives normally have two or more discs with
+      each label; one should be readable.
 
 ────────────────────────────────────────────────────────────────────
 COMMAND-LINE REFERENCE
 ────────────────────────────────────────────────────────────────────
 
-For users comfortable with CMD/PowerShell, restore.bat is just a
+If you are comfortable with CMD/PowerShell: restore.bat is just a
 wrapper around lcsas-restore.exe.  The .exe accepts:
 
     --repo DIR             path to the restic repository
@@ -358,7 +365,7 @@ wrapper around lcsas-restore.exe.  The .exe accepts:
     --catalog FILE         optional path to LCSAS catalog.db
 
 The repository metadata lives under metadata\<name>\ on the disc,
-where <name> is the backup-set folder (the directory containing
+where <name> is the repository's folder (the directory containing
 keys\ and index\); run `dir D:\metadata` to list them.
 
 Example:
@@ -390,12 +397,12 @@ in order of effort:
 
   C. Use a Linux/macOS machine instead.  Boot a Linux live USB
      (Ubuntu, Mint, Debian -- any modern distro will do), insert
-     the disc, and run:
+     the meta disc, and run:
         sh /media/<user>/<DISC>/restore.sh ~/restored
      The Linux binary has NO UCRT dependency; it only needs glibc
      or musl, both universal on Linux.
 
-  D. Use the standalone Python restorer.  Install Python 3 from
+  D. Use the Python reader.  Install Python 3 from
      python.org (Python 3.10 or newer; the script exits with a clear
      message on anything older), then run:
         python D:\standalone_restorer.py ^
@@ -405,7 +412,7 @@ in order of effort:
             --mount-point E:\
      This works on any Windows that still runs Python 3.  Note that
      restore.bat does NOT chain to this script for you any more --
-     you invoke it directly.  See "MANUAL PYTHON RECOVERY" below.
+     you invoke it directly.  See "MANUAL PYTHON RESTORE" below.
 
   E. Future: an msvcrt-linked .exe.  See recovery/docs/
      WINDOWS_RECOVERY_PLAN.txt section "Phase W5 -- legacy msvcrt
@@ -413,28 +420,28 @@ in order of effort:
      on Windows XP / Vista.  Not yet available.
 
 ────────────────────────────────────────────────────────────────────
-MANUAL PYTHON RECOVERY (last resort, no binaries needed)
+MANUAL PYTHON RESTORE (last resort, no binaries needed)
 ────────────────────────────────────────────────────────────────────
 
 If both lcsas-restore.exe and rustic-static.exe are unusable on
 your host -- missing UCRT, antivirus quarantine, broken bits, wrong
-architecture -- you can still recover using the pure-Python
-standalone restorer that ships on every meta disc.
+architecture -- you can still restore using the Python reader
+(standalone_restorer.py) that ships on every meta disc.
 
 restore.bat does NOT chain to this script.  Older versions did, but
 the chain required the `py` launcher to be on PATH, which is not a
 safe assumption on a stock Windows host that has never had Python
 installed.  We removed the chain so the .bat fails fast with a
-clear error instead of pretending Python recovery is automatic.
-The standalone_restorer.py file is still on the disc; you invoke
-it directly when you need it.
+clear error instead of pretending a Python restore is automatic.
+The standalone_restorer.py file is still on the meta disc; you
+invoke it directly when you need it.
 
 STEP 1.  Install Python 3 from https://www.python.org if it is not
          already on the host.  Python 3.10 or newer is required (the
-         restorer exits with a clear message on anything older).
+         script exits with a clear message on anything older).
          Tick "Add Python to PATH" in the installer.
 
-STEP 2.  Open a Command Prompt at the meta-disc root.  For example,
+STEP 2.  Open a Command Prompt at the meta disc root.  For example,
          if the disc is mounted at D::
 
              D:
@@ -448,7 +455,7 @@ STEP 3.  Put the password in a file.  The script reads the password
          on a shared machine, save it to removable media instead and
          delete it as soon as the restore finishes.
 
-STEP 4.  Run the standalone restorer.  --repo, --password-file and
+STEP 4.  Run the Python reader.  --repo, --password-file and
          --target are all required flags; there are no positional
          arguments.
 
@@ -458,9 +465,9 @@ STEP 4.  Run the standalone restorer.  --repo, --password-file and
                  --target C:\Users\me\restored ^
                  --mount-point E:\
 
-         <name> is the backup-set folder under D:\metadata\ -- the
+         <name> is the repository's folder under D:\metadata\ -- the
          directory that contains keys\ and index\.  Run
-         `dir D:\metadata` to list the available sets.
+         `dir D:\metadata` to list the repositories.
 
          Pack data lives on the data discs, not under metadata\.
          Add one --mount-point <letter>:\ argument per inserted
@@ -468,12 +475,12 @@ STEP 4.  Run the standalone restorer.  --repo, --password-file and
          script pauses so you can swap discs, then re-scans the
          mount points.  Run with --help for the full flag surface.
 
-STEP 5.  Wait for "Recovery complete".  Files are byte-equal to the
+STEP 5.  Wait for "Restore complete".  Files are byte-equal to the
          original snapshot.  Symlink, ACL, owner/group and other
          POSIX-specific metadata are dropped on Windows (same caveats
          as the binary path).
 
-The standalone restorer has NO external dependencies beyond the
+The Python reader has NO external dependencies beyond the
 Python standard library; it implements AES-256 and the restic blob
 format directly.  It is slower than the C binary -- typically by a
 factor of 5-20x -- but works on any Windows that runs Python 3.
@@ -494,8 +501,9 @@ If the disc itself is unreadable (cracks, scratches, drive errors):
         the free, open-source ImgBurn (Read mode: Disc -> Image) is a
         common choice on Windows.  Save it as, e.g., C:\temp\disc.iso.
 
-     b. From a CMD prompt at the disc root, run the bundled helper,
-        which scans the image and offers to repair it in place:
+     b. From a CMD prompt at the meta disc root, run the bundled
+        helper, which scans the image and offers to repair it in
+        place:
 
            restore.bat --check-disc C:\temp\disc.iso
 
@@ -508,12 +516,12 @@ If the disc itself is unreadable (cracks, scratches, drive errors):
      If damage exceeds the parity, lcsas-ecc reports it and refuses a
      partial repair rather than returning a silently-broken image.
 
-  3. Then mount the recovered .iso via Windows' built-in mount
+  3. Then mount the repaired .iso via Windows' built-in mount
      (right-click -> Mount) and re-run restore.bat against the
      mounted drive.
-  4. If you have multiple copies of the same volume, any single
-     readable copy is sufficient.  The on-disc binaries and packs
-     are bit-identical across copies.
+  4. If you have more than one disc with the same label, any one
+     readable disc is enough.  The binaries and packs on them are
+     bit-identical.
 
 The in-house repair tool (lcsas-ecc) is built from source we ship and
 audit on the meta disc; the dvdisaster RS03 reference source is pinned

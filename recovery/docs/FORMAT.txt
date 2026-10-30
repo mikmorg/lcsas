@@ -1,7 +1,7 @@
 LCSAS RECOVERY TOOLCHAIN -- ON-DISC FORMAT
 ============================================
 
-This document describes the on-disc data formats relevant to recovery.
+This document describes the on-disc data formats relevant to a restore.
 It is derived from docs/RESTIC_FORMAT_SPEC.md and the LCSAS source.
 
 REPOSITORY LAYOUT (restic format)
@@ -38,20 +38,21 @@ KEY FILE
          "mac": { "k": "<b64 16 bytes>", "r": "<b64 16 bytes>" } }
     encrypted under the key-encryption-key (KEK) derived from scrypt.
 
-REPO V1 vs V2
+REPOSITORY V1 vs V2
 
   Versions 1 and 2 are a FROZEN, GATED contract (FMT-03): they are the
   only formats every recovery tier (this C reader, the pinned rustic
-  fallback, and the pure-Python tier-3 restorer) can decode.  The burn
-  pipeline decode-proves each mirror before mastering any disc and
-  REFUSES to burn a repo whose live writer has migrated past v2 — so no
-  disc that no shipped reader can open is ever produced.  Bumping the set
-  means changing all three readers together, not just upgrading the NAS
-  rustic.
+  fallback, and the tier-3 Python reader) can decode.  The burn
+  pipeline decode-proves each mirror before mastering any volume and
+  REFUSES to burn a repository whose live writer has migrated past
+  v2 — so no disc that no shipped reader can open is ever produced.
+  Bumping the set means changing all three readers together, not just
+  upgrading the NAS rustic.
 
-  Repo version 1: encrypted blobs decrypt directly to JSON / raw data.
-  Repo version 2: a leading compression-type byte is prepended after
-  decryption:
+  Repository version 1: encrypted blobs decrypt directly to JSON / raw
+  data.
+  Repository version 2: a leading compression-type byte is prepended
+  after decryption:
     0x00 -> uncompressed (strip the byte)
     0x01 -> zstd-compressed (strip; decompress remainder)
     0x02 -> zstd-compressed (strip; decompress remainder)
@@ -59,8 +60,9 @@ REPO V1 vs V2
   For repository files (config, index, snapshots), the type byte is
   ALWAYS present in v2 (even when uncompressed: the byte is 0x00).
 
-  For pack-blob inline data in v2 repos, the leading byte is OMITTED
-  if compressed: the zstd frame starts directly at the blob's offset.
+  For pack-blob inline data in v2 repositories, the leading byte is
+  OMITTED if compressed: the zstd frame starts directly at the blob's
+  offset.
   The implementation detects compression by checking the zstd magic
   number (28 B5 2F FD) at the start of decrypted data.
 
@@ -98,23 +100,23 @@ PACK FILE DISCOVERY
 
 LCSAS CATALOG
 
-  In addition to the restic repository, LCSAS maintains a SQLite
-  catalog at /catalog.db on every disc.  Phase 1 MVP does not use the
-  catalog; phase 2 will add it.  Schema is documented in
-  src/lcsas/db/schema.py (version 5).
+  In addition to the restic repository, LCSAS burns a copy of its
+  SQLite catalog (the disc catalog) at /catalog.db onto every data
+  disc.  Phase 1 MVP does not use the catalog; phase 2 will add it.
+  Schema is documented in src/lcsas/db/schema.py (version 5).
 
 VOLUME LAYOUT (LCSAS disc)
 
-  /catalog.db                          SQLite catalog
+  /catalog.db                          SQLite disc catalog
   /repos/<repo_id>/                    one full restic repository per
-                                        co-burned repo
+                                        co-burned repository
     keys/, index/, snapshots/, data/
   /recovery/                           this toolchain
     bin/<arch>/lcsas-restore
     src/, Makefile
     scripts/restore.sh, ...
     docs/FORMAT.txt, BUILD.txt, RECOVER.txt, CRYPTO.txt
-  /standalone_restorer.py              pure-Python fallback (tier 3)
+  /standalone_restorer.py              Python reader (tier 3)
   /MANIFEST.sha256                     SHA-256 of every file on disc
   /SURVIVABILITY.md                    survivability invariants
 
@@ -178,10 +180,10 @@ PATH SAFETY
 
 CHECKSUMS
 
-  Every blob is verified by SHA-256.  Every pack header is verified by
-  Poly1305-AES.  Every encrypted file is verified by Poly1305-AES.
-  Tampering with any single byte produces a verification failure that
-  aborts the restore with a non-zero exit code.
+  Every blob is checked against its SHA-256 ID.  Every pack header is
+  authenticated by Poly1305-AES.  Every encrypted file is authenticated
+  by Poly1305-AES.  Tampering with any single byte produces an
+  integrity failure that aborts the restore with a non-zero exit code.
 
   At the disc level, dvdisaster RS03 ECC provides additional integrity
   + repair beyond the cryptographic checks.
@@ -191,7 +193,7 @@ TIER-1 LIMITS
   Tier-1 JSON parsing (index files, snapshot files, tree blobs) is
   size-adaptive: the token buffer is grown on demand, so there is no
   fixed cap on the number of blob entries per index, directory entries
-  per tree, or content chunks per file.  See lcsas_json_parse_alloc in
+  per tree, or content blobs per file.  See lcsas_json_parse_alloc in
   src/lcsas-restore/json_q.c.
 
   The only ceilings are:

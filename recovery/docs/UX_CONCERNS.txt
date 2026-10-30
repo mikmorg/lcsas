@@ -1,14 +1,14 @@
 LCSAS RECOVERY -- COMMON-CASE / UX CONCERNS LOG
 =================================================
 
-This file tracks every known concern that affects an AVERAGE USER
+This file tracks every known concern that affects an AVERAGE HEIR
 restoring an archive in 2030-2050.  Each item has a STATUS, a brief
 description, and a mitigation strategy.
 
 These are distinct from the 50-year survivability concerns covered
 by docs/TIERS.txt + recovery/specs/.  The toolchain is engineered to
 survive software-ecosystem decay; this log tracks the *current-decade*
-user-experience gaps where survivability ≠ recoverability.
+user-experience gaps where survivability ≠ restorability.
 
 STATUS legend:
   OPEN       not yet addressed; on the work plan
@@ -19,36 +19,36 @@ STATUS legend:
   WONTFIX    intentionally not addressed (with rationale)
 
 ────────────────────────────────────────────────────────────────────
-ID 001 -- Windows users have no recovery path
+ID 001 -- Heirs on Windows have no restore path
 ────────────────────────────────────────────────────────────────────
 STATUS: MITIGATED (native Windows path shipped; a SecureBoot-signed
         live-USB remains the no-OS fallback)
 RESOLVED BY: UX-01 / INFRA-01 landed the full native path —
         recovery/bin/x86_64-windows/lcsas-restore.exe (built via
         zig cc), recovery/scripts/restore.bat (CMD driver mirroring
-        restore.sh, with holographic-metadata layout discovery), and
+        restore.sh, with repository-metadata layout discovery), and
         recovery/docs/RECOVER_WINDOWS.txt.  A wine smoke test plus a
         two-job Windows-journey e2e gate exercise the .bat end to end.
         Residual: no Authenticode signature yet (the unsigned-binary
         concern below), and a bare no-OS machine still rides the
         live-USB route (the optical-drive-rarity concern below).
-IMPACT: HIGH.  Windows is ~70% of the laptop market.  A user with a
-        Windows-only laptop who inherits the discs cannot run any
-        of the prebuilt binaries; they would need to install WSL2,
+IMPACT: HIGH.  Windows is ~70% of the laptop market.  An heir with
+        only a Windows laptop cannot run any of the prebuilt
+        binaries; they would need to install WSL2,
         install a Linux distro, mount the disc inside WSL, and run
         the shell driver -- a multi-hour learning curve.
 
 MITIGATION (DONE -- UX-01 / INFRA-01):
   * Cross-build lcsas-restore.exe for x86_64-windows via zig cc.
-  * Ship recovery/bin/x86_64-windows/lcsas-restore.exe on the meta-
-    volume.
+  * Ship recovery/bin/x86_64-windows/lcsas-restore.exe on the meta
+    disc.
   * Ship recovery/scripts/restore.bat as a CMD-compatible driver
     that mirrors restore.sh.
   * Document the Windows workflow in docs/RECOVER_WINDOWS.txt and
     in START_HERE.txt.
-  * [DONE 2026-06-11, KEY-05] Split-key archives on Windows: the
+  * [DONE 2026-06-11, KEY-05] Split passwords on Windows: the
     static combiner lcsas-keyshare.exe is now documented in
-    RECOVER_WINDOWS.txt ("KEY SHARES (SPLIT PASSWORDS)") and in
+    RECOVER_WINDOWS.txt ("SHARE CARDS (SPLIT PASSWORDS)") and in
     restore.bat's header + password prompt, and the meta-builder
     relocates it next to lcsas-restore.exe under the on-disc
     rust-triple bin dir.  Pinned by
@@ -58,7 +58,7 @@ MITIGATION (DONE -- UX-01 / INFRA-01):
 ID 002 -- /restore.sh is one file among many at disc root
 ────────────────────────────────────────────────────────────────────
 STATUS: OPEN
-IMPACT: MEDIUM.  Inheritor opens disc in file explorer, sees
+IMPACT: MEDIUM.  Heir opens disc in file explorer, sees
         15-20 files (README, README_RESTORE, restore.sh,
         restore-auto.sh, restore_legacy.sh, restore_c89.sh,
         standalone_restorer.py, tools/, lcsas/, ...).  Picking
@@ -77,7 +77,7 @@ ID 003 -- No GUI launcher
 ────────────────────────────────────────────────────────────────────
 STATUS: DEFERRED  (also a NON-GOAL in WINDOWS_RECOVERY_PLAN.txt: the
         .bat console UX is the common-case answer on Windows)
-IMPACT: MEDIUM.  Average user in 2040 may have never used a
+IMPACT: MEDIUM.  Average heir in 2040 may have never used a
         terminal.  A double-clickable launcher (.app on macOS,
         .exe with prompt on Windows) lowers the barrier.
 
@@ -110,7 +110,7 @@ MITIGATION:
     the home folder and run the copy, after
         xattr -dr com.apple.quarantine ~/lcsas-meta     (macOS)
         chmod -R u+x ~/lcsas-meta/recovery/bin          (Linux)
-    Checked on Linux against a real meta-volume copied to a
+    Checked on Linux against a real meta disc copied to a
     showexec FAT image: tiers 1-2 skipped from the stick, tier 1
     restores byte-identically from the chmod'ed copy.  The macOS
     wording is for the manual Mac drill (#475) to confirm.
@@ -130,22 +130,22 @@ RESOLVED BY: RECOVER.txt "MULTI-DISC RESTORE" section documents the
              tests/recovery_hardening/test_disc_swap_docs.py.
 IMPACT: HIGH.  When lcsas-restore needs a pack on a different
         volume, it currently prints "pack not found: <sha>" and
-        exits non-zero.  The user has no idea which physical disc
+        exits non-zero.  The heir has no idea which physical disc
         to insert next.
 
 MITIGATION:
   * Implement: when a pack is missing on the mounted disc,
-    consult the on-disc catalog (or a new plain-text disc_index.txt
+    consult the disc catalog (or a new plain-text disc_index.txt
     we should write at burn time) and print:
         ==> Please insert disc:  vol-042  "Family Photos 2027 (3/8)"
         ==> Catalog says it contains pack: aa11b2c3...
         ==> Press ENTER when ready (q to abort).
   * Wait for ENTER, re-scan the data/ directory, continue.
-  * Add a test that simulates a missing pack and verifies the
+  * Add a test that simulates a missing pack and checks the
     prompt + retry loop.
 
 ────────────────────────────────────────────────────────────────────
-ID 006 -- Password loss = unrecoverable
+ID 006 -- Password loss = no restore possible
 ────────────────────────────────────────────────────────────────────
 STATUS: WONTFIX-CRYPTOGRAPHIC
 IMPACT: HIGHEST.  No password = no key derivation = no decryption.
@@ -157,12 +157,12 @@ MITIGATION (organizational, not technical):
   * START_HERE.txt should instruct archive owners to write the
     password down and store it physically separate from the discs
     (safe deposit box, with a lawyer, in an estate planning
-    document, or in a Sharmir-secret-shared multi-person scheme).
-  * IMPLEMENTED (KEY-09): paper-printable "Recovery Card" shipped as
+    document, or split into Shamir shares held by several people).
+  * IMPLEMENTED (KEY-09): paper-printable "Password Card" shipped as
     docs/PASSWORD_CARD.txt (static fill-in template) plus a generator
     `lcsas --config lcsas.toml key card --repo R` that renders the card
     with a transcription CHECK CODE (first 4 hex of SHA-256(password);
-    the password itself is never printed). An owner/heir verifies a
+    the password itself is never printed). An owner/heir checks a
     hand-copied password with `lcsas key card --check FILE --code CODE`
     (MATCH/MISMATCH). The card is an off-disc artifact by design.
   * IMPLEMENTED (UX-09): whole-archive starting sheet generator
@@ -170,11 +170,12 @@ MITIGATION (organizational, not technical):
     covering owner, repositories, disc count (from the catalog when
     reachable, else fill-in blanks), the K-of-N share scheme when split,
     and the literal first command an heir runs per OS. Complements the
-    per-repo `key card` (which records one password); the estate card is
-    the heir's entry point and is stored WITH the discs (no secret on it).
-  * Optionally: support a secondary password (escrow) at archive
-    creation time.  Phase 5+.
-  * No technical mitigation possible from the inheritor side.
+    per-repository `key card` (which records one password); the estate
+    card is the heir's entry point and is stored WITH the discs (no
+    secret on it).
+  * Optionally: support a secondary password, held by someone
+    trusted, at archive creation time.  Phase 5+.
+  * No technical mitigation possible from the heir's side.
 
 ────────────────────────────────────────────────────────────────────
 ID 007 -- Optical drives are increasingly rare on modern hardware
@@ -182,7 +183,7 @@ ID 007 -- Optical drives are increasingly rare on modern hardware
 STATUS: MITIGATED (live-USB route documented + gated; USB BD reader
         still required to physically read the discs)
 IMPACT: MEDIUM.  By 2030 most laptops have no internal optical
-        drive.  Inheritors must procure a USB BD reader (~$40,
+        drive.  Heirs must procure a USB BD reader (~$40,
         widely available today; uncertain for 2050).
 
 MITIGATION:
@@ -217,19 +218,19 @@ RESOLVED BY: START_HERE.txt (rendered by src/lcsas/meta/builder.py
              labelled LCSAS_META" prompts in restore.sh (QUICK START)
              and restore.bat (no-backup-set-found message), and the RECOVER.txt
              MULTI-DISC RESTORE section (see ID 011).
-IMPACT: MEDIUM.  In a 50-disc archive, only one (the meta-volume)
-        contains the toolchain.  The others are data-only.  Picking
-        the wrong one wastes time.
+IMPACT: MEDIUM.  In a 50-disc archive, only the meta disc contains
+        the toolchain (if there are several, use the newest).  The
+        others are data-only.  Picking the wrong one wastes time.
 
 MITIGATION:
   * Print clear "META" vs "DATA" labels on each disc (already done
-    on disc labels; needs to be also on the disc's filesystem volume
+    on disc labels; needs to be also on the disc's filesystem
     label so it shows up in the file explorer).
   * Have START_HERE.txt unambiguously say "look for the disc labelled
     LCSAS_META first".
 
 ────────────────────────────────────────────────────────────────────
-ID 009 -- No verification step before destructive write
+ID 009 -- No confirmation step before destructive write
 ────────────────────────────────────────────────────────────────────
 STATUS: RESOLVED (non-empty-target guard) [UX-07]
 IMPACT: LOW.  lcsas-restore writes restored files directly into
@@ -257,7 +258,7 @@ MITIGATION:
 ID 010 -- Disc-creation date and original-archive context are opaque
 ────────────────────────────────────────────────────────────────────
 STATUS: OPEN
-IMPACT: LOW.  The inheritor sees a pile of discs and cannot tell
+IMPACT: LOW.  The heir sees a pile of discs and cannot tell
         when they were burned, by whom, with what software version,
         or for what purpose ("photos? business records? both?").
 
@@ -273,7 +274,7 @@ MITIGATION:
   * Make this file the first thing referenced from START_HERE.txt.
 
 ────────────────────────────────────────────────────────────────────
-ID 011 -- disc-loader is test-only — no real-user disc-swap guide existed
+ID 011 -- disc-loader is test-only — no disc-swap guide for heirs existed
 ────────────────────────────────────────────────────────────────────
 STATUS: CLOSED
 RESOLVED BY: RECOVER.txt "MULTI-DISC RESTORE" section (closes #106).
@@ -281,10 +282,10 @@ RESOLVED BY: RECOVER.txt "MULTI-DISC RESTORE" section (closes #106).
              tests/recovery_hardening/test_disc_swap_docs.py.
 IMPACT: HIGH.  The automated test rig uses a setuid C wrapper called
         disc-loader to simulate disc swaps without human interaction.
-        Real disaster-recovery operators have no equivalent; they must
-        physically eject and insert discs.  No operator-facing
-        documentation of that process existed, so a passing test gave
-        false confidence that the UX was smooth for real users.
+        Real heirs have no equivalent; they must physically eject
+        and insert discs.  No heir-facing documentation of that
+        process existed, so a passing test gave false confidence
+        that the UX was smooth for real heirs.
 
 MITIGATION:
   * Added a MULTI-DISC RESTORE section to RECOVER.txt that documents
@@ -294,7 +295,7 @@ MITIGATION:
     LCSAS_PACK_CACHE_DIR knob that reduces swap frequency.
   * Added a note in that section explicitly calling out that
     disc-loader is test-only and that a passing test does not
-    guarantee smooth live-operator UX.
+    guarantee smooth UX for a real heir.
 
 ────────────────────────────────────────────────────────────────────
 ID 012 -- env-var defaults were undocumented
@@ -305,8 +306,8 @@ RESOLVED BY: recovery/docs/ENV_VARS.txt (closes #89).
              tests/recovery_hardening/test_env_var_docs.py.
 IMPACT: MEDIUM.  LCSAS_PACK_CACHE_DIR defaulted ON (auto) and
         LCSAS_TIER_FALLBACK defaulted OFF with no documented rationale.
-        Operators could not predict restore behavior without reading
-        restore.sh source — violating the principle that the recovery
+        Nobody could predict restore behavior without reading
+        restore.sh source — violating the principle that the restore
         path must be understandable without tooling.
 
 MITIGATION:

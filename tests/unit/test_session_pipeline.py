@@ -1107,7 +1107,7 @@ class TestCleanSession:
             ).fetchone()[0] == 0
 
         # Without --force the clean must REFUSE (packs would be stranded).
-        with pytest.raises(ValueError, match="no verified disc copy"):
+        with pytest.raises(ValueError, match="no verified disc"):
             orch.clean_session(result.session_id)
         for m in result.manifests:
             assert get_volume_by_id(conn, m.volume_id) is not None

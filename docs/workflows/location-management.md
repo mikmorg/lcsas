@@ -1,17 +1,17 @@
 # Location Management & Multi-Copy Sync
 
 LCSAS treats *physical location* as a first-class catalog dimension. Every burned
-disc is tagged with the location it lives at — home safe,
+disc is tagged with the location where it is kept — home safe,
 bank deposit box, off-site colocation, "in transit" — and the catalog tracks
-each `(volume, location)` pair as an independent **volume copy**. This lets the
-same logical volume exist at N places, and lets LCSAS reason about which
-locations are *behind* on archival relative to the master mirror.
+each `(volume, location)` pair as an independent **disc** (one `volume_copies`
+row). This lets the same volume exist at N places, and lets LCSAS reason
+about which locations are *behind* on archival relative to the mirror.
 
 Multi-copy redundancy is built on two tables: `locations` (the registry of
-named places) and `volume_copies` (the M:N join of "which volume lives where",
-with status `ACTIVE` / `DEPRECATED` / `DESTROYED`). To bring a lagging
+named places) and `volume_copies` (the M:N join of "which volume has a disc
+where", with status `ACTIVE` / `DEPRECATED` / `DESTROYED`). To bring a lagging
 location up to parity, LCSAS computes the *delta* of packs missing at that
-location and stages a fresh set of ISOs containing just those packs —
+location and stages a fresh set of ISO images containing just those packs —
 the `--for-location` flow. The same staging+burn pipeline is reused, so
 delta burns are physically indistinguishable from initial burns once the
 disc is in hand.
@@ -31,8 +31,8 @@ disc is in hand.
 
 ## `lcsas location add`
 
-**Purpose:** Register a named physical storage location so volume copies can
-reference it via foreign key.
+**Purpose:** Register a named location so disc records (`volume_copies` rows)
+can reference it via foreign key.
 
 **Prerequisites:**
 - `--config` pointing at a valid LCSAS config (the command refuses to run
@@ -66,8 +66,8 @@ in `src/lcsas/db/schema.py`).
 
 **Variant axes that apply:**
 - Multi-copy — the entire feature exists to enable >1 copy across locations.
-- Multi-tenant — locations are global, not per-repo; tenants share the
-  same location namespace.
+- Multi-repository — locations are global, not per-repository; all repositories
+  share the same location namespace.
 
 **Test coverage:**
 - Existing: `tests/unit/test_db_locations.py::TestLocationCRUD::test_create_and_get`,
@@ -86,7 +86,7 @@ in `src/lcsas/db/schema.py`).
 ## `lcsas location list`
 
 **Purpose:** Enumerate every registered location alongside a coverage
-summary (volume count, pack count, packs behind master).
+summary (volume count, pack count, packs behind the whole archive).
 
 **Prerequisites:**
 - `--config` with a readable catalog.
@@ -104,7 +104,7 @@ summary (volume count, pack count, packs behind master).
    counts, computing `missing = total_archived - pack_count`
    (`src/lcsas/db/queries.py`).
 6. The handler joins each location with its summary (defaulting to zeros
-   when a location has no copies yet) and emits one line per location
+   when a location has no discs yet) and emits one line per location
    with a status of either `all current` or `<N> packs behind`
    (the `"list"` branch of `cmd_location()`).
 
@@ -114,8 +114,8 @@ summary (volume count, pack count, packs behind master).
 **Variant axes that apply:**
 - Multi-copy — coverage "behind" only makes sense once two or more
   locations exist.
-- Multi-tenant — pack counts pool every repo because
-  `get_location_summary` doesn't filter by repo.
+- Multi-repository — pack counts pool every repository because
+  `get_location_summary` doesn't filter by repository.
 
 **Test coverage:**
 - Existing: `tests/unit/test_location_queries.py` covers
@@ -134,7 +134,7 @@ summary (volume count, pack count, packs behind master).
 ## `lcsas location status`
 
 **Purpose:** Show a detailed coverage report for one location — exactly
-which packs are present there, which ones are missing, grouped by repo.
+which packs are present there, which ones are missing, grouped by repository.
 
 **Prerequisites:**
 - `--config` with a readable catalog.
@@ -146,8 +146,8 @@ which packs are present there, which ones are missing, grouped by repo.
    (the `location` subparser block in `build_parser()`).
 2. `cmd_location()` enters the `"status"` branch
    (`src/lcsas/cli/main.py`).
-3. `get_packs_at_location(conn, name)` returns the set of pack IDs that
-   have at least one `ACTIVE` copy at this location, by joining
+3. `get_packs_at_location(conn, name)` returns the set of `pack_id` row ids
+   of packs that have at least one `ACTIVE` disc at this location, by joining
    `volume_packs` to `volume_copies` filtered on
    `vc.status='ACTIVE'` (`src/lcsas/db/queries.py`).
 4. `get_packs_missing_at_location(conn, name)` returns Pack rows that
@@ -170,14 +170,14 @@ Location: Offsite_Safe
 **Variant axes that apply:**
 - Multi-copy — the report is meaningless for a single-location setup
   (always "0 missing").
-- Multi-tenant — output is grouped per repo, so multi-repo deployments
-  see one line per tenant.
+- Multi-repository — output is grouped per repository, so an archive with
+  several repositories shows one line per repository.
 
 **Test coverage:**
 - Existing: `tests/unit/test_location_queries.py::TestLocationQueries`
   covers `get_packs_at_location` and `get_packs_missing_at_location`
   exhaustively (empty, partial, full coverage).
-- Gap: no CLI test asserts the per-repo grouping in the output;
+- Gap: no CLI test asserts the per-repository grouping in the output;
   no test covers an unknown location name (currently silently returns
   empty sets, instead of raising).
 
@@ -201,7 +201,7 @@ registered locations (e.g. quarterly rotation from `Home_Safe` to
   `src/lcsas/db/schema.py`).
 - An `ACTIVE` `volume_copies` row must exist for
   `(volume_id, from_location)`.
-- The destination must **not** already have a copy of this volume —
+- The destination must **not** already have a disc of this volume —
   the UNIQUE constraint `(volume_id, location)` blocks duplicates
   (`volume_copies` DDL in `src/lcsas/db/schema.py`).
 
@@ -223,30 +223,30 @@ registered locations (e.g. quarterly rotation from `Home_Safe` to
    `volume_events` in the same transaction (issue #16,
    `move_volume_copy()`).
 6. A `sqlite3.IntegrityError` (duplicate destination) is translated
-   into a `ValueError` with a user-readable message
+   into a `ValueError` with a readable message
    (`move_volume_copy()`).
-7. A zero-row update (no `ACTIVE` copy at `from_location`) also raises
+7. A zero-row update (no `ACTIVE` disc at `from_location`) also raises
    `ValueError` (`move_volume_copy()`).
 8. On success, the handler logs `Moved <label>: <a> → <b>`
    (the `"move"` branch of `cmd_location()`).
 
 **Expected outcome:** A single `volume_copies` row mutated in place —
 `location = to`, `notes` extended with the move record — plus one
-`LOCATION_MOVE` row in `volume_events`. No new copy row is
+`LOCATION_MOVE` row in `volume_events`. No new disc row is
 created; the disc retains its `burn_date`, `iso_sha256`, and
 `media_serial`.
 
 **Variant axes that apply:**
 - Multi-copy — the entire workflow is multi-copy-specific.
-- OS — none; pure catalog mutation, no media handling.
+- OS — none; pure catalog mutation, no disc handling.
 
 **Test coverage:**
 - Existing: `tests/unit/test_db_volume_copies.py` covers
   `move_volume_copy` happy-path and duplicate-destination paths;
   `tests/unit/test_cli_comprehensive.py::test_location_move_nonexistent_volume`
   covers the missing-label error path.
-- Gap: no test covers the "no `ACTIVE` copy at source" branch via CLI;
-  no test verifies that `notes` accrues across multiple moves.
+- Gap: no test covers the "no `ACTIVE` disc at source" branch via CLI;
+  no test checks that `notes` accrues across multiple moves.
 
 **Source refs:**
 - the `location` subparser in `build_parser()` and the `"move"` branch of
@@ -259,17 +259,17 @@ created; the disc retains its `burn_date`, `iso_sha256`, and
 
 ## `lcsas copy deprecate` / `lcsas copy destroy`
 
-**Purpose:** Record the *fate* of a single physical disc copy when a disc
-is damaged, retired, or lost. `deprecate` marks a copy as retired-but-
-present; `destroy` marks it as gone. Both mutate one `volume_copies` row
-(by `(volume_label, location)`), leaving copies at other locations
+**Purpose:** Record the *fate* of a single disc when it is damaged, taken
+out of service, or lost. `deprecate` marks a disc as out of service but
+still present; `destroy` marks it as gone. Both mutate one `volume_copies`
+row (by `(volume_label, location)`), leaving discs at other locations
 untouched.
 
 **Prerequisites:**
 - `--config` with a writable catalog.
 - The volume label must resolve to a `Volume` row. `deprecate` requires
   an `ACTIVE` `volume_copies` row for `(volume, location)`; `destroy`
-  accepts a copy row in any status.
+  accepts a disc row in any status.
 
 **Steps:**
 1. Parser registers `copy deprecate <volume_label> <location>` and
@@ -279,26 +279,27 @@ untouched.
    label logs an error and returns 1.
 3. It dispatches to `deprecate_copy(conn, volume_id, location)` or
    `destroy_copy(conn, volume_id, location)`
-   (`src/lcsas/db/volume_copies.py`), which flip the copy's `status` to
-   `DEPRECATED` / `DESTROYED`. A `ValueError` (no matching copy — no
-   `ACTIVE` copy for `deprecate`, no copy row at all for `destroy`) is
+   (`src/lcsas/db/volume_copies.py`), which flip the disc's `status` to
+   `DEPRECATED` / `DESTROYED`. A `ValueError` (no matching disc — no
+   `ACTIVE` disc for `deprecate`, no disc row at all for `destroy`) is
    logged and returns 1.
-4. **Auto-demotion:** if that was the *last* `ACTIVE` copy of the volume,
-   the helper returns a "demoted" flag and the volume itself drops to
-   `DEPRECATED`. `cmd_copy` then warns that the volume's packs now count
-   in `lcsas status` / the redundancy report and suggests re-burning via
+4. **Auto-demotion:** if that was the volume's *last* `ACTIVE` disc,
+   the helper returns a "demoted" flag and the volume is now a lost
+   volume: its recorded state drops to `DEPRECATED`. `cmd_copy` then warns
+   that the volume's packs now count in `lcsas status` / the redundancy
+   report and suggests re-burning via
    `lcsas stage --for-location <location>`.
 
 **Expected outcome:** One `volume_copies` row transitions to
-`DEPRECATED` / `DESTROYED`. Losing the last `ACTIVE` copy auto-demotes
-the parent volume to `DEPRECATED` so the redundancy report and the
+`DEPRECATED` / `DESTROYED`. Losing the last `ACTIVE` disc auto-demotes
+the volume to `DEPRECATED` (a lost volume) so the redundancy report and the
 deprecation guard stop counting it as a replica.
 
 **Variant axes that apply:**
-- Multi-copy — the command is only meaningful once a volume has copies
-  across locations; with a single copy, `destroy` triggers the
+- Multi-copy — the command is only meaningful once a volume has discs
+  at several locations; with a single disc, `destroy` triggers the
   auto-demotion warning.
-- Multi-tenant — operates on a volume label, independent of repo.
+- Multi-repository — operates on a volume label, independent of repository.
 
 **Source refs:**
 - `build_parser()` (`copy` subparser), `cmd_copy`
@@ -309,7 +310,7 @@ deprecation guard stop counting it as a replica.
 
 ## Multi-copy sync via `--for-location`
 
-**Purpose:** Bring a lagging location up to parity with the master mirror
+**Purpose:** Bring a lagging location up to parity with the mirror
 by staging and burning *only* the packs that location is missing.
 
 **Prerequisites:**
@@ -319,8 +320,8 @@ by staging and burning *only* the packs that location is missing.
   creation during burn.
 - The catalog contains the full set of packs (i.e. `lcsas scan` has run
   against the live mirrors).
-- Enough free disk under `config.staging_path` to hold the delta ISOs
-  plus ECC overhead (the disk-space pre-flight in
+- Enough free disk space in the staging area (`config.staging_path`) to
+  hold the delta ISO images plus ECC overhead (the disk-space pre-flight in
   `BurnOrchestrator.stage()`, `src/lcsas/burn/orchestrator.py`).
 
 **Steps:**
@@ -330,8 +331,8 @@ by staging and burning *only* the packs that location is missing.
    `build_parser()`, `src/lcsas/cli/main.py`). `cmd_stage()` passes
    `for_location=args.for_location` into `BurnOrchestrator.stage()`.
    Burn the resulting session with
-   `lcsas burn --session <id> --location <name>` to tag the burned copies
-   for that location.
+   `lcsas burn --session <id> --location <name>` to tag the burned discs
+   with that location.
 
 2. `BurnOrchestrator.stage()` receives `for_location` and routes pack
    selection through `_gather_packs_for_staging`
@@ -345,18 +346,18 @@ by staging and burning *only* the packs that location is missing.
      `volume_copies` row at the target location.
 
 4. If `repo_ids` were also passed, the result is intersected with that
-   set (the repo filter at the end of `_gather_packs_for_staging()`).
+   set (the repository filter at the end of `_gather_packs_for_staging()`).
 
 5. Raises `ValueError("No packs need staging.")` if the location is
    already up to date (`BurnOrchestrator.stage()`).
 
 6. The remaining pipeline is identical to a fresh burn: FFD bin-pack
    (`BurnOrchestrator._multi_bin_pack()`), staging-dir build with
-   holographic catalog injection, ISO master via xorriso, ECC via
+   disc catalog injection, ISO image mastering via xorriso, ECC via
    DVDisaster, then `burn_session()`.
 
 7. `burn_session(..., location=<name>)`
-   (`BurnOrchestrator.burn_session()`) burns each ISO and calls
+   (`BurnOrchestrator.burn_session()`) burns each ISO image and calls
    `add_volume_copy(conn, volume_id, location)`
    (`src/lcsas/db/volume_copies.py`). The UPSERT means re-running the
    burn at the same location is idempotent: it updates `burn_date`
@@ -365,26 +366,26 @@ by staging and burning *only* the packs that location is missing.
 8. For re-burns of a volume that is already `VERIFIED` at another
    location, `burn_session` deliberately skips the
    `VERIFIED → BURNING → VERIFIED` status churn and just records a new
-   copy (the `is_reburn` path in `BurnOrchestrator.burn_session()`).
+   disc (the `is_reburn` path in `BurnOrchestrator.burn_session()`).
 
 **Expected outcome:** New `volume_copies` rows linking the delta-volume(s)
 to the target location, with `status = 'ACTIVE'`. The original volumes
 (those satisfying other locations) are untouched in their statuses;
-new physical discs are issued **only** for the delta, never duplicating
-existing copies at the target.
+new discs are burned **only** for the delta, never duplicating
+discs already at the target.
 
 **Variant axes that apply:**
 - Media type — delta size determines how many discs are needed; small
   deltas can fit on a single BD25 even when the original archive used
   MDISC100.
 - Multi-copy — the entire feature is multi-copy.
-- Multi-tenant — `--repo` filters the delta to a subset of tenants;
+- Multi-repository — `--repo` filters the delta to a subset of repositories;
   see step 4.
 - Optical drive count — irrelevant to selection, relevant to burn-loop
   pacing (one drive = serialized burns).
-- ECC — always on for production media; implicitly skipped for TEST_*.
+- ECC — always on for production media types; implicitly skipped for TEST_*.
   Has no effect on pack selection.
-- Recovery tier — sync targets Tier 2 only.
+- Storage stage — sync targets the discs only.
 
 **Test coverage:**
 - Existing:
@@ -393,13 +394,13 @@ existing copies at the target.
   - `tests/unit/test_session_pipeline.py::test_stage_for_location_delta`
     — staging the delta when some packs already exist at the target
     location.
-  - `tests/unit/test_cross_location_restore.py` — restoring with copies
+  - `tests/unit/test_cross_location_restore.py` — restoring with discs
     spread across locations.
   - `tests/unit/test_location_queries.py` — exhaustive coverage of
     `get_unarchived_or_missing_at_location`.
 - Gap: no integration test covers an end-to-end
   `stage --for-location` → `burn --session --location` pair where the
-  staging filter and copy tag share a name.
+  staging filter and the discs' location tag share a name.
 
 **Source refs:**
 - the `--for-location` flag in `build_parser()` and `cmd_stage()` in
@@ -441,24 +442,24 @@ Key behaviours derived from the schema (the `locations` and
   status='ACTIVE', iso_sha256=…, media_serial=…`
   (`add_volume_copy()` in `src/lcsas/db/volume_copies.py`). Re-burning
   the same volume to the same location is therefore idempotent and
-  resurrects deprecated copies.
+  resurrects a deprecated disc's row.
 - Volumes can transition through their own lifecycle
   (`STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED`)
-  independently of their copies' statuses. A `VERIFIED` volume re-burned
-  to a new location stays `VERIFIED`; only the new copy starts fresh
+  independently of their discs' statuses. A `VERIFIED` volume re-burned
+  to a new location stays `VERIFIED`; only the new disc starts fresh
   (the `is_reburn` path in `BurnOrchestrator.burn_session()`,
   `src/lcsas/burn/orchestrator.py`).
 - `volume_events` (table DDL in `src/lcsas/db/schema.py`) keeps an audit
   trail including a `LOCATION_MOVE` event type, and `move_volume_copy()`
-  emits one atomically with the copy update (issue #16) — from/to are
+  emits one atomically with the disc row's update (issue #16) — from/to are
   serialised into the event's `detail` column.
 - `get_location_summary` computes "packs behind" against the *global*
   archived pack count, so all locations are compared against the union of
   archived packs across every location — not against the live mirror.
-- Volume copies cascade-delete with the parent volume
+- Disc rows (`volume_copies`) cascade-delete with the parent volume
   (`ON DELETE CASCADE` on `volume_copies.volume_id`,
   `src/lcsas/db/schema.py`); location rows
-  do **not** cascade — `DELETE FROM locations` with live copies will
+  do **not** cascade — `DELETE FROM locations` with live disc rows will
   raise an FK error.
 
 ---
@@ -475,7 +476,7 @@ operating LCSAS in a multi-location production setup:
    every physical move.
 
 2. **No `location rename` or `location remove`.**
-   `delete_location()` exists at the DB layer
+   `delete_location()` exists in the catalog layer
    (`src/lcsas/db/locations.py`) but is not wired into the CLI. There
    is no rename operation at all; because `locations.name` is the FK
    target, a rename would have to cascade through `volume_copies` and
@@ -491,22 +492,22 @@ operating LCSAS in a multi-location production setup:
    from `Home` to `Vault` while moving disc B (same volume) from `Vault`
    to `Home` requires a two-step "park at intermediate location" dance.
    This is by design — there is only one logical "current location"
-   per copy — but operators should be aware.
+   per disc — but the owner should be aware.
 
-5. **`location move` operates on `ACTIVE` copies only.**
-   A `DEPRECATED` or `DESTROYED` copy at the source location is invisible
+5. **`location move` operates on `ACTIVE` discs only.**
+   A `DEPRECATED` or `DESTROYED` disc at the source location is invisible
    to `move_volume_copy` and the command reports
-   `No active copy of volume X at '<from>'`
+   `No in-service disc of volume X at '<from>'`
    (the zero-row check in `move_volume_copy()`,
-   `src/lcsas/db/volume_copies.py`). Restoring a deprecated copy
-   requires a manual SQL update.
+   `src/lcsas/db/volume_copies.py`). Putting a deprecated disc back in
+   service requires a manual SQL update.
 
 6. **`--for-location` always pulls `is_pruned = 0` packs.**
    `get_unarchived_or_missing_at_location` filters out pruned packs
    (the `is_pruned = 0` predicate in its query,
    `src/lcsas/db/queries.py`), so a freshly-pruned pack cannot be
    re-burned to a lagging location even if it still exists on the live
-   mirror. For long-rotation off-site copies, run `--for-location`
+   mirror. For off-site discs on a long rotation, run `--for-location`
    *before* `rustic forget --prune`.
 
 7. **`lcsas burn --location` rejects unknown names (fixed in #19).**
@@ -515,7 +516,7 @@ operating LCSAS in a multi-location production setup:
    (`src/lcsas/db/locations.py`). Unknown names abort with a
    "did you mean …?" hint computed by `difflib.get_close_matches`, so
    a typo in `lcsas burn --location Offsite_Safre` no longer mints a
-   phantom row. Operators who actually want a new location pass
+   phantom row. An owner who actually wants a new location passes
    `--create-location` (or pre-register with `lcsas location add`).
    `burn_session()` still calls `ensure_location` defensively for
    non-CLI callers, but in the CLI path the row is guaranteed to exist
@@ -524,12 +525,12 @@ operating LCSAS in a multi-location production setup:
 8. **`get_location_summary` ignores `DEPRECATED`/`DESTROYED` volumes**
    (the volume-status filter in `get_location_summary()`,
    `src/lcsas/db/queries.py`), so a location whose discs have all
-   been retired shows as `0 volumes, 0 packs, 0 packs behind` rather
+   been taken out of service shows as `0 volumes, 0 packs, 0 packs behind` rather
    than as a special "obsolete" state. The location row remains in the
    registry until explicitly deleted.
 
-9. **Recording copy fate is supported via `lcsas copy`.**
-   The DB layer's `deprecate_copy` / `destroy_copy`
+9. **Recording a disc's fate is supported via `lcsas copy`.**
+   The catalog layer's `deprecate_copy` / `destroy_copy`
    (`src/lcsas/db/volume_copies.py`) are wired into the CLI as
    `lcsas copy deprecate` and `lcsas copy destroy` (`cmd_copy` in
    `src/lcsas/cli/main.py`). Marking a damaged or lost disc no longer

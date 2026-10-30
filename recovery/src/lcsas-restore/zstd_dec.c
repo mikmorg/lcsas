@@ -20,7 +20,7 @@
  * unset and no content-size field in the header.  That makes
  * ZSTD_getFrameContentSize return ZSTD_CONTENTSIZE_UNKNOWN — which
  * the old probe path treated as a fatal error, breaking restore on
- * every multi-tenant disc we shipped.
+ * every multi-repository disc we shipped.
  *
  * The fix: fall back to ZSTD_decompressBound, which derives a safe
  * upper bound from the frame block headers without needing the

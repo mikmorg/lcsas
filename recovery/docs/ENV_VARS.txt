@@ -9,7 +9,7 @@ behave differently without them — are also opt-in unless the feature
 is always safe and the penalty of forgetting it is data loss or silent
 failure, in which case it is opt-out (default ON).
 
-This principle exists so operators can predict restore behavior without
+This principle exists so you can predict restore behavior without
 reading source code.  Each "Why this default" entry below maps to one
 of the two clauses above.
 
@@ -23,7 +23,7 @@ CREDENTIALS
 LCSAS_PASSWORD
   Default:  unset (prompts on stdin)
   Since:    Phase 1
-  What:     Encryption password for the Rustic repository.  When set,
+  What:     Password for the Rustic repository.  When set,
             restore.sh writes it to a temp file (mode 600) instead of
             reading interactively.  Mutually exclusive with LCSAS_PWFILE.
   Why:      Opt-in — credentials must never appear in the environment
@@ -41,14 +41,14 @@ DISCOVERY OVERRIDES
 ───────────────────
 
 LCSAS_REPO
-  Default:  unset (prompts when multiple repos found)
+  Default:  unset (prompts when multiple repositories found)
   Since:    Phase 14
-  What:     Tenant / repository name to restore.  Matches the basename
+  What:     Repository name to restore.  Matches the basename
             of the metadata/<name>/ directory on the disc.  Skips the
-            numbered-list prompt on multi-tenant archives.
+            numbered-list prompt on archives with several repositories.
   Why:      Opt-in — omitting it is correct and safe; it just shows an
-            interactive prompt.  Setting it changes which tenant's data
-            is restored; wrong value exits with an error.
+            interactive prompt.  Setting it changes which repository's
+            data is restored; wrong value exits with an error.
 
 LCSAS_TARGET
   Default:  unset (auto-detected from uname -m and uname -s)
@@ -63,9 +63,9 @@ LCSAS_TARGET
 LCSAS_META_DISC
   Default:  unset (auto-detected via mtab / findmnt)
   Since:    Phase 20
-  What:     Mount point of the recovery / meta disc.  Tells restore.sh
+  What:     Mount point of the meta disc.  Tells restore.sh
             and the tier-1 binary to exclude that path from pack
-            searches so a user with a single optical drive can eject
+            searches so an heir with a single optical drive can eject
             the meta disc and reuse the drive for data discs.
   Why:      Opt-in — auto-detection (mtab probe) handles the common
             case correctly; explicit set is for unusual mount layouts
@@ -103,10 +103,10 @@ LCSAS_PACK_CACHE_DIR
             to O(N_discs).
   Why:      Opt-OUT.  The v3 blind run took 16 disc swaps for 3 needed
             discs without the cache.  Forgetting this knob means the
-            operator swaps discs 3-16× more often than necessary —
+            heir swaps discs 3-16× more often than necessary —
             a silent penalty that accumulates to hours of human time
-            and risks disc handling errors.  Disk-constrained operators
-            who cannot afford the cache space can explicitly set
+            and risks disc handling errors.  Anyone short of disk space
+            who cannot afford the cache can explicitly set
             LCSAS_PACK_CACHE_DIR='' to turn it off.
 
 LCSAS_DRAIN_CHUNK_PACKS
@@ -122,11 +122,11 @@ LCSAS_DRAIN_CHUNK_PACKS
             100-500 when working with slow optical drives to keep the
             restore interactive between drain calls.
   Why:      Opt-IN.  Changing the default would change observable timing
-            behavior: existing scripts and operators that rely on the
+            behavior: existing scripts and people that rely on the
             disc being fully drained after the first pack hit would see
-            a different pattern.  Chunked draining is an explicit
+            a different pattern.  Draining in steps is an explicit
             trade-off between restore interactivity and disc-read
-            continuity; operators who want it must opt in.
+            continuity; anyone who wants it must opt in.
 
 LCSAS_MAX_JSON_MIB
   Default:  256  (opt-in override; default ceiling always active)
@@ -160,8 +160,8 @@ LCSAS_MAX_TREE_DEPTH
             ~1300+ level tree killed the process by signal with zero
             diagnostic — indistinguishable from "the software is broken"
             to a non-technical heir.  The cap converts that into an
-            actionable, recoverable error.  Overriding it is an escape
-            hatch, not a routine knob.
+            actionable error that can be worked around.  Overriding it
+            is an escape hatch, not a routine knob.
 
 LCSAS_TIER_FALLBACK
   Default:  0  (opt-in / default OFF)
@@ -171,24 +171,24 @@ LCSAS_TIER_FALLBACK
             1 → run each non-last tier as a subprocess; fall through to
             the next tier (tier 2, then tier 3) on non-zero exit.
   Why:      Opt-IN.  The default exec() behavior preserves the
-            bare-minimum recovery story: tier 1 IS the recovery, and
-            failures must surface immediately so the operator knows
-            tier 1 is broken.  Silent fallback could mask a tier-1
-            regression, giving false confidence that an archive is
-            recoverable when the primary path is actually broken.
-            LCSAS_TIER_FALLBACK=1 is an explicit opt-in for operators
-            who already know tier 1 is broken and want the cascade to
-            walk for them.
+            bare-minimum restore story: tier 1 IS the restore path, and
+            failures must surface immediately so you know tier 1 is
+            broken.  Silent fallback could mask a tier-1 regression,
+            giving false confidence that an archive can be restored
+            when the primary path is actually broken.
+            LCSAS_TIER_FALLBACK=1 is an explicit opt-in for anyone
+            who already knows tier 1 is broken and wants the cascade
+            to walk for them.
 
 LCSAS_ALLOW_PYTHON_TIER
   Default:  1  (opt-out / default ON)
   Since:    Phase 20
-  What:     1 (default) → tier-3 Python restorer is a reachable
+  What:     1 (default) → tier 3 (the Python reader) is a reachable
             fallback when tiers 1 and 2 are both absent or failed.
             0 → stop the cascade after tiers 1/2; never invoke Python.
   Why:      Opt-OUT.  Tier 3 is the last-resort safety net; disabling
-            it without an explicit operator choice removes the only
-            non-binary recovery option.  Environments that ban Python
+            it without an explicit choice removes the only non-binary
+            recovery tier.  Environments that ban Python
             entirely (air-gapped kiosks) can set this to 0.
 
 LCSAS_PROGRESS
@@ -197,12 +197,12 @@ LCSAS_PROGRESS
   What:     Controls periodic progress output on stderr during a
             restore.  Applies to both the tier-1 C binary
             (lcsas-restore prints "progress: N/M blobs, X MB" lines)
-            and the tier-3 Python restorer (prints "N/M files, X MB").
+            and the tier-3 Python reader (prints "N/M files, X MB").
             Set LCSAS_PROGRESS=0 to silence all progress output.
             Any other value (including unset) enables progress.
   Why:      Opt-OUT.  On a slow disc (~1 MB/s) a silent restore is
             indistinguishable from a frozen process.  Forgetting this
-            knob means the operator cannot tell if recovery is
+            knob means you cannot tell if the restore is
             proceeding or stuck.  The only reason to silence it is in
             machine-parseable log pipelines; that requires explicit opt.
 
@@ -212,14 +212,15 @@ LCSAS_NO_RELOCATE
   What:     1 → skip the relocation-to-RAM step.  Normally restore.sh
             detects when it is running off a read-only optical medium
             and copies itself + the recovery binaries to a writable
-            temp dir before exec()ing the copy.  This lets the operator
+            temp dir before exec()ing the copy.  This lets you
             eject the meta disc and reuse the drive for data discs.
             0 → perform relocation when the medium appears read-only.
   Why:      Opt-IN.  The relocation is a safety behavior; disabling it
             is only appropriate in test / development environments
             (e.g., running restore.sh from a source checkout on a
-            writable disk).  Accidentally disabling it on a live single-
-            drive recovery holds the meta disc open and prevents ejecting.
+            writable disk).  Accidentally disabling it during a real
+            single-drive restore holds the meta disc open and prevents
+            ejecting.
 
 LCSAS_ALLOW_NO_PACK_SEARCH
   Default:  0  (opt-in / default OFF)
@@ -231,7 +232,7 @@ LCSAS_ALLOW_NO_PACK_SEARCH
             actionable message.
             0 → enforce the pre-flight check.
   Why:      Opt-IN.  The check exists precisely because missing it
-            leads the operator to type a password and wait before
+            leads the heir to type a password and wait before
             seeing the inevitable "no packs found" failure.  The bypass
             is for test fixtures, initramfs environments, and scripted
             pipelines that mount data discs between the script setup
@@ -273,10 +274,10 @@ LCSAS_SKIP_SPACE_CHECK
             directory or the pack-cache filesystem is too small.
             When the size cannot be derived the check silently skips.
   Why:      Opt-OUT.  Forgetting the check means discovering a
-            too-small disk via ENOSPC after a long disc-swapping
-            session — the worst possible point.  The bypass exists
-            for operators restoring a SUBSET (one small snapshot of a
-            large archive) where the whole-archive estimate is a
+            too-small disk via ENOSPC after hours of disc swapping —
+            the worst possible point.  The bypass exists for
+            restoring a SUBSET (one small snapshot of a large
+            archive) where the whole-archive estimate is a
             deliberate overestimate.
 
 LCSAS_CHECK_DISC_AUTOFIX
@@ -351,23 +352,23 @@ LCSAS_OPTIONAL_ARCHES
   Why:      Test-only.  No restore behavior is affected.
 
 ────────────────────────────────────────────────────────────────────
-VARIABLES NOT FOR OPERATORS
+INTERNAL VARIABLES (DO NOT SET)
 ────────────────────────────────────────────────────────────────────
 
 LCSAS_RELOCATED
   Internal sentinel set by restore.sh on re-exec after relocation to
-  RAM.  Its value is the original meta-disc mount path.  Not a user
+  RAM.  Its value is the meta disc's original mount path.  Not a
   knob; do not set manually.
 
 ────────────────────────────────────────────────────────────────────
-QUICK REFERENCE (operator-facing knobs only)
+QUICK REFERENCE (knobs you may set)
 ────────────────────────────────────────────────────────────────────
 
-Variable                    Default   Opt-in/out  Typical operator use
+Variable                    Default   Opt-in/out  Typical use
 ──────────────────────────  ────────  ──────────  ────────────────────
 LCSAS_PASSWORD              unset     opt-in      scripted restores
 LCSAS_PWFILE                unset     opt-in      scripted restores
-LCSAS_REPO                  unset     opt-in      multi-tenant shortcut
+LCSAS_REPO                  unset     opt-in      multi-repository shortcut
 LCSAS_TARGET                unset     opt-in      unusual host arch
 LCSAS_META_DISC             unset     opt-in      unusual mount layout
 LCSAS_MOUNT_DIRS            unset     opt-in      non-standard disc mounts
@@ -379,7 +380,7 @@ LCSAS_TIER_FALLBACK         0         opt-in      set 1 to walk cascade
 LCSAS_ALLOW_PYTHON_TIER     1         opt-out     set 0 to ban Python
 LCSAS_CHECK_DISC_AUTOFIX    0         opt-in      unattended ECC repair
 LCSAS_FORCE_NONEMPTY_TARGET 0         opt-in      scripted overwrite ack
-LCSAS_KEYSHARE_PASSPHRASE   unset     opt-in      split-key passphrase
+LCSAS_KEYSHARE_PASSPHRASE   unset     opt-in      share passphrase
 LCSAS_PROGRESS              unset     opt-out     set 0 to silence output
 LCSAS_NO_RELOCATE           0         opt-in      set 1 for testing
 LCSAS_ALLOW_NO_PACK_SEARCH  0         opt-in      set 1 for test rigs

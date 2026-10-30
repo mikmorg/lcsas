@@ -609,7 +609,7 @@ main(void)
             memset(missing, 0xCD, 32);
             lcsas_disc_locator_init(&l, search, 1, NULL, /*interactive=*/1);
             /* Also set meta_disc so print_prompt emits the
-             * "Single-drive recovery" instructions block
+             * "Single-drive restore" instructions block
              * (disc_locator.c lines 717-720). */
             lcsas_disc_locator_set_meta(&l, "/tmp/dummy_meta");
             rc = lcsas_disc_locate_pack(&l, missing, found, sizeof found);
@@ -1301,15 +1301,15 @@ main(void)
             }
             {
                 static const struct { const char *needle; int want; } c[] = {
-                    { "mounted volume LCSAS_BD25_2026_0001 at ", 1 },
-                    { "mounted the recovery (meta) disc at ", 1 },
+                    { "mounted the disc labelled LCSAS_BD25_2026_0001 at ", 1 },
+                    { "mounted the META disc at ", 1 },
                     { "VOL_BADJSON: its volume_info.json is not valid JSON; "
                       "searching it anyway.", 1 },
                     { "VOL_ARRAY: its volume_info.json is not valid JSON", 1 },
                     { "VOL_NOLABEL: its volume_info.json has no usable label", 1 },
                     { "VOL_NUMLABEL: its volume_info.json has no usable label", 1 },
                     { "VOL_LONGLABEL: its volume_info.json has no usable label", 1 },
-                    { "mounted volume EVIL?[31mX? at ", 1 },
+                    { "mounted the disc labelled EVIL?[31mX? at ", 1 },
                     { "VOL_DIR: its volume_info.json could not be read", 1 },
                     { "VOL_BIG: its volume_info.json is too large", 1 },
                     { "VOL_NONE", 0 },
@@ -1343,7 +1343,7 @@ main(void)
             }
             (void)lcsas_disc_locate_pack(&l, missing, found, sizeof found);
             (void)lcsas_disc_locate_pack(&l, missing, found, sizeof found);
-            if (count_lines_with(out, "mounted volume LCSAS_BD25_2026_0001 ")
+            if (count_lines_with(out, "mounted the disc labelled LCSAS_BD25_2026_0001 ")
                     != 2) {
                 fprintf(stderr,
                         "FAIL: volume label: a disc ejected and put back "
@@ -1354,7 +1354,7 @@ main(void)
             write_pack(p, "{\"label\": \"LCSAS_BD25_2026_0002\", \"uuid\": "
                           "\"u-other-disc\"}");
             (void)lcsas_disc_locate_pack(&l, missing, found, sizeof found);
-            if (count_lines_with(out, "mounted volume LCSAS_BD25_2026_0002 ")
+            if (count_lines_with(out, "mounted the disc labelled LCSAS_BD25_2026_0002 ")
                     != 1) {
                 fprintf(stderr,
                         "FAIL: volume label: a different disc at the same "
@@ -1484,13 +1484,13 @@ main(void)
                 }
                 rewind(out);
                 while (nl < 64 && fgets(lines[nl], sizeof lines[nl], out)) {
-                    if (strstr(lines[nl], "mounted volume")
+                    if (strstr(lines[nl], "mounted the disc labelled")
                             && strncmp(lines[nl], "[lcsas-restore] ", 16) != 0)
                         glued = 1;
-                    if (strstr(lines[nl], "mounted volume WRONG_DISC at ")
+                    if (strstr(lines[nl], "mounted the disc labelled WRONG_DISC at ")
                             && iw < 0)
                         iw = nl;
-                    if (strstr(lines[nl], "mounted volume RIGHT_DISC at ")
+                    if (strstr(lines[nl], "mounted the disc labelled RIGHT_DISC at ")
                             && ir < 0)
                         ir = nl;
                     nl++;
@@ -1561,7 +1561,7 @@ main(void)
                  "abababababababababababababababababababababababababababababababab");
         if (make_catalog(cat_path, sql) != 0
                 || !prompt_mentions(tmpdir, cat_path, missing,
-                                    "catalog has the pack, but no current volume mapping")) {
+                                    "catalog has the pack, but lists no disc for it")) {
             fprintf(stderr, "FAIL #488: no-volume-mapping prompt\n"); fails++;
         }
 
@@ -1571,7 +1571,7 @@ main(void)
                  "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
         if (make_catalog(cat_path, sql) != 0
                 || !prompt_mentions(tmpdir, cat_path, missing,
-                                    "catalog has no record of this pack hash")) {
+                                    "catalog has no record of this pack ID")) {
             fprintf(stderr, "FAIL #488: no-record prompt\n"); fails++;
         }
 

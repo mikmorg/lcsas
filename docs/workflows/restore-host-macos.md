@@ -1,19 +1,19 @@
 # Restore from a Running macOS Host
 
-> **Tier:** Cross-tier — exercises HOT mirror metadata + COLD optical
-> media on a macOS recovery host.
+> **Storage stage:** the discs — exercises the repository metadata +
+> packs on optical discs from a macOS host.
 
 ## Purpose
 
-Walk an operator from "fresh macOS box with the meta-volume + data
+Walk an heir from "fresh macOS box with the meta disc + data
 discs in hand" to "files restored to `~/Restored/`".  Phase 21.1
 unlocked this path by bundling per-target rustic + Python binaries on
-the meta-volume; this doc is the operator-facing companion.
+the meta disc; this doc is the heir-facing companion.
 
 ## Table of contents
 
 - [Assumed environment](#assumed-environment)
-- [Workflow: bootstrap from the meta-disc](#workflow-bootstrap-from-the-meta-disc)
+- [Workflow: bootstrap from the meta disc](#workflow-bootstrap-from-the-meta-disc)
 - [Workflow: mounting data discs (`hdiutil` and the GUI)](#workflow-mounting-data-discs-hdiutil-and-the-gui)
 - [Workflow: ISO verification without dvdisaster](#workflow-iso-verification-without-dvdisaster)
 - [Apple Silicon vs Intel — which target wins](#apple-silicon-vs-intel--which-target-wins)
@@ -25,24 +25,26 @@ the meta-volume; this doc is the operator-facing companion.
 
 - A working macOS Big Sur (11.x) or later.  Earlier macOS versions
   ship Python 2 by default; the bundled CPython 3.12 on the
-  meta-volume covers them too, but `hdiutil` semantics changed across
+  meta disc covers them too, but `hdiutil` semantics changed across
   10.13/10.14 and we don't test pre-Big Sur.
 - An external USB or Thunderbolt **optical drive** (the Mac itself
   hasn't shipped a built-in optical drive since 2012).  Any
   USB BD-R / DVD drive that macOS Finder can mount is enough — the
   recovery scripts never go below the filesystem layer.
-- The LCSAS **meta-disc** burned via Phase 21.1's
+- The LCSAS **meta disc** burned via Phase 21.1's
   `make fetch-recovery` + `lcsas meta build` pipeline so the disc
   contains `recovery/bin/aarch64-apple-darwin/` and
   `recovery/bin/x86_64-apple-darwin/` subtrees.
 - One or more LCSAS **data discs** burned to BD-R / M-Disc.
-- The repository **encryption key** on an offline medium (paper
+- The repository **password** on an offline medium (paper
   printout, USB stick, etc. — see `docs/ESTATE_PLANNING.md`).
 
-## Workflow: bootstrap from the meta-disc
+## Workflow: bootstrap from the meta disc
 
-1. Insert the meta-disc.  Finder mounts it under `/Volumes/LCSAS_META`
-   (or similar — the label is whatever `lcsas meta build` produced).
+1. Insert the newest meta disc (if it fails, use the meta disc burned
+   closest in date to the data discs).  Finder mounts it under
+   `/Volumes/LCSAS_META` (or similar — the label is whatever
+   `lcsas meta build` produced).
 2. Open Terminal and run:
 
    ```sh
@@ -53,29 +55,30 @@ the meta-volume; this doc is the operator-facing companion.
    and selects `recovery/bin/aarch64-apple-darwin/` on Apple Silicon
    or `recovery/bin/x86_64-apple-darwin/` on Intel (see the `Darwin`
    arm of the target-dispatch block in `recovery/scripts/restore.sh`).
-3. The script prompts for the encryption password.  Paste from the
+3. The script prompts for the password.  Paste from the
    offline copy.  Alternative non-interactive forms:
 
    - `LCSAS_PASSWORD='...' sh restore.sh ~/Restored`
    - `LCSAS_PWFILE=/path/to/key.txt sh restore.sh ~/Restored`
 
-   If the archive's password was **split** into SLIP-0039 key shares
+   If the password was **split** into SLIP-0039 shares
    (`PASSWORD_INFO.txt` on the disc says so), rebuild it first with the
    bundled combiner — primary path is the static
-   `recovery/bin/aarch64-apple-darwin/lcsas-keyshare` (or the
-   `x86_64-apple-darwin` build on Intel); the Python fallback is
-   `keyshare_combine.py` run under the meta-disc's bundled CPython at
+   `recovery/bin/aarch64-apple-darwin/lcsas-keyshare <card1> <card2> ...`
+   (or the `x86_64-apple-darwin` build on Intel); the Python fallback is
+   `python3 keyshare_combine.py <card1> <card2> ...` run under the meta
+   disc's bundled CPython at
    `recovery/bin/<platform>/python/bin/python3`.  See
    [`docs/SHARE_FORMAT.md`](../SHARE_FORMAT.md) for the share
    format and [`docs/guides/recovery-runbook.md`](../guides/recovery-runbook.md) for
-   the full operator runbook.
+   the full runbook.
 
 4. Tier 1 (prebuilt C89 `lcsas-restore`) runs.  If it succeeds, restored
    files land in `~/Restored/`.  Tier 2 (`rustic-static`) and
-   tier 3 (`python3 standalone_restorer.py`, using the meta-disc's
+   tier 3 (`python3 standalone_restorer.py`, using the meta disc's
    bundled CPython at `recovery/bin/<target>/python/bin/python3`)
    are reached only if a prior tier crashes; the cascade is
-   transparent to the operator.  Tier-1 fall-through to tier-2/3 is
+   transparent to the heir.  Tier-1 fall-through to tier-2/3 is
    opt-in via `LCSAS_TIER_FALLBACK=1` (default `0` exec()s tier 1
    directly so a tier-1 regression surfaces loudly — see
    `recovery/docs/ENV_VARS.txt`).  The macOS tier-1 binaries are
@@ -122,7 +125,7 @@ hdiutil detach /Volumes/LCSAS_BD25_2026_0001
 ## Workflow: ISO verification without dvdisaster
 
 DVDisaster isn't bundled for the Darwin targets (cross-compiling it is
-high effort and the recovery path doesn't strictly need it — see
+high effort and the restore path doesn't strictly need it — see
 [`CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q2).
 On macOS, the verification fallback is a SHA-256 compare against the
 hash recorded at burn time:
@@ -131,7 +134,7 @@ hash recorded at burn time:
 from lcsas.restore.executor import verify_iso_sha256
 
 # Expected SHA-256 lives in session_volumes.iso_sha256 for discs
-# that came out of `lcsas burn`, or in a *.json receipt for discs
+# that came out of `lcsas burn`, or in a *.json burn receipt for discs
 # burned via `lcsas burn-iso --emit-receipt`.
 ok = verify_iso_sha256(Path("/Volumes/LCSAS_BD25_2026_0001.iso"),
                        expected_sha256="abc123...")
@@ -139,9 +142,9 @@ ok = verify_iso_sha256(Path("/Volumes/LCSAS_BD25_2026_0001.iso"),
 
 The shape is **detect-only** (Phase 21.2.b): if the SHA matches, the
 ISO is byte-identical to what was burned.  If it doesn't, you've got
-corruption and you need a redundant copy from another location — the
-SHA verifier can tell you which volume is bad but it can't repair
-like RS03 can.  For RS03-level repair, mount the disc on a Linux host
+corruption and you need another disc of that volume from another
+location — the SHA check can tell you which disc is bad but it can't
+repair like RS03 can.  For RS03-level repair, mount the disc on a Linux host
 that has dvdisaster installed.
 
 **Source refs:** `src/lcsas/restore/executor.py:verify_iso_sha256`,
@@ -184,11 +187,11 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   the committed Mach-O binaries on `macos-14` (Apple Silicon) and
   `macos-15-intel` (Intel) via
   `tests/recovery_hardening/test_tier1_macos_native.py`.
-- **Boot directly from the meta-disc (intentional: no LCSAS disc is
+- **Boot directly from the meta disc (intentional: no LCSAS disc is
   bootable, BOOT-01):** Mac firmware doesn't boot ISO
   9660 on USB optical drives well.  If your Mac is fully bricked,
-  recovery from this meta-disc is *not* the path — use macOS Recovery
-  Mode or a target-disk-mode dump first, then run the meta-disc
+  a restore from this meta disc is *not* the path — use macOS Recovery
+  Mode or a target-disk-mode dump first, then run the meta disc
   restore on another Mac.
 - **Single-drive multi-disc swap:** tier 1 (`lcsas-restore`) has its
   own swap prompt: it names the missing disc, waits for ENTER and
@@ -204,7 +207,7 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   stdin piped or redirected, a missing pack fails at once with
   "pack not found".  Discs burned before #534 was fixed carry a
   WAL-mode catalog, which SQLite cannot query in place on a read-only
-  volume.  Tier 1 now reopens it as immutable and names the disc
+  disc.  Tier 1 now reopens it as immutable and names the disc
   (#543); older recovery binaries said "catalog could not be queried
   -- likely written by a newer LCSAS" instead.  Nothing is wrong with
   those discs: insert them one at a time.  Mounting every disc first (Finder will hold them
@@ -215,11 +218,11 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   `src/lcsas/meta/restore_single_drive.py`) only builds the pick list
   and ingests packs, and has no prompt of its own.
 - (Fixed, #533) **Repository picker with two or more data discs
-  mounted:** every data disc carries `metadata/<tenant>/`, and repo
+  mounted:** every data disc carries `metadata/<repo>/`, and repository
   discovery de-duplicated by path, so with N data discs mounted a
-  single-tenant archive was listed N times ("Multiple repositories on
+  single-repository archive was listed N times ("Multiple repositories on
   this archive: 1) win  2) win ...") and a run without a terminal exited
-  1 at the picker.  Candidates are now de-duplicated by tenant name,
+  1 at the picker.  Candidates are now de-duplicated by repository name,
   keeping the first copy found (the meta disc's own, when present), as
   `restore.bat` does.  Found by `macos-e2e.yml`; not macOS-specific.
 - **Quarantine attribute (intentional: OS behaviour, with a documented
@@ -232,9 +235,9 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
 
 - **Media type** — TEST_TINY, BD25, BD50, BDXL100 (M-Disc variants
   alias).  All supported; the SHA-fallback is media-agnostic.
-- **Multi-tenant** — single repo or multiple.  Same flow either way.
+- **Multi-repository** — one repository or several.  Same flow either way.
 - **Multi-copy** — single or multiple locations.  Mount whichever
-  copies the operator has on hand; `--pack-search` finds packs
+  discs the heir has on hand; `--pack-search` finds packs
   wherever they live.
 - **Live distro** — not applicable (macOS host is already running).
 - **Recovery tier** — tier 1 / 2 / 3, exactly as on Linux.

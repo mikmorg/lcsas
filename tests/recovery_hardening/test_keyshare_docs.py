@@ -47,9 +47,9 @@ _GUIDE = (REPO_ROOT / "docs" / "RECOVERY_GUIDE.md").read_text(
 def test_recover_txt_has_key_shares_section():
     """RECOVER.txt must carry a key-shares section naming the static
     combiner (primary) and the python fallback."""
-    idx = _RECOVER.find("KEY SHARES (SPLIT PASSWORDS)")
+    idx = _RECOVER.find("SHARE CARDS (SPLIT PASSWORDS)")
     assert idx != -1, (
-        "RECOVER.txt is missing the KEY SHARES (SPLIT PASSWORDS) section. "
+        "RECOVER.txt is missing the SHARE CARDS (SPLIT PASSWORDS) section. "
         "Split-key heirs have no documented reconstruct-first pre-step."
     )
     window = _RECOVER[idx:]
@@ -82,8 +82,8 @@ def test_recover_txt_password_recovery_carries_split_exception():
 def test_recover_windows_has_key_shares_section():
     """RECOVER_WINDOWS.txt must document lcsas-keyshare.exe — bare
     Windows has no python3, so the .exe is the only combiner there."""
-    assert "KEY SHARES" in _RECOVER_WIN, (
-        "RECOVER_WINDOWS.txt is missing a KEY SHARES section."
+    assert "SHARE CARDS" in _RECOVER_WIN, (
+        "RECOVER_WINDOWS.txt is missing a SHARE CARDS section."
     )
     assert "lcsas-keyshare.exe" in _RECOVER_WIN, (
         "RECOVER_WINDOWS.txt does not name lcsas-keyshare.exe. A split-key "

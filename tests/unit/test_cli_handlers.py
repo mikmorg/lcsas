@@ -377,7 +377,7 @@ class TestCmdCopy:
                        "VOL_GONE", "Bank_Vault"])
         assert result == 1
         out = capsys.readouterr().out
-        assert "No copy" in out
+        assert "No disc" in out
 
 
 # ---------------------------------------------------------------------------
@@ -2226,7 +2226,7 @@ def test_status_stale_copies_report(tmp_path, capsys):
     assert main(["--db", str(db), "status"]) == 0
     captured = capsys.readouterr()
     out = captured.out + captured.err
-    assert "2 physical cop(ies) not verified in the last 365 days" in out
+    assert "2 disc(s) not verified in the last 365 days" in out
 
     # Tighter threshold pulls the fresh copy in as well.
     assert main(["--db", str(db), "status", "--stale-copies",

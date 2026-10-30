@@ -1,6 +1,6 @@
 ---
 name: key-escrow
-description: COMPLETE (all 6 phases shipped 2026-05-31, PRs #311-#315 merged; kept for a possible future phase). Drove the LCSAS Shamir key-escrow build one dependency-aware step at a time. Reads .claude/skills/key-escrow/PLAN.md as source of truth, advances the lowest open phase, delegates code to worktree sub-agents with full-coverage + lint + typecheck gates, opens a PR per item, and (per the 2026-05-31 standing authorization) merges on green without waiting for the user. Phase 4 iterated the two blind tests (single-key + 2-of-5 split-key) autonomously until BOTH scored full marks on consecutive runs.
+description: COMPLETE (all 6 phases shipped 2026-05-31, PRs #311-#315 merged; kept for a possible future phase). Drove the LCSAS Shamir password-split build one dependency-aware step at a time. Reads .claude/skills/key-escrow/PLAN.md as source of truth, advances the lowest open phase, delegates code to worktree sub-agents with full-coverage + lint + typecheck gates, opens a PR per item, and (per the 2026-05-31 standing authorization) merges on green without waiting for the user. Phase 4 iterated the two blind tests (unsplit password + 2-of-5 split password) autonomously until BOTH scored full marks on consecutive runs.
 ---
 
 > **STATUS: COMPLETE.** Every phase (0–5) in PLAN.md is `[x]`; the feature is
@@ -8,9 +8,9 @@ description: COMPLETE (all 6 phases shipped 2026-05-31, PRs #311-#315 merged; ke
 > no-op — it exists as the driver record and for any future phase appended to
 > PLAN.md.
 
-# Key-Escrow Driver
+# Password-Split Driver
 
-You are the engineering lead executing the LCSAS key-escrow (Shamir Secret Sharing)
+You are the engineering lead executing the LCSAS password-split (Shamir Secret Sharing)
 plan. Each invocation advances the effort by **one step**, respecting the dependency
 graph and the gates. You coordinate and integrate; you delegate feature code.
 
@@ -36,7 +36,7 @@ just do them without prompting."** So:
 - **The budget guard still applies in Phase 4:** after 3 consecutive failing blind runs on
   the same un-localized root cause, STOP and report rather than burn budget.
 - **Never weaken a gate to make progress** — not coverage, not `verify.sh`, not the
-  single-key-path-unchanged rule. A green achieved by lowering the bar is a regression.
+  unsplit-password-path-unchanged rule. A green achieved by lowering the bar is a regression.
 
 ## Hard rules (from CLAUDE.md, the recovery ethos, and project memory)
 
@@ -53,17 +53,17 @@ just do them without prompting."** So:
    gate run. `LCSAS_BLIND_ACK_COST=1` is pre-authorized by the 2026-05-31 standing
    authorization (see Autonomy policy) — recorded in the Driver log. Bound the loop — see
    Phase 4 below.
-4. **The blind test exercises PRODUCTION meta-disc output unmodified.** No overlay scripts,
-   no patched restore.sh, no test-only combiner. If the heir can't recover from the real
+4. **The blind test exercises PRODUCTION meta disc output unmodified.** No overlay scripts,
+   no patched restore.sh, no test-only combiner. If the heir can't restore from the real
    meta disc + real prompts, the feature has not shipped. (This is the existing harness's
    own acceptance gate — do not weaken it.)
-5. **The single-key path must stay byte-for-byte unchanged.** Shares are additive; an
+5. **The unsplit-password path must stay byte-for-byte unchanged.** Shares are additive; an
    archive with no shares prompts for the password exactly as today.
 6. **PR per item.** Branch per item, open a PR, run the gates. Per the Autonomy policy
    (2026-05-31 standing authorization, which supersedes the original halt-at-gates rule),
    merge yourself once CI is green. Within a phase you may stack branches but keep each
    item's PR reviewable.
-7. **Verify before claiming done.** Real runs, not just mocks — especially the blind score.
+7. **Check before claiming done.** Real runs, not just mocks — especially the blind score.
    Self-correct openly when a check disproves an assumption.
 
 ## One cycle
@@ -111,7 +111,7 @@ for variant in [single-key, split-key-2of5]:        # K4.1 then K4.2
 ```
 
 - Diagnose from `transcript.jsonl` (what the heir typed) + the 15 named checks in
-  `verify.sh` / `tests/e2e/cdemu_blind_restore/PLAN.md`. Common split-key failure modes to
+  `verify.sh` / `tests/e2e/cdemu_blind_restore/PLAN.md`. Common split-password failure modes to
   watch: heir can't find/parse share cards; combiner not on the meta disc; restore.sh share
   branch not reached; an illusion-leak token in a combiner error message; reconstruction
   succeeds but password has a trailing newline.

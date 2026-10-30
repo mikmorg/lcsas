@@ -20,9 +20,9 @@ class WedgedMigrationError(RuntimeError):
 # ---------------------------------------------------------------------------
 # TIER-1 FROZEN SURFACE  (FMT-05)
 # ---------------------------------------------------------------------------
-# The C tier-1 recovery reader (recovery/src/lcsas-restore/catalog.c) is
-# burned onto every disc and can NEVER be patched once written.  It hard-codes
-# SQL against the columns below.  An older meta-disc binary will routinely be
+# The tier-1 C reader (recovery/src/lcsas-restore/catalog.c) is burned onto
+# every meta disc and can NEVER be patched once written.  It hard-codes SQL
+# against the columns below.  An older meta disc's binary will routinely be
 # paired with newer data discs, so these (table, column) pairs are FROZEN:
 #
 #   schema_version : version
@@ -259,7 +259,7 @@ def _refuse_wedged(conn: sqlite3.Connection) -> None:
         raise WedgedMigrationError(
             f"Catalog contains leftover table(s) {names} from an "
             "interrupted schema migration. Do NOT continue. Restore the "
-            "catalog from backup, or recover manually: the original data "
+            "catalog from backup, or repair it by hand: the original data "
             f"is intact in {names}. "
             "See docs/RUNBOOK_migration_recovery.md."
         )
@@ -304,8 +304,8 @@ def create_all(conn: sqlite3.Connection) -> None:
     # Apply pending migrations: production reaches create_all only via
     # ensure_schema (FMA-02), but keep migrate() here too so any direct
     # caller still upgrades long-lived catalogs (BURN-04 needs
-    # session_volumes.iso_size_bytes on upgraded v≤6 databases).
-    # No-op on freshly created databases (version is already current).
+    # session_volumes.iso_size_bytes on upgraded v≤6 catalogs).
+    # No-op on freshly created catalogs (version is already current).
     migrate(conn)
 
 
@@ -331,7 +331,7 @@ def _is_readonly(conn: sqlite3.Connection) -> bool:
     try:
         conn.execute("UPDATE schema_version SET version = version WHERE 0")
     except sqlite3.OperationalError as exc:
-        # "no such table" on an uninitialized DB is not a readonly signal.
+        # "no such table" on an uninitialized catalog is not a readonly signal.
         return "readonly" in str(exc).lower()
     finally:
         conn.execute("ROLLBACK")
@@ -344,9 +344,9 @@ def ensure_schema(conn: sqlite3.Connection) -> int:
     The ONLY schema entry point production code should call (FMA-02).
     Returns the catalog's schema version after the call:
     ``CURRENT_SCHEMA_VERSION`` on writable catalogs (created or migrated
-    in place), or the existing older version on read-only snapshots —
-    on-disc holographic catalogs are opened from read-only ISO9660
-    mounts and must never be migrated in place; reader code tolerates
+    in place), or the existing older version on read-only catalogs —
+    disc catalogs are opened from read-only ISO9660 mounts and must
+    never be migrated in place; reader code tolerates
     old shapes (compat mode).
     """
     version = get_schema_version(conn)
@@ -364,16 +364,16 @@ def ensure_schema(conn: sqlite3.Connection) -> int:
                 version, CURRENT_SCHEMA_VERSION,
             )
         return version
-    create_all(conn)  # runs migrate() on the hot catalog
+    create_all(conn)  # runs migrate() on the writable catalog
     return CURRENT_SCHEMA_VERSION
 
 
 def migrate(conn: sqlite3.Connection) -> int:
     """Apply any pending schema migrations.  Returns the new version.
 
-    This is safe to call on freshly-created databases (``create_all``
+    This is safe to call on freshly-created catalogs (``create_all``
     already writes the latest version — nothing to migrate).  It is
-    also safe to call on read-only catalog snapshots embedded on discs;
+    also safe to call on read-only disc catalogs;
     ``ALTER TABLE … ADD COLUMN`` uses ``IF NOT EXISTS``-style safety
     via a column-existence check first.
 
@@ -396,7 +396,7 @@ def migrate(conn: sqlite3.Connection) -> int:
     cursor = conn.cursor()
     fk_off = False
     try:
-        # v2 → v3: add verified_at column, created_at on repos
+        # v2 → v3: add verified_at column, created_at on repositories
         if current < 3:
             cursor.execute("BEGIN IMMEDIATE")
             cols = {r[1] for r in cursor.execute("PRAGMA table_info(volumes)").fetchall()}
@@ -554,9 +554,10 @@ def migrate(conn: sqlite3.Connection) -> int:
             cursor.execute("COMMIT")
 
         # v7 → v8: volume_copies.iso_size_bytes — the same post-ECC byte
-        # length on the per-location copy row, so device verification still
-        # has a length after a receipt import or a catalog rebuild from
-        # disc copies (session_volumes is not merged by rebuild) (FMA-03).
+        # length on the per-disc row (one per location), so device
+        # verification still has a length after a receipt import or a catalog
+        # rebuild from discs (session_volumes is not merged by rebuild)
+        # (FMA-03).
         if current < 8:
             cursor.execute("BEGIN IMMEDIATE")
             tables = {
@@ -584,10 +585,10 @@ def migrate(conn: sqlite3.Connection) -> int:
 
         # v8 → v9: key_escrow — the durable record of a `lcsas key split`
         # (KEY-08).  Additive bare CREATE TABLE, no data movement; pre-upgrade
-        # catalogs simply gain an empty table.  Restore-side readers
-        # (tier-1 C, tier-3 standalone) never touch it, and rebuild.py probes
-        # sqlite_master before merging any table, so v≤8 disc catalogs that
-        # lack it are unaffected.
+        # catalogs simply gain an empty table.  Restore-side readers (the
+        # tier-1 C reader, the tier-3 Python reader) never touch it, and
+        # rebuild.py probes sqlite_master before merging any table, so v≤8
+        # disc catalogs that lack it are unaffected.
         if current < 9:
             cursor.execute("BEGIN IMMEDIATE")
             cursor.execute(SQL_CREATE_KEY_ESCROW)
@@ -600,14 +601,14 @@ def migrate(conn: sqlite3.Connection) -> int:
         # v9 → v10: repositories.status — an explicit 'retired' marker so a
         # catalog row whose mirror is legitimately gone forever can be told
         # apart from one that is merely unmounted right now (#437).  Every
-        # pre-upgrade repo becomes 'active', which is exactly today's
+        # pre-upgrade repository becomes 'active', which is exactly today's
         # semantics.  Additive plain ADD COLUMN with a *constant* default
         # (a non-constant default such as CURRENT_TIMESTAMP is rejected by
         # SQLite), no data movement, and no CHECK — see the note above
-        # SQL_CREATE_REPOSITORIES.  Restore-side readers (tier-1 C, tier-3
-        # standalone) never query `repositories`, so v≤9 disc catalogs are
-        # unaffected, and rebuild.py merges the table by explicit column
-        # name rather than positionally.
+        # SQL_CREATE_REPOSITORIES.  Restore-side readers (the tier-1 C reader,
+        # the tier-3 Python reader) never query `repositories`, so v≤9 disc
+        # catalogs are unaffected, and rebuild.py merges the table by
+        # explicit column name rather than positionally.
         if current < 10:
             cursor.execute("BEGIN IMMEDIATE")
             tables = {

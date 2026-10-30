@@ -20,7 +20,7 @@ def _row_to_session(row: sqlite3.Row) -> BurnSession:
 
 def _row_to_session_volume(row: sqlite3.Row) -> SessionVolume:
     # iso_size_bytes is absent on catalogs burned before schema v7
-    # (on-disc holographic snapshots are frozen forever).
+    # (disc catalogs are frozen forever).
     try:
         iso_size_bytes = row["iso_size_bytes"]
     except (IndexError, KeyError):
@@ -80,7 +80,7 @@ def resolve_session_id(conn: sqlite3.Connection, session_ref: str) -> str:
     """Resolve 'latest' or a session_id string to an actual session_id."""
     if session_ref == "latest":
         return get_latest_session(conn).session_id
-    # Verify it exists
+    # Check it exists
     get_session(conn, session_ref)
     return session_ref
 

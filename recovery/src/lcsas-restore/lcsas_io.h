@@ -11,7 +11,7 @@
  * on Windows).  Alias to ENOSPC there so callers can classify both
  * the same way ("target out of space" UX) without per-call-site
  * #ifdef guards.  EDQUOT is the per-user/group quota equivalent of
- * ENOSPC; same operator response. */
+ * ENOSPC; the fix is the same. */
 #ifndef EDQUOT
 #  define EDQUOT ENOSPC
 #endif

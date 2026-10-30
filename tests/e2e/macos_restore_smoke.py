@@ -76,7 +76,7 @@ RELOCATED_MARK = "[lcsas-restore] copied recovery binaries to"
 PROMPT_MARK = "is required for the next file"
 PROMPT_END_RE = re.compile(r"\+-{20,}\+\s*\n> ")
 LIVES_ON_RE = re.compile(
-    r"It lives on volume\(s\):(?P<body>.*?)Currently searching:", re.S
+    r"It is on any disc labelled:(?P<body>.*?)Currently searching:", re.S
 )
 # Both catalog-failure wordings: "could not be queried" (schema skew) and,
 # since #543, "could not be read".
@@ -575,7 +575,7 @@ def check_prompt_text(box: str) -> None:
         "Currently searching:",
         "Insert the right disc and press ENTER to retry.",
         "Type 'q' then ENTER to abort.",
-        "Single-drive recovery",  # restore.sh passed --meta-disc
+        "Single-drive restore",  # restore.sh passed --meta-disc
     ):
         if want not in box:
             raise CheckError(f"swap prompt lacks {want!r}:\n{box}")

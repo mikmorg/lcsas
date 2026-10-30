@@ -6,7 +6,7 @@ before #456 tier-1 never read it.  An operator who swapped in the wrong
 disc saw only "still not found", with nothing to say which disc had
 gone in.  Each rescan of the mount parents now prints::
 
-    [lcsas-restore] mounted volume <label> at <path>
+    [lcsas-restore] mounted the disc labelled <label> at <path>
 
 once per insertion.  A missing file is silent (older discs, plain
 directories), and a bad one costs only the label: a one-line note, and
@@ -99,8 +99,8 @@ def test_poll_names_the_wrong_disc_then_the_right_one(tmp_path: Path) -> None:
     assert rc == 0, f"binary exited {rc}; expected 0 once the right disc mounted"
     _verify_restore(target, files)
 
-    wrong_line = f"[lcsas-restore] mounted volume {_WRONG} at "
-    right_line = f"[lcsas-restore] mounted volume {_RIGHT} at "
+    wrong_line = f"[lcsas-restore] mounted the disc labelled {_WRONG} at "
+    right_line = f"[lcsas-restore] mounted the disc labelled {_RIGHT} at "
     lines = out.splitlines()
     starts = [i for i, ln in enumerate(lines) if ln.startswith(wrong_line)]
     assert len(starts) == 1, (
@@ -133,7 +133,7 @@ def test_enter_names_the_disc_it_rescanned(tmp_path: Path) -> None:
     out = run.output()
     assert rc == 0, f"binary exited {rc}; expected 0 after ENTER"
     _verify_restore(target, files)
-    named = out.find(f"[lcsas-restore] mounted volume {_RIGHT} at ")
+    named = out.find(f"[lcsas-restore] mounted the disc labelled {_RIGHT} at ")
     found = out.find("; continuing.")
     assert named >= 0, "the disc rescanned after ENTER was not named"
     assert named < found, "the disc must be named before the restore continues"
@@ -179,7 +179,7 @@ def test_bad_or_missing_volume_info_never_blocks_restore(
     assert rc == 0, f"binary exited {rc}; a bad volume_info.json blocked the restore"
     assert _DETECTED in out
     _verify_restore(target, files)
-    assert "mounted volume" not in out
+    assert "mounted the disc labelled" not in out
     if note is None:
         assert "volume_info.json" not in out, (
             "a disc without volume_info.json must stay silent"

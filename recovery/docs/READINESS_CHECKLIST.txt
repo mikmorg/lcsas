@@ -3,7 +3,7 @@ LCSAS RECOVERY -- PRODUCTION READINESS CHECKLIST
 
 PURPOSE
 
-Verify these items before relying on an LCSAS archive in a real
+Check these items before relying on an LCSAS archive in a real
 disaster.  Each item cites a concrete failure mode and a HOW OFTEN
 indicator.  Items are grouped into three phases: one-time setup,
 ongoing maintenance, and an annual drill.
@@ -20,14 +20,14 @@ BEFORE RELYING ON THESE DISCS  (one-time, at archive creation)
           sha256sum -c recovery/UPSTREAM.sha256
     HOW OFTEN: once at build time, repeat when recovery/bin/ changes.
 
-[ ] NO-OS RECOVERY DRILL — verify the live-USB recovery path on a
+[ ] NO-OS RESTORE DRILL — test the live-USB restore path on a
     spare machine.  NOTE: LCSAS discs are NOT bootable.  Write a
     current live-Linux image (e.g. Ubuntu Desktop LTS) to a USB
     stick, boot the spare machine from it, mount the meta disc,
     and confirm restore.sh is reachable:
       sh /mnt/recovery/scripts/restore.sh --help
     Why: the no-OS journey is the worst credible failure mode; an
-    undrilled live-USB path is an untested recovery path.
+    undrilled live-USB path is an untested restore path.
     See recovery/docs/BOOT.txt for the full procedure.
     ERRATUM: meta discs burned before 2026-06 carry stale on-disc
     text (START_HERE.txt / BOOT.txt) telling the reader to boot the
@@ -43,22 +43,22 @@ BEFORE RELYING ON THESE DISCS  (one-time, at archive creation)
     HOW OFTEN: once per meta disc build.
 
 [ ] WINDOWS DOUBLE-CLICK DRILL — on a stock Windows 10/11 VM (no admin
-    elevation), mount the freshly built meta ISO, then confirm the
-    advertised heir journey actually works:
+    elevation), mount the ISO image of a freshly built meta disc, then
+    confirm the advertised heir journey actually works:
       [ ] File Explorer shows START_HERE.txt + restore.bat at the root.
       [ ] Double-click restore.bat -> SmartScreen -> "Run anyway".
       [ ] The script DISCOVERS the backup set (no "could not find an
           LCSAS backup set" dead-end) and reaches the "Password:" prompt.
-      [ ] With >=2 tenants on the archive, a numbered selection prompt
-          appears; LCSAS_REPO=<name> skips it.
-      [ ] Recovery completes; files land in Documents\restored and are
+      [ ] With >=2 repositories on the archive, a numbered selection
+          prompt appears; LCSAS_REPO=<name> skips it.
+      [ ] The restore completes; files land in Documents\restored and are
           byte-equal to the source.
     Why: Windows is the single most likely OS an heir holds, and its
-    repo discovery silently dead-ended before UX-01 (it probed only
-    %RECOVERY%\repo / %RECOVERY%, neither of which exists on a real
-    meta-volume whose repos live under metadata\<tenant>\).  Static .bat
-    grep tests cannot catch a layout-contract break; only running the
-    .bat against a built disc does.
+    repository discovery silently dead-ended before UX-01 (it probed
+    only %RECOVERY%\repo / %RECOVERY%, neither of which exists on a
+    real meta disc whose repositories live under metadata\<repo>\).
+    Static .bat grep tests cannot catch a layout-contract break; only
+    running the .bat against a built disc does.
     AUTOMATED: the windows-e2e workflow (INFRA-01) builds a fixture on
     Linux and runs restore.bat unattended on a windows-latest runner,
     hash-comparing the restored tree; the wine smoke
@@ -67,30 +67,30 @@ BEFORE RELYING ON THESE DISCS  (one-time, at archive creation)
     on the discs.
     HOW OFTEN: once per meta disc build, and after any restore.bat change.
 
-[ ] ENCRYPTION KEY REDUNDANCY — confirm the repository password is
-    stored in at least 2 physically separate locations.  Acceptable
+[ ] PASSWORD REDUNDANCY — confirm each repository's password is
+    stored in at least 2 physically separate places.  Acceptable
     forms: a printed copy in a fireproof safe, an offsite estate
-    document, a Shamir-shared key split across trusted parties, or
-    a hardware key manager at a second site.
+    document, a Shamir split of the password into shares held by
+    trusted people, or a hardware password manager kept elsewhere.
     Why: see recovery/docs/CRYPTO.txt — the password directly seeds
-    the scrypt KDF; there is no password-recovery path.  A single
-    copy is a single point of failure.  offsite storage is not
+    the scrypt KDF; there is no way to get a lost password back.  A
+    single copy is a single point of failure.  offsite storage is not
     optional for production archives.
-    DRILL: confirm the escrowed shares (or password copy) STILL
-    unlock the repo — a rotated/stale escrow opens nothing and the
-    failure is undetectable until recovery.  Run:
+    DRILL: confirm the shares (or password copy) STILL unlock the
+    repository — shares or a copy of an old, changed password open
+    nothing, and the failure stays hidden until a restore.  Run:
       lcsas --config lcsas.toml key verify --repo REPO \
           --share-file CARD1 --share-file CARD2   # any K of N
       # or, to test a stored password copy directly:
       lcsas --config lcsas.toml key verify --repo REPO \
           --password-file /path/to/password-copy
-    Exit code 0 and an "OK:" line mean the escrow is good.  After any
-    re-key, ALL old cards are void — re-split and redistribute (see
-    docs/ESTATE_PLANNING.md "ROTATION").
-    HOW OFTEN: verify at archive creation; re-confirm annually.
+    Exit code 0 and an "OK:" line mean the shares (or copy) are good.
+    After any password change, ALL old cards are void — re-split and
+    redistribute (see docs/ESTATE_PLANNING.md "ROTATION").
+    HOW OFTEN: check at archive creation; re-confirm annually.
 
 [ ] FULL TEST-RESTORE — run a test-restore of the most recent
-    snapshot to a temporary directory and verify that the file
+    snapshot to a temporary directory and check that the file
     count matches the original backup.
     How:
       mkdir -p /tmp/test-restore
@@ -100,13 +100,13 @@ BEFORE RELYING ON THESE DISCS  (one-time, at archive creation)
     Compare restored file count against the original source:
       find /tmp/test-restore -type f | wc -l
     Why: an archive that was never test-restored has never been
-    verified end-to-end.  Bit rot, wrong snapshot ID, or a
-    misconfigured encryption key only show up when you actually
-    try to read data back.
+    checked end-to-end.  Bit rot, wrong snapshot ID, or a wrongly
+    recorded password only show up when you actually try to read
+    data back.
     HOW OFTEN: once at archive creation; see monthly cadence below.
 
 ────────────────────────────────────────────────────────────────────
-ONGOING MAINTENANCE  (monthly, or after each new disc set)
+ONGOING MAINTENANCE  (monthly, or after each burn session)
 ────────────────────────────────────────────────────────────────────
 
 [ ] MONTHLY TEST-RESTORE — restore the most recent snapshot to a
@@ -130,18 +130,18 @@ ONGOING MAINTENANCE  (monthly, or after each new disc set)
     Why: discs can be lost, mislabelled, or destroyed without being
     marked DESTROYED in the catalog.  A silent gap discovered during
     an emergency restore costs time you don't have.
-    HOW OFTEN: monthly, or after each new disc set is burned.
+    HOW OFTEN: monthly, or after each burn session.
 
 [ ] BLAST-RADIUS REVIEW — ask the pre-mortem question: "if every
-    copy of ONE disc fails, which data is lost?"  Run:
+    disc of ONE volume fails, which data is lost?"  Run:
       lcsas status --redundancy
-    to list every under-replicated pack grouped by the disc holding
-    it, then for each disc flagged as a single point of failure:
+    to list every under-replicated pack grouped by the volume holding
+    it, then for each volume flagged as a single point of failure:
       lcsas volume impact <LABEL>
-    to see the affected repos, the bytes at stake, and where the
-    surviving copies live (add --snapshots with the mirror mounted
-    for the snapshot-level view).  Re-burn a second copy of any disc
-    whose loss you cannot accept:
+    to see the affected repositories, the bytes at stake, and which
+    other discs still hold those packs (add --snapshots with the
+    mirror mounted for the snapshot-level view).  Burn another disc
+    of any volume whose loss you cannot accept:
       lcsas stage --for-location <location>
     Why: a disc that is the only durable holder of packs is a single
     point of failure for every memory in them; without this review
@@ -152,10 +152,10 @@ ONGOING MAINTENANCE  (monthly, or after each new disc set)
     drive and re-verify it against the catalog.
     How (preferred — results are RECORDED in the catalog):
       lcsas verify --all --disc
-    This walks every ACTIVE copy, prompts you to insert each disc,
+    This walks every ACTIVE disc, prompts you to insert each one,
     checks identity (PVD Volume ID) + full device hash against the
     SHA-256 recorded at burn time, and stamps last_verified_at on
-    each passing copy.  Find overdue discs first with:
+    each disc that passes.  Find overdue discs first with:
       lcsas status --stale-copies
     Fallback (no catalog / bare drive — read-only surface scan, NOT
     recorded anywhere):
@@ -171,24 +171,24 @@ ONGOING MAINTENANCE  (monthly, or after each new disc set)
     only if the disc is caught early.  Treat ANY read error as a
     signal to re-burn; do not wait.  The RS03
     repair path itself (below-threshold repair restores byte-identical;
-    above-threshold damage fails loud rather than silently) is verified
+    above-threshold damage fails loud rather than silently) is tested
     against the real dvdisaster binary by
     tests/integration/test_ecc_repair.py.  That proof runs weekly in CI
     (the ecc-weekly workflow on Mondays, and ecc-repair on any PR
     touching the ECC wrapper) and is also available locally via the
     opt-in LCSAS_ECC_REPAIR=1 invocation.
-    Recording matters: the verification history travels with the
-    holographic catalog onto every later disc, so an heir can ask
-    "when was each copy last confirmed good?" decades from now.
+    Recording matters: the verify history travels in the disc
+    catalog of every later disc, so an heir can ask "when was each
+    disc last confirmed good?" decades from now.
     HOW OFTEN: monthly for discs less than 2 years old; weekly for
     discs older than 5 years or stored in suboptimal conditions.
 
-[ ] OFFSITE COPY VERIFICATION — confirm that the offsite copy of
+[ ] OFFSITE COPY CHECK — confirm that the offsite copy of
     the archive (second set of discs, remote NAS mirror, or cloud
     backup) is current.  Log the location and date checked.
     Why: a house fire, flood, or theft destroys local copies.  The
     offsite copy is not a bonus — it is the archive.
-    HOW OFTEN: after each new disc set; monthly for the offsite log.
+    HOW OFTEN: after each burn session; monthly for the offsite log.
 
 ────────────────────────────────────────────────────────────────────
 EMERGENCY DRILL  (annually)
@@ -202,27 +202,27 @@ EMERGENCY DRILL  (annually)
          discs are NOT bootable), then mount the meta disc.
       2. Follow recovery/docs/RECOVER.txt from step 1.
       3. Restore one representative snapshot to local storage.
-      4. Verify file count and spot-check a handful of files.
+      4. Check file count and spot-check a handful of files.
       5. Record the date, elapsed time, and any issues in an
          audit_log.txt file stored alongside the physical discs.
     Why: the automated test suite uses a software disc-loader shim;
     it does NOT test that a human can actually bring up a live-USB
     environment, mount the meta disc, physically swap data discs,
-    and recover files.  A passing CI
+    and restore files.  A passing CI
     gate does not substitute for a real drill.  See also
     recovery/docs/UX_CONCERNS.txt for known UX gaps, and
     recovery/docs/PHYSICAL_DISC_VALIDATION.txt for the physical-media
     burn + blind-restore + ECC-damage-and-repair runbook (the
     hardware-only complement to the software ECC tests).
     HOW OFTEN: annually, or whenever a major recovery component
-    changes (new meta disc build, new tier-1 binary, new disc set).
+    changes (new meta disc build, new tier-1 binary, new burn session).
 
-[ ] KEY ESCROW REVIEW — review all password escrow arrangements:
-    printed copies, estate documents, split-key holders.  Confirm
-    each arrangement is still accessible and the holders are still
+[ ] PASSWORD STORAGE REVIEW — review every place a password is kept:
+    printed copies, estate documents, share holders.  Confirm each
+    arrangement is still accessible and the holders are still
     reachable.
-    Why: escrow arrangements decay.  A key holder moves, a safe is
-    re-keyed, a printed copy degrades.  Catching this during a
+    Why: these arrangements decay.  A share holder moves, a safe's
+    lock is changed, a printed copy degrades.  Catching this during a
     planned review is far better than discovering it during a
     disaster.
     HOW OFTEN: annually.
@@ -231,23 +231,23 @@ EMERGENCY DRILL  (annually)
     recovery/MANIFEST.sha256.  If upstream releases (rustic, Python)
     have shipped security fixes since the last pin update, rebuild
     the meta disc and update the pins.
-    Why: recovery binaries may carry CVEs.  Because the recovery
-    path runs on an air-gapped machine, automatic patching never
-    fires; only an explicit review catches stale pins.
+    Why: recovery binaries may carry CVEs.  Because a restore runs
+    on an air-gapped machine, automatic patching never fires; only
+    an explicit review catches stale pins.
     How:  sha256sum -c recovery/MANIFEST.sha256
           sha256sum -c recovery/UPSTREAM.sha256
     HOW OFTEN: annually, or when upstream publishes a security
     advisory affecting a pinned component.
 
 ────────────────────────────────────────────────────────────────────
-JOURNEY DRILL LOG  (one line per blind-restore variant, per meta build)
+JOURNEY DRILL LOG  (one line per blind-restore variant, per meta disc build)
 ────────────────────────────────────────────────────────────────────
 
 The blind-restore drills (make blind-restore-*) are the only end-to-end
-proof that an HEIR can actually recover.  They are opt-in and spend real
+proof that an HEIR can actually restore.  They are opt-in and spend real
 API money (USD 0.2-0.7 per default haiku run, measured 2026-10),
 so they do NOT run in CI — which means the only record that they
-ran at all is this log.  Update it on every meta-disc build: one dated
+ran at all is this log.  Update it on every meta disc build: one dated
 row per variant.  An empty or stale row is itself the finding.
 
 Per project policy the blind-restore agent runs on HAIKU only (not
@@ -286,18 +286,18 @@ QUICK REFERENCE
 Item                            HOW OFTEN
 ──────────────────────────────  ─────────────────────────────────────
 Binary audit (sha256sum)        At build time; repeat on bin/ change
-No-OS live-USB recovery drill   Once per meta disc build
+No-OS live-USB restore drill    Once per meta disc build
 Windows double-click drill      Once per meta disc build / .bat change
-Encryption key redundancy       At creation; verify annually
+Password redundancy             At creation; re-confirm annually
 Full test-restore               At creation; see monthly cadence
 Monthly test-restore            Monthly
-Volume count check              Monthly / after new disc set
+Volume count check              Monthly / after a burn session
 Blast-radius review             Monthly, with the volume count check
 Disc readability scan           Monthly (<2 yr); weekly (>5 yr)
-Offsite copy verification       After each disc set; monthly log
+Offsite copy check              After each burn session; monthly log
 Annual blind restore drill      Annually / after major change
-Journey drill log               Per meta build; per restore.sh/.bat change
-Key escrow review               Annually
+Journey drill log               Per meta disc build; per restore.sh/.bat change
+Password storage review         Annually
 Binary pin review               Annually / on CVE advisory
 
 ────────────────────────────────────────────────────────────────────
@@ -310,7 +310,7 @@ RELATED DOCUMENTS
                                        Physical-disc burn/restore/ECC drill
   recovery/docs/CRYPTO.txt            Encryption design
   recovery/docs/ENV_VARS.txt          Environment variable reference
-  recovery/docs/BOOT.txt              No-OS recovery (live-USB; the
+  recovery/docs/BOOT.txt              No-OS restore (live-USB; the
                                        discs are NOT bootable)
   recovery/MANIFEST.sha256            Hash manifest for built artifacts
   recovery/UPSTREAM.sha256            Hash manifest for upstream binaries

@@ -3,9 +3,9 @@
 The split-key-docs variant must stage the printable ``-card.txt`` files an
 heir actually receives — header + usage text + mnemonic — NOT bare mnemonic
 files.  This pins the card-staging helper in setup.py: the staged files end
-in ``-card.txt``, carry the ``LCSAS KEY SHARE`` header AND a full-length
+in ``-card.txt``, carry the ``LCSAS SHARE CARD`` header AND a full-length
 SLIP-0039 mnemonic line, are mode 0600, and reconstruct the password.  Only
-the holder's quorum (2 of 5) is staged; no bare share file is written.
+the heir's quorum (2 of 5) is staged; no bare share file is written.
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ def test_no_bare_share_file_staged(staged: list[Path]) -> None:
 def test_cards_have_header_and_mnemonic(staged: list[Path]) -> None:
     for p in staged:
         text = p.read_text(encoding="utf-8")
-        assert "LCSAS KEY SHARE" in text
+        assert "LCSAS SHARE CARD" in text
         mnemonic = extract_mnemonic(text, source=str(p))
         # A SLIP-0039 share mnemonic is always >= 20 words (the share
         # header alone occupies the first several); the exact count grows

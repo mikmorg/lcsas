@@ -4,7 +4,7 @@
  * Strict C89.  Tables are precomputed at compile time (sbox / Rcon).
  * No timing side-channel mitigations: this is restore-only code that runs
  * once with no concurrent adversary.  An attacker who can measure the
- * timing of a recovery run can also just steal the disc.
+ * timing of a restore run can also just steal the disc.
  *
  * Spec: FIPS PUB 197 sections 5.1 (cipher), 5.2 (key expansion).
  */

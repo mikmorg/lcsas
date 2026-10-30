@@ -1,4 +1,4 @@
-# LCSAS host-A image — scan, bin-pack, stage, master ISOs, apply ECC.
+# LCSAS host-A image — scan, bin-pack, stage, master ISO images, apply ECC.
 #
 # Purpose: run the assembly half of the portable burn workflow on a host
 # that cannot run LCSAS natively.  The motivating case is a Debian 10
@@ -31,9 +31,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # rustic v0.11.2, static musl — deliberately the SAME artifact pinned in
 # recovery/UPSTREAM.sha256 as the tier-2 recovery reader bundled onto the
-# meta-volume.  Version coherence is not cosmetic here: the config default
+# meta disc.  Version coherence is not cosmetic here: the config default
 # allow_unverified_repo_format=false makes `lcsas burn` refuse to master a
-# disc from a repo it cannot prove readable by the pinned recovery
+# disc from a repository it cannot prove readable by the pinned recovery
 # readers.  Writing the mirror with this exact rustic avoids that refusal.
 ARG RUSTIC_VERSION=0.11.2
 ARG RUSTIC_TARBALL=rustic-v0.11.2-x86_64-unknown-linux-musl.tar.gz
@@ -54,10 +54,11 @@ RUN curl -fsSL -o "/tmp/${RUSTIC_TARBALL}" \
 COPY src/ /opt/lcsas/src/
 ENV PYTHONPATH=/opt/lcsas/src
 
-# Keep the Rustic mirror and the staging tree under ONE bind mount rooted
-# here.  staging/builder.py hardlinks packs from mirror into staging, and
-# utils/fs.py falls back to a full copy on EXDEV — two separate bind mounts
-# read as two devices and would silently copy every volume in full.
+# Keep the Rustic mirror and the staging area under ONE bind mount rooted
+# here.  staging/builder.py hardlinks packs from the mirror into the staging
+# area, and utils/fs.py falls back to a full copy on EXDEV — two separate
+# bind mounts read as two devices and would silently copy every volume in
+# full.
 WORKDIR /srv/lcsas
 
 ENTRYPOINT ["python3", "-m", "lcsas"]

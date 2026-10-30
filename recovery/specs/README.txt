@@ -63,7 +63,7 @@ MAPPING: SPEC -> IMPLEMENTATION
 REBUILDING FROM SPEC ALONE
 
 If every binary and every line of vendored C source becomes unusable,
-the following are sufficient to recover an LCSAS archive:
+the following are sufficient to restore an LCSAS archive:
 
   1. Read restic-format.md to understand the on-disc layout.
   2. Implement (or find) SHA-256 per fips180-4, AES-128/256 per
@@ -71,7 +71,7 @@ the following are sufficient to recover an LCSAS archive:
      rfc8439.
   3. Implement base64 decoder per rfc4648 and a JSON tokenizer per
      rfc8259.
-  4. (Optional, for v2 repos) Implement zstd decoder per rfc8878.
+  4. (Optional, for v2 repositories) Implement zstd decoder per rfc8878.
   5. Read ISO 9660 directories per ecma-119 (or use any UNIX-like
      OS's built-in iso9660 / cd9660 driver).
   6. Apply restic-format.md to extract files.

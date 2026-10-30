@@ -1,11 +1,11 @@
-# LCSAS Key-Share Format (SLIP-0039)
+# LCSAS Share Format (SLIP-0039)
 
 > **Purpose of this document.** If, decades from now, the LCSAS encryption
 > password was split into *shares* (so no single lost copy is fatal), this file
 > tells a competent engineer how to reconstruct the password from those shares
 > **using nothing but this spec** — no surviving LCSAS tool, no internet. It is
-> the key-management sibling of `RESTIC_FORMAT_SPEC.md` and
-> `DVDISASTER_RS03_FORMAT.md`, and it is bundled on every meta-volume.
+> the password-splitting sibling of `RESTIC_FORMAT_SPEC.md` and
+> `DVDISASTER_RS03_FORMAT.md`, and it is bundled on every meta disc.
 
 ---
 
@@ -13,7 +13,7 @@
 
 LCSAS encrypts each repository with a password that seeds restic's scrypt KDF
 (see `RESTIC_FORMAT_SPEC.md` §"Key derivation"). **Losing that password = losing
-the data, permanently** — there is no recovery path through the ciphertext.
+the data, permanently** — there is no way back in through the ciphertext.
 
 To remove that single point of failure, the password may be split with **Shamir
 Secret Sharing (SSS)** into **N shares** such that **any K reconstruct it** and
@@ -26,28 +26,31 @@ secret" in SLIP-0039 terms). SLIP-0039 also has a separate optional
 *passphrase* — LCSAS leaves that empty by default; if used, it is an extra
 factor the heir must also supply.
 
-If you are holding **word-list cards** (20 or 33 words each), you have SLIP-0039
+If you are holding **share cards** (20 or 33 words each), you have SLIP-0039
 shares — read on. If you are holding a single password (no shares), this
 document does not apply; use the password directly.
 
-## 2. How to reconstruct (operator summary)
+## 2. How to reconstruct (summary)
 
 1. Gather **any K** shares (default K=2). Each share is an ordered list of
    words from the LCSAS/SLIP-0039 wordlist (1024 words, each uniquely
    identified by its first 4 letters; shipped inside the bundled
-   `lcsas.keyshare` python package on the meta-volume, and compiled into
+   `lcsas.keyshare` python package on the meta disc, and compiled into
    `lcsas-keyshare` as `wordlist.c`). You may type just the first 4
    letters of each word — the bundled combiners (`lcsas-keyshare`,
    `keyshare_combine.py`, and `lcsas key combine`) expand any unambiguous
    prefix to the full word.
-2. Run the bundled combiner (shipped on the meta-volume) or any
-   SLIP-0039-compatible tool, **or** re-implement §4 below.
+2. Run the combiner bundled on the meta disc:
+   `recovery/bin/<machine>/lcsas-keyshare <card1> <card2> ...`
+   If that binary won't run, use the Python fallback:
+   `python3 keyshare_combine.py <card1> <card2> ...`
+   Any SLIP-0039-compatible tool also works, **or** re-implement §4 below.
 3. The output bytes are the repository password. Feed it to `restore.sh` at the
-   `Password:` prompt exactly as a single-key archive would.
+   `Password:` prompt exactly as for an archive whose password is not split.
 
 A wrong or incomplete share set **fails loudly** (checksum/digest mismatch or
 "insufficient shares") rather than returning garbage — see §4.6. Before
-attempting recovery the bundled combiners run a per-share pre-pass: each
+combining, the bundled combiners run a per-share pre-pass: each
 share is validated on its own and a named verdict is printed (e.g.
 `share 2 (alpha-share-2-card.txt): word 7 'buidling' is not a share word`),
 so a single mistyped card is pinpointed instead of failing generically.
@@ -63,7 +66,7 @@ through the 1024-word list:
 | Extendable flag | 1 | Salt-derivation variant |
 | Iteration exponent | 4 | PBKDF2 work factor = 10000·2^e |
 | Group index | 4 | Which group this share belongs to |
-| Group threshold − 1 | 4 | Groups needed to recover |
+| Group threshold − 1 | 4 | Groups needed to rebuild the secret |
 | Group count − 1 | 4 | Total groups |
 | Member index | 4 | Which share within the group |
 | Member threshold − 1 | 4 | Shares needed within the group (this is K) |
@@ -84,15 +87,15 @@ re-implementation must pass all 45. The pieces:
 1. **Wordlist → bits.** Map each word to its 10-bit index; concatenate.
 2. **RS1024 checksum.** A Reed-Solomon checksum over GF(1024) with the customization
    string `"shamir"` (or `"shamir_extendable"` when the extendable bit is set);
-   the last 3 words carry it. Verify before trusting any field.
+   the last 3 words carry it. Check it before trusting any field.
 3. **Shamir over GF(256).** Each share value is a point on K−1-degree polynomials
    (one per secret byte) over the Rijndael field (reducing polynomial
-   `0x11B`). Recover the secret bytes by **Lagrange interpolation** at x=255
+   `0x11B`). Rebuild the secret bytes by **Lagrange interpolation** at x=255
    (the secret index); indices 254 and 255 are reserved for the digest and
    secret respectively.
 4. **Digest integrity.** Index 254 holds `HMAC-SHA256(R, secret)[:4] || R` where
    R is random padding; recompute and compare to detect a corrupt/forged set.
-5. **Passphrase decryption.** The recovered value is decrypted with a **4-round
+5. **Passphrase decryption.** The rebuilt value is decrypted with a **4-round
    Feistel network** keyed by `PBKDF2-HMAC-SHA256(passphrase, salt, iterations)`,
    where `iterations = 2500·2^e` per round and `salt = "shamir" || identifier`
    (or empty when extendable). The result is the master secret = the password.
@@ -112,41 +115,41 @@ re-implementation must pass all 45. The pieces:
   password is under 16 chars or below ~60 estimated bits. Full threat model and
   entropy table: `docs/DISC_CONFIDENTIALITY.md`.
 - **Default split: 2-of-5.** A backup's dominant risk is *loss*, so K is kept
-  low for recoverability; raise it for more privacy at the cost of more ways to
-  become unrecoverable.
+  low for restorability; raise it for more privacy at the cost of more ways to
+  lose the data.
 - **Secret constraints.** SLIP-0039 master secrets are even-length and ≥128
   bits. LCSAS encodes the (possibly shorter) repository password into a valid
   master secret at the CLI layer (`lcsas key split`); the inverse decoding is
   applied after reconstruction. See `PASSWORD_INFO.txt` on the disc for whether an
-  archive used split keys and the K/N in effect.
-- **Verify-at-split.** `lcsas key split` authenticates the password against the
-  repo's real `keys/` files (pure-Python scrypt + Poly1305) and round-trips the
-  freshly written cards *before* declaring success, so it never escrows a
-  password that does not unlock the repo or a card that does not reconstruct.
-  Pass `--no-verify-repo` only when the mirror's `keys/` is unreachable at split
-  time. Re-confirm escrow health any time with
+  archive's password was split and the K/N in effect.
+- **Checked at split time.** `lcsas key split` authenticates the password
+  against the repository's real `keys/` files (pure-Python scrypt + Poly1305)
+  and round-trips the freshly written cards *before* declaring success, so it
+  never splits a password that does not unlock the repository or writes a card
+  that does not reconstruct. Pass `--no-verify-repo` only when the mirror's
+  `keys/` is unreachable at split time. Re-check the split any time with
   `lcsas --config ... key verify --repo R --share-file CARD …` (or
   `--password-file FILE`); exit code is the contract.
 - **Card stamps & rotation.** Each printed card carries `Split on : <date>` and
   `Split ID : NNNNN` — the 15-bit SLIP-0039 identifier, identical across all
   cards of one split and (almost certainly) different between splits. After a
-  re-key, *all* old cards are void; re-split, redistribute, destroy superseded
-  cards, and `lcsas key verify` the new set. See `docs/ESTATE_PLANNING.md`
+  password change, *all* old cards are void; re-split, redistribute, destroy
+  superseded cards, and `lcsas key verify` the new set. See `docs/ESTATE_PLANNING.md`
   "ROTATION". Cards from before this stamping (no `Split on`/`Split ID` lines)
   remain valid combiner input — the extractor ignores non-wordlist lines.
 - **Where shares live.** Off-disc, by design — printed share cards in separate
-  locations / with separate holders, per `docs/ESTATE_PLANNING.md`. Shares are
-  **never** written to any LCSAS volume (that would defeat the split).
+  places / with separate share holders, per `docs/ESTATE_PLANNING.md`. Shares
+  are **never** written to any LCSAS disc (that would defeat the split).
 - **Wordlist provenance.** The bundled `wordlist.txt` is the official 1024-word
   SLIP-0039 list (unique 4-letter prefixes). It is git-pinned in this
   repository and guarded by the 45 official SLIP-0039 test vectors
   (`recovery/tests/test_keyshare.c`, `tests/unit/test_keyshare.py`).
   SHA-256 of `wordlist.txt` (1024 LF-terminated words):
   `bcc4555340332d169718aed8bf31dd9d5248cb7da6e5d355140ef4f1e601eec3`
-  — verify with `sha256sum wordlist.txt`. The C combiner's `wordlist.c` is
+  — check with `sha256sum wordlist.txt`. The C combiner's `wordlist.c` is
   generated from the same list.
 
-## 6. Minimal recovery, no tools
+## 6. Minimal reconstruction, no tools
 
 If neither the LCSAS combiner nor any SLIP-0039 tool runs, §4 is implementable
 in well under 300 lines against this repo's vendored implementation

@@ -38,7 +38,7 @@ def setup_logging(verbose: bool = False) -> logging.Logger:
         If *True* the log level is set to ``DEBUG``; otherwise ``INFO``.
 
     The format intentionally omits timestamps — LCSAS is a CLI tool, not
-    a daemon.  Users who need timestamps can set the ``LCSAS_LOG_FORMAT``
+    a daemon.  To get timestamps, set the ``LCSAS_LOG_FORMAT``
     environment variable.
 
     The handler writes to **stdout** so that ``capsys`` in tests captures
@@ -76,7 +76,7 @@ _PASSWORD_SUFFIXES = (".key", ".pem", ".pass", ".password", ".secret")
 
 
 def mask_password_path(path: str) -> str:
-    """Mask a path if it looks like a password/key file.
+    """Mask a path if it looks like a password file.
 
     Returns ``***`` if the path ends with a known password-file suffix,
     otherwise returns the path unchanged.

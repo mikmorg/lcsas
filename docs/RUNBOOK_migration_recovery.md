@@ -1,4 +1,4 @@
-# RUNBOOK — Recovering a catalog wedged by an interrupted schema migration
+# RUNBOOK — Repairing a catalog wedged by an interrupted schema migration
 
 ## When you need this
 
@@ -6,7 +6,7 @@ An LCSAS command refused to run with an error like:
 
 > Catalog contains leftover table(s) volumes_old from an interrupted
 > schema migration. Do NOT continue. Restore the catalog from backup,
-> or recover manually: the original data is intact in volumes_old.
+> or repair it by hand: the original data is intact in volumes_old.
 > See docs/RUNBOOK_migration_recovery.md.
 
 **Your data is NOT lost.** Read on.
@@ -34,16 +34,16 @@ If you have a copy of the catalog from before the interrupted
 migration, use it and re-run any LCSAS command; the migration re-runs
 atomically and completes.
 
-Remember the holographic design: **every burned disc carries a complete
-catalog snapshot** (`catalog.db` at the disc root). If the NAS catalog
-is the only damaged copy, you can rebuild from disc copies instead of
-repairing by hand:
+Remember: **every burned disc carries a disc catalog** (`catalog.db` at
+the disc root), current as of that disc's burn. If the master catalog on
+the NAS is the only damaged copy, you can rebuild from disc catalogs
+instead of repairing by hand:
 
 ```bash
 lcsas catalog rebuild /mnt/disc1 /mnt/disc2 --output rebuilt.db
 ```
 
-## Option B — manual recovery (two statements per table)
+## Option B — repair by hand (two statements per table)
 
 Open the catalog with the sqlite3 shell:
 
@@ -63,9 +63,9 @@ SELECT COUNT(*) FROM volumes;
 - Error `no such table: volumes` → no shadow; **skip the DROP** below.
 - `0` → empty shadow; safe to drop.
 - Anything else → **STOP.** Both tables hold rows; do not guess.
-  Restore from backup or rebuild from disc copies (Option A).
+  Restore from backup or rebuild from disc catalogs (Option A).
 
-Then run the recovery:
+Then run the repair:
 
 ```sql
 DROP TABLE volumes;
@@ -100,6 +100,6 @@ comes back at the current schema version with all rows intact.
 
 ## If anything looks wrong
 
-Stop and fall back to Option A. The on-disc holographic catalog copies
-are the designed mitigation for exactly this failure: losing the
-writable NAS catalog never loses the archive.
+Stop and fall back to Option A. The disc catalogs are the designed
+mitigation for exactly this failure: losing the master catalog on the
+NAS never loses the archive.

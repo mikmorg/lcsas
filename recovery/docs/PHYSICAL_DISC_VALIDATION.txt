@@ -6,7 +6,7 @@ PURPOSE
 This runbook covers the parts of issue #302 that CANNOT be automated
 in CI or on a VM: proving that an LCSAS archive survives a round trip
 through REAL optical media -- a physically burned disc, read back by a
-REAL optical drive, and (for the ECC layer) recovered from PHYSICALLY
+REAL optical drive, and (for the ECC layer) repaired after PHYSICALLY
 induced damage.
 
 It is the hardware-gated complement to the automated coverage:
@@ -36,9 +36,9 @@ name.  Do not let a green CDEmu run masquerade as physical validation.
 PREREQUISITES (the human running this needs)
 
   - A real BD-R / M-DISC writer (USB or SATA) attached to a Linux host.
-  - Blank physical media: at least 2 discs of the target type
+  - Blank physical media: at least 2 discs of the target media type
     (BD25 or MDISC100), so the multi-copy and damage runs do not
-    consume the only copy.
+    consume the only disc.
   - The repository password file used to create the archive.
   - LCSAS installed (`make dev`) and the tier-1 binary built
     (`make -C recovery`).
@@ -47,8 +47,8 @@ PREREQUISITES (the human running this needs)
 
 PROCEDURE
 
-  Record everything in the run log (template at the end).  Convert the
-  media-size constant to your real disc before burning (do NOT burn a
+  Record everything in the run log (template at the end).  Set the
+  media type to match your real disc before burning (do NOT burn a
   700 MB ECC-padded TEST_TINY image to a BD25 -- size the source so the
   augmented image fits the disc).
 
@@ -72,7 +72,7 @@ PROCEDURE
     Note drive model, media brand/type, and burn speed in the run log.
 
   STEP 3 -- BLIND RESTORE FROM THE PHYSICAL DISC
-    Eject, re-insert, and restore as a naive operator would -- via the
+    Eject, re-insert, and restore as a naive heir would -- via the
     bundled recovery/scripts/restore.sh cascade (tier 1 -> 2 -> 3),
     reading from the REAL mount (e.g. /media/<label>), NOT a loopback:
 
@@ -97,12 +97,12 @@ PROCEDURE
     prompt behaves exactly as before.
 
   STEP 4 -- PHYSICAL ECC DAMAGE + REPAIR (below threshold)
-    Physically damage a SECOND copy below the RS03 redundancy
+    Physically damage a SECOND disc below the RS03 redundancy
     threshold.  Realistic options, least to most destructive:
       a. A fine opaque-marker scribble or small adhesive dot on the
          data side (a few mm -- well under the redundancy %).
       b. A shallow radial scratch.
-    Verify the drive now reports read errors:
+    Check that the drive now reports read errors:
 
       dvdisaster -d /dev/sr0 -t        # scan medium -> reports bad sectors
 
@@ -117,12 +117,12 @@ PROCEDURE
     form is already covered by test_ecc_repair.py).
 
   STEP 5 -- DAMAGE ABOVE THRESHOLD (fails loud)
-    Damage a THIRD copy beyond the redundancy threshold (a large
+    Damage a THIRD disc beyond the redundancy threshold (a large
     gouge / many sectors).  Confirm repair REPORTS FAILURE rather than
     silently producing a partial restore:
 
       repair_iso() must return False; restore.sh must NOT report
-      success; the operator must be told the disc is unrecoverable.
+      success; the heir must be told the disc cannot be repaired.
 
     This is the physical analogue of
     test_rs03_fails_loud_when_damage_exceeds_capacity and satisfies
@@ -143,7 +143,7 @@ ACCEPTANCE-CRITERIA MAP (issue #302)
 RUN LOG TEMPLATE (copy into tests/e2e/ when executed)
 
   date:               ____________________
-  operator:           ____________________
+  run by:             ____________________
   drive model:        ____________________  (lsscsi)
   drive firmware:     ____________________
   media type/brand:   ____________________  (e.g. Verbatim M-DISC 100GB)

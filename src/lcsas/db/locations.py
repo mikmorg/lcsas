@@ -42,7 +42,7 @@ def create_location(
     name: str,
     description: str = "",
 ) -> Location:
-    """Register a new physical storage location."""
+    """Register a new location."""
     conn.execute(
         "INSERT INTO locations (name, description) VALUES (?, ?)",
         (name, description),
@@ -132,6 +132,6 @@ def list_locations(conn: sqlite3.Connection) -> list[Location]:
 
 
 def delete_location(conn: sqlite3.Connection, name: str) -> None:
-    """Delete a location (fails if copies still reference it)."""
+    """Delete a location (fails if any disc is still recorded there)."""
     conn.execute("DELETE FROM locations WHERE name = ?", (name,))
     conn.commit()
