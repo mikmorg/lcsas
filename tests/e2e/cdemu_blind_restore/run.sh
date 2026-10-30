@@ -9,15 +9,18 @@ HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 RUN_DIR="${RUN_DIR:-/tmp/lcsas-blind-run-$(date +%s)}"
 mkdir -p "$RUN_DIR"
 
-# Prevent overlapping runs — only one blind-restore at a time.
-LOCKFILE="/tmp/lcsas-blind-restore.lock"
-exec 9>"$LOCKFILE"
+# Prevent overlapping runs — only one blind-restore at a time.  The lock
+# is a read-only fd on this directory, not a file in /tmp: run.sh runs as
+# the invoking user (make blind-restore) and as root (run_variant.sh,
+# under sudo -E), and with fs.protected_regular=2 neither can reopen a
+# /tmp file the other created (#559).  flock(2) works on a directory fd,
+# needs no write access and leaves nothing behind.
+exec 9<"$HERE"
 if ! flock -n 9; then
     echo "ERROR: another blind-restore run is already in progress." >&2
-    echo "       Lock held by: $(cat "$LOCKFILE" 2>/dev/null || echo unknown)" >&2
+    echo "       Lock: $HERE (list runs: pgrep -af cdemu_blind_restore/run.sh)" >&2
     exit 1
 fi
-echo "PID $$ started $(date -Iseconds)" >&9
 
 # Select the agent prompt by variant.  Key-escrow Phase 3 (K3.2): the
 # split-key-2of5 variant ships a self-contained prompt that reconstructs
