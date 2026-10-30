@@ -12,8 +12,10 @@ from lcsas.db.key_escrow import (
     clear_split,
     detect_escrow_drift,
     get_split,
+    get_split_for_repo,
     record_split,
 )
+from lcsas.db.repos import register_repo
 from lcsas.db.schema import (
     CURRENT_SCHEMA_VERSION,
     create_all,
@@ -125,6 +127,99 @@ def test_drift_record_but_config_false(conn):
     )
     assert msg is not None
     assert "key_split=false" in msg and "3-of-5" in msg
+
+
+# ---------------------------------------------------------------------------
+# #571: splits keyed by the catalog repo_id (a UUID), legacy name-keyed rows
+# ---------------------------------------------------------------------------
+
+# A repo_id the way `lcsas repo add` makes one: a UUID, not the name.
+FAMILY_ID = "0b6e2d44-9c1f-4a7e-8d35-61f0c2a9b7e4"
+
+
+@pytest.fixture
+def uuid_conn(conn):
+    register_repo(conn, FAMILY_ID, "family", "/mnt/mirror/family")
+    return conn
+
+
+def test_get_split_for_repo_finds_record_under_repo_id(uuid_conn):
+    record_split(uuid_conn, FAMILY_ID, 3, 5, 1)
+    rec = get_split_for_repo(uuid_conn, FAMILY_ID)
+    assert rec is not None
+    assert (rec.repo_id, rec.threshold, rec.shares) == (FAMILY_ID, 3, 5)
+
+
+def test_get_split_for_repo_honours_legacy_name_keyed_record(uuid_conn):
+    """Builds before #571 recorded the split under the repository's name."""
+    record_split(uuid_conn, "family", 2, 4, 9)
+    rec = get_split_for_repo(uuid_conn, FAMILY_ID)
+    assert rec is not None
+    assert (rec.repo_id, rec.threshold, rec.shares) == ("family", 2, 4)
+
+
+def test_get_split_for_repo_prefers_repo_id_over_legacy_name(uuid_conn):
+    record_split(uuid_conn, "family", 2, 4, 9)
+    record_split(uuid_conn, FAMILY_ID, 3, 5, 1)
+    rec = get_split_for_repo(uuid_conn, FAMILY_ID)
+    assert rec is not None
+    assert (rec.repo_id, rec.threshold, rec.shares) == (FAMILY_ID, 3, 5)
+
+
+def test_get_split_for_repo_none_when_nothing_recorded(uuid_conn):
+    assert get_split_for_repo(uuid_conn, FAMILY_ID) is None
+    # An unregistered repo_id has no name to fall back to.
+    assert get_split_for_repo(uuid_conn, "not-registered") is None
+
+
+def test_get_split_for_repo_tolerates_missing_tables():
+    c = get_memory_connection()  # no schema at all
+    assert get_split_for_repo(c, FAMILY_ID) is None
+    c.close()
+
+
+def test_drift_honours_legacy_name_keyed_record(uuid_conn):
+    record_split(uuid_conn, "family", 3, 5, 1)
+    assert detect_escrow_drift(
+        uuid_conn, [FAMILY_ID], config_split=True,
+        config_threshold=3, config_shares=5,
+    ) is None
+    msg = detect_escrow_drift(
+        uuid_conn, [FAMILY_ID], config_split=False,
+        config_threshold=2, config_shares=5,
+    )
+    assert msg is not None
+    assert "key_split=false" in msg and "3-of-5" in msg
+
+
+def test_drift_names_repository_by_name_not_uuid(uuid_conn):
+    msg = detect_escrow_drift(
+        uuid_conn, [FAMILY_ID], config_split=True,
+        config_threshold=2, config_shares=5,
+    )
+    assert msg is not None
+    assert msg.startswith("password split drift for repository 'family':")
+    assert "'lcsas --config ... key split --repo family'" in msg
+    assert FAMILY_ID not in msg
+
+    record_split(uuid_conn, FAMILY_ID, 3, 5, 1)
+    for split, k in ((True, 2), (False, 2)):
+        msg = detect_escrow_drift(
+            uuid_conn, [FAMILY_ID], config_split=split,
+            config_threshold=k, config_shares=5,
+        )
+        assert msg is not None
+        assert msg.startswith("password split drift for repository 'family':")
+        assert FAMILY_ID not in msg
+
+
+def test_drift_names_unregistered_repo_by_its_id(conn):
+    msg = detect_escrow_drift(
+        conn, ["orphan-id"], config_split=True,
+        config_threshold=2, config_shares=5,
+    )
+    assert msg is not None
+    assert msg.startswith("password split drift for repository 'orphan-id':")
 
 
 def test_escrow_drift_error_is_runtime_error():

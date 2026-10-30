@@ -98,6 +98,8 @@ theft.
   With `--config`, the split's **K/N and identifier are recorded in the
   catalog** so disc instructions can be derived from the split you actually
   performed (and the next-step reminder is printed).
+  Register the repository with `lcsas repo add` first. If the catalog does
+  not list the repository, `key split` stops before it writes any share.
 
 - [ ] **Mark the archive as split** so the discs print share instructions —
   set `key_split = true` (and your `key_threshold` / `key_shares`) under

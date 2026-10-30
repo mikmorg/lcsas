@@ -797,7 +797,7 @@ PERIODIC VERIFICATION
 
   Use the LCSAS verify command:
 
-    lcsas verify --isos /path/to/disc/images/
+    lcsas verify --all --disc
 
   Or use dvdisaster to check ECC integrity:
 

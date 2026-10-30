@@ -1300,7 +1300,8 @@ class TestEscrowDrift:
         msg = str(ei.value)
         assert "key_split=true" in msg
         assert "no split" in msg
-        assert "family" in msg
+        # Named by the repository's catalog name, not its repo_id (#571).
+        assert "password split drift for repository 'Family Photos':" in msg
 
     def test_record_but_config_false_aborts(self, orch_env):
         """A recorded split with key_split=false → abort (superseded key)."""
@@ -1344,6 +1345,113 @@ class TestEscrowDrift:
         events = get_events_for_volume(orch_env["conn"], manifest.volume_id)
         notes = [e for e in events if e.event_type == "NOTE"]
         assert any("KEY-08 split drift override" in e.detail for e in notes)
+
+
+@pytest.fixture
+def uuid_orch_env(tmp_path):
+    """Like ``orch_env``, but ``family`` is registered under a UUID repo_id,
+    the way ``lcsas repo add`` registers every repository (#571)."""
+    from lcsas.utils.labels import generate_uuid
+
+    config = _make_config(tmp_path)
+    conn = get_memory_connection()
+    create_all(conn)
+    config.db_path.parent.mkdir(parents=True, exist_ok=True)
+    config.db_path.write_bytes(b"sqlite_placeholder")
+    repo_id = generate_uuid()
+    assert repo_id != "family"
+    mirror = config.repositories["family"].mirror_path
+    register_repo(conn, repo_id, "family", str(mirror))
+    for i in range(1, 4):
+        content = _pack_bytes(i, 100 * i)
+        sha = _sha(content)
+        register_pack(conn, sha256=sha, size_bytes=100 * i, repo_id=repo_id)
+        (mirror / "data" / sha).write_bytes(content)
+    for subdir in ("index", "snapshots", "keys"):
+        (mirror / subdir).mkdir(exist_ok=True)
+    (mirror / "config").write_text('{"version": 2}')
+    return {
+        "config": config,
+        "conn": conn,
+        "repo_id": repo_id,
+        "xorriso": MagicMock(),
+        "dvdisaster": MagicMock(),
+    }
+
+
+class TestEscrowDriftUuidRepo:
+    """#571: splits are found by the packs' catalog repo_id (a UUID), and a
+    record that an earlier build left under the repository's name still
+    counts."""
+
+    _split_orch = staticmethod(TestEscrowDrift._split_orch)
+
+    @staticmethod
+    def _start_here(manifest) -> str:
+        return (manifest.staging_path / "START_HERE.txt").read_text(
+            encoding="utf-8"
+        )
+
+    def test_split_under_repo_id_passes_and_reaches_disc_text(
+        self, uuid_orch_env
+    ):
+        from lcsas.db.key_escrow import record_split
+
+        env = uuid_orch_env
+        record_split(env["conn"], env["repo_id"], 3, 5, 777)
+        orch = self._split_orch(env, key_split=True, k=3, n=5)
+        manifest = orch.prepare()  # must not raise
+        text = self._start_here(manifest)
+        assert "YOUR PASSWORD IS SPLIT INTO 5 SHARE CARDS" in text
+        assert "You need ANY 3 of them." in text
+
+    def test_legacy_name_keyed_record_passes_preflight(self, uuid_orch_env):
+        from lcsas.db.key_escrow import record_split
+
+        env = uuid_orch_env
+        record_split(env["conn"], "family", 3, 5, 777)  # pre-#571 shape
+        orch = self._split_orch(env, key_split=True, k=3, n=5)
+        manifest = orch.prepare()  # must not raise
+        assert manifest.volume_id > 0
+
+    def test_legacy_name_keyed_record_reaches_disc_text(self, uuid_orch_env):
+        """Config says 2-of-5; the legacy record says 3-of-4; with the drift
+        override the disc text still follows the record."""
+        from lcsas.db.key_escrow import record_split
+
+        env = uuid_orch_env
+        record_split(env["conn"], "family", 3, 4, 777)
+        orch = self._split_orch(env, key_split=True, k=2, n=5,
+                                allow_drift=True)
+        text = self._start_here(orch.prepare())
+        assert "YOUR PASSWORD IS SPLIT INTO 4 SHARE CARDS" in text
+        assert "You need ANY 3 of them." in text
+        assert "any 2" not in text.lower()
+
+    def test_legacy_record_with_config_false_aborts(self, uuid_orch_env):
+        from lcsas.db.key_escrow import EscrowDriftError, record_split
+
+        env = uuid_orch_env
+        record_split(env["conn"], "family", 3, 5, 12345)
+        orch = self._split_orch(env, key_split=False)
+        with pytest.raises(EscrowDriftError) as ei:
+            orch.prepare()
+        msg = str(ei.value)
+        assert "password split drift for repository 'family':" in msg
+        assert "key_split=false" in msg
+        assert "3-of-5" in msg
+
+    def test_drift_message_names_repository_not_uuid(self, uuid_orch_env):
+        from lcsas.db.key_escrow import EscrowDriftError
+
+        env = uuid_orch_env
+        orch = self._split_orch(env, key_split=True)
+        with pytest.raises(EscrowDriftError) as ei:
+            orch.prepare()
+        msg = str(ei.value)
+        assert "password split drift for repository 'family':" in msg
+        assert "'lcsas --config ... key split --repo family'" in msg
+        assert env["repo_id"] not in msg
 
 
 # =========================================================================

@@ -778,7 +778,7 @@ def test_iso_restore(
     vol_mount_dirs: dict[str, Path] = {}
 
     for iso_path in iso_files:
-        vol_label = iso_path.stem  # e.g., "E2ETEST_TEST_TINY_0001"
+        vol_label = iso_path.stem  # e.g., "E2ETEST_TEST_TINY_2026_0001"
         extract_dir = extract_base / vol_label
         extract_dir.mkdir(exist_ok=True)
 

@@ -78,7 +78,7 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
    - `db_path` parent exists and is writable.
    - `default_ecc_redundancy_pct` in `[0, 100]`.
    - `metadata_reserve_bytes` non-negative and `< default_media_type.usable_bytes`.
-   - `label_prefix` non-empty, matches `[A-Z0-9_]+`, short enough for a 32-char ISO 9660 label with the configured `media_type`'s token (CD700, BDXL100 and MDISC100 allow one character less than BD25); a prefix that fits the configured media type but not another production media type logs a WARNING, since `stage`/`burn --media` can pick it.
+   - `label_prefix` non-empty, matches `[A-Z0-9_]+`, short enough for a 32-char ISO 9660 label with the configured `media_type`'s token (CD700, BDXL100 and MDISC100 allow one character less than BD25); a prefix that fits the configured media type but not another production media type logs a WARNING, since `stage --media` can pick it.
    - Per-repository `mirror_path` exists and is a directory; `password_file` exists if set.
    - `staging_path` and `mirror_base_path` are not identical or nested (cleanup would destroy mirrors).
 

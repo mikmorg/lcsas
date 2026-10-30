@@ -195,7 +195,7 @@ volume_events (
 
 -- Recorded Shamir/SLIP-0039 password split per repository (KEY-08)
 key_escrow (
-    repo_id      TEXT PRIMARY KEY REFERENCES repositories,
+    repo_id      TEXT PRIMARY KEY, -- no foreign key: older builds keyed it by name
     threshold    INTEGER NOT NULL, -- K in a K-of-N split
     shares       INTEGER NOT NULL, -- N total shares issued
     slip39_id    INTEGER NOT NULL, -- SLIP-0039 identifier
@@ -254,7 +254,7 @@ verified, self-describing volumes burned onto discs.
 ### Staging Area Layout (one volume)
 
 ```
-LCSAS_BD_2026_003/
+LCSAS_BD25_2026_0003/
 ├── data/                          # Pack files (hardlinked from mirror)
 │   ├── aa/                        # Two-level layout (first 2 hex chars)
 │   │   ├── aabbccdd...            # Full pack ID as filename
@@ -282,7 +282,7 @@ LCSAS_BD_2026_003/
 ```json
 {
   "uuid": "550e8400-e29b-41d4-a716-446655440000",
-  "label": "LCSAS_BD_2026_003",
+  "label": "LCSAS_BD25_2026_0003",
   "media_type": "BD25",
   "created_at": "2026-03-15T10:30:00Z",
   "pack_count": 142,
@@ -660,7 +660,7 @@ lcsas repo retire   REPO_ID                        Mark a repository retired (mi
 lcsas repo activate REPO_ID                        Mark a retired repository active again
 lcsas scan          [--repo REPO] [--no-prune-sync] Discover new packs, mark pruned
 lcsas status        [--redundancy] [--stale-copies] Show archive status summary
-lcsas burn          --session ID [--media TYPE]    Burn staged ISOs to disc
+lcsas burn          --session ID                   Burn staged ISOs to disc
                     [--location LOC] [--device DEV]
                     [--dry-run]
 lcsas stage         [--media TYPE]                  Stage ISOs for deferred burning
@@ -711,9 +711,13 @@ make coverage           # With coverage report
 {PREFIX}_{MEDIA}_{YEAR}_{SEQ}
 ```
 
+`PREFIX` is `label_prefix` (default `LCSAS`). `MEDIA` is the media type,
+with MDISC shortened to MD and BDXL to BX (`generate_volume_label` in
+`src/lcsas/utils/labels.py`). `SEQ` has at least four digits.
+
 Examples:
-- `LCSAS_BD25_2026_0001` — First BD25 volume of 2026
-- `LCSAS_MDISC100_2026_0003` — Third MDISC100 volume
+- `LCSAS_BD25_2026_0001` — the first volume, a BD25 made in 2026
+- `LCSAS_MD100_2026_0003` — the third volume, an MDISC100
 
 The sequence number is global across all media types for a given prefix,
 monotonically increasing, ensuring no label collisions.

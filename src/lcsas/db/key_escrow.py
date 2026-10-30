@@ -9,6 +9,11 @@ The table is optional on read paths: it arrived at schema v9, and v≤8 disc
 catalogs (and any catalog opened before ``migrate()`` runs) may lack it.
 :func:`get_split` tolerates the missing table so restore/rebuild code never
 crashes on an old catalog.
+
+A split is keyed by the catalog repo_id (the UUID ``repo add`` assigns), the
+ID the packs being staged carry.  Earlier builds keyed it by the repository's
+name instead (#571); :func:`get_split_for_repo` still honours such a record,
+so every reader goes through it.
 """
 
 from __future__ import annotations
@@ -48,6 +53,7 @@ def record_split(
 ) -> KeyEscrow:
     """Record (or replace, on rotation) the split state for *repo_id*.
 
+    *repo_id* is the catalog repo_id, not the repository's name.
     Replace-on-conflict means re-splitting a repository's password
     overwrites the prior record — the newest split is the one heirs should
     follow.
@@ -84,6 +90,36 @@ def get_split(conn: sqlite3.Connection, repo_id: str) -> KeyEscrow | None:
         "SELECT * FROM key_escrow WHERE repo_id = ?", (repo_id,)
     ).fetchone()
     return _row_to_escrow(row) if row else None
+
+
+def _repo_name(conn: sqlite3.Connection, repo_id: str) -> str | None:
+    """The repository's name for *repo_id*, or None if it is not registered."""
+    try:
+        row = conn.execute(
+            "SELECT name FROM repositories WHERE repo_id = ?", (repo_id,)
+        ).fetchone()
+    except sqlite3.OperationalError:  # no repositories table: not a catalog
+        return None
+    return row["name"] if row else None
+
+
+def get_split_for_repo(
+    conn: sqlite3.Connection, repo_id: str
+) -> KeyEscrow | None:
+    """Return the recorded split for the repository with catalog *repo_id*.
+
+    Looks under *repo_id* first.  If nothing is there, looks under the
+    repository's name: builds before #571 recorded the split under the
+    name given to ``key split --repo``.  Every reader of a split uses this,
+    never :func:`get_split` with a bare ID.
+    """
+    record = get_split(conn, repo_id)
+    if record is not None:
+        return record
+    name = _repo_name(conn, repo_id)
+    if name is None or name == repo_id:
+        return None
+    return get_split(conn, name)
 
 
 def clear_split(
@@ -127,22 +163,24 @@ def detect_escrow_drift(
     A repository with neither a record nor ``key_split`` is consistent (no split).
     """
     for repo_id in sorted(set(repo_ids)):
-        record = get_split(conn, repo_id)
+        record = get_split_for_repo(conn, repo_id)
+        # Name the repository the way ``--repo`` takes it, not by its UUID.
+        name = _repo_name(conn, repo_id) or repo_id
         if config_split:
             if record is None:
                 return (
-                    f"password split drift for repository '{repo_id}': lcsas.toml says "
+                    f"password split drift for repository '{name}': lcsas.toml says "
                     f"key_split=true {config_threshold}-of-{config_shares} but "
                     f"the catalog records no split for this repository. Discs would "
                     f"print instructions to gather share cards that were never "
-                    f"made. Re-run 'lcsas key split --config ... --repo "
-                    f"{repo_id}' or set key_split=false under [defaults]."
+                    f"made. Re-run 'lcsas --config ... key split --repo "
+                    f"{name}' or set key_split=false under [defaults]."
                 )
             if (record.threshold, record.shares) != (
                 config_threshold, config_shares
             ):
                 return (
-                    f"password split drift for repository '{repo_id}': lcsas.toml says "
+                    f"password split drift for repository '{name}': lcsas.toml says "
                     f"key_split=true {config_threshold}-of-{config_shares} but "
                     f"the catalog records a {record.threshold}-of-"
                     f"{record.shares} split on {record.split_at}. Discs would "
@@ -152,7 +190,7 @@ def detect_escrow_drift(
         else:
             if record is not None:
                 return (
-                    f"password split drift for repository '{repo_id}': lcsas.toml says "
+                    f"password split drift for repository '{name}': lcsas.toml says "
                     f"key_split=false but the catalog records a "
                     f"{record.threshold}-of-{record.shares} split on "
                     f"{record.split_at}. Discs would tell the heir to find a "
