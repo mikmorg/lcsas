@@ -5980,6 +5980,89 @@ def _warn_if_weak_password(password: bytes) -> None:
         )
 
 
+def _check_split_repo_registered(
+    args: argparse.Namespace, config: LCSASConfig
+) -> None:
+    """Refuse a split whose repository is not in the catalog (#571).
+
+    ``key split`` records the split under the catalog repo_id that
+    ``repo add`` assigned, because that is the ID the burn pipeline looks
+    it up by.  Raises ValueError (the message to print) when there is no
+    catalog or the repository is not registered in it, so the caller can
+    stop before any share exists.  A catalog that exists but cannot be
+    read only logs a warning: the split goes ahead without being recorded.
+    """
+    from lcsas.db.repos import get_repo_by_name
+    from lcsas.exceptions import CatalogError
+
+    name = args.repo
+    repo_cfg = config.repositories.get(name)
+    mirror = str(repo_cfg.mirror_path) if repo_cfg is not None else "<mirror_path>"
+    db_path = _resolve_db_path(args, config)
+    try:
+        conn = _open_existing_catalog(db_path)
+        try:
+            repo = get_repo_by_name(conn, name)
+        finally:
+            conn.close()
+    except CatalogError:  # no file, or never initialised
+        # An unmounted drive looks the same as a new archive here, so the
+        # mount check comes first: 'init' on an empty mount point would
+        # make a second catalog.
+        raise ValueError(
+            f"No catalog at {db_path}, so the split would not be recorded. "
+            f"If the catalog is on a drive that is not mounted, mount it and "
+            f"split again. If this is a new archive, run 'lcsas --config ... "
+            f"init', then 'lcsas --config ... repo add {name} {mirror}', then "
+            f"split again. No shares were written."
+        ) from None
+    except ValueError as e:  # two repositories share the name
+        raise ValueError(
+            f"{e} The split cannot tell which one to record. No shares were "
+            f"written."
+        ) from None
+    # RuntimeError: get_connection's integrity check failed (a damaged file).
+    except (sqlite3.Error, OSError, RuntimeError) as e:
+        logger.warning(
+            "Could not read the catalog at %s (%s). The split will go ahead, "
+            "but it may not be recorded.", db_path, e,
+        )
+        return
+    if repo is None:
+        raise ValueError(
+            f"Repository '{name}' is not registered in the catalog at "
+            f"{db_path}. Register it first with 'lcsas --config ... repo add "
+            f"{name} {mirror}', then split again. No shares were written."
+        )
+
+
+def _record_split_by_name(
+    conn: sqlite3.Connection,
+    name: str,
+    threshold: int,
+    shares: int,
+    split_id: int,
+) -> None:
+    """Record a split under the catalog repo_id of the repository *name*.
+
+    Also drops a record that an earlier build left under the name (#571),
+    so one row stands for one repository.
+    """
+    from lcsas.db.key_escrow import clear_split, record_split
+    from lcsas.db.repos import get_repo_by_name
+
+    repo = get_repo_by_name(conn, name)
+    if repo is None:
+        raise ValueError(f"repository '{name}' is not registered in the catalog")
+    record_split(conn, repo.repo_id, threshold, shares, split_id, commit=False)
+    name_is_an_id = conn.execute(
+        "SELECT 1 FROM repositories WHERE repo_id = ?", (name,)
+    ).fetchone()
+    if name_is_an_id is None:
+        clear_split(conn, name, commit=False)
+    conn.commit()
+
+
 def cmd_key_split(args: argparse.Namespace) -> int:
     """Split a repository password into K-of-N SLIP-0039 shares."""
     from datetime import date
@@ -6028,6 +6111,16 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     if not repo_pw_file.exists():
         logger.error("Password file does not exist: %s", repo_pw_file)
         return 1
+
+    # The split is recorded under the repository's catalog repo_id.  Check
+    # it is registered before any share exists (#571): a split the catalog
+    # cannot record would have to be done again, with new share cards.
+    if config is not None:
+        try:
+            _check_split_repo_registered(args, config)
+        except ValueError as e:
+            logger.error("%s", e)
+            return 1
 
     # Read the password and drop a single trailing newline (password files
     # often have one; rustic's --password-file ignores it).
@@ -6133,11 +6226,12 @@ def cmd_key_split(args: argparse.Namespace) -> int:
 
     # ── Record the split durably (KEY-08) ─────────────────────────────
     # The catalog row is what the burn pipeline reconciles against and what
-    # disc share-instructions are derived from.  Without --config there is no
-    # catalog to write to, so drift-checking is unavailable — warn loudly.
+    # disc share-instructions are derived from.  It is keyed by the
+    # repository's catalog repo_id, not its name (#571).  Without --config
+    # there is no catalog to write to, so drift-checking is unavailable —
+    # warn loudly.
     if config is not None:
         from lcsas.db.connection import locked_connection
-        from lcsas.db.key_escrow import record_split
         from lcsas.db.schema import ensure_schema
 
         try:
@@ -6146,7 +6240,9 @@ def cmd_key_split(args: argparse.Namespace) -> int:
                 timeout=_resolve_lock_timeout(args),
             ) as conn:
                 ensure_schema(conn)
-                record_split(conn, args.repo, threshold, shares, split_id)
+                _record_split_by_name(
+                    conn, args.repo, threshold, shares, split_id
+                )
         except Exception as e:  # noqa: BLE001 - cards are written; don't fail the split
             logger.warning(
                 "Split succeeded but recording it in the catalog failed: %s. "

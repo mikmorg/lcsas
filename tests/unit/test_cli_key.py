@@ -91,8 +91,28 @@ def _share_card_files(out_dir: Path, repo: str = "alpha") -> list[Path]:
     return sorted(out_dir.glob(f"{repo}-share-*-card.txt"))
 
 
+def _register_repo(db_path: Path, name: str, mirror: Path) -> str:
+    """Register *name* the way ``lcsas repo add`` does: under a fresh UUID
+    repo_id that differs from the name (#571).  Returns the repo_id."""
+    from lcsas.db.connection import locked_connection
+    from lcsas.db.repos import register_repo
+    from lcsas.db.schema import ensure_schema
+    from lcsas.utils.labels import generate_uuid
+
+    repo_id = generate_uuid()
+    assert repo_id != name
+    with locked_connection(db_path) as conn:
+        ensure_schema(conn)
+        register_repo(conn, repo_id, name, str(mirror.resolve()))
+    return repo_id
+
+
 def _config_file(
-    tmp_path: Path, *, keys_password: bytes | None = PASSWORD, **defaults: object
+    tmp_path: Path,
+    *,
+    keys_password: bytes | None = PASSWORD,
+    register: bool = True,
+    **defaults: object,
 ) -> Path:
     """Write a minimal TOML config with optional [defaults] overrides.
 
@@ -101,6 +121,11 @@ def _config_file(
     repo-unlock check passes.  Pass ``keys_password=None`` to omit ``keys/``
     (to exercise the fail-closed path) or a different password (to exercise
     the wrong-password path).
+
+    By default ``alpha`` is also registered in the catalog under a UUID
+    repo_id, as ``repo add`` would do, because ``key split --config``
+    refuses a repository the catalog does not know (#571).  Pass
+    ``register=False`` to leave the catalog absent.
     """
     pw_file = tmp_path / "alpha.pw"
     _write_pw_file(pw_file)
@@ -125,6 +150,8 @@ def _config_file(
     ]
     cfg = tmp_path / "lcsas.toml"
     cfg.write_text("\n".join(lines) + "\n")
+    if register:
+        _register_repo(tmp_path / "archive.db", "alpha", mirror)
     return cfg
 
 
@@ -386,13 +413,23 @@ class TestSplitRecordsState:
             "key", "split", "--repo", "alpha", "--out", str(out),
         ]) == 0
 
-        # The catalog records the 3/4 split.
+        # The catalog records the 3/4 split under the repository's catalog
+        # repo_id (a UUID), not under the name given to --repo (#571).
         config = load_config(cfg)
         with locked_connection(config.db_path) as conn:
-            rec = get_split(conn, "alpha")
+            (repo_id,) = [
+                r["repo_id"] for r in conn.execute(
+                    "SELECT repo_id FROM repositories WHERE name = 'alpha'"
+                )
+            ]
+            rec = get_split(conn, repo_id)
+            by_name = get_split(conn, "alpha")
+        assert repo_id != "alpha"
         assert rec is not None
+        assert rec.repo_id == repo_id
         assert (rec.threshold, rec.shares) == (3, 4)
         assert rec.slip39_id >= 0
+        assert by_name is None
 
         # The success output names the key_split next step.
         captured = capsys.readouterr()
@@ -430,6 +467,268 @@ class TestSplitRecordsState:
             "--out", str(recovered),
         ])
         assert recovered.read_bytes() == PASSWORD
+
+
+class TestSplitRecordedUnderRepoId:
+    """#571: ``key split --repo <name>`` records the split under the catalog
+    repo_id that ``repo add`` assigned, which is the ID the stage preflight
+    and the disc text look it up by.
+
+    The end-to-end tests use only the CLI, the orchestrator and long-standing
+    catalog helpers, so on the unfixed code they fail on the preflight
+    ("records no split") rather than on an import.
+    """
+
+    @staticmethod
+    def _repo_add_and_split(
+        tmp_path: Path, *, k: int = 3, n: int = 4, **defaults: object
+    ) -> Path:
+        cfg = _config_file(
+            tmp_path, register=False, key_threshold=k, key_shares=n, **defaults
+        )
+        assert main(["--config", str(cfg), "init"]) == 0
+        assert main([
+            "--config", str(cfg),
+            "repo", "add", "alpha", str(tmp_path / "mirror"),
+        ]) == 0
+        assert main([
+            "--config", str(cfg),
+            "key", "split", "--repo", "alpha", "--out", str(tmp_path / "shares"),
+        ]) == 0
+        return cfg
+
+    @staticmethod
+    def _stage_one_volume(cfg: Path, *, allow_drift: bool = False) -> Path:
+        """Seed one pack for ``alpha`` and run the orchestrator's prepare()
+        against the CLI's catalog.  Returns the volume's staging root."""
+        import dataclasses
+        from unittest.mock import MagicMock
+
+        from lcsas.burn.operator import NullOperatorPrompt
+        from lcsas.burn.orchestrator import BurnOrchestrator
+        from lcsas.config.media import MediaType
+        from lcsas.config.settings import load_config
+        from lcsas.db.connection import get_connection
+        from lcsas.db.packs import register_pack
+
+        config = load_config(cfg)
+        mirror = config.repositories["alpha"].mirror_path
+        for sub in ("data", "index", "snapshots", "keys"):
+            (mirror / sub).mkdir(exist_ok=True)
+        (mirror / "config").write_text('{"version": 2}')
+        content = b"issue-571 pack " * 64
+        sha = hashlib.sha256(content).hexdigest()
+        (mirror / "data" / sha).write_bytes(content)
+        config.staging_path.mkdir(parents=True, exist_ok=True)
+
+        # The fake mirror has no real rustic data, so skip the FMT-03
+        # decode proof (it needs a password_file to run at all).
+        config = dataclasses.replace(
+            config,
+            default_media_type=MediaType.TEST_TINY,
+            default_ecc_redundancy_pct=0,
+            metadata_reserve_bytes=1000,
+            label_prefix="TEST",
+            allow_unverified_repo_format=True,
+            repositories={
+                "alpha": dataclasses.replace(
+                    config.repositories["alpha"], password_file=None
+                ),
+            },
+        )
+        conn = get_connection(config.db_path)
+        try:
+            (repo_id,) = [
+                r["repo_id"] for r in conn.execute(
+                    "SELECT repo_id FROM repositories WHERE name = 'alpha'"
+                )
+            ]
+            assert repo_id != "alpha"  # repo add assigns a UUID
+            register_pack(conn, sha256=sha, size_bytes=len(content),
+                          repo_id=repo_id)
+            orch = BurnOrchestrator(
+                config, conn, MagicMock(), MagicMock(),
+                prompt=NullOperatorPrompt(),
+                allow_escrow_drift=allow_drift,
+            )
+            manifest = orch.prepare()
+        finally:
+            conn.close()
+        return manifest.staging_path
+
+    def test_repo_add_split_then_stage_preflight_passes(
+        self, tmp_path: Path
+    ) -> None:
+        """repo add -> key split -> stage with key_split=true: the preflight
+        finds the split and the disc text names its K/N."""
+        cfg = self._repo_add_and_split(tmp_path, key_split="true")
+        root = self._stage_one_volume(cfg)  # must not raise EscrowDriftError
+        start_here = (root / "START_HERE.txt").read_text(encoding="utf-8")
+        assert "YOUR PASSWORD IS SPLIT INTO 4 SHARE CARDS" in start_here
+        assert "You need ANY 3 of them." in start_here
+        info = (root / "PASSWORD_INFO.txt").read_text(encoding="utf-8")
+        assert "password is SPLIT into 4 share cards." in info
+        assert "any 3 of them.  Fewer than 3 cards reveal nothing." in info
+
+    def test_recorded_kn_reaches_disc_text_over_config(
+        self, tmp_path: Path
+    ) -> None:
+        """The disc text takes K/N from the recorded split, not lcsas.toml.
+
+        Split 3-of-4, then claim 2-of-5 in the config and pass the drift
+        override: the discs must still say 3-of-4.
+        """
+        cfg = self._repo_add_and_split(tmp_path)
+        text = cfg.read_text().replace(
+            "key_threshold = 3", "key_threshold = 2"
+        ).replace("key_shares = 4", "key_shares = 5\nkey_split = true")
+        cfg.write_text(text)
+        root = self._stage_one_volume(cfg, allow_drift=True)
+        start_here = (root / "START_HERE.txt").read_text(encoding="utf-8")
+        assert "YOUR PASSWORD IS SPLIT INTO 4 SHARE CARDS" in start_here
+        assert "You need ANY 3 of them." in start_here
+        info = (root / "PASSWORD_INFO.txt").read_text(encoding="utf-8")
+        assert "password is SPLIT into 4 share cards." in info
+        assert "any 3 of them.  Fewer than 3 cards reveal nothing." in info
+        for name, text in (("START_HERE.txt", start_here),
+                           ("PASSWORD_INFO.txt", info)):
+            assert "split into 5" not in text.lower(), name
+            assert "any 2" not in text.lower(), name
+
+    def test_unregistered_repo_refused_before_any_share(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        cfg = _config_file(tmp_path, register=False)
+        assert main(["--config", str(cfg), "init"]) == 0
+        capsys.readouterr()
+        out = tmp_path / "shares"
+        assert main([
+            "--config", str(cfg),
+            "key", "split", "--repo", "alpha", "--out", str(out),
+        ]) == 1
+        msg = capsys.readouterr().out
+        db = (tmp_path / "archive.db").resolve()
+        mirror = (tmp_path / "mirror").resolve()
+        assert (
+            f"Repository 'alpha' is not registered in the catalog at {db}. "
+            f"Register it first with 'lcsas --config ... repo add alpha "
+            f"{mirror}', then split again. No shares were written."
+        ) in msg
+        assert not out.exists()
+        assert "Wrote" not in msg
+
+    def test_no_catalog_refused_before_any_share(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        cfg = _config_file(tmp_path, register=False)
+        out = tmp_path / "shares"
+        assert main([
+            "--config", str(cfg),
+            "key", "split", "--repo", "alpha", "--out", str(out),
+        ]) == 1
+        msg = capsys.readouterr().out
+        db = (tmp_path / "archive.db").resolve()
+        mirror = (tmp_path / "mirror").resolve()
+        assert (
+            f"No catalog at {db}, so the split would not be recorded. If the "
+            f"catalog is on a drive that is not mounted, mount it and split "
+            f"again. If this is a new archive, run 'lcsas --config ... init', "
+            f"then 'lcsas --config ... repo add alpha {mirror}', then split "
+            f"again. No shares were written."
+        ) in msg
+        assert not out.exists()
+        # The refusal must not leave a fresh catalog behind.
+        assert not (tmp_path / "archive.db").exists()
+
+    def test_two_repositories_with_one_name_refused(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        cfg = _config_file(tmp_path)  # registers alpha once ...
+        _register_repo(tmp_path / "archive.db", "alpha", tmp_path / "mirror")
+        out = tmp_path / "shares"
+        assert main([
+            "--config", str(cfg),
+            "key", "split", "--repo", "alpha", "--out", str(out),
+        ]) == 1
+        msg = capsys.readouterr().out
+        assert "More than one repository in the catalog is named 'alpha'" in msg
+        assert "No shares were written." in msg
+        assert not out.exists()
+
+    def test_unreadable_catalog_still_writes_cards_and_warns(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        """A catalog that exists but cannot be read keeps the old behaviour:
+        the cards are written and the owner is told to re-run later."""
+        cfg = _config_file(tmp_path, register=False)
+        (tmp_path / "archive.db").write_bytes(b"this is not an SQLite file" * 64)
+        out = tmp_path / "shares"
+        assert main([
+            "--config", str(cfg),
+            "key", "split", "--repo", "alpha", "--out", str(out),
+        ]) == 0
+        msg = capsys.readouterr().out
+        assert "Could not read the catalog at" in msg
+        assert "Split succeeded but recording it in the catalog failed" in msg
+        assert "key split --repo alpha' so burn drift-checking works" in msg
+        assert len(_share_card_files(out)) == 5
+
+    def test_damaged_catalog_still_writes_cards_and_warns(
+        self, tmp_path: Path, capsys, monkeypatch
+    ) -> None:
+        """get_connection raises RuntimeError when the catalog's integrity
+        check fails.  That is a catalog that cannot be read, so it takes the
+        same warn-and-go-ahead path, not main()'s "Unexpected error"."""
+        import lcsas.db.connection as connection
+
+        cfg = _config_file(tmp_path)  # archive.db exists, alpha registered
+        db = (tmp_path / "archive.db").resolve()
+        damage = "Catalog integrity check failed (test)"
+
+        def _damaged(db_path: object) -> object:
+            raise RuntimeError(damage)
+
+        monkeypatch.setattr(connection, "get_connection", _damaged)
+        out = tmp_path / "shares"
+        assert main([
+            "--config", str(cfg),
+            "key", "split", "--repo", "alpha", "--out", str(out),
+        ]) == 0
+        msg = capsys.readouterr().out
+        assert (
+            f"Could not read the catalog at {db} ({damage}). The split will "
+            f"go ahead, but it may not be recorded."
+        ) in msg
+        assert "Unexpected error" not in msg
+        assert "Split succeeded but recording it in the catalog failed" in msg
+        assert len(_share_card_files(out)) == 5
+
+    def test_resplit_drops_a_legacy_name_keyed_record(
+        self, tmp_path: Path
+    ) -> None:
+        from lcsas.db.connection import locked_connection
+        from lcsas.db.key_escrow import get_split, record_split
+
+        cfg = _config_file(tmp_path, key_threshold=3, key_shares=4)
+        db = tmp_path / "archive.db"
+        with locked_connection(db) as conn:
+            record_split(conn, "alpha", 2, 5, 1)  # as builds before #571 did
+        assert main([
+            "--config", str(cfg),
+            "key", "split", "--repo", "alpha", "--out", str(tmp_path / "s"),
+        ]) == 0
+        with locked_connection(db) as conn:
+            (repo_id,) = [
+                r["repo_id"] for r in conn.execute(
+                    "SELECT repo_id FROM repositories WHERE name = 'alpha'"
+                )
+            ]
+            rec = get_split(conn, repo_id)
+            legacy = get_split(conn, "alpha")
+            rows = conn.execute("SELECT COUNT(*) FROM key_escrow").fetchone()[0]
+        assert rec is not None and (rec.threshold, rec.shares) == (3, 4)
+        assert legacy is None
+        assert rows == 1
 
 
 # --------------------------------------------------------------------------

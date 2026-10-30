@@ -27,7 +27,11 @@ from lcsas.burn.operator import (
 )
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
-from lcsas.db.key_escrow import EscrowDriftError, detect_escrow_drift, get_split
+from lcsas.db.key_escrow import (
+    EscrowDriftError,
+    detect_escrow_drift,
+    get_split_for_repo,
+)
 from lcsas.db.locations import ensure_location
 from lcsas.db.models import Pack, SessionVolume, Volume
 from lcsas.db.queries import get_unarchived_or_missing_at_location, get_unarchived_packs
@@ -727,7 +731,7 @@ class BurnOrchestrator:
         scope for the single archive-wide split block.
         """
         for repo_id in sorted(set(repo_ids)):
-            record = get_split(self._conn, repo_id)
+            record = get_split_for_repo(self._conn, repo_id)
             if record is not None:
                 return (record.threshold, record.shares)
         return None

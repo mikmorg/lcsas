@@ -10,6 +10,7 @@ from lcsas.db.packs import register_pack
 from lcsas.db.repos import (
     delete_repo,
     get_repo,
+    get_repo_by_name,
     list_repos,
     register_repo,
     set_repo_status,
@@ -52,6 +53,34 @@ class TestGetRepo:
     def test_get_nonexistent_raises(self, memory_db):
         with pytest.raises(ValueError, match="not found"):
             get_repo(memory_db, "nonexistent_repo")
+
+
+class TestGetRepoByName:
+    """``--repo`` takes a name; ``repo add`` keys the row by a UUID (#571)."""
+
+    def test_finds_uuid_keyed_repo_by_name(self, memory_db):
+        rid = "6f1c2a9e-3b7d-4c51-9a0e-2d8f4b6c1e37"
+        register_repo(memory_db, rid, "family", "/mnt/mirror/family")
+        repo = get_repo_by_name(memory_db, "family")
+        assert repo is not None
+        assert repo.repo_id == rid
+
+    def test_unknown_name_returns_none(self, memory_db):
+        assert get_repo_by_name(memory_db, "ghost") is None
+
+    def test_does_not_match_by_repo_id(self, memory_db):
+        register_repo(memory_db, "r1", "Repo One", "/mnt/r1")
+        assert get_repo_by_name(memory_db, "r1") is None
+
+    def test_two_repos_with_one_name_raise(self, memory_db):
+        register_repo(memory_db, "id-b", "family", "/mnt/b")
+        register_repo(memory_db, "id-a", "family", "/mnt/a")
+        with pytest.raises(
+            ValueError,
+            match=r"More than one repository in the catalog is named "
+                  r"'family' \(IDs: id-a, id-b\)\.",
+        ):
+            get_repo_by_name(memory_db, "family")
 
 
 class TestListRepos:

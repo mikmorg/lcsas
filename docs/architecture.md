@@ -195,7 +195,7 @@ volume_events (
 
 -- Recorded Shamir/SLIP-0039 password split per repository (KEY-08)
 key_escrow (
-    repo_id      TEXT PRIMARY KEY REFERENCES repositories,
+    repo_id      TEXT PRIMARY KEY, -- no foreign key: older builds keyed it by name
     threshold    INTEGER NOT NULL, -- K in a K-of-N split
     shares       INTEGER NOT NULL, -- N total shares issued
     slip39_id    INTEGER NOT NULL, -- SLIP-0039 identifier

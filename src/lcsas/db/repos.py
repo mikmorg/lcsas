@@ -74,6 +74,28 @@ def get_repo(conn: sqlite3.Connection, repo_id: str) -> Repository:
     return _row_to_repo(row)
 
 
+def get_repo_by_name(conn: sqlite3.Connection, name: str) -> Repository | None:
+    """Fetch a repository by its name (what ``--repo`` takes), or None.
+
+    ``repo add`` gives each repository a UUID repo_id, so the name the
+    owner types is not the ID the catalog keys on.  The name column has no
+    UNIQUE constraint, so two rows can share a name: that raises
+    ValueError rather than guessing which one was meant.
+    """
+    rows = conn.execute(
+        "SELECT * FROM repositories WHERE name = ? ORDER BY repo_id", (name,)
+    ).fetchall()
+    if not rows:
+        return None
+    if len(rows) > 1:
+        ids = ", ".join(r["repo_id"] for r in rows)
+        raise ValueError(
+            f"More than one repository in the catalog is named '{name}' "
+            f"(IDs: {ids})."
+        )
+    return _row_to_repo(rows[0])
+
+
 def list_repos(conn: sqlite3.Connection) -> list[Repository]:
     """List all registered repositories."""
     rows = conn.execute("SELECT * FROM repositories ORDER BY name").fetchall()
