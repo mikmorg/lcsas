@@ -285,6 +285,12 @@ two-phase consolidation.
   axis below.  The CLI surface for this is
   `lcsas copy deprecate <volume_label> <location>` /
   `lcsas copy destroy <volume_label> <location>`.
+- The volume stays a deprecated volume, shown as `DEPRECATED`, even after
+  those calls take its last disc out of service: its `"Status changed:
+  … → DEPRECATED"` note marks it as superseded, not lost.  Only a volume
+  whose last in-service disc goes *before* it is deprecated becomes a lost
+  volume (shown `LOST`; see
+  [ADR 0003](../adr/0003-lost-volumes-are-not-a-schema-state.md)).
 - Restore planners now de-prefer these volumes
   (`v.status NOT IN ('DEPRECATED', 'DESTROYED')` —
   `src/lcsas/db/queries.py`).
@@ -458,7 +464,10 @@ catalog and physical reality (FMA-01).  Two independent checks:
 - `--fix` run: ghost volumes deleted, their packs returned to the
   unarchived pool (re-selectable by a later `lcsas stage`).
 - The drift check (durable-without-ACTIVE-disc) is never auto-fixed —
-  it always requires the owner to investigate.
+  it always requires the owner to investigate.  A drifted volume that
+  has disc records but none in service is a lost volume, so its line
+  reads `status=LOST (recorded as <status>)`; one with no disc records
+  at all keeps its recorded status.
 
 **Variant axes that apply:**
 - **Multi-repository** — ghost pack stats are reported per repository.
@@ -620,9 +629,16 @@ service or destroying them.
    to `cmd_volume_impact` (`build_parser()`).
 2. Resolve the volume by label; error 1 if not found
    (`cmd_volume_impact`).
-3. List all `volume_copies` (active and not); warn if no ACTIVE disc
-   is recorded (the volume may already be lost).  Print each disc's
-   location, status, and last-verified age (`cmd_volume_impact`).
+3. List all `volume_copies` (active and not).  A lost volume (no disc
+   left in service, see
+   [ADR 0003](../adr/0003-lost-volumes-are-not-a-schema-state.md)) is
+   shown as `LOST` with a warning naming its recorded status.  Print each
+   disc's location, status, and last-verified age (`cmd_volume_impact`).
+   For a lost volume recorded `DEPRECATED` there is no blast radius left
+   to predict: the command lists, by repository, the packs it left on no
+   disc in service (now only in the mirror, so the next `lcsas stage`
+   burns them again) and, as `DATA LOSS`, any that were also pruned from
+   the mirror, then returns 0 (`_print_lost_volume_packs`).
 4. Compute the at-risk packs — packs on this volume that no live disc
    of **any other volume** holds — via `get_at_risk_packs_for_volume`
    (`src/lcsas/db/queries.py`).
@@ -706,10 +722,16 @@ override (logged at WARNING — `src/lcsas/db/volumes.py`).
 volume-wide status above, each disc has its own status of
 `ACTIVE`/`DEPRECATED`/`DESTROYED` (`src/lcsas/db/schema.py`).  Helpers
 `deprecate_copy(conn, volume_id, location)` and
-`destroy_copy(conn, volume_id, location)` toggle these
+`destroy_copy(conn, volume_id, location, lost=False)` toggle these
 (`src/lcsas/db/volume_copies.py`), surfaced by the CLI as
 `lcsas copy deprecate <volume_label> <location>` /
-`lcsas copy destroy <volume_label> <location>`.  *The deprecation
+`lcsas copy destroy [--lost] <volume_label> <location>`.  A lost disc is
+recorded `DESTROYED` like a destroyed one; only its `NOTE` event says
+"lost".  Recording a volume's last in-service disc gone makes it a lost
+volume: `_demote_volume_if_last_copy_lost` writes `DEPRECATED` directly
+(bypassing `update_status`) plus an `auto-deprecated:` `NOTE`, and owner
+displays show it as `LOST`
+([ADR 0003](../adr/0003-lost-volumes-are-not-a-schema-state.md)).  *The deprecation
 triggered by `consolidate --deprecate` does NOT cascade into
 `volume_copies`* — an owner with a multi-copy archive must run
 `lcsas copy deprecate`/`destroy` per location separately.
@@ -744,6 +766,8 @@ Python layer as `VALID_EVENT_TYPES` (`src/lcsas/db/volume_events.py`).
 | `consolidate --execute`                       | `NOTE` (per source volume)     | `"Status changed: VERIFIED → CONSOLIDATING"` |
 | Staging-failure auto-rollback                 | `NOTE` (per source volume)     | `"Status changed: CONSOLIDATING → VERIFIED"` |
 | `consolidate --deprecate` (success)           | `NOTE` (per source volume)     | `"Status changed: <prev> → DEPRECATED"`     |
+| `copy deprecate` / `copy destroy [--lost]`    | `NOTE` (per disc)              | `"disc at <loc> recorded as deprecated (out of service)"` / `"… as destroyed"` / `"… as lost (whereabouts unknown)"` |
+| last in-service disc recorded gone            | `NOTE` (lost volume)           | `"auto-deprecated: last in-service disc <deprecated\|destroyed\|lost> at <loc>"` |
 | `catalog import-receipts` (verify pass/fail)  | `VERIFY_PASS` / `VERIFY_FAIL` + `BURN_RECEIPT_IMPORTED` | receipt filename; JSON provenance (iso_sha256, session_id, device, pack_ids) |
 | `catalog validate` (PASS/FAIL)                | **none** — see *Gaps*          | n/a                                         |
 | `catalog rebuild`                             | merges `volume_events` rows from the disc catalogs (no synthetic "rebuilt" event) | n/a |

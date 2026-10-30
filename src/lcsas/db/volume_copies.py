@@ -306,6 +306,11 @@ def _demote_volume_if_last_copy_lost(
 ) -> bool:
     """Record the volume as DEPRECATED (lost) when its last ACTIVE disc is gone.
 
+    A volume with no disc left in service is a lost volume.  There is no
+    LOST status in the schema (Q33, ADR 0003): it is recorded as
+    DEPRECATED plus the NOTE event written here, and owner displays show
+    it as LOST (``lcsas.db.queries.get_lost_volume_ids``).
+
     Replica truth (BURN-10): a volume is a live replica iff it has >=1
     ACTIVE disc — except a volume with zero ``volume_copies`` rows at all,
     which counts by status alone (legacy).  A volume whose disc rows exist
@@ -335,14 +340,42 @@ def _demote_volume_if_last_copy_lost(
     )
     if result.rowcount == 0:
         return False
+    from lcsas.constants import AUTO_DEPRECATED_NOTE_PREFIX
+    from lcsas.db.volume_events import add_event
+    # The prefix is what lcsas.db.queries.get_lost_volume_ids matches to
+    # tell a lost volume from one deprecated by consolidation (ADR 0003).
+    add_event(
+        conn, volume_id, "NOTE",
+        location=location,
+        detail=(
+            f"{AUTO_DEPRECATED_NOTE_PREFIX} last in-service disc {action} "
+            f"at {location}"
+        ),
+        commit=False,
+    )
+    return True
+
+
+def _record_disc_fate(
+    conn: sqlite3.Connection,
+    volume_id: int,
+    location: str,
+    fate: str,
+) -> None:
+    """Write the per-disc NOTE event for ``lcsas copy deprecate/destroy``.
+
+    One event per call, last disc or not, so the volume's events always
+    say what happened to each disc.  A lost disc and a destroyed disc
+    share the DESTROYED disc status; only this note tells them apart
+    (Q38).  Shares the caller's transaction; no commit.
+    """
     from lcsas.db.volume_events import add_event
     add_event(
         conn, volume_id, "NOTE",
         location=location,
-        detail=f"auto-deprecated: last in-service disc {action} at {location}",
+        detail=f"disc at {location} recorded as {fate}",
         commit=False,
     )
-    return True
 
 
 def deprecate_copy(
@@ -365,6 +398,9 @@ def deprecate_copy(
         raise ValueError(
             f"No in-service disc of volume {volume_id} at '{location}'"
         )
+    _record_disc_fate(
+        conn, volume_id, location, "deprecated (out of service)"
+    )
     demoted = _demote_volume_if_last_copy_lost(
         conn, volume_id, location, "deprecated"
     )
@@ -376,12 +412,20 @@ def destroy_copy(
     conn: sqlite3.Connection,
     volume_id: int,
     location: str,
+    *,
+    lost: bool = False,
 ) -> bool:
-    """Mark a disc as destroyed.
+    """Mark a disc as destroyed, or with *lost* as lost.
+
+    Both record the disc status DESTROYED (no schema change, Q38); the
+    per-disc NOTE event says "destroyed" or "lost (whereabouts unknown)",
+    and so does the volume's auto-deprecation note when this was its last
+    in-service disc.
 
     Raises ValueError if no disc is recorded at the location.  Returns
     True when this was the volume's last ACTIVE disc and the volume
-    itself was auto-demoted to DEPRECATED (BURN-10).
+    itself was auto-demoted to DEPRECATED (BURN-10): it is now a lost
+    volume.
     """
     result = conn.execute(
         """UPDATE volume_copies SET status = 'DESTROYED'
@@ -392,8 +436,13 @@ def destroy_copy(
         raise ValueError(
             f"No disc of volume {volume_id} recorded at '{location}'"
         )
+    action = "lost" if lost else "destroyed"
+    _record_disc_fate(
+        conn, volume_id, location,
+        "lost (whereabouts unknown)" if lost else "destroyed",
+    )
     demoted = _demote_volume_if_last_copy_lost(
-        conn, volume_id, location, "destroyed"
+        conn, volume_id, location, action
     )
     conn.commit()
     return demoted

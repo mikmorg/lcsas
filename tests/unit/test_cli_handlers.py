@@ -320,8 +320,8 @@ class TestCmdCopy:
             conn.close()
 
     def test_copy_destroy_cli(self, tmp_path, capsys):
-        """Destroying the last copy demotes the volume and prints the
-        re-burn hint (BURN-10 wire-level)."""
+        """Destroying the last disc demotes the volume, calls it lost and
+        prints the re-burn hint (BURN-10, Q33 wire-level)."""
         db = tmp_path / "test.db"
         vol_id = _setup_copy_db(db)
 
@@ -330,7 +330,7 @@ class TestCmdCopy:
         assert result == 0
         out = capsys.readouterr().out
         assert "DESTROYED" in out
-        assert "auto-deprecated" in out
+        assert "VOL_GONE is now a lost volume" in out
         assert "stage --for-location Home_Shelf" in out
         assert self._volume_status(db, vol_id) == "DEPRECATED"
 
@@ -344,7 +344,7 @@ class TestCmdCopy:
         assert result == 0
         out = capsys.readouterr().out
         assert "DESTROYED" in out
-        assert "auto-deprecated" not in out
+        assert "now a lost volume" not in out
         assert self._volume_status(db, vol_id) == "VERIFIED"
 
     def test_copy_deprecate_cli(self, tmp_path, capsys):
@@ -356,7 +356,7 @@ class TestCmdCopy:
         assert result == 0
         out = capsys.readouterr().out
         assert "DEPRECATED" in out
-        assert "auto-deprecated" in out
+        assert "VOL_GONE is now a lost volume" in out
         assert self._volume_status(db, vol_id) == "DEPRECATED"
 
     def test_copy_destroy_unknown_volume_errors(self, tmp_path, capsys):

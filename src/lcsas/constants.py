@@ -11,6 +11,18 @@ STATUS_CONSOLIDATING = "CONSOLIDATING"
 STATUS_DEPRECATED = "DEPRECATED"
 STATUS_DESTROYED = "DESTROYED"
 
+# Display-only status for a lost volume: a burned volume with no disc left
+# in service.  It is never stored: the catalog records a lost volume as
+# DEPRECATED plus a NOTE event that starts with AUTO_DEPRECATED_NOTE_PREFIX
+# (Q33, docs/adr/0003-lost-volumes-are-not-a-schema-state.md).  The one
+# predicate that decides it is lcsas.db.queries.get_lost_volume_ids.
+DISPLAY_STATUS_LOST = "LOST"
+
+# Start of the NOTE event detail written when a volume's last in-service
+# disc is recorded deprecated, destroyed or lost.  Older catalogs carry
+# "auto-deprecated: last physical copy ..." so only this prefix is matched.
+AUTO_DEPRECATED_NOTE_PREFIX = "auto-deprecated:"
+
 # Burn session statuses
 SESSION_STAGED = "STAGED"
 SESSION_PARTIAL = "PARTIAL"
