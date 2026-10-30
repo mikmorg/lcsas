@@ -38,6 +38,31 @@ matrix, and the on-disc recovery manuals.
 The full synthesized architecture reference lives at
 [docs/architecture.md](docs/architecture.md).
 
+## No Independent Security Review
+
+LCSAS v1.0 ships without an independent security review. No outside person
+has reviewed LCSAS's own code, including the code that handles the crypto:
+the tier-1 C reader's decryption and authentication (scrypt, AES, Poly1305),
+the tier-3 Python reader's decryption and authentication, and the SLIP-0039
+share code (in Python and in the `lcsas-keyshare` C binary). The 2026-06
+audit was self-graded. The encryption format itself is not LCSAS's: it is
+restic's repository format, which rustic also uses.
+
+Why this is acceptable:
+
+- **A reader bug fails loudly.** Every blob is authenticated (a Poly1305
+  MAC and a SHA-256 hash), so a bug in a reader's decryption or
+  authentication makes the restore reject data instead of restoring wrong
+  data. Tier 2 (rustic) and tier 2b (stock restic) share none of the
+  readers' code.
+- **Tier 2b is the hedge.** It restores with no LCSAS code at all. The steps
+  are in [`recovery/docs/RESTORE_STANDARD_TOOLS.txt`](recovery/docs/RESTORE_STANDARD_TOOLS.txt).
+- **The silent risk is the share code.** A bug there could write share cards
+  that do not rebuild the password. The yearly `lcsas key verify` in the
+  [owner schedule](docs/workflows/verify-and-audit.md#owner-schedule) tests
+  exactly that: it rebuilds the password from the cards and checks that it
+  unlocks the repository.
+
 ## Project Structure
 
 ```
@@ -464,6 +489,7 @@ rustic restore abc123def456 \
 | Location move | As needed | Record that a disc moved between locations |
 | Store offsite discs | Monthly | Carry discs to safe deposit / relative's house |
 | LCSAS status | Anytime | Check all packs archived, check redundancy per location |
+| Disc checks | See the [owner schedule](docs/workflows/verify-and-audit.md#owner-schedule) | Read discs back, re-burn on any read error, test restore, yearly drill |
 | Restore | When needed | Pick list → mount discs → cache assembly → Rustic restore |
 
 ## Restoring After a Disaster (Meta Disc)

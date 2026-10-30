@@ -8,6 +8,10 @@ disaster.  Each item cites a concrete failure mode and a HOW OFTEN
 indicator.  Items are grouped into three phases: one-time setup,
 ongoing maintenance, and an annual drill.
 
+The schedule for reading discs back and re-burning is the owner
+schedule in docs/workflows/verify-and-audit.md ("Re-verification
+schedules").  The HOW OFTEN lines below agree with it.
+
 ────────────────────────────────────────────────────────────────────
 BEFORE RELYING ON THESE DISCS  (one-time, at archive creation)
 ────────────────────────────────────────────────────────────────────
@@ -94,7 +98,8 @@ BEFORE RELYING ON THESE DISCS  (one-time, at archive creation)
     count matches the original backup.
     How:
       mkdir -p /tmp/test-restore
-      lcsas restore exec latest /tmp/test-restore
+      lcsas --config lcsas.toml restore exec latest /tmp/test-restore \
+          --repo REPO --password-file /path/to/password-file
       # or using the tier-1 binary directly:
       /mnt/recovery/scripts/restore.sh /tmp/test-restore
     Compare restored file count against the original source:
@@ -115,7 +120,9 @@ ONGOING MAINTENANCE  (monthly, or after each burn session)
     subset of your data.
     How:
       mkdir -p /scratch/lcsas-test-restore
-      lcsas restore exec latest /scratch/lcsas-test-restore
+      lcsas --config lcsas.toml restore exec latest \
+          /scratch/lcsas-test-restore \
+          --repo REPO --password-file /path/to/password-file
     Check the exit code; lcsas-restore exits non-zero on any blob
     integrity failure.  Discard the output when done.
     Why: optical discs degrade.  A monthly smoke-test catches bit
@@ -150,13 +157,18 @@ ONGOING MAINTENANCE  (monthly, or after each burn session)
 
 [ ] DISC READABILITY SCAN — insert each disc in a SATA or USB BD
     drive and re-verify it against the catalog.
-    How (preferred — results are RECORDED in the catalog):
+    How (preferred — results are RECORDED in the catalog): each
+    month, list every in-service disc, the ones read longest ago
+    first:
+      lcsas status --stale-copies --older-than-days 0
+    Read back the discs at the top of the list, a twelfth of the
+    count, one at a time:
+      lcsas verify <LABEL> --disc --location <LOCATION>
+    Or read every disc in one sitting:
       lcsas verify --all --disc
-    This walks every ACTIVE disc, prompts you to insert each one,
-    checks identity (PVD Volume ID) + full device hash against the
-    SHA-256 recorded at burn time, and stamps last_verified_at on
-    each disc that passes.  Find overdue discs first with:
-      lcsas status --stale-copies
+    Each read checks identity (PVD Volume ID) + full device hash
+    against the SHA-256 recorded at burn time, and stamps
+    last_verified_at on each disc that passes.
     Fallback (no catalog / bare drive — read-only surface scan, NOT
     recorded anywhere):
       dd if=/dev/sr0 of=/dev/null bs=64k status=progress
@@ -180,8 +192,8 @@ ONGOING MAINTENANCE  (monthly, or after each burn session)
     Recording matters: the verify history travels in the disc
     catalog of every later disc, so an heir can ask "when was each
     disc last confirmed good?" decades from now.
-    HOW OFTEN: monthly for discs less than 2 years old; weekly for
-    discs older than 5 years or stored in suboptimal conditions.
+    HOW OFTEN: monthly, a twelfth of the discs, so that every disc
+    is read once a year.  Re-burn at once after any read error.
 
 [ ] OFFSITE COPY CHECK — confirm that the offsite copy of
     the archive (second set of discs, remote NAS mirror, or cloud
@@ -293,7 +305,7 @@ Full test-restore               At creation; see monthly cadence
 Monthly test-restore            Monthly
 Volume count check              Monthly / after a burn session
 Blast-radius review             Monthly, with the volume count check
-Disc readability scan           Monthly (<2 yr); weekly (>5 yr)
+Disc readability scan           Monthly, a twelfth of the discs
 Offsite copy check              After each burn session; monthly log
 Annual blind restore drill      Annually / after major change
 Journey drill log               Per meta disc build; per restore.sh/.bat change

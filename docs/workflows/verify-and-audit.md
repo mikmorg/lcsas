@@ -10,7 +10,7 @@ This document covers the observability/integrity commands and the policies that 
 - `lcsas status` — at-a-glance archive inventory (`--stale-copies`, `--redundancy`)
 - `lcsas session list` — list burn sessions
 - `lcsas session abort` — abort a never-burned session and reclaim its packs
-- Periodic re-verification cadence — how often to pull discs out of safes
+- Re-verification schedules — the owner schedule and the long-term schedule: how often to read discs back, and when to re-burn
 - Reading the `volume_events` audit trail — the immutable lifecycle log
 
 The integrity model has three layers that this doc threads together: the
@@ -42,7 +42,7 @@ one place that decides it
 4. [`lcsas status` — inventory dashboard](#lcsas-status--inventory-dashboard)
 5. [`lcsas session list` — list sessions](#lcsas-session-list--list-sessions)
 6. [`lcsas session abort` — abort a never-burned session](#lcsas-session-abort--abort-a-never-burned-session)
-7. [Periodic re-verification cadence](#periodic-re-verification-cadence)
+7. [Re-verification schedules](#re-verification-schedules)
 8. [Reading the `volume_events` audit trail](#reading-the-volume_events-audit-trail)
 
 ---
@@ -330,54 +330,82 @@ lcsas --config lcsas.toml session abort [REF] [--volume LABEL]
 
 ---
 
-## Periodic re-verification cadence
+## Re-verification schedules
 
-**Purpose:** A disc that is never read is no different from a disc that has rotted — you only learn about bit-rot when you try to read the disc. A scheduled cadence pulls discs out of long-term storage on a known rhythm so failures are caught with maximum safety margin (i.e. before the volume's other disc also rots).
+**Purpose:** A disc that is never read is no different from a disc that has rotted: you only learn about decay when you read the disc back. This section is the one place that says how often to read discs back and when to re-burn. It has two schedules: the **owner schedule**, for while the owner maintains the archive, and the **long-term schedule**, for whoever holds the archive after the owner. Other docs link here instead of giving their own schedule, and the text burned onto the discs says the same thing.
 
-**Prerequisites:** A running LCSAS install with at least one `BURNED` or `VERIFIED` volume.
+**Prerequisites:** For the owner schedule, a running LCSAS install with at least one `BURNED` or `VERIFIED` volume. The commands below assume the config file is `lcsas.toml`.
 
-**Recommended cadence — sourced from the codebase:**
+### Owner schedule
 
-The codebase specifies a cadence in two places. Both apply equally to BD-R, M-Disc, and other optical media, and are written into every disc's on-disc README via the `HolographicInjector`:
+Follow this schedule while you, the owner, maintain the archive.
 
-| Cadence | Action | Source |
-|---------|--------|--------|
-| Every **2-5 years** | Spot-check a few discs | `src/lcsas/staging/metadata.py` |
-| Every **5-10 years** | Full verify of all discs (`lcsas verify --all --disc`) | `src/lcsas/staging/metadata.py` |
-| Every **5-10 years** | Re-burn discs to fresh media (even M-Disc degrades) | `docs/ESTATE_PLANNING.md` |
-| On **any** read error | Re-burn ALL data — same-batch media may be co-degrading | `src/lcsas/staging/metadata.py` |
+1. **Every month, read back a twelfth of the discs,** so that every disc is read once a year. First list every in-service disc, never-read discs first, then the ones read longest ago:
 
-The codebase does **not** distinguish a separate cadence for BD-R vs. M-Disc — the same 2-5y / 5-10y window covers both. Media-vendor literature suggests M-Disc could safely use the longer end of that window and BD-R the shorter, but LCSAS itself does not encode that policy. The `volume_copies.last_verified_at` stamp **is** tracked: `lcsas status --stale-copies [--older-than-days N]` surfaces ACTIVE discs never verified or overdue (FMA-05), and `lcsas status` warns about them in its summary. There is still no scheduled-reminder integration — the cadence runs out-of-band.
+   ```bash
+   lcsas --config lcsas.toml status --stale-copies --older-than-days 0
+   ```
 
-**Steps:**
-1. Run `lcsas status --stale-copies` (or read the warning in plain `lcsas status`) to plan which discs to pull. The stamp comes from `verify --disc` / `verify --all --disc`.
-2. Pull the discs from storage and mount them on a verification host.
-3. Run `lcsas verify <label> --disc --device <dev>` per disc (stamps `last_verified_at`), or `lcsas verify --all --disc` to sweep every ACTIVE disc one by one.
-4. Cross-check with `lcsas catalog validate <mount> [--content]` for each disc.
-5. If any disc fails: append a manual `VERIFY_FAIL_REBURN` event (one of the `VALID_EVENT_TYPES`, `src/lcsas/db/volume_events.py`) and trigger the re-burn workflow (out of scope here).
-6. Optionally record a `CONDITION_CHECK` / `NOTE` event for spot-checks that passed without a full ECC pass.
+   `--older-than-days 0` lists every in-service disc, not only the overdue ones, and the first line gives the count. Read back the discs at the top of the list, a twelfth of the count, one at a time:
 
-**Expected outcome:**
-- Every volume in the affected cohort has a fresh `VERIFY_PASS` (or `VERIFY_FAIL` / `VERIFY_FAIL_REBURN`) event whose `event_date` is recent.
-- Failures trigger an out-of-band re-burn pipeline.
+   ```bash
+   lcsas --config lcsas.toml verify <LABEL> --disc --location <LOCATION>
+   ```
+
+   A pass stamps the disc as read. Plain `lcsas status` warns about any disc not read for a year (365 days). To read every disc in one sitting instead, run `lcsas --config lcsas.toml verify --all --disc` (add `--location <LOCATION>` for one location). Meta discs are not on the list: read each one once a year too, by mounting it and running `lcsas meta verify <MOUNT>`.
+
+2. **Re-burn as soon as there is any read error.** Do not wait for the next month. A failed `verify` records a `VERIFY_FAIL` event, and `lcsas status` then warns that the volume needs a re-burn. Take the disc out of service, then burn a replacement for its location:
+
+   ```bash
+   lcsas --config lcsas.toml copy deprecate <LABEL> <LOCATION>
+   lcsas --config lcsas.toml stage --for-location <LOCATION>
+   lcsas --config lcsas.toml burn --session latest --location <LOCATION>
+   ```
+
+   `stage --for-location` stages every pack that has no in-service disc at that location, but it skips pruned packs (see [location-management.md](location-management.md#multi-copy-sync-via---for-location)).
+
+3. **Every month, run a test restore** of the latest snapshot into a scratch directory, and check that it exits 0:
+
+   ```bash
+   lcsas --config lcsas.toml restore exec latest <SCRATCH_DIR> --repo <REPO> --password-file <PASSWORD_FILE>
+   ```
+
+   This is the MONTHLY TEST-RESTORE item in [`recovery/docs/READINESS_CHECKLIST.txt`](../../recovery/docs/READINESS_CHECKLIST.txt).
+
+4. **Once a year, run the drill and `lcsas key verify`.** The drill is the BLIND RESTORE DRILL in the checklist's EMERGENCY DRILL section. `lcsas key verify` checks that the share cards (any K of them), or a stored copy of the password, still unlock each repository:
+
+   ```bash
+   lcsas --config lcsas.toml key verify --repo <REPO> --share-file <CARD1> --share-file <CARD2>
+   lcsas --config lcsas.toml key verify --repo <REPO> --password-file <PASSWORD_COPY>
+   ```
+
+   Exit code 0 and an `OK:` line mean they still work.
+
+### Long-term schedule
+
+For whoever holds the archive after the owner. Every disc carries this schedule in `DISC_CARE.txt` (written by `HolographicInjector.write_disc_care()` in `src/lcsas/staging/metadata.py`), so the two must say the same thing:
+
+- **Every 2-5 years:** verify a few discs (a spot-check).
+- **Every 5-10 years:** verify every disc, then re-burn all the data onto fresh discs. Even M-DISC ages.
+- **After ANY read error:** re-burn ALL the data onto fresh discs at once. Discs from the same media batch may be failing together.
 
 **Variant axes that apply:**
-- **Media type:** BD-R LTH (organic dye) should be biased toward the *shorter* end of every window; M-Disc (inorganic) toward the longer end. The codebase does not enforce this differential; owners must encode it in their own schedule.
-- **Multi-repository:** Cadence is per-disc, not per-repository. A single sweep covers every repository with packs on a disc.
-- **Optical drive count:** Drive count dictates the *throughput* of the cadence — a single-drive setup doing a 5-yearly full sweep of 1000 discs at ~10 min/disc needs roughly a week of wall-clock time. Plan accordingly.
-- **Multi-copy:** Archives with several copies of each volume should stagger the cadence per disc so the same calendar event doesn't pull both copies of a volume out of storage simultaneously (defeating the redundancy).
-- **ECC:** The whole cadence assumes ECC verification is what `verify` runs by default. If ECC is disabled the cadence still makes sense but the failure margin shrinks.
-- **Storage stage:** This cadence covers the discs only; the mirror is checked continuously by Rustic itself.
+- **Media type:** Both schedules apply to every media type. LCSAS does not set a shorter schedule for BD-R LTH (organic dye) than for M-DISC; an owner who wants one can read those discs more often.
+- **Multi-repository:** The schedules are per disc, not per repository. Reading a disc back covers every repository with packs on it.
+- **Optical drive count:** Drive count sets how long the reading takes. With one drive at ~10 min/disc, a twelfth of 1000 discs (about 83) takes about 14 hours a month, and a full sweep of 1000 discs takes about a week.
+- **Multi-copy:** Do not take both discs of a volume out of storage at the same time; that defeats having a second disc.
+- **ECC:** The RS03 margin is for restoring from a damaged disc, not a reason to keep using it. Any read error means re-burn, even when RS03 could still repair the disc.
+- **Storage stage:** These schedules cover the discs only; the mirror is checked continuously by Rustic itself.
 
 **Test coverage:**
-- The cadence is a policy, not code, so there is nothing to unit-test directly. The supporting query (`get_events_for_volume` for `last verified` derivation) is tested at `tests/unit/test_db_volume_events.py:86-124`.
+- The schedules are policy, not code, so there is nothing to unit-test directly. The monthly list (`status --stale-copies`, including `--older-than-days 0`) is tested in `tests/unit/test_cli_handlers.py`, and `tests/recovery_hardening/test_last_verified_writer_exists.py` pins that `verify --disc` writes the stamp it reads.
 - Gaps:
-  - `lcsas status --stale-copies` surfaces overdue discs, but there is no scheduled-task / hook integration; the cadence runs out-of-band.
-  - The cadence written to disc (`src/lcsas/staging/metadata.py`) and the cadence in `docs/ESTATE_PLANNING.md` are *slightly* divergent (2-5y vs. 5-10y vs. 5-10y reburn). Worth reconciling in a follow-up doc PR.
+  - There is no scheduled-task / hook integration; the owner runs the schedule by hand.
+  - `lcsas status --stale-copies` does not list meta discs, so their yearly read is not tracked.
 
 **Source refs:**
-- `src/lcsas/staging/metadata.py` (on-disc periodic-verification text)
-- `docs/ESTATE_PLANNING.md` (owner-facing periodic maintenance checklist)
+- `src/lcsas/staging/metadata.py` (`write_disc_care`: the long-term schedule on every disc)
+- `recovery/docs/READINESS_CHECKLIST.txt` (the owner's checklist; its HOW OFTEN lines follow the owner schedule)
 - `_print_stale_copies` / `find_stale_copies` (`src/lcsas/cli/main.py`, `src/lcsas/db/volume_copies.py`)
 - `src/lcsas/db/volume_events.py` (queries for "when was this last verified")
 

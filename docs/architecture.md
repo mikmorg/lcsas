@@ -398,7 +398,8 @@ Each repository maintains its own encryption independently:
 - On demand: `lcsas catalog validate <mounted-disc> --content` re-reads
   every pack file on a mounted disc and checks its SHA-256 against
   the pack ID in its filename
-- Periodic: `dvdisaster --verify` on stored discs
+- Periodic: read stored discs back with `lcsas verify <label> --disc`,
+  on the [re-verification schedules](workflows/verify-and-audit.md#re-verification-schedules)
 - Catalog cross-check: compare mirror packs against catalog records
 
 ---
