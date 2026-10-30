@@ -127,10 +127,18 @@ subcommand. `--output` / `-o` is required.
       repository, whether it is `retired` and how many of its packs sit
       on volumes that still exist — the two facts the key gate below
       decides on.
-   9. `_bundle_recovery_toolchain_artifacts` — copy the recovery `bin/`
-      tree (per-target `lcsas-restore`, `rustic-static`, **`lcsas-ecc`**,
-      and the bundled CPython) and merge `recovery/MANIFEST.sha256`
-      onto the meta disc (`_bundle_upstream_binaries` + `_bundle_tier1_binaries`).
+   9. `_bundle_recovery_toolchain_artifacts` — copy `recovery/` onto the
+      meta disc, add the per-target binaries (`lcsas-restore`,
+      **`lcsas-ecc`**, `rustic-static`, and the bundled CPython) and merge
+      `recovery/MANIFEST.sha256` (`_bundle_upstream_binaries` +
+      `_bundle_tier1_binaries`). From a git checkout it copies only the
+      git-tracked files under `recovery/` (the set the manifest is built
+      from), plus `recovery/bin/` as it stands, so untracked files such as the
+      fuzzer output a local `make audit-gate` leaves in
+      `recovery/fuzz/corpus/` stay off the disc (#562). Outside a git
+      checkout it copies the whole folder minus build debris and fuzzer
+      output, and warns that any other stray file will fail
+      `lcsas meta verify --strict`.
    10. `_write_restore_script` / `_write_restore_auto_script` — render
        `recovery/scripts/restore.sh` and `restore_auto.sh` (plus
        `restore.bat` on the Windows path) from the in-source script
@@ -145,6 +153,9 @@ subcommand. `--output` / `-o` is required.
        `CONFIG_SUMMARY.txt` (config builds), and `DISC_CARE.txt` via the
        `HolographicInjector`.
 3. The `.incomplete` marker is removed once every stage succeeds.
+   `cmd_meta_build` then warns about any file in the built `recovery/`
+   that `recovery/MANIFEST.sha256` does not list: the files
+   `lcsas meta verify --strict` would report as `EXTRA` (#562).
 4. **RST-05 completeness gate:** `cmd_meta_build` then calls
    `builder.missing_required_contents()` (the `required_meta_paths()`
    contract). If any per-target tier-1/2/3 binary, `lcsas-ecc`, CPython
@@ -177,7 +188,10 @@ The directory is ready to feed to `xorriso` for ISO mastering.
   layout, bundled tools function, restore.sh parses as bash, cascades
   present, START_HERE / disc-care files generated, `standalone_restorer.py`
   shipped, `restore_single_drive.py` shipped, single-drive defaults wired,
-  no `.incomplete` marker after build; `TestBundleUpstreamBinaries`).
+  no `.incomplete` marker after build; `TestBundleUpstreamBinaries`;
+  `TestRecoveryBundleTrackedOnly`: only git-tracked `recovery/` files
+  are bundled and a checkout with fuzzer output still passes
+  `meta verify --strict`).
 - `tests/integration/test_meta_volume_restore.py` end-to-end (build a
   meta disc, nuke everything else, restore using ONLY the meta disc's
   bundled tools, check byte-for-byte file hashes).
@@ -303,7 +317,8 @@ lcsas meta verify <output-dir> [--strict]
 2. It reads `<output>/recovery/MANIFEST.sha256` and recomputes the
    SHA-256 of every listed file, reporting `MISSING` and `MISMATCH`.
 3. With `--strict`, files present under `recovery/` but *absent* from the
-   manifest are reported as `EXTRA`.
+   manifest are reported as `EXTRA`. `lcsas meta build` warns about the
+   same files when it builds the tree.
 4. Independent of the manifest, it runs the **RST-05 required-contents
    check** (`required_meta_paths()`), reporting any `ABSENT` contract
    artifact (a never-bundled target the manifest can't catch). The
@@ -551,7 +566,12 @@ bumped tool versions, freshly cross-built tier-1 binaries, and (if
 newly-added repositories exist) updated repository metadata.
 
 **Prerequisites:**
-- A development checkout of LCSAS with the desired source revision.
+- A development checkout of LCSAS with the desired source revision. For a
+  meta disc you will burn, use a clean git checkout of that revision (a
+  `git worktree` of the tag, say). The builder bundles only the
+  git-tracked files under `recovery/`, so untracked files cannot reach
+  the disc, but it copies tracked files as they are in the work tree,
+  local edits included; a clean checkout makes the disc reproducible.
 - Same tool prerequisites as `lcsas meta build` (and the cross-built
   `recovery/bin/<arch>/` tree + upstream cache for a complete build).
 
@@ -566,7 +586,8 @@ newly-added repositories exist) updated repository metadata.
    meta build --output /tmp/meta-NEW` (`--config`/`--db` are global flags
    and must come *before* the subcommand). The full pipeline regenerates
    `lcsas/src/` from the current project root and re-renders all in-source
-   script constants.
+   script constants. Then run `lcsas meta verify --strict /tmp/meta-NEW`,
+   which must pass.
 4. Master the directory into an ISO image with `xorriso` (optionally
    RS03-ECC it) and burn it the same way as a data disc.
 5. Nothing is recorded in the catalog: the meta disc is not a volume, and

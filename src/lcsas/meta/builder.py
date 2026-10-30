@@ -15,21 +15,24 @@ archive discs, minus only the password:
 from __future__ import annotations
 
 import contextlib
+import fnmatch
 import json
 import logging
 import os
 import re
 import shutil
 import signal
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # sqlite3 is imported lazily where it is actually used
     import sqlite3
+    from collections.abc import Callable, Collection
 
 from lcsas.config.settings import LCSASConfig
 from lcsas.meta.bundler import ToolBundler
@@ -1671,6 +1674,128 @@ discs and feed in the password file.
 '''
 
 
+# ── recovery/ bundling: which files go on the disc (#562) ────────────
+
+# The two manifests under recovery/ that MANIFEST.sha256 never lists: the
+# curation rule in recovery/Makefile excludes both (a manifest cannot list
+# itself), so neither counts as a file the manifest is missing.
+UNLISTED_MANIFESTS = frozenset({"MANIFEST.sha256", "docs/MANIFEST.sha256"})
+
+# Build debris that never belongs on a meta disc (recovery/.gitignore).
+# Applied to bin/, which is copied as it stands, and to the whole tree
+# when git cannot say which files are tracked.
+_RECOVERY_DEBRIS = (
+    "build", "build-*", "dist", "__pycache__", "*.pyc", "*.o", "*.a",
+)
+
+# Fuzzer output that recovery/fuzz/.gitignore keeps out of git, by the
+# directory it sits in: in fuzz/corpus/<target>/, names that start with
+# eight hex digits; in fuzz/crashes/<target>/, names that start with a
+# hex digit or with "crash_".  Curated inputs there (seed_*, and a few
+# named ones such as tree/real_tree.json) are tracked and do not match.
+# Only the fallback copy uses this; in a git checkout git decides.
+_FUZZ_OUTPUT_PATTERNS = {
+    "corpus": ("[0-9a-f]" * 8 + "*",),
+    "crashes": ("[0-9a-f]*", "crash_*"),
+}
+
+# Environment overrides that would make git answer for some other git
+# repository than the one recovery/ sits in (a git hook, for one, sets
+# GIT_DIR or GIT_INDEX_FILE for its children).
+_GIT_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+
+
+def _is_fuzz_output(rel: PurePosixPath) -> bool:
+    """True when *rel* (relative to recovery/) is gitignored fuzzer output."""
+    parts = rel.parts
+    if len(parts) != 4 or parts[0] != "fuzz":
+        return False
+    patterns = _FUZZ_OUTPUT_PATTERNS.get(parts[1], ())
+    return any(fnmatch.fnmatchcase(parts[3], pat) for pat in patterns)
+
+
+def _fallback_recovery_ignore(
+    src_root: Path,
+) -> Callable[[str, list[str]], set[str]]:
+    """``copytree`` ignore callable for a recovery/ tree outside git.
+
+    Skips build debris and gitignored fuzzer output.  The fuzzer check
+    looks at the parent directory, not just the name: tracked files such
+    as ``tests/fixtures/repo/index/<sha256>`` are hex-named too.
+    """
+    debris = shutil.ignore_patterns(*_RECOVERY_DEBRIS)
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        skipped = set(debris(directory, names))
+        rel_dir = PurePosixPath(Path(directory).relative_to(src_root).as_posix())
+        skipped.update(n for n in names if _is_fuzz_output(rel_dir / n))
+        return skipped
+
+    return ignore
+
+
+def _git_tracked_files(directory: Path) -> tuple[list[str] | None, str]:
+    """List the git-tracked files under *directory*, relative to it.
+
+    This is the oracle ``make -C recovery manifest`` builds
+    MANIFEST.sha256 from (``git ls-files --cached -- .``).  Returns
+    ``(paths, "")``, or ``(None, reason)`` when git cannot answer: git is
+    not installed, *directory* is not in a git work tree, or git tracks
+    nothing under it (a copy that merely sits inside some other git
+    repository).
+    """
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_LOCATION_VARS}
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(directory), "ls-files", "--cached", "-z", "--", "."],
+            capture_output=True, timeout=120, check=False, env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, f"git could not be run: {exc}"
+    if proc.returncode != 0:
+        lines = proc.stderr.decode("utf-8", "replace").strip().splitlines()
+        return None, lines[-1] if lines else f"git exited {proc.returncode}"
+    paths = [os.fsdecode(p) for p in proc.stdout.split(b"\0") if p]
+    if not paths:
+        return None, "git tracks no files under it"
+    return paths, ""
+
+
+def manifest_listed_paths(manifest: Path) -> set[str]:
+    """The recovery/-relative paths a MANIFEST.sha256 lists, without "./"."""
+    listed: set[str] = set()
+    for line in manifest.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split("  ", 1)
+        if len(parts) == 2:
+            rel = parts[1]
+            listed.add(rel[2:] if rel.startswith("./") else rel)
+    return listed
+
+
+def files_outside_manifest(
+    recovery_root: Path, listed: Collection[str]
+) -> list[str]:
+    """Files under *recovery_root* that *listed* does not name, sorted.
+
+    *listed* holds recovery/-relative paths without "./".  These are the
+    files ``lcsas meta verify --strict`` reports as EXTRA; the two
+    manifests themselves never count (``UNLISTED_MANIFESTS``).
+    """
+    listed_set = set(listed)
+    extras: list[str] = []
+    for path in recovery_root.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(recovery_root).as_posix()
+        if rel in UNLISTED_MANIFESTS or rel in listed_set:
+            continue
+        extras.append(rel)
+    return sorted(extras)
+
+
 # ── Per-repo metadata bundling (#435) ────────────────────────────────
 
 # Wall-clock bound on the "is this mirror reachable?" probe.  A stat()
@@ -2227,6 +2352,10 @@ class MetaVolumeBuilder:
             ├── Makefile
             └── VERSION
 
+        Which source files are copied is decided by
+        ``_copy_recovery_tree``: in a git checkout, only the tracked ones
+        plus ``bin/`` (#562).
+
         Missing per-arch binaries are silently skipped; the recovery
         cascade falls through to the vendored ``rustic-static`` (tier 2)
         and ultimately the Python reader (tier 3) when the
@@ -2239,14 +2368,7 @@ class MetaVolumeBuilder:
         dst = self._output / "recovery"
         if dst.exists():
             shutil.rmtree(str(dst))
-        shutil.copytree(
-            str(src),
-            str(dst),
-            ignore=shutil.ignore_patterns(
-                "build", "build-*", "__pycache__", "*.pyc",
-                "*.o", "*.a",
-            ),
-        )
+        self._copy_recovery_tree(src, dst)
 
         # Copy the new POSIX restore.sh to the meta disc root so
         # existing automation that looks for /restore.sh finds the new
@@ -2285,6 +2407,84 @@ class MetaVolumeBuilder:
         # against.  Must run after BOTH bundlers, so it stays here at
         # the orchestrator level rather than inside either bundler.
         self._regenerate_recovery_manifest(dst)
+
+    def _copy_recovery_tree(self, src: Path, dst: Path) -> None:
+        """Copy the source files of recovery/ that belong on the meta disc.
+
+        recovery/MANIFEST.sha256 lists the files we author, and git is
+        its oracle: every tracked file under recovery/ except ``bin/`` and
+        the two manifests.  So in a git checkout this copies exactly the
+        tracked files, plus ``bin/`` as it stands (build debris aside),
+        because ``_regenerate_recovery_manifest`` lists whatever ends up
+        under ``bin/``.  Untracked files, such as the thousands of
+        fuzzer-generated corpus entries a local ``make audit-gate``
+        leaves behind, stay off the disc (#562).  Tracked files are copied
+        as they are in the work tree, local edits included.
+
+        Outside a git checkout (a source tarball, say) git cannot say
+        what is tracked, so the whole tree is copied minus build debris
+        and the fuzzer output ``recovery/fuzz/.gitignore`` names, with a
+        warning: any other stray file would fail ``meta verify --strict``.
+        """
+        tracked, why_not = _git_tracked_files(src)
+        if tracked is None:
+            _logger.warning(
+                "Meta disc: git cannot list the tracked files in %s (%s); "
+                "it may not be a git checkout. Copying the "
+                "whole directory, minus build debris and fuzzer output. Any "
+                "other file there that recovery/MANIFEST.sha256 does not "
+                "list will fail `lcsas meta verify --strict`. Build the "
+                "meta disc from a git checkout to bundle only tracked "
+                "files (#562).",
+                src, why_not,
+            )
+            shutil.copytree(
+                str(src), str(dst), ignore=_fallback_recovery_ignore(src),
+            )
+            return
+
+        dst.mkdir(parents=True)
+        gone: list[str] = []
+        for rel in tracked:
+            if rel.split("/", 1)[0] == "bin":
+                continue  # copied whole below
+            src_file = src / rel
+            if not src_file.is_file():
+                gone.append(rel)  # in the index, deleted from the work tree
+                continue
+            dst_file = dst / rel
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src_file), str(dst_file))
+        if gone:
+            _logger.warning(
+                "Meta disc: %d tracked recovery/ file(s) are missing from "
+                "the work tree and were not bundled: %s",
+                len(gone), ", ".join(gone),
+            )
+
+        bin_src = src / "bin"
+        if bin_src.is_dir():
+            shutil.copytree(
+                str(bin_src), str(dst / "bin"),
+                ignore=shutil.ignore_patterns(*_RECOVERY_DEBRIS),
+            )
+
+    def unlisted_recovery_files(self) -> list[str]:
+        """Files under the built recovery/ that its MANIFEST.sha256 omits.
+
+        The same set ``lcsas meta verify --strict`` reports as EXTRA, so
+        ``cmd_meta_build`` can warn at build time rather than leave it to
+        a verify run (#562).  Call it after ``build()``: later build steps
+        still write into recovery/.  Empty when there is no
+        recovery/MANIFEST.sha256 to compare against.
+        """
+        recovery_root = self._output / "recovery"
+        manifest = recovery_root / "MANIFEST.sha256"
+        if not manifest.is_file():
+            return []
+        return files_outside_manifest(
+            recovery_root, manifest_listed_paths(manifest)
+        )
 
     def _verify_cached_upstream_archives(self, cache_root: Path) -> None:
         """Re-verify every PRESENT cached upstream archive against
@@ -2474,9 +2674,8 @@ class MetaVolumeBuilder:
         (the static share combiner): the heir-facing Windows docs
         name a single on-disc bin dir per target, so the combiner must
         live next to lcsas-restore under the rust triple.  The
-        short-arch copies remain on disc too (the whole source
-        ``recovery/`` tree is copied verbatim by
-        ``_bundle_recovery_toolchain_artifacts``).
+        short-arch copies remain on disc too (``_copy_recovery_tree``
+        copies the source ``recovery/bin/`` as it stands).
 
         The owner triggers the underlying cross-builds with
         ``lcsas recovery build --arch <short-arch>`` for each desired

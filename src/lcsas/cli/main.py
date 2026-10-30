@@ -3686,6 +3686,24 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
         logger.error(f"{e}")
         return 1
 
+    # Issue #562: name at build time the files that `meta verify --strict`
+    # would report as EXTRA, so a stray file shows here instead of only
+    # when (and if) the owner runs a strict verify.  A warning, not a
+    # failure: the disc can still restore.
+    unlisted = builder.unlisted_recovery_files()
+    if unlisted:
+        shown = ", ".join(unlisted[:10])
+        if len(unlisted) > 10:
+            shown += f", and {len(unlisted) - 10} more"
+        logger.warning(
+            "The meta disc's recovery/ holds %d file(s) that "
+            "recovery/MANIFEST.sha256 does not list, so `lcsas meta verify "
+            "--strict` will fail: %s. Build from a git checkout, which "
+            "bundles only tracked files; if these files are tracked, "
+            "regenerate the manifest with `make -C recovery manifest`.",
+            len(unlisted), shown,
+        )
+
     # RST-05: required-contents completeness gate (default ON).  A
     # meta disc missing per-target binaries or root restore artifacts
     # is incomplete; fail loud unless --allow-incomplete.
@@ -3903,12 +3921,6 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
     return 0
 
 
-# The two manifests under recovery/ that MANIFEST.sha256 never lists: the
-# curation rule in recovery/Makefile excludes both (a manifest cannot list
-# itself), so --strict must not count either as an extra.
-_UNLISTED_MANIFESTS = frozenset({"MANIFEST.sha256", "docs/MANIFEST.sha256"})
-
-
 def cmd_meta_verify(args: argparse.Namespace) -> int:
     """Audit a built meta disc against its recovery/MANIFEST.sha256.
 
@@ -3971,15 +3983,11 @@ def cmd_meta_verify(args: argparse.Namespace) -> int:
 
     extras: list[str] = []
     if args.strict:
-        listed = set(expected.keys())
-        for path in recovery_root.rglob("*"):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(recovery_root).as_posix()
-            if rel in _UNLISTED_MANIFESTS:
-                continue
-            if rel not in listed:
-                extras.append(rel)
+        # The two manifests are never counted: the curation rule in
+        # recovery/Makefile keeps both out of MANIFEST.sha256 (a manifest
+        # cannot list itself).  `meta build` warns with the same check.
+        from lcsas.meta.builder import files_outside_manifest
+        extras = files_outside_manifest(recovery_root, expected.keys())
 
     # RST-05: required-contents check, independent of the manifest.  The
     # manifest is regenerated from whatever was bundled, so it cannot
