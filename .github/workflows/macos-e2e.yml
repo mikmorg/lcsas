@@ -14,7 +14,7 @@ name: macos-e2e
 #
 # Two jobs, like windows-e2e.yml.  `fixture` (ubuntu) builds a real rustic
 # repo, FOUR data ISOs, the meta ISO and a SHA-256 manifest.  `restore`
-# (macos-14 arm64 + macos-15-intel x86_64) runs tests/e2e/macos_restore_smoke.py:
+# (macos-15 arm64 + macos-15-intel x86_64) runs tests/e2e/macos_restore_smoke.py:
 #
 #   * happy path      every ISO attached, stdin closed, LCSAS_NO_RELOCATE unset
 #                     (the relocate-to-RAM path is part of the proof); the
@@ -131,7 +131,7 @@ jobs:
           # Same labels as macos-tier1.yml (see its note on macos-15-intel's
           # retirement).
           - { runner: macos-15-intel, arch: x86_64 }
-          - { runner: macos-14,       arch: arm64  }
+          - { runner: macos-15,       arch: arm64  }
 
     steps:
       - name: Checkout

@@ -2,7 +2,7 @@
 """macOS ``restore.sh`` journey harness (#517) -- the macOS twin of windows-e2e.
 
 ``.github/workflows/macos-e2e.yml`` builds a fixture on Linux (``fixture``
-sub-command), then on hosted ``macos-14`` (arm64) and ``macos-15-intel``
+sub-command), then on hosted ``macos-15`` (arm64) and ``macos-15-intel``
 (x86_64) runners drives the REAL ``restore.sh`` off ISOs attached with
 ``hdiutil attach``, the way a Mac heir with discs in a USB drive would:
 
