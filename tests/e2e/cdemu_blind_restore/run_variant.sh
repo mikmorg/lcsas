@@ -31,11 +31,11 @@
 #   windows              — UX-08 layer 3: the Windows heir journey driven
 #                          through recovery/scripts/restore.bat under wine,
 #                          with the discs presented as a plain directory
-#                          tree (no cdemu — Windows has no vhba).  HARD
-#                          DEPENDENCY on UX-01 (restore.bat repo discovery)
-#                          and INFRA-01 (windows fixture builder); until
-#                          both land this case fails loud with that reason
-#                          rather than scoring a meaningless run.
+#                          tree (no cdemu — Windows has no vhba).  NEVER
+#                          BUILT: its blockers (UX-01, INFRA-01) landed, and
+#                          the owner decided (2026-10-30, #479) to retire it
+#                          once the manual Windows drill (#476) passes.  It
+#                          fails loud, spending nothing, until then.
 #
 # Exits 0 with `SCORE: 15/15 (variant=<name>)` on full pass.
 # Exits non-zero on any failure; the score line still prints.
@@ -60,27 +60,22 @@ case "$VARIANT" in
         ;;
 esac
 
-# UX-08 layer 3: the Windows journey does NOT use the cdemu/vhba disc
-# loader (no kernel module on a Windows-emulating host) — it presents the
-# discs as a directory tree and drives restore.bat under `wine cmd`.  That
-# harness is only meaningful once UX-01 (restore.bat repo discovery) and
-# INFRA-01 (the windows fixture builder + agent prompt) have landed; until
-# then a "run" would score against broken plumbing and teach us nothing.
-# Fail loud with the precise blocker instead of faking a green/red number.
+# UX-08 layer 3: the Windows journey would NOT use the cdemu/vhba disc
+# loader (no kernel module on a Windows-emulating host); it would present
+# the discs as a directory tree and drive restore.bat under `wine cmd`.  It
+# was never built.  Its old blockers, UX-01 (restore.bat repo discovery)
+# and INFRA-01 (the windows fixture builder), both landed; on 2026-10-30
+# the owner decided to retire this variant once the manual Windows drill
+# (#476) passes, because windows-e2e.yml (restore.bat on a real Windows
+# runner) plus that drill cover the journey (#479).  Fail loud, spending
+# nothing, instead of faking a green/red number.
 if [ "$VARIANT" = "windows" ]; then
-    if ! command -v wine >/dev/null 2>&1; then
-        echo "ERROR: variant windows needs wine (no cdemu on Windows)." >&2
-        echo "       Install wine, then re-run once UX-01+INFRA-01 land." >&2
-        exit 2
-    fi
-    echo "ERROR: variant windows is not yet runnable." >&2
-    echo "       Blocked on UX-01 (restore.bat repo discovery) and" >&2
-    echo "       INFRA-01 (windows directory-tree fixture + agent prompt)." >&2
-    echo "       The smoke layer that IS available today:" >&2
+    echo "ERROR: variant windows was never built." >&2
+    echo "       It retires once the manual Windows drill (#476) passes" >&2
+    echo "       (owner decision, 2026-10-30; see #479).  What covers" >&2
+    echo "       Windows today: .github/workflows/windows-e2e.yml and" >&2
     echo "         sh recovery/tests/test_restore_bat_e2e.sh" >&2
-    echo "       Record drills in recovery/docs/READINESS_CHECKLIST.txt" >&2
-    echo "       (JOURNEY DRILL LOG) once this variant scores 15/15." >&2
-    echo "SCORE: 0/15 (variant=windows)  [BLOCKED: UX-01/INFRA-01]" >&2
+    echo "SCORE: 0 (variant=windows)  [NOT BUILT: retires once #476 passes]" >&2
     exit 3
 fi
 

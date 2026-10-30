@@ -238,15 +238,12 @@ blind-restore-split-docs:
 	$(MAKE) blind-restore-teardown
 
 # UX-08 layer 3: the Windows heir journey end-to-end through
-# recovery/scripts/restore.bat under wine (the discs are presented as a
-# directory tree — Windows has no cdemu/vhba).  Same cost guard as its
-# siblings.  haiku-only per project policy; record the score in
-# recovery/docs/READINESS_CHECKLIST.txt (JOURNEY DRILL LOG) after each run.
-#
-# Hard dependency: UX-01 (restore.bat repository discovery) + INFRA-01 (windows
-# fixture builder + agent prompt).  Until both land the windows variant
-# exits non-zero with that reason rather than scoring broken plumbing — so
-# this target will FAIL loud, by design, until its prerequisites merge.
+# recovery/scripts/restore.bat under wine (the discs presented as a
+# directory tree — Windows has no cdemu/vhba).  NEVER BUILT: its blockers
+# (UX-01, INFRA-01) landed, and the owner decided on 2026-10-30 to retire it
+# once the manual Windows drill (#476) passes (#479).  Until then the
+# variant exits non-zero with that reason, spending nothing — so this
+# target FAILS loud, by design.
 # The cheap pre-flight available today is `make -C recovery test` (which
 # runs recovery/tests/test_restore_bat_e2e.sh when wine is present).
 blind-restore-windows:
