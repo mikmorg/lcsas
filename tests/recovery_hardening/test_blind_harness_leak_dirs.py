@@ -86,11 +86,19 @@ def test_setup_never_chowns_or_chmods_a_leak_dir() -> None:
             assert leak not in m.group(1), m.group(0)
 
 
+def _teardown_acl_loop() -> re.Match[str]:
+    """The ``for d in ...; do ... done`` loop that runs ``setfacl -x``."""
+    text = TEARDOWN_SH.read_text(encoding="utf-8")
+    for m in re.finditer(r"^for d in ([^\n]*); do\n(.*?)^done\n", text,
+                         re.MULTILINE | re.DOTALL):
+        if "setfacl -x u:lcsas-blind" in m.group(2):
+            return m
+    raise AssertionError("teardown.sh no longer removes the agent's ACL entry")
+
+
 def test_teardown_drops_the_acl_before_userdel_and_leaves_mode_alone() -> None:
     text = TEARDOWN_SH.read_text(encoding="utf-8")
-    m = re.search(r"^for d in (.*); do\n.*setfacl -x u:lcsas-blind",
-                  text, re.MULTILINE)
-    assert m, "teardown.sh no longer removes the agent's ACL entry"
+    m = _teardown_acl_loop()
     assert sorted(m.group(1).split()) == sorted(_leak_dirs()), (
         "teardown.sh's setfacl -x list must match setup.py's LEAK_DIRS"
     )
@@ -103,26 +111,59 @@ def test_teardown_drops_the_acl_before_userdel_and_leaves_mode_alone() -> None:
                 assert leak not in loop.group(1).split(), loop.group(0)
 
 
+def _acl(path: Path) -> list[str]:
+    out = subprocess.run(["getfacl", "-cp", str(path)],
+                         capture_output=True, text=True, check=True).stdout
+    return [line for line in out.splitlines() if line]
+
+
 @pytest.mark.skipif(shutil.which("setfacl") is None,
                     reason="setfacl(1) not installed")
-def test_the_acl_step_keeps_owner_and_mode(tmp_path: Path) -> None:
-    """Run setup's setfacl step on a scratch dir (user ``nobody``)."""
+@pytest.mark.parametrize("mode", [0o755, 0o775, 0o700])
+def test_setup_then_teardown_leaves_the_dir_exactly_as_it_was(
+    tmp_path: Path, mode: int,
+) -> None:
+    """Run setup's setfacl step, then teardown's loop, on a scratch dir.
+
+    Uses user ``nobody`` in place of the agent user, and teardown's loop
+    body taken verbatim from teardown.sh.
+    """
     leak = tmp_path / "cargo-target"
     leak.mkdir()
-    leak.chmod(0o755)
+    leak.chmod(mode)
     before = os.stat(leak)
+    minimal = _acl(leak)
     add = subprocess.run(["setfacl", "-m", "u:nobody:---", str(leak)],
                          capture_output=True, text=True)
     if add.returncode != 0:
         pytest.skip(f"no ACL support here: {add.stderr.strip()}")
+    during = os.stat(leak)
+    assert (during.st_uid, during.st_gid) == (before.st_uid, before.st_gid)
+    assert during.st_mode & 0o7777 == mode
+    assert "user:nobody:---" in _acl(leak)
+
+    body = _teardown_acl_loop().group(2).replace("lcsas-blind", "nobody")
+    subprocess.run(["bash", "-c", f'for d in "$1"; do\n{body}done', "_",
+                    str(leak)], check=True)
     after = os.stat(leak)
     assert (after.st_uid, after.st_gid) == (before.st_uid, before.st_gid)
-    assert after.st_mode & 0o7777 == 0o755
-    acl = subprocess.run(["getfacl", "-p", str(leak)],
-                         capture_output=True, text=True, check=True).stdout
-    assert "user:nobody:---" in acl
-    subprocess.run(["setfacl", "-x", "u:nobody", str(leak)], check=True)
-    acl = subprocess.run(["getfacl", "-p", str(leak)],
-                         capture_output=True, text=True, check=True).stdout
-    assert "user:nobody" not in acl
-    assert os.stat(leak).st_mode & 0o7777 == 0o755
+    assert after.st_mode & 0o7777 == mode
+    assert _acl(leak) == minimal, "teardown left ACL entries behind"
+
+
+@pytest.mark.skipif(shutil.which("setfacl") is None,
+                    reason="setfacl(1) not installed")
+def test_teardown_keeps_a_directorys_own_acl_entries(tmp_path: Path) -> None:
+    leak = tmp_path / "shared"
+    leak.mkdir()
+    leak.chmod(0o755)
+    own = subprocess.run(["setfacl", "-m", "g:root:r-x", str(leak)],
+                         capture_output=True, text=True)
+    if own.returncode != 0:
+        pytest.skip(f"no ACL support here: {own.stderr.strip()}")
+    subprocess.run(["setfacl", "-m", "u:nobody:---", str(leak)], check=True)
+    body = _teardown_acl_loop().group(2).replace("lcsas-blind", "nobody")
+    subprocess.run(["bash", "-c", f'for d in "$1"; do\n{body}done', "_",
+                    str(leak)], check=True)
+    acl = _acl(leak)
+    assert "group:root:r-x" in acl and not any("nobody" in a for a in acl)
