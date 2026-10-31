@@ -3,7 +3,8 @@
 DISC_CARE.txt is burned onto every disc.  It used to present M-DISC's
 unverifiable "1000+ year" vendor marketing as fact and "strongly
 recommend" it, biasing the archivist toward a price premium instead of
-toward what actually moves durability (more copies + re-burn cadence).
+toward what actually moves durability (more discs in more locations,
+read back regularly, and re-burned only after a read error).
 It also said only "keep a USB Blu-ray drive" — but 100 GB BDXL/M-DISC
 tiers need a *BDXL-capable* drive, a strictly rarer class; an heir
 replacing a dead drive with a non-BDXL drive reads ZERO of the 100 GB
@@ -14,7 +15,10 @@ These tests pin:
   * the generic BDXL spec-sheet caveat is always present;
   * "1000+" survives only when qualified as manufacturer-rated;
   * "strongly recommended" is gone;
-  * the redundancy/re-burn headline leads MEDIA LONGEVITY.
+  * the redundancy/read-back headline leads MEDIA LONGEVITY, and no
+    disc is told to be re-burned because of its age (owner decision
+    2026-10-31: whatever the media type, re-burn only after a read
+    error).
 """
 
 from __future__ import annotations
@@ -27,7 +31,7 @@ from lcsas.staging.metadata import HolographicInjector
 
 WARNING = "THIS ARCHIVE USES 100 GB BDXL MEDIA"
 GENERIC_CAVEAT = "check the\n    spec sheet before buying a replacement"
-HEADLINE = "Durability comes from REDUNDANCY and RE-BURN CADENCE"
+HEADLINE = "Durability comes from REDUNDANCY and READING DISCS BACK"
 
 
 def _config(tmp_path: Path, media: MediaType) -> LCSASConfig:
@@ -83,6 +87,14 @@ def test_mdisc_1000_year_only_appears_qualified(tmp_path: Path) -> None:
     assert "strongly recommended" not in text.lower()
 
 
-def test_redundancy_reburn_headline_present(tmp_path: Path) -> None:
+def test_redundancy_readback_headline_present(tmp_path: Path) -> None:
     text = _render(tmp_path, _config(tmp_path, MediaType.BD25))
     assert HEADLINE in text
+    # No disc is re-burned because of its age, whatever the media type.
+    squashed = " ".join(text.split())
+    assert (
+        "Re-burn only after a read error, never because a disc is old, "
+        "whatever its media type." in squashed
+    )
+    assert "RE-BURN CADENCE" not in text
+    assert "Even M-DISC ages" not in squashed

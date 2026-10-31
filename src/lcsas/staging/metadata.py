@@ -913,9 +913,11 @@ ENVIRONMENT
 MEDIA LONGEVITY
 ---------------
 
-  Durability comes from REDUNDANCY and RE-BURN CADENCE (see
-  PERIODIC VERIFICATION), not from media choice.  More copies
-  and more locations move the needle far more than any disc brand.
+  Durability comes from REDUNDANCY and READING DISCS BACK (see
+  PERIODIC VERIFICATION), not from media choice.  Keeping more
+  discs in more locations helps far more than any disc brand.
+  Re-burn only after a read error, never because a disc is old,
+  whatever its media type.
 
   - M-DISC: manufacturer-rated 1000+ years.  This rating is
     vendor marketing that cannot be independently confirmed
@@ -935,8 +937,8 @@ PERIODIC VERIFICATION
   Even with proper storage, verify discs periodically:
 
   - Every 2-5 years: verify a few discs (a spot-check).
-  - Every 5-10 years: verify every disc, then re-burn all
-    the data onto fresh discs.  Even M-DISC ages.
+  - Every 5-10 years: verify every disc (read each one back
+    in full).
   - After ANY read error: re-burn ALL the data onto fresh
     discs at once.  Discs from the same media batch may be
     failing together.

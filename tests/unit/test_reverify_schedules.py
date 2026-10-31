@@ -6,10 +6,15 @@ re-burn.  Every disc carries the long-term schedule in DISC_CARE.txt
 (``HolographicInjector.write_disc_care``), so the two texts must say the
 same thing.  The READINESS checklist follows the owner schedule.
 
-These tests fail if DISC_CARE.txt and the doc drift apart, if the
-checklist goes back to a schedule of its own, or if a link to one of
-the schedule sections stops matching a heading (the link-integrity test
-strips ``#anchors``, so it would not notice).
+No disc is re-burned because of its age, whatever the media type: a
+disc is re-burned only after a read error (owner decision 2026-10-31).
+
+These tests fail if DISC_CARE.txt and the doc drift apart, if either
+of them tells anyone to re-burn on a time interval or loses the
+re-burn-after-a-read-error rule, if the checklist goes back to a
+schedule of its own, or if a link to one of the schedule sections
+stops matching a heading (the link-integrity test strips ``#anchors``,
+so it would not notice).
 """
 
 from __future__ import annotations
@@ -70,6 +75,68 @@ def test_disc_care_carries_the_long_term_schedule(tmp_path: Path) -> None:
         "the 'Long-term schedule' in docs/workflows/verify-and-audit.md "
         f"says.\n  doc:  {doc}\n  disc: {disc}"
     )
+
+
+# "re-burn", "reburn", "re burn".
+_REBURN = re.compile(r"\bre-?\s?burn", re.IGNORECASE)
+# A time interval: "5-10 years", "every 2 years", "yearly", "a decade".
+_INTERVAL = re.compile(
+    r"\b\d+(?:\s*-\s*\d+)?\s+years?\b|\byearly\b|\bannually\b"
+    r"|\b(?:once|every|each)\s+(?:a\s+)?year\b|\bdecades?\b",
+    re.IGNORECASE,
+)
+
+
+def _sentences(section: str) -> list[str]:
+    """A section's sentences; each bullet starts a new one."""
+    parts = re.split(r"\n\s*-\s+|(?<=[.!?])\s+", section.replace("**", ""))
+    return [_squash(p) for p in parts if p.strip()]
+
+
+def _doc_schedules_section() -> str:
+    """'## Re-verification schedules' in the doc, both schedules."""
+    text = VERIFY_DOC.read_text(encoding="utf-8")
+    start = text.index("\n## Re-verification schedules\n")
+    return text[start:text.index("\n---\n", start)]
+
+
+def _disc_care_schedule_section(tmp_path: Path) -> str:
+    """PERIODIC VERIFICATION in DISC_CARE.txt, up to the next section."""
+    root = tmp_path / "section"
+    root.mkdir()
+    HolographicInjector(root).write_disc_care(None)
+    text = (root / "DISC_CARE.txt").read_text(encoding="utf-8")
+    start = text.index("PERIODIC VERIFICATION\n---")
+    return text[start:text.index("DRIVE AVAILABILITY\n---", start)]
+
+
+def test_no_disc_is_reburned_on_a_time_interval(tmp_path: Path) -> None:
+    """Re-burn only after a read error, never by age (2026-10-31)."""
+    texts = {
+        "verify-and-audit.md": (
+            _doc_long_term_bullets(), _doc_schedules_section(),
+        ),
+        "DISC_CARE.txt": (
+            _disc_care_bullets(tmp_path), _disc_care_schedule_section(tmp_path),
+        ),
+    }
+    for name, (bullets, section) in texts.items():
+        on_a_timer = [
+            s for s in [*bullets, *_sentences(section)]
+            if _REBURN.search(s) and _INTERVAL.search(s)
+        ]
+        assert not on_a_timer, (
+            f"{name} tells the reader to re-burn on a time interval; no "
+            f"disc is re-burned because of its age: {on_a_timer}"
+        )
+        reburn = [b for b in bullets if _REBURN.search(b)]
+        assert len(reburn) == 1 and reburn[0].startswith(
+            "After ANY read error: re-burn",
+        ), (
+            f"{name}: the long-term schedule must keep exactly one re-burn "
+            f"bullet, the 'After ANY read error' one: {bullets}"
+        )
+        assert not any("Even M-DISC ages" in b for b in bullets), bullets
 
 
 def test_checklist_follows_the_owner_schedule() -> None:

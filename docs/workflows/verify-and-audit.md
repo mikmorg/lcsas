@@ -386,11 +386,11 @@ Follow this schedule while you, the owner, maintain the archive.
 For whoever holds the archive after the owner. Every disc carries this schedule in `DISC_CARE.txt` (written by `HolographicInjector.write_disc_care()` in `src/lcsas/staging/metadata.py`), so the two must say the same thing:
 
 - **Every 2-5 years:** verify a few discs (a spot-check).
-- **Every 5-10 years:** verify every disc, then re-burn all the data onto fresh discs. Even M-DISC ages.
+- **Every 5-10 years:** verify every disc (read each one back in full).
 - **After ANY read error:** re-burn ALL the data onto fresh discs at once. Discs from the same media batch may be failing together.
 
 **Variant axes that apply:**
-- **Media type:** Both schedules apply to every media type. LCSAS does not set a shorter schedule for BD-R LTH (organic dye) than for M-DISC; an owner who wants one can read those discs more often.
+- **Media type:** Both schedules apply to every media type. No disc is re-burned because of its age, whatever its type (M-DISC, BD-R HTL, BD-R LTH or DVD); a disc is re-burned only after a read error. LCSAS does not set a shorter schedule for BD-R LTH (organic dye) than for M-DISC; an owner who wants one can read those discs more often.
 - **Multi-repository:** The schedules are per disc, not per repository. Reading a disc back covers every repository with packs on it.
 - **Optical drive count:** Drive count sets how long the reading takes. With one drive at ~10 min/disc, a twelfth of 1000 discs (about 83) takes about 14 hours a month, and a full sweep of 1000 discs takes about a week.
 - **Multi-copy:** Do not take both discs of a volume out of storage at the same time; that defeats having a second disc.
