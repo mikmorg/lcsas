@@ -716,8 +716,8 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
               - Store discs vertically (like books), not stacked flat.
               - Keep in a cool, dry, dark place.
               - Handle by the edges — do not touch the data surface.
-              - Blu-ray discs (especially M-Disc) can last 100+ years
-                with proper storage.
+              - No kind of disc is proven to last 100 years, M-DISC
+                included.  See DISC_CARE.txt for how to check them.
         """)
         # Drop the entire placeholder line (incl. any leading indent that
         # textwrap.dedent left behind) and substitute the (possibly empty)
@@ -916,8 +916,8 @@ MEDIA LONGEVITY
   Durability comes from REDUNDANCY and READING DISCS BACK (see
   PERIODIC VERIFICATION), not from media choice.  Keeping more
   discs in more locations helps far more than any disc brand.
-  Re-burn only after a read error, never because a disc is old,
-  whatever its media type.
+  Re-burn onto fresh discs after any read error, but never
+  just because a disc is old, whatever its media type.
 
   - M-DISC: manufacturer-rated 1000+ years.  This rating is
     vendor marketing that cannot be independently confirmed
@@ -938,7 +938,8 @@ PERIODIC VERIFICATION
 
   - Every 2-5 years: verify a few discs (a spot-check).
   - Every 5-10 years: verify every disc (read each one back
-    in full).
+    in full).  Keep any disc that reads back cleanly,
+    however old it is.
   - After ANY read error: re-burn ALL the data onto fresh
     discs at once.  Discs from the same media batch may be
     failing together.
@@ -950,6 +951,9 @@ PERIODIC VERIFICATION
   Or use dvdisaster to check ECC integrity:
 
     dvdisaster -i /dev/sr0 -t
+
+  Any error either check reports counts as a read error, even
+  one that dvdisaster can still repair.
 
 DRIVE AVAILABILITY
 ------------------

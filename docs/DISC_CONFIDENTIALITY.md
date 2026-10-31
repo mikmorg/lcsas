@@ -95,7 +95,8 @@ files remain valid forever and reconstruct the *old* password. There is no
 The only true revocation for a leaked or weak password is the **physical
 destruction of every disc** that carries the affected key files.
 Plan accordingly: the password you burn is, in practice, the password those
-discs will carry for their entire physical lifetime (100+ years for M-Disc).
+discs will carry for their entire physical lifetime (for decades; no media
+lifetime, M-DISC included, is proven).
 
 ## 5. Where to keep discs and cards
 

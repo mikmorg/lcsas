@@ -6,8 +6,9 @@ re-burn.  Every disc carries the long-term schedule in DISC_CARE.txt
 (``HolographicInjector.write_disc_care``), so the two texts must say the
 same thing.  The READINESS checklist follows the owner schedule.
 
-No disc is re-burned because of its age, whatever the media type: a
-disc is re-burned only after a read error (owner decision 2026-10-31).
+No disc is re-burned because of its age, whatever the media type: data
+is re-burned onto fresh discs after a read error, never just because a
+disc is old (owner decision 2026-10-31).
 
 These tests fail if DISC_CARE.txt and the doc drift apart, if either
 of them tells anyone to re-burn on a time interval or loses the
@@ -79,9 +80,17 @@ def test_disc_care_carries_the_long_term_schedule(tmp_path: Path) -> None:
 
 # "re-burn", "reburn", "re burn".
 _REBURN = re.compile(r"\bre-?\s?burn", re.IGNORECASE)
-# A time interval: "5-10 years", "every 2 years", "yearly", "a decade".
+# A time interval: "5-10 years", "ten years", "five to ten years",
+# "every few years", "18 months", "every 2 years", "yearly", "a decade".
+_NUMBER_WORD = (
+    r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve"
+    r"|fifteen|twenty|thirty|forty|fifty|hundred|few|several)"
+)
 _INTERVAL = re.compile(
-    r"\b\d+(?:\s*-\s*\d+)?\s+years?\b|\byearly\b|\bannually\b"
+    r"\b\d+(?:\s*-\s*\d+)?\s+(?:years?|months?)\b"
+    rf"|\b{_NUMBER_WORD}(?:(?:\s*-\s*|\s+(?:to|or)\s+){_NUMBER_WORD})?"
+    r"\s+(?:years?|months?)\b"
+    r"|\byearly\b|\bannually\b"
     r"|\b(?:once|every|each)\s+(?:a\s+)?year\b|\bdecades?\b",
     re.IGNORECASE,
 )
@@ -100,24 +109,26 @@ def _doc_schedules_section() -> str:
     return text[start:text.index("\n---\n", start)]
 
 
-def _disc_care_schedule_section(tmp_path: Path) -> str:
-    """PERIODIC VERIFICATION in DISC_CARE.txt, up to the next section."""
-    root = tmp_path / "section"
+def _disc_care_text(tmp_path: Path) -> str:
+    """All of DISC_CARE.txt, not only PERIODIC VERIFICATION.
+
+    MEDIA LONGEVITY talks about re-burning too (it once rested
+    durability on a "re-burn cadence"), so the whole file is scanned.
+    """
+    root = tmp_path / "whole"
     root.mkdir()
     HolographicInjector(root).write_disc_care(None)
-    text = (root / "DISC_CARE.txt").read_text(encoding="utf-8")
-    start = text.index("PERIODIC VERIFICATION\n---")
-    return text[start:text.index("DRIVE AVAILABILITY\n---", start)]
+    return (root / "DISC_CARE.txt").read_text(encoding="utf-8")
 
 
 def test_no_disc_is_reburned_on_a_time_interval(tmp_path: Path) -> None:
-    """Re-burn only after a read error, never by age (2026-10-31)."""
+    """Re-burn after a read error, never just by age (2026-10-31)."""
     texts = {
         "verify-and-audit.md": (
             _doc_long_term_bullets(), _doc_schedules_section(),
         ),
         "DISC_CARE.txt": (
-            _disc_care_bullets(tmp_path), _disc_care_schedule_section(tmp_path),
+            _disc_care_bullets(tmp_path), _disc_care_text(tmp_path),
         ),
     }
     for name, (bullets, section) in texts.items():

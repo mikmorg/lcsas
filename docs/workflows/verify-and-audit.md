@@ -386,11 +386,11 @@ Follow this schedule while you, the owner, maintain the archive.
 For whoever holds the archive after the owner. Every disc carries this schedule in `DISC_CARE.txt` (written by `HolographicInjector.write_disc_care()` in `src/lcsas/staging/metadata.py`), so the two must say the same thing:
 
 - **Every 2-5 years:** verify a few discs (a spot-check).
-- **Every 5-10 years:** verify every disc (read each one back in full).
+- **Every 5-10 years:** verify every disc (read each one back in full). Keep any disc that reads back cleanly, however old it is.
 - **After ANY read error:** re-burn ALL the data onto fresh discs at once. Discs from the same media batch may be failing together.
 
 **Variant axes that apply:**
-- **Media type:** Both schedules apply to every media type. No disc is re-burned because of its age, whatever its type (M-DISC, BD-R HTL, BD-R LTH or DVD); a disc is re-burned only after a read error. LCSAS does not set a shorter schedule for BD-R LTH (organic dye) than for M-DISC; an owner who wants one can read those discs more often.
+- **Media type:** Both schedules apply to every media type. No disc is re-burned because of its age, whatever its media type; a disc still in service is re-burned only after a read error. LCSAS does not set a shorter schedule for BD-R LTH (organic dye) than for M-DISC; an owner who wants one can read those discs more often.
 - **Multi-repository:** The schedules are per disc, not per repository. Reading a disc back covers every repository with packs on it.
 - **Optical drive count:** Drive count sets how long the reading takes. With one drive at ~10 min/disc, a twelfth of 1000 discs (about 83) takes about 14 hours a month, and a full sweep of 1000 discs takes about a week.
 - **Multi-copy:** Do not take both discs of a volume out of storage at the same time; that defeats having a second disc.
@@ -398,7 +398,7 @@ For whoever holds the archive after the owner. Every disc carries this schedule 
 - **Storage stage:** These schedules cover the discs only; the mirror is checked continuously by Rustic itself.
 
 **Test coverage:**
-- The schedules are policy, not code, so there is nothing to unit-test directly. The monthly list (`status --stale-copies`, including `--older-than-days 0`) is tested in `tests/unit/test_cli_handlers.py`, and `tests/recovery_hardening/test_last_verified_writer_exists.py` pins that `verify --disc` writes the stamp it reads.
+- The schedule text is pinned by `tests/unit/test_reverify_schedules.py` (the long-term bullets in this doc and in DISC_CARE.txt must match, neither may pair a re-burn with a time interval, and the 'After ANY read error' re-burn bullet must stay) and `tests/unit/test_disc_care_media_guidance.py` (MEDIA LONGEVITY: re-burn onto fresh discs after any read error, but never just because a disc is old). The monthly list (`status --stale-copies`, including `--older-than-days 0`) is tested in `tests/unit/test_cli_handlers.py`, and `tests/recovery_hardening/test_last_verified_writer_exists.py` pins that `verify --disc` writes the stamp it reads.
 - Gaps:
   - There is no scheduled-task / hook integration; the owner runs the schedule by hand.
   - `lcsas status --stale-copies` does not list meta discs, so their yearly read is not tracked.
