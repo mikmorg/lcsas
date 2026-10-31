@@ -15,31 +15,31 @@ The words in this file follow `CONTEXT.md`, the project glossary.
 
 ## Where things stand
 
-- **The drills wait for `v1.0.0-rc3`.** On 2026-10-30 the owner decided
-  the glossary (`CONTEXT.md`) and the other rc3 fixes land BEFORE any
-  drill, so the drills test the final wording. The lab is building rc3
-  now and will post the tag on tracker #478. Don't drill `v1.0.0-rc2`
-  (`b033cb6`). Record the tag and commit of the rc you drilled (rc3, or a
-  later rc after a fix) in every drill result.
-- At rc2, all 8 runnable blind-restore variants scored 16/16 (the drill log
-  in `recovery/docs/READINESS_CHECKLIST.txt`). rc3 gets the same full
-  sweep and a clean meta disc rebuild before it is tagged.
+- **Drill `v1.0.0-rc3` (`7a872ab`, tagged 2026-10-31).** On 2026-10-30
+  the owner decided the glossary (`CONTEXT.md`) and the other rc3 fixes
+  land BEFORE any drill, so the drills test the final wording. Don't
+  drill `v1.0.0-rc2` (`b033cb6`). Record the tag and commit of the rc you
+  drilled (rc3, or a later rc after a fix) in every drill result. The
+  tag announcement is on tracker #478.
+- At rc3, all 8 runnable blind-restore variants scored 16/16 (the drill log
+  in `recovery/docs/READINESS_CHECKLIST.txt`), and the lab's clean meta
+  disc build passed `lcsas meta verify --strict`.
 - **v1.0.0 final waits on four human/hardware gates** (tracker #478):
   - #473: physical BD-R and M-DISC burn → damage → repair → restore
   - #474: a cold restore by a non-technical stand-in (see below)
   - #475: a manual macOS restore
   - #476: a manual Windows restore. This is now a gate (owner, 2026-10-30).
 - **Decided, not gates:** v1.0 ships without an independent crypto
-  review. The lab adds a disclosure to README and ESTATE_PLANNING, naming
-  stock restic (tier 2b) as the hedge, and that closes #477. CI stays on
+  review. README and ESTATE_PLANNING disclose it, naming stock restic
+  (tier 2b) as the hedge (#477, closed). CI stays on
   Ubuntu 24.04 for v1.0; #538 stays open for after it.
 - **What "final" means:** when every gate has passed on one rc and the
   owner says go, the lab tags v1.0.0 on master if master's restore path
   (rule 3) is unchanged since that rc; otherwise it cuts another rc and
   the affected drills run again.
 - Other open issues are lab-side: #479 (retire it once #476 passes),
-  #491 (three of its items land in rc3; location remove/rename comes
-  after), #569. #559, #562 and #571 are fixed in rc3.
+  #491 (three of its items are in rc3; location remove/rename comes
+  after), #569, #573, #581. #559, #562 and #571 are fixed in rc3.
 
 ## Hard rules
 
