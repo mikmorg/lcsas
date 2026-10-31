@@ -88,6 +88,7 @@ of each ISO contains:
 | `metadata/<repo>/config` | mirror copy (`inject_metadata()`) | Repository version + chunker params. |
 | `catalog.db` | master catalog (`inject_catalog()`) | Disc catalog — every disc carries the catalog as of its burn. |
 | `volume_info.json` | written by `write_volume_info()` | UUID, label, pack manifest. |
+| `VOLUME_INFO.txt` | written by `write_volume_info()` | The same in plain text for a human: label, place in its burn session, when the volume was prepared (before the burn), LCSAS version, media type, repositories, pack count and size. |
 | `standalone_restorer.py` | written by `write_standalone_restorer()` | The Python reader, tier 3 (this document's hero). |
 | `RESTORE_INSTRUCTIONS.txt` | written by `write_restore_instructions()` | Plain-text steps for a human. |
 | `START_HERE.txt`, `PASSWORD_INFO.txt`, `CONFIG_SUMMARY.txt`, `DISC_CARE.txt` | survivability docs (`write_start_here()`, `write_key_info()`, `write_config_summary()`, `write_disc_care()`) | Onboarding for a non-technical finder. |
@@ -460,16 +461,19 @@ belong to — all without any central server.
 
    Demonstrated end-to-end in
    `tests/integration/test_disc_only_restore.py::TestDiscOnlyRestore::test_on_disc_catalog_enables_pick_list`.
-6. Read the human-friendly `volume_info.json` for the disc's own
-   identity:
+6. Read `VOLUME_INFO.txt` (plain text) or `volume_info.json` for the
+   disc's own identity:
 
    ```
+   cat DISC/VOLUME_INFO.txt
    cat DISC/volume_info.json
    ```
 
-   Contains `uuid`, `label`, `media_type`, `pack_count`, `total_bytes`,
-   `repositories`, `sha256_manifest`
-   (`HolographicInjector.write_volume_info()`).
+   The JSON contains `uuid`, `label`, `media_type`, `pack_count`,
+   `total_bytes`, `repositories`, `sha256_manifest`; the text file
+   gives the label, the volume's place in its burn session, when it was
+   prepared, the LCSAS version, the media type, the repositories and the
+   pack count and size (both from `HolographicInjector.write_volume_info()`).
 
 **Expected outcome:** A complete inventory of the archive as of this
 disc's burn, reconstructed from the single mounted disc, including which

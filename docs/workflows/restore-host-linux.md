@@ -400,7 +400,7 @@ the rustic `--password-file` contract).
    ([`src/lcsas/config/settings.py`](../../src/lcsas/config/settings.py)).
 2. *`restore exec`*: requires `--password-file <path>` on the command
    line — there is **no** `LCSAS_PASSWORD` / `RUSTIC_PASSWORD`
-   environment fallback in the wrapper today. The CLI checks the file
+   environment fallback, by design (see Gaps). The CLI checks the file
    exists before calling rustic
    (early check in `cmd_restore_exec()`).
 3. *Subprocess*: `SubprocessRusticRunner._run()` passes
@@ -423,9 +423,10 @@ failing rustic invocation.
 - *Multi-repository*: each repository carries its own `password_file`
   in the TOML config; restoring a different repository means changing
   `--repo` and `--password-file` together.
-- *Interactive password entry*: **not supported** today. Rustic's own
-  `--password-command` is not surfaced; an owner who keeps the password
-  in an HSM must write it to a tmpfs file before invoking LCSAS.
+- *Interactive password entry*: **not supported** (decided against,
+  #491). Rustic's own `--password-command` is not surfaced; an owner
+  who keeps the password in an HSM must write it to a tmpfs file
+  before invoking LCSAS.
 - *OS*: file path conventions only — the actual file is opaque bytes.
 
 **Test coverage:** Existing —
@@ -441,7 +442,7 @@ failing rustic invocation.
     CLI-level test asserts it end to end through `restore exec`.
   - No test covers a `LCSAS_PASSWORD` env var because the feature does
     not exist — if added it would need both a wrapper change and a
-    dedicated test (open product decision, #491).
+    dedicated test (decided against, #491).
   - No test rejects a password file with insecure permissions (e.g.
     world-readable `0644`). Today LCSAS just opens it.
 
@@ -513,8 +514,8 @@ rustic-decompression side, not on the disc-ingest side.
 
   **Gaps:**
   - No first-class `--include` / `--path` / `--filter` flag on
-    `lcsas restore exec` — partial restore is a workaround today (open
-    product decision, #491).
+    `lcsas restore exec` — partial restore uses the workaround above
+    (decided against, #491).
   - No test exercising the "rustic-against-LCSAS-cache" pattern.
 
 **Source refs:**
@@ -647,13 +648,18 @@ must still be readable.
   and the `exec_p.add_argument("--password-file", ..., required=True)`
   declaration in the `restore exec` subparser of `build_parser()`
   ([`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).
-  (Open product decision, not a deliberate non-goal: tracked in #491.)
+  Decided against (#491): the CLI deliberately takes no password from
+  the environment (see
+  [README.md](../../README.md#how-lcsas-passes-passwords-to-rustic));
+  `restore.sh` on the meta disc is the one exception.
 - **No path-filter flag for partial restore.** Snapshot id and target
   are the only arguments forwarded to rustic
   (`SubprocessRusticRunner.restore()` in
   [`src/lcsas/rustic/wrapper.py`](../../src/lcsas/rustic/wrapper.py)).
   The owner must drive rustic directly against the LCSAS-built cache.
-  (Open product decision: tracked in #491.)
+  Decided against (#491): rustic run against that cache already
+  restores one path (see
+  [partial restore](#workflow-partial-restore-single-file--subtree)).
 - **ECC verification in `restore exec` needs an ISO file handle
   (intentional: RS03 verify/repair operates on a raw image, which a bare
   mounted directory does not provide).**
@@ -671,8 +677,9 @@ must still be readable.
   (intentional) and handled by `lcsas restore standalone` — see
   [`restore-disc-only.md`](restore-disc-only.md).
 - **No interactive password prompt** (rustic's `--password-command` is
-  not surfaced). (Open product decision: tracked in #491. The
-  `restore.sh` tier-1 path does prompt.)
+  not surfaced). Decided against (#491): like the rest of the CLI,
+  `restore exec` reads the password from a file. The `restore.sh`
+  tier-1 path does prompt.
 - **No regression test for cache cleanup on SIGINT** during ingestion
   (despite the `ShutdownManager` wiring in `cmd_restore_exec()`,
   [`src/lcsas/cli/main.py`](../../src/lcsas/cli/main.py)).

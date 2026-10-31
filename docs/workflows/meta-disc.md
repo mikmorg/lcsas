@@ -139,16 +139,25 @@ subcommand. `--output` / `-o` is required.
       checkout it copies the whole folder minus build debris and fuzzer
       output, and warns that any other stray file will fail
       `lcsas meta verify --strict`.
-   10. `_write_restore_script` / `_write_restore_auto_script` — render
-       `recovery/scripts/restore.sh` and `restore_auto.sh` (plus
-       `restore.bat` on the Windows path) from the in-source script
-       constants and set them executable.
+   10. `_write_restore_script` / `_write_restore_auto_script` — copy
+       `recovery/scripts/restore.sh` to the disc root as `restore.sh`
+       (leaving a redirect stub behind), and write the two bash
+       heredocs into `recovery/scripts/`: `restore_legacy.sh`
+       (`RESTORE_SCRIPT`, the superseded flag-style driver) and
+       `restore-auto.sh` (`RESTORE_AUTO_SCRIPT`, automation only). Both
+       sit off the disc root so the heir sees one restore script there
+       (#491); they find `tools/` and `standalone_restorer.py` two
+       levels up, and each gets a `recovery/MANIFEST.sha256` row. Not to
+       be confused with `recovery/scripts/restore_auto.sh` (underscore),
+       the POSIX-sh wrapper copied verbatim from the source tree.
    11. `_write_readme` / `_write_readme_txt` — render `README_RESTORE.md`
        and a plain-text twin.
    12. `_write_volume_info` — write `volume_info.json` with `type: "meta"`,
        bundled-tool list, tool versions, timestamps, and `repo_metadata`
        (which catalogued repositories' keys this disc does — and does
-       not — carry).
+       not — carry), plus its plain-text twin `VOLUME_INFO.txt` (this is
+       the meta disc, when it was built, the LCSAS version, and that it
+       holds the tools but no catalog).
    13. `_write_start_here` — write `START_HERE.txt`, plus `PASSWORD_INFO.txt`,
        `CONFIG_SUMMARY.txt` (config builds), and `DISC_CARE.txt` via the
        `HolographicInjector`.
@@ -282,7 +291,10 @@ required-contents contract (`required_meta_paths`,
 | `tools/restore_single_drive.py` | `_bundle_restore_helper` | stdlib-only single-drive disc-swap helper. |
 | `lcsas/src/lcsas/` | `_bundle_source` | LCSAS Python package source (no external deps). |
 | `docs/`, `README.md`, `pyproject.toml` | `_bundle_docs` | Project docs including the restic-format spec for last-resort decoding. |
-| `recovery/scripts/restore.sh`, `restore_auto.sh`, `restore.bat` | `_write_restore_script` / `_write_restore_auto_script` | Tier dispatchers (single-drive default + scripted + Windows). |
+| `restore.sh` (root), `recovery/scripts/restore.sh` (redirect stub) | `_write_restore_script` | The tier dispatcher heirs run (single-drive default). |
+| `restore.bat`, `recovery/scripts/restore.bat`, `recovery/scripts/restore_auto.sh` | `_bundle_recovery_toolchain_artifacts` (copied from the source tree) | Windows dispatcher; POSIX-sh wrapper that restores every repository non-interactively. |
+| `recovery/scripts/restore_legacy.sh` | `_write_restore_script` | The superseded flag-style bash driver (`--key/--isos/--target`), kept for compatibility. Off the disc root since #491. |
+| `recovery/scripts/restore-auto.sh` | `_write_restore_auto_script` | Non-interactive disc-swap driver for automation only. Off the disc root since #491. |
 | `standalone_restorer.py` | `_bundle_standalone_restorer` | The Python reader (tier 3), for when no binary works. |
 | `keyshare_combine.py` | `_bundle_keyshare_combiner` | stdlib-only SLIP-0039 share combiner (heir pre-step when a password was split). |
 | `README_RESTORE.md` / `README_RESTORE.txt` | `_write_readme` / `_write_readme_txt` | Human-readable restore instructions. |
@@ -293,6 +305,7 @@ required-contents contract (`required_meta_paths`,
 | `recovery/bin/<target>/python/...` | `_bundle_upstream_binaries` | Tier-3 bundled CPython tree, per target. |
 | `recovery/MANIFEST.sha256` | merged by `_bundle_recovery_toolchain_artifacts` | SHA-256 of the bundled recovery source/scripts (audited by `lcsas meta verify`). |
 | `metadata/<repo_id>/{config,keys,index,snapshots}` (optional) | `_bundle_metadata` | Per-repository Rustic state that *doesn't* go stale (keys decrypt any future pack). A repository whose mirror was unreachable at build time is absent here — and named in the build summary and in `volume_info.json` (#435), and fails the build outright if it is a live repository with packs on discs (#437). |
+| `VOLUME_INFO.txt` | `_write_volume_info` | Plain-text twin of `volume_info.json` for heirs: this is the meta disc, when it was built, the LCSAS version, and that it holds the tools but no catalog. |
 | `volume_info.json` | `_write_volume_info` | `type: "meta"` + bundled-tool inventory + tool versions + `repo_metadata` (repositories whose keys are / are not on this disc, each with its `retired` flag and `packs_on_discs` count, plus `acknowledged` — whether the build was waved through with `--allow-missing-metadata`). |
 | **NOT present:** `catalog.db` | — | Deliberately absent — see [Catalog policy](#catalog-policy-why-no-catalogdb-on-the-meta-disc). |
 | **NOT present:** any kernel / initramfs / GRUB / isolinux / boot wizard | — | LCSAS discs are NOT bootable (the Alpine live stack was removed, BOOT-07). |
@@ -542,7 +555,7 @@ Therefore:
    in-cache metadata and re-emit the pick list. Volumes burned *after* the
    meta disc appear in the updated list and get visited later in the same
    loop.
-4. The non-interactive `restore_auto.sh` performs the same organic upgrade,
+4. The non-interactive `recovery/scripts/restore-auto.sh` performs the same organic upgrade,
    optionally auto-selecting the disc with the newest label first to
    minimise the number of upgrades needed.
 
@@ -640,7 +653,7 @@ catalog policy (no `catalog.db`).
 |---|---|---|---|
 | `lcsas meta build` | `tests/unit/test_meta_builder.py::TestMetaVolumeBuilder`, `::TestBundleUpstreamBinaries` | `tests/integration/test_meta_volume_restore.py` | No `--db`-populated `metadata/` assertion. |
 | `lcsas meta verify` | `tests/unit/test_meta_builder.py` (manifest + required-contents) | — | None significant. |
-| Meta disc inventory | `test_build_creates_directory_structure`, `test_bundled_*_works`, `test_start_here_generated`, `test_standalone_restorer_bundled`, `test_single_drive_helper_bundled` | `TestMetaVolumeRestore::test_meta_volume_has_all_tools` / `_has_source` / `_has_docs` | None significant. |
+| Meta disc inventory | `test_build_creates_directory_structure`, `test_bundled_*_works`, `test_start_here_generated`, `test_standalone_restorer_bundled`, `test_single_drive_helper_bundled`, `TestMovedRestoreScripts` (the two scripts under `recovery/scripts/` run from there, manifest rows), `TestMetaVolumeInfoTxt` | `TestMetaVolumeRestore::test_meta_volume_has_all_tools` / `_has_source` / `_has_docs` | None significant. |
 | Cross-platform bundling | `TestBundleUpstreamBinaries` (5 tests), `test_restore_sh_dispatcher.py` | — | Per-target restore exercised in recovery-toolchain CI. |
 | Single-drive bootstrap | `test_single_drive_helper_bundled`, `test_restore_script_single_drive_default`, `TestSingleDriveBitsStandalone` | `TestMetaVolumeRestore` (directory mode); `test_interactive_restore.py` (PTY + loop-device disc swaps, root-gated) | None significant. |
 | Catalog policy | Code inspection | `TestMetaVolumeRestore` exercises the disc catalog implicitly | No direct `--reseed` precedence test. |

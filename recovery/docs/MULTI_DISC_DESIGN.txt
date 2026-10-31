@@ -424,6 +424,8 @@ E7. The disc has been re-burned with the same volume label but
        expected UUID doesn't match, warn but continue searching
        (the pack might still happen to be there).
        [Not implemented: #456 prints the label only.]
+       [Decided against (#491): a wrong disc already fails loudly,
+       through the label check and blob authentication.]
 
 E8. Disc is mounted but pack file is corrupted (read error).
     -> Currently bubbles up; with this design, we treat it as

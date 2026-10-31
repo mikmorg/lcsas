@@ -255,18 +255,20 @@ If `restore.sh` produces an error you can't resolve via
 [troubleshooting.md](../TROUBLESHOOTING.md), the meta disc also
 ships fallback paths:
 
-- **`restore_auto.sh`** — non-interactive version intended for CI
-  pipelines.  Takes two positional arguments
+- **`recovery/scripts/restore_auto.sh`** — non-interactive POSIX-sh
+  version intended for CI pipelines.  Takes two positional arguments
   (`restore_auto.sh RECOVERY_ROOT TARGET_ROOT`) and reads the password
   from the `LCSAS_PWFILE` environment variable (which must be set); it
   restores the latest snapshot of every repository it discovers.  No
   interactive disc-swap prompts — point it at a tree that already holds
-  every pack.  See Appendix A in `README_RESTORE.md`.
-- **`restore_legacy.sh`** — the older Bash driver, written to the
-  meta disc alongside `restore.sh`.  Different flag UX:
-  `./restore_legacy.sh --key <password-file> --target <dir> [--isos <dir>]
-  [--repo <name>] [--snapshot <id>]`.  Useful when you already
-  have every ISO extracted to disk (pass `--isos`).
+  every pack.  Not to be confused with the Bash
+  `recovery/scripts/restore-auto.sh`, which has its own flags (Appendix A
+  in `README_RESTORE.md`).
+- **`recovery/scripts/restore_legacy.sh`** — the older Bash driver.
+  Different flag UX:
+  `bash recovery/scripts/restore_legacy.sh --key <password-file> --target <dir>
+  [--isos <dir>] [--repo <name>] [--snapshot <id>]`.  Useful when you
+  already have every ISO extracted to disk (pass `--isos`).
 - **Direct invocation of the upstream rustic binary** at
   `tools/bin/rustic-static`.  Requires you to manually assemble
   the pack tree (see [troubleshooting.md](../TROUBLESHOOTING.md#manual-pack-assembly-last-resort-tier-3-fallback)).

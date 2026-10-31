@@ -9,6 +9,9 @@ Contents of a meta disc:
     lcsas/          LCSAS source code
     docs/           Architecture and project documentation
     restore.sh      Bootstrap restore script (pure bash + bundled tools)
+    recovery/       Recovery tools; recovery/scripts/ also holds
+                    restore-auto.sh (automation) and restore_legacy.sh
     README_RESTORE.md   Human-readable restore instructions
+    VOLUME_INFO.txt     What this disc is, in plain text
     volume_info.json    Self-describing disc metadata
 """

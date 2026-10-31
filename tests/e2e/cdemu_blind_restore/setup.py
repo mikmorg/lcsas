@@ -327,18 +327,30 @@ def _build_meta_iso() -> Path:
     ).build()
 
     # Issue #261 — strip operator-convenience wrappers from the test
-    # meta disc.  Real meta discs ship `restore-auto.sh`, `restore_legacy.sh`,
-    # `restore_c89.sh`, and `restore.bat` as ergonomic shortcuts; verify.sh
+    # meta disc.  Real meta discs ship `restore-auto.sh`, `restore_legacy.sh`
+    # (both under recovery/scripts/ since #491), `restore_c89.sh`, and
+    # `restore.bat` as ergonomic shortcuts; verify.sh
     # forbids the test agent from using them (see no_authoring_check.py
     # line ~238).  Their presence on the test fixture is pure temptation
     # — about 1-in-5 haiku runs bypasses the canonical `restore.sh` path
     # for `restore-auto.sh`.  Pull them out of the fixture so the agent
     # has no choice but the canonical path.
-    for convenience in ("restore-auto.sh", "restore_legacy.sh",
+    for convenience in ("recovery/scripts/restore-auto.sh",
+                        "recovery/scripts/restore_legacy.sh",
                         "restore_c89.sh", "restore.bat"):
         p = META_STAGE / convenience
         if p.exists():
             p.unlink()
+    # The two under recovery/ carry MANIFEST.sha256 rows; drop them too so
+    # an agent's `sha256sum -c` does not report files missing.
+    manifest = META_STAGE / "recovery" / "MANIFEST.sha256"
+    if manifest.is_file():
+        gone = {"./scripts/restore-auto.sh", "./scripts/restore_legacy.sh"}
+        rows = [
+            line for line in manifest.read_text().splitlines()
+            if line.split("  ", 1)[-1] not in gone
+        ]
+        manifest.write_text("\n".join(rows) + "\n")
 
     _apply_variant_mutations(META_STAGE)
 

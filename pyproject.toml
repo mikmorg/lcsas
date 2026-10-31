@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lcsas"
-version = "0.1.0"
+version = "1.0.0rc3"
 description = "Linux Cold Storage Archival Suite — orchestrates Rustic, Xorriso, and DVDisaster for durable, offline-first optical cold archival"
 readme = "README.md"
 license = {text = "MIT"}

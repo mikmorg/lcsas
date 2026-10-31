@@ -197,8 +197,11 @@ def _get_tool_version(tool_path: Path) -> str:
 # ``recovery/scripts/restore.sh`` (the POSIX-sh / 3-tier driver) is
 # available — which is normally the case — meta-builder writes it as
 # the meta disc's primary ``/restore.sh`` and this heredoc is
-# written alongside as ``/restore_legacy.sh`` for anyone who still
-# wants the explicit ``--key/--isos/--target`` flag interface.
+# written as ``recovery/scripts/restore_legacy.sh`` (off the disc root,
+# #491) for anyone who still wants the explicit ``--key/--isos/--target``
+# flag interface.  On a build with no recovery/ tree it is the root
+# ``/restore.sh`` itself, so the script finds the disc root from either
+# place (``DISC_ROOT`` below).
 #
 # Two integration tests pin to this legacy contract:
 #   * tests/integration/test_meta_volume_restore.py — exercises full
@@ -217,20 +220,24 @@ RESTORE_SCRIPT = r'''#!/usr/bin/env bash
 #    2. The data discs (or their ISO images)
 #    3. Your password file
 #
+#  On the meta disc this is recovery/scripts/restore_legacy.sh; the
+#  disc root's restore.sh is the newer driver.  (A meta disc built
+#  without the recovery/ tree has this script as its root restore.sh.)
+#
 #  Two modes:
 #    Single-drive (DEFAULT) — models the disaster scenario: you own one
 #      optical drive and a stack of archive discs. Script prompts for
 #      each disc by label, reads it in place, and ingests only the
 #      packs needed for the target repository.
 #
-#        ./restore.sh --key PASSWORD_FILE --target TARGET [--repo REPO]
-#                     [--drive /dev/sr0] [--snapshot ID]
+#        restore_legacy.sh --key PASSWORD_FILE --target TARGET [--repo REPO]
+#                          [--drive /dev/sr0] [--snapshot ID]
 #
 #    Directory (opt-in, legacy) — you already have every ISO image on
 #      disk. Script extracts them all and runs the classic flow.
 #
-#        ./restore.sh --key PASSWORD_FILE --isos ISO_DIR --target TARGET
-#                     [--repo REPO] [--snapshot ID]
+#        restore_legacy.sh --key PASSWORD_FILE --isos ISO_DIR --target TARGET
+#                          [--repo REPO] [--snapshot ID]
 #
 #  Rustic binary cascade:
 #    1. bundled rustic         (dynamically linked)
@@ -240,7 +247,13 @@ RESTORE_SCRIPT = r'''#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TOOLS="$SCRIPT_DIR/tools"
+# tools/, metadata/ and standalone_restorer.py sit at the disc root.
+# This script lives either in recovery/scripts/ or at the root itself.
+case "$SCRIPT_DIR" in
+    */recovery/scripts) DISC_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)" ;;
+    *)                  DISC_ROOT="$SCRIPT_DIR" ;;
+esac
+TOOLS="$DISC_ROOT/tools"
 
 # ── Configure bundled tools ──────────────────────────────────────
 export LD_LIBRARY_PATH="${TOOLS}/lib:${LD_LIBRARY_PATH:-}"
@@ -268,8 +281,8 @@ fi
 
 # Look for standalone_restorer.py shipped on the meta disc, then
 # inside any extracted data disc (it's placed on every disc).
-if [[ -f "$SCRIPT_DIR/standalone_restorer.py" ]]; then
-    STANDALONE="$SCRIPT_DIR/standalone_restorer.py"
+if [[ -f "$DISC_ROOT/standalone_restorer.py" ]]; then
+    STANDALONE="$DISC_ROOT/standalone_restorer.py"
 fi
 
 # ── ISO extraction function (cascade) ───────────────────────────
@@ -324,16 +337,16 @@ usage() {
 LCSAS Restore
 
 Single-drive mode (DEFAULT):
-  ./restore.sh --key PASSWORD_FILE --target TARGET [--repo NAME]
-               [--drive /dev/sr0] [--snapshot ID]
+  $0 --key PASSWORD_FILE --target TARGET [--repo NAME]
+      [--drive /dev/sr0] [--snapshot ID]
 
   Insert any LCSAS archive disc into the drive. The script reads
   the catalog, tells you which discs to insert next, and restores
   the repository onto disk. Only one disc is mounted at a time.
 
 Directory mode (opt-in, legacy):
-  ./restore.sh --key PASSWORD_FILE --isos ISO_DIR --target TARGET
-               [--repo NAME] [--snapshot ID]
+  $0 --key PASSWORD_FILE --isos ISO_DIR --target TARGET
+      [--repo NAME] [--snapshot ID]
 
   Use when the ISO image of every data disc is already on disk.
 
@@ -569,8 +582,8 @@ with open(sys.argv[1]) as f:
     echo "--- Phase 1: Bootstrap ---"
     # Seed keys/config from meta disc if available (they don't go stale).
     BOOTSTRAP_META=""
-    if [[ -d "$SCRIPT_DIR/metadata" ]]; then
-        BOOTSTRAP_META="$SCRIPT_DIR/metadata"
+    if [[ -d "$DISC_ROOT/metadata" ]]; then
+        BOOTSTRAP_META="$DISC_ROOT/metadata"
     fi
     echo "  Insert any LCSAS archive disc to begin."
     echo "  (Tip: start with the disc whose label is newest: the latest"
@@ -592,7 +605,7 @@ with open(sys.argv[1]) as f:
         rc=$?
         if [[ $rc -eq 2 ]]; then
             echo ""
-            echo "Re-run with: ./restore.sh --key $KEY_FILE --target $TARGET --repo NAME"
+            echo "Re-run with: $0 --key $KEY_FILE --target $TARGET --repo NAME"
             umount_drive
             exit 2
         fi
@@ -1025,15 +1038,23 @@ RESTORE_AUTO_SCRIPT = r'''#!/usr/bin/env bash
 #  If --disc-cmd is omitted, the script assumes the discs will be
 #  loaded externally and waits for the drive to become readable.
 #
+#  On the meta disc this is recovery/scripts/restore-auto.sh.
+#
 #  Usage:
-#    ./restore-auto.sh --key PASSWORD_FILE --target TARGET --repo NAME \
-#                      [--drive /dev/sr0] [--disc-cmd CMD] \
-#                      [--snapshot ID] [--work-dir DIR]
+#    recovery/scripts/restore-auto.sh --key PASSWORD_FILE --target TARGET \
+#        --repo NAME [--drive /dev/sr0] [--disc-cmd CMD] \
+#        [--snapshot ID] [--work-dir DIR]
 # ═══════════════════════════════════════════════════════════════════
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TOOLS="$SCRIPT_DIR/tools"
+# tools/, metadata/ and standalone_restorer.py sit at the disc root,
+# two levels above recovery/scripts/.
+case "$SCRIPT_DIR" in
+    */recovery/scripts) DISC_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)" ;;
+    *)                  DISC_ROOT="$SCRIPT_DIR" ;;
+esac
+TOOLS="$DISC_ROOT/tools"
 
 # ── Configure bundled tools ──────────────────────────────────────
 export LD_LIBRARY_PATH="${TOOLS}/lib:${LD_LIBRARY_PATH:-}"
@@ -1058,8 +1079,8 @@ if [[ -x "${TOOLS}/bin/python3" ]]; then
 elif command -v python3 &>/dev/null; then
     PYTHON="$(command -v python3)"
 fi
-if [[ -f "$SCRIPT_DIR/standalone_restorer.py" ]]; then
-    STANDALONE="$SCRIPT_DIR/standalone_restorer.py"
+if [[ -f "$DISC_ROOT/standalone_restorer.py" ]]; then
+    STANDALONE="$DISC_ROOT/standalone_restorer.py"
 fi
 
 # ── Usage ────────────────────────────────────────────────────────
@@ -1068,9 +1089,9 @@ usage() {
 LCSAS Non-Interactive Restore (automated disc-swap)
 
 Usage:
-  ./restore-auto.sh --key PASSWORD_FILE --target TARGET --repo NAME \\
-                    [--drive /dev/sr0] [--disc-cmd CMD] \\
-                    [--snapshot ID] [--work-dir DIR]
+  $0 --key PASSWORD_FILE --target TARGET --repo NAME \\
+      [--drive /dev/sr0] [--disc-cmd CMD] \\
+      [--snapshot ID] [--work-dir DIR]
 
 Options:
   --key FILE        (required) Path to the password file
@@ -1249,7 +1270,7 @@ CACHE_DIR="$WORK_DIR/cache"
 mkdir -p "$CACHE_DIR"
 
 # ── Seed keys/config from meta disc if available ─────────────────
-if [[ -d "$SCRIPT_DIR/metadata" ]]; then
+if [[ -d "$DISC_ROOT/metadata" ]]; then
     echo "  Seeding repository metadata from the meta disc..."
 fi
 
@@ -1454,6 +1475,42 @@ echo "════════════════════════�
 '''
 
 
+def render_meta_volume_info_txt(built_at: datetime) -> str:
+    """The text of the meta disc's VOLUME_INFO.txt (#491, UX 010).
+
+    The plain-text twin of the meta disc's ``volume_info.json``, for an
+    heir who cannot read JSON: what this disc is, when it was built, the
+    LCSAS version, and that it holds the tools but no catalog.
+    """
+    from lcsas import __version__
+
+    built = built_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return (
+        "ABOUT THIS DISC\n"
+        "===============\n"
+        "\n"
+        "This is the LCSAS META disc.  It holds the recovery tools, the\n"
+        "instructions and the source code needed to restore the files on\n"
+        "the archive's data discs.  It holds no backup data and no\n"
+        "catalog: the catalog is on every data disc.\n"
+        "\n"
+        f"  Built on:      {built}\n"
+        f"  Made with:     LCSAS version {__version__}\n"
+        "\n"
+        "If you have more than one META disc, use the newest.\n"
+        "\n"
+        "To get your files back, read START_HERE.txt on this disc first.\n"
+        "volume_info.json describes this disc for computer programs.\n"
+    )
+
+
+# Where the two non-heir restore scripts live on the meta disc, relative to
+# its root.  Both used to sit at the root next to restore.sh; #491
+# (UX_CONCERNS 002) moved them here so the root shows heirs one script.
+RESTORE_AUTO_SCRIPT_PATH = "recovery/scripts/restore-auto.sh"
+RESTORE_LEGACY_SCRIPT_PATH = "recovery/scripts/restore_legacy.sh"
+
+
 README_RESTORE = '''\
 # LCSAS — Restore from Discs
 
@@ -1469,10 +1526,11 @@ images. The **only** thing you must provide is your **password**.
 | `lcsas/` | LCSAS source code (Python, no external dependencies) |
 | `docs/` | Architecture documentation + restic format specification |
 | `restore.sh` | **Start here. Prompts for password and disc swaps.** |
-| `restore-auto.sh` | Non-interactive restore (automation only; use restore.sh instead) |
-| `restore_legacy.sh` | Older Bash driver kept for back-compat — superseded by `restore.sh`. |
 | `README_RESTORE.md` | This file |
+| `VOLUME_INFO.txt` | What this disc is, when it was built, and the LCSAS version, in plain text |
 | `volume_info.json` | Machine-readable details of this disc (includes tool versions) |
+| `recovery/scripts/restore-auto.sh` | Non-interactive restore (automation only) |
+| `recovery/scripts/restore_legacy.sh` | Older Bash driver, superseded by `restore.sh` |
 
 ## Terminology
 
@@ -1560,19 +1618,19 @@ persists across runs.
 
 > **Automation / CI only.** Heirs restoring after a disaster
 > must use the interactive `restore.sh` above. The non-interactive
-> driver `restore-auto.sh` exists only for scripted pipelines —
-> see Appendix A.
+> driver `recovery/scripts/restore-auto.sh` exists only for scripted
+> pipelines — see Appendix A.
 
 ## Directory Mode (opt-in, legacy)
 
 If you already have the ISO image of every data disc on disk (e.g.
 pre-rsynced to a NAS) you can side-load them via the legacy bash driver
-(`restore_legacy.sh`):
+(`recovery/scripts/restore_legacy.sh`):
 
 ```bash
-./restore_legacy.sh --key /path/to/password.txt \\
-                    --isos /path/to/iso/directory/ \\
-                    --target ~/restored/
+bash /mnt/recovery/scripts/restore_legacy.sh --key /path/to/password.txt \\
+     --isos /path/to/iso/directory/ \\
+     --target ~/restored/
 ```
 
 This extracts every ISO up front and copies every pack into the cache
@@ -1649,17 +1707,19 @@ See `docs/architecture.md` for the complete system architecture, and
 > automated environment. Heirs restoring after a disaster
 > should use `restore.sh` (Single-Drive Mode above).
 
-`restore-auto.sh` runs the same four phases as `restore.sh`
-(bootstrap, ingest, finalize, rustic restore) but never calls
-`read` and never waits for keyboard input.  It is the right tool
+`recovery/scripts/restore-auto.sh` runs the same four phases as
+`restore.sh` (bootstrap, ingest, finalize, rustic restore) but never
+calls `read` and never waits for keyboard input.  It is the right tool
 for an environment where another process can mechanically swap
-discs and feed in the password file.
+discs and feed in the password file.  (Do not confuse it with
+`recovery/scripts/restore_auto.sh`, a separate POSIX-sh wrapper that
+restores every repository from a recovery tree.)
 
 ```bash
-./restore-auto.sh --key /path/to/password.txt \\
-                  --target ~/restored/ \\
-                  --repo REPO_NAME \\
-                  --disc-cmd "disc-loader"
+bash /mnt/recovery/scripts/restore-auto.sh --key /path/to/password.txt \\
+     --target ~/restored/ \\
+     --repo REPO_NAME \\
+     --disc-cmd "disc-loader"
 ```
 
 | Option | Description |
@@ -1938,8 +1998,12 @@ class MetaVolumeBuilder:
         ├── lcsas/
         │   └── src/lcsas/    LCSAS Python package
         ├── docs/             architecture docs
+        ├── recovery/scripts/ restore-auto.sh (automation) and
+        │                     restore_legacy.sh (superseded), kept off
+        │                     the root so heirs see restore.sh (#491)
         ├── restore.sh        bootstrap script
         ├── README_RESTORE.md human instructions
+        ├── VOLUME_INFO.txt   plain-text "what this disc is"
         └── volume_info.json  self-describing metadata
     """
 
@@ -3011,11 +3075,17 @@ class MetaVolumeBuilder:
           from earlier days and is kept only for compatibility with
           discs that predate the recovery/ tree.
 
-        The legacy script is *also* written, as ``restore_legacy.sh``,
-        so it remains accessible as a manual third option if needed.
+        In the first case the legacy script is *also* written, as
+        ``recovery/scripts/restore_legacy.sh`` (``RESTORE_LEGACY_SCRIPT_PATH``),
+        so it remains accessible as a manual third option if needed.  It
+        lives there, not at the disc root, so the root shows heirs one
+        restore script (#491, UX_CONCERNS 002), and it gets a row in
+        ``recovery/MANIFEST.sha256`` like every file under recovery/.
         """
         script_path = self._output / "restore.sh"
         new_driver = self._output / "recovery" / "scripts" / "restore.sh"
+        # An older build left restore_legacy.sh at the disc root (#491).
+        (self._output / "restore_legacy.sh").unlink(missing_ok=True)
         if new_driver.is_file():
             shutil.copy2(str(new_driver), str(script_path))
             os.chmod(str(script_path), 0o755)
@@ -3036,11 +3106,15 @@ class MetaVolumeBuilder:
                 "@@BUILD_DATE@@", _build_date
             )
             _write_and_sync(script_path, _content)
-            # Stash the legacy bash driver alongside for compatibility /
-            # for anyone who specifically wants it.  Off the bare path.
-            legacy = self._output / "restore_legacy.sh"
+            # Stash the legacy bash driver in recovery/scripts/ for
+            # compatibility / for anyone who specifically wants it.  Off
+            # the disc root (#491); it finds tools/ two levels up.
+            legacy = self._output / RESTORE_LEGACY_SCRIPT_PATH
             _write_and_sync(legacy, RESTORE_SCRIPT)
             os.chmod(str(legacy), 0o755)
+            self._refresh_recovery_manifest_row(
+                legacy, "./scripts/restore_legacy.sh", add_missing=True
+            )
             # Replace the inner copy with a redirect so heirs (and
             # agents) who navigate into recovery/scripts/ land on the
             # canonical root-level entry, not a silent duplicate.
@@ -3069,13 +3143,19 @@ class MetaVolumeBuilder:
             _write_and_sync(script_path, RESTORE_SCRIPT)
             os.chmod(str(script_path), 0o755)
 
-    def _refresh_recovery_manifest_row(self, on_disc: Path, rel: str) -> None:
+    def _refresh_recovery_manifest_row(
+        self, on_disc: Path, rel: str, *, add_missing: bool = False
+    ) -> None:
         """Update one row of recovery/MANIFEST.sha256 to match a file we
         rewrote after the manifest was generated.
 
         ``rel`` is the manifest-relative path (e.g. ``./scripts/restore.sh``).
-        No-op when the manifest is absent (older builds) or carries no such
-        row.  Keeps every other row untouched.
+        No-op when the manifest is absent (older builds).  A manifest with
+        no such row is left alone, unless ``add_missing`` is set: then the
+        row is appended, for a file the builder itself adds under
+        recovery/ (``lcsas meta verify --strict`` and the BOOT-07 gate
+        reject any file there that has no row).  Keeps every other row
+        untouched.
         """
         import hashlib
 
@@ -3099,14 +3179,30 @@ class MetaVolumeBuilder:
                 replaced = True
             else:
                 out.append(line)
+        if not replaced and add_missing:
+            out.append(new_row)
+            replaced = True
         if replaced:
             _write_and_sync(manifest, "\n".join(out) + "\n")
 
     def _write_restore_auto_script(self) -> None:
-        """Write the non-interactive restore-auto.sh script."""
-        script_path = self._output / "restore-auto.sh"
+        """Write the non-interactive restore-auto.sh script.
+
+        It goes to ``recovery/scripts/restore-auto.sh``
+        (``RESTORE_AUTO_SCRIPT_PATH``), not the disc root: it is for
+        automation only, and the root should show heirs one restore script
+        (#491, UX_CONCERNS 002).  The script finds tools/ two levels up.
+        Not to be confused with ``recovery/scripts/restore_auto.sh`` (with
+        an underscore), the POSIX-sh wrapper copied from the source tree.
+        """
+        (self._output / "restore-auto.sh").unlink(missing_ok=True)
+        script_path = self._output / RESTORE_AUTO_SCRIPT_PATH
+        script_path.parent.mkdir(parents=True, exist_ok=True)
         _write_and_sync(script_path, RESTORE_AUTO_SCRIPT)
         os.chmod(str(script_path), 0o755)
+        self._refresh_recovery_manifest_row(
+            script_path, "./scripts/restore-auto.sh", add_missing=True
+        )
 
     def _write_readme(self) -> None:
         """Write the human-readable restore instructions."""
@@ -3146,10 +3242,11 @@ class MetaVolumeBuilder:
                 tools_bin / "rustic-static"
             )
 
+        built_at = datetime.now(UTC)
         info = {
             "type": "meta",
             "description": "LCSAS meta disc — tools + source for restoring the archive",
-            "created_at": datetime.now(UTC).isoformat(),
+            "created_at": built_at.isoformat(),
             "platform": f"linux-{os.uname().machine}",
             "python_version": (
                 f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -3160,7 +3257,9 @@ class MetaVolumeBuilder:
                 "tool_versions": tool_versions,
                 "lcsas_source": True,
                 "restore_script": "restore.sh",
-                "restore_auto_script": "restore-auto.sh",
+                # Key name kept for readers of older discs; the value
+                # moved off the disc root in #491.
+                "restore_auto_script": RESTORE_AUTO_SCRIPT_PATH,
                 "documentation": True,
             },
             # Tier-3 zstd capability (RST-04).  ``native_zstd`` records
@@ -3216,6 +3315,9 @@ class MetaVolumeBuilder:
             json.dump(info, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
+        _write_and_sync(
+            self._output / "VOLUME_INFO.txt", render_meta_volume_info_txt(built_at)
+        )
 
     def _write_start_here(self) -> None:
         """Write START_HERE.txt to the meta disc.

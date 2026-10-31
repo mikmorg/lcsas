@@ -293,9 +293,11 @@ class TestMetaVolumeRestore:
                 # The active /restore.sh is the new POSIX-sh driver (3-tier
                 # cascade, positional args).  The legacy bash driver that
                 # accepts --key/--isos/--target is preserved on the meta
-                # volume as /restore_legacy.sh; exercise that here so the
-                # full end-to-end restore flow is covered.
-                "bash", str(self.meta_dir / "restore_legacy.sh"),
+                # disc as recovery/scripts/restore_legacy.sh (#491); run it
+                # from there so the full end-to-end restore flow is covered.
+                "bash", str(
+                    self.meta_dir / "recovery" / "scripts" / "restore_legacy.sh"
+                ),
                 "--key", str(self.key_file),
                 "--isos", str(self.iso_dir),
                 "--target", str(self.restore_target),
@@ -327,9 +329,11 @@ class TestMetaVolumeRestore:
                 # The active /restore.sh is the new POSIX-sh driver (3-tier
                 # cascade, positional args).  The legacy bash driver that
                 # accepts --key/--isos/--target is preserved on the meta
-                # volume as /restore_legacy.sh; exercise that here so the
-                # full end-to-end restore flow is covered.
-                "bash", str(self.meta_dir / "restore_legacy.sh"),
+                # disc as recovery/scripts/restore_legacy.sh (#491); run it
+                # from there so the full end-to-end restore flow is covered.
+                "bash", str(
+                    self.meta_dir / "recovery" / "scripts" / "restore_legacy.sh"
+                ),
                 "--key", str(self.key_file),
                 "--isos", str(self.iso_dir),
                 "--target", str(self.restore_target),

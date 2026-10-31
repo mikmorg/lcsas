@@ -410,14 +410,15 @@ in order of effort:
             --password-file C:\path\to\pw.txt ^
             --target C:\Users\me\restored ^
             --mount-point E:\
-     This works on any Windows that still runs Python 3.  Note that
+     This works on any Windows that runs Python 3.10 or newer,
+     which rules out Windows 7 and older.  Note that
      restore.bat does NOT chain to this script for you any more --
      you invoke it directly.  See "MANUAL PYTHON RESTORE" below.
 
-  E. Future: an msvcrt-linked .exe.  See recovery/docs/
-     WINDOWS_RECOVERY_PLAN.txt section "Phase W5 -- legacy msvcrt
-     build" for the planned long-term solution that would also run
-     on Windows XP / Vista.  Not yet available.
+  E. A separate .exe for older Windows is not planned.  On
+     Windows XP, Vista or an unpatched Windows 7, use option A, B
+     or C.  Option D does not help there: Python 3.10 does not
+     install on Windows 7 or older.
 
 ────────────────────────────────────────────────────────────────────
 MANUAL PYTHON RESTORE (last resort, no binaries needed)

@@ -181,6 +181,7 @@ LCSAS_BD25_2026_0001.iso
 ├── CONFIG_SUMMARY.txt       Archive settings summary
 ├── DISC_CARE.txt            How to store discs safely
 ├── standalone_restorer.py   Tier 3 Python reader (no dependencies)
+├── VOLUME_INFO.txt          This disc's label and contents, in plain text
 ├── volume_info.json         Machine-readable disc identity
 ├── catalog.db               Disc catalog (SQLite): which disc holds each pack
 ├── data/                    Encrypted backup data
@@ -199,6 +200,7 @@ The **META disc** holds no catalog.  It contains:
 LCSAS_META.iso
 ├── restore.sh               Start here.  Interactive restore script.
 ├── README_RESTORE.md        Detailed restore guide
+├── VOLUME_INFO.txt          What this disc is and when it was built
 ├── tools/bin/<arch>/        Per-platform recovery binaries
 ├── lcsas/                   Full LCSAS source code
 └── recovery/docs/           On-disc reference (RECOVER.txt, TIERS.txt, …)

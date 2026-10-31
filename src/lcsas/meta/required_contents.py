@@ -59,6 +59,12 @@ _WINDOWS_TARGETS = frozenset({"x86_64-pc-windows-gnu"})
 # Root-level artifacts every complete meta disc must carry.  These live
 # outside recovery/ (so the recovery/ manifest never covers them) but are
 # load-bearing for the restore flow an heir actually uses.
+#
+# Deliberately NOT required: recovery/scripts/restore-auto.sh (automation
+# only) and recovery/scripts/restore_legacy.sh (superseded by restore.sh).
+# #491 moved both off the disc root; no heir restore depends on either, so
+# a disc without them is not incomplete.  Nor is VOLUME_INFO.txt, which
+# only describes the disc.
 _ROOT_ARTIFACTS: tuple[str, ...] = (
     "standalone_restorer.py",
     "keyshare_combine.py",

@@ -146,7 +146,7 @@ needs to do on each non-x86_64 host:
 ARM64 Linux:
   apt install rustic xorriso python3
   python3 -m pip install /mnt/meta/lcsas_src  # if cmd_restore_standalone is wanted
-  bash /mnt/meta/restore_legacy.sh --key ~/key.txt --isos /mnt/data/ --target ~/restored/
+  bash /mnt/meta/recovery/scripts/restore_legacy.sh --key ~/key.txt --isos /mnt/data/ --target ~/restored/
 
 macOS (Intel or Apple Silicon):
   brew install rustic xorriso

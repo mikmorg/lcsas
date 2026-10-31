@@ -40,11 +40,11 @@ _BOOT_NAME_RE = re.compile(
 # reviewed in-repo source (heredocs in builder.py or verbatim copies
 # of files under src/lcsas/ and manifest-pinned recovery/scripts/).
 # They are text, not opaque artifacts — anything NOT in this list and
-# not manifest-pinned fails the gate.
+# not manifest-pinned fails the gate.  restore-auto.sh and
+# restore_legacy.sh moved into recovery/scripts/ (#491), where the
+# builder gives them MANIFEST.sha256 rows, so they are not listed here.
 _AUTHORED_SCRIPTS = {
     "restore.sh",
-    "restore-auto.sh",
-    "restore_legacy.sh",
     "restore_c89.sh",
     "restore.bat",
     "keyshare_combine.py",

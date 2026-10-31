@@ -98,6 +98,8 @@ Encryption means a lost/garbled K-of-N share set = data gone forever, with no pa
 recovery and no warning until restore time. The weakest link is a human transcribing
 20-word SLIP-0039 mnemonics off cards decades later — and that link is, again, only
 "tested" by an AI proxy (C1). A typo'd share is recoverable; a *lost* share threshold is not.
+*[2026-10-30 note. Decided against (#491): recording share drills would need schema v11;
+the annual checklist (`recovery/docs/READINESS_CHECKLIST.txt`) covers it.]*
 
 ### C8 — The audit was self-graded.
 `DEEP_AUDIT_2026-06.md` found 78 issues; they were remediated and verified by the *same*
@@ -140,6 +142,7 @@ less trustworthy than it sounds.
    *[2026-10-20 correction: done in PR #411 (#320); see the C5 note above.]*
 6. **Promote differential-testing breadth to a headline metric** (corpus size, % of
    restore decisions cross-checked across tiers), above line coverage. (C9.)
+   *[2026-10-30 note. Decided against (#491): coverage policy is already settled (#488).]*
 7. **Stabilize the CI substrate** (disk, concurrency, deterministic gates) before trusting
    "green" as a release signal. (C10.)
 8. **Have someone who is not you re-audit a sample** of the 82 "RESOLVED" findings. (C8.)
