@@ -45,6 +45,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_agent_prompt.py` | Hardening test: agent_prompt.txt staying current with lcsas-restore features. |
 | `test_audit_gate_threshold_parity.py` | Hardening: CI coverage threshold tracks the local measured floor (GATE-07). |
 | `test_bin_parity_exempt_ledger.py` | Hardening test (GATE-08): the bin-parity exemption ledger must stay honest. |
+| `test_blind_harness_leak_dirs.py` | The blind harness hides leftover directories by ACL, not chown/chmod. |
 | `test_blind_run_lock.py` | The blind harness's run lock works across users and leaves no file (#559). |
 | `test_blind_variant_xfail_ledger.py` | Hardening test (GATE-06): the blind-restore XFAIL ledger must stay |
 | `test_boot_config_paths.py` | BOOT-03: boot menu entry paths must equal the staged-tree paths. |

@@ -75,6 +75,10 @@ SYSCTL_FILE = Path("/etc/sysctl.d/99-blind-restore.conf")
 
 AGENT_USER = "lcsas-blind"
 AGENT_HOME = Path("/home") / AGENT_USER
+# Leftover directories on this host that would leak the illusion.  Hidden
+# from AGENT_USER by an ACL entry only (never chown/chmod: some belong to
+# other projects); teardown.sh keeps the same list.
+LEAK_DIRS = (Path("/mnt/staging"), Path("/scratch/cargo-target"))
 # Agent CLI config dir lives on /scratch, not under AGENT_HOME on "/": claude
 # 2.x writes a ~26 KB config + session files and the small root partition can
 # ENOSPC mid-write, corrupting the config.  See the seeding block below.
@@ -138,7 +142,8 @@ def require_root() -> None:
 
 
 def require_binaries() -> None:
-    required = ["rustic", "xorriso", "cc", "claude", "cdemu", "tmux"]
+    required = ["rustic", "xorriso", "cc", "claude", "cdemu", "tmux",
+                "setfacl"]
     missing = [b for b in required if shutil.which(b) is None]
     if missing:
         print(f"missing required binaries: {', '.join(missing)}", file=sys.stderr)
@@ -769,23 +774,27 @@ def _lock_fixture_dir() -> None:
             os.chown(target, 0, 0)
             os.chmod(target, 0o700)
 
-    for leak in (
-        Path("/mnt/staging"),
-        Path("/scratch/cargo-target"),
-    ):
-        if not leak.exists():
+    # Old dev work on this host left a staging mount (ours) behind.
+    subprocess.run(
+        ["umount", "/mnt/staging"],
+        check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    # Shut only the agent user out of the leftover directories, with an
+    # ACL entry, and leave their owner and mode alone.  Other projects
+    # on this host build into /scratch/cargo-target, and the old chown
+    # root:root + chmod 0700 locked them out for the whole run (teardown
+    # put the mode back but never the owner).  teardown.sh drops the
+    # entry again.
+    for leak in LEAK_DIRS:
+        if not leak.is_dir():
             continue
-        with contextlib.suppress(Exception):
-            subprocess.run(
-                ["umount", str(leak)],
-                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-        try:
-            if leak.is_dir():
-                os.chown(leak, 0, 0)
-                os.chmod(leak, 0o700)
-        except Exception:
-            pass
+        acl = subprocess.run(
+            ["setfacl", "-m", f"u:{AGENT_USER}:---", str(leak)],
+            check=False, capture_output=True, text=True,
+        )
+        if acl.returncode != 0:
+            print(f"  WARNING: could not hide {leak} from {AGENT_USER}: "
+                  f"{acl.stderr.strip()}", file=sys.stderr)
 
     # Hide the vhba udev rule — it contains "cdemu" and "vhba" which
     # instantly reveal the illusion. Rename so it's not discoverable
