@@ -150,9 +150,9 @@ When each worker reports back:
    above): also run `LCSAS_BLIND_ACK_COST=1 make blind-restore`
    wrapped in `timeout 2700`.  Must score 16/16.  If it
    doesn't, the PR doesn't ship.  Surface the failure to the
-   user; do not merge a red blind run.  (One-time exception for
-   the rc3 batch only: one combined sweep on master before the
-   rc3 tag instead; see the autopilot Policy block.)
+   user; do not merge a red blind run.  (Exception for the rc3
+   and rc4 batches only: one combined sweep on master before that
+   rc's tag instead; see the autopilot Policy block.)
 5. **Merge**: `gh pr merge <num> --merge` on green CI (never
    `--admin`).  Sync `github` and `origin` (mirror remote).
 6. **Cross-PR retest (Issue #99 lesson):** If other PRs from the same
