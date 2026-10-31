@@ -6,10 +6,16 @@ re-burn.  Every disc carries the long-term schedule in DISC_CARE.txt
 (``HolographicInjector.write_disc_care``), so the two texts must say the
 same thing.  The READINESS checklist follows the owner schedule.
 
-These tests fail if DISC_CARE.txt and the doc drift apart, if the
-checklist goes back to a schedule of its own, or if a link to one of
-the schedule sections stops matching a heading (the link-integrity test
-strips ``#anchors``, so it would not notice).
+No disc is re-burned because of its age, whatever the media type: data
+is re-burned onto fresh discs after a read error, never just because a
+disc is old (owner decision 2026-10-31).
+
+These tests fail if DISC_CARE.txt and the doc drift apart, if either
+of them tells anyone to re-burn on a time interval or loses the
+re-burn-after-a-read-error rule, if the checklist goes back to a
+schedule of its own, or if a link to one of the schedule sections
+stops matching a heading (the link-integrity test strips ``#anchors``,
+so it would not notice).
 """
 
 from __future__ import annotations
@@ -70,6 +76,78 @@ def test_disc_care_carries_the_long_term_schedule(tmp_path: Path) -> None:
         "the 'Long-term schedule' in docs/workflows/verify-and-audit.md "
         f"says.\n  doc:  {doc}\n  disc: {disc}"
     )
+
+
+# "re-burn", "reburn", "re burn".
+_REBURN = re.compile(r"\bre-?\s?burn", re.IGNORECASE)
+# A time interval: "5-10 years", "ten years", "five to ten years",
+# "every few years", "18 months", "every 2 years", "yearly", "a decade".
+_NUMBER_WORD = (
+    r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve"
+    r"|fifteen|twenty|thirty|forty|fifty|hundred|few|several)"
+)
+_INTERVAL = re.compile(
+    r"\b\d+(?:\s*-\s*\d+)?\s+(?:years?|months?)\b"
+    rf"|\b{_NUMBER_WORD}(?:(?:\s*-\s*|\s+(?:to|or)\s+){_NUMBER_WORD})?"
+    r"\s+(?:years?|months?)\b"
+    r"|\byearly\b|\bannually\b"
+    r"|\b(?:once|every|each)\s+(?:a\s+)?year\b|\bdecades?\b",
+    re.IGNORECASE,
+)
+
+
+def _sentences(section: str) -> list[str]:
+    """A section's sentences; each bullet starts a new one."""
+    parts = re.split(r"\n\s*-\s+|(?<=[.!?])\s+", section.replace("**", ""))
+    return [_squash(p) for p in parts if p.strip()]
+
+
+def _doc_schedules_section() -> str:
+    """'## Re-verification schedules' in the doc, both schedules."""
+    text = VERIFY_DOC.read_text(encoding="utf-8")
+    start = text.index("\n## Re-verification schedules\n")
+    return text[start:text.index("\n---\n", start)]
+
+
+def _disc_care_text(tmp_path: Path) -> str:
+    """All of DISC_CARE.txt, not only PERIODIC VERIFICATION.
+
+    MEDIA LONGEVITY talks about re-burning too (it once rested
+    durability on a "re-burn cadence"), so the whole file is scanned.
+    """
+    root = tmp_path / "whole"
+    root.mkdir()
+    HolographicInjector(root).write_disc_care(None)
+    return (root / "DISC_CARE.txt").read_text(encoding="utf-8")
+
+
+def test_no_disc_is_reburned_on_a_time_interval(tmp_path: Path) -> None:
+    """Re-burn after a read error, never just by age (2026-10-31)."""
+    texts = {
+        "verify-and-audit.md": (
+            _doc_long_term_bullets(), _doc_schedules_section(),
+        ),
+        "DISC_CARE.txt": (
+            _disc_care_bullets(tmp_path), _disc_care_text(tmp_path),
+        ),
+    }
+    for name, (bullets, section) in texts.items():
+        on_a_timer = [
+            s for s in [*bullets, *_sentences(section)]
+            if _REBURN.search(s) and _INTERVAL.search(s)
+        ]
+        assert not on_a_timer, (
+            f"{name} tells the reader to re-burn on a time interval; no "
+            f"disc is re-burned because of its age: {on_a_timer}"
+        )
+        reburn = [b for b in bullets if _REBURN.search(b)]
+        assert len(reburn) == 1 and reburn[0].startswith(
+            "After ANY read error: re-burn",
+        ), (
+            f"{name}: the long-term schedule must keep exactly one re-burn "
+            f"bullet, the 'After ANY read error' one: {bullets}"
+        )
+        assert not any("Even M-DISC ages" in b for b in bullets), bullets
 
 
 def test_checklist_follows_the_owner_schedule() -> None:

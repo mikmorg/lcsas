@@ -23,12 +23,13 @@ run to *landed* or *escalated*, never to half-done.
 - **Blind-restore gate:** haiku model, `LCSAS_BLIND_ACK_COST=1`, per PR,
   only when the change touches the restore path.  Changes outside it
   skip it.
-  **rc3 exception** (owner, 2026-10-30; one-time, not the standing rule):
-  restore-path PRs in the rc3 batch may merge on green CI without a
-  per-PR blind run; ONE combined haiku sweep of every runnable variant
-  (the eight in the `recovery/docs/READINESS_CHECKLIST.txt` drill log)
-  then runs on master before `v1.0.0-rc3` is tagged, and a red sweep
-  blocks the tag until fixed.
+  **rc3/rc4 exception** (owner, 2026-10-30 for rc3, extended to rc4 on
+  2026-10-31; not the standing rule): restore-path PRs in the rc3 and
+  rc4 batches may merge on green CI without a per-PR blind run; ONE
+  combined haiku sweep of every runnable variant (the eight in the
+  `recovery/docs/READINESS_CHECKLIST.txt` drill log) then runs on
+  master before that rc is tagged, and a red sweep blocks the tag
+  until fixed.
 - **Committed binaries:** any `recovery/src/**` C change regenerates the
   affected committed bins via the bin_parity recipe (drive
   `bin_parity.rebuild` + copy, then `bin_parity.py` must PASS).

@@ -249,7 +249,8 @@ also include the two-step share-reconstruction pre-step.
 
 ### 5. Periodic Maintenance
 
-- [ ] **Read your discs back and re-burn on schedule.** Follow the
+- [ ] **Read your discs back on schedule, and re-burn any disc that shows
+  a read error.** Follow the
   [owner schedule](workflows/verify-and-audit.md#owner-schedule) in
   `docs/workflows/verify-and-audit.md`: it says how often to read discs
   back, when to re-burn, and when to run the test restore, the drill and
