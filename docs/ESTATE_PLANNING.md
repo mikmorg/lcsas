@@ -172,7 +172,8 @@ Procedure after any password change:
 
 The annual READINESS drill (`recovery/docs/READINESS_CHECKLIST.txt`,
 "PASSWORD REDUNDANCY") runs that same `lcsas key verify` so a silent
-rotation drift is caught within a year, not at restore time.
+rotation drift is caught within a year, not at restore time. It is part
+of the [owner schedule](workflows/verify-and-audit.md#owner-schedule).
 
 ### 3. Letter to Heirs
 
@@ -248,15 +249,15 @@ also include the two-step share-reconstruction pre-step.
 
 ### 5. Periodic Maintenance
 
-- [ ] **Re-burn discs every 5-10 years** (even M-Disc degrades eventually)
-- [ ] **Verify existing discs** periodically.  To re-check every burned
-  volume in one pass (against its catalog hashes):
-  ```
-  lcsas verify --all
-  ```
-  Add `--disc` to read the physical discs from the drive instead of the
-  ISO images in the staging area, or verify one volume at a time with
-  `lcsas verify <LABEL> --iso /path/to/<LABEL>.iso`.
+- [ ] **Read your discs back and re-burn on schedule.** Follow the
+  [owner schedule](workflows/verify-and-audit.md#owner-schedule) in
+  `docs/workflows/verify-and-audit.md`: it says how often to read discs
+  back, when to re-burn, and when to run the test restore, the drill and
+  `lcsas key verify`, with the commands for each.
+- [ ] **Know the long-term schedule.** Whoever holds the archive after you
+  follows the [long-term schedule](workflows/verify-and-audit.md#long-term-schedule).
+  Every disc carries it in `DISC_CARE.txt`, so your heirs can read it
+  without this document.
 - [ ] **Update your letter** when you burn new discs or move the password
 - [ ] **Tell someone trusted** that these discs exist and where to find them
 - [ ] **Keep a Blu-ray drive available** — as optical drives disappear from
@@ -264,6 +265,33 @@ also include the two-step share-reconstruction pre-step.
 - [ ] **If your archive uses 100 GB BDXL media, check the stored drive is
   BDXL-capable** — many ordinary BD drives are NOT, and a non-BDXL drive
   reads none of the 100 GB discs
+
+---
+
+## No Independent Security Review
+
+LCSAS v1.0 ships without an independent security review. No outside
+person has reviewed LCSAS's own code, including the code that handles the
+crypto: the tier-1 C reader's decryption and authentication (scrypt, AES,
+Poly1305), the tier-3 Python reader's decryption and authentication, and
+the SLIP-0039 share code (in Python and in the `lcsas-keyshare` C binary).
+The 2026-06 audit was self-graded. The encryption format itself is not
+LCSAS's: it is restic's repository format, which rustic also uses.
+
+Why this is acceptable:
+
+- **A reader bug fails loudly.** Every blob is authenticated (a Poly1305
+  MAC and a SHA-256 hash), so a bug in a reader's decryption or
+  authentication makes the restore reject data instead of restoring wrong
+  data. Tier 2 (rustic) and tier 2b (stock restic) share none of the
+  readers' code.
+- **Tier 2b is the hedge.** It restores with no LCSAS code at all. The
+  steps are in `recovery/docs/RESTORE_STANDARD_TOOLS.txt`.
+- **The silent risk is the share code.** A bug there could write share
+  cards that do not rebuild the password. The yearly `lcsas key verify` in
+  the [owner schedule](workflows/verify-and-audit.md#owner-schedule) tests
+  exactly that: it rebuilds the password from the cards and checks that it
+  unlocks the repository.
 
 ---
 

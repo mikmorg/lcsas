@@ -934,11 +934,12 @@ PERIODIC VERIFICATION
 
   Even with proper storage, verify discs periodically:
 
-  - Every 2-5 years: spot-check a few discs
-  - Every 5-10 years: full verify of all discs
-  - If ANY disc shows read errors, consider re-burning ALL
-    data to fresh media (discs from the same media batch may
-    be degrading similarly)
+  - Every 2-5 years: verify a few discs (a spot-check).
+  - Every 5-10 years: verify every disc, then re-burn all
+    the data onto fresh discs.  Even M-DISC ages.
+  - After ANY read error: re-burn ALL the data onto fresh
+    discs at once.  Discs from the same media batch may be
+    failing together.
 
   Use the LCSAS verify command:
 
