@@ -34,6 +34,18 @@ rm -f  /var/log/disc-loader.log
 rm -f  /etc/sudoers.d/lcsas-blind
 rm -f  /etc/sysctl.d/99-blind-restore.conf
 
+# Drop the ACL entry setup.py used to hide leftover directories from the
+# agent (setup.py LEAK_DIRS), while the user name still resolves.  Owner
+# and mode were never changed.  Also drop the mask entry setfacl added,
+# unless the directory has ACL entries of its own, so it ends up exactly
+# as it was.
+for d in /mnt/staging /scratch/cargo-target; do
+    [[ -d "$d" ]] || continue
+    setfacl -x u:lcsas-blind "$d" 2>/dev/null || true
+    getfacl -cp "$d" 2>/dev/null | grep -qE '^(user|group):[^:]+:' \
+        || setfacl -x m:: "$d" 2>/dev/null || true
+done
+
 if id lcsas-blind >/dev/null 2>&1; then
     pkill -u lcsas-blind || true
     userdel -r lcsas-blind 2>/dev/null || userdel lcsas-blind 2>/dev/null || true
@@ -49,7 +61,7 @@ fi
 # Restore renamed directories and unlock sealed ones.
 [[ -d /mnt/.optical-test ]] && mv /mnt/.optical-test /mnt/cdemu-test 2>/dev/null || true
 [[ -d /scratch/.optical-test ]] && mv /scratch/.optical-test /scratch/cdemu-test 2>/dev/null || true
-for d in /mnt/cdemu-test /mnt/staging /scratch/cdemu-test /scratch/cargo-target; do
+for d in /mnt/cdemu-test /scratch/cdemu-test; do
     [[ -d "$d" ]] && chmod 755 "$d" 2>/dev/null || true
 done
 
