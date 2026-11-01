@@ -270,27 +270,26 @@ show /15.)
 
   DATE        VARIANT              MODEL   SCORE   COST   FIXTURE BUILT FROM
   ──────────  ───────────────────  ──────  ──────  ─────  ──────────────────
-  2026-10-31  single-key           haiku   16/16   $0.18  master d8e8b58
-  2026-10-31  split-2of5           haiku   16/16   $0.18  master d8e8b58
-  2026-10-31  split-key-docs       haiku   16/16   $0.32  master d8e8b58
-  2026-10-31  tier1-missing        haiku   16/16   $0.43  master d8e8b58
-  2026-10-31  tier1-tier2-missing  haiku   16/16   $0.56  master d8e8b58
-  2026-10-31  single-tenant        haiku   16/16   $0.16  master d8e8b58
-  2026-10-31  5-tenant             haiku   16/16   $0.26  master d8e8b58
-  2026-10-31  no-catalog           haiku   16/16   $0.24  master d8e8b58
+  2026-10-31  single-key           haiku   16/16   $0.21  master c3b0250
+  2026-10-31  split-2of5           haiku   16/16   $0.18  master c3b0250
+  2026-10-31  split-key-docs       haiku   16/16   $0.34  master c3b0250
+  2026-10-31  tier1-missing        haiku   16/16   $0.57  master c3b0250
+  2026-10-31  tier1-tier2-missing  haiku   16/16   $0.32  master c3b0250
+  2026-10-31  single-tenant        haiku   16/16   $0.13  master c3b0250
+  2026-10-31  5-tenant             haiku   16/16   $0.43  master c3b0250
+  2026-10-31  no-catalog           haiku   16/16   $0.26  master c3b0250
   (not built) windows              haiku   --/16   --     retires once #476 passes
                                                           (#479)
 
-  The 2026-10-31 rows are the v1.0.0-rc3 sweep (#478): one run per
+  The 2026-10-31 rows are the v1.0.0-rc4 sweep (#478): one run per
   variant via `run_variant.sh <variant>` (split-2of5 is the
   split-key-2of5 variant), each building its own fixture meta disc
   from the tree named above.  COST is the agent's reported API spend.
-  single-key's first run that day scored 13/16: the host's root
+  Every variant scored 16/16 on its first run.  The v1.0.0-rc3 sweep
+  earlier that day (master d8e8b58) also scored 16/16 on every
+  variant; its single-key needed a re-run, because the host's root
   partition, which holds the agent's restore target, filled up
-  mid-restore, and tier 1 stopped with "target directory out of space
-  (errno=28)".  The re-run, with space free, is the row above.  The
-  v1.0.0-rc2 sweep (2026-10-23, master 8b441b6, #480) also scored
-  16/16 on every variant.
+  mid-restore (tier 1: "target directory out of space (errno=28)").
   tier1-missing was first promoted out of XFAIL.list on 2026-06-15,
   after two consecutive 16/16 runs (issue #227).
 

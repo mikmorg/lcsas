@@ -15,13 +15,15 @@ The words in this file follow `CONTEXT.md`, the project glossary.
 
 ## Where things stand
 
-- **Drill `v1.0.0-rc3` (`7a872ab`, tagged 2026-10-31).** On 2026-10-30
-  the owner decided the glossary (`CONTEXT.md`) and the other rc3 fixes
-  land BEFORE any drill, so the drills test the final wording. Don't
-  drill `v1.0.0-rc2` (`b033cb6`). Record the tag and commit of the rc you
-  drilled (rc3, or a later rc after a fix) in every drill result. The
-  tag announcement is on tracker #478.
-- At rc3, all 8 runnable blind-restore variants scored 16/16 (the drill log
+- **Drill `v1.0.0-rc4` (tagged 2026-10-31; the tag and commit are in
+  the announcement on tracker #478).** On 2026-10-30 the owner decided
+  the glossary (`CONTEXT.md`) and the other fixes land BEFORE any drill,
+  so the drills test the final wording. `v1.0.0-rc3` (`7a872ab`) was
+  superseded the same day, before any drill, because the no-age re-burn
+  decision below changes `DISC_CARE.txt` on every disc. Don't drill rc3
+  or rc2. Record the tag and commit of the rc you drilled (rc4, or a
+  later rc after a fix) in every drill result.
+- At rc4, all 8 runnable blind-restore variants scored 16/16 (the drill log
   in `recovery/docs/READINESS_CHECKLIST.txt`), and the lab's clean meta
   disc build passed `lcsas meta verify --strict`.
 - **v1.0.0 final waits on four human/hardware gates** (tracker #478):
@@ -32,14 +34,18 @@ The words in this file follow `CONTEXT.md`, the project glossary.
 - **Decided, not gates:** v1.0 ships without an independent crypto
   review. README and ESTATE_PLANNING disclose it, naming stock restic
   (tier 2b) as the hedge (#477, closed). CI stays on
-  Ubuntu 24.04 for v1.0; #538 stays open for after it.
+  Ubuntu 24.04 for v1.0; #538 stays open for after it. No disc is
+  re-burned because of its age, whatever the media type: discs are read
+  back on the schedules in `docs/workflows/verify-and-audit.md`, and
+  re-burned only after a read error (owner, 2026-10-31).
 - **What "final" means:** when every gate has passed on one rc and the
   owner says go, the lab tags v1.0.0 on master if master's restore path
   (rule 3) is unchanged since that rc; otherwise it cuts another rc and
-  the affected drills run again.
+  the affected drills run again. If the gates pass on rc4, final is rc4
+  plus only the version bump to 1.0.0, with no rc5 (owner, 2026-10-31).
 - Other open issues are lab-side: #479 (retire it once #476 passes),
   #491 (three of its items are in rc3; location remove/rename comes
-  after), #569, #573, #581. #559, #562 and #571 are fixed in rc3.
+  after), #569, #573, #581. #559, #562 and #571 are fixed since rc3.
 
 ## Hard rules
 
