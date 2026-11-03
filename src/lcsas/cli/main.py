@@ -314,6 +314,16 @@ def build_parser() -> argparse.ArgumentParser:
                                       help="Show packs present/missing at a location.")
     loc_status_p.add_argument("name", help="Location name.")
 
+    loc_rename_p = loc_sub.add_parser(
+        "rename", help="Rename a location; its discs and history follow.")
+    loc_rename_p.add_argument("old_name", help="Current location name.")
+    loc_rename_p.add_argument("new_name", help="New location name.")
+
+    loc_remove_p = loc_sub.add_parser(
+        "remove",
+        help="Remove a location that no disc record or history names.")
+    loc_remove_p.add_argument("name", help="Location name.")
+
     loc_move_p = loc_sub.add_parser("move",
                                     help="Record a disc moving between locations.")
     loc_move_p.add_argument("volume_label",
@@ -2257,7 +2267,16 @@ def cmd_location(args: argparse.Namespace) -> int:
             logger.info(f"Added location: {name}")
 
         elif args.location_command == "status":
+            from lcsas.db.locations import get_location
             from lcsas.db.queries import get_packs_at_location, get_packs_missing_at_location
+
+            # An unknown name used to print "0 archived / 0 missing", which
+            # reads as "a location that holds nothing" (#491).
+            try:
+                get_location(conn, args.name)
+            except ValueError as exc:
+                logger.error(f"{exc}. See `lcsas location list`.")
+                return 1
 
             at_loc = get_packs_at_location(conn, args.name)
             missing = get_packs_missing_at_location(conn, args.name)
@@ -2275,6 +2294,28 @@ def cmd_location(args: argparse.Namespace) -> int:
                     total_size = sum(p.size_bytes for p in packs)
                     logger.info(f"    repo={repo}: {len(packs)} packs ({total_size / 1e9:.1f} GB)")
 
+        elif args.location_command == "rename":
+            from lcsas.db.locations import rename_location
+            new_name = sanitize_name(args.new_name, "location name")
+            try:
+                moved = rename_location(conn, args.old_name, new_name)
+            except ValueError as exc:
+                logger.error(str(exc))
+                return 1
+            logger.info(
+                f"Renamed location {args.old_name} → {new_name} "
+                f"({moved} disc, event and volume record(s) updated)."
+            )
+
+        elif args.location_command == "remove":
+            from lcsas.db.locations import delete_location
+            try:
+                delete_location(conn, args.name)
+            except ValueError as exc:
+                logger.error(str(exc))
+                return 1
+            logger.info(f"Removed location: {args.name}")
+
         elif args.location_command == "move":
             from lcsas.db.volume_copies import move_volume_copy
             from lcsas.db.volumes import get_volume_by_label
@@ -2287,7 +2328,9 @@ def cmd_location(args: argparse.Namespace) -> int:
             logger.info(f"Moved {args.volume_label}: {args.from_location} → {args.to_location}")
 
         else:
-            logger.error("Usage: lcsas location {list|add|status|move}")
+            logger.error(
+                "Usage: lcsas location {list|add|status|rename|remove|move}"
+            )
             return 1
     return 0
 

@@ -485,7 +485,12 @@ Key behaviours derived from the schema (the `locations` and
   (`ON DELETE CASCADE` on `volume_copies.volume_id`,
   `src/lcsas/db/schema.py`); location rows
   do **not** cascade — `DELETE FROM locations` with live disc rows will
-  raise an FK error.
+  raise an FK error.  `lcsas location rename <old> <new>` therefore adds
+  the new name, repoints every disc record, audit event and volume in one
+  transaction, and drops the old name; `lcsas location remove <name>`
+  refuses while any disc record or audit event still names the location
+  (#491).  `lcsas location status <unknown>` is an error, not
+  "0 archived / 0 missing".
 
 ---
 
