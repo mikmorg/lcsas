@@ -572,6 +572,7 @@ class BurnOrchestrator:
             injector.write_volume_info(
                 vol, packs=selected_packs,
                 burn_session_position=burn_session_position,
+                repo_names={rid: m.name for rid, m in markers.items()},
             )
             injector.write_restore_instructions()
             injector.write_standalone_restorer()

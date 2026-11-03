@@ -235,6 +235,7 @@ def render_volume_info_txt(
     volume: Volume,
     packs: Sequence[Pack] = (),
     burn_session_position: tuple[int, int] | None = None,
+    repo_names: Mapping[str, str] | None = None,
 ) -> str:
     """The text of a data disc's VOLUME_INFO.txt (#491, UX 010).
 
@@ -246,6 +247,11 @@ def render_volume_info_txt(
     ``burn_session_position`` is ``(N, M)``: this is volume N of the M
     volumes staged together in its burn session.  ``None`` (no burn
     session, as in ``prepare``) leaves the line out.
+
+    ``repo_names`` maps a repo_id to its name (the name in the folder's
+    ``LCSAS_REPO.txt``).  A repository whose name differs from its id is
+    listed as ``name (id)``, with its pack count on the next line, so a
+    UUID folder name can be matched to the set's name.
     """
     from lcsas import __version__
 
@@ -269,10 +275,18 @@ def render_volume_info_txt(
                 count_bytes = per_repo.setdefault(p.repo_id, [0, 0])
                 count_bytes[0] += 1
                 count_bytes[1] += p.size_bytes
-        repo_rows = [
-            f"{repo} ({_packs_text(count)}, {_human_bytes(size)})"
-            for repo, (count, size) in sorted(per_repo.items())
-        ] or ["(not recorded)"]
+        names = repo_names or {}
+        repo_rows: list[str] = []
+        for repo, (count, size) in sorted(per_repo.items()):
+            amount = f"{_packs_text(count)}, {_human_bytes(size)}"
+            name = names.get(repo)
+            if name and name != repo:
+                # A UUID is 36 characters: the amount goes on its own
+                # line to stay inside 72 columns.
+                repo_rows += [f"{name} ({repo})", f"  {amount}"]
+            else:
+                repo_rows.append(f"{repo} ({amount})")
+        repo_rows = repo_rows or ["(not recorded)"]
         repo_text = f"\n{pad}".join(repo_rows)
         total = sum(p.size_bytes for p in packs)
         pack_text = f"{_packs_text(len(packs))}, {_human_bytes(total)} in all"
@@ -456,6 +470,7 @@ class HolographicInjector:
         volume: Volume,
         packs: Sequence[Pack] = (),
         burn_session_position: tuple[int, int] | None = None,
+        repo_names: Mapping[str, str] | None = None,
     ) -> None:
         """Write volume_info.json and VOLUME_INFO.txt to the staging root.
 
@@ -472,6 +487,9 @@ class HolographicInjector:
             burn_session_position: Optional ``(N, M)``: this is volume N
                 of the M volumes in its burn session.  Only the text
                 file shows it.
+            repo_names: Optional ``{repo_id: name}``, the names in the
+                repositories' ``LCSAS_REPO.txt``.  Only the text file
+                shows them.
         """
         # This file (like the disc catalog) is written BEFORE the burn:
         # ``status`` is always STAGING here, and the catalog's
@@ -504,7 +522,9 @@ class HolographicInjector:
             f.flush()
             os.fsync(f.fileno())
 
-        text = render_volume_info_txt(volume, packs, burn_session_position)
+        text = render_volume_info_txt(
+            volume, packs, burn_session_position, repo_names
+        )
         with open(self._root / "VOLUME_INFO.txt", "w", encoding="utf-8") as f:
             f.write(text)
             f.flush()
@@ -641,8 +661,11 @@ HOW TO RESTORE (manual)
            cp "$f" /tmp/cache/data/$prefix/$sha
        done
 
-4. Copy metadata (index, snapshots, keys, config) from any disc:
-       cp -r /tmp/vol1/metadata/REPO_NAME/* /tmp/cache/
+4. Copy metadata (index, snapshots, keys, config) from any disc.
+   Each folder in metadata/ is one repository, named by its ID.  The
+   LCSAS_REPO.txt file in the folder gives the repository's name:
+       grep -H '^name=' /tmp/vol1/metadata/*/LCSAS_REPO.txt
+       cp -r /tmp/vol1/metadata/REPO_ID/* /tmp/cache/
 
 5. Restore:
        rustic restore latest -r /tmp/cache --password-file password.txt --target /output
@@ -651,7 +674,9 @@ DISC CONTENTS
 --------------
 
   data/                     Pack files (encrypted, each named by its SHA-256)
-  metadata/                 Repository index, snapshot, and key files
+  metadata/                 Repository index, snapshot, and key files:
+                            one folder per repository, and an
+                            LCSAS_REPO.txt in each gives its name
   catalog.db                Disc catalog (SQLite), as of this disc's burn
   VOLUME_INFO.txt           This disc's label and contents, in plain text
   volume_info.json          Machine-readable volume identity and manifest

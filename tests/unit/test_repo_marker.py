@@ -447,7 +447,7 @@ def test_prepare_writes_a_marker_for_each_set_of_a_mixed_archive(
 
     Each set's marker gives its config key as the name (the name on the
     estate card, PASSWORD_INFO.txt and the share cards), and the split
-    agrees with PASSWORD_INFO.txt.
+    agrees with PASSWORD_INFO.txt.  VOLUME_INFO.txt names each set.
     """
     mirror = tmp_path / "mirror"
     config = _mixed_config(tmp_path, mirror)
@@ -477,6 +477,27 @@ def test_prepare_writes_a_marker_for_each_set_of_a_mixed_archive(
     info = (root / "PASSWORD_INFO.txt").read_text(encoding="utf-8")
     assert "photos : any 2 of 3 share cards" in info
     assert "Every other repository (documents) has an ordinary password." in info
+
+    volume_info = (root / "VOLUME_INFO.txt").read_text(encoding="utf-8")
+    assert f"Repositories:  photos ({PHOTOS})\n" in volume_info
+    assert f"\n                 documents ({DOCUMENTS})\n" in volume_info
+    assert "  2 packs, " in volume_info
+    assert all(len(line) <= 72 for line in volume_info.splitlines())
+
+
+def test_volume_info_keeps_the_old_row_when_the_name_is_the_id(
+    tmp_path: Path,
+) -> None:
+    from tests.unit.test_staging import _packs, _volume
+
+    root = tmp_path / "staging"
+    root.mkdir()
+    HolographicInjector(root).write_volume_info(
+        _volume(), packs=_packs(), repo_names={"family": "family", "work": "Work"},
+    )
+    text = (root / "VOLUME_INFO.txt").read_text(encoding="utf-8")
+    assert "Repositories:  family (2 packs, 2.5 GB)\n" in text
+    assert "                 Work (work)\n                   1 pack, 1.5 MB\n" in text
 
 
 # ---------------------------------------------------------------------------
