@@ -77,6 +77,11 @@ class _LcsasArgumentParser(argparse.ArgumentParser):
         super().error(message)
 
 
+def _volume_ref(text: str) -> int | str:
+    """argparse type for a volume: a catalog ID (all digits) or a label."""
+    return int(text) if text.isdigit() else text
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser with all subcommands."""
     parser = _LcsasArgumentParser(
@@ -124,7 +129,8 @@ def build_parser() -> argparse.ArgumentParser:
     repo_sub.add_parser("list", help="List registered repositories.")
 
     repo_rm = repo_sub.add_parser("remove", help="Remove a repository.")
-    repo_rm.add_argument("repo_id", help="Repository ID to remove.")
+    repo_rm.add_argument("repo_id", metavar="REPO",
+                         help="Repository name (or its catalog ID) to remove.")
     repo_rm.add_argument("--force", action="store_true",
                          help="Force removal even if packs exist (marks them pruned).")
 
@@ -137,13 +143,16 @@ def build_parser() -> argparse.ArgumentParser:
                     "(unlike `repo remove --force`). Reversible with "
                     "`lcsas repo activate`.",
     )
-    repo_retire.add_argument("repo_id", help="Repository ID to retire.")
+    repo_retire.add_argument("repo_id", metavar="REPO",
+                             help="Repository name (or its catalog ID) to retire.")
 
     repo_activate = repo_sub.add_parser(
         "activate",
         help="Mark a retired repository active again.",
     )
-    repo_activate.add_argument("repo_id", help="Repository ID to activate.")
+    repo_activate.add_argument(
+        "repo_id", metavar="REPO",
+        help="Repository name (or its catalog ID) to activate.")
 
     # --- scan ---
     scan_p = subparsers.add_parser(
@@ -528,8 +537,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # --- consolidate ---
     cons_p = subparsers.add_parser("consolidate", help="Merge volumes into a larger one.")
-    cons_p.add_argument("volume_ids", type=int, nargs="+",
-                        help="Volume IDs to consolidate.")
+    cons_p.add_argument("volume_ids", nargs="+", metavar="VOLUME",
+                        type=_volume_ref,
+                        help="Volume labels (or catalog volume IDs) to "
+                             "consolidate.")
     cons_p.add_argument("--target-media", type=str, default="MDISC100",
                         help="Target media type for consolidated volume.")
     cons_p.add_argument("--execute", action="store_true", default=False,
@@ -1152,7 +1163,7 @@ def _cmd_repo_set_status(
     on its config name without re-opening the catalog.
     """
     from lcsas.db.connection import locked_connection
-    from lcsas.db.repos import get_repo, set_repo_status
+    from lcsas.db.repos import set_repo_status
     from lcsas.db.schema import ensure_schema
 
     db_path = _resolve_db_path(args)
@@ -1163,8 +1174,11 @@ def _cmd_repo_set_status(
     with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
         try:
-            repo = get_repo(conn, args.repo_id)
-        except ValueError:
+            repo = _find_repo(conn, args.repo_id)
+        except ValueError as exc:
+            logger.error(str(exc))
+            return 1, None
+        if repo is None:
             logger.error(f"Repository '{args.repo_id}' not found.")
             return 1, None
         if repo.status == status:
@@ -1186,7 +1200,7 @@ def _warn_if_still_in_config(args: argparse.Namespace, repo_name: str) -> None:
     one (``validate_config`` in config/settings.py makes a missing
     ``mirror_path`` a hard error, and scan/burn/verify/status gate on it
     via ``_validate_config_or_exit``).  So an owner who follows the
-    meta-build key gate's advice — "`lcsas repo retire <id>` if a mirror
+    meta-build key gate's advice — "`lcsas repo retire <repo>` if a mirror
     is gone for good" — gets a clean `meta build` and then walks into a
     hard config error on their next `scan`, because the dead mirror is
     still listed in lcsas.toml.  Close that loop here, where the owner
@@ -1220,7 +1234,8 @@ def cmd_repo_retire(args: argparse.Namespace) -> int:
         logger.info(
             "Its packs and snapshots are untouched — retirement records "
             "that the mirror is gone for good, it does not delete history. "
-            "Re-enable with `lcsas repo activate %s`.", args.repo_id,
+            "Re-enable with `lcsas repo activate %s`.",
+            repo_name or args.repo_id,
         )
         if repo_name:
             _warn_if_still_in_config(args, repo_name)
@@ -1235,11 +1250,60 @@ def cmd_repo_activate(args: argparse.Namespace) -> int:
     return rc
 
 
+def _find_repo(conn: Any, ref: str) -> Any:
+    """The repository *ref* names: its catalog repo_id, else its name (#581).
+
+    The owner thinks in names; ``repo add`` keys the catalog on a UUID.  An
+    exact name match wins over a case-insensitive one.  Returns None when
+    nothing matches; raises ValueError when a name is ambiguous.
+    """
+    from lcsas.db.repos import get_repo, get_repo_by_name, list_repos
+
+    try:
+        return get_repo(conn, ref)
+    except ValueError:
+        pass
+    repo = get_repo_by_name(conn, ref)
+    if repo is not None:
+        return repo
+    matches = [r for r in list_repos(conn) if r.name.lower() == ref.lower()]
+    if len(matches) > 1:
+        raise ValueError(
+            f"'{ref}' matches {len(matches)} repositories; use its catalog ID "
+            "(`lcsas repo list`)."
+        )
+    return matches[0] if matches else None
+
+
+def _resolve_volume_refs(
+    conn: Any, refs: list[int | str],
+) -> list[int] | None:
+    """Catalog volume IDs for *refs*: each a volume label or an ID (#581).
+
+    Logs and returns None if any ref matches no volume.
+    """
+    from lcsas.db.volumes import get_volume_by_id, get_volume_by_label
+
+    ids: list[int] = []
+    for ref in refs:
+        vol = None if isinstance(ref, int) else get_volume_by_label(conn, ref)
+        if vol is None and str(ref).isdigit():
+            try:
+                vol = get_volume_by_id(conn, int(ref))
+            except ValueError:
+                vol = None
+        if vol is None:
+            logger.error(f"Volume '{ref}' not found (give a label or an ID).")
+            return None
+        ids.append(vol.volume_id)
+    return ids
+
+
 def cmd_repo_remove(args: argparse.Namespace) -> int:
     """Remove a repository from the catalog."""
     from lcsas.db.connection import locked_connection
     from lcsas.db.packs import bulk_mark_pruned, list_packs
-    from lcsas.db.repos import delete_repo, get_repo
+    from lcsas.db.repos import delete_repo
     from lcsas.db.schema import ensure_schema
     from lcsas.db.snapshots import delete_snapshots_for_repo
     from lcsas.db.volume_packs import get_volume_ids_for_pack
@@ -1249,8 +1313,11 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
         ensure_schema(conn)
 
         try:
-            repo = get_repo(conn, args.repo_id)
-        except ValueError:
+            repo = _find_repo(conn, args.repo_id)
+        except ValueError as exc:
+            logger.error(str(exc))
+            return 1
+        if repo is None:
             logger.error(f"Repository '{args.repo_id}' not found.")
             return 1
 
@@ -3114,6 +3181,11 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
                          f"Valid types: {valid}")
             return 1
 
+        volume_ids = _resolve_volume_refs(conn, args.volume_ids)
+        if volume_ids is None:
+            return 1
+        args.volume_ids = volume_ids
+
         reserve = config.metadata_reserve_bytes if config else 104_857_600
         merger = VolumeMerger(conn, metadata_reserve_bytes=reserve)
         plan = merger.plan_consolidation(args.volume_ids, media_type)
@@ -4062,7 +4134,7 @@ def cmd_meta_build(args: argparse.Namespace) -> int:
                     "that actually makes the disc restorable."
                 )
                 logger.error(
-                    "  2. `lcsas repo retire <repo_id>` if a mirror is gone "
+                    "  2. `lcsas repo retire <repo>` if a mirror is gone "
                     "for good. Reversible, and it keeps the repo's pack and "
                     "snapshot history (unlike `repo remove --force`, which "
                     "deletes it). Also drop its [repos.<name>] block from "

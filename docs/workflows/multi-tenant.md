@@ -146,15 +146,18 @@ Retirement is **not** removal. `lcsas repo remove --force` deletes the
 repository's packs and snapshots from the catalog — an owner whose data is
 on burned discs must never be pushed toward that verb just to quiet a
 gate. `retire` only flips a flag, keeps every row, and is undone by
-`lcsas repo activate <repo_id>`. Because it destroys nothing, it does
+`lcsas repo activate <repo>`. Because it destroys nothing, it does
 not prompt for confirmation.
 
-**Prerequisites:** A registered repository (UUID from `lcsas repo list`).
+**Prerequisites:** A registered repository, given by its name or its
+catalog ID (the UUID from `lcsas repo list`) (#581).
 
 **Steps:**
 
-1. `lcsas repo retire <repo_id>` — look up by UUID; exit 1 with
-   `Repository '<id>' not found.` if absent.
+1. `lcsas repo retire <repo>` — look up by catalog ID, then by name
+   (exact, then any case; `_find_repo`); exit 1 with
+   `Repository '<repo>' not found.` if absent, or name the clash if
+   two repositories share the name.
    (`cmd_repo_retire` in `src/lcsas/cli/main.py`)
 2. The handler opens a `locked_connection` and runs `ensure_schema`
    first, so a pre-v10 catalog (no `status` column) migrates in place
@@ -165,7 +168,7 @@ not prompt for confirmation.
    retro-apply one through `ALTER TABLE ADD COLUMN` and a migrated
    catalog would silently lack it.
    (`set_repo_status` in `src/lcsas/db/repos.py`)
-4. `lcsas repo activate <repo_id>` reverses it. Re-running either verb
+4. `lcsas repo activate <repo>` reverses it. Re-running either verb
    on a repository already in that state is a no-op that exits 0.
 
 **Expected outcome:** `repo list` shows the new status; packs,
@@ -220,8 +223,8 @@ lives on `volumes` (managed by `consolidate --deprecate`).
 
 **Steps:**
 
-1. `lcsas repo remove <repo_id> [--force]` — look up by UUID; exit 1
-   with `not found` if missing. (`cmd_repo_remove` in `src/lcsas/cli/main.py`)
+1. `lcsas repo remove <repo> [--force]` — look up by catalog ID, then by
+   name (`_find_repo`); exit 1 with `not found` if missing. (`cmd_repo_remove` in `src/lcsas/cli/main.py`)
 2. List active (non-pruned) packs. Refuse without `--force` if any are
    linked to active volumes, then refuse without `--force` if any
    active packs exist at all. (`cmd_repo_remove` in `src/lcsas/cli/main.py`)
