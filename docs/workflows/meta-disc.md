@@ -491,7 +491,7 @@ still on a disc. A repository whose on-disc packs are all pruned still
 needs its keys.
 
 **The way out:** the error names the offending repositories and offers all three
-remedies — mount the mirror and rebuild, `lcsas repo retire <repo_id>`, or
+remedies — mount the mirror and rebuild, `lcsas repo retire <repo>`, or
 `--allow-missing-metadata` for this build. That last one is a **new flag,
 deliberately not `--allow-incomplete`**: `--allow-incomplete` means "dev
 build lacking per-target binaries", it lives habitually in build scripts,
