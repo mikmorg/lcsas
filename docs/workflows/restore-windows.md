@@ -46,8 +46,10 @@ Windows host, which is not guaranteed for the headless-restore
 scenario the script targets); heirs who need it invoke
 `standalone_restorer.py` manually (see [Manual Python fallback](#manual-python-fallback-not-orchestrated-by-restorebat)).
 
-**Split passwords:** if `PASSWORD_INFO.txt` says the password was split
-into SLIP-0039 shares, rebuild it **first** with the bundled
+**Split passwords:** if `PASSWORD_INFO.txt` says the password of the
+repository you are restoring was split into SLIP-0039 shares (an archive
+may split some repositories' passwords and not others), rebuild it
+**first** with the bundled
 combiner before running `restore.bat`. The primary tool is the static
 `bin\x86_64-pc-windows-gnu\lcsas-keyshare.exe <card1> <card2> ...`
 (the .bat prints this hint at the password prompt); the Python fallback

@@ -17,8 +17,9 @@ WHAT YOU NEED
   * All the data discs for the archive (or one disc per distinct LABEL -- the
     repository metadata is copied onto every disc, so any single disc
     carries it).
-  * The repository password, OR (if the password was split) at least K of the
-    N share cards.
+  * The repository password, OR (if that repository's password was split) at
+    least K of its N share cards.  PASSWORD_INFO.txt says, for each
+    repository, whether its password was split.
   * A computer.  A stock restic binary AND a rustic binary are bundled on this
     disc under recovery/bin/<your-machine>/ (restic, restic.exe, rustic) -- so
     you need no internet.  You may also install restic fresh (below) if you'd
