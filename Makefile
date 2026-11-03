@@ -1,4 +1,4 @@
-.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-tier3-qemu test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-split-docs blind-restore-windows blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e meta-gate shellcheck
+.PHONY: dev lint typecheck test-unit test-integration test-e2e test-recovery-hardening test-tier3-qemu test-all gate coverage clean blind-restore blind-restore-x5 blind-restore-variants blind-restore-single-key blind-restore-split-2of5 blind-restore-split-docs blind-restore-mixed-split blind-restore-windows blind-restore-teardown fetch-recovery verify-recovery build-recovery gen-catalogue audit-gate shell-coverage verify-burn-e2e meta-gate shellcheck
 
 # Default target: lint + typecheck + every test level ending with the
 # recovery-hardening gate.  `make` with no args runs the full build
@@ -235,6 +235,20 @@ blind-restore-split-docs:
 	fi
 	sudo -E bash tests/e2e/cdemu_blind_restore/run_variant.sh split-key-docs \
 	    || { echo "FAIL: variant split-key-docs" >&2; $(MAKE) blind-restore-teardown; exit 1; }
+	$(MAKE) blind-restore-teardown
+
+# #587: one archive with alpha's password split 2-of-3 in its own config
+# table and bravo on an ordinary password.  Same prompt and cards as
+# split-key-docs, but the discs (and a config-built meta disc) carry the
+# per-repository split text, which split-key-docs never exercises.
+blind-restore-mixed-split:
+	@if [ "$$LCSAS_BLIND_ACK_COST" != "1" ]; then \
+		echo "ERROR: blind-restore-mixed-split spawns a real Claude sub-agent (real API spend)." >&2; \
+		echo "       Re-invoke with LCSAS_BLIND_ACK_COST=1 to proceed." >&2; \
+		exit 1; \
+	fi
+	sudo -E bash tests/e2e/cdemu_blind_restore/run_variant.sh mixed-split \
+	    || { echo "FAIL: variant mixed-split" >&2; $(MAKE) blind-restore-teardown; exit 1; }
 	$(MAKE) blind-restore-teardown
 
 # UX-08 layer 3: the Windows heir journey end-to-end through

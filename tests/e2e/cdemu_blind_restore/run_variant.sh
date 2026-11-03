@@ -28,6 +28,11 @@
 #                          scenario-only prompt (no command spoon-feed) plus 2
 #                          production -card.txt artifacts, and must derive
 #                          every command from the on-disc instructions.
+#   mixed-split          — #587: one archive, alpha's password split 2-of-3
+#                          in its own config table, bravo on an ordinary
+#                          password.  The discs and a config-built meta disc
+#                          carry the per-repository split text; the agent
+#                          gets split-key-docs' prompt and 2 of the 3 cards.
 #   windows              — UX-08 layer 3: the Windows heir journey driven
 #                          through recovery/scripts/restore.bat under wine,
 #                          with the discs presented as a plain directory
@@ -49,13 +54,14 @@ case "$VARIANT" in
     default|tier1-missing|tier1-tier2-missing) : ;;
     single-tenant|5-tenant|no-catalog) : ;;
     single-key|split-key-2of5|split-key-docs) : ;;
+    mixed-split) : ;;
     windows) : ;;
     *)
         echo "ERROR: unknown variant: $VARIANT" >&2
         echo "       supported: default | tier1-missing | tier1-tier2-missing |" >&2
         echo "                  single-tenant | 5-tenant | no-catalog |" >&2
         echo "                  single-key | split-key-2of5 | split-key-docs |" >&2
-        echo "                  windows" >&2
+        echo "                  mixed-split | windows" >&2
         exit 2
         ;;
 esac
