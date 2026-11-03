@@ -3386,7 +3386,10 @@ class MetaVolumeBuilder:
         """
         from lcsas.staging.metadata import _share_recovery_lines, split_view
 
-        label = f"{config.label_prefix}_META" if config is not None else "LCSAS_META"
+        # The meta disc is always labelled LCSAS_META, whatever the archive's
+        # label_prefix (#588): the estate card and every heir doc name that
+        # label, and docs/workflows/meta-disc.md masters it with -V LCSAS_META.
+        label = "LCSAS_META"
 
         # No LCSAS disc is bootable (the live-boot path was dropped per
         # BOOT-01/BOOT-07), so the no-OS route must never claim the disc
