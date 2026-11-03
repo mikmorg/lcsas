@@ -95,10 +95,16 @@ def cmd_name(name: str, repo_id: str) -> str:
     """The ``name_cmd=`` value: *name* with only ``[A-Za-z0-9 ._+,-]``.
 
     Every other character, non-ASCII included, becomes ``_``, and the
-    result is cut to 64 characters.  It is never empty: an empty result
-    falls back to the (equally restricted) repo_id.
+    result is cut to 64 characters.  A result with no ASCII letter or
+    digit (empty, or only ``_`` and punctuation, as for a name written
+    wholly in another script) falls back to the equally restricted
+    repo_id: ``restore.bat``'s menu shows only ``name_cmd``, and two
+    sets shown as ``__`` could not be told apart.
     """
-    return _cmd_safe(name) or _cmd_safe(repo_id)
+    safe = _cmd_safe(name)
+    if any(ch.isascii() and ch.isalnum() for ch in safe):
+        return safe
+    return _cmd_safe(repo_id)
 
 
 def _check_repo_id(repo_id: str) -> None:

@@ -144,7 +144,9 @@ def test_non_ascii_name_is_written_as_utf8(tmp_path: Path) -> None:
         ("line1\nline2\r\n\tend", "line1 line2   end", "line1 line2   end"),
         (" \x00 padded \x1b[31m ", "padded  [31m", "padded  _31m"),
         ("x\u2028y\u0085z\x9b\x7f", "x y z", "x y z"),
-        ("%%%", "%%%", "___"),
+        # No ASCII letter or digit left: the id instead (see below).
+        ("%%%", "%%%", PHOTOS),
+        ("写真", "写真", PHOTOS),
     ],
 )
 def test_names_are_sanitised(raw: str, name: str, name_cmd: str) -> None:
@@ -163,7 +165,7 @@ def test_long_names_are_cut() -> None:
     assert marker.name_cmd == "A" * 64
     wide = make_repo_marker(PHOTOS, config_name="é" * 200)
     assert wide.name == "é" * 128
-    assert wide.name_cmd == "_" * 64
+    assert wide.name_cmd == PHOTOS
     # A cut that ends on a space does not leave a trailing space.
     spaced = make_repo_marker(PHOTOS, config_name="a" * 63 + " " + "b" * 136)
     assert spaced.name_cmd == "a" * 63
@@ -186,6 +188,25 @@ def test_name_cmd_is_never_empty() -> None:
     assert cmd_name("", PHOTOS) == PHOTOS
     assert cmd_name("   ", "family") == "family"
     assert display_name("\n\t \x00") == ""
+
+
+def test_name_cmd_without_a_letter_or_digit_falls_back_to_the_id() -> None:
+    """restore.bat's menu shows only name_cmd: "__" and "___" say nothing.
+
+    Two sets named wholly in another script must still look different
+    there, so a name_cmd with no ASCII letter or digit becomes the id.
+    """
+    photos = make_repo_marker(PHOTOS, config_name="写真")
+    diary = make_repo_marker(DOCUMENTS, config_name="日本語")
+    assert (photos.name, photos.name_cmd) == ("写真", PHOTOS)
+    assert (diary.name, diary.name_cmd) == ("日本語", DOCUMENTS)
+    for only_marks in ("-.-", "+ , +", "%&!"):
+        assert cmd_name(only_marks, "family") == "family"
+    # One letter or digit is enough to keep the name.
+    assert cmd_name("写真 2001", PHOTOS) == "__ 2001"
+    assert cmd_name("é1", PHOTOS) == "_1"
+    # An id with no letter or digit is still used: never empty.
+    assert cmd_name("写真", "記録") == "__"
 
 
 def test_bad_ids_and_names_are_refused(tmp_path: Path) -> None:
