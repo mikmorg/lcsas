@@ -83,6 +83,15 @@ LEAK_DIRS = (Path("/mnt/staging"), Path("/scratch/cargo-target"))
 # 2.x writes a ~26 KB config + session files and the small root partition can
 # ENOSPC mid-write, corrupting the config.  See the seeding block below.
 AGENT_CLAUDE_CFG = Path("/scratch/lcsas-blind-claude-cfg")
+# The fixture, the vault and the agent home keep their data on /scratch:
+# "/" is small and reserved for the system (machine policy), and every
+# variant rewrites about 3 GB of ISOs there.  The paths stay where they
+# were, because the agent's world must look the same and verify.sh (never
+# edited) defaults to them and pattern-matches /var/lib/disc-vault and
+# /home/lcsas-blind/.  FIXTURE and VAULT are symlinks into SCRATCH_STORE;
+# AGENT_HOME is a bind mount, so `pwd -P` and `realpath ~` still print
+# /home/lcsas-blind.  A reboot drops the bind mount; setup.py remounts it.
+SCRATCH_STORE = Path("/scratch/lcsas-blind-store")
 
 # File sizing: each TEST_TINY volume has ~1.35 MB usable after the
 # holographic-metadata reserve (#142: TEST_TINY = 2 MB, reserve ≈ 700 KB
@@ -133,6 +142,61 @@ def sh(cmd: list[str] | str, **kw) -> subprocess.CompletedProcess:
         display = " ".join(shlex.quote(c) for c in cmd)
     print(f"  $ {display}", flush=True)
     return subprocess.run(cmd, check=True, **kw)
+
+
+def _cdemu_gid() -> int:
+    return pwd.getpwnam(os.environ.get("CDEMU_USER", "mikmorg")).pw_gid
+
+
+def _empty_dir(path: Path) -> None:
+    for child in path.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def _make_scratch_store() -> None:
+    # root:cdemu 0710: cdemu_user can traverse to the vault's ISOs,
+    # lcsas-blind cannot enter or list.
+    SCRATCH_STORE.mkdir(exist_ok=True)
+    os.chown(SCRATCH_STORE, 0, _cdemu_gid())
+    os.chmod(SCRATCH_STORE, 0o710)
+
+
+def _scratch_backed_dir(path: Path, name: str) -> None:
+    """Make *path* a symlink to an empty SCRATCH_STORE/<name>.
+
+    A real directory at *path* (left by a harness that kept its data on
+    "/") is removed first.  chown/chmod on *path* then act on the target.
+    """
+    _make_scratch_store()
+    if path.is_symlink():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+    backing = SCRATCH_STORE / name
+    if backing.exists():
+        shutil.rmtree(backing)
+    backing.mkdir()
+    path.symlink_to(backing)
+
+
+def _bind_agent_home() -> None:
+    """Back AGENT_HOME with SCRATCH_STORE/home through a bind mount.
+
+    Reuses an existing mount (every run_variant.sh call runs setup.py),
+    so mounts never stack.
+    """
+    if subprocess.run(["mountpoint", "-q", str(AGENT_HOME)],
+                      check=False).returncode == 0:
+        return
+    _make_scratch_store()
+    backing = SCRATCH_STORE / "home"
+    backing.mkdir(exist_ok=True)
+    AGENT_HOME.mkdir(parents=True, exist_ok=True)
+    _empty_dir(AGENT_HOME)  # skel files useradd -m put on "/"
+    sh(["mount", "--bind", str(backing), str(AGENT_HOME)])
 
 
 def require_root() -> None:
@@ -434,12 +498,9 @@ def _apply_data_disc_variant_mutations(staging_path: Path) -> None:
 
 
 def _vault_isos(iso_files: list[Path], meta_iso: Path) -> dict[str, Path]:
-    cdemu_user = os.environ.get("CDEMU_USER", "mikmorg")
-    cdemu_gid = pwd.getpwnam(cdemu_user).pw_gid
+    cdemu_gid = _cdemu_gid()
 
-    if VAULT.exists():
-        shutil.rmtree(VAULT)
-    VAULT.mkdir(parents=True)
+    _scratch_backed_dir(VAULT, "vault")
     # Directory is root:cdemu_user 0710 — cdemu_user can traverse to read
     # the ISOs, lcsas-blind cannot enter or list. Files are root:cdemu_user
     # 0640 as defense in depth.
@@ -621,14 +682,8 @@ def _create_agent_user(labels: list[str]) -> None:
     except KeyError:
         sh(["useradd", "-m", "-s", "/bin/bash", AGENT_USER])
 
-    if AGENT_HOME.exists():
-        for child in AGENT_HOME.iterdir():
-            if child.is_dir() and not child.is_symlink():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
-    else:
-        AGENT_HOME.mkdir(parents=True)
+    _bind_agent_home()
+    _empty_dir(AGENT_HOME)
 
     (AGENT_HOME / "restored").mkdir()
 
@@ -810,8 +865,7 @@ def main() -> int:
     require_binaries()
 
     banner("1. clean fixture root")
-    if FIXTURE.exists():
-        shutil.rmtree(FIXTURE)
+    _scratch_backed_dir(FIXTURE, "fixture")
     for d in (SOURCES, MIRROR, STAGING, SECRETS, ISO_OUT, META_STAGE):
         d.mkdir(parents=True, exist_ok=True)
 
