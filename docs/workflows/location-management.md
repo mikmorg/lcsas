@@ -485,7 +485,12 @@ Key behaviours derived from the schema (the `locations` and
   (`ON DELETE CASCADE` on `volume_copies.volume_id`,
   `src/lcsas/db/schema.py`); location rows
   do **not** cascade — `DELETE FROM locations` with live disc rows will
-  raise an FK error.
+  raise an FK error.  `lcsas location rename <old> <new>` therefore adds
+  the new name, repoints every disc record, audit event and volume in one
+  transaction, and drops the old name; `lcsas location remove <name>`
+  refuses while any disc record or audit event still names the location
+  (#491).  `lcsas location status <unknown>` is an error, not
+  "0 archived / 0 missing".
 
 ---
 
@@ -500,12 +505,13 @@ operating LCSAS in a multi-location production setup:
    transaction as the `volume_copies` update, so audit consumers see
    every physical move.
 
-2. **No `location rename` or `location remove`.**
-   `delete_location()` exists in the catalog layer
-   (`src/lcsas/db/locations.py`) but is not wired into the CLI. There
-   is no rename operation at all; because `locations.name` is the FK
-   target, a rename would have to cascade through `volume_copies` and
-   `volume_events` manually.
+2. **`location rename` and `location remove` (resolved, #491).**
+   `rename_location()` and `delete_location()`
+   (`src/lcsas/db/locations.py`) back the two CLI commands. Because
+   `locations.name` is the FK target with no cascade, a rename repoints
+   `volume_copies`, `volume_events` and `volumes` itself, in one
+   transaction; a remove refuses while any disc record or audit event
+   still names the location.
 
 3. **`location status` doesn't check that the location exists.**
    The `"status"` branch of `cmd_location()` passes an arbitrary name
