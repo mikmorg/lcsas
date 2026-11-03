@@ -22,9 +22,24 @@ done
 
 bash /home/mikmorg/git/lcsas/scripts/cdemu_drive.sh unload >/dev/null 2>&1 || true
 
-rm -rf /var/lib/disc-vault
+# Stop the agent before unmounting its home: a process whose cwd is in ~
+# keeps the bind mount busy.
+if id lcsas-blind >/dev/null 2>&1; then
+    pkill -u lcsas-blind 2>/dev/null || true
+    sleep 1
+    pkill -9 -u lcsas-blind 2>/dev/null || true
+fi
+# setup.py bind-mounts the agent home from /scratch/lcsas-blind-store.
+# Unmount it before the user and its home are deleted below; otherwise
+# that would empty the /scratch copy and fail to remove the mountpoint.
+if mountpoint -q /home/lcsas-blind; then
+    umount /home/lcsas-blind 2>/dev/null || umount -l /home/lcsas-blind
+fi
+
+rm -rf /var/lib/disc-vault          # a symlink into the store (older: a dir)
 rm -rf /opt/disc-robot
-rm -rf /var/lib/lcsas-blind-test
+rm -rf /var/lib/lcsas-blind-test    # a symlink into the store (older: a dir)
+rm -rf /scratch/lcsas-blind-store   # fixture, vault and agent home data
 rm -rf /scratch/lcsas-blind-claude-cfg  # agent CLAUDE_CONFIG_DIR (off "/")
 rm -rf /home/lcsas-blind/.claude-cfg     # legacy on-"/" location, pre-fix
 rm -rf /mnt/lcsas-data/blind-test  # legacy v1 location, harmless if absent
