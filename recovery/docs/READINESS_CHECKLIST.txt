@@ -293,7 +293,8 @@ show /15.)
   one archive holds a password split 2-of-3 and an ordinary one, and it
   is the first variant whose discs carry the split text itself.
   tier1-tier2-missing cost more than at rc4 ($0.32) because tier 3
-  asked for a disc about once per restored file, as it did at rc4, and
+  asked for a disc about once per restored file, as it did at rc4 (it
+  has no pack cache, #602), and
   this agent answered each prompt with a separate command.
 
   The v1.0.0-rc4 sweep (2026-10-31, master c3b0250) and the rc3 sweep
