@@ -1464,3 +1464,21 @@ class TestKeyCard:
     def test_key_card_router_lists_card(self, capsys) -> None:
         assert main(["key"]) == 1
         assert "card" in capsys.readouterr().out
+
+
+class TestPerRepoDefaults:
+    """#587: `key split` takes K/N from the repository's own table."""
+
+    def test_repo_table_kn_is_the_default(self, tmp_path: Path, capsys) -> None:
+        cfg = _config_file(tmp_path)  # [repos.alpha] is the last table
+        with cfg.open("a") as f:
+            f.write("key_threshold = 3\nkey_shares = 4\n")
+        out = tmp_path / "shares"
+        assert main([
+            "--config", str(cfg),
+            "key", "split", "--repo", "alpha", "--out", str(out),
+        ]) == 0
+        assert len(_share_mnemonic_files(out)) == 4
+        captured = capsys.readouterr()
+        assert "under [repos.alpha] in lcsas.toml" in captured.out
+        assert "key_threshold = 3" in captured.out

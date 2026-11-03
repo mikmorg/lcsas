@@ -3334,13 +3334,46 @@ class MetaVolumeBuilder:
 
         injector = HolographicInjector(self._output)
         injector.write_disc_care(self._config)
+        recorded = self._recorded_splits()
         if self._config is not None:
-            injector.write_key_info(self._config)
+            injector.write_key_info(self._config, recorded=recorded)
             injector.write_config_summary(self._config)
-        text = self._render_meta_start_here(self._config)
+        text = self._render_meta_start_here(self._config, recorded)
         _write_and_sync(self._output / "START_HERE.txt", text)
 
-    def _render_meta_start_here(self, config: LCSASConfig | None) -> str:
+    def _recorded_splits(self) -> dict[str, tuple[int, int]]:
+        """Each configured repository's recorded split K/N, by name (KEY-08).
+
+        Read from the catalog the build was given, so the meta disc prints
+        the split actually performed rather than the config's K/N (#573,
+        #587).  Empty without a config or a catalog.
+        """
+        if self._config is None or self._catalog_db_path is None:
+            return {}
+        src = Path(self._catalog_db_path)
+        if not src.is_file():
+            return {}
+        import sqlite3
+
+        from lcsas.db.key_escrow import recorded_splits_by_name
+
+        conn = sqlite3.connect(f"file:{src}?mode=ro&immutable=1", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            return recorded_splits_by_name(conn, {
+                name: repo.mirror_path
+                for name, repo in self._config.repositories.items()
+            })
+        except sqlite3.DatabaseError:  # pragma: no cover - not a catalog
+            return {}
+        finally:
+            conn.close()
+
+    def _render_meta_start_here(
+        self,
+        config: LCSASConfig | None,
+        recorded: dict[str, tuple[int, int]] | None = None,
+    ) -> str:
         """Render the meta disc's START_HERE.txt text (UX-05).
 
         The document always carries the per-OS dispatch (Windows /
@@ -3351,7 +3384,7 @@ class MetaVolumeBuilder:
         Every file the text references must exist on the meta disc
         (guarded by tests/unit/test_meta_builder.py).
         """
-        from lcsas.staging.metadata import _share_recovery_lines
+        from lcsas.staging.metadata import _share_recovery_lines, split_view
 
         label = f"{config.label_prefix}_META" if config is not None else "LCSAS_META"
 
@@ -3407,12 +3440,12 @@ class MetaVolumeBuilder:
                 "  * PASSWORD_INFO.txt on this disc lists which password\n"
                 "    unlocks which repository.\n"
             )
-            if config.key_split:
+            if split_view(config, recorded=recorded) is not None:
                 # Same share-combining pre-step text as PASSWORD_INFO.txt — one
                 # source so the doc-contract gates cover both.
-                split_block = (
-                    "\n" + "\n".join(_share_recovery_lines(config)).rstrip() + "\n"
-                )
+                split_block = "\n" + "\n".join(
+                    _share_recovery_lines(config, recorded=recorded)
+                ).rstrip() + "\n"
             if config.technical_contact:
                 contact_block = (
                     "  The archive owner suggested this technical contact:\n"
