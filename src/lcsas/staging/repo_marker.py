@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from lcsas.config.settings import LCSASConfig
-from lcsas.db.key_escrow import get_split_for_repo
+from lcsas.db.key_escrow import can_record_splits, get_split_for_repo
 from lcsas.db.models import KeyEscrow
 
 _logger = logging.getLogger(__name__)
@@ -157,8 +157,9 @@ def make_repo_marker(
     Name: the config key that maps this repo_id, else the catalog's
     ``repositories.name``, else the id; the first that is not empty once
     sanitised.  Split: the recorded split (``key_escrow``) wins, with its
-    SLIP-39 id; else the config's ``(split, K, N)`` for this repository
-    (no split id: no record means no cards were recorded); else none.
+    SLIP-39 id; else *config_split*, the config's ``(split, K, N)`` for
+    this repository, with no split id; else none.  Pass *config_split*
+    only when the catalog cannot record a split (see :func:`repo_markers`).
 
     Raises ValueError if *repo_id* is empty or holds a control character.
     """
@@ -284,15 +285,27 @@ def repo_markers(
     *conn* is the catalog, opened with ``sqlite3.Row`` rows (the split
     reader needs them).  A catalog without ``key_escrow`` or without a
     ``name`` column is fine.  *config_names* maps repo_id to config key
-    (``config_names_by_repo_id`` or the burn's own join).  The config's
-    split for a repository is looked up by that key, else by the catalog
-    name, else by the id: the key the burn's drift guard uses.
+    (``config_names_by_repo_id`` or the burn's own join).
+
+    Split: a catalog that can record splits (it has ``key_escrow``,
+    schema v9+) decides alone.  A record gives ``K-of-N`` and the split
+    id; no record gives ``split=none``, even when the config says the
+    password is split: no record means no share cards were made (the
+    burn's drift guard), and the guard checks only the sets with packs
+    on the volume, while every set gets a marker.  Only a catalog with
+    no ``key_escrow`` table (before v9) falls back to the config's split,
+    looked up by the config key, else the catalog name, else the id: the
+    key the drift guard uses.
 
     A repository whose id cannot be written into a marker is left out,
     with a warning: restore works without the marker.
     """
     names = config_names or {}
     catalog = _catalog_repo_names(conn)
+    try:
+        records_known = can_record_splits(conn)
+    except sqlite3.DatabaseError:
+        records_known = False
     out: dict[str, RepoMarker] = {}
     for repo_id in repo_ids:
         catalog_name = catalog.get(repo_id)
@@ -303,7 +316,7 @@ def repo_markers(
             record = None
         config_split = (
             config.repo_split(key or catalog_name or repo_id)
-            if config is not None else None
+            if config is not None and not records_known else None
         )
         try:
             out[repo_id] = make_repo_marker(

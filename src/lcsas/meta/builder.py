@@ -2984,9 +2984,10 @@ class MetaVolumeBuilder:
 
         Names: the config key that maps the repo_id when the build has a
         config, else the catalog name, else the id.  Split: the catalog's
-        recorded split, else the config's, else none.  A hand-rolled
-        catalog with no ``name`` column or no ``key_escrow`` table still
-        gets a marker (name = id).
+        recorded split, else none; only a catalog with no ``key_escrow``
+        table (before schema v9) takes the config's split instead.  A
+        hand-rolled catalog with no ``name`` column or no ``key_escrow``
+        table still gets a marker (name = id).
         """
         from lcsas.db.key_escrow import config_names_by_repo_id
         from lcsas.staging.repo_marker import repo_markers

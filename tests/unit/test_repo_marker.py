@@ -26,6 +26,7 @@ The real rustic, restic and tier-1 binaries are checked in
 from __future__ import annotations
 
 import codecs
+import dataclasses
 import hashlib
 import re
 import sqlite3
@@ -351,7 +352,32 @@ def test_repo_markers_from_a_mixed_catalog(tmp_path: Path) -> None:
     assert bare[DOCUMENTS].name_cmd == "Scans _ Papers"
 
 
+def test_no_record_on_a_catalog_that_records_splits_means_no_split(
+    tmp_path: Path,
+) -> None:
+    """The config says split, but the catalog (v9+) records none.
+
+    No record means no share cards were made: the drift guard's rule.
+    The guard checks only the sets with packs on the volume, so the
+    marker must not take the config's word for the others.
+    """
+    mirror = tmp_path / "mirror"
+    config = _mixed_config(tmp_path, mirror)
+    conn = get_memory_connection()
+    create_all(conn)
+    register_repo(conn, PHOTOS, "Family Photos", str(mirror / "photos"))
+    names = config_names_by_repo_id(conn, {
+        k: r.mirror_path for k, r in config.repositories.items()
+    })
+    assert config.repo_split(names[PHOTOS]) == (True, 2, 3)
+
+    markers = repo_markers(conn, [PHOTOS], config=config, config_names=names)
+    assert markers[PHOTOS] == RepoMarker(PHOTOS, "photos", None, None)
+    assert "\nsplit=none\nsplit_id=\n" in render_repo_marker(markers[PHOTOS])
+
+
 def test_repo_markers_from_a_catalog_without_names_or_records(tmp_path: Path) -> None:
+    """A catalog with no key_escrow table (before v9): the config decides."""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute("CREATE TABLE repositories (repo_id TEXT, mirror_path TEXT)")
@@ -485,6 +511,49 @@ def test_prepare_writes_a_marker_for_each_set_of_a_mixed_archive(
     assert all(len(line) <= 72 for line in volume_info.splitlines())
 
 
+def test_prepare_marks_a_set_with_no_recorded_split_as_not_split(
+    tmp_path: Path,
+) -> None:
+    """A third set: key_split=true in the config, no record, no packs.
+
+    The drift guard checks only the sets with packs on this volume, so
+    the burn goes ahead without --allow-escrow-drift.  Its marker must
+    say split=none: no record means no share cards were made.
+    """
+    videos = "5d1e7a3c-2f8b-4c69-a0e4-9b3d6f2c8e17"
+    mirror = tmp_path / "mirror"
+    base = _mixed_config(tmp_path, mirror)
+    config = dataclasses.replace(base, repositories={
+        **base.repositories,
+        "videos": RepositoryConfig(
+            name="videos", mirror_path=mirror / "videos",
+            key_split=True, key_threshold=3, key_shares=5,
+        ),
+    })
+    config.staging_path.mkdir(parents=True)
+    config.db_path.write_bytes(b"sqlite_placeholder")
+    conn = get_memory_connection()
+    _mixed_catalog(conn, mirror)
+    register_repo(conn, videos, "videos", str(mirror / "videos"))
+    _mirror_repo(mirror / "videos")
+    _seed_repo_packs(conn, PHOTOS, mirror / "photos", 1)
+    _seed_repo_packs(conn, DOCUMENTS, mirror / "documents", 10)
+
+    orch = BurnOrchestrator(
+        config, conn, MagicMock(), MagicMock(), prompt=NullOperatorPrompt(),
+    )
+    root = orch.prepare(media_type=MediaType.TEST_TINY).staging_path
+
+    fields = read_repo_marker(root / "metadata" / videos)
+    assert fields is not None
+    assert (fields["name"], fields["split"], fields["split_id"]) == (
+        "videos", "none", "",
+    )
+    photos = read_repo_marker(root / "metadata" / PHOTOS)
+    assert photos is not None
+    assert (photos["split"], photos["split_id"]) == ("2-of-3", "04242")
+
+
 def test_volume_info_keeps_the_old_row_when_the_name_is_the_id(
     tmp_path: Path,
 ) -> None:
@@ -551,6 +620,29 @@ def test_meta_disc_with_catalog_but_no_config(tmp_path: Path) -> None:
     assert (photos["name"], photos["split"]) == ("Family Photos", "2-of-3")
     assert (documents["name"], documents["name_cmd"], documents["split"]) == (
         "Scans & Papers", "Scans _ Papers", "none",
+    )
+
+
+def test_meta_disc_config_split_without_a_record_is_not_split(
+    tmp_path: Path,
+) -> None:
+    """A v9+ catalog with no record for photos: the config's split is ignored.
+
+    The meta disc has no drift guard, so this is the only check.
+    """
+    mirror = tmp_path / "mirror"
+    _mirror_repo(mirror / "photos")
+    db = tmp_path / "catalog.db"
+    conn = get_connection(db)
+    create_all(conn)
+    register_repo(conn, PHOTOS, "Family Photos", str(mirror / "photos"))
+    conn.close()
+
+    meta = _bundle(tmp_path, db, _mixed_config(tmp_path, mirror))
+    fields = read_repo_marker(meta / PHOTOS)
+    assert fields is not None
+    assert (fields["name"], fields["split"], fields["split_id"]) == (
+        "photos", "none", "",
     )
 
 
