@@ -1692,8 +1692,8 @@ class TestMetaStartHereVariants:
         out, builder = meta_tree
         content = (out / "START_HERE.txt").read_text(encoding="utf-8")
         bare = builder._render_meta_start_here(None)
-        meta_label = f"{builder._config.label_prefix}_META"
-        for text, label in ((content, meta_label), (bare, "LCSAS_META")):
+        # Always LCSAS_META, whatever the label_prefix (#588).
+        for text, label in ((content, "LCSAS_META"), (bare, "LCSAS_META")):
             assert "IF THE COMPUTER REFUSES TO RUN IT" in text
             for cmd in (
                 f"cp -R /Volumes/{label} ~/lcsas-meta",
@@ -2873,3 +2873,27 @@ class TestBundlerEdgeBranches:
     def test_find_installed_package_rejects_unlisted(self):
         with pytest.raises(ValueError, match="not in the allowed bundle list"):
             ToolBundler._find_installed_package("requests")
+
+
+def test_meta_label_is_lcsas_meta_whatever_the_prefix(tmp_path):
+    """#588: with label_prefix = "DRILL" the estate card and the meta
+    disc's START_HERE.txt must name only LCSAS_META for the meta disc."""
+    import re
+    from dataclasses import replace
+
+    from lcsas.cli.main import _estate_card_text
+
+    config = replace(_survivability_config(tmp_path), label_prefix="DRILL")
+    start_here = MetaVolumeBuilder(
+        tmp_path / "meta", config=config,
+    )._render_meta_start_here(config)
+    card = _estate_card_text(
+        owner="O", description="D", technical_contact="T",
+        repositories=["family"], key_storage_hints="H",
+        key_split=True, key_threshold=2, key_shares=5,
+        label_prefix="DRILL", disc_count=2, card_date="2026-11-03",
+    )
+    for text in (start_here, card):
+        labels = set(re.findall(r"\b[A-Z0-9]+_META\b", text))
+        assert labels == {"LCSAS_META"}, labels
+    assert "labeled DRILL_*" in card  # data discs keep the prefix
