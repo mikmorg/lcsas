@@ -270,26 +270,37 @@ show /15.)
 
   DATE        VARIANT              MODEL   SCORE   COST   FIXTURE BUILT FROM
   ──────────  ───────────────────  ──────  ──────  ─────  ──────────────────
-  2026-10-31  single-key           haiku   16/16   $0.21  master c3b0250
-  2026-10-31  split-2of5           haiku   16/16   $0.18  master c3b0250
-  2026-10-31  split-key-docs       haiku   16/16   $0.34  master c3b0250
-  2026-10-31  tier1-missing        haiku   16/16   $0.57  master c3b0250
-  2026-10-31  tier1-tier2-missing  haiku   16/16   $0.32  master c3b0250
-  2026-10-31  single-tenant        haiku   16/16   $0.13  master c3b0250
-  2026-10-31  5-tenant             haiku   16/16   $0.43  master c3b0250
-  2026-10-31  no-catalog           haiku   16/16   $0.26  master c3b0250
+  2026-11-03  single-key           haiku   16/16   $0.11  master 19bd409
+  2026-11-03  split-2of5           haiku   16/16   $0.11  master 19bd409
+  2026-11-03  split-key-docs       haiku   16/16   $0.16  master 19bd409
+  2026-11-03  tier1-missing        haiku   16/16   $0.51  master 19bd409
+  2026-11-03  tier1-tier2-missing  haiku   16/16   $0.94  master 19bd409
+  2026-11-03  single-tenant        haiku   16/16   $0.07  master 19bd409
+  2026-11-03  5-tenant             haiku   16/16   $0.33  master 19bd409
+  2026-11-03  no-catalog           haiku   16/16   $0.33  master 19bd409
+  2026-11-03  mixed-split          haiku   16/16   $0.29  master 19bd409
+  2026-11-03  split-key-docs (2)   haiku   16/16   $0.28  master 19bd409
   (not built) windows              haiku   --/16   --     retires once #476 passes
                                                           (#479)
 
-  The 2026-10-31 rows are the v1.0.0-rc4 sweep (#478): one run per
+  The 2026-11-03 rows are the v1.0.0-rc5 sweep (#478): one run per
   variant via `run_variant.sh <variant>` (split-2of5 is the
   split-key-2of5 variant), each building its own fixture meta disc
   from the tree named above.  COST is the agent's reported API spend.
-  Every variant scored 16/16 on its first run.  The v1.0.0-rc3 sweep
-  earlier that day (master d8e8b58) also scored 16/16 on every
-  variant; its single-key needed a re-run, because the host's root
-  partition, which holds the agent's restore target, filled up
-  mid-restore (tier 1: "target directory out of space (errno=28)").
+  Every variant scored 16/16 on its first run.  split-key-docs ran
+  twice, as VARIANT_FLAKE_NOTES.md requires before a change to the
+  split-password text ships.  mixed-split is new in rc5 (#587, #597):
+  one archive holds a password split 2-of-3 and an ordinary one, and it
+  is the first variant whose discs carry the split text itself.
+  tier1-tier2-missing cost more than at rc4 ($0.32) because tier 3
+  asked for a disc about once per restored file, as it did at rc4, and
+  this agent answered each prompt with a separate command.
+
+  The v1.0.0-rc4 sweep (2026-10-31, master c3b0250) and the rc3 sweep
+  earlier that day (master d8e8b58) also scored 16/16 on every variant;
+  rc3's single-key needed a re-run, because the host's root partition,
+  which holds the agent's restore target, filled up mid-restore
+  (tier 1: "target directory out of space (errno=28)").
   tier1-missing was first promoted out of XFAIL.list on 2026-06-15,
   after two consecutive 16/16 runs (issue #227).
 
