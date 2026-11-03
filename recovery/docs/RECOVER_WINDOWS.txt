@@ -171,14 +171,17 @@ newline.
 SHARE CARDS (SPLIT PASSWORDS) -- rebuild the password first
 ────────────────────────────────────────────────────────────────────
 
-Some archives split the password into N shares, one per share card
-(any K of them rebuild it; fewer than K reveal nothing).
-PASSWORD_INFO.txt on any disc states whether the password was split,
-and the K and N.  If it was, rebuild the password BEFORE running
+Some archives split a repository's password into N shares, one per
+share card (any K of them rebuild it; fewer than K reveal nothing).
+An archive may split some repositories' passwords and not others.
+PASSWORD_INFO.txt on any disc states, for each repository, whether
+its password was split, and the K and N.  If the password of the
+repository you are restoring was split, rebuild it BEFORE running
 restore.bat:
 
-  STEP 1.  Gather any K share cards (printed pages headed
-           "LCSAS KEY SHARE" or "SHARE CARD").  If you only have
+  STEP 1.  Gather any K share cards of that repository (printed
+           pages headed "LCSAS KEY SHARE" or "SHARE CARD"; each card
+           names its repository).  If you only have
            paper, retype each card into its own text file, e.g.
            C:\Users\me\card1.txt and C:\Users\me\card2.txt.
 

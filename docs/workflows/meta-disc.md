@@ -174,6 +174,10 @@ subcommand. `--output` / `-o` is required.
 5. The output directory is then handed to `xorriso` (out of band; not
    part of `meta build` itself) to master into an ISO image, optionally
    with DVDisaster RS03 ECC, and burned the same way as data discs.
+   The volume label is always `LCSAS_META`, whatever the archive's
+   `label_prefix`: the estate card, `START_HERE.txt` and every restore
+   guide tell the heir to look for that label (#588).
+   `xorriso -as mkisofs -r -J -joliet-long -iso-level 3 -V LCSAS_META -o meta.iso <output>`
 
 **Expected outcome:** `args.output` contains a complete meta disc tree,
 no `.incomplete` marker, and a `volume_info.json` whose `type` field is
@@ -601,8 +605,9 @@ newly-added repositories exist) updated repository metadata.
    `lcsas/src/` from the current project root and re-renders all in-source
    script constants. Then run `lcsas meta verify --strict /tmp/meta-NEW`,
    which must pass.
-4. Master the directory into an ISO image with `xorriso` (optionally
-   RS03-ECC it) and burn it the same way as a data disc.
+4. Master the directory into an ISO image with `xorriso`, volume label
+   `LCSAS_META` (`-V LCSAS_META`; see the build steps above), optionally
+   RS03-ECC it, and burn it the same way as a data disc.
 5. Nothing is recorded in the catalog: the meta disc is not a volume, and
    `meta build` never writes to the master catalog.
 6. Keep the previous meta disc(s) with the other discs: an heir uses the

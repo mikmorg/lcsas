@@ -274,15 +274,18 @@ in turn; you only need ONE valid password.
 
 SHARE CARDS (SPLIT PASSWORDS)
 
-Some archives split the repository password into N shares, each on
+Some archives split a repository's password into N shares, each on
 its own share card (any K of them rebuild it; fewer than K reveal
-nothing).  PASSWORD_INFO.txt on any disc states whether this
-archive's password was split and the K and N in effect.  If it was,
-rebuild the password BEFORE running the normal cascade:
+nothing).  An archive may split some repositories' passwords and not
+others.  PASSWORD_INFO.txt on any disc states, for each repository,
+whether its password was split and the K and N in effect.  If the
+password of the repository you are restoring was split, rebuild it
+BEFORE running the normal cascade:
 
-  1. Gather any K share cards (printed pages with "SHARE CARD" in
-     the title -- older cards are titled "LCSAS KEY SHARE" -- or the
-     share text files).
+  1. Gather any K share cards of that repository (printed pages with
+     "SHARE CARD" in the title -- older cards are titled "LCSAS KEY
+     SHARE" -- or the share text files).  Each card names its
+     repository.
 
   2. On the meta disc, run the static combiner for your machine:
 
