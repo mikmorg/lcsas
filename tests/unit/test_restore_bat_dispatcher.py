@@ -236,3 +236,103 @@ def test_restore_bat_takes_the_relocation_sentinel_out_of_the_callers_env():
     assert "setlocal enabledelayedexpansion" not in code[1:], (
         "a second setlocal would bring the caller's LCSAS_RELOCATED back"
     )
+
+
+def _code(content: str) -> list[str]:
+    return _code_lines(content, ("REM", "@"))
+
+
+def test_restore_bat_searches_the_meta_disc_letter_after_a_swap():
+    """#604: on a machine with ONE optical drive every data disc goes into
+    the META disc's own letter.  Up to rc5 restore.bat skipped that letter
+    (SKIP_L), so tier 1 never looked there again.  It must now be passed
+    as --pack-search, and as --mount-parent once the pack cache exists,
+    as the very same string as --meta-disc (tier 1 compares them byte for
+    byte; --meta-disc makes it skip the letter only while the META disc
+    is in).  Functional proof: test_restore_bat_single_drive_wine.py and
+    windows-e2e's single-drive leg."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    assert "SKIP_L" not in content, "the meta-letter skip is back (#604)"
+    assert 'if defined LCSAS_RELOCATED set "DISC_LETTERS= %LCSAS_RELOCATED%"' in code
+    assert 'if defined LCSAS_RELOCATED set "META_DISC_ARG=--meta-disc %LCSAS_RELOCATED%"' in code
+    loop = code.index("for %%D in (%DISC_LETTERS%) do (")
+    assert code[loop + 1] == 'set "PACK_SEARCH_ARGS=!PACK_SEARCH_ARGS! --pack-search %%D"'
+    assert code[loop + 2] == (
+        'if defined CACHE_OK set "PACK_SEARCH_ARGS=!PACK_SEARCH_ARGS! --mount-parent %%D"'
+    )
+    # --mount-parent nowhere else: without a cache tier 1 would open a
+    # disc's catalog.db in place and hold the disc (#610).
+    mounts = [ln for ln in code if "--mount-parent" in ln]
+    assert mounts == [code[loop + 2]], mounts
+    # The letters stay unquoted: "X:\" would end in \" (#615).
+    assert not any('"--pack-search' in ln or '--pack-search "' in ln for ln in code)
+
+
+def test_restore_bat_sets_up_the_pack_cache_before_tier1():
+    """#610: Windows tier 1 ran without LCSAS_PACK_CACHE_DIR, so discs went
+    back and forth.  restore.bat must set it (unless the caller did) and
+    make the folder itself before tier 1 starts."""
+    content = RESTORE_BAT.read_text()
+    tier1 = content.index("----- Tier 1:")
+    head = content[:tier1]
+    assert 'set "LCSAS_PACK_CACHE_DIR=%TOOLS%\\pack-cache"' in head
+    assert 'mkdir "%LCSAS_PACK_CACHE_DIR%"' in head
+    assert 'if exist "%LCSAS_PACK_CACHE_DIR%\\" set "CACHE_OK=1"' in head
+
+
+def test_restore_bat_passes_a_local_copy_of_the_catalog():
+    """#610: a catalog.db passed in place on a data disc stays open for the
+    whole restore and holds that disc in the drive.  Tier 1 gets a copy
+    in TOOLS, never a disc path."""
+    code = _code(RESTORE_BAT.read_text())
+    args = [ln for ln in code if "CATALOG_ARG=--catalog" in ln]
+    assert args == ['set "CATALOG_ARG=--catalog "!CATALOG_COPY!""'], args
+    assert 'set "CATALOG_COPY=%TOOLS%\\catalog.db"' in code
+    assert 'copy /Y "%CATALOG_PICK%" "%CATALOG_COPY%" >nul 2>nul' in code
+
+
+def test_restore_bat_passes_lcsas_interactive_through():
+    """LCSAS_INTERACTIVE reaches tier 1 as --interactive, so a harness that
+    feeds the disc prompt through a pipe can make tier 1 ask."""
+    content = RESTORE_BAT.read_text()
+    for value in ("on", "off", "auto"):
+        assert f'set "INTERACTIVE_ARG=--interactive {value}"' in content
+    tier1 = content[content.index("----- Tier 1:"):content.index("----- Tier 2:")]
+    assert "%INTERACTIVE_ARG%" in tier1
+
+
+def test_restore_bat_stops_without_tier2_for_a_metadata_only_set():
+    """#615: after 'q' at the disc prompt (or any other tier-1 failure but
+    77) restore.bat fell into tier 2, which reads packs only from the
+    set's own data\\ folder.  A set under metadata\\<id>\\ has none, so
+    tier 2 could only fail and then say "no working recovery method".
+    The script must stop there instead, from a top-level label (an
+    `exit /b` inside the tier-1 block does not reach `cmd /c`, #384)."""
+    content = RESTORE_BAT.read_text()
+    tier1 = content[content.index("----- Tier 1:"):content.index("----- Tier 2:")]
+    stop = tier1.index('if not exist "%REPO%\\data\\" goto :tier1_stopped')
+    assert stop < tier1.index("trying tier 2"), "the guard must come first"
+    code = _code(content)
+    label = code.index(":tier1_stopped")
+    assert label > code.index(":wrong_password"), "must sit at top level, after the exits"
+    body = code[label:]
+    assert 'del "%PWFILE%" 2>nul' in body
+    assert body[-1] == "exit /b %RC%", body
+
+
+def test_restore_bat_target_cannot_end_in_a_backslash():
+    """#615: --target "E:\\" ends in \\", which the program reads as a
+    quote, so the folder swallowed every later argument; and a TARGET
+    left in the environment won over the default on an empty answer."""
+    code = _code(RESTORE_BAT.read_text())
+    ask = code.index('set /p "TARGET=Restore to which folder? [%DEFAULT_TARGET%]: "')
+    assert code[ask - 1] == 'set "TARGET="'
+    after = code[ask:ask + 16]
+    assert 'if defined TARGET set "TARGET=!TARGET:"=!"' in after
+    assert 'set "TARGET=!TARGET:~0,-1!"' in after
+    # A drive root: the script keeps E:\, the programs get E:\.
+    assert 'set "TARGET_ARG=!TARGET!."' in after
+    targets = [ln for ln in code if ln.startswith('"%BIN%"')
+               and ("--target " in ln or "restore latest " in ln)]
+    assert targets and all('"%TARGET_ARG%"' in ln for ln in targets), targets

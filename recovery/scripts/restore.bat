@@ -11,6 +11,12 @@ REM
 REM   Tier 1.  bin\<arch>\lcsas-restore.exe   (prebuilt, static)
 REM   Tier 2.  bin\<arch>\rustic-static.exe   (vendored cross-check)
 REM
+REM Tier 2 runs only for a backup set whose folder holds its own data\
+REM (a set copied whole to one folder).  A set read from the discs keeps
+REM its packs on the data discs, which only tier 1 can ask for one at a
+REM time, so when tier 1 stops there the script stops too: it keeps what
+REM is restored and says how to carry on (#615).
+REM
 REM If both tiers are missing or fail, the script exits non-zero with a
 REM clear error including a manual-restore hint.  The tier-3 Python
 REM reader ships on the disc but is NOT orchestrated from
@@ -399,8 +405,30 @@ echo Recovery root: %RECOVERY%
 echo Repo:          %REPO%
 echo Architecture:  %ARCH%
 echo.
+REM Clear TARGET first: `set /p` keeps the old value when the answer is
+REM empty, so a TARGET left in the caller's environment would silently
+REM win over the default (#615).
+set "TARGET="
 set /p "TARGET=Restore to which folder? [%DEFAULT_TARGET%]: "
-if "%TARGET%"=="" set "TARGET=%DEFAULT_TARGET%"
+REM Drop any quotes typed around the folder, then any trailing backslash.
+REM The programs get the folder as --target "<folder>", and a backslash
+REM right before the closing quote escapes it: the program then reads the
+REM rest of the line as part of the folder name (#615).  For a drive
+REM root such as E:\ the script itself keeps E:\ (E: alone would mean
+REM "the current folder on E:"), and the programs get TARGET_ARG, E:\.
+REM which is the same root with no backslash at the end.
+if defined TARGET set "TARGET=!TARGET:"=!"
+:strip_target
+if defined TARGET if "!TARGET:~-1!"=="\" (
+    set "TARGET=!TARGET:~0,-1!"
+    goto :strip_target
+)
+if not defined TARGET set "TARGET=%DEFAULT_TARGET%"
+set "TARGET_ARG=!TARGET!"
+if "!TARGET:~-1!"==":" (
+    set "TARGET=!TARGET!\"
+    set "TARGET_ARG=!TARGET!."
+)
 
 REM ----- Non-empty-target guard [UX-07] -----------------------------
 REM Warn BEFORE the password prompt when %TARGET% already holds the
@@ -491,39 +519,105 @@ set "LCSAS_PW="
 REM Ensure the temp file is cleaned up no matter how we exit.
 REM (CMD has no real trap; we delete after each branch.)
 
-REM ----- Auto-discover other mounted discs ---------------------------
-REM When packs are split across multiple LCSAS volumes, the heir may
-REM have several discs mounted simultaneously.  Scan drive letters D-Z
-REM and pass each one that contains a data\ subdir as --pack-search.
-REM Skip the meta disc drive (LCSAS_RELOCATED) so a single-drive
-REM restore can free the drive for data discs.
+REM ----- Pack cache and the local copy of the catalog (#610) ---------
+REM TOOLS is where this run keeps its own files.  Relocated, it is the
+REM recovery folder of the copy in %TEMP%, which the copy on the disc
+REM deletes when the run ends; otherwise it is the recovery folder this
+REM script runs from.  Change only this line to move them.
+for %%I in ("%RECOVERY%") do set "TOOLS=%%~fI"
 
-set "PACK_SEARCH_ARGS="
-for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
-    set "SKIP_L="
-    if defined LCSAS_RELOCATED if /i "%%L:\"=="%LCSAS_RELOCATED%" set "SKIP_L=1"
-    if not defined SKIP_L (
-        if exist "%%L:\data\" (
-            if /i not "%%L:\"=="%RECOVERY%" set "PACK_SEARCH_ARGS=!PACK_SEARCH_ARGS! --pack-search %%L:\"
-        )
-        if exist "%%L:\repo\data\" (
-            if /i not "%%L:\repo"=="%REPO%" set "PACK_SEARCH_ARGS=!PACK_SEARCH_ARGS! --pack-search %%L:\repo"
-        )
-    )
+REM The pack cache: the first time tier 1 finds a pack on a disc, it
+REM copies every pack on that disc into this folder, so each disc is
+REM asked for about once instead of once per file.  restore.bat makes
+REM the folder itself and checks it is there: tier 1 can only make the
+REM last folder of the path.  (cmd cannot set a variable to an empty
+REM value, so unlike restore.sh there is no "LCSAS_PACK_CACHE_DIR="
+REM switch to turn the cache off; set it to another folder instead.)
+set "CACHE_OK="
+set "CACHE_SET_HERE="
+if not defined LCSAS_PACK_CACHE_DIR (
+    set "LCSAS_PACK_CACHE_DIR=%TOOLS%\pack-cache"
+    set "CACHE_SET_HERE=1"
+)
+if not exist "%LCSAS_PACK_CACHE_DIR%\" mkdir "%LCSAS_PACK_CACHE_DIR%" 2>nul
+if exist "%LCSAS_PACK_CACHE_DIR%\" set "CACHE_OK=1"
+if not defined CACHE_OK (
+    echo [lcsas-restore] cannot create the pack cache folder !LCSAS_PACK_CACHE_DIR!
+    echo                 so a disc may be asked for more than once.
+    if defined CACHE_SET_HERE set "LCSAS_PACK_CACHE_DIR="
+    set "CACHE_SET_HERE="
 )
 
-REM Pass --meta-disc through so lcsas-restore.exe excludes the disc
-REM from its own search list and drops cwd out of it before prompts.
+REM ----- Where tier 1 looks for discs (#604) --------------------------
+REM Tier 1 looks for packs in each --pack-search folder.  At each disc
+REM prompt it also re-reads each --mount-parent folder, to find the disc
+REM just put in and the catalog.db on it.  It goes back to the same drive
+REM letters after every swap, so it gets:
+REM
+REM  * The META disc's own letter (LCSAS_RELOCATED), always.  With ONE
+REM    optical drive that is the only drive: every data disc goes into
+REM    it.  --meta-disc makes tier 1 skip the letter only while the META
+REM    disc is still in it (it checks for recovery\scripts\restore.sh,
+REM    #143).  Up to rc5 the letter was left out, so a one-drive restore
+REM    could never find a data disc (#604).  The very same string goes
+REM    to --meta-disc, --pack-search and --mount-parent: tier 1 compares
+REM    them byte for byte, so "d:\" would not match "D:\".
+REM  * Every other letter that holds a data disc at launch: one with a
+REM    data\ folder, or with a volume_info.json and no
+REM    recovery\scripts\restore.bat (that is a META disc).
+REM
+REM The letters go unquoted: "D:\" would end in \" and the program would
+REM read it as a quote and swallow the rest of the line.
+REM
+REM --mount-parent only once the pack cache folder exists.  Without the
+REM cache, tier 1 opens a catalog.db it finds there in place, and that
+REM disc cannot come out of the drive until the restore ends.
+set "DISC_LETTERS="
+if defined LCSAS_RELOCATED set "DISC_LETTERS= %LCSAS_RELOCATED%"
+set "PACK_SEARCH_ARGS="
+for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
+    set "ADD_L="
+    if exist "%%L:\data\" set "ADD_L=1"
+    if exist "%%L:\volume_info.json" if not exist "%%L:\recovery\scripts\restore.bat" set "ADD_L=1"
+    if defined LCSAS_RELOCATED if /i "%%L:\"=="%LCSAS_RELOCATED%" set "ADD_L="
+    if defined ADD_L set "DISC_LETTERS=!DISC_LETTERS! %%L:\"
+    REM Old discs kept the packs under repo\data\.
+    if exist "%%L:\repo\data\" set "PACK_SEARCH_ARGS=!PACK_SEARCH_ARGS! --pack-search %%L:\repo"
+)
+if not defined DISC_LETTERS goto :letters_done
+for %%D in (%DISC_LETTERS%) do (
+    set "PACK_SEARCH_ARGS=!PACK_SEARCH_ARGS! --pack-search %%D"
+    if defined CACHE_OK set "PACK_SEARCH_ARGS=!PACK_SEARCH_ARGS! --mount-parent %%D"
+)
+echo [lcsas-restore] drives searched for discs:%DISC_LETTERS%
+:letters_done
+
+REM --meta-disc: tier 1 skips the META disc's letter while the META disc
+REM is in it, and moves its own working folder off the disc before it
+REM asks for one, so the disc can come out.
 set "META_DISC_ARG="
 if defined LCSAS_RELOCATED set "META_DISC_ARG=--meta-disc %LCSAS_RELOCATED%"
 
-REM Optional --catalog if a catalog.db is present.
+REM LCSAS_INTERACTIVE=on/off/auto is passed to tier 1 as --interactive.
+REM Its own default, auto, asks at the disc prompt only when it reads
+REM from a console; a test that feeds the answers through a pipe sets on.
+set "INTERACTIVE_ARG="
+if /i "!LCSAS_INTERACTIVE!"=="on"   set "INTERACTIVE_ARG=--interactive on"
+if /i "!LCSAS_INTERACTIVE!"=="off"  set "INTERACTIVE_ARG=--interactive off"
+if /i "!LCSAS_INTERACTIVE!"=="auto" set "INTERACTIVE_ARG=--interactive auto"
+
+REM Optional --catalog if a catalog.db is present.  It lets the disc
+REM prompt name the disc that holds a pack.
 REM The meta disc deliberately carries NO catalog.db (it would always
 REM be stale at burn time).  Scan every drive letter for catalog.db and
 REM keep the LAST one found (highest drive letter), not the newest:
 REM plain cmd has no locale-proof way to compare file times (#482).  It
 REM only feeds the disc-swap hints; with an older catalog, hints for
 REM packs burned after it say "no record", and the restore still works.
+REM Tier 1 gets a COPY in TOOLS, never the file on a disc: it keeps the
+REM catalog open until it ends, and an open file holds the disc in the
+REM drive (#610).  `copy` keeps the file's date, which tier 1 compares
+REM with any catalog it finds later.
 set "CATALOG_ARG="
 set "CATALOG_PICK="
 if exist "%RECOVERY%\catalog.db" set "CATALOG_PICK=%RECOVERY%\catalog.db"
@@ -533,24 +627,39 @@ for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
         set "CATALOG_PICK=%%L:\catalog.db"
     )
 )
-if defined CATALOG_PICK (
-    set "CATALOG_ARG=--catalog "!CATALOG_PICK!""
-    echo [lcsas-restore] using catalog !CATALOG_PICK!
+if not defined CATALOG_PICK goto :catalog_done
+for %%I in ("%CATALOG_PICK%") do set "CATALOG_PICK=%%~fI"
+set "CATALOG_COPY=%TOOLS%\catalog.db"
+if /i "%CATALOG_PICK%"=="%CATALOG_COPY%" goto :catalog_copied
+del "%CATALOG_COPY%" >nul 2>nul
+copy /Y "%CATALOG_PICK%" "%CATALOG_COPY%" >nul 2>nul
+:catalog_copied
+if not exist "%CATALOG_COPY%" (
+    echo [lcsas-restore] could not copy !CATALOG_PICK! to !TOOLS!,
+    echo                 so the disc prompts will not name the discs.
+    goto :catalog_done
 )
+set "CATALOG_ARG=--catalog "!CATALOG_COPY!""
+echo [lcsas-restore] using catalog !CATALOG_PICK! (a copy in !TOOLS!)
+:catalog_done
 
 REM ----- Tier 1: prebuilt lcsas-restore.exe -------------------------
 set "BIN=%RECOVERY%\bin\%ARCH%\lcsas-restore.exe"
 if exist "%BIN%" (
     echo.
     echo [tier 1] running !BIN!
-    "%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --target "%TARGET%" --snapshot latest %PACK_SEARCH_ARGS% %CATALOG_ARG% %META_DISC_ARG%
+    "%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --target "%TARGET_ARG%" --snapshot latest %PACK_SEARCH_ARGS% %CATALOG_ARG% %META_DISC_ARG% %INTERACTIVE_ARG%
     set "RC=!ERRORLEVEL!"
     REM %PWFILE% is deleted only on the TERMINAL branches below -- the
     REM fall-through to tier 2 needs it alive or rustic-static.exe gets
     REM a --password-file pointing at nothing and can never succeed.
-    REM Tier 2 and the no-tier epilogue each do their own del.
+    REM Tier 2, the no-tier epilogue and :tier1_stopped each do their
+    REM own del.
     if !RC! equ 0 (
         del "%PWFILE%" 2>nul
+        REM The pack cache is no longer needed.  Only remove a folder
+        REM this script chose; one named in LCSAS_PACK_CACHE_DIR stays.
+        if defined CACHE_SET_HERE rmdir /s /q "!LCSAS_PACK_CACHE_DIR!" 2>nul
         echo.
         echo ============================================================
         echo  Restore complete.  Files restored to: !TARGET!
@@ -575,6 +684,14 @@ if exist "%BIN%" (
         pause
         goto :wrong_password
     )
+    REM Any other exit, including 'q' at the disc prompt.  Tier 2,
+    REM rustic-static, reads packs only from the data\ folder of the
+    REM backup set.  A set found under a metadata\ folder has none: its
+    REM packs are on the data discs.  Tier 2 could only fail there, and
+    REM then report "no working recovery method" although tier 1 ran
+    REM fine (#615).  Stop instead and keep what is restored, as
+    REM restore.sh does (#227).
+    if not exist "%REPO%\data\" goto :tier1_stopped
     echo [tier 1] failed with exit code !RC!; trying tier 2...
 )
 
@@ -583,7 +700,7 @@ set "BIN=%RECOVERY%\bin\%ARCH%\rustic-static.exe"
 if exist "%BIN%" (
     echo.
     echo [tier 2] running !BIN!
-    "%BIN%" --repository "%REPO%" --password-file "%PWFILE%" restore latest "%TARGET%"
+    "%BIN%" --repository "%REPO%" --password-file "%PWFILE%" restore latest "%TARGET_ARG%"
     set "RC=!ERRORLEVEL!"
     del "%PWFILE%" 2>nul
     if !RC! equ 0 (
@@ -620,3 +737,24 @@ REM reliably propagates to `cmd /c` (issue #384).  Normal flow stops at
 REM the `exit /b 1` above and never falls into this label.
 :wrong_password
 exit /b 77
+
+REM Reached only via `goto` from tier 1 when it stopped with any exit
+REM code but 0 or 77 and the backup set has no data\ folder, so tier 2
+REM cannot run (#615).  At top level for the same reason as
+REM :wrong_password.  Tier 1 never removes a file it has restored, and
+REM a new run skips every file that is already complete (#92).
+:tier1_stopped
+del "%PWFILE%" 2>nul
+echo.
+echo ============================================================
+echo  The restore stopped before it finished ^(code %RC%^).
+echo.
+echo  The files restored so far are kept in:
+echo    %TARGET%
+echo.
+echo  To carry on, run restore.bat again from the META disc and
+echo  choose the same folder.  It skips the files that are already
+echo  there and goes on from where it stopped.
+echo ============================================================
+pause
+exit /b %RC%
