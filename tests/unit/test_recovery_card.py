@@ -219,3 +219,27 @@ def test_card_commands_pass_restore_sh_flag_contract() -> None:
     for _lineno, cmd in found:
         for flag in _FLAG_TOKEN.findall(cmd):
             assert flag in accepted, f"phantom restore.sh flag on card: {flag}"
+
+
+def test_cli_no_burned_disc_leaves_the_count_blank(tmp_path: Path) -> None:
+    """A card printed before the first burn must not say "0 disc(s)"."""
+    from lcsas.constants import STATUS_STAGING
+    from lcsas.db.connection import get_connection
+    from lcsas.db.schema import ensure_schema
+    from lcsas.db.volumes import create_volume
+
+    cfg = _write_config(tmp_path, split=False)
+    conn = get_connection(tmp_path / "archive.db")
+    ensure_schema(conn)
+    create_volume(
+        conn, "SMITH_001", "uuid-1", "BD25", 25_000_000_000,
+        status=STATUS_STAGING,
+    )
+    conn.commit()
+    conn.close()
+
+    out = tmp_path / "card.txt"
+    assert main(["--config", str(cfg), "estate", "card", "--output", str(out)]) == 0
+    card = out.read_text(encoding="utf-8")
+    assert "0 disc(s)" not in card
+    assert "______________________________  (labeled SMITH_*)" in card

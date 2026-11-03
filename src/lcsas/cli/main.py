@@ -5998,10 +5998,13 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
                 STATUS_DEPRECATED,
             }
             lost_ids = get_lost_volume_ids(conn)
+            # None, not 0, before the first burn: a card printed then (or
+            # from staged drill discs) leaves the fill-in blank instead of
+            # telling the heir there are "0 disc(s)".
             disc_count = sum(
                 1 for v in list_volumes(conn)
                 if v.status in burned and v.volume_id not in lost_ids
-            )
+            ) or None
             # KEY-08 / #573: print the split actually performed, not the
             # config's K/N.
             from lcsas.db.key_escrow import recorded_splits_by_name
