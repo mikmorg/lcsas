@@ -505,9 +505,13 @@ def test_prepare_writes_a_marker_for_each_set_of_a_mixed_archive(
     assert "Every other repository (documents) has an ordinary password." in info
 
     volume_info = (root / "VOLUME_INFO.txt").read_text(encoding="utf-8")
-    assert f"Repositories:  photos ({PHOTOS})\n" in volume_info
-    assert f"\n                 documents ({DOCUMENTS})\n" in volume_info
-    assert "  2 packs, " in volume_info
+    pad = " " * 17
+    assert (
+        f"  Repositories:  photos\n{pad}  ID {PHOTOS}\n{pad}  2 packs, "
+    ) in volume_info
+    assert (
+        f"\n{pad}documents\n{pad}  ID {DOCUMENTS}\n{pad}  2 packs, "
+    ) in volume_info
     assert all(len(line) <= 72 for line in volume_info.splitlines())
 
 
@@ -566,7 +570,52 @@ def test_volume_info_keeps_the_old_row_when_the_name_is_the_id(
     )
     text = (root / "VOLUME_INFO.txt").read_text(encoding="utf-8")
     assert "Repositories:  family (2 packs, 2.5 GB)\n" in text
-    assert "                 Work (work)\n                   1 pack, 1.5 MB\n" in text
+    assert (
+        "                 Work\n"
+        "                   ID work\n"
+        "                   1 pack, 1.5 MB\n"
+    ) in text
+
+
+def test_volume_info_long_names_stay_inside_72_columns() -> None:
+    """Names up to the marker's 128 characters, with UUID ids."""
+    from lcsas.db.models import Pack
+    from lcsas.staging.metadata import render_volume_info_txt
+    from tests.unit.test_staging import _volume
+
+    letters = "5d1e7a3c-2f8b-4c69-a0e4-9b3d6f2c8e17"
+    names = {
+        PHOTOS: make_repo_marker(PHOTOS, config_name="Family Photos 2001").name,
+        DOCUMENTS: make_repo_marker(
+            DOCUMENTS, config_name="Family Photos and Papers " * 10
+        ).name,
+        letters: make_repo_marker(letters, config_name="L" * 200).name,
+    }
+    assert len(names[DOCUMENTS]) == len(names[letters]) == 128
+    packs = [
+        Pack(pack_id=i, sha256=f"{i:064x}", size_bytes=1_500_000,
+             repo_id=repo_id, is_pruned=False, created_at="")
+        for i, repo_id in enumerate(names, start=1)
+    ]
+
+    text = render_volume_info_txt(_volume(), packs, repo_names=names)
+    lines = text.splitlines()
+    assert all(len(line) <= 72 for line in lines), max(lines, key=len)
+    pad = " " * 17
+    for repo_id, name in names.items():
+        id_at = lines.index(f"{pad}  ID {repo_id}")
+        assert lines[id_at + 1] == f"{pad}  1 pack, 1.5 MB"
+        # The name's lines sit just above its ID line, and hold it all.
+        start = next(
+            i for i in range(id_at - 1, -1, -1)
+            if not lines[i].startswith(f"{pad}  ")
+        )
+        parts = [
+            lines[start].removeprefix("  Repositories:  ").strip(),
+            *(line.strip() for line in lines[start + 1:id_at]),
+        ]
+        joiner = "" if " " not in name else " "
+        assert joiner.join(parts) == name
 
 
 # ---------------------------------------------------------------------------

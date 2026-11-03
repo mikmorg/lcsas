@@ -250,8 +250,9 @@ def render_volume_info_txt(
 
     ``repo_names`` maps a repo_id to its name (the name in the folder's
     ``LCSAS_REPO.txt``).  A repository whose name differs from its id is
-    listed as ``name (id)``, with its pack count on the next line, so a
-    UUID folder name can be matched to the set's name.
+    listed by name, then ``ID <id>`` and its pack count on lines of
+    their own, so a UUID folder name can be matched to the set's name
+    and every line stays inside 72 columns.
     """
     from lcsas import __version__
 
@@ -279,11 +280,16 @@ def render_volume_info_txt(
         repo_rows: list[str] = []
         for repo, (count, size) in sorted(per_repo.items()):
             amount = f"{_packs_text(count)}, {_human_bytes(size)}"
-            name = names.get(repo)
-            if name and name != repo:
-                # A UUID is 36 characters: the amount goes on its own
-                # line to stay inside 72 columns.
-                repo_rows += [f"{name} ({repo})", f"  {amount}"]
+            name = (names.get(repo) or "").strip()
+            # The name (wrapped: it may be 128 characters), then the ID
+            # (a UUID is 36) and the amount on lines of their own, so
+            # every line stays inside 72 columns.
+            name_lines = textwrap.wrap(
+                name, width=72 - len(pad), subsequent_indent="  ",
+                break_on_hyphens=False,
+            ) if name != repo else []
+            if name_lines:
+                repo_rows += [*name_lines, f"  ID {repo}", f"  {amount}"]
             else:
                 repo_rows.append(f"{repo} ({amount})")
         repo_rows = repo_rows or ["(not recorded)"]
