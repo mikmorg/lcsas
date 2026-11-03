@@ -101,14 +101,19 @@ theft.
   Register the repository with `lcsas repo add` first. If the catalog does
   not list the repository, `key split` stops before it writes any share.
 
-- [ ] **Mark the archive as split** so the discs print share instructions —
-  set `key_split = true` (and your `key_threshold` / `key_shares`) under
-  `[defaults]` in `lcsas.toml` (see §4). When split, every disc's
-  `PASSWORD_INFO.txt` and `START_HERE.txt` tell the heir to **first reconstruct
-  the password, then restore normally**.
+- [ ] **Mark the password as split** so the discs print share instructions —
+  set `key_split = true` (and your `key_threshold` / `key_shares`) in
+  `lcsas.toml` (see §4): under `[defaults]` when every repository's password
+  is split, or in the repository's own `[repos.<name>]` table when only some
+  are. One archive can hold split and ordinary passwords side by side
+  (#587). When split, every disc's `PASSWORD_INFO.txt` and `START_HERE.txt`
+  tell the heir to **first reconstruct the password, then restore
+  normally**; in a mixed archive they name each split repository with its
+  own K/N, and say which repositories have an ordinary password.
 
-  > **Drift guard (KEY-08).** `lcsas stage` aborts if `key_split` / `key_threshold`
-  > / `key_shares` in `lcsas.toml` disagree with the recorded split — so discs
+  > **Drift guard (KEY-08).** `lcsas stage` aborts if a repository's `key_split` /
+  > `key_threshold` / `key_shares` in `lcsas.toml` (its own table, else
+  > `[defaults]`) disagree with its recorded split — so discs
   > can never print instructions that contradict the real split (e.g. config
   > says "any 2" while the split was 3-of-5, or `key_split=true` with no split
   > ever performed). The disc's K/N is taken from the recorded split when one
@@ -242,10 +247,27 @@ key_threshold = 2      # K: share cards needed to reconstruct
 key_shares = 5         # N: share cards produced
 ```
 
+If only some repositories' passwords are split, leave `[defaults]` alone and
+set the same three keys in each split repository's own table instead; a key
+set there overrides `[defaults]` for that repository only:
+
+```toml
+[repos.photos]
+mirror_path = "/mnt/mirror/photos"
+password_file = "/root/keys/photos.key"
+key_split = true       # only this repository's password is split
+key_threshold = 2
+key_shares = 3
+
+[repos.documents]      # no key_split: an ordinary password
+mirror_path = "/mnt/mirror/documents"
+password_file = "/root/keys/documents.key"
+```
+
 This information is automatically written to `START_HERE.txt` on every
 disc you burn — so your heirs can read it even without this document.
-When `key_split = true`, each disc's `START_HERE.txt` and `PASSWORD_INFO.txt`
-also include the two-step share-reconstruction pre-step.
+When a password is split, each disc's `START_HERE.txt` and
+`PASSWORD_INFO.txt` also include the two-step share-reconstruction pre-step.
 
 ### 5. Periodic Maintenance
 

@@ -13,7 +13,8 @@ import re
 import shutil
 import sqlite3
 import textwrap
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -44,33 +45,131 @@ _METADATA_FILES = ["config"]
 MIN_HOLOGRAPHIC_RESERVE_BYTES = 700_000
 
 
+@dataclass(frozen=True)
+class SplitView:
+    """Which repositories' passwords are split into share cards (#587).
+
+    ``uniform`` is the ``(K, N)`` when the whole archive is split alike —
+    every configured repository split with the same K/N, or a config with
+    no repositories and ``key_split`` set.  The heir text is then exactly
+    the archive-wide text it always was.  Otherwise (``uniform`` None) the
+    text names each split repository with its own K/N (``by_repo``) and the
+    repositories with an ordinary password (``unsplit``).
+    """
+
+    by_repo: dict[str, tuple[int, int]]
+    unsplit: tuple[str, ...]
+    uniform: tuple[int, int] | None
+
+
+def split_view(
+    config: LCSASConfig,
+    escrow_override: tuple[int, int] | None = None,
+    recorded: Mapping[str, tuple[int, int]] | None = None,
+) -> SplitView | None:
+    """The archive's password splits, or None when no password is split.
+
+    A repository is split when ``config.repo_split`` says so (its
+    ``[repos.<name>]`` table, else ``[defaults]``).  Its K/N come from
+    *recorded* (the catalog's split records by repository name: KEY-08, the
+    split actually performed), else *escrow_override* (one recorded K/N for
+    the whole archive), else the config.
+    """
+    if not config.repositories:
+        if not config.key_split:
+            return None
+        kn = escrow_override if escrow_override is not None else (
+            config.key_threshold, config.key_shares
+        )
+        return SplitView(by_repo={}, unsplit=(), uniform=kn)
+    recorded = recorded or {}
+    by_repo: dict[str, tuple[int, int]] = {}
+    for name in sorted(config.repositories):
+        split, k, n = config.repo_split(name)
+        if split:
+            by_repo[name] = recorded.get(name) or escrow_override or (k, n)
+    if not by_repo:
+        return None
+    unsplit = tuple(sorted(set(config.repositories) - set(by_repo)))
+    kns = set(by_repo.values())
+    uniform = next(iter(kns)) if not unsplit and len(kns) == 1 else None
+    return SplitView(by_repo=by_repo, unsplit=unsplit, uniform=uniform)
+
+
+def _split_repo_list(view: SplitView, indent: str) -> list[str]:
+    """One line per split repository: its name and its K of N."""
+    width = max(len(name) for name in view.by_repo)
+    return [
+        f"{indent}{name.ljust(width)} : any {k} of {n} share cards"
+        for name, (k, n) in view.by_repo.items()
+    ]
+
+
 def _share_recovery_lines(
-    config: LCSASConfig, escrow_override: tuple[int, int] | None = None
+    config: LCSASConfig,
+    escrow_override: tuple[int, int] | None = None,
+    recorded: Mapping[str, tuple[int, int]] | None = None,
 ) -> list[str]:
     """Plain-language steps for the heir to rebuild a split password.
 
-    Only emitted when ``config.key_split`` is set (i.e. this archive's
-    password was actually split into shares).  Names the K/N in effect
-    and points at the standalone share combiner pre-step bundled on the
-    meta disc.
+    Only emitted when a password is actually split (``split_view``).  Names
+    the K/N in effect and points at the standalone share combiner pre-step
+    bundled on the meta disc.  An archive split alike throughout gets the
+    archive-wide text; a mixed archive (#587) gets a list of the split
+    repositories, each with its own K/N.
 
     ``escrow_override`` is the (K, N) of the recorded split (KEY-08); when
     present it overrides the config values so disc text reflects the split
-    that was actually performed.
+    that was actually performed.  ``recorded`` does the same per repository.
     """
-    k, n = escrow_override if escrow_override is not None else (
-        config.key_threshold, config.key_shares
+    view = split_view(config, escrow_override, recorded)
+    uniform = (
+        (config.key_threshold, config.key_shares) if view is None
+        else view.uniform
     )
+    if view is None or uniform is not None:
+        k, n = uniform or (config.key_threshold, config.key_shares)
+        head = [
+            "SPLIT PASSWORD — YOUR PASSWORD IS IN SHARE CARDS",
+            "------------------------------------------------",
+            f"This archive's password is SPLIT into {n} share cards.  You need",
+            f"any {k} of them.  Fewer than {k} cards reveal nothing.",
+            "",
+            "Reconstruct the password in TWO steps:",
+            "",
+            f"  STEP 1 (pre-step): gather any {k} share cards.  On the",
+            "  META disc, run the share combiner for your machine:",
+        ]
+        pass_cards = f"  (pass any {k} card files; or pipe the share words on stdin)."
+    else:
+        head = [
+            "SPLIT PASSWORDS — SOME PASSWORDS ARE IN SHARE CARDS",
+            "---------------------------------------------------",
+            "The password of each repository listed here is SPLIT into",
+            "share cards:",
+            "",
+            *_split_repo_list(view, "    "),
+            "",
+        ]
+        if view.unsplit:
+            head.append(
+                f"Every other repository ({', '.join(view.unsplit)}) has an "
+                "ordinary password."
+            )
+        head += [
+            "Each share card names its repository: use the cards of the",
+            "repository you are restoring.  Fewer cards than it needs",
+            "reveal nothing.",
+            "",
+            "Reconstruct a split password in TWO steps:",
+            "",
+            "  STEP 1 (pre-step): gather enough share cards of that",
+            "  repository (the list above says how many).  On the",
+            "  META disc, run the share combiner for your machine:",
+        ]
+        pass_cards = "  (pass the card files; or pipe the share words on stdin)."
     return [
-        "SPLIT PASSWORD — YOUR PASSWORD IS IN SHARE CARDS",
-        "------------------------------------------------",
-        f"This archive's password is SPLIT into {n} share cards.  You need",
-        f"any {k} of them.  Fewer than {k} cards reveal nothing.",
-        "",
-        "Reconstruct the password in TWO steps:",
-        "",
-        f"  STEP 1 (pre-step): gather any {k} share cards.  On the",
-        "  META disc, run the share combiner for your machine:",
+        *head,
         "",
         "      recovery/bin/<machine>/lcsas-keyshare <card1> <card2>",
         "",
@@ -88,7 +187,7 @@ def _share_recovery_lines(
         "      recovery/bin/<platform>/python/bin/python3 \\",
         "          keyshare_combine.py <card1> <card2>",
         "",
-        f"  (pass any {k} card files; or pipe the share words on stdin).",
+        pass_cards,
         "  Either combiner prints the password and nothing else.  Save",
         "  it, e.g.:",
         "",
@@ -561,6 +660,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
         self,
         config: LCSASConfig,
         escrow_override: tuple[int, int] | None = None,
+        recorded: Mapping[str, tuple[int, int]] | None = None,
     ) -> None:
         """Write a plain-language START_HERE.txt to the staging root.
 
@@ -572,6 +672,8 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
             config: LCSAS configuration with survivability fields.
             escrow_override: (K, N) of the recorded split (KEY-08); when set,
                 overrides the config's K/N in the split-password block.
+            recorded: (K, N) of each repository's recorded split, by
+                repository name (#587); wins over ``escrow_override``.
         """
         owner = config.archive_owner or "the person who created this archive"
         description = config.archive_description or (
@@ -597,25 +699,61 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
         # first" pre-step.  Archives whose password is not split must NOT
         # show share instructions.
         split_block = ""
-        if config.key_split:
-            k, n = escrow_override if escrow_override is not None else (
-                config.key_threshold, config.key_shares
-            )
-            split_block = textwrap.dedent(f"""\
+        view = split_view(config, escrow_override, recorded)
+        if view is not None:
+            if view.uniform is not None:
+                k, n = view.uniform
+                intro = textwrap.dedent(f"""\
 
-                YOUR PASSWORD IS SPLIT INTO {n} SHARE CARDS
-                -------------------------------------------
+                    YOUR PASSWORD IS SPLIT INTO {n} SHARE CARDS
+                    -------------------------------------------
 
-                  The password for this archive was split into {n} share
-                  cards.  You need ANY {k} of them.  Before you can restore,
-                  you must FIRST rebuild the password from the cards:
+                      The password for this archive was split into {n} share
+                      cards.  You need ANY {k} of them.  Before you can restore,
+                      you must FIRST rebuild the password from the cards:
 
-                    STEP 1: gather any {k} share cards.  On the META disc,
-                      run the share combiner for your machine:
+                        STEP 1: gather any {k} share cards.  On the META disc,
+                          run the share combiner for your machine:
+                    """)
+                pass_cards = f"pass any {k} card files"
+                fewer = f"Fewer than {k} cards reveal nothing."
+            else:
+                # Same column layout as the archive-wide intro above: the
+                # heading at column 0, body text at 2, STEP lines at 4.
+                intro_lines = [
+                    "",
+                    "SOME PASSWORDS ARE SPLIT INTO SHARE CARDS",
+                    "-----------------------------------------",
+                    "",
+                    "  The password of each repository below was split into",
+                    "  share cards.  Before you can restore one of them, you",
+                    "  must FIRST rebuild its password from its cards:",
+                    "",
+                    *_split_repo_list(view, "      "),
+                    "",
+                ]
+                if view.unsplit:
+                    intro_lines.append(
+                        f"  Every other repository ({', '.join(view.unsplit)})"
+                        " has an ordinary password."
+                    )
+                intro_lines += [
+                    "  Each share card names its repository.",
+                    "",
+                    "    STEP 1: gather enough share cards of that repository",
+                    "      (the list above says how many).  On the META disc,",
+                    "      run the share combiner for your machine:",
+                ]
+                intro = "\n".join(intro_lines) + "\n"
+                pass_cards = "pass the card files"
+                fewer = "Too few cards reveal nothing."
+            # The rest is shared.  Its least-indented line ("Fewer ...") sits
+            # at column 2 under the heading, so put back those two columns.
+            split_block = intro + textwrap.indent(textwrap.dedent(f"""\
 
                         recovery/bin/<machine>/lcsas-keyshare <card1> <card2>
 
-                      (pass any {k} card files; <machine> is x86_64 for
+                      ({pass_cards}; <machine> is x86_64 for
                       most PCs, aarch64 = newer ARM/Apple, x86_64-windows
                       = Windows: use lcsas-keyshare.exe).  It prints the
                       password.  If that program will not run, the
@@ -636,9 +774,9 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
 
                         sh /mnt/restore.sh --target ~/restored
 
-                  Fewer than {k} cards reveal nothing.  Details are in
+                  {fewer}  Details are in
                   PASSWORD_INFO.txt and docs/SHARE_FORMAT.md.
-                """)
+                """), "  ")
             # Indent to match the surrounding START_HERE section headers.
             split_block = textwrap.indent(split_block, "          ")
 
@@ -739,6 +877,7 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
         self,
         config: LCSASConfig,
         escrow_override: tuple[int, int] | None = None,
+        recorded: Mapping[str, tuple[int, int]] | None = None,
     ) -> None:
         """Write PASSWORD_INFO.txt mapping repositories to their passwords.
 
@@ -746,7 +885,13 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
             config: LCSAS configuration with repository definitions.
             escrow_override: (K, N) of the recorded split (KEY-08); when set,
                 overrides the config's K/N in the split-password section.
+            recorded: (K, N) of each repository's recorded split, by
+                repository name (#587); wins over ``escrow_override``.
         """
+        view = split_view(config, escrow_override, recorded)
+        # A mixed archive (#587) says, in each repository's own entry,
+        # whether its password is split.
+        mixed = view is not None and view.uniform is None
         lines = [
             "PASSWORD INFORMATION",
             "====================",
@@ -770,6 +915,15 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
                     )
                 else:
                     lines.append("  Password file: (not specified in config)")
+                if mixed and view is not None:
+                    if name in view.by_repo:
+                        k, n = view.by_repo[name]
+                        lines.append(
+                            f"  Password: SPLIT into {n} share cards "
+                            f"(any {k} rebuild it)"
+                        )
+                    else:
+                        lines.append("  Password: an ordinary password (not split)")
                 lines.append("")
 
         if config.key_storage_hints:
@@ -795,8 +949,8 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
         lines.append("meta disc) for the full stolen-disc threat model.")
         lines.append("")
 
-        if config.key_split:
-            lines.extend(_share_recovery_lines(config, escrow_override))
+        if view is not None:
+            lines.extend(_share_recovery_lines(config, escrow_override, recorded))
 
         path = self._root / "PASSWORD_INFO.txt"
         with open(path, "w", encoding="utf-8") as f:

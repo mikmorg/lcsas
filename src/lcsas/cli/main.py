@@ -5849,8 +5849,14 @@ def _estate_card_text(
     label_prefix: str,
     disc_count: int | None,
     card_date: str,
+    split_repos: dict[str, tuple[int, int]] | None = None,
+    unsplit_repos: tuple[str, ...] = (),
 ) -> str:
     """Build the one-page whole-archive estate card (UX-09).
+
+    ``key_split``/``key_threshold``/``key_shares`` describe an archive split
+    alike throughout.  A mixed archive (#587) passes ``split_repos`` (name ->
+    K/N) and ``unsplit_repos`` instead, and the card lists each repository.
 
     Unlike the per-repo password card (``key card``, which records ONE
     password), this is the heir's starting sheet for the entire estate: who
@@ -5889,7 +5895,29 @@ def _estate_card_text(
         "WHERE THE PASSWORD IS KEPT",
         f"  {or_blank(key_storage_hints)}",
     ]
-    if key_split:
+    if split_repos:
+        lines += [
+            "",
+            "SOME PASSWORDS ARE SPLIT INTO SHARE CARDS",
+            *[
+                f"  {name}: any {k} of {n} share cards rebuild its password"
+                for name, (k, n) in split_repos.items()
+            ],
+            *[
+                f"  {name}: an ordinary password (not split)"
+                for name in unsplit_repos
+            ],
+            "  Fewer cards reveal nothing.  Share holders (and repository):",
+            "    1. ______________________   2. ______________________",
+            "    3. ______________________   4. ______________________",
+            "    5. ______________________",
+            "  Gather one repository's cards and, on the LCSAS_META disc, run:",
+            "      recovery/bin/<machine>/lcsas-keyshare <card1> <card2>",
+            "  If that program will not run, the fallback is:",
+            "      python3 keyshare_combine.py <card1> <card2>",
+            "  It prints the password; enter it at the restore prompt.",
+        ]
+    elif key_split:
         lines += [
             "",
             "THE PASSWORD IS SPLIT INTO SHARE CARDS",
@@ -5944,6 +5972,7 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
         return 1
 
     disc_count: int | None = None
+    recorded: dict[str, tuple[int, int]] = {}
     db_path = _resolve_db_path(args, config)
     if db_path.exists():
         from lcsas.constants import (
@@ -5973,21 +6002,35 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
                 1 for v in list_volumes(conn)
                 if v.status in burned and v.volume_id not in lost_ids
             )
+            # KEY-08 / #573: print the split actually performed, not the
+            # config's K/N.
+            from lcsas.db.key_escrow import recorded_splits_by_name
+            recorded = recorded_splits_by_name(conn, {
+                name: repo.mirror_path
+                for name, repo in config.repositories.items()
+            })
         finally:
             conn.close()
 
+    from lcsas.staging.metadata import split_view
+
+    view = split_view(config, recorded=recorded)
+    uniform = view.uniform if view is not None else None
+    mixed = view is not None and uniform is None
     card = _estate_card_text(
         owner=config.archive_owner,
         description=config.archive_description,
         technical_contact=config.technical_contact,
         repositories=sorted(config.repositories),
         key_storage_hints=config.key_storage_hints,
-        key_split=config.key_split,
-        key_threshold=config.key_threshold,
-        key_shares=config.key_shares,
+        key_split=uniform is not None,
+        key_threshold=uniform[0] if uniform else config.key_threshold,
+        key_shares=uniform[1] if uniform else config.key_shares,
         label_prefix=config.label_prefix,
         disc_count=disc_count,
         card_date=date.today().isoformat(),
+        split_repos=view.by_repo if mixed and view is not None else None,
+        unsplit_repos=view.unsplit if mixed and view is not None else (),
     )
 
     if args.output is not None:
@@ -6256,10 +6299,14 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     repo_pw_file: Path | None = args.password_file
 
     config = _load_config_opt(args)
+    # #587: the repository's own [repos.<name>] K/N, else [defaults].
+    _, repo_k, repo_n = (
+        config.repo_split(args.repo) if config is not None else (False, 2, 5)
+    )
     if threshold is None:
-        threshold = config.key_threshold if config is not None else 2
+        threshold = repo_k
     if shares is None:
-        shares = config.key_shares if config is not None else 5
+        shares = repo_n
 
     # Resolve the password source.
     if repo_pw_file is None:
@@ -6442,8 +6489,9 @@ def cmd_key_split(args: argparse.Namespace) -> int:
     )
     print(
         f"NEXT STEP: set key_split = true (and key_threshold = {threshold}, "
-        f"key_shares = {shares}) under [defaults] in lcsas.toml so burned "
-        "discs print share instructions."
+        f"key_shares = {shares}) under [repos.{args.repo}] in lcsas.toml, or "
+        "under [defaults] if every repository is split, so burned discs "
+        "print share instructions."
     )
     print(
         "SECURITY: the password was never printed. Store shares apart; any "

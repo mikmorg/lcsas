@@ -1746,3 +1746,51 @@ class TestOperatorProtocol:
 
         assert get_session(conn, result.session_id).status == before != "PARTIAL"
 
+
+
+class TestPerRepoKeySplit:
+    """#587: one archive holds a split repository and an unsplit one."""
+
+    @staticmethod
+    def _mixed_orch(orch_env, *, k=2, n=3):
+        import dataclasses
+
+        base = orch_env["config"]
+        family = dataclasses.replace(
+            base.repositories["family"],
+            key_split=True, key_threshold=k, key_shares=n,
+        )
+        documents = RepositoryConfig(
+            name="documents", mirror_path=base.mirror_base_path / "documents",
+        )
+        cfg = dataclasses.replace(
+            base, key_split=False,
+            repositories={"family": family, "documents": documents},
+        )
+        return BurnOrchestrator(
+            cfg, orch_env["conn"], orch_env["xorriso"], orch_env["dvdisaster"],
+        )
+
+    def test_mixed_archive_burns_and_names_each_repository(self, orch_env):
+        from lcsas.db.key_escrow import record_split
+
+        record_split(orch_env["conn"], "family", 2, 3, 4242)
+        manifest = self._mixed_orch(orch_env).prepare()  # no drift
+        start = (manifest.staging_path / "START_HERE.txt").read_text(
+            encoding="utf-8"
+        )
+        info = (manifest.staging_path / "PASSWORD_INFO.txt").read_text(
+            encoding="utf-8"
+        )
+        for text in (start, info):
+            assert "family : any 2 of 3 share cards" in text
+            assert "(documents) has an ordinary password" in text
+        assert "Password: SPLIT into 3 share cards (any 2 rebuild it)" in info
+
+    def test_mixed_archive_still_catches_per_repo_drift(self, orch_env):
+        from lcsas.db.key_escrow import EscrowDriftError, record_split
+
+        record_split(orch_env["conn"], "family", 2, 3, 4242)
+        with pytest.raises(EscrowDriftError) as ei:
+            self._mixed_orch(orch_env, k=3, n=5).prepare()
+        assert "[repos.family] or [defaults]" in str(ei.value)

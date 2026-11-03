@@ -31,6 +31,7 @@ from lcsas.db.key_escrow import (
     EscrowDriftError,
     detect_escrow_drift,
     get_split_for_repo,
+    recorded_splits,
 )
 from lcsas.db.locations import ensure_location
 from lcsas.db.models import Pack, SessionVolume, Volume
@@ -560,9 +561,16 @@ class BurnOrchestrator:
                 injector.write_lcsas_source()
             # KEY-08: render share K/N from the recorded split when present,
             # so disc text reflects the split that was actually performed.
+            # #587: each repository's own recorded split, by name, so a
+            # mixed archive (split + single passwords) prints both right.
             escrow_kn = self._effective_kn(list(packs_by_repo))
-            injector.write_start_here(self._config, escrow_override=escrow_kn)
-            injector.write_key_info(self._config, escrow_override=escrow_kn)
+            recorded = recorded_splits(self._conn, self._config_names())
+            injector.write_start_here(
+                self._config, escrow_override=escrow_kn, recorded=recorded
+            )
+            injector.write_key_info(
+                self._config, escrow_override=escrow_kn, recorded=recorded
+            )
             injector.write_config_summary(self._config)
             injector.write_disc_care(self._config)
 
@@ -693,6 +701,20 @@ class BurnOrchestrator:
                 return cfg
         return None
 
+    def _config_names(self) -> dict[str, str]:
+        """Catalog repo_id -> the repository's ``[repos.<name>]`` key (#587).
+
+        Joined with :meth:`_match_repo_config`, so a catalog name that
+        differs from the config key still finds the repository's own split
+        setting and its recorded split.
+        """
+        names: dict[str, str] = {}
+        for repo in list_repos(self._conn):
+            cfg = self._match_repo_config(repo.name, repo.mirror_path)
+            if cfg is not None:
+                names[repo.repo_id] = cfg.name
+        return names
+
     def _get_mirror_paths(self) -> dict[str, Path]:
         """Build a dict of {repo_id: mirror_path} from the catalog's repositories."""
         paths: dict[str, Path] = {}
@@ -719,6 +741,8 @@ class BurnOrchestrator:
             config_split=self._config.key_split,
             config_threshold=self._config.key_threshold,
             config_shares=self._config.key_shares,
+            split_for=self._config.repo_split,
+            config_names=self._config_names(),
         )
         if message is None:
             return None
@@ -733,9 +757,9 @@ class BurnOrchestrator:
         A recorded split is the authoritative source for the heir-facing K/N
         (KEY-08); falls back to None (caller uses config) when no repository
         on the volume has a record.  If the staged repositories carry different
-        recorded splits, the first by repo_id wins — the drift preflight already blocked
-        any config/record disagreement, and mixed-split archives are out of
-        scope for the single archive-wide split block.
+        recorded splits, the first by repo_id wins.  It is only the fallback
+        K/N: the disc text takes each configured repository's own record
+        first (``recorded_splits_by_name``, #587).
         """
         for repo_id in sorted(set(repo_ids)):
             record = get_split_for_repo(self._conn, repo_id)

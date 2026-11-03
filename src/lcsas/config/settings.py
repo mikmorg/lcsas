@@ -53,6 +53,8 @@ class LCSASConfig:
     # Whether THIS archive's password is actually split into shares.  Gates
     # the heir-facing share-combining instructions (PASSWORD_INFO / START_HERE):
     # K/N always carry defaults, so they alone don't indicate a real split.
+    # All three are the archive-wide defaults: a repository's own
+    # ``[repos.<name>]`` table may override each of them (#587, repo_split).
     key_split: bool = False
 
     # ── Format-drift gate (FMT-03) ───────────────────────────────
@@ -74,6 +76,23 @@ class LCSASConfig:
     key_storage_hints: str = ""
     technical_contact: str = ""
 
+    def repo_split(self, name: str) -> tuple[bool, int, int]:
+        """``(split, K, N)`` in effect for repository *name* (#587).
+
+        Each key set in the repository's ``[repos.<name>]`` table overrides
+        the same key under ``[defaults]``; a name the config doesn't list
+        gets the ``[defaults]`` values.
+        """
+        repo = self.repositories.get(name)
+        if repo is None:
+            return (self.key_split, self.key_threshold, self.key_shares)
+        return (
+            self.key_split if repo.key_split is None else repo.key_split,
+            self.key_threshold if repo.key_threshold is None
+            else repo.key_threshold,
+            self.key_shares if repo.key_shares is None else repo.key_shares,
+        )
+
 
 @dataclass(frozen=True)
 class RepositoryConfig:
@@ -83,6 +102,11 @@ class RepositoryConfig:
     mirror_path: Path               # e.g. /mnt/mirror/family
     password_file: Path | None = None
     encryption_key_id: str = ""
+    # Per-repository password split (#587).  None = use the [defaults]
+    # value; LCSASConfig.repo_split resolves the pair.
+    key_split: bool | None = None
+    key_threshold: int | None = None
+    key_shares: int | None = None
 
 
 def _xdg_db_path() -> str:
@@ -119,7 +143,10 @@ def unknown_toml_keys(raw: dict[str, Any]) -> list[str]:
         "archive_owner", "archive_description",
         "key_storage_hints", "technical_contact",
     }
-    known_repo_keys = {"mirror_path", "password_file", "encryption_key_id"}
+    known_repo_keys = {
+        "mirror_path", "password_file", "encryption_key_id",
+        "key_split", "key_threshold", "key_shares",
+    }
 
     unknown_sections = set(raw.keys()) - known_sections
     if unknown_sections:
@@ -187,6 +214,11 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         [repos.work]
         mirror_path = "/mnt/mirror/work"
         password_file = "/root/keys/work.key"
+        # Optional: split only this repository's password (#587); each
+        # key overrides the same [defaults] key for this repository.
+        key_split = true
+        key_threshold = 2
+        key_shares = 3
     """
     config_path = config_path.resolve()
     base_dir = config_path.parent
@@ -229,11 +261,15 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         if "mirror_path" not in repo_cfg:
             raise ValueError(f"[repos.{repo_name}] has no mirror_path (required)")
         pw_file = repo_cfg.get("password_file")
+        repo_split = repo_cfg.get("key_split")
         repos[repo_name] = RepositoryConfig(
             name=repo_name,
             mirror_path=resolve(repo_cfg["mirror_path"]),
             password_file=resolve(pw_file) if pw_file else None,
             encryption_key_id=repo_cfg.get("encryption_key_id", ""),
+            key_split=None if repo_split is None else bool(repo_split),
+            key_threshold=repo_cfg.get("key_threshold"),
+            key_shares=repo_cfg.get("key_shares"),
         )
 
     # NB: loading a config deliberately performs no I/O on the repository paths.

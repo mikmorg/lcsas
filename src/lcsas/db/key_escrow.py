@@ -18,8 +18,11 @@ so every reader goes through it.
 
 from __future__ import annotations
 
+import os
 import sqlite3
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 
 from lcsas.db.models import KeyEscrow
 
@@ -103,6 +106,73 @@ def _repo_name(conn: sqlite3.Connection, repo_id: str) -> str | None:
     return row["name"] if row else None
 
 
+def config_names_by_repo_id(
+    conn: sqlite3.Connection, mirrors: Mapping[str, Path]
+) -> dict[str, str]:
+    """Catalog ``repo_id`` -> the repository's ``[repos.<name>]`` config key.
+
+    *mirrors* maps each config key to its ``mirror_path``.  The join is the
+    burn's (``BurnOrchestrator._match_repo_config``): mirror path first —
+    the catalog name may differ from the config key (``repo add`` takes any
+    name) — then exact name, then case-insensitive name.  Paths are compared
+    lexically: a stale mount must not hang this (#427).
+    """
+    try:
+        rows = conn.execute(
+            "SELECT repo_id, name, mirror_path FROM repositories"
+        ).fetchall()
+    except sqlite3.OperationalError:  # no repositories table
+        return {}
+    by_path = {os.path.normpath(str(m)): key for key, m in mirrors.items()}
+    by_lower = {key.lower(): key for key in mirrors}
+    out: dict[str, str] = {}
+    for repo_id, name, mirror_path in rows:
+        key = by_path.get(os.path.normpath(str(mirror_path or "")))
+        if key is None:
+            key = name if name in mirrors else by_lower.get(str(name).lower())
+        if key is not None:
+            out[repo_id] = key
+    return out
+
+
+def recorded_splits(
+    conn: sqlite3.Connection, config_names: Mapping[str, str]
+) -> dict[str, tuple[int, int]]:
+    """``(K, N)`` of each recorded split, by config key (#587, KEY-08).
+
+    *config_names* maps catalog ``repo_id`` to config key
+    (:func:`config_names_by_repo_id`).  Repositories with no recorded split
+    are left out.
+    """
+    out: dict[str, tuple[int, int]] = {}
+    for repo_id, key in config_names.items():
+        record = get_split_for_repo(conn, repo_id)
+        if record is not None:
+            out[key] = (record.threshold, record.shares)
+    return out
+
+
+def recorded_splits_by_name(
+    conn: sqlite3.Connection, mirrors: Mapping[str, Path]
+) -> dict[str, tuple[int, int]]:
+    """``(K, N)`` of each configured repository's recorded split, by config key.
+
+    For readers outside the burn (meta disc, estate card).  A config key no
+    catalog repository matches is still looked up as-is: splits recorded
+    before #571 were keyed by name.
+    """
+    names = config_names_by_repo_id(conn, mirrors)
+    out = recorded_splits(conn, names)
+    matched = set(names.values())
+    for key in mirrors:
+        if key in out or key in matched:
+            continue
+        record = get_split(conn, key)
+        if record is not None:
+            out[key] = (record.threshold, record.shares)
+    return out
+
+
 def get_split_for_repo(
     conn: sqlite3.Connection, repo_id: str
 ) -> KeyEscrow | None:
@@ -149,12 +219,19 @@ def detect_escrow_drift(
     config_split: bool,
     config_threshold: int,
     config_shares: int,
+    split_for: Callable[[str], tuple[bool, int, int]] | None = None,
+    config_names: Mapping[str, str] | None = None,
 ) -> str | None:
     """Return an actionable drift message, or None if config and records agree.
 
-    The TOML carries one archive-wide ``key_split``/``key_threshold``/
-    ``key_shares``; splits are recorded per repository.  For each repository
-    being burned:
+    ``config_split``/``config_threshold``/``config_shares`` are the TOML's
+    ``[defaults]``.  A repository's ``[repos.<name>]`` table may override
+    them (#587): pass ``split_for`` (``LCSASConfig.repo_split``), which maps a
+    repository's config key to its ``(split, K, N)``, and it replaces the
+    three defaults for that repository.  ``config_names`` maps a catalog
+    ``repo_id`` to its config key (:func:`config_names_by_repo_id`); without
+    an entry the catalog name is used.  Splits are recorded per repository.
+    For each repository being burned:
 
     - config says split, no record (or K/N mismatch) → drift.
     - record exists, config says ``key_split=false`` → drift (the heir would
@@ -166,26 +243,30 @@ def detect_escrow_drift(
         record = get_split_for_repo(conn, repo_id)
         # Name the repository the way ``--repo`` takes it, not by its UUID.
         name = _repo_name(conn, repo_id) or repo_id
-        if config_split:
+        key = (config_names or {}).get(repo_id, name)
+        split, threshold, shares = (
+            split_for(key) if split_for is not None
+            else (config_split, config_threshold, config_shares)
+        )
+        where = f"[repos.{key}] or [defaults]" if split_for else "[defaults]"
+        if split:
             if record is None:
                 return (
                     f"password split drift for repository '{name}': lcsas.toml says "
-                    f"key_split=true {config_threshold}-of-{config_shares} but "
+                    f"key_split=true {threshold}-of-{shares} but "
                     f"the catalog records no split for this repository. Discs would "
                     f"print instructions to gather share cards that were never "
                     f"made. Re-run 'lcsas --config ... key split --repo "
-                    f"{name}' or set key_split=false under [defaults]."
+                    f"{name}' or set key_split=false under {where}."
                 )
-            if (record.threshold, record.shares) != (
-                config_threshold, config_shares
-            ):
+            if (record.threshold, record.shares) != (threshold, shares):
                 return (
                     f"password split drift for repository '{name}': lcsas.toml says "
-                    f"key_split=true {config_threshold}-of-{config_shares} but "
+                    f"key_split=true {threshold}-of-{shares} but "
                     f"the catalog records a {record.threshold}-of-"
                     f"{record.shares} split on {record.split_at}. Discs would "
                     f"print wrong instructions. Re-run 'lcsas key split' or fix "
-                    f"key_threshold/key_shares under [defaults]."
+                    f"key_threshold/key_shares under {where}."
                 )
         else:
             if record is not None:
@@ -196,7 +277,7 @@ def detect_escrow_drift(
                     f"{record.split_at}. Discs would tell the heir to find a "
                     f"single password that was superseded by that split. Set "
                     f"key_split=true (key_threshold={record.threshold}, "
-                    f"key_shares={record.shares}) under [defaults], or run "
+                    f"key_shares={record.shares}) under {where}, or run "
                     f"'lcsas key combine' to undo the split."
                 )
     return None
