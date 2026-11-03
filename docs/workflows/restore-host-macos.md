@@ -61,8 +61,9 @@ the meta disc; this doc is the heir-facing companion.
    - `LCSAS_PASSWORD='...' sh restore.sh ~/Restored`
    - `LCSAS_PWFILE=/path/to/key.txt sh restore.sh ~/Restored`
 
-   If the password was **split** into SLIP-0039 shares
-   (`PASSWORD_INFO.txt` on the disc says so), rebuild it first with the
+   If the password of the repository you are restoring was **split** into
+   SLIP-0039 shares (`PASSWORD_INFO.txt` on the disc says so, for each
+   repository), rebuild it first with the
    bundled combiner — primary path is the static
    `recovery/bin/aarch64-apple-darwin/lcsas-keyshare <card1> <card2> ...`
    (or the `x86_64-apple-darwin` build on Intel); the Python fallback is
