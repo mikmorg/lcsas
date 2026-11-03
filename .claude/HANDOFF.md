@@ -5,7 +5,8 @@ if you are the **field session**: the one with the optical writer, the
 real discs and the real data. The root `CLAUDE.md` covers architecture
 and commands; this file covers your role and what you can't learn from
 the code. Written 2026-10-24 by the lab session at the hand-over;
-updated 2026-10-30 with the owner's decisions from the grilling session.
+updated 2026-10-30 and 2026-11-02 with the owner's decisions from the
+grilling sessions.
 The words in this file follow `CONTEXT.md`, the project glossary.
 
 | | **Lab** (vm-desk1, the VM on home2) | **Field** (you) |
@@ -15,22 +16,27 @@ The words in this file follow `CONTEXT.md`, the project glossary.
 
 ## Where things stand
 
-- **Drill `v1.0.0-rc4` (tagged 2026-10-31; the tag and commit are in
-  the announcement on tracker #478).** On 2026-10-30 the owner decided
-  the glossary (`CONTEXT.md`) and the other fixes land BEFORE any drill,
-  so the drills test the final wording. `v1.0.0-rc3` (`7a872ab`) was
-  superseded the same day, before any drill, because the no-age re-burn
-  decision below changes `DISC_CARE.txt` on every disc. Don't drill rc3
-  or rc2. Record the tag and commit of the rc you drilled (rc4, or a
-  later rc after a fix) in every drill result.
-- At rc4, all 8 runnable blind-restore variants scored 16/16 (the drill log
-  in `recovery/docs/READINESS_CHECKLIST.txt`), and the lab's clean meta
-  disc build passed `lcsas meta verify --strict`.
-- **v1.0.0 final waits on four human/hardware gates** (tracker #478):
+- **Drill `v1.0.0-rc5`, once the lab tags it and announces it on
+  tracker #478. Don't drill rc4** (owner, 2026-11-02). No drill had run on
+  rc4. rc5 adds, before any drill: a password split per repository, so
+  one archive can hold split and ordinary passwords side by side (#587);
+  the meta disc is always labelled `LCSAS_META` (#588); the estate card
+  and the meta disc print the recorded split's K/N (#573); and a
+  restore.sh test-hook fix (#569). Don't drill rc4, rc3 or rc2. Record
+  the tag and commit of the rc you drilled in every drill result.
+- Before the rc5 tag the lab runs the full haiku blind sweep (now 9
+  variants, with a new mixed-split one) and a clean meta disc build that
+  must pass `lcsas meta verify --strict`. The results go in the
+  announcement on #478.
+- **v1.0.0 final waits on three human/hardware gates** (tracker #478):
   - #473: physical BD-R and M-DISC burn → damage → repair → restore
   - #474: a cold restore by a non-technical stand-in (see below)
-  - #475: a manual macOS restore
-  - #476: a manual Windows restore. This is now a gate (owner, 2026-10-30).
+  - #476: a manual Windows restore
+- **#475 (macOS) moved to after final** (owner, 2026-11-02): the owner has
+  no Mac, and the heir will most likely use Windows. CI covers macOS
+  `restore.sh` and the Mach-O tier-1 binaries; the Finder/Gatekeeper/
+  quarantine path stays untested until #475 runs. The v1.0.0 tag and
+  release notes say so.
 - **Decided, not gates:** v1.0 ships without an independent crypto
   review. README and ESTATE_PLANNING disclose it, naming stock restic
   (tier 2b) as the hedge (#477, closed). CI stays on
@@ -39,13 +45,16 @@ The words in this file follow `CONTEXT.md`, the project glossary.
   back on the schedules in `docs/workflows/verify-and-audit.md`, and
   re-burned only after a read error (owner, 2026-10-31).
 - **What "final" means:** when every gate has passed on one rc and the
-  owner says go, the lab tags v1.0.0 on master if master's restore path
-  (rule 3) is unchanged since that rc; otherwise it cuts another rc and
-  the affected drills run again. If the gates pass on rc4, final is rc4
-  plus only the version bump to 1.0.0, with no rc5 (owner, 2026-10-31).
+  owner says go, the lab tags v1.0.0 on master, provided master's restore
+  path (rule 3, plus the heir-facing text and `README.md`) is unchanged
+  since that rc apart from the version bump. Owner-side code and docs
+  (`cli/`, `db/`, the owner workflow guides) may still change. Otherwise
+  the lab cuts another rc and the affected drills run again (owner,
+  2026-11-02). At final the lab also builds a generic v1.0.0 meta disc,
+  verifies it strictly and diffs it against the rc's.
 - Other open issues are lab-side: #479 (retire it once #476 passes),
-  #491 (three of its items are in rc3; location remove/rename comes
-  after), #569, #573, #581. #559, #562 and #571 are fixed since rc3.
+  #491 item 8 (location remove/rename), #573 (catalog rebuild keeps the
+  split records), #581.
 
 ## Hard rules
 
@@ -75,7 +84,18 @@ The words in this file follow `CONTEXT.md`, the project glossary.
 
 ## Your work
 
-### Drills against the current rc (rc3 first)
+### Drills against the current rc (rc5)
+
+- **Order** (owner, 2026-11-02): #476 first, then #474 last, because each
+  re-run of #474 needs a fresh stand-in. #473 runs whenever you start: it
+  is the only gate that needs your machine, since the lab host's drive
+  can't burn BD.
+- **The drill archive** (owner, 2026-11-02): one archive with the default
+  label prefix and two repositories, one whose password is split 2-of-3
+  into share cards and one with an ordinary password. Two data discs plus
+  a meta disc built from the drill config and catalog. The lab commits
+  the kit that builds it (a fixed non-personal corpus, its sha256
+  manifest, the drill config) under `tests/e2e/`.
 
 - **Drill discs hold test data only.** No real data is burned until
   v1.0.0 final (owner, 2026-10-30). Burn drill discs from a test corpus
@@ -92,25 +112,33 @@ The words in this file follow `CONTEXT.md`, the project glossary.
   - Steps 4–5 damage a disc below, then above, the ECC threshold.
   - Fill in the RUN LOG TEMPLATE at the end of that file and commit it
     under `tests/e2e/`, with no personal data (rule 1).
+- **#476 (Windows) and #474 run in the lab**, on a Windows 10 VM on the
+  lab host (owner, 2026-11-02). The lab builds the drill discs and
+  inserts each one as virtual CD media, never as a copied-in ISO file:
+  a copied file carries Mark-of-the-Web, so SmartScreen would show
+  prompts a real disc never does. For #476 the owner clicks through; for
+  #474 the owner plays the disc drive and inserts each disc the stand-in
+  asks for. You don't need to do anything for these two.
 - **#474 (non-technical person):** the owner's heir does NOT take this
   drill. Use a stand-in: someone non-technical, who is not the heir, on
   the same kind of computer the heir would use. Each re-run needs a new
   stand-in, since someone who has seen the docs is no longer cold. Give
   them the drill discs, the cards printed for the drill's test archive
-  and nothing else. Observe; don't help. Write down where they got stuck,
+  (the estate card, 2 of the 3 share cards, the password card) and
+  nothing else. Observe; don't help. Write down where they got stuck,
   in their words, and the time per step. Refer to them by role only (rule 1). Findings go on the issue;
   fixes are usually heir-doc PRs. The real heir walks through it once
   after final.
-- **#475 (macOS) and #476 (Windows):** walk through
-  `docs/workflows/restore-host-macos.md` / `recovery/docs/RECOVER_WINDOWS.txt` the way
-  an heir would. Capture every OS prompt (Gatekeeper, quarantine,
-  SmartScreen, Defender, UAC) and every place the docs and the screen
+- **#476 (Windows), and #475 (macOS) after final:** walk through
+  `recovery/docs/RECOVER_WINDOWS.txt` / `docs/workflows/restore-host-macos.md`
+  the way an heir would. Capture every OS prompt (SmartScreen, Defender,
+  UAC, Gatekeeper, quarantine) and every place the docs and the screen
   disagree.
 - **If a drill fails:** comment on its issue with the build, what
   happened and the evidence, and file a bug. The lab fixes it, sweeps all
   the blind variants, rebuilds the meta disc cleanly and cuts the next rc.
   Then rerun the failed drill, plus any drill whose path the fix changed.
-  **When all four gates pass on one rc,** the lab tags final as described
+  **When all three gates pass on one rc,** the lab tags final as described
   under "Where things stand".
 
 ### Real data before final
@@ -121,6 +149,12 @@ may set up the real config, back real data up into the mirror, and run
 data. After final, the rest of this section applies. (Lab advice, not an
 owner rule: wait until final to split the real password too, so the share
 cards print with the final wording.)
+
+**The real archive is ONE archive** (owner, 2026-11-02): one repository's
+password split into share cards, the others on ordinary passwords. Set
+the split in that repository's own `[repos.<name>]` table, not under
+`[defaults]` (`docs/ESTATE_PLANNING.md` §4). Keep the default label
+prefix.
 
 Read these in order: `docs/workflows/init-and-config.md` →
 `backup-and-scan.md` → `stage-and-burn.md` → `verify-and-audit.md` →
@@ -160,7 +194,9 @@ Things the docs state, but that cost real time to learn:
 The owner's own meta disc waits for v1.0.0 final (owner, 2026-10-30).
 The meta disc the lab builds for each rc is a **generic** build with no
 repository metadata. The disc the owner keeps must be built on your machine,
-from the owner's config and catalog:
+from the owner's config and catalog (owner, 2026-11-02): that is what puts
+the owner's details and the split instructions on its `START_HERE.txt`. Its
+volume label is always `LCSAS_META` (#588):
 
 - **Build from a clean checkout of the tag.** Use a detached
   `git worktree add --detach <dir> v1.0.0`, and run that worktree's
@@ -215,7 +251,8 @@ The channel between the sessions is **GitHub issues** (`gh`, repo
   - xorriso 1.5.6, plus dvdisaster 0.79.10 for ECC and the damage steps.
   - A burner tool: `xorrecord` or `growisofs`.
   - `lsscsi` to record the drive.
-  - The macOS and Windows drills need the real OSes.
+  - The macOS drill (#475, after final) needs a real Mac. The Windows
+    drills run in the lab.
 - **Light checks are fine here:** `make lint`, `make typecheck`,
   `make test-unit`, and single tests. Integration tests skip themselves
   when a tool is missing. Leave `make gate`, `make audit-gate`, the
