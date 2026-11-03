@@ -40,7 +40,10 @@ set -eu
 # of every executed line to that file.  Honoured only when bash is
 # the interpreter (BASH_XTRACEFD is bash-specific); dash/POSIX-sh
 # ignore the hook and run normally.  No production-path effect.
-if [ -n "${LCSAS_SHELL_TRACE:-}" ]; then
+# The BASH_VERSION check is what makes "ignore" true (#569): the copy
+# relocated to RAM re-runs under /bin/sh with the variable still set,
+# and dash has no LINENO, so PS4's $LINENO failed `set -u` there.
+if [ -n "${LCSAS_SHELL_TRACE:-}" ] && [ -n "${BASH_VERSION:-}" ]; then
     # 9 is a high enough fd to avoid clashing with stdin/stdout/stderr
     # or any of the script's later `exec N>...` redirections.
     exec 9>>"$LCSAS_SHELL_TRACE"
