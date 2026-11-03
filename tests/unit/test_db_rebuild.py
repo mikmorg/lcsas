@@ -936,3 +936,105 @@ class TestRecencyAwareRebuild:
             conn.close()
             assert status == "DESTROYED"
             assert len(result.warnings) == 1
+
+
+class TestRebuildKeepsPasswordSplits:
+    """#573: a rebuilt catalog keeps the recorded password splits."""
+
+    @staticmethod
+    def _disc_with_split(base: Path, name: str, mtime: float,
+                         split: tuple[int, int, int, str] | None) -> Path:
+        disc = _build_disc(
+            base, name, mtime,
+            [(f"LCSAS_{name}", f"uuid-{name}", "BURNED", VOLUME_CREATED_AT)],
+        )
+        if split is not None:
+            k, n, ident, split_at = split
+            conn = get_connection(disc / "catalog.db")
+            conn.execute(
+                "INSERT INTO key_escrow (repo_id, threshold, shares, "
+                "slip39_id, split_at) VALUES (?, ?, ?, ?, ?)",
+                ("repo1", k, n, ident, split_at),
+            )
+            conn.commit()
+            conn.close()
+            os.utime(disc / "catalog.db", (mtime, mtime))
+        return disc
+
+    def test_split_survives_and_passes_the_stage_preflight(
+        self, tmp_path: Path,
+    ) -> None:
+        from lcsas.db.key_escrow import detect_escrow_drift, get_split_for_repo
+
+        disc = self._disc_with_split(
+            tmp_path, "d1", 1_000, (3, 5, 4242, "2026-10-01T10:00:00+00:00"),
+        )
+        out = tmp_path / "rebuilt.db"
+        result = rebuild.rebuild_catalog([disc], out)
+        assert result.ok and result.splits_merged == 1
+        conn = get_connection(out)
+        record = get_split_for_repo(conn, "repo1")
+        assert record is not None
+        assert (record.threshold, record.shares, record.slip39_id) == (3, 5, 4242)
+        assert detect_escrow_drift(
+            conn, ["repo1"], config_split=True, config_threshold=3,
+            config_shares=5,
+        ) is None
+        conn.close()
+
+    def test_newest_split_wins_whatever_the_disc_order(
+        self, tmp_path: Path,
+    ) -> None:
+        """A re-split replaces the record: the later split_at is kept even
+        when it sits on the staler catalog."""
+        from lcsas.db.key_escrow import get_split_for_repo
+
+        old_split = self._disc_with_split(
+            tmp_path, "fresh", 2_000, (2, 5, 1, "2026-09-01T10:00:00+00:00"),
+        )
+        new_split = self._disc_with_split(
+            tmp_path, "stale", 1_000, (3, 4, 2, "2026-10-01T10:00:00+00:00"),
+        )
+        for order, name in (([old_split, new_split], "a"),
+                            ([new_split, old_split], "b")):
+            out = tmp_path / f"rebuilt-{name}.db"
+            assert rebuild.rebuild_catalog(order, out).ok
+            conn = get_connection(out)
+            record = get_split_for_repo(conn, "repo1")
+            conn.close()
+            assert record is not None
+            assert (record.threshold, record.shares, record.slip39_id) == (3, 4, 2)
+
+    def test_disc_without_the_table_is_fine(self, tmp_path: Path) -> None:
+        disc = self._disc_with_split(tmp_path, "d1", 1_000, None)
+        conn = get_connection(disc / "catalog.db")
+        conn.execute("DROP TABLE key_escrow")
+        conn.commit()
+        conn.close()
+        result = rebuild.rebuild_catalog([disc], tmp_path / "rebuilt.db")
+        assert result.ok and result.splits_merged == 0
+
+
+def test_repo_remove_drops_its_split_record(tmp_path: Path, capsys) -> None:
+    """#573: `repo remove` no longer leaves the split record behind, under
+    the repo_id or (splits recorded before #571) the name."""
+    from lcsas.cli.main import main
+    from lcsas.db.key_escrow import get_split, record_split
+    from lcsas.db.repos import list_repos
+
+    db = tmp_path / "test.db"
+    assert main(["init", "--db-path", str(db)]) == 0
+    assert main(["--db", str(db), "repo", "add", "photos", "/mnt/photos"]) == 0
+    conn = get_connection(db)
+    repo_id = next(r.repo_id for r in list_repos(conn) if r.name == "photos")
+    record_split(conn, repo_id, 2, 3, 7)
+    record_split(conn, "photos", 2, 3, 7)  # pre-#571 shape
+    record_split(conn, "other", 2, 5, 8)
+    conn.close()
+
+    assert main(["--db", str(db), "repo", "remove", repo_id]) == 0
+    conn = get_connection(db)
+    assert get_split(conn, repo_id) is None
+    assert get_split(conn, "photos") is None
+    assert get_split(conn, "other") is not None
+    conn.close()

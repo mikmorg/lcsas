@@ -1320,6 +1320,15 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
                 "DELETE FROM packs WHERE repo_id = ?", (repo.repo_id,)
             )
         snap_count = delete_snapshots_for_repo(conn, repo.repo_id)
+        # #573: the repository's recorded password split goes with it, under
+        # its repo_id and under its name (splits recorded before #571).
+        from lcsas.db.key_escrow import clear_split
+        clear_split(conn, repo.repo_id, commit=False)
+        if conn.execute(
+            "SELECT 1 FROM repositories WHERE repo_id = ? AND repo_id != ?",
+            (repo.name, repo.repo_id),
+        ).fetchone() is None:  # the name isn't another repository's id
+            clear_split(conn, repo.name, commit=False)
         delete_repo(conn, repo.repo_id)
 
     logger.info(
@@ -3076,6 +3085,7 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
     logger.info("Volumes          : %d new", result.volumes_merged)
     logger.info("Packs            : %d new", result.packs_merged)
     logger.info("Snapshots        : %d new", result.snapshots_merged)
+    logger.info("Password splits  : %d recorded", result.splits_merged)
 
     # FMA-06: mixed-age disc boxes carry conflicting catalog views; the
     # merge keeps the freshest one and explains what it overrode here.

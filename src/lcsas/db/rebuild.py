@@ -97,6 +97,7 @@ class RebuildResult:
     events_merged: int = 0
     sessions_merged: int = 0
     session_volumes_merged: int = 0
+    splits_merged: int = 0
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -406,6 +407,33 @@ def _merge_one_disc(
         else:
             counts["session_volumes"] = 0
 
+        # 9. key_escrow (KEY-08, #573) — the recorded password splits, keyed
+        #    on repo_id.  Every disc catalog carries them; dropping them made
+        #    the stage preflight refuse a rebuilt catalog ("the catalog
+        #    records no split") until the owner split the password again,
+        #    which supersedes the share cards already handed out.  Unlike the
+        #    tables above, the newest SPLIT wins, not the freshest catalog:
+        #    a re-split replaces the record, so a later split_at is the
+        #    one heirs follow.  A disc burned before the table lacks it.
+        if "key_escrow" in src_tables:
+            cur = target.execute(
+                f"""
+                INSERT INTO key_escrow
+                    (repo_id, threshold, shares, slip39_id, split_at)
+                SELECT repo_id, threshold, shares, slip39_id, split_at
+                FROM {alias}.key_escrow WHERE true
+                ON CONFLICT(repo_id) DO UPDATE SET
+                    threshold = excluded.threshold,
+                    shares = excluded.shares,
+                    slip39_id = excluded.slip39_id,
+                    split_at = excluded.split_at
+                WHERE excluded.split_at > key_escrow.split_at
+                """
+            )
+            counts["key_escrow"] = cur.rowcount
+        else:
+            counts["key_escrow"] = 0
+
         target.commit()
 
     finally:
@@ -431,6 +459,8 @@ def rebuild_catalog(
       the merge result does not depend on the order discs are listed.
     - Records with the same natural key keep the freshest catalog's view
       (newest-first ordering + INSERT OR IGNORE).
+    - Recorded password splits (``key_escrow``) keep the newest
+      ``split_at`` per repository, whichever disc carries it (#573).
     - Volume status follows the freshest catalog that mentions the volume,
       including downgrades to DEPRECATED/DESTROYED.  A stale disc claiming
       a volume is more alive than the freshest record (the resurrection
@@ -513,6 +543,7 @@ def rebuild_catalog(
         result.events_merged += counts.get("volume_events", 0)
         result.sessions_merged += counts.get("burn_sessions", 0)
         result.session_volumes_merged += counts.get("session_volumes", 0)
+        result.splits_merged += counts.get("key_escrow", 0)
         is_pruned_conflicts += counts.get("is_pruned_conflicts", 0)
 
         _logger.info(
