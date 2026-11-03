@@ -93,6 +93,15 @@ AGENT_CLAUDE_CFG = Path("/scratch/lcsas-blind-claude-cfg")
 # /home/lcsas-blind.  A reboot drops the bind mount; setup.py remounts it.
 SCRATCH_STORE = Path("/scratch/lcsas-blind-store")
 
+# mixed-split variant (#587): one archive, alpha's password split 2-of-3 in
+# its own [repos.alpha] table (recorded in the catalog, so the burn's drift
+# guard passes), bravo on an ordinary password.  Unlike split-key-docs, the
+# discs themselves carry the per-repository split text, and the meta disc is
+# built from the archive's config (owner decision Q19) so its START_HERE
+# carries it too.  The agent gets 2 of the 3 printed cards.
+MIXED_SPLIT_K, MIXED_SPLIT_N = 2, 3
+MIXED_SPLIT_CARDS = SECRETS / "mixed-split-cards"
+
 # File sizing: each TEST_TINY volume has ~1.35 MB usable after the
 # holographic-metadata reserve (#142: TEST_TINY = 2 MB, reserve ≈ 700 KB
 # for SQLite catalog + per-repo Rustic index/snapshots/keys).  With
@@ -289,13 +298,12 @@ def _init_burn_db():
     return conn
 
 
-def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
+def _fixture_config():
+    """The archive's LCSASConfig, shared by the burn and (mixed-split) the
+    meta disc build."""
     sys.path.insert(0, str(REPO_ROOT / "src"))
-    from lcsas.burn.orchestrator import BurnOrchestrator
     from lcsas.config.media import MediaType
     from lcsas.config.settings import LCSASConfig, RepositoryConfig
-    from lcsas.db.queries import get_unarchived_packs
-    from lcsas.iso.xorriso import SubprocessXorrisoRunner
 
     repos = {
         name: RepositoryConfig(
@@ -305,6 +313,15 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
         )
         for name in _tenants()
     }
+    if os.environ.get("LCSAS_VARIANT", "") == "mixed-split":
+        repos["alpha"] = RepositoryConfig(
+            name="alpha",
+            mirror_path=MIRROR / "alpha",
+            password_file=SECRETS / "alpha.pw",
+            key_split=True,
+            key_threshold=MIXED_SPLIT_K,
+            key_shares=MIXED_SPLIT_N,
+        )
 
     # Phase 21.3 fix: use the canonical empirical reserve constant
     # (SQLite catalog + per-repo Rustic metadata + ISO 9660 overhead
@@ -322,7 +339,7 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
         MIN_HOLOGRAPHIC_RESERVE_BYTES
         + max(0, len(repos) - 1) * per_extra_tenant_bytes
     )
-    config = LCSASConfig(
+    return LCSASConfig(
         mirror_base_path=MIRROR,
         staging_path=STAGING,
         db_path=DB_PATH,
@@ -332,6 +349,40 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
         metadata_reserve_bytes=reserve,
         repositories=repos,
     )
+
+
+def _record_mixed_split(conn) -> None:
+    """mixed-split: print alpha's 2-of-3 cards now and record the split.
+
+    The cards go to MIXED_SPLIT_CARDS (inside the locked fixture);
+    _create_agent_user hands the agent the quorum.  Recording the split
+    under the cards' own SLIP-0039 identifier keeps catalog and cards
+    consistent, and lets the burn's drift guard pass.
+    """
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    from lcsas.db.key_escrow import record_split
+    from lcsas.keyshare import extract_mnemonic, share_identifier
+
+    if MIXED_SPLIT_CARDS.exists():
+        shutil.rmtree(MIXED_SPLIT_CARDS)
+    MIXED_SPLIT_CARDS.mkdir(parents=True)
+    os.chmod(MIXED_SPLIT_CARDS, 0o700)
+    cards = _stage_split_key_cards(
+        "alpha", threshold=MIXED_SPLIT_K, count=MIXED_SPLIT_N,
+        out_dir=MIXED_SPLIT_CARDS,
+    )
+    ident = share_identifier(extract_mnemonic(cards[0].read_text()))
+    record_split(conn, "alpha", MIXED_SPLIT_K, MIXED_SPLIT_N, ident)
+
+
+def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    from lcsas.burn.orchestrator import BurnOrchestrator
+    from lcsas.config.media import MediaType
+    from lcsas.db.queries import get_unarchived_packs
+    from lcsas.iso.xorriso import SubprocessXorrisoRunner
+
+    config = _fixture_config()
 
     class NoOpEcc:
         def augment_iso(self, iso_path, redundancy_pct=15):
@@ -389,8 +440,13 @@ def _build_meta_iso() -> Path:
     # so the blind-restore fixture skips it rather than depend on a populated
     # recovery cache / network fetch.  Meta-bundle completeness is covered by
     # its own gate, not this restore-journey drill.
+    # mixed-split: built from the archive's config (owner decision Q19), so
+    # the meta START_HERE.txt / PASSWORD_INFO.txt carry the per-repository
+    # split.  Every other variant keeps the generic no-config meta disc.
+    mixed = os.environ.get("LCSAS_VARIANT", "") == "mixed-split"
     MetaVolumeBuilder(
         META_STAGE,
+        config=_fixture_config() if mixed else None,
         catalog_db_path=DB_PATH,
         allow_no_dvdisaster_source=True,
     ).build()
@@ -717,6 +773,13 @@ def _create_agent_user(labels: list[str]) -> None:
     elif variant == "split-key-docs":
         for card_dst in _stage_split_key_cards("alpha", threshold=2, count=5):
             secret_files.append(card_dst)
+    elif variant == "mixed-split":
+        # The quorum of the cards whose split the catalog records.
+        for card in sorted(MIXED_SPLIT_CARDS.glob("alpha-share-*-card.txt")):
+            card_dst = AGENT_HOME / card.name
+            shutil.copy2(card, card_dst)
+            os.chmod(card_dst, 0o600)
+            secret_files.append(card_dst)
     else:
         alpha_pw_dst = AGENT_HOME / "tenant-alpha.pw"
         shutil.copy2(SECRETS / "alpha.pw", alpha_pw_dst)
@@ -911,6 +974,8 @@ def main() -> int:
 
     banner("4a. LCSAS burn — first batch")
     conn = _init_burn_db()
+    if os.environ.get("LCSAS_VARIANT", "") == "mixed-split":
+        _record_mixed_split(conn)
     iso_files_batch1 = _run_burn_pipeline(conn, max_volumes=6)
     print(f"  burned {len(iso_files_batch1)} data ISOs (batch 1)")
 
