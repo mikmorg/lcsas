@@ -218,9 +218,9 @@ if errorlevel 1 goto :tools_fresh
 echo [lcsas-restore] using the recovery files already copied to !TOOLS!
 REM A backup set on this META disc that the earlier copy lacks goes in
 REM too (#605); the sets already there keep what the earlier run read.
-if defined META_SRC for /f "delims=" %%T in ('dir /ad /b "%META_SRC%" 2^>nul') do if not exist "!TOOLS!\metadata\%%T\" (
-    echo                   metadata\%%T
-    xcopy /e /i /q /y "%META_SRC%\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul
+if defined META_SRC for /f "delims=" %%T in ('dir /ad /b "%META_SRC%" 2^>nul') do (
+    if not exist "!TOOLS!\metadata\%%T\" echo                   metadata\%%T
+    if not exist "!TOOLS!\metadata\%%T\" xcopy /e /i /q /y "%META_SRC%\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul
 )
 goto :relaunch
 
@@ -570,6 +570,8 @@ set "SEL="
 if not defined LCSAS_REPO goto :menu
 for /l %%I in (1,1,%NCAND%) do call :match_set %%I
 if defined SEL goto :repo_selected
+for /l %%I in (1,1,%NCAND%) do call :match_name %%I
+if defined SEL goto :repo_selected
 echo ERROR: LCSAS_REPO=!LCSAS_REPO! is not among the backup sets on this archive:
 for /l %%I in (1,1,%NCAND%) do call :menu_line %%I
 pause
@@ -617,20 +619,31 @@ goto :eof
 
 :match_set
 REM %~1 = a candidate's number.  SEL = it when LCSAS_REPO is its folder
-REM name (the id), its name_cmd, or the name= line of its marker.  That
+REM name (the id) or its name_cmd, case-blind.
+if defined SEL goto :eof
+if /i "!CAND_NAME_%~1!"=="!LCSAS_REPO!" set "SEL=%~1"
+if defined CAND_NC_%~1 if /i "!CAND_NC_%~1!"=="!LCSAS_REPO!" set "SEL=%~1"
+goto :eof
+
+:match_name
+REM %~1 = a candidate's number.  SEL = it when LCSAS_REPO is the name=
+REM line of its marker; tried only when no id or name_cmd matched.  That
 REM line may hold any character, "!" and "^" too, so it is compared with
 REM delayed expansion off, straight from the file (case-blind).  cmd
 REM reads the file in the console's code page, so a name with letters
 REM outside A-Z may not match: use the id or the name in the menu then.
 if defined SEL goto :eof
-if /i "!CAND_NAME_%~1!"=="!LCSAS_REPO!" set "SEL=%~1"
-if defined CAND_NC_%~1 if /i "!CAND_NC_%~1!"=="!LCSAS_REPO!" set "SEL=%~1"
-if defined SEL goto :eof
 if not defined CAND_MK_%~1 goto :eof
 set "MN_FILE=!CAND_%~1!\LCSAS_REPO.txt"
 setlocal disabledelayedexpansion
 set "MN_HIT="
-for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%MN_FILE%") do if "%%A"=="name" if /i "%%B"=="%LCSAS_REPO%" set "MN_HIT=1"
+REM (Brackets, not `if ... if /i ...` on one line: wine cannot parse a
+REM second `if /i` after a compare.)
+for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%MN_FILE%") do (
+    if "%%A"=="name" (
+        if /i "%%B"=="%LCSAS_REPO%" set "MN_HIT=1"
+    )
+)
 endlocal & set "MN_HIT=%MN_HIT%"
 if defined MN_HIT set "SEL=%~1"
 goto :eof
@@ -677,16 +690,20 @@ REM only when its id= is the folder's name: MK_NC = name_cmd, when every
 REM character of it is one C1 allows (else the folder name is shown),
 REM MK_K and MK_N = the split's K and N when split=K-of-N, MK_SID = the
 REM Split ID.  The marker is a hint: lcsas-keyshare checks the shares.
-REM Only these keys are set from the file, as cmd would change a name=
-REM value with "!" or "^" in it.
+REM The name= line, which may hold any character, never reaches a for
+REM body here: eol=n skips the lines that start with "n" (name= and
+REM name_cmd=), and name_cmd= is fetched alone with findstr.  Real cmd
+REM puts a for variable's text in after it has parsed the command, but
+REM wine puts it in before, so a name with & or | in it would be run
+REM there.  (The "#" lines have no "=": they set nothing.)
 for %%K in (ID NC SPLIT SID K N) do set "MK_%%K="
 if not exist "%~1\LCSAS_REPO.txt" goto :eof
-for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%~1\LCSAS_REPO.txt") do (
+for /f "usebackq eol=n tokens=1,* delims==" %%A in ("%~1\LCSAS_REPO.txt") do (
     if "%%A"=="id" set "MK_ID=%%B"
-    if "%%A"=="name_cmd" set "MK_NC=%%B"
     if "%%A"=="split" set "MK_SPLIT=%%B"
     if "%%A"=="split_id" set "MK_SID=%%B"
 )
+for /f "tokens=1,* delims==" %%A in ('findstr /c:"name_cmd=" "%~1\LCSAS_REPO.txt" 2^>nul') do if "%%A"=="name_cmd" set "MK_NC=%%B"
 if not "!MK_ID!"=="%~nx1" (
     for %%K in (ID NC SPLIT SID) do set "MK_%%K="
     goto :eof
@@ -1479,13 +1496,17 @@ REM rest of the first "  Label:" line of its VOLUME_INFO.txt, which no
 REM rc6 change moved (the backup sets' rows come after it, indented),
 REM else volume_info.json's "label"; nothing when neither has one.
 set "RL_LABEL="
-if exist "%~1VOLUME_INFO.txt" for /f "usebackq tokens=1,*" %%A in ("%~1VOLUME_INFO.txt") do if not defined RL_LABEL if "%%A"=="Label:" set "RL_LABEL=%%B"
+REM Only the lines with "Label:" (or "label") in them reach the for body:
+REM the other lines list the backup sets' names (see :read_marker).
+if exist "%~1VOLUME_INFO.txt" for /f "tokens=1,*" %%A in ('findstr /c:"Label:" "%~1VOLUME_INFO.txt" 2^>nul') do if not defined RL_LABEL if "%%A"=="Label:" set "RL_LABEL=%%B"
 if defined RL_LABEL goto :eof
 if not exist "%~1volume_info.json" goto :eof
-for /f "usebackq tokens=1,* delims=:" %%A in ("%~1volume_info.json") do if not defined RL_LABEL (
+REM (The `if` inside the brackets: wine loses the closing bracket of
+REM `do if ... (`.)
+for /f "tokens=1,* delims=:" %%A in ('findstr /c:"label" "%~1volume_info.json" 2^>nul') do (
     set "JL_K=%%A"
     set "JL_V=%%B"
-    call :json_label_line
+    if not defined RL_LABEL call :json_label_line
 )
 goto :eof
 
