@@ -394,12 +394,108 @@ static void run_check_share(void)
     }
 }
 
+/*
+ * More than K shares (#476 drill): the cards say "any K of N", so a
+ * reader who types every card they have must not be refused.  The
+ * "eraser senior" shares of vectors 15-19 are one split: group
+ * "decision" needs 2 members, group "beard" needs 1, and 2 groups are
+ * needed.  Vector 18 (smug + scared + beard romp) is the exact set.
+ */
+#define KS_SMUG \
+    "eraser senior decision smug corner ruin rescue cubic angel tackle " \
+    "skin skunk program roster trash rumor slush angel flea amazing"
+#define KS_SCARED \
+    "eraser senior decision scared cargo theory device idea deliver " \
+    "modify curly include pancake both news skin realize vitamins away " \
+    "join"
+#define KS_ROSTER \
+    "eraser senior decision roster beard treat identify grumpy salt " \
+    "index fake aviation theater cubic bike cause research dragon " \
+    "emphasis counter"
+#define KS_SHADOW \
+    "eraser senior decision shadow artist work morning estate greatest " \
+    "pipeline plan ting petition forget hormone flexible general goat " \
+    "admit surface"
+#define KS_BEARD \
+    "eraser senior beard romp adorn nuclear spill corner cradle style " \
+    "ancient family general leader ambition exchange unusual garlic " \
+    "promise voice"
+
+static void run_more_than_threshold(void)
+{
+    static const struct {
+        const char *what;
+        const char *m[6];
+        size_t n;
+        int ok;
+    } cases[] = {
+        { "3 of a 2-member group",
+          { KS_SMUG, KS_SCARED, KS_ROSTER, KS_BEARD }, 4, 1 },
+        { "4 of a 2-member group",
+          { KS_ROSTER, KS_BEARD, KS_SHADOW, KS_SMUG, KS_SCARED }, 5, 1 },
+        { "the same card twice",
+          { KS_SMUG, KS_SMUG, KS_SCARED, KS_BEARD }, 4, 1 },
+        { "the same card twice, one other",
+          { KS_BEARD, KS_SHADOW, KS_SHADOW, KS_ROSTER }, 4, 1 },
+        { "one member, given twice",
+          { KS_SMUG, KS_SMUG, KS_BEARD }, 3, 0 },
+        { "second group missing",
+          { KS_SMUG, KS_SCARED, KS_ROSTER }, 3, 0 }
+    };
+    static const char *const want = "7c3397a292a5941682d7a4ae2d898d11";
+    size_t i;
+
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        unsigned char got[LCSAS_SLIP39_MAX_SECRET];
+        unsigned char exp[LCSAS_SLIP39_MAX_SECRET];
+        size_t gotlen = 0;
+        long elen = hex_to_bytes(want, exp, sizeof(exp));
+        int rc = lcsas_slip39_recover(cases[i].m, cases[i].n, TREZOR,
+                                      sizeof(TREZOR), got, &gotlen);
+        if (cases[i].ok) {
+            if (rc != 0 || elen < 0 || (size_t)elen != gotlen ||
+                memcmp(got, exp, gotlen) != 0) {
+                fprintf(stderr, "FAIL more-than-K: %s did not recover\n",
+                        cases[i].what);
+                fails++;
+            }
+        } else if (rc == 0) {
+            fprintf(stderr, "FAIL more-than-K: %s recovered a secret\n",
+                    cases[i].what);
+            fails++;
+        }
+    }
+}
+
+/* lcsas_keyshare_is_word: full words and unique 4+-letter prefixes, in
+ * any case, are share words; prose and typos are not. */
+static void run_is_word(void)
+{
+    static const struct { const char *tok; int want; } cases[] = {
+        { "academic", 1 }, { "ACADEMIC", 1 }, { "acad", 1 },
+        { "aca", 0 }, { "buidling", 0 }, { "the", 0 }, { "", 0 },
+        { "abcdefghijklmnopqrstuvwxyzabcdefghij", 0 }
+    };
+    size_t i;
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        int got = lcsas_keyshare_is_word(cases[i].tok,
+                                         strlen(cases[i].tok));
+        if (got != cases[i].want) {
+            fprintf(stderr, "FAIL is_word('%s') = %d, want %d\n",
+                    cases[i].tok, got, cases[i].want);
+            fails++;
+        }
+    }
+}
+
 int main(void)
 {
     run_vectors();
     run_codec();
     run_extract();
     run_check_share();
+    run_more_than_threshold();
+    run_is_word();
     if (fails == 0) {
         printf("test_keyshare: OK\n");
     }

@@ -55,6 +55,10 @@ extern const char *const lcsas_slip39_wordlist[1024];
  *   out_secret  caller buffer of at least LCSAS_SLIP39_MAX_SECRET bytes.
  *   out_len     receives the master-secret length on success.
  *
+ * More member shares than a group's threshold are fine: the first
+ * `threshold` distinct ones are used, and the same share given twice
+ * counts once.  Two different shares with one member index fail.
+ *
  * Returns 0 on success.  Returns nonzero on ANY failure (unknown word,
  * bad length/padding, RS1024 mismatch, mismatched share parameters,
  * fewer than the threshold number of shares/groups, or a failed
@@ -104,9 +108,9 @@ int lcsas_keyshare_recover_password(const char *const *mnemonics, size_t n,
  * into `out` (capacity `cap`).
  *
  * Returns 0 on success.  Returns nonzero if the joined word count is not
- * a valid share length (20 or 33) or `out` is too small; on the
- * word-count failure a one-line reason (e.g. "found 7 share words,
- * expected 20 or 33") is written into `errbuf` (capacity `errcap`,
+ * a valid share length (at least 20 words) or `out` is too small; on
+ * the word-count failure a one-line reason (e.g. "found 7 share words,
+ * expected at least 20") is written into `errbuf` (capacity `errcap`,
  * truncated to fit; may be NULL to discard).
  */
 int lcsas_keyshare_extract(const char *text, char *out, size_t cap,
@@ -131,5 +135,13 @@ int lcsas_keyshare_extract(const char *text, char *out, size_t cap,
  */
 int lcsas_keyshare_check_share(const char *mnemonic,
                                char *errbuf, size_t errcap);
+
+/*
+ * Return 1 if the token `tok` (length `len`, any case, not
+ * NUL-terminated) is a share word: a full wordlist word or its unique
+ * 4+-letter prefix.  Else 0.  Lets a caller tell a mistyped share line
+ * (nearly all share words) from card prose (almost none).
+ */
+int lcsas_keyshare_is_word(const char *tok, size_t len);
 
 #endif

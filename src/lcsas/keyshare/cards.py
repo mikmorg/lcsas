@@ -23,7 +23,7 @@ import layouts.
 
 from __future__ import annotations
 
-from .slip39 import MIN_MNEMONIC_LENGTH_WORDS, KeyShareError
+from .slip39 import MIN_MNEMONIC_LENGTH_WORDS, KeyShareError, _word_index
 from .wordlist import _WORD_TO_INDEX
 
 # A SLIP-0039 share is METADATA_LENGTH_WORDS (7) plus one word per 10 bits
@@ -46,6 +46,28 @@ def is_mnemonic_line(line: str) -> bool:
     if not tokens:
         return False
     return all(tok.lower() in _WORD_TO_INDEX for tok in tokens)
+
+
+def is_mistyped_share_line(line: str) -> bool:
+    """Return True iff *line* looks like a share with typing mistakes.
+
+    For one-share-per-line input (stdin), where a line that is not all
+    wordlist words is skipped as prose: a line with enough tokens to be a
+    share (13, as the C combiner requires of a file) and at most a quarter
+    of them not share words (full words or unique 4+-letter prefixes) is a
+    mistyped share, not prose, so the caller can name the bad word.
+    Mirrors ``is_mistyped_share_line`` in recovery/src/lcsas-keyshare.
+    """
+    tokens = line.split()
+    if len(tokens) < 13:
+        return False
+    bad = 0
+    for tok in tokens:
+        try:
+            _word_index(tok)
+        except KeyShareError:
+            bad += 1
+    return bad * 4 <= len(tokens)
 
 
 def extract_mnemonic(text: str, source: str = "input") -> str:
@@ -71,6 +93,6 @@ def extract_mnemonic(text: str, source: str = "input") -> str:
     if len(words) < _MIN_WORDS:
         raise KeyShareError(
             f"'{source}': found {len(words)} share words, expected at least "
-            f"{_MIN_WORDS} — is this a complete share card?"
+            f"{_MIN_WORDS} - is this a complete share card?"
         )
     return " ".join(words)
