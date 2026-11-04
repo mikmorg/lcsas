@@ -1071,17 +1071,36 @@ def test_another_set_q_or_no_input_at_the_folder_prompt_ends_the_run(
     assert not (tmp_path / "tools").exists()
 
 
-def test_quitting_the_next_set_does_not_offer_to_resume_the_first(tmp_path: Path) -> None:
-    """Q at the second round's set list: the first set is restored, so
-    its resume.sh is gone and no "stopped before it finished" box."""
+@pytest.mark.parametrize("answer", ["q\n", ""])
+def test_quitting_the_next_set_does_not_offer_to_resume_the_first(
+    tmp_path: Path, answer: str,
+) -> None:
+    """Q (or the end of the input) at the second round's set list: the
+    first set is restored, so no "stopped before it finished" box, and
+    the run has done all the reader chose: exit 0 and the tools folder
+    goes (C5, C6), as restore.bat does and as Q at the folder question
+    does.  (This test used to pin exit 65, which left the tools folder
+    behind after a finished restore.)"""
     recovery = _two_sets(tmp_path)
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_INTERACTIVE="on"),
-               stdin=f"1\n{GOOD_PW}\ny\n\nq\n")
-    assert res.returncode == 65, res.stderr
+               stdin=f"1\n{GOOD_PW}\ny\n\n{answer}")
+    assert res.returncode == 0, res.stderr
     assert "starting again for the next backup set" in res.stderr
+    assert "No other backup set restored." in res.stderr
     assert "stopped before it finished" not in res.stderr
-    assert not (tmp_path / "tools" / "resume.sh").exists()
+    assert len(_runs(tmp_path)) == 1
+    assert not (tmp_path / "tools").exists()
+
+
+def test_q_at_the_first_set_list_still_stops_with_65(tmp_path: Path) -> None:
+    """Before any set is restored, Q at the set list is a quit (C5: 65)."""
+    recovery = _two_sets(tmp_path)
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on"), stdin="q\n")
+    assert res.returncode == 65, res.stderr
+    assert "No other backup set restored." not in res.stderr
+    assert not _runs(tmp_path)
 
 
 def test_ctrl_c_at_the_another_set_question_removes_the_tools(tmp_path: Path) -> None:

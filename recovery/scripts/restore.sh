@@ -1831,6 +1831,17 @@ set_match() {
     return 0
 }
 
+# another_pass_done: in the run that "Restore another backup set?" started
+# (offer_another_set sets LCSAS_ANOTHER_PASS), Q or the end of the input
+# at the set list means no other set.  The sets chosen before are
+# restored, so the run ends with 0 and the tools folder goes (C5, C6), as
+# restore.bat does and as Q at the folder question does.
+another_pass_done() {
+    [ "${LCSAS_ANOTHER_PASS:-0}" = 1 ] || return 0
+    printf 'No other backup set restored.\n' >&2
+    exit 0
+}
+
 # Count non-empty lines (printf "\n" | wc -l returns 1 — useless).
 # `grep -c` exits 1 when nothing matches; under `set -e` that would
 # kill the script, so wrap in `|| true` and let the count fall to 0.
@@ -1899,6 +1910,7 @@ EOF
                     # The input ended: nobody chose, as good as Q (C5).
                     IFS=$_saved_ifs
                     printf '\nno repository chosen\n' >&2
+                    another_pass_done
                     exit "$EXIT_USER_ABORT"
                 fi
                 # Number form: positional-arg lookup avoids `eval` on input.
@@ -1919,6 +1931,7 @@ EOF
                 case "$repo_choice" in
                     q|Q)
                         IFS=$_saved_ifs
+                        another_pass_done
                         printf 'Stopped at your request.\n' >&2
                         exit "$EXIT_USER_ABORT" ;;
                 esac
@@ -2982,7 +2995,9 @@ offer_another_set() {
     if [ "$_cache_auto" = 1 ]; then unset LCSAS_PACK_CACHE_DIR; fi
     unset LCSAS_REPO LCSAS_PASSWORD LCSAS_PWFILE LCSAS_SHARES_DIR LCSAS_RESUME
     LCSAS_NEWEST_DISC_PROMPT=0
-    export LCSAS_NEWEST_DISC_PROMPT
+    # Q at the next run's set list then ends with 0 (another_pass_done).
+    LCSAS_ANOTHER_PASS=1
+    export LCSAS_NEWEST_DISC_PROMPT LCSAS_ANOTHER_PASS
     if [ -n "$TOOLS" ]; then
         LCSAS_TOOLS_DIR="$TOOLS"
         export LCSAS_TOOLS_DIR

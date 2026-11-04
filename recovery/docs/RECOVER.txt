@@ -117,7 +117,8 @@ in this order.  Each one says how to answer.
          2) photos (password split: any 2 of 3 share cards)
      Type the number, the name, or the set's id (its folder name
      under metadata/).  Q then ENTER, or the end of the input, stops
-     (exit code 65).
+     (exit code 65); after question 5 it means no other set, and
+     the run ends with 0.
 
   3. The password.  What you type is not shown.  An empty answer is
      asked again, and so is a password the backup set does not
@@ -292,8 +293,9 @@ You can stop a restore at any time:
   * Anywhere else, press Ctrl-C.  restore.sh exits with code 130.
 
 Once a backup set is restored there is nothing to carry on: stopping
-at "Restore another backup set?" (or at the folder question after it)
-ends the run, and the tools folder is deleted.
+at "Restore another backup set?", at the folder question after it,
+or at the list of sets that follows ends the run with exit code 0,
+and the tools folder is deleted.
 
 Nothing is lost.  Files restored so far stay in the target folder,
 and the tools folder (below) stays, with the discs already read in
@@ -542,7 +544,10 @@ EXIT CODES
     77 -- a repository key rejected the password, or you typed q at
           the password or a share card prompt
     130 / 143 -- stopped by Ctrl-C / killed; carry on with resume.sh
-  On every exit but 0 the tools folder stays (see "THE TOOLS FOLDER").
+  On every exit but 0 the tools folder stays (see "THE TOOLS FOLDER"),
+  except Ctrl-C at "Restore another backup set?" or the folder
+  question after it: that set is restored, nothing is left to
+  carry on, and the folder goes.
 Exit 64 means every tier (1, 2, 2b, AND 3) was missing or unrunnable on
 the current meta disc, before any password was prompted.
 This is most likely on a corrupted meta disc (all binaries lost to

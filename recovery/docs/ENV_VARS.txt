@@ -176,6 +176,10 @@ LCSAS_INTERACTIVE
             are asked on auto only when stdin is a terminal, on on
             always (a test rig answers them through a pipe), never on
             off.  So a piped or scripted run never waits for them.
+            restore.bat's own questions do not follow it: it does not
+            test for a console, so it asks them whatever the value
+            (LCSAS_NEWEST_DISC_PROMPT=0 and LCSAS_ANOTHER_SET=0 turn
+            off the two extra ones).
   Why:      Opt-in.  auto is right for a person at a console; the knob
             lets a test harness play that person at the disc prompt.
 
@@ -207,6 +211,10 @@ LCSAS_ANOTHER_SET
             starts again at the set list, reusing the tools folder and
             its pack cache; N ends the run and deletes the tools
             folder.  0 never asks.  restore_auto.sh sets it to 0.
+            The next set's password is asked for: LCSAS_PASSWORD,
+            LCSAS_PWFILE (--key) and LCSAS_SHARES_DIR are for the
+            first set only.  Q at the next set list ends the run with
+            0, as N does.
   Why:      Opt-OUT.  Restoring a second set (documents, then photos)
             would otherwise mean the META disc and the copy again.
 
@@ -496,6 +504,13 @@ LCSAS_RESUME
   then uses that copy (and skips the newest-disc metadata refresh),
   so "latest" is the same snapshot as before the stop, whatever data
   disc is in the drive by then.  Not a knob; do not set manually.
+
+LCSAS_ANOTHER_PASS
+  Internal: restore.sh sets it to 1 when it starts again for the
+  next backup set after "Restore another backup set? [y/N]".  Q
+  (or the end of the input) at that run's list of sets then means
+  no other set: the run ends with 0 and the tools folder goes, as
+  in restore.bat.  Not a knob; do not set manually.
 
 ────────────────────────────────────────────────────────────────────
 QUICK REFERENCE (knobs you may set)
