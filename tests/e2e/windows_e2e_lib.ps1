@@ -101,9 +101,14 @@ function Get-DataDiscs {
 
 # --repo is a metadata\<id> folder (keys/index/snapshots, no data\), so
 # EVERY pack must come from a drive restore.bat hands to lcsas-restore.exe
-# (it names them: "drives searched for discs:").  Proving
-# that more than one mounted data disc holds packs therefore proves, with
-# the byte-exact tree check, that a restore consumed more than one disc.
+# (it names them: "drives searched for discs:").  This counts every pack,
+# whatever set it belongs to, so on its own it no longer proves the
+# restored set came from more than one disc (the fixture has two sets,
+# #617).  The fixture job proves that part on Linux: the restored set's
+# own packs lie on two or more discs, none holding them all
+# (fixture_lib.restore_set_span_problem, sets.json restore_discs).  With
+# that and the byte-exact tree check, a restore consumed more than one
+# disc.
 function Assert-MultiDisc {
     param([int]$Minimum = 2)
     $discs = @(Get-DataDiscs | Where-Object { $_.Packs -gt 0 })

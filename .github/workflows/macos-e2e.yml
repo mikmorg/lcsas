@@ -30,11 +30,17 @@ name: macos-e2e
 # discovery offered the one backup set once per disc ("Multiple
 # repositories on this archive: 1) win 2) win ...") and exited 1 without a
 # terminal.  The happy path runs both ways: the heir's plain invocation and
-# LCSAS_REPO set to the set's name.
+# with LCSAS_REPO set to the set's name.
 #
 # The set is registered with `lcsas repo add`, as an owner does, so its
 # folder on the discs is named by a UUID id, not by its name "Family
 # photos" (#617); the happy path checks restore.sh prints the name (#606).
+# The fixture has ONE set, so restore.sh takes it without reading
+# LCSAS_REPO: these legs show LCSAS_REPO set does no harm, not that
+# restore.sh matches a set by its name or id.  That matching is gated on
+# Linux (tests/recovery_hardening/test_restore_sh_journey.py).  A second
+# set here would put the set list on screen and end the heir's plain
+# invocation below at it, which is the #533 check.
 #
 # No `schedule:` here, on purpose (#462): GitHub disables a scheduled file after
 # 60 quiet days, PR trigger and all.  The repo's rule is that a weekly run lives
@@ -48,6 +54,8 @@ on:
       - "recovery/scripts/**"
       - "src/lcsas/meta/**"
       - "src/lcsas/staging/metadata.py"
+      # The set markers on the discs, and name_cmd (#606, #617).
+      - "src/lcsas/staging/repo_marker.py"
       - "recovery/bin/aarch64-macos/**"
       - "recovery/bin/x86_64-macos/**"
       - "tests/e2e/fixture_lib.py"
@@ -153,8 +161,9 @@ jobs:
           name: macos-fixture
           path: fixture
 
-      # The name is fixture_lib.WINDOWS_SET_NAME.
-      - name: restore.sh with every disc attached (happy path, LCSAS_REPO by name)
+      # The name is fixture_lib.WINDOWS_SET_NAME.  With one set restore.sh
+      # does not read LCSAS_REPO (see the header).
+      - name: restore.sh with every disc attached (happy path, LCSAS_REPO set)
         timeout-minutes: 10
         run: python3 tests/e2e/macos_restore_smoke.py happy "$PWD/fixture" --repo "Family photos"
 

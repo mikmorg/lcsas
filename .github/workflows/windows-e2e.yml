@@ -25,6 +25,8 @@ on:
       - "recovery/scripts/**"
       - "src/lcsas/meta/**"
       - "src/lcsas/staging/metadata.py"
+      # The set markers on the discs, and name_cmd (#606, #617).
+      - "src/lcsas/staging/repo_marker.py"
       - "recovery/bin/x86_64-windows/**"
       - "tests/e2e/fixture_lib.py"
       - "tests/e2e/windows_e2e_lib.ps1"
@@ -84,25 +86,25 @@ jobs:
       # Sizing (#517): fixture_lib's defaults (12 x 64 KiB) fit ONE TEST_TINY
       # data disc, so the heir's multi-disc sweep was never exercised.  A
       # TEST_TINY disc is 2 MiB with a ~700 KB holographic reserve (~1.3 MiB
-      # of packs), so 8 x 512 KiB (4 MiB of incompressible data) lands on
-      # four data discs.  Few, bigger files rather than many small ones:
-      # Defender real-time scanning on the windows runner is per-file.
+      # of packs), so 8 x 512 KiB (4 MiB of incompressible data,
+      # fixture_lib.WINDOWS_E2E_FILE_COUNT/_BYTES) lands on four data discs.
+      # Few, bigger files rather than many small ones: Defender real-time
+      # scanning on the windows runner is per-file.
       #
       # Backup sets (#617): two, each registered with `lcsas repo add` as an
       # owner does, so the discs name their folders by UUID ids.  The one
       # restored has an accented name, which restore.bat shows as its
       # name_cmd ("_" for the accented letter); the second fills the set
       # menu, as on the drill's two-set archive (#606).  sets.json carries
-      # their ids and names to the restore job.
+      # their ids and names to the restore job, and which discs hold the
+      # restored set's packs.  tests/integration/test_e2e_fixture_sets.py
+      # builds this same fixture on every PR (make test-integration).
       - name: Build Windows fixture (rustic repos + ISOs + manifest)
-        env:
-          FIXTURE_FILE_COUNT: "8"
-          FIXTURE_FILE_BYTES: "524288"
         run: |
           set -euo pipefail
           mkdir -p fixture-out
           PYTHONPATH=src python3 - "$PWD/fixture-out" <<'PY'
-          import json, os, sys
+          import json, sys
           from pathlib import Path
 
           sys.path.insert(0, "tests/e2e")
@@ -111,8 +113,8 @@ jobs:
           workdir = Path(sys.argv[1]).resolve()
           fx = fixture_lib.build_windows_fixture(
               workdir,
-              file_count=int(os.environ["FIXTURE_FILE_COUNT"]),
-              file_bytes=int(os.environ["FIXTURE_FILE_BYTES"]),
+              file_count=fixture_lib.WINDOWS_E2E_FILE_COUNT,
+              file_bytes=fixture_lib.WINDOWS_E2E_FILE_BYTES,
               # The single-drive leg mounts only the meta ISO, so the
               # backup set must be on it, as on a real meta disc (#617).
               meta_metadata=True,
@@ -129,10 +131,16 @@ jobs:
           (workdir / "artifacts.json").write_text(json.dumps(artifacts, indent=2))
           print(json.dumps(artifacts, indent=2))
           print(f"DATA_DISCS={len(fx.data_isos)}")
-          # The Windows multi-disc leg is meaningless on one disc.
+          # The Windows multi-disc leg is meaningless on one disc, and so
+          # is it when the restored set's own packs fit one disc: the other
+          # set's packs share the discs (#617).
           assert len(fx.data_isos) >= 2, (
               f"fixture produced {len(fx.data_isos)} data ISO(s); need >= 2"
           )
+          for label, packs in json.loads(fx.sets_path.read_text())["restore_discs"].items():
+              print(f"restored set: {len(packs)} pack(s) on {label}")
+          problem = fixture_lib.restore_set_span_problem(fx.sets_path, minimum=2)
+          assert problem is None, problem
           PY
           # Flatten the produced artifacts into an upload dir.  data ISOs +
           # meta ISO live under fixture-out/iso_out/.
@@ -266,9 +274,13 @@ jobs:
       # handed all the data discs to lcsas-restore.exe as --pack-search and
       # the restore consumed packs from several of them with no swap prompt.
       # restore.bat prints nothing about its --pack-search drives, and --repo
-      # (X:\metadata\<id>) holds no data\, so we assert it structurally: more
-      # than one mounted disc holds packs, and the byte-exact check above
-      # passed, so packs necessarily came from more than one disc.
+      # (X:\metadata\<id>) holds no data\, so we assert it structurally.
+      # The fixture job proved the RESTORED set's own packs lie on two or
+      # more data discs, none holding them all (restore_set_span_problem;
+      # the other set's packs share the discs, so a count of every pack
+      # would prove nothing, #617).  This step checks those discs are
+      # mounted and hold packs; with the byte-exact check above, packs
+      # necessarily came from more than one disc.
       - name: Multi-disc — the restore swept more than one data disc
         shell: pwsh
         run: |

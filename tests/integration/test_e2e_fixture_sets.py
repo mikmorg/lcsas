@@ -1,11 +1,13 @@
 """#617: the windows-e2e / macos-e2e fixture's discs name sets as an owner's do.
 
-Builds the real fixture (rustic + the burn pipeline + xorriso), small, in
-windows-e2e's shape (two backup sets, the backup set metadata on the meta
-disc too) and checks what is on the discs: every ``metadata/`` folder is
-named by a UUID id, never by a name; its ``LCSAS_REPO.txt`` marker gives
-the name and the name restore.bat shows (``name_cmd``); and ``sets.json``,
-which the windows and macOS legs read, says the same.
+Builds the real fixture (rustic + the burn pipeline + xorriso) exactly as
+windows-e2e's fixture job does (two backup sets, the backup set metadata
+on the meta disc too, the workflow's size) and checks what is on the
+discs: every ``metadata/`` folder is named by a UUID id, never by a name;
+its ``LCSAS_REPO.txt`` marker gives the name and the name restore.bat
+shows (``name_cmd``); ``sets.json``, which the windows and macOS legs
+read, says the same; and the restored set's own packs lie on two discs or
+more, which windows-e2e's multi-disc step relies on.
 """
 
 from __future__ import annotations
@@ -46,11 +48,25 @@ def _metadata_of(iso: Path, dest: Path) -> dict[str, dict[str, str] | None]:
     return {d.name: read_repo_marker(d) for d in dest.iterdir() if d.is_dir()}
 
 
+def _packs_of(iso: Path) -> set[str]:
+    """The pack file names under the iso's /data."""
+    proc = subprocess.run(
+        ["xorriso", "-indev", str(iso), "-find", "/data", "-type", "f"],
+        check=True, capture_output=True, text=True,
+    )
+    return {
+        line.strip().strip("'").rsplit("/", 1)[-1]
+        for line in proc.stdout.splitlines()
+        if line.startswith("'/data/")
+    }
+
+
 def test_windows_e2e_fixture_discs_use_uuid_ids_and_names(tmp_path: Path) -> None:
+    """windows-e2e's fixture exactly as the workflow builds it."""
     fx = fixture_lib.build_windows_fixture(
         tmp_path / "work",
-        file_count=2,
-        file_bytes=16 * 1024,
+        file_count=fixture_lib.WINDOWS_E2E_FILE_COUNT,
+        file_bytes=fixture_lib.WINDOWS_E2E_FILE_BYTES,
         meta_metadata=True,
         set_name=fixture_lib.WINDOWS_E2E_SET_NAME,
         other_set_names=fixture_lib.WINDOWS_E2E_OTHER_SET_NAMES,
@@ -70,10 +86,15 @@ def test_windows_e2e_fixture_discs_use_uuid_ids_and_names(tmp_path: Path) -> Non
     # The meta disc carries every set; each data disc the sets it holds
     # packs of.  Every folder is an id, and its marker names the set.
     seen: set[str] = set()
+    names = [s["name"] for s in every]
     for n, iso in enumerate([fx.meta_iso, *fx.data_isos]):
         folders = _metadata_of(iso, tmp_path / f"x{n}")
         if iso == fx.meta_iso:
             assert set(folders) == set(by_id), iso.name
+        # The blind setup's check of each disc agrees.
+        assert fixture_lib.set_marker_problems(
+            tmp_path / f"x{n}", names, require_all=iso == fx.meta_iso,
+        ) == [], iso.name
         for folder, marker in folders.items():
             assert folder in by_id, f"{iso.name}: metadata/{folder} is no set's id"
             assert marker is not None, f"{iso.name}: metadata/{folder} has no marker"
@@ -83,7 +104,21 @@ def test_windows_e2e_fixture_discs_use_uuid_ids_and_names(tmp_path: Path) -> Non
             ), iso.name
             seen.add(folder)
     assert restore["id"] in seen
-    assert len(fx.data_isos) >= 1
+
+    # The multi-disc proof (#517, #617): the restored set's OWN packs need
+    # two discs or more, as the workflow's fixture job asserts; and
+    # restore_discs, which says so, matches the packs on the discs.
+    assert len(fx.data_isos) >= 2
+    assert fixture_lib.restore_set_span_problem(fx.sets_path, minimum=2) is None
+    discs = sets["restore_discs"]
+    restored = {sha for packs in discs.values() for sha in packs}
+    on_discs = {iso.stem: _packs_of(iso) for iso in fx.data_isos}
+    assert set(discs) <= set(on_discs)
+    for label, packs in on_discs.items():
+        assert sorted(packs & restored) == discs.get(label, []), label
+    # The other set's packs share the discs: a count of every pack (what
+    # Assert-MultiDisc sees on Windows) is more than the restored set's.
+    assert set().union(*on_discs.values()) > restored
 
 
 def test_default_fixture_has_one_set_named_apart_from_its_id(

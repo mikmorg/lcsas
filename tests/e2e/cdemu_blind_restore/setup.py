@@ -49,6 +49,7 @@ from fixture_lib import (  # noqa: E402
     generate_source_tree,
     init_rustic_repo,
     master_iso,
+    set_marker_problems,
 )
 
 # Keep the fixture OUT of /mnt — that path is reserved for the
@@ -315,6 +316,24 @@ def _repo_id(conn, name: str) -> str:
     return repo.repo_id
 
 
+def _check_set_markers(stage: Path, *, require_all: bool) -> None:
+    """#617: stop the setup unless the disc staged at *stage* keeps each
+    backup set as an owner's discs do: ``metadata/<uuid>/`` with an
+    ``LCSAS_REPO.txt`` naming one of the tenants.  verify.sh scores no
+    set name, so a fixture that regressed to ``metadata/alpha/`` (or lost
+    its markers) would otherwise only show in an LLM run.  *require_all*:
+    the META disc carries every tenant; a data disc only those it holds
+    packs of."""
+    problems = set_marker_problems(
+        stage / "metadata", _tenants(), require_all=require_all,
+    )
+    if problems:
+        raise SystemExit(
+            f"{stage}: the backup set folders are not an owner's:\n  "
+            + "\n  ".join(problems)
+        )
+
+
 def _fixture_config():
     """The archive's LCSASConfig, shared by the burn and (mixed-split) the
     meta disc build."""
@@ -430,6 +449,7 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
         # for the no-catalog variant, between prepare (which injects
         # catalog.db into staging) and execute (which masters the ISO).
         _apply_data_disc_variant_mutations(manifest.staging_path)
+        _check_set_markers(manifest.staging_path, require_all=False)
         iso_path = ISO_OUT / f"{manifest.volume_label}.iso"
         orchestrator.execute(
             manifest, iso_output=iso_path, skip_burn=True,
@@ -497,6 +517,7 @@ def _build_meta_iso() -> Path:
         manifest.write_text("\n".join(rows) + "\n")
 
     _apply_variant_mutations(META_STAGE)
+    _check_set_markers(META_STAGE, require_all=True)
 
     # Shared ISO mastering (INFRA-01).
     return master_iso(

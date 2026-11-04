@@ -26,6 +26,7 @@ import sqlite3
 import subprocess
 import sys
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,6 +76,89 @@ def add_repo(db_path: Path, name: str, mirror: Path) -> str:
     if repo_id == name:
         raise RuntimeError(f"repo add gave {name!r} its own name as its id")
     return repo_id
+
+
+def _is_uuid(text: str) -> bool:
+    try:
+        return str(uuid.UUID(text)) == text
+    except ValueError:
+        return False
+
+
+def set_marker_problems(
+    metadata_dir: Path, names: Iterable[str], *, require_all: bool,
+) -> list[str]:
+    """What is wrong with the backup set folders in *metadata_dir* (a
+    disc's ``metadata/``), measured against an owner's discs (#617).
+
+    Every folder must be named by a UUID id, never by a set's name.  Its
+    ``LCSAS_REPO.txt`` marker must give that id and one of *names*, and no
+    two folders may give the same name.  With *require_all*, every one of
+    *names* must have a folder: the META disc carries every set, a data
+    disc only the sets it holds packs of.  An empty list means all is well.
+    """
+    _ensure_src_on_path()
+    from lcsas.staging.repo_marker import read_repo_marker
+
+    wanted = set(names)
+    problems: list[str] = []
+    found: dict[str, str] = {}
+    folders = (
+        sorted(p for p in metadata_dir.iterdir() if p.is_dir())
+        if metadata_dir.is_dir() else []
+    )
+    if not folders:
+        problems.append(f"{metadata_dir}: no backup set folders")
+    for folder in folders:
+        if not _is_uuid(folder.name):
+            problems.append(
+                f"{folder}: the folder is not named by a UUID id"
+                + (" (it is the set's name)" if folder.name in wanted else "")
+            )
+            continue
+        marker = read_repo_marker(folder)
+        if marker is None:
+            problems.append(f"{folder}: no LCSAS_REPO.txt whose id= is the folder")
+            continue
+        name = marker.get("name", "")
+        if name not in wanted:
+            problems.append(f"{folder}: the marker names {name!r}, no set of this archive")
+        elif name in found:
+            problems.append(f"{folder}: {name!r} also has the folder {found[name]}")
+        else:
+            found[name] = folder.name
+    if require_all:
+        missing = sorted(wanted - set(found))
+        if missing:
+            problems.append(f"{metadata_dir}: no folder for {', '.join(missing)}")
+    return problems
+
+
+def restore_set_span_problem(sets_path: Path, *, minimum: int = 2) -> str | None:
+    """Why the restored set's packs do not lie on at least *minimum* data
+    discs with no one disc holding them all, or None if they do.
+
+    Reads ``restore_discs`` in a fixture's ``sets.json``.  windows-e2e
+    restores with every disc mounted and checks the tree byte for byte;
+    that proves the restore read more than one disc only when the set it
+    restored needs more than one.  The other sets' packs share the discs,
+    so the count must be of the restored set's packs alone.
+    """
+    sets = json.loads(sets_path.read_text(encoding="utf-8"))
+    discs: dict[str, list[str]] = sets.get("restore_discs") or {}
+    every = {sha for packs in discs.values() for sha in packs}
+    if not every:
+        return f"{sets_path}: no disc holds a pack of the restored set"
+    holding = sorted(label for label, packs in discs.items() if packs)
+    if len(holding) < minimum:
+        return (
+            f"the restored set's {len(every)} packs lie on {len(holding)} "
+            f"data disc(s) ({', '.join(holding)}); need >= {minimum}"
+        )
+    for label in holding:
+        if set(discs[label]) >= every:
+            return f"{label} alone holds all {len(every)} packs of the restored set"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +317,11 @@ def build_meta_iso(
 # archive (#606, #617).  (\u00ed is a small i with an acute accent.)
 WINDOWS_E2E_SET_NAME = "Fotos da fam\u00edlia"
 WINDOWS_E2E_OTHER_SET_NAMES = ("Work documents",)
+# windows-e2e's size (#517): 8 x 512 KiB of incompressible data does not
+# fit one TEST_TINY disc, so the restored set spans several.  The workflow
+# and tests/integration/test_e2e_fixture_sets.py build this same shape.
+WINDOWS_E2E_FILE_COUNT = 8
+WINDOWS_E2E_FILE_BYTES = 512 * 1024
 
 
 @dataclass(frozen=True)
@@ -285,7 +374,10 @@ def build_windows_fixture(
       * ``sets.json``                    — the backup sets: ``restore`` (the
                                            one ``manifest.json`` describes)
                                            and ``others``, each with its id,
-                                           name and name_cmd (ASCII JSON)
+                                           name and name_cmd; and
+                                           ``restore_discs``, {data disc
+                                           label: the restored set's pack
+                                           ids on it} (ASCII JSON)
 
     Every set is registered with ``lcsas repo add`` (:func:`add_repo`), so
     its id is a UUID and its ``metadata/<id>/`` folder on the discs is not
@@ -411,6 +503,22 @@ def build_windows_fixture(
         iso_path = iso_out / f"{prepared.volume_label}.iso"
         orchestrator.execute(prepared, iso_output=iso_path, skip_burn=True)
         data_isos.append(iso_path)
+    # Where the restored set's packs went, by disc label.  The other sets'
+    # packs share the discs, so counting every pack on a disc proves
+    # nothing about the restored set (restore_set_span_problem).
+    restore_discs: dict[str, list[str]] = {}
+    for label, sha in conn.execute(
+        """
+        SELECT v.label, p.sha256
+        FROM packs p
+        JOIN volume_packs vp ON p.pack_id = vp.pack_id
+        JOIN volumes v ON vp.volume_id = v.volume_id
+        WHERE p.repo_id = ? AND p.is_pruned = 0
+        ORDER BY v.label, p.sha256
+        """,
+        (sets[0].repo_id,),
+    ):
+        restore_discs.setdefault(str(label), []).append(str(sha))
     conn.close()
 
     # 5. meta ISO (carries the tier-1 lcsas-restore.exe + a repo to discover).
@@ -430,6 +538,7 @@ def build_windows_fixture(
     sets_path.write_text(json.dumps({
         "restore": sets[0].as_json(),
         "others": [s.as_json() for s in sets[1:]],
+        "restore_discs": restore_discs,
     }, indent=2) + "\n")
 
     return WindowsFixture(
