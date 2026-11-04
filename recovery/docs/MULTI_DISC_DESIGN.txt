@@ -565,7 +565,7 @@ be closed before the heir is prompted.  The audit:
   - sh / cmd.exe: holds the script.  Released after `exec` to the
     relocated copy.
   - lcsas-restore loader: mmaps the binary.  Released after `exec`
-    to /tmp/lcsas-restore.
+    to the copy in the tools folder (~/lcsas-restore-tools, #609).
   - keys/, index/, snapshots/: opendir+closedir in repo.c (see
     lines 184/191, 427/434, 593/653).  All metadata is in RAM by
     the time the locator is reached.
@@ -579,7 +579,7 @@ WORKFLOW EXAMPLE (one-drive case)
 ─────────────────────────────────
 
   $ sh /mnt/recovery/scripts/restore.sh ~/restored
-  [lcsas-restore] copied recovery binaries to /tmp/lcsas-restore.X9k2
+  [lcsas-restore] copied recovery binaries to /home/alice/lcsas-restore-tools
   [lcsas-restore] you may eject the meta disc when the binary
                   prompts for a data disc.
   [tier 1] using prebuilt lcsas-restore (x86_64)

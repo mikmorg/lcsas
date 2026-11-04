@@ -441,15 +441,20 @@ def _make_recovery_with_binary(tmp_path: Path) -> Path:
 
 
 def test_pack_search_skips_meta_disc_path(tmp_path: Path) -> None:
-    """add_pack_search must skip paths at or under META_DISC (lines 755-756)
-    so that a single-drive user can eject the meta disc after recovery
-    starts — we cannot use the meta disc as a pack source."""
+    """add_pack_search must skip paths at or under META_DISC while the
+    meta disc is in the drive, so that a single-drive user can eject it
+    after recovery starts — we cannot use the meta disc as a pack
+    source.  (Since #616 the meta disc counts as "in the drive" only
+    while its recovery/scripts/restore.sh is there, so the fixture now
+    carries one, and a data/ that would otherwise be searched.)"""
     recovery = _make_recovery_with_binary(tmp_path)
     mounts_root = tmp_path / "mounts"
     # The meta-disc mount and a separate data disc share the same parent.
     meta_mnt = mounts_root / "meta_disc"
     data_mnt = mounts_root / "data_disc"
-    meta_mnt.mkdir(parents=True)
+    (meta_mnt / "recovery" / "scripts").mkdir(parents=True)
+    (meta_mnt / "recovery" / "scripts" / "restore.sh").write_text("# meta\n")
+    (meta_mnt / "data").mkdir()
     (data_mnt / "data").mkdir(parents=True)  # valid pack-search target
 
     env = {
@@ -469,6 +474,75 @@ def test_pack_search_skips_meta_disc_path(tmp_path: Path) -> None:
         f"add_pack_search must not include the meta-disc path in --pack-search "
         f"roots; got pack_roots={pack_roots}"
     )
+    assert str(data_mnt) in pack_roots, pack_roots
+
+
+def test_pack_search_uses_the_meta_mount_point_once_the_disc_is_out(
+    tmp_path: Path,
+) -> None:
+    """#616: the meta disc is skipped only while it is live (its
+    recovery/scripts/restore.sh is there), as tier 1 does.  Once it is
+    out, a data disc mounted at the same place is a pack source."""
+    recovery = _make_recovery_with_binary(tmp_path)
+    mounts_root = tmp_path / "mounts"
+    drive = mounts_root / "cdrom"
+    (drive / "data").mkdir(parents=True)  # a data disc where the meta was
+
+    env = {
+        **os.environ,
+        "LCSAS_RELOCATED": str(drive),
+        "LCSAS_MOUNT_DIRS": str(mounts_root),
+    }
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored"), "latest"],
+        capture_output=True, text=True, env=env, timeout=15, input="stub-pw\n",
+    )
+    args = _stub_args(res.stdout)
+    roots = [args[i + 1] for i, a in enumerate(args) if a == "--pack-search"]
+    assert str(drive) in roots, (roots, res.stderr)
+
+    # The same drive while the META disc is still in it: skipped.
+    (drive / "recovery" / "scripts").mkdir(parents=True)
+    (drive / "recovery" / "scripts" / "restore.sh").write_text("# meta\n")
+    res = subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(tmp_path / "restored2"), "latest"],
+        capture_output=True, text=True, env=env, timeout=15, input="stub-pw\n",
+    )
+    args = _stub_args(res.stdout)
+    roots = [args[i + 1] for i, a in enumerate(args) if a == "--pack-search"]
+    assert str(drive) not in roots, (roots, res.stderr)
+
+
+def test_lcsas_interactive_is_passed_to_tier1(tmp_path: Path) -> None:
+    """#617: LCSAS_INTERACTIVE=on|off|auto reaches tier 1 as
+    --interactive; another value is ignored with a message; unset adds
+    nothing (tier 1's own auto)."""
+    recovery = _make_recovery_with_binary(tmp_path)
+    base = {
+        **os.environ,
+        "LCSAS_RELOCATED": "/fake/meta",
+        "LCSAS_MOUNT_DIRS": "",
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+        # on also turns on restore.sh's own questions; the first, the
+        # newest data disc, has its own tests (test_restore_sh_journey).
+        "LCSAS_NEWEST_DISC_PROMPT": "0",
+    }
+    for value, want in (("on", "on"), ("off", "off"), ("auto", "auto"),
+                        ("sometimes", None), (None, None)):
+        env = dict(base)
+        env.pop("LCSAS_INTERACTIVE", None)
+        if value is not None:
+            env["LCSAS_INTERACTIVE"] = value
+        res = subprocess.run(
+            ["sh", str(RESTORE_SH), str(recovery),
+             str(tmp_path / f"restored-{value}"), "latest"],
+            capture_output=True, text=True, env=env, timeout=15, input="pw\n",
+        )
+        args = _stub_args(res.stdout)
+        got = [args[i + 1] for i, a in enumerate(args) if a == "--interactive"]
+        assert got == ([want] if want else []), (value, args, res.stderr)
+        if value == "sometimes":
+            assert "ignoring LCSAS_INTERACTIVE=sometimes" in res.stderr, res.stderr
 
 
 def test_pack_search_repo_data_subdir(tmp_path: Path) -> None:
