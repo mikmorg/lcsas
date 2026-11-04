@@ -33,10 +33,19 @@ QUICK REFERENCE — complete command sequence (do exactly this)
 
   Step 3 — answer the prompts:
 
-    # A multi-tenant archive asks `Choose a repository` first; a
-    # single-tenant archive skips straight to `Password:`.  Wait on
-    # either, branch on which one matched.
-    out=$(restore-shell expect 'Choose a repository|Password:' 60)
+    # restore.sh first asks you to put in your NEWEST data disc
+    # (the META disc is still in the drive).  Send s to skip that
+    # question: this archive's META disc copies are current.  Then a
+    # multi-tenant archive asks `Choose a repository`; a single-tenant
+    # archive skips straight to `Password:`.  Wait on any of them,
+    # branch on which one matched.
+    out=$(restore-shell expect 'NEWEST data disc|Choose a repository|Password:' 120)
+    case "$out" in
+        *"NEWEST data disc"*)
+            restore-shell send s
+            out=$(restore-shell expect 'Choose a repository|Password:' 60)
+            ;;
+    esac
     case "$out" in
         *"Choose a repository"*)
             restore-shell send alpha
@@ -60,7 +69,11 @@ QUICK REFERENCE — complete command sequence (do exactly this)
       for _ in $(seq 1 40); do
           out=$(restore-shell expect 'Insert the right disc|restore complete' 120) || break
           case "$out" in
-              *"restore complete"*) echo "RESTORE COMPLETE"; break ;;
+              *"restore complete"*)
+                  echo "RESTORE COMPLETE"
+                  # Answer "Restore another backup set?" with no.
+                  restore-shell send n
+                  break ;;
               *"Insert the right"*) ;;  # fall through to swap
           esac
 
@@ -265,9 +278,19 @@ LCSAS_TIER_FALLBACK=1
     (lcsas-restore) crashes.  Default OFF.  Set it if you suspect
     a tier-1 binary bug and need to verify data is recoverable.
 
-LCSAS_REPO=<path>
-    Skip the multi-tenant selection prompt and use this repo
-    directory directly.  Useful when you already know the repo.
+LCSAS_REPO=<name or id>
+    Skip the multi-tenant selection prompt and restore this backup
+    set (its name, e.g. alpha, or its id).  Useful when you already
+    know the repo.
+
+LCSAS_NEWEST_DISC_PROMPT=0
+    Skip the "put in your NEWEST data disc" question restore.sh
+    asks first; it then uses the discs mounted now, else the copies
+    on the META disc.
+
+LCSAS_ANOTHER_SET=0
+    Skip the "Restore another backup set from these discs? [y/N]"
+    question restore.sh asks after a restore that succeeds.
 
 LCSAS_ALLOW_NO_PACK_SEARCH=1
     Bypass the hard-error when no data discs are detected on mount.

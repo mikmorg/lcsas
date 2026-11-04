@@ -42,9 +42,10 @@ DECISION FLOW
 
          sh /mnt/restore.sh /tmp/restored latest
 
-       This prompts for the password and writes restored files under
-       /tmp/restored.  The script auto-detects architecture and falls
-       back through the cascade if the primary binary is missing.
+       This asks a few questions (see "WHAT restore.sh ASKS"), then
+       writes restored files under /tmp/restored.  The script
+       auto-detects architecture and falls back through the cascade
+       if the primary binary is missing.
 
      NO  -> fall back to the Python reader (tier 3) from a
             data disc that ships its own standalone_restorer.py.
@@ -89,6 +90,60 @@ itself and the binaries off a read-only disc into its tools folder
 sticks, downloaded disc images, and locked-down computers.  (The
 binaries carry no Apple or Microsoft developer signature, so a
 cautious OS treats them as software from an unknown source.)
+
+WHAT restore.sh ASKS
+
+Run from the META disc on a terminal, restore.sh asks these questions,
+in this order.  Each one says how to answer.
+
+  1. Your NEWEST data disc.  When no data disc is in yet, it asks you
+     to take the META disc out and put in the data disc with the
+     latest year, and then the highest number, in its label: for
+     example, LCSAS_CD700_2026_0002 is newer than LCSAS_CD700_2025_0019.
+     Each disc holds every backup set's list of snapshots as it was
+     when that disc was made, so the newest disc knows the newest
+     snapshots, and any backup set added after the META disc was made.
+     Press ENTER once the disc is in (if it does not open by itself,
+     mount it: sudo mount /dev/sr0 /media).  restore.sh prints the
+     full label it found.  The name the computer shows for a disc may
+     be cut short; the full label is printed on the disc and in its
+     VOLUME_INFO.txt.  S then ENTER skips this question and uses the
+     copies on the META disc.  Q then ENTER stops (exit code 65).
+
+  2. The backup set, when the discs hold more than one.  The sets are
+     listed by name, with a note when a set's password is split into
+     share cards:
+         1) documents
+         2) photos (password split: any 2 of 3 share cards)
+     Type the number, the name, or the set's id (its folder name
+     under metadata/).  Q then ENTER stops (exit code 65).
+
+  3. The password.  What you type is not shown.  An empty answer is
+     asked again, and so is a password the backup set does not
+     accept: it is checked before the restore starts.  Q then ENTER
+     stops (exit code 77).  A password that is just the letter q
+     cannot be typed here: put it in a file and use --key FILE.
+     When the set's password is split, restore.sh asks for the share
+     cards instead (see "SHARE CARDS (SPLIT PASSWORDS)").
+
+  4. The discs, one by one, while the restore runs (see "MULTI-DISC
+     RESTORE").
+
+  5. After a restore that succeeds, when the discs hold another set:
+         Restore another backup set from these discs? [y/N]
+     y asks for the folder to restore it into (ENTER keeps the same
+     folder) and starts again at question 2, with no META disc and
+     nothing copied again.  N or ENTER ends the restore, and the
+     tools folder is deleted (see "THE TOOLS FOLDER").
+
+Question 1, the check of the password, and question 5 come only on a
+terminal: never when the answers come from a pipe or a script.  To
+run with no questions at all, give the answers in advance (see
+"ENVIRONMENT VARIABLES"):
+
+    LCSAS_REPO=photos LCSAS_PWFILE=/path/to/password-file \
+    LCSAS_NEWEST_DISC_PROMPT=0 LCSAS_ANOTHER_SET=0 \
+        sh /mnt/restore.sh ~/restored
 
 CASCADE DETAILS
 
@@ -224,6 +279,9 @@ You can stop a restore at any time:
 
   * At a disc prompt, type q then ENTER.  restore.sh exits with code
     75 ("stopped at your request").
+  * At a question restore.sh asks, type q then ENTER: exit code 65 at
+    the newest data disc or the backup set, 77 at the password or a
+    share card.
   * Anywhere else, press Ctrl-C.  restore.sh exits with code 130.
 
 Nothing is lost.  Files restored so far stay in the target folder,
@@ -257,8 +315,10 @@ and it holds:
   recovery/bin/<arch>/         the recovery programs for THIS computer
                                only (about 130 MB, not all platforms)
   recovery/docs/               these manuals
-  metadata/                    the META disc's copy of every backup
-                               set's keys, index and snapshots
+  metadata/                    every backup set's keys, index and
+                               snapshots: the META disc's copy, with
+                               the sets on the newest data disc you
+                               put in taken from that disc
   catalog.db                   a copy of the catalog from a data disc
   pack-cache/                  the packs copied off each data disc
   resume.sh                    carries a stopped restore on (mode 700;
@@ -269,9 +329,10 @@ minutes on a slow drive.  The pack cache can grow to the size of the
 discs it copies, so the home folder needs that much free space; the
 check before the password prompt includes it.
 
-The folder is removed when a restore succeeds.  After any other exit
-(a wrong password, q at a disc prompt, Ctrl-C) it stays, so you can
-carry on; delete it yourself when you no longer need it:
+The folder is removed when a restore succeeds and you answer N to
+"Restore another backup set?".  After any other exit (a wrong
+password, q at a disc prompt, Ctrl-C) it stays, so you can carry on;
+delete it yourself when you no longer need it:
 
     rm -rf ~/lcsas-restore-tools
 
@@ -348,9 +409,38 @@ Some archives split a repository's password into N shares, each on
 its own share card (any K of them rebuild it; fewer than K reveal
 nothing).  An archive may split some repositories' passwords and not
 others.  PASSWORD_INFO.txt on any disc states, for each repository,
-whether its password was split and the K and N in effect.  If the
-password of the repository you are restoring was split, rebuild it
-BEFORE running the normal cascade:
+whether its password was split and the K and N in effect.
+
+restore.sh asks for the cards itself when the backup set's marker
+(metadata/<id>/LCSAS_REPO.txt on the discs) says its password is
+split:
+
+    The password for photos is split into 3 share cards;
+    you need any 2 of them (Split ID 01234).
+    Share card 1 of 2: type all the words on one line, then ENTER
+    (or Q to quit).
+
+Type the words of exactly K different cards, one card per line; the
+words show as you type, and a word may be cut to its first 4 letters.
+Each card is checked on its own as you type it: a mistyped word is
+named, and that card is asked for again.  The cards are then combined
+with the bundled lcsas-keyshare.  If they cannot be combined (cards
+from two different splits: compare the Split ID on each card), or the
+password they make is not this set's, it starts again at card 1.
+P then ENTER instead of a card lets you type the password itself; Q
+then ENTER stops (exit code 77).  Each card you type is kept in its
+own private temporary file, deleted as soon as the cards are combined
+and on any exit.
+
+To give the cards without typing them, put each card (the printed
+card's text, or a file with just its words) in its own file in one
+folder, and name that folder:
+
+    LCSAS_SHARES_DIR=/path/to/cards sh /mnt/restore.sh ~/restored
+
+Discs made by an older LCSAS have no marker, and a set whose split was
+never recorded says it is not split: restore.sh then asks for the
+password.  Rebuild it first, by hand:
 
   1. Gather any K share cards of that repository (printed pages with
      "SHARE CARD" in the title -- older cards are titled "LCSAS KEY
@@ -411,10 +501,12 @@ EXIT CODES
     1  -- generic failure (no repo found, unsupported OS/arch, etc.)
     2  -- usage error
     64 -- no recovery method available
-    65 -- you stopped at a question restore.sh asked (e.g. the
-          overwrite warning for a folder that is not empty)
+    65 -- you stopped at a question restore.sh asked (the newest
+          data disc, the backup set, or the overwrite warning for a
+          folder that is not empty)
     75 -- you typed q at a disc prompt; carry on with resume.sh
-    77 -- a repository key rejected the password
+    77 -- a repository key rejected the password, or you typed q at
+          the password or a share card prompt
     130 / 143 -- stopped by Ctrl-C / killed; carry on with resume.sh
   On every exit but 0 the tools folder stays (see "THE TOOLS FOLDER").
 Exit 64 means every tier (1, 2, 2b, AND 3) was missing or unrunnable on
@@ -474,11 +566,37 @@ before invoking restore.sh.
 
   LCSAS_INTERACTIVE=on|off|auto
       Passed to the tier-1 binary as --interactive.  auto (default)
-      asks at the disc prompt only on a terminal.
+      asks at the disc prompt only on a terminal.  It also decides
+      whether restore.sh asks its own extra questions (the newest
+      data disc, a password asked again, another backup set): auto
+      asks them only on a terminal, on asks them even when the
+      answers come from a pipe (test rigs), off never asks them.
 
-See `sh restore.sh --help` for the full list including LCSAS_REPO,
-LCSAS_PASSWORD, LCSAS_PWFILE, LCSAS_TARGET, LCSAS_META_DISC,
-LCSAS_MOUNT_DIRS, LCSAS_NO_RELOCATE, and LCSAS_PROGRESS.
+  LCSAS_REPO=<name or id>
+      The backup set to restore, by its name or its id; skips the
+      list of sets.
+
+  LCSAS_PASSWORD=<password>   LCSAS_PWFILE=<file>
+      The password, or a file holding it (--key FILE is the same as
+      LCSAS_PWFILE); skips the password prompt.  A wrong one is not
+      asked for again: the run stops with exit code 77.
+
+  LCSAS_SHARES_DIR=<folder>
+      A folder of share card files, one card per file: the password
+      is rebuilt from them, with no share card prompts (see "SHARE
+      CARDS (SPLIT PASSWORDS)").
+
+  LCSAS_NEWEST_DISC_PROMPT=0
+      Do not ask for the newest data disc first: use the discs
+      mounted now, else the copies on the META disc.
+
+  LCSAS_ANOTHER_SET=0
+      Do not ask "Restore another backup set?" after a restore that
+      succeeds.
+
+See `sh restore.sh --help` for the full list including LCSAS_TARGET,
+LCSAS_META_DISC, LCSAS_MOUNT_DIRS, LCSAS_NO_RELOCATE, and
+LCSAS_PROGRESS.
 
 MULTI-DISC RESTORE
 
@@ -498,11 +616,13 @@ try the META disc burned closest in date to the data discs.
 
 For the first DATA disc, insert a disc with the NEWEST label: the
 latest year in the label, then the highest number (for example,
-LCSAS_BD25_2027_0014 comes before LCSAS_BD25_2026_0009).  Its catalog
-is the fullest, so the restore needs fewer disc swaps.  Any data disc
-still works.  Go by the label, not by when a disc was burned: a disc
-burned later to replace a damaged one keeps the old label and still
-carries the old catalog.
+LCSAS_BD25_2027_0014 comes before LCSAS_BD25_2026_0009).  restore.sh
+asks for it right after copying (see "WHAT restore.sh ASKS").  Its
+list of snapshots is the newest and its catalog the fullest, so the
+restore sees every backup set and needs fewer disc swaps.  Any data
+disc still works.  Go by the label, not by when a disc was burned: a
+disc burned later to replace a damaged one keeps the old label and
+still carries the old catalog.
 
   1. Insert the META disc and mount it:
          sudo mount /dev/sr0 /mnt
@@ -518,9 +638,11 @@ carries the old catalog.
          [lcsas-restore] copying the backup-set metadata (about 2 MB) ...
          [lcsas-restore] you may eject the meta disc when the
                          binary prompts for a data disc.
-  4. When the binary has loaded the index and needs a pack that lives
-     on a DATA disc it pauses and prints a prompt (see below).  Insert
-     a disc with the newest label first, as described above.
+  4. It asks you to take the META disc out and put in the data disc
+     with the newest label, as described above, and then for the
+     backup set and its password.
+  5. When the binary has loaded the index and needs a pack that lives
+     on another DATA disc, it pauses and prints a prompt (see below).
 
 WHAT THE SWAP PROMPT LOOKS LIKE
 
