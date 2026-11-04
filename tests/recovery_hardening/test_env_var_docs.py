@@ -89,3 +89,25 @@ def test_env_vars_txt_contains_optin_optout_principle() -> None:
         "and can predict how the restore script will behave without "
         "reading source code."
     )
+
+
+def test_env_vars_txt_lists_each_variable_once() -> None:
+    """Each variable has ONE entry, and ONE row in the quick reference.
+
+    restore.sh and restore.bat document the same variables (C4), each
+    from its own branch.  A merge that keeps both sides' entries --
+    which git does with no conflict when they sit in different places
+    -- would leave two entries that say different things.  One entry
+    per variable, with a "Windows:" paragraph for restore.bat.
+    """
+    lines = ENV_VARS_TXT.read_text(encoding="utf-8").splitlines()
+    entries = [ln for ln in lines if ln.startswith("LCSAS_") and ln.strip() == ln
+               and " " not in ln]
+    rows = [ln.split()[0] for ln in lines
+            if ln.startswith("LCSAS_") and len(ln.split()) > 1]
+    assert entries, "no LCSAS_ entry headings found in ENV_VARS.txt"
+    assert rows, "no LCSAS_ quick-reference rows found in ENV_VARS.txt"
+    dup_entries = sorted({e for e in entries if entries.count(e) > 1})
+    dup_rows = sorted({r for r in rows if rows.count(r) > 1})
+    assert not dup_entries, f"ENV_VARS.txt has two entries for {dup_entries}"
+    assert not dup_rows, f"ENV_VARS.txt has two quick-reference rows for {dup_rows}"

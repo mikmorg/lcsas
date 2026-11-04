@@ -30,6 +30,13 @@ LCSAS_PASSWORD
             exit 77.  (Typed at the prompt, a wrong password is caught
             before the restore starts and asked for again; since rc6,
             #608.)
+  Windows:  restore.bat honours it too (since rc6, #608), after
+            LCSAS_PWFILE.  It writes it to a temp file in %TEMP%,
+            deleted on every way out, and tries it with
+            lcsas-restore --list-snapshots before the restore: a wrong
+            one is said plainly, and the password is then asked on the
+            keyboard.  It is used for every backup set restored in the
+            run.
   Why:      Opt-in — credentials must never appear in the environment
             by default.  Scripted / CI use requires explicit action.
 
@@ -39,6 +46,25 @@ LCSAS_PWFILE
   What:     Path to a file whose first line is the password.  Preferred
             over LCSAS_PASSWORD in scripts because the secret stays in
             a file rather than a shell variable.
+  Windows:  restore.bat honours it too (since rc6, #608), before
+            LCSAS_PASSWORD: it copies the file's exact bytes (copy /b)
+            to its own temp file in %TEMP% and never deletes yours.
+            A read-only file (on a CD, a locked USB stick) is fine:
+            the copy loses the read-only mark, and is deleted on
+            every way out (a later run deletes one left by a closed
+            window).  A line break at the end is ignored.
+            RECOVER_WINDOWS.txt, "THE PASSWORD", shows how to write
+            such a file from a hidden PowerShell prompt (Windows
+            PowerShell 5.1 is enough).  A file that cannot be read, or
+            a wrong password, falls back to the keyboard.
+  Why:      Opt-in — same reasoning as LCSAS_PASSWORD.
+
+LCSAS_PW
+  Default:  unset (prompts on stdin)
+  Since:    restore.bat only, before rc6
+  What:     The older restore.bat name for LCSAS_PASSWORD, kept: used
+            when neither LCSAS_PWFILE nor LCSAS_PASSWORD is set.
+            restore.sh does not read it.
   Why:      Opt-in — same reasoning as LCSAS_PASSWORD.
 
 LCSAS_SHARES_DIR
@@ -49,13 +75,25 @@ LCSAS_SHARES_DIR
             printed card's text, or just its words).  restore.sh
             rebuilds the password from every file in it with the
             bundled lcsas-keyshare (more than K cards is fine) and asks
-            nothing.  If they cannot rebuild it, the run stops with
-            exit 77.  LCSAS_PWFILE and LCSAS_PASSWORD come first.
+            nothing.  A file with a mistake is named and left out, and
+            the rest are combined.  If they cannot rebuild it, the run
+            stops with exit 77.  LCSAS_PWFILE and LCSAS_PASSWORD come
+            first.
             Unset, restore.sh asks for exactly K cards, one per line,
             when the set's marker (metadata/<id>/LCSAS_REPO.txt) says
             split=K-of-N; P at that prompt types the password instead.
+  Windows:  restore.bat combines the files in a new folder under
+            %TEMP% that it then deletes.  It uses the folder when
+            LCSAS_PWFILE, LCSAS_PASSWORD and LCSAS_PW are not set, for
+            any backup set, split or not in its marker.  Every file
+            must be a card typed right: one mistyped word in any file
+            makes lcsas-keyshare refuse the whole folder (exit 3,
+            naming the word), even when K good cards remain.  If the
+            cards do not rebuild the password, it says why and asks on
+            the keyboard (the cards, or P and the password).
   Why:      Opt-in — the cards are secrets; scripted use needs an
-            explicit choice, like LCSAS_PWFILE.
+            explicit choice, like LCSAS_PWFILE.  The folder also serves
+            a set whose marker does not say its password is split.
 
 DISCOVERY OVERRIDES
 ───────────────────
@@ -70,6 +108,11 @@ LCSAS_REPO
             Skips the numbered list on archives with several sets.  A
             name two sets share matches neither: use the id.  The list
             itself shows each set's name (its id when it has no marker).
+  Windows:  restore.bat (since rc6, #606) matches the id, then the
+            name or name_cmd, case-blind, and takes the first set that
+            matches: with two sets of the same name, use the id.  A
+            name with letters outside A-Z may not match in cmd's code
+            page; use the id or the name the menu shows.
   Why:      Opt-in — omitting it is correct and safe; it just shows an
             interactive prompt.  Setting it changes which repository's
             data is restored; wrong value exits with an error.
@@ -147,9 +190,9 @@ LCSAS_PACK_CACHE_DIR
             who cannot afford the cache can explicitly set
             LCSAS_PACK_CACHE_DIR='' to turn it off.
   Windows:  restore.bat honours it too (since rc6, #610).  Unset, it
-            uses a pack-cache folder inside the recovery folder it runs
-            from: the copy it makes in %TEMP% (deleted when the script
-            ends), or the folder itself when it does not relocate.  It
+            uses the pack-cache folder in the tools folder (see
+            LCSAS_TOOLS_DIR), which outlives a restore that stopped,
+            so carrying it on does not ask for those discs again.  It
             makes the folder and checks it is there before tier 1
             starts, and removes it after a successful restore (a folder
             you named yourself is kept).  cmd cannot hold an empty
@@ -197,9 +240,25 @@ LCSAS_NEWEST_DISC_PROMPT
             mounted now are used, else the copies on the META disc.
             Answering S at the question does the same; Q stops (exit
             65).  resume.sh and the next-set run set it to 0.
+            The META disc's copies may lack the latest backups; and
+            when the META disc was made after the newest data disc, its
+            latest snapshot can need packs that are on no disc yet, so
+            tier 1 then asks for a disc that does not exist.
+  Windows:  restore.bat, run from a META disc (or relocated from one)
+            with no data disc in any drive, first asks for the NEWEST
+            data disc: the latest year, then the highest number, read
+            from the label in its VOLUME_INFO.txt.  That disc's
+            snapshots\ and index\ then replace the META disc's copies
+            in the tools folder (keys\ from both; a set only on the
+            META disc keeps its copy), and its catalog.db is the one
+            used.  With data discs in at the start there is no
+            question either: the newest of them is used.  The question
+            is not asked when carrying on a stopped restore.
   Why:      Opt-OUT.  The META disc's copy can be older than the newest
             data disc, and a set added after the META disc was made is
             not on it at all, so "latest" would quietly be older (#605).
+            The knob is for test rigs and for a reader who knows the
+            META disc is current.
 
 LCSAS_ANOTHER_SET
   Default:  unset → 1  (opt-out / default ON)
@@ -215,11 +274,17 @@ LCSAS_ANOTHER_SET
             LCSAS_PWFILE (--key) and LCSAS_SHARES_DIR are for the
             first set only.  Q at the next set list ends the run with
             0, as N does.
+  Windows:  restore.bat asks it after a good restore of an archive
+            with more than one backup set.  Yes goes back to the menu,
+            with the tools folder, the pack cache and the catalog copy
+            as they are; only no (or the end of the input) ends the
+            run and lets the tools folder be deleted.
   Why:      Opt-OUT.  Restoring a second set (documents, then photos)
             would otherwise mean the META disc and the copy again.
 
 LCSAS_TOOLS_DIR
-  Default:  unset → $HOME/lcsas-restore-tools  (opt-out / default ON)
+  Default:  unset → $HOME/lcsas-restore-tools; on Windows
+            %LOCALAPPDATA%\LCSAS-restore  (opt-out / default ON)
   Since:    rc6 (#609)
   What:     The tools folder restore.sh keeps a restore's own files in.
             Run off the META disc, it copies there: itself, this
@@ -241,9 +306,37 @@ LCSAS_TOOLS_DIR
             falls back to a temporary folder, as it does when there is
             no $HOME.  On a live USB stick $HOME is in RAM: the folder
             is lost at power-off, and restore.sh says so.
+  Windows:  restore.bat copies itself into it from a disc, with this
+            computer's programs (bin\<triple>\ only),
+            RECOVER_WINDOWS.txt, the backup sets' metadata, a copy of
+            the catalog, the pack cache, resume.cfg and "Resume LCSAS
+            restore.bat" (also put on the Desktop).  The folder stays
+            until a restore has finished (exit 0), and is then deleted
+            with the Desktop launcher; after a stop (exit 75, q at a
+            disc box) or any other failure it stays, and the launcher
+            carries the restore on with no META disc.  resume.cfg
+            names the backup set, the restore folder and the drive
+            letters, never the password.  A folder made by the very
+            same restore.bat (compared with fc /b) from the very same
+            META disc (its volume_info.json "created_at", kept in
+            archive.txt) is used as it is; any other is replaced,
+            keeping its pack cache only when its lcsas-restore.exe is
+            the very same.  Since the tools folder is deleted at the
+            end, restore.bat uses only a folder that is new, empty, or
+            its own (it writes .lcsas-tools there first); any other
+            folder, and a whole drive (E:\), is refused with exit 1
+            before anything in it changes.  That holds for every run,
+            the default folder included.  A run that does not relocate
+            (LCSAS_NO_RELOCATE=1, or a META disc copied to a folder or
+            a USB stick, which can be written to) keeps its pack cache,
+            catalog copy and merged metadata in the folder's
+            in-place\ subfolder, removed after exit 0, so a stopped
+            restore waiting in the folder is left as it is.
+            Not %TEMP%: Disk Cleanup and Storage Sense empty it.
   Why:      Opt-OUT.  Without it a stopped restore meant the META disc,
             the copy and every disc again (#609).  Point it elsewhere
-            when $HOME is small or in RAM, e.g. at a USB disk.
+            when $HOME is small or in RAM, e.g. at a USB disk, or on
+            Windows when C: is short of space.
 
 LCSAS_DRAIN_CHUNK_PACKS
   Default:  0  (opt-in / default OFF)
@@ -494,9 +587,12 @@ INTERNAL VARIABLES (DO NOT SET)
 
 LCSAS_RELOCATED
   Internal sentinel set by restore.sh on re-exec after relocation to
-  the tools folder.  Its value is the meta disc's original mount path.
-  resume.sh sets it too.  Not a knob; do not set manually.  (The
-  relocation also exports LCSAS_TOOLS_DIR with the folder it used.)
+  the tools folder (resume.sh sets it too), and by restore.bat when it
+  runs its copy in the tools folder (also from resume.cfg when "Resume
+  LCSAS restore.bat" carries a restore on).  Its value is the meta
+  disc's original mount path or drive letter.  Not a knob; do not set
+  manually.  (restore.sh's relocation also exports LCSAS_TOOLS_DIR with
+  the folder it used.)
 
 LCSAS_RESUME
   Internal: resume.sh sets it to 1 when the tools folder holds the
@@ -520,6 +616,7 @@ Variable                    Default   Opt-in/out  Typical use
 ──────────────────────────  ────────  ──────────  ────────────────────
 LCSAS_PASSWORD              unset     opt-in      scripted restores
 LCSAS_PWFILE                unset     opt-in      scripted restores
+LCSAS_PW                    unset     opt-in      older restore.bat name
 LCSAS_SHARES_DIR            unset     opt-in      share cards, no typing
 LCSAS_REPO                  unset     opt-in      set by name, name_cmd or id
 LCSAS_TARGET                unset     opt-in      unusual host arch
@@ -528,7 +625,7 @@ LCSAS_MOUNT_DIRS            unset     opt-in      non-standard disc mounts
 LCSAS_PACK_CACHE_DIR        auto      opt-out     set ''  to disable cache
 LCSAS_NEWEST_DISC_PROMPT    1         opt-out     set 0 to skip that step
 LCSAS_ANOTHER_SET           1         opt-out     set 0 to never ask
-LCSAS_TOOLS_DIR             (home)    opt-out     tools folder elsewhere
+LCSAS_TOOLS_DIR             (home/local) opt-out  tools folder elsewhere
 LCSAS_INTERACTIVE           unset     opt-in      set on for piped test rigs
 LCSAS_DRAIN_CHUNK_PACKS     0         opt-in      set 100-500 for slow optical
 LCSAS_MAX_JSON_MIB          256       opt-in      lower on tiny 32-bit hosts

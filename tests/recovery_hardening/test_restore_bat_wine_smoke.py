@@ -34,7 +34,7 @@ from pathlib import Path
 import pytest
 
 from tests.recovery_hardening._diff_helpers import non_marker_files
-from tests.recovery_hardening._wine_helpers import stop_wineserver
+from tests.recovery_hardening._wine_helpers import stop_and_remove_prefix, stop_wineserver
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_BAT = REPO_ROOT / "recovery" / "scripts" / "restore.bat"
@@ -89,9 +89,11 @@ def _require_working_wineboot() -> None:
 
 @pytest.fixture(autouse=True)
 def _stop_test_wineserver(tmp_path: Path):
-    """Stop this test's wineserver before pytest removes its prefix (#453)."""
+    """Stop this test's wineserver (#453), then delete its prefix: pytest
+    keeps every tmp_path until the session ends (#623, a full CI run ran
+    out of disk)."""
     yield
-    stop_wineserver(tmp_path / "wineprefix")
+    stop_and_remove_prefix(tmp_path / "wineprefix")
 
 
 
@@ -146,7 +148,24 @@ def _init_prefix(prefix: Path) -> dict[str, str]:
     # D-Z scan in restore.bat can only ever see letters this test maps
     # itself, never a disc the host happens to have mounted.
     _harden_prefix_drives(prefix)
+    _private_user_folders(prefix)
     return env
+
+
+def _private_user_folders(prefix: Path) -> None:
+    """Make the prefix user's Desktop and Documents real folders.
+
+    wine links them to the host user's own ~/Desktop and ~/Documents when
+    those exist.  restore.bat writes "Resume LCSAS restore.bat" to the
+    Desktop (#609), and its default restore folder is
+    Documents\\restored: a test must write neither into the host's home.
+    """
+    for user in (prefix / "drive_c" / "users").glob("*"):
+        for name in ("Desktop", "Documents"):
+            folder = user / name
+            if folder.is_symlink():
+                folder.unlink()
+                folder.mkdir()
 
 
 def _map_drive(prefix: Path, letter: str, target: Path) -> None:
@@ -199,12 +218,15 @@ def _run_bat(
 
     LCSAS_NO_RELOCATE=1 keeps us on the direct flow (no copy-to-%TEMP%
     re-launch).  LCSAS_TARGET pins the target triple so detection cannot
-    misfire under wine.
+    misfire under wine.  LCSAS_NEWEST_DISC_PROMPT=0 skips the question
+    for the newest data disc (#605): the meta tree here has no label, so
+    it is a META disc, and the question would take the one stdin line.
     """
     run_env = {
         **env,
         "LCSAS_NO_RELOCATE": "1",
         "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+        "LCSAS_NEWEST_DISC_PROMPT": "0",
         **(extra_env or {}),
     }
     bat = f"{meta_letter.upper()}:\\recovery\\scripts\\restore.bat"
