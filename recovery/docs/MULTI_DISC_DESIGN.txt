@@ -680,9 +680,12 @@ KNOWN LIMITATIONS
     #143), and searches it again once a data disc is in.  Up to rc5
     restore.bat left the letter out for the whole run, so a
     one-drive restore on Windows could never find a data disc
-    (#604).  A drive that is EMPTY when restore.bat starts is not
-    seen at all (`if exist X:\` is false), so put the META disc in
-    the drive you will use for the data discs.  A restore carried on
+    (#604).  restore.bat does not pass a drive that is EMPTY when it
+    starts (`if exist X:\` is false).  Since rc6 tier 1 itself
+    searches the root of every optical drive (GetDriveTypeA ==
+    DRIVE_CDROM) each time it looks for a disc, so such a drive is
+    still found; the META disc's own drive is the simplest one to
+    use for the data discs.  A restore carried on
     with "Resume LCSAS restore.bat" searches the letters the stopped
     run saved in resume.cfg, empty or not (#609).
   - Set LCSAS_NO_RELOCATE=1 to suppress relocation (for dev/test
