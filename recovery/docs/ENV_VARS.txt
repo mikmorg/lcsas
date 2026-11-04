@@ -65,10 +65,11 @@ LCSAS_REPO
   Since:    Phase 14
   What:     Backup set to restore, by its id (the name of its
             metadata/<id>/ folder on the discs) or, since rc6 (#606),
-            by its name (name= in that folder's LCSAS_REPO.txt).  Skips
-            the numbered list on archives with several sets.  A name two
-            sets share matches neither: use the id.  The list itself
-            shows each set's name (its id when it has no marker).
+            by its name (name= in that folder's LCSAS_REPO.txt) or its
+            plain-letters name (name_cmd=, as restore.bat shows it).
+            Skips the numbered list on archives with several sets.  A
+            name two sets share matches neither: use the id.  The list
+            itself shows each set's name (its id when it has no marker).
   Why:      Opt-in — omitting it is correct and safe; it just shows an
             interactive prompt.  Setting it changes which repository's
             data is restored; wrong value exits with an error.
@@ -489,6 +490,13 @@ LCSAS_RELOCATED
   resume.sh sets it too.  Not a knob; do not set manually.  (The
   relocation also exports LCSAS_TOOLS_DIR with the folder it used.)
 
+LCSAS_RESUME
+  Internal: resume.sh sets it to 1 when the tools folder holds the
+  copy of the set's snapshots the stopped run used.  The resumed run
+  then uses that copy (and skips the newest-disc metadata refresh),
+  so "latest" is the same snapshot as before the stop, whatever data
+  disc is in the drive by then.  Not a knob; do not set manually.
+
 ────────────────────────────────────────────────────────────────────
 QUICK REFERENCE (knobs you may set)
 ────────────────────────────────────────────────────────────────────
@@ -498,7 +506,7 @@ Variable                    Default   Opt-in/out  Typical use
 LCSAS_PASSWORD              unset     opt-in      scripted restores
 LCSAS_PWFILE                unset     opt-in      scripted restores
 LCSAS_SHARES_DIR            unset     opt-in      share cards, no typing
-LCSAS_REPO                  unset     opt-in      set by name or id
+LCSAS_REPO                  unset     opt-in      set by name, name_cmd or id
 LCSAS_TARGET                unset     opt-in      unusual host arch
 LCSAS_META_DISC             unset     opt-in      unusual mount layout
 LCSAS_MOUNT_DIRS            unset     opt-in      non-standard disc mounts

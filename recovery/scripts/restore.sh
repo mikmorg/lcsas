@@ -168,6 +168,57 @@ human_kb() {
     }'
 }
 
+# make_writable PATH: give the owner write permission on PATH and all
+# under it.  A disc is mastered read-only (xorriso -as mkisofs -r: every
+# folder r-x, every file r--) and cp -R keeps those modes, so a copy
+# made from a disc could be neither replaced nor removed.  Every copy
+# into the tools folder goes through this.
+make_writable() {
+    if [ -e "$1" ] && [ ! -L "$1" ]; then
+        chmod -R u+w "$1" 2>/dev/null || true
+    fi
+    return 0
+}
+
+# rm_tree PATH...: remove copies this script made, read-only or not.
+# 1 when one of them could not be removed.
+rm_tree() {
+    _rt_rc=0
+    for _rt in "$@"; do
+        if [ -e "$_rt" ] || [ -L "$_rt" ]; then
+            make_writable "$_rt"
+            rm -rf "$_rt" 2>/dev/null || _rt_rc=1
+        fi
+    done
+    return "$_rt_rc"
+}
+
+# path_inside A B: 0 when the folder A is the folder B or is under it
+# (both must exist; compared by their real paths).
+path_inside() {
+    _pi_a="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+    _pi_b="$(cd "$2" 2>/dev/null && pwd -P)" || return 1
+    if [ -z "$_pi_a" ] || [ -z "$_pi_b" ]; then return 1; fi
+    case "$_pi_a/" in "${_pi_b%/}"/*) return 0 ;; esac
+    return 1
+}
+
+# sh_quote S: S as one single-quoted shell word.
+sh_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# sh_word S: S as a shell word to copy and paste: as it is when the shell
+# would neither split nor expand it, else single-quoted.  For the
+# commands this script prints, such as the resume command.
+# shellcheck disable=SC2317  # runs from the EXIT trap
+sh_word() {
+    case "$1" in
+        ''|*[!A-Za-z0-9_./+,:@%=-]*) sh_quote "$1" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 # ── The tools folder (C6, #609) ───────────────────────────────────
 #
 # One fixed folder per user holds everything a restore needs once the
@@ -216,20 +267,106 @@ room_for() {
     return 1
 }
 
-# tools_dir_replace DIR: DIR holds a copy made by ANOTHER restore.sh.
-# Remove what that copy put there; keep its pack cache only when both
-# scripts come from the same build (the stamped LCSAS_RESTORE_BUILD_SHA).
-tools_dir_replace() {
-    [ -f "$1/recovery/scripts/restore.sh" ] || return 0
-    _old_build="$(grep '^LCSAS_RESTORE_BUILD_SHA=' "$1/recovery/scripts/restore.sh" 2>/dev/null || true)"
-    _new_build="$(grep '^LCSAS_RESTORE_BUILD_SHA=' "$SCRIPT" 2>/dev/null || true)"
-    printf '[lcsas-restore] %s holds an older copy of the recovery tools; replacing it\n' "$1" >&2
-    rm -rf "$1/recovery" "$1/metadata" "$1/catalog.db" "$1/resume.sh" \
-           "$1/standalone_restorer.py" "$1/tools"
-    if [ -z "$_old_build" ] || [ "$_old_build" != "$_new_build" ]; then
-        rm -rf "$1/pack-cache"
+# What a tools folder holds besides the marker, all of it made by this
+# script: .lcsas-build is the build line of the restore.sh that filled
+# it, .lcsas-sets the ids of the META disc's backup sets it was filled
+# for, .lcsas-copy-ok says the copy off the disc finished.
+TOOLS_FILES="recovery metadata catalog.db pack-cache resume.sh standalone_restorer.py tools .lcsas-build .lcsas-sets .lcsas-copy-ok .exec-probe"
+
+build_line() {
+    grep '^LCSAS_RESTORE_BUILD_SHA=' "$1" 2>/dev/null | sed -n 1p
+    return 0
+}
+
+# tools_dir_build DIR: the build line of the restore.sh that filled DIR.
+tools_dir_build() {
+    if [ -f "$1/.lcsas-build" ]; then
+        sed -n 1p "$1/.lcsas-build"
+    elif [ -f "$1/recovery/scripts/restore.sh" ]; then
+        build_line "$1/recovery/scripts/restore.sh"
     fi
     return 0
+}
+
+# tools_dir_replace DIR REASON KEEP_CACHE: DIR holds what ANOTHER run
+# left (another build, a copy that did not finish, another archive's
+# sets).  Remove all of it but the marker; keep the pack cache only when
+# KEEP_CACHE is 1 (packs are named by their hash, so the same build's
+# cache is still good).
+tools_dir_replace() {
+    _tr_any=0
+    _tr_ifs="$IFS"; IFS=' '
+    for _tr in $TOOLS_FILES; do
+        if [ -e "$1/$_tr" ]; then _tr_any=1; fi
+    done
+    if [ "$_tr_any" = 1 ]; then
+        printf '[lcsas-restore] %s holds %s; replacing it\n' "$1" "$2" >&2
+        for _tr in $TOOLS_FILES; do
+            [ "$_tr" != pack-cache ] || [ "$3" != 1 ] || continue
+            rm_tree "$1/$_tr" || true
+        done
+    fi
+    IFS="$_tr_ifs"
+    return 0
+}
+
+# tools_dir_remove DIR: the restore is done; remove what this script put
+# in DIR, then DIR itself.  Never a blanket rm -rf: anything else that
+# came to be in the folder stays, and so does the folder.
+# shellcheck disable=SC2317  # runs from the EXIT trap
+tools_dir_remove() {
+    _tr_ifs="$IFS"; IFS=' '
+    for _tr in $TOOLS_FILES; do
+        rm_tree "$1/$_tr" || true
+    done
+    IFS="$_tr_ifs"
+    rm -f "$1/$TOOLS_MARK" 2>/dev/null || true
+    if [ -d "$1" ] && ! rmdir "$1" 2>/dev/null \
+       && [ -n "$(ls -A "$1" 2>/dev/null)" ]; then
+        printf '[restore.sh] %s holds other files, so the folder is kept\n' "$1" >&2
+    fi
+    return 0
+}
+
+# meta_sets MD: the ids of the backup sets in the metadata folder MD,
+# one a line.
+meta_sets() {
+    for _ms in "$1"/*; do
+        if [ -d "$_ms/keys" ]; then printf '%s\n' "${_ms##*/}"; fi
+    done
+    return 0
+}
+
+# tools_other_archive DIR MD: 0 when the tools folder DIR was filled for
+# ANOTHER archive: none of the backup sets in the META disc's metadata
+# folder MD is among the META disc sets DIR was filled for (.lcsas-sets).
+# Set ids are unique, so a newer or older META disc of the same archive
+# always shares one.  A folder with no .lcsas-sets says nothing.
+tools_other_archive() {
+    [ -s "$1/.lcsas-sets" ] || return 1
+    _toa_any=0
+    for _toa in "$2"/*; do
+        [ -d "$_toa/keys" ] || continue
+        _toa_any=1
+        if grep -qxF -- "${_toa##*/}" "$1/.lcsas-sets" 2>/dev/null; then return 1; fi
+    done
+    [ "$_toa_any" = 1 ]
+}
+
+# copy_tree SRC DST: copy the folder SRC to DST whole or not at all: into
+# a hidden .<name>.new beside DST, swapped in only when every file was
+# copied.  1, with DST as it was, when the copy failed (a scratched
+# disc, a full disk, a disc taken out).
+copy_tree() {
+    _ct_new="${2%/*}/.${2##*/}.new"
+    rm_tree "$_ct_new" || true
+    if cp -R "$1" "$_ct_new" 2>/dev/null; then
+        make_writable "$_ct_new"
+        rm_tree "$2" || true
+        if mv "$_ct_new" "$2" 2>/dev/null; then return 0; fi
+    fi
+    rm_tree "$_ct_new" || true
+    return 1
 }
 
 relocate_to_ram() {
@@ -274,6 +411,12 @@ relocate_to_ram() {
     fi
     _bin_kb=""
     [ -n "$src_bin" ] && _bin_kb="$(du -sk "$_copy_from" 2>/dev/null | awk '{print $1}')"
+    # The meta disc's own metadata/ (each backup set's keys, index and
+    # snapshots) is at the disc ROOT, not under recovery/.
+    case "$SCRIPT_DIR" in
+        */recovery/scripts) _meta_md="${SCRIPT_DIR%/recovery/scripts}/metadata" ;;
+        *)                  _meta_md="$SCRIPT_DIR/metadata" ;;
+    esac
     # Where the copy goes (#609).  First the fixed tools folder, so a
     # stopped restore can carry on from it and a re-run reuses it: when
     # it already holds a copy made by this same restore.sh, nothing is
@@ -288,17 +431,37 @@ relocate_to_ram() {
     _reuse=0
     _td="${LCSAS_TOOLS_DIR:-${HOME:+$HOME/lcsas-restore-tools}}"
     case "$_td" in ''|/*) ;; *) _td="$(pwd)/$_td" ;; esac
-    if [ -n "$_td" ] && [ -f "$_td/$TOOLS_MARK" ] \
-       && [ -d "$_td/recovery/$_copy_to" ] \
-       && cmp -s "$SCRIPT" "$_td/recovery/scripts/restore.sh"; then
-        _reuse=1
-        ramdir="$_td"
-    elif [ -n "$_td" ]; then
+    # Reused only when an earlier run copied ALL of it off a disc of this
+    # same build and archive: the copy finished (.lcsas-copy-ok), its
+    # restore.sh and tier-1 binary match the disc's byte for byte, and
+    # its sets are this META disc's.  A copy that stopped part-way (a
+    # scratched disc, a full disk, Ctrl-C) is made again, never trusted.
+    _td_why="an older copy of the recovery tools"
+    _td_keep=0
+    if [ -n "$_td" ] && [ -f "$_td/$TOOLS_MARK" ]; then
+        if tools_other_archive "$_td" "$_meta_md"; then
+            _td_why="the copies of another archive's backup sets"
+        elif [ "$(tools_dir_build "$_td")" = "$(build_line "$SCRIPT")" ]; then
+            _td_keep=1
+            if ! cmp -s "$SCRIPT" "$_td/recovery/scripts/restore.sh"; then
+                :   # another restore.sh: an older copy
+            elif [ -f "$_td/.lcsas-copy-ok" ] && [ -d "$_td/recovery/$_copy_to" ] \
+                 && { [ ! -f "$_copy_from/lcsas-restore" ] \
+                      || cmp -s "$_copy_from/lcsas-restore" \
+                                "$_td/recovery/$_copy_to/lcsas-restore"; }; then
+                _reuse=1
+                ramdir="$_td"
+            else
+                _td_why="a copy of the recovery tools that is not complete"
+            fi
+        fi
+    fi
+    if [ "$_reuse" = 0 ] && [ -n "$_td" ]; then
         _td_probe="$_td"
         [ -d "$_td_probe" ] || _td_probe="$(dirname "$_td")"
         if room_for "$_td_probe" "$_bin_kb" && tools_dir_claim "$_td" \
            && dir_runs_programs "$_td"; then
-            tools_dir_replace "$_td"
+            tools_dir_replace "$_td" "$_td_why" "$_td_keep"
             ramdir="$_td"
         else
             printf '[lcsas-restore] cannot use %s for the recovery tools; ' "$_td" >&2
@@ -327,7 +490,8 @@ relocate_to_ram() {
         # resume until the computer is turned off, removed on success.
         : > "$ramdir/$TOOLS_MARK"
     done
-    unset _free_kb _reloc_triple _td _td_probe
+    unset _free_kb _reloc_triple _td _td_probe _td_why _td_keep
+    _copy_ok=1
     if [ -z "$ramdir" ]; then
         printf '[lcsas-restore] cannot find a writable dir to relocate to; ' >&2
         printf 'continuing from %s (drive will be held)\n' "$orig_mount" >&2
@@ -340,6 +504,7 @@ relocate_to_ram() {
     else
         # Mirror the on-disc layout under $ramdir so the script's own
         # AUTO_RECOVERY logic resolves $ramdir/recovery as RECOVERY.
+        rm -f "$ramdir/.lcsas-copy-ok"
         mkdir -p "$ramdir/recovery/scripts" "$ramdir/recovery/$_copy_to"
         if [ -n "$src_bin" ]; then
             # #612: say what is happening BEFORE a copy that takes minutes
@@ -348,13 +513,14 @@ relocate_to_ram() {
                    "$(human_kb "${_bin_kb:-0}")" >&2
             printf '                from the disc to %s; on a slow drive this takes a few minutes...\n' \
                    "$ramdir" >&2
-            cp -R "$_copy_from/." "$ramdir/recovery/$_copy_to/" 2>/dev/null || true
+            cp -R "$_copy_from/." "$ramdir/recovery/$_copy_to/" 2>/dev/null \
+                || _copy_ok=0
             # A copy of the disc on a FAT/exFAT stick (or a noexec mount) can
             # leave the binaries without their executable bits (#496).
             chmod -R u+x "$ramdir/recovery/bin" 2>/dev/null || true
             # The restore manuals travel with the tools (C6).
             if [ -d "$src_bin/../docs" ]; then
-                cp -R "$src_bin/../docs" "$ramdir/recovery/" 2>/dev/null || true
+                cp -R "$src_bin/../docs" "$ramdir/recovery/" 2>/dev/null || _copy_ok=0
             fi
         fi
         cp -f "$SCRIPT" "$ramdir/recovery/scripts/restore.sh"
@@ -402,7 +568,7 @@ relocate_to_ram() {
             _zstd_pyver="$(basename "$(dirname "$_zstd_src")")"
             mkdir -p "$ramdir/tools/lib/$_zstd_pyver"
             cp -R "$_zstd_src" "$ramdir/tools/lib/$_zstd_pyver/zstandard" \
-                2>/dev/null || true
+                2>/dev/null || _copy_ok=0
             break
         done
         unset _zstd_src _zstd_pyver
@@ -410,29 +576,41 @@ relocate_to_ram() {
         printf '[lcsas-restore] copied recovery binaries to %s\n' "$ramdir" >&2
     fi
 
-    # The meta disc's own metadata/ (each backup set's keys, index and
-    # snapshots) is at the disc ROOT, not under recovery/.  Copy it so
-    # the restore can find the sets once the disc is out (#616).  A
-    # reused copy keeps the sets it has (an earlier run may have brought
-    # them up to date from a data disc) and only gains the missing ones.
-    case "$SCRIPT_DIR" in
-        */recovery/scripts) _meta_md="${SCRIPT_DIR%/recovery/scripts}/metadata" ;;
-        *)                  _meta_md="$SCRIPT_DIR/metadata" ;;
-    esac
+    # Copy the meta disc's metadata/ so the restore can find the sets once
+    # the disc is out (#616).  Each set is copied whole or not at all
+    # (copy_tree).  A reused copy keeps the sets an earlier run brought up
+    # to date from a data disc (tagged in metadata/.from/); every other
+    # set is taken from this META disc again.
     if [ -d "$_meta_md" ]; then
         if [ "$_reuse" = 0 ]; then
-            rm -rf "$ramdir/metadata"
+            rm_tree "$ramdir/metadata" || true
             _meta_kb="$(du -sk "$_meta_md" 2>/dev/null | awk '{print $1}')"
             printf '[lcsas-restore] copying the backup-set metadata (about %s) to %s/metadata...\n' \
                    "$(human_kb "${_meta_kb:-0}")" "$ramdir" >&2
         fi
         mkdir -p "$ramdir/metadata"
         for _meta_set in "$_meta_md"/*; do
-            [ -e "$ramdir/metadata/${_meta_set##*/}" ] \
-                || cp -R "$_meta_set" "$ramdir/metadata/" 2>/dev/null || true
+            [ -d "$_meta_set" ] || continue
+            if [ -f "$ramdir/metadata/.from/${_meta_set##*/}" ] \
+               && [ -d "$ramdir/metadata/${_meta_set##*/}" ]; then
+                continue
+            fi
+            copy_tree "$_meta_set" "$ramdir/metadata/${_meta_set##*/}" || _copy_ok=0
         done
     fi
-    unset _bin_kb _meta_md _meta_kb _meta_set _reuse
+    # Everything copied off the disc can be replaced and removed later.
+    make_writable "$ramdir"
+    if [ "$_reuse" = 0 ]; then
+        build_line "$SCRIPT" > "$ramdir/.lcsas-build"
+        meta_sets "$_meta_md" > "$ramdir/.lcsas-sets"
+        if [ "$_copy_ok" = 1 ]; then
+            : > "$ramdir/.lcsas-copy-ok"
+        else
+            printf '[lcsas-restore] some files could not be copied from the disc; this\n' >&2
+            printf '                copy is used for this run, and copied again next time.\n' >&2
+        fi
+    fi
+    unset _bin_kb _meta_md _meta_kb _meta_set _reuse _copy_ok
 
     # A live USB stick keeps $HOME (and /tmp) in RAM.
     case "$(target_fstype "$ramdir")" in
@@ -655,9 +833,11 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           a previous LCSAS restore -- overwrite?' prompt.
                           Restoring into such a folder otherwise prompts
                           (and refuses with exit 65 when no terminal is
-                          attached).  Re-runs into a prior LCSAS target
-                          are silent regardless (a hidden marker file,
-                          .lcsas-restore-marker, identifies them).
+                          attached).  Re-runs of a set into its prior
+                          LCSAS target are silent regardless (a hidden
+                          marker file, .lcsas-restore-marker, names the
+                          sets restored there); another set into that
+                          folder prompts too.
   LCSAS_MAX_JSON_MIB      Max token-buffer memory (MiB) the tier-1
                           binary allocates to parse any single JSON
                           structure (index/snapshot/tree).  Default 256;
@@ -895,6 +1075,14 @@ if [ -n "$TARGET_FLAG" ]; then
     TARGET="$TARGET_FLAG"
 fi
 
+# A recovery root given as a relative path is made absolute: resume.sh
+# and the next set's run start from another folder, where it would name
+# nothing (or be taken for the target).
+case "$RECOVERY" in
+    /*) ;;
+    *) RECOVERY="$(cd "$RECOVERY" && pwd)" ;;
+esac
+
 # ── Target detection (arch + OS) ──────────────────────────────────
 #
 # Picks one of the six targets bundled by the meta disc builder (see
@@ -981,23 +1169,34 @@ _restore_exit_log="/tmp/lcsas-restore-exit.$(date +%Y%m%d-%H%M%S-$$)"
 # shellcheck disable=SC2317  # runs from the EXIT/INT/TERM trap below
 _restore_exit_handler() {
     rc=$?
+    # Every step below is best-effort: under set -e one failed rm used to
+    # abort the handler and turn a restore that succeeded into exit 1.
+    # A signal can land while IFS is changed (the set list splits on
+    # newlines, the mount-dir walks on colons): put it back.
+    set +e
+    IFS=' 	
+'
+
     if [ -n "${_stty_saved:-}" ]; then
-        stty "$_stty_saved" 2>/dev/null || true
+        stty "$_stty_saved" 2>/dev/null
         printf '\n' >&2
     fi
-    [ -n "${TIER3_ERR:-}" ] && [ -f "${TIER3_ERR:-}" ] && rm -f "$TIER3_ERR"
-    [ -n "${TIER3_RC_FILE:-}" ] && [ -f "${TIER3_RC_FILE:-}" ] && rm -f "$TIER3_RC_FILE"
-    [ -n "${PWFILE_TMP:-}" ] && [ -f "${PWFILE_TMP:-}" ] && rm -f "$PWFILE_TMP"
-    [ -n "${SHARE_DIR:-}" ] && rm -rf "$SHARE_DIR"
-    [ -n "${RUN_TMP:-}" ] && rm -rf "$RUN_TMP"
+    if [ -n "${TIER3_ERR:-}" ]; then rm -f "$TIER3_ERR"; fi
+    if [ -n "${TIER3_RC_FILE:-}" ]; then rm -f "$TIER3_RC_FILE"; fi
+    if [ -n "${PWFILE_TMP:-}" ]; then rm -f "$PWFILE_TMP"; fi
+    if [ -n "${SHARE_DIR:-}" ]; then rm -rf "$SHARE_DIR"; fi
+    if [ -n "${RUN_TMP:-}" ]; then rm_tree "$RUN_TMP"; fi
     # #609: the tools folder goes after a restore that succeeded (#508:
     # otherwise every run left ~130 MB behind), and stays after any other
     # exit -- a wrong password, q at the disc prompt, Ctrl-C -- so the
-    # restore can carry on from it.  Only a folder carrying the marker.
+    # restore can carry on from it.  Only a folder carrying the marker,
+    # and only what this script put there (tools_dir_remove).  Once the
+    # set is restored (RESTORE_DONE), a stop at the "another set?"
+    # questions leaves nothing to carry on.
     if [ -n "${TOOLS:-}" ] && [ -f "$TOOLS/$TOOLS_MARK" ]; then
-        if [ "$rc" -eq 0 ]; then
-            cd / 2>/dev/null || true
-            rm -rf "$TOOLS"
+        if [ "$rc" -eq 0 ] || [ "${RESTORE_DONE:-0}" = 1 ]; then
+            cd / 2>/dev/null
+            tools_dir_remove "$TOOLS"
         elif [ -f "$TOOLS/resume.sh" ]; then
             cat >&2 <<EOF
 
@@ -1006,7 +1205,7 @@ restored so far stay in the target folder, and the tools copied from
 the disc stay in
     $TOOLS
 To carry on later (the META disc is not needed), run:
-    sh $TOOLS/resume.sh
+    sh $(sh_word "$TOOLS/resume.sh")
 It asks for the password again.  Delete that folder when you are done.
 EOF
         elif [ -d "$TOOLS/recovery" ] || [ -d "$TOOLS/pack-cache" ]; then
@@ -1014,19 +1213,20 @@ EOF
                    "$TOOLS" >&2
         else
             # Nothing in it worth keeping: the run stopped before it began.
-            rm -rf "$TOOLS"
+            tools_dir_remove "$TOOLS"
         fi
     fi
     if [ "$rc" -ne 0 ]; then
         printf '[restore.sh] EXIT rc=%d at line approx=%d\n' "$rc" "${LINENO:-0}" \
-            >> "$_restore_exit_log" 2>/dev/null || true
+            >> "$_restore_exit_log" 2>/dev/null
         printf '[restore.sh] PYBIN=%s PYREST=%s\n' "${PYBIN:-unset}" "${PYREST:-unset}" \
-            >> "$_restore_exit_log" 2>/dev/null || true
-        printf '[restore.sh] exit log: %s\n' "$_restore_exit_log" >&2 || true
+            >> "$_restore_exit_log" 2>/dev/null
+        printf '[restore.sh] exit log: %s\n' "$_restore_exit_log" >&2
     fi
-    # Always return 0 so the trap does not clobber the script's exit
-    # status (POSIX traps inherit the trap action's return code under
-    # some shells -- notably dash on Debian / Ubuntu / busybox).
+    # Return 0 so the trap does not clobber the script's exit status
+    # (POSIX traps inherit the trap action's return code under some
+    # shells -- notably dash on Debian / Ubuntu / busybox).  The set +e
+    # above is what makes this line always reached.
     return 0
 }
 trap _restore_exit_handler EXIT
@@ -1052,6 +1252,27 @@ _tools_want="${LCSAS_TOOLS_DIR:-${HOME:+$HOME/lcsas-restore-tools}}"
 case "$_tools_want" in ''|/*) ;; *) _tools_want="$(pwd)/$_tools_want" ;; esac
 if [ -n "$_tools_want" ] && tools_dir_claim "$_tools_want"; then
     TOOLS="$(cd "$_tools_want" && pwd -P)"
+    # Run in place (relocate_to_ram has done this for a relocated run):
+    # what another build or another archive left here is not used (C6).
+    # Its catalog copy would be the first catalog considered, and its
+    # sets would join the list.
+    if [ -z "${LCSAS_RELOCATED:-}" ]; then
+        _tw_meta="$(dirname "$RECOVERY")/metadata"
+        _tw_build="$(tools_dir_build "$TOOLS")"
+        if tools_other_archive "$TOOLS" "$_tw_meta"; then
+            tools_dir_replace "$TOOLS" "the copies of another archive's backup sets" 0
+        elif [ -n "$_tw_build" ] && [ "$_tw_build" != "$(build_line "$SCRIPT")" ]; then
+            tools_dir_replace "$TOOLS" "an older copy of the recovery tools" 0
+        elif [ -f "$TOOLS/recovery/scripts/restore.sh" ] \
+             && ! cmp -s "$SCRIPT" "$TOOLS/recovery/scripts/restore.sh"; then
+            tools_dir_replace "$TOOLS" "an older copy of the recovery tools" 1
+        fi
+        build_line "$SCRIPT" > "$TOOLS/.lcsas-build"
+        if [ -n "$(meta_sets "$_tw_meta")" ]; then
+            meta_sets "$_tw_meta" > "$TOOLS/.lcsas-sets"
+        fi
+        unset _tw_meta _tw_build
+    fi
 else
     [ -z "$_tools_want" ] \
         || printf '[restore.sh] cannot use %s as the tools folder; using a temporary one\n' \
@@ -1094,8 +1315,10 @@ export LCSAS_MOUNT_DIRS="$LCSAS_MOUNT_DIRS_EFFECTIVE"
 # Default when UNSET: auto, which is pack-cache/ in the tools folder
 # (#616: it used to be ${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>, which no
 # run ever removed and no later run could reuse).  Explicitly empty: off.
+_cache_auto=0
 if [ "${LCSAS_PACK_CACHE_DIR-auto}" = "auto" ]; then
     LCSAS_PACK_CACHE_DIR="${STATE_DIR:+$STATE_DIR/pack-cache}"
+    _cache_auto=1
 fi
 export LCSAS_PACK_CACHE_DIR
 
@@ -1306,28 +1529,56 @@ data_discs() {
 # data disc SET_DIR is on; it is kept in <tools>/metadata/.from/<id> so
 # discovery ranks the copy like that disc, and a copy from a newer disc
 # is never replaced by one from an older disc (or from no disc).
+# The new copy is built beside the old one (.<id>.new) and swapped in only
+# when every file was copied: a scratched disc, a full disk or a disc
+# taken out part-way leaves the old copy as it was, and untagged.
+# 0 when the tools copy now holds what SET_DIR holds (copied, or it IS
+# that copy); 1 when it was left alone or the copy failed.
 merge_set_metadata() {
     _ms_id="${1##*/}"
     _ms_dst="$TOOLS/metadata/$_ms_id"
     _ms_tag="$TOOLS/metadata/.from/$_ms_id"
+    _ms_new="$TOOLS/metadata/.$_ms_id.new"
+    _ms_old="$TOOLS/metadata/.$_ms_id.old"
     [ "$(cd "$1" && pwd -P)" != "$(cd "$_ms_dst" 2>/dev/null && pwd -P)" ] || return 0
     if [ -f "$_ms_tag" ] && [ -d "$_ms_dst/index" ]; then
-        [ -n "${2:-}" ] || return 0
-        key_newer "$(label_key "$2")" "$(label_key "$(clean_text < "$_ms_tag")")" || return 0
+        [ -n "${2:-}" ] || return 1
+        key_newer "$(label_key "$2")" "$(label_key "$(clean_text < "$_ms_tag")")" || return 1
     fi
-    mkdir -p "$_ms_dst/keys" "$TOOLS/metadata/.from"
-    rm -rf "$_ms_dst/index" "$_ms_dst/snapshots"
-    cp -R "$1/index" "$1/snapshots" "$_ms_dst/" 2>/dev/null || true
-    cp -R "$1/keys/." "$_ms_dst/keys/" 2>/dev/null || true
-    for _ms_f in "$1"/*; do
-        if [ -f "$_ms_f" ]; then cp -p "$_ms_f" "$_ms_dst/" 2>/dev/null || true; fi
+    rm_tree "$_ms_new" "$_ms_old" || true
+    _ms_ok=1
+    mkdir -p "$_ms_new/keys" "$TOOLS/metadata/.from" || _ms_ok=0
+    # Everything the copy has but its index/ and snapshots/, then the
+    # disc's index/, snapshots/ and top-level files, and its keys/ added.
+    for _ms_e in "$_ms_dst"/*; do
+        [ -e "$_ms_e" ] || continue
+        case "${_ms_e##*/}" in index|snapshots) continue ;; esac
+        cp -R "$_ms_e" "$_ms_new/" 2>/dev/null || _ms_ok=0
     done
-    if [ -n "${2:-}" ]; then
-        printf '%s\n' "$2" > "$_ms_tag"
-    else
-        rm -f "$_ms_tag"
+    for _ms_e in index snapshots; do
+        if [ -d "$1/$_ms_e" ]; then cp -R "$1/$_ms_e" "$_ms_new/" 2>/dev/null || _ms_ok=0; fi
+    done
+    cp -R "$1/keys/." "$_ms_new/keys/" 2>/dev/null || _ms_ok=0
+    for _ms_e in "$1"/*; do
+        if [ -f "$_ms_e" ]; then cp -p "$_ms_e" "$_ms_new/" 2>/dev/null || _ms_ok=0; fi
+    done
+    if [ "$_ms_ok" = 1 ]; then
+        make_writable "$_ms_new"
+        if [ -e "$_ms_dst" ]; then mv "$_ms_dst" "$_ms_old"; fi
+        mv "$_ms_new" "$_ms_dst"
+        rm_tree "$_ms_old" || true
+        if [ -n "${2:-}" ]; then
+            printf '%s\n' "$2" > "$_ms_tag"
+        else
+            rm -f "$_ms_tag"
+        fi
+        return 0
     fi
-    return 0
+    rm_tree "$_ms_new" || true
+    printf '[lcsas-restore] could not copy all of the backup set %s from %s;\n' \
+           "$(set_label "$1")" "${2:-$1}" >&2
+    printf '                the copy in %s stays as it was.\n' "$_ms_dst" >&2
+    return 1
 }
 
 # ── Step 0: the newest data disc (#605, C2, C7) ───────────────────
@@ -1360,7 +1611,7 @@ if newest_disc_wanted; then
   To take the META disc out, eject it: use your file manager's Eject,
   or type  sudo eject /dev/sr0  in another terminal (on a Mac:
   drutil eject).  If the data disc does not open by itself, mount it:
-  sudo mount /dev/sr0 /media
+  sudo mount /dev/sr0 /mnt
 
   Press ENTER when it is in; S then ENTER to skip (use the copies on
   the META disc); Q then ENTER to quit.
@@ -1399,7 +1650,7 @@ EOF
         else
             printf 'No data disc found yet in %s.\n' "$LCSAS_MOUNT_DIRS_EFFECTIVE" >&2
             printf 'If it does not open by itself, mount it, for example:\n' >&2
-            printf '    sudo mount /dev/sr0 /media\n' >&2
+            printf '    sudo mount /dev/sr0 /mnt\n' >&2
         fi
     done
 fi
@@ -1409,8 +1660,9 @@ fi
 # disc's, keys/ are added, and sets it does not hold keep the META
 # disc's copy.  Only on the single-drive journey (a META disc is known),
 # where that disc may come out of the drive before the next set or a
-# resumed run needs the copy.
-if [ -n "$TOOLS" ] && [ -n "${META_DISC:-}" ]; then
+# resumed run needs the copy.  Never in a resumed run (LCSAS_RESUME,
+# set by resume.sh): it carries on with the copy the stopped run used.
+if [ -n "$TOOLS" ] && [ -n "${META_DISC:-}" ] && [ "${LCSAS_RESUME:-0}" != 1 ]; then
     _nd_top="$(data_discs | sed -n 1p)"
     _nd_dir="${_nd_top#*"$TAB"}"
     _nd_lab=""
@@ -1430,7 +1682,7 @@ if [ -n "$TOOLS" ] && [ -n "${META_DISC:-}" ]; then
             printf '                %s to %s/metadata...\n' "$_nd_lab" "$TOOLS" >&2
             for _nd_set in "$_nd_dir/metadata"/*; do
                 if [ ! -d "$_nd_set/keys" ] || [ ! -d "$_nd_set/index" ]; then continue; fi
-                merge_set_metadata "$_nd_set" "$_nd_lab"
+                merge_set_metadata "$_nd_set" "$_nd_lab" || true
             done
         fi
     fi
@@ -1548,19 +1800,27 @@ EOF
 REPO_CANDIDATES="$(printf '%s' "$_by_name" | LC_ALL=C sort -f | cut -f3-)"
 
 # set_match WANT: the candidate whose id is WANT; else the one candidate
-# whose name is WANT (#606).  Prints nothing when none, or when two sets
-# share that name (then it says so: the number or the id tells them
-# apart).  Expects IFS to be a newline, as the menu block sets it.
+# whose name, or name_cmd (the plain-letters form restore.bat shows, C1,
+# C4), is WANT (#606).  Prints nothing when none, or when two sets share
+# that name (then it says so: the number or the id tells them apart).
+# Expects IFS to be a newline, as the menu block sets it.
 set_match() {
+    [ -n "$1" ] || return 0
     for _sm_c in $REPO_CANDIDATES; do
         case "${_sm_c##*/}" in "$1") printf '%s' "$_sm_c"; return 0 ;; esac
     done
     _sm_hit=""
     _sm_n=0
     for _sm_c in $REPO_CANDIDATES; do
-        case "$(set_label "$_sm_c")" in
-            "$1") _sm_hit="$_sm_c"; _sm_n=$((_sm_n + 1)) ;;
-        esac
+        _sm_is=0
+        case "$(set_label "$_sm_c")" in "$1") _sm_is=1 ;; esac
+        if [ "$_sm_is" = 0 ]; then
+            case "$(set_field "$_sm_c" name_cmd)" in "$1") _sm_is=1 ;; esac
+        fi
+        if [ "$_sm_is" = 1 ]; then
+            _sm_hit="$_sm_c"
+            _sm_n=$((_sm_n + 1))
+        fi
     done
     if [ "$_sm_n" -gt 1 ]; then
         printf 'More than one backup set is called %s; choose it by its number or id.\n' \
@@ -1636,9 +1896,10 @@ EOF
                 done
                 printf 'Choose a repository (number or name): ' >&2
                 if ! IFS= read -r repo_choice; then
+                    # The input ended: nobody chose, as good as Q (C5).
                     IFS=$_saved_ifs
                     printf '\nno repository chosen\n' >&2
-                    exit 1
+                    exit "$EXIT_USER_ABORT"
                 fi
                 # Number form: positional-arg lookup avoids `eval` on input.
                 case "$repo_choice" in
@@ -1673,6 +1934,17 @@ EOF
         IFS=$_saved_ifs
         ;;
 esac
+# A resumed run (resume.sh sets LCSAS_RESUME=1) carries on the SAME
+# restore: the set's copy in the tools folder is the one the stopped run
+# used (it was brought up to date from that run's copy, below), so its
+# "latest" is the same snapshot.  A newer data disc in the drive now
+# must not switch it: tier 1 skips files already restored, and a second
+# snapshot would leave a mix of the two.
+if [ "${LCSAS_RESUME:-0}" = 1 ] && [ -n "$TOOLS" ] \
+   && [ -d "$TOOLS/metadata/${REPO##*/}/keys" ] \
+   && [ -d "$TOOLS/metadata/${REPO##*/}/index" ]; then
+    REPO="$TOOLS/metadata/${REPO##*/}"
+fi
 printf '[restore.sh] using repository %s\n' "$REPO" >&2
 SET_NAME="$(set_label "$REPO")"
 [ "$SET_NAME" = "${REPO##*/}" ] || printf '[restore.sh] backup set: %s\n' "$SET_NAME" >&2
@@ -2015,22 +2287,58 @@ fi
 # supported way to resume an interrupted restore (RECOVER.txt RETRY
 # SAFETY -- idempotent resume).  So we warn only when the target is
 # non-empty AND lacks our marker file.  After confirmation/creation we
-# drop a hidden zero-byte marker, so every subsequent re-run is silent.
+# drop a hidden marker, so every subsequent re-run is silent.  The
+# marker names the backup sets restored into the folder, one id a line:
+# another set restored on top of one would keep (same size) or overwrite
+# (other size) the first set's files with no word, so a folder that
+# holds ANOTHER set's restore is warned about too.  An empty marker (an
+# older restore.sh, or restore.bat) names no set and stays silent.
 # (EXIT_USER_ABORT, 65, is set with the discovery helpers above.)
+SET_ID="${REPO##*/}"
 MARKER="$TARGET_DIR/.lcsas-restore-marker"
+
+# The tools folder (or this run's temporary one) is deleted when the
+# restore is done, so the restored files must not go inside it (C6).
+_tg_probe="$(space_probe_dir "$TARGET_DIR")"
+if [ -n "$STATE_DIR" ] && [ -n "$_tg_probe" ] && path_inside "$_tg_probe" "$STATE_DIR"; then
+    {
+        printf 'restore.sh: the folder to restore into,\n'
+        printf '    %s\n' "$TARGET_DIR"
+        printf 'is inside the tools folder %s,\n' "$STATE_DIR"
+        printf 'which is deleted when the restore is done.  Choose a folder\n'
+        printf 'outside it, for example %s/restored.\n' "$(dirname "$STATE_DIR")"
+    } >&2
+    exit "$EXIT_USER_ABORT"
+fi
+unset _tg_probe
+
+_tg_other=0
+if [ -s "$MARKER" ] && ! grep -qxF -- "$SET_ID" "$MARKER" 2>/dev/null; then
+    _tg_other=1
+fi
 if [ -d "$TARGET_DIR" ] && [ -n "$(ls -A "$TARGET_DIR" 2>/dev/null)" ] \
-   && [ ! -f "$MARKER" ] \
+   && { [ ! -f "$MARKER" ] || [ "$_tg_other" = 1 ]; } \
    && [ "${LCSAS_FORCE_NONEMPTY_TARGET:-0}" != "1" ]; then
     {
         printf '==========================================================\n'
         printf '  WARNING: the folder\n'
         printf '      %s\n' "$TARGET_DIR"
-        printf '  already contains files that do not look like a previous\n'
-        printf '  LCSAS restore.  Restored files with the same names will\n'
-        printf '  OVERWRITE what is there now.\n'
-        printf '\n'
-        printf '  Safest choice: stop, and restore into a NEW, empty\n'
-        printf '  folder instead.\n'
+        if [ "$_tg_other" = 1 ]; then
+            printf '  already holds the restore of ANOTHER backup set.  Files\n'
+            printf '  of %s with the same names as that set'"'"'s\n' "$SET_NAME"
+            printf '  would be mixed in with them: some OVERWRITE them, and\n'
+            printf '  some are skipped as already restored.\n'
+            printf '\n'
+            printf '  Safest choice: stop, and restore this set into a NEW,\n'
+            printf '  empty folder instead.\n'
+        else
+            printf '  already contains files that do not look like a previous\n'
+            printf '  LCSAS restore.  Restored files with the same names will\n'
+            printf '  OVERWRITE what is there now.\n'
+            printf '\n'
+            printf '  Safest choice: stop, and restore into a NEW, empty\n'
+            printf '  folder instead.\n'
+        fi
         printf '==========================================================\n'
     } >&2
     if [ -t 0 ]; then
@@ -2046,8 +2354,11 @@ if [ -d "$TARGET_DIR" ] && [ -n "$(ls -A "$TARGET_DIR" 2>/dev/null)" ] \
         exit "$EXIT_USER_ABORT"
     fi
 fi
+unset _tg_other
 mkdir -p "$TARGET_DIR"
-: > "$MARKER" 2>/dev/null || true
+if [ ! -s "$MARKER" ] || ! grep -qxF -- "$SET_ID" "$MARKER" 2>/dev/null; then
+    printf '%s\n' "$SET_ID" >> "$MARKER" 2>/dev/null || true
+fi
 # The target as a full path: resume.sh and the next set need it from
 # any folder (tier 1 runs from / when the META disc is known).
 TARGET_ABS="$(cd "$TARGET_DIR" && pwd)"
@@ -2059,14 +2370,18 @@ TARGET_ABS="$(cd "$TARGET_DIR" && pwd)"
 # no question but the password.  Tier 1 skips every file that is
 # already complete (#92) and the pack cache keeps the discs already
 # read.  resume.sh NEVER holds the password.
-sh_quote() {
-    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
-}
 if [ -n "$TOOLS" ]; then
-    # The chosen set's copy in the tools folder matches the one used
-    # (merge_set_metadata, above; a no-op when it is that copy).
+    # The chosen set's copy in the tools folder is brought to match the
+    # one used (merge_set_metadata, above; it is that copy when
+    # relocated).  When it does, resume.sh carries on with that copy
+    # (LCSAS_RESUME=1), so "latest" stays the same snapshot whatever
+    # disc is in the drive then.
+    _rs_frozen=0
     case "$(basename "$(dirname "$REPO")")" in
-        metadata) merge_set_metadata "$REPO" "$(disc_label "$(dirname "$(dirname "$REPO")")")" ;;
+        metadata)
+            if merge_set_metadata "$REPO" "$(disc_label "$(dirname "$(dirname "$REPO")")")"; then
+                _rs_frozen=1
+            fi ;;
     esac
     _rs_env="" _rs_set="" _rs_val=""
     for _rs_var in LCSAS_RELOCATED LCSAS_META_DISC LCSAS_MOUNT_DIRS \
@@ -2077,6 +2392,10 @@ if [ -n "$TOOLS" ]; then
         eval "_rs_val=\$$_rs_var"
         _rs_env="$_rs_env$_rs_var=$(sh_quote "$_rs_val"); export $_rs_var$NL"
     done
+    if [ "$_rs_frozen" = 1 ]; then
+        _rs_env="${_rs_env}LCSAS_RESUME=1; export LCSAS_RESUME$NL"
+    fi
+    unset _rs_frozen
     # LCSAS_NEWEST_DISC_PROMPT=0: the tools folder already holds the
     # newest disc's copy of the sets, if this run saw one.
     cat > "$TOOLS/resume.sh" <<EOF
@@ -2115,12 +2434,23 @@ bin_preflight_ok() {
     return 0
 }
 
-# The share card combiner for this computer (lcsas-keyshare).
+# The share card combiner for this computer (lcsas-keyshare).  Checked
+# like the tier binaries (bin_preflight_ok): a zero-byte (bit-rotted)
+# file would run as an empty script, exit 0 and "accept" every card.
 KEYSHARE_BIN=""
 for _ks in "$RECOVERY/bin/$TARGET/lcsas-keyshare" \
            "$RECOVERY/bin/$TARGET/lcsas-keyshare.exe"; do
-    if [ -x "$_ks" ]; then KEYSHARE_BIN="$_ks"; break; fi
+    if [ -x "$_ks" ] && bin_preflight_ok "$_ks"; then KEYSHARE_BIN="$_ks"; break; fi
 done
+
+# keyshare_broken RC: lcsas-keyshare gave an answer it never gives (exit
+# RC, or no password at all), so it does not work on this computer: the
+# cards are not to blame.
+keyshare_broken() {
+    printf 'The share combiner %s does not work on\n' "$KEYSHARE_BIN" >&2
+    printf 'this computer (exit %s); the cards are not to blame.  Rebuild the\n' "$1" >&2
+    printf 'password as RECOVER.txt "SHARE CARDS" says, then type it.\n' >&2
+}
 
 # quit_password: the reader typed Q, or the input ended, at the password
 # or share card prompt.
@@ -2253,7 +2583,7 @@ ask_shares() {
                     # alone, as expected below K).
                     set -- "$@" "$_as_f"
                     _as_i=$((_as_i + 1)) ;;
-                *)
+                3)
                     # lcsas-keyshare names the bad word; the file it
                     # names is this card.
                     SC_FILE="$_as_f" SC_CARD="card $_as_i" awk '{
@@ -2263,21 +2593,35 @@ ask_shares() {
                     rm -f "$_as_f"
                     printf 'That card has a mistake (see above).  Type card %d again.\n' \
                            "$_as_i" >&2 ;;
+                *)
+                    # 2 (usage), 126/127 (cannot run), a crash: never a
+                    # card's fault.
+                    drop_shares
+                    keyshare_broken "$_as_rc"
+                    return 1 ;;
             esac
         done
         _as_rc=0
         "$KEYSHARE_BIN" "$@" > "$PWFILE" 2>"$SHARE_DIR/check.err" || _as_rc=$?
-        if [ "$_as_rc" -eq 0 ]; then
-            drop_shares
-            password_ok && return 0
-            printf 'The password rebuilt from these cards was not accepted for %s.\n' \
-                   "$SET_NAME" >&2
-            printf 'The cards may belong to another backup set: compare the Split ID.\n' >&2
-        else
-            sed 's/^/  /' "$SHARE_DIR/check.err" >&2
-            printf 'These cards could not be combined: they may come from different\n' >&2
-            printf 'splits (compare the Split ID on each card).\n' >&2
+        if [ "$_as_rc" -eq 0 ] && [ ! -s "$PWFILE" ]; then
+            _as_rc="0, no password"
         fi
+        case "$_as_rc" in
+            0)
+                drop_shares
+                password_ok && return 0
+                printf 'The password rebuilt from these cards was not accepted for %s.\n' \
+                       "$SET_NAME" >&2
+                printf 'The cards may belong to another backup set: compare the Split ID.\n' >&2 ;;
+            1|3)
+                sed 's/^/  /' "$SHARE_DIR/check.err" >&2
+                printf 'These cards could not be combined: they may come from different\n' >&2
+                printf 'splits (compare the Split ID on each card).\n' >&2 ;;
+            *)
+                drop_shares
+                keyshare_broken "$_as_rc"
+                return 1 ;;
+        esac
         printf 'Start again with card 1, or Q then ENTER to quit.\n' >&2
     done
 }
@@ -2306,9 +2650,40 @@ shares_from_dir() {
            "$SET_NAME" $# "$LCSAS_SHARES_DIR" >&2
     _sd_rc=0
     "$KEYSHARE_BIN" "$@" > "$PWFILE" || _sd_rc=$?
-    [ "$_sd_rc" -ne 0 ] || return 0
-    printf 'Could not rebuild the password from the cards in %s\n' "$LCSAS_SHARES_DIR" >&2
-    printf '(lcsas-keyshare exit %d: see above).\n' "$_sd_rc" >&2
+    if [ "$_sd_rc" -eq 3 ]; then
+        # A card file has a mistake.  Typed, that card would be asked for
+        # again; here it is left out, and the others are combined if
+        # enough of them are left.
+        _sd_n=$#
+        for _sd_f in "$@"; do
+            shift
+            _sd_one=0
+            "$KEYSHARE_BIN" "$_sd_f" >/dev/null 2>&1 || _sd_one=$?
+            case "$_sd_one" in
+                0|1) set -- "$@" "$_sd_f" ;;
+                3)   printf '[restore.sh] leaving out %s: it has a mistake (see above)\n' \
+                            "$_sd_f" >&2 ;;
+                *)   keyshare_broken "$_sd_one"
+                     return 1 ;;
+            esac
+        done
+        if [ $# -gt 0 ] && [ $# -lt "$_sd_n" ]; then
+            printf '[restore.sh] combining the other %d card files\n' $# >&2
+            _sd_rc=0
+            "$KEYSHARE_BIN" "$@" > "$PWFILE" || _sd_rc=$?
+        fi
+    fi
+    if [ "$_sd_rc" -eq 0 ]; then
+        if [ -s "$PWFILE" ]; then return 0; fi
+        keyshare_broken "0, no password"
+        return 1
+    fi
+    case "$_sd_rc" in
+        1|3)
+            printf 'Could not rebuild the password from the cards in %s\n' "$LCSAS_SHARES_DIR" >&2
+            printf '(lcsas-keyshare exit %d: see above).\n' "$_sd_rc" >&2 ;;
+        *)  keyshare_broken "$_sd_rc" ;;
+    esac
     return 1
 }
 
@@ -2385,8 +2760,9 @@ tmpfs|ramfs)
         case "$_tmpfs_ans" in
             y|Y) ;;
             *)
+                # The reader said no: a quit at a question (C5).
                 printf 'aborted: pick a directory on a real disk and re-run.\n' >&2
-                exit 1 ;;
+                exit "$EXIT_USER_ABORT" ;;
         esac
     fi
     ;;
@@ -2540,8 +2916,10 @@ write_session_log() {
 # folder, keeps its copies and its pack cache for that set: the script
 # starts again from the set list with no META disc.  Only when there is
 # another set, and someone can answer (is_interactive);
-# LCSAS_ANOTHER_SET=0 skips it.  No (the default) ends the run, and the
-# tools folder goes.
+# LCSAS_ANOTHER_SET=0 skips it.  No (the default), Q or the end of the
+# input ends the run, and the tools folder goes.  The next set goes into
+# a NEW folder by default (<target>-2, -3, ...): restored on top of this
+# one, the two sets' files would be mixed (the target guard says so too).
 offer_another_set() {
     [ "${LCSAS_ANOTHER_SET:-1}" != 0 ] || return 0
     [ "$REPO_COUNT" -gt 1 ] || return 0
@@ -2553,25 +2931,53 @@ offer_another_set() {
         y|Y|yes|Yes|YES) ;;
         *) return 0 ;;
     esac
+    _os_base="$TARGET_ABS"
+    case "${_os_base##*-}" in
+        ''|*[!0-9]*) ;;
+        *) _os_base="${_os_base%-*}" ;;
+    esac
+    _os_n=2
+    while [ -n "$(ls -A "$_os_base-$_os_n" 2>/dev/null)" ]; do
+        _os_n=$((_os_n + 1))
+    done
     while :; do
-        printf 'Folder to restore it into (ENTER: %s): ' "$TARGET_ABS" >&2
+        printf 'Folder to restore it into (ENTER: %s; Q then ENTER: no other set): ' \
+               "$_os_base-$_os_n" >&2
         _os_dir=""
-        IFS= read -r _os_dir || return 0
+        IFS= read -r _os_dir || _os_dir=q
         # shellcheck disable=SC2088  # a typed "~/": the text, not a path
         case "$_os_dir" in
-            '')   _os_dir="$TARGET_ABS" ;;
+            q|Q)
+                printf 'No other backup set restored; %s is done.\n' "$SET_NAME" >&2
+                return 0 ;;
+            '')   _os_dir="$_os_base-$_os_n" ;;
             '~')  _os_dir="${HOME:-}" ;;
             '~/'*) _os_dir="${HOME:-}/${_os_dir#'~/'}" ;;
         esac
-        case "$_os_dir" in /?*) break ;; esac
-        printf 'Type the full path of the folder, starting with / or ~/.\n' >&2
+        case "$_os_dir" in
+            /?*) ;;
+            *)
+                printf 'Type the full path of the folder, starting with / or ~/.\n' >&2
+                continue ;;
+        esac
+        _os_probe="$(space_probe_dir "$_os_dir")"
+        if [ -n "$STATE_DIR" ] && [ -n "$_os_probe" ] \
+           && path_inside "$_os_probe" "$STATE_DIR"; then
+            printf 'That folder is inside the tools folder %s, which is\n' "$STATE_DIR" >&2
+            printf 'deleted at the end.  Choose a folder outside it.\n' >&2
+            continue
+        fi
+        break
     done
     # This run's own files go now (exec skips the exit handler); the
     # tools folder stays for the next set.
     [ -z "${PWFILE_TMP:-}" ] || rm -f "$PWFILE_TMP"
     drop_shares
-    [ -z "${RUN_TMP:-}" ] || rm -rf "$RUN_TMP"
-    unset LCSAS_REPO LCSAS_PASSWORD LCSAS_PWFILE LCSAS_SHARES_DIR
+    [ -z "${RUN_TMP:-}" ] || rm_tree "$RUN_TMP" || true
+    # A pack cache this run put in its own temporary folder (which is
+    # gone now) is not handed on: the next run picks its own.
+    if [ "$_cache_auto" = 1 ]; then unset LCSAS_PACK_CACHE_DIR; fi
+    unset LCSAS_REPO LCSAS_PASSWORD LCSAS_PWFILE LCSAS_SHARES_DIR LCSAS_RESUME
     LCSAS_NEWEST_DISC_PROMPT=0
     export LCSAS_NEWEST_DISC_PROMPT
     if [ -n "$TOOLS" ]; then
@@ -2583,10 +2989,19 @@ offer_another_set() {
     exec sh "$SCRIPT" "$RECOVERY" "$_os_dir" latest
 }
 
+# restore_done: the set is restored.  resume.sh would carry on a
+# restore that finished, so it goes; and from here any exit, Ctrl-C at
+# the "another set?" questions too, removes the tools folder.
+restore_done() {
+    RESTORE_DONE=1
+    if [ -n "$TOOLS" ]; then rm -f "$TOOLS/resume.sh"; fi
+}
+
 # restore_succeeded TIER: the restore is done; log it, offer another
 # set, and exit 0.
 restore_succeeded() {
     write_session_log "$1"
+    restore_done
     offer_another_set
     exit 0
 }
@@ -3008,7 +3423,10 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         fi
         printf '[tier 3] diagnostic log: %s\n' "$_restore_exit_log" >&2 2>/dev/null || true
         rm -f "$TIER3_ERR" "$TIER3_RC_FILE"
-        if [ "$tier3_rc" -eq 0 ]; then offer_another_set; fi
+        if [ "$tier3_rc" -eq 0 ]; then
+            restore_done
+            offer_another_set
+        fi
         exit "$tier3_rc"
     fi
 fi

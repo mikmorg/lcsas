@@ -23,12 +23,16 @@ resume.sh run and the real relocation's re-exec run under /bin/sh.
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import stat
 import subprocess
 import textwrap
 import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
+
+import pytest
 
 from .conftest import _scaled_timeout
 
@@ -317,14 +321,19 @@ def test_term_exits_143_and_keeps_the_tools_folder(tmp_path: Path) -> None:
 # ── resume.sh after q, with the meta disc gone (#609, #615) ──────────
 
 
-def test_resume_sh_finishes_after_q_with_the_meta_disc_gone(tmp_path: Path) -> None:
-    """The whole journey: run off a (writable stand-in for the) meta disc,
-    which relocates into the tools folder; the reader types q at the
-    disc prompt (tier 1 exits 75); the meta disc is taken away; resume.sh
-    finishes the restore from the tools folder alone, and the folder is
-    removed after that success."""
+@pytest.mark.parametrize("disc", ["writable", "read-only"])
+def test_resume_sh_finishes_after_q_with_the_meta_disc_gone(
+    tmp_path: Path, readonly: Callable[[Path], None], disc: str,
+) -> None:
+    """The whole journey: run off a stand-in for the meta disc (read-only
+    like a real one, or writable), which relocates into the tools folder;
+    the reader types q at the disc prompt (tier 1 exits 75); the meta disc
+    is taken away; resume.sh finishes the restore from the tools folder
+    alone, and the folder is removed after that success."""
     meta = tmp_path / "LCSAS_META"
     _meta_disc(meta, script=True)
+    if disc == "read-only":
+        readonly(meta)
     tools = tmp_path / "tools"
     target = tmp_path / "restored"
     once = tmp_path / "rc-once"
@@ -358,5 +367,304 @@ def test_resume_sh_finishes_after_q_with_the_meta_disc_gone(tmp_path: Path) -> N
 
 
 def _rmtree(path: Path) -> None:
-    import shutil
+    _make_writable(path)
     shutil.rmtree(path)
+
+
+# ── Discs are read-only (#616 review) ────────────────────────────────
+#
+# xorriso -as mkisofs -r masters every folder r-x and every file r--, and
+# cp -R keeps those modes, so every copy made off a real disc was
+# read-only: the metadata merge could not replace it (set -e ended the
+# run before the set list) and the exit handler could not remove the
+# tools folder, so a restore that succeeded exited 1 and left the copy.
+# Every fixture above is writable; these strip the write bits the way a
+# mounted disc has them.
+
+
+def _strip_write(root: Path) -> None:
+    for p in [root, *root.rglob("*")]:
+        if not p.is_symlink():
+            p.chmod(stat.S_IMODE(p.stat().st_mode) & ~0o222)
+
+
+def _make_writable(root: Path) -> None:
+    if not root.exists():
+        return
+    root.chmod(stat.S_IMODE(root.stat().st_mode) | 0o700)
+    for p in root.rglob("*"):
+        if not p.is_symlink():
+            p.chmod(stat.S_IMODE(p.stat().st_mode) | (0o700 if p.is_dir() else 0o600))
+
+
+@pytest.fixture
+def readonly() -> Iterator[Callable[[Path], None]]:
+    """Make a disc fixture read-only; its write bits come back at teardown
+    so the basetemp can be removed."""
+    made: list[Path] = []
+
+    def make(root: Path) -> None:
+        _strip_write(root)
+        made.append(root)
+
+    yield make
+    for root in made:
+        _make_writable(root)
+
+
+def _data_disc(media: Path, label: str, tag: str) -> Path:
+    """A data disc labelled *label* holding SET_ID's metadata (each file
+    named after *tag*) and a data/ folder."""
+    root = media / label[:16]
+    repo = root / "metadata" / SET_ID
+    for sub in ("keys", "index", "snapshots"):
+        (repo / sub).mkdir(parents=True)
+        (repo / sub / f"{sub}-{tag}").write_text(tag)
+    (root / "data").mkdir()
+    (root / "VOLUME_INFO.txt").write_text(f"ABOUT THIS DISC\n\n  Label:         {label}\n")
+    return root
+
+
+def test_read_only_discs_are_merged_and_the_tools_go_after_success(
+    tmp_path: Path, readonly: Callable[[Path], None],
+) -> None:
+    """Relocated off a read-only META disc with a read-only data disc in
+    (two drives): the set's copy from the newest disc replaces the META
+    disc's (C2), the restore succeeds with exit 0, and the tools folder,
+    every copy in it read-only on the disc, is removed."""
+    meta = tmp_path / "LCSAS_META"
+    _meta_disc(meta, script=True)
+    media = tmp_path / "media"
+    disc = _data_disc(media, "LCSAS_TEST_TINY_2026_0002", "disc")
+    readonly(meta)
+    readonly(disc)
+    tools = tmp_path / "tools"
+    target = tmp_path / "restored"
+    res = subprocess.run(
+        ["sh", str(meta / "restore.sh"), str(target)],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60,
+        env=_env(tmp_path, LCSAS_TOOLS_DIR=str(tools), LCSAS_META_DISC=str(meta),
+                 LCSAS_MOUNT_DIRS=str(media)),
+    )
+    assert res.returncode == 0, res.stderr
+    assert "copying the backup sets' metadata from the disc labelled" in res.stderr
+    assert "Permission denied" not in res.stderr, res.stderr
+    assert _arg(res.stdout, "--repo") == f"{disc}/metadata/{SET_ID}"
+    assert (target / "restored.txt").read_text() == "restored\n"
+    assert not tools.exists(), "the tools folder must go after a success"
+
+
+def test_a_read_only_set_copied_in_place_is_removed_after_success(
+    tmp_path: Path, readonly: Callable[[Path], None],
+) -> None:
+    """Run in place: the set's copy is brought into the tools folder from
+    the read-only data disc it was read from; after the success all of it
+    goes and the exit code stays 0."""
+    recovery = _meta_disc(tmp_path / "disc")
+    media = tmp_path / "media"
+    disc = _data_disc(media, "LCSAS_TEST_TINY_2026_0001", "disc")
+    readonly(disc)
+    readonly(tmp_path / "disc")
+    tools = tmp_path / "tools"
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), LCSAS_MOUNT_DIRS=str(media)))
+    assert res.returncode == 0, res.stderr
+    assert "Permission denied" not in res.stderr, res.stderr
+    assert not tools.exists()
+
+
+# ── The target and the tools folder (#609 review) ────────────────────
+
+
+def test_a_target_inside_the_tools_folder_is_refused(tmp_path: Path) -> None:
+    """An empty folder (a fresh USB stick, say) is a fine tools folder,
+    but the tools folder is deleted after the restore: a target inside it
+    is refused with 65 before anything is restored."""
+    recovery = _meta_disc(tmp_path / "disc")
+    stick = tmp_path / "stick"
+    stick.mkdir()
+    res = _run(recovery, stick / "restored", _env(tmp_path, LCSAS_TOOLS_DIR=str(stick)))
+    assert res.returncode == 65, res.stderr
+    assert f"is inside the tools folder {stick}," in res.stderr, res.stderr
+    assert "ARG: " not in res.stdout, "tier 1 ran"
+    assert not (stick / "restored").exists()
+
+
+def test_success_removes_only_what_the_script_put_in_the_tools_folder(tmp_path: Path) -> None:
+    """The handler removes the entries it made, never the whole folder
+    blindly: a file someone else put there stays, and so does the folder."""
+    recovery = _meta_disc(tmp_path / "disc")
+    tools = tmp_path / "tools"
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), STUB_RC="1"))
+    assert res.returncode == 1, res.stderr
+    (tools / "notes.txt").write_text("mine")
+    res = subprocess.run(["sh", str(tools / "resume.sh")], stdin=subprocess.DEVNULL,
+                         capture_output=True, text=True, env=_env(tmp_path), timeout=60)
+    assert res.returncode == 0, res.stderr
+    assert sorted(p.name for p in tools.iterdir()) == ["notes.txt"]
+    assert f"{tools} holds other files, so the folder is kept" in res.stderr
+
+
+# ── resume.sh carries on the SAME restore (#609 review) ──────────────
+
+
+def test_resume_keeps_the_copy_the_stopped_run_used(tmp_path: Path) -> None:
+    """Run 1 restores from the META disc's copy and is stopped (q, 75).
+    The resumed run finds a data disc whose copy of the set is newer: it
+    must still use run 1's copy, or "latest" could name another snapshot
+    and tier 1 (which skips files already restored) would leave a mix."""
+    meta = tmp_path / "LCSAS_META"
+    _meta_disc(meta, script=True)
+    tools = tmp_path / "tools"
+    media = tmp_path / "media"
+    media.mkdir()
+    once = tmp_path / "rc-once"
+    once.write_text("75")
+    env = _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), LCSAS_META_DISC=str(meta),
+               LCSAS_MOUNT_DIRS=str(media), STUB_ONCE_RC_FILE=str(once))
+    first = subprocess.run(
+        ["sh", str(meta / "restore.sh"), str(tmp_path / "restored")],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=60,
+    )
+    assert first.returncode == 75, first.stderr
+    assert _arg(first.stdout, "--repo") == f"{tools}/metadata/{SET_ID}"
+    assert "LCSAS_RESUME=1; export LCSAS_RESUME" in (tools / "resume.sh").read_text()
+
+    _rmtree(meta)
+    _data_disc(media, "LCSAS_TEST_TINY_2026_0003", "newer")
+    second = subprocess.run(["sh", str(tools / "resume.sh")], stdin=subprocess.DEVNULL,
+                            capture_output=True, text=True, env=_env(tmp_path), timeout=60)
+    assert second.returncode == 0, second.stderr
+    assert _arg(second.stdout, "--repo") == f"{tools}/metadata/{SET_ID}", second.stderr
+
+
+def test_resume_works_from_a_folder_with_a_space_and_a_quote(tmp_path: Path) -> None:
+    """The printed resume command can be pasted as it is, and resume.sh
+    quotes the paths it carries, when they hold a space and a quote."""
+    base = tmp_path / "it's a stick"
+    tools = base / "lcsas tools"
+    target = base / "restored files"
+    recovery = _meta_disc(tmp_path / "disc")
+    first = _run(recovery, target, _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), STUB_RC="1"))
+    assert first.returncode == 1, first.stderr
+    lines = first.stderr.splitlines()
+    command = lines[lines.index("To carry on later (the META disc is not needed), run:") + 1]
+    assert command.strip().startswith("sh '"), command
+    second = subprocess.run(["sh", "-c", command.strip()], cwd="/", stdin=subprocess.DEVNULL,
+                            capture_output=True, text=True, env=_env(tmp_path), timeout=60)
+    assert second.returncode == 0, second.stderr
+    assert (target / "restored.txt").read_text() == "restored\n"
+    assert not tools.exists()
+
+
+def test_a_relative_recovery_root_still_resumes_from_another_folder(tmp_path: Path) -> None:
+    """`sh restore.sh rec/recovery out` from the folder holding rec/:
+    resume.sh (and the next set's run) start from /, so the recovery root
+    is written down as a full path."""
+    _meta_disc(tmp_path / "rec")
+    tools = tmp_path / "tools"
+    first = subprocess.run(
+        ["sh", str(RESTORE_SH), "rec/recovery", "out", "latest"], cwd=tmp_path,
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
+        env=_env(tmp_path, LCSAS_TOOLS_DIR=str(tools), STUB_RC="1"),
+    )
+    assert first.returncode == 1, first.stderr
+    assert f"'{tmp_path}/rec/recovery'" in (tools / "resume.sh").read_text()
+    second = subprocess.run(["sh", str(tools / "resume.sh")], cwd="/", stdin=subprocess.DEVNULL,
+                            capture_output=True, text=True, env=_env(tmp_path), timeout=60)
+    assert second.returncode == 0, second.stderr
+    assert (tmp_path / "out" / "restored.txt").is_file()
+
+
+# ── A copy that did not finish, another build, another archive ──────
+
+
+def test_a_copy_that_did_not_finish_is_made_again(tmp_path: Path) -> None:
+    """One unreadable file on the disc (a scratch): the copy is used for
+    that run only.  The next run copies again instead of trusting it
+    (it used to say "using that copy" and fail the same way forever)."""
+    meta = tmp_path / "LCSAS_META"
+    _meta_disc(meta, script=True)
+    tier1 = meta / "recovery" / "bin" / HOST_TARGET / "lcsas-restore"
+    tier1.chmod(0)
+    tools = tmp_path / "tools"
+    target = tmp_path / "restored"
+    env = _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), LCSAS_META_DISC=str(meta))
+    argv = ["sh", str(meta / "restore.sh"), str(target)]
+    try:
+        first = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True,
+                               text=True, env=env, timeout=60)
+    finally:
+        tier1.chmod(0o755)
+    assert first.returncode != 0, first.stderr
+    assert "some files could not be copied from the disc" in first.stderr, first.stderr
+    assert not (tools / ".lcsas-copy-ok").exists()
+
+    second = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True,
+                            text=True, env=env, timeout=60)
+    assert second.returncode == 0, second.stderr
+    assert "on an earlier run; using that copy" not in second.stderr
+    assert "a copy of the recovery tools that is not complete; replacing it" in second.stderr
+    assert (target / "restored.txt").is_file()
+
+
+OTHER_ID = "5d2e7a10-3c4b-4f6e-8a9b-0c1d2e3f4a5b"
+
+
+def test_a_tools_folder_left_by_another_archive_is_not_used(tmp_path: Path) -> None:
+    """Run in place, a tools folder kept after a stopped restore of ANOTHER
+    archive (filled for a META disc with no set in common) is emptied
+    first: its sets would join the list and its catalog would be the
+    first one considered."""
+    recovery = _meta_disc(tmp_path / "disc")
+    tools = tmp_path / "tools"
+    other = tools / "metadata" / OTHER_ID
+    for sub in ("keys", "index", "snapshots"):
+        (other / sub).mkdir(parents=True)
+    (tools / ".lcsas-restore-tools").write_text("")
+    (tools / ".lcsas-sets").write_text(f"{OTHER_ID}\n")
+    (tools / "catalog.db").write_text("another archive's catalog")
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), STUB_RC="1"))
+    assert res.returncode == 1, res.stderr
+    assert "holds the copies of another archive's backup sets; replacing it" in res.stderr
+    assert "Multiple repositories" not in res.stderr
+    assert _arg(res.stdout, "--catalog") is None
+    assert not other.exists()
+
+
+def test_a_set_added_after_the_meta_disc_is_kept_for_the_resume(tmp_path: Path) -> None:
+    """Run in place, the tools folder may hold only a set that is not on
+    the META disc (added later, read off a data disc): it is the same
+    archive, so a resume keeps that copy (and the pack cache)."""
+    recovery = _meta_disc(tmp_path / "disc")
+    tools = tmp_path / "tools"
+    late = tools / "metadata" / OTHER_ID
+    for sub in ("keys", "index", "snapshots"):
+        (late / sub).mkdir(parents=True)
+    (tools / "pack-cache").mkdir()
+    (tools / ".lcsas-restore-tools").write_text("")
+    (tools / ".lcsas-sets").write_text(f"{SET_ID}\n")
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), LCSAS_REPO=OTHER_ID, STUB_RC="1"))
+    assert res.returncode == 1, res.stderr
+    assert "replacing it" not in res.stderr
+    assert _arg(res.stdout, "--repo") == str(late)
+    assert (tools / "pack-cache").is_dir()
+
+
+def test_a_tools_folder_of_another_build_is_emptied_in_place_too(tmp_path: Path) -> None:
+    """C6's replace rule held only for a relocated run; run in place, a
+    tools folder filled by another build is emptied, its cache too."""
+    recovery = _meta_disc(tmp_path / "disc")
+    tools = tmp_path / "tools"
+    (tools / "pack-cache").mkdir(parents=True)
+    (tools / "pack-cache" / "cached-pack").write_text("pack")
+    (tools / ".lcsas-restore-tools").write_text("")
+    (tools / ".lcsas-build").write_text('LCSAS_RESTORE_BUILD_SHA="0123abcd"\n')
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_TOOLS_DIR=str(tools), STUB_RC="1"))
+    assert res.returncode == 1, res.stderr
+    assert f"{tools} holds an older copy of the recovery tools; replacing it" in res.stderr
+    assert not (tools / "pack-cache" / "cached-pack").exists()

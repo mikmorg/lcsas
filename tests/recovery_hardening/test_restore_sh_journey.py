@@ -36,6 +36,7 @@ import contextlib
 import os
 import platform
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -72,7 +73,8 @@ needs_keyshare = pytest.mark.skipif(
 
 # The stub tier 1.  --help answers the pre-flight.  --list-snapshots is
 # the password check: 0 for GOOD_PW, else 77, as tier 1 does.  A restore
-# run logs its --repo, --target and password and exits 77 on a wrong
+# run logs its --repo, --target and password (and, on a line of its own,
+# its pack cache, which it makes as tier 1 does) and exits 77 on a wrong
 # password, else $STUB_RC (default 0) after writing restored.txt.
 STUB = textwrap.dedent("""\
     #!/bin/sh
@@ -93,6 +95,8 @@ STUB = textwrap.dedent("""\
         exit 77
     fi
     printf 'RUN repo=%s target=%s pw=%s\\n' "$repo" "$target" "$pw" >> "$STUB_LOG"
+    printf 'CACHE %s\\n' "${LCSAS_PACK_CACHE_DIR-}" >> "$STUB_LOG"
+    if [ -n "${LCSAS_PACK_CACHE_DIR:-}" ]; then mkdir -p "$LCSAS_PACK_CACHE_DIR"; fi
     [ "$pw" = "$GOOD_PW" ] || exit 77
     printf 'restored\\n' > "$target/restored.txt"
     exit "${STUB_RC:-0}"
@@ -418,10 +422,10 @@ def test_a_wrong_answer_is_asked_again_and_q_quits(tmp_path: Path) -> None:
     assert "no repository named holidays" in res.stderr
     assert "Type its number, its name or its id" in res.stderr
     assert res.stderr.count("Choose a repository") == 2
-    # No answer at all: the input ended.
+    # No answer at all: the input ended, as good as Q (C5: 65).
     res = _run(recovery, tmp_path / "out",
                _env(tmp_path, LCSAS_PASSWORD=GOOD_PW), stdin="")
-    assert res.returncode == 1
+    assert res.returncode == 65
     assert "no repository chosen" in res.stderr
 
 
@@ -533,6 +537,9 @@ def test_the_newest_disc_step_waits_for_a_labelled_data_disc(tmp_path: Path) -> 
     s = _Session([str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"], env)
     s.expect("put in your NEWEST data disc")
     s.expect("ENTER, S or Q: ")
+    # /mnt, not /media: mounting over /media hides /media/$USER/*, where a
+    # live USB stick (the tools folder, the target) is mounted.
+    assert "sudo mount /dev/sr0 /mnt" in s.text and "/dev/sr0 /media" not in s.text
     s.send("\n")
     s.expect("The META disc is still in the drive")
     (meta / "recovery" / "scripts" / "restore.sh").unlink()   # ejected
@@ -948,17 +955,25 @@ def test_another_set_restores_the_next_set_then_removes_the_tools(tmp_path: Path
 
 
 @pytest.mark.parametrize("folder", ["", "~"])
-def test_another_set_enter_keeps_the_folder_and_tilde_is_home(tmp_path: Path, folder: str) -> None:
+def test_another_set_enter_takes_a_new_folder_and_tilde_is_home(
+    tmp_path: Path, folder: str,
+) -> None:
+    """ENTER is a NEW folder beside the first (<target>-2, the first
+    number free): the next set restored on top of the first would mix
+    them.  (This test used to pin ENTER = the same folder.)"""
     recovery = _two_sets(tmp_path)
     home = tmp_path / "home"
     home.mkdir()
+    (tmp_path / "out-2").mkdir()
+    (tmp_path / "out-2" / "taken.txt").write_text("someone's")
     res = _run(recovery, tmp_path / "out",
                # The home folder holds the session log by then.
                _env(tmp_path, LCSAS_INTERACTIVE="on", HOME=str(home),
                     LCSAS_FORCE_NONEMPTY_TARGET="1"),
                stdin=f"1\n{GOOD_PW}\ny\n{folder}\n2\n{GOOD_PW}\nn\n")
     assert res.returncode == 0, res.stderr
-    second = tmp_path / "out" if folder == "" else home
+    assert f"(ENTER: {tmp_path}/out-3; Q then ENTER: no other set)" in res.stderr
+    second = tmp_path / "out-3" if folder == "" else home
     assert _runs(tmp_path)[1] == (
         f"RUN repo={tmp_path}/meta/metadata/{PHOTOS_ID} target={second} pw={GOOD_PW}")
 
@@ -1032,3 +1047,258 @@ def test_resume_sh_skips_the_step_and_names_the_set_by_id(tmp_path: Path) -> Non
     assert stat.S_IMODE((tmp_path / "tools" / "resume.sh").stat().st_mode) == 0o700
 
 
+# ── Review fixes: another set, the target marker, names, cards ───────
+
+
+@pytest.mark.parametrize("answer", ["q\n", "Q\n", ""])
+def test_another_set_q_or_no_input_at_the_folder_prompt_ends_the_run(
+    tmp_path: Path, answer: str,
+) -> None:
+    """Q (or the end of the input) at the folder question means no other
+    set: the run ends with 0 and the tools folder goes (C6).  Q used to
+    be asked again as a folder name, forever."""
+    recovery = _two_sets(tmp_path)
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_PASSWORD=GOOD_PW,
+                    LCSAS_REPO=DOCS),
+               stdin="y\n" + answer)
+    assert res.returncode == 0, res.stderr
+    assert f"No other backup set restored; {DOCS} is done." in res.stderr
+    assert "Type the full path" not in res.stderr
+    assert len(_runs(tmp_path)) == 1
+    assert not (tmp_path / "tools").exists()
+
+
+def test_quitting_the_next_set_does_not_offer_to_resume_the_first(tmp_path: Path) -> None:
+    """Q at the second round's set list: the first set is restored, so
+    its resume.sh is gone and no "stopped before it finished" box."""
+    recovery = _two_sets(tmp_path)
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on"),
+               stdin=f"1\n{GOOD_PW}\ny\n\nq\n")
+    assert res.returncode == 65, res.stderr
+    assert "starting again for the next backup set" in res.stderr
+    assert "stopped before it finished" not in res.stderr
+    assert not (tmp_path / "tools" / "resume.sh").exists()
+
+
+def test_ctrl_c_at_the_another_set_question_removes_the_tools(tmp_path: Path) -> None:
+    """The set is restored; Ctrl-C at "another set?" leaves nothing to
+    carry on: exit 130, no resume box, the tools folder goes."""
+    recovery = _two_sets(tmp_path)
+    s = _Session([str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"],
+                 _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_PASSWORD=GOOD_PW,
+                      LCSAS_REPO=DOCS))
+    s.expect("Restore another backup set from these discs? [y/N] ")
+    s.proc.send_signal(signal.SIGINT)
+    assert s.finish() == 130, s.text
+    assert "stopped before it finished" not in s.text
+    assert not (tmp_path / "tools").exists()
+
+
+def test_ctrl_c_at_the_password_prompt_keeps_the_tools_and_says_how_to_resume(
+    tmp_path: Path,
+) -> None:
+    """A signal at one of the script's own questions (not inside tier 1,
+    whose exit code would hide the trap's): exit 130, resume.sh kept.  The
+    old INT trap ran the exit handler and carried on (here: 77)."""
+    recovery = _two_sets(tmp_path)
+    s = _Session([str(RESTORE_SH), str(recovery), str(tmp_path / "out"), "latest"],
+                 _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=DOCS))
+    s.expect("Password: ")
+    s.proc.send_signal(signal.SIGINT)
+    assert s.finish() == 130, s.text
+    assert "The restore stopped before it finished (exit code 130)" in s.text
+    assert (tmp_path / "tools" / "resume.sh").is_file()
+    assert not _runs(tmp_path)
+
+
+def test_another_set_folder_inside_the_tools_folder_is_asked_again(tmp_path: Path) -> None:
+    recovery = _two_sets(tmp_path)
+    tools = tmp_path / "tools"
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on"),
+               stdin=f"1\n{GOOD_PW}\ny\n{tools}/photos\n{tmp_path}/photos\n2\n{GOOD_PW}\nn\n")
+    assert res.returncode == 0, res.stderr
+    assert f"That folder is inside the tools folder {tools}" in res.stderr
+    assert _runs(tmp_path)[1].endswith(f"target={tmp_path}/photos pw={GOOD_PW}")
+
+
+def test_a_folder_holding_another_sets_restore_is_warned_about(tmp_path: Path) -> None:
+    """The target's marker names the sets restored into it.  Another set
+    into the same folder would keep (same size) or overwrite the first
+    set's files with no word: it is warned about like a folder of other
+    files (no terminal: refused with 65).  The same set again is silent."""
+    recovery = _two_sets(tmp_path)
+    out = tmp_path / "out"
+    env = _env(tmp_path, LCSAS_PASSWORD=GOOD_PW)
+    assert _run(recovery, out, {**env, "LCSAS_REPO": DOCS}).returncode == 0
+    assert (out / ".lcsas-restore-marker").read_text() == f"{DOCS_ID}\n"
+    res = _run(recovery, out, {**env, "LCSAS_REPO": PHOTOS})
+    assert res.returncode == 65, res.stderr
+    assert "already holds the restore of ANOTHER backup set" in res.stderr
+    assert len(_runs(tmp_path)) == 1
+    res = _run(recovery, out, {**env, "LCSAS_REPO": DOCS})
+    assert res.returncode == 0, res.stderr
+    assert "WARNING" not in res.stderr
+    res = _run(recovery, out, {**env, "LCSAS_REPO": PHOTOS, "LCSAS_FORCE_NONEMPTY_TARGET": "1"})
+    assert res.returncode == 0, res.stderr
+    assert (out / ".lcsas-restore-marker").read_text() == f"{DOCS_ID}\n{PHOTOS_ID}\n"
+    # An empty marker (an older restore.sh, or restore.bat) names no set.
+    (out / ".lcsas-restore-marker").write_text("")
+    res = _run(recovery, out, {**env, "LCSAS_REPO": PHOTOS})
+    assert res.returncode == 0, res.stderr
+
+
+def test_another_set_with_no_tools_folder_leaves_no_cache_behind(tmp_path: Path) -> None:
+    """No usable tools folder: each run keeps its pack cache in its own
+    temporary folder.  The next set's run used to inherit the first run's
+    cache path, under a folder already removed, and leave it behind."""
+    recovery = _two_sets(tmp_path)
+    mine = tmp_path / "mine"
+    mine.mkdir()
+    (mine / "letter.txt").write_text("keep me")
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_TOOLS_DIR=str(mine)),
+               stdin=f"1\n{GOOD_PW}\ny\n{tmp_path}/second\n2\n{GOOD_PW}\nn\n")
+    assert res.returncode == 0, res.stderr
+    caches = [ln[6:] for ln in _log(tmp_path) if ln.startswith("CACHE ")]
+    assert len(caches) == 2 and caches[0] != caches[1], caches
+    assert all(c.startswith(f"{tmp_path}/tmpdir/lcsas-restore-run.") for c in caches), caches
+    assert list((tmp_path / "tmpdir").iterdir()) == []
+
+
+def test_lcsas_repo_matches_the_cmd_safe_name(tmp_path: Path) -> None:
+    """C4: LCSAS_REPO matches the name, the name_cmd (the plain form
+    restore.bat shows) or the id."""
+    recovery = _meta(tmp_path / "meta")
+    _set(tmp_path / "meta", DOCS_ID, DOCS)
+    photos = _set(tmp_path / "meta", PHOTOS_ID, None)
+    (photos / "LCSAS_REPO.txt").write_text(
+        f"format=1\nid={PHOTOS_ID}\nname=Fotos de família\nname_cmd=Fotos de fam_lia\n"
+        "split=none\nsplit_id=\n", encoding="utf-8")
+    for value in ("Fotos de família", "Fotos de fam_lia"):
+        res = _run(recovery, tmp_path / "out",
+                   _env(tmp_path, LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=value))
+        assert res.returncode == 0, res.stderr
+        assert f"repo={tmp_path}/meta/metadata/{PHOTOS_ID} " in _runs(tmp_path)[-1]
+
+
+def test_the_merge_never_replaces_a_copy_from_a_newer_disc(tmp_path: Path) -> None:
+    """An older data disc is in: it refreshes the set whose tools copy is
+    the META disc's, but the copy tagged from a newer disc stays."""
+    tools = tmp_path / "tools"
+    recovery = _meta(tools)
+    (tools / ".lcsas-restore-tools").write_text("")
+    _set(tools, DOCS_ID, DOCS, tag="newer")
+    (tools / "metadata" / ".from").mkdir()
+    (tools / "metadata" / ".from" / DOCS_ID).write_text("LCSAS_TEST_TINY_2026_0002\n")
+    _set(tools, PHOTOS_ID, PHOTOS, tag="meta")
+    old = _data_disc(tmp_path / "media", "OLD", "LCSAS_TEST_TINY_2026_0001")
+    _set(old, DOCS_ID, DOCS, tag="old")
+    _set(old, PHOTOS_ID, PHOTOS, tag="old")
+    (tools / "recovery" / "scripts" / "restore.sh").unlink()
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_RELOCATED=str(tmp_path / "gone-meta"),
+                    LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=PHOTOS, STUB_RC="1"))
+    assert res.returncode == 1, res.stderr
+    md = tools / "metadata"
+    assert sorted(p.name for p in (md / DOCS_ID / "index").iterdir()) == ["index-newer"]
+    assert (md / ".from" / DOCS_ID).read_text().strip() == "LCSAS_TEST_TINY_2026_0002"
+    assert sorted(p.name for p in (md / PHOTOS_ID / "index").iterdir()) == ["index-old"]
+
+
+def test_a_merge_that_cannot_copy_every_file_keeps_the_old_copy(tmp_path: Path) -> None:
+    """A file on the newest disc cannot be read: the tools copy of that
+    set stays as it was (not half replaced) and is not tagged with the
+    disc's label, so it is tried again; resume.sh is not tied to it."""
+    tools = tmp_path / "tools"
+    recovery = _meta(tools)
+    (tools / ".lcsas-restore-tools").write_text("")
+    _set(tools, DOCS_ID, DOCS, tag="meta")
+    new = _data_disc(tmp_path / "media", "NEW", "LCSAS_TEST_TINY_2026_0002")
+    _set(new, DOCS_ID, DOCS, tag="new")
+    bad = new / "metadata" / DOCS_ID / "index" / "index-unreadable"
+    bad.write_text("x")
+    bad.chmod(0)
+    (tools / "recovery" / "scripts" / "restore.sh").unlink()
+    try:
+        res = _run(recovery, tmp_path / "out",
+                   _env(tmp_path, LCSAS_RELOCATED=str(tmp_path / "gone-meta"),
+                        LCSAS_PASSWORD=GOOD_PW, LCSAS_REPO=DOCS, STUB_RC="1"))
+    finally:
+        bad.chmod(0o644)
+    assert res.returncode == 1, res.stderr
+    assert f"could not copy all of the backup set {DOCS}" in res.stderr, res.stderr
+    docs = tools / "metadata" / DOCS_ID
+    assert sorted(p.name for p in (docs / "index").iterdir()) == ["index-meta"]
+    assert not (tools / "metadata" / ".from" / DOCS_ID).exists()
+    assert not [p for p in (tools / "metadata").iterdir() if p.name.startswith(f".{DOCS_ID}")]
+    assert "LCSAS_RESUME" not in (tools / "resume.sh").read_text()
+
+
+@needs_keyshare
+def test_lcsas_shares_dir_leaves_out_a_card_with_a_mistake(tmp_path: Path) -> None:
+    """All three cards of a 2-of-3 split, one mistyped: the other two
+    rebuild the password, as the typed route would after asking again."""
+    cards, split_id = _shares(GOOD_PW.encode(), 2, 3)
+    words = cards[1].split()
+    words[2] = "zzzzq"
+    shares = tmp_path / "cards"
+    shares.mkdir()
+    (shares / "a.txt").write_text(_card(cards[0]))
+    (shares / "b.txt").write_text(_card(" ".join(words)))
+    (shares / "c.txt").write_text(_card(cards[2]))
+    recovery = _split_sets(tmp_path, split_id)
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_REPO=PHOTOS, LCSAS_SHARES_DIR=str(shares)))
+    assert res.returncode == 0, res.stderr
+    assert f"leaving out {shares}/b.txt: it has a mistake" in res.stderr
+    assert _runs(tmp_path)[0].endswith(f"pw={GOOD_PW}")
+
+
+def _broken_keyshare(tmp_path: Path, body: str) -> Path:
+    recovery = _split_sets(tmp_path, "01234", keyshare=False)
+    ks = recovery / "bin" / HOST_TARGET / "lcsas-keyshare"
+    ks.write_text(body)
+    ks.chmod(0o755)
+    return recovery
+
+
+def test_a_zero_byte_share_combiner_is_not_used(tmp_path: Path) -> None:
+    """A bit-rotted (empty) lcsas-keyshare runs as an empty script and
+    exits 0: every card was "valid" and the rebuilt password empty.  It is
+    checked like the tier binaries and left out."""
+    recovery = _broken_keyshare(tmp_path, "")
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=PHOTOS,
+                    LCSAS_ANOTHER_SET="0"), stdin=f"{GOOD_PW}\n")
+    assert res.returncode == 0, res.stderr
+    assert "combiner (lcsas-keyshare) is missing here" in res.stderr
+    assert "Share card" not in res.stderr
+
+
+@pytest.mark.parametrize("rc", [2, 139])
+def test_a_share_combiner_that_does_not_work_asks_for_the_password(
+    tmp_path: Path, rc: int,
+) -> None:
+    """An exit lcsas-keyshare never gives for a card (2: usage, a crash)
+    is not the card's fault: no "that card has a mistake" loop, but the
+    password prompt.  LCSAS_SHARES_DIR says so and exits 77."""
+    recovery = _broken_keyshare(
+        tmp_path, f'#!/bin/sh\n[ "${{1:-}}" = --help ] && exit 0\nexit {rc}\n')
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_INTERACTIVE="on", LCSAS_REPO=PHOTOS,
+                    LCSAS_ANOTHER_SET="0"),
+               stdin=f"some card words\n{GOOD_PW}\n")
+    assert res.returncode == 0, res.stderr
+    assert f"this computer (exit {rc}); the cards are not to blame" in res.stderr
+    assert "That card has a mistake" not in res.stderr
+    assert _runs(tmp_path)[0].endswith(f"pw={GOOD_PW}")
+    cards = tmp_path / "cards"
+    cards.mkdir()
+    (cards / "one.txt").write_text("some card words\n")
+    res = _run(recovery, tmp_path / "out",
+               _env(tmp_path, LCSAS_REPO=PHOTOS, LCSAS_SHARES_DIR=str(cards)))
+    assert res.returncode == 77, res.stderr
+    assert "the cards are not to blame" in res.stderr

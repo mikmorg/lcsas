@@ -104,7 +104,7 @@ in this order.  Each one says how to answer.
      when that disc was made, so the newest disc knows the newest
      snapshots, and any backup set added after the META disc was made.
      Press ENTER once the disc is in (if it does not open by itself,
-     mount it: sudo mount /dev/sr0 /media).  restore.sh prints the
+     mount it: sudo mount /dev/sr0 /mnt).  restore.sh prints the
      full label it found.  The name the computer shows for a disc may
      be cut short; the full label is printed on the disc and in its
      VOLUME_INFO.txt.  S then ENTER skips this question and uses the
@@ -116,7 +116,8 @@ in this order.  Each one says how to answer.
          1) documents
          2) photos (password split: any 2 of 3 share cards)
      Type the number, the name, or the set's id (its folder name
-     under metadata/).  Q then ENTER stops (exit code 65).
+     under metadata/).  Q then ENTER, or the end of the input, stops
+     (exit code 65).
 
   3. The password.  What you type is not shown.  An empty answer is
      asked again, and so is a password the backup set does not
@@ -131,10 +132,13 @@ in this order.  Each one says how to answer.
 
   5. After a restore that succeeds, when the discs hold another set:
          Restore another backup set from these discs? [y/N]
-     y asks for the folder to restore it into (ENTER keeps the same
-     folder) and starts again at question 2, with no META disc and
-     nothing copied again.  N or ENTER ends the restore, and the
-     tools folder is deleted (see "THE TOOLS FOLDER").
+     y asks for the folder to restore it into and starts again at
+     question 2, with no META disc and nothing copied again.  ENTER
+     takes a NEW folder beside the first (for example ~/restored-2):
+     two sets restored into one folder would be mixed together.  Q
+     then ENTER at the folder question restores no other set.  N or
+     ENTER ends the restore, and the tools folder is deleted (see
+     "THE TOOLS FOLDER").
 
 Question 1, the check of the password, and question 5 come only on a
 terminal: never when the answers come from a pipe or a script.  To
@@ -259,10 +263,13 @@ silently treated as complete.  Files that finished cleanly on the
 first pass (size matches manifest) are skipped; files that failed
 are retried.  No "delete the target directory first" dance.
 
-The first restore into a folder drops a hidden zero-byte marker
-(.lcsas-restore-marker) in it.  Because the marker is present, every
-re-run into that SAME folder proceeds SILENTLY -- the resume case
-above is never interrupted by a prompt.
+The first restore into a folder drops a hidden marker
+(.lcsas-restore-marker) in it, naming the backup set restored there.
+Because the marker is present, every re-run of that set into that SAME
+folder proceeds SILENTLY -- the resume case above is never interrupted
+by a prompt.  Restoring ANOTHER backup set into that folder warns
+first, like a folder of your own files (below): files of both sets
+with the same names would be mixed together.
 
 If you instead point a restore at a folder that already holds YOUR
 own files (no marker -- it was not made by a prior LCSAS restore),
@@ -284,6 +291,10 @@ You can stop a restore at any time:
     share card.
   * Anywhere else, press Ctrl-C.  restore.sh exits with code 130.
 
+Once a backup set is restored there is nothing to carry on: stopping
+at "Restore another backup set?" (or at the folder question after it)
+ends the run, and the tools folder is deleted.
+
 Nothing is lost.  Files restored so far stay in the target folder,
 and the tools folder (below) stays, with the discs already read in
 its pack cache.  restore.sh prints the command that carries on:
@@ -292,14 +303,21 @@ its pack cache.  restore.sh prints the command that carries on:
 
 resume.sh needs NO META disc: it runs the copy in the tools folder,
 for the same backup set and the same target folder, and asks only for
-the password again (it never stores the password).  Flags you give it
+the password again (it never stores the password).  It carries on
+with the copy of the set's snapshots that the stopped run used, even
+if a newer data disc is in the drive by then, so the files restored
+before and after the stop come from the same snapshot.  The command
+is printed with quotes when the folder's name needs them; copy it as
+it is.  Flags you give it
 are passed on, e.g.  sh ~/lcsas-restore-tools/resume.sh --key FILE.
 Files that are already complete are skipped (see RETRY SAFETY), and
 discs already copied into the pack cache are not asked for again.
 
 Running restore.sh from the META disc again works too: it finds the
-tools folder, uses the copy already there instead of copying again,
-and carries on the same way.
+tools folder, uses the copy already there instead of copying again
+(only a copy that finished, of the same META disc and the same
+restore.sh: one that stopped part-way, say on a scratched disc, is
+made again), and carries on the same way.
 
 THE TOOLS FOLDER
 
@@ -330,23 +348,32 @@ discs it copies, so the home folder needs that much free space; the
 check before the password prompt includes it.
 
 The folder is removed when a restore succeeds and you answer N to
-"Restore another backup set?".  After any other exit (a wrong
-password, q at a disc prompt, Ctrl-C) it stays, so you can carry on;
-delete it yourself when you no longer need it:
+"Restore another backup set?": restore.sh removes what it put there,
+and the folder itself if nothing else is in it.  After any other exit
+(a wrong password, q at a disc prompt, Ctrl-C) it stays, so you can
+carry on; delete it yourself when you no longer need it:
 
     rm -rf ~/lcsas-restore-tools
 
-A folder left by a different META disc is replaced.  A folder that
-holds files of your own is never used or deleted (restore.sh then
-uses a temporary folder, and a stopped restore cannot carry on).
+The copies are made writable even though a disc is read-only, so the
+folder can always be removed.  A folder left by another restore.sh, or
+holding the backup sets of another archive, is emptied and used again.
+A folder that holds files of your own is never used or deleted
+(restore.sh then uses a temporary folder, and a stopped restore cannot
+carry on).  Never restore INTO the tools folder: it is deleted at the
+end, so restore.sh refuses such a target (exit code 65).
 
 ON A LIVE USB STICK the home folder is in RAM: the tools folder, and
 anything restored into the home folder, is lost when the computer is
 turned off.  restore.sh says so.  Carry on before turning it off, or
-point LCSAS_TOOLS_DIR (and the target) at a real disk, e.g. a USB disk:
+point LCSAS_TOOLS_DIR and the target at two separate folders on a real
+disk, e.g. a USB disk:
 
     LCSAS_TOOLS_DIR=/media/$USER/USBDISK/lcsas-tools \
         sh /mnt/restore.sh /media/$USER/USBDISK/restored
+
+Mount the data discs at /mnt, never at /media: mounting a disc over
+/media hides the USB disk under /media/$USER.
 
 REPAIRING A DAMAGED DISC
 
@@ -438,6 +465,12 @@ folder, and name that folder:
 
     LCSAS_SHARES_DIR=/path/to/cards sh /mnt/restore.sh ~/restored
 
+A card file with a mistake in it is named and left out, and the other
+cards are combined if enough of them are left.  If lcsas-keyshare
+itself does not work on this computer, restore.sh says so (the cards
+are not to blame) and asks for the password instead; rebuild it as
+below.
+
 Discs made by an older LCSAS have no marker, and a set whose split was
 never recorded says it is not split: restore.sh then asks for the
 password.  Rebuild it first, by hand:
@@ -502,8 +535,9 @@ EXIT CODES
     2  -- usage error
     64 -- no recovery method available
     65 -- you stopped at a question restore.sh asked (the newest
-          data disc, the backup set, or the overwrite warning for a
-          folder that is not empty)
+          data disc, the backup set, the overwrite warning for a
+          folder that is not empty, or "restore into RAM anyway?"), or
+          the folder to restore into is inside the tools folder
     75 -- you typed q at a disc prompt; carry on with resume.sh
     77 -- a repository key rejected the password, or you typed q at
           the password or a share card prompt
@@ -573,8 +607,9 @@ before invoking restore.sh.
       answers come from a pipe (test rigs), off never asks them.
 
   LCSAS_REPO=<name or id>
-      The backup set to restore, by its name or its id; skips the
-      list of sets.
+      The backup set to restore, by its name, its plain-letters name
+      (the name_cmd= line of its LCSAS_REPO.txt, as restore.bat shows
+      it) or its id; skips the list of sets.
 
   LCSAS_PASSWORD=<password>   LCSAS_PWFILE=<file>
       The password, or a file holding it (--key FILE is the same as

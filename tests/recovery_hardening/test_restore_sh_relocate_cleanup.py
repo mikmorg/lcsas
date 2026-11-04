@@ -132,10 +132,17 @@ def test_tools_folder_stays_after_a_failure_and_is_reused(
     ).read_text()
     assert f"sh {tools}/resume.sh" in first.stderr, first.stderr
 
-    # A set the copy lacks is added; the sets it has are kept as they are.
+    # A set the copy lacks is added; a set an earlier run brought up to
+    # date from a data disc (tagged in metadata/.from/) is kept as it is;
+    # any other set is taken from the META disc again.  (This used to keep
+    # every set the copy had, so a half-copied set, or one from an older
+    # META disc, was never refreshed.)
     (tools / "metadata" / "alpha" / "keys" / "updated-by-run-1").write_text("")
+    (tools / "metadata" / ".from").mkdir()
+    (tools / "metadata" / ".from" / "alpha").write_text("LCSAS_TEST_TINY_2026_0002\n")
     for sub in ("keys", "index"):
         (meta / "metadata" / "bravo" / sub).mkdir(parents=True)
+    (tools / "metadata" / "bravo" / "keys").mkdir(parents=True)  # half a copy
     again = _run(meta, tmp_path, shm_dir, stub_rc=1)
     assert again.returncode == 1, again.stderr
     assert (
