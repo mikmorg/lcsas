@@ -96,8 +96,14 @@ LCSAS_PACK_CACHE_DIR
   Default:  auto  (opt-out / default ON)
   Since:    Phase 24
   What:     Opportunistic pack cache directory.  Three values:
-              auto    (default when unset) → allocate a temporary dir
-                      under ${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>.
+              auto    (default when unset) → pack-cache/ in the tools
+                      folder (see LCSAS_TOOLS_DIR), so a stopped
+                      restore carries on with the discs it already
+                      read.  Without a tools folder (no $HOME), a
+                      temporary folder under ${TMPDIR:-/tmp} that is
+                      removed when the run ends.  (Before rc6 it was
+                      ${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>, which no
+                      run removed, #616.)
               <path>  → use that exact path (persists across runs).
               ''      (explicitly empty) → cache off.
             When active, every successful pack-file locate causes the
@@ -138,10 +144,37 @@ LCSAS_INTERACTIVE
             is a console window.  on asks even when the answers come
             through a pipe, as in the windows-e2e single-drive leg and
             the wine single-drive test.  off never asks: a pack that is
-            on no inserted disc fails at once.  restore.sh does not
-            read it.
+            on no inserted disc fails at once.  restore.sh passes it to
+            tier 1 the same way (since rc6, #617) and prints a line
+            when it ignores a value.
   Why:      Opt-in.  auto is right for a person at a console; the knob
             lets a test harness play that person at the disc prompt.
+
+LCSAS_TOOLS_DIR
+  Default:  unset → $HOME/lcsas-restore-tools  (opt-out / default ON)
+  Since:    rc6 (#609)
+  What:     The tools folder restore.sh keeps a restore's own files in.
+            Run off the META disc, it copies there: itself, this
+            computer's binaries (bin/<triple>/ only), the docs and the
+            disc's metadata/ folder; then it runs from the copy, so the
+            disc can come out of the drive.  The pack cache, a copy of
+            the catalog (tier 1 never gets a catalog.db on a disc) and
+            resume.sh live there too.  resume.sh (mode 700) carries a
+            stopped restore on with no META disc; it holds the set's id,
+            the target and the settings, NEVER the password.
+            The folder is removed after a restore that succeeds and
+            kept after any other exit: a wrong password, q at the disc
+            prompt (exit 75), Ctrl-C (130) or TERM (143).  The next run
+            from the same META disc reuses the copy; a copy made by a
+            different restore.sh is replaced (its pack cache is kept
+            only when both come from the same build).  A folder that
+            already holds other files is never used or deleted; the run
+            falls back to a temporary folder, as it does when there is
+            no $HOME.  On a live USB stick $HOME is in RAM: the folder
+            is lost at power-off, and restore.sh says so.
+  Why:      Opt-OUT.  Without it a stopped restore meant the META disc,
+            the copy and every disc again (#609).  Point it elsewhere
+            when $HOME is small or in RAM, e.g. at a USB disk.
 
 LCSAS_DRAIN_CHUNK_PACKS
   Default:  0  (opt-in / default OFF)
@@ -243,11 +276,12 @@ LCSAS_PROGRESS
 LCSAS_NO_RELOCATE
   Default:  0  (opt-in / default OFF)
   Since:    Phase 20
-  What:     1 → skip the relocation-to-RAM step.  Normally restore.sh
+  What:     1 → skip the relocation step.  Normally restore.sh
             detects when it is running off a read-only optical medium
-            and copies itself + the recovery binaries to a writable
-            temp dir before exec()ing the copy.  This lets you
-            eject the meta disc and reuse the drive for data discs.
+            and copies itself + the recovery binaries to the tools
+            folder (LCSAS_TOOLS_DIR) before exec()ing the copy.  This
+            lets you eject the meta disc and reuse the drive for data
+            discs.
             0 → perform relocation when the medium appears read-only.
   Why:      Opt-IN.  The relocation is a safety behavior; disabling it
             is only appropriate in test / development environments
@@ -391,8 +425,9 @@ INTERNAL VARIABLES (DO NOT SET)
 
 LCSAS_RELOCATED
   Internal sentinel set by restore.sh on re-exec after relocation to
-  RAM.  Its value is the meta disc's original mount path.  Not a
-  knob; do not set manually.
+  the tools folder.  Its value is the meta disc's original mount path.
+  resume.sh sets it too.  Not a knob; do not set manually.  (The
+  relocation also exports LCSAS_TOOLS_DIR with the folder it used.)
 
 ────────────────────────────────────────────────────────────────────
 QUICK REFERENCE (knobs you may set)
@@ -407,6 +442,7 @@ LCSAS_TARGET                unset     opt-in      unusual host arch
 LCSAS_META_DISC             unset     opt-in      unusual mount layout
 LCSAS_MOUNT_DIRS            unset     opt-in      non-standard disc mounts
 LCSAS_PACK_CACHE_DIR        auto      opt-out     set ''  to disable cache
+LCSAS_TOOLS_DIR             (home)    opt-out     tools folder elsewhere
 LCSAS_INTERACTIVE           unset     opt-in      set on for piped test rigs
 LCSAS_DRAIN_CHUNK_PACKS     0         opt-in      set 100-500 for slow optical
 LCSAS_MAX_JSON_MIB          256       opt-in      lower on tiny 32-bit hosts

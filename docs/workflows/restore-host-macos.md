@@ -223,9 +223,14 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   discovery de-duplicated by path, so with N data discs mounted a
   single-repository archive was listed N times ("Multiple repositories on
   this archive: 1) win  2) win ...") and a run without a terminal exited
-  1 at the picker.  Candidates are now de-duplicated by repository name,
-  keeping the first copy found (the meta disc's own, when present), as
-  `restore.bat` does.  Found by `macos-e2e.yml`; not macOS-specific.
+  1 at the picker.  Candidates are now de-duplicated by repository id
+  (the folder name).  Found by `macos-e2e.yml`; not macOS-specific.
+  Which copy is kept changed in rc6 (#605): the meta disc's own copy is
+  only the fallback, for a set that no mounted data disc carries.  A
+  mounted data disc's copy wins, because the meta copy can be older than
+  the data discs (and a set added after the meta disc was made is on the
+  data discs only).  Keeping the meta disc's copy first, as #533 did, is
+  what made the reader restore a stale "latest" snapshot.
 - **Quarantine attribute (intentional: OS behaviour, with a documented
   workaround; the heir-docs half is #490):** macOS may attach
   `com.apple.quarantine` to
