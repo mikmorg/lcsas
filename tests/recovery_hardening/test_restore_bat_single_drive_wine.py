@@ -410,3 +410,43 @@ def test_q_at_the_disc_prompt_stops_without_tier2(tmp_path: Path) -> None:
     got = target / "a0.txt"
     assert got.is_file() and _sha(got.read_bytes()) == _sha(FILES["a0.txt"]), out
 
+
+def test_catalog_seen_at_launch_is_passed_as_a_local_copy(tmp_path: Path) -> None:
+    """#610: restore.bat gives tier 1 a COPY of the catalog.db it finds at
+    launch, in its own folder, never the file on a disc: tier 1 keeps the
+    catalog open to the end, and an open file holds that disc in its
+    drive.  `copy` keeps the file's date, which tier 1 compares with any
+    catalog.db it meets later.
+
+    Disc A is in a second drive, E:, at launch, so restore.bat sees its
+    catalog.db and searches E: as well.  Tier 1 reads the tree and a0.txt
+    there with no prompt.  The one prompt is for disc B, by name: the
+    catalog is known from the start."""
+    fx = _build(tmp_path)
+    _map_drive(fx.prefix, "e", fx.discs["disc_a"])
+    run = _Run(fx)
+    try:
+        boxes = _drive(fx, run)
+    finally:
+        rc = run.finish()
+    out = run.text
+    print(f"disc prompts: {len(boxes)}")
+
+    assert rc == 0, f"rc={rc}\n--- output ---\n{out}"
+    assert "Restore complete" in out, out
+    for name, data in FILES.items():
+        got = fx.target / name
+        assert got.is_file() and _sha(got.read_bytes()) == _sha(data), (
+            f"{name} not restored byte-exact\n{out}")
+
+    tools = f"C:\\{RELOC}\\recovery"
+    assert f"using catalog E:\\catalog.db (a copy in {tools})" in out, out
+    assert "could not copy" not in out, out
+    copy = fx.reloc / "recovery" / "catalog.db"
+    original = fx.discs["disc_a"] / "catalog.db"
+    assert copy.read_bytes() == original.read_bytes()
+    assert abs(copy.stat().st_mtime - original.stat().st_mtime) < 2.0, (
+        "the copy did not keep the catalog's date")
+    assert "drives searched for discs: D:\\ E:\\" in out, out
+    assert len(boxes) == 1 and LABELS["disc_b"] in boxes[0], boxes
+    assert "[tier 2]" not in out, out

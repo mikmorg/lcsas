@@ -223,14 +223,28 @@ function Invoke-RelocationLeg {
         $problems.Add("no '[tier 1] running' line: the relocated copy had no lcsas-restore.exe (the bin tree was not mirrored)")
     }
 
-    # 3. completion + exit status + byte-exact tree.
+    # 3. #610: tier 1 got a COPY of a disc's catalog.db, made in the
+    #    relocated copy's own folder, never the file on the disc (an open
+    #    file holds the disc in its drive).  Every ISO is mounted here, so
+    #    restore.bat finds a catalog.db at launch.
+    $cat = [regex]::Match($out, 'using catalog ([A-Z]:\\catalog\.db) \(a copy in (.+)\)')
+    if ($cat.Success) {
+        Write-Host "Catalog: $($cat.Groups[1].Value), copy in $($cat.Groups[2].Value)"
+        if ($cat.Groups[2].Value -notmatch 'lcsas-restore-\d+-\d+\\recovery$') {
+            $problems.Add("the catalog copy is not in the relocated copy: $($cat.Groups[2].Value)")
+        }
+    } else {
+        $problems.Add("no 'using catalog X:\catalog.db (a copy in ...)' line: tier 1 got no local copy of the catalog")
+    }
+
+    # 4. completion + exit status + byte-exact tree.
     if ($rc -ne 0) { $problems.Add("restore.bat exit code $rc (want 0)") }
     # Case-sensitive: tier 1's own "[lcsas-restore] restore complete" line
     # (also in $out via 2>&1) must not stand in for restore.bat's banner.
     if ($out -cnotmatch 'Restore complete') { $problems.Add("'Restore complete' banner missing") }
     Test-TreeAgainstManifest -Fixture $Fixture -Target $target -Problems $problems
 
-    # 4. nothing left behind in %TEMP%: the password file, or the copy (#545).
+    # 5. nothing left behind in %TEMP%: the password file, or the copy (#545).
     $pwLeft = @(Get-TempNames 'lcsas-pw-*' | Where-Object { $pwBefore -notcontains $_ })
     if ($pwLeft.Count -gt 0) { $problems.Add("password file(s) left in %TEMP%: $($pwLeft -join ', ')") }
     Assert-NoRamDirLeft -New $ramNew -Problems $problems
@@ -238,7 +252,7 @@ function Invoke-RelocationLeg {
     if ($problems.Count -gt 0) {
         throw ("relocation leg failed:`n  - " + ($problems -join "`n  - "))
     }
-    Write-Host 'Relocation leg passed: copy made, tier 1 ran from it, tree byte-exact, copy removed.'
+    Write-Host 'Relocation leg passed: copy made, tier 1 ran from it with a local catalog copy, tree byte-exact, copy removed.'
 }
 
 # ---------------------------------------------------------------------
