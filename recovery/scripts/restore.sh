@@ -32,6 +32,17 @@
 #   1    generic failure (no repository, unsupported OS/arch, etc.)
 #   2    usage error
 #   64   no recovery binary available at any tier (issue #225)
+#   65   the reader stopped at a question this script asked
+#   75   the reader typed q at tier 1's disc prompt (#615)
+#   77   a repository key rejected the password
+#   130  stopped with Ctrl-C (143: killed with TERM)
+#
+# Tools folder (#609): run off a disc, the script copies itself, this
+# computer's binaries, the docs and the meta disc's metadata/ into
+# $LCSAS_TOOLS_DIR (default $HOME/lcsas-restore-tools) and runs from
+# there.  The pack cache, a copy of the catalog and resume.sh live
+# there too.  It is removed after a restore that succeeds and kept
+# after any other exit, so `sh <tools>/resume.sh` can carry on.
 
 set -eu
 
@@ -117,6 +128,104 @@ _host_triple() {
     esac
 }
 
+# target_fstype DIR: the FSTYPE of the filesystem holding DIR; empty when
+# undetectable.  Never returns non-zero (set -e safety).
+# LCSAS_PROC_MOUNTS (test seam) points the fallback parser at an
+# alternate mount table AND bypasses findmnt so the awk path is
+# exercisable on hosts that have findmnt.  Used for the restore target
+# (BOOT-05) and for the tools folder (a live USB's $HOME is RAM).
+target_fstype() {
+    if [ -z "${LCSAS_PROC_MOUNTS:-}" ] && command -v findmnt >/dev/null 2>&1; then
+        findmnt -n -o FSTYPE --target "$1" 2>/dev/null || true
+        return 0
+    fi
+    _tft_table="${LCSAS_PROC_MOUNTS:-/proc/mounts}"
+    [ -r "$_tft_table" ] || return 0
+    # Longest-prefix match of the target's canonical path against the
+    # mount-point column; same-length later entries win (overmounts
+    # append to the table).
+    awk -v p="$(cd "$1" 2>/dev/null && pwd -P)" '
+        {
+            pre = ($2 == "/") ? "/" : $2 "/"
+            if (p != "" && (p == $2 || index(p, pre) == 1) &&
+                length($2) >= l) { l = length($2); t = $3 }
+        }
+        END { print t }' "$_tft_table" 2>/dev/null || true
+    return 0
+}
+
+human_kb() {
+    # KB count -> "N.N GB" / "N MB" (GB collapses to 0.0 below 1 GB).
+    awk -v kb="$1" 'BEGIN {
+        if (kb >= 1048576) printf "%.1f GB", kb / 1048576;
+        else printf "%d MB", (kb + 1023) / 1024;
+    }'
+}
+
+# ── The tools folder (C6, #609) ───────────────────────────────────
+#
+# One fixed folder per user holds everything a restore needs once the
+# meta disc is out of the drive.  A marker file says a folder is ours:
+# the script only ever empties or deletes a folder that carries it.
+TOOLS_MARK=".lcsas-restore-tools"
+
+# tools_dir_claim DIR: make DIR a tools folder.  0 = DIR now carries the
+# marker.  An existing folder is claimed only when it is empty or
+# already carries the marker, so a folder holding the reader's own files
+# (LCSAS_TOOLS_DIR=$HOME, say) is never used and never deleted.
+tools_dir_claim() {
+    if [ -d "$1" ]; then
+        [ -f "$1/$TOOLS_MARK" ] && return 0
+        [ -z "$(ls -A "$1" 2>/dev/null)" ] || return 1
+    else
+        mkdir -p "$1" 2>/dev/null || return 1
+    fi
+    : > "$1/$TOOLS_MARK" 2>/dev/null || return 1
+    return 0
+}
+
+# dir_runs_programs DIR: 0 when a program in DIR can be run (#496: a
+# "noexec" mount refuses them).
+dir_runs_programs() {
+    printf '#!/bin/sh\nexit 0\n' > "$1/.exec-probe" 2>/dev/null || return 1
+    chmod +x "$1/.exec-probe" 2>/dev/null || true
+    if "$1/.exec-probe" 2>/dev/null; then
+        rm -f "$1/.exec-probe"
+        return 0
+    fi
+    rm -f "$1/.exec-probe"
+    return 1
+}
+
+# room_for DIR KB: 0 unless df says DIR has less than KB free; then it
+# says so and returns 1.  Unknown sizes count as room.
+room_for() {
+    _free_kb="$(df -Pk "$1" 2>/dev/null | awk 'NR==2 { print $4 }')"
+    case "$2:$_free_kb" in
+        *[!0-9:]*|:*|*:) return 0 ;;
+    esac
+    [ "$_free_kb" -lt "$2" ] || return 0
+    printf '[lcsas-restore] %s has %s KB free, the recovery ' "$1" "$_free_kb" >&2
+    printf 'binaries need %s KB; trying the next folder\n' "$2" >&2
+    return 1
+}
+
+# tools_dir_replace DIR: DIR holds a copy made by ANOTHER restore.sh.
+# Remove what that copy put there; keep its pack cache only when both
+# scripts come from the same build (the stamped LCSAS_RESTORE_BUILD_SHA).
+tools_dir_replace() {
+    [ -f "$1/recovery/scripts/restore.sh" ] || return 0
+    _old_build="$(grep '^LCSAS_RESTORE_BUILD_SHA=' "$1/recovery/scripts/restore.sh" 2>/dev/null || true)"
+    _new_build="$(grep '^LCSAS_RESTORE_BUILD_SHA=' "$SCRIPT" 2>/dev/null || true)"
+    printf '[lcsas-restore] %s holds an older copy of the recovery tools; replacing it\n' "$1" >&2
+    rm -rf "$1/recovery" "$1/metadata" "$1/catalog.db" "$1/resume.sh" \
+           "$1/standalone_restorer.py" "$1/tools"
+    if [ -z "$_old_build" ] || [ "$_old_build" != "$_new_build" ]; then
+        rm -rf "$1/pack-cache"
+    fi
+    return 0
+}
+
 relocate_to_ram() {
     # $1 = original meta disc mount root.
     orig_mount="$1"; shift
@@ -146,14 +255,6 @@ relocate_to_ram() {
             src_bin="$SCRIPT_DIR/../bin"
         fi
     fi
-    # Pick a scratch dir that is NOT inside the meta disc, has room for
-    # the bin/ tree, and may run programs (#496).  A small tmpfs
-    # (/run/user/<uid> is 10% of RAM by default; the bin/ tree is
-    # ~750 MB) used to take a partial copy silently, and a "noexec" /tmp
-    # (common on hardened hosts) made every relocated tier fail with
-    # "Permission denied".  Either way the next candidate is tried,
-    # ending with $HOME.  The copy itself stays best-effort: one
-    # unreadable file on a scratched disc must not block relocation.
     # Copy only this host's bin/<triple>/ (#508): restore.sh never reads
     # another target's dir, and the whole tree is ~750 MB against ~130 MB
     # for one target.  Unknown platform or no such dir: copy everything.
@@ -167,109 +268,182 @@ relocate_to_ram() {
     fi
     _bin_kb=""
     [ -n "$src_bin" ] && _bin_kb="$(du -sk "$_copy_from" 2>/dev/null | awk '{print $1}')"
+    # Where the copy goes (#609).  First the fixed tools folder, so a
+    # stopped restore can carry on from it and a re-run reuses it: when
+    # it already holds a copy made by this same restore.sh, nothing is
+    # copied again.  When it cannot be used, a temporary folder, as
+    # before: not inside the meta disc, with room for the bin/ tree, and
+    # allowed to run programs (#496).  A small tmpfs (/run/user/<uid> is
+    # 10% of RAM by default) used to take a partial copy silently, and a
+    # "noexec" /tmp (common on hardened hosts) made every relocated tier
+    # fail with "Permission denied".  The copy itself stays best-effort:
+    # one unreadable file on a scratched disc must not block relocation.
     ramdir=""
+    _reuse=0
+    _td="${LCSAS_TOOLS_DIR:-${HOME:+$HOME/lcsas-restore-tools}}"
+    case "$_td" in ''|/*) ;; *) _td="$(pwd)/$_td" ;; esac
+    if [ -n "$_td" ] && [ -f "$_td/$TOOLS_MARK" ] \
+       && [ -d "$_td/recovery/$_copy_to" ] \
+       && cmp -s "$SCRIPT" "$_td/recovery/scripts/restore.sh"; then
+        _reuse=1
+        ramdir="$_td"
+    elif [ -n "$_td" ]; then
+        _td_probe="$_td"
+        [ -d "$_td_probe" ] || _td_probe="$(dirname "$_td")"
+        if room_for "$_td_probe" "$_bin_kb" && tools_dir_claim "$_td" \
+           && dir_runs_programs "$_td"; then
+            tools_dir_replace "$_td"
+            ramdir="$_td"
+        else
+            printf '[lcsas-restore] cannot use %s for the recovery tools; ' "$_td" >&2
+            printf 'trying a temporary folder\n' >&2
+        fi
+    fi
     for cand in "${TMPDIR:-}" "${XDG_RUNTIME_DIR:-}" /tmp /run /var/tmp \
                 "${HOME:-}"; do
+        [ -z "$ramdir" ] || break
         [ -n "$cand" ] || continue
         [ -d "$cand" ] || continue
         [ -w "$cand" ] || continue
         case "$cand" in "$orig_mount"|"$orig_mount"/*) continue;; esac
-        _free_kb="$(df -Pk "$cand" 2>/dev/null | awk 'NR==2 { print $4 }')"
-        case "$_bin_kb:$_free_kb" in
-            *[!0-9:]*|:*|*:) ;;
-            *)  if [ "$_free_kb" -lt "$_bin_kb" ]; then
-                    printf '[lcsas-restore] %s has %s KB free, the recovery ' "$cand" "$_free_kb" >&2
-                    printf 'binaries need %s KB; trying the next folder\n' "$_bin_kb" >&2
-                    continue
-                fi ;;
-        esac
+        room_for "$cand" "$_bin_kb" || continue
         ramdir="$(mktemp -d "$cand/lcsas-restore.XXXXXX" 2>/dev/null || true)"
         if [ -z "$ramdir" ] || [ ! -d "$ramdir" ]; then
             ramdir=""
             continue
         fi
-        printf '#!/bin/sh\nexit 0\n' > "$ramdir/.exec-probe" 2>/dev/null
-        chmod +x "$ramdir/.exec-probe" 2>/dev/null
-        if ! "$ramdir/.exec-probe" 2>/dev/null; then
+        if ! dir_runs_programs "$ramdir"; then
             rm -rf "$ramdir"
             ramdir=""
             continue
         fi
-        rm -f "$ramdir/.exec-probe"
-        break
+        # The temporary folder is this run's tools folder: kept for a
+        # resume until the computer is turned off, removed on success.
+        : > "$ramdir/$TOOLS_MARK"
     done
-    unset _bin_kb _free_kb _reloc_triple
+    unset _free_kb _reloc_triple _td _td_probe
     if [ -z "$ramdir" ]; then
         printf '[lcsas-restore] cannot find a writable dir to relocate to; ' >&2
         printf 'continuing from %s (drive will be held)\n' "$orig_mount" >&2
         return 1
     fi
 
-    # Mirror the on-disc layout under $ramdir so the script's own
-    # AUTO_RECOVERY logic resolves $ramdir/recovery as RECOVERY.
-    mkdir -p "$ramdir/recovery/scripts" "$ramdir/recovery/$_copy_to"
-    if [ -n "$src_bin" ]; then
-        cp -R "$_copy_from/." "$ramdir/recovery/$_copy_to/" 2>/dev/null || true
-        # A copy of the disc on a FAT/exFAT stick (or a noexec mount) can
-        # leave the binaries without their executable bits (#496).
-        chmod -R u+x "$ramdir/recovery/bin" 2>/dev/null || true
-    fi
-    cp -f "$SCRIPT" "$ramdir/recovery/scripts/restore.sh"
-    chmod +x "$ramdir/recovery/scripts/restore.sh"
-    if [ -f "$SCRIPT_DIR/detect_arch.sh" ]; then
-        cp -f "$SCRIPT_DIR/detect_arch.sh" "$ramdir/recovery/scripts/detect_arch.sh"
-        chmod +x "$ramdir/recovery/scripts/detect_arch.sh"
-    fi
-    # Catalog sidecar for prompt hints (small enough to copy).
-    for cat_cand in \
-        "$SCRIPT_DIR/../catalog.db" \
-        "$SCRIPT_DIR/catalog.db" \
-        "$SCRIPT_DIR/../../catalog.db"
-    do
-        [ -f "$cat_cand" ] || continue
-        cp -f "$cat_cand" "$ramdir/recovery/catalog.db" 2>/dev/null || true
-        break
-    done
-    # Issue #234 — copy standalone_restorer.py for tier 3 too.  Without
-    # this, post-relocation the tier-3 fall-through can't find the
-    # script (the orig location was under the now-ejected meta disc).
-    # The tier-3 search looks at $RECOVERY/../standalone_restorer.py
-    # (which resolves to $ramdir/standalone_restorer.py post-reloc).
-    for pyrest_cand in \
-        "$SCRIPT_DIR/../standalone_restorer.py" \
-        "$SCRIPT_DIR/standalone_restorer.py" \
-        "$SCRIPT_DIR/../../standalone_restorer.py"
-    do
-        [ -f "$pyrest_cand" ] || continue
-        cp -f "$pyrest_cand" "$ramdir/standalone_restorer.py" 2>/dev/null || true
-        break
-    done
+    if [ "$_reuse" = 1 ]; then
+        printf '[lcsas-restore] copied recovery binaries to %s on an earlier run; ' "$ramdir" >&2
+        printf 'using that copy\n' >&2
+    else
+        # Mirror the on-disc layout under $ramdir so the script's own
+        # AUTO_RECOVERY logic resolves $ramdir/recovery as RECOVERY.
+        mkdir -p "$ramdir/recovery/scripts" "$ramdir/recovery/$_copy_to"
+        if [ -n "$src_bin" ]; then
+            # #612: say what is happening BEFORE a copy that takes minutes
+            # on a slow drive; it used to run in silence.
+            printf '[lcsas-restore] copying the recovery tools for this computer (about %s)\n' \
+                   "$(human_kb "${_bin_kb:-0}")" >&2
+            printf '                from the disc to %s; on a slow drive this takes a few minutes...\n' \
+                   "$ramdir" >&2
+            cp -R "$_copy_from/." "$ramdir/recovery/$_copy_to/" 2>/dev/null || true
+            # A copy of the disc on a FAT/exFAT stick (or a noexec mount) can
+            # leave the binaries without their executable bits (#496).
+            chmod -R u+x "$ramdir/recovery/bin" 2>/dev/null || true
+            # The restore manuals travel with the tools (C6).
+            if [ -d "$src_bin/../docs" ]; then
+                cp -R "$src_bin/../docs" "$ramdir/recovery/" 2>/dev/null || true
+            fi
+        fi
+        cp -f "$SCRIPT" "$ramdir/recovery/scripts/restore.sh"
+        chmod +x "$ramdir/recovery/scripts/restore.sh"
+        if [ -f "$SCRIPT_DIR/detect_arch.sh" ]; then
+            cp -f "$SCRIPT_DIR/detect_arch.sh" "$ramdir/recovery/scripts/detect_arch.sh"
+            chmod +x "$ramdir/recovery/scripts/detect_arch.sh"
+        fi
+        # Catalog sidecar for prompt hints (small enough to copy).
+        for cat_cand in \
+            "$SCRIPT_DIR/../catalog.db" \
+            "$SCRIPT_DIR/catalog.db" \
+            "$SCRIPT_DIR/../../catalog.db"
+        do
+            [ -f "$cat_cand" ] || continue
+            cp -f "$cat_cand" "$ramdir/recovery/catalog.db" 2>/dev/null || true
+            break
+        done
+        # Issue #234 — copy standalone_restorer.py for tier 3 too.  Without
+        # this, post-relocation the tier-3 fall-through can't find the
+        # script (the orig location was under the now-ejected meta disc).
+        # The tier-3 search looks at $RECOVERY/../standalone_restorer.py
+        # (which resolves to $ramdir/standalone_restorer.py post-reloc).
+        for pyrest_cand in \
+            "$SCRIPT_DIR/../standalone_restorer.py" \
+            "$SCRIPT_DIR/standalone_restorer.py" \
+            "$SCRIPT_DIR/../../standalone_restorer.py"
+        do
+            [ -f "$pyrest_cand" ] || continue
+            cp -f "$pyrest_cand" "$ramdir/standalone_restorer.py" 2>/dev/null || true
+            break
+        done
 
-    # Issue #284 — copy the bundled zstandard package so tier-3 PYTHONPATH
-    # resolution works post-relocation.  PR #239 wired PYTHONPATH to
-    # $META_ROOT/tools/lib/python*/zstandard/ but that path disappears
-    # when the meta disc is ejected.  Mirror the directory into the RAM
-    # dir so the existing PYTHONPATH search finds it at
-    # $ramdir/tools/lib/python*/zstandard/.
-    for _zstd_src in \
-        "$SCRIPT_DIR/../../tools/lib/python"*/zstandard \
-        "$SCRIPT_DIR/tools/lib/python"*/zstandard
-    do
-        [ -d "$_zstd_src" ] || continue
-        _zstd_pyver="$(basename "$(dirname "$_zstd_src")")"
-        mkdir -p "$ramdir/tools/lib/$_zstd_pyver"
-        cp -R "$_zstd_src" "$ramdir/tools/lib/$_zstd_pyver/zstandard" \
-            2>/dev/null || true
-        break
-    done
-    unset _zstd_src _zstd_pyver
+        # Issue #284 — copy the bundled zstandard package so tier-3 PYTHONPATH
+        # resolution works post-relocation.  PR #239 wired PYTHONPATH to
+        # $META_ROOT/tools/lib/python*/zstandard/ but that path disappears
+        # when the meta disc is ejected.  Mirror the directory into the RAM
+        # dir so the existing PYTHONPATH search finds it at
+        # $ramdir/tools/lib/python*/zstandard/.
+        for _zstd_src in \
+            "$SCRIPT_DIR/../../tools/lib/python"*/zstandard \
+            "$SCRIPT_DIR/tools/lib/python"*/zstandard
+        do
+            [ -d "$_zstd_src" ] || continue
+            _zstd_pyver="$(basename "$(dirname "$_zstd_src")")"
+            mkdir -p "$ramdir/tools/lib/$_zstd_pyver"
+            cp -R "$_zstd_src" "$ramdir/tools/lib/$_zstd_pyver/zstandard" \
+                2>/dev/null || true
+            break
+        done
+        unset _zstd_src _zstd_pyver
 
-    printf '[lcsas-restore] copied recovery binaries to %s\n' "$ramdir" >&2
+        printf '[lcsas-restore] copied recovery binaries to %s\n' "$ramdir" >&2
+    fi
+
+    # The meta disc's own metadata/ (each backup set's keys, index and
+    # snapshots) is at the disc ROOT, not under recovery/.  Copy it so
+    # the restore can find the sets once the disc is out (#616).  A
+    # reused copy keeps the sets it has (an earlier run may have brought
+    # them up to date from a data disc) and only gains the missing ones.
+    case "$SCRIPT_DIR" in
+        */recovery/scripts) _meta_md="${SCRIPT_DIR%/recovery/scripts}/metadata" ;;
+        *)                  _meta_md="$SCRIPT_DIR/metadata" ;;
+    esac
+    if [ -d "$_meta_md" ]; then
+        if [ "$_reuse" = 0 ]; then
+            rm -rf "$ramdir/metadata"
+            _meta_kb="$(du -sk "$_meta_md" 2>/dev/null | awk '{print $1}')"
+            printf '[lcsas-restore] copying the backup-set metadata (about %s) to %s/metadata...\n' \
+                   "$(human_kb "${_meta_kb:-0}")" "$ramdir" >&2
+        fi
+        mkdir -p "$ramdir/metadata"
+        for _meta_set in "$_meta_md"/*; do
+            [ -e "$ramdir/metadata/${_meta_set##*/}" ] \
+                || cp -R "$_meta_set" "$ramdir/metadata/" 2>/dev/null || true
+        done
+    fi
+    unset _bin_kb _meta_md _meta_kb _meta_set _reuse
+
+    # A live USB stick keeps $HOME (and /tmp) in RAM.
+    case "$(target_fstype "$ramdir")" in
+        tmpfs|ramfs)
+            cat >&2 <<EOF
+[lcsas-restore] note: $ramdir is in RAM (normal on a live USB stick).
+                It is lost when this computer is turned off, so a
+                stopped restore can be carried on only until then.
+EOF
+            ;;
+    esac
     printf '[lcsas-restore] you may eject the meta disc when the ' >&2
     printf 'binary prompts for a data disc.\n' >&2
 
     LCSAS_RELOCATED="$orig_mount"
-    export LCSAS_RELOCATED
+    LCSAS_TOOLS_DIR="$ramdir"
+    export LCSAS_RELOCATED LCSAS_TOOLS_DIR
     # cd outside the meta disc so the new sh inherits a safe cwd.
     cd / 2>/dev/null || true
     # Re-exec the relocated script with the SAME positional args.
@@ -380,6 +554,9 @@ QUICK START:
   3. Run: sh /mnt/restore.sh ~/restored/ latest
   4. Answer the prompts (repository, password).
   5. When asked to swap discs, do so and press Enter.
+  To stop, type q at a disc prompt (or press Ctrl-C).  The tools stay
+  in ~/lcsas-restore-tools; run 'sh ~/lcsas-restore-tools/resume.sh'
+  to carry on later.
 
   RECOVERY_ROOT (auto-detected when restore.sh is run from inside the
   recovery tree) must contain bin/<arch>/lcsas-restore and/or src/.
@@ -414,10 +591,22 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           for mounted data discs (default:
                           /Volumes:/media/<user>:/media:/mnt:/run/media/<user>).
                           Set to '' (empty) to disable the auto-scan.
+  LCSAS_TOOLS_DIR         Tools folder (default: \$HOME/lcsas-restore-tools).
+                          Run off a disc, the script copies itself, this
+                          computer's binaries, the docs and the disc's
+                          metadata/ there, keeps the pack cache, a copy
+                          of the catalog and resume.sh there, and runs
+                          from there.  Removed after a restore that
+                          succeeds; kept otherwise, so that
+                          'sh <tools>/resume.sh' carries on (no META
+                          disc needed).
   LCSAS_PACK_CACHE_DIR    Opportunistic pack cache.  'auto' (default
-                          when unset) → \${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>;
+                          when unset) → <tools>/pack-cache;
                           a path → that path; '' (empty) → cache off.
                           Trades disk space for fewer disc swaps.
+  LCSAS_INTERACTIVE       on / off / auto, passed to tier 1 as
+                          --interactive.  auto (default) asks at the
+                          disc prompt only on a terminal.
   LCSAS_TIER_FALLBACK     0 (default) → tier 1 crash aborts the run.
                           1 → fall through to tier 2 / tier 3 on
                           non-zero exit.  Use when you suspect a bug
@@ -769,14 +958,33 @@ _restore_exit_handler() {
     [ -n "${TIER3_ERR:-}" ] && [ -f "${TIER3_ERR:-}" ] && rm -f "$TIER3_ERR"
     [ -n "${TIER3_RC_FILE:-}" ] && [ -f "${TIER3_RC_FILE:-}" ] && rm -f "$TIER3_RC_FILE"
     [ -n "${PWFILE_TMP:-}" ] && [ -f "${PWFILE_TMP:-}" ] && rm -f "$PWFILE_TMP"
-    # #508: a relocated copy (~130 MB of binaries) removes itself, or every
-    # run leaves one behind in /tmp or /run/user.  Only the directory
-    # relocate_to_ram made: $SCRIPT_DIR is <ramdir>/recovery/scripts.
-    if [ -n "${LCSAS_RELOCATED:-}" ]; then
-        _reloc_root="$(dirname "$(dirname "$SCRIPT_DIR")")"
-        case "$(basename "$_reloc_root")" in
-            lcsas-restore.??????) rm -rf "$_reloc_root" ;;
-        esac
+    [ -n "${RUN_TMP:-}" ] && rm -rf "$RUN_TMP"
+    # #609: the tools folder goes after a restore that succeeded (#508:
+    # otherwise every run left ~130 MB behind), and stays after any other
+    # exit -- a wrong password, q at the disc prompt, Ctrl-C -- so the
+    # restore can carry on from it.  Only a folder carrying the marker.
+    if [ -n "${TOOLS:-}" ] && [ -f "$TOOLS/$TOOLS_MARK" ]; then
+        if [ "$rc" -eq 0 ]; then
+            cd / 2>/dev/null || true
+            rm -rf "$TOOLS"
+        elif [ -f "$TOOLS/resume.sh" ]; then
+            cat >&2 <<EOF
+
+The restore stopped before it finished (exit code $rc).  The files
+restored so far stay in the target folder, and the tools copied from
+the disc stay in
+    $TOOLS
+To carry on later (the META disc is not needed), run:
+    sh $TOOLS/resume.sh
+It asks for the password again.  Delete that folder when you are done.
+EOF
+        elif [ -d "$TOOLS/recovery" ] || [ -d "$TOOLS/pack-cache" ]; then
+            printf '[restore.sh] the tools copied from the disc stay in %s for the next run\n' \
+                   "$TOOLS" >&2
+        else
+            # Nothing in it worth keeping: the run stopped before it began.
+            rm -rf "$TOOLS"
+        fi
     fi
     if [ "$rc" -ne 0 ]; then
         printf '[restore.sh] EXIT rc=%d at line approx=%d\n' "$rc" "${LINENO:-0}" \
@@ -790,7 +998,37 @@ _restore_exit_handler() {
     # some shells -- notably dash on Debian / Ubuntu / busybox).
     return 0
 }
-trap _restore_exit_handler EXIT INT TERM
+trap _restore_exit_handler EXIT
+# Ctrl-C, TERM or a closed terminal end the run with the shell's usual
+# status, so the EXIT handler sees a failure and KEEPS the tools folder.
+# The handler used to run for INT/TERM itself, return 0 and let the
+# script carry on, which then exited 0 (#616).
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+# ── The tools folder and this run's own files (#609, #610) ───────
+#
+# TOOLS holds what a restore needs once the meta disc is out (see the
+# header).  Relocated, it is the folder relocate_to_ram copied into; run
+# in place, it holds only the pack cache, the catalog copy and
+# resume.sh.  When no tools folder can be made (no $HOME, say), the run
+# keeps those files in a temporary folder that goes when it exits, so a
+# stopped restore cannot be carried on from it.
+TOOLS=""
+RUN_TMP=""
+_tools_want="${LCSAS_TOOLS_DIR:-${HOME:+$HOME/lcsas-restore-tools}}"
+case "$_tools_want" in ''|/*) ;; *) _tools_want="$(pwd)/$_tools_want" ;; esac
+if [ -n "$_tools_want" ] && tools_dir_claim "$_tools_want"; then
+    TOOLS="$(cd "$_tools_want" && pwd -P)"
+else
+    [ -z "$_tools_want" ] \
+        || printf '[restore.sh] cannot use %s as the tools folder; using a temporary one\n' \
+                  "$_tools_want" >&2
+    RUN_TMP="$(mktemp -d "${TMPDIR:-/tmp}/lcsas-restore-run.XXXXXX" 2>/dev/null || true)"
+fi
+STATE_DIR="${TOOLS:-$RUN_TMP}"
+unset _tools_want
 
 # ── Repo discovery ────────────────────────────────────────────────
 #
@@ -820,11 +1058,6 @@ $1"
 # Direct layouts (legacy).
 add_repo_candidate "$RECOVERY/repo"
 add_repo_candidate "$RECOVERY"
-# Repository metadata — one per repository under metadata/<name>/.
-for cand in "$RECOVERY/metadata"/*; do
-    [ -d "$cand" ] || continue
-    add_repo_candidate "$cand"
-done
 # Any currently-mounted archive disc (the same directories the
 # pack-search scan below uses).  We add the repos themselves here
 # so an heir can run `sh restore.sh` immediately after mounting a
@@ -856,20 +1089,42 @@ export LCSAS_MOUNT_DIRS="$LCSAS_MOUNT_DIRS_EFFECTIVE"
 #   LCSAS_PACK_CACHE_DIR=            (empty) disable — hosts short
 #                                    on disk space only
 #
-# Default when UNSET: auto.  Default when explicitly empty: off.
+# Default when UNSET: auto, which is pack-cache/ in the tools folder
+# (#616: it used to be ${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>, which no
+# run ever removed and no later run could reuse).  Explicitly empty: off.
 if [ "${LCSAS_PACK_CACHE_DIR-auto}" = "auto" ]; then
-    LCSAS_PACK_CACHE_DIR="${TMPDIR:-/tmp}/lcsas-pack-cache.$$"
+    LCSAS_PACK_CACHE_DIR="${STATE_DIR:+$STATE_DIR/pack-cache}"
 fi
 export LCSAS_PACK_CACHE_DIR
+
+# The meta disc.  META_ROOT is the folder that holds recovery/: the disc
+# root when the script runs from the disc, the tools folder after
+# relocation (which copies the disc's metadata/ there).  META_DISC is
+# where the disc was mounted.  Like tier 1 (disc_locator.c
+# meta_disc_is_live), it counts as the meta disc only while its
+# recovery/scripts/restore.sh is there: once the disc is out, its old
+# mount point may hold a data disc.
+META_ROOT="$(dirname "$RECOVERY")"
+meta_disc_is_live() {
+    [ -n "${META_DISC:-}" ] && [ -e "$META_DISC/recovery/scripts/restore.sh" ]
+}
+is_meta_mount() {
+    [ "$1" = "$META_ROOT" ] && return 0
+    meta_disc_is_live || return 1
+    case "$1" in "$META_DISC"|"$META_DISC"/*) return 0 ;; esac
+    return 1
+}
+
 OLD_IFS="$IFS"; IFS=":"
 for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
     IFS="$OLD_IFS"
     [ -n "$parent" ] && [ -d "$parent" ] || continue
     # The mount point itself may directly contain metadata/* (when
     # /mnt is the disc root), so probe both /mnt itself and any
-    # children of /mnt.
+    # children of /mnt.  The meta disc's own copy is added below.
     for mnt in "$parent" "$parent"/*; do
         [ -d "$mnt" ] || continue
+        is_meta_mount "$mnt" && continue
         for cand in "$mnt/metadata"/*; do
             [ -d "$cand" ] || continue
             add_repo_candidate "$cand"
@@ -878,14 +1133,29 @@ for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
     IFS=":"
 done
 IFS="$OLD_IFS"
+# The meta disc's own copies come LAST: <META_ROOT>/metadata/ (the disc
+# root, or the tools folder's copy), the legacy $RECOVERY/metadata/, and
+# the disc itself.  The meta disc's metadata/ used to be found ONLY by
+# the mount-dir walk above, so a meta disc mounted anywhere else (say
+# /cdrom) with no data disc mounted found no repository at all (#616).
+for _meta_md in "$META_ROOT/metadata" "$RECOVERY/metadata" \
+                ${META_DISC:+"$META_DISC/metadata"}; do
+    for cand in "$_meta_md"/*; do
+        [ -d "$cand" ] || continue
+        add_repo_candidate "$cand"
+    done
+done
 
 # De-duplicate REPO_CANDIDATES by repository name (the last path
 # component), keeping the first copy found, then pick one.  Every
 # data disc carries metadata/<repo>/ for every repository, so keying
 # on the path listed one repository once per mounted disc and turned
 # a single-repository archive into a bogus "Multiple repositories"
-# prompt (#533).  First found = the meta disc's own copy when there
-# is one; --repo NAME resolves the same way; restore.bat dedupes alike.
+# prompt (#533).  Because the meta disc's copies are listed last, a
+# mounted data disc's copy wins: the meta copy is only the fallback for
+# a set that no mounted data disc carries.  It was the other way round
+# (#605): the meta copy can be older than the data discs, and a set
+# added after the meta disc was made is on the data discs only.
 REPO_CANDIDATES="$(printf '%s\n' "$REPO_CANDIDATES" \
                   | awk -F/ 'NF && !seen[$NF]++')"
 
@@ -1144,9 +1414,11 @@ catalog_consider() {
     fi
     return 0
 }
-# Local recovery-tree candidates (last resort).
-for cand in "$RECOVERY/catalog.db" "$REPO/catalog.db" \
-            "$RECOVERY/../catalog.db"; do
+# Local recovery-tree candidates (last resort).  The copy an earlier
+# run left in the tools folder comes first: a resumed run with no disc
+# in the drive still names the discs in its prompts.
+for cand in ${STATE_DIR:+"$STATE_DIR/catalog.db"} "$RECOVERY/catalog.db" \
+            "$REPO/catalog.db" "$RECOVERY/../catalog.db"; do
     catalog_consider "$cand"
 done
 # Mounted discs: the same LCSAS_MOUNT_DIRS walk as repo discovery and
@@ -1167,9 +1439,30 @@ for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
     IFS=":"
 done
 IFS="$OLD_IFS"
-if [ -n "$catalog_pick" ]; then
-    CATALOG_ARG="--catalog$NL$catalog_pick"
-    printf '[lcsas-restore] using catalog %s\n' "$catalog_pick" >&2
+# #610: tier 1 keeps its --catalog file open for the whole run, so a
+# catalog.db on a disc held that disc in the drive.  Tier 1 gets a COPY
+# in the tools folder instead, never a path on a disc.  cp -p keeps the
+# mtime: tier 1 never swaps to a catalog older than this one, and the
+# stale-locator check below compares it.
+catalog_local=""
+if [ -n "$catalog_pick" ] && [ -n "$STATE_DIR" ]; then
+    catalog_local="$(cd "$STATE_DIR" && pwd -P)/catalog.db"
+    _cat_src="$(cd "$(dirname "$catalog_pick")" && pwd -P)/$(basename "$catalog_pick")"
+    if [ "$_cat_src" != "$catalog_local" ]; then
+        _cat_kb="$(du -sk "$catalog_pick" 2>/dev/null | awk '{print $1}')"
+        printf '[lcsas-restore] copying the catalog (about %s) from %s\n' \
+               "$(human_kb "${_cat_kb:-0}")" "$catalog_pick" >&2
+        rm -f "$catalog_local"
+        cp -p "$catalog_pick" "$catalog_local" 2>/dev/null \
+            || { rm -f "$catalog_local"; catalog_local=""; }
+    fi
+fi
+if [ -n "$catalog_local" ]; then
+    CATALOG_ARG="--catalog$NL$catalog_local"
+    printf '[lcsas-restore] using catalog %s (a copy in %s)\n' "$catalog_pick" "$STATE_DIR" >&2
+elif [ -n "$catalog_pick" ]; then
+    printf '[lcsas-restore] could not copy the catalog %s, so the\n' "$catalog_pick" >&2
+    printf '                disc prompts will not name the discs.\n' >&2
 fi
 
 # If the heir is using a persistent (non-auto) pack cache, the
@@ -1233,19 +1526,11 @@ fs_dev_for() {
     return 0
 }
 
-human_kb() {
-    # KB count -> "N.N GB" / "N MB" (GB collapses to 0.0 below 1 GB).
-    awk -v kb="$1" 'BEGIN {
-        if (kb >= 1048576) printf "%.1f GB", kb / 1048576;
-        else printf "%d MB", (kb + 1023) / 1024;
-    }'
-}
-
 if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
     required_kb=0
     _tenant="$(basename "$REPO")"
     if [ -n "$catalog_pick" ] && command -v sqlite3 >/dev/null 2>&1; then
-        _req_bytes="$(sqlite3 "$catalog_pick" \
+        _req_bytes="$(sqlite3 "${catalog_local:-$catalog_pick}" \
             "SELECT COALESCE(SUM(p.size_bytes), 0) FROM packs p \
              JOIN repositories r ON r.repo_id = p.repo_id \
              WHERE (r.name = '$_tenant' OR r.repo_id = '$_tenant') \
@@ -1265,7 +1550,7 @@ if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
         # this fallback never produced a size (#535).  The password has
         # not been asked for yet, so pass /dev/null.
         _req_mb="$("$_RESTORE_BIN_PROBE" --repo "$REPO" \
-                       --password-file /dev/null --catalog "$catalog_pick" \
+                       --password-file /dev/null --catalog "${catalog_local:-$catalog_pick}" \
                        --list-pending-packs 2>/dev/null \
                    | awk '/^Total:/ {
                          for (i = 1; i < NF; i++)
@@ -1353,6 +1638,57 @@ fi
 mkdir -p "$TARGET_DIR"
 : > "$MARKER" 2>/dev/null || true
 
+# ── resume.sh (#609) ──────────────────────────────────────────────
+#
+# The set and the target are known now, so write <tools>/resume.sh: it
+# runs this restore again from the tools folder, with no META disc and
+# no question but the password.  Tier 1 skips every file that is
+# already complete (#92) and the pack cache keeps the discs already
+# read.  resume.sh NEVER holds the password.
+sh_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+# merge_set_metadata SET_DIR: make <tools>/metadata/<id>/ match the
+# set's copy at SET_DIR (C2): its index/ and snapshots/ replace the
+# older ones and its keys/ are added, so a resumed run with that disc
+# out of the drive sees the same snapshots as this one.
+merge_set_metadata() {
+    _ms_dst="$TOOLS/metadata/$(basename "$1")"
+    [ "$(cd "$1" && pwd -P)" != "$(cd "$_ms_dst" 2>/dev/null && pwd -P)" ] || return 0
+    mkdir -p "$_ms_dst/keys"
+    rm -rf "$_ms_dst/index" "$_ms_dst/snapshots"
+    cp -R "$1/index" "$1/snapshots" "$_ms_dst/" 2>/dev/null || true
+    cp -R "$1/keys/." "$_ms_dst/keys/" 2>/dev/null || true
+    for _ms_f in "$1"/*; do
+        if [ -f "$_ms_f" ]; then cp -p "$_ms_f" "$_ms_dst/" 2>/dev/null || true; fi
+    done
+    return 0
+}
+if [ -n "$TOOLS" ]; then
+    case "$(basename "$(dirname "$REPO")")" in
+        metadata) merge_set_metadata "$REPO" ;;
+    esac
+    _rs_env="" _rs_set="" _rs_val=""
+    for _rs_var in LCSAS_RELOCATED LCSAS_META_DISC LCSAS_MOUNT_DIRS \
+                   LCSAS_PACK_CACHE_DIR LCSAS_TARGET LCSAS_INTERACTIVE \
+                   LCSAS_TIER_FALLBACK; do
+        eval "_rs_set=\${$_rs_var+x}"
+        [ -n "$_rs_set" ] || continue
+        eval "_rs_val=\$$_rs_var"
+        _rs_env="$_rs_env$_rs_var=$(sh_quote "$_rs_val"); export $_rs_var$NL"
+    done
+    cat > "$TOOLS/resume.sh" <<EOF
+#!/bin/sh
+# Carries on the LCSAS restore that stopped.  Written by restore.sh;
+# it holds no password (the restore asks for it again).  Flags such as
+# --key FILE are passed on.
+${_rs_env}LCSAS_TOOLS_DIR=$(sh_quote "$TOOLS"); export LCSAS_TOOLS_DIR
+LCSAS_REPO=$(sh_quote "$(basename "$REPO")"); export LCSAS_REPO
+exec sh $(sh_quote "$SCRIPT") "\$@" $(sh_quote "$RECOVERY") $(sh_quote "$(cd "$TARGET_DIR" && pwd)") $(sh_quote "$SNAP")
+EOF
+    chmod 700 "$TOOLS/resume.sh"
+fi
+
 # ── Password file (now that we know which repository we decrypt) ──
 
 PWFILE="${LCSAS_PWFILE:-}"
@@ -1388,30 +1724,7 @@ mkdir -p "$TARGET_DIR"
 # reachable (TTY), default to aborting.  Non-interactive automation
 # keeps working (warn-and-continue) unless LCSAS_FORBID_TMPFS_TARGET=1.
 
-target_fstype() {
-    # Print the FSTYPE of the filesystem holding "$1"; empty when
-    # undetectable.  Never returns non-zero (set -e safety).
-    # LCSAS_PROC_MOUNTS (test seam) points the fallback parser at an
-    # alternate mount table AND bypasses findmnt so the awk path is
-    # exercisable on hosts that have findmnt.
-    if [ -z "${LCSAS_PROC_MOUNTS:-}" ] && command -v findmnt >/dev/null 2>&1; then
-        findmnt -n -o FSTYPE --target "$1" 2>/dev/null || true
-        return 0
-    fi
-    _tft_table="${LCSAS_PROC_MOUNTS:-/proc/mounts}"
-    [ -r "$_tft_table" ] || return 0
-    # Longest-prefix match of the target's canonical path against the
-    # mount-point column; same-length later entries win (overmounts
-    # append to the table).
-    awk -v p="$(cd "$1" 2>/dev/null && pwd -P)" '
-        {
-            pre = ($2 == "/") ? "/" : $2 "/"
-            if (p != "" && (p == $2 || index(p, pre) == 1) &&
-                length($2) >= l) { l = length($2); t = $3 }
-        }
-        END { print t }' "$_tft_table" 2>/dev/null || true
-    return 0
-}
+# (target_fstype is defined near the top, before relocation uses it.)
 
 _tgt_fstype="$(target_fstype "$TARGET_DIR")"
 case "$_tgt_fstype" in
@@ -1467,9 +1780,11 @@ esac
 PACK_SEARCH_ARGS=""
 add_pack_search() {
     # $1: a path that might contain restic data.
-    # Skip anything under the meta disc -- a single-drive heir cannot
-    # rely on the meta disc as a pack source AND eject it.
-    if [ -n "${META_DISC:-}" ]; then
+    # Skip anything under the meta disc while it is still in the drive
+    # -- a single-drive heir cannot rely on the meta disc as a pack
+    # source AND eject it.  Once it is out, the same mount point may
+    # hold a data disc, and that one is searched (#616).
+    if meta_disc_is_live; then
         case "$1" in
             "$META_DISC"|"$META_DISC"/*) return ;;
         esac
@@ -1545,6 +1860,18 @@ META_DISC_ARG=""
 if [ -n "${META_DISC:-}" ]; then
     META_DISC_ARG="--meta-disc$NL$META_DISC"
 fi
+
+# LCSAS_INTERACTIVE=on|off|auto is passed to tier 1 as --interactive, as
+# restore.bat does (#617).  auto, tier 1's own default, asks at the disc
+# prompt only when its input is a terminal; on lets a test rig with a
+# piped stdin play the reader there.  Any other value is ignored.
+INTERACTIVE_ARG=""
+case "${LCSAS_INTERACTIVE:-}" in
+    on|off|auto) INTERACTIVE_ARG="--interactive$NL$LCSAS_INTERACTIVE" ;;
+    '') ;;
+    *)  printf '[restore.sh] ignoring LCSAS_INTERACTIVE=%s (use on, off or auto)\n' \
+               "$LCSAS_INTERACTIVE" >&2 ;;
+esac
 
 # ── Session log helper ───────────────────────────────────────────
 #
@@ -1648,7 +1975,7 @@ elif [ -x "$RESTORE_BIN" ]; then
     # /media/user/DISC LABEL 1 — as a single argument (issue #364).
     _oifs=$IFS; IFS=$NL
     # shellcheck disable=SC2086
-    set -- $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG
+    set -- $PACK_SEARCH_ARGS $CATALOG_ARG $META_DISC_ARG $INTERACTIVE_ARG
     IFS=$_oifs
     if [ "$FALLBACK" = "1" ]; then
         # `set -e` would kill the script on any tier-1 non-zero; the
@@ -1671,6 +1998,13 @@ elif [ -x "$RESTORE_BIN" ]; then
             printf '        other tiers use the same keys, so not retrying.\n'         >&2
             printf '        Check the password (and any share cards).\n'               >&2
             exit 77
+        fi
+        # Exit 75: the reader typed q at the disc prompt (#615).  That is
+        # a pause, not a tier-1 failure, so it is TERMINAL like 77: the
+        # tools folder stays and the exit handler prints how to carry on.
+        if [ $tier1_rc -eq 75 ]; then
+            printf '[tier 1] stopped at the disc prompt at your request; not trying another tier.\n' >&2
+            exit 75
         fi
         printf '[tier 1] exited %d, falling through to tier 2\n' \
                $tier1_rc >&2
@@ -1897,7 +2231,6 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         # version skew breaks ABI, the `import zstandard` guard
         # still lets tier 3 START and fail on the first decompress
         # with an actionable error.
-        META_ROOT="$(dirname "$RECOVERY")"
         for _zstd_libdir in "$META_ROOT"/tools/lib/python*; do
             if [ -d "$_zstd_libdir/zstandard" ]; then
                 if [ -n "${PYTHONPATH:-}" ]; then

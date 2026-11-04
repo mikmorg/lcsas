@@ -139,7 +139,8 @@ def test_too_small_candidate_is_skipped(tmp_path: Path) -> None:
     """A relocation dir without room for the bin/ tree (a small tmpfs
     such as /run/user/<uid>) used to get a silently partial copy.  Now
     it is skipped and the next candidate is used.  A `df` shim reports
-    the first candidate as nearly full."""
+    the first candidate as nearly full.  Since #609 the first candidate
+    is the tools folder in $HOME, so HOME is the nearly full one too."""
     import shutil
     import uuid
     shm = Path("/dev/shm")
@@ -175,20 +176,24 @@ def test_too_small_candidate_is_skipped(tmp_path: Path) -> None:
         env = {
             **os.environ,
             "PATH": f"{shim}:{os.environ.get('PATH', '/usr/bin:/bin')}",
-            "HOME": str(tmp_path),
+            "HOME": str(small),
             "TMPDIR": str(small),
             "XDG_RUNTIME_DIR": str(roomy),
             "LCSAS_MOUNT_DIRS": str(meta),
             "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
             "LCSAS_SKIP_SPACE_CHECK": "1",
         }
-        for k in ("LCSAS_RELOCATED", "LCSAS_NO_RELOCATE", "LCSAS_META_DISC"):
+        for k in ("LCSAS_RELOCATED", "LCSAS_NO_RELOCATE", "LCSAS_META_DISC",
+                  "LCSAS_TOOLS_DIR"):
             env.pop(k, None)
         res = subprocess.run(
             ["sh", str(meta / "restore.sh"), str(tmp_path / "out")],
             input="pw\n", capture_output=True, text=True, env=env, timeout=60,
         )
         assert f"{small} has 1 KB free" in res.stderr, res.stderr
+        assert f"cannot use {small}/lcsas-restore-tools for the recovery tools" in (
+            res.stderr
+        ), res.stderr
         assert f"copied recovery binaries to {roomy}/lcsas-restore." in res.stderr, (
             res.stderr
         )
