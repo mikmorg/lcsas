@@ -172,7 +172,7 @@ def _share_recovery_lines(
     return [
         *head,
         "",
-        "      recovery/bin/<machine>/lcsas-keyshare <card1> <card2>",
+        "      /mnt/recovery/bin/<machine>/lcsas-keyshare <card1> <card2>",
         "",
         "  <machine> is the folder under recovery/bin/ that names your",
         "  computer: x86_64-unknown-linux-musl for most PCs,",
@@ -181,28 +181,33 @@ def _share_recovery_lines(
         "  and the program is lcsas-keyshare.exe).",
         "  If that program will not run, the fallback is:",
         "",
-        "      python3 keyshare_combine.py <card1> <card2>",
+        "      python3 /mnt/keyshare_combine.py <card1> <card2>",
         "",
         "  If python3 is not installed, use the copy bundled on the",
         "  META disc — <platform> is the folder under",
         "  recovery/bin/ that names your machine (for most PCs that is",
         "  x86_64-unknown-linux-musl):",
         "",
-        "      recovery/bin/<platform>/python/bin/python3 \\",
-        "          keyshare_combine.py <card1> <card2>",
+        "      /mnt/recovery/bin/<platform>/python/bin/python3 \\",
+        "          /mnt/keyshare_combine.py <card1> <card2>",
         "",
         pass_cards,
+        "  Give each card file by its full path, e.g. ~/card1.txt.",
         "  Either combiner prints the password and nothing else.  Save",
-        "  it, e.g.:",
+        "  it in your home folder (the disc cannot be written to), e.g.:",
         "",
-        "      recovery/bin/<machine>/lcsas-keyshare <card1> <card2> > repo.key",
+        "      /mnt/recovery/bin/<machine>/lcsas-keyshare \\",
+        "          <card1> <card2> > ~/repo.key",
         "",
         "  STEP 2: run the normal restore and use that password:",
         "",
         "      sh /mnt/restore.sh --target ~/restored",
         "",
         "  When restore.sh shows the  Password:  prompt, type the password",
-        "  from STEP 1 (or pass the saved file with --key repo.key).",
+        "  from STEP 1, or pass the saved file by its full path:",
+        "  sh /mnt/restore.sh --key ~/repo.key --target ~/restored",
+        "  (restore.sh moves to another folder before it reads the file,",
+        "  so a short name such as repo.key is not found).",
         "",
         "  The restore itself is UNCHANGED — the only extra work",
         "  is the STEP 1 pre-step that turns your share cards back into the",
@@ -625,15 +630,23 @@ HOW TO RESTORE (with the meta disc)
 
 If you have the LCSAS meta disc (use the newest one if you have
 several), insert it and mount it, then run the interactive restore
-script.  It will prompt you for the repository name (if there is
-more than one), the encryption password, and will pause for each
-data disc as it needs them.
+script:
 
     sudo mount /dev/sr0 /mnt
     sh /mnt/restore.sh ~/restored/ latest
 
-When prompted, eject the current disc, insert the named data disc,
-and press Enter.  Repeat until you see "RESTORE COMPLETE".
+It first copies its tools to a folder on this computer
+(~/lcsas-restore-tools), so the meta disc can come out of the drive.
+Then it asks, one question at a time: for your NEWEST data disc (the
+latest year in its label, then the highest number), for the backup
+set when there is more than one, and for its password, or for the
+share cards when the password is split.  Then it pauses for each data
+disc it needs: eject the current disc, insert the named data disc,
+and press Enter.  It is done when it prints
+"[lcsas-restore] restore complete".
+
+To stop, type q at a disc prompt.  To carry on later, with no meta
+disc, run:  sh ~/lcsas-restore-tools/resume.sh
 
 If you prefer a password file over the interactive prompt, set
 LCSAS_PWFILE=/path/to/password.txt before invoking restore.sh.
@@ -763,8 +776,11 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
                     -------------------------------------------
 
                       The password for this archive was split into {n} share
-                      cards.  You need ANY {k} of them.  Before you can restore,
-                      you must FIRST rebuild the password from the cards:
+                      cards.  You need ANY {k} of them.  A newer restore.sh or
+                      restore.bat asks for the cards itself: type the words of
+                      each card when it asks.  If it asks for a password
+                      instead (an older disc, or a split that was never
+                      recorded), rebuild the password from the cards first:
 
                         STEP 1: gather any {k} share cards.  On the META disc,
                           run the share combiner for your machine:
@@ -780,8 +796,11 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
                     "-----------------------------------------",
                     "",
                     "  The password of each repository below was split into",
-                    "  share cards.  Before you can restore one of them, you",
-                    "  must FIRST rebuild its password from its cards:",
+                    "  share cards.  A newer restore.sh or restore.bat asks for",
+                    "  the cards itself: type the words of each card when it",
+                    "  asks.  If it asks for a password instead (an older",
+                    "  disc, or a split that was never recorded), rebuild the",
+                    "  password from the cards first:",
                     "",
                     *_split_repo_list(view, "      "),
                     "",
@@ -805,26 +824,32 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
             # at column 2 under the heading, so put back those two columns.
             split_block = intro + textwrap.indent(textwrap.dedent(f"""\
 
-                        recovery/bin/<machine>/lcsas-keyshare <card1> <card2>
+                        /mnt/recovery/bin/<machine>/lcsas-keyshare \\
+                            <card1> <card2>
 
-                      ({pass_cards}; <machine> is x86_64 for
-                      most PCs, aarch64 = newer ARM/Apple, x86_64-windows
-                      = Windows: use lcsas-keyshare.exe).  It prints the
-                      password.  If that program will not run, the
-                      fallback is:
+                      ({pass_cards}, each by its full path, e.g.
+                      ~/card1.txt.  <machine> is the folder under
+                      recovery/bin/ that names your computer:
+                      x86_64-unknown-linux-musl for most PCs,
+                      aarch64-unknown-linux-musl for 64-bit ARM,
+                      aarch64-apple-darwin for an Apple Silicon Mac; on
+                      Windows x86_64-pc-windows-gnu, and the program is
+                      lcsas-keyshare.exe.)  It prints the password.  If
+                      that program will not run, the fallback is:
 
-                        python3 keyshare_combine.py <card1> <card2>
+                        python3 /mnt/keyshare_combine.py <card1> <card2>
 
                       ...and if python3 is not installed either, use
                       the copy bundled on the META disc (<platform> is
                       the folder under recovery/bin/ naming your
                       machine, e.g. x86_64-unknown-linux-musl):
 
-                        recovery/bin/<platform>/python/bin/python3 \\
-                            keyshare_combine.py <card1> <card2>
+                        /mnt/recovery/bin/<platform>/python/bin/python3 \\
+                            /mnt/keyshare_combine.py <card1> <card2>
 
                     STEP 2: run the normal restore and enter that password
-                      at the  Password:  prompt:
+                      at the  Password:  prompt (if a newer script asks for
+                      the share cards instead, type P, then the password):
 
                         sh /mnt/restore.sh --target ~/restored
 

@@ -1630,11 +1630,12 @@ on later, with no meta disc, run the command the script prints:
 sh ~/lcsas-restore-tools/resume.sh
 ```
 
-It asks for the password again (it never stores it) and does not
-ask again for the discs it already copied.  Re-running the first
-command from the meta disc works too.  Once a restore succeeds and
-you decline another backup set, the tools folder and its copies of
-the discs are deleted: a later restore needs the discs again.
+It asks for the password (or the share cards) again (it never
+stores the password) and does not ask again for the discs it already
+copied.  Re-running the first command from the meta disc works too.
+Once a restore succeeds and you decline another backup set, the tools
+folder and its copies of the discs are deleted: a later restore needs
+the discs again.
 
 > **Tip:** with a second drive, a data disc that is already mounted
 > (say under `/media`) when you start counts as your newest data
