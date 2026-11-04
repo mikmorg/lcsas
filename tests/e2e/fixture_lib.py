@@ -202,6 +202,7 @@ def build_windows_fixture(
     *,
     file_count: int = 12,
     file_bytes: int = 64 * 1024,
+    meta_metadata: bool = False,
 ) -> WindowsFixture:
     """Build a complete single-tenant TEST_TINY fixture for the Windows
     restore-journey gate, with NO root/cdemu/privileged steps.
@@ -218,6 +219,13 @@ def build_windows_fixture(
     Keep *file_count* small (Defender real-time scanning slows many-small-
     file restores on the windows runner) but >1 so the restore exercises a
     real tree.
+
+    *meta_metadata* also copies the backup set's metadata (keys, index,
+    snapshots, config) onto the meta ISO, as a real ``lcsas meta build``
+    does: the builder reads it from the catalog.  windows-e2e's one-drive
+    leg needs it (#617): with only the meta disc in the drive at launch,
+    that copy is the only place restore.bat can find the set.  Off by
+    default, so the other users of this fixture keep their meta ISO.
     """
     _ensure_src_on_path()
     from lcsas.burn.orchestrator import BurnOrchestrator
@@ -314,6 +322,7 @@ def build_windows_fixture(
     meta_iso = build_meta_iso(
         meta_stage=meta_stage,
         iso_out=iso_out,
+        catalog_db=db_path if meta_metadata else None,
         allow_no_dvdisaster_source=True,
     )
 

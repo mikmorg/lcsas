@@ -56,12 +56,31 @@ If you have multiple discs, the script will tell you when to swap.
 
 You do NOT need two Blu-ray drives.  Before the prompt, restore.bat
 copies itself and the binary tree from the meta disc into %TEMP%
-and re-launches from there.  After that copy, no file handles
-remain on the meta disc, so you can eject it and insert each data
-disc into the same drive when prompted.  Start with the data disc
-whose label is newest (the latest year, then the highest number):
-its catalog is the fullest, so you will swap discs less often.
-Any data disc still works.
+and re-launches from there.  After that copy, nothing on the meta
+disc is in use.  When the restore needs a data disc, it shows a box
+like this:
+
+    Pack 4f3e2a1b9c8d0e7f... is required for the next file.
+    It is on any disc labelled:
+      LCSAS_BD25_2026_0003
+
+Take the disc that is in the drive out, put in the disc the box
+names, and press Enter.  Use the same drive the meta disc was in.
+
+The first box may not name a disc yet.  Then put in your newest
+data disc: the latest year, then the highest number.  Every data
+disc carries a catalog, so from then on the box names the disc it
+needs.  A wrong disc does no harm: the box just asks again.
+
+The first time the restore reads from a data disc, it copies all of
+that disc's packs to this computer, so you put each disc in about
+once.  The copy sits in your TEMP folder (usually on drive C:) and
+is deleted when the script ends.
+
+To stop, type Q and press Enter at the box.  The files restored so
+far stay in the folder you chose.  To carry on later, run
+restore.bat again from the meta disc and choose the same folder: it
+skips the files that are already there.
 
 ────────────────────────────────────────────────────────────────────
 FILES LARGER THAN 4 GiB (multi-extent ISO 9660 limitation)
@@ -215,6 +234,15 @@ DESTINATION FOLDER NOTES
   * The default destination is %USERPROFILE%\Documents\restored,
     typically C:\Users\<you>\Documents\restored.
 
+  * Choose a folder, not a whole drive.  To restore onto a USB
+    drive E:, type a folder on it, such as E:\restored.  If you
+    type just E:\ the script asks again.
+
+  * While it runs, the restore also keeps a copy of the packs of
+    each data disc it has read, in your TEMP folder (usually on
+    drive C:).  That needs free space too: about the size of those
+    discs.  It is deleted when the script ends.
+
   * If the original archive has more data than you have free disk
     space, the restore will fail partway through.  restore.bat does
     not check this for you (restore.sh on macOS/Linux does), so check
@@ -334,16 +362,20 @@ TROUBLESHOOTING -- error messages
       keys, so they would fail the same way.  Nothing was restored;
       fix the password and simply re-run.
 
-"tree blob not found: <hex>"
-   -> A pack file containing the blob is on a different disc.
-      The next version of restore.bat will prompt for disc swaps;
-      until then, mount all discs into one combined folder
-      (xcopy /e D:\repo\data C:\merged\repo\data; xcopy /e
-      E:\repo\data C:\merged\repo\data; ...) and point restore.bat
-      at that combined folder.
+"pack not found: <hex>"  or  "tree blob not found: <hex>"
+   -> The pack is on a data disc that is not in a drive, and
+      lcsas-restore.exe could not ask you for it.  It asks only
+      when it runs in a console window.  Double-click restore.bat,
+      or run it from a Command Prompt window, and it shows a box
+      that names the disc it needs (see QUICK START above).  A
+      script that types the answers itself can set
+      LCSAS_INTERACTIVE=on.
 
-"pack not found: <hex>"
-   -> Same as above -- need the disc with that pack.
+"The restore stopped before it finished (code N)."
+   -> You typed Q at a disc box, or lcsas-restore.exe stopped on
+      an error shown above.  The files restored so far are kept.
+      To carry on, run restore.bat again from the meta disc and
+      choose the same folder: it skips the files already there.
 
 "ERROR: bad zstd blob size"
    -> Data corruption on the disc.  Try another disc with the same
