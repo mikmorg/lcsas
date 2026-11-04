@@ -145,7 +145,9 @@ jobs:
   restore:
     runs-on: windows-latest
     needs: fixture
-    timeout-minutes: 40
+    # 60, not 40, since the stop-and-resume leg (#609) runs a second
+    # one-drive restore.
+    timeout-minutes: 60
 
     steps:
       # Only for tests/e2e/windows_e2e_lib.ps1 (the multi-disc, relocation
@@ -250,13 +252,16 @@ jobs:
           . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
           Assert-MultiDisc -Minimum 2
 
-      # ---- #517: single-drive RAM relocation --------------------------------
+      # ---- #517: single-drive relocation -------------------------------------
       # Same restore, but WITHOUT LCSAS_NO_RELOCATE, so the "Single-drive
-      # guard" block runs: it probes the (read-only) ISO, copies the script +
-      # bin tree under %TEMP%\lcsas-restore-N-N\recovery, re-execs the copy
-      # and sets LCSAS_RELOCATED, so tier 1 skips the meta drive while the
-      # meta disc is in it (and searches it once a data disc is, #604).
-      # Started with cwd on the disc, like a double-click.
+      # guard" block runs: it probes the (read-only) ISO, copies the script
+      # and this computer's programs into the tools folder,
+      # %LOCALAPPDATA%\LCSAS-restore (#609, #612), re-execs the copy and
+      # sets LCSAS_RELOCATED, so tier 1 skips the meta drive while the meta
+      # disc is in it (and searches it once a data disc is, #604).  Started
+      # with cwd on the disc, like a double-click.  The nested-layout run
+      # first leaves a stale tools folder behind, which must be replaced
+      # (wine's fc cannot tell two files apart, so only this proves it).
       #
       # Both copies of the script are run: the one at the disc root
       # (E:\restore.bat, what the heir double-clicks) and
@@ -280,7 +285,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
           Invoke-RelocationLeg -Fixture (Join-Path $PWD 'fixture') `
-            -BatRel 'recovery\scripts\restore.bat' -TargetName 'restored-reloc-nested'
+            -BatRel 'recovery\scripts\restore.bat' -TargetName 'restored-reloc-nested' -SeedStale
 
       - name: Negative case — wrong password fails cleanly
         shell: pwsh
@@ -321,6 +326,7 @@ jobs:
           # never be attempted (it would leave a partial tree first).
           if ($rc -ne 77) { throw "restore.bat must exit 77 on a wrong password; got $rc" }
           if ($out -match "trying tier 2") { throw "restore.bat fell through to tier 2 on a wrong password" }
+          if ($out -match "Access is denied") { throw "restore.bat printed 'Access is denied.' (#611)" }
           if ($out -notmatch "could not decrypt the repository") { throw "wrong-password banner missing from output" }
           # No restored data may be left behind.  restore.bat drops a
           # .lcsas-restore-marker resume sentinel into the target BEFORE
@@ -387,6 +393,22 @@ jobs:
           . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
           Invoke-SingleDriveLeg -Fixture (Join-Path $PWD 'fixture') `
             -BatRel 'restore.bat' -TargetName 'restored-single-drive'
+
+      # ---- #609/#615: stop, then carry on without the META disc -----------
+      # One drive again.  q at the second disc box: tier 1 exits 75, the
+      # tools folder stays with resume.cfg (no password) and the launcher
+      # "Resume LCSAS restore.bat", also on the Desktop.  Then, with a data
+      # disc in the META disc's letter, the Desktop launcher finishes the
+      # restore: exit 0, tree byte-exact, tools folder and launcher gone.
+      # Runs the launcher's (goto) line, which wine cannot.
+      - name: Stop-and-resume leg — q at a disc box, then the Desktop launcher
+        shell: pwsh
+        timeout-minutes: 25
+        run: |
+          $ErrorActionPreference = "Stop"
+          . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
+          Invoke-StopAndResumeLeg -Fixture (Join-Path $PWD 'fixture') `
+            -BatRel 'restore.bat' -TargetName 'restored-stop-resume'
 
       - name: Dismount ISOs
         if: always()
