@@ -475,9 +475,10 @@ def test_restore_bat_reuses_or_replaces_the_tools_folder():
         "echo [lcsas-restore] using the recovery files already copied")
     added = code[reuse + 3:relaunch]
     assert added[0].startswith("if defined META_SRC for /f ") and added[0].endswith(
-        'if not exist "!TOOLS!\\metadata\\%%T\\" ('), added
+        " do ("), added
     assert [ln for ln in added if "xcopy" in ln] == [
-        'xcopy /e /i /q /y "%META_SRC%\\%%T" "!TOOLS!\\metadata\\%%T" >nul 2>nul'], added
+        'if not exist "!TOOLS!\\metadata\\%%T\\" xcopy /e /i /q /y "%META_SRC%\\%%T" '
+        '"!TOOLS!\\metadata\\%%T" >nul 2>nul'], added
     fresh = code.index(":tools_fresh")
     assert fresh > reuse
     same_exe = 'fc /b "!SRC_ROOT!\\bin\\%ARCH%\\lcsas-restore.exe"'

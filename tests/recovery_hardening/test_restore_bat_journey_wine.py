@@ -213,8 +213,8 @@ class _Set:
 def _docs() -> _Set:
     return _Set("9c41d2e8-5f3a-4b7e-a0d6-71e2c8b45f09", "Family documents",
                 "docs-pass-4471",
-                {"letters/a.txt": b"dear all\n" * 300,
-                 "tax/2025.bin": bytes(range(256)) * 12})
+                {"letter-a.txt": b"dear all\n" * 300,
+                 "tax-2025.bin": bytes(range(256)) * 12})
 
 
 def _photos(split: tuple[int, int] | None = None) -> _Set:
@@ -266,10 +266,12 @@ def _packs(s: _Set) -> list[Path]:
 
 
 def _write_disc(disc: Path, label: str, sets: list[_Set],
-                packs_of: list[_Set], catalog: Path) -> None:
+                packs_of: list[_Set], catalog: Path,
+                only: set[str] | None = None) -> None:
     """A data disc as the burn lays it out: data\\<xx>\\<pack>, every set's
     metadata with its marker, catalog.db, volume_info.json and
-    VOLUME_INFO.txt (written by the real renderer)."""
+    VOLUME_INFO.txt (written by the real renderer).  ``only``: the pack
+    names to put on it, of the sets in ``packs_of`` (default: all)."""
     from lcsas.db.models import Pack, Volume
     from lcsas.staging.metadata import render_volume_info_txt
 
@@ -277,6 +279,8 @@ def _write_disc(disc: Path, label: str, sets: list[_Set],
     packs = []
     for s in packs_of:
         for pack in _packs(s):
+            if only is not None and pack.name not in only:
+                continue
             dst = disc / "data" / pack.name[:2]
             dst.mkdir(parents=True, exist_ok=True)
             shutil.copy2(pack, dst / pack.name)
@@ -326,17 +330,22 @@ def _write_meta(meta: Path, sets: list[_Set]) -> None:
         render_meta_volume_info_txt(datetime(2026, 9, 1, tzinfo=UTC)))
 
 
-def _catalog(path: Path, disc_a: list[_Set], disc_b: list[_Set] | None) -> Path:
+def _catalog(path: Path, disc_a: list[_Set], disc_b: list[_Set] | None,
+             only: set[str] | None = None) -> Path:
     """A catalog as burned on a disc.  Disc A's (``disc_b`` None) was
-    burned before disc B existed."""
+    burned before disc B existed.  ``only``: disc A's pack names, when
+    it holds only some packs of its sets (the rest are disc B's)."""
     sys.path.insert(0, str(RECOVERY / "tests"))
     import test_multidisc
 
-    def sizes(sets: list[_Set]) -> list[tuple[str, int]]:
-        return [(p.name, p.stat().st_size) for s in sets for p in _packs(s)]
+    def sizes(sets: list[_Set], keep) -> list[tuple[str, int]]:
+        return [(p.name, p.stat().st_size) for s in sets for p in _packs(s)
+                if keep(p.name)]
 
-    test_multidisc._build_catalog(path, sizes(disc_a), sizes(disc_b or []),
-                                  LABEL_A, LABEL_B)
+    on_a = (lambda n: True) if only is None else (lambda n: n in only)
+    on_b = (lambda n: True) if only is None else (lambda n: n not in only)
+    test_multidisc._build_catalog(path, sizes(disc_a, on_a),
+                                  sizes(disc_b or [], on_b), LABEL_A, LABEL_B)
     return path
 
 
@@ -523,7 +532,7 @@ def test_newest_data_disc_first_on_one_drive(fresh: _Wine, tmp_path: Path) -> No
               " characters of the label; the full label is printed on the disc.")
         assert c7 in step, step
         assert ("Press ENTER when it is in; S then ENTER to skip (use the copies\r\n"
-                "  on the META disc); Q then ENTER to quit.") in step, step
+                " on the META disc); Q then ENTER to quit.") in step, step
         assert "Restore to which folder?" not in out, out
 
         # --- 2. the copy in the tools folder ------------------------------
@@ -578,14 +587,18 @@ def test_newest_of_the_discs_already_in_the_drives(fresh: _Wine, tmp_path: Path)
     is no question, and the newest of them is used, by the label in its
     VOLUME_INFO.txt, not by its drive letter.  Disc A, older, is in E:
     (the last letter, which the catalog rule up to rc5 took); disc B in
-    D:.  Disc A also lists a set whose name is "Label: LCSAS_TEST_2099_9999":
+    D:.  The documents set has a pack on each.  Disc A also lists a set
+    whose name is "Label: LCSAS_TEST_2099_9999", on a line of its own:
     only the first "  Label:" line of VOLUME_INFO.txt is the disc's.
 
     Not relocated (LCSAS_NO_RELOCATE=1), so the merged copy is made in the
     tools folder and goes with it after the restore.  LCSAS_REPO picks the
-    set by its name, and LCSAS_PASSWORD gives the password."""
+    set by its name (case-blind), which here is not its name_cmd, and
+    LCSAS_PASSWORD gives the password."""
     wine = fresh
     docs = _docs()
+    docs.name = "Family's documents, 2020+"
+    assert docs.name_cmd == "Family_s documents, 2020+"
     decoy = _Set("e1d2c3b4-a5f6-4789-8abc-def012345678",
                  "Label: LCSAS_TEST_2099_9999", "decoy-pass-1",
                  {"x.txt": b"decoy\n"})
@@ -595,11 +608,17 @@ def test_newest_of_the_discs_already_in_the_drives(fresh: _Wine, tmp_path: Path)
     _write_meta(meta, [docs])
     disc_a = tmp_path / "disc_a"
     disc_b = tmp_path / "disc_b"
-    cat_a = _catalog(tmp_path / "cat-a.db", [docs, decoy], None)
-    cat_b = _catalog(tmp_path / "cat-b.db", [docs, decoy], [docs])
-    _write_disc(disc_a, LABEL_A, [docs, decoy], [docs, decoy], cat_a)
-    _write_disc(disc_b, LABEL_B, [docs], [docs], cat_b)
-    assert "Label: LCSAS_TEST_2099_9999" in (disc_a / "VOLUME_INFO.txt").read_text()
+    docs_packs = [p.name for p in _packs(docs)]
+    on_a = {docs_packs[0], *(p.name for p in _packs(decoy))}
+    cat_a = _catalog(tmp_path / "cat-a.db", [docs, decoy], None, on_a)
+    cat_b = _catalog(tmp_path / "cat-b.db", [docs, decoy], [docs], on_a)
+    _write_disc(disc_a, LABEL_A, [docs, decoy], [docs, decoy], cat_a, on_a)
+    _write_disc(disc_b, LABEL_B, [docs], [docs], cat_b,
+                set(docs_packs) - on_a)
+    assert len(docs_packs) == 2 and docs.repo_id < decoy.repo_id
+    info_a = (disc_a / "VOLUME_INFO.txt").read_text()
+    assert re.search(r"^ +Label: LCSAS_TEST_2099_9999$", info_a, re.M), info_a
+    assert info_a.index(f"Label:         {LABEL_A}") < info_a.index("2099")
     _make_read_only(meta)
     try:
         _map_drive(wine.prefix, "g", meta)
@@ -608,7 +627,7 @@ def test_newest_of_the_discs_already_in_the_drives(fresh: _Wine, tmp_path: Path)
         tools = wine.drive_c / "lcsas tools"
         run = _Run(wine, "G:\\restore.bat", {
             "LCSAS_NO_RELOCATE": "1", "LCSAS_TOOLS_DIR": "C:\\lcsas tools",
-            "LCSAS_REPO": "family DOCUMENTS",
+            "LCSAS_REPO": "FAMILY'S documents, 2020+",
             "LCSAS_PASSWORD": docs.password,
         })
         try:
@@ -623,7 +642,7 @@ def test_newest_of_the_discs_already_in_the_drives(fresh: _Wine, tmp_path: Path)
         assert f"newest data disc: {LABEL_B} in drive D:" in out, out
         assert "using catalog D:\\catalog.db" in out, out
         assert "This archive contains more than one backup set" not in out, out
-        assert "Backup set:    Family documents" in out, out
+        assert f"Backup set:    {docs.name_cmd}" in out, out
         assert "using the password in LCSAS_PASSWORD" in out, out
         assert "Password: " not in out, out
         _assert_restored(wine.drive_c / "docs", docs, out)
