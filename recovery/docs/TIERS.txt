@@ -286,6 +286,20 @@ Scope: this guard lives in tier 1; if tier 1 is absent or skipped by
 pre-flight, a wrong password is only detected by a later tier, which
 can still leave a partial tree (issue #399).
 
+EXIT 75 -- STOPPED AT THE DISC PROMPT (rc6): tier 1 exits 75 when the
+reader types q at its disc-swap prompt (or the prompt's input ends).
+Nothing is wrong: the reader paused.  The files restored so far stay,
+and running the same command again carries on (finished files are
+skipped).  A driver script should keep its tools folder and say how
+to resume, and must NOT try the next tier: tier 2 cannot swap discs.
+
+Tier 1 exit status, in full:
+  0   restored (or, with --list-snapshots, listed)
+  1   failed (setup, a disc read error, a pack on no disc it can see)
+  2   usage error
+  75  stopped at the disc prompt (q, or the input ended)
+  77  wrong password (see above)
+
 WHY PYTHON IS NOT ON THE BARE PATH
 
 Python is a healthy ecosystem today, but at a 50-year horizon:
