@@ -21,7 +21,7 @@ that rc's code. Run it under the lab's build lock: it stages about 630 MiB with
 RS03 ECC and builds a full meta disc.
 
 ```sh
-git worktree add --detach /scratch/lcsas-drill-src v1.0.0-rc5
+git worktree add --detach /scratch/lcsas-drill-src v1.0.0-rc6
 cd /scratch/lcsas-drill-src
 export LCSAS_RECOVERY_CACHE=/scratch/lcsas-recovery-cache   # the upstream cache
 /scratch/build-lock-lcsas.sh \
