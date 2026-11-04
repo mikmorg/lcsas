@@ -26,7 +26,7 @@ import sqlite3
 import subprocess
 import sys
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -76,6 +76,88 @@ def add_repo(db_path: Path, name: str, mirror: Path) -> str:
     if repo_id == name:
         raise RuntimeError(f"repo add gave {name!r} its own name as its id")
     return repo_id
+
+
+def split_password(
+    workdir: Path,
+    *,
+    db_path: Path,
+    name: str,
+    mirror: Path,
+    password_file: Path,
+    threshold: int,
+    shares: int,
+    cards_dir: Path,
+) -> tuple[int, list[Path]]:
+    """Split the password of the backup set *name* into *shares* share
+    cards, any *threshold* of which rebuild it, as an owner does: the
+    set's config says ``key_split = true`` with its K and N, and ``lcsas
+    key split`` checks that the password opens the set's keys, records the
+    split in the catalog (key_escrow, under the set's id) and writes the
+    printable cards.  The burn's drift guard needs that record, and the
+    set markers on the discs take ``split=K-of-N`` and the split id from it
+    (C1).
+
+    Returns the split id (the cards' "Split ID") and the printed cards,
+    copied into *cards_dir*, card 1 first.  The cards are invented test
+    data, made fresh with every fixture: never commit one.  The command's
+    lines go to stderr, as in :func:`add_repo`; it prints no share words.
+    """
+    _ensure_src_on_path()
+    from lcsas.cli.main import main as lcsas_main
+    from lcsas.db.key_escrow import get_split_for_repo
+    from lcsas.keyshare import extract_mnemonic, share_identifier
+
+    # The owner's lcsas.toml, cut down to what `key split` reads.  JSON
+    # string quoting is valid TOML for these plain paths and names.
+    slug = mirror.name
+    cfg = workdir / f"split-{slug}.toml"
+    cfg.write_text("\n".join([
+        "[paths]",
+        f"mirror_base = {json.dumps(str(mirror.parent))}",
+        f"staging = {json.dumps(str(workdir / 'staging'))}",
+        f"database = {json.dumps(str(db_path))}",
+        f"[repos.{json.dumps(name)}]",
+        f"mirror_path = {json.dumps(str(mirror))}",
+        f"password_file = {json.dumps(str(password_file))}",
+        "key_split = true",
+        f"key_threshold = {threshold}",
+        f"key_shares = {shares}",
+    ]) + "\n", encoding="utf-8")
+    out = workdir / "keyshares" / slug
+    with contextlib.redirect_stdout(sys.stderr):
+        rc = lcsas_main([
+            "--config", str(cfg), "key", "split", "--repo", name,
+            "--out", str(out),
+        ])
+    if rc != 0:
+        raise RuntimeError(f"lcsas key split --repo {name!r} exited {rc}")
+    printed = sorted(
+        out.glob("*-share-*-card.txt"),
+        key=lambda p: int(p.name.rsplit("-share-", 1)[1].split("-", 1)[0]),
+    )
+    if len(printed) != shares:
+        raise RuntimeError(f"key split wrote {len(printed)} cards, not {shares}")
+    cards_dir.mkdir(parents=True, exist_ok=True)
+    cards = []
+    for card in printed:
+        dst = cards_dir / card.name
+        shutil.copy2(card, dst)
+        cards.append(dst)
+    split_id = share_identifier(
+        extract_mnemonic(cards[0].read_text(encoding="utf-8"))
+    )
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        conn.row_factory = sqlite3.Row  # as the catalog code reads rows
+        repo_id = conn.execute(
+            "SELECT repo_id FROM repositories WHERE name = ?", (name,)
+        ).fetchone()[0]
+        record = get_split_for_repo(conn, str(repo_id))
+    if record is None or (record.threshold, record.shares, record.slip39_id) != (
+        threshold, shares, split_id,
+    ):
+        raise RuntimeError(f"key split recorded {record!r} for {name!r}")
+    return split_id, cards
 
 
 def _is_uuid(text: str) -> bool:
@@ -317,6 +399,10 @@ def build_meta_iso(
 # archive (#606, #617).  (\u00ed is a small i with an acute accent.)
 WINDOWS_E2E_SET_NAME = "Fotos da fam\u00edlia"
 WINDOWS_E2E_OTHER_SET_NAMES = ("Work documents",)
+# windows-e2e's second set has its password split 2-of-3, as the drill's
+# archive has one set split and one not (#607, F6).  Its cards go into
+# the fixture artifact, and a leg types two of them on real Windows.
+WINDOWS_E2E_SPLIT_SETS: dict[str, tuple[int, int]] = {"Work documents": (2, 3)}
 # windows-e2e's size (#517): 8 x 512 KiB of incompressible data does not
 # fit one TEST_TINY disc, so the restored set spans several.  The workflow
 # and tests/integration/test_e2e_fixture_sets.py build this same shape.
@@ -327,14 +413,31 @@ WINDOWS_E2E_FILE_BYTES = 512 * 1024
 @dataclass(frozen=True)
 class FixtureSet:
     """A backup set in a fixture: its id, its name and the name restore.bat
-    shows (``name_cmd``, C1)."""
+    shows (``name_cmd``, C1).  A set built with its files also names its
+    manifest, and a split set its K and N, its split id and its printed
+    share cards (paths relative to the fixture folder)."""
 
     repo_id: str
     name: str
     name_cmd: str
+    manifest: str = ""
+    split: tuple[int, int] | None = None
+    split_id: int | None = None
+    cards: tuple[str, ...] = ()
 
-    def as_json(self) -> dict[str, str]:
-        return {"id": self.repo_id, "name": self.name, "name_cmd": self.name_cmd}
+    def as_json(self) -> dict[str, object]:
+        got: dict[str, object] = {
+            "id": self.repo_id, "name": self.name, "name_cmd": self.name_cmd,
+            # As the set marker says it (C1).  The share words stay in the
+            # card files: the fixture job prints sets.json.
+            "split": f"{self.split[0]}-of-{self.split[1]}" if self.split else "none",
+        }
+        if self.manifest:
+            got["manifest"] = self.manifest
+        if self.split:
+            got["split_id"] = f"{self.split_id:05d}" if self.split_id is not None else ""
+            got["cards"] = list(self.cards)
+        return got
 
 
 @dataclass(frozen=True)
@@ -359,6 +462,7 @@ def build_windows_fixture(
     meta_metadata: bool = False,
     set_name: str = WINDOWS_SET_NAME,
     other_set_names: tuple[str, ...] = (),
+    split_sets: Mapping[str, tuple[int, int]] | None = None,
 ) -> WindowsFixture:
     """Build a complete TEST_TINY fixture for the Windows restore-journey
     gate, with NO root/cdemu/privileged steps.
@@ -378,6 +482,10 @@ def build_windows_fixture(
                                            ``restore_discs``, {data disc
                                            label: the restored set's pack
                                            ids on it} (ASCII JSON)
+      * ``manifest-<folder>.json``       — the same as ``manifest.json``,
+                                           for each other set
+      * ``cards/``                       — the printed share cards of each
+                                           set in *split_sets*
 
     Every set is registered with ``lcsas repo add`` (:func:`add_repo`), so
     its id is a UUID and its ``metadata/<id>/`` folder on the discs is not
@@ -399,6 +507,11 @@ def build_windows_fixture(
     leg needs it (#617): with only the meta disc in the drive at launch,
     that copy is the only place restore.bat can find the set.  Off by
     default, so the other users of this fixture keep their meta ISO.
+
+    *split_sets* maps a set's name to the K and N its password is split
+    into, as an owner splits it (:func:`split_password`): the set's config
+    says so, and the split is recorded in the catalog before the burn, so
+    every disc's marker for the set says ``split=K-of-N`` (#607).
     """
     _ensure_src_on_path()
     from lcsas.burn.orchestrator import BurnOrchestrator
@@ -431,14 +544,18 @@ def build_windows_fixture(
         plan.append((f"other{i}", other, 2, 32 * 1024, workdir / f"other{i}.pw"))
     if len({name for _, name, _, _, _ in plan}) != len(plan):
         raise ValueError(f"backup set names must differ: {plan!r}")
+    splits = dict(split_sets or {})
+    unknown = set(splits) - {name for _, name, _, _, _ in plan}
+    if unknown:
+        raise ValueError(f"split_sets names no set of this fixture: {sorted(unknown)}")
 
-    # 1. synthetic source trees + the restored set's manifest
+    # 1. synthetic source trees + each set's manifest
     # 2. rustic repos (fixture-only passwords)
-    manifest: dict[str, str] = {}
+    manifests: dict[str, dict[str, str]] = {}
     for slug, _name, count, size, pw in plan:
-        tree = generate_source_tree(sources / slug, count=count, size_bytes=size)
-        if slug == "win":
-            manifest = tree
+        manifests[slug] = generate_source_tree(
+            sources / slug, count=count, size_bytes=size,
+        )
         pw.write_text(os.urandom(16).hex())
         pw.chmod(0o600)
         init_rustic_repo(
@@ -454,9 +571,26 @@ def build_windows_fixture(
     create_all(conn)
     conn.commit()
     sets: list[FixtureSet] = []
-    for slug, name, _count, _size, _pw in plan:
+    for slug, name, _count, _size, pw in plan:
         repo_id = add_repo(db_path, name, mirror_base / slug)
-        sets.append(FixtureSet(repo_id, name, cmd_name(name, repo_id)))
+        # 3b. a split set: its password into share cards, recorded in the
+        #     catalog before anything is burned (#607)
+        split = splits.get(name)
+        split_id: int | None = None
+        cards: tuple[str, ...] = ()
+        if split is not None:
+            split_id, card_paths = split_password(
+                workdir, db_path=db_path, name=name,
+                mirror=mirror_base / slug, password_file=pw,
+                threshold=split[0], shares=split[1],
+                cards_dir=workdir / "cards",
+            )
+            cards = tuple(p.relative_to(workdir).as_posix() for p in card_paths)
+        manifest_name = "manifest.json" if slug == "win" else f"manifest-{slug}.json"
+        sets.append(FixtureSet(
+            repo_id, name, cmd_name(name, repo_id), manifest=manifest_name,
+            split=split, split_id=split_id, cards=cards,
+        ))
         scanned = scan_mirror_packs(mirror_base / slug).packs
         DeltaAnalyzer(conn, scanned, repo_id=repo_id).register_new_packs()
         conn.commit()
@@ -464,10 +598,15 @@ def build_windows_fixture(
     # 4. burn pipeline → data ISOs (no ECC; the gate exercises the restore
     #    path, not RS03 repair — that has its own opt-in suite).  Each
     #    further set adds its index/snapshots/keys to every disc, as in the
-    #    blind fixture's reserve.
+    #    blind fixture's reserve.  A split set's config says so, as the
+    #    owner's lcsas.toml does; the burn's drift guard checks it against
+    #    the recorded split.
     repos = {
         name: RepositoryConfig(
-            name=name, mirror_path=mirror_base / slug, password_file=pw
+            name=name, mirror_path=mirror_base / slug, password_file=pw,
+            key_split=True if name in splits else None,
+            key_threshold=splits[name][0] if name in splits else None,
+            key_shares=splits[name][1] if name in splits else None,
         )
         for slug, name, _count, _size, pw in plan
     }
@@ -530,10 +669,30 @@ def build_windows_fixture(
         catalog_db=db_path if meta_metadata else None,
         allow_no_dvdisaster_source=True,
     )
+    # The split reaches the META disc's markers, which restore.bat reads
+    # to ask for the cards; tests/integration/test_e2e_fixture_sets.py
+    # checks the data discs' too.
+    if meta_metadata:
+        from lcsas.staging.repo_marker import read_repo_marker
 
-    # 6. manifest the restorable source tree, and say which set it is
+        for s in sets:
+            marker = read_repo_marker(meta_stage / "metadata" / s.repo_id) or {}
+            want = s.as_json()
+            got = (marker.get("split"), marker.get("split_id", ""))
+            if got != (want["split"], want.get("split_id", "")):
+                raise RuntimeError(
+                    f"the META disc's marker for {s.name!r} says split={got[0]!r} "
+                    f"split_id={got[1]!r}, not {want['split']!r} "
+                    f"{want.get('split_id', '')!r}"
+                )
+
+    # 6. manifest each set's source tree (manifest.json is the restored
+    #    set's), and say which set is which
+    for (slug, *_rest), fixture_set in zip(plan, sets, strict=True):
+        (workdir / fixture_set.manifest).write_text(
+            json.dumps(manifests[slug], indent=2, sort_keys=True)
+        )
     manifest_path = workdir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
     sets_path = workdir / "sets.json"
     sets_path.write_text(json.dumps({
         "restore": sets[0].as_json(),
