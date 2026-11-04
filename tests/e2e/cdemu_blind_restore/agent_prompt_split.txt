@@ -297,7 +297,7 @@ USEFUL ENV VARS
 ===============
 
 LCSAS_PACK_CACHE_DIR=auto
-    Set automatically by restore.sh when a writable /tmp exists.
+    Set automatically by restore.sh: pack-cache/ in its tools folder.
     Causes lcsas-restore to copy pack files into a local cache dir
     as they are read from disc, so subsequent disc swaps for the
     same packs can be served from cache.  The v3 blind run showed

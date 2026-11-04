@@ -62,9 +62,11 @@ to prepare the stick) and a USB stick of 8 GB or more.
 
          sh /mnt/recovery/scripts/restore.sh /home/ubuntu/restored latest
 
-     This prompts for the password and walks you through inserting
-     data discs.  From here, RECOVER.txt on this disc is the full
-     manual.
+     It copies its tools to the folder lcsas-restore-tools in your
+     home folder, so the META disc can come out of the drive.  Then
+     it asks for your newest data disc, the backup set and its
+     password, and walks you through inserting data discs.  From
+     here, RECOVER.txt on this disc is the full manual.
 
   7. Restored files land in /home/ubuntu/restored, which lives in
      RAM on a live system.  Copy them to a real disk (USB drive,
@@ -73,7 +75,14 @@ to prepare the stick) and a USB stick of 8 GB or more.
      live-USB system: plug in an external drive and restore
      directly to a directory on it, not the live system's home
      folder -- restore.sh detects a RAM-backed target and asks for
-     confirmation before continuing.
+     confirmation before continuing.  The tools folder is in RAM too,
+     with the copies of the discs read so far: a restore that stops
+     can be carried on (sh ~/lcsas-restore-tools/resume.sh) only
+     until the computer is turned off.  RECOVER.txt, "THE TOOLS
+     FOLDER", shows how to keep the copies of the discs on a USB
+     disk (LCSAS_PACK_CACHE_DIR), which any USB disk can hold; the
+     tools folder itself needs a disk that can run programs, which
+     a FAT32 stick cannot.
 
 WHY THIS WORKS DECADES FROM NOW
 

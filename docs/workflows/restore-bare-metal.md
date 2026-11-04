@@ -8,6 +8,18 @@
 > references in this document predate that move. For the no-OS
 > restore route that works today, see
 > [restore-live-usb.md](restore-live-usb.md).
+>
+> **The `restore.sh` details below are out of date too.** Every
+> `recovery/scripts/restore.sh:NNN` and `recovery/docs/*.txt:NNN`
+> reference here predates rc6 and points at the wrong lines. Since rc6,
+> `restore.sh` relocates into its tools folder (`~/lcsas-restore-tools`,
+> `relocate_to_ram`), not a throwaway RAM folder; asks for the newest
+> data disc before the set list; reads each set's metadata from
+> `metadata/<id>/` and names it from its `LCSAS_REPO.txt`; runs tier 1
+> (it does not `exec` it) and exits with its code; and leaves
+> `resume.sh` to carry on a stopped restore. The current behaviour is in
+> `recovery/docs/RECOVER.txt`, `recovery/docs/MULTI_DISC_DESIGN.txt`
+> and [recovery-runbook.md](../guides/recovery-runbook.md).
 
 This document covers the *house-on-fire* restore path: the heir (or the owner after a total system loss) has the LCSAS optical discs in hand but **no working operating system, no Python interpreter, no internet, and possibly no second computer**. The restore happens by booting the LCSAS meta disc directly. PID 1 is a 158-line statically-linked C program (`recovery/src/lcsas-init/init.c`); everything from there forward is C and POSIX shell only — Python is explicitly **off** the bare path.
 
@@ -271,7 +283,7 @@ This sub-workflow is materially different from the multi-drive case and is the *
 14. If every tier failed, print a help message naming each missing ingredient and exit 1 (`recovery/scripts/restore.sh:442`–`recovery/scripts/restore.sh:455`).
 
 **Expected outcome:**
-- The highest-numbered viable tier's binary is exec'd in place; `restore.sh`'s own process is replaced. Exit code is the binary's exit code.
+- The first viable tier runs as a child of `restore.sh` (not `exec`'d, so its exit handler can delete the temporary password file, #363). Exit code is the binary's exit code.
 - Common case in a freshly-burned MVP archive: tier 1 fires; everything else is dead code.
 - The `[tier N] using ...` log line on stderr tells the heir which path was taken.
 

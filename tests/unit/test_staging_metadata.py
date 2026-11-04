@@ -121,3 +121,69 @@ def test_kn_comes_from_recorded_split_not_config(tmp_path: Path) -> None:
         assert "any 2" not in text.lower(), (
             f"{name}: the config K (2) leaked into the heir-facing text"
         )
+
+
+def _render_mixed(tmp_path: Path) -> dict[str, str]:
+    """A mixed archive (#587): one split repository, one not."""
+    root = tmp_path / "mixed"
+    root.mkdir()
+    config = _config(tmp_path, key_split=False)
+    config.repositories["photos"] = RepositoryConfig(
+        name="photos",
+        mirror_path=tmp_path / "mirror" / "photos",
+        password_file=Path("/keys/photos.key"),
+        key_split=True,
+        key_threshold=2,
+        key_shares=3,
+    )
+    injector = HolographicInjector(root)
+    injector.write_start_here(config)
+    injector.write_key_info(config)
+    return {
+        name: (root / name).read_text(encoding="utf-8")
+        for name in ("START_HERE.txt", "PASSWORD_INFO.txt")
+    }
+
+
+def test_split_blocks_name_the_disc_folders_and_the_card_prompt(
+    tmp_path: Path,
+) -> None:
+    """#605/#607: START_HERE.txt is the file the heir reads first, and its
+    split block kept the source-tree folder names (x86_64, aarch64,
+    x86_64-windows), which the META disc does not have: it stores the
+    binaries under the rust triples.  It also said the password must
+    FIRST be rebuilt and typed at the Password: prompt, while an rc6
+    script asks for the cards (P lets a rebuilt password in).  Only the
+    PASSWORD_INFO.txt copy had been fixed."""
+    renders = {
+        **{f"uniform/{k}": v for k, v in _render(tmp_path, key_split=True).items()},
+        **{f"mixed/{k}": v for k, v in _render_mixed(tmp_path).items()},
+    }
+    for name, text in renders.items():
+        for triple in ("x86_64-unknown-linux-musl", "x86_64-pc-windows-gnu"):
+            assert triple in text, f"{name}: does not name the {triple} folder"
+        assert "x86_64 for" not in text, f"{name}: source-tree folder name"
+        assert "x86_64-windows" not in text, f"{name}: source-tree folder name"
+        assert "must FIRST rebuild" not in text, (
+            f"{name}: a newer script asks for the cards itself"
+        )
+        assert "type P" in text, f"{name}: no word on P for a rebuilt password"
+        assert "/mnt/recovery/bin/<machine>/lcsas-keyshare" in text, (
+            f"{name}: the combiner must be given by its full path"
+        )
+
+
+def test_restore_instructions_follow_the_rc6_journey(tmp_path: Path) -> None:
+    """#605/#609: RESTORE_INSTRUCTIONS.txt on every data disc still said
+    to repeat swaps until "RESTORE COMPLETE", which nothing on the rc6
+    path prints, and knew neither the newest-disc step, the tools folder,
+    the share cards nor resume.sh."""
+    root = tmp_path / "ri"
+    root.mkdir()
+    HolographicInjector(root).write_restore_instructions()
+    text = (root / "RESTORE_INSTRUCTIONS.txt").read_text(encoding="utf-8")
+    assert "RESTORE COMPLETE" not in text
+    assert "[lcsas-restore] restore complete" in text
+    assert "NEWEST data disc" in text
+    assert "share cards" in text
+    assert "~/lcsas-restore-tools/resume.sh" in text

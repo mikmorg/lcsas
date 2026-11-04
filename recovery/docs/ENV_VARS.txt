@@ -13,6 +13,22 @@ This principle exists so you can predict restore behavior without
 reading source code.  Each "Why this default" entry below maps to one
 of the two clauses above.
 
+WHICH PROGRAM READS EACH VARIABLE
+──────────────────────────────────
+Each entry has a "Read by:" line.  The programs are:
+
+  restore.sh     the restore script for Linux and macOS
+  restore.bat    the restore script for Windows
+  tier 1         lcsas-restore (lcsas-restore.exe on Windows), the
+                 program both scripts start to do the restore
+  tier 3         standalone_restorer.py, the Python reader that only
+                 restore.sh starts
+  lcsas-keyshare the share card combiner both scripts start
+
+A variable that tier 1 or lcsas-keyshare reads works with both
+scripts: they pass their environment on.  A "Windows:" paragraph says
+what restore.bat does when it differs from restore.sh.
+
 ────────────────────────────────────────────────────────────────────
 VARIABLE               DEFAULT   SINCE   WHAT IT DOES
 ────────────────────────────────────────────────────────────────────
@@ -23,13 +39,16 @@ CREDENTIALS
 LCSAS_PASSWORD
   Default:  unset (prompts on stdin)
   Since:    Phase 1
+  Read by:  restore.sh and restore.bat
   What:     Password for the Rustic repository.  When set,
             restore.sh writes it to a temp file (mode 600) instead of
-            reading interactively.  Mutually exclusive with LCSAS_PWFILE.
+            reading interactively.  When LCSAS_PWFILE (or --key) is
+            set too, the file wins and this is not used.
             A wrong one is not asked for again: the run stops with
             exit 77.  (Typed at the prompt, a wrong password is caught
             before the restore starts and asked for again; since rc6,
-            #608.)
+            #608.)  restore.sh uses it for the first backup set only:
+            the "Restore another backup set?" run asks again.
   Windows:  restore.bat honours it too (since rc6, #608), after
             LCSAS_PWFILE.  It writes it to a temp file in %TEMP%,
             deleted on every way out, and tries it with
@@ -43,9 +62,15 @@ LCSAS_PASSWORD
 LCSAS_PWFILE
   Default:  unset (prompts on stdin)
   Since:    Phase 1
-  What:     Path to a file whose first line is the password.  Preferred
-            over LCSAS_PASSWORD in scripts because the secret stays in
-            a file rather than a shell variable.
+  Read by:  restore.sh (also as --key FILE) and restore.bat
+  What:     Path to a file that holds the password.  Tier 1 drops the
+            line breaks at the end of the file; everything before them
+            is the password, exactly.  Preferred over LCSAS_PASSWORD
+            in scripts because the secret stays in a file rather than
+            a shell variable.  restore.sh hands the file itself to the
+            restore.  A wrong password stops the run with exit 77, as
+            for LCSAS_PASSWORD, and restore.sh asks again for the
+            next backup set.
   Windows:  restore.bat honours it too (since rc6, #608), before
             LCSAS_PASSWORD: it copies the file's exact bytes (copy /b)
             to its own temp file in %TEMP% and never deletes yours.
@@ -56,12 +81,14 @@ LCSAS_PWFILE
             RECOVER_WINDOWS.txt, "THE PASSWORD", shows how to write
             such a file from a hidden PowerShell prompt (Windows
             PowerShell 5.1 is enough).  A file that cannot be read, or
-            a wrong password, falls back to the keyboard.
+            a wrong password, falls back to the keyboard.  It is used
+            for every backup set restored in the run.
   Why:      Opt-in — same reasoning as LCSAS_PASSWORD.
 
 LCSAS_PW
   Default:  unset (prompts on stdin)
   Since:    restore.bat only, before rc6
+  Read by:  restore.bat only
   What:     The older restore.bat name for LCSAS_PASSWORD, kept: used
             when neither LCSAS_PWFILE nor LCSAS_PASSWORD is set.
             restore.sh does not read it.
@@ -71,6 +98,8 @@ LCSAS_SHARES_DIR
   Default:  unset (asks for the share cards when the set's password
             is split, else for the password)
   Since:    rc6 (#607)
+  Read by:  restore.sh and restore.bat (both hand the files to
+            lcsas-keyshare)
   What:     A folder of share card files, one card per file (the
             printed card's text, or just its words).  restore.sh
             rebuilds the password from every file in it with the
@@ -78,7 +107,7 @@ LCSAS_SHARES_DIR
             nothing.  A file with a mistake is named and left out, and
             the rest are combined.  If they cannot rebuild it, the run
             stops with exit 77.  LCSAS_PWFILE and LCSAS_PASSWORD come
-            first.
+            first.  restore.sh uses it for the first backup set only.
             Unset, restore.sh asks for exactly K cards, one per line,
             when the set's marker (metadata/<id>/LCSAS_REPO.txt) says
             split=K-of-N; P at that prompt types the password instead.
@@ -101,6 +130,7 @@ DISCOVERY OVERRIDES
 LCSAS_REPO
   Default:  unset (prompts when multiple repositories found)
   Since:    Phase 14
+  Read by:  restore.sh (also as --repo NAME) and restore.bat
   What:     Backup set to restore, by its id (the name of its
             metadata/<id>/ folder on the discs) or, since rc6 (#606),
             by its name (name= in that folder's LCSAS_REPO.txt) or its
@@ -120,27 +150,45 @@ LCSAS_REPO
 LCSAS_TARGET
   Default:  unset (auto-detected from uname -m and uname -s)
   Since:    Phase 21
+  Read by:  restore.sh and restore.bat
   What:     Override the rust-triple used to select which lcsas-restore
             and rustic-static binaries to run (e.g.,
             x86_64-unknown-linux-musl).  Useful when uname -m
             misreports on an emulated or cross-compiled host.
+            Relocated, restore.sh copies only that triple's folder.
+  Windows:  restore.bat reads it too: unset, it picks
+            x86_64-pc-windows-gnu from PROCESSOR_ARCHITECTURE (AMD64
+            or x86), and refuses ARM64.  It copies only that triple's
+            programs into the tools folder.
   Why:      Opt-in — auto-detection is correct in the vast majority of
             cases; overriding it is an escape hatch for unusual hosts.
 
 LCSAS_META_DISC
   Default:  unset (auto-detected via mtab / findmnt)
   Since:    Phase 20
+  Read by:  restore.sh and tier 1 (tier 1 reads it only when its
+            own --meta-disc option is not given)
   What:     Mount point of the meta disc.  Tells restore.sh
             and the tier-1 binary to exclude that path from pack
             searches so an heir with a single optical drive can eject
-            the meta disc and reuse the drive for data discs.
+            the meta disc and reuse the drive for data discs.  Both
+            skip it only while the META disc is still in it: once a
+            data disc is in that drive, it is searched.  restore.sh
+            finds the mount point itself only when it relocates off
+            the disc.  Set, it also turns on the newest-data-disc step
+            (LCSAS_NEWEST_DISC_PROMPT) for a copy of the META disc run
+            where it is.
+  Windows:  restore.bat does not read it.  It passes the META disc's
+            drive letter to tier 1 as --meta-disc itself.
   Why:      Opt-in — auto-detection (mtab probe) handles the common
             case correctly; explicit set is for unusual mount layouts
             or initramfs environments where mtab is absent.
 
 LCSAS_MOUNT_DIRS
-  Default:  unset → /Volumes:/media/<user>:/media:/mnt:/run/media/<user>
+  Default:  unset → /Volumes:/media/<user>:/media:/mnt:
+            /run/media/<user>:/run/media
   Since:    Phase 20
+  Read by:  restore.sh and tier 1
   What:     Colon-separated list of directories scanned for mounted
             data discs.  Overrides the compiled-in default list on
             both the shell side (restore.sh) and the C side
@@ -149,7 +197,10 @@ LCSAS_MOUNT_DIRS
             On Windows, lcsas-restore splits it on ';' (':' is in
             every drive letter) and has no default list: it searches
             the root of every optical drive (D:\ and so on) instead,
-            each time it looks for a disc.
+            each time it looks for a disc.  restore.bat does not read
+            it: it passes its drive letters to tier 1 as
+            --mount-parent, and tier 1 reads the variable only when
+            no --mount-parent is given.
   Why:      Opt-in — the compiled-in default covers Linux, macOS, and
             BSD conventions.  Override only when discs are mounted
             under a non-standard path (e.g., systemd-managed
@@ -162,6 +213,8 @@ BEHAVIOR KNOBS
 LCSAS_PACK_CACHE_DIR
   Default:  auto  (opt-out / default ON)
   Since:    Phase 24
+  Read by:  restore.sh, restore.bat and tier 1 (tier 1 does the
+            copying; the scripts choose the folder)
   What:     Opportunistic pack cache directory.  Three values:
               auto    (default when unset) → pack-cache/ in the tools
                       folder (see LCSAS_TOOLS_DIR), so a stopped
@@ -205,6 +258,8 @@ LCSAS_PACK_CACHE_DIR
 LCSAS_INTERACTIVE
   Default:  unset → auto  (opt-in)
   Since:    rc6 (#617)
+  Read by:  restore.sh and restore.bat (both pass it to tier 1 as
+            --interactive)
   What:     restore.bat passes it to tier 1 as --interactive on, off
             or auto; any other value is ignored.  auto (tier 1's own
             default) asks at the disc-swap prompt only when its input
@@ -229,8 +284,11 @@ LCSAS_INTERACTIVE
 LCSAS_NEWEST_DISC_PROMPT
   Default:  unset → 1  (opt-out / default ON)
   Since:    rc6 (#605)
+  Read by:  restore.sh and restore.bat
   What:     Run off the META disc on a terminal with no data disc in
-            yet, restore.sh first asks the reader to take the META disc
+            yet (relocated off the disc, or with LCSAS_META_DISC set;
+            not for a copy of the META disc run where it is),
+            restore.sh first asks the reader to take the META disc
             out and put in the NEWEST data disc (the latest year, then
             the highest number in its label, read from the disc's
             VOLUME_INFO.txt, never the drive's 16-character name for
@@ -253,7 +311,14 @@ LCSAS_NEWEST_DISC_PROMPT
             META disc keeps its copy), and its catalog.db is the one
             used.  With data discs in at the start there is no
             question either: the newest of them is used.  The question
-            is not asked when carrying on a stopped restore.
+            is not asked when carrying on a stopped restore.  It is
+            also asked from a copy of the META disc that can be
+            written to (a USB stick): its merged copies then go in the
+            tools folder's in-place\ folder.  It does not follow
+            LCSAS_INTERACTIVE.  S skips it, Q stops (exit 65), and
+            after five ENTERs with no data disc found it goes on with
+            the META disc's copies (cmd cannot tell an empty answer
+            from the end of the input).
   Why:      Opt-OUT.  The META disc's copy can be older than the newest
             data disc, and a set added after the META disc was made is
             not on it at all, so "latest" would quietly be older (#605).
@@ -263,6 +328,7 @@ LCSAS_NEWEST_DISC_PROMPT
 LCSAS_ANOTHER_SET
   Default:  unset → 1  (opt-out / default ON)
   Since:    rc6 (#609)
+  Read by:  restore.sh and restore.bat
   What:     After a restore that succeeds, when the discs hold more
             than one set and someone can answer (see
             LCSAS_INTERACTIVE), restore.sh asks "Restore another backup
@@ -278,7 +344,11 @@ LCSAS_ANOTHER_SET
             with more than one backup set.  Yes goes back to the menu,
             with the tools folder, the pack cache and the catalog copy
             as they are; only no (or the end of the input) ends the
-            run and lets the tools folder be deleted.
+            run and lets the tools folder be deleted.  It asks for
+            the set first and then the folder, whose default is
+            Documents\restored-<name>; restore.sh asks for the folder
+            first (default <target>-2).  It does not follow
+            LCSAS_INTERACTIVE.
   Why:      Opt-OUT.  Restoring a second set (documents, then photos)
             would otherwise mean the META disc and the copy again.
 
@@ -286,6 +356,7 @@ LCSAS_TOOLS_DIR
   Default:  unset → $HOME/lcsas-restore-tools; on Windows
             %LOCALAPPDATA%\LCSAS-restore  (opt-out / default ON)
   Since:    rc6 (#609)
+  Read by:  restore.sh and restore.bat
   What:     The tools folder restore.sh keeps a restore's own files in.
             Run off the META disc, it copies there: itself, this
             computer's binaries (bin/<triple>/ only), the docs and the
@@ -301,17 +372,31 @@ LCSAS_TOOLS_DIR
             Ctrl-C (130) or TERM (143).  The next run
             from the same META disc reuses the copy; a copy made by a
             different restore.sh is replaced (its pack cache is kept
-            only when both come from the same build).  A folder that
-            already holds other files is never used or deleted; the run
-            falls back to a temporary folder, as it does when there is
-            no $HOME.  On a live USB stick $HOME is in RAM: the folder
-            is lost at power-off, and restore.sh says so.
+            only when both come from the same build).  restore.sh
+            writes the file .lcsas-restore-tools in a folder it uses,
+            and later uses only an empty folder or one with that file.
+            A folder that already holds other files is never used or
+            deleted, and restore.sh falls back to a temporary folder,
+            as it does when there is no $HOME.  Run off the META disc
+            (relocated), that temporary folder becomes the tools
+            folder: a stopped restore carries on from it with the
+            resume.sh the script prints, until the folder is cleared
+            (most systems empty /tmp at power-off).  Run in place, the
+            run's own files go to a temporary folder that is deleted
+            when it exits, so a stopped restore cannot be carried on.
+            Run off the META disc, the programs run from the tools
+            folder, so it must allow that (a FAT32 USB stick as a
+            desktop mounts it does not); otherwise restore.sh falls
+            back the same way.  On a live USB stick $HOME is in
+            RAM: the folder is lost at power-off, and restore.sh says
+            so.
   Windows:  restore.bat copies itself into it from a disc, with this
             computer's programs (bin\<triple>\ only),
             RECOVER_WINDOWS.txt, the backup sets' metadata, a copy of
             the catalog, the pack cache, resume.cfg and "Resume LCSAS
             restore.bat" (also put on the Desktop).  The folder stays
-            until a restore has finished (exit 0), and is then deleted
+            until a restore has finished (exit 0) and the reader says
+            no to another set, and is then deleted
             with the Desktop launcher; after a stop (exit 75, q at a
             disc box) or any other failure it stays, and the launcher
             carries the restore on with no META disc.  resume.cfg
@@ -323,7 +408,8 @@ LCSAS_TOOLS_DIR
             keeping its pack cache only when its lcsas-restore.exe is
             the very same.  Since the tools folder is deleted at the
             end, restore.bat uses only a folder that is new, empty, or
-            its own (it writes .lcsas-tools there first); any other
+            its own (it writes .lcsas-tools there first, a different
+            name from restore.sh's); any other
             folder, and a whole drive (E:\), is refused with exit 1
             before anything in it changes.  That holds for every run,
             the default folder included.  A run that does not relocate
@@ -341,6 +427,7 @@ LCSAS_TOOLS_DIR
 LCSAS_DRAIN_CHUNK_PACKS
   Default:  0  (opt-in / default OFF)
   Since:    Phase 25
+  Read by:  tier 1, so it works with restore.sh and restore.bat
   What:     Limits how many pack files are copied per drain_disc() call.
             0 (default) → drain the entire disc data/ subtree in one
             call (safe, but can stall for 8-40 minutes on a slow
@@ -360,6 +447,7 @@ LCSAS_DRAIN_CHUNK_PACKS
 LCSAS_MAX_JSON_MIB
   Default:  256  (opt-in override; default ceiling always active)
   Since:    Phase 26 (T1C-01)
+  Read by:  tier 1, so it works with restore.sh and restore.bat
   What:     Maximum token-buffer memory, in MiB, that tier-1 will
             allocate to parse any single JSON structure (index file,
             snapshot file, or tree blob).  Tier-1 parsing is otherwise
@@ -377,6 +465,7 @@ LCSAS_MAX_JSON_MIB
 LCSAS_MAX_TREE_DEPTH
   Default:  1000  (opt-in override; default cap always active)
   Since:    Phase 26 (T1C-04)
+  Read by:  tier 1, so it works with restore.sh and restore.bat
   What:     Maximum directory-tree recursion depth tier-1 will walk.
             Tier-1 descends subtrees on the C stack (~6 KB per level);
             1000 levels ~= 6 MB, inside the default 8 MB stack ulimit.
@@ -395,16 +484,33 @@ LCSAS_MAX_TREE_DEPTH
 LCSAS_TIER_FALLBACK
   Default:  0  (opt-in / default OFF)
   Since:    Phase 24
-  What:     0 (default) → restore.sh exec()s tier 1 directly; a tier-1
-            crash propagates its exit code to the caller.
+  Read by:  restore.sh only
+  What:     0 (default) → restore.sh runs tier 1 and exits with its
+            exit code; a tier-1 crash is not followed by another tier.
+            (It runs tier 1 rather than exec()ing it, so its exit
+            handler can still delete the temporary password file,
+            #363.)
             1 → run each non-last tier as a subprocess; fall through to
             the next tier (tier 2, then tier 3) on non-zero exit.
-  Why:      Opt-IN.  The default exec() behavior preserves the
-            bare-minimum restore story: tier 1 IS the restore path, and
-            failures must surface immediately so you know tier 1 is
-            broken.  Silent fallback could mask a tier-1 regression,
-            giving false confidence that an archive can be restored
-            when the primary path is actually broken.
+            Never after tier-1 exit 77 (wrong password) or 75 (q at
+            the disc prompt): those stop the run either way.
+  Windows:  restore.bat does not read it.  It always tries tier 2
+            after a tier-1 failure, but only for a backup set whose
+            folder holds its own data\ (rustic-static cannot ask for
+            discs), and never after exit 75 or 77.  A set read from
+            the discs stops after tier 1 and keeps the tools folder.
+            That check sits inside the tier-1 step, so when
+            lcsas-restore.exe is missing (say, quarantined by
+            antivirus) in a run that does not relocate, restore.bat
+            goes straight to tier 2 whatever the set, and tier 2
+            fails for a set read from the discs.  restore.bat has no
+            tier 3.
+  Why:      Opt-IN.  The default (tier 1 only, its exit code returned)
+            preserves the bare-minimum restore story: tier 1 IS the
+            restore path, and failures must surface immediately so you
+            know tier 1 is broken.  Silent fallback could mask a
+            tier-1 regression, giving false confidence that an archive
+            can be restored when the primary path is actually broken.
             LCSAS_TIER_FALLBACK=1 is an explicit opt-in for anyone
             who already knows tier 1 is broken and wants the cascade
             to walk for them.
@@ -412,6 +518,7 @@ LCSAS_TIER_FALLBACK
 LCSAS_ALLOW_PYTHON_TIER
   Default:  1  (opt-out / default ON)
   Since:    Phase 20
+  Read by:  restore.sh only (restore.bat never starts tier 3)
   What:     1 (default) → tier 3 (the Python reader) is a reachable
             fallback when tiers 1 and 2 are both absent or failed.
             0 → stop the cascade after tiers 1/2; never invoke Python.
@@ -423,12 +530,13 @@ LCSAS_ALLOW_PYTHON_TIER
 LCSAS_PROGRESS
   Default:  unset → ON (opt-out / default ON)
   Since:    Phase 22
-  What:     Controls periodic progress output on stderr during a
-            restore.  Applies to both the tier-1 C binary
-            (lcsas-restore prints "progress: N/M blobs, X MB" lines)
-            and the tier-3 Python reader (prints "N/M files, X MB").
-            Set LCSAS_PROGRESS=0 to silence all progress output.
-            Any other value (including unset) enables progress.
+  Read by:  tier 3 only
+  What:     Controls the periodic progress output on stderr of the
+            tier-3 Python reader ("N/M files, X MB").
+            Set LCSAS_PROGRESS=0 to silence it.  Any other value
+            (including unset) enables it.  Tier 1 does not read this
+            variable: lcsas-restore always prints its
+            "[lcsas-restore] progress: N/M blobs, X MB" lines.
   Why:      Opt-OUT.  On a slow disc (~1 MB/s) a silent restore is
             indistinguishable from a frozen process.  Forgetting this
             knob means you cannot tell if the restore is
@@ -438,6 +546,7 @@ LCSAS_PROGRESS
 LCSAS_NO_RELOCATE
   Default:  0  (opt-in / default OFF)
   Since:    Phase 20
+  Read by:  restore.sh and restore.bat
   What:     1 → skip the relocation step.  Normally restore.sh
             detects when it is running off a read-only optical medium
             and copies itself + the recovery binaries to the tools
@@ -445,6 +554,12 @@ LCSAS_NO_RELOCATE
             lets you eject the meta disc and reuse the drive for data
             discs.
             0 → perform relocation when the medium appears read-only.
+  Windows:  restore.bat reads it too: 1 skips the copy into the tools
+            folder, and the script runs where it is.  It still keeps
+            its pack cache, its catalog copy and the metadata it
+            merges in the tools folder's in-place\ folder, removed
+            after a restore that succeeds, and writes no resume.cfg
+            or "Resume LCSAS restore.bat".
   Why:      Opt-IN.  The relocation is a safety behavior; disabling it
             is only appropriate in test / development environments
             (e.g., running restore.sh from a source checkout on a
@@ -455,6 +570,7 @@ LCSAS_NO_RELOCATE
 LCSAS_ALLOW_NO_PACK_SEARCH
   Default:  0  (opt-in / default OFF)
   Since:    Phase 23
+  Read by:  restore.sh only
   What:     1 → suppress the "no data discs detected" hard error.
             Normally restore.sh aborts before asking for a password if
             no mounted disc contains a data/ directory, because the
@@ -471,6 +587,7 @@ LCSAS_ALLOW_NO_PACK_SEARCH
 LCSAS_ALLOW_TMPFS_TARGET
   Default:  0  (opt-in / default OFF)
   Since:    2026-06 audit (BOOT-05)
+  Read by:  restore.sh only
   What:     1 → skip the interactive "Continue restoring into RAM
             anyway? [y/N]" confirmation when the target directory sits
             on a RAM-backed filesystem (tmpfs/ramfs).  The warning
@@ -483,6 +600,7 @@ LCSAS_ALLOW_TMPFS_TARGET
 LCSAS_FORBID_TMPFS_TARGET
   Default:  0  (opt-in / default OFF)
   Since:    2026-06 audit (BOOT-05)
+  Read by:  restore.sh only
   What:     1 → refuse to restore into a RAM-backed (tmpfs/ramfs)
             target directory even when no TTY is attached.  The
             default non-interactive behavior is warn-and-continue so
@@ -495,6 +613,8 @@ LCSAS_FORBID_TMPFS_TARGET
 LCSAS_SKIP_SPACE_CHECK
   Default:  0  (check ON / opt-out)
   Since:    2026-06 audit (FMA-09)
+  Read by:  restore.sh only (restore.bat makes no space check; see
+            RECOVER_WINDOWS.txt, "DESTINATION FOLDER NOTES")
   What:     1 → skip the free-space preflight restore.sh runs before
             any password or disc prompt.  The check derives the
             archive size from the freshest reachable catalog.db (via
@@ -513,30 +633,42 @@ LCSAS_SKIP_SPACE_CHECK
 LCSAS_CHECK_DISC_AUTOFIX
   Default:  0  (ask on a terminal; refuse without one / opt-in)
   Since:    2026-06 audit (FMT-01, --check-disc)
-  What:     1 → when `restore.sh --check-disc` (or restore.bat
-            :check_disc) finds damage in a disc image, repair it
+  Read by:  restore.sh and restore.bat (--check-disc only)
+  What:     1 → when `restore.sh --check-disc` (or `restore.bat
+            --check-disc`) finds damage in a disc image, repair it
             using the burned RS03 ECC parity WITHOUT the interactive
             "Repair it now? [y/N]" confirmation.  With no terminal
-            and this unset, the script refuses to write and exits
-            nonzero.
+            and this unset, restore.sh refuses to write and exits 1.
+            restore.bat always asks; an empty answer, or the end of
+            the input, leaves the image as it is (exit 1).
   Why:      Opt-IN.  Repair rewrites the image file; an unattended
             run must explicitly accept that risk.
 
 LCSAS_FORCE_NONEMPTY_TARGET
   Default:  0  (confirm on a terminal; refuse without one / opt-in)
   Since:    2026-06 audit (UX-07)
+  Read by:  restore.sh and restore.bat
   What:     1 → skip the "target folder already contains files that
             do not look like a previous LCSAS restore" overwrite
             guard in restore.sh / restore.bat.  Interactively the
             guard asks you to type YES; non-interactively it refuses
-            unless this is set.  (A hidden marker file makes re-runs
-            into the same restore target silent either way.)
+            (exit 65) unless this is set.  (A hidden marker file,
+            .lcsas-restore-marker, makes re-runs into the same restore
+            target silent either way.)  restore.sh's marker names the
+            backup sets restored into the folder, so restoring another
+            set into it warns too.
+  Windows:  restore.bat asks for YES whether or not a person is
+            there; any other answer, or the end of the input, stops
+            with exit 65.  Its marker is empty, so it does not warn
+            about another set restored into the same folder.
   Why:      Opt-IN.  Restoring over unrelated existing files can
             silently overwrite them; scripted runs must opt in.
 
 LCSAS_KEYSHARE_PASSPHRASE
   Default:  unset (empty passphrase)
   Since:    Key escrow (C5, 2026-05)
+  Read by:  lcsas-keyshare, so it works with restore.sh and
+            restore.bat when they combine share cards
   What:     Passphrase for SLIP-0039 share combination, read by the
             tier-1 `lcsas-keyshare` combiner when no --passphrase
             flag is given.  Only relevant for splits created with a
@@ -550,10 +682,11 @@ BUILD / CI GATES
 LCSAS_BLIND_ACK_COST
   Default:  unset → OFF  (opt-in / default OFF)
   Since:    Phase 22
+  Read by:  the Makefile (not a restore program)
   What:     Gate for `make blind-restore` and `make blind-restore-x5`.
             These targets spawn a real Claude sub-agent against a live
-            cdemu disc array; each run costs approximately USD 5-25 in
-            API credits.  Set LCSAS_BLIND_ACK_COST=1 to confirm that
+            cdemu disc array, which costs API credits on every run.
+            Set LCSAS_BLIND_ACK_COST=1 to confirm that
             you accept the cost before the Makefile proceeds.
   Why:      Opt-IN.  Purely a cost-acknowledgement guard.  No restore
             behavior is affected.
@@ -564,9 +697,13 @@ TOOLCHAIN / DEVELOPER
 LCSAS_RECOVERY_CACHE
   Default:  unset → ${HOME}/.cache/lcsas/recovery-binaries
   Since:    Phase 21
+  Read by:  recovery/scripts/fetch_upstream.sh and the meta disc
+            builder (lcsas meta build); not a restore program
   What:     Directory used by recovery/scripts/fetch_upstream.sh as a
             local cache for downloaded upstream recovery binaries
-            (rustic-static, python-build-standalone).  Set to a
+            (rustic-static, python-build-standalone).  lcsas meta
+            build reads the same cache for those binaries and the
+            dvdisaster source it puts on the META disc.  Set to a
             shared path on build servers to avoid redundant downloads
             across workspaces.
   Why:      Opt-IN — the default HOME-relative path is suitable for
@@ -575,6 +712,7 @@ LCSAS_RECOVERY_CACHE
 LCSAS_OPTIONAL_ARCHES
   Default:  unset
   Since:    Phase 21
+  Read by:  the test suite (not a restore program)
   What:     Space-separated list of rust-triples that are allowed to
             be absent from a built meta disc without failing tests.
             Used by test_meta_bundling_completeness.py to mark
@@ -635,7 +773,7 @@ LCSAS_ALLOW_PYTHON_TIER     1         opt-out     set 0 to ban Python
 LCSAS_CHECK_DISC_AUTOFIX    0         opt-in      unattended ECC repair
 LCSAS_FORCE_NONEMPTY_TARGET 0         opt-in      scripted overwrite ack
 LCSAS_KEYSHARE_PASSPHRASE   unset     opt-in      share passphrase
-LCSAS_PROGRESS              unset     opt-out     set 0 to silence output
+LCSAS_PROGRESS              unset     opt-out     set 0 to quiet tier 3
 LCSAS_NO_RELOCATE           0         opt-in      set 1 for testing
 LCSAS_ALLOW_NO_PACK_SEARCH  0         opt-in      set 1 for test rigs
 LCSAS_ALLOW_TMPFS_TARGET    0         opt-in      set 1 to skip RAM-target prompt
@@ -643,4 +781,3 @@ LCSAS_FORBID_TMPFS_TARGET   0         opt-in      set 1 to ban RAM targets
 LCSAS_SKIP_SPACE_CHECK      0         opt-out     set 1 to skip space preflight
 LCSAS_BLIND_ACK_COST        unset     opt-in      set 1 to run blind e2e
 LCSAS_RECOVERY_CACHE        (home)    opt-in      CI shared binary cache
-LCSAS_NO_WIZARD             unset     opt-in      automated live-boot test

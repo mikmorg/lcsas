@@ -61,12 +61,24 @@ on the dead machine (internal or USB).
    sh /mnt/recovery/scripts/restore.sh /home/ubuntu/restored latest
    ```
 
-   The script prompts for the password and walks through data
-   disc swaps. For the first data disc, pick the one with the newest
-   label (the latest year, then the highest number): its disc catalog
-   is the fullest, so you swap discs less often; any data disc works.
+   The script copies its tools to `~/lcsas-restore-tools` so the
+   META disc can come out, then asks for your newest data disc (the
+   latest year in its label, then the highest number), the backup set
+   and its password, and walks through the data disc swaps.
    `recovery/docs/RECOVER.txt` on the disc is the full manual from
-   this point.
+   this point. On a live system the home folder is in RAM, so the
+   tools folder, and the copies of the discs in it, are lost at
+   power-off: a restore that stops can be carried on only until then
+   (`sh ~/lcsas-restore-tools/resume.sh`). To keep the copies of the
+   discs, put the pack cache on a real disk, e.g.
+   `LCSAS_PACK_CACHE_DIR=/media/ubuntu/USBDISK/lcsas-pack-cache`; after
+   a power-off, run `restore.sh` from the META disc again with the same
+   setting and the discs in that cache are not asked for again. The
+   pack cache needs no programs to run from it, so any USB disk works.
+   The tools folder (`LCSAS_TOOLS_DIR`) does: a FAT32 stick, as the
+   desktop mounts it, cannot run programs, and `restore.sh` then falls
+   back to a temporary folder in RAM. Put the tools folder only on a
+   disk formatted for Linux, such as ext4.
 7. **Copy the restored files to a real disk before powering off** — a
    live system's home directory lives in RAM. Either copy out of
    `/home/ubuntu/restored`, or pass a path on a mounted disk as the
