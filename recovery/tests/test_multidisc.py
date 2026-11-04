@@ -696,6 +696,10 @@ def case_single_drive_script_relocation() -> int:
         # should detect the read-only directory and relocate to /tmp.
         env = os.environ.copy()
         env["LCSAS_META_DISC"] = str(fakedisc)
+        # The copy goes to the tools folder, kept after a run that does
+        # not succeed (#609): keep it inside this case's temp dir, not
+        # in the developer's $HOME.
+        env["LCSAS_TOOLS_DIR"] = str(tmp / "tools")
         env["LCSAS_PWFILE"] = str(pwfile)
         env["LCSAS_PASSWORD"] = "correct-horse-battery-staple"
         cmd = [
