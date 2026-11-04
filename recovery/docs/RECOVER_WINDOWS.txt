@@ -143,8 +143,12 @@ is in a drive yet, the script asks for that disc first:
 
 Take the meta disc out (nothing on it is in use any more), put in
 the data disc whose label has the latest year and then the highest
-number, wait until File Explorer shows it, and press Enter.  The
-script prints the label it read from the disc, for example:
+number, wait until File Explorer shows it, and only then press
+Enter: a drive can take half a minute to read a disc.  Each Enter
+with no data disc in counts as a try, and after five tries the
+script goes on with the copies on the meta disc, just as S does
+(see below).  The script prints the label it read from the disc,
+for example:
 
      [lcsas-restore] newest data disc: LCSAS_CD700_2026_0002 in drive D:
 
@@ -217,9 +221,13 @@ restore.bat" on your Desktop (the same file is in the tools
 folder).  You do NOT need the meta disc for that, and nothing is
 copied again.  It carries on with the same backup set, into the
 same folder, and looks in the same drives, even one that is empty
-when you start it.  It asks for the password again: the password is
-never saved.  Then put in the disc each box names.  Files that are
-already restored are skipped.
+when you start it.  It asks for the password again (or for the share
+cards again, if the password is split, so keep the cards at hand):
+the password is never saved.  It does not ask for the newest data
+disc again: it carries on with the same backups as before the stop,
+whatever disc is in the drive, so the files restored before and
+after the stop come from the same backup.  Then put in the disc each
+box names.  Files that are already restored are skipped.
 
 The same works if the window was closed, or the computer was
 restarted, once you had answered the question about the restore
@@ -515,16 +523,30 @@ DESTINATION FOLDER NOTES
   * If the original archive has more data than you have free disk
     space, the restore will fail partway through.  restore.bat does
     not check this for you (restore.sh on macOS/Linux does), so check
-    first.  Put the data disc whose label is newest (the latest
-    year, then the highest number; its catalog is the fullest) in
-    drive E:, open a Command Prompt at the META disc and run:
+    first.  This works with one drive (D: here).  With the meta disc
+    in the drive, open a Command Prompt and copy the program to a
+    new folder on this computer:
 
-        recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe ^
-            --catalog E:\catalog.db --list-pending-packs
+        mkdir C:\lcsas-check
+        copy D:\recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe ^
+            C:\lcsas-check\
+
+    Then take the meta disc out, put in the data disc whose label is
+    newest (the latest year, then the highest number; its catalog is
+    the fullest), and copy its catalog too:
+
+        copy D:\catalog.db C:\lcsas-check\
+
+    Then run the copy.  It reads only the catalog here; --repo and
+    --password-file must be given, but are not read:
+
+        C:\lcsas-check\lcsas-restore.exe --list-pending-packs ^
+            --catalog C:\lcsas-check\catalog.db ^
+            --repo C:\lcsas-check --password-file NUL
 
     Its last line reads "Total: N packs, X MB across M discs."  Make
     sure the destination drive has at least X MB free, as shown in
-    File Explorer under "This PC".
+    File Explorer under "This PC".  Delete C:\lcsas-check afterwards.
 
   * Long paths: Windows historically limited paths to 260 characters.
     Modern Windows 10/11 supports longer paths if enabled in Group
@@ -590,12 +612,13 @@ CASE C.  "lcsas-restore.exe is not recognized as an internal or
                RESTORE" below for details).  Install Python from
                python.org, then run:
                    python D:\standalone_restorer.py ^
-                       --repo D:\metadata\<name> ^
+                       --repo C:\lcsas-set ^
                        --password-file C:\path\to\pw.txt ^
                        --target C:\Users\me\restored ^
                        --mount-point E:\
-               See "MANUAL PYTHON RESTORE" below for what <name>,
-               the password file and --mount-point mean.
+               See "MANUAL PYTHON RESTORE" below for how to make
+               C:\lcsas-set, the password file and what
+               --mount-point means.
 
 CASE D.  The restore completes but some files appear truncated.
          File a bug report with the SHA-256 of the affected file
@@ -720,15 +743,26 @@ wrapper around lcsas-restore.exe.  The .exe accepts:
 It exits 0 (done), 1 (failed), 2 (wrong arguments), 75 (you typed q
 at a disc box) or 77 (wrong password).
 
-The repository metadata lives under metadata\<name>\ on the disc,
-where <name> is the repository's folder (the directory containing
-keys\ and index\); run `dir D:\metadata` to list them.
+Each backup set's keys, index and snapshots live under
+metadata\<id>\ on every disc, where <id> is the set's id, a long
+code; the set's name is on the name= line of LCSAS_REPO.txt in that
+folder.  To see which folder is which set:
 
-Example:
+    findstr /s /b /c:"name=" D:\metadata\LCSAS_REPO.txt
 
-    cd D:
+(VOLUME_INFO.txt on a data disc lists each set's name too, with an
+"ID <id>" line under it.)  Use the copy on your NEWEST data disc
+(the latest year, then the highest number, in its label): it has the
+latest backups.  The meta disc's copy knows only the backups made
+before the meta disc was burned, and none of the sets added later.
+
+Example, with the meta disc in D: and the newest data disc in E:
+(a second drive):
+
+    D:
+    cd \
     recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe ^
-        --repo D:\metadata\<name> ^
+        --repo E:\metadata\<id> ^
         --password-file C:\path\pw.txt ^
         --target C:\Users\me\restored ^
         --pack-search E:\ ^
@@ -780,10 +814,12 @@ in order of effort:
      python.org (Python 3.10 or newer; the script exits with a clear
      message on anything older), then run:
         python D:\standalone_restorer.py ^
-            --repo D:\metadata\<name> ^
+            --repo C:\lcsas-set ^
             --password-file C:\path\to\pw.txt ^
             --target C:\Users\me\restored ^
             --mount-point E:\
+     (C:\lcsas-set is the set's folder copied off your newest data
+     disc: see "MANUAL PYTHON RESTORE", STEP 4.)
      This works on any Windows that runs Python 3.10 or newer,
      which rules out Windows 7 and older.  Note that
      restore.bat does NOT chain to this script for you any more --
@@ -830,19 +866,35 @@ STEP 3.  Put the password in a file.  The script reads the password
          on a shared machine, save it to removable media instead and
          delete it as soon as the restore finishes.
 
-STEP 4.  Run the Python reader.  --repo, --password-file and
+STEP 4.  Copy the backup set's folder to this computer.  Each set's
+         keys, index and snapshots are in metadata\<id>\ on every
+         disc, where <id> is the set's id, a long code; the name= line
+         of LCSAS_REPO.txt in that folder names the set.  To see which
+         folder is which set:
+
+             findstr /s /b /c:"name=" D:\metadata\LCSAS_REPO.txt
+
+         Take the copy from your NEWEST data disc (the latest year,
+         then the highest number, in its label): it has the latest
+         backups, and the meta disc's copy may lack them.  With that
+         disc in drive E: (with one drive: take the meta disc out, put
+         the data disc in, and use D: wherever E: is written here):
+
+             xcopy /e /i E:\metadata\<id> C:\lcsas-set
+
+         A copy on this computer stays readable while you swap discs.
+         Every data disc carries standalone_restorer.py too, so STEP 5
+         also works from a data disc's root.
+
+STEP 5.  Run the Python reader.  --repo, --password-file and
          --target are all required flags; there are no positional
          arguments.
 
              python standalone_restorer.py ^
-                 --repo D:\metadata\<name> ^
+                 --repo C:\lcsas-set ^
                  --password-file C:\Users\me\pw.txt ^
                  --target C:\Users\me\restored ^
                  --mount-point E:\
-
-         <name> is the repository's folder under D:\metadata\ -- the
-         directory that contains keys\ and index\.  Run
-         `dir D:\metadata` to list the repositories.
 
          Pack data lives on the data discs, not under metadata\.
          Add one --mount-point <letter>:\ argument per inserted
@@ -850,7 +902,7 @@ STEP 4.  Run the Python reader.  --repo, --password-file and
          script pauses so you can swap discs, then re-scans the
          mount points.  Run with --help for the full flag surface.
 
-STEP 5.  Wait for "Restore complete".  Files are byte-equal to the
+STEP 6.  Wait for "Restore complete".  Files are byte-equal to the
          original snapshot.  Symlink, ACL, owner/group and other
          POSIX-specific metadata are dropped on Windows (same caveats
          as the binary path).

@@ -76,11 +76,11 @@ primary AND the only practical pre-Python fallback.
 
 ON WINDOWS (restore.bat)
 
-restore.bat runs tier 1 (lcsas-restore.exe) and, only for a backup
-set whose folder holds its own data\, tier 2 (rustic-static.exe).
-It has no tier 2b and no tier 3: the Python reader is a manual step
-(RECOVER_WINDOWS.txt, "MANUAL PYTHON RESTORE").  It has no
-LCSAS_TIER_FALLBACK knob:
+restore.bat runs tier 1 (lcsas-restore.exe) and, when tier 1 is
+present, tier 2 (rustic-static.exe) only for a backup set whose
+folder holds its own data\.  It has no tier 2b and no tier 3: the
+Python reader is a manual step (RECOVER_WINDOWS.txt, "MANUAL PYTHON
+RESTORE").  It has no LCSAS_TIER_FALLBACK knob:
   * tier 1 exits 0: done.
   * tier 1 exits 77 (wrong password) or 75 (q at the disc prompt):
     stop, keep the tools folder, never tier 2.
@@ -88,6 +88,14 @@ LCSAS_TIER_FALLBACK knob:
     folder): stop, keep the tools folder and say how to carry on.
     Tier 2 could only fail there (#615).
   * any other exit, for a set with its own data\: try tier 2.
+  * no lcsas-restore.exe at all (antivirus quarantined it, say):
+    the data\ check above is part of the tier-1 step, so restore.bat
+    goes straight to tier 2 whatever the set.  In a run that does not
+    relocate, rustic-static.exe is there and then fails for a set
+    read from the discs; the relocated copy holds rustic-static.exe
+    only when a set has its own data\.  Either way, restore the .exe
+    (RECOVER_WINDOWS.txt, "SMARTSCREEN WARNING") or use the Python
+    reader.
 
 TIER 2b: STOCK RESTIC / RUSTIC (INDEPENDENT AUDITED READER)
 

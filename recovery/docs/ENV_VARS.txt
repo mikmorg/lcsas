@@ -376,9 +376,18 @@ LCSAS_TOOLS_DIR
             writes the file .lcsas-restore-tools in a folder it uses,
             and later uses only an empty folder or one with that file.
             A folder that already holds other files is never used or
-            deleted; the run falls back to a temporary folder, as it
-            does when there is no $HOME, and a stopped restore cannot
-            be carried on from it.  On a live USB stick $HOME is in
+            deleted, and restore.sh falls back to a temporary folder,
+            as it does when there is no $HOME.  Run off the META disc
+            (relocated), that temporary folder becomes the tools
+            folder: a stopped restore carries on from it with the
+            resume.sh the script prints, until the folder is cleared
+            (most systems empty /tmp at power-off).  Run in place, the
+            run's own files go to a temporary folder that is deleted
+            when it exits, so a stopped restore cannot be carried on.
+            Run off the META disc, the programs run from the tools
+            folder, so it must allow that (a FAT32 USB stick as a
+            desktop mounts it does not); otherwise restore.sh falls
+            back the same way.  On a live USB stick $HOME is in
             RAM: the folder is lost at power-off, and restore.sh says
             so.
   Windows:  restore.bat copies itself into it from a disc, with this
@@ -490,13 +499,18 @@ LCSAS_TIER_FALLBACK
             folder holds its own data\ (rustic-static cannot ask for
             discs), and never after exit 75 or 77.  A set read from
             the discs stops after tier 1 and keeps the tools folder.
-            restore.bat has no tier 3.
-  Why:      Opt-IN.  The default exec() behavior preserves the
-            bare-minimum restore story: tier 1 IS the restore path, and
-            failures must surface immediately so you know tier 1 is
-            broken.  Silent fallback could mask a tier-1 regression,
-            giving false confidence that an archive can be restored
-            when the primary path is actually broken.
+            That check sits inside the tier-1 step, so when
+            lcsas-restore.exe is missing (say, quarantined by
+            antivirus) in a run that does not relocate, restore.bat
+            goes straight to tier 2 whatever the set, and tier 2
+            fails for a set read from the discs.  restore.bat has no
+            tier 3.
+  Why:      Opt-IN.  The default (tier 1 only, its exit code returned)
+            preserves the bare-minimum restore story: tier 1 IS the
+            restore path, and failures must surface immediately so you
+            know tier 1 is broken.  Silent fallback could mask a
+            tier-1 regression, giving false confidence that an archive
+            can be restored when the primary path is actually broken.
             LCSAS_TIER_FALLBACK=1 is an explicit opt-in for anyone
             who already knows tier 1 is broken and wants the cascade
             to walk for them.
@@ -683,10 +697,13 @@ TOOLCHAIN / DEVELOPER
 LCSAS_RECOVERY_CACHE
   Default:  unset → ${HOME}/.cache/lcsas/recovery-binaries
   Since:    Phase 21
-  Read by:  recovery/scripts/fetch_upstream.sh (not a restore program)
+  Read by:  recovery/scripts/fetch_upstream.sh and the meta disc
+            builder (lcsas meta build); not a restore program
   What:     Directory used by recovery/scripts/fetch_upstream.sh as a
             local cache for downloaded upstream recovery binaries
-            (rustic-static, python-build-standalone).  Set to a
+            (rustic-static, python-build-standalone).  lcsas meta
+            build reads the same cache for those binaries and the
+            dvdisaster source it puts on the META disc.  Set to a
             shared path on build servers to avoid redundant downloads
             across workspaces.
   Why:      Opt-IN — the default HOME-relative path is suitable for

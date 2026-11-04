@@ -40,10 +40,10 @@ DECISION FLOW
   Q: Does /mnt contain restore.sh and recovery/bin/<arch>/lcsas-restore?
      YES -> primary path:
 
-         sh /mnt/restore.sh /tmp/restored latest
+         sh /mnt/restore.sh ~/restored latest
 
        This asks a few questions (see "WHAT restore.sh ASKS"), then
-       writes restored files under /tmp/restored.  The script
+       writes restored files under ~/restored.  The script
        auto-detects architecture and falls back through the cascade
        if the primary binary is missing.
 
@@ -55,14 +55,18 @@ DECISION FLOW
          python3 /mnt/standalone_restorer.py \
              --repo /tmp/cache \
              --password-file /tmp/pwfile \
-             --target /tmp/restored
+             --target ~/restored
 
 IF THE COMPUTER REFUSES TO RUN THE TOOLS
 
 The programs on the disc are fine; a safety setting on the computer
 is in the way.  The fix is the same everywhere: copy the meta disc to
 a folder the computer lets you run programs from, and run the copy.
-It needs about 1 GB of free space; delete the copy afterwards.
+It needs about 1 GB of free space; delete the copy afterwards.  A copy
+run where it is does not ask for your newest data disc (see question 1
+below), so once the copy is made, take the meta disc out, put your
+NEWEST data disc in and mount it, and only then run the copy: it then
+uses that disc's newer list of snapshots.
 
   macOS -- "cannot be opened because the developer cannot be
   verified", or the restore stops with "Killed".  macOS has marked
@@ -108,7 +112,12 @@ in this order.  Each one says how to answer.
      full label it found.  The name the computer shows for a disc may
      be cut short; the full label is printed on the disc and in its
      VOLUME_INFO.txt.  S then ENTER skips this question and uses the
-     copies on the META disc.  Q then ENTER stops (exit code 65).
+     copies on the META disc, which may lack the latest backups.
+     Worse, if the META disc was made AFTER your newest data disc,
+     its latest backup can need files that are on no disc yet, and
+     the restore then asks for a disc that does not exist.  Skip only
+     when you have no data disc at hand.  Q then ENTER stops (exit
+     code 65).
      Only a run off the META disc itself asks this: a copy of the
      disc in a folder on this computer, run where it is, does not
      (set LCSAS_META_DISC to that folder to have it asked).
@@ -127,7 +136,8 @@ in this order.  Each one says how to answer.
      asked again, and so is a password the backup set does not
      accept: it is checked before the restore starts.  Q then ENTER
      stops (exit code 77).  A password that is just the letter q
-     cannot be typed here: put it in a file and use --key FILE.
+     cannot be typed here: put it in a file and use --key FILE,
+     with FILE as a full path such as ~/pw.txt.
      When the set's password is split, restore.sh asks for the share
      cards instead (see "SHARE CARDS (SPLIT PASSWORDS)").
 
@@ -136,13 +146,14 @@ in this order.  Each one says how to answer.
 
   5. After a restore that succeeds, when the discs hold another set:
          Restore another backup set from these discs? [y/N]
-     y asks for the folder to restore it into and starts again at
-     question 2, with no META disc and nothing copied again.  ENTER
-     takes a NEW folder beside the first (for example ~/restored-2):
-     two sets restored into one folder would be mixed together.  Q
-     then ENTER at the folder question restores no other set.  N or
-     ENTER ends the restore, and the tools folder is deleted (see
-     "THE TOOLS FOLDER").
+     At [y/N]: N or ENTER ends the restore, and the tools folder is
+     deleted (see "THE TOOLS FOLDER").  y asks for the folder to
+     restore the next set into, and then starts again at question 2,
+     with no META disc and nothing copied again.
+     At the folder question: ENTER takes a NEW folder beside the
+     first (for example ~/restored-2), because two sets restored into
+     one folder would be mixed together.  Q then ENTER restores no
+     other set.
 
 Question 1, the check of the password, and question 5 come only on a
 terminal: never when the answers come from a pipe or a script.  To
@@ -219,7 +230,7 @@ Then list that set's snapshots (the password file holds the password;
 
   /mnt/recovery/bin/<arch>/lcsas-restore \
       --repo /mnt/metadata/<id> \
-      --password-file /tmp/pw \
+      --password-file ~/pw \
       --list-snapshots
 
 Output:
@@ -229,12 +240,22 @@ Output:
   e5f6g7h8  2026-02-12T08:15:00.000Z      /home/alice
 
 A META disc's copy lists the snapshots made before the META disc was
-burned.  For the newest list, use the same path on your newest data
-disc.  A wrong password exits with code 77.
+burned.  A data disc carries no recovery/bin/, and with one drive the
+META disc is out once a data disc is in.  For the newest list, use the
+copy restore.sh keeps in its tools folder (see "THE TOOLS FOLDER"):
+after its newest-disc step, metadata/<id>/ there holds the newest data
+disc's copy, and its program runs with no META disc:
+
+  ~/lcsas-restore-tools/recovery/bin/<arch>/lcsas-restore \
+      --repo ~/lcsas-restore-tools/metadata/<id> \
+      --password-file ~/pw \
+      --list-snapshots
+
+A wrong password exits with code 77.
 
 RESTORE A SPECIFIC SNAPSHOT
 
-  sh /mnt/restore.sh /tmp/restored a1b2c3d4
+  sh /mnt/restore.sh ~/restored a1b2c3d4
 
 The snapshot argument may be 'latest', an exact ID, or a unique prefix.
 restore.sh handles the disc cascade, password prompt, and pack-cache
@@ -319,9 +340,16 @@ its pack cache.  restore.sh prints the command that carries on:
 
     sh ~/lcsas-restore-tools/resume.sh
 
+resume.sh is written once the backup set and the target folder are
+known, just before the password is asked for.  A stop before then
+(at the newest data disc or the list of sets) has nothing to carry
+on: run restore.sh from the META disc again, and it uses the tools
+folder that is already there.
+
 resume.sh needs NO META disc: it runs the copy in the tools folder,
 for the same backup set and the same target folder, and asks only for
-the password again (it never stores the password).  It carries on
+the password (or the share cards) again: it never stores the
+password.  It carries on
 with the copy of the set's snapshots that the stopped run used, even
 if a newer data disc is in the drive by then, so the files restored
 before and after the stop come from the same snapshot.  The command
@@ -376,19 +404,41 @@ carry on; delete it yourself when you no longer need it:
 The copies are made writable even though a disc is read-only, so the
 folder can always be removed.  A folder left by another restore.sh, or
 holding the backup sets of another archive, is emptied and used again.
-A folder that holds files of your own is never used or deleted
-(restore.sh then uses a temporary folder, and a stopped restore cannot
-carry on).  Never restore INTO the tools folder: it is deleted at the
-end, so restore.sh refuses such a target (exit code 65).
+A folder that holds files of your own is never used or deleted.
+Run off the META disc, restore.sh then says "cannot use ... for the
+recovery tools; trying a temporary folder", and that temporary
+folder (in /tmp, or another place with room) becomes the tools
+folder: a stopped restore carries on with the resume.sh command the
+script prints, until the folder is cleared (most computers empty
+/tmp when they are turned off).  Run where it is (a copy of the META
+disc on this computer), it says "cannot use ... as the tools folder;
+using a temporary one": the run's own files go to a temporary folder
+that is deleted when it ends, so a stopped restore cannot be carried
+on.
+Never restore INTO the tools folder: it is deleted at the end, so
+restore.sh refuses such a target (exit code 65).
 
 ON A LIVE USB STICK the home folder is in RAM: the tools folder, and
 anything restored into the home folder, is lost when the computer is
 turned off.  restore.sh says so.  Carry on before turning it off, or
-point LCSAS_TOOLS_DIR and the target at two separate folders on a real
-disk, e.g. a USB disk:
+keep the pack cache and the restored files on a real disk, e.g. a USB
+disk:
 
-    LCSAS_TOOLS_DIR=/media/$USER/USBDISK/lcsas-tools \
+    LCSAS_PACK_CACHE_DIR=/media/$USER/USBDISK/lcsas-pack-cache \
         sh /mnt/restore.sh /media/$USER/USBDISK/restored
+
+The pack cache and the target need no programs to run from them, so
+any USB disk will do (on FAT32 or exFAT the restored files lose their
+symbolic links: see "TARGET FILESYSTEM LIMITATIONS").  The tools
+folder is different: the programs run from it.  A FAT32 stick, as
+the desktop mounts it, cannot run programs, and restore.sh then
+falls back to a temporary folder in RAM ("cannot use ... for the
+recovery tools").  After a power-off, run restore.sh from the META
+disc again with the same LCSAS_PACK_CACHE_DIR: the discs already in
+that pack cache are not asked for again, and files already restored
+are skipped.  To keep the whole tools folder (and resume.sh) as well,
+set LCSAS_TOOLS_DIR to a new folder on a disk formatted for Linux,
+such as ext4.
 
 Mount the data discs at /mnt, never at /media: mounting a disc over
 /media hides the USB disk under /media/$USER.
@@ -484,10 +534,12 @@ folder, and name that folder:
     LCSAS_SHARES_DIR=/path/to/cards sh /mnt/restore.sh ~/restored
 
 A card file with a mistake in it is named and left out, and the other
-cards are combined if enough of them are left.  If lcsas-keyshare
+cards are combined if enough of them are left.  If they cannot be
+combined, restore.sh stops with exit code 77.  If lcsas-keyshare
 itself does not work on this computer, restore.sh says so (the cards
-are not to blame) and asks for the password instead; rebuild it as
-below.
+are not to blame): with LCSAS_SHARES_DIR it stops with exit code 77,
+and with typed cards it asks for the password instead.  Rebuild the
+password as below.
 
 Discs made by an older LCSAS have no marker, and a set whose split was
 never recorded says it is not split: restore.sh then asks for the
@@ -498,10 +550,12 @@ password.  Rebuild it first, by hand:
      SHARE" -- or the share text files).  Each card names its
      repository.
 
-  2. On the meta disc, run the static combiner for your machine:
+  2. On the meta disc, run the static combiner for your machine.
+     Give each path in full, and save the password in your home
+     folder (the disc cannot be written to):
 
          /mnt/recovery/bin/<arch>/lcsas-keyshare \
-             card1.txt card2.txt > repo.key
+             ~/card1.txt ~/card2.txt > ~/repo.key
 
      <arch> is your machine's target dir under recovery/bin/ -- run
      `ls /mnt/recovery/bin/` to see the exact name (the burned dirs use
@@ -514,13 +568,15 @@ password.  Rebuild it first, by hand:
      Python fallback at the disc root:
 
          python3 /mnt/keyshare_combine.py \
-             card1.txt card2.txt > repo.key
+             ~/card1.txt ~/card2.txt > ~/repo.key
 
   4. Continue with the normal cascade above.  Type the
      rebuilt password at the  Password:  prompt, or pass the
-     saved password file:
+     saved password file by its full path (restore.sh moves to its
+     tools folder before it reads it, so a short name such as
+     repo.key is not found):
 
-         sh /mnt/restore.sh --key repo.key --target /tmp/restored
+         sh /mnt/restore.sh --key ~/repo.key --target ~/restored
 
 Format + re-implementation details: docs/SHARE_FORMAT.md on the
 meta disc.
@@ -564,7 +620,9 @@ EXIT CODES
     77 -- a repository key rejected the password, or you typed q at
           the password or a share card prompt
     129 / 130 / 143 -- the terminal closed / Ctrl-C / killed; carry
-          on with resume.sh
+          on with resume.sh, if the stop came after the backup set
+          and the folder were chosen (see "STOPPING AND CARRYING ON
+          LATER")
   On every exit but 0 the tools folder stays (see "THE TOOLS FOLDER"),
   except Ctrl-C at "Restore another backup set?" or the folder
   question after it: that set is restored, nothing is left to
@@ -677,7 +735,7 @@ try the META disc burned closest in date to the data discs.
 
 For the first DATA disc, insert a disc with the NEWEST label: the
 latest year in the label, then the highest number (for example,
-LCSAS_BD25_2027_0014 comes before LCSAS_BD25_2026_0009).  restore.sh
+LCSAS_BD25_2027_0014 is newer than LCSAS_BD25_2026_0009).  restore.sh
 asks for it right after copying (see "WHAT restore.sh ASKS").  Its
 list of snapshots is the newest and its catalog the fullest, so the
 restore sees every backup set and needs fewer disc swaps.  Any data
@@ -701,7 +759,9 @@ still carries the old catalog.
                          binary prompts for a data disc.
   4. It asks you to take the META disc out and put in the data disc
      with the newest label, as described above, and then for the
-     backup set and its password.
+     backup set and its password.  This question comes sooner than
+     the line above says: the copy is done, so the META disc can come
+     out now.
   5. When the binary has loaded the index and needs a pack that lives
      on another DATA disc, it pauses and prints a prompt (see below).
 
@@ -797,9 +857,11 @@ You do NOT need two Blu-ray drives.  restore.sh detects that it is
 running from a read-only mount (the meta disc), copies itself plus the
 binaries for this computer to its tools folder (~/lcsas-restore-tools
 by default), and re-executes from there.  After this relocation, no
-file handles remain on the meta disc, so when the binary prompts for a
-data disc you can eject the meta disc and insert the data disc into
-the same drive.
+file handles remain on the meta disc, so you can eject it and insert
+a data disc into the same drive.  The first question after the copy
+asks for exactly that: your newest data disc (see "WHAT restore.sh
+ASKS").  If you skip it, the META disc can come out at the first disc
+prompt instead.
 
 While the META disc is still in the drive, the prompt tells you how
 to swap:

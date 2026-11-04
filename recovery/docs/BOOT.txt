@@ -79,7 +79,10 @@ to prepare the stick) and a USB stick of 8 GB or more.
      with the copies of the discs read so far: a restore that stops
      can be carried on (sh ~/lcsas-restore-tools/resume.sh) only
      until the computer is turned off.  RECOVER.txt, "THE TOOLS
-     FOLDER", shows how to put it on a real disk.
+     FOLDER", shows how to keep the copies of the discs on a USB
+     disk (LCSAS_PACK_CACHE_DIR), which any USB disk can hold; the
+     tools folder itself needs a disk that can run programs, which
+     a FAT32 stick cannot.
 
 WHY THIS WORKS DECADES FROM NOW
 
