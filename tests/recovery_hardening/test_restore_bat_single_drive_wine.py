@@ -310,13 +310,17 @@ class _Run:
 
 
 def _drive(fx: _Fixture, run: _Run, *, quit_at: int | None = None,
-           target_win: str = TARGET_WIN) -> list[str]:
+           target_win: str = TARGET_WIN,
+           swaps: list[str] | None = None) -> list[str]:
     """Answer restore.bat's prompts and tier 1's disc prompts.
 
     At each disc prompt, put the disc that holds the named pack into D:
     (re-point the symlink) and press ENTER; at prompt ``quit_at`` type q
-    instead.  Returns the text of every disc prompt, in order.
+    instead.  Returns the text of every disc prompt, in order.  ``swaps``
+    gets the name of each disc put in that was not in D: already (the
+    META disc is in at the start).
     """
+    current = fx.meta
     assert run.wait_for(lambda t: "Restore to which folder?" in t), run.text
     run.send(target_win)
     assert run.wait_for(lambda t: "Password:" in t), run.text
@@ -340,6 +344,9 @@ def _drive(fx: _Fixture, run: _Run, *, quit_at: int | None = None,
         disc = fx.disc_holding(m.group(1)) if m else None
         if disc is not None:
             _map_drive(fx.prefix, "d", disc)  # eject, insert, same letter
+            if disc != current and swaps is not None:
+                swaps.append(disc.name)
+            current = disc
         run.send("")
 
 
@@ -348,14 +355,13 @@ def test_one_drive_restore_swaps_discs_in_the_same_letter(tmp_path: Path) -> Non
     and the pack cache keeps the swaps to about one per disc."""
     fx = _build(tmp_path)
     run = _Run(fx)
+    swaps: list[str] = []
     try:
-        boxes = _drive(fx, run)
+        boxes = _drive(fx, run, swaps=swaps)
     finally:
         rc = run.finish()
     out = run.text
-    # Recorded for the drill log: with the rc5 tier 1 a disc is drained
-    # into the cache only after a pack is found on it.
-    print(f"disc prompts: {len(boxes)} for {len(fx.discs)} data discs")
+    print(f"disc prompts: {len(boxes)}, swaps {swaps} for {len(fx.discs)} data discs")
 
     assert rc == 0, f"rc={rc}\n--- output ---\n{out}"
     # Case-sensitive: restore.bat's banner, not tier 1's own line.
@@ -365,8 +371,18 @@ def test_one_drive_restore_swaps_discs_in_the_same_letter(tmp_path: Path) -> Non
         assert got.is_file() and _sha(got.read_bytes()) == _sha(data), (
             f"{name} not restored byte-exact\n{out}")
 
-    assert 1 <= len(boxes) <= len(fx.discs) + 1, (
+    # C8 (#604, #617): swaps <= discs.  This allowed discs + 1 disc
+    # prompts before, from when tier 1 copied a disc into the cache only
+    # after a pack was found on it.  Here the newest-data-disc step is
+    # off, so the META disc is in D: at launch and every data disc goes
+    # in at a prompt.  Tier 1 now copies a data disc whole into the pack
+    # cache the first time it sees it (drain on first sight, D item 8),
+    # so no prompt asks for a disc again: one prompt and one swap per
+    # disc that holds a pack the restore needs, here both.
+    assert 1 <= len(boxes) <= len(fx.discs), (
         f"{len(boxes)} disc prompts for {len(fx.discs)} data discs\n{out}")
+    assert len(swaps) <= len(fx.discs), (swaps, out)
+    assert len(set(swaps)) == len(swaps), f"a disc went in twice: {swaps}\n{out}"
     assert "drives searched for discs: D:\\" in out, out
     for box in boxes:
         searching = box.split("Currently searching:", 1)[-1]
