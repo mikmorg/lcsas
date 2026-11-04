@@ -159,6 +159,11 @@ def world(tmp_path_factory):
         env=env, capture_output=True, timeout=120, check=False)
     # The mount manager reads drive types when it starts.
     stop_wineserver(prefix)
+    # The runs themselves get no system D-Bus, so wine's mount manager
+    # cannot map the host's own optical drives (another job may have a
+    # disc in one) as E: and up.  D: keeps its registry type, which the
+    # mount manager reads at start without D-Bus.
+    env = {**env, "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/nonexistent"}
     w = {"base": base, "env": env, "dos": dos, "files": files,
          "disc_of": disc_of, "meta": meta}
     yield w
