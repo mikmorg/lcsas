@@ -157,9 +157,9 @@ layout) or several.
    `--resume`) and `--check-disc` skip this check.
 5. **The copy off the disc** (section "Single-drive guard: copy the
    tools off the disc"). The script tries to write a probe file next to
-   itself (`2>nul > "%PROBE%" echo.`, with `2>nul` first so a read-only
-   disc prints nothing; up to rc5 every start printed "Access is
-   denied.", #611). If the probe can be written (a writable copy) or
+   itself, with its error output sent to nul, so a read-only disc
+   prints nothing (up to rc5 every start printed "Access is denied.",
+   #611). If the probe can be written (a writable copy) or
    `LCSAS_NO_RELOCATE=1`, it does not relocate (see
    [`in-place\`](#a-run-that-does-not-relocate-in-place)). Otherwise:
    - It finds the recovery root on the disc for both places the script
@@ -226,8 +226,8 @@ layout) or several.
      `recovery\scripts\restore.bat`. `:read_label` takes the label from
      the `  Label:` line of its `VOLUME_INFO.txt` (else
      `volume_info.json` `"label"`), never the drive's own name, which
-     Joliet cuts to 16 characters (`LCSAS_CD700_2026` for every CD of a
-     year). `:label_ok` keeps a label only when it holds nothing but
+     Joliet cuts to 16 characters, the same for every CD of a year.
+     `:label_ok` keeps a label only when it holds nothing but
      `A-Z a-z 0-9 _`. `:parse_label` reads the year and number from the
      right; ties keep the lower drive letter.
    - On ENTER it prints `[lcsas-restore] newest data disc: <label> in
@@ -573,7 +573,8 @@ Windows workflow inherits. Source refs in parentheses.
   every optical drive (`GetDriveTypeA == DRIVE_CDROM`) each time it
   looks for a disc, and splits `LCSAS_MOUNT_DIRS` on `;` (not `:`).
 - **Drive names:** File Explorer shows a disc's Joliet volume name, cut
-  to 16 characters: `LCSAS_CD700_2026` for every CD of a year. The
+  to 16 characters: the prefix, the media and the year, the same for
+  every CD of a year. The
   scripts and tier 1 read the full label from the disc's
   `VOLUME_INFO.txt` / `volume_info.json` instead.
 - **Path separators:** the C source always passes forward slashes; the
