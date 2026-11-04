@@ -63,20 +63,18 @@ catalog.c:317   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardco
 catalog.c:318   INTRACTABLE   "
 
 # disc_locator.c
-disc_locator.c:666   VOLATILE   copy_file fwrite error path; covered by test_disc_locator RLIMIT_FSIZE fs-full drain when a >=11%-free cache base exists (TMPDIR / /dev/shm / /tmp), uncovered otherwise [FMA-09]
-disc_locator.c:667   VOLATILE   "
-disc_locator.c:776   VOLATILE   drain_disc fs_critically_full warn; covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache base fs is <10% free [FMA-09]
-disc_locator.c:777   VOLATILE   "
-disc_locator.c:783   VOLATILE   "
-disc_locator.c:785   VOLATILE   "
-disc_locator.c:822   DEFENSIVE   drain_disc path-too-long defensive continue (prefix_dir overflow)
-disc_locator.c:824   DEFENSIVE   "
-disc_locator.c:831   DEFENSIVE   drain_disc path-too-long defensive continue (cache_prefix overflow)
-disc_locator.c:833   DEFENSIVE   "
-disc_locator.c:844   DEFENSIVE   drain_disc path-too-long defensive continue (src path overflow)
-disc_locator.c:846   DEFENSIVE   "
-disc_locator.c:851   DEFENSIVE   drain_disc path-too-long defensive continue (dst path overflow)
-disc_locator.c:853   DEFENSIVE   "
+disc_locator.c:963   DEFENSIVE   drain_walk path-too-long defensive continue (prefix_dir overflow)
+disc_locator.c:965   DEFENSIVE   "
+disc_locator.c:972   DEFENSIVE   drain_walk path-too-long defensive continue (cache_prefix overflow)
+disc_locator.c:974   DEFENSIVE   "
+disc_locator.c:985   DEFENSIVE   drain_walk path-too-long defensive continue (src path overflow)
+disc_locator.c:987   DEFENSIVE   "
+disc_locator.c:992   DEFENSIVE   drain_walk path-too-long defensive continue (dst path overflow)
+disc_locator.c:994   DEFENSIVE   "
+disc_locator.c:1046   VOLATILE   drain_disc fs_critically_full warn; covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache base fs is <10% free [FMA-09]
+disc_locator.c:1047   VOLATILE   "
+disc_locator.c:1053   VOLATILE   "
+disc_locator.c:1055   VOLATILE   "
 
 # lcsas_io.c
 lcsas_io.c:22   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection
@@ -87,7 +85,7 @@ lcsas_io.c:47   INTRACTABLE   EINTR retry in lcsas_write_exact write loop; needs
 lcsas_io.c:48   INTRACTABLE   "
 
 # main.c
-main.c:578   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)
+main.c:630   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)
 
 # poly1305.c
 poly1305.c:146   INTRACTABLE   Final-clamp non-underflow branch: fires when h >= 2^130-5 after accumulation; ~5/2^130 for random messages; requires a chosen-message attack on the MAC accumulator
