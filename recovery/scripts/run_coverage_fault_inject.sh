@@ -58,7 +58,8 @@ fi
 # keeps its folder.
 reap_shm() {
     for d in /dev/shm/lcsas_dl_*_*; do
-        [ -d "$d" ] && [ -O "$d" ] || continue
+        [ -d "$d" ] || continue
+        [ -O "$d" ] || continue
         pid=${d##*_}
         case "$pid" in
             ''|*[!0-9]*) continue ;;
