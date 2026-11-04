@@ -366,8 +366,11 @@ def test_one_drive_restore_swaps_discs_in_the_same_letter(tmp_path: Path) -> Non
         assert "|   D:\\ " in searching, f"D:\\ not searched:\n{box}"
         for posix in POSIX_PARENTS:
             assert posix not in box, f"{posix} listed on Windows:\n{box}"
-    # The pack cache was on: each disc was copied in once.
-    assert "draining disc D:\\" in out, out
+    # The pack cache was on: each data disc was copied in once, on first
+    # sight, so no disc has to go back in (#612).
+    for label in LABELS.values():
+        copied = out.count(f"copying disc {label} to the cache")
+        assert copied == 1, f"{label} copied {copied} times\n{out}"
     assert "cannot create the pack cache" not in out, out
     # After the first swap tier 1 read disc A's catalog.db (through
     # --mount-parent), so the second prompt names disc B.

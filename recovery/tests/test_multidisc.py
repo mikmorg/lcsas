@@ -324,13 +324,19 @@ def case_single_drive_meta_exclusion() -> int:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def case_single_drive_prompt_mentions_eject() -> int:
-    """When --meta-disc is set and an interactive prompt fires, the
-    rendered box mentions 'eject the META disc' to coach the
-    one-drive user."""
+def _eject_hint_case(name: str, meta_live: bool) -> int:
+    """Run one swap prompt with --meta-disc set.  The box tells the
+    one-drive user to eject the META disc only while that disc is still
+    in (its recovery/scripts/restore.sh is readable); once it is gone
+    the line would only confuse (#604)."""
     tmp = Path(tempfile.mkdtemp(prefix="lcsas_mdisc_eject_"))
     try:
         repo, pwfile, disc_a, disc_b, files = _build_fixture(tmp)
+        meta = tmp / "fake-meta"
+        if meta_live:
+            scripts = meta / "recovery" / "scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "restore.sh").write_text("#!/bin/sh\n")
         target = tmp / "out"
         target.mkdir()
 
@@ -345,7 +351,7 @@ def case_single_drive_prompt_mentions_eject() -> int:
              "--snapshot", "latest",
              "--pack-search", str(disc_a),
              "--pack-search", str(staging),
-             "--meta-disc", str(tmp / "fake-meta"),   # arbitrary, just non-empty
+             "--meta-disc", str(meta),
              "--interactive", "on",
              "--verbose"],
             stdin=subprocess.PIPE,
@@ -386,22 +392,38 @@ def case_single_drive_prompt_mentions_eject() -> int:
         t.join(timeout=5)
 
         if not prompted.is_set():
-            print("FAIL (eject-hint): never saw the swap prompt",
+            print(f"FAIL ({name}): never saw the swap prompt",
                   file=sys.stderr)
             return 1
-        if not saw_eject_hint.is_set():
-            print("FAIL (eject-hint): prompt did not mention 'eject the META disc'",
+        if meta_live and not saw_eject_hint.is_set():
+            print(f"FAIL ({name}): prompt did not mention 'eject the META disc'",
                   file=sys.stderr)
+            return 1
+        if not meta_live and saw_eject_hint.is_set():
+            print(f"FAIL ({name}): prompt said 'eject the META disc' "
+                  "with no META disc in", file=sys.stderr)
             return 1
         if rc != 0:
-            print(f"FAIL (eject-hint): exit {rc}", file=sys.stderr)
+            print(f"FAIL ({name}): exit {rc}", file=sys.stderr)
             return 1
         if not _verify(target, files):
             return 1
-        print("case_single_drive_prompt_mentions_eject: OK")
+        print(f"{name}: OK")
         return 0
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def case_single_drive_prompt_mentions_eject() -> int:
+    """With the META disc still in, the swap box says to eject it."""
+    return _eject_hint_case("case_single_drive_prompt_mentions_eject", True)
+
+
+def case_single_drive_prompt_no_eject_once_meta_gone() -> int:
+    """With the META disc already out, the swap box does not say to
+    eject it."""
+    return _eject_hint_case(
+        "case_single_drive_prompt_no_eject_once_meta_gone", False)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -754,6 +776,7 @@ CASES = (
     case_interactive_swap,
     case_single_drive_meta_exclusion,
     case_single_drive_prompt_mentions_eject,
+    case_single_drive_prompt_no_eject_once_meta_gone,
     case_catalog_freshest_pick,
     case_catalog_prompt_label,
     case_single_drive_script_relocation,
