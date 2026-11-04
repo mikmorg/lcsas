@@ -23,6 +23,7 @@ from lcsas.config.settings import LCSASConfig
 from lcsas.db.models import Pack, Volume
 from lcsas.restore.standalone_builder import build_standalone
 from lcsas.staging.builder import MirrorUnavailableError
+from lcsas.staging.repo_marker import RepoMarker, write_repo_marker
 from lcsas.utils.fs import copy_file, copy_tree, ensure_dir
 from lcsas.utils.pack_layout import METADATA_SUBDIRS
 
@@ -234,6 +235,7 @@ def render_volume_info_txt(
     volume: Volume,
     packs: Sequence[Pack] = (),
     burn_session_position: tuple[int, int] | None = None,
+    repo_names: Mapping[str, str] | None = None,
 ) -> str:
     """The text of a data disc's VOLUME_INFO.txt (#491, UX 010).
 
@@ -245,6 +247,12 @@ def render_volume_info_txt(
     ``burn_session_position`` is ``(N, M)``: this is volume N of the M
     volumes staged together in its burn session.  ``None`` (no burn
     session, as in ``prepare``) leaves the line out.
+
+    ``repo_names`` maps a repo_id to its name (the name in the folder's
+    ``LCSAS_REPO.txt``).  A repository whose name differs from its id is
+    listed by name, then ``ID <id>`` and its pack count on lines of
+    their own, so a UUID folder name can be matched to the set's name
+    and every line stays inside 72 columns.
     """
     from lcsas import __version__
 
@@ -268,10 +276,23 @@ def render_volume_info_txt(
                 count_bytes = per_repo.setdefault(p.repo_id, [0, 0])
                 count_bytes[0] += 1
                 count_bytes[1] += p.size_bytes
-        repo_rows = [
-            f"{repo} ({_packs_text(count)}, {_human_bytes(size)})"
-            for repo, (count, size) in sorted(per_repo.items())
-        ] or ["(not recorded)"]
+        names = repo_names or {}
+        repo_rows: list[str] = []
+        for repo, (count, size) in sorted(per_repo.items()):
+            amount = f"{_packs_text(count)}, {_human_bytes(size)}"
+            name = (names.get(repo) or "").strip()
+            # The name (wrapped: it may be 128 characters), then the ID
+            # (a UUID is 36) and the amount on lines of their own, so
+            # every line stays inside 72 columns.
+            name_lines = textwrap.wrap(
+                name, width=72 - len(pad), subsequent_indent="  ",
+                break_on_hyphens=False,
+            ) if name != repo else []
+            if name_lines:
+                repo_rows += [*name_lines, f"  ID {repo}", f"  {amount}"]
+            else:
+                repo_rows.append(f"{repo} ({amount})")
+        repo_rows = repo_rows or ["(not recorded)"]
         repo_text = f"\n{pad}".join(repo_rows)
         total = sum(p.size_bytes for p in packs)
         pack_text = f"{_packs_text(len(packs))}, {_human_bytes(total)} in all"
@@ -365,6 +386,7 @@ class HolographicInjector:
         self,
         mirror_paths: dict[str, Path],
         required_repos: set[str] | None = None,
+        markers: Mapping[str, RepoMarker] | None = None,
     ) -> None:
         """Copy repository metadata from each mirror into the staging tree.
 
@@ -377,6 +399,14 @@ class HolographicInjector:
                 :class:`MirrorUnavailableError` instead of being silently
                 skipped; any other missing metadata piece is logged as a
                 warning.  Repositories not listed keep the lenient skip.
+            markers: Each repository's backup set marker, by repo_id
+                (``repo_marker.repo_markers``).  It is written as
+                ``metadata/<repo_id>/LCSAS_REPO.txt``.  A repository with
+                no marker here gets no file: restore works without it.
+
+        A repository with nothing to copy (an unreachable mirror with no
+        packs on this volume) gets no ``metadata/<repo_id>/`` folder at
+        all, so no folder on the disc is empty.
         """
         required = required_repos or set()
         for repo_id, mirror_root in mirror_paths.items():
@@ -394,29 +424,34 @@ class HolographicInjector:
                     ),
                 )
             repo_meta_dir = self._metadata_dir / repo_id
+            dirs = [d for d in _METADATA_DIRS if (mirror_root / d).is_dir()]
+            files = [f for f in _METADATA_FILES if (mirror_root / f).is_file()]
+            if repo_id in required:
+                for name in _METADATA_DIRS:
+                    if name not in dirs:
+                        _logger.warning(
+                            "Repository '%s': metadata dir %s missing from "
+                            "mirror — not injected onto this volume.",
+                            repo_id, mirror_root / name,
+                        )
+                for name in _METADATA_FILES:
+                    if name not in files:
+                        _logger.warning(
+                            "Repository '%s': metadata file %s missing from "
+                            "mirror — not injected onto this volume.",
+                            repo_id, mirror_root / name,
+                        )
+            if not dirs and not files:
+                continue  # nothing to copy: no empty folder on the disc
             ensure_dir(repo_meta_dir)
+            for name in dirs:
+                copy_tree(mirror_root / name, repo_meta_dir / name)
+            for name in files:
+                copy_file(mirror_root / name, repo_meta_dir / name)
 
-            # Copy metadata directories
-            for subdir_name in _METADATA_DIRS:
-                src = mirror_root / subdir_name
-                if src.is_dir():
-                    copy_tree(src, repo_meta_dir / subdir_name)
-                elif repo_id in required:
-                    _logger.warning(
-                        "Repository '%s': metadata dir %s missing from mirror — "
-                        "not injected onto this volume.", repo_id, src,
-                    )
-
-            # Copy metadata files
-            for fname in _METADATA_FILES:
-                src = mirror_root / fname
-                if src.is_file():
-                    copy_file(src, repo_meta_dir / fname)
-                elif repo_id in required:
-                    _logger.warning(
-                        "Repository '%s': metadata file %s missing from mirror — "
-                        "not injected onto this volume.", repo_id, src,
-                    )
+            marker = (markers or {}).get(repo_id)
+            if marker is not None:
+                write_repo_marker(repo_meta_dir, marker)
 
     def inject_catalog(self, db_path: Path) -> None:
         """Copy the master catalog to the staging root as the disc catalog.
@@ -441,6 +476,7 @@ class HolographicInjector:
         volume: Volume,
         packs: Sequence[Pack] = (),
         burn_session_position: tuple[int, int] | None = None,
+        repo_names: Mapping[str, str] | None = None,
     ) -> None:
         """Write volume_info.json and VOLUME_INFO.txt to the staging root.
 
@@ -457,6 +493,9 @@ class HolographicInjector:
             burn_session_position: Optional ``(N, M)``: this is volume N
                 of the M volumes in its burn session.  Only the text
                 file shows it.
+            repo_names: Optional ``{repo_id: name}``, the names in the
+                repositories' ``LCSAS_REPO.txt``.  Only the text file
+                shows them.
         """
         # This file (like the disc catalog) is written BEFORE the burn:
         # ``status`` is always STAGING here, and the catalog's
@@ -489,7 +528,9 @@ class HolographicInjector:
             f.flush()
             os.fsync(f.fileno())
 
-        text = render_volume_info_txt(volume, packs, burn_session_position)
+        text = render_volume_info_txt(
+            volume, packs, burn_session_position, repo_names
+        )
         with open(self._root / "VOLUME_INFO.txt", "w", encoding="utf-8") as f:
             f.write(text)
             f.flush()
@@ -626,8 +667,11 @@ HOW TO RESTORE (manual)
            cp "$f" /tmp/cache/data/$prefix/$sha
        done
 
-4. Copy metadata (index, snapshots, keys, config) from any disc:
-       cp -r /tmp/vol1/metadata/REPO_NAME/* /tmp/cache/
+4. Copy metadata (index, snapshots, keys, config) from any disc.
+   Each folder in metadata/ is one repository, named by its ID.  The
+   LCSAS_REPO.txt file in the folder gives the repository's name:
+       grep -H '^name=' /tmp/vol1/metadata/*/LCSAS_REPO.txt
+       cp -r /tmp/vol1/metadata/REPO_ID/* /tmp/cache/
 
 5. Restore:
        rustic restore latest -r /tmp/cache --password-file password.txt --target /output
@@ -636,7 +680,9 @@ DISC CONTENTS
 --------------
 
   data/                     Pack files (encrypted, each named by its SHA-256)
-  metadata/                 Repository index, snapshot, and key files
+  metadata/                 Repository index, snapshot, and key files:
+                            one folder per repository, and an
+                            LCSAS_REPO.txt in each gives its name
   catalog.db                Disc catalog (SQLite), as of this disc's burn
   VOLUME_INFO.txt           This disc's label and contents, in plain text
   volume_info.json          Machine-readable volume identity and manifest

@@ -1,10 +1,11 @@
 /*
  * test_disc_locator.c -- exercise the disc-locator public API.
  *
- * Sets up a synthetic disc layout under /tmp and verifies that
- * lcsas_disc_locate_pack finds packs across the four supported
- * path layouts.  Also exercises mount-parent enumeration, cache_dir
- * drain, meta-disc exclusion, and miss-path (non-interactive).
+ * Sets up a synthetic disc layout under $TMPDIR (default /tmp) and
+ * verifies that lcsas_disc_locate_pack finds packs across the four
+ * supported path layouts.  Also exercises mount-parent enumeration,
+ * cache_dir drain, meta-disc exclusion, and miss-path
+ * (non-interactive).
  */
 #include "disc_locator.h"
 #include "catalog.h"
@@ -22,6 +23,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <utime.h>
 #include <errno.h>
 
 static int fails = 0;
@@ -181,6 +183,122 @@ prompt_mentions(const char *search_dir, const char *cat_path,
     return hit;
 }
 
+/*
+ * Check a prompt transcript: every line of each box, from its top
+ * "+---" border to its bottom one, is exactly 60 characters.  Returns
+ * the number of box lines seen, or -1 (each bad line named on stderr).
+ */
+static int
+box_lines_are_60(FILE *f, const char *what)
+{
+    char line[512];
+    int in_box = 0;
+    int n = 0;
+    int bad = 0;
+    rewind(f);
+    while (fgets(line, sizeof line, f)) {
+        size_t len = strlen(line);
+        int border;
+        if (len > 0 && line[len - 1] == '\n') line[--len] = '\0';
+        border = strncmp(line, "+---", 4) == 0;
+        if (!in_box && !border) continue;
+        n++;
+        if (len != 60) {
+            fprintf(stderr, "FAIL box width (%s): %lu columns: '%s'\n",
+                    what, (unsigned long)len, line);
+            bad = 1;
+        }
+        if (border) in_box = !in_box;
+    }
+    fseek(f, 0, SEEK_END);
+    return bad ? -1 : n;
+}
+
+/*
+ * One interactive miss for `missing`, answered with `answer` ("" means
+ * the input just ends), with the prompt written to a temp file.  The
+ * locator gets the given search paths, mount parents, meta disc and
+ * catalog (each may be NULL/0).  Returns the transcript (the caller
+ * fcloses it), or NULL.  *rc and *quit get the locate's return and
+ * the locator's reader_quit.
+ */
+static FILE *
+prompt_run(const char **search, size_t n_search,
+           const char **parents, size_t n_parents,
+           const char *meta, const char *cat_path,
+           const unsigned char *missing, const char *answer,
+           int *rc, int *quit)
+{
+    lcsas_disc_locator l;
+    lcsas_catalog *cat = NULL;
+    int pfd[2];
+    FILE *in;
+    FILE *out = tmpfile();
+    char found[2048];
+    size_t alen = strlen(answer);
+
+    *rc = 0;
+    *quit = 0;
+    if (!out) return NULL;
+    if (pipe(pfd) != 0) {
+        fclose(out);
+        return NULL;
+    }
+    if (alen > 0 && write(pfd[1], answer, alen) != (ssize_t)alen) {
+        /* A short write ends the input early: still an abort. */
+    }
+    close(pfd[1]);
+    in = fdopen(pfd[0], "r");
+    if (cat_path) cat = lcsas_catalog_open(cat_path);
+    lcsas_disc_locator_init(&l, search, n_search, cat, 1);
+    lcsas_disc_locator_set_auto_mount(&l, 0);
+    if (n_parents) lcsas_disc_locator_set_mount_parents(&l, parents, n_parents);
+    if (meta) lcsas_disc_locator_set_meta(&l, meta);
+    if (in) l.prompt_in = in;
+    l.prompt_out = out;
+    alarm(20);
+    *rc = lcsas_disc_locate_pack(&l, missing, found, sizeof found);
+    alarm(0);
+    *quit = l.reader_quit;
+    lcsas_disc_locator_free(&l);
+    if (in) fclose(in); else close(pfd[0]);
+    if (cat) lcsas_catalog_close(cat);
+    return out;
+}
+
+/* Send stderr to a temp file until capture_stderr_end(); returns it. */
+static FILE *
+capture_stderr_begin(int *saved)
+{
+    FILE *f = tmpfile();
+    fflush(stderr);
+    *saved = dup(2);
+    if (f && *saved >= 0) dup2(fileno(f), 2);
+    return f;
+}
+
+static void
+capture_stderr_end(int saved)
+{
+    fflush(stderr);
+    if (saved >= 0) {
+        dup2(saved, 2);
+        close(saved);
+    }
+}
+
+/* Write a sparse file of `bytes` bytes (reads back as zeros). */
+static int
+write_sparse(const char *path, long bytes)
+{
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int ok;
+    if (fd < 0) return -1;
+    ok = ftruncate(fd, (off_t)bytes) == 0;
+    close(fd);
+    return ok ? 0 : -1;
+}
+
 static const char *
 roomy_base(void)
 {
@@ -207,7 +325,7 @@ roomy_base(void)
 int
 main(void)
 {
-    char tmpdir[] = "/tmp/lcsas_dl_test_XXXXXX";
+    char tmpdir[300];
     char path[1024];
     char found[2048];
     const char *hex =
@@ -215,7 +333,13 @@ main(void)
     unsigned char pack_id[32];
     lcsas_disc_locator l;
     int rc;
+    const char *tmp_base = getenv("TMPDIR");
 
+    /* Under $TMPDIR, so a run that never reaches the cleanup at the
+     * end (one stopped by a fault-injected malloc or killed by a
+     * timeout) leaves its fixtures where its caller removes them. */
+    if (!tmp_base || !*tmp_base || strlen(tmp_base) > 256) tmp_base = "/tmp";
+    sprintf(tmpdir, "%s/lcsas_dl_test_XXXXXX", tmp_base);
     if (mkdtemp(tmpdir) == NULL) {
         fprintf(stderr, "FAIL: mkdtemp errno=%d\n", errno);
         return 1;
@@ -608,9 +732,9 @@ main(void)
         } else {
             memset(missing, 0xCD, 32);
             lcsas_disc_locator_init(&l, search, 1, NULL, /*interactive=*/1);
-            /* Also set meta_disc so print_prompt emits the
-             * "Single-drive restore" instructions block
-             * (disc_locator.c lines 717-720). */
+            /* Also set a meta_disc.  It is not live (no sentinel), so
+             * print_prompt leaves out the "Single-drive restore" block;
+             * the rc6 box test below covers it with a live one. */
             lcsas_disc_locator_set_meta(&l, "/tmp/dummy_meta");
             rc = lcsas_disc_locate_pack(&l, missing, found, sizeof found);
             (void)rc;
@@ -722,6 +846,12 @@ main(void)
                     fprintf(stderr,
                             "FAIL: truncated pack left in cache at %s "
                             "(%ld bytes)\n", p, (long)st.st_size);
+                    fails++;
+                }
+                snprintf(p, sizeof p, "%s/data/01/%s.part", full_cache, hex);
+                if (stat(p, &st) == 0) {
+                    fprintf(stderr,
+                            "FAIL: truncated .part left in cache at %s\n", p);
                     fails++;
                 }
             }
@@ -1622,7 +1752,10 @@ main(void)
 
     /* #488: consider_catalog falls back to opening the original when the
      * copy into the cache fails.  A directory (with an entry, so unlink
-     * can't clear it) sits where the copy should go. */
+     * can't clear it) sits where the copy should go.  Pass 0 blocks
+     * the copy itself (".new"): the original is opened in place.
+     * Pass 1 blocks only the rename of the finished copy onto
+     * ".locator-catalog.db": the ".new" copy is opened instead. */
     {
         char parent[1024];
         char disc[1024];
@@ -1631,26 +1764,116 @@ main(void)
         char blocker[1100];
         const char *parents[1];
         FILE *f;
-        snprintf(parent, sizeof parent, "%s_catfailparent", tmpdir);
-        snprintf(disc, sizeof disc, "%s/discA", parent);
-        snprintf(cat, sizeof cat, "%s/catalog.db", disc);
-        snprintf(cache_dir, sizeof cache_dir,
-                 "%s/lcsas_dl_catfail_%ld", roomy_base(), (long)getpid());
-        snprintf(blocker, sizeof blocker, "%s/.locator-catalog.db/x", cache_dir);
-        if (mkdir_recursive(disc) != 0 || mkdir_recursive(blocker) != 0) {
-            fprintf(stderr, "FAIL mkdir catfail fixture\n"); fails++;
+        int pass;
+        for (pass = 0; pass < 2; pass++) {
+            snprintf(parent, sizeof parent, "%s_catfailparent", tmpdir);
+            snprintf(disc, sizeof disc, "%s/discA", parent);
+            snprintf(cat, sizeof cat, "%s/catalog.db", disc);
+            snprintf(cache_dir, sizeof cache_dir,
+                     "%s/lcsas_dl_catfail_%ld", roomy_base(), (long)getpid());
+            snprintf(blocker, sizeof blocker, "%s/.locator-catalog.db%s/x",
+                     cache_dir, pass == 0 ? ".new" : "");
+            if (mkdir_recursive(disc) != 0 || mkdir_recursive(blocker) != 0) {
+                fprintf(stderr, "FAIL mkdir catfail fixture\n"); fails++;
+            }
+            f = fopen(cat, "wb");
+            if (f) { fputs("not a real catalog", f); fclose(f); }
+            parents[0] = parent;
+            lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+            lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+            lcsas_disc_locator_set_cache_dir(&l, cache_dir);
+            rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
+            (void)rc; /* the copy-failure fallback is the goal */
+            if (!l.owned_catalog || !l.owned_catalog_path
+                    || strcmp(l.owned_catalog_path, cat) != 0) {
+                fprintf(stderr, "FAIL #488 catfail (%d): no catalog "
+                                "opened\n", pass); fails++;
+            }
+            lcsas_disc_locator_free(&l);
+            {
+                char rm[1024];
+                snprintf(rm, sizeof rm, "rm -rf %s %s", parent, cache_dir);
+                (void)system(rm);
+            }
         }
-        f = fopen(cat, "wb");
-        if (f) { fputs("not a real catalog", f); fclose(f); }
+    }
+
+    /* rc6 review: a newer catalog.db that cannot be copied into the
+     * cache leaves the catalog in use open.  (Before, the one in use
+     * was closed and its copy deleted first, so the locator was left
+     * with none.)  discA's catalog is taken on the first rescan;
+     * discB, put in later, has a newer catalog that cannot be read:
+     * the copy fails, and so does the in-place fallback. */
+    {
+        char parent[1024], disc[1024], cat_a[1100], cat_b[1100];
+        char cache_dir[1024], p[1100], buf[64];
+        const char *parents[1];
+        unsigned char miss[32];
+        struct utimbuf ut;
+        FILE *err, *f;
+        int saved;
+        size_t n = 0;
+        memset(miss, 0xC9, 32);
+        snprintf(parent, sizeof parent, "%s_keepcat", tmpdir);
+        snprintf(disc, sizeof disc, "%s/discA", parent);
+        snprintf(cat_a, sizeof cat_a, "%s/catalog.db", disc);
+        mkdir_recursive(disc);
+        write_pack(cat_a, "catalog A");
+        ut.actime = ut.modtime = (time_t)1000000000L;
+        (void)utime(cat_a, &ut);
+        snprintf(cache_dir, sizeof cache_dir, "%s/lcsas_dl_keepcat_%ld",
+                 roomy_base(), (long)getpid());
+        mkdir_recursive(cache_dir);
         parents[0] = parent;
+
+        err = capture_stderr_begin(&saved);
         lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
         lcsas_disc_locator_set_mount_parents(&l, parents, 1);
         lcsas_disc_locator_set_cache_dir(&l, cache_dir);
-        rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
-        (void)rc; /* the copy-failure fallback is the goal */
+        (void)lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+        snprintf(disc, sizeof disc, "%s/discB", parent);
+        snprintf(cat_b, sizeof cat_b, "%s/catalog.db", disc);
+        mkdir_recursive(disc);
+        write_pack(cat_b, "catalog B");
+        ut.actime = ut.modtime = (time_t)1000000100L;
+        (void)utime(cat_b, &ut);
+        (void)chmod(cat_b, 0);
+        if (access(cat_b, R_OK) == 0) {
+            capture_stderr_end(saved);
+            fprintf(stderr, "[info] catalog.db stays readable after "
+                            "chmod 0 (root?): skipping the keep-catalog "
+                            "case\n");
+        } else {
+            (void)lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+            capture_stderr_end(saved);
+            if (!l.owned_catalog || !l.owned_catalog_path
+                    || strcmp(l.owned_catalog_path, cat_a) != 0) {
+                fprintf(stderr, "FAIL rc6 keep catalog: the catalog in "
+                                "use was dropped (now %s)\n",
+                        l.owned_catalog_path ? l.owned_catalog_path
+                                             : "none"); fails++;
+            }
+            snprintf(p, sizeof p, "%s/.locator-catalog.db", cache_dir);
+            f = fopen(p, "rb");
+            if (f) { n = fread(buf, 1, sizeof buf - 1, f); fclose(f); }
+            buf[n] = '\0';
+            if (strcmp(buf, "catalog A") != 0) {
+                fprintf(stderr, "FAIL rc6 keep catalog: the cache copy "
+                                "of the catalog in use is gone\n"); fails++;
+            }
+            snprintf(p, sizeof p, "%s/.locator-catalog.db.new", cache_dir);
+            f = fopen(p, "rb");
+            if (f) {
+                fclose(f);
+                fprintf(stderr, "FAIL rc6 keep catalog: a failed copy "
+                                "left %s\n", p); fails++;
+            }
+        }
+        if (err) fclose(err);
         lcsas_disc_locator_free(&l);
+        (void)chmod(cat_b, 0644);
         {
-            char rm[1024];
+            char rm[2200];
             snprintf(rm, sizeof rm, "rm -rf %s %s", parent, cache_dir);
             (void)system(rm);
         }
@@ -1760,6 +1983,298 @@ main(void)
         {
             char rm[1100];
             snprintf(rm, sizeof rm, "rm -rf %s", meta);
+            (void)system(rm);
+        }
+    }
+
+
+    /* rc6 (#476 drill, F9/F10): every line of the disc-swap box is
+     * exactly 60 columns.  Without a catalog it says what to do (put in
+     * the newest data disc) instead of naming a flag.  A mount parent
+     * that does not exist (or is a file) is not listed as searched.
+     * The single-drive hint shows only while the META disc is still in
+     * the drive, and typing q -- or the input ending -- sets
+     * reader_quit, which main() turns into exit 75. */
+    {
+        char meta[1024], sub[1024], blocker[1024], cat_path[1024];
+        char longlabel[61];
+        const char *search[] = { tmpdir };
+        const char *parents[2];
+        unsigned char missing[32];
+        FILE *out;
+        int prc, quit;
+        char sql[2048];
+        const char *schema =
+            "CREATE TABLE schema_version(version INTEGER);"
+            "INSERT INTO schema_version VALUES(10);"
+            "CREATE TABLE packs(pack_id INTEGER PRIMARY KEY, sha256 TEXT,"
+            " size_bytes INTEGER, repo_id TEXT);"
+            "CREATE TABLE volumes(volume_id INTEGER PRIMARY KEY, label TEXT,"
+            " uuid TEXT, media_type TEXT, status TEXT);"
+            "CREATE TABLE volume_packs(volume_id INTEGER, pack_id INTEGER);";
+
+        memset(missing, 0xAB, 32);
+        snprintf(meta, sizeof meta, "%s_boxmeta", tmpdir);
+        snprintf(sub, sizeof sub, "%s/recovery/scripts", meta);
+        mkdir_recursive(sub);
+        snprintf(sub, sizeof sub, "%s/recovery/scripts/restore.sh", meta);
+        write_pack(sub, "#!/bin/sh\n");
+        snprintf(blocker, sizeof blocker, "%s_box_parent_is_a_file", tmpdir);
+        write_pack(blocker, "x");
+        parents[0] = "/nonexistent/lcsas-phantom-parent";
+        parents[1] = blocker;
+
+        /* Live META disc, no catalog, 'q'. */
+        out = prompt_run(search, 1, parents, 2, meta, NULL, missing, "q\n",
+                         &prc, &quit);
+        if (!out) {
+            fprintf(stderr, "FAIL rc6 box: no transcript\n"); fails++;
+        } else {
+            if (box_lines_are_60(out, "no catalog") < 10) {
+                fprintf(stderr, "FAIL rc6 box: no-catalog box\n"); fails++;
+            }
+            if (count_lines_with(out, "| (no disc catalog yet: insert your "
+                                      "newest data disc)      |") != 1
+                    || count_lines_with(out, "--catalog") != 0) {
+                fprintf(stderr, "FAIL rc6 box: no-catalog line\n"); fails++;
+            }
+            if (count_lines_with(out, "Single-drive restore") != 1) {
+                fprintf(stderr, "FAIL rc6 box: hint missing while the "
+                                "META disc is in\n"); fails++;
+            }
+            if (count_lines_with(out, "phantom") != 0
+                    || count_lines_with(out, "parent_is_a_file") != 0) {
+                fprintf(stderr, "FAIL rc6 box: a mount parent that is not "
+                                "a folder is listed\n"); fails++;
+            }
+            if (prc != -1 || quit != 1) {
+                fprintf(stderr, "FAIL rc6 box: q gave rc=%d quit=%d "
+                                "(want -1, 1)\n", prc, quit); fails++;
+            }
+            fclose(out);
+        }
+
+        /* META disc ejected (sentinel gone), the input just ends. */
+        unlink(sub);
+        out = prompt_run(search, 1, NULL, 0, meta, NULL, missing, "",
+                         &prc, &quit);
+        if (!out) {
+            fprintf(stderr, "FAIL rc6 box: no transcript (2)\n"); fails++;
+        } else {
+            if (box_lines_are_60(out, "meta ejected") < 8) {
+                fprintf(stderr, "FAIL rc6 box: meta-ejected box\n"); fails++;
+            }
+            if (count_lines_with(out, "Single-drive restore") != 0) {
+                fprintf(stderr, "FAIL rc6 box: hint shown with the META "
+                                "disc out\n"); fails++;
+            }
+            if (prc != -1 || quit != 1) {
+                fprintf(stderr, "FAIL rc6 box: EOF gave rc=%d quit=%d "
+                                "(want -1, 1)\n", prc, quit); fails++;
+            }
+            fclose(out);
+        }
+
+        /* A catalog naming the disc, one label longer than the box. */
+        memset(longlabel, 'L', sizeof longlabel - 1);
+        longlabel[sizeof longlabel - 1] = '\0';
+        memcpy(longlabel + sizeof longlabel - 5, "0042", 4);
+        snprintf(cat_path, sizeof cat_path, "%s_box_catalog.db", tmpdir);
+        snprintf(sql, sizeof sql,
+                 "%sINSERT INTO packs VALUES(1, '%s', 10, 'r');"
+                 "INSERT INTO volumes VALUES(1, 'LCSAS_CD700_2026_0002', 'u1',"
+                 " 'CD700', 'VERIFIED');"
+                 "INSERT INTO volumes VALUES(2, '%s', 'u2', 'CD700', 'VERIFIED');"
+                 "INSERT INTO volume_packs VALUES(1, 1);"
+                 "INSERT INTO volume_packs VALUES(2, 1);",
+                 schema,
+                 "abababababababababababababababababababababababababababababababab",
+                 longlabel);
+        if (make_catalog(cat_path, sql) != 0) {
+            fprintf(stderr, "FAIL rc6 box: catalog fixture\n"); fails++;
+        } else {
+            out = prompt_run(search, 1, NULL, 0, NULL, cat_path, missing,
+                             "q\n", &prc, &quit);
+            if (!out) {
+                fprintf(stderr, "FAIL rc6 box: no transcript (3)\n"); fails++;
+            } else {
+                if (box_lines_are_60(out, "catalog labels") < 10) {
+                    fprintf(stderr, "FAIL rc6 box: catalog box\n"); fails++;
+                }
+                if (count_lines_with(out, "|   LCSAS_CD700_2026_0002") != 1
+                        || count_lines_with(out, "LLL0042 |") != 1) {
+                    fprintf(stderr, "FAIL rc6 box: labels not listed (the "
+                                    "long one by its end)\n"); fails++;
+                }
+                fclose(out);
+            }
+        }
+        unlink(cat_path);
+        unlink(blocker);
+        {
+            char rm[1100];
+            snprintf(rm, sizeof rm, "rm -rf %s", meta);
+            (void)system(rm);
+        }
+    }
+
+    /* rc6 copy_file: the copy goes to "<dst>.part" and is renamed only
+     * when complete.  (a) A source that cannot be read to the end (here
+     * a catalog.db that is a folder: fopen works, fread fails) leaves
+     * neither the copy nor a .part behind.  (b) A .part that cannot be
+     * created fails the copy cleanly. */
+    {
+        char parent[1024], disc[1024], p[1100], cache_dir[1024];
+        const char *parents[1];
+        unsigned char miss[32];
+        struct stat st;
+        int pass;
+        memset(miss, 0xC7, 32);
+        for (pass = 0; pass < 2; pass++) {
+            snprintf(parent, sizeof parent, "%s_partparent%d", tmpdir, pass);
+            snprintf(disc, sizeof disc, "%s/discA", parent);
+            snprintf(cache_dir, sizeof cache_dir, "%s/lcsas_dl_part%d_%ld",
+                     roomy_base(), pass, (long)getpid());
+            if (pass == 0) {
+                /* The catalog is a folder (with an entry). */
+                snprintf(p, sizeof p, "%s/catalog.db/entry", disc);
+                mkdir_recursive(p);
+            } else {
+                snprintf(p, sizeof p, "%s/catalog.db", disc);
+                mkdir_recursive(disc);
+                write_pack(p, "not a real catalog");
+                /* A folder sits where the .part would go. */
+                snprintf(p, sizeof p, "%s/.locator-catalog.db.new.part/x",
+                         cache_dir);
+                mkdir_recursive(p);
+            }
+            mkdir_recursive(cache_dir);
+            parents[0] = parent;
+            lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+            lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+            lcsas_disc_locator_set_cache_dir(&l, cache_dir);
+            rc = lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+            lcsas_disc_locator_free(&l);
+            snprintf(p, sizeof p, "%s/.locator-catalog.db", cache_dir);
+            if (stat(p, &st) == 0) {
+                fprintf(stderr, "FAIL rc6 copy_file (%d): a failed copy "
+                                "left %s\n", pass, p); fails++;
+            }
+            snprintf(p, sizeof p, "%s/.locator-catalog.db.new", cache_dir);
+            if (stat(p, &st) == 0) {
+                fprintf(stderr, "FAIL rc6 copy_file (%d): a failed copy "
+                                "left %s\n", pass, p); fails++;
+            }
+            if (pass == 0) {
+                snprintf(p, sizeof p, "%s/.locator-catalog.db.new.part",
+                         cache_dir);
+                if (stat(p, &st) == 0) {
+                    fprintf(stderr, "FAIL rc6 copy_file: a failed copy "
+                                    "left %s\n", p); fails++;
+                }
+            }
+            {
+                char rm[2200];
+                snprintf(rm, sizeof rm, "rm -rf %s %s", parent, cache_dir);
+                (void)system(rm);
+            }
+        }
+    }
+
+    /* rc6 drain on first sight (#476 drill, N+1 swaps): with the cache
+     * on, a data disc (one with a volume_info.json) that a rescan finds
+     * for the first time is copied into the cache at once, even though
+     * the pack being looked for is not on it, so the reader never has
+     * to put it back.  Progress lines name the disc by its label.  The
+     * same disc is not copied again on the next rescan, and a folder
+     * with data/ but no volume_info.json is left alone. */
+    {
+        char parent[1024], disc[1024], plain[1024], p[1200];
+        char cache_dir[1024];
+        const char *parents[1];
+        unsigned char miss[32];
+        struct stat st;
+        FILE *err;
+        int saved;
+        int k;
+        static const char *const packs[3] = {
+            "aa00000000000000000000000000000000000000000000000000000000000001",
+            "aa00000000000000000000000000000000000000000000000000000000000002",
+            "aa00000000000000000000000000000000000000000000000000000000000003"
+        };
+        memset(miss, 0xC8, 32);
+        snprintf(parent, sizeof parent, "%s_firstsight", tmpdir);
+        snprintf(disc, sizeof disc, "%s/DISC_A", parent);
+        snprintf(plain, sizeof plain, "%s/PLAIN", parent);
+        snprintf(cache_dir, sizeof cache_dir, "%s/lcsas_dl_firstsight_%ld",
+                 roomy_base(), (long)getpid());
+        make_labelled_disc(parent, "DISC_A",
+            "{\"label\": \"LCSAS_TEST_2026_0001\", \"type\": \"data\"}");
+        snprintf(p, sizeof p, "%s/data/aa", disc);
+        mkdir_recursive(p);
+        for (k = 0; k < 3; k++) {
+            /* 3 x 8 MiB: the copy passes a 16 MiB progress step midway. */
+            snprintf(p, sizeof p, "%s/data/aa/%s", disc, packs[k]);
+            if (write_sparse(p, 8L * 1024L * 1024L) != 0) {
+                fprintf(stderr, "FAIL rc6 first sight: sparse pack\n");
+                fails++;
+            }
+        }
+        snprintf(p, sizeof p, "%s/data/bb", plain);
+        mkdir_recursive(p);
+        snprintf(p, sizeof p, "%s/data/bb/bb%062d", plain, 7);
+        write_pack(p, "plain-folder-pack");
+        mkdir_recursive(cache_dir);
+        parents[0] = parent;
+
+        err = capture_stderr_begin(&saved);
+        lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+        lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+        lcsas_disc_locator_set_cache_dir(&l, cache_dir);
+        rc = lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+        (void)lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+        lcsas_disc_locator_free(&l);
+        capture_stderr_end(saved);
+
+        if (rc != -1) {
+            fprintf(stderr, "FAIL rc6 first sight: miss rc=%d\n", rc);
+            fails++;
+        }
+        for (k = 0; k < 3; k++) {
+            snprintf(p, sizeof p, "%s/data/aa/%s", cache_dir, packs[k]);
+            if (stat(p, &st) != 0 || st.st_size != 8L * 1024L * 1024L) {
+                fprintf(stderr, "FAIL rc6 first sight: %s not copied\n", p);
+                fails++;
+            }
+        }
+        snprintf(p, sizeof p, "%s/data/bb", cache_dir);
+        if (stat(p, &st) == 0) {
+            fprintf(stderr, "FAIL rc6 first sight: a folder without "
+                            "volume_info.json was copied\n"); fails++;
+        }
+        if (!err) {
+            fprintf(stderr, "FAIL rc6 first sight: no stderr capture\n");
+            fails++;
+        } else {
+            static const struct { const char *needle; int want; } c[] = {
+                { "copying disc LCSAS_TEST_2026_0001 to the cache: 24 MB.", 1 },
+                { "copying disc LCSAS_TEST_2026_0001 to the cache: 16 of 24 MB", 1 },
+                { "copied 24 of 24 MB from disc LCSAS_TEST_2026_0001 to the "
+                  "cache.", 1 }
+            };
+            size_t j;
+            for (j = 0; j < sizeof c / sizeof c[0]; j++) {
+                if (count_lines_with(err, c[j].needle) != c[j].want) {
+                    fprintf(stderr, "FAIL rc6 first sight: want %d line(s) "
+                                    "with '%s'\n", c[j].want, c[j].needle);
+                    fails++;
+                }
+            }
+            fclose(err);
+        }
+        {
+            char rm[2200];
+            snprintf(rm, sizeof rm, "rm -rf %s %s", parent, cache_dir);
             (void)system(rm);
         }
     }

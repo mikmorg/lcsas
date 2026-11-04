@@ -1051,7 +1051,7 @@ class PurePythonRestorer:
         lines = [
             "",
             bar,
-            f"| Pack {pack_id[:16]}... is required for the next file.       |",
+            f"| Pack {pack_id[:16]}... is required for the next file.  |",
         ]
 
         cat_result = self._lookup_volume_labels(pack_id)

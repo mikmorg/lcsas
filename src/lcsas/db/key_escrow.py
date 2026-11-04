@@ -34,6 +34,16 @@ def _table_exists(conn: sqlite3.Connection) -> bool:
     return row is not None
 
 
+def can_record_splits(conn: sqlite3.Connection) -> bool:
+    """True when the catalog has a ``key_escrow`` table (schema v9+).
+
+    On such a catalog, no record for a repository means no split was
+    recorded for it: the burn's drift guard says the cards were never
+    made.  A catalog without the table (before v9) cannot tell.
+    """
+    return _table_exists(conn)
+
+
 def _row_to_escrow(row: sqlite3.Row) -> KeyEscrow:
     return KeyEscrow(
         repo_id=row["repo_id"],

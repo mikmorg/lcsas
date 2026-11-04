@@ -3093,6 +3093,34 @@ class TestSwapPromptCatalogStates:
         r._print_swap_prompt("a" * 32)
         assert "lists no disc for it" in capsys.readouterr().err
 
+    @pytest.mark.parametrize(
+        "lookup",
+        [
+            None,
+            ([], "hit-no-vols"),
+            ([], "miss"),
+            (["LCSAS_CD700_2026_0002", "L" * 56 + "0042"], "hit"),
+        ],
+    )
+    def test_every_box_line_is_60_columns(
+        self, tmp_path: Path, capsys, lookup
+    ):
+        # rc6 (#476 drill, F10): the "Pack ... is required" line was 65
+        # columns in a 60-column box, the same text as tier 1's.  Every
+        # line from the top border to the bottom one must be 60 wide, a
+        # long label or path included (cut from the left, keeping its end).
+        r = _bare_restorer(tmp_path, pack_search_paths=[tmp_path / ("m" * 80)])
+        r._lookup_volume_labels = lambda pid: lookup
+        r._print_swap_prompt("ab" * 32)
+        err = capsys.readouterr().err
+        box = err[err.index("+---"): err.rindex("+") + 1].split("\n")
+        assert len(box) >= 8, err
+        for line in box:
+            assert len(line) == 60, f"{len(line)} columns: {line!r}"
+        assert "| Pack abababababababab... is required for the next file.  |" in box
+        if lookup is not None and lookup[0]:
+            assert any(line.endswith("LLL0042 |") for line in box), box
+
 
 class TestInteractiveFindPackPath:
     def test_eof_on_stdin_gives_up(
