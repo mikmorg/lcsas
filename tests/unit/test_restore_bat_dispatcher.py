@@ -471,7 +471,8 @@ def test_restore_bat_reuses_or_replaces_the_tools_folder():
     assert code[reuse + 3] == "goto :relaunch"
     fresh = code.index(":tools_fresh")
     assert fresh > reuse
-    keep = [ln for ln in code[fresh:] if ln.startswith('fc /b "!SRC_ROOT!\\bin\\%ARCH%\\lcsas-restore.exe"')]
+    same_exe = 'fc /b "!SRC_ROOT!\\bin\\%ARCH%\\lcsas-restore.exe"'
+    keep = [ln for ln in code[fresh:] if ln.startswith(same_exe)]
     assert len(keep) == 1, code[fresh:]
     # Never a recursive delete of the folder itself before the restore.
     for ln in code:

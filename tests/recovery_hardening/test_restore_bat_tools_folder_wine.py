@@ -48,7 +48,6 @@ import json
 import os
 import re
 import shutil
-import stat
 import subprocess
 import sys
 import threading
@@ -145,7 +144,7 @@ def _sha(data: bytes) -> str:
 
 
 def _make_writable(root: Path) -> None:
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, _dirnames, filenames in os.walk(root):
         os.chmod(dirpath, 0o755)
         for name in filenames:
             with contextlib.suppress(OSError):
@@ -154,7 +153,7 @@ def _make_writable(root: Path) -> None:
 
 def _make_read_only(root: Path) -> None:
     """A disc: nothing in it can be written, so the write probe fails."""
-    for dirpath, dirnames, filenames in os.walk(root, topdown=False):
+    for dirpath, _dirnames, filenames in os.walk(root, topdown=False):
         for name in filenames:
             os.chmod(os.path.join(dirpath, name), 0o444)
         os.chmod(dirpath, 0o555)
