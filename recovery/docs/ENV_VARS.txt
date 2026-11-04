@@ -116,6 +116,32 @@ LCSAS_PACK_CACHE_DIR
             and risks disc handling errors.  Anyone short of disk space
             who cannot afford the cache can explicitly set
             LCSAS_PACK_CACHE_DIR='' to turn it off.
+  Windows:  restore.bat honours it too (since rc6, #610).  Unset, it
+            uses a pack-cache folder inside the recovery folder it runs
+            from: the copy it makes in %TEMP% (deleted when the script
+            ends), or the folder itself when it does not relocate.  It
+            makes the folder and checks it is there before tier 1
+            starts, and removes it after a successful restore (a folder
+            you named yourself is kept).  cmd cannot hold an empty
+            variable, so the '' form does not exist there: name another
+            folder instead.  Without a working cache folder restore.bat
+            does not pass --mount-parent either, because tier 1 would
+            then open a catalog.db on a disc in place, and that disc
+            could not come out of the drive.
+
+LCSAS_INTERACTIVE
+  Default:  unset → auto  (opt-in)
+  Since:    rc6 (#617)
+  What:     restore.bat passes it to tier 1 as --interactive on, off
+            or auto; any other value is ignored.  auto (tier 1's own
+            default) asks at the disc-swap prompt only when its input
+            is a console window.  on asks even when the answers come
+            through a pipe, as in the windows-e2e single-drive leg and
+            the wine single-drive test.  off never asks: a pack that is
+            on no inserted disc fails at once.  restore.sh does not
+            read it.
+  Why:      Opt-in.  auto is right for a person at a console; the knob
+            lets a test harness play that person at the disc prompt.
 
 LCSAS_DRAIN_CHUNK_PACKS
   Default:  0  (opt-in / default OFF)
@@ -381,6 +407,7 @@ LCSAS_TARGET                unset     opt-in      unusual host arch
 LCSAS_META_DISC             unset     opt-in      unusual mount layout
 LCSAS_MOUNT_DIRS            unset     opt-in      non-standard disc mounts
 LCSAS_PACK_CACHE_DIR        auto      opt-out     set ''  to disable cache
+LCSAS_INTERACTIVE           unset     opt-in      set on for piped test rigs
 LCSAS_DRAIN_CHUNK_PACKS     0         opt-in      set 100-500 for slow optical
 LCSAS_MAX_JSON_MIB          256       opt-in      lower on tiny 32-bit hosts
 LCSAS_MAX_TREE_DEPTH        1000      opt-in      raise + 'ulimit -s unlimited'

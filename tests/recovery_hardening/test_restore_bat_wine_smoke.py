@@ -414,3 +414,81 @@ def test_awkward_password_reaches_tier1_verbatim(
     )
     restored = {p.name for p in non_marker_files(meta / "restored")}
     assert "proof.txt" in restored, out
+
+
+@pytest.mark.parametrize(
+    ("answer", "folder"),
+    [("E:\\out\\", "out"), ('"E:\\quoted out\\"', "quoted out")],
+    ids=["trailing-backslash", "quoted"],
+)
+def test_target_ending_in_backslash_restores(
+    tmp_path: Path, answer: str, folder: str,
+) -> None:
+    """#615: restore.bat passes the folder as --target "<folder>", so
+    "E:\\out\\" ended in \\", which the program reads as a quote: the
+    folder name swallowed every later argument.  The script drops typed
+    quotes and trailing backslashes.  A whole drive is refused:
+    test_whole_drive_target_is_asked_again."""
+    import sys
+    if not RESTORE_EXE.is_file():
+        pytest.skip(f"{RESTORE_EXE} not present")
+    sys.path.insert(0, str(REPO_ROOT / "recovery" / "tests"))
+    import test_e2e  # sibling fixture builder
+
+    repo = tmp_path / "repo-src"
+    test_e2e.build_repo(repo, "test", {"proof.txt": b"target folder\n"})
+    prefix = tmp_path / "wineprefix"
+    env = _init_prefix(prefix)
+    meta = tmp_path / "meta"
+    _make_meta_tree(meta, repo_src=repo)
+    _map_drive(prefix, "e", meta)
+
+    res = _run_bat(
+        env, "e",
+        stdin_data=answer + "\n",
+        extra_env={"LCSAS_PW": "test"},
+    )
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, f"rc={res.returncode}\n--- output ---\n{out}"
+    assert f"Files restored to: E:\\{folder}" in out, out
+    proof = meta / folder / "proof.txt"
+    assert proof.is_file() and proof.read_bytes() == b"target folder\n", out
+
+
+def test_whole_drive_target_is_asked_again(tmp_path: Path) -> None:
+    """#615: a whole drive such as E:\\ is refused and the question asked
+    again.  Tier 1 makes the folder with mkdir and accepts only "already
+    exists"; Windows answers "access denied" for the top of a drive, so
+    the restore would stop the same way on every run.  Here stdin is at
+    its end by the second question, so the empty answer takes the
+    default folder."""
+    env, meta = _fixture_meta(tmp_path)
+    res = _run_bat(
+        env, "e",
+        stdin_data="E:\\\n",
+        extra_env={"LCSAS_PW": "test"},
+    )
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, f"rc={res.returncode}\n--- output ---\n{out}"
+    assert "E:\\ is a whole drive, not a folder." in out, out
+    assert "for example E:\\restored" in out, out
+    assert out.count("Restore to which folder?") == 2, out
+    assert "\\Documents\\restored" in out, out
+    # Nothing was written to the top of E:.
+    assert not (meta / ".lcsas-restore-marker").exists(), out
+
+
+def test_target_left_in_the_environment_is_ignored(tmp_path: Path) -> None:
+    """#615: `set /p` keeps the old value on an empty answer, so a TARGET
+    already in the caller's environment silently replaced the default
+    folder.  restore.bat now clears it before asking."""
+    env, meta = _fixture_meta(tmp_path)
+    res = _run_bat(
+        env, "e",
+        stdin_data="\n",
+        extra_env={"LCSAS_PW": "test", "TARGET": "E:\\from-env"},
+    )
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, f"rc={res.returncode}\n--- output ---\n{out}"
+    assert not (meta / "from-env").exists(), out
+    assert "\\Documents\\restored" in out, out

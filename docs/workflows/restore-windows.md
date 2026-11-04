@@ -259,16 +259,21 @@ data discs through the same drive.
    drive. Best is a disc of the newest volume (the latest year in its
    label, then the highest number): its disc catalog is the fullest, so
    fewer swaps are needed. Any data disc still works.
-7. Two cooperating mechanisms keep the swapped drive in scope:
-   - `restore.bat` skips the meta disc drive letter when building
-     `--pack-search` so the data disc that lands on `D:\` is treated
-     as a fresh data disc rather than the (now ejected) meta disc
-     (`recovery/scripts/restore.bat:167`-`172`).
-   - The bat passes `--meta-disc %LCSAS_RELOCATED%` through to the
-     binary so the locator inside `lcsas-restore.exe` excludes that
-     path from its own search list and refuses to keep cwd inside it
-     (`recovery/scripts/restore.bat:180`-`183`,
-     `recovery/src/lcsas-restore/main.c:28`-`32`).
+7. Two cooperating mechanisms keep the swapped drive in scope (#604):
+   - `restore.bat` passes the meta disc's letter (`LCSAS_RELOCATED`,
+     e.g. `D:\`) to the binary as `--pack-search` and, once its pack
+     cache folder exists, as `--mount-parent`, so the data disc that
+     lands on `D:\` is searched (and its `catalog.db` read) after the
+     swap. Up to rc5 it skipped that letter for the whole run, so a
+     one-drive restore could never find a data disc.
+   - The bat also passes `--meta-disc %LCSAS_RELOCATED%`, the very same
+     string, so the locator inside `lcsas-restore.exe` skips that path
+     only while the meta disc is still in it (it checks for
+     `recovery/scripts/restore.sh`, #143) and refuses to keep cwd
+     inside it.
+   - With `LCSAS_PACK_CACHE_DIR` set to the relocated copy's
+     `recovery\pack-cache`, each data disc is copied in the first time a
+     pack is found on it, so each disc goes in about once (#610).
 8. When `lcsas-restore.exe` is missing a pack it prompts the heir to
    swap discs; the heir ejects the current disc, inserts the next,
    and presses Enter. Restore continues until the target folder is
@@ -299,8 +304,12 @@ from the copy, restored tree byte-exact), and *Eject leg — relocated restore
 survives a meta-disc eject* (started from the disc-root `restore.bat`; the
 meta ISO is dismounted once the relocated copy is up, the restore still
 finishes byte-exact, the exit code is 0 and nothing tries to read the
-ejected disc). The wine suite
-(`tests/recovery_hardening/test_restore_bat_wine_smoke.py`) and the
+ejected disc). *Single-drive leg — every data disc swapped into one drive
+letter* mounts only the meta ISO and, at each disc prompt, moves the named
+data ISO into the meta disc's own letter (#617). Under wine,
+`tests/recovery_hardening/test_restore_bat_single_drive_wine.py` runs the
+relocated copy through the same swap by re-pointing `d:`. The wine smoke
+suite (`tests/recovery_hardening/test_restore_bat_wine_smoke.py`) and the
 happy-path and wrong-password steps of `windows-e2e.yml` still set
 `LCSAS_NO_RELOCATE=1`; `recovery/tests/test_e2e_windows.sh` invokes the
 `.exe` directly; and the multi-disc / disc-swap design has its own pytest at

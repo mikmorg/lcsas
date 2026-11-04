@@ -214,13 +214,17 @@ restore.sh (POSIX):
 
 restore.bat (Windows CMD):
 
-  Scan drive letters D through Z for ones with a data\ subdir:
+  Scan drive letters D through Z.  Pass the META disc's own letter,
+  and every letter that holds a data disc at launch (a data\ folder,
+  or a volume_info.json on a disc that is not a META disc), as
+  --pack-search.  Once the pack cache folder exists, pass the same
+  letters as --mount-parent too (shipped in rc6, #604):
 
-      for /f "tokens=*" %%D in ('wmic logicaldisk get name /value ^| findstr "Name="') do (
-          for /f "tokens=2 delims==" %%L in ("%%D") do (
-              if exist "%%L\data" set "PACK_SEARCH=!PACK_SEARCH! --pack-search %%L\data"
-              if exist "%%L\repo\data" set "PACK_SEARCH=!PACK_SEARCH! --pack-search %%L\repo\data"
-          )
+      for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
+          if exist "%%L:\data\" set "DISC_LETTERS=!DISC_LETTERS! %%L:\"
+      )
+      for %%D in (%DISC_LETTERS%) do (
+          set "ARGS=!ARGS! --pack-search %%D --mount-parent %%D"
       )
 
 CATALOG INTEGRATION
@@ -529,9 +533,12 @@ LCSAS releases the drive in three coordinated steps:
   3. lcsas-restore takes a new --meta-disc CLI flag (also the env
      var LCSAS_META_DISC).  When set, the disc_locator:
        - excludes that path from its --pack-search candidate list
-         (otherwise a path under /mnt/... would re-fopen the disc on
-         every retry);
-       - returns no paths under it;
+         WHILE the META disc is still in it (otherwise a path under
+         /mnt/... would re-fopen the disc on every retry).  It checks
+         for recovery/scripts/restore.sh, which only a META disc
+         carries; once a data disc is in that drive, the same path is
+         searched again (#143);
+       - returns no paths under it while the META disc is in;
        - chdir("/")s before blocking on the prompt, so any
          cwd inside /mnt is dropped.
 
@@ -618,11 +625,20 @@ KNOWN LIMITATIONS
 
   - macOS bare-disc boot path is not in scope; the host-OS path on
     macOS still works (restore.sh relocates to /tmp).
-  - On Windows, %~d0 is sampled at .bat launch.  After the heir
-    ejects, the same drive letter may rebind to the data disc; we
-    record the meta disc path BEFORE the eject prompt, so the
-    locator excludes the original letter even if it later names a
-    different disc.
+  - On Windows, restore.bat records the META disc's drive letter
+    (%~d0, as LCSAS_RELOCATED) before the relocated copy runs.  On a
+    machine with one optical drive, every data disc then goes into
+    that same letter.  So restore.bat passes the letter three times:
+    --meta-disc, --pack-search and (once the pack cache folder
+    exists) --mount-parent, as the very same string, because the
+    locator compares paths byte for byte.  The locator skips the
+    letter only while the META disc is still in it (step 3 above,
+    #143), and searches it again once a data disc is in.  Up to rc5
+    restore.bat left the letter out for the whole run, so a
+    one-drive restore on Windows could never find a data disc
+    (#604).  A drive that is EMPTY when restore.bat starts is not
+    seen at all (`if exist X:\` is false), so put the META disc in
+    the drive you will use for the data discs.
   - Set LCSAS_NO_RELOCATE=1 to suppress relocation (for dev/test
     workflows running the script from a writable checkout).
 
