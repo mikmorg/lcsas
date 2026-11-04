@@ -138,7 +138,7 @@ def test_tools_folder_stays_after_a_failure_and_is_reused(
     # every set the copy had, so a half-copied set, or one from an older
     # META disc, was never refreshed.)
     (tools / "metadata" / "alpha" / "keys" / "updated-by-run-1").write_text("")
-    (tools / "metadata" / ".from").mkdir()
+    (tools / "metadata" / ".from").mkdir(exist_ok=True)
     (tools / "metadata" / ".from" / "alpha").write_text("LCSAS_TEST_TINY_2026_0002\n")
     for sub in ("keys", "index"):
         (meta / "metadata" / "bravo" / sub).mkdir(parents=True)

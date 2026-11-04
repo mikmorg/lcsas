@@ -483,8 +483,10 @@ def test_sets_only_on_the_meta_disc_or_only_on_a_data_disc_are_offered(tmp_path:
     # Best copy first: the data disc's sets, then the META-only ones.
     assert _menu(res.stderr) == ["1) added later", f"2) {DOCS}"], res.stderr
     assert f"repo={disc}/metadata/{LATE_ID} " in _runs(tmp_path)[0]
-    res = _run(recovery, tmp_path / "out",
+    # Another set: another folder (the first one's marker names that set).
+    res = _run(recovery, tmp_path / "out2",
                _env(tmp_path, LCSAS_PASSWORD=GOOD_PW), stdin="2\n")
+    assert res.returncode == 0, res.stderr
     assert f"repo={tmp_path}/meta/metadata/{DOCS_ID} " in _runs(tmp_path)[-1]
 
 
