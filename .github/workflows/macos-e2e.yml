@@ -27,9 +27,14 @@ name: macos-e2e
 #                     ENTER, then the right disc with no input (#455 rescan).
 #
 # This workflow caught #533: with two or more data discs mounted, repo
-# discovery offered the one tenant once per disc ("Multiple repositories on
-# this archive: 1) win 2) win ...") and exited 1 without a terminal.  The
-# happy path runs both ways: the heir's plain invocation and LCSAS_REPO=win.
+# discovery offered the one backup set once per disc ("Multiple
+# repositories on this archive: 1) win 2) win ...") and exited 1 without a
+# terminal.  The happy path runs both ways: the heir's plain invocation and
+# LCSAS_REPO set to the set's name.
+#
+# The set is registered with `lcsas repo add`, as an owner does, so its
+# folder on the discs is named by a UUID id, not by its name "Family
+# photos" (#617); the happy path checks restore.sh prints the name (#606).
 #
 # No `schedule:` here, on purpose (#462): GitHub disables a scheduled file after
 # 60 quiet days, PR trigger and all.  The repo's rule is that a weekly run lives
@@ -148,9 +153,10 @@ jobs:
           name: macos-fixture
           path: fixture
 
-      - name: restore.sh with every disc attached (happy path, LCSAS_REPO=win)
+      # The name is fixture_lib.WINDOWS_SET_NAME.
+      - name: restore.sh with every disc attached (happy path, LCSAS_REPO by name)
         timeout-minutes: 10
-        run: python3 tests/e2e/macos_restore_smoke.py happy "$PWD/fixture" --repo win
+        run: python3 tests/e2e/macos_restore_smoke.py happy "$PWD/fixture" --repo "Family photos"
 
       - name: restore.sh with every disc attached (happy path, no LCSAS_REPO)
         # The heir's plain invocation.  Until #533 it died at a bogus
@@ -160,7 +166,7 @@ jobs:
 
       - name: Wrong password fails cleanly (exit 77, no partial tree)
         timeout-minutes: 10
-        run: python3 tests/e2e/macos_restore_smoke.py wrong-password "$PWD/fixture" --repo win
+        run: python3 tests/e2e/macos_restore_smoke.py wrong-password "$PWD/fixture" --repo "Family photos"
 
       - name: Swap prompt (meta + one data disc attached, the rest hdiutil-attached on request)
         timeout-minutes: 10

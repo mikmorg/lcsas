@@ -53,7 +53,11 @@ import time
 from pathlib import Path
 
 META_LABEL = "LCSAS_META"
-TENANT = "win"  # build_windows_fixture's tenant / repo name
+# The fixture's one backup set is registered with `lcsas repo add`, so its
+# folder on the discs is named by a UUID id, not its name (#617).  The
+# fixture job writes both to sets.json; restore.sh must print the name.
+SETS_FILE = "sets.json"
+SET_NAMED_MARK = "[restore.sh] backup set: "
 MARKER_NAME = ".lcsas-restore-marker"
 
 # Fixture sizing.  TEST_TINY discs are 2 MiB and the burn pipeline reserves
@@ -151,6 +155,8 @@ def cmd_fixture(args: argparse.Namespace) -> None:
             shutil.copy2(iso, upload / iso.name)
         shutil.copy2(fx.manifest_path, upload / "manifest.json")
         shutil.copy2(fx.password_file, upload / "repo.pw")
+        shutil.copy2(fx.sets_path, upload / SETS_FILE)
+        log(f"backup set: {fx.restore_set.name!r}, id {fx.restore_set.repo_id}")
         (upload / "packmap.json").write_text(
             json.dumps(pack_map(fx.data_isos), indent=2, sort_keys=True)
         )
@@ -183,6 +189,14 @@ class Fixture:
             (self.dir / "manifest.json").read_text()
         )
         self.password = (self.dir / "repo.pw").read_text().strip()
+        sets = json.loads((self.dir / SETS_FILE).read_text(encoding="utf-8"))
+        self.set_id: str = sets["restore"]["id"]
+        self.set_name: str = sets["restore"]["name"]
+        if self.set_id == self.set_name:
+            raise SystemExit(
+                f"{self.dir / SETS_FILE}: the set's id is its name; "
+                "the fixture must register it with repo add (#617)"
+            )
         # {volume label: [pack ids on that disc]}, written by `fixture`.  Lets the
         # swap case tell which disc a prompt's pack lives on even when the
         # catalog on the attached disc predates the disc that holds it.
@@ -409,6 +423,18 @@ def check_tier1_ran(output: str) -> None:
             raise CheckError(f"restore.sh mentions {bad!r}: the cascade did not stay on tier 1")
 
 
+def check_set_named(fx: Fixture, output: str) -> None:
+    """#606: restore.sh names the set by the name in its marker, not by
+    the UUID id its folder is named after."""
+    if f"{SET_NAMED_MARK}{fx.set_name}\n" not in output:
+        raise CheckError(
+            f"restore.sh did not name the backup set: no {SET_NAMED_MARK!r}"
+            f"{fx.set_name!r} line (its id is {fx.set_id})"
+        )
+    if f"{SET_NAMED_MARK}{fx.set_id}" in output:
+        raise CheckError(f"restore.sh named the backup set by its id {fx.set_id}")
+
+
 def check_relocated(output: str) -> None:
     if RELOCATED_MARK not in output:
         raise CheckError(
@@ -425,11 +451,11 @@ def check_relocated(output: str) -> None:
 def case_happy(
     fx: Fixture, mounts: Mounts, work: Path, timeout: int, repo: str | None
 ) -> None:
-    # Every data disc carries metadata/<tenant>/ (the holographic layout).
+    # Every data disc carries metadata/<id>/ (the holographic layout).
     # Until #533 repo discovery de-duplicated candidates by PATH, so with N
-    # data discs mounted a single-tenant archive was offered N identical
-    # "win" repositories and, with stdin closed, restore.sh exited 1 at the
-    # picker.  The workflow runs this case with and without `--repo win`.
+    # data discs mounted a single-set archive was offered N identical
+    # sets and, with stdin closed, restore.sh exited 1 at the picker.  The
+    # workflow runs this case with and without `--repo <the set's name>`.
     for iso in fx.all:
         mounts.attach(iso)
     target = work / "restored"
@@ -443,6 +469,7 @@ def case_happy(
         raise CheckError(f"restore.sh failed (rc={rc})")
     check_relocated(out)
     check_tier1_ran(out)
+    check_set_named(fx, out)
     verify_restored(fx, target)
 
 
@@ -758,7 +785,7 @@ def main(argv: list[str]) -> int:
             p.add_argument("--work", help="scratch directory (default: a fresh temp dir)")
             p.add_argument("--timeout", type=int, default=300, help="seconds for restore.sh")
             p.add_argument(
-                "--repo", help=f"set LCSAS_REPO (this fixture's tenant is {TENANT!r})"
+                "--repo", help="set LCSAS_REPO (the fixture's sets.json has the set's name and id)"
             )
             p.set_defaults(func=cmd_case)
         else:
