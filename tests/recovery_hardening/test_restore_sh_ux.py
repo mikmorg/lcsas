@@ -523,6 +523,9 @@ def test_lcsas_interactive_is_passed_to_tier1(tmp_path: Path) -> None:
         "LCSAS_RELOCATED": "/fake/meta",
         "LCSAS_MOUNT_DIRS": "",
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+        # on also turns on restore.sh's own questions; the first, the
+        # newest data disc, has its own tests (test_restore_sh_journey).
+        "LCSAS_NEWEST_DISC_PROMPT": "0",
     }
     for value, want in (("on", "on"), ("off", "off"), ("auto", "auto"),
                         ("sometimes", None), (None, None)):

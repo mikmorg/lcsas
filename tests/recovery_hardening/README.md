@@ -98,10 +98,11 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_sh_catalog_invalidation.py` | Hardening test: mtime-based locator-catalog cache invalidation in restore.sh (Issue #108). |
 | `test_restore_sh_catalog_pick.py` | restore.sh: which catalog.db it picks, and from where (#517 gaps). |
 | `test_restore_sh_ecc_dispatch.py` | Hardening tests: restore.sh --check-disc ECC dispatch [FMT-01]. |
+| `test_restore_sh_journey.py` | Hardening (#605 #606 #607 #608 #609 #617): restore.sh's journey. |
 | `test_restore_sh_nonexec_bins.py` | Hardening (#496): tier binaries that are present but can't be run. |
 | `test_restore_sh_password_hygiene.py` | test_restore_sh_password_hygiene.py -- restore.sh password-file cleanup. |
 | `test_restore_sh_relocate.py` | Hardening tests: restore.sh relocation path (read-only SCRIPT_DIR). |
-| `test_restore_sh_relocate_cleanup.py` | Hardening (#508): relocation copies one target and cleans up after itself. |
+| `test_restore_sh_relocate_cleanup.py` | Hardening (#508, #609, #612): relocation copies one target into the |
 | `test_restore_sh_relocate_no_scratch.py` | Hardening (#517): with nowhere to relocate to, restore.sh warns and goes on. |
 | `test_restore_sh_repo_flag.py` | Hardening test: --repo NAME flag on restore.sh (Issue #91). |
 | `test_restore_sh_stock_restic_tier.py` | test_restore_sh_stock_restic_tier.py -- restore.sh tier-2b dispatch. |
@@ -109,6 +110,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_sh_target_key_flags.py` | Hardening tests: --target / --key flags on restore.sh [KEY-02]. |
 | `test_restore_sh_tier1_missing_multidisc.py` | Hardening test (GATE-06): restore.sh drives the full tier1-missing |
 | `test_restore_sh_tmpfs_target_warns.py` | Hardening tests: RAM-backed (tmpfs) restore-target warning [BOOT-05]. |
+| `test_restore_sh_tools_folder.py` | Hardening (#609, #610, #615, #616): restore.sh's tools folder. |
 | `test_restore_sh_ux.py` | Hardening tests: restore.sh UX improvements (recommendations #3, #4, #8). |
 | `test_restore_sh_version_flag.py` | Hardening test: --version flag on restore.sh (Issue #96). |
 | `test_restore_shell_facade.py` | The blind agent's terminal must keep the restore's last lines. |

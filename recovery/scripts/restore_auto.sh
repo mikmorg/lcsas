@@ -24,6 +24,14 @@ RECOVERY="$1"
 TARGET="$2"
 fail=0
 
+# restore.sh's own questions are for a person at a terminal: the newest
+# data disc first, and "restore another backup set?" after each one.
+# This loop restores every set itself and may run on a terminal, so it
+# turns both off (#605, #609).
+LCSAS_NEWEST_DISC_PROMPT=0
+LCSAS_ANOTHER_SET=0
+export LCSAS_NEWEST_DISC_PROMPT LCSAS_ANOTHER_SET
+
 # Discover repositories: each subdir of $RECOVERY/repos/ with a keys/ entry.
 if [ -d "$RECOVERY/repos" ]; then
     repos_root="$RECOVERY/repos"

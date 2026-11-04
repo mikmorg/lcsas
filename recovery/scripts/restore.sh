@@ -26,6 +26,11 @@
 # Inputs:
 #   $LCSAS_PASSWORD  -- if set, used as password (otherwise prompts on stdin)
 #   $LCSAS_PWFILE    -- if set, path to a password file (overrides above)
+#   $LCSAS_SHARES_DIR -- if set, a folder of share card files: the password
+#                       is rebuilt from them (after the two above)
+# With none of these, the script asks: for the share cards when the set's
+# marker (metadata/<id>/LCSAS_REPO.txt) says its password is split, else
+# for the password, again after a wrong one.
 #
 # Documented exit codes:
 #   0    success
@@ -34,7 +39,8 @@
 #   64   no recovery binary available at any tier (issue #225)
 #   65   the reader stopped at a question this script asked
 #   75   the reader typed q at tier 1's disc prompt (#615)
-#   77   a repository key rejected the password
+#   77   a repository key rejected the password, or the reader stopped at
+#        the password or share card prompt
 #   130  stopped with Ctrl-C (143: killed with TERM)
 #
 # Tools folder (#609): run off a disc, the script copies itself, this
@@ -552,7 +558,9 @@ QUICK START:
   1. Insert the disc labelled LCSAS_META into your drive.
   2. Mount it (typically: sudo mount /dev/sr0 /mnt).
   3. Run: sh /mnt/restore.sh ~/restored/ latest
-  4. Answer the prompts (repository, password).
+  4. Answer the prompts: put in your newest data disc (or type S to
+     skip), choose the backup set, then type its password (or the
+     words of its share cards).
   5. When asked to swap discs, do so and press Enter.
   To stop, type q at a disc prompt (or press Ctrl-C).  The tools stay
   in ~/lcsas-restore-tools; run 'sh ~/lcsas-restore-tools/resume.sh'
@@ -563,8 +571,9 @@ QUICK START:
   TARGET_DIR is where to write restored files (default: /tmp/restored).
 
 FLAGS AND ENVIRONMENT VARIABLES:
-  --repo NAME             Repository name (same as LCSAS_REPO=NAME).
-                          Skips the repository selection prompt.
+  --repo NAME             Backup set to restore, by its name or its id
+                          (same as LCSAS_REPO=NAME).  Skips the
+                          repository selection prompt.
   --target DIR            Where to write restored files.  Equivalent to
                           the positional TARGET_DIR; give one or the
                           other, not both.
@@ -577,9 +586,18 @@ FLAGS AND ENVIRONMENT VARIABLES:
   LCSAS_PWFILE            Path to a file whose contents are the password.
                           Read instead of prompting; preserves any
                           trailing newline in the file.
-  LCSAS_REPO              Repository name to restore.  Skips the
-                          repository prompt on archives with more
+  LCSAS_SHARES_DIR        Folder of share card files, one card per file.
+                          The password is rebuilt from them with the
+                          bundled lcsas-keyshare instead of prompting.
+  LCSAS_REPO              Backup set to restore, by name or id.  Skips
+                          the repository prompt on archives with more
                           than one repository.
+  LCSAS_NEWEST_DISC_PROMPT
+                          0 → skip the "put in your NEWEST data disc"
+                          step at the start: use the discs mounted now,
+                          else the copies on the META disc.
+  LCSAS_ANOTHER_SET       0 → do not ask "Restore another backup set?"
+                          after a restore that succeeds.
   LCSAS_TARGET            Override the auto-detected rust-triple (e.g.
                           force x86_64-unknown-linux-musl on a host
                           where uname -m misreports).
@@ -606,7 +624,10 @@ FLAGS AND ENVIRONMENT VARIABLES:
                           Trades disk space for fewer disc swaps.
   LCSAS_INTERACTIVE       on / off / auto, passed to tier 1 as
                           --interactive.  auto (default) asks at the
-                          disc prompt only on a terminal.
+                          disc prompt only on a terminal.  The script's
+                          own extra questions (newest data disc, a
+                          wrong password, another backup set) follow
+                          it too: on asks them even on a pipe.
   LCSAS_TIER_FALLBACK     0 (default) → tier 1 crash aborts the run.
                           1 → fall through to tier 2 / tier 3 on
                           non-zero exit.  Use when you suspect a bug
@@ -946,6 +967,11 @@ ARCH="$TARGET"
 
 # Cleanup hook for the temporary password file we may write below.
 PWFILE_TMP=""
+# The folder that holds the typed share cards (#607), one file each.
+SHARE_DIR=""
+# The terminal settings while the password is read with echo off; the
+# exit handler puts them back if Ctrl-C lands at that prompt.
+_stty_saved=""
 # Tier-3 stderr capture files (issue #240); set if tier 3 fires.
 TIER3_ERR=""
 TIER3_RC_FILE=""
@@ -955,9 +981,14 @@ _restore_exit_log="/tmp/lcsas-restore-exit.$(date +%Y%m%d-%H%M%S-$$)"
 # shellcheck disable=SC2317  # runs from the EXIT/INT/TERM trap below
 _restore_exit_handler() {
     rc=$?
+    if [ -n "${_stty_saved:-}" ]; then
+        stty "$_stty_saved" 2>/dev/null || true
+        printf '\n' >&2
+    fi
     [ -n "${TIER3_ERR:-}" ] && [ -f "${TIER3_ERR:-}" ] && rm -f "$TIER3_ERR"
     [ -n "${TIER3_RC_FILE:-}" ] && [ -f "${TIER3_RC_FILE:-}" ] && rm -f "$TIER3_RC_FILE"
     [ -n "${PWFILE_TMP:-}" ] && [ -f "${PWFILE_TMP:-}" ] && rm -f "$PWFILE_TMP"
+    [ -n "${SHARE_DIR:-}" ] && rm -rf "$SHARE_DIR"
     [ -n "${RUN_TMP:-}" ] && rm -rf "$RUN_TMP"
     # #609: the tools folder goes after a restore that succeeded (#508:
     # otherwise every run left ~130 MB behind), and stays after any other
@@ -1030,43 +1061,14 @@ fi
 STATE_DIR="${TOOLS:-$RUN_TMP}"
 unset _tools_want
 
-# ── Repo discovery ────────────────────────────────────────────────
+# ── Mount directories, the meta disc and the newest data disc ─────
 #
-# A restic-format repository is a directory containing keys/ and
-# index/ subdirs.  The historical layout placed it directly at
-# ${RECOVERY}/repo (used by restore_legacy.sh).  Modern LCSAS
-# archives instead carry each repository's metadata under
-# metadata/<repo>/ on every disc — the layout where the meta disc
-# and every data disc both ship the repository metadata for every
-# backed-up repository.  Probe both layouts, plus any mounted disc.
-#
-# When multiple candidate repositories are found (typical: a
-# multi-repository archive), the LCSAS_REPO environment variable
-# selects one by repository name.  If exactly one candidate exists
-# we use it; otherwise we list and exit with a helpful hint.
-
-REPO=""
-REPO_CANDIDATES=""
-add_repo_candidate() {
-    # $1: path to inspect.  If it looks like a restic repo (keys/ +
-    # index/), append it to REPO_CANDIDATES (newline-separated).
-    [ -d "$1/keys" ] && [ -d "$1/index" ] || return 0
-    REPO_CANDIDATES="$REPO_CANDIDATES
-$1"
-}
-
-# Direct layouts (legacy).
-add_repo_candidate "$RECOVERY/repo"
-add_repo_candidate "$RECOVERY"
-# Any currently-mounted archive disc (the same directories the
-# pack-search scan below uses).  We add the repos themselves here
-# so an heir can run `sh restore.sh` immediately after mounting a
-# single data disc — no manual symlink dance required.
-#
-# The set of directories scanned is overridable via LCSAS_MOUNT_DIRS
-# (colon-separated list), useful for tests and for unusual setups
-# (e.g. systemd-mounted /run/media/$USER/).  Default mimics the
-# /Volumes /media /mnt convention used elsewhere in the script.
+# The directories scanned for mounted discs, by repository discovery,
+# the catalog pick and the pack search below.  Overridable via
+# LCSAS_MOUNT_DIRS (colon-separated list), useful for tests and for
+# unusual setups (e.g. systemd-mounted /run/media/$USER/).  Default
+# mimics the /Volumes /media /mnt convention used elsewhere in the
+# script.
 LCSAS_MOUNT_DIRS_DEFAULT="/Volumes:/media/$(id -un 2>/dev/null):/media:/mnt:/run/media/$(id -un 2>/dev/null):/run/media"
 LCSAS_MOUNT_DIRS_EFFECTIVE="${LCSAS_MOUNT_DIRS-$LCSAS_MOUNT_DIRS_DEFAULT}"
 # Export so the tier-1 binary inherits the SAME list when it
@@ -1115,24 +1117,396 @@ is_meta_mount() {
     return 1
 }
 
-OLD_IFS="$IFS"; IFS=":"
-for parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
-    IFS="$OLD_IFS"
-    [ -n "$parent" ] && [ -d "$parent" ] || continue
-    # The mount point itself may directly contain metadata/* (when
-    # /mnt is the disc root), so probe both /mnt itself and any
-    # children of /mnt.  The meta disc's own copy is added below.
-    for mnt in "$parent" "$parent"/*; do
-        [ -d "$mnt" ] || continue
-        is_meta_mount "$mnt" && continue
-        for cand in "$mnt/metadata"/*; do
-            [ -d "$cand" ] || continue
-            add_repo_candidate "$cand"
-        done
+EXIT_USER_ABORT=65
+# A single newline and a tab, the field separators of the lists below.
+# restore.sh may run against discs auto-mounted at paths containing
+# spaces (e.g. /media/user/DISC LABEL 1), so the flag lists
+# (--pack-search / --catalog / --meta-disc / --mount-point) are stored
+# one token per line and expanded with `IFS=$NL; set -- $LIST` at each
+# call site — never as space-joined strings that word-split a spaced
+# path (issue #364).
+NL='
+'
+TAB="$(printf '\t')"
+
+# is_interactive: 0 when this run may ask its own extra questions (the
+# newest data disc, a wrong password, another backup set).  It follows
+# LCSAS_INTERACTIVE like tier 1 does: on asks even on a pipe (test rigs),
+# off never asks, and auto (the default) asks only on a terminal, so a
+# piped or scripted run never waits for an answer nobody gives.
+is_interactive() {
+    case "${LCSAS_INTERACTIVE:-auto}" in
+        on)  return 0 ;;
+        off) return 1 ;;
+    esac
+    [ -t 0 ]
+}
+
+# Text read off a disc (a set's name, a disc's label) is untrusted: it is
+# only ever printed with printf '%s' or compared, never run, and control
+# characters are dropped so it cannot drive the terminal.
+clean_text() {
+    tr -d '\000-\037\177'
+}
+
+# marker_field SET_DIR KEY: the value of KEY in SET_DIR/LCSAS_REPO.txt,
+# the backup set marker (C1: key=value lines, a trailing CR stripped,
+# # lines skipped), or nothing.  A marker whose id= is not the folder's
+# name was copied into the wrong folder and is ignored.
+marker_field() {
+    [ -f "$1/LCSAS_REPO.txt" ] || return 0
+    MF_ID="${1##*/}" MF_KEY="$2" awk '
+        { sub(/\r$/, "") }
+        /^#/ { next }
+        { i = index($0, "=") }
+        i > 0 { f[substr($0, 1, i - 1)] = substr($0, i + 1) }
+        END {
+            if (f["id"] == ENVIRON["MF_ID"] && (ENVIRON["MF_KEY"] in f))
+                print f[ENVIRON["MF_KEY"]]
+        }' "$1/LCSAS_REPO.txt" 2>/dev/null | clean_text
+    return 0
+}
+
+# set_field SET_DIR KEY: marker_field for the set at SET_DIR, falling
+# back to the tools folder's and the META disc's copies of the same set:
+# a disc made before the marker existed has none, while a newer META
+# disc's copy may.
+set_field() {
+    for _sf_dir in "$1" ${TOOLS:+"$TOOLS/metadata/${1##*/}"} \
+                   "$META_ROOT/metadata/${1##*/}"; do
+        _sf="$(marker_field "$_sf_dir" "$2")"
+        if [ -n "$_sf" ]; then
+            printf '%s' "$_sf"
+            return 0
+        fi
     done
-    IFS=":"
-done
-IFS="$OLD_IFS"
+    return 0
+}
+
+# set_label SET_DIR: the name a person knows the set by (#606): the
+# marker's name=, else the folder's name, which is the set's id.
+set_label() {
+    _sl="$(set_field "$1" name)"
+    case "$_sl" in
+        *[!' ']*) printf '%s' "$_sl" ;;
+        *)        printf '%s' "${1##*/}" ;;
+    esac
+}
+
+# set_split SET_DIR: "K N" when the marker says the set's password is
+# split into N share cards, any K of which rebuild it; else nothing.
+set_split() {
+    set_field "$1" split | awk -F'-of-' '
+        NF == 2 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ &&
+        $1 + 0 >= 1 && $1 + 0 <= $2 + 0 && $2 + 0 <= 16 { print $1 + 0, $2 + 0 }'
+}
+
+# set_split_text SET_DIR: the menu's note for a split password.
+set_split_text() {
+    _st="$(set_split "$1")"
+    [ -n "$_st" ] || return 0
+    printf ' (password split: any %s of %s share cards)' "${_st% *}" "${_st#* }"
+}
+
+# file_mtime FILE: its mtime in seconds, 0 when it is missing.
+file_mtime() {
+    _fm="$(stat -c '%Y' "$1" 2>/dev/null || stat -f '%m' "$1" 2>/dev/null || true)"
+    case "$_fm" in ''|*[!0-9]*) _fm=0 ;; esac
+    printf '%s\n' "$_fm"
+}
+
+# is_meta_root DIR: 0 when DIR is the root of a META disc (or a copy).
+is_meta_root() {
+    [ -e "$1/recovery/scripts/restore.sh" ] && return 0
+    [ -f "$1/volume_info.json" ] || return 1
+    grep -q '"type"[[:space:]]*:[[:space:]]*"meta"' "$1/volume_info.json" 2>/dev/null
+}
+
+# disc_label DIR: the full label of the data disc mounted at DIR, from
+# the "  Label:  <LABEL>" line of its VOLUME_INFO.txt (or the "label" of
+# its volume_info.json); nothing for a META disc or a folder without
+# one.  Never the name the computer shows for the disc: Joliet cuts that
+# to 16 characters, the same for every disc of a year (C2).
+disc_label() {
+    _dl=""
+    is_meta_root "$1" && return 0
+    if [ -f "$1/VOLUME_INFO.txt" ]; then
+        _dl="$(sed -n 's/^  Label:[[:space:]]*//p' "$1/VOLUME_INFO.txt" 2>/dev/null \
+               | sed -n 1p | clean_text)"
+    fi
+    if [ -z "$_dl" ] && [ -f "$1/volume_info.json" ]; then
+        _dl="$(sed -n 's/^.*"label"[[:space:]]*:[[:space:]]*"\([^"]*\)".*$/\1/p' \
+                   "$1/volume_info.json" 2>/dev/null | sed -n 1p | clean_text)"
+    fi
+    printf '%s' "${_dl%"${_dl##*[! ]}"}"
+}
+
+# label_key LABEL: 18 digits that sort like the label's age (C2): the
+# second-to-last "_" token is the year, the last the disc's number, so
+# LCSAS_CD700_2026_0002 is newer than LCSAS_CD700_2025_0019.  A label of
+# another shape counts as the oldest.
+label_key() {
+    printf '%s\n' "$1" | awk -F_ '{
+        y = 0; s = 0
+        if (NF >= 3 && $NF ~ /^[0-9]+$/ && $(NF - 1) ~ /^[0-9]+$/ &&
+            length($NF) <= 9 && length($(NF - 1)) <= 9) {
+            y = $(NF - 1) + 0; s = $NF + 0
+        }
+        printf "%09d%09d\n", y, s
+    }'
+}
+
+# key_newer A B: 0 when label_key A is greater than label_key B.
+key_newer() {
+    awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 > b + 0) }'
+}
+
+# disc_copies: every folder under the mount directories (each one itself,
+# and its children) that holds a metadata/ folder, one "KEY<TAB>DIR" line
+# each, best first.  A data disc ranks by its label's year, then number,
+# then by its catalog.db's mtime (C2); a META disc found there ranks
+# below every data disc.  Ties keep the scan order.  The meta disc this
+# script came from is left out while it is in the drive.
+disc_copies() {
+    _disc_copies_scan | sort -r
+}
+_disc_copies_scan() {
+    _dc_i=0
+    _dc_ifs="$IFS"; IFS=":"
+    for _dc_parent in $LCSAS_MOUNT_DIRS_EFFECTIVE; do
+        IFS="$_dc_ifs"
+        if [ -z "$_dc_parent" ] || [ ! -d "$_dc_parent" ]; then IFS=":"; continue; fi
+        for _dc_mnt in "$_dc_parent" "$_dc_parent"/*; do
+            [ -d "$_dc_mnt/metadata" ] || continue
+            is_meta_mount "$_dc_mnt" && continue
+            _dc_i=$((_dc_i + 1))
+            if is_meta_root "$_dc_mnt"; then
+                _dc_key="1$(label_key '')000000000000"
+            else
+                _dc_key="2$(label_key "$(disc_label "$_dc_mnt")")"
+                _dc_key="$_dc_key$(printf '%012d' "$(file_mtime "$_dc_mnt/catalog.db")")"
+            fi
+            printf '%s%06d%s%s\n' "$_dc_key" $((999999 - _dc_i)) "$TAB" "$_dc_mnt"
+        done
+        IFS=":"
+    done
+    IFS="$_dc_ifs"
+    return 0
+}
+
+# data_discs: the data discs among disc_copies, newest first.
+data_discs() {
+    disc_copies | awk '/^2/'
+}
+
+# merge_set_metadata SET_DIR [LABEL]: make <tools>/metadata/<id>/ match
+# the set's copy at SET_DIR (C2): its index/ and snapshots/ replace the
+# older ones and its keys/ are added, so a resumed run, or the next set,
+# with that disc out of the drive sees the same snapshots.  LABEL is the
+# data disc SET_DIR is on; it is kept in <tools>/metadata/.from/<id> so
+# discovery ranks the copy like that disc, and a copy from a newer disc
+# is never replaced by one from an older disc (or from no disc).
+merge_set_metadata() {
+    _ms_id="${1##*/}"
+    _ms_dst="$TOOLS/metadata/$_ms_id"
+    _ms_tag="$TOOLS/metadata/.from/$_ms_id"
+    [ "$(cd "$1" && pwd -P)" != "$(cd "$_ms_dst" 2>/dev/null && pwd -P)" ] || return 0
+    if [ -f "$_ms_tag" ] && [ -d "$_ms_dst/index" ]; then
+        [ -n "${2:-}" ] || return 0
+        key_newer "$(label_key "$2")" "$(label_key "$(clean_text < "$_ms_tag")")" || return 0
+    fi
+    mkdir -p "$_ms_dst/keys" "$TOOLS/metadata/.from"
+    rm -rf "$_ms_dst/index" "$_ms_dst/snapshots"
+    cp -R "$1/index" "$1/snapshots" "$_ms_dst/" 2>/dev/null || true
+    cp -R "$1/keys/." "$_ms_dst/keys/" 2>/dev/null || true
+    for _ms_f in "$1"/*; do
+        if [ -f "$_ms_f" ]; then cp -p "$_ms_f" "$_ms_dst/" 2>/dev/null || true; fi
+    done
+    if [ -n "${2:-}" ]; then
+        printf '%s\n' "$2" > "$_ms_tag"
+    else
+        rm -f "$_ms_tag"
+    fi
+    return 0
+}
+
+# ── Step 0: the newest data disc (#605, C2, C7) ───────────────────
+#
+# Each disc holds every backup set's keys, index and snapshots as they
+# were when it was made, and the restore reads them once, at the start.
+# On a one-drive computer only the META disc is in at the start, and its
+# copy can be older than the newest data disc (a set added later is not
+# in it at all), so "latest" meant the META disc's latest.  So, run off
+# the META disc with no data disc in yet, ask for the newest data disc
+# first.  Only when someone can answer: on a terminal (see
+# is_interactive), never for a pipe or a script; LCSAS_NEWEST_DISC_PROMPT=0
+# skips it.  POSIX sh cannot wait with a timeout, so the reader presses
+# ENTER once the disc is in.
+newest_disc_wanted() {
+    [ "${LCSAS_NEWEST_DISC_PROMPT:-1}" != 0 ] || return 1
+    [ -n "${META_DISC:-}" ] || return 1
+    is_interactive || return 1
+    [ -z "$(data_discs)" ]
+}
+if newest_disc_wanted; then
+    cat >&2 <<'EOF'
+
+========================================================================
+  Take the META disc out and put in your NEWEST data disc: the one
+  with the latest year, and then the highest number, for example
+  LCSAS_CD700_2026_0002.  The name the computer shows for a disc may
+  be cut short; the full label is printed on the disc.
+
+  To take the META disc out, eject it: use your file manager's Eject,
+  or type  sudo eject /dev/sr0  in another terminal (on a Mac:
+  drutil eject).  If the data disc does not open by itself, mount it:
+  sudo mount /dev/sr0 /media
+
+  Press ENTER when it is in; S then ENTER to skip (use the copies on
+  the META disc); Q then ENTER to quit.
+========================================================================
+EOF
+    while :; do
+        printf 'ENTER, S or Q: ' >&2
+        _nd_ans=""
+        IFS= read -r _nd_ans || _nd_ans=q
+        case "$_nd_ans" in
+            s|S)
+                printf 'Skipped: using the copies on the META disc.\n' >&2
+                break ;;
+            q|Q)
+                printf 'Stopped at your request.\n' >&2
+                exit "$EXIT_USER_ABORT" ;;
+            '') ;;
+            *)
+                printf 'Press ENTER once the disc is in, or type S or Q.\n' >&2
+                continue ;;
+        esac
+        _nd_top="$(data_discs | sed -n 1p)"
+        _nd_dir="${_nd_top#*"$TAB"}"
+        _nd_lab=""
+        [ -z "$_nd_top" ] || _nd_lab="$(disc_label "$_nd_dir")"
+        if [ -n "$_nd_lab" ]; then
+            printf 'Found the data disc labelled %s\n' "$_nd_lab" >&2
+            printf '  (at %s).\n' "$_nd_dir" >&2
+            break
+        elif [ -n "$_nd_top" ]; then
+            printf 'The disc at %s has no label in a VOLUME_INFO.txt, so\n' "$_nd_dir" >&2
+            printf 'it is not an LCSAS data disc.  Put in a data disc.\n' >&2
+        elif meta_disc_is_live; then
+            printf 'The META disc is still in the drive (%s).\n' "$META_DISC" >&2
+            printf 'Take it out first, then put in the newest data disc.\n' >&2
+        else
+            printf 'No data disc found yet in %s.\n' "$LCSAS_MOUNT_DIRS_EFFECTIVE" >&2
+            printf 'If it does not open by itself, mount it, for example:\n' >&2
+            printf '    sudo mount /dev/sr0 /media\n' >&2
+        fi
+    done
+fi
+
+# The newest data disc mounted now refreshes the tools folder's copy of
+# every set it holds (C2): its snapshots/ and index/ replace the META
+# disc's, keys/ are added, and sets it does not hold keep the META
+# disc's copy.  Only on the single-drive journey (a META disc is known),
+# where that disc may come out of the drive before the next set or a
+# resumed run needs the copy.
+if [ -n "$TOOLS" ] && [ -n "${META_DISC:-}" ]; then
+    _nd_top="$(data_discs | sed -n 1p)"
+    _nd_dir="${_nd_top#*"$TAB"}"
+    _nd_lab=""
+    [ -z "$_nd_top" ] || _nd_lab="$(disc_label "$_nd_dir")"
+    if [ -n "$_nd_lab" ]; then
+        _nd_copy=0
+        for _nd_set in "$_nd_dir/metadata"/*; do
+            if [ ! -d "$_nd_set/keys" ] || [ ! -d "$_nd_set/index" ]; then continue; fi
+            _nd_tag="$TOOLS/metadata/.from/${_nd_set##*/}"
+            if [ ! -f "$_nd_tag" ] || key_newer "$(label_key "$_nd_lab")" \
+                    "$(label_key "$(clean_text < "$_nd_tag")")"; then
+                _nd_copy=1
+            fi
+        done
+        if [ "$_nd_copy" = 1 ]; then
+            printf '[lcsas-restore] copying the backup sets'"'"' metadata from the disc labelled\n' >&2
+            printf '                %s to %s/metadata...\n' "$_nd_lab" "$TOOLS" >&2
+            for _nd_set in "$_nd_dir/metadata"/*; do
+                if [ ! -d "$_nd_set/keys" ] || [ ! -d "$_nd_set/index" ]; then continue; fi
+                merge_set_metadata "$_nd_set" "$_nd_lab"
+            done
+        fi
+    fi
+fi
+
+# ── Repo discovery ────────────────────────────────────────────────
+#
+# A restic-format repository is a directory containing keys/ and
+# index/ subdirs.  The historical layout placed it directly at
+# ${RECOVERY}/repo (used by restore_legacy.sh).  Modern LCSAS
+# archives instead carry each repository's metadata under
+# metadata/<repo_id>/ on every disc — the layout where the meta disc
+# and every data disc both ship the repository metadata for every
+# backed-up repository.  Probe both layouts, plus any mounted disc.
+#
+# Every copy of a set gets a rank, and the best copy of each set is the
+# one used (C2, #605): the legacy layouts first, then the data discs,
+# newest label first (an older disc's copy is older), then the tools
+# folder's copy ranked like the data disc it was refreshed from, and the
+# META disc's copies last, as the fallback for a set that no data disc
+# holds.  First-wins by scan order put the META disc's copy first, which
+# can be older than the data discs, and missed a set added after it.
+#
+# When multiple candidate repositories are found (typical: a
+# multi-repository archive), LCSAS_REPO selects one by its id or its
+# name.  If exactly one candidate exists we use it; otherwise we list
+# them by name and ask.
+
+REPO=""
+REPO_CANDIDATES=""
+_cand_i=0
+add_repo_candidate() {
+    # $1: path to inspect; $2: its rank.  If it looks like a restic repo
+    # (keys/ + index/), add it to REPO_CANDIDATES as a "KEY<TAB>PATH"
+    # line; the key's last 6 digits keep the scan order on ties.
+    [ -d "$1/keys" ] && [ -d "$1/index" ] || return 0
+    _cand_i=$((_cand_i + 1))
+    REPO_CANDIDATES="$REPO_CANDIDATES$2$(printf '%06d' $((999999 - _cand_i)))$TAB$1$NL"
+}
+_key_none="$(label_key '')000000000000"
+
+# Direct layouts (legacy).
+add_repo_candidate "$RECOVERY/repo" "3$_key_none"
+add_repo_candidate "$RECOVERY" "3$_key_none"
+# Any currently-mounted archive disc (the same directories the
+# pack-search scan below uses), so an heir can run `sh restore.sh`
+# immediately after mounting a single data disc — no manual symlink
+# dance required.  The mount point itself may directly contain
+# metadata/* (when /mnt is the disc root), so disc_copies probes both
+# /mnt itself and any children of /mnt.
+_dc_list="$(disc_copies)"
+while IFS= read -r _dc_line; do
+    [ -n "$_dc_line" ] || continue
+    _dc_key="${_dc_line%%"$TAB"*}"
+    for cand in "${_dc_line#*"$TAB"}/metadata"/*; do
+        [ -d "$cand" ] || continue
+        add_repo_candidate "$cand" "${_dc_key%??????}"
+    done
+done <<EOF
+$_dc_list
+EOF
+# The tools folder's copies (relocated, this is also <META_ROOT>/metadata):
+# ranked like the data disc each was refreshed from, else as a META copy.
+_tools_md=""
+if [ -n "$TOOLS" ] && [ -d "$TOOLS/metadata" ]; then
+    _tools_md="$TOOLS/metadata"
+    for cand in "$_tools_md"/*; do
+        [ -d "$cand" ] || continue
+        if [ -f "$_tools_md/.from/${cand##*/}" ]; then
+            add_repo_candidate "$cand" \
+                "2$(label_key "$(clean_text < "$_tools_md/.from/${cand##*/}")")000000000000"
+        else
+            add_repo_candidate "$cand" "1$_key_none"
+        fi
+    done
+fi
 # The meta disc's own copies come LAST: <META_ROOT>/metadata/ (the disc
 # root, or the tools folder's copy), the legacy $RECOVERY/metadata/, and
 # the disc itself.  The meta disc's metadata/ used to be found ONLY by
@@ -1140,24 +1514,62 @@ IFS="$OLD_IFS"
 # /cdrom) with no data disc mounted found no repository at all (#616).
 for _meta_md in "$META_ROOT/metadata" "$RECOVERY/metadata" \
                 ${META_DISC:+"$META_DISC/metadata"}; do
+    [ -d "$_meta_md" ] || continue
+    if [ -n "$_tools_md" ] \
+       && [ "$(cd "$_meta_md" && pwd -P)" = "$(cd "$_tools_md" && pwd -P)" ]; then
+        continue
+    fi
     for cand in "$_meta_md"/*; do
         [ -d "$cand" ] || continue
-        add_repo_candidate "$cand"
+        add_repo_candidate "$cand" "1$_key_none"
     done
 done
 
-# De-duplicate REPO_CANDIDATES by repository name (the last path
-# component), keeping the first copy found, then pick one.  Every
-# data disc carries metadata/<repo>/ for every repository, so keying
-# on the path listed one repository once per mounted disc and turned
-# a single-repository archive into a bogus "Multiple repositories"
-# prompt (#533).  Because the meta disc's copies are listed last, a
-# mounted data disc's copy wins: the meta copy is only the fallback for
-# a set that no mounted data disc carries.  It was the other way round
-# (#605): the meta copy can be older than the data discs, and a set
-# added after the meta disc was made is on the data discs only.
-REPO_CANDIDATES="$(printf '%s\n' "$REPO_CANDIDATES" \
-                  | awk -F/ 'NF && !seen[$NF]++')"
+# Best copy first, then one copy per set: de-duplicate by the folder
+# name (the set's id), keeping the best-ranked copy.  Every data disc
+# carries metadata/<id>/ for every set, so keying on the path listed one
+# set once per mounted disc and turned a single-set archive into a bogus
+# "Multiple repositories" prompt (#533).
+REPO_CANDIDATES="$(printf '%s' "$REPO_CANDIDATES" | sort -r | awk -F"$TAB" '
+    NF >= 2 {
+        p = substr($0, index($0, FS) + 1)
+        n = split(p, a, "/")
+        if (!seen[a[n]]++) print p
+    }')"
+# The sets are listed by name (then id), so a number means the same set
+# on every run: the next set's list, or a resumed run's.
+_by_name=""
+while IFS= read -r cand; do
+    [ -n "$cand" ] || continue
+    _by_name="$_by_name$(set_label "$cand")$TAB${cand##*/}$TAB$cand$NL"
+done <<EOF
+$REPO_CANDIDATES
+EOF
+REPO_CANDIDATES="$(printf '%s' "$_by_name" | LC_ALL=C sort -f | cut -f3-)"
+
+# set_match WANT: the candidate whose id is WANT; else the one candidate
+# whose name is WANT (#606).  Prints nothing when none, or when two sets
+# share that name (then it says so: the number or the id tells them
+# apart).  Expects IFS to be a newline, as the menu block sets it.
+set_match() {
+    for _sm_c in $REPO_CANDIDATES; do
+        case "${_sm_c##*/}" in "$1") printf '%s' "$_sm_c"; return 0 ;; esac
+    done
+    _sm_hit=""
+    _sm_n=0
+    for _sm_c in $REPO_CANDIDATES; do
+        case "$(set_label "$_sm_c")" in
+            "$1") _sm_hit="$_sm_c"; _sm_n=$((_sm_n + 1)) ;;
+        esac
+    done
+    if [ "$_sm_n" -gt 1 ]; then
+        printf 'More than one backup set is called %s; choose it by its number or id.\n' \
+               "$1" >&2
+    elif [ "$_sm_n" -eq 1 ]; then
+        printf '%s' "$_sm_hit"
+    fi
+    return 0
+}
 
 # Count non-empty lines (printf "\n" | wc -l returns 1 — useless).
 # `grep -c` exits 1 when nothing matches; under `set -e` that would
@@ -1186,8 +1598,8 @@ EOF
         ;;
     *)
         # Multi-repository archive.  Honour LCSAS_REPO if it matches a
-        # candidate's basename (`alpha`, `bravo`, ...); otherwise
-        # prompt the heir to pick one.
+        # candidate's id or name; otherwise list the sets by name and
+        # ask the heir to pick one.
         #
         # REPO_CANDIDATES is newline-separated and a repository path can contain
         # spaces (e.g. a disc auto-mounted at /media/user/DISC LABEL 1), so
@@ -1200,64 +1612,70 @@ EOF
 '
         REPO_NAMES=""
         for cand in $REPO_CANDIDATES; do
-            REPO_NAMES="$REPO_NAMES $(basename "$cand")"
+            _rn="$(set_label "$cand")"
+            [ "$_rn" = "${cand##*/}" ] || _rn="$_rn (id ${cand##*/})"
+            REPO_NAMES="$REPO_NAMES${REPO_NAMES:+, }$_rn"
         done
-        REPO_NAMES="${REPO_NAMES# }"
         if [ -n "${LCSAS_REPO:-}" ]; then
-            for cand in $REPO_CANDIDATES; do
-                base="$(basename "$cand")"
-                if [ "$base" = "$LCSAS_REPO" ]; then
-                    REPO="$cand"
-                    break
-                fi
-            done
+            REPO="$(set_match "$LCSAS_REPO")"
             if [ -z "$REPO" ]; then
                 printf 'LCSAS_REPO=%s not among available repositories: %s\n' \
                        "$LCSAS_REPO" "$REPO_NAMES" >&2
                 exit 1
             fi
         else
-            printf 'Multiple repositories on this archive:\n' >&2
-            repo_idx=0
-            for cand in $REPO_CANDIDATES; do
-                repo_idx=$((repo_idx + 1))
-                printf '  %d) %s\n' "$repo_idx" "$(basename "$cand")" >&2
-            done
-            printf 'Choose a repository (number or name): ' >&2
-            IFS= read -r repo_choice
-            # Number form: positional-arg lookup avoids `eval` on input.
-            case "$repo_choice" in
-                ''|*[!0-9]*) ;;
-                *)
-                    # shellcheck disable=SC2086
-                    set -- $REPO_CANDIDATES
-                    if [ "$repo_choice" -ge 1 ] \
-                       && [ "$repo_choice" -le $# ]; then
-                        eval "REPO=\${$repo_choice}"
-                    fi
-                    ;;
-            esac
-            # Name form (fallback / legacy): match by basename.
-            if [ -z "$REPO" ]; then
+            while :; do
+                printf 'Multiple repositories on this archive:\n' >&2
+                repo_idx=0
                 for cand in $REPO_CANDIDATES; do
-                    base="$(basename "$cand")"
-                    if [ "$base" = "$repo_choice" ]; then
-                        REPO="$cand"
-                        break
-                    fi
+                    repo_idx=$((repo_idx + 1))
+                    # The name is untrusted text off a disc: printed as
+                    # data with %s, never run or re-parsed (#606).
+                    printf '  %d) %s%s\n' "$repo_idx" "$(set_label "$cand")" \
+                           "$(set_split_text "$cand")" >&2
                 done
-            fi
-            if [ -z "$REPO" ]; then
-                IFS=$_saved_ifs
+                printf 'Choose a repository (number or name): ' >&2
+                if ! IFS= read -r repo_choice; then
+                    IFS=$_saved_ifs
+                    printf '\nno repository chosen\n' >&2
+                    exit 1
+                fi
+                # Number form: positional-arg lookup avoids `eval` on input.
+                case "$repo_choice" in
+                    ''|*[!0-9]*) ;;
+                    *)
+                        # shellcheck disable=SC2086
+                        set -- $REPO_CANDIDATES
+                        if [ "$repo_choice" -ge 1 ] \
+                           && [ "$repo_choice" -le $# ]; then
+                            eval "REPO=\${$repo_choice}"
+                        fi
+                        ;;
+                esac
+                # Name form: the set's id or its name.
+                [ -n "$REPO" ] || REPO="$(set_match "$repo_choice")"
+                [ -z "$REPO" ] || break
+                case "$repo_choice" in
+                    q|Q)
+                        IFS=$_saved_ifs
+                        printf 'Stopped at your request.\n' >&2
+                        exit "$EXIT_USER_ABORT" ;;
+                esac
                 printf 'no repository named %s; choose from: %s\n' \
                        "$repo_choice" "$REPO_NAMES" >&2
-                exit 1
-            fi
+                if ! is_interactive; then
+                    IFS=$_saved_ifs
+                    exit 1
+                fi
+                printf 'Type its number, its name or its id (Q then ENTER to quit).\n' >&2
+            done
         fi
         IFS=$_saved_ifs
         ;;
 esac
 printf '[restore.sh] using repository %s\n' "$REPO" >&2
+SET_NAME="$(set_label "$REPO")"
+[ "$SET_NAME" = "${REPO##*/}" ] || printf '[restore.sh] backup set: %s\n' "$SET_NAME" >&2
 
 # ── No-recovery-binary guard (issue #225) ─────────────────────────
 #
@@ -1379,15 +1797,8 @@ then
     exit "$EXIT_NO_RECOVERY_BIN"
 fi
 
-# A single newline, used as the field separator for the tier-invocation
-# argument lists below.  restore.sh may run against discs auto-mounted at
-# paths containing spaces (e.g. /media/user/DISC LABEL 1), so the flag
-# lists (--pack-search / --catalog / --meta-disc / --mount-point) are
-# stored one token per line and expanded with `IFS=$NL; set -- $LIST` at
-# each call site — never as space-joined strings that word-split a spaced
-# path (issue #364).
-NL='
-'
+# (NL, the separator of the tier argument lists below, is set with the
+# discovery helpers above.)
 
 # Optional --catalog if a catalog.db is present somewhere reachable.
 # Used for human-readable volume hints in prompts, and by the free-
@@ -1605,7 +2016,7 @@ fi
 # SAFETY -- idempotent resume).  So we warn only when the target is
 # non-empty AND lacks our marker file.  After confirmation/creation we
 # drop a hidden zero-byte marker, so every subsequent re-run is silent.
-EXIT_USER_ABORT=65
+# (EXIT_USER_ABORT, 65, is set with the discovery helpers above.)
 MARKER="$TARGET_DIR/.lcsas-restore-marker"
 if [ -d "$TARGET_DIR" ] && [ -n "$(ls -A "$TARGET_DIR" 2>/dev/null)" ] \
    && [ ! -f "$MARKER" ] \
@@ -1637,6 +2048,9 @@ if [ -d "$TARGET_DIR" ] && [ -n "$(ls -A "$TARGET_DIR" 2>/dev/null)" ] \
 fi
 mkdir -p "$TARGET_DIR"
 : > "$MARKER" 2>/dev/null || true
+# The target as a full path: resume.sh and the next set need it from
+# any folder (tier 1 runs from / when the META disc is known).
+TARGET_ABS="$(cd "$TARGET_DIR" && pwd)"
 
 # ── resume.sh (#609) ──────────────────────────────────────────────
 #
@@ -1648,35 +2062,23 @@ mkdir -p "$TARGET_DIR"
 sh_quote() {
     printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
 }
-# merge_set_metadata SET_DIR: make <tools>/metadata/<id>/ match the
-# set's copy at SET_DIR (C2): its index/ and snapshots/ replace the
-# older ones and its keys/ are added, so a resumed run with that disc
-# out of the drive sees the same snapshots as this one.
-merge_set_metadata() {
-    _ms_dst="$TOOLS/metadata/$(basename "$1")"
-    [ "$(cd "$1" && pwd -P)" != "$(cd "$_ms_dst" 2>/dev/null && pwd -P)" ] || return 0
-    mkdir -p "$_ms_dst/keys"
-    rm -rf "$_ms_dst/index" "$_ms_dst/snapshots"
-    cp -R "$1/index" "$1/snapshots" "$_ms_dst/" 2>/dev/null || true
-    cp -R "$1/keys/." "$_ms_dst/keys/" 2>/dev/null || true
-    for _ms_f in "$1"/*; do
-        if [ -f "$_ms_f" ]; then cp -p "$_ms_f" "$_ms_dst/" 2>/dev/null || true; fi
-    done
-    return 0
-}
 if [ -n "$TOOLS" ]; then
+    # The chosen set's copy in the tools folder matches the one used
+    # (merge_set_metadata, above; a no-op when it is that copy).
     case "$(basename "$(dirname "$REPO")")" in
-        metadata) merge_set_metadata "$REPO" ;;
+        metadata) merge_set_metadata "$REPO" "$(disc_label "$(dirname "$(dirname "$REPO")")")" ;;
     esac
     _rs_env="" _rs_set="" _rs_val=""
     for _rs_var in LCSAS_RELOCATED LCSAS_META_DISC LCSAS_MOUNT_DIRS \
                    LCSAS_PACK_CACHE_DIR LCSAS_TARGET LCSAS_INTERACTIVE \
-                   LCSAS_TIER_FALLBACK; do
+                   LCSAS_TIER_FALLBACK LCSAS_ANOTHER_SET; do
         eval "_rs_set=\${$_rs_var+x}"
         [ -n "$_rs_set" ] || continue
         eval "_rs_val=\$$_rs_var"
         _rs_env="$_rs_env$_rs_var=$(sh_quote "$_rs_val"); export $_rs_var$NL"
     done
+    # LCSAS_NEWEST_DISC_PROMPT=0: the tools folder already holds the
+    # newest disc's copy of the sets, if this run saw one.
     cat > "$TOOLS/resume.sh" <<EOF
 #!/bin/sh
 # Carries on the LCSAS restore that stopped.  Written by restore.sh;
@@ -1684,31 +2086,251 @@ if [ -n "$TOOLS" ]; then
 # --key FILE are passed on.
 ${_rs_env}LCSAS_TOOLS_DIR=$(sh_quote "$TOOLS"); export LCSAS_TOOLS_DIR
 LCSAS_REPO=$(sh_quote "$(basename "$REPO")"); export LCSAS_REPO
-exec sh $(sh_quote "$SCRIPT") "\$@" $(sh_quote "$RECOVERY") $(sh_quote "$(cd "$TARGET_DIR" && pwd)") $(sh_quote "$SNAP")
+LCSAS_NEWEST_DISC_PROMPT=0; export LCSAS_NEWEST_DISC_PROMPT
+exec sh $(sh_quote "$SCRIPT") "\$@" $(sh_quote "$RECOVERY") $(sh_quote "$TARGET_ABS") $(sh_quote "$SNAP")
 EOF
     chmod 700 "$TOOLS/resume.sh"
 fi
 
-# ── Password file (now that we know which repository we decrypt) ──
+# ── The password (now that we know which backup set) ──────────────
+#
+# In this order: LCSAS_PWFILE (or --key FILE), LCSAS_PASSWORD, the share
+# card files in LCSAS_SHARES_DIR, and otherwise ask (#607, #608): for the
+# share cards when the set's marker says its password is split, else
+# for the password.  An empty answer asks again, and Q (or the end of
+# the input) stops with exit 77.  Asked on a terminal, a password that a
+# repository key rejects is caught before tier 1 starts and asked for
+# again (C7); a password given in the environment or a file is not
+# asked again.
+
+# bin_preflight_ok PATH -- see "Issue #223" at the tier dispatch below:
+# 0 iff PATH is non-empty and a `--help` dry-run does not fail with an
+# exec-format error (rc 126/127).
+bin_preflight_ok() {
+    [ -s "$1" ] || return 1
+    "$1" --help >/dev/null 2>&1
+    case $? in
+        126|127) return 1 ;;
+    esac
+    return 0
+}
+
+# The share card combiner for this computer (lcsas-keyshare).
+KEYSHARE_BIN=""
+for _ks in "$RECOVERY/bin/$TARGET/lcsas-keyshare" \
+           "$RECOVERY/bin/$TARGET/lcsas-keyshare.exe"; do
+    if [ -x "$_ks" ]; then KEYSHARE_BIN="$_ks"; break; fi
+done
+
+# quit_password: the reader typed Q, or the input ended, at the password
+# or share card prompt.
+quit_password() {
+    printf 'Stopped at your request; no password was given.\n' >&2
+    exit 77
+}
+
+# read_hidden VAR PROMPT: read one line into VAR with the terminal's echo
+# off (#363), so the password is not shown on screen or left in the
+# scrollback.  Not a terminal (stty -g fails): an ordinary read.
+read_hidden() {
+    _stty_saved="$(stty -g 2>/dev/null)" || _stty_saved=""
+    [ -z "$_stty_saved" ] || stty -echo 2>/dev/null || true
+    # The prompt after echo is off: a fast typist's first keys are hidden.
+    printf '%s' "$2" >&2
+    _rh_rc=0
+    IFS= read -r "$1" || _rh_rc=$?
+    if [ -n "$_stty_saved" ]; then
+        stty "$_stty_saved" 2>/dev/null || true
+        _stty_saved=""
+        printf '\n' >&2
+    fi
+    return "$_rh_rc"
+}
+
+# password_ok: 1 when a repository key of the set rejects the password
+# in $PWFILE.  Tier 1 lists the snapshots, which opens the keys first
+# and exits 77 on a wrong password (main.c).  Only asked on a terminal,
+# where the password can be asked for again, and only when tier 1 runs
+# here; any other answer is left for the restore itself to report.
+password_ok() {
+    is_interactive || return 0
+    [ -x "$_RESTORE_BIN_PROBE" ] && bin_preflight_ok "$_RESTORE_BIN_PROBE" || return 0
+    printf '[restore.sh] checking the password...\n' >&2
+    _po_rc=0
+    LCSAS_PACK_CACHE_DIR='' "$_RESTORE_BIN_PROBE" --repo "$REPO" \
+        --password-file "$PWFILE" --list-snapshots >/dev/null 2>&1 || _po_rc=$?
+    [ "$_po_rc" -ne 77 ]
+}
+
+# ask_password: the password prompt, until a password is accepted.
+ask_password() {
+    printf 'Type the password for %s, then ENTER (Q then ENTER to quit).\n' \
+           "$SET_NAME" >&2
+    while :; do
+        _ap_pw=""
+        read_hidden _ap_pw 'Password: ' || quit_password
+        case "$_ap_pw" in
+            '')
+                printf 'No password typed.  Type the password, or Q then ENTER to quit.\n' >&2
+                continue ;;
+            q|Q) quit_password ;;
+        esac
+        printf '%s\n' "$_ap_pw" > "$PWFILE"
+        password_ok && return 0
+        printf 'That password was not accepted for %s.\n' "$SET_NAME" >&2
+        printf 'Type it again (check the letters and the caps lock), or Q then ENTER to quit.\n' >&2
+    done
+}
+
+# drop_shares: remove the typed share cards (they are also removed on
+# any exit).
+drop_shares() {
+    [ -z "$SHARE_DIR" ] || rm -rf "$SHARE_DIR"
+    SHARE_DIR=""
+}
+
+# ask_shares K N: the share card prompts (C7).  Each card is typed on one
+# line, checked alone with lcsas-keyshare (a typo is named and that card
+# asked again), and kept in its own file in a private temporary folder,
+# never the tools folder.  Exactly K cards are combined into $PWFILE.
+# Returns 1 when the reader types P: they will type the password.
+ask_shares() {
+    _as_k="${1% *}"
+    _as_n="${1#* }"
+    _as_sid="$(set_field "$REPO" split_id | tr -cd '0-9')"
+    printf '\nThe password for %s is split into %s share cards;\n' \
+           "$SET_NAME" "$_as_n" >&2
+    printf 'you need any %s of them%s.\n' "$_as_k" "${_as_sid:+ (Split ID $_as_sid)}" >&2
+    printf 'Type the words of each card on one line; they show as you type.\n' >&2
+    printf 'P then ENTER instead: type the password itself.\n' >&2
+    while :; do
+        drop_shares
+        SHARE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lcsas-shares.XXXXXX" 2>/dev/null || true)"
+        if [ -z "$SHARE_DIR" ] || ! chmod 700 "$SHARE_DIR"; then
+            SHARE_DIR=""
+            printf 'Cannot make a private temporary folder in %s for the cards;\n' \
+                   "${TMPDIR:-/tmp}" >&2
+            printf 'rebuild the password first (see RECOVER.txt) and type it.\n' >&2
+            return 1
+        fi
+        _as_i=1
+        set --   # the card files typed so far
+        while [ "$_as_i" -le "$_as_k" ]; do
+            printf 'Share card %d of %d: type all the words on one line, then ENTER (or Q to quit).\n> ' \
+                   "$_as_i" "$_as_k" >&2
+            _as_line=""
+            IFS= read -r _as_line || quit_password
+            case "$_as_line" in
+                q|Q) quit_password ;;
+                p|P) drop_shares; return 1 ;;
+                *[!' 	']*) ;;
+                *)
+                    printf 'No words typed.\n' >&2
+                    continue ;;
+            esac
+            _as_f="$(mktemp "$SHARE_DIR/share.XXXXXX")"
+            chmod 600 "$_as_f"
+            printf '%s\n' "$_as_line" > "$_as_f"
+            # The same card twice counts once, so the cards could not
+            # be combined; say so now.
+            _as_norm="$(printf '%s\n' "$_as_line" | tr '[:upper:]' '[:lower:]' | tr -s ' 	' '  ')"
+            _as_dup=0
+            for _as_g in "$@"; do
+                if [ "$(tr '[:upper:]' '[:lower:]' < "$_as_g" | tr -s ' 	' '  ')" = "$_as_norm" ]; then
+                    _as_dup=1
+                fi
+            done
+            if [ "$_as_dup" = 1 ]; then
+                rm -f "$_as_f"
+                printf 'That is a card you already typed.  Type a different card.\n' >&2
+                continue
+            fi
+            _as_rc=0
+            "$KEYSHARE_BIN" "$_as_f" >/dev/null 2>"$SHARE_DIR/check.err" || _as_rc=$?
+            case "$_as_rc" in
+                0|1)
+                    # Valid on its own (1: it cannot rebuild the password
+                    # alone, as expected below K).
+                    set -- "$@" "$_as_f"
+                    _as_i=$((_as_i + 1)) ;;
+                *)
+                    # lcsas-keyshare names the bad word; the file it
+                    # names is this card.
+                    SC_FILE="$_as_f" SC_CARD="card $_as_i" awk '{
+                        f = ENVIRON["SC_FILE"]; i = index($0, f)
+                        if (i) $0 = substr($0, 1, i - 1) ENVIRON["SC_CARD"] substr($0, i + length(f))
+                        print "  " $0 }' "$SHARE_DIR/check.err" >&2
+                    rm -f "$_as_f"
+                    printf 'That card has a mistake (see above).  Type card %d again.\n' \
+                           "$_as_i" >&2 ;;
+            esac
+        done
+        _as_rc=0
+        "$KEYSHARE_BIN" "$@" > "$PWFILE" 2>"$SHARE_DIR/check.err" || _as_rc=$?
+        if [ "$_as_rc" -eq 0 ]; then
+            drop_shares
+            password_ok && return 0
+            printf 'The password rebuilt from these cards was not accepted for %s.\n' \
+                   "$SET_NAME" >&2
+            printf 'The cards may belong to another backup set: compare the Split ID.\n' >&2
+        else
+            sed 's/^/  /' "$SHARE_DIR/check.err" >&2
+            printf 'These cards could not be combined: they may come from different\n' >&2
+            printf 'splits (compare the Split ID on each card).\n' >&2
+        fi
+        printf 'Start again with card 1, or Q then ENTER to quit.\n' >&2
+    done
+}
+
+# shares_from_dir: rebuild the password from every card file in
+# LCSAS_SHARES_DIR, with no questions.  1 when it cannot.
+shares_from_dir() {
+    if [ ! -d "$LCSAS_SHARES_DIR" ]; then
+        printf 'LCSAS_SHARES_DIR=%s is not a folder.\n' "$LCSAS_SHARES_DIR" >&2
+        return 1
+    fi
+    if [ -z "$KEYSHARE_BIN" ]; then
+        printf 'LCSAS_SHARES_DIR is set, but there is no share combiner here\n' >&2
+        printf '(%s/bin/%s/lcsas-keyshare).\n' "$RECOVERY" "$TARGET" >&2
+        return 1
+    fi
+    set --
+    for _sd_f in "$LCSAS_SHARES_DIR"/*; do
+        if [ -f "$_sd_f" ]; then set -- "$@" "$_sd_f"; fi
+    done
+    if [ $# -eq 0 ]; then
+        printf 'LCSAS_SHARES_DIR=%s holds no card files.\n' "$LCSAS_SHARES_DIR" >&2
+        return 1
+    fi
+    printf '[restore.sh] rebuilding the password for %s from the %d card files in %s\n' \
+           "$SET_NAME" $# "$LCSAS_SHARES_DIR" >&2
+    _sd_rc=0
+    "$KEYSHARE_BIN" "$@" > "$PWFILE" || _sd_rc=$?
+    [ "$_sd_rc" -ne 0 ] || return 0
+    printf 'Could not rebuild the password from the cards in %s\n' "$LCSAS_SHARES_DIR" >&2
+    printf '(lcsas-keyshare exit %d: see above).\n' "$_sd_rc" >&2
+    return 1
+}
 
 PWFILE="${LCSAS_PWFILE:-}"
 if [ -z "$PWFILE" ]; then
     PWFILE_TMP="$(mktemp /tmp/lcsas-pw.XXXXXX)"
     chmod 600 "$PWFILE_TMP"
     PWFILE="$PWFILE_TMP"
+    _pw_split="$(set_split "$REPO")"
     if [ -n "${LCSAS_PASSWORD:-}" ]; then
         printf '%s\n' "$LCSAS_PASSWORD" > "$PWFILE"
+    elif [ -n "${LCSAS_SHARES_DIR:-}" ]; then
+        shares_from_dir || exit 77
+    elif [ -n "$_pw_split" ] && [ -n "$KEYSHARE_BIN" ]; then
+        ask_shares "$_pw_split" || ask_password
     else
-        printf 'Password: ' >&2
-        # Disable terminal echo so the password is not shown on screen
-        # or left in scrollback (issue #363).  Save/restore the tty state
-        # and emit the newline the (now-invisible) Enter didn't produce.
-        # Guarded for the non-tty case (stty -g fails → skip).
-        _stty_saved="$(stty -g 2>/dev/null)" || _stty_saved=""
-        [ -n "$_stty_saved" ] && stty -echo 2>/dev/null
-        IFS= read -r pw
-        [ -n "$_stty_saved" ] && { stty "$_stty_saved" 2>/dev/null; printf '\n' >&2; }
-        printf '%s\n' "$pw" > "$PWFILE"
+        if [ -n "$_pw_split" ]; then
+            printf 'The password for %s is split into share cards, but the share\n' "$SET_NAME" >&2
+            printf 'combiner (lcsas-keyshare) is missing here.  Rebuild the password\n' >&2
+            printf 'as RECOVER.txt "SHARE CARDS" says, then type it.\n' >&2
+        fi
+        ask_password
     fi
 fi
 
@@ -1910,6 +2532,72 @@ write_session_log() {
     printf '%s\n' "$_line" >> "$_logfile" 2>/dev/null || true
 }
 
+# ── Another backup set (C6) ───────────────────────────────────────
+#
+# After a restore that succeeds, a reader who chose the set from the
+# list may want another set from the same discs (documents, then
+# photos).  Asking here, before the exit handler deletes the tools
+# folder, keeps its copies and its pack cache for that set: the script
+# starts again from the set list with no META disc.  Only when there is
+# another set, and someone can answer (is_interactive);
+# LCSAS_ANOTHER_SET=0 skips it.  No (the default) ends the run, and the
+# tools folder goes.
+offer_another_set() {
+    [ "${LCSAS_ANOTHER_SET:-1}" != 0 ] || return 0
+    [ "$REPO_COUNT" -gt 1 ] || return 0
+    is_interactive || return 0
+    printf '\nRestore another backup set from these discs? [y/N] ' >&2
+    _os_ans=""
+    IFS= read -r _os_ans || return 0
+    case "$_os_ans" in
+        y|Y|yes|Yes|YES) ;;
+        *) return 0 ;;
+    esac
+    while :; do
+        printf 'Folder to restore it into (ENTER: %s): ' "$TARGET_ABS" >&2
+        _os_dir=""
+        IFS= read -r _os_dir || return 0
+        # shellcheck disable=SC2088  # a typed "~/": the text, not a path
+        case "$_os_dir" in
+            '')   _os_dir="$TARGET_ABS" ;;
+            '~')  _os_dir="${HOME:-}" ;;
+            '~/'*) _os_dir="${HOME:-}/${_os_dir#'~/'}" ;;
+        esac
+        case "$_os_dir" in /?*) break ;; esac
+        printf 'Type the full path of the folder, starting with / or ~/.\n' >&2
+    done
+    # This run's own files go now (exec skips the exit handler); the
+    # tools folder stays for the next set.
+    [ -z "${PWFILE_TMP:-}" ] || rm -f "$PWFILE_TMP"
+    drop_shares
+    [ -z "${RUN_TMP:-}" ] || rm -rf "$RUN_TMP"
+    unset LCSAS_REPO LCSAS_PASSWORD LCSAS_PWFILE LCSAS_SHARES_DIR
+    LCSAS_NEWEST_DISC_PROMPT=0
+    export LCSAS_NEWEST_DISC_PROMPT
+    if [ -n "$TOOLS" ]; then
+        LCSAS_TOOLS_DIR="$TOOLS"
+        export LCSAS_TOOLS_DIR
+    fi
+    printf '[restore.sh] starting again for the next backup set\n' >&2
+    cd / 2>/dev/null || true
+    exec sh "$SCRIPT" "$RECOVERY" "$_os_dir" latest
+}
+
+# restore_succeeded TIER: the restore is done; log it, offer another
+# set, and exit 0.
+restore_succeeded() {
+    write_session_log "$1"
+    offer_another_set
+    exit 0
+}
+
+# say_wrong_password: tier 1 exited 77.
+say_wrong_password() {
+    printf '[tier 1] wrong password: a repository key rejected it, and the\n'  >&2
+    printf '        other tiers use the same keys, so not retrying.\n'         >&2
+    printf '        Check the password (and any share cards).\n'               >&2
+}
+
 # ── Tier dispatch ─────────────────────────────────────────────────
 #
 # Each tier is tried in priority order.  The default behavior is to
@@ -1945,15 +2633,8 @@ FALLBACK="${LCSAS_TIER_FALLBACK:-0}"
 # and != 127).  Any other exit code (incl. program errors like rc=17
 # from a synthetic-failure stub) is treated as "binary loads fine";
 # the cascade then runs it for real and lets normal exit-code
-# semantics (or LCSAS_TIER_FALLBACK) handle the result.
-bin_preflight_ok() {
-    [ -s "$1" ] || return 1
-    "$1" --help >/dev/null 2>&1
-    case $? in
-        126|127) return 1 ;;
-    esac
-    return 0
-}
+# semantics (or LCSAS_TIER_FALLBACK) handle the result.  (It is defined
+# with the password helpers above, whose check uses it too.)
 
 # ── Tier 1: prebuilt lcsas-restore (C89, static, no Python) ───────
 
@@ -1985,7 +2666,7 @@ elif [ -x "$RESTORE_BIN" ]; then
                        --target "$TARGET_DIR" --snapshot "$SNAP" \
                        "$@" \
                        || tier1_rc=$?
-        if [ $tier1_rc -eq 0 ]; then write_session_log 1; exit 0; fi
+        if [ $tier1_rc -eq 0 ]; then restore_succeeded 1; fi
         # Exit 77 means a key file POSITIVELY rejected the password
         # (Poly1305 MAC mismatch) -- NOT a missing/unreadable keys dir,
         # which exits 1 and is allowed to fall through.  A rejected
@@ -1994,9 +2675,7 @@ elif [ -x "$RESTORE_BIN" ]; then
         # later tier can leave a partial tree behind before it rejects
         # the password (issue #384).  Stop with a clear message.
         if [ $tier1_rc -eq 77 ]; then
-            printf '[tier 1] wrong password: a repository key rejected it, and the\n'  >&2
-            printf '        other tiers use the same keys, so not retrying.\n'         >&2
-            printf '        Check the password (and any share cards).\n'               >&2
+            say_wrong_password
             exit 77
         fi
         # Exit 75: the reader typed q at the disc prompt (#615).  That is
@@ -2019,7 +2698,8 @@ elif [ -x "$RESTORE_BIN" ]; then
                        --target "$TARGET_DIR" --snapshot "$SNAP" \
                        "$@" \
                        || _tier1_rc=$?
-        [ "$_tier1_rc" -eq 0 ] && write_session_log 1
+        if [ "$_tier1_rc" -eq 0 ]; then restore_succeeded 1; fi
+        if [ "$_tier1_rc" -eq 77 ]; then say_wrong_password; fi
         exit "$_tier1_rc"
     fi
 fi
@@ -2048,7 +2728,7 @@ elif [ -x "$RUSTIC_BIN" ]; then
         "$RUSTIC_BIN" --repository "$REPO" --password-file "$PWFILE" \
                      restore "$SNAP" "$TARGET_DIR" \
                      || tier2_rc=$?
-        if [ $tier2_rc -eq 0 ]; then write_session_log 2; exit 0; fi
+        if [ $tier2_rc -eq 0 ]; then restore_succeeded 2; fi
         printf '[tier 2] exited %d, falling through to tier 3\n' \
                $tier2_rc >&2
     else
@@ -2058,7 +2738,7 @@ elif [ -x "$RUSTIC_BIN" ]; then
         _tier2_rc=0
         "$RUSTIC_BIN" --repository "$REPO" --password-file "$PWFILE" \
                      restore "$SNAP" "$TARGET_DIR" || _tier2_rc=$?
-        [ "$_tier2_rc" -eq 0 ] && write_session_log 2
+        if [ "$_tier2_rc" -eq 0 ]; then restore_succeeded 2; fi
         exit "$_tier2_rc"
     fi
 fi
@@ -2108,7 +2788,7 @@ if [ -n "$STDTOOL_BIN" ] && [ -x "$STDTOOL_BIN" ] \
             RESTIC_PASSWORD_FILE="$PWFILE" "$STDTOOL_BIN" -r "$REPO" \
                  restore "$SNAP" --target "$TARGET_DIR" --no-lock || tier2b_rc=$?
         fi
-        if [ $tier2b_rc -eq 0 ]; then write_session_log 2; exit 0; fi
+        if [ $tier2b_rc -eq 0 ]; then restore_succeeded 2; fi
         printf '[tier 2b] exited %d, falling through to tier 3\n' $tier2b_rc >&2
     else
         # Run (not exec) so the EXIT trap shreds the temp password file
@@ -2122,7 +2802,7 @@ if [ -n "$STDTOOL_BIN" ] && [ -x "$STDTOOL_BIN" ] \
             RESTIC_PASSWORD_FILE="$PWFILE" "$STDTOOL_BIN" -r "$REPO" \
                  restore "$SNAP" --target "$TARGET_DIR" --no-lock || _tier2b_rc=$?
         fi
-        [ "$_tier2b_rc" -eq 0 ] && write_session_log 2
+        if [ "$_tier2b_rc" -eq 0 ]; then restore_succeeded 2; fi
         exit "$_tier2b_rc"
     fi
 fi
@@ -2328,6 +3008,7 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         fi
         printf '[tier 3] diagnostic log: %s\n' "$_restore_exit_log" >&2 2>/dev/null || true
         rm -f "$TIER3_ERR" "$TIER3_RC_FILE"
+        if [ "$tier3_rc" -eq 0 ]; then offer_another_set; fi
         exit "$tier3_rc"
     fi
 fi
