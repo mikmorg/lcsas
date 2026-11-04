@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+from .conftest import _scaled_timeout
+
 pytestmark = pytest.mark.integration
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -79,7 +81,7 @@ def test_disc_locator_fixtures_live_under_tmpdir(tmp_path: Path) -> None:
     finally:
         if proc.poll() is None:
             proc.send_signal(signal.SIGKILL)
-        proc.wait(timeout=30)
+        proc.wait(timeout=_scaled_timeout(30))
     assert seen, (
         "test_disc_locator made no lcsas_dl_test_* folder under the "
         f"TMPDIR it was given ({tmpdir}) while it ran; a killed run "
