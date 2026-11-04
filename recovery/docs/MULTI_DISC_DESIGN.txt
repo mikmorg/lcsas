@@ -515,14 +515,18 @@ disc cannot be ejected while it has open file descriptors.
 
 LCSAS releases the drive in three coordinated steps:
 
-  1. restore.sh / restore.bat RELOCATE to RAM before doing anything
-     else.  They copy themselves + the bin/<arch>/ tree to a writable
-     scratch dir (under /tmp, /run, %TEMP%, etc.), set the sentinel
-     env var LCSAS_RELOCATED=<original meta mount>, and re-exec from
-     the scratch dir.  The original meta disc is now no longer
-     opened by sh/cmd.exe -- only by lcsas-restore, which holds
-     scoped open/close FDs on individual files (see
-     repo.c::lcsas_repo_read_blob).
+  1. restore.sh / restore.bat RELOCATE before doing anything else.
+     They copy themselves + the bin/<arch>/ tree to a writable
+     folder (restore.sh: under /tmp, /run, etc.; restore.bat: the
+     tools folder, %LOCALAPPDATA%\LCSAS-restore, with only the
+     programs of bin\<triple>\ and the backup sets' metadata, #612),
+     set the sentinel env var LCSAS_RELOCATED=<original meta mount>,
+     and re-exec from that folder.  The original meta disc is now no
+     longer opened by sh/cmd.exe -- only by lcsas-restore, which
+     holds scoped open/close FDs on individual files (see
+     repo.c::lcsas_repo_read_blob).  restore.bat keeps its tools
+     folder until a restore has finished, so a restore that stopped
+     carries on from it with no META disc (#609).
 
   2. lcsas-init (initramfs PID 1) exports LCSAS_META_DISC=/mnt to
      restore.sh so the script knows the exclusion path without
@@ -638,7 +642,9 @@ KNOWN LIMITATIONS
     one-drive restore on Windows could never find a data disc
     (#604).  A drive that is EMPTY when restore.bat starts is not
     seen at all (`if exist X:\` is false), so put the META disc in
-    the drive you will use for the data discs.
+    the drive you will use for the data discs.  A restore carried on
+    with "Resume LCSAS restore.bat" searches the letters the stopped
+    run saved in resume.cfg, empty or not (#609).
   - Set LCSAS_NO_RELOCATE=1 to suppress relocation (for dev/test
     workflows running the script from a writable checkout).
 

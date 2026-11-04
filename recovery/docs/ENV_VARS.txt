@@ -117,9 +117,9 @@ LCSAS_PACK_CACHE_DIR
             who cannot afford the cache can explicitly set
             LCSAS_PACK_CACHE_DIR='' to turn it off.
   Windows:  restore.bat honours it too (since rc6, #610).  Unset, it
-            uses a pack-cache folder inside the recovery folder it runs
-            from: the copy it makes in %TEMP% (deleted when the script
-            ends), or the folder itself when it does not relocate.  It
+            uses the pack-cache folder in the tools folder (see
+            LCSAS_TOOLS_DIR), which outlives a restore that stopped,
+            so carrying it on does not ask for those discs again.  It
             makes the folder and checks it is there before tier 1
             starts, and removes it after a successful restore (a folder
             you named yourself is kept).  cmd cannot hold an empty
@@ -128,6 +128,31 @@ LCSAS_PACK_CACHE_DIR
             does not pass --mount-parent either, because tier 1 would
             then open a catalog.db on a disc in place, and that disc
             could not come out of the drive.
+
+LCSAS_TOOLS_DIR
+  Default:  unset → %LOCALAPPDATA%\LCSAS-restore  (opt-in override)
+  Since:    rc6 (#609)
+  What:     The tools folder restore.bat copies itself into from a
+            disc, with this computer's programs (bin\<triple>\ only),
+            RECOVER_WINDOWS.txt, the backup sets' metadata, a copy of
+            the catalog, the pack cache, resume.cfg and "Resume LCSAS
+            restore.bat" (also put on the Desktop).  The copy runs from
+            there, so the META disc can come out of the drive.  The
+            folder stays until a restore has finished (exit 0), and is
+            then deleted with the Desktop launcher; after a stop (exit
+            75, q at a disc box) or any other failure it stays, and the
+            launcher carries the restore on with no META disc.
+            resume.cfg names the backup set, the restore folder and the
+            drive letters, never the password.  A folder made by the
+            very same restore.bat (compared with fc /b) is used as it
+            is; one from another version is replaced, keeping its pack
+            cache only when its lcsas-restore.exe is the very same.
+            A folder named here that already holds other files is
+            refused, since the tools folder is deleted at the end.
+            Not %TEMP%: Disk Cleanup and Storage Sense empty it.
+            restore.sh does not read it yet.
+  Why:      Opt-in.  The default suits every reader; the knob is for a
+            computer whose C: drive is short of space, or for a test.
 
 LCSAS_INTERACTIVE
   Default:  unset → auto  (opt-in)
@@ -391,8 +416,10 @@ INTERNAL VARIABLES (DO NOT SET)
 
 LCSAS_RELOCATED
   Internal sentinel set by restore.sh on re-exec after relocation to
-  RAM.  Its value is the meta disc's original mount path.  Not a
-  knob; do not set manually.
+  RAM, and by restore.bat when it runs its copy in the tools folder
+  (also from resume.cfg when "Resume LCSAS restore.bat" carries a
+  restore on).  Its value is the meta disc's original mount path or
+  drive letter.  Not a knob; do not set manually.
 
 ────────────────────────────────────────────────────────────────────
 QUICK REFERENCE (knobs you may set)
@@ -407,6 +434,7 @@ LCSAS_TARGET                unset     opt-in      unusual host arch
 LCSAS_META_DISC             unset     opt-in      unusual mount layout
 LCSAS_MOUNT_DIRS            unset     opt-in      non-standard disc mounts
 LCSAS_PACK_CACHE_DIR        auto      opt-out     set ''  to disable cache
+LCSAS_TOOLS_DIR             (local)   opt-in      Windows tools folder elsewhere
 LCSAS_INTERACTIVE           unset     opt-in      set on for piped test rigs
 LCSAS_DRAIN_CHUNK_PACKS     0         opt-in      set 100-500 for slow optical
 LCSAS_MAX_JSON_MIB          256       opt-in      lower on tiny 32-bit hosts
