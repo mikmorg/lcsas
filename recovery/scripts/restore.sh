@@ -2316,7 +2316,10 @@ _tg_other=0
 if [ -s "$MARKER" ] && ! grep -qxF -- "$SET_ID" "$MARKER" 2>/dev/null; then
     _tg_other=1
 fi
-if [ -d "$TARGET_DIR" ] && [ -n "$(ls -A "$TARGET_DIR" 2>/dev/null)" ] \
+# Only files other than the marker count: a folder emptied but for it
+# (rm -rf restored/* leaves the dot-file) has nothing to overwrite.
+if [ -d "$TARGET_DIR" ] \
+   && ls -A "$TARGET_DIR" 2>/dev/null | grep -qvxF .lcsas-restore-marker \
    && { [ ! -f "$MARKER" ] || [ "$_tg_other" = 1 ]; } \
    && [ "${LCSAS_FORCE_NONEMPTY_TARGET:-0}" != "1" ]; then
     {

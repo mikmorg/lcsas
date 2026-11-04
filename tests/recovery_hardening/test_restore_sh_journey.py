@@ -1150,6 +1150,13 @@ def test_a_folder_holding_another_sets_restore_is_warned_about(tmp_path: Path) -
     (out / ".lcsas-restore-marker").write_text("")
     res = _run(recovery, out, {**env, "LCSAS_REPO": PHOTOS})
     assert res.returncode == 0, res.stderr
+    # A folder emptied but for the marker (`rm -rf restored/*` leaves the
+    # dot-file, as the blind harness does between runs) has nothing to mix.
+    (out / "restored.txt").unlink()
+    (out / ".lcsas-restore-marker").write_text("5d2e7a10-3c4b-4f6e-8a9b-0c1d2e3f4a5b\n")
+    res = _run(recovery, out, {**env, "LCSAS_REPO": DOCS})
+    assert res.returncode == 0, res.stderr
+    assert "WARNING" not in res.stderr
 
 
 def test_another_set_with_no_tools_folder_leaves_no_cache_behind(tmp_path: Path) -> None:
