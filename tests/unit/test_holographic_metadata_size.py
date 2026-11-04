@@ -42,6 +42,7 @@ from lcsas.staging.metadata import (
     MIN_HOLOGRAPHIC_RESERVE_BYTES,
     HolographicInjector,
 )
+from lcsas.staging.repo_marker import make_repo_marker
 from lcsas.utils.fs import dir_size_bytes
 
 # Empirically measured: xorriso -as mkisofs -r -J -joliet-long -iso-level 3
@@ -147,7 +148,13 @@ def _build_representative_staging(
     )
 
     injector = HolographicInjector(staging_root)
-    injector.inject_metadata(mirror_paths)
+    # Each repository's LCSAS_REPO.txt marker (rc6 C1) costs one more ISO
+    # block per repository.
+    markers = {
+        name: make_repo_marker(name, config_name=name, config_split=(True, 2, 3))
+        for name in mirror_paths
+    }
+    injector.inject_metadata(mirror_paths, markers=markers)
     injector.inject_catalog(catalog_db)
     injector.write_volume_info(volume)
     injector.write_restore_instructions()

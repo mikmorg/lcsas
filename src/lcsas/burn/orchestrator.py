@@ -61,6 +61,7 @@ from lcsas.ecc.dvdisaster import DVDisasterRunner, smallest_fitting_medium_bytes
 from lcsas.iso.xorriso import MediaStatus, XorrisoRunner
 from lcsas.staging.builder import MirrorUnavailableError, StagingBuilder
 from lcsas.staging.metadata import HolographicInjector
+from lcsas.staging.repo_marker import repo_markers
 from lcsas.utils.fs import ensure_dir, safe_remove_tree
 from lcsas.utils.hashing import sha256_file
 from lcsas.utils.labels import (
@@ -478,10 +479,27 @@ class BurnOrchestrator:
         # staging tree before anything is written to the catalog.
         builder.assert_staged_complete(selected_packs)
 
+        # KEY-08: the disc text renders share K/N from the recorded split
+        # when present, so it reflects the split that was actually
+        # performed.  #587: each repository's own recorded split, by name,
+        # so a mixed archive (split + single passwords) prints both right.
+        # The backup set markers (rc6 C1) read the same catalog: each
+        # repository's name and its split, the record winning.
+        config_names = self._config_names()
+        escrow_kn = self._effective_kn(list(packs_by_repo))
+        recorded = recorded_splits(self._conn, config_names)
+        markers = repo_markers(
+            self._conn, mirror_paths,
+            config=self._config, config_names=config_names,
+        )
+
         # 2. Inject repository metadata — strict for repositories with packs
-        #    on this volume (the disc must stay self-describing for them).
+        #    on this volume (the disc must stay self-describing for them) —
+        #    and each repository's metadata/<repo_id>/LCSAS_REPO.txt.
         injector = HolographicInjector(staging_root)
-        injector.inject_metadata(mirror_paths, required_repos=set(packs_by_repo))
+        injector.inject_metadata(
+            mirror_paths, required_repos=set(packs_by_repo), markers=markers,
+        )
 
         # 3. Register volume in the catalog (atomic transaction)
         volume = create_volume(
@@ -554,17 +572,12 @@ class BurnOrchestrator:
             injector.write_volume_info(
                 vol, packs=selected_packs,
                 burn_session_position=burn_session_position,
+                repo_names={rid: m.name for rid, m in markers.items()},
             )
             injector.write_restore_instructions()
             injector.write_standalone_restorer()
             if not media_type.is_test:
                 injector.write_lcsas_source()
-            # KEY-08: render share K/N from the recorded split when present,
-            # so disc text reflects the split that was actually performed.
-            # #587: each repository's own recorded split, by name, so a
-            # mixed archive (split + single passwords) prints both right.
-            escrow_kn = self._effective_kn(list(packs_by_repo))
-            recorded = recorded_splits(self._conn, self._config_names())
             injector.write_start_here(
                 self._config, escrow_override=escrow_kn, recorded=recorded
             )

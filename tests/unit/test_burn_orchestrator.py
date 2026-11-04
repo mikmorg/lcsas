@@ -788,10 +788,10 @@ class TestStage:
         seen: list[tuple[int, int] | None] = []
         real = HolographicInjector.write_volume_info
 
-        def spy(self, volume, packs=(), burn_session_position=None):
+        def spy(self, volume, packs=(), burn_session_position=None, **kw):
             seen.append(burn_session_position)
             return real(self, volume, packs=packs,
-                        burn_session_position=burn_session_position)
+                        burn_session_position=burn_session_position, **kw)
 
         monkeypatch.setattr(HolographicInjector, "write_volume_info", spy)
 

@@ -155,7 +155,12 @@ class TestHolographicInjector:
             )
 
     def test_inject_metadata_non_required_repo_still_skipped(self, tmp_path):
-        """Repos without packs on this volume keep the lenient skip."""
+        """Repos without packs on this volume keep the lenient skip.
+
+        With nothing to copy, no metadata/<repo_id>/ folder is made at all:
+        an empty folder on a disc only confuses the restore scripts' set
+        menu (rc6: it used to be created empty).
+        """
         staging_root = tmp_path / "staging"
         staging_root.mkdir()
         bare_mirror = tmp_path / "bare_mirror"
@@ -163,7 +168,7 @@ class TestHolographicInjector:
 
         injector = HolographicInjector(staging_root)
         injector.inject_metadata({"test_repo": bare_mirror})  # must not raise
-        assert (staging_root / "metadata" / "test_repo").is_dir()
+        assert not (staging_root / "metadata" / "test_repo").exists()
 
     def test_inject_catalog(self, tmp_path):
         staging_root = tmp_path / "staging"
