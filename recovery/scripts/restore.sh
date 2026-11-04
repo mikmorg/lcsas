@@ -2331,8 +2331,17 @@ if [ -s "$MARKER" ] && ! grep -qxF -- "$SET_ID" "$MARKER" 2>/dev/null; then
 fi
 # Only files other than the marker count: a folder emptied but for it
 # (rm -rf restored/* leaves the dot-file) has nothing to overwrite.
+# Globs, not `ls -A | grep` (SC2010); -L also counts a dangling link.
+holds_more_than_marker() {
+    for _hm in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+        [ -e "$_hm" ] || [ -L "$_hm" ] || continue
+        [ "${_hm##*/}" = .lcsas-restore-marker ] && continue
+        return 0
+    done
+    return 1
+}
 if [ -d "$TARGET_DIR" ] \
-   && ls -A "$TARGET_DIR" 2>/dev/null | grep -qvxF .lcsas-restore-marker \
+   && holds_more_than_marker "$TARGET_DIR" \
    && { [ ! -f "$MARKER" ] || [ "$_tg_other" = 1 ]; } \
    && [ "${LCSAS_FORCE_NONEMPTY_TARGET:-0}" != "1" ]; then
     {
