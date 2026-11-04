@@ -287,16 +287,23 @@ def test_disc_locator_drain_guard_on_critically_full_fs(tmp_path: Path) -> None:
 
 def test_disc_locator_mid_drain_fs_full_unlinks_truncated(tmp_path: Path) -> None:
     """The RLIMIT_FSIZE drain case needs a roomy TMPDIR (>10 % free) to
-    get past the guard; a 16 MiB tmpfs guarantees that even on hosts
+    get past the guard; a fresh tmpfs guarantees that even on hosts
     whose /tmp is nearly full.  The C unit then asserts the truncated
-    cache copy is unlinked and the locate still succeeds."""
+    cache copy is unlinked and the locate still succeeds.
+
+    The whole C unit runs with this TMPDIR, so the tmpfs must hold all
+    of it, not just the RLIMIT case.  Its largest case (rc6 drain on
+    first sight) copies 24 MiB into a cache: the copy must pass the
+    16 MiB progress step to print a line midway, so it cannot be made
+    smaller than that.  64 MiB leaves room for it with the >10 % free
+    that the drain guard needs (16 MiB did not: #476 rc6 review)."""
     if not _can_sudo_mount():
         pytest.skip("passwordless sudo + mount/umount required")
     if not DISC_LOCATOR_TEST_BIN.is_file():
         pytest.skip("recovery/build/test_disc_locator not built "
                     "(run `make -C recovery`)")
 
-    with _tmpfs(Path(f"/tmp/lcsas-fma09-roomy-{os.getpid()}"), "16m") as mnt:
+    with _tmpfs(Path(f"/tmp/lcsas-fma09-roomy-{os.getpid()}"), "64m") as mnt:
         res = subprocess.run(
             [str(DISC_LOCATOR_TEST_BIN)],
             env={**os.environ, "TMPDIR": str(mnt)},

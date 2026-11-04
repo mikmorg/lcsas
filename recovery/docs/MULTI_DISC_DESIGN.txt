@@ -541,7 +541,9 @@ The interactive prompt also gains a line:
      | optical drive, eject the META disc first, then           |
      | insert the disc named above into the SAME drive.         |
 
-so the one-drive heir knows the swap procedure.
+so the one-drive heir knows the swap procedure.  Since rc6 the lines
+show only while the META disc is still in its drive: once it is out
+they would send the reader after a disc they have already removed.
 
 OPEN-FD LIFECYCLE
 ─────────────────
@@ -576,7 +578,7 @@ WORKFLOW EXAMPLE (one-drive case)
   [lcsas-restore] restoring snapshot a1b2c3d4 -> /home/alice/restored
 
   +----------------------------------------------------------+
-  | Pack 4f3e2a1b9c8d... is required for the next file.       |
+  | Pack 4f3e2a1b9c8d1234... is required for the next file.  |
   | (catalog has no record of this pack ID)                  |
   |                                                          |
   | Currently searching: ...                                 |

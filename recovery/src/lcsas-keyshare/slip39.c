@@ -722,11 +722,14 @@ int lcsas_slip39_recover(const char *const *mnemonics, size_t n,
             group_threshold = s.group_threshold;
             value_len = s.value_len;
         } else {
+            /* value_len too: a threshold-1 group copies its first
+             * share's value as value_len bytes. */
             if (s.identifier != first.identifier ||
                 s.extendable != first.extendable ||
                 s.iteration_exponent != first.iteration_exponent ||
                 s.group_threshold != first.group_threshold ||
-                s.group_count != first.group_count) {
+                s.group_count != first.group_count ||
+                s.value_len != value_len) {
                 free(s.value);
                 goto cleanup;
             }
@@ -752,6 +755,7 @@ int lcsas_slip39_recover(const char *const *mnemonics, size_t n,
 
         {
             group_t *g = &groups[gi];
+            int same_card = 0;
             if (g->nshares > 0 &&
                 g->shares[0].member_threshold != s.member_threshold) {
                 free(s.value);
@@ -759,9 +763,22 @@ int lcsas_slip39_recover(const char *const *mnemonics, size_t n,
             }
             for (k = 0; k < g->nshares; k++) {
                 if (g->shares[k].member_index == s.member_index) {
-                    free(s.value);
-                    goto cleanup;   /* duplicate member share */
+                    /* The same card given twice is harmless: keep one
+                     * copy.  Two DIFFERENT shares claiming one member
+                     * index cannot both be right, so that fails. */
+                    if (g->shares[k].value_len != s.value_len ||
+                        memcmp(g->shares[k].value, s.value,
+                               s.value_len) != 0) {
+                        free(s.value);
+                        goto cleanup;
+                    }
+                    same_card = 1;
+                    break;
                 }
+            }
+            if (same_card) {
+                free(s.value);
+                continue;
             }
             if (g->nshares >= MAX_SHARES) {
                 free(s.value);
@@ -788,10 +805,13 @@ int lcsas_slip39_recover(const char *const *mnemonics, size_t n,
         size_t m;
         unsigned char *gsdata;
 
-        if (g->nshares != (size_t)member_threshold) {
+        /* At least the threshold.  Any member_threshold distinct shares
+         * of a group rebuild its secret, so more than enough is fine
+         * (the cards say "any K"): use the first member_threshold. */
+        if (g->nshares < (size_t)member_threshold) {
             goto cleanup;
         }
-        for (m = 0; m < g->nshares; m++) {
+        for (m = 0; m < (size_t)member_threshold; m++) {
             members[m].x = g->shares[m].member_index;
             members[m].len = g->shares[m].value_len;
             members[m].data = g->shares[m].value;  /* borrowed, not owned */
@@ -801,7 +821,8 @@ int lcsas_slip39_recover(const char *const *mnemonics, size_t n,
         if (gsdata == NULL) {
             goto cleanup;
         }
-        if (recover_secret(member_threshold, members, g->nshares,
+        if (recover_secret(member_threshold, members,
+                           (size_t)member_threshold,
                            gsdata, value_len) != 0) {
             free(gsdata);
             goto cleanup;
@@ -1266,4 +1287,23 @@ int lcsas_keyshare_check_share(const char *mnemonic, char *errbuf, size_t errcap
     }
     free(words);
     return rc;
+}
+
+int lcsas_keyshare_is_word(const char *tok, size_t len)
+{
+    char word[32];
+    size_t j;
+
+    if (tok == NULL || len == 0 || len >= sizeof(word)) {
+        return 0;
+    }
+    for (j = 0; j < len; j++) {
+        char c = tok[j];
+        if (c >= 'A' && c <= 'Z') {
+            c = (char)(c - 'A' + 'a');
+        }
+        word[j] = c;
+    }
+    word[len] = '\0';
+    return word_to_index(word, len) >= 0;
 }
