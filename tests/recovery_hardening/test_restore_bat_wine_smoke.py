@@ -146,7 +146,24 @@ def _init_prefix(prefix: Path) -> dict[str, str]:
     # D-Z scan in restore.bat can only ever see letters this test maps
     # itself, never a disc the host happens to have mounted.
     _harden_prefix_drives(prefix)
+    _private_user_folders(prefix)
     return env
+
+
+def _private_user_folders(prefix: Path) -> None:
+    """Make the prefix user's Desktop and Documents real folders.
+
+    wine links them to the host user's own ~/Desktop and ~/Documents when
+    those exist.  restore.bat writes "Resume LCSAS restore.bat" to the
+    Desktop (#609), and its default restore folder is
+    Documents\\restored: a test must write neither into the host's home.
+    """
+    for user in (prefix / "drive_c" / "users").glob("*"):
+        for name in ("Desktop", "Documents"):
+            folder = user / name
+            if folder.is_symlink():
+                folder.unlink()
+                folder.mkdir()
 
 
 def _map_drive(prefix: Path, letter: str, target: Path) -> None:

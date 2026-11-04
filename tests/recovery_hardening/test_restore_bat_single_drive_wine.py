@@ -10,19 +10,18 @@ Wine maps a drive letter to a Linux folder through a symlink in
 ``$WINEPREFIX/dosdevices``.  Re-pointing ``d:`` from the META folder to
 a data-disc folder is the eject-and-insert, in the SAME letter.
 
-Where the run starts: the relocated copy.  From a real disc, restore.bat
-copies itself into %TEMP% and relaunches that copy with LCSAS_RELOCATED
-set to the META disc's letter.  That block cannot finish under wine 9:
-wine's robocopy exits 16 on the flags it uses, and wine's ``where``
-reports a robocopy even when there is none, so the xcopy fallback is not
-taken and the script stays on the disc ("could not copy the recovery
-programs").  So the test lays out the copy exactly as the relocation
-does (recovery\scripts\restore.bat, recovery\bin\<triple>\,
-recovery\metadata\<id>\) on C:, sets LCSAS_RELOCATED=D:\ as the relaunch
-line does, and runs that copy.  Every line after the relocation then
-runs as shipped, with D: holding the live META disc at launch.  The
-relocation, its relaunch line and a same-letter swap on a real drive are
-covered on windows-latest by windows-e2e.yml (the single-drive leg).
+Where the run starts: the copy in the tools folder.  From a real disc,
+restore.bat copies what it needs into the tools folder (#609) and
+relaunches that copy with LCSAS_RELOCATED set to the META disc's letter.
+wine runs the copy (test_restore_bat_tools_folder_wine.py checks it) but
+not the relaunch line: its cmd does not end a batch at ``(goto) 2>nul``.
+So the test lays out a tools folder as the relocation does
+(recovery\scripts\restore.bat, recovery\bin\<triple>\, metadata\<id>\)
+on C:, sets LCSAS_RELOCATED=D:\ as the relaunch line does, and runs that
+copy.  Every line after the relocation then runs as shipped, with D:
+holding the live META disc at launch.  The relaunch line and a
+same-letter swap on a real drive are covered on windows-latest by
+windows-e2e.yml (the single-drive leg).
 
 Wine's ``set /p`` takes everything waiting on stdin at its first read,
 so the harness writes each answer only once its prompt is on screen.
@@ -69,7 +68,8 @@ FILES = {
     "a2.bin": bytes(range(256)) * 16,
     "a3.txt": b"file three\n" * 400,
 }
-# Stand-in for %TEMP%\lcsas-restore-N-N, the relocated copy.
+# Stand-in for the tools folder (%LOCALAPPDATA%\LCSAS-restore) that
+# holds the relocated copy.
 RELOC = "lcsas-restore-reloc"
 TARGET_WIN = "C:\\restored"
 DEADLINE_S = 240
@@ -219,12 +219,13 @@ def _build(tmp_path: Path) -> _Fixture:
     prefix = tmp_path / "wineprefix"
     env = _init_prefix(prefix)
 
-    # The relocated copy, laid out as the relocation block writes it.
+    # The relocated copy, laid out as the relocation block writes the
+    # tools folder (#609).
     reloc = prefix / "drive_c" / RELOC
     (reloc / "recovery" / "scripts").mkdir(parents=True)
     shutil.copy2(RESTORE_BAT, reloc / "recovery" / "scripts" / "restore.bat")
     shutil.copytree(meta / "recovery" / "bin", reloc / "recovery" / "bin")
-    shutil.copytree(meta / "metadata", reloc / "recovery" / "metadata")
+    shutil.copytree(meta / "metadata", reloc / "metadata")
 
     _map_drive(prefix, "d", meta)  # the META disc is in the one drive
     run_env = {k: v for k, v in env.items()
@@ -366,15 +367,23 @@ def test_one_drive_restore_swaps_discs_in_the_same_letter(tmp_path: Path) -> Non
         assert "|   D:\\ " in searching, f"D:\\ not searched:\n{box}"
         for posix in POSIX_PARENTS:
             assert posix not in box, f"{posix} listed on Windows:\n{box}"
-    # The pack cache was on: each disc was copied in once.
-    assert "draining disc D:\\" in out, out
+    # The pack cache was on: each disc was copied in once.  (Was
+    # "draining disc D:\\", tier 1's wording before rc6's #610 rebuild.)
+    for label in LABELS.values():
+        assert f"copying disc {label} to the cache" in out, out
     assert "cannot create the pack cache" not in out, out
     # After the first swap tier 1 read disc A's catalog.db (through
     # --mount-parent), so the second prompt names disc B.
     assert len(boxes) >= 2 and LABELS["disc_b"] in boxes[1], boxes
     assert "[tier 2]" not in out, out
-    # restore.bat removes the pack cache it made once the restore is done.
-    assert not (fx.reloc / "recovery" / "pack-cache").exists()
+    # restore.bat removes the pack cache it made once the restore is done,
+    # and marks the tools folder for the relaunch line to delete (#609);
+    # the launcher it had put on the Desktop is gone.
+    assert not (fx.reloc / "pack-cache").exists()
+    assert (fx.reloc / ".done").is_file()
+    desktops = list((fx.prefix / "drive_c" / "users").glob(
+        "*/Desktop/Resume LCSAS restore.bat"))
+    assert desktops == [], desktops
 
 
 def test_q_at_the_disc_prompt_stops_without_tier2(tmp_path: Path) -> None:
@@ -399,9 +408,15 @@ def test_q_at_the_disc_prompt_stops_without_tier2(tmp_path: Path) -> None:
     out = run.text
 
     assert len(boxes) == 2, out
-    assert rc not in (0, 77), f"rc={rc}\n{out}"
+    # 75: tier 1 paused by the reader (C5).  Was "not 0 or 77" before
+    # tier 1 had its own code for it.
+    assert rc == 75, f"rc={rc}\n{out}"
     assert "The restore stopped before it finished" in out, out
     assert f"(code {rc})" in out, out
+    # The tools folder stays, and the banner says how to carry on (#609).
+    assert f'"C:\\{RELOC}\\Resume LCSAS restore.bat"' in out, out
+    assert (fx.reloc / "resume.cfg").is_file()
+    assert not (fx.reloc / ".done").exists()
     assert "trying tier 2" not in out and "[tier 2]" not in out, out
     assert "no working recovery method" not in out, out
     assert re.search(r"kept in:\r?\n +C:\\Photos & Videos\r?\n", out), out
@@ -439,10 +454,11 @@ def test_catalog_seen_at_launch_is_passed_as_a_local_copy(tmp_path: Path) -> Non
         assert got.is_file() and _sha(got.read_bytes()) == _sha(data), (
             f"{name} not restored byte-exact\n{out}")
 
-    tools = f"C:\\{RELOC}\\recovery"
+    # The copy is in the tools folder itself (C6), not in its recovery\.
+    tools = f"C:\\{RELOC}"
     assert f"using catalog E:\\catalog.db (a copy in {tools})" in out, out
     assert "could not copy" not in out, out
-    copy = fx.reloc / "recovery" / "catalog.db"
+    copy = fx.reloc / "catalog.db"
     original = fx.discs["disc_a"] / "catalog.db"
     assert copy.read_bytes() == original.read_bytes()
     assert abs(copy.stat().st_mtime - original.stat().st_mtime) < 2.0, (
