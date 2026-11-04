@@ -475,7 +475,7 @@ def test_restore_bat_reuses_or_replaces_the_tools_folder():
     on windows-e2e (Invoke-RelocationLeg -SeedStale)."""
     block = _relocation_block(RESTORE_BAT.read_text())
     code = _code_lines(block)
-    reuse = code.index('fc /b "%~f0" "%TOOLS%\\recovery\\scripts\\restore.bat" >nul 2>nul')
+    reuse = code.index('fc /b "%~f0" "%TOOLS%\\recovery\\scripts\\restore.bat" >nul 2>nul <nul')
     assert code[reuse + 1] == "if errorlevel 1 goto :tools_fresh"
     # Updated (B2 review): and only a folder copied from this very META
     # disc -- its volume_info.json "created_at", kept in archive.txt.
@@ -847,7 +847,7 @@ def test_restore_bat_carrying_on_keeps_the_newest_catalog_copy():
     assert 'del /f /q "%CATALOG_COPY%" >nul 2>nul' in code
     assert not [ln for ln in code if ln.startswith('del "%CATALOG_COPY%"')]
     copy = code.index('copy /Y "%CATALOG_PICK%" "%CATALOG_COPY%" >nul 2>nul')
-    assert code[copy + 1] == 'attrib -r "%CATALOG_COPY%" >nul 2>nul'
+    assert code[copy + 1] == 'attrib -r "%CATALOG_COPY%" >nul 2>nul <nul'
 
 
 def test_restore_bat_password_file_goes_even_when_read_only():
@@ -862,7 +862,7 @@ def test_restore_bat_password_file_goes_even_when_read_only():
     assert not [ln for ln in code if 'del "%PWFILE%"' in ln]
     assert len([ln for ln in code if 'del /f /q "%PWFILE%" >nul 2>nul' in ln]) >= 10
     copy = code.index('copy /b /y "!LCSAS_PWFILE!" "%PWFILE%" >nul 2>nul')
-    assert code[copy + 1] == 'attrib -r "%PWFILE%" >nul 2>nul'
+    assert code[copy + 1] == 'attrib -r "%PWFILE%" >nul 2>nul <nul'
     clean = code.index("if defined ANOTHER_PASS goto :temp_cleared")
     assert code[clean + 1:clean + 4] == [
         'del /f /q "%TEMP%\\lcsas-pw-*.txt" >nul 2>nul',
@@ -933,22 +933,26 @@ def test_restore_bat_folder_question_takes_q_and_a_whole_path():
 
 
 def test_restore_bat_helpers_never_read_the_scripts_input():
-    """Every xcopy, lcsas-keyshare and --list-snapshots call reads <nul.
+    """Every program that needs no input reads <nul: xcopy, attrib, fc,
+    reg, lcsas-keyshare and the --list-snapshots password check.
 
-    On real Windows xcopy reads the script's own standard input.  With
-    the answers piped in (windows-e2e), the newest-disc merge's xcopy
-    swallowed every answer before the folder question, and the run
-    ended "No password was given" (77).  Wine's xcopy does not read it,
-    so the wine tests passed; only a static pin can hold this here.
+    On real Windows xcopy and attrib read the script's own standard
+    input.  With the answers piped in (windows-e2e), the catalog copy's
+    `attrib -r` swallowed every answer after the folder question, and
+    the run ended "No password was given" (77); a probe run on CI
+    showed it.  Wine's xcopy and attrib leave stdin alone, so the wine
+    tests passed; only a static pin can hold this here.
     """
     import re
 
-    calls = re.compile(r'(?i)(?:^|[\s(&])xcopy\s|^"%KS_EXE%"\s|--list-snapshots\b')
+    calls = re.compile(
+        r'(?i)(?:^|[\s(&\'])(?:xcopy|attrib|fc|reg)\s|^"%KS_EXE%"\s|--list-snapshots\b')
     lines = [
         ln.strip() for ln in RESTORE_BAT.read_text().splitlines()
         if ln.strip() and not ln.strip().upper().startswith(("REM", "::"))
     ]
     hits = [ln for ln in lines if calls.search(ln) and not ln.startswith("echo")]
-    assert len(hits) >= 8, f"self-check: only {len(hits)} calls found:\n" + "\n".join(hits)
-    missing = [ln for ln in hits if "<nul" not in ln.replace(" ", "")]
+    assert len(hits) >= 13, f"self-check: only {len(hits)} calls found:\n" + "\n".join(hits)
+    missing = [ln for ln in hits
+               if "<nul" not in ln.replace(" ", "") and "^<nul" not in ln]
     assert not missing, "these read the script's input:\n" + "\n".join(missing)

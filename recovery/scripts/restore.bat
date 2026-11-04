@@ -225,7 +225,7 @@ REM copied last): run that, with the metadata, catalog copy and pack
 REM cache it has.  fc /b compares the bytes.
 if not exist "%TOOLS%\recovery\scripts\restore.bat" goto :tools_fresh
 if not exist "%TOOLS%\recovery\bin\%ARCH%\lcsas-restore.exe" goto :tools_fresh
-fc /b "%~f0" "%TOOLS%\recovery\scripts\restore.bat" >nul 2>nul
+fc /b "%~f0" "%TOOLS%\recovery\scripts\restore.bat" >nul 2>nul <nul
 if errorlevel 1 goto :tools_fresh
 REM ...and only when it was copied from this very META disc (archive.txt,
 REM see :archive_id).  A folder left by a stopped restore of another
@@ -254,7 +254,7 @@ REM program's.
 if not exist "%TOOLS%\pack-cache\" goto :tools_cleared
 set "KEEP_CACHE="
 if defined SRC_ROOT if exist "%TOOLS%\recovery\bin\%ARCH%\lcsas-restore.exe" (
-    fc /b "!SRC_ROOT!\bin\%ARCH%\lcsas-restore.exe" "%TOOLS%\recovery\bin\%ARCH%\lcsas-restore.exe" >nul 2>nul
+    fc /b "!SRC_ROOT!\bin\%ARCH%\lcsas-restore.exe" "%TOOLS%\recovery\bin\%ARCH%\lcsas-restore.exe" >nul 2>nul <nul
     if not errorlevel 1 set "KEEP_CACHE=1"
 )
 if not defined KEEP_CACHE rmdir /s /q "%TOOLS%\pack-cache" 2>nul
@@ -281,10 +281,11 @@ REM in bin\<arch>\, and rustic-static.exe only when a backup set here
 REM holds its own data\ (tier 2 cannot run otherwise); this computer's
 REM guide; the backup sets' metadata.  Up to rc5 this was the whole bin
 REM tree, 744 MB for six kinds of computer, with nothing on screen.
-REM Every xcopy, keyshare and --list-snapshots call reads from <nul: on
-REM real Windows xcopy reads the script's own input, so with answers
-REM piped in (windows-e2e, a test rig) it swallowed every answer before
-REM the folder question.  Wine's xcopy does not, so only CI showed it.
+REM Every program that needs no input reads from <nul (xcopy, attrib,
+REM fc, reg, lcsas-keyshare, --list-snapshots): on real Windows xcopy
+REM and attrib read the script's own input, so with answers piped in
+REM (windows-e2e, a test rig) they swallowed every answer left.  Wine's
+REM do not, so only CI showed it.
 REM copy and xcopy, not robocopy: wine runs them too (its robocopy exits
 REM 16 on these flags), so the local tests check the copy.  restore.bat
 REM is copied last, so a copy cut short is never taken for a whole one.
@@ -1070,7 +1071,7 @@ REM plain del cannot remove -- the old copy was then used while the line
 REM below named the new one.  attrib -r takes the mark off the new copy.
 del /f /q "%CATALOG_COPY%" >nul 2>nul
 copy /Y "%CATALOG_PICK%" "%CATALOG_COPY%" >nul 2>nul
-attrib -r "%CATALOG_COPY%" >nul 2>nul
+attrib -r "%CATALOG_COPY%" >nul 2>nul <nul
 set "CATALOG_COPIED=1"
 :catalog_copied
 if not exist "%CATALOG_COPY%" (
@@ -1186,7 +1187,7 @@ copy /b /y "!LCSAS_PWFILE!" "%PWFILE%" >nul 2>nul
 REM The copy keeps a read-only mark the reader's file has (a file on a CD
 REM or a locked USB stick): take it off, or no later del could remove the
 REM copy and no typed password could replace it.
-attrib -r "%PWFILE%" >nul 2>nul
+attrib -r "%PWFILE%" >nul 2>nul <nul
 if exist "%PWFILE%" goto :pw_file_copied
 echo [lcsas-restore] cannot read the password file LCSAS_PWFILE names:
 echo                 !LCSAS_PWFILE!
@@ -1852,7 +1853,7 @@ set "RESUME_CMD=%LAUNCHER%"
 REM The Desktop: where Explorer has it (OneDrive may have moved it),
 REM else %USERPROFILE%\Desktop.
 set "DESKTOP="
-for /f "tokens=1,2,*" %%A in ('reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders" /v Desktop 2^>nul') do if /i "%%A"=="Desktop" set "DESKTOP=%%C"
+for /f "tokens=1,2,*" %%A in ('reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders" /v Desktop 2^>nul ^<nul') do if /i "%%A"=="Desktop" set "DESKTOP=%%C"
 if not defined DESKTOP set "DESKTOP=%USERPROFILE%\Desktop"
 if not exist "!DESKTOP!\" goto :eof
 copy /Y "%LAUNCHER%" "!DESKTOP!\Resume LCSAS restore.bat" >nul 2>nul
