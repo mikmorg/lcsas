@@ -500,7 +500,7 @@ def test_restore_bat_reuses_or_replaces_the_tools_folder():
         " do ("), added
     assert [ln for ln in added if "xcopy" in ln] == [
         'if not exist "!TOOLS!\\metadata\\%%T\\" xcopy /e /i /q /y "%META_SRC%\\%%T" '
-        '"!TOOLS!\\metadata\\%%T" >nul 2>nul'], added
+        '"!TOOLS!\\metadata\\%%T" >nul 2>nul <nul'], added
     fresh = code.index(":tools_fresh")
     assert fresh > reuse
     same_exe = 'fc /b "!SRC_ROOT!\\bin\\%ARCH%\\lcsas-restore.exe"'
@@ -703,7 +703,7 @@ def test_restore_bat_tries_the_password_before_tier1():
     code = _code(content)
     check = [ln for ln in code if "--list-snapshots" in ln]
     head = '"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" '
-    assert check == [head + "--list-snapshots >nul 2>nul"], check
+    assert check == [head + "--list-snapshots >nul 2>nul <nul"], check
     tier1 = [i for i, ln in enumerate(code)
              if ln.startswith(head + '--target "%TARGET%" --snapshot latest ')]
     assert len(tier1) == 1, tier1
@@ -725,8 +725,8 @@ def test_restore_bat_share_cards_live_in_temp_never_in_the_tools_folder():
     new_dir = _label_body(content, ":new_shares_dir")
     assert 'set "SH_DIR=%TEMP%\\lcsas-shares-%RANDOM%%RANDOM%"' in new_dir
     assert not [ln for ln in code if "SH_DIR=" in ln and "TOOLS" in ln]
-    assert '"%KS_EXE%" "card%SI%.txt" >nul 2> "keyshare.txt"' in code
-    assert '"%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt"' in code
+    assert '"%KS_EXE%" "card%SI%.txt" >nul 2> "keyshare.txt" <nul' in code
+    assert '"%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt" <nul' in code
     assert 'if "%KRC%"=="3" goto :share_bad' in code
     assert 'if /i "!SHARE!"=="p" goto :shares_own' in code
 
@@ -930,3 +930,25 @@ def test_restore_bat_folder_question_takes_q_and_a_whole_path():
     body = _label_body(content, ":target_quit")
     assert body == [":target_quit", "if defined ANOTHER_PASS goto :all_done",
                     "echo Stopped; nothing was restored.", "pause", "exit /b 65"], body
+
+
+def test_restore_bat_helpers_never_read_the_scripts_input():
+    """Every xcopy, lcsas-keyshare and --list-snapshots call reads <nul.
+
+    On real Windows xcopy reads the script's own standard input.  With
+    the answers piped in (windows-e2e), the newest-disc merge's xcopy
+    swallowed every answer before the folder question, and the run
+    ended "No password was given" (77).  Wine's xcopy does not read it,
+    so the wine tests passed; only a static pin can hold this here.
+    """
+    import re
+
+    calls = re.compile(r'(?i)(?:^|[\s(&])xcopy\s|^"%KS_EXE%"\s|--list-snapshots\b')
+    lines = [
+        ln.strip() for ln in RESTORE_BAT.read_text().splitlines()
+        if ln.strip() and not ln.strip().upper().startswith(("REM", "::"))
+    ]
+    hits = [ln for ln in lines if calls.search(ln) and not ln.startswith("echo")]
+    assert len(hits) >= 8, f"self-check: only {len(hits)} calls found:\n" + "\n".join(hits)
+    missing = [ln for ln in hits if "<nul" not in ln.replace(" ", "")]
+    assert not missing, "these read the script's input:\n" + "\n".join(missing)

@@ -241,7 +241,7 @@ REM A backup set on this META disc that the earlier copy lacks goes in
 REM too (#605); the sets already there keep what the earlier run read.
 if defined META_SRC for /f "delims=" %%T in ('dir /ad /b "%META_SRC%" 2^>nul') do (
     if not exist "!TOOLS!\metadata\%%T\" echo                   metadata\%%T
-    if not exist "!TOOLS!\metadata\%%T\" xcopy /e /i /q /y "%META_SRC%\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul
+    if not exist "!TOOLS!\metadata\%%T\" xcopy /e /i /q /y "%META_SRC%\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul <nul
 )
 goto :relaunch
 
@@ -281,6 +281,10 @@ REM in bin\<arch>\, and rustic-static.exe only when a backup set here
 REM holds its own data\ (tier 2 cannot run otherwise); this computer's
 REM guide; the backup sets' metadata.  Up to rc5 this was the whole bin
 REM tree, 744 MB for six kinds of computer, with nothing on screen.
+REM Every xcopy, keyshare and --list-snapshots call reads from <nul: on
+REM real Windows xcopy reads the script's own input, so with answers
+REM piped in (windows-e2e, a test rig) it swallowed every answer before
+REM the folder question.  Wine's xcopy does not, so only CI showed it.
 REM copy and xcopy, not robocopy: wine runs them too (its robocopy exits
 REM 16 on these flags), so the local tests check the copy.  restore.bat
 REM is copied last, so a copy cut short is never taken for a whole one.
@@ -295,7 +299,7 @@ call :copy_one "docs\RECOVER_WINDOWS.txt"
 if defined META_SRC for /f "delims=" %%T in ('dir /ad /b "%META_SRC%" 2^>nul') do (
     echo                   metadata\%%T
     mkdir "!TOOLS!\metadata\%%T" 2>nul
-    xcopy /e /i /q /y "%META_SRC%\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul
+    xcopy /e /i /q /y "%META_SRC%\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul <nul
     if errorlevel 4 set "COPY_BAD=1"
 )
 if defined SRC_ROOT if exist "!SRC_ROOT!\catalog.db" copy /Y "!SRC_ROOT!\catalog.db" "!TOOLS!\catalog.db" >nul 2>nul
@@ -1219,7 +1223,7 @@ if "%SH_N%"=="0" goto :shares_dir_bad
 set "SH_ARGS="
 for /l %%I in (1,1,%SH_N%) do set "SH_ARGS=!SH_ARGS! card%%I.txt"
 pushd "%SH_DIR%"
-"%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt"
+"%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt" <nul
 set "KRC=%ERRORLEVEL%"
 popd
 if "%KRC%"=="0" goto :shares_dir_ok
@@ -1283,7 +1287,7 @@ if "!SHARE!"=="!SHARE: =!" goto :share_one_word
 > "%SH_DIR%\card%SI%.txt" echo !SHARE!
 set "SHARE="
 pushd "%SH_DIR%"
-"%KS_EXE%" "card%SI%.txt" >nul 2> "keyshare.txt"
+"%KS_EXE%" "card%SI%.txt" >nul 2> "keyshare.txt" <nul
 set "KRC=%ERRORLEVEL%"
 popd
 REM 0: a card that holds the whole password; 1: a good card that needs
@@ -1316,7 +1320,7 @@ set "SH_ARGS="
 for /l %%I in (1,1,%SPLIT_K%) do set "SH_ARGS=!SH_ARGS! card%%I.txt"
 del /f /q "%PWFILE%" >nul 2>nul
 pushd "%SH_DIR%"
-"%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt"
+"%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt" <nul
 set "KRC=%ERRORLEVEL%"
 popd
 if "%KRC%"=="0" goto :shares_rebuilt
@@ -1352,7 +1356,7 @@ REM rejected it; anything else is left to the restore itself to report.
 set "BIN=%RECOVERY%\bin\%ARCH%\lcsas-restore.exe"
 if not exist "%BIN%" goto :pw_ok
 echo [lcsas-restore] checking the password ...
-"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --list-snapshots >nul 2>nul
+"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --list-snapshots >nul 2>nul <nul
 set "PW_RC=%ERRORLEVEL%"
 if not "%PW_RC%"=="77" goto :pw_ok
 del /f /q "%PWFILE%" >nul 2>nul
@@ -1734,7 +1738,7 @@ del /f /q "%TOOLS%\merged-from.txt" >nul 2>nul
 mkdir "%TOOLS%\metadata" 2>nul
 if not exist "%TOOLS%\metadata\" goto :merge_cannot
 set "METADATA_SET_HERE=1"
-if exist "%DISC_ROOT_S%metadata\" for /f "delims=" %%T in ('dir /ad /b "%DISC_ROOT_S%metadata" 2^>nul') do xcopy /e /i /q /y "%DISC_ROOT_S%metadata\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul
+if exist "%DISC_ROOT_S%metadata\" for /f "delims=" %%T in ('dir /ad /b "%DISC_ROOT_S%metadata" 2^>nul') do xcopy /e /i /q /y "%DISC_ROOT_S%metadata\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul <nul
 :merge_into
 if not exist "%TOOLS%\metadata\" mkdir "%TOOLS%\metadata" 2>nul
 if not exist "%TOOLS%\metadata\" goto :merge_cannot
@@ -1766,11 +1770,11 @@ if not exist "!MS_SRC!\index\" goto :eof
 echo                   metadata\%~1
 rmdir /s /q "!MS_NEW!" 2>nul
 rmdir /s /q "!MS_OLD!" 2>nul
-xcopy /e /i /q /y "!MS_SRC!" "!MS_NEW!" >nul 2>nul
+xcopy /e /i /q /y "!MS_SRC!" "!MS_NEW!" >nul 2>nul <nul
 if errorlevel 2 goto :merge_set_bad
 if not exist "!MS_NEW!\index\" goto :merge_set_bad
 if not exist "!MS_NEW!\keys\" goto :merge_set_bad
-if exist "!MS_DST!\keys\" xcopy /e /i /q /y "!MS_DST!\keys" "!MS_NEW!\keys" >nul 2>nul
+if exist "!MS_DST!\keys\" xcopy /e /i /q /y "!MS_DST!\keys" "!MS_NEW!\keys" >nul 2>nul <nul
 if exist "!MS_DST!\" move "!MS_DST!" "!MS_OLD!" >nul 2>nul
 if exist "!MS_DST!\" goto :merge_set_bad
 move "!MS_NEW!" "!MS_DST!" >nul 2>nul
