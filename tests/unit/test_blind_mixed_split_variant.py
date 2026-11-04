@@ -34,6 +34,11 @@ _setup = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_setup)
 
 _SECRET = b"correct horse battery staple"
+# Ids the way `lcsas repo add` makes them: UUIDs, not the names (#617).
+_IDS = {
+    "alpha": "6f1c0b9e-2d47-4a3e-9b85-0c7e4d2a1f36",
+    "bravo": "d83a5e21-7c90-4f1b-a6e4-35b9c0d7e812",
+}
 
 
 def test_fixture_config_splits_only_alpha(monkeypatch) -> None:
@@ -61,8 +66,8 @@ def test_recorded_split_matches_cards_and_passes_drift(
     monkeypatch.setattr(_setup, "MIXED_SPLIT_CARDS", secrets / "cards")
     conn = get_memory_connection()
     create_all(conn)
-    for name in ("alpha", "bravo"):
-        register_repo(conn, name, name, f"/m/{name}")
+    for name, repo_id in _IDS.items():
+        register_repo(conn, repo_id, name, f"/m/{name}")
 
     _setup._record_mixed_split(conn)
 
@@ -70,15 +75,17 @@ def test_recorded_split_matches_cards_and_passes_drift(
     assert len(cards) == 2  # the heir's quorum of the 3 printed
     mnemonics = [extract_mnemonic(c.read_text()) for c in cards]
     assert decode_master_secret(combine_mnemonics(mnemonics)) == _SECRET
-    record = get_split_for_repo(conn, "alpha")
+    # Recorded under alpha's id, found by its name.
+    record = get_split_for_repo(conn, _IDS["alpha"])
     assert record is not None
     assert (record.threshold, record.shares) == (2, 3)
     assert record.slip39_id == share_identifier(mnemonics[0])
-    assert get_split_for_repo(conn, "bravo") is None
+    assert get_split_for_repo(conn, _IDS["bravo"]) is None
+    assert get_split_for_repo(conn, "alpha") is None
 
     config = _setup._fixture_config()
     assert detect_escrow_drift(
-        conn, ["alpha", "bravo"], config_split=False, config_threshold=2,
+        conn, list(_IDS.values()), config_split=False, config_threshold=2,
         config_shares=5, split_for=config.repo_split,
     ) is None
 

@@ -30,11 +30,11 @@ from lcsas.burn.orchestrator import BurnOrchestrator
 from lcsas.config.media import MediaType
 from lcsas.config.settings import LCSASConfig, RepositoryConfig
 from lcsas.db.connection import get_connection
-from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
 from lcsas.meta.builder import MetaVolumeBuilder
 from lcsas.packs.delta import DeltaAnalyzer
 from lcsas.packs.scanner import scan_mirror_packs
+from tests.e2e.fixture_lib import add_repo
 
 # ── Skip conditions ──────────────────────────────────────────────
 
@@ -166,10 +166,13 @@ class TestInteractiveRestore:
         # ── LCSAS catalog ────────────────────────────────────────
         conn = get_connection(db_path)
         create_all(conn)
-        register_repo(conn, "photos", "photos", str(repo))
+        conn.commit()
+        # As an owner does (#617): the set's id is a UUID, its name
+        # "photos", which the restore names it by (--repo photos).
+        repo_id = add_repo(db_path, "photos", repo)
 
         scanned = scan_mirror_packs(repo).packs
-        delta = DeltaAnalyzer(conn, scanned, repo_id="photos")
+        delta = DeltaAnalyzer(conn, scanned, repo_id=repo_id)
         delta.register_new_packs()
 
         from lcsas.db.queries import get_unarchived_packs
