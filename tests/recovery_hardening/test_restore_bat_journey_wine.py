@@ -47,7 +47,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.recovery_hardening._wine_helpers import stop_wineserver
+from tests.recovery_hardening._wine_helpers import stop_and_remove_prefix, stop_wineserver
 from tests.recovery_hardening.test_restore_bat_wine_smoke import (
     _harden_prefix_drives,
     _init_prefix,
@@ -169,7 +169,7 @@ def wine(tmp_path_factory: pytest.TempPathFactory):
     try:
         yield w
     finally:
-        stop_wineserver(prefix)
+        stop_and_remove_prefix(prefix)
 
 
 @pytest.fixture
