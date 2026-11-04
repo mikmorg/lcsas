@@ -26,6 +26,13 @@ LCSAS_PASSWORD
   What:     Password for the Rustic repository.  When set,
             restore.sh writes it to a temp file (mode 600) instead of
             reading interactively.  Mutually exclusive with LCSAS_PWFILE.
+  Windows:  restore.bat honours it too (since rc6, #608), after
+            LCSAS_PWFILE.  It writes it to a temp file in %TEMP%,
+            deleted on every way out, and tries it with
+            lcsas-restore --list-snapshots before the restore: a wrong
+            one is said plainly, and the password is then asked on the
+            keyboard.  It is used for every backup set restored in the
+            run.
   Why:      Opt-in — credentials must never appear in the environment
             by default.  Scripted / CI use requires explicit action.
 
@@ -35,7 +42,41 @@ LCSAS_PWFILE
   What:     Path to a file whose first line is the password.  Preferred
             over LCSAS_PASSWORD in scripts because the secret stays in
             a file rather than a shell variable.
+  Windows:  restore.bat honours it too (since rc6, #608), before
+            LCSAS_PASSWORD: it copies the file's exact bytes (copy /b)
+            to its own temp file and never deletes yours.  A line
+            break at the end is ignored.  RECOVER_WINDOWS.txt, "THE
+            PASSWORD", shows how to write such a file from a hidden
+            PowerShell prompt (Windows PowerShell 5.1 is enough).  A
+            file that cannot be read, or a wrong password, falls back
+            to the keyboard.
   Why:      Opt-in — same reasoning as LCSAS_PASSWORD.
+
+LCSAS_PW
+  Default:  unset (prompts on stdin)
+  Since:    restore.bat only, before rc6
+  What:     The older restore.bat name for LCSAS_PASSWORD, kept: used
+            when neither LCSAS_PWFILE nor LCSAS_PASSWORD is set.
+            restore.sh does not read it.
+  Why:      Opt-in — same reasoning as LCSAS_PASSWORD.
+
+LCSAS_SHARES_DIR
+  Default:  unset (asks for the share cards when the set's
+            LCSAS_REPO.txt says its password is split)
+  Since:    rc6 (#607)
+  What:     A folder of share card files, one card per file (a
+            retyped card, or the card file as printed: lines that are
+            not share words are skipped).  restore.bat combines every
+            file in it with lcsas-keyshare, in a new folder under
+            %TEMP% that it then deletes, and uses the rebuilt password
+            with no question asked.  More than K cards is fine.  It is
+            used when LCSAS_PWFILE, LCSAS_PASSWORD and LCSAS_PW are
+            not set, for any backup set, split or not in its marker.
+            If the cards do not rebuild the password, it says why and
+            asks on the keyboard.  restore.sh does not read it yet.
+  Why:      Opt-in — the questions are right for a person; the folder
+            is for scripts and tests, and for a set whose marker does
+            not say its password is split.
 
 DISCOVERY OVERRIDES
 ───────────────────
@@ -46,6 +87,11 @@ LCSAS_REPO
   What:     Repository name to restore.  Matches the basename
             of the metadata/<name>/ directory on the disc.  Skips the
             numbered-list prompt on archives with several repositories.
+            In restore.bat (since rc6, #606) it also matches the set's
+            name or name_cmd from its LCSAS_REPO.txt, case-blind: the
+            folders are named by repo_id, a UUID since `repo add`.
+            A name with letters outside A-Z may not match in cmd's
+            code page; use the id or the name the menu shows.
   Why:      Opt-in — omitting it is correct and safe; it just shows an
             interactive prompt.  Setting it changes which repository's
             data is restored; wrong value exits with an error.
@@ -153,6 +199,41 @@ LCSAS_TOOLS_DIR
             restore.sh does not read it yet.
   Why:      Opt-in.  The default suits every reader; the knob is for a
             computer whose C: drive is short of space, or for a test.
+
+LCSAS_NEWEST_DISC_PROMPT
+  Default:  unset → ask  (set 0 to skip; opt-out)
+  Since:    rc6 (#605)
+  What:     restore.bat, run from a META disc (or relocated from one)
+            with no data disc in any drive, first asks for the NEWEST
+            data disc: the latest year, then the highest number, read
+            from the label in its VOLUME_INFO.txt.  That disc's
+            snapshots\ and index\ then replace the META disc's copies
+            in the tools folder (keys\ from both; a set only on the
+            META disc keeps its copy), and its catalog.db is the one
+            used.  0 skips the question: the data discs already in
+            are used, else the META disc's copies.  With data discs
+            in at the start there is no question either: the newest of
+            them is used.  The question is not asked when carrying on
+            a stopped restore.  restore.sh does not read it yet.
+  Why:      Opt-OUT.  Without the newest data disc, "latest" is the
+            latest backup when the META disc was burned, and a backup
+            set added since is not listed at all: a silent loss of the
+            newest data.  The knob is for test rigs and for a reader
+            who knows the META disc is current.
+
+LCSAS_ANOTHER_SET
+  Default:  unset → ask  (set 0 to skip)
+  Since:    rc6
+  What:     After a good restore of an archive with more than one
+            backup set, restore.bat asks "Restore another backup set
+            from these discs? [y/N]".  Yes goes back to the menu, with
+            the tools folder, the pack cache and the catalog copy as
+            they are; only no (or the end of the input) ends the run
+            and lets the tools folder be deleted.  0 skips the
+            question: the run ends after one set.  restore.sh does not
+            read it yet.
+  Why:      Opt-out.  The question costs one ENTER; without it a
+            second set means the META disc and every disc again.
 
 LCSAS_INTERACTIVE
   Default:  unset → auto  (opt-in)
@@ -429,6 +510,8 @@ Variable                    Default   Opt-in/out  Typical use
 ──────────────────────────  ────────  ──────────  ────────────────────
 LCSAS_PASSWORD              unset     opt-in      scripted restores
 LCSAS_PWFILE                unset     opt-in      scripted restores
+LCSAS_PW                    unset     opt-in      older restore.bat name
+LCSAS_SHARES_DIR            unset     opt-in      share cards from files
 LCSAS_REPO                  unset     opt-in      multi-repository shortcut
 LCSAS_TARGET                unset     opt-in      unusual host arch
 LCSAS_META_DISC             unset     opt-in      unusual mount layout
@@ -436,6 +519,8 @@ LCSAS_MOUNT_DIRS            unset     opt-in      non-standard disc mounts
 LCSAS_PACK_CACHE_DIR        auto      opt-out     set ''  to disable cache
 LCSAS_TOOLS_DIR             (local)   opt-in      Windows tools folder elsewhere
 LCSAS_INTERACTIVE           unset     opt-in      set on for piped test rigs
+LCSAS_NEWEST_DISC_PROMPT    (ask)     opt-out     0: skip the question
+LCSAS_ANOTHER_SET           (ask)     opt-out     set 0: one set per run
 LCSAS_DRAIN_CHUNK_PACKS     0         opt-in      set 100-500 for slow optical
 LCSAS_MAX_JSON_MIB          256       opt-in      lower on tiny 32-bit hosts
 LCSAS_MAX_TREE_DEPTH        1000      opt-in      raise + 'ulimit -s unlimited'

@@ -6,7 +6,7 @@ WHO THIS IS FOR
 You are running Windows 10 (version 1709 / October 2017 or later)
 or Windows 11.  You have inherited a collection of LCSAS discs and
 you want to read the files on them.  You have the password for the
-archive.
+archive, or enough of its share cards.
 
 WHY 1709?
 
@@ -48,13 +48,21 @@ QUICK START (90 SECONDS)
   6. A black console window opens.  Do not click inside it while
      the restore runs (see "A CLICK IN THE WINDOW PAUSES THE
      RESTORE" below).  It first copies its programs to this
-     computer (see "THE COPY ON THIS COMPUTER" below).  When
-     prompted:
-        - press Enter to accept the default restore folder
+     computer (see "THE COPY ON THIS COMPUTER" below).  Then it
+     asks, one question at a time:
+        - for your newest data disc: take the meta disc out, put
+          that disc in, and press Enter (see "THE NEWEST DATA DISC
+          FIRST" below).
+        - which backup set to restore, if the archive has more
+          than one: type its number and press Enter.
+        - for the restore folder: press Enter to accept the default
           (Documents\restored), OR type a folder of your choosing.
-        - type the password and press Enter.
+        - for the password: type it and press Enter.  If the
+          password of that set is split into share cards, it asks
+          for the cards instead (see "SHARE CARDS" below).
   7. Wait.  When the script says "Restore complete", the files are
-     in the folder you chose.
+     in the folder you chose.  If the archive has more than one
+     backup set, it then asks whether to restore another one.
 
 If you have multiple discs, the script will tell you when to swap.
 If you stop, or the window closes, you can carry on later without
@@ -112,6 +120,46 @@ LCSAS_TOOLS_DIR to an empty or new folder before you start (see
 ENV_VARS.txt).
 
 ────────────────────────────────────────────────────────────────────
+THE NEWEST DATA DISC FIRST
+────────────────────────────────────────────────────────────────────
+
+The meta disc knows your backups only as they were when it was
+burned.  Every data disc knows them as they were when that disc was
+burned, so the newest data disc knows the latest backup, and any
+backup set added after the meta disc was made.  When no data disc
+is in a drive yet, the script asks for that disc first:
+
+     Take the META disc out and put in your NEWEST data disc: the one
+     with the latest year, and then the highest number, e.g.
+     LCSAS_CD700_2026_0002.  File Explorer shows only the first 16
+     characters of the label; the full label is printed on the disc.
+
+     Press ENTER when it is in; S then ENTER to skip (use the copies
+     on the META disc); Q then ENTER to quit.
+
+Take the meta disc out (nothing on it is in use any more), put in
+the data disc whose label has the latest year and then the highest
+number, wait until File Explorer shows it, and press Enter.  The
+script prints the label it read from the disc, for example:
+
+     [lcsas-restore] newest data disc: LCSAS_CD700_2026_0002 in drive D:
+
+Check it against the label printed on the disc.  File Explorer
+shows only "LCSAS_CD700_2026" for every CD of a year, so the script
+reads the full label from the file VOLUME_INFO.txt on the disc.  If
+the disc in the drive is not a data disc of the archive, the script
+says so and asks again.
+
+The script then uses that disc's list of backups and its catalog,
+which says which disc holds what.  Leave the disc in the drive: the
+restore reads from it first.
+
+S skips this step.  The restore then uses the copies on the meta
+disc, which may lack the latest backups.  If data discs are already
+in their drives when you start (a computer with several drives),
+the script does not ask: it uses the one with the newest label.
+
+────────────────────────────────────────────────────────────────────
 SWAPPING DISCS
 ────────────────────────────────────────────────────────────────────
 
@@ -124,10 +172,12 @@ When the restore needs a data disc, it shows a box like this:
 Take the disc that is in the drive out, put in the disc the box
 names, and press Enter.  Use the same drive the meta disc was in.
 
-The first box may not name a disc yet.  Then put in your newest
-data disc: the latest year, then the highest number.  Every data
-disc carries a catalog, so from then on the box names the disc it
-needs.  A wrong disc does no harm: the box just asks again.
+The box names the disc from the catalog of the newest data disc.
+If you skipped that disc (S), the first box may not name a disc yet.
+Then put in your newest data disc: the latest year, then the
+highest number.  Every data disc carries a catalog, so from then on
+the box names the disc it needs.  A wrong disc does no harm: the box
+just asks again.
 
 The first time the restore reads from a data disc, it copies all of
 that disc's packs to this computer, so you put each disc in about
@@ -167,8 +217,10 @@ itself, run restore.bat from the meta disc again.  Running
 restore.bat from the meta disc again always works too: it asks the
 questions again and uses the tools folder that is already there.
 
-When the restore has finished, the script deletes the tools folder
-and "Resume LCSAS restore.bat" (both copies).  To give up a restore
+When the restore has finished, and you have said no to restoring
+another backup set (see "MORE THAN ONE BACKUP SET"), the script
+deletes the tools folder and "Resume LCSAS restore.bat" (both
+copies).  To give up a restore
 you do not want to finish, delete the folder
 %LOCALAPPDATA%\LCSAS-restore and the file on your Desktop yourself.
 
@@ -255,44 +307,113 @@ recovery\MANIFEST.sha256 on the disc; you can check it by hand:
     certutil -hashfile recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe SHA256
 
 ────────────────────────────────────────────────────────────────────
-THE PASSWORD IS VISIBLE WHILE TYPING (CMD limitation)
+THE PASSWORD
 ────────────────────────────────────────────────────────────────────
 
-Plain CMD has no equivalent of `read -s`.  If you want a hidden
-password prompt, open PowerShell instead and run:
+The script asks for the password of the backup set you chose:
 
-    $env:LCSAS_PASSWORD = (Read-Host -AsSecureString -Prompt "Password" | `
-        ConvertFrom-SecureString -AsPlainText)
+     Password:
+
+Type it and press Enter.  Before the restore starts, the script
+tries the password.  If it is wrong, it says so:
+
+     That password is wrong: it does not open the backup set
+     Family documents.
+
+and asks again.  An empty answer asks again too.  To stop, type Q
+and press Enter: nothing is restored (exit code 77).
+
+THE PASSWORD IS VISIBLE WHILE YOU TYPE IT.  Plain CMD cannot hide
+it; the script says so before it asks.  Make sure nobody can see
+your screen.
+
+To type it hidden, use Windows PowerShell (it comes with Windows 10
+and 11).  Open PowerShell and run these lines.  They ask for the
+password without showing it, write it to a file in your temporary
+folder with no line break at the end, start the restore, and delete
+the file afterwards:
+
+    $s = Read-Host -AsSecureString -Prompt "Password"
+    $b = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)
+    $p = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($b)
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b)
+    $f = "$env:TEMP\lcsas-pw.txt"
+    $u = New-Object Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($f, $p, $u)
+    $env:LCSAS_PWFILE = $f
+    D:\restore.bat
+    Remove-Item $f
+
+(Replace D: with your disc's drive letter.)  These lines work in the
+Windows PowerShell 5.1 that comes with Windows; they do not need
+PowerShell 7.
+
+The script reads the password from the file LCSAS_PWFILE names, byte
+for byte, and does not ask for it.  Any file that holds only the
+password will do, for example one on a USB stick:
+
+    set LCSAS_PWFILE=E:\password.txt
     D:\restore.bat
 
-(Replace D: with your disc's drive letter.)
+LCSAS_PASSWORD holds the password itself instead of a file name
+(LCSAS_PW, an older name, works too).  If the password from either
+is wrong, the script says so and asks for it on the keyboard.
 
-For non-interactive use (e.g. scripting), put the password in a
-file and set the LCSAS_PWFILE environment variable:
+────────────────────────────────────────────────────────────────────
+SHARE CARDS (SPLIT PASSWORDS)
+────────────────────────────────────────────────────────────────────
 
-    set LCSAS_PWFILE=C:\path\to\password.txt
+Some archives split a backup set's password into N shares, one per
+share card: any K of them rebuild it, and fewer than K reveal
+nothing.  An archive may split some sets' passwords and not others.
+PASSWORD_INFO.txt on any disc states, for each set, whether its
+password was split, and the K and N.
+
+When the set you chose is split, the menu says so, for example:
+
+     [2] Holiday photos (password split: any 2 of 3 share cards)
+
+and the script asks for the cards instead of the password:
+
+     The password for Holiday photos is split into 3 share cards; you
+     need any 2 of them (Split ID 01234).
+
+     Share card 1 of 2: type all the words on one line, then ENTER
+     (or Q to quit).
+     Words of card 1:
+
+Take any K cards whose "Split ID" is the one shown.  For each card,
+type all its words on one line, in order, with a space between
+them, and press Enter.  The first 4 letters of each word are enough.
+The script checks each card on its own as you type it: if a word is
+wrong, it names the word and asks for that card again.  When it has
+K cards, it rebuilds the password with the bundled
+lcsas-keyshare.exe and goes on.  Cards from another backup set, or
+the same card typed twice, do not rebuild the password: the script
+says so and asks for the cards again.
+
+Each card you type is kept in a file of its own in %TEMP% only until
+the password is rebuilt, and then deleted.  If you have already
+rebuilt the password, type P instead of a card, and then the
+password.
+
+TO TYPE NO CARDS: put each card in a text file of its own, all in
+one folder (a retyped card, or the card file as it was printed: its
+other lines may stay in the file), and set LCSAS_SHARES_DIR to that
+folder before you start.  More than K cards is fine.
+
+    set LCSAS_SHARES_DIR=C:\Users\me\cards
     D:\restore.bat
 
-The password file should contain only the password, no trailing
-newline.
+IF THE MENU DOES NOT SAY THE PASSWORD IS SPLIT, but PASSWORD_INFO.txt
+does (an older disc, for one), use LCSAS_SHARES_DIR as above, or
+rebuild the password yourself and type it at the "Password:" prompt:
 
-────────────────────────────────────────────────────────────────────
-SHARE CARDS (SPLIT PASSWORDS) -- rebuild the password first
-────────────────────────────────────────────────────────────────────
-
-Some archives split a repository's password into N shares, one per
-share card (any K of them rebuild it; fewer than K reveal nothing).
-An archive may split some repositories' passwords and not others.
-PASSWORD_INFO.txt on any disc states, for each repository, whether
-its password was split, and the K and N.  If the password of the
-repository you are restoring was split, rebuild it BEFORE running
-restore.bat:
-
-  STEP 1.  Gather any K share cards of that repository (printed
+  STEP 1.  Gather any K share cards of that backup set (printed
            pages headed "LCSAS KEY SHARE" or "SHARE CARD"; each card
-           names its repository).  If you only have
-           paper, retype each card into its own text file, e.g.
-           C:\Users\me\card1.txt and C:\Users\me\card2.txt.
+           names its set).  If you only have paper, retype each card
+           into its own text file, e.g. C:\Users\me\card1.txt and
+           C:\Users\me\card2.txt.
 
   STEP 2.  Open a Command Prompt at the meta disc root (e.g. D:)
            and run the bundled combiner:
@@ -301,11 +422,12 @@ restore.bat:
                    C:\Users\me\card1.txt C:\Users\me\card2.txt
 
            It prints the password and nothing else.  Append
-           " > C:\Users\me\repo.key" to the command to also save it
-           to a file.
+           " > C:\Users\me\repo.key" to the command to save it to
+           a file instead, and use that file as LCSAS_PWFILE (see
+           "THE PASSWORD" above).
 
-  STEP 3.  Run restore.bat as normal and type the reconstructed
-           password at its "Password:" prompt.
+  STEP 3.  Run restore.bat as normal and type the rebuilt password
+           at its "Password:" prompt.
 
 If lcsas-keyshare.exe will not run on your host, install Python 3
 (see "MANUAL PYTHON RESTORE" below for the python.org steps) and
@@ -316,6 +438,40 @@ use the pure-Python fallback at the meta disc root:
 
 Format + re-implementation details: docs/SHARE_FORMAT.md on the
 meta disc.
+
+────────────────────────────────────────────────────────────────────
+MORE THAN ONE BACKUP SET
+────────────────────────────────────────────────────────────────────
+
+An archive can hold several backup sets, each with its own password
+(for example "Family documents" and "Holiday photos").  The script
+lists them by name and asks which one to restore:
+
+     This archive contains more than one backup set:
+        [1] Family documents
+        [2] Holiday photos (password split: any 2 of 3 share cards)
+
+     Type the number of the one to restore, or Q then ENTER to quit.
+     Which one do you want to restore? [1]:
+
+A set from an older disc shows a long code such as
+3f9c2b71-8d4e-4a06-b5e1-7c0a9d2e6f48 instead of its name.  In a name,
+each character other than A-Z, a-z, 0-9, space and . _ + , - shows
+as "_", and a name with none of A-Z, a-z or 0-9 shows the code.
+
+When a set has been restored, the script asks:
+
+     Restore another backup set from these discs? [y/N]:
+
+Type Y and press Enter to choose the next set from the same list.
+The copy on this computer is kept, and so are the copies of the
+discs read so far, so those discs are not asked for again.  The next
+set goes into a folder of its own by default
+(Documents\restored-<its name>).  Enter alone, or N, ends the run,
+and only then is the tools folder deleted.
+
+To choose a set without the menu, set LCSAS_REPO to its name or its
+code before you start (see ENV_VARS.txt).
 
 ────────────────────────────────────────────────────────────────────
 DESTINATION FOLDER NOTES
@@ -430,9 +586,10 @@ PRIVACY / SECURITY
 ────────────────────────────────────────────────────────────────────
 
   * The password is briefly written to %TEMP% and deleted after the
-    binary exits.  If your machine has full-disk encryption, this is
-    safe enough.  On shared machines, prefer the LCSAS_PWFILE
-    workflow with a file on removable media.
+    binary exits, and so are the share cards you type.  If your
+    machine has full-disk encryption, this is safe enough.  On
+    shared machines, prefer the LCSAS_PWFILE workflow with a file on
+    removable media.
 
   * The tools folder (%LOCALAPPDATA%\LCSAS-restore) and "Resume
     LCSAS restore.bat" never hold the password.  resume.cfg in that
@@ -450,14 +607,26 @@ PRIVACY / SECURITY
 TROUBLESHOOTING -- error messages
 ────────────────────────────────────────────────────────────────────
 
-"ERROR: could not decrypt any key file (wrong password?)"
-   -> The password is wrong, OR the password contains characters
-      CMD mangled (rare; non-ASCII or quote characters).  Try the
-      PowerShell entry point above or the LCSAS_PWFILE workflow.
-      restore.bat stops here on purpose (exit code 77) instead of
-      trying the other recovery tiers -- they all read the same
-      keys, so they would fail the same way.  Nothing was restored;
-      fix the password and simply re-run.
+"That password is wrong: it does not open the backup set ..."
+   -> The script tried the password before the restore, and the
+      backup set's key rejected it.  Type it again: check the case
+      of each letter and the keyboard layout.  A password with
+      characters CMD may change (letters outside A-Z, quotes) is
+      safer through the PowerShell lines in "THE PASSWORD" above.
+      Q stops the script (exit code 77) and prints "could not
+      decrypt the repository with that password".  Nothing was
+      restored, and no other recovery tier was tried -- they all
+      read the same keys, so they would fail the same way.
+
+"Share card N was not typed right"
+   -> The line above it names the word that is not a share word, or
+      says that a word is missing or the card's check failed.  Type
+      the card again, word by word against the paper.
+
+"Those share cards do not fit together"
+   -> Each card is fine on its own, but together they do not rebuild
+      the password: they come from different splits (compare the
+      Split ID on the cards), or one card was typed twice.
 
 "pack not found: <hex>"  or  "tree blob not found: <hex>"
    -> The pack is on a data disc that is not in a drive, and
