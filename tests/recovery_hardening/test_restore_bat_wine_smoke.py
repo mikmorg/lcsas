@@ -427,12 +427,8 @@ def test_target_ending_in_backslash_restores(
     """#615: restore.bat passes the folder as --target "<folder>", so
     "E:\\out\\" ended in \\", which the program reads as a quote: the
     folder name swallowed every later argument.  The script drops typed
-    quotes and trailing backslashes.
-
-    A drive root (E:\\ -> the programs get E:\\.) is pinned statically in
-    test_restore_bat_dispatcher.py: wine's cmd answers `if exist "E:\\"`
-    with false, so restore.bat stops at "could not create E:\\" under
-    wine before any program runs; real cmd finds the root."""
+    quotes and trailing backslashes.  A whole drive is refused:
+    test_whole_drive_target_is_asked_again."""
     import sys
     if not RESTORE_EXE.is_file():
         pytest.skip(f"{RESTORE_EXE} not present")
@@ -457,6 +453,29 @@ def test_target_ending_in_backslash_restores(
     assert f"Files restored to: E:\\{folder}" in out, out
     proof = meta / folder / "proof.txt"
     assert proof.is_file() and proof.read_bytes() == b"target folder\n", out
+
+
+def test_whole_drive_target_is_asked_again(tmp_path: Path) -> None:
+    """#615: a whole drive such as E:\\ is refused and the question asked
+    again.  Tier 1 makes the folder with mkdir and accepts only "already
+    exists"; Windows answers "access denied" for the top of a drive, so
+    the restore would stop the same way on every run.  Here stdin is at
+    its end by the second question, so the empty answer takes the
+    default folder."""
+    env, meta = _fixture_meta(tmp_path)
+    res = _run_bat(
+        env, "e",
+        stdin_data="E:\\\n",
+        extra_env={"LCSAS_PW": "test"},
+    )
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, f"rc={res.returncode}\n--- output ---\n{out}"
+    assert "E:\\ is a whole drive, not a folder." in out, out
+    assert "for example E:\\restored" in out, out
+    assert out.count("Restore to which folder?") == 2, out
+    assert "\\Documents\\restored" in out, out
+    # Nothing was written to the top of E:.
+    assert not (meta / ".lcsas-restore-marker").exists(), out
 
 
 def test_target_left_in_the_environment_is_ignored(tmp_path: Path) -> None:

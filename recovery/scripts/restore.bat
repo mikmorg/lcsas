@@ -408,15 +408,13 @@ echo.
 REM Clear TARGET first: `set /p` keeps the old value when the answer is
 REM empty, so a TARGET left in the caller's environment would silently
 REM win over the default (#615).
+:ask_target
 set "TARGET="
 set /p "TARGET=Restore to which folder? [%DEFAULT_TARGET%]: "
 REM Drop any quotes typed around the folder, then any trailing backslash.
 REM The programs get the folder as --target "<folder>", and a backslash
 REM right before the closing quote escapes it: the program then reads the
-REM rest of the line as part of the folder name (#615).  For a drive
-REM root such as E:\ the script itself keeps E:\ (E: alone would mean
-REM "the current folder on E:"), and the programs get TARGET_ARG, E:\.
-REM which is the same root with no backslash at the end.
+REM rest of the line as part of the folder name (#615).
 if defined TARGET set "TARGET=!TARGET:"=!"
 :strip_target
 if defined TARGET if "!TARGET:~-1!"=="\" (
@@ -424,10 +422,18 @@ if defined TARGET if "!TARGET:~-1!"=="\" (
     goto :strip_target
 )
 if not defined TARGET set "TARGET=%DEFAULT_TARGET%"
-set "TARGET_ARG=!TARGET!"
+REM A whole drive, such as E:\ (E: by now), is refused and the question
+REM asked again.  Tier 1 makes the folder, and each folder inside it,
+REM with mkdir and accepts only "already exists".  For the top of a
+REM drive Windows answers "access denied", so the restore would stop the
+REM same way on every run (#615).  Drop this check once tier 1 accepts a
+REM folder that is already there.
 if "!TARGET:~-1!"==":" (
-    set "TARGET=!TARGET!\"
-    set "TARGET_ARG=!TARGET!."
+    echo.
+    echo  !TARGET!\ is a whole drive, not a folder.  Choose a folder on
+    echo  it instead, for example !TARGET!\restored
+    echo.
+    goto :ask_target
 )
 
 REM ----- Non-empty-target guard [UX-07] -----------------------------
@@ -648,7 +654,7 @@ set "BIN=%RECOVERY%\bin\%ARCH%\lcsas-restore.exe"
 if exist "%BIN%" (
     echo.
     echo [tier 1] running !BIN!
-    "%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --target "%TARGET_ARG%" --snapshot latest %PACK_SEARCH_ARGS% %CATALOG_ARG% %META_DISC_ARG% %INTERACTIVE_ARG%
+    "%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --target "%TARGET%" --snapshot latest %PACK_SEARCH_ARGS% %CATALOG_ARG% %META_DISC_ARG% %INTERACTIVE_ARG%
     set "RC=!ERRORLEVEL!"
     REM %PWFILE% is deleted only on the TERMINAL branches below -- the
     REM fall-through to tier 2 needs it alive or rustic-static.exe gets
@@ -700,7 +706,7 @@ set "BIN=%RECOVERY%\bin\%ARCH%\rustic-static.exe"
 if exist "%BIN%" (
     echo.
     echo [tier 2] running !BIN!
-    "%BIN%" --repository "%REPO%" --password-file "%PWFILE%" restore latest "%TARGET_ARG%"
+    "%BIN%" --repository "%REPO%" --password-file "%PWFILE%" restore latest "%TARGET%"
     set "RC=!ERRORLEVEL!"
     del "%PWFILE%" 2>nul
     if !RC! equ 0 (
@@ -750,7 +756,7 @@ echo ============================================================
 echo  The restore stopped before it finished ^(code %RC%^).
 echo.
 echo  The files restored so far are kept in:
-echo    %TARGET%
+echo    !TARGET!
 echo.
 echo  To carry on, run restore.bat again from the META disc and
 echo  choose the same folder.  It skips the files that are already

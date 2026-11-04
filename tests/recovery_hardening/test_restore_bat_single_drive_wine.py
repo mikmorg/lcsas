@@ -302,7 +302,8 @@ class _Run:
         return rc
 
 
-def _drive(fx: _Fixture, run: _Run, *, quit_at: int | None = None) -> list[str]:
+def _drive(fx: _Fixture, run: _Run, *, quit_at: int | None = None,
+           target_win: str = TARGET_WIN) -> list[str]:
     """Answer restore.bat's prompts and tier 1's disc prompts.
 
     At each disc prompt, put the disc that holds the named pack into D:
@@ -310,7 +311,7 @@ def _drive(fx: _Fixture, run: _Run, *, quit_at: int | None = None) -> list[str]:
     instead.  Returns the text of every disc prompt, in order.
     """
     assert run.wait_for(lambda t: "Restore to which folder?" in t), run.text
-    run.send(TARGET_WIN)
+    run.send(target_win)
     assert run.wait_for(lambda t: "Password:" in t), run.text
     run.send(PASSWORD)
 
@@ -380,14 +381,19 @@ def test_q_at_the_disc_prompt_stops_without_tier2(tmp_path: Path) -> None:
     """#615: 'q' at the disc prompt ends tier 1 with a non-zero code.  For
     a backup set read from metadata\\<id>\\ (no data\\), tier 2 cannot
     work, so restore.bat stops there, keeps the restored files and says
-    how to carry on."""
+    how to carry on.
+
+    The folder has an "&" in its name, as Windows allows: the banner must
+    print it whole (`echo %TARGET%` cut it there and ran the rest)."""
     fx = _build(tmp_path)
     # A decoy tier 2: a fall-through would print its banner.
     decoy = fx.reloc / "recovery" / "bin" / TRIPLE / "rustic-static.exe"
     decoy.write_bytes(b"MZ decoy")
+    folder = "Photos & Videos"
+    target = fx.prefix / "drive_c" / folder
     run = _Run(fx)
     try:
-        boxes = _drive(fx, run, quit_at=2)
+        boxes = _drive(fx, run, quit_at=2, target_win=f"C:\\{folder}")
     finally:
         rc = run.finish()
     out = run.text
@@ -398,6 +404,9 @@ def test_q_at_the_disc_prompt_stops_without_tier2(tmp_path: Path) -> None:
     assert f"(code {rc})" in out, out
     assert "trying tier 2" not in out and "[tier 2]" not in out, out
     assert "no working recovery method" not in out, out
+    assert re.search(r"kept in:\r?\n +C:\\Photos & Videos\r?\n", out), out
+    assert "recognize" not in out, out  # "Videos" was not run
     # a0.txt was restored from disc A before the second prompt: kept.
-    got = fx.target / "a0.txt"
+    got = target / "a0.txt"
     assert got.is_file() and _sha(got.read_bytes()) == _sha(FILES["a0.txt"]), out
+

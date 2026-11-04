@@ -234,6 +234,10 @@ DESTINATION FOLDER NOTES
   * The default destination is %USERPROFILE%\Documents\restored,
     typically C:\Users\<you>\Documents\restored.
 
+  * Choose a folder, not a whole drive.  To restore onto a USB
+    drive E:, type a folder on it, such as E:\restored.  If you
+    type just E:\ the script asks again.
+
   * While it runs, the restore also keeps a copy of the packs of
     each data disc it has read, in your TEMP folder (usually on
     drive C:).  That needs free space too: about the size of those

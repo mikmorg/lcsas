@@ -324,15 +324,34 @@ def test_restore_bat_stops_without_tier2_for_a_metadata_only_set():
 def test_restore_bat_target_cannot_end_in_a_backslash():
     """#615: --target "E:\\" ends in \\", which the program reads as a
     quote, so the folder swallowed every later argument; and a TARGET
-    left in the environment won over the default on an empty answer."""
+    left in the environment won over the default on an empty answer.
+
+    A whole drive is refused and the question asked again: tier 1 makes
+    the folder with mkdir and accepts only "already exists", and Windows
+    answers "access denied" for the top of a drive.  Functional proof:
+    test_restore_bat_wine_smoke.py::test_whole_drive_target_is_asked_again."""
     code = _code(RESTORE_BAT.read_text())
     ask = code.index('set /p "TARGET=Restore to which folder? [%DEFAULT_TARGET%]: "')
-    assert code[ask - 1] == 'set "TARGET="'
+    assert code[ask - 2:ask] == [":ask_target", 'set "TARGET="']
     after = code[ask:ask + 16]
     assert 'if defined TARGET set "TARGET=!TARGET:"=!"' in after
     assert 'set "TARGET=!TARGET:~0,-1!"' in after
-    # A drive root: the script keeps E:\, the programs get E:\.
-    assert 'set "TARGET_ARG=!TARGET!."' in after
+    drive = after.index('if "!TARGET:~-1!"==":" (')
+    assert after.index('if not defined TARGET set "TARGET=%DEFAULT_TARGET%"') < drive
+    refusal = after[drive:after.index(")", drive)]
+    assert "goto :ask_target" in refusal, refusal
+    assert not any(ln.startswith("set ") for ln in refusal), refusal
     targets = [ln for ln in code if ln.startswith('"%BIN%"')
                and ("--target " in ln or "restore latest " in ln)]
-    assert targets and all('"%TARGET_ARG%"' in ln for ln in targets), targets
+    assert len(targets) == 2 and all('"%TARGET%"' in ln for ln in targets), targets
+
+
+def test_restore_bat_stop_banner_prints_the_folder_verbatim():
+    """The banner after a tier-1 stop names the folder that holds the
+    files restored so far.  `echo %TARGET%` is expanded before cmd splits
+    the line, so a folder such as "Photos & Videos" was cut at the "&"
+    and cmd tried to run "Videos".  `!TARGET!` is expanded after."""
+    code = _code(RESTORE_BAT.read_text())
+    body = code[code.index(":tier1_stopped"):]
+    kept = body.index("echo  The files restored so far are kept in:")
+    assert body[kept + 1] == "echo    !TARGET!", body[kept:kept + 2]
