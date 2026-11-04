@@ -116,8 +116,9 @@ REM copy of the catalog, resume.cfg and "Resume LCSAS restore.bat".
 REM That copy is TOOLS\recovery\scripts\restore.bat, so it finds TOOLS
 REM two folders up.  Otherwise TOOLS is LCSAS_TOOLS_DIR, else
 REM %LOCALAPPDATA%\LCSAS-restore: not %TEMP%, which Disk Cleanup and
-REM Storage Sense empty.  A run that does not relocate keeps only its
-REM pack cache and its catalog copy there.
+REM Storage Sense empty.  A run that does not relocate keeps its pack
+REM cache, its catalog copy and the metadata it merges in TOOLS\in-place
+REM (see "A run that does not relocate" below).
 if defined LCSAS_RELOCATED goto :tools_from_script
 if defined RESUME goto :tools_from_script
 set "TOOLS=%USERPROFILE%\AppData\Local\LCSAS-restore"
@@ -129,6 +130,24 @@ set "TOOLS=%~dp0..\.."
 :tools_known
 for %%I in ("%TOOLS%") do set "TOOLS=%%~fI"
 if "%TOOLS:~-1%"=="\" set "TOOLS=%TOOLS:~0,-1%"
+REM The tools folder is deleted once the restore has finished, so the
+REM script uses only a folder that is new, empty, or one it made itself:
+REM it writes .lcsas-tools there before anything else.  Any other folder
+REM is refused before anything in it changes: one that LCSAS_TOOLS_DIR
+REM names and that holds the reader's own files (a META disc copied to a
+REM USB stick, say), or a whole drive (E:\ is "E:" by now, and
+REM `rmdir /s /q "E:"` would empty the drive's current folder).  A run
+REM that does not relocate is checked too.  The copy that runs from the
+REM tools folder (relocated, or carrying on) is in such a folder already.
+if defined LCSAS_RELOCATED goto :tools_owned
+if defined RESUME goto :tools_owned
+if /i "%~1"=="--check-disc" goto :tools_owned
+if "%TOOLS:~-1%"==":" goto :tools_taken
+if not exist "%TOOLS%\" goto :tools_owned
+if exist "%TOOLS%\.lcsas-tools" goto :tools_owned
+dir /b /a "%TOOLS%" 2>nul | findstr "." >nul
+if not errorlevel 1 goto :tools_taken
+:tools_owned
 REM .done means "the restore has finished: delete this folder", and is
 REM written only after a good restore.  One left over by a run whose
 REM delete failed must not delete the folder after a stop this time.
@@ -201,13 +220,6 @@ set "META_SRC="
 if exist "%~dp0..\..\metadata\" for %%I in ("%~dp0..\..\metadata") do set "META_SRC=%%~fI"
 if not defined META_SRC if exist "%~dp0metadata\" for %%I in ("%~dp0metadata") do set "META_SRC=%%~fI"
 
-REM A folder named in LCSAS_TOOLS_DIR that already holds other files is
-REM left alone: the tools folder is deleted once the restore is done.
-if defined LCSAS_TOOLS_DIR if exist "%TOOLS%\" if not exist "%TOOLS%\recovery\" if not exist "%TOOLS%\pack-cache\" (
-    dir /b /a "%TOOLS%" 2>nul | findstr "." >nul
-    if not errorlevel 1 goto :tools_taken
-)
-
 REM An earlier run left a whole copy of this very script (restore.bat is
 REM copied last): run that, with the metadata, catalog copy and pack
 REM cache it has.  fc /b compares the bytes.
@@ -215,6 +227,15 @@ if not exist "%TOOLS%\recovery\scripts\restore.bat" goto :tools_fresh
 if not exist "%TOOLS%\recovery\bin\%ARCH%\lcsas-restore.exe" goto :tools_fresh
 fc /b "%~f0" "%TOOLS%\recovery\scripts\restore.bat" >nul 2>nul
 if errorlevel 1 goto :tools_fresh
+REM ...and only when it was copied from this very META disc (archive.txt,
+REM see :archive_id).  A folder left by a stopped restore of another
+REM archive, or from an older META disc, holds that disc's sets, catalog
+REM copy and merged-from.txt, whose labels repeat from one archive to the
+REM next: it is replaced.
+call :archive_id
+set "OLD_ARCHIVE="
+if exist "%TOOLS%\archive.txt" for /f "usebackq delims=" %%A in ("%TOOLS%\archive.txt") do if not defined OLD_ARCHIVE set "OLD_ARCHIVE=%%A"
+if not "!OLD_ARCHIVE!"=="!ARCHIVE_ID!" goto :tools_fresh
 echo [lcsas-restore] using the recovery files already copied to !TOOLS!
 REM A backup set on this META disc that the earlier copy lacks goes in
 REM too (#605); the sets already there keep what the earlier run read.
@@ -241,8 +262,10 @@ if not defined KEEP_CACHE rmdir /s /q "%TOOLS%\pack-cache" 2>nul
 if exist "%TOOLS%\recovery\" rmdir /s /q "%TOOLS%\recovery" 2>nul
 if exist "%TOOLS%\metadata\" rmdir /s /q "%TOOLS%\metadata" 2>nul
 if exist "%TOOLS%\metadata-new\" rmdir /s /q "%TOOLS%\metadata-new" 2>nul
-del /f /q "%TOOLS%\catalog.db" "%TOOLS%\resume.cfg" "%TOOLS%\Resume LCSAS restore.bat" "%TOOLS%\merged-from.txt" >nul 2>nul
+del /f /q "%TOOLS%\catalog.db" "%TOOLS%\resume.cfg" "%TOOLS%\Resume LCSAS restore.bat" "%TOOLS%\merged-from.txt" "%TOOLS%\archive.txt" >nul 2>nul
 
+REM .lcsas-tools first: the folder is the restore's own from now on.
+call :claim_tools "%TOOLS%"
 mkdir "%TOOLS%\recovery\scripts" 2>nul
 mkdir "%TOOLS%\recovery\bin\%ARCH%" 2>nul
 mkdir "%TOOLS%\recovery\docs" 2>nul
@@ -276,6 +299,10 @@ if defined META_SRC for /f "delims=" %%T in ('dir /ad /b "%META_SRC%" 2^>nul') d
     if errorlevel 4 set "COPY_BAD=1"
 )
 if defined SRC_ROOT if exist "!SRC_ROOT!\catalog.db" copy /Y "!SRC_ROOT!\catalog.db" "!TOOLS!\catalog.db" >nul 2>nul
+call :archive_id
+if not defined ARCHIVE_ID goto :archive_saved
+2>nul > "%TOOLS%\archive.txt" echo !ARCHIVE_ID!
+:archive_saved
 echo                   recovery\scripts\restore.bat
 copy /Y "%~f0" "%TOOLS%\recovery\scripts\restore.bat" >nul 2>nul
 if errorlevel 1 set "COPY_BAD=1"
@@ -313,20 +340,22 @@ REM the exit.
 REM
 REM When the copy returns, the tools folder goes only if the restore
 REM finished: the copy then leaves .done in it (a running batch file
-REM cannot delete its own folder).  A restore that stopped keeps the
-REM folder, for "Resume LCSAS restore.bat" (#609).  A command after the
-REM `call` replaces its exit code (a trailing `set` turned 7 into 0), so
-REM keep the code in LCSAS_RC first and end with `cmd /c exit` to hand
-REM it back.  `call` expands %%ERRORLEVEL%% after the copy has returned;
-REM the child cmd expands %%LCSAS_RC%%.  Not `exit`, which would close
-REM the prompt window of an heir who started this from one.
+REM cannot delete its own folder), and only if it is the restore's own
+REM (.lcsas-tools, see "The tools folder" above).  A restore that
+REM stopped keeps the folder, for "Resume LCSAS restore.bat" (#609).  A
+REM command after the `call` replaces its exit code (a trailing `set`
+REM turned 7 into 0), so keep the code in LCSAS_RC first and end with
+REM `cmd /c exit` to hand it back.  `call` expands %%ERRORLEVEL%% after
+REM the copy has returned; the child cmd expands %%LCSAS_RC%%.  Not
+REM `exit`, which would close the prompt window of an heir who started
+REM this from one.
 REM
 REM wine's cmd does not end a batch at (goto): it prints "Argument
 REM missing", skips the rest of the line and goes on with the next one,
 REM so under wine the run carries on from the disc, not relocated.  The
 REM wine tests check the copy that way; windows-e2e runs this line.
 :relaunch
-(goto) 2>nul & cd /d %SystemDrive%\ & set "LCSAS_RELOCATED=%~d0\" & call "%TOOLS%\recovery\scripts\restore.bat" %* & call set "LCSAS_RC=%%ERRORLEVEL%%" & (if exist "%TOOLS%\.done" rmdir /s /q "%TOOLS%") 2>nul & cmd /c exit %%LCSAS_RC%%
+(goto) 2>nul & cd /d %SystemDrive%\ & set "LCSAS_RELOCATED=%~d0\" & call "%TOOLS%\recovery\scripts\restore.bat" %* & call set "LCSAS_RC=%%ERRORLEVEL%%" & (if exist "%TOOLS%\.done" if exist "%TOOLS%\.lcsas-tools" rmdir /s /q "%TOOLS%") 2>nul & cmd /c exit %%LCSAS_RC%%
 
 :after_relocate
 REM ----- Auto-discover recovery root from this script's path --------
@@ -414,6 +443,18 @@ if /i "%~1"=="--check-disc" (
     pause
     exit /b 3
 )
+
+REM ----- A run that does not relocate (#609) ---------------------------
+REM Run from a copy that can be written to (a META disc copied to a USB
+REM stick or a folder, or LCSAS_NO_RELOCATE=1), or from the disc after a
+REM copy that failed, the script keeps its pack cache, its catalog copy
+REM and the metadata it merges in TOOLS\in-place, never in TOOLS itself:
+REM TOOLS may hold a restore that stopped, which "Resume LCSAS
+REM restore.bat" carries on, and that must stay as it is.  TOOLS_TOP is
+REM the tools folder.  :use_tools makes both the first time they are
+REM needed.
+set "TOOLS_TOP=%TOOLS%"
+if not defined LCSAS_RELOCATED set "TOOLS=%TOOLS%\in-place"
 
 REM ----- The newest data disc (#605) ---------------------------------
 REM Each backup set's index and snapshots on the META disc are as old as
@@ -712,12 +753,19 @@ REM Any other character leaves a token.  Spaces are taken out first, and
 REM the value is read with %%...%% on a line of its own: wine's for /f
 REM splits a "!VAR!" before it expands it, and stops at a space inside
 REM delims=.  (The leading x: for /f skips a line that starts with ";".)
+REM A quote is made "#" first, with delayed expansion (which never reads
+REM the text again): put in a line with %%...%% as it is, a quote would
+REM end the quoted text there, and what follows it would run.  The marker
+REM is a file on a disc, so the same goes for split= and split_id=.
 if not defined MK_NC goto :marker_nc_read
 set "_T=!MK_NC: =!"
+set "_T=!_T:"=#!"
 for /f "delims=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+,-" %%x in ("x%_T%") do set "MK_NC="
 :marker_nc_read
+if defined MK_SID set "MK_SID=!MK_SID:"=#!"
 if not defined MK_SPLIT goto :marker_nosplit
 set "_T=!MK_SPLIT:-of-= !"
+set "_T=!_T:"=#!"
 for /f "tokens=1,2" %%a in ("%_T%") do (
     set "MK_K=%%a"
     set "MK_N=%%b"
@@ -765,8 +813,8 @@ echo ============================================================
 echo                 LCSAS Restore (Windows)
 echo ============================================================
 echo.
-echo Recovery root: %RECOVERY%
-echo Repo:          %REPO%
+echo Recovery root: !RECOVERY!
+echo Repo:          !REPO!
 echo Backup set:    !SET_NAME!
 echo Architecture:  %ARCH%
 echo.
@@ -780,8 +828,10 @@ REM Clear TARGET first: `set /p` keeps the old value when the answer is
 REM empty, so a TARGET left in the caller's environment would silently
 REM win over the default (#615).
 :ask_target
+echo Type a folder, or ENTER for the one in brackets; Q then ENTER quits.
 set "TARGET="
 set /p "TARGET=Restore to which folder? [%DEFAULT_TARGET%]: "
+if /i "!TARGET!"=="q" goto :target_quit
 REM Drop any quotes typed around the folder, then any trailing backslash.
 REM The programs get the folder as --target "<folder>", and a backslash
 REM right before the closing quote escapes it: the program then reads the
@@ -806,6 +856,16 @@ if "!TARGET:~-1!"==":" (
     echo.
     goto :ask_target
 )
+REM A folder without its drive (restored, or \restored) would be made
+REM wherever cmd happens to be: C:\ after the relaunch.  Ask for the
+REM whole path.  \\server\share\folder is a whole path too.
+if "!TARGET:~1,1!"==":" goto :target_chosen
+if "!TARGET:~0,2!"=="\\" goto :target_chosen
+echo.
+echo  !TARGET! is not a whole path.  Type the folder with its drive,
+echo  for example C:\restored
+echo.
+goto :ask_target
 :target_chosen
 
 REM ----- Non-empty-target guard [UX-07] -----------------------------
@@ -871,6 +931,7 @@ REM value, so unlike restore.sh there is no "LCSAS_PACK_CACHE_DIR="
 REM switch to turn the cache off; set it to another folder instead.)
 REM (CACHE_SET_HERE is cleared at the top, not here: another backup set,
 REM restored in the same run, uses the cache this run made.)
+call :use_tools
 set "CACHE_OK="
 if not defined LCSAS_PACK_CACHE_DIR (
     set "LCSAS_PACK_CACHE_DIR=%TOOLS%\pack-cache"
@@ -956,26 +1017,39 @@ if /i "!LCSAS_INTERACTIVE!"=="auto" set "INTERACTIVE_ARG=--interactive auto"
 REM Optional --catalog if a catalog.db is present.  It lets the disc
 REM prompt name the disc that holds a pack.
 REM The meta disc deliberately carries NO catalog.db (it would always
-REM be stale at burn time).  Scan every drive letter for catalog.db and
-REM keep the LAST one found (highest drive letter), not the newest:
-REM plain cmd has no locale-proof way to compare file times (#482).  It
-REM only feeds the disc-swap hints; with an older catalog, hints for
-REM packs burned after it say "no record", and the restore still works.
-REM With no disc catalog in a drive, the copy an earlier run left in
-REM TOOLS is used (a restore that carries on, #609).
-REM Tier 1 gets a COPY in TOOLS, never the file on a disc: it keeps the
-REM catalog open until it ends, and an open file holds the disc in the
-REM drive (#610).  `copy` keeps the file's date, which tier 1 compares
-REM with any catalog it finds later.
-REM The newest data disc's catalog, when the step above found it, wins
-REM over every other (C2): it is still in its drive, as nothing has asked
-REM for another disc yet.  Another backup set in the same run keeps the
-REM copy the first one used: the disc in a drive by then is any disc.
+REM be stale at burn time).  Tier 1 gets a COPY in TOOLS, never the file
+REM on a disc: it keeps the catalog open until it ends, and an open file
+REM holds the disc in the drive (#610).  `copy` keeps the file's date,
+REM which tier 1 compares with any catalog.db it finds later: it takes a
+REM newer one, never an older one.  The copy comes from, in this order:
+REM  1. The newest data disc, when the step above found it (C2): it is
+REM     still in its drive, as nothing has asked for another disc yet.
+REM  2. The copy already in TOOLS, when a restore carries on, or when an
+REM     earlier run here read the newest data disc (merged-from.txt): it
+REM     is that disc's.  The disc in a drive now may be any disc, and an
+REM     older disc's catalog would leave the disc prompts for the packs
+REM     burned after it with no disc to name (#609).
+REM  3. Else the LAST catalog.db found (highest drive letter), not the
+REM     newest: plain cmd has no locale-proof way to compare file times
+REM     (#482).  With an older catalog, the prompts for packs burned
+REM     after it say "no record", and the restore still works.
+REM Another backup set in the same run keeps the copy the first one
+REM used: the disc in a drive by then is any disc.
 if defined ANOTHER_PASS if defined CATALOG_ARG goto :catalog_done
 set "CATALOG_ARG="
 set "CATALOG_PICK="
 set "CATALOG_COPIED="
-if exist "%TOOLS%\catalog.db" set "CATALOG_PICK=%TOOLS%\catalog.db"
+set "CATALOG_COPY=%TOOLS%\catalog.db"
+if not defined NEWEST_ROOT goto :catalog_not_newest
+if not exist "!NEWEST_ROOT!catalog.db" goto :catalog_not_newest
+set "CATALOG_PICK=!NEWEST_ROOT!catalog.db"
+goto :catalog_picked
+:catalog_not_newest
+if not exist "%CATALOG_COPY%" goto :catalog_scan
+set "CATALOG_PICK=%CATALOG_COPY%"
+if defined RESUME goto :catalog_picked
+if exist "%TOOLS%\merged-from.txt" goto :catalog_picked
+:catalog_scan
 if exist "%RECOVERY%\catalog.db" set "CATALOG_PICK=%RECOVERY%\catalog.db"
 if exist "%REPO%\catalog.db"     set "CATALOG_PICK=%REPO%\catalog.db"
 for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
@@ -983,13 +1057,16 @@ for %%L in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
         set "CATALOG_PICK=%%L:\catalog.db"
     )
 )
-if defined NEWEST_ROOT if exist "!NEWEST_ROOT!catalog.db" set "CATALOG_PICK=!NEWEST_ROOT!catalog.db"
+:catalog_picked
 if not defined CATALOG_PICK goto :catalog_done
 for %%I in ("%CATALOG_PICK%") do set "CATALOG_PICK=%%~fI"
-set "CATALOG_COPY=%TOOLS%\catalog.db"
 if /i "%CATALOG_PICK%"=="%CATALOG_COPY%" goto :catalog_copied
-del "%CATALOG_COPY%" >nul 2>nul
+REM /f: a copy made from a disc keeps the disc's read-only mark, which
+REM plain del cannot remove -- the old copy was then used while the line
+REM below named the new one.  attrib -r takes the mark off the new copy.
+del /f /q "%CATALOG_COPY%" >nul 2>nul
 copy /Y "%CATALOG_PICK%" "%CATALOG_COPY%" >nul 2>nul
+attrib -r "%CATALOG_COPY%" >nul 2>nul
 set "CATALOG_COPIED=1"
 :catalog_copied
 if not exist "%CATALOG_COPY%" (
@@ -1037,6 +1114,15 @@ REM ask for ever.
 REM CMD has no `read -s` equivalent, so a typed password is visible on
 REM the screen; the script says so once.  RECOVER_WINDOWS.txt shows how
 REM to type it hidden in PowerShell and pass it in LCSAS_PWFILE.
+REM A window closed while a password or typed share cards sat in %TEMP%
+REM left them there, and a new run picks new names, so nothing ever
+REM removed them.  The first pass removes every lcsas-pw-*.txt file and
+REM lcsas-shares-* folder in %TEMP% before it asks.  (So run one restore
+REM at a time on a computer: a second one would remove the first one's.)
+if defined ANOTHER_PASS goto :temp_cleared
+del /f /q "%TEMP%\lcsas-pw-*.txt" >nul 2>nul
+for /f "delims=" %%D in ('dir /ad /b "%TEMP%\lcsas-shares-*" 2^>nul') do rmdir /s /q "%TEMP%\%%D" 2>nul
+:temp_cleared
 set "PWFILE=%TEMP%\lcsas-pw-%RANDOM%-%TIME:~6,2%%TIME:~9,2%.txt"
 set "KS_EXE=%RECOVERY%\bin\%ARCH%\lcsas-keyshare.exe"
 set "PW_SOURCE="
@@ -1050,7 +1136,7 @@ if not defined PW_SOURCE if defined LCSAS_PW set "PW_SOURCE=LCSAS_PW"
 if not defined PW_SOURCE if defined LCSAS_SHARES_DIR set "PW_SOURCE=LCSAS_SHARES_DIR"
 
 :pw_next
-del "%PWFILE%" 2>nul
+del /f /q "%PWFILE%" >nul 2>nul
 if "!PW_SOURCE!"=="LCSAS_PWFILE" goto :pw_from_file
 if "!PW_SOURCE!"=="LCSAS_PASSWORD" goto :pw_from_env
 if "!PW_SOURCE!"=="LCSAS_PW" goto :pw_from_env
@@ -1093,6 +1179,10 @@ goto :pw_prompt
 :pw_from_file
 set "PW_SOURCE="
 copy /b /y "!LCSAS_PWFILE!" "%PWFILE%" >nul 2>nul
+REM The copy keeps a read-only mark the reader's file has (a file on a CD
+REM or a locked USB stick): take it off, or no later del could remove the
+REM copy and no typed password could replace it.
+attrib -r "%PWFILE%" >nul 2>nul
 if exist "%PWFILE%" goto :pw_file_copied
 echo [lcsas-restore] cannot read the password file LCSAS_PWFILE names:
 echo                 !LCSAS_PWFILE!
@@ -1224,13 +1314,13 @@ goto :share_next
 :shares_combine
 set "SH_ARGS="
 for /l %%I in (1,1,%SPLIT_K%) do set "SH_ARGS=!SH_ARGS! card%%I.txt"
-del "%PWFILE%" 2>nul
+del /f /q "%PWFILE%" >nul 2>nul
 pushd "%SH_DIR%"
 "%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt"
 set "KRC=%ERRORLEVEL%"
 popd
 if "%KRC%"=="0" goto :shares_rebuilt
-del "%PWFILE%" 2>nul
+del /f /q "%PWFILE%" >nul 2>nul
 rmdir /s /q "%SH_DIR%" 2>nul
 echo.
 echo Those share cards do not fit together, so they do not rebuild the
@@ -1265,7 +1355,7 @@ echo [lcsas-restore] checking the password ...
 "%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --list-snapshots >nul 2>nul
 set "PW_RC=%ERRORLEVEL%"
 if not "%PW_RC%"=="77" goto :pw_ok
-del "%PWFILE%" 2>nul
+del /f /q "%PWFILE%" >nul 2>nul
 set "PW_WRONG=1"
 echo.
 if "%PW_FROM%"=="shares" goto :pw_wrong_shares
@@ -1278,7 +1368,7 @@ echo set !SET_NAME!.  Check that every card belongs to it.
 goto :pw_next
 
 :pw_gave_up
-del "%PWFILE%" 2>nul
+del /f /q "%PWFILE%" >nul 2>nul
 echo.
 echo ============================================================
 if defined PW_WRONG echo  ERROR: could not decrypt the repository with that password.
@@ -1304,7 +1394,7 @@ if exist "%BIN%" (
     REM Tier 2, the no-tier epilogue and :tier1_stopped each do their
     REM own del.
     if !RC! equ 0 (
-        del "%PWFILE%" 2>nul
+        del /f /q "%PWFILE%" >nul 2>nul
         goto :restore_done
     )
     REM A key file POSITIVELY rejected the password (issue #384).  Every
@@ -1316,7 +1406,7 @@ if exist "%BIN%" (
     REM Windows (cmd /c returns 0), so goto a top-level label to exit.
     REM The tools folder stays: the restore has not finished (#609).
     if !RC! equ 77 (
-        del "%PWFILE%" 2>nul
+        del /f /q "%PWFILE%" >nul 2>nul
         echo.
         echo ============================================================
         echo  ERROR: could not decrypt the repository with that password.
@@ -1346,23 +1436,23 @@ if exist "%BIN%" (
     echo [tier 2] running !BIN!
     "%BIN%" --repository "%REPO%" --password-file "%PWFILE%" restore latest "%TARGET%"
     set "RC=!ERRORLEVEL!"
-    del "%PWFILE%" 2>nul
+    del /f /q "%PWFILE%" >nul 2>nul
     if !RC! equ 0 goto :restore_done
     echo [tier 2] failed with exit code !RC!.
 )
 
-del "%PWFILE%" 2>nul
+del /f /q "%PWFILE%" >nul 2>nul
 echo.
 echo ============================================================
 echo  ERROR: no working recovery method on this system.
 echo.
 echo  Looked for:
-echo    %RECOVERY%\bin\%ARCH%\lcsas-restore.exe
-echo    %RECOVERY%\bin\%ARCH%\rustic-static.exe
+echo    !RECOVERY!\bin\%ARCH%\lcsas-restore.exe
+echo    !RECOVERY!\bin\%ARCH%\rustic-static.exe
 echo.
 echo  A manual restore with the tier-3 Python reader on the disc
 echo  (requires a Python 3 install on this host) is described in
-echo  %RECOVERY%\docs\RECOVER_WINDOWS.txt -- this .bat does not
+echo  !RECOVERY!\docs\RECOVER_WINDOWS.txt -- this .bat does not
 echo  launch it for you.
 echo ============================================================
 pause
@@ -1371,7 +1461,7 @@ exit /b 1
 REM ----- The restore has finished -------------------------------------
 REM Reached only via `goto` from tier 1 or tier 2 when they exit 0.
 :restore_done
-del "%PWFILE%" 2>nul
+del /f /q "%PWFILE%" >nul 2>nul
 echo.
 echo ============================================================
 echo  Restore complete.  Files restored to: !TARGET!
@@ -1401,17 +1491,19 @@ REM the folder.
 if defined DESK_LAUNCHER del /f /q "!DESK_LAUNCHER!" >nul 2>nul
 REM Relocated, this copy runs from TOOLS and cannot delete it: .done
 REM tells the copy on the disc (or the launcher) to, once this copy has
-REM returned (#609).  Not relocated, the run kept only its pack cache,
-REM its catalog copy and any metadata\ it merged (#605) there, and the
-REM folder goes if that is all.
-if defined LCSAS_RELOCATED (
-    2>nul > "%TOOLS%\.done" echo.
-) else (
-    if defined CATALOG_COPIED del /f /q "!CATALOG_COPY!" >nul 2>nul
-    if defined METADATA_SET_HERE rmdir /s /q "!TOOLS!\metadata" 2>nul
-    if defined METADATA_SET_HERE del /f /q "!TOOLS!\merged-from.txt" >nul 2>nul
-    rmdir "!TOOLS!" >nul 2>nul
-)
+REM returned (#609).  Not relocated, the run kept its pack cache, its
+REM catalog copy and any metadata\ it merged (#605) in TOOLS\in-place,
+REM which goes; then the tools folder goes too if nothing else is in it
+REM (a stopped restore's files stay, and .lcsas-tools with them).
+if not defined LCSAS_RELOCATED goto :all_done_in_place
+2>nul > "%TOOLS%\.done" echo.
+goto :all_done_end
+:all_done_in_place
+if /i "!TOOLS!"=="!TOOLS_TOP!\in-place" rmdir /s /q "!TOOLS!" 2>nul
+del /f /q "!TOOLS_TOP!\.lcsas-tools" >nul 2>nul
+rmdir "!TOOLS_TOP!" >nul 2>nul
+if exist "!TOOLS_TOP!\" call :claim_tools "%TOOLS_TOP%"
+:all_done_end
 pause
 exit /b 0
 
@@ -1434,7 +1526,7 @@ REM writes no password (#482).  Those three go through `set /p`, which
 REM writes them as-is (without a newline).  Not `echo(`: Windows takes
 REM it, but wine writes a literal "(" and the wine tests drive this
 REM script.
-del "%PWFILE%" 2>nul
+del /f /q "%PWFILE%" >nul 2>nul
 set "PW_PLAIN_ECHO=1"
 if /i "!PW_VALUE!"=="on" set "PW_PLAIN_ECHO="
 if /i "!PW_VALUE!"=="off" set "PW_PLAIN_ECHO="
@@ -1446,6 +1538,41 @@ if defined PW_PLAIN_ECHO (
 )
 set "PW_PLAIN_ECHO="
 set "PW_VALUE="
+goto :eof
+
+:claim_tools
+REM %~1 = the tools folder.  Make it, and write .lcsas-tools in it: the
+REM folder is the restore's own, so it may be deleted once the restore
+REM has finished (see "The tools folder" above).
+if not exist "%~1\" mkdir "%~1" 2>nul
+if exist "%~1\.lcsas-tools" goto :eof
+2>nul > "%~1\.lcsas-tools" echo restore.bat made this folder; it deletes it once the restore is done.
+goto :eof
+
+:use_tools
+REM Make the tools folder (TOOLS_TOP, with .lcsas-tools) and TOOLS, its
+REM in-place\ for a run that does not relocate, before the first file
+REM goes in.
+if not exist "%TOOLS_TOP%\.lcsas-tools" call :claim_tools "%TOOLS_TOP%"
+if not exist "%TOOLS%\" mkdir "%TOOLS%" 2>nul
+goto :eof
+
+:archive_id
+REM ARCHIVE_ID = when the META disc this script runs from was made: the
+REM "created_at" of its volume_info.json, nothing without one.  The tools
+REM folder keeps it in archive.txt, and only a run from the very same
+REM META disc uses that folder as it is.
+set "ARCHIVE_ID="
+if not defined SRC_ROOT goto :eof
+for %%I in ("%SRC_ROOT%\..") do set "AI_JSON=%%~fI"
+if not "%AI_JSON:~-1%"=="\" set "AI_JSON=%AI_JSON%\"
+set "AI_JSON=%AI_JSON%volume_info.json"
+if not exist "%AI_JSON%" goto :eof
+for /f "tokens=1,* delims=:" %%A in ('findstr /c:"created_at" "%AI_JSON%" 2^>nul') do if not defined ARCHIVE_ID set "ARCHIVE_ID=%%B"
+if not defined ARCHIVE_ID goto :eof
+set "ARCHIVE_ID=!ARCHIVE_ID:"=!"
+set "ARCHIVE_ID=!ARCHIVE_ID: =!"
+set "ARCHIVE_ID=!ARCHIVE_ID:,=!"
 goto :eof
 
 :new_shares_dir
@@ -1485,7 +1612,7 @@ if not defined PL_YEAR goto :eof
 if %PL_YEAR% lss %NEWEST_Y% goto :eof
 if %PL_YEAR% equ %NEWEST_Y% if %PL_SEQ% leq %NEWEST_S% goto :eof
 set "NEWEST_ROOT=%1:\"
-set "NEWEST_LABEL=%RL_LABEL%"
+set "NEWEST_LABEL=!RL_LABEL!"
 set "NEWEST_Y=%PL_YEAR%"
 set "NEWEST_S=%PL_SEQ%"
 goto :eof
@@ -1499,7 +1626,7 @@ set "RL_LABEL="
 REM Only the lines with "Label:" (or "label") in them reach the for body:
 REM the other lines list the backup sets' names (see :read_marker).
 if exist "%~1VOLUME_INFO.txt" for /f "tokens=1,*" %%A in ('findstr /c:"Label:" "%~1VOLUME_INFO.txt" 2^>nul') do if not defined RL_LABEL if "%%A"=="Label:" set "RL_LABEL=%%B"
-if defined RL_LABEL goto :eof
+if defined RL_LABEL goto :read_label_ok
 if not exist "%~1volume_info.json" goto :eof
 REM (The `if` inside the brackets: wine loses the closing bracket of
 REM `do if ... (`.)
@@ -1508,6 +1635,21 @@ for /f "tokens=1,* delims=:" %%A in ('findstr /c:"label" "%~1volume_info.json" 2
     set "JL_V=%%B"
     if not defined RL_LABEL call :json_label_line
 )
+:read_label_ok
+call :label_ok
+goto :eof
+
+:label_ok
+REM RL_LABEL = a label read from a disc, or from merged-from.txt.  It is
+REM kept only when it holds nothing but A-Z, a-z, 0-9 and "_", as every
+REM label LCSAS writes does.  It is text from a file on a disc, put in
+REM lines below with %%RL_LABEL%%: a quote in it would end the quoted
+REM text there, and what follows would run.  So a quote is made "#"
+REM first, with delayed expansion (which never reads the text again),
+REM and the check then sees it.
+if not defined RL_LABEL goto :eof
+set "_T=!RL_LABEL:"=#!"
+for /f "delims=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_" %%x in ("x%_T%") do set "RL_LABEL="
 goto :eof
 
 :json_label_line
@@ -1527,7 +1669,7 @@ goto :eof
 REM RL_LABEL = PREFIX_MEDIA_YYYY_SEQ.  PL_YEAR and PL_SEQ = its last two
 REM "_" fields, read from the right (a prefix may hold "_"), as numbers;
 REM both nothing when they are not numbers.
-set "PL_REST=%RL_LABEL%"
+set "PL_REST=!RL_LABEL!"
 set "PL_PREV="
 set "PL_LAST="
 :parse_label_next
@@ -1573,7 +1715,8 @@ set "MF_LABEL="
 if exist "%TOOLS%\merged-from.txt" for /f "usebackq delims=" %%A in ("%TOOLS%\merged-from.txt") do if not defined MF_LABEL set "MF_LABEL=%%A"
 if not defined MF_LABEL goto :merge_fresh
 if not defined LCSAS_RELOCATED goto :merge_fresh
-set "RL_LABEL=%MF_LABEL%"
+set "RL_LABEL=!MF_LABEL!"
+call :label_ok
 call :parse_label
 if not defined PL_YEAR goto :merge_fresh
 if %PL_YEAR% lss %NEWEST_Y% goto :merge_fresh
@@ -1584,7 +1727,8 @@ goto :eof
 :merge_fresh
 if not exist "!NEWEST_ROOT!metadata\" goto :eof
 if defined LCSAS_RELOCATED goto :merge_into
-if /i "%DISC_ROOT_S%"=="%TOOLS%\" goto :merge_into
+REM Not relocated: TOOLS is TOOLS\in-place, this run's own.
+call :use_tools
 if exist "%TOOLS%\metadata\" rmdir /s /q "%TOOLS%\metadata" 2>nul
 del /f /q "%TOOLS%\merged-from.txt" >nul 2>nul
 mkdir "%TOOLS%\metadata" 2>nul
@@ -1698,7 +1842,7 @@ set "LAUNCHER=%TOOLS%\Resume LCSAS restore.bat"
 >>"%LAUNCHER%" echo pause
 >>"%LAUNCHER%" echo exit /b 1
 >>"%LAUNCHER%" echo :carry_on
->>"%LAUNCHER%" echo (goto) 2^>nul ^& cd /d %%SystemDrive%%\ ^& call "%%TOOLS%%\recovery\scripts\restore.bat" --resume ^& call set "LCSAS_RC=%%%%ERRORLEVEL%%%%" ^& (if exist "%%TOOLS%%\.done" del /f /q "%%~f0") 2^>nul ^& (if exist "%%TOOLS%%\.done" rmdir /s /q "%%TOOLS%%") 2^>nul ^& cmd /c exit %%%%LCSAS_RC%%%%
+>>"%LAUNCHER%" echo (goto) 2^>nul ^& cd /d %%SystemDrive%%\ ^& call "%%TOOLS%%\recovery\scripts\restore.bat" --resume ^& call set "LCSAS_RC=%%%%ERRORLEVEL%%%%" ^& (if exist "%%TOOLS%%\.done" del /f /q "%%~f0") 2^>nul ^& (if exist "%%TOOLS%%\.done" if exist "%%TOOLS%%\.lcsas-tools" rmdir /s /q "%%TOOLS%%") 2^>nul ^& cmd /c exit %%%%LCSAS_RC%%%%
 if not exist "%LAUNCHER%" goto :resume_unsaved
 set "RESUME_CMD=%LAUNCHER%"
 REM The Desktop: where Explorer has it (OneDrive may have moved it),
@@ -1716,18 +1860,28 @@ del /f /q "%CFG%" >nul 2>nul
 set "RESUME_CMD="
 goto :eof
 
-REM Reached only via `goto` from the relocation, before anything is
-REM copied.
+REM Reached only via `goto` from the check of the tools folder at the
+REM start, before anything in it has changed.
 :tools_taken
-echo ERROR: LCSAS_TOOLS_DIR names !TOOLS!,
-echo a folder that already holds other files.  The tools folder is
-echo deleted once the restore has finished, so name a new or empty
-echo folder instead, or leave LCSAS_TOOLS_DIR unset.
+echo ERROR: the tools folder !TOOLS!
+echo is a folder that already holds other files, or a whole drive.  The
+echo restore copies its programs there and deletes the folder once it
+echo has finished, so it uses only a new or empty folder, or one it made
+echo itself.  Set LCSAS_TOOLS_DIR to a new or empty folder, or leave it
+echo unset to use the usual one, %%LOCALAPPDATA%%\LCSAS-restore.
 pause
 exit /b 1
 
 REM Reached only via `goto` from the newest-data-disc step: Q (C5: 65).
 :newest_quit
+echo Stopped; nothing was restored.
+pause
+exit /b 65
+
+REM Reached only via `goto` from the folder question: Q (C5: 65).  After
+REM a set was restored, Q there means "no more", as at the menu.
+:target_quit
+if defined ANOTHER_PASS goto :all_done
 echo Stopped; nothing was restored.
 pause
 exit /b 65
@@ -1746,7 +1900,7 @@ REM (#615).  At top level for the same reason as :wrong_password.  Tier 1
 REM never removes a file it has restored, and a new run skips every file
 REM that is already complete (#92).  The tools folder stays (#609).
 :tier1_stopped
-del "%PWFILE%" 2>nul
+del /f /q "%PWFILE%" >nul 2>nul
 echo.
 echo ============================================================
 echo  The restore stopped before it finished ^(code %RC%^).
