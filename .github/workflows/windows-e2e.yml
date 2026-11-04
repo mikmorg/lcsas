@@ -87,7 +87,14 @@ jobs:
       # of packs), so 8 x 512 KiB (4 MiB of incompressible data) lands on
       # four data discs.  Few, bigger files rather than many small ones:
       # Defender real-time scanning on the windows runner is per-file.
-      - name: Build Windows fixture (rustic repo + ISOs + manifest)
+      #
+      # Backup sets (#617): two, each registered with `lcsas repo add` as an
+      # owner does, so the discs name their folders by UUID ids.  The one
+      # restored has an accented name, which restore.bat shows as its
+      # name_cmd ("_" for the accented letter); the second fills the set
+      # menu, as on the drill's two-set archive (#606).  sets.json carries
+      # their ids and names to the restore job.
+      - name: Build Windows fixture (rustic repos + ISOs + manifest)
         env:
           FIXTURE_FILE_COUNT: "8"
           FIXTURE_FILE_BYTES: "524288"
@@ -109,12 +116,15 @@ jobs:
               # The single-drive leg mounts only the meta ISO, so the
               # backup set must be on it, as on a real meta disc (#617).
               meta_metadata=True,
+              set_name=fixture_lib.WINDOWS_E2E_SET_NAME,
+              other_set_names=fixture_lib.WINDOWS_E2E_OTHER_SET_NAMES,
           )
           artifacts = {
               "meta_iso": str(fx.meta_iso),
               "data_isos": [str(p) for p in fx.data_isos],
               "manifest": str(fx.manifest_path),
               "password_file": str(fx.password_file),
+              "sets": str(fx.sets_path),
           }
           (workdir / "artifacts.json").write_text(json.dumps(artifacts, indent=2))
           print(json.dumps(artifacts, indent=2))
@@ -130,6 +140,8 @@ jobs:
           cp fixture-out/iso_out/*.iso        upload/
           cp fixture-out/manifest.json        upload/
           cp fixture-out/repo.pw              upload/repo.pw
+          cp fixture-out/sets.json            upload/sets.json
+          cat upload/sets.json
           ls -la upload/
 
       - name: Upload fixture artifact
@@ -169,6 +181,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
           $fixture = Join-Path $PWD "fixture"
 
           # Mount every ISO; collect drive letters.  The meta ISO carries
@@ -195,14 +208,25 @@ jobs:
           @($target, $pw, "", "", "", "", "", "") | Set-Content -Path $answers -Encoding ascii
 
           $env:LCSAS_NO_RELOCATE = "1"
+          # Two backup sets: the set is named by its id (#617), so no menu
+          # takes the first answer.  The single-drive leg uses the menu.
+          $sets = Get-FixtureSets -Fixture $fixture
+          $env:LCSAS_REPO = $sets.restore.id
           $bat = "${metaDrive}:\restore.bat"
-          Write-Host "Running: cmd /c `"$bat`" < answers.txt"
-          cmd /c "`"$bat`" < `"$answers`""
+          $outFile = Join-Path $env:RUNNER_TEMP "happy-out.txt"
+          Write-Host "Running: cmd /c `"$bat`" < answers.txt (LCSAS_REPO=$($env:LCSAS_REPO))"
+          # Redirect inside the cmd /c string, so $LASTEXITCODE is restore.bat's.
+          cmd /c "`"$bat`" < `"$answers`" > `"$outFile`" 2>&1"
           $rc = $LASTEXITCODE
+          $out = Get-Content $outFile -Raw
+          Write-Host $out
           Write-Host "restore.bat exit code: $rc"
           "RESTORE_RC=$rc"   | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
           "TARGET_DIR=$target" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
           if ($rc -ne 0) { throw "restore.bat failed (rc=$rc) — see log above" }
+          $problems = New-Object 'System.Collections.Generic.List[string]'
+          Assert-SetNamed -Out $out -Sets $sets -Problems $problems
+          if ($problems.Count -gt 0) { throw ($problems -join "`n") }
 
       - name: Verify restored tree matches manifest (byte-exact)
         shell: pwsh
@@ -242,7 +266,7 @@ jobs:
       # handed all the data discs to lcsas-restore.exe as --pack-search and
       # the restore consumed packs from several of them with no swap prompt.
       # restore.bat prints nothing about its --pack-search drives, and --repo
-      # (X:\metadata\win) holds no data\, so we assert it structurally: more
+      # (X:\metadata\<id>) holds no data\, so we assert it structurally: more
       # than one mounted disc holds packs, and the byte-exact check above
       # passed, so packs necessarily came from more than one disc.
       - name: Multi-disc — the restore swept more than one data disc
@@ -285,7 +309,8 @@ jobs:
           $ErrorActionPreference = "Stop"
           . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
           Invoke-RelocationLeg -Fixture (Join-Path $PWD 'fixture') `
-            -BatRel 'recovery\scripts\restore.bat' -TargetName 'restored-reloc-nested' -SeedStale
+            -BatRel 'recovery\scripts\restore.bat' -TargetName 'restored-reloc-nested' -SeedStale `
+            -PickBy name_cmd
 
       - name: Negative case — wrong password fails cleanly
         shell: pwsh
@@ -296,7 +321,12 @@ jobs:
           # password), so opt out and let this step's own assertions on
           # $LASTEXITCODE decide pass/fail.
           $PSNativeCommandUseErrorActionPreference = $false
+          . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
           $fixture = Join-Path $PWD "fixture"
+          # The set by the name restore.bat shows (its name_cmd), which
+          # LCSAS_REPO must match as well as the id (#606).
+          $sets = Get-FixtureSets -Fixture $fixture
+          $env:LCSAS_REPO = $sets.restore.name_cmd
           $metaDrive = $null
           foreach ($d in (Get-Volume | Where-Object { $_.DriveLetter })) {
             if (Test-Path "$($d.DriveLetter):\restore.bat") { $metaDrive = $d.DriveLetter }
@@ -328,6 +358,9 @@ jobs:
           if ($out -match "trying tier 2") { throw "restore.bat fell through to tier 2 on a wrong password" }
           if ($out -match "Access is denied") { throw "restore.bat printed 'Access is denied.' (#611)" }
           if ($out -notmatch "could not decrypt the repository") { throw "wrong-password banner missing from output" }
+          $problems = New-Object 'System.Collections.Generic.List[string]'
+          Assert-SetNamed -Out $out -Sets $sets -Problems $problems
+          if ($problems.Count -gt 0) { throw ($problems -join "`n") }
           # No restored data may be left behind.  restore.bat drops a
           # .lcsas-restore-marker resume sentinel into the target BEFORE
           # any tier runs (UX-07); it is script state, not tier output,
@@ -353,8 +386,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
-          Invoke-RelocatedWrongPasswordLeg -BatRel 'restore.bat' `
-            -TargetName 'restored-reloc-wrong'
+          Invoke-RelocatedWrongPasswordLeg -Fixture (Join-Path $PWD 'fixture') `
+            -BatRel 'restore.bat' -TargetName 'restored-reloc-wrong'
           # The leg throws on any failure; without this the step inherits
           # the intended $LASTEXITCODE=77 and reports red.
           exit 0
@@ -383,9 +416,10 @@ jobs:
       # dismounts everything, mounts only the meta ISO, runs the relocated
       # restore.bat with LCSAS_INTERACTIVE=on, answers the newest-data-disc
       # step (#605) by putting the newest data ISO into the meta disc's
-      # letter, and at each disc box moves the named data ISO into that
-      # letter (Dismount-DiskImage, Mount-DiskImage -NoDriveLetter,
-      # mountvol) and presses ENTER.
+      # letter, picks the set from the set menu, which must list both sets
+      # by name and neither by id (#606), and at each disc box moves the
+      # named data ISO into that letter (Dismount-DiskImage,
+      # Mount-DiskImage -NoDriveLetter, mountvol) and presses ENTER.
       # Runs after the eject leg: it starts by dismounting every ISO.
       - name: Single-drive leg — every data disc swapped into one drive letter
         shell: pwsh
