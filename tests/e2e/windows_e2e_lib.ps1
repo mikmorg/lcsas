@@ -646,7 +646,8 @@ function Start-RestoreProcess {
     param(
         [string]$Bat,
         [string]$OutFile,
-        [string]$WorkDir
+        [string]$WorkDir,
+        [hashtable]$Env = @{}
     )
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = 'cmd.exe'
@@ -657,7 +658,51 @@ function Start-RestoreProcess {
     $psi.CreateNoWindow = $true
     $psi.WorkingDirectory = $WorkDir
     $psi.EnvironmentVariables['LCSAS_INTERACTIVE'] = 'on'
+    foreach ($k in $Env.Keys) { $psi.EnvironmentVariables[$k] = $Env[$k] }
     return [System.Diagnostics.Process]::Start($psi)
+}
+
+# The data ISO whose label is newest: the latest year, then the highest
+# number (the last two "_" fields of LCSAS_<MEDIA>_<YYYY>_<SEQ>.iso).
+function Get-NewestDataIso {
+    param([string[]]$DataIsos)
+    $best = $null
+    $bestKey = $null
+    foreach ($iso in $DataIsos) {
+        $parts = [IO.Path]::GetFileNameWithoutExtension($iso).Split('_')
+        $key = [int64]$parts[$parts.Count - 2] * 1000000 + [int64]$parts[$parts.Count - 1]
+        if ($null -eq $bestKey -or $key -gt $bestKey) { $best = $iso; $bestKey = $key }
+    }
+    return $best
+}
+
+# #605 (C7): the newest-data-disc step.  Wait for its question, take the
+# disc that is in $Letter out and put the newest data ISO in, in the SAME
+# letter, press ENTER, and check that the script read the disc's full
+# label from its VOLUME_INFO.txt.  Returns the ISO now in $Letter.
+function Invoke-NewestDiscStep {
+    param(
+        [System.Diagnostics.Process]$Proc,
+        [string]$OutFile,
+        [string]$Letter,
+        [string]$Current,
+        [string[]]$DataIsos,
+        [System.Collections.Generic.List[string]]$Problems
+    )
+    $text = Wait-ForOutput -Path $OutFile -Pattern 'Newest data disc: ' -Proc $Proc -Seconds 300
+    if ($text -cnotmatch 'Newest data disc: ') { throw "no newest-data-disc question; output so far:`n$text" }
+    if ($text -cnotmatch 'Take the META disc out and put in your NEWEST data disc') {
+        $Problems.Add('the newest-data-disc step does not use the C7 wording')
+    }
+    $newest = Get-NewestDataIso -DataIsos $DataIsos
+    $label = [IO.Path]::GetFileNameWithoutExtension($newest)
+    Switch-DiscInLetter -Letter $Letter -Current $Current -Iso $newest
+    Write-Host "newest-data-disc step: $label is in ${Letter}:; ENTER"
+    $Proc.StandardInput.WriteLine('')
+    $want = [regex]::Escape("newest data disc: $label in drive ${Letter}:")
+    $text = Wait-ForOutput -Path $OutFile -Pattern $want -Proc $Proc -Seconds 120
+    if ($text -cnotmatch $want) { $Problems.Add("the script did not read the label $label in ${Letter}:") }
+    return $newest
 }
 
 # Answer tier 1's disc boxes until the restore ends.
@@ -786,11 +831,13 @@ function Complete-RestoreProcess {
 # reader with one drive.  Up to rc5 restore.bat never gave tier 1 that
 # letter, so this restore could not finish.
 #
-# stdin: restore.bat's two `set /p` prompts (folder, password) get one
-# line each, written only once the prompt is in $outFile; then one empty
-# line (ENTER) per box, after the swap (Invoke-DiscBoxes).  The first box
-# names no disc, because the meta disc has no catalog.  stdin is closed
-# after the final banner, which ends the `pause`.
+# stdin: first the newest-data-disc step (#605): the newest data ISO goes
+# into the meta disc's letter and ENTER (Invoke-NewestDiscStep).  Then
+# restore.bat's two `set /p` prompts (folder, password) get one line
+# each, written only once the prompt is in $outFile; then one empty line
+# (ENTER) per box, after the swap (Invoke-DiscBoxes).  The catalog comes
+# from the newest data disc, so the boxes name the disc they need.  stdin
+# is closed after the final banner, which ends the `pause`.
 # ---------------------------------------------------------------------
 function Invoke-SingleDriveLeg {
     param(
@@ -834,10 +881,16 @@ function Invoke-SingleDriveLeg {
     $problems = New-Object 'System.Collections.Generic.List[string]'
     $proc = $null
     $result = @{ Boxes = 0; Swaps = 0; Current = $metaIso }
+    $stepSwaps = 0
     $rc = 'n/a'
     try {
         Write-Host "Starting (no LCSAS_NO_RELOCATE, LCSAS_INTERACTIVE=on): $bat"
         $proc = Start-RestoreProcess -Bat $bat -OutFile $outFile -WorkDir "${letter}:\"
+
+        $current = Invoke-NewestDiscStep -Proc $proc -OutFile $outFile -Letter $letter -Current $metaIso `
+            -DataIsos $dataIsos -Problems $problems
+        $result.Current = $current
+        $stepSwaps = 1
 
         $text = Wait-ForOutput -Path $outFile -Pattern 'Restore to which folder\?' -Proc $proc -Seconds 300
         if ($text -cnotmatch 'Restore to which folder\?') { throw "no folder prompt; output so far:`n$text" }
@@ -846,14 +899,15 @@ function Invoke-SingleDriveLeg {
         if ($text -cnotmatch 'Password: ') { throw "no password prompt; output so far:`n$text" }
         $proc.StandardInput.WriteLine($pw)
 
-        $result = Invoke-DiscBoxes -Proc $proc -OutFile $outFile -Letter $letter -Current $metaIso `
+        $result = Invoke-DiscBoxes -Proc $proc -OutFile $outFile -Letter $letter -Current $current `
             -DataIsos $dataIsos -PackMap $packMap -Problems $problems
         $rc = Complete-RestoreProcess -Proc $proc -Problems $problems
     } finally {
         if ($proc -and -not $proc.HasExited) { & taskkill /PID $proc.Id /T /F | Out-Null }
     }
     $boxes = $result.Boxes
-    $swaps = $result.Swaps
+    # The step's swap (the newest data disc in) counts too.
+    $swaps = $result.Swaps + $stepSwaps
     $out = Read-SharedText $outFile
     Write-Host '----- restore.bat output -----'
     Write-Host $out
@@ -865,10 +919,16 @@ function Invoke-SingleDriveLeg {
     }
     if ("$rc" -ne '0') { $problems.Add("restore.bat exit code $rc (want 0)") }
     if ($out -cnotmatch 'Restore complete') { $problems.Add("'Restore complete' banner missing") }
-    if ($swaps -lt 1) { $problems.Add('no disc was swapped: the leg proved nothing') }
+    if ($result.Swaps -lt 1) { $problems.Add('no disc was swapped at a box: the leg proved nothing') }
     if ($boxes -gt $dataIsos.Count + 1) {
         $problems.Add("$boxes disc boxes for $($dataIsos.Count) data discs (want at most $($dataIsos.Count + 1))")
     }
+    if ($swaps -gt $dataIsos.Count + 1) {
+        $problems.Add("$swaps swaps for $($dataIsos.Count) data discs, the step's included (want at most $($dataIsos.Count + 1))")
+    }
+    # #605: the catalog copy is the newest disc's, so the first box names
+    # the disc it needs.
+    if ($out -match 'no disc catalog yet') { $problems.Add('a box had no catalog although the newest data disc was read first') }
     if ($out -match '/Volumes') { $problems.Add('a disc box lists the POSIX folder /Volumes on Windows') }
     if ($out -match 'trying tier 2') { $problems.Add('fell through to tier 2') }
     # #611: the relocation's write probe printed "Access is denied." on
@@ -958,8 +1018,11 @@ function Invoke-StopAndResumeLeg {
     $resume = @{ Boxes = 0; Swaps = 0; Current = $metaIso }
     try {
         # --- 1. run from the META disc, stop at the second box ---------
+        # The newest-data-disc step is skipped here (C4): this leg counts
+        # boxes from the META disc on, and Invoke-SingleDriveLeg runs it.
         Write-Host "Starting (one drive, q at the second box): $bat"
-        $proc = Start-RestoreProcess -Bat $bat -OutFile $outStop -WorkDir "${letter}:\"
+        $proc = Start-RestoreProcess -Bat $bat -OutFile $outStop -WorkDir "${letter}:\" `
+            -Env @{ LCSAS_NEWEST_DISC_PROMPT = '0' }
         $text = Wait-ForOutput -Path $outStop -Pattern 'Restore to which folder\?' -Proc $proc -Seconds 300
         if ($text -cnotmatch 'Restore to which folder\?') { throw "no folder prompt; output so far:`n$text" }
         $proc.StandardInput.WriteLine($target)

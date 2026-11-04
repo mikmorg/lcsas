@@ -381,9 +381,11 @@ jobs:
       # disc into that SAME letter when tier 1 asks.  Up to rc5 restore.bat
       # never gave tier 1 that letter, and nothing here caught it.  This leg
       # dismounts everything, mounts only the meta ISO, runs the relocated
-      # restore.bat with LCSAS_INTERACTIVE=on, and at each disc box moves
-      # the named data ISO into the meta disc's letter (Dismount-DiskImage,
-      # Mount-DiskImage -NoDriveLetter, mountvol) and presses ENTER.
+      # restore.bat with LCSAS_INTERACTIVE=on, answers the newest-data-disc
+      # step (#605) by putting the newest data ISO into the meta disc's
+      # letter, and at each disc box moves the named data ISO into that
+      # letter (Dismount-DiskImage, Mount-DiskImage -NoDriveLetter,
+      # mountvol) and presses ENTER.
       # Runs after the eject leg: it starts by dismounting every ISO.
       - name: Single-drive leg — every data disc swapped into one drive letter
         shell: pwsh
@@ -400,7 +402,9 @@ jobs:
       # "Resume LCSAS restore.bat", also on the Desktop.  Then, with a data
       # disc in the META disc's letter, the Desktop launcher finishes the
       # restore: exit 0, tree byte-exact, tools folder and launcher gone.
-      # Runs the launcher's (goto) line, which wine cannot.
+      # Runs the launcher's (goto) line, which wine cannot.  The newest-
+      # data-disc step is skipped (LCSAS_NEWEST_DISC_PROMPT=0) so the boxes
+      # count from the META disc on; the single-drive leg runs the step.
       - name: Stop-and-resume leg — q at a disc box, then the Desktop launcher
         shell: pwsh
         timeout-minutes: 25
