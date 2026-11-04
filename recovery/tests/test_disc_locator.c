@@ -23,6 +23,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <utime.h>
 #include <errno.h>
 
 static int fails = 0;
@@ -1751,7 +1752,10 @@ main(void)
 
     /* #488: consider_catalog falls back to opening the original when the
      * copy into the cache fails.  A directory (with an entry, so unlink
-     * can't clear it) sits where the copy should go. */
+     * can't clear it) sits where the copy should go.  Pass 0 blocks
+     * the copy itself (".new"): the original is opened in place.
+     * Pass 1 blocks only the rename of the finished copy onto
+     * ".locator-catalog.db": the ".new" copy is opened instead. */
     {
         char parent[1024];
         char disc[1024];
@@ -1760,26 +1764,116 @@ main(void)
         char blocker[1100];
         const char *parents[1];
         FILE *f;
-        snprintf(parent, sizeof parent, "%s_catfailparent", tmpdir);
-        snprintf(disc, sizeof disc, "%s/discA", parent);
-        snprintf(cat, sizeof cat, "%s/catalog.db", disc);
-        snprintf(cache_dir, sizeof cache_dir,
-                 "%s/lcsas_dl_catfail_%ld", roomy_base(), (long)getpid());
-        snprintf(blocker, sizeof blocker, "%s/.locator-catalog.db/x", cache_dir);
-        if (mkdir_recursive(disc) != 0 || mkdir_recursive(blocker) != 0) {
-            fprintf(stderr, "FAIL mkdir catfail fixture\n"); fails++;
+        int pass;
+        for (pass = 0; pass < 2; pass++) {
+            snprintf(parent, sizeof parent, "%s_catfailparent", tmpdir);
+            snprintf(disc, sizeof disc, "%s/discA", parent);
+            snprintf(cat, sizeof cat, "%s/catalog.db", disc);
+            snprintf(cache_dir, sizeof cache_dir,
+                     "%s/lcsas_dl_catfail_%ld", roomy_base(), (long)getpid());
+            snprintf(blocker, sizeof blocker, "%s/.locator-catalog.db%s/x",
+                     cache_dir, pass == 0 ? ".new" : "");
+            if (mkdir_recursive(disc) != 0 || mkdir_recursive(blocker) != 0) {
+                fprintf(stderr, "FAIL mkdir catfail fixture\n"); fails++;
+            }
+            f = fopen(cat, "wb");
+            if (f) { fputs("not a real catalog", f); fclose(f); }
+            parents[0] = parent;
+            lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
+            lcsas_disc_locator_set_mount_parents(&l, parents, 1);
+            lcsas_disc_locator_set_cache_dir(&l, cache_dir);
+            rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
+            (void)rc; /* the copy-failure fallback is the goal */
+            if (!l.owned_catalog || !l.owned_catalog_path
+                    || strcmp(l.owned_catalog_path, cat) != 0) {
+                fprintf(stderr, "FAIL #488 catfail (%d): no catalog "
+                                "opened\n", pass); fails++;
+            }
+            lcsas_disc_locator_free(&l);
+            {
+                char rm[1024];
+                snprintf(rm, sizeof rm, "rm -rf %s %s", parent, cache_dir);
+                (void)system(rm);
+            }
         }
-        f = fopen(cat, "wb");
-        if (f) { fputs("not a real catalog", f); fclose(f); }
+    }
+
+    /* rc6 review: a newer catalog.db that cannot be copied into the
+     * cache leaves the catalog in use open.  (Before, the one in use
+     * was closed and its copy deleted first, so the locator was left
+     * with none.)  discA's catalog is taken on the first rescan;
+     * discB, put in later, has a newer catalog that cannot be read:
+     * the copy fails, and so does the in-place fallback. */
+    {
+        char parent[1024], disc[1024], cat_a[1100], cat_b[1100];
+        char cache_dir[1024], p[1100], buf[64];
+        const char *parents[1];
+        unsigned char miss[32];
+        struct utimbuf ut;
+        FILE *err, *f;
+        int saved;
+        size_t n = 0;
+        memset(miss, 0xC9, 32);
+        snprintf(parent, sizeof parent, "%s_keepcat", tmpdir);
+        snprintf(disc, sizeof disc, "%s/discA", parent);
+        snprintf(cat_a, sizeof cat_a, "%s/catalog.db", disc);
+        mkdir_recursive(disc);
+        write_pack(cat_a, "catalog A");
+        ut.actime = ut.modtime = (time_t)1000000000L;
+        (void)utime(cat_a, &ut);
+        snprintf(cache_dir, sizeof cache_dir, "%s/lcsas_dl_keepcat_%ld",
+                 roomy_base(), (long)getpid());
+        mkdir_recursive(cache_dir);
         parents[0] = parent;
+
+        err = capture_stderr_begin(&saved);
         lcsas_disc_locator_init(&l, NULL, 0, NULL, 0);
         lcsas_disc_locator_set_mount_parents(&l, parents, 1);
         lcsas_disc_locator_set_cache_dir(&l, cache_dir);
-        rc = lcsas_disc_locate_pack(&l, pack_id, found, sizeof found);
-        (void)rc; /* the copy-failure fallback is the goal */
+        (void)lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+        snprintf(disc, sizeof disc, "%s/discB", parent);
+        snprintf(cat_b, sizeof cat_b, "%s/catalog.db", disc);
+        mkdir_recursive(disc);
+        write_pack(cat_b, "catalog B");
+        ut.actime = ut.modtime = (time_t)1000000100L;
+        (void)utime(cat_b, &ut);
+        (void)chmod(cat_b, 0);
+        if (access(cat_b, R_OK) == 0) {
+            capture_stderr_end(saved);
+            fprintf(stderr, "[info] catalog.db stays readable after "
+                            "chmod 0 (root?): skipping the keep-catalog "
+                            "case\n");
+        } else {
+            (void)lcsas_disc_locate_pack(&l, miss, found, sizeof found);
+            capture_stderr_end(saved);
+            if (!l.owned_catalog || !l.owned_catalog_path
+                    || strcmp(l.owned_catalog_path, cat_a) != 0) {
+                fprintf(stderr, "FAIL rc6 keep catalog: the catalog in "
+                                "use was dropped (now %s)\n",
+                        l.owned_catalog_path ? l.owned_catalog_path
+                                             : "none"); fails++;
+            }
+            snprintf(p, sizeof p, "%s/.locator-catalog.db", cache_dir);
+            f = fopen(p, "rb");
+            if (f) { n = fread(buf, 1, sizeof buf - 1, f); fclose(f); }
+            buf[n] = '\0';
+            if (strcmp(buf, "catalog A") != 0) {
+                fprintf(stderr, "FAIL rc6 keep catalog: the cache copy "
+                                "of the catalog in use is gone\n"); fails++;
+            }
+            snprintf(p, sizeof p, "%s/.locator-catalog.db.new", cache_dir);
+            f = fopen(p, "rb");
+            if (f) {
+                fclose(f);
+                fprintf(stderr, "FAIL rc6 keep catalog: a failed copy "
+                                "left %s\n", p); fails++;
+            }
+        }
+        if (err) fclose(err);
         lcsas_disc_locator_free(&l);
+        (void)chmod(cat_b, 0644);
         {
-            char rm[1024];
+            char rm[2200];
             snprintf(rm, sizeof rm, "rm -rf %s %s", parent, cache_dir);
             (void)system(rm);
         }
@@ -2050,7 +2144,7 @@ main(void)
                 mkdir_recursive(disc);
                 write_pack(p, "not a real catalog");
                 /* A folder sits where the .part would go. */
-                snprintf(p, sizeof p, "%s/.locator-catalog.db.part/x",
+                snprintf(p, sizeof p, "%s/.locator-catalog.db.new.part/x",
                          cache_dir);
                 mkdir_recursive(p);
             }
@@ -2066,8 +2160,13 @@ main(void)
                 fprintf(stderr, "FAIL rc6 copy_file (%d): a failed copy "
                                 "left %s\n", pass, p); fails++;
             }
+            snprintf(p, sizeof p, "%s/.locator-catalog.db.new", cache_dir);
+            if (stat(p, &st) == 0) {
+                fprintf(stderr, "FAIL rc6 copy_file (%d): a failed copy "
+                                "left %s\n", pass, p); fails++;
+            }
             if (pass == 0) {
-                snprintf(p, sizeof p, "%s/.locator-catalog.db.part",
+                snprintf(p, sizeof p, "%s/.locator-catalog.db.new.part",
                          cache_dir);
                 if (stat(p, &st) == 0) {
                     fprintf(stderr, "FAIL rc6 copy_file: a failed copy "

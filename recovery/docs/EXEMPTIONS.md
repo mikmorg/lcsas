@@ -63,18 +63,18 @@ catalog.c:317   INTRACTABLE   print_pending_packs sqlite3_prepare_v2 on a hardco
 catalog.c:318   INTRACTABLE   "
 
 # disc_locator.c
-disc_locator.c:963   DEFENSIVE   drain_walk path-too-long defensive continue (prefix_dir overflow)
-disc_locator.c:965   DEFENSIVE   "
-disc_locator.c:972   DEFENSIVE   drain_walk path-too-long defensive continue (cache_prefix overflow)
-disc_locator.c:974   DEFENSIVE   "
-disc_locator.c:985   DEFENSIVE   drain_walk path-too-long defensive continue (src path overflow)
-disc_locator.c:987   DEFENSIVE   "
-disc_locator.c:992   DEFENSIVE   drain_walk path-too-long defensive continue (dst path overflow)
-disc_locator.c:994   DEFENSIVE   "
-disc_locator.c:1046   VOLATILE   drain_disc fs_critically_full warn; covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache base fs is <10% free [FMA-09]
-disc_locator.c:1047   VOLATILE   "
-disc_locator.c:1053   VOLATILE   "
-disc_locator.c:1055   VOLATILE   "
+disc_locator.c:978   DEFENSIVE   drain_walk path-too-long defensive continue (prefix_dir overflow)
+disc_locator.c:980   DEFENSIVE   "
+disc_locator.c:987   DEFENSIVE   drain_walk path-too-long defensive continue (cache_prefix overflow)
+disc_locator.c:989   DEFENSIVE   "
+disc_locator.c:1000  DEFENSIVE   drain_walk path-too-long defensive continue (src path overflow)
+disc_locator.c:1002  DEFENSIVE   "
+disc_locator.c:1007  DEFENSIVE   drain_walk path-too-long defensive continue (dst path overflow)
+disc_locator.c:1009  DEFENSIVE   "
+disc_locator.c:1061   VOLATILE   drain_disc fs_critically_full warn; covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache base fs is <10% free [FMA-09]
+disc_locator.c:1062   VOLATILE   "
+disc_locator.c:1068   VOLATILE   "
+disc_locator.c:1070   VOLATILE   "
 
 # lcsas_io.c
 lcsas_io.c:22   INTRACTABLE   EINTR retry in lcsas_pread_exact read loop; needs racy signal injection

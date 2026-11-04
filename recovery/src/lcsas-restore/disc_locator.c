@@ -326,6 +326,12 @@ push_discovered(lcsas_disc_locator *l, const char *path)
  * original is touched only during the copy.  Fallback when no cache
  * dir is configured: open the original in-place (legacy behaviour;
  * the heir gets the mount-busy friction).
+ *
+ * The new copy is made beside the one in use (".new") and takes its
+ * place only once it is complete, so a catalog that cannot be read
+ * off the disc leaves the one in use open.  Windows can neither
+ * delete nor rename over an open file, so the one in use is closed
+ * just before that.
  */
 static void
 consider_catalog(lcsas_disc_locator *l, const char *path)
@@ -334,27 +340,36 @@ consider_catalog(lcsas_disc_locator *l, const char *path)
     lcsas_catalog *cat;
     char *path_dup;
     char open_path[4096];
+    char new_path[4096];
 
     if (!path || !*path) return;
     if (stat(path, &st) != 0) return;
     if ((long long)st.st_mtime <= l->owned_catalog_mtime) return;
 
     if (l->cache_dir) {
-        int rc = snprintf(open_path, sizeof open_path,
-                          "%s/.locator-catalog.db", l->cache_dir);
-        if (rc <= 0 || (size_t)rc >= sizeof open_path) return;
-        /* The previous copy is open in SQLite, and Windows can neither
-         * delete nor replace an open file: close it first. */
-        if (l->owned_catalog) lcsas_catalog_close(l->owned_catalog);
-        l->owned_catalog = NULL;
-        /* Drop any previous copy so the file size doesn't accumulate. */
-        unlink(open_path);
-        if (copy_file(path, open_path) != 0) {
+        int rc = snprintf(new_path, sizeof new_path,
+                          "%s/.locator-catalog.db.new", l->cache_dir);
+        if (rc <= 0 || (size_t)rc >= sizeof new_path) return;
+        sprintf(open_path, "%s/.locator-catalog.db", l->cache_dir);
+        if (copy_file(path, new_path) != 0) {
+#ifdef _WIN32
+            /* Opened in place, the disc's catalog would hold the
+             * drive, and Windows would not eject the disc.  Keep
+             * the catalog in use. */
+            return;
+#else
             /* Best-effort fallback: open the original.  Will pin the
              * mount, but better than no catalog. */
             cat = lcsas_catalog_open(path);
+#endif
         } else {
-            cat = lcsas_catalog_open(open_path);
+            if (l->owned_catalog) lcsas_catalog_close(l->owned_catalog);
+            l->owned_catalog = NULL;
+#ifdef _WIN32
+            (void)remove(open_path);
+#endif
+            cat = lcsas_catalog_open(rename(new_path, open_path) == 0
+                                     ? open_path : new_path);
         }
     } else {
         cat = lcsas_catalog_open(path);
