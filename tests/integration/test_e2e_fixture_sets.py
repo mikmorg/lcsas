@@ -11,6 +11,7 @@ which the windows and macOS legs read, says the same.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import uuid
@@ -38,6 +39,10 @@ def _metadata_of(iso: Path, dest: Path) -> dict[str, dict[str, str] | None]:
          "-extract", "/metadata", str(dest)],
         check=True, capture_output=True,
     )
+    # The extracted folders keep the disc's read-only modes; make them
+    # writable again, or pytest cannot remove its temp folder.
+    for dirpath, _dirs, _files in os.walk(dest):
+        os.chmod(dirpath, 0o755)
     return {d.name: read_repo_marker(d) for d in dest.iterdir() if d.is_dir()}
 
 
