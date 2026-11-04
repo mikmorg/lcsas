@@ -102,9 +102,10 @@ def test_restore_bat_probes_holographic_metadata_layout():
     # LCSAS_REPO must select a tenant (parity with restore.sh).
     assert "LCSAS_REPO" in content
 
-    # The relocation block must copy metadata into the RAM dir.
-    assert "%RAMDIR%\\recovery\\metadata" in content, (
-        "single-drive relocation does not carry metadata\\ into RAM"
+    # The relocation block must copy metadata into the tools folder
+    # (#609: metadata\<id>\ at its top, where the copy's DISC_ROOT is).
+    assert "!TOOLS!\\metadata\\%%T" in content, (
+        "single-drive relocation does not carry metadata\\ into the tools folder"
     )
 
     # The dead-end "no restic repo" message must be gone in favour of the
@@ -160,25 +161,32 @@ def test_restore_bat_relocation_copies_bin_for_both_script_locations():
     must come from a root resolved for both layouts, and an empty copy
     must not be launched.  windows-e2e's root relocation leg is the
     functional proof; this is the cheap guard against a revert.
-    """
-    block = _relocation_block(RESTORE_BAT.read_text())
-    copies = [
-        line.strip() for line in block.splitlines()
-        if line.strip().startswith(("robocopy", "xcopy"))
-    ]
-    bin_copies = [c for c in copies if "recovery\\bin" in c]
-    assert bin_copies, "relocation no longer copies the bin tree"
-    for c in bin_copies:
-        assert "%~dp0..\\bin" not in c, f"bin copied from %~dp0..\\bin again: {c}"
-        assert "!SRC_ROOT!\\bin" in c, f"bin not copied from SRC_ROOT: {c}"
+
+    Updated for #612: the programs are copied one by one through
+    :copy_one (from "%SRC_ROOT%\\<path>"), not as a robocopy/xcopy of
+    the whole bin tree, and the check after the copy looks at this
+    computer's bin\\<arch>\\ only."""
+    content = RESTORE_BAT.read_text()
+    block = _relocation_block(content)
+    copy_loop = (
+        'for %%F in (lcsas-restore.exe lcsas-keyshare.exe lcsas-ecc.exe %T2_EXE%) '
+        'do call :copy_one "bin\\%ARCH%\\%%F"'
+    )
+    code = _code_lines(block)
+    assert copy_loop in code, "relocation no longer copies the programs"
+    first_copy = block.index(copy_loop)
+
+    # :copy_one copies from the resolved root, never from %~dp0..\bin.
+    sub = _label_body(content, ":copy_one")
+    assert 'copy /Y "%SRC_ROOT%\\%~1" "%TOOLS%\\recovery\\%~1" >nul 2>nul' in sub, sub
+    assert not any("%~dp0..\\bin" in ln for ln in sub)
 
     # Both layouts are probed before the first copy.
-    first_copy = block.index(bin_copies[0])
     assert 0 <= block.find('if exist "%~dp0..\\bin\\"') < first_copy
     assert 0 <= block.find('if exist "%~dp0recovery\\bin\\"') < first_copy
 
     # A copy with no .exe falls back to running from the disc.
-    check = block.find('dir /s /b "%RAMDIR%\\recovery\\bin\\*.exe"')
+    check = block.find('dir /b "%TOOLS%\\recovery\\bin\\%ARCH%\\*.exe"')
     assert check > first_copy, "no empty-copy check after the bin copy"
     assert "goto :after_relocate" in block[check:block.index("copied recovery files to")]
 
@@ -197,9 +205,11 @@ def test_restore_bat_relaunch_reads_nothing_more_from_the_disc():
     code = _code_lines(block)
     assert code[-1].startswith(
         '(goto) 2>nul & cd /d %SystemDrive%\\ & set "LCSAS_RELOCATED=%~d0\\" '
-        '& call "%RAMDIR%\\recovery\\scripts\\restore.bat" %* & '
+        '& call "%TOOLS%\\recovery\\scripts\\restore.bat" %* & '
     ), code[-1]
-    assert not any(ln.startswith('call "%RAMDIR%') for ln in code), code
+    assert not any(ln.startswith('call "%TOOLS%') for ln in code), code
+    # The reuse branch jumps straight to the same line (#609).
+    assert code[-2:-1] == [":relaunch"], code[-3:]
 
 
 def test_restore_bat_relaunch_removes_the_copy_and_keeps_its_exit_code():
@@ -209,15 +219,20 @@ def test_restore_bat_relaunch_removes_the_copy_and_keeps_its_exit_code():
     trailing `set` turned 7 into 0 on windows-latest), so the code is
     kept first and handed back by `cmd /c exit` as the very last
     command.  windows-e2e's relocated wrong-password leg is the
-    functional proof (exit 77 through the relocation, no copy left);
-    this guards the order.
-    """
+    functional proof (exit 77 through the relocation); this guards the
+    order.
+
+    Updated for #609: the copy now lives in the fixed tools folder and
+    goes only when the restore finished, which the copy marks with
+    TOOLS\\.done.  A stopped restore keeps it for "Resume LCSAS
+    restore.bat".  The `if` is in parentheses: bare, it would take the
+    `& cmd /c exit` after it as part of its own command."""
     line = _code_lines(_relocation_block(RESTORE_BAT.read_text()))[-1]
     cmds = [c.strip() for c in line.split(" & ")]
-    call = cmds.index('call "%RAMDIR%\\recovery\\scripts\\restore.bat" %*')
+    call = cmds.index('call "%TOOLS%\\recovery\\scripts\\restore.bat" %*')
     assert cmds[call + 1:] == [
         'call set "LCSAS_RC=%%ERRORLEVEL%%"',
-        'rmdir /s /q "%RAMDIR%" 2>nul',
+        '(if exist "%TOOLS%\\.done" rmdir /s /q "%TOOLS%") 2>nul',
         "cmd /c exit %%LCSAS_RC%%",
     ], cmds
 
@@ -355,3 +370,220 @@ def test_restore_bat_stop_banner_prints_the_folder_verbatim():
     body = code[code.index(":tier1_stopped"):]
     kept = body.index("echo  The files restored so far are kept in:")
     assert body[kept + 1] == "echo    !TARGET!", body[kept:kept + 2]
+
+
+# ---------------------------------------------------------------------
+# rc6 PR B2 (drill #476): the Windows journey from a disc.
+# ---------------------------------------------------------------------
+
+
+def _label_body(content: str, label: str) -> list[str]:
+    """Code lines from ``label`` up to the next top-level ``goto :eof``
+    or ``exit /b`` (the end of a subroutine or of a terminal label)."""
+    code = _code(content)
+    start = code.index(label)
+    body = []
+    for ln in code[start:]:
+        body.append(ln)
+        if ln in ("goto :eof",) or ln.startswith("exit /b"):
+            break
+    return body
+
+
+def test_restore_bat_write_probes_send_errors_away_first():
+    """#611: `> "%PROBE%" echo. 2>nul` printed "Access is denied." on every
+    start from a disc: cmd reports a redirect it cannot open itself, and a
+    2>nul after the `>` comes too late.  Under wine only the form with
+    2>nul first was silent.  The marker in the restore folder had the
+    same pattern.  Functional proof: the wine relocation test (a
+    read-only META folder) and every windows-e2e relocation leg."""
+    code = _code(RESTORE_BAT.read_text())
+    assert '2>nul > "%PROBE%" echo.' in code
+    assert '2>nul > "%MARKER%" echo.' in code
+    for ln in code:
+        for name in ("%PROBE%", "%MARKER%", '%TOOLS%\\.done'):
+            if f'> "{name}' in ln:
+                assert ln.startswith("2>nul >"), f"redirect error escapes: {ln}"
+
+
+def test_restore_bat_warns_about_quickedit_before_the_copy():
+    """#613: a click in the console window starts QuickEdit's "Select"
+    mode, which pauses the restore, and nothing told the reader.  The
+    note comes first, before the long copy, once (the relocated copy does
+    not repeat it), and says how to get out of it.  QuickEdit is not
+    switched off: that would change the reader's console settings."""
+    content = RESTORE_BAT.read_text()
+    note = content.index("PAUSES the restore")
+    assert note < content.index('2>nul > "%PROBE%" echo.')
+    assert note < content.index("call :copy_one")
+    head = content[:note]
+    assert head.rstrip().endswith("echo  A click selects text and"), head[-200:]
+    guard = head.rindex("if not defined LCSAS_RELOCATED (")
+    assert "Esc" in content[note:note + 300]
+    assert "right-click" in content[note:note + 300]
+    assert guard > content.index("setlocal enabledelayedexpansion")
+    assert not any("reg add" in ln for ln in _code(content)), "no registry change"
+
+
+def test_restore_bat_relocation_copies_only_this_platform():
+    """#612: the relocation copied the whole recovery\\bin (744 MB, six
+    kinds of computer) without a word.  It now copies bin\\<arch>\\'s three
+    programs (rustic-static.exe only when tier 2 could run), this
+    computer's guide and the metadata, and names each on screen.  ARCH is
+    known before the relocation for that.  Functional proof:
+    test_restore_bat_tools_folder_wine.py."""
+    content = RESTORE_BAT.read_text()
+    block = _relocation_block(content)
+    code = _code_lines(block)
+    assert content.index('set "ARCH=x86_64-pc-windows-gnu"') < content.index(
+        "if defined LCSAS_RELOCATED goto :after_relocate")
+    assert not any(ln.startswith("robocopy") or "where robocopy" in ln for ln in code)
+    for ln in code:
+        if ln.startswith(("xcopy", "copy")):
+            assert "\\bin" not in ln, f"copies a whole bin folder: {ln}"
+    assert 'call :copy_one "docs\\RECOVER_WINDOWS.txt"' in code
+    # rustic-static.exe only for a set that holds its own data\.
+    t2 = [ln for ln in code if 'set "T2_EXE=rustic-static.exe"' in ln]
+    assert len(t2) == 1 and '\\data\\"' in t2[0], t2
+    # The progress lines name what is copied.
+    sub = _label_body(content, ":copy_one")
+    assert "echo                   recovery\\%~1" in sub, sub
+    assert "echo                   metadata\\%%T" in code
+    # restore.bat is copied last: a copy cut short is never reused.
+    last_copy = max(i for i, ln in enumerate(code)
+                    if ln.startswith(("copy ", "xcopy ", "call :copy_one"))
+                    or " call :copy_one " in ln)
+    assert code[last_copy] == 'copy /Y "%~f0" "%TOOLS%\\recovery\\scripts\\restore.bat" >nul 2>nul'
+
+
+def test_restore_bat_reuses_or_replaces_the_tools_folder():
+    """#609 (C6): a tools folder with a byte-identical restore.bat is used
+    as it is (`fc /b`), with its metadata, catalog copy and pack cache;
+    otherwise what it holds is removed BY NAME (LCSAS_TOOLS_DIR may name a
+    folder with other files) and copied afresh, keeping pack-cache\\ only
+    when the tier-1 program is byte-identical.  wine's fc is a stub that
+    answers "same" for any two files, so the replace branch is proved only
+    on windows-e2e (Invoke-RelocationLeg -SeedStale)."""
+    block = _relocation_block(RESTORE_BAT.read_text())
+    code = _code_lines(block)
+    reuse = code.index('fc /b "%~f0" "%TOOLS%\\recovery\\scripts\\restore.bat" >nul 2>nul')
+    assert code[reuse + 1] == "if errorlevel 1 goto :tools_fresh"
+    assert code[reuse + 3] == "goto :relaunch"
+    fresh = code.index(":tools_fresh")
+    assert fresh > reuse
+    keep = [ln for ln in code[fresh:] if ln.startswith('fc /b "!SRC_ROOT!\\bin\\%ARCH%\\lcsas-restore.exe"')]
+    assert len(keep) == 1, code[fresh:]
+    # Never a recursive delete of the folder itself before the restore.
+    for ln in code:
+        assert 'rmdir /s /q "%TOOLS%"' not in ln or ln.startswith("(goto) 2>nul"), ln
+    # A folder named in LCSAS_TOOLS_DIR that holds other files is refused.
+    assert any("goto :tools_taken" in ln for ln in code)
+
+
+def test_restore_bat_tools_folder_default_and_override():
+    """C4/C6: the tools folder is %LOCALAPPDATA%\\LCSAS-restore unless
+    LCSAS_TOOLS_DIR names another; the copy in it finds it two folders up
+    from itself.  Not %TEMP%: Disk Cleanup and Storage Sense empty it."""
+    code = _code(RESTORE_BAT.read_text())
+    assert 'if defined LOCALAPPDATA set "TOOLS=%LOCALAPPDATA%\\LCSAS-restore"' in code
+    assert 'if defined LCSAS_TOOLS_DIR set "TOOLS=%LCSAS_TOOLS_DIR%"' in code
+    assert 'set "TOOLS=%~dp0..\\.."' in code
+    assert not any("%TEMP%\\lcsas-restore" in ln for ln in code)
+    # The cache and the catalog copy are in it (#610).
+    assert 'set "LCSAS_PACK_CACHE_DIR=%TOOLS%\\pack-cache"' in code
+
+
+def test_restore_bat_tools_folder_goes_only_after_a_finished_restore():
+    """#609 (C6): the tools folder is deleted only after rc 0, through
+    TOOLS\\.done and the (goto) relaunch line: the copy runs from that
+    folder and cannot delete it itself (cmd reads a running batch file
+    again after a `call` returns).  A stale .done is removed first, so it
+    cannot delete the folder after a stop."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    writes = [ln for ln in code if '"%TOOLS%\\.done" echo.' in ln]
+    assert writes == ['2>nul > "%TOOLS%\\.done" echo.'], writes
+    done = _label_body(content, ":restore_done")
+    assert writes[0] in done, done
+    assert code.index('del /f /q "%TOOLS%\\.done" >nul 2>nul') < code.index(
+        "if defined LCSAS_RELOCATED goto :after_relocate")
+    # The Desktop launcher goes at the same point.
+    assert 'if defined DESK_LAUNCHER del /f /q "!DESK_LAUNCHER!" >nul 2>nul' in done
+
+
+def test_restore_bat_q_at_the_disc_prompt_is_terminal():
+    """C5 / #615: tier 1 exits 75 when the reader types q at the disc
+    prompt ("paused by the reader").  That ends the run whatever the set's
+    layout: keep the tools folder, print how to carry on, exit 75.  Tier 2
+    must not run."""
+    content = RESTORE_BAT.read_text()
+    tier1 = content[content.index("----- Tier 1:"):content.index("----- Tier 2:")]
+    stop = tier1.index("if !RC! equ 75 goto :tier1_stopped")
+    assert stop < tier1.index('if not exist "%REPO%\\data\\" goto :tier1_stopped')
+    assert stop < tier1.index("trying tier 2")
+    body = _label_body(content, ":tier1_stopped")
+    assert 'echo    "!RESUME_CMD!"' in body, body
+    assert body[-1] == "exit /b %RC%"
+
+
+def test_restore_bat_resume_cfg_never_holds_the_password():
+    """#609 (C6): resume.cfg keeps the set, the folder, the META disc's
+    letter and the letters searched -- NEVER the password.  It is written
+    before the password prompt, so every stop after it can be carried on.
+    Functional proof: test_restore_bat_tools_folder_wine.py reads the file
+    for the password."""
+    content = RESTORE_BAT.read_text()
+    body = _label_body(content, ":save_resume")
+    for ln in body:
+        for word in ("LCSAS_PW", "PWFILE", "LCSAS_PASSWORD"):
+            assert word not in ln, f"resume.cfg/launcher writer touches {word}: {ln}"
+    cfg = [ln[ln.index("echo ") + 5:] for ln in body if '"%CFG%" echo ' in ln]
+    keys = [c.split("=", 1)[0] for c in cfg if not c.startswith("#")]
+    assert keys == ["set", "target", "meta", "letters"], cfg
+    code = _code(content)
+    assert code.index("if defined LCSAS_RELOCATED call :save_resume") < code.index(
+        'set /p "LCSAS_PW=Password: "')
+
+
+def _launcher_lines(content: str) -> list[str]:
+    """The lines restore.bat writes into "Resume LCSAS restore.bat", as
+    the file will hold them (carets and doubled percents undone)."""
+    out = []
+    for ln in _code(content):
+        if not ln.startswith(('> "%LAUNCHER%" echo ', '>>"%LAUNCHER%" echo ')):
+            continue
+        text = ln.split(" echo ", 1)[1]
+        if "!" not in text:
+            text = text.replace("^&", "&").replace("^>", ">")
+        # A batch line's %% is one % in the file it writes.
+        out.append(text.replace("%%", "%"))
+    return out
+
+
+def test_restore_bat_resume_launcher_ends_itself_before_the_restore():
+    """#609 (C6): "Resume LCSAS restore.bat" runs the tools copy with
+    --resume.  Like the relaunch line on the disc, it ends its own batch
+    with (goto) first, so the copy can delete the Desktop launcher, and it
+    removes the tools folder (and itself) only once the copy has left
+    .done there.  wine cannot run the (goto); the wine test runs the rest
+    of this line as it stands."""
+    lines = _launcher_lines(RESTORE_BAT.read_text())
+    assert lines[0] == "@echo off"
+    assert 'set "TOOLS=!TOOLS!"' in lines
+    goto = [ln for ln in lines if ln.startswith("(goto) 2>nul & ")]
+    assert len(goto) == 1, lines
+    # Last: nothing after it is ever read (and wine, which runs on past a
+    # (goto), then ends there too).
+    assert lines[-1] == goto[0], lines
+    cmds = [c.strip() for c in goto[0].split(" & ")]
+    assert cmds == [
+        "(goto) 2>nul",
+        "cd /d %SystemDrive%\\",
+        'call "%TOOLS%\\recovery\\scripts\\restore.bat" --resume',
+        'call set "LCSAS_RC=%%ERRORLEVEL%%"',
+        '(if exist "%TOOLS%\\.done" del /f /q "%~f0") 2>nul',
+        '(if exist "%TOOLS%\\.done" rmdir /s /q "%TOOLS%") 2>nul',
+        "cmd /c exit %%LCSAS_RC%%",
+    ], cmds
+    # The script deletes the Desktop copy itself on rc 0 (it may be the
+    # one that ran), so the order above is safe from either copy.
