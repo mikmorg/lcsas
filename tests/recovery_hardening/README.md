@@ -52,6 +52,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_boot_docs_reality.py` | test_boot_docs_reality.py -- docs-vs-reality contract gate for `lcsas ...` |
 | `test_boot_path_quarantined.py` | Boot-path quarantine tripwire (BOOT-08) + BOOT-06 record-keeping. |
 | `test_ci_workflow_parity.py` | Hardening: CI workflow ↔ `make gate` suite parity (GATE-02). |
+| `test_coverage_fault_inject_cleanup.py` | Hardening test: the coverage fault sweep leaves no test fixtures behind. |
 | `test_cross_build_deps.py` | Guard the recovery cross-build source dependencies. |
 | `test_disc_swap_docs.py` | test_disc_swap_docs.py -- static regression guard for the MULTI-DISC RESTORE |
 | `test_dockerfile_rustic_pin_parity.py` | The host-A image's rustic pin must equal the tier-2 recovery pin (#428). |

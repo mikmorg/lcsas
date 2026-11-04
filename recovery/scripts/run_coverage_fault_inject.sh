@@ -23,18 +23,50 @@
 # dropped locally and reconciled against CI.  The counting run (LCSAS_FAIL_AT
 # unset) is deliberately NOT capped: it must run to completion to count
 # allocations.
+#
+# Cleanup: a faulted run leaves through the gcov shim's _exit() and a
+# stuck one is killed by `timeout`, so a test's own cleanup at the end
+# of main() never runs.  Each run therefore gets its own TMPDIR (made
+# with mktemp under the caller's $TMPDIR, default /tmp), removed after
+# the run.  test_disc_locator puts its drain caches in /dev/shm when
+# TMPDIR has no room, so after each run any of our own
+# /dev/shm/lcsas_dl_*_<pid> folders whose process is gone are removed
+# too.  Before this, every sweep left hundreds of fixture folders in
+# /tmp and /dev/shm (RAM), and a 24 MB drain case filled swap.
+#
+# COV_FI_TESTS (default: every build/test_*): space-separated test
+# names to sweep, e.g. "test_disc_locator".  COV_FI_LIB (default
+# build/malloc_inject.so): the LD_PRELOAD shim.  Both exist for the
+# cleanup gate test (tests/recovery_hardening/
+# test_coverage_fault_inject_cleanup.py).
 
 set -eu
 
 MAX_N=${1:-200}
 PER_RUN_TIMEOUT=${PER_RUN_TIMEOUT:-300}
 HERE="$(cd "$(dirname "$0")"/.. && pwd)"
-LIB="$HERE/build/malloc_inject.so"
+LIB="${COV_FI_LIB:-$HERE/build/malloc_inject.so}"
+SWEEP_TMP="${TMPDIR:-/tmp}"
 
 if [ ! -x "$LIB" ]; then
     echo "[cov-fi] need malloc_inject.so — re-run after coverage-c" >&2
     exit 1
 fi
+
+# Remove our own /dev/shm/lcsas_dl_*_<pid> folders whose process has
+# exited.  A live pid (a test still running, here or in another job)
+# keeps its folder.
+reap_shm() {
+    for d in /dev/shm/lcsas_dl_*_*; do
+        [ -d "$d" ] && [ -O "$d" ] || continue
+        pid=${d##*_}
+        case "$pid" in
+            ''|*[!0-9]*) continue ;;
+        esac
+        if kill -0 "$pid" 2>/dev/null; then continue; fi
+        rm -rf "$d"
+    done
+}
 
 # `timeout` (coreutils) caps each injected run; degrade gracefully if it
 # is missing (e.g. a minimal restore host) rather than aborting the sweep.
@@ -49,7 +81,15 @@ export LD_PRELOAD="$LIB"
 export LCSAS_FAULT_INJECT_GCOV=1
 export LCSAS_FAIL_QUIET=1
 
-for bin in "$HERE"/build/test_*; do
+# The binaries to sweep, as the positional parameters.
+if [ -n "${COV_FI_TESTS:-}" ]; then
+    set --
+    for t in $COV_FI_TESTS; do set -- "$@" "$HERE/build/$t"; done
+else
+    set -- "$HERE"/build/test_*
+fi
+
+for bin in "$@"; do
     [ -x "$bin" ] || continue
     case "$(basename "$bin")" in
         *.o|*.gcda|*.gcno) continue ;;
@@ -57,7 +97,10 @@ for bin in "$HERE"/build/test_*; do
     # Count allocations once.  LCSAS_FAIL_AT unset → never fault.
     # Temporarily clear LCSAS_FAIL_QUIET so the count message lands on stderr.
     unset LCSAS_FAIL_AT
-    total=$(env -u LCSAS_FAIL_QUIET "$bin" 2>&1 >/dev/null | grep -oP 'total allocations: \K\d+' || true)
+    run_tmp=$(mktemp -d "$SWEEP_TMP/lcsas-cov-fi.XXXXXX")
+    total=$(TMPDIR="$run_tmp" env -u LCSAS_FAIL_QUIET "$bin" 2>&1 >/dev/null | grep -oP 'total allocations: \K\d+' || true)
+    rm -rf "$run_tmp"
+    reap_shm
     if [ "${total:-0}" = "0" ]; then
         echo "[cov-fi] $(basename "$bin"): no allocations counted, skipping"
         continue
@@ -67,7 +110,14 @@ for bin in "$HERE"/build/test_*; do
     echo "[cov-fi] $(basename "$bin"): sweeping N=1..$n_iter (total=$total)"
     n=1
     while [ $n -le $n_iter ]; do
-        LCSAS_FAIL_AT=$n $TIMEOUT "$bin" >/dev/null 2>&1 || true
+        run_tmp=$(mktemp -d "$SWEEP_TMP/lcsas-cov-fi.XXXXXX")
+        rc=0
+        LCSAS_FAIL_AT=$n TMPDIR="$run_tmp" $TIMEOUT "$bin" >/dev/null 2>&1 || rc=$?
+        if [ "$rc" = 124 ] && [ -n "$TIMEOUT" ]; then
+            echo "[cov-fi] $(basename "$bin") N=$n: stopped after ${PER_RUN_TIMEOUT} s"
+        fi
+        rm -rf "$run_tmp"
+        reap_shm
         n=$((n + 1))
     done
 done

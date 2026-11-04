@@ -1,10 +1,11 @@
 /*
  * test_disc_locator.c -- exercise the disc-locator public API.
  *
- * Sets up a synthetic disc layout under /tmp and verifies that
- * lcsas_disc_locate_pack finds packs across the four supported
- * path layouts.  Also exercises mount-parent enumeration, cache_dir
- * drain, meta-disc exclusion, and miss-path (non-interactive).
+ * Sets up a synthetic disc layout under $TMPDIR (default /tmp) and
+ * verifies that lcsas_disc_locate_pack finds packs across the four
+ * supported path layouts.  Also exercises mount-parent enumeration,
+ * cache_dir drain, meta-disc exclusion, and miss-path
+ * (non-interactive).
  */
 #include "disc_locator.h"
 #include "catalog.h"
@@ -323,7 +324,7 @@ roomy_base(void)
 int
 main(void)
 {
-    char tmpdir[] = "/tmp/lcsas_dl_test_XXXXXX";
+    char tmpdir[300];
     char path[1024];
     char found[2048];
     const char *hex =
@@ -331,7 +332,13 @@ main(void)
     unsigned char pack_id[32];
     lcsas_disc_locator l;
     int rc;
+    const char *tmp_base = getenv("TMPDIR");
 
+    /* Under $TMPDIR, so a run that never reaches the cleanup at the
+     * end (one stopped by a fault-injected malloc or killed by a
+     * timeout) leaves its fixtures where its caller removes them. */
+    if (!tmp_base || !*tmp_base || strlen(tmp_base) > 256) tmp_base = "/tmp";
+    sprintf(tmpdir, "%s/lcsas_dl_test_XXXXXX", tmp_base);
     if (mkdtemp(tmpdir) == NULL) {
         fprintf(stderr, "FAIL: mkdtemp errno=%d\n", errno);
         return 1;
