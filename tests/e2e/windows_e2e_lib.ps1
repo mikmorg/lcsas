@@ -242,6 +242,8 @@ function Get-TempNames {
 # would (a different restore.bat and tier-1 program, a pack cache and a
 # stale .done).  restore.bat must replace it (its `fc /b` says "not the
 # same") rather than run it; wine's fc cannot tell, so only this proves it.
+# The folder holds .lcsas-tools, as every tools folder restore.bat has
+# made since rc6 does: without it restore.bat refuses the folder.
 # ---------------------------------------------------------------------
 function Invoke-RelocationLeg {
     param(
@@ -271,6 +273,7 @@ function Invoke-RelocationLeg {
         Set-Content -LiteralPath (Join-Path $oldBin 'lcsas-restore.exe') -Value 'not this version' -Encoding ascii
         Set-Content -LiteralPath (Join-Path $tools 'pack-cache\stale.pack') -Value 'stale' -Encoding ascii
         Set-Content -LiteralPath (Join-Path $tools '.done') -Value '' -Encoding ascii
+        Set-Content -LiteralPath (Join-Path $tools '.lcsas-tools') -Value 'made by restore.bat' -Encoding ascii
         Write-Host "Seeded a stale tools folder at $tools"
     }
 

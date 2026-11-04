@@ -56,7 +56,8 @@ QUICK START (90 SECONDS)
         - which backup set to restore, if the archive has more
           than one: type its number and press Enter.
         - for the restore folder: press Enter to accept the default
-          (Documents\restored), OR type a folder of your choosing.
+          (Documents\restored), OR type a folder of your choosing,
+          with its drive (for example E:\restored).
         - for the password: type it and press Enter.  If the
           password of that set is split into share cards, it asks
           for the cards instead (see "SHARE CARDS" below).
@@ -113,11 +114,14 @@ as it copies it:
 
 The tools folder stays until the restore has finished, and is then
 deleted.  If a tools folder from an earlier run is there and was
-made by the same restore.bat, the script uses it as it is ("using
-the recovery files already copied to ...").  One made by another
-version is replaced.  To put the tools folder somewhere else, set
-LCSAS_TOOLS_DIR to an empty or new folder before you start (see
-ENV_VARS.txt).
+copied from this same meta disc, the script uses it as it is
+("using the recovery files already copied to ...").  One copied
+from another meta disc, or by another version, is replaced.  To
+put the tools folder somewhere else, set LCSAS_TOOLS_DIR to an
+empty or new folder before you start (see ENV_VARS.txt).  Because
+the script deletes the tools folder at the end, it will not use a
+folder that already holds other files, or a whole drive such as
+E:\: it stops with an error before it changes anything there.
 
 ────────────────────────────────────────────────────────────────────
 THE NEWEST DATA DISC FIRST
@@ -155,9 +159,15 @@ which says which disc holds what.  Leave the disc in the drive: the
 restore reads from it first.
 
 S skips this step.  The restore then uses the copies on the meta
-disc, which may lack the latest backups.  If data discs are already
-in their drives when you start (a computer with several drives),
-the script does not ask: it uses the one with the newest label.
+disc, which may lack the latest backups.  Worse, if the meta disc
+was made AFTER your newest data disc, its latest backup can need
+files that are on no disc yet: the restore then asks for a disc
+that does not exist.  Skip only when you have no data disc at
+hand.
+
+If data discs are already in their drives when you start (a
+computer with several drives), the script does not ask: it uses the
+one with the newest label.
 
 ────────────────────────────────────────────────────────────────────
 SWAPPING DISCS
@@ -212,10 +222,13 @@ never saved.  Then put in the disc each box names.  Files that are
 already restored are skipped.
 
 The same works if the window was closed, or the computer was
-restarted, after the copy.  If the window closed during the copy
-itself, run restore.bat from the meta disc again.  Running
-restore.bat from the meta disc again always works too: it asks the
-questions again and uses the tools folder that is already there.
+restarted, once you had answered the question about the restore
+folder: the script makes "Resume LCSAS restore.bat" right after
+that question, before it asks for the password.  If the window
+closed before then, there is nothing to carry on yet: run
+restore.bat from the meta disc again.  Running restore.bat from
+the meta disc again always works too: it asks the questions again
+and uses the tools folder that is already there.
 
 When the restore has finished, and you have said no to restoring
 another backup set (see "MORE THAN ONE BACKUP SET"), the script
@@ -484,6 +497,11 @@ DESTINATION FOLDER NOTES
     drive E:, type a folder on it, such as E:\restored.  If you
     type just E:\ the script asks again.
 
+  * Type the whole path of the folder, starting with its drive:
+    C:\Users\<you>\restored, not just "restored" (the script asks
+    again).  Q then Enter at this question stops the script;
+    nothing is restored (exit code 65).
+
   * While it runs, the restore also keeps a copy of the packs of
     each data disc it has read, in the tools folder
     (%LOCALAPPDATA%\LCSAS-restore, usually on drive C:).  That needs
@@ -585,11 +603,17 @@ CASE D.  The restore completes but some files appear truncated.
 PRIVACY / SECURITY
 ────────────────────────────────────────────────────────────────────
 
-  * The password is briefly written to %TEMP% and deleted after the
-    binary exits, and so are the share cards you type.  If your
-    machine has full-disk encryption, this is safe enough.  On
-    shared machines, prefer the LCSAS_PWFILE workflow with a file on
-    removable media.
+  * The password is written to a file in %TEMP% while the restore
+    runs, and so are the share cards you type; a password from
+    LCSAS_PWFILE is copied there too.  The script deletes them when
+    the restore ends.  If the window is closed first, they stay
+    until restore.bat runs again, which deletes every lcsas-pw-*.txt
+    file and lcsas-shares-* folder in %TEMP% before it asks for a
+    password; you may delete them yourself instead.  If your machine
+    has full-disk encryption, this is safe enough.  On a shared
+    machine, restore on a computer only you use, or delete those
+    files as soon as the restore stops.  Keep the file LCSAS_PWFILE
+    names on removable media, and take it away afterwards.
 
   * The tools folder (%LOCALAPPDATA%\LCSAS-restore) and "Resume
     LCSAS restore.bat" never hold the password.  resume.cfg in that
@@ -646,12 +670,15 @@ TROUBLESHOOTING -- error messages
       needed (see "STOPPING AND CARRYING ON" above).  It skips the
       files already there.
 
-"ERROR: LCSAS_TOOLS_DIR names ..., a folder that already holds
- other files."
-   -> LCSAS_TOOLS_DIR is set to a folder with other files in it.
-      The tools folder is deleted once the restore has finished,
-      so the script will not use such a folder.  Set it to a new or
-      empty folder, or remove the setting to use the default.
+"ERROR: the tools folder ... is a folder that already holds other
+ files, or a whole drive."
+   -> The tools folder (LCSAS_TOOLS_DIR, or the usual
+      %LOCALAPPDATA%\LCSAS-restore) holds files the script did not
+      put there, or is a whole drive such as E:\.  The tools folder
+      is deleted once the restore has finished, so the script will
+      not use such a folder, and changed nothing in it.  Set
+      LCSAS_TOOLS_DIR to a new or empty folder, or remove the
+      setting to use the usual one.
 
 "ERROR: bad zstd blob size"
    -> Data corruption on the disc.  Try another disc with the same

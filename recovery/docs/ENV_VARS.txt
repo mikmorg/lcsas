@@ -44,12 +44,15 @@ LCSAS_PWFILE
             a file rather than a shell variable.
   Windows:  restore.bat honours it too (since rc6, #608), before
             LCSAS_PASSWORD: it copies the file's exact bytes (copy /b)
-            to its own temp file and never deletes yours.  A line
-            break at the end is ignored.  RECOVER_WINDOWS.txt, "THE
-            PASSWORD", shows how to write such a file from a hidden
-            PowerShell prompt (Windows PowerShell 5.1 is enough).  A
-            file that cannot be read, or a wrong password, falls back
-            to the keyboard.
+            to its own temp file in %TEMP% and never deletes yours.
+            A read-only file (on a CD, a locked USB stick) is fine:
+            the copy loses the read-only mark, and is deleted on
+            every way out (a later run deletes one left by a closed
+            window).  A line break at the end is ignored.
+            RECOVER_WINDOWS.txt, "THE PASSWORD", shows how to write
+            such a file from a hidden PowerShell prompt (Windows
+            PowerShell 5.1 is enough).  A file that cannot be read, or
+            a wrong password, falls back to the keyboard.
   Why:      Opt-in — same reasoning as LCSAS_PASSWORD.
 
 LCSAS_PW
@@ -69,11 +72,15 @@ LCSAS_SHARES_DIR
             not share words are skipped).  restore.bat combines every
             file in it with lcsas-keyshare, in a new folder under
             %TEMP% that it then deletes, and uses the rebuilt password
-            with no question asked.  More than K cards is fine.  It is
-            used when LCSAS_PWFILE, LCSAS_PASSWORD and LCSAS_PW are
-            not set, for any backup set, split or not in its marker.
-            If the cards do not rebuild the password, it says why and
-            asks on the keyboard.  restore.sh does not read it yet.
+            with no question asked.  More than K cards is fine, but
+            every file must be a card typed right: one mistyped word
+            in any file makes lcsas-keyshare refuse the whole folder
+            (exit 3, naming the word), even when K good cards remain.
+            It is used when LCSAS_PWFILE, LCSAS_PASSWORD and LCSAS_PW
+            are not set, for any backup set, split or not in its
+            marker.  If the cards do not rebuild the password, it says
+            why and asks on the keyboard (the cards, or P and the
+            password).  restore.sh does not read it yet.
   Why:      Opt-in — the questions are right for a person; the folder
             is for scripts and tests, and for a set whose marker does
             not say its password is split.
@@ -190,11 +197,21 @@ LCSAS_TOOLS_DIR
             launcher carries the restore on with no META disc.
             resume.cfg names the backup set, the restore folder and the
             drive letters, never the password.  A folder made by the
-            very same restore.bat (compared with fc /b) is used as it
-            is; one from another version is replaced, keeping its pack
-            cache only when its lcsas-restore.exe is the very same.
-            A folder named here that already holds other files is
-            refused, since the tools folder is deleted at the end.
+            very same restore.bat (compared with fc /b) from the very
+            same META disc (its volume_info.json "created_at", kept in
+            archive.txt) is used as it is; any other is replaced,
+            keeping its pack cache only when its lcsas-restore.exe is
+            the very same.  Since the tools folder is deleted at the
+            end, restore.bat uses only a folder that is new, empty, or
+            its own (it writes .lcsas-tools there first); any other
+            folder, and a whole drive (E:\), is refused with exit 1
+            before anything in it changes.  That holds for every run,
+            the default folder included.  A run that does not relocate
+            (LCSAS_NO_RELOCATE=1, or a META disc copied to a folder or
+            a USB stick, which can be written to) keeps its pack cache,
+            catalog copy and merged metadata in the folder's
+            in-place\ subfolder, removed after exit 0, so a stopped
+            restore waiting in the folder is left as it is.
             Not %TEMP%: Disk Cleanup and Storage Sense empty it.
             restore.sh does not read it yet.
   Why:      Opt-in.  The default suits every reader; the knob is for a
@@ -211,7 +228,11 @@ LCSAS_NEWEST_DISC_PROMPT
             in the tools folder (keys\ from both; a set only on the
             META disc keeps its copy), and its catalog.db is the one
             used.  0 skips the question: the data discs already in
-            are used, else the META disc's copies.  With data discs
+            are used, else the META disc's copies.  Those may lack the
+            latest backups; and when the META disc was made after the
+            newest data disc, its latest snapshot can need packs that
+            are on no disc yet, so tier 1 then asks for a disc that
+            does not exist.  With data discs
             in at the start there is no question either: the newest of
             them is used.  The question is not asked when carrying on
             a stopped restore.  restore.sh does not read it yet.
