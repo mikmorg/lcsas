@@ -63,6 +63,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_format_txt_path_safety.py` | Hardening test: FORMAT.txt PATH SAFETY must match binary behaviour. |
 | `test_initramfs_manifest_sources.py` | BOOT-02: build_initramfs.sh must hard-fail on missing sources. |
 | `test_keyshare_docs.py` | test_keyshare_docs.py -- static guard: heir docs name the C combiner [KEY-05]. |
+| `test_keyshare_windows_wine.py` | rc6: the committed Windows ``lcsas-keyshare.exe`` under wine. |
 | `test_last_verified_writer_exists.py` | Hardening test: volume_copies.last_verified_at must have a writer. |
 | `test_live_usb_procedure_docs.py` | test_live_usb_procedure_docs.py -- static doc-pinning gate for the |
 | `test_manifest_freshness.py` | test_manifest_freshness.py -- tamper/staleness gate for recovery/MANIFEST.sha256. |
@@ -149,6 +150,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_tier1_volume_label.py` | Hardening: tier-1 names each disc it finds by its label (#456). |
 | `test_tier1_vs_tier2_differential.py` | Phase 14: tier-1 ↔ tier-2 differential oracle. |
 | `test_tier1_wide_directory.py` | T1C-01: one very wide directory (5,000 entries in a single tree blob). |
+| `test_tier1_windows_drive_swap_wine.py` | rc6 (#476 drill, F8/F9/F10/F12): Windows tier 1 with ONE optical drive. |
 | `test_tier1_windows_wine.py` | Issue #118: tier-1 Windows cross-built binary coverage via wine. |
 | `test_tier1_xattrs.py` | Issue #190 — tier-1 must restore extended attributes (xattrs). |
 | `test_tier3_catalog_auto_discovery.py` | Hardening test: tier-3 catalog auto-discovery (#253). |
