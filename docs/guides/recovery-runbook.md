@@ -84,7 +84,10 @@ That's it.  Two positional arguments:
 
 The script will:
 
-- Copy itself into RAM so you can eject the meta disc safely.
+- Copy itself, this computer's recovery programs and the backup sets'
+  metadata into its tools folder, `~/lcsas-restore-tools`, and run
+  from there, so the meta disc can come out of the drive.  It prints
+  how much it copies first; on a slow drive this takes a few minutes.
 - Auto-discover repository metadata (per-repository `keys/` +
   `index/` pairs) on the meta disc and on any currently-mounted data
   disc.
@@ -93,66 +96,108 @@ The script will:
 
 ## Step 3 — Answer the prompts
 
-You'll see up to three prompts in sequence:
+You'll see these, in this order:
 
-### `Repository:` (only on archives with several repositories)
+### `Take the META disc out and put in your NEWEST data disc`
+
+When no data disc is in yet, the script asks for your newest data
+disc: the latest year in its label, then the highest number (for
+example `LCSAS_TEST_TINY_2026_0003` is newer than
+`LCSAS_TEST_TINY_2026_0002`).  Its list of snapshots is the newest, so
+`latest` really is the latest.
+
+1. Eject the meta disc (`sudo eject /dev/sr0`, or the drive's button).
+2. Insert the newest data disc.  If it does not open by itself, mount
+   it: `sudo mount /dev/sr0 /mnt`.
+3. Press Enter.  The script prints the full label it found.
+
+`S` then Enter skips this and uses the copies on the meta disc (they
+may lack the latest backups).  `Q` then Enter stops (exit code 65).
+
+### `Choose a repository (number or name):` (only on archives with several repositories)
 
 If your archive has more than one repository (e.g. `alpha` and `bravo`),
-the script lists them and asks you to choose:
+the script lists them by name and asks you to choose:
 
 ```
 Multiple repositories on this archive:
   1) alpha
-  2) bravo
+  2) bravo (password split: any 2 of 3 share cards)
 Choose a repository (number or name):
 ```
 
-Type either the number (`1`) or the name (`alpha`) and press Enter.
+Type the number (`1`), the name (`alpha`) or the id (its folder name
+under `metadata/`) and press Enter.
 
 To pre-select non-interactively, set `LCSAS_REPO=alpha` in your
 environment before launching the script.
 
 ### `Password:`
 
-Type the encryption password for the chosen repository.  The script
-reads stdin in the clear (POSIX-sh has no silent-read) — that's
-expected.  If you'd rather not type it visibly, you can put it in
-a file and set `LCSAS_PWFILE=/path/to/file`.
+Type the encryption password for the chosen repository.  What you
+type is not shown.  The script checks it before the restore starts:
+an empty or wrong password is asked for again, and `Q` then Enter
+stops (exit code 77).  If you'd rather not type it, put it in a file
+and set `LCSAS_PWFILE=/path/to/file` (or pass `--key FILE`).
 
-### `INSERT DISC: LCSAS_TEST_TINY_2026_0003`
+When the repository's password is split into share cards, the script
+asks for the cards instead: type the words of each card on one line.
+`P` then Enter there lets you type the password itself.
 
-The recovery binary will print this whenever it needs a pack that
-isn't on the disc currently in your drive.  At that prompt:
+### The disc box
+
+The recovery binary prints a box whenever it needs a pack that
+isn't on the disc currently in your drive:
+
+```
++----------------------------------------------------------+
+| Pack 4f3e2a1b9c8d0e7f... is required for the next file.  |
+| It is on any disc labelled:                              |
+|   LCSAS_TEST_TINY_2026_0003                              |
+| ...                                                      |
+| Insert the right disc and press ENTER to retry.          |
+| Type 'q' then ENTER to abort.                            |
++----------------------------------------------------------+
+```
+
+At that prompt:
 
 1. **Eject the current disc** from your drive (button, eject
    key, or `eject /dev/sr0` from another terminal).
 2. **Insert the disc named in the prompt.**
-3. **Press Enter** at the prompt.  The binary will rescan
+3. **Press Enter** at the prompt (on Linux a disc that mounts by
+   itself is found without Enter).  The binary will rescan
    `/mnt` and any other mount points in `LCSAS_MOUNT_DIRS`,
-   find the pack, drain the rest of that disc into the cache,
+   find the pack, copy that whole disc into the cache,
    and continue.
 
 If you accidentally insert the wrong disc, the binary prints
-`(still not found — check the disc label and try again)` and
+`(still not found -- check the disc label and try again)` and
 waits.  Eject and try again.
 
-Type `q` at any disc prompt to abort the restore cleanly.
+Type `q` at any disc prompt to stop the restore cleanly (exit code
+75); see [Aborting / re-running](#aborting--re-running).
 
 ---
 
-## Step 4 — Wait for `RESTORE COMPLETE`
+## Step 4 — Wait for `restore complete`
 
 The binary prints periodic progress on stderr:
 
 ```
-[lcsas-restore] progress: 12/30 blobs, 0.4 MB
-[lcsas-restore] progress: 24/30 blobs, 0.7 MB
-[lcsas-restore] RESTORE COMPLETE
+[lcsas-restore] progress: 12/30 blobs, 0 MB
+[lcsas-restore] progress: 24/30 blobs, 1 MB
+[lcsas-restore] restore complete
 ```
 
-When you see `RESTORE COMPLETE`, your files are at the path you
-gave as `TARGET_DIR` (e.g. `~/restored/`).  Check with
+When you see `[lcsas-restore] restore complete`, your files are at the
+path you gave as `TARGET_DIR` (e.g. `~/restored/`).  Check with
 `ls -laR ~/restored/`.
+
+If the archive holds more than one repository, the script then asks
+`Restore another backup set from these discs? [y/N]` (see
+[Restoring several repositories](#restoring-several-repositories)).
+`N` or Enter ends the run and deletes the tools folder.
 
 ---
 
@@ -181,24 +226,30 @@ README), compare:
 
 ## Restoring several repositories
 
-Run the restore script once per repository:
+After a restore that succeeds, the script asks:
 
-```sh
-sh /mnt/restore.sh ~/restored-alpha/ latest    # answer 'alpha'
-sh /mnt/restore.sh ~/restored-bravo/ latest    # answer 'bravo'
+```
+Restore another backup set from these discs? [y/N]
 ```
 
-Each invocation keeps its pack cache in the tools folder
-(`~/lcsas-restore-tools/pack-cache/`, since rc6), which is removed when
-that restore succeeds.  If you're restoring several repositories in
-sequence, you can speed up runs 2–N by re-pointing them at a shared
-cache, which is never removed for you:
+Type `y`.  It asks for a folder (Enter takes a new folder beside
+the first, e.g. `~/restored-2`: two repositories restored into one
+folder would be mixed together), then shows the list of repositories
+again and asks for the next one's password.  The meta disc is not
+needed again, and the discs already copied into the pack cache are
+not asked for again.  `N` or Enter ends the run; only then is the
+tools folder, with its pack cache, deleted.
+
+To restore the repositories in separate runs instead, run the script
+once per repository.  Each run's pack cache is deleted when it
+succeeds, so the second run asks for the discs again unless both
+runs share a cache folder you name, which is never removed for you:
 
 ```sh
-mkdir -p /tmp/shared-pack-cache
-LCSAS_PACK_CACHE_DIR=/tmp/shared-pack-cache \
+mkdir -p ~/shared-pack-cache
+LCSAS_PACK_CACHE_DIR=~/shared-pack-cache \
     sh /mnt/restore.sh ~/restored-alpha/ latest
-LCSAS_PACK_CACHE_DIR=/tmp/shared-pack-cache \
+LCSAS_PACK_CACHE_DIR=~/shared-pack-cache \
     sh /mnt/restore.sh ~/restored-bravo/ latest
 ```
 
@@ -211,9 +262,11 @@ The second run finds most packs already cached from the first run.
 If you have only one optical drive, you'll be doing the eject /
 insert / press-Enter dance for each unique disc.  The pack cache
 defaults ON (`LCSAS_PACK_CACHE_DIR=auto`) so you only swap to each
-data disc **once** — the first contact drains the whole disc's
-packs into `~/lcsas-restore-tools/pack-cache/` (RAM on a live USB
-stick), and subsequent packs from the same disc resolve from cache.
+data disc **once** — the first time the binary sees a data disc it
+copies the whole disc into `~/lcsas-restore-tools/pack-cache/` (RAM
+on a live USB stick), and later packs from the same disc resolve
+from the cache.  The cache needs about as much free space as the
+discs it copies.
 
 If your home folder is constrained, see the cache-size warnings in
 [troubleshooting.md](../TROUBLESHOOTING.md#warning-cache-filesystem-at-x-is-10-free-disabling-further-drains).
@@ -235,18 +288,29 @@ sh /mnt/restore.sh ~/restored/ latest
 ```
 
 The script's auto-discovery walks `LCSAS_MOUNT_DIRS` (default
-`/Volumes:/media/<user>:/media:/mnt:/run/media/<user>`) and adds
-every mount it finds with a `data/` subdirectory as a pack source.
-No swap prompts needed.
+`/Volumes:/media/<user>:/media:/mnt:/run/media/<user>:/run/media`)
+and adds every mount it finds with a `data/` subdirectory as a pack
+source.  With a data disc already mounted it does not ask for the
+newest one: it uses the newest it finds.  No swap prompts needed.
 
 ---
 
 ## Aborting / re-running
 
-Type `q` at any disc prompt to abort.  Your `TARGET_DIR` will be
-left as-is (no cleanup); re-run the same command to retry.  The
-pack cache survives across runs and the second attempt benefits
-from it immediately.
+Type `q` at any disc prompt to stop (exit code 75), or press Ctrl-C.
+Your `TARGET_DIR` is left as-is (no cleanup), and the tools folder
+stays, with the discs already copied into its pack cache.  The
+script prints the command that carries on:
+
+```sh
+sh ~/lcsas-restore-tools/resume.sh
+```
+
+It needs no meta disc, asks only for the password again (it never
+stores it), skips the files that are already complete and does not
+ask again for the discs it already copied.  Re-running the first
+command from the meta disc works too.  To give up, delete
+`~/lcsas-restore-tools` yourself.
 
 ---
 

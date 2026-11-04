@@ -82,6 +82,8 @@ of each ISO contains:
 | Path on disc | Source | Purpose for Tier 3 |
 | --- | --- | --- |
 | `data/` | hardlinked packs (`staging/builder.py`) | The encrypted restic pack files. Two-level `data/<prefix>/<sha256>` layout (`pack_dest_path()` in `src/lcsas/utils/pack_layout.py`); the restorer also accepts flat `data/<sha256>` (`PurePythonRestorer._find_pack_path()`). |
+| `metadata/<repo>/` | mirror copy (`HolographicInjector.inject_metadata()`) | One folder per repository, named by its id (a UUID since `repo add`; the name for older repositories). |
+| `metadata/<repo>/LCSAS_REPO.txt` | written by `inject_metadata()` | Plain `key=value` marker: the repository's `id`, `name`, `name_cmd` and `split` (whether its password is split into share cards). `grep -H '^name=' DISC/metadata/*/LCSAS_REPO.txt` maps folders to names. |
 | `metadata/<repo>/index/` | mirror copy (`HolographicInjector.inject_metadata()`) | Encrypted blob → pack offset map. |
 | `metadata/<repo>/snapshots/` | mirror copy (`inject_metadata()`) | Encrypted snapshot pointers (root tree IDs). |
 | `metadata/<repo>/keys/` | mirror copy (`inject_metadata()`) | scrypt-protected master key files. |
@@ -333,7 +335,11 @@ All step references below are to `cmd_restore_from_disc()` in
    mount.
 4. Read the disc catalog to pick the repository (single repository
    = auto-selected; several repositories = `--repo NAME`).
-5. Locate `metadata/<repo>/` on the disc.
+5. Locate `metadata/<repo>/` on the disc.  It looks the folder up by
+   the repository's catalog NAME, but discs name the folders by id, so
+   for a repository whose name differs from its id this step finds
+   nothing (#618).  Until that is fixed, run Workflow B by hand with
+   `--repo DISC/metadata/<id>`.
 6. Probe for a usable `rustic` binary; if absent, mark
    `rustic_available = False`
    (the `check_binary_version("rustic", ...)` probe).

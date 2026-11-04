@@ -502,8 +502,9 @@ The **meta disc** solves this by bundling *everything* needed for a restore onto
 
 | Path | Contents |
 |------|----------|
-| `tools/bin/<target>/` | Per-platform tier-1 (`lcsas-restore`) + tier-2 (`rustic-static`) binaries for six targets: Linux x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows x86_64-gnu.  See [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md). |
-| `tools/lib/` | Shared libraries for the bundled CPython interpreter (tier-3 fallback) |
+| `recovery/bin/<triple>/` | Per-platform tier-1 (`lcsas-restore`), share combiner (`lcsas-keyshare`), disc repair (`lcsas-ecc`) and tier-2 (`rustic-static`) binaries for six targets: Linux x86_64/aarch64/armv7 musl, macOS Intel + Apple Silicon, Windows x86_64-gnu.  See [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md). |
+| `metadata/<id>/` | Every backup set's keys, index and snapshots as of the meta disc's build, with its `LCSAS_REPO.txt` (the set's name).  The newest data disc carries newer copies. |
+| `tools/` | Portable Linux x86_64 tools (rustic, Python 3) and shared libraries for the bundled CPython interpreter (tier-3 fallback) |
 | `lcsas/src/` | Complete LCSAS source code (zero pip dependencies) |
 | `recovery/docs/` | On-disc recovery manual (`RECOVER.txt`, `TIERS.txt`, `ENV_VARS.txt`, …) |
 | `restore.sh` | Interactive restore script — start here |
@@ -546,14 +547,19 @@ prompts you interactively and pauses whenever it needs the next data disc.
 # 1. Mount the meta disc
 sudo mount /dev/sr0 /mnt
 
-# 2. Start the restore — it will ask for your password, then prompt
-#    for each data disc as it needs them
+# 2. Start the restore.  It copies its tools to ~/lcsas-restore-tools,
+#    so the meta disc can come out, then asks its questions
 sh /mnt/restore.sh ~/restored/ latest
 
+# First it asks for your NEWEST data disc (the latest year in the
+# label, then the highest number): eject the meta disc, insert that
+# disc, mount it if needed, press Enter.
+#
 # With multiple repositories on the archive the script prints a numbered menu:
 #   Choose a repository (number or name): <pick one and press Enter>
 # (single-repository archives skip the prompt), then:
 #   Password:   <type your password and press Enter>
+# (or the words of its share cards, when its password is split)
 #
 # When a data disc is needed it prints a swap prompt:
 #   Insert the right disc and press ENTER to retry.
@@ -561,7 +567,8 @@ sh /mnt/restore.sh ~/restored/ latest
 # Eject the current disc and insert the requested data disc.  Once it
 # is mounted the restore carries on by itself (Linux/macOS; press Enter
 # if it doesn't, or on Windows).  Repeat until it prints
-# "restore complete".
+# "restore complete".  To stop, type q at a swap prompt; carry on
+# later with:  sh ~/lcsas-restore-tools/resume.sh
 ```
 
 See [`recovery/docs/RECOVER.txt`](recovery/docs/RECOVER.txt) for the
@@ -579,6 +586,11 @@ ISO on), so mount each ISO in turn when the swap prompt appears:
 # Mount the meta ISO
 sudo mount -o loop lcsas_meta.iso /mnt
 sh /mnt/restore.sh ~/restored/ latest
+
+# When it asks for your newest data disc, mount the newest data ISO
+# in place of the meta ISO (in another terminal), then press Enter:
+sudo umount /mnt
+sudo mount -o loop lcsas_data_0002.iso /mnt
 
 # When a swap prompt appears, mount the next data ISO:
 sudo umount /mnt

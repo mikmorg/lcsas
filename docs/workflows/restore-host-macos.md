@@ -55,15 +55,30 @@ the meta disc; this doc is the heir-facing companion.
    and selects `recovery/bin/aarch64-apple-darwin/` on Apple Silicon
    or `recovery/bin/x86_64-apple-darwin/` on Intel (see the `Darwin`
    arm of the target-dispatch block in `recovery/scripts/restore.sh`).
-3. The script prompts for the password.  Paste from the
-   offline copy.  Alternative non-interactive forms:
+3. The script copies itself, the binaries for this Mac and the backup
+   sets' metadata into its tools folder, `~/lcsas-restore-tools`, and
+   runs from there, so the meta disc can come out of the drive.  It
+   then asks, in order (see `recovery/docs/RECOVER.txt`, "WHAT
+   restore.sh ASKS"):
+   - for your **newest data disc**: eject the meta disc
+     (`drutil eject`, or Finder's Eject), insert the data disc with the
+     latest year and then the highest number in its label, and press
+     Enter.  `S` skips (the meta disc's copies are used), `Q` quits;
+   - which **backup set**, when there are several (number, name or
+     id);
+   - for the **password**, which is not shown as you type; a wrong one
+     is asked for again.  Paste from the offline copy.
+
+   Alternative non-interactive forms:
 
    - `LCSAS_PASSWORD='...' sh restore.sh ~/Restored`
    - `LCSAS_PWFILE=/path/to/key.txt sh restore.sh ~/Restored`
 
    If the password of the repository you are restoring was **split** into
-   SLIP-0039 shares (`PASSWORD_INFO.txt` on the disc says so, for each
-   repository), rebuild it first with the
+   SLIP-0039 shares, the script asks for the share cards itself when the
+   set's `LCSAS_REPO.txt` says so (type `P` there to type a rebuilt
+   password instead).  When only `PASSWORD_INFO.txt` says the password
+   is split (an older disc), rebuild it first with the
    bundled combiner — primary path is the static
    `recovery/bin/aarch64-apple-darwin/lcsas-keyshare <card1> <card2> ...`
    (or the `x86_64-apple-darwin` build on Intel); the Python fallback is
@@ -78,11 +93,14 @@ the meta disc; this doc is the heir-facing companion.
    files land in `~/Restored/`.  Tier 2 (`rustic-static`) and
    tier 3 (`python3 standalone_restorer.py`, using the meta disc's
    bundled CPython at `recovery/bin/<target>/python/bin/python3`)
-   are reached only if a prior tier crashes; the cascade is
-   transparent to the heir.  Tier-1 fall-through to tier-2/3 is
-   opt-in via `LCSAS_TIER_FALLBACK=1` (default `0` exec()s tier 1
-   directly so a tier-1 regression surfaces loudly — see
-   `recovery/docs/ENV_VARS.txt`).  The macOS tier-1 binaries are
+   are reached only when tier 1 is missing or will not run on this
+   Mac; the cascade is transparent to the heir.  Tier-1 fall-through
+   to tier-2/3 after a tier-1 failure is opt-in via
+   `LCSAS_TIER_FALLBACK=1` (default `0` runs tier 1 and exits with its
+   code, so a tier-1 regression surfaces loudly — see
+   `recovery/docs/ENV_VARS.txt`).  If you stop (`q` at a disc prompt,
+   exit 75, or Ctrl-C), the tools folder stays: carry on with
+   `sh ~/lcsas-restore-tools/resume.sh`, no meta disc needed.  The macOS tier-1 binaries are
    cross-built with `zig cc -target <arch>-macos` (Phase 21.12; no
    Apple SDK required).
 
@@ -94,8 +112,8 @@ Darwin dispatch arm selects the `*-apple-darwin` triple),
 
 The recovery scripts probe `/Volumes/*` for any mounted LCSAS data
 discs and pass each as a `--pack-search` argument to
-`lcsas-restore` (`recovery/scripts/restore.sh:349-356`).  There are
-two ways for a disc to land in `/Volumes`:
+`lcsas-restore` (`add_pack_search` in `recovery/scripts/restore.sh`).
+There are two ways for a disc to land in `/Volumes`:
 
 ### a. Finder GUI (default)
 
@@ -204,9 +222,9 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
   on a terminal, and answers each prompt by attaching a wrong disc
   (ENTER: "still not found"), then the right disc (ENTER: the restore
   resumes), then the right disc with no input (the rescan finds it).
-  The prompt only appears when `restore.sh` runs on a terminal; with
-  stdin piped or redirected, a missing pack fails at once with
-  "pack not found".  Discs burned before #534 was fixed carry a
+  The prompt only appears when `restore.sh` runs on a terminal (or with
+  `LCSAS_INTERACTIVE=on`); with stdin piped or redirected, a missing
+  pack fails at once with "pack not found".  Discs burned before #534 was fixed carry a
   WAL-mode catalog, which SQLite cannot query in place on a read-only
   disc.  Tier 1 now reopens it as immutable and names the disc
   (#543); older recovery binaries said "catalog could not be queried
@@ -256,6 +274,6 @@ target-dispatch block); see `recovery/docs/ENV_VARS.txt` (LCSAS_TARGET).
 | Intel Mac target selection | [covered] | same file — Darwin + x86_64 → x86_64-apple-darwin |
 | SHA-256 portable verifier | [covered] | `tests/unit/test_restore_executor.py::TestVerifyIsoSha256` (5 tests) |
 | verify_iso ECC→SHA fallback | [covered] | `tests/unit/test_restore_executor.py::TestVerifyIsoFallback` (4 tests) |
-| Full end-to-end macOS restore (`restore.sh` journey) | [covered] | `.github/workflows/macos-e2e.yml` (driver `tests/e2e/macos_restore_smoke.py`) runs the real `restore.sh` off `hdiutil`-attached fixture ISOs on `macos-15` (arm64) and `macos-15-intel` (x86_64): all discs attached with the read-only relocate-to-RAM re-exec (byte-exact against the manifest), wrong password (exit 77, no partial tree), and a multi-disc swap prompt (4 data discs, 3 swaps: wrong disc, right disc with ENTER, right disc with no input). The all-discs-attached restore runs both as the heir's plain invocation and with `--repo`. A stock-hardware pass by a person is still the manual real-Mac drill, #475 |
+| Full end-to-end macOS restore (`restore.sh` journey) | [covered] | `.github/workflows/macos-e2e.yml` (driver `tests/e2e/macos_restore_smoke.py`) runs the real `restore.sh` off `hdiutil`-attached fixture ISOs on `macos-15` (arm64) and `macos-15-intel` (x86_64): all discs attached with the read-only relocation re-exec into the tools folder (byte-exact against the manifest), wrong password (exit 77, no partial tree), and a multi-disc swap prompt (4 data discs, 3 swaps: wrong disc, right disc with ENTER, right disc with no input). The all-discs-attached restore runs both as the heir's plain invocation and with `--repo`. A stock-hardware pass by a person is still the manual real-Mac drill, #475 |
 | `hdiutil` mount flow | [covered] | The same workflow attaches every ISO with `hdiutil attach -readonly -nobrowse -mountpoint /Volumes/<LABEL>`; the manual real-Mac drill is #475 |
 | Apple Silicon binary execution | [covered] | `.github/workflows/macos-tier1.yml` runs the committed Mach-O binaries via `tests/recovery_hardening/test_tier1_macos_native.py` on `macos-15` (arm64) and `macos-15-intel` (x86_64) |
