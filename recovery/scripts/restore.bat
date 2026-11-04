@@ -189,13 +189,13 @@ REM from the disc and leaves no tools folder behind.
 if /i "%~1"=="--check-disc" goto :after_relocate
 
 REM Probe writability of %~dp0 by trying to create a temp file there.
-REM cmd itself reports a redirect it cannot open, on its OWN stderr, so
-REM a 2>nul on the command, before or after the >, comes too late: every
-REM start from a disc printed "Access is denied." (#611).  Only a 2>nul
-REM on a block around it catches that (wine is silent either way, so
-REM only windows-e2e shows it).  Every write that may fail uses this form.
+REM cmd itself reports a redirect it cannot open (#611: "Access is denied."
+REM at every start from a disc).  Real cmd prints it on its OWN stderr, so
+REM only a 2>nul on a block around the write catches it; wine prints it
+REM unless the 2>nul comes first on the command itself.  So every write
+REM that may fail has both: (2>nul > "file" echo ...) 2>nul.
 set "PROBE=%~dp0lcsas-probe-%RANDOM%.tmp"
-(> "%PROBE%" type nul) 2>nul
+(2>nul > "%PROBE%" echo.) 2>nul
 if exist "%PROBE%" (
     del "%PROBE%" 2>nul
     goto :after_relocate
@@ -308,7 +308,7 @@ if defined META_SRC for /f "delims=" %%T in ('dir /ad /b "%META_SRC%" 2^>nul') d
 if defined SRC_ROOT if exist "!SRC_ROOT!\catalog.db" copy /Y "!SRC_ROOT!\catalog.db" "!TOOLS!\catalog.db" >nul 2>nul
 call :archive_id
 if not defined ARCHIVE_ID goto :archive_saved
-(> "%TOOLS%\archive.txt" echo !ARCHIVE_ID!) 2>nul
+(2>nul > "%TOOLS%\archive.txt" echo !ARCHIVE_ID!) 2>nul
 :archive_saved
 echo                   recovery\scripts\restore.bat
 copy /Y "%~f0" "%TOOLS%\recovery\scripts\restore.bat" >nul 2>nul
@@ -924,7 +924,7 @@ REM negative case, the shell/wine tests) exclude it BY NAME rather than
 REM relying on a hidden attribute.  2>nul first, as for the probe: a
 REM folder that cannot be written to says so below, not with "Access is
 REM denied." here (#611).
-(> "%MARKER%" type nul) 2>nul
+(2>nul > "%MARKER%" echo.) 2>nul
 
 REM ----- Pack cache and the local copy of the catalog (#610) ---------
 REM Both live in the tools folder, TOOLS (see "The tools folder" above).
@@ -1503,7 +1503,7 @@ REM catalog copy and any metadata\ it merged (#605) in TOOLS\in-place,
 REM which goes; then the tools folder goes too if nothing else is in it
 REM (a stopped restore's files stay, and .lcsas-tools with them).
 if not defined LCSAS_RELOCATED goto :all_done_in_place
-(> "%TOOLS%\.done" type nul) 2>nul
+(2>nul > "%TOOLS%\.done" echo.) 2>nul
 goto :all_done_end
 :all_done_in_place
 if /i "!TOOLS!"=="!TOOLS_TOP!\in-place" rmdir /s /q "!TOOLS!" 2>nul
@@ -1553,7 +1553,7 @@ REM folder is the restore's own, so it may be deleted once the restore
 REM has finished (see "The tools folder" above).
 if not exist "%~1\" mkdir "%~1" 2>nul
 if exist "%~1\.lcsas-tools" goto :eof
-(> "%~1\.lcsas-tools" echo restore.bat made this folder; it deletes it once the restore is done.) 2>nul
+(2>nul > "%~1\.lcsas-tools" echo restore.bat made this folder; it deletes it once the restore is done.) 2>nul
 goto :eof
 
 :use_tools
@@ -1748,7 +1748,7 @@ if not exist "%TOOLS%\metadata\" goto :merge_cannot
 echo [lcsas-restore] reading the backup sets on !NEWEST_LABEL!:
 for /f "delims=" %%T in ('dir /ad /b "!NEWEST_ROOT!metadata" 2^>nul') do call :merge_set "%%T"
 if exist "%TOOLS%\metadata-new\" rmdir /s /q "%TOOLS%\metadata-new" 2>nul
-(> "%TOOLS%\merged-from.txt" echo !NEWEST_LABEL!) 2>nul
+(2>nul > "%TOOLS%\merged-from.txt" echo !NEWEST_LABEL!) 2>nul
 goto :eof
 :merge_cannot
 echo [lcsas-restore] cannot write to !TOOLS!, so the backup sets on the

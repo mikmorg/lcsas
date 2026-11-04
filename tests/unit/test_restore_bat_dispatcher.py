@@ -401,18 +401,20 @@ def _label_body(content: str, label: str) -> list[str]:
 
 def test_restore_bat_write_probes_send_errors_away_first():
     """#611: the write probe printed "Access is denied." on every start
-    from a disc.  Real cmd reports a redirect it cannot open on its OWN
-    stderr, so a 2>nul on the command -- after the `>`, or before it --
-    comes too late; windows-e2e showed the 2>nul-first form still
-    printing it.  Only `(> "file" ...) 2>nul`, a block with the 2>nul
-    outside, is silent.  Wine is silent with every form.  The marker in
-    the restore folder, .done, .lcsas-tools, archive.txt and
-    merged-from.txt use the same form.  Functional proof: every
-    windows-e2e relocation leg checks for "Access is denied"."""
+    from a disc.  cmd reports a redirect it cannot open itself.  Real cmd
+    prints it on its OWN stderr, so only a 2>nul on a block around the
+    write catches it (windows-e2e showed the bare 2>nul-first form still
+    printing it).  Wine prints it unless the 2>nul comes FIRST on the
+    command (the wine tests showed the bare block form printing it).  So
+    each write that may fail has both: `(2>nul > "file" echo ...) 2>nul`.
+    The marker in the restore folder, .done, .lcsas-tools, archive.txt
+    and merged-from.txt use the same form.  Functional proof: the wine
+    relocation tests (a read-only META folder) and every windows-e2e
+    relocation leg check for "Access is denied"."""
     code = _code(RESTORE_BAT.read_text())
-    assert '(> "%PROBE%" type nul) 2>nul' in code
-    assert '(> "%MARKER%" type nul) 2>nul' in code
-    assert not [ln for ln in code if ln.startswith("2>nul >")]
+    assert '(2>nul > "%PROBE%" echo.) 2>nul' in code
+    assert '(2>nul > "%MARKER%" echo.) 2>nul' in code
+    assert not [ln for ln in code if ln.startswith("2>nul >") or ln.startswith("(>")]
     names = ("%PROBE%", "%MARKER%", '%TOOLS%\\.done', '%~1\\.lcsas-tools',
              '%TOOLS%\\archive.txt', '%TOOLS%\\merged-from.txt')
     seen = 0
@@ -420,7 +422,7 @@ def test_restore_bat_write_probes_send_errors_away_first():
         for name in names:
             if f'> "{name}"' in ln:
                 seen += 1
-                assert ln.startswith("(>") and ln.endswith(") 2>nul"), (
+                assert ln.startswith("(2>nul >") and ln.endswith(") 2>nul"), (
                     f"redirect error escapes: {ln}")
     assert seen == len(names), seen
 
@@ -433,7 +435,7 @@ def test_restore_bat_warns_about_quickedit_before_the_copy():
     switched off: that would change the reader's console settings."""
     content = RESTORE_BAT.read_text()
     note = content.index("PAUSES the restore")
-    assert note < content.index('(> "%PROBE%" type nul) 2>nul')
+    assert note < content.index('(2>nul > "%PROBE%" echo.) 2>nul')
     assert note < content.index("call :copy_one")
     head = content[:note]
     assert head.rstrip().endswith("echo  A click selects text and"), head[-200:]
@@ -554,8 +556,8 @@ def test_restore_bat_tools_folder_goes_only_after_a_finished_restore():
     cannot delete the folder after a stop."""
     content = RESTORE_BAT.read_text()
     code = _code(content)
-    writes = [ln for ln in code if '"%TOOLS%\\.done" type nul' in ln]
-    assert writes == ['(> "%TOOLS%\\.done" type nul) 2>nul'], writes
+    writes = [ln for ln in code if '"%TOOLS%\\.done" echo.' in ln]
+    assert writes == ['(2>nul > "%TOOLS%\\.done" echo.) 2>nul'], writes
     done = _label_body(content, ":restore_done")
     assert writes[0] in done, done
     assert code.index('del /f /q "%TOOLS%\\.done" >nul 2>nul') < code.index(
@@ -752,7 +754,7 @@ def test_restore_bat_asks_for_another_set_before_cleaning_up():
     assert len(ask) == 1, done
     rm_cache = 'if defined CACHE_SET_HERE rmdir /s /q "!LCSAS_PACK_CACHE_DIR!" 2>nul'
     assert ask[0] < done.index(rm_cache)
-    assert ask[0] < done.index('(> "%TOOLS%\\.done" type nul) 2>nul')
+    assert ask[0] < done.index('(2>nul > "%TOOLS%\\.done" echo.) 2>nul')
     assert 'if /i "!ANOTHER_ANS!"=="y" goto :another_set' in done
     assert 'if not "%LCSAS_ANOTHER_SET%"=="0"' in "\n".join(done)
 
@@ -801,7 +803,7 @@ def test_restore_bat_tools_folder_must_be_its_own():
     claim = code.index('call :claim_tools "%TOOLS%"', fresh)
     assert claim < code.index('mkdir "%TOOLS%\\recovery\\scripts" 2>nul', fresh)
     sub = _label_body(content, ":claim_tools")
-    assert any(ln.startswith('(> "%~1\\.lcsas-tools" echo ') for ln in sub), sub
+    assert any(ln.startswith('(2>nul > "%~1\\.lcsas-tools" echo ') for ln in sub), sub
     taken = _label_body(content, ":tools_taken")
     assert any("already holds other files, or a whole drive" in ln for ln in taken)
     assert taken[-1] == "exit /b 1"
