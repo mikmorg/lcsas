@@ -34,6 +34,8 @@ if TYPE_CHECKING:  # sqlite3 is imported lazily where it is actually used
     import sqlite3
     from collections.abc import Callable, Collection
 
+    from lcsas.staging.repo_marker import RepoMarker
+
 from lcsas.config.settings import LCSASConfig
 from lcsas.meta.bundler import ToolBundler
 from lcsas.meta.required_contents import (
@@ -2885,6 +2887,10 @@ class MetaVolumeBuilder:
         recorded, not silent (#435): every outcome lands in
         ``metadata_results``, which the log, the build summary, and
         ``volume_info.json`` on the disc all report.
+
+        Each folder that gets anything copied into it also gets its
+        backup set marker, ``LCSAS_REPO.txt`` (rc6 C1): the same file,
+        from the same renderer, as on the data discs.
         """
         self._metadata_results = []
         if self._catalog_db_path is None:
@@ -2897,12 +2903,16 @@ class MetaVolumeBuilder:
         conn = sqlite3.connect(
             f"file:{src}?mode=ro&immutable=1", uri=True
         )
+        # The split reader (key_escrow.get_split_for_repo) needs named
+        # columns; a Row still unpacks like a tuple below.
+        conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(
                 "SELECT repo_id, mirror_path FROM repositories"
             ).fetchall()
             retired = self._read_retired_repos(conn)
             packs_on_discs = self._read_packs_on_discs(conn)
+            markers = self._read_repo_markers(conn, [r[0] for r in rows])
         finally:
             conn.close()
 
@@ -2952,6 +2962,10 @@ class MetaVolumeBuilder:
                     shutil.copytree(str(s), str(d))
                 if d.exists():
                     copied.append(sub)
+            marker = markers.get(repo_id)
+            if copied and marker is not None:
+                from lcsas.staging.repo_marker import write_repo_marker
+                write_repo_marker(dst_repo, marker)
             self._metadata_results.append(
                 RepoMetadataResult(
                     repo_id=repo_id,
@@ -2962,6 +2976,31 @@ class MetaVolumeBuilder:
                     packs_on_discs=n_on_discs,
                 )
             )
+
+    def _read_repo_markers(
+        self, conn: sqlite3.Connection, repo_ids: list[str]
+    ) -> dict[str, RepoMarker]:
+        """Each catalogued repository's backup set marker (rc6 C1).
+
+        Names: the config key that maps the repo_id when the build has a
+        config, else the catalog name, else the id.  Split: the catalog's
+        recorded split, else none; only a catalog with no ``key_escrow``
+        table (before schema v9) takes the config's split instead.  A
+        hand-rolled catalog with no ``name`` column or no ``key_escrow``
+        table still gets a marker (name = id).
+        """
+        from lcsas.db.key_escrow import config_names_by_repo_id
+        from lcsas.staging.repo_marker import repo_markers
+
+        config_names: dict[str, str] = {}
+        if self._config is not None:
+            config_names = config_names_by_repo_id(conn, {
+                name: repo.mirror_path
+                for name, repo in self._config.repositories.items()
+            })
+        return repo_markers(
+            conn, repo_ids, config=self._config, config_names=config_names,
+        )
 
     @staticmethod
     def _read_retired_repos(conn: sqlite3.Connection) -> set[str]:
