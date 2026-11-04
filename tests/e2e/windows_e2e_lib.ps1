@@ -53,16 +53,32 @@ function Get-AllSets {
     return @(@($Sets.restore) + @($Sets.others | Where-Object { $_ }))
 }
 
+# #607: the fixture's set whose password is split into share cards (its
+# .split is "K-of-N", as its marker says; .cards are the printed cards,
+# relative to the fixture folder; .manifest is its tree).
+function Get-SplitSet {
+    param($Sets)
+    $split = @(Get-AllSets $Sets | Where-Object { $_.split -and $_.split -ne 'none' })
+    if ($split.Count -ne 1) { throw "sets.json has $($split.Count) split sets (want 1)" }
+    if (-not $split[0].cards -or -not $split[0].manifest -or -not $split[0].split_id) {
+        throw "sets.json: the split set $($split[0].name_cmd) has no cards, manifest or split_id"
+    }
+    return $split[0]
+}
+
 # #606: restore.bat names the chosen set by its name_cmd on the
 # "Backup set:" line, and no line shows a set's id where a name belongs.
 # (The "Repo:" line is the set's folder, which IS named by its id.)
+# -Set: the set the leg restored (default: the one manifest.json is).
 function Assert-SetNamed {
     param(
         [string]$Out,
         $Sets,
-        [System.Collections.Generic.List[string]]$Problems
+        [System.Collections.Generic.List[string]]$Problems,
+        $Set = $null
     )
-    $want = 'Backup set:    ' + $Sets.restore.name_cmd
+    if (-not $Set) { $Set = $Sets.restore }
+    $want = 'Backup set:    ' + $Set.name_cmd
     if (-not $Out.Contains($want)) {
         $Problems.Add("no '$want' line: restore.bat did not show the set's name (#606)")
     }
@@ -130,13 +146,16 @@ function Assert-MultiDisc {
 
 # Same byte-exact comparison as the "Verify restored tree matches manifest"
 # step; appends a message to $Problems for every discrepancy.
+# -ManifestName: another set's manifest (sets.json names it), for a leg
+# that restores that set.
 function Test-TreeAgainstManifest {
     param(
         [string]$Fixture,
         [string]$Target,
-        [System.Collections.Generic.List[string]]$Problems
+        [System.Collections.Generic.List[string]]$Problems,
+        [string]$ManifestName = 'manifest.json'
     )
-    $manifest = Get-Content (Join-Path $Fixture 'manifest.json') -Raw | ConvertFrom-Json
+    $manifest = Get-Content (Join-Path $Fixture $ManifestName) -Raw | ConvertFrom-Json
     $anchor = Get-ChildItem -Path $Target -Recurse -Filter 'file_000.bin' -ErrorAction SilentlyContinue |
               Select-Object -First 1
     if (-not $anchor) {
@@ -781,37 +800,53 @@ function Invoke-NewestDiscStep {
 
 # #606 (F4): restore.bat's set menu.  Wait for it, check that it lists
 # every set by the name restore.bat shows (name_cmd) and none by its id,
-# and choose the set to restore by its number.  The order is restore.bat's
-# (its folders are named by UUID ids), so the number is read off the
-# screen, as a reader would.
+# and choose a set by its number.  The order is restore.bat's (its
+# folders are named by UUID ids), so the number is read off the screen,
+# as a reader would.  #607 (C7): a set whose password is split is listed
+# as "<name_cmd> (password split: any K of N share cards)"; the K and N
+# shown must be the set's own (sets.json "split", as its marker says),
+# and a set that is not split has no such words.  -Choose: the set to
+# pick (default: the one manifest.json is).
 function Invoke-SetMenu {
     param(
         [System.Diagnostics.Process]$Proc,
         [string]$OutFile,
         $Sets,
-        [System.Collections.Generic.List[string]]$Problems
+        [System.Collections.Generic.List[string]]$Problems,
+        $Choose = $null
     )
+    if (-not $Choose) { $Choose = $Sets.restore }
     $prompt = 'Which one do you want to restore\? \[1\]: '
     $text = Wait-ForOutput -Path $OutFile -Pattern $prompt -Proc $Proc -Seconds 120
     if ($text -cnotmatch $prompt) { throw "no set menu; output so far:`n$text" }
     $start = $text.LastIndexOf('This archive contains more than one backup set:')
     if ($start -lt 0) { throw "no set menu heading; output so far:`n$text" }
     $entries = @{}
-    foreach ($m in [regex]::Matches($text.Substring($start), '(?m)^[ \t]*\[(\d+)\] ([^\r\n]+)')) {
-        $entries[$m.Groups[2].Value.Trim()] = $m.Groups[1].Value
+    $shownSplit = @{}
+    $line = '(?m)^[ \t]*\[(\d+)\] ([^\r\n]+?)(?: \(password split: any (\d+) of (\d+) share cards\))?[ \t]*\r?$'
+    foreach ($m in [regex]::Matches($text.Substring($start), $line)) {
+        $label = $m.Groups[2].Value.Trim()
+        $entries[$label] = $m.Groups[1].Value
+        $shownSplit[$label] = if ($m.Groups[3].Success) { "$($m.Groups[3].Value)-of-$($m.Groups[4].Value)" } else { 'none' }
     }
-    foreach ($e in $entries.GetEnumerator()) { Write-Host "set menu: [$($e.Value)] $($e.Key)" }
+    foreach ($e in $entries.GetEnumerator()) {
+        Write-Host "set menu: [$($e.Value)] $($e.Key) (split: $($shownSplit[$e.Key]))"
+    }
     $all = Get-AllSets $Sets
     if ($entries.Count -ne $all.Count) {
         $Problems.Add("the set menu lists $($entries.Count) sets; the archive has $($all.Count)")
     }
     foreach ($s in $all) {
-        if (-not $entries.ContainsKey($s.name_cmd)) { $Problems.Add("the set menu does not list '$($s.name_cmd)' (#606)") }
+        if (-not $entries.ContainsKey($s.name_cmd)) {
+            $Problems.Add("the set menu does not list '$($s.name_cmd)' (#606)")
+        } elseif ($s.split -and $shownSplit[$s.name_cmd] -ne $s.split) {
+            $Problems.Add("the set menu shows '$($s.name_cmd)' as split $($shownSplit[$s.name_cmd]); its marker says $($s.split) (#607)")
+        }
         if ($entries.ContainsKey($s.id)) { $Problems.Add("the set menu lists the id $($s.id), not '$($s.name_cmd)' (#606)") }
     }
-    $pick = $entries[$Sets.restore.name_cmd]
-    if (-not $pick) { throw "the set menu has no '$($Sets.restore.name_cmd)'; output so far:`n$text" }
-    Write-Host "set menu: choosing [$pick] $($Sets.restore.name_cmd)"
+    $pick = $entries[$Choose.name_cmd]
+    if (-not $pick) { throw "the set menu has no '$($Choose.name_cmd)'; output so far:`n$text" }
+    Write-Host "set menu: choosing [$pick] $($Choose.name_cmd)"
     $Proc.StandardInput.WriteLine($pick)
 }
 
@@ -824,7 +859,8 @@ function Invoke-SetMenu {
 # file', with the file ending in "> ", is a new box.  The 16-hex pack
 # prefix is looked up in $PackMap; that data ISO goes into $Letter (if it
 # is not in already) and ENTER is pressed.  At box $QuitAt, q instead.
-# Returns @{ Boxes; Swaps; Current }.
+# Returns @{ Boxes; Swaps; Current; Inserted }: Inserted lists the data
+# ISOs put into the drive at the boxes, in order (one per swap).
 function Invoke-DiscBoxes {
     param(
         [System.Diagnostics.Process]$Proc,
@@ -839,6 +875,7 @@ function Invoke-DiscBoxes {
     $boxes = 0
     $swaps = 0
     $seen = 0
+    $inserted = New-Object 'System.Collections.Generic.List[string]'
     $maxBoxes = $DataIsos.Count + 2
     $deadline = (Get-Date).AddSeconds(900)
     while ((Get-Date) -lt $deadline) {
@@ -886,12 +923,13 @@ function Invoke-DiscBoxes {
             }
             $Current = $next
             $swaps++
+            $inserted.Add($next)
         }
         $isoName = Split-Path $next -Leaf
         Write-Host "box ${boxes}: pack $prefix is on $isoName, now in ${Letter}: (swaps so far: $swaps); ENTER"
         $Proc.StandardInput.WriteLine('')
     }
-    return @{ Boxes = $boxes; Swaps = $swaps; Current = $Current }
+    return @{ Boxes = $boxes; Swaps = $swaps; Current = $Current; Inserted = @($inserted) }
 }
 
 # Put $Iso into the EMPTY drive letter $Letter (as Switch-DiscInLetter,
@@ -932,6 +970,44 @@ function Complete-RestoreProcess {
     }
     if ($Proc.HasExited) { return $Proc.ExitCode }
     return 'n/a'
+}
+
+# C8 (#604, #617): swaps <= discs.  $Inserted lists every data ISO put
+# into the one drive, in order: the newest-data-disc step's, then the
+# boxes'.  With the pack cache on, tier 1 copies a data disc whole the
+# first time it sees it ("copying disc <LABEL> to the cache": drain on
+# first sight, D item 8), so a disc never has to go in twice.  So the
+# swaps are at most the data discs, and no ISO is in the list twice.
+function Assert-SwapsWithinDiscs {
+    param(
+        [string[]]$Inserted,
+        [string[]]$DataIsos,
+        [string]$What,
+        [System.Collections.Generic.List[string]]$Problems
+    )
+    $Inserted = @($Inserted | Where-Object { $_ })
+    if ($Inserted.Count -gt $DataIsos.Count) {
+        $Problems.Add("$($Inserted.Count) swaps $What for $($DataIsos.Count) data discs (want at most $($DataIsos.Count): each disc goes in once, C8)")
+    }
+    foreach ($g in @($Inserted | Group-Object)) {
+        if ($g.Count -gt 1) {
+            $Problems.Add("$(Split-Path $g.Name -Leaf) went into the drive $($g.Count) times $What (the pack cache keeps a disc once it is read, C8)")
+        }
+    }
+}
+
+# #612 (C8): each data disc is copied into the pack cache exactly once.
+function Assert-CopiedOnce {
+    param(
+        [string]$Out,
+        [string[]]$DataIsos,
+        [System.Collections.Generic.List[string]]$Problems
+    )
+    foreach ($iso in $DataIsos) {
+        $label = [IO.Path]::GetFileNameWithoutExtension($iso)
+        $n = [regex]::Matches($Out, 'copying disc ' + [regex]::Escape($label) + ' to the cache').Count
+        if ($n -ne 1) { $Problems.Add("'copying disc $label to the cache' appears $n times (want exactly once, #612)") }
+    }
 }
 
 # ---------------------------------------------------------------------
@@ -997,8 +1073,9 @@ function Invoke-SingleDriveLeg {
 
     $problems = New-Object 'System.Collections.Generic.List[string]'
     $proc = $null
-    $result = @{ Boxes = 0; Swaps = 0; Current = $metaIso }
+    $result = @{ Boxes = 0; Swaps = 0; Current = $metaIso; Inserted = @() }
     $stepSwaps = 0
+    $stepIso = $null
     $rc = 'n/a'
     try {
         Write-Host "Starting (no LCSAS_NO_RELOCATE, LCSAS_INTERACTIVE=on): $bat"
@@ -1008,6 +1085,7 @@ function Invoke-SingleDriveLeg {
             -DataIsos $dataIsos -Problems $problems
         $result.Current = $current
         $stepSwaps = 1
+        $stepIso = $current
 
         Invoke-SetMenu -Proc $proc -OutFile $outFile -Sets $sets -Problems $problems
 
@@ -1025,8 +1103,10 @@ function Invoke-SingleDriveLeg {
         if ($proc -and -not $proc.HasExited) { & taskkill /PID $proc.Id /T /F | Out-Null }
     }
     $boxes = $result.Boxes
-    # The step's swap (the newest data disc in) counts too.
+    # The step's swap (the newest data disc in) counts too: C8 counts
+    # every time a disc goes into the drive.
     $swaps = $result.Swaps + $stepSwaps
+    $inserted = @(@($stepIso) + @($result.Inserted) | Where-Object { $_ })
     $out = Read-SharedText $outFile
     Write-Host '----- restore.bat output -----'
     Write-Host $out
@@ -1039,12 +1119,23 @@ function Invoke-SingleDriveLeg {
     if ("$rc" -ne '0') { $problems.Add("restore.bat exit code $rc (want 0)") }
     if ($out -cnotmatch 'Restore complete') { $problems.Add("'Restore complete' banner missing") }
     if ($result.Swaps -lt 1) { $problems.Add('no disc was swapped at a box: the leg proved nothing') }
-    if ($boxes -gt $dataIsos.Count + 1) {
-        $problems.Add("$boxes disc boxes for $($dataIsos.Count) data discs (want at most $($dataIsos.Count + 1))")
+    # C8 (#604, #617): swaps <= discs, the step's swap INCLUDED (this
+    # allowed discs + 1 before).  The step puts the newest data disc in,
+    # and tier 1 copies it whole into the pack cache at launch; each box
+    # after that asks for a disc not read yet, which is copied whole when
+    # it goes in.  So every data disc goes in at most once: at most
+    # discs - 1 swaps at the boxes, plus the step's.  (windows-e2e on
+    # 130baf4 and f9e7a57: 4 data discs, 1 + 3 = 4 swaps, 3 boxes.)
+    # Boxes are bounded by the discs too, not discs - 1: a box shown again
+    # for the disc already in (a slow drive) costs no swap.
+    if ($boxes -gt $dataIsos.Count) {
+        $problems.Add("$boxes disc boxes for $($dataIsos.Count) data discs (want at most $($dataIsos.Count))")
     }
-    if ($swaps -gt $dataIsos.Count + 1) {
-        $problems.Add("$swaps swaps for $($dataIsos.Count) data discs, the step's included (want at most $($dataIsos.Count + 1))")
-    }
+    if ($swaps -ne $inserted.Count) { $problems.Add("swap count $swaps, but $($inserted.Count) discs went in") }
+    Assert-SwapsWithinDiscs -Inserted $inserted -DataIsos $dataIsos -What 'with the step' -Problems $problems
+    # #612 (C8): with the newest data disc read first, every data disc is
+    # copied into the cache once, the first time it is in the drive.
+    Assert-CopiedOnce -Out $out -DataIsos $dataIsos -Problems $problems
     # #605: the catalog copy is the newest disc's, so the first box names
     # the disc it needs.
     if ($out -match 'no disc catalog yet') { $problems.Add('a box had no catalog although the newest data disc was read first') }
@@ -1138,8 +1229,8 @@ function Invoke-StopAndResumeLeg {
     $current = $metaIso
     $rcStop = 'n/a'
     $rcResume = 'n/a'
-    $stop = @{ Boxes = 0; Swaps = 0; Current = $metaIso }
-    $resume = @{ Boxes = 0; Swaps = 0; Current = $metaIso }
+    $stop = @{ Boxes = 0; Swaps = 0; Current = $metaIso; Inserted = @() }
+    $resume = @{ Boxes = 0; Swaps = 0; Current = $metaIso; Inserted = @() }
     try {
         # --- 1. run from the META disc, stop at the second box ---------
         # The newest-data-disc step is skipped here (C4): this leg counts
@@ -1173,6 +1264,22 @@ function Invoke-StopAndResumeLeg {
         Assert-SetNamed -Out $out -Sets $sets -Problems $problems
         Assert-OnlyThisPlatform -Out $out -Problems $problems -CheckFolder
         Assert-ToolsDirKept -Problems $problems -Password $pw
+        # D item 6 (C8): tier 1 writes each pack into the cache as
+        # <pack>.part and renames it only when it is whole, so a stop
+        # leaves no partial pack that the run carrying on would trust.
+        # Checked now, while the tools folder is kept: a finished restore
+        # removes the cache.  The disc that went in before the stop was
+        # copied into it, so an empty cache means the check proved nothing.
+        $cache = Join-Path $tools 'pack-cache'
+        $cached = @(Get-ChildItem -LiteralPath $cache -Recurse -File -Force -ErrorAction SilentlyContinue)
+        Write-Host "pack cache after the stop: $($cached.Count) file(s) in $cache"
+        if ($cached.Count -eq 0) {
+            $problems.Add("the pack cache $cache is empty after the stop: the disc read before it was not copied in")
+        }
+        $parts = @($cached | Where-Object { $_.Name -like '*.part' })
+        if ($parts.Count -gt 0) {
+            $problems.Add("partial pack file(s) left in the pack cache after the stop: $($parts.FullName -join ', ')")
+        }
 
         # --- 2. carry on with the Desktop launcher, no META disc --------
         $desk = Get-DesktopLauncher
@@ -1202,10 +1309,14 @@ function Invoke-StopAndResumeLeg {
     if ($out -match 'trying tier 2') { $problems.Add('fell through to tier 2 after carrying on') }
     # resume.cfg holds the set's id; the banner still shows its name.
     Assert-SetNamed -Out $out -Sets $sets -Problems $problems
+    # C8: swaps <= discs over both runs (this allowed discs + 1 before).
+    # The stopped run's pack cache is kept for the launcher's run, so a
+    # disc read before the stop never goes in again; the box where q was
+    # typed swapped nothing.  (windows-e2e on 130baf4 and f9e7a57: 1 + 3 =
+    # 4 swaps for 4 data discs.)
     $total = $stop.Swaps + $resume.Swaps
-    if ($total -gt $dataIsos.Count + 1) {
-        $problems.Add("$total swaps in all for $($dataIsos.Count) data discs (want at most $($dataIsos.Count + 1))")
-    }
+    Assert-SwapsWithinDiscs -Inserted (@($stop.Inserted) + @($resume.Inserted)) -DataIsos $dataIsos `
+        -What 'over the stop and the carrying on' -Problems $problems
     Assert-NoAccessDenied -Out $out -Problems $problems
     Test-TreeAgainstManifest -Fixture $Fixture -Target $target -Problems $problems
     $pwLeft = @(Get-TempNames 'lcsas-pw-*' | Where-Object { $pwBefore -notcontains $_ })
@@ -1219,4 +1330,488 @@ function Invoke-StopAndResumeLeg {
         throw ("stop-and-resume leg failed:`n  - " + ($problems -join "`n  - "))
     }
     Write-Host "Stop-and-resume leg passed: exit 75 kept the tools folder; the launcher finished the restore with no META disc ($total swaps)."
+}
+
+# Every ISO of the fixture mounted, each at a drive letter of its own (the
+# layout of the first legs), whatever the leg before left.  Returns the
+# META disc's letter.
+function Mount-FixtureIsos {
+    param([string]$Fixture)
+    $isos = @(Get-ChildItem -Path $Fixture -Filter '*.iso')
+    foreach ($iso in $isos) {
+        Dismount-DiskImage -ImagePath $iso.FullName -ErrorAction SilentlyContinue | Out-Null
+    }
+    foreach ($iso in $isos) { Mount-DiskImage -ImagePath $iso.FullName | Out-Null }
+    for ($i = 0; $i -lt 60; $i++) {
+        $meta = Find-MetaDrive
+        if ($meta -and @(Get-DataDiscs).Count -eq ($isos.Count - 1)) { return $meta }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "after mounting $($isos.Count) ISOs: META disc at '$(Find-MetaDrive)', $(@(Get-DataDiscs).Count) data discs"
+}
+
+# ---------------------------------------------------------------------
+# G1 (#608): the documented way to type the password hidden.
+#
+# RECOVER_WINDOWS.txt, "THE PASSWORD", gives PowerShell lines that read
+# the password with Read-Host -AsSecureString, turn it back into text
+# (SecureStringToBSTR + PtrToStringBSTR, which Windows PowerShell 5.1
+# has; ConvertFrom-SecureString -AsPlainText needs PowerShell 7), write
+# it to $env:TEMP\lcsas-pw.txt with no BOM and no line break, set
+# LCSAS_PWFILE to that file, run restore.bat and delete the file.
+#
+# The doc has no markers around the lines, and this PR changes no doc
+# text, so Get-DocPasswordLines finds them by what they are: in the
+# section headed "THE PASSWORD", the indented block that starts with the
+# Read-Host -AsSecureString line and ends with "Remove-Item $f".  It
+# throws, naming what it missed, when the heading, the block or any of
+# its lines is not there: a reworded doc must be looked at again, never
+# skipped.  The lines are read from the META disc, the copy a reader has.
+# ---------------------------------------------------------------------
+function Get-DocPasswordLines {
+    param([string]$DocPath)
+    if (-not (Test-Path -LiteralPath $DocPath)) { throw "no $DocPath" }
+    $lines = @([IO.File]::ReadAllText($DocPath, [Text.Encoding]::UTF8) -split "`r?`n")
+    $heads = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -ceq 'THE PASSWORD') { $i } })
+    if ($heads.Count -ne 1) { throw "$DocPath has $($heads.Count) lines 'THE PASSWORD' (want 1)" }
+    # The section runs to the next rule line (box-drawing dashes, U+2500)
+    # after the heading's own two.
+    $end = $lines.Count
+    for ($i = $heads[0] + 2; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\u2500{10,}\s*$') { $end = $i; break }
+    }
+    $starts = @(for ($i = $heads[0]; $i -lt $end; $i++) {
+        if ($lines[$i] -cmatch '^ {4}\$s = Read-Host -AsSecureString\b') { $i }
+    })
+    if ($starts.Count -ne 1) {
+        throw "$DocPath, THE PASSWORD: $($starts.Count) lines '    `$s = Read-Host -AsSecureString' (want 1): the snippet's start marker"
+    }
+    $block = New-Object 'System.Collections.Generic.List[string]'
+    for ($i = $starts[0]; $i -lt $end -and $lines[$i] -match '^ {4}\S'; $i++) {
+        $block.Add($lines[$i].Substring(4).TrimEnd())
+    }
+    $want = [ordered]@{
+        'the password read hidden'      = '^\$s = Read-Host -AsSecureString\b'
+        'SecureStringToBSTR'            = '^\$b = \[Runtime\.InteropServices\.Marshal\]::SecureStringToBSTR\(\$s\)$'
+        'PtrToStringBSTR'               = '^\$p = \[Runtime\.InteropServices\.Marshal\]::PtrToStringBSTR\(\$b\)$'
+        'the file in %TEMP%'            = '^\$f = "\$env:TEMP\\[^"\\]+"$'
+        'UTF8Encoding($false)'          = '^\$u = New-Object Text\.UTF8Encoding\(\$false\)$'
+        'WriteAllText'                  = '^\[IO\.File\]::WriteAllText\(\$f, \$p, \$u\)$'
+        'LCSAS_PWFILE = $f'             = '^\$env:LCSAS_PWFILE = \$f$'
+        'X:\restore.bat'                = '^[A-Za-z]:\\restore\.bat$'
+        'Remove-Item $f (the end marker)' = '^Remove-Item \$f$'
+    }
+    $at = [ordered]@{}
+    $missing = @()
+    foreach ($k in $want.Keys) {
+        $hits = @(for ($i = 0; $i -lt $block.Count; $i++) { if ($block[$i] -cmatch $want[$k]) { $i } })
+        if ($hits.Count -ne 1) { $missing += "$k ($($hits.Count) lines)" } else { $at[$k] = $hits[0] }
+    }
+    if ($missing.Count -gt 0) {
+        throw "$DocPath, THE PASSWORD: the PowerShell lines changed; not found once: $($missing -join '; ')`n$($block -join "`n")"
+    }
+    $order = @($at['WriteAllText'], $at['LCSAS_PWFILE = $f'], $at['X:\restore.bat'], $at['Remove-Item $f (the end marker)'])
+    if ($at['Remove-Item $f (the end marker)'] -ne $block.Count - 1 -or
+        (Compare-Object $order ($order | Sort-Object) -SyncWindow 0)) {
+        throw "$DocPath, THE PASSWORD: the lines are not in the order write, LCSAS_PWFILE, restore.bat, Remove-Item:`n$($block -join "`n")"
+    }
+    foreach ($l in $block) {
+        if ($l -match '[^\x20-\x7e]') { throw "$DocPath, THE PASSWORD: a line is not plain ASCII: $l" }
+    }
+    return [pscustomobject]@{
+        Lines    = @($block)
+        ReadHost = $at['the password read hidden']
+        PwFile   = $at['LCSAS_PWFILE = $f']
+        Restore  = $at['X:\restore.bat']
+    }
+}
+
+# The doc's lines up to LCSAS_PWFILE, made into a script that runs with
+# no keyboard: ONLY the Read-Host -AsSecureString source on the first
+# line is replaced, by ConvertTo-SecureString on the password the leg
+# puts in the environment (LCSAS_E2E_DOC_PW).  The doc's next lines run
+# restore.bat and delete the file; the leg does both itself, to check the
+# file between them.  The script ends by writing what it made to
+# $env:LCSAS_E2E_DOC_RESULT, with the PowerShell version that ran it.
+function New-DocPasswordScript {
+    param($Doc, [string]$Path)
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    $lines.Add('$ErrorActionPreference = ''Stop''')
+    for ($i = 0; $i -le $Doc.PwFile; $i++) {
+        $l = $Doc.Lines[$i]
+        if ($i -eq $Doc.ReadHost) {
+            # "$$" is one "$" in a .NET replacement string.
+            $source = 'Read-Host -AsSecureString( -Prompt ("[^"]*"|''[^'']*''|\S+))?$'
+            $plain = 'ConvertTo-SecureString -String $$env:LCSAS_E2E_DOC_PW -AsPlainText -Force'
+            $new = [regex]::Replace($l, $source, $plain)
+            if ($new -eq $l -or $new -notmatch '^\$s = ConvertTo-SecureString ') {
+                throw "could not replace the Read-Host source in: $l"
+            }
+            Write-Host "doc line: $l"
+            Write-Host "  run as: $new"
+            $l = $new
+        } else {
+            Write-Host "doc line: $l"
+        }
+        $lines.Add($l)
+    }
+    $lines.Add('$r = [ordered]@{ ps = "$($PSVersionTable.PSVersion)"; edition = "$($PSVersionTable.PSEdition)"; f = $f; pwfile = $env:LCSAS_PWFILE }')
+    $lines.Add('[IO.File]::WriteAllText($env:LCSAS_E2E_DOC_RESULT, (ConvertTo-Json -InputObject $r), (New-Object Text.UTF8Encoding($false)))')
+    # ASCII: Windows PowerShell 5.1 reads a script with no BOM in the
+    # ANSI code page.
+    [IO.File]::WriteAllLines($Path, [string[]]$lines, [Text.Encoding]::ASCII)
+}
+
+# ---------------------------------------------------------------------
+# Leg (G1, #608): the hidden-password route of RECOVER_WINDOWS.txt, on
+# real Windows.
+#   1. The doc's PowerShell lines, from the META disc, run under Windows
+#      PowerShell 5.1 (powershell.exe, not pwsh) with only the Read-Host
+#      source replaced.  They must write the password, byte for byte (no
+#      BOM, no line break), to $env:TEMP\lcsas-pw.txt and set
+#      LCSAS_PWFILE to it.
+#   2. restore.bat from the META disc, as the doc's next line runs it (cwd
+#      the user's folder, so it copies itself to the tools folder), with
+#      that LCSAS_PWFILE and the set named in LCSAS_REPO.  It must restore
+#      byte-exact with no password question, leave the reader's file as
+#      it was (its first pass deletes %TEMP%\lcsas-pw-*.txt, which
+#      lcsas-pw.txt must not match), and leave no lcsas-pw-* of its own.
+# ---------------------------------------------------------------------
+function Invoke-HiddenPasswordLeg {
+    param(
+        [string]$Fixture,
+        [string]$BatRel,
+        [string]$TargetName
+    )
+    $ErrorActionPreference = 'Stop'
+    $PSNativeCommandUseErrorActionPreference = $false
+    foreach ($v in @('LCSAS_NO_RELOCATE', 'LCSAS_RELOCATED', 'LCSAS_PWFILE', 'LCSAS_PASSWORD', 'LCSAS_PW', 'LCSAS_SHARES_DIR')) {
+        Remove-Item "Env:$v" -ErrorAction SilentlyContinue
+    }
+    $sets = Get-FixtureSets -Fixture $Fixture
+    $meta = Mount-FixtureIsos -Fixture $Fixture
+    $bat = "${meta}:\$BatRel"
+    if (-not (Test-Path -LiteralPath $bat)) { throw "no $bat on the meta disc" }
+    $docPath = "${meta}:\recovery\docs\RECOVER_WINDOWS.txt"
+    $doc = Get-DocPasswordLines -DocPath $docPath
+    Write-Host "RECOVER_WINDOWS.txt on the META disc: the PowerShell lines of THE PASSWORD, $($doc.Lines.Count) lines"
+
+    $pw = (Get-Content (Join-Path $Fixture 'repo.pw') -Raw).Trim()
+    $docFile = Join-Path $env:TEMP 'lcsas-pw.txt'
+    if (Test-Path -LiteralPath $docFile) { Remove-Item -Force -LiteralPath $docFile }
+    $script = Join-Path $env:RUNNER_TEMP 'doc-password.ps1'
+    $resultFile = Join-Path $env:RUNNER_TEMP 'doc-password.json'
+    if (Test-Path -LiteralPath $resultFile) { Remove-Item -Force -LiteralPath $resultFile }
+    New-DocPasswordScript -Doc $doc -Path $script
+
+    $problems = New-Object 'System.Collections.Generic.List[string]'
+    $ps51 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path -LiteralPath $ps51)) { throw "no Windows PowerShell 5.1 at $ps51" }
+    $env:LCSAS_E2E_DOC_PW = $pw
+    $env:LCSAS_E2E_DOC_RESULT = $resultFile
+    try {
+        & $ps51 -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script
+        $psRc = $LASTEXITCODE
+    } finally {
+        Remove-Item Env:LCSAS_E2E_DOC_PW -ErrorAction SilentlyContinue
+        Remove-Item Env:LCSAS_E2E_DOC_RESULT -ErrorAction SilentlyContinue
+    }
+    if ($psRc -ne 0 -or -not (Test-Path -LiteralPath $resultFile)) {
+        throw "the doc's PowerShell lines failed under powershell.exe (exit $psRc)"
+    }
+    $made = Get-Content -LiteralPath $resultFile -Raw | ConvertFrom-Json
+    Write-Host "powershell.exe $($made.ps) ($($made.edition)) wrote $($made.f); LCSAS_PWFILE=$($made.pwfile)"
+    if (-not ($made.ps -like '5.1*') -or $made.edition -ne 'Desktop') {
+        $problems.Add("the doc's lines ran under PowerShell $($made.ps) $($made.edition), not Windows PowerShell 5.1")
+    }
+    if ($made.f -ne $docFile) { $problems.Add("the doc's lines wrote $($made.f), not $docFile") }
+    if ($made.pwfile -ne $made.f) { $problems.Add("the doc's lines set LCSAS_PWFILE to $($made.pwfile), not to the file $($made.f)") }
+    $want = [Text.Encoding]::ASCII.GetBytes($pw)
+    $before = if (Test-Path -LiteralPath $docFile) { [IO.File]::ReadAllBytes($docFile) } else { $null }
+    if (-not $before) {
+        throw "the doc's lines left no $docFile"
+    }
+    if ([Convert]::ToBase64String($before) -ne [Convert]::ToBase64String($want)) {
+        $problems.Add("$docFile holds $($before.Length) bytes, not the $($want.Length) bytes of the password alone (a BOM or a line break?)")
+    }
+
+    Clear-ToolsDir
+    $env:LCSAS_REPO = $sets.restore.id
+    $env:LCSAS_PWFILE = $made.pwfile
+    $target = Join-Path $env:RUNNER_TEMP $TargetName
+    if (Test-Path -LiteralPath $target) { Remove-Item -Recurse -Force -LiteralPath $target }
+    New-Item -ItemType Directory -Force -Path $target | Out-Null
+    # The folder, then ENTERs: "another set?" (no) and the last pause.  No
+    # password: a question for it reads these empty lines and gives up.
+    $answers = Join-Path $env:RUNNER_TEMP "answers-$TargetName.txt"
+    @($target, '', '', '', '', '', '', '') | Set-Content -Path $answers -Encoding ascii
+    $outFile = Join-Path $env:RUNNER_TEMP "out-$TargetName.txt"
+    $pwBefore = Get-TempNames 'lcsas-pw-*'
+    Write-Host "Running (cwd $env:USERPROFILE, LCSAS_PWFILE=$($env:LCSAS_PWFILE), LCSAS_REPO=$($env:LCSAS_REPO)): $bat"
+    Push-Location -LiteralPath $env:USERPROFILE
+    try {
+        cmd /c "`"$bat`" < `"$answers`" > `"$outFile`" 2>&1"
+        $rc = $LASTEXITCODE
+    } finally {
+        Pop-Location
+        Remove-Item Env:LCSAS_PWFILE -ErrorAction SilentlyContinue
+    }
+    $out = Get-Content $outFile -Raw
+    Write-Host '----- restore.bat output -----'
+    Write-Host $out
+    Write-Host '----- end output -----'
+    Write-Host "restore.bat exit code: $rc"
+
+    if ($rc -ne 0) { $problems.Add("restore.bat exit code $rc (want 0)") }
+    if ($out -cnotmatch 'Restore complete') { $problems.Add("'Restore complete' banner missing") }
+    if ($out -notmatch 'using the password in the file LCSAS_PWFILE names') {
+        $problems.Add('restore.bat did not take the password from LCSAS_PWFILE')
+    }
+    if ($out -cmatch 'Password: ') { $problems.Add('restore.bat asked for the password although LCSAS_PWFILE gave it') }
+    if ($out -match 'That password is wrong|cannot read the password file') {
+        $problems.Add("the password in the doc's file did not open the set")
+    }
+    if ($out -notmatch 'copied recovery files to') { $problems.Add("no 'copied recovery files to' message: the relocation did not happen") }
+    if ($out -match 'trying tier 2') { $problems.Add('fell through to tier 2') }
+    Assert-NoAccessDenied -Out $out -Problems $problems
+    Assert-SetNamed -Out $out -Sets $sets -Problems $problems
+    Test-TreeAgainstManifest -Fixture $Fixture -Target $target -Problems $problems
+    # The reader's file is theirs: restore.bat copies it and deletes only
+    # its copy.
+    if (-not (Test-Path -LiteralPath $docFile)) {
+        $problems.Add("restore.bat deleted the reader's password file $docFile")
+    } elseif ([Convert]::ToBase64String([IO.File]::ReadAllBytes($docFile)) -ne [Convert]::ToBase64String($before)) {
+        $problems.Add("restore.bat changed the reader's password file $docFile")
+    }
+    $pwLeft = @(Get-TempNames 'lcsas-pw-*' | Where-Object { $pwBefore -notcontains $_ })
+    if ($pwLeft.Count -gt 0) { $problems.Add("password file(s) left in %TEMP%: $($pwLeft -join ', ')") }
+    Assert-ToolsDirGone -Problems $problems
+    # The doc's last line.
+    Remove-Item -Force -LiteralPath $docFile -ErrorAction SilentlyContinue
+
+    if ($problems.Count -gt 0) {
+        throw ("hidden-password leg failed:`n  - " + ($problems -join "`n  - "))
+    }
+    Write-Host "Hidden-password leg passed: the doc's lines under PowerShell $($made.ps) wrote the password exactly; restore.bat used it, restored byte-exact and kept the reader's file."
+}
+
+# ---------------------------------------------------------------------
+# G3 (#607, F6): share cards typed into restore.bat on real Windows.
+# ---------------------------------------------------------------------
+
+# The share words of a printed card (`lcsas key split`'s -card.txt): the
+# line after "THE SHARE WORDS".
+function Get-CardWords {
+    param([string]$Path)
+    $lines = @([IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8) -split "`r?`n")
+    for ($i = 0; $i -lt $lines.Count - 1; $i++) {
+        if ($lines[$i] -cmatch '^THE SHARE WORDS') {
+            $words = @($lines[$i + 1].Trim() -split '\s+' | Where-Object { $_ })
+            if ($words.Count -lt 20) { throw "$Path`: $($words.Count) share words after THE SHARE WORDS (a card has 20 or more)" }
+            return ($words -join ' ')
+        }
+    }
+    throw "$Path`: no THE SHARE WORDS line: not a share card"
+}
+
+# Every run of three words in a row from these cards.  A card kept on
+# disk shows up as its words in a row; single share words are everyday
+# English and turn up anywhere by chance (#617), so never look for one.
+function Get-WordRuns {
+    param([string[]]$Cards)
+    $runs = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($c in $Cards) {
+        $w = @($c -split ' ')
+        for ($i = 0; $i -le $w.Count - 3; $i++) { [void]$runs.Add(($w[$i..($i + 2)] -join ' ')) }
+    }
+    return @($runs)
+}
+
+# The files under $Dir that hold any of $Runs (read as bytes, so the
+# programs and the encrypted packs are searched too).
+function Find-CardText {
+    param(
+        [string]$Dir,
+        [string[]]$Runs
+    )
+    $hits = @()
+    foreach ($f in @(Get-ChildItem -LiteralPath $Dir -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+        try { $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($f.FullName)) }
+        catch { Write-Host "cannot read $($f.FullName): $($_.Exception.Message)"; continue }
+        foreach ($r in $Runs) {
+            if ($text.Contains($r)) { $hits += $f.FullName; break }
+        }
+    }
+    return $hits
+}
+
+# ---------------------------------------------------------------------
+# Leg (G3, #607, F6): the set whose password is split 2-of-3, restored on
+# ONE drive by typing two of its printed cards, as in the drill.  Like
+# the single-drive leg: only the META disc is in at the start, the
+# newest data disc goes into its letter at the newest-data-disc step, and
+# each box gets the disc it names in that letter.
+#   * The menu lists the set with "(password split: any 2 of 3 share
+#     cards)" (Invoke-SetMenu checks it) and it is chosen from there.
+#   * At "Words of card 1: " card 1 with ONE word changed to a word that
+#     is no share word: lcsas-keyshare.exe names it and card 1 is asked
+#     again.  Then card 1 right, and card 3 at "Words of card 2: ".
+#   * The cards rebuild the password; "Password: " is never asked.
+#   * At "Restore another backup set from these discs? [y/N]" (the tools
+#     folder is still there): no three card words in a row in any file of
+#     the tools folder, and no lcsas-shares-* folder in %TEMP%.  Then N.
+#   * Exit 0, the set's tree byte-exact, nothing left in %TEMP%
+#     (lcsas-shares-*, lcsas-pw-*), the tools folder gone, swaps <= discs.
+# The card words are never written to the log.
+# ---------------------------------------------------------------------
+function Invoke-SplitCardsLeg {
+    param(
+        [string]$Fixture,
+        [string]$BatRel,
+        [string]$TargetName
+    )
+    $ErrorActionPreference = 'Stop'
+    $PSNativeCommandUseErrorActionPreference = $false
+    foreach ($v in @('LCSAS_NO_RELOCATE', 'LCSAS_RELOCATED', 'LCSAS_REPO', 'LCSAS_PWFILE', 'LCSAS_PASSWORD', 'LCSAS_PW', 'LCSAS_SHARES_DIR')) {
+        Remove-Item "Env:$v" -ErrorAction SilentlyContinue
+    }
+    $sets = Get-FixtureSets -Fixture $Fixture
+    $work = Get-SplitSet $sets
+    $kn = [regex]::Match([string]$work.split, '^2-of-(\d+)$')
+    if (-not $kn.Success -or [int]$kn.Groups[1].Value -lt 3 -or @($work.cards).Count -lt 3) {
+        throw "the leg types cards 1 and 3 of a 2-of-N split (N >= 3); sets.json says $($work.name_cmd) is $($work.split) with $(@($work.cards).Count) cards"
+    }
+    $splitN = [int]$kn.Groups[1].Value
+    $cards = @($work.cards | ForEach-Object { Get-CardWords -Path (Join-Path $Fixture $_) })
+    $card1 = $cards[0]
+    $card3 = $cards[2]
+    # One word of card 1 made into no share word (no SLIP-39 word starts
+    # with "zq", so no prefix of it is one either).
+    $w = @($card1 -split ' ')
+    $w[4] = 'zqzq'
+    $typo = $w -join ' '
+    $runs = Get-WordRuns -Cards @($card1, $card3)
+    Write-Host "Set $($work.name_cmd): split $($work.split), Split ID $($work.split_id); typing cards 1 and 3 ($(@($card1 -split ' ').Count) words each)"
+
+    $isos = @(Get-ChildItem -Path $Fixture -Filter '*.iso')
+    $metaIso = ($isos | Where-Object { $_.Name -eq 'LCSAS_META.iso' }).FullName
+    if (-not $metaIso) { throw 'LCSAS_META.iso not found in the fixture dir' }
+    $dataIsos = @($isos | Where-Object { $_.Name -ne 'LCSAS_META.iso' } | ForEach-Object { $_.FullName })
+    foreach ($iso in $isos) {
+        Dismount-DiskImage -ImagePath $iso.FullName -ErrorAction SilentlyContinue | Out-Null
+    }
+    $packMap = Get-PackMap -DataIsos $dataIsos
+    Clear-ToolsDir
+    $tools = Get-ToolsDir
+
+    $img = Mount-DiskImage -ImagePath $metaIso -PassThru
+    $letter = [string](Get-Volume -DiskImage $img).DriveLetter
+    if (-not $letter) { throw 'the meta ISO got no drive letter' }
+    Write-Host "Only the meta ISO is mounted, at ${letter}:"
+    $bat = "${letter}:\$BatRel"
+    if (-not (Test-Path -LiteralPath $bat)) { throw "no $bat on the meta disc" }
+
+    $target = Join-Path $env:RUNNER_TEMP $TargetName
+    if (Test-Path -LiteralPath $target) { Remove-Item -Recurse -Force -LiteralPath $target }
+    New-Item -ItemType Directory -Force -Path $target | Out-Null
+    $outFile = Join-Path $env:RUNNER_TEMP "out-$TargetName.txt"
+    if (Test-Path -LiteralPath $outFile) { Remove-Item -Force -LiteralPath $outFile }
+    $pwBefore = Get-TempNames 'lcsas-pw-*'
+    $sharesBefore = Get-TempNames 'lcsas-shares-*'
+
+    $problems = New-Object 'System.Collections.Generic.List[string]'
+    $proc = $null
+    $result = @{ Boxes = 0; Swaps = 0; Current = $metaIso; Inserted = @() }
+    $stepIso = $null
+    $asked = $false
+    $rc = 'n/a'
+    try {
+        Write-Host "Starting (no LCSAS_NO_RELOCATE, LCSAS_INTERACTIVE=on, no LCSAS_REPO): $bat"
+        $proc = Start-RestoreProcess -Bat $bat -OutFile $outFile -WorkDir "${letter}:\"
+        $stepIso = Invoke-NewestDiscStep -Proc $proc -OutFile $outFile -Letter $letter -Current $metaIso `
+            -DataIsos $dataIsos -Problems $problems
+        $result.Current = $stepIso
+        Invoke-SetMenu -Proc $proc -OutFile $outFile -Sets $sets -Problems $problems -Choose $work
+
+        $text = Wait-ForOutput -Path $outFile -Pattern 'Restore to which folder\?' -Proc $proc -Seconds 300
+        if ($text -cnotmatch 'Restore to which folder\?') { throw "no folder prompt; output so far:`n$text" }
+        $proc.StandardInput.WriteLine($target)
+
+        $text = Wait-ForOutput -Path $outFile -Pattern 'Words of card 1: ' -Proc $proc -Seconds 120
+        if ($text -cnotmatch 'Words of card 1: ') { throw "no question for card 1; output so far:`n$text" }
+        Write-Host "card 1, with one word wrong"
+        $proc.StandardInput.WriteLine($typo)
+        $again = '(?s)Words of card 1: .*Words of card 1: '
+        $text = Wait-ForOutput -Path $outFile -Pattern $again -Proc $proc -Seconds 120
+        if ($text -cnotmatch $again) { throw "card 1 with a wrong word was not asked again; output so far:`n$text" }
+        Write-Host "card 1 again, right"
+        $proc.StandardInput.WriteLine($card1)
+        $text = Wait-ForOutput -Path $outFile -Pattern 'Words of card 2: ' -Proc $proc -Seconds 120
+        if ($text -cnotmatch 'Words of card 2: ') { throw "no question for card 2; output so far:`n$text" }
+        Write-Host "card 3, at the question for card 2"
+        $proc.StandardInput.WriteLine($card3)
+
+        $result = Invoke-DiscBoxes -Proc $proc -OutFile $outFile -Letter $letter -Current $stepIso `
+            -DataIsos $dataIsos -PackMap $packMap -Problems $problems
+        $another = 'Restore another backup set from these discs\? \[y/N\]: '
+        $text = Wait-ForOutput -Path $outFile -Pattern $another -Proc $proc -Seconds 120
+        if ($text -cmatch $another) {
+            $asked = $true
+            # The tools folder is still there, with the pack cache and the
+            # catalog copy: the cards must be in none of its files.
+            if (-not (Test-Path -LiteralPath $tools)) {
+                $problems.Add("the tools folder $tools is gone before the reader answered 'another set?'")
+            } else {
+                Write-ToolsDirReport -Dir $tools
+                $hits = @(Find-CardText -Dir $tools -Runs $runs)
+                if ($hits.Count -gt 0) { $problems.Add("share card words are in the tools folder: $($hits -join ', ')") }
+            }
+            $sharesNow = @(Get-TempNames 'lcsas-shares-*' | Where-Object { $sharesBefore -notcontains $_ })
+            if ($sharesNow.Count -gt 0) { $problems.Add("typed cards still in %TEMP% after the restore: $($sharesNow -join ', ')") }
+            Write-Host "another set?: N"
+            $proc.StandardInput.WriteLine('N')
+        } else {
+            $problems.Add("no 'Restore another backup set from these discs? [y/N]' question")
+        }
+        $rc = Complete-RestoreProcess -Proc $proc -Problems $problems
+    } finally {
+        if ($proc -and -not $proc.HasExited) { & taskkill /PID $proc.Id /T /F | Out-Null }
+    }
+    $out = Read-SharedText $outFile
+    Write-Host '----- restore.bat output -----'
+    Write-Host $out
+    Write-Host '----- end output -----'
+    Write-Host "restore.bat exit code: $rc; disc boxes: $($result.Boxes); swaps at boxes: $($result.Swaps); data discs: $($dataIsos.Count)"
+
+    if ("$rc" -ne '0') { $problems.Add("restore.bat exit code $rc (want 0)") }
+    if ($out -cnotmatch 'Restore complete') { $problems.Add("'Restore complete' banner missing") }
+    if ($out -notmatch 'copied recovery files to') { $problems.Add("no 'copied recovery files to' message: the relocation did not happen") }
+    $intro = "The password for $($work.name_cmd) is split into $splitN share cards; you`r`nneed any 2 of them (Split ID $($work.split_id))."
+    if (-not $out.Contains($intro)) { $problems.Add("no card introduction naming the set, 2 of $splitN and Split ID $($work.split_id) (C7)") }
+    if ($out -notmatch "'zqzq' is not a share word") { $problems.Add("lcsas-keyshare.exe did not name the wrong word 'zqzq'") }
+    if ($out -notmatch 'Share card 1 was not typed right') { $problems.Add('no line saying card 1 was not typed right') }
+    if ($out -notmatch 'the share cards rebuilt the password') { $problems.Add("no 'the share cards rebuilt the password' line") }
+    if ($out -match 'Words of card 3') { $problems.Add('asked for a third card of a 2-of-N split') }
+    if ($out -cmatch 'Password: ') { $problems.Add("asked 'Password: ' for a set whose cards rebuilt it") }
+    if ($out -match 'That password is wrong|does not open the backup|do not fit together') { $problems.Add('the rebuilt password was refused') }
+    if ($out -match 'trying tier 2') { $problems.Add('fell through to tier 2') }
+    Assert-NoAccessDenied -Out $out -Problems $problems
+    Assert-SetNamed -Out $out -Sets $sets -Problems $problems -Set $work
+    Test-TreeAgainstManifest -Fixture $Fixture -Target $target -Problems $problems -ManifestName $work.manifest
+    $inserted = @(@($stepIso) + @($result.Inserted) | Where-Object { $_ })
+    Assert-SwapsWithinDiscs -Inserted $inserted -DataIsos $dataIsos -What 'with the step' -Problems $problems
+    $pwLeft = @(Get-TempNames 'lcsas-pw-*' | Where-Object { $pwBefore -notcontains $_ })
+    if ($pwLeft.Count -gt 0) { $problems.Add("password file(s) left in %TEMP%: $($pwLeft -join ', ')") }
+    $sharesLeft = @(Get-TempNames 'lcsas-shares-*' | Where-Object { $sharesBefore -notcontains $_ })
+    if ($sharesLeft.Count -gt 0) { $problems.Add("typed cards left in %TEMP%: $($sharesLeft -join ', ')") }
+    if (-not $asked) { $problems.Add('the tools folder was never searched for card words') }
+    Assert-ToolsDirGone -Problems $problems
+
+    foreach ($iso in $isos) {
+        Dismount-DiskImage -ImagePath $iso.FullName -ErrorAction SilentlyContinue | Out-Null
+    }
+    if ($problems.Count -gt 0) {
+        throw ("split-cards leg failed:`n  - " + ($problems -join "`n  - "))
+    }
+    Write-Host "Split-cards leg passed: cards 1 (after a wrong word) and 3 rebuilt the password of $($work.name_cmd); tree byte-exact; no card left behind."
 }

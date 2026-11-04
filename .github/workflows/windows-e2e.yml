@@ -27,6 +27,9 @@ on:
       - "src/lcsas/staging/metadata.py"
       # The set markers on the discs, and name_cmd (#606, #617).
       - "src/lcsas/staging/repo_marker.py"
+      # The hidden-password leg runs the PowerShell lines of this doc
+      # (#608), so a change to them must run it.
+      - "recovery/docs/RECOVER_WINDOWS.txt"
       - "recovery/bin/x86_64-windows/**"
       - "tests/e2e/fixture_lib.py"
       - "tests/e2e/windows_e2e_lib.ps1"
@@ -99,6 +102,13 @@ jobs:
       # their ids and names to the restore job, and which discs hold the
       # restored set's packs.  tests/integration/test_e2e_fixture_sets.py
       # builds this same fixture on every PR (make test-integration).
+      #
+      # Split password (#607): "Work documents" has its password split
+      # 2-of-3 the way an owner does it (key_split in its config, then
+      # `lcsas key split`, which records the split in the catalog), so
+      # every disc's marker says split=2-of-3.  Its three printed cards
+      # (invented, new every run) go into the artifact's cards/, and its
+      # tree into manifest-other1.json, for the split-cards leg.
       - name: Build Windows fixture (rustic repos + ISOs + manifest)
         run: |
           set -euo pipefail
@@ -120,6 +130,7 @@ jobs:
               meta_metadata=True,
               set_name=fixture_lib.WINDOWS_E2E_SET_NAME,
               other_set_names=fixture_lib.WINDOWS_E2E_OTHER_SET_NAMES,
+              split_sets=fixture_lib.WINDOWS_E2E_SPLIT_SETS,
           )
           artifacts = {
               "meta_iso": str(fx.meta_iso),
@@ -141,14 +152,24 @@ jobs:
               print(f"restored set: {len(packs)} pack(s) on {label}")
           problem = fixture_lib.restore_set_span_problem(fx.sets_path, minimum=2)
           assert problem is None, problem
+          # The split set, its cards and its manifest (#607).
+          for s in fx.other_sets:
+              if s.split:
+                  assert len(s.cards) == s.split[1], s.cards
+                  for card in s.cards:
+                      assert (workdir / card).is_file(), card
+                  assert (workdir / s.manifest).is_file(), s.manifest
+                  print(f"{s.name}: split {s.split[0]}-of-{s.split[1]}, {len(s.cards)} cards")
           PY
           # Flatten the produced artifacts into an upload dir.  data ISOs +
           # meta ISO live under fixture-out/iso_out/.
           mkdir -p upload
           cp fixture-out/iso_out/*.iso        upload/
           cp fixture-out/manifest.json        upload/
+          cp fixture-out/manifest-*.json      upload/
           cp fixture-out/repo.pw              upload/repo.pw
           cp fixture-out/sets.json            upload/sets.json
+          cp -r fixture-out/cards             upload/cards
           cat upload/sets.json
           ls -la upload/
 
@@ -404,6 +425,25 @@ jobs:
           # the intended $LASTEXITCODE=77 and reports red.
           exit 0
 
+      # ---- #608: the hidden-password route of RECOVER_WINDOWS.txt ----------
+      # The doc's PowerShell lines ("THE PASSWORD") are read from the META
+      # disc and run under Windows PowerShell 5.1 (powershell.exe), with
+      # only Read-Host -AsSecureString replaced, so it is the doc's text
+      # that is tested; the leg fails if those lines cannot be found.  They
+      # must write the password byte for byte to %TEMP%\lcsas-pw.txt.  Then
+      # restore.bat (from the disc, so relocated) restores with
+      # LCSAS_PWFILE set to that file and LCSAS_REPO naming the set: no
+      # password question, tree byte-exact, the reader's file kept, no
+      # lcsas-pw-* left.  It mounts every ISO itself.
+      - name: Hidden-password leg — RECOVER_WINDOWS.txt's PowerShell 5.1 lines, then LCSAS_PWFILE
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = "Stop"
+          . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
+          Invoke-HiddenPasswordLeg -Fixture (Join-Path $PWD 'fixture') `
+            -BatRel 'restore.bat' -TargetName 'restored-doc-password'
+
       # ---- #517: eject the meta disc after relocation ------------------------
       # LAST before the dismount step, because it ejects the meta ISO (the
       # wrong-password step re-finds the meta drive by scanning volumes).
@@ -459,6 +499,23 @@ jobs:
           . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
           Invoke-StopAndResumeLeg -Fixture (Join-Path $PWD 'fixture') `
             -BatRel 'restore.bat' -TargetName 'restored-stop-resume'
+
+      # ---- #607: the split set, by typing two share cards ------------------
+      # One drive, as in the single-drive leg, but the set chosen from the
+      # menu is "Work documents", whose password is split 2-of-3: the menu
+      # must say so, and the script asks for the cards, not the password.
+      # Card 1 is typed first with one word that is no share word (the
+      # script names it and asks for card 1 again), then right, then card
+      # 3.  While the tools folder is still there (at "Restore another
+      # backup set?"), no file in it may hold three card words in a row.
+      - name: Split-cards leg — two of three share cards typed, one with a wrong word first
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
+          $ErrorActionPreference = "Stop"
+          . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
+          Invoke-SplitCardsLeg -Fixture (Join-Path $PWD 'fixture') `
+            -BatRel 'restore.bat' -TargetName 'restored-split-cards'
 
       - name: Dismount ISOs
         if: always()
