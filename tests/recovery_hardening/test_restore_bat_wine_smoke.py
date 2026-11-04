@@ -216,12 +216,15 @@ def _run_bat(
 
     LCSAS_NO_RELOCATE=1 keeps us on the direct flow (no copy-to-%TEMP%
     re-launch).  LCSAS_TARGET pins the target triple so detection cannot
-    misfire under wine.
+    misfire under wine.  LCSAS_NEWEST_DISC_PROMPT=0 skips the question
+    for the newest data disc (#605): the meta tree here has no label, so
+    it is a META disc, and the question would take the one stdin line.
     """
     run_env = {
         **env,
         "LCSAS_NO_RELOCATE": "1",
         "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+        "LCSAS_NEWEST_DISC_PROMPT": "0",
         **(extra_env or {}),
     }
     bat = f"{meta_letter.upper()}:\\recovery\\scripts\\restore.bat"

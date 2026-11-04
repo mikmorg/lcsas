@@ -289,7 +289,11 @@ def fx(tmp_path: Path):
     assert len(users) == 1, users
     run_env = {k: v for k, v in env.items()
                if not k.startswith("LCSAS_") and k.upper() != "TARGET"}
-    run_env.update({"LCSAS_TARGET": TRIPLE, "LCSAS_INTERACTIVE": "on"})
+    # The newest-data-disc step (#605) is skipped: this test counts the
+    # disc prompts from the META disc on.  test_restore_bat_journey_wine.py
+    # runs the step.
+    run_env.update({"LCSAS_TARGET": TRIPLE, "LCSAS_INTERACTIVE": "on",
+                    "LCSAS_NEWEST_DISC_PROMPT": "0"})
 
     _make_read_only(meta)
     _map_drive(prefix, "d", meta)  # the META disc is in the one drive
@@ -406,20 +410,21 @@ def _drive(fx: _Fixture, run: _Run, *, target_win: str | None = TARGET_WIN,
 def _run_from_the_disc(fx: _Fixture,
                        extra_env: dict[str, str] | None = None) -> tuple[int, str]:
     """restore.bat from the META folder in D:, as a double-click starts
-    it, up to the password prompt; an empty password ends the run (1).
-    Under wine the run goes on from the disc after the copy (see the
-    module notes), so tier 1 is never reached this way."""
+    it, up to the password prompt; Q there ends the run (77, C5: an empty
+    answer asks again since #608).  Under wine the run goes on from the
+    disc after the copy (see the module notes), so tier 1 is never
+    reached this way."""
     run = _Run(fx, ["wine", "cmd", "/c", "D:\\restore.bat"], extra_env)
     try:
         assert run.wait_for(lambda t: "Restore to which folder?" in t), run.text
         run.send(TARGET_WIN)
         assert run.wait_for(lambda t: "Password:" in t), run.text
-        run.send("")
+        run.send("q")
         run.wait_for(lambda t: "Press any key" in t)
     finally:
         rc = run.finish()
     out = run.text
-    assert rc == 1 and "ERROR: empty password" in out, f"rc={rc}\n{out}"
+    assert rc == 77 and "No password was given" in out, f"rc={rc}\n{out}"
     assert "[tier 1]" not in out, out
     return rc, out
 

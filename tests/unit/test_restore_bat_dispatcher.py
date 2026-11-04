@@ -468,7 +468,16 @@ def test_restore_bat_reuses_or_replaces_the_tools_folder():
     code = _code_lines(block)
     reuse = code.index('fc /b "%~f0" "%TOOLS%\\recovery\\scripts\\restore.bat" >nul 2>nul')
     assert code[reuse + 1] == "if errorlevel 1 goto :tools_fresh"
-    assert code[reuse + 3] == "goto :relaunch"
+    # Reused: a set on this META disc that the copy lacks goes in (#605),
+    # then the relaunch.  Nothing else.
+    relaunch = code.index("goto :relaunch", reuse)
+    assert code[reuse + 2].startswith(
+        "echo [lcsas-restore] using the recovery files already copied")
+    added = code[reuse + 3:relaunch]
+    assert added[0].startswith("if defined META_SRC for /f ") and added[0].endswith(
+        'if not exist "!TOOLS!\\metadata\\%%T\\" ('), added
+    assert [ln for ln in added if "xcopy" in ln] == [
+        'xcopy /e /i /q /y "%META_SRC%\\%%T" "!TOOLS!\\metadata\\%%T" >nul 2>nul'], added
     fresh = code.index(":tools_fresh")
     assert fresh > reuse
     same_exe = 'fc /b "!SRC_ROOT!\\bin\\%ARCH%\\lcsas-restore.exe"'
@@ -588,3 +597,128 @@ def test_restore_bat_resume_launcher_ends_itself_before_the_restore():
     ], cmds
     # The script deletes the Desktop copy itself on rc 0 (it may be the
     # one that ran), so the order above is safe from either copy.
+
+
+def test_restore_bat_newest_disc_step_comes_before_the_menu():
+    """#605 (C2, C7): before the set menu, a run from a META disc with no
+    data disc in asks for the NEWEST data disc, in C7's words; Q quits
+    with 65, S and LCSAS_NEWEST_DISC_PROMPT=0 skip it.  The label comes
+    from VOLUME_INFO.txt's "  Label:" line (first one only), never from
+    the drive.  Functional proof: test_restore_bat_journey_wine.py."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    step = code.index(":meta_known")
+    ask = code.index('set /p "TARGET=Restore to which folder? [%DEFAULT_TARGET%]: "')
+    assert step < code.index(":choose_set") < ask
+    assert code.index('if /i "%~1"=="--check-disc" (') < step
+    for line in (
+        "echo  Take the META disc out and put in your NEWEST data disc: the one",
+        "echo  with the latest year, and then the highest number, e.g.",
+        "echo  LCSAS_CD700_2026_0002.  File Explorer shows only the first 16",
+        "echo  characters of the label; the full label is printed on the disc.",
+        "echo  Press ENTER when it is in; S then ENTER to skip ^(use the copies",
+        "echo  on the META disc^); Q then ENTER to quit.",
+    ):
+        assert line in code, line
+    assert 'if "%LCSAS_NEWEST_DISC_PROMPT%"=="0" goto :newest_done' in code
+    assert "if defined RESUME goto :newest_done" in code
+    quit_body = _label_body(content, ":newest_quit")
+    assert quit_body[-1] == "exit /b 65", quit_body
+    read = _label_body(content, ":read_label")
+    assert any('"%%A"=="Label:"' in ln and "if not defined RL_LABEL" in ln
+               for ln in read), read
+
+
+def test_restore_bat_merges_only_index_and_snapshots_from_the_newest_disc():
+    """#605 (C2): no robocopy union of index\\ or snapshots\\.  Each set on
+    the newest disc is copied whole into metadata-new\\ (outside
+    metadata\\), keys\\ of the copy it replaces are added, and only then
+    is it moved into place."""
+    content = RESTORE_BAT.read_text()
+    assert "robocopy" not in "\n".join(_code(content)).lower()
+    body = _label_body(content, ":merge_set")
+    joined = "\n".join(body)
+    assert 'xcopy /e /i /q /y "!MS_SRC!" "!MS_NEW!"' in joined
+    assert 'xcopy /e /i /q /y "!MS_DST!\\keys" "!MS_NEW!\\keys"' in joined
+    assert joined.index('"!MS_NEW!"') < joined.index('move "!MS_NEW!" "!MS_DST!"')
+    assert 'set "MS_NEW=!TOOLS!\\metadata-new\\%~1"' in body
+
+
+def test_restore_bat_menu_shows_name_cmd_and_never_reparses_it():
+    """#606 (C1): the menu shows the marker's name_cmd and split, printed
+    with delayed expansion (`call echo` would re-parse a name), and the
+    marker's name= line is never put in a variable."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    assert not [ln for ln in code if ln.startswith("call echo") or " call echo " in ln]
+    assert "echo    [%~1] !CAND_LABEL_%~1!" in code
+    assert ('if defined MK_K set "_LB=!_LB! (password split: any !MK_K! '
+            'of !MK_N! share cards)"') in code
+    marker = "\n".join(_label_body(content, ":read_marker"))
+    for key in ("id", "name_cmd", "split", "split_id"):
+        assert f'if "%%A"=="{key}" set ' in marker, key
+    assert 'if "%%A"=="name" set' not in marker
+
+
+def test_restore_bat_tries_the_password_before_tier1():
+    """#608 (C7): the password is tried with --list-snapshots (exit 77 on
+    a wrong one) before tier 1 runs, and a wrong one asks again; an empty
+    answer asks again, Q quits with 77."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    check = [ln for ln in code if "--list-snapshots" in ln]
+    head = '"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" '
+    assert check == [head + "--list-snapshots >nul 2>nul"], check
+    tier1 = [i for i, ln in enumerate(code)
+             if ln.startswith(head + '--target "%TARGET%" --snapshot latest ')]
+    assert len(tier1) == 1, tier1
+    assert code.index(check[0]) < tier1[0]
+    assert code.index('set "LCSAS_PW="') < code.index('set /p "LCSAS_PW=Password: "')
+    assert 'if /i "!LCSAS_PW!"=="q" goto :pw_gave_up' in code
+    start = code.index(":pw_gave_up")
+    gave_up = code[start:code.index("goto :wrong_password", start) + 1]
+    assert "pause" in gave_up, gave_up
+    assert not [ln for ln in gave_up if ln.startswith("goto :pw")], gave_up
+
+
+def test_restore_bat_share_cards_live_in_temp_never_in_the_tools_folder():
+    """#607 (C7): each typed card is a file of its own in a new folder
+    under %TEMP%, checked alone with lcsas-keyshare, then all K are
+    combined into PWFILE; P lets the reader type the password."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    new_dir = _label_body(content, ":new_shares_dir")
+    assert 'set "SH_DIR=%TEMP%\\lcsas-shares-%RANDOM%%RANDOM%"' in new_dir
+    assert not [ln for ln in code if "SH_DIR=" in ln and "TOOLS" in ln]
+    assert '"%KS_EXE%" "card%SI%.txt" >nul 2> "keyshare.txt"' in code
+    assert '"%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt"' in code
+    assert 'if "%KRC%"=="3" goto :share_bad' in code
+    assert 'if /i "!SHARE!"=="p" goto :shares_own' in code
+
+
+def test_restore_bat_asks_for_another_set_before_cleaning_up():
+    """After a good restore, "Restore another backup set from these
+    discs?" comes before the pack cache goes and before .done is
+    written (C6): yes goes back to the menu, keeping both."""
+    content = RESTORE_BAT.read_text()
+    done = _label_body(content, ":restore_done")
+    ask = [i for i, ln in enumerate(done)
+           if "Restore another backup set from these discs? [y/N]: " in ln]
+    assert len(ask) == 1, done
+    rm_cache = 'if defined CACHE_SET_HERE rmdir /s /q "!LCSAS_PACK_CACHE_DIR!" 2>nul'
+    assert ask[0] < done.index(rm_cache)
+    assert ask[0] < done.index('2>nul > "%TOOLS%\\.done" echo.')
+    assert 'if /i "!ANOTHER_ANS!"=="y" goto :another_set' in done
+    assert 'if not "%LCSAS_ANOTHER_SET%"=="0"' in "\n".join(done)
+
+
+def test_restore_bat_c4_variables_are_documented():
+    """C4: every variable restore.bat honours has a row in ENV_VARS.txt."""
+    env_doc = (RESTORE_BAT.parents[1] / "docs" / "ENV_VARS.txt").read_text()
+    content = RESTORE_BAT.read_text()
+    for var in ("LCSAS_REPO", "LCSAS_TARGET", "LCSAS_PASSWORD", "LCSAS_PWFILE",
+                "LCSAS_PW", "LCSAS_SHARES_DIR", "LCSAS_NEWEST_DISC_PROMPT",
+                "LCSAS_TOOLS_DIR", "LCSAS_PACK_CACHE_DIR", "LCSAS_INTERACTIVE",
+                "LCSAS_ANOTHER_SET"):
+        assert var in content, var
+        assert f"\n{var}\n" in env_doc, f"{var} has no entry in ENV_VARS.txt"

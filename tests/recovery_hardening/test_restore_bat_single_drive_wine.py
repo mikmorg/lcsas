@@ -234,6 +234,10 @@ def _build(tmp_path: Path) -> _Fixture:
         "LCSAS_RELOCATED": "D:\\",   # what the relaunch line sets
         "LCSAS_TARGET": TRIPLE,
         "LCSAS_INTERACTIVE": "on",
+        # Skip the newest-data-disc step (#605): these tests count the
+        # disc prompts from the META disc on.  The step has its own test,
+        # test_restore_bat_journey_wine.py.
+        "LCSAS_NEWEST_DISC_PROMPT": "0",
     })
     return _Fixture(prefix=prefix, env=run_env, meta=meta, discs=discs,
                     reloc=reloc)
