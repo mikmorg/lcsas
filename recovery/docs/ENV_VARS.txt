@@ -26,6 +26,10 @@ LCSAS_PASSWORD
   What:     Password for the Rustic repository.  When set,
             restore.sh writes it to a temp file (mode 600) instead of
             reading interactively.  Mutually exclusive with LCSAS_PWFILE.
+            A wrong one is not asked for again: the run stops with
+            exit 77.  (Typed at the prompt, a wrong password is caught
+            before the restore starts and asked for again; since rc6,
+            #608.)
   Why:      Opt-in — credentials must never appear in the environment
             by default.  Scripted / CI use requires explicit action.
 
@@ -37,15 +41,35 @@ LCSAS_PWFILE
             a file rather than a shell variable.
   Why:      Opt-in — same reasoning as LCSAS_PASSWORD.
 
+LCSAS_SHARES_DIR
+  Default:  unset (asks for the share cards when the set's password
+            is split, else for the password)
+  Since:    rc6 (#607)
+  What:     A folder of share card files, one card per file (the
+            printed card's text, or just its words).  restore.sh
+            rebuilds the password from every file in it with the
+            bundled lcsas-keyshare (more than K cards is fine) and asks
+            nothing.  If they cannot rebuild it, the run stops with
+            exit 77.  LCSAS_PWFILE and LCSAS_PASSWORD come first.
+            Unset, restore.sh asks for exactly K cards, one per line,
+            when the set's marker (metadata/<id>/LCSAS_REPO.txt) says
+            split=K-of-N; P at that prompt types the password instead.
+  Why:      Opt-in — the cards are secrets; scripted use needs an
+            explicit choice, like LCSAS_PWFILE.
+
 DISCOVERY OVERRIDES
 ───────────────────
 
 LCSAS_REPO
   Default:  unset (prompts when multiple repositories found)
   Since:    Phase 14
-  What:     Repository name to restore.  Matches the basename
-            of the metadata/<name>/ directory on the disc.  Skips the
-            numbered-list prompt on archives with several repositories.
+  What:     Backup set to restore, by its id (the name of its
+            metadata/<id>/ folder on the discs) or, since rc6 (#606),
+            by its name (name= in that folder's LCSAS_REPO.txt) or its
+            plain-letters name (name_cmd=, as restore.bat shows it).
+            Skips the numbered list on archives with several sets.  A
+            name two sets share matches neither: use the id.  The list
+            itself shows each set's name (its id when it has no marker).
   Why:      Opt-in — omitting it is correct and safe; it just shows an
             interactive prompt.  Setting it changes which repository's
             data is restored; wrong value exits with an error.
@@ -96,8 +120,14 @@ LCSAS_PACK_CACHE_DIR
   Default:  auto  (opt-out / default ON)
   Since:    Phase 24
   What:     Opportunistic pack cache directory.  Three values:
-              auto    (default when unset) → allocate a temporary dir
-                      under ${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>.
+              auto    (default when unset) → pack-cache/ in the tools
+                      folder (see LCSAS_TOOLS_DIR), so a stopped
+                      restore carries on with the discs it already
+                      read.  Without a tools folder (no $HOME), a
+                      temporary folder under ${TMPDIR:-/tmp} that is
+                      removed when the run ends.  (Before rc6 it was
+                      ${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>, which no
+                      run removed, #616.)
               <path>  → use that exact path (persists across runs).
               ''      (explicitly empty) → cache off.
             When active, every successful pack-file locate causes the
@@ -138,10 +168,82 @@ LCSAS_INTERACTIVE
             is a console window.  on asks even when the answers come
             through a pipe, as in the windows-e2e single-drive leg and
             the wine single-drive test.  off never asks: a pack that is
-            on no inserted disc fails at once.  restore.sh does not
-            read it.
+            on no inserted disc fails at once.  restore.sh passes it to
+            tier 1 the same way (since rc6, #617) and prints a line
+            when it ignores a value.  restore.sh's own extra questions
+            follow it too: the newest data disc, the check that asks a
+            typed password again, and "Restore another backup set?"
+            are asked on auto only when stdin is a terminal, on on
+            always (a test rig answers them through a pipe), never on
+            off.  So a piped or scripted run never waits for them.
+            restore.bat's own questions do not follow it: it does not
+            test for a console, so it asks them whatever the value
+            (LCSAS_NEWEST_DISC_PROMPT=0 and LCSAS_ANOTHER_SET=0 turn
+            off the two extra ones).
   Why:      Opt-in.  auto is right for a person at a console; the knob
             lets a test harness play that person at the disc prompt.
+
+LCSAS_NEWEST_DISC_PROMPT
+  Default:  unset → 1  (opt-out / default ON)
+  Since:    rc6 (#605)
+  What:     Run off the META disc on a terminal with no data disc in
+            yet, restore.sh first asks the reader to take the META disc
+            out and put in the NEWEST data disc (the latest year, then
+            the highest number in its label, read from the disc's
+            VOLUME_INFO.txt, never the drive's 16-character name for
+            it).  That disc's copy of each backup set it holds (its
+            snapshots and index) is the one used, and refreshes the
+            tools folder's copy.  0 skips the question: the discs
+            mounted now are used, else the copies on the META disc.
+            Answering S at the question does the same; Q stops (exit
+            65).  resume.sh and the next-set run set it to 0.
+  Why:      Opt-OUT.  The META disc's copy can be older than the newest
+            data disc, and a set added after the META disc was made is
+            not on it at all, so "latest" would quietly be older (#605).
+
+LCSAS_ANOTHER_SET
+  Default:  unset → 1  (opt-out / default ON)
+  Since:    rc6 (#609)
+  What:     After a restore that succeeds, when the discs hold more
+            than one set and someone can answer (see
+            LCSAS_INTERACTIVE), restore.sh asks "Restore another backup
+            set from these discs? [y/N]".  y asks for the folder and
+            starts again at the set list, reusing the tools folder and
+            its pack cache; N ends the run and deletes the tools
+            folder.  0 never asks.  restore_auto.sh sets it to 0.
+            The next set's password is asked for: LCSAS_PASSWORD,
+            LCSAS_PWFILE (--key) and LCSAS_SHARES_DIR are for the
+            first set only.  Q at the next set list ends the run with
+            0, as N does.
+  Why:      Opt-OUT.  Restoring a second set (documents, then photos)
+            would otherwise mean the META disc and the copy again.
+
+LCSAS_TOOLS_DIR
+  Default:  unset → $HOME/lcsas-restore-tools  (opt-out / default ON)
+  Since:    rc6 (#609)
+  What:     The tools folder restore.sh keeps a restore's own files in.
+            Run off the META disc, it copies there: itself, this
+            computer's binaries (bin/<triple>/ only), the docs and the
+            disc's metadata/ folder; then it runs from the copy, so the
+            disc can come out of the drive.  The pack cache, a copy of
+            the catalog (tier 1 never gets a catalog.db on a disc) and
+            resume.sh live there too.  resume.sh (mode 700) carries a
+            stopped restore on with no META disc; it holds the set's id,
+            the target and the settings, NEVER the password.
+            The folder is removed after a restore that succeeds, once
+            the reader declines another set, and kept after any other
+            exit: a wrong password, q at the disc prompt (exit 75),
+            Ctrl-C (130) or TERM (143).  The next run
+            from the same META disc reuses the copy; a copy made by a
+            different restore.sh is replaced (its pack cache is kept
+            only when both come from the same build).  A folder that
+            already holds other files is never used or deleted; the run
+            falls back to a temporary folder, as it does when there is
+            no $HOME.  On a live USB stick $HOME is in RAM: the folder
+            is lost at power-off, and restore.sh says so.
+  Why:      Opt-OUT.  Without it a stopped restore meant the META disc,
+            the copy and every disc again (#609).  Point it elsewhere
+            when $HOME is small or in RAM, e.g. at a USB disk.
 
 LCSAS_DRAIN_CHUNK_PACKS
   Default:  0  (opt-in / default OFF)
@@ -243,11 +345,12 @@ LCSAS_PROGRESS
 LCSAS_NO_RELOCATE
   Default:  0  (opt-in / default OFF)
   Since:    Phase 20
-  What:     1 → skip the relocation-to-RAM step.  Normally restore.sh
+  What:     1 → skip the relocation step.  Normally restore.sh
             detects when it is running off a read-only optical medium
-            and copies itself + the recovery binaries to a writable
-            temp dir before exec()ing the copy.  This lets you
-            eject the meta disc and reuse the drive for data discs.
+            and copies itself + the recovery binaries to the tools
+            folder (LCSAS_TOOLS_DIR) before exec()ing the copy.  This
+            lets you eject the meta disc and reuse the drive for data
+            discs.
             0 → perform relocation when the medium appears read-only.
   Why:      Opt-IN.  The relocation is a safety behavior; disabling it
             is only appropriate in test / development environments
@@ -391,8 +494,23 @@ INTERNAL VARIABLES (DO NOT SET)
 
 LCSAS_RELOCATED
   Internal sentinel set by restore.sh on re-exec after relocation to
-  RAM.  Its value is the meta disc's original mount path.  Not a
-  knob; do not set manually.
+  the tools folder.  Its value is the meta disc's original mount path.
+  resume.sh sets it too.  Not a knob; do not set manually.  (The
+  relocation also exports LCSAS_TOOLS_DIR with the folder it used.)
+
+LCSAS_RESUME
+  Internal: resume.sh sets it to 1 when the tools folder holds the
+  copy of the set's snapshots the stopped run used.  The resumed run
+  then uses that copy (and skips the newest-disc metadata refresh),
+  so "latest" is the same snapshot as before the stop, whatever data
+  disc is in the drive by then.  Not a knob; do not set manually.
+
+LCSAS_ANOTHER_PASS
+  Internal: restore.sh sets it to 1 when it starts again for the
+  next backup set after "Restore another backup set? [y/N]".  Q
+  (or the end of the input) at that run's list of sets then means
+  no other set: the run ends with 0 and the tools folder goes, as
+  in restore.bat.  Not a knob; do not set manually.
 
 ────────────────────────────────────────────────────────────────────
 QUICK REFERENCE (knobs you may set)
@@ -402,11 +520,15 @@ Variable                    Default   Opt-in/out  Typical use
 ──────────────────────────  ────────  ──────────  ────────────────────
 LCSAS_PASSWORD              unset     opt-in      scripted restores
 LCSAS_PWFILE                unset     opt-in      scripted restores
-LCSAS_REPO                  unset     opt-in      multi-repository shortcut
+LCSAS_SHARES_DIR            unset     opt-in      share cards, no typing
+LCSAS_REPO                  unset     opt-in      set by name, name_cmd or id
 LCSAS_TARGET                unset     opt-in      unusual host arch
 LCSAS_META_DISC             unset     opt-in      unusual mount layout
 LCSAS_MOUNT_DIRS            unset     opt-in      non-standard disc mounts
 LCSAS_PACK_CACHE_DIR        auto      opt-out     set ''  to disable cache
+LCSAS_NEWEST_DISC_PROMPT    1         opt-out     set 0 to skip that step
+LCSAS_ANOTHER_SET           1         opt-out     set 0 to never ask
+LCSAS_TOOLS_DIR             (home)    opt-out     tools folder elsewhere
 LCSAS_INTERACTIVE           unset     opt-in      set on for piped test rigs
 LCSAS_DRAIN_CHUNK_PACKS     0         opt-in      set 100-500 for slow optical
 LCSAS_MAX_JSON_MIB          256       opt-in      lower on tiny 32-bit hosts

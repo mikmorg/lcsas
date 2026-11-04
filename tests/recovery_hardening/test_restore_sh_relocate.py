@@ -89,7 +89,8 @@ def test_readonly_script_dir_triggers_relocation(tmp_path: Path) -> None:
     # The relocation banner is the primary signal that lines 222/236 fired.
     # The re-exec'd script runs as /bin/sh (shebang), not bash, so its trace
     # goes to stderr — we don't assert returncode since the re-exec may not
-    # find a repo (metadata isn't copied to the RAM dir by design).
+    # find a repo: relocation copies the disc ROOT's metadata/ (#616), and
+    # this fixture keeps its repo under recovery/metadata/ instead.
     assert "[lcsas-restore] copied recovery binaries to" in res.stderr, (
         f"expected relocation banner in stderr — lines 222/236 may not have "
         f"fired.\nstderr:\n{res.stderr[:500]}"

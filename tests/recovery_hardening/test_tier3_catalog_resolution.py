@@ -368,20 +368,27 @@ def test_restore_sh_threads_catalog_arg_to_tier3(tmp_path: Path) -> None:
     pybin_dir = tmp_path / "stubbin"
     pybin_dir.mkdir()
     argv_log = pybin_dir / "argv.log"
+    seen = pybin_dir / "catalog.seen"
     stub = pybin_dir / "python3"
     stub.write_text(textwrap.dedent(f"""\
         #!/bin/sh
         : > {argv_log}
+        prev=
         for a in "$@"; do
             printf '%s\\n' "$a" >> {argv_log}
+            [ "$prev" = --catalog ] && cp "$a" {seen}
+            prev=$a
         done
         exit 0
     """))
     stub.chmod(0o755)
 
     target = tmp_path / "restored"
+    tools = tmp_path / "tools"
+    tools.mkdir()
     env = {
         **os.environ,
+        "LCSAS_TOOLS_DIR": str(tools),
         "PATH": f"{pybin_dir}:" + os.environ.get("PATH", ""),
         "LCSAS_MOUNT_DIRS": "",
         "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
@@ -400,6 +407,13 @@ def test_restore_sh_threads_catalog_arg_to_tier3(tmp_path: Path) -> None:
         "restore.sh's tier-3 dispatch did not pass --catalog; "
         f"argv: {args}\nstderr:\n{result.stderr}"
     )
-    assert args[args.index("--catalog") + 1] == str(catalog), (
-        f"--catalog points to the wrong path; argv: {args}"
+    # Since rc6 (#610) restore.sh hands every tier its own copy of the
+    # catalog, in the tools folder, never a catalog.db in place: the
+    # copy must be of the catalog that was reachable.
+    assert args[args.index("--catalog") + 1] == str(tools / "catalog.db"), (
+        f"--catalog is not the tools folder's copy; argv: {args}"
+    )
+    assert seen.is_file(), "tier 3 got a --catalog that was not a readable file"
+    assert seen.read_bytes() == catalog.read_bytes(), (
+        "the tools folder's catalog.db is not a copy of the reachable catalog"
     )

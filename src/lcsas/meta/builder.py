@@ -1573,24 +1573,34 @@ disc itself (`metadata/<repo>/`), so you do **not** need to
 insert a data disc before starting — the script will prompt you
 for each one as the recovery binary needs it.  The script will:
 
-1. List the repositories on this archive.  If more than one
-   repository is present, it prints `Repository:` and waits for
-   you to **type the repository name** (`alpha`, `bravo`, …) and
-   press Enter.  Archives with a single repository skip this
-   prompt.  You can also set `LCSAS_REPO=<name>` in the
-   environment to preselect.
-2. Print `Password:` and wait for the password on stdin.
-   **Type your password** and press Enter.  The password is
-   read in the clear (POSIX-sh has no silent-read); do not
-   pipe it from `echo` — type it.
-3. `exec` the highest-priority recovery tier available
+1. Ask you to take the meta disc out and put in your **newest**
+   data disc: the latest year, then the highest number, in its
+   label (e.g. `LCSAS_CD700_2026_0002`).  Its copy of the backup
+   sets is the newest, so `latest` really is the latest.  Press
+   Enter once it is in, or type `S` and Enter to skip and use the
+   copies on the meta disc.
+2. List the backup sets (repositories) on this archive by name.
+   If more than one is present, it prints `Choose a repository`
+   and waits for you to **type its number or name** and press
+   Enter.  Archives with a single repository skip this prompt.
+   You can also set `LCSAS_REPO=<name>` in the environment to
+   preselect.
+3. Print `Password:` and wait for the password.
+   **Type your password** and press Enter; it is not shown as you
+   type.  An empty or wrong password is asked for again, and `q`
+   quits.
+   When the set's password is split into share cards, it asks for
+   the words of each card instead (`P` lets you type the password).
+4. Run the highest-priority recovery tier available
    (`bin/<arch>/lcsas-restore` → `bin/<arch>/rustic-static` →
    bundled CPython + `standalone_restorer.py`).  Only one tier
    runs per invocation.
-4. When a pack is missing from the disc currently in the drive,
+5. When a pack is missing from the disc currently in the drive,
    the recovery binary stops and prints `INSERT DISC: LCSAS_<label>`
    on stderr.  **Swap the disc in your optical drive and press Enter.**
    Repeat until the binary prints `RESTORE COMPLETE` and exits 0.
+6. Ask whether to restore another backup set from the same discs;
+   the meta disc is not needed again for it.
 
 > **Working from a single terminal.** You do not need tmux or a second SSH
 > session to handle disc swaps — a normal single-terminal flow works.
