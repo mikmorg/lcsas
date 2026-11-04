@@ -15,7 +15,7 @@ Public API:
 
 from __future__ import annotations
 
-from .cards import extract_mnemonic, is_mnemonic_line
+from .cards import extract_mnemonic, is_mistyped_share_line, is_mnemonic_line
 from .codec import decode_master_secret, encode_master_secret
 from .slip39 import (
     KeyShareError,
@@ -35,6 +35,7 @@ __all__ = [
     "encode_master_secret",
     "extract_mnemonic",
     "generate_mnemonics",
+    "is_mistyped_share_line",
     "is_mnemonic_line",
     "recover_secret",
     "share_identifier",

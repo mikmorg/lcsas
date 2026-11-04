@@ -19,8 +19,10 @@
  *
  * --mount-parent names directories whose children are scanned on
  * every retry (so a disc auto-mounted AFTER the binary started is
- * found).  Defaults: $LCSAS_MOUNT_DIRS (colon-separated) or
- * /Volumes:/media:/mnt:/run/media.
+ * found).  Defaults: $LCSAS_MOUNT_DIRS (colon-separated; on Windows
+ * semicolon-separated) or /Volumes:/media:/mnt:/run/media.  Windows
+ * has no default parents: there the root of every optical drive is
+ * searched on each retry instead.
  *
  * --interactive controls behaviour when a pack is still missing:
  *   auto (default)  prompt if stdin is a TTY, else fail fast
@@ -35,7 +37,16 @@
  * locator excludes that path from pack searches and refuses to keep
  * the cwd inside it, so an heir with a SINGLE optical drive can eject
  * the meta disc and reuse the same drive for data discs.
+ *
+ * Exit status: 0 restored (or listed); 1 failed; 2 usage error;
+ * 75 the reader typed q at the disc prompt (run the same command again
+ * to carry on); 77 wrong password.
  */
+#ifdef _WIN32
+/* A system header: it goes before posix_compat.h's shim macros. */
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#endif
 #include "repo.h"
 #include "tree.h"
 #include "json_q.h"
@@ -74,12 +85,30 @@
  * binary's other statuses (0 ok, 1 generic failure, 2 usage). */
 #define EXIT_WRONG_PASSWORD 77
 
+/* Distinct exit status for "the reader typed q at the disc-swap prompt"
+ * (or its input ended there).  Nothing is wrong with the discs or the
+ * password; the reader paused.  Driver scripts keep their files and
+ * say how to carry on, rather than treating it as a failure or trying
+ * another tier.  75 is sysexits.h EX_TEMPFAIL ("try again later"). */
+#define EXIT_READER_QUIT 75
+
 #define MAX_PACK_SEARCH 64
 #define MAX_MOUNT_PARENTS 32
 
+/* LCSAS_MOUNT_DIRS splits on ':' -- except on Windows, where ':' is in
+ * every drive letter, so it splits on ';' like Windows PATH. */
+#ifdef _WIN32
+#  define MOUNT_DIRS_SEP ';'
+#else
+#  define MOUNT_DIRS_SEP ':'
+#endif
+
+#ifndef _WIN32
 /* Default mount parents scanned on every retry when LCSAS_MOUNT_DIRS
  * is unset.  Mirrors the restore.sh shell-side default and the
- * design doc (MULTI_DISC_DESIGN.txt §"DRIVER SCRIPT CHANGES"). */
+ * design doc (MULTI_DISC_DESIGN.txt §"DRIVER SCRIPT CHANGES").
+ * Windows has none: the locator searches every optical drive's root
+ * there instead, and these paths would only be listed, never found. */
 static const char *DEFAULT_MOUNT_PARENTS[] = {
     "/Volumes",
     "/media",
@@ -88,6 +117,7 @@ static const char *DEFAULT_MOUNT_PARENTS[] = {
 };
 #define N_DEFAULT_MOUNT_PARENTS \
     (sizeof DEFAULT_MOUNT_PARENTS / sizeof DEFAULT_MOUNT_PARENTS[0])
+#endif
 
 static void
 usage(const char *argv0)
@@ -124,7 +154,9 @@ usage(const char *argv0)
         "disc inserted AFTER the binary started is discovered.  Multiple\n"
         "--mount-parent flags may be supplied.  When none are given, the\n"
         "binary reads colon-separated $LCSAS_MOUNT_DIRS, then falls back\n"
-        "to /Volumes:/media:/mnt:/run/media.\n"
+        "to /Volumes:/media:/mnt:/run/media.  On Windows the variable is\n"
+        "semicolon-separated, there is no fallback, and every optical\n"
+        "drive (D:\\ and so on) is searched on each retry anyway.\n"
         "\n"
         "--interactive controls behaviour on missing pack:\n"
         "    auto (default)  prompt if stdin is a TTY\n"
@@ -147,7 +179,18 @@ usage(const char *argv0)
         "The locator excludes that path from pack searches and drops\n"
         "any cwd inside it before prompting, so an heir with one optical\n"
         "drive can eject the meta disc and reuse the same drive\n"
-        "for data discs.  Driver scripts set this automatically.\n",
+        "for data discs.  Driver scripts set this automatically.\n"
+        "\n"
+        "LCSAS_PACK_CACHE_DIR names a folder to copy each data disc\n"
+        "into once it is found, so no disc has to go back in later.\n"
+        "\n"
+        "Exit status:\n"
+        "    0   restored (or listed)\n"
+        "    1   failed\n"
+        "    2   usage error\n"
+        "    75  you typed q at the disc prompt; run the same command\n"
+        "        again to carry on (files already restored are kept)\n"
+        "    77  wrong password\n",
         argv0);
 }
 
@@ -198,6 +241,12 @@ main(int argc, char **argv)
     long sidx;
     int rc = 1;
     char keys_dir[4096];
+
+#ifdef _WIN32
+    /* Probing an empty optical drive must fail quietly, not raise the
+     * "There is no disk in the drive" dialog box and wait for a click. */
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+#endif
 
     for (i = 1; i < argc; i++) {
         int matched = 0;
@@ -337,8 +386,9 @@ main(int argc, char **argv)
     /* Determine the mount-parent list scanned on each retry to pick up
      * freshly-inserted discs.  Precedence (highest first):
      *   1. one or more --mount-parent CLI flags
-     *   2. $LCSAS_MOUNT_DIRS colon-separated env var
-     *   3. compiled-in defaults (/Volumes, /media, /mnt, /run/media)
+     *   2. $LCSAS_MOUNT_DIRS colon-separated env var (';' on Windows)
+     *   3. compiled-in defaults (/Volumes, /media, /mnt, /run/media;
+     *      none on Windows, which searches its optical drives instead)
      * The driver script reuses the same env var, so the C and shell
      * sides stay in sync. */
     if (n_mount_parents == 0) {
@@ -351,18 +401,20 @@ main(int argc, char **argv)
                 memcpy(mount_parents_buf, env, len + 1);
                 p = mount_parents_buf;
                 while (p && *p && n_mount_parents < MAX_MOUNT_PARENTS) {
-                    next = strchr(p, ':');
+                    next = strchr(p, MOUNT_DIRS_SEP);
                     if (next) { *next = '\0'; next++; }
                     if (*p) mount_parents[n_mount_parents++] = p;
                     p = next;
                 }
             }
         } else {
+#ifndef _WIN32
             size_t k;
             for (k = 0; k < N_DEFAULT_MOUNT_PARENTS
                      && n_mount_parents < MAX_MOUNT_PARENTS; k++) {
                 mount_parents[n_mount_parents++] = DEFAULT_MOUNT_PARENTS[k];
             }
+#endif
         }
     }
     lcsas_disc_locator_set_mount_parents(&locator, mount_parents,
@@ -604,6 +656,15 @@ main(int argc, char **argv)
                                      target, target, &locator,
                                      &progress);
         lcsas_progress_finish(&progress);
+        if (tree_rc != 0 && locator.reader_quit) {
+            fprintf(stderr,
+                    "[lcsas-restore] stopped at the disc prompt.  Files "
+                    "restored so far are kept.\n"
+                    "[lcsas-restore] To carry on, run the same command "
+                    "again; finished files are skipped.\n");
+            rc = EXIT_READER_QUIT;
+            goto out;
+        }
         if (tree_rc != 0) {
             fprintf(stderr, "ERROR: tree restore failed\n");
             goto out;

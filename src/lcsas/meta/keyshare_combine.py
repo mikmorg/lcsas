@@ -27,10 +27,14 @@
 #
 #  ...or paste the printed password at restore.sh's "Password:" prompt.
 #
-#  If you supply fewer than K shares, or a share is corrupted, or the
-#  shares come from a different archive, the tool prints a clear error
-#  to stderr and exits non-zero (the password is never partially
-#  printed).
+#  More than K shares is fine.  If you supply fewer than K shares, or a
+#  share is mistyped, or the shares come from a different archive, the
+#  tool prints a clear error to stderr and exits non-zero (the password
+#  is never partially printed).  Exit status, as for the C lcsas-keyshare:
+#    0  the password was rebuilt and written
+#    1  the shares could not be combined (too few, or mixed splits)
+#    2  usage error, a file could not be read, or no shares given
+#    3  a share is not valid (a word is mistyped or missing)
 # ═══════════════════════════════════════════════════════════════════
 """Standalone SLIP-0039 share combiner for the LCSAS meta disc.
 
@@ -70,6 +74,7 @@ try:  # source checkout / dev: lcsas.keyshare
         check_share,
         decode_master_secret,
         extract_mnemonic,
+        is_mistyped_share_line,
         is_mnemonic_line,
         recover_secret,
     )
@@ -83,9 +88,15 @@ except ImportError:  # pragma: no cover - meta disc top-level bundle path
         check_share,
         decode_master_secret,
         extract_mnemonic,
+        is_mistyped_share_line,
         is_mnemonic_line,
         recover_secret,
     )
+
+# Exit status (the C lcsas-keyshare uses the same values).
+EXIT_CANNOT_COMBINE = 1
+EXIT_USAGE = 2
+EXIT_BAD_SHARE = 3
 
 
 def _read_mnemonics(paths: list[str]) -> list[tuple[str, str]]:
@@ -96,7 +107,9 @@ def _read_mnemonics(paths: list[str]) -> list[tuple[str, str]]:
     extracted (header/prose lines ignored).  When no paths are given,
     mnemonics are read from stdin keeping one-mnemonic-per-line
     semantics, but non-mnemonic lines (blanks, comments, card prose) are
-    skipped rather than fatal, so ``cat card1 card2 | ...`` works.
+    skipped rather than fatal, so ``cat card1 card2 | ...`` works.  A line
+    that is nearly all share words is kept as a share with typing
+    mistakes, so the per-share check names the bad word.
     Returns ``(label, mnemonic)`` pairs in the order encountered; the label
     (a file path or ``"stdin line N"``) is used for per-share diagnostics.
     """
@@ -107,8 +120,10 @@ def _read_mnemonics(paths: list[str]) -> list[tuple[str, str]]:
             mnemonics.append((p, extract_mnemonic(text, source=p)))
     else:
         for lineno, line in enumerate(sys.stdin.read().splitlines(), start=1):
-            if is_mnemonic_line(line):
-                mnemonics.append((f"stdin line {lineno}", " ".join(line.split())))
+            if is_mnemonic_line(line) or is_mistyped_share_line(line):
+                mnemonics.append(
+                    (f"stdin line {lineno}", " ".join(line.lower().split()))
+                )
     return mnemonics
 
 
@@ -116,7 +131,9 @@ def main(argv: list[str] | None = None) -> int:
     """Reconstruct the password from shares and write it to stdout.
 
     Returns 0 on success (password written as raw bytes, no trailing
-    newline) and a non-zero exit code on any failure.
+    newline) and a non-zero exit code on any failure: 1 the shares could
+    not be combined, 2 usage / unreadable file / no shares, 3 a share is
+    not valid.
     """
     args = sys.argv[1:] if argv is None else argv
 
@@ -126,7 +143,15 @@ def main(argv: list[str] | None = None) -> int:
             "       cat share1 share2 | python3 keyshare_combine.py\n"
             "\n"
             "Reconstructs the repository password from any K SLIP-0039\n"
-            "shares and writes it (raw bytes, no newline) to stdout.\n"
+            "shares (more than K is fine) and writes it (raw bytes, no\n"
+            "newline) to stdout.\n"
+            "\n"
+            "Exit status:\n"
+            "  0  the password was rebuilt and written\n"
+            "  1  the shares could not be combined: too few, or not all\n"
+            "     from the same split (compare the Split ID on the cards)\n"
+            "  2  usage error, a file could not be read, or no shares given\n"
+            "  3  a share is not valid: a word is mistyped or missing\n"
         )
         return 0
 
@@ -134,17 +159,17 @@ def main(argv: list[str] | None = None) -> int:
         pairs = _read_mnemonics(args)
     except OSError as exc:
         sys.stderr.write(f"error: could not read share file: {exc}\n")
-        return 2
+        return EXIT_USAGE
     except KeyShareError as exc:
         sys.stderr.write(f"error: {exc}\n")
-        return 1
+        return EXIT_BAD_SHARE
 
     if not pairs:
         sys.stderr.write(
             "error: no share mnemonics supplied.  Pass share file paths as\n"
             "arguments, or pipe mnemonics (one per line) on stdin.\n"
         )
-        return 2
+        return EXIT_USAGE
 
     # Per-share pre-pass: validate each share independently and print a
     # named verdict, so a single mistyped card is pinpointed (file + word
@@ -162,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
             "error: one or more shares failed individual validation; fix the\n"
             "flagged words above and retry.\n"
         )
-        return 1
+        return EXIT_BAD_SHARE
 
     mnemonics = [mnemonic for _, mnemonic in pairs]
     try:
@@ -174,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
             "Check that you supplied at least K shares from the SAME archive\n"
             "and that every word was transcribed correctly.\n"
         )
-        return 1
+        return EXIT_CANNOT_COMBINE
 
     sys.stdout.buffer.write(password)
     sys.stdout.buffer.flush()

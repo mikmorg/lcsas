@@ -31,7 +31,7 @@ LABELS = [f"LCSAS_TEST_TINY_2026_000{n}" for n in range(1, 5)]
 # names the disc.
 BOX_NO_HINT = """\
 +----------------------------------------------------------+
-| Pack c3e2247d2646d9f7... is required for the next file.       |
+| Pack c3e2247d2646d9f7... is required for the next file.  |
 | (catalog has the pack, but lists no disc for it)         |
 |                                                          |
 | Currently searching:                                     |

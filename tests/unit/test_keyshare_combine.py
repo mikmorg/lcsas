@@ -174,7 +174,8 @@ class TestCombinerInProcess:
         assert capsysbinary.readouterr().out == _PASSWORD
 
     def test_truncated_card_errors(self, tmp_path, capsys):
-        """KEY-01: a truncated card fails (rc 1), naming file + word count."""
+        """KEY-01: a truncated card fails (rc 3: a share is not valid),
+        naming file + word count.  (Before rc6 every failure was rc 1.)"""
         from lcsas.cli.main import main as cli_main
 
         pw_file = tmp_path / "pw"
@@ -196,10 +197,11 @@ class TestCombinerInProcess:
         ]
         trunc.write_text("\n".join(kept) + "\n")
         rc = keyshare_combine.main([str(trunc), str(cards[1])])
-        assert rc == 1
+        assert rc == keyshare_combine.EXIT_BAD_SHARE == 3
         err = capsys.readouterr().err
         assert "trunc-card.txt" in err
         assert "share words" in err
+        assert err.isascii(), err
 
 
 # ── (a') subprocess isolation: only the keyshare package importable ──
@@ -512,7 +514,7 @@ class TestConfigKeySplit:
 class TestCombinerPerShareValidation:
     """The per-share pre-pass pinpoints a single mistyped share."""
 
-    def test_invalid_share_flagged_and_returns_1(self, tmp_path, capsys):
+    def test_invalid_share_flagged_and_returns_3(self, tmp_path, capsys):
         # Swap two valid words so the share still parses structurally (all
         # words in the wordlist, correct count) but its SLIP-0039 CHECKSUM
         # is broken -> _read_mnemonics accepts it, but the per-share
@@ -530,6 +532,64 @@ class TestCombinerPerShareValidation:
 
         rc = keyshare_combine.main([str(bad)])
 
-        assert rc == 1
+        # rc6: a share that is not valid is exit 3 (it was 1, the same as
+        # "cannot combine"), so a script can ask for that card again.
+        assert rc == 3
         err = capsys.readouterr().err
         assert "failed individual validation" in err
+
+    def test_more_than_k_shares_rebuild(self, tmp_path, capsysbinary):
+        """rc6 (#476 drill): the cards say "any K", so all the cards a
+        reader has -- here 4 of a 2-of-5 split, one of them twice -- must
+        rebuild the password, not fail as "too many"."""
+        mns = _make_2of5()
+        files = []
+        for i, m in enumerate([mns[0], mns[2], mns[4], mns[1], mns[2]]):
+            f = tmp_path / f"s{i}.txt"
+            f.write_text(m + "\n")
+            files.append(str(f))
+        assert keyshare_combine.main(files) == 0
+        assert capsysbinary.readouterr().out == _PASSWORD
+
+    def test_too_few_shares_is_exit_1(self, tmp_path, capsys):
+        mns = _make_2of5()
+        f = tmp_path / "one.txt"
+        f.write_text(mns[3] + "\n")
+        assert keyshare_combine.main([str(f)]) == keyshare_combine.EXIT_CANNOT_COMBINE == 1
+        assert "at least 2" in capsys.readouterr().err
+
+    def test_stdin_typo_is_named_not_skipped(self, monkeypatch, capsys):
+        """rc6: on stdin a share line with a typo used to be dropped as
+        prose, so the reader saw only "no shares".  Now it is checked
+        like a file and the bad word is named (exit 3)."""
+        import io
+
+        mns = _make_2of5()
+        words = mns[0].split()
+        words[6] = "buidling"
+        piped = "Tip: you may type just the first 4 letters of each word -- the\n"
+        piped += " ".join(words) + "\n" + mns[1] + "\n"
+        monkeypatch.setattr("sys.stdin", io.StringIO(piped))
+        rc = keyshare_combine.main([])
+        err = capsys.readouterr().err
+        assert rc == keyshare_combine.EXIT_BAD_SHARE, err
+        assert "stdin line 2" in err
+        assert "word 7 'buidling'" in err
+        assert "stdin line 1" not in err  # card prose is still skipped
+
+    def test_stdin_prefix_typed_share_rebuilds(self, monkeypatch, capsysbinary):
+        """A share typed as 4-letter prefixes is not all wordlist words,
+        but it is nearly all share words: it is kept and rebuilds."""
+        import io
+
+        mns = _make_2of5()
+        prefixed = " ".join(w[:4] for w in mns[3].split())
+        monkeypatch.setattr("sys.stdin", io.StringIO(prefixed + "\n" + mns[4] + "\n"))
+        assert keyshare_combine.main([]) == 0
+        assert capsysbinary.readouterr().out == _PASSWORD
+
+    def test_help_documents_exit_status(self, capsys):
+        assert keyshare_combine.main(["--help"]) == 0
+        err = capsys.readouterr().err
+        for code in ("  0  ", "  1  ", "  2  ", "  3  "):
+            assert code in err

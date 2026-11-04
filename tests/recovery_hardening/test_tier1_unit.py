@@ -943,12 +943,14 @@ def test_fixture_pack_cache_dir_speeds_repeat_restore(tmp_path: Path) -> None:
 
 
 def test_copy_file_partial_write_leaves_no_garbage() -> None:
-    """Static analysis pin for Issue #85: confirm that disc_locator.c
-    still contains the unlink(dst) call on the fwrite-error path in
-    copy_file.  This is a documentation pin — it guards against the
-    error-path cleanup being accidentally deleted during future edits.
-    It does NOT execute the fwrite failure (that requires fault
-    injection), but it ensures the dead-code-remover never removes it.
+    """Static analysis pin for Issue #85: confirm that disc_locator.c's
+    copy_file still writes to "<dst>.part", deletes the .part on any
+    error (unlink(part)), and only renames it onto dst once complete.
+    Since rc6 the copy is atomic, so an error never leaves a short dst
+    (the old pin looked for unlink(dst) on the fwrite-error path).
+    This is a documentation pin -- it guards against the error-path
+    cleanup being accidentally deleted during future edits.  The
+    failure paths themselves run in recovery/tests/test_disc_locator.c.
     """
     disc_locator = (
         Path(__file__).resolve().parents[2]
@@ -956,11 +958,12 @@ def test_copy_file_partial_write_leaves_no_garbage() -> None:
     )
     assert disc_locator.is_file(), f"disc_locator.c not found at {disc_locator}"
     src = disc_locator.read_text(encoding="utf-8", errors="replace")
-    assert "unlink(dst)" in src, (
-        "copy_file error-path cleanup (unlink(dst)) has been removed from "
-        "disc_locator.c — restore it to prevent partial-write garbage on "
-        "disc unmount during a restore."
-    )
+    for needle in ('"%s.part"', "unlink(part)", "rename(part, dst)"):
+        assert needle in src, (
+            f"copy_file's atomic-copy cleanup ({needle}) has been removed "
+            "from disc_locator.c -- restore it, or a failed copy leaves "
+            "partial-write garbage in the pack cache."
+        )
 
 
 # ── Issue #269: xattr + hardlink coverage fixtures ────────────────

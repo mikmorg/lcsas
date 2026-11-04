@@ -568,7 +568,11 @@ class _ShareGroup:
         self.shares.add(share)
 
     def to_raw_shares(self) -> list[_RawShare]:
-        return [_RawShare(s.member_index, s.value) for s in self.shares]
+        """The group's shares, in member-index order (a set has none)."""
+        return [
+            _RawShare(s.member_index, s.value)
+            for s in sorted(self.shares, key=lambda s: s.member_index)
+        ]
 
     def common_parameters(self) -> _ShareCommonParameters:
         return next(iter(self.shares)).common_parameters()
@@ -769,17 +773,29 @@ def _recover_ems(groups: dict[int, _ShareGroup]) -> _EncryptedMasterSecret:
         )
 
     for group in groups.values():
-        if len(group) != group.member_threshold():
+        # At least the threshold: any member_threshold distinct shares of a
+        # group rebuild its secret, so more than enough is fine (the cards
+        # say "any K").  The same card twice already collapses (the group
+        # holds a set); two DIFFERENT shares with one index cannot both be
+        # right.  Mirrors the C combiner (recovery/src/lcsas-keyshare).
+        if len(group) < group.member_threshold():
             raise KeyShareError(
-                "Wrong number of mnemonics. Expected "
+                "Wrong number of mnemonics. Expected at least "
                 f"{group.member_threshold()} mnemonics in the group, but "
                 f"{len(group)} were provided."
+            )
+        if len({share.member_index for share in group.shares}) != len(group):
+            raise KeyShareError(
+                "Invalid set of shares. Share indices must be unique."
             )
 
     group_shares = [
         _RawShare(
             group_index,
-            _recover_secret(group.member_threshold(), group.to_raw_shares()),
+            _recover_secret(
+                group.member_threshold(),
+                group.to_raw_shares()[: group.member_threshold()],
+            ),
         )
         for group_index, group in groups.items()
     ]
@@ -792,7 +808,8 @@ def _recover_ems(groups: dict[int, _ShareGroup]) -> _EncryptedMasterSecret:
 def combine_mnemonics(mnemonics: list[str], passphrase: bytes = b"") -> bytes:
     """Recombine SLIP-0039 mnemonic shares into the master secret.
 
-    :param mnemonics: at least ``K`` valid mnemonic strings from one share set.
+    :param mnemonics: at least ``K`` valid mnemonic strings from one share set
+        (more than ``K`` is fine; the same share twice counts once).
     :param passphrase: the passphrase used when the secret was split.
     :returns: the recovered master secret.
     :raises KeyShareError: if the list is empty, a mnemonic is malformed, the

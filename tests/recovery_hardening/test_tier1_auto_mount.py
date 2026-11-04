@@ -17,8 +17,9 @@ the binary can never see a half-copied pack.
   2. ``--auto-mount off`` keeps the old contract: the disc is not picked
      up until ENTER, and the prompt makes no such promise.
   3. Typing still works while polling: ENTER rescans (and re-prompts
-     when the disc is still missing), then 'q' aborts.
-  4. EOF on stdin while polling aborts, as it always has.
+     when the disc is still missing), then 'q' aborts with exit 75
+     ("paused by the reader", rc6).
+  4. EOF on stdin while polling aborts, as it always has (exit 75).
 
 The C side (recovery/tests/test_disc_locator.c) pins the stdio-buffer
 trap: typed-ahead answers must not be stranded in a FILE buffer that
@@ -201,8 +202,11 @@ def test_enter_and_q_still_work_while_polling(tmp_path: Path) -> None:
         run.reap()
     out = run.output()
     assert "still not found" in out, "ENTER while polling did not rescan"
-    assert rc != 0, "'q' while polling did not abort"
+    # rc6: 'q' is "paused by the reader", exit 75, not the generic 1, so
+    # a driver script can keep its files and say how to carry on.
+    assert rc == 75, f"'q' while polling exited {rc}, not 75"
     assert "aborted by user" in out
+    assert "To carry on, run the same command again" in out
 
 
 def test_eof_while_polling_aborts(tmp_path: Path) -> None:
@@ -217,7 +221,7 @@ def test_eof_while_polling_aborts(tmp_path: Path) -> None:
         rc = run.finish()
     finally:
         run.reap()
-    assert rc != 0, "EOF on stdin while polling did not abort"
+    assert rc == 75, f"EOF on stdin while polling exited {rc}, not 75"
     assert "aborted by user" in run.output()
 
 

@@ -130,11 +130,23 @@ lcsas_mkdir_p(const char *path)
     if (len == sizeof(tmp) - 1) return -1;       /* path too long */
     tmp[len] = '\0';
 
-    /* Walk forwards, calling mkdir() at each separator. */
-    for (i = 1; i <= len; i++) {
-        if (tmp[i] == '/' || tmp[i] == '\0') {
+    /* Walk forwards, calling mkdir() at each separator.  On Windows
+     * '\' separates too and a leading drive is skipped (posix_compat.h). */
+    for (i = LCSAS_PATH_START(tmp); i <= len; i++) {
+        if (LCSAS_IS_SEP(tmp[i]) || tmp[i] == '\0') {
             char saved = tmp[i];
             tmp[i] = '\0';
+#ifdef _WIN32
+            {
+                /* An existing folder: nothing to make.  MSVCRT's mkdir
+                 * on a drive root fails with EACCES, not EEXIST. */
+                struct stat st;
+                if (stat(tmp, &st) == 0 && S_ISDIR(st.st_mode)) {
+                    tmp[i] = saved;
+                    continue;
+                }
+            }
+#endif
             rc = mkdir(tmp, 0700);
             if (rc < 0 && errno != EEXIST) return -1;
             tmp[i] = saved;

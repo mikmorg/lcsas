@@ -74,4 +74,24 @@
 #  define O_BINARY 0
 #endif
 
+/* Path helpers for the mkdir -p walks and path comparisons.
+ *   LCSAS_IS_SEP(c)        a directory separator: '/', and on Windows
+ *                          '\' as well.
+ *   LCSAS_PATH_START(p)    the index to start looking for separators:
+ *                          past a leading drive ("C:" or "C:\") on
+ *                          Windows, so "C:" itself is never made.
+ *   LCSAS_PATH_NCMP(a,b,n) compare n bytes of two paths; Windows paths
+ *                          ignore case.  Needs <string.h>. */
+#ifdef _WIN32
+#  define LCSAS_IS_SEP(c)          ((c) == '/' || (c) == '\\')
+#  define LCSAS_PATH_START(p) \
+       (((p)[0] != '\0' && (p)[1] == ':') \
+            ? (LCSAS_IS_SEP((p)[2]) ? 3 : 2) : 1)
+#  define LCSAS_PATH_NCMP(a, b, n) _strnicmp((a), (b), (n))
+#else
+#  define LCSAS_IS_SEP(c)          ((c) == '/')
+#  define LCSAS_PATH_START(p)      1
+#  define LCSAS_PATH_NCMP(a, b, n) memcmp((a), (b), (n))
+#endif
+
 #endif  /* LCSAS_POSIX_COMPAT_H */

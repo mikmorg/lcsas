@@ -79,6 +79,10 @@ LCSAS_MOUNT_DIRS
             both the shell side (restore.sh) and the C side
             (lcsas-restore), which share the same value via export.
             Set to '' (empty string) to disable auto-scan entirely.
+            On Windows, lcsas-restore splits it on ';' (':' is in
+            every drive letter) and has no default list: it searches
+            the root of every optical drive (D:\ and so on) instead,
+            each time it looks for a disc.
   Why:      Opt-in — the compiled-in default covers Linux, macOS, and
             BSD conventions.  Override only when discs are mounted
             under a non-standard path (e.g., systemd-managed
@@ -100,7 +104,11 @@ LCSAS_PACK_CACHE_DIR
             rest of that disc's data/ subtree to be copied into the
             cache.  Subsequent packs from the same disc are served from
             local storage; the disc-swap count drops from O(N_blobs)
-            to O(N_discs).
+            to O(N_discs).  A data disc that tier 1 finds for the first
+            time is copied at once, even before one of its packs is
+            needed, so no disc has to go back in later.  The copy
+            prints how many MB are done, and is refused when the
+            cache's drive is under 10% free.
   Why:      Opt-OUT.  The v3 blind run took 16 disc swaps for 3 needed
             discs without the cache.  Forgetting this knob means the
             heir swaps discs 3-16× more often than necessary —

@@ -76,6 +76,9 @@ typedef struct lcsas_disc_locator {
      * successful pack hit on a mounted disc triggers a "drain":
      * the rest of that disc's data/ subtree is copied into the cache
      * so future packs from the same disc don't require another swap.
+     * A data disc newly found by a rescan (one with a volume_info.json)
+     * is drained at once, before any of its packs is needed ("drain on
+     * first sight"), so the reader never has to put it back.
      * Trades disk space for reduced disc thrashing.
      *
      * NULL = feature off (default), no draining, no extra disk use. */
@@ -112,6 +115,11 @@ typedef struct lcsas_disc_locator {
     /* 1 while the cursor sits after the prompt's "> " (#456), so a line
      * printed mid-wait starts on a fresh line and restores the "> ". */
     int mid_prompt_line;
+
+    /* Set to 1 when the reader typed 'q' at the disc prompt (or its
+     * input ended), so main() can tell "paused by the reader" (exit
+     * 75) from a real failure (exit 1). */
+    int reader_quit;
 } lcsas_disc_locator;
 
 /*
@@ -143,7 +151,9 @@ void lcsas_disc_locator_set_meta(lcsas_disc_locator *l,
  * inserted optical discs (e.g. "/Volumes", "/media/$USER", "/mnt").
  * On each retry the locator opendir()s every parent, adds new
  * children to its discovered-paths list, and also looks for a
- * fresher catalog.db at each child's root.
+ * fresher catalog.db at each child's root.  A parent that is not an
+ * existing directory is skipped.  On Windows the root of every
+ * optical drive ("D:\") is searched on each retry as well.
  *
  * `mount_parents` and the strings it points to are BORROWED -- caller
  * keeps ownership.  Pass NULL/0 to clear.
@@ -209,7 +219,8 @@ void lcsas_disc_locator_set_auto_mount(lcsas_disc_locator *l, int on);
  *   - Each re-scan of the mount parents names every disc not yet named
  *     for its current insertion, by the label in its volume_info.json
  *     (#456), on prompt_out.
- *   - Returns -1 if the heir types 'q' to abort (or stdin hits EOF).
+ *   - Returns -1 if the heir types 'q' to abort (or stdin hits EOF),
+ *     and sets `reader_quit`.
  */
 int lcsas_disc_locate_pack(lcsas_disc_locator *l,
                            const unsigned char pack_id[32],

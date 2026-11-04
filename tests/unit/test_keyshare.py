@@ -324,6 +324,26 @@ def test_mismatched_group_parameters_raises() -> None:
         combine_mnemonics([mnemonics[0], forged.mnemonic()])
 
 
+def test_more_than_threshold_shares_recover() -> None:
+    """rc6 (#476 drill): the cards say "any K of N"; giving more than K
+    (here 4 of a 2-of-5, plus one card twice) must still recover.  The C
+    combiner does the same (recovery/tests/test_keyshare.c)."""
+    mnemonics = split_secret(_MS, threshold=2, count=5)
+    assert combine_mnemonics(mnemonics[:4]) == _MS
+    assert combine_mnemonics([mnemonics[3], mnemonics[3], mnemonics[1]]) == _MS
+    assert combine_mnemonics(list(reversed(mnemonics))) == _MS
+
+
+def test_conflicting_shares_with_one_member_index_raise() -> None:
+    """Two DIFFERENT shares claiming one member index cannot both be right."""
+    mnemonics = split_secret(_MS, threshold=2, count=3)
+    s0 = slip39._Share.from_mnemonic(mnemonics[0])
+    s1 = slip39._Share.from_mnemonic(mnemonics[1])
+    clash = s1._replace(member_index=s0.member_index)
+    with pytest.raises(KeyShareError, match="indices must be unique"):
+        combine_mnemonics([mnemonics[0], clash.mnemonic(), mnemonics[2]])
+
+
 def test_duplicate_share_indices_raise() -> None:
     """Interpolation rejects a repeated x-coordinate."""
     shares = [slip39._RawShare(0, bytes(16)), slip39._RawShare(0, bytes(16))]
