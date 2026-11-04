@@ -69,18 +69,19 @@ LCSAS_SHARES_DIR
   Since:    rc6 (#607)
   What:     A folder of share card files, one card per file (a
             retyped card, or the card file as printed: lines that are
-            not share words are skipped).  restore.bat combines every
-            file in it with lcsas-keyshare, in a new folder under
-            %TEMP% that it then deletes, and uses the rebuilt password
-            with no question asked.  More than K cards is fine, but
-            every file must be a card typed right: one mistyped word
-            in any file makes lcsas-keyshare refuse the whole folder
-            (exit 3, naming the word), even when K good cards remain.
-            It is used when LCSAS_PWFILE, LCSAS_PASSWORD and LCSAS_PW
-            are not set, for any backup set, split or not in its
-            marker.  If the cards do not rebuild the password, it says
-            why and asks on the keyboard (the cards, or P and the
-            password).  restore.sh does not read it yet.
+            not share words are skipped).  The password is rebuilt
+            from every file in it with the bundled lcsas-keyshare
+            (more than K cards is fine), and no question is asked.
+            LCSAS_PWFILE and LCSAS_PASSWORD come first.
+  Windows:  restore.bat combines the files in a new folder under
+            %TEMP% that it then deletes.  It uses the folder when
+            LCSAS_PWFILE, LCSAS_PASSWORD and LCSAS_PW are not set, for
+            any backup set, split or not in its marker.  Every file
+            must be a card typed right: one mistyped word in any file
+            makes lcsas-keyshare refuse the whole folder (exit 3,
+            naming the word), even when K good cards remain.  If the
+            cards do not rebuild the password, it says why and asks on
+            the keyboard (the cards, or P and the password).
   Why:      Opt-in — the questions are right for a person; the folder
             is for scripts and tests, and for a set whose marker does
             not say its password is split.
@@ -182,23 +183,82 @@ LCSAS_PACK_CACHE_DIR
             then open a catalog.db on a disc in place, and that disc
             could not come out of the drive.
 
-LCSAS_TOOLS_DIR
-  Default:  unset → %LOCALAPPDATA%\LCSAS-restore  (opt-in override)
+LCSAS_INTERACTIVE
+  Default:  unset → auto  (opt-in)
+  Since:    rc6 (#617)
+  What:     restore.bat passes it to tier 1 as --interactive on, off
+            or auto; any other value is ignored.  auto (tier 1's own
+            default) asks at the disc-swap prompt only when its input
+            is a console window.  on asks even when the answers come
+            through a pipe, as in the windows-e2e single-drive leg and
+            the wine single-drive test.  off never asks: a pack that is
+            on no inserted disc fails at once.  restore.sh does not
+            read it.
+  Why:      Opt-in.  auto is right for a person at a console; the knob
+            lets a test harness play that person at the disc prompt.
+
+LCSAS_NEWEST_DISC_PROMPT
+  Default:  unset → 1  (opt-out / default ON)
+  Since:    rc6 (#605)
+  What:     0 skips the step that first asks for the NEWEST data disc
+            when the restore runs off the META disc with no data disc
+            in yet: the discs already in are used, else the copies on
+            the META disc.  Those may lack the latest backups; and
+            when the META disc was made after the newest data disc,
+            its latest snapshot can need packs that are on no disc
+            yet, so tier 1 then asks for a disc that does not exist.
+  Windows:  restore.bat, run from a META disc (or relocated from one)
+            with no data disc in any drive, first asks for the NEWEST
+            data disc: the latest year, then the highest number, read
+            from the label in its VOLUME_INFO.txt.  That disc's
+            snapshots\ and index\ then replace the META disc's copies
+            in the tools folder (keys\ from both; a set only on the
+            META disc keeps its copy), and its catalog.db is the one
+            used.  With data discs in at the start there is no
+            question either: the newest of them is used.  The question
+            is not asked when carrying on a stopped restore.
+  Why:      Opt-OUT.  Without the newest data disc, "latest" is the
+            latest backup when the META disc was burned, and a backup
+            set added since is not listed at all: a silent loss of the
+            newest data.  The knob is for test rigs and for a reader
+            who knows the META disc is current.
+
+LCSAS_ANOTHER_SET
+  Default:  unset → 1  (opt-out / default ON)
   Since:    rc6 (#609)
-  What:     The tools folder restore.bat copies itself into from a
-            disc, with this computer's programs (bin\<triple>\ only),
+  What:     0 skips the question "Restore another backup set from
+            these discs? [y/N]" after a restore that succeeds: the run
+            ends after one set.
+  Windows:  restore.bat asks it after a good restore of an archive
+            with more than one backup set.  Yes goes back to the menu,
+            with the tools folder, the pack cache and the catalog copy
+            as they are; only no (or the end of the input) ends the
+            run and lets the tools folder be deleted.
+  Why:      Opt-out.  The question costs one ENTER; without it a
+            second set means the META disc and every disc again.
+
+LCSAS_TOOLS_DIR
+  Default:  unset → %LOCALAPPDATA%\LCSAS-restore on Windows
+            (opt-out / default ON)
+  Since:    rc6 (#609)
+  What:     The tools folder: run off a disc, the restore copies what
+            this computer needs into it and runs from there, so the
+            META disc can come out of the drive.  It stays until a
+            restore has finished, carries a stopped restore on with no
+            META disc, and never holds the password.
+  Windows:  restore.bat copies itself into it from a disc, with this
+            computer's programs (bin\<triple>\ only),
             RECOVER_WINDOWS.txt, the backup sets' metadata, a copy of
             the catalog, the pack cache, resume.cfg and "Resume LCSAS
-            restore.bat" (also put on the Desktop).  The copy runs from
-            there, so the META disc can come out of the drive.  The
-            folder stays until a restore has finished (exit 0), and is
-            then deleted with the Desktop launcher; after a stop (exit
-            75, q at a disc box) or any other failure it stays, and the
-            launcher carries the restore on with no META disc.
-            resume.cfg names the backup set, the restore folder and the
-            drive letters, never the password.  A folder made by the
-            very same restore.bat (compared with fc /b) from the very
-            same META disc (its volume_info.json "created_at", kept in
+            restore.bat" (also put on the Desktop).  The folder stays
+            until a restore has finished (exit 0), and is then deleted
+            with the Desktop launcher; after a stop (exit 75, q at a
+            disc box) or any other failure it stays, and the launcher
+            carries the restore on with no META disc.  resume.cfg
+            names the backup set, the restore folder and the drive
+            letters, never the password.  A folder made by the very
+            same restore.bat (compared with fc /b) from the very same
+            META disc (its volume_info.json "created_at", kept in
             archive.txt) is used as it is; any other is replaced,
             keeping its pack cache only when its lcsas-restore.exe is
             the very same.  Since the tools folder is deleted at the
@@ -213,62 +273,8 @@ LCSAS_TOOLS_DIR
             in-place\ subfolder, removed after exit 0, so a stopped
             restore waiting in the folder is left as it is.
             Not %TEMP%: Disk Cleanup and Storage Sense empty it.
-            restore.sh does not read it yet.
-  Why:      Opt-in.  The default suits every reader; the knob is for a
+  Why:      Opt-out: the folder is always used.  The knob is for a
             computer whose C: drive is short of space, or for a test.
-
-LCSAS_NEWEST_DISC_PROMPT
-  Default:  unset → ask  (set 0 to skip; opt-out)
-  Since:    rc6 (#605)
-  What:     restore.bat, run from a META disc (or relocated from one)
-            with no data disc in any drive, first asks for the NEWEST
-            data disc: the latest year, then the highest number, read
-            from the label in its VOLUME_INFO.txt.  That disc's
-            snapshots\ and index\ then replace the META disc's copies
-            in the tools folder (keys\ from both; a set only on the
-            META disc keeps its copy), and its catalog.db is the one
-            used.  0 skips the question: the data discs already in
-            are used, else the META disc's copies.  Those may lack the
-            latest backups; and when the META disc was made after the
-            newest data disc, its latest snapshot can need packs that
-            are on no disc yet, so tier 1 then asks for a disc that
-            does not exist.  With data discs
-            in at the start there is no question either: the newest of
-            them is used.  The question is not asked when carrying on
-            a stopped restore.  restore.sh does not read it yet.
-  Why:      Opt-OUT.  Without the newest data disc, "latest" is the
-            latest backup when the META disc was burned, and a backup
-            set added since is not listed at all: a silent loss of the
-            newest data.  The knob is for test rigs and for a reader
-            who knows the META disc is current.
-
-LCSAS_ANOTHER_SET
-  Default:  unset → ask  (set 0 to skip)
-  Since:    rc6
-  What:     After a good restore of an archive with more than one
-            backup set, restore.bat asks "Restore another backup set
-            from these discs? [y/N]".  Yes goes back to the menu, with
-            the tools folder, the pack cache and the catalog copy as
-            they are; only no (or the end of the input) ends the run
-            and lets the tools folder be deleted.  0 skips the
-            question: the run ends after one set.  restore.sh does not
-            read it yet.
-  Why:      Opt-out.  The question costs one ENTER; without it a
-            second set means the META disc and every disc again.
-
-LCSAS_INTERACTIVE
-  Default:  unset → auto  (opt-in)
-  Since:    rc6 (#617)
-  What:     restore.bat passes it to tier 1 as --interactive on, off
-            or auto; any other value is ignored.  auto (tier 1's own
-            default) asks at the disc-swap prompt only when its input
-            is a console window.  on asks even when the answers come
-            through a pipe, as in the windows-e2e single-drive leg and
-            the wine single-drive test.  off never asks: a pack that is
-            on no inserted disc fails at once.  restore.sh does not
-            read it.
-  Why:      Opt-in.  auto is right for a person at a console; the knob
-            lets a test harness play that person at the disc prompt.
 
 LCSAS_DRAIN_CHUNK_PACKS
   Default:  0  (opt-in / default OFF)
@@ -532,16 +538,16 @@ Variable                    Default   Opt-in/out  Typical use
 LCSAS_PASSWORD              unset     opt-in      scripted restores
 LCSAS_PWFILE                unset     opt-in      scripted restores
 LCSAS_PW                    unset     opt-in      older restore.bat name
-LCSAS_SHARES_DIR            unset     opt-in      share cards from files
+LCSAS_SHARES_DIR            unset     opt-in      share cards, no typing
 LCSAS_REPO                  unset     opt-in      multi-repository shortcut
 LCSAS_TARGET                unset     opt-in      unusual host arch
 LCSAS_META_DISC             unset     opt-in      unusual mount layout
 LCSAS_MOUNT_DIRS            unset     opt-in      non-standard disc mounts
 LCSAS_PACK_CACHE_DIR        auto      opt-out     set ''  to disable cache
-LCSAS_TOOLS_DIR             (local)   opt-in      Windows tools folder elsewhere
+LCSAS_NEWEST_DISC_PROMPT    1         opt-out     set 0 to skip that step
+LCSAS_ANOTHER_SET           1         opt-out     set 0 to never ask
+LCSAS_TOOLS_DIR             (local)   opt-out     tools folder elsewhere
 LCSAS_INTERACTIVE           unset     opt-in      set on for piped test rigs
-LCSAS_NEWEST_DISC_PROMPT    (ask)     opt-out     0: skip the question
-LCSAS_ANOTHER_SET           (ask)     opt-out     set 0: one set per run
 LCSAS_DRAIN_CHUNK_PACKS     0         opt-in      set 100-500 for slow optical
 LCSAS_MAX_JSON_MIB          256       opt-in      lower on tiny 32-bit hosts
 LCSAS_MAX_TREE_DEPTH        1000      opt-in      raise + 'ulimit -s unlimited'

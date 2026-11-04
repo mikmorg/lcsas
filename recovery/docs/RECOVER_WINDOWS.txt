@@ -334,7 +334,9 @@ tries the password.  If it is wrong, it says so:
      Family documents.
 
 and asks again.  An empty answer asks again too.  To stop, type Q
-and press Enter: nothing is restored (exit code 77).
+and press Enter: nothing is restored (exit code 77).  A password
+that is just the letter Q cannot be typed here: put it in a file
+and use LCSAS_PWFILE (below).
 
 THE PASSWORD IS VISIBLE WHILE YOU TYPE IT.  Plain CMD cannot hide
 it; the script says so before it asks.  Make sure nobody can see
@@ -715,6 +717,23 @@ Example:
         --target C:\Users\me\restored ^
         --pack-search E:\ ^
         --verbose
+
+EXIT CODES of restore.bat (the same as restore.sh's; see RECOVER.txt):
+
+    0   the restore finished: every backup set you chose
+    1   a failure; the message above it says what
+    65  you typed Q at a question restore.bat asked (the newest data
+        disc, the backup set, the restore folder), or you did not
+        type YES at the warning about a folder that is not empty
+    75  you typed Q at a disc box; carry on with "Resume LCSAS
+        restore.bat" (see "STOPPING AND CARRYING ON")
+    77  the password was wrong, or you typed Q at the password or a
+        share card
+  Any other code is the one lcsas-restore.exe stopped with; the
+  message above says how to carry on.  After any exit but 0 the
+  tools folder stays, so the restore can carry on.  Once a backup
+  set is restored, Q at the menu or the folder question for the next
+  set ends the run with 0, and the tools folder goes.
 
 ────────────────────────────────────────────────────────────────────
 ON OLDER WINDOWS (XP / Vista / unpatched 7-8)
