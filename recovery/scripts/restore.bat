@@ -754,8 +754,13 @@ if not exist "%CATALOG_COPY%" (
     goto :catalog_done
 )
 set "CATALOG_ARG=--catalog "!CATALOG_COPY!""
-if defined CATALOG_COPIED echo [lcsas-restore] using catalog !CATALOG_PICK! (a copy in !TOOLS!)
-if not defined CATALOG_COPIED echo [lcsas-restore] using the catalog copy in !TOOLS!
+REM Not `if ... echo ... (a copy ...)`: wine reads those brackets as
+REM a block.  A copy left by an earlier run is used as it is.
+if not defined CATALOG_COPIED goto :catalog_kept
+echo [lcsas-restore] using catalog !CATALOG_PICK! (a copy in !TOOLS!)
+goto :catalog_done
+:catalog_kept
+echo [lcsas-restore] using the catalog copy in !TOOLS!
 :catalog_done
 
 REM ----- How to carry on if the restore stops (#609) ----------------
