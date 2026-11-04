@@ -114,8 +114,10 @@ sudo mount /dev/sr0 /mnt
 
 ## `WARNING: cache filesystem at X is <10% free; disabling further drains`
 
-**Cause**: the pack cache (default `${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>/`)
-is on a filesystem that's nearly full.  The binary auto-disables
+**Cause**: the pack cache (default `pack-cache/` in the tools folder,
+`~/lcsas-restore-tools/`, since rc6; before that
+`${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>/`) is on a filesystem that's
+nearly full.  The binary auto-disables
 drains rather than risk ENOSPC mid-restore.
 
 **Fix**: point the cache somewhere with more room:

@@ -1,7 +1,8 @@
 """Hardening (#517): with nowhere to relocate to, restore.sh warns and goes on.
 
-relocate_to_ram tries $TMPDIR, $XDG_RUNTIME_DIR, /tmp, /run, /var/tmp
-and $HOME.  When none of them takes a copy, it prints "cannot find a
+relocate_to_ram tries the tools folder ($LCSAS_TOOLS_DIR, default
+$HOME/lcsas-restore-tools, #609), then $TMPDIR, $XDG_RUNTIME_DIR, /tmp,
+/run, /var/tmp and $HOME.  When none of them takes a copy, it prints "cannot find a
 writable dir to relocate to; continuing from <disc> (drive will be
 held)" and returns 1, and the caller's `|| true` keeps `set -eu` from
 ending the script there.  The restore then runs from the disc.  A host
@@ -14,6 +15,8 @@ No test reached this branch before.  A CI host always has a writable
 /tmp, so a stub mktemp on PATH refuses the relocation's
 `mktemp -d <dir>/lcsas-restore.XXXXXX` in every candidate and passes
 every other mktemp call (the password file, tier 3) to the real one.
+The tools folder is made unusable by pointing LCSAS_TOOLS_DIR at a
+folder that already holds other files (restore.sh never uses one).
 The run must:
 
   1. print the warning, naming the disc, and no "copied recovery
@@ -81,7 +84,11 @@ def test_no_scratch_dir_warns_and_restores_from_the_disc(tmp_path: Path) -> None
     stubs, log = _refusing_mktemp(tmp_path)
     home = tmp_path / "home"
     home.mkdir()
+    busy = tmp_path / "busy"
+    busy.mkdir()
+    (busy / "someone-elses-file").write_text("x")
     env = {
+        "LCSAS_TOOLS_DIR": str(busy),
         **os.environ,
         "PATH": f"{stubs}{os.pathsep}{os.environ.get('PATH', '')}",
         "HOME": str(home),
@@ -108,6 +115,7 @@ def test_no_scratch_dir_warns_and_restores_from_the_disc(tmp_path: Path) -> None
         f"the stub mktemp never refused $TMPDIR, so the test didn't reach the "
         f"no-scratch branch; it saw: {tried}\n{out}"
     )
+    assert f"cannot use {busy} for the recovery tools" in res.stderr, out
     assert (
         "cannot find a writable dir to relocate to; "
         f"continuing from {meta} (drive will be held)"

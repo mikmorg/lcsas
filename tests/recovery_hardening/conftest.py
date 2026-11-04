@@ -37,6 +37,15 @@ the few pty tests that need ``Popen`` call ``_scaled_timeout`` on their
 own hang-guards; ``test_timeout_scaling.py`` fails any that don't (#458).
 
 Scale with ``LCSAS_TEST_TIMEOUT_SCALE`` (default 4; 1 disables).
+
+**3. A private tools folder (#609).**  restore.sh keeps its tools folder
+(binaries copied off the disc, the pack cache, the catalog copy and
+resume.sh) in ``$LCSAS_TOOLS_DIR``, by default ``$HOME/lcsas-restore-tools``,
+and keeps it after any run that does not succeed.  A test that runs
+restore.sh (or resume.sh, or restore_auto.sh) with the developer's own HOME and no
+``LCSAS_TOOLS_DIR`` gets a fresh folder under the pytest basetemp
+instead, so no test writes to the real home directory.  A test that sets
+its own HOME (or drops HOME) is left alone: it is testing the default.
 """
 from __future__ import annotations
 
@@ -46,6 +55,43 @@ import subprocess
 import pytest
 
 _real_run = subprocess.run
+_real_popen = subprocess.Popen
+
+# Set per test by the autouse fixture: makes a fresh tools folder.
+_tools_dir_factory: dict = {}
+
+
+def _inject_tools_dir(argv: object, kwargs: dict) -> dict:
+    """Give a restore.sh / resume.sh run a private LCSAS_TOOLS_DIR (#609)."""
+    if not (isinstance(argv, (list, tuple)) and argv):
+        return kwargs
+    names = {os.path.basename(str(a)) for a in argv[:2]}
+    if not names & {"restore.sh", "resume.sh", "restore_auto.sh"}:
+        return kwargs
+    base = kwargs.get("env")
+    if base is None:
+        base = os.environ
+    if "LCSAS_TOOLS_DIR" in base or base.get("HOME") != os.environ.get("HOME"):
+        return kwargs
+    factory = _tools_dir_factory.get("make")
+    if factory is None:
+        return kwargs
+    env = dict(base)
+    env["LCSAS_TOOLS_DIR"] = str(factory())
+    kwargs["env"] = env
+    return kwargs
+
+
+class _ToolsDirPopen(_real_popen):  # type: ignore[misc,valid-type]
+    """``subprocess.Popen`` that applies :func:`_inject_tools_dir`.
+
+    ``subprocess.run`` builds its child through ``Popen`` too, so this
+    one hook covers both, including the pty tests that call Popen.
+    """
+
+    def __init__(self, args, *a, **kwargs):  # type: ignore[no-untyped-def]
+        kwargs = _inject_tools_dir(args, kwargs)
+        super().__init__(args, *a, **kwargs)
 
 # At or above this many seconds, a timeout is read as a deliberate wait
 # (e.g. the 90 s wineboot fail-fast probe, the 120 s per-wine-call cap)
@@ -117,6 +163,17 @@ def _run_wrapper(*args, **kwargs):  # type: ignore[no-untyped-def]
         else:
             kwargs["args"] = new_argv
     return _real_run(*args, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _private_tools_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Point restore.sh runs at a fresh tools folder (see item 3 above)."""
+    monkeypatch.setitem(
+        _tools_dir_factory, "make", lambda: tmp_path_factory.mktemp("lcsas-tools"),
+    )
+    monkeypatch.setattr(subprocess, "Popen", _ToolsDirPopen)
 
 
 @pytest.fixture(autouse=True)

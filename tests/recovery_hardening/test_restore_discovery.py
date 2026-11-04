@@ -329,9 +329,9 @@ def test_one_tenant_on_several_mounted_discs_needs_no_picker(tmp_path: Path) -> 
     recovery = tmp_path / "recovery"
     recovery.mkdir()
     _install_stub_binary(recovery, HOST_TARGET, "lcsas-restore")
-    meta_copy = _make_repo_skeleton(recovery / "metadata", "win")
+    _make_repo_skeleton(recovery / "metadata", "win")
     mount_parent = tmp_path / "media"
-    _mount_data_discs(mount_parent, [["win"]] * 4)
+    discs = _mount_data_discs(mount_parent, [["win"]] * 4)
     target = tmp_path / "restored"
 
     # Only the password on stdin: a picker would eat it as its answer.
@@ -339,8 +339,104 @@ def test_one_tenant_on_several_mounted_discs_needs_no_picker(tmp_path: Path) -> 
                        env={"LCSAS_MOUNT_DIRS": str(mount_parent)})
     assert res.returncode == 0, res.stderr
     assert "Multiple repositories" not in res.stderr, res.stderr
-    # The first copy found (the meta disc's own) is the one used.
-    assert _arg_value(_stub_args(res.stdout), "--repo") == str(meta_copy)
+    # A mounted data disc's copy is used, not the meta disc's own (#605):
+    # the meta copy is only the fallback for a set no mounted data disc
+    # carries.  (This used to assert the meta copy won.)
+    assert _arg_value(_stub_args(res.stdout), "--repo") == str(
+        discs[0] / "metadata" / "win"
+    )
+
+
+# ── The meta disc's own metadata/ (#616) ─────────────────────────────
+
+# Invented ids.  A set's folder is named by its id, never by its name.
+SET_ID = "5d0c7e9a-3b1f-4c62-9e8d-a4f17b2c6e01"
+OTHER_ID = "c81e4f2d-9a07-4b5e-8d3c-61f0e2a9b7d4"
+
+
+def _meta_disc(root: Path, ids: list[str]) -> Path:
+    """A meta disc: restore.sh's sentinel under recovery/scripts/, the
+    stub tier 1, and metadata/<id>/ at the disc ROOT (as the builder
+    writes it), not under recovery/."""
+    recovery = root / "recovery"
+    (recovery / "scripts").mkdir(parents=True)
+    (recovery / "scripts" / "restore.sh").write_text("# sentinel\n")
+    _install_stub_binary(recovery, HOST_TARGET, "lcsas-restore")
+    for set_id in ids:
+        repo = _make_repo_skeleton(root / "metadata", set_id)
+        (repo / "data").rmdir()  # the meta disc carries no packs
+    return recovery
+
+
+def test_meta_metadata_is_found_outside_the_mount_dirs(tmp_path: Path) -> None:
+    """A meta disc mounted outside /Volumes, /media, /mnt (say /cdrom),
+    with no data disc mounted, used to give "no restic repository found":
+    its metadata/ is at the disc root and only the mount-dir walk looked
+    there."""
+    cdrom = tmp_path / "cdrom"
+    recovery = _meta_disc(cdrom, [SET_ID])
+    res = _run_restore(recovery, tmp_path / "restored", env={
+        "LCSAS_MOUNT_DIRS": "",
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+    })
+    assert res.returncode == 0, res.stderr
+    assert _arg_value(_stub_args(res.stdout), "--repo") == str(
+        cdrom / "metadata" / SET_ID
+    )
+
+
+def test_relocated_run_finds_the_live_meta_disc_metadata(tmp_path: Path) -> None:
+    """After relocation the run also looks at the meta disc itself
+    ($LCSAS_RELOCATED/metadata), wherever it is mounted."""
+    cdrom = tmp_path / "cdrom"
+    _meta_disc(cdrom, [SET_ID])
+    elsewhere = tmp_path / "copy" / "recovery"
+    elsewhere.mkdir(parents=True)
+    _install_stub_binary(elsewhere, HOST_TARGET, "lcsas-restore")
+    res = _run_restore(elsewhere, tmp_path / "restored", env={
+        "LCSAS_MOUNT_DIRS": "",
+        "LCSAS_RELOCATED": str(cdrom),
+    })
+    assert res.returncode == 0, res.stderr
+    assert _arg_value(_stub_args(res.stdout), "--repo") == str(
+        cdrom / "metadata" / SET_ID
+    )
+
+
+def test_live_meta_disc_in_a_mount_dir_comes_after_the_data_discs(
+    tmp_path: Path,
+) -> None:
+    """The live meta disc under a mount dir is not taken for a data disc:
+    its copy comes last, and a set only it carries is still offered."""
+    media = tmp_path / "media"
+    meta = media / "LCSAS_META"
+    _meta_disc(meta, [SET_ID, OTHER_ID])
+    disc = media / "LCSAS_TEST_TINY_2026_0001"
+    (disc / "data").mkdir(parents=True)
+    _make_repo_skeleton(disc / "metadata", SET_ID)
+    copy = tmp_path / "copy" / "recovery"
+    copy.mkdir(parents=True)
+    _install_stub_binary(copy, HOST_TARGET, "lcsas-restore")
+
+    res = _run_restore(copy, tmp_path / "restored", env={
+        "LCSAS_MOUNT_DIRS": str(media),
+        "LCSAS_RELOCATED": str(meta),
+        "LCSAS_REPO": SET_ID,
+    })
+    assert res.returncode == 0, res.stderr
+    assert _arg_value(_stub_args(res.stdout), "--repo") == str(
+        disc / "metadata" / SET_ID
+    )
+
+    res = _run_restore(copy, tmp_path / "restored2", env={
+        "LCSAS_MOUNT_DIRS": str(media),
+        "LCSAS_RELOCATED": str(meta),
+        "LCSAS_REPO": OTHER_ID,
+    })
+    assert res.returncode == 0, res.stderr
+    assert _arg_value(_stub_args(res.stdout), "--repo") == str(
+        meta / "metadata" / OTHER_ID
+    )
 
 
 def test_one_tenant_on_data_discs_only_needs_no_picker(tmp_path: Path) -> None:

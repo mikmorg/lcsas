@@ -432,3 +432,45 @@ def test_fallback_preserves_success_when_tier1_works(tmp_path: Path) -> None:
         "tier 2 ran after a successful tier 1 — the fallback path "
         "is short-circuiting incorrectly."
     )
+
+
+def test_reader_quit_is_terminal_even_with_fallback(tmp_path: Path) -> None:
+    """#615: tier 1 exits 75 when the reader types q at the disc prompt.
+    That is a pause, not a tier-1 failure: even with
+    LCSAS_TIER_FALLBACK=1 no other tier runs, the tools folder stays and
+    the run says how to carry on."""
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    _make_repo(recovery)  # with data/, so tier 2 WOULD be eligible
+    _install_failing_binary(recovery, "lcsas-restore", exit_code=75)
+    _install_succeeding_binary(recovery, "rustic-static")
+    target = tmp_path / "restored"
+    tools = tmp_path / "tools"
+
+    res = _run(recovery, target, env_extra={
+        "LCSAS_TIER_FALLBACK": "1", "LCSAS_TOOLS_DIR": str(tools),
+    })
+    assert res.returncode == 75, (
+        f"q at the disc prompt must exit 75; got rc={res.returncode}\n"
+        f"stdout:{res.stdout}\nstderr:{res.stderr}"
+    )
+    assert "SUCCESS_rustic-static" not in res.stdout, res.stdout
+    assert "falling through" not in res.stderr, res.stderr
+    assert "stopped at the disc prompt at your request" in res.stderr, res.stderr
+    assert (tools / "resume.sh").is_file()
+    assert f"sh {tools}/resume.sh" in res.stderr, res.stderr
+
+
+def test_reader_quit_without_fallback_keeps_the_tools(tmp_path: Path) -> None:
+    """The default path exits with tier 1's 75 too, and keeps the tools."""
+    recovery = tmp_path / "recovery"
+    recovery.mkdir()
+    _make_repo(recovery)
+    _install_failing_binary(recovery, "lcsas-restore", exit_code=75)
+    tools = tmp_path / "tools"
+
+    res = _run(recovery, tmp_path / "restored",
+               env_extra={"LCSAS_TOOLS_DIR": str(tools)})
+    assert res.returncode == 75, res.stderr
+    assert (tools / "resume.sh").is_file()
+    assert f"sh {tools}/resume.sh" in res.stderr, res.stderr

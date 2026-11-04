@@ -188,10 +188,11 @@ sh /mnt/restore.sh ~/restored-alpha/ latest    # answer 'alpha'
 sh /mnt/restore.sh ~/restored-bravo/ latest    # answer 'bravo'
 ```
 
-Each invocation builds its own pack cache under
-`${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>/`.  These persist until you
-delete them.  If you're restoring several repositories in sequence, you
-can speed up runs 2–N by re-pointing them at a shared cache:
+Each invocation keeps its pack cache in the tools folder
+(`~/lcsas-restore-tools/pack-cache/`, since rc6), which is removed when
+that restore succeeds.  If you're restoring several repositories in
+sequence, you can speed up runs 2–N by re-pointing them at a shared
+cache, which is never removed for you:
 
 ```sh
 mkdir -p /tmp/shared-pack-cache
@@ -211,10 +212,10 @@ If you have only one optical drive, you'll be doing the eject /
 insert / press-Enter dance for each unique disc.  The pack cache
 defaults ON (`LCSAS_PACK_CACHE_DIR=auto`) so you only swap to each
 data disc **once** — the first contact drains the whole disc's
-packs into RAM-backed `/tmp/lcsas-pack-cache.<pid>/`, and
-subsequent packs from the same disc resolve from cache.
+packs into `~/lcsas-restore-tools/pack-cache/` (RAM on a live USB
+stick), and subsequent packs from the same disc resolve from cache.
 
-If `/tmp` is constrained, see the cache-size warnings in
+If your home folder is constrained, see the cache-size warnings in
 [troubleshooting.md](../TROUBLESHOOTING.md#warning-cache-filesystem-at-x-is-10-free-disabling-further-drains).
 
 ---
