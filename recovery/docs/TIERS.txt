@@ -74,6 +74,21 @@ TIER 1 -> TIER 3; tier 2 is a single-disc-only fallback.
 An heir with a multi-disc archive should treat tier 1 as the
 primary AND the only practical pre-Python fallback.
 
+ON WINDOWS (restore.bat)
+
+restore.bat runs tier 1 (lcsas-restore.exe) and, only for a backup
+set whose folder holds its own data\, tier 2 (rustic-static.exe).
+It has no tier 2b and no tier 3: the Python reader is a manual step
+(RECOVER_WINDOWS.txt, "MANUAL PYTHON RESTORE").  It has no
+LCSAS_TIER_FALLBACK knob:
+  * tier 1 exits 0: done.
+  * tier 1 exits 77 (wrong password) or 75 (q at the disc prompt):
+    stop, keep the tools folder, never tier 2.
+  * any other exit, for a set read from the discs (no data\ in its
+    folder): stop, keep the tools folder and say how to carry on.
+    Tier 2 could only fail there (#615).
+  * any other exit, for a set with its own data\: try tier 2.
+
 TIER 2b: STOCK RESTIC / RUSTIC (INDEPENDENT AUDITED READER)
 
 After tier 2, restore.sh automatically tries a stock restic (the
@@ -292,6 +307,8 @@ Nothing is wrong: the reader paused.  The files restored so far stay,
 and running the same command again carries on (finished files are
 skipped).  A driver script should keep its tools folder and say how
 to resume, and must NOT try the next tier: tier 2 cannot swap discs.
+restore.sh and restore.bat both do so, with or without
+LCSAS_TIER_FALLBACK, and exit 75 themselves.
 
 Tier 1 exit status, in full:
   0   restored (or, with --list-snapshots, listed)

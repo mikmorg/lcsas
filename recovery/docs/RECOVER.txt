@@ -109,6 +109,9 @@ in this order.  Each one says how to answer.
      be cut short; the full label is printed on the disc and in its
      VOLUME_INFO.txt.  S then ENTER skips this question and uses the
      copies on the META disc.  Q then ENTER stops (exit code 65).
+     Only a run off the META disc itself asks this: a copy of the
+     disc in a folder on this computer, run where it is, does not
+     (set LCSAS_META_DISC to that folder to have it asked).
 
   2. The backup set, when the discs hold more than one.  The sets are
      listed by name, with a note when a set's password is split into
@@ -205,8 +208,17 @@ and you would get nothing.
 
 LIST AVAILABLE SNAPSHOTS
 
+Each backup set's keys, index and snapshots are in its own folder,
+metadata/<id>/, on every disc.  <id> is the set's id; to see which
+folder is which set, run:
+
+  grep -H '^name=' /mnt/metadata/*/LCSAS_REPO.txt
+
+Then list that set's snapshots (the password file holds the password;
+<arch> is your computer's folder under recovery/bin/):
+
   /mnt/recovery/bin/<arch>/lcsas-restore \
-      --repo /mnt/repo \
+      --repo /mnt/metadata/<id> \
       --password-file /tmp/pw \
       --list-snapshots
 
@@ -215,6 +227,10 @@ Output:
   ID        TIME                          PATH
   a1b2c3d4  2026-01-15T10:30:00.000Z      /home/alice
   e5f6g7h8  2026-02-12T08:15:00.000Z      /home/alice
+
+A META disc's copy lists the snapshots made before the META disc was
+burned.  For the newest list, use the same path on your newest data
+disc.  A wrong password exits with code 77.
 
 RESTORE A SPECIFIC SNAPSHOT
 
@@ -429,8 +445,8 @@ The password directly seeds the scrypt KDF that derives the master
 key encryption key.  If you have lost the password (and hold no
 share cards), the data cannot be decrypted by anyone.
 
-If multiple key files exist under repo/keys/, lcsas-restore tries each
-in turn; you only need ONE valid password.
+If a set's keys/ folder holds several key files, lcsas-restore tries
+each in turn; you only need ONE valid password.
 
 SHARE CARDS (SPLIT PASSWORDS)
 
@@ -513,10 +529,10 @@ DISCS WITH THE SAME LABEL
 
 If you have more than one disc with the same label (as is the
 default), they are bit-identical.  Any one working disc is enough.
-To check which disc you are using:
+To check which disc you are using, read its full label (the name the
+computer shows for a disc may be cut short):
 
   cat /mnt/VOLUME_INFO.txt     # label and contents, plain text
-  sha256sum /mnt/MANIFEST.sha256
 
 SUPPORT
 
@@ -527,9 +543,13 @@ src/, and the documents under docs/ are everything you need.
 EXIT CODES
 
   lcsas-restore exits:
-    0 -- success
-    1 -- runtime error (bad password, missing file, integrity failure)
-    2 -- usage error
+    0  -- success (restored, or listed)
+    1  -- failed (missing file, integrity failure, a pack on no disc
+          it can see)
+    2  -- usage error
+    75 -- you typed q at its disc prompt (or its input ended); run the
+          same command again to carry on
+    77 -- wrong password: a key file rejected it
 
   restore.sh exits:
     0  -- success (whichever tier ran)
@@ -543,7 +563,8 @@ EXIT CODES
     75 -- you typed q at a disc prompt; carry on with resume.sh
     77 -- a repository key rejected the password, or you typed q at
           the password or a share card prompt
-    130 / 143 -- stopped by Ctrl-C / killed; carry on with resume.sh
+    129 / 130 / 143 -- the terminal closed / Ctrl-C / killed; carry
+          on with resume.sh
   On every exit but 0 the tools folder stays (see "THE TOOLS FOLDER"),
   except Ctrl-C at "Restore another backup set?" or the folder
   question after it: that set is restored, nothing is left to
@@ -564,12 +585,12 @@ heirs do not need any of them.  Set them with `export NAME=value`
 before invoking restore.sh.
 
   LCSAS_TIER_FALLBACK=1
-      Run each tier as a subprocess and fall through to the next
-      tier on a non-zero exit.  Default (unset or 0) is `exec` of
-      tier 1 directly, so a tier-1 crash aborts the run.  Use this
-      when you suspect a tier-1 bug and want the cascade to try
-      tier 2 / tier 3 instead.  Tier 3 is always exec'd (last resort,
-      nothing to fall back to).  Exception: a wrong password (tier-1
+      Fall through to the next tier on a non-zero exit.  Default
+      (unset or 0): restore.sh runs tier 1 and exits with its exit
+      code, so a tier-1 crash ends the run.  Use this when you
+      suspect a tier-1 bug and want the cascade to try tier 2 /
+      tier 3 instead.  Tier 3 is the last resort: nothing comes
+      after it.  Exception: a wrong password (tier-1
       exit 77, meaning a key file positively rejected it) STOPS the
       run -- every tier reads the same keys, so retrying with another
       tier cannot help and may leave a partial tree.  Fix the
@@ -691,17 +712,24 @@ mounted disc it prints (to stderr):
 
   +----------------------------------------------------------+
   | Pack ... is required for the next file.                  |
+  | It is on any disc labelled:                              |
+  |   LCSAS_BD25_2026_0003                                   |
   | ...                                                      |
   | Single-drive restore: if your machine has only ONE       |
   | optical drive, eject the META disc first, then           |
   | insert the disc named above into the SAME drive.         |
   | Insert the right disc and press ENTER to retry.          |
+  | Type 'q' then ENTER to abort.                            |
   +----------------------------------------------------------+
 
-The catalog hint lines will name the label of the DATA disc you need
-(e.g. "LCSAS_BD25_2026_0003") when a catalog.db is available on a
-mounted disc.  If no catalog is present the prompt shows only the pack
-ID and asks you to try each DATA disc in turn.
+The catalog lines name the label of the DATA disc you need (e.g.
+"LCSAS_BD25_2026_0003").  The catalog comes from your newest data
+disc.  If you skipped that disc, the first box says
+    (no disc catalog yet: insert your newest data disc)
+Do that: every data disc carries a catalog, and from then on the box
+names the disc it needs.  The three "Single-drive restore" lines show
+only while the META disc is still in its drive.  q then ENTER stops
+the restore with exit code 75 (see "STOPPING AND CARRYING ON LATER").
 
 PHYSICAL SWAP STEPS (single optical drive)
 
@@ -740,20 +768,23 @@ EXPECTED SWAP COUNT (FIRST-CONTACT COST)
 Even with the pack cache enabled, the first contact with each DATA disc
 always requires a physical swap — one swap per disc, minimum.  For an
 archive spread across N data discs, expect at least N swap prompts.
-With the cache active each disc is needed only once (O(N) total swaps);
-later restore runs find all packs in cache and need no disc at all.
-Without the cache, the same disc may be requested multiple times within
-a single restore run.
+With the cache active each disc is needed only once (O(N) total swaps).
+A restore that stopped and is carried on (resume.sh) finds the discs
+it already copied in the cache and does not ask for them again.  The
+cache is deleted with the tools folder once a restore succeeds, so a
+NEW restore, after that, needs the discs again.  Without the cache,
+the same disc may be requested multiple times within a single restore
+run.
 
 REDUCING SWAP FREQUENCY WITH THE PACK CACHE
 
 By default restore.sh keeps an opportunistic pack cache in its tools
-folder (LCSAS_PACK_CACHE_DIR=auto; see "THE TOOLS FOLDER").  When
-lcsas-restore first reads a pack from a DATA disc it copies the entire
-data/ subtree of that disc into the cache.  Subsequent packs from the
-same disc are served from the local cache, not the disc, so each DATA
-disc typically needs to be inserted only ONCE regardless of how many
-packs it contributes to the restore.
+folder (LCSAS_PACK_CACHE_DIR=auto; see "THE TOOLS FOLDER").  The first
+time lcsas-restore sees a DATA disc, it copies the entire data/
+subtree of that disc into the cache, and says how many MB it copies.
+Later packs from the same disc are served from the local cache, not
+the disc, so each DATA disc typically needs to be inserted only ONCE
+regardless of how many packs it contributes to the restore.
 
   * To use a specific directory:   export LCSAS_PACK_CACHE_DIR=/path
   * To disable (disk-constrained):  export LCSAS_PACK_CACHE_DIR=
@@ -770,15 +801,19 @@ file handles remain on the meta disc, so when the binary prompts for a
 data disc you can eject the meta disc and insert the data disc into
 the same drive.
 
-The prompt explicitly tells you when to swap:
+While the META disc is still in the drive, the prompt tells you how
+to swap:
 
   +----------------------------------------------------------+
   | Pack ... is required for the next file.                  |
+  | It is on any disc labelled:                              |
+  |   LCSAS_BD25_2026_0003                                   |
   | ...                                                      |
   | Single-drive restore: if your machine has only ONE       |
   | optical drive, eject the META disc first, then           |
   | insert the disc named above into the SAME drive.         |
   | Insert the right disc and press ENTER to retry.          |
+  | Type 'q' then ENTER to abort.                            |
   +----------------------------------------------------------+
 
 Set LCSAS_NO_RELOCATE=1 to suppress the relocation step (only

@@ -7,7 +7,13 @@ laptop, has the password, but does not have Linux, WSL, admin
 rights, developer tools, or any pre-existing LCSAS installation. The
 recovery toolchain ships a prebuilt `lcsas-restore.exe` and a
 `restore.bat` orchestrator on the meta disc; the entire restore path
-is "insert disc, double-click `restore.bat`, type password."
+is "insert the meta disc, double-click `restore.bat`, answer its
+questions, swap discs when asked."
+
+The heir-facing walkthrough is `recovery/docs/RECOVER_WINDOWS.txt` on
+the meta disc. This document is its companion for people who maintain
+or check the Windows path: what `restore.bat` does, in order, and what
+tests cover it.
 
 Sibling docs:
 
@@ -18,342 +24,437 @@ Sibling docs:
 - [`restore-disc-only.md`](restore-disc-only.md) – disc-only walkthrough
   ignoring host preinstall.
 
+**References.** This document names `restore.bat`'s `REM -----` section
+headings and its `:labels` (for example `:find_newest`) rather than line
+numbers, which move with every change. `grep -n "^:find_newest"
+recovery/scripts/restore.bat` finds one.
+
 ## Table of contents
 
 1. [Common context](#common-context)
-2. [Workflow A: Meta disc + multi-drive (happy path)](#workflow-a-meta-disc--multi-drive-happy-path)
-3. [Workflow B: Single-drive variant (RAM relocation + disc swap)](#workflow-b-single-drive-variant-ram-relocation--disc-swap)
-4. [Manual Python fallback (not orchestrated by `restore.bat`)](#manual-python-fallback-not-orchestrated-by-restorebat)
-5. [Path / drive-letter handling differences from Linux](#path--drive-letter-handling-differences-from-linux)
-6. [Test coverage and gaps](#test-coverage-and-gaps)
-7. [Consolidated source refs](#consolidated-source-refs)
+2. [The restore, step by step](#the-restore-step-by-step)
+3. [Carrying on a restore that stopped](#carrying-on-a-restore-that-stopped)
+4. [A run that does not relocate (`in-place\`)](#a-run-that-does-not-relocate-in-place)
+5. [More than one optical drive](#more-than-one-optical-drive)
+6. [Exit codes](#exit-codes)
+7. [Manual Python fallback (not orchestrated by `restore.bat`)](#manual-python-fallback-not-orchestrated-by-restorebat)
+8. [Path / drive-letter handling differences from Linux](#path--drive-letter-handling-differences-from-linux)
+9. [Where restore.bat and restore.sh differ](#where-restorebat-and-restoresh-differ)
+10. [Test coverage and gaps](#test-coverage-and-gaps)
+11. [Consolidated source refs](#consolidated-source-refs)
 
 ## Common context
 
 The Windows recovery stack is the file `recovery/scripts/restore.bat`
-plus the prebuilt `lcsas-restore.exe`. The binary lives at
-`recovery/bin/x86_64-windows/` in the **source tree** (build-host
-output dir), but the meta disc builder bundles it onto the disc under the
-rust target triple `recovery\bin\x86_64-pc-windows-gnu\` — on-disc
-paths always use the triple (see `recovery/docs/RECOVER_WINDOWS.txt`
-for the heir-facing walkthrough and
-`recovery/docs/WINDOWS_RECOVERY_PLAN.txt` for the design rationale).
+(also at the meta disc's root) plus three prebuilt programs:
+`lcsas-restore.exe` (tier 1), `lcsas-keyshare.exe` (the share card
+combiner) and `lcsas-ecc.exe` (the disc repair tool for
+`restore.bat --check-disc`). They live at
+`recovery/bin/x86_64-windows/` in the **source tree** (build-host output
+dir); the meta disc builder bundles them onto the disc under the rust
+target triple `recovery\bin\x86_64-pc-windows-gnu\`, next to the
+upstream `rustic-static.exe` (tier 2). On-disc paths always use the
+triple (see `recovery/docs/WINDOWS_RECOVERY_PLAN.txt` for the design
+rationale). Sizes in the source tree: `lcsas-restore.exe` about 1.4 MB,
+`lcsas-keyshare.exe` and `lcsas-ecc.exe` about 0.1 MB each.
 
-The orchestrator runs a two-tier cascade. The Python fallback that
-shipped on the disc is no longer chained from the .bat (the inner
-cascade depended on the `py` launcher being installed on the target
-Windows host, which is not guaranteed for the headless-restore
-scenario the script targets); heirs who need it invoke
-`standalone_restorer.py` manually (see [Manual Python fallback](#manual-python-fallback-not-orchestrated-by-restorebat)).
+The orchestrator runs a two-tier cascade:
 
-**Split passwords:** if `PASSWORD_INFO.txt` says the password of the
-repository you are restoring was split into SLIP-0039 shares (an archive
-may split some repositories' passwords and not others), rebuild it
-**first** with the bundled
-combiner before running `restore.bat`. The primary tool is the static
-`bin\x86_64-pc-windows-gnu\lcsas-keyshare.exe <card1> <card2> ...`
-(the .bat prints this hint at the password prompt); the Python fallback
-is `python keyshare_combine.py <card1> <card2> ...` run under the meta
-disc's bundled CPython. See
-`recovery/docs/RECOVER_WINDOWS.txt` (its split-password section),
+| Tier | What runs                                              | When on Windows |
+|------|--------------------------------------------------------|-----------------|
+| 1    | `bin\<triple>\lcsas-restore.exe`                       | Always first    |
+| 2    | `bin\<triple>\rustic-static.exe` (cross-check)         | Only for a backup set whose folder holds its own `data\` |
+
+A backup set read from the discs (the normal layout: `metadata\<id>\` on
+each disc, packs in each disc's `data\`) has no `data\` in its folder.
+`rustic-static.exe` cannot ask for discs, so for such a set a tier-1
+failure is final: the script stops at `:tier1_stopped`, keeps the tools
+folder and says how to carry on (#615). There is no tier 3 in the .bat:
+the Python reader ships on the disc, but `restore.bat` does not launch
+it (it would need a Python install the host may not have); heirs who
+need it run `standalone_restorer.py` by hand (see
+[Manual Python fallback](#manual-python-fallback-not-orchestrated-by-restorebat)).
+
+**Split passwords:** when a backup set's `LCSAS_REPO.txt` (in its
+`metadata\<id>\` folder) says `split=K-of-N`, `restore.bat` asks for K
+share cards itself and rebuilds the password with
+`bin\x86_64-pc-windows-gnu\lcsas-keyshare.exe` (`:shares_ask`, #607).
+When only `PASSWORD_INFO.txt` says the password is split (an older
+disc, or a split that was never recorded), the heir rebuilds it first
+by hand; the .bat prints that hint at the password prompt. See
+`recovery/docs/RECOVER_WINDOWS.txt` ("SHARE CARDS (SPLIT PASSWORDS)"),
 [`docs/SHARE_FORMAT.md`](../SHARE_FORMAT.md), and
 [`docs/guides/recovery-runbook.md`](../guides/recovery-runbook.md).
 
-| Tier | What runs                                              | Status on Windows |
-|------|--------------------------------------------------------|-------------------|
-| 1    | `bin\<arch>\lcsas-restore.exe`                         | Primary           |
-| 2    | `bin\<arch>\rustic-static.exe` (cross-check)           | Secondary         |
-
-Architecture detection maps `PROCESSOR_ARCHITECTURE` (`AMD64`/`x86`)
-and `PROCESSOR_ARCHITEW6432` to the `x86_64-pc-windows-gnu` target
-triple (ARM64 is explicitly rejected with a winget/rustic workaround
-message) at `recovery/scripts/restore.bat:93`-`123`. The binary
-itself is the C99 codebase with the Win32/POSIX shim
-`recovery/src/lcsas-restore/posix_compat.h` papering over `mkdir`,
-`lseek` (to `_lseeki64` for 64-bit pack offsets), `symlink` (stubbed to
-`-1`/`EPERM`), `chmod` (no-op), and `fsync` (`_commit`).
+Architecture detection (section "Detect target (arch + OS)") maps
+`PROCESSOR_ARCHITECTURE` (`AMD64`/`x86`) and `PROCESSOR_ARCHITEW6432` to
+the `x86_64-pc-windows-gnu` target triple; ARM64 is rejected with a
+winget/rustic workaround message, and `LCSAS_TARGET` overrides the
+choice. The triple is known before the relocation, which copies only
+that triple's programs. The binary itself is the C codebase with the
+Win32/POSIX shim `recovery/src/lcsas-restore/posix_compat.h` papering
+over `mkdir`, `lseek` (to `_lseeki64` for 64-bit pack offsets),
+`symlink` (stubbed to `-1`/`EPERM`), `chmod` (no-op), and `fsync`
+(`_commit`).
 
 Windows version floor is **Windows 10 1709 / October 2017** (or Windows
 7 SP1 / 8 / 8.1 with KB2999226), because UCRT
 (`api-ms-win-crt-*.dll`) is a load-time dependency
-(`recovery/docs/RECOVER_WINDOWS.txt:11`-`19`,
-`recovery/docs/WINDOWS_RECOVERY_PLAN.txt:14`-`22`).
+(`recovery/docs/RECOVER_WINDOWS.txt`, "WHY 1709?";
+`recovery/docs/WINDOWS_RECOVERY_PLAN.txt`, target platforms).
 
-## Workflow A: Meta disc + multi-drive (happy path)
+## The restore, step by step
 
-**Purpose:** Restore files on a Windows 10/11 machine when the heir has
-either (a) a writable mount point for the meta disc contents, or (b)
-multiple optical drives so the meta disc can stay inserted while data
-discs are read from another drive.
+**Purpose:** Restore files on a Windows 10/11 machine from the meta disc
+and the data discs, with **one** optical drive (the usual cheap-laptop
+layout) or several.
 
 **Prerequisites:**
 
-- Windows 10 build 1709 or later, or Windows 11 (any build); ARM64
-  Windows 11 also supported but **not runtime-tested**
-  (`recovery/docs/WINDOWS_RECOVERY_PLAN.txt:18`-`22`).
-- USB optical drive (or built-in) that reads the disc format the
+- Windows 10 build 1709 or later, or Windows 11 (any build). ARM64
+  Windows is rejected (no aarch64 Windows binary ships).
+- A USB optical drive (or built-in) that reads the disc format the
   archive was burned to.
-- The meta disc plus all data discs available; if a multi-drive setup
-  is used the data disc(s) sit in additional drives.
-- The password.
-- No admin rights, no installer, no toolchain
-  (`recovery/docs/RECOVER_WINDOWS.txt:22`-`28`).
+- The meta disc plus the data discs.
+- The password, or enough of the set's share cards.
+- No admin rights, no installer, no toolchain.
+- Free space on the drive that holds `%LOCALAPPDATA%` (usually C:) for
+  the tools folder: a few MB for the programs and the backup sets'
+  metadata, plus the pack cache, which grows to about the size of the
+  data discs read. `restore.bat` makes no space check of its own
+  (`restore.sh` does); `RECOVER_WINDOWS.txt` ("DESTINATION FOLDER
+  NOTES") shows how to size the restore with `--list-pending-packs`.
 
 **Steps:**
 
-1. Plug in the USB optical drive and insert the newest meta disc
-   (labelled `LCSAS_META`; if it fails, use the meta disc burned closest
-   in date to the data discs). Confirm in File Explorer
-   that it appears under "This PC" as a drive letter such as `D:` or
-   `E:` (`recovery/docs/RECOVER_WINDOWS.txt:39`-`44`).
-2. (Optional, for the cautious) Check the script and binary against the
-   per-disc manifest with `certutil`:
-   `certutil -hashfile restore.bat SHA256` and
-   `certutil -hashfile recovery\bin\x86_64-pc-windows-gnu\lcsas-restore.exe SHA256`,
-   then `findstr` the expected values out of
-   `recovery\MANIFEST.sha256` (`recovery/docs/RECOVER_WINDOWS.txt:70`-`86`).
-3. Double-click `restore.bat` in File Explorer (or run it from CMD /
-   PowerShell at the disc root) (`recovery/scripts/restore.bat:2`-`7`,
-   `recovery/docs/RECOVER_WINDOWS.txt:44`-`45`).
-4. If SmartScreen says "Windows protected your PC," click **More info
-   → Run anyway**. The signing certificate is intentionally absent
-   because Authenticode certs expire on a 1-3 year cycle and are
-   incompatible with long-term archival
-   (`recovery/docs/RECOVER_WINDOWS.txt:88`-`107`,
-   `recovery/docs/WINDOWS_RECOVERY_PLAN.txt:381`-`386`).
-5. The script auto-discovers the recovery root and architecture
-   (`recovery/scripts/restore.bat:84`-`105`) and the restic repository by
-   probing for `keys/` + `index/` (`recovery/scripts/restore.bat:107`-`116`).
-6. When prompted for the restore folder, accept the default
-   (`%USERPROFILE%\Documents\restored`) by pressing Enter, or type a
-   different absolute path (`recovery/scripts/restore.bat:118`-`137`).
-7. Type the password. It is **visible while typing** because plain CMD
-   has no `read -s` equivalent (`recovery/scripts/restore.bat:139`-`149`,
-   `recovery/docs/RECOVER_WINDOWS.txt:114`-`134`). The password is
-   written to a transient file under `%TEMP%` whose name embeds
-   `%RANDOM%` plus the current time and is deleted on every exit path
-   (`recovery/scripts/restore.bat:151`-`157`, `:210`, `:229`, `:256`,
-   `:268`).
-8. `restore.bat` walks drive letters `D-Z` and registers any drive
-   containing `data\` or `repo\data\` as a `--pack-search` argument so
-   `lcsas-restore.exe` finds packs that live on the data discs without
-   the heir having to type paths
-   (`recovery/scripts/restore.bat:159`-`178`). It also auto-selects
-   the freshest `catalog.db` across drives — the meta disc deliberately
-   carries none (it would be stale at burn time)
-   (`recovery/scripts/restore.bat:185`-`201`).
-9. Tier 1 fires: `lcsas-restore.exe` runs with `--repo`,
-   `--password-file`, `--target`, `--snapshot latest`, plus the
-   collected `--pack-search` / `--catalog` / `--meta-disc` args. If
-   it exits non-zero the script demotes to Tier 2
-   (`rustic-static.exe`). If Tier 2 is also missing or fails, the
-   script prints an error (with a hint pointing at
-   `standalone_restorer.py` for heirs with Python installed) and
-   exits non-zero.
-10. On success the script prints "Restore complete" with the target
-    folder and `pause`s so a double-click console does not vanish.
+1. Insert the newest meta disc (labelled `LCSAS_META`; if it fails, use
+   the meta disc burned closest in date to the data discs). Put it in the
+   drive you will use for the data discs: a drive that is empty when
+   `restore.bat` starts is not searched (`if exist X:\` is false there).
+   Optionally check the script and binary with `certutil -hashfile`
+   against `recovery\MANIFEST.sha256` (`RECOVER_WINDOWS.txt`, "CHECK THE
+   BINARY BEFORE RUNNING IT").
+2. Double-click `restore.bat` in File Explorer (or run it from CMD /
+   PowerShell). If SmartScreen says "Windows protected your PC," click
+   **More info → Run anyway**. The tools are unsigned on purpose:
+   Authenticode certificates expire on a 1-3 year cycle.
+3. **QuickEdit warning** (section "A click in this window pauses the
+   restore", #613). The first lines say that a click in the window
+   selects text and pauses the restore (the window title then starts
+   with "Select"), and that Esc or a right-click carries on. The script
+   does not change the console's settings. The relocated copy does not
+   say it again.
+4. **The tools folder** (section "The tools folder", #609). `TOOLS` is
+   `%LOCALAPPDATA%\LCSAS-restore` (or `LCSAS_TOOLS_DIR`). Because the
+   folder is deleted at the end, the script uses only a folder that is
+   absent, empty, or holds `.lcsas-tools`, the marker it writes there
+   first (`:claim_tools`). Any other folder, and a whole drive such as
+   `E:\`, is refused with exit 1 before anything in it changes
+   (`:tools_taken`). Only the copy that runs from `TOOLS` (relocated, or
+   `--resume`) and `--check-disc` skip this check.
+5. **The copy off the disc** (section "Single-drive guard: copy the
+   tools off the disc"). The script tries to write a probe file next to
+   itself (`2>nul > "%PROBE%" echo.`, with `2>nul` first so a read-only
+   disc prints nothing; up to rc5 every start printed "Access is
+   denied.", #611). If the probe can be written (a writable copy) or
+   `LCSAS_NO_RELOCATE=1`, it does not relocate (see
+   [`in-place\`](#a-run-that-does-not-relocate-in-place)). Otherwise:
+   - It finds the recovery root on the disc for both places the script
+     lives (`..` from `recovery\scripts\restore.bat`, `recovery\` from
+     the disc-root `restore.bat`, #531) and the disc's `metadata\`.
+   - **Reuse.** When `TOOLS` already holds a whole copy whose
+     `restore.bat` is byte-identical to this one (`fc /b`) and whose
+     `archive.txt` matches this META disc's `volume_info.json`
+     `created_at` (`:archive_id`), it says `using the recovery files
+     already copied to ...`, adds only the META disc's sets the copy
+     lacks, and relaunches.
+   - **Fresh copy** (`:tools_fresh`). Otherwise it removes what an
+     earlier copy left, by name, keeping `pack-cache\` only when that
+     copy's `lcsas-restore.exe` is byte-identical to the disc's. It
+     writes `.lcsas-tools` first, then copies, naming each file on
+     screen (`:copy_one`, #612): the three programs of
+     `bin\<triple>\`, plus `rustic-static.exe` only when a set on the
+     disc holds its own `data\`; `docs\RECOVER_WINDOWS.txt`; each
+     `metadata\<id>\` (`xcopy`); a `catalog.db` beside `bin\` if there
+     is one; `archive.txt`; and `restore.bat` last, so a copy cut short
+     is never taken for a whole one. That is a few MB. Up to rc5 the
+     relocation copied the whole `recovery\bin` with `robocopy` or
+     `xcopy`, 744 MB and 17,063 files for six kinds of computer, with
+     nothing on screen, into a random `%TEMP%` folder that every run
+     deleted. The copy now uses `copy` and `xcopy` only: wine runs them,
+     so the local tests check it.
+   - A copy with no `.exe` in it, or one that failed (a copy that
+     errors, or comes out a different size), is removed, and the script
+     stays on the disc: `could not copy the recovery programs to ... --
+     staying on disc.` The restore still works, but the disc cannot
+     come out until it has finished.
+   - It prints `copied recovery files to <TOOLS>` and `you may eject
+     the meta disc when the binary prompts for a data disc.`
+   - **The relaunch line** (`:relaunch`) ends the copy on the disc with
+     `(goto) 2>nul`, `cd`s to `%SystemDrive%\`, sets `LCSAS_RELOCATED`
+     to the disc's drive letter (e.g. `D:\`) and `call`s the copy in
+     `TOOLS` with the same arguments. Nothing is read from the disc
+     after that. When the copy returns, the same line deletes `TOOLS`
+     only when both `.done` and `.lcsas-tools` are in it (the copy
+     writes `.done` after a restore that finished), and hands back the
+     copy's exit code with `cmd /c exit` (#532, #545). The relocated
+     copy takes `LCSAS_RELOCATED` into its own `setlocal` scope and out
+     of the caller's environment.
+6. **The newest data disc** (section "The newest data disc", #605; C2).
+   The META disc's copy of each backup set is as old as the META disc,
+   and with one drive no data disc is in at the start. So, run from a
+   META disc (relocated, or with no `Label:` line in `VOLUME_INFO.txt`
+   and `recovery\scripts\restore.bat` at the root) with no data disc in
+   any drive, the script asks:
+
+   ```
+   Take the META disc out and put in your NEWEST data disc: the one
+   with the latest year, and then the highest number, e.g.
+   LCSAS_CD700_2026_0002.  File Explorer shows only the first 16
+   characters of the label; the full label is printed on the disc.
+
+   Press ENTER when it is in; S then ENTER to skip (use the copies
+   on the META disc); Q then ENTER to quit.
+   Newest data disc:
+   ```
+
+   - `:find_newest` / `:consider_disc` look at D: to Z:. A data disc is
+     one with `data\`, or with `volume_info.json` and no
+     `recovery\scripts\restore.bat`. `:read_label` takes the label from
+     the `  Label:` line of its `VOLUME_INFO.txt` (else
+     `volume_info.json` `"label"`), never the drive's own name, which
+     Joliet cuts to 16 characters (`LCSAS_CD700_2026` for every CD of a
+     year). `:label_ok` keeps a label only when it holds nothing but
+     `A-Z a-z 0-9 _`. `:parse_label` reads the year and number from the
+     right; ties keep the lower drive letter.
+   - On ENTER it prints `[lcsas-restore] newest data disc: <label> in
+     drive D:`, or says no data disc is in yet, or that the disc has no
+     LCSAS label, and asks again. `S` skips, `Q` stops with exit 65
+     (`:newest_quit`). cmd cannot tell an empty answer from the end of
+     the input, so after five tries it goes on with the META copies.
+   - With data discs already in at the start it asks nothing and takes
+     the newest of them. `LCSAS_NEWEST_DISC_PROMPT=0` skips the step, a
+     resumed run (`--resume`) skips it, and so does a run that stayed on
+     the disc.
+   - `:merge_newest` / `:merge_set` then bring the tools folder's
+     `metadata\` up to date: for each set on that disc, its
+     `snapshots\` and `index\` come from that disc only, its `keys\` are
+     the union of both copies, and its `LCSAS_REPO.txt` and `config`
+     come along. Each set's new copy is built in `metadata-new\` and
+     swapped in whole; a disc that cannot be read leaves the old copy as
+     it was. A set only on the META disc keeps its META copy. Never a
+     union of `index\` or `snapshots\`. The disc's label goes into
+     `merged-from.txt`; a later run never merges an older disc over it.
+7. **The backup set** (section "Find the restic repository",
+   `:choose_set`, #606). Candidates are folders with `keys\` and
+   `index\`: legacy layouts first, then the merged copy, then this
+   disc's `metadata\`, then `D:\metadata\` to `Z:\metadata\`; the first
+   copy of each id wins. With more than one, the menu shows each set's
+   `name_cmd` from its `LCSAS_REPO.txt` (`:read_marker`; only when the
+   marker's `id=` is the folder name; a set with no marker shows its id)
+   and its split:
+
+   ```
+   This archive contains more than one backup set:
+      [1] documents
+      [2] photos (password split: any 2 of 3 share cards)
+
+   Type the number of the one to restore, or Q then ENTER to quit.
+   Which one do you want to restore? [1]:
+   ```
+
+   It takes a number (ENTER means 1). `Q` stops with exit 65
+   (`:menu_quit`). `LCSAS_REPO` picks a set without the menu, by its
+   id or `name_cmd` (`:match_set`), else by its `name=` line
+   (`:match_name`, case-blind); no match exits 1 with the list.
+8. **The folder** (section "Ask for target directory", `:ask_target`).
+   `Type a folder, or ENTER for the one in brackets; Q then ENTER
+   quits.` then `Restore to which folder? [<default>]:`. The default is
+   `%USERPROFILE%\Documents\restored`. Quotes typed around the folder
+   and trailing backslashes are dropped (a `\` before the closing quote
+   would swallow the rest of tier 1's command line, #615). A whole
+   drive (`E:\`) is refused and asked again; so is a folder without a
+   drive letter or a `\\` prefix. `Q` stops with exit 65
+   (`:target_quit`). A resumed run takes the folder from `resume.cfg`.
+9. **The non-empty-folder guard** (section "Non-empty-target guard",
+   UX-07). A folder that holds files and no `.lcsas-restore-marker`
+   gets a warning; anything but `YES` stops with exit 65.
+   `LCSAS_FORCE_NONEMPTY_TARGET=1` skips it. The marker is written
+   empty (`restore.sh`'s names the sets restored there).
+10. **The pack cache and the catalog copy** (section "Pack cache and
+    the local copy of the catalog", #610). The pack cache is
+    `TOOLS\pack-cache` unless `LCSAS_PACK_CACHE_DIR` names another
+    folder; the script makes it and checks it exists (tier 1 can only
+    make the last folder of the path). Tier 1 copies a data disc into
+    it the first time it sees the disc, so each disc goes in about
+    once. The catalog tier 1 gets is a copy, `TOOLS\catalog.db`, never
+    a file on a disc (tier 1 keeps it open, which would hold the disc in
+    the drive). It is copied from the newest data disc found in step 6;
+    else, when carrying on or when `merged-from.txt` exists, the copy
+    already in `TOOLS` is kept; else the last `catalog.db` found on D:
+    to Z:.
+11. **The drives tier 1 searches** (section "Where tier 1 looks for
+    discs", #604). `DISC_LETTERS` is the META disc's own letter
+    (`LCSAS_RELOCATED`) always, the letters a resumed run saved, and
+    every other letter that holds a data disc at launch. Each goes to
+    tier 1 as `--pack-search X:\`, and as `--mount-parent X:\` too once
+    the pack cache folder exists (without a cache, tier 1 would open a
+    disc's `catalog.db` in place). The META letter also goes as
+    `--meta-disc X:\`, the very same string, so tier 1 skips it only
+    while the META disc is in it. All `X:\` arguments are unquoted, so
+    a `\"` cannot swallow the command line. The script prints
+    `[lcsas-restore] drives searched for discs: D:\ ...`. Up to rc5 the
+    META letter was left out, so a one-drive restore could never find a
+    data disc (#604). `LCSAS_INTERACTIVE=on|off|auto` is passed as
+    `--interactive`.
+12. **`resume.cfg` and the launcher** (section "How to carry on if the
+    restore stops", `:save_resume`; relocated runs only). Before the
+    password is asked, the script writes `TOOLS\resume.cfg` (the set's
+    id, the target folder, the META letter and the drive letters;
+    never the password), reads it back, and writes `TOOLS\Resume LCSAS
+    restore.bat`, with a copy on the Desktop (the folder Explorer has
+    in HKCU `Shell Folders`, else `%USERPROFILE%\Desktop`).
+13. **The password** (section "The password", #607, #608). It reaches
+    the programs in a file in `%TEMP%` (`lcsas-pw-*.txt`), deleted on
+    every way out; the first pass also deletes any `lcsas-pw-*.txt` and
+    `lcsas-shares-*` a closed window left. The source is the first of
+    `LCSAS_PWFILE` (copied byte for byte with `copy /b`),
+    `LCSAS_PASSWORD`, `LCSAS_PW`, `LCSAS_SHARES_DIR`, the share cards
+    (when the marker says the set is split), and the keyboard. The
+    script says once that a typed password is visible. Before tier 1
+    starts, `lcsas-restore.exe --list-snapshots` tries it
+    (`:pw_check`): exit 77 means a key rejected it, and the script says
+    `That password is wrong: it does not open the backup set <name>.`
+    and asks again. A wrong or unreadable preset falls back to the
+    keyboard. An empty answer asks again; `Q`, or the third empty
+    answer in a row, ends with exit 77 (`:pw_gave_up`).
+    - **Share cards** (`:shares_ask`): `The password for <name> is
+      split into N share cards; you need any K of them (Split ID
+      NNNNN).`, then for each card `Share card i of K: type all the
+      words on one line, then ENTER` / `(or Q to quit).` and `Words of
+      card i:`. Each card goes in its own file in a new
+      `%TEMP%\lcsas-shares-*` folder and is checked alone with
+      `lcsas-keyshare.exe <file>`: exit 3 or 2 names the problem and
+      asks for that card again. Then the K cards are combined; cards
+      that do not fit together are asked for again. `P` types the
+      rebuilt password instead.
+    - **`LCSAS_SHARES_DIR`**: every file in the folder is a card (more
+      than K is fine). One mistyped file makes `lcsas-keyshare` refuse
+      the whole folder, and the script falls back to the keyboard.
+14. **Tier 1** (section "Tier 1: prebuilt lcsas-restore.exe"). It runs
+    `lcsas-restore.exe --repo ... --password-file ... --target ...
+    --snapshot latest` with the arguments of steps 10-11. Its disc box
+    reads, for example:
+
+    ```
+    +----------------------------------------------------------+
+    | Pack 4f3e2a1b9c8d0e7f... is required for the next file.  |
+    | It is on any disc labelled:                              |
+    |   LCSAS_CD700_2026_0001                                  |
+    |                                                          |
+    | Currently searching:                                     |
+    |   D:\                                                    |
+    |                                                          |
+    | Insert the right disc and press ENTER to retry.          |
+    | Type 'q' then ENTER to abort.                            |
+    +----------------------------------------------------------+
+    ```
+
+    With no catalog yet the second line is `(no disc catalog yet:
+    insert your newest data disc)`. The three "Single-drive restore"
+    lines show only while the META disc is still in its drive. On
+    Windows the box always waits for ENTER. Exit codes:
+    - 0: `:restore_done`.
+    - 77 (wrong password): the "could not decrypt the repository" box,
+      then exit 77 from top level (`:wrong_password`; an `exit /b`
+      inside a bracketed block does not reach `cmd /c`, #384).
+    - 75 (`q` at the disc box) and any other exit for a set with no
+      `data\`: `:tier1_stopped` prints `The restore stopped before it
+      finished (code N).`, where the files are, and how to carry on,
+      then exits with that code. The tools folder stays.
+    - any other exit for a set with its own `data\`: tier 2.
+15. **Another set** (section "The restore has finished"). After
+    `Restore complete.  Files restored to: <folder>`, an archive with
+    more than one set asks `Restore another backup set from these
+    discs? [y/N]:` (unless `LCSAS_ANOTHER_SET=0`). `y` goes back to the
+    menu (step 7) with the tools folder, the pack cache and the catalog
+    copy as they are; the next folder defaults to
+    `Documents\restored-<name>`. `Q` at the menu or the folder question
+    in that pass ends the run with 0.
+16. **The end** (`:all_done`). The pack cache goes if this run chose
+    it, and the Desktop launcher goes. Relocated, the copy writes `.done`
+    and the relaunch line (step 5) or the launcher deletes `TOOLS` once
+    the copy has returned. Exit 0.
 
 **Expected outcome:** Files materialise under
 `%USERPROFILE%\Documents\restored` (or the chosen folder), byte-equal
 to the original snapshot. The `%TEMP%` password file is deleted on
-every exit path.
+every exit path; the tools folder is gone after exit 0, and stays after
+any other exit.
 
-**Variant axes that apply:**
+## Carrying on a restore that stopped
 
-- **OS:** Windows 10 1709+ / Windows 11 on x86_64. ARM64 Windows is a
-  deferred target: `restore.bat` rejects it with a winget/rustic
-  workaround message and no aarch64 Windows binary ships (see the
-  target-platforms list at the top of
-  `recovery/docs/WINDOWS_RECOVERY_PLAN.txt`).
-  Windows 7/8/8.1 with KB2999226 is best-effort.
-- **Optical drive count:** 2+ drives is the cleanest layout — the
-  meta disc stays mounted, data discs sit in other drives, the
-  drive-letter sweep at `recovery/scripts/restore.bat:167`-`178` picks
-  them all up automatically. For 1 drive see [Workflow B](#workflow-b-single-drive-variant-ram-relocation--disc-swap).
-- **Recovery tier:** Tier 1 first; falls back to Tier 2 (bundled
-  rustic) on non-zero exit. There is no third (Python) tier inside
-  the .bat; if both tiers fail the script exits with an error and a
-  hint pointing at the manual `standalone_restorer.py` path
-  (see [Manual Python fallback](#manual-python-fallback-not-orchestrated-by-restorebat)).
-
-**Test coverage:** `restore.bat` is driven through a CMD interpreter on a
-real `windows-latest` runner by `.github/workflows/windows-e2e.yml`
-(happy path with the meta ISO and four data ISOs mounted on separate drive
-letters, so the drive-letter sweep runs across several data discs;
-wrong password exits 77 with no partial tree) and, locally, through wine's `cmd` by
-`tests/recovery_hardening/test_restore_bat_wine_smoke.py`. The Linux-host
-Wine test at `recovery/tests/test_e2e_windows.sh` exercises Tier 1 only
-(it invokes the `.exe` directly). Gaps: no automated test that
-SmartScreen "Run anyway" works post-quarantine (manual drill, #476).
-The remaining real-Windows verification is the manual checklist in
-`recovery/docs/WINDOWS_RECOVERY_PLAN.txt` ("ON A REAL WINDOWS VM
-(manual, recurring)").
-
-**Source refs:** `recovery/scripts/restore.bat:84`-`220`,
-`recovery/docs/RECOVER_WINDOWS.txt:35`-`58`,
-`recovery/docs/WINDOWS_RECOVERY_PLAN.txt:14`-`24`,
-`recovery/src/lcsas-restore/posix_compat.h:30`-`77`, `lcsas-restore.exe`
-binary at `recovery/bin/x86_64-windows/lcsas-restore.exe`.
-
-## Workflow B: Single-drive variant (RAM relocation + disc swap)
-
-**Purpose:** Same as Workflow A, but the heir has **only one** optical
-drive — the most common cheap-laptop layout. The script must free the
-drive after starting so the heir can eject the meta disc and feed in
-data discs through the same drive.
-
-**Prerequisites:**
-
-- Same Windows version requirements as Workflow A.
-- Single optical drive (USB or built-in).
-- Writable `%TEMP%` with enough free space to mirror the
-  `recovery\bin\` tree (typically a few MB; the meta disc bins are
-  measured in MB, not GB).
-- Sufficient RAM or pagefile for the script and binary to run from
-  `%TEMP%` while disc swaps happen.
+**Purpose:** Finish a restore that stopped (`q` at a disc box, a window
+closed, the computer restarted) without the meta disc and without
+copying anything again (#609). Up to rc5 the copy went into a random
+`%TEMP%` folder that every run deleted, so carrying on meant the meta
+disc and the whole copy again.
 
 **Steps:**
 
-1. Insert the meta disc and double-click `restore.bat` exactly as in
-   Workflow A
-   (`recovery/docs/RECOVER_WINDOWS.txt:54`-`58`).
-2. The script's single-drive guard kicks in
-   (`recovery/scripts/restore.bat:25`-`46`): it tries to create a
-   throwaway `lcsas-probe-*.tmp` file next to itself; if the disc is
-   read-only the file does **not** exist after the redirect, signalling
-   "I am running off a read-only disc." The guard is skipped if
-   `LCSAS_NO_RELOCATE=1` or if it has already relocated itself (sentinel
-   `LCSAS_RELOCATED`) (`recovery/scripts/restore.bat:36`-`37`).
-3. The script creates a unique `%TEMP%\lcsas-restore-<RANDOM>-<RANDOM>`
-   directory and rebuilds the on-disc `recovery\scripts\` and
-   `recovery\bin\` layout under it
-   (`recovery/scripts/restore.bat:47`-`57`). If `mkdir` fails it falls
-   back to running in-place
-   (`recovery/scripts/restore.bat:53`-`56`).
-4. The bat finds the recovery root on the disc for both copies of the
-   script (`..` from `recovery\scripts\restore.bat`, `recovery\` from
-   the disc-root `restore.bat`) (`recovery/scripts/restore.bat:68`-`77`),
-   copies itself with `copy /Y "%~f0"` and mirrors that root's `bin\`
-   tree with `robocopy` (preferred — handles long paths), falling back
-   to `xcopy /E /I /Y /Q` if `robocopy` is absent; a `catalog.db` beside
-   `bin\` is copied too (`recovery/scripts/restore.bat:81`-`90`). If no
-   `.exe` reached the copy it removes the copy, says so, and stays on
-   the disc (the restore still works, but the disc cannot be ejected
-   until it finishes) (`recovery/scripts/restore.bat:95`-`101`).
-5. The heir sees `[lcsas-restore] copied recovery files to %RAMDIR%` /
-   `you may eject the meta disc when the binary prompts for a data disc.`
-   (`recovery/scripts/restore.bat:122`-`124`). One line then ends the
-   copy on the disc with `(goto) 2>nul`, `cd`s to `%SystemDrive%\` (so
-   the relocated copy does not hold the disc as its cwd), sets
-   `LCSAS_RELOCATED` to the meta disc drive letter (e.g. `D:\`) and
-   `call`s the relocated `restore.bat` with the same args
-   (`recovery/scripts/restore.bat:145`). Nothing is read from the disc
-   after that, so ejecting it cannot break the end of the run. When the
-   relocated copy returns, the same line removes `%RAMDIR%` and hands
-   back the copy's exit code with `cmd /c exit` (#545). The relocated copy takes
-   `LCSAS_RELOCATED` into its own `setlocal` scope and out of the
-   caller's environment (`recovery/scripts/restore.bat:33`).
-6. The relocated copy runs everything from Workflow A steps 5-10. Now
-   the meta disc has no file handles outstanding, so the heir can
-   eject it when prompted and load the first data disc into the same
-   drive. Best is a disc of the newest volume (the latest year in its
-   label, then the highest number): its disc catalog is the fullest, so
-   fewer swaps are needed. Any data disc still works.
-7. Two cooperating mechanisms keep the swapped drive in scope (#604):
-   - `restore.bat` passes the meta disc's letter (`LCSAS_RELOCATED`,
-     e.g. `D:\`) to the binary as `--pack-search` and, once its pack
-     cache folder exists, as `--mount-parent`, so the data disc that
-     lands on `D:\` is searched (and its `catalog.db` read) after the
-     swap. Up to rc5 it skipped that letter for the whole run, so a
-     one-drive restore could never find a data disc.
-   - The bat also passes `--meta-disc %LCSAS_RELOCATED%`, the very same
-     string, so the locator inside `lcsas-restore.exe` skips that path
-     only while the meta disc is still in it (it checks for
-     `recovery/scripts/restore.sh`, #143) and refuses to keep cwd
-     inside it.
-   - With `LCSAS_PACK_CACHE_DIR` set to the relocated copy's
-     `recovery\pack-cache`, each data disc is copied in the first time a
-     pack is found on it, so each disc goes in about once (#610).
-8. When `lcsas-restore.exe` is missing a pack it prompts the heir to
-   swap discs; the heir ejects the current disc, inserts the next,
-   and presses Enter. Restore continues until the target folder is
-   filled.
+1. Double-click `Resume LCSAS restore.bat` on the Desktop (or in the
+   tools folder). It exists once the folder question (step 8) was
+   answered on a relocated run.
+2. The launcher ends its own batch with `(goto)`, `cd`s to
+   `%SystemDrive%\` and runs `TOOLS\recovery\scripts\restore.bat
+   --resume`.
+3. `--resume` reads `resume.cfg` (`:read_resume`): the set, the target
+   folder, the META letter (as `LCSAS_RELOCATED`) and the saved drive
+   letters, which are searched even when empty now. It skips the
+   newest-disc step (the same snapshot as before the stop), keeps
+   `TOOLS\catalog.db`, and asks only for the password.
+4. Tier 1 skips every file that is already complete (#92), and the
+   pack cache keeps the discs already read.
+5. After exit 0 the launcher deletes itself and `TOOLS` (when `.done`
+   and `.lcsas-tools` are there).
 
-**Expected outcome:** Identical to Workflow A; the heir only needs one
-optical drive and never has to manually copy disc contents to local
-disk first.
+Running `restore.bat` from the meta disc again works too: it asks the
+questions again and reuses the tools folder (step 5).
 
-**Variant axes that apply:**
+## A run that does not relocate (`in-place\`)
 
-- **OS:** Same as Workflow A. The relocation logic depends on
-  `%TEMP%`, `%RANDOM%`, and `cmd.exe` semantics present in every
-  supported Windows version.
-- **Optical drive count:** **1** is the whole point of this variant.
-  Multi-drive setups transparently skip it because the writability
-  probe succeeds when the script is already running from disk
-  (`recovery/scripts/restore.bat:39`-`45`); the multi-drive case also
-  works correctly from the relocated copy if it triggers anyway.
-- **Recovery tier:** Same cascade as Workflow A. The relocation
-  happens before tier dispatch, so all tiers benefit.
+A run that does not relocate (`LCSAS_NO_RELOCATE=1`, a writable copy of
+the META disc such as a USB stick, or the script staying on the disc
+after a failed copy) still needs a pack cache, a catalog copy and,
+after the newest-disc step, a merged `metadata\`. It keeps them in
+`TOOLS\in-place\` (section "A run that does not relocate"), never in
+`TOOLS` itself, so a stopped restore waiting in `TOOLS` for its
+launcher is left as it is. `in-place\` is removed after exit 0, and
+`TOOLS` too if nothing else remains (`:all_done_in_place`). Such runs
+write no `resume.cfg` and no launcher; to carry on, run `restore.bat`
+again and choose the same folder.
 
-**Test coverage:** The relocation runs on a real `windows-latest` runner
-in `.github/workflows/windows-e2e.yml`: the steps *Relocation leg —
-restore.bat at the disc root (the heir's double-click)* and *Relocation leg —
-`recovery\scripts\restore.bat` layout* (copy made under `%TEMP%`, tier 1 run
-from the copy, restored tree byte-exact), and *Eject leg — relocated restore
-survives a meta-disc eject* (started from the disc-root `restore.bat`; the
-meta ISO is dismounted once the relocated copy is up, the restore still
-finishes byte-exact, the exit code is 0 and nothing tries to read the
-ejected disc). *Single-drive leg — every data disc swapped into one drive
-letter* mounts only the meta ISO and, at each disc prompt, moves the named
-data ISO into the meta disc's own letter (#617). Under wine,
-`tests/recovery_hardening/test_restore_bat_single_drive_wine.py` runs the
-relocated copy through the same swap by re-pointing `d:`. The wine smoke
-suite (`tests/recovery_hardening/test_restore_bat_wine_smoke.py`) and the
-happy-path and wrong-password steps of `windows-e2e.yml` still set
-`LCSAS_NO_RELOCATE=1`; `recovery/tests/test_e2e_windows.sh` invokes the
-`.exe` directly; and the multi-disc / disc-swap design has its own pytest at
-`recovery/tests/test_multidisc.py` but that does not exercise the Windows
-.bat copy/relocate logic.
+## More than one optical drive
 
-What the real-runner legs found (the first run of the relocation leg
-surfaced the first item):
+With data discs in other drives at launch, step 6 asks nothing and
+merges the newest of them; step 11 passes every such letter to tier 1,
+so the restore may need no swap at all. The META disc's letter is
+passed too, and searched once the META disc is out.
 
-- (Fixed, #531) **The relocation was broken when started from the
-  disc-root `restore.bat` (the copy an heir double-clicks).** The bin tree
-  was copied from `%~dp0..\bin`, which is `E:\bin` for `E:\restore.bat`
-  (the binaries are in `E:\recovery\bin`), so the RAM copy got an empty
-  `recovery\bin` and the relocated script ended in `ERROR: no working
-  recovery method on this system` with exit code 1.
-- (Fixed, #545) **What a working relocation leaves behind:** the copy
-  `%TEMP%\lcsas-restore-<n>-<n>\` (about 40 files, 16.5 MB with the fixture
-  meta tree) was never removed. The disc copy's relaunch line now removes
-  it when the relocated copy returns, keeping that copy's exit code, and
-  the relocation, eject and relocated wrong-password legs fail if one is
-  left. A copy is still left if the window is closed mid-restore. The
-  script also prints `Access is denied.` once, from the writability probe
-  on the read-only disc. The password file is deleted.
-- (Fixed, #532) **After the meta disc was ejected,** the restore completed
-  and was byte-exact, but the copy on the disc was still a running batch
-  file: when the `call` returned, `cmd` went back to it on the ejected
-  disc, printed `The system cannot find the path specified.` after the
-  final "Press any key" and exited 1 although the restore succeeded.
-  Putting `exit /b` on the same line or in a `( )` block does not help
-  (measured on `windows-latest`); ending the disc copy with `(goto) 2>nul`
-  before the `call` does.
+## Exit codes
 
-Gaps: no test for `%TEMP%` exhaustion or for the `robocopy`/`xcopy`
-fallback; the eject leg uses `Dismount-DiskImage`, which detaches the image
-without asking whether anything still holds a handle on it, so it shows the
-restore survives the loss of the meta disc but not that Explorer's own
-Eject would be allowed (open handles or a cwd on the disc make it refuse);
-no test of a real disc swap on one drive (the legs mount every data disc at
-once, so the swap prompt never appears).
+| Code | Meaning |
+|------|---------|
+| 0  | The restore finished: every backup set the reader chose. |
+| 1  | A failure: unsupported processor, a tools folder that is not the restore's own, no backup set found, `LCSAS_REPO` matches nothing, the target cannot be made, or no tier works. The message says which. |
+| 65 | The reader typed Q at a question `restore.bat` asked (the newest data disc, the backup set, the folder), or did not type YES at the non-empty-folder warning. |
+| 75 | The reader typed q at tier 1's disc box. Carry on with the launcher. |
+| 77 | Wrong password, or Q (or three empty answers) at the password or a share card. |
+| other | The code tier 1 stopped with, for a set read from the discs. |
 
-**Source refs:** `recovery/scripts/restore.bat:25`-`81`,
-`recovery/scripts/restore.bat:159`-`183`,
-`recovery/src/lcsas-restore/main.c:1`-`32`,
-`recovery/docs/RECOVER_WINDOWS.txt:54`-`58`.
+`restore.bat --check-disc IMAGE` has its own codes: 0 (no damage, or
+repaired), 1 (damage left, by request or beyond the parity), 2 (no RS03
+layer) and 3 (no image, no `lcsas-ecc.exe`, or a read error).
 
 ## Manual Python fallback (not orchestrated by `restore.bat`)
 
@@ -399,17 +500,19 @@ need it.
 
    ```
    python standalone_restorer.py ^
-       --repo D:\metadata\<name> ^
+       --repo D:\metadata\<id> ^
        --password-file C:\path\to\pw.txt ^
        --target C:\Users\me\restored ^
        --mount-point E:\
    ```
 
-   `<name>` is the repository's folder under `D:\metadata\` (the
+   `<id>` is the repository's folder under `D:\metadata\` (the
    directory containing `keys\` and `index\`; `dir D:\metadata`
-   lists them). Pack data lives on the data discs: add one
-   `--mount-point <letter>:\` per inserted data disc — the
-   disc-swap pause re-scans the mount points after a swap.
+   lists them, and the `name=` line of each folder's
+   `LCSAS_REPO.txt` says which set it is). The newest data disc's
+   `metadata\<id>\` has the newest snapshots. Pack data lives on the
+   data discs: add one `--mount-point <letter>:\` per inserted data
+   disc — the disc-swap pause re-scans the mount points after a swap.
    Use `--snapshot <id>` to pick a specific snapshot (default:
    latest), or `--list-snapshots` to enumerate them.  See
    `python standalone_restorer.py --help` for the full flag surface.
@@ -427,15 +530,15 @@ still apply.
 
 **Variant axes that apply:**
 
-- **OS:** Windows 7 / 8 / 8.1 / 10 / 11 — anything that still runs
-  Python 3. Notably this **is** the path for Windows 7 SP1 / 8 / 8.1
-  hosts that never received KB2999226 (UCRT)
-  (`recovery/docs/RECOVER_WINDOWS.txt`).
+- **OS:** any Windows that runs Python 3.10 or newer (Windows 8.1, 10
+  and 11). This **is** the path for a Windows 8.1 host that never
+  received KB2999226 (UCRT); Windows 7 and older cannot install
+  Python 3.10.
 - **Optical drive count:** Manual; the heir is responsible for
   pointing the Python reader at whichever drive has the
-  repository. The single-drive RAM-relocation trick in
-  [Workflow B](#workflow-b-single-drive-variant-ram-relocation--disc-swap)
-  applies only to the .bat-orchestrated tiers and does not run here.
+  repository. The tools folder and disc swaps of
+  [the restore](#the-restore-step-by-step) apply only to the
+  .bat-orchestrated tiers and do not run here.
 - **Recovery tier:** This is the manual escape hatch for cases
   where both Tier 1 and Tier 2 are unusable.
 
@@ -450,9 +553,9 @@ Heirs on those systems move the discs to a newer machine, or on
 Windows 7 install KB2999226.
 
 **Source refs:** `standalone_restorer.py` (root of the meta disc),
-`recovery/docs/RECOVER_WINDOWS.txt` (heir-facing manual restore
-section), `src/lcsas/restore/restic_fallback.py` (the underlying
-pure-Python AES/zstd code).
+`recovery/docs/RECOVER_WINDOWS.txt` ("MANUAL PYTHON RESTORE"),
+`src/lcsas/restore/restic_fallback.py` (the underlying pure-Python
+AES/zstd code).
 
 ## Path / drive-letter handling differences from Linux
 
@@ -460,199 +563,215 @@ These are not workflow steps in themselves but constraints every
 Windows workflow inherits. Source refs in parentheses.
 
 - **Drive letters vs mount points:** the Linux `restore.sh` walks
-  `/media/`, `/mnt/`, `/run/media/`; the Windows .bat sweeps drive
-  letters `D` through `Z` and registers each one containing `data\`
-  or `repo\data\` as a `--pack-search` directory
-  (`recovery/scripts/restore.bat:166`-`178`). Drive letters below `D`
-  are skipped to avoid the OS drive and any system reserved drives.
+  `LCSAS_MOUNT_DIRS` (`/Volumes`, `/media`, `/mnt`, `/run/media` ...);
+  `restore.bat` looks at drive letters `D` through `Z` (step 11).
+  Letters below `D` are skipped to avoid the OS drive and any system
+  reserved drives. `lcsas-restore.exe` itself also searches the root of
+  every optical drive (`GetDriveTypeA == DRIVE_CDROM`) each time it
+  looks for a disc, and splits `LCSAS_MOUNT_DIRS` on `;` (not `:`).
+- **Drive names:** File Explorer shows a disc's Joliet volume name, cut
+  to 16 characters: `LCSAS_CD700_2026` for every CD of a year. The
+  scripts and tier 1 read the full label from the disc's
+  `VOLUME_INFO.txt` / `volume_info.json` instead.
 - **Path separators:** the C source always passes forward slashes; the
   Win32 runtime accepts them transparently, so no path translation is
-  needed
-  (`recovery/src/lcsas-restore/posix_compat.h:30`-`58`,
-  `recovery/docs/WINDOWS_RECOVERY_PLAN.txt:60`-`64`).
+  needed (`recovery/src/lcsas-restore/posix_compat.h`;
+  `recovery/docs/WINDOWS_RECOVERY_PLAN.txt`).
 - **Backslash quoting in CMD:** the .bat quotes every path passed to
   binaries (`"%REPO%"`, `"%TARGET%"`, `"%PWFILE%"`) so spaces and
-  embedded `&`/`(`/`)` survive
-  (`recovery/scripts/restore.bat:208`, `:227`, `:254`).
+  embedded `&`/`(`/`)` survive. A path that ends in `\` must not be
+  quoted: `"E:\"` ends in `\"`, which the program reads as a quote. So
+  the drive-letter arguments go unquoted, and trailing backslashes are
+  stripped from the target (step 8).
 - **Long paths (> 260 chars):** Windows historically caps paths at
   `MAX_PATH=260`. Modern Windows 10/11 supports longer paths if the
   registry key `LongPathsEnabled=1` is set or via group policy. Files
   with paths > 260 chars fail to write on default installs; documented
   workaround is to restore to a short root like `C:\r`
-  (`recovery/docs/RECOVER_WINDOWS.txt:149`-`156`).
+  (`recovery/docs/RECOVER_WINDOWS.txt`, "DESTINATION FOLDER NOTES").
+  Tier 1's handling of such paths, of non-ASCII names, of `:` and of
+  `..\` is tracked in #619.
 - **Symlinks:** `posix_compat.h` stubs `symlink()` to return `-1` with
   `EPERM` because Windows symlink creation requires
   `SeCreateSymbolicLinkPrivilege`, which the binary deliberately does
-  not request. Affected paths are reported on stderr
-  (`recovery/src/lcsas-restore/posix_compat.h:14`-`17`, `:54`;
-  `recovery/docs/RECOVER_WINDOWS.txt:157`-`161`).
+  not request. Affected paths are reported on stderr.
 - **chmod / fsync / lseek:** `chmod` is a no-op; `fsync` maps to
   `_commit`; `lseek` maps to `_lseeki64` so 64-bit pack offsets
   survive — without this remap, pack files > 4 GiB would silently
-  truncate (`recovery/src/lcsas-restore/posix_compat.h:50`-`58`,
-  `recovery/docs/WINDOWS_RECOVERY_PLAN.txt:134`-`143`).
+  truncate (`recovery/src/lcsas-restore/posix_compat.h`).
 - **Filename case:** Windows is case-insensitive; an archive that
-  contains both `foo.txt` and `FOO.TXT` will lose one on restore
-  (`recovery/docs/RECOVER_WINDOWS.txt:163`-`166`).
+  contains both `foo.txt` and `FOO.TXT` will lose one on restore.
 - **Owner/group/UID/GID/xattrs:** Windows has no equivalent and the
   binary silently skips them; hardlinks across drives silently
-  degrade to copies
-  (`recovery/docs/WINDOWS_RECOVERY_PLAN.txt:365`-`378`).
+  degrade to copies (`recovery/docs/WINDOWS_RECOVERY_PLAN.txt`).
 - **UTF-8 / code page:** the binary embeds an application manifest
   requesting `<activeCodePage>UTF8</activeCodePage>` on Windows 10
-  1903+. On older Windows non-ASCII filenames may be mangled
-  (`recovery/docs/WINDOWS_RECOVERY_PLAN.txt:118`-`131`).
+  1903+. On older Windows non-ASCII filenames may be mangled. The
+  menu shows only a set's `name_cmd` (plain letters), because cmd reads
+  marker files in the console's code page.
 - **`O_BINARY`:** open flags include `O_BINARY` on Windows (to suppress
   CRLF translation); on POSIX the shim defines `O_BINARY` to `0` so
-  call sites use the same constants
-  (`recovery/src/lcsas-restore/posix_compat.h:70`-`75`).
+  call sites use the same constants.
+
+## Where restore.bat and restore.sh differ
+
+Both scripts agree on the exit codes 0/65/75/77, the newest-disc merge
+rule, the catalog copy passed as `--catalog`, the marker names and the
+"carry on with the same snapshot" rule. These differences remain, by
+design or as open owner decisions (DESIGN "sh vs bat differences
+LEFT"):
+
+| Topic | restore.bat | restore.sh |
+|---|---|---|
+| Set menu | `[1] name`, a number only, ENTER means 1 | `  1) name`, "Choose a repository (number or name):", number, name, `name_cmd` or id; no default |
+| Wrong `LCSAS_PASSWORD` / `LCSAS_PWFILE` | says so, asks on the keyboard; reused for the next set | exits 77; dropped for the next set |
+| `LCSAS_SHARES_DIR` with one bad card file | refuses the folder, asks on the keyboard | leaves that file out, combines the rest; exits 77 if they cannot |
+| `LCSAS_TOOLS_DIR` naming a folder with other files | refused, exit 1 | a temporary folder; the run cannot be carried on |
+| `LCSAS_INTERACTIVE` | passed to tier 1 only; the script's own questions are always asked | also decides whether the script's own questions are asked |
+| Newest-disc step | also from a writable META copy; five ENTERs go on | only when the META mount is known and a terminal is there; end of input quits 65 |
+| Another set | asks the set, then the folder (default `restored-<name>`) | asks the folder (default `<target>-2`), then the set |
+| `LCSAS_REPO` match | case-blind, first match | exact; none when two sets share the name |
+| Catalog copy | the newest label's disc | the freshest file by mtime |
+| Tools folder marker | `.lcsas-tools` | `.lcsas-restore-tools` |
+| Tier cascade | tier 2 only for a set with its own `data\`; no tier 3 | `LCSAS_TIER_FALLBACK=1` walks tiers 2, 2b and 3 |
 
 ## Test coverage and gaps
 
 **Existing automated coverage:**
 
-- `recovery/tests/test_e2e_windows.sh` builds a synthetic v2 (zstd)
-  restic repository via the helper in `recovery/tests/test_e2e.py`, runs
-  `bin/x86_64-windows/lcsas-restore.exe` under Wine (with
-  `WINEDEBUG=-all`), and verifies three fixture files
-  (`hello.txt`, `binary.bin`, `compress.txt`) are restored
-  byte-for-byte. The script skips cleanly when the .exe or Wine is
-  missing. It invokes the .exe directly, so it exercises tier 1 only.
 - `.github/workflows/windows-e2e.yml` (run weekly through
-  `windows-e2e-weekly.yml`, and on any PR touching `recovery/scripts/**`,
-  `src/lcsas/meta/**`, `recovery/bin/x86_64-windows/**`,
-  `tests/e2e/fixture_lib.py` or `tests/e2e/windows_e2e_lib.ps1`) is the
-  real-Windows gate. A Linux job builds a fixture (real rustic repository, data
-  ISOs and a meta ISO, via
-  `tests/e2e/fixture_lib.py::build_windows_fixture`, sized to 8 x 512 KiB
-  files so the burn spans several TEST_TINY data discs: four discs holding
-  nine packs between them in the validating runs; the job fails if it
-  yields fewer than two); a
-  `windows-latest` job mounts every ISO and runs, in order:
-  - *Mount ISOs and run restore.bat (happy path)* and *Verify restored tree
-    matches manifest (byte-exact)*: `restore.bat` unattended (answers fed on
-    stdin, `LCSAS_NO_RELOCATE=1`), then the restored tree compared
-    byte-for-byte against a SHA-256 manifest. All four data discs are
-    mounted, so the drive-letter sweep hands them all to the tier-1 binary.
-  - *Multi-disc — the restore swept more than one data disc*: more than one
-    mounted disc holds packs and none holds them all. `restore.bat` prints
-    nothing about its `--pack-search` drives and `--repo` carries no `data\`,
-    so with the byte-exact check this is the proof that packs came from
-    several discs.
+  `windows-e2e-weekly.yml`, by hand with `gh workflow run windows-e2e.yml
+  --ref <branch>`, and on any PR touching `recovery/scripts/**`,
+  `src/lcsas/meta/**`, `src/lcsas/staging/metadata.py`,
+  `recovery/bin/x86_64-windows/**`, `tests/e2e/fixture_lib.py`,
+  `tests/e2e/windows_e2e_lib.ps1` or the workflow itself; it is
+  path-filtered and not a required check) is the real-Windows gate. A
+  Linux job builds a fixture (real rustic repository, data ISOs and a
+  meta ISO, via `tests/e2e/fixture_lib.py::build_windows_fixture`, sized
+  so the burn spans several TEST_TINY data discs; the job fails if it
+  yields fewer than two); a `windows-latest` job runs `restore.bat`
+  through a real `cmd`, in order:
+  - *Mount ISOs and run restore.bat (happy path)* and *Verify restored
+    tree matches manifest (byte-exact)*: every ISO mounted at its own
+    letter, `LCSAS_NO_RELOCATE=1`, answers fed on stdin, the tree
+    compared byte for byte against a SHA-256 manifest.
+  - *Multi-disc — the restore swept more than one data disc*: more than
+    one mounted disc holds packs and none holds them all.
   - *Relocation leg — restore.bat at the disc root (the heir's
-    double-click)*: the same restore from `E:\restore.bat` without
-    `LCSAS_NO_RELOCATE`, started with its cwd on the disc. It requires the
-    `copied recovery files to` message, a tier-1 binary that ran from the
-    `%TEMP%` copy, exit 0, a byte-exact tree, and neither the password file
-    nor the copy left in `%TEMP%` (#545).
-  - *Relocation leg — `recovery\scripts\restore.bat` layout*: the same from
-    the other copy of the script.
-  - *Negative case — wrong password fails cleanly*: requires exit 77, no
-    tier-2 fall-through, the "could not decrypt the repository" banner and no
-    partial tree left behind.
-  - *Relocated wrong password — exit 77 survives the cleanup*: the negative
-    case without `LCSAS_NO_RELOCATE`, from the disc root. It requires the
-    relocation, exit 77 through it, the banner, no tier-2 fall-through, no
-    partial tree and no copy left (#545). The other relocated legs expect 0,
-    which an exit code lost on the relaunch line would also give.
-  - *Eject leg — relocated restore survives a meta-disc eject*: `restore.bat`
-    runs with a stdin pipe held open; once the relocated copy is up the meta
-    ISO is dismounted, and only then are the target and password fed in, so
-    tier 1 runs entirely after the eject. Requires "Restore complete", exit
-    0, no "The system cannot find the path specified." (#532), a byte-exact
-    tree and no copy left in `%TEMP%`.
-- `tests/recovery_hardening/test_restore_bat_wine_smoke.py` runs the real
-  `restore.bat` through wine's `cmd` against fake meta and data trees on
-  mapped drive letters: `test_happy_path_discovers_repo_and_invokes_tier1`,
-  `test_wrong_password_is_terminal_no_tier2_fallthrough` and
-  `test_missing_repo_reports_error`. It is a local pre-filter, not a gate
-  (wine's `cmd` is an approximation of Windows').
-- `tests/recovery_hardening/test_restore_bat_ecc_dispatch_wine.py`
-  (`--check-disc` on a clean and a damaged image),
-  `tests/recovery_hardening/test_restore_bat_password_lifetime.py`
-  (the `%TEMP%` password file is deleted on every terminal path, checked
-  statically) and `tests/unit/test_restore_bat_dispatcher.py`
-  (target naming, the ARM64 rejection message, `LCSAS_TARGET`, the
-  non-empty-target warning) cover the rest of the script's branches.
-- `tests/recovery_hardening/test_tier1_windows_wine.py` runs the
-  tier-1 .exe under wine.
+    double-click)* and *Relocation leg — `recovery\scripts\restore.bat`
+    layout*: the copy into `%LOCALAPPDATA%\LCSAS-restore`, tier 1 run
+    from it, exit 0, a byte-exact tree, no password file and no tools
+    folder left, and no "Access is denied." (#611).
+  - *Negative case — wrong password fails cleanly* and *Relocated wrong
+    password — exit 77 survives the cleanup*: exit 77, no tier-2
+    fall-through, the "could not decrypt the repository" banner, no
+    partial tree.
+  - *Eject leg — relocated restore survives a meta-disc eject*: the
+    meta ISO is dismounted once the relocated copy is up; exit 0, no
+    "The system cannot find the path specified." (#532).
+  - *Single-drive leg — every data disc swapped into one drive letter*
+    (#604, #617): only the meta ISO is mounted; the newest-disc step is
+    answered by putting the newest data ISO into the meta disc's letter,
+    and at each disc box the named data ISO is moved into that SAME
+    letter (`Dismount-DiskImage`, `Mount-DiskImage -NoDriveLetter`,
+    `mountvol`) with `LCSAS_INTERACTIVE=on`. It asserts exit 0, a
+    byte-exact tree, swaps at most one more than the data discs, and no
+    "Access is denied.".
+  - *Stop-and-resume leg — q at a disc box, then the Desktop launcher*
+    (#609, #615): `q` at the second box exits 75 and keeps the tools
+    folder, `resume.cfg` (no password) and the Desktop launcher; the
+    launcher then finishes the restore with no meta disc, exit 0, and
+    the tools folder and launcher are gone.
+- The wine suites run the real `restore.bat` through wine's `cmd`. They
+  are local pre-filters, not gates: wine's `cmd` is an approximation of
+  Windows', and it does not end a batch at `(goto) 2>nul`, so it cannot
+  run the relaunch line or the launcher. The relocated tests lay out the
+  tools folder as the copy does and start that copy with
+  `LCSAS_RELOCATED` set.
+  - `tests/recovery_hardening/test_restore_bat_wine_smoke.py`: discovery,
+    tier 1, wrong password (77, no tier 2), missing repository.
+  - `tests/recovery_hardening/test_restore_bat_tools_folder_wine.py`:
+    the copy into the tools folder (#609, #611, #612, #613), stop and
+    carry on, `LCSAS_TOOLS_DIR` refusing a busy folder.
+  - `tests/recovery_hardening/test_restore_bat_single_drive_wine.py`: a
+    one-drive, two-disc restore swapped in the same letter by
+    re-pointing `dosdevices/d:`; `q` at the box with no tier 2; the
+    catalog passed as a local copy.
+  - `tests/recovery_hardening/test_restore_bat_journey_wine.py`: the
+    newest-disc step, names in the menu (UUID ids), the password asked
+    again, 2-of-3 share cards, `LCSAS_SHARES_DIR`, another set, the
+    folder question, disc text that is never run.
+  - `tests/recovery_hardening/test_restore_bat_ecc_dispatch_wine.py`
+    (`--check-disc` on a clean and a damaged image).
+  - `tests/recovery_hardening/test_tier1_windows_wine.py`,
+    `test_tier1_windows_drive_swap_wine.py` (tier 1 alone: drive-root
+    discovery, drain on first sight, exit 75, `;` in
+    `LCSAS_MOUNT_DIRS`) and `test_keyshare_windows_wine.py`.
+- Static checks: `tests/recovery_hardening/test_restore_bat_password_lifetime.py`
+  (the `%TEMP%` password file is deleted on every terminal path) and
+  `tests/unit/test_restore_bat_dispatcher.py` (target naming, the ARM64
+  rejection message, `LCSAS_TARGET`, the non-empty-target warning).
+- `recovery/tests/test_e2e_windows.sh` runs
+  `bin/x86_64-windows/lcsas-restore.exe` under wine against a synthetic
+  v2 (zstd) repository (tier 1 only).
 
 **Gaps:**
 
-- **`restore.bat` itself is now tested** (previously "no automated test of
-  `restore.bat`"; resolved by the wine suite and `windows-e2e.yml` above).
-  The RAM relocation is now exercised on real Windows by the
-  `windows-e2e.yml` relocation and eject legs (next bullet); the wine suite
-  and the happy-path and wrong-password steps still set
-  `LCSAS_NO_RELOCATE=1`.
-- **The single-drive RAM relocation (Workflow B) is covered only in part.**
-  Covered by `windows-e2e.yml` (*Relocation leg* and *Eject leg* steps):
-  `robocopy` mirrors the bin tree and the relocated copy runs tier 1 to a
-  byte-exact restore when started from `recovery\scripts\restore.bat`, and
-  the restore survives a meta disc eject (`Dismount-DiskImage`). Still open:
-  the disc-root `restore.bat` entry point fails the relocation leg (bin tree
-  not copied; the step is `continue-on-error` until fixed); `%TEMP%`
-  exhaustion; the `xcopy` fallback (the runner always has `robocopy`);
-  whether `cd /d %SystemDrive%\` really frees the disc for Explorer's Eject
-  (the forced `Dismount-DiskImage` would succeed regardless); and a real
-  disc swap on one drive.
-- **No automated test for older Windows / msvcrt (intentional: Windows 10
-  1709+ is the stated support floor).** Windows XP/Vista/unpatched 7 are
-  listed as REJECTED platforms in `recovery/docs/WINDOWS_RECOVERY_PLAN.txt`;
-  Phase W5 there (an msvcrt-linked binary and a Wine-with-UCRT-disabled
-  harness) was decided against (#491) and is listed as a non-goal. Heirs
-  on those systems move the discs to a newer host. The
+- **A real optical drive.** Every Windows leg mounts ISO images.
+  `Dismount-DiskImage` detaches an image without asking whether anything
+  holds a handle on it, so the legs show the restore survives the loss
+  of the meta disc, not that Explorer's own Eject would be allowed. The
+  manual drill (#476, a Windows 10 VM on the lab host with one optical
+  drive) covers that.
+- **`%TEMP%` / `%LOCALAPPDATA%` exhaustion** has no test.
+- **A root target** (`E:\`) is refused; lifting that needs a
+  windows-e2e leg that proves it (for example with a `subst` drive).
+- **Older Windows / msvcrt (intentional: Windows 10 1709+ is the stated
+  support floor).** Windows XP/Vista/unpatched 7 are listed as REJECTED
+  platforms in `recovery/docs/WINDOWS_RECOVERY_PLAN.txt`; Phase W5 there
+  (an msvcrt-linked binary and a Wine-with-UCRT-disabled harness) was
+  decided against (#491). Heirs on those systems move the discs to a
+  newer host. The
   [manual Python fallback](#manual-python-fallback-not-orchestrated-by-restorebat)
-  (tier 3) is no way round it: it needs Python 3.10, which does not
-  install on Windows 7 or older.
-- **No automated test of SmartScreen / antivirus interactions
-  (intentional: heir-driven, cannot be CI-tested).** The documented "Run
-  anyway" / quarantine-restore steps in `recovery/docs/RECOVER_WINDOWS.txt`
-  are manual, and Authenticode signing is a documented NON-GOAL in
-  `recovery/docs/WINDOWS_RECOVERY_PLAN.txt`. The manual real-Windows
-  double-click drill is tracked as a release gate in #476.
-- **No automated test of UAC (intentional: manual gate #476).** The
-  restore path is designed to need no elevation, but no test verifies
-  behaviour when the heir runs `restore.bat` from an elevated CMD (e.g.
-  whether the password file in `%TEMP%` lands somewhere unexpected,
-  whether `cd /d %SystemDrive%\` works under UAC virtualisation). #476
-  lists UAC explicitly.
-- **No automated test of ARM64 Windows (intentional: not shipped).**
-  `restore.bat` explicitly rejects ARM64 with a winget/rustic workaround
-  message (no bundled aarch64 Windows binary ships); the rejection text is
-  pinned by `tests/unit/test_restore_bat_dispatcher.py::test_restore_bat_rejects_windows_arm64_with_explanation`.
-- **A drive-letter sweep across several data discs is now exercised on real
-  Windows; a disc *swap* is not.** `windows-e2e.yml` builds its fixture from
-  8 x 512 KiB files (the `build_windows_fixture` default of 12 x 64 KiB fits
-  one TEST_TINY volume: 2 MiB less the 700 kB reserved for the disc
-  catalog and repository metadata), which
-  lands on four data discs, mounts all of them at once, and checks
-  structurally that more than one holds packs (step *Multi-disc — the restore
-  swept more than one data disc*) before the byte-exact comparison.
-  `restore.bat` prints nothing about the drives it sweeps, so that structural
-  check is the evidence. A *swap* between discs on one drive (the prompt
-  and re-scan inside `lcsas-restore.exe`) is not exercised on real Windows;
-  it is covered only through the POSIX `recovery/tests/test_multidisc.py`.
+  is no way round it on Windows 7 or older: Python 3.10 does not install
+  there.
+- **SmartScreen / antivirus (intentional: heir-driven, cannot be
+  CI-tested).** The "Run anyway" / quarantine-restore steps in
+  `recovery/docs/RECOVER_WINDOWS.txt` are manual, and Authenticode
+  signing is a documented NON-GOAL in
+  `recovery/docs/WINDOWS_RECOVERY_PLAN.txt`. The manual double-click
+  drill is a release gate in #476.
+- **UAC (intentional: manual gate #476).** The restore path is designed
+  to need no elevation; no test runs `restore.bat` from an elevated CMD.
+- **ARM64 Windows (intentional: not shipped).** The rejection text is
+  pinned by
+  `tests/unit/test_restore_bat_dispatcher.py::test_restore_bat_rejects_windows_arm64_with_explanation`.
 
 ## Consolidated source refs
 
-- `recovery/scripts/restore.bat` (full file) — orchestrator,
-  RAM-relocation guard, tier cascade, drive sweep, catalog
-  auto-selection.
+- `recovery/scripts/restore.bat` (full file) — orchestrator; see its
+  `REM -----` sections and `:labels` named above.
 - `recovery/docs/RECOVER_WINDOWS.txt` — heir-facing walkthrough,
-  SmartScreen / antivirus guidance, command-line reference, older
-  Windows options, physical disc problems.
+  QuickEdit, the tools folder, the newest data disc, swaps, stopping
+  and carrying on, the password, share cards, SmartScreen / antivirus,
+  command-line reference, exit codes, older Windows options, physical
+  disc problems.
+- `recovery/docs/ENV_VARS.txt` — every `LCSAS_*` variable, with what
+  `restore.bat` does with it.
+- `recovery/docs/MULTI_DISC_DESIGN.txt` — the swap design, the newest
+  data disc, the tools folder and carrying on, for both scripts.
 - `recovery/docs/WINDOWS_RECOVERY_PLAN.txt` — design rationale, target
-  platforms, source portability plan, cross-compile (zig cc), driver
-  script design, testing strategy, Phase W5 msvcrt plan,
-  out-of-scope/non-goals.
+  platforms, source portability plan, cross-compile (zig cc), testing
+  strategy, Phase W5 msvcrt plan, out-of-scope/non-goals.
 - `recovery/src/lcsas-restore/posix_compat.h` — POSIX/Win32 shim
   (`mkdir`, `lseek`/`_lseeki64`, `symlink` stub, `chmod` no-op,
   `fsync`/`_commit`, `O_BINARY`).
-- `recovery/src/lcsas-restore/main.c:1`-`32` — `--meta-disc` / 
-  `--pack-search` / `--catalog` flag surface used by `restore.bat`.
+- `recovery/src/lcsas-restore/main.c` (`usage()`) — the `--meta-disc` /
+  `--pack-search` / `--mount-parent` / `--catalog` / `--interactive`
+  flag surface and exit codes used by `restore.bat`.
 - `recovery/bin/x86_64-windows/lcsas-restore.exe` — prebuilt static
   Windows binary (UCRT, MinGW-w64 via `zig cc`) in the source tree;
   bundled onto the disc at `recovery\bin\x86_64-pc-windows-gnu\`,
   which is the path Tier 1 invokes.
-- `recovery/tests/test_e2e_windows.sh` — Wine-based end-to-end test.
+- `.github/workflows/windows-e2e.yml` and `tests/e2e/windows_e2e_lib.ps1`
+  — the real-Windows legs.

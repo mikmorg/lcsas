@@ -415,7 +415,9 @@ password.
 TO TYPE NO CARDS: put each card in a text file of its own, all in
 one folder (a retyped card, or the card file as it was printed: its
 other lines may stay in the file), and set LCSAS_SHARES_DIR to that
-folder before you start.  More than K cards is fine.
+folder before you start.  More than K cards is fine, but every file
+must be a card typed right: one wrong word in any file and the script
+says so and asks for the cards on the keyboard instead.
 
     set LCSAS_SHARES_DIR=C:\Users\me\cards
     D:\restore.bat
@@ -554,8 +556,8 @@ CASE A.  Double-click opens Notepad instead of running the script.
          `D:\restore.bat`.
 
 CASE B.  The console window flashes and disappears.
-         Open CMD/PowerShell first, navigate to the disc
-         (`cd D:`), then run `restore.bat` so the error message
+         Open CMD/PowerShell first, go to the disc (type `D:` and
+         press Enter), then run `restore.bat` so the error message
          stays on screen.
 
 CASE C.  "lcsas-restore.exe is not recognized as an internal or
@@ -579,8 +581,9 @@ CASE C.  "lcsas-restore.exe is not recognized as an internal or
            (b) Use WSL.  Install WSL2 from the Microsoft Store (no
                admin needed in recent Windows versions), then:
                    wsl
-                   sh /mnt/d/recovery/scripts/restore.sh /mnt/d ~/restored
-               (replace /mnt/d with your disc mount point inside WSL).
+                   sh /mnt/d/restore.sh ~/restored
+               (replace /mnt/d with your disc mount point inside WSL;
+               RECOVER.txt on the disc describes that restore).
 
            (c) Use the Python reader (manual; this is NOT chained
                from restore.bat any more -- see "MANUAL PYTHON
@@ -621,7 +624,9 @@ PRIVACY / SECURITY
     LCSAS restore.bat" never hold the password.  resume.cfg in that
     folder names only the backup set, the restore folder and the
     drive letters.  The tools folder does hold a copy of the packs
-    read so far; they are encrypted, as on the discs.
+    read so far; they are encrypted, as on the discs.  It also holds
+    a copy of the catalog, which is not encrypted, as on every data
+    disc (see docs/DISC_CONFIDENTIALITY.md on the META disc).
 
   * The .exe is fully offline.  It makes no network connections.
     You can run it on an air-gapped machine.
@@ -701,8 +706,19 @@ wrapper around lcsas-restore.exe.  The .exe accepts:
     --list-snapshots       print all snapshots; do not restore
     --pack-search DIR      extra dir to scan for pack files
                            (repeatable; one per inserted data disc)
-    --verbose              print progress messages
-    --catalog FILE         optional path to LCSAS catalog.db
+    --mount-parent DIR     a drive to look at again for a new disc at
+                           each disc box (repeatable, e.g. D:\)
+    --meta-disc DIR        the META disc's drive: skipped while the
+                           META disc is in it
+    --interactive on|off|auto
+                           ask at a disc box (auto: only in a console)
+    --catalog FILE         optional path to LCSAS catalog.db; pass a
+                           copy, not the file on a disc
+    --list-pending-packs   with --catalog: which discs hold how much
+    --verbose              print more messages
+
+It exits 0 (done), 1 (failed), 2 (wrong arguments), 75 (you typed q
+at a disc box) or 77 (wrong password).
 
 The repository metadata lives under metadata\<name>\ on the disc,
 where <name> is the repository's folder (the directory containing
@@ -718,7 +734,8 @@ Example:
         --pack-search E:\ ^
         --verbose
 
-EXIT CODES of restore.bat (the same as restore.sh's; see RECOVER.txt):
+EXIT CODES of restore.bat (0, 65, 75 and 77 mean the same as for
+restore.sh; see RECOVER.txt):
 
     0   the restore finished: every backup set you chose
     1   a failure; the message above it says what
