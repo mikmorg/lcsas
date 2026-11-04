@@ -106,6 +106,9 @@ jobs:
               workdir,
               file_count=int(os.environ["FIXTURE_FILE_COUNT"]),
               file_bytes=int(os.environ["FIXTURE_FILE_BYTES"]),
+              # The single-drive leg mounts only the meta ISO, so the
+              # backup set must be on it, as on a real meta disc (#617).
+              meta_metadata=True,
           )
           artifacts = {
               "meta_iso": str(fx.meta_iso),
@@ -142,7 +145,7 @@ jobs:
   restore:
     runs-on: windows-latest
     needs: fixture
-    timeout-minutes: 20
+    timeout-minutes: 40
 
     steps:
       # Only for tests/e2e/windows_e2e_lib.ps1 (the multi-disc, relocation
@@ -251,8 +254,9 @@ jobs:
       # Same restore, but WITHOUT LCSAS_NO_RELOCATE, so the "Single-drive
       # guard" block runs: it probes the (read-only) ISO, copies the script +
       # bin tree under %TEMP%\lcsas-restore-N-N\recovery, re-execs the copy
-      # and sets LCSAS_RELOCATED so the meta drive is excluded from the pack
-      # search.  Started with cwd on the disc, like a double-click.
+      # and sets LCSAS_RELOCATED, so tier 1 skips the meta drive while the
+      # meta disc is in it (and searches it once a data disc is, #604).
+      # Started with cwd on the disc, like a double-click.
       #
       # Both copies of the script are run: the one at the disc root
       # (E:\restore.bat, what the heir double-clicks) and
@@ -364,6 +368,25 @@ jobs:
           . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
           Invoke-EjectLeg -Fixture (Join-Path $PWD 'fixture') `
             -BatRel 'restore.bat' -TargetName 'restored-eject'
+
+      # ---- #604/#617: ONE optical drive ------------------------------------
+      # Every leg above has each ISO at its own drive letter.  A reader with
+      # one drive has only the meta disc in at the start and puts each data
+      # disc into that SAME letter when tier 1 asks.  Up to rc5 restore.bat
+      # never gave tier 1 that letter, and nothing here caught it.  This leg
+      # dismounts everything, mounts only the meta ISO, runs the relocated
+      # restore.bat with LCSAS_INTERACTIVE=on, and at each disc box moves
+      # the named data ISO into the meta disc's letter (Dismount-DiskImage,
+      # Mount-DiskImage -NoDriveLetter, mountvol) and presses ENTER.
+      # Runs after the eject leg: it starts by dismounting every ISO.
+      - name: Single-drive leg — every data disc swapped into one drive letter
+        shell: pwsh
+        timeout-minutes: 20
+        run: |
+          $ErrorActionPreference = "Stop"
+          . (Join-Path $env:GITHUB_WORKSPACE 'repo/tests/e2e/windows_e2e_lib.ps1')
+          Invoke-SingleDriveLeg -Fixture (Join-Path $PWD 'fixture') `
+            -BatRel 'restore.bat' -TargetName 'restored-single-drive'
 
       - name: Dismount ISOs
         if: always()

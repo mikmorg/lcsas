@@ -45,9 +45,9 @@ function Get-DataDiscs {
     return $found
 }
 
-# restore.bat prints nothing about the --pack-search drives it hands to
-# lcsas-restore.exe, and --repo is X:\metadata\win (keys/index/snapshots,
-# no data\), so EVERY pack must come from a --pack-search drive.  Proving
+# --repo is a metadata\win folder (keys/index/snapshots, no data\), so
+# EVERY pack must come from a drive restore.bat hands to lcsas-restore.exe
+# (it names them: "drives searched for discs:").  Proving
 # that more than one mounted data disc holds packs therefore proves, with
 # the byte-exact tree check, that a restore consumed more than one disc.
 function Assert-MultiDisc {
@@ -428,4 +428,259 @@ function Invoke-EjectLeg {
         throw ("eject leg failed:`n  - " + ($problems -join "`n  - "))
     }
     Write-Host 'Eject leg passed: the relocated restore survived the meta-disc eject.'
+}
+
+# Wait until $Pattern (a case-sensitive regex) shows up in $Path, or
+# $Proc exits, or $Seconds pass.  Returns the text read last; the caller
+# tests it again.
+function Wait-ForOutput {
+    param(
+        [string]$Path,
+        [string]$Pattern,
+        [System.Diagnostics.Process]$Proc,
+        [int]$Seconds
+    )
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    $text = ''
+    while ((Get-Date) -lt $deadline) {
+        $text = Read-SharedText $Path
+        if ($text -cmatch $Pattern) { break }
+        if ($Proc.HasExited) { Start-Sleep -Milliseconds 500; $text = Read-SharedText $Path; break }
+        Start-Sleep -Milliseconds 200
+    }
+    return $text
+}
+
+# Put $Iso into the drive letter $Letter: the disc in it comes out
+# (Dismount-DiskImage, which removes the letter), then $Iso is mounted
+# with no letter and `mountvol` gives it $Letter.  This is the one-drive
+# reader's eject and insert, in the SAME letter.
+function Switch-DiscInLetter {
+    param(
+        [string]$Letter,
+        [string]$Current,
+        [string]$Iso
+    )
+    Dismount-DiskImage -ImagePath $Current | Out-Null
+    for ($i = 0; $i -lt 60; $i++) {
+        if (-not (Test-Path -LiteralPath "${Letter}:\")) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    $img = Mount-DiskImage -ImagePath $Iso -NoDriveLetter -PassThru
+    $vol = $null
+    for ($i = 0; $i -lt 60; $i++) {
+        $vol = Get-Volume -DiskImage $img -ErrorAction SilentlyContinue
+        if ($vol -and $vol.Path) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not ($vol -and $vol.Path)) { throw "no volume for $Iso after Mount-DiskImage -NoDriveLetter" }
+    Write-Host "mountvol ${Letter}: $($vol.Path)"
+    & mountvol "${Letter}:" $vol.Path | Out-Host
+    for ($i = 0; $i -lt 20; $i++) {
+        if (Test-Path -LiteralPath "${Letter}:\data") { return }
+        Start-Sleep -Milliseconds 500
+    }
+    # Second way to give a volume a letter, should mountvol not take.
+    Write-Host "mountvol did not give ${Letter}: to $Iso; trying Win32_Volume"
+    $wv = Get-CimInstance -ClassName Win32_Volume | Where-Object { $_.DeviceID -eq $vol.Path }
+    if ($wv) { Set-CimInstance -InputObject $wv -Property @{ DriveLetter = "${Letter}:" } }
+    for ($i = 0; $i -lt 40; $i++) {
+        if (Test-Path -LiteralPath "${Letter}:\data") { return }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "$Iso did not appear at ${Letter}: after mountvol"
+}
+
+# ---------------------------------------------------------------------
+# Leg (#604, #617): ONE optical drive.  Only the meta ISO is mounted.
+# restore.bat relocates (no LCSAS_NO_RELOCATE), and every data disc then
+# goes into the meta disc's own drive letter, one at a time, as for a
+# reader with one drive.  Up to rc5 restore.bat never gave tier 1 that
+# letter, so this restore could not finish.
+#
+# How a disc box is spotted: tier 1 prints the box on stderr, which the
+# cmd /c string sends to $outFile.  Its first line is
+# "| Pack <16 hex>... is required for the next file." and it ends with
+# the bare prompt "> ".  The leg counts the lines that hold
+# 'is required for the next file'; one more of them, with the file
+# ending in "> ", is a new box.  The 16-hex pack prefix is looked up in a
+# map made at the start (each data ISO mounted once, its data\ listed):
+# the first box names no disc, because the meta disc has no catalog.
+#
+# stdin: restore.bat's two `set /p` prompts (folder, password) get one
+# line each, written only once the prompt is in $outFile; then one empty
+# line (ENTER) per box, after the swap.  LCSAS_INTERACTIVE=on makes tier
+# 1 ask although its stdin is a pipe.  stdin is closed after the final
+# banner, which ends the `pause`.
+# ---------------------------------------------------------------------
+function Invoke-SingleDriveLeg {
+    param(
+        [string]$Fixture,
+        [string]$BatRel,
+        [string]$TargetName
+    )
+    $ErrorActionPreference = 'Stop'
+    $PSNativeCommandUseErrorActionPreference = $false
+    Remove-Item Env:LCSAS_NO_RELOCATE -ErrorAction SilentlyContinue
+    Remove-Item Env:LCSAS_RELOCATED -ErrorAction SilentlyContinue
+
+    $isos = @(Get-ChildItem -Path $Fixture -Filter '*.iso')
+    $metaIso = ($isos | Where-Object { $_.Name -eq 'LCSAS_META.iso' }).FullName
+    if (-not $metaIso) { throw 'LCSAS_META.iso not found in the fixture dir' }
+    $dataIsos = @($isos | Where-Object { $_.Name -ne 'LCSAS_META.iso' } | ForEach-Object { $_.FullName })
+    if ($dataIsos.Count -lt 2) { throw "need >= 2 data ISOs for a swap; the fixture has $($dataIsos.Count)" }
+
+    # An empty machine: nothing mounted.
+    foreach ($iso in $isos) {
+        Dismount-DiskImage -ImagePath $iso.FullName -ErrorAction SilentlyContinue | Out-Null
+    }
+
+    # Which data ISO holds which pack.
+    $packMap = @{}
+    foreach ($iso in $dataIsos) {
+        $img = Mount-DiskImage -ImagePath $iso -PassThru
+        $l = [string](Get-Volume -DiskImage $img).DriveLetter
+        $names = @(Get-ChildItem -LiteralPath "${l}:\data" -Recurse -File -ErrorAction SilentlyContinue |
+                   ForEach-Object { $_.Name })
+        Write-Host ("{0}: {1} packs" -f (Split-Path $iso -Leaf), $names.Count)
+        $packMap[$iso] = $names
+        Dismount-DiskImage -ImagePath $iso | Out-Null
+    }
+
+    $img = Mount-DiskImage -ImagePath $metaIso -PassThru
+    $letter = [string](Get-Volume -DiskImage $img).DriveLetter
+    if (-not $letter) { throw 'the meta ISO got no drive letter' }
+    Write-Host "Only the meta ISO is mounted, at ${letter}:"
+    $bat = "${letter}:\$BatRel"
+    if (-not (Test-Path -LiteralPath $bat)) { throw "no $bat on the meta disc" }
+
+    $target = Join-Path $env:RUNNER_TEMP $TargetName
+    if (Test-Path -LiteralPath $target) { Remove-Item -Recurse -Force -LiteralPath $target }
+    New-Item -ItemType Directory -Force -Path $target | Out-Null
+    $pw = (Get-Content (Join-Path $Fixture 'repo.pw') -Raw).Trim()
+    $outFile = Join-Path $env:RUNNER_TEMP "out-$TargetName.txt"
+    if (Test-Path -LiteralPath $outFile) { Remove-Item -Force -LiteralPath $outFile }
+    $ramBefore = Get-TempNames 'lcsas-restore-*'
+    $pwBefore  = Get-TempNames 'lcsas-pw-*'
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'cmd.exe'
+    $psi.Arguments = "/c `"`"$bat`" > `"$outFile`" 2>&1`""
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $psi.CreateNoWindow = $true
+    $psi.WorkingDirectory = "${letter}:\"
+    $psi.EnvironmentVariables['LCSAS_INTERACTIVE'] = 'on'
+
+    $problems = New-Object 'System.Collections.Generic.List[string]'
+    $proc = $null
+    $current = $metaIso
+    $boxes = 0
+    $swaps = 0
+    $maxBoxes = $dataIsos.Count + 2
+    try {
+        Write-Host "Starting (no LCSAS_NO_RELOCATE, LCSAS_INTERACTIVE=on): $bat"
+        $proc = [System.Diagnostics.Process]::Start($psi)
+
+        $text = Wait-ForOutput -Path $outFile -Pattern 'Restore to which folder\?' -Proc $proc -Seconds 300
+        if ($text -cnotmatch 'Restore to which folder\?') { throw "no folder prompt; output so far:`n$text" }
+        $proc.StandardInput.WriteLine($target)
+        $text = Wait-ForOutput -Path $outFile -Pattern 'Password: ' -Proc $proc -Seconds 120
+        if ($text -cnotmatch 'Password: ') { throw "no password prompt; output so far:`n$text" }
+        $proc.StandardInput.WriteLine($pw)
+
+        $seen = 0
+        $deadline = (Get-Date).AddSeconds(900)
+        while ((Get-Date) -lt $deadline) {
+            $text = Read-SharedText $outFile
+            if ($proc.HasExited) { break }
+            if ($text -cmatch 'Restore complete' -or $text -cmatch 'The restore stopped') { break }
+            $n = [regex]::Matches($text, 'is required for the next file').Count
+            if ($n -le $seen -or -not $text.EndsWith('> ')) {
+                Start-Sleep -Milliseconds 300
+                continue
+            }
+            $seen = $n
+            $boxes++
+            if ($boxes -gt $maxBoxes) {
+                $problems.Add("more than $maxBoxes disc boxes for $($dataIsos.Count) data discs; typed q")
+                $proc.StandardInput.WriteLine('q')
+                continue
+            }
+            $packs = [regex]::Matches($text, '\| Pack ([0-9a-f]{16})\.\.\.')
+            if ($packs.Count -eq 0) {
+                $problems.Add("box ${boxes} names no pack; typed q")
+                $proc.StandardInput.WriteLine('q')
+                continue
+            }
+            $prefix = $packs[$packs.Count - 1].Groups[1].Value
+            $next = $null
+            foreach ($iso in $dataIsos) {
+                if (@($packMap[$iso] | Where-Object { $_.StartsWith($prefix) }).Count -gt 0) { $next = $iso }
+            }
+            if (-not $next) {
+                $problems.Add("box ${boxes} asks for pack $prefix, which is on no data ISO; typed q")
+                $proc.StandardInput.WriteLine('q')
+                continue
+            }
+            if ($next -ne $current) {
+                Switch-DiscInLetter -Letter $letter -Current $current -Iso $next
+                $current = $next
+                $swaps++
+            }
+            $isoName = Split-Path $next -Leaf
+            Write-Host "box ${boxes}: pack $prefix is on $isoName, now in ${letter}: (swaps so far: $swaps); ENTER"
+            $proc.StandardInput.WriteLine('')
+        }
+        # The final banner is up (or the script ended): close stdin, which
+        # ends its `pause`.
+        try { $proc.StandardInput.Close() } catch { Write-Host "stdin close: $($_.Exception.Message)" }
+        if (-not $proc.WaitForExit(120000)) {
+            $problems.Add('restore.bat did not exit within 120 s after its last box')
+            & taskkill /PID $proc.Id /T /F | Out-Null
+        }
+    } finally {
+        if ($proc -and -not $proc.HasExited) { & taskkill /PID $proc.Id /T /F | Out-Null }
+    }
+    $rc = if ($proc -and $proc.HasExited) { $proc.ExitCode } else { 'n/a' }
+    $out = Read-SharedText $outFile
+    Write-Host '----- restore.bat output -----'
+    Write-Host $out
+    Write-Host '----- end output -----'
+    Write-Host "restore.bat exit code: $rc; disc boxes: $boxes; swaps: $swaps; data discs: $($dataIsos.Count)"
+
+    if ($out -notmatch 'copied recovery files to') {
+        $problems.Add("no 'copied recovery files to' message: the relocation did not happen")
+    }
+    if ("$rc" -ne '0') { $problems.Add("restore.bat exit code $rc (want 0)") }
+    if ($out -cnotmatch 'Restore complete') { $problems.Add("'Restore complete' banner missing") }
+    if ($swaps -lt 1) { $problems.Add('no disc was swapped: the leg proved nothing') }
+    if ($boxes -gt $dataIsos.Count + 1) {
+        $problems.Add("$boxes disc boxes for $($dataIsos.Count) data discs (want at most $($dataIsos.Count + 1))")
+    }
+    if ($out -match '/Volumes') { $problems.Add('a disc box lists the POSIX folder /Volumes on Windows') }
+    if ($out -match 'trying tier 2') { $problems.Add('fell through to tier 2') }
+    # TODO(#611): the relocation's write probe prints "Access is denied."
+    # on every start from a disc (F1).  rc6 PR B2 fixes it; then make this
+    # a problem instead of a warning.
+    if ($out -match 'Access is denied') {
+        Write-Host "::warning::restore.bat printed 'Access is denied.' while relocating (#611, known; fixed in PR B2)"
+    }
+    Test-TreeAgainstManifest -Fixture $Fixture -Target $target -Problems $problems
+
+    $pwLeft = @(Get-TempNames 'lcsas-pw-*' | Where-Object { $pwBefore -notcontains $_ })
+    if ($pwLeft.Count -gt 0) { $problems.Add("password file(s) left in %TEMP%: $($pwLeft -join ', ')") }
+    $ramNew = @(Get-TempNames 'lcsas-restore-*' | Where-Object { $ramBefore -notcontains $_ })
+    Assert-NoRamDirLeft -New $ramNew -Problems $problems
+
+    # Leave no image mounted for the steps after this one.
+    foreach ($iso in $isos) {
+        Dismount-DiskImage -ImagePath $iso.FullName -ErrorAction SilentlyContinue | Out-Null
+    }
+
+    if ($problems.Count -gt 0) {
+        throw ("single-drive leg failed:`n  - " + ($problems -join "`n  - "))
+    }
+    Write-Host "Single-drive leg passed: $swaps swap(s) in ${letter}:, $boxes box(es), tree byte-exact."
 }
