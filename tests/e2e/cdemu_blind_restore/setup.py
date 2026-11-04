@@ -45,9 +45,11 @@ HERE = Path(__file__).resolve().parent
 # workflow and this cdemu fixture build identical repos/ISOs.
 sys.path.insert(0, str(REPO_ROOT / "tests" / "e2e"))
 from fixture_lib import (  # noqa: E402
+    add_repo,
     generate_source_tree,
     init_rustic_repo,
     master_iso,
+    set_marker_problems,
 )
 
 # Keep the fixture OUT of /mnt — that path is reserved for the
@@ -271,10 +273,16 @@ def _init_rustic_repo(name: str) -> None:
 
 
 def _init_burn_db():
-    """Create the catalog DB and register repos. Returns the connection."""
+    """Create the catalog DB and register repos. Returns the connection.
+
+    Each tenant is registered with ``lcsas repo add``, as an owner does
+    (#617): its id is a UUID, so the discs keep its metadata in
+    ``metadata/<uuid>/`` and the restore scripts must show the NAME
+    (alpha, bravo, ...) from the set's marker.  The tenants' names, and
+    so the agent prompts' ``alpha``, are unchanged.
+    """
     sys.path.insert(0, str(REPO_ROOT / "src"))
     from lcsas.db.connection import get_connection
-    from lcsas.db.repos import register_repo
     from lcsas.db.schema import create_all
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
@@ -284,18 +292,46 @@ def _init_burn_db():
         DB_PATH.unlink()
     conn = get_connection(DB_PATH)
     create_all(conn)
-
-    tenants = _tenants()
-    for name in tenants:
-        register_repo(conn, name, name, str(MIRROR / name))
     conn.commit()
 
-    for name in tenants:
+    for name in _tenants():
+        repo_id = add_repo(DB_PATH, name, MIRROR / name)
+        print(f"  {name}: id {repo_id}")
         scanned = scan_mirror_packs(MIRROR / name).packs
-        delta = DeltaAnalyzer(conn, scanned, repo_id=name)
+        delta = DeltaAnalyzer(conn, scanned, repo_id=repo_id)
         delta.register_new_packs()
     conn.commit()
     return conn
+
+
+def _repo_id(conn, name: str) -> str:
+    """The catalog id of the tenant called *name* (a UUID, see
+    _init_burn_db)."""
+    sys.path.insert(0, str(REPO_ROOT / "src"))
+    from lcsas.db.repos import get_repo_by_name
+
+    repo = get_repo_by_name(conn, name)
+    if repo is None:
+        raise LookupError(f"no backup set called {name!r} in the catalog")
+    return repo.repo_id
+
+
+def _check_set_markers(stage: Path, *, require_all: bool) -> None:
+    """#617: stop the setup unless the disc staged at *stage* keeps each
+    backup set as an owner's discs do: ``metadata/<uuid>/`` with an
+    ``LCSAS_REPO.txt`` naming one of the tenants.  verify.sh scores no
+    set name, so a fixture that regressed to ``metadata/alpha/`` (or lost
+    its markers) would otherwise only show in an LLM run.  *require_all*:
+    the META disc carries every tenant; a data disc only those it holds
+    packs of."""
+    problems = set_marker_problems(
+        stage / "metadata", _tenants(), require_all=require_all,
+    )
+    if problems:
+        raise SystemExit(
+            f"{stage}: the backup set folders are not an owner's:\n  "
+            + "\n  ".join(problems)
+        )
 
 
 def _fixture_config():
@@ -372,7 +408,9 @@ def _record_mixed_split(conn) -> None:
         out_dir=MIXED_SPLIT_CARDS,
     )
     ident = share_identifier(extract_mnemonic(cards[0].read_text()))
-    record_split(conn, "alpha", MIXED_SPLIT_K, MIXED_SPLIT_N, ident)
+    record_split(
+        conn, _repo_id(conn, "alpha"), MIXED_SPLIT_K, MIXED_SPLIT_N, ident,
+    )
 
 
 def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
@@ -411,6 +449,7 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
         # for the no-catalog variant, between prepare (which injects
         # catalog.db into staging) and execute (which masters the ISO).
         _apply_data_disc_variant_mutations(manifest.staging_path)
+        _check_set_markers(manifest.staging_path, require_all=False)
         iso_path = ISO_OUT / f"{manifest.volume_label}.iso"
         orchestrator.execute(
             manifest, iso_output=iso_path, skip_burn=True,
@@ -478,6 +517,7 @@ def _build_meta_iso() -> Path:
         manifest.write_text("\n".join(rows) + "\n")
 
     _apply_variant_mutations(META_STAGE)
+    _check_set_markers(META_STAGE, require_all=True)
 
     # Shared ISO mastering (INFRA-01).
     return master_iso(
@@ -587,21 +627,26 @@ def _vault_isos(iso_files: list[Path], meta_iso: Path) -> dict[str, Path]:
 
 
 def _write_expected_alpha_volumes() -> list[str]:
+    # By NAME: alpha's id is a UUID (#617).  An empty list would make
+    # verify.sh refuse to score every run (its fixture-presence guard).
     conn = sqlite3.connect(str(DB_PATH))
     try:
         rows = conn.execute(
             """
             SELECT DISTINCT v.label
             FROM packs p
+            JOIN repositories r ON p.repo_id = r.repo_id
             JOIN volume_packs vp ON p.pack_id = vp.pack_id
             JOIN volumes v ON vp.volume_id = v.volume_id
-            WHERE p.repo_id = 'alpha' AND p.is_pruned = 0
+            WHERE r.name = 'alpha' AND p.is_pruned = 0
             ORDER BY v.label
             """
         ).fetchall()
     finally:
         conn.close()
     labels = [r[0] for r in rows]
+    if not labels:
+        raise SystemExit("no volume holds an alpha pack: the fixture is broken")
     (FIXTURE / "expected_alpha_volumes.txt").write_text(
         "\n".join(labels) + "\n"
     )

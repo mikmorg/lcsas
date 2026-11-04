@@ -24,6 +24,55 @@
 #     finished.  Every relocated leg starts by removing it (Clear-ToolsDir),
 #     so no leg takes an earlier leg's copy by accident, and checks it is
 #     gone after exit 0 and kept after exit 75 or 77.
+#   * The fixture has two backup sets, registered as an owner does (`lcsas
+#     repo add`), so their folders on the discs are named by UUID ids, not
+#     by their names (#617).  sets.json says which is which.  The leg that
+#     goes through restore.bat's set menu is the single-drive leg; every
+#     other leg names the set in LCSAS_REPO (by its id, or by the name
+#     restore.bat shows), and checks the "Backup set:" line shows that
+#     name, never the id (#606).
+
+# The fixture's backup sets (sets.json, from the fixture job): .restore is
+# the one manifest.json describes, .others are there to fill the menu.
+# Each has .id (the UUID folder name on the discs), .name, and .name_cmd,
+# the name restore.bat shows (C1: letters outside A-Z/0-9/space/._+,- are
+# "_").
+function Get-FixtureSets {
+    param([string]$Fixture)
+    $p = Join-Path $Fixture 'sets.json'
+    if (-not (Test-Path -LiteralPath $p)) { throw "no sets.json in $Fixture" }
+    $sets = Get-Content -LiteralPath $p -Raw -Encoding utf8 | ConvertFrom-Json
+    if (-not $sets.restore.id -or -not $sets.restore.name_cmd) { throw "sets.json names no set to restore" }
+    if ($sets.restore.id -eq $sets.restore.name) { throw "sets.json: the set's id is its name; the fixture must use repo add (#617)" }
+    return $sets
+}
+
+# Every set of the fixture, the restored one first.
+function Get-AllSets {
+    param($Sets)
+    return @(@($Sets.restore) + @($Sets.others | Where-Object { $_ }))
+}
+
+# #606: restore.bat names the chosen set by its name_cmd on the
+# "Backup set:" line, and no line shows a set's id where a name belongs.
+# (The "Repo:" line is the set's folder, which IS named by its id.)
+function Assert-SetNamed {
+    param(
+        [string]$Out,
+        $Sets,
+        [System.Collections.Generic.List[string]]$Problems
+    )
+    $want = 'Backup set:    ' + $Sets.restore.name_cmd
+    if (-not $Out.Contains($want)) {
+        $Problems.Add("no '$want' line: restore.bat did not show the set's name (#606)")
+    }
+    foreach ($s in (Get-AllSets $Sets)) {
+        $id = [regex]::Escape($s.id)
+        if ($Out -match "Backup set:\s+$id" -or $Out -match "\[\d+\]\s+$id") {
+            $Problems.Add("restore.bat showed the id $($s.id) where the name '$($s.name_cmd)' belongs (#606)")
+        }
+    }
+}
 
 function Find-MetaDrive {
     foreach ($v in (Get-Volume | Where-Object { $_.DriveLetter })) {
@@ -50,11 +99,16 @@ function Get-DataDiscs {
     return $found
 }
 
-# --repo is a metadata\win folder (keys/index/snapshots, no data\), so
+# --repo is a metadata\<id> folder (keys/index/snapshots, no data\), so
 # EVERY pack must come from a drive restore.bat hands to lcsas-restore.exe
-# (it names them: "drives searched for discs:").  Proving
-# that more than one mounted data disc holds packs therefore proves, with
-# the byte-exact tree check, that a restore consumed more than one disc.
+# (it names them: "drives searched for discs:").  This counts every pack,
+# whatever set it belongs to, so on its own it no longer proves the
+# restored set came from more than one disc (the fixture has two sets,
+# #617).  The fixture job proves that part on Linux: the restored set's
+# own packs lie on two or more discs, none holding them all
+# (fixture_lib.restore_set_span_problem, sets.json restore_discs).  With
+# that and the byte-exact tree check, a restore consumed more than one
+# disc.
 function Assert-MultiDisc {
     param([int]$Minimum = 2)
     $discs = @(Get-DataDiscs | Where-Object { $_.Packs -gt 0 })
@@ -250,12 +304,19 @@ function Invoke-RelocationLeg {
         [string]$Fixture,
         [string]$BatRel,        # path of restore.bat relative to the meta-disc root
         [string]$TargetName,
-        [switch]$SeedStale
+        [switch]$SeedStale,
+        # LCSAS_REPO names the set by its id, or by the name restore.bat
+        # shows (name_cmd), which it must match too (#606).
+        [ValidateSet('id', 'name_cmd')]
+        [string]$PickBy = 'id'
     )
     $ErrorActionPreference = 'Stop'
     $PSNativeCommandUseErrorActionPreference = $false
     Remove-Item Env:LCSAS_NO_RELOCATE -ErrorAction SilentlyContinue
     Remove-Item Env:LCSAS_RELOCATED -ErrorAction SilentlyContinue
+    $sets = Get-FixtureSets -Fixture $Fixture
+    $env:LCSAS_REPO = $sets.restore.$PickBy
+    Write-Host "LCSAS_REPO=$($env:LCSAS_REPO) (the set's $PickBy)"
 
     $meta = Find-MetaDrive
     if (-not $meta) { throw 'meta ISO not mounted (no drive holds restore.bat)' }
@@ -318,6 +379,7 @@ function Invoke-RelocationLeg {
     if ($out -notmatch 'PAUSES the restore') { $problems.Add('no QuickEdit note (#613)') }
     Assert-OnlyThisPlatform -Out $out -Problems $problems
     Assert-NoAccessDenied -Out $out -Problems $problems
+    Assert-SetNamed -Out $out -Sets $sets -Problems $problems
 
     # 2. the tier-1 binary that ran came from the tools folder, so the
     #    programs were copied (the folder is gone by now to look in).
@@ -376,6 +438,7 @@ function Invoke-RelocationLeg {
 # ---------------------------------------------------------------------
 function Invoke-RelocatedWrongPasswordLeg {
     param(
+        [string]$Fixture,
         [string]$BatRel,
         [string]$TargetName
     )
@@ -383,6 +446,8 @@ function Invoke-RelocatedWrongPasswordLeg {
     $PSNativeCommandUseErrorActionPreference = $false
     Remove-Item Env:LCSAS_NO_RELOCATE -ErrorAction SilentlyContinue
     Remove-Item Env:LCSAS_RELOCATED -ErrorAction SilentlyContinue
+    $sets = Get-FixtureSets -Fixture $Fixture
+    $env:LCSAS_REPO = $sets.restore.id
 
     $meta = Find-MetaDrive
     if (-not $meta) { throw 'meta ISO not mounted (no drive holds restore.bat)' }
@@ -427,6 +492,7 @@ function Invoke-RelocatedWrongPasswordLeg {
     $pwLeft = @(Get-TempNames 'lcsas-pw-*' | Where-Object { $pwBefore -notcontains $_ })
     if ($pwLeft.Count -gt 0) { $problems.Add("password file(s) left in %TEMP%: $($pwLeft -join ', ')") }
     Assert-NoAccessDenied -Out $out -Problems $problems
+    Assert-SetNamed -Out $out -Sets $sets -Problems $problems
     # #609: not finished, so the tools folder stays, with a way to carry on.
     Assert-ToolsDirKept -Problems $problems -Password $wrong
     if ($out -notmatch 'To try again, run ".+Resume LCSAS restore\.bat"') {
@@ -466,6 +532,10 @@ function Invoke-EjectLeg {
     $bat = "${meta}:\$BatRel"
     $metaIso = (Get-ChildItem -Path $Fixture -Filter 'LCSAS_META.iso').FullName
     if (-not $metaIso) { throw 'LCSAS_META.iso not found in the fixture dir' }
+    # The set is named up front: the banner this leg waits for comes after
+    # the set menu, which would wait for an answer.
+    $sets = Get-FixtureSets -Fixture $Fixture
+    $env:LCSAS_REPO = $sets.restore.id
 
     $target = Join-Path $env:RUNNER_TEMP $TargetName
     if (Test-Path -LiteralPath $target) { Remove-Item -Recurse -Force -LiteralPath $target }
@@ -556,6 +626,7 @@ function Invoke-EjectLeg {
     if ("$rc" -ne '0') { $problems.Add("exit code after a completed restore is $rc, not 0") }
     Test-TreeAgainstManifest -Fixture $Fixture -Target $target -Problems $problems
     Assert-NoAccessDenied -Out $out -Problems $problems
+    Assert-SetNamed -Out $out -Sets $sets -Problems $problems
     Assert-ToolsDirGone -Problems $problems
 
     if ($problems.Count -gt 0) {
@@ -708,6 +779,42 @@ function Invoke-NewestDiscStep {
     return $newest
 }
 
+# #606 (F4): restore.bat's set menu.  Wait for it, check that it lists
+# every set by the name restore.bat shows (name_cmd) and none by its id,
+# and choose the set to restore by its number.  The order is restore.bat's
+# (its folders are named by UUID ids), so the number is read off the
+# screen, as a reader would.
+function Invoke-SetMenu {
+    param(
+        [System.Diagnostics.Process]$Proc,
+        [string]$OutFile,
+        $Sets,
+        [System.Collections.Generic.List[string]]$Problems
+    )
+    $prompt = 'Which one do you want to restore\? \[1\]: '
+    $text = Wait-ForOutput -Path $OutFile -Pattern $prompt -Proc $Proc -Seconds 120
+    if ($text -cnotmatch $prompt) { throw "no set menu; output so far:`n$text" }
+    $start = $text.LastIndexOf('This archive contains more than one backup set:')
+    if ($start -lt 0) { throw "no set menu heading; output so far:`n$text" }
+    $entries = @{}
+    foreach ($m in [regex]::Matches($text.Substring($start), '(?m)^[ \t]*\[(\d+)\] ([^\r\n]+)')) {
+        $entries[$m.Groups[2].Value.Trim()] = $m.Groups[1].Value
+    }
+    foreach ($e in $entries.GetEnumerator()) { Write-Host "set menu: [$($e.Value)] $($e.Key)" }
+    $all = Get-AllSets $Sets
+    if ($entries.Count -ne $all.Count) {
+        $Problems.Add("the set menu lists $($entries.Count) sets; the archive has $($all.Count)")
+    }
+    foreach ($s in $all) {
+        if (-not $entries.ContainsKey($s.name_cmd)) { $Problems.Add("the set menu does not list '$($s.name_cmd)' (#606)") }
+        if ($entries.ContainsKey($s.id)) { $Problems.Add("the set menu lists the id $($s.id), not '$($s.name_cmd)' (#606)") }
+    }
+    $pick = $entries[$Sets.restore.name_cmd]
+    if (-not $pick) { throw "the set menu has no '$($Sets.restore.name_cmd)'; output so far:`n$text" }
+    Write-Host "set menu: choosing [$pick] $($Sets.restore.name_cmd)"
+    $Proc.StandardInput.WriteLine($pick)
+}
+
 # Answer tier 1's disc boxes until the restore ends.
 #
 # How a disc box is spotted: tier 1 prints the box on stderr, which the
@@ -836,11 +943,14 @@ function Complete-RestoreProcess {
 #
 # stdin: first the newest-data-disc step (#605): the newest data ISO goes
 # into the meta disc's letter and ENTER (Invoke-NewestDiscStep).  Then
-# restore.bat's two `set /p` prompts (folder, password) get one line
-# each, written only once the prompt is in $outFile; then one empty line
-# (ENTER) per box, after the swap (Invoke-DiscBoxes).  The catalog comes
-# from the newest data disc, so the boxes name the disc they need.  stdin
-# is closed after the final banner, which ends the `pause`.
+# the set menu (#606): this is the leg with no LCSAS_REPO, so the menu
+# must list each set by its name and the set is chosen by its number
+# (Invoke-SetMenu).  Then restore.bat's two `set /p` prompts (folder,
+# password) get one line each, written only once the prompt is in
+# $outFile; then one empty line (ENTER) per box, after the swap
+# (Invoke-DiscBoxes).  The catalog comes from the newest data disc, so
+# the boxes name the disc they need.  stdin is closed after the final
+# banner, which answers "another set?" with no and ends the `pause`.
 # ---------------------------------------------------------------------
 function Invoke-SingleDriveLeg {
     param(
@@ -852,6 +962,10 @@ function Invoke-SingleDriveLeg {
     $PSNativeCommandUseErrorActionPreference = $false
     Remove-Item Env:LCSAS_NO_RELOCATE -ErrorAction SilentlyContinue
     Remove-Item Env:LCSAS_RELOCATED -ErrorAction SilentlyContinue
+    # The reader picks the set from the menu.
+    Remove-Item Env:LCSAS_REPO -ErrorAction SilentlyContinue
+    $sets = Get-FixtureSets -Fixture $Fixture
+    if (@(Get-AllSets $sets).Count -lt 2) { throw 'the fixture has one backup set: restore.bat shows no menu' }
 
     $isos = @(Get-ChildItem -Path $Fixture -Filter '*.iso')
     $metaIso = ($isos | Where-Object { $_.Name -eq 'LCSAS_META.iso' }).FullName
@@ -894,6 +1008,8 @@ function Invoke-SingleDriveLeg {
             -DataIsos $dataIsos -Problems $problems
         $result.Current = $current
         $stepSwaps = 1
+
+        Invoke-SetMenu -Proc $proc -OutFile $outFile -Sets $sets -Problems $problems
 
         $text = Wait-ForOutput -Path $outFile -Pattern 'Restore to which folder\?' -Proc $proc -Seconds 300
         if ($text -cnotmatch 'Restore to which folder\?') { throw "no folder prompt; output so far:`n$text" }
@@ -938,6 +1054,7 @@ function Invoke-SingleDriveLeg {
     # every start from a disc (F1).
     Assert-NoAccessDenied -Out $out -Problems $problems
     Assert-OnlyThisPlatform -Out $out -Problems $problems
+    Assert-SetNamed -Out $out -Sets $sets -Problems $problems
     Test-TreeAgainstManifest -Fixture $Fixture -Target $target -Problems $problems
 
     $pwLeft = @(Get-TempNames 'lcsas-pw-*' | Where-Object { $pwBefore -notcontains $_ })
@@ -986,6 +1103,10 @@ function Invoke-StopAndResumeLeg {
     if (-not $metaIso) { throw 'LCSAS_META.iso not found in the fixture dir' }
     $dataIsos = @($isos | Where-Object { $_.Name -ne 'LCSAS_META.iso' } | ForEach-Object { $_.FullName })
     if ($dataIsos.Count -lt 2) { throw "need >= 2 data ISOs to stop between two; the fixture has $($dataIsos.Count)" }
+    # The set is named by its id (LCSAS_REPO), so no menu; carrying on
+    # takes the set from resume.cfg.
+    Remove-Item Env:LCSAS_REPO -ErrorAction SilentlyContinue
+    $sets = Get-FixtureSets -Fixture $Fixture
 
     foreach ($iso in $isos) {
         Dismount-DiskImage -ImagePath $iso.FullName -ErrorAction SilentlyContinue | Out-Null
@@ -1025,7 +1146,7 @@ function Invoke-StopAndResumeLeg {
         # boxes from the META disc on, and Invoke-SingleDriveLeg runs it.
         Write-Host "Starting (one drive, q at the second box): $bat"
         $proc = Start-RestoreProcess -Bat $bat -OutFile $outStop -WorkDir "${letter}:\" `
-            -Env @{ LCSAS_NEWEST_DISC_PROMPT = '0' }
+            -Env @{ LCSAS_NEWEST_DISC_PROMPT = '0'; LCSAS_REPO = $sets.restore.id }
         $text = Wait-ForOutput -Path $outStop -Pattern 'Restore to which folder\?' -Proc $proc -Seconds 300
         if ($text -cnotmatch 'Restore to which folder\?') { throw "no folder prompt; output so far:`n$text" }
         $proc.StandardInput.WriteLine($target)
@@ -1049,6 +1170,7 @@ function Invoke-StopAndResumeLeg {
         if ($out -match 'trying tier 2|\[tier 2\]|no working recovery method') { $problems.Add('fell through to tier 2 after q') }
         if ($current -eq $metaIso) { $problems.Add('no data disc went in before the stop') }
         Assert-NoAccessDenied -Out $out -Problems $problems
+        Assert-SetNamed -Out $out -Sets $sets -Problems $problems
         Assert-OnlyThisPlatform -Out $out -Problems $problems -CheckFolder
         Assert-ToolsDirKept -Problems $problems -Password $pw
 
@@ -1078,6 +1200,8 @@ function Invoke-StopAndResumeLeg {
     if ($out -notmatch 'Carrying on the restore into:') { $problems.Add('carrying on did not name the folder') }
     if ($out -match 'copied recovery files to') { $problems.Add('carrying on copied the tools again') }
     if ($out -match 'trying tier 2') { $problems.Add('fell through to tier 2 after carrying on') }
+    # resume.cfg holds the set's id; the banner still shows its name.
+    Assert-SetNamed -Out $out -Sets $sets -Problems $problems
     $total = $stop.Swaps + $resume.Swaps
     if ($total -gt $dataIsos.Count + 1) {
         $problems.Add("$total swaps in all for $($dataIsos.Count) data discs (want at most $($dataIsos.Count + 1))")

@@ -17,22 +17,148 @@ stdlib-only at runtime, matching the project's zero-dependency rule.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
+import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# The backup set build_windows_fixture makes.  Its name has a space, which
+# name_cmd keeps; the macOS journey restores it.
+WINDOWS_SET_NAME = "Family photos"
 
 
 def _ensure_src_on_path() -> None:
     src = str(REPO_ROOT / "src")
     if src not in sys.path:
         sys.path.insert(0, src)
+
+
+# ---------------------------------------------------------------------------
+# Backup sets, registered the way an owner does
+# ---------------------------------------------------------------------------
+
+
+def add_repo(db_path: Path, name: str, mirror: Path) -> str:
+    """Register the backup set at *mirror* as *name* with ``lcsas repo
+    add``, as an owner does, and return the id it was given.
+
+    ``repo add`` gives every set a fresh UUID, and every disc keeps the
+    set's metadata in ``metadata/<id>/``.  The fixtures used to register
+    ``repo_id == name``, so no gate ever saw an id that differs from the
+    name, and drill #476 found the set menu showing UUIDs (#606, #617).
+    The CLI log line goes to stderr, so a caller's stdout stays its own.
+    """
+    _ensure_src_on_path()
+    from lcsas.cli.main import main as lcsas_main
+
+    with contextlib.redirect_stdout(sys.stderr):
+        rc = lcsas_main(["--db", str(db_path), "repo", "add", name, str(mirror)])
+    if rc != 0:
+        raise RuntimeError(f"lcsas repo add {name!r} {mirror} exited {rc}")
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        rows = conn.execute(
+            "SELECT repo_id FROM repositories WHERE name = ?", (name,)
+        ).fetchall()
+    if len(rows) != 1:
+        raise RuntimeError(f"{len(rows)} catalog rows are named {name!r}")
+    repo_id = str(rows[0][0])
+    uuid.UUID(repo_id)  # ValueError if repo add stops making UUIDs
+    if repo_id == name:
+        raise RuntimeError(f"repo add gave {name!r} its own name as its id")
+    return repo_id
+
+
+def _is_uuid(text: str) -> bool:
+    try:
+        return str(uuid.UUID(text)) == text
+    except ValueError:
+        return False
+
+
+def set_marker_problems(
+    metadata_dir: Path, names: Iterable[str], *, require_all: bool,
+) -> list[str]:
+    """What is wrong with the backup set folders in *metadata_dir* (a
+    disc's ``metadata/``), measured against an owner's discs (#617).
+
+    Every folder must be named by a UUID id, never by a set's name.  Its
+    ``LCSAS_REPO.txt`` marker must give that id and one of *names*, and no
+    two folders may give the same name.  With *require_all*, every one of
+    *names* must have a folder: the META disc carries every set, a data
+    disc only the sets it holds packs of.  An empty list means all is well.
+    """
+    _ensure_src_on_path()
+    from lcsas.staging.repo_marker import read_repo_marker
+
+    wanted = set(names)
+    problems: list[str] = []
+    found: dict[str, str] = {}
+    folders = (
+        sorted(p for p in metadata_dir.iterdir() if p.is_dir())
+        if metadata_dir.is_dir() else []
+    )
+    if not folders:
+        problems.append(f"{metadata_dir}: no backup set folders")
+    for folder in folders:
+        if not _is_uuid(folder.name):
+            problems.append(
+                f"{folder}: the folder is not named by a UUID id"
+                + (" (it is the set's name)" if folder.name in wanted else "")
+            )
+            continue
+        marker = read_repo_marker(folder)
+        if marker is None:
+            problems.append(f"{folder}: no LCSAS_REPO.txt whose id= is the folder")
+            continue
+        name = marker.get("name", "")
+        if name not in wanted:
+            problems.append(f"{folder}: the marker names {name!r}, no set of this archive")
+        elif name in found:
+            problems.append(f"{folder}: {name!r} also has the folder {found[name]}")
+        else:
+            found[name] = folder.name
+    if require_all:
+        missing = sorted(wanted - set(found))
+        if missing:
+            problems.append(f"{metadata_dir}: no folder for {', '.join(missing)}")
+    return problems
+
+
+def restore_set_span_problem(sets_path: Path, *, minimum: int = 2) -> str | None:
+    """Why the restored set's packs do not lie on at least *minimum* data
+    discs with no one disc holding them all, or None if they do.
+
+    Reads ``restore_discs`` in a fixture's ``sets.json``.  windows-e2e
+    restores with every disc mounted and checks the tree byte for byte;
+    that proves the restore read more than one disc only when the set it
+    restored needs more than one.  The other sets' packs share the discs,
+    so the count must be of the restored set's packs alone.
+    """
+    sets = json.loads(sets_path.read_text(encoding="utf-8"))
+    discs: dict[str, list[str]] = sets.get("restore_discs") or {}
+    every = {sha for packs in discs.values() for sha in packs}
+    if not every:
+        return f"{sets_path}: no disc holds a pack of the restored set"
+    holding = sorted(label for label, packs in discs.items() if packs)
+    if len(holding) < minimum:
+        return (
+            f"the restored set's {len(every)} packs lie on {len(holding)} "
+            f"data disc(s) ({', '.join(holding)}); need >= {minimum}"
+        )
+    for label in holding:
+        if set(discs[label]) >= every:
+            return f"{label} alone holds all {len(every)} packs of the restored set"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +311,31 @@ def build_meta_iso(
 # Self-contained Windows fixture
 # ---------------------------------------------------------------------------
 
+# windows-e2e's backup sets.  The restored one has an accented letter,
+# which name_cmd turns into "_", so name_cmd differs from the name (C1);
+# the second set puts the menu on screen, as on the drill's two-set
+# archive (#606, #617).  (\u00ed is a small i with an acute accent.)
+WINDOWS_E2E_SET_NAME = "Fotos da fam\u00edlia"
+WINDOWS_E2E_OTHER_SET_NAMES = ("Work documents",)
+# windows-e2e's size (#517): 8 x 512 KiB of incompressible data does not
+# fit one TEST_TINY disc, so the restored set spans several.  The workflow
+# and tests/integration/test_e2e_fixture_sets.py build this same shape.
+WINDOWS_E2E_FILE_COUNT = 8
+WINDOWS_E2E_FILE_BYTES = 512 * 1024
+
+
+@dataclass(frozen=True)
+class FixtureSet:
+    """A backup set in a fixture: its id, its name and the name restore.bat
+    shows (``name_cmd``, C1)."""
+
+    repo_id: str
+    name: str
+    name_cmd: str
+
+    def as_json(self) -> dict[str, str]:
+        return {"id": self.repo_id, "name": self.name, "name_cmd": self.name_cmd}
+
 
 @dataclass(frozen=True)
 class WindowsFixture:
@@ -195,6 +346,9 @@ class WindowsFixture:
     manifest_path: Path
     password_file: Path
     source_root: Path
+    restore_set: FixtureSet
+    other_sets: tuple[FixtureSet, ...]
+    sets_path: Path
 
 
 def build_windows_fixture(
@@ -203,9 +357,11 @@ def build_windows_fixture(
     file_count: int = 12,
     file_bytes: int = 64 * 1024,
     meta_metadata: bool = False,
+    set_name: str = WINDOWS_SET_NAME,
+    other_set_names: tuple[str, ...] = (),
 ) -> WindowsFixture:
-    """Build a complete single-tenant TEST_TINY fixture for the Windows
-    restore-journey gate, with NO root/cdemu/privileged steps.
+    """Build a complete TEST_TINY fixture for the Windows restore-journey
+    gate, with NO root/cdemu/privileged steps.
 
     Produces, under *workdir*:
       * ``iso_out/LCSAS_META.iso``       — bootable meta tree + tier-1 .exe
@@ -215,6 +371,23 @@ def build_windows_fixture(
       * ``repo.pw``                      — fixture-only repo password (the
                                            workflow treats this as a per-run
                                            secret; never a real credential)
+      * ``sets.json``                    — the backup sets: ``restore`` (the
+                                           one ``manifest.json`` describes)
+                                           and ``others``, each with its id,
+                                           name and name_cmd; and
+                                           ``restore_discs``, {data disc
+                                           label: the restored set's pack
+                                           ids on it} (ASCII JSON)
+
+    Every set is registered with ``lcsas repo add`` (:func:`add_repo`), so
+    its id is a UUID and its ``metadata/<id>/`` folder on the discs is not
+    its name (#617).  *set_name* names the set that is restored.  Each of
+    *other_set_names* adds a small set with its own password, which
+    nobody restores: two sets or more put restore.bat's set menu on
+    screen.  The config key, the catalog name and the marker's ``name=``
+    are the same text for every set.  Folder names stay ASCII (``win``,
+    ``other1``, ...): the restored tree mirrors the source path, and
+    Windows tier 1's non-ASCII path handling is its own issue (#619).
 
     Keep *file_count* small (Defender real-time scanning slows many-small-
     file restores on the windows runner) but >1 so the restore exercises a
@@ -233,17 +406,15 @@ def build_windows_fixture(
     from lcsas.config.settings import LCSASConfig, RepositoryConfig
     from lcsas.db.connection import get_connection
     from lcsas.db.queries import get_unarchived_packs
-    from lcsas.db.repos import register_repo
     from lcsas.db.schema import create_all
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
     from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
+    from lcsas.staging.repo_marker import cmd_name
 
-    tenant = "win"
     sources = workdir / "sources"
     mirror_base = workdir / "mirror"
-    mirror = mirror_base / tenant
     staging = workdir / "staging"
     iso_out = workdir / "iso_out"
     meta_stage = workdir / "meta_stage"
@@ -253,36 +424,52 @@ def build_windows_fixture(
     for d in (sources, mirror_base, staging, iso_out):
         d.mkdir(parents=True, exist_ok=True)
 
-    # 1. synthetic source tree + manifest
-    src_tree = sources / tenant
-    manifest = generate_source_tree(
-        src_tree, count=file_count, size_bytes=file_bytes
-    )
+    # (folder name, set name, file count, file size, password file).  The
+    # other sets are small: they exist to be listed, not restored.
+    plan = [("win", set_name, file_count, file_bytes, pw_file)]
+    for i, other in enumerate(other_set_names, start=1):
+        plan.append((f"other{i}", other, 2, 32 * 1024, workdir / f"other{i}.pw"))
+    if len({name for _, name, _, _, _ in plan}) != len(plan):
+        raise ValueError(f"backup set names must differ: {plan!r}")
 
-    # 2. rustic repo (fixture-only password)
-    pw_file.write_text(os.urandom(16).hex())
-    pw_file.chmod(0o600)
-    init_rustic_repo(
-        mirror=mirror, password_file=pw_file, source_tree=src_tree
-    )
+    # 1. synthetic source trees + the restored set's manifest
+    # 2. rustic repos (fixture-only passwords)
+    manifest: dict[str, str] = {}
+    for slug, _name, count, size, pw in plan:
+        tree = generate_source_tree(sources / slug, count=count, size_bytes=size)
+        if slug == "win":
+            manifest = tree
+        pw.write_text(os.urandom(16).hex())
+        pw.chmod(0o600)
+        init_rustic_repo(
+            mirror=mirror_base / slug, password_file=pw,
+            source_tree=sources / slug,
+        )
 
-    # 3. catalog + pack registration
+    # 3. catalog: each set registered as an owner does (repo add), then
+    #    its packs
     if db_path.exists():
         db_path.unlink()
     conn = get_connection(db_path)
     create_all(conn)
-    register_repo(conn, tenant, tenant, str(mirror))
     conn.commit()
-    scanned = scan_mirror_packs(mirror).packs
-    DeltaAnalyzer(conn, scanned, repo_id=tenant).register_new_packs()
-    conn.commit()
+    sets: list[FixtureSet] = []
+    for slug, name, _count, _size, _pw in plan:
+        repo_id = add_repo(db_path, name, mirror_base / slug)
+        sets.append(FixtureSet(repo_id, name, cmd_name(name, repo_id)))
+        scanned = scan_mirror_packs(mirror_base / slug).packs
+        DeltaAnalyzer(conn, scanned, repo_id=repo_id).register_new_packs()
+        conn.commit()
 
     # 4. burn pipeline → data ISOs (no ECC; the gate exercises the restore
-    #    path, not RS03 repair — that has its own opt-in suite).
+    #    path, not RS03 repair — that has its own opt-in suite).  Each
+    #    further set adds its index/snapshots/keys to every disc, as in the
+    #    blind fixture's reserve.
     repos = {
-        tenant: RepositoryConfig(
-            name=tenant, mirror_path=mirror, password_file=pw_file
+        name: RepositoryConfig(
+            name=name, mirror_path=mirror_base / slug, password_file=pw
         )
+        for slug, name, _count, _size, pw in plan
     }
     config = LCSASConfig(
         mirror_base_path=mirror_base,
@@ -291,7 +478,9 @@ def build_windows_fixture(
         default_media_type=MediaType.TEST_TINY,
         default_ecc_redundancy_pct=0,
         label_prefix="LCSAS",
-        metadata_reserve_bytes=MIN_HOLOGRAPHIC_RESERVE_BYTES,
+        metadata_reserve_bytes=(
+            MIN_HOLOGRAPHIC_RESERVE_BYTES + 150_000 * (len(plan) - 1)
+        ),
         repositories=repos,
     )
 
@@ -314,6 +503,22 @@ def build_windows_fixture(
         iso_path = iso_out / f"{prepared.volume_label}.iso"
         orchestrator.execute(prepared, iso_output=iso_path, skip_burn=True)
         data_isos.append(iso_path)
+    # Where the restored set's packs went, by disc label.  The other sets'
+    # packs share the discs, so counting every pack on a disc proves
+    # nothing about the restored set (restore_set_span_problem).
+    restore_discs: dict[str, list[str]] = {}
+    for label, sha in conn.execute(
+        """
+        SELECT v.label, p.sha256
+        FROM packs p
+        JOIN volume_packs vp ON p.pack_id = vp.pack_id
+        JOIN volumes v ON vp.volume_id = v.volume_id
+        WHERE p.repo_id = ? AND p.is_pruned = 0
+        ORDER BY v.label, p.sha256
+        """,
+        (sets[0].repo_id,),
+    ):
+        restore_discs.setdefault(str(label), []).append(str(sha))
     conn.close()
 
     # 5. meta ISO (carries the tier-1 lcsas-restore.exe + a repo to discover).
@@ -326,16 +531,25 @@ def build_windows_fixture(
         allow_no_dvdisaster_source=True,
     )
 
-    # 6. manifest the restorable source tree
+    # 6. manifest the restorable source tree, and say which set it is
     manifest_path = workdir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    sets_path = workdir / "sets.json"
+    sets_path.write_text(json.dumps({
+        "restore": sets[0].as_json(),
+        "others": [s.as_json() for s in sets[1:]],
+        "restore_discs": restore_discs,
+    }, indent=2) + "\n")
 
     return WindowsFixture(
         meta_iso=meta_iso,
         data_isos=data_isos,
         manifest_path=manifest_path,
         password_file=pw_file,
-        source_root=src_tree,
+        source_root=sources / "win",
+        restore_set=sets[0],
+        other_sets=tuple(sets[1:]),
+        sets_path=sets_path,
     )
 
 
@@ -358,6 +572,7 @@ def _main(argv: list[str]) -> int:
         "data_isos": [str(p) for p in fx.data_isos],
         "manifest": str(fx.manifest_path),
         "password_file": str(fx.password_file),
+        "sets": str(fx.sets_path),
     }, indent=2))
     return 0
 

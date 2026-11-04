@@ -247,13 +247,13 @@ def _build_archive(work: Path) -> _Archive:
     from lcsas.config.settings import LCSASConfig, RepositoryConfig
     from lcsas.db.connection import get_connection
     from lcsas.db.queries import get_unarchived_packs
-    from lcsas.db.repos import register_repo
     from lcsas.db.schema import create_all
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
     from lcsas.meta.builder import MetaVolumeBuilder
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
     from lcsas.staging.metadata import MIN_HOLOGRAPHIC_RESERVE_BYTES
+    from tests.e2e.fixture_lib import add_repo
 
     sources = work / "sources" / TENANT
     sources.mkdir(parents=True)
@@ -291,9 +291,11 @@ def _build_archive(work: Path) -> _Archive:
     db_path = work / "catalog.db"
     conn = get_connection(db_path)
     create_all(conn)
-    register_repo(conn, TENANT, TENANT, str(mirror))
     conn.commit()
-    delta = DeltaAnalyzer(conn, scan_mirror_packs(mirror).packs, repo_id=TENANT)
+    # As an owner does (#617): the set's id is a UUID, its name TENANT.
+    # The guest's LCSAS_REPO='alpha' names it by its name.
+    repo_id = add_repo(db_path, TENANT, mirror)
+    delta = DeltaAnalyzer(conn, scan_mirror_packs(mirror).packs, repo_id=repo_id)
     delta.register_new_packs()
     conn.commit()
 
