@@ -166,7 +166,8 @@ LCSAS_TARGET
 LCSAS_META_DISC
   Default:  unset (auto-detected via mtab / findmnt)
   Since:    Phase 20
-  Read by:  restore.sh and tier 1 (when no --meta-disc is given)
+  Read by:  restore.sh and tier 1 (tier 1 reads it only when its
+            own --meta-disc option is not given)
   What:     Mount point of the meta disc.  Tells restore.sh
             and the tier-1 binary to exclude that path from pack
             searches so an heir with a single optical drive can eject

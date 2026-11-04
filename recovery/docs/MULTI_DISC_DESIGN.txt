@@ -714,8 +714,8 @@ the NEWEST data disc when no data disc is in yet:
     "  Label:  <LABEL>" (or volume_info.json "label"), read from the
     right: the second-to-last "_" field is the year, the last the
     number, compared as numbers.  Never the drive or volume name:
-    Joliet cuts it to 16 characters, LCSAS_CD700_2026 for every CD of
-    a year.
+    Joliet cuts it to 16 characters, the same for every CD of a
+    year.
   * The script prints the full label it read, and asks again when
     the disc has none (not a data disc).  Q stops with exit 65.
   * With data discs already in, it takes the newest of them and asks
