@@ -63,13 +63,20 @@ The orchestrator runs a two-tier cascade:
 | Tier | What runs                                              | When on Windows |
 |------|--------------------------------------------------------|-----------------|
 | 1    | `bin\<triple>\lcsas-restore.exe`                       | Always first    |
-| 2    | `bin\<triple>\rustic-static.exe` (cross-check)         | Only for a backup set whose folder holds its own `data\` |
+| 2    | `bin\<triple>\rustic-static.exe` (cross-check)         | After a tier-1 failure, only for a backup set whose folder holds its own `data\`; with no `lcsas-restore.exe` at all, for any set (below) |
 
 A backup set read from the discs (the normal layout: `metadata\<id>\` on
 each disc, packs in each disc's `data\`) has no `data\` in its folder.
 `rustic-static.exe` cannot ask for discs, so for such a set a tier-1
 failure is final: the script stops at `:tier1_stopped`, keeps the tools
-folder and says how to carry on (#615). There is no tier 3 in the .bat:
+folder and says how to carry on (#615). That `data\` check sits inside
+the tier-1 step (`if exist "%BIN%" ( ... )`), so when
+`lcsas-restore.exe` is missing (quarantined by antivirus, say) the
+script goes straight to tier 2 whatever the set. In a run that does not
+relocate, `rustic-static.exe` is there and then fails for a set read
+from the discs, against C5 ("never run tier 2 against a metadata-only
+set"); the relocated copy has `rustic-static.exe` only when a set holds
+`data\`. There is no tier 3 in the .bat:
 the Python reader ships on the disc, but `restore.bat` does not launch
 it (it would need a Python install the host may not have); heirs who
 need it run `standalone_restorer.py` by hand (see
@@ -192,7 +199,11 @@ layout) or several.
      staying on disc.` The restore still works, but the disc cannot
      come out until it has finished.
    - It prints `copied recovery files to <TOOLS>` and `you may eject
-     the meta disc when the binary prompts for a data disc.`
+     the meta disc when the binary prompts for a data disc.` The
+     newest-disc step (step 6) asks for it sooner: the copy is done, so
+     the META disc can come out as soon as that step asks. The line
+     predates the step; its wording is restore.bat's (and restore.sh's)
+     to change.
    - **The relaunch line** (`:relaunch`) ends the copy on the disc with
      `(goto) 2>nul`, `cd`s to `%SystemDrive%\`, sets `LCSAS_RELOCATED`
      to the disc's drive letter (e.g. `D:\`) and `call`s the copy in
@@ -415,7 +426,8 @@ disc and the whole copy again.
    folder, the META letter (as `LCSAS_RELOCATED`) and the saved drive
    letters, which are searched even when empty now. It skips the
    newest-disc step (the same snapshot as before the stop), keeps
-   `TOOLS\catalog.db`, and asks only for the password.
+   `TOOLS\catalog.db`, and asks only for the password, or for the
+   share cards again when the set's password is split.
 4. Tier 1 skips every file that is already complete (#92), and the
    pack cache keeps the discs already read.
 5. After exit 0 the launcher deletes itself and `TOOLS` (when `.done`
@@ -503,17 +515,20 @@ need it.
 
    ```
    python standalone_restorer.py ^
-       --repo D:\metadata\<id> ^
+       --repo C:\lcsas-set ^
        --password-file C:\path\to\pw.txt ^
        --target C:\Users\me\restored ^
        --mount-point E:\
    ```
 
-   `<id>` is the repository's folder under `D:\metadata\` (the
-   directory containing `keys\` and `index\`; `dir D:\metadata`
-   lists them, and the `name=` line of each folder's
-   `LCSAS_REPO.txt` says which set it is). The newest data disc's
-   `metadata\<id>\` has the newest snapshots. Pack data lives on the
+   `C:\lcsas-set` is a copy of the set's `metadata\<id>\` folder
+   (the directory containing `keys\` and `index\`), taken from the
+   newest data disc, which has the newest snapshots:
+   `xcopy /e /i E:\metadata\<id> C:\lcsas-set`. The `name=` line of
+   each folder's `LCSAS_REPO.txt` says which set it is:
+   `findstr /s /b /c:"name=" E:\metadata\LCSAS_REPO.txt`. A copy on
+   C: stays readable while the discs are swapped (RECOVER_WINDOWS.txt,
+   "MANUAL PYTHON RESTORE", STEP 4). Pack data lives on the
    data discs: add one `--mount-point <letter>:\` per inserted data
    disc — the disc-swap pause re-scans the mount points after a swap.
    Use `--snapshot <id>` to pick a specific snapshot (default:
@@ -608,11 +623,13 @@ Windows workflow inherits. Source refs in parentheses.
 - **Owner/group/UID/GID/xattrs:** Windows has no equivalent and the
   binary silently skips them; hardlinks across drives silently
   degrade to copies (`recovery/docs/WINDOWS_RECOVERY_PLAN.txt`).
-- **UTF-8 / code page:** the binary embeds an application manifest
-  requesting `<activeCodePage>UTF8</activeCodePage>` on Windows 10
-  1903+. On older Windows non-ASCII filenames may be mangled. The
-  menu shows only a set's `name_cmd` (plain letters), because cmd reads
-  marker files in the console's code page.
+- **UTF-8 / code page:** the binary has no application manifest (no
+  `<activeCodePage>UTF8</activeCodePage>`; the exes carry no resources
+  at all), so file names outside the console's code page may be mangled
+  on restore (#619). `recovery/docs/WINDOWS_RECOVERY_PLAN.txt` describes
+  the manifest as a plan only. The menu shows only a set's `name_cmd`
+  (plain letters), because cmd reads marker files in the console's code
+  page.
 - **`O_BINARY`:** open flags include `O_BINARY` on Windows (to suppress
   CRLF translation); on POSIX the shim defines `O_BINARY` to `0` so
   call sites use the same constants.
@@ -630,14 +647,14 @@ LEFT"):
 | Set menu | `[1] name`, a number only, ENTER means 1 | `  1) name`, "Choose a repository (number or name):", number, name, `name_cmd` or id; no default |
 | Wrong `LCSAS_PASSWORD` / `LCSAS_PWFILE` | says so, asks on the keyboard; reused for the next set | exits 77; dropped for the next set |
 | `LCSAS_SHARES_DIR` with one bad card file | refuses the folder, asks on the keyboard | leaves that file out, combines the rest; exits 77 if they cannot |
-| `LCSAS_TOOLS_DIR` naming a folder with other files | refused, exit 1 | a temporary folder; the run cannot be carried on |
+| `LCSAS_TOOLS_DIR` naming a folder with other files | refused, exit 1 | a temporary folder: relocated, it is the tools folder and `resume.sh` carries on from it until it is cleared; run in place, it is deleted at exit and the run cannot be carried on |
 | `LCSAS_INTERACTIVE` | passed to tier 1 only; the script's own questions are always asked | also decides whether the script's own questions are asked |
 | Newest-disc step | also from a writable META copy; five ENTERs go on | only when the META mount is known and a terminal is there; end of input quits 65 |
 | Another set | asks the set, then the folder (default `restored-<name>`) | asks the folder (default `<target>-2`), then the set |
 | `LCSAS_REPO` match | case-blind, first match | exact; none when two sets share the name |
 | Catalog copy | the newest label's disc | the freshest file by mtime |
 | Tools folder marker | `.lcsas-tools` | `.lcsas-restore-tools` |
-| Tier cascade | tier 2 only for a set with its own `data\`; no tier 3 | `LCSAS_TIER_FALLBACK=1` walks tiers 2, 2b and 3 |
+| Tier cascade | after a tier-1 failure, tier 2 only for a set with its own `data\`; with no `lcsas-restore.exe`, tier 2 for any set; no tier 3 | `LCSAS_TIER_FALLBACK=1` walks tiers 2, 2b and 3 |
 
 ## Test coverage and gaps
 

@@ -111,8 +111,10 @@ sudo mount /dev/sr0 /mnt
 ```
 
 Older recovery binaries said `(no --catalog supplied; cannot
-suggest a disc)` here, and the legacy `restore_legacy.sh` prints
-`INSERT DISC: <hash>`; the fix is the same.
+suggest a disc)` here.  The legacy `restore_legacy.sh` prints
+`INSERT DISC: <label>` instead (blank for the first disc); there,
+insert the disc it names, or your newest data disc when it names
+none.
 
 ---
 

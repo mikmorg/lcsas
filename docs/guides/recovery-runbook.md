@@ -279,18 +279,25 @@ If you have multiple optical drives or are restoring from pre-ripped
 ISO files on disk:
 
 ```sh
-# Loop-mount every ISO and run restore — it auto-discovers all of them
+# Loop-mount every ISO under /mnt, one folder each, and run restore
+# from the META image: it auto-discovers all of them
+n=0
 for iso in /path/to/iso-collection/*.iso; do
-    mp=$(mktemp -d)
-    sudo mount -o ro,loop "$iso" "$mp"
+    n=$((n + 1))
+    sudo mkdir -p "/mnt/iso$n"
+    sudo mount -o ro,loop "$iso" "/mnt/iso$n"
 done
-sh /mnt/restore.sh ~/restored/ latest
+ls /mnt/iso*/restore.sh              # the META image is the one listed
+sh /mnt/isoN/restore.sh ~/restored/ latest   # N from the line above
 ```
 
 The script's auto-discovery walks `LCSAS_MOUNT_DIRS` (default
 `/Volumes:/media/<user>:/media:/mnt:/run/media/<user>:/run/media`)
-and adds every mount it finds with a `data/` subdirectory as a pack
-source.  With a data disc already mounted it does not ask for the
+and each folder's direct children, and adds every mount it finds with
+a `data/` subdirectory as a pack source.  A mount anywhere else (say a
+`mktemp -d` folder under `/tmp`) is not found: mount under one of those
+folders, or set `LCSAS_MOUNT_DIRS` to the folder that holds the
+mounts.  With a data disc already mounted it does not ask for the
 newest one: it uses the newest it finds.  No swap prompts needed.
 
 ---
@@ -306,11 +313,11 @@ script prints the command that carries on:
 sh ~/lcsas-restore-tools/resume.sh
 ```
 
-It needs no meta disc, asks only for the password again (it never
-stores it), skips the files that are already complete and does not
-ask again for the discs it already copied.  Re-running the first
-command from the meta disc works too.  To give up, delete
-`~/lcsas-restore-tools` yourself.
+It needs no meta disc, asks only for the password (or the share
+cards) again (it never stores the password), skips the files that are
+already complete and does not ask again for the discs it already
+copied.  Re-running the first command from the meta disc works too.
+To give up, delete `~/lcsas-restore-tools` yourself.
 
 ---
 

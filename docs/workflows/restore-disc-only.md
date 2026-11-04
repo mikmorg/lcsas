@@ -338,8 +338,12 @@ All step references below are to `cmd_restore_from_disc()` in
 5. Locate `metadata/<repo>/` on the disc.  It looks the folder up by
    the repository's catalog NAME, but discs name the folders by id, so
    for a repository whose name differs from its id this step finds
-   nothing (#618).  Until that is fixed, run Workflow B by hand with
-   `--repo DISC/metadata/<id>`.
+   nothing (#618).  Until that is fixed, run Workflow B by hand:
+   build its cache (step 1) from `DISC/metadata/<id>/` and the disc's
+   `data/`, or point the restorer at the folder and add the disc as a
+   pack source, `standalone_restorer.py --repo DISC/metadata/<id>
+   --mount-point DISC ...` (without `--mount-point` it looks for packs
+   only in `<repo>/data/`, which `metadata/<id>/` does not have).
 6. Probe for a usable `rustic` binary; if absent, mark
    `rustic_available = False`
    (the `check_binary_version("rustic", ...)` probe).
