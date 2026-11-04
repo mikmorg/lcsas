@@ -189,11 +189,13 @@ REM from the disc and leaves no tools folder behind.
 if /i "%~1"=="--check-disc" goto :after_relocate
 
 REM Probe writability of %~dp0 by trying to create a temp file there.
-REM The 2>nul comes FIRST: cmd itself reports a redirect it cannot open,
-REM so with the 2>nul at the end every start from a disc printed
-REM "Access is denied." (#611).
+REM cmd itself reports a redirect it cannot open (#611: "Access is denied."
+REM at every start from a disc).  Real cmd prints it on its OWN stderr, so
+REM only a 2>nul on a block around the write catches it; wine prints it
+REM unless the 2>nul comes first on the command itself.  So every write
+REM that may fail has both: (2>nul > "file" echo ...) 2>nul.
 set "PROBE=%~dp0lcsas-probe-%RANDOM%.tmp"
-2>nul > "%PROBE%" echo.
+(2>nul > "%PROBE%" echo.) 2>nul
 if exist "%PROBE%" (
     del "%PROBE%" 2>nul
     goto :after_relocate
@@ -225,7 +227,7 @@ REM copied last): run that, with the metadata, catalog copy and pack
 REM cache it has.  fc /b compares the bytes.
 if not exist "%TOOLS%\recovery\scripts\restore.bat" goto :tools_fresh
 if not exist "%TOOLS%\recovery\bin\%ARCH%\lcsas-restore.exe" goto :tools_fresh
-fc /b "%~f0" "%TOOLS%\recovery\scripts\restore.bat" >nul 2>nul
+fc /b "%~f0" "%TOOLS%\recovery\scripts\restore.bat" >nul 2>nul <nul
 if errorlevel 1 goto :tools_fresh
 REM ...and only when it was copied from this very META disc (archive.txt,
 REM see :archive_id).  A folder left by a stopped restore of another
@@ -241,7 +243,7 @@ REM A backup set on this META disc that the earlier copy lacks goes in
 REM too (#605); the sets already there keep what the earlier run read.
 if defined META_SRC for /f "delims=" %%T in ('dir /ad /b "%META_SRC%" 2^>nul') do (
     if not exist "!TOOLS!\metadata\%%T\" echo                   metadata\%%T
-    if not exist "!TOOLS!\metadata\%%T\" xcopy /e /i /q /y "%META_SRC%\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul
+    if not exist "!TOOLS!\metadata\%%T\" xcopy /e /i /q /y "%META_SRC%\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul <nul
 )
 goto :relaunch
 
@@ -254,7 +256,7 @@ REM program's.
 if not exist "%TOOLS%\pack-cache\" goto :tools_cleared
 set "KEEP_CACHE="
 if defined SRC_ROOT if exist "%TOOLS%\recovery\bin\%ARCH%\lcsas-restore.exe" (
-    fc /b "!SRC_ROOT!\bin\%ARCH%\lcsas-restore.exe" "%TOOLS%\recovery\bin\%ARCH%\lcsas-restore.exe" >nul 2>nul
+    fc /b "!SRC_ROOT!\bin\%ARCH%\lcsas-restore.exe" "%TOOLS%\recovery\bin\%ARCH%\lcsas-restore.exe" >nul 2>nul <nul
     if not errorlevel 1 set "KEEP_CACHE=1"
 )
 if not defined KEEP_CACHE rmdir /s /q "%TOOLS%\pack-cache" 2>nul
@@ -281,6 +283,11 @@ REM in bin\<arch>\, and rustic-static.exe only when a backup set here
 REM holds its own data\ (tier 2 cannot run otherwise); this computer's
 REM guide; the backup sets' metadata.  Up to rc5 this was the whole bin
 REM tree, 744 MB for six kinds of computer, with nothing on screen.
+REM Every program that needs no input reads from <nul (xcopy, attrib,
+REM fc, reg, lcsas-keyshare, --list-snapshots): on real Windows xcopy
+REM and attrib read the script's own input, so with answers piped in
+REM (windows-e2e, a test rig) they swallowed every answer left.  Wine's
+REM do not, so only CI showed it.
 REM copy and xcopy, not robocopy: wine runs them too (its robocopy exits
 REM 16 on these flags), so the local tests check the copy.  restore.bat
 REM is copied last, so a copy cut short is never taken for a whole one.
@@ -295,13 +302,13 @@ call :copy_one "docs\RECOVER_WINDOWS.txt"
 if defined META_SRC for /f "delims=" %%T in ('dir /ad /b "%META_SRC%" 2^>nul') do (
     echo                   metadata\%%T
     mkdir "!TOOLS!\metadata\%%T" 2>nul
-    xcopy /e /i /q /y "%META_SRC%\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul
+    xcopy /e /i /q /y "%META_SRC%\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul <nul
     if errorlevel 4 set "COPY_BAD=1"
 )
 if defined SRC_ROOT if exist "!SRC_ROOT!\catalog.db" copy /Y "!SRC_ROOT!\catalog.db" "!TOOLS!\catalog.db" >nul 2>nul
 call :archive_id
 if not defined ARCHIVE_ID goto :archive_saved
-2>nul > "%TOOLS%\archive.txt" echo !ARCHIVE_ID!
+(2>nul > "%TOOLS%\archive.txt" echo !ARCHIVE_ID!) 2>nul
 :archive_saved
 echo                   recovery\scripts\restore.bat
 copy /Y "%~f0" "%TOOLS%\recovery\scripts\restore.bat" >nul 2>nul
@@ -917,7 +924,7 @@ REM negative case, the shell/wine tests) exclude it BY NAME rather than
 REM relying on a hidden attribute.  2>nul first, as for the probe: a
 REM folder that cannot be written to says so below, not with "Access is
 REM denied." here (#611).
-2>nul > "%MARKER%" echo.
+(2>nul > "%MARKER%" echo.) 2>nul
 
 REM ----- Pack cache and the local copy of the catalog (#610) ---------
 REM Both live in the tools folder, TOOLS (see "The tools folder" above).
@@ -1066,7 +1073,7 @@ REM plain del cannot remove -- the old copy was then used while the line
 REM below named the new one.  attrib -r takes the mark off the new copy.
 del /f /q "%CATALOG_COPY%" >nul 2>nul
 copy /Y "%CATALOG_PICK%" "%CATALOG_COPY%" >nul 2>nul
-attrib -r "%CATALOG_COPY%" >nul 2>nul
+attrib -r "%CATALOG_COPY%" >nul 2>nul <nul
 set "CATALOG_COPIED=1"
 :catalog_copied
 if not exist "%CATALOG_COPY%" (
@@ -1182,7 +1189,7 @@ copy /b /y "!LCSAS_PWFILE!" "%PWFILE%" >nul 2>nul
 REM The copy keeps a read-only mark the reader's file has (a file on a CD
 REM or a locked USB stick): take it off, or no later del could remove the
 REM copy and no typed password could replace it.
-attrib -r "%PWFILE%" >nul 2>nul
+attrib -r "%PWFILE%" >nul 2>nul <nul
 if exist "%PWFILE%" goto :pw_file_copied
 echo [lcsas-restore] cannot read the password file LCSAS_PWFILE names:
 echo                 !LCSAS_PWFILE!
@@ -1219,7 +1226,7 @@ if "%SH_N%"=="0" goto :shares_dir_bad
 set "SH_ARGS="
 for /l %%I in (1,1,%SH_N%) do set "SH_ARGS=!SH_ARGS! card%%I.txt"
 pushd "%SH_DIR%"
-"%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt"
+"%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt" <nul
 set "KRC=%ERRORLEVEL%"
 popd
 if "%KRC%"=="0" goto :shares_dir_ok
@@ -1283,7 +1290,7 @@ if "!SHARE!"=="!SHARE: =!" goto :share_one_word
 > "%SH_DIR%\card%SI%.txt" echo !SHARE!
 set "SHARE="
 pushd "%SH_DIR%"
-"%KS_EXE%" "card%SI%.txt" >nul 2> "keyshare.txt"
+"%KS_EXE%" "card%SI%.txt" >nul 2> "keyshare.txt" <nul
 set "KRC=%ERRORLEVEL%"
 popd
 REM 0: a card that holds the whole password; 1: a good card that needs
@@ -1316,7 +1323,7 @@ set "SH_ARGS="
 for /l %%I in (1,1,%SPLIT_K%) do set "SH_ARGS=!SH_ARGS! card%%I.txt"
 del /f /q "%PWFILE%" >nul 2>nul
 pushd "%SH_DIR%"
-"%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt"
+"%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt" <nul
 set "KRC=%ERRORLEVEL%"
 popd
 if "%KRC%"=="0" goto :shares_rebuilt
@@ -1352,7 +1359,7 @@ REM rejected it; anything else is left to the restore itself to report.
 set "BIN=%RECOVERY%\bin\%ARCH%\lcsas-restore.exe"
 if not exist "%BIN%" goto :pw_ok
 echo [lcsas-restore] checking the password ...
-"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --list-snapshots >nul 2>nul
+"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" --list-snapshots >nul 2>nul <nul
 set "PW_RC=%ERRORLEVEL%"
 if not "%PW_RC%"=="77" goto :pw_ok
 del /f /q "%PWFILE%" >nul 2>nul
@@ -1496,7 +1503,7 @@ REM catalog copy and any metadata\ it merged (#605) in TOOLS\in-place,
 REM which goes; then the tools folder goes too if nothing else is in it
 REM (a stopped restore's files stay, and .lcsas-tools with them).
 if not defined LCSAS_RELOCATED goto :all_done_in_place
-2>nul > "%TOOLS%\.done" echo.
+(2>nul > "%TOOLS%\.done" echo.) 2>nul
 goto :all_done_end
 :all_done_in_place
 if /i "!TOOLS!"=="!TOOLS_TOP!\in-place" rmdir /s /q "!TOOLS!" 2>nul
@@ -1546,7 +1553,7 @@ REM folder is the restore's own, so it may be deleted once the restore
 REM has finished (see "The tools folder" above).
 if not exist "%~1\" mkdir "%~1" 2>nul
 if exist "%~1\.lcsas-tools" goto :eof
-2>nul > "%~1\.lcsas-tools" echo restore.bat made this folder; it deletes it once the restore is done.
+(2>nul > "%~1\.lcsas-tools" echo restore.bat made this folder; it deletes it once the restore is done.) 2>nul
 goto :eof
 
 :use_tools
@@ -1734,14 +1741,14 @@ del /f /q "%TOOLS%\merged-from.txt" >nul 2>nul
 mkdir "%TOOLS%\metadata" 2>nul
 if not exist "%TOOLS%\metadata\" goto :merge_cannot
 set "METADATA_SET_HERE=1"
-if exist "%DISC_ROOT_S%metadata\" for /f "delims=" %%T in ('dir /ad /b "%DISC_ROOT_S%metadata" 2^>nul') do xcopy /e /i /q /y "%DISC_ROOT_S%metadata\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul
+if exist "%DISC_ROOT_S%metadata\" for /f "delims=" %%T in ('dir /ad /b "%DISC_ROOT_S%metadata" 2^>nul') do xcopy /e /i /q /y "%DISC_ROOT_S%metadata\%%T" "!TOOLS!\metadata\%%T" >nul 2>nul <nul
 :merge_into
 if not exist "%TOOLS%\metadata\" mkdir "%TOOLS%\metadata" 2>nul
 if not exist "%TOOLS%\metadata\" goto :merge_cannot
 echo [lcsas-restore] reading the backup sets on !NEWEST_LABEL!:
 for /f "delims=" %%T in ('dir /ad /b "!NEWEST_ROOT!metadata" 2^>nul') do call :merge_set "%%T"
 if exist "%TOOLS%\metadata-new\" rmdir /s /q "%TOOLS%\metadata-new" 2>nul
-2>nul > "%TOOLS%\merged-from.txt" echo !NEWEST_LABEL!
+(2>nul > "%TOOLS%\merged-from.txt" echo !NEWEST_LABEL!) 2>nul
 goto :eof
 :merge_cannot
 echo [lcsas-restore] cannot write to !TOOLS!, so the backup sets on the
@@ -1766,11 +1773,11 @@ if not exist "!MS_SRC!\index\" goto :eof
 echo                   metadata\%~1
 rmdir /s /q "!MS_NEW!" 2>nul
 rmdir /s /q "!MS_OLD!" 2>nul
-xcopy /e /i /q /y "!MS_SRC!" "!MS_NEW!" >nul 2>nul
+xcopy /e /i /q /y "!MS_SRC!" "!MS_NEW!" >nul 2>nul <nul
 if errorlevel 2 goto :merge_set_bad
 if not exist "!MS_NEW!\index\" goto :merge_set_bad
 if not exist "!MS_NEW!\keys\" goto :merge_set_bad
-if exist "!MS_DST!\keys\" xcopy /e /i /q /y "!MS_DST!\keys" "!MS_NEW!\keys" >nul 2>nul
+if exist "!MS_DST!\keys\" xcopy /e /i /q /y "!MS_DST!\keys" "!MS_NEW!\keys" >nul 2>nul <nul
 if exist "!MS_DST!\" move "!MS_DST!" "!MS_OLD!" >nul 2>nul
 if exist "!MS_DST!\" goto :merge_set_bad
 move "!MS_NEW!" "!MS_DST!" >nul 2>nul
@@ -1848,7 +1855,7 @@ set "RESUME_CMD=%LAUNCHER%"
 REM The Desktop: where Explorer has it (OneDrive may have moved it),
 REM else %USERPROFILE%\Desktop.
 set "DESKTOP="
-for /f "tokens=1,2,*" %%A in ('reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders" /v Desktop 2^>nul') do if /i "%%A"=="Desktop" set "DESKTOP=%%C"
+for /f "tokens=1,2,*" %%A in ('reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders" /v Desktop 2^>nul ^<nul') do if /i "%%A"=="Desktop" set "DESKTOP=%%C"
 if not defined DESKTOP set "DESKTOP=%USERPROFILE%\Desktop"
 if not exist "!DESKTOP!\" goto :eof
 copy /Y "%LAUNCHER%" "!DESKTOP!\Resume LCSAS restore.bat" >nul 2>nul

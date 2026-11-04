@@ -400,19 +400,31 @@ def _label_body(content: str, label: str) -> list[str]:
 
 
 def test_restore_bat_write_probes_send_errors_away_first():
-    """#611: `> "%PROBE%" echo. 2>nul` printed "Access is denied." on every
-    start from a disc: cmd reports a redirect it cannot open itself, and a
-    2>nul after the `>` comes too late.  Under wine only the form with
-    2>nul first was silent.  The marker in the restore folder had the
-    same pattern.  Functional proof: the wine relocation test (a
-    read-only META folder) and every windows-e2e relocation leg."""
+    """#611: the write probe printed "Access is denied." on every start
+    from a disc.  cmd reports a redirect it cannot open itself.  Real cmd
+    prints it on its OWN stderr, so only a 2>nul on a block around the
+    write catches it (windows-e2e showed the bare 2>nul-first form still
+    printing it).  Wine prints it unless the 2>nul comes FIRST on the
+    command (the wine tests showed the bare block form printing it).  So
+    each write that may fail has both: `(2>nul > "file" echo ...) 2>nul`.
+    The marker in the restore folder, .done, .lcsas-tools, archive.txt
+    and merged-from.txt use the same form.  Functional proof: the wine
+    relocation tests (a read-only META folder) and every windows-e2e
+    relocation leg check for "Access is denied"."""
     code = _code(RESTORE_BAT.read_text())
-    assert '2>nul > "%PROBE%" echo.' in code
-    assert '2>nul > "%MARKER%" echo.' in code
+    assert '(2>nul > "%PROBE%" echo.) 2>nul' in code
+    assert '(2>nul > "%MARKER%" echo.) 2>nul' in code
+    assert not [ln for ln in code if ln.startswith("2>nul >") or ln.startswith("(>")]
+    names = ("%PROBE%", "%MARKER%", '%TOOLS%\\.done', '%~1\\.lcsas-tools',
+             '%TOOLS%\\archive.txt', '%TOOLS%\\merged-from.txt')
+    seen = 0
     for ln in code:
-        for name in ("%PROBE%", "%MARKER%", '%TOOLS%\\.done'):
-            if f'> "{name}' in ln:
-                assert ln.startswith("2>nul >"), f"redirect error escapes: {ln}"
+        for name in names:
+            if f'> "{name}"' in ln:
+                seen += 1
+                assert ln.startswith("(2>nul >") and ln.endswith(") 2>nul"), (
+                    f"redirect error escapes: {ln}")
+    assert seen == len(names), seen
 
 
 def test_restore_bat_warns_about_quickedit_before_the_copy():
@@ -423,7 +435,7 @@ def test_restore_bat_warns_about_quickedit_before_the_copy():
     switched off: that would change the reader's console settings."""
     content = RESTORE_BAT.read_text()
     note = content.index("PAUSES the restore")
-    assert note < content.index('2>nul > "%PROBE%" echo.')
+    assert note < content.index('(2>nul > "%PROBE%" echo.) 2>nul')
     assert note < content.index("call :copy_one")
     head = content[:note]
     assert head.rstrip().endswith("echo  A click selects text and"), head[-200:]
@@ -475,7 +487,7 @@ def test_restore_bat_reuses_or_replaces_the_tools_folder():
     on windows-e2e (Invoke-RelocationLeg -SeedStale)."""
     block = _relocation_block(RESTORE_BAT.read_text())
     code = _code_lines(block)
-    reuse = code.index('fc /b "%~f0" "%TOOLS%\\recovery\\scripts\\restore.bat" >nul 2>nul')
+    reuse = code.index('fc /b "%~f0" "%TOOLS%\\recovery\\scripts\\restore.bat" >nul 2>nul <nul')
     assert code[reuse + 1] == "if errorlevel 1 goto :tools_fresh"
     # Updated (B2 review): and only a folder copied from this very META
     # disc -- its volume_info.json "created_at", kept in archive.txt.
@@ -500,7 +512,7 @@ def test_restore_bat_reuses_or_replaces_the_tools_folder():
         " do ("), added
     assert [ln for ln in added if "xcopy" in ln] == [
         'if not exist "!TOOLS!\\metadata\\%%T\\" xcopy /e /i /q /y "%META_SRC%\\%%T" '
-        '"!TOOLS!\\metadata\\%%T" >nul 2>nul'], added
+        '"!TOOLS!\\metadata\\%%T" >nul 2>nul <nul'], added
     fresh = code.index(":tools_fresh")
     assert fresh > reuse
     same_exe = 'fc /b "!SRC_ROOT!\\bin\\%ARCH%\\lcsas-restore.exe"'
@@ -545,7 +557,7 @@ def test_restore_bat_tools_folder_goes_only_after_a_finished_restore():
     content = RESTORE_BAT.read_text()
     code = _code(content)
     writes = [ln for ln in code if '"%TOOLS%\\.done" echo.' in ln]
-    assert writes == ['2>nul > "%TOOLS%\\.done" echo.'], writes
+    assert writes == ['(2>nul > "%TOOLS%\\.done" echo.) 2>nul'], writes
     done = _label_body(content, ":restore_done")
     assert writes[0] in done, done
     assert code.index('del /f /q "%TOOLS%\\.done" >nul 2>nul') < code.index(
@@ -703,7 +715,7 @@ def test_restore_bat_tries_the_password_before_tier1():
     code = _code(content)
     check = [ln for ln in code if "--list-snapshots" in ln]
     head = '"%BIN%" --repo "%REPO%" --password-file "%PWFILE%" '
-    assert check == [head + "--list-snapshots >nul 2>nul"], check
+    assert check == [head + "--list-snapshots >nul 2>nul <nul"], check
     tier1 = [i for i, ln in enumerate(code)
              if ln.startswith(head + '--target "%TARGET%" --snapshot latest ')]
     assert len(tier1) == 1, tier1
@@ -725,8 +737,8 @@ def test_restore_bat_share_cards_live_in_temp_never_in_the_tools_folder():
     new_dir = _label_body(content, ":new_shares_dir")
     assert 'set "SH_DIR=%TEMP%\\lcsas-shares-%RANDOM%%RANDOM%"' in new_dir
     assert not [ln for ln in code if "SH_DIR=" in ln and "TOOLS" in ln]
-    assert '"%KS_EXE%" "card%SI%.txt" >nul 2> "keyshare.txt"' in code
-    assert '"%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt"' in code
+    assert '"%KS_EXE%" "card%SI%.txt" >nul 2> "keyshare.txt" <nul' in code
+    assert '"%KS_EXE%" %SH_ARGS% > "%PWFILE%" 2> "keyshare.txt" <nul' in code
     assert 'if "%KRC%"=="3" goto :share_bad' in code
     assert 'if /i "!SHARE!"=="p" goto :shares_own' in code
 
@@ -742,7 +754,7 @@ def test_restore_bat_asks_for_another_set_before_cleaning_up():
     assert len(ask) == 1, done
     rm_cache = 'if defined CACHE_SET_HERE rmdir /s /q "!LCSAS_PACK_CACHE_DIR!" 2>nul'
     assert ask[0] < done.index(rm_cache)
-    assert ask[0] < done.index('2>nul > "%TOOLS%\\.done" echo.')
+    assert ask[0] < done.index('(2>nul > "%TOOLS%\\.done" echo.) 2>nul')
     assert 'if /i "!ANOTHER_ANS!"=="y" goto :another_set' in done
     assert 'if not "%LCSAS_ANOTHER_SET%"=="0"' in "\n".join(done)
 
@@ -791,7 +803,7 @@ def test_restore_bat_tools_folder_must_be_its_own():
     claim = code.index('call :claim_tools "%TOOLS%"', fresh)
     assert claim < code.index('mkdir "%TOOLS%\\recovery\\scripts" 2>nul', fresh)
     sub = _label_body(content, ":claim_tools")
-    assert any(ln.startswith('2>nul > "%~1\\.lcsas-tools" echo ') for ln in sub), sub
+    assert any(ln.startswith('(2>nul > "%~1\\.lcsas-tools" echo ') for ln in sub), sub
     taken = _label_body(content, ":tools_taken")
     assert any("already holds other files, or a whole drive" in ln for ln in taken)
     assert taken[-1] == "exit /b 1"
@@ -847,7 +859,7 @@ def test_restore_bat_carrying_on_keeps_the_newest_catalog_copy():
     assert 'del /f /q "%CATALOG_COPY%" >nul 2>nul' in code
     assert not [ln for ln in code if ln.startswith('del "%CATALOG_COPY%"')]
     copy = code.index('copy /Y "%CATALOG_PICK%" "%CATALOG_COPY%" >nul 2>nul')
-    assert code[copy + 1] == 'attrib -r "%CATALOG_COPY%" >nul 2>nul'
+    assert code[copy + 1] == 'attrib -r "%CATALOG_COPY%" >nul 2>nul <nul'
 
 
 def test_restore_bat_password_file_goes_even_when_read_only():
@@ -862,7 +874,7 @@ def test_restore_bat_password_file_goes_even_when_read_only():
     assert not [ln for ln in code if 'del "%PWFILE%"' in ln]
     assert len([ln for ln in code if 'del /f /q "%PWFILE%" >nul 2>nul' in ln]) >= 10
     copy = code.index('copy /b /y "!LCSAS_PWFILE!" "%PWFILE%" >nul 2>nul')
-    assert code[copy + 1] == 'attrib -r "%PWFILE%" >nul 2>nul'
+    assert code[copy + 1] == 'attrib -r "%PWFILE%" >nul 2>nul <nul'
     clean = code.index("if defined ANOTHER_PASS goto :temp_cleared")
     assert code[clean + 1:clean + 4] == [
         'del /f /q "%TEMP%\\lcsas-pw-*.txt" >nul 2>nul',
@@ -930,3 +942,29 @@ def test_restore_bat_folder_question_takes_q_and_a_whole_path():
     body = _label_body(content, ":target_quit")
     assert body == [":target_quit", "if defined ANOTHER_PASS goto :all_done",
                     "echo Stopped; nothing was restored.", "pause", "exit /b 65"], body
+
+
+def test_restore_bat_helpers_never_read_the_scripts_input():
+    """Every program that needs no input reads <nul: xcopy, attrib, fc,
+    reg, lcsas-keyshare and the --list-snapshots password check.
+
+    On real Windows xcopy and attrib read the script's own standard
+    input.  With the answers piped in (windows-e2e), the catalog copy's
+    `attrib -r` swallowed every answer after the folder question, and
+    the run ended "No password was given" (77); a probe run on CI
+    showed it.  Wine's xcopy and attrib leave stdin alone, so the wine
+    tests passed; only a static pin can hold this here.
+    """
+    import re
+
+    calls = re.compile(
+        r'(?i)(?:^|[\s(&\'])(?:xcopy|attrib|fc|reg)\s|^"%KS_EXE%"\s|--list-snapshots\b')
+    lines = [
+        ln.strip() for ln in RESTORE_BAT.read_text().splitlines()
+        if ln.strip() and not ln.strip().upper().startswith(("REM", "::"))
+    ]
+    hits = [ln for ln in lines if calls.search(ln) and not ln.startswith("echo")]
+    assert len(hits) >= 13, f"self-check: only {len(hits)} calls found:\n" + "\n".join(hits)
+    missing = [ln for ln in hits
+               if "<nul" not in ln.replace(" ", "") and "^<nul" not in ln]
+    assert not missing, "these read the script's input:\n" + "\n".join(missing)

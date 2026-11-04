@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.recovery_hardening._wine_helpers import stop_wineserver
+from tests.recovery_hardening._wine_helpers import stop_and_remove_prefix, stop_wineserver
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECOVERY = REPO_ROOT / "recovery"
@@ -80,9 +80,11 @@ def _require_working_wineboot() -> None:
 
 @pytest.fixture(autouse=True)
 def _stop_test_wineserver(tmp_path: Path):
-    """Stop this test's wineserver before pytest removes its prefix (#453)."""
+    """Stop this test's wineserver (#453), then delete its prefix: pytest
+    keeps every tmp_path until the session ends (#623, a full CI run ran
+    out of disk)."""
     yield
-    stop_wineserver(tmp_path / "wineprefix")
+    stop_and_remove_prefix(tmp_path / "wineprefix")
 
 
 

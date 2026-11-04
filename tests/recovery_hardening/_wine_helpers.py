@@ -31,3 +31,15 @@ def stop_wineserver(prefix: Path | str, timeout: int = 20) -> None:
         with contextlib.suppress(OSError, subprocess.SubprocessError):
             subprocess.run(["wineserver", flag], env=env,
                            capture_output=True, timeout=timeout)
+
+
+def stop_and_remove_prefix(prefix: Path | str) -> None:
+    """Stop ``prefix``'s wineserver, then delete the prefix (~1.3 GB).
+
+    ``tmp_path_retention_policy = "none"`` deletes nothing while a session
+    runs: pytest clears old base temps only when the NEXT session starts.
+    With one fresh prefix per test, a CI run kept every prefix until the
+    end, and the runner ran out of disk ("No space left on device", #623).
+    """
+    stop_wineserver(prefix)
+    shutil.rmtree(prefix, ignore_errors=True)

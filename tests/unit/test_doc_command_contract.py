@@ -914,6 +914,10 @@ def test_lcsas_commands_in_readme_and_doc_code_blocks_exist() -> None:
 _LABEL_ALLOWLIST: set[tuple[str, str]] = {
     # Quotes, verbatim, the directory name a burn-iso test fixture uses.
     ("docs/workflows/burn-iso-portable.md", "ARCHIVE_TEST_0001"),
+    # Quotes what File Explorer shows for a CD: the 16-character volume
+    # name, the label cut short, which is why restore.bat reads the full
+    # label from VOLUME_INFO.txt (#605).
+    ("recovery/docs/RECOVER_WINDOWS.txt", "LCSAS_CD700_2026"),
 }
 
 

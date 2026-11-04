@@ -47,7 +47,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.recovery_hardening._wine_helpers import stop_wineserver
+from tests.recovery_hardening._wine_helpers import stop_and_remove_prefix, stop_wineserver
 from tests.recovery_hardening.test_restore_bat_wine_smoke import (
     _harden_prefix_drives,
     _init_prefix,
@@ -169,7 +169,7 @@ def wine(tmp_path_factory: pytest.TempPathFactory):
     try:
         yield w
     finally:
-        stop_wineserver(prefix)
+        stop_and_remove_prefix(prefix)
 
 
 @pytest.fixture
@@ -806,9 +806,16 @@ def test_split_password_from_two_of_three_cards(fresh: _Wine, tmp_path: Path) ->
     _assert_restored(wine.drive_c / "photos", photos, out)
     assert not list(wine.temp.glob("lcsas-shares-*")), "share cards left in %TEMP%"
     assert not list(wine.temp.glob("lcsas-pw-*")), "password file left"
-    for word in words[:3]:
-        assert not any(word in p.read_text(errors="replace")
-                       for p in tools.rglob("*.txt")), "a card in the tools folder"
+    # A card kept on disk shows up as its words in a row.  Single share
+    # words are everyday English and turn up in RECOVER_WINDOWS.txt by
+    # chance (the cards are new every run), so look for three in a row,
+    # from both typed cards, in every file of the tools folder.
+    runs = {" ".join(card.split()[i:i + 3])
+            for card in (photos.shares[0], photos.shares[2])
+            for i in range(len(card.split()) - 2)}
+    for f in (q for q in tools.rglob("*") if q.is_file()):
+        text = f.read_text(errors="replace")
+        assert not [r for r in runs if r in text], f"a card in the tools folder: {f}"
 
 
 def test_shares_dir_rebuilds_the_password_without_questions(
