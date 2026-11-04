@@ -230,10 +230,9 @@ def _drive(world, name: str, extra_env: dict[str, str],
             if len(ends) <= prompts:
                 continue
             prompts = len(ends)
-            m = None
-            for m in PACK_RE.finditer(text[: ends[-1].end()]):
-                pass
-            answer = on_prompt(m.group(1) if m else None) if prompts <= 4 else b"q\n"
+            asked = PACK_RE.findall(text[: ends[-1].end()])
+            pack = asked[-1] if asked else None
+            answer = on_prompt(pack) if prompts <= 4 else b"q\n"
             assert proc.stdin is not None
             proc.stdin.write(answer)
             proc.stdin.flush()
