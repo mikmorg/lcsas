@@ -226,13 +226,17 @@ def test_restore_bat_relaunch_removes_the_copy_and_keeps_its_exit_code():
     goes only when the restore finished, which the copy marks with
     TOOLS\\.done.  A stopped restore keeps it for "Resume LCSAS
     restore.bat".  The `if` is in parentheses: bare, it would take the
-    `& cmd /c exit` after it as part of its own command."""
+    `& cmd /c exit` after it as part of its own command.
+
+    Updated (B2 review): and only when the folder is the restore's own,
+    with .lcsas-tools in it (the check at the start refuses any other)."""
     line = _code_lines(_relocation_block(RESTORE_BAT.read_text()))[-1]
     cmds = [c.strip() for c in line.split(" & ")]
     call = cmds.index('call "%TOOLS%\\recovery\\scripts\\restore.bat" %*')
     assert cmds[call + 1:] == [
         'call set "LCSAS_RC=%%ERRORLEVEL%%"',
-        '(if exist "%TOOLS%\\.done" rmdir /s /q "%TOOLS%") 2>nul',
+        '(if exist "%TOOLS%\\.done" if exist "%TOOLS%\\.lcsas-tools" '
+        'rmdir /s /q "%TOOLS%") 2>nul',
         "cmd /c exit %%LCSAS_RC%%",
     ], cmds
 
@@ -332,7 +336,8 @@ def test_restore_bat_stops_without_tier2_for_a_metadata_only_set():
     label = code.index(":tier1_stopped")
     assert label > code.index(":wrong_password"), "must sit at top level, after the exits"
     body = code[label:]
-    assert 'del "%PWFILE%" 2>nul' in body
+    # Updated (B2 review): /f, as for every delete of the password file.
+    assert 'del /f /q "%PWFILE%" >nul 2>nul' in body
     assert body[-1] == "exit /b %RC%", body
 
 
@@ -347,8 +352,12 @@ def test_restore_bat_target_cannot_end_in_a_backslash():
     test_restore_bat_wine_smoke.py::test_whole_drive_target_is_asked_again."""
     code = _code(RESTORE_BAT.read_text())
     ask = code.index('set /p "TARGET=Restore to which folder? [%DEFAULT_TARGET%]: "')
-    assert code[ask - 2:ask] == [":ask_target", 'set "TARGET="']
-    after = code[ask:ask + 16]
+    # Updated (B2 review): the line that says Q quits comes first.
+    assert code[ask - 3:ask] == [
+        ":ask_target",
+        "echo Type a folder, or ENTER for the one in brackets; Q then ENTER quits.",
+        'set "TARGET="']
+    after = code[ask:ask + 20]
     assert 'if defined TARGET set "TARGET=!TARGET:"=!"' in after
     assert 'set "TARGET=!TARGET:~0,-1!"' in after
     drive = after.index('if "!TARGET:~-1!"==":" (')
@@ -468,12 +477,25 @@ def test_restore_bat_reuses_or_replaces_the_tools_folder():
     code = _code_lines(block)
     reuse = code.index('fc /b "%~f0" "%TOOLS%\\recovery\\scripts\\restore.bat" >nul 2>nul')
     assert code[reuse + 1] == "if errorlevel 1 goto :tools_fresh"
+    # Updated (B2 review): and only a folder copied from this very META
+    # disc -- its volume_info.json "created_at", kept in archive.txt.
+    # Functional proof (wine, whose fc says "same" for any two files):
+    # test_restore_bat_journey_wine.py::
+    # test_tools_folder_from_another_meta_disc_is_replaced.
+    assert code[reuse + 2:reuse + 6] == [
+        "call :archive_id",
+        'set "OLD_ARCHIVE="',
+        'if exist "%TOOLS%\\archive.txt" for /f "usebackq delims=" %%A in '
+        '("%TOOLS%\\archive.txt") do if not defined OLD_ARCHIVE '
+        'set "OLD_ARCHIVE=%%A"',
+        'if not "!OLD_ARCHIVE!"=="!ARCHIVE_ID!" goto :tools_fresh',
+    ], code[reuse + 2:reuse + 6]
     # Reused: a set on this META disc that the copy lacks goes in (#605),
     # then the relaunch.  Nothing else.
     relaunch = code.index("goto :relaunch", reuse)
-    assert code[reuse + 2].startswith(
+    assert code[reuse + 6].startswith(
         "echo [lcsas-restore] using the recovery files already copied")
-    added = code[reuse + 3:relaunch]
+    added = code[reuse + 7:relaunch]
     assert added[0].startswith("if defined META_SRC for /f ") and added[0].endswith(
         " do ("), added
     assert [ln for ln in added if "xcopy" in ln] == [
@@ -485,10 +507,20 @@ def test_restore_bat_reuses_or_replaces_the_tools_folder():
     keep = [ln for ln in code[fresh:] if ln.startswith(same_exe)]
     assert len(keep) == 1, code[fresh:]
     # Never a recursive delete of the folder itself before the restore.
-    for ln in code:
-        assert 'rmdir /s /q "%TOOLS%"' not in ln or ln.startswith("(goto) 2>nul"), ln
-    # A folder named in LCSAS_TOOLS_DIR that holds other files is refused.
-    assert any("goto :tools_taken" in ln for ln in code)
+    # Updated (B2 review): in the whole script, the only recursive deletes
+    # of a tools folder are the relaunch line's (after .done, and only of
+    # a folder with .lcsas-tools in it) and TOOLS\\in-place's at the end
+    # of a run that did not relocate.
+    whole = _code(RESTORE_BAT.read_text())
+    for ln in whole:
+        for name in ('"%TOOLS%"', '"!TOOLS!"', '"%TOOLS_TOP%"', '"!TOOLS_TOP!"'):
+            if f"rmdir /s /q {name}" in ln:
+                assert ln.startswith("(goto) 2>nul") or ln == (
+                    'if /i "!TOOLS!"=="!TOOLS_TOP!\\in-place" '
+                    'rmdir /s /q "!TOOLS!" 2>nul'), ln
+    # A folder that is not the restore's own is refused (see
+    # test_restore_bat_tools_folder_must_be_its_own).
+    assert any("goto :tools_taken" in ln for ln in whole)
 
 
 def test_restore_bat_tools_folder_default_and_override():
@@ -593,7 +625,9 @@ def test_restore_bat_resume_launcher_ends_itself_before_the_restore():
         'call "%TOOLS%\\recovery\\scripts\\restore.bat" --resume',
         'call set "LCSAS_RC=%%ERRORLEVEL%%"',
         '(if exist "%TOOLS%\\.done" del /f /q "%~f0") 2>nul',
-        '(if exist "%TOOLS%\\.done" rmdir /s /q "%TOOLS%") 2>nul',
+        # Updated (B2 review): only a folder with .lcsas-tools in it.
+        '(if exist "%TOOLS%\\.done" if exist "%TOOLS%\\.lcsas-tools" '
+        'rmdir /s /q "%TOOLS%") 2>nul',
         "cmd /c exit %%LCSAS_RC%%",
     ], cmds
     # The script deletes the Desktop copy itself on rc 0 (it may be the
@@ -723,3 +757,176 @@ def test_restore_bat_c4_variables_are_documented():
                 "LCSAS_ANOTHER_SET"):
         assert var in content, var
         assert f"\n{var}\n" in env_doc, f"{var} has no entry in ENV_VARS.txt"
+
+
+def test_restore_bat_tools_folder_must_be_its_own():
+    """C4/C6 (B2 review): the tools folder is deleted once a restore has
+    finished, so restore.bat refuses, before anything in it changes, a
+    whole drive and any folder that holds files but no .lcsas-tools --
+    for runs that relocate AND runs that do not.  The check used to run
+    only for LCSAS_TOOLS_DIR, only on the relocation path, and only when
+    the folder held no recovery\\ or pack-cache\\.  Functional proof:
+    test_restore_bat_journey_wine.py::test_tools_folder_must_be_the_restores_own."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    start = code.index("if defined LCSAS_RELOCATED goto :tools_owned")
+    assert code[start:start + 9] == [
+        "if defined LCSAS_RELOCATED goto :tools_owned",
+        "if defined RESUME goto :tools_owned",
+        'if /i "%~1"=="--check-disc" goto :tools_owned',
+        'if "%TOOLS:~-1%"==":" goto :tools_taken',
+        'if not exist "%TOOLS%\\" goto :tools_owned',
+        'if exist "%TOOLS%\\.lcsas-tools" goto :tools_owned',
+        'dir /b /a "%TOOLS%" 2>nul | findstr "." >nul',
+        "if not errorlevel 1 goto :tools_taken",
+        ":tools_owned",
+    ], code[start:start + 9]
+    # Before anything is deleted in TOOLS, and before the relocation.
+    assert start > code.index(':tools_known')
+    assert start < code.index('del /f /q "%TOOLS%\\.done" >nul 2>nul')
+    assert start < code.index("if defined LCSAS_RELOCATED goto :after_relocate")
+    assert not any("LCSAS_TOOLS_DIR" in ln and "tools_taken" in ln for ln in code)
+    # The copy marks the folder as the restore's own before it fills it.
+    fresh = code.index(":tools_cleared")
+    claim = code.index('call :claim_tools "%TOOLS%"', fresh)
+    assert claim < code.index('mkdir "%TOOLS%\\recovery\\scripts" 2>nul', fresh)
+    sub = _label_body(content, ":claim_tools")
+    assert any(ln.startswith('2>nul > "%~1\\.lcsas-tools" echo ') for ln in sub), sub
+    taken = _label_body(content, ":tools_taken")
+    assert any("already holds other files, or a whole drive" in ln for ln in taken)
+    assert taken[-1] == "exit /b 1"
+
+
+def test_restore_bat_runs_that_do_not_relocate_use_in_place():
+    """#609 (B2 review): a run that does not relocate (a META copy that
+    can be written to, LCSAS_NO_RELOCATE=1) keeps its pack cache, catalog
+    copy and merged metadata in TOOLS\\in-place.  In TOOLS itself it
+    deleted a stopped restore's metadata\\, pack cache and catalog copy,
+    so "Resume LCSAS restore.bat" then found no backup set."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    top = code.index('set "TOOLS_TOP=%TOOLS%"')
+    assert code[top + 1] == 'if not defined LCSAS_RELOCATED set "TOOLS=%TOOLS%\\in-place"'
+    assert code.index('if /i "%~1"=="--check-disc" (') < top < code.index(":meta_known")
+    # Made before the first file goes in.
+    assert code.index("call :use_tools") < code.index('set "CACHE_OK="')
+    merge = _label_body(content, ":merge_fresh")
+    assert merge.index("call :use_tools") < merge.index(
+        'if exist "%TOOLS%\\metadata\\" rmdir /s /q "%TOOLS%\\metadata" 2>nul')
+    assert not any('"%DISC_ROOT_S%"=="%TOOLS%\\"' in ln for ln in merge)
+    done = _label_body(content, ":restore_done")
+    i = done.index(":all_done_in_place")
+    assert done[i + 1:i + 5] == [
+        'if /i "!TOOLS!"=="!TOOLS_TOP!\\in-place" rmdir /s /q "!TOOLS!" 2>nul',
+        'del /f /q "!TOOLS_TOP!\\.lcsas-tools" >nul 2>nul',
+        'rmdir "!TOOLS_TOP!" >nul 2>nul',
+        'if exist "!TOOLS_TOP!\\" call :claim_tools "%TOOLS_TOP%"',
+    ], done[i:]
+
+
+def test_restore_bat_carrying_on_keeps_the_newest_catalog_copy():
+    """#609/#605 (B2 review): a restore that carries on (or a tools folder
+    that read the newest data disc before, merged-from.txt) keeps the
+    catalog copy in TOOLS -- the newest data disc's -- instead of copying
+    whatever disc is in a drive over it: an older disc's catalog has no
+    record of the packs burned after it.  The copy is deleted with /f: a
+    copy from a disc is read-only.  Functional proof:
+    test_restore_bat_journey_wine.py::
+    test_three_discs_one_drive_carry_on_keeps_the_newest_catalog."""
+    code = _code(RESTORE_BAT.read_text())
+    newest = code.index('set "CATALOG_PICK=!NEWEST_ROOT!catalog.db"')
+    keep = code.index(":catalog_not_newest")
+    scan = code.index(":catalog_scan")
+    assert newest < keep < scan < code.index(":catalog_picked")
+    assert code[keep + 1:scan] == [
+        'if not exist "%CATALOG_COPY%" goto :catalog_scan',
+        'set "CATALOG_PICK=%CATALOG_COPY%"',
+        "if defined RESUME goto :catalog_picked",
+        'if exist "%TOOLS%\\merged-from.txt" goto :catalog_picked',
+    ], code[keep:scan]
+    assert 'del /f /q "%CATALOG_COPY%" >nul 2>nul' in code
+    assert not [ln for ln in code if ln.startswith('del "%CATALOG_COPY%"')]
+    copy = code.index('copy /Y "%CATALOG_PICK%" "%CATALOG_COPY%" >nul 2>nul')
+    assert code[copy + 1] == 'attrib -r "%CATALOG_COPY%" >nul 2>nul'
+
+
+def test_restore_bat_password_file_goes_even_when_read_only():
+    """#608 (B2 review): `copy` keeps a read-only mark, so a copy of a
+    read-only LCSAS_PWFILE could not be deleted by plain `del` nor
+    replaced by `> "%PWFILE%" echo`: the wrong password was tried again
+    and again, and a right one stayed in %TEMP%.  Every delete of the
+    password file is /f, and the mark comes off the copy.  A window
+    closed mid-restore left the file there for good: the first pass
+    removes every lcsas-pw-*.txt and lcsas-shares-* in %TEMP%."""
+    code = _code(RESTORE_BAT.read_text())
+    assert not [ln for ln in code if 'del "%PWFILE%"' in ln]
+    assert len([ln for ln in code if 'del /f /q "%PWFILE%" >nul 2>nul' in ln]) >= 10
+    copy = code.index('copy /b /y "!LCSAS_PWFILE!" "%PWFILE%" >nul 2>nul')
+    assert code[copy + 1] == 'attrib -r "%PWFILE%" >nul 2>nul'
+    clean = code.index("if defined ANOTHER_PASS goto :temp_cleared")
+    assert code[clean + 1:clean + 4] == [
+        'del /f /q "%TEMP%\\lcsas-pw-*.txt" >nul 2>nul',
+        "for /f \"delims=\" %%D in ('dir /ad /b \"%TEMP%\\lcsas-shares-*\" 2^>nul') "
+        'do rmdir /s /q "%TEMP%\\%%D" 2>nul',
+        ":temp_cleared",
+    ]
+    assert code[clean + 4].startswith('set "PWFILE=%TEMP%\\lcsas-pw-')
+
+
+def test_restore_bat_disc_text_never_breaks_out_of_quotes():
+    """#605/#606 (B2 review): a disc's label and a marker's name_cmd=,
+    split= and split_id= are text from a disc, and were put in lines with
+    %...% inside quotes: a '"' in them ended the quotes and the rest of
+    the line ran.  Every such value has its quotes made "#" with delayed
+    expansion (which never reads the text again) before any %...% use,
+    and a label is kept only when it is [A-Za-z0-9_].  Functional proof:
+    test_restore_bat_journey_wine.py::test_disc_text_with_a_quote_is_never_run."""
+    content = RESTORE_BAT.read_text()
+    read = _label_body(content, ":read_label")
+    assert read[-2:] == ["call :label_ok", "goto :eof"], read
+    ok = _label_body(content, ":label_ok")
+    q = ok.index('set "_T=!RL_LABEL:"=#!"')
+    check = [i for i, ln in enumerate(ok) if '%%x in ("x%_T%") do set "RL_LABEL="' in ln]
+    assert check and check[0] == q + 1, ok
+    assert "delims=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_" in ok[q + 1]
+    code = _code(content)
+    assert 'set "PL_REST=!RL_LABEL!"' in code
+    assert 'set "NEWEST_LABEL=!RL_LABEL!"' in code
+    assert not [ln for ln in code if "%RL_LABEL%" in ln or "%MF_LABEL%" in ln]
+    mf = code.index('set "RL_LABEL=!MF_LABEL!"')
+    assert code[mf + 1:mf + 3] == ["call :label_ok", "call :parse_label"]
+    marker = code[code.index(":read_marker"):code.index(":marker_nosplit")]
+    nc = marker.index('set "_T=!MK_NC: =!"')
+    assert marker[nc + 1] == 'set "_T=!_T:"=#!"' and '("x%_T%")' in marker[nc + 2]
+    sp = marker.index('set "_T=!MK_SPLIT:-of-= !"')
+    assert marker[sp + 1] == 'set "_T=!_T:"=#!"' and '("%_T%")' in marker[sp + 2]
+    sid = marker.index('if defined MK_SID set "MK_SID=!MK_SID:"=#!"')
+    assert sid < marker.index('call :to_number "%MK_SID%" MK_SID_OK')
+    # The banner: the set's folder (a name on a disc) never with %...%.
+    assert "echo Repo:          !REPO!" in code
+    assert not [ln for ln in code if ln.startswith("echo") and "%REPO%" in ln]
+
+
+def test_restore_bat_folder_question_takes_q_and_a_whole_path():
+    """#615 (B2 review): Q at the folder question quits (65, or "no
+    more" after a set was restored), as at every other question: "q" used
+    to become the folder C:\\q.  A folder with no drive is asked again.
+    Functional proof: test_restore_bat_journey_wine.py::
+    test_folder_question_takes_q_and_wants_a_whole_path."""
+    content = RESTORE_BAT.read_text()
+    code = _code(content)
+    ask = code.index('set /p "TARGET=Restore to which folder? [%DEFAULT_TARGET%]: "')
+    assert code[ask + 1] == 'if /i "!TARGET!"=="q" goto :target_quit'
+    chosen = code.index(":target_chosen", ask)
+    assert code[chosen - 7:chosen] == [
+        'if "!TARGET:~1,1!"==":" goto :target_chosen',
+        'if "!TARGET:~0,2!"=="\\\\" goto :target_chosen',
+        "echo.",
+        "echo  !TARGET! is not a whole path.  Type the folder with its drive,",
+        "echo  for example C:\\restored",
+        "echo.",
+        "goto :ask_target",
+    ], code[chosen - 7:chosen]
+    body = _label_body(content, ":target_quit")
+    assert body == [":target_quit", "if defined ANOTHER_PASS goto :all_done",
+                    "echo Stopped; nothing was restored.", "pause", "exit /b 65"], body

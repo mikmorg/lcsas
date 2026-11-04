@@ -302,11 +302,13 @@ def _write_disc(disc: Path, label: str, sets: list[_Set],
         json.dumps({"uuid": volume.uuid, "label": label}, indent=2))
 
 
-def _write_meta(meta: Path, sets: list[_Set]) -> None:
+def _write_meta(meta: Path, sets: list[_Set],
+                created_at: str = "2026-09-01T10:00:00.000000+00:00") -> None:
     """The META disc: both copies of restore.bat, restore.sh (tier 1
     checks it to see the META disc is in), this computer's programs, the
     guide, and the metadata of the sets that existed when it was burned.
-    No catalog, no label."""
+    No catalog, no label.  Its volume_info.json says when it was made,
+    on a line of its own, as the META builder writes it."""
     from datetime import UTC, datetime
 
     from lcsas.meta.builder import render_meta_volume_info_txt
@@ -325,7 +327,8 @@ def _write_meta(meta: Path, sets: list[_Set]) -> None:
                  meta / "recovery" / "docs" / "RECOVER_WINDOWS.txt")
     for s in sets:
         _put_set(meta, s)
-    (meta / "volume_info.json").write_text(json.dumps({"type": "meta"}))
+    (meta / "volume_info.json").write_text(json.dumps(
+        {"type": "meta", "created_at": created_at}, indent=2))
     (meta / "VOLUME_INFO.txt").write_text(
         render_meta_volume_info_txt(datetime(2026, 9, 1, tzinfo=UTC)))
 
@@ -351,10 +354,12 @@ def _catalog(path: Path, disc_a: list[_Set], disc_b: list[_Set] | None,
 
 def _tools_folder(wine: _Wine, archive: _Archive, name: str) -> Path:
     """The tools folder as the copy from the META disc lays it out:
-    restore.bat, this computer's programs, the guide, the META disc's
-    metadata.  It runs as the relaunch line starts it (LCSAS_RELOCATED)."""
+    .lcsas-tools (the folder is the restore's own), restore.bat, this
+    computer's programs, the guide, the META disc's metadata.  It runs as
+    the relaunch line starts it (LCSAS_RELOCATED)."""
     tools = wine.drive_c / name
     (tools / "recovery" / "scripts").mkdir(parents=True)
+    (tools / ".lcsas-tools").write_text("made by the test\r\n")
     shutil.copy2(RESTORE_BAT, tools / "recovery" / "scripts" / "restore.bat")
     shutil.copytree(archive.meta / "recovery" / "bin",
                     tools / "recovery" / "bin")
@@ -902,3 +907,541 @@ def test_another_set_then_the_tools_folder_goes(fresh: _Wine, tmp_path: Path) ->
     assert out.count("Restore complete") == 2, out
     assert (tools / ".done").is_file(), "no .done after 'no'"
     assert not (tools / "pack-cache").exists(), "pack cache left after 'no'"
+
+
+# --------------------------------------------------------------------
+# Review fixes: carrying on, the tools folder, disc text, the questions
+# --------------------------------------------------------------------
+
+LABEL_C = "LCSAS_TEST_2026_0003"
+LAUNCHER = "Resume LCSAS restore.bat"
+BOX_END = re.compile(r"\+-{58}\+\r?\n> ")
+PACK_RE = re.compile(r"\| Pack ([0-9a-f]{16})\.\.\.")
+ANY_LABEL = re.compile(r"LCSAS_TEST_\d{4}_\d{4}")
+
+
+def _catalog_of(path: Path, s: _Set, discs: list[tuple[str, list[Path]]]) -> Path:
+    """A catalog naming the packs on each of ``discs``, as burned on the
+    last of them."""
+    import sqlite3
+
+    from lcsas.db import schema as db_schema
+    from lcsas.db.packs import register_pack
+    from lcsas.db.volume_packs import bulk_link_packs
+    from lcsas.db.volumes import create_volume
+
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    db_schema.create_all(conn)
+    conn.execute("INSERT OR IGNORE INTO repositories (repo_id, name, mirror_path)"
+                 " VALUES (?, ?, ?)", (s.repo_id, s.name, "/srv/backup"))
+    conn.commit()
+    for label, packs in discs:
+        regs = [register_pack(conn, p.name, p.stat().st_size, s.repo_id)
+                for p in packs]
+        vol = create_volume(conn, label=label, uuid=f"uuid-{label}",
+                            media_type="BD25", capacity_bytes=26843545600,
+                            status="VERIFIED", commit=False)
+        bulk_link_packs(conn, vol.volume_id, [p.pack_id for p in regs],
+                        commit=False)
+    conn.commit()
+    conn.close()
+    return path
+
+
+def _answer_boxes(wine: _Wine, run: _Run, holder: dict[str, Path],
+                  quit_at: int | None = None) -> list[str]:
+    """Tier 1's disc prompts, once the password is in: at each, the disc
+    holding the named pack goes into D: (the one drive) and ENTER is
+    pressed; at prompt ``quit_at``, q.  Returns each prompt's text."""
+    boxes: list[str] = []
+    while True:
+        while time.monotonic() < run.deadline:
+            text = run.text
+            if (len(BOX_END.findall(text)) > len(boxes)
+                    or "Press any key" in text[run.pos:]
+                    or run.proc.poll() is not None):
+                break
+            time.sleep(0.2)
+        text = run.text
+        ends = [m.end() for m in BOX_END.finditer(text)]
+        if len(ends) <= len(boxes):
+            return boxes
+        end = ends[len(boxes)]
+        boxes.append(text[text.rfind("| Pack ", 0, end):end])
+        if len(boxes) == quit_at or len(boxes) > 6:
+            run.send("q")
+            continue
+        m = PACK_RE.search(boxes[-1])
+        disc = holder.get(m.group(1)) if m else None
+        if disc is not None:
+            _map_drive(wine.prefix, "d", disc)  # eject, insert: same letter
+        run.send("")
+
+
+def _replay_launcher(wine: _Wine, launcher: Path) -> str:
+    """The launcher as wine can run it: its (goto) line without the
+    `(goto) 2>nul & ` that wine cannot run, every other line as it is."""
+    lines = launcher.read_bytes().decode().split("\r\n")
+    goto = [i for i, ln in enumerate(lines) if ln.startswith("(goto) 2>nul & ")]
+    assert len(goto) == 1, lines
+    lines[goto[0]] = lines[goto[0]][len("(goto) 2>nul & "):]
+    (wine.drive_c / "resume-replay.bat").write_bytes("\r\n".join(lines).encode())
+    return "C:\\resume-replay.bat"
+
+
+def _quick(wine: _Wine, cmd: str, env: dict[str, str]) -> tuple[int, str]:
+    """A run that should end at the start: two ENTERs as its whole input
+    (wine's set /p takes all of it at the first question)."""
+    res = subprocess.run(["wine", "cmd", "/c", cmd], env={**wine.env, **env},
+                         cwd=str(wine.drive_c), input=b"\n\n",
+                         capture_output=True, timeout=DEADLINE_S)
+    return res.returncode, (res.stdout + res.stderr).decode("utf-8", "replace")
+
+
+def _snapshot(root: Path) -> dict[str, bytes]:
+    return {p.relative_to(root).as_posix(): p.read_bytes()
+            for p in root.rglob("*") if p.is_file()}
+
+
+def test_three_discs_one_drive_carry_on_keeps_the_newest_catalog(
+    fresh: _Wine, tmp_path: Path,
+) -> None:
+    """The one-drive journey with THREE data discs (#605, #609, #617):
+    the newest-disc step reads disc 3, q at the first disc prompt stops
+    the restore (75), and "Resume LCSAS restore.bat" carries it on with
+    the OLDEST disc already in the drive.
+
+    The run that carries on must keep the catalog copy taken from disc 3.
+    It used to copy the catalog of whatever disc was in a drive over it:
+    disc 1's, which has no record of disc 2's packs, so the prompt for
+    disc 2 named no disc (F9 again).  Here every prompt names its disc.
+
+    The discs are read-only, as discs are.  A .done that an earlier run
+    could not delete is in the tools folder at the start: it must not
+    outlive the stop, or the folder would go with it."""
+    wine = fresh
+    docs = _docs()
+    docs.files = {f"part-{i}.bin": bytes([65 + i]) * 2500 for i in range(6)}
+    sys.path.insert(0, str(RECOVERY / "tests"))
+    import test_e2e
+    docs.repo = tmp_path / f"repo-{docs.repo_id}"
+    test_e2e.build_repo(docs.repo, docs.password, docs.files, split_packs=3)
+    packs = _packs(docs)
+    assert len(packs) == 3, packs
+    labels = (LABEL_A, LABEL_B, LABEL_C)
+    discs: dict[str, Path] = {}
+    catalogs: dict[str, Path] = {}
+    for i, label in enumerate(labels):
+        cat = _catalog_of(tmp_path / f"cat-{i}.db", docs,
+                          [(lb, [packs[j]]) for j, lb in enumerate(labels[:i + 1])])
+        stamp = 1_790_000_000 + i * 86_400  # each disc burned a day later
+        os.utime(cat, (stamp, stamp))
+        disc = tmp_path / f"disc_{i}"
+        _write_disc(disc, label, [docs], [docs], cat, only={packs[i].name})
+        discs[label] = disc
+        catalogs[label] = cat
+    holder = {p.name[:16]: discs[lb] for p, lb in zip(packs, labels, strict=True)}
+    meta = tmp_path / "meta"
+    _write_meta(meta, [docs])
+    tools = _tools_folder(wine, _Archive(meta, discs, [docs]), "lcsas-three")
+    tools_win = "C:\\lcsas-three"
+    (tools / ".done").write_text("")
+    for root in (meta, *discs.values()):
+        _make_read_only(root)
+    try:
+        # --- 1. the step reads disc 3; q at the first disc prompt --------
+        _map_drive(wine.prefix, "d", meta)
+        run = _Run(wine, f"{tools_win}\\recovery\\scripts\\restore.bat",
+                   {"LCSAS_RELOCATED": "D:\\"})
+        try:
+            run.expect("Newest data disc: ")
+            _map_drive(wine.prefix, "d", discs[LABEL_C])
+            run.send("")
+            run.answer("Restore to which folder?", "C:\\three")
+            run.answer("Password: ", docs.password)
+            first = _answer_boxes(wine, run, holder, quit_at=1)
+        finally:
+            rc = run.finish()
+        out = run.text
+        _assert_clean(out)
+        assert rc == 75, f"rc={rc}\n{out}"
+        assert f"newest data disc: {LABEL_C} in drive D:" in out, out
+        assert len(first) == 1 and ANY_LABEL.search(first[0]), first
+        assert (tools / "catalog.db").read_bytes() == catalogs[LABEL_C].read_bytes()
+        assert not (tools / ".done").exists(), "a stale .done outlived the stop"
+        assert (tools / "resume.cfg").is_file(), out
+        assert (wine.desktop / LAUNCHER).is_file(), out
+
+        # --- 2. carry on, with the OLDEST disc in the drive ---------------
+        _map_drive(wine.prefix, "d", discs[LABEL_A])
+        run = _Run(wine, _replay_launcher(wine, wine.desktop / LAUNCHER))
+        try:
+            before = run.answer("Password: ", docs.password)
+            boxes = _answer_boxes(wine, run, holder)
+        finally:
+            rc = run.finish()
+        out = run.text
+        _assert_clean(out)
+        assert rc == 0, f"rc={rc}\n{out}"
+        assert "Carrying on the restore into:" in before, before
+        assert f"using the catalog copy in {tools_win}" in before, before
+        assert "using catalog D:\\catalog.db" not in before, before
+        assert boxes, f"no disc prompt: disc 2 was never asked for\n{out}"
+        for box in boxes:
+            assert LABEL_B in box and "no record" not in box, box
+        _assert_restored(wine.drive_c / "three", docs, out)
+        assert not tools.exists(), f"tools folder left: {_files(tools)}"
+        assert not (wine.desktop / LAUNCHER).exists(), "Desktop launcher left"
+    finally:
+        for root in (meta, *discs.values()):
+            _make_writable(root)
+
+
+def test_tools_folder_must_be_the_restores_own(fresh: _Wine, tmp_path: Path) -> None:
+    """#609 (C4, C6): the tools folder is deleted once a restore has
+    finished, so restore.bat uses only a folder that is new, empty or its
+    own (.lcsas-tools).  It used to check only a folder LCSAS_TOOLS_DIR
+    named, only on the copy from a disc, and only when it held no
+    recovery\\ or pack-cache\\: a META disc copied to a USB stick and named
+    there had its recovery\\ and metadata\\ deleted.
+
+    1. LCSAS_TOOLS_DIR names a META copy with the reader's own file in
+       it: refused (exit 1), nothing in it changed.
+    2. The same folder with LCSAS_NO_RELOCATE=1 (no copy at all).
+    3. LCSAS_TOOLS_DIR=F:\\, a whole drive.
+    4. A run that does not relocate, while a stopped restore waits in the
+       usual tools folder: it restores using TOOLS\\in-place, and every
+       file of the stopped restore is still there afterwards."""
+    wine = fresh
+    docs = _docs()
+    _build_set(tmp_path, docs)
+    meta = tmp_path / "meta"
+    _write_meta(meta, [docs])
+    disc_b = tmp_path / "disc_b"
+    _write_disc(disc_b, LABEL_B, [docs], [docs],
+                _catalog(tmp_path / "cat.db", [docs], None))
+    usb = wine.drive_c / "usb-meta"
+    (usb / "recovery" / "scripts").mkdir(parents=True)
+    shutil.copy2(RESTORE_BAT, usb / "recovery" / "scripts" / "restore.bat")
+    (usb / "metadata" / docs.repo_id).mkdir(parents=True)
+    (usb / "metadata" / docs.repo_id / "keep.txt").write_text("the reader's\n")
+    (usb / "my notes.txt").write_text("keep me\n")
+    usb_before = _snapshot(usb)
+    root_f = tmp_path / "drive_f"
+    (root_f / "recovery").mkdir(parents=True)
+    (root_f / "recovery" / "notes.txt").write_text("on the stick\n")
+    tools = wine.user_dir / "AppData" / "Local" / "LCSAS-restore"
+    tools_win = f"C:\\users\\{wine.user}\\AppData\\Local\\LCSAS-restore"
+    _make_read_only(meta)
+    try:
+        _map_drive(wine.prefix, "d", meta)
+        _map_drive(wine.prefix, "f", root_f)
+        quick = {"LCSAS_NEWEST_DISC_PROMPT": "0", "LCSAS_PASSWORD": "x"}
+        for n, env in enumerate((
+            {"LCSAS_TOOLS_DIR": "C:\\usb-meta"},
+            {"LCSAS_TOOLS_DIR": "C:\\usb-meta", "LCSAS_NO_RELOCATE": "1"},
+            {"LCSAS_TOOLS_DIR": "F:\\"},
+        ), 1):
+            rc, out = _quick(wine, "D:\\restore.bat", {**quick, **env})
+            assert rc == 1, f"case {n}: rc={rc}\n{out}"
+            assert "a folder that already holds other files, or a whole drive" in out, (
+                f"case {n}:\n{out}")
+            assert "Restore to which folder?" not in out, f"case {n}:\n{out}"
+            assert _snapshot(usb) == usb_before, f"case {n}: the USB copy changed"
+            assert (root_f / "recovery" / "notes.txt").is_file(), f"case {n}"
+
+        # --- 4. a stopped restore waits in the usual tools folder ---------
+        (tools / "metadata" / docs.repo_id).mkdir(parents=True)
+        (tools / "metadata" / docs.repo_id / "keep.txt").write_text("stopped\n")
+        (tools / "pack-cache" / "ab").mkdir(parents=True)
+        (tools / "pack-cache" / "ab" / "abcd.pack").write_bytes(b"cached")
+        (tools / "catalog.db").write_bytes(b"the stopped run's catalog")
+        (tools / "resume.cfg").write_text(
+            f"set={docs.repo_id}\r\ntarget=C:\\stopped\r\nmeta=D:\\\r\nletters= D\r\n")
+        (tools / ".lcsas-tools").write_text("made by restore.bat\r\n")
+        stopped = _snapshot(tools)
+        _map_drive(wine.prefix, "e", disc_b)
+        run = _Run(wine, "D:\\recovery\\scripts\\restore.bat", {
+            "LCSAS_NO_RELOCATE": "1", "LCSAS_PASSWORD": docs.password,
+            "LCSAS_ANOTHER_SET": "0"})
+        try:
+            run.answer("Restore to which folder?", "C:\\docs-here")
+            run.expect("Restore complete")
+        finally:
+            rc = run.finish()
+        out = run.text
+        _assert_clean(out)
+        assert rc == 0, f"rc={rc}\n{out}"
+        assert f"using catalog E:\\catalog.db (a copy in {tools_win}\\in-place)" in out, out
+        _assert_restored(wine.drive_c / "docs-here", docs, out)
+        after = _snapshot(tools)
+        # .lcsas-tools is written again when the folder stays: by name.
+        assert after.pop(".lcsas-tools", None) is not None, _files(tools)
+        stopped.pop(".lcsas-tools")
+        assert after == stopped, "the stopped restore's files changed"
+        assert not (tools / "in-place").exists(), _files(tools)
+    finally:
+        _make_writable(meta)
+
+
+def test_disc_text_with_a_quote_is_never_run(fresh: _Wine, tmp_path: Path) -> None:
+    """The label in a disc's VOLUME_INFO.txt, and the name_cmd=, split=
+    and split_id= lines of a set's LCSAS_REPO.txt, are text from a disc.
+    restore.bat put them in lines with %...%, in quotes: a '"' in them
+    ended the quotes there, and the rest of the line ran (#605, #606).
+    LCSAS writes none of them with a quote; a disc made by hand can.
+    Here each one carries a command that would leave a file in C:\\.
+    None runs, the disc counts as one with no label, and its sets show
+    by their ids or by a name_cmd that is clean."""
+    wine = fresh
+    docs = _docs()
+    _build_set(tmp_path, docs)
+    meta = tmp_path / "meta"
+    _write_meta(meta, [docs])
+    odd = tmp_path / "odd_disc"
+    (odd / "data" / "00").mkdir(parents=True)
+    (odd / "VOLUME_INFO.txt").write_text(
+        "LCSAS VOLUME INFORMATION\n"
+        '  Label:         X"&echo INJ>C:\\inj_label.txt&rem "\n')
+    (odd / "volume_info.json").write_text(json.dumps({"uuid": "u-odd"}))
+    odd_one = "b8e1f0a2-7c3d-4e59-a6b4-1d2c3e4f5a6b"
+    odd_two = "c9f2a1b3-8d4e-4f6a-b7c5-2e3d4f5a6b7c"
+    markers = {
+        odd_one: ('name=Odd one\n'
+                  'name_cmd=Odd"&echo INJ>C:\\inj_nc.txt&rem "\n'
+                  "split=2-of-3\n"
+                  'split_id=1"&echo INJ>C:\\inj_sid.txt&rem "\n'),
+        odd_two: ("name=Odd two\n"
+                  "name_cmd=Odd two\n"
+                  'split=1"&echo INJ>C:\\inj_split.txt&rem "-of-3\n'
+                  "split_id=\n"),
+    }
+    for set_id, lines in markers.items():
+        dst = odd / "metadata" / set_id
+        for part in ("keys", "index", "snapshots"):
+            (dst / part).mkdir(parents=True)
+        (dst / "LCSAS_REPO.txt").write_text(
+            "# LCSAS backup set marker. Restore works without this file.\n"
+            f"format=1\nid={set_id}\n{lines}")
+    _make_read_only(meta)
+    try:
+        _map_drive(wine.prefix, "d", meta)
+        _map_drive(wine.prefix, "e", odd)
+        run = _Run(wine, "D:\\recovery\\scripts\\restore.bat",
+                   {"LCSAS_NO_RELOCATE": "1"})
+        try:
+            seen = run.answer("Which one do you want to restore? [1]: ", "q")
+        finally:
+            rc = run.finish()
+        out = run.text
+        injected = sorted(p.name for p in wine.drive_c.glob("inj_*.txt"))
+        assert not injected, f"disc text ran as a command: {injected}\n{out}"
+        _assert_clean(out)
+        assert rc == 65, f"rc={rc}\n{out}"
+        assert "newest data disc:" not in out, out
+        assert sorted(_menu_lines(seen)) == sorted([
+            docs.name_cmd,
+            f"{odd_one} (password split: any 2 of 3 share cards)",
+            "Odd two",
+        ]), seen
+    finally:
+        _make_writable(meta)
+
+
+def test_folder_question_takes_q_and_wants_a_whole_path(
+    fresh: _Wine, tmp_path: Path,
+) -> None:
+    """The folder question (#615).  Q then ENTER stops (65, nothing
+    made), as at every other question: "q" used to become the folder
+    C:\\q, and the files were restored there.  A folder typed without its
+    drive ("restored") is asked again: it would be made wherever cmd was.
+    And a restore folder that cannot be written to is reported by tier 1,
+    never with "Access is denied" from the script's own marker (#611)."""
+    wine = fresh
+    docs = _docs()
+    _build_set(tmp_path, docs)
+    meta = tmp_path / "meta"
+    _write_meta(meta, [docs])
+    disc_b = tmp_path / "disc_b"
+    _write_disc(disc_b, LABEL_B, [docs], [docs],
+                _catalog(tmp_path / "cat.db", [docs], None))
+    env = {"LCSAS_NO_RELOCATE": "1", "LCSAS_NEWEST_DISC_PROMPT": "0"}
+    _make_read_only(meta)
+    read_only = wine.drive_c / "read-only"
+    read_only.mkdir()
+    try:
+        _map_drive(wine.prefix, "d", meta)
+        run = _Run(wine, "D:\\recovery\\scripts\\restore.bat", env)
+        try:
+            ask = run.answer("Restore to which folder?", "restored")
+            again = run.answer("Restore to which folder?", "q")
+            run.expect("Press any key")
+        finally:
+            rc = run.finish()
+        out = run.text
+        _assert_clean(out)
+        assert rc == 65, f"rc={rc}\n{out}"
+        assert "Q then ENTER quits" in ask, ask
+        assert "restored is not a whole path" in again, again
+        assert "Stopped; nothing was restored." in out, out
+        assert "Password: " not in out, out
+        for made in ("q", "restored"):
+            assert not (wine.drive_c / made).exists(), f"C:\\{made} was made"
+
+        # A restore folder that cannot be written to.
+        os.chmod(read_only, 0o555)
+        _map_drive(wine.prefix, "e", disc_b)
+        run = _Run(wine, "D:\\recovery\\scripts\\restore.bat",
+                   {**env, "LCSAS_PASSWORD": docs.password})
+        try:
+            run.answer("Restore to which folder?", "C:\\read-only")
+            run.expect("Press any key")
+        finally:
+            rc = run.finish()
+        out = run.text
+        _assert_clean(out)
+        assert rc != 0, f"rc={rc}\n{out}"
+        assert "[tier 1] running" in out, out
+        assert "The restore stopped before it finished" in out, out
+    finally:
+        os.chmod(read_only, 0o755)
+        _make_writable(meta)
+
+
+def test_tools_folder_from_another_meta_disc_is_replaced(
+    fresh: _Wine, tmp_path: Path,
+) -> None:
+    """C6: a tools folder is used again as it is only by a run from the
+    very same META disc (its volume_info.json "created_at", kept in
+    archive.txt).  A folder left by another archive's META disc, or an
+    older META disc, holds that disc's sets, its catalog copy and its
+    merged-from.txt, whose labels repeat from one archive to the next.
+    restore.bat used to reuse it whenever restore.bat itself was the
+    same.  (wine's fc calls any two files the same, so this checks the
+    META disc alone.)  Each run stops with Q at the newest-disc step."""
+    wine = fresh
+    docs, photos = _docs(), _photos()
+    for s in (docs, photos):
+        _build_set(tmp_path, s)
+    meta_a, meta_b = tmp_path / "meta_a", tmp_path / "meta_b"
+    _write_meta(meta_a, [docs], created_at="2026-09-01T10:00:00.000000+00:00")
+    _write_meta(meta_b, [docs, photos], created_at="2026-10-15T18:30:00.000000+00:00")
+    tools = wine.user_dir / "AppData" / "Local" / "LCSAS-restore"
+    for meta in (meta_a, meta_b):
+        _make_read_only(meta)
+    try:
+        said = []
+        for meta in (meta_a, meta_b, meta_b):
+            _map_drive(wine.prefix, "d", meta)
+            run = _Run(wine, "D:\\restore.bat")
+            try:
+                run.answer("Newest data disc: ", "q")
+            finally:
+                rc = run.finish()
+            out = run.text
+            _assert_clean(out)
+            assert rc == 65, f"rc={rc}\n{out}"
+            said.append("copied" if "copied recovery files to" in out
+                        else "reused" if "using the recovery files already copied" in out
+                        else out)
+        assert said == ["copied", "copied", "reused"], said
+        assert (tools / "archive.txt").read_text().strip() == (
+            "2026-10-15T18:30:00.000000+00:00")
+        assert (tools / "metadata" / photos.repo_id).is_dir(), _files(tools)
+        assert (tools / ".lcsas-tools").is_file()
+    finally:
+        for meta in (meta_a, meta_b):
+            _make_writable(meta)
+
+
+def test_read_only_password_file_and_leftovers_in_temp(
+    fresh: _Wine, tmp_path: Path,
+) -> None:
+    """#608.  A window closed while a password or typed share cards were
+    in %TEMP% left them there for good: each run picks new names.  The
+    first pass now removes every lcsas-pw-*.txt and lcsas-shares-* there
+    (read-only ones too).
+
+    LCSAS_PWFILE names a read-only file with a wrong password: the script
+    says so, and the password typed next restores.  On Windows the copy
+    of a read-only file is read-only, and the plain del and `>` used
+    before could not replace it: the wrong password was tried for ever.
+    (wine's copy does not keep the mark, so here this part only shows
+    the path works; the static pins guard the del /f and attrib -r.)"""
+    wine = fresh
+    docs = _docs()
+    _build_set(tmp_path, docs)
+    meta = tmp_path / "meta"
+    _write_meta(meta, [docs])
+    disc_b = tmp_path / "disc_b"
+    _write_disc(disc_b, LABEL_B, [docs], [docs],
+                _catalog(tmp_path / "cat.db", [docs], None))
+    _tools_folder(wine, _Archive(meta, {LABEL_B: disc_b}, [docs]), "lcsas-ro-pw")
+    _map_drive(wine.prefix, "d", disc_b)
+    old_pw = wine.temp / "lcsas-pw-4242-0707.txt"
+    old_pw.write_text("left by a closed window\r\n")
+    old_pw.chmod(0o444)
+    old_cards = wine.temp / "lcsas-shares-31337"
+    old_cards.mkdir()
+    (old_cards / "card1.txt").write_text("academic acid acne\r\n")
+    pw_file = wine.drive_c / "read-only-pw.txt"
+    pw_file.write_bytes(b"not-the-password\r\n")
+    pw_file.chmod(0o444)
+    try:
+        run = _Run(wine, "C:\\lcsas-ro-pw\\recovery\\scripts\\restore.bat",
+                   {"LCSAS_RELOCATED": "D:\\", "LCSAS_PWFILE": "C:\\read-only-pw.txt"})
+        try:
+            run.answer("Restore to which folder?", "C:\\docs-ro")
+            wrong = run.answer("Password: ", docs.password)
+            run.expect("Restore complete")
+        finally:
+            rc = run.finish()
+        out = run.text
+        _assert_clean(out)
+        assert rc == 0, f"rc={rc}\n{out}"
+        assert "using the password in the file LCSAS_PWFILE names" in wrong, wrong
+        assert "That password is wrong" in wrong, wrong
+        _assert_restored(wine.drive_c / "docs-ro", docs, out)
+        left = sorted(p.name for p in wine.temp.glob("lcsas-*"))
+        assert left == [], f"left in %TEMP%: {left}"
+        assert pw_file.read_bytes() == b"not-the-password\r\n", "the reader's file changed"
+    finally:
+        for p in (pw_file, old_pw):
+            with contextlib.suppress(OSError):
+                p.chmod(0o644)
+
+
+def test_q_at_a_disc_prompt_stops_a_set_with_its_own_data(
+    fresh: _Wine, tmp_path: Path,
+) -> None:
+    """C5 (#615, #617): q at a disc prompt (75) ends the run also for a
+    set whose folder holds a data\\ folder of its own, as a set copied
+    whole holds: tier 2 must not run then, although it would for another
+    failure.  The folder holds one pack of three; the others are on no
+    disc in a drive.  A decoy tier 2 would say "[tier 2] running"."""
+    wine = fresh
+    docs = _docs()
+    _build_set(tmp_path, docs)
+    root = tmp_path / "whole"
+    _write_meta(root, [])
+    win = root / "recovery" / "bin" / TRIPLE
+    (win / "rustic-static.exe").write_bytes(b"MZ decoy")
+    dst = _put_set(root, docs)
+    first = _packs(docs)[0]
+    (dst / "data" / first.name[:2]).mkdir(parents=True)
+    shutil.copy2(first, dst / "data" / first.name[:2] / first.name)
+    _map_drive(wine.prefix, "d", root)
+    run = _Run(wine, "D:\\recovery\\scripts\\restore.bat", {
+        "LCSAS_NEWEST_DISC_PROMPT": "0", "LCSAS_PASSWORD": docs.password})
+    try:
+        run.answer("Restore to which folder?", "C:\\whole-set")
+        boxes = _answer_boxes(wine, run, {}, quit_at=1)
+    finally:
+        rc = run.finish()
+    out = run.text
+    _assert_clean(out)
+    assert len(boxes) == 1, out
+    assert rc == 75, f"rc={rc}\n{out}"
+    assert "The restore stopped before it finished (code 75)." in out, out
+    assert "trying tier 2" not in out and "[tier 2]" not in out, out

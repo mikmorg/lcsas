@@ -21,6 +21,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RESTORE_BAT = REPO_ROOT / "recovery" / "scripts" / "restore.bat"
+# How restore.bat deletes the password file.  Updated (B2 review): with
+# /f, since a copy of a read-only LCSAS_PWFILE is read-only and plain
+# `del` leaves it (test_restore_bat_dispatcher.py pins that no plain
+# `del "%PWFILE%"` is left).
+DEL_PWFILE = 'del /f /q "%PWFILE%"'
 
 
 def _tier1_block() -> str:
@@ -61,7 +66,7 @@ def test_no_pwfile_delete_on_tier1_fallthrough_path() -> None:
     # Only look after the rc capture (the invocation line above it has no
     # del; the point is the post-run dispatch).
     fallthrough = fallthrough[fallthrough.index('set "RC=!ERRORLEVEL!"'):]
-    assert 'del "%PWFILE%"' not in fallthrough, (
+    assert DEL_PWFILE not in fallthrough and 'del "%PWFILE%"' not in fallthrough, (
         "restore.bat deletes %PWFILE% on the tier-1 fall-through path — "
         "the tier-2 fallthrough then gets a dead --password-file "
         "(issue #384 review finding)."
@@ -81,7 +86,7 @@ def test_terminal_branches_delete_pwfile() -> None:
             default=len(block),
         )
         branch = block[branch_start:branch_exit]
-        assert 'del "%PWFILE%"' in branch, (
+        assert DEL_PWFILE in branch, (
             f"tier-1 branch {marker!r} exits without deleting %PWFILE% — "
             "the plaintext password would outlive the run."
         )
@@ -92,9 +97,9 @@ def test_every_terminal_path_deletes_pwfile() -> None:
     paths and the no-tier epilogue too (they pre-date #384; pin them so
     a refactor cannot drop one silently)."""
     text = RESTORE_BAT.read_text()
-    dels = len(re.findall(r'del "%PWFILE%"', text))
+    dels = len(re.findall(re.escape(DEL_PWFILE), text))
     # tier-1 success + tier-1 77 + tier-2 + epilogue
     assert dels >= 4, (
-        f"expected >=4 `del \"%PWFILE%\"` sites (tier-1 success/77, "
+        f"expected >=4 `{DEL_PWFILE}` sites (tier-1 success/77, "
         f"tier-2, epilogue); found {dels}"
     )
