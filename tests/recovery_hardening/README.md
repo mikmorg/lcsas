@@ -62,6 +62,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_exemptions_contract.py` | Hardening: the tier-1 coverage-exemptions contract cannot silently rot or |
 | `test_format_canary.py` | FMT-03 format canary: round-trip LATEST rustic through the pinned readers. |
 | `test_format_txt_path_safety.py` | Hardening test: FORMAT.txt PATH SAFETY must match binary behaviour. |
+| `test_heir_doc_reality.py` | Static guard: heir manuals give commands that work as typed (#605, #609, #618, #619). |
 | `test_initramfs_manifest_sources.py` | BOOT-02: build_initramfs.sh must hard-fail on missing sources. |
 | `test_keyshare_docs.py` | test_keyshare_docs.py -- static guard: heir docs name the C combiner [KEY-05]. |
 | `test_keyshare_windows_wine.py` | rc6: the committed Windows ``lcsas-keyshare.exe`` under wine. |

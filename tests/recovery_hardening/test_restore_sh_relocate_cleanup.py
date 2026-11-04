@@ -211,6 +211,51 @@ def test_unusable_tools_folder_falls_back_to_a_temporary_one(
     assert sorted(p.name for p in shm_dir.iterdir()) == []
 
 
+def test_temporary_tools_folder_can_be_carried_on(
+    tmp_path: Path, shm_dir: Path,
+) -> None:
+    """Relocated off the META disc, the temporary folder that replaces a
+    busy LCSAS_TOOLS_DIR IS the tools folder: a stop keeps it, with a
+    resume.sh that carries the restore on (#609).  The docs used to say
+    such a run could not be carried on (ENV_VARS.txt LCSAS_TOOLS_DIR,
+    RECOVER.txt "THE TOOLS FOLDER", MULTI_DISC_DESIGN.txt, the sh-vs-bat
+    table in restore-windows.md); only a run in place cannot."""
+    meta = _stick(tmp_path)
+    mine = tmp_path / "my-files"
+    mine.mkdir()
+    (mine / "letter.txt").write_text("mine")
+    first = _run(meta, tmp_path, shm_dir, tools=mine, stub_rc=75)
+    assert first.returncode == 75, first.stderr
+    assert f"cannot use {mine} for the recovery tools" in first.stderr, first.stderr
+    temps = sorted(shm_dir.glob("lcsas-restore.*"))
+    assert len(temps) == 1, f"expected one temporary tools folder: {temps}"
+    resume = temps[0] / "resume.sh"
+    assert resume.is_file(), sorted(p.name for p in temps[0].iterdir())
+    assert f"sh {resume}" in first.stderr, first.stderr
+    assert sorted(p.name for p in mine.iterdir()) == ["letter.txt"]
+
+    env = {
+        **os.environ,
+        "HOME": str(tmp_path),
+        "TMPDIR": str(shm_dir),
+        "LCSAS_SKIP_SPACE_CHECK": "1",
+        "LCSAS_ALLOW_NO_PACK_SEARCH": "1",
+        "STUB_RC": "0",
+    }
+    for k in ("LCSAS_RELOCATED", "LCSAS_NO_RELOCATE", "LCSAS_META_DISC",
+              "LCSAS_TOOLS_DIR", "LCSAS_REPO"):
+        env.pop(k, None)
+    again = subprocess.run(
+        ["sh", str(resume)], input="pw\n", capture_output=True, text=True,
+        env=env, timeout=60,
+    )
+    assert again.returncode == 0, again.stderr
+    assert "[tier 1] using prebuilt lcsas-restore" in again.stderr, again.stderr
+    assert "copying the recovery tools" not in again.stderr, again.stderr
+    assert not temps[0].exists(), "the tools folder must go after a success"
+    assert sorted(p.name for p in mine.iterdir()) == ["letter.txt"]
+
+
 def test_run_from_recovery_scripts_copies_the_docs_and_root_metadata(
     tmp_path: Path, shm_dir: Path,
 ) -> None:
