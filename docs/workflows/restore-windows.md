@@ -129,8 +129,11 @@ layout) or several.
 
 1. Insert the newest meta disc (labelled `LCSAS_META`; if it fails, use
    the meta disc burned closest in date to the data discs). Put it in the
-   drive you will use for the data discs: a drive that is empty when
-   `restore.bat` starts is not searched (`if exist X:\` is false there).
+   drive you will use for the data discs. `restore.bat` passes tier 1
+   only the drives that hold a disc when it starts (`if exist X:\` is
+   false for an empty drive); tier 1 itself also looks at the root of
+   every optical drive each time it looks for a disc, so an empty
+   second drive is still found.
    Optionally check the script and binary with `certutil -hashfile`
    against `recovery\MANIFEST.sha256` (`RECOVER_WINDOWS.txt`, "CHECK THE
    BINARY BEFORE RUNNING IT").
