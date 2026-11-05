@@ -1419,6 +1419,73 @@ def test_read_only_password_file_and_leftovers_in_temp(
                 p.chmod(0o644)
 
 
+def _host_to_win(wine: _Wine, path: Path) -> str:
+    """<prefix>/drive_c/a/b -> C:\\a\\b (the other way from _win_to_host)."""
+    return "C:\\" + "\\".join(path.relative_to(wine.drive_c).parts)
+
+
+@pytest.mark.parametrize("where", ["doc-temp", "usb-crlf"])
+def test_password_file_with_the_right_password_restores_and_is_kept(
+    fresh: _Wine, tmp_path: Path, where: str,
+) -> None:
+    """#608 (C4): LCSAS_PWFILE names a file with the RIGHT password.  The
+    only other LCSAS_PWFILE test has a wrong one, so the way
+    RECOVER_WINDOWS.txt gives to type the password hidden was never seen
+    to restore anything.
+
+    doc-temp: the file those PowerShell lines write, %TEMP%\\lcsas-pw.txt,
+    the password with no line break.  restore.bat's first pass deletes
+    %TEMP%\\lcsas-pw-*.txt, which this name must not match.
+    usb-crlf: a file on a USB stick (E:\\password.txt, as the doc's other
+    example), saved with the CRLF that Notepad adds.  The bytes are
+    copied as they are; tier 1 drops trailing CR and LF.
+
+    No password question, byte-exact, the reader's file as it was, and no
+    lcsas-pw-* copy left.  windows-e2e runs the doc's own PowerShell lines
+    under Windows PowerShell 5.1 (the hidden-password leg)."""
+    wine = fresh
+    docs = _docs()
+    _build_set(tmp_path, docs)
+    meta = tmp_path / "meta"
+    _write_meta(meta, [docs])
+    disc_b = tmp_path / "disc_b"
+    _write_disc(disc_b, LABEL_B, [docs], [docs],
+                _catalog(tmp_path / "cat.db", [docs], None))
+    tools = _tools_folder(wine, _Archive(meta, {LABEL_B: disc_b}, [docs]),
+                          f"lcsas-pwfile-{where}")
+    _map_drive(wine.prefix, "d", disc_b)
+    if where == "doc-temp":
+        pw_file = wine.temp / "lcsas-pw.txt"
+        pw_win = _host_to_win(wine, pw_file)
+        content = docs.password.encode()
+    else:
+        usb = tmp_path / "usb"
+        usb.mkdir()
+        _map_drive(wine.prefix, "e", usb)
+        pw_file = usb / "password.txt"
+        pw_win = "E:\\password.txt"
+        content = docs.password.encode() + b"\r\n"
+    pw_file.write_bytes(content)
+    run = _Run(wine, f"C:\\lcsas-pwfile-{where}\\recovery\\scripts\\restore.bat",
+               {"LCSAS_RELOCATED": "D:\\", "LCSAS_PWFILE": pw_win})
+    try:
+        run.answer("Restore to which folder?", f"C:\\docs-{where}")
+        run.expect("Restore complete")
+    finally:
+        rc = run.finish()
+    out = run.text
+    _assert_clean(out)
+    assert rc == 0, f"rc={rc}\n{out}"
+    assert "using the password in the file LCSAS_PWFILE names" in out, out
+    assert "Password: " not in out, "asked for the password LCSAS_PWFILE gave"
+    assert "That password is wrong" not in out, out
+    assert out.count("[tier 1] running") == 1, out
+    _assert_restored(wine.drive_c / f"docs-{where}", docs, out)
+    assert pw_file.read_bytes() == content, "the reader's password file changed or went"
+    assert not list(wine.temp.glob("lcsas-pw-*")), "restore.bat's copy of the password left"
+    assert (tools / ".done").is_file()
+
+
 def test_q_at_a_disc_prompt_stops_a_set_with_its_own_data(
     fresh: _Wine, tmp_path: Path,
 ) -> None:

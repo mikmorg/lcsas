@@ -8,6 +8,12 @@ its ``LCSAS_REPO.txt`` marker gives the name and the name restore.bat
 shows (``name_cmd``); ``sets.json``, which the windows and macOS legs
 read, says the same; and the restored set's own packs lie on two discs or
 more, which windows-e2e's multi-disc step relies on.
+
+The second set's password is split 2-of-3 as an owner splits it (#607):
+``lcsas key split`` records the split, so every disc's marker for that
+set says ``split=2-of-3`` with the cards' split id, the first set's says
+``split=none``, and two of the printed cards rebuild the password.
+windows-e2e types two of those cards into restore.bat on real Windows.
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ from pathlib import Path
 
 import pytest
 
+from lcsas.keyshare import decode_master_secret, extract_mnemonic, recover_secret
 from lcsas.staging.repo_marker import read_repo_marker
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -70,6 +77,7 @@ def test_windows_e2e_fixture_discs_use_uuid_ids_and_names(tmp_path: Path) -> Non
         meta_metadata=True,
         set_name=fixture_lib.WINDOWS_E2E_SET_NAME,
         other_set_names=fixture_lib.WINDOWS_E2E_OTHER_SET_NAMES,
+        split_sets=fixture_lib.WINDOWS_E2E_SPLIT_SETS,
     )
     sets = json.loads(fx.sets_path.read_text(encoding="ascii"))
     every = [sets["restore"], *sets["others"]]
@@ -102,6 +110,10 @@ def test_windows_e2e_fixture_discs_use_uuid_ids_and_names(tmp_path: Path) -> Non
             assert (marker["id"], marker["name"], marker["name_cmd"]) == (
                 want["id"], want["name"], want["name_cmd"]
             ), iso.name
+            # #607: the split as recorded, on every disc that has the set.
+            assert (marker["split"], marker.get("split_id", "")) == (
+                want["split"], want.get("split_id", "")
+            ), (iso.name, want["name"])
             seen.add(folder)
     assert restore["id"] in seen
 
@@ -120,6 +132,36 @@ def test_windows_e2e_fixture_discs_use_uuid_ids_and_names(tmp_path: Path) -> Non
     # Assert-MultiDisc sees on Windows) is more than the restored set's.
     assert set().union(*on_discs.values()) > restored
 
+    # #607: the restored set is not split; the other one is, 2-of-3, with
+    # its three printed cards and a manifest for windows-e2e's cards leg.
+    assert restore["split"] == "none" and "cards" not in restore
+    work = next(s for s in every if s["name"] in fixture_lib.WINDOWS_E2E_SPLIT_SETS)
+    k, n = fixture_lib.WINDOWS_E2E_SPLIT_SETS[work["name"]]
+    assert (k, n) == (2, 3)
+    assert work["split"] == "2-of-3"
+    assert len(work["split_id"]) == 5 and work["split_id"].isdigit()
+    assert [s["name"] for s in every if s["split"] != "none"] == [work["name"]]
+    workdir = tmp_path / "work"
+    cards = [workdir / c for c in work["cards"]]
+    assert len(cards) == n and all(c.is_file() for c in cards), cards
+    texts = [c.read_text(encoding="utf-8") for c in cards]
+    for i, text in enumerate(texts, 1):
+        assert f"Repository : {work['name']}" in text
+        assert f"Share      : {i} of {n}" in text
+        assert f"Split ID   : {work['split_id']}" in text
+    # Card 1 and card 3, the two the leg types, rebuild the password.
+    password = (workdir / "other1.pw").read_bytes()
+    rebuilt = decode_master_secret(recover_secret(
+        [extract_mnemonic(texts[0]), extract_mnemonic(texts[2])]
+    ))
+    assert rebuilt == password
+    manifest = json.loads((workdir / work["manifest"]).read_text(encoding="utf-8"))
+    assert sorted(manifest) == ["file_000.bin", "file_001.bin"]
+    assert restore["manifest"] == "manifest.json"
+    assert json.loads(fx.manifest_path.read_text(encoding="utf-8")) == (
+        fixture_lib.sha256_tree_manifest(fx.source_root)
+    )
+
 
 def test_default_fixture_has_one_set_named_apart_from_its_id(
     tmp_path: Path,
@@ -131,6 +173,8 @@ def test_default_fixture_has_one_set_named_apart_from_its_id(
     )
     sets = json.loads(fx.sets_path.read_text(encoding="ascii"))
     assert sets["others"] == []
+    assert sets["restore"]["split"] == "none"
+    assert not (tmp_path / "work" / "cards").exists()
     assert sets["restore"]["name"] == fixture_lib.WINDOWS_SET_NAME
     assert sets["restore"]["id"] != sets["restore"]["name"]
     folders = _metadata_of(fx.data_isos[0], tmp_path / "x")
