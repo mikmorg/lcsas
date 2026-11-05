@@ -14,7 +14,9 @@ pwsh runs on Linux too (GitHub's ubuntu runners ship it), so this:
   with the split of a split set (#607), and typing the number of the set
   to restore;
 * runs the helpers of the legs added for #604, #607 and #608: the C8
-  swap and cache-copy counts, reading a printed share card and finding
+  swap and cache-copy counts, the check of the pack cache a stop leaves
+  (each pack whole: its SHA-256 is its name), reading a printed share
+  card and finding
   three of its words in a row in a folder, and finding the PowerShell
   lines of RECOVER_WINDOWS.txt "THE PASSWORD" (failing loudly when they
   are gone) and making them into a script that runs with no keyboard.
@@ -273,6 +275,56 @@ $once = (($isos | ForEach-Object { $line -f [IO.Path]::GetFileNameWithoutExtensi
 $r.copied_once = Get-Copied $once
 $r.copied_twice = Get-Copied ($once + ($line -f 'LCSAS_TEST_TINY_2026_0002'))
 $r.copied_missing = Get-Copied ($line -f 'LCSAS_TEST_TINY_2026_0001')
+# A long drain's progress lines are not a second copy (tier 1's
+# drain_tick); a copy counted over two runs says so.
+$progress = '[lcsas-restore] copying disc LCSAS_TEST_TINY_2026_0002 to the cache: ' +
+            '16 of 24 MB' + $crlf
+$r.copied_progress = Get-Copied ($once + $progress + $progress)
+$p = New-Object 'System.Collections.Generic.List[string]'
+$twice1 = $once + ($line -f 'LCSAS_TEST_TINY_2026_0001')
+Assert-CopiedOnce -Out $twice1 -DataIsos @($isos[0], $isos[0]) -What 'over both runs' -Problems $p
+$r.copied_what = [string[]]@($p)
+
+# D item 6 (C8): the pack cache after a stop.  A pack is named by the
+# SHA-256 of its bytes.
+function New-Pack([string]$Cache, [string]$Text, [int]$Cut = 0) {
+    $bytes = [Text.Encoding]::ASCII.GetBytes($Text)
+    $hash = [Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
+    $sha = [BitConverter]::ToString($hash).Replace('-', '').ToLowerInvariant()
+    $dir = Join-Path (Join-Path $Cache 'data') $sha.Substring(0, 2)
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    if ($Cut -gt 0) { $bytes = [byte[]]$bytes[0..($Cut - 1)] }
+    [IO.File]::WriteAllBytes((Join-Path $dir $sha), $bytes)
+    return $sha
+}
+function New-Cache([string]$Name) {
+    $c = Join-Path $Work $Name
+    New-Item -ItemType Directory -Force -Path $c | Out-Null
+    # tier 1's catalog copy sits at the top of the cache: not a pack.
+    [IO.File]::WriteAllText((Join-Path $c '.locator-catalog.db'), 'not a pack')
+    return $c
+}
+function Get-Cache([string]$Cache, [hashtable]$Map) {
+    $p = New-Object 'System.Collections.Generic.List[string]'
+    $n = Assert-PackCacheWhole -Cache $Cache -Isos @($isos[0]) -PackMap $Map -Problems $p
+    return [ordered]@{ n = $n; problems = [string[]]@($p) }
+}
+$c = New-Cache 'cache-good'
+$one = New-Pack $c ('invented pack one ' * 40)
+$two = New-Pack $c ('invented pack two ' * 40)
+$r.cache_good = Get-Cache $c @{ $isos[0] = @($one, $two) }
+$r.cache_missing = Get-Cache $c @{ $isos[0] = @($one, $two, ('f' * 64)) }
+$c = New-Cache 'cache-short'
+$one = New-Pack $c ('invented pack one ' * 40)
+$cut = New-Pack $c ('invented pack two ' * 40) -Cut 100
+$r.cache_short_name = $cut
+$r.cache_short = Get-Cache $c @{ $isos[0] = @($one, $cut) }
+$c = New-Cache 'cache-part'
+$one = New-Pack $c ('invented pack one ' * 40)
+$partDir = Join-Path (Join-Path $c 'data') $one.Substring(0, 2)
+[IO.File]::WriteAllText((Join-Path $partDir "$('e' * 64).part"), 'half')
+$r.cache_part = Get-Cache $c @{ $isos[0] = @($one) }
+$r.cache_empty = Get-Cache (New-Cache 'cache-empty') @{ $isos[0] = @($one) }
 
 # #608: the PowerShell lines of RECOVER_WINDOWS.txt, and the script made
 # of them; a doc without them fails loudly.
@@ -463,6 +515,40 @@ def test_copied_once(helpers: dict) -> None:
         "copying disc LCSAS_TEST_TINY_2026_0002 to the cache",
         "copying disc LCSAS_TEST_TINY_2026_0003 to the cache",
     ]
+
+
+def test_copied_once_counts_only_the_drains_launch_line(helpers: dict) -> None:
+    """A drain of 16 MiB or more also prints '... to the cache: n of N MB'
+    progress lines; they are the same copy, not a second one."""
+    assert helpers["copied_progress"] == []
+    # Counted over two runs, and a disc listed twice is checked once.
+    assert helpers["copied_what"] == [
+        "'copying disc LCSAS_TEST_TINY_2026_0001 to the cache' appears 2 times "
+        "over both runs (want exactly once, #612)"
+    ]
+
+
+def test_pack_cache_whole(helpers: dict) -> None:
+    """D item 6 (C8): every pack of the disc read before the stop is in
+    the cache, each whole (its SHA-256 is its name), and no .part."""
+    assert helpers["cache_good"] == {"n": 2, "problems": []}
+    missing = helpers["cache_missing"]["problems"]
+    assert len(missing) == 1 and missing[0].startswith(
+        "1 pack(s) of LCSAS_TEST_TINY_2026_0001.iso, read before the stop, "
+        "are not in the pack cache"), missing
+    assert missing[0].endswith("f" * 64), missing
+    short = helpers["cache_short"]["problems"]
+    assert len(short) == 1 and short[0].startswith(
+        f"pack {helpers['cache_short_name']} in the pack cache is not whole: "
+        "its SHA-256 is "), short
+    assert short[0].endswith("(100 bytes)"), short
+    part = helpers["cache_part"]["problems"]
+    assert len(part) == 1 and part[0].startswith(
+        "partial pack file(s) left in the pack cache after the stop: "), part
+    assert part[0].endswith("e" * 64 + ".part"), part
+    empty = helpers["cache_empty"]
+    assert empty["n"] == 0 and len(empty["problems"]) == 1, empty
+    assert empty["problems"][0].startswith("no pack in the pack cache "), empty
 
 
 # ---------------------------------------------------------------------------

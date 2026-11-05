@@ -379,6 +379,12 @@ def test_one_drive_restore_swaps_discs_in_the_same_letter(tmp_path: Path) -> Non
     # cache the first time it sees it (drain on first sight, D item 8),
     # so no prompt asks for a disc again: one prompt and one swap per
     # disc that holds a pack the restore needs, here both.
+    # The prompt bound is the gate.  A swap is made only at a prompt, and
+    # only for a disc not in D: already, so with two discs the two swap
+    # lines below follow from it (and from the second prompt naming disc
+    # B, further down): they are a cross-check of C8's wording "swaps <=
+    # discs", and cannot fail on their own.  A lost first-sight drain
+    # shows as a third prompt for disc A.
     assert 1 <= len(boxes) <= len(fx.discs), (
         f"{len(boxes)} disc prompts for {len(fx.discs)} data discs\n{out}")
     assert len(swaps) <= len(fx.discs), (swaps, out)

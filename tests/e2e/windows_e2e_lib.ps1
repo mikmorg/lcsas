@@ -996,18 +996,85 @@ function Assert-SwapsWithinDiscs {
     }
 }
 
-# #612 (C8): each data disc is copied into the pack cache exactly once.
+# #612 (C8): each data disc in $DataIsos is copied into the pack cache
+# exactly once.  Only tier 1's launch line of a drain is counted,
+# "copying disc <LABEL> to the cache: <N> MB.  From a disc ...".  A long
+# drain also prints progress lines with the same words, "... to the
+# cache: <n> of <N> MB" (every 16 MiB or more: none on a 2 MB TEST_TINY
+# disc), and those are not a second copy.  A drain of a disc the cache
+# already holds prints nothing.  -What says over which run(s).
 function Assert-CopiedOnce {
     param(
         [string]$Out,
         [string[]]$DataIsos,
+        [System.Collections.Generic.List[string]]$Problems,
+        [string]$What = ''
+    )
+    foreach ($iso in @($DataIsos | Where-Object { $_ } | Select-Object -Unique)) {
+        $label = [IO.Path]::GetFileNameWithoutExtension($iso)
+        $n = [regex]::Matches($Out, 'copying disc ' + [regex]::Escape($label) + ' to the cache: \d+ MB\.').Count
+        if ($n -ne 1) {
+            $where = if ($What) { " $What" } else { '' }
+            $Problems.Add("'copying disc $label to the cache' appears $n times$where (want exactly once, #612)")
+        }
+    }
+}
+
+# D item 6 (C8), #612: the pack cache a stopped run leaves for the run
+# that carries on.  The cache is searched first and a drain skips a pack
+# it already holds, so a pack cut short there would be trusted from then
+# on.  Three checks:
+#  * every pack of each disc read before the stop ($Isos) is in the cache:
+#    tier 1 copies a data disc whole the first time it sees it (drain on
+#    first sight, D item 8);
+#  * every pack in it is whole: a pack file is named by the SHA-256 of its
+#    bytes (the executor checks the same), so a short or torn copy fails;
+#  * no "<pack>.part" is left.  Tier 1 writes "<pack>.part" and renames it
+#    only when the copy is whole, and removes it when a copy fails, so
+#    only a killed or crashed run could leave one.  This proves a graceful
+#    stop leaves none; the SHA-256 check is the one that would catch a
+#    copy written straight to its name and cut short.
+# Only files under data\ named by 64 hex digits are packs (tier 1 keeps
+# its catalog copy, .locator-catalog.db, at the top of the cache).
+# Returns the number of packs checked.
+function Assert-PackCacheWhole {
+    param(
+        [string]$Cache,
+        [string[]]$Isos,
+        [hashtable]$PackMap,
         [System.Collections.Generic.List[string]]$Problems
     )
-    foreach ($iso in $DataIsos) {
-        $label = [IO.Path]::GetFileNameWithoutExtension($iso)
-        $n = [regex]::Matches($Out, 'copying disc ' + [regex]::Escape($label) + ' to the cache').Count
-        if ($n -ne 1) { $Problems.Add("'copying disc $label to the cache' appears $n times (want exactly once, #612)") }
+    $all = @(Get-ChildItem -LiteralPath $Cache -Recurse -File -Force -ErrorAction SilentlyContinue)
+    $parts = @($all | Where-Object { $_.Name -like '*.part' })
+    if ($parts.Count -gt 0) {
+        $Problems.Add("partial pack file(s) left in the pack cache after the stop: $($parts.FullName -join ', ')")
     }
+    $dataDir = Join-Path $Cache 'data'
+    $packs = @()
+    if (Test-Path -LiteralPath $dataDir) {
+        $packs = @(Get-ChildItem -LiteralPath $dataDir -Recurse -File -Force -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Name -match '^[0-9a-fA-F]{64}$' })
+    }
+    if ($packs.Count -eq 0) {
+        $Problems.Add("no pack in the pack cache $Cache after the stop: the disc read before it was not copied in")
+        return 0
+    }
+    $have = @{}
+    foreach ($f in $packs) { $have[$f.Name.ToLowerInvariant()] = $true }
+    foreach ($iso in @($Isos | Where-Object { $_ } | Select-Object -Unique)) {
+        $missing = @(@($PackMap[$iso]) | Where-Object {
+                $_ -match '^[0-9a-fA-F]{64}$' -and -not $have.ContainsKey($_.ToLowerInvariant()) })
+        if ($missing.Count -gt 0) {
+            $Problems.Add("$($missing.Count) pack(s) of $(Split-Path $iso -Leaf), read before the stop, are not in the pack cache (drain on first sight copies a disc whole), e.g. $($missing[0])")
+        }
+    }
+    foreach ($f in $packs) {
+        $sha = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($sha -ne $f.Name.ToLowerInvariant()) {
+            $Problems.Add("pack $($f.Name) in the pack cache is not whole: its SHA-256 is $sha ($($f.Length) bytes)")
+        }
+    }
+    return $packs.Count
 }
 
 # ---------------------------------------------------------------------
@@ -1131,11 +1198,14 @@ function Invoke-SingleDriveLeg {
     if ($boxes -gt $dataIsos.Count) {
         $problems.Add("$boxes disc boxes for $($dataIsos.Count) data discs (want at most $($dataIsos.Count))")
     }
-    if ($swaps -ne $inserted.Count) { $problems.Add("swap count $swaps, but $($inserted.Count) discs went in") }
     Assert-SwapsWithinDiscs -Inserted $inserted -DataIsos $dataIsos -What 'with the step' -Problems $problems
-    # #612 (C8): with the newest data disc read first, every data disc is
-    # copied into the cache once, the first time it is in the drive.
-    Assert-CopiedOnce -Out $out -DataIsos $dataIsos -Problems $problems
+    # #612 (C8): with the newest data disc read first, every data disc that
+    # went in is copied into the cache once, the first time it is in the
+    # drive.  Counted over the discs that went in, not every data disc:
+    # the fixture promises only that the restored set spans two or more
+    # discs (restore_set_span_problem), so a disc it does not need is
+    # never asked for.
+    Assert-CopiedOnce -Out $out -DataIsos $inserted -Problems $problems
     # #605: the catalog copy is the newest disc's, so the first box names
     # the disc it needs.
     if ($out -match 'no disc catalog yet') { $problems.Add('a box had no catalog although the newest data disc was read first') }
@@ -1264,22 +1334,15 @@ function Invoke-StopAndResumeLeg {
         Assert-SetNamed -Out $out -Sets $sets -Problems $problems
         Assert-OnlyThisPlatform -Out $out -Problems $problems -CheckFolder
         Assert-ToolsDirKept -Problems $problems -Password $pw
-        # D item 6 (C8): tier 1 writes each pack into the cache as
-        # <pack>.part and renames it only when it is whole, so a stop
-        # leaves no partial pack that the run carrying on would trust.
+        # D item 6 (C8): the pack cache the run carrying on will trust.
         # Checked now, while the tools folder is kept: a finished restore
-        # removes the cache.  The disc that went in before the stop was
-        # copied into it, so an empty cache means the check proved nothing.
+        # removes the cache.  Every pack of the disc(s) read before the
+        # stop must be there and whole (its SHA-256 is its name), and no
+        # <pack>.part may be left (Assert-PackCacheWhole says what each
+        # check proves).
         $cache = Join-Path $tools 'pack-cache'
-        $cached = @(Get-ChildItem -LiteralPath $cache -Recurse -File -Force -ErrorAction SilentlyContinue)
-        Write-Host "pack cache after the stop: $($cached.Count) file(s) in $cache"
-        if ($cached.Count -eq 0) {
-            $problems.Add("the pack cache $cache is empty after the stop: the disc read before it was not copied in")
-        }
-        $parts = @($cached | Where-Object { $_.Name -like '*.part' })
-        if ($parts.Count -gt 0) {
-            $problems.Add("partial pack file(s) left in the pack cache after the stop: $($parts.FullName -join ', ')")
-        }
+        $nCached = Assert-PackCacheWhole -Cache $cache -Isos $stop.Inserted -PackMap $packMap -Problems $problems
+        Write-Host "pack cache after the stop: $nCached pack(s) in $cache, each checked against its SHA-256"
 
         # --- 2. carry on with the Desktop launcher, no META disc --------
         $desk = Get-DesktopLauncher
@@ -1310,12 +1373,23 @@ function Invoke-StopAndResumeLeg {
     # resume.cfg holds the set's id; the banner still shows its name.
     Assert-SetNamed -Out $out -Sets $sets -Problems $problems
     # C8: swaps <= discs over both runs (this allowed discs + 1 before).
-    # The stopped run's pack cache is kept for the launcher's run, so a
-    # disc read before the stop never goes in again; the box where q was
-    # typed swapped nothing.  (windows-e2e on 130baf4 and f9e7a57: 1 + 3 =
-    # 4 swaps for 4 data discs.)
+    # The box where q was typed swapped nothing.  (windows-e2e on 130baf4
+    # and f9e7a57: 1 + 3 = 4 swaps for 4 data discs.)  This alone cannot
+    # see the kept pack cache: the disc read before the stop is still in
+    # the drive when the launcher starts, so tier 1 would read it again
+    # from there, with no box and no swap, had the cache been lost.
     $total = $stop.Swaps + $resume.Swaps
-    Assert-SwapsWithinDiscs -Inserted (@($stop.Inserted) + @($resume.Inserted)) -DataIsos $dataIsos `
+    $wentIn = @(@($stop.Inserted) + @($resume.Inserted) | Where-Object { $_ })
+    Assert-SwapsWithinDiscs -Inserted $wentIn -DataIsos $dataIsos `
+        -What 'over the stop and the carrying on' -Problems $problems
+    # #612 (C8): the run carrying on reuses the stopped run's pack cache.
+    # Each disc that went in is copied into the cache once over BOTH runs:
+    # a lost or unused cache makes the launcher's run copy the disc read
+    # before the stop a second time, at launch, from the drive.  (On
+    # f9e7a57 the stop copied 0001 and the carrying on 0003, 0002 and
+    # 0004.)
+    $stopOut = Read-SharedText $outStop
+    Assert-CopiedOnce -Out ($stopOut + $out) -DataIsos $wentIn `
         -What 'over the stop and the carrying on' -Problems $problems
     Assert-NoAccessDenied -Out $out -Problems $problems
     Test-TreeAgainstManifest -Fixture $Fixture -Target $target -Problems $problems
