@@ -1527,7 +1527,7 @@ images. The **only** thing you must provide is your **password**.
 | `tools/` | Portable Linux x86_64 binaries: rustic, xorriso, Python 3 |
 | `lcsas/` | LCSAS source code (Python, no external dependencies) |
 | `docs/` | Architecture documentation + restic format specification |
-| `restore.sh` | **Start here. Prompts for password and disc swaps.** |
+| `restore.sh` | **Start here. Asks for the newest data disc, the set, the password.** |
 | `README_RESTORE.md` | This file |
 | `VOLUME_INFO.txt` | What this disc is, when it was built, and the LCSAS version, in plain text |
 | `volume_info.json` | Machine-readable details of this disc (includes tool versions) |
@@ -1536,8 +1536,10 @@ images. The **only** thing you must provide is your **password**.
 
 ## Terminology
 
-A **repository** is one encrypted backup dataset. Archives may hold
-several repositories side by side. Pass the repository name to `--repo`.
+A **repository** (a backup set) is one encrypted backup dataset.
+Archives may hold several repositories side by side.  Each one's
+metadata is in `metadata/<id>/` on every disc; its
+`LCSAS_REPO.txt` names it.  Pass its name or its id to `--repo`.
 
 ## Single-Drive Mode (DEFAULT)
 
@@ -1553,9 +1555,11 @@ sh /mnt/restore.sh ~/restored/ latest
 ```
 
 `restore.sh` detects that it is running off a read-only optical disc
-and copies itself (plus the recovery binaries) into RAM automatically,
-so you can eject the meta disc when the binary first prompts for a
-data disc — no manual `cp -r` step is needed.
+and copies itself, this computer's recovery binaries and the backup
+sets' metadata into its tools folder, `~/lcsas-restore-tools`, and
+runs from there, so the meta disc can come out of the drive — no
+manual `cp -r` step is needed.  The tools folder stays until the
+restore has finished (see "Stopping and carrying on" below).
 
 > **Advanced override:** set `LCSAS_NO_RELOCATE=1` in the environment
 > if you want to keep running directly off the disc (e.g. for tests,
@@ -1596,37 +1600,48 @@ for each one as the recovery binary needs it.  The script will:
    bundled CPython + `standalone_restorer.py`).  Only one tier
    runs per invocation.
 5. When a pack is missing from the disc currently in the drive,
-   the recovery binary stops and prints `INSERT DISC: LCSAS_<label>`
-   on stderr.  **Swap the disc in your optical drive and press Enter.**
-   Repeat until the binary prints `RESTORE COMPLETE` and exits 0.
+   the recovery binary stops and prints a box on stderr:
+   `Pack <id>... is required for the next file.` and, below it,
+   `It is on any disc labelled:` with the disc's label.
+   **Swap the disc in your optical drive and press Enter.**  The
+   first time it sees a data disc it copies all of it to the tools
+   folder, so each disc goes in about once.  Repeat until the
+   binary prints `[lcsas-restore] restore complete`.
 6. Ask whether to restore another backup set from the same discs;
    the meta disc is not needed again for it.
 
 > **Working from a single terminal.** You do not need tmux or a second SSH
 > session to handle disc swaps — a normal single-terminal flow works.
-> When the binary prompts to swap a disc:
->
->   1. Open a second terminal OR press Ctrl+Z to suspend the restore.
->   2. Run `disc-loader insert <label>` (or eject + insert the
->      physical disc by hand, e.g. `sudo eject /dev/sr0`).
->   3. In the second terminal: `disc-loader status` to confirm.
->      In the first terminal: type `fg` to resume.
->   4. Press Enter at the restore prompt.
->
-> If `disc-loader` is not installed on your host, the same flow works
-> with plain `sudo eject /dev/sr0` and physically swapping the disc.
+> Eject the disc with the drive's button or your file manager.  Or
+> press Ctrl+Z to suspend the restore, run `sudo eject /dev/sr0`
+> (on a Mac: `drutil eject`), put the next disc in, type `fg` to
+> resume, and press Enter at the prompt.  On Linux and macOS the
+> binary looks again every 2 seconds while it waits, so a disc that
+> mounts by itself is found without Enter.
 
-If a disc is unreadable or the system crashes mid-restore you can
-re-run the same command — the pack cache under the work directory
-persists across runs.
+### Stopping and carrying on
 
-> **Tip:** if you mount a data disc at `/mnt` (or `/media/...`)
-> before starting, the recovery binary uses that disc's catalog
-> for friendlier disc-swap prompts (it prints the disc *label*
-> rather than the pack ID) and skips re-prompting for packs
-> already on the mounted disc.  Best is the disc whose label is
-> newest (the latest year, then the highest number): its catalog
-> is the fullest.
+To stop, type `q` and Enter at a disc prompt (exit code 75), or
+press Ctrl-C.  The files restored so far stay in the target folder,
+and the tools folder stays, with the discs already copied.  To carry
+on later, with no meta disc, run the command the script prints:
+
+```sh
+sh ~/lcsas-restore-tools/resume.sh
+```
+
+It asks for the password (or the share cards) again (it never
+stores the password) and does not ask again for the discs it already
+copied.  Re-running the first command from the meta disc works too.
+Once a restore succeeds and you decline another backup set, the tools
+folder and its copies of the discs are deleted: a later restore needs
+the discs again.
+
+> **Tip:** with a second drive, a data disc that is already mounted
+> (say under `/media`) when you start counts as your newest data
+> disc, and the script does not ask for one.  Best is the disc whose
+> label is newest (the latest year, then the highest number): its
+> list of snapshots is the newest and its catalog the fullest.
 
 > **Automation / CI only.** Heirs restoring after a disaster
 > must use the interactive `restore.sh` above. The non-interactive
@@ -1686,10 +1701,12 @@ export PYTHONPATH="$(pwd)/lcsas/src"
   requires ~2 GB of RAM for large repositories.
 
 - **Re-running after failure:** If a restore is interrupted (power loss, Ctrl+C,
-  disk full), simply re-run the restore command.  The pack cache that
-  `restore.sh` builds in a temporary work directory persists across runs,
-  so a re-run picks up where the previous attempt stopped.  Do **not**
-  rely on a partially-restored target directory.
+  disk full), run `sh ~/lcsas-restore-tools/resume.sh`, or re-run the
+  restore command.  The pack cache in the tools folder stays until a
+  restore succeeds, so a re-run does not ask again for the discs it
+  already copied, and files that are already complete are skipped.
+  On a live USB stick the home folder is in RAM: the tools folder is
+  lost when the computer is turned off.
 
 ## What Is NOT on This Disc
 
@@ -3580,10 +3597,11 @@ INHERITED A WHOLE STACK OF DISCS?
   labelled {label} (or similar): a META disc like this one.
   Start with it.  If there are several, use the newest; if
   that one fails, use the one burned closest in date to the
-  data discs.  Any data disc can go in first, but a disc of the
-  newest volume (the latest year in its label, then the highest
-  number) has the fullest catalog.  The restore will tell you
-  which data disc to insert next.
+  data discs.  The restore first asks for your newest data
+  disc: the latest year in its label, then the highest number
+  (the full label is printed on the disc).  It knows the
+  newest backups.  After that the restore tells you which data
+  disc to insert next.
 
 NEED HELP?
 

@@ -363,61 +363,55 @@ disc-health checks on a mounted meta disc. See
 
 **Purpose:** Handle the worst-case hardware configuration: one optical
 drive, a stack of data discs, and the meta disc. The meta disc occupies
-the drive at the start, so it must self-extract everything it needs onto
+the drive at the start, so `restore.sh` copies everything it needs onto
 local disk *before* the drive is freed to accept data discs. (This is a
-software extraction step on a running OS — the disc is not bootable.)
+software step on a running OS — the disc is not bootable.)
 
 **Prerequisites:**
 - A meta disc and the host's existing OS (or a live Linux USB).
-- Enough RAM/local disk to hold a working copy of the meta disc's files
-  (a few hundred MB).
+- Room in the home folder for the tools folder (about 130 MB for one
+  platform's binaries, plus the pack cache: about the size of the data
+  discs read).
 - The password (a password file on a USB stick, or typed in from paper).
 
 **Steps:**
 
-1. Mount the meta disc at `/mnt/meta` on the running OS.
-2. **Copy the meta disc's files to local disk** so the drive can be freed
-   (`README_RESTORE.md` Step 1 of single-drive mode):
+1. Mount the meta disc and run the restore from it:
    ```bash
-   sudo mount /dev/sr0 /mnt/meta
-   cp -r /mnt/meta /tmp/lcsas-meta
-   cd /tmp/lcsas-meta
-   sudo umount /mnt/meta
+   sudo mount /dev/sr0 /mnt
+   sh /mnt/restore.sh ~/restored/ latest
    ```
-3. **Eject the meta disc.** `restore.sh` uses the optical drive as the
-   data-disc loader; its prompt loop unmounts + ejects before asking the
-   heir to swap discs.
-4. **Insert a disc of the newest volume** — the latest year in the label,
-   then the highest number. Its disc catalog is the fullest, so the
-   restore needs fewer disc swaps. Any data disc still works.
-5. Run from the extracted copy (single-drive mode is the default;
-   interactive prompts):
-   ```bash
-   sh recovery/scripts/restore.sh ~/restored/ latest
-   # script prompts: Repository: REPO_NAME
-   #                 Password:   <type the password>
-   ```
-   For scripted runs use `restore_auto.sh`; on Windows use `restore.bat`.
-6. Phase 1 (bootstrap) mounts the inserted disc, reads its `catalog.db`,
-   invokes `tools/restore_single_drive.py bootstrap …`, and emits a pick
-   list describing every data disc the restore will visit.
-7. Phase 2 (ingest) walks the volume list. For each volume it ejects the
-   current disc, prompts for the wanted disc, then copies every needed pack
-   into the cache, checking each copied pack's SHA-256. If a newly-inserted
-   disc carries a *fresher* disc catalog (`MAX(created_at)`), it re-runs
-   `bootstrap --reseed` and refreshes the pick list mid-loop.
-8. Phase 3 (finalize) checks that every required pack is present and intact
-   in the cache, classifying any missing pack as `RECOVERABLE` (another disc
-   holds it) or `UNRECOVERABLE`.
-9. After finalize succeeds, the wrapper invokes `rustic restore` (or, if no
-   rustic binary works, `standalone_restorer.py`) against the assembled
-   cache to write files into the target.
+2. `restore.sh` sees it runs off a read-only disc and copies itself,
+   this computer's `recovery/bin/<triple>/`, the docs and the disc's
+   `metadata/` into its tools folder, `~/lcsas-restore-tools`, then runs
+   that copy. Nothing on the disc is in use any more.
+3. It asks for the **newest data disc**: eject the meta disc, insert the
+   data disc with the latest year and then the highest number in its
+   label, mount it if it does not open by itself, and press Enter. That
+   disc's snapshots and index replace the meta disc's copies in the
+   tools folder, and its `catalog.db` is copied there too.
+4. It asks for the backup set (`Choose a repository (number or name):`)
+   and its password (or the set's share cards).
+5. Tier 1 runs. At each disc box, eject, insert the named data disc and
+   press Enter (a disc that mounts by itself is found without Enter).
+   The first time it sees a data disc it copies all of it into the pack
+   cache, so each disc goes in about once.
+6. After a restore that succeeds it asks whether to restore another
+   backup set from the same discs; when you decline, the tools folder
+   goes.
 
-**Expected outcome:** The restore completes against the assembled cache;
-the optical drive holds the meta disc only at the very start and is free
-for data discs afterward. State persists in
-`$CACHE_DIR/restore-state.json` so an interrupted restore can be resumed by
-re-running the same command.
+For scripted runs use `restore_auto.sh`; on Windows use `restore.bat`
+(`docs/workflows/restore-windows.md`). The older Bash driver,
+`recovery/scripts/restore_legacy.sh`, has its own phases (bootstrap
+with `tools/restore_single_drive.py`, ingest, finalize, then
+`rustic restore` against an assembled cache) and prints `INSERT DISC:`;
+see `README_RESTORE.md`, "Directory Mode".
+
+**Expected outcome:** The restore completes; the optical drive holds the
+meta disc only at the very start and is free for data discs afterward.
+If the restore stops (`q` at a disc box, Ctrl-C), the tools folder stays
+with the discs already copied, and `sh ~/lcsas-restore-tools/resume.sh`
+carries it on with no meta disc.
 
 **Variant axes that apply:**
 - **Media type:** the data-disc media type determines swap count, not the
@@ -427,13 +421,16 @@ re-running the same command.
   to leave its drive.
 - **Storage stage:** the cache lives on the restoring computer's local disk
   and is filled from the discs.
-- **Repository selection:** running without a repository makes
-  `restore_single_drive.py bootstrap` list available repositories and exit
-  so the heir can pick one.
+- **Repository selection:** with more than one backup set, `restore.sh`
+  lists them by name and asks; `LCSAS_REPO` (or `--repo`) picks one
+  without the list.
 
 **Test coverage:**
+- `tests/recovery_hardening/test_restore_sh_journey.py` and
+  `test_restore_sh_tools_folder.py`: the newest-disc step, the set list,
+  the password, another set, the tools folder and resume.sh.
 - `tests/unit/test_meta_builder.py::TestMetaVolumeBuilder::test_single_drive_helper_bundled`
-  and `::test_restore_script_single_drive_default`.
+  and `::test_restore_script_single_drive_default` (the legacy driver).
 - `tests/unit/test_meta_builder.py::TestSingleDriveBitsStandalone`
   (dispatcher, bash syntax, helper write).
 - `tests/integration/test_meta_volume_restore.py` covers the directory-mode

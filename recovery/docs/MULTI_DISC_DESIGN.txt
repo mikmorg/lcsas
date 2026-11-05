@@ -31,8 +31,19 @@ WHAT HAS SHIPPED (as of Phase 21)
     the label in the volume_info.json it already carries, so a wrong
     disc is obvious ("mounted the disc labelled ... at ...", then
     "still not found").  Design item C below, without a new file.
-  * Single-drive relocation: restore.sh copies itself and the binary
-    to RAM (/tmp) before prompting, so the meta disc can be ejected.
+  * Single-drive relocation: restore.sh and restore.bat copy
+    themselves and this computer's binaries to a tools folder on the
+    computer before prompting, so the meta disc can be ejected (see
+    SINGLE-DRIVE RESTORE below).
+  * The newest data disc first (rc6, #605): before the set menu, the
+    scripts ask for the newest data disc and take each backup set's
+    snapshots and index from it.  See THE NEWEST DATA DISC FIRST.
+  * Carrying on (rc6, #609): the tools folder outlives a restore
+    that stopped, and resume.sh / "Resume LCSAS restore.bat" carry it
+    on with no META disc.  See THE TOOLS FOLDER AND CARRYING ON.
+  * Drain on first sight (rc6): with the pack cache on, tier 1
+    copies a data disc into the cache the first time it sees it, so
+    each disc goes in about once.  q at the prompt exits 75.
   * See RECOVER.txt (MULTI-DISC RESTORE section) for the current
     heir-facing procedure including exact prompt text and physical
     swap steps.
@@ -52,9 +63,9 @@ disc (tools + indices) plus 4-50 data discs (each
 ~25-100 GB of encrypted packs).  At restore time the recovery tool
 must read pack files that physically live on many different discs.
 
-CURRENT BEHAVIOUR (broken)
+BEHAVIOUR BEFORE THIS DESIGN (fixed since; kept for the record)
 
-  lcsas-restore opens its single --repo directory and treats
+  lcsas-restore opened its single --repo directory and treated
   $REPO/data/ as the universe of available pack files.  When a
   required pack is not present there it prints:
 
@@ -516,23 +527,29 @@ disc cannot be ejected while it has open file descriptors.
 LCSAS releases the drive in three coordinated steps:
 
   1. restore.sh / restore.bat RELOCATE before doing anything else.
-     They copy themselves + the bin/<arch>/ tree to a writable
-     folder (restore.sh: under /tmp, /run, etc.; restore.bat: the
-     tools folder, %LOCALAPPDATA%\LCSAS-restore, with only the
-     programs of bin\<triple>\ and the backup sets' metadata, #612),
-     set the sentinel env var LCSAS_RELOCATED=<original meta mount>,
-     and re-exec from that folder.  The original meta disc is now no
-     longer opened by sh/cmd.exe -- only by lcsas-restore, which
-     holds scoped open/close FDs on individual files (see
-     repo.c::lcsas_repo_read_blob).  restore.bat keeps its tools
-     folder until a restore has finished, so a restore that stopped
-     carries on from it with no META disc (#609).
+     They copy themselves, this computer's binaries and the META
+     disc's metadata/ to the tools folder (see THE TOOLS FOLDER AND
+     CARRYING ON below):
+       restore.sh:  $HOME/lcsas-restore-tools, with bin/<triple>/
+                    and the docs; a temporary folder under /tmp,
+                    /run and so on only when that folder cannot be
+                    used;
+       restore.bat: %LOCALAPPDATA%\LCSAS-restore, with only the three
+                    programs of bin\<triple>\ (rustic-static.exe only
+                    when a set holds its own data\), RECOVER_WINDOWS.txt
+                    and the backup sets' metadata (#612).
+     They set the sentinel env var LCSAS_RELOCATED=<original meta
+     mount>, and re-exec from that folder.  The original meta disc
+     is now no longer opened by sh/cmd.exe -- only by lcsas-restore,
+     which holds scoped open/close FDs on individual files (see
+     repo.c::lcsas_repo_read_blob).
 
-  2. lcsas-init (initramfs PID 1) exports LCSAS_META_DISC=/mnt to
-     restore.sh so the script knows the exclusion path without
-     having to probe.  init.c also chdir("/")s before exec, so the
-     execve(2) barrier does not carry a cwd into restore.sh that
-     would pin the disc.
+  2. LCSAS_META_DISC names the META disc's mount point for a caller
+     that knows it, so restore.sh need not probe.  It was meant for
+     lcsas-init (initramfs PID 1), which also chdir("/")s before
+     exec; that live-boot path is quarantined in experimental/boot/
+     and no LCSAS disc boots.  Today the variable is set by hand or
+     by test rigs.
 
   3. lcsas-restore takes a new --meta-disc CLI flag (also the env
      var LCSAS_META_DISC).  When set, the disc_locator:
@@ -571,6 +588,13 @@ be closed before the heir is prompted.  The audit:
     the time the locator is reached.
   - pack files: open+close in lcsas_repo_read_blob (line 748 /
     756).  No long-lived FDs.
+  - catalog.db: tier 1 keeps its --catalog file open for the whole
+    run, so both scripts pass a COPY in the tools folder, never a
+    file on a disc (#610).  A newer catalog.db that tier 1 finds on
+    a disc later is copied into the pack cache
+    (.locator-catalog.db) and opened there.  Without a pack cache it
+    is opened in place, which holds that disc: so restore.bat passes
+    --mount-parent only once its pack cache folder exists.
 
 After step 3 (locator entry) the meta disc has zero open FDs and
 can be ejected.
@@ -582,7 +606,10 @@ WORKFLOW EXAMPLE (one-drive case)
   [lcsas-restore] copied recovery binaries to /home/alice/lcsas-restore-tools
   [lcsas-restore] you may eject the meta disc when the binary
                   prompts for a data disc.
-  [tier 1] using prebuilt lcsas-restore (x86_64)
+  (the newest-data-disc step, the set menu and the password; see
+   THE NEWEST DATA DISC FIRST below.  With S at the first, no data
+   disc and no catalog is in yet when tier 1 starts)
+  [tier 1] using prebuilt lcsas-restore (x86_64-unknown-linux-musl)
   [lcsas-restore] master key loaded
   [lcsas-restore] indexed 12,847 blobs
   [lcsas-restore] loaded 4 snapshot(s)
@@ -590,7 +617,7 @@ WORKFLOW EXAMPLE (one-drive case)
 
   +----------------------------------------------------------+
   | Pack 4f3e2a1b9c8d1234... is required for the next file.  |
-  | (catalog has no record of this pack ID)                  |
+  | (no disc catalog yet: insert your newest data disc)      |
   |                                                          |
   | Currently searching: ...                                 |
   |                                                          |
@@ -599,12 +626,24 @@ WORKFLOW EXAMPLE (one-drive case)
   | insert the disc named above into the SAME drive.         |
   |                                                          |
   | Insert the right disc and press ENTER to retry.          |
+  | Type 'q' then ENTER to abort.                            |
   +----------------------------------------------------------+
   > _
+
+  The "Single-drive restore" lines show only while the META disc is
+  still in its drive (since rc6).  With a catalog the box names the
+  disc instead ("It is on any disc labelled:"); a catalog that does
+  not know the pack says "(catalog has no record of this pack ID)".
 
   (heir ejects meta disc, inserts data disc, presses ENTER)
 
   [lcsas-restore] found 4f3e2a1b9c8d...; continuing.
+
+  With the pack cache on (the default), the first time tier 1 sees a
+  data disc it copies all of it into the cache and says so:
+
+  [lcsas-restore] copying disc LCSAS_BD25_2027_0003 to the cache: 512 MB.  From a disc this can take several minutes.
+  [lcsas-restore] copied 512 of 512 MB from disc LCSAS_BD25_2027_0003 to the cache.
 
   With --auto-mount on (the default since #455) the prompt also says
   "(A disc that mounts by itself is found without ENTER.)", and a disc
@@ -628,7 +667,8 @@ KNOWN LIMITATIONS
 ─────────────────
 
   - macOS bare-disc boot path is not in scope; the host-OS path on
-    macOS still works (restore.sh relocates to /tmp).
+    macOS still works (restore.sh relocates to its tools folder,
+    ~/lcsas-restore-tools).
   - On Windows, restore.bat records the META disc's drive letter
     (%~d0, as LCSAS_RELOCATED) before the relocated copy runs.  On a
     machine with one optical drive, every data disc then goes into
@@ -640,13 +680,140 @@ KNOWN LIMITATIONS
     #143), and searches it again once a data disc is in.  Up to rc5
     restore.bat left the letter out for the whole run, so a
     one-drive restore on Windows could never find a data disc
-    (#604).  A drive that is EMPTY when restore.bat starts is not
-    seen at all (`if exist X:\` is false), so put the META disc in
-    the drive you will use for the data discs.  A restore carried on
+    (#604).  restore.bat does not pass a drive that is EMPTY when it
+    starts (`if exist X:\` is false).  Since rc6 tier 1 itself
+    searches the root of every optical drive (GetDriveTypeA ==
+    DRIVE_CDROM) each time it looks for a disc, so such a drive is
+    still found; the META disc's own drive is the simplest one to
+    use for the data discs.  A restore carried on
     with "Resume LCSAS restore.bat" searches the letters the stopped
     run saved in resume.cfg, empty or not (#609).
   - Set LCSAS_NO_RELOCATE=1 to suppress relocation (for dev/test
     workflows running the script from a writable checkout).
+
+────────────────────────────────────────────────────────────────────
+THE NEWEST DATA DISC FIRST (rc6, #605)
+────────────────────────────────────────────────────────────────────
+
+Every disc carries every backup set's keys/, index/ and snapshots/
+as they were when that disc was made.  The META disc's copy is as
+old as the META disc: a backup made later is not in it, and a set
+added later is not there at all.  With one drive, only the META disc
+is in at the start, so up to rc5 "latest" meant the latest when the
+META disc was burned.
+
+So both scripts, after relocating and before the set menu, ask for
+the NEWEST data disc when no data disc is in yet:
+
+  Take the META disc out and put in your NEWEST data disc: the one
+  with the latest year, and then the highest number, ...
+  Press ENTER when it is in; S then ENTER to skip (use the copies on
+  the META disc); Q then ENTER to quit.
+
+  * "Newest" is the label from the disc root's VOLUME_INFO.txt line
+    "  Label:  <LABEL>" (or volume_info.json "label"), read from the
+    right: the second-to-last "_" field is the year, the last the
+    number, compared as numbers.  Never the drive or volume name:
+    Joliet cuts it to 16 characters, the same for every CD of a
+    year.
+  * The script prints the full label it read, and asks again when
+    the disc has none (not a data disc).  Q stops with exit 65.
+  * With data discs already in, it takes the newest of them and asks
+    nothing.
+  * Merge rule, into the tools folder's metadata/: for each set on
+    that disc, its snapshots/ and index/ come from that disc ONLY
+    (they replace the older copy whole), its keys/ are the union of
+    both copies, and its LCSAS_REPO.txt comes along.  A set that is
+    only on the META disc keeps the META copy.  Never a union of
+    index/ or snapshots/: the META copy can be newer than any disc
+    at hand, and an index entry for a pack pruned since would make
+    tier 1 pick between two at random.
+  * Catalog: the catalog.db tier 1 gets is a copy in the tools
+    folder (#610).  restore.bat copies the newest data disc's;
+    restore.sh copies the freshest catalog.db by file time among the
+    mounted discs and its own earlier copy (the two differ only for
+    a re-burn that keeps an old label).
+
+Where the two scripts differ:
+  * restore.sh asks only on a terminal (LCSAS_INTERACTIVE) and only
+    when it knows the META disc's mount (relocated, or LCSAS_META_DISC
+    set); a copy of the META disc run where it is does not ask.  The
+    end of the input stops it with 65.
+  * restore.bat asks whenever it runs from a META disc or from a
+    writable copy of one (no "Label:" in VOLUME_INFO.txt and
+    recovery\scripts\restore.bat at the root).  Five ENTERs with no
+    data disc found go on with the META disc's copies, because cmd
+    cannot tell an empty answer from the end of the input.  A label
+    read from a disc is used only when it holds nothing but
+    A-Z, a-z, 0-9 and "_".
+  * LCSAS_NEWEST_DISC_PROMPT=0 skips the step in both; a resumed
+    restore skips it too, so it carries on with the same snapshot.
+
+────────────────────────────────────────────────────────────────────
+THE TOOLS FOLDER AND CARRYING ON (rc6, #609)
+────────────────────────────────────────────────────────────────────
+
+The relocation (step 1 of SINGLE-DRIVE RESTORE) copies into a fixed
+tools folder, not a throwaway one, so a restore that stops can carry
+on without the META disc:
+
+                restore.sh                   restore.bat
+  folder        $HOME/lcsas-restore-tools    %LOCALAPPDATA%\LCSAS-restore
+  marker        .lcsas-restore-tools         .lcsas-tools
+  resume        resume.sh (mode 700)         resume.cfg + "Resume LCSAS
+                                             restore.bat" (also on the
+                                             Desktop)
+  also holds    metadata/, catalog.db,       metadata\, catalog.db,
+                pack-cache/, .lcsas-build,   pack-cache\, archive.txt,
+                .lcsas-sets, .lcsas-copy-ok  merged-from.txt, in-place\
+
+LCSAS_TOOLS_DIR names another folder for both.
+
+  * Ownership: each script writes its marker file in the folder
+    before anything else, and later uses only a folder that is new,
+    empty or carries its marker.  Any other folder (one holding the
+    reader's own files, or a whole drive such as E:\) is never used
+    and never deleted: restore.bat refuses it with exit 1 before
+    changing anything; restore.sh falls back to a temporary folder.
+    Relocated off the META disc, that temporary folder becomes the
+    tools folder, and a stopped restore carries on from it with the
+    resume.sh the script prints, until the folder is cleared (most
+    systems empty /tmp at power-off).  Run in place, the run's files
+    go to a temporary folder deleted at exit, and that run cannot be
+    carried on.
+  * Reuse: a later run from the META disc reuses the copy only when
+    it is whole and was made by the very same script and tier-1
+    binary for the same archive (restore.sh: .lcsas-build,
+    .lcsas-copy-ok and .lcsas-sets; restore.bat: fc /b of restore.bat
+    and archive.txt, the META disc's volume_info.json created_at).
+    Otherwise it is replaced, keeping pack-cache only for the same
+    build (restore.sh) or the same lcsas-restore.exe (restore.bat).
+  * Resume: resume.sh / resume.cfg hold the set, the target folder
+    and (restore.bat) the drive letters searched, NEVER the password.
+    A resumed run asks only for the password (or the share cards
+    again, for a split set), skips the newest-disc step and uses the
+    tools folder's copy of the set, so "latest" is the same snapshot
+    as before the stop (restore.sh exports LCSAS_RESUME=1 for that).  Tier 1 skips files that are already
+    complete, and the pack cache keeps the discs already read.
+  * Delete: only after a restore that succeeds and the reader
+    declines "Restore another backup set from these discs? [y/N]".
+    restore.sh removes only the entries it made, then the folder.
+    restore.bat's copy runs from inside the folder and cannot delete
+    it, so it leaves .done there; the relaunch line on the disc copy
+    (or the launcher) then deletes the folder, but only when both
+    .done and .lcsas-tools are in it.  After any other exit (a wrong
+    password, q at a disc prompt with exit 75, Ctrl-C) the folder
+    stays.
+  * In place (restore.bat): a run that does not relocate
+    (LCSAS_NO_RELOCATE=1, a writable copy of the META disc, or a copy
+    that failed so the script stays on the disc) keeps its pack
+    cache, catalog copy, merged metadata and merged-from.txt in the
+    tools folder's in-place\ subfolder, so a stopped restore waiting
+    in the tools folder is left as it is.  in-place\ is removed after
+    a restore that succeeds, and the tools folder too if nothing else
+    is in it.  Such runs write no resume.cfg and no launcher.
+    restore.sh, run in place, keeps those files in the tools folder
+    itself.
 
 ────────────────────────────────────────────────────────────────────
 SEE ALSO

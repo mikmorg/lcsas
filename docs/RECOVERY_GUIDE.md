@@ -22,12 +22,15 @@ You need **three things** to restore your files:
 > shared password manager.
 
 > **Password split into share cards?**  If `PASSWORD_INFO.txt` on any disc
-> says the password is split, you must reconstruct it first: gather
-> the stated number of share cards (printed pages titled
-> "SHARE CARD"; older cards say "KEY SHARE") and run the combiner
-> bundled on the META disc —
+> says the password is split, gather the stated number of share cards
+> (printed pages titled "SHARE CARD"; older cards say "KEY SHARE").
+> The restore script asks for the cards itself when the disc marks the
+> set's password as split: type the words of each card when it asks.
+> If it asks for a password instead (an older disc), rebuild the
+> password first with the combiner bundled on the META disc —
 > `recovery/bin/<machine>/lcsas-keyshare card1.txt card2.txt`
-> (`<machine>` is `x86_64` for most PCs; on Windows, run
+> (`<machine>` is the folder under `recovery/bin/` for your computer,
+> `x86_64-unknown-linux-musl` for most PCs; on Windows, run
 > `lcsas-keyshare.exe`, see the Windows walkthrough).  If the binary
 > won't run, the fallback is `python3 keyshare_combine.py card1.txt
 > card2.txt`.  Either prints the password — then continue below as
@@ -60,8 +63,9 @@ For the most common case, the entire restore is:
 ```sh
 sudo mount /dev/sr0 /mnt                       # insert the newest META disc, mount
 sh /mnt/restore.sh ~/restored/ latest          # start restore
-# answer "Repository: <name>" and "Password: <yours>"
-# first data disc: the one with the newest label (see below)
+# when asked, eject META, insert the data disc with the newest label
+#   (see below), press Enter
+# choose the repository (number or name), then type its password
 # when prompted, eject + insert the named data disc, press Enter
 # repeat for each data disc the script asks for
 ```
@@ -73,7 +77,10 @@ newest label: the latest year in the label, then the highest number.
 That disc's catalog is the fullest, so you swap discs less often.  Any
 data disc still works.
 
-When you see `RESTORE COMPLETE`, your files are in `~/restored/`.
+When you see `[lcsas-restore] restore complete`, your files are in
+`~/restored/`.  If you stop part-way (`q` at a disc prompt, or
+Ctrl-C), carry on later with `sh ~/lcsas-restore-tools/resume.sh`;
+no META disc is needed.
 [recovery-runbook.md](guides/recovery-runbook.md) has the long form with
 troubleshooting and guidance for archives with several repositories.
 
@@ -96,7 +103,7 @@ sudo mount -o remount,exec /mnt
 ### "wrong password" or "unable to open key"
 
 - Double-check you're using the correct password for the repository you
-  selected at the `Repository:` prompt.
+  chose at the `Choose a repository` prompt.
 - If the archive has multiple repositories, they may use different
   passwords.  Check `PASSWORD_INFO.txt` on any disc for which password
   goes with which repository.
@@ -187,7 +194,9 @@ LCSAS_BD25_2026_0001.iso
 ├── data/                    Encrypted backup data
 │   └── ab/abc123...         Pack files (named by pack ID)
 └── metadata/
-    └── family/              One folder per repository
+    └── <id>/                One folder per repository, named by its id
+        ├── LCSAS_REPO.txt   The repository's name, and whether its
+        │                    password is split
         ├── config
         ├── keys/
         ├── index/
@@ -198,12 +207,15 @@ The **META disc** holds no catalog.  It contains:
 
 ```
 LCSAS_META.iso
-├── restore.sh               Start here.  Interactive restore script.
+├── restore.sh               Start here (Linux, macOS).  Interactive restore script.
+├── restore.bat              Start here (Windows).
 ├── README_RESTORE.md        Detailed restore guide
 ├── VOLUME_INFO.txt          What this disc is and when it was built
-├── tools/bin/<arch>/        Per-platform recovery binaries
-├── lcsas/                   Full LCSAS source code
-└── recovery/docs/           On-disc reference (RECOVER.txt, TIERS.txt, …)
+├── metadata/<id>/           Every repository's metadata, as of this disc
+├── recovery/bin/<triple>/   Per-platform recovery binaries
+├── recovery/docs/           On-disc reference (RECOVER.txt, TIERS.txt, …)
+├── tools/                   Portable Linux x86_64 tools (rustic, Python 3)
+└── lcsas/                   Full LCSAS source code
 ```
 
 The META disc ships binaries for six platforms (Linux
@@ -231,14 +243,12 @@ Print this and tape it to the inside of your disc binder:
 │     sudo mount /dev/sr0 /mnt                            │
 │     sh /mnt/restore.sh ~/restored/ latest               │
 │                                                         │
-│  4. Answer prompts:                                     │
-│     Repository: <name>                                  │
-│     Password:   <yours>                                 │
+│  4. When asked, swap META for the data disc with the    │
+│     newest label (latest year, then highest number).    │
 │                                                         │
-│  5. First data disc: the one with the newest label      │
-│     (latest year, then highest number).  After that,    │
-│     when asked, eject + insert the named data disc,     │
-│     press Enter.  Repeat per disc.                      │
+│  5. Choose the repository, type its password.  When     │
+│     asked, eject + insert the named data disc, press    │
+│     Enter.  Repeat per disc.                            │
 │                                                         │
 │  6. Files appear in ~/restored/                         │
 │                                                         │

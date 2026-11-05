@@ -11,8 +11,10 @@ quoting the exact command and message.
 **Cause**: tier-1 binary or your shell has the mount open (chdir
 inside, open file handle, SQLite catalog).  Used to happen
 constantly before commit `c6f89a0` — the catalog SQLite handle
-pinned the mount.  The catalog is now copied to the pack cache
-before opening, so this is rare.
+pinned the mount.  Since rc6 the script gives tier 1 a copy of the
+catalog in its tools folder (`~/lcsas-restore-tools/catalog.db`),
+and tier 1 copies a catalog it finds on a disc later into its pack
+cache before opening it, so this is rare.
 
 **Fix (most cases)**: `lsof /mnt` to find the holder.  If it's
 your own shell:
@@ -65,14 +67,10 @@ all three tiers in order instead of failing fast on tier 1:
 LCSAS_TIER_FALLBACK=1 sh restore.sh ~/restored/ latest
 ```
 
-If tier 3 itself is broken, drop to manual rustic invocation:
-
-```sh
-/mnt/tools/bin/rustic-static -r /mnt/metadata/alpha \
-    --password-file ~/key.txt restore latest ~/restored/
-```
-
-(Replace `alpha` and the password-file path with yours.)
+If tier 3 itself is broken, drop to a manual rustic run.  rustic
+needs every pack in one folder, so first assemble the repository
+as [Manual pack assembly](#manual-pack-assembly-last-resort-tier-3-fallback)
+below says, then run rustic-static against that folder.
 
 ---
 
@@ -94,21 +92,29 @@ or use a fresher meta disc.  The fix has been in master since
 
 ---
 
-## `INSERT DISC: <hash>` (hex pack ID, no friendly label)
+## `(no disc catalog yet: insert your newest data disc)` (the disc box names no disc)
 
-**Cause**: no `--catalog` was supplied to tier-1, so the binary
-can't translate pack ID → disc label.  Happens when you haven't
-mounted any data disc that carries a catalog.
+**Cause**: tier 1 has no catalog, so it cannot turn the pack ID into
+a disc label.  This happens when no data disc was in at the start
+(you typed S at "put in your NEWEST data disc", or the script did not
+ask).  The META disc carries no catalog.
 
-**Fix**: mount any data disc.  Each data disc carries a disc
-catalog at `<disc-root>/catalog.db`.  The script auto-discovers
-it and re-picks whichever disc catalog is freshest.
+**Fix**: put in your newest data disc (the latest year in its
+label, then the highest number) and mount it if it does not open by
+itself.  Each data disc carries a disc catalog at
+`<disc-root>/catalog.db`; tier 1 picks it up when it looks again.
 
 ```sh
 sudo mount /dev/sr0 /mnt
 # Now press Enter at the prompt; the rescan will find both the
 # pack and the catalog.
 ```
+
+Older recovery binaries said `(no --catalog supplied; cannot
+suggest a disc)` here.  The legacy `restore_legacy.sh` prints
+`INSERT DISC: <label>` instead (blank for the first disc); there,
+insert the disc it names, or your newest data disc when it names
+none.
 
 ---
 
@@ -140,11 +146,14 @@ LCSAS_PACK_CACHE_DIR= sh restore.sh ~/restored/ latest
 ## Several repositories: typed the wrong repository name
 
 **Cause**: typed `albha` instead of `alpha` at the
-`Repository:` prompt.
+`Choose a repository (number or name):` prompt.
 
-**Fix**: the script exits 1 with the list of available
-repositories.  Just re-run.  The `Repository:` prompt only appears
-on archives with more than one repository.
+**Fix**: on a terminal the script says
+`no repository named albha; choose from: ...` and asks again: type
+the number, the name or the id (Q then Enter quits, exit code 65).
+Without a terminal (a script, a pipe) it exits 1 with that list.
+The prompt only appears on archives with more than one repository.
+On Windows, `restore.bat` takes only the number.
 
 ---
 
@@ -154,13 +163,16 @@ on archives with more than one repository.
 (real heir).
 
 **Fix**: the restore is idempotent over rustic-format repositories —
-just re-run.  The pack cache survives across runs, so the second
-attempt benefits from any draining done in the first attempt:
+just carry on.  A restore that stopped keeps its tools folder, with
+the discs already copied into its pack cache, until a restore
+succeeds.  Run the command the script printed (no META disc needed):
 
 ```sh
-# Same exact command, the cache is already warm
-sh restore.sh ~/restored/ latest
+sh ~/lcsas-restore-tools/resume.sh
 ```
+
+Re-running the first command from the META disc works too.  Once a
+restore succeeds the tools folder and its pack cache are deleted.
 
 For the test fixture: bump `MAX_TURNS` in `tests/e2e/cdemu_blind_restore/run.sh`.
 
@@ -188,15 +200,18 @@ If `restore.sh` is broken in some way you can't fix and you have
 to manually assemble a rustic-format repository by hand:
 
 1. Pick a writable directory `$R` (call it `/tmp/manual-repo`).
-2. Copy `keys/`, `index/`, `snapshots/` from any data disc's
-   `metadata/<repo>/` into `$R/`.
+2. Copy `config`, `keys/`, `index/` and `snapshots/` from your
+   NEWEST data disc's `metadata/<id>/` into `$R/` (the newest disc
+   knows the newest snapshots; `grep -H '^name=' /mnt/metadata/*/LCSAS_REPO.txt`
+   says which `<id>` is which backup set).
 3. For every data disc, mount it and copy `data/` into `$R/data/`
    (or `cp -r` over the existing tree; both directories are
    content-addressed so identical packs merge cleanly).
-4. Run rustic-static directly against `$R`:
+4. Run rustic-static from the META disc (`recovery/bin/<arch>/rustic-static`,
+   or `tools/bin/rustic-static`) directly against `$R`:
 
 ```sh
-/mnt/tools/bin/rustic-static -r /tmp/manual-repo \
+/mnt/recovery/bin/<arch>/rustic-static -r /tmp/manual-repo \
     --password-file ~/key.txt restore latest ~/restored/
 ```
 
