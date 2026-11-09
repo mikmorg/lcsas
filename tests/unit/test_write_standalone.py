@@ -101,9 +101,11 @@ class TestStandaloneFloor:
                 for alias in node.names:
                     if alias.name in self._POST_310_MODULES:
                         offenders.append(f"import {alias.name}")
-            elif isinstance(node, ast.Name):
-                if node.id in self._POST_310_BUILTINS:
-                    offenders.append(node.id)
+            elif (
+                isinstance(node, ast.Name)
+                and node.id in self._POST_310_BUILTINS
+            ):
+                offenders.append(node.id)
 
         assert not offenders, (
             "Generated standalone script uses post-3.10 APIs "
