@@ -12,8 +12,8 @@ f7cd8639cdddaa5ca0d9dc426721cc4d033dc6cee9560d3257c3cd6c27e0a9eb  ./docs/BOOT.tx
 f132fe266826e4e2c2caa54a7d99d90aa9ce6b309fcc3c1e220273ac0d7b87a7  ./docs/BUILD.txt
 c0e55356dc88716be52d561ca990ad0c38bb9d718ae7d9e08b6d22a404afeb63  ./docs/CRYPTO.txt
 6c4fc38068d6c49396ef9dafdc9b85c2f0072429b589a3a825e11f97e39eb4e1  ./docs/DEFERRED_WORK.txt
-bbd43155c3f38186cbcb09630e4879f247aef6a5f3aae2e28f6e840e91d1a60d  ./docs/ENV_VARS.txt
-cd5b3c1210fc519a626da6a3bafa129786e0e52ec7f85435c4d9536033765d7b  ./docs/EXEMPTIONS.md
+79b95836ee9aa7de23bdc83ca2ee60274e2a044a41e24e801e7e1eb3e1bcf038  ./docs/ENV_VARS.txt
+7fb50be5ef3b81bc2e88ae1d7555e4360ef1c9b8754f9fc64a5b789378dc2e56  ./docs/EXEMPTIONS.md
 708a1f0640b039f72d2dbad4a6599c6610701005b500ea8c8147c7b98fb6484d  ./docs/FORMAT.txt
 4905bc6b2dc35c092a1185d053050b78adf59c7933f68c31c24b23c1e30f2f47  ./docs/MULTI_DISC_DESIGN.txt
 62b3a1bfbb4257b28dbc8a03496c7916360b6e6d709fd16418439feb76910f08  ./docs/PHYSICAL_DISC_VALIDATION.txt
@@ -291,8 +291,8 @@ fdedb9ff512078245a11aba51a261b52076669afb25c9aed0db0bfca91cd7f8d  ./src/lcsas-re
 f22c4d0db8ccf2237f0fb70c63ddbe0f9e741760d9225f87bd3e109b57d806fc  ./src/lcsas-restore/b64.h
 da43038678c9ce0dea445c0abff14701235e9c4b2f473470caefb739015c3e79  ./src/lcsas-restore/catalog.c
 8c9ee6af7e4208d1f20262fba91e66244363496bba984463a49d1c083d84dde7  ./src/lcsas-restore/catalog.h
-3775b4ab22ab5b126c358763aa0d71627be21f70a59f2f283869edf2c56ae6f5  ./src/lcsas-restore/disc_locator.c
-19f174f60bc98743ac57ba422235e197a591c6da57cc97f0ea1cfc984594cff3  ./src/lcsas-restore/disc_locator.h
+e949a2ae51e39e75cc13ae5b51dab7180033112a0b8470abfab64c9e06e0206a  ./src/lcsas-restore/disc_locator.c
+f94f2bce8d43858fd27fa378d31b68070b0fee84d4b4066d94edc7ad0184f01b  ./src/lcsas-restore/disc_locator.h
 ec4082af81aebc47f987d37bcbe26188897aca8279cfb0a4932ef3051178a1a5  ./src/lcsas-restore/hex.c
 80953b8e3d4771369f8827b8c1fc1560fce64866873b752196c6c802aa083181  ./src/lcsas-restore/hex.h
 ee4c41e6c9b038bfc96b62119477f43c957a80bd40a8685f77782f2c44517574  ./src/lcsas-restore/json_q.c
@@ -339,7 +339,7 @@ dd73cf763995ac0f5b2a7b2281e9fdd4fd810f9ece15d89ae4e8954583da0df3  ./tests/gen_ke
 af8ec80717432b1a0cf769c80049fc2f86fb48891844259e335d40c598661c7f  ./tests/test_b64.c
 374d3366ae0d2546f9444a70a9eda397a0f97698ccac7c4b4d1f279b8f58b187  ./tests/test_bare_path.sh
 fb2bd945d75309f50f235614f38bbbe8fe3ef61f80481dad615bc350b40c3408  ./tests/test_catalog.c
-6e868ced66f9d69912bea3cb1bf089160fdb3290b65fca96648d03f5c34bdfee  ./tests/test_disc_locator.c
+05e916fd7fcc0586ee4efc3889b6f1468362be6597a349429332bb56d11ad286  ./tests/test_disc_locator.c
 61314fc14a36703e0a6d4bf550cd48aab2defd3929dc71140d44032ba3d9454c  ./tests/test_e2e.py
 c3716d6e5ac8193689130a65de1eb4c85fd7797560f3dc07d78cc9f7a6b5132b  ./tests/test_e2e_windows.sh
 9042e9544ac7192aaa6551264e100817791a3a7d084fbe93c6e22e122dd70217  ./tests/test_ecc.c

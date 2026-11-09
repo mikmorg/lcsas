@@ -864,14 +864,44 @@ main(void)
         }
     }
 
-    /* fs_critically_full guard [FMA-09]: when LCSAS_TEST_FULL_FS_DIR
-     * names a directory on a <10%-free filesystem (the gated Python
+    /* The pack-cache space rule is in bytes, not a percentage (#634).
+     * A 1 TB drive 92 % full still has 80 GB free: a 700 MB disc fits.
+     * The same drive with only 1.5 GB free does not (1 GiB margin);
+     * a 2 GB drive with 600 MB free fits a 500 MB disc (5 % = 100 MB
+     * margin) but not a 520 MB one; a disc bigger than the free
+     * space never fits; an empty disc always fits a non-full drive. */
+    {
+        const unsigned long long MB = 1000ULL * 1000ULL;
+        const unsigned long long TB = MB * 1000ULL * 1000ULL;
+        struct { unsigned long long fr, tot, need; int want; } c[] = {
+            { 80000ULL * MB, 1ULL * TB, 700ULL * MB, 1 },
+            { 1500ULL * MB,  1ULL * TB, 700ULL * MB, 0 },
+            { 600ULL * MB,   2000ULL * MB, 500ULL * MB, 1 },
+            { 600ULL * MB,   2000ULL * MB, 520ULL * MB, 0 },
+            { 600ULL * MB,   2000ULL * MB, 700ULL * MB, 0 },
+            { 600ULL * MB,   2000ULL * MB, 0ULL, 1 },
+        };
+        size_t k;
+        for (k = 0; k < sizeof c / sizeof c[0]; k++) {
+            int got = lcsas_drain_fits(c[k].fr, c[k].tot, c[k].need);
+            if (!got != !c[k].want) {
+                fprintf(stderr,
+                        "FAIL: lcsas_drain_fits(free=%llu, total=%llu, "
+                        "need=%llu) = %d, want %d\n", c[k].fr, c[k].tot,
+                        c[k].need, got, c[k].want);
+                fails++;
+            }
+        }
+    }
+
+    /* Cache-space guard [FMA-09, #634]: when LCSAS_TEST_FULL_FS_DIR
+     * names a directory on a filesystem with less than 5 % free (the gated Python
      * harness in tests/recovery_hardening/test_restore_space_preflight.py
-     * mounts and fills a 1 MiB tmpfs), draining into a cache there
-     * must be REFUSED up front: "disabling further drains" warning on
-     * stderr, no pack copied, locate still succeeds.  Self-skips when
-     * the env var is unset (plain `make test` runs) or the named fs
-     * is not actually critically full. */
+     * mounts and fills a 1 MiB tmpfs), there is no room for the disc
+     * plus the margin, so draining into a cache there must be REFUSED:
+     * "too little to copy disc" warning on stderr, no pack copied,
+     * locate still succeeds.  Self-skips when the env var is unset
+     * (plain `make test` runs) or the named fs has 5 % or more free. */
     {
         const char *full_fs = getenv("LCSAS_TEST_FULL_FS_DIR");
         struct statvfs vfs;
@@ -885,9 +915,9 @@ main(void)
             fprintf(stderr,
                     "[info] LCSAS_TEST_FULL_FS_DIR unset; skipping "
                     "critically-full drain-guard test\n");
-        } else if (pct_free >= 10) {
+        } else if (pct_free >= 5) {
             fprintf(stderr,
-                    "[info] %s is %d%% free (not <10%%); skipping "
+                    "[info] %s is %d%% free (not <5%%); skipping "
                     "critically-full drain-guard test\n", full_fs, pct_free);
         } else {
             char guard_cache[1024];

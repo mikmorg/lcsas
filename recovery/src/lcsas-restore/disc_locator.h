@@ -197,6 +197,17 @@ void lcsas_disc_locator_set_cache_dir(lcsas_disc_locator *l,
                                       const char *cache_dir);
 
 /*
+ * The pack-cache space rule (#634): a disc whose uncopied packs total
+ * `need_bytes` is copied into the cache only when the cache's drive
+ * keeps, after the copy, at least 5 % of `total_bytes` free, capped
+ * at LCSAS_DRAIN_MARGIN_MAX.  Returns non-zero when it fits.
+ */
+#define LCSAS_DRAIN_MARGIN_MAX  (1024ULL * 1024ULL * 1024ULL)  /* 1 GiB */
+int lcsas_drain_fits(unsigned long long free_bytes,
+                     unsigned long long total_bytes,
+                     unsigned long long need_bytes);
+
+/*
  * Turn auto-detect (see `auto_mount` above) on (non-zero, the default)
  * or off.  Only matters when the locator is interactive.
  */

@@ -844,30 +844,36 @@ copy_file(const char *src, const char *dst)
 }
 
 /*
- * Return non-zero if the filesystem hosting `path` is below
- * `min_free_pct` percent free.  Conservative on stat failure
- * (returns 0 — assume OK).  Posts a one-line stderr warning on
- * threshold crossing so the heir sees it once.
+ * Fill *free_bytes and *total_bytes for the filesystem hosting `path`.
+ * Returns 0 on success, -1 when the sizes cannot be read.
  */
 static int
-fs_critically_full(const char *path, int min_free_pct)
+fs_space(const char *path, unsigned long long *free_bytes,
+         unsigned long long *total_bytes)
 {
 #ifndef _WIN32
     struct statvfs vfs;
-    unsigned long long free_bytes, total_bytes;
-    int pct_free;
-    if (!path || statvfs(path, &vfs) != 0) return 0;
-    free_bytes  = (unsigned long long)vfs.f_bavail * vfs.f_frsize;
-    total_bytes = (unsigned long long)vfs.f_blocks * vfs.f_frsize;
-    if (total_bytes == 0) return 0;
-    pct_free = (int)((free_bytes * 100ULL) / total_bytes);
-    return pct_free < min_free_pct;
+    if (!path || statvfs(path, &vfs) != 0) return -1;
+    *free_bytes  = (unsigned long long)vfs.f_bavail * vfs.f_frsize;
+    *total_bytes = (unsigned long long)vfs.f_blocks * vfs.f_frsize;
 #else
     ULARGE_INTEGER avail, total;
-    if (!path || !GetDiskFreeSpaceExA(path, &avail, &total, NULL)) return 0;
-    if (total.QuadPart == 0) return 0;
-    return (int)((avail.QuadPart * 100ULL) / total.QuadPart) < min_free_pct;
+    if (!path || !GetDiskFreeSpaceExA(path, &avail, &total, NULL)) return -1;
+    *free_bytes  = (unsigned long long)avail.QuadPart;
+    *total_bytes = (unsigned long long)total.QuadPart;
 #endif
+    return 0;
+}
+
+int
+lcsas_drain_fits(unsigned long long free_bytes,
+                 unsigned long long total_bytes,
+                 unsigned long long need_bytes)
+{
+    unsigned long long margin = total_bytes / 20;          /* 5 % */
+    if (margin > LCSAS_DRAIN_MARGIN_MAX) margin = LCSAS_DRAIN_MARGIN_MAX;
+    if (need_bytes > free_bytes) return 0;
+    return free_bytes - need_bytes >= margin;
 }
 
 /*
@@ -1053,23 +1059,6 @@ drain_disc(lcsas_disc_locator *l, const char *root)
     /* If `root` IS the cache (or under it), nothing to drain. */
     if (path_under(root, l->cache_dir)) return;
 
-    /* Refuse to drain when the cache's filesystem is critically
-     * full (<10% free).  Prevents the silent-ENOSPC failure mode
-     * that would abort the restore mid-flight.  One-line warning. */
-    if (fs_critically_full(l->cache_dir, 10)) {
-        static int warned = 0;
-        if (!warned) {
-            fprintf(stderr,
-                    "[lcsas-restore] WARNING: cache filesystem at %s "
-                    "is <10%% free; disabling further drains.  Set "
-                    "LCSAS_PACK_CACHE_DIR= (empty) for the rest of "
-                    "this run if disk pressure is critical.\n",
-                    l->cache_dir);
-            warned = 1;
-        }
-        return;
-    }
-
     /* Soft warning at 1 GB total cache size.  Single-shot. */
     {
         static int big_warned = 0;
@@ -1097,6 +1086,33 @@ drain_disc(lcsas_disc_locator *l, const char *root)
     (void)drain_walk(l, data_dir, &pg, 0);
     if (pg.total == 0) return;
     disc_name(root, name, sizeof name);
+
+    /* Copy the disc only when the cache's drive has room for it plus
+     * a margin (5 % of the drive, at most 1 GiB), so the copy can
+     * never fill the drive and abort the restore mid-flight.  The
+     * test is in bytes, not a percentage: a large drive that is 92 %
+     * full still has room for many discs (#634).  Unknown sizes:
+     * assume there is room.  One-line warning. */
+    {
+        unsigned long long free_b, total_b;
+        if (fs_space(l->cache_dir, &free_b, &total_b) == 0
+                && !lcsas_drain_fits(free_b, total_b, pg.total)) {
+            static int warned = 0;
+            if (!warned) {
+                fprintf(stderr,
+                        "[lcsas-restore] WARNING: the cache at %s has "
+                        "%llu MB free, too little to copy disc %s "
+                        "(%llu MB) and keep some to spare; not copying "
+                        "discs that do not fit, so they may be asked "
+                        "for again.  Set LCSAS_PACK_CACHE_DIR to a "
+                        "folder on a roomier drive.\n",
+                        l->cache_dir, free_b / DRAIN_MIB, name,
+                        DRAIN_MB_CEIL(pg.total));
+                warned = 1;
+            }
+            return;
+        }
+    }
     pg.name = name;
     pg.step = pg.total / 20;
     if (pg.step < DRAIN_STEP_MIN) pg.step = DRAIN_STEP_MIN;

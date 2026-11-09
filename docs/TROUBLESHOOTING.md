@@ -118,13 +118,17 @@ none.
 
 ---
 
-## `WARNING: cache filesystem at X is <10% free; disabling further drains`
+## `WARNING: the cache at X has N MB free, too little to copy disc L`
 
 **Cause**: the pack cache (default `pack-cache/` in the tools folder,
 `~/lcsas-restore-tools/`, since rc6; before that
-`${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>/`) is on a filesystem that's
-nearly full.  The binary auto-disables
-drains rather than risk ENOSPC mid-restore.
+`${TMPDIR:-/tmp}/lcsas-pack-cache.<pid>/`) is on a drive without room
+for the whole disc plus some to spare (5 % of the drive, at most
+1 GB).  The binary does not copy discs that do not fit, rather than
+risk filling the drive mid-restore; the restore still finishes, but
+may ask for those discs again.  (Before rc7 the rule was "under 10 %
+free", and the warning read `cache filesystem at X is <10% free;
+disabling further drains`.)
 
 **Fix**: point the cache somewhere with more room:
 
