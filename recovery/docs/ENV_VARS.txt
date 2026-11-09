@@ -233,8 +233,10 @@ LCSAS_PACK_CACHE_DIR
             to O(N_discs).  A data disc that tier 1 finds for the first
             time is copied at once, even before one of its packs is
             needed, so no disc has to go back in later.  The copy
-            prints how many MB are done, and is refused when the
-            cache's drive is under 10% free.
+            prints how many MB are done, and is skipped when the
+            cache's drive lacks room for the disc plus 5% of the
+            drive (at most 1 GB) to spare (#634; before rc7: when the
+            drive was under 10% free).
   Why:      Opt-OUT.  The v3 blind run took 16 disc swaps for 3 needed
             discs without the cache.  Forgetting this knob means the
             heir swaps discs 3-16× more often than necessary —

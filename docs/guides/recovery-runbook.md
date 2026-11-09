@@ -269,7 +269,7 @@ from the cache.  The cache needs about as much free space as the
 discs it copies.
 
 If your home folder is constrained, see the cache-size warnings in
-[troubleshooting.md](../TROUBLESHOOTING.md#warning-cache-filesystem-at-x-is-10-free-disabling-further-drains).
+[troubleshooting.md](../TROUBLESHOOTING.md#warning-the-cache-at-x-has-n-mb-free-too-little-to-copy-disc-l).
 
 ---
 

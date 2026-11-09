@@ -253,7 +253,8 @@ def test_skip_space_check_proceeds_to_password_prompt(tmp_path: Path) -> None:
 
 
 def test_disc_locator_drain_guard_on_critically_full_fs(tmp_path: Path) -> None:
-    """The drain guard must refuse a cache on a <10 %-free filesystem:
+    """The drain guard must refuse a cache whose drive has no room for
+    the disc plus the margin (5 % of the drive, at most 1 GiB, #634):
     warning on stderr, no pack copied, locate still succeeds (asserted
     inside the C unit via the LCSAS_TEST_FULL_FS_DIR seam)."""
     if not _can_sudo_mount():
@@ -263,8 +264,8 @@ def test_disc_locator_drain_guard_on_critically_full_fs(tmp_path: Path) -> None:
                     "(run `make -C recovery`)")
 
     with _tmpfs(Path(f"/tmp/lcsas-fma09-full-{os.getpid()}"), "1m") as mnt:
-        # Fill the 1 MiB tmpfs to ~94 % so statvfs reports <10 % free.
-        (mnt / "filler").write_bytes(b"\0" * (960 * 1024))
+        # Fill the 1 MiB tmpfs to ~98 %: less than the 5 % margin free.
+        (mnt / "filler").write_bytes(b"\0" * (1000 * 1024))
         res = subprocess.run(
             [str(DISC_LOCATOR_TEST_BIN)],
             env={**os.environ, "LCSAS_TEST_FULL_FS_DIR": str(mnt)},
@@ -275,7 +276,7 @@ def test_disc_locator_drain_guard_on_critically_full_fs(tmp_path: Path) -> None:
         f"C unit assertions failed (truncated/dirty cache or broken "
         f"locate).\nstdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
-    assert "disabling further drains" in res.stderr, (
+    assert "too little to copy disc" in res.stderr, (
         f"the critically-full guard must warn the operator once.\n"
         f"stderr:\n{res.stderr}"
     )
