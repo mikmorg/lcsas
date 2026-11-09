@@ -871,9 +871,9 @@ main(void)
      * margin) but not a 520 MB one; a disc bigger than the free
      * space never fits; an empty disc always fits a non-full drive. */
     {
-        const unsigned long long MB = 1000ULL * 1000ULL;
-        const unsigned long long TB = MB * 1000ULL * 1000ULL;
-        struct { unsigned long long fr, tot, need; int want; } c[] = {
+#define MB (1000ULL * 1000ULL)
+#define TB (MB * 1000ULL * 1000ULL)
+        static const struct { unsigned long long fr, tot, need; int want; } c[] = {
             { 80000ULL * MB, 1ULL * TB, 700ULL * MB, 1 },
             { 1500ULL * MB,  1ULL * TB, 700ULL * MB, 0 },
             { 600ULL * MB,   2000ULL * MB, 500ULL * MB, 1 },
@@ -881,6 +881,8 @@ main(void)
             { 600ULL * MB,   2000ULL * MB, 700ULL * MB, 0 },
             { 600ULL * MB,   2000ULL * MB, 0ULL, 1 },
         };
+#undef TB
+#undef MB
         size_t k;
         for (k = 0; k < sizeof c / sizeof c[0]; k++) {
             int got = lcsas_drain_fits(c[k].fr, c[k].tot, c[k].need);

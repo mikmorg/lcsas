@@ -73,6 +73,7 @@ disc_locator.c:1013  DEFENSIVE   drain_walk path-too-long defensive continue (ds
 disc_locator.c:1015  DEFENSIVE   "
 disc_locator.c:1101   VOLATILE   drain_disc no-room warn (lcsas_drain_fits, #634); covered via the gated tmpfs harness (LCSAS_TEST_FULL_FS_DIR, test_restore_space_preflight.py) or on hosts whose cache fs lacks room for a test disc plus the margin [FMA-09]
 disc_locator.c:1102   VOLATILE   "
+disc_locator.c:1110   VOLATILE   "
 disc_locator.c:1111   VOLATILE   "
 disc_locator.c:1113   VOLATILE   "
 
