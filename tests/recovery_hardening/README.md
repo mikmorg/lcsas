@@ -167,6 +167,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_tier3_invocation.py` | Hardening test #4: restore.sh tier-3 invocation flag correctness. |
 | `test_tier3_progress.py` | Hardening test: tier-3 pure-Python restorer emits periodic progress. |
 | `test_tier3_pythonpath.py` | Hardening test: restore.sh tier-3 PYTHONPATH wiring for bundled zstandard. |
+| `test_tier3_stale_catalog.py` | #635: tier 3 must name the disc it needs after at most one disc insert. |
 | `test_tier3_stderr_capture.py` | Hardening test: restore.sh tier-3 stderr capture-and-replay on failure. |
 | `test_tier3_tolerant_restore.py` | Hardening guard: tier-3 standalone restorer is SKIP-AND-CONTINUE. |
 | `test_tier3_zstd_portability.py` | Hardening test: tier-3 zstd works on every approved target (RST-04). |
