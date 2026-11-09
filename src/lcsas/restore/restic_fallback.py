@@ -38,6 +38,7 @@ See ``docs/RESTIC_FORMAT_SPEC.md`` for the full format reference.
 
 from __future__ import annotations
 
+import atexit
 import base64
 import hashlib
 import json
@@ -45,6 +46,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from datetime import timezone
 from pathlib import Path
@@ -562,6 +564,16 @@ class PurePythonRestorer:
         else:
             raise ValueError("Provide either password_file or password")
 
+        # #635: local copies of every disc catalog seen so far, keyed by
+        # the SHA-256 of its bytes.  The catalog on disc N lists only
+        # discs 1..N, and it is gone once that disc is swapped out, so
+        # the prompt combines all the copies and keeps naming discs
+        # after a swap.  _newest_known_label is the newest disc any of
+        # them lists (set by _lookup_volume_labels for the prompt).
+        self._catalog_copies: dict[str, Path] = {}
+        self._catalog_copy_dir: Path | None = None
+        self._newest_known_label: str | None = None
+
         self._master_key: MasterKey | None = None
         self._blob_index: dict[str, BlobLocation] | None = None
         self._snapshots: list[SnapshotMeta] | None = None
@@ -928,7 +940,124 @@ class PurePythonRestorer:
                     return candidate
         return None
 
+    def _discover_catalogs(self) -> list[Path]:
+        """Every ``catalog.db`` reachable now, in ``_discover_catalog`` order."""
+        found: list[Path] = []
+        seen: set[Path] = set()
+        for root in self._pack_search_paths:
+            for candidate in (
+                root / "catalog.db",
+                root.parent / "catalog.db",
+                root / "recovery" / "catalog.db",
+            ):
+                try:
+                    key = candidate.resolve(strict=False)
+                except OSError:
+                    key = candidate
+                if key in seen:
+                    continue
+                seen.add(key)
+                if candidate.is_file():
+                    found.append(candidate)
+        return found
+
+    def _keep_catalog_copy(self, path: Path) -> None:
+        """Copy a reachable catalog to a private temp folder, once per content.
+
+        The copy outlives the disc it came from (#635).  Errors are
+        swallowed: the prompt must never fail because a copy could not
+        be made.
+        """
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if digest in self._catalog_copies:
+                return
+            if self._catalog_copy_dir is None:
+                self._catalog_copy_dir = Path(
+                    tempfile.mkdtemp(prefix="lcsas-tier3-catalogs-")
+                )
+                atexit.register(
+                    shutil.rmtree, str(self._catalog_copy_dir), True
+                )
+            dst = self._catalog_copy_dir / f"{digest[:16]}.db"
+            shutil.copyfile(path, dst)
+            self._catalog_copies[digest] = dst
+        except OSError:
+            return
+
+    @staticmethod
+    def _query_catalog(
+        path: Path, pack_id: str,
+    ) -> tuple[list[str], bool, int, str | None]:
+        """(labels, pack known, number of discs listed, newest disc listed).
+
+        Raises sqlite3.Error on an unreadable catalog.
+        """
+        conn = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
+        try:
+            labels = [row[0] for row in conn.execute(
+                "SELECT v.label FROM volumes v "
+                "JOIN volume_packs vp ON v.volume_id = vp.volume_id "
+                "JOIN packs p ON p.pack_id = vp.pack_id "
+                "WHERE p.sha256 = ? ORDER BY v.label",
+                (pack_id,),
+            )]
+            known = bool(labels) or conn.execute(
+                "SELECT 1 FROM packs WHERE sha256 = ? LIMIT 1", (pack_id,),
+            ).fetchone() is not None
+            n_vols = conn.execute("SELECT COUNT(*) FROM volumes").fetchone()[0]
+            newest = conn.execute(
+                "SELECT label FROM volumes ORDER BY volume_id DESC LIMIT 1"
+            ).fetchone()
+            return labels, known, int(n_vols), newest[0] if newest else None
+        finally:
+            conn.close()
+
     def _lookup_volume_labels(
+        self, pack_id: str,
+    ) -> tuple[list[str], str] | None:
+        """Resolve a pack ID to disc labels using every catalog seen (#635).
+
+        Same contract as ``_lookup_catalog_path``, which consults
+        ``catalog_path`` (explicit or auto-discovered).  On top of that,
+        every catalog reachable now is copied locally, and all copies
+        are consulted: the labels are the union, and the pack counts
+        as known if any catalog knows it.  Sets
+        ``_newest_known_label`` to the newest disc in the catalog that
+        lists the most discs, for the prompt's "newer than" hint.
+        """
+        primary = self._lookup_catalog_path(pack_id)
+        reachable = self._discover_catalogs()
+        if self.catalog_path is not None and self.catalog_path.is_file():
+            reachable.insert(0, self.catalog_path)
+        for cat in reachable:
+            self._keep_catalog_copy(cat)
+        labels: set[str] = set(primary[0]) if primary else set()
+        known = primary is not None and (
+            bool(primary[0]) or primary[1] == self._CATALOG_HIT_NO_VOLS
+        )
+        any_ok = primary is not None
+        best_n = -1
+        for copy in self._catalog_copies.values():
+            try:
+                c_labels, c_known, n_vols, newest = self._query_catalog(
+                    copy, pack_id,
+                )
+            except sqlite3.Error:
+                continue
+            any_ok = True
+            labels.update(c_labels)
+            known = known or c_known
+            if n_vols > best_n:
+                best_n = n_vols
+                self._newest_known_label = newest
+        if not any_ok:
+            return None
+        if labels:
+            return sorted(labels), ""
+        return [], self._CATALOG_HIT_NO_VOLS if known else self._CATALOG_MISS
+
+    def _lookup_catalog_path(
         self, pack_id: str,
     ) -> tuple[list[str], str] | None:
         """Resolve a pack ID to the labels of the volumes that carry it.
@@ -1062,6 +1191,12 @@ class PurePythonRestorer:
             lines.append(
                 "| (tier-3 Python reader: no catalog available)             |"
             )
+            # #635: say how to get one.  Every data disc carries the
+            # catalog, and the next prompt reads it.
+            lines.extend([
+                "| Insert any data disc, your newest if you know which:     |",
+                "| its catalog names the disc this pack is on.              |",
+            ])
         else:
             labels, status = cat_result
             if labels:
@@ -1076,6 +1211,17 @@ class PurePythonRestorer:
                 lines.append(
                     "| (catalog has the pack, but lists no disc for it)         |"
                 )
+                # #635: a disc's catalog lists only the discs burned
+                # before it, so the pack is on a newer disc.
+                newest = getattr(self, "_newest_known_label", None)
+                if newest:
+                    lines.append(
+                        "| It is on a disc newer than:                              |"
+                    )
+                    lines.append(self._frame_indented(newest))
+                    lines.append(
+                        "| Insert your newest data disc: its catalog names it.      |"
+                    )
             else:
                 # _CATALOG_MISS -- pack ID not in catalog at all.
                 lines.append(

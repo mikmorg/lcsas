@@ -363,10 +363,11 @@ def test_auto_discovered_corrupt_catalog_is_evicted_for_retry(
         tmp_path, pack_search_paths=[bad_root, good_root]
     )
     # Prompt 1: discovery finds the corrupt one first, opens it,
-    # sqlite3.Error fires, cache evicted, returns None (legacy line).
+    # sqlite3.Error fires, cache evicted.  Since #635 the lookup also
+    # reads every catalog reachable now, so the good one answers at once.
     result1 = restorer._lookup_volume_labels(_PACK_HASH)
-    assert result1 is None, (
-        f"expected None on corrupt-catalog hit, got {result1}"
+    assert result1 == ([_VOLUME_LABEL], ""), (
+        f"expected the reachable good catalog to answer, got {result1}"
     )
     assert restorer.catalog_path is None, (
         "auto-discovered corrupt catalog was NOT evicted from cache: "
@@ -393,10 +394,10 @@ def test_explicit_corrupt_catalog_stays_cached(tmp_path: Path) -> None:
     be auto-evicted -- the operator asked for THAT catalog and a
     silent substitution would surprise them.
 
-    Behaviour pinned: each lookup against the corrupt explicit catalog
-    returns None (legacy line) but ``self.catalog_path`` stays set,
-    so the second lookup makes the same query against the same path
-    (and gets the same None).  No discovery runs.
+    Behaviour pinned: ``self.catalog_path`` stays set to the explicit
+    file across lookups.  Since #635 the lookup also reads every disc
+    catalog reachable now (it adds labels, it does not replace the
+    explicit catalog), so the healthy one still names the disc.
     """
     explicit = tmp_path / "explicit.db"
     explicit.write_bytes(b"not a sqlite database")
@@ -416,12 +417,11 @@ def test_explicit_corrupt_catalog_stays_cached(tmp_path: Path) -> None:
         interactive=True,
         catalog_path=explicit,
     )
-    assert restorer._lookup_volume_labels(_PACK_HASH) is None
+    assert restorer._lookup_volume_labels(_PACK_HASH) == ([_VOLUME_LABEL], "")
     assert restorer.catalog_path == explicit, (
         "explicit catalog was auto-evicted -- operator's --catalog choice "
         f"got silently dropped: {restorer.catalog_path}"
     )
-    # Confirm: second lookup uses the same (still corrupt) explicit
-    # path, never falls through to discovery.
-    assert restorer._lookup_volume_labels(_PACK_HASH) is None
+    # Second lookup: the explicit path is still the one in use.
+    assert restorer._lookup_volume_labels(_PACK_HASH) == ([_VOLUME_LABEL], "")
     assert restorer.catalog_path == explicit
