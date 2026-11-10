@@ -2756,6 +2756,26 @@ def cmd_volume_impact(args: argparse.Namespace) -> int:
     return 0
 
 
+def _receipt_verified_at(burn_date: object) -> str:
+    """The time a verified receipt's disc was read back, as the UTC ISO-8601
+    string ``volume_copies.last_verified_at`` is compared in (#646): the
+    receipt's ``burn_date`` (burn-iso verifies straight after burning),
+    normalised to UTC, or the import time when it is missing or unreadable.
+    A time in the future is clamped to now."""
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    if isinstance(burn_date, str) and burn_date.strip():
+        try:
+            when = datetime.fromisoformat(burn_date.strip())
+        except ValueError:
+            return now.isoformat()
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        return min(when.astimezone(UTC), now).isoformat()
+    return now.isoformat()
+
+
 def cmd_catalog_import(args: argparse.Namespace) -> int:
     """Import burn receipts from remote burns.
 
@@ -2954,6 +2974,13 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     burn_date=receipt.get("burn_date", ""),
                     iso_sha256=receipt_hash or None,
                     iso_size_bytes=receipt_size,
+                    # #646: burn-iso read the disc back right after the
+                    # burn, as the direct burn path does, so the disc was
+                    # verified then.  --no-verify (null) leaves it NULL.
+                    last_verified_at=(
+                        _receipt_verified_at(receipt.get("burn_date"))
+                        if verify_passed else None
+                    ),
                     commit=False,
                 )
 
