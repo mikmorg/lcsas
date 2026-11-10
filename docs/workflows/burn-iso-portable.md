@@ -364,16 +364,28 @@ produced by a live burn pipeline.
       (`cmd_catalog_import`).
    3. Look up the volume by label; skip with a warning if absent
       (`cmd_catalog_import`).
-   4. Issue #18 hash guard: if any prior `BURN_RECEIPT_IMPORTED` event
+   4. Staged-ISO guard (#644): compare the receipt's `iso_sha256` and
+      `iso_size_bytes` with the values recorded in `session_volumes` when
+      the volume's ISO was mastered (its most recent burn session).  On a
+      difference, **reject** the receipt (no rows written, both hashes
+      named) and count it toward the non-zero exit: the disc was burned
+      from a copy of the ISO that is not the one staged, for example one
+      damaged on its way to the burner.  `burn-iso`'s own verify cannot
+      catch this, since it only compares the disc with the file it was
+      given.  A receipt with no hash, or a volume with no staged hash on
+      record, is imported with a warning that the check was SKIPPED
+      (`cmd_catalog_import`, `get_staged_iso` in
+      `src/lcsas/db/sessions.py`).
+   5. Issue #18 hash guard: if any prior `BURN_RECEIPT_IMPORTED` event
       for this volume recorded a different `iso_sha256`, **reject** the
       receipt (no rows written) and count it toward the non-zero exit
       (`cmd_catalog_import`).
-   5. Ensure the destination location exists (creates the row if not —
+   6. Ensure the destination location exists (creates the row if not —
       `cmd_catalog_import`,
       `src/lcsas/db/locations.py`).
-   6. Read `verify_passed` (default `False`)
+   7. Read `verify_passed` (default `False`)
       (`cmd_catalog_import`).
-   7. If the volume is in `STAGING`, advance it:
+   8. If the volume is in `STAGING`, advance it:
       - `STAGING → BURNING` (always)
       - then `BURNING → VERIFIED` + `mark_closed` + `VERIFY_PASS`
         event, if `verify_passed`
@@ -383,19 +395,19 @@ produced by a live burn pipeline.
       Status transitions are validated against `VALID_TRANSITIONS`
       (`src/lcsas/db/volumes.py`), so an already-`VERIFIED`
       volume cannot be reverted from a receipt.
-   8. Add a `volume_copies` row for this `(volume_id, location)` pair,
+   9. Add a `volume_copies` row for this `(volume_id, location)` pair,
       stamping the burn date, `iso_sha256`, and `iso_size_bytes` from
       the receipt (`cmd_catalog_import`). The underlying upsert
       collapses re-imports of the same receipt into the existing
       `volume_copies` row (`src/lcsas/db/volume_copies.py`).
-   9. Record a `BURN_RECEIPT_IMPORTED` audit event whose `detail` is a
+   10. Record a `BURN_RECEIPT_IMPORTED` audit event whose `detail` is a
       JSON blob of the receipt provenance (`iso_sha256`, `session_id`,
       `device`, `pack_ids`, receipt filename)
       (`cmd_catalog_import`).
-   10. Commit per receipt; bump the `imported` counter
+   11. Commit per receipt; bump the `imported` counter
       (`cmd_catalog_import`).
 4. Log the total imported count; if any receipt was rejected for an
-   `iso_sha256` mismatch, return a non-zero exit code
+   ISO hash or size mismatch, return a non-zero exit code
    (`cmd_catalog_import`).
 
 **Expected outcome:**
@@ -412,8 +424,12 @@ produced by a live burn pipeline.
 - Bad / malformed / orphan receipts are skipped with warnings; the
   command still returns `0` in that case (the successful ones are
   committed). It returns a **non-zero** exit code only when a receipt
-  is rejected for an `iso_sha256` mismatch against a prior
-  `BURN_RECEIPT_IMPORTED` event (`cmd_catalog_import`).
+  is rejected: its `iso_sha256` or `iso_size_bytes` differs from the ISO
+  staged for that volume (#644), or its `iso_sha256` differs from a prior
+  `BURN_RECEIPT_IMPORTED` event (`cmd_catalog_import`; asserted by
+  `tests/unit/test_import_receipts_errors.py::TestStagedIsoCheck` and, end
+  to end with a byte flipped in B's copy of the ISO,
+  `tests/integration/test_portable_burn_loop.py::test_iso_damaged_in_transit_is_rejected_at_import`).
 
 **Variant axes that apply:**
 
