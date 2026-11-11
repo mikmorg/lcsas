@@ -2647,3 +2647,35 @@ class TestVolumeImpactSnapshots:
                 "report above is catalog-only") in out
         assert "2 pack(s) (1.50 GB) become unrestorable" in out
         mock_runner.restore_dry_run.assert_not_called()
+
+
+def test_status_shows_where_the_discs_are(tmp_path, capsys):
+    """#643: the volume list shows the locations of a volume's ACTIVE discs,
+    "(for X)" for one still being staged for X, never just volumes.location."""
+    from lcsas.db.connection import get_connection
+    from lcsas.db.locations import ensure_location
+    from lcsas.db.volume_copies import add_volume_copy
+    from lcsas.db.volumes import create_volume
+
+    db = tmp_path / "test.db"
+    main(["init", "--db-path", str(db)])
+    conn = get_connection(str(db))
+    try:
+        for loc in ("Home_Shelf", "Bank_Box"):
+            ensure_location(conn, loc)
+        burned = create_volume(conn, "BURNED_VOL", "u-1", "TEST_TINY", 1000,
+                               location="Home_Shelf", status="VERIFIED")
+        add_volume_copy(conn, burned.volume_id, "Bank_Box")
+        create_volume(conn, "WAITING_VOL", "u-2", "TEST_TINY", 1000,
+                      location="Bank_Box", status="STAGING")
+        conn.commit()
+    finally:
+        conn.close()
+    capsys.readouterr()
+
+    assert main(["--db", str(db), "status"]) == 0
+    lines = {ln.split()[0]: ln for ln in capsys.readouterr().out.splitlines()
+             if ln.strip().startswith(("BURNED_VOL", "WAITING_VOL"))}
+    assert lines["BURNED_VOL"].rstrip().endswith("Bank_Box")
+    assert "Home_Shelf" not in lines["BURNED_VOL"]
+    assert lines["WAITING_VOL"].rstrip().endswith("(for Bank_Box)")
