@@ -34,30 +34,17 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+README_ASSET = REPO_ROOT / "src" / "lcsas" / "meta" / "assets" / "README_RESTORE.md"
 
 
 def _read_readme_source() -> str:
-    """Pull the README_RESTORE heredoc out of the meta builder.
+    """The README_RESTORE.md text the meta builder writes to the disc.
 
-    The README is generated at build time from a string literal in
-    ``src/lcsas/meta/builder.py``.  We read it directly rather than
-    building a meta disc just to inspect it.  Same helper pattern as
-    ``test_readme_invocation_parity.py``.
+    It is copied verbatim from ``src/lcsas/meta/assets/README_RESTORE.md``
+    (#689), so we read that file rather than build a meta disc just to
+    inspect it.
     """
-    builder = REPO_ROOT / "src" / "lcsas" / "meta" / "builder.py"
-    src = builder.read_text()
-    m = re.search(
-        r"^README_RESTORE\s*=\s*(['\"])(.+?)\1\s*$"
-        r"|^README_RESTORE\s*=\s*'''\\?\n(.+?)^'''",
-        src, re.DOTALL | re.MULTILINE,
-    )
-    if m is None:
-        m = re.search(
-            r"^README_RESTORE\s*=\s*'''\\?\n(.+?)\n'''",
-            src, re.DOTALL | re.MULTILINE,
-        )
-    assert m is not None, "could not locate README_RESTORE in builder.py"
-    return m.group(m.lastindex)
+    return README_ASSET.read_text(encoding="utf-8")
 
 
 def test_readme_no_manual_cp() -> None:
@@ -67,7 +54,7 @@ def test_readme_no_manual_cp() -> None:
         "README_RESTORE still documents the obsolete `cp -r /mnt ...` "
         "manual-relocation recipe — restore.sh's relocate_to_ram logic "
         "handles this automatically.  Drop the recipe from "
-        "src/lcsas/meta/builder.py."
+        "src/lcsas/meta/assets/README_RESTORE.md."
     )
 
 

@@ -9,6 +9,10 @@ when a (file, code) pair has MORE findings than the baseline (something
 new) and when it has FEWER (the baseline is stale: lower it in the same
 change, so a fixed warning can't silently come back).
 
+Each file is checked in the dialect its shebang names: ``bash`` for a bash
+script (the meta disc's bash drivers under ``src/lcsas/meta/assets/``,
+#689), POSIX ``sh`` for everything else.
+
 Usage: shellcheck_gate.py FILE...           (CI / ``make shellcheck``)
        shellcheck_gate.py --print FILE...   (print a fresh baseline)
 """
@@ -28,16 +32,30 @@ BASELINE = Path(__file__).with_name("shellcheck_baseline.txt")
 Counts = Counter[tuple[str, str]]
 
 
+def shell_dialect(file: str) -> str:
+    """``bash`` if the file's shebang names bash, else ``sh``."""
+    with open(file, encoding="utf-8", errors="replace") as f:
+        first = f.readline()
+    return "bash" if first.startswith("#!") and "bash" in first else "sh"
+
+
 def run_shellcheck(files: list[str]) -> Counts:
-    """Count shellcheck findings per (file, SCnnnn) for POSIX sh."""
-    proc = subprocess.run(
-        ["shellcheck", "-s", "sh", "-f", "json1", *files],
-        capture_output=True, text=True, check=False,
-    )
-    if proc.returncode not in (0, 1):  # 1 = findings; anything else = error
-        sys.exit(f"shellcheck failed (rc={proc.returncode}): {proc.stderr}")
-    comments = json.loads(proc.stdout or '{"comments": []}')["comments"]
-    return Counter((c["file"], f"SC{c['code']}") for c in comments)
+    """Count shellcheck findings per (file, SCnnnn), each file checked in
+    the dialect of its shebang (see ``shell_dialect``)."""
+    counts: Counts = Counter()
+    for dialect in ("sh", "bash"):
+        group = [f for f in files if shell_dialect(f) == dialect]
+        if not group:
+            continue
+        proc = subprocess.run(
+            ["shellcheck", "-s", dialect, "-f", "json1", *group],
+            capture_output=True, text=True, check=False,
+        )
+        if proc.returncode not in (0, 1):  # 1 = findings; else = error
+            sys.exit(f"shellcheck failed (rc={proc.returncode}): {proc.stderr}")
+        comments = json.loads(proc.stdout or '{"comments": []}')["comments"]
+        counts.update((c["file"], f"SC{c['code']}") for c in comments)
+    return counts
 
 
 def load_baseline(path: Path) -> Counts:
@@ -85,8 +103,8 @@ def main(argv: list[str] | None = None) -> int:
     for p in problems:
         print(p, file=sys.stderr)
     if problems:
-        print("Run shellcheck -s sh on the file above for details.",
-              file=sys.stderr)
+        print("Run shellcheck -s sh (-s bash for a bash script) on the "
+              "file above for details.", file=sys.stderr)
         return 1
     print(f"shellcheck ratchet: {sum(found.values())} finding(s), "
           "all in the baseline.")
