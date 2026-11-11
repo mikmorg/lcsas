@@ -89,6 +89,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_auto_gaps.py` | test_restore_auto_gaps.py -- restore_auto.sh usage-error exits and repo-discovery layouts. |
 | `test_restore_auto_repo_select.py` | test_restore_auto_repo_select.py -- restore_auto.sh per-repo selection. |
 | `test_restore_bat_ecc_dispatch_wine.py` | FMT-01: restore.bat --check-disc ECC repair path, end-to-end under wine. |
+| `test_restore_bat_free_space_wine.py` | restore.bat's free-space check, under wine (#660). |
 | `test_restore_bat_journey_wine.py` | restore.bat's questions under wine: disc, set, password, cards (#605-#608). |
 | `test_restore_bat_password_lifetime.py` | restore.bat temp-password-file lifetime (issue #384 review finding). |
 | `test_restore_bat_single_drive_wine.py` | restore.bat finishes a one-drive, two-disc restore under wine (#604, #615). |
