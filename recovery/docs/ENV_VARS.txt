@@ -632,7 +632,10 @@ LCSAS_SKIP_SPACE_CHECK
             the catalog copy and before the password.  The size is
             always the tier-1 --list-pending-packs total (every set in
             the archive), the free space comes from `dir`, and "the
-            same filesystem" means the same drive letter.  Set it in a
+            same filesystem" means the same drive letter.  When the
+            discs hold more than one backup set, a short drive asks
+            "Carry on anyway? [y/N]" (y goes on) rather than stopping,
+            as the size may be far above the chosen set's.  Set it in a
             Command Prompt (set LCSAS_SKIP_SPACE_CHECK=1) and run
             restore.bat from there.
   Why:      Opt-OUT.  Forgetting the check means discovering a

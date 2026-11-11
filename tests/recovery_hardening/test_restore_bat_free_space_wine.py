@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 from tests.recovery_hardening._wine_helpers import stop_and_remove_prefix
+from tests.recovery_hardening.test_restore_bat_journey_wine import _Run
 from tests.recovery_hardening.test_restore_bat_wine_smoke import (
     _harden_prefix_drives,
     _init_prefix,
@@ -60,6 +61,8 @@ pytestmark = [
 
 SIZING = "Need about"
 SAME_DRIVE = "on the same drive"
+ASK = "Carry on anyway? [y/N]"
+STOPPED = "Not enough free space for this restore"
 
 
 @dataclass
@@ -121,6 +124,14 @@ def _free(wine: _Wine) -> int:
     return shutil.disk_usage(wine.drive_c).free
 
 
+def _second_set(meta: Path) -> None:
+    """A second backup set, as a data disc carries one: the archive now
+    holds two, and restore.bat shows its menu ([1] is recovery\\repo)."""
+    other = meta / "metadata" / "setb"
+    (other / "keys").mkdir(parents=True)
+    (other / "index").mkdir()
+
+
 def _run(wine: _Wine, target: str, **extra: str) -> tuple[int, str]:
     res = _run_bat(
         wine.env, "e",
@@ -147,6 +158,65 @@ def test_same_drive_needs_the_folder_and_the_cache(wine: _Wine, meta: Path) -> N
     assert len(lines) == 1 and "C:\\restored" in lines[0], out
     assert SAME_DRIVE in out and "C:\\cache660" in out, out
     assert "LCSAS_SKIP_SPACE_CHECK" in out, out
+    assert "[tier 1]" not in out, out
+    # One backup set: the size is that set's, so no question.
+    assert ASK not in out, out
+    assert STOPPED in out, out
+
+
+def _several_sets_up_to_the_question(wine: _Wine, meta: Path) -> _Run:
+    """Two backup sets, a catalog that fits once but not twice, and the
+    folder and the pack cache on C:.  Wine's ``set /p`` takes all that
+    waits on stdin at its first read, so each answer is written once
+    its prompt is on screen (as in test_restore_bat_journey_wine.py)."""
+    _second_set(meta)
+    _catalog(meta, int(_free(wine) * 0.6))
+    # _Run reads only .env and .drive_c, which this _Wine has too.
+    run = _Run(wine, "E:\\recovery\\scripts\\restore.bat", extra_env={  # type: ignore[arg-type]
+        "LCSAS_NO_RELOCATE": "1",
+        "LCSAS_TARGET": "x86_64-pc-windows-gnu",
+        "LCSAS_NEWEST_DISC_PROMPT": "0",
+        "LCSAS_PW": "not-used",
+        "LCSAS_PACK_CACHE_DIR": "C:\\cache660",
+    })
+    run.answer("Which one do you want to restore? [1]: ", "1")
+    run.answer("Restore to which folder?", "C:\\restored")
+    seen = run.expect(ASK)
+    # The numbers come first, then why the size may be too high.
+    lines = _sizing_lines(seen)
+    assert len(lines) == 1 and "C:\\restored" in lines[0], run.text
+    assert SAME_DRIVE in seen, run.text
+    assert "all 2 backup sets" in seen and "may need less" in seen, run.text
+    return run
+
+
+def test_several_sets_short_drive_asks_and_y_carries_on(
+        wine: _Wine, meta: Path) -> None:
+    """#660: the size counts every backup set in the archive, so with
+    two sets a short drive does not stop the run: restore.bat says the
+    chosen set may need less, asks, and y goes on to tier 1."""
+    run = _several_sets_up_to_the_question(wine, meta)
+    run.send("y")
+    run.expect("[tier 1] running")
+    run.finish()
+
+    assert STOPPED not in run.text, run.text
+
+
+@pytest.mark.parametrize("answer", ["n", None], ids=["n", "end-of-input"])
+def test_several_sets_short_drive_other_answers_stop(
+        wine: _Wine, meta: Path, answer: str | None) -> None:
+    """With two sets, any answer but y (and the end of the input) stops
+    as before: exit 1, before the password and the first disc."""
+    run = _several_sets_up_to_the_question(wine, meta)
+    if answer is not None:
+        run.send(answer)
+        run.expect(STOPPED)
+    rc = run.finish()
+    out = run.text
+
+    assert rc == 1, f"rc={rc}\n--- output ---\n{out}"
+    assert STOPPED in out and "LCSAS_SKIP_SPACE_CHECK" in out, out
     assert "[tier 1]" not in out, out
 
 

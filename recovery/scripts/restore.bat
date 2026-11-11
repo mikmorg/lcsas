@@ -1100,17 +1100,32 @@ REM Stop now, before the password and the first disc, when a drive has
 REM too little free space for the restore: not part-way through, after
 REM discs have been swapped.  The size comes from the catalog copy,
 REM through lcsas-restore.exe --list-pending-packs.  It is the size of
-REM every pack in the archive, so it is an estimate, a little high when
-REM the archive holds more than one backup set.  The pack cache needs
+REM every pack in the archive, so it is an estimate, and well above one
+REM set's size when the archive holds several backup sets.  The pack cache needs
 REM about that size too, so when the folder and the pack cache are on
 REM the same drive (the usual: both on C:) that drive needs both.  What
 REM an earlier run already wrote counts: the packs in the cache, and the
 REM files in a folder an earlier restore wrote to.  With no catalog, no
 REM program or a size that cannot be read, there is no check: a missing
 REM size never stops a restore.  LCSAS_SKIP_SPACE_CHECK=1 skips it.
+REM The size counts every backup set in the archive (tier 1 has no
+REM per-set size).  So with more than one set a short drive asks, and
+REM y carries on; anything else (or the end of the input) stops.  One
+REM set: the size is that set's, and a short drive stops.
 if "%LCSAS_SKIP_SPACE_CHECK%"=="1" goto :space_done
 call :space_check
-if defined SPACE_SHORT goto :space_short
+if not defined SPACE_SHORT goto :space_done
+if %NCAND% leq 1 goto :space_short
+echo.
+echo  That size counts all %NCAND% backup sets on these discs, not only
+echo  !SET_NAME!, so the set you chose may need less.  You can carry
+echo  on, but if the drive fills up the restore stops part-way.
+REM Cleared first: `set /p` keeps the old value on an empty answer.
+set "SPACE_ANS="
+set /p "SPACE_ANS=Carry on anyway? [y/N]: "
+if /i "!SPACE_ANS!"=="y" goto :space_done
+if /i "!SPACE_ANS!"=="yes" goto :space_done
+goto :space_short
 :space_done
 
 REM ----- How to carry on if the restore stops (#609) ----------------

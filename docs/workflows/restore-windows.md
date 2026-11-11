@@ -132,8 +132,11 @@ layout) or several.
   (#660): the folder and the pack cache each need about the archive
   size (from the catalog, through `--list-pending-packs`), so one
   drive that holds both needs twice that. It stops with the numbers
-  when a drive is short. `LCSAS_SKIP_SPACE_CHECK=1` skips the check;
-  `RECOVER_WINDOWS.txt` ("DESTINATION FOLDER NOTES") explains it.
+  when a drive is short. That size counts every backup set on the
+  discs, so when there is more than one it asks `Carry on anyway?
+  [y/N]` instead, and `y` goes on. `LCSAS_SKIP_SPACE_CHECK=1` skips
+  the check; `RECOVER_WINDOWS.txt` ("DESTINATION FOLDER NOTES")
+  explains it.
 
 **Steps:**
 

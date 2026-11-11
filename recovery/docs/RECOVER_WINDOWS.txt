@@ -525,12 +525,22 @@ DESTINATION FOLDER NOTES
     checks this before it asks for the password, from the catalog:
     the folder needs about the size of the archive, and the pack
     cache the same again, so when both are on drive C: it needs
-    twice the size there.  When a drive is too small it says so and
-    stops; nothing is restored.  Free some space, or choose a folder
-    on another drive, and run it again.  The size is an estimate for
-    the whole archive (every backup set in it).  To restore anyway,
-    type   set LCSAS_SKIP_SPACE_CHECK=1   in a Command Prompt and run
-    restore.bat from it.
+    twice the size there.  When a drive is too small it says so with
+    the numbers.
+
+    The size counts the whole archive: every backup set on the discs.
+    So when the discs hold more than one backup set, the set you
+    chose may need less, and restore.bat asks
+        Carry on anyway? [y/N]
+    Type y and press ENTER to go on (if the drive fills up, the
+    restore stops part-way).  Any other answer stops it.
+
+    With one backup set, or when you answer no, it stops; nothing is
+    restored.  Free some space, or choose a folder on another drive,
+    and run it again.  To restore anyway, open a Command Prompt,
+    type
+        set LCSAS_SKIP_SPACE_CHECK=1
+    and run restore.bat from that Command Prompt.
 
     The check needs a catalog.db.  Without one, there is no check;
     to size the restore by hand, do this.  It works with one drive
