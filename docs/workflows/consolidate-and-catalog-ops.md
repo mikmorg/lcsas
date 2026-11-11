@@ -428,6 +428,12 @@ catalog and physical reality (FMA-01).  Two independent checks:
    correspond to no physical disc; a restore pick list would offer them
    by label and an heir would hunt for a disc that never existed.
    `--fix` deletes them and returns their packs to the unarchived pool.
+   A volume whose staged ISO still exists (its latest `session_volumes`
+   `iso_path` is a file) is **waiting to be burned**, not a ghost: in
+   the split-machine workflow it may already be burned elsewhere, with
+   its receipt still to be imported, which a deleted volume could no
+   longer take.  It is listed separately and `--fix` leaves it alone
+   unless `--include-waiting` is given (#647).
 2. **Durable volumes without an ACTIVE disc** — status says a disc
    exists but no disc record backs it (status/`volume_copies` drift).
    Report-only; never auto-fixed.
@@ -439,21 +445,25 @@ catalog and physical reality (FMA-01).  Two independent checks:
 
 **Steps:**
 1. Argparse routes `lcsas catalog reconcile [--fix] [--yes]
-   [--older-than-hours N]` to `cmd_catalog_reconcile`
+   [--include-waiting] [--older-than-hours N]` to `cmd_catalog_reconcile`
    (`build_parser()`).  `--older-than-hours` defaults to **24**.
 2. Open a locked catalog connection and ensure schema is current
    (`cmd_catalog_reconcile`).
 3. Query `get_durable_volumes_without_active_copies` and warn for each
    drifted volume (report-only) (`src/lcsas/db/queries.py`).
-4. Query `get_ghost_volumes(conn, older_than_hours)`; if none, log the
-   all-clear and return 0 (`src/lcsas/db/queries.py`).
+4. Query `get_ghost_volumes(conn, older_than_hours)` and set aside (and
+   list) those whose staged ISO still exists (`staged_iso_present`,
+   `src/lcsas/db/sessions.py`) unless `--include-waiting`; if no ghost
+   is left, log the all-clear and return 0 (`src/lcsas/db/queries.py`).
 5. For each ghost, tally per-repository pack/byte stats via
    `get_volume_pack_stats_by_repo` and warn
    (`src/lcsas/db/queries.py`).
 6. Without `--fix`: print the `--fix` hint and return **1** (ghosts
    are a non-clean state).
 7. With `--fix`: unless `--yes` is given, prompt for `yes`
-   confirmation (abort on `EOFError` or any other answer); then
+   confirmation, which warns that a receipt for a deleted volume can no
+   longer be imported and that its ISOs are orphaned (abort on
+   `EOFError` or any other answer); then
    `delete_volume` each ghost and report the reclaimed pack count
    (`src/lcsas/db/volumes.py`).
 
@@ -481,6 +491,7 @@ catalog and physical reality (FMA-01).  Two independent checks:
 - `cmd_catalog_reconcile` in `src/lcsas/cli/main.py`
 - `get_ghost_volumes`, `get_durable_volumes_without_active_copies`,
   `get_volume_pack_stats_by_repo` in `src/lcsas/db/queries.py`
+- `staged_iso_present` in `src/lcsas/db/sessions.py`
 
 ---
 

@@ -478,9 +478,20 @@ def validate_config(config: LCSASConfig) -> list[str]:
             )
 
     # Check for critical path overlaps that could cause data loss during cleanup.
-    # Specifically: staging_path and mirror_base_path must be separate
-    # (cleanup routines would destroy mirrors if the staging area is inside a
-    # mirror).
+    # The staging area must not hold, or sit inside, a repository mirror:
+    # cleaning the staging area would destroy it.  #645: a staging area
+    # inside mirror_base is fine when it overlaps no repository's
+    # mirror_path (<base>/<repo> + <base>/staging keeps staging on the
+    # mirrors' filesystem, so packs are hardlinked, not copied).  With no
+    # repositories configured, mirror_base itself is the fallback mirror
+    # (BurnOrchestrator._get_mirror_paths), so it is checked as one.
+    def _overlap(a: Path, b: Path) -> str | None:
+        if a == b:
+            return "identical"
+        if a in b.parents or b in a.parents:
+            return "overlap"
+        return None
+
     try:
         staging_real = config.staging_path.resolve()
         mirror_real = config.mirror_base_path.resolve()
@@ -488,12 +499,28 @@ def validate_config(config: LCSASConfig) -> list[str]:
             errors.append(
                 f"staging_path and mirror_base_path cannot be identical: {staging_real}"
             )
-        elif staging_real in mirror_real.parents or mirror_real in staging_real.parents:
+        elif staging_real in mirror_real.parents or (
+            mirror_real in staging_real.parents and not config.repositories
+        ):
             errors.append(
                 f"staging_path and mirror_base_path cannot overlap: "
                 f"{staging_real} vs {mirror_real} "
                 f"(cleaning the staging area would affect mirrors)"
             )
+        for name, repo in config.repositories.items():
+            repo_real = repo.mirror_path.resolve()
+            kind = _overlap(staging_real, repo_real)
+            if kind == "identical":
+                errors.append(
+                    f"staging_path and repo '{name}' mirror_path cannot be "
+                    f"identical: {staging_real}"
+                )
+            elif kind == "overlap":
+                errors.append(
+                    f"staging_path and repo '{name}' mirror_path cannot "
+                    f"overlap: {staging_real} vs {repo_real} "
+                    f"(cleaning the staging area would affect the mirror)"
+                )
     except (OSError, RuntimeError):
         # Path resolution failed (e.g., due to symlink issues)
         pass

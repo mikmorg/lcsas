@@ -428,8 +428,15 @@ def build_parser() -> argparse.ArgumentParser:
     cat_reconcile_p.add_argument(
         "--fix", action="store_true", default=False,
         help="Delete ghost volumes (never-burned STAGING/BURNING volumes "
-             "with zero copies), returning their packs to the unarchived "
-             "pool. Asks for confirmation unless --yes is given.",
+             "with zero copies whose staged ISO is gone), returning their "
+             "packs to the unarchived pool. Asks for confirmation unless "
+             "--yes is given.",
+    )
+    cat_reconcile_p.add_argument(
+        "--include-waiting", action="store_true", default=False,
+        help="With --fix: also delete volumes whose staged ISO still exists "
+             "(waiting to be burned, e.g. on another machine). A receipt "
+             "for a deleted volume can no longer be imported.",
     )
     cat_reconcile_p.add_argument(
         "--yes", action="store_true", default=False,
@@ -1779,12 +1786,13 @@ def cmd_status(args: argparse.Namespace) -> int:
     """Show archive status summary."""
     from lcsas.db.queries import (
         get_archive_status_summary,
+        get_ghost_volumes,
         get_live_volumes_for_packs,
         get_lost_volume_ids,
         get_redundancy_report,
         volume_display_status,
     )
-    from lcsas.db.sessions import list_sessions
+    from lcsas.db.sessions import list_sessions, staged_iso_present
     from lcsas.db.volume_copies import find_stale_copies
     from lcsas.db.volume_events import get_latest_event
     from lcsas.db.volumes import list_volumes
@@ -1811,6 +1819,11 @@ def cmd_status(args: argparse.Namespace) -> int:
             disc_locations.setdefault(row["volume_id"], []).append(row["location"])
         lost_ids = get_lost_volume_ids(conn)
         partial_sessions = list_sessions(conn, status_filter="PARTIAL")
+        # #647: never-burned volumes split by whether their ISO is still in
+        # the staging area (waiting to be burned) or gone (a ghost).
+        unburned = get_ghost_volumes(conn, older_than_hours=0)
+        waiting = [v.label for v in unburned if staged_iso_present(conn, v.volume_id)]
+        ghost_labels = [v.label for v in unburned if v.label not in waiting]
         # FMA-08: packs that live on exactly one disc.  Packs in
         # the <2-copies report with at least one live holder are on one
         # disc; zero-holder packs are the unarchived/staged buckets above.
@@ -1845,11 +1858,27 @@ def cmd_status(args: argparse.Namespace) -> int:
             where = (f"(for {v.location})" if v.status in ("STAGING", "BURNING")
                      else "(no disc in service)")
         logger.info(f"  {v.label:<25} {v.media_type:<10} {shown:<10} {where}")
-    if summary["staged"] > 0:
+    if waiting:
+        logger.warning(
+            "WARNING: %d volume(s) are staged and waiting to be burned "
+            "(their ISOs are in the staging area): %s. Burn them with "
+            "'lcsas burn', or burn the ISOs elsewhere with 'lcsas burn-iso "
+            "--emit-receipt' and import the receipts with 'lcsas catalog "
+            "import-receipts'. Until then their packs are NOT on any disc.",
+            len(waiting), ", ".join(waiting),
+        )
+    if ghost_labels:
+        logger.warning(
+            "WARNING: %d volume(s) were staged but never burned, and their "
+            "ISOs are gone: %s. 'lcsas catalog reconcile --fix' deletes them "
+            "from the catalog and returns their packs to the unarchived "
+            "pool for the next 'lcsas stage'.",
+            len(ghost_labels), ", ".join(ghost_labels),
+        )
+    if summary["staged"] > 0 and not (waiting or ghost_labels):
         logger.warning(
             "WARNING: %d pack(s) are staged on volumes that were never "
-            "burned — run 'lcsas catalog reconcile' or burn the pending "
-            "session.",
+            "burned. See 'lcsas catalog reconcile'.",
             summary["staged"],
         )
     for s in partial_sessions:
@@ -2769,6 +2798,26 @@ def cmd_volume_impact(args: argparse.Namespace) -> int:
     return 0
 
 
+def _receipt_verified_at(burn_date: object) -> str:
+    """The time a verified receipt's disc was read back, as the UTC ISO-8601
+    string ``volume_copies.last_verified_at`` is compared in (#646): the
+    receipt's ``burn_date`` (burn-iso verifies straight after burning),
+    normalised to UTC, or the import time when it is missing or unreadable.
+    A time in the future is clamped to now."""
+    from datetime import UTC, datetime
+
+    now = datetime.now(UTC)
+    if isinstance(burn_date, str) and burn_date.strip():
+        try:
+            when = datetime.fromisoformat(burn_date.strip())
+        except ValueError:
+            return now.isoformat()
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        return min(when.astimezone(UTC), now).isoformat()
+    return now.isoformat()
+
+
 def cmd_catalog_import(args: argparse.Namespace) -> int:
     """Import burn receipts from remote burns.
 
@@ -2788,6 +2837,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     from lcsas.db.connection import locked_connection
     from lcsas.db.locations import ensure_location
     from lcsas.db.schema import ensure_schema
+    from lcsas.db.sessions import get_staged_iso
     from lcsas.db.volume_copies import add_volume_copy
     from lcsas.db.volume_events import add_event, get_events_for_volume
     from lcsas.db.volumes import get_volume_by_label, mark_closed, update_status
@@ -2865,7 +2915,47 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             # tampered / re-mastered) — reject without writing anything.
             receipt_hash = receipt.get("iso_sha256") or ""
             hash_mismatch = False
-            if receipt_hash:
+            # #644: the receipt must name the ISO that was staged.  burn-iso
+            # hashes whatever file it is given on the burning machine, so an
+            # ISO damaged or swapped on its way there would otherwise burn,
+            # pass its own verify, and import as VERIFIED.
+            staged = get_staged_iso(conn, vol.volume_id)
+            if staged is None:
+                logger.warning(
+                    f"Receipt '{receipt_file}': no ISO hash was recorded "
+                    f"when '{receipt['volume_label']}' was staged; the "
+                    "staged-ISO check was SKIPPED."
+                )
+            elif not receipt_hash:
+                logger.warning(
+                    f"Receipt '{receipt_file}' carries no iso_sha256; the "
+                    "check against the ISO staged for "
+                    f"'{receipt['volume_label']}' was SKIPPED."
+                )
+            else:
+                staged_hash, staged_size = staged
+                if receipt_hash != staged_hash:
+                    logger.error(
+                        f"Receipt '{receipt_file}' iso_sha256 {receipt_hash} "
+                        f"does not match the ISO staged for volume "
+                        f"'{receipt['volume_label']}' ({staged_hash}): the "
+                        "disc was burned from a different or damaged copy "
+                        "of the ISO; rejecting.  Copy the ISO again, check "
+                        "it with sha256sum, and re-burn."
+                    )
+                    hash_mismatch = True
+                elif (
+                    receipt_size is not None and staged_size is not None
+                    and receipt_size != staged_size
+                ):
+                    logger.error(
+                        f"Receipt '{receipt_file}' iso_size_bytes "
+                        f"{receipt_size} does not match the ISO staged for "
+                        f"volume '{receipt['volume_label']}' ({staged_size} "
+                        "bytes); rejecting."
+                    )
+                    hash_mismatch = True
+            if receipt_hash and not hash_mismatch:
                 prior_events = get_events_for_volume(
                     conn, vol.volume_id, "BURN_RECEIPT_IMPORTED"
                 )
@@ -2967,6 +3057,13 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     burn_date=receipt.get("burn_date", ""),
                     iso_sha256=receipt_hash or None,
                     iso_size_bytes=receipt_size,
+                    # #646: burn-iso read the disc back right after the
+                    # burn, as the direct burn path does, so the disc was
+                    # verified then.  --no-verify (null) leaves it NULL.
+                    last_verified_at=(
+                        _receipt_verified_at(receipt.get("burn_date"))
+                        if verify_passed else None
+                    ),
                     commit=False,
                 )
 
@@ -2999,7 +3096,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
     logger.info(f"Imported {imported} receipt(s).")
     if rejected:
-        logger.error(f"Rejected {rejected} receipt(s) due to iso_sha256 mismatch.")
+        logger.error(f"Rejected {rejected} receipt(s): ISO hash or size mismatch.")
         return 1
     return 0
 
@@ -3084,15 +3181,35 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
         volume_display_status,
     )
     from lcsas.db.schema import ensure_schema
+    from lcsas.db.sessions import staged_iso_present
     from lcsas.db.volumes import delete_volume
 
     config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
+    include_waiting = getattr(args, "include_waiting", False)
 
     with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
 
-        ghosts = get_ghost_volumes(conn, args.older_than_hours)
+        # #647: a never-burned volume whose staged ISO still exists is
+        # waiting to be burned (possibly on another machine, with its
+        # receipt still to come), not a ghost.  --fix leaves it alone
+        # unless --include-waiting.
+        candidates = get_ghost_volumes(conn, args.older_than_hours)
+        waiting = [v for v in candidates if staged_iso_present(conn, v.volume_id)]
+        if waiting:
+            logger.info(
+                "%d volume(s) older than %dh are waiting to be burned "
+                "(their staged ISOs still exist); not treated as ghosts%s:",
+                len(waiting), args.older_than_hours,
+                "" if include_waiting else " (--include-waiting to include them)",
+            )
+            for v in waiting:
+                logger.info("  %s  (status=%s, created %s)",
+                            v.label, v.status, v.created_at)
+        ghosts = candidates if include_waiting else [
+            v for v in candidates if v not in waiting
+        ]
         drifted = get_durable_volumes_without_active_copies(conn)
 
         if drifted:
@@ -3151,8 +3268,10 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
             try:
                 response = input(
                     f"Delete {len(ghosts)} ghost volume(s) and return "
-                    f"their packs to the unarchived pool? "
-                    f"Type 'yes' to confirm: "
+                    f"their packs to the unarchived pool? A burn receipt "
+                    f"for a deleted volume can no longer be imported, and "
+                    f"any of their ISOs left in the staging area are "
+                    f"orphaned. Type 'yes' to confirm: "
                 ).strip()
             except EOFError:
                 logger.error(

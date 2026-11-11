@@ -461,3 +461,216 @@ class TestMixedBatch:
             assert [c.location for c in get_copies_for_volume(conn, vol.volume_id)] == ["Offsite"]
         finally:
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# #646: a verified receipt records the disc as verified
+# ---------------------------------------------------------------------------
+
+
+class TestReceiptLastVerified:
+    def _last_verified(self, db: Path, label: str, location: str) -> str | None:
+        conn = get_connection(db)
+        try:
+            vol = get_volume_by_label(conn, label)
+            assert vol is not None
+            (copy,) = [c for c in get_copies_for_volume(conn, vol.volume_id)
+                       if c.location == location]
+            return copy.last_verified_at
+        finally:
+            conn.close()
+
+    def test_verified_receipt_sets_last_verified_and_status_is_quiet(
+        self, env, capsys,
+    ):
+        from datetime import UTC, datetime
+
+        from lcsas.db.volume_copies import find_stale_copies
+
+        tmp_path, cfg, db = env
+        body = dict(_good("VOL_GOOD", "Bank_Box"),
+                    burn_date=datetime.now(UTC).isoformat())
+        assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 0
+        assert self._last_verified(db, "VOL_GOOD", "Bank_Box") == body["burn_date"]
+        conn = get_connection(db)
+        try:
+            assert find_stale_copies(conn) == []
+        finally:
+            conn.close()
+        capsys.readouterr()
+        assert main(["--config", str(cfg), "status"]) == 0
+        assert "not verified" not in capsys.readouterr().out
+
+    def test_unverified_receipt_leaves_it_null(self, env):
+        tmp_path, cfg, db = env
+        body = dict(_good("VOL_GOOD", "Bank_Box"), verify_passed=None)
+        assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 0
+        assert self._last_verified(db, "VOL_GOOD", "Bank_Box") is None
+
+    def test_reburn_without_verify_clears_the_old_verification(self, env):
+        """The row now describes a new, unread disc."""
+        tmp_path, cfg, db = env
+        assert _run(cfg, _receipt(tmp_path, "a.json", _good("VOL_GOOD", "Bank_Box"))) == 0
+        assert self._last_verified(db, "VOL_GOOD", "Bank_Box") is not None
+        again = dict(_good("VOL_GOOD", "Bank_Box"), verify_passed=None)
+        assert _run(cfg, _receipt(tmp_path, "b.json", again)) == 0
+        assert self._last_verified(db, "VOL_GOOD", "Bank_Box") is None
+
+    @pytest.mark.parametrize("burn_date, expected", [
+        ("2026-04-14T14:00:00+02:00", "2026-04-14T12:00:00+00:00"),
+        ("2026-04-14T12:00:00", "2026-04-14T12:00:00+00:00"),
+    ])
+    def test_burn_date_is_normalised_to_utc(self, env, burn_date, expected):
+        tmp_path, cfg, db = env
+        body = dict(_good("VOL_GOOD", "Bank_Box"), burn_date=burn_date)
+        assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 0
+        assert self._last_verified(db, "VOL_GOOD", "Bank_Box") == expected
+
+    @pytest.mark.parametrize("burn_date", ["", "not a date", "2999-01-01T00:00:00+00:00"])
+    def test_missing_bad_or_future_burn_date_uses_the_import_time(
+        self, env, burn_date,
+    ):
+        from datetime import UTC, datetime
+
+        tmp_path, cfg, db = env
+        before = datetime.now(UTC).isoformat()
+        body = dict(_good("VOL_GOOD", "Bank_Box"), burn_date=burn_date)
+        assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 0
+        got = self._last_verified(db, "VOL_GOOD", "Bank_Box")
+        assert got is not None and before <= got <= datetime.now(UTC).isoformat()
+
+
+
+
+# ---------------------------------------------------------------------------
+# #644: the receipt must name the ISO that was staged
+# ---------------------------------------------------------------------------
+
+
+def _stage_record(db: Path, label: str, sha: str | None, size: int | None,
+                  session_id: str = "sess-1") -> None:
+    """Record a burn session for ``label`` as `lcsas stage` would."""
+    from lcsas.db.sessions import add_session_volume, create_session
+
+    conn = get_connection(db)
+    try:
+        vol = get_volume_by_label(conn, label)
+        assert vol is not None
+        create_session(conn, "TEST_TINY", "/staging", session_id=session_id)
+        add_session_volume(conn, session_id, vol.volume_id, f"/staging/{label}.iso",
+                           iso_sha256=sha, iso_size_bytes=size)
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def staged_env(tmp_path):
+    """One STAGING volume whose ISO was recorded as ("a"*64, 2048 bytes)."""
+    cfg = _write_config(tmp_path)
+    db = _make_catalog(tmp_path, {"VOL_NEW": "STAGING"})
+    _stage_record(db, "VOL_NEW", "a" * 64, 2048)
+    return tmp_path, cfg, db
+
+
+def _status(db: Path, label: str) -> str:
+    conn = get_connection(db)
+    try:
+        vol = get_volume_by_label(conn, label)
+        assert vol is not None
+        return vol.status
+    finally:
+        conn.close()
+
+
+class TestStagedIsoCheck:
+    def test_matching_hash_imports_and_verifies(self, staged_env, capsys):
+        tmp_path, cfg, db = staged_env
+        rc = _run(cfg, _receipt(tmp_path, "r.json", _good("VOL_NEW", "Bank_Box")))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "SKIPPED" not in out
+        _assert_imported(db, "VOL_NEW", "Bank_Box")
+        assert _status(db, "VOL_NEW") == "VERIFIED"
+
+    def test_first_receipt_with_a_different_hash_is_rejected(self, staged_env, capsys):
+        """The case #644 is about: no earlier receipt to compare with."""
+        tmp_path, cfg, db = staged_env
+        before = _dump(db)
+        bad = dict(_good("VOL_NEW", "Bank_Box"), iso_sha256="c" * 64)
+        rc = _run(cfg, _receipt(tmp_path, "bad.json", bad))
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "does not match the ISO staged" in out
+        assert "c" * 64 in out and "a" * 64 in out
+        assert "Rejected 1 receipt(s)" in out
+        assert _dump(db) == before
+        assert _status(db, "VOL_NEW") == "STAGING"
+
+    def test_different_size_is_rejected(self, staged_env, capsys):
+        tmp_path, cfg, db = staged_env
+        before = _dump(db)
+        bad = dict(_good("VOL_NEW", "Bank_Box"), iso_size_bytes=4096)
+        rc = _run(cfg, _receipt(tmp_path, "bad.json", bad))
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "iso_size_bytes 4096" in out
+        assert _dump(db) == before
+
+    def test_mismatch_does_not_stop_the_batch(self, staged_env, capsys):
+        tmp_path, cfg, db = staged_env
+        bad = dict(_good("VOL_NEW", "Bank_Box"), iso_sha256="c" * 64)
+        good = _good("VOL_NEW", "Home_Shelf")
+        rc = _run(cfg, _receipt(tmp_path, "bad.json", bad),
+                  _receipt(tmp_path, "good.json", good))
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "Imported 1 receipt(s)." in out
+        _assert_imported(db, "VOL_NEW", "Home_Shelf")
+
+    def test_latest_session_wins(self, staged_env, capsys):
+        """A volume re-mastered in a later session is checked against the newer ISO."""
+        tmp_path, cfg, db = staged_env
+        conn = get_connection(db)
+        try:
+            conn.execute("UPDATE burn_sessions SET created_at = '2000-01-01T00:00:00'")
+            conn.commit()
+        finally:
+            conn.close()
+        _stage_record(db, "VOL_NEW", "d" * 64, 2048, session_id="sess-2")
+        rc = _run(cfg, _receipt(tmp_path, "old.json", _good("VOL_NEW", "Bank_Box")))
+        assert rc == 1
+        assert "does not match the ISO staged" in capsys.readouterr().out
+        newer = dict(_good("VOL_NEW", "Bank_Box"), iso_sha256="d" * 64)
+        assert _run(cfg, _receipt(tmp_path, "new.json", newer)) == 0
+
+    def test_receipt_without_hash_warns_that_the_check_was_skipped(
+        self, staged_env, capsys,
+    ):
+        tmp_path, cfg, db = staged_env
+        body = _good("VOL_NEW", "Bank_Box")
+        del body["iso_sha256"]
+        rc = _run(cfg, _receipt(tmp_path, "nohash.json", body))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "carries no iso_sha256" in out and "SKIPPED" in out
+        _assert_imported(db, "VOL_NEW", "Bank_Box")
+
+    def test_volume_without_staged_hash_warns_that_the_check_was_skipped(
+        self, env, capsys,
+    ):
+        """env's volumes have no burn session at all (e.g. an older catalog)."""
+        tmp_path, cfg, db = env
+        rc = _run(cfg, _receipt(tmp_path, "r.json", _good("VOL_GOOD", "Bank_Box")))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "no ISO hash was recorded" in out and "SKIPPED" in out
+        _assert_imported(db, "VOL_GOOD", "Bank_Box")
+
+    def test_empty_staged_hash_counts_as_none(self, tmp_path, capsys):
+        """session_volumes rows start with iso_sha256='' before the ISO exists."""
+        cfg = _write_config(tmp_path)
+        db = _make_catalog(tmp_path, {"VOL_NEW": "STAGING"})
+        _stage_record(db, "VOL_NEW", "", None)
+        rc = _run(cfg, _receipt(tmp_path, "r.json", _good("VOL_NEW", "Bank_Box")))
+        assert rc == 0
+        assert "no ISO hash was recorded" in capsys.readouterr().out

@@ -300,6 +300,31 @@ def test_stage_burn_iso_import_marks_the_volume_verified_with_one_copy(
     assert site_a.events("VERIFY_FAIL") == []
 
 
+def test_iso_damaged_in_transit_is_rejected_at_import(site_a, site_b, capsys):
+    """#644: B's copy of the ISO has one byte flipped past the label.  The
+    burn and its own verify pass (they only see B's file), but the receipt's
+    hash is not the one A staged, so A rejects it and the volume stays
+    STAGING with no disc recorded."""
+    data = bytearray(site_b.iso.read_bytes())
+    data[-1] ^= 0xFF
+    site_b.iso.write_bytes(bytes(data))
+
+    rc, receipt_path, _ = site_b.burn(
+        session=site_a.session_id, location=_SITE,
+        disc_id=_pvd_volume_id(site_b.iso),
+    )
+    assert rc == 0 and receipt_path is not None
+    capsys.readouterr()
+
+    assert site_a.lcsas("catalog", "import-receipts", str(receipt_path)) == 1
+    out = capsys.readouterr().out
+    assert "does not match the ISO staged" in out
+    assert site_a.staged_iso_record()["iso_sha256"] in out
+    assert site_a.volume()["status"] == "STAGING"
+    assert site_a.copies() == []
+    assert site_a.events("BURN_RECEIPT_IMPORTED") == []
+
+
 def test_second_burn_at_another_site_only_adds_a_copy(site_a, site_b):
     """Doc "Multi-copy": the volume is already VERIFIED, so the second
     receipt adds a ``volume_copies`` row and leaves the status alone."""
