@@ -1479,6 +1479,40 @@ main(void)
         }
     }
 
+    /* ── #662: an index file that cannot be read (mode 000) is skipped
+     * with a "could not be read" warning, not "failed authentication".
+     * The load still succeeds from the valid indexes.  Skipped as root. */
+    if (geteuid() != 0) {
+        char tmp[] = "/tmp/lcsas_662_idxio_XXXXXX";
+        char idx_path[1200], hexname[65];
+        lcsas_blob_index ix;
+        FILE *f;
+        if (mkdtemp(tmp) == NULL) {
+            fprintf(stderr, "FAIL: 662 idx mkdtemp\n"); fails++;
+        } else if (copy_valid_indexes(repo, tmp) != 0) {
+            fprintf(stderr, "FAIL: 662 idx copy_valid_indexes\n"); fails++;
+        } else {
+            memset(hexname, 'a', 64); hexname[64] = '\0';
+            snprintf(idx_path, sizeof idx_path, "%s/index/%s", tmp, hexname);
+            f = fopen(idx_path, "wb");
+            if (f) { fwrite("garbage!!", 1, 9, f); fclose(f); }
+            chmod(idx_path, 0);
+            fprintf(stderr,
+                    "[test_repo] 662 expecting index could-not-be-read "
+                    "WARNING below:\n");
+            lcsas_blob_index_init(&ix);
+            rc = lcsas_repo_load_index(tmp, &mk, &ix);
+            if (rc < 0 || ix.count == 0) {
+                fprintf(stderr,
+                        "FAIL: 662 unreadable index must warn+skip "
+                        "(rc=%d count=%lu)\n", rc, (unsigned long)ix.count);
+                fails++;
+            }
+            lcsas_blob_index_free(&ix);
+            chmod(idx_path, 0600);
+        }
+    }
+
     /* ── #401-E: load_snapshots error paths ───────────────────────────── */
     {
         unsigned char iv[16];
@@ -1510,7 +1544,118 @@ main(void)
                             "skip (rc=%d count=%zu)\n", rc, snaps.count);
                     fails++;
                 }
+                /* #662: the skipped file is counted and named. */
+                if (snaps.unreadable != 1
+                        || strcmp(snaps.unreadable_name, hexname) != 0) {
+                    fprintf(stderr,
+                            "FAIL: 662 auth-fail snapshot not counted "
+                            "(unreadable=%zu name=%s)\n",
+                            snaps.unreadable, snaps.unreadable_name);
+                    fails++;
+                }
                 lcsas_snapshot_list_free(&snaps);
+            }
+        }
+
+        /* #662 (a2): an unreadable (mode 000) snapshot file is a read
+         * error, counted like an auth failure.  Skipped as root. */
+        if (geteuid() != 0) {
+            char tmp[] = "/tmp/lcsas_662_snapio_XXXXXX";
+            char sdir[1100], spath[1300];
+            lcsas_snapshot_list snaps;
+            FILE *f;
+            if (mkdtemp(tmp) == NULL) {
+                fprintf(stderr, "FAIL: 662 mkdtemp\n"); fails++;
+            } else {
+                memset(hexname, 'c', 64); hexname[64] = '\0';
+                snprintf(sdir, sizeof sdir, "%s/snapshots", tmp);
+                mkdir(sdir, 0700);
+                snprintf(spath, sizeof spath, "%s/%s", sdir, hexname);
+                f = fopen(spath, "wb");
+                if (f) { fwrite("garbage!!", 1, 9, f); fclose(f); }
+                chmod(spath, 0);
+                fprintf(stderr,
+                        "[test_repo] 662 expecting could-not-be-read "
+                        "WARNING below:\n");
+                lcsas_snapshot_list_init(&snaps);
+                rc = lcsas_repo_load_snapshots(tmp, &mk, &snaps);
+                if (rc != 0 || snaps.count != 0 || snaps.unreadable != 1) {
+                    fprintf(stderr,
+                            "FAIL: 662 unreadable snapshot (rc=%d count=%zu "
+                            "unreadable=%zu)\n", rc, snaps.count,
+                            snaps.unreadable);
+                    fails++;
+                }
+                lcsas_snapshot_list_free(&snaps);
+                chmod(spath, 0600);
+            }
+        }
+
+        /* #662 (a3): a snapshot whose zstd frame is corrupt is counted
+         * and reported as corrupt (not as an auth or read failure). */
+        {
+            char tmp[] = "/tmp/lcsas_662_snapzstd_XXXXXX";
+            char sdir[1100], spath[1300];
+            lcsas_snapshot_list snaps;
+            unsigned char frame[18];
+            unsigned long long fcs = 100;
+            int b;
+            iv[0] = 0x46;
+            frame[0] = 0x02;
+            frame[1] = 0x28; frame[2] = 0xb5; frame[3] = 0x2f; frame[4] = 0xfd;
+            frame[5] = 0xE0;
+            for (b = 0; b < 8; b++)
+                frame[6 + b] = (unsigned char)((fcs >> (8 * b)) & 0xFF);
+            frame[14] = 0xFF; frame[15] = 0xFF; frame[16] = 0xFF;
+            frame[17] = 0xFF;
+            if (mkdtemp(tmp) == NULL) {
+                fprintf(stderr, "FAIL: 662 zstd mkdtemp\n"); fails++;
+            } else {
+                memset(hexname, 'b', 64); hexname[64] = '\0';
+                snprintf(sdir, sizeof sdir, "%s/snapshots", tmp);
+                mkdir(sdir, 0700);
+                snprintf(spath, sizeof spath, "%s/%s", sdir, hexname);
+                if (enc_write(&mk, iv, frame, sizeof frame, spath) != 0) {
+                    fprintf(stderr, "FAIL: 662 zstd enc_write\n"); fails++;
+                } else {
+                    fprintf(stderr,
+                            "[test_repo] 662 expecting snapshot-corrupt "
+                            "WARNING below:\n");
+                    lcsas_snapshot_list_init(&snaps);
+                    rc = lcsas_repo_load_snapshots(tmp, &mk, &snaps);
+                    if (rc != 0 || snaps.unreadable != 1) {
+                        fprintf(stderr,
+                                "FAIL: 662 corrupt-zstd snapshot (rc=%d "
+                                "unreadable=%zu)\n", rc, snaps.unreadable);
+                        fails++;
+                    }
+                    lcsas_snapshot_list_free(&snaps);
+                }
+            }
+        }
+
+        /* #663: snapshot times compare by instant, not by text. */
+        {
+            /* 01:10-05:00 is 06:10Z, later than 01:30-04:00 = 05:30Z,
+             * although it sorts first as text. */
+            if (lcsas_snapshot_time_cmp("2026-11-01T01:30:00-04:00",
+                                        "2026-11-01T01:10:00-05:00") >= 0) {
+                fprintf(stderr, "FAIL: 663 mixed offsets not by instant\n");
+                fails++;
+            }
+            if (lcsas_snapshot_time_cmp("2026-01-01T00:00:00.5Z",
+                                        "2026-01-01T00:00:00.25Z") <= 0) {
+                fprintf(stderr, "FAIL: 663 fraction order\n");
+                fails++;
+            }
+            if (lcsas_snapshot_time_cmp("2026-01-01T00:00:00Z",
+                                        "2026-01-01T00:00:00+00:00") != 0) {
+                fprintf(stderr, "FAIL: 663 same instant not equal\n");
+                fails++;
+            }
+            if (lcsas_snapshot_time_cmp("not-a-time", "zzz") >= 0) {
+                fprintf(stderr, "FAIL: 663 text fallback\n");
+                fails++;
             }
         }
 

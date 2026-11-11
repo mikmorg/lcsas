@@ -1250,7 +1250,16 @@ print_prompt(lcsas_disc_locator *l, const char *hex)
                 fr = -1;
             }
         } else if (fr > 0) {
+            /* Issue #657 — a pack the catalog has never seen was most
+             * likely never burned (a snapshot newer than the discs).
+             * The catalog in use may still be an older disc's, so keep
+             * prompting, but say what to do if the newest disc was
+             * already read. */
             fputs("| (catalog has no record of this pack ID)                  |\n", o);
+            fputs("| If the NEWEST data disc has already been read, this pack |\n", o);
+            fputs("| was never burned: the snapshot is newer than the discs.  |\n", o);
+            fputs("| Type 'q', then list the snapshots (--list) and restore   |\n", o);
+            fputs("| an older one with --snapshot <id>.                       |\n", o);
         }
         /* A query error.  Do NOT claim "no record": we never asked. */
         if (fr < 0) print_catalog_error(o, cat);
