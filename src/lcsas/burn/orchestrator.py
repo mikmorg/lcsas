@@ -58,6 +58,7 @@ from lcsas.db.volumes import (
     update_used_bytes,
 )
 from lcsas.ecc.dvdisaster import DVDisasterRunner, smallest_fitting_medium_bytes
+from lcsas.exceptions import StagingError
 from lcsas.iso.xorriso import MediaStatus, XorrisoRunner
 from lcsas.staging.builder import MirrorUnavailableError, StagingBuilder
 from lcsas.staging.metadata import HolographicInjector
@@ -72,6 +73,18 @@ from lcsas.utils.labels import (
 )
 
 _logger = logging.getLogger(__name__)
+
+
+class NothingToStageError(StagingError, ValueError):
+    """Every unarchived pack already waits on a staged volume (#672)."""
+
+
+def _describe_waiting(held: dict[str, list[str]]) -> str:
+    """``LABEL, LABEL in session S; ...`` for the waiting-volume messages."""
+    return "; ".join(
+        f"{', '.join(labels)} in session {sid}"
+        for sid, labels in sorted(held.items())
+    )
 
 
 def unfinished_iso_path(iso_path: Path) -> Path:
@@ -880,7 +893,29 @@ class BurnOrchestrator:
             allowed = set(pack_sha256s)
             packs_to_stage = [p for p in packs_to_stage if p.sha256 in allowed]
 
+        # #672: plain stage leaves out packs whose disc is on its way: a
+        # never-burned volume whose finished ISO waits in the staging area.
+        held: dict[str, list[str]] = {}
+        if for_location is None:
+            packs_to_stage, held = self._hold_back_waiting(packs_to_stage)
+            if held and packs_to_stage:
+                logger.warning(
+                    "Not staging packs that are already on volumes waiting "
+                    "to be burned: %s. Burn them with 'lcsas burn --session "
+                    "<id>', or 'lcsas session abort <id>' to stage their "
+                    "packs again.", _describe_waiting(held),
+                )
+
         if not packs_to_stage:
+            if held:
+                raise NothingToStageError(
+                    "No packs need staging: every unarchived pack is on a "
+                    f"volume waiting to be burned ({_describe_waiting(held)}).",
+                    recovery_hint=(
+                        "lcsas burn --session <id> --location <name>, or "
+                        "lcsas session abort <id> to discard the waiting ISOs."
+                    ),
+                )
             raise ValueError("No packs need staging.")
 
         # 2. Bin-pack into multiple volumes
@@ -1648,6 +1683,69 @@ class BurnOrchestrator:
             packs = [p for p in packs if p.repo_id in repo_ids]
 
         return packs
+
+    def _hold_back_waiting(
+        self, packs: list[Pack],
+    ) -> tuple[list[Pack], dict[str, list[str]]]:
+        """Drop the packs that sit on a volume waiting to be burned (#672).
+
+        A volume is waiting when it was never burned (STAGING/BURNING),
+        its staging finished (the ISO hash is recorded, #665) and its ISO
+        is still in the staging area.  As for ``stage --for-location``
+        (#642), a volume whose disc failed verification does not hold its
+        packs back.  Returns the remaining packs and the waiting volumes'
+        labels per burn session.
+        """
+        from lcsas.db.sessions import staged_iso_present, staging_incomplete
+
+        rows = self._conn.execute(
+            """SELECT v.volume_id, v.label,
+                      (SELECT sv.session_id FROM session_volumes sv
+                       JOIN burn_sessions bs USING (session_id)
+                       WHERE sv.volume_id = v.volume_id
+                       ORDER BY bs.created_at DESC, sv.rowid DESC
+                       LIMIT 1) AS session_id
+               FROM volumes v
+               WHERE v.status IN ('STAGING', 'BURNING')
+                 AND NOT EXISTS (
+                     SELECT 1 FROM volume_events e
+                     WHERE e.volume_id = v.volume_id
+                       AND e.event_type = 'VERIFY_FAIL'
+                 )
+               ORDER BY v.label"""
+        ).fetchall()
+        waiting: dict[int, tuple[str, str]] = {}
+        for r in rows:
+            vid = int(r["volume_id"])
+            if r["session_id"] is None:
+                continue
+            if staging_incomplete(self._conn, vid):
+                continue
+            if not staged_iso_present(self._conn, vid):
+                continue
+            waiting[vid] = (str(r["label"]), str(r["session_id"]))
+        if not waiting:
+            return packs, {}
+
+        placeholders = ",".join("?" * len(waiting))
+        held_rows = self._conn.execute(
+            f"SELECT pack_id, volume_id FROM volume_packs "
+            f"WHERE volume_id IN ({placeholders})",
+            list(waiting),
+        ).fetchall()
+        holder = {int(r["pack_id"]): int(r["volume_id"]) for r in held_rows}
+        remaining: list[Pack] = []
+        held: dict[str, list[str]] = {}
+        for p in packs:
+            on_volume = holder.get(p.pack_id)
+            if on_volume is None:
+                remaining.append(p)
+                continue
+            label, session_id = waiting[on_volume]
+            labels = held.setdefault(session_id, [])
+            if label not in labels:
+                labels.append(label)
+        return remaining, held
 
     def _multi_bin_pack(
         self,

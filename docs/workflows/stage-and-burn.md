@@ -571,16 +571,20 @@ Volume statuses (set by `update_status` / `mark_closed`):
 
 The pipeline is interrupt-safe in three places:
 
-1. **Inside `stage()`** — if the process dies after some volumes are staged
-   but before all are written, the partially-built session remains in
-   `STAGED` with some volumes in `STAGING`. Re-running `lcsas stage` will
-   create a **new** session for the still-unarchived packs (the
-   partial volumes' packs are linked but the volumes are still `STAGING`
-   so `get_unarchived_packs` excludes them via `volume_packs`). Today
-   there is no "resume this STAGED session" command; the recommended
-   fix is `lcsas stage --clean --session <id>` to discard the
-   partial session (`cmd_stage`, `BurnOrchestrator.clean_session`) and then
-   re-stage.
+1. **Inside `stage()`** — if the process dies after some volumes are
+   staged, those volumes stay in `STAGING` with their finished ISOs in
+   the staging area. The volume being built when it died is rolled back
+   on Ctrl-C. If the process was killed outright, that volume stays
+   behind with an empty ISO hash, and `lcsas status` lists it as
+   INCOMPLETE (#665). A second `lcsas stage` does **not** pick the packs
+   of a volume whose finished ISO is waiting; it names the waiting
+   session and stages only the other packs (#672). If every unarchived
+   pack is waiting, it stops with "No packs need staging" and names the
+   session. There is no "resume this session" command. Either burn the
+   waiting volumes with `lcsas burn --session <id>`, or discard the
+   session with `lcsas session abort <id>` (`cmd_session_abort`,
+   `BurnOrchestrator.abort_session`) and stage again. An INCOMPLETE
+   volume must always be discarded this way.
 2. **Inside `burn_session()` between volumes** — if volume 3 of 5 fails,
    volumes 1-2 are `VERIFIED`, volume 3 is back to `STAGING`, volumes 4-5
    are still `STAGING`, session is `PARTIAL`. **Resume** by re-running
