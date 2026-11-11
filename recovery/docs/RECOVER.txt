@@ -921,27 +921,39 @@ that exist only on volumes recorded as DEPRECATED or DESTROYED
 separately, so you know which data depends on discs that may no
 longer exist.
 
-CAVEAT: the NEWEST burn session's volumes look unfinished after a
+CAVEAT: the NEWEST burn session's discs have no disc record after a
 rebuild.  A disc catalog is copied onto its disc at STAGING time,
-before the burn happens, so a disc cannot record its own burn.  The
-very latest burn session therefore appears in a rebuilt catalog as
-STAGING volumes with no locations and no verify history, and the
-newest discs' ISO image hashes may be absent.  This is EXPECTED, not
-corruption: restore still works (the packs are on the discs).  What
-is missing is the record of where each disc is kept and which discs
-were verified.  To re-establish it, run:
+before the burn happens, so a disc cannot record its own burn.  Give
+the rebuild every disc of the newest burn session you hold: each
+volume whose own disc it reads is marked BURNED, and the rebuild
+lists those volumes.  They have no location and no verify history
+yet, and the newest discs' ISO image hashes may be absent.  This is
+EXPECTED, not corruption: restore still works (the packs are on the
+discs).  What is missing is the record of where each disc is kept
+and which discs were verified.  To re-establish it, put each listed
+disc in the drive and run:
 
-    lcsas verify <label> --disc
+    lcsas verify <label> --disc --location <where it is kept>
 
-for each disc of that burn session you hold; this records the disc
-at its location with a fresh verify.  Older burn sessions are
-unaffected — their burn records were captured on later discs and are
-merged back in (volume_events, burn_sessions, and session_volumes all
-survive the rebuild).
+This checks the disc, records it at that location, and marks the
+volume VERIFIED.  The location must already exist (see 'lcsas
+location list'; add one with 'lcsas location add').  Until you have
+done this for every listed volume, do not run 'lcsas session abort'
+on that burn session: it deletes volumes that have no disc record.
+Older burn sessions are unaffected — their burn records were
+captured on later discs and are merged back in (volume_events,
+burn_sessions, and session_volumes all survive the rebuild).
 
 OWNER HABIT: keep the latest burn session's burn receipt files
 (receipts/*.json) with your printed estate papers.  After a rebuild
 they re-load where the newest discs went and their ISO image hashes
 in one step:
 
-    lcsas catalog import-receipts /path/to/receipts/*.json
+    lcsas catalog import-receipts --allow-unhashed /path/to/receipts/*.json
+
+  --allow-unhashed is needed here: the rebuilt catalog has no ISO
+  image hash for the newest disc (see the CAVEAT above), so its
+  receipt's hash cannot be compared with one.  A receipt already
+  imported, or one whose location is not in the rebuilt catalog, is
+  reported and skipped; the command then exits non-zero, which is
+  expected.

@@ -529,8 +529,8 @@ class HolographicInjector:
         # This file (like the disc catalog) is written BEFORE the burn:
         # ``status`` is always STAGING here, and the catalog's
         # ``volumes.location`` column for this volume holds the
-        # *intended first location* (the configured default at create
-        # time), never a burn confirmation.  Where each disc actually
+        # location the volume was staged FOR (``stage --for-location``,
+        # else the configured default), never a burn confirmation.  Where each disc actually
         # went lives in ``volume_copies`` in the owner's master catalog
         # and in the durable burn receipts (``<db dir>/receipts/``) —
         # deliberately NO location field is written here.  [BURN-08]
