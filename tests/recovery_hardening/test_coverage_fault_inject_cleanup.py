@@ -189,7 +189,7 @@ def test_fault_sweep_cleans_up_when_stopped(tmp_path: Path) -> None:
     finally:
         if proc.poll() is None:
             os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait(timeout=30)
+            proc.wait(timeout=_scaled_timeout(30))
         if use_shm and dead.exists():
             shutil.rmtree(dead)
             pytest.fail(f"a dead-pid {dead} was not reaped after SIGTERM")
