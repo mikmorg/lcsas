@@ -100,7 +100,7 @@ volumes (
     media_type   TEXT NOT NULL,      -- BD25, MDISC100, BDXL100, etc.
     capacity_bytes INTEGER NOT NULL, -- Raw capacity in bytes
     used_bytes   INTEGER DEFAULT 0,
-    location     TEXT DEFAULT 'Home_Shelf',
+    location     TEXT DEFAULT 'Home_Shelf', -- staged for (#687), see below
     status       TEXT,               -- STAGING → BURNING → BURNED → VERIFIED → DEPRECATED → DESTROYED
     created_at   DATETIME,
     closed_at    DATETIME,

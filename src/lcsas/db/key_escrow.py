@@ -18,7 +18,6 @@ so every reader goes through it.
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -121,28 +120,33 @@ def config_names_by_repo_id(
 ) -> dict[str, str]:
     """Catalog ``repo_id`` -> the repository's ``[repos.<name>]`` config key.
 
-    *mirrors* maps each config key to its ``mirror_path``.  The join is the
-    burn's (``BurnOrchestrator._match_repo_config``): mirror path first —
-    the catalog name may differ from the config key (``repo add`` takes any
-    name) — then exact name, then case-insensitive name.  Paths are compared
-    lexically: a stale mount must not hang this (#427).
+    *mirrors* maps each config key to its ``mirror_path``.  Each key is
+    resolved with :func:`lcsas.db.repos.resolve_repo`, the resolver every
+    command uses (#687): mirror path first — the catalog name may differ
+    from the config key (``repo add`` takes any name) — then name.  When
+    two keys land on one repository, the key whose mirror path matched
+    wins.  Paths are compared lexically: a stale mount must not hang this
+    (#427).  A key that matches nothing, or more than one repository, is
+    left out.
     """
-    try:
-        rows = conn.execute(
-            "SELECT repo_id, name, mirror_path FROM repositories"
-        ).fetchall()
-    except sqlite3.OperationalError:  # no repositories table
-        return {}
-    by_path = {os.path.normpath(str(m)): key for key, m in mirrors.items()}
-    by_lower = {key.lower(): key for key in mirrors}
-    out: dict[str, str] = {}
-    for repo_id, name, mirror_path in rows:
-        key = by_path.get(os.path.normpath(str(mirror_path or "")))
-        if key is None:
-            key = name if name in mirrors else by_lower.get(str(name).lower())
-        if key is not None:
-            out[repo_id] = key
-    return out
+    from lcsas.db.repos import resolve_repo, same_mirror_path
+
+    by_path: dict[str, str] = {}
+    by_name: dict[str, str] = {}
+    for key, mirror in mirrors.items():
+        try:
+            repo = resolve_repo(conn, key, mirror)
+        except ValueError:  # ambiguous: no guessing
+            continue
+        except sqlite3.OperationalError:  # no repositories table
+            return {}
+        if repo is None:
+            continue
+        if same_mirror_path(repo.mirror_path, mirror):
+            by_path.setdefault(repo.repo_id, key)
+        else:
+            by_name.setdefault(repo.repo_id, key)
+    return {**by_name, **by_path}
 
 
 def recorded_splits(

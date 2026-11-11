@@ -1059,30 +1059,51 @@ def _open_existing_catalog(db_path: Path | str) -> sqlite3.Connection:
 def _resolve_repo_names_to_ids(
     conn: sqlite3.Connection,
     names: list[str] | None,
+    config: LCSASConfig | None = None,
 ) -> list[str] | None:
     """Map owner-facing repository *names* to catalog repo_ids (UUIDs).
 
-    Returns ``None`` when *names* is ``None`` (no filter).  Logs a
-    warning for names that don't map to any registered repository.
+    Each name goes through :func:`lcsas.db.repos.resolve_repo` (#687), with
+    its configured mirror path when *config* lists it.  Returns ``None``
+    when *names* is ``None`` (no filter).  Logs a warning for names that
+    don't map to any registered repository.  Raises ValueError when a name
+    matches more than one repository (#685).
     """
     if names is None:
         return None
-    from lcsas.db.repos import list_repos
+    from lcsas.db.repos import resolve_repo
 
-    name_to_id = {r.name: r.repo_id for r in list_repos(conn)}
     ids: list[str] = []
     for n in names:
-        rid = name_to_id.get(n)
-        if rid is None:
+        repo = resolve_repo(conn, n, _config_mirror(config, n))
+        if repo is None:
             logger.warning(f"repository '{n}' not registered in the catalog, skipping.")
         else:
-            ids.append(rid)
+            ids.append(repo.repo_id)
     if not ids:
         raise ValueError(
             f"None of the specified repositories exist in the catalog: "
             f"{', '.join(names)}"
         )
     return ids
+
+
+def _config_if_loadable(args: argparse.Namespace) -> LCSASConfig | None:
+    """``--config`` when it loads, else None: for commands that only use it
+    as a hint (the mirror path of ``[repos.<name>]``) and work with ``--db``
+    alone, so a broken config must not stop them."""
+    try:
+        return _load_config_opt(args)
+    except Exception:  # noqa: BLE001 - advisory only
+        return None
+
+
+def _config_mirror(config: LCSASConfig | None, name: str) -> Path | None:
+    """The mirror path ``[repos.<name>]`` configures, or None (#687)."""
+    if config is None:
+        return None
+    repo_cfg = config.repositories.get(name)
+    return repo_cfg.mirror_path if repo_cfg is not None else None
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -1127,6 +1148,26 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
 
         repo_id = generate_uuid()
         mirror = args.mirror_path.resolve()
+
+        # #685: names and mirror paths must be unique.  The schema has no
+        # UNIQUE index on either (v10 is burned on discs), so check here:
+        # a second 'photos' made every later `--repo photos` ambiguous.
+        from lcsas.db.repos import list_repos, same_mirror_path
+        for existing in list_repos(conn):
+            if existing.name == args.name:
+                clash = f"name '{args.name}'"
+            elif same_mirror_path(existing.mirror_path, mirror):
+                clash = f"mirror path {mirror}"
+            else:
+                continue
+            logger.error(
+                f"A repository with the {clash} is already registered: "
+                f"'{existing.name}' (id: {existing.repo_id}, mirror: "
+                f"{existing.mirror_path}). Nothing was registered. Use "
+                f"another name, or `lcsas repo list` to see the existing "
+                f"repositories."
+            )
+            return 1
 
         # Auto-detect the key ID from the repository's keys/ dir
         key_ids = read_repo_key_ids(mirror)
@@ -1191,7 +1232,10 @@ def _cmd_repo_set_status(
     with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
         try:
-            repo = _find_repo(conn, args.repo_id)
+            repo = _find_repo(
+                conn, args.repo_id,
+                _config_mirror(_config_if_loadable(args), args.repo_id),
+            )
         except ValueError as exc:
             logger.error(str(exc))
             return 1, None
@@ -1267,29 +1311,18 @@ def cmd_repo_activate(args: argparse.Namespace) -> int:
     return rc
 
 
-def _find_repo(conn: Any, ref: str) -> Any:
-    """The repository *ref* names: its catalog repo_id, else its name (#581).
+def _find_repo(conn: Any, ref: str, mirror_path: Path | None = None) -> Any:
+    """The repository *ref* names: its name or its catalog ID (#581).
 
-    The owner thinks in names; ``repo add`` keys the catalog on a UUID.  An
-    exact name match wins over a case-insensitive one.  Returns None when
-    nothing matches; raises ValueError when a name is ambiguous.
+    A thin wrapper over :func:`lcsas.db.repos.resolve_repo`, the one
+    resolver (#687): the configured mirror path of ``[repos.<ref>]`` first
+    when given, then the name, the catalog ID, and the name ignoring case.
+    Returns None when nothing matches; raises ValueError when a name is
+    ambiguous.
     """
-    from lcsas.db.repos import get_repo, get_repo_by_name, list_repos
+    from lcsas.db.repos import resolve_repo
 
-    try:
-        return get_repo(conn, ref)
-    except ValueError:
-        pass
-    repo = get_repo_by_name(conn, ref)
-    if repo is not None:
-        return repo
-    matches = [r for r in list_repos(conn) if r.name.lower() == ref.lower()]
-    if len(matches) > 1:
-        raise ValueError(
-            f"'{ref}' matches {len(matches)} repositories; use its catalog ID "
-            "(`lcsas repo list`)."
-        )
-    return matches[0] if matches else None
+    return resolve_repo(conn, ref, mirror_path)
 
 
 def _resolve_volume_refs(
@@ -1330,7 +1363,10 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
         ensure_schema(conn)
 
         try:
-            repo = _find_repo(conn, args.repo_id)
+            repo = _find_repo(
+                conn, args.repo_id,
+                _config_mirror(_config_if_loadable(args), args.repo_id),
+            )
         except ValueError as exc:
             logger.error(str(exc))
             return 1
@@ -1428,7 +1464,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
     from lcsas.db.connection import locked_connection
     from lcsas.db.queries import get_archive_status_summary
-    from lcsas.db.repos import list_repos
+    from lcsas.db.repos import resolve_repo
     from lcsas.db.schema import ensure_schema
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
@@ -1445,9 +1481,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
     ) as conn:
         ensure_schema(conn)
 
-        # Map config repository names → catalog repo_ids (UUIDs)
-        repos_db = {r.name: r.repo_id for r in list_repos(conn)}
 
+        # Config key → catalog repo_id, filled as each repository resolves.
+        repos_db: dict[str, str] = {}
         repo_filter = set(args.repo) if args.repo else None
         total_new = 0
         total_scanned = 0
@@ -1472,7 +1508,13 @@ def cmd_scan(args: argparse.Namespace) -> int:
             if repo_filter and repo_name not in repo_filter:
                 continue
 
-            db_repo_id = repos_db.get(repo_name)
+            # Config key → catalog repo_id: mirror path, then name (#687).
+            try:
+                db_repo = resolve_repo(conn, repo_name, repo_cfg.mirror_path)
+            except ValueError as exc:
+                logger.error("%s", exc)
+                return 1
+            db_repo_id = db_repo.repo_id if db_repo is not None else None
             if db_repo_id is None:
                 logger.warning(
                     f"repository '{repo_name}' not registered in the catalog "
@@ -1480,6 +1522,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 )
                 repos_unregistered.append(repo_name)
                 continue
+            repos_db[repo_name] = db_repo_id
 
             mirror_path = repo_cfg.mirror_path
             scan_result = scan_mirror_packs(mirror_path)
@@ -2077,7 +2120,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
                     return 1
 
             try:
-                repo_ids = _resolve_repo_names_to_ids(conn, args.repo)
+                repo_ids = _resolve_repo_names_to_ids(conn, args.repo, config)
             except ValueError as e:
                 logger.error(str(e))
                 return 1
@@ -6482,7 +6525,7 @@ def _check_split_repo_registered(
     stop before any share exists.  A catalog that exists but cannot be
     read only logs a warning: the split goes ahead without being recorded.
     """
-    from lcsas.db.repos import get_repo_by_name
+    from lcsas.db.repos import resolve_repo
     from lcsas.exceptions import CatalogError
 
     name = args.repo
@@ -6492,7 +6535,7 @@ def _check_split_repo_registered(
     try:
         conn = _open_existing_catalog(db_path)
         try:
-            repo = get_repo_by_name(conn, name)
+            repo = resolve_repo(conn, name, _config_mirror(config, name))
         finally:
             conn.close()
     except CatalogError:  # no file, or never initialised
@@ -6532,16 +6575,19 @@ def _record_split_by_name(
     threshold: int,
     shares: int,
     split_id: int,
+    mirror_path: Path | None = None,
 ) -> None:
     """Record a split under the catalog repo_id of the repository *name*.
 
-    Also drops a record that an earlier build left under the name (#571),
-    so one row stands for one repository.
+    *name* is resolved like every other ``--repo`` (#687), with
+    *mirror_path* (its configured mirror) first.  Also drops a record that
+    an earlier build left under the name (#571), so one row stands for one
+    repository.
     """
     from lcsas.db.key_escrow import clear_split, record_split
-    from lcsas.db.repos import get_repo_by_name
+    from lcsas.db.repos import resolve_repo
 
-    repo = get_repo_by_name(conn, name)
+    repo = resolve_repo(conn, name, mirror_path)
     if repo is None:
         raise ValueError(f"repository '{name}' is not registered in the catalog")
     record_split(conn, repo.repo_id, threshold, shares, split_id, commit=False)
@@ -6735,7 +6781,8 @@ def cmd_key_split(args: argparse.Namespace) -> int:
             ) as conn:
                 ensure_schema(conn)
                 _record_split_by_name(
-                    conn, args.repo, threshold, shares, split_id
+                    conn, args.repo, threshold, shares, split_id,
+                    _config_mirror(config, args.repo),
                 )
         except Exception as e:  # noqa: BLE001 - cards are written; don't fail the split
             logger.warning(
