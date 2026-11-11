@@ -74,7 +74,8 @@ airgapped machines, and split-machine "stage here, burn there" pipelines.
    `src/lcsas/utils/hashing.py`).
 4. If `--emit-receipt` was given, work out the receipt file (step 8) and
    refuse the run, before anything is burned, if a file is already there
-   that is not a receipt of this volume at this location (#675;
+   that is not a receipt of this volume at this location, or if a file
+   stands where the receipt's folder should be (#675;
    `_receipt_overwrite_refusal`).
 5. Unless `--no-verify` is passed, a blank-media pre-check refuses a disc
    that already carries data before the burn begins (`cmd_burn_iso`).
@@ -169,8 +170,8 @@ command.
   `--emit-receipt` into a directory tree that does not exist yet creates
   every missing parent (`mkdir(parents=True)`) and writes the receipt at the
   exact path given (`::test_nested_missing_dirs_are_created`), alongside a
-  single missing parent, an existing parent, overwriting an existing receipt
-  file, and a failed burn leaving no receipt and creating no directories.
+  single missing parent, an existing parent, replacing this disc's own
+  receipt, and a failed burn leaving no receipt and creating no directories.
 - `tests/unit/test_burn_iso_receipt_io.py::TestReceiptIsFsynced` — the receipt
   file is `fsync()`-ed exactly once, after every byte has been flushed
   (`::test_receipt_file_is_fsynced_with_all_data_already_flushed`); the same
@@ -179,7 +180,8 @@ command.
 - `tests/unit/test_burn_iso_receipt_io.py::TestEmitReceiptMissingFolder` —
   `--emit-receipt receipts/` and `--emit-receipt receipts` with no such
   folder create it and write `<label>_<location>.json`; three burns leave
-  three receipts (#675).
+  three receipts; a file where the folder should be is refused before
+  the burn (#675).
   `::TestEmitReceiptCreatesParents::test_existing_receipt_of_another_volume_is_refused`
   — another volume's receipt is kept and nothing is burned.
 - `tests/unit/test_burn_iso_readback.py` — the read-back against a

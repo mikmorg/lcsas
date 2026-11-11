@@ -2423,8 +2423,19 @@ def _receipt_overwrite_refusal(
 
     A file already there may only be replaced by a receipt for the same
     volume and location (a re-run); anything else is another disc's
-    receipt, or not a receipt at all, and is kept.
+    receipt, or not a receipt at all, and is kept.  The folder the receipt
+    goes in must be one, or be creatable: a file in its place (e.g. a
+    'receipts' file written before #675) is refused too.
     """
+    ancestor = out_path.parent
+    while not ancestor.exists() and ancestor != ancestor.parent:
+        ancestor = ancestor.parent
+    if ancestor.exists() and not ancestor.is_dir():
+        return (
+            f"{ancestor} is a file, not a folder, so the receipt cannot be "
+            f"written in it.  Move that file aside or give --emit-receipt "
+            f"another folder.  Nothing was burned or checked."
+        )
     if not out_path.exists():
         return None
     existing: object = None

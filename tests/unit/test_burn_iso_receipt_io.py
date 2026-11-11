@@ -193,6 +193,21 @@ class TestEmitReceiptMissingFolder:
             f"VOL_RECEIPT_000{n}_Offsite_Safe.json" for n in range(3)
         ]
 
+    def test_a_file_where_the_folder_should_be_is_refused(self, tmp_path, iso, capsys):
+        """A 'receipts' file left by the old behaviour, then 'receipts/':
+        refused before the burn, never a burned disc with no receipt."""
+        target = tmp_path / "receipts"
+        old = json.dumps({"volume_label": "OLD_0001", "location": "Home"})
+        target.write_text(old)
+
+        with _mock_xorriso() as burn:
+            rc = _burn_iso(iso, f"{target}{os.sep}")
+
+        assert rc == 1
+        burn.assert_not_called()
+        assert target.read_text() == old
+        assert "is a file, not a folder" in capsys.readouterr().out
+
     def test_existing_file_without_extension_is_still_the_file(self, tmp_path, iso):
         """An existing file is never turned into a folder; it is replaced
         only when it holds this disc's receipt."""
