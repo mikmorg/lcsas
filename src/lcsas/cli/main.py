@@ -411,6 +411,17 @@ def build_parser() -> argparse.ArgumentParser:
                                       help="Import burn receipts from remote burns.")
     cat_import_p.add_argument("receipt_files", nargs="+",
                               help="Receipt JSON files.")
+    cat_import_p.add_argument(
+        "--allow-unhashed", action="store_true", default=False,
+        help="Let a passing receipt make its volume VERIFIED even when the "
+             "receipt's ISO hash cannot be matched to the staged ISO (one "
+             "of the two hashes is missing). Check the disc first.",
+    )
+    cat_import_p.add_argument(
+        "--allow-other-location", action="store_true", default=False,
+        help="Accept a first disc at a location other than the one its "
+             "volume was staged for.",
+    )
 
     cat_validate_p = cat_sub.add_parser(
         "validate",
@@ -1798,6 +1809,60 @@ def _print_redundancy_report(conn: sqlite3.Connection, min_copies: int) -> int:
     return 0
 
 
+def _volumes_needing_reburn(
+    conn: sqlite3.Connection,
+) -> list[tuple[str, str, bool]]:
+    """(label, location, disc recorded there) for every location where a
+    volume's newest verify result is a failure (BURN-05, #671).
+
+    Only VERIFY_PASS, VERIFY_FAIL and VERIFY_FAIL_REBURN count, location
+    by location: a later pass at the same location (a good re-burn)
+    clears it, a pass at another location does not.  Once the remedy is
+    done -- the volume's packs were staged again for that location
+    (``stage --for-location``) or are on another disc there -- the
+    location needs nothing more from it and it is not listed, unless a
+    disc of it is still recorded there (a disc that failed a re-check).
+    """
+    from lcsas.db.queries import get_unarchived_or_missing_at_location
+
+    newest: dict[tuple[int, str], tuple[str, str]] = {}
+    for row in conn.execute(
+        """SELECT e.volume_id, e.location, e.event_type, v.label
+           FROM volume_events e JOIN volumes v USING (volume_id)
+           WHERE e.event_type IN ('VERIFY_PASS', 'VERIFY_FAIL',
+                                  'VERIFY_FAIL_REBURN')
+           ORDER BY e.event_date, e.event_id"""
+    ):
+        key = (int(row["volume_id"]), row["location"] or "<unknown>")
+        newest[key] = (row["event_type"], row["label"])
+    active = {
+        (int(r["volume_id"]), r["location"])
+        for r in conn.execute(
+            "SELECT volume_id, location FROM volume_copies "
+            "WHERE status = 'ACTIVE'"
+        )
+    }
+    missing_at: dict[str, set[int]] = {}
+    result: list[tuple[str, str, bool]] = []
+    for (vid, loc), (event_type, label) in newest.items():
+        if event_type == "VERIFY_PASS":
+            continue
+        has_disc = (vid, loc) in active
+        if not has_disc and loc != "<unknown>":
+            packs = {int(r[0]) for r in conn.execute(
+                "SELECT pack_id FROM volume_packs WHERE volume_id = ?", (vid,)
+            )}
+            if loc not in missing_at:
+                missing_at[loc] = {
+                    p.pack_id
+                    for p in get_unarchived_or_missing_at_location(conn, loc)
+                }
+            if packs and not packs & missing_at[loc]:
+                continue
+        result.append((label, loc, has_disc))
+    return sorted(result)
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     """Show archive status summary."""
     from lcsas.db.queries import (
@@ -1810,7 +1875,6 @@ def cmd_status(args: argparse.Namespace) -> int:
     )
     from lcsas.db.sessions import list_sessions, staged_iso_present
     from lcsas.db.volume_copies import find_stale_copies
-    from lcsas.db.volume_events import get_latest_event
     from lcsas.db.volumes import list_volumes
 
     db_path = _resolve_db_path(args)
@@ -1837,24 +1901,23 @@ def cmd_status(args: argparse.Namespace) -> int:
         partial_sessions = list_sessions(conn, status_filter="PARTIAL")
         # #647: never-burned volumes split by whether their ISO is still in
         # the staging area (waiting to be burned) or gone (a ghost).
+        # BURN-05: a volume whose newest verify result at a location is a
+        # failure needs a re-burn there (#671: other events, such as the
+        # BURN_RECEIPT_IMPORTED written after a failed receipt, don't count).
+        needs_reburn = _volumes_needing_reburn(conn)
+        failed_labels = {label for label, _, _ in needs_reburn}
         unburned = get_ghost_volumes(conn, older_than_hours=0)
-        waiting = [v.label for v in unburned if staged_iso_present(conn, v.volume_id)]
-        ghost_labels = [v.label for v in unburned if v.label not in waiting]
+        with_iso = [v.label for v in unburned if staged_iso_present(conn, v.volume_id)]
+        # #671: a volume whose disc failed verification is listed under
+        # "needs re-burn", not as waiting to be burned.
+        waiting = [label for label in with_iso if label not in failed_labels]
+        ghost_labels = [v.label for v in unburned if v.label not in with_iso]
         # FMA-08: packs that live on exactly one disc.  Packs in
         # the <2-copies report with at least one live holder are on one
         # disc; zero-holder packs are the unarchived/staged buckets above.
         under = get_redundancy_report(conn, min_copies=2)
         live_map = get_live_volumes_for_packs(conn, [p.pack_id for p in under])
         single_disc_packs = [p for p in under if live_map.get(p.pack_id)]
-        # BURN-05: a volume whose latest event is a verify failure has no
-        # disc recorded for that burn — it needs a re-burn at the location.
-        needs_reburn: list[tuple[str, str]] = []
-        for v in volumes:
-            ev = get_latest_event(conn, v.volume_id)
-            if ev is not None and ev.event_type in (
-                "VERIFY_FAIL", "VERIFY_FAIL_REBURN",
-            ):
-                needs_reburn.append((v.label, ev.location or "<unknown>"))
     finally:
         conn.close()
 
@@ -1891,7 +1954,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             "pool for the next 'lcsas stage'.",
             len(ghost_labels), ", ".join(ghost_labels),
         )
-    if summary["staged"] > 0 and not (waiting or ghost_labels):
+    if summary["staged"] > 0 and not (with_iso or ghost_labels):
         logger.warning(
             "WARNING: %d pack(s) are staged on volumes that were never "
             "burned. See 'lcsas catalog reconcile'.",
@@ -1904,8 +1967,28 @@ def cmd_status(args: argparse.Namespace) -> int:
             "lcsas burn --session %s --location <location>",
             s.session_id, s.session_id,
         )
-    for label, loc in needs_reburn:
-        logger.warning("WARNING: %s needs re-burn at %s", label, loc)
+    for label, loc, has_disc in needs_reburn:
+        if loc == "<unknown>":
+            logger.warning(
+                "WARNING: %s failed verification (no location recorded). "
+                "Check it with 'lcsas verify %s --disc'.",
+                label, label,
+            )
+        elif has_disc:
+            logger.warning(
+                "WARNING: %s needs re-burn at %s: its disc there failed "
+                "verification. Check it with 'lcsas verify %s --disc'; if it "
+                "is bad, record it with 'lcsas copy deprecate %s %s', then "
+                "stage it again with 'lcsas stage --for-location %s' and burn "
+                "the new volume.",
+                label, loc, label, label, loc, loc,
+            )
+        else:
+            logger.warning(
+                "WARNING: %s needs re-burn at %s: its disc failed "
+                "verification and no disc of it is recorded there. %s",
+                label, loc, _restage_hint(loc),
+            )
     if single_disc_packs:
         logger.warning(
             "WARNING: %d pack(s) (%.1f GB) exist on only one disc — run "
@@ -2965,27 +3048,113 @@ def _receipt_verified_at(burn_date: object) -> str:
     return now.isoformat()
 
 
+def _restage_hint(location: str) -> str:
+    """The one next step for a disc that failed verification (#671).
+
+    It is what `lcsas stage --for-location` already does: packs of a
+    volume whose disc failed verification count as missing at that
+    location (``get_unarchived_or_missing_at_location``), so they are
+    staged again on a new volume.
+    """
+    return (
+        f"Stage it again for that location with 'lcsas stage "
+        f"--for-location {location}', then burn the new volume."
+    )
+
+
+def _receipt_timestamp(value: object) -> float | None:
+    """A receipt or catalog time as POSIX seconds, or None when it is
+    missing or unreadable.  A time without a zone is read as UTC."""
+    from datetime import UTC, datetime
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        when = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return when.timestamp()
+
+
+def _receipt_already_imported(
+    conn: sqlite3.Connection,
+    volume_id: int,
+    location: str,
+    burn_date: str,
+    receipt_hash: str,
+) -> bool:
+    """True when a receipt with this location, burn date and ISO hash was
+    imported for the volume before (#666).
+
+    The BURN_RECEIPT_IMPORTED event records the burn date since #666; for
+    receipts imported earlier the disc record's burn date stands in.
+    """
+    from lcsas.db.volume_copies import get_copy_at_location
+    from lcsas.db.volume_events import get_events_for_volume
+
+    for prior in get_events_for_volume(conn, volume_id, "BURN_RECEIPT_IMPORTED"):
+        if prior.location != location:
+            continue
+        try:
+            detail = json.loads(prior.detail) if prior.detail else {}
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(detail, dict)
+            and detail.get("burn_date") == burn_date
+            and (detail.get("iso_sha256") or "") == receipt_hash
+        ):
+            return True
+    copy = get_copy_at_location(conn, volume_id, location)
+    return (
+        copy is not None
+        and copy.burn_date == burn_date
+        and (copy.iso_sha256 or "") == receipt_hash
+    )
+
+
 def cmd_catalog_import(args: argparse.Namespace) -> int:
     """Import burn receipts from remote burns.
 
-    Also transitions volume status for receipts of STAGING volumes:
-      - verify_passed=true  → STAGING → BURNING → VERIFIED (+ mark_closed)
-      - verify_passed=false → stays STAGING, VERIFY_FAIL event (#483, as
-        burn_session does: the packs go back to the unarchived pool)
-      - verify_passed=null  → STAGING → BURNING → BURNED (burn-iso --no-verify:
-        a disc exists but was never read back, so it is not VERIFIED)
+    A receipt for a volume with no verified disc yet (STAGING, BURNING or
+    BURNED; #670) moves the volume on:
+      - verify_passed=true  → VERIFIED (+ mark_closed, VERIFY_PASS).  The
+        receipt's iso_sha256 must match the ISO recorded at staging, unless
+        --allow-unhashed (#669).
+      - verify_passed=false → back to STAGING, VERIFY_FAIL event (#483, as
+        burn_session does: the packs go back to the unarchived pool, and
+        ``lcsas stage --for-location`` stages them again, #671)
+      - verify_passed=null  → BURNED (burn-iso --no-verify: a disc exists
+        but was never read back, so it is not VERIFIED)
     Already-VERIFIED volumes (re-burn to a new location) keep their status.
 
     A disc is recorded for every receipt except verify_passed=false: a disc
     that failed verification is not recorded (BURN-05, as burn_session does),
     so that location still needs the volume.  A re-burn that failed gets a
     VERIFY_FAIL_REBURN event instead (#514).
+
+    Every receipt that cannot be imported is refused with a message, the
+    others are still imported, and the exit code is non-zero (#669).  A
+    receipt imported before is skipped as "already imported" (exit 0), and
+    an old receipt never brings back a disc recorded lost or destroyed
+    (#666).
     """
     from lcsas.db.connection import locked_connection
-    from lcsas.db.locations import ensure_location
+    from lcsas.db.locations import (
+        UnknownLocationError,
+        list_locations,
+        resolve_location,
+    )
     from lcsas.db.schema import ensure_schema
     from lcsas.db.sessions import get_staged_iso
-    from lcsas.db.volume_copies import add_volume_copy
+    from lcsas.db.volume_copies import (
+        add_volume_copy,
+        get_copies_for_volume,
+        get_copy_at_location,
+        get_disc_retired_at,
+    )
     from lcsas.db.volume_events import add_event, get_events_for_volume
     from lcsas.db.volumes import get_volume_by_label, mark_closed, update_status
 
@@ -2993,19 +3162,23 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     if config is None:
         logger.error("--config is required for catalog.")
         return 1
+    allow_unhashed = bool(getattr(args, "allow_unhashed", False))
+    allow_other_location = bool(getattr(args, "allow_other_location", False))
+    absent = object()
 
-    rejected = 0
+    refused = 0
+    already = 0
+    imported = 0
     with locked_connection(
         _resolve_db_path(args, config), timeout=_resolve_lock_timeout(args)
     ) as conn:
         ensure_schema(conn)
 
-        imported = 0
         for receipt_file in args.receipt_files:
-            # Every malformed receipt is skipped with a warning and the import
-            # goes on (#522).  ValueError covers JSONDecodeError and the
-            # UnicodeDecodeError of a non-UTF-8 file (e.g. UTF-16 from a
-            # PowerShell `>` redirect).
+            # A receipt that cannot be imported is refused with a message
+            # and the import goes on (#522); the exit code says so (#669).
+            # ValueError covers JSONDecodeError and the UnicodeDecodeError of
+            # a non-UTF-8 file (e.g. UTF-16 from a PowerShell `>` redirect).
             try:
                 with open(receipt_file, encoding="utf-8") as f:
                     receipt = json.load(f)
@@ -3014,12 +3187,14 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     f"Failed to read receipt '{receipt_file}': {e} "
                     "(a receipt must be a UTF-8 JSON file), skipping."
                 )
+                refused += 1
                 continue
             if not isinstance(receipt, dict):
                 logger.warning(
                     f"Receipt '{receipt_file}' is not a JSON object "
                     f"(got {type(receipt).__name__}), skipping."
                 )
+                refused += 1
                 continue
 
             # Validate required receipt fields
@@ -3027,6 +3202,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             if missing:
                 logger.warning(f"Receipt '{receipt_file}' missing keys: "
                                f"{', '.join(missing)}, skipping.")
+                refused += 1
                 continue
             bad_fields = [
                 k for k in ("volume_label", "location")
@@ -3043,49 +3219,116 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                         raise ValueError(raw_size)
                 except (TypeError, ValueError):
                     bad_fields.append("iso_size_bytes")
+            receipt_hash = receipt.get("iso_sha256") or ""
+            if not isinstance(receipt_hash, str):
+                bad_fields.append("iso_sha256")
+            burn_date = receipt.get("burn_date") or ""
+            if not isinstance(burn_date, str):
+                bad_fields.append("burn_date")
+            # #669: verify_passed must be JSON true, false or null.  It used
+            # to go through bool(), so the string "false" counted as passed.
+            raw_verify = receipt.get("verify_passed", absent)
+            if raw_verify is not None and not isinstance(raw_verify, bool):
+                bad_fields.append("verify_passed")
             if bad_fields:
+                why = ""
+                if "verify_passed" in bad_fields:
+                    got = ("nothing" if raw_verify is absent
+                           else json.dumps(raw_verify))
+                    why = (" (verify_passed must be JSON true, false or "
+                           f"null; got {got})")
                 logger.warning(
                     f"Receipt '{receipt_file}' has invalid "
-                    f"{', '.join(bad_fields)}, skipping."
+                    f"{', '.join(bad_fields)}{why}, skipping."
                 )
+                refused += 1
                 continue
+            verify_passed = raw_verify is True
+            verify_failed = raw_verify is False
+            label: str = receipt["volume_label"]
+            location: str = receipt["location"]
+            name = Path(receipt_file).name
 
-            vol = get_volume_by_label(conn, receipt["volume_label"])
+            vol = get_volume_by_label(conn, label)
             if vol is None:
-                logger.warning(f"Volume '{receipt['volume_label']}' not found, skipping.")
+                logger.warning(f"Volume '{label}' not found, skipping.")
+                refused += 1
                 continue
 
-            # Issue #18: receipt-vs-prior-receipt hash check. If a previous
-            # BURN_RECEIPT_IMPORTED event for this volume recorded an
-            # iso_sha256, the new receipt's iso_sha256 must match. Mismatch
-            # means the receipt is for a different physical ISO (swapped /
-            # tampered / re-mastered) — reject without writing anything.
-            receipt_hash = receipt.get("iso_sha256") or ""
-            hash_mismatch = False
+            # #666: a receipt imported before changes nothing.  In particular
+            # it never brings back a disc recorded lost or destroyed since.
+            if _receipt_already_imported(
+                conn, vol.volume_id, location, burn_date, receipt_hash,
+            ):
+                copy = get_copy_at_location(conn, vol.volume_id, location)
+                if copy is not None and copy.status != "ACTIVE":
+                    logger.warning(
+                        f"Receipt '{receipt_file}': already imported.  The "
+                        f"disc of '{label}' at {location} has since been "
+                        f"recorded as {copy.status} (lost, destroyed or out "
+                        "of service); it stays so."
+                    )
+                else:
+                    logger.info(f"Receipt '{receipt_file}': already imported.")
+                already += 1
+                continue
+
+            # #669: the location must be a known one, as for `lcsas burn`;
+            # a mistyped name must not become a new location.
+            try:
+                resolve_location(conn, location)
+            except UnknownLocationError as exc:
+                known = [loc.name for loc in list_locations(conn)]
+                hint = (f" Did you mean: {', '.join(exc.suggestions)}?"
+                        if exc.suggestions else "")
+                logger.error(
+                    f"Receipt '{receipt_file}': unknown location "
+                    f"'{location}'.{hint} Known locations: "
+                    f"{', '.join(known) if known else '(none)'}.  If the "
+                    "disc really is kept there, register it with 'lcsas "
+                    f"location add {location}' and import the receipt "
+                    "again; skipping."
+                )
+                refused += 1
+                continue
+
+            # #670: STAGING, BURNING and BURNED all have no verified disc yet.
+            first_disc = vol.status in ("STAGING", "BURNING", "BURNED")
+
+            # #669: the first disc belongs where the volume was staged for.
+            # A VERIFIED volume taking a disc elsewhere is the multi-copy
+            # path and is not checked.  Older volumes may have no location.
+            if (
+                first_disc and vol.location and vol.location != location
+                and not allow_other_location
+            ):
+                logger.error(
+                    f"Receipt '{receipt_file}': '{label}' was staged for "
+                    f"location {vol.location}, but the receipt says "
+                    f"{location}; skipping.  If the disc really is kept at "
+                    f"{location}, import it again with --allow-other-location."
+                )
+                refused += 1
+                continue
+
             # #644: the receipt must name the ISO that was staged.  burn-iso
             # hashes whatever file it is given on the burning machine, so an
             # ISO damaged or swapped on its way there would otherwise burn,
             # pass its own verify, and import as VERIFIED.
             staged = get_staged_iso(conn, vol.volume_id)
+            hash_mismatch = False
+            unchecked = ""
             if staged is None:
-                logger.warning(
-                    f"Receipt '{receipt_file}': no ISO hash was recorded "
-                    f"when '{receipt['volume_label']}' was staged; the "
-                    "staged-ISO check was SKIPPED."
-                )
+                unchecked = f"no ISO hash was recorded when '{label}' was staged"
             elif not receipt_hash:
-                logger.warning(
-                    f"Receipt '{receipt_file}' carries no iso_sha256; the "
-                    "check against the ISO staged for "
-                    f"'{receipt['volume_label']}' was SKIPPED."
-                )
+                unchecked = "the receipt carries no iso_sha256"
             else:
                 staged_hash, staged_size = staged
                 if receipt_hash != staged_hash:
                     logger.error(
                         f"Receipt '{receipt_file}' iso_sha256 {receipt_hash} "
                         f"does not match the ISO staged for volume "
-                        f"'{receipt['volume_label']}' ({staged_hash}): the "
+                        f"'{label}' ({staged_hash}): the "
                         "disc was burned from a different or damaged copy "
                         "of the ISO; rejecting.  Copy the ISO again, check "
                         "it with sha256sum, and re-burn."
@@ -3098,15 +3341,18 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     logger.error(
                         f"Receipt '{receipt_file}' iso_size_bytes "
                         f"{receipt_size} does not match the ISO staged for "
-                        f"volume '{receipt['volume_label']}' ({staged_size} "
-                        "bytes); rejecting."
+                        f"volume '{label}' ({staged_size} bytes); rejecting."
                     )
                     hash_mismatch = True
+            # Issue #18: receipt-vs-prior-receipt hash check. If a previous
+            # BURN_RECEIPT_IMPORTED event for this volume recorded an
+            # iso_sha256, the new receipt's iso_sha256 must match. Mismatch
+            # means the receipt is for a different physical ISO (swapped /
+            # tampered / re-mastered) — reject without writing anything.
             if receipt_hash and not hash_mismatch:
-                prior_events = get_events_for_volume(
+                for prior in get_events_for_volume(
                     conn, vol.volume_id, "BURN_RECEIPT_IMPORTED"
-                )
-                for prior in prior_events:
+                ):
                     try:
                         prior_detail = (
                             json.loads(prior.detail) if prior.detail else {}
@@ -3119,89 +3365,110 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                             f"Receipt '{receipt_file}' iso_sha256 "
                             f"{receipt_hash} does not match previously "
                             f"recorded hash {prior_hash} for volume "
-                            f"'{receipt['volume_label']}'; rejecting."
+                            f"'{label}'; rejecting."
                         )
                         hash_mismatch = True
                         break
             if hash_mismatch:
-                rejected += 1
+                refused += 1
                 continue
-
-            ensure_location(conn, receipt["location"], commit=False)
-
-            # Advance status if this is the first burn (STAGING); otherwise
-            # just record the disc (handles re-burns to additional locations).
-            # verify_passed is tri-state (#514): true, false (verify FAILED),
-            # null (not verified).  A receipt without the key predates the
-            # field: it keeps the old reading (status as failed, disc kept).
-            raw_verify = receipt.get("verify_passed", "missing")
-            if raw_verify == "missing":
-                logger.warning(
-                    f"Receipt '{receipt_file}' has no verify_passed field; "
-                    "treating the burn as unverified."
-                )
-            stated = raw_verify not in (None, "missing")
-            verify_passed = stated and bool(raw_verify)
-            verify_failed = stated and not bool(raw_verify)
-            if vol.status == "STAGING" and verify_failed:
-                # #483: a disc that failed verification leaves the volume
-                # STAGING, as burn_session does, so its packs stay in the
-                # unarchived pool.  The event records the attempt.
-                add_event(
-                    conn, vol.volume_id, "VERIFY_FAIL",
-                    location=receipt["location"],
-                    detail=f"Offline burn receipt: {Path(receipt_file).name}",
-                    commit=False,
-                )
-            elif vol.status == "STAGING":
-                update_status(conn, vol.volume_id, "BURNING", commit=False)
-                if verify_passed:
-                    update_status(conn, vol.volume_id, "VERIFIED", commit=False)
-                    mark_closed(conn, vol.volume_id, commit=False)
-                    add_event(
-                        conn, vol.volume_id, "VERIFY_PASS",
-                        location=receipt["location"],
-                        detail=f"Offline burn receipt: {Path(receipt_file).name}",
-                        commit=False,
+            if unchecked:
+                # #669: a volume becomes VERIFIED from a receipt only when
+                # the receipt proves its disc holds the staged ISO.
+                if first_disc and verify_passed and not allow_unhashed:
+                    logger.error(
+                        f"Receipt '{receipt_file}': {unchecked}, so the disc "
+                        f"cannot be matched to the ISO staged for '{label}'; "
+                        "skipping.  Check the disc against the staged ISO "
+                        "(sha256sum), then import the receipt again with "
+                        "--allow-unhashed."
                     )
-                else:
-                    update_status(conn, vol.volume_id, "BURNED", commit=False)
-                    if raw_verify == "missing":
-                        add_event(
-                            conn, vol.volume_id, "VERIFY_FAIL",
-                            location=receipt["location"],
-                            detail=f"Offline burn receipt: {Path(receipt_file).name}",
-                            commit=False,
-                        )
-            elif verify_failed:
-                add_event(
-                    conn, vol.volume_id, "VERIFY_FAIL_REBURN",
-                    location=receipt["location"],
-                    detail=f"Offline burn receipt: {Path(receipt_file).name}",
-                    commit=False,
+                    refused += 1
+                    continue
+                logger.warning(
+                    f"Receipt '{receipt_file}': {unchecked}; the check "
+                    f"against the ISO staged for '{label}' was SKIPPED."
                 )
 
+            # #666: never turn a disc recorded lost, destroyed or out of
+            # service back into an in-service one, unless this receipt is
+            # for a disc burned after that was recorded (a real re-burn).
+            old_copy = get_copy_at_location(conn, vol.volume_id, location)
+            if (
+                old_copy is not None and old_copy.status != "ACTIVE"
+                and not verify_failed
+            ):
+                retired = (get_disc_retired_at(conn, vol.volume_id, location)
+                           or old_copy.burn_date)
+                retired_ts = _receipt_timestamp(retired)
+                burn_ts = _receipt_timestamp(burn_date)
+                if retired_ts is None or burn_ts is None or burn_ts <= retired_ts:
+                    logger.warning(
+                        f"Receipt '{receipt_file}': the disc of '{label}' at "
+                        f"{location} was recorded as {old_copy.status} "
+                        f"({retired or 'date unknown'}), and this receipt's "
+                        f"burn date ({burn_date or 'none'}) is not later.  "
+                        f"It stays {old_copy.status}; skipping."
+                    )
+                    refused += 1
+                    continue
+
+            event_detail = f"Offline burn receipt: {name}"
             if verify_failed:
+                if first_disc and not get_copies_for_volume(conn, vol.volume_id):
+                    # #483: a disc that failed verification returns the
+                    # volume to STAGING, as burn_session does, so its packs
+                    # go back to the unarchived pool.  The event records the
+                    # attempt.
+                    if vol.status != "STAGING":
+                        update_status(conn, vol.volume_id, "STAGING",
+                                      commit=False)
+                    add_event(conn, vol.volume_id, "VERIFY_FAIL",
+                              location=location, detail=event_detail,
+                              commit=False)
+                else:
+                    add_event(conn, vol.volume_id, "VERIFY_FAIL_REBURN",
+                              location=location, detail=event_detail,
+                              commit=False)
                 logger.warning(
-                    f"Receipt '{receipt_file}': the disc for "
-                    f"'{receipt['volume_label']}' FAILED verification at "
-                    f"{receipt['location']}.  No disc was recorded; that "
-                    "location still needs this volume.  Re-burn it."
+                    f"Receipt '{receipt_file}': the disc for '{label}' "
+                    f"FAILED verification at {location}.  No disc was "
+                    "recorded; that location still needs this volume.  "
+                    + _restage_hint(location)
                 )
             else:
-                if raw_verify is None:
+                if verify_passed:
+                    if first_disc:
+                        if vol.status == "STAGING":
+                            update_status(conn, vol.volume_id, "BURNING",
+                                          commit=False)
+                        update_status(conn, vol.volume_id, "VERIFIED",
+                                      commit=False)
+                        mark_closed(conn, vol.volume_id, commit=False)
+                    # One VERIFY_PASS per passing disc, as the direct burn
+                    # writes: `lcsas status` reads the newest verify result
+                    # at each location (#671).
+                    add_event(conn, vol.volume_id, "VERIFY_PASS",
+                              location=location, detail=event_detail,
+                              commit=False)
+                else:
+                    if vol.status == "STAGING":
+                        update_status(conn, vol.volume_id, "BURNING",
+                                      commit=False)
+                    if vol.status in ("STAGING", "BURNING"):
+                        update_status(conn, vol.volume_id, "BURNED",
+                                      commit=False)
                     logger.warning(
-                        f"Receipt '{receipt_file}': '{receipt['volume_label']}' "
-                        f"was burned at {receipt['location']} without "
-                        "verification (burn-iso --no-verify).  Recorded, but "
-                        "not as VERIFIED: check it with `lcsas verify "
-                        f"{receipt['volume_label']} --disc`."
+                        f"Receipt '{receipt_file}': '{label}' was burned at "
+                        f"{location} without verification (burn-iso "
+                        "--no-verify).  Recorded, but not as VERIFIED: check "
+                        f"it with `lcsas verify {label} --disc`."
                     )
                 add_volume_copy(
                     conn,
                     volume_id=vol.volume_id,
-                    location=receipt["location"],
-                    burn_date=receipt.get("burn_date", ""),
+                    location=location,
+                    burn_date=burn_date,
                     iso_sha256=receipt_hash or None,
                     iso_size_bytes=receipt_size,
                     # #646: burn-iso read the disc back right after the
@@ -3209,7 +3476,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     # as the direct burn path does, so the disc was
                     # verified then.  --no-verify (null) leaves it NULL.
                     last_verified_at=(
-                        _receipt_verified_at(receipt.get("burn_date"))
+                        _receipt_verified_at(burn_date)
                         if verify_passed else None
                     ),
                     commit=False,
@@ -3217,12 +3484,13 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
             # Issue #18: persist receipt provenance (iso_sha256, session_id,
             # device, pack_ids) on the master catalog as a
-            # BURN_RECEIPT_IMPORTED audit event. Captures all four fields
-            # from the receipt JSON so later "which device burned this?"
-            # and "does the disc hash match the recorded one?" queries can
-            # be answered from the catalog alone.
+            # BURN_RECEIPT_IMPORTED audit event, so later "which device
+            # burned this?" and "does the disc hash match the recorded one?"
+            # queries can be answered from the catalog alone.  burn_date
+            # lets a later import see that the receipt was imported (#666).
             provenance = {
                 "iso_sha256": receipt_hash,
+                "burn_date": burn_date,
                 "session_id": receipt.get("session_id") or "",
                 "device": receipt.get("device") or "",
                 # pack_ids is emitted by the session-based burn path but NOT
@@ -3230,12 +3498,12 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                 # docs/workflows/burn-iso-portable.md). Persist verbatim so
                 # whichever path produced the receipt is preserved.
                 "pack_ids": list(receipt.get("pack_ids") or []),
-                "receipt_file": Path(receipt_file).name,
-                "verify_passed": None if raw_verify == "missing" else raw_verify,
+                "receipt_file": name,
+                "verify_passed": raw_verify,
             }
             add_event(
                 conn, vol.volume_id, "BURN_RECEIPT_IMPORTED",
-                location=receipt["location"],
+                location=location,
                 detail=json.dumps(provenance),
                 commit=False,
             )
@@ -3243,8 +3511,13 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             imported += 1
 
     logger.info(f"Imported {imported} receipt(s).")
-    if rejected:
-        logger.error(f"Rejected {rejected} receipt(s): ISO hash or size mismatch.")
+    if already:
+        logger.info(f"Skipped {already} receipt(s) that were already imported.")
+    if refused:
+        logger.error(
+            f"Rejected {refused} receipt(s); see the messages above.  The "
+            "other receipts were imported."
+        )
         return 1
     return 0
 
