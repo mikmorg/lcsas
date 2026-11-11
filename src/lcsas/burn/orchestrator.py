@@ -984,8 +984,12 @@ class BurnOrchestrator:
         Args:
             media_type: Target media type (defaults to config).
             for_location: If set, stage only packs missing at this location.
+                It is recorded as the new volumes' location.
             repo_ids: Optional filter to specific repositories.
-            pack_sha256s: If set, stage only packs with these pack IDs.
+            pack_sha256s: If set, stage exactly the packs with these
+                SHA-256s (consolidation), whether or not they are already
+                on a disc; ``for_location`` and ``repo_ids`` then do not
+                select packs.
             dry_run: If True, compute the plan but skip all side effects.
 
             min_fill_pct: If above 0, the last planned volume is not staged
@@ -1003,15 +1007,17 @@ class BurnOrchestrator:
         mt = media_type or self._config.default_media_type
 
         # 1. Gather packs to stage
-        packs_to_stage = self._gather_packs_for_staging(
-            for_location=for_location,
-            repo_ids=repo_ids,
-        )
-
-        # Apply explicit pack filter (used by consolidate --execute)
         if pack_sha256s is not None:
-            allowed = set(pack_sha256s)
-            packs_to_stage = [p for p in packs_to_stage if p.sha256 in allowed]
+            # consolidate --execute: exactly these packs, archived or not
+            # (they sit on VERIFIED volumes, so the unarchived pool never
+            # holds them — #677).  for_location is then only recorded as
+            # the new volumes' location.
+            packs_to_stage = self._packs_by_sha256(pack_sha256s)
+        else:
+            packs_to_stage = self._gather_packs_for_staging(
+                for_location=for_location,
+                repo_ids=repo_ids,
+            )
 
         # #672: plain stage leaves out packs whose disc is on its way: a
         # never-burned volume whose finished ISO waits in the staging area.
@@ -1896,6 +1902,29 @@ class BurnOrchestrator:
     # -----------------------------------------------------------------
     # Internal helpers
     # -----------------------------------------------------------------
+
+    def _packs_by_sha256(self, pack_sha256s: list[str]) -> list[Pack]:
+        """The catalog's packs with these SHA-256s, in the order given.
+
+        Raises ValueError naming any SHA-256 the catalog does not know.
+        """
+        from lcsas.db.packs import get_pack_by_sha256
+
+        packs: list[Pack] = []
+        unknown: list[str] = []
+        for sha in dict.fromkeys(pack_sha256s):
+            pack = get_pack_by_sha256(self._conn, sha)
+            if pack is None:
+                unknown.append(sha)
+            else:
+                packs.append(pack)
+        if unknown:
+            raise ValueError(
+                f"{len(unknown)} pack(s) are not in the catalog: "
+                + ", ".join(unknown[:5])
+                + (" …" if len(unknown) > 5 else "")
+            )
+        return packs
 
     def _gather_packs_for_staging(
         self,

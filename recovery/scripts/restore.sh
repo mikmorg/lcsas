@@ -38,7 +38,7 @@
 #   2    usage error
 #   64   no recovery binary available at any tier (issue #225)
 #   65   the reader stopped at a question this script asked
-#   75   the reader typed q at tier 1's disc prompt (#615)
+#   75   the reader typed q at the disc prompt of tier 1 (#615) or tier 3
 #   77   a repository key rejected the password, or the reader stopped at
 #        the password or share card prompt
 #   130  stopped with Ctrl-C (143: killed with TERM)
@@ -1979,29 +1979,54 @@ EXIT_NO_RECOVERY_BIN=64
 _RESTORE_BIN_PROBE="$RECOVERY/bin/$TARGET/lcsas-restore"
 _RUSTIC_BIN_PROBE="$RECOVERY/bin/$TARGET/rustic-static"
 
+# tier3_python_runs CAND: true when CAND starts and is Python 3.8 or
+# newer.  Being executable is not enough (#714): the bundled Linux
+# CPython needs the musl loader (/lib/ld-musl-<arch>.so.1), which stock
+# Debian, Ubuntu and Fedora lack, so there it fails with "not found".
+# stdin is closed so a probed program can never eat the password line.
+tier3_python_runs() {
+    "$1" -c 'import sys; sys.exit(sys.version_info < (3, 8))' \
+        </dev/null >/dev/null 2>&1
+}
+
+# find_tier3_python: tier 3's interpreter.  The bundled CPython first
+# (it works on hosts with no Python packaged), then python3 / python on
+# PATH, taking the first that runs.  Sets TIER3_PYBIN (empty: none
+# runs) and TIER3_PY_SKIPPED (a bundled interpreter that is there but
+# did not run, else empty).  Used by both the probe below and the
+# tier-3 dispatch, so the two always agree.
+find_tier3_python() {
+    TIER3_PYBIN=""
+    TIER3_PY_SKIPPED=""
+    for _t3_cand in \
+        "$RECOVERY/bin/$TARGET/python/bin/python3" \
+        "$RECOVERY/bin/$TARGET/python/python.exe" \
+        "$RECOVERY/bin/$TARGET/python/bin/python"; do
+        [ -x "$_t3_cand" ] || continue
+        if tier3_python_runs "$_t3_cand"; then
+            TIER3_PYBIN="$_t3_cand"; return 0
+        fi
+        [ -n "$TIER3_PY_SKIPPED" ] || TIER3_PY_SKIPPED="$_t3_cand"
+    done
+    for _t3_cand in python3 python; do
+        command -v "$_t3_cand" >/dev/null 2>&1 || continue
+        if tier3_python_runs "$_t3_cand"; then
+            TIER3_PYBIN="$_t3_cand"; return 0
+        fi
+    done
+    return 0
+}
+
 # Probe tier 3 (CPython + standalone_restorer.py) availability using
-# the same search rules as the tier-3 dispatch block far below.  Kept
-# inline (not a function) so the search list stays in lock-step.
+# the same search rules as the tier-3 dispatch block far below (the
+# interpreter through find_tier3_python, after the tier-2b probe; the
+# script list is repeated there, keep the two in lock-step).
 _have_tier3_python=0
 _have_tier3_script=0
 _tier3_pybin_probe=""
 _tier3_script_probe=""
+TIER3_PY_SKIPPED=""
 if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
-    for cand in \
-        "$RECOVERY/bin/$TARGET/python/bin/python3" \
-        "$RECOVERY/bin/$TARGET/python/python.exe" \
-        "$RECOVERY/bin/$TARGET/python/bin/python"; do
-        if [ -x "$cand" ]; then
-            _tier3_pybin_probe="$cand"; _have_tier3_python=1; break
-        fi
-    done
-    if [ "$_have_tier3_python" = "0" ]; then
-        for p in python3 python; do
-            if command -v "$p" >/dev/null 2>&1; then
-                _tier3_pybin_probe="$p"; _have_tier3_python=1; break
-            fi
-        done
-    fi
     for cand in "$RECOVERY/../standalone_restorer.py" \
                 "$RECOVERY/standalone_restorer.py" \
                 "$SCRIPT_DIR/../standalone_restorer.py"; do
@@ -2026,6 +2051,18 @@ if [ "$_have_stdtool" = "0" ]; then
             _stdtool_probe="$(command -v "$c")"; _have_stdtool=1; break
         fi
     done
+fi
+
+# Tier 3's interpreter is started only when no other tier is here, so
+# the guard below depends on it: a restore that tier 1 can do never
+# starts Python.
+if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ] \
+   && [ ! -x "$_RESTORE_BIN_PROBE" ] && [ ! -x "$_RUSTIC_BIN_PROBE" ] \
+   && [ "$_have_stdtool" = "0" ]; then
+    find_tier3_python
+    if [ -n "$TIER3_PYBIN" ]; then
+        _tier3_pybin_probe="$TIER3_PYBIN"; _have_tier3_python=1
+    fi
 fi
 
 if [ ! -x "$_RESTORE_BIN_PROBE" ] \
@@ -2061,8 +2098,12 @@ then
         if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" != "1" ]; then
             printf '  tier 3: disabled by LCSAS_ALLOW_PYTHON_TIER=0\n'
         else
-            if [ "$_have_tier3_python" = "0" ]; then
-                printf '  tier 3: no python3 on PATH and no bundled CPython at '
+            if [ "$_have_tier3_python" = "0" ] && [ -n "$TIER3_PY_SKIPPED" ]; then
+                printf '  tier 3: the bundled Python %s cannot run on this host\n' \
+                       "$TIER3_PY_SKIPPED"
+                printf '          (missing musl loader?), and no working python3 on PATH\n'
+            elif [ "$_have_tier3_python" = "0" ]; then
+                printf '  tier 3: no working python3 on PATH and no bundled CPython at '
                 printf '%s/bin/%s/python/\n' "$RECOVERY" "$TARGET"
             fi
             if [ "$_have_tier3_script" = "0" ]; then
@@ -3257,21 +3298,12 @@ fi
 # ── Tier 3: Python fallback (LAST RESORT, off the bare path) ─────
 
 if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
-    PYBIN=""
     # Prefer the per-target bundled CPython (from python-build-standalone)
     # over whatever happens to be on $PATH.  This keeps tier 3 working on
-    # hosts that don't have python3 packaged.
-    for cand in \
-        "$RECOVERY/bin/$TARGET/python/bin/python3" \
-        "$RECOVERY/bin/$TARGET/python/python.exe" \
-        "$RECOVERY/bin/$TARGET/python/bin/python"; do
-        if [ -x "$cand" ]; then PYBIN="$cand"; break; fi
-    done
-    if [ -z "$PYBIN" ]; then
-        for p in python3 python; do
-            if command -v "$p" >/dev/null 2>&1; then PYBIN="$p"; break; fi
-        done
-    fi
+    # hosts that don't have python3 packaged.  Only an interpreter that
+    # actually runs counts (#714): see find_tier3_python.
+    find_tier3_python
+    PYBIN="$TIER3_PYBIN"
     PYREST=""
     for cand in "$RECOVERY/../standalone_restorer.py" \
                 "$RECOVERY/standalone_restorer.py" \
@@ -3279,6 +3311,10 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         if [ -f "$cand" ]; then PYREST="$cand"; break; fi
     done
     if [ -n "$PYBIN" ] && [ -n "$PYREST" ]; then
+        if [ -n "$TIER3_PY_SKIPPED" ]; then
+            printf '[tier 3] the bundled Python cannot run on this host (missing musl loader?); using the host %s\n' \
+                   "$PYBIN" >&2
+        fi
         printf '[tier 3] dispatch: pybin=%s pyrest=%s repo=%s\n' \
             "$PYBIN" "$PYREST" "$REPO" >> "$_restore_exit_log" 2>/dev/null || true
         printf '[tier 3] falling back to Python (%s + %s)\n' \
@@ -3442,7 +3478,13 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         # Defensive: cat read an empty file?  Default to 1.
         [ -n "$tier3_rc" ] || tier3_rc=1
         printf '[tier 3] rc=%d\n' "$tier3_rc" >> "$_restore_exit_log" 2>/dev/null || true
-        if [ "$tier3_rc" -ne 0 ] && [ -s "$TIER3_ERR" ]; then
+        if [ "$tier3_rc" -eq 75 ]; then
+            # Exit 75: the reader typed q at tier 3's disc prompt, or its
+            # input ended -- a pause, not a failure, as for tier 1's 75.
+            # The exit handler keeps the tools folder and says how to
+            # carry on.
+            printf '[tier 3] stopped at the disc prompt at your request.\n' >&2
+        elif [ "$tier3_rc" -ne 0 ] && [ -s "$TIER3_ERR" ]; then
             printf '\n[tier 3] FAILED (rc=%d)\n' "$tier3_rc" >&2
             printf '[tier 3] -------------- captured stderr --------------\n' >&2
             sed 's/^/[tier 3] /' "$TIER3_ERR" >&2
@@ -3456,6 +3498,15 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         fi
         exit "$tier3_rc"
     fi
+    if [ -n "$PYREST" ] && [ -z "$PYBIN" ]; then
+        if [ -n "$TIER3_PY_SKIPPED" ]; then
+            printf '[tier 3] cannot run: the bundled Python %s cannot run on this host\n' \
+                   "$TIER3_PY_SKIPPED" >&2
+            printf '[tier 3] (missing musl loader?), and there is no working python3 on PATH.\n' >&2
+        else
+            printf '[tier 3] cannot run: no working Python here (bundled or python3 on PATH).\n' >&2
+        fi
+    fi
 fi
 
 cat >&2 <<EOF
@@ -3465,7 +3516,8 @@ The bare-minimum restore path (tiers 1-2) needs ONE of:
   * a prebuilt $RESTORE_BIN
   * a prebuilt $RUSTIC_BIN
 
-The optional Python tier (tier 3) needs python3 and standalone_restorer.py.
+The optional Python tier (tier 3) needs a Python 3 that runs on this
+computer (the bundled one or python3 on PATH) and standalone_restorer.py.
 
 See $RECOVERY/docs/RECOVER.txt for manual restore instructions.
 EOF

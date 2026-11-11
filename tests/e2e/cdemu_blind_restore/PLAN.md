@@ -215,7 +215,7 @@ That is the entire step. The meta disc contains:
 - `lcsas/src/lcsas/` — full source
 
 If `README_RESTORE.md` is unclear, that's a **product** bug — file it
-against `src/lcsas/meta/builder.py:README_RESTORE` and update both the
+against `src/lcsas/meta/assets/README_RESTORE.md` and update both the
 production text **and** the test, in that order. Do not patch the README
 on the test fixture.
 
@@ -573,7 +573,8 @@ the blind agent (think time + simulated swap sleeps), <5 s for verify.
 2. ✅ Single-drive helper `src/lcsas/meta/restore_single_drive.py` — landed,
    8 unit tests passing.
 3. ✅ Production `restore.sh` defaults to single-drive mode — landed in
-   `src/lcsas/meta/builder.py:RESTORE_SCRIPT`. Bash syntax + bundling
+   `src/lcsas/meta/builder.py:RESTORE_SCRIPT` (since #689 the file
+   `src/lcsas/meta/assets/restore_legacy.sh`). Bash syntax + bundling
    asserted by unit tests.
 4. ✅ `tools/restore_single_drive.py` bundled by `MetaVolumeBuilder` —
    landed; verified by `test_single_drive_helper_bundled`.

@@ -10,6 +10,12 @@
  *   - path-length guard: a joined path > 4095 bytes fails loud and
  *     leaves no truncated-path file behind.
  *   - malformed blob: a non-array / garbage tree fails cleanly.
+ *   - #653: equal inode numbers are a hardlink only with links > 1 and
+ *     the same device_id.
+ *   - #654: a read-only directory with children restores (non-root),
+ *     and a second run over it succeeds.
+ *   - #655: a part-written read-only file is reopened by a resume.
+ *   - #661: the resume skip needs size AND mtime to match.
  */
 #include "tree.h"
 #include "repo.h"
@@ -22,6 +28,7 @@
 #include <sys/types.h>
 #include <dirent.h>
 #include <unistd.h>
+#include <utime.h>
 
 static int fails = 0;
 
@@ -68,7 +75,9 @@ lcsas_repo_read_blob(const char *repo_path,
 
 static void rmrf(const char *path)
 {
-    DIR *d = opendir(path);
+    DIR *d;
+    (void)chmod(path, 0700);   /* #654 tests leave 0555 directories */
+    d = opendir(path);
     if (d) {
         struct dirent *e;
         while ((e = readdir(d)) != NULL) {
@@ -172,6 +181,264 @@ static char *tiny_tree_blob(int call, size_t *len_out)
     blob = strdup("{\"nodes\":[]}");
     *len_out = strlen(blob);
     return blob;
+}
+
+/* Scripted blobs: call N returns a copy of g_blobs[N] (NULL ends). */
+static const char *g_blobs[8];
+
+static char *scripted_blob(int call, size_t *len_out)
+{
+    char *blob;
+    if (call < 0 || call >= 8 || !g_blobs[call]) return NULL;
+    blob = strdup(g_blobs[call]);
+    *len_out = strlen(blob);
+    return blob;
+}
+
+static int run_scripted(const char *target)
+{
+    lcsas_master_key mk;
+    lcsas_blob_index ix;
+    memset(&mk, 0, sizeof mk);
+    memset(&ix, 0, sizeof ix);
+    g_blob_fn = scripted_blob;
+    g_call = 0;
+    lcsas_tree_max_depth = 1000;
+    return lcsas_tree_restore("/repo", &mk, &ix, TREE_ID,
+                              target, target, NULL, NULL);
+}
+
+static void write_file(const char *path, const char *data, int mode)
+{
+    FILE *f = fopen(path, "wb");
+    if (f) { fputs(data, f); fclose(f); }
+    (void)chmod(path, (mode_t)mode);
+}
+
+static void read_file(const char *path, char *buf, size_t cap)
+{
+    FILE *f = fopen(path, "rb");
+    size_t n = 0;
+    if (f) { n = fread(buf, 1, cap - 1, f); fclose(f); }
+    buf[n] = '\0';
+}
+
+/* Two empty file nodes "a" and "b" sharing inode 42, with the given
+ * extra fields; returns 1 when the restore made them one inode. */
+static int restored_as_one_inode(const char *a_extra, const char *b_extra,
+                                 const char *tag)
+{
+    char *target = mktarget();
+    char blob[512], pa[512], pb[512];
+    struct stat sa, sb;
+    int linked = -1;
+    sprintf(blob,
+            "{\"nodes\":["
+            "{\"name\":\"a\",\"type\":\"file\",\"mode\":420,"
+            "\"size\":0,\"inode\":42%s,\"content\":[]},"
+            "{\"name\":\"b\",\"type\":\"file\",\"mode\":420,"
+            "\"size\":0,\"inode\":42%s,\"content\":[]}]}",
+            a_extra, b_extra);
+    g_blobs[0] = blob;
+    g_blobs[1] = NULL;
+    if (run_scripted(target) != 0) {
+        fprintf(stderr, "FAIL %s: restore rc != 0\n", tag);
+        fails++;
+    } else {
+        sprintf(pa, "%s/a", target);
+        sprintf(pb, "%s/b", target);
+        if (stat(pa, &sa) != 0 || stat(pb, &sb) != 0) {
+            fprintf(stderr, "FAIL %s: a or b missing\n", tag);
+            fails++;
+        } else {
+            linked = (sa.st_ino == sb.st_ino);
+        }
+    }
+    rmrf(target);
+    return linked;
+}
+
+static void test_inode_collision_not_linked(void)
+{
+    /* #653: rustic records "inode" on every file.  Equal inode numbers
+     * with links == 1 (or no links field) are two different files. */
+    if (restored_as_one_inode(",\"links\":1", ",\"links\":1",
+                              "inode_links1") == 1) {
+        fprintf(stderr, "FAIL inode_links1: links==1 nodes were "
+                "restored as one inode\n");
+        fails++;
+    }
+    if (restored_as_one_inode("", "", "inode_nolinks") == 1) {
+        fprintf(stderr, "FAIL inode_nolinks: nodes without links were "
+                "restored as one inode\n");
+        fails++;
+    }
+    /* A device_id that is present but not a number makes the node a
+     * non-candidate: two files, never a guessed link. */
+    if (restored_as_one_inode(",\"links\":2,\"device_id\":\"x\"",
+                              ",\"links\":2,\"device_id\":\"x\"",
+                              "inode_bad_device") == 1) {
+        fprintf(stderr, "FAIL inode_bad_device: nodes with a non-numeric "
+                "device_id were restored as one inode\n");
+        fails++;
+    }
+    /* links that is not a number: not a hardlink candidate. */
+    if (restored_as_one_inode(",\"links\":\"2\"", ",\"links\":\"2\"",
+                              "inode_bad_links") == 1) {
+        fprintf(stderr, "FAIL inode_bad_links: nodes with a non-numeric "
+                "links were restored as one inode\n");
+        fails++;
+    }
+    /* Equal inode on two different devices: two files. */
+    if (restored_as_one_inode(",\"links\":2,\"device_id\":1",
+                              ",\"links\":2,\"device_id\":2",
+                              "inode_two_devices") == 1) {
+        fprintf(stderr, "FAIL inode_two_devices: nodes on different "
+                "devices were restored as one inode\n");
+        fails++;
+    }
+}
+
+static void test_real_hardlink_kept(void)
+{
+    /* #653 must not over-correct: same device, same inode, links > 1
+     * is a real hardlink and stays one inode (#192). */
+    if (restored_as_one_inode(",\"links\":2,\"device_id\":7",
+                              ",\"links\":2,\"device_id\":7",
+                              "real_hardlink") != 1) {
+        fprintf(stderr, "FAIL real_hardlink: a true hardlink pair was "
+                "not restored as one inode\n");
+        fails++;
+    }
+    /* No device_id recorded (older snapshots): links > 1 alone, same
+     * inode, is still a hardlink (device 0 on both sides). */
+    if (restored_as_one_inode(",\"links\":2", ",\"links\":2",
+                              "hardlink_no_device") != 1) {
+        fprintf(stderr, "FAIL hardlink_no_device: links>1 pair without "
+                "device_id was not restored as one inode\n");
+        fails++;
+    }
+}
+
+static void test_readonly_dir_with_children(void)
+{
+    /* #654: a 0555 directory holding a file must restore for a
+     * non-root user, end with mode 0555, and a second run over the
+     * finished (read-only) tree must also succeed. */
+    char *target = mktarget();
+    char dpath[512], fpath[512];
+    struct stat st;
+    int run;
+    g_blobs[0] = "{\"nodes\":[{\"name\":\"ro\",\"type\":\"dir\","
+                 "\"mode\":365,\"subtree\":\"" TREE_ID "\"}]}";
+    g_blobs[1] = "{\"nodes\":[{\"name\":\"f\",\"type\":\"file\","
+                 "\"mode\":420,\"size\":0,\"content\":[]}]}";
+    g_blobs[2] = NULL;
+    sprintf(dpath, "%s/ro", target);
+    sprintf(fpath, "%s/ro/f", target);
+    for (run = 1; run <= 2; run++) {
+        if (run_scripted(target) != 0) {
+            fprintf(stderr, "FAIL ro_dir: run %d rc != 0\n", run);
+            fails++;
+        }
+        if (stat(fpath, &st) != 0) {
+            fprintf(stderr, "FAIL ro_dir: run %d: ro/f missing\n", run);
+            fails++;
+        }
+        if (stat(dpath, &st) != 0 || (st.st_mode & 07777) != 0555) {
+            fprintf(stderr, "FAIL ro_dir: run %d: ro mode %o, want 555\n",
+                    run, (unsigned)(st.st_mode & 07777));
+            fails++;
+        }
+    }
+    rmrf(target);
+}
+
+static void test_resume_readonly_partial(void)
+{
+    /* #655: a part-written 0444 file (wrong size) from an interrupted
+     * run must be reopened and finished, then end at mode 0444. */
+    char *target = mktarget();
+    char fpath[512];
+    struct stat st;
+    sprintf(fpath, "%s/f", target);
+    write_file(fpath, "xx", 0444);
+    g_blobs[0] = "{\"nodes\":[{\"name\":\"f\",\"type\":\"file\","
+                 "\"mode\":292,\"size\":5,\"content\":[]}]}";
+    g_blobs[1] = NULL;
+    if (run_scripted(target) != 0) {
+        fprintf(stderr, "FAIL ro_partial: rc != 0\n");
+        fails++;
+    }
+    if (stat(fpath, &st) != 0 || st.st_size != 5
+            || (st.st_mode & 07777) != 0444) {
+        fprintf(stderr, "FAIL ro_partial: size %ld mode %o, want 5 444\n",
+                (long)st.st_size, (unsigned)(st.st_mode & 07777));
+        fails++;
+    }
+    rmrf(target);
+}
+
+static void test_resume_skip_needs_mtime(void)
+{
+    /* #661: a same-size file whose mtime differs from the node is not
+     * this snapshot's file and must be rewritten; a same-size file
+     * with the node's mtime is skipped (resume). */
+    char *target = mktarget();
+    char fpath[512], buf[16];
+    struct stat st;
+    struct utimbuf ub;
+    sprintf(fpath, "%s/f", target);
+    g_blobs[0] = "{\"nodes\":[{\"name\":\"f\",\"type\":\"file\","
+                 "\"mode\":420,\"size\":3,"
+                 "\"mtime\":\"2020-01-01T00:00:00Z\",\"content\":[]}]}";
+    g_blobs[1] = NULL;
+
+    write_file(fpath, "abc", 0644);
+    ub.actime = ub.modtime = (time_t)1000000000;
+    (void)utime(fpath, &ub);
+    if (run_scripted(target) != 0) {
+        fprintf(stderr, "FAIL skip_mtime: rewrite run rc != 0\n");
+        fails++;
+    }
+    read_file(fpath, buf, sizeof buf);
+    if (strcmp(buf, "abc") == 0) {
+        fprintf(stderr, "FAIL skip_mtime: old same-size file was kept\n");
+        fails++;
+    }
+    if (stat(fpath, &st) != 0 || (long)st.st_mtime != 1577836800L) {
+        fprintf(stderr, "FAIL skip_mtime: mtime not the node's\n");
+        fails++;
+    }
+
+    write_file(fpath, "abc", 0644);
+    ub.actime = ub.modtime = (time_t)1577836800L;
+    (void)utime(fpath, &ub);
+    if (run_scripted(target) != 0) {
+        fprintf(stderr, "FAIL skip_mtime: skip run rc != 0\n");
+        fails++;
+    }
+    read_file(fpath, buf, sizeof buf);
+    if (strcmp(buf, "abc") != 0) {
+        fprintf(stderr, "FAIL skip_mtime: finished file was rewritten\n");
+        fails++;
+    }
+    rmrf(target);
+}
+
+static void test_blob_failure_message(void)
+{
+    /* #654: a file whose data blob cannot be read fails the walk (rc != 0)
+     * and the failure line carries no stale system error. */
+    char *target = mktarget();
+    g_blobs[0] = "{\"nodes\":[{\"name\":\"f\",\"type\":\"file\","
+                 "\"mode\":420,\"size\":4,\"content\":[\"" TREE_ID "\"]}]}";
+    g_blobs[1] = NULL;
+    if (run_scripted(target) == 0) {
+        fprintf(stderr, "FAIL blob_failure: rc 0 for an unreadable blob\n");
+        fails++;
+    }
+    rmrf(target);
 }
 
 /* ── tests ──────────────────────────────────────────────────────── */
@@ -342,6 +609,12 @@ int main(void)
     test_root_not_object();
     test_symlink_embedded_nul_skipped();
     test_tree_blob_too_large();
+    test_inode_collision_not_linked();
+    test_real_hardlink_kept();
+    test_readonly_dir_with_children();
+    test_resume_readonly_partial();
+    test_resume_skip_needs_mtime();
+    test_blob_failure_message();
     if (fails) {
         fprintf(stderr, "test_tree: %d FAIL\n", fails);
         return 1;
