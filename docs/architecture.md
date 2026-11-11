@@ -383,6 +383,7 @@ Each repository maintains its own encryption independently:
 
 - Critical packs should exist on ≥2 in-service discs
 - The `redundancy_report` query identifies packs on fewer than N in-service discs
+  (only discs of burned volumes count; a staged volume has no disc yet, #679)
 - Consolidation naturally puts surviving packs on additional discs
 
 ### Verification
