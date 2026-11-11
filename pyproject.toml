@@ -39,6 +39,9 @@ where = ["src"]
 # combiner works from an installed wheel / sdist (loaded via importlib path at
 # runtime).  Critical for the standalone combiner on the meta disc (Phase 2 K2.1).
 "lcsas.keyshare" = ["wordlist.txt"]
+# The meta disc's restore scripts and README_RESTORE.md (#689), read by
+# lcsas.meta.builder at import and written to the disc byte for byte.
+"lcsas.meta" = ["assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

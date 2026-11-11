@@ -86,7 +86,7 @@ lcsas_io.c:47   INTRACTABLE   EINTR retry in lcsas_write_exact write loop; needs
 lcsas_io.c:48   INTRACTABLE   "
 
 # main.c
-main.c:630   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)
+main.c:668   INTRACTABLE   main lcsas_mkdir_p ENOSPC/EDQUOT classifier on the --target path; needs filesystem-full tmpfs (integration-only)
 
 # poly1305.c
 poly1305.c:146   INTRACTABLE   Final-clamp non-underflow branch: fires when h >= 2^130-5 after accumulation; ~5/2^130 for random messages; requires a chosen-message attack on the MAC accumulator
@@ -108,62 +108,62 @@ repo.c:491   DEFENSIVE   "
 repo.c:626   DEFERRED   index count exceeded sanity limit guard; needs >1M index files
 repo.c:627   DEFERRED   "
 repo.c:628   DEFERRED   "
-repo.c:753   DEFENSIVE   load_index pass-2 TOCTOU guard for TOOBIG/ZSTD; pass-1 already fatals on the same static file set, unreachable single-threaded (kept as a guard)
-repo.c:754   DEFENSIVE   "
-repo.c:757   DEFENSIVE   "
-repo.c:759   DEFENSIVE   "
-repo.c:761   DEFENSIVE   "
-repo.c:763   DEFENSIVE   "
-repo.c:772   DEFENSIVE   load_index pass-2 index-too-large (-2); pass-1 parses the same file first with the same cap and fatals -> unreachable
-repo.c:775   DEFENSIVE   "
-repo.c:778   DEFENSIVE   load_index pass-2 invalid-JSON (<=0); pass-1 parses the same file first and fatals -> unreachable
-repo.c:780   DEFENSIVE   "
-repo.c:814   INTRACTABLE   blob_index_push realloc fail; malloc fault-inject blocked by the gcov runtime
-repo.c:815   INTRACTABLE   "
-repo.c:816   INTRACTABLE   "
-repo.c:1137   INTRACTABLE   read_blob pread() disc-disconnect EIO/ENXIO classifier; the fstat guard passed, so pread fails only on a real media error / shrink race - hardware/race only
-repo.c:1138   INTRACTABLE   "
-repo.c:1139   INTRACTABLE   "
-repo.c:1140   INTRACTABLE   "
-repo.c:1144   INTRACTABLE   "
-repo.c:1145   INTRACTABLE   "
-repo.c:1148   INTRACTABLE   read_blob pread generic-errno else-branch + shared exit; needs a non-classified errno from pread (hardware/race)
-repo.c:1151   INTRACTABLE   "
-repo.c:1153   INTRACTABLE   "
+repo.c:761   DEFENSIVE   load_index pass-2 TOCTOU guard for TOOBIG/ZSTD; pass-1 already fatals on the same static file set, unreachable single-threaded (kept as a guard)
+repo.c:762   DEFENSIVE   "
+repo.c:765   DEFENSIVE   "
+repo.c:767   DEFENSIVE   "
+repo.c:769   DEFENSIVE   "
+repo.c:771   DEFENSIVE   "
+repo.c:780   DEFENSIVE   load_index pass-2 index-too-large (-2); pass-1 parses the same file first with the same cap and fatals -> unreachable
+repo.c:783   DEFENSIVE   "
+repo.c:786   DEFENSIVE   load_index pass-2 invalid-JSON (<=0); pass-1 parses the same file first and fatals -> unreachable
+repo.c:788   DEFENSIVE   "
+repo.c:822   INTRACTABLE   blob_index_push realloc fail; malloc fault-inject blocked by the gcov runtime
+repo.c:823   INTRACTABLE   "
+repo.c:824   INTRACTABLE   "
+repo.c:1181   INTRACTABLE   read_blob pread() disc-disconnect EIO/ENXIO classifier; the fstat guard passed, so pread fails only on a real media error / shrink race - hardware/race only
+repo.c:1182   INTRACTABLE   "
+repo.c:1183   INTRACTABLE   "
+repo.c:1184   INTRACTABLE   "
+repo.c:1188   INTRACTABLE   "
+repo.c:1189   INTRACTABLE   "
+repo.c:1192   INTRACTABLE   read_blob pread generic-errno else-branch + shared exit; needs a non-classified errno from pread (hardware/race)
+repo.c:1195   INTRACTABLE   "
+repo.c:1197   INTRACTABLE   "
 
 # tree.c
-tree.c:252   DEFENSIVE   decode_node_mtime decode-string fail (lcsas_json_decode_string<0); fixture mtime fields are always well-formed
-tree.c:281   INTRACTABLE   write_blob_sparse write_exact fail on the non-zero prefix; needs a RO mount or write-syscall injection
-tree.c:291   INTRACTABLE   write_blob_sparse lseek fail on the sparse-hole seek; SEEK_CUR on a writable regular fd cannot fail without syscall injection
-tree.c:295   INTRACTABLE   write_blob_sparse write_exact fail on a short (<4 KiB) zero run; same syscall-injection need as 281 (the branch itself is now covered)
-tree.c:323   INTRACTABLE   apply_node_ownership body; guarded by geteuid()!=0 early-return - only reachable when the test process runs as root, which coverage-c never does
-tree.c:324   INTRACTABLE   "
-tree.c:325   INTRACTABLE   "
-tree.c:326   INTRACTABLE   "
-tree.c:328   INTRACTABLE   "
-tree.c:329   INTRACTABLE   "
-tree.c:331   INTRACTABLE   "
-tree.c:336   INTRACTABLE   apply_node_ownership lchown wrapper; only reachable when running as root with valid uid/gid fields
-tree.c:626   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on lcsas_create_file fail (#221); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
-tree.c:627   INTRACTABLE   "
-tree.c:628   INTRACTABLE   "
-tree.c:633   INTRACTABLE   "
-tree.c:689   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on write fail mid-content (#221); same constraint as 626
-tree.c:690   INTRACTABLE   "
-tree.c:691   INTRACTABLE   "
-tree.c:692   INTRACTABLE   "
+tree.c:292   DEFENSIVE   decode_node_mtime decode-string fail (lcsas_json_decode_string<0); fixture mtime fields are always well-formed
+tree.c:321   INTRACTABLE   write_blob_sparse write_exact fail on the non-zero prefix; needs a RO mount or write-syscall injection
+tree.c:331   INTRACTABLE   write_blob_sparse lseek fail on the sparse-hole seek; SEEK_CUR on a writable regular fd cannot fail without syscall injection
+tree.c:335   INTRACTABLE   write_blob_sparse write_exact fail on a short (<4 KiB) zero run; same syscall-injection need as 281 (the branch itself is now covered)
+tree.c:363   INTRACTABLE   apply_node_ownership body; guarded by geteuid()!=0 early-return - only reachable when the test process runs as root, which coverage-c never does
+tree.c:364   INTRACTABLE   "
+tree.c:365   INTRACTABLE   "
+tree.c:366   INTRACTABLE   "
+tree.c:368   INTRACTABLE   "
+tree.c:369   INTRACTABLE   "
+tree.c:371   INTRACTABLE   "
+tree.c:376   INTRACTABLE   apply_node_ownership lchown wrapper; only reachable when running as root with valid uid/gid fields
+tree.c:698   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on lcsas_create_file fail (#221); needs a filesystem-full target - integration-only (test_tier1_target_full.py)
+tree.c:699   INTRACTABLE   "
 tree.c:700   INTRACTABLE   "
-tree.c:932   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on mkdir_p fail (#221); a non-ENOSPC mkdir failure is tested, the fs-full branch is integration-only
-tree.c:936   INTRACTABLE   "
-tree.c:1013   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT/EPERM/EOPNOTSUPP/ENOSYS classifier on symlink() fail (#221/#224); needs a filesystem-full or non-POSIX (FAT32/exFAT/SMB) target - integration-only
-tree.c:1014   INTRACTABLE   "
-tree.c:1015   INTRACTABLE   "
-tree.c:1017   INTRACTABLE   "
-tree.c:1021   INTRACTABLE   "
-tree.c:1022   INTRACTABLE   "
-tree.c:1023   INTRACTABLE   "
-tree.c:1032   INTRACTABLE   "
-tree.c:1037   INTRACTABLE   tree_restore_recurse generic symlink()-fail catch-all; any symlink() failure needs an environmental condition (RO mount, EACCES) the coverage-c harness does not provide
+tree.c:705   INTRACTABLE   "
+tree.c:761   INTRACTABLE   restore_file_node ENOSPC/EDQUOT classifier on write fail mid-content (#221); same constraint as 626
+tree.c:762   INTRACTABLE   "
+tree.c:763   INTRACTABLE   "
+tree.c:764   INTRACTABLE   "
+tree.c:772   INTRACTABLE   "
+tree.c:1016   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT classifier on mkdir_p fail (#221); a non-ENOSPC mkdir failure is tested, the fs-full branch is integration-only
+tree.c:1020   INTRACTABLE   "
+tree.c:1112   INTRACTABLE   tree_restore_recurse ENOSPC/EDQUOT/EPERM/EOPNOTSUPP/ENOSYS classifier on symlink() fail (#221/#224); needs a filesystem-full or non-POSIX (FAT32/exFAT/SMB) target - integration-only
+tree.c:1113   INTRACTABLE   "
+tree.c:1114   INTRACTABLE   "
+tree.c:1116   INTRACTABLE   "
+tree.c:1120   INTRACTABLE   "
+tree.c:1121   INTRACTABLE   "
+tree.c:1122   INTRACTABLE   "
+tree.c:1131   INTRACTABLE   "
+tree.c:1136   INTRACTABLE   tree_restore_recurse generic symlink()-fail catch-all; any symlink() failure needs an environmental condition (RO mount, EACCES) the coverage-c harness does not provide
 ```<!-- EXEMPTIONS-FENCE-END -->
 
 ## Path forward

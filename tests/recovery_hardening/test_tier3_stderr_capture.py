@@ -59,6 +59,8 @@ def _install_failing_python_stub(bin_dir: Path) -> None:
     stub = bin_dir / "python3"
     stub.write_text(textwrap.dedent(f"""\
         #!/bin/sh
+        # restore.sh first checks the interpreter runs (#714).
+        case "$1" in -c) exit 0 ;; esac
         # Emit a multi-line "traceback" so we can verify the separator
         # markers wrap the captured stderr correctly.
         printf 'Traceback (most recent call last):\\n' >&2

@@ -32,11 +32,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _RECOVER_TXT = REPO_ROOT / "recovery" / "docs" / "RECOVER.txt"
 _BOOT_TXT = REPO_ROOT / "recovery" / "docs" / "BOOT.txt"
 _BUILDER_PY = REPO_ROOT / "src" / "lcsas" / "meta" / "builder.py"
+# The restore scripts and README_RESTORE.md the builder writes (#689).
+_META_ASSETS = REPO_ROOT / "src" / "lcsas" / "meta" / "assets"
 
 # Read each file once at module level — tests are static string checks only.
 _RECOVER_TEXT = _RECOVER_TXT.read_text(encoding="utf-8")
 _BOOT_TEXT = _BOOT_TXT.read_text(encoding="utf-8")
-_BUILDER_SRC = _BUILDER_PY.read_text(encoding="utf-8")
+_BUILDER_SRC = _BUILDER_PY.read_text(encoding="utf-8") + "".join(
+    p.read_text(encoding="utf-8") for p in sorted(_META_ASSETS.iterdir()) if p.is_file()
+)
 
 
 def test_recover_txt_no_os_branch_does_not_route_to_booting_the_disc():
@@ -97,7 +101,7 @@ def test_builder_start_here_does_not_promise_a_bootable_disc():
     """Belt-and-braces for UX-03: the minimal START_HERE heredoc in
     builder.py must not tell the heir to boot the disc."""
     assert "Boot directly from the disc" not in _BUILDER_SRC, (
-        "src/lcsas/meta/builder.py still contains the 'Boot directly from "
+        "src/lcsas/meta/builder.py or assets/ still contains the 'Boot directly from "
         "the disc' START_HERE text. That instruction is a dead end (no disc "
         "is bootable) and must route to the live-USB procedure instead."
     )

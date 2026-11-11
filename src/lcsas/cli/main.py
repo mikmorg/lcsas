@@ -599,6 +599,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Stage active packs (without deprecating source volumes).")
     cons_p.add_argument("--deprecate", action="store_true", default=False,
                         help="Mark source volumes as DEPRECATED (run after --execute succeeds).")
+    cons_p.add_argument("--location", default=None,
+                        help="With --execute: the location the new volumes "
+                             "are staged for (default: the configured "
+                             "default location). A location given here "
+                             "must already exist.")
 
     # --- verify ---
     verify_p = subparsers.add_parser("verify", help="Verify a volume's ISO or disc.")
@@ -627,10 +632,11 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Filter --all to discs/volumes at this location; "
                                "with single-volume --disc, stamp the disc at "
                                "this location (defaults to the volume's only "
-                               "ACTIVE disc when unambiguous); with "
-                               "--mark-verified on a volume with no disc "
-                               "recorded (required there), record its disc "
-                               "at this location.")
+                               "ACTIVE disc when unambiguous); with --disc, "
+                               "record the disc there when none of the volume "
+                               "is recorded at it; with --mark-verified on a "
+                               "volume with no disc recorded (required there), "
+                               "record its disc at this location.")
 
     # --- session ---
     session_p = subparsers.add_parser("session", help="Manage burn sessions.")
@@ -3985,6 +3991,33 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
         for warning in result.warnings:
             logger.warning("  %s", warning)
 
+    # #678: a disc cannot record its own burn, so the newest burn
+    # session's volumes come back with no disc record.  Their discs were
+    # read, so the rebuild marked them BURNED; where each disc is kept
+    # and its verify must be entered again.
+    if result.needs_verify:
+        logger.warning(
+            "%d volume(s) were marked BURNED because their own disc was "
+            "read, but no disc records where they are kept or that they "
+            "were verified: %s",
+            len(result.needs_verify), ", ".join(result.needs_verify),
+        )
+        logger.warning(
+            "For each disc of them you hold, put it in the drive and run "
+            "(against the rebuilt catalog, --db %s):", output_db,
+        )
+        for label in result.needs_verify:
+            logger.warning(
+                "  lcsas verify %s --disc --location <where it is kept>",
+                label,
+            )
+        logger.warning(
+            "That records the disc at its location and marks the volume "
+            "VERIFIED. Until then, do not run 'lcsas session abort' on "
+            "their burn session: it deletes volumes that have no disc "
+            "record."
+        )
+
     if result.errors:
         logger.error("Rebuild completed with %d error(s):", len(result.errors))
         for err in result.errors:
@@ -3993,6 +4026,14 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
 
     logger.info("Catalog rebuild complete: %s", output_db)
     return 0
+
+
+def _unknown_location_msg(exc: Any) -> str:
+    """Error for an unknown --location that this command will not create."""
+    msg = f"Unknown location '{exc.name}'"
+    if exc.suggestions:
+        msg += f" (did you mean: {', '.join(exc.suggestions)}?)"
+    return msg + ". Add it with 'lcsas location add <name>' first."
 
 
 def cmd_consolidate(args: argparse.Namespace) -> int:
@@ -4066,6 +4107,36 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             logger.error("--config is required for --execute.")
             return 1
 
+        # #677: only VERIFIED volumes can become CONSOLIDATING.  Refuse
+        # anything else now, before the prompt, not with an invalid-
+        # transition error after the owner typed "yes".
+        from lcsas.db.volumes import get_volume_by_id
+        not_ready = [get_volume_by_id(conn, vid) for vid in args.volume_ids]
+        not_ready = [v for v in not_ready if v.status != "VERIFIED"]
+        if not_ready:
+            for v in not_ready:
+                hint = {
+                    "BURNED": f"verify its disc first ('lcsas verify "
+                              f"{v.label} --disc')",
+                    "CONSOLIDATING": "it is already being consolidated: burn "
+                                     "that session and run 'consolidate "
+                                     "--deprecate', or 'lcsas session abort' "
+                                     "it",
+                }.get(v.status, "only VERIFIED volumes can be consolidated")
+                logger.error(f"Volume {v.label} is {v.status}: {hint}.")
+            logger.error("Nothing was staged.")
+            return 1
+
+        location = args.location or config.default_location
+        if args.location:
+            # A typo must not stage discs for a place that does not exist.
+            from lcsas.db.locations import UnknownLocationError, resolve_location
+            try:
+                resolve_location(conn, location)
+            except UnknownLocationError as exc:
+                logger.error(_unknown_location_msg(exc))
+                return 1
+
         # Confirmation prompt before executing irreversible staging
         logger.warning("")
         logger.warning(
@@ -4097,31 +4168,41 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             SubprocessDVDisasterRunner(tmpdir=config.staging_path),
         )
 
-        # Mark source volumes as CONSOLIDATING before staging (atomic marker)
-        merger.mark_sources_consolidating(args.volume_ids)
-        logger.info("Marked %d source volume(s) as CONSOLIDATING", len(args.volume_ids))
-
-        # Stage only the active packs from the consolidation plan
+        # Stage exactly the active packs from the consolidation plan
+        # (#677: stage() used to intersect them with the unarchived pool,
+        # which never holds packs of VERIFIED volumes).  The sources stay
+        # VERIFIED until staging succeeded, so a failed stage changes
+        # nothing.
         pack_shas = [p.sha256 for p in plan.active_packs]
         try:
             session = orch.stage(
                 media_type=media_type,
+                for_location=location,
                 pack_sha256s=pack_shas,
             )
-        except Exception:
-            # If staging fails, abort consolidation to revert source volumes to VERIFIED
-            merger.abort_consolidation(args.volume_ids)
-            logger.error("Staging failed. Reverted source volumes to VERIFIED.", exc_info=True)
-            raise
+        except (ValueError, OSError) as e:
+            logger.error("Staging failed: %s", e)
+            logger.error("The source volumes were not changed.")
+            return 1
 
-        logger.info(f"Staged {len(session.manifests)} volume(s).")
+        # Mark the sources CONSOLIDATING, tied to the new burn session:
+        # 'lcsas session abort' of it returns them to VERIFIED.
+        merger.mark_sources_consolidating(
+            args.volume_ids, session_id=session.session_id,
+        )
+        logger.info("Marked %d source volume(s) as CONSOLIDATING", len(args.volume_ids))
+
+        logger.info(f"Staged {len(session.manifests)} volume(s) for {location}.")
         logger.info(
             "Consolidation staged.  Next steps:\n"
             "  1. burn session %s\n"
             "  2. verify the new volumes\n"
-            "  3. then deprecate sources with: consolidate --deprecate %s",
+            "  3. then deprecate sources with: consolidate --deprecate %s\n"
+            "To cancel instead: lcsas session abort %s (the sources return "
+            "to VERIFIED)",
             session.session_id,
             " ".join(str(v) for v in args.volume_ids),
+            session.session_id,
         )
 
     return 0
@@ -4397,9 +4478,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 return 1
 
         passed = True
+        recorded_disc = False
 
         if args.disc:
+            from datetime import UTC, datetime
+
             from lcsas.db.volume_copies import (
+                add_volume_copy,
                 get_copies_for_volume,
                 touch_last_verified,
             )
@@ -4409,6 +4494,27 @@ def cmd_verify(args: argparse.Namespace) -> int:
             # say which one is in the drive, or the stamp would assert
             # freshness for a disc that was never read.
             stamp_location = args.location
+            # #678: --location names a place where no disc of this volume
+            # is recorded (a catalog rebuilt from discs has no record for
+            # the newest burn session).  A passing check records the disc
+            # there.  The location must already exist, so a typo cannot
+            # create a phantom one (#19).
+            record_location = False
+            if stamp_location is not None and conn.execute(
+                "SELECT 1 FROM volume_copies WHERE volume_id = ? "
+                "AND location = ?",
+                (vol.volume_id, stamp_location),
+            ).fetchone() is None:
+                from lcsas.db.locations import (
+                    UnknownLocationError,
+                    resolve_location,
+                )
+                try:
+                    resolve_location(conn, stamp_location)
+                except UnknownLocationError as exc:
+                    logger.error(_unknown_location_msg(exc))
+                    return 1
+                record_location = True
             if stamp_location is None:
                 active = get_copies_for_volume(conn, vol.volume_id)
                 if len(active) == 1:
@@ -4437,6 +4543,22 @@ def cmd_verify(args: argparse.Namespace) -> int:
                     logger.warning(
                         f"  No ACTIVE disc of {vol.label} recorded — "
                         f"last_verified_at not stamped"
+                    )
+                elif record_location:
+                    # Uncommitted: the add_event() below commits the
+                    # disc record atomically with the VERIFY_PASS event.
+                    add_volume_copy(
+                        conn, vol.volume_id, stamp_location,
+                        notes=(
+                            "recorded by 'lcsas verify --disc'; the burn "
+                            "date is the date it was recorded"
+                        ),
+                        last_verified_at=datetime.now(UTC).isoformat(),
+                        commit=False,
+                    )
+                    recorded_disc = True
+                    logger.info(
+                        f"  Recorded the disc of {vol.label} at {stamp_location}"
                     )
                 # Stamp uncommitted: the add_event() below commits it
                 # atomically with the VERIFY_PASS event.
@@ -4505,6 +4627,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if passed and vol.status == "BURNED":
             update_status(conn, vol.volume_id, "VERIFIED")
             logger.info(f"Volume {vol.label}: promoted BURNED → VERIFIED")
+        elif passed and recorded_disc and vol.status in ("STAGING", "BURNING"):
+            # #678: the disc was identified, read, and is now recorded —
+            # the same evidence a burn's own check gives.
+            update_status(conn, vol.volume_id, "VERIFIED", force=True)
+            logger.info(
+                f"Volume {vol.label}: promoted {vol.status} → VERIFIED"
+            )
 
         return 0 if passed else 1
 
@@ -7839,7 +7968,20 @@ def cmd_session_abort(args: argparse.Namespace) -> int:
             if args.volume:
                 orch.abort_volume(args.volume)
             else:
-                orch.abort_session(args.ref)
+                from lcsas.consolidate.merger import (
+                    release_consolidation_sources,
+                )
+                from lcsas.db.sessions import resolve_session_id
+                session_id = resolve_session_id(conn, args.ref)
+                orch.abort_session(session_id)
+                # #677: a consolidation session's sources go back to
+                # VERIFIED; nothing is left to finish them.
+                released = release_consolidation_sources(conn, session_id)
+                if released:
+                    logger.info(
+                        "Returned %d consolidation source volume(s) to "
+                        "VERIFIED: %s", len(released), ", ".join(released),
+                    )
         except ValueError as e:
             logger.error("%s", e)
             return 1
