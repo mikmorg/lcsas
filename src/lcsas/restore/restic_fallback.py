@@ -41,16 +41,18 @@ from __future__ import annotations
 import atexit
 import base64
 import contextlib
+import errno
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
 import tempfile
 from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
-from datetime import timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -214,6 +216,49 @@ class NoKeyUnlockedError(IntegrityError):
         super().__init__(message)
         self.rejected = rejected
         self.corrupt = corrupt
+
+
+#: Exit code for "the reader typed q at the disc prompt (or its input
+#: ended there)".  The same as tier 1's EXIT_READER_QUIT: sysexits.h
+#: EX_TEMPFAIL, "try again later".
+EXIT_READER_QUIT = 75
+
+
+class RestoreAbortedError(Exception):
+    """The whole restore must stop now, not just the current file (#658).
+
+    Raised when the reader types ``q`` at the disc prompt, when input
+    ends there, and when the target filesystem is full.  Deliberately
+    NOT an ``OSError`` (nor an ``IntegrityError``): the tolerant
+    per-file handlers catch those and go on with the next file, which
+    would ask for the same disc again, or fail every remaining file in
+    turn on a full disk.
+
+    ``exit_code`` is what the tier-3 command exits with:
+    ``EXIT_READER_QUIT`` (75) for a stop at the disc prompt, 1 for a
+    full disk.
+    """
+
+    def __init__(self, message: str, exit_code: int) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+
+
+#: "No space left" and "quota exceeded" (EDQUOT is absent on Windows).
+_DISK_FULL_ERRNOS = frozenset(
+    {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}
+)
+
+
+def _disk_full_abort(path: Path, exc: OSError) -> RestoreAbortedError:
+    """Build the abort for a full target filesystem while writing *path*."""
+    return RestoreAbortedError(
+        f"the filesystem that holds {path.parent} is full "
+        f"({exc.strerror or exc}) while writing {path.name}.  Free some "
+        "space there, or restore to a bigger disk, then run the same "
+        "command again.  Files restored so far are kept.",
+        exit_code=1,
+    )
 
 
 class _NodeFailed(Exception):  # noqa: N818 — internal control-flow sentinel, not a public error
@@ -502,7 +547,9 @@ class PurePythonRestorer:
             interactive: If True (default), ``_find_pack_path`` prints the
                 LCSAS disc-swap prompt to stderr and blocks on stdin when
                 a pack is not found in any configured search path, then
-                rescans (up to ``_DISC_SWAP_MAX_RETRIES`` times).  If False,
+                rescans (up to ``_DISC_SWAP_MAX_RETRIES`` times).  ``q`` or
+                the end of input there raises ``RestoreAbortedError``,
+                which stops the whole restore (#658).  If False,
                 ``_find_pack_path`` raises FileNotFoundError on miss
                 (matches pre-#234 behaviour; tests that pin the raise
                 contract must opt out explicitly).  The tier-3 CLI sets
@@ -611,6 +658,11 @@ class PurePythonRestorer:
         Returns:
             SnapshotMeta for the restored snapshot.
 
+        Raises:
+            RestoreAbortedError: the reader typed ``q`` at the disc
+                prompt, its input ended there, or the target filesystem
+                is full (#658).  Its ``exit_code`` says which.
+
         Note:
             Under the default tolerant mode (``strict=False``), a
             per-node failure does not raise — the count is available on
@@ -642,7 +694,14 @@ class PurePythonRestorer:
             _log(f"Counted {self._progress_total_files} file(s) to restore.")
 
         target.mkdir(parents=True, exist_ok=True)
-        self._restore_tree(snap.tree, target)
+        try:
+            self._restore_tree(snap.tree, target)
+        except RestoreAbortedError:
+            # #658: the restore stops here; still list the files that
+            # failed before the stop.
+            if self._failures:
+                self._write_failure_manifest(target)
+            raise
 
         # Force a final 100% line so the last reported count matches
         # the total — otherwise the heir sees e.g. 47/50 and
@@ -826,8 +885,13 @@ class PurePythonRestorer:
                 )
             )
 
-        # Sort by time (ISO 8601 strings sort lexicographically)
-        self._snapshots.sort(key=lambda s: s.time)
+        # Sort by the instant, not the string (#663): two times with
+        # different UTC offsets (the repeated hour when daylight saving
+        # ends, a container on UTC next to a host on local time) sort
+        # wrong as strings.  A time that will not parse sorts first, so
+        # it is never taken as "latest"; the sort is stable, so ties keep
+        # file-name order.
+        self._snapshots.sort(key=_snapshot_sort_key)
         _log(f"Found {len(self._snapshots)} snapshot(s).")
 
     def _latest_snapshot(self) -> SnapshotMeta:
@@ -1229,6 +1293,15 @@ class PurePythonRestorer:
                 lines.append(
                     "| (catalog has no record of this pack ID)                  |"
                 )
+                # #657 (tier-1 parity): the snapshot may be newer than
+                # every disc.  Say how to pick an older one, with this
+                # reader's own option names.
+                lines.extend([
+                    "| If the NEWEST data disc has already been read, this pack |",
+                    "| was never burned: the snapshot is newer than the discs.  |",
+                    "| Type 'q', then list the snapshots (--list-snapshots)     |",
+                    "| and restore an older one with --snapshot <id>.           |",
+                ])
 
         lines.extend([
             "|                                                          |",
@@ -1251,7 +1324,9 @@ class PurePythonRestorer:
         Supports both flat and two-level layouts.  When *interactive*
         is True and no copy is found, prints the LCSAS disc-swap prompt
         to stderr, waits for ENTER on stdin, then rescans -- up to
-        ``_DISC_SWAP_MAX_RETRIES`` times.
+        ``_DISC_SWAP_MAX_RETRIES`` times.  ``q`` or the end of input
+        raises ``RestoreAbortedError`` (#658); running out of retries
+        raises FileNotFoundError, which fails only the current file.
         """
         hit = self._scan_pack_search_paths(pack_id)
         if hit is not None:
@@ -1264,16 +1339,23 @@ class PurePythonRestorer:
                 f"Looked in: {searched}"
             )
 
-        # Interactive: prompt-and-retry loop, bounded.
+        # Interactive: prompt-and-retry loop, bounded.  'q' or the end of
+        # input stops the WHOLE restore (#658), as in tier 1: failing
+        # just this file would ask for a disc again for the next one.
         for _ in range(self._DISC_SWAP_MAX_RETRIES):
             self._print_swap_prompt(pack_id)
             line = sys.stdin.readline()
-            if not line:
-                # EOF on stdin -- nothing more to read, give up cleanly.
-                break
-            if line.strip().lower() == "q":
-                sys.stderr.write("[lcsas-restore] aborted by user\n")
-                break
+            if not line or line.strip().lower() == "q":
+                if line:
+                    sys.stderr.write("[lcsas-restore] aborted by user\n")
+                else:
+                    # The cursor still sits after "> ": end that line.
+                    sys.stderr.write("\n[lcsas-restore] input ended\n")
+                raise RestoreAbortedError(
+                    "stopped at the disc prompt.  Files restored so far "
+                    "are kept.  To carry on, run the same command again.",
+                    exit_code=EXIT_READER_QUIT,
+                )
             hit = self._scan_pack_search_paths(pack_id)
             if hit is not None:
                 sys.stderr.write(
@@ -1501,6 +1583,9 @@ class PurePythonRestorer:
                 # subtree recursion records its own. Keep going.
                 continue
             except (IntegrityError, KeyError, OSError) as exc:
+                if isinstance(exc, OSError) and exc.errno in _DISK_FULL_ERRNOS:
+                    # #658: a full disk would fail every later file too.
+                    raise _disk_full_abort(node_path, exc) from exc
                 if self._strict:
                     raise
                 self._record_failure(node_path, "", exc)
@@ -1535,13 +1620,17 @@ class PurePythonRestorer:
                     bytes_written += len(chunk)
             self._apply_metadata(node, tmp_path)
             os.replace(tmp_path, path)
-        except _NodeFailed:
+        except (_NodeFailed, RestoreAbortedError):
             tmp_path.unlink(missing_ok=True)
             raise
         except (IntegrityError, KeyError, OSError) as exc:
             # Failure outside the per-blob guard above (e.g. _apply_metadata
             # or os.replace) — still record + clean up under tolerant mode.
             tmp_path.unlink(missing_ok=True)
+            if isinstance(exc, OSError) and exc.errno in _DISK_FULL_ERRNOS:
+                # #658: stop the whole restore (removing the partial file
+                # above gave its space back).
+                raise _disk_full_abort(path, exc) from exc
             if self._strict:
                 raise
             self._record_failure(path, "", exc)
@@ -1769,35 +1858,66 @@ class PurePythonRestorer:
 
 # ── Utilities ────────────────────────────────────────────────────
 
+# A restic time: date, "T", time, an optional fraction of any length and
+# an optional UTC offset ("Z" or +HH:MM).  The offset is searched for in
+# the part after the "T" only, as the date has dashes of its own.
+_TIMESTAMP_RE = re.compile(
+    r"^(?P<base>[^T]+T\d{1,2}:\d{1,2}:\d{1,2})"
+    r"(?:\.(?P<frac>\d+))?"
+    r"(?P<tz>[Zz]|[+-]\d{2}:?\d{2})?$"
+)
+
+
+def _parse_instant(ts: str) -> datetime:
+    """Parse a restic-style ISO 8601 timestamp to an aware datetime.
+
+    Keeps the UTC offset (#659): ``2026-01-02T03:04:05.123456789+02:00``
+    is the instant 01:04:05.123456 UTC.  The fraction is cut or padded
+    to six digits (Python keeps microseconds), so a 3-digit fraction or
+    none at all parses too.  A time with no offset is taken as UTC.
+
+    Raises:
+        ValueError: *ts* is not such a timestamp.
+    """
+    m = _TIMESTAMP_RE.match(ts.strip())
+    if m is None:
+        raise ValueError(f"not an ISO 8601 timestamp: {ts!r}")
+    frac = (m.group("frac") or "")[:6].ljust(6, "0")
+    tz = m.group("tz")
+    if tz is None or tz in ("Z", "z"):
+        tz = "+00:00"
+    elif ":" not in tz:
+        tz = f"{tz[:3]}:{tz[3:]}"
+    # Python 3.10's fromisoformat takes exactly this shape: six fraction
+    # digits and a +HH:MM offset (no "Z").  This file is concatenated
+    # into ``standalone_restorer.py``, which runs on 3.10.
+    norm = f"{m.group('base')}.{frac}{tz}"
+    try:
+        return datetime.fromisoformat(norm)
+    except ValueError:
+        # A date or time without zero padding ("2026-1-5T..."), which
+        # fromisoformat rejects and strptime accepts.
+        return datetime.strptime(norm, "%Y-%m-%dT%H:%M:%S.%f%z")
+
+
 def _parse_timestamp(ts: str) -> float:
     """Parse a restic-style ISO 8601 timestamp to epoch seconds.
 
-    Handles nanosecond precision: ``2026-01-15T10:30:00.123456789Z``.
-    Falls back to basic parsing if the format is unexpected.
+    See ``_parse_instant``; raises ValueError on a malformed time.
     """
-    # Strip trailing timezone designator and nanoseconds
-    ts = ts.rstrip("Z")
-    if "." in ts:
-        date_part, frac = ts.split(".", 1)
-        # Truncate to microseconds (Python limit)
-        frac = frac[:6].ljust(6, "0")
-        ts = f"{date_part}.{frac}"
-    else:
-        ts = ts + ".000000"
+    return _parse_instant(ts).timestamp()
 
-    # Python 3.7+ datetime.fromisoformat
-    from datetime import datetime
 
+def _snapshot_sort_key(snap: SnapshotMeta) -> tuple[int, float]:
+    """Sort key for snapshots: the instant of ``snap.time`` (#663).
+
+    A time that does not parse gives ``(0, 0.0)``, before every real
+    time, so a damaged snapshot file is never chosen as "latest".
+    """
     try:
-        # noqa UP017: datetime.UTC is 3.11+; this file is concatenated into
-        # ``standalone_restorer.py`` (Python 3.10 floor), so timezone.utc is required.
-        dt = datetime.fromisoformat(ts).replace(tzinfo=timezone.utc)  # noqa: UP017
+        return (1, _parse_timestamp(snap.time))
     except ValueError:
-        # Last resort: basic parse
-        dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f").replace(
-            tzinfo=timezone.utc  # noqa: UP017
-        )
-    return dt.timestamp()
+        return (0, 0.0)
 
 
 _QUIET = False

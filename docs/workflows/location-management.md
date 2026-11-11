@@ -100,13 +100,17 @@ summary (volume count, pack count, packs behind the whole archive).
    (`src/lcsas/db/locations.py`).
 4. If the table is empty, logs `No locations registered.` and returns 0
    (the `"list"` branch of `cmd_location()`).
-5. `get_location_summary(conn)` aggregates per-location volume and pack
-   counts, computing `missing = total_archived - pack_count`
-   (`src/lcsas/db/queries.py`).
-6. The handler joins each location with its summary (defaulting to zeros
-   when a location has no discs yet) and emits one line per location
-   with a status of either `all current` or `<N> packs behind`
-   (the `"list"` branch of `cmd_location()`).
+5. `get_location_summary(conn)` returns one row for every registered
+   location: its in-service discs, the packs held there, and
+   `missing = archived - held` (`src/lcsas/db/queries.py`). A pack is
+   held at a location when an `ACTIVE` disc there belongs to a durable
+   (`BURNED`/`VERIFIED`/`CONSOLIDATING`) volume that links it and the
+   pack is not pruned (`_HELD_AT_LOCATION`, #680). `location status` and
+   `stage --for-location` use the same rule, so all three agree.
+6. The handler emits one line per location with a status of either
+   `all current` or `<N> packs behind` (the `"list"` branch of
+   `cmd_location()`). A location with no disc in service shows every
+   archived pack as behind.
 
 **Expected outcome:** One line per registered location:
 `<name>  <N> volumes, <M> packs, all current | K packs behind`.
@@ -121,7 +125,9 @@ summary (volume count, pack count, packs behind the whole archive).
 - Existing: `tests/unit/test_location_queries.py` covers
   `get_location_summary` directly; `tests/unit/test_db_locations.py::
   TestLocationCRUD::test_list_locations` covers ordering.
-- Gap: no CLI test exercises the joined summary output formatting.
+- `tests/unit/test_location_held.py` checks that `location list`,
+  `location status` and `stage --for-location` agree after a
+  consolidation, and that a location with no disc is not "all current".
 
 **Source refs:**
 - the `location` subparser in `build_parser()` and the `"list"` branch of
@@ -147,12 +153,12 @@ which packs are present there, which ones are missing, grouped by repository.
 2. `cmd_location()` enters the `"status"` branch
    (`src/lcsas/cli/main.py`).
 3. `get_packs_at_location(conn, name)` returns the set of `pack_id` row ids
-   of packs that have at least one `ACTIVE` disc at this location, by joining
-   `volume_packs` to `volume_copies` filtered on
-   `vc.status='ACTIVE'` (`src/lcsas/db/queries.py`).
+   of packs held at this location: not pruned, and linked to a durable
+   volume with an `ACTIVE` disc there (`_HELD_AT_LOCATION`,
+   `src/lcsas/db/queries.py`, #680).
 4. `get_packs_missing_at_location(conn, name)` returns Pack rows that
-   are archived somewhere but **not** at this location
-   (`src/lcsas/db/queries.py`).
+   are archived (not pruned, on a durable volume) but **not** held at
+   this location (`src/lcsas/db/queries.py`).
 5. The handler logs the totals, then bins missing packs by `repo_id`
    and reports `repo=<id>: <N> packs (<size> GB)`
    (the `"status"` branch of `cmd_location()`).
@@ -479,8 +485,10 @@ Key behaviours derived from the schema (the `locations` and
   emits one atomically with the disc row's update (issue #16) — from/to are
   serialised into the event's `detail` column.
 - `get_location_summary` computes "packs behind" against the *global*
-  archived pack count, so all locations are compared against the union of
-  archived packs across every location — not against the live mirror.
+  archived pack count (packs that are not pruned and are on a durable
+  volume), so all locations are compared against the union of archived
+  packs across every location — not against the live mirror. Pruned packs
+  and packs on never-burned volumes are neither held nor behind.
 - Disc rows (`volume_copies`) cascade-delete with the parent volume
   (`ON DELETE CASCADE` on `volume_copies.volume_id`,
   `src/lcsas/db/schema.py`); location rows
@@ -553,12 +561,14 @@ operating LCSAS in a multi-location production setup:
    non-CLI callers, but in the CLI path the row is guaranteed to exist
    by then.
 
-8. **`get_location_summary` ignores `DEPRECATED`/`DESTROYED` volumes**
-   (the volume-status filter in `get_location_summary()`,
-   `src/lcsas/db/queries.py`), so a location whose discs have all
-   been taken out of service shows as `0 volumes, 0 packs, 0 packs behind` rather
-   than as a special "obsolete" state. The location row remains in the
-   registry until explicitly deleted.
+8. **Per-location counts ignore volumes that are not durable** (the
+   `_HELD_AT_LOCATION` rule in `src/lcsas/db/queries.py`): a
+   `DEPRECATED` volume (for example one superseded by consolidation) or a
+   never-burned one holds nothing, even while its disc records are still
+   `ACTIVE`. A location whose discs have all been taken out of service
+   shows as `0 volumes, 0 packs, <N> packs behind`, where N is every
+   archived pack (#680). The location row remains in the registry until
+   explicitly deleted.
 
 9. **Recording a disc's fate is supported via `lcsas copy`.**
    The catalog layer's `deprecate_copy` / `destroy_copy`

@@ -49,8 +49,9 @@ airgapped machines, and split-machine "stage here, burn there" pipelines.
 - An ISO previously produced by `lcsas stage` (typically containing the
   disc catalog, with DVDisaster RS03 ECC already
   applied — see `src/lcsas/burn/orchestrator.py`).
-- `xorriso` ≥ 1.4.0 on the burner machine (used both for burning and
-  for read-back verification — `src/lcsas/iso/xorriso.py`).
+- `xorriso` ≥ 1.4.0 on the burner machine (used for burning, the blank
+  check, `-check_media` and the volume ID — `src/lcsas/iso/xorriso.py`).
+  The read-back itself is a plain read of the device.
 - A target optical drive (`/dev/sr0` by default).
 - For receipt emission: a known **volume label** (defaults to the ISO's
   own PVD volume ID, i.e. the label it was mastered with, then to the
@@ -69,37 +70,59 @@ airgapped machines, and split-machine "stage here, burn there" pipelines.
    (`cmd_burn_iso`).
 3. Hash the ISO with SHA-256 **before** the burn, so the receipt records
    exactly the bits that went to disc even if the file is later
-   replaced (`cmd_burn_iso`, `src/lcsas/utils/hashing.py`).
-4. Unless `--no-verify` is passed, a blank-media pre-check refuses a disc
+   replaced, and the disc can be compared with them (`cmd_burn_iso`,
+   `src/lcsas/utils/hashing.py`).
+4. If `--emit-receipt` was given, work out the receipt file (step 8) and
+   refuse the run, before anything is burned, if a file is already there
+   that is not a receipt of this volume at this location, or if a file
+   stands where the receipt's folder should be (#675;
+   `_receipt_overwrite_refusal`).
+5. Unless `--no-verify` is passed, a blank-media pre-check refuses a disc
    that already carries data before the burn begins (`cmd_burn_iso`).
-5. Stream the ISO to the optical device with xorriso in `-as cdrecord
+6. Stream the ISO to the optical device with xorriso in `-as cdrecord
    -dao` mode (`cmd_burn_iso`, `src/lcsas/iso/xorriso.py`).
-6. Unless `--no-verify` is passed, read-back-verify the disc with
-   `xorriso -check_media`, then read the disc's PVD Volume ID back and
-   confirm it matches the label; record `verify_passed` for the receipt
-   (`cmd_burn_iso`, `src/lcsas/iso/xorriso.py`).
-7. If `--emit-receipt` was given, build the receipt dict with
-   `volume_label` (from `--label` or `iso.parent.name`), `session_id`,
-   `location`, `device`, `burn_date` (UTC ISO 8601), `iso_sha256`,
-   `iso_size_bytes`, and `verify_passed` (`cmd_burn_iso`).
-8. Persist the receipt JSON. If `--emit-receipt` points at a directory,
-   auto-name the file `<label>_<location>.json`; otherwise treat the
-   path as the receipt filename and create parent directories as
-   needed. The write is `fsync()`-ed before the process returns so the
-   receipt survives a power loss on the burner
-   (`cmd_burn_iso`).
+7. Unless `--no-verify` is passed, check the disc against the ISO (#664,
+   `_burn_iso_readback`), with the same three steps as `lcsas burn`:
+   1. `xorriso -check_media`: the disc is readable.
+   2. The disc's PVD Volume ID equals the label: it is the right disc.
+   3. Read back exactly the ISO's length from the device, hash it with
+      SHA-256 and compare it with the ISO's hash
+      (`read_device_sha256` in `src/lcsas/burn/device_verify.py`). A
+      short read fails. A readable disc with the wrong bytes fails here,
+      where `-check_media` alone would pass it.
+
+   `verify_passed` is true only if all three pass.
+8. If `--emit-receipt` was given, write the receipt with
+   `volume_label` (from `--label`, else the ISO's PVD volume ID),
+   `session_id`, `location`, `device`, `burn_date` (UTC ISO 8601),
+   `iso_sha256`, `iso_size_bytes`, `verify_passed`, `device_sha256` (the
+   hash read back from the disc; null when nothing was read back) and
+   `verify_only` (`cmd_burn_iso`). The target is a folder when it exists
+   as one, ends in a path separator (`receipts/`), or does not exist and
+   has no file extension (`receipts`); the receipt is then
+   `<label>_<location>.json` inside it, and the folder is created if
+   needed (#675). Any other target is the receipt file itself, and its
+   parent folders are created as needed. The write is `fsync()`-ed
+   before the process returns so the receipt survives a power loss on
+   the burner (`cmd_burn_iso`).
 9. Exit non-zero if `--verify` was on and verification failed — but the
    receipt is still written so the failure is recorded
    (`cmd_burn_iso`).
+
+**`--verify-only`** (#673): skip steps 5 and 6. Nothing is burned; the
+disc already in the drive is checked as in step 7 and a receipt is
+written for it with `verify_only: true`. Use it when a receipt was lost
+(see "Missing receipt" below). It cannot be combined with `--no-verify`.
 
 **Expected outcome:**
 
 - One physical disc burned at `--device`.
 - Optionally one receipt JSON on disk, containing every datum needed for
   later catalog import (label, location, device, burn date, ISO hash,
-  verify result, session id).
+  verify result, hash read back from the disc, session id).
 - Exit code `0` on success, `1` on missing ISO, missing `--location`
-  with `--emit-receipt`, or verify failure.
+  with `--emit-receipt`, a receipt file that belongs to another disc, or
+  verify failure (including a disc whose bytes differ from the ISO).
 - No changes to any SQLite catalog; the local filesystem is the only
   state touched.
 
@@ -147,13 +170,33 @@ command.
   `--emit-receipt` into a directory tree that does not exist yet creates
   every missing parent (`mkdir(parents=True)`) and writes the receipt at the
   exact path given (`::test_nested_missing_dirs_are_created`), alongside a
-  single missing parent, an existing parent, overwriting an existing receipt
-  file, and a failed burn leaving no receipt and creating no directories.
+  single missing parent, an existing parent, replacing this disc's own
+  receipt, and a failed burn leaving no receipt and creating no directories.
 - `tests/unit/test_burn_iso_receipt_io.py::TestReceiptIsFsynced` — the receipt
   file is `fsync()`-ed exactly once, after every byte has been flushed
   (`::test_receipt_file_is_fsynced_with_all_data_already_flushed`); the same
   holds for the receipt of a failed verify and for a receipt written into a
   directory target, and no receipt requested means no `fsync`.
+- `tests/unit/test_burn_iso_receipt_io.py::TestEmitReceiptMissingFolder` —
+  `--emit-receipt receipts/` and `--emit-receipt receipts` with no such
+  folder create it and write `<label>_<location>.json`; three burns leave
+  three receipts; a file where the folder should be is refused before
+  the burn (#675).
+  `::TestEmitReceiptCreatesParents::test_existing_receipt_of_another_volume_is_refused`
+  — another volume's receipt is kept and nothing is burned.
+- `tests/unit/test_burn_iso_readback.py` — the read-back against a
+  stand-in device file (#664): a matching disc passes and its hash is in
+  the receipt; a disc with part of the image zeroed, or shorter than the
+  ISO, fails with `verify_passed: false`; exactly the ISO's length is
+  read; an unreadable or wrong disc is not read back. `TestVerifyOnly`
+  covers `--verify-only` (#673).
+- `tests/integration/test_portable_burn_loop.py::test_disc_that_differs_from_the_iso_fails_the_readback`
+  and `::test_lost_receipt_is_replaced_by_verify_only` — the same through
+  stage, burn-iso and import.
+- `tests/e2e/test_burn_verify_disc.py::test_burn_iso_readback_pass_then_altered_image_fails`
+  — the read-back against a CDEmu drive: a disc whose image is altered
+  by one byte fails. Opt-in (`LCSAS_BURN_E2E=1`, `make verify-burn-e2e`);
+  it skips without `cdemu` and `xorriso`.
 
 **Gaps in coverage:**
 
@@ -175,6 +218,8 @@ command.
 - `build_parser()` in `src/lcsas/cli/main.py` — argparse wiring for `burn-iso`.
 - `cmd_burn_iso` in `src/lcsas/cli/main.py` — handler and dispatch.
 - `src/lcsas/iso/xorriso.py` — `burn_iso` and `verify_disc`.
+- `src/lcsas/burn/device_verify.py` — `read_device_sha256`, shared with
+  `lcsas burn`.
 - `src/lcsas/utils/hashing.py` — `sha256_file`.
 - `tests/unit/test_cli_comprehensive.py` — `TestCmdBurnIso` test class.
 
@@ -404,8 +449,9 @@ the command exits non-zero (#669).
       difference, **reject** the receipt (both hashes named): the disc
       was burned from a copy of the ISO that is not the one staged, for
       example one damaged on its way to the burner.  `burn-iso`'s own
-      verify cannot catch this, since it only compares the disc with the
-      file it was given (`get_staged_iso` in `src/lcsas/db/sessions.py`).
+      verify cannot catch this, since it compares the disc with the file
+      it was given (#664), not with the ISO that was staged
+      (`get_staged_iso` in `src/lcsas/db/sessions.py`).
    7. Issue #18 hash guard: if any prior `BURN_RECEIPT_IMPORTED` event
       for this volume recorded a different `iso_sha256`, **reject** the
       receipt.
@@ -438,7 +484,9 @@ the command exits non-zero (#669).
       `verify_passed: true` it also sets `last_verified_at` to the
       receipt's `burn_date` (in UTC; the import time if it is missing,
       unreadable or in the future), since `burn-iso` read the disc back
-      right after burning, so `lcsas status` does not count the disc as
+      right after burning and compared its SHA-256 with the ISO (#664;
+      `--verify-only` read it back at that time), so `lcsas status` does
+      not count the disc as
       never verified (#646).  A `--no-verify` receipt leaves it NULL.
       Discs imported before #646 keep a NULL `last_verified_at` and are
       listed by `lcsas status --stale-copies` until `lcsas verify <label>
@@ -602,8 +650,11 @@ and how the code responds today.
 ### Partial burn that passes write but fails verify
 
 - **Symptom:** xorriso reports a successful write, but `verify_disc`
-  (`-check_media`) returns non-zero.
-- **Behaviour:** `cmd_burn_iso` sets `verify_passed = False`. The
+  (`-check_media`) returns non-zero, the disc names another volume, or
+  the bytes read back from the disc do not have the ISO's SHA-256 (the
+  log names both hashes).
+- **Behaviour:** `cmd_burn_iso` sets `verify_passed = False` and, when
+  the disc was read back, records the hash read in `device_sha256`. The
   receipt is **still written** with `verify_passed: false`; the
   process exits 1 (`cmd_burn_iso`). The disc is physically present
   but suspect.
@@ -629,13 +680,31 @@ and how the code responds today.
   to learn about the burn until the receipt is retrieved.
 - **Fix options:**
   1. Re-fetch the receipt from B (still on disk unless deleted).
-  2. Manually reconstruct a receipt JSON — the schema is small
-     (`volume_label`, `location`, `verify_passed`, `burn_date`) —
-     and feed it to `catalog import-receipts`.
-  3. Use the manual path: `lcsas verify <label>
-     --mark-verified --detail "remote burn, receipt lost"`
-     (`cmd_verify`). This skips the
-     receipt entirely but only works for already-staged volumes.
+  2. Check the burned disc against the ISO and write a new receipt,
+     without burning again (#673). Put the disc in the drive on a
+     machine that has the ISO and run:
+
+     ```
+     lcsas burn-iso <volume_label>.iso --verify-only --device /dev/srN \
+         --emit-receipt <receipts-dir>/ --location <location-name>
+     ```
+
+     It runs the same checks as `burn-iso --verify` (readable, right
+     volume ID, SHA-256 read back equals the ISO's) and writes
+     `<label>_<location>.json` with `verify_only: true`. Copy it to A
+     and run `lcsas catalog import-receipts` on it as usual. A failed
+     check writes `verify_passed: false` and exits 1: re-burn instead.
+     Use the ISO staged on A (or a copy of it): the import rejects a
+     receipt whose `iso_sha256` is not the staged ISO's.
+  3. If neither the receipt nor the ISO is available, use the manual
+     path: `lcsas verify <label> --mark-verified --location
+     <location-name> --detail "remote burn, receipt lost"`
+     (`cmd_verify`). It works for `STAGING` and `BURNED` volumes. For a
+     volume with no disc recorded, `--location` is required: the disc
+     is recorded there as ACTIVE, with the staged ISO's hash, the volume
+     is closed and set `VERIFIED`, and a `VERIFY_PASS` event is
+     written. Nothing reads the disc, so its `last_verified_at` stays
+     empty until `lcsas verify <label> --disc` is run on it.
 
 ### Duplicate import (same receipt fed twice)
 
