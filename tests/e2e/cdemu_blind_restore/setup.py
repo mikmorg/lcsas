@@ -46,6 +46,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_ROOT / "tests" / "e2e"))
 from fixture_lib import (  # noqa: E402
     add_repo,
+    burn_to_isos,
     generate_source_tree,
     init_rustic_repo,
     master_iso,
@@ -414,6 +415,13 @@ def _record_mixed_split(conn) -> None:
 
 
 def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
+    """Stage and finish (skip_burn) one burn session of data discs.
+
+    The owner's flow, as ``burn_to_isos`` runs it: stage() masters every
+    ISO of the session, then burn_session(skip_burn=True) marks the
+    volumes VERIFIED.  *max_volumes* caps this batch at that many discs
+    (the rest wait for the next call).
+    """
     sys.path.insert(0, str(REPO_ROOT / "src"))
     from lcsas.burn.orchestrator import BurnOrchestrator
     from lcsas.config.media import MediaType
@@ -430,35 +438,51 @@ def _run_burn_pipeline(conn, *, max_volumes: int | None = None) -> list[Path]:
         def repair_iso(self, iso_path):
             return True
 
+    class VariantXorriso:
+        """Variant hook (issue #218): mutate each data disc's staging tree
+        (no-catalog strips catalog.db) and check its set markers right
+        before it is mastered.  stage() injects catalog.db and masters the
+        ISO in one call, so this is the only gap between the two."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def create_iso(self, source_dir, output_iso, volume_label, **kwargs):
+            _apply_data_disc_variant_mutations(Path(source_dir))
+            _check_set_markers(Path(source_dir), require_all=False)
+            return self._inner.create_iso(
+                source_dir, output_iso, volume_label, **kwargs,
+            )
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
     orchestrator = BurnOrchestrator(
-        config, conn, SubprocessXorrisoRunner(), NoOpEcc()
+        config, conn, VariantXorriso(SubprocessXorrisoRunner()), NoOpEcc(),
     )
+    media = MediaType.TEST_TINY
 
-    ISO_OUT.mkdir(parents=True, exist_ok=True)
-    iso_files: list[Path] = []
-    count = 0
-    while get_unarchived_packs(conn):
-        if max_volumes is not None and count >= max_volumes:
-            break
-        try:
-            manifest = orchestrator.prepare(media_type=MediaType.TEST_TINY)
-        except ValueError as exc:
-            print(f"  burn stopped: {exc}", file=sys.stderr)
-            break
-        # Variant hook (issue #218): strip catalog.db from data discs
-        # for the no-catalog variant, between prepare (which injects
-        # catalog.db into staging) and execute (which masters the ISO).
-        _apply_data_disc_variant_mutations(manifest.staging_path)
-        _check_set_markers(manifest.staging_path, require_all=False)
-        iso_path = ISO_OUT / f"{manifest.volume_label}.iso"
-        orchestrator.execute(
-            manifest, iso_output=iso_path, skip_burn=True,
+    unarchived = get_unarchived_packs(conn)
+    if not unarchived:
+        return []
+    pack_sha256s = None
+    if max_volumes is not None:
+        # The packs of stage()'s own first max_volumes bins.  Kept in the
+        # unarchived order, so stage() packs exactly those bins again.
+        plans = orchestrator._multi_bin_pack(unarchived, media)
+        if len(plans) > max_volumes:
+            keep = {p.sha256 for packs, _ in plans[:max_volumes] for p in packs}
+            pack_sha256s = [p.sha256 for p in unarchived if p.sha256 in keep]
+
+    try:
+        iso_files = burn_to_isos(
+            orchestrator, ISO_OUT, media_type=media, pack_sha256s=pack_sha256s,
         )
-        size = iso_path.stat().st_size
-        print(f"    → {iso_path.name} ({size:,} bytes)")
-        iso_files.append(iso_path)
-        count += 1
-
+    except ValueError as exc:
+        print(f"  burn stopped: {exc}", file=sys.stderr)
+        return []
+    for iso_path in iso_files:
+        print(f"    → {iso_path.name} ({iso_path.stat().st_size:,} bytes)")
     return iso_files
 
 

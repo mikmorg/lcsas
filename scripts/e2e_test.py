@@ -418,48 +418,44 @@ def run_burn_pipeline(conn: sqlite3.Connection) -> list[Path]:
     orchestrator = BurnOrchestrator(config, conn, xorriso, dvdisaster)
 
     iso_files: list[Path] = []
-    volume_num = 0
 
-    while True:
-        unarchived = get_unarchived_packs(conn)
-        total_bytes = get_total_unarchived_bytes(conn)
+    # The owner's flow (#699 removed the single-volume prepare/execute
+    # path): stage() masters every volume's ISO in one burn session, then
+    # burn_session(skip_burn=True) marks them VERIFIED without a drive.
+    unarchived = get_unarchived_packs(conn)
+    total_bytes = get_total_unarchived_bytes(conn)
+    if not unarchived:
+        info("All packs archived — burn pipeline complete")
+        return iso_files
+    info(f"{len(unarchived)} unarchived packs ({total_bytes:,} bytes)")
 
-        if not unarchived:
-            info("All packs archived — burn pipeline complete")
-            break
-
-        volume_num += 1
-        info(
-            f"Volume {volume_num}: {len(unarchived)} unarchived packs"
-            f" ({total_bytes:,} bytes remaining)"
+    try:
+        result = orchestrator.stage(media_type=mt)
+        receipts = orchestrator.burn_session(
+            result.session_id, skip_burn=True, interactive=False,
         )
-
-        try:
-            manifest = orchestrator.prepare(media_type=mt)
-            info(f"  Prepared: {manifest.volume_label} "
+        status = {r.volume_label: r.verify_passed for r in receipts}
+        ISO_DIR.mkdir(parents=True, exist_ok=True)
+        for manifest in result.manifests:
+            info(f"  Staged: {manifest.volume_label} "
                  f"({len(manifest.selected_packs)} packs, "
                  f"{manifest.total_data_bytes:,} bytes)")
-
-            iso_path = ISO_DIR / f"{manifest.volume_label}.iso"
-            volume = orchestrator.execute(
-                manifest,
-                iso_output=iso_path,
-                skip_burn=True,
-            )
-
+            assert manifest.iso_path is not None
+            iso_path = ISO_DIR / manifest.iso_path.name
+            shutil.move(str(manifest.iso_path), iso_path)
             iso_size = iso_path.stat().st_size
             info(f"  ISO created: {iso_path.name} ({iso_size:,} bytes)")
-            info(f"  Volume status: {volume.status}")
+            info(f"  Burn (skip_burn) passed: "
+                 f"{status.get(manifest.volume_label)}")
             iso_files.append(iso_path)
+        info("All packs archived — burn pipeline complete")
 
-        except ValueError as e:
-            warn(f"  Burn stopped: {e}")
-            break
-        except Exception as e:
-            fail(f"  Burn failed: {e}")
-            import traceback
-            traceback.print_exc()
-            break
+    except ValueError as e:
+        warn(f"  Burn stopped: {e}")
+    except Exception as e:
+        fail(f"  Burn failed: {e}")
+        import traceback
+        traceback.print_exc()
 
     return iso_files
 

@@ -175,7 +175,7 @@ class TestInteractiveRestore:
         delta = DeltaAnalyzer(conn, scanned, repo_id=repo_id)
         delta.register_new_packs()
 
-        from lcsas.db.queries import get_unarchived_packs
+        from tests.e2e.fixture_lib import burn_to_isos
 
         mt = MediaType.TEST_TINY
         repo_configs = {
@@ -198,17 +198,7 @@ class TestInteractiveRestore:
             config, conn, _TestXorrisoRunner(), _NoOpDVDisaster()
         )
 
-        isos: list[Path] = []
-        while get_unarchived_packs(conn):
-            try:
-                manifest = orchestrator.prepare(media_type=mt)
-                iso = iso_out / f"{manifest.volume_label}.iso"
-                orchestrator.execute(
-                    manifest, iso_output=iso, skip_burn=True
-                )
-                isos.append(iso)
-            except ValueError:
-                break
+        isos = burn_to_isos(orchestrator, iso_out, media_type=mt)
 
         conn.close()
 

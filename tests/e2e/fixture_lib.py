@@ -29,6 +29,7 @@ import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -357,6 +358,45 @@ def master_iso(stage: Path, iso_path: Path, *, volume_label: str) -> Path:
     return iso_path
 
 
+def burn_to_isos(
+    orchestrator: Any,
+    iso_out: Path,
+    *,
+    media_type: Any = None,
+    pack_sha256s: list[str] | None = None,
+    location: str = "Home_Shelf",
+) -> list[Path]:
+    """Turn unarchived packs into finished data-disc ISOs, the owner's way.
+
+    Fixtures need data ISOs without an optical drive.  They follow the
+    production flow (``lcsas stage``, then ``lcsas burn --session``):
+    ``stage()`` masters one ISO per volume in one burn session, then
+    ``burn_session(skip_burn=True)`` records each volume VERIFIED with a
+    disc at *location*, touching no device.  (This replaces the
+    single-volume ``prepare()``/``execute()`` path removed in #699.)  As
+    on the owner's discs, each disc carries the catalog as staging left
+    it, so the session's own volumes show as STAGING there.
+
+    *pack_sha256s* stages exactly those packs (see ``stage()``).  The
+    ISOs are moved to ``<iso_out>/<label>.iso`` and returned in label
+    order.
+    """
+    result = orchestrator.stage(
+        media_type=media_type, pack_sha256s=pack_sha256s,
+    )
+    orchestrator.burn_session(
+        result.session_id, location=location, skip_burn=True,
+        interactive=False,
+    )
+    iso_out.mkdir(parents=True, exist_ok=True)
+    isos: list[Path] = []
+    for iso in result.iso_paths:
+        dest = iso_out / iso.name
+        shutil.move(str(iso), dest)
+        isos.append(dest)
+    return isos
+
+
 def build_meta_iso(
     *,
     meta_stage: Path,
@@ -518,7 +558,6 @@ def build_windows_fixture(
     from lcsas.config.media import MediaType
     from lcsas.config.settings import LCSASConfig, RepositoryConfig
     from lcsas.db.connection import get_connection
-    from lcsas.db.queries import get_unarchived_packs
     from lcsas.db.schema import create_all
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
     from lcsas.packs.delta import DeltaAnalyzer
@@ -636,12 +675,9 @@ def build_windows_fixture(
     orchestrator = BurnOrchestrator(
         config, conn, SubprocessXorrisoRunner(), _NoOpEcc()
     )
-    data_isos: list[Path] = []
-    while get_unarchived_packs(conn):
-        prepared = orchestrator.prepare(media_type=MediaType.TEST_TINY)
-        iso_path = iso_out / f"{prepared.volume_label}.iso"
-        orchestrator.execute(prepared, iso_output=iso_path, skip_burn=True)
-        data_isos.append(iso_path)
+    data_isos = burn_to_isos(
+        orchestrator, iso_out, media_type=MediaType.TEST_TINY,
+    )
     # Where the restored set's packs went, by disc label.  The other sets'
     # packs share the discs, so counting every pack on a disc proves
     # nothing about the restored set (restore_set_span_problem).

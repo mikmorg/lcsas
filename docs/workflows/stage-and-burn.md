@@ -164,8 +164,8 @@ machines, or when staging in advance for an unattended burn.
   `lcsas scan`. `--dry-run` only reports the unscanned pack files.
 - `xorriso ≥ 1.4.0` on `PATH`. For production media (any `MediaType`
   with `ecc_overhead_pct > 0`), `dvdisaster ≥ 0.79` is also required.
-  Version checks happen lazily inside `BurnOrchestrator.execute`, but
-  the same binaries are invoked by `stage` for ISO + ECC.
+  `stage` invokes them for ISO + ECC. It does not check their
+  versions (only the removed single-volume `execute` path did, #699).
 - `staging_path` filesystem with enough free space; pre-flight requires
   `total_data_bytes × (1.05 × (1 + ecc%/100) + 1)`
   (`BurnOrchestrator.stage`).
@@ -560,7 +560,7 @@ budgets the *padded* ISO size per volume
 (`smallest_fitting_medium_bytes`) plus one temp copy for augmentation.
 
 Test media (`TEST_TINY`, `ecc_overhead_pct == 0`) is **implicitly
-skipped**: `BurnOrchestrator.execute` and `_stage_single_volume` only
+skipped**: `_stage_single_volume` only
 invoke `DvdisasterRunner.augment_iso` when
 `media_type.ecc_overhead_pct > 0`. RS03 has a minimum image size that
 the 1 MB test ISO cannot meet, so the implicit skip prevents test runs
@@ -690,10 +690,9 @@ Primary unit tests for this pipeline:
 
 - `tests/unit/test_binpack.py` — FFD correctness, oversize-item handling,
   capacity edge cases, multi-volume layout (1 reference to `TEST_TINY`).
-- `tests/unit/test_burn_orchestrator.py` — `prepare()` / `execute()` legacy
-  API, `skip_burn` matrix, custom ISO output paths, oversize-pack
-  rejection, manifest rollback, and an assertion that ECC IS invoked on
-  production media (4 references to `TEST_TINY`).
+- `tests/unit/test_burn_orchestrator.py` — one-volume `stage()`,
+  oversize-pack rejection, post-burn verify, burn failure rollback,
+  key-split drift, and the operator burn protocol.
 - `tests/unit/test_session_pipeline.py` — the broadest coverage: stage
   (single & multi-volume, multi-repository, `for_location`,
   pack ID filter, implicit ECC skip on TEST_TINY), burn_session (happy path, latest resolution,
@@ -746,7 +745,6 @@ Refs are by symbol name (line numbers drift); grep the file for the symbol.
 | Handler: `cmd_burn_iso` | `src/lcsas/cli/main.py` | `cmd_burn_iso` |
 | Handler: `session list` / `session abort` | `src/lcsas/cli/main.py` | `cmd_session_list` / `cmd_session_abort` |
 | Dispatch: `burn` → `cmd_burn_session` | `src/lcsas/cli/main.py` | `args.command == "burn"` branch |
-| `BurnOrchestrator.prepare` / `execute` / `abort` (legacy API) | `src/lcsas/burn/orchestrator.py` | `BurnOrchestrator.prepare` |
 | `BurnOrchestrator._stage_single_volume` | `src/lcsas/burn/orchestrator.py` | `_stage_single_volume` |
 | `BurnOrchestrator.stage` | `src/lcsas/burn/orchestrator.py` | `stage` |
 | `BurnOrchestrator.burn_session` | `src/lcsas/burn/orchestrator.py` | `burn_session` |

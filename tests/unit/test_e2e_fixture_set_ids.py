@@ -334,10 +334,13 @@ def test_blind_setup_checks_every_disc_before_mastering_it() -> None:
     after the variant edits and before its ISO is mastered."""
     import inspect
 
+    # stage() injects the catalog and masters the ISO in one call, so the
+    # data-disc hook wraps xorriso's create_iso (#699).
     burn = inspect.getsource(_setup._run_burn_pipeline)
-    check = burn.index("_check_set_markers(manifest.staging_path, require_all=False)")
+    check = burn.index("_check_set_markers(Path(source_dir), require_all=False)")
     assert burn.index("_apply_data_disc_variant_mutations(") < check
-    assert check < burn.index("orchestrator.execute(")
+    assert check < burn.index("return self._inner.create_iso(")
+    assert "VariantXorriso(SubprocessXorrisoRunner())" in burn
     meta = inspect.getsource(_setup._build_meta_iso)
     check = meta.index("_check_set_markers(META_STAGE, require_all=True)")
     assert meta.index("_apply_variant_mutations(META_STAGE)") < check

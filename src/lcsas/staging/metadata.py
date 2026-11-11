@@ -273,8 +273,8 @@ def render_volume_info_txt(
     """
     from lcsas import __version__
 
-    # Only stage() knows the volume's place in its burn session; prepare()
-    # stages one volume with no session, so the line is left out.
+    # stage() passes the volume's place in its burn session; without it
+    # (a direct call) the line is left out.
     place_line = ""
     if burn_session_position is not None:
         n, m = burn_session_position

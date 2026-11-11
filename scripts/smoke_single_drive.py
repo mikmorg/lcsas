@@ -161,20 +161,21 @@ def run_lcsas_burn() -> list[Path]:
         config, conn, SubprocessXorrisoRunner(), NoOpEcc()
     )
 
+    # The owner's flow (#699 removed prepare/execute): stage every ISO in
+    # one burn session, then finish it with skip_burn (no drive).
     iso_files: list[Path] = []
-    vol_n = 0
-    while get_unarchived_packs(conn):
-        vol_n += 1
-        print(f"  preparing volume {vol_n}...")
-        try:
-            manifest = orchestrator.prepare(media_type=MediaType.TEST_TINY)
-        except ValueError as e:
-            print(f"  prepare stopped: {e}")
-            break
-        iso_path = ISO_OUT / f"{manifest.volume_label}.iso"
-        orchestrator.execute(
-            manifest, iso_output=iso_path, skip_burn=True, skip_ecc=True,
+    try:
+        result = orchestrator.stage(media_type=MediaType.TEST_TINY)
+        orchestrator.burn_session(
+            result.session_id, skip_burn=True, interactive=False,
         )
+    except ValueError as e:
+        print(f"  stage stopped: {e}")
+        result = None
+    ISO_OUT.mkdir(parents=True, exist_ok=True)
+    for staged in (result.iso_paths if result else []):
+        iso_path = ISO_OUT / staged.name
+        shutil.move(str(staged), iso_path)
         iso_files.append(iso_path)
         print(f"    → {iso_path.name} ({iso_path.stat().st_size:,} bytes)")
 

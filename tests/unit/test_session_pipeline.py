@@ -1383,7 +1383,13 @@ class TestAbortSession:
 
         # A stranded volume from a pre-fix crash window: volume + pack
         # links exist, but no session_volumes row.
-        manifest = orch.prepare()
+        result = orch.stage()
+        (manifest,) = result.manifests
+        conn.execute(
+            "DELETE FROM session_volumes WHERE session_id = ?",
+            (result.session_id,),
+        )
+        conn.commit()
         summary = orch.abort_volume(manifest.volume_label)
 
         assert summary.volumes_deleted == 1
@@ -1870,36 +1876,3 @@ class TestSessionManifestAndReceipts:
                 data = json.load(f)
             locations_seen.add(data["location"])
         assert locations_seen == {"Home_Shelf", "Offsite_Safe"}
-
-
-# =========================================================================
-# Backward Compatibility Tests (legacy prepare/execute still works)
-# =========================================================================
-
-
-class TestLegacyPrepareExecute:
-    """Verify the existing prepare()/execute() API still works."""
-
-    def test_prepare_still_works(self, env):
-        """Legacy prepare() still creates a single-volume manifest."""
-        orch = env["orch"]
-        manifest = orch.prepare()
-
-        assert manifest.volume_label.startswith("TEST_")
-        assert manifest.total_data_bytes > 0
-        assert len(manifest.selected_packs) > 0
-
-    def test_execute_still_works(self, env):
-        """Legacy execute() still creates ISO and finalizes volume."""
-        orch = env["orch"]
-        manifest = orch.prepare()
-        vol = orch.execute(manifest, skip_burn=True)
-
-        assert vol.status == "VERIFIED"
-
-    def test_abort_still_works(self, env):
-        """Legacy abort() still cleans up."""
-        orch = env["orch"]
-        manifest = orch.prepare()
-        orch.abort(manifest)
-        assert not manifest.staging_path.exists()
