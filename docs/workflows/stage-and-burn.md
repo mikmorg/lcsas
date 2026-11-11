@@ -82,16 +82,35 @@ The end-to-end flow inside a single session:
      `TEST_*` media), `write_start_here`, `write_key_info`,
      `write_config_summary`, `write_disc_care`.
    - `xorriso create_iso` masters the staging tree → ISO
-     (`SubprocessXorrisoRunner.create_iso`).
+     (`SubprocessXorrisoRunner.create_iso`). The ISO is built under the
+     working name `<label>.unfinished` and keeps it until the last step
+     below (#665).
    - If the media type carries non-zero `ecc_overhead_pct` (i.e. all
      production media), `dvdisaster -mRS03 -c` augments the ISO
      in-place via a temporary copy + atomic rename
      (`SubprocessDVDisasterRunner.augment_iso`; `LcsasEccRunner` is the
      dvdisaster-free fallback, FMT-01). Test media (`TEST_TINY`) is
      implicitly skipped — see `MediaType.ecc_overhead_pct`.
+   - Before mastering, the staging tree (packs + disc metadata) must fit
+     in `media_type.usable_bytes`, the capacity less the ECC share. It
+     only fails when the disc metadata outgrew `metadata_reserve_mb`
+     (#674).
+   - Before ECC, the RS03 redundancy is computed from the ISO size: RS03
+     pads the image to the smallest fitting medium, and the padding is
+     the parity. Below 5 % (`MIN_EFFECTIVE_REDUNDANCY_PCT`) the stage
+     fails and names the volume and the percentage (#674). This also
+     catches a small last volume that lands just under a smaller rung
+     (a 4.6 GB ISO pads to a DVD, not to a BD).
+     `lcsas stage --allow-low-redundancy` stages it anyway and records
+     the percentage as a `NOTE` event on the volume. Not recommended.
    - Post-ECC validation: rejects an ISO larger than
      `media_type.capacity_bytes`.
-   - `sha256_file(iso)` is computed and stored on the session-volume row.
+   - `sha256_file(iso)` and the ISO's length are stored on the
+     session-volume row. Only then is the ISO renamed to `<label>.iso`.
+     A stage killed before this point (during ECC, say) leaves no
+     `<label>.iso`, and the volume's hash stays empty. Such a volume is
+     *incomplete*: `lcsas status` says so, and `lcsas burn --session`
+     refuses it. Run `lcsas session abort <id>`, then `lcsas stage` again.
 6. **Write session manifest** — `session.json` lists volume ids, labels,
    uuids, ISO paths, and pack row numbers (`pack_ids`)
    (`BurnOrchestrator.stage`).
@@ -133,8 +152,14 @@ machines, or when staging in advance for an unattended burn.
   (`--config`, `--db`, `--lock-timeout`, `--verbose`) come **before** the
   subcommand, e.g. `lcsas --config <path> stage ...`.
 - Initialised catalog (`lcsas init`).
-- Registered repositories (`lcsas repo add`) and a recent `lcsas scan` so the
-  catalog reflects current mirror state.
+- Registered repositories (`lcsas repo add`). A recent `lcsas scan` is
+  good practice, but stage no longer depends on it: before planning, it
+  lists each mirror's pack files and registers any the catalog does not
+  know yet, as `lcsas scan` does (#656). A disc carries each mirror's
+  snapshot files as they are at staging time, so their packs must be in
+  the plan. Stage does not mark pruned packs; it names `lcsas scan` for
+  that. If a mirror cannot be read completely, stage stops and names
+  `lcsas scan`. `--dry-run` only reports the unscanned pack files.
 - `xorriso ≥ 1.4.0` on `PATH`. For production media (any `MediaType`
   with `ecc_overhead_pct > 0`), `dvdisaster ≥ 0.79` is also required.
   Version checks happen lazily inside `BurnOrchestrator.execute`, but
@@ -162,9 +187,13 @@ machines, or when staging in advance for an unattended burn.
    as a volume event. Without it, an `EscrowDriftError` aborts the stage so a
    disc never prints share instructions that contradict the real split
    (`cmd_stage`).
-7. `--clean --session <id|latest>` (optionally `--force`) — clean up a staged
+7. `--allow-low-redundancy` — stage a volume even when its RS03
+   redundancy would be below 5 %, or its content exceeds the medium's
+   usable bytes (#674). The percentage is recorded as a `NOTE` event on
+   the volume. Not recommended.
+8. `--clean --session <id|latest>` (optionally `--force`) — clean up a staged
    session rather than staging anything new (see "Cleaning a session" below).
-8. Internally: `orch.stage(...)` → `_gather_packs_for_staging` →
+9. Internally: `orch.stage(...)` → `_gather_packs_for_staging` →
    `_multi_bin_pack` → per-volume `_stage_single_volume`
    (`cmd_stage`, `BurnOrchestrator.stage`).
 
@@ -545,7 +574,11 @@ Volume statuses (set by `update_status` / `mark_closed`):
 - **`STAGING`** — set by `create_volume` during `_stage_single_volume`.
   Also where a volume falls back if `execute` or `burn_session` raises
   (`BurnOrchestrator._stage_single_volume`, `BurnOrchestrator.burn_session`).
-- **`BURNING`** — set immediately before `xorriso burn_iso`.
+- **`BURNING`** — set immediately before `xorriso burn_iso`. A burn
+  killed outright (power loss, `kill -9`) leaves the volume here. The next
+  `lcsas burn --session` puts a BURNING volume with no disc recorded back
+  to `STAGING` and burns it, and it checks this before it asks for a
+  blank disc (#668).
 - **`BURNED`** — set when a burn completes but post-burn `verify_disc`
   fails. The volume holds at `BURNED` so the owner can investigate
   (`BurnOrchestrator.burn_session`).
@@ -558,16 +591,20 @@ Volume statuses (set by `update_status` / `mark_closed`):
 
 The pipeline is interrupt-safe in three places:
 
-1. **Inside `stage()`** — if the process dies after some volumes are staged
-   but before all are written, the partially-built session remains in
-   `STAGED` with some volumes in `STAGING`. Re-running `lcsas stage` will
-   create a **new** session for the still-unarchived packs (the
-   partial volumes' packs are linked but the volumes are still `STAGING`
-   so `get_unarchived_packs` excludes them via `volume_packs`). Today
-   there is no "resume this STAGED session" command; the recommended
-   fix is `lcsas stage --clean --session <id>` to discard the
-   partial session (`cmd_stage`, `BurnOrchestrator.clean_session`) and then
-   re-stage.
+1. **Inside `stage()`** — if the process dies after some volumes are
+   staged, those volumes stay in `STAGING` with their finished ISOs in
+   the staging area. The volume being built when it died is rolled back
+   on Ctrl-C. If the process was killed outright, that volume stays
+   behind with an empty ISO hash, and `lcsas status` lists it as
+   INCOMPLETE (#665). A second `lcsas stage` does **not** pick the packs
+   of a volume whose finished ISO is waiting; it names the waiting
+   session and stages only the other packs (#672). If every unarchived
+   pack is waiting, it stops with "No packs need staging" and names the
+   session. There is no "resume this session" command. Either burn the
+   waiting volumes with `lcsas burn --session <id>`, or discard the
+   session with `lcsas session abort <id>` (`cmd_session_abort`,
+   `BurnOrchestrator.abort_session`) and stage again. An INCOMPLETE
+   volume must always be discarded this way.
 2. **Inside `burn_session()` between volumes** — if volume 3 of 5 fails,
    volumes 1-2 are `VERIFIED`, volume 3 is back to `STAGING`, volumes 4-5
    are still `STAGING`, session is `PARTIAL`. **Resume** by re-running
@@ -580,8 +617,9 @@ The pipeline is interrupt-safe in three places:
    owner currently has to manually identify the failed volume and
    re-stage just that volume; this is a documented sharp edge.
 3. **Inside a single volume's burn** — if `xorriso burn_iso` or
-   `verify_disc` raises, the volume transitions back to `STAGING` and the
-   exception propagates (`BurnOrchestrator.burn_session`). The
+   `verify_disc` raises, or the owner presses Ctrl-C, the volume
+   transitions back to `STAGING` and the exception propagates
+   (`BurnOrchestrator.burn_session`, #668). The
    ISO file is **not** deleted unless verify passed
    (`BurnOrchestrator.burn_session`), so re-running
    `lcsas burn --session <id>` will retry that volume with the same ISO.

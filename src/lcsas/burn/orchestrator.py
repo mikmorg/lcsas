@@ -33,6 +33,7 @@ from lcsas.db.key_escrow import (
     get_split_for_repo,
     recorded_splits,
 )
+from lcsas.db.label_mark import label_seq, next_label_seq, raise_label_high_water
 from lcsas.db.locations import ensure_location
 from lcsas.db.models import Pack, SessionVolume, Volume
 from lcsas.db.queries import get_unarchived_or_missing_at_location, get_unarchived_packs
@@ -52,12 +53,16 @@ from lcsas.db.volumes import (
     create_volume,
     delete_volume,
     get_volume_by_id,
-    list_volumes,
     mark_closed,
     update_status,
     update_used_bytes,
 )
-from lcsas.ecc.dvdisaster import DVDisasterRunner, smallest_fitting_medium_bytes
+from lcsas.ecc.dvdisaster import (
+    MIN_EFFECTIVE_REDUNDANCY_PCT,
+    DVDisasterRunner,
+    smallest_fitting_medium_bytes,
+)
+from lcsas.exceptions import StagingError
 from lcsas.iso.xorriso import MediaStatus, XorrisoRunner
 from lcsas.staging.builder import MirrorUnavailableError, StagingBuilder
 from lcsas.staging.metadata import HolographicInjector
@@ -68,10 +73,34 @@ from lcsas.utils.labels import (
     generate_session_id,
     generate_uuid,
     generate_volume_label,
-    next_seq_num,
 )
 
 _logger = logging.getLogger(__name__)
+
+
+class LowRedundancyError(StagingError):
+    """A volume would carry too little RS03 parity (#674)."""
+
+
+class NothingToStageError(StagingError, ValueError):
+    """Every unarchived pack already waits on a staged volume (#672)."""
+
+
+def _describe_waiting(held: dict[str, list[str]]) -> str:
+    """``LABEL, LABEL in session S; ...`` for the waiting-volume messages."""
+    return "; ".join(
+        f"{', '.join(labels)} in session {sid}"
+        for sid, labels in sorted(held.items())
+    )
+
+
+def unfinished_iso_path(iso_path: Path) -> Path:
+    """Working name of an ISO that is still being mastered or augmented (#665).
+
+    ``<label>.iso`` becomes ``<label>.unfinished``.  Nothing looks for this
+    name: it is renamed to ``<label>.iso`` only once the ISO is finished.
+    """
+    return iso_path.with_suffix(".unfinished")
 
 
 @dataclass
@@ -86,6 +115,10 @@ class BurnManifest:
     total_data_bytes: int
     staging_path: Path
     iso_path: Path | None = None
+    # SHA-256 and byte length of the finished (post-ECC) ISO, recorded on
+    # the session volume before the ISO gets its final name (#665).
+    iso_sha256: str = ""
+    iso_size_bytes: int | None = None
 
 
 @dataclass
@@ -145,6 +178,7 @@ class BurnOrchestrator:
         device_reader: Callable[[str, int], str] = read_device_sha256,
         allow_escrow_drift: bool = False,
         prompt: OperatorPrompt | None = None,
+        allow_low_redundancy: bool = False,
     ) -> None:
         self._config = config
         self._conn = conn
@@ -161,6 +195,9 @@ class BurnOrchestrator:
         # KEY-08 escape hatch: skip the split drift abort (logged as a
         # volume event on each staged volume).  For multi-config edge cases.
         self._allow_escrow_drift = allow_escrow_drift
+        # #674 escape hatch: stage a volume whose RS03 redundancy is below
+        # MIN_EFFECTIVE_REDUNDANCY_PCT (recorded as a volume event).
+        self._allow_low_redundancy = allow_low_redundancy
 
     def prepare(
         self,
@@ -233,11 +270,7 @@ class BurnOrchestrator:
         )
 
         # 3. Generate volume identity
-        existing_labels = [
-            v.label for v in
-            list_volumes(self._conn)
-        ]
-        seq = next_seq_num(existing_labels, self._config.label_prefix)
+        seq = next_label_seq(self._conn, self._config.label_prefix)  # #676
         vol_label = generate_volume_label(
             self._config.label_prefix, mt.label_name, seq
         )
@@ -517,6 +550,11 @@ class BurnOrchestrator:
             status="STAGING",
             commit=False,
         )
+        # #676: remember the label number in the same transaction, so it
+        # is never issued again even if this volume is later deleted.
+        issued = label_seq(vol_label)
+        if issued is not None:
+            raise_label_high_water(self._conn, issued)
 
         pack_ids = [p.pack_id for p in selected_packs]
         bulk_link_packs(self._conn, volume.volume_id, pack_ids, commit=False)
@@ -594,45 +632,99 @@ class BurnOrchestrator:
 
             # 6. Optionally create ISO + ECC
             iso_path: Path | None = None
+            iso_sha256 = ""
+            iso_size_bytes: int | None = None
             if iso_output is not None:
                 # Pre-flight: verify staging dir fits in the target media.
                 from lcsas.utils.fs import dir_size_bytes
                 estimated_bytes = dir_size_bytes(staging_root)
+                # #674: the content must leave the medium's ECC share free.
+                # Packs are planned against usable_bytes minus the metadata
+                # reserve, so this trips when the disc metadata outgrew
+                # metadata_reserve_mb.  Checked before mastering.
+                if (estimated_bytes > media_type.usable_bytes
+                        and not self._allow_low_redundancy):
+                    raise LowRedundancyError(
+                        f"Staging directory for {vol_label} is "
+                        f"{estimated_bytes:,} bytes, more than the "
+                        f"{media_type.usable_bytes:,} usable bytes of "
+                        f"{media_type.name} (its capacity less the "
+                        f"{media_type.ecc_overhead_pct}% kept for error "
+                        f"correction). The disc metadata has probably "
+                        f"outgrown metadata_reserve_mb.",
+                        recovery_hint=(
+                            "Raise metadata_reserve_mb in lcsas.toml and "
+                            "stage again, or pass --allow-low-redundancy "
+                            "to stage it anyway (NOT recommended)."
+                        ),
+                    )
                 if estimated_bytes > media_type.capacity_bytes:
                     raise ValueError(
                         f"Staging directory for {vol_label} is too large: "
                         f"{estimated_bytes:,} bytes > {media_type.capacity_bytes:,} bytes "
                         f"capacity ({media_type.name}). Reduce pack count or use larger media."
                     )
+                # #665: master and augment under a working name.  The ISO
+                # gets its final name <label>.iso only once ECC and the
+                # size check have passed and its hash is recorded, so a
+                # stage killed part-way (SIGTERM, power loss) never leaves
+                # a finished-looking ISO without RS03 data.
+                work_iso = unfinished_iso_path(iso_output)
                 self._xorriso.create_iso(
-                    staging_root, iso_output, vol_label,
+                    staging_root, work_iso, vol_label,
                     expected_bytes=estimated_bytes,
                 )
-                iso_path = iso_output
 
                 if media_type.ecc_overhead_pct > 0:
+                    self._check_redundancy(
+                        work_iso, vol_label, volume.volume_id,
+                    )
                     self._dvdisaster.augment_iso(
-                        iso_path, self._config.default_ecc_redundancy_pct,
+                        work_iso, self._config.default_ecc_redundancy_pct,
                     )
 
                 # 7. Validate ISO size against media capacity  [O4]
-                if not iso_path.exists():
+                if not work_iso.exists():
                     raise FileNotFoundError(
-                        f"ISO not created by xorriso: {iso_path}. "
+                        f"ISO not created by xorriso: {work_iso}. "
                         f"Check xorriso output for errors."
                     )
-                iso_size = iso_path.stat().st_size
+                iso_size = work_iso.stat().st_size
                 if iso_size > media_type.capacity_bytes:
                     raise ValueError(
-                        f"ISO {iso_path.name} is {iso_size:,} bytes, exceeds "
+                        f"ISO {iso_output.name} is {iso_size:,} bytes, exceeds "
                         f"{media_type.name} capacity of "
                         f"{media_type.capacity_bytes:,} bytes"
                     )
+
+                # 8. Record the hash and length, THEN give the ISO its
+                # final name: a <label>.iso on disk always has its hash
+                # on record (an empty hash means staging never finished).
+                # The length is what device read-back verification hashes
+                # against once the ISO itself is cleaned up (BURN-04).
+                iso_sha256 = sha256_file(work_iso)
+                iso_size_bytes = iso_size
+                if session_id is not None:
+                    update_session_volume_iso(
+                        self._conn,
+                        session_id=session_id,
+                        volume_id=volume.volume_id,
+                        iso_path=str(iso_output),
+                        iso_sha256=iso_sha256,
+                        iso_size_bytes=iso_size_bytes,
+                    )
+                os.replace(work_iso, iso_output)
+                iso_path = iso_output
         except BaseException:
             self._conn.rollback()  # drop any uncommitted partial state
             # Removes volume_packs links and the session_volumes row too,
             # so the packs reappear in get_unarchived_packs().
             delete_volume(self._conn, volume.volume_id)
+            if iso_output is not None:
+                # The unfinished ISO is never burnable; free its space.
+                import contextlib
+                with contextlib.suppress(OSError):
+                    unfinished_iso_path(iso_output).unlink(missing_ok=True)
             raise
 
         return BurnManifest(
@@ -644,6 +736,51 @@ class BurnOrchestrator:
             total_data_bytes=total_bytes,
             staging_path=staging_root,
             iso_path=iso_path,
+            iso_sha256=iso_sha256,
+            iso_size_bytes=iso_size_bytes,
+        )
+
+    def _check_redundancy(
+        self, iso: Path, vol_label: str, volume_id: int,
+    ) -> None:
+        """Refuse an ISO whose RS03 redundancy would be thin (#674).
+
+        RS03 pads the image to the smallest fitting medium and the padding
+        is the parity, so the redundancy is known before dvdisaster runs.
+        Below MIN_EFFECTIVE_REDUNDANCY_PCT the stage fails, unless
+        ``allow_low_redundancy`` is set: then the percentage is recorded
+        as a NOTE event on the volume.
+        """
+        iso_size = iso.stat().st_size
+        if iso_size <= 0:
+            return
+        try:
+            padded = smallest_fitting_medium_bytes(iso_size)
+        except ValueError:
+            return  # too large for any medium: augment_iso reports it
+        pct = (padded - iso_size) / iso_size * 100
+        if pct >= MIN_EFFECTIVE_REDUNDANCY_PCT:
+            return
+        detail = (
+            f"RS03 effective redundancy {pct:.1f}% is below the "
+            f"{MIN_EFFECTIVE_REDUNDANCY_PCT:.0f}% floor (ISO {iso_size:,} "
+            f"bytes, padded to {padded:,})"
+        )
+        if not self._allow_low_redundancy:
+            raise LowRedundancyError(
+                f"Volume {vol_label}: {detail}. This disc would have thin "
+                f"protection against bit-rot.",
+                recovery_hint=(
+                    "Stage fewer packs per volume or use a larger medium. "
+                    "Pass --allow-low-redundancy to stage it anyway (NOT "
+                    "recommended); the percentage is recorded on the volume."
+                ),
+            )
+        _logger.warning("Volume %s: %s. Staging anyway "
+                        "(--allow-low-redundancy).", vol_label, detail)
+        add_event(
+            self._conn, volume_id, "NOTE",
+            detail=f"{detail}; staged with --allow-low-redundancy",
         )
 
     def _format_preflight(self, repo_ids: list[str]) -> None:
@@ -834,7 +971,29 @@ class BurnOrchestrator:
             allowed = set(pack_sha256s)
             packs_to_stage = [p for p in packs_to_stage if p.sha256 in allowed]
 
+        # #672: plain stage leaves out packs whose disc is on its way: a
+        # never-burned volume whose finished ISO waits in the staging area.
+        held: dict[str, list[str]] = {}
+        if for_location is None:
+            packs_to_stage, held = self._hold_back_waiting(packs_to_stage)
+            if held and packs_to_stage:
+                logger.warning(
+                    "Not staging packs that are already on volumes waiting "
+                    "to be burned: %s. Burn them with 'lcsas burn --session "
+                    "<id>', or 'lcsas session abort <id>' to stage their "
+                    "packs again.", _describe_waiting(held),
+                )
+
         if not packs_to_stage:
+            if held:
+                raise NothingToStageError(
+                    "No packs need staging: every unarchived pack is on a "
+                    f"volume waiting to be burned ({_describe_waiting(held)}).",
+                    recovery_hint=(
+                        "lcsas burn --session <id> --location <name>, or "
+                        "lcsas session abort <id> to discard the waiting ISOs."
+                    ),
+                )
             raise ValueError("No packs need staging.")
 
         # 2. Bin-pack into multiple volumes
@@ -922,8 +1081,9 @@ class BurnOrchestrator:
         manifests: list[BurnManifest] = []
         iso_paths: list[Path] = []
 
-        existing_labels = [v.label for v in list_volumes(self._conn)]
-        seq = next_seq_num(existing_labels, self._config.label_prefix)
+        # #676: above every label number ever issued, not only those of
+        # the volumes still in the catalog.
+        seq = next_label_seq(self._conn, self._config.label_prefix)
 
         for i, (selected_packs, total_bytes) in enumerate(volume_plans):
             vol_label = generate_volume_label(
@@ -936,7 +1096,8 @@ class BurnOrchestrator:
 
             # Stage, register, inject metadata, create ISO + ECC.  The
             # session_volumes row is committed atomically with the volume
-            # row inside _stage_single_volume (iso_sha256='' until hashed).
+            # row inside _stage_single_volume (iso_sha256='' until the
+            # finished ISO is hashed, just before it gets its final name).
             manifest = self._stage_single_volume(
                 selected_packs=selected_packs,
                 total_bytes=total_bytes,
@@ -950,25 +1111,9 @@ class BurnOrchestrator:
                 location=for_location,
             )
 
-            # Compute ISO hash + byte length and record them on the
-            # session volume.  The length is what device read-back
-            # verification hashes against once the ISO file itself has
-            # been cleaned up (BURN-04).
-            iso_hash = ""
-            iso_size: int | None = None
-            if manifest.iso_path and manifest.iso_path.exists():
-                iso_hash = sha256_file(manifest.iso_path)
-                iso_size = manifest.iso_path.stat().st_size
-
-            update_session_volume_iso(
-                self._conn,
-                session_id=session_id,
-                volume_id=manifest.volume_id,
-                iso_path=str(manifest.iso_path or iso_path),
-                iso_sha256=iso_hash,
-                iso_size_bytes=iso_size,
-            )
-
+            # The ISO hash + byte length are already on the session
+            # volume: _stage_single_volume records them before the ISO
+            # gets its final name (#665).
             manifests.append(manifest)
             if manifest.iso_path:
                 iso_paths.append(manifest.iso_path)
@@ -1020,6 +1165,9 @@ class BurnOrchestrator:
 
         # Ensure location exists
         ensure_location(self._conn, location)
+
+        # Check every volume BEFORE the first prompt for a blank disc.
+        self._burn_preflight(session_id, session_vols)
 
         receipts: list[BurnReceipt] = []
         total = len(session_vols)
@@ -1160,7 +1308,9 @@ class BurnOrchestrator:
                 # are idempotent re-writes of the same files.
                 self._write_durable_receipts([receipt], location)
 
-            except Exception as original_exc:
+            except BaseException as original_exc:
+                # BaseException: Ctrl-C during a burn must also return the
+                # volume to STAGING, or the next run finds it BURNING (#668).
                 try:
                     self._conn.rollback()
                     if not is_reburn:
@@ -1218,6 +1368,61 @@ class BurnOrchestrator:
         self._write_durable_receipts(receipts, location)
 
         return receipts
+
+    def _burn_preflight(
+        self, session_id: str, session_vols: list[SessionVolume],
+    ) -> None:
+        """Refuse a session that cannot be burned, before any disc prompt.
+
+        #665: a never-burned volume whose ISO hash is empty was staged by
+        a ``lcsas stage`` that did not finish (killed during mastering or
+        ECC).  Its ISO may lack RS03 data, so it is never burned.
+        """
+        from lcsas.exceptions import BurnError
+
+        incomplete: list[str] = []
+        for sv in session_vols:
+            vol = get_volume_by_id(self._conn, sv.volume_id)
+            if vol.status in ("STAGING", "BURNING") and not sv.iso_sha256:
+                incomplete.append(vol.label)
+        if incomplete:
+            raise BurnError(
+                f"Staging of {', '.join(incomplete)} did not finish: the "
+                f"ISO has no recorded hash and may lack its error-correction "
+                f"data. Nothing was burned.",
+                recovery_hint=(
+                    f"lcsas session abort {session_id}, then lcsas stage "
+                    f"again."
+                ),
+            )
+
+        # #668: a burn interrupted hard (killed, power loss) leaves its
+        # volume in BURNING.  With no disc recorded it was never burned
+        # as far as the catalog knows: put it back to STAGING so this run
+        # burns it.  BURNING with a disc recorded is not a state the burn
+        # writes; refuse it rather than guess.
+        from lcsas.db.volume_copies import get_copies_for_volume
+
+        for sv in session_vols:
+            vol = get_volume_by_id(self._conn, sv.volume_id)
+            if vol.status != "BURNING":
+                continue
+            if get_copies_for_volume(
+                self._conn, sv.volume_id, active_only=False,
+            ):
+                raise BurnError(
+                    f"Volume {vol.label} is BURNING but already has a disc "
+                    f"recorded. Nothing was burned.",
+                    recovery_hint=(
+                        f"Check it with 'lcsas catalog reconcile' and "
+                        f"'lcsas verify {vol.label} --disc'."
+                    ),
+                )
+            _logger.warning(
+                "Volume %s was left BURNING by an interrupted burn; "
+                "resetting it to STAGING and burning it again.", vol.label,
+            )
+            update_status(self._conn, sv.volume_id, "STAGING")
 
     def _assert_blank_media(self, device: str, label: str) -> None:
         """Refuse to burn onto a disc that already carries data (FUP-01).
@@ -1587,6 +1792,69 @@ class BurnOrchestrator:
             packs = [p for p in packs if p.repo_id in repo_ids]
 
         return packs
+
+    def _hold_back_waiting(
+        self, packs: list[Pack],
+    ) -> tuple[list[Pack], dict[str, list[str]]]:
+        """Drop the packs that sit on a volume waiting to be burned (#672).
+
+        A volume is waiting when it was never burned (STAGING/BURNING),
+        its staging finished (the ISO hash is recorded, #665) and its ISO
+        is still in the staging area.  As for ``stage --for-location``
+        (#642), a volume whose disc failed verification does not hold its
+        packs back.  Returns the remaining packs and the waiting volumes'
+        labels per burn session.
+        """
+        from lcsas.db.sessions import staged_iso_present, staging_incomplete
+
+        rows = self._conn.execute(
+            """SELECT v.volume_id, v.label,
+                      (SELECT sv.session_id FROM session_volumes sv
+                       JOIN burn_sessions bs USING (session_id)
+                       WHERE sv.volume_id = v.volume_id
+                       ORDER BY bs.created_at DESC, sv.rowid DESC
+                       LIMIT 1) AS session_id
+               FROM volumes v
+               WHERE v.status IN ('STAGING', 'BURNING')
+                 AND NOT EXISTS (
+                     SELECT 1 FROM volume_events e
+                     WHERE e.volume_id = v.volume_id
+                       AND e.event_type = 'VERIFY_FAIL'
+                 )
+               ORDER BY v.label"""
+        ).fetchall()
+        waiting: dict[int, tuple[str, str]] = {}
+        for r in rows:
+            vid = int(r["volume_id"])
+            if r["session_id"] is None:
+                continue
+            if staging_incomplete(self._conn, vid):
+                continue
+            if not staged_iso_present(self._conn, vid):
+                continue
+            waiting[vid] = (str(r["label"]), str(r["session_id"]))
+        if not waiting:
+            return packs, {}
+
+        placeholders = ",".join("?" * len(waiting))
+        held_rows = self._conn.execute(
+            f"SELECT pack_id, volume_id FROM volume_packs "
+            f"WHERE volume_id IN ({placeholders})",
+            list(waiting),
+        ).fetchall()
+        holder = {int(r["pack_id"]): int(r["volume_id"]) for r in held_rows}
+        remaining: list[Pack] = []
+        held: dict[str, list[str]] = {}
+        for p in packs:
+            on_volume = holder.get(p.pack_id)
+            if on_volume is None:
+                remaining.append(p)
+                continue
+            label, session_id = waiting[on_volume]
+            labels = held.setdefault(session_id, [])
+            if label not in labels:
+                labels.append(label)
+        return remaining, held
 
     def _multi_bin_pack(
         self,
