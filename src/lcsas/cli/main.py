@@ -268,6 +268,13 @@ def build_parser() -> argparse.ArgumentParser:
                               "Logged as a volume event. For multi-config "
                               "edge cases only — discs may print share "
                               "instructions that do not match the real split.")
+    stage_p.add_argument("--allow-low-redundancy", action="store_true",
+                         default=False,
+                         help="Stage a volume even if its RS03 error "
+                              "correction would be below the 5%% floor, or "
+                              "its content exceeds the medium's usable "
+                              "bytes. Recorded as a volume event. NOT "
+                              "recommended.")
 
     # --- burn-iso ---
     burniso_p = subparsers.add_parser(
@@ -2118,6 +2125,9 @@ def cmd_stage(args: argparse.Namespace) -> int:
                 SubprocessXorrisoRunner(tmpdir=config.staging_path),
                 SubprocessDVDisasterRunner(tmpdir=config.staging_path),
                 allow_escrow_drift=getattr(args, "allow_escrow_drift", False),
+                allow_low_redundancy=getattr(
+                    args, "allow_low_redundancy", False,
+                ),
             )
 
             if args.clean:

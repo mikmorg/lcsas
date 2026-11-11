@@ -57,7 +57,11 @@ from lcsas.db.volumes import (
     update_status,
     update_used_bytes,
 )
-from lcsas.ecc.dvdisaster import DVDisasterRunner, smallest_fitting_medium_bytes
+from lcsas.ecc.dvdisaster import (
+    MIN_EFFECTIVE_REDUNDANCY_PCT,
+    DVDisasterRunner,
+    smallest_fitting_medium_bytes,
+)
 from lcsas.exceptions import StagingError
 from lcsas.iso.xorriso import MediaStatus, XorrisoRunner
 from lcsas.staging.builder import MirrorUnavailableError, StagingBuilder
@@ -73,6 +77,10 @@ from lcsas.utils.labels import (
 )
 
 _logger = logging.getLogger(__name__)
+
+
+class LowRedundancyError(StagingError):
+    """A volume would carry too little RS03 parity (#674)."""
 
 
 class NothingToStageError(StagingError, ValueError):
@@ -171,6 +179,7 @@ class BurnOrchestrator:
         device_reader: Callable[[str, int], str] = read_device_sha256,
         allow_escrow_drift: bool = False,
         prompt: OperatorPrompt | None = None,
+        allow_low_redundancy: bool = False,
     ) -> None:
         self._config = config
         self._conn = conn
@@ -187,6 +196,9 @@ class BurnOrchestrator:
         # KEY-08 escape hatch: skip the split drift abort (logged as a
         # volume event on each staged volume).  For multi-config edge cases.
         self._allow_escrow_drift = allow_escrow_drift
+        # #674 escape hatch: stage a volume whose RS03 redundancy is below
+        # MIN_EFFECTIVE_REDUNDANCY_PCT (recorded as a volume event).
+        self._allow_low_redundancy = allow_low_redundancy
 
     def prepare(
         self,
@@ -626,6 +638,26 @@ class BurnOrchestrator:
                 # Pre-flight: verify staging dir fits in the target media.
                 from lcsas.utils.fs import dir_size_bytes
                 estimated_bytes = dir_size_bytes(staging_root)
+                # #674: the content must leave the medium's ECC share free.
+                # Packs are planned against usable_bytes minus the metadata
+                # reserve, so this trips when the disc metadata outgrew
+                # metadata_reserve_mb.  Checked before mastering.
+                if (estimated_bytes > media_type.usable_bytes
+                        and not self._allow_low_redundancy):
+                    raise LowRedundancyError(
+                        f"Staging directory for {vol_label} is "
+                        f"{estimated_bytes:,} bytes, more than the "
+                        f"{media_type.usable_bytes:,} usable bytes of "
+                        f"{media_type.name} (its capacity less the "
+                        f"{media_type.ecc_overhead_pct}% kept for error "
+                        f"correction). The disc metadata has probably "
+                        f"outgrown metadata_reserve_mb.",
+                        recovery_hint=(
+                            "Raise metadata_reserve_mb in lcsas.toml and "
+                            "stage again, or pass --allow-low-redundancy "
+                            "to stage it anyway (NOT recommended)."
+                        ),
+                    )
                 if estimated_bytes > media_type.capacity_bytes:
                     raise ValueError(
                         f"Staging directory for {vol_label} is too large: "
@@ -644,6 +676,9 @@ class BurnOrchestrator:
                 )
 
                 if media_type.ecc_overhead_pct > 0:
+                    self._check_redundancy(
+                        work_iso, vol_label, volume.volume_id,
+                    )
                     self._dvdisaster.augment_iso(
                         work_iso, self._config.default_ecc_redundancy_pct,
                     )
@@ -703,6 +738,49 @@ class BurnOrchestrator:
             iso_path=iso_path,
             iso_sha256=iso_sha256,
             iso_size_bytes=iso_size_bytes,
+        )
+
+    def _check_redundancy(
+        self, iso: Path, vol_label: str, volume_id: int,
+    ) -> None:
+        """Refuse an ISO whose RS03 redundancy would be thin (#674).
+
+        RS03 pads the image to the smallest fitting medium and the padding
+        is the parity, so the redundancy is known before dvdisaster runs.
+        Below MIN_EFFECTIVE_REDUNDANCY_PCT the stage fails, unless
+        ``allow_low_redundancy`` is set: then the percentage is recorded
+        as a NOTE event on the volume.
+        """
+        iso_size = iso.stat().st_size
+        if iso_size <= 0:
+            return
+        try:
+            padded = smallest_fitting_medium_bytes(iso_size)
+        except ValueError:
+            return  # too large for any medium: augment_iso reports it
+        pct = (padded - iso_size) / iso_size * 100
+        if pct >= MIN_EFFECTIVE_REDUNDANCY_PCT:
+            return
+        detail = (
+            f"RS03 effective redundancy {pct:.1f}% is below the "
+            f"{MIN_EFFECTIVE_REDUNDANCY_PCT:.0f}% floor (ISO {iso_size:,} "
+            f"bytes, padded to {padded:,})"
+        )
+        if not self._allow_low_redundancy:
+            raise LowRedundancyError(
+                f"Volume {vol_label}: {detail}. This disc would have thin "
+                f"protection against bit-rot.",
+                recovery_hint=(
+                    "Stage fewer packs per volume or use a larger medium. "
+                    "Pass --allow-low-redundancy to stage it anyway (NOT "
+                    "recommended); the percentage is recorded on the volume."
+                ),
+            )
+        _logger.warning("Volume %s: %s. Staging anyway "
+                        "(--allow-low-redundancy).", vol_label, detail)
+        add_event(
+            self._conn, volume_id, "NOTE",
+            detail=f"{detail}; staged with --allow-low-redundancy",
         )
 
     def _format_preflight(self, repo_ids: list[str]) -> None:

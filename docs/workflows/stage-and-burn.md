@@ -91,6 +91,18 @@ The end-to-end flow inside a single session:
      (`SubprocessDVDisasterRunner.augment_iso`; `LcsasEccRunner` is the
      dvdisaster-free fallback, FMT-01). Test media (`TEST_TINY`) is
      implicitly skipped — see `MediaType.ecc_overhead_pct`.
+   - Before mastering, the staging tree (packs + disc metadata) must fit
+     in `media_type.usable_bytes`, the capacity less the ECC share. It
+     only fails when the disc metadata outgrew `metadata_reserve_mb`
+     (#674).
+   - Before ECC, the RS03 redundancy is computed from the ISO size: RS03
+     pads the image to the smallest fitting medium, and the padding is
+     the parity. Below 5 % (`MIN_EFFECTIVE_REDUNDANCY_PCT`) the stage
+     fails and names the volume and the percentage (#674). This also
+     catches a small last volume that lands just under a smaller rung
+     (a 4.6 GB ISO pads to a DVD, not to a BD).
+     `lcsas stage --allow-low-redundancy` stages it anyway and records
+     the percentage as a `NOTE` event on the volume. Not recommended.
    - Post-ECC validation: rejects an ISO larger than
      `media_type.capacity_bytes`.
    - `sha256_file(iso)` and the ISO's length are stored on the
@@ -175,9 +187,13 @@ machines, or when staging in advance for an unattended burn.
    as a volume event. Without it, an `EscrowDriftError` aborts the stage so a
    disc never prints share instructions that contradict the real split
    (`cmd_stage`).
-7. `--clean --session <id|latest>` (optionally `--force`) — clean up a staged
+7. `--allow-low-redundancy` — stage a volume even when its RS03
+   redundancy would be below 5 %, or its content exceeds the medium's
+   usable bytes (#674). The percentage is recorded as a `NOTE` event on
+   the volume. Not recommended.
+8. `--clean --session <id|latest>` (optionally `--force`) — clean up a staged
    session rather than staging anything new (see "Cleaning a session" below).
-8. Internally: `orch.stage(...)` → `_gather_packs_for_staging` →
+9. Internally: `orch.stage(...)` → `_gather_packs_for_staging` →
    `_multi_bin_pack` → per-volume `_stage_single_volume`
    (`cmd_stage`, `BurnOrchestrator.stage`).
 
