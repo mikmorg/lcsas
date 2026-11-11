@@ -71,7 +71,10 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
 1. `lcsas --config PATH config check` — load and validate. (`cmd_config_check`, `src/lcsas/cli/main.py`)
    - Parser: `config` subparser in `build_parser()` (`src/lcsas/cli/main.py`).
    - Missing `--config` logs `--config is required for config check.` and returns 1.
-2. `load_config()` parses via `tomllib`, warns on unknown sections/keys, resolves relative paths, and builds a frozen `LCSASConfig`. (`src/lcsas/config/settings.py`)
+2. `load_config()` parses via `tomllib`, warns on unknown sections/keys, resolves relative paths, and builds a frozen `LCSASConfig`. (`src/lcsas/config/settings.py`) It stops with an error naming the key, for every command, when (#682):
+   - a known key has the wrong TOML type: strings must be quoted, numbers and `true`/`false` must not be (`key_split = "false"`, `key_threshold = "3"`, `metadata_reserve_mb = "100"`, `media_type = 25`, `label_prefix = 7` are all errors);
+   - `key_threshold`/`key_shares` (in `[defaults]`, or the pair a `[repos.<name>]` table makes by overriding either) is not `2 <= K <= N <= 16`, or `K = N = 1` for no split;
+   - two `[repos.<name>]` tables have the same `mirror_path`.
 3. `validate_config()` checks (`src/lcsas/config/settings.py`):
    - `mirror_base_path` exists and is a directory.
    - `staging_path` exists, is a directory, and is writable.
@@ -84,7 +87,7 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
 
 **Expected outcome:**
 - Valid: one `Configuration is valid.` log line, exit 0.
-- Invalid: one log line per error, exit 1. All errors reported in one pass.
+- Invalid: one log line per error, exit 1. All errors reported in one pass. A value the loader rejects (step 2) is reported as one `Invalid value in <file>: ...` line, with every wrong-type key in it, and no traceback.
 
 **Variant axes that apply:**
 - Media type: `defaults.media_type` gates `metadata_reserve_bytes` against `usable_bytes`; the test media type (`TEST_TINY`) is accepted (`MediaType` in `src/lcsas/config/media.py`).
