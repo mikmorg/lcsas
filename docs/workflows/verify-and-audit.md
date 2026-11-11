@@ -221,8 +221,8 @@ one place that decides it
 2. Dispatch: `args.command == "status"` → `cmd_status` (`src/lcsas/cli/main.py`).
 3. `cmd_status` opens an existing catalog via `_open_existing_catalog` (read-only; errors if uninitialized).
 4. If `--stale-copies`, delegate to `_print_stale_copies` (FMA-05) and return. If `--redundancy`, delegate to `_print_redundancy_report` (FMA-08) and return.
-5. Otherwise: query `get_archive_status_summary`, `list_volumes`, the lost volumes (`get_lost_volume_ids`), partial sessions, the FMA-08 single-disc volumes (`get_redundancy_report` with `min_copies=2`), per-volume "needs re-burn" events, and `find_stale_copies`.
-6. Print the pack-stats line, the per-volume table, and any **WARNING** lines: staged-never-burned packs, PARTIAL sessions, volumes needing re-burn, single-disc packs (→ `status --redundancy`), and stale discs (→ `status --stale-copies` / `verify --all --disc`).
+5. Otherwise: query `get_archive_status_summary`, `list_volumes`, the lost volumes (`get_lost_volume_ids`), partial sessions, the FMA-08 single-disc volumes (`get_redundancy_report` with `min_copies=2`), the "needs re-burn" locations (`_volumes_needing_reburn`: per volume and location, the newest of `VERIFY_PASS`, `VERIFY_FAIL` and `VERIFY_FAIL_REBURN` is a failure; other events do not count, #671), and `find_stale_copies`.
+6. Print the pack-stats line, the per-volume table, and any **WARNING** lines: staged-never-burned packs, PARTIAL sessions, volumes needing re-burn (with the next step: `lcsas stage --for-location <location>`, as the import message says; a volume listed there is not also listed as waiting to be burned), single-disc packs (→ `status --redundancy`), and stale discs (→ `status --stale-copies` / `verify --all --disc`).
 7. Return `0`.
 
 **Expected outcome:**
