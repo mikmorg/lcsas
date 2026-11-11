@@ -175,11 +175,25 @@ metadata_reserve_mb = 100
 [repos.family]
 mirror_path   = "/mnt/mirror/family"
 password_file = "/root/keys/family.key"
+# Optional, descriptive only: the folders backed up into this repository.
+sources       = ["/srv/family1", "/srv/family2"]
 
 [repos.personal]
 mirror_path   = "/mnt/mirror/personal"
 password_file = "/root/keys/personal.key"
+
+# Optional: the discs kept at one location. `lcsas stage --collection
+# bank` stages these repositories for Bank_Box on MDISC100, and holds
+# back a last volume that fills less than 90% of its pack space.
+[collections.bank]
+location     = "Bank_Box"
+media_type   = "MDISC100"
+min_fill_pct = 90
+repos        = ["family", "personal"]
 ```
+
+See [docs/workflows/collections.md](docs/workflows/collections.md) for
+collections and `lcsas status --json`.
 
 #### How LCSAS Passes Passwords to Rustic
 
