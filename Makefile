@@ -11,11 +11,12 @@ dev:
 lint:
 	ruff check src/ tests/
 
-# POSIX-sh lint for the recovery scripts an heir runs (#484).  A ratchet:
-# fails on any finding not in scripts/shellcheck_baseline.txt, and on a
-# baseline entry that no longer matches (lower it when you fix one).
+# shellcheck lint for the recovery scripts an heir runs (#484) and the meta
+# disc's bash drivers in src/lcsas/meta/assets/ (#689).  A ratchet: fails
+# on any finding not in scripts/shellcheck_baseline.txt, and on a baseline
+# entry that no longer matches (lower it when you fix one).
 shellcheck:
-	python3 scripts/shellcheck_gate.py recovery/scripts/*.sh
+	python3 scripts/shellcheck_gate.py recovery/scripts/*.sh src/lcsas/meta/assets/*.sh
 
 lint-fix:
 	ruff check --fix src/ tests/

@@ -111,14 +111,14 @@ class TestCmdInit:
 
 class TestCmdRepoAddEdges:
     def test_duplicate_repo_name_errors(self, tmp_path, capsys):
-        """Adding the same repo twice with same name; second should succeed
-        (generates new UUID)."""
+        """A second repository with the same name is refused (#685): it
+        would make every later ``--repo dup`` ambiguous."""
         db = tmp_path / "test.db"
         main(["init", "--db-path", str(db)])
         r1 = main(["--db", str(db), "repo", "add", "dup", "/p1"])
         r2 = main(["--db", str(db), "repo", "add", "dup", "/p2"])
         assert r1 == 0
-        assert r2 == 0
+        assert r2 == 1
 
 
 class TestCmdRepoListEdges:
@@ -368,6 +368,14 @@ def _fake_iso(path: Path, volid: str) -> Path:
     return path
 
 
+def _drive_holding(iso: Path, tmp_path: Path) -> str:
+    """A stand-in optical device: a file holding the burned image, which
+    burn-iso's read-back (#664) hashes like a real drive."""
+    drive = tmp_path / "drive.img"
+    drive.write_bytes(iso.read_bytes())
+    return str(drive)
+
+
 class TestCmdBurnIso:
     def test_burn_iso_missing_file(self, tmp_path, capsys):
         iso = tmp_path / "missing.iso"
@@ -390,7 +398,8 @@ class TestCmdBurnIso:
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.read_disc_volume_id",
                   return_value=iso.parent.name),
         ):
-            result = main(["burn-iso", str(iso)])
+            result = main(["burn-iso", str(iso),
+                           "--device", _drive_holding(iso, tmp_path)])
 
         assert result == 0
         mock_burn.assert_called_once()
@@ -428,7 +437,8 @@ class TestCmdBurnIso:
                   return_value="LCSAS_TINY_0007"),
         ):
             rc = main(["burn-iso", str(iso), "--emit-receipt", str(out),
-                       "--location", "Home"])
+                       "--location", "Home",
+                       "--device", _drive_holding(iso, tmp_path)])
         assert rc == 0
         data = json.loads((out / "LCSAS_TINY_0007_Home.json").read_text())
         assert data["volume_label"] == "LCSAS_TINY_0007"
@@ -464,7 +474,8 @@ class TestCmdBurnIso:
         ):
             result = main(["burn-iso", str(iso),
                            "--emit-receipt", str(out_dir),
-                           "--location", "Offsite_Safe"])
+                           "--location", "Offsite_Safe",
+                           "--device", _drive_holding(iso, tmp_path)])
 
         assert result == 0
         receipt_path = out_dir / "ARCHIVE_TEST_0001_Offsite_Safe.json"
@@ -496,7 +507,8 @@ class TestCmdBurnIso:
             result = main(["burn-iso", str(iso),
                            "--emit-receipt", str(out_file),
                            "--label", "EXPLICIT_LABEL",
-                           "--location", "Home"])
+                           "--location", "Home",
+                           "--device", _drive_holding(iso, tmp_path)])
 
         assert result == 0
         data = json.loads(out_file.read_text())
@@ -955,14 +967,17 @@ class TestCmdVerify:
         create_volume(conn, "VOL_MV", "u1", "BD25", 25e9, "Home", "BURNED")
         conn.close()
 
+        # #673: the volume has no disc recorded, so --location is needed.
         result = main(["--db", str(db), "verify", "VOL_MV",
-                        "--mark-verified", "--detail", "Verified on remote machine"])
+                        "--mark-verified", "--detail", "Verified on remote machine",
+                        "--location", "Home"])
         assert result == 0
 
         conn = get_connection(db)
         from lcsas.db.volumes import get_volume_by_label
         vol = get_volume_by_label(conn, "VOL_MV")
         assert vol.status == "VERIFIED"
+        assert vol.closed_at is not None
 
         from lcsas.db.volume_events import get_events_for_volume
         events = get_events_for_volume(conn, vol.volume_id, "VERIFY_PASS")

@@ -353,6 +353,8 @@ def test_tier3_failure_stderr_replayed(tmp_path: Path) -> None:
     recovery, pybin_dir = _make_tier3_fixture(tmp_path)
     (pybin_dir / "python3").write_text(textwrap.dedent("""\
         #!/bin/sh
+        # restore.sh first checks the interpreter runs (#714).
+        case "$1" in -c) exit 0 ;; esac
         echo "ImportError: No module named 'zstandard'" >&2
         exit 1
     """))

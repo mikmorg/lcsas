@@ -672,6 +672,7 @@ coverage-c-run:
 	        ../tests/recovery_hardening/test_tier1_auto_mount.py \
 	        ../tests/recovery_hardening/test_tier1_volume_label.py \
 	        ../tests/recovery_hardening/test_tier1_fault_handling.py \
+	        ../tests/recovery_hardening/test_tier1_unreadable_snapshot.py \
 	    || true
 	# Step 3b: exercise the LCSAS_STRESS_LOOKUPS diagnostic block in
 	# main.c (Linux-only) so coverage-c reports it.  ~1 s.  Uses the

@@ -45,12 +45,31 @@ def test_baseline_parser_ignores_comments(tmp_path):
 
 
 def test_committed_baseline_matches_the_tree(monkeypatch):
-    """The same check CI runs; skips where shellcheck isn't installed."""
+    """The same check CI runs (``make shellcheck``); skips where shellcheck
+    isn't installed."""
     if shutil.which("shellcheck") is None:
         pytest.skip("shellcheck not installed")
-    files = sorted(str(p.relative_to(REPO_ROOT))
-                   for p in (REPO_ROOT / "recovery" / "scripts").glob("*.sh"))
-    assert files, "derived file list must not be empty"
+    recovery = sorted(str(p.relative_to(REPO_ROOT))
+                      for p in (REPO_ROOT / "recovery" / "scripts").glob("*.sh"))
+    assets = sorted(str(p.relative_to(REPO_ROOT))
+                    for p in (REPO_ROOT / "src" / "lcsas" / "meta" / "assets").glob("*.sh"))
+    assert recovery and assets, "derived file lists must not be empty"
     monkeypatch.chdir(REPO_ROOT)
-    found = gate.run_shellcheck(files)
+    found = gate.run_shellcheck(recovery + assets)
     assert gate.compare(found, gate.load_baseline(gate.BASELINE)) == []
+
+
+def test_shell_dialect_follows_the_shebang(tmp_path):
+    """#689: the meta disc's bash drivers are linted as bash; the POSIX
+    recovery scripts, and anything without a bash shebang, as sh."""
+    cases = {
+        "env_bash.sh": ("#!/usr/bin/env bash\n", "bash"),
+        "bin_bash.sh": ("#!/bin/bash\n", "bash"),
+        "posix.sh": ("#!/bin/sh\n", "sh"),
+        "no_shebang.sh": ("echo hi\n", "sh"),
+        "comment_bash.sh": ("# bash, but not a shebang\n", "sh"),
+    }
+    for name, (first, _) in cases.items():
+        (tmp_path / name).write_text(first + "true\n")
+    got = {name: gate.shell_dialect(str(tmp_path / name)) for name in cases}
+    assert got == {name: want for name, (_, want) in cases.items()}

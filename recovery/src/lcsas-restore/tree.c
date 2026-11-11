@@ -62,15 +62,23 @@ int lcsas_tree_max_depth = 1000;
 
 /* Issue #192 — hardlink reconstruction.
  *
- * Restic records hardlinks via a per-node "inode" field: two file
- * nodes sharing the same nonzero inode value represent the same
- * hardlinked file.  Tier-2 (rustic restore) reconstructs them via
+ * Restic records hardlinks via the per-node "inode", "device_id" and
+ * "links" fields: two file nodes with links > 1 and the same nonzero
+ * (device_id, inode) pair represent the same hardlinked file.
+ *
+ * Issue #653 — the inode number alone is NOT a hardlink key.  rustic
+ * records "inode" on every file node, and a snapshot that spans more
+ * than one filesystem repeats inode numbers.  Keying on the inode
+ * alone turned unrelated files into link()s to whichever file was
+ * restored first (wrong content, exit 0).  Only nodes with links > 1
+ * enter the map, and the key is (device_id, inode); this also keeps
+ * the map as small as the number of hardlinked files.  Tier-2 (rustic restore) reconstructs them via
  * link(2); without doing the same, tier-1 emits a full content copy
  * for every name, which can multiply restored size by the link
  * factor (e.g. /usr/lib/firmware ~10x).
  *
  * The map is per-restore (not global): a flat array of
- * (inode, restored-path) pairs, populated as the recursion walks
+ * (device, inode, restored-path) triples, populated as the recursion walks
  * the tree.  Growth pattern mirrors blob_index_push in repo.c
  * (cap = 64, double).
  *
@@ -79,6 +87,7 @@ int lcsas_tree_max_depth = 1000;
  * a tier-1 binary whose Windows story is "best-effort").
  */
 typedef struct {
+    long long device;    /* "device_id" (0 when absent) */
     long long inode;
     char *path;          /* malloc'd; freed by hardlink_map_free */
 } hardlink_entry;
@@ -133,18 +142,20 @@ hardlink_map_free(hardlink_map *m)
  * small enough that an O(n) walk per node is cheaper than the alloc/
  * compare overhead of anything fancier. */
 static const char *
-hardlink_map_find(const hardlink_map *m, long long inode)
+hardlink_map_find(const hardlink_map *m, long long device, long long inode)
 {
     size_t i;
     if (!m) return NULL;
     for (i = 0; i < m->count; i++) {
-        if (m->entries[i].inode == inode) return m->entries[i].path;
+        if (m->entries[i].inode == inode && m->entries[i].device == device)
+            return m->entries[i].path;
     }
     return NULL;
 }
 
 static int
-hardlink_map_insert(hardlink_map *m, long long inode, const char *path)
+hardlink_map_insert(hardlink_map *m, long long device, long long inode,
+                    const char *path)
 {
     char *dup;
     size_t plen;
@@ -161,6 +172,7 @@ hardlink_map_insert(hardlink_map *m, long long inode, const char *path)
     dup = (char *)malloc(plen + 1);
     if (!dup) return -1;
     memcpy(dup, path, plen + 1);
+    m->entries[m->count].device = device;
     m->entries[m->count].inode = inode;
     m->entries[m->count].path = dup;
     m->count++;
@@ -181,6 +193,34 @@ decode_node_inode(const char *src, const lcsas_json_tok *toks,
     if (lcsas_json_decode_int(src, &toks[ino_i], &val) != 0) return -1;
     if (val == 0) return -1;
     *out = val;
+    return 0;
+}
+
+/* Issue #653 — the hardlink key of a file node.  Returns 0 and fills
+ * (*dev_out, *ino_out) only when the node is a hardlink candidate:
+ * "links" > 1 and a nonzero "inode".  "device_id" is optional (0 when
+ * absent).  Any field that is present but cannot be decoded makes the
+ * node a non-candidate, so a doubtful node gets its own content copy
+ * rather than a link to another file's content. */
+static int
+decode_node_hardlink_key(const char *src, const lcsas_json_tok *toks,
+                         long node_idx, long long *dev_out,
+                         long long *ino_out)
+{
+    long links_i = lcsas_json_obj_get(src, toks, node_idx, "links");
+    long dev_i;
+    long long links = 0;
+    long long dev = 0;
+    if (links_i < 0 || toks[links_i].type != LCSAS_JSON_NUMBER) return -1;
+    if (lcsas_json_decode_int(src, &toks[links_i], &links) != 0) return -1;
+    if (links <= 1) return -1;
+    if (decode_node_inode(src, toks, node_idx, ino_out) != 0) return -1;
+    dev_i = lcsas_json_obj_get(src, toks, node_idx, "device_id");
+    if (dev_i >= 0) {
+        if (toks[dev_i].type != LCSAS_JSON_NUMBER) return -1;
+        if (lcsas_json_decode_int(src, &toks[dev_i], &dev) != 0) return -1;
+    }
+    *dev_out = dev;
     return 0;
 }
 
@@ -525,18 +565,44 @@ restore_file_node(const char *repo_path,
             if (lcsas_json_decode_int(src, &toks[size_idx], &expected_size) == 0
                     && expected_size >= 0) {
                 struct stat st;
+                int same = 0;
                 if (stat(target_path, &st) == 0
                         && S_ISREG(st.st_mode)
                         && (long long)st.st_size == expected_size) {
+                    same = 1;
+#ifndef _WIN32
+                    /* Issue #661 — size alone does not prove the file
+                     * is this snapshot's file: a run of a DIFFERENT
+                     * snapshot into the same folder would keep the old
+                     * content of every same-size file.  A finished file
+                     * carries the node's mtime (applied last, below),
+                     * so require that too, to the second (some
+                     * filesystems drop sub-second precision).  Same
+                     * rule as rustic's default.  Windows tier 1 does
+                     * not restore mtimes, so it stays size-only. */
+                    {
+                        struct timespec nts[2];
+                        if (decode_node_mtime(src, toks, node_idx, nts) == 0
+                                && (long long)st.st_mtime
+                                       != (long long)nts[1].tv_sec) {
+                            same = 0;
+                        }
+                    }
+#endif
+                }
+                if (same) {
                     fprintf(stderr,
                             "[lcsas-restore] skipping already-restored: %s\n",
                             target_path);
 #ifndef _WIN32
                     if (hlmap) {
-                        long long ino = 0;
-                        if (decode_node_inode(src, toks, node_idx, &ino) == 0
-                                && hardlink_map_find(hlmap, ino) == NULL) {
-                            (void)hardlink_map_insert(hlmap, ino, target_path);
+                        long long dev = 0, ino = 0;
+                        if (decode_node_hardlink_key(src, toks, node_idx,
+                                                     &dev, &ino) == 0
+                                && hardlink_map_find(hlmap, dev, ino)
+                                       == NULL) {
+                            (void)hardlink_map_insert(hlmap, dev, ino,
+                                                      target_path);
                         }
                     }
 #endif
@@ -547,16 +613,18 @@ restore_file_node(const char *repo_path,
     }
 
 #ifndef _WIN32
-    /* Issue #192 — hardlink reconstruction.  If this node's inode
-     * matches one we've already restored in this snapshot, link()
+    /* Issue #192 — hardlink reconstruction.  If this node's
+     * (device_id, inode) key (links > 1 only, #653) matches one we've
+     * already restored in this snapshot, link()
      * to the previously-restored path instead of writing a fresh
      * content copy.  Falls through to the normal restore path if
      * the inode is missing, zero, unmapped, or the link() call
      * fails (best-effort: a failed link still gets a content copy). */
     if (hlmap) {
-        long long inode = 0;
-        if (decode_node_inode(src, toks, node_idx, &inode) == 0) {
-            const char *prior = hardlink_map_find(hlmap, inode);
+        long long device = 0, inode = 0;
+        if (decode_node_hardlink_key(src, toks, node_idx,
+                                     &device, &inode) == 0) {
+            const char *prior = hardlink_map_find(hlmap, device, inode);
             if (prior) {
                 /* Unlink any pre-existing target; link() refuses to
                  * overwrite, and we may be re-running over a stale
@@ -590,7 +658,8 @@ restore_file_node(const char *repo_path,
             } else {
                 /* First occurrence: record path so subsequent nodes
                  * with the same inode become link()s. */
-                (void)hardlink_map_insert(hlmap, inode, target_path);
+                (void)hardlink_map_insert(hlmap, device, inode,
+                                          target_path);
             }
         }
     }
@@ -618,6 +687,9 @@ restore_file_node(const char *repo_path,
         }
         final_posix_mode = mode_from_go_filemode(mode_value);
         fd = lcsas_create_file(target_path, final_posix_mode);
+        /* #654: errno now describes only what fails from here on (the
+         * resume stat and the hardlink unlink above leave ENOENT). */
+        if (fd >= 0) errno = 0;
     }
     if (fd < 0) {
         /* Issue #221 — classify ENOSPC / EDQUOT explicitly so the
@@ -790,6 +862,7 @@ tree_restore_recurse(const char *repo_path,
     long node_count, found = 0;
     long t;
     int rc = -1;
+    unsigned int dir_final_mode = 0755;  /* #654: applied after children */
 
     /* T1C-04: fail loud before the C stack overflows.  A SIGSEGV here
      * is indistinguishable from "the recovery software is broken" to a
@@ -918,10 +991,21 @@ tree_restore_recurse(const char *repo_path,
             }
 
             if (strcmp(type_buf, "file") == 0) {
+                errno = 0;
                 if (restore_file_node(repo_path, mk, ix,
                                       (char *)blob, toks, ntoks, t, node_path,
                                       locator, progress, hlmap) != 0) {
-                    fprintf(stderr, "file restore failed: %s\n", node_path);
+                    /* Issue #654 — name the system error when there is
+                     * one, so "permission denied" or "read-only file
+                     * system" is not hidden behind a bare failure. */
+                    int saved_errno = errno;
+                    if (saved_errno != 0) {
+                        fprintf(stderr, "file restore failed: %s (%s)\n",
+                                node_path, strerror(saved_errno));
+                    } else {
+                        fprintf(stderr, "file restore failed: %s\n",
+                                node_path);
+                    }
                     goto out;
                 }
             } else if (strcmp(type_buf, "dir") == 0) {
@@ -943,7 +1027,15 @@ tree_restore_recurse(const char *repo_path,
                 }
                 /* mkdir_p hardcodes 0700 for intermediates; the leaf
                  * directory's mode comes from the tree node's "mode"
-                 * field.  Match tier-2 (rustic) parity. */
+                 * field.  Match tier-2 (rustic) parity.
+                 *
+                 * Issue #654 — the node's mode is applied AFTER the
+                 * children are restored (below, with the mtime).  A
+                 * read-only directory (0555, 0500) chmod'ed first made
+                 * every child's create fail for a non-root user.  While
+                 * the children are written the directory is owner
+                 * rwx; this also re-opens a read-only directory left
+                 * by an earlier run, so a resume gets past it. */
                 {
                     long dmode_i = lcsas_json_obj_get((char *)blob, toks,
                                                      t, "mode");
@@ -953,9 +1045,12 @@ tree_restore_recurse(const char *repo_path,
                         (void)lcsas_json_decode_int((char *)blob,
                                                     &toks[dmode_i], &dmode_v);
                     }
+                    dir_final_mode = mode_from_go_filemode(dmode_v);
 #ifndef _WIN32
                     (void)chmod(node_path,
-                                (mode_t)mode_from_go_filemode(dmode_v));
+                                (mode_t)(dir_final_mode | 0700));
+#else
+                    (void)dir_final_mode;
 #endif
                 }
                 if (subtree_i >= 0
@@ -972,6 +1067,10 @@ tree_restore_recurse(const char *repo_path,
                     }
                 }
 #ifndef _WIN32
+                /* Issue #654 — final directory mode, now that every
+                 * child exists.  chmod does not touch mtime, but keep
+                 * it before utimensat for clarity. */
+                (void)chmod(node_path, (mode_t)dir_final_mode);
                 /* Issue #188 — apply dir mtime AFTER recursing into the
                  * subtree.  Otherwise creating children re-bumps the
                  * parent's mtime to the restore-time clock. */

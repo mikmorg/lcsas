@@ -33,9 +33,11 @@ from lcsas.restore._aes_pure import (
     key_schedule,
 )
 from lcsas.restore.restic_fallback import (
+    EXIT_READER_QUIT,
     IntegrityError,
     MasterKey,
     PurePythonRestorer,
+    RestoreAbortedError,
     _clamp_r,
     _constant_time_eq,
     _decrypt_authenticated,
@@ -390,6 +392,103 @@ class TestParseTimestamp:
     def test_microsecond_precision(self):
         ts = _parse_timestamp("2026-01-15T10:30:00.123456Z")
         assert isinstance(ts, float)
+
+    # #659: the UTC offset is kept, and a short fraction still parses.
+    @staticmethod
+    def _utc(*args: int) -> float:
+        from datetime import datetime, timezone
+        return datetime(*args, tzinfo=timezone.utc).timestamp()  # noqa: UP017
+
+    def test_offset_is_kept(self):
+        ts = _parse_timestamp("2026-01-02T03:04:05.123456789+02:00")
+        assert ts == self._utc(2026, 1, 2, 1, 4, 5, 123456)
+
+    def test_negative_offset_is_kept(self):
+        ts = _parse_timestamp("2026-01-02T03:04:05-05:00")
+        assert ts == self._utc(2026, 1, 2, 8, 4, 5)
+
+    def test_three_digit_fraction(self):
+        ts = _parse_timestamp("2026-01-02T03:04:05.123+02:00")
+        assert ts == self._utc(2026, 1, 2, 1, 4, 5, 123000)
+
+    def test_no_fraction_with_offset(self):
+        ts = _parse_timestamp("2026-01-02T03:04:05+02:00")
+        assert ts == self._utc(2026, 1, 2, 1, 4, 5)
+
+    def test_zulu_and_no_offset_are_utc(self):
+        want = self._utc(2026, 1, 2, 3, 4, 5, 500000)
+        assert _parse_timestamp("2026-01-02T03:04:05.5Z") == want
+        assert _parse_timestamp("2026-01-02T03:04:05.5") == want
+
+    @pytest.mark.parametrize("bad", ["", "garbage", "2026-01-02"])
+    def test_malformed_raises_value_error(self, bad):
+        with pytest.raises(ValueError):
+            _parse_timestamp(bad)
+
+    def test_restored_mtime_is_the_recorded_instant(self, tmp_path):
+        # Before #659 the offset was dropped (mtime off by two hours) and
+        # a 3-digit fraction left the file with the time of the restore.
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        r = PurePythonRestorer(repo_path=repo, password=PASSWORD)
+        f = tmp_path / "f"
+        f.write_bytes(b"x")
+        r._apply_metadata(
+            {"mtime": "2026-01-02T03:04:05.123+02:00",
+             "atime": "2026-01-02T03:04:05.123456789+02:00"},
+            f,
+        )
+        st = f.stat()
+        # 2026-01-02T01:04:05 UTC; utime takes a float, so allow 1 us.
+        assert abs(st.st_mtime - 1767315845.123) < 1e-6
+        assert abs(st.st_atime - 1767315845.123456) < 1e-6
+
+
+class TestSnapshotOrder:
+    """#663: "latest" is the newest instant, not the greatest string."""
+
+    def _restorer_with_times(
+        self, tmp_path: Path, times: dict[str, str],
+    ) -> PurePythonRestorer:
+        repo = tmp_path / "repo"
+        (repo / "snapshots").mkdir(parents=True)
+        for name in times:
+            (repo / "snapshots" / name).write_bytes(b"")
+        r = PurePythonRestorer(repo_path=repo, password=PASSWORD)
+
+        def _fake_decrypt(path: Path) -> bytes:
+            return json.dumps(
+                {"time": times[path.name], "tree": "t" + path.name}
+            ).encode()
+
+        r._decrypt_file = _fake_decrypt  # type: ignore[method-assign]
+        r._load_snapshots()
+        return r
+
+    def test_mixed_offsets_pick_the_later_instant(self, tmp_path):
+        # 01:30-04:00 is 05:30 UTC; 01:10-05:00 is 06:10 UTC.  As strings
+        # the first sorts last; as instants the second is newer.
+        r = self._restorer_with_times(tmp_path, {
+            "aa" * 32: "2026-11-01T01:10:00-05:00",
+            "bb" * 32: "2026-11-01T01:30:00-04:00",
+        })
+        assert r._latest_snapshot().snapshot_id == "aa" * 32
+
+    def test_utc_container_next_to_local_host(self, tmp_path):
+        r = self._restorer_with_times(tmp_path, {
+            "aa" * 32: "2026-06-01T12:00:00.5Z",
+            "bb" * 32: "2026-06-01T13:30:00+02:00",  # 11:30 UTC
+            "cc" * 32: "2026-06-01T08:15:00.25-04:00",  # 12:15 UTC
+        })
+        assert [s.snapshot_id[:2] for s in r._snapshots] == ["bb", "aa", "cc"]
+
+    def test_unparseable_time_is_never_latest(self, tmp_path):
+        r = self._restorer_with_times(tmp_path, {
+            "aa" * 32: "2026-06-01T12:00:00Z",
+            "bb" * 32: "",
+            "cc" * 32: "not a time",
+        })
+        assert r._latest_snapshot().snapshot_id == "aa" * 32
 
 
 # ── Key Derivation Tests ────────────────────────────────────────
@@ -2728,6 +2827,156 @@ def _build_multifile_repo(
     return repo
 
 
+class TestRestoreAborts:
+    """#658: q / end of input at the disc prompt and a full disk stop the
+    WHOLE restore at once; a damaged file still fails only itself."""
+
+    FILES = {
+        "a.txt": b"alpha content\n",
+        "b.txt": b"bravo content\n",
+        "c.txt": b"charlie content\n",
+    }
+
+    def _restorer(self, tmp_path: Path, **kw) -> PurePythonRestorer:
+        repo = _build_multifile_repo(tmp_path, files=self.FILES, **kw)
+        return PurePythonRestorer(repo, password=PASSWORD, interactive=True)
+
+    def _data_packs_missing(self, r: PurePythonRestorer) -> None:
+        """Every data blob asks for a disc that is never inserted."""
+        data_ids = {hashlib.sha256(c).hexdigest() for c in self.FILES.values()}
+        real_read = r._read_blob
+
+        def _read(blob_id: str) -> bytes:
+            if blob_id in data_ids:
+                r._find_pack_path("ff" * 32)
+            return real_read(blob_id)
+
+        r._read_blob = _read  # type: ignore[method-assign]
+
+    @pytest.mark.parametrize(("stdin", "said"), [
+        ("q\n", "aborted by user"),
+        ("", "input ended"),
+    ])
+    def test_stop_at_prompt_ends_restore_at_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+        stdin: str, said: str,
+    ):
+        r = self._restorer(tmp_path)
+        self._data_packs_missing(r)
+        monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+        target = tmp_path / "out"
+        with pytest.raises(RestoreAbortedError) as ei:
+            r.restore(target=target)
+        assert ei.value.exit_code == EXIT_READER_QUIT
+        err = capsys.readouterr().err
+        # One prompt, one stop: not a prompt per remaining file.
+        assert err.count("is required for the next file") == 1
+        assert err.count(said) == 1
+        assert r.failures == 0
+        assert sorted(p.name for p in target.iterdir()) == []
+
+    def test_disk_full_while_writing_ends_restore(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        import errno
+
+        import lcsas.restore.restic_fallback as fb
+
+        r = self._restorer(tmp_path)
+        calls = []
+
+        def _full(src, dst):
+            calls.append(dst)
+            raise OSError(errno.ENOSPC, "No space left on device", str(src))
+
+        monkeypatch.setattr(fb.os, "replace", _full)
+        target = tmp_path / "out"
+        with pytest.raises(RestoreAbortedError) as ei:
+            r.restore(target=target)
+        assert len(calls) == 1, "must stop at the first full write"
+        assert ei.value.exit_code == 1
+        msg = str(ei.value)
+        assert f"filesystem that holds {target} is full" in msg
+        assert "No space left on device" in msg
+        # The partial file is removed (frees its space) and nothing else
+        # was attempted or recorded as a per-file failure.
+        assert list(target.iterdir()) == []
+        assert r.failures == 0
+
+    def test_disk_full_outside_the_file_write_ends_restore(
+        self, tmp_path: Path
+    ):
+        # ENOSPC raised by the per-node path (mkdir, symlink, the file's
+        # parent dir) reaches the _restore_tree handler: also an abort.
+        import errno
+
+        r = self._restorer(tmp_path)
+        calls = []
+
+        def _full(node, path):
+            calls.append(path)
+            raise OSError(errno.EDQUOT, "Disk quota exceeded")
+
+        r._restore_file = _full  # type: ignore[method-assign]
+        with pytest.raises(RestoreAbortedError) as ei:
+            r.restore(target=tmp_path / "out")
+        assert len(calls) == 1
+        assert ei.value.exit_code == 1
+        assert "Disk quota exceeded" in str(ei.value)
+
+    def test_other_write_error_fails_only_that_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        import errno
+
+        import lcsas.restore.restic_fallback as fb
+
+        r = self._restorer(tmp_path)
+        real_replace = os.replace
+
+        def _eio_on_b(src, dst):
+            if str(dst).endswith("b.txt"):
+                raise OSError(errno.EIO, "Input/output error")
+            real_replace(src, dst)
+
+        monkeypatch.setattr(fb.os, "replace", _eio_on_b)
+        target = tmp_path / "out"
+        r.restore(target=target)  # no abort
+        assert r.failures == 1
+        assert (target / "a.txt").read_bytes() == self.FILES["a.txt"]
+        assert (target / "c.txt").read_bytes() == self.FILES["c.txt"]
+
+    def test_damaged_file_fails_only_that_file(self, tmp_path: Path):
+        r = self._restorer(tmp_path, corrupt_blob="b.txt")
+        target = tmp_path / "out"
+        r.restore(target=target)  # no abort
+        assert r.failures == 1
+        assert not (target / "b.txt").exists()
+        assert (target / "a.txt").read_bytes() == self.FILES["a.txt"]
+        assert (target / "c.txt").read_bytes() == self.FILES["c.txt"]
+
+    def test_failures_before_a_stop_are_still_listed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # a.txt is damaged (recorded), then q at the prompt for b.txt:
+        # RESTORE_FAILURES.txt still names a.txt.
+        r = self._restorer(tmp_path, corrupt_blob="a.txt")
+        b_id = hashlib.sha256(self.FILES["b.txt"]).hexdigest()
+        real_read = r._read_blob
+
+        def _read(blob_id: str) -> bytes:
+            if blob_id == b_id:
+                r._find_pack_path("ff" * 32)
+            return real_read(blob_id)
+
+        r._read_blob = _read  # type: ignore[method-assign]
+        monkeypatch.setattr(sys, "stdin", io.StringIO("q\n"))
+        target = tmp_path / "out"
+        with pytest.raises(RestoreAbortedError):
+            r.restore(target=target)
+        assert "a.txt" in (target / "RESTORE_FAILURES.txt").read_text()
+
+
 class TestTolerantTraversal:
     """RST-03: one bad blob must not abort the whole tier-3 restore."""
 
@@ -3093,6 +3342,34 @@ class TestSwapPromptCatalogStates:
         r._print_swap_prompt("a" * 32)
         assert "lists no disc for it" in capsys.readouterr().err
 
+    def test_miss_says_how_to_pick_an_older_snapshot(
+        self, tmp_path: Path, capsys
+    ):
+        # #657 (tier-1 parity): a pack the catalog never saw may belong
+        # to a snapshot newer than every disc.
+        r = _bare_restorer(tmp_path)
+        r._lookup_volume_labels = lambda pid: ([], r._CATALOG_MISS)
+        r._print_swap_prompt("a" * 32)
+        err = capsys.readouterr().err
+        box = err.split("\n")
+        i = box.index(
+            "| (catalog has no record of this pack ID)                  |"
+        )
+        assert box[i + 1:i + 5] == [
+            "| If the NEWEST data disc has already been read, this pack |",
+            "| was never burned: the snapshot is newer than the discs.  |",
+            "| Type 'q', then list the snapshots (--list-snapshots)     |",
+            "| and restore an older one with --snapshot <id>.           |",
+        ]
+
+    def test_hit_does_not_mention_older_snapshots(
+        self, tmp_path: Path, capsys
+    ):
+        r = _bare_restorer(tmp_path)
+        r._lookup_volume_labels = lambda pid: (["LCSAS_BD25_2026_0001"], "hit")
+        r._print_swap_prompt("a" * 32)
+        assert "--list-snapshots" not in capsys.readouterr().err
+
     @pytest.mark.parametrize(
         "lookup",
         [
@@ -3124,28 +3401,47 @@ class TestSwapPromptCatalogStates:
 
 class TestInteractiveFindPackPath:
     def test_eof_on_stdin_gives_up(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
     ):
-        # Empty stdin -> readline() returns "" -> break -> FileNotFound
-        # (restic_fallback.py:1004-1007 then 1021-1025).
+        # Empty stdin -> readline() returns "" -> the whole restore stops
+        # (#658: was FileNotFoundError, which failed only this file).
         d = tmp_path / "mnt"
         d.mkdir()
         r = _bare_restorer(tmp_path, pack_search_paths=[d], interactive=True)
         monkeypatch.setattr(sys, "stdin", io.StringIO(""))
-        with pytest.raises(FileNotFoundError, match="Pack file not found"):
+        with pytest.raises(RestoreAbortedError) as ei:
             r._find_pack_path("deadbeef" * 8)
+        assert ei.value.exit_code == EXIT_READER_QUIT == 75
+        assert not isinstance(ei.value, OSError)
+        assert "input ended" in capsys.readouterr().err
 
     def test_q_aborts(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
     ):
-        # 'q' -> abort message + break (restic_fallback.py:1008-1010).
+        # 'q' -> abort message + the whole restore stops (#658).
         d = tmp_path / "mnt"
         d.mkdir()
         r = _bare_restorer(tmp_path, pack_search_paths=[d], interactive=True)
         monkeypatch.setattr(sys, "stdin", io.StringIO("q\n"))
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(RestoreAbortedError) as ei:
             r._find_pack_path("deadbeef" * 8)
+        assert ei.value.exit_code == EXIT_READER_QUIT
+        assert "stopped at the disc prompt" in str(ei.value)
         assert "aborted by user" in capsys.readouterr().err
+
+    def test_retries_exhausted_still_fails_only_the_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # ENTER every time, never found: FileNotFoundError, a per-file
+        # failure, as before.
+        d = tmp_path / "mnt"
+        d.mkdir()
+        r = _bare_restorer(tmp_path, pack_search_paths=[d], interactive=True)
+        monkeypatch.setattr(
+            sys, "stdin", io.StringIO("\n" * (r._DISC_SWAP_MAX_RETRIES + 1))
+        )
+        with pytest.raises(FileNotFoundError, match="Pack file not found"):
+            r._find_pack_path("deadbeef" * 8)
 
     def test_found_after_retry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys

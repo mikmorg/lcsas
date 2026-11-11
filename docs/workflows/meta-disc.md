@@ -142,16 +142,19 @@ subcommand. `--output` / `-o` is required.
    10. `_write_restore_script` / `_write_restore_auto_script` — copy
        `recovery/scripts/restore.sh` to the disc root as `restore.sh`
        (leaving a redirect stub behind), and write the two bash
-       heredocs into `recovery/scripts/`: `restore_legacy.sh`
-       (`RESTORE_SCRIPT`, the superseded flag-style driver) and
-       `restore-auto.sh` (`RESTORE_AUTO_SCRIPT`, automation only). Both
+       scripts from `src/lcsas/meta/assets/` into `recovery/scripts/`:
+       `restore_legacy.sh` (`RESTORE_SCRIPT`, the superseded flag-style
+       driver) and `restore-auto.sh` (`RESTORE_AUTO_SCRIPT`, automation
+       only). Both
        sit off the disc root so the heir sees one restore script there
        (#491); they find `tools/` and `standalone_restorer.py` two
        levels up, and each gets a `recovery/MANIFEST.sha256` row. Not to
        be confused with `recovery/scripts/restore_auto.sh` (underscore),
        the POSIX-sh wrapper copied verbatim from the source tree.
-   11. `_write_readme` / `_write_readme_txt` — render `README_RESTORE.md`
-       and a plain-text twin.
+   11. `_write_readme` / `_write_readme_txt` — write `README_RESTORE.md`
+       (from `src/lcsas/meta/assets/README_RESTORE.md`) and a plain-text
+       twin. `tests/unit/test_meta_assets_golden.py` pins the SHA-256 of
+       these files and the two bash scripts (#689).
    12. `_write_volume_info` — write `volume_info.json` with `type: "meta"`,
        bundled-tool list, tool versions, timestamps, and `repo_metadata`
        (which catalogued repositories' keys this disc does — and does
@@ -441,7 +444,8 @@ carries it on with no meta disc.
   `xorriso`; self-skips without them). Tier 1's own swap prompt is covered
   by `recovery/tests/test_multidisc.py::case_interactive_swap`.
 
-**Source refs:** `RESTORE_SCRIPT` / `RESTORE_AUTO_SCRIPT` constants and
+**Source refs:** `src/lcsas/meta/assets/restore_legacy.sh` and
+`restore-auto.sh` (loaded as `RESTORE_SCRIPT` / `RESTORE_AUTO_SCRIPT`) and
 `_write_restore_script` (`src/lcsas/meta/builder.py`);
 `src/lcsas/meta/restore_single_drive.py`.
 
@@ -566,7 +570,7 @@ Rustic keys never go stale (a 2020-burnt meta disc can still decrypt a
 the disc catalog on the freshest data disc.
 
 **Source refs:** `_bundle_metadata` (`src/lcsas/meta/builder.py`);
-`RESTORE_SCRIPT` / `RESTORE_AUTO_SCRIPT` (`src/lcsas/meta/builder.py`,
+`restore_legacy.sh` / `restore-auto.sh` (`src/lcsas/meta/assets/`,
 catalog-upgrade glue); `src/lcsas/meta/restore_single_drive.py`
 (`phase_bootstrap`, `--reseed`); `HolographicInjector`
 (`src/lcsas/staging/metadata.py`).

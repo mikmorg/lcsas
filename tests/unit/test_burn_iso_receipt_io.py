@@ -1,4 +1,4 @@
-"""I/O-contract tests for ``lcsas burn-iso --emit-receipt`` (issue #517).
+"""I/O-contract tests for ``lcsas burn-iso --emit-receipt`` (issues #517, #675).
 
 The receipt is the only durable evidence a remote burn site hands back, so
 two properties matter and were untested:
@@ -10,7 +10,8 @@ two properties matter and were untested:
   a power cut right after "Receipt written" must not lose it.
 
 The xorriso runner is fully mocked (including ``media_status`` and
-``read_disc_volume_id``) and an unplugged device name is passed, so the
+``read_disc_volume_id``), so is the device read-back, and an unplugged
+device name is passed, so the
 host's real optical drive is never touched.
 """
 
@@ -37,8 +38,13 @@ _ISO_BYTES = b"not-really-an-iso" * 100
 
 @contextlib.contextmanager
 def _mock_xorriso(*, verify: bool = True, burn_error: Exception | None = None):
-    """Mock every xorriso touchpoint cmd_burn_iso uses."""
+    """Mock every xorriso touchpoint cmd_burn_iso uses, and the #664 device
+    read-back (it returns the ISO's hash: the disc matches)."""
     with contextlib.ExitStack() as stack:
+        stack.enter_context(patch(
+            "lcsas.burn.device_verify.read_device_sha256",
+            return_value=hashlib.sha256(_ISO_BYTES).hexdigest(),
+        ))
         burn = stack.enter_context(patch(f"{_RUNNER}.burn_iso", side_effect=burn_error))
         stack.enter_context(patch(f"{_RUNNER}.verify_disc", return_value=verify))
         stack.enter_context(patch(f"{_RUNNER}.media_status", return_value=MediaStatus.BLANK))
@@ -54,7 +60,7 @@ def iso(tmp_path) -> Path:
     return path
 
 
-def _burn_iso(iso: Path, receipt: Path) -> int:
+def _burn_iso(iso: Path, receipt: Path | str) -> int:
     return main([
         "burn-iso", str(iso),
         "--device", _FAKE_DEVICE,
@@ -111,14 +117,108 @@ class TestEmitReceiptCreatesParents:
 
         assert receipt.is_file()
 
-    def test_existing_receipt_file_is_overwritten(self, tmp_path, iso):
+    def test_existing_receipt_of_the_same_disc_is_overwritten(self, tmp_path, iso):
+        """A re-run for the same volume and location replaces its receipt."""
         receipt = tmp_path / "r.json"
-        receipt.write_text(json.dumps({"volume_label": "STALE"}))
+        receipt.write_text(json.dumps({
+            "volume_label": _LABEL, "location": "Offsite_Safe",
+            "verify_passed": False,
+        }))
 
         with _mock_xorriso():
             assert _burn_iso(iso, receipt) == 0
 
-        assert json.loads(receipt.read_text())["volume_label"] == _LABEL
+        assert json.loads(receipt.read_text())["verify_passed"] is True
+
+    def test_existing_receipt_of_another_volume_is_refused(self, tmp_path, iso, capsys):
+        """#675: another volume's receipt is kept, and the refusal comes
+        before the burn, so no disc is left without a receipt.  (This test
+        used to expect the overwrite.)"""
+        receipt = tmp_path / "r.json"
+        stale = json.dumps({"volume_label": "STALE", "location": "Offsite_Safe"})
+        receipt.write_text(stale)
+
+        with _mock_xorriso() as burn:
+            rc = _burn_iso(iso, receipt)
+
+        assert rc == 1
+        burn.assert_not_called()
+        assert receipt.read_text() == stale
+        out = capsys.readouterr().out
+        assert "refusing to overwrite" in out
+        assert "STALE" in out
+
+
+# ---------------------------------------------------------------------------
+# #675: a --emit-receipt folder that does not exist yet
+# ---------------------------------------------------------------------------
+
+
+class TestEmitReceiptMissingFolder:
+    def test_trailing_separator_makes_a_folder(self, tmp_path, iso):
+        target = tmp_path / "receipts"
+        with _mock_xorriso():
+            assert _burn_iso(iso, f"{target}{os.sep}") == 0
+
+        assert target.is_dir()
+        written = target / f"{_LABEL}_Offsite_Safe.json"
+        assert json.loads(written.read_text())["volume_label"] == _LABEL
+
+    def test_name_without_extension_makes_a_folder(self, tmp_path, iso):
+        target = tmp_path / "receipts"
+        with _mock_xorriso():
+            assert _burn_iso(iso, str(target)) == 0
+
+        assert target.is_dir()
+        assert [p.name for p in target.iterdir()] == [f"{_LABEL}_Offsite_Safe.json"]
+
+    def test_three_burns_leave_three_receipts(self, tmp_path):
+        """The reported failure: each burn overwrote one file named
+        'receipts', so only the last receipt survived."""
+        target = tmp_path / "receipts"
+        for n in range(3):
+            label = f"VOL_RECEIPT_000{n}"
+            iso = tmp_path / f"{label}.iso"
+            iso.write_bytes(_ISO_BYTES)
+            with _mock_xorriso(), patch(
+                f"{_RUNNER}.read_disc_volume_id", return_value=label,
+            ):
+                assert main([
+                    "burn-iso", str(iso), "--device", _FAKE_DEVICE,
+                    "--label", label, "--location", "Offsite_Safe",
+                    "--emit-receipt", str(target),
+                ]) == 0
+
+        assert sorted(p.name for p in target.iterdir()) == [
+            f"VOL_RECEIPT_000{n}_Offsite_Safe.json" for n in range(3)
+        ]
+
+    def test_a_file_where_the_folder_should_be_is_refused(self, tmp_path, iso, capsys):
+        """A 'receipts' file left by the old behaviour, then 'receipts/':
+        refused before the burn, never a burned disc with no receipt."""
+        target = tmp_path / "receipts"
+        old = json.dumps({"volume_label": "OLD_0001", "location": "Home"})
+        target.write_text(old)
+
+        with _mock_xorriso() as burn:
+            rc = _burn_iso(iso, f"{target}{os.sep}")
+
+        assert rc == 1
+        burn.assert_not_called()
+        assert target.read_text() == old
+        assert "is a file, not a folder" in capsys.readouterr().out
+
+    def test_existing_file_without_extension_is_still_the_file(self, tmp_path, iso):
+        """An existing file is never turned into a folder; it is replaced
+        only when it holds this disc's receipt."""
+        target = tmp_path / "receipt"
+        target.write_text(json.dumps(
+            {"volume_label": _LABEL, "location": "Offsite_Safe"}))
+        with _mock_xorriso():
+            assert _burn_iso(iso, str(target)) == 0
+
+        assert target.is_file()
+        assert json.loads(target.read_text())["verify_passed"] is True
 
     def test_failed_burn_leaves_no_receipt_and_creates_no_dirs(self, tmp_path, iso):
         """A receipt must only ever exist for a burn that actually ran."""

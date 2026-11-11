@@ -165,21 +165,26 @@ def test_cli_disc_count_from_catalog(tmp_path: Path) -> None:
 
     from lcsas.constants import STATUS_BURNED, STATUS_STAGING, STATUS_VERIFIED
     from lcsas.db.connection import get_connection
+    from lcsas.db.locations import create_location
     from lcsas.db.schema import ensure_schema
+    from lcsas.db.volume_copies import add_volume_copy
     from lcsas.db.volumes import create_volume
 
     conn = get_connection(db_path)
     ensure_schema(conn)
+    create_location(conn, "Home_Shelf")
     # Two physical discs (BURNED, VERIFIED) + one in-progress STAGING that
-    # must NOT count toward the heir's disc inventory.
-    create_volume(
-        conn, "SMITH_001", "uuid-1", "BD25", 25_000_000_000,
-        status=STATUS_BURNED,
-    )
-    create_volume(
-        conn, "SMITH_002", "uuid-2", "BD25", 25_000_000_000,
-        status=STATUS_VERIFIED,
-    )
+    # must NOT count toward the heir's disc inventory.  #684: a burned
+    # volume counts by its ACTIVE disc, as a real burn records one.
+    for label, status in (
+        ("SMITH_001", STATUS_BURNED),
+        ("SMITH_002", STATUS_VERIFIED),
+    ):
+        vol = create_volume(
+            conn, label, f"uuid-{label}", "BD25", 25_000_000_000,
+            status=status,
+        )
+        add_volume_copy(conn, vol.volume_id, "Home_Shelf")
     create_volume(
         conn, "SMITH_003", "uuid-3", "BD25", 25_000_000_000,
         status=STATUS_STAGING,
@@ -193,6 +198,76 @@ def test_cli_disc_count_from_catalog(tmp_path: Path) -> None:
     assert "2 disc(s), labeled SMITH_*" in out.read_text(encoding="utf-8")
     # Sanity: STATUS_STAGING constant referenced so the count rule is pinned.
     assert STATUS_STAGING == "STAGING"
+
+
+def test_cli_disc_count_skips_superseded_destroyed_volumes(
+    tmp_path: Path,
+) -> None:
+    """#684: 5 volumes, 2 superseded by consolidation and their discs
+    destroyed -> the card says 3."""
+    from lcsas.constants import STATUS_DEPRECATED, STATUS_VERIFIED
+    from lcsas.db.connection import get_connection
+    from lcsas.db.locations import create_location
+    from lcsas.db.schema import ensure_schema
+    from lcsas.db.volume_copies import add_volume_copy, destroy_copy
+    from lcsas.db.volumes import create_volume
+
+    cfg = _write_config(tmp_path, split=False)
+    conn = get_connection(tmp_path / "archive.db")
+    ensure_schema(conn)
+    create_location(conn, "Home_Shelf")
+    for i in range(1, 6):
+        superseded = i <= 2
+        vol = create_volume(
+            conn, f"SMITH_00{i}", f"uuid-{i}", "BD25", 25_000_000_000,
+            status=STATUS_DEPRECATED if superseded else STATUS_VERIFIED,
+        )
+        add_volume_copy(conn, vol.volume_id, "Home_Shelf")
+        if superseded:
+            destroy_copy(conn, vol.volume_id, "Home_Shelf")
+    conn.commit()
+    conn.close()
+
+    out = tmp_path / "card.txt"
+    assert main(["--config", str(cfg), "estate", "card", "--output", str(out)]) == 0
+    assert "3 disc(s), labeled SMITH_*" in out.read_text(encoding="utf-8")
+
+
+def test_cli_ensure_schema_runs_under_the_catalog_lock(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """#684: ensure_schema may migrate the catalog, so it must run while
+    the catalog lock is held."""
+    import fcntl
+
+    import lcsas.db.schema as schema_mod
+    from lcsas.db.connection import get_connection
+
+    cfg = _write_config(tmp_path, split=False)
+    db_path = tmp_path / "archive.db"
+    conn = get_connection(db_path)
+    schema_mod.ensure_schema(conn)
+    conn.close()
+
+    real = schema_mod.ensure_schema
+    seen: list[bool] = []
+
+    def _spy(c):  # type: ignore[no-untyped-def]
+        # A second exclusive non-blocking lock fails while the card holds it.
+        with open(str(db_path) + ".lock", "a+") as fd:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                seen.append(True)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                seen.append(False)
+        return real(c)
+
+    monkeypatch.setattr(schema_mod, "ensure_schema", _spy)
+    out = tmp_path / "card.txt"
+    assert main(["--config", str(cfg), "estate", "card", "--output", str(out)]) == 0
+    assert seen == [True]
 
 
 # --------------------------------------------------------------------------

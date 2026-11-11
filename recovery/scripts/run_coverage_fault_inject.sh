@@ -69,6 +69,20 @@ reap_shm() {
     done
 }
 
+# A sweep stopped from outside (Ctrl-C, or an outer `timeout`/make
+# killing it) used to skip the per-run cleanup below: 1,162 drain-cache
+# folders were left in /dev/shm (RAM) after one interrupted sweep
+# (2026-11-11).  Clean the current run's TMPDIR and reap /dev/shm on
+# every way out.
+run_tmp=""
+cleanup() {
+    if [ -n "$run_tmp" ]; then rm -rf "$run_tmp"; fi
+    reap_shm
+}
+trap cleanup EXIT
+trap 'cleanup; trap - EXIT; exit 130' INT
+trap 'cleanup; trap - EXIT; exit 143' TERM
+
 # `timeout` (coreutils) caps each injected run; degrade gracefully if it
 # is missing (e.g. a minimal restore host) rather than aborting the sweep.
 if command -v timeout >/dev/null 2>&1; then

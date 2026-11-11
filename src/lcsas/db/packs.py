@@ -109,6 +109,28 @@ def bulk_mark_pruned(conn: sqlite3.Connection, pack_ids: list[int]) -> int:
     return updated
 
 
+def bulk_unmark_pruned(conn: sqlite3.Connection, pack_ids: list[int]) -> int:
+    """Return several pruned packs to the active pool in one transaction (#667).
+
+    Inverse of :func:`bulk_mark_pruned`.  Returns the number of packs
+    updated.
+    """
+    if not pack_ids:
+        return 0
+    updated = 0
+    for i in range(0, len(pack_ids), _SQLITE_BATCH):
+        batch = pack_ids[i : i + _SQLITE_BATCH]
+        placeholders = ",".join("?" * len(batch))
+        cur = conn.execute(
+            f"UPDATE packs SET is_pruned = 0 WHERE pack_id IN ({placeholders})"
+            " AND is_pruned = 1",
+            batch,
+        )
+        updated += cur.rowcount
+    conn.commit()
+    return updated
+
+
 def bulk_register(
     conn: sqlite3.Connection,
     packs: list[tuple[str, int, str]],
