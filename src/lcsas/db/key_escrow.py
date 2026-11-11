@@ -291,7 +291,8 @@ def detect_escrow_drift(
                     f"{record.split_at}. Discs would tell the heir to find a "
                     f"single password that was superseded by that split. Set "
                     f"key_split=true (key_threshold={record.threshold}, "
-                    f"key_shares={record.shares}) under {where}, or run "
-                    f"'lcsas key combine' to undo the split."
+                    f"key_shares={record.shares}) under {where}, or, if the "
+                    f"split was abandoned, run 'lcsas --config ... key "
+                    f"unsplit --repo {name}' to clear the recorded split."
                 )
     return None

@@ -119,6 +119,11 @@ theft.
   > ever performed). The disc's K/N is taken from the recorded split when one
   > exists. `--allow-escrow-drift` overrides the abort for multi-config edge
   > cases (logged as a volume event).
+  >
+  > If you abandon a split and go back to a single password, set
+  > `key_split = false` and run `lcsas --config ... key unsplit --repo R`.
+  > It asks first, clears the recorded split, and logs an `AUDIT` line
+  > naming what it cleared (#681). It does not touch any card.
 
 - [ ] **Tell heirs the reconstruction is a two-step pre-step**, in your
   letter (template below):

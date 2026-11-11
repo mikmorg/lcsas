@@ -207,7 +207,21 @@ key_escrow (
 > a K-of-N SLIP-0039 set (and when) — it never stores the shares or the
 > password itself. Share words live only on the printed share cards. See the
 > share format spec ([docs/SHARE_FORMAT.md](SHARE_FORMAT.md))
-> and the `keyshare/` package.
+> and the `keyshare/` package. `lcsas key unsplit --repo R` removes the
+> record when a split is abandoned (#681).
+
+> `volumes.location` is the location a volume was **staged for** (from
+> `stage --for-location`, else the configured default). It is free text,
+> not checked against `locations`, and it never says where a disc is: a
+> disc's place is its `volume_copies.location` row. It is used for display
+> (`(for <name>)` in `lcsas status`) and to keep `stage --for-location`
+> from staging the same packs twice for one place (#642). (#687)
+
+> `repositories.name` and `mirror_path` have no UNIQUE index (schema v10
+> is burned on discs); `lcsas repo add` refuses a duplicate of either
+> (#685). Every command that takes a repository resolves it the same way:
+> the configured mirror path first, then the name (`resolve_repo` in
+> `src/lcsas/db/repos.py`, #687).
 
 ### Volume Lifecycle States
 

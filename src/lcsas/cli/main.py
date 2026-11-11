@@ -836,6 +836,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the reconstructed password here (default: stdout).",
     )
 
+    key_unsplit = key_sub.add_parser(
+        "unsplit",
+        help="Clear the catalog's record of a repository's password split "
+             "(after the split was abandoned).",
+        description=(
+            "Remove the recorded K-of-N split for one repository from the "
+            "catalog, so burned discs stop telling the heir to gather share "
+            "cards. It does not touch any share card or the password. Use it "
+            "when the split was abandoned and key_split is false for the "
+            "repository."
+        ),
+    )
+    key_unsplit.add_argument(
+        "--repo", required=True,
+        help="Repository whose recorded split to clear.",
+    )
+    key_unsplit.add_argument(
+        "--yes", action="store_true",
+        help="Do not ask for confirmation.",
+    )
+
     key_card = key_sub.add_parser(
         "card",
         help="Print a paper password card for the DEFAULT (unsplit) "
@@ -5908,8 +5929,10 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_key_verify(args)
         elif args.key_command == "card":
             return cmd_key_card(args)
+        elif args.key_command == "unsplit":
+            return cmd_key_unsplit(args)
         else:
-            logger.error("Usage: lcsas key {split,combine,verify,card}")
+            logger.error("Usage: lcsas key {split,unsplit,combine,verify,card}")
             return 1
     elif args.command == "estate":
         if args.estate_command == "card":
@@ -6848,6 +6871,99 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         "SECURITY: the password was never printed. Store shares apart; any "
         f"{threshold} of {shares} reconstruct it, fewer reveal nothing.",
         file=sys.stderr,
+    )
+    return 0
+
+
+def cmd_key_unsplit(args: argparse.Namespace) -> int:
+    """Clear a repository's recorded password split (#681).
+
+    The record (KEY-08) is what burned discs derive their share-card
+    instructions from, and what the burn's drift check compares the config
+    against.  When a split is abandoned (the cards were never handed out,
+    or the owner went back to a single password), this is the command
+    that makes the catalog agree.  It asks first, and logs one audit line
+    naming what was cleared.
+    """
+    from lcsas.db.connection import locked_connection
+    from lcsas.db.key_escrow import clear_split, get_split_for_repo
+    from lcsas.db.repos import resolve_repo
+    from lcsas.db.schema import ensure_schema
+
+    config = _load_config_opt(args)
+    db_path = _resolve_db_path(args, config)
+    _open_existing_catalog(db_path).close()  # no catalog: say so, don't make one
+    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
+        ensure_schema(conn)
+        try:
+            repo = resolve_repo(conn, args.repo, _config_mirror(config, args.repo))
+        except ValueError as exc:
+            logger.error("%s", exc)
+            return 1
+        if repo is None:
+            logger.error(
+                "Repository '%s' is not registered in the catalog at %s. "
+                "See `lcsas repo list`.", args.repo, db_path,
+            )
+            return 1
+        record = get_split_for_repo(conn, repo.repo_id)
+        if record is None:
+            logger.info(
+                "The catalog records no password split for repository '%s'. "
+                "Nothing to clear.", repo.name,
+            )
+            return 0
+
+        logger.warning(
+            "Repository '%s' has a recorded %d-of-%d split (split ID %05d, "
+            "on %s). Clearing it means burned discs will tell the heir the "
+            "password is NOT split. Its share cards are not touched.",
+            repo.name, record.threshold, record.shares, record.slip39_id,
+            record.split_at,
+        )
+        if not args.yes:
+            try:
+                answer = input(
+                    "Type 'yes' to clear the recorded split, or anything else "
+                    "to cancel: "
+                ).strip()
+            except EOFError:
+                logger.error(
+                    "No terminal available for confirmation (redirected "
+                    "input). Pass --yes to clear without asking."
+                )
+                return 1
+            if answer.lower() != "yes":
+                logger.info("Nothing cleared.")
+                return 0
+
+        # Under the repo_id, and under the name for a record an earlier
+        # build made (#571), as `repo remove` does.
+        clear_split(conn, repo.repo_id, commit=False)
+        if conn.execute(
+            "SELECT 1 FROM repositories WHERE repo_id = ? AND repo_id != ?",
+            (repo.name, repo.repo_id),
+        ).fetchone() is None:  # the name isn't another repository's id
+            clear_split(conn, repo.name, commit=False)
+        conn.commit()
+
+    from datetime import UTC, datetime
+    logger.warning(
+        "AUDIT %s key unsplit: cleared the recorded %d-of-%d split of "
+        "repository '%s' (id %s, split ID %05d, split on %s).",
+        datetime.now(UTC).isoformat(timespec="seconds"), record.threshold,
+        record.shares, repo.name, repo.repo_id, record.slip39_id,
+        record.split_at,
+    )
+    table = (
+        f"[repos.{args.repo}]"
+        if config is not None and args.repo in config.repositories
+        else f"the repository's [repos.<name>] table ('{repo.name}' in the catalog)"
+    )
+    print(
+        f"NEXT STEP: make sure key_split is false for this repository in "
+        f"lcsas.toml ({table}, else [defaults]), so the config and the "
+        f"catalog agree."
     )
     return 0
 
