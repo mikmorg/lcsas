@@ -4303,8 +4303,6 @@ def cmd_recovery(args: argparse.Namespace) -> int:
         print(f"built {a.arch}: {a.lcsas_restore}")
         if a.lcsas_iso9660:
             print(f"  + {a.lcsas_iso9660}")
-        if a.lcsas_init:
-            print(f"  + {a.lcsas_init}")
         return 0
 
     if sub == "test":

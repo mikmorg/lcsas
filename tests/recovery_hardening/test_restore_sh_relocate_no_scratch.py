@@ -93,7 +93,7 @@ def test_no_scratch_dir_warns_and_restores_from_the_disc(tmp_path: Path) -> None
         "PATH": f"{stubs}{os.pathsep}{os.environ.get('PATH', '')}",
         "HOME": str(home),
         "TMPDIR": str(tmp_path),
-        # Names the disc: the trigger lcsas-init uses, and one that works
+        # Names the disc: the explicit caller override, and one that works
         # as root too (a 0555 dir doesn't stop root writing to it).
         "LCSAS_META_DISC": str(meta),
         "LCSAS_MOUNT_DIRS": str(meta),

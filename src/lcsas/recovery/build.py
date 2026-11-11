@@ -29,14 +29,11 @@ class RecoveryArtifacts:
     arch: str
     lcsas_restore: Path
     lcsas_iso9660: Path | None
-    lcsas_init: Path | None
 
     def to_dict(self) -> dict[str, str]:
         d = {"arch": self.arch, "lcsas_restore": str(self.lcsas_restore)}
         if self.lcsas_iso9660 is not None:
             d["lcsas_iso9660"] = str(self.lcsas_iso9660)
-        if self.lcsas_init is not None:
-            d["lcsas_init"] = str(self.lcsas_init)
         return d
 
 
@@ -108,7 +105,6 @@ class RecoveryBuilder:
             arch=arch,
             lcsas_restore=build / "lcsas-restore",
             lcsas_iso9660=build / "lcsas-iso9660" if (build / "lcsas-iso9660").exists() else None,
-            lcsas_init=build / "lcsas-init" if (build / "lcsas-init").exists() else None,
         )
 
     def cross_build(self, arch: str, cc: str | None = None,
@@ -126,15 +122,14 @@ class RecoveryBuilder:
         For Windows arches (x86_64-windows, aarch64-windows), the
         Makefile's dedicated ``windows`` target is invoked (which
         shells out to ``zig cc -target <arch>-windows-gnu``); the
-        binary has a ``.exe`` suffix and lcsas-init is not produced
-        (it's a Linux-only PID 1).
+        binary has a ``.exe`` suffix.
 
         For macOS arches (x86_64-macos, aarch64-macos), Phase 21.12
         uses ``zig cc -target <arch>-macos`` (no Apple SDK required —
         zig bundles enough libSystem definitions to link Mach-O
         executables for both Apple Silicon and Intel).  Binary has
-        no extension; lcsas-iso9660 and lcsas-init are not produced
-        (redundant on Darwin / Linux-only respectively).
+        no extension; lcsas-iso9660 is not produced (redundant on
+        Darwin).
         """
         if arch not in self.SUPPORTED_ARCHES:
             raise ValueError(f"unsupported arch: {arch}")
@@ -169,12 +164,10 @@ class RecoveryBuilder:
             return RecoveryArtifacts(
                 arch=arch,
                 lcsas_restore=exe,
-                # iso9660 / init not produced for non-Linux targets:
-                #   - init is Linux PID 1 only
-                #   - iso9660 is redundant — Windows + macOS can
-                #     mount ISOs natively (Mount-DiskImage / hdiutil)
+                # iso9660 is not produced for non-Linux targets: it is
+                # redundant — Windows + macOS can mount ISOs natively
+                # (Mount-DiskImage / hdiutil).
                 lcsas_iso9660=None,
-                lcsas_init=None,
             )
 
         # ── Linux cross-compile path ─────────────────────────────────
@@ -212,19 +205,17 @@ class RecoveryBuilder:
         bin_dir = self._dir / "bin" / arch
         bin_dir.mkdir(parents=True, exist_ok=True)
         build = self._dir / "build" / arch
-        for name in ("lcsas-restore", "lcsas-iso9660", "lcsas-init"):
+        for name in ("lcsas-restore", "lcsas-iso9660"):
             src = build / name
             if src.exists():
                 shutil.copy2(str(src), str(bin_dir / name))
                 os.chmod(str(bin_dir / name), 0o755)
 
         iso9660_path = bin_dir / "lcsas-iso9660"
-        init_path = bin_dir / "lcsas-init"
         return RecoveryArtifacts(
             arch=arch,
             lcsas_restore=bin_dir / "lcsas-restore",
             lcsas_iso9660=iso9660_path if iso9660_path.exists() else None,
-            lcsas_init=init_path if init_path.exists() else None,
         )
 
     def run_tests(self, verbose: bool = False) -> bool:

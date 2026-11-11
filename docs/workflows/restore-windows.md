@@ -19,8 +19,8 @@ Sibling docs:
 
 - [`restore-host-linux.md`](restore-host-linux.md) – Linux host with the
   binaries on hand.
-- [`restore-bare-metal.md`](restore-bare-metal.md) – a wiped machine
-  (its boot path is not built today; no LCSAS disc is bootable).
+- [`restore-live-usb.md`](restore-live-usb.md) – a wiped machine:
+  boot a live-Linux USB (no LCSAS disc is bootable).
 - [`restore-disc-only.md`](restore-disc-only.md) – disc-only walkthrough
   ignoring host preinstall.
 

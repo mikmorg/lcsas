@@ -14,7 +14,8 @@ computer would follow the instruction, get "no bootable device", and have
 no hint the path was fictional.
 
 The 2026-06 deep audit verdict was DROP: the boot scaffolding was
-quarantined to experimental/boot/ and the no-OS journey rerouted to a
+deleted (#688; last held at tag archive/pre-1.0-history) and the no-OS journey
+rerouted to a
 current live-Linux USB stick.  These tests pin that routing so it cannot
 silently regress back to the dead end.
 

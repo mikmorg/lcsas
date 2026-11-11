@@ -216,9 +216,8 @@ def test_recovery_builder_cross_builds_macos(isolated_recovery_tree):
     assert RECOVERY_DIR not in a.lcsas_restore.parents
     # Mach-O binaries don't get the .exe suffix.
     assert a.lcsas_restore.name == "lcsas-restore"
-    # iso9660 + init not produced for macOS (same as Windows).
+    # iso9660 not produced for macOS (same as Windows).
     assert a.lcsas_iso9660 is None
-    assert a.lcsas_init is None
     # And it really is a Mach-O binary (4-byte magic).
     with a.lcsas_restore.open("rb") as f:
         magic = f.read(4)
@@ -275,5 +274,3 @@ def test_recovery_builder_cross_builds_windows(isolated_recovery_tree):
     # Isolation guard (#320/#327): the artifact lives in the throwaway copy.
     assert RECOVERY_DIR not in a.lcsas_restore.parents
     assert a.lcsas_restore.name == "lcsas-restore.exe"
-    # Windows binary isn't expected to ship lcsas-init (Linux PID 1 only).
-    assert a.lcsas_init is None

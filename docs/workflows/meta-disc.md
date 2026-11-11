@@ -31,7 +31,7 @@ The meta disc *deliberately omits* `catalog.db`; see
 
 Sibling docs: [`docs/workflows/recovery-toolchain.md`](recovery-toolchain.md)
 (how the tier-1 binaries are built),
-[`docs/workflows/restore-bare-metal.md`](restore-bare-metal.md),
+[`docs/workflows/restore-live-usb.md`](restore-live-usb.md),
 [`docs/workflows/verify-and-audit.md`](verify-and-audit.md), and
 [`docs/architecture.md`](../architecture.md).
 
