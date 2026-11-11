@@ -391,6 +391,103 @@ class TestParseTimestamp:
         ts = _parse_timestamp("2026-01-15T10:30:00.123456Z")
         assert isinstance(ts, float)
 
+    # #659: the UTC offset is kept, and a short fraction still parses.
+    @staticmethod
+    def _utc(*args: int) -> float:
+        from datetime import datetime, timezone
+        return datetime(*args, tzinfo=timezone.utc).timestamp()  # noqa: UP017
+
+    def test_offset_is_kept(self):
+        ts = _parse_timestamp("2026-01-02T03:04:05.123456789+02:00")
+        assert ts == self._utc(2026, 1, 2, 1, 4, 5, 123456)
+
+    def test_negative_offset_is_kept(self):
+        ts = _parse_timestamp("2026-01-02T03:04:05-05:00")
+        assert ts == self._utc(2026, 1, 2, 8, 4, 5)
+
+    def test_three_digit_fraction(self):
+        ts = _parse_timestamp("2026-01-02T03:04:05.123+02:00")
+        assert ts == self._utc(2026, 1, 2, 1, 4, 5, 123000)
+
+    def test_no_fraction_with_offset(self):
+        ts = _parse_timestamp("2026-01-02T03:04:05+02:00")
+        assert ts == self._utc(2026, 1, 2, 1, 4, 5)
+
+    def test_zulu_and_no_offset_are_utc(self):
+        want = self._utc(2026, 1, 2, 3, 4, 5, 500000)
+        assert _parse_timestamp("2026-01-02T03:04:05.5Z") == want
+        assert _parse_timestamp("2026-01-02T03:04:05.5") == want
+
+    @pytest.mark.parametrize("bad", ["", "garbage", "2026-01-02"])
+    def test_malformed_raises_value_error(self, bad):
+        with pytest.raises(ValueError):
+            _parse_timestamp(bad)
+
+    def test_restored_mtime_is_the_recorded_instant(self, tmp_path):
+        # Before #659 the offset was dropped (mtime off by two hours) and
+        # a 3-digit fraction left the file with the time of the restore.
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        r = PurePythonRestorer(repo_path=repo, password=PASSWORD)
+        f = tmp_path / "f"
+        f.write_bytes(b"x")
+        r._apply_metadata(
+            {"mtime": "2026-01-02T03:04:05.123+02:00",
+             "atime": "2026-01-02T03:04:05.123456789+02:00"},
+            f,
+        )
+        st = f.stat()
+        # 2026-01-02T01:04:05 UTC; utime takes a float, so allow 1 us.
+        assert abs(st.st_mtime - 1767315845.123) < 1e-6
+        assert abs(st.st_atime - 1767315845.123456) < 1e-6
+
+
+class TestSnapshotOrder:
+    """#663: "latest" is the newest instant, not the greatest string."""
+
+    def _restorer_with_times(
+        self, tmp_path: Path, times: dict[str, str],
+    ) -> PurePythonRestorer:
+        repo = tmp_path / "repo"
+        (repo / "snapshots").mkdir(parents=True)
+        for name in times:
+            (repo / "snapshots" / name).write_bytes(b"")
+        r = PurePythonRestorer(repo_path=repo, password=PASSWORD)
+
+        def _fake_decrypt(path: Path) -> bytes:
+            return json.dumps(
+                {"time": times[path.name], "tree": "t" + path.name}
+            ).encode()
+
+        r._decrypt_file = _fake_decrypt  # type: ignore[method-assign]
+        r._load_snapshots()
+        return r
+
+    def test_mixed_offsets_pick_the_later_instant(self, tmp_path):
+        # 01:30-04:00 is 05:30 UTC; 01:10-05:00 is 06:10 UTC.  As strings
+        # the first sorts last; as instants the second is newer.
+        r = self._restorer_with_times(tmp_path, {
+            "aa" * 32: "2026-11-01T01:10:00-05:00",
+            "bb" * 32: "2026-11-01T01:30:00-04:00",
+        })
+        assert r._latest_snapshot().snapshot_id == "aa" * 32
+
+    def test_utc_container_next_to_local_host(self, tmp_path):
+        r = self._restorer_with_times(tmp_path, {
+            "aa" * 32: "2026-06-01T12:00:00.5Z",
+            "bb" * 32: "2026-06-01T13:30:00+02:00",  # 11:30 UTC
+            "cc" * 32: "2026-06-01T08:15:00.25-04:00",  # 12:15 UTC
+        })
+        assert [s.snapshot_id[:2] for s in r._snapshots] == ["bb", "aa", "cc"]
+
+    def test_unparseable_time_is_never_latest(self, tmp_path):
+        r = self._restorer_with_times(tmp_path, {
+            "aa" * 32: "2026-06-01T12:00:00Z",
+            "bb" * 32: "",
+            "cc" * 32: "not a time",
+        })
+        assert r._latest_snapshot().snapshot_id == "aa" * 32
+
 
 # ── Key Derivation Tests ────────────────────────────────────────
 

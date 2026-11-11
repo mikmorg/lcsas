@@ -43,12 +43,13 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
 import tempfile
 from dataclasses import dataclass, field
-from datetime import timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -824,8 +825,13 @@ class PurePythonRestorer:
                 )
             )
 
-        # Sort by time (ISO 8601 strings sort lexicographically)
-        self._snapshots.sort(key=lambda s: s.time)
+        # Sort by the instant, not the string (#663): two times with
+        # different UTC offsets (the repeated hour when daylight saving
+        # ends, a container on UTC next to a host on local time) sort
+        # wrong as strings.  A time that will not parse sorts first, so
+        # it is never taken as "latest"; the sort is stable, so ties keep
+        # file-name order.
+        self._snapshots.sort(key=_snapshot_sort_key)
         _log(f"Found {len(self._snapshots)} snapshot(s).")
 
     def _latest_snapshot(self) -> SnapshotMeta:
@@ -1691,35 +1697,66 @@ class PurePythonRestorer:
 
 # ── Utilities ────────────────────────────────────────────────────
 
+# A restic time: date, "T", time, an optional fraction of any length and
+# an optional UTC offset ("Z" or +HH:MM).  The offset is searched for in
+# the part after the "T" only, as the date has dashes of its own.
+_TIMESTAMP_RE = re.compile(
+    r"^(?P<base>[^T]+T\d{1,2}:\d{1,2}:\d{1,2})"
+    r"(?:\.(?P<frac>\d+))?"
+    r"(?P<tz>[Zz]|[+-]\d{2}:?\d{2})?$"
+)
+
+
+def _parse_instant(ts: str) -> datetime:
+    """Parse a restic-style ISO 8601 timestamp to an aware datetime.
+
+    Keeps the UTC offset (#659): ``2026-01-02T03:04:05.123456789+02:00``
+    is the instant 01:04:05.123456 UTC.  The fraction is cut or padded
+    to six digits (Python keeps microseconds), so a 3-digit fraction or
+    none at all parses too.  A time with no offset is taken as UTC.
+
+    Raises:
+        ValueError: *ts* is not such a timestamp.
+    """
+    m = _TIMESTAMP_RE.match(ts.strip())
+    if m is None:
+        raise ValueError(f"not an ISO 8601 timestamp: {ts!r}")
+    frac = (m.group("frac") or "")[:6].ljust(6, "0")
+    tz = m.group("tz")
+    if tz is None or tz in ("Z", "z"):
+        tz = "+00:00"
+    elif ":" not in tz:
+        tz = f"{tz[:3]}:{tz[3:]}"
+    # Python 3.10's fromisoformat takes exactly this shape: six fraction
+    # digits and a +HH:MM offset (no "Z").  This file is concatenated
+    # into ``standalone_restorer.py``, which runs on 3.10.
+    norm = f"{m.group('base')}.{frac}{tz}"
+    try:
+        return datetime.fromisoformat(norm)
+    except ValueError:
+        # A date or time without zero padding ("2026-1-5T..."), which
+        # fromisoformat rejects and strptime accepts.
+        return datetime.strptime(norm, "%Y-%m-%dT%H:%M:%S.%f%z")
+
+
 def _parse_timestamp(ts: str) -> float:
     """Parse a restic-style ISO 8601 timestamp to epoch seconds.
 
-    Handles nanosecond precision: ``2026-01-15T10:30:00.123456789Z``.
-    Falls back to basic parsing if the format is unexpected.
+    See ``_parse_instant``; raises ValueError on a malformed time.
     """
-    # Strip trailing timezone designator and nanoseconds
-    ts = ts.rstrip("Z")
-    if "." in ts:
-        date_part, frac = ts.split(".", 1)
-        # Truncate to microseconds (Python limit)
-        frac = frac[:6].ljust(6, "0")
-        ts = f"{date_part}.{frac}"
-    else:
-        ts = ts + ".000000"
+    return _parse_instant(ts).timestamp()
 
-    # Python 3.7+ datetime.fromisoformat
-    from datetime import datetime
 
+def _snapshot_sort_key(snap: SnapshotMeta) -> tuple[int, float]:
+    """Sort key for snapshots: the instant of ``snap.time`` (#663).
+
+    A time that does not parse gives ``(0, 0.0)``, before every real
+    time, so a damaged snapshot file is never chosen as "latest".
+    """
     try:
-        # noqa UP017: datetime.UTC is 3.11+; this file is concatenated into
-        # ``standalone_restorer.py`` (Python 3.10 floor), so timezone.utc is required.
-        dt = datetime.fromisoformat(ts).replace(tzinfo=timezone.utc)  # noqa: UP017
+        return (1, _parse_timestamp(snap.time))
     except ValueError:
-        # Last resort: basic parse
-        dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S.%f").replace(
-            tzinfo=timezone.utc  # noqa: UP017
-        )
-    return dt.timestamp()
+        return (0, 0.0)
 
 
 def _log(msg: str) -> None:
