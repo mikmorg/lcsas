@@ -6599,6 +6599,15 @@ def _record_split_by_name(
     conn.commit()
 
 
+def _existing_share_files(out_dir: Path, repo: str) -> list[Path]:
+    """Files in *out_dir* named like ``key split``'s output for *repo* (#683)."""
+    import glob
+
+    if not out_dir.is_dir():
+        return []
+    return sorted(out_dir.glob(f"{glob.escape(repo)}-share-*"))
+
+
 def cmd_key_split(args: argparse.Namespace) -> int:
     """Split a repository password into K-of-N SLIP-0039 shares."""
     from datetime import date
@@ -6625,6 +6634,30 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         threshold = repo_k
     if shares is None:
         shares = repo_n
+    # #682: the same K/N rule the config loader applies, for -k/-n too.
+    from lcsas.config.settings import key_split_pair_error
+    pair_problem = key_split_pair_error(threshold, shares)
+    if pair_problem is not None:
+        logger.error("Could not split password: %s.", pair_problem)
+        return 1
+
+    # #683: never mix two splits in one folder.  A second split with a
+    # smaller N would leave the old higher-numbered cards beside the new
+    # ones, and they cannot combine with them.  Checked before the password
+    # is read, so nothing is written.
+    out_dir: Path = args.out if args.out is not None else Path(f"./keyshares-{args.repo}")
+    old_cards = _existing_share_files(out_dir, args.repo)
+    if old_cards:
+        logger.error(
+            "%s already holds share files for repository '%s' from an "
+            "earlier split:\n  %s\nNew cards must not sit beside them: cards "
+            "of two splits cannot be combined with each other. Move these "
+            "files into a dated subfolder (or destroy them, once every holder "
+            "has the new cards), or pass --out with an empty folder, then "
+            "split again. No shares were written.",
+            out_dir, args.repo, "\n  ".join(str(p) for p in old_cards),
+        )
+        return 1
 
     # Resolve the password source.
     if repo_pw_file is None:
@@ -6725,7 +6758,6 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         logger.error("Could not read share identifier: %s", e)
         return 1
 
-    out_dir: Path = args.out if args.out is not None else Path(f"./keyshares-{args.repo}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for i, mnemonic in enumerate(mnemonics, start=1):

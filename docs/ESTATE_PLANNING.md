@@ -167,6 +167,10 @@ Procedure after any password change:
    Each card is stamped with `Split on : <date>` and a `Split ID : NNNNN`
    (the SLIP-0039 identifier, shared by all cards of one split, different
    between splits) so you can tell card generations apart in the binder.
+   `key split` will not write into a folder that already holds
+   `R-share-*` files: move the old cards into a dated subfolder first, or
+   pass `--out` with an empty folder (#683). Cards of two splits never
+   combine with each other.
 2. **Redistribute** the new cards to the same share holders and places.
 3. **Recall and destroy** the superseded cards (shred / incinerate). Note the
    superseded `Split ID` in your estate notes so a stray old card is
