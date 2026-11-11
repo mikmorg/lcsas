@@ -328,6 +328,40 @@ class TestStandaloneSubprocess:
         assert manifest.is_file()
         assert "standalone_test.txt" in manifest.read_text()
 
+    def test_stop_at_disc_prompt_exits_75(self, tmp_path):
+        """#658: 'q' or the end of input at the disc prompt ends the
+        restore at once with exit 75 (tier 1's code) and one message."""
+        repo, pw_file, script = _build_repo_and_script(tmp_path)
+        # The disc holding the pack is not in the drive.
+        away = tmp_path / "away"
+        (repo / "data").rename(away)
+        (repo / "data").mkdir()
+        for stdin, said in (("q\n", "aborted by user"), ("", "input ended")):
+            target = tmp_path / f"output-{len(stdin)}"
+            result = subprocess.run(
+                [
+                    sys.executable, str(script),
+                    "--repo", str(repo),
+                    "--password-file", str(pw_file),
+                    "--target", str(target),
+                    "--interactive", "on",
+                ],
+                input=stdin,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            assert result.returncode == 75, (
+                f"stdin={stdin!r}: expected exit 75, got "
+                f"{result.returncode}.\nstderr: {result.stderr}"
+            )
+            err = result.stderr
+            assert "Traceback (most recent call last)" not in err, err
+            assert err.count("is required for the next file") == 1, err
+            assert err.count(said) == 1, err
+            assert err.count("[lcsas-restore] stopped at the disc prompt") == 1
+            assert "could not start" not in err
+
     def test_escaping_symlink_not_created(self, tmp_path):
         """RST-06: the generated script must skip an escaping relative
         symlink — no out-of-target link is created, and the loss is

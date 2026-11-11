@@ -34,7 +34,8 @@ This document provides a checklist and templates to make that possible.
 - [ ] **Maintain a paper manifest**
   - Generate a one-page whole-archive **estate card** with
     `lcsas --config lcsas.toml estate card --output card.txt` — it fills in
-    the owner, repositories, disc count (from the catalog), whether the
+    the owner, repositories, disc count (from the catalog: each burned
+    volume with a disc still in service, counted once), whether the
     password is split, and the literal first command an heir runs per
     operating system. No password is printed. Store this sheet WITH the disc
     binder.

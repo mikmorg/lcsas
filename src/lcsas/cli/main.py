@@ -6717,30 +6717,37 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
             STATUS_DEPRECATED,
             STATUS_VERIFIED,
         )
-        from lcsas.db.connection import get_connection
-        from lcsas.db.queries import get_lost_volume_ids
+        from lcsas.db.connection import locked_connection
         from lcsas.db.schema import ensure_schema
-        from lcsas.db.volumes import list_volumes
 
-        conn = get_connection(db_path)
-        try:
+        # #684: ensure_schema may migrate the catalog, so it runs under
+        # the catalog lock like every other writer.
+        with locked_connection(
+            db_path, timeout=_resolve_lock_timeout(args)
+        ) as conn:
             ensure_schema(conn)
-            # Count volumes that were burned (burned and beyond), not
-            # in-progress STAGING/BURNING volumes an heir won't hold, nor
-            # DESTROYED ones that no longer exist, nor lost volumes (no
-            # disc left in service, Q33) whose discs the heir won't hold.
-            burned = {
+            # #684: count the volumes the heir can hold: burned (and
+            # beyond) with at least one ACTIVE disc.  Not in-progress
+            # STAGING/BURNING volumes, not DESTROYED ones, and not a
+            # volume whose every disc was destroyed or retired (a lost
+            # volume, Q33, or one superseded by consolidation).  Copies
+            # of one volume share its label, so this counts labels.
+            burned = (
                 STATUS_BURNED, STATUS_VERIFIED, STATUS_CONSOLIDATING,
                 STATUS_DEPRECATED,
-            }
-            lost_ids = get_lost_volume_ids(conn)
+            )
+            row = conn.execute(
+                "SELECT COUNT(*) FROM volumes v "
+                f"WHERE v.status IN ({', '.join('?' * len(burned))}) "
+                "AND EXISTS (SELECT 1 FROM volume_copies c "
+                "            WHERE c.volume_id = v.volume_id "
+                "              AND c.status = 'ACTIVE')",
+                burned,
+            ).fetchone()
             # None, not 0, before the first burn: a card printed then (or
             # from staged drill discs) leaves the fill-in blank instead of
             # telling the heir there are "0 disc(s)".
-            disc_count = sum(
-                1 for v in list_volumes(conn)
-                if v.status in burned and v.volume_id not in lost_ids
-            ) or None
+            disc_count = int(row[0]) or None
             # KEY-08 / #573: print the split actually performed, not the
             # config's K/N.
             from lcsas.db.key_escrow import recorded_splits_by_name
@@ -6748,8 +6755,6 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
                 name: repo.mirror_path
                 for name, repo in config.repositories.items()
             })
-        finally:
-            conn.close()
 
     from lcsas.staging.metadata import split_view
 
