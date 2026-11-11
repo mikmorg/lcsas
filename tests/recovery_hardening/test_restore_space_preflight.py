@@ -259,12 +259,15 @@ def test_skip_space_check_proceeds_to_password_prompt(tmp_path: Path) -> None:
 
 
 def _run_restore_sh(recovery: Path, target: Path, cache: Path) -> subprocess.CompletedProcess[str]:
+    """restore.sh with the pack cache at ``cache`` and its tools folder
+    beside the fixture, not in the home folder."""
     return subprocess.run(
         ["sh", str(RESTORE_SH), str(recovery), str(target)],
         stdin=subprocess.DEVNULL,
         capture_output=True, text=True,
-        env=_env(LCSAS_PACK_CACHE_DIR=str(cache)), timeout=30,
-        start_new_session=True,
+        env=_env(LCSAS_PACK_CACHE_DIR=str(cache),
+                 LCSAS_TOOLS_DIR=str(recovery.parent / "tools")),
+        timeout=30, start_new_session=True,
     )
 
 
