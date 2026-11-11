@@ -2092,7 +2092,7 @@ def _add_untracked(rec: Path) -> None:
     """
     from lcsas.meta.required_contents import required_meta_paths
 
-    for rel in (*_JUNK, "notes.txt", "bin/x86_64/lcsas-init"):
+    for rel in (*_JUNK, "notes.txt", "bin/x86_64/untracked-helper"):
         (rec / rel).parent.mkdir(parents=True, exist_ok=True)
         (rec / rel).write_bytes(b"untracked\n")
     for rel in required_meta_paths():
@@ -2150,7 +2150,7 @@ class TestRecoveryBundleTrackedOnly:
         assert os.access(bundled / "scripts" / "restore.sh", os.X_OK)
         # bin/ goes on as it stands, untracked files included.
         assert (bundled / "bin" / "x86_64" / "lcsas-restore").is_file()
-        assert (bundled / "bin" / "x86_64" / "lcsas-init").is_file()
+        assert (bundled / "bin" / "x86_64" / "untracked-helper").is_file()
 
         assert b.unlisted_recovery_files() == []
         _stub_root_contents(out)

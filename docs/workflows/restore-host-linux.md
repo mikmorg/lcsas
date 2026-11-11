@@ -16,9 +16,9 @@ on `PATH`. The flow is:
 This is *not* the path for a restore after a disaster. Sibling docs
 cover the harder modes:
 
-- [`docs/workflows/restore-bare-metal.md`](restore-bare-metal.md) —
-  restore when the LCSAS host itself is gone (its boot path is not
-  built today; no LCSAS disc is bootable).
+- [`docs/workflows/restore-live-usb.md`](restore-live-usb.md) —
+  restore when the LCSAS host itself is gone: boot a live-Linux USB
+  (no LCSAS disc is bootable).
 - [`docs/workflows/restore-windows.md`](restore-windows.md) —
   restore from a Windows workstation.
 - [`docs/workflows/restore-disc-only.md`](restore-disc-only.md) —
@@ -123,7 +123,7 @@ copied and `rustic` is invoked only for `--dry-run`.
   catalog the same way.
 - *Multi-repository*: yes — `--repo` selects exactly one repository;
   per-repository password files keep repositories apart.
-- *OS*: Linux only for this doc (Windows/bare-metal handled by
+- *OS*: Linux only for this doc (Windows/live USB handled by
   siblings).
 - *Optical drive count*: irrelevant; `plan` doesn't touch discs.
 - *Multi-copy*: both `plan` and `exec` use the alternates-aware

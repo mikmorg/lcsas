@@ -787,9 +787,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=(
             "host",
             # Linux musl targets (Phase 21.10.b + 21.11).
-            "x86_64", "aarch64", "armv7", "riscv64",
-            # Windows-gnu targets via `zig cc` (Phase 21.10.b).
-            "x86_64-windows", "aarch64-windows",
+            "x86_64", "aarch64", "armv7",
+            # Windows-gnu target via `zig cc` (Phase 21.10.b).
+            "x86_64-windows",
             # macOS targets via `zig cc -target X-macos` (Phase 21.12).
             "x86_64-macos", "aarch64-macos",
         ),
@@ -5208,8 +5208,6 @@ def cmd_recovery(args: argparse.Namespace) -> int:
         print(f"built {a.arch}: {a.lcsas_restore}")
         if a.lcsas_iso9660:
             print(f"  + {a.lcsas_iso9660}")
-        if a.lcsas_init:
-            print(f"  + {a.lcsas_init}")
         return 0
 
     if sub == "test":

@@ -772,7 +772,6 @@ class _FakeRecoveryBuilder:
             arch="x86_64",
             lcsas_restore=self.recovery_dir / "build" / "lcsas-restore",
             lcsas_iso9660=None,
-            lcsas_init=None,
         )
 
     def cross_build(self, arch: str, cc=None, verbose: bool = False):
@@ -785,7 +784,6 @@ class _FakeRecoveryBuilder:
             arch=arch,
             lcsas_restore=self.recovery_dir / "bin" / arch / "lcsas-restore",
             lcsas_iso9660=None,
-            lcsas_init=None,
         )
 
     def run_tests(self, verbose: bool = False) -> bool:

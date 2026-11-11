@@ -171,7 +171,7 @@ def test_mtime_tie_keeps_the_first_catalog_in_scan_order(tmp_path: Path) -> None
     so equal mtimes keep the first one scanned (mount dirs in
     LCSAS_MOUNT_DIRS order, discs in glob order).  mtime is the only
     freshness signal the script has; a disc with a skewed clock can still
-    win or lose wrongly (docs/workflows/restore-bare-metal.md)."""
+    win or lose wrongly."""
     recovery = _recovery(tmp_path)
     first_dir, second_dir = tmp_path / "a-media", tmp_path / "b-media"
     first = _disc(first_dir / "LCSAS_0009", 1_700_000_000)

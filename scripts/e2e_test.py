@@ -18,7 +18,7 @@ Phases:
   9. Report summary
 
 Prerequisites:
-  - /mnt/lcsas-data mounted (run scripts/setup_test_lv.sh first)
+  - /mnt/lcsas-data mounted, or LCSAS_E2E_BASE set to a writable scratch dir
   - rustic, xorriso on PATH
   - dvdisaster on PATH (optional — ECC steps skipped if missing)
   - lcsas installed in the active venv
@@ -126,7 +126,7 @@ def preflight() -> bool:
             BASE.mkdir(parents=True, exist_ok=True)
             info(f"Created base {BASE}")
         else:
-            fail(f"{BASE} does not exist — run scripts/setup_test_lv.sh first")
+            fail(f"{BASE} does not exist — mount it, or set LCSAS_E2E_BASE")
             return False
 
     for d in [MIRROR_DIR, STAGING_DIR, ISO_DIR, RESTORE_DIR, DB_DIR, TEST_DATA_DIR]:

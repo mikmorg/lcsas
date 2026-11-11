@@ -29,7 +29,6 @@ class RecoveryArtifacts:
     arch: str
     lcsas_restore: Path
     lcsas_iso9660: Path | None
-    lcsas_init: Path | None
 
 
 class RecoveryBuilder:
@@ -42,14 +41,16 @@ class RecoveryBuilder:
         Makefile, src/, vendored/, etc.).
     """
 
+    # The six approved tier-1 targets (APPROVED_TARGETS in
+    # lcsas.meta.required_contents); nothing else is built.
     SUPPORTED_ARCHES = (
-        "x86_64", "aarch64", "armv7", "riscv64",
-        "x86_64-windows", "aarch64-windows",
+        "x86_64", "aarch64", "armv7",
+        "x86_64-windows",
         "x86_64-macos", "aarch64-macos",
     )
 
     # Arches that target Windows -- binaries get .exe suffix, build via zig cc.
-    _WINDOWS_ARCHES = ("x86_64-windows", "aarch64-windows")
+    _WINDOWS_ARCHES = ("x86_64-windows",)
     # Arches that target macOS -- build via `zig cc -target <arch>-macos`,
     # produce Mach-O executables, no -static (macOS forbids it).
     _MACOS_ARCHES = ("x86_64-macos", "aarch64-macos")
@@ -62,7 +63,6 @@ class RecoveryBuilder:
         "x86_64":  "x86_64-linux-musl-gcc",
         "aarch64": "aarch64-linux-musl-gcc",
         "armv7":   "armv7-linux-musleabihf-gcc",
-        "riscv64": "riscv64-linux-musl-gcc",
     }
 
     def __init__(self, recovery_dir: Path) -> None:
@@ -100,14 +100,13 @@ class RecoveryBuilder:
             arch=arch,
             lcsas_restore=build / "lcsas-restore",
             lcsas_iso9660=build / "lcsas-iso9660" if (build / "lcsas-iso9660").exists() else None,
-            lcsas_init=build / "lcsas-init" if (build / "lcsas-init").exists() else None,
         )
 
     def cross_build(self, arch: str, cc: str | None = None,
                     verbose: bool = False) -> RecoveryArtifacts:
         """Cross-compile lcsas-restore for ``arch``.
 
-        For Linux arches (x86_64, aarch64, armv7, riscv64), ``cc``
+        For Linux arches (x86_64, aarch64, armv7), ``cc``
         defaults to the canonical musl-cross-make prefix for that
         target (``x86_64-linux-musl-gcc`` for most; armv7 uses the
         hardfloat variant ``armv7-linux-musleabihf-gcc``).  The
@@ -115,18 +114,17 @@ class RecoveryBuilder:
         your toolchain ships a different prefix or you want to use
         ``zig cc`` (e.g. ``--cc "zig cc -target armv7-linux-musleabihf"``).
 
-        For Windows arches (x86_64-windows, aarch64-windows), the
-        Makefile's dedicated ``windows`` target is invoked (which
-        shells out to ``zig cc -target <arch>-windows-gnu``); the
-        binary has a ``.exe`` suffix and lcsas-init is not produced
-        (it's a Linux-only PID 1).
+        For Windows (x86_64-windows), the Makefile's dedicated
+        ``bin/x86_64-windows/lcsas-restore.exe`` rule is invoked (which
+        shells out to ``zig cc -target x86_64-windows-gnu``); the
+        binary has a ``.exe`` suffix.
 
         For macOS arches (x86_64-macos, aarch64-macos), Phase 21.12
         uses ``zig cc -target <arch>-macos`` (no Apple SDK required —
         zig bundles enough libSystem definitions to link Mach-O
         executables for both Apple Silicon and Intel).  Binary has
-        no extension; lcsas-iso9660 and lcsas-init are not produced
-        (redundant on Darwin / Linux-only respectively).
+        no extension; lcsas-iso9660 is not produced (redundant on
+        Darwin).
         """
         if arch not in self.SUPPORTED_ARCHES:
             raise ValueError(f"unsupported arch: {arch}")
@@ -161,12 +159,10 @@ class RecoveryBuilder:
             return RecoveryArtifacts(
                 arch=arch,
                 lcsas_restore=exe,
-                # iso9660 / init not produced for non-Linux targets:
-                #   - init is Linux PID 1 only
-                #   - iso9660 is redundant — Windows + macOS can
-                #     mount ISOs natively (Mount-DiskImage / hdiutil)
+                # iso9660 is not produced for non-Linux targets: it is
+                # redundant — Windows + macOS can mount ISOs natively
+                # (Mount-DiskImage / hdiutil).
                 lcsas_iso9660=None,
-                lcsas_init=None,
             )
 
         # ── Linux cross-compile path ─────────────────────────────────
@@ -204,19 +200,17 @@ class RecoveryBuilder:
         bin_dir = self._dir / "bin" / arch
         bin_dir.mkdir(parents=True, exist_ok=True)
         build = self._dir / "build" / arch
-        for name in ("lcsas-restore", "lcsas-iso9660", "lcsas-init"):
+        for name in ("lcsas-restore", "lcsas-iso9660"):
             src = build / name
             if src.exists():
                 shutil.copy2(str(src), str(bin_dir / name))
                 os.chmod(str(bin_dir / name), 0o755)
 
         iso9660_path = bin_dir / "lcsas-iso9660"
-        init_path = bin_dir / "lcsas-init"
         return RecoveryArtifacts(
             arch=arch,
             lcsas_restore=bin_dir / "lcsas-restore",
             lcsas_iso9660=iso9660_path if iso9660_path.exists() else None,
-            lcsas_init=init_path if init_path.exists() else None,
         )
 
     def run_tests(self, verbose: bool = False) -> bool:
@@ -263,6 +257,4 @@ class RecoveryBuilder:
             return "x86_64"
         if m in ("aarch64", "arm64"):
             return "aarch64"
-        if m == "riscv64":
-            return "riscv64"
         raise RuntimeError(f"unsupported host arch: {m}")
