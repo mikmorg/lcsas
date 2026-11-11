@@ -33,9 +33,11 @@ from lcsas.restore._aes_pure import (
     key_schedule,
 )
 from lcsas.restore.restic_fallback import (
+    EXIT_READER_QUIT,
     IntegrityError,
     MasterKey,
     PurePythonRestorer,
+    RestoreAbortedError,
     _clamp_r,
     _constant_time_eq,
     _decrypt_authenticated,
@@ -2825,6 +2827,156 @@ def _build_multifile_repo(
     return repo
 
 
+class TestRestoreAborts:
+    """#658: q / end of input at the disc prompt and a full disk stop the
+    WHOLE restore at once; a damaged file still fails only itself."""
+
+    FILES = {
+        "a.txt": b"alpha content\n",
+        "b.txt": b"bravo content\n",
+        "c.txt": b"charlie content\n",
+    }
+
+    def _restorer(self, tmp_path: Path, **kw) -> PurePythonRestorer:
+        repo = _build_multifile_repo(tmp_path, files=self.FILES, **kw)
+        return PurePythonRestorer(repo, password=PASSWORD, interactive=True)
+
+    def _data_packs_missing(self, r: PurePythonRestorer) -> None:
+        """Every data blob asks for a disc that is never inserted."""
+        data_ids = {hashlib.sha256(c).hexdigest() for c in self.FILES.values()}
+        real_read = r._read_blob
+
+        def _read(blob_id: str) -> bytes:
+            if blob_id in data_ids:
+                r._find_pack_path("ff" * 32)
+            return real_read(blob_id)
+
+        r._read_blob = _read  # type: ignore[method-assign]
+
+    @pytest.mark.parametrize(("stdin", "said"), [
+        ("q\n", "aborted by user"),
+        ("", "input ended"),
+    ])
+    def test_stop_at_prompt_ends_restore_at_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+        stdin: str, said: str,
+    ):
+        r = self._restorer(tmp_path)
+        self._data_packs_missing(r)
+        monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+        target = tmp_path / "out"
+        with pytest.raises(RestoreAbortedError) as ei:
+            r.restore(target=target)
+        assert ei.value.exit_code == EXIT_READER_QUIT
+        err = capsys.readouterr().err
+        # One prompt, one stop: not a prompt per remaining file.
+        assert err.count("is required for the next file") == 1
+        assert err.count(said) == 1
+        assert r.failures == 0
+        assert sorted(p.name for p in target.iterdir()) == []
+
+    def test_disk_full_while_writing_ends_restore(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        import errno
+
+        import lcsas.restore.restic_fallback as fb
+
+        r = self._restorer(tmp_path)
+        calls = []
+
+        def _full(src, dst):
+            calls.append(dst)
+            raise OSError(errno.ENOSPC, "No space left on device", str(src))
+
+        monkeypatch.setattr(fb.os, "replace", _full)
+        target = tmp_path / "out"
+        with pytest.raises(RestoreAbortedError) as ei:
+            r.restore(target=target)
+        assert len(calls) == 1, "must stop at the first full write"
+        assert ei.value.exit_code == 1
+        msg = str(ei.value)
+        assert f"filesystem that holds {target} is full" in msg
+        assert "No space left on device" in msg
+        # The partial file is removed (frees its space) and nothing else
+        # was attempted or recorded as a per-file failure.
+        assert list(target.iterdir()) == []
+        assert r.failures == 0
+
+    def test_disk_full_outside_the_file_write_ends_restore(
+        self, tmp_path: Path
+    ):
+        # ENOSPC raised by the per-node path (mkdir, symlink, the file's
+        # parent dir) reaches the _restore_tree handler: also an abort.
+        import errno
+
+        r = self._restorer(tmp_path)
+        calls = []
+
+        def _full(node, path):
+            calls.append(path)
+            raise OSError(errno.EDQUOT, "Disk quota exceeded")
+
+        r._restore_file = _full  # type: ignore[method-assign]
+        with pytest.raises(RestoreAbortedError) as ei:
+            r.restore(target=tmp_path / "out")
+        assert len(calls) == 1
+        assert ei.value.exit_code == 1
+        assert "Disk quota exceeded" in str(ei.value)
+
+    def test_other_write_error_fails_only_that_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        import errno
+
+        import lcsas.restore.restic_fallback as fb
+
+        r = self._restorer(tmp_path)
+        real_replace = os.replace
+
+        def _eio_on_b(src, dst):
+            if str(dst).endswith("b.txt"):
+                raise OSError(errno.EIO, "Input/output error")
+            real_replace(src, dst)
+
+        monkeypatch.setattr(fb.os, "replace", _eio_on_b)
+        target = tmp_path / "out"
+        r.restore(target=target)  # no abort
+        assert r.failures == 1
+        assert (target / "a.txt").read_bytes() == self.FILES["a.txt"]
+        assert (target / "c.txt").read_bytes() == self.FILES["c.txt"]
+
+    def test_damaged_file_fails_only_that_file(self, tmp_path: Path):
+        r = self._restorer(tmp_path, corrupt_blob="b.txt")
+        target = tmp_path / "out"
+        r.restore(target=target)  # no abort
+        assert r.failures == 1
+        assert not (target / "b.txt").exists()
+        assert (target / "a.txt").read_bytes() == self.FILES["a.txt"]
+        assert (target / "c.txt").read_bytes() == self.FILES["c.txt"]
+
+    def test_failures_before_a_stop_are_still_listed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # a.txt is damaged (recorded), then q at the prompt for b.txt:
+        # RESTORE_FAILURES.txt still names a.txt.
+        r = self._restorer(tmp_path, corrupt_blob="a.txt")
+        b_id = hashlib.sha256(self.FILES["b.txt"]).hexdigest()
+        real_read = r._read_blob
+
+        def _read(blob_id: str) -> bytes:
+            if blob_id == b_id:
+                r._find_pack_path("ff" * 32)
+            return real_read(blob_id)
+
+        r._read_blob = _read  # type: ignore[method-assign]
+        monkeypatch.setattr(sys, "stdin", io.StringIO("q\n"))
+        target = tmp_path / "out"
+        with pytest.raises(RestoreAbortedError):
+            r.restore(target=target)
+        assert "a.txt" in (target / "RESTORE_FAILURES.txt").read_text()
+
+
 class TestTolerantTraversal:
     """RST-03: one bad blob must not abort the whole tier-3 restore."""
 
@@ -3221,28 +3373,47 @@ class TestSwapPromptCatalogStates:
 
 class TestInteractiveFindPackPath:
     def test_eof_on_stdin_gives_up(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
     ):
-        # Empty stdin -> readline() returns "" -> break -> FileNotFound
-        # (restic_fallback.py:1004-1007 then 1021-1025).
+        # Empty stdin -> readline() returns "" -> the whole restore stops
+        # (#658: was FileNotFoundError, which failed only this file).
         d = tmp_path / "mnt"
         d.mkdir()
         r = _bare_restorer(tmp_path, pack_search_paths=[d], interactive=True)
         monkeypatch.setattr(sys, "stdin", io.StringIO(""))
-        with pytest.raises(FileNotFoundError, match="Pack file not found"):
+        with pytest.raises(RestoreAbortedError) as ei:
             r._find_pack_path("deadbeef" * 8)
+        assert ei.value.exit_code == EXIT_READER_QUIT == 75
+        assert not isinstance(ei.value, OSError)
+        assert "input ended" in capsys.readouterr().err
 
     def test_q_aborts(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
     ):
-        # 'q' -> abort message + break (restic_fallback.py:1008-1010).
+        # 'q' -> abort message + the whole restore stops (#658).
         d = tmp_path / "mnt"
         d.mkdir()
         r = _bare_restorer(tmp_path, pack_search_paths=[d], interactive=True)
         monkeypatch.setattr(sys, "stdin", io.StringIO("q\n"))
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(RestoreAbortedError) as ei:
             r._find_pack_path("deadbeef" * 8)
+        assert ei.value.exit_code == EXIT_READER_QUIT
+        assert "stopped at the disc prompt" in str(ei.value)
         assert "aborted by user" in capsys.readouterr().err
+
+    def test_retries_exhausted_still_fails_only_the_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # ENTER every time, never found: FileNotFoundError, a per-file
+        # failure, as before.
+        d = tmp_path / "mnt"
+        d.mkdir()
+        r = _bare_restorer(tmp_path, pack_search_paths=[d], interactive=True)
+        monkeypatch.setattr(
+            sys, "stdin", io.StringIO("\n" * (r._DISC_SWAP_MAX_RETRIES + 1))
+        )
+        with pytest.raises(FileNotFoundError, match="Pack file not found"):
+            r._find_pack_path("deadbeef" * 8)
 
     def test_found_after_retry(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys

@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import atexit
 import base64
+import errno
 import hashlib
 import json
 import os
@@ -213,6 +214,49 @@ class NoKeyUnlockedError(IntegrityError):
         super().__init__(message)
         self.rejected = rejected
         self.corrupt = corrupt
+
+
+#: Exit code for "the reader typed q at the disc prompt (or its input
+#: ended there)".  The same as tier 1's EXIT_READER_QUIT: sysexits.h
+#: EX_TEMPFAIL, "try again later".
+EXIT_READER_QUIT = 75
+
+
+class RestoreAbortedError(Exception):
+    """The whole restore must stop now, not just the current file (#658).
+
+    Raised when the reader types ``q`` at the disc prompt, when input
+    ends there, and when the target filesystem is full.  Deliberately
+    NOT an ``OSError`` (nor an ``IntegrityError``): the tolerant
+    per-file handlers catch those and go on with the next file, which
+    would ask for the same disc again, or fail every remaining file in
+    turn on a full disk.
+
+    ``exit_code`` is what the tier-3 command exits with:
+    ``EXIT_READER_QUIT`` (75) for a stop at the disc prompt, 1 for a
+    full disk.
+    """
+
+    def __init__(self, message: str, exit_code: int) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
+
+
+#: "No space left" and "quota exceeded" (EDQUOT is absent on Windows).
+_DISK_FULL_ERRNOS = frozenset(
+    {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}
+)
+
+
+def _disk_full_abort(path: Path, exc: OSError) -> RestoreAbortedError:
+    """Build the abort for a full target filesystem while writing *path*."""
+    return RestoreAbortedError(
+        f"the filesystem that holds {path.parent} is full "
+        f"({exc.strerror or exc}) while writing {path.name}.  Free some "
+        "space there, or restore to a bigger disk, then run the same "
+        "command again.  Files restored so far are kept.",
+        exit_code=1,
+    )
 
 
 class _NodeFailed(Exception):  # noqa: N818 — internal control-flow sentinel, not a public error
@@ -501,7 +545,9 @@ class PurePythonRestorer:
             interactive: If True (default), ``_find_pack_path`` prints the
                 LCSAS disc-swap prompt to stderr and blocks on stdin when
                 a pack is not found in any configured search path, then
-                rescans (up to ``_DISC_SWAP_MAX_RETRIES`` times).  If False,
+                rescans (up to ``_DISC_SWAP_MAX_RETRIES`` times).  ``q`` or
+                the end of input there raises ``RestoreAbortedError``,
+                which stops the whole restore (#658).  If False,
                 ``_find_pack_path`` raises FileNotFoundError on miss
                 (matches pre-#234 behaviour; tests that pin the raise
                 contract must opt out explicitly).  The tier-3 CLI sets
@@ -610,6 +656,11 @@ class PurePythonRestorer:
         Returns:
             SnapshotMeta for the restored snapshot.
 
+        Raises:
+            RestoreAbortedError: the reader typed ``q`` at the disc
+                prompt, its input ended there, or the target filesystem
+                is full (#658).  Its ``exit_code`` says which.
+
         Note:
             Under the default tolerant mode (``strict=False``), a
             per-node failure does not raise — the count is available on
@@ -641,7 +692,14 @@ class PurePythonRestorer:
             _log(f"Counted {self._progress_total_files} file(s) to restore.")
 
         target.mkdir(parents=True, exist_ok=True)
-        self._restore_tree(snap.tree, target)
+        try:
+            self._restore_tree(snap.tree, target)
+        except RestoreAbortedError:
+            # #658: the restore stops here; still list the files that
+            # failed before the stop.
+            if self._failures:
+                self._write_failure_manifest(target)
+            raise
 
         # Force a final 100% line so the last reported count matches
         # the total — otherwise the heir sees e.g. 47/50 and
@@ -1255,7 +1313,9 @@ class PurePythonRestorer:
         Supports both flat and two-level layouts.  When *interactive*
         is True and no copy is found, prints the LCSAS disc-swap prompt
         to stderr, waits for ENTER on stdin, then rescans -- up to
-        ``_DISC_SWAP_MAX_RETRIES`` times.
+        ``_DISC_SWAP_MAX_RETRIES`` times.  ``q`` or the end of input
+        raises ``RestoreAbortedError`` (#658); running out of retries
+        raises FileNotFoundError, which fails only the current file.
         """
         hit = self._scan_pack_search_paths(pack_id)
         if hit is not None:
@@ -1268,16 +1328,23 @@ class PurePythonRestorer:
                 f"Looked in: {searched}"
             )
 
-        # Interactive: prompt-and-retry loop, bounded.
+        # Interactive: prompt-and-retry loop, bounded.  'q' or the end of
+        # input stops the WHOLE restore (#658), as in tier 1: failing
+        # just this file would ask for a disc again for the next one.
         for _ in range(self._DISC_SWAP_MAX_RETRIES):
             self._print_swap_prompt(pack_id)
             line = sys.stdin.readline()
-            if not line:
-                # EOF on stdin -- nothing more to read, give up cleanly.
-                break
-            if line.strip().lower() == "q":
-                sys.stderr.write("[lcsas-restore] aborted by user\n")
-                break
+            if not line or line.strip().lower() == "q":
+                if line:
+                    sys.stderr.write("[lcsas-restore] aborted by user\n")
+                else:
+                    # The cursor still sits after "> ": end that line.
+                    sys.stderr.write("\n[lcsas-restore] input ended\n")
+                raise RestoreAbortedError(
+                    "stopped at the disc prompt.  Files restored so far "
+                    "are kept.  To carry on, run the same command again.",
+                    exit_code=EXIT_READER_QUIT,
+                )
             hit = self._scan_pack_search_paths(pack_id)
             if hit is not None:
                 sys.stderr.write(
@@ -1505,6 +1572,9 @@ class PurePythonRestorer:
                 # subtree recursion records its own. Keep going.
                 continue
             except (IntegrityError, KeyError, OSError) as exc:
+                if isinstance(exc, OSError) and exc.errno in _DISK_FULL_ERRNOS:
+                    # #658: a full disk would fail every later file too.
+                    raise _disk_full_abort(node_path, exc) from exc
                 if self._strict:
                     raise
                 self._record_failure(node_path, "", exc)
@@ -1539,13 +1609,17 @@ class PurePythonRestorer:
                     bytes_written += len(chunk)
             self._apply_metadata(node, tmp_path)
             os.replace(tmp_path, path)
-        except _NodeFailed:
+        except (_NodeFailed, RestoreAbortedError):
             tmp_path.unlink(missing_ok=True)
             raise
         except (IntegrityError, KeyError, OSError) as exc:
             # Failure outside the per-blob guard above (e.g. _apply_metadata
             # or os.replace) — still record + clean up under tolerant mode.
             tmp_path.unlink(missing_ok=True)
+            if isinstance(exc, OSError) and exc.errno in _DISK_FULL_ERRNOS:
+                # #658: stop the whole restore (removing the partial file
+                # above gave its space back).
+                raise _disk_full_abort(path, exc) from exc
             if self._strict:
                 raise
             self._record_failure(path, "", exc)
