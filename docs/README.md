@@ -39,7 +39,7 @@ Task-oriented walkthroughs for running an archive and restoring from it:
 - [guides/survivability.md](guides/survivability.md) — durability rationale:
   why the cascade and disc-integrity layers survive decades.
 - [RECOVERY_GUIDE.md](RECOVERY_GUIDE.md) — emergency router to the OS-specific
-  restore path (Linux, macOS, Windows, bare-metal, disc-only fallback).
+  restore path (Linux, macOS, Windows, live USB, disc-only fallback).
 - [ESTATE_PLANNING.md](ESTATE_PLANNING.md) — handing the archive to an heir.
 - [PASSWORD_CARD.txt](PASSWORD_CARD.txt) — printable fill-in-the-blanks
   password-card template for one repository's password (never kept with

@@ -5,7 +5,7 @@ Durable, offline-first cold archival for Linux — built so data stays restorabl
 > **🚨 In an emergency and need to restore data?**
 > Start at **[docs/RECOVERY_GUIDE.md](docs/RECOVERY_GUIDE.md)** — it
 > routes you to the right OS-specific walkthrough (Linux, macOS,
-> Windows, bare-metal, or disc-only Python reader) in one click.
+> Windows, live USB, or disc-only Python reader) in one click.
 
 ## Key Capabilities
 
