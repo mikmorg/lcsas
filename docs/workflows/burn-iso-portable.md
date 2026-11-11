@@ -21,8 +21,8 @@ media without touching any catalog, then optionally emits a small JSON
 **receipt** describing what happened (label, location, device, burn date,
 ISO SHA-256, verify result). Receipts travel back to the canonical host
 where `lcsas catalog import-receipts` reconciles them with the master
-catalog: status is advanced, locations are ensured, discs and audit
-events are recorded. The receipt is the only authoritative record of a
+catalog: status is advanced, discs and audit events are recorded. A
+receipt must name a location that is already registered. The receipt is the only authoritative record of a
 remote burn, so its handling — generation, transport, idempotent
 ingestion — is the central concern of this document.
 
@@ -237,10 +237,20 @@ where its discs will be kept (B).
 6. **Transport back.** Copy the receipt directory back to A. Receipts
    are small JSON files; bandwidth and trust requirements are minimal.
    A receipt does not contain Rustic secrets or pack contents.
-7. **On A — reconcile.** Run `lcsas catalog import-receipts
-   <receipts-dir>/*.json` against the master catalog. Each receipt
-   transitions its volume's status (or records another disc if the volume
-   is already VERIFIED — see next section).
+7. **On A — reconcile.** Import the new receipts, then move them into an
+   `imported/` subfolder, so the next round imports only its own:
+
+   ```
+   lcsas catalog import-receipts <receipts-dir>/*.json
+   mkdir -p <receipts-dir>/imported
+   mv <receipts-dir>/*.json <receipts-dir>/imported/
+   ```
+
+   Each receipt transitions its volume's status (or records another disc
+   if the volume is already VERIFIED — see next section). A receipt that
+   is refused stays refused until you fix the cause; read the messages
+   before you move the files. Importing a receipt again is harmless: it
+   is reported as "already imported" and changes nothing (#666).
 8. **Optional — physical handoff.** If the burner is also where the
    discs will be kept, the discs stay where they are. If they
    are being couriered to a third place, follow up with `lcsas location
@@ -252,9 +262,11 @@ where its discs will be kept (B).
 - Catalog on A reflects every successful burn on B (`STAGING →
   BURNING → VERIFIED` for first burns, plus a `volume_copies` row per
   location).
-- Failed verifies on B become `BURNED` (not `VERIFIED`) on A and emit
-  a `VERIFY_FAIL` audit event so the owner can investigate
-  (`cmd_catalog_import`).
+- A failed verify on B leaves the volume `STAGING` on A (#483), records
+  no disc, and writes a `VERIFY_FAIL` event. `lcsas status` then lists
+  the volume under "needs re-burn", and the next step is to stage it
+  again for that location with `lcsas stage --for-location <location>`
+  and burn the new volume (#671; `cmd_catalog_import`).
 - A complete audit trail exists on A: every receipt-imported event
   includes the receipt filename in its detail field
   (`cmd_catalog_import`).
@@ -328,10 +340,10 @@ B.
 
 **Purpose:** Pull one or more burn receipts produced by remote (or
 local) `burn-iso` runs into the canonical master catalog, advancing
-volume status, ensuring locations exist, and recording discs and
-audit events. This is the only "write" path that mutates the catalog
-based on out-of-band burn evidence; everything else in the catalog is
-produced by a live burn pipeline.
+volume status and recording discs and audit events. This is the only
+"write" path that mutates the catalog based on out-of-band burn
+evidence; everything else in the catalog is produced by a live burn
+pipeline.
 
 **Prerequisites:**
 
@@ -339,14 +351,24 @@ produced by a live burn pipeline.
   `cmd_catalog_import`).
 - Read/write access to the master `catalog.db` (defaults from config;
   overridable via `--db`).
-- One or more receipt JSON files with at minimum the keys
-  `volume_label` and `location`
-  (`cmd_catalog_import`).
+- One or more receipt JSON files with the keys `volume_label`,
+  `location` and `verify_passed` (`cmd_catalog_import`).
 - The referenced volume must already exist in the master catalog —
-  i.e. `lcsas stage` must have run for it. Receipts whose volume label
-  is unknown are skipped with a warning
-  (`cmd_catalog_import`); they are **not** an error and
-  do not abort the rest of the batch.
+  i.e. `lcsas stage` must have run for it.
+- The receipt's location must be registered (`lcsas location add`).
+
+Every receipt that cannot be imported is refused with a message and
+writes nothing. The other receipts of the batch are still imported, and
+the command exits non-zero (#669).
+
+**Options:**
+
+- `--allow-unhashed` — let a passing receipt make its volume VERIFIED
+  when its ISO hash cannot be matched to the staged ISO (the receipt
+  has no `iso_sha256`, or no hash was recorded at staging, as for the
+  newest burn session after a `catalog rebuild`). Check the disc first.
+- `--allow-other-location` — accept a first disc at a location other
+  than the one its volume was staged for.
 
 **Steps:**
 
@@ -356,87 +378,98 @@ produced by a live burn pipeline.
    exists (`cmd_catalog_import`,
    `src/lcsas/db/connection.py`, `src/lcsas/db/schema.py`).
 3. For each receipt file:
-   1. Parse JSON; on `JSONDecodeError` or `OSError`, log a warning and
-      continue with the next file
-      (`cmd_catalog_import`).
-   2. Validate required keys (`volume_label`, `location`); skip with a
-      warning if any are missing
-      (`cmd_catalog_import`).
-   3. Look up the volume by label; skip with a warning if absent
-      (`cmd_catalog_import`).
-   4. Staged-ISO guard (#644): compare the receipt's `iso_sha256` and
+   1. Parse JSON; refuse a file that cannot be read or is not a JSON
+      object (`cmd_catalog_import`).
+   2. Check the fields: `volume_label` and `location` must be non-blank
+      strings, `iso_size_bytes` a non-negative integer, and
+      `verify_passed` JSON `true`, `false` or `null` — nothing else, so
+      the string `"false"` is refused, not read as passed (#669).
+   3. Look up the volume by label; refuse the receipt if it is unknown.
+   4. Already imported (#666): if a receipt with the same location,
+      burn date and ISO hash was imported for this volume before, say
+      "already imported" and change nothing. This is not an error. If
+      that disc has since been recorded lost, destroyed or deprecated,
+      the message says so, and the disc stays that way.
+   5. Location (#669): refuse a location that is not registered, as
+      `lcsas burn` does; the message lists the known locations. A
+      receipt for a volume with no verified disc yet (STAGING, BURNING
+      or BURNED) must name the location the volume was staged for
+      (`volumes.location`), unless `--allow-other-location` is given.
+      Volumes staged before that column was set are not checked, and a
+      VERIFIED volume taking a disc at another location is the
+      multi-copy path, also not checked.
+   6. Staged-ISO guard (#644): compare the receipt's `iso_sha256` and
       `iso_size_bytes` with the values recorded in `session_volumes` when
       the volume's ISO was mastered (its most recent burn session).  On a
-      difference, **reject** the receipt (no rows written, both hashes
-      named) and count it toward the non-zero exit: the disc was burned
-      from a copy of the ISO that is not the one staged, for example one
-      damaged on its way to the burner.  `burn-iso`'s own verify cannot
-      catch this, since it only compares the disc with the file it was
-      given.  A receipt with no hash, or a volume with no staged hash on
-      record, is imported with a warning that the check was SKIPPED
-      (`cmd_catalog_import`, `get_staged_iso` in
-      `src/lcsas/db/sessions.py`).
-   5. Issue #18 hash guard: if any prior `BURN_RECEIPT_IMPORTED` event
+      difference, **reject** the receipt (both hashes named): the disc
+      was burned from a copy of the ISO that is not the one staged, for
+      example one damaged on its way to the burner.  `burn-iso`'s own
+      verify cannot catch this, since it only compares the disc with the
+      file it was given (`get_staged_iso` in `src/lcsas/db/sessions.py`).
+   7. Issue #18 hash guard: if any prior `BURN_RECEIPT_IMPORTED` event
       for this volume recorded a different `iso_sha256`, **reject** the
-      receipt (no rows written) and count it toward the non-zero exit
-      (`cmd_catalog_import`).
-   6. Ensure the destination location exists (creates the row if not —
-      `cmd_catalog_import`,
-      `src/lcsas/db/locations.py`).
-   7. Read `verify_passed` (default `False`)
-      (`cmd_catalog_import`).
-   8. If the volume is in `STAGING`, advance it:
-      - `STAGING → BURNING` (always)
-      - then `BURNING → VERIFIED` + `mark_closed` + `VERIFY_PASS`
-        event, if `verify_passed`
-        (`cmd_catalog_import`).
-      - or `BURNING → BURNED` + `VERIFY_FAIL` event, if not
-        (`cmd_catalog_import`).
-      Status transitions are validated against `VALID_TRANSITIONS`
-      (`src/lcsas/db/volumes.py`), so an already-`VERIFIED`
-      volume cannot be reverted from a receipt.
-   9. Add a `volume_copies` row for this `(volume_id, location)` pair,
-      stamping the burn date, `iso_sha256`, and `iso_size_bytes` from
-      the receipt (`cmd_catalog_import`).  For a receipt with
+      receipt.
+   8. Missing hash (#669): when the check in step 6 cannot be made (no
+      hash in the receipt, or none recorded at staging), a passing
+      receipt for a volume with no verified disc yet is refused unless
+      `--allow-unhashed` is given. Other receipts are imported with a
+      warning that the check was SKIPPED.
+   9. Lost disc (#666): if the disc recorded at this location is
+      DESTROYED or DEPRECATED, refuse a receipt whose burn date is not
+      later than the time that was recorded. A receipt for a disc burned
+      after it (a real re-burn) puts the disc back in service.
+   10. Status (#670): a volume with no verified disc yet (STAGING,
+      BURNING or BURNED) is handled the same way whatever its status:
+      - `verify_passed: true` → `VERIFIED` + `mark_closed` +
+        `VERIFY_PASS` event.
+      - `verify_passed: null` (`burn-iso --no-verify`) → `BURNED`.
+      - `verify_passed: false` → back to `STAGING` (#483) +
+        `VERIFY_FAIL` event, and no disc is recorded (BURN-05). The
+        message names the next step: stage the volume again for that
+        location with `lcsas stage --for-location <location>` and burn
+        the new volume (#671). A volume that already has a disc gets a
+        `VERIFY_FAIL_REBURN` event instead.
+      An already-`VERIFIED` volume keeps its status. Every passing
+      receipt writes a `VERIFY_PASS` event, as the direct burn does, so
+      `lcsas status` sees the newest verify result at each location.
+   11. Unless the verify failed, add a `volume_copies` row for this
+      `(volume_id, location)` pair, stamping the burn date, `iso_sha256`,
+      and `iso_size_bytes` from the receipt.  For a receipt with
       `verify_passed: true` it also sets `last_verified_at` to the
       receipt's `burn_date` (in UTC; the import time if it is missing,
       unreadable or in the future), since `burn-iso` read the disc back
       right after burning, so `lcsas status` does not count the disc as
       never verified (#646).  A `--no-verify` receipt leaves it NULL.
-      Discs imported before this change keep a NULL `last_verified_at`
-      and are listed by `lcsas status --stale-copies` until `lcsas
-      verify <label> --disc` is run on them. The underlying upsert
-      collapses re-imports of the same receipt into the existing
-      `volume_copies` row (`src/lcsas/db/volume_copies.py`).
-   10. Record a `BURN_RECEIPT_IMPORTED` audit event whose `detail` is a
-      JSON blob of the receipt provenance (`iso_sha256`, `session_id`,
-      `device`, `pack_ids`, receipt filename)
-      (`cmd_catalog_import`).
-   11. Commit per receipt; bump the `imported` counter
-      (`cmd_catalog_import`).
-4. Log the total imported count; if any receipt was rejected for an
-   ISO hash or size mismatch, return a non-zero exit code
-   (`cmd_catalog_import`).
+      Discs imported before #646 keep a NULL `last_verified_at` and are
+      listed by `lcsas status --stale-copies` until `lcsas verify <label>
+      --disc` is run on them.
+   12. Record a `BURN_RECEIPT_IMPORTED` audit event whose `detail` is a
+      JSON blob of the receipt provenance (`iso_sha256`, `burn_date`,
+      `session_id`, `device`, `pack_ids`, receipt filename,
+      `verify_passed`).
+   13. Commit per receipt.
+4. Log how many receipts were imported, already imported, and
+   rejected; exit non-zero if any was rejected (`cmd_catalog_import`).
 
 **Expected outcome:**
 
-- One `volume_copies` row per `(volume_id, location)` in the receipts.
-- One status transition per first-time-burned volume (STAGING → BURNED
-  or STAGING → VERIFIED) with an accompanying `volume_events` row
-  citing the receipt filename in `detail`.
+- One `volume_copies` row per `(volume_id, location)` in the receipts
+  that passed or were not verified.
+- One status change per first-time-burned volume (to VERIFIED, BURNED,
+  or back to STAGING) with a `volume_events` row citing the receipt
+  filename in `detail`.
 - For volumes that were already `VERIFIED` at import time, **no**
   status change — only a `volume_copies` row is added (the "re-burn to a
   new location" path)
   (`cmd_catalog_import`;
   asserted by `TestCmdCatalogImport::test_import_reburn_only_adds_copy`).
-- Bad / malformed / orphan receipts are skipped with warnings; the
-  command still returns `0` in that case (the successful ones are
-  committed). It returns a **non-zero** exit code only when a receipt
-  is rejected: its `iso_sha256` or `iso_size_bytes` differs from the ISO
-  staged for that volume (#644), or its `iso_sha256` differs from a prior
-  `BURN_RECEIPT_IMPORTED` event (`cmd_catalog_import`; asserted by
-  `tests/unit/test_import_receipts_errors.py::TestStagedIsoCheck` and, end
-  to end with a byte flipped in B's copy of the ISO,
+- Exit `0` when every receipt was imported or already imported.
+  Exit `1` when any receipt was refused — malformed, unknown volume or
+  location, wrong location, missing hash, a lost disc, or an ISO hash or
+  size that differs from the staged ISO (#644) or from a prior receipt
+  (#18) — while the good receipts are still imported
+  (`tests/unit/test_import_receipts_errors.py`, and end to end with a
+  byte flipped in B's copy of the ISO,
   `tests/integration/test_portable_burn_loop.py::test_iso_damaged_in_transit_is_rejected_at_import`).
 
 **Variant axes that apply:**
@@ -466,12 +499,12 @@ behaviour.
 - `tests/unit/test_import_receipts_errors.py::TestMalformedReceiptFile` — a
   truncated, empty, non-JSON or trailing-comma file, a nonexistent path, a
   directory in place of a receipt, and JSON that is not a receipt object
-  (`[]`, a bare string, `{}`) are each skipped with a warning, exit 0, and
-  leave the catalog tables unchanged.
+  (`[]`, a bare string, `{}`) are each skipped with a warning, exit 1
+  (#669), and leave the catalog tables unchanged.
 - `tests/unit/test_import_receipts_errors.py::TestMissingKeys` — a receipt
   missing `volume_label`, `location` or both is skipped and the missing keys
-  are named (and only those); a receipt with just those two keys imports
-  (the other keys are optional).
+  are named (and only those); a receipt with just those two keys and
+  `verify_passed` imports (the other keys are optional).
 - `tests/unit/test_import_receipts_errors.py::TestOrphanReceipt` — a receipt
   whose `volume_label` is not in the catalog is skipped, writes nothing
   (not even its `location` row, and no volume is invented), and the label
@@ -480,9 +513,32 @@ behaviour.
   mixing good and bad receipts (malformed, missing keys, orphan,
   nonexistent file), bad first or bad last, still imports the good receipt
   and leaves no trace of the bad one; bad receipts sandwiching two good ones
-  import both; an all-bad batch exits 0 and changes nothing; and an
-  `iso_sha256` mismatch is the one non-zero exit (`rc == 1`) yet does not
-  stop the rest of the batch (`::test_hash_mismatch_exits_nonzero_but_does_not_stop_the_batch`).
+  import both; an all-bad batch exits 1 and changes nothing; and an
+  `iso_sha256` mismatch exits 1 yet does not stop the rest of the batch
+  (`::test_hash_mismatch_exits_nonzero_but_does_not_stop_the_batch`).
+- `tests/unit/test_import_receipts_errors.py::TestReimport` (#666) — the
+  same receipt imported twice changes nothing the second time and says
+  "already imported" (also for a receipt imported before the burn date was
+  recorded in the event); after `copy destroy --lost` the old receipt
+  leaves the disc DESTROYED with a warning, another receipt not newer than
+  the loss is refused, and a later re-burn puts the disc back in service.
+- `tests/unit/test_import_receipts_errors.py::TestStrictReceipt` (#669) — a
+  non-boolean or missing `verify_passed` is refused; an unknown location is
+  refused and the known ones are listed; a refused receipt exits 1 while
+  the good one still imports; a location other than the staged-for one is
+  refused unless `--allow-other-location`; a volume without a staged-for
+  location is not checked.  `TestStagedIsoCheck::test_receipt_without_hash_warns_that_the_check_was_skipped`
+  pins `--allow-unhashed`.
+- `tests/unit/test_import_receipts_errors.py::TestFirstDiscStates` (#670) —
+  a passing receipt makes a STAGING, BURNING or BURNED volume VERIFIED with
+  `closed_at` and `VERIFY_PASS`, and `lcsas stage` no longer selects its
+  packs; a failed receipt returns a BURNING or BURNED volume with no disc
+  to STAGING.
+- `tests/unit/test_import_receipts_errors.py::TestFailedBurnNextStep` (#671)
+  — fail, status, re-burn, pass: the import message and `lcsas status`
+  name `lcsas stage --for-location`, the for-location query takes the
+  packs, and the passing re-burn clears "needs re-burn"; a pass at another
+  location does not clear a failure.
 - `tests/unit/test_import_receipts_errors.py::TestMalformedReceiptFile` also
   pins the shapes that used to abort the whole batch (#522): a file that
   is not valid UTF-8 (UTF-16 from a PowerShell `>`, binary garbage), JSON
@@ -514,9 +570,10 @@ behaviour.
 - `cmd_catalog_import` in `src/lcsas/cli/main.py` — handler and dispatch.
 - `src/lcsas/db/volumes.py` — `update_status`, `mark_closed`,
   `VALID_TRANSITIONS`.
-- `src/lcsas/db/volume_copies.py` — `add_volume_copy` upsert.
+- `src/lcsas/db/volume_copies.py` — `add_volume_copy` upsert,
+  `get_copy_at_location`, `get_disc_retired_at`.
 - `src/lcsas/db/volume_events.py` — `add_event`, `get_events_for_volume`.
-- `src/lcsas/db/locations.py` — `ensure_location`.
+- `src/lcsas/db/locations.py` — `resolve_location`.
 - `tests/unit/test_cli_comprehensive.py` — `TestCmdCatalogImport` test class.
 
 ---
@@ -557,11 +614,12 @@ and how the code responds today.
   in the unarchived pool and the next `lcsas stage` offers them again
   (`cmd_catalog_import`;
   `TestCmdCatalogImport::test_import_keeps_staging_on_verify_fail`,
-  `::test_import_failed_first_burn_records_no_copy`).
-- **Fix:** Investigate the disc (mount and run `lcsas catalog
-  validate` — `cmd_catalog_validate`; or use `lcsas verify
-  --disc`); if it is unreadable, re-burn a replacement and re-import its
-  receipt.
+  `::test_import_failed_first_burn_records_no_copy`). `lcsas status`
+  lists the volume under "needs re-burn" (#671).
+- **Fix:** Stage the volume again for that location with `lcsas stage
+  --for-location <location>`, burn the new volume, and import its
+  receipt. The import message and `lcsas status` name the same step
+  (#671). Do not keep the suspect disc.
 
 ### Missing receipt (burn happened, JSON never arrived)
 
@@ -583,18 +641,16 @@ and how the code responds today.
 
 - **Symptom:** The owner imports the same receipt directory twice, or
   ships overlapping batches.
-- **Behaviour:**
-  - **Volume status:** Already `VERIFIED` after the first import.
-    The second import sees `vol.status == "VERIFIED"` and skips the
-    transition block entirely
-    (`cmd_catalog_import`). No `VERIFY_PASS` event is
-    re-fired.
-  - **Disc row:** `add_volume_copy` is an UPSERT on
-    `(volume_id, location)` — second import refreshes `burn_date`
-    and `notes` on the existing row rather than creating a duplicate
-    (`src/lcsas/db/volume_copies.py`).
-- **Net effect:** Idempotent except for the `burn_date` and `notes`
-  fields on the `volume_copies` row, which take the latest receipt's values.
+- **Behaviour (#666):** a receipt whose location, burn date and ISO hash
+  were already imported for its volume is reported as "already
+  imported" and changes nothing: no status change, no event, and the
+  disc row's `last_verified_at` and `notes` are left alone. The exit
+  code stays `0`. If the disc has since been recorded lost, destroyed
+  or deprecated, it stays so and the message says so; any other receipt
+  for that location must have a burn date later than that record to put
+  a disc back in service.
+- **Prevention:** move imported receipts into an `imported/` subfolder
+  (step 7 of the remote-burner workflow).
 - **Caveat (resolved, #514):** If the second receipt has
   `verify_passed: false` and the volume is already `VERIFIED`, no disc is
   recorded or refreshed for that location; a `VERIFY_FAIL_REBURN` event
@@ -608,8 +664,8 @@ and how the code responds today.
   staged the volume (e.g. the staging-side `catalog.db` was rolled
   back, or the receipt is for a volume that never existed).
 - **Behaviour:** `get_volume_by_label` returns `None`; the receipt is
-  skipped with a warning
-  (`cmd_catalog_import`). No error, no partial update.
+  skipped with a warning and the command exits `1` (#669)
+  (`cmd_catalog_import`). No partial update.
 - **Fix:** Stage the volume on A (or put back the missing volume
   row), then re-import the receipt.
 
@@ -622,8 +678,8 @@ and how the code responds today.
 - **Behaviour:** each of these is caught per receipt (`ValueError`,
   which includes `JSONDecodeError` and `UnicodeDecodeError`, plus
   `OSError` and the field checks). The file is skipped with a warning
-  and writes nothing, not even its location row. The rest of the batch
-  continues (`cmd_catalog_import`, #522; pinned by
+  and writes nothing. The rest of the batch continues, and the command
+  exits `1` (`cmd_catalog_import`, #522, #669; pinned by
   `tests/unit/test_import_receipts_errors.py::TestMalformedReceiptFile`).
 - **Fix:** Repair the file, or re-export it on B if the
   filesystem there is intact.
@@ -690,15 +746,11 @@ workflow (the three that could leave the catalog wrong were resolved in
   preview which receipts would be skipped, which volumes would
   transition, or which disc rows would be refreshed before committing.
   (`import-receipts` takes only `receipt_files`; no `--dry-run` flag.)
-- **No CLI cross-check between receipt's `iso_sha256` and the
-  staging-side ISO hash.** A receipt could be silently swapped for one
-  from a different ISO and the import would not notice it differs from
-  the session-time hash (the master catalog has the session-time hash
-  in `session_volumes.iso_sha256`, written by `update_session_volume_iso`
-  in `BurnOrchestrator.stage` — but `cmd_catalog_import` does not
-  consult it; it only cross-checks against prior
-  `BURN_RECEIPT_IMPORTED` events for the same volume, so the *first*
-  receipt for a volume is trusted).
+- **(Resolved, #644, #669) Cross-check between the receipt's
+  `iso_sha256` and the staging-side ISO hash.** The import compares the
+  receipt with `session_volumes.iso_sha256` and rejects a difference;
+  a passing receipt with no hash to compare is refused unless
+  `--allow-unhashed`.
 - **(Resolved, #514) Failed and unverified receipts.** A receipt with
   `verify_passed: false` no longer records a disc (BURN-05: a failed disc
   is not counted as holding the volume, so the location still needs it); a failed
@@ -713,9 +765,9 @@ workflow (the three that could leave the catalog wrong were resolved in
   receipt from poisoning the rest, and re-running is idempotent).** Each
   receipt is committed individually (`cmd_catalog_import`), so a
   `KeyboardInterrupt` mid-batch leaves a partial import; this is benign
-  because every operation is idempotent on re-run (a re-import adds
-  another `BURN_RECEIPT_IMPORTED` event), but worth documenting for
-  the owner.
+  because every operation is idempotent on re-run (a receipt imported
+  before is reported as "already imported" and changes nothing, #666),
+  but worth documenting for the owner.
 
 ---
 
@@ -739,7 +791,7 @@ workflow (the three that could leave the catalog wrong were resolved in
   `mark_closed`), `src/lcsas/db/volume_copies.py` (`add_volume_copy`
   UPSERT), `src/lcsas/db/volume_events.py` (`add_event`,
   `get_events_for_volume`), `src/lcsas/db/locations.py`
-  (`ensure_location`).
+  (`resolve_location`).
 - Hashing: `src/lcsas/utils/hashing.py` (`sha256_file`).
 - Tests: `tests/unit/test_cli_comprehensive.py` (`TestCmdBurnIso`,
   `TestCmdCatalogImport`), `tests/unit/test_burn_iso_receipt_io.py`

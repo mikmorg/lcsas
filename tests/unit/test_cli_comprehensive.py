@@ -606,6 +606,13 @@ class TestCmdLocation:
 # cmd_catalog_import
 # ===================================================================
 
+def _import_locations(conn) -> None:
+    """#669: a receipt must name a registered location."""
+    from lcsas.db.locations import ensure_location
+    for name in ("Home", "Offsite", "Vault", "Vault_A", "Vault_B"):
+        ensure_location(conn, name)
+
+
 class TestCmdCatalogImport:
     def test_import_receipts_from_json(self, tmp_path, capsys):
         cfg = _write_config(tmp_path)
@@ -613,6 +620,7 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_001", "uuid1", "TEST_TINY", 1000, "Home", "VERIFIED")
+        _import_locations(conn)
         conn.close()
 
         receipt = tmp_path / "receipt.json"
@@ -622,6 +630,7 @@ class TestCmdCatalogImport:
             "session_id": "s1",
             "location": "Offsite",
             "pack_count": 5,
+            "verify_passed": True,
         }))
 
         result = main(["--config", str(cfg), "catalog", "import-receipts",
@@ -635,6 +644,12 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_100", "u1", "TEST_TINY", 1000, "Home", "STAGING")
+        _import_locations(conn)
+        # #669: VERIFIED needs the receipt's hash to match the staged ISO's.
+        from lcsas.db.sessions import add_session_volume, create_session
+        create_session(conn, "TEST_TINY", "/staging", session_id="s100")
+        add_session_volume(conn, "s100", 1, "/staging/VOL_100.iso",
+                           iso_sha256="e" * 64, iso_size_bytes=2048)
         conn.close()
 
         receipt = tmp_path / "r.json"
@@ -643,6 +658,7 @@ class TestCmdCatalogImport:
             "location": "Home",
             "verify_passed": True,
             "burn_date": "2026-04-14T12:00:00+00:00",
+            "iso_sha256": "e" * 64,
         }))
 
         result = main(["--config", str(cfg), "catalog", "import-receipts",
@@ -667,6 +683,7 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_101", "u2", "TEST_TINY", 1000, "Home", "STAGING")
+        _import_locations(conn)
         conn.close()
 
         receipt = tmp_path / "r.json"
@@ -697,6 +714,7 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_514", "u514", "TEST_TINY", 1000, "Home", status)
+        _import_locations(conn)
         conn.close()
         r = tmp_path / "r.json"
         r.write_text(json.dumps({"volume_label": "VOL_514", **receipt}))
@@ -715,7 +733,7 @@ class TestCmdCatalogImport:
         """#514 / BURN-05: a disc that failed verification is not a copy,
         and (#483) the volume stays STAGING so its packs stay unarchived."""
         rc, vol, copies, events = self._import(
-            tmp_path, "STAGING", {"location": "Vault", "verify_passed": False})
+            tmp_path, "STAGING", {"location": "Home", "verify_passed": False})
         assert rc == 0
         assert vol.status == "STAGING"
         assert copies == []
@@ -749,6 +767,7 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_102", "u3", "TEST_TINY", 1000, "Home", "VERIFIED")
+        _import_locations(conn)
         conn.close()
 
         receipt = tmp_path / "r.json"
@@ -780,7 +799,8 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_PROV", "uuid-prov", "TEST_TINY", 1000,
-                      "Home", "STAGING")
+                      "Vault_A", "STAGING")
+        _import_locations(conn)
         conn.close()
 
         iso_hash = "a" * 64
@@ -800,8 +820,9 @@ class TestCmdCatalogImport:
             "pack_ids": pack_ids,
         }))
 
+        # No staged ISO hash on record here (#669).
         result = main(["--config", str(cfg), "catalog", "import-receipts",
-                       str(receipt)])
+                       "--allow-unhashed", str(receipt)])
         assert result == 0
 
         conn = get_connection(db)
@@ -835,7 +856,8 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_HASH", "uuid-hash", "TEST_TINY", 1000,
-                      "Home", "STAGING")
+                      "Vault_A", "STAGING")
+        _import_locations(conn)
         conn.close()
 
         good_hash = "b" * 64
@@ -852,8 +874,9 @@ class TestCmdCatalogImport:
             "verify_passed": True,
             "pack_ids": [],
         }))
+        # No staged ISO hash on record here (#669).
         rc1 = main(["--config", str(cfg), "catalog", "import-receipts",
-                    str(r1)])
+                    "--allow-unhashed", str(r1)])
         assert rc1 == 0
 
         # Second receipt: same volume, *different* iso_sha256 — must reject.

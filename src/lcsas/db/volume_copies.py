@@ -114,6 +114,43 @@ def get_volume_copy(conn: sqlite3.Connection, copy_id: int) -> VolumeCopy:
     return _row_to_copy(row)
 
 
+def get_copy_at_location(
+    conn: sqlite3.Connection,
+    volume_id: int,
+    location: str,
+) -> VolumeCopy | None:
+    """The disc record of a volume at a location, whatever its status, or None.
+
+    There is at most one per (volume, location): the upsert in
+    :func:`add_volume_copy` reuses the row.
+    """
+    row = conn.execute(
+        "SELECT * FROM volume_copies WHERE volume_id = ? AND location = ?",
+        (volume_id, location),
+    ).fetchone()
+    return _row_to_copy(row) if row is not None else None
+
+
+def get_disc_retired_at(
+    conn: sqlite3.Connection,
+    volume_id: int,
+    location: str,
+) -> str | None:
+    """When the disc at *location* was last recorded deprecated, destroyed
+    or lost (the event date of the newest NOTE written by
+    ``_record_disc_fate``), or None if there is no such record (#666)."""
+    prefix = _disc_fate_prefix(location)
+    for row in conn.execute(
+        """SELECT event_date, detail FROM volume_events
+           WHERE volume_id = ? AND event_type = 'NOTE' AND location = ?
+           ORDER BY event_date DESC, event_id DESC""",
+        (volume_id, location),
+    ):
+        if str(row["detail"]).startswith(prefix):
+            return str(row["event_date"])
+    return None
+
+
 def get_copies_for_volume(
     conn: sqlite3.Connection,
     volume_id: int,
@@ -373,9 +410,14 @@ def _record_disc_fate(
     add_event(
         conn, volume_id, "NOTE",
         location=location,
-        detail=f"disc at {location} recorded as {fate}",
+        detail=f"{_disc_fate_prefix(location)}{fate}",
         commit=False,
     )
+
+
+def _disc_fate_prefix(location: str) -> str:
+    """The start of every per-disc fate NOTE (see get_disc_retired_at)."""
+    return f"disc at {location} recorded as "
 
 
 def deprecate_copy(
