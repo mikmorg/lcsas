@@ -1489,8 +1489,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
             analyzer = DeltaAnalyzer(conn, packs_on_disk, db_repo_id)
             new_packs = analyzer.register_new_packs()
-            unarchived = analyzer.get_unarchived()
-            unarchived_bytes = analyzer.get_total_unarchived_bytes()
+            # #667: a pack an earlier scan marked pruned but this scan found
+            # is in the mirror: back to the active pool.  Like registration,
+            # this is additive and safe on an incomplete scan.
+            unpruned = analyzer.unprune_found()
 
             total_new += len(new_packs)
 
@@ -1530,9 +1532,19 @@ def cmd_scan(args: argparse.Namespace) -> int:
                                 f"({pruned_bytes:,} bytes)"
                             )
 
+            # Counted after un-prune and prune-sync, so the number is the
+            # one `lcsas stage` will see (#696 item 9).
+            unarchived = analyzer.get_unarchived()
+            unarchived_bytes = analyzer.get_total_unarchived_bytes()
+
             logger.info(f"  {repo_name}:")
             logger.info(f"    Packs on disk:  {len(packs_on_disk)}")
             logger.info(f"    Newly registered: {len(new_packs)}")
+            if unpruned:
+                logger.info(
+                    f"    Un-pruned:      {len(unpruned)} (found in the "
+                    f"mirror again)"
+                )
             logger.info(f"    Unarchived:     {len(unarchived)} ({unarchived_bytes:,} bytes)")
 
         # Persist snapshots (unless --no-snapshots)
