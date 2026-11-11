@@ -77,6 +77,30 @@ class DeltaAnalyzer:
 
         return bulk_register(self._conn, new_tuples)
 
+    def unprune_found(self) -> list[Pack]:
+        """Clear ``is_pruned`` for pruned packs that are in the mirror again (#667).
+
+        Prune-sync marks a pack pruned when one scan does not find it (a
+        network share that was partly unavailable looks the same).  When a
+        later scan finds it, it is in the mirror, so it goes back to the
+        active pool and the next ``lcsas stage`` can select it.  Registration
+        skips known SHAs, so without this it would stay pruned for good.
+        Only this analyzer's repository is touched.  Returns the packs that
+        were un-pruned.
+        """
+        if not self._scanner_result or self._repo_id is None:
+            return []
+        from lcsas.db.packs import bulk_unmark_pruned, list_packs
+
+        found = [
+            p for p in list_packs(
+                self._conn, repo_id=self._repo_id, include_pruned=True
+            )
+            if p.is_pruned and p.sha256 in self._scanner_result
+        ]
+        bulk_unmark_pruned(self._conn, [p.pack_id for p in found])
+        return found
+
     def get_unarchived(self) -> list[Pack]:
         """Return packs in the catalog not yet assigned to any volume."""
         return get_unarchived_packs(self._conn, self._repo_id)

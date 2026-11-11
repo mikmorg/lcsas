@@ -125,7 +125,10 @@ def config_names_by_repo_id(
     burn's (``BurnOrchestrator._match_repo_config``): mirror path first —
     the catalog name may differ from the config key (``repo add`` takes any
     name) — then exact name, then case-insensitive name.  Paths are compared
-    lexically: a stale mount must not hang this (#427).
+    lexically: a stale mount must not hang this (#427).  This is the same
+    order as :func:`lcsas.db.repos.resolve_repo` (#687), run from the
+    catalog side; it reads only three columns so it also works on disc
+    catalogs of any vintage, which ``list_repos`` does not.
     """
     try:
         rows = conn.execute(
@@ -287,7 +290,8 @@ def detect_escrow_drift(
                     f"{record.split_at}. Discs would tell the heir to find a "
                     f"single password that was superseded by that split. Set "
                     f"key_split=true (key_threshold={record.threshold}, "
-                    f"key_shares={record.shares}) under {where}, or run "
-                    f"'lcsas key combine' to undo the split."
+                    f"key_shares={record.shares}) under {where}, or, if the "
+                    f"split was abandoned, run 'lcsas --config ... key "
+                    f"unsplit --repo {name}' to clear the recorded split."
                 )
     return None

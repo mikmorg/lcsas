@@ -114,3 +114,68 @@ def test_tier1_preserves_mtime(tmp_path: Path) -> None:
         "diff_trees(compare_mtime=True) reports tier-1 vs tier-2 "
         "divergence:\n" + "\n".join(diffs)
     )
+
+
+# #659: rustic writes node times in the backup host's local offset, and
+# a whole-second time has no fraction at all.  Tier 3 used to drop the
+# offset (mtime shifted by it) and failed on a time with no fraction
+# (mtime = time of the restore).  Back up under a +05:30 zone, restore
+# with tier 1 and tier 3, and compare to the second.
+TIER3_MTIMES = {
+    "whole.txt": 1_577_836_800.0,       # no fraction in the node time
+    "fraction.txt": 1_704_067_200.25,   # a short fraction
+    "nanos.txt": 946_684_800.123456,
+}
+
+
+def test_tier1_and_tier3_mtimes_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if not shutil.which("rustic"):
+        pytest.skip("rustic not on PATH")
+    bin_path = find_restore_bin()
+    if bin_path is None:
+        pytest.skip("no lcsas-restore binary; run `make -C recovery`")
+    from lcsas.restore.restic_fallback import PurePythonRestorer
+
+    src = tmp_path / "src"
+    src.mkdir()
+    for name, mtime in TIER3_MTIMES.items():
+        f = src / name
+        f.write_text(f"content of {name}\n")
+        os.utime(f, (mtime, mtime))
+
+    repo = tmp_path / "repo"
+    pwfile = tmp_path / "pw"
+    pwfile.write_text("test-password\n")
+    # rustic writes local times: make "local" +05:30 (no DST there).
+    monkeypatch.setenv("TZ", "Asia/Kolkata")
+    build_rustic_repo(src, repo, pwfile)
+    monkeypatch.delenv("TZ")
+
+    tier3 = PurePythonRestorer(repo, password_file=pwfile)
+    snap_time = tier3.list_snapshots()[-1].time
+    assert snap_time.endswith("+05:30"), (
+        f"rustic did not write a +05:30 time ({snap_time!r}); the test "
+        "would not exercise the offset"
+    )
+
+    tier1_out = tmp_path / "tier1_out"
+    tier3_out = tmp_path / "tier3_out"
+    restore_with_tier1(repo, tier1_out, pwfile, bin_path)
+    tier3.restore(target=tier3_out)
+    assert tier3.failures == 0
+    tier1_root = find_restored_root(tier1_out)
+    tier3_root = find_restored_root(tier3_out)
+
+    failures: list[str] = []
+    for name, expected in TIER3_MTIMES.items():
+        m1 = int((tier1_root / name).stat().st_mtime)
+        m3 = int((tier3_root / name).stat().st_mtime)
+        if m3 != int(expected):
+            failures.append(
+                f"{name}: tier-3 mtime {m3} != original {int(expected)}"
+            )
+        if m1 != m3:
+            failures.append(f"{name}: tier-1 mtime {m1} != tier-3 mtime {m3}")
+    assert not failures, "\n".join(failures)
