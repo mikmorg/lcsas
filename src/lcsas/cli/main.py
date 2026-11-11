@@ -1830,6 +1830,14 @@ def cmd_status(args: argparse.Namespace) -> int:
         # incomplete, whatever is in the staging area: never burn it.
         incomplete = [v.label for v in unburned
                       if staging_incomplete(conn, v.volume_id)]
+        incomplete_sessions = sorted({
+            str(r["session_id"]) for r in conn.execute(
+                "SELECT sv.session_id FROM session_volumes sv "
+                "JOIN volumes v USING (volume_id) WHERE v.label IN "
+                f"({','.join('?' * len(incomplete))})",
+                incomplete,
+            )
+        }) if incomplete else []
         unburned = [v for v in unburned if v.label not in incomplete]
         waiting = [v.label for v in unburned if staged_iso_present(conn, v.volume_id)]
         ghost_labels = [v.label for v in unburned if v.label not in waiting]
@@ -1871,10 +1879,11 @@ def cmd_status(args: argparse.Namespace) -> int:
         logger.warning(
             "WARNING: %d volume(s) are INCOMPLETE: their staging did not "
             "finish, so their ISOs may lack error-correction data: %s. Do "
-            "not burn them. Run 'lcsas session abort' for their session, "
+            "not burn them. Run 'lcsas session abort <id>' for session %s, "
             "then 'lcsas stage' again. Until then their packs are NOT on "
             "any disc.",
             len(incomplete), ", ".join(incomplete),
+            ", ".join(incomplete_sessions),
         )
     if waiting:
         logger.warning(

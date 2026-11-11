@@ -154,6 +154,7 @@ class TestKilledDuringEcc:
         text = caplog.text
         assert "INCOMPLETE" in text
         assert vol.label in text
+        assert session.session_id in text
         assert "waiting to be burned" not in text
 
     def test_waiting_iso_with_empty_hash_is_incomplete_too(
