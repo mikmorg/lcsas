@@ -13,6 +13,9 @@ These tests pin:
   prompt;
 * ``LCSAS_SKIP_SPACE_CHECK=1`` bypasses the check and proceeds to
   the next prompt (the password prompt);
+* a target and pack cache on ONE filesystem need the sum of the two,
+  on two filesystems each its own share, and what an earlier run
+  already wrote counts (#660);
 * the ``disc_locator.c`` drain guard refuses to drain into a cache
   on a critically-full (<10 % free) filesystem
   (``LCSAS_TEST_FULL_FS_DIR`` seam in the C unit test);
@@ -247,6 +250,115 @@ def test_skip_space_check_proceeds_to_password_prompt(tmp_path: Path) -> None:
         f"with the check skipped the run must reach the password prompt.\n"
         f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
     )
+
+
+# ── restore.sh: target and pack cache on one or two disks (#660) ─────
+#
+# The fixture's catalog says 50 MB.  An 80 MiB tmpfs holds one 50 MB
+# share but not two, so it tells "needs the sum" from "needs one".
+
+
+def _run_restore_sh(recovery: Path, target: Path, cache: Path) -> subprocess.CompletedProcess[str]:
+    """restore.sh with the pack cache at ``cache`` and its tools folder
+    beside the fixture, not in the home folder."""
+    return subprocess.run(
+        ["sh", str(RESTORE_SH), str(recovery), str(target)],
+        stdin=subprocess.DEVNULL,
+        capture_output=True, text=True,
+        env=_env(LCSAS_PACK_CACHE_DIR=str(cache),
+                 LCSAS_TOOLS_DIR=str(recovery.parent / "tools")),
+        timeout=30, start_new_session=True,
+    )
+
+
+def test_same_disk_needs_target_plus_cache(tmp_path: Path) -> None:
+    """#660: with the target and the pack cache on ONE filesystem the
+    check skipped the second directory, so it asked for 50 MB where the
+    restore needs 100 MB.  An 80 MiB disk must now be refused before the
+    password prompt, and the message must say why it needs the sum."""
+    if not _can_sudo_mount():
+        pytest.skip("passwordless sudo + mount/umount required")
+    recovery = _recovery_fixture(tmp_path)
+
+    with _tmpfs(Path(f"/tmp/lcsas-660-same-{os.getpid()}"), "80m") as mnt:
+        res = _run_restore_sh(recovery, mnt / "restored", mnt / "cache")
+
+    assert res.returncode == 1, (
+        f"80 MiB cannot hold a 50 MB restore AND its 50 MB pack cache.\n"
+        f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    )
+    assert SIZING_SNIPPET in res.stderr, res.stderr
+    assert "100 MB" in res.stderr, (
+        f"the refusal must ask for the sum of the two (2 x 50 MB).\n"
+        f"stderr:\n{res.stderr}"
+    )
+    assert "on the same disk" in res.stderr, res.stderr
+    assert "Password:" not in res.stderr, res.stderr
+    assert "ARG: " not in res.stdout, res.stdout
+
+
+def test_same_disk_counts_what_an_earlier_run_wrote(tmp_path: Path) -> None:
+    """A restore that carries on already holds part of the archive: the
+    packs in the cache, the files in a target with the restore marker.
+    Those count, or a restore that stopped half-way could never carry
+    on on the disk it filled.  120 MiB with 40 MB in the cache and 40 MB
+    of restored files leaves 40 MB free: 10 + 10 MB still needed, so it
+    goes on (counting nothing, it would ask for 100 MB)."""
+    if not _can_sudo_mount():
+        pytest.skip("passwordless sudo + mount/umount required")
+    recovery = _recovery_fixture(tmp_path)
+
+    with _tmpfs(Path(f"/tmp/lcsas-660-resume-{os.getpid()}"), "120m") as mnt:
+        (mnt / "cache" / "ab").mkdir(parents=True)
+        (mnt / "cache" / "ab" / "ab01").write_bytes(b"\0" * (40 * 1024 * 1024))
+        (mnt / "restored").mkdir()
+        (mnt / "restored" / ".lcsas-restore-marker").write_text("alpha\n")
+        (mnt / "restored" / "half.bin").write_bytes(b"\0" * (40 * 1024 * 1024))
+        res = _run_restore_sh(recovery, mnt / "restored", mnt / "cache")
+
+    assert SIZING_SNIPPET not in res.stderr, (
+        f"what the earlier run wrote must count towards the restore.\n"
+        f"stderr:\n{res.stderr}"
+    )
+    assert "Password:" in res.stderr, (
+        f"stdout:\n{res.stdout}\nstderr:\n{res.stderr}"
+    )
+
+
+def test_two_disks_each_need_their_own_share(tmp_path: Path) -> None:
+    """#660: on two filesystems each needs only its own 50 MB, so two
+    80 MiB disks pass; a 1 MiB cache disk is refused by name while the
+    roomy target disk is not named."""
+    if not _can_sudo_mount():
+        pytest.skip("passwordless sudo + mount/umount required")
+    recovery = _recovery_fixture(tmp_path)
+    pid = os.getpid()
+
+    with _tmpfs(Path(f"/tmp/lcsas-660-t-{pid}"), "80m") as tmnt, \
+            _tmpfs(Path(f"/tmp/lcsas-660-c-{pid}"), "80m") as cmnt:
+        roomy = _run_restore_sh(recovery, tmnt / "restored", cmnt / "cache")
+    assert SIZING_SNIPPET not in roomy.stderr, (
+        f"two 80 MiB disks each hold their 50 MB share.\n"
+        f"stderr:\n{roomy.stderr}"
+    )
+    assert "Password:" in roomy.stderr, (
+        f"stdout:\n{roomy.stdout}\nstderr:\n{roomy.stderr}"
+    )
+
+    with _tmpfs(Path(f"/tmp/lcsas-660-t2-{pid}"), "80m") as tmnt, \
+            _tmpfs(Path(f"/tmp/lcsas-660-c2-{pid}"), "1m") as cmnt:
+        short = _run_restore_sh(recovery, tmnt / "restored", cmnt / "cache")
+        cache_dir = str(cmnt / "cache")
+        target_dir = str(tmnt / "restored")
+    assert short.returncode == 1, short.stderr
+    lines = [ln for ln in short.stderr.splitlines() if SIZING_SNIPPET in ln]
+    assert len(lines) == 1 and cache_dir in lines[0], (
+        f"only the too-small cache disk may be named.\n"
+        f"stderr:\n{short.stderr}"
+    )
+    assert target_dir not in lines[0], short.stderr
+    assert "on the same disk" not in short.stderr, short.stderr
+    assert "Password:" not in short.stderr, short.stderr
 
 
 # ── disc_locator.c drain guard + mid-drain fs-full (C unit seams) ─────
