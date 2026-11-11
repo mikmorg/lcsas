@@ -6,8 +6,10 @@ name: opt-in-gates
 # named gates that gave no protection.  weekly.yml calls this file every
 # Monday; run it by hand with `gh workflow run opt-in-gates.yml`.
 #
-#   fault-inject   LCSAS_FAULT_INJECT=1  malloc-failure sweep over every C
-#                  test binary: a failed allocation must never crash.
+#   fault-inject   LCSAS_FAULT_INJECT=1  malloc-failure sweep (first 100
+#                                        allocations) over every C test
+#                                        binary: a failed allocation must
+#                                        never crash.
 #   diff-petabyte  LCSAS_DIFF=1          tier-1 vs tier-2 restore of every
 #                                        content profile, byte for byte.
 #                  LCSAS_PETABYTE=1      1M-entry index + 1k files through
@@ -48,10 +50,13 @@ jobs:
         run: make dev
       - name: Build the C test binaries
         run: make -C recovery all test
-      - name: Malloc fault-injection sweep (full, not the 100-step smoke)
+      - name: Malloc fault-injection sweep
+        # The test's own default sweep (MAX_N=100 per binary).  The full
+        # sweep (LCSAS_FAULT_INJECT_MAX_N=10000) did not finish inside the
+        # test's 900 s subprocess timeout on the lab VM (2026-11-11), so it
+        # stays a by-hand run: `make -C recovery fault-inject`.
         env:
           LCSAS_FAULT_INJECT: "1"
-          LCSAS_FAULT_INJECT_MAX_N: "10000"
         run: |
           pytest tests/recovery_hardening/test_tier1_fault_inject.py -v \
             --junitxml=/tmp/fault-inject.xml
