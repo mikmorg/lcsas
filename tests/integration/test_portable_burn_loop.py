@@ -18,9 +18,10 @@ The loop, with the same real tools the production path uses:
    name, so the parent-directory fallback could not produce the label).
 3. **B: ``burn-iso <iso> --emit-receipt <dir> --location ...``** with no
    ``--config``, no ``--label``.  Only the drive is mocked: ``burn_iso``,
-   ``verify_disc``, ``media_status`` and ``read_disc_volume_id`` (the latter
-   answers what a burned disc really reports -- the ISO's own PVD volume ID,
-   read here by an independent parser) with an unplugged device name, as
+   ``verify_disc``, ``media_status``, ``read_disc_volume_id`` (it answers
+   what a burned disc really reports -- the ISO's own PVD volume ID, read
+   here by an independent parser) and the #664 device read-back (it hashes
+   the image the "drive" holds) with an unplugged device name, as
    ``tests/unit/test_burn_iso_receipt_io.py`` does on the batch-1 branch.
 4. **Transport** the receipt back to **A** and ``catalog import-receipts`` it.
 
@@ -30,6 +31,7 @@ Requires: ``rustic`` and ``xorriso`` on PATH (self-skip otherwise).
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import random
@@ -58,6 +60,7 @@ pytestmark = [
 
 _RUNNER = "lcsas.iso.xorriso.SubprocessXorrisoRunner"
 _FAKE_DEVICE = "/dev/lcsas-test-no-such-drive"
+_READBACK = "lcsas.burn.device_verify.read_device_sha256"
 _SITE = "Offsite_Safe"
 _SECOND_SITE = "Cold_Vault"
 
@@ -72,9 +75,17 @@ def _pvd_volume_id(iso: Path) -> str:
 
 
 @contextlib.contextmanager
-def _drive(*, disc_id: str, verify: bool = True) -> Iterator:
-    """Stand in for the optical drive on host B; yields the ``burn_iso`` mock."""
+def _drive(*, disc_id: str, disc: Path, verify: bool = True) -> Iterator:
+    """Stand in for the optical drive on host B; yields the ``burn_iso`` mock.
+
+    *disc* is the image the drive holds: the #664 read-back hashes its
+    first ``length`` bytes, as a real drive would hand them back.
+    """
+    def read_back(device: str, length: int) -> str:
+        return hashlib.sha256(disc.read_bytes()[:length]).hexdigest()
+
     with contextlib.ExitStack() as stack:
+        stack.enter_context(patch(_READBACK, side_effect=read_back))
         burn = stack.enter_context(patch(f"{_RUNNER}.burn_iso"))
         stack.enter_context(patch(f"{_RUNNER}.verify_disc", return_value=verify))
         stack.enter_context(
@@ -189,15 +200,21 @@ class _SiteB:
         shutil.copy2(iso, self.iso)
 
     def burn(self, *, session: str, location: str, disc_id: str,
-             verify: bool = True) -> tuple[int, Path | None, object]:
-        """``lcsas burn-iso`` exactly as the doc's step 4 spells it."""
-        with _drive(disc_id=disc_id, verify=verify) as burn:
+             verify: bool = True, disc: Path | None = None,
+             verify_only: bool = False) -> tuple[int, Path | None, object]:
+        """``lcsas burn-iso`` exactly as the doc's step 4 spells it.
+
+        The drive reads back *disc* (default: the ISO itself, a good burn).
+        """
+        with _drive(disc_id=disc_id, verify=verify,
+                    disc=disc or self.iso) as burn:
             rc = main([
                 "burn-iso", str(self.iso),
                 "--device", _FAKE_DEVICE,
                 "--emit-receipt", str(self.receipts),
                 "--location", location,
                 "--session", session,
+                *(["--verify-only"] if verify_only else []),
             ])
         written = sorted(self.receipts.glob(f"*_{location}.json"))
         return rc, (written[0] if written else None), burn
@@ -402,3 +419,68 @@ def test_wrong_disc_in_the_drive_is_caught_by_the_staged_label(site_a, site_b):
     assert site_a.lcsas("catalog", "import-receipts", str(receipt_path)) == 0
     assert site_a.volume()["status"] == "STAGING"  # #483
     assert site_a.copies() == []
+
+
+def test_disc_that_differs_from_the_iso_fails_the_readback(site_a, site_b):
+    """#664: the disc is readable and identifies as the right volume, but one
+    byte past the label differs from the ISO.  ``xorriso -check_media`` and the
+    volume-ID check both pass; only the SHA-256 read-back catches it.  The
+    receipt says ``verify_passed: false`` and carries the hash read back, and
+    A keeps the volume STAGING with no disc recorded."""
+    bad = site_b.root / "bad-disc.img"
+    data = bytearray(site_b.iso.read_bytes())
+    data[-1] ^= 0xFF
+    bad.write_bytes(bytes(data))
+
+    rc, receipt_path, _burn = site_b.burn(
+        session=site_a.session_id, location=_SITE,
+        disc_id=_pvd_volume_id(site_b.iso), disc=bad,
+    )
+
+    assert rc == 1
+    assert receipt_path is not None
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["verify_passed"] is False
+    assert receipt["iso_sha256"] == site_a.staged_iso_record()["iso_sha256"]
+    assert receipt["device_sha256"] == hashlib.sha256(bytes(data)).hexdigest()
+    assert receipt["device_sha256"] != receipt["iso_sha256"]
+
+    assert site_a.lcsas("catalog", "import-receipts", str(receipt_path)) == 0
+    assert site_a.volume()["status"] == "STAGING"
+    assert site_a.copies() == []
+
+
+def test_lost_receipt_is_replaced_by_verify_only(site_a, site_b):
+    """#673: the disc was burned but its receipt never reached A.  ``burn-iso
+    --verify-only`` checks the disc against the ISO without burning and
+    writes a receipt; importing it gives VERIFIED with one ACTIVE disc."""
+    rc, receipt_path, burn = site_b.burn(
+        session=site_a.session_id, location=_SITE,
+        disc_id=_pvd_volume_id(site_b.iso),
+    )
+    assert rc == 0 and receipt_path is not None
+    burn.assert_called_once()
+    receipt_path.unlink()  # the receipt is lost
+
+    rc, receipt_path, burn = site_b.burn(
+        session=site_a.session_id, location=_SITE,
+        disc_id=_pvd_volume_id(site_b.iso), verify_only=True,
+    )
+
+    assert rc == 0
+    burn.assert_not_called()  # nothing burned again
+    assert receipt_path is not None
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["verify_only"] is True
+    assert receipt["verify_passed"] is True
+    assert receipt["device_sha256"] == receipt["iso_sha256"]
+
+    assert site_a.lcsas("catalog", "import-receipts", str(receipt_path)) == 0
+    vol = site_a.volume()
+    assert vol["status"] == "VERIFIED"
+    assert vol["closed_at"] is not None
+    (copy,) = site_a.copies()
+    assert copy["location"] == _SITE
+    assert copy["status"] == "ACTIVE"
+    assert copy["last_verified_at"] is not None
+    assert len(site_a.events("VERIFY_PASS")) == 1

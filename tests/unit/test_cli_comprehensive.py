@@ -368,6 +368,14 @@ def _fake_iso(path: Path, volid: str) -> Path:
     return path
 
 
+def _drive_holding(iso: Path, tmp_path: Path) -> str:
+    """A stand-in optical device: a file holding the burned image, which
+    burn-iso's read-back (#664) hashes like a real drive."""
+    drive = tmp_path / "drive.img"
+    drive.write_bytes(iso.read_bytes())
+    return str(drive)
+
+
 class TestCmdBurnIso:
     def test_burn_iso_missing_file(self, tmp_path, capsys):
         iso = tmp_path / "missing.iso"
@@ -390,7 +398,8 @@ class TestCmdBurnIso:
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.read_disc_volume_id",
                   return_value=iso.parent.name),
         ):
-            result = main(["burn-iso", str(iso)])
+            result = main(["burn-iso", str(iso),
+                           "--device", _drive_holding(iso, tmp_path)])
 
         assert result == 0
         mock_burn.assert_called_once()
@@ -428,7 +437,8 @@ class TestCmdBurnIso:
                   return_value="LCSAS_TINY_0007"),
         ):
             rc = main(["burn-iso", str(iso), "--emit-receipt", str(out),
-                       "--location", "Home"])
+                       "--location", "Home",
+                       "--device", _drive_holding(iso, tmp_path)])
         assert rc == 0
         data = json.loads((out / "LCSAS_TINY_0007_Home.json").read_text())
         assert data["volume_label"] == "LCSAS_TINY_0007"
@@ -464,7 +474,8 @@ class TestCmdBurnIso:
         ):
             result = main(["burn-iso", str(iso),
                            "--emit-receipt", str(out_dir),
-                           "--location", "Offsite_Safe"])
+                           "--location", "Offsite_Safe",
+                           "--device", _drive_holding(iso, tmp_path)])
 
         assert result == 0
         receipt_path = out_dir / "ARCHIVE_TEST_0001_Offsite_Safe.json"
@@ -496,7 +507,8 @@ class TestCmdBurnIso:
             result = main(["burn-iso", str(iso),
                            "--emit-receipt", str(out_file),
                            "--label", "EXPLICIT_LABEL",
-                           "--location", "Home"])
+                           "--location", "Home",
+                           "--device", _drive_holding(iso, tmp_path)])
 
         assert result == 0
         data = json.loads(out_file.read_text())

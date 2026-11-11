@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
     from lcsas.config.settings import LCSASConfig
     from lcsas.db.models import Pack
+    from lcsas.iso.xorriso import XorrisoRunner
 
 logger = get_logger()
 
@@ -284,10 +285,20 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Optical device path (overrides config; "
                                 "default /dev/sr0 when neither is set).")
     burniso_p.add_argument("--verify", action=argparse.BooleanOptionalAction, default=True,
-                           help="Verify after burning (use --no-verify to skip).")
-    burniso_p.add_argument("--emit-receipt", type=Path, default=None,
-                           help="Write a burn receipt JSON to this path "
-                                "(file or directory) for later catalog import.")
+                           help="Verify after burning: read the disc back and "
+                                "compare its SHA-256 with the ISO's "
+                                "(use --no-verify to skip).")
+    burniso_p.add_argument("--verify-only", action="store_true", default=False,
+                           help="Do not burn: check the disc already in the "
+                                "drive against the ISO, as --verify does, and "
+                                "write a receipt for it (a lost receipt).")
+    # str, not Path: Path() drops a trailing separator, which marks a folder.
+    burniso_p.add_argument("--emit-receipt", type=str, default=None,
+                           help="Write a burn receipt JSON for later catalog "
+                                "import.  A folder (existing, ending in a "
+                                "path separator, or a name with no extension) "
+                                "gets <label>_<location>.json and is created "
+                                "if missing; any other path is the file.")
     burniso_p.add_argument("--label", type=str, default=None,
                            help="Volume label for the receipt. Defaults to the "
                                 "ISO's parent directory name.")
@@ -2206,7 +2217,12 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
 
 
 def cmd_burn_iso(args: argparse.Namespace) -> int:
-    """Burn a single ISO file to optical media (standalone)."""
+    """Burn a single ISO file to optical media (standalone).
+
+    With ``--verify-only`` nothing is burned: the disc already in the drive
+    is checked against the ISO and a receipt is written for it, which
+    replaces a receipt that was lost (#673).
+    """
     from datetime import UTC, datetime
 
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
@@ -2217,8 +2233,13 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
         return 1
 
     emit_receipt = getattr(args, "emit_receipt", None)
+    verify_only = bool(getattr(args, "verify_only", False))
     if emit_receipt is not None and not args.location:
         logger.error("--location is required when --emit-receipt is given.")
+        return 1
+    if verify_only and not args.verify:
+        logger.error("--verify-only checks the disc; it cannot be combined "
+                     "with --no-verify.")
         return 1
 
     runner = SubprocessXorrisoRunner()
@@ -2231,10 +2252,11 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
     # first, and _load_config_opt returns None without a --config.
     device = _resolve_device(args)
 
-    # Hash before burn — cheap insurance against the file changing under us.
+    # Hash before burn — cheap insurance against the file changing under
+    # us, and the hash the disc is read back against (#664).
     iso_sha256 = ""
     iso_size_bytes: int | None = None
-    if emit_receipt is not None:
+    if emit_receipt is not None or args.verify:
         from lcsas.utils.hashing import sha256_file
         iso_sha256 = sha256_file(iso_path)
         iso_size_bytes = iso_path.stat().st_size
@@ -2245,48 +2267,56 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
     # label it was mastered with, wherever the file sits.
     label = args.label or _iso_volume_id(iso_path) or iso_path.parent.name
 
-    # FUP-01 mitigation 2: blank-media pre-check (behind --verify). A disc
-    # that already carries data is refused before the burn, not after.
-    if args.verify:
-        from lcsas.iso.xorriso import MediaStatus
-        status = runner.media_status(device=device)
-        if status is MediaStatus.CLOSED:
-            logger.error(
-                "Disc in %s is not blank (it already contains data). "
-                "Remove it and insert a blank disc.", device,
-            )
+    # #675: settle where the receipt goes, and refuse a clash, BEFORE the
+    # burn: a refusal after it would leave a disc with no receipt.
+    out_path: Path | None = None
+    if emit_receipt is not None:
+        out_path = _receipt_out_path(str(emit_receipt), label, args.location)
+        refusal = _receipt_overwrite_refusal(out_path, label, args.location)
+        if refusal is not None:
+            logger.error(refusal)
             return 1
-        if status is MediaStatus.UNKNOWN:
-            logger.warning(
-                "Could not determine the media status of %s — "
-                "proceeding anyway.", device,
-            )
 
-    logger.info(f"Burning {iso_path} to {device} ...")
-    runner.burn_iso(iso_path, device=device)
-    logger.info("Burn complete.")
+    if verify_only:
+        logger.info(
+            f"--verify-only: checking the disc in {device} against "
+            f"{iso_path}; nothing is burned."
+        )
+    else:
+        # FUP-01 mitigation 2: blank-media pre-check (behind --verify). A
+        # disc that already carries data is refused before the burn, not
+        # after.
+        if args.verify:
+            from lcsas.iso.xorriso import MediaStatus
+            status = runner.media_status(device=device)
+            if status is MediaStatus.CLOSED:
+                logger.error(
+                    "Disc in %s is not blank (it already contains data). "
+                    "Remove it and insert a blank disc.", device,
+                )
+                return 1
+            if status is MediaStatus.UNKNOWN:
+                logger.warning(
+                    "Could not determine the media status of %s — "
+                    "proceeding anyway.", device,
+                )
+
+        logger.info(f"Burning {iso_path} to {device} ...")
+        runner.burn_iso(iso_path, device=device)
+        logger.info("Burn complete.")
 
     # None = not verified (--no-verify).  It used to default to True, so a
     # disc never read back imported as VERIFIED (#514).
     verify_passed: bool | None = None
+    device_sha256: str | None = None
     if args.verify:
         logger.info(f"Verifying disc on {device} ...")
-        verify_passed = runner.verify_disc(device=device)
+        verify_passed, device_sha256 = _burn_iso_readback(
+            runner, device, label, iso_sha256, iso_size_bytes,
+        )
         logger.info(f"  Verify: {'PASS' if verify_passed else 'FAIL'}")
-        # FUP-01 mitigation 3: post-burn identity readback. The PVD Volume
-        # ID was written from the label at mastering time, so a mismatch
-        # means the disc in the drive is not this image (wrong disc / silent
-        # mis-burn).
-        if verify_passed:
-            disc_id = runner.read_disc_volume_id(device=device)
-            if disc_id != label:
-                logger.error(
-                    "Disc in %s identifies as '%s' — expected '%s'. "
-                    "Wrong disc?", device, disc_id, label,
-                )
-                verify_passed = False
 
-    if emit_receipt is not None:
+    if out_path is not None:
         receipt = {
             "volume_label": label,
             "session_id": args.session,
@@ -2296,13 +2326,14 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
             "iso_sha256": iso_sha256,
             "iso_size_bytes": iso_size_bytes,
             "verify_passed": verify_passed,
+            # #664: SHA-256 of the bytes read back from the disc (null when
+            # nothing was read back).
+            "device_sha256": device_sha256,
+            # #673: true when this run checked a disc burned earlier instead
+            # of burning one (a receipt that replaces a lost one).
+            "verify_only": verify_only,
         }
-        # Accept either a directory (auto-name) or a full file path.
-        if emit_receipt.is_dir():
-            out_path = emit_receipt / f"{label}_{args.location}.json"
-        else:
-            emit_receipt.parent.mkdir(parents=True, exist_ok=True)
-            out_path = emit_receipt
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(receipt, f, indent=2)
             f.flush()
@@ -2313,6 +2344,106 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
         return 1
 
     return 0
+
+
+def _burn_iso_readback(
+    runner: XorrisoRunner,
+    device: str,
+    label: str,
+    iso_sha256: str,
+    iso_size_bytes: int | None,
+) -> tuple[bool, str | None]:
+    """burn-iso's check of the disc in *device* against the ISO (#664).
+
+    The same three steps as the direct burn path (``_verify_burned_disc``):
+    ``xorriso -check_media`` (readable), the PVD volume ID equals *label*
+    (FUP-01: the right disc), then exactly *iso_size_bytes* read back from
+    the device must have the ISO's SHA-256.  Returns ``(passed, hash read
+    back)``; the hash is None when the read-back did not run or failed.
+    """
+    from lcsas.burn.device_verify import read_device_sha256
+
+    if not runner.verify_disc(device=device):
+        logger.error(f"Disc in {device} failed the readability check "
+                     "(xorriso -check_media).")
+        return False, None
+    disc_id = runner.read_disc_volume_id(device=device)
+    if disc_id != label:
+        logger.error(
+            "Disc in %s identifies as '%s' — expected '%s'. "
+            "Wrong disc?", device, disc_id, label,
+        )
+        return False, None
+    if not iso_sha256 or not iso_size_bytes:
+        logger.error("The ISO is empty; there is nothing to compare the "
+                     "disc with.")
+        return False, None
+    try:
+        device_sha256 = read_device_sha256(device, iso_size_bytes)
+    except (OSError, ValueError) as exc:
+        logger.error(f"Reading the disc back from {device} failed: {exc}")
+        return False, None
+    if device_sha256 != iso_sha256:
+        logger.error(
+            f"The disc in {device} does not match the ISO: read back "
+            f"SHA-256 {device_sha256}, ISO SHA-256 {iso_sha256}."
+        )
+        return False, device_sha256
+    logger.info(f"  Read back {iso_size_bytes:,} bytes; SHA-256 matches "
+                f"the ISO ({device_sha256[:16]}..).")
+    return True, device_sha256
+
+
+def _receipt_out_path(target: str, label: str, location: str) -> Path:
+    """Where ``burn-iso --emit-receipt TARGET`` writes the receipt (#675).
+
+    TARGET is a folder when it is one, when it ends in a path separator,
+    or when it does not exist and has no file extension: the receipt is
+    then ``<label>_<location>.json`` inside it (the folder is created when
+    the receipt is written).  Any other TARGET is the receipt file itself.
+    """
+    path = Path(target)
+    seps = tuple(s for s in (os.sep, os.altsep) if s)
+    if path.is_dir() or target.endswith(seps) or (
+        not path.exists() and not path.suffix
+    ):
+        return path / f"{label}_{location}.json"
+    return path
+
+
+def _receipt_overwrite_refusal(
+    out_path: Path, label: str, location: str,
+) -> str | None:
+    """Why the receipt may not be written to *out_path*, or None (#675).
+
+    A file already there may only be replaced by a receipt for the same
+    volume and location (a re-run); anything else is another disc's
+    receipt, or not a receipt at all, and is kept.
+    """
+    if not out_path.exists():
+        return None
+    existing: object = None
+    if out_path.is_file():
+        try:
+            with open(out_path, encoding="utf-8") as f:
+                existing = json.load(f)
+        except (OSError, ValueError):
+            existing = None
+    if isinstance(existing, dict) and (
+        existing.get("volume_label") == label
+        and existing.get("location") == location
+    ):
+        return None
+    if isinstance(existing, dict) and "volume_label" in existing:
+        owner = (f"the receipt of volume '{existing.get('volume_label')}' "
+                 f"at '{existing.get('location')}'")
+    else:
+        owner = "not a receipt of this volume"
+    return (
+        f"{out_path} already exists and is {owner}; refusing to overwrite "
+        f"it.  Give --emit-receipt a folder (for example 'receipts/') or "
+        f"another file name.  Nothing was burned or checked."
+    )
 
 
 def _iso_volume_id(iso_path: Path) -> str | None:
@@ -3058,7 +3189,8 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     iso_sha256=receipt_hash or None,
                     iso_size_bytes=receipt_size,
                     # #646: burn-iso read the disc back right after the
-                    # burn, as the direct burn path does, so the disc was
+                    # burn and compared its SHA-256 with the ISO (#664),
+                    # as the direct burn path does, so the disc was
                     # verified then.  --no-verify (null) leaves it NULL.
                     last_verified_at=(
                         _receipt_verified_at(receipt.get("burn_date"))
