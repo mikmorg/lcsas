@@ -144,3 +144,55 @@ def test_fault_sweep_removes_what_its_runs_leave(tmp_path: Path) -> None:
     finally:
         for d in planted:
             shutil.rmtree(d, ignore_errors=True)
+
+
+def test_fault_sweep_cleans_up_when_stopped(tmp_path: Path) -> None:
+    """A sweep stopped from outside (SIGTERM to its process group, as an
+    outer ``timeout`` or make does) still removes its run folder and
+    reaps dead-pid /dev/shm folders.  On 2026-11-11 one interrupted
+    sweep left 1,162 drain-cache folders in /dev/shm (RAM)."""
+    _need_test_bin()
+    cc = shutil.which("cc")
+    if cc is None or shutil.which("timeout") is None:
+        pytest.skip("needs cc (for the malloc_inject shim) and timeout")
+    shim = tmp_path / "malloc_inject.so"
+    subprocess.run(
+        [cc, "-shared", "-fPIC", "-O0", "-D_GNU_SOURCE", str(SHIM_SRC),
+         "-o", str(shim), "-ldl"],
+        check=True, capture_output=True, timeout=120,
+    )
+    sweep_tmp = tmp_path / "sweep"
+    sweep_tmp.mkdir()
+    use_shm = SHM.is_dir() and os.access(SHM, os.W_OK)
+    dead = SHM / f"lcsas_dl_stoptest_{_dead_pid()}"
+    if use_shm:
+        (dead / "data").mkdir(parents=True)
+    proc = subprocess.Popen(
+        ["sh", str(SWEEP), "50"],
+        env={**os.environ, "TMPDIR": str(sweep_tmp),
+             "COV_FI_LIB": str(shim),
+             "COV_FI_TESTS": "test_disc_locator",
+             "PER_RUN_TIMEOUT": "60"},
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and proc.poll() is None:
+            if any(p.name.startswith("lcsas-cov-fi.")
+                   for p in sweep_tmp.iterdir()):
+                break
+            time.sleep(0.05)
+        assert proc.poll() is None, "the sweep ended before it was stopped"
+        os.killpg(proc.pid, signal.SIGTERM)
+        rc = proc.wait(timeout=_scaled_timeout(60))
+    finally:
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=30)
+        if use_shm and dead.exists():
+            shutil.rmtree(dead)
+            pytest.fail(f"a dead-pid {dead} was not reaped after SIGTERM")
+    assert rc == 143, f"expected exit 143 after SIGTERM, got {rc}"
+    left = sorted(p.name for p in sweep_tmp.iterdir())
+    assert not left, f"the stopped sweep left these in its TMPDIR: {left}"
