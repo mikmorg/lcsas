@@ -220,6 +220,7 @@ static void test_verify_clean(void)
     long n;
     if (!img) { fails++; return; }
     bad = (unsigned char *) malloc((size_t) L.total_sectors);
+    if (!bad) { free(img); fails++; return; }
     n = rs03_verify(img, len, &L, bad);
     CHECK(n == 0, "verify clean image == 0 damage");
     free(bad);
@@ -241,6 +242,7 @@ static void test_repair(void)
 
     if (!orig) { fails++; return; }
     img = (unsigned char *) malloc(len);
+    if (!img) { free(orig); fails++; return; }
     memcpy(img, orig, len);
 
     /* Corrupt three distinct data sectors (different codeword positions
@@ -258,6 +260,7 @@ static void test_repair(void)
     }
 
     bad = (unsigned char *) malloc((size_t) L.total_sectors);
+    if (!bad) { free(img); free(orig); fails++; return; }
     ndmg = rs03_verify(img, len, &L, bad);
     CHECK(ndmg == nv, "verify detects all corrupted sectors");
 
@@ -289,6 +292,7 @@ static void test_uncorrectable(void)
 
     /* Erase nroots+1 layers at pos 0 -> beyond capacity. */
     bad = (unsigned char *) calloc((size_t) L.total_sectors, 1);
+    if (!bad) { free(orig); fails++; return; }
     for (layer = 0; layer <= L.nroots; layer++) {
         bad[rs03_sector_index(&L, layer, 0)] = 1;
     }

@@ -15,10 +15,13 @@ You will need:
   - The repository password (set when the archive was created).
   - A target directory with free space of AT LEAST the archive size
     (the size shown by `lcsas restore plan`, or the snapshot size) on
-    BOTH the target disk and the pack-cache disk (default: your home
-    folder, see "THE TOOLS FOLDER") --
-    restore.sh checks this for you before any password or disc prompt
-    and refuses with the exact numbers if either disk is too small.
+    the target disk, and the same again on the pack-cache disk
+    (default: your home folder, see "THE TOOLS FOLDER").  When the
+    two are on ONE disk (the usual case), that disk needs twice the
+    archive size.  restore.sh (and restore.bat on Windows) checks
+    this for you before any password or disc prompt and refuses with
+    the exact numbers if a disk is too small.  A restore that carries
+    on counts what it already wrote.
     Override with LCSAS_SKIP_SPACE_CHECK=1 if you know better.
 
 DECISION FLOW

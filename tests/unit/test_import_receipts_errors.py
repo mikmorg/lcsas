@@ -700,9 +700,12 @@ class TestStagedIsoCheck:
         db = _make_catalog(tmp_path, {"VOL_NEW": "STAGING"}, staged_for="Bank_Box")
         _stage_record(db, "VOL_NEW", "", None)
         r = _receipt(tmp_path, "r.json", _good("VOL_NEW", "Bank_Box"))
+        # #665: a never-burned volume with no ISO hash is a stage that did
+        # not finish; its receipt needs --allow-incomplete-staging too.
         assert _run(cfg, r) == 1
-        assert "no ISO hash was recorded" in capsys.readouterr().out
-        assert _run(cfg, r, flags=("--allow-unhashed",)) == 0
+        assert "did not finish" in capsys.readouterr().out
+        assert _run(cfg, r, flags=("--allow-unhashed",
+                                   "--allow-incomplete-staging")) == 0
         assert "no ISO hash was recorded" in capsys.readouterr().out
 
 
@@ -1090,3 +1093,48 @@ class TestFailedBurnNextStep:
         out = capsys.readouterr().out
         assert "VOL_GOOD needs re-burn at Vault" in out
         assert "needs re-burn at Offsite" not in out
+
+
+class TestIncompleteStaging:
+    """#665: a volume whose staging never finished (no ISO hash recorded)
+    may have been burned from an ISO without RS03 data; its receipt is
+    refused unless --allow-incomplete-staging."""
+
+    @pytest.fixture
+    def staged(self, tmp_path):
+        from lcsas.db.sessions import add_session_volume, create_session
+
+        cfg = _write_config(tmp_path)
+        db = _make_catalog(tmp_path, {"VOL_S": "STAGING"}, staged_for="Offsite")
+        conn = get_connection(db)
+        try:
+            vol = get_volume_by_label(conn, "VOL_S")
+            assert vol is not None
+            create_session(conn, media_type="TEST_TINY",
+                           staging_dir=str(tmp_path / "staging" / "s1"),
+                           session_id="s1")
+            # The stage was cut short: the session row has no ISO hash.
+            add_session_volume(conn, "s1", vol.volume_id,
+                               str(tmp_path / "staging" / "s1" / "VOL_S.iso"),
+                               iso_sha256="")
+        finally:
+            conn.close()
+        return tmp_path, cfg, db
+
+    def test_receipt_is_refused(self, staged, capsys):
+        tmp_path, cfg, db = staged
+        before = _dump(db)
+        r = _receipt(tmp_path, "r.json", _good("VOL_S", "Offsite"))
+        assert _run(cfg, r) == 1
+        cap = capsys.readouterr()
+        out = cap.out + cap.err
+        assert "did not finish" in out
+        assert "--allow-incomplete-staging" in out
+        assert _dump(db) == before
+
+    def test_override_imports(self, staged):
+        tmp_path, cfg, db = staged
+        r = _receipt(tmp_path, "r.json", _good("VOL_S", "Offsite"))
+        assert _run(cfg, r, flags=("--allow-incomplete-staging",
+                                   "--allow-unhashed")) == 0
+        _assert_imported(db, "VOL_S", "Offsite")
