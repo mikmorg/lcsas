@@ -5,19 +5,6 @@ from __future__ import annotations
 import sqlite3
 
 
-def link_pack_to_volume(
-    conn: sqlite3.Connection,
-    volume_id: int,
-    pack_id: int,
-) -> None:
-    """Create an association between a pack and a volume."""
-    conn.execute(
-        "INSERT OR IGNORE INTO volume_packs (volume_id, pack_id) VALUES (?, ?)",
-        (volume_id, pack_id),
-    )
-    conn.commit()
-
-
 def bulk_link_packs(
     conn: sqlite3.Connection,
     volume_id: int,
@@ -32,19 +19,6 @@ def bulk_link_packs(
     )
     if commit:
         conn.commit()
-
-
-def unlink_pack_from_volume(
-    conn: sqlite3.Connection,
-    volume_id: int,
-    pack_id: int,
-) -> None:
-    """Remove the association between a pack and a volume."""
-    conn.execute(
-        "DELETE FROM volume_packs WHERE volume_id = ? AND pack_id = ?",
-        (volume_id, pack_id),
-    )
-    conn.commit()
 
 
 def get_pack_ids_for_volume(

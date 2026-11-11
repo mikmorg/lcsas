@@ -94,9 +94,11 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
 - Multi-repository: each `[repos.<name>]` block validated independently; one error per failing repository.
 - OS: filesystem semantics of `Path.resolve()` and `os.access(..., W_OK)` matter; read-only mounts trip `staging_path is not writable`.
 - Multi-copy: N/A.
-- ECC: `default_ecc_redundancy_pct` range-checked; deprecated (BURN-07) —
-  it has no effect on RS03 augmented images (dvdisaster pads to the
-  smallest fitting medium), so any non-default value logs a WARNING.
+- ECC: `[defaults] ecc_redundancy_pct` is ignored (BURN-07). It has no
+  effect on RS03 augmented images (dvdisaster pads to the smallest
+  fitting medium). Old configs still load, but any config that sets the
+  key logs a WARNING that says it is ignored. Its value is still
+  range-checked (`[0, 100]`).
 - Storage stage: none (config only).
 
 **Test coverage:**

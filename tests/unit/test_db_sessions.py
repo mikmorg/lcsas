@@ -7,14 +7,13 @@ import pytest
 from lcsas.db.sessions import (
     add_session_volume,
     create_session,
-    delete_session,
     get_latest_session,
     get_session,
     get_session_volumes,
     list_sessions,
     resolve_session_id,
-    update_iso_sha256,
     update_session_status,
+    update_session_volume_iso,
 )
 from lcsas.db.volumes import create_volume
 from lcsas.utils.labels import generate_uuid
@@ -93,12 +92,6 @@ class TestSessionCRUD:
         assert len(staged) == 1
         assert staged[0].session_id == "s1"
 
-    def test_delete_session(self, conn):
-        create_session(conn, "TEST_TINY", "/tmp/s1", session_id="s1")
-        delete_session(conn, "s1")
-        with pytest.raises(ValueError):
-            get_session(conn, "s1")
-
 
 class TestSessionVolumes:
     def test_add_and_get(self, conn):
@@ -121,20 +114,15 @@ class TestSessionVolumes:
         vols = get_session_volumes(conn, "s1")
         assert len(vols) == 2
 
-    def test_update_iso_sha256(self, conn):
+    def test_update_session_volume_iso(self, conn):
         create_session(conn, "TEST_TINY", "/tmp/s1", session_id="s1")
         vol = create_volume(conn, "V1", generate_uuid(), "TEST_TINY", 1_000_000)
         add_session_volume(conn, "s1", vol.volume_id, "/tmp/V1.iso")
 
-        update_iso_sha256(conn, "s1", vol.volume_id, "deadbeef")
+        update_session_volume_iso(
+            conn, "s1", vol.volume_id, "/tmp/V1.iso", "deadbeef", 4096,
+        )
         vols = get_session_volumes(conn, "s1")
         assert vols[0].iso_sha256 == "deadbeef"
+        assert vols[0].iso_size_bytes == 4096
 
-    def test_delete_session_removes_volumes(self, conn):
-        create_session(conn, "TEST_TINY", "/tmp/s1", session_id="s1")
-        vol = create_volume(conn, "V1", generate_uuid(), "TEST_TINY", 1_000_000)
-        add_session_volume(conn, "s1", vol.volume_id, "/tmp/V1.iso")
-
-        delete_session(conn, "s1")
-        vols = get_session_volumes(conn, "s1")
-        assert len(vols) == 0

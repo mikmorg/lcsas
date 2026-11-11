@@ -1072,7 +1072,8 @@ docs/RESTIC_FORMAT_SPEC.md on the LCSAS meta disc.
             "===========================",
             "",
             f"Media type:      {config.default_media_type.name}",
-            f"ECC redundancy:  {config.default_ecc_redundancy_pct}%",
+            # Not default_ecc_redundancy_pct: that key is ignored (#699).
+            "ECC:             dvdisaster RS03, filling the disc",
             f"Label prefix:    {config.label_prefix}",
             "",
         ]

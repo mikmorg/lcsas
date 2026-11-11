@@ -9,8 +9,6 @@ from lcsas.db.volume_packs import (
     bulk_link_packs,
     get_pack_ids_for_volume,
     get_volume_ids_for_pack,
-    link_pack_to_volume,
-    unlink_pack_from_volume,
 )
 from lcsas.db.volumes import create_volume
 from lcsas.utils.labels import generate_uuid
@@ -30,11 +28,11 @@ def _make_pack(conn, sha="abc123", size=1000, repo="repo_a"):
     return register_pack(conn, sha256=sha, size_bytes=size, repo_id=repo)
 
 
-class TestLinkPackToVolume:
+class TestLinkOnePack:
     def test_basic_link(self, memory_db):
         vol = _make_vol(memory_db)
         pack = _make_pack(memory_db)
-        link_pack_to_volume(memory_db, vol.volume_id, pack.pack_id)
+        bulk_link_packs(memory_db, vol.volume_id, [pack.pack_id])
 
         ids = get_pack_ids_for_volume(memory_db, vol.volume_id)
         assert pack.pack_id in ids
@@ -43,8 +41,8 @@ class TestLinkPackToVolume:
         """INSERT OR IGNORE means duplicates are silently ignored."""
         vol = _make_vol(memory_db)
         pack = _make_pack(memory_db)
-        link_pack_to_volume(memory_db, vol.volume_id, pack.pack_id)
-        link_pack_to_volume(memory_db, vol.volume_id, pack.pack_id)
+        bulk_link_packs(memory_db, vol.volume_id, [pack.pack_id])
+        bulk_link_packs(memory_db, vol.volume_id, [pack.pack_id])
 
         ids = get_pack_ids_for_volume(memory_db, vol.volume_id)
         assert ids.count(pack.pack_id) == 1
@@ -53,28 +51,11 @@ class TestLinkPackToVolume:
         vol = _make_vol(memory_db)
         p1 = _make_pack(memory_db, sha="sha1")
         p2 = _make_pack(memory_db, sha="sha2")
-        link_pack_to_volume(memory_db, vol.volume_id, p1.pack_id)
-        link_pack_to_volume(memory_db, vol.volume_id, p2.pack_id)
+        bulk_link_packs(memory_db, vol.volume_id, [p1.pack_id])
+        bulk_link_packs(memory_db, vol.volume_id, [p2.pack_id])
 
         ids = get_pack_ids_for_volume(memory_db, vol.volume_id)
         assert len(ids) == 2
-
-
-class TestUnlinkPackFromVolume:
-    def test_unlink_existing(self, memory_db):
-        vol = _make_vol(memory_db)
-        pack = _make_pack(memory_db)
-        link_pack_to_volume(memory_db, vol.volume_id, pack.pack_id)
-        unlink_pack_from_volume(memory_db, vol.volume_id, pack.pack_id)
-
-        ids = get_pack_ids_for_volume(memory_db, vol.volume_id)
-        assert pack.pack_id not in ids
-
-    def test_unlink_nonexistent_noop(self, memory_db):
-        """Unlinking a non-existent association doesn't raise."""
-        vol = _make_vol(memory_db)
-        unlink_pack_from_volume(memory_db, vol.volume_id, 99999)
-        # No error, no effect
 
 
 class TestGetPackIdsForVolume:
@@ -103,8 +84,8 @@ class TestGetVolumeIdsForPack:
         v1 = _make_vol(memory_db, label="V1")
         v2 = _make_vol(memory_db, label="V2")
         pack = _make_pack(memory_db)
-        link_pack_to_volume(memory_db, v1.volume_id, pack.pack_id)
-        link_pack_to_volume(memory_db, v2.volume_id, pack.pack_id)
+        bulk_link_packs(memory_db, v1.volume_id, [pack.pack_id])
+        bulk_link_packs(memory_db, v2.volume_id, [pack.pack_id])
 
         ids = get_volume_ids_for_pack(memory_db, pack.pack_id)
         assert set(ids) == {v1.volume_id, v2.volume_id}

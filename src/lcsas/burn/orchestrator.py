@@ -1585,11 +1585,12 @@ class BurnOrchestrator:
         expected_hash = sv.iso_sha256
         if not expected_hash:
             if iso_path.exists():
-                # A crash between the volume commit and
-                # update_session_volume_iso (#370) leaves a MODERN row with
-                # an empty hash even though the staged ISO is still on disk.
-                # Re-hash it now for a full read-back comparison instead of
-                # silently downgrading to readability-only.
+                # Only a re-burn reaches this: _burn_preflight refuses a
+                # never-burned volume with no hash (#665), so the #370
+                # crash case never burns.  A VERIFIED volume from a
+                # pre-Phase-13 session has no hash but may still have its
+                # ISO: re-hash it for a full read-back comparison instead
+                # of downgrading to readability-only (#699 kept this).
                 expected_hash = sha256_file(iso_path)
             else:
                 # Genuine pre-Phase-13 row (no hash ever recorded) AND the

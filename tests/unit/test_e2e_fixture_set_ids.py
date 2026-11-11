@@ -23,7 +23,7 @@ from lcsas.db.connection import get_connection
 from lcsas.db.packs import register_pack
 from lcsas.db.repos import register_repo
 from lcsas.db.schema import create_all
-from lcsas.db.volume_packs import link_pack_to_volume
+from lcsas.db.volume_packs import bulk_link_packs
 from lcsas.db.volumes import create_volume
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -145,7 +145,7 @@ def test_expected_alpha_volumes_are_found_by_name(
         for owner in owners:
             n += 1
             pack = register_pack(conn, f"{n:064x}", 1000, ids[owner])
-            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+            bulk_link_packs(conn, vol.volume_id, [pack.pack_id])
     conn.close()
     monkeypatch.setattr(_setup, "DB_PATH", db)
     monkeypatch.setattr(_setup, "FIXTURE", tmp_path)

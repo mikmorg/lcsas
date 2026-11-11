@@ -52,13 +52,6 @@ def dir_size_bytes(path: Path) -> int:
     return total
 
 
-def list_files_recursive(path: Path) -> list[Path]:
-    """Recursively list all files under a directory (no directories)."""
-    if not path.is_dir():
-        return []
-    return sorted(p for p in path.rglob("*") if p.is_file())
-
-
 def copy_tree(src: Path, dst: Path) -> None:
     """Copy an entire directory tree. Overwrites dst if it exists.
 

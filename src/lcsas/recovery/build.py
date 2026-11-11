@@ -31,14 +31,6 @@ class RecoveryArtifacts:
     lcsas_iso9660: Path | None
     lcsas_init: Path | None
 
-    def to_dict(self) -> dict[str, str]:
-        d = {"arch": self.arch, "lcsas_restore": str(self.lcsas_restore)}
-        if self.lcsas_iso9660 is not None:
-            d["lcsas_iso9660"] = str(self.lcsas_iso9660)
-        if self.lcsas_init is not None:
-            d["lcsas_init"] = str(self.lcsas_init)
-        return d
-
 
 class RecoveryBuilder:
     """Drive ``recovery/Makefile`` from the Python orchestrator.

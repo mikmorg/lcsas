@@ -424,8 +424,9 @@ For whoever holds the archive after the owner. Every disc carries this schedule 
 2. Append events via `add_event(conn, volume_id, event_type, location=None, detail="", event_date=None)` — invalid event types raise `ValueError`.
 3. Read all events for one volume, newest-first: `get_events_for_volume(conn, volume_id, event_type=None)`.
 4. Read just the most-recent event (overall, or filtered by type) for a volume: `get_latest_event(conn, volume_id, event_type=None)`. This is the building block of "when was this volume last verified?"
-5. Pull a global feed of one event type across all volumes, limited: `get_events_by_type(conn, event_type, limit=100)`. This is what you would build a "recent failures across the archive" dashboard on top of.
-6. Single-event lookup by primary key: `get_event(conn, event_id)`.
+5. Single-event lookup by primary key: `get_event(conn, event_id)`.
+
+There is no query for one event type across all volumes; use sqlite3 (`SELECT * FROM volume_events WHERE event_type = 'VERIFY_FAIL' ORDER BY event_date DESC`).
 
 **Expected outcome:**
 - Calling `add_event` returns a fully-populated `VolumeEvent` (dataclass) with `event_id`, `event_date` (UTC ISO), and `detail` set.

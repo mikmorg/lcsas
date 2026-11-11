@@ -7,7 +7,7 @@ import shutil
 import pytest
 
 from lcsas.config.media import MediaType
-from lcsas.config.settings import default_config
+from lcsas.config.settings import LCSASConfig
 from lcsas.db.connection import get_memory_connection
 from lcsas.db.packs import register_pack
 from lcsas.db.repos import register_repo
@@ -152,7 +152,10 @@ def test_config(tmp_path):
     db_path = tmp_path / "archive.db"
     mirror.mkdir()
     staging.mkdir()
-    return default_config(mirror, staging, db_path, MediaType.TEST_TINY)
+    return LCSASConfig(
+        mirror_base_path=mirror, staging_path=staging, db_path=db_path,
+        default_media_type=MediaType.TEST_TINY,
+    )
 
 
 # ---------------------------------------------------------------------------
