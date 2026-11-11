@@ -31,8 +31,8 @@ that pack is invisible to the burn pipeline.
 
 **Purpose:** Produce new pack files in the mirror so LCSAS has
 something to scan and eventually burn. LCSAS does not wrap `rustic backup` from
-the CLI; it expects the owner to run Rustic directly (or via a Protocol
-backup runner in tests/programmatic use).
+the CLI; it expects the owner to run Rustic directly. (Code and tests can
+call `RusticRunner.backup` in `src/lcsas/rustic/wrapper.py`.)
 
 **Prerequisites:**
 - A registered repository in the catalog (`lcsas repo add <name> <mirror_path>`)
