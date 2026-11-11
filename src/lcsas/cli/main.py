@@ -425,6 +425,12 @@ def build_parser() -> argparse.ArgumentParser:
              "of the two hashes is missing). Check the disc first.",
     )
     cat_import_p.add_argument(
+        "--allow-incomplete-staging", action="store_true", default=False,
+        help="Import a receipt for a volume whose staging did not finish "
+             "(no ISO hash recorded; its ISO may lack RS03 error "
+             "correction). Check the disc first (#665).",
+    )
+    cat_import_p.add_argument(
         "--allow-other-location", action="store_true", default=False,
         help="Accept a first disc at a location other than the one its "
              "volume was staged for.",
@@ -3349,7 +3355,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
         resolve_location,
     )
     from lcsas.db.schema import ensure_schema
-    from lcsas.db.sessions import get_staged_iso
+    from lcsas.db.sessions import get_staged_iso, staging_incomplete
     from lcsas.db.volume_copies import (
         add_volume_copy,
         get_copies_for_volume,
@@ -3365,6 +3371,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
         return 1
     allow_unhashed = bool(getattr(args, "allow_unhashed", False))
     allow_other_location = bool(getattr(args, "allow_other_location", False))
+    allow_incomplete = bool(getattr(args, "allow_incomplete_staging", False))
     absent = object()
 
     refused = 0
@@ -3508,6 +3515,26 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     f"location {vol.location}, but the receipt says "
                     f"{location}; skipping.  If the disc really is kept at "
                     f"{location}, import it again with --allow-other-location."
+                )
+                refused += 1
+                continue
+
+            # #665: a volume whose staging never finished (no ISO hash was
+            # recorded, so mastering or ECC was cut short) may have been
+            # burned from an ISO without RS03 data.  Never record such a
+            # disc as good on the receipt's word alone.
+            if (
+                first_disc and staging_incomplete(conn, vol.volume_id)
+                and not allow_incomplete
+            ):
+                logger.error(
+                    f"Receipt '{receipt_file}': the staging of '{label}' did "
+                    "not finish (no ISO hash was recorded), so its ISO may "
+                    "lack RS03 error correction; skipping.  Abort that burn "
+                    "session ('lcsas session abort <session>') and stage "
+                    "again.  If you have checked the disc and want it "
+                    "recorded anyway, import again with "
+                    "--allow-incomplete-staging."
                 )
                 refused += 1
                 continue
