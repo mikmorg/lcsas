@@ -131,12 +131,13 @@ def test_meta_builder_bundles_recovery_toolchain(tmp_path):
 
 
 def test_recovery_builder_supports_windows_arches():
-    """RecoveryBuilder advertises x86_64-windows and aarch64-windows."""
+    """RecoveryBuilder advertises x86_64-windows, the one approved
+    Windows target; aarch64-windows was dropped (#697)."""
     from lcsas.recovery import RecoveryBuilder
 
     rb = RecoveryBuilder(RECOVERY_DIR)
     assert "x86_64-windows" in rb.SUPPORTED_ARCHES
-    assert "aarch64-windows" in rb.SUPPORTED_ARCHES
+    assert "aarch64-windows" not in rb.SUPPORTED_ARCHES
     assert "x86_64-windows" in rb._WINDOWS_ARCHES
 
 

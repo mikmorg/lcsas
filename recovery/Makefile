@@ -352,7 +352,6 @@ test-windows: bin/x86_64-windows/lcsas-restore.exe
 # Keep in sync with scripts/bin_parity.py + src/lcsas/recovery/build.py.
 bin/x86_64/lcsas-restore: ARCH=x86_64
 bin/aarch64/lcsas-restore: ARCH=aarch64
-bin/riscv64/lcsas-restore: ARCH=riscv64
 
 bin/x86_64/lcsas-restore:
 	$(MAKE) clean
@@ -370,15 +369,6 @@ bin/aarch64/lcsas-restore:
 	cp build/aarch64/lcsas-restore bin/aarch64/
 	cp build/aarch64/lcsas-iso9660 bin/aarch64/
 
-bin/riscv64/lcsas-restore:
-	$(MAKE) clean
-	$(MAKE) BUILD=build/riscv64 \
-	        CC=$${CC_RISCV64:-riscv64-linux-musl-gcc} \
-	        LDFLAGS="-static -Wl,--strip-debug"
-	mkdir -p bin/riscv64
-	cp build/riscv64/lcsas-restore bin/riscv64/
-	cp build/riscv64/lcsas-iso9660 bin/riscv64/
-
 # Source deps so a tier-1 source edit forces a cross rebuild (see
 # ecc-arches).  The all-arches / windows / macos recipes build restore +
 # iso9660 into each per-arch tree, so both tools' sources (plus the
@@ -387,9 +377,9 @@ ARCH_SRCS := $(wildcard $(SRCDIR)/*.c $(SRCDIR)/*.h) \
              $(wildcard src/lcsas-iso9660/*.c src/lcsas-iso9660/*.h) \
              $(wildcard $(VENDOR)/sqlite/*.c $(VENDOR)/sqlite/*.h) \
              $(wildcard $(VENDOR)/zstd/*.c $(VENDOR)/zstd/*.h)
-bin/x86_64/lcsas-restore bin/aarch64/lcsas-restore bin/riscv64/lcsas-restore bin/x86_64-windows/lcsas-restore.exe bin/aarch64-windows/lcsas-restore.exe bin/x86_64-macos/lcsas-restore bin/aarch64-macos/lcsas-restore: $(ARCH_SRCS)
+bin/x86_64/lcsas-restore bin/aarch64/lcsas-restore bin/x86_64-windows/lcsas-restore.exe bin/x86_64-macos/lcsas-restore bin/aarch64-macos/lcsas-restore: $(ARCH_SRCS)
 
-all-arches: bin/x86_64/lcsas-restore bin/aarch64/lcsas-restore bin/riscv64/lcsas-restore
+all-arches: bin/x86_64/lcsas-restore bin/aarch64/lcsas-restore
 
 # Cross-compile for Windows via zig cc (ships its own MinGW headers).
 # Produces a PE32+ binary that runs on Windows 7+ without Visual C++
@@ -428,17 +418,6 @@ bin/x86_64-windows/lcsas-restore.exe:
 	        build/x86_64-windows/lcsas-restore.exe
 	mkdir -p bin/x86_64-windows
 	cp build/x86_64-windows/lcsas-restore.exe bin/x86_64-windows/
-
-bin/aarch64-windows/lcsas-restore.exe:
-	rm -rf build/aarch64-windows
-	$(MAKE) BUILD=build/aarch64-windows \
-	        CC="$(ZIG_CC) -target aarch64-windows-gnu" \
-	        VENDOR_CFLAGS="-std=gnu99 -O2 -DNDEBUG -Wno-deprecated-declarations -Wno-unused-function" \
-	        LDFLAGS=-Wl,--strip-debug \
-	        BIN_EXT=.exe \
-	        build/aarch64-windows/lcsas-restore.exe
-	mkdir -p bin/aarch64-windows
-	cp build/aarch64-windows/lcsas-restore.exe bin/aarch64-windows/
 
 windows: bin/x86_64-windows/lcsas-restore.exe
 
@@ -575,15 +554,6 @@ zig-aarch64:
 	mkdir -p bin/aarch64
 	cp build/aarch64-zig/lcsas-restore bin/aarch64/
 	cp build/aarch64-zig/lcsas-iso9660 bin/aarch64/
-
-zig-riscv64:
-	$(MAKE) clean
-	$(MAKE) CC="zig cc -target riscv64-linux-musl" \
-	        LDFLAGS="-static -Wl,--strip-debug" \
-	        BUILD=build/riscv64-zig
-	mkdir -p bin/riscv64
-	cp build/riscv64-zig/lcsas-restore bin/riscv64/
-	cp build/riscv64-zig/lcsas-iso9660 bin/riscv64/
 
 # ── Reproducible-build verification ───────────────────────────────
 #
@@ -1271,4 +1241,4 @@ fault-inject: $(BUILD)/malloc_inject.so
 	python3 scripts/run_fault_inject.py --max-sweep $(MAX_N)
 	@echo "[fault-inject] PASS: 0 crashes across all test binaries"
 
-.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check check-toolchain bin-parity zig-aarch64 zig-riscv64 keyshare-arches ecc-arches coverage-c coverage-c-run decontaminate sanitize sanitize-run fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-rs03-smoke fuzz-rs03 fuzz-smoke audit-gate fault-inject
+.PHONY: all all-arches test test-e2e test-bare-path test-windows windows macos clean manifest repro-check check-toolchain bin-parity zig-aarch64 keyshare-arches ecc-arches coverage-c coverage-c-run decontaminate sanitize sanitize-run fuzz-json-smoke fuzz-json fuzz-b64-smoke fuzz-b64 fuzz-zstd-smoke fuzz-zstd fuzz-path-smoke fuzz-path fuzz-repo-smoke fuzz-repo fuzz-keyshare-smoke fuzz-keyshare fuzz-tree-smoke fuzz-tree fuzz-rs03-smoke fuzz-rs03 fuzz-smoke audit-gate fault-inject

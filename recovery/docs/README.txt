@@ -91,7 +91,8 @@ PHASE STATUS
 
   Phase 3 (Multi-arch + FreeBSD): SOURCE COMPLETE
     - Cross-compile Makefile targets for aarch64 / riscv64 (using
-      musl-cross or zig cc).
+      musl-cross or zig cc).  (The riscv64 target was removed in
+      2026; it was never one of the six approved targets.)
     - Linux 6.6 LTS kernel configs for all three arches.
     - FreeBSD 13.4 kernel config and bootloader configuration.
     - Boot menus (isolinux.cfg / grub.cfg) wired for all four boot

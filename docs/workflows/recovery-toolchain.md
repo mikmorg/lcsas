@@ -110,8 +110,8 @@ The Python orchestrator lives at `src/lcsas/recovery/build.py`
 
 ## Supported target arches
 
-The `--arch` choices are `host` plus the eight
-`RecoveryBuilder.SUPPORTED_ARCHES` cross targets — nine in all:
+The `--arch` choices are `host` plus the six
+`RecoveryBuilder.SUPPORTED_ARCHES` cross targets — seven in all:
 
 | `--arch` value   | Toolchain | Notes |
 |------------------|-----------|-------|
@@ -119,18 +119,15 @@ The `--arch` choices are `host` plus the eight
 | `x86_64`         | `x86_64-linux-musl-gcc` or `zig cc` | Linux x86_64, static |
 | `aarch64`        | `aarch64-linux-musl-gcc` or `zig cc` | Linux ARM64, static |
 | `armv7`          | `armv7-linux-musleabihf-gcc` or `zig cc` | Linux 32-bit ARM hardfloat |
-| `riscv64`        | `riscv64-linux-musl-gcc` or `zig cc` | Linux RISC-V, static |
 | `x86_64-windows` | `zig cc -target x86_64-windows-gnu` | `.exe`; no `lcsas-iso9660` |
-| `aarch64-windows`| `zig cc -target aarch64-windows-gnu` | `.exe`; no `lcsas-iso9660` |
 | `x86_64-macos`   | `zig cc -target x86_64-macos` | Mach-O; no `-static`; no `lcsas-iso9660` |
 | `aarch64-macos`  | `zig cc -target aarch64-macos` | Mach-O; no `-static`; no `lcsas-iso9660` |
 
-Of these, **six are the APPROVED_TARGETS** the meta disc's
-required-contents contract demands a tier-1 binary for
+The six cross targets are exactly the **APPROVED_TARGETS** the meta
+disc's required-contents contract demands a tier-1 binary for
 (`src/lcsas/meta/required_contents.py`): the three Linux musl targets
 (`x86_64`, `aarch64`, `armv7`), the two macOS targets, and
-`x86_64-pc-windows-gnu`.  `riscv64` and `aarch64-windows` build but
-are not (yet) part of the required-contents contract.  See
+`x86_64-pc-windows-gnu`.  No other target is built.  See
 [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q6.
 
 Source refs: `RecoveryBuilder.SUPPORTED_ARCHES`,
@@ -169,7 +166,7 @@ lcsas recovery build [--arch ARCH] [--cc CC] [--verbose]
 - `make` + a host `cc` for `--arch host`.
 - For Linux cross targets: the matching musl-cross-make prefix
   (`x86_64-linux-musl-gcc`, `aarch64-linux-musl-gcc`,
-  `armv7-linux-musleabihf-gcc`, `riscv64-linux-musl-gcc`) **or**
+  `armv7-linux-musleabihf-gcc`) **or**
   `zig cc` passed via `--cc`.
 - For Windows / macOS targets: `zig cc` (the Makefile's dedicated
   per-target rules invoke `zig cc -target ...`; no mingw or Apple SDK
@@ -466,7 +463,6 @@ standalone equivalent used by tests and tooling.
    - `Linux x86_64` → `x86_64`
    - `Linux aarch64` / `arm64` → `aarch64`
    - `Linux armv7l` → `armv7`
-   - `Linux riscv64` → `riscv64`
    - `Darwin arm64` → `aarch64-macos`; `Darwin x86_64` → `x86_64-macos`
    - Windows (`restore.bat`) → `x86_64-windows`
 3. Override with `$LCSAS_TARGET=<arch>` if auto-detection misfires

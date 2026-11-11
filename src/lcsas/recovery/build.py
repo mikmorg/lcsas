@@ -47,14 +47,16 @@ class RecoveryBuilder:
         Makefile, src/, vendored/, etc.).
     """
 
+    # The six approved tier-1 targets (APPROVED_TARGETS in
+    # lcsas.meta.required_contents); nothing else is built.
     SUPPORTED_ARCHES = (
-        "x86_64", "aarch64", "armv7", "riscv64",
-        "x86_64-windows", "aarch64-windows",
+        "x86_64", "aarch64", "armv7",
+        "x86_64-windows",
         "x86_64-macos", "aarch64-macos",
     )
 
     # Arches that target Windows -- binaries get .exe suffix, build via zig cc.
-    _WINDOWS_ARCHES = ("x86_64-windows", "aarch64-windows")
+    _WINDOWS_ARCHES = ("x86_64-windows",)
     # Arches that target macOS -- build via `zig cc -target <arch>-macos`,
     # produce Mach-O executables, no -static (macOS forbids it).
     _MACOS_ARCHES = ("x86_64-macos", "aarch64-macos")
@@ -67,7 +69,6 @@ class RecoveryBuilder:
         "x86_64":  "x86_64-linux-musl-gcc",
         "aarch64": "aarch64-linux-musl-gcc",
         "armv7":   "armv7-linux-musleabihf-gcc",
-        "riscv64": "riscv64-linux-musl-gcc",
     }
 
     def __init__(self, recovery_dir: Path) -> None:
@@ -111,7 +112,7 @@ class RecoveryBuilder:
                     verbose: bool = False) -> RecoveryArtifacts:
         """Cross-compile lcsas-restore for ``arch``.
 
-        For Linux arches (x86_64, aarch64, armv7, riscv64), ``cc``
+        For Linux arches (x86_64, aarch64, armv7), ``cc``
         defaults to the canonical musl-cross-make prefix for that
         target (``x86_64-linux-musl-gcc`` for most; armv7 uses the
         hardfloat variant ``armv7-linux-musleabihf-gcc``).  The
@@ -119,9 +120,9 @@ class RecoveryBuilder:
         your toolchain ships a different prefix or you want to use
         ``zig cc`` (e.g. ``--cc "zig cc -target armv7-linux-musleabihf"``).
 
-        For Windows arches (x86_64-windows, aarch64-windows), the
-        Makefile's dedicated ``windows`` target is invoked (which
-        shells out to ``zig cc -target <arch>-windows-gnu``); the
+        For Windows (x86_64-windows), the Makefile's dedicated
+        ``bin/x86_64-windows/lcsas-restore.exe`` rule is invoked (which
+        shells out to ``zig cc -target x86_64-windows-gnu``); the
         binary has a ``.exe`` suffix.
 
         For macOS arches (x86_64-macos, aarch64-macos), Phase 21.12
@@ -262,6 +263,4 @@ class RecoveryBuilder:
             return "x86_64"
         if m in ("aarch64", "arm64"):
             return "aarch64"
-        if m == "riscv64":
-            return "riscv64"
         raise RuntimeError(f"unsupported host arch: {m}")
