@@ -443,6 +443,12 @@ the command exits non-zero (#669).
       Volumes staged before that column was set are not checked, and a
       VERIFIED volume taking a disc at another location is the
       multi-copy path, also not checked.
+      Unfinished staging (#665): a receipt for a never-burned volume
+      (STAGING or BURNING) whose staging did not finish (no ISO hash
+      was recorded, so mastering or ECC was cut short and the ISO may
+      lack RS03 data) is refused unless `--allow-incomplete-staging` is
+      given.  The fix is `lcsas session abort <session>` and a new
+      `lcsas stage`.
    6. Staged-ISO guard (#644): compare the receipt's `iso_sha256` and
       `iso_size_bytes` with the values recorded in `session_volumes` when
       the volume's ISO was mastered (its most recent burn session).  On a
