@@ -140,8 +140,14 @@ machines, or when staging in advance for an unattended burn.
   (`--config`, `--db`, `--lock-timeout`, `--verbose`) come **before** the
   subcommand, e.g. `lcsas --config <path> stage ...`.
 - Initialised catalog (`lcsas init`).
-- Registered repositories (`lcsas repo add`) and a recent `lcsas scan` so the
-  catalog reflects current mirror state.
+- Registered repositories (`lcsas repo add`). A recent `lcsas scan` is
+  good practice, but stage no longer depends on it: before planning, it
+  lists each mirror's pack files and registers any the catalog does not
+  know yet, as `lcsas scan` does (#656). A disc carries each mirror's
+  snapshot files as they are at staging time, so their packs must be in
+  the plan. Stage does not mark pruned packs; it names `lcsas scan` for
+  that. If a mirror cannot be read completely, stage stops and names
+  `lcsas scan`. `--dry-run` only reports the unscanned pack files.
 - `xorriso ≥ 1.4.0` on `PATH`. For production media (any `MediaType`
   with `ecc_overhead_pct > 0`), `dvdisaster ≥ 0.79` is also required.
   Version checks happen lazily inside `BurnOrchestrator.execute`, but

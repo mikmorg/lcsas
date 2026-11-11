@@ -2028,6 +2028,55 @@ def cmd_staging_clean(args: argparse.Namespace) -> int:
     return 0
 
 
+def _sync_mirrors_before_stage(
+    conn: sqlite3.Connection,
+    repo_ids: list[str] | None,
+    *,
+    dry_run: bool,
+) -> bool:
+    """Register unscanned mirror packs before staging (#656).
+
+    Returns False (stage must stop) when a mirror could not be read
+    completely: unscanned packs may hide behind the unreadable paths.
+    """
+    from lcsas.packs.stage_sync import sync_unscanned_packs
+
+    sync = sync_unscanned_packs(conn, repo_ids, dry_run=dry_run)
+    if sync.incomplete:
+        for name, errors in sync.incomplete.items():
+            logger.error(
+                "Could not read the whole mirror of repository '%s' "
+                "(%d unreadable path(s), first: %s).",
+                name, len(errors), errors[0],
+            )
+        logger.error(
+            "Refusing to stage: the mirror may hold pack files that are not "
+            "in the catalog. Fix the mount or permissions, run 'lcsas scan', "
+            "then stage again."
+        )
+        return False
+    for name, count in sync.unscanned.items():
+        if dry_run:
+            logger.info(
+                "[DRY RUN] Repository '%s': %d pack file(s) in the mirror are "
+                "not in the catalog yet. A real stage registers them first, "
+                "as 'lcsas scan' does; this plan leaves them out.",
+                name, count,
+            )
+        else:
+            logger.info(
+                "Repository '%s': registered %d pack file(s) from the mirror "
+                "that were not in the catalog yet (as 'lcsas scan' does).",
+                name, count,
+            )
+    for name, count in sync.missing_from_mirror.items():
+        logger.warning(
+            "Repository '%s': %d pack(s) in the catalog are no longer in the "
+            "mirror. Run 'lcsas scan' to record prunes.", name, count,
+        )
+    return True
+
+
 def cmd_stage(args: argparse.Namespace) -> int:
     """Stage ISOs for deferred burning."""
     from lcsas.burn.orchestrator import BurnOrchestrator
@@ -2086,6 +2135,13 @@ def cmd_stage(args: argparse.Namespace) -> int:
                 repo_ids = _resolve_repo_names_to_ids(conn, args.repo)
             except ValueError as e:
                 logger.error(str(e))
+                return 1
+
+            # #656: a disc carries each mirror's snapshots as they are now,
+            # so the catalog must know every pack file in the mirrors first.
+            if not _sync_mirrors_before_stage(
+                conn, repo_ids, dry_run=getattr(args, "dry_run", False),
+            ):
                 return 1
 
             from lcsas.db.key_escrow import EscrowDriftError
