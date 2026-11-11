@@ -204,3 +204,26 @@ def delete_session(conn: sqlite3.Connection, session_id: str) -> None:
             "DELETE FROM burn_sessions WHERE session_id = ?",
             (session_id,),
         )
+
+
+def get_staged_iso(
+    conn: sqlite3.Connection,
+    volume_id: int,
+) -> tuple[str, int | None] | None:
+    """Return ``(iso_sha256, iso_size_bytes)`` recorded when the volume's ISO
+    was mastered, from its most recent burn session, or None if no session
+    recorded a hash for it (#644)."""
+    row = conn.execute(
+        """SELECT sv.iso_sha256, sv.iso_size_bytes
+           FROM session_volumes sv
+           JOIN burn_sessions bs USING (session_id)
+           WHERE sv.volume_id = ?
+             AND sv.iso_sha256 IS NOT NULL AND sv.iso_sha256 != ''
+           ORDER BY bs.created_at DESC, sv.rowid DESC
+           LIMIT 1""",
+        (volume_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    size = row["iso_size_bytes"]
+    return str(row["iso_sha256"]), (int(size) if size is not None else None)
