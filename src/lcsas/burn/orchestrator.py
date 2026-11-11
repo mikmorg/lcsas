@@ -33,6 +33,7 @@ from lcsas.db.key_escrow import (
     get_split_for_repo,
     recorded_splits,
 )
+from lcsas.db.label_mark import label_seq, next_label_seq, raise_label_high_water
 from lcsas.db.locations import ensure_location
 from lcsas.db.models import Pack, SessionVolume, Volume
 from lcsas.db.queries import get_unarchived_or_missing_at_location, get_unarchived_packs
@@ -52,7 +53,6 @@ from lcsas.db.volumes import (
     create_volume,
     delete_volume,
     get_volume_by_id,
-    list_volumes,
     mark_closed,
     update_status,
     update_used_bytes,
@@ -73,7 +73,6 @@ from lcsas.utils.labels import (
     generate_session_id,
     generate_uuid,
     generate_volume_label,
-    next_seq_num,
 )
 
 _logger = logging.getLogger(__name__)
@@ -271,11 +270,7 @@ class BurnOrchestrator:
         )
 
         # 3. Generate volume identity
-        existing_labels = [
-            v.label for v in
-            list_volumes(self._conn)
-        ]
-        seq = next_seq_num(existing_labels, self._config.label_prefix)
+        seq = next_label_seq(self._conn, self._config.label_prefix)  # #676
         vol_label = generate_volume_label(
             self._config.label_prefix, mt.label_name, seq
         )
@@ -555,6 +550,11 @@ class BurnOrchestrator:
             status="STAGING",
             commit=False,
         )
+        # #676: remember the label number in the same transaction, so it
+        # is never issued again even if this volume is later deleted.
+        issued = label_seq(vol_label)
+        if issued is not None:
+            raise_label_high_water(self._conn, issued)
 
         pack_ids = [p.pack_id for p in selected_packs]
         bulk_link_packs(self._conn, volume.volume_id, pack_ids, commit=False)
@@ -1081,8 +1081,9 @@ class BurnOrchestrator:
         manifests: list[BurnManifest] = []
         iso_paths: list[Path] = []
 
-        existing_labels = [v.label for v in list_volumes(self._conn)]
-        seq = next_seq_num(existing_labels, self._config.label_prefix)
+        # #676: above every label number ever issued, not only those of
+        # the volumes still in the catalog.
+        seq = next_label_seq(self._conn, self._config.label_prefix)
 
         for i, (selected_packs, total_bytes) in enumerate(volume_plans):
             vol_label = generate_volume_label(
