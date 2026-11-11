@@ -113,6 +113,7 @@ static char *deep_chain_blob(int call, size_t *len_out)
     static char name[901];
     char *blob = (char *)malloc(2048);
     (void)call;
+    if (!blob) return NULL;  /* injected malloc failure: read fails */
     memset(name, 'a', 900);
     name[900] = '\0';
     sprintf(blob,
@@ -129,6 +130,7 @@ static char *deep_chain_short(int call, size_t *len_out)
 {
     char *blob = (char *)malloc(256);
     (void)call;
+    if (!blob) return NULL;
     sprintf(blob,
             "{\"nodes\":[{\"name\":\"d\",\"type\":\"dir\","
             "\"mode\":493,\"subtree\":\"" TREE_ID "\"}]}");
@@ -142,6 +144,7 @@ static char *garbage_blob(int call, size_t *len_out)
     char *blob;
     (void)call;
     blob = strdup("{\"nodes\":[-]}");
+    if (!blob) return NULL;
     *len_out = strlen(blob);
     return blob;
 }
@@ -154,6 +157,7 @@ static char *not_object_blob(int call, size_t *len_out)
     char *blob;
     (void)call;
     blob = strdup("[1,2,3]");
+    if (!blob) return NULL;
     *len_out = strlen(blob);
     return blob;
 }
@@ -167,6 +171,7 @@ static char *symlink_nul_blob(int call, size_t *len_out)
     (void)call;
     blob = strdup("{\"nodes\":[{\"name\":\"lnk\",\"type\":\"symlink\","
                   "\"linktarget\":\"a\\u0000b\"}]}");
+    if (!blob) return NULL;
     *len_out = strlen(blob);
     return blob;
 }
@@ -179,6 +184,7 @@ static char *tiny_tree_blob(int call, size_t *len_out)
     char *blob;
     (void)call;
     blob = strdup("{\"nodes\":[]}");
+    if (!blob) return NULL;
     *len_out = strlen(blob);
     return blob;
 }
@@ -191,6 +197,7 @@ static char *scripted_blob(int call, size_t *len_out)
     char *blob;
     if (call < 0 || call >= 8 || !g_blobs[call]) return NULL;
     blob = strdup(g_blobs[call]);
+    if (!blob) return NULL;
     *len_out = strlen(blob);
     return blob;
 }

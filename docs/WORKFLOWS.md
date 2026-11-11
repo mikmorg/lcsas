@@ -40,6 +40,7 @@ multi-tenant, recovery-toolchain) are called out as such in their detail files.
 | meta-disc | [workflows/meta-disc.md](workflows/meta-disc.md) | The meta disc (not bootable): bundled recovery binaries + source. |
 | consolidate-and-catalog-ops | [workflows/consolidate-and-catalog-ops.md](workflows/consolidate-and-catalog-ops.md) | `consolidate` plus `catalog validate/rebuild`. |
 | verify-and-audit | [workflows/verify-and-audit.md](workflows/verify-and-audit.md) | `verify`, `status`, `session list`. |
+| collections | [workflows/collections.md](workflows/collections.md) | `[collections.<name>]` in lcsas.toml: `stage --collection`, `--min-fill`/`--partial`, `status --json` for scripts. |
 
 ## Variant axis registry
 
