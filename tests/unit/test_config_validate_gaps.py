@@ -4,8 +4,8 @@ Pins ``validate_config()`` branches and ``_validate_toml_keys()`` warnings
 that had no test at any level:
 
 * ``staging_path`` vs ``mirror_base_path`` overlap (identical, nested either
-  way, via symlink) -- NB: the validator has no *repo-to-repo* mirror-path
-  overlap check, only this staging/mirror one;
+  way, via symlink) and, since #645, vs each repository's ``mirror_path`` --
+  NB: the validator has no *repo-to-repo* mirror-path overlap check;
 * ``label_prefix`` validation (empty, non-ISO-9660 characters, the 32-char
   label ceiling);
 * ``metadata_reserve_bytes >= usable_bytes`` of the configured media;
@@ -94,6 +94,57 @@ class TestStagingMirrorOverlap:
         errors = validate_config(_base_config(tmp_path))
         assert not _errors_mentioning(errors, "cannot overlap")
         assert not _errors_mentioning(errors, "cannot be identical")
+
+
+class TestStagingRepoOverlap:
+    """#645: with repositories configured, the staging area is checked
+    against each repository's mirror_path, not against mirror_base."""
+
+    def _repo(self, path: Path) -> RepositoryConfig:
+        path.mkdir(parents=True, exist_ok=True)
+        return RepositoryConfig(name="family", mirror_path=path)
+
+    def test_staging_beside_the_repos_inside_mirror_base_is_fine(self, tmp_path):
+        cfg = _base_config(tmp_path)
+        base = cfg.mirror_base_path
+        staging = base / "staging"
+        staging.mkdir()
+        cfg = _with(cfg, staging_path=staging,
+                    repositories={"family": self._repo(base / "family")})
+        errors = validate_config(cfg)
+        assert not _errors_mentioning(errors, "overlap")
+        assert not _errors_mentioning(errors, "identical")
+
+    def test_staging_inside_a_repo_is_rejected(self, tmp_path):
+        cfg = _base_config(tmp_path)
+        repo = self._repo(cfg.mirror_base_path / "family")
+        staging = repo.mirror_path / "staging"
+        staging.mkdir()
+        errors = validate_config(_with(cfg, staging_path=staging,
+                                       repositories={"family": repo}))
+        assert _errors_mentioning(errors, "repo 'family' mirror_path cannot overlap")
+
+    def test_a_repo_inside_staging_is_rejected(self, tmp_path):
+        cfg = _base_config(tmp_path)
+        repo = self._repo(cfg.staging_path / "family")
+        errors = validate_config(_with(cfg, repositories={"family": repo}))
+        assert _errors_mentioning(errors, "repo 'family' mirror_path cannot overlap")
+
+    def test_staging_identical_to_a_repo_is_rejected(self, tmp_path):
+        cfg = _base_config(tmp_path)
+        repo = self._repo(tmp_path / "elsewhere")
+        errors = validate_config(_with(cfg, staging_path=repo.mirror_path,
+                                       repositories={"family": repo}))
+        assert _errors_mentioning(errors, "repo 'family' mirror_path cannot be identical")
+
+    def test_mirror_base_inside_staging_is_still_rejected(self, tmp_path):
+        cfg = _base_config(tmp_path)
+        nested = cfg.staging_path / "mirror"
+        nested.mkdir()
+        repo = self._repo(tmp_path / "elsewhere")
+        errors = validate_config(_with(cfg, mirror_base_path=nested,
+                                       repositories={"family": repo}))
+        assert _errors_mentioning(errors, "staging_path and mirror_base_path cannot overlap")
 
 
 # ---------------------------------------------------------------------------
