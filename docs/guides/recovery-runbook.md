@@ -347,7 +347,10 @@ ships fallback paths:
 - **Tier 3, the Python reader (`standalone_restorer.py`)** (slowest,
   ~1 MB/s).  Requires only Python 3.10+ + standard library.  Run with
   `--repo /path/to/assembled/repo --password-file <file>
-  --target <dir>`.
+  --target <dir>`.  As in tier 1, `q` (or the end of input) at its
+  disc box stops the whole restore with exit code 75.  A full disk
+  stops it with exit code 1 and names the full folder.  A damaged file
+  is skipped and listed in `RESTORE_FAILURES.txt` (exit code 2).
 
 All four are documented in `README_RESTORE.md` on the meta disc.
 

@@ -764,9 +764,9 @@ status was added by the v4→v5 migration in the same module.
 
 | From → To                      | Trigger                                            | Source                                          |
 | ------------------------------ | -------------------------------------------------- | ----------------------------------------------- |
-| `STAGING → BURNING → VERIFIED` | `catalog import-receipts` w/ `verify_passed=true` (offline-burn receipt) | `cmd_catalog_import`   |
-| `STAGING → BURNING → BURNED`   | `catalog import-receipts` w/ `verify_passed=null` (`burn-iso --no-verify`) | `cmd_catalog_import`   |
-| stays `STAGING`                | `catalog import-receipts` w/ `verify_passed=false` (#483) | `cmd_catalog_import`                     |
+| `STAGING`/`BURNING`/`BURNED → VERIFIED` | `catalog import-receipts` w/ `verify_passed=true` and a hash matching the staged ISO (offline-burn receipt; #669, #670) | `cmd_catalog_import`   |
+| `STAGING`/`BURNING → BURNED`   | `catalog import-receipts` w/ `verify_passed=null` (`burn-iso --no-verify`) | `cmd_catalog_import`   |
+| `BURNING`/`BURNED → STAGING`, or stays `STAGING` | `catalog import-receipts` w/ `verify_passed=false`, volume with no disc (#483, #670) | `cmd_catalog_import`                     |
 | `BURNED → VERIFIED`            | `lcsas verify --mark-verified`                     | `cmd_verify` in `src/lcsas/cli/main.py`         |
 | `VERIFIED → CONSOLIDATING`     | `lcsas consolidate --execute` (just after staging succeeds) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |
 | `CONSOLIDATING → VERIFIED`     | `lcsas session abort` of the consolidation's burn session | `cmd_session_abort`, `src/lcsas/consolidate/merger.py` |
@@ -830,7 +830,7 @@ Python layer as `VALID_EVENT_TYPES` (`src/lcsas/db/volume_events.py`).
 | `consolidate --deprecate` (success)           | `NOTE` (per source volume)     | `"Status changed: <prev> → DEPRECATED"`     |
 | `copy deprecate` / `copy destroy [--lost]`    | `NOTE` (per disc)              | `"disc at <loc> recorded as deprecated (out of service)"` / `"… as destroyed"` / `"… as lost (whereabouts unknown)"` |
 | last in-service disc recorded gone            | `NOTE` (lost volume)           | `"auto-deprecated: last in-service disc <deprecated\|destroyed\|lost> at <loc>"` |
-| `catalog import-receipts` (verify pass/fail)  | `VERIFY_PASS` / `VERIFY_FAIL` + `BURN_RECEIPT_IMPORTED` | receipt filename; JSON provenance (iso_sha256, session_id, device, pack_ids) |
+| `catalog import-receipts` (verify pass/fail)  | `VERIFY_PASS` / `VERIFY_FAIL` / `VERIFY_FAIL_REBURN` + `BURN_RECEIPT_IMPORTED` | receipt filename; JSON provenance (iso_sha256, burn_date, session_id, device, pack_ids, verify_passed) |
 | `catalog validate` (PASS/FAIL)                | **none** — see *Gaps*          | n/a                                         |
 | `catalog rebuild`                             | merges `volume_events` rows from the disc catalogs (no synthetic "rebuilt" event) | n/a |
 | `loc move` (`cmd_location`, out of category)  | `LOCATION_MOVE` (record-keeping precedent) | `<free text>`                  |

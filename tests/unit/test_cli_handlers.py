@@ -1497,6 +1497,9 @@ def test_import_receipts_from_durable_dir(tmp_path):
     for label in labels:
         create_volume(fresh, label, f"uuid-{label}", "TEST_TINY",
                       2_097_152, "Home_Shelf", "STAGING")
+    # #669: the receipt's location must be a registered one.
+    from lcsas.db.locations import ensure_location
+    ensure_location(fresh, "Offsite_Safe")
     fresh.close()
 
     # 3. Replay the durable receipt directory through the CLI.
@@ -1511,7 +1514,11 @@ def test_import_receipts_from_durable_dir(tmp_path):
         'media_type = "TEST_TINY"\n'
         "metadata_reserve_mb = 0\n"
     )
+    # #669: the rebuilt catalog has no staged ISO hash for these volumes,
+    # and they were staged for Home_Shelf but burned for Offsite_Safe, so
+    # the owner vouches for both.
     rc = main(["--config", str(cfg), "catalog", "import-receipts",
+               "--allow-unhashed", "--allow-other-location",
                *[str(rf) for rf in receipt_files]])
     assert rc == 0
 
