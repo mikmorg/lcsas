@@ -1510,7 +1510,75 @@ main(void)
                             "skip (rc=%d count=%zu)\n", rc, snaps.count);
                     fails++;
                 }
+                /* #662: the skipped file is counted and named. */
+                if (snaps.unreadable != 1
+                        || strcmp(snaps.unreadable_name, hexname) != 0) {
+                    fprintf(stderr,
+                            "FAIL: 662 auth-fail snapshot not counted "
+                            "(unreadable=%zu name=%s)\n",
+                            snaps.unreadable, snaps.unreadable_name);
+                    fails++;
+                }
                 lcsas_snapshot_list_free(&snaps);
+            }
+        }
+
+        /* #662 (a2): an unreadable (mode 000) snapshot file is a read
+         * error, counted like an auth failure.  Skipped as root. */
+        if (geteuid() != 0) {
+            char tmp[] = "/tmp/lcsas_662_snapio_XXXXXX";
+            char sdir[1100], spath[1300];
+            lcsas_snapshot_list snaps;
+            FILE *f;
+            if (mkdtemp(tmp) == NULL) {
+                fprintf(stderr, "FAIL: 662 mkdtemp\n"); fails++;
+            } else {
+                memset(hexname, 'c', 64); hexname[64] = '\0';
+                snprintf(sdir, sizeof sdir, "%s/snapshots", tmp);
+                mkdir(sdir, 0700);
+                snprintf(spath, sizeof spath, "%s/%s", sdir, hexname);
+                f = fopen(spath, "wb");
+                if (f) { fwrite("garbage!!", 1, 9, f); fclose(f); }
+                chmod(spath, 0);
+                fprintf(stderr,
+                        "[test_repo] 662 expecting could-not-be-read "
+                        "WARNING below:\n");
+                lcsas_snapshot_list_init(&snaps);
+                rc = lcsas_repo_load_snapshots(tmp, &mk, &snaps);
+                if (rc != 0 || snaps.count != 0 || snaps.unreadable != 1) {
+                    fprintf(stderr,
+                            "FAIL: 662 unreadable snapshot (rc=%d count=%zu "
+                            "unreadable=%zu)\n", rc, snaps.count,
+                            snaps.unreadable);
+                    fails++;
+                }
+                lcsas_snapshot_list_free(&snaps);
+                chmod(spath, 0600);
+            }
+        }
+
+        /* #663: snapshot times compare by instant, not by text. */
+        {
+            /* 01:10-05:00 is 06:10Z, later than 01:30-04:00 = 05:30Z,
+             * although it sorts first as text. */
+            if (lcsas_snapshot_time_cmp("2026-11-01T01:30:00-04:00",
+                                        "2026-11-01T01:10:00-05:00") >= 0) {
+                fprintf(stderr, "FAIL: 663 mixed offsets not by instant\n");
+                fails++;
+            }
+            if (lcsas_snapshot_time_cmp("2026-01-01T00:00:00.5Z",
+                                        "2026-01-01T00:00:00.25Z") <= 0) {
+                fprintf(stderr, "FAIL: 663 fraction order\n");
+                fails++;
+            }
+            if (lcsas_snapshot_time_cmp("2026-01-01T00:00:00Z",
+                                        "2026-01-01T00:00:00+00:00") != 0) {
+                fprintf(stderr, "FAIL: 663 same instant not equal\n");
+                fails++;
+            }
+            if (lcsas_snapshot_time_cmp("not-a-time", "zzz") >= 0) {
+                fprintf(stderr, "FAIL: 663 text fallback\n");
+                fails++;
             }
         }
 

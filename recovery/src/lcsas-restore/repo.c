@@ -671,10 +671,18 @@ lcsas_repo_load_index(const char *repo_path,
             }
             /* MAC/decrypt or I/O failure stays non-fatal here (a stray
              * or corrupt single file must not sink the whole load), but
-             * it is no longer silent: warn per file and tally a summary. */
-            fprintf(stderr,
-                    "WARNING: index file %s failed authentication; "
-                    "skipping\n", names[i]);
+             * it is no longer silent: warn per file and tally a summary.
+             * Issue #662 — a read error is reported as a read error,
+             * not as "failed authentication". */
+            if (why == LCSAS_DEC_IO) {
+                fprintf(stderr,
+                        "WARNING: index file %s could not be read; "
+                        "skipping\n", names[i]);
+            } else {
+                fprintf(stderr,
+                        "WARNING: index file %s failed authentication; "
+                        "skipping\n", names[i]);
+            }
             auth_failures++;
             continue;
         }
@@ -850,6 +858,7 @@ void
 lcsas_snapshot_list_init(lcsas_snapshot_list *l)
 {
     l->items = NULL; l->count = 0; l->cap = 0;
+    l->unreadable = 0; l->unreadable_name[0] = '\0';
 }
 
 void
@@ -875,21 +884,36 @@ snap_list_push(lcsas_snapshot_list *l, const lcsas_snapshot *s)
 }
 
 /* Comparator for qsort: sort lcsas_snapshot entries ascending by
- * their ISO-8601 `time` field.  Restic writes time strings in a
- * zero-padded fixed-width form (e.g. "2026-05-21T00:00:00.123456Z"),
- * which makes strcmp a correct chronological comparator: the lexical
- * order matches the chronological order.
+ * their ISO-8601 `time` field.  Sorting by time (not by file_name,
+ * which is a content-addressed hash and thus filesystem-order-
+ * equivalent) is what makes `lcsas_snapshot_latest` agree with
+ * rustic's `latest` selector (closes #194).
  *
- * Sorting by time (not by file_name, which is a content-addressed
- * hash and thus filesystem-order-equivalent) is what makes
- * `lcsas_snapshot_latest` agree with rustic's `latest` selector
- * (closes #194). */
+ * Issue #663 — the text order is only chronological when every time
+ * string carries the same UTC offset.  rustic writes the backup host's
+ * local offset, so the repeated hour when daylight saving time ends, or
+ * a backup made in a UTC container next to one made on a host in local
+ * time, sorts wrongly as text.  Compare the parsed instants. */
+int
+lcsas_snapshot_time_cmp(const char *a, const char *b)
+{
+    long long sa = 0, sb = 0;
+    long na = 0, nb = 0;
+    if (lcsas_parse_iso8601_utc(a, &sa, &na) == 0
+            && lcsas_parse_iso8601_utc(b, &sb, &nb) == 0) {
+        if (sa != sb) return sa < sb ? -1 : 1;
+        if (na != nb) return na < nb ? -1 : 1;
+        return 0;
+    }
+    return strcmp(a, b);
+}
+
 static int
 snap_time_qsort_cmp(const void *a, const void *b)
 {
     const lcsas_snapshot *sa = (const lcsas_snapshot *)a;
     const lcsas_snapshot *sb = (const lcsas_snapshot *)b;
-    return strcmp(sa->time, sb->time);
+    return lcsas_snapshot_time_cmp(sa->time, sb->time);
 }
 
 int
@@ -914,18 +938,41 @@ lcsas_repo_load_snapshots(const char *repo_path,
         long ntoks;
         long tree_i, time_i, paths_i;
         lcsas_snapshot snap;
+        int why;
 
         if (e->d_name[0] == '.') continue;
         if (strlen(e->d_name) > LCSAS_HEX_BLOB_ID_LEN) continue;
 
         snprintf(path, sizeof path, "%s/%s", snap_dir, e->d_name);
-        plain = decrypt_repo_file(path, mk, &plen, NULL);
+        why = LCSAS_DEC_OK;
+        plain = decrypt_repo_file(path, mk, &plen, &why);
         if (!plain) {
             /* A snapshot that fails authentication vanishes from the
-             * list — that is silent selection data loss, so name it. */
-            fprintf(stderr,
-                    "WARNING: snapshot file %s failed authentication; "
-                    "skipping\n", e->d_name);
+             * list — that is silent selection data loss, so name it.
+             * Issue #662 — also count it, so that a restore of
+             * "latest" stops (or asks) instead of quietly taking an
+             * older snapshot, and say what kind of failure it was. */
+            if (why == LCSAS_DEC_IO) {
+                fprintf(stderr,
+                        "WARNING: snapshot file %s could not be read; "
+                        "skipping\n", e->d_name);
+            } else if (why == LCSAS_DEC_MAC) {
+                fprintf(stderr,
+                        "WARNING: snapshot file %s failed authentication; "
+                        "skipping\n", e->d_name);
+            } else {
+                fprintf(stderr,
+                        "WARNING: snapshot file %s is corrupt; "
+                        "skipping\n", e->d_name);
+            }
+            if (out->unreadable == 0) {
+                size_t nl = strlen(e->d_name);
+                if (nl >= sizeof(out->unreadable_name))
+                    nl = sizeof(out->unreadable_name) - 1;
+                memcpy(out->unreadable_name, e->d_name, nl);
+                out->unreadable_name[nl] = '\0';
+            }
+            out->unreadable++;
             continue;
         }
         ntoks = lcsas_json_parse_alloc((const char *)plain, plen, &toks, 256);
@@ -989,12 +1036,10 @@ lcsas_repo_load_snapshots(const char *repo_path,
     }
     closedir(d);
 
-    /* Sort ascending by ISO-8601 `time` so that items[count-1] is the
-     * chronologically newest snapshot — what `lcsas_snapshot_latest`
-     * returns and what rustic's `latest` selector also picks.  See
-     * snap_time_qsort_cmp for the rationale on strcmp vs. parsed
-     * time; the short version is that restic's time strings are
-     * zero-padded fixed-width so lexical order equals chronological. */
+    /* Sort ascending by the instant in `time` so that items[count-1]
+     * is the chronologically newest snapshot — what
+     * `lcsas_snapshot_latest` returns and what rustic's `latest`
+     * selector also picks (#194, #663). */
     if (out->count > 1) {
         qsort(out->items, out->count, sizeof(lcsas_snapshot),
               snap_time_qsort_cmp);

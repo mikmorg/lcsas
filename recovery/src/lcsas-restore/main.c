@@ -606,12 +606,50 @@ main(int argc, char **argv)
                    snaps.items[k].time,
                    snaps.items[k].first_path);
         }
+        if (snaps.unreadable > 0) {
+            printf("(%lu snapshot file(s) could not be read; see the "
+                   "warnings above)\n", (unsigned long)snaps.unreadable);
+        }
         rc = 0;
         goto out;
     }
 
     if (snapshot_arg == NULL || strcmp(snapshot_arg, "latest") == 0) {
         sidx = lcsas_snapshot_latest(&snaps);
+        /* Issue #662 — a snapshot file that could not be read may be
+         * the newest one.  Taking the newest READABLE snapshot without
+         * a word would restore older data and still exit 0.  Stop, or
+         * ask when someone is at the keyboard. */
+        if (sidx >= 0 && snaps.unreadable > 0) {
+            fprintf(stderr,
+                    "WARNING: %lu snapshot file(s) could not be read "
+                    "(first: %s).\n"
+                    "         The newest snapshot may be one of them.\n"
+                    "         The newest snapshot that could be read is "
+                    "%.8s from %s.\n",
+                    (unsigned long)snaps.unreadable, snaps.unreadable_name,
+                    snaps.items[sidx].file_name, snaps.items[sidx].time);
+            if (!interactive) {
+                fprintf(stderr,
+                        "ERROR: not restoring \"latest\" without a "
+                        "choice.  Run again with --snapshot %.8s to "
+                        "restore that snapshot, or use another copy of "
+                        "the disc.\n",
+                        snaps.items[sidx].file_name);
+                goto out;
+            } else {
+                char answer[16];
+                fprintf(stderr,
+                        "Restore snapshot %.8s instead? [y/N] ",
+                        snaps.items[sidx].file_name);
+                fflush(stderr);
+                if (fgets(answer, sizeof answer, stdin) == NULL
+                        || (answer[0] != 'y' && answer[0] != 'Y')) {
+                    fprintf(stderr, "Not restoring.\n");
+                    goto out;
+                }
+            }
+        }
     } else {
         sidx = lcsas_snapshot_find(&snaps, snapshot_arg);
     }
