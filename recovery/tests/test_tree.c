@@ -426,6 +426,21 @@ static void test_resume_skip_needs_mtime(void)
     rmrf(target);
 }
 
+static void test_blob_failure_message(void)
+{
+    /* #654: a file whose data blob cannot be read fails the walk (rc != 0)
+     * and the failure line carries no stale system error. */
+    char *target = mktarget();
+    g_blobs[0] = "{\"nodes\":[{\"name\":\"f\",\"type\":\"file\","
+                 "\"mode\":420,\"size\":4,\"content\":[\"" TREE_ID "\"]}]}";
+    g_blobs[1] = NULL;
+    if (run_scripted(target) == 0) {
+        fprintf(stderr, "FAIL blob_failure: rc 0 for an unreadable blob\n");
+        fails++;
+    }
+    rmrf(target);
+}
+
 /* ── tests ──────────────────────────────────────────────────────── */
 
 static void test_path_too_long(void)
@@ -599,6 +614,7 @@ int main(void)
     test_readonly_dir_with_children();
     test_resume_readonly_partial();
     test_resume_skip_needs_mtime();
+    test_blob_failure_message();
     if (fails) {
         fprintf(stderr, "test_tree: %d FAIL\n", fails);
         return 1;

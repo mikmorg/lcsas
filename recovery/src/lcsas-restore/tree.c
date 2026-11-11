@@ -687,6 +687,9 @@ restore_file_node(const char *repo_path,
         }
         final_posix_mode = mode_from_go_filemode(mode_value);
         fd = lcsas_create_file(target_path, final_posix_mode);
+        /* #654: errno now describes only what fails from here on (the
+         * resume stat and the hardlink unlink above leave ENOENT). */
+        if (fd >= 0) errno = 0;
     }
     if (fd < 0) {
         /* Issue #221 — classify ENOSPC / EDQUOT explicitly so the

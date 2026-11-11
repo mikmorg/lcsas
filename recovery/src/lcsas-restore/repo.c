@@ -966,9 +966,8 @@ lcsas_repo_load_snapshots(const char *repo_path,
                         "skipping\n", e->d_name);
             }
             if (out->unreadable == 0) {
+                /* Names longer than 64 were skipped above, so this fits. */
                 size_t nl = strlen(e->d_name);
-                if (nl >= sizeof(out->unreadable_name))
-                    nl = sizeof(out->unreadable_name) - 1;
                 memcpy(out->unreadable_name, e->d_name, nl);
                 out->unreadable_name[nl] = '\0';
             }
