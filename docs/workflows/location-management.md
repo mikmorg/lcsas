@@ -376,8 +376,9 @@ by staging and burning *only* the packs that location is missing.
 4. If `repo_ids` were also passed, the result is intersected with that
    set (the repository filter at the end of `_gather_packs_for_staging()`).
 
-5. Raises `ValueError("No packs need staging.")` if the location is
-   already up to date (`BurnOrchestrator.stage()`).
+5. Raises `NothingToStageError("No packs need staging.")` (a
+   `ValueError`) if the location is already up to date
+   (`BurnOrchestrator.stage()`). The CLI prints the message and exits 1.
 
 6. The remaining pipeline is identical to a fresh burn: FFD bin-pack
    (`BurnOrchestrator._multi_bin_pack()`), staging-dir build with
