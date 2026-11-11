@@ -397,7 +397,15 @@ produced by a live burn pipeline.
       volume cannot be reverted from a receipt.
    9. Add a `volume_copies` row for this `(volume_id, location)` pair,
       stamping the burn date, `iso_sha256`, and `iso_size_bytes` from
-      the receipt (`cmd_catalog_import`). The underlying upsert
+      the receipt (`cmd_catalog_import`).  For a receipt with
+      `verify_passed: true` it also sets `last_verified_at` to the
+      receipt's `burn_date` (in UTC; the import time if it is missing,
+      unreadable or in the future), since `burn-iso` read the disc back
+      right after burning, so `lcsas status` does not count the disc as
+      never verified (#646).  A `--no-verify` receipt leaves it NULL.
+      Discs imported before this change keep a NULL `last_verified_at`
+      and are listed by `lcsas status --stale-copies` until `lcsas
+      verify <label> --disc` is run on them. The underlying upsert
       collapses re-imports of the same receipt into the existing
       `volume_copies` row (`src/lcsas/db/volume_copies.py`).
    10. Record a `BURN_RECEIPT_IMPORTED` audit event whose `detail` is a

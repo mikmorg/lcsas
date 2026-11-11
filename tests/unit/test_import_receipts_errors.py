@@ -464,6 +464,85 @@ class TestMixedBatch:
 
 
 # ---------------------------------------------------------------------------
+# #646: a verified receipt records the disc as verified
+# ---------------------------------------------------------------------------
+
+
+class TestReceiptLastVerified:
+    def _last_verified(self, db: Path, label: str, location: str) -> str | None:
+        conn = get_connection(db)
+        try:
+            vol = get_volume_by_label(conn, label)
+            assert vol is not None
+            (copy,) = [c for c in get_copies_for_volume(conn, vol.volume_id)
+                       if c.location == location]
+            return copy.last_verified_at
+        finally:
+            conn.close()
+
+    def test_verified_receipt_sets_last_verified_and_status_is_quiet(
+        self, env, capsys,
+    ):
+        from datetime import UTC, datetime
+
+        from lcsas.db.volume_copies import find_stale_copies
+
+        tmp_path, cfg, db = env
+        body = dict(_good("VOL_GOOD", "Bank_Box"),
+                    burn_date=datetime.now(UTC).isoformat())
+        assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 0
+        assert self._last_verified(db, "VOL_GOOD", "Bank_Box") == body["burn_date"]
+        conn = get_connection(db)
+        try:
+            assert find_stale_copies(conn) == []
+        finally:
+            conn.close()
+        capsys.readouterr()
+        assert main(["--config", str(cfg), "status"]) == 0
+        assert "not verified" not in capsys.readouterr().out
+
+    def test_unverified_receipt_leaves_it_null(self, env):
+        tmp_path, cfg, db = env
+        body = dict(_good("VOL_GOOD", "Bank_Box"), verify_passed=None)
+        assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 0
+        assert self._last_verified(db, "VOL_GOOD", "Bank_Box") is None
+
+    def test_reburn_without_verify_clears_the_old_verification(self, env):
+        """The row now describes a new, unread disc."""
+        tmp_path, cfg, db = env
+        assert _run(cfg, _receipt(tmp_path, "a.json", _good("VOL_GOOD", "Bank_Box"))) == 0
+        assert self._last_verified(db, "VOL_GOOD", "Bank_Box") is not None
+        again = dict(_good("VOL_GOOD", "Bank_Box"), verify_passed=None)
+        assert _run(cfg, _receipt(tmp_path, "b.json", again)) == 0
+        assert self._last_verified(db, "VOL_GOOD", "Bank_Box") is None
+
+    @pytest.mark.parametrize("burn_date, expected", [
+        ("2026-04-14T14:00:00+02:00", "2026-04-14T12:00:00+00:00"),
+        ("2026-04-14T12:00:00", "2026-04-14T12:00:00+00:00"),
+    ])
+    def test_burn_date_is_normalised_to_utc(self, env, burn_date, expected):
+        tmp_path, cfg, db = env
+        body = dict(_good("VOL_GOOD", "Bank_Box"), burn_date=burn_date)
+        assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 0
+        assert self._last_verified(db, "VOL_GOOD", "Bank_Box") == expected
+
+    @pytest.mark.parametrize("burn_date", ["", "not a date", "2999-01-01T00:00:00+00:00"])
+    def test_missing_bad_or_future_burn_date_uses_the_import_time(
+        self, env, burn_date,
+    ):
+        from datetime import UTC, datetime
+
+        tmp_path, cfg, db = env
+        before = datetime.now(UTC).isoformat()
+        body = dict(_good("VOL_GOOD", "Bank_Box"), burn_date=burn_date)
+        assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 0
+        got = self._last_verified(db, "VOL_GOOD", "Bank_Box")
+        assert got is not None and before <= got <= datetime.now(UTC).isoformat()
+
+
+
+
+# ---------------------------------------------------------------------------
 # #644: the receipt must name the ISO that was staged
 # ---------------------------------------------------------------------------
 
