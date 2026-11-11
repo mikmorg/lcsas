@@ -138,6 +138,29 @@ class StageResult:
     # #657: repositories whose snapshots could not be checked (no
     # password_file, or the walk failed); every snapshot was copied.
     snapshots_unchecked: dict[str, str] = field(default_factory=dict)
+    # #701: the last planned volume, left out because it filled less of
+    # its pack space than the minimum fill.  When it was the only
+    # volume, nothing is staged: session_id is "" and manifests is empty.
+    underfilled: UnderfilledVolume | None = None
+
+
+@dataclass(frozen=True)
+class UnderfilledVolume:
+    """A planned volume below the minimum fill, not staged (#701)."""
+
+    pack_count: int
+    data_bytes: int
+    pack_space_bytes: int
+    fill_pct: float
+    min_fill_pct: float
+
+    def describe(self, media_name: str) -> str:
+        return (
+            f"{self.pack_count} pack(s), {self.data_bytes:,} bytes: "
+            f"{self.fill_pct:.1f}% of a {media_name} volume's pack space "
+            f"({self.pack_space_bytes:,} bytes), below the minimum fill of "
+            f"{self.min_fill_pct:g}%"
+        )
 
 
 @dataclass
@@ -944,6 +967,8 @@ class BurnOrchestrator:
         repo_ids: list[str] | None = None,
         pack_sha256s: list[str] | None = None,
         dry_run: bool = False,
+        min_fill_pct: float = 0.0,
+        partial: bool = False,
     ) -> StageResult:
         """Stage all unarchived packs into ISOs, creating a burn session.
 
@@ -962,6 +987,12 @@ class BurnOrchestrator:
             repo_ids: Optional filter to specific repositories.
             pack_sha256s: If set, stage only packs with these pack IDs.
             dry_run: If True, compute the plan but skip all side effects.
+
+            min_fill_pct: If above 0, the last planned volume is not staged
+                when its packs fill less than this percent of its pack
+                space (#701); the volumes before it are.  Its packs wait
+                for a later stage.
+            partial: Stage the last volume even below ``min_fill_pct``.
 
         Returns:
             StageResult with burn session ID, manifests, and ISO paths.
@@ -1005,20 +1036,50 @@ class BurnOrchestrator:
                         "lcsas session abort <id> to discard the waiting ISOs."
                     ),
                 )
-            raise ValueError("No packs need staging.")
+            # A StagingError, so the CLI prints it as it is, not as an
+            # "Unexpected error" (#701: a scheduled collection stage
+            # meets this whenever nothing new came in).
+            raise NothingToStageError("No packs need staging.")
 
         # 2. Bin-pack into multiple volumes
         volume_plans = self._multi_bin_pack(packs_to_stage, mt)
+
+        # #701: a last volume below the minimum fill waits for more data.
+        # Decided on the plan, before any side effect.
+        volume_plans, underfilled = self._trim_underfilled(
+            volume_plans, mt, min_fill_pct, partial=partial,
+        )
+        if not volume_plans:
+            logger.info(
+                "%sNothing staged: the only volume would hold %s. Its "
+                "packs wait for a later stage; pass --partial to stage "
+                "it now.", "[DRY RUN] " if dry_run else "",
+                underfilled.describe(mt.name) if underfilled else "",
+            )
+            return StageResult(
+                session_id="", media_type=mt, staging_dir=Path("/dev/null"),
+                underfilled=underfilled,
+            )
+        if underfilled is not None:
+            logger.warning(
+                "%sNot staging the last volume: it would hold %s. Its "
+                "packs wait for a later stage; pass --partial to stage "
+                "it now.", "[DRY RUN] " if dry_run else "",
+                underfilled.describe(mt.name),
+            )
 
         # --- Dry-run: report the plan without side effects ---
         if dry_run:
             total_bytes = sum(b for _, b in volume_plans)
             logger.info(f"[DRY RUN] {len(volume_plans)} volume(s) planned "
                         f"on {mt.name}")
+            pack_space = self._pack_space_bytes(mt)
             for i, (packs, vol_bytes) in enumerate(volume_plans, 1):
                 fill_pct = (vol_bytes / mt.capacity_bytes) * 100
+                space_pct = vol_bytes / pack_space * 100
                 logger.info(f"  Volume {i}: {len(packs)} packs, "
-                            f"{vol_bytes:,} bytes ({fill_pct:.1f}% fill)")
+                            f"{vol_bytes:,} bytes ({fill_pct:.1f}% fill, "
+                            f"{space_pct:.1f}% of its pack space)")
             logger.info(f"  Total data: {total_bytes:,} bytes")
             return StageResult(
                 session_id="dry-run",
@@ -1994,6 +2055,49 @@ class BurnOrchestrator:
             ]
 
         return volume_plans
+
+    def _pack_space_bytes(self, media_type: MediaType) -> int:
+        """Bytes of packs one volume can hold: what _multi_bin_pack fills.
+
+        The medium's usable bytes (after the ECC share) less the metadata
+        reserve.  A volume with this many bytes of packs is 100% full.
+        """
+        return max(
+            1, media_type.usable_bytes - self._config.metadata_reserve_bytes,
+        )
+
+    def _trim_underfilled(
+        self,
+        volume_plans: list[tuple[list[Pack], int]],
+        media_type: MediaType,
+        min_fill_pct: float,
+        *,
+        partial: bool,
+    ) -> tuple[list[tuple[list[Pack], int]], UnderfilledVolume | None]:
+        """Drop the last planned volume when it is below *min_fill_pct* (#701).
+
+        Fill is measured against the volume's pack space
+        (:meth:`_pack_space_bytes`), so a volume packed as full as it can
+        be is at 100%, whatever the medium's ECC share.  Only the last
+        volume is checked: _multi_bin_pack fills each volume as far as
+        the packs allow before it starts the next, so the last one holds
+        what is left over.  With *partial*, or no minimum, nothing is
+        dropped.
+        """
+        if min_fill_pct <= 0 or partial or not volume_plans:
+            return volume_plans, None
+        packs, data_bytes = volume_plans[-1]
+        space = self._pack_space_bytes(media_type)
+        fill = data_bytes / space * 100
+        if fill >= min_fill_pct:
+            return volume_plans, None
+        return volume_plans[:-1], UnderfilledVolume(
+            pack_count=len(packs),
+            data_bytes=data_bytes,
+            pack_space_bytes=space,
+            fill_pct=fill,
+            min_fill_pct=min_fill_pct,
+        )
 
     def _write_session_manifest(
         self,
