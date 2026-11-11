@@ -826,7 +826,8 @@ FLAGS AND ENVIRONMENT VARIABLES:
   LCSAS_SKIP_SPACE_CHECK  1 → skip the free-space preflight that
                           compares the archive size (from the catalog)
                           against free space at TARGET_DIR and the
-                          pack cache before any password/disc prompt.
+                          pack cache (twice the size when both are on
+                          one disk) before any password/disc prompt.
                           Default: check ON when the size is derivable.
   LCSAS_FORCE_NONEMPTY_TARGET
                           1 → skip the 'TARGET_DIR is non-empty and not
@@ -2188,10 +2189,14 @@ fi
 # the tier-1 binary's --list-pending-packs total (a slight over-
 # estimate when packs live on several discs).  When neither tool can
 # run, the check is SKIPPED -- never block a restore on a missing
-# convenience tool.  Both the target and the pack cache filesystems
-# are checked: packs accumulate in the cache (~the same total)
-# before the restore writes the target.  LCSAS_SKIP_SPACE_CHECK=1
-# bypasses the whole check.
+# convenience tool.  The pack cache needs about that size too: packs
+# accumulate in it while the restore writes the target.  When the
+# target and the cache share a filesystem (the default: both under
+# the home folder) that filesystem needs the SUM of the two (#660);
+# on two filesystems each needs its own share.  A restore that carries
+# on counts what it already wrote: the packs in the cache, and the
+# files in a target that holds the marker of an earlier restore.
+# LCSAS_SKIP_SPACE_CHECK=1 bypasses the whole check.
 
 space_probe_dir() {
     # Print the nearest EXISTING ancestor directory of "$1" (df needs
@@ -2214,12 +2219,43 @@ free_kb_for() {
 }
 
 fs_dev_for() {
-    # df device column for "$1" -- proxy for "same filesystem" so the
-    # target and cache aren't double-reported when they share one.
+    # df mount point of "$1": the target and the cache are on the same
+    # filesystem when df names the same mount point for both.  Not the
+    # device column, which is "tmpfs" for every tmpfs (#660).
     _fd_dir="$(space_probe_dir "$1")"
     [ -n "$_fd_dir" ] || return 0
-    df -Pk "$_fd_dir" 2>/dev/null | awk 'NR==2 { print $1 }'
+    df -Pk "$_fd_dir" 2>/dev/null \
+        | awk 'NR==2 { for (i = 1; i <= 5; i++) sub(/^[^ ]+ +/, ""); print }'
     return 0
+}
+
+used_kb_in() {
+    # KB already used under "$1" (0 when it does not exist).
+    _uk=0
+    if [ -d "$1" ]; then
+        _uk="$(du -sk "$1" 2>/dev/null | awk 'NR==1 { print $1 }')"
+        case "$_uk" in ''|*[!0-9]*) _uk=0 ;; esac
+    fi
+    printf '%s\n' "$_uk"
+}
+
+still_needed_kb() {
+    # required_kb less the "$1" KB already there, never below 0.
+    if [ "$1" -ge "$required_kb" ]; then echo 0
+    else echo $(( required_kb - $1 )); fi
+}
+
+space_short() {
+    # space_short DIR NEED_KB: say so and set space_fail when the
+    # filesystem holding DIR has less than NEED_KB free.  Returns 1
+    # when it is short.  Free space that cannot be read is not short.
+    _ss_free="$(free_kb_for "$1")"
+    case "$_ss_free" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$_ss_free" -lt "$2" ] || return 0
+    printf 'restore.sh: Need about %s free at %s; only %s available.\n' \
+           "$(human_kb "$2")" "$1" "$(human_kb "$_ss_free")" >&2
+    space_fail=1
+    return 1
 }
 
 if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
@@ -2261,24 +2297,36 @@ if [ "${LCSAS_SKIP_SPACE_CHECK:-0}" != "1" ]; then
     if [ "$required_kb" -gt 0 ]; then
         mkdir -p "$TARGET_DIR" 2>/dev/null || true
         space_fail=0
-        _checked_devs=" "
-        for _sp_dir in "$TARGET_DIR" "${LCSAS_PACK_CACHE_DIR:-}"; do
-            [ -n "$_sp_dir" ] || continue
-            _sp_dev="$(fs_dev_for "$_sp_dir")"
-            [ -n "$_sp_dev" ] || _sp_dev="$_sp_dir"
-            case "$_checked_devs" in
-                *" $_sp_dev "*) continue ;;
-            esac
-            _checked_devs="$_checked_devs$_sp_dev "
-            _sp_free_kb="$(free_kb_for "$_sp_dir")"
-            case "$_sp_free_kb" in ''|*[!0-9]*) continue ;; esac
-            if [ "$_sp_free_kb" -lt "$required_kb" ]; then
-                printf 'restore.sh: Need about %s free at %s; only %s available.\n' \
-                       "$(human_kb "$required_kb")" "$_sp_dir" \
-                       "$(human_kb "$_sp_free_kb")" >&2
-                space_fail=1
+        # What each still needs: the restored files (less those an
+        # earlier restore into this folder already wrote) and the pack
+        # cache (less the packs already in it).
+        _sp_t_used=0
+        if [ -f "$TARGET_DIR/.lcsas-restore-marker" ]; then
+            _sp_t_used="$(used_kb_in "$TARGET_DIR")"
+        fi
+        _sp_t_need="$(still_needed_kb "$_sp_t_used")"
+        _sp_c_dir="${LCSAS_PACK_CACHE_DIR:-}"
+        _sp_c_need=0
+        if [ -n "$_sp_c_dir" ]; then
+            _sp_c_need="$(still_needed_kb "$(used_kb_in "$_sp_c_dir")")"
+        fi
+        _sp_t_dev="$(fs_dev_for "$TARGET_DIR")"
+        _sp_c_dev=""
+        [ -z "$_sp_c_dir" ] || _sp_c_dev="$(fs_dev_for "$_sp_c_dir")"
+        if [ -n "$_sp_c_dir" ] && [ -n "$_sp_t_dev" ] \
+           && [ "$_sp_t_dev" = "$_sp_c_dev" ]; then
+            # One filesystem holds both: it needs the sum (#660).
+            if ! space_short "$TARGET_DIR" "$(( _sp_t_need + _sp_c_need ))"; then
+                printf '    (%s for the restored files and %s for the pack\n' \
+                       "$(human_kb "$_sp_t_need")" "$(human_kb "$_sp_c_need")" >&2
+                printf '    cache at %s, on the same disk.)\n' "$_sp_c_dir" >&2
             fi
-        done
+        else
+            space_short "$TARGET_DIR" "$_sp_t_need" || true
+            if [ -n "$_sp_c_dir" ]; then
+                space_short "$_sp_c_dir" "$_sp_c_need" || true
+            fi
+        fi
         if [ "$space_fail" = "1" ]; then
             printf 'Free space or choose a different --target, then re-run.\n' >&2
             printf '(set LCSAS_SKIP_SPACE_CHECK=1 to bypass this check.)\n' >&2

@@ -884,6 +884,10 @@ REM file .lcsas-restore-marker is present (and when
 REM LCSAS_FORCE_NONEMPTY_TARGET=1).  The marker is written after
 REM confirmation/creation so subsequent re-runs are silent.
 set "MARKER=%TARGET%\.lcsas-restore-marker"
+REM An earlier restore wrote into this folder: the free-space check below
+REM counts what it wrote (#660).  Asked before the marker is written.
+set "TARGET_RESUMED="
+if exist "%MARKER%" set "TARGET_RESUMED=1"
 if exist "%TARGET%\" if not exist "%MARKER%" if not "%LCSAS_FORCE_NONEMPTY_TARGET%"=="1" (
     dir /b "%TARGET%" 2>nul | findstr "." >nul
     if not errorlevel 1 (
@@ -1090,6 +1094,24 @@ goto :catalog_done
 :catalog_kept
 echo [lcsas-restore] using the catalog copy in !TOOLS!
 :catalog_done
+
+REM ----- Free space (#660) --------------------------------------------
+REM Stop now, before the password and the first disc, when a drive has
+REM too little free space for the restore: not part-way through, after
+REM discs have been swapped.  The size comes from the catalog copy,
+REM through lcsas-restore.exe --list-pending-packs.  It is the size of
+REM every pack in the archive, so it is an estimate, a little high when
+REM the archive holds more than one backup set.  The pack cache needs
+REM about that size too, so when the folder and the pack cache are on
+REM the same drive (the usual: both on C:) that drive needs both.  What
+REM an earlier run already wrote counts: the packs in the cache, and the
+REM files in a folder an earlier restore wrote to.  With no catalog, no
+REM program or a size that cannot be read, there is no check: a missing
+REM size never stops a restore.  LCSAS_SKIP_SPACE_CHECK=1 skips it.
+if "%LCSAS_SKIP_SPACE_CHECK%"=="1" goto :space_done
+call :space_check
+if defined SPACE_SHORT goto :space_short
+:space_done
 
 REM ----- How to carry on if the restore stops (#609) ----------------
 REM Relocated, the tools folder outlives this run until the restore has
@@ -1556,6 +1578,143 @@ if exist "%~1\.lcsas-tools" goto :eof
 (2>nul > "%~1\.lcsas-tools" echo restore.bat made this folder; it deletes it once the restore is done.) 2>nul
 goto :eof
 
+:space_check
+REM Sets SPACE_SHORT, and says which drive is short, when a drive has
+REM less free space than the restore needs.  Sizes are in MB of 1000000
+REM bytes: set /a counts only to 2147483647.
+set "SPACE_SHORT="
+if not defined CATALOG_ARG goto :eof
+set "SP_BIN=%RECOVERY%\bin\%ARCH%\lcsas-restore.exe"
+if not exist "%SP_BIN%" goto :eof
+REM "Total: 6 packs, 20.4 MB across 2 discs." -- MB of 1048576 bytes.
+REM --repo and --password-file must be given, but are not read.
+set "SP_OUT=%TOOLS%\pending-packs.txt"
+"%SP_BIN%" --repo "%REPO%" --password-file NUL --catalog "%CATALOG_COPY%" --list-pending-packs >"%SP_OUT%" 2>nul <nul
+set "SP_MIB="
+if exist "%SP_OUT%" for /f "usebackq tokens=1,4" %%A in ("%SP_OUT%") do if "%%A"=="Total:" set "SP_MIB=%%B"
+del /f /q "%SP_OUT%" >nul 2>nul
+if not defined SP_MIB goto :eof
+REM %SP_MIB%, not !SP_MIB!: wine's for /f does not expand !VAR! there.
+for /f "delims=." %%M in ("%SP_MIB%") do set "SP_MIB=%%M"
+call :sp_digits SP_MIB
+if not defined SP_MIB goto :eof
+REM 9 digits or more (100 TB) would not fit set /a below.  Padded
+REM first: wine gives the whole value for !V:~8! of a shorter one.
+set "SP_P=000000000!SP_MIB!"
+if not "!SP_P:~-9,1!"=="0" goto :eof
+REM MB of 1048576 bytes to MB of 1000000, rounded up.
+set /a "SP_REQ=SP_MIB + SP_MIB / 20 + 1"
+REM What each still needs.
+set "SP_USED=0"
+if defined TARGET_RESUMED call :sp_used "%TARGET%" SP_USED
+set /a "SP_TNEED=SP_REQ - SP_USED"
+if !SP_TNEED! lss 0 set "SP_TNEED=0"
+set "SP_CDIR="
+if defined CACHE_OK set "SP_CDIR=%LCSAS_PACK_CACHE_DIR%"
+set "SP_CNEED=0"
+if defined SP_CDIR call :sp_used "%SP_CDIR%" SP_USED
+if defined SP_CDIR set /a "SP_CNEED=SP_REQ - SP_USED"
+if !SP_CNEED! lss 0 set "SP_CNEED=0"
+REM The same drive letter: one drive holds both.
+for %%I in ("%TARGET%") do set "SP_TDRV=%%~dI"
+set "SP_CDRV="
+if defined SP_CDIR for %%I in ("%SP_CDIR%") do set "SP_CDRV=%%~dI"
+if not defined SP_CDIR goto :sp_apart
+if not "!SP_TDRV:~1!"==":" goto :sp_apart
+if /i not "!SP_TDRV!"=="!SP_CDRV!" goto :sp_apart
+set /a "SP_NEED=SP_TNEED + SP_CNEED"
+call :sp_short "%TARGET%" !SP_NEED!
+if not defined SP_WAS_SHORT goto :eof
+call :sp_human !SP_TNEED! SP_T_TXT
+call :sp_human !SP_CNEED! SP_C_TXT
+echo     !SP_T_TXT! for the restored files, and !SP_C_TXT! for the pack
+echo     cache in !SP_CDIR!, on the same drive.
+goto :eof
+:sp_apart
+call :sp_short "%TARGET%" !SP_TNEED!
+if defined SP_CDIR call :sp_short "%SP_CDIR%" !SP_CNEED!
+goto :eof
+
+:sp_short
+REM sp_short FOLDER NEED_MB: says so, and sets SPACE_SHORT and
+REM SP_WAS_SHORT, when the drive of FOLDER has less than NEED_MB free.
+REM Free space that cannot be read is not short.
+set "SP_WAS_SHORT="
+set "SP_LAST="
+for /f "delims=" %%L in ('dir /-c /ad "%~1" 2^>nul ^<nul') do set "SP_LAST=%%L"
+call :sp_lastnum SP_FREE
+if not defined SP_FREE goto :eof
+call :sp_mb SP_FREE
+if !SP_FREE! geq %~2 goto :eof
+call :sp_human %~2 SP_NEED_TXT
+call :sp_human !SP_FREE! SP_FREE_TXT
+REM !SP_DIR!, not %~1: a folder name may hold an ampersand.
+set "SP_DIR=%~1"
+echo restore.bat: Need about !SP_NEED_TXT! free at !SP_DIR!; only !SP_FREE_TXT! available.
+set "SPACE_SHORT=1"
+set "SP_WAS_SHORT=1"
+goto :eof
+
+:sp_used
+REM sp_used FOLDER VAR: VAR = MB of the files in FOLDER and below, 0
+REM when that cannot be read.  dir /s ends with the total of the files,
+REM then the free-space line.
+set "%~2=0"
+set "SP_LAST="
+set "SP_PREV="
+for /f "delims=" %%L in ('dir /s /-c /a-d "%~1" 2^>nul ^<nul') do (
+    set "SP_PREV=!SP_LAST!"
+    set "SP_LAST=%%L"
+)
+set "SP_LAST=!SP_PREV!"
+call :sp_lastnum SP_BYTES
+if not defined SP_BYTES goto :eof
+call :sp_mb SP_BYTES
+set "%~2=!SP_BYTES!"
+goto :eof
+
+:sp_lastnum
+REM VAR = the last word of SP_LAST that is all digits ("3 Dir(s)
+REM 59672178688 bytes free", in any language).  Unset when none is.
+REM The brackets go first: the line is expanded as the for is read.
+set "%~1="
+if not defined SP_LAST goto :eof
+set "SP_LAST=!SP_LAST:(= !"
+set "SP_LAST=!SP_LAST:)= !"
+for %%W in (%SP_LAST%) do (
+    set "SP_W=%%W"
+    call :sp_digits SP_W
+    if defined SP_W set "%~1=!SP_W!"
+)
+goto :eof
+
+:sp_digits
+REM Unsets VAR unless it is all digits.
+if not defined %~1 goto :eof
+set "SP_DG=!%~1!"
+for /f "delims=0123456789" %%x in ("%SP_DG%") do set "%~1="
+goto :eof
+
+:sp_mb
+REM VAR, a count of bytes, becomes MB (rounded down); 999999999 when
+REM it is a petabyte or more.
+set "SP_N=!%~1:~0,-6!"
+if not defined SP_N set "SP_N=0"
+for /f "tokens=* delims=0" %%x in ("%SP_N%") do set "SP_N=%%x"
+if not defined SP_N set "SP_N=0"
+REM 10 digits or more: padded first, as for SP_MIB above.
+set "SP_P=0000000000!SP_N!"
+if not "!SP_P:~-10,1!"=="0" set "SP_N=999999999"
+set "%~1=!SP_N!"
+goto :eof
+
+:sp_human
+REM sp_human MB VAR: VAR = "N MB", or "N.N GB" from 1000 MB.
+if %~1 lss 1000 (set "%~2=%~1 MB" & goto :eof)
+set /a "SP_G=%~1 / 1000, SP_D=(%~1 %% 1000) / 100"
+set "%~2=!SP_G!.!SP_D! GB"
+goto :eof
+
 :use_tools
 REM Make the tools folder (TOOLS_TOP, with .lcsas-tools) and TOOLS, its
 REM in-place\ for a run that does not relocate, before the first file
@@ -1884,6 +2043,24 @@ REM Reached only via `goto` from the newest-data-disc step: Q (C5: 65).
 echo Stopped; nothing was restored.
 pause
 exit /b 65
+
+REM Reached only via `goto` from the free-space check (#660), before the
+REM password and the first disc.  At top level so `exit /b 1` reaches
+REM `cmd /c`, as for :wrong_password.
+:space_short
+echo.
+echo ============================================================
+echo  Not enough free space for this restore; nothing was restored.
+echo  Free some space, or choose a folder on another drive, then
+echo  run restore.bat again.
+echo.
+echo  The size is an estimate from the catalog.  To restore anyway,
+echo  open a Command Prompt, type
+echo      set LCSAS_SKIP_SPACE_CHECK=1
+echo  and run restore.bat from that Command Prompt.
+echo ============================================================
+pause
+exit /b 1
 
 REM Reached only via `goto` from the folder question: Q (C5: 65).  After
 REM a set was restored, Q there means "no more", as at the menu.

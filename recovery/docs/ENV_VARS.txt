@@ -615,8 +615,7 @@ LCSAS_FORBID_TMPFS_TARGET
 LCSAS_SKIP_SPACE_CHECK
   Default:  0  (check ON / opt-out)
   Since:    2026-06 audit (FMA-09)
-  Read by:  restore.sh only (restore.bat makes no space check; see
-            RECOVER_WINDOWS.txt, "DESTINATION FOLDER NOTES")
+  Read by:  restore.sh and restore.bat (since rc8, #660)
   What:     1 → skip the free-space preflight restore.sh runs before
             any password or disc prompt.  The check derives the
             archive size from the freshest reachable catalog.db (via
@@ -624,7 +623,18 @@ LCSAS_SKIP_SPACE_CHECK
             --list-pending-packs total) and refuses with the exact
             required-vs-available numbers when either the target
             directory or the pack-cache filesystem is too small.
+            Each needs about the archive size, so when the two share
+            a filesystem (the default) it needs the sum (#660).  What
+            an earlier run wrote counts: the packs in the cache, and
+            the files in a target that holds the restore marker.
             When the size cannot be derived the check silently skips.
+  Windows:  restore.bat makes the same check (since rc8, #660), after
+            the catalog copy and before the password.  The size is
+            always the tier-1 --list-pending-packs total (every set in
+            the archive), the free space comes from `dir`, and "the
+            same filesystem" means the same drive letter.  Set it in a
+            Command Prompt (set LCSAS_SKIP_SPACE_CHECK=1) and run
+            restore.bat from there.
   Why:      Opt-OUT.  Forgetting the check means discovering a
             too-small disk via ENOSPC after hours of disc swapping —
             the worst possible point.  The bypass exists for

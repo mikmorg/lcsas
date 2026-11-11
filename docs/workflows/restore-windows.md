@@ -128,9 +128,12 @@ layout) or several.
 - Free space on the drive that holds `%LOCALAPPDATA%` (usually C:) for
   the tools folder: a few MB for the programs and the backup sets'
   metadata, plus the pack cache, which grows to about the size of the
-  data discs read. `restore.bat` makes no space check of its own
-  (`restore.sh` does); `RECOVER_WINDOWS.txt` ("DESTINATION FOLDER
-  NOTES") shows how to size the restore with `--list-pending-packs`.
+  data discs read. `restore.bat` checks the space before the password
+  (#660): the folder and the pack cache each need about the archive
+  size (from the catalog, through `--list-pending-packs`), so one
+  drive that holds both needs twice that. It stops with the numbers
+  when a drive is short. `LCSAS_SKIP_SPACE_CHECK=1` skips the check;
+  `RECOVER_WINDOWS.txt` ("DESTINATION FOLDER NOTES") explains it.
 
 **Steps:**
 
