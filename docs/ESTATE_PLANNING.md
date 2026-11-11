@@ -34,7 +34,8 @@ This document provides a checklist and templates to make that possible.
 - [ ] **Maintain a paper manifest**
   - Generate a one-page whole-archive **estate card** with
     `lcsas --config lcsas.toml estate card --output card.txt` — it fills in
-    the owner, repositories, disc count (from the catalog), whether the
+    the owner, repositories, disc count (from the catalog: each burned
+    volume with a disc still in service, counted once), whether the
     password is split, and the literal first command an heir runs per
     operating system. No password is printed. Store this sheet WITH the disc
     binder.
@@ -119,6 +120,11 @@ theft.
   > ever performed). The disc's K/N is taken from the recorded split when one
   > exists. `--allow-escrow-drift` overrides the abort for multi-config edge
   > cases (logged as a volume event).
+  >
+  > If you abandon a split and go back to a single password, set
+  > `key_split = false` and run `lcsas --config ... key unsplit --repo R`.
+  > It asks first, clears the recorded split, and logs an `AUDIT` line
+  > naming what it cleared (#681). It does not touch any card.
 
 - [ ] **Tell heirs the reconstruction is a two-step pre-step**, in your
   letter (template below):
@@ -167,6 +173,10 @@ Procedure after any password change:
    Each card is stamped with `Split on : <date>` and a `Split ID : NNNNN`
    (the SLIP-0039 identifier, shared by all cards of one split, different
    between splits) so you can tell card generations apart in the binder.
+   `key split` will not write into a folder that already holds
+   `R-share-*` files: move the old cards into a dated subfolder first, or
+   pass `--out` with an empty folder (#683). Cards of two splits never
+   combine with each other.
 2. **Redistribute** the new cards to the same share holders and places.
 3. **Recall and destroy** the superseded cards (shred / incinerate). Note the
    superseded `Split ID` in your estate notes so a stray old card is

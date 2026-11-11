@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
+from pathlib import Path
 
 from lcsas.db.models import Repository
 
@@ -94,6 +96,69 @@ def get_repo_by_name(conn: sqlite3.Connection, name: str) -> Repository | None:
             f"(IDs: {ids})."
         )
     return _row_to_repo(rows[0])
+
+
+def same_mirror_path(a: str | Path, b: str | Path) -> bool:
+    """Whether two mirror paths name the same directory, compared lexically.
+
+    No filesystem access: a stale mount must not hang a lookup (#427).
+    """
+    return os.path.normpath(str(a)) == os.path.normpath(str(b))
+
+
+def resolve_repo(
+    conn: sqlite3.Connection,
+    ref: str,
+    mirror_path: str | Path | None = None,
+) -> Repository | None:
+    """The catalog repository an owner means by *ref* (#687).
+
+    The ONE resolver every command uses for a repository it is given.
+    *ref* is usually a ``[repos.<name>]`` config key; *mirror_path* is that
+    key's configured mirror, when there is a config.  Order:
+
+    1. the catalog repository with that mirror path — the config key may
+       differ from the catalog name (``repo add`` takes any name, and a
+       config can be renamed);
+    2. the repository named *ref*;
+    3. the repository whose catalog ID is *ref*;
+    4. the one repository named *ref* ignoring case.
+
+    Returns None when nothing matches.  Raises ValueError when a step
+    matches more than one repository rather than guessing (#685).
+    """
+    repos = list_repos(conn)
+    if mirror_path is not None:
+        by_path = [r for r in repos if same_mirror_path(r.mirror_path, mirror_path)]
+        if len(by_path) > 1:
+            # Only a catalog from before #685 can hold these.  The name may
+            # still single one out; two of that name too is the name's error.
+            named = [r for r in by_path if r.name == ref]
+            if len(named) == 1:
+                return named[0]
+            if named:
+                get_repo_by_name(conn, ref)  # raises, naming both
+        if len(by_path) > 1:
+            names = ", ".join(f"'{r.name}' ({r.repo_id})" for r in by_path)
+            raise ValueError(
+                f"More than one repository in the catalog has the mirror "
+                f"path {mirror_path}: {names}."
+            )
+        if by_path:
+            return by_path[0]
+    repo = get_repo_by_name(conn, ref)  # raises ValueError when ambiguous
+    if repo is not None:
+        return repo
+    by_id = [r for r in repos if r.repo_id == ref]
+    if by_id:
+        return by_id[0]
+    matches = [r for r in repos if r.name.lower() == ref.lower()]
+    if len(matches) > 1:
+        raise ValueError(
+            f"'{ref}' matches {len(matches)} repositories; use its catalog ID "
+            "(`lcsas repo list`)."
+        )
+    return matches[0] if matches else None
 
 
 def list_repos(conn: sqlite3.Connection) -> list[Repository]:

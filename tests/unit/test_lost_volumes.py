@@ -522,9 +522,10 @@ class TestDisplays:
         card = tmp_path / "card.txt"
         assert main(["--config", str(cfg), "estate", "card",
                      "--output", str(card)]) == 0
-        # KEEP (VERIFIED) + OLD (deprecated by consolidation) + MID
-        # (CONSOLIDATING); LOST_ME has no disc left, so it is not counted.
-        assert "3 disc(s), labeled SMITH_*" in card.read_text(encoding="utf-8")
+        # KEEP (VERIFIED) + MID (CONSOLIDATING); LOST_ME has no disc left,
+        # so it is not counted.  #684: nor is OLD (deprecated by
+        # consolidation): its only disc is retired, none is ACTIVE.
+        assert "2 disc(s), labeled SMITH_*" in card.read_text(encoding="utf-8")
 
     def test_burn_dry_run_shows_lost(self, tmp_path, capsys):
         from lcsas.db.sessions import add_session_volume, create_session

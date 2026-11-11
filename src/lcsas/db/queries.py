@@ -35,6 +35,23 @@ _HAS_DURABLE_LINK = f"""EXISTS (
       AND v.status IN {_DURABLE_SQL}
 )"""
 
+# #680: the ONE definition of "pack p is held at location L".  Boolean
+# SQL over a ``packs`` row aliased ``p``; it takes one positional ``?``,
+# the location name.  Held = p is not pruned and an ACTIVE disc at L
+# belongs to a durable volume that links p.  A DEPRECATED volume (one
+# superseded by consolidation) and a never-burned STAGING/BURNING volume
+# hold nothing, whatever disc records they still have.  Every per-location
+# query (location list, location status, stage --for-location) uses it.
+_HELD_AT_LOCATION = f"""(p.is_pruned = 0 AND EXISTS (
+    SELECT 1 FROM volume_packs hvp
+    JOIN volumes hv ON hv.volume_id = hvp.volume_id
+    JOIN volume_copies hvc ON hvc.volume_id = hv.volume_id
+    WHERE hvp.pack_id = p.pack_id
+      AND hvc.location = ?
+      AND hvc.status = 'ACTIVE'
+      AND hv.status IN {_DURABLE_SQL}
+))"""
+
 # Q33 / ADR 0003: the ONE definition of a lost volume, "a burned volume
 # with no disc left in service".  Boolean SQL over a ``volumes`` row
 # aliased ``v``; every owner display goes through get_lost_volume_ids().
@@ -576,13 +593,15 @@ def get_redundancy_report(
     Replica truth (BURN-10/FMA-08): redundancy is counted in ACTIVE
     ``volume_copies`` rows, not volume rows — two ACTIVE rows for one
     volume are two discs, and a volume whose every disc is
-    DEPRECATED/DESTROYED contributes nothing.  A volume with zero
-    ``volume_copies`` rows counts as one disc by status alone (legacy:
-    volumes burned before discs were recorded, skip_burn fixtures, catalogs
-    rebuilt from old discs).
+    DEPRECATED/DESTROYED contributes nothing.  Only durable volumes
+    (BURNED/VERIFIED/CONSOLIDATING) count (#679): a STAGING or BURNING
+    volume has no disc yet.  A durable volume with zero ``volume_copies``
+    rows counts as one disc by status alone (legacy: volumes burned before
+    discs were recorded, skip_burn fixtures, catalogs rebuilt from old
+    discs).
     """
     rows = conn.execute(
-        """SELECT p.*, COALESCE(SUM(
+        f"""SELECT p.*, COALESCE(SUM(
                CASE
                    WHEN v.volume_id IS NULL THEN 0
                    WHEN NOT EXISTS (SELECT 1 FROM volume_copies vc
@@ -595,7 +614,7 @@ def get_redundancy_report(
            FROM packs p
            LEFT JOIN volume_packs vp ON p.pack_id = vp.pack_id
            LEFT JOIN volumes v ON vp.volume_id = v.volume_id
-               AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+               AND v.status IN {_DURABLE_SQL}
            WHERE p.is_pruned = 0
            GROUP BY p.pack_id
            HAVING copy_count < ?
@@ -612,8 +631,8 @@ def get_live_volumes_for_packs(
     """Map pack_id → volumes that count as live replicas of it (FMA-08).
 
     Live replica truth matches :func:`get_redundancy_report`: the volume
-    is not DEPRECATED/DESTROYED and has >=1 ACTIVE ``volume_copies`` row
-    (or zero ``volume_copies`` rows at all — legacy).  Companion to the
+    is durable (BURNED/VERIFIED/CONSOLIDATING, #679) and has >=1 ACTIVE
+    ``volume_copies`` row (or zero ``volume_copies`` rows at all — legacy).  Companion to the
     redundancy report: groups its under-replicated packs by the volume(s)
     actually holding them.
     """
@@ -626,7 +645,7 @@ def get_live_volumes_for_packs(
                 FROM volume_packs vp
                 JOIN volumes v ON v.volume_id = vp.volume_id
                 WHERE vp.pack_id IN ({placeholders})
-                  AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
+                  AND v.status IN {_DURABLE_SQL}
                   AND (
                       EXISTS (SELECT 1 FROM volume_copies vc
                               WHERE vc.volume_id = v.volume_id
@@ -878,9 +897,9 @@ def get_unarchived_or_missing_at_location(
     conn: sqlite3.Connection,
     location: str,
 ) -> list[Pack]:
-    """Return packs that either have no volume at all OR have no ACTIVE disc
-    at the specified location. This is the full set needed to bring a
-    location completely up to date.
+    """Return packs that either have no volume at all OR are not held at
+    the specified location (``_HELD_AT_LOCATION``, #680). This is the full
+    set needed to bring a location completely up to date.
 
     Packs already on a never-burned (STAGING/BURNING) volume staged FOR
     this location are left out (#642): their disc is on its way (an ISO
@@ -892,15 +911,9 @@ def get_unarchived_or_missing_at_location(
     (BURN-05, #483).
     """
     rows = conn.execute(
-        """SELECT p.* FROM packs p
+        f"""SELECT p.* FROM packs p
            WHERE p.is_pruned = 0
-             AND p.pack_id NOT IN (
-                 SELECT DISTINCT vp.pack_id
-                 FROM volume_packs vp
-                 JOIN volume_copies vc ON vc.volume_id = vp.volume_id
-                 WHERE vc.location = ?
-                   AND vc.status = 'ACTIVE'
-             )
+             AND NOT {_HELD_AT_LOCATION}
              AND p.pack_id NOT IN (
                  SELECT DISTINCT vp.pack_id
                  FROM volume_packs vp
@@ -928,13 +941,9 @@ def get_packs_at_location(
     conn: sqlite3.Connection,
     location: str,
 ) -> set[int]:
-    """Return the ``pack_id`` row ids of packs with an ACTIVE disc at location."""
+    """Return the ``pack_id`` row ids of packs held at *location* (#680)."""
     rows = conn.execute(
-        """SELECT DISTINCT vp.pack_id
-           FROM volume_packs vp
-           JOIN volume_copies vc ON vc.volume_id = vp.volume_id
-           WHERE vc.location = ?
-             AND vc.status = 'ACTIVE'""",
+        f"SELECT p.pack_id FROM packs p WHERE {_HELD_AT_LOCATION}",
         (location,),
     ).fetchall()
     return {row["pack_id"] for row in rows}
@@ -944,22 +953,18 @@ def get_packs_missing_at_location(
     conn: sqlite3.Connection,
     location: str,
 ) -> list[Pack]:
-    """Return packs that have been archived but have no ACTIVE disc at location.
+    """Return archived packs that are not held at *location* (#680).
 
-    This identifies packs that need to be staged and burned for a location
-    to bring it up to date.
+    Archived = not pruned and linked to a durable volume.  A pack linked
+    only to a never-burned STAGING/BURNING volume is not archived, so it
+    is not "missing" here: it is unarchived, and the next ``lcsas stage``
+    picks it up anyway.
     """
     rows = conn.execute(
-        """SELECT p.* FROM packs p
+        f"""SELECT p.* FROM packs p
            WHERE p.is_pruned = 0
-             AND p.pack_id IN (SELECT pack_id FROM volume_packs)
-             AND p.pack_id NOT IN (
-                 SELECT DISTINCT vp.pack_id
-                 FROM volume_packs vp
-                 JOIN volume_copies vc ON vc.volume_id = vp.volume_id
-                 WHERE vc.location = ?
-                   AND vc.status = 'ACTIVE'
-             )
+             AND {_HAS_DURABLE_LINK}
+             AND NOT {_HELD_AT_LOCATION}
            ORDER BY p.created_at""",
         (location,),
     ).fetchall()
@@ -969,32 +974,50 @@ def get_packs_missing_at_location(
 def get_location_summary(
     conn: sqlite3.Connection,
 ) -> list[dict[str, Any]]:
-    """Summary of each location: volume count, pack count, packs behind."""
+    """Summary of each location: volume count, pack count, packs behind.
+
+    One row for every registered location, and for any location a disc
+    record names that is not registered.  "packs" counts the packs held
+    there and "missing" the archived packs that are not
+    (:func:`get_packs_missing_at_location`), so a location with no disc
+    in service shows every archived pack as missing (#680).
+    """
     total_archived = conn.execute(
-        """SELECT COUNT(DISTINCT pack_id) FROM volume_packs"""
+        f"""SELECT COUNT(*) FROM packs p
+           WHERE p.is_pruned = 0 AND {_HAS_DURABLE_LINK}"""
     ).fetchone()[0]
 
-    rows = conn.execute(
-        """SELECT
-               vc.location,
-               COUNT(DISTINCT vc.volume_id) AS volume_count,
-               COUNT(DISTINCT vp.pack_id) AS pack_count
-           FROM volume_copies vc
-           JOIN volume_packs vp ON vp.volume_id = vc.volume_id
-           JOIN volumes v ON v.volume_id = vc.volume_id
-           WHERE vc.status = 'ACTIVE' AND v.status NOT IN ('DEPRECATED', 'DESTROYED')
-           GROUP BY vc.location
-           ORDER BY vc.location"""
-    ).fetchall()
-    return [
-        {
-            "location": r["location"],
-            "volumes": r["volume_count"],
-            "packs": r["pack_count"],
-            "missing": total_archived - r["pack_count"],
-        }
-        for r in rows
+    names = [
+        r[0] for r in conn.execute(
+            """SELECT name FROM locations
+               UNION
+               SELECT location FROM volume_copies
+               ORDER BY 1"""
+        ).fetchall()
     ]
+    out: list[dict[str, Any]] = []
+    for name in names:
+        volume_count = conn.execute(
+            f"""SELECT COUNT(DISTINCT vc.volume_id)
+               FROM volume_copies vc
+               JOIN volumes v ON v.volume_id = vc.volume_id
+               WHERE vc.location = ?
+                 AND vc.status = 'ACTIVE'
+                 AND v.status IN {_DURABLE_SQL}""",
+            (name,),
+        ).fetchone()[0]
+        held = conn.execute(
+            f"SELECT COUNT(*) FROM packs p WHERE {_HELD_AT_LOCATION}",
+            (name,),
+        ).fetchone()[0]
+        out.append({
+            "location": name,
+            "volumes": int(volume_count),
+            "packs": int(held),
+            # Held packs are archived by definition, so this is exact.
+            "missing": int(total_archived) - int(held),
+        })
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1068,3 +1091,19 @@ def get_snapshots_by_tag(
             (tag,),
         ).fetchall()
     return [_row_to_snapshot(r) for r in rows]
+
+
+def get_archived_pack_ids(conn: sqlite3.Connection, repo_id: str) -> set[str]:
+    """Pack IDs (file names) of a repository that are on a durable volume.
+
+    #657: ``lcsas stage`` puts a snapshot on a disc only when every pack
+    it needs is on a durable volume or in the session being staged.
+    Pruned packs are included: a pack on a burned disc is still there.
+    """
+    rows = conn.execute(
+        f"""SELECT p.sha256 FROM packs p
+           WHERE p.repo_id = ?
+             AND {_HAS_DURABLE_LINK}""",
+        (repo_id,),
+    ).fetchall()
+    return {r[0] for r in rows}

@@ -162,6 +162,8 @@ def test_tier3_pythonpath_can_actually_import_zstandard(tmp_path: Path) -> None:
     stub = stub_dir / "python3"
     stub.write_text(textwrap.dedent(f"""\
         #!/bin/sh
+        # restore.sh first checks the interpreter runs (#714).
+        case "$1" in -c) exit 0 ;; esac
         # We get exec'd as `python3 standalone_restorer.py --repo ...`.
         # Ignore the script + args; just probe the PYTHONPATH-resolved
         # zstandard module.
