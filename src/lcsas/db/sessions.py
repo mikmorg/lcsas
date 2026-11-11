@@ -254,3 +254,31 @@ def get_staged_iso(
         return None
     size = row["iso_size_bytes"]
     return str(row["iso_sha256"]), (int(size) if size is not None else None)
+
+
+def staging_incomplete(conn: sqlite3.Connection, volume_id: int) -> bool:
+    """True when the volume was staged but its ISO was never finished (#665).
+
+    ``lcsas stage`` records the ISO's hash on the session volume just
+    before the ISO gets its final name, after ECC and the size check.  A
+    never-burned (STAGING/BURNING) volume whose most recent session row
+    still has an empty hash was interrupted part-way: its ISO, if any,
+    may lack RS03 data and must not be burned or imported.  The way out
+    is ``lcsas session abort`` and a new ``lcsas stage``.
+
+    Burned volumes are never reported: rows from before ISO hashes were
+    recorded also have an empty hash.
+    """
+    row = conn.execute(
+        """SELECT v.status, sv.iso_sha256
+           FROM volumes v
+           JOIN session_volumes sv ON sv.volume_id = v.volume_id
+           JOIN burn_sessions bs ON bs.session_id = sv.session_id
+           WHERE v.volume_id = ?
+           ORDER BY bs.created_at DESC, sv.rowid DESC
+           LIMIT 1""",
+        (volume_id,),
+    ).fetchone()
+    if row is None:
+        return False
+    return row["status"] in ("STAGING", "BURNING") and not row["iso_sha256"]

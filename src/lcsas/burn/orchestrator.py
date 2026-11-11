@@ -74,6 +74,15 @@ from lcsas.utils.labels import (
 _logger = logging.getLogger(__name__)
 
 
+def unfinished_iso_path(iso_path: Path) -> Path:
+    """Working name of an ISO that is still being mastered or augmented (#665).
+
+    ``<label>.iso`` becomes ``<label>.unfinished``.  Nothing looks for this
+    name: it is renamed to ``<label>.iso`` only once the ISO is finished.
+    """
+    return iso_path.with_suffix(".unfinished")
+
+
 @dataclass
 class BurnManifest:
     """Describes a prepared burn operation (single volume)."""
@@ -86,6 +95,10 @@ class BurnManifest:
     total_data_bytes: int
     staging_path: Path
     iso_path: Path | None = None
+    # SHA-256 and byte length of the finished (post-ECC) ISO, recorded on
+    # the session volume before the ISO gets its final name (#665).
+    iso_sha256: str = ""
+    iso_size_bytes: int | None = None
 
 
 @dataclass
@@ -594,6 +607,8 @@ class BurnOrchestrator:
 
             # 6. Optionally create ISO + ECC
             iso_path: Path | None = None
+            iso_sha256 = ""
+            iso_size_bytes: int | None = None
             if iso_output is not None:
                 # Pre-flight: verify staging dir fits in the target media.
                 from lcsas.utils.fs import dir_size_bytes
@@ -604,35 +619,64 @@ class BurnOrchestrator:
                         f"{estimated_bytes:,} bytes > {media_type.capacity_bytes:,} bytes "
                         f"capacity ({media_type.name}). Reduce pack count or use larger media."
                     )
+                # #665: master and augment under a working name.  The ISO
+                # gets its final name <label>.iso only once ECC and the
+                # size check have passed and its hash is recorded, so a
+                # stage killed part-way (SIGTERM, power loss) never leaves
+                # a finished-looking ISO without RS03 data.
+                work_iso = unfinished_iso_path(iso_output)
                 self._xorriso.create_iso(
-                    staging_root, iso_output, vol_label,
+                    staging_root, work_iso, vol_label,
                     expected_bytes=estimated_bytes,
                 )
-                iso_path = iso_output
 
                 if media_type.ecc_overhead_pct > 0:
                     self._dvdisaster.augment_iso(
-                        iso_path, self._config.default_ecc_redundancy_pct,
+                        work_iso, self._config.default_ecc_redundancy_pct,
                     )
 
                 # 7. Validate ISO size against media capacity  [O4]
-                if not iso_path.exists():
+                if not work_iso.exists():
                     raise FileNotFoundError(
-                        f"ISO not created by xorriso: {iso_path}. "
+                        f"ISO not created by xorriso: {work_iso}. "
                         f"Check xorriso output for errors."
                     )
-                iso_size = iso_path.stat().st_size
+                iso_size = work_iso.stat().st_size
                 if iso_size > media_type.capacity_bytes:
                     raise ValueError(
-                        f"ISO {iso_path.name} is {iso_size:,} bytes, exceeds "
+                        f"ISO {iso_output.name} is {iso_size:,} bytes, exceeds "
                         f"{media_type.name} capacity of "
                         f"{media_type.capacity_bytes:,} bytes"
                     )
+
+                # 8. Record the hash and length, THEN give the ISO its
+                # final name: a <label>.iso on disk always has its hash
+                # on record (an empty hash means staging never finished).
+                # The length is what device read-back verification hashes
+                # against once the ISO itself is cleaned up (BURN-04).
+                iso_sha256 = sha256_file(work_iso)
+                iso_size_bytes = iso_size
+                if session_id is not None:
+                    update_session_volume_iso(
+                        self._conn,
+                        session_id=session_id,
+                        volume_id=volume.volume_id,
+                        iso_path=str(iso_output),
+                        iso_sha256=iso_sha256,
+                        iso_size_bytes=iso_size_bytes,
+                    )
+                os.replace(work_iso, iso_output)
+                iso_path = iso_output
         except BaseException:
             self._conn.rollback()  # drop any uncommitted partial state
             # Removes volume_packs links and the session_volumes row too,
             # so the packs reappear in get_unarchived_packs().
             delete_volume(self._conn, volume.volume_id)
+            if iso_output is not None:
+                # The unfinished ISO is never burnable; free its space.
+                import contextlib
+                with contextlib.suppress(OSError):
+                    unfinished_iso_path(iso_output).unlink(missing_ok=True)
             raise
 
         return BurnManifest(
@@ -644,6 +688,8 @@ class BurnOrchestrator:
             total_data_bytes=total_bytes,
             staging_path=staging_root,
             iso_path=iso_path,
+            iso_sha256=iso_sha256,
+            iso_size_bytes=iso_size_bytes,
         )
 
     def _format_preflight(self, repo_ids: list[str]) -> None:
@@ -936,7 +982,8 @@ class BurnOrchestrator:
 
             # Stage, register, inject metadata, create ISO + ECC.  The
             # session_volumes row is committed atomically with the volume
-            # row inside _stage_single_volume (iso_sha256='' until hashed).
+            # row inside _stage_single_volume (iso_sha256='' until the
+            # finished ISO is hashed, just before it gets its final name).
             manifest = self._stage_single_volume(
                 selected_packs=selected_packs,
                 total_bytes=total_bytes,
@@ -950,25 +997,9 @@ class BurnOrchestrator:
                 location=for_location,
             )
 
-            # Compute ISO hash + byte length and record them on the
-            # session volume.  The length is what device read-back
-            # verification hashes against once the ISO file itself has
-            # been cleaned up (BURN-04).
-            iso_hash = ""
-            iso_size: int | None = None
-            if manifest.iso_path and manifest.iso_path.exists():
-                iso_hash = sha256_file(manifest.iso_path)
-                iso_size = manifest.iso_path.stat().st_size
-
-            update_session_volume_iso(
-                self._conn,
-                session_id=session_id,
-                volume_id=manifest.volume_id,
-                iso_path=str(manifest.iso_path or iso_path),
-                iso_sha256=iso_hash,
-                iso_size_bytes=iso_size,
-            )
-
+            # The ISO hash + byte length are already on the session
+            # volume: _stage_single_volume records them before the ISO
+            # gets its final name (#665).
             manifests.append(manifest)
             if manifest.iso_path:
                 iso_paths.append(manifest.iso_path)
@@ -1020,6 +1051,9 @@ class BurnOrchestrator:
 
         # Ensure location exists
         ensure_location(self._conn, location)
+
+        # Check every volume BEFORE the first prompt for a blank disc.
+        self._burn_preflight(session_id, session_vols)
 
         receipts: list[BurnReceipt] = []
         total = len(session_vols)
@@ -1218,6 +1252,33 @@ class BurnOrchestrator:
         self._write_durable_receipts(receipts, location)
 
         return receipts
+
+    def _burn_preflight(
+        self, session_id: str, session_vols: list[SessionVolume],
+    ) -> None:
+        """Refuse a session that cannot be burned, before any disc prompt.
+
+        #665: a never-burned volume whose ISO hash is empty was staged by
+        a ``lcsas stage`` that did not finish (killed during mastering or
+        ECC).  Its ISO may lack RS03 data, so it is never burned.
+        """
+        from lcsas.exceptions import BurnError
+
+        incomplete: list[str] = []
+        for sv in session_vols:
+            vol = get_volume_by_id(self._conn, sv.volume_id)
+            if vol.status in ("STAGING", "BURNING") and not sv.iso_sha256:
+                incomplete.append(vol.label)
+        if incomplete:
+            raise BurnError(
+                f"Staging of {', '.join(incomplete)} did not finish: the "
+                f"ISO has no recorded hash and may lack its error-correction "
+                f"data. Nothing was burned.",
+                recovery_hint=(
+                    f"lcsas session abort {session_id}, then lcsas stage "
+                    f"again."
+                ),
+            )
 
     def _assert_blank_media(self, device: str, label: str) -> None:
         """Refuse to burn onto a disc that already carries data (FUP-01).

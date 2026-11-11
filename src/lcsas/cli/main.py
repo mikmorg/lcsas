@@ -1792,7 +1792,11 @@ def cmd_status(args: argparse.Namespace) -> int:
         get_redundancy_report,
         volume_display_status,
     )
-    from lcsas.db.sessions import list_sessions, staged_iso_present
+    from lcsas.db.sessions import (
+        list_sessions,
+        staged_iso_present,
+        staging_incomplete,
+    )
     from lcsas.db.volume_copies import find_stale_copies
     from lcsas.db.volume_events import get_latest_event
     from lcsas.db.volumes import list_volumes
@@ -1822,6 +1826,11 @@ def cmd_status(args: argparse.Namespace) -> int:
         # #647: never-burned volumes split by whether their ISO is still in
         # the staging area (waiting to be burned) or gone (a ghost).
         unburned = get_ghost_volumes(conn, older_than_hours=0)
+        # #665: a stage that did not finish (no ISO hash recorded) is
+        # incomplete, whatever is in the staging area: never burn it.
+        incomplete = [v.label for v in unburned
+                      if staging_incomplete(conn, v.volume_id)]
+        unburned = [v for v in unburned if v.label not in incomplete]
         waiting = [v.label for v in unburned if staged_iso_present(conn, v.volume_id)]
         ghost_labels = [v.label for v in unburned if v.label not in waiting]
         # FMA-08: packs that live on exactly one disc.  Packs in
@@ -1858,6 +1867,15 @@ def cmd_status(args: argparse.Namespace) -> int:
             where = (f"(for {v.location})" if v.status in ("STAGING", "BURNING")
                      else "(no disc in service)")
         logger.info(f"  {v.label:<25} {v.media_type:<10} {shown:<10} {where}")
+    if incomplete:
+        logger.warning(
+            "WARNING: %d volume(s) are INCOMPLETE: their staging did not "
+            "finish, so their ISOs may lack error-correction data: %s. Do "
+            "not burn them. Run 'lcsas session abort' for their session, "
+            "then 'lcsas stage' again. Until then their packs are NOT on "
+            "any disc.",
+            len(incomplete), ", ".join(incomplete),
+        )
     if waiting:
         logger.warning(
             "WARNING: %d volume(s) are staged and waiting to be burned "
@@ -1875,7 +1893,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             "pool for the next 'lcsas stage'.",
             len(ghost_labels), ", ".join(ghost_labels),
         )
-    if summary["staged"] > 0 and not (waiting or ghost_labels):
+    if summary["staged"] > 0 and not (waiting or ghost_labels or incomplete):
         logger.warning(
             "WARNING: %d pack(s) are staged on volumes that were never "
             "burned. See 'lcsas catalog reconcile'.",

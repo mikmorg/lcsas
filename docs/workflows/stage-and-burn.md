@@ -82,7 +82,9 @@ The end-to-end flow inside a single session:
      `TEST_*` media), `write_start_here`, `write_key_info`,
      `write_config_summary`, `write_disc_care`.
    - `xorriso create_iso` masters the staging tree → ISO
-     (`SubprocessXorrisoRunner.create_iso`).
+     (`SubprocessXorrisoRunner.create_iso`). The ISO is built under the
+     working name `<label>.unfinished` and keeps it until the last step
+     below (#665).
    - If the media type carries non-zero `ecc_overhead_pct` (i.e. all
      production media), `dvdisaster -mRS03 -c` augments the ISO
      in-place via a temporary copy + atomic rename
@@ -91,7 +93,12 @@ The end-to-end flow inside a single session:
      implicitly skipped — see `MediaType.ecc_overhead_pct`.
    - Post-ECC validation: rejects an ISO larger than
      `media_type.capacity_bytes`.
-   - `sha256_file(iso)` is computed and stored on the session-volume row.
+   - `sha256_file(iso)` and the ISO's length are stored on the
+     session-volume row. Only then is the ISO renamed to `<label>.iso`.
+     A stage killed before this point (during ECC, say) leaves no
+     `<label>.iso`, and the volume's hash stays empty. Such a volume is
+     *incomplete*: `lcsas status` says so, and `lcsas burn --session`
+     refuses it. Run `lcsas session abort <id>`, then `lcsas stage` again.
 6. **Write session manifest** — `session.json` lists volume ids, labels,
    uuids, ISO paths, and pack row numbers (`pack_ids`)
    (`BurnOrchestrator.stage`).
