@@ -80,6 +80,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          sh .github/scripts/apt-prepare.sh
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             clang \

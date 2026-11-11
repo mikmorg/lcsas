@@ -54,6 +54,7 @@ jobs:
           python-version: "3.11"
       - name: Install xorriso and dvdisaster
         run: |
+          sh .github/scripts/apt-prepare.sh
           sudo apt-get update
           sudo apt-get install -y xorriso dvdisaster
           xorriso -version
