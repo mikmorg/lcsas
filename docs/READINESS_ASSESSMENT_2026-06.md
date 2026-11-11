@@ -102,7 +102,7 @@ recovery and no warning until restore time. The weakest link is a human transcri
 the annual checklist (`recovery/docs/READINESS_CHECKLIST.txt`) covers it.]*
 
 ### C8 — The audit was self-graded.
-`DEEP_AUDIT_2026-06.md` found 78 issues; they were remediated and verified by the *same*
+The 2026-06 deep audit (removed in #692; kept at tag `archive/pre-1.0-history`) found 78 issues; they were remediated and verified by the *same*
 author/agent now assessing readiness. All 82 follow-up plans are marked RESOLVED — by the
 party with the strongest incentive to mark them resolved. There has been **no independent
 confirmation** that the fixes are correct and complete. Self-audit is valuable; it is not

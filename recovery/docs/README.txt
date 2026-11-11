@@ -54,7 +54,8 @@ SOURCE LAYOUT
 
 DESIGN DECISIONS
 
-See ../plans/ in the LCSAS repository for the full design plan.
+The full design plans were removed from the LCSAS source repository
+in 2026; they remain at the tag archive/pre-1.0-history.
 Summary:
 
   Architectures:   six approved targets: Linux x86_64 / aarch64 / armv7

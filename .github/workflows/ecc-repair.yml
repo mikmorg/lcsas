@@ -12,7 +12,7 @@ name: ecc-repair
 #     semantics) without waiting for Monday.  That includes the tier-1 RS03
 #     codec (recovery/src/lcsas-ecc) and the ISO/burn layout the proof
 #     builds on (#484); not wider, since the run takes ~80 min.
-# See plans/audit-2026-06/GATE-05-schedule-ecc-repair-proof-ci.md.
+# Background: plan GATE-05, kept at tag archive/pre-1.0-history (#692).
 #
 # No `schedule:` here, on purpose (#462): GitHub disables a scheduled file
 # after 60 quiet days, PR trigger and all.  The 2026-08-05 -> 10-15 quiet
