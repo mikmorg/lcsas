@@ -98,16 +98,6 @@ class XorrisoRunner(Protocol):
         progress_interval: int = 30,
     ) -> Path: ...
 
-    def create_bootable_iso(
-        self,
-        source_dir: Path,
-        output_iso: Path,
-        volume_label: str,
-        bios_boot: bool = True,
-        uefi_boot: bool = True,
-        timeout: int = 7200,
-    ) -> Path: ...
-
     def burn_iso(
         self,
         iso_path: Path,
@@ -257,83 +247,6 @@ class SubprocessXorrisoRunner(SubprocessRunnerBase):
             raise
         except Exception:
             stop_event.set()
-            if tmp_iso.exists():
-                tmp_iso.unlink()
-            raise
-        return output_iso
-
-    def create_bootable_iso(
-        self,
-        source_dir: Path,
-        output_iso: Path,
-        volume_label: str,
-        bios_boot: bool = True,
-        uefi_boot: bool = True,
-        timeout: int = 7200,
-    ) -> Path:
-        """Create a bootable ISO with El Torito records for BIOS and/or UEFI.
-
-        The *source_dir* must already contain the boot infrastructure:
-
-        * ``isolinux/isolinux.bin`` — for Legacy BIOS boot
-        * ``boot/efiboot.img`` — for UEFI boot
-
-        Missing boot files are silently skipped (the corresponding boot
-        mode will simply be unavailable).
-        """
-        if not source_dir.is_dir():
-            raise FileNotFoundError(f"Source directory not found: {source_dir}")
-        self._assert_no_multiextent_files(source_dir)
-
-        tmp_iso = output_iso.with_suffix(".iso.tmp")
-        cmd = [
-            self._binary,
-            "-as", "mkisofs",
-            "-r",
-            "-J",
-            "-joliet-long",
-            "-iso-level", "3",
-            "-V", volume_label,
-        ]
-
-        # Legacy BIOS boot via isolinux (El Torito primary)
-        isolinux_bin = source_dir / "isolinux" / "isolinux.bin"
-        if bios_boot and isolinux_bin.is_file():
-            cmd.extend([
-                "-b", "isolinux/isolinux.bin",
-                "-c", "isolinux/boot.cat",
-                "-no-emul-boot",
-                "-boot-load-size", "4",
-                "-boot-info-table",
-            ])
-
-        # UEFI boot via EFI image (El Torito alternate)
-        efiboot_img = source_dir / "boot" / "efiboot.img"
-        if uefi_boot and efiboot_img.is_file():
-            cmd.extend([
-                "-eltorito-alt-boot",
-                "-e", "boot/efiboot.img",
-                "-no-emul-boot",
-            ])
-
-        cmd.extend(["-o", str(tmp_iso), str(source_dir)])
-
-        try:
-            subprocess.run(
-                cmd, capture_output=True, text=True, check=True,
-                env=self._env(), timeout=timeout,
-            )
-            os.rename(tmp_iso, output_iso)
-        except subprocess.TimeoutExpired as exc:
-            if tmp_iso.exists():
-                tmp_iso.unlink()
-            self._handle_timeout("xorriso", "bootable ISO creation", exc)
-        except subprocess.CalledProcessError as exc:
-            self._log_stderr("xorriso", exc)
-            if tmp_iso.exists():
-                tmp_iso.unlink()
-            raise
-        except Exception:
             if tmp_iso.exists():
                 tmp_iso.unlink()
             raise

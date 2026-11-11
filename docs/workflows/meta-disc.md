@@ -31,7 +31,7 @@ The meta disc *deliberately omits* `catalog.db`; see
 
 Sibling docs: [`docs/workflows/recovery-toolchain.md`](recovery-toolchain.md)
 (how the tier-1 binaries are built),
-[`docs/workflows/restore-bare-metal.md`](restore-bare-metal.md),
+[`docs/workflows/restore-live-usb.md`](restore-live-usb.md),
 [`docs/workflows/verify-and-audit.md`](verify-and-audit.md), and
 [`docs/architecture.md`](../architecture.md).
 
@@ -267,9 +267,9 @@ binaries are built.
 
 **Building the tier-1 binaries** is `lcsas recovery build --arch <arch>`
 (see the recovery-toolchain doc); `lcsas meta build` then picks the
-results up from `recovery/bin/<arch>/` automatically. Two extra targets
-(`riscv64`, `aarch64-windows`) build via `RecoveryBuilder.SUPPORTED_ARCHES`
-but are not part of the required-contents contract. See
+results up from `recovery/bin/<arch>/` automatically.
+`RecoveryBuilder.SUPPORTED_ARCHES` names only the six approved targets of the
+required-contents contract. See
 [`../CROSS_PLATFORM_META_RFC.md`](../CROSS_PLATFORM_META_RFC.md) §6 Q6.
 
 **Source refs:** `APPROVED_TARGETS` / `required_target_paths`

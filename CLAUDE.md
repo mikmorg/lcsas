@@ -82,7 +82,7 @@ Restore is the reverse: `restore/planner.py` generates a disc pick list; `restor
 - **Disc catalog** — the complete SQLite catalog, current as of each disc's burn, is burned onto every disc so a restore never requires a central server.
 - **Multiple repositories** — several Rustic repositories share the same discs; each repository is encrypted under its own password; the catalog tracks which repository owns each pack.
 - **Zero runtime dependencies** — the entire codebase uses only the Python standard library (`zstandard` is optional). This is intentional so the restore path works on a bare system.
-- **Meta disc** — a separate disc (`meta/`) bundles per-target static binaries (rustic, xorriso, python3), LCSAS source, and a `restore.sh` script so a full restore is possible with nothing pre-installed. It holds no catalog. No LCSAS disc is bootable — the meta disc is mounted from a running OS (the live-boot path was quarantined to `experimental/boot/`). Phase 21 added per-target bundling for six rust-triples (Linux x86_64/aarch64/armv7 musl, macOS arm64/x86_64, Windows x86_64-gnu).
+- **Meta disc** — a separate disc (`meta/`) bundles per-target static binaries (rustic, xorriso, python3), LCSAS source, and a `restore.sh` script so a full restore is possible with nothing pre-installed. It holds no catalog. No LCSAS disc is bootable — the meta disc is mounted from a running OS (the live-boot path was dropped; its scaffolding was deleted in #688 and survives only at the repository tag `archive/pre-1.0-history`). Phase 21 added per-target bundling for six rust-triples (Linux x86_64/aarch64/armv7 musl, macOS arm64/x86_64, Windows x86_64-gnu).
 
 ### Recovery cascade (intent + reality)
 
