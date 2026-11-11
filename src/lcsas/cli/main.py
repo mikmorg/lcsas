@@ -2098,9 +2098,41 @@ def cmd_stage(args: argparse.Namespace) -> int:
                     m.iso_path, iso_size / 1e9, len(m.selected_packs),
                 )
             logger.info(f"Manifest: {result.staging_dir / 'session.json'}")
+            _report_snapshot_coverage(result)
         return 0
     finally:
         shutdown.uninstall()
+
+
+def _report_snapshot_coverage(result: Any) -> None:
+    """#657: say which snapshots these discs do NOT carry, and why.
+
+    A snapshot goes on a disc only when every pack it needs is on a
+    burned disc or on this session's discs.  The rest wait for a later
+    disc; until then the newest snapshot on the discs is older than the
+    newest backup.
+    """
+    for repo_name, snaps in sorted(result.snapshots_left_out.items()):
+        logger.warning(
+            "Repository '%s': %d snapshot(s) are NOT on these discs, "
+            "because some of their packs are not on any disc yet:",
+            repo_name, len(snaps),
+        )
+        for snap in snaps:
+            logger.warning(
+                "  %s  %s  (%d pack(s) not on a disc)",
+                snap.snapshot_id[:8], snap.time, snap.missing_packs,
+            )
+        logger.warning(
+            "  A later disc carries them once their packs are burned "
+            "(run 'lcsas stage' again after these discs are burned)."
+        )
+    for repo_name, reason in sorted(result.snapshots_unchecked.items()):
+        logger.warning(
+            "Repository '%s': could not check which snapshots are fully on "
+            "discs (%s); every snapshot was copied to these discs.",
+            repo_name, reason,
+        )
 
 
 def cmd_burn_session(args: argparse.Namespace) -> int:

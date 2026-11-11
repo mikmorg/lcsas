@@ -59,6 +59,7 @@ from lcsas.db.volumes import (
 )
 from lcsas.ecc.dvdisaster import DVDisasterRunner, smallest_fitting_medium_bytes
 from lcsas.iso.xorriso import MediaStatus, XorrisoRunner
+from lcsas.packs.snapshot_coverage import LeftOutSnapshot, snapshot_coverage
 from lcsas.staging.builder import MirrorUnavailableError, StagingBuilder
 from lcsas.staging.metadata import HolographicInjector
 from lcsas.staging.repo_marker import repo_markers
@@ -97,6 +98,13 @@ class StageResult:
     staging_dir: Path
     manifests: list[BurnManifest] = field(default_factory=list)
     iso_paths: list[Path] = field(default_factory=list)
+    # #657: per repository name, the snapshots left off these discs
+    # because their packs are not all on discs yet.
+    snapshots_left_out: dict[str, list[LeftOutSnapshot]] = field(
+        default_factory=dict)
+    # #657: repositories whose snapshots could not be checked (no
+    # password_file, or the walk failed); every snapshot was copied.
+    snapshots_unchecked: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -148,6 +156,8 @@ class BurnOrchestrator:
     ) -> None:
         self._config = config
         self._conn = conn
+        # #657: set by stage() for the session being staged.
+        self._snapshot_allow: dict[str, set[str]] | None = None
         self._xorriso = xorriso
         self._dvdisaster = dvdisaster
         # FUP-01: injectable owner-interaction seam.  Defaults to the
@@ -500,6 +510,7 @@ class BurnOrchestrator:
         injector = HolographicInjector(staging_root)
         injector.inject_metadata(
             mirror_paths, required_repos=set(packs_by_repo), markers=markers,
+            snapshot_allow=self._snapshot_allow,
         )
 
         # 3. Register volume in the catalog (atomic transaction)
@@ -866,6 +877,14 @@ class BurnOrchestrator:
                                for p in _packs}
         self._format_preflight(sorted(participating_repos))
 
+        # #657: only snapshots whose packs are all on discs (durable
+        # volumes, or this session's volumes) go onto this session's
+        # discs.  Computed once, before any side effect.
+        session_packs = {p.sha256 for _packs, _b in volume_plans
+                         for p in _packs}
+        snapshot_allow, left_out, unchecked = self._snapshot_coverage(
+            session_packs)
+
         # 3. Disk space pre-flight check [BURN-07]
         # Per volume we hold the staging tree (packs + disc catalog +
         # repository metadata) AND its ISO — ISOs persist for the whole
@@ -925,6 +944,10 @@ class BurnOrchestrator:
         existing_labels = [v.label for v in list_volumes(self._conn)]
         seq = next_seq_num(existing_labels, self._config.label_prefix)
 
+        # #657: _stage_single_volume reads this for the whole session (an
+        # orchestrator serves one command, so no reset is needed on error).
+        self._snapshot_allow = snapshot_allow
+
         for i, (selected_packs, total_bytes) in enumerate(volume_plans):
             vol_label = generate_volume_label(
                 self._config.label_prefix, mt.label_name, seq + i,
@@ -972,6 +995,7 @@ class BurnOrchestrator:
             manifests.append(manifest)
             if manifest.iso_path:
                 iso_paths.append(manifest.iso_path)
+        self._snapshot_allow = None
 
         # Write session manifest JSON
         self._write_session_manifest(session_id, session_dir, manifests)
@@ -982,7 +1006,55 @@ class BurnOrchestrator:
             staging_dir=session_dir,
             manifests=manifests,
             iso_paths=iso_paths,
+            snapshots_left_out=left_out,
+            snapshots_unchecked=unchecked,
         )
+
+    def _snapshot_coverage(
+        self, session_packs: set[str],
+    ) -> tuple[dict[str, set[str]], dict[str, list[LeftOutSnapshot]],
+               dict[str, str]]:
+        """#657: which snapshot files may go on this session's discs.
+
+        For every repository with a mirror, walk its snapshots with the
+        tier-3 reader and keep those whose packs are all held: on a
+        durable volume, or in *session_packs*.  Returns
+        ``(allow by repo_id, left out by repo name, unchecked by repo
+        name with the reason)``.  A repository that cannot be checked
+        (no password_file, or the walk fails) is not filtered — every
+        snapshot is copied, as before — and is reported as unchecked.
+        """
+        from lcsas.db.queries import get_archived_pack_ids
+        from lcsas.db.repos import get_repo
+        from lcsas.restore.restic_fallback import IntegrityError
+
+        allow: dict[str, set[str]] = {}
+        left_out: dict[str, list[LeftOutSnapshot]] = {}
+        unchecked: dict[str, str] = {}
+        for repo_id, mirror in sorted(self._get_mirror_paths().items()):
+            repo = get_repo(self._conn, repo_id)
+            if not (mirror / "snapshots").is_dir():
+                continue
+            repo_cfg = self._match_repo_config(repo.name, repo.mirror_path)
+            password_file = repo_cfg.password_file if repo_cfg else None
+            if password_file is None or not password_file.is_file():
+                unchecked[repo.name] = "no password_file configured"
+                continue
+            held = get_archived_pack_ids(self._conn, repo_id) | session_packs
+            try:
+                cov = snapshot_coverage(mirror, password_file, held)
+            except (IntegrityError, OSError, ValueError, KeyError) as exc:
+                unchecked[repo.name] = f"snapshot check failed: {exc}"
+                _logger.warning(
+                    "repo '%s': could not check which snapshots are fully "
+                    "on discs (%s); every snapshot file is copied.",
+                    repo.name, exc,
+                )
+                continue
+            allow[repo_id] = cov.complete
+            if cov.left_out:
+                left_out[repo.name] = cov.left_out
+        return allow, left_out, unchecked
 
     def burn_session(
         self,

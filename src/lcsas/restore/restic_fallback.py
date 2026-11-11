@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import atexit
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -47,6 +48,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
 from datetime import timezone
 from pathlib import Path
@@ -1593,6 +1595,82 @@ class PurePythonRestorer:
                     stack.append(node["subtree"])
         return total
 
+    def missing_packs_by_snapshot(
+        self, held_packs: Collection[str],
+    ) -> list[tuple[SnapshotMeta, frozenset[str]]]:
+        """Issue #657 — the packs each snapshot needs that are not held.
+
+        Walks every snapshot's trees and returns, per snapshot (oldest
+        first), the set of pack IDs it references that are not in
+        *held_packs*: the packs of its tree blobs and of its files' data
+        blobs.  An empty set means the snapshot is fully restorable from
+        the held packs.  A tree that cannot be read, or a blob the index
+        does not know, counts as a missing pseudo-pack (``"?tree:<id>"``,
+        ``"?blob:<id>"``), so a doubtful snapshot is never called complete.
+
+        Trees shared between snapshots (most of them, between two
+        backups of the same folders) are read once.  Only tree blobs are
+        read, never file data.
+        """
+        self._ensure_loaded()
+        assert self._blob_index is not None
+        assert self._snapshots is not None
+        held = held_packs if isinstance(held_packs, (set, frozenset)) else set(held_packs)
+        empty: frozenset[str] = frozenset()
+        memo: dict[str, frozenset[str]] = {}
+
+        def blob_pack_missing(blob_id: str) -> str | None:
+            loc = self._blob_index.get(blob_id) if self._blob_index else None
+            if loc is None:
+                return f"?blob:{blob_id}"
+            return None if loc.pack_id in held else loc.pack_id
+
+        def tree_missing(root: str) -> frozenset[str]:
+            # Iterative post-order walk: (tree id, children expanded?).
+            pending: dict[str, tuple[set[str], list[str]]] = {}
+            stack: list[tuple[str, bool]] = [(root, False)]
+            while stack:
+                tid, expanded = stack.pop()
+                if tid in memo:
+                    continue
+                if not expanded:
+                    if tid in pending:
+                        continue
+                    own: set[str] = set()
+                    subtrees: list[str] = []
+                    m = blob_pack_missing(tid)
+                    if m is not None:
+                        own.add(m)
+                    try:
+                        doc = json.loads(self._read_blob(tid))
+                    except (IntegrityError, KeyError, OSError,
+                            ValueError) as exc:
+                        _log(f"tree {tid[:12]} unreadable: {exc}")
+                        memo[tid] = frozenset(own | {f"?tree:{tid}"})
+                        continue
+                    for node in doc.get("nodes") or []:
+                        ntype = node.get("type", "file")
+                        if ntype == "dir" and node.get("subtree"):
+                            subtrees.append(node["subtree"])
+                        elif ntype == "file":
+                            for blob_id in node.get("content") or []:
+                                m = blob_pack_missing(blob_id)
+                                if m is not None:
+                                    own.add(m)
+                    pending[tid] = (own, subtrees)
+                    stack.append((tid, True))
+                    for sub in subtrees:
+                        if sub not in memo:
+                            stack.append((sub, False))
+                else:
+                    own, subtrees = pending.pop(tid)
+                    for sub in subtrees:
+                        own |= memo.get(sub, empty)
+                    memo[tid] = frozenset(own) if own else empty
+            return memo.get(root, empty)
+
+        return [(snap, tree_missing(snap.tree)) for snap in self._snapshots]
+
     def _emit_progress(self, *, force: bool = False) -> None:
         """Emit a progress line to stderr if a threshold has been hit.
 
@@ -1722,6 +1800,28 @@ def _parse_timestamp(ts: str) -> float:
     return dt.timestamp()
 
 
+_QUIET = False
+
+
+@contextlib.contextmanager
+def quiet_log() -> Iterator[None]:
+    """Silence :func:`_log` while the reader is used as a library.
+
+    ``lcsas stage`` walks snapshot trees with this reader (#657); its
+    progress lines ("Master key decrypted", "Loaded index") mean nothing
+    to someone staging discs.
+    """
+    global _QUIET
+    saved = _QUIET
+    _QUIET = True
+    try:
+        yield
+    finally:
+        _QUIET = saved
+
+
 def _log(msg: str) -> None:
     """Simple stderr logger for fallback restore progress."""
+    if _QUIET:
+        return
     print(f"[restic-fallback] {msg}", file=sys.stderr, flush=True)

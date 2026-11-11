@@ -400,6 +400,7 @@ class HolographicInjector:
         mirror_paths: dict[str, Path],
         required_repos: set[str] | None = None,
         markers: Mapping[str, RepoMarker] | None = None,
+        snapshot_allow: Mapping[str, set[str]] | None = None,
     ) -> None:
         """Copy repository metadata from each mirror into the staging tree.
 
@@ -416,6 +417,10 @@ class HolographicInjector:
                 (``repo_marker.repo_markers``).  It is written as
                 ``metadata/<repo_id>/LCSAS_REPO.txt``.  A repository with
                 no marker here gets no file: restore works without it.
+            snapshot_allow: #657 — for a repository listed here, only the
+                snapshot files named in its set are copied: the snapshots
+                whose packs are all on discs (or on this burn session's
+                discs).  A repository not listed gets every snapshot file.
 
         A repository with nothing to copy (an unreachable mirror with no
         packs on this volume) gets no ``metadata/<repo_id>/`` folder at
@@ -457,7 +462,18 @@ class HolographicInjector:
             if not dirs and not files:
                 continue  # nothing to copy: no empty folder on the disc
             ensure_dir(repo_meta_dir)
+            allow = (snapshot_allow or {}).get(repo_id)
             for name in dirs:
+                if name == "snapshots" and allow is not None:
+                    # #657: a snapshot whose packs are not all on discs
+                    # would make "latest" ask for a disc that does not
+                    # exist.  Keep the folder even when empty, so a
+                    # reader says "no snapshots" rather than "no folder".
+                    ensure_dir(repo_meta_dir / name)
+                    for snap in sorted((mirror_root / name).iterdir()):
+                        if snap.is_file() and snap.name in allow:
+                            copy_file(snap, repo_meta_dir / name / snap.name)
+                    continue
                 copy_tree(mirror_root / name, repo_meta_dir / name)
             for name in files:
                 copy_file(mirror_root / name, repo_meta_dir / name)
