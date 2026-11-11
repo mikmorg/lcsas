@@ -62,6 +62,7 @@ jobs:
 
       - name: Install xorriso
         run: |
+          sh .github/scripts/apt-prepare.sh
           sudo apt-get update
           sudo apt-get install -y xorriso
           xorriso -version

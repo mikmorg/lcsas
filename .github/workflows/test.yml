@@ -71,6 +71,7 @@ jobs:
 
       - name: Install xorriso and dvdisaster
         run: |
+          sh .github/scripts/apt-prepare.sh
           sudo apt-get update
           sudo apt-get install -y xorriso dvdisaster
           xorriso -version
@@ -227,6 +228,7 @@ jobs:
 
       - name: Install xorriso + dvdisaster + qemu + wine
         run: |
+          sh .github/scripts/apt-prepare.sh
           sudo apt-get update
           # qemu-user-static + wine let the cross-arch committed-binary
           # hardening tests (aarch64/armv7 via qemu, windows .exe via wine)

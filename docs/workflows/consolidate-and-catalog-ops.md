@@ -148,16 +148,18 @@ packs will require, without touching any state.
 
 ## `lcsas consolidate --execute`
 
-**Purpose:**  Mark source volumes `CONSOLIDATING`, stage the surviving
-packs into a fresh burn session (one or more new volumes on the target
-media), and hand the owner the session ID to burn.  Does **not**
-deprecate the sources — that is a separate, post-verification step.
+**Purpose:**  Stage the surviving packs of the source volumes into a
+fresh burn session (one or more new volumes on the target media), mark
+the sources `CONSOLIDATING`, and hand the owner the session ID to burn.
+Does **not** deprecate the sources — that is a separate,
+post-verification step.
 
 **Prerequisites:**
 - All dry-run / plan prerequisites above.
 - `--config` is required (`cmd_consolidate`).
-- Source volumes are in `VERIFIED` status (the only legal source for
+- Every source volume is `VERIFIED` (the only legal source for
   `CONSOLIDATING` — `VALID_TRANSITIONS` in `src/lcsas/db/volumes.py`).
+- The packs are still on the mirror: staging copies them from there.
 - Interactive terminal (stdin is `tty`) for the irreversible-change
   confirmation prompt (`cmd_consolidate`).
 - xorriso and dvdisaster runners available on `PATH` (the
@@ -170,36 +172,49 @@ deprecate the sources — that is a separate, post-verification step.
 2. `--deprecate` and `--execute` are mutually exclusive; reject both
    set (`cmd_consolidate`).
 3. Confirm config is loaded; abort otherwise (`cmd_consolidate`).
-4. Prompt the owner for `yes` confirmation; abort on anything
+4. Refuse, before the prompt, any source that is not `VERIFIED`, with
+   its status and what to do: a `BURNED` source needs
+   `lcsas verify <label> --disc` first; a `CONSOLIDATING` one is already
+   in a consolidation (#677).  Nothing is changed.
+5. `--location` names the location the new volumes are staged for; it
+   must already exist.  Without it, the configured default location is
+   used.
+6. Prompt the owner for `yes` confirmation; abort on anything
    else, error on `EOFError` (non-interactive stdin —
    `cmd_consolidate`).
-5. Build a `BurnOrchestrator` with the xorriso/dvdisaster runners
-   (`cmd_consolidate`).
-6. Call `merger.mark_sources_consolidating(volume_ids)` to flip every
-   source from `VERIFIED → CONSOLIDATING` *before* staging
-   (`cmd_consolidate`, `src/lcsas/consolidate/merger.py`).  This is the
-   crash-safety marker — if the process dies mid-burn, the owner can
-   see intent in the catalog rather than finding `ACTIVE` volumes that
-   look unrelated to any in-flight work.
-7. Build a list of pack IDs from `plan.active_packs` and call
-   `orch.stage(media_type, pack_sha256s=...)` (`cmd_consolidate`).
-8. **On staging failure:** call `merger.abort_consolidation` to revert
-   every source `CONSOLIDATING → VERIFIED`, log with `exc_info`, and
-   re-raise (`cmd_consolidate`, `src/lcsas/consolidate/merger.py`).
-9. **On success:** log the staged session ID and the remaining
-   manual steps (`burn`, verify, `consolidate --deprecate`)
-   (`cmd_consolidate`).
+7. Build a `BurnOrchestrator` with the xorriso/dvdisaster runners and
+   call `orch.stage(media_type, for_location=<location>,
+   pack_sha256s=...)` with the plan's active packs.  With
+   `pack_sha256s`, `stage()` stages exactly those packs, although they
+   are already on discs (#677: it used to intersect them with the
+   unarchived pool, which never holds them, so it always ended with
+   "No packs need staging.").  Each new volume records the location.
+8. **On staging failure:** log the error and exit 1.  The sources
+   were not changed yet, so they stay `VERIFIED`.
+9. **On success:** `merger.mark_sources_consolidating(volume_ids,
+   session_id=...)` flips every source `VERIFIED → CONSOLIDATING` and
+   records a `NOTE` event on it naming the new burn session
+   (`src/lcsas/consolidate/merger.py`).  Then log the staged session ID
+   and the remaining manual steps (`burn`, verify,
+   `consolidate --deprecate`), and how to cancel.
+
+**Cancelling:** `lcsas session abort <session>` on the consolidation's
+burn session deletes its never-burned volumes as for any session, then
+returns the sources it names in their `NOTE` event to `VERIFIED`
+(`release_consolidation_sources` in `src/lcsas/consolidate/merger.py`,
+called from `cmd_session_abort`).
 
 **Expected outcome:**
 - Every source volume is in `CONSOLIDATING` status.
 - A new burn session exists with one or more `STAGING` volumes
-  containing exactly the source set's active packs.
+  containing exactly the source set's active packs, staged for the
+  chosen location.
 - The owner gets a printed next-step list ending in
   `consolidate --deprecate <ids>`.
 - Source `volume_copies` rows are untouched (deprecation happens
   later).
-- Exit code 0 on success.  Non-zero on staging failure (after
-  rollback to `VERIFIED`).
+- Exit code 0 on success.  1 on a refused source, an unknown
+  location, or a staging failure (sources unchanged).
 
 **Variant axes that apply:**
 - **Media type** — bigger targets → fewer volumes_needed but a
@@ -221,9 +236,12 @@ deprecate the sources — that is a separate, post-verification step.
 - `tests/unit/test_consolidate.py::TestVolumeMerger::test_abort_consolidation`
 - `tests/unit/test_consolidate.py::TestVolumeMerger::test_mark_consolidating_multiple_volumes`
 - `tests/unit/test_consolidate.py::TestVolumeMerger::test_abort_consolidation_multiple_volumes`
-- **Gap:** no end-to-end CLI test of `cmd_consolidate --execute` that
-  exercises the orchestrator (the confirmation prompt + subprocess
-  runners are not stubbed in any test).
+- `tests/unit/test_consolidate_execute.py` — drives the real
+  `BurnOrchestrator.stage()` through the CLI (only xorriso's ISO writer
+  is faked): two `VERIFIED` volumes become one new volume holding their
+  packs at the chosen location; non-`VERIFIED` sources and unknown
+  locations are refused before the prompt; `session abort` returns the
+  sources to `VERIFIED`.
 
 **Source refs:**
 - `cmd_consolidate` in `src/lcsas/cli/main.py`
@@ -523,11 +541,16 @@ rebuilds the master.
    (`cmd_catalog_rebuild`).  Internally:
    1. Open (or create) `output_db` and run `ensure_schema` to install
       the current (v10) schema.  Pre-existing master rows seed a
-      per-volume freshness baseline from their `created_at`
-      (`src/lcsas/db/rebuild.py`).
+      freshness baseline (the newest timestamp in its rows) for their
+      volumes and split records (`src/lcsas/db/rebuild.py`).
    2. **Sort discs newest-first** by the source catalog's freshness
-      (FMA-06).  Discs lacking `catalog.db` sort last and only emit a
-      skip error (`src/lcsas/db/rebuild.py`).
+      (FMA-06).  Freshness is the newest timestamp in the catalog's
+      rows (volume created/closed/verified, disc burn and verify dates,
+      event dates, burn sessions, password splits); the `catalog.db`
+      file mtime only breaks a tie, so a catalog copied without keeping
+      its mtime cannot outrank one with newer rows (#686).  Discs
+      lacking `catalog.db` sort last and only emit a skip error
+      (`src/lcsas/db/rebuild.py`).
    3. For each disc (newest first):
       1. Skip discs lacking `catalog.db`; record the skip in
          `RebuildResult.errors` and bump `discs_skipped`.
@@ -552,13 +575,29 @@ rebuilds the master.
          kept and a warning is appended to `RebuildResult.warnings`.
          A destroyed volume is therefore **never resurrected** by an
          older disc that predates its destruction.
-      4. Tally per-table insert counts.
+      4. **Password splits (`key_escrow`).**  The freshest catalog that
+         knows a repository decides its split record, so a split that
+         was cleared before a newer disc was staged stays cleared
+         (#686).  A disc from before the table existed decides nothing.
+      5. Tally per-table insert counts.
    4. Append a summary warning if staler discs disagreed on
-      `is_pruned`, then return a `RebuildResult`
+      `is_pruned`.
+   5. **The newest burn session (#678).**  A disc catalog is copied
+      onto its disc at staging time, so in every input the newest burn
+      session's volumes are `STAGING` with no disc record.  A volume
+      whose own disc was an input (its uuid is in that disc's
+      `volume_info.json`) and that is still `STAGING`/`BURNING` after
+      the merge becomes `BURNED`, so the next `lcsas stage` does not
+      select its packs again.  It is listed in
+      `RebuildResult.needs_verify`.  A volume with a `VERIFY_FAIL` event
+      is left as it is, with a warning.  Then return a `RebuildResult`
       (`src/lcsas/db/rebuild.py`).
 4. Log a per-table summary (discs processed/skipped; repositories,
    volumes, packs, snapshots merged) and any `RebuildResult.warnings`
-   (`cmd_catalog_rebuild`).
+   (`cmd_catalog_rebuild`).  List the volumes in `needs_verify`, with
+   `lcsas verify <label> --disc --location <where it is kept>` for
+   each.  That command checks the disc in the drive, records it at that
+   location (an ACTIVE disc record) and marks the volume `VERIFIED`.
 5. Log each error if any occurred; return 1 in that case, 0
    otherwise (`cmd_catalog_rebuild`).
 
@@ -570,6 +609,11 @@ rebuilds the master.
   most-alive one — downgrades stick and destroyed volumes are never
   resurrected (FMA-06).  Resurrection-hazard disagreements surface as
   `RebuildResult.warnings`.
+- No volume whose disc was read is left `STAGING`; the newest burn
+  session's volumes are `BURNED` with no disc record until the owner
+  runs `lcsas verify <label> --disc --location <where>` for each.
+  Until then, `lcsas session abort` of their session would delete them
+  (it deletes volumes with no disc record).
 - Exit 0 if all discs merged; 1 if any disc was skipped or errored
   (master catalog still contains successfully-merged data).
 
@@ -601,6 +645,13 @@ rebuilds the master.
 - `…::test_merge_snapshots`
 - `…::test_merge_volume_packs_with_id_translation`
 - `…::test_merge_volume_copies_preserves_all_fields`
+- `…::TestRecencyAwareRebuild::test_newer_rows_beat_a_newer_file_mtime`
+  and `…::TestRebuildKeepsPasswordSplits::test_cleared_split_stays_cleared`
+  (#686).
+- `tests/unit/test_rebuild_newest_session.py` — rebuild from the
+  staging trees of two burn sessions; the newest session's volumes come
+  back `BURNED` and listed, `verify --disc --location` records the disc
+  and verifies them, and `stage` selects none of their packs (#678).
 - The `DESTROYED → VERIFIED` resurrection hazard — an older disc that
   predates a volume's destruction — is handled by the recency-aware
   merge (FMA-06): the fresh DESTROYED status is kept and a warning is
@@ -717,8 +768,8 @@ status was added by the v4→v5 migration in the same module.
 | `STAGING`/`BURNING → BURNED`   | `catalog import-receipts` w/ `verify_passed=null` (`burn-iso --no-verify`) | `cmd_catalog_import`   |
 | `BURNING`/`BURNED → STAGING`, or stays `STAGING` | `catalog import-receipts` w/ `verify_passed=false`, volume with no disc (#483, #670) | `cmd_catalog_import`                     |
 | `BURNED → VERIFIED`            | `lcsas verify --mark-verified`                     | `cmd_verify` in `src/lcsas/cli/main.py`         |
-| `VERIFIED → CONSOLIDATING`     | `lcsas consolidate --execute` (just before staging) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |
-| `CONSOLIDATING → VERIFIED`     | Staging failure during `--execute` (auto-rollback) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |
+| `VERIFIED → CONSOLIDATING`     | `lcsas consolidate --execute` (just after staging succeeds) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |
+| `CONSOLIDATING → VERIFIED`     | `lcsas session abort` of the consolidation's burn session | `cmd_session_abort`, `src/lcsas/consolidate/merger.py` |
 | `CONSOLIDATING → DEPRECATED`   | `lcsas consolidate --deprecate` (post-verification) | `cmd_consolidate`, `src/lcsas/consolidate/merger.py` |
 | `VERIFIED → DEPRECATED`        | `lcsas consolidate --deprecate` (no `--execute` first) | Same as above (also legal per `VALID_TRANSITIONS`). |
 | `DEPRECATED → DESTROYED`       | No first-class CLI command yet — see *Gaps*       | `VALID_TRANSITIONS` in `src/lcsas/db/volumes.py` |
@@ -774,8 +825,8 @@ Python layer as `VALID_EVENT_TYPES` (`src/lcsas/db/volume_events.py`).
 
 | Workflow                                      | Event                          | Detail field                                |
 | --------------------------------------------- | ------------------------------ | ------------------------------------------- |
-| `consolidate --execute`                       | `NOTE` (per source volume)     | `"Status changed: VERIFIED → CONSOLIDATING"` |
-| Staging-failure auto-rollback                 | `NOTE` (per source volume)     | `"Status changed: CONSOLIDATING → VERIFIED"` |
+| `consolidate --execute`                       | `NOTE` ×2 (per source volume)  | `"Status changed: VERIFIED → CONSOLIDATING"` and `"consolidation: packs staged into burn session <id>"` |
+| `session abort` of that burn session          | `NOTE` (per source volume)     | `"Status changed: CONSOLIDATING → VERIFIED"` |
 | `consolidate --deprecate` (success)           | `NOTE` (per source volume)     | `"Status changed: <prev> → DEPRECATED"`     |
 | `copy deprecate` / `copy destroy [--lost]`    | `NOTE` (per disc)              | `"disc at <loc> recorded as deprecated (out of service)"` / `"… as destroyed"` / `"… as lost (whereabouts unknown)"` |
 | last in-service disc recorded gone            | `NOTE` (lost volume)           | `"auto-deprecated: last in-service disc <deprecated\|destroyed\|lost> at <loc>"` |

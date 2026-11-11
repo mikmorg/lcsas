@@ -136,6 +136,11 @@ typedef struct {
     lcsas_snapshot *items;
     size_t count;
     size_t cap;
+    /* Issue #662 — snapshot files that could not be read or failed
+     * authentication.  The newest of these may be newer than every
+     * loaded snapshot, so "latest" must not be chosen silently. */
+    size_t unreadable;
+    char unreadable_name[LCSAS_HEX_BLOB_ID_LEN + 1];  /* first one seen */
 } lcsas_snapshot_list;
 
 void lcsas_snapshot_list_init(lcsas_snapshot_list *l);
@@ -145,8 +150,13 @@ int lcsas_repo_load_snapshots(const char *repo_path,
                               const lcsas_master_key *mk,
                               lcsas_snapshot_list *out);
 
-/* Return index of latest snapshot (highest time string), or -1 if empty. */
+/* Return index of latest snapshot (newest instant), or -1 if empty. */
 long lcsas_snapshot_latest(const lcsas_snapshot_list *l);
+
+/* Issue #663 — order two snapshot `time` strings by the instant they
+ * name (UTC offsets applied), not by their text.  Falls back to text
+ * order when either string does not parse.  <0, 0, >0 like strcmp. */
+int lcsas_snapshot_time_cmp(const char *a, const char *b);
 
 /* Find snapshot by exact match or unique prefix; -1 if not found. */
 long lcsas_snapshot_find(const lcsas_snapshot_list *l, const char *id);

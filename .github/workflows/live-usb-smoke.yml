@@ -46,6 +46,7 @@ jobs:
 
       - name: Install QEMU, Secure-Boot OVMF, xorriso
         run: |
+          sh .github/scripts/apt-prepare.sh
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf xorriso
           test -f /usr/share/OVMF/OVMF_CODE_4M.ms.fd

@@ -319,6 +319,12 @@ _CLI_BLOCK = textwrap.dedent("""\
         except KeyboardInterrupt:
             print("\\n[lcsas-restore] aborted by user.", file=sys.stderr)
             sys.exit(130)
+        except RestoreAbortedError as exc:
+            # #658: 'q' or end of input at the disc prompt (exit 75, as
+            # in tier 1), or a full target filesystem (exit 1).  Must
+            # come before the catch-all below.
+            print(f"[lcsas-restore] {exc}", file=sys.stderr)
+            sys.exit(exc.exit_code)
         except Exception as exc:
             print(
                 f"[lcsas-restore] restore could not start: {exc}\\n"
