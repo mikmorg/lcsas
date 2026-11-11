@@ -1319,6 +1319,119 @@ def test_catalog_reconcile_spares_fresh_and_burned_volumes(tmp_path, capsys):
     assert "no ghost volumes" in out
 
 
+def _give_staged_iso(db: str, tmp_path, label: str = "GHOST_VOL") -> object:
+    """Record a burn session for ``label`` whose ISO exists on disk."""
+    from lcsas.db.connection import get_connection
+    from lcsas.db.sessions import add_session_volume, create_session
+    from lcsas.db.volumes import get_volume_by_label
+
+    session_dir = tmp_path / "staging" / f"sess-{label}"
+    session_dir.mkdir(parents=True)
+    iso = session_dir / f"{label}.iso"
+    iso.write_bytes(b"\x00" * 64)
+    conn = get_connection(db)
+    try:
+        vol = get_volume_by_label(conn, label)
+        assert vol is not None
+        create_session(conn, media_type="TEST_TINY",
+                       staging_dir=str(session_dir), session_id=f"sess-{label}")
+        add_session_volume(conn, f"sess-{label}", vol.volume_id, str(iso),
+                           iso_sha256="c" * 64, iso_size_bytes=64)
+    finally:
+        conn.close()
+    return iso
+
+
+def test_status_says_waiting_not_reconcile_while_the_iso_exists(tmp_path, capsys):
+    """#647: a staged volume whose ISO is still in the staging area is
+    waiting to be burned; status must not point at `catalog reconcile`."""
+    db = tmp_path / "test.db"
+    main(["init", "--db-path", str(db)])
+    _seed_ghost_volume(str(db))
+    _give_staged_iso(str(db), tmp_path)
+    capsys.readouterr()
+
+    assert main(["--db", str(db), "status"]) == 0
+    out = capsys.readouterr().out
+    assert "2 staged (NOT yet on disc)" in out
+    assert "waiting to be burned" in out and "GHOST_VOL" in out
+    assert "import-receipts" in out
+    assert "reconcile" not in out
+
+
+def test_status_names_what_reconcile_fix_deletes_once_the_iso_is_gone(
+    tmp_path, capsys,
+):
+    db = tmp_path / "test.db"
+    main(["init", "--db-path", str(db)])
+    _seed_ghost_volume(str(db))
+    _give_staged_iso(str(db), tmp_path).unlink()
+    capsys.readouterr()
+
+    assert main(["--db", str(db), "status"]) == 0
+    out = capsys.readouterr().out
+    assert "ISOs are gone: GHOST_VOL" in out
+    assert "'lcsas catalog reconcile --fix' deletes them" in out
+    assert "waiting to be burned" not in out
+
+
+def test_catalog_reconcile_fix_spares_an_old_volume_whose_iso_exists(
+    tmp_path, capsys,
+):
+    """#647: a 48 h old STAGING volume whose ISO exists (burned elsewhere,
+    receipt not yet imported) survives a default --fix; --include-waiting
+    deletes it."""
+    from lcsas.db.connection import get_connection
+
+    db = tmp_path / "test.db"
+    main(["init", "--db-path", str(db)])
+    _seed_ghost_volume(str(db))
+    _give_staged_iso(str(db), tmp_path)
+    capsys.readouterr()
+
+    rc = main(["--db", str(db), "catalog", "reconcile"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "waiting to be burned" in out and "GHOST_VOL" in out
+    assert "no ghost volumes" in out
+
+    assert main(["--db", str(db), "catalog", "reconcile", "--fix", "--yes"]) == 0
+    conn = get_connection(str(db))
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM volumes").fetchone()[0] == 1
+    finally:
+        conn.close()
+    capsys.readouterr()
+
+    rc = main(["--db", str(db), "catalog", "reconcile", "--fix", "--yes",
+               "--include-waiting"])
+    assert rc == 0
+    assert "Deleting ghost volume GHOST_VOL" in capsys.readouterr().out
+    conn = get_connection(str(db))
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM volumes").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_catalog_reconcile_confirmation_mentions_receipts(tmp_path, capsys,
+                                                          monkeypatch):
+    db = tmp_path / "test.db"
+    main(["init", "--db-path", str(db)])
+    _seed_ghost_volume(str(db))
+    capsys.readouterr()
+    prompts: list[str] = []
+
+    def fake_input(prompt: str) -> str:
+        prompts.append(prompt)
+        return "no"
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    assert main(["--db", str(db), "catalog", "reconcile", "--fix"]) == 1
+    assert len(prompts) == 1
+    assert "receipt" in prompts[0] and "can no longer be imported" in prompts[0]
+
+
 def test_import_receipts_from_durable_dir(tmp_path):
     """`catalog import-receipts <db dir>/receipts/*.json` repopulates
     copy/location rows on a fresh hot DB from the durable receipts the

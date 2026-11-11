@@ -428,8 +428,15 @@ def build_parser() -> argparse.ArgumentParser:
     cat_reconcile_p.add_argument(
         "--fix", action="store_true", default=False,
         help="Delete ghost volumes (never-burned STAGING/BURNING volumes "
-             "with zero copies), returning their packs to the unarchived "
-             "pool. Asks for confirmation unless --yes is given.",
+             "with zero copies whose staged ISO is gone), returning their "
+             "packs to the unarchived pool. Asks for confirmation unless "
+             "--yes is given.",
+    )
+    cat_reconcile_p.add_argument(
+        "--include-waiting", action="store_true", default=False,
+        help="With --fix: also delete volumes whose staged ISO still exists "
+             "(waiting to be burned, e.g. on another machine). A receipt "
+             "for a deleted volume can no longer be imported.",
     )
     cat_reconcile_p.add_argument(
         "--yes", action="store_true", default=False,
@@ -1779,12 +1786,13 @@ def cmd_status(args: argparse.Namespace) -> int:
     """Show archive status summary."""
     from lcsas.db.queries import (
         get_archive_status_summary,
+        get_ghost_volumes,
         get_live_volumes_for_packs,
         get_lost_volume_ids,
         get_redundancy_report,
         volume_display_status,
     )
-    from lcsas.db.sessions import list_sessions
+    from lcsas.db.sessions import list_sessions, staged_iso_present
     from lcsas.db.volume_copies import find_stale_copies
     from lcsas.db.volume_events import get_latest_event
     from lcsas.db.volumes import list_volumes
@@ -1802,6 +1810,11 @@ def cmd_status(args: argparse.Namespace) -> int:
         volumes = list_volumes(conn)
         lost_ids = get_lost_volume_ids(conn)
         partial_sessions = list_sessions(conn, status_filter="PARTIAL")
+        # #647: never-burned volumes split by whether their ISO is still in
+        # the staging area (waiting to be burned) or gone (a ghost).
+        unburned = get_ghost_volumes(conn, older_than_hours=0)
+        waiting = [v.label for v in unburned if staged_iso_present(conn, v.volume_id)]
+        ghost_labels = [v.label for v in unburned if v.label not in waiting]
         # FMA-08: packs that live on exactly one disc.  Packs in
         # the <2-copies report with at least one live holder are on one
         # disc; zero-holder packs are the unarchived/staged buckets above.
@@ -1832,11 +1845,27 @@ def cmd_status(args: argparse.Namespace) -> int:
     for v in volumes:
         shown = volume_display_status(v, lost_ids)
         logger.info(f"  {v.label:<25} {v.media_type:<10} {shown:<10} {v.location}")
-    if summary["staged"] > 0:
+    if waiting:
+        logger.warning(
+            "WARNING: %d volume(s) are staged and waiting to be burned "
+            "(their ISOs are in the staging area): %s. Burn them with "
+            "'lcsas burn', or burn the ISOs elsewhere with 'lcsas burn-iso "
+            "--emit-receipt' and import the receipts with 'lcsas catalog "
+            "import-receipts'. Until then their packs are NOT on any disc.",
+            len(waiting), ", ".join(waiting),
+        )
+    if ghost_labels:
+        logger.warning(
+            "WARNING: %d volume(s) were staged but never burned, and their "
+            "ISOs are gone: %s. 'lcsas catalog reconcile --fix' deletes them "
+            "from the catalog and returns their packs to the unarchived "
+            "pool for the next 'lcsas stage'.",
+            len(ghost_labels), ", ".join(ghost_labels),
+        )
+    if summary["staged"] > 0 and not (waiting or ghost_labels):
         logger.warning(
             "WARNING: %d pack(s) are staged on volumes that were never "
-            "burned — run 'lcsas catalog reconcile' or burn the pending "
-            "session.",
+            "burned. See 'lcsas catalog reconcile'.",
             summary["staged"],
         )
     for s in partial_sessions:
@@ -3112,15 +3141,35 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
         volume_display_status,
     )
     from lcsas.db.schema import ensure_schema
+    from lcsas.db.sessions import staged_iso_present
     from lcsas.db.volumes import delete_volume
 
     config = _load_config_opt(args)
     db_path = _resolve_db_path(args, config)
+    include_waiting = getattr(args, "include_waiting", False)
 
     with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
 
-        ghosts = get_ghost_volumes(conn, args.older_than_hours)
+        # #647: a never-burned volume whose staged ISO still exists is
+        # waiting to be burned (possibly on another machine, with its
+        # receipt still to come), not a ghost.  --fix leaves it alone
+        # unless --include-waiting.
+        candidates = get_ghost_volumes(conn, args.older_than_hours)
+        waiting = [v for v in candidates if staged_iso_present(conn, v.volume_id)]
+        if waiting:
+            logger.info(
+                "%d volume(s) older than %dh are waiting to be burned "
+                "(their staged ISOs still exist); not treated as ghosts%s:",
+                len(waiting), args.older_than_hours,
+                "" if include_waiting else " (--include-waiting to include them)",
+            )
+            for v in waiting:
+                logger.info("  %s  (status=%s, created %s)",
+                            v.label, v.status, v.created_at)
+        ghosts = candidates if include_waiting else [
+            v for v in candidates if v not in waiting
+        ]
         drifted = get_durable_volumes_without_active_copies(conn)
 
         if drifted:
@@ -3179,8 +3228,10 @@ def cmd_catalog_reconcile(args: argparse.Namespace) -> int:
             try:
                 response = input(
                     f"Delete {len(ghosts)} ghost volume(s) and return "
-                    f"their packs to the unarchived pool? "
-                    f"Type 'yes' to confirm: "
+                    f"their packs to the unarchived pool? A burn receipt "
+                    f"for a deleted volume can no longer be imported, and "
+                    f"any of their ISOs left in the staging area are "
+                    f"orphaned. Type 'yes' to confirm: "
                 ).strip()
             except EOFError:
                 logger.error(

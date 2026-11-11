@@ -206,6 +206,33 @@ def delete_session(conn: sqlite3.Connection, session_id: str) -> None:
         )
 
 
+def get_staged_iso_path(
+    conn: sqlite3.Connection,
+    volume_id: int,
+) -> str | None:
+    """Return the ISO path recorded for the volume by its most recent burn
+    session, or None if no session recorded one (#647)."""
+    row = conn.execute(
+        """SELECT sv.iso_path
+           FROM session_volumes sv
+           JOIN burn_sessions bs USING (session_id)
+           WHERE sv.volume_id = ? AND sv.iso_path != ''
+           ORDER BY bs.created_at DESC, sv.rowid DESC
+           LIMIT 1""",
+        (volume_id,),
+    ).fetchone()
+    return str(row["iso_path"]) if row is not None else None
+
+
+def staged_iso_present(conn: sqlite3.Connection, volume_id: int) -> bool:
+    """True when the volume's staged ISO still exists on disk: it is waiting
+    to be burned (here, or elsewhere via burn-iso), not a ghost (#647)."""
+    from pathlib import Path
+
+    path = get_staged_iso_path(conn, volume_id)
+    return path is not None and Path(path).is_file()
+
+
 def get_staged_iso(
     conn: sqlite3.Connection,
     volume_id: int,
