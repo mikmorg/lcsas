@@ -12,10 +12,14 @@ pinned that.  These tests cover:
   whichever order they arrive in.
 
 They assert exit codes and, via a before/after dump of the catalog tables,
-that a skipped receipt writes nothing at all.  Nothing here depends on
-``verify_passed`` semantics: good receipts target an already-VERIFIED volume
-(the "re-burn to a new location" path), so only the copy row and the
+that a skipped receipt writes nothing at all.  Since #669 every skipped or
+refused receipt makes the exit code non-zero, while the good receipts of
+the batch are still imported.  Nothing here depends on ``verify_passed``
+semantics: good receipts target an already-VERIFIED volume (the "re-burn to
+a new location" path), so only the copy row and the
 ``BURN_RECEIPT_IMPORTED`` event are asserted.
+
+The #666 / #669 / #670 / #671 cases are at the end of the file.
 """
 
 from __future__ import annotations
@@ -54,12 +58,22 @@ metadata_reserve_mb = 0
     return cfg
 
 
-def _make_catalog(tmp_path: Path, labels: dict[str, str]) -> Path:
+# #669: a receipt must name a registered location.
+_LOCATIONS = ("Home", "Offsite", "Vault", "Vault_B", "Vault_C", "Bank_Box",
+              "Home_Shelf")
+
+
+def _make_catalog(tmp_path: Path, labels: dict[str, str],
+                  staged_for: str = "Home") -> Path:
+    from lcsas.db.locations import ensure_location
+
     db = tmp_path / "archive.db"
     conn = get_connection(db)
     create_all(conn)
+    for name in _LOCATIONS:
+        ensure_location(conn, name)
     for i, (label, status) in enumerate(labels.items()):
-        create_volume(conn, label, f"uuid-{i}", "TEST_TINY", 1000, "Home", status)
+        create_volume(conn, label, f"uuid-{i}", "TEST_TINY", 1000, staged_for, status)
     conn.close()
     return db
 
@@ -100,9 +114,9 @@ def _good(label: str, location: str = "Offsite") -> dict:
     }
 
 
-def _run(cfg: Path, *files: Path) -> int:
+def _run(cfg: Path, *files: Path, flags: tuple[str, ...] = ()) -> int:
     return main(["--config", str(cfg), "catalog", "import-receipts",
-                 *[str(f) for f in files]])
+                 *flags, *[str(f) for f in files]])
 
 
 def _assert_imported(db: Path, label: str, location: str, expected_events: int = 1) -> None:
@@ -150,7 +164,7 @@ class TestMalformedReceiptFile:
         rc = _run(cfg, bad)
 
         out = capsys.readouterr().out
-        assert rc == 0  # documented: skipped receipts are not an error
+        assert rc == 1  # #669: a skipped receipt is a non-zero exit
         assert "Failed to read receipt" in out
         assert str(bad) in out
         assert "Imported 0 receipt(s)." in out
@@ -163,7 +177,7 @@ class TestMalformedReceiptFile:
         rc = _run(cfg, tmp_path / "never-written.json")
 
         out = capsys.readouterr().out
-        assert rc == 0
+        assert rc == 1
         assert "Failed to read receipt" in out
         assert "Imported 0 receipt(s)." in out
         assert _dump(db) == before
@@ -175,7 +189,7 @@ class TestMalformedReceiptFile:
 
         rc = _run(cfg, tmp_path / "adir")
 
-        assert rc == 0
+        assert rc == 1
         assert "Failed to read receipt" in capsys.readouterr().out
         assert _dump(db) == before
 
@@ -193,7 +207,7 @@ class TestMalformedReceiptFile:
         rc = _run(cfg, _receipt(tmp_path, "weird.json", body))
 
         out = capsys.readouterr().out
-        assert rc == 0
+        assert rc == 1
         assert message in out
         assert _dump(db) == before
 
@@ -238,7 +252,7 @@ class TestMalformedReceiptFile:
                        {**_good("VOL_OTHER", "Vault_Q"), "iso_size_bytes": size})
         good = _receipt(tmp_path, "good.json", _good("VOL_GOOD"))
 
-        assert _run(cfg, bad, good) == 0
+        assert _run(cfg, bad, good) == 1
 
         out = capsys.readouterr().out
         assert "Unexpected error" not in out
@@ -281,7 +295,7 @@ class TestMalformedReceiptFile:
         before = _dump(db)
         bad = _receipt(tmp_path, "bad.json", {**_good("VOL_OTHER"), field: value})
 
-        assert _run(cfg, bad) == 0
+        assert _run(cfg, bad) == 1
 
         out = capsys.readouterr().out
         assert "Unexpected error" not in out
@@ -306,7 +320,7 @@ class TestMissingKeys:
         rc = _run(cfg, _receipt(tmp_path, "incomplete.json", body))
 
         out = capsys.readouterr().out
-        assert rc == 0
+        assert rc == 1
         assert "missing keys" in out
         for key in named:
             assert key in out
@@ -319,10 +333,12 @@ class TestMissingKeys:
         assert _dump(db) == before
 
     def test_optional_keys_are_not_required(self, env, capsys):
-        """Only volume_label + location are mandatory; everything else defaults."""
+        """Only volume_label, location and (#669) verify_passed are needed;
+        everything else defaults."""
         tmp_path, cfg, db = env
         minimal = _receipt(tmp_path, "min.json",
-                           {"volume_label": "VOL_GOOD", "location": "Offsite"})
+                           {"volume_label": "VOL_GOOD", "location": "Offsite",
+                            "verify_passed": True})
 
         assert _run(cfg, minimal) == 0
 
@@ -339,7 +355,7 @@ class TestOrphanReceipt:
         rc = _run(cfg, orphan)
 
         out = capsys.readouterr().out
-        assert rc == 0
+        assert rc == 1
         assert "Volume 'VOL_NOT_IN_CATALOG' not found" in out
         assert "Imported 0 receipt(s)." in out
         after = _dump(db)
@@ -390,7 +406,7 @@ class TestMixedBatch:
         rc = _run(cfg, *files)
 
         out = capsys.readouterr().out
-        assert rc == 0
+        assert rc == 1
         assert "Imported 1 receipt(s)." in out
         _assert_imported(db, "VOL_GOOD", "Offsite")
         # The bad receipt left no trace: no event on the volume it named, and
@@ -417,25 +433,25 @@ class TestMixedBatch:
 
         rc = _run(cfg, *files)
 
-        assert rc == 0
+        assert rc == 1
         assert "Imported 2 receipt(s)." in capsys.readouterr().out
         _assert_imported(db, "VOL_GOOD", "Offsite")
         _assert_imported(db, "VOL_OTHER", "Vault")
 
-    def test_all_bad_batch_exits_zero_and_changes_nothing(self, env, capsys):
+    def test_all_bad_batch_exits_nonzero_and_changes_nothing(self, env, capsys):
         tmp_path, cfg, db = env
         before = _dump(db)
 
         rc = _run(cfg, *[make(tmp_path) for make in _BAD_FILES.values()])
 
         out = capsys.readouterr().out
-        assert rc == 0  # documented: only an iso_sha256 mismatch is a non-zero exit
+        assert rc == 1  # #669: any refused receipt is a non-zero exit
         assert "Imported 0 receipt(s)." in out
         assert _dump(db) == before
 
     def test_hash_mismatch_exits_nonzero_but_does_not_stop_the_batch(self, env, capsys):
-        """The one rc != 0 case: a rejected receipt flips the exit code, yet the
-        good receipt after it is still committed and the rejected one wrote nothing."""
+        """A rejected receipt flips the exit code, yet the good receipt after
+        it is still committed and the rejected one wrote nothing."""
         tmp_path, cfg, db = env
         first = _receipt(tmp_path, "first.json", _good("VOL_GOOD", "Offsite"))
         assert _run(cfg, first) == 0
@@ -508,11 +524,14 @@ class TestReceiptLastVerified:
         assert self._last_verified(db, "VOL_GOOD", "Bank_Box") is None
 
     def test_reburn_without_verify_clears_the_old_verification(self, env):
-        """The row now describes a new, unread disc."""
+        """The row now describes a new, unread disc.  (#666: the re-burn has
+        a later burn date; the same burn date and hash would be the same
+        receipt imported again.)"""
         tmp_path, cfg, db = env
         assert _run(cfg, _receipt(tmp_path, "a.json", _good("VOL_GOOD", "Bank_Box"))) == 0
         assert self._last_verified(db, "VOL_GOOD", "Bank_Box") is not None
-        again = dict(_good("VOL_GOOD", "Bank_Box"), verify_passed=None)
+        again = dict(_good("VOL_GOOD", "Bank_Box"), verify_passed=None,
+                     burn_date="2026-05-01T12:00:00+00:00")
         assert _run(cfg, _receipt(tmp_path, "b.json", again)) == 0
         assert self._last_verified(db, "VOL_GOOD", "Bank_Box") is None
 
@@ -567,7 +586,7 @@ def _stage_record(db: Path, label: str, sha: str | None, size: int | None,
 def staged_env(tmp_path):
     """One STAGING volume whose ISO was recorded as ("a"*64, 2048 bytes)."""
     cfg = _write_config(tmp_path)
-    db = _make_catalog(tmp_path, {"VOL_NEW": "STAGING"})
+    db = _make_catalog(tmp_path, {"VOL_NEW": "STAGING"}, staged_for="Bank_Box")
     _stage_record(db, "VOL_NEW", "a" * 64, 2048)
     return tmp_path, cfg, db
 
@@ -619,13 +638,13 @@ class TestStagedIsoCheck:
     def test_mismatch_does_not_stop_the_batch(self, staged_env, capsys):
         tmp_path, cfg, db = staged_env
         bad = dict(_good("VOL_NEW", "Bank_Box"), iso_sha256="c" * 64)
-        good = _good("VOL_NEW", "Home_Shelf")
+        good = _good("VOL_NEW", "Bank_Box")
         rc = _run(cfg, _receipt(tmp_path, "bad.json", bad),
                   _receipt(tmp_path, "good.json", good))
         out = capsys.readouterr().out
         assert rc == 1
         assert "Imported 1 receipt(s)." in out
-        _assert_imported(db, "VOL_NEW", "Home_Shelf")
+        _assert_imported(db, "VOL_NEW", "Bank_Box")
 
     def test_latest_session_wins(self, staged_env, capsys):
         """A volume re-mastered in a later session is checked against the newer ISO."""
@@ -649,11 +668,20 @@ class TestStagedIsoCheck:
         tmp_path, cfg, db = staged_env
         body = _good("VOL_NEW", "Bank_Box")
         del body["iso_sha256"]
-        rc = _run(cfg, _receipt(tmp_path, "nohash.json", body))
+        nohash = _receipt(tmp_path, "nohash.json", body)
+        # #669: without a hash the volume does not become VERIFIED ...
+        before = _dump(db)
+        assert _run(cfg, nohash) == 1
+        out = capsys.readouterr().out
+        assert "carries no iso_sha256" in out and "--allow-unhashed" in out
+        assert _dump(db) == before
+        # ... unless the owner says so.
+        rc = _run(cfg, nohash, flags=("--allow-unhashed",))
         out = capsys.readouterr().out
         assert rc == 0
         assert "carries no iso_sha256" in out and "SKIPPED" in out
         _assert_imported(db, "VOL_NEW", "Bank_Box")
+        assert _status(db, "VOL_NEW") == "VERIFIED"
 
     def test_volume_without_staged_hash_warns_that_the_check_was_skipped(
         self, env, capsys,
@@ -669,8 +697,360 @@ class TestStagedIsoCheck:
     def test_empty_staged_hash_counts_as_none(self, tmp_path, capsys):
         """session_volumes rows start with iso_sha256='' before the ISO exists."""
         cfg = _write_config(tmp_path)
-        db = _make_catalog(tmp_path, {"VOL_NEW": "STAGING"})
+        db = _make_catalog(tmp_path, {"VOL_NEW": "STAGING"}, staged_for="Bank_Box")
         _stage_record(db, "VOL_NEW", "", None)
-        rc = _run(cfg, _receipt(tmp_path, "r.json", _good("VOL_NEW", "Bank_Box")))
-        assert rc == 0
+        r = _receipt(tmp_path, "r.json", _good("VOL_NEW", "Bank_Box"))
+        assert _run(cfg, r) == 1
         assert "no ISO hash was recorded" in capsys.readouterr().out
+        assert _run(cfg, r, flags=("--allow-unhashed",)) == 0
+        assert "no ISO hash was recorded" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# #666: an old receipt imported again changes nothing
+# ---------------------------------------------------------------------------
+
+
+def _copy(db: Path, label: str, location: str):
+    from lcsas.db.volume_copies import get_copy_at_location
+
+    conn = get_connection(db)
+    try:
+        vol = get_volume_by_label(conn, label)
+        assert vol is not None
+        return get_copy_at_location(conn, vol.volume_id, location)
+    finally:
+        conn.close()
+
+
+class TestReimport:
+    def test_same_receipt_twice_changes_nothing_the_second_time(self, env, capsys):
+        tmp_path, cfg, db = env
+        r = _receipt(tmp_path, "r.json", _good("VOL_GOOD", "Offsite"))
+        assert _run(cfg, r) == 0
+        # Something the owner wrote on the disc record since.
+        conn = get_connection(db)
+        try:
+            conn.execute("UPDATE volume_copies SET notes = 'shelf 3'")
+            conn.commit()
+        finally:
+            conn.close()
+        capsys.readouterr()
+        before = _dump(db)
+
+        assert _run(cfg, r) == 0
+
+        out = capsys.readouterr().out
+        assert "already imported" in out
+        assert "Imported 0 receipt(s)." in out
+        assert _dump(db) == before  # last_verified_at and notes untouched
+        assert _copy(db, "VOL_GOOD", "Offsite").notes == "shelf 3"
+
+    def test_receipt_imported_before_burn_date_was_recorded_is_seen(self, env, capsys):
+        """A receipt imported before #666 has no burn_date in its event; the
+        disc record's burn date stands in."""
+        tmp_path, cfg, db = env
+        r = _receipt(tmp_path, "r.json", _good("VOL_GOOD", "Offsite"))
+        assert _run(cfg, r) == 0
+        conn = get_connection(db)
+        try:
+            row = conn.execute(
+                "SELECT event_id, detail FROM volume_events "
+                "WHERE event_type = 'BURN_RECEIPT_IMPORTED'"
+            ).fetchone()
+            detail = json.loads(row["detail"])
+            del detail["burn_date"]
+            conn.execute("UPDATE volume_events SET detail = ? WHERE event_id = ?",
+                         (json.dumps(detail), row["event_id"]))
+            conn.commit()
+        finally:
+            conn.close()
+        capsys.readouterr()
+        before = _dump(db)
+        assert _run(cfg, r) == 0
+        assert "already imported" in capsys.readouterr().out
+        assert _dump(db) == before
+
+    def test_lost_disc_stays_destroyed_when_its_receipt_is_imported_again(
+        self, env, capsys,
+    ):
+        tmp_path, cfg, db = env
+        r = _receipt(tmp_path, "r.json", _good("VOL_GOOD", "Offsite"))
+        assert _run(cfg, r) == 0
+        assert main(["--config", str(cfg), "copy", "destroy", "VOL_GOOD",
+                     "Offsite", "--lost"]) == 0
+        capsys.readouterr()
+        before = _dump(db)
+
+        assert _run(cfg, r) == 0
+
+        out = capsys.readouterr().out
+        assert "already imported" in out and "stays so" in out
+        assert _dump(db) == before
+        assert _copy(db, "VOL_GOOD", "Offsite").status == "DESTROYED"
+
+    def test_other_receipt_not_newer_than_the_loss_is_refused(self, env, capsys):
+        """A receipt that was never imported, for a disc burned before the
+        loss was recorded, cannot bring the lost disc back either."""
+        tmp_path, cfg, db = env
+        assert _run(cfg, _receipt(tmp_path, "r.json", _good("VOL_GOOD", "Offsite"))) == 0
+        assert main(["--config", str(cfg), "copy", "destroy", "VOL_GOOD",
+                     "Offsite", "--lost"]) == 0
+        capsys.readouterr()
+        before = _dump(db)
+        older = dict(_good("VOL_GOOD", "Offsite"),
+                     burn_date="2026-04-15T12:00:00+00:00")
+
+        assert _run(cfg, _receipt(tmp_path, "older.json", older)) == 1
+
+        out = capsys.readouterr().out
+        assert "is not later" in out and "It stays DESTROYED" in out
+        assert _dump(db) == before
+
+    def test_reburn_after_the_loss_puts_a_disc_back_in_service(self, env, capsys):
+        from datetime import UTC, datetime
+
+        tmp_path, cfg, db = env
+        assert _run(cfg, _receipt(tmp_path, "r.json", _good("VOL_GOOD", "Offsite"))) == 0
+        assert main(["--config", str(cfg), "copy", "destroy", "VOL_GOOD",
+                     "Offsite", "--lost"]) == 0
+        reburn = dict(_good("VOL_GOOD", "Offsite"),
+                      burn_date=datetime.now(UTC).isoformat())
+
+        assert _run(cfg, _receipt(tmp_path, "reburn.json", reburn)) == 0
+
+        copy = _copy(db, "VOL_GOOD", "Offsite")
+        assert copy.status == "ACTIVE"
+        assert copy.burn_date == reburn["burn_date"]
+
+
+# ---------------------------------------------------------------------------
+# #669: bad receipts are refused, and the exit code says so
+# ---------------------------------------------------------------------------
+
+
+class TestStrictReceipt:
+    @pytest.mark.parametrize("value", ["false", "true", "", 0, 1, [], {}])
+    def test_non_boolean_verify_passed_is_refused(self, staged_env, capsys, value):
+        tmp_path, cfg, db = staged_env
+        before = _dump(db)
+        body = dict(_good("VOL_NEW", "Bank_Box"), verify_passed=value)
+
+        assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 1
+
+        out = capsys.readouterr().out
+        assert "verify_passed must be JSON true, false or null" in out
+        assert _dump(db) == before
+        assert _status(db, "VOL_NEW") == "STAGING"
+
+    def test_missing_verify_passed_is_refused(self, staged_env, capsys):
+        tmp_path, cfg, db = staged_env
+        before = _dump(db)
+        body = _good("VOL_NEW", "Bank_Box")
+        del body["verify_passed"]
+
+        assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 1
+
+        assert "got nothing" in capsys.readouterr().out
+        assert _dump(db) == before
+
+    def test_unknown_location_is_refused_and_known_ones_are_listed(
+        self, env, capsys,
+    ):
+        tmp_path, cfg, db = env
+        before = _dump(db)
+
+        rc = _run(cfg, _receipt(tmp_path, "r.json", _good("VOL_GOOD", "Ofsite")))
+
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "unknown location 'Ofsite'" in out
+        assert "Did you mean: Offsite?" in out
+        assert "Known locations: " + ", ".join(sorted(_LOCATIONS)) in out
+        assert "lcsas location add Ofsite" in out
+        assert _dump(db) == before  # no location was created
+
+    def test_refused_receipt_exits_nonzero_but_valid_ones_still_import(
+        self, env, capsys,
+    ):
+        tmp_path, cfg, db = env
+        bad = _receipt(tmp_path, "bad.json",
+                       dict(_good("VOL_OTHER", "Vault"), verify_passed="false"))
+        good = _receipt(tmp_path, "good.json", _good("VOL_GOOD", "Offsite"))
+
+        rc = _run(cfg, bad, good)
+
+        out = capsys.readouterr().out
+        assert rc == 1
+        assert "Imported 1 receipt(s)." in out and "Rejected 1 receipt(s)" in out
+        _assert_imported(db, "VOL_GOOD", "Offsite")
+
+    def test_location_other_than_staged_for_is_refused_unless_allowed(
+        self, staged_env, capsys,
+    ):
+        tmp_path, cfg, db = staged_env
+        before = _dump(db)
+        r = _receipt(tmp_path, "r.json", _good("VOL_NEW", "Vault"))
+
+        assert _run(cfg, r) == 1
+
+        out = capsys.readouterr().out
+        assert "was staged for location Bank_Box" in out
+        assert "--allow-other-location" in out
+        assert _dump(db) == before
+
+        assert _run(cfg, r, flags=("--allow-other-location",)) == 0
+        _assert_imported(db, "VOL_NEW", "Vault")
+        assert _status(db, "VOL_NEW") == "VERIFIED"
+
+    def test_volume_without_a_staged_for_location_is_not_checked(self, tmp_path, capsys):
+        """Older volumes may have no volumes.location: nothing to compare."""
+        cfg = _write_config(tmp_path)
+        db = _make_catalog(tmp_path, {"VOL_OLD": "STAGING"}, staged_for="")
+        _stage_record(db, "VOL_OLD", "a" * 64, 2048)
+        assert _run(cfg, _receipt(tmp_path, "r.json", _good("VOL_OLD", "Vault"))) == 0
+        assert _status(db, "VOL_OLD") == "VERIFIED"
+
+
+# ---------------------------------------------------------------------------
+# #670: STAGING, BURNING and BURNED are treated alike
+# ---------------------------------------------------------------------------
+
+
+class TestFirstDiscStates:
+    @pytest.mark.parametrize("start", ["STAGING", "BURNING", "BURNED"])
+    def test_passing_receipt_verifies_and_closes_the_volume(self, tmp_path, start):
+        from lcsas.db.packs import register_pack
+        from lcsas.db.queries import get_unarchived_packs
+        from lcsas.db.repos import register_repo
+        from lcsas.db.volume_packs import link_pack_to_volume
+
+        cfg = _write_config(tmp_path)
+        db = _make_catalog(tmp_path, {"VOL_NEW": start}, staged_for="Bank_Box")
+        _stage_record(db, "VOL_NEW", "a" * 64, 2048)
+        conn = get_connection(db)
+        try:
+            register_repo(conn, "repo1", "Repo 1", "/mirror/repo1")
+            pack = register_pack(conn, "f" * 64, 100, "repo1")
+            vol = get_volume_by_label(conn, "VOL_NEW")
+            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+        finally:
+            conn.close()
+
+        assert _run(cfg, _receipt(tmp_path, "r.json", _good("VOL_NEW", "Bank_Box"))) == 0
+
+        conn = get_connection(db)
+        try:
+            vol = get_volume_by_label(conn, "VOL_NEW")
+            assert vol.status == "VERIFIED"
+            assert vol.closed_at is not None
+            assert len(get_events_for_volume(conn, vol.volume_id, "VERIFY_PASS")) == 1
+            # `lcsas stage` does not select its packs again.
+            assert pack.pack_id not in {p.pack_id for p in get_unarchived_packs(conn)}
+        finally:
+            conn.close()
+
+    @pytest.mark.parametrize("start", ["BURNING", "BURNED"])
+    def test_failed_receipt_without_a_disc_returns_the_volume_to_staging(
+        self, tmp_path, start,
+    ):
+        cfg = _write_config(tmp_path)
+        db = _make_catalog(tmp_path, {"VOL_NEW": start}, staged_for="Bank_Box")
+        _stage_record(db, "VOL_NEW", "a" * 64, 2048)
+        body = dict(_good("VOL_NEW", "Bank_Box"), verify_passed=False)
+
+        assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 0
+
+        assert _status(db, "VOL_NEW") == "STAGING"
+        conn = get_connection(db)
+        try:
+            vol = get_volume_by_label(conn, "VOL_NEW")
+            assert len(get_events_for_volume(conn, vol.volume_id, "VERIFY_FAIL")) == 1
+        finally:
+            conn.close()
+
+    def test_unverified_receipt_for_a_burned_volume_keeps_it_burned(self, tmp_path):
+        cfg = _write_config(tmp_path)
+        db = _make_catalog(tmp_path, {"VOL_NEW": "BURNED"}, staged_for="Bank_Box")
+        _stage_record(db, "VOL_NEW", "a" * 64, 2048)
+        body = dict(_good("VOL_NEW", "Bank_Box"), verify_passed=None)
+        assert _run(cfg, _receipt(tmp_path, "r.json", body)) == 0
+        assert _status(db, "VOL_NEW") == "BURNED"
+
+
+# ---------------------------------------------------------------------------
+# #671: a failed burn shows under "needs re-burn"; one next step everywhere
+# ---------------------------------------------------------------------------
+
+
+class TestFailedBurnNextStep:
+    def test_fail_status_reburn_pass_status(self, staged_env, capsys):
+        from lcsas.db.packs import register_pack
+        from lcsas.db.queries import get_unarchived_or_missing_at_location
+        from lcsas.db.repos import register_repo
+        from lcsas.db.volume_packs import link_pack_to_volume
+
+        tmp_path, cfg, db = staged_env
+        # The staged ISO is still in the staging area.
+        iso = tmp_path / "VOL_NEW.iso"
+        iso.write_bytes(b"\0" * 2048)
+        conn = get_connection(db)
+        try:
+            conn.execute("UPDATE session_volumes SET iso_path = ?", (str(iso),))
+            register_repo(conn, "repo1", "Repo 1", "/mirror/repo1")
+            pack = register_pack(conn, "f" * 64, 100, "repo1")
+            vol = get_volume_by_label(conn, "VOL_NEW")
+            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+            conn.commit()
+        finally:
+            conn.close()
+        next_step = "lcsas stage --for-location Bank_Box"
+
+        # 1. The laptop burn failed its verify.
+        failed = dict(_good("VOL_NEW", "Bank_Box"), verify_passed=False)
+        assert _run(cfg, _receipt(tmp_path, "fail.json", failed)) == 0
+        out = capsys.readouterr().out
+        assert "FAILED verification" in out and next_step in out
+
+        # 2. status lists it under needs re-burn, with the same next step,
+        #    and not as waiting to be burned.
+        assert main(["--config", str(cfg), "status"]) == 0
+        out = capsys.readouterr().out
+        assert "VOL_NEW needs re-burn at Bank_Box" in out
+        assert next_step in out
+        assert "waiting to be burned" not in out
+
+        # ... and `stage --for-location` would stage its packs again.
+        conn = get_connection(db)
+        try:
+            missing = get_unarchived_or_missing_at_location(conn, "Bank_Box")
+            assert pack.pack_id in {p.pack_id for p in missing}
+        finally:
+            conn.close()
+
+        # 3. The re-burn passes.
+        passed = dict(_good("VOL_NEW", "Bank_Box"),
+                      burn_date="2026-04-15T12:00:00+00:00")
+        assert _run(cfg, _receipt(tmp_path, "pass.json", passed)) == 0
+        assert _status(db, "VOL_NEW") == "VERIFIED"
+        capsys.readouterr()
+
+        # 4. status no longer lists it.
+        assert main(["--config", str(cfg), "status"]) == 0
+        assert "needs re-burn" not in capsys.readouterr().out
+
+    def test_pass_at_another_location_does_not_clear_a_failure(self, env, capsys):
+        """The newest verify result counts location by location."""
+        tmp_path, cfg, db = env
+        failed = dict(_good("VOL_GOOD", "Vault"), verify_passed=False)
+        assert _run(cfg, _receipt(tmp_path, "fail.json", failed)) == 0
+        passed = dict(_good("VOL_GOOD", "Offsite"),
+                      burn_date="2026-04-15T12:00:00+00:00")
+        assert _run(cfg, _receipt(tmp_path, "pass.json", passed)) == 0
+        capsys.readouterr()
+
+        assert main(["--config", str(cfg), "status"]) == 0
+
+        out = capsys.readouterr().out
+        assert "VOL_GOOD needs re-burn at Vault" in out
+        assert "needs re-burn at Offsite" not in out
