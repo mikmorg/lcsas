@@ -944,14 +944,17 @@ class TestCmdVerify:
         create_volume(conn, "VOL_MV", "u1", "BD25", 25e9, "Home", "BURNED")
         conn.close()
 
+        # #673: the volume has no disc recorded, so --location is needed.
         result = main(["--db", str(db), "verify", "VOL_MV",
-                        "--mark-verified", "--detail", "Verified on remote machine"])
+                        "--mark-verified", "--detail", "Verified on remote machine",
+                        "--location", "Home"])
         assert result == 0
 
         conn = get_connection(db)
         from lcsas.db.volumes import get_volume_by_label
         vol = get_volume_by_label(conn, "VOL_MV")
         assert vol.status == "VERIFIED"
+        assert vol.closed_at is not None
 
         from lcsas.db.volume_events import get_events_for_volume
         events = get_events_for_volume(conn, vol.volume_id, "VERIFY_PASS")

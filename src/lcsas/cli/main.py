@@ -588,7 +588,9 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Optical drive device (overrides config; "
                                "default /dev/sr0 when neither is set).")
     verify_p.add_argument("--mark-verified", action="store_true", default=False,
-                          help="Manually mark the volume as verified (remote workflow).")
+                          help="Manually mark the volume as verified (remote "
+                               "workflow). Needs --location when the volume "
+                               "has no disc recorded.")
     verify_p.add_argument("--mark-failed", action="store_true", default=False,
                           help="Record a verification failure without checking media.")
     verify_p.add_argument("--detail", default="",
@@ -601,7 +603,10 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Filter --all to discs/volumes at this location; "
                                "with single-volume --disc, stamp the disc at "
                                "this location (defaults to the volume's only "
-                               "ACTIVE disc when unambiguous).")
+                               "ACTIVE disc when unambiguous); with "
+                               "--mark-verified on a volume with no disc "
+                               "recorded (required there), record its disc "
+                               "at this location.")
 
     # --- session ---
     session_p = subparsers.add_parser("session", help="Manage burn sessions.")
@@ -3738,6 +3743,84 @@ def _check_disc_for_volume(
     return "FAIL"
 
 
+def _mark_verified(
+    conn: sqlite3.Connection,
+    label: str,
+    location: str | None,
+    detail: str,
+) -> int:
+    """``lcsas verify <label> --mark-verified``: the owner states that a
+    disc of the volume was checked elsewhere.
+
+    A volume with no ACTIVE disc on record also needs ``--location``:
+    VERIFIED with no disc anywhere would leave its packs looking archived
+    on nothing (#673).  The disc is then recorded there, with the staged
+    ISO's hash, and the volume is closed, as an imported receipt does.
+    ``last_verified_at`` stays NULL: nothing here read the disc.
+    """
+    from lcsas.db.locations import ensure_location
+    from lcsas.db.queries import get_lost_volume_ids, volume_display_status
+    from lcsas.db.sessions import get_staged_iso
+    from lcsas.db.volume_copies import add_volume_copy, get_copies_for_volume
+    from lcsas.db.volume_events import add_event
+    from lcsas.db.volumes import get_volume_by_label, mark_closed, update_status
+
+    vol = get_volume_by_label(conn, label)
+    if vol is None:
+        logger.error(f"Volume '{label}' not found.")
+        return 1
+    shown = volume_display_status(vol, get_lost_volume_ids(conn))
+    if shown not in ("BURNED", "STAGING"):
+        logger.error(
+            f"Cannot mark volume {vol.label} VERIFIED: status is {shown} "
+            f"(only BURNED or STAGING allowed)"
+        )
+        return 1
+
+    active = get_copies_for_volume(conn, vol.volume_id)
+    if not active and not location:
+        logger.error(
+            f"Volume {vol.label} has no disc recorded.  Give --location "
+            f"to say where its disc is kept, and that disc is recorded.  "
+            f"To check the disc itself, use 'lcsas burn-iso --verify-only' "
+            f"and import its receipt (docs/workflows/burn-iso-portable.md, "
+            f"\"Missing receipt\")."
+        )
+        return 1
+    if active and location and location not in {c.location for c in active}:
+        held = ", ".join(sorted(c.location for c in active))
+        logger.error(
+            f"Volume {vol.label} has discs at {held}, not at {location}.  "
+            f"--mark-verified records a disc only for a volume with none; "
+            f"record another disc by importing its burn receipt."
+        )
+        return 1
+
+    if vol.status == "STAGING":
+        update_status(conn, vol.volume_id, "BURNING", commit=False)
+    update_status(conn, vol.volume_id, "VERIFIED", commit=False)
+    logger.info(f"Volume {vol.label}: status {vol.status} → VERIFIED")
+    if not active and location:
+        ensure_location(conn, location, commit=False)
+        staged = get_staged_iso(conn, vol.volume_id)
+        add_volume_copy(
+            conn, vol.volume_id, location,
+            notes="Recorded by verify --mark-verified",
+            iso_sha256=staged[0] if staged else None,
+            iso_size_bytes=staged[1] if staged else None,
+            commit=False,
+        )
+        logger.info(f"Volume {vol.label}: disc recorded at {location}")
+    if vol.closed_at is None:
+        mark_closed(conn, vol.volume_id, commit=False)
+    add_event(
+        conn, vol.volume_id, "VERIFY_PASS",
+        location=location,
+        detail=detail or "Manual verification (remote)",
+    )
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Verify a volume's ISO image or burned disc.
 
@@ -3775,27 +3858,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
         # --- Manual marking (remote verification workflow) ---
         if args.mark_verified:
-            if vol.status == "BURNED":
-                update_status(conn, vol.volume_id, "VERIFIED")
-                logger.info(f"Volume {vol.label}: status BURNED → VERIFIED")
-            elif vol.status == "STAGING":
-                update_status(conn, vol.volume_id, "VERIFIED", force=True)
-                logger.info(
-                    f"Volume {vol.label}: status STAGING → VERIFIED (split-machine workflow)"
-                )
-            else:
-                from lcsas.db.queries import get_lost_volume_ids, volume_display_status
-                shown = volume_display_status(vol, get_lost_volume_ids(conn))
-                logger.error(
-                    f"Cannot mark volume {vol.label} VERIFIED: status is {shown} "
-                    f"(only BURNED or STAGING allowed)"
-                )
-                return 1
-            add_event(
-                conn, vol.volume_id, "VERIFY_PASS",
-                detail=args.detail or "Manual verification (remote)",
-            )
-            return 0
+            return _mark_verified(conn, vol.label, args.location, args.detail)
 
         if args.mark_failed:
             add_event(
