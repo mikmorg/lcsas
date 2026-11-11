@@ -564,6 +564,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Stage active packs (without deprecating source volumes).")
     cons_p.add_argument("--deprecate", action="store_true", default=False,
                         help="Mark source volumes as DEPRECATED (run after --execute succeeds).")
+    cons_p.add_argument("--location", default=None,
+                        help="With --execute: the location the new volumes "
+                             "are staged for (default: the configured "
+                             "default location). A location given here "
+                             "must already exist.")
 
     # --- verify ---
     verify_p = subparsers.add_parser("verify", help="Verify a volume's ISO or disc.")
@@ -3454,6 +3459,36 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             logger.error("--config is required for --execute.")
             return 1
 
+        # #677: only VERIFIED volumes can become CONSOLIDATING.  Refuse
+        # anything else now, before the prompt, not with an invalid-
+        # transition error after the owner typed "yes".
+        from lcsas.db.volumes import get_volume_by_id
+        not_ready = [get_volume_by_id(conn, vid) for vid in args.volume_ids]
+        not_ready = [v for v in not_ready if v.status != "VERIFIED"]
+        if not_ready:
+            for v in not_ready:
+                hint = {
+                    "BURNED": f"verify its disc first ('lcsas verify "
+                              f"{v.label} --disc')",
+                    "CONSOLIDATING": "it is already being consolidated: burn "
+                                     "that session and run 'consolidate "
+                                     "--deprecate', or 'lcsas session abort' "
+                                     "it",
+                }.get(v.status, "only VERIFIED volumes can be consolidated")
+                logger.error(f"Volume {v.label} is {v.status}: {hint}.")
+            logger.error("Nothing was staged.")
+            return 1
+
+        location = args.location or config.default_location
+        if args.location:
+            # A typo must not stage discs for a place that does not exist.
+            from lcsas.db.locations import UnknownLocationError, resolve_location
+            try:
+                resolve_location(conn, location)
+            except UnknownLocationError as exc:
+                logger.error(_unknown_location_msg(exc))
+                return 1
+
         # Confirmation prompt before executing irreversible staging
         logger.warning("")
         logger.warning(
@@ -3485,31 +3520,41 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             SubprocessDVDisasterRunner(tmpdir=config.staging_path),
         )
 
-        # Mark source volumes as CONSOLIDATING before staging (atomic marker)
-        merger.mark_sources_consolidating(args.volume_ids)
-        logger.info("Marked %d source volume(s) as CONSOLIDATING", len(args.volume_ids))
-
-        # Stage only the active packs from the consolidation plan
+        # Stage exactly the active packs from the consolidation plan
+        # (#677: stage() used to intersect them with the unarchived pool,
+        # which never holds packs of VERIFIED volumes).  The sources stay
+        # VERIFIED until staging succeeded, so a failed stage changes
+        # nothing.
         pack_shas = [p.sha256 for p in plan.active_packs]
         try:
             session = orch.stage(
                 media_type=media_type,
+                for_location=location,
                 pack_sha256s=pack_shas,
             )
-        except Exception:
-            # If staging fails, abort consolidation to revert source volumes to VERIFIED
-            merger.abort_consolidation(args.volume_ids)
-            logger.error("Staging failed. Reverted source volumes to VERIFIED.", exc_info=True)
-            raise
+        except (ValueError, OSError) as e:
+            logger.error("Staging failed: %s", e)
+            logger.error("The source volumes were not changed.")
+            return 1
 
-        logger.info(f"Staged {len(session.manifests)} volume(s).")
+        # Mark the sources CONSOLIDATING, tied to the new burn session:
+        # 'lcsas session abort' of it returns them to VERIFIED.
+        merger.mark_sources_consolidating(
+            args.volume_ids, session_id=session.session_id,
+        )
+        logger.info("Marked %d source volume(s) as CONSOLIDATING", len(args.volume_ids))
+
+        logger.info(f"Staged {len(session.manifests)} volume(s) for {location}.")
         logger.info(
             "Consolidation staged.  Next steps:\n"
             "  1. burn session %s\n"
             "  2. verify the new volumes\n"
-            "  3. then deprecate sources with: consolidate --deprecate %s",
+            "  3. then deprecate sources with: consolidate --deprecate %s\n"
+            "To cancel instead: lcsas session abort %s (the sources return "
+            "to VERIFIED)",
             session.session_id,
             " ".join(str(v) for v in args.volume_ids),
+            session.session_id,
         )
 
     return 0
@@ -7081,7 +7126,20 @@ def cmd_session_abort(args: argparse.Namespace) -> int:
             if args.volume:
                 orch.abort_volume(args.volume)
             else:
-                orch.abort_session(args.ref)
+                from lcsas.consolidate.merger import (
+                    release_consolidation_sources,
+                )
+                from lcsas.db.sessions import resolve_session_id
+                session_id = resolve_session_id(conn, args.ref)
+                orch.abort_session(session_id)
+                # #677: a consolidation session's sources go back to
+                # VERIFIED; nothing is left to finish them.
+                released = release_consolidation_sources(conn, session_id)
+                if released:
+                    logger.info(
+                        "Returned %d consolidation source volume(s) to "
+                        "VERIFIED: %s", len(released), ", ".join(released),
+                    )
         except ValueError as e:
             logger.error("%s", e)
             return 1

@@ -11,6 +11,37 @@ from lcsas.db.queries import get_packs_only_on_volumes, get_pruned_packs_on_volu
 from lcsas.db.volumes import get_volume_by_id, update_status
 
 
+def consolidation_note(session_id: str) -> str:
+    """Detail of the NOTE event that ties a source volume to the burn
+    session its packs were staged into (#677).  ``session abort`` of that
+    session finds the sources by it (no schema change: volume_events)."""
+    return f"consolidation: packs staged into burn session {session_id}"
+
+
+def release_consolidation_sources(
+    conn: sqlite3.Connection,
+    session_id: str,
+) -> list[str]:
+    """Return the CONSOLIDATING sources of *session_id* to VERIFIED.
+
+    Called when that burn session is aborted, so its sources do not stay
+    CONSOLIDATING with nothing left to finish.  Returns their labels.
+    """
+    rows = conn.execute(
+        """SELECT DISTINCT v.volume_id, v.label FROM volumes v
+           JOIN volume_events e ON e.volume_id = v.volume_id
+           WHERE v.status = 'CONSOLIDATING'
+             AND e.event_type = 'NOTE'
+             AND e.detail = ?
+           ORDER BY v.label""",
+        (consolidation_note(session_id),),
+    ).fetchall()
+    for row in rows:
+        update_status(conn, row[0], "VERIFIED", commit=False)
+    conn.commit()
+    return [row[1] for row in rows]
+
+
 @dataclass
 class ConsolidationPlan:
     """Plan for merging source volumes into a target volume."""
@@ -108,6 +139,7 @@ class VolumeMerger:
     def mark_sources_consolidating(
         self,
         source_volume_ids: list[int],
+        session_id: str | None = None,
     ) -> None:
         """Transition source volumes to CONSOLIDATING before the burn starts.
 
@@ -116,9 +148,20 @@ class VolumeMerger:
         and either re-run the burn (transition back to VERIFIED) or
         complete the deprecation manually, rather than finding volumes
         silently stuck as ACTIVE with no indication of intent.
+
+        With *session_id* (the burn session the packs were staged into),
+        each source also gets a :func:`consolidation_note` event, so
+        aborting that session returns the sources to VERIFIED (#677).
         """
+        from lcsas.db.volume_events import add_event
+
         for vid in source_volume_ids:
             update_status(self._conn, vid, "CONSOLIDATING", commit=False)
+            if session_id is not None:
+                add_event(
+                    self._conn, vid, "NOTE",
+                    detail=consolidation_note(session_id), commit=False,
+                )
         self._conn.commit()
 
     def abort_consolidation(

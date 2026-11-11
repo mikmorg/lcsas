@@ -1818,7 +1818,7 @@ class TestCmdConsolidate:
 
         staged: list[list[str]] = []
 
-        def _fake_stage(self, media_type, pack_sha256s):
+        def _fake_stage(self, media_type, pack_sha256s, for_location=None):
             staged.append(list(pack_sha256s))
             return SimpleNamespace(session_id="SESSION-469", manifests=[object()])
 
