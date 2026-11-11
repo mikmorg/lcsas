@@ -68,7 +68,9 @@ The end-to-end flow inside a single session:
      (`src/lcsas/staging/builder.py`).
    - `HolographicInjector.inject_metadata` copies each repository's `index/`,
      `snapshots/`, `keys/`, and `config` into `metadata/<repo_id>/`
-     (`src/lcsas/staging/metadata.py`).
+     (`src/lcsas/staging/metadata.py`).  Only the snapshots whose packs
+     are all on discs go into `snapshots/` (see "Snapshots on a disc"
+     below).
    - `create_volume` + `bulk_link_packs` + `update_used_bytes` register the
      volume in catalog with status `STAGING`.
    - `wal_checkpoint(TRUNCATE)` + `inject_catalog` flush the SQLite catalog
@@ -245,6 +247,30 @@ See also [`docs/architecture.md`](../architecture.md) for the storage-stage
 and disc-catalog model.
 
 ---
+
+### Snapshots on a disc
+
+A disc carries a snapshot only when every pack the snapshot needs is on
+a burned disc or on one of the discs of the session being staged.
+Before it builds the discs, `lcsas stage` reads each repository's
+snapshot trees with the repository's `password_file` (tree data only,
+never file content) and leaves out every other snapshot (#657).
+
+Why: someone restoring "latest" from the discs gets the newest snapshot
+on the discs.  If that snapshot needed a pack that is on no disc, the
+restore would ask, again and again, for a disc that does not exist.
+
+`lcsas stage` then lists, per repository, the snapshots it left out and
+how many of their packs are not on a disc.  This happens when a backup
+ran after the last `lcsas scan`, or when packs are left over for a later
+disc.  A later session carries those snapshots once their packs are
+burned.
+
+A repository with no `password_file` cannot be checked: every snapshot
+file is copied, as before, and `lcsas stage` says so.  The check is fast
+when the Python `zstandard` module is installed (the
+`docker/Dockerfile.host-a` image has it); without it LCSAS uses its own
+slower decoder.
 
 ## `lcsas burn --session <id>` — burn a previously staged session
 
