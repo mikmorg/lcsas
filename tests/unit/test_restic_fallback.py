@@ -3342,6 +3342,34 @@ class TestSwapPromptCatalogStates:
         r._print_swap_prompt("a" * 32)
         assert "lists no disc for it" in capsys.readouterr().err
 
+    def test_miss_says_how_to_pick_an_older_snapshot(
+        self, tmp_path: Path, capsys
+    ):
+        # #657 (tier-1 parity): a pack the catalog never saw may belong
+        # to a snapshot newer than every disc.
+        r = _bare_restorer(tmp_path)
+        r._lookup_volume_labels = lambda pid: ([], r._CATALOG_MISS)
+        r._print_swap_prompt("a" * 32)
+        err = capsys.readouterr().err
+        box = err.split("\n")
+        i = box.index(
+            "| (catalog has no record of this pack ID)                  |"
+        )
+        assert box[i + 1:i + 5] == [
+            "| If the NEWEST data disc has already been read, this pack |",
+            "| was never burned: the snapshot is newer than the discs.  |",
+            "| Type 'q', then list the snapshots (--list-snapshots)     |",
+            "| and restore an older one with --snapshot <id>.           |",
+        ]
+
+    def test_hit_does_not_mention_older_snapshots(
+        self, tmp_path: Path, capsys
+    ):
+        r = _bare_restorer(tmp_path)
+        r._lookup_volume_labels = lambda pid: (["LCSAS_BD25_2026_0001"], "hit")
+        r._print_swap_prompt("a" * 32)
+        assert "--list-snapshots" not in capsys.readouterr().err
+
     @pytest.mark.parametrize(
         "lookup",
         [

@@ -1291,6 +1291,15 @@ class PurePythonRestorer:
                 lines.append(
                     "| (catalog has no record of this pack ID)                  |"
                 )
+                # #657 (tier-1 parity): the snapshot may be newer than
+                # every disc.  Say how to pick an older one, with this
+                # reader's own option names.
+                lines.extend([
+                    "| If the NEWEST data disc has already been read, this pack |",
+                    "| was never burned: the snapshot is newer than the discs.  |",
+                    "| Type 'q', then list the snapshots (--list-snapshots)     |",
+                    "| and restore an older one with --snapshot <id>.           |",
+                ])
 
         lines.extend([
             "|                                                          |",
