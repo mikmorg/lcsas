@@ -111,14 +111,14 @@ class TestCmdInit:
 
 class TestCmdRepoAddEdges:
     def test_duplicate_repo_name_errors(self, tmp_path, capsys):
-        """Adding the same repo twice with same name; second should succeed
-        (generates new UUID)."""
+        """A second repository with the same name is refused (#685): it
+        would make every later ``--repo dup`` ambiguous."""
         db = tmp_path / "test.db"
         main(["init", "--db-path", str(db)])
         r1 = main(["--db", str(db), "repo", "add", "dup", "/p1"])
         r2 = main(["--db", str(db), "repo", "add", "dup", "/p2"])
         assert r1 == 0
-        assert r2 == 0
+        assert r2 == 1
 
 
 class TestCmdRepoListEdges:

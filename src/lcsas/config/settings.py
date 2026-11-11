@@ -180,6 +180,98 @@ def _validate_toml_keys(raw: dict[str, Any]) -> None:
         _logger.warning("%s", message)
 
 
+# Expected TOML type of each known key (#682), by section.  "str" keys take
+# a quoted string, "int" a bare whole number, "number" a bare whole or
+# decimal number, "bool" a bare true/false.
+_PATHS_TYPES = {"mirror_base": "str", "staging": "str", "database": "str"}
+_DEFAULTS_TYPES = {
+    "media_type": "str", "ecc_redundancy_pct": "int", "location": "str",
+    "optical_device": "str", "label_prefix": "str",
+    "metadata_reserve_mb": "number", "key_threshold": "int",
+    "key_shares": "int", "key_split": "bool",
+    "allow_unverified_repo_format": "bool",
+}
+_SURVIVE_TYPES = {
+    "archive_owner": "str", "archive_description": "str",
+    "key_storage_hints": "str", "technical_contact": "str",
+}
+_REPO_TYPES = {
+    "mirror_path": "str", "password_file": "str", "encryption_key_id": "str",
+    "key_split": "bool", "key_threshold": "int", "key_shares": "int",
+}
+_TYPE_WORDS = {
+    "str": "a quoted string",
+    "int": "a whole number without quotes",
+    "number": "a number without quotes",
+    "bool": "true or false without quotes",
+}
+
+# Largest share count `lcsas key split` makes (SLIP-0039 allows 16 shares).
+MAX_KEY_SHARES = 16
+
+
+def _type_ok(kind: str, value: object) -> bool:
+    if kind == "str":
+        return isinstance(value, str)
+    if kind == "bool":
+        return isinstance(value, bool)
+    # bool is an int subclass: `key_threshold = true` is not a number.
+    if isinstance(value, bool):
+        return False
+    if kind == "int":
+        return isinstance(value, int)
+    return isinstance(value, (int, float))
+
+
+def _type_errors(raw: dict[str, Any]) -> list[str]:
+    """One message per known key whose value has the wrong TOML type (#682).
+
+    Each message names the key and the type it needs, so the owner can fix
+    the line instead of meeting a TypeError later (``key_split = "false"``
+    used to read as true, ``key_threshold = "3"`` crashed `key split`).
+    """
+    errors: list[str] = []
+
+    def check(where: str, table: object, types: dict[str, str]) -> None:
+        if not isinstance(table, dict):
+            return
+        for key, kind in types.items():
+            if key in table and not _type_ok(kind, table[key]):
+                errors.append(
+                    f"{where} {key} must be {_TYPE_WORDS[kind]}, "
+                    f"not {table[key]!r}"
+                )
+
+    for section in ("paths", "defaults", "survivability", "repos"):
+        if section in raw and not isinstance(raw[section], dict):
+            errors.append(f"[{section}] must be a table")
+    check("[paths]", raw.get("paths", {}), _PATHS_TYPES)
+    check("[defaults]", raw.get("defaults", {}), _DEFAULTS_TYPES)
+    check("[survivability]", raw.get("survivability", {}), _SURVIVE_TYPES)
+    repos = raw.get("repos", {})
+    if isinstance(repos, dict):
+        for name, repo_cfg in repos.items():
+            check(f"[repos.{name}]", repo_cfg, _REPO_TYPES)
+    return errors
+
+
+def key_split_pair_error(threshold: int, shares: int) -> str | None:
+    """Why *threshold*-of-*shares* is not a usable split, or None (#682).
+
+    A split needs 2 <= K <= N <= 16; K = N = 1 means the password is not
+    split.  ``lcsas key split`` checks its own -k/-n with the same rule.
+    """
+    if (threshold, shares) == (1, 1):
+        return None
+    if 2 <= threshold <= shares <= MAX_KEY_SHARES:
+        return None
+    return (
+        f"{threshold}-of-{shares} is not a usable split: it needs "
+        f"2 <= key_threshold <= key_shares <= {MAX_KEY_SHARES}, or "
+        f"key_threshold = key_shares = 1 for no split"
+    )
+
+
 def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
     """Load LCSAS configuration from a TOML file.
 
@@ -228,6 +320,11 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
 
     # Validate known sections and keys
     _validate_toml_keys(raw)
+    # Wrong value types are errors, named by key (#682).  _load_config_opt
+    # turns the ValueError into a ConfigError: no traceback.
+    type_errors = _type_errors(raw)
+    if type_errors:
+        raise ValueError("; ".join(type_errors))
 
     paths = raw.get("paths", {})
     defaults = raw.get("defaults", {})
@@ -305,7 +402,7 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
             config_path,
         )
 
-    return LCSASConfig(
+    config = LCSASConfig(
         mirror_base_path=resolve(paths.get("mirror_base", "/mnt/mirror")),
         staging_path=resolve(paths.get("staging", "/mnt/staging")),
         db_path=resolve(paths.get("database", _xdg_db_path())),
@@ -314,7 +411,9 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         default_location=defaults.get("location", "Home_Shelf"),
         optical_device=defaults.get("optical_device", "/dev/sr0"),
         label_prefix=defaults.get("label_prefix", "LCSAS"),
-        metadata_reserve_bytes=defaults.get("metadata_reserve_mb", 100) * 1_048_576,
+        metadata_reserve_bytes=int(
+            defaults.get("metadata_reserve_mb", 100) * 1_048_576
+        ),
         key_threshold=defaults.get("key_threshold", 2),
         key_shares=defaults.get("key_shares", 5),
         key_split=bool(defaults.get("key_split", False)),
@@ -327,6 +426,45 @@ def load_config(config_path: Path) -> LCSASConfig:  # noqa: C901
         key_storage_hints=survive.get("key_storage_hints", ""),
         technical_contact=survive.get("technical_contact", ""),
     )
+    problems = _split_and_mirror_errors(config)
+    if problems:
+        raise ValueError("; ".join(problems))
+    return config
+
+
+def _split_and_mirror_errors(config: LCSASConfig) -> list[str]:
+    """Impossible K/N pairs and shared mirror paths (#682).
+
+    Checked in the loader, lexically (no I/O), so every command — not just
+    `config check` — refuses a config that cannot work.
+    """
+    errors: list[str] = []
+    problem = key_split_pair_error(config.key_threshold, config.key_shares)
+    if problem is not None:
+        errors.append(f"[defaults] key_threshold/key_shares: {problem}")
+    for name, repo in config.repositories.items():
+        if repo.key_threshold is None and repo.key_shares is None:
+            continue  # uses [defaults], checked above
+        _, k, n = config.repo_split(name)
+        problem = key_split_pair_error(k, n)
+        if problem is not None:
+            errors.append(
+                f"[repos.{name}] key_threshold/key_shares: {problem}"
+            )
+    # Two repositories on one mirror would make the catalog unable to tell
+    # them apart (repositories are matched by mirror path first, #687).
+    seen: dict[str, str] = {}
+    for name, repo in config.repositories.items():
+        key = os.path.normpath(str(repo.mirror_path))
+        if key in seen:
+            errors.append(
+                f"[repos.{name}] mirror_path is the same as "
+                f"[repos.{seen[key]}] mirror_path ({key}); each repository "
+                f"needs its own mirror"
+            )
+        else:
+            seen[key] = name
+    return errors
 
 
 def default_config(

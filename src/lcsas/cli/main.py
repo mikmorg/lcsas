@@ -863,6 +863,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the reconstructed password here (default: stdout).",
     )
 
+    key_unsplit = key_sub.add_parser(
+        "unsplit",
+        help="Clear the catalog's record of a repository's password split "
+             "(after the split was abandoned).",
+        description=(
+            "Remove the recorded K-of-N split for one repository from the "
+            "catalog, so burned discs stop telling the heir to gather share "
+            "cards. It does not touch any share card or the password. Use it "
+            "when the split was abandoned and key_split is false for the "
+            "repository."
+        ),
+    )
+    key_unsplit.add_argument(
+        "--repo", required=True,
+        help="Repository whose recorded split to clear.",
+    )
+    key_unsplit.add_argument(
+        "--yes", action="store_true",
+        help="Do not ask for confirmation.",
+    )
+
     key_card = key_sub.add_parser(
         "card",
         help="Print a paper password card for the DEFAULT (unsplit) "
@@ -1086,30 +1107,51 @@ def _open_existing_catalog(db_path: Path | str) -> sqlite3.Connection:
 def _resolve_repo_names_to_ids(
     conn: sqlite3.Connection,
     names: list[str] | None,
+    config: LCSASConfig | None = None,
 ) -> list[str] | None:
     """Map owner-facing repository *names* to catalog repo_ids (UUIDs).
 
-    Returns ``None`` when *names* is ``None`` (no filter).  Logs a
-    warning for names that don't map to any registered repository.
+    Each name goes through :func:`lcsas.db.repos.resolve_repo` (#687), with
+    its configured mirror path when *config* lists it.  Returns ``None``
+    when *names* is ``None`` (no filter).  Logs a warning for names that
+    don't map to any registered repository.  Raises ValueError when a name
+    matches more than one repository (#685).
     """
     if names is None:
         return None
-    from lcsas.db.repos import list_repos
+    from lcsas.db.repos import resolve_repo
 
-    name_to_id = {r.name: r.repo_id for r in list_repos(conn)}
     ids: list[str] = []
     for n in names:
-        rid = name_to_id.get(n)
-        if rid is None:
+        repo = resolve_repo(conn, n, _config_mirror(config, n))
+        if repo is None:
             logger.warning(f"repository '{n}' not registered in the catalog, skipping.")
         else:
-            ids.append(rid)
+            ids.append(repo.repo_id)
     if not ids:
         raise ValueError(
             f"None of the specified repositories exist in the catalog: "
             f"{', '.join(names)}"
         )
     return ids
+
+
+def _config_if_loadable(args: argparse.Namespace) -> LCSASConfig | None:
+    """``--config`` when it loads, else None: for commands that only use it
+    as a hint (the mirror path of ``[repos.<name>]``) and work with ``--db``
+    alone, so a broken config must not stop them."""
+    try:
+        return _load_config_opt(args)
+    except Exception:  # noqa: BLE001 - advisory only
+        return None
+
+
+def _config_mirror(config: LCSASConfig | None, name: str) -> Path | None:
+    """The mirror path ``[repos.<name>]`` configures, or None (#687)."""
+    if config is None:
+        return None
+    repo_cfg = config.repositories.get(name)
+    return repo_cfg.mirror_path if repo_cfg is not None else None
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -1154,6 +1196,26 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
 
         repo_id = generate_uuid()
         mirror = args.mirror_path.resolve()
+
+        # #685: names and mirror paths must be unique.  The schema has no
+        # UNIQUE index on either (v10 is burned on discs), so check here:
+        # a second 'photos' made every later `--repo photos` ambiguous.
+        from lcsas.db.repos import list_repos, same_mirror_path
+        for existing in list_repos(conn):
+            if existing.name == args.name:
+                clash = f"name '{args.name}'"
+            elif same_mirror_path(existing.mirror_path, mirror):
+                clash = f"mirror path {mirror}"
+            else:
+                continue
+            logger.error(
+                f"A repository with the {clash} is already registered: "
+                f"'{existing.name}' (id: {existing.repo_id}, mirror: "
+                f"{existing.mirror_path}). Nothing was registered. Use "
+                f"another name, or `lcsas repo list` to see the existing "
+                f"repositories."
+            )
+            return 1
 
         # Auto-detect the key ID from the repository's keys/ dir
         key_ids = read_repo_key_ids(mirror)
@@ -1218,7 +1280,10 @@ def _cmd_repo_set_status(
     with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
         try:
-            repo = _find_repo(conn, args.repo_id)
+            repo = _find_repo(
+                conn, args.repo_id,
+                _config_mirror(_config_if_loadable(args), args.repo_id),
+            )
         except ValueError as exc:
             logger.error(str(exc))
             return 1, None
@@ -1294,29 +1359,18 @@ def cmd_repo_activate(args: argparse.Namespace) -> int:
     return rc
 
 
-def _find_repo(conn: Any, ref: str) -> Any:
-    """The repository *ref* names: its catalog repo_id, else its name (#581).
+def _find_repo(conn: Any, ref: str, mirror_path: Path | None = None) -> Any:
+    """The repository *ref* names: its name or its catalog ID (#581).
 
-    The owner thinks in names; ``repo add`` keys the catalog on a UUID.  An
-    exact name match wins over a case-insensitive one.  Returns None when
-    nothing matches; raises ValueError when a name is ambiguous.
+    A thin wrapper over :func:`lcsas.db.repos.resolve_repo`, the one
+    resolver (#687): the configured mirror path of ``[repos.<ref>]`` first
+    when given, then the name, the catalog ID, and the name ignoring case.
+    Returns None when nothing matches; raises ValueError when a name is
+    ambiguous.
     """
-    from lcsas.db.repos import get_repo, get_repo_by_name, list_repos
+    from lcsas.db.repos import resolve_repo
 
-    try:
-        return get_repo(conn, ref)
-    except ValueError:
-        pass
-    repo = get_repo_by_name(conn, ref)
-    if repo is not None:
-        return repo
-    matches = [r for r in list_repos(conn) if r.name.lower() == ref.lower()]
-    if len(matches) > 1:
-        raise ValueError(
-            f"'{ref}' matches {len(matches)} repositories; use its catalog ID "
-            "(`lcsas repo list`)."
-        )
-    return matches[0] if matches else None
+    return resolve_repo(conn, ref, mirror_path)
 
 
 def _resolve_volume_refs(
@@ -1357,7 +1411,10 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
         ensure_schema(conn)
 
         try:
-            repo = _find_repo(conn, args.repo_id)
+            repo = _find_repo(
+                conn, args.repo_id,
+                _config_mirror(_config_if_loadable(args), args.repo_id),
+            )
         except ValueError as exc:
             logger.error(str(exc))
             return 1
@@ -1455,7 +1512,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
     from lcsas.db.connection import locked_connection
     from lcsas.db.queries import get_archive_status_summary
-    from lcsas.db.repos import list_repos
+    from lcsas.db.repos import resolve_repo
     from lcsas.db.schema import ensure_schema
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
@@ -1472,9 +1529,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
     ) as conn:
         ensure_schema(conn)
 
-        # Map config repository names → catalog repo_ids (UUIDs)
-        repos_db = {r.name: r.repo_id for r in list_repos(conn)}
 
+        # Config key → catalog repo_id, filled as each repository resolves.
+        repos_db: dict[str, str] = {}
         repo_filter = set(args.repo) if args.repo else None
         total_new = 0
         total_scanned = 0
@@ -1499,7 +1556,13 @@ def cmd_scan(args: argparse.Namespace) -> int:
             if repo_filter and repo_name not in repo_filter:
                 continue
 
-            db_repo_id = repos_db.get(repo_name)
+            # Config key → catalog repo_id: mirror path, then name (#687).
+            try:
+                db_repo = resolve_repo(conn, repo_name, repo_cfg.mirror_path)
+            except ValueError as exc:
+                logger.error("%s", exc)
+                return 1
+            db_repo_id = db_repo.repo_id if db_repo is not None else None
             if db_repo_id is None:
                 logger.warning(
                     f"repository '{repo_name}' not registered in the catalog "
@@ -1507,6 +1570,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 )
                 repos_unregistered.append(repo_name)
                 continue
+            repos_db[repo_name] = db_repo_id
 
             mirror_path = repo_cfg.mirror_path
             scan_result = scan_mirror_packs(mirror_path)
@@ -1516,8 +1580,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
             analyzer = DeltaAnalyzer(conn, packs_on_disk, db_repo_id)
             new_packs = analyzer.register_new_packs()
-            unarchived = analyzer.get_unarchived()
-            unarchived_bytes = analyzer.get_total_unarchived_bytes()
+            # #667: a pack an earlier scan marked pruned but this scan found
+            # is in the mirror: back to the active pool.  Like registration,
+            # this is additive and safe on an incomplete scan.
+            unpruned = analyzer.unprune_found()
 
             total_new += len(new_packs)
 
@@ -1557,9 +1623,19 @@ def cmd_scan(args: argparse.Namespace) -> int:
                                 f"({pruned_bytes:,} bytes)"
                             )
 
+            # Counted after un-prune and prune-sync, so the number is the
+            # one `lcsas stage` will see (#696 item 9).
+            unarchived = analyzer.get_unarchived()
+            unarchived_bytes = analyzer.get_total_unarchived_bytes()
+
             logger.info(f"  {repo_name}:")
             logger.info(f"    Packs on disk:  {len(packs_on_disk)}")
             logger.info(f"    Newly registered: {len(new_packs)}")
+            if unpruned:
+                logger.info(
+                    f"    Un-pruned:      {len(unpruned)} (found in the "
+                    f"mirror again)"
+                )
             logger.info(f"    Unarchived:     {len(unarchived)} ({unarchived_bytes:,} bytes)")
 
         # Persist snapshots (unless --no-snapshots)
@@ -2164,7 +2240,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
                     return 1
 
             try:
-                repo_ids = _resolve_repo_names_to_ids(conn, args.repo)
+                repo_ids = _resolve_repo_names_to_ids(conn, args.repo, config)
             except ValueError as e:
                 logger.error(str(e))
                 return 1
@@ -6332,8 +6408,10 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_key_verify(args)
         elif args.key_command == "card":
             return cmd_key_card(args)
+        elif args.key_command == "unsplit":
+            return cmd_key_unsplit(args)
         else:
-            logger.error("Usage: lcsas key {split,combine,verify,card}")
+            logger.error("Usage: lcsas key {split,unsplit,combine,verify,card}")
             return 1
     elif args.command == "estate":
         if args.estate_command == "card":
@@ -6954,7 +7032,7 @@ def _check_split_repo_registered(
     stop before any share exists.  A catalog that exists but cannot be
     read only logs a warning: the split goes ahead without being recorded.
     """
-    from lcsas.db.repos import get_repo_by_name
+    from lcsas.db.repos import resolve_repo
     from lcsas.exceptions import CatalogError
 
     name = args.repo
@@ -6964,7 +7042,7 @@ def _check_split_repo_registered(
     try:
         conn = _open_existing_catalog(db_path)
         try:
-            repo = get_repo_by_name(conn, name)
+            repo = resolve_repo(conn, name, _config_mirror(config, name))
         finally:
             conn.close()
     except CatalogError:  # no file, or never initialised
@@ -7004,16 +7082,19 @@ def _record_split_by_name(
     threshold: int,
     shares: int,
     split_id: int,
+    mirror_path: Path | None = None,
 ) -> None:
     """Record a split under the catalog repo_id of the repository *name*.
 
-    Also drops a record that an earlier build left under the name (#571),
-    so one row stands for one repository.
+    *name* is resolved like every other ``--repo`` (#687), with
+    *mirror_path* (its configured mirror) first.  Also drops a record that
+    an earlier build left under the name (#571), so one row stands for one
+    repository.
     """
     from lcsas.db.key_escrow import clear_split, record_split
-    from lcsas.db.repos import get_repo_by_name
+    from lcsas.db.repos import resolve_repo
 
-    repo = get_repo_by_name(conn, name)
+    repo = resolve_repo(conn, name, mirror_path)
     if repo is None:
         raise ValueError(f"repository '{name}' is not registered in the catalog")
     record_split(conn, repo.repo_id, threshold, shares, split_id, commit=False)
@@ -7023,6 +7104,15 @@ def _record_split_by_name(
     if name_is_an_id is None:
         clear_split(conn, name, commit=False)
     conn.commit()
+
+
+def _existing_share_files(out_dir: Path, repo: str) -> list[Path]:
+    """Files in *out_dir* named like ``key split``'s output for *repo* (#683)."""
+    import glob
+
+    if not out_dir.is_dir():
+        return []
+    return sorted(out_dir.glob(f"{glob.escape(repo)}-share-*"))
 
 
 def cmd_key_split(args: argparse.Namespace) -> int:
@@ -7051,6 +7141,30 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         threshold = repo_k
     if shares is None:
         shares = repo_n
+    # #682: the same K/N rule the config loader applies, for -k/-n too.
+    from lcsas.config.settings import key_split_pair_error
+    pair_problem = key_split_pair_error(threshold, shares)
+    if pair_problem is not None:
+        logger.error("Could not split password: %s.", pair_problem)
+        return 1
+
+    # #683: never mix two splits in one folder.  A second split with a
+    # smaller N would leave the old higher-numbered cards beside the new
+    # ones, and they cannot combine with them.  Checked before the password
+    # is read, so nothing is written.
+    out_dir: Path = args.out if args.out is not None else Path(f"./keyshares-{args.repo}")
+    old_cards = _existing_share_files(out_dir, args.repo)
+    if old_cards:
+        logger.error(
+            "%s already holds share files for repository '%s' from an "
+            "earlier split:\n  %s\nNew cards must not sit beside them: cards "
+            "of two splits cannot be combined with each other. Move these "
+            "files into a dated subfolder (or destroy them, once every holder "
+            "has the new cards), or pass --out with an empty folder, then "
+            "split again. No shares were written.",
+            out_dir, args.repo, "\n  ".join(str(p) for p in old_cards),
+        )
+        return 1
 
     # Resolve the password source.
     if repo_pw_file is None:
@@ -7151,7 +7265,6 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         logger.error("Could not read share identifier: %s", e)
         return 1
 
-    out_dir: Path = args.out if args.out is not None else Path(f"./keyshares-{args.repo}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for i, mnemonic in enumerate(mnemonics, start=1):
@@ -7207,7 +7320,8 @@ def cmd_key_split(args: argparse.Namespace) -> int:
             ) as conn:
                 ensure_schema(conn)
                 _record_split_by_name(
-                    conn, args.repo, threshold, shares, split_id
+                    conn, args.repo, threshold, shares, split_id,
+                    _config_mirror(config, args.repo),
                 )
         except Exception as e:  # noqa: BLE001 - cards are written; don't fail the split
             logger.warning(
@@ -7241,6 +7355,99 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         "SECURITY: the password was never printed. Store shares apart; any "
         f"{threshold} of {shares} reconstruct it, fewer reveal nothing.",
         file=sys.stderr,
+    )
+    return 0
+
+
+def cmd_key_unsplit(args: argparse.Namespace) -> int:
+    """Clear a repository's recorded password split (#681).
+
+    The record (KEY-08) is what burned discs derive their share-card
+    instructions from, and what the burn's drift check compares the config
+    against.  When a split is abandoned (the cards were never handed out,
+    or the owner went back to a single password), this is the command
+    that makes the catalog agree.  It asks first, and logs one audit line
+    naming what was cleared.
+    """
+    from lcsas.db.connection import locked_connection
+    from lcsas.db.key_escrow import clear_split, get_split_for_repo
+    from lcsas.db.repos import resolve_repo
+    from lcsas.db.schema import ensure_schema
+
+    config = _load_config_opt(args)
+    db_path = _resolve_db_path(args, config)
+    _open_existing_catalog(db_path).close()  # no catalog: say so, don't make one
+    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
+        ensure_schema(conn)
+        try:
+            repo = resolve_repo(conn, args.repo, _config_mirror(config, args.repo))
+        except ValueError as exc:
+            logger.error("%s", exc)
+            return 1
+        if repo is None:
+            logger.error(
+                "Repository '%s' is not registered in the catalog at %s. "
+                "See `lcsas repo list`.", args.repo, db_path,
+            )
+            return 1
+        record = get_split_for_repo(conn, repo.repo_id)
+        if record is None:
+            logger.info(
+                "The catalog records no password split for repository '%s'. "
+                "Nothing to clear.", repo.name,
+            )
+            return 0
+
+        logger.warning(
+            "Repository '%s' has a recorded %d-of-%d split (split ID %05d, "
+            "on %s). Clearing it means burned discs will tell the heir the "
+            "password is NOT split. Its share cards are not touched.",
+            repo.name, record.threshold, record.shares, record.slip39_id,
+            record.split_at,
+        )
+        if not args.yes:
+            try:
+                answer = input(
+                    "Type 'yes' to clear the recorded split, or anything else "
+                    "to cancel: "
+                ).strip()
+            except EOFError:
+                logger.error(
+                    "No terminal available for confirmation (redirected "
+                    "input). Pass --yes to clear without asking."
+                )
+                return 1
+            if answer.lower() != "yes":
+                logger.info("Nothing cleared.")
+                return 0
+
+        # Under the repo_id, and under the name for a record an earlier
+        # build made (#571), as `repo remove` does.
+        clear_split(conn, repo.repo_id, commit=False)
+        if conn.execute(
+            "SELECT 1 FROM repositories WHERE repo_id = ? AND repo_id != ?",
+            (repo.name, repo.repo_id),
+        ).fetchone() is None:  # the name isn't another repository's id
+            clear_split(conn, repo.name, commit=False)
+        conn.commit()
+
+    from datetime import UTC, datetime
+    logger.warning(
+        "AUDIT %s key unsplit: cleared the recorded %d-of-%d split of "
+        "repository '%s' (id %s, split ID %05d, split on %s).",
+        datetime.now(UTC).isoformat(timespec="seconds"), record.threshold,
+        record.shares, repo.name, repo.repo_id, record.slip39_id,
+        record.split_at,
+    )
+    table = (
+        f"[repos.{args.repo}]"
+        if config is not None and args.repo in config.repositories
+        else f"the repository's [repos.<name>] table ('{repo.name}' in the catalog)"
+    )
+    print(
+        f"NEXT STEP: make sure key_split is false for this repository in "
+        f"lcsas.toml ({table}, else [defaults]), so the config and the "
+        f"catalog agree."
     )
     return 0
 

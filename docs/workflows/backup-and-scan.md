@@ -127,14 +127,20 @@ catalogued yet?" command.
       (`scan_mirror_packs` in `src/lcsas/packs/scanner.py`).
    b. Diff against the catalog with `DeltaAnalyzer.register_new_packs`
       (`src/lcsas/packs/delta.py`).
-   c. Compute unarchived totals via `get_unarchived` /
-      `get_total_unarchived_bytes` (`DeltaAnalyzer`,
-      `src/lcsas/packs/delta.py`).
+   c. Un-prune: a pack an earlier scan marked pruned that this scan found
+      in the mirror goes back to the active pool
+      (`DeltaAnalyzer.unprune_found`, `bulk_unmark_pruned`, #667). Like
+      registration this always runs, even on an incomplete scan or with
+      `--no-prune-sync`.
    d. Reconcile pruned packs via `detect_pruned` + `bulk_mark_pruned`,
       but **only when the scan was complete** (`scan_result.errors` empty)
       and only if the mass-prune guard passes (see §5)
       (`cmd_scan`; `DeltaAnalyzer.detect_pruned`, `src/lcsas/packs/delta.py`;
       `bulk_mark_pruned`, `src/lcsas/db/packs.py`).
+   e. Compute unarchived totals via `get_unarchived` /
+      `get_total_unarchived_bytes` (`DeltaAnalyzer`,
+      `src/lcsas/packs/delta.py`), after steps c and d, so the count is
+      the one `lcsas stage` will see.
 3. Persist snapshots: `rustic snapshots --json` per repository, then
    `bulk_upsert_snapshots` (snapshot block of `cmd_scan`;
    `SubprocessRusticRunner.snapshots` in `src/lcsas/rustic/wrapper.py`).
@@ -149,12 +155,16 @@ catalogued yet?" command.
 - Packs in the catalog but missing from the mirror are flagged as pruned (unless
   `--no-prune-sync`, the scan was incomplete, or the mass-prune guard
   trips — see §5); their `is_pruned` flag flips to 1.
+- Pruned packs that are in the mirror again (a share that was briefly
+  unavailable) flip back to `is_pruned = 0`, and the next `lcsas stage`
+  selects them if they are not on a disc (#667).
 - Snapshots are upserted into the `snapshots` table.
 - stdout per repository:
   ```
   <name>:
     Packs on disk:  N
     Newly registered: M
+    Un-pruned:      P (found in the mirror again)   <- only when P > 0
     Unarchived:     U (B bytes)
   ```
   and a footer:
