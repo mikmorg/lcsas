@@ -590,7 +590,9 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Filter --all to discs/volumes at this location; "
                                "with single-volume --disc, stamp the disc at "
                                "this location (defaults to the volume's only "
-                               "ACTIVE disc when unambiguous).")
+                               "ACTIVE disc when unambiguous), or record the "
+                               "disc there when none of the volume is "
+                               "recorded at it.")
 
     # --- session ---
     session_p = subparsers.add_parser("session", help="Manage burn sessions.")
@@ -3336,6 +3338,33 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
         for warning in result.warnings:
             logger.warning("  %s", warning)
 
+    # #678: a disc cannot record its own burn, so the newest burn
+    # session's volumes come back with no disc record.  Their discs were
+    # read, so the rebuild marked them BURNED; where each disc is kept
+    # and its verify must be entered again.
+    if result.needs_verify:
+        logger.warning(
+            "%d volume(s) were marked BURNED because their own disc was "
+            "read, but no disc records where they are kept or that they "
+            "were verified: %s",
+            len(result.needs_verify), ", ".join(result.needs_verify),
+        )
+        logger.warning(
+            "For each disc of them you hold, put it in the drive and run "
+            "(against the rebuilt catalog, --db %s):", output_db,
+        )
+        for label in result.needs_verify:
+            logger.warning(
+                "  lcsas verify %s --disc --location <where it is kept>",
+                label,
+            )
+        logger.warning(
+            "That records the disc at its location and marks the volume "
+            "VERIFIED. Until then, do not run 'lcsas session abort' on "
+            "their burn session: it deletes volumes that have no disc "
+            "record."
+        )
+
     if result.errors:
         logger.error("Rebuild completed with %d error(s):", len(result.errors))
         for err in result.errors:
@@ -3344,6 +3373,14 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
 
     logger.info("Catalog rebuild complete: %s", output_db)
     return 0
+
+
+def _unknown_location_msg(exc: Any) -> str:
+    """Error for an unknown --location that this command will not create."""
+    msg = f"Unknown location '{exc.name}'"
+    if exc.suggestions:
+        msg += f" (did you mean: {', '.join(exc.suggestions)}?)"
+    return msg + ". Add it with 'lcsas location add <name>' first."
 
 
 def cmd_consolidate(args: argparse.Namespace) -> int:
@@ -3690,9 +3727,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 return 1
 
         passed = True
+        recorded_disc = False
 
         if args.disc:
+            from datetime import UTC, datetime
+
             from lcsas.db.volume_copies import (
+                add_volume_copy,
                 get_copies_for_volume,
                 touch_last_verified,
             )
@@ -3702,6 +3743,27 @@ def cmd_verify(args: argparse.Namespace) -> int:
             # say which one is in the drive, or the stamp would assert
             # freshness for a disc that was never read.
             stamp_location = args.location
+            # #678: --location names a place where no disc of this volume
+            # is recorded (a catalog rebuilt from discs has no record for
+            # the newest burn session).  A passing check records the disc
+            # there.  The location must already exist, so a typo cannot
+            # create a phantom one (#19).
+            record_location = False
+            if stamp_location is not None and conn.execute(
+                "SELECT 1 FROM volume_copies WHERE volume_id = ? "
+                "AND location = ?",
+                (vol.volume_id, stamp_location),
+            ).fetchone() is None:
+                from lcsas.db.locations import (
+                    UnknownLocationError,
+                    resolve_location,
+                )
+                try:
+                    resolve_location(conn, stamp_location)
+                except UnknownLocationError as exc:
+                    logger.error(_unknown_location_msg(exc))
+                    return 1
+                record_location = True
             if stamp_location is None:
                 active = get_copies_for_volume(conn, vol.volume_id)
                 if len(active) == 1:
@@ -3730,6 +3792,22 @@ def cmd_verify(args: argparse.Namespace) -> int:
                     logger.warning(
                         f"  No ACTIVE disc of {vol.label} recorded — "
                         f"last_verified_at not stamped"
+                    )
+                elif record_location:
+                    # Uncommitted: the add_event() below commits the
+                    # disc record atomically with the VERIFY_PASS event.
+                    add_volume_copy(
+                        conn, vol.volume_id, stamp_location,
+                        notes=(
+                            "recorded by 'lcsas verify --disc'; the burn "
+                            "date is the date it was recorded"
+                        ),
+                        last_verified_at=datetime.now(UTC).isoformat(),
+                        commit=False,
+                    )
+                    recorded_disc = True
+                    logger.info(
+                        f"  Recorded the disc of {vol.label} at {stamp_location}"
                     )
                 # Stamp uncommitted: the add_event() below commits it
                 # atomically with the VERIFY_PASS event.
@@ -3798,6 +3876,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if passed and vol.status == "BURNED":
             update_status(conn, vol.volume_id, "VERIFIED")
             logger.info(f"Volume {vol.label}: promoted BURNED → VERIFIED")
+        elif passed and recorded_disc and vol.status in ("STAGING", "BURNING"):
+            # #678: the disc was identified, read, and is now recorded —
+            # the same evidence a burn's own check gives.
+            update_status(conn, vol.volume_id, "VERIFIED", force=True)
+            logger.info(
+                f"Volume {vol.label}: promoted {vol.status} → VERIFIED"
+            )
 
         return 0 if passed else 1
 

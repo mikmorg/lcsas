@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import urllib.parse
@@ -141,6 +142,11 @@ class RebuildResult:
     sessions_merged: int = 0
     session_volumes_merged: int = 0
     splits_merged: int = 0
+    # Labels of volumes this rebuild moved from STAGING to BURNED because
+    # their own disc was one of the inputs (#678).  No disc record says
+    # where those discs are kept; ``lcsas verify <label> --disc
+    # --location <where>`` records it.
+    needs_verify: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -511,6 +517,67 @@ def _merge_one_disc(
     return counts
 
 
+def _own_volume_uuid(disc_path: Path) -> str | None:
+    """The uuid in a disc's ``volume_info.json`` (None if absent/unreadable)."""
+    try:
+        info = json.loads(
+            (disc_path / "volume_info.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    uuid_ = info.get("uuid") if isinstance(info, dict) else None
+    return uuid_ if isinstance(uuid_, str) and uuid_ else None
+
+
+def _promote_read_discs(
+    conn: sqlite3.Connection,
+    own_uuids: set[str],
+    result: RebuildResult,
+) -> None:
+    """Mark volumes whose own disc was read as BURNED (#678).
+
+    A disc catalog is copied onto the disc when the volume is staged, so
+    the newest burn session's volumes are STAGING in every input catalog,
+    with no disc record.  A disc that was just read proves its volume
+    was burned, so such a volume becomes BURNED (its packs no longer
+    return to the stage pool).  Where the disc is kept and whether it
+    was verified are not on any disc: the volume is listed in
+    ``result.needs_verify`` for ``lcsas verify --disc --location``.
+
+    A volume with a VERIFY_FAIL event is left as it is: a newer catalog
+    records that a burn of it failed its check, so the disc that was
+    read may be that failed disc.
+    """
+    for uuid_ in sorted(own_uuids):
+        row = conn.execute(
+            "SELECT volume_id, label, status FROM volumes WHERE uuid = ?",
+            (uuid_,),
+        ).fetchone()
+        if row is None or row[2] not in ("STAGING", "BURNING"):
+            continue
+        volume_id, label = row[0], row[1]
+        failed = conn.execute(
+            "SELECT 1 FROM volume_events WHERE volume_id = ? "
+            "AND event_type = 'VERIFY_FAIL' LIMIT 1",
+            (volume_id,),
+        ).fetchone()
+        if failed is not None:
+            result.warnings.append(
+                f"volume {label}: its disc was read, but a catalog records "
+                f"that a burn of it failed verification, so it stays "
+                f"{row[2]}. Check the disc with 'lcsas verify {label} "
+                f"--disc --location <where it is kept>'."
+            )
+            continue
+        conn.execute(
+            "UPDATE volumes SET status = 'BURNED' WHERE volume_id = ?",
+            (volume_id,),
+        )
+        result.needs_verify.append(label)
+    conn.commit()
+    result.needs_verify.sort()
+
+
 def rebuild_catalog(
     disc_paths: list[Path],
     output_db: Path,
@@ -536,6 +603,10 @@ def rebuild_catalog(
       including downgrades to DEPRECATED/DESTROYED.  A stale disc claiming
       a volume is more alive than the freshest record (the resurrection
       hazard) is reported in :attr:`RebuildResult.warnings`.
+    - A volume whose own disc is one of the inputs (its uuid is in the
+      disc's ``volume_info.json``) and is still STAGING/BURNING after the
+      merge becomes BURNED and is listed in
+      :attr:`RebuildResult.needs_verify` (#678).
 
     Args:
         disc_paths: List of mounted disc root directories.
@@ -595,6 +666,7 @@ def rebuild_catalog(
     )
 
     is_pruned_conflicts = 0
+    own_uuids: set[str] = set()
     for disc_path, source_db, freshness in ordered:
         if source_db is None:
             _logger.warning(
@@ -621,6 +693,9 @@ def rebuild_catalog(
             continue
 
         result.discs_processed += 1
+        own_uuid = _own_volume_uuid(disc_path)
+        if own_uuid is not None:
+            own_uuids.add(own_uuid)
         result.repositories_merged += counts.get("repositories", 0)
         result.volumes_merged += counts.get("volumes", 0)
         result.packs_merged += counts.get("packs", 0)
@@ -646,6 +721,8 @@ def rebuild_catalog(
             "disagreed on is_pruned — kept the freshest catalog's view "
             "(discs are merged newest-first)."
         )
+
+    _promote_read_discs(conn, own_uuids, result)
 
     conn.close()
     return result
