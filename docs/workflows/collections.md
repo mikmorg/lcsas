@@ -13,6 +13,15 @@ With collections, `lcsas config check` checks them.
 Two collections that hold the same repositories make two full copies of
 the archive, at two locations, possibly on two media types.
 
+A collection chooses which repositories' **packs** go to a location. It
+does not choose what each disc describes: like every LCSAS disc, a
+collection's disc also carries the whole disc catalog and the
+repository metadata (encrypted index, key and snapshot files) of every
+repository in the archive, as `HolographicInjector` copies them. Each
+repository stays encrypted under its own password, but anyone holding
+the disc can see the names of all the archive's repositories. See
+[DISC_CONFIDENTIALITY.md](../DISC_CONFIDENTIALITY.md).
+
 ## Table of contents
 
 1. [The config](#the-config)

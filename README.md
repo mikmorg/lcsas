@@ -185,6 +185,7 @@ password_file = "/root/keys/personal.key"
 # Optional: the discs kept at one location. `lcsas stage --collection
 # bank` stages these repositories for Bank_Box on MDISC100, and holds
 # back a last volume that fills less than 90% of its pack space.
+# Register the location first: lcsas location add Bank_Box
 [collections.bank]
 location     = "Bank_Box"
 media_type   = "MDISC100"
