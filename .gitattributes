@@ -4,3 +4,8 @@
 # recovery driver would dead-end before the journey even started.
 # [INFRA-01]
 *.bat text eol=crlf
+
+# The meta disc's restore scripts and README are written to the disc byte
+# for byte and pinned by SHA-256 (tests/unit/test_meta_assets_golden.py,
+# #689): never let a checkout rewrite their line endings.
+src/lcsas/meta/assets/* -text
