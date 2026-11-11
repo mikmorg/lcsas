@@ -75,6 +75,7 @@ jobs:
         uses: ./.github/actions/install-rustic
       - name: Install GNU time (the petabyte test reads peak RSS from it)
         run: |
+          sh .github/scripts/apt-prepare.sh
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends time
           test -x /usr/bin/time
@@ -105,6 +106,7 @@ jobs:
           python-version: "3.11"
       - name: Install qemu-user-static
         run: |
+          sh .github/scripts/apt-prepare.sh
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-user-static
           qemu-aarch64-static --version
