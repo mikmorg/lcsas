@@ -1019,6 +1019,7 @@ class TestFailedBurnNextStep:
         assert "VOL_NEW needs re-burn at Bank_Box" in out
         assert next_step in out
         assert "waiting to be burned" not in out
+        assert "catalog reconcile" not in out  # no second, different step
 
         # ... and `stage --for-location` would stage its packs again.
         conn = get_connection(db)
@@ -1036,6 +1037,41 @@ class TestFailedBurnNextStep:
         capsys.readouterr()
 
         # 4. status no longer lists it.
+        assert main(["--config", str(cfg), "status"]) == 0
+        assert "needs re-burn" not in capsys.readouterr().out
+
+    def test_doing_the_named_step_clears_the_warning(self, staged_env, capsys):
+        """After `stage --for-location` put the packs on a new volume, the
+        failed one is no longer listed: the location needs nothing from it."""
+        from lcsas.db.packs import register_pack
+        from lcsas.db.repos import register_repo
+        from lcsas.db.volume_packs import link_pack_to_volume
+
+        tmp_path, cfg, db = staged_env
+        conn = get_connection(db)
+        try:
+            register_repo(conn, "repo1", "Repo 1", "/mirror/repo1")
+            pack = register_pack(conn, "f" * 64, 100, "repo1")
+            vol = get_volume_by_label(conn, "VOL_NEW")
+            link_pack_to_volume(conn, vol.volume_id, pack.pack_id)
+        finally:
+            conn.close()
+        failed = dict(_good("VOL_NEW", "Bank_Box"), verify_passed=False)
+        assert _run(cfg, _receipt(tmp_path, "fail.json", failed)) == 0
+        capsys.readouterr()
+        assert main(["--config", str(cfg), "status"]) == 0
+        assert "VOL_NEW needs re-burn at Bank_Box" in capsys.readouterr().out
+
+        # What `lcsas stage --for-location Bank_Box` does: a new volume,
+        # staged for Bank_Box, holding the same pack.
+        conn = get_connection(db)
+        try:
+            new = create_volume(conn, "VOL_NEXT", "uuid-next", "TEST_TINY", 1000,
+                                "Bank_Box", "STAGING")
+            link_pack_to_volume(conn, new.volume_id, pack.pack_id)
+        finally:
+            conn.close()
+
         assert main(["--config", str(cfg), "status"]) == 0
         assert "needs re-burn" not in capsys.readouterr().out
 

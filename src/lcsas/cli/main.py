@@ -1801,8 +1801,14 @@ def _volumes_needing_reburn(
 
     Only VERIFY_PASS, VERIFY_FAIL and VERIFY_FAIL_REBURN count, location
     by location: a later pass at the same location (a good re-burn)
-    clears it, a pass at another location does not.
+    clears it, a pass at another location does not.  Once the remedy is
+    done -- the volume's packs were staged again for that location
+    (``stage --for-location``) or are on another disc there -- the
+    location needs nothing more from it and it is not listed, unless a
+    disc of it is still recorded there (a disc that failed a re-check).
     """
+    from lcsas.db.queries import get_unarchived_or_missing_at_location
+
     newest: dict[tuple[int, str], tuple[str, str]] = {}
     for row in conn.execute(
         """SELECT e.volume_id, e.location, e.event_type, v.label
@@ -1820,11 +1826,25 @@ def _volumes_needing_reburn(
             "WHERE status = 'ACTIVE'"
         )
     }
-    return sorted(
-        (label, loc, (vid, loc) in active)
-        for (vid, loc), (event_type, label) in newest.items()
-        if event_type != "VERIFY_PASS"
-    )
+    missing_at: dict[str, set[int]] = {}
+    result: list[tuple[str, str, bool]] = []
+    for (vid, loc), (event_type, label) in newest.items():
+        if event_type == "VERIFY_PASS":
+            continue
+        has_disc = (vid, loc) in active
+        if not has_disc and loc != "<unknown>":
+            packs = {int(r[0]) for r in conn.execute(
+                "SELECT pack_id FROM volume_packs WHERE volume_id = ?", (vid,)
+            )}
+            if loc not in missing_at:
+                missing_at[loc] = {
+                    p.pack_id
+                    for p in get_unarchived_or_missing_at_location(conn, loc)
+                }
+            if packs and not packs & missing_at[loc]:
+                continue
+        result.append((label, loc, has_disc))
+    return sorted(result)
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -1932,7 +1952,13 @@ def cmd_status(args: argparse.Namespace) -> int:
             s.session_id, s.session_id,
         )
     for label, loc, has_disc in needs_reburn:
-        if has_disc:
+        if loc == "<unknown>":
+            logger.warning(
+                "WARNING: %s failed verification (no location recorded). "
+                "Check it with 'lcsas verify %s --disc'.",
+                label, label,
+            )
+        elif has_disc:
             logger.warning(
                 "WARNING: %s needs re-burn at %s: its disc there failed "
                 "verification. Check it with 'lcsas verify %s --disc'; if it "
