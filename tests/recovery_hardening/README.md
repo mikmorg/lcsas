@@ -112,6 +112,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_sh_target_guards.py` | Hardening tests: restore.sh target-safety guards [UX-07] + [BOOT-05]. |
 | `test_restore_sh_target_key_flags.py` | Hardening tests: --target / --key flags on restore.sh [KEY-02]. |
 | `test_restore_sh_tier1_missing_multidisc.py` | Hardening test (GATE-06): restore.sh drives the full tier1-missing |
+| `test_restore_sh_tier3_python.py` | Hardening test (#714, #706): which Python tier 3 runs, and its exit 75. |
 | `test_restore_sh_tmpfs_target_warns.py` | Hardening tests: RAM-backed (tmpfs) restore-target warning [BOOT-05]. |
 | `test_restore_sh_tools_folder.py` | Hardening (#609, #610, #615, #616): restore.sh's tools folder. |
 | `test_restore_sh_ux.py` | Hardening tests: restore.sh UX improvements (recommendations #3, #4, #8). |

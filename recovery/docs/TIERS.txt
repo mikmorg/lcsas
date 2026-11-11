@@ -187,6 +187,17 @@ offline guessing.  The stolen-disc threat model, the entropy guidance,
 and the no-rotation reality are documented in
 ``docs/DISC_CONFIDENTIALITY.md`` (bundled on every meta disc).
 
+TIER 3: WHICH PYTHON
+
+restore.sh uses the CPython bundled for this computer
+(bin/<arch>/python/) first, then python3 or python on PATH.  It takes
+the first one that actually STARTS and is Python 3.8 or newer (the
+reader itself needs 3.10 and says so).  Being on disc is not enough:
+the bundled Linux builds need the musl loader
+(/lib/ld-musl-<arch>.so.1), which stock Debian, Ubuntu and Fedora do
+not have.  There restore.sh says the bundled Python cannot run and
+uses the host's python3 (#714).  If none runs, tier 3 says so.
+
 TIER 3: SKIP-AND-CONTINUE ON A BAD BLOB
 
 Tier 3 (the Python reader, standalone_restorer.py, last resort) is
