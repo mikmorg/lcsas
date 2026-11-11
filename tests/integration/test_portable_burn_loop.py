@@ -117,7 +117,10 @@ class _SiteA:
             "\n[defaults]\n"
             'media_type = "TEST_TINY"\n'
             "ecc_redundancy_pct = 0\n"
-            'location = "Home_Shelf"\n'
+            # #669: the volume is staged for the location its first disc
+            # goes to; import refuses another one without
+            # --allow-other-location.
+            f'location = "{_SITE}"\n'
             'optical_device = "/dev/null"\n'
             'label_prefix = "PORT"\n'
             "metadata_reserve_mb = 0\n"
@@ -127,6 +130,9 @@ class _SiteA:
         )
         for argv in (
             ["init"],
+            # #669: import refuses a location that is not registered.
+            ["location", "add", _SITE],
+            ["location", "add", _SECOND_SITE],
             ["repo", "add", "family", str(mirror)],
             ["scan", "--no-snapshots"],
             ["stage"],
@@ -340,9 +346,10 @@ def test_second_burn_at_another_site_only_adds_a_copy(site_a, site_b):
     copies = site_a.copies()
     assert [c["location"] for c in copies] == sorted([_SITE, _SECOND_SITE])
     assert {c["status"] for c in copies} == {"ACTIVE"}
-    # Both discs came from one ISO: same hash on both rows, one VERIFY_PASS.
+    # Both discs came from one ISO: same hash on both rows.  Each passing
+    # disc has its VERIFY_PASS, as on the direct burn path (#671).
     assert {c["iso_sha256"] for c in copies} == {site_a.staged_iso_record()["iso_sha256"]}
-    assert len(site_a.events("VERIFY_PASS")) == 1
+    assert len(site_a.events("VERIFY_PASS")) == 2
     assert len(site_a.events("BURN_RECEIPT_IMPORTED")) == 2
 
 
