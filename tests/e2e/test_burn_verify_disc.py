@@ -16,6 +16,9 @@ optical device:
   copies disc-by-disc: a passing disc stamps ``last_verified_at`` on
   its copy, a byte-flipped disc records VERIFY_FAIL and is never
   stamped — the disc-rot cadence the staleness report depends on.
+* ``lcsas burn-iso --verify`` (the portable path, #664) reads the disc
+  back too: a disc whose image differs from the ISO by one byte fails,
+  and ``--verify-only`` (#673) checks a burned disc without burning.
 
 Flow of the original BURN-04 drill:
   1. Master a small ISO with xorriso and register it in a fresh catalog
@@ -459,3 +462,73 @@ def test_verify_disc_truncated_image_fails(cdemu_device, tmp_path):
     conn = get_connection(db_path)
     assert get_volume_by_label(conn, label).status == "BURNED"
     conn.close()
+
+
+def test_burn_iso_readback_pass_then_altered_image_fails(cdemu_device, tmp_path):
+    """#664: ``lcsas burn-iso --verify`` reads the disc back and compares its
+    SHA-256 with the ISO.  CDEmu cannot be written to, so the "burn" loads a
+    copy of the ISO into device 0; everything after it is real: xorriso
+    ``-check_media``, the PVD volume ID and the read-back of /dev/srX.
+
+    1. Burn → the disc matches → exit 0, receipt ``verify_passed: true``
+       with the hash read back.
+    2. Alter one byte of the image behind the device and burn again → the
+       disc is still readable and still names the right volume, but the
+       read-back differs → exit 1, receipt ``verify_passed: false``.
+    3. ``--verify-only`` (#673) against the pristine disc passes without
+       burning.
+    """
+    import json
+    from unittest.mock import patch
+
+    from lcsas.cli.main import main
+    from lcsas.iso.xorriso import MediaStatus
+    from lcsas.utils.hashing import sha256_file
+
+    label = "LCSAS_E2E_BURNISO"
+    iso = _master_iso(tmp_path, label)
+    iso_hash = sha256_file(iso)
+    disc = tmp_path / "disc.iso"  # the image the virtual drive holds
+
+    def burn_by_loading(iso_path, device):
+        _load(disc, cdemu_device)
+
+    def burn_iso(receipts: Path, *extra: str) -> tuple[int, dict]:
+        runner = "lcsas.iso.xorriso.SubprocessXorrisoRunner"
+        with (
+            patch(f"{runner}.burn_iso", side_effect=burn_by_loading),
+            patch(f"{runner}.media_status", return_value=MediaStatus.BLANK),
+        ):
+            rc = main([
+                "burn-iso", str(iso), "--device", cdemu_device,
+                "--emit-receipt", f"{receipts}/", "--location", "E2E_Shelf",
+                *extra,
+            ])
+        receipt = json.loads((receipts / f"{label}_E2E_Shelf.json").read_text())
+        return rc, receipt
+
+    # 1. A good burn.
+    disc.write_bytes(iso.read_bytes())
+    rc, receipt = burn_iso(tmp_path / "r1")
+    assert rc == 0, "a disc that matches the ISO must pass"
+    assert receipt["verify_passed"] is True
+    assert receipt["device_sha256"] == iso_hash
+
+    # 2. The image behind the device differs from the ISO by one byte.
+    _unload()
+    altered = bytearray(iso.read_bytes())
+    altered[len(altered) // 2] ^= 0xFF
+    disc.write_bytes(bytes(altered))
+    rc, receipt = burn_iso(tmp_path / "r2")
+    assert rc == 1, "a disc that differs from the ISO must fail the verify"
+    assert receipt["verify_passed"] is False
+    assert receipt["device_sha256"] not in (None, iso_hash)
+
+    # 3. A lost receipt: check the pristine disc again without burning.
+    _unload()
+    disc.write_bytes(iso.read_bytes())
+    _load(disc, cdemu_device)
+    rc, receipt = burn_iso(tmp_path / "r3", "--verify-only")
+    assert rc == 0
+    assert receipt["verify_only"] is True
+    assert receipt["verify_passed"] is True
