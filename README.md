@@ -5,7 +5,7 @@ Durable, offline-first cold archival for Linux — built so data stays restorabl
 > **🚨 In an emergency and need to restore data?**
 > Start at **[docs/RECOVERY_GUIDE.md](docs/RECOVERY_GUIDE.md)** — it
 > routes you to the right OS-specific walkthrough (Linux, macOS,
-> Windows, bare-metal, or disc-only Python reader) in one click.
+> Windows, live USB, or disc-only Python reader) in one click.
 
 ## Key Capabilities
 
@@ -175,11 +175,26 @@ metadata_reserve_mb = 100
 [repos.family]
 mirror_path   = "/mnt/mirror/family"
 password_file = "/root/keys/family.key"
+# Optional, descriptive only: the folders backed up into this repository.
+sources       = ["/srv/family1", "/srv/family2"]
 
 [repos.personal]
 mirror_path   = "/mnt/mirror/personal"
 password_file = "/root/keys/personal.key"
+
+# Optional: the discs kept at one location. `lcsas stage --collection
+# bank` stages these repositories for Bank_Box on MDISC100, and holds
+# back a last volume that fills less than 90% of its pack space.
+# Register the location first: lcsas location add Bank_Box
+[collections.bank]
+location     = "Bank_Box"
+media_type   = "MDISC100"
+min_fill_pct = 90
+repos        = ["family", "personal"]
 ```
+
+See [docs/workflows/collections.md](docs/workflows/collections.md) for
+collections and `lcsas status --json`.
 
 #### How LCSAS Passes Passwords to Rustic
 
@@ -709,10 +724,9 @@ in [`docs/CROSS_PLATFORM_META_RFC.md`](docs/CROSS_PLATFORM_META_RFC.md) §6 Q1):
 
 - **RISC-V** — upstream rustic (tier 2) does not yet ship a release
   artifact for `riscv64gc-unknown-linux-gnu`, and we don't cross-compile
-  rustic ourselves; will be added when upstream ships. (The tier-1
-  `lcsas-restore` CLI can already cross-build for `riscv64` —
-  `lcsas recovery build --arch riscv64` — but riscv64 is not one of the
-  six approved bundled targets.)
+  rustic ourselves; will be added when upstream ships. `lcsas recovery
+  build` builds tier 1 only for the six approved targets, so riscv64
+  has no tier-1 build target either.
 - **i686** (32-bit x86) — upstream ships it but the number of heirs
   restoring on 32-bit x86 in 2026+ is vanishingly small.
 - **FreeBSD / OpenBSD** — no upstream rustic.  The heir must install

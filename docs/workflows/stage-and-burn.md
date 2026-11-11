@@ -181,6 +181,14 @@ machines, or when staging in advance for an unattended burn.
 4. `--for-location <name>` — stage packs missing at that location only;
    routes through `get_unarchived_or_missing_at_location`
    (`BurnOrchestrator._gather_packs_for_staging`).
+   `--collection <name>` sets `--repo`, `--for-location` and `--media`
+   from a `[collections.<name>]` table instead, plus its minimum fill
+   (#701, [collections.md](collections.md)).
+   `--min-fill <pct>` leaves out the last volume when its packs fill
+   less than that percent of its pack space; the volumes before it are
+   staged. `--partial` stages it anyway. If it is the only volume,
+   nothing is staged and the exit code is 0
+   (`BurnOrchestrator._trim_underfilled`).
 5. `--dry-run` / `-n` — compute the bin-pack plan and report it, then exit
    without touching the staging area, the catalog, or the disc
    (`BurnOrchestrator.stage`).

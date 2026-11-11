@@ -74,7 +74,8 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
 2. `load_config()` parses via `tomllib`, warns on unknown sections/keys, resolves relative paths, and builds a frozen `LCSASConfig`. (`src/lcsas/config/settings.py`) It stops with an error naming the key, for every command, when (#682):
    - a known key has the wrong TOML type: strings must be quoted, numbers and `true`/`false` must not be (`key_split = "false"`, `key_threshold = "3"`, `metadata_reserve_mb = "100"`, `media_type = 25`, `label_prefix = 7` are all errors);
    - `key_threshold`/`key_shares` (in `[defaults]`, or the pair a `[repos.<name>]` table makes by overriding either) is not `2 <= K <= N <= 16`, or `K = N = 1` for no split;
-   - two `[repos.<name>]` tables have the same `mirror_path`.
+   - two `[repos.<name>]` tables have the same `mirror_path`;
+   - a `[repos.<name>]` `sources` is not a list of strings, or a `[collections.<name>]` table has no `location`, an empty or missing `repos`, a repository with no `[repos.<name>]` table, an unknown `media_type`, or a `min_fill_pct` outside 0-100 (#701, [collections.md](collections.md)).
 3. `validate_config()` checks (`src/lcsas/config/settings.py`):
    - `mirror_base_path` exists and is a directory.
    - `staging_path` exists, is a directory, and is writable.
@@ -84,6 +85,7 @@ Schema version is 10 (`CURRENT_SCHEMA_VERSION` in `src/lcsas/db/schema.py`); the
    - `label_prefix` non-empty, matches `[A-Z0-9_]+`, short enough for a 32-char ISO 9660 label with the configured `media_type`'s token (CD700, BDXL100 and MDISC100 allow one character less than BD25); a prefix that fits the configured media type but not another production media type logs a WARNING, since `stage --media` can pick it.
    - Per-repository `mirror_path` exists and is a directory; `password_file` exists if set.
    - `staging_path` does not overlap a repository mirror (cleanup would destroy it): it is not identical to `mirror_base_path`, does not contain it, and is not identical to, inside, or a parent of any repository's `mirror_path`.  A staging area inside `mirror_base_path` beside the repositories (`<base>/<repo>` and `<base>/staging`) is allowed, which keeps it on the mirrors' filesystem so packs are hardlinked (#645); with no repositories configured, `mirror_base_path` is itself the fallback mirror and a staging area inside it is rejected.
+4. With `[collections.<name>]` tables, `config check` also checks each collection (`_config_check_collections`, `src/lcsas/cli/main.py`): every repository in it has a readable `password_file` (unless `allow_unverified_repo_format` is set), and, when the catalog exists, its location is registered (`lcsas location add`) and every repository is registered and active (`lcsas repo add`). Without a catalog it says these were not checked and does not create one.
 
 **Expected outcome:**
 - Valid: one `Configuration is valid.` log line, exit 0.

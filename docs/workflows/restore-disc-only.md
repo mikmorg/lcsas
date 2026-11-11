@@ -16,8 +16,8 @@ disc identify itself without the master catalog.
 Sibling restore routes (more capable, prefer them when available):
 
 - `docs/workflows/restore-host-linux.md` — full LCSAS install on Linux
-- `docs/workflows/restore-bare-metal.md` — the parked direct-boot path
-  (no LCSAS disc is bootable; see `docs/workflows/restore-live-usb.md`)
+- `docs/workflows/restore-live-usb.md` — no working computer: boot a
+  live-Linux USB (no LCSAS disc is bootable)
 - `docs/workflows/restore-windows.md` — Windows host with rustic.exe
 - `docs/workflows/meta-disc.md` — how the meta disc is built
 
