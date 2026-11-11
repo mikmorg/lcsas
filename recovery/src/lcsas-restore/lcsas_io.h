@@ -35,10 +35,11 @@ int lcsas_pread_exact(int fd, void *buf, size_t len, long long off);
 int lcsas_write_exact(int fd, const void *buf, size_t len);
 
 /*
- * Create (or overwrite) a regular file with the given mode bits
- * (umask-stripped during open(); restored via fchmod() after).
- * Pass the mode from the restic tree node's "mode" field so the
- * restored file matches the original.  Returns fd or -1 on error.
+ * Create (or overwrite) a regular file for writing.  On POSIX the
+ * file is created 0600 and `mode` is ignored: the caller applies the
+ * node's final mode after the content is written (#655), so a file
+ * left part-written stays reopenable by a resume.  On Windows `mode`
+ * is passed to open().  Returns fd or -1 on error (errno set).
  * The intermediate directories must already exist.
  */
 int lcsas_create_file(const char *path, unsigned int mode);
