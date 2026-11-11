@@ -43,10 +43,9 @@ name: macos-e2e
 # invocation below at it, which is the #533 check.
 #
 # No `schedule:` here, on purpose (#462): GitHub disables a scheduled file after
-# 60 quiet days, PR trigger and all.  The repo's rule is that a weekly run lives
-# in a `*-weekly.yml` wrapper that calls this file (see windows-e2e-weekly.yml);
-# none exists for this workflow yet.  `workflow_call` is declared so adding one
-# is a one-file change.
+# 60 quiet days, PR trigger and all.  The weekly run lives in weekly.yml, which
+# calls this file through `workflow_call` (#694), so a quiet spell can only
+# switch off that.
 
 on:
   pull_request:
@@ -61,6 +60,7 @@ on:
       - "tests/e2e/fixture_lib.py"
       - "tests/e2e/macos_restore_smoke.py"
       - ".github/workflows/macos-e2e.yml"
+      - ".github/actions/install-rustic/**"
   workflow_dispatch: {}
   workflow_call: {}
 
@@ -76,11 +76,6 @@ jobs:
     runs-on: ubuntu-24.04  # pinned like every workflow; see test.yml and #538
     timeout-minutes: 15
 
-    env:
-      RUSTIC_VERSION: "0.11.2"
-      RUSTIC_ASSET: "rustic-v0.11.2-x86_64-unknown-linux-gnu.tar.gz"
-      RUSTIC_SHA256: "fb7b74a14418b2dd070360c9abb22607f8559bdd344a0adf1b33bc2e31f83f5f"
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -90,21 +85,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install rustic (pinned release tarball)
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.local/bin"
-          cd "$(mktemp -d)"
-          url="https://github.com/rustic-rs/rustic/releases/download/v${RUSTIC_VERSION}/${RUSTIC_ASSET}"
-          curl -fsSL -o rustic.tar.gz "$url"
-          actual=$(sha256sum rustic.tar.gz | awk '{print $1}')
-          if [ "$RUSTIC_SHA256" != "$actual" ]; then
-            echo "SHA256 mismatch: expected=$RUSTIC_SHA256 actual=$actual" >&2
-            exit 1
-          fi
-          tar -xzf rustic.tar.gz
-          install -m 0755 rustic "$HOME/.local/bin/rustic"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install rustic (pinned; the one pin lives in the action)
+        uses: ./.github/actions/install-rustic
 
       - name: Install xorriso
         run: |

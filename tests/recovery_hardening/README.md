@@ -21,13 +21,21 @@ make test-recovery-hardening   # this tier only
 A handful of tests in this tier are slow or need a special toolchain, so
 they self-skip unless an env var opts them in. They are NOT part of the
 default `make gate`; run them explicitly when touching the tier-1 C
-binary or before a release:
+binary or before a release.  CI runs every one of them:
+`.github/workflows/opt-in-gates.yml` (called each Monday by `weekly.yml`)
+runs the fault-injection, differential, petabyte and qemu gates, and
+`audit-gate.yml` runs `make -C recovery coverage-c` and `sanitize` (what
+the coverage and sanitize tests wrap) on every PR touching tier-1 C.
+`test_ci_gate_inventory.py` fails if a variable named in the root
+CLAUDE.md is set by nothing.
 
 | Env var | Enables |
 |---------|---------|
 | `LCSAS_COVERAGE=1` | `test_tier1_coverage_baseline.py` — runs `make coverage-c`, asserts `recovery/build/coverage.txt` is written. |
 | `LCSAS_SANITIZE=1` | `test_tier1_sanitize.py` — runs `make sanitize`, asserts 0 ASan/UBSan/LSan findings. |
 | `LCSAS_FAULT_INJECT=1` | `test_tier1_fault_inject.py` — malloc fault-injection sweep over every tier-1 unit binary. |
+| `LCSAS_DIFF=1` | `test_tier1_vs_tier2_differential.py` — every content profile, not just the smoke one: tier-1 and tier-2 restores must be byte-identical. |
+| `LCSAS_PETABYTE=1` | `test_tier1_petabyte_fixture.py` — 1M-entry index + 1k files through tier 1 under RSS and wall-clock budgets. |
 | `LCSAS_ZSTD_QEMU=1` | `test_tier3_zstd_qemu.py` — tier-3 zstd restore under aarch64 CPython via qemu-user (`make test-tier3-qemu`). |
 | `LCSAS_OPTIONAL_ARCHES` | suppresses skips for cross-compile arches a dev doesn't have a toolchain for. |
 
@@ -51,6 +59,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_boot_config_paths.py` | BOOT-03: boot menu entry paths must equal the staged-tree paths. |
 | `test_boot_docs_reality.py` | test_boot_docs_reality.py -- docs-vs-reality contract gate for `lcsas ...` |
 | `test_boot_path_quarantined.py` | Boot-path quarantine tripwire (BOOT-08) + BOOT-06 record-keeping. |
+| `test_ci_gate_inventory.py` | Hardening: every documented opt-in gate is run by something (#694, #693). |
 | `test_ci_workflow_parity.py` | Hardening: CI workflow ↔ `make gate` suite parity (GATE-02). |
 | `test_coverage_fault_inject_cleanup.py` | Hardening test: the coverage fault sweep leaves no test fixtures behind. |
 | `test_cross_build_deps.py` | Guard the recovery cross-build source dependencies. |

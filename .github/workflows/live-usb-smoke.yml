@@ -10,16 +10,20 @@ name: live-usb-smoke
 # hash asserted on the serial console).  See
 # tests/e2e/test_live_usb_restore.py and recovery/docs/BOOT.txt OPTION 2.
 #
-# Scheduled weekly, NOT per-PR: the fixture is a ~3.4 GB ISO download
-# and the boot takes minutes even under KVM.  The always-on counterpart
-# (doc-pinning gate, tests/recovery_hardening/test_live_usb_procedure_docs.py)
-# runs in the normal suite.
+# Weekly, NOT per-PR: the fixture is a ~3.4 GB ISO download and the boot
+# takes minutes even under KVM.  The always-on counterpart (doc-pinning
+# gate, tests/recovery_hardening/test_live_usb_procedure_docs.py) runs in
+# the normal suite.
+#
+# No `schedule:` here (#462, #693): weekly.yml calls this file and holds
+# the schedule and the one canary watchdog that tickets a red run.
 
 on:
-  schedule:
-    # Monday 04:17 UTC -- off the top of the hour per GitHub's guidance.
-    - cron: "17 4 * * 1"
   workflow_dispatch:
+  workflow_call: {}
+
+permissions:
+  contents: read
 
 jobs:
   live-usb-smoke:
@@ -27,12 +31,6 @@ jobs:
     # TCG worst case: the test's own internal deadline is 25 min of VM
     # time; leave headroom for the ISO download + fixture build.
     timeout-minutes: 90
-
-    env:
-      # Pinned rustic release -- keep in lockstep with test.yml.
-      RUSTIC_VERSION: "0.11.2"
-      RUSTIC_ASSET: "rustic-v0.11.2-x86_64-unknown-linux-gnu.tar.gz"
-      RUSTIC_SHA256: "fb7b74a14418b2dd070360c9abb22607f8559bdd344a0adf1b33bc2e31f83f5f"
 
     steps:
       - name: Checkout
@@ -43,23 +41,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install rustic (pinned release tarball)
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.local/bin"
-          cd "$(mktemp -d)"
-          url="https://github.com/rustic-rs/rustic/releases/download/v${RUSTIC_VERSION}/${RUSTIC_ASSET}"
-          echo "Downloading $url"
-          curl -fsSL -o rustic.tar.gz "$url"
-          actual=$(sha256sum rustic.tar.gz | awk '{print $1}')
-          if [ "$RUSTIC_SHA256" != "$actual" ]; then
-            echo "SHA256 mismatch: expected=$RUSTIC_SHA256 actual=$actual" >&2
-            exit 1
-          fi
-          echo "SHA256 verified: $actual"
-          tar -xzf rustic.tar.gz
-          install -m 0755 rustic "$HOME/.local/bin/rustic"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install rustic (pinned; the one pin lives in the action)
+        uses: ./.github/actions/install-rustic
 
       - name: Install QEMU, Secure-Boot OVMF, xorriso
         run: |
@@ -104,44 +87,4 @@ jobs:
             tail -n 200 "$log"
           else
             echo "no serial log produced"
-          fi
-
-  canary-watchdog:
-    # Scheduled-run failures only email the workflow author; this drill sat
-    # red for 5 straight Mondays with a zero-issue backlog before anyone
-    # noticed (#418).  File (or bump) a tracking issue so a red canary is
-    # always visible work.  Job-level rather than a step in the drill job,
-    # and cancelled-aware, so a timeout-kill (conclusion `cancelled`, for
-    # which failure() is false -- the #419 blind spot) still triggers it on
-    # a fresh runner.  See #420 for the fleet-wide pattern.
-    runs-on: ubuntu-24.04
-    needs: [live-usb-smoke]
-    if: >-
-      always() && github.event_name == 'schedule'
-      && (needs.live-usb-smoke.result == 'failure'
-          || needs.live-usb-smoke.result == 'cancelled')
-    permissions:
-      issues: write
-    steps:
-      - name: File (or bump) the tracking issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        # No `|| true`: if ticket-filing itself fails (perms, missing
-        # label), this job must fail loud -- a silent watchdog is this
-        # bug all over again one level up.
-        run: |
-          set -euo pipefail
-          title="live-usb-smoke: scheduled Secure-Boot restore drill went red"
-          body="Scheduled live-USB drill result: **${{ needs.live-usb-smoke.result }}** on \`${{ github.sha }}\`.
-
-          The BOOT-04 no-OS recovery route (boot a stock live ISO, run restore.sh off the META disc) is unproven until this is green again.
-          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          existing="$(gh issue list --state open \
-            --search "\"$title\" in:title" \
-            --json number --jq '.[0].number // empty')"
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
-          else
-            gh issue create --title "$title" --label bug --body "$body"
           fi

@@ -25,24 +25,16 @@ jobs:
       contents: read
       actions: read
 
-    env:
-      # Pinned rustic release. Update in lockstep with README "Development"
-      # section so local devs and CI run identical versions.
-      RUSTIC_VERSION: "0.11.2"
-      RUSTIC_ASSET: "rustic-v0.11.2-x86_64-unknown-linux-gnu.tar.gz"
-      # SHA256 of the pinned asset, taken from the upstream-published
-      # .sha256 sidecar on the release page. Verified locally on bump.
-      RUSTIC_SHA256: "fb7b74a14418b2dd070360c9abb22607f8559bdd344a0adf1b33bc2e31f83f5f"
-
     steps:
       - name: No workflow in this repo is switched off (#462)
         # GitHub disables a workflow file that has a `schedule:` trigger
         # after 60 days without repository activity.  A disabled file
         # produces no runs, so nothing ever goes red and the #420
         # watchdogs have nothing to report: the 2026-08-05 -> 10-15 quiet
-        # spell switched off seven canaries without a sound.  This job
-        # runs on every push and PR, so the first one after a quiet spell
-        # fails here, naming the fix.  Only files under .github/workflows/
+        # spell switched off seven canaries without a sound.  Since #693
+        # the only scheduled file is weekly.yml, so that is the file a
+        # quiet spell switches off.  This job runs on every push and PR,
+        # so the first one after a quiet spell fails here, naming the fix.  Only files under .github/workflows/
         # count (the API also lists GitHub's own dynamic workflows, e.g.
         # the Copilot agent), and disabled_fork is a fork's normal state.
         env:
@@ -74,30 +66,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install rustic (pinned release tarball)
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.local/bin"
-          cd "$(mktemp -d)"
-          url="https://github.com/rustic-rs/rustic/releases/download/v${RUSTIC_VERSION}/${RUSTIC_ASSET}"
-          echo "Downloading $url"
-          curl -fsSL -o rustic.tar.gz "$url"
-          # Strict SHA256 verification against the pinned hash above.
-          actual=$(sha256sum rustic.tar.gz | awk '{print $1}')
-          if [ "$RUSTIC_SHA256" != "$actual" ]; then
-            echo "SHA256 mismatch: expected=$RUSTIC_SHA256 actual=$actual" >&2
-            exit 1
-          fi
-          echo "SHA256 verified: $actual"
-          tar -xzf rustic.tar.gz
-          # Tarball layout: a single `rustic` binary at the archive root.
-          install -m 0755 rustic "$HOME/.local/bin/rustic"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Verify rustic installation
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          rustic --version
+      - name: Install rustic (pinned; the one pin lives in the action)
+        uses: ./.github/actions/install-rustic
 
       - name: Install xorriso and dvdisaster
         run: |
@@ -160,19 +130,21 @@ jobs:
           shellcheck --version
           make shellcheck
 
-      - name: Run e2e pipeline test (full scan→binpack→stage→ISO→ECC)
+      - name: Run the e2e suite (make test-e2e; pipeline scan→binpack→stage→ISO→ECC)
         # GATE-10: e2e_test.py used to hard-skip off /mnt/lcsas-data (the dev
         # VM LV), so the gate went green-by-skip everywhere else. Point it at
         # a CI scratch base and PROVE it ran: green-by-skip is the bug being
-        # fixed, so we grep the summary for the pipeline test passing and fail
-        # the step if it was skipped or never collected.
+        # fixed, so we grep for the pipeline test passing and fail the step
+        # if it was skipped or never collected.
+        # The whole of tests/e2e runs, as in `make gate` (#694): the tests
+        # that need CDEmu, root or a live ISO skip here, and run in
+        # weekly.yml (live-USB) or by hand (make verify-burn-e2e).
         run: |
           set -euo pipefail
           export LCSAS_E2E_BASE=/var/tmp/lcsas-e2e
           mkdir -p "$LCSAS_E2E_BASE"
-          pytest tests/e2e/test_scripts.py::test_e2e_pipeline -v \
-            | tee /tmp/e2e_pytest.log
-          grep -Eq '1 passed' /tmp/e2e_pytest.log
+          make test-e2e | tee /tmp/e2e_pytest.log
+          grep -Eq 'test_scripts\.py::test_e2e_pipeline PASSED' /tmp/e2e_pytest.log
 
       - name: Type-check (mypy strict)
         run: make typecheck
@@ -192,10 +164,6 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      # Same pinned rustic as the `test` job — keep in lockstep.
-      RUSTIC_VERSION: "0.11.2"
-      RUSTIC_ASSET: "rustic-v0.11.2-x86_64-unknown-linux-gnu.tar.gz"
-      RUSTIC_SHA256: "fb7b74a14418b2dd070360c9abb22607f8559bdd344a0adf1b33bc2e31f83f5f"
       # Skip-rot floor: minimum passed-test count.  qemu-user-static + wine +
       # stock restic (all installed below) let the aarch64/armv7/windows
       # committed-binary tests and the standard-tools compat gate actually
@@ -217,23 +185,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install rustic (pinned release tarball)
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.local/bin"
-          cd "$(mktemp -d)"
-          url="https://github.com/rustic-rs/rustic/releases/download/v${RUSTIC_VERSION}/${RUSTIC_ASSET}"
-          echo "Downloading $url"
-          curl -fsSL -o rustic.tar.gz "$url"
-          actual=$(sha256sum rustic.tar.gz | awk '{print $1}')
-          if [ "$RUSTIC_SHA256" != "$actual" ]; then
-            echo "SHA256 mismatch: expected=$RUSTIC_SHA256 actual=$actual" >&2
-            exit 1
-          fi
-          echo "SHA256 verified: $actual"
-          tar -xzf rustic.tar.gz
-          install -m 0755 rustic "$HOME/.local/bin/rustic"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install rustic (pinned; the one pin lives in the action)
+        uses: ./.github/actions/install-rustic
 
       - name: Install stock restic (pinned, for the standard-tools compat gate)
         # H4: tests/recovery_hardening/test_stock_restic_compat.py — the

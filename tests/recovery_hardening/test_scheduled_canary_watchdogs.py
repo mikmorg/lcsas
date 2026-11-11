@@ -26,6 +26,10 @@ one of the failure modes we just paid for:
    and a 403 on ticket-filing is this bug all over again one level up.
 6. No ``|| true`` inside the job -- ecc-weekly's old step swallowed its own
    errors, so it had never been proven to work.
+7. Since #693 one watchdog serves every canary in weekly.yml, so its
+   ``needs:`` must list every other job in the file, and its ticket table
+   must have a title for each.  A canary left out of ``needs:`` is a
+   canary whose red run files nothing.
 
 Text-level / YAML-free parsing on purpose (pattern of
 test_workflow_path_filter.py): the suite is stdlib-only.
@@ -119,4 +123,60 @@ def test_scheduled_workflow_has_sound_watchdog(workflow: Path) -> None:
         f"{workflow.name} canary-watchdog is not scoped to schedule events "
         "-- PR/dispatch failures are already visible to whoever triggered "
         "them; unscoped watchdogs file duplicate noise."
+    )
+
+
+_JOB_RE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$", re.M)
+
+
+def _job_ids(text: str) -> list[str]:
+    """Top-level job ids: 2-space-indented keys after the `jobs:` line."""
+    m = re.search(r"^jobs:\s*$", text, re.M)
+    assert m, "no top-level `jobs:` line -- parser broken?"
+    return _JOB_RE.findall(text[m.end():])
+
+
+def _watchdog_needs(block: str) -> set[str]:
+    """The watchdog's `needs:`, block form (`- job` lines) or inline list."""
+    m = re.search(r"^    needs:[ \t]*(.*)$", block, re.M)
+    assert m, "canary-watchdog has no needs: line"
+    inline = m.group(1).strip()
+    if inline:
+        return {n.strip() for n in inline.strip("[]").split(",") if n.strip()}
+    found: set[str] = set()
+    for line in block[m.end():].splitlines()[1:]:
+        item = re.match(r"^      - ([A-Za-z0-9_-]+)\s*$", line)
+        if not item:
+            break
+        found.add(item.group(1))
+    return found
+
+
+@pytest.mark.parametrize(
+    "workflow", _scheduled_workflows(), ids=lambda p: p.name
+)
+def test_watchdog_covers_every_job(workflow: Path) -> None:
+    text = workflow.read_text(encoding="utf-8")
+    block = _watchdog_block(text, workflow.name)
+    jobs = set(_job_ids(text)) - {"canary-watchdog"}
+    assert jobs, f"{workflow.name}: no jobs besides the watchdog -- parser broken?"
+    needs = _watchdog_needs(block)
+    missing = sorted(jobs - needs)
+    assert not missing, (
+        f"{workflow.name}: canary-watchdog does not need {missing}, so a "
+        "red run of those files no ticket.  Add them to its needs: list."
+    )
+    unknown = sorted(needs - jobs)
+    assert not unknown, (
+        f"{workflow.name}: canary-watchdog needs {unknown}, which are not "
+        "jobs in this file (GitHub rejects the workflow)."
+    )
+    untitled = sorted(
+        j for j in jobs
+        if not re.search(rf"^\s+{re.escape(j)}\)\s*$", block, re.M)
+    )
+    assert not untitled, (
+        f"{workflow.name}: canary-watchdog has no `case` entry (title and "
+        f"ticket text) for {untitled}; they would be ticketed under a "
+        "generic title."
     )

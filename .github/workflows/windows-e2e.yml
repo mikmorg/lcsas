@@ -16,8 +16,8 @@ name: windows-e2e
 #
 # No `schedule:` here, on purpose (#462): GitHub disables a scheduled file
 # after 60 quiet days, PR trigger and all, and the 2026-08-05 -> 10-15 quiet
-# spell did.  The weekly run lives in windows-e2e-weekly.yml, which calls
-# this file, so a quiet spell can now only switch off that.
+# spell did.  The weekly run lives in weekly.yml, which calls this file,
+# so a quiet spell can now only switch off that.
 
 on:
   pull_request:
@@ -34,8 +34,9 @@ on:
       - "tests/e2e/fixture_lib.py"
       - "tests/e2e/windows_e2e_lib.ps1"
       - ".github/workflows/windows-e2e.yml"
+      - ".github/actions/install-rustic/**"
   workflow_dispatch:
-  # The weekly run (windows-e2e-weekly.yml).
+  # The weekly run (weekly.yml).
   workflow_call: {}
 
 jobs:
@@ -47,11 +48,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
-    env:
-      RUSTIC_VERSION: "0.11.2"
-      RUSTIC_ASSET: "rustic-v0.11.2-x86_64-unknown-linux-gnu.tar.gz"
-      RUSTIC_SHA256: "fb7b74a14418b2dd070360c9abb22607f8559bdd344a0adf1b33bc2e31f83f5f"
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,21 +57,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install rustic (pinned release tarball)
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.local/bin"
-          cd "$(mktemp -d)"
-          url="https://github.com/rustic-rs/rustic/releases/download/v${RUSTIC_VERSION}/${RUSTIC_ASSET}"
-          curl -fsSL -o rustic.tar.gz "$url"
-          actual=$(sha256sum rustic.tar.gz | awk '{print $1}')
-          if [ "$RUSTIC_SHA256" != "$actual" ]; then
-            echo "SHA256 mismatch: expected=$RUSTIC_SHA256 actual=$actual" >&2
-            exit 1
-          fi
-          tar -xzf rustic.tar.gz
-          install -m 0755 rustic "$HOME/.local/bin/rustic"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install rustic (pinned; the one pin lives in the action)
+        uses: ./.github/actions/install-rustic
 
       - name: Install xorriso
         run: |
