@@ -736,4 +736,10 @@ Examples:
 - `LCSAS_MD100_2026_0003` — the third volume, an MDISC100
 
 The sequence number is global across all media types for a given prefix,
-monotonically increasing, ensuring no label collisions.
+monotonically increasing, ensuring no label collisions. A number is never
+issued twice, even after `lcsas session abort` or a volume delete removes
+its volume (#676). The catalog keeps the highest number ever issued in the
+SQLite header field `PRAGMA user_version` (`src/lcsas/db/label_mark.py`).
+This is not a schema change, and every disc catalog carries the field. A
+catalog rebuilt from discs takes the highest number found in any disc
+catalog, as a mark or as a label.

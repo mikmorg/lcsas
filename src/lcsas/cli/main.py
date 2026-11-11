@@ -269,6 +269,13 @@ def build_parser() -> argparse.ArgumentParser:
                               "Logged as a volume event. For multi-config "
                               "edge cases only — discs may print share "
                               "instructions that do not match the real split.")
+    stage_p.add_argument("--allow-low-redundancy", action="store_true",
+                         default=False,
+                         help="Stage a volume even if its RS03 error "
+                              "correction would be below the 5%% floor, or "
+                              "its content exceeds the medium's usable "
+                              "bytes. Recorded as a volume event. NOT "
+                              "recommended.")
 
     # --- burn-iso ---
     burniso_p = subparsers.add_parser(
@@ -1955,7 +1962,11 @@ def cmd_status(args: argparse.Namespace) -> int:
         get_redundancy_report,
         volume_display_status,
     )
-    from lcsas.db.sessions import list_sessions, staged_iso_present
+    from lcsas.db.sessions import (
+        list_sessions,
+        staged_iso_present,
+        staging_incomplete,
+    )
     from lcsas.db.volume_copies import find_stale_copies
     from lcsas.db.volumes import list_volumes
 
@@ -1989,6 +2000,19 @@ def cmd_status(args: argparse.Namespace) -> int:
         needs_reburn = _volumes_needing_reburn(conn)
         failed_labels = {label for label, _, _ in needs_reburn}
         unburned = get_ghost_volumes(conn, older_than_hours=0)
+        # #665: a stage that did not finish (no ISO hash recorded) is
+        # incomplete, whatever is in the staging area: never burn it.
+        incomplete = [v.label for v in unburned
+                      if staging_incomplete(conn, v.volume_id)]
+        incomplete_sessions = sorted({
+            str(r["session_id"]) for r in conn.execute(
+                "SELECT sv.session_id FROM session_volumes sv "
+                "JOIN volumes v USING (volume_id) WHERE v.label IN "
+                f"({','.join('?' * len(incomplete))})",
+                incomplete,
+            )
+        }) if incomplete else []
+        unburned = [v for v in unburned if v.label not in incomplete]
         with_iso = [v.label for v in unburned if staged_iso_present(conn, v.volume_id)]
         # #671: a volume whose disc failed verification is listed under
         # "needs re-burn", not as waiting to be burned.
@@ -2019,6 +2043,16 @@ def cmd_status(args: argparse.Namespace) -> int:
             where = (f"(for {v.location})" if v.status in ("STAGING", "BURNING")
                      else "(no disc in service)")
         logger.info(f"  {v.label:<25} {v.media_type:<10} {shown:<10} {where}")
+    if incomplete:
+        logger.warning(
+            "WARNING: %d volume(s) are INCOMPLETE: their staging did not "
+            "finish, so their ISOs may lack error-correction data: %s. Do "
+            "not burn them. Run 'lcsas session abort <id>' for session %s, "
+            "then 'lcsas stage' again. Until then their packs are NOT on "
+            "any disc.",
+            len(incomplete), ", ".join(incomplete),
+            ", ".join(incomplete_sessions),
+        )
     if waiting:
         logger.warning(
             "WARNING: %d volume(s) are staged and waiting to be burned "
@@ -2036,7 +2070,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             "pool for the next 'lcsas stage'.",
             len(ghost_labels), ", ".join(ghost_labels),
         )
-    if summary["staged"] > 0 and not (with_iso or ghost_labels):
+    if summary["staged"] > 0 and not (with_iso or ghost_labels or incomplete):
         logger.warning(
             "WARNING: %d pack(s) are staged on volumes that were never "
             "burned. See 'lcsas catalog reconcile'.",
@@ -2191,6 +2225,55 @@ def cmd_staging_clean(args: argparse.Namespace) -> int:
     return 0
 
 
+def _sync_mirrors_before_stage(
+    conn: sqlite3.Connection,
+    repo_ids: list[str] | None,
+    *,
+    dry_run: bool,
+) -> bool:
+    """Register unscanned mirror packs before staging (#656).
+
+    Returns False (stage must stop) when a mirror could not be read
+    completely: unscanned packs may hide behind the unreadable paths.
+    """
+    from lcsas.packs.stage_sync import sync_unscanned_packs
+
+    sync = sync_unscanned_packs(conn, repo_ids, dry_run=dry_run)
+    if sync.incomplete:
+        for name, errors in sync.incomplete.items():
+            logger.error(
+                "Could not read the whole mirror of repository '%s' "
+                "(%d unreadable path(s), first: %s).",
+                name, len(errors), errors[0],
+            )
+        logger.error(
+            "Refusing to stage: the mirror may hold pack files that are not "
+            "in the catalog. Fix the mount or permissions, run 'lcsas scan', "
+            "then stage again."
+        )
+        return False
+    for name, count in sync.unscanned.items():
+        if dry_run:
+            logger.info(
+                "[DRY RUN] Repository '%s': %d pack file(s) in the mirror are "
+                "not in the catalog yet. A real stage registers them first, "
+                "as 'lcsas scan' does; this plan leaves them out.",
+                name, count,
+            )
+        else:
+            logger.info(
+                "Repository '%s': registered %d pack file(s) from the mirror "
+                "that were not in the catalog yet (as 'lcsas scan' does).",
+                name, count,
+            )
+    for name, count in sync.missing_from_mirror.items():
+        logger.warning(
+            "Repository '%s': %d pack(s) in the catalog are no longer in the "
+            "mirror. Run 'lcsas scan' to record prunes.", name, count,
+        )
+    return True
+
+
 def cmd_stage(args: argparse.Namespace) -> int:
     """Stage ISOs for deferred burning."""
     from lcsas.burn.orchestrator import BurnOrchestrator
@@ -2223,6 +2306,9 @@ def cmd_stage(args: argparse.Namespace) -> int:
                 SubprocessXorrisoRunner(tmpdir=config.staging_path),
                 SubprocessDVDisasterRunner(tmpdir=config.staging_path),
                 allow_escrow_drift=getattr(args, "allow_escrow_drift", False),
+                allow_low_redundancy=getattr(
+                    args, "allow_low_redundancy", False,
+                ),
             )
 
             if args.clean:
@@ -2249,6 +2335,13 @@ def cmd_stage(args: argparse.Namespace) -> int:
                 repo_ids = _resolve_repo_names_to_ids(conn, args.repo, config)
             except ValueError as e:
                 logger.error(str(e))
+                return 1
+
+            # #656: a disc carries each mirror's snapshots as they are now,
+            # so the catalog must know every pack file in the mirrors first.
+            if not _sync_mirrors_before_stage(
+                conn, repo_ids, dry_run=getattr(args, "dry_run", False),
+            ):
                 return 1
 
             from lcsas.db.key_escrow import EscrowDriftError
@@ -2279,9 +2372,41 @@ def cmd_stage(args: argparse.Namespace) -> int:
                     m.iso_path, iso_size / 1e9, len(m.selected_packs),
                 )
             logger.info(f"Manifest: {result.staging_dir / 'session.json'}")
+            _report_snapshot_coverage(result)
         return 0
     finally:
         shutdown.uninstall()
+
+
+def _report_snapshot_coverage(result: Any) -> None:
+    """#657: say which snapshots these discs do NOT carry, and why.
+
+    A snapshot goes on a disc only when every pack it needs is on a
+    burned disc or on this session's discs.  The rest wait for a later
+    disc; until then the newest snapshot on the discs is older than the
+    newest backup.
+    """
+    for repo_name, snaps in sorted(result.snapshots_left_out.items()):
+        logger.warning(
+            "Repository '%s': %d snapshot(s) are NOT on these discs, "
+            "because some of their packs are not on any disc yet:",
+            repo_name, len(snaps),
+        )
+        for snap in snaps:
+            logger.warning(
+                "  %s  %s  (%d pack(s) not on a disc)",
+                snap.snapshot_id[:8], snap.time, snap.missing_packs,
+            )
+        logger.warning(
+            "  A later disc carries them once their packs are burned "
+            "(run 'lcsas stage' again after these discs are burned)."
+        )
+    for repo_name, reason in sorted(result.snapshots_unchecked.items()):
+        logger.warning(
+            "Repository '%s': could not check which snapshots are fully on "
+            "discs (%s); every snapshot was copied to these discs.",
+            repo_name, reason,
+        )
 
 
 def cmd_burn_session(args: argparse.Namespace) -> int:

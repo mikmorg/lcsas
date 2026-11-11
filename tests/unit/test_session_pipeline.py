@@ -1324,18 +1324,19 @@ class TestMidStageCompensation:
     ):
         """No crash window: a volume row never exists outside session_volumes.
 
-        Crash right after _stage_single_volume returns (in the ISO-hashing
-        step of stage()); the already-committed volume must still be
-        reachable through session_volumes so burn_session / session abort
-        can see it.
+        Crash right after _stage_single_volume returns (writing the
+        session manifest in stage()); the already-committed volume must
+        still be reachable through session_volumes so burn_session /
+        session abort can see it.  Since #665 the ISO hash is recorded
+        inside _stage_single_volume, before the ISO gets its final name.
         """
         conn = env["conn"]
         orch = env["orch"]
 
-        def _boom(path):
+        def _boom(*_a, **_kw):
             raise RuntimeError("crash before session registration")
 
-        monkeypatch.setattr("lcsas.burn.orchestrator.sha256_file", _boom)
+        monkeypatch.setattr(orch, "_write_session_manifest", _boom)
 
         with pytest.raises(RuntimeError, match="crash before session"):
             orch.stage()
@@ -1347,7 +1348,7 @@ class TestMidStageCompensation:
             (vols[0]["volume_id"],),
         ).fetchone()
         assert sv is not None
-        assert sv["iso_sha256"] == ""
+        assert sv["iso_sha256"] == hashlib.sha256(b"\x00" * 1024).hexdigest()
 
 
 # =========================================================================

@@ -724,5 +724,9 @@ def rebuild_catalog(
 
     _promote_read_discs(conn, own_uuids, result)
 
+    # #676: never reissue a label number that any disc carries.
+    from lcsas.db.label_mark import merge_label_high_water
+    merge_label_high_water(conn, [db for _p, db, _f in ordered if db is not None])
+
     conn.close()
     return result

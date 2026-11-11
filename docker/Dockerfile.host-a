@@ -23,6 +23,7 @@ FROM debian:12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 \
+        python3-zstandard \
         xorriso \
         dvdisaster \
         ca-certificates \
@@ -47,6 +48,11 @@ RUN curl -fsSL -o "/tmp/${RUSTIC_TARBALL}" \
  && rm -rf /tmp/* \
  && rustic --version
 
+# python3-zstandard (above) is optional: LCSAS runs on the standard library
+# alone.  `lcsas stage` walks each repository's snapshot trees to decide
+# which snapshots are fully on discs (#657); rustic compresses trees with
+# zstd, and the built-in pure-Python decoder is about 100x slower.
+#
 # LCSAS itself: zero runtime dependencies (pyproject.toml `dependencies = []`),
 # pure standard library.  No pip, no venv, no build step — source on
 # PYTHONPATH is enough.  src/lcsas/__main__.py propagates the exit code, so

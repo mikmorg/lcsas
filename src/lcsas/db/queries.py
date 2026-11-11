@@ -1091,3 +1091,19 @@ def get_snapshots_by_tag(
             (tag,),
         ).fetchall()
     return [_row_to_snapshot(r) for r in rows]
+
+
+def get_archived_pack_ids(conn: sqlite3.Connection, repo_id: str) -> set[str]:
+    """Pack IDs (file names) of a repository that are on a durable volume.
+
+    #657: ``lcsas stage`` puts a snapshot on a disc only when every pack
+    it needs is on a durable volume or in the session being staged.
+    Pruned packs are included: a pack on a burned disc is still there.
+    """
+    rows = conn.execute(
+        f"""SELECT p.sha256 FROM packs p
+           WHERE p.repo_id = ?
+             AND {_HAS_DURABLE_LINK}""",
+        (repo_id,),
+    ).fetchall()
+    return {r[0] for r in rows}
