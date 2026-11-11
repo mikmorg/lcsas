@@ -298,6 +298,8 @@ def _build_archive(work: Path) -> _Archive:
     delta.register_new_packs()
     conn.commit()
 
+    # stage() checks the staging area's free space first, so it must exist.
+    (work / "staging").mkdir(exist_ok=True)
     config = LCSASConfig(
         mirror_base_path=work / "mirror",
         staging_path=work / "staging",
