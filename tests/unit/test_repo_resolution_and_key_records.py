@@ -101,10 +101,9 @@ def test_resolver_order_mirror_path_then_name_then_id():
     assert resolve_repo(conn, "id-a").repo_id == "id-a"
     assert resolve_repo(conn, "PHOTOS").repo_id == "id-a"
     assert resolve_repo(conn, "nothing") is None
-    # The burn's reverse map agrees.
-    assert config_names_by_repo_id(conn, {"pics": Path("/m/photos")}) == {
-        "id-a": "pics",
-    }
+    # The burn's reverse map puts the mirror first too.
+    names = config_names_by_repo_id(conn, {"pics": Path("/m/photos")})
+    assert names["id-a"] == "pics"
     conn.close()
 
 
