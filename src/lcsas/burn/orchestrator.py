@@ -1229,7 +1229,9 @@ class BurnOrchestrator:
                 # are idempotent re-writes of the same files.
                 self._write_durable_receipts([receipt], location)
 
-            except Exception as original_exc:
+            except BaseException as original_exc:
+                # BaseException: Ctrl-C during a burn must also return the
+                # volume to STAGING, or the next run finds it BURNING (#668).
                 try:
                     self._conn.rollback()
                     if not is_reburn:
@@ -1314,6 +1316,34 @@ class BurnOrchestrator:
                     f"again."
                 ),
             )
+
+        # #668: a burn interrupted hard (killed, power loss) leaves its
+        # volume in BURNING.  With no disc recorded it was never burned
+        # as far as the catalog knows: put it back to STAGING so this run
+        # burns it.  BURNING with a disc recorded is not a state the burn
+        # writes; refuse it rather than guess.
+        from lcsas.db.volume_copies import get_copies_for_volume
+
+        for sv in session_vols:
+            vol = get_volume_by_id(self._conn, sv.volume_id)
+            if vol.status != "BURNING":
+                continue
+            if get_copies_for_volume(
+                self._conn, sv.volume_id, active_only=False,
+            ):
+                raise BurnError(
+                    f"Volume {vol.label} is BURNING but already has a disc "
+                    f"recorded. Nothing was burned.",
+                    recovery_hint=(
+                        f"Check it with 'lcsas catalog reconcile' and "
+                        f"'lcsas verify {vol.label} --disc'."
+                    ),
+                )
+            _logger.warning(
+                "Volume %s was left BURNING by an interrupted burn; "
+                "resetting it to STAGING and burning it again.", vol.label,
+            )
+            update_status(self._conn, sv.volume_id, "STAGING")
 
     def _assert_blank_media(self, device: str, label: str) -> None:
         """Refuse to burn onto a disc that already carries data (FUP-01).

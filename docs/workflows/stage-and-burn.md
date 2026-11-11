@@ -558,7 +558,11 @@ Volume statuses (set by `update_status` / `mark_closed`):
 - **`STAGING`** — set by `create_volume` during `_stage_single_volume`.
   Also where a volume falls back if `execute` or `burn_session` raises
   (`BurnOrchestrator._stage_single_volume`, `BurnOrchestrator.burn_session`).
-- **`BURNING`** — set immediately before `xorriso burn_iso`.
+- **`BURNING`** — set immediately before `xorriso burn_iso`. A burn
+  killed outright (power loss, `kill -9`) leaves the volume here. The next
+  `lcsas burn --session` puts a BURNING volume with no disc recorded back
+  to `STAGING` and burns it, and it checks this before it asks for a
+  blank disc (#668).
 - **`BURNED`** — set when a burn completes but post-burn `verify_disc`
   fails. The volume holds at `BURNED` so the owner can investigate
   (`BurnOrchestrator.burn_session`).
@@ -597,8 +601,9 @@ The pipeline is interrupt-safe in three places:
    owner currently has to manually identify the failed volume and
    re-stage just that volume; this is a documented sharp edge.
 3. **Inside a single volume's burn** — if `xorriso burn_iso` or
-   `verify_disc` raises, the volume transitions back to `STAGING` and the
-   exception propagates (`BurnOrchestrator.burn_session`). The
+   `verify_disc` raises, or the owner presses Ctrl-C, the volume
+   transitions back to `STAGING` and the exception propagates
+   (`BurnOrchestrator.burn_session`, #668). The
    ISO file is **not** deleted unless verify passed
    (`BurnOrchestrator.burn_session`), so re-running
    `lcsas burn --session <id>` will retry that volume with the same ISO.
