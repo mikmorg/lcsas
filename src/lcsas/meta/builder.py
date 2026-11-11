@@ -1959,7 +1959,7 @@ class MetaVolumeBuilder:
         Every file the text references must exist on the meta disc
         (guarded by tests/unit/test_meta_builder.py).
         """
-        from lcsas.staging.metadata import _share_recovery_lines, split_view
+        from lcsas.staging.metadata import share_recovery_lines, split_view
 
         # The meta disc is always labelled LCSAS_META, whatever the archive's
         # label_prefix (#588): the estate card and every heir doc name that
@@ -2022,7 +2022,7 @@ class MetaVolumeBuilder:
                 # Same share-combining pre-step text as PASSWORD_INFO.txt — one
                 # source so the doc-contract gates cover both.
                 split_block = "\n" + "\n".join(
-                    _share_recovery_lines(config, recorded=recorded)
+                    share_recovery_lines(config, recorded=recorded)
                 ).rstrip() + "\n"
             if config.technical_contact:
                 contact_block = (

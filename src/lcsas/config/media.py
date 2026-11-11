@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from enum import Enum
 
+# Max single-extent ISO 9660 file section: 4 GiB - 2 KiB.  A file larger than
+# this is stored as multiple extents under ISO 9660 Level 3, which Windows'
+# native CDFS driver (the Mount-DiskImage path behind restore.bat) does not
+# reassemble — the heir silently sees a truncated file.  The ISO mastering
+# step refuses any tree containing such a file, and the bin-packer warns
+# about such packs before staging.
+ISO_MAX_FILE_BYTES = 0xFFFF_F800
+
 
 class MediaType(Enum):
     """Supported physical media types with capacity and ECC overhead.

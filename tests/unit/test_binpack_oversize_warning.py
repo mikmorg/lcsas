@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import logging
 
-from lcsas.binpack.algorithm import _ISO_MAX_FILE_BYTES, first_fit_decreasing
-from lcsas.config.media import MediaType
+from lcsas.binpack.algorithm import first_fit_decreasing
+from lcsas.config.media import ISO_MAX_FILE_BYTES, MediaType
 
 
 def test_warns_on_multiextent_item_that_fits_media(caplog):
@@ -33,7 +33,7 @@ def test_warns_on_multiextent_item_that_fits_media(caplog):
 
 def test_no_warning_for_item_at_limit(caplog):
     """An item of exactly the single-extent limit must not warn."""
-    items = [("ok", _ISO_MAX_FILE_BYTES)]
+    items = [("ok", ISO_MAX_FILE_BYTES)]
     with caplog.at_level(logging.WARNING, logger="lcsas.binpack.algorithm"):
         first_fit_decreasing(items, capacity=MediaType.BDXL100.usable_bytes)
     assert not any(

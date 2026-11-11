@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from lcsas.iso.xorriso import _ISO_MAX_FILE_BYTES
+from lcsas.config.media import ISO_MAX_FILE_BYTES
 
 _logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ def first_fit_decreasing(
     # ISO mastering hard-rejects these (iso.xorriso); warn at plan time too so
     # the owner hears about it before staging completes.
     multiextent = [
-        (iid, sz) for iid, sz in sorted_items if sz > _ISO_MAX_FILE_BYTES
+        (iid, sz) for iid, sz in sorted_items if sz > ISO_MAX_FILE_BYTES
     ]
     if multiextent:
         detail = ", ".join(f"'{iid}' ({sz:,} bytes)" for iid, sz in multiextent[:5])
@@ -74,7 +74,7 @@ def first_fit_decreasing(
             "%d item(s) exceed the single-extent ISO 9660 limit (%d bytes) and "
             "would be stored multi-extent, which Windows' native mount silently "
             "truncates. ISO mastering will refuse these. Items: %s",
-            len(multiextent), _ISO_MAX_FILE_BYTES, detail,
+            len(multiextent), ISO_MAX_FILE_BYTES, detail,
         )
 
     selected: list[tuple[str, int]] = []

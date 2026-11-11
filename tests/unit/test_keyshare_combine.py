@@ -11,7 +11,7 @@ Covers:
       split archive and hide it for an archive whose password is not split.
 
 Targets 100% line coverage of ``lcsas.meta.keyshare_combine`` and the new
-``_bundle_keyshare_combiner`` / ``_share_recovery_lines`` / split-gating
+``_bundle_keyshare_combiner`` / ``share_recovery_lines`` / split-gating
 branches.
 """
 

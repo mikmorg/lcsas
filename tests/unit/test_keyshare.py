@@ -160,7 +160,7 @@ def test_both_extendable_flags_round_trip(extendable: bool) -> None:
         1, [(2, 3)], _MS, b"pw", 1, extendable=extendable
     )[0]
     assert combine_mnemonics(mnemonics[:2], b"pw") == _MS
-    share = slip39._Share.from_mnemonic(mnemonics[0])
+    share = slip39.Share.from_mnemonic(mnemonics[0])
     assert share.extendable is extendable
 
 
@@ -301,8 +301,8 @@ def test_mismatched_common_parameters_raises() -> None:
     top-level "all mnemonics share the same common parameters" guard fires.
     """
     groups = generate_mnemonics(2, [(1, 1), (1, 1)], _MS)
-    g0 = slip39._Share.from_mnemonic(groups[0][0])
-    g1 = slip39._Share.from_mnemonic(groups[1][0])
+    g0 = slip39.Share.from_mnemonic(groups[0][0])
+    g1 = slip39.Share.from_mnemonic(groups[1][0])
     # Tamper g1's iteration exponent (a common parameter) and re-encode.
     forged = g1._replace(iteration_exponent=g1.iteration_exponent + 1)
     with pytest.raises(KeyShareError, match="must begin with the same"):
@@ -317,7 +317,7 @@ def test_mismatched_group_parameters_raises() -> None:
     threshold while keeping identifier/group params identical.
     """
     mnemonics = split_secret(_MS, threshold=2, count=3)
-    s0 = slip39._Share.from_mnemonic(mnemonics[0])
+    s0 = slip39.Share.from_mnemonic(mnemonics[0])
     # A share in the same group index but with a different member_threshold.
     forged = s0._replace(member_threshold=s0.member_threshold + 1)
     with pytest.raises(KeyShareError, match="parameters don't match"):
@@ -337,8 +337,8 @@ def test_more_than_threshold_shares_recover() -> None:
 def test_conflicting_shares_with_one_member_index_raise() -> None:
     """Two DIFFERENT shares claiming one member index cannot both be right."""
     mnemonics = split_secret(_MS, threshold=2, count=3)
-    s0 = slip39._Share.from_mnemonic(mnemonics[0])
-    s1 = slip39._Share.from_mnemonic(mnemonics[1])
+    s0 = slip39.Share.from_mnemonic(mnemonics[0])
+    s1 = slip39.Share.from_mnemonic(mnemonics[1])
     clash = s1._replace(member_index=s0.member_index)
     with pytest.raises(KeyShareError, match="indices must be unique"):
         combine_mnemonics([mnemonics[0], clash.mnemonic(), mnemonics[2]])
@@ -366,7 +366,7 @@ def test_interpolate_at_known_x_returns_share_data() -> None:
 
 def test_short_mnemonic_raises() -> None:
     with pytest.raises(KeyShareError, match="at least"):
-        slip39._Share.from_mnemonic("academic academic academic")
+        slip39.Share.from_mnemonic("academic academic academic")
 
 
 def test_too_long_mnemonic_padding_raises() -> None:
@@ -376,7 +376,7 @@ def test_too_long_mnemonic_padding_raises() -> None:
     # Append one extra word: 21 words -> padding_len = (10*(21-7))%16 = 12 > 8.
     bad = " ".join([*words, "academic"])
     with pytest.raises(KeyShareError, match="Invalid mnemonic length"):
-        slip39._Share.from_mnemonic(bad)
+        slip39.Share.from_mnemonic(bad)
 
 
 def test_recover_secret_alias_matches_combine() -> None:

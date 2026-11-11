@@ -17,8 +17,8 @@ from unittest.mock import patch
 
 import pytest
 
+from lcsas.config.media import ISO_MAX_FILE_BYTES
 from lcsas.iso.xorriso import (
-    _ISO_MAX_FILE_BYTES,
     OversizeFileError,
     SubprocessXorrisoRunner,
 )
@@ -34,7 +34,7 @@ class TestCreateIsoOversizeGuard:
     def test_rejects_oversize_file_before_spawn(self, tmp_path):
         source = tmp_path / "source"
         offender = source / "data" / "ab" / "cd" / "bighash"
-        _make_sparse(offender, _ISO_MAX_FILE_BYTES + 1)
+        _make_sparse(offender, ISO_MAX_FILE_BYTES + 1)
         runner = SubprocessXorrisoRunner()
 
         with patch("lcsas.iso.xorriso.subprocess.Popen") as mock_popen:
@@ -45,10 +45,10 @@ class TestCreateIsoOversizeGuard:
         assert "bighash" in str(exc.value)
 
     def test_exact_limit_passes_guard(self, tmp_path):
-        """A file of exactly _ISO_MAX_FILE_BYTES is single-extent and allowed."""
+        """A file of exactly ISO_MAX_FILE_BYTES is single-extent and allowed."""
         source = tmp_path / "source"
         ok_file = source / "data" / "ok"
-        _make_sparse(ok_file, _ISO_MAX_FILE_BYTES)
+        _make_sparse(ok_file, ISO_MAX_FILE_BYTES)
         runner = SubprocessXorrisoRunner()
 
         captured: list[str] = []
@@ -72,7 +72,7 @@ class TestCreateBootableIsoOversizeGuard:
     def test_rejects_oversize_file_before_spawn(self, tmp_path):
         source = tmp_path / "source"
         offender = source / "payload" / "huge.img"
-        _make_sparse(offender, _ISO_MAX_FILE_BYTES + 1)
+        _make_sparse(offender, ISO_MAX_FILE_BYTES + 1)
         runner = SubprocessXorrisoRunner()
 
         with patch("lcsas.iso.xorriso.subprocess.run") as mock_run:
@@ -85,7 +85,7 @@ class TestCreateBootableIsoOversizeGuard:
     def test_exact_limit_passes_guard(self, tmp_path):
         source = tmp_path / "source"
         ok_file = source / "ok"
-        _make_sparse(ok_file, _ISO_MAX_FILE_BYTES)
+        _make_sparse(ok_file, ISO_MAX_FILE_BYTES)
         runner = SubprocessXorrisoRunner()
 
         def _run_factory(cmd, **kwargs):

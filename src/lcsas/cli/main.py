@@ -7135,7 +7135,7 @@ def _verify_password_unlocks_repo(
     from lcsas.restore.restic_fallback import (
         IntegrityError,
         NoKeyUnlockedError,
-        _try_keys,
+        try_keys,
     )
 
     if not keys_dir.is_dir():
@@ -7152,7 +7152,7 @@ def _verify_password_unlocks_repo(
             "Pass --no-verify-repo to skip (dangerous)."
         )
     try:
-        _try_keys(keys_dir, password)
+        try_keys(keys_dir, password)
     except NoKeyUnlockedError as e:
         damaged = "; ".join(why for _, why in e.corrupt)
         if not e.rejected:
@@ -7196,14 +7196,14 @@ def _recombine_roundtrip_error(
     from itertools import combinations
 
     from lcsas.keyshare import KeyShareError, decode_master_secret, recover_secret
-    from lcsas.keyshare.slip39 import _Share
+    from lcsas.keyshare.slip39 import Share
 
     # Read K from share metadata.  A corrupted/short mnemonic here is itself a
     # verification failure (its checksum won't parse).
     threshold: int | None = None
     for i, mn in enumerate(mnemonics):
         try:
-            threshold = _Share.from_mnemonic(mn).member_threshold
+            threshold = Share.from_mnemonic(mn).member_threshold
             break
         except KeyShareError as e:
             return f"share {i + 1} is not a valid SLIP-0039 share: {e}"

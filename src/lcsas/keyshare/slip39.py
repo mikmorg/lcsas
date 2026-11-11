@@ -412,7 +412,9 @@ class _ShareGroupParameters(NamedTuple):
     member_threshold: int
 
 
-class _Share(NamedTuple):
+class Share(NamedTuple):
+    """One SLIP-0039 share mnemonic, decoded into its fields."""
+
     identifier: int
     extendable: bool
     iteration_exponent: int
@@ -477,7 +479,7 @@ class _Share(NamedTuple):
         return " ".join(self.words())
 
     @classmethod
-    def from_mnemonic(cls, mnemonic: str) -> _Share:
+    def from_mnemonic(cls, mnemonic: str) -> Share:
         data = _mnemonic_to_indices(mnemonic)
 
         if len(data) < MIN_MNEMONIC_LENGTH_WORDS:
@@ -545,12 +547,12 @@ class _Share(NamedTuple):
 
 class _ShareGroup:
     def __init__(self) -> None:
-        self.shares: set[_Share] = set()
+        self.shares: set[Share] = set()
 
     def __len__(self) -> int:
         return len(self.shares)
 
-    def add(self, share: _Share) -> None:
+    def add(self, share: Share) -> None:
         if self.shares and self.group_parameters() != share.group_parameters():
             mismatch = next(
                 name
@@ -718,7 +720,7 @@ def generate_mnemonics(
         groups, group_shares, strict=True
     ):
         group_mnemonics = [
-            _Share(
+            Share(
                 identifier,
                 extendable,
                 iteration_exponent,
@@ -741,7 +743,7 @@ def _decode_mnemonics(mnemonics: Iterable[str]) -> dict[int, _ShareGroup]:
     common_params: set[_ShareCommonParameters] = set()
     groups: dict[int, _ShareGroup] = {}
     for mnemonic in mnemonics:
-        share = _Share.from_mnemonic(mnemonic)
+        share = Share.from_mnemonic(mnemonic)
         common_params.add(share.common_parameters())
         group = groups.setdefault(share.group_index, _ShareGroup())
         group.add(share)
@@ -859,7 +861,7 @@ def share_identifier(mnemonic: str) -> int:
 
     :raises KeyShareError: if *mnemonic* is not a valid SLIP-0039 share.
     """
-    return _Share.from_mnemonic(mnemonic).identifier
+    return Share.from_mnemonic(mnemonic).identifier
 
 
 def check_share(mnemonic: str) -> str | None:
