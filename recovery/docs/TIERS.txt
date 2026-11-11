@@ -327,7 +327,9 @@ and running the same command again carries on (finished files are
 skipped).  A driver script should keep its tools folder and say how
 to resume, and must NOT try the next tier: tier 2 cannot swap discs.
 restore.sh and restore.bat both do so, with or without
-LCSAS_TIER_FALLBACK, and exit 75 themselves.
+LCSAS_TIER_FALLBACK, and exit 75 themselves.  Tier 3 uses the same
+code for the same stop (rc8); restore.sh treats it the same way:
+no "FAILED" report, the tools folder stays, and it exits 75.
 
 Tier 1 exit status, in full:
   0   restored (or, with --list-snapshots, listed)
@@ -335,6 +337,15 @@ Tier 1 exit status, in full:
   2   usage error
   75  stopped at the disc prompt (q, or the input ended)
   77  wrong password (see above)
+
+Tier 3 (standalone_restorer.py) exit status:
+  0   restored (or, with --list-snapshots, listed)
+  1   failed (setup: wrong password, no repository, Python older
+      than 3.10; or a full disk)
+  2   usage error, or finished with some files skipped (listed in
+      RESTORE_FAILURES.txt; see "TIER 3: SKIP-AND-CONTINUE")
+  75  stopped at the disc prompt (q, or the input ended)
+  130 stopped with Ctrl-C
 
 WHY PYTHON IS NOT ON THE BARE PATH
 

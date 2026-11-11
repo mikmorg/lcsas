@@ -187,3 +187,23 @@ def test_no_python_runs_after_tier1_fails(tmp_path: Path) -> None:
     assert "ERROR: no recovery method available." in res.stderr, res.stderr
     assert "falling back to Python" not in res.stderr, res.stderr
 
+
+def test_tier3_exit_75_is_a_stop_not_a_failure(tmp_path: Path) -> None:
+    """Tier 3 exits 75 (q at its disc prompt): restore.sh exits 75 too,
+    reports no failure, keeps the tools folder and says how to resume."""
+    recovery = _fixture(tmp_path, None)
+    stub_dir = tmp_path / "stubbin"
+    _host_python(stub_dir, 75, tmp_path / "host-argv.log")
+    tools = tmp_path / "tools"
+
+    res = _run(recovery, tmp_path, stub_dir, LCSAS_TOOLS_DIR=str(tools))
+
+    assert res.returncode == 75, (
+        f"rc={res.returncode}\nstdout:{res.stdout}\nstderr:{res.stderr}")
+    assert "HOST_PYTHON_RAN" in res.stdout, res.stdout
+    assert "[tier 3] stopped at the disc prompt at your request." in res.stderr, (
+        res.stderr)
+    assert "[tier 3] FAILED" not in res.stderr, res.stderr
+    assert "captured stderr" not in res.stderr, res.stderr
+    assert (tools / "resume.sh").is_file()
+    assert f"sh {tools}/resume.sh" in res.stderr, res.stderr

@@ -38,7 +38,7 @@
 #   2    usage error
 #   64   no recovery binary available at any tier (issue #225)
 #   65   the reader stopped at a question this script asked
-#   75   the reader typed q at tier 1's disc prompt (#615)
+#   75   the reader typed q at the disc prompt of tier 1 (#615) or tier 3
 #   77   a repository key rejected the password, or the reader stopped at
 #        the password or share card prompt
 #   130  stopped with Ctrl-C (143: killed with TERM)
@@ -3478,7 +3478,13 @@ if [ "${LCSAS_ALLOW_PYTHON_TIER:-1}" = "1" ]; then
         # Defensive: cat read an empty file?  Default to 1.
         [ -n "$tier3_rc" ] || tier3_rc=1
         printf '[tier 3] rc=%d\n' "$tier3_rc" >> "$_restore_exit_log" 2>/dev/null || true
-        if [ "$tier3_rc" -ne 0 ] && [ -s "$TIER3_ERR" ]; then
+        if [ "$tier3_rc" -eq 75 ]; then
+            # Exit 75: the reader typed q at tier 3's disc prompt, or its
+            # input ended -- a pause, not a failure, as for tier 1's 75.
+            # The exit handler keeps the tools folder and says how to
+            # carry on.
+            printf '[tier 3] stopped at the disc prompt at your request.\n' >&2
+        elif [ "$tier3_rc" -ne 0 ] && [ -s "$TIER3_ERR" ]; then
             printf '\n[tier 3] FAILED (rc=%d)\n' "$tier3_rc" >&2
             printf '[tier 3] -------------- captured stderr --------------\n' >&2
             sed 's/^/[tier 3] /' "$TIER3_ERR" >&2
