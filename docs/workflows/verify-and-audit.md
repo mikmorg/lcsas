@@ -66,7 +66,7 @@ one place that decides it
 3. `cmd_verify` loads config and acquires a `locked_connection` against the resolved catalog path, then runs `ensure_schema` (schema v10) (`cmd_verify`, `src/lcsas/cli/main.py`).
 4. If `--all` is set, control hands off to `_verify_all_disc` (when `--disc`) or `_verify_all` — see the next workflow.
 5. Otherwise, look up the volume by label; bail if missing.
-6. **Manual-marking branch (`--mark-verified`):** transition `BURNED → VERIFIED` (or `STAGING → VERIFIED` with `force=True` for the split-machine workflow) and append a `VERIFY_PASS` event.
+6. **Manual-marking branch (`--mark-verified`, `_mark_verified`):** only a `BURNED` or `STAGING` volume (not a lost one). A volume with no ACTIVE disc needs `--location` (#673): the disc is recorded there (ACTIVE, with the staged ISO's hash; `last_verified_at` stays empty, as nothing read the disc) and `closed_at` is set. Then `BURNED → VERIFIED` (or `STAGING → BURNING → VERIFIED`) and a `VERIFY_PASS` event at that location. A `--location` where the volume has no disc, while it has discs elsewhere, is refused. To check the disc itself instead, see `burn-iso --verify-only` in `burn-iso-portable.md`.
 7. **Manual-marking branch (`--mark-failed`):** append a `VERIFY_FAIL` event with `detail` text; do not change status.
 8. **Physical/ISO branch:** if `--iso` was not passed and `--disc` was not requested, look up the most-recent `session_volumes.iso_path` for the volume; bail if neither is available.
 9. If `--disc`: resolve which disc is in the drive (`--location`, or the volume's sole ACTIVE disc), then run `_check_disc_for_volume` (`src/lcsas/cli/main.py`): an **identity gate** first (read the disc's ISO 9660 Volume ID; a mismatch / unreadable ID is `WRONG_DISC` and records *nothing* — FMA-03), then `verify_disc` (`-check_media` readability), then a **device read-back SHA-256** compared against the hash recorded at stage time (BURN-04). A PASS stamps `last_verified_at` on the disc (FMA-05).
@@ -221,8 +221,8 @@ one place that decides it
 2. Dispatch: `args.command == "status"` → `cmd_status` (`src/lcsas/cli/main.py`).
 3. `cmd_status` opens an existing catalog via `_open_existing_catalog` (read-only; errors if uninitialized).
 4. If `--stale-copies`, delegate to `_print_stale_copies` (FMA-05) and return. If `--redundancy`, delegate to `_print_redundancy_report` (FMA-08) and return.
-5. Otherwise: query `get_archive_status_summary`, `list_volumes`, the lost volumes (`get_lost_volume_ids`), partial sessions, the FMA-08 single-disc volumes (`get_redundancy_report` with `min_copies=2`), per-volume "needs re-burn" events, and `find_stale_copies`.
-6. Print the pack-stats line, the per-volume table, and any **WARNING** lines: staged-never-burned packs, PARTIAL sessions, volumes needing re-burn, single-disc packs (→ `status --redundancy`), and stale discs (→ `status --stale-copies` / `verify --all --disc`).
+5. Otherwise: query `get_archive_status_summary`, `list_volumes`, the lost volumes (`get_lost_volume_ids`), partial sessions, the FMA-08 single-disc volumes (`get_redundancy_report` with `min_copies=2`), the "needs re-burn" locations (`_volumes_needing_reburn`: per volume and location, the newest of `VERIFY_PASS`, `VERIFY_FAIL` and `VERIFY_FAIL_REBURN` is a failure; other events do not count, #671; once the volume's packs were staged again for that location, or are on another disc there, it is no longer listed unless a disc of it is still recorded there), and `find_stale_copies`.
+6. Print the pack-stats line, the per-volume table, and any **WARNING** lines: staged-never-burned packs, PARTIAL sessions, volumes needing re-burn (with the next step: `lcsas stage --for-location <location>`, as the import message says; a volume listed there is not also listed as waiting to be burned), single-disc packs (→ `status --redundancy`), and stale discs (→ `status --stale-copies` / `verify --all --disc`).
 7. Return `0`.
 
 **Expected outcome:**

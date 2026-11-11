@@ -657,8 +657,8 @@ before invoking restore.sh.
       tier cannot help and may leave a partial tree.  Fix the
       password and re-run.  (A missing/unreadable keys directory is
       NOT treated as a wrong password; it exits 1 and falls through
-      normally.)  Typing q at a disc prompt (tier-1 exit 75) also
-      stops the run: it is a pause, not a failure.
+      normally.)  Typing q at a disc prompt (exit 75, from tier 1
+      or tier 3) also stops the run: it is a pause, not a failure.
 
       One residual on the no-tier-1 path (#399): when the tier-1
       binary is absent or won't run (bit rot, wrong arch), the

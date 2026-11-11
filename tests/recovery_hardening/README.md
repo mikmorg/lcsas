@@ -113,6 +113,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_restore_sh_target_guards.py` | Hardening tests: restore.sh target-safety guards [UX-07] + [BOOT-05]. |
 | `test_restore_sh_target_key_flags.py` | Hardening tests: --target / --key flags on restore.sh [KEY-02]. |
 | `test_restore_sh_tier1_missing_multidisc.py` | Hardening test (GATE-06): restore.sh drives the full tier1-missing |
+| `test_restore_sh_tier3_python.py` | Hardening test (#714, #706): which Python tier 3 runs, and its exit 75. |
 | `test_restore_sh_tmpfs_target_warns.py` | Hardening tests: RAM-backed (tmpfs) restore-target warning [BOOT-05]. |
 | `test_restore_sh_tools_folder.py` | Hardening (#609, #610, #615, #616): restore.sh's tools folder. |
 | `test_restore_sh_ux.py` | Hardening tests: restore.sh UX improvements (recommendations #3, #4, #8). |
@@ -156,6 +157,7 @@ dvdisaster RS03 repair proof under `tests/integration/`, and
 | `test_tier1_sparse.py` | Issue #193 — tier-1 must preserve sparseness of restored files. |
 | `test_tier1_target_full.py` | Issue #221 — tier-1 must surface ENOSPC on the target filesystem. |
 | `test_tier1_unit.py` | Issue #115: tier-1 C unit-test harness — fast, agent-free. |
+| `test_tier1_unreadable_snapshot.py` | Issue #662 -- tier 1 must not silently restore an older snapshot. |
 | `test_tier1_volume_label.py` | Hardening: tier-1 names each disc it finds by its label (#456). |
 | `test_tier1_vs_tier2_differential.py` | Phase 14: tier-1 ↔ tier-2 differential oracle. |
 | `test_tier1_wide_directory.py` | T1C-01: one very wide directory (5,000 entries in a single tree blob). |

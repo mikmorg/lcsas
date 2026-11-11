@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
     from lcsas.config.settings import LCSASConfig
     from lcsas.db.models import Pack
+    from lcsas.iso.xorriso import XorrisoRunner
 
 logger = get_logger()
 
@@ -268,6 +269,13 @@ def build_parser() -> argparse.ArgumentParser:
                               "Logged as a volume event. For multi-config "
                               "edge cases only — discs may print share "
                               "instructions that do not match the real split.")
+    stage_p.add_argument("--allow-low-redundancy", action="store_true",
+                         default=False,
+                         help="Stage a volume even if its RS03 error "
+                              "correction would be below the 5%% floor, or "
+                              "its content exceeds the medium's usable "
+                              "bytes. Recorded as a volume event. NOT "
+                              "recommended.")
 
     # --- burn-iso ---
     burniso_p = subparsers.add_parser(
@@ -284,10 +292,20 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Optical device path (overrides config; "
                                 "default /dev/sr0 when neither is set).")
     burniso_p.add_argument("--verify", action=argparse.BooleanOptionalAction, default=True,
-                           help="Verify after burning (use --no-verify to skip).")
-    burniso_p.add_argument("--emit-receipt", type=Path, default=None,
-                           help="Write a burn receipt JSON to this path "
-                                "(file or directory) for later catalog import.")
+                           help="Verify after burning: read the disc back and "
+                                "compare its SHA-256 with the ISO's "
+                                "(use --no-verify to skip).")
+    burniso_p.add_argument("--verify-only", action="store_true", default=False,
+                           help="Do not burn: check the disc already in the "
+                                "drive against the ISO, as --verify does, and "
+                                "write a receipt for it (a lost receipt).")
+    # str, not Path: Path() drops a trailing separator, which marks a folder.
+    burniso_p.add_argument("--emit-receipt", type=str, default=None,
+                           help="Write a burn receipt JSON for later catalog "
+                                "import.  A folder (existing, ending in a "
+                                "path separator, or a name with no extension) "
+                                "gets <label>_<location>.json and is created "
+                                "if missing; any other path is the file.")
     burniso_p.add_argument("--label", type=str, default=None,
                            help="Volume label for the receipt. Defaults to the "
                                 "ISO's parent directory name.")
@@ -400,6 +418,17 @@ def build_parser() -> argparse.ArgumentParser:
                                       help="Import burn receipts from remote burns.")
     cat_import_p.add_argument("receipt_files", nargs="+",
                               help="Receipt JSON files.")
+    cat_import_p.add_argument(
+        "--allow-unhashed", action="store_true", default=False,
+        help="Let a passing receipt make its volume VERIFIED even when the "
+             "receipt's ISO hash cannot be matched to the staged ISO (one "
+             "of the two hashes is missing). Check the disc first.",
+    )
+    cat_import_p.add_argument(
+        "--allow-other-location", action="store_true", default=False,
+        help="Accept a first disc at a location other than the one its "
+             "volume was staged for.",
+    )
 
     cat_validate_p = cat_sub.add_parser(
         "validate",
@@ -564,6 +593,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Stage active packs (without deprecating source volumes).")
     cons_p.add_argument("--deprecate", action="store_true", default=False,
                         help="Mark source volumes as DEPRECATED (run after --execute succeeds).")
+    cons_p.add_argument("--location", default=None,
+                        help="With --execute: the location the new volumes "
+                             "are staged for (default: the configured "
+                             "default location). A location given here "
+                             "must already exist.")
 
     # --- verify ---
     verify_p = subparsers.add_parser("verify", help="Verify a volume's ISO or disc.")
@@ -577,7 +611,9 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Optical drive device (overrides config; "
                                "default /dev/sr0 when neither is set).")
     verify_p.add_argument("--mark-verified", action="store_true", default=False,
-                          help="Manually mark the volume as verified (remote workflow).")
+                          help="Manually mark the volume as verified (remote "
+                               "workflow). Needs --location when the volume "
+                               "has no disc recorded.")
     verify_p.add_argument("--mark-failed", action="store_true", default=False,
                           help="Record a verification failure without checking media.")
     verify_p.add_argument("--detail", default="",
@@ -590,7 +626,11 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Filter --all to discs/volumes at this location; "
                                "with single-volume --disc, stamp the disc at "
                                "this location (defaults to the volume's only "
-                               "ACTIVE disc when unambiguous).")
+                               "ACTIVE disc when unambiguous); with --disc, "
+                               "record the disc there when none of the volume "
+                               "is recorded at it; with --mark-verified on a "
+                               "volume with no disc recorded (required there), "
+                               "record its disc at this location.")
 
     # --- session ---
     session_p = subparsers.add_parser("session", help="Manage burn sessions.")
@@ -836,6 +876,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write the reconstructed password here (default: stdout).",
     )
 
+    key_unsplit = key_sub.add_parser(
+        "unsplit",
+        help="Clear the catalog's record of a repository's password split "
+             "(after the split was abandoned).",
+        description=(
+            "Remove the recorded K-of-N split for one repository from the "
+            "catalog, so burned discs stop telling the heir to gather share "
+            "cards. It does not touch any share card or the password. Use it "
+            "when the split was abandoned and key_split is false for the "
+            "repository."
+        ),
+    )
+    key_unsplit.add_argument(
+        "--repo", required=True,
+        help="Repository whose recorded split to clear.",
+    )
+    key_unsplit.add_argument(
+        "--yes", action="store_true",
+        help="Do not ask for confirmation.",
+    )
+
     key_card = key_sub.add_parser(
         "card",
         help="Print a paper password card for the DEFAULT (unsplit) "
@@ -1059,30 +1120,51 @@ def _open_existing_catalog(db_path: Path | str) -> sqlite3.Connection:
 def _resolve_repo_names_to_ids(
     conn: sqlite3.Connection,
     names: list[str] | None,
+    config: LCSASConfig | None = None,
 ) -> list[str] | None:
     """Map owner-facing repository *names* to catalog repo_ids (UUIDs).
 
-    Returns ``None`` when *names* is ``None`` (no filter).  Logs a
-    warning for names that don't map to any registered repository.
+    Each name goes through :func:`lcsas.db.repos.resolve_repo` (#687), with
+    its configured mirror path when *config* lists it.  Returns ``None``
+    when *names* is ``None`` (no filter).  Logs a warning for names that
+    don't map to any registered repository.  Raises ValueError when a name
+    matches more than one repository (#685).
     """
     if names is None:
         return None
-    from lcsas.db.repos import list_repos
+    from lcsas.db.repos import resolve_repo
 
-    name_to_id = {r.name: r.repo_id for r in list_repos(conn)}
     ids: list[str] = []
     for n in names:
-        rid = name_to_id.get(n)
-        if rid is None:
+        repo = resolve_repo(conn, n, _config_mirror(config, n))
+        if repo is None:
             logger.warning(f"repository '{n}' not registered in the catalog, skipping.")
         else:
-            ids.append(rid)
+            ids.append(repo.repo_id)
     if not ids:
         raise ValueError(
             f"None of the specified repositories exist in the catalog: "
             f"{', '.join(names)}"
         )
     return ids
+
+
+def _config_if_loadable(args: argparse.Namespace) -> LCSASConfig | None:
+    """``--config`` when it loads, else None: for commands that only use it
+    as a hint (the mirror path of ``[repos.<name>]``) and work with ``--db``
+    alone, so a broken config must not stop them."""
+    try:
+        return _load_config_opt(args)
+    except Exception:  # noqa: BLE001 - advisory only
+        return None
+
+
+def _config_mirror(config: LCSASConfig | None, name: str) -> Path | None:
+    """The mirror path ``[repos.<name>]`` configures, or None (#687)."""
+    if config is None:
+        return None
+    repo_cfg = config.repositories.get(name)
+    return repo_cfg.mirror_path if repo_cfg is not None else None
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -1127,6 +1209,26 @@ def cmd_repo_add(args: argparse.Namespace) -> int:
 
         repo_id = generate_uuid()
         mirror = args.mirror_path.resolve()
+
+        # #685: names and mirror paths must be unique.  The schema has no
+        # UNIQUE index on either (v10 is burned on discs), so check here:
+        # a second 'photos' made every later `--repo photos` ambiguous.
+        from lcsas.db.repos import list_repos, same_mirror_path
+        for existing in list_repos(conn):
+            if existing.name == args.name:
+                clash = f"name '{args.name}'"
+            elif same_mirror_path(existing.mirror_path, mirror):
+                clash = f"mirror path {mirror}"
+            else:
+                continue
+            logger.error(
+                f"A repository with the {clash} is already registered: "
+                f"'{existing.name}' (id: {existing.repo_id}, mirror: "
+                f"{existing.mirror_path}). Nothing was registered. Use "
+                f"another name, or `lcsas repo list` to see the existing "
+                f"repositories."
+            )
+            return 1
 
         # Auto-detect the key ID from the repository's keys/ dir
         key_ids = read_repo_key_ids(mirror)
@@ -1191,7 +1293,10 @@ def _cmd_repo_set_status(
     with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
         ensure_schema(conn)
         try:
-            repo = _find_repo(conn, args.repo_id)
+            repo = _find_repo(
+                conn, args.repo_id,
+                _config_mirror(_config_if_loadable(args), args.repo_id),
+            )
         except ValueError as exc:
             logger.error(str(exc))
             return 1, None
@@ -1267,29 +1372,18 @@ def cmd_repo_activate(args: argparse.Namespace) -> int:
     return rc
 
 
-def _find_repo(conn: Any, ref: str) -> Any:
-    """The repository *ref* names: its catalog repo_id, else its name (#581).
+def _find_repo(conn: Any, ref: str, mirror_path: Path | None = None) -> Any:
+    """The repository *ref* names: its name or its catalog ID (#581).
 
-    The owner thinks in names; ``repo add`` keys the catalog on a UUID.  An
-    exact name match wins over a case-insensitive one.  Returns None when
-    nothing matches; raises ValueError when a name is ambiguous.
+    A thin wrapper over :func:`lcsas.db.repos.resolve_repo`, the one
+    resolver (#687): the configured mirror path of ``[repos.<ref>]`` first
+    when given, then the name, the catalog ID, and the name ignoring case.
+    Returns None when nothing matches; raises ValueError when a name is
+    ambiguous.
     """
-    from lcsas.db.repos import get_repo, get_repo_by_name, list_repos
+    from lcsas.db.repos import resolve_repo
 
-    try:
-        return get_repo(conn, ref)
-    except ValueError:
-        pass
-    repo = get_repo_by_name(conn, ref)
-    if repo is not None:
-        return repo
-    matches = [r for r in list_repos(conn) if r.name.lower() == ref.lower()]
-    if len(matches) > 1:
-        raise ValueError(
-            f"'{ref}' matches {len(matches)} repositories; use its catalog ID "
-            "(`lcsas repo list`)."
-        )
-    return matches[0] if matches else None
+    return resolve_repo(conn, ref, mirror_path)
 
 
 def _resolve_volume_refs(
@@ -1330,7 +1424,10 @@ def cmd_repo_remove(args: argparse.Namespace) -> int:
         ensure_schema(conn)
 
         try:
-            repo = _find_repo(conn, args.repo_id)
+            repo = _find_repo(
+                conn, args.repo_id,
+                _config_mirror(_config_if_loadable(args), args.repo_id),
+            )
         except ValueError as exc:
             logger.error(str(exc))
             return 1
@@ -1428,7 +1525,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
     from lcsas.db.connection import locked_connection
     from lcsas.db.queries import get_archive_status_summary
-    from lcsas.db.repos import list_repos
+    from lcsas.db.repos import resolve_repo
     from lcsas.db.schema import ensure_schema
     from lcsas.packs.delta import DeltaAnalyzer
     from lcsas.packs.scanner import scan_mirror_packs
@@ -1445,9 +1542,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
     ) as conn:
         ensure_schema(conn)
 
-        # Map config repository names → catalog repo_ids (UUIDs)
-        repos_db = {r.name: r.repo_id for r in list_repos(conn)}
 
+        # Config key → catalog repo_id, filled as each repository resolves.
+        repos_db: dict[str, str] = {}
         repo_filter = set(args.repo) if args.repo else None
         total_new = 0
         total_scanned = 0
@@ -1472,7 +1569,13 @@ def cmd_scan(args: argparse.Namespace) -> int:
             if repo_filter and repo_name not in repo_filter:
                 continue
 
-            db_repo_id = repos_db.get(repo_name)
+            # Config key → catalog repo_id: mirror path, then name (#687).
+            try:
+                db_repo = resolve_repo(conn, repo_name, repo_cfg.mirror_path)
+            except ValueError as exc:
+                logger.error("%s", exc)
+                return 1
+            db_repo_id = db_repo.repo_id if db_repo is not None else None
             if db_repo_id is None:
                 logger.warning(
                     f"repository '{repo_name}' not registered in the catalog "
@@ -1480,6 +1583,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 )
                 repos_unregistered.append(repo_name)
                 continue
+            repos_db[repo_name] = db_repo_id
 
             mirror_path = repo_cfg.mirror_path
             scan_result = scan_mirror_packs(mirror_path)
@@ -1489,8 +1593,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
             analyzer = DeltaAnalyzer(conn, packs_on_disk, db_repo_id)
             new_packs = analyzer.register_new_packs()
-            unarchived = analyzer.get_unarchived()
-            unarchived_bytes = analyzer.get_total_unarchived_bytes()
+            # #667: a pack an earlier scan marked pruned but this scan found
+            # is in the mirror: back to the active pool.  Like registration,
+            # this is additive and safe on an incomplete scan.
+            unpruned = analyzer.unprune_found()
 
             total_new += len(new_packs)
 
@@ -1530,9 +1636,19 @@ def cmd_scan(args: argparse.Namespace) -> int:
                                 f"({pruned_bytes:,} bytes)"
                             )
 
+            # Counted after un-prune and prune-sync, so the number is the
+            # one `lcsas stage` will see (#696 item 9).
+            unarchived = analyzer.get_unarchived()
+            unarchived_bytes = analyzer.get_total_unarchived_bytes()
+
             logger.info(f"  {repo_name}:")
             logger.info(f"    Packs on disk:  {len(packs_on_disk)}")
             logger.info(f"    Newly registered: {len(new_packs)}")
+            if unpruned:
+                logger.info(
+                    f"    Un-pruned:      {len(unpruned)} (found in the "
+                    f"mirror again)"
+                )
             logger.info(f"    Unarchived:     {len(unarchived)} ({unarchived_bytes:,} bytes)")
 
         # Persist snapshots (unless --no-snapshots)
@@ -1782,6 +1898,60 @@ def _print_redundancy_report(conn: sqlite3.Connection, min_copies: int) -> int:
     return 0
 
 
+def _volumes_needing_reburn(
+    conn: sqlite3.Connection,
+) -> list[tuple[str, str, bool]]:
+    """(label, location, disc recorded there) for every location where a
+    volume's newest verify result is a failure (BURN-05, #671).
+
+    Only VERIFY_PASS, VERIFY_FAIL and VERIFY_FAIL_REBURN count, location
+    by location: a later pass at the same location (a good re-burn)
+    clears it, a pass at another location does not.  Once the remedy is
+    done -- the volume's packs were staged again for that location
+    (``stage --for-location``) or are on another disc there -- the
+    location needs nothing more from it and it is not listed, unless a
+    disc of it is still recorded there (a disc that failed a re-check).
+    """
+    from lcsas.db.queries import get_unarchived_or_missing_at_location
+
+    newest: dict[tuple[int, str], tuple[str, str]] = {}
+    for row in conn.execute(
+        """SELECT e.volume_id, e.location, e.event_type, v.label
+           FROM volume_events e JOIN volumes v USING (volume_id)
+           WHERE e.event_type IN ('VERIFY_PASS', 'VERIFY_FAIL',
+                                  'VERIFY_FAIL_REBURN')
+           ORDER BY e.event_date, e.event_id"""
+    ):
+        key = (int(row["volume_id"]), row["location"] or "<unknown>")
+        newest[key] = (row["event_type"], row["label"])
+    active = {
+        (int(r["volume_id"]), r["location"])
+        for r in conn.execute(
+            "SELECT volume_id, location FROM volume_copies "
+            "WHERE status = 'ACTIVE'"
+        )
+    }
+    missing_at: dict[str, set[int]] = {}
+    result: list[tuple[str, str, bool]] = []
+    for (vid, loc), (event_type, label) in newest.items():
+        if event_type == "VERIFY_PASS":
+            continue
+        has_disc = (vid, loc) in active
+        if not has_disc and loc != "<unknown>":
+            packs = {int(r[0]) for r in conn.execute(
+                "SELECT pack_id FROM volume_packs WHERE volume_id = ?", (vid,)
+            )}
+            if loc not in missing_at:
+                missing_at[loc] = {
+                    p.pack_id
+                    for p in get_unarchived_or_missing_at_location(conn, loc)
+                }
+            if packs and not packs & missing_at[loc]:
+                continue
+        result.append((label, loc, has_disc))
+    return sorted(result)
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     """Show archive status summary."""
     from lcsas.db.queries import (
@@ -1792,9 +1962,12 @@ def cmd_status(args: argparse.Namespace) -> int:
         get_redundancy_report,
         volume_display_status,
     )
-    from lcsas.db.sessions import list_sessions, staged_iso_present
+    from lcsas.db.sessions import (
+        list_sessions,
+        staged_iso_present,
+        staging_incomplete,
+    )
     from lcsas.db.volume_copies import find_stale_copies
-    from lcsas.db.volume_events import get_latest_event
     from lcsas.db.volumes import list_volumes
 
     db_path = _resolve_db_path(args)
@@ -1821,24 +1994,36 @@ def cmd_status(args: argparse.Namespace) -> int:
         partial_sessions = list_sessions(conn, status_filter="PARTIAL")
         # #647: never-burned volumes split by whether their ISO is still in
         # the staging area (waiting to be burned) or gone (a ghost).
+        # BURN-05: a volume whose newest verify result at a location is a
+        # failure needs a re-burn there (#671: other events, such as the
+        # BURN_RECEIPT_IMPORTED written after a failed receipt, don't count).
+        needs_reburn = _volumes_needing_reburn(conn)
+        failed_labels = {label for label, _, _ in needs_reburn}
         unburned = get_ghost_volumes(conn, older_than_hours=0)
-        waiting = [v.label for v in unburned if staged_iso_present(conn, v.volume_id)]
-        ghost_labels = [v.label for v in unburned if v.label not in waiting]
+        # #665: a stage that did not finish (no ISO hash recorded) is
+        # incomplete, whatever is in the staging area: never burn it.
+        incomplete = [v.label for v in unburned
+                      if staging_incomplete(conn, v.volume_id)]
+        incomplete_sessions = sorted({
+            str(r["session_id"]) for r in conn.execute(
+                "SELECT sv.session_id FROM session_volumes sv "
+                "JOIN volumes v USING (volume_id) WHERE v.label IN "
+                f"({','.join('?' * len(incomplete))})",
+                incomplete,
+            )
+        }) if incomplete else []
+        unburned = [v for v in unburned if v.label not in incomplete]
+        with_iso = [v.label for v in unburned if staged_iso_present(conn, v.volume_id)]
+        # #671: a volume whose disc failed verification is listed under
+        # "needs re-burn", not as waiting to be burned.
+        waiting = [label for label in with_iso if label not in failed_labels]
+        ghost_labels = [v.label for v in unburned if v.label not in with_iso]
         # FMA-08: packs that live on exactly one disc.  Packs in
         # the <2-copies report with at least one live holder are on one
         # disc; zero-holder packs are the unarchived/staged buckets above.
         under = get_redundancy_report(conn, min_copies=2)
         live_map = get_live_volumes_for_packs(conn, [p.pack_id for p in under])
         single_disc_packs = [p for p in under if live_map.get(p.pack_id)]
-        # BURN-05: a volume whose latest event is a verify failure has no
-        # disc recorded for that burn — it needs a re-burn at the location.
-        needs_reburn: list[tuple[str, str]] = []
-        for v in volumes:
-            ev = get_latest_event(conn, v.volume_id)
-            if ev is not None and ev.event_type in (
-                "VERIFY_FAIL", "VERIFY_FAIL_REBURN",
-            ):
-                needs_reburn.append((v.label, ev.location or "<unknown>"))
     finally:
         conn.close()
 
@@ -1858,6 +2043,16 @@ def cmd_status(args: argparse.Namespace) -> int:
             where = (f"(for {v.location})" if v.status in ("STAGING", "BURNING")
                      else "(no disc in service)")
         logger.info(f"  {v.label:<25} {v.media_type:<10} {shown:<10} {where}")
+    if incomplete:
+        logger.warning(
+            "WARNING: %d volume(s) are INCOMPLETE: their staging did not "
+            "finish, so their ISOs may lack error-correction data: %s. Do "
+            "not burn them. Run 'lcsas session abort <id>' for session %s, "
+            "then 'lcsas stage' again. Until then their packs are NOT on "
+            "any disc.",
+            len(incomplete), ", ".join(incomplete),
+            ", ".join(incomplete_sessions),
+        )
     if waiting:
         logger.warning(
             "WARNING: %d volume(s) are staged and waiting to be burned "
@@ -1875,7 +2070,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             "pool for the next 'lcsas stage'.",
             len(ghost_labels), ", ".join(ghost_labels),
         )
-    if summary["staged"] > 0 and not (waiting or ghost_labels):
+    if summary["staged"] > 0 and not (with_iso or ghost_labels or incomplete):
         logger.warning(
             "WARNING: %d pack(s) are staged on volumes that were never "
             "burned. See 'lcsas catalog reconcile'.",
@@ -1888,8 +2083,28 @@ def cmd_status(args: argparse.Namespace) -> int:
             "lcsas burn --session %s --location <location>",
             s.session_id, s.session_id,
         )
-    for label, loc in needs_reburn:
-        logger.warning("WARNING: %s needs re-burn at %s", label, loc)
+    for label, loc, has_disc in needs_reburn:
+        if loc == "<unknown>":
+            logger.warning(
+                "WARNING: %s failed verification (no location recorded). "
+                "Check it with 'lcsas verify %s --disc'.",
+                label, label,
+            )
+        elif has_disc:
+            logger.warning(
+                "WARNING: %s needs re-burn at %s: its disc there failed "
+                "verification. Check it with 'lcsas verify %s --disc'; if it "
+                "is bad, record it with 'lcsas copy deprecate %s %s', then "
+                "stage it again with 'lcsas stage --for-location %s' and burn "
+                "the new volume.",
+                label, loc, label, label, loc, loc,
+            )
+        else:
+            logger.warning(
+                "WARNING: %s needs re-burn at %s: its disc failed "
+                "verification and no disc of it is recorded there. %s",
+                label, loc, _restage_hint(loc),
+            )
     if single_disc_packs:
         logger.warning(
             "WARNING: %d pack(s) (%.1f GB) exist on only one disc — run "
@@ -2010,6 +2225,55 @@ def cmd_staging_clean(args: argparse.Namespace) -> int:
     return 0
 
 
+def _sync_mirrors_before_stage(
+    conn: sqlite3.Connection,
+    repo_ids: list[str] | None,
+    *,
+    dry_run: bool,
+) -> bool:
+    """Register unscanned mirror packs before staging (#656).
+
+    Returns False (stage must stop) when a mirror could not be read
+    completely: unscanned packs may hide behind the unreadable paths.
+    """
+    from lcsas.packs.stage_sync import sync_unscanned_packs
+
+    sync = sync_unscanned_packs(conn, repo_ids, dry_run=dry_run)
+    if sync.incomplete:
+        for name, errors in sync.incomplete.items():
+            logger.error(
+                "Could not read the whole mirror of repository '%s' "
+                "(%d unreadable path(s), first: %s).",
+                name, len(errors), errors[0],
+            )
+        logger.error(
+            "Refusing to stage: the mirror may hold pack files that are not "
+            "in the catalog. Fix the mount or permissions, run 'lcsas scan', "
+            "then stage again."
+        )
+        return False
+    for name, count in sync.unscanned.items():
+        if dry_run:
+            logger.info(
+                "[DRY RUN] Repository '%s': %d pack file(s) in the mirror are "
+                "not in the catalog yet. A real stage registers them first, "
+                "as 'lcsas scan' does; this plan leaves them out.",
+                name, count,
+            )
+        else:
+            logger.info(
+                "Repository '%s': registered %d pack file(s) from the mirror "
+                "that were not in the catalog yet (as 'lcsas scan' does).",
+                name, count,
+            )
+    for name, count in sync.missing_from_mirror.items():
+        logger.warning(
+            "Repository '%s': %d pack(s) in the catalog are no longer in the "
+            "mirror. Run 'lcsas scan' to record prunes.", name, count,
+        )
+    return True
+
+
 def cmd_stage(args: argparse.Namespace) -> int:
     """Stage ISOs for deferred burning."""
     from lcsas.burn.orchestrator import BurnOrchestrator
@@ -2042,6 +2306,9 @@ def cmd_stage(args: argparse.Namespace) -> int:
                 SubprocessXorrisoRunner(tmpdir=config.staging_path),
                 SubprocessDVDisasterRunner(tmpdir=config.staging_path),
                 allow_escrow_drift=getattr(args, "allow_escrow_drift", False),
+                allow_low_redundancy=getattr(
+                    args, "allow_low_redundancy", False,
+                ),
             )
 
             if args.clean:
@@ -2065,9 +2332,16 @@ def cmd_stage(args: argparse.Namespace) -> int:
                     return 1
 
             try:
-                repo_ids = _resolve_repo_names_to_ids(conn, args.repo)
+                repo_ids = _resolve_repo_names_to_ids(conn, args.repo, config)
             except ValueError as e:
                 logger.error(str(e))
+                return 1
+
+            # #656: a disc carries each mirror's snapshots as they are now,
+            # so the catalog must know every pack file in the mirrors first.
+            if not _sync_mirrors_before_stage(
+                conn, repo_ids, dry_run=getattr(args, "dry_run", False),
+            ):
                 return 1
 
             from lcsas.db.key_escrow import EscrowDriftError
@@ -2098,9 +2372,41 @@ def cmd_stage(args: argparse.Namespace) -> int:
                     m.iso_path, iso_size / 1e9, len(m.selected_packs),
                 )
             logger.info(f"Manifest: {result.staging_dir / 'session.json'}")
+            _report_snapshot_coverage(result)
         return 0
     finally:
         shutdown.uninstall()
+
+
+def _report_snapshot_coverage(result: Any) -> None:
+    """#657: say which snapshots these discs do NOT carry, and why.
+
+    A snapshot goes on a disc only when every pack it needs is on a
+    burned disc or on this session's discs.  The rest wait for a later
+    disc; until then the newest snapshot on the discs is older than the
+    newest backup.
+    """
+    for repo_name, snaps in sorted(result.snapshots_left_out.items()):
+        logger.warning(
+            "Repository '%s': %d snapshot(s) are NOT on these discs, "
+            "because some of their packs are not on any disc yet:",
+            repo_name, len(snaps),
+        )
+        for snap in snaps:
+            logger.warning(
+                "  %s  %s  (%d pack(s) not on a disc)",
+                snap.snapshot_id[:8], snap.time, snap.missing_packs,
+            )
+        logger.warning(
+            "  A later disc carries them once their packs are burned "
+            "(run 'lcsas stage' again after these discs are burned)."
+        )
+    for repo_name, reason in sorted(result.snapshots_unchecked.items()):
+        logger.warning(
+            "Repository '%s': could not check which snapshots are fully on "
+            "discs (%s); every snapshot was copied to these discs.",
+            repo_name, reason,
+        )
 
 
 def cmd_burn_session(args: argparse.Namespace) -> int:
@@ -2206,7 +2512,12 @@ def cmd_burn_session(args: argparse.Namespace) -> int:
 
 
 def cmd_burn_iso(args: argparse.Namespace) -> int:
-    """Burn a single ISO file to optical media (standalone)."""
+    """Burn a single ISO file to optical media (standalone).
+
+    With ``--verify-only`` nothing is burned: the disc already in the drive
+    is checked against the ISO and a receipt is written for it, which
+    replaces a receipt that was lost (#673).
+    """
     from datetime import UTC, datetime
 
     from lcsas.iso.xorriso import SubprocessXorrisoRunner
@@ -2217,8 +2528,13 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
         return 1
 
     emit_receipt = getattr(args, "emit_receipt", None)
+    verify_only = bool(getattr(args, "verify_only", False))
     if emit_receipt is not None and not args.location:
         logger.error("--location is required when --emit-receipt is given.")
+        return 1
+    if verify_only and not args.verify:
+        logger.error("--verify-only checks the disc; it cannot be combined "
+                     "with --no-verify.")
         return 1
 
     runner = SubprocessXorrisoRunner()
@@ -2231,10 +2547,11 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
     # first, and _load_config_opt returns None without a --config.
     device = _resolve_device(args)
 
-    # Hash before burn — cheap insurance against the file changing under us.
+    # Hash before burn — cheap insurance against the file changing under
+    # us, and the hash the disc is read back against (#664).
     iso_sha256 = ""
     iso_size_bytes: int | None = None
-    if emit_receipt is not None:
+    if emit_receipt is not None or args.verify:
         from lcsas.utils.hashing import sha256_file
         iso_sha256 = sha256_file(iso_path)
         iso_size_bytes = iso_path.stat().st_size
@@ -2245,48 +2562,56 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
     # label it was mastered with, wherever the file sits.
     label = args.label or _iso_volume_id(iso_path) or iso_path.parent.name
 
-    # FUP-01 mitigation 2: blank-media pre-check (behind --verify). A disc
-    # that already carries data is refused before the burn, not after.
-    if args.verify:
-        from lcsas.iso.xorriso import MediaStatus
-        status = runner.media_status(device=device)
-        if status is MediaStatus.CLOSED:
-            logger.error(
-                "Disc in %s is not blank (it already contains data). "
-                "Remove it and insert a blank disc.", device,
-            )
+    # #675: settle where the receipt goes, and refuse a clash, BEFORE the
+    # burn: a refusal after it would leave a disc with no receipt.
+    out_path: Path | None = None
+    if emit_receipt is not None:
+        out_path = _receipt_out_path(str(emit_receipt), label, args.location)
+        refusal = _receipt_overwrite_refusal(out_path, label, args.location)
+        if refusal is not None:
+            logger.error(refusal)
             return 1
-        if status is MediaStatus.UNKNOWN:
-            logger.warning(
-                "Could not determine the media status of %s — "
-                "proceeding anyway.", device,
-            )
 
-    logger.info(f"Burning {iso_path} to {device} ...")
-    runner.burn_iso(iso_path, device=device)
-    logger.info("Burn complete.")
+    if verify_only:
+        logger.info(
+            f"--verify-only: checking the disc in {device} against "
+            f"{iso_path}; nothing is burned."
+        )
+    else:
+        # FUP-01 mitigation 2: blank-media pre-check (behind --verify). A
+        # disc that already carries data is refused before the burn, not
+        # after.
+        if args.verify:
+            from lcsas.iso.xorriso import MediaStatus
+            status = runner.media_status(device=device)
+            if status is MediaStatus.CLOSED:
+                logger.error(
+                    "Disc in %s is not blank (it already contains data). "
+                    "Remove it and insert a blank disc.", device,
+                )
+                return 1
+            if status is MediaStatus.UNKNOWN:
+                logger.warning(
+                    "Could not determine the media status of %s — "
+                    "proceeding anyway.", device,
+                )
+
+        logger.info(f"Burning {iso_path} to {device} ...")
+        runner.burn_iso(iso_path, device=device)
+        logger.info("Burn complete.")
 
     # None = not verified (--no-verify).  It used to default to True, so a
     # disc never read back imported as VERIFIED (#514).
     verify_passed: bool | None = None
+    device_sha256: str | None = None
     if args.verify:
         logger.info(f"Verifying disc on {device} ...")
-        verify_passed = runner.verify_disc(device=device)
+        verify_passed, device_sha256 = _burn_iso_readback(
+            runner, device, label, iso_sha256, iso_size_bytes,
+        )
         logger.info(f"  Verify: {'PASS' if verify_passed else 'FAIL'}")
-        # FUP-01 mitigation 3: post-burn identity readback. The PVD Volume
-        # ID was written from the label at mastering time, so a mismatch
-        # means the disc in the drive is not this image (wrong disc / silent
-        # mis-burn).
-        if verify_passed:
-            disc_id = runner.read_disc_volume_id(device=device)
-            if disc_id != label:
-                logger.error(
-                    "Disc in %s identifies as '%s' — expected '%s'. "
-                    "Wrong disc?", device, disc_id, label,
-                )
-                verify_passed = False
 
-    if emit_receipt is not None:
+    if out_path is not None:
         receipt = {
             "volume_label": label,
             "session_id": args.session,
@@ -2296,13 +2621,14 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
             "iso_sha256": iso_sha256,
             "iso_size_bytes": iso_size_bytes,
             "verify_passed": verify_passed,
+            # #664: SHA-256 of the bytes read back from the disc (null when
+            # nothing was read back).
+            "device_sha256": device_sha256,
+            # #673: true when this run checked a disc burned earlier instead
+            # of burning one (a receipt that replaces a lost one).
+            "verify_only": verify_only,
         }
-        # Accept either a directory (auto-name) or a full file path.
-        if emit_receipt.is_dir():
-            out_path = emit_receipt / f"{label}_{args.location}.json"
-        else:
-            emit_receipt.parent.mkdir(parents=True, exist_ok=True)
-            out_path = emit_receipt
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(receipt, f, indent=2)
             f.flush()
@@ -2313,6 +2639,117 @@ def cmd_burn_iso(args: argparse.Namespace) -> int:
         return 1
 
     return 0
+
+
+def _burn_iso_readback(
+    runner: XorrisoRunner,
+    device: str,
+    label: str,
+    iso_sha256: str,
+    iso_size_bytes: int | None,
+) -> tuple[bool, str | None]:
+    """burn-iso's check of the disc in *device* against the ISO (#664).
+
+    The same three steps as the direct burn path (``_verify_burned_disc``):
+    ``xorriso -check_media`` (readable), the PVD volume ID equals *label*
+    (FUP-01: the right disc), then exactly *iso_size_bytes* read back from
+    the device must have the ISO's SHA-256.  Returns ``(passed, hash read
+    back)``; the hash is None when the read-back did not run or failed.
+    """
+    from lcsas.burn.device_verify import read_device_sha256
+
+    if not runner.verify_disc(device=device):
+        logger.error(f"Disc in {device} failed the readability check "
+                     "(xorriso -check_media).")
+        return False, None
+    disc_id = runner.read_disc_volume_id(device=device)
+    if disc_id != label:
+        logger.error(
+            "Disc in %s identifies as '%s' — expected '%s'. "
+            "Wrong disc?", device, disc_id, label,
+        )
+        return False, None
+    if not iso_sha256 or not iso_size_bytes:
+        logger.error("The ISO is empty; there is nothing to compare the "
+                     "disc with.")
+        return False, None
+    try:
+        device_sha256 = read_device_sha256(device, iso_size_bytes)
+    except (OSError, ValueError) as exc:
+        logger.error(f"Reading the disc back from {device} failed: {exc}")
+        return False, None
+    if device_sha256 != iso_sha256:
+        logger.error(
+            f"The disc in {device} does not match the ISO: read back "
+            f"SHA-256 {device_sha256}, ISO SHA-256 {iso_sha256}."
+        )
+        return False, device_sha256
+    logger.info(f"  Read back {iso_size_bytes:,} bytes; SHA-256 matches "
+                f"the ISO ({device_sha256[:16]}..).")
+    return True, device_sha256
+
+
+def _receipt_out_path(target: str, label: str, location: str) -> Path:
+    """Where ``burn-iso --emit-receipt TARGET`` writes the receipt (#675).
+
+    TARGET is a folder when it is one, when it ends in a path separator,
+    or when it does not exist and has no file extension: the receipt is
+    then ``<label>_<location>.json`` inside it (the folder is created when
+    the receipt is written).  Any other TARGET is the receipt file itself.
+    """
+    path = Path(target)
+    seps = tuple(s for s in (os.sep, os.altsep) if s)
+    if path.is_dir() or target.endswith(seps) or (
+        not path.exists() and not path.suffix
+    ):
+        return path / f"{label}_{location}.json"
+    return path
+
+
+def _receipt_overwrite_refusal(
+    out_path: Path, label: str, location: str,
+) -> str | None:
+    """Why the receipt may not be written to *out_path*, or None (#675).
+
+    A file already there may only be replaced by a receipt for the same
+    volume and location (a re-run); anything else is another disc's
+    receipt, or not a receipt at all, and is kept.  The folder the receipt
+    goes in must be one, or be creatable: a file in its place (e.g. a
+    'receipts' file written before #675) is refused too.
+    """
+    ancestor = out_path.parent
+    while not ancestor.exists() and ancestor != ancestor.parent:
+        ancestor = ancestor.parent
+    if ancestor.exists() and not ancestor.is_dir():
+        return (
+            f"{ancestor} is a file, not a folder, so the receipt cannot be "
+            f"written in it.  Move that file aside or give --emit-receipt "
+            f"another folder.  Nothing was burned or checked."
+        )
+    if not out_path.exists():
+        return None
+    existing: object = None
+    if out_path.is_file():
+        try:
+            with open(out_path, encoding="utf-8") as f:
+                existing = json.load(f)
+        except (OSError, ValueError):
+            existing = None
+    if isinstance(existing, dict) and (
+        existing.get("volume_label") == label
+        and existing.get("location") == location
+    ):
+        return None
+    if isinstance(existing, dict) and "volume_label" in existing:
+        owner = (f"the receipt of volume '{existing.get('volume_label')}' "
+                 f"at '{existing.get('location')}'")
+    else:
+        owner = "not a receipt of this volume"
+    return (
+        f"{out_path} already exists and is {owner}; refusing to overwrite "
+        f"it.  Give --emit-receipt a folder (for example 'receipts/') or "
+        f"another file name.  Nothing was burned or checked."
+    )
 
 
 def _iso_volume_id(iso_path: Path) -> str | None:
@@ -2818,27 +3255,113 @@ def _receipt_verified_at(burn_date: object) -> str:
     return now.isoformat()
 
 
+def _restage_hint(location: str) -> str:
+    """The one next step for a disc that failed verification (#671).
+
+    It is what `lcsas stage --for-location` already does: packs of a
+    volume whose disc failed verification count as missing at that
+    location (``get_unarchived_or_missing_at_location``), so they are
+    staged again on a new volume.
+    """
+    return (
+        f"Stage it again for that location with 'lcsas stage "
+        f"--for-location {location}', then burn the new volume."
+    )
+
+
+def _receipt_timestamp(value: object) -> float | None:
+    """A receipt or catalog time as POSIX seconds, or None when it is
+    missing or unreadable.  A time without a zone is read as UTC."""
+    from datetime import UTC, datetime
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        when = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return when.timestamp()
+
+
+def _receipt_already_imported(
+    conn: sqlite3.Connection,
+    volume_id: int,
+    location: str,
+    burn_date: str,
+    receipt_hash: str,
+) -> bool:
+    """True when a receipt with this location, burn date and ISO hash was
+    imported for the volume before (#666).
+
+    The BURN_RECEIPT_IMPORTED event records the burn date since #666; for
+    receipts imported earlier the disc record's burn date stands in.
+    """
+    from lcsas.db.volume_copies import get_copy_at_location
+    from lcsas.db.volume_events import get_events_for_volume
+
+    for prior in get_events_for_volume(conn, volume_id, "BURN_RECEIPT_IMPORTED"):
+        if prior.location != location:
+            continue
+        try:
+            detail = json.loads(prior.detail) if prior.detail else {}
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(detail, dict)
+            and detail.get("burn_date") == burn_date
+            and (detail.get("iso_sha256") or "") == receipt_hash
+        ):
+            return True
+    copy = get_copy_at_location(conn, volume_id, location)
+    return (
+        copy is not None
+        and copy.burn_date == burn_date
+        and (copy.iso_sha256 or "") == receipt_hash
+    )
+
+
 def cmd_catalog_import(args: argparse.Namespace) -> int:
     """Import burn receipts from remote burns.
 
-    Also transitions volume status for receipts of STAGING volumes:
-      - verify_passed=true  → STAGING → BURNING → VERIFIED (+ mark_closed)
-      - verify_passed=false → stays STAGING, VERIFY_FAIL event (#483, as
-        burn_session does: the packs go back to the unarchived pool)
-      - verify_passed=null  → STAGING → BURNING → BURNED (burn-iso --no-verify:
-        a disc exists but was never read back, so it is not VERIFIED)
+    A receipt for a volume with no verified disc yet (STAGING, BURNING or
+    BURNED; #670) moves the volume on:
+      - verify_passed=true  → VERIFIED (+ mark_closed, VERIFY_PASS).  The
+        receipt's iso_sha256 must match the ISO recorded at staging, unless
+        --allow-unhashed (#669).
+      - verify_passed=false → back to STAGING, VERIFY_FAIL event (#483, as
+        burn_session does: the packs go back to the unarchived pool, and
+        ``lcsas stage --for-location`` stages them again, #671)
+      - verify_passed=null  → BURNED (burn-iso --no-verify: a disc exists
+        but was never read back, so it is not VERIFIED)
     Already-VERIFIED volumes (re-burn to a new location) keep their status.
 
     A disc is recorded for every receipt except verify_passed=false: a disc
     that failed verification is not recorded (BURN-05, as burn_session does),
     so that location still needs the volume.  A re-burn that failed gets a
     VERIFY_FAIL_REBURN event instead (#514).
+
+    Every receipt that cannot be imported is refused with a message, the
+    others are still imported, and the exit code is non-zero (#669).  A
+    receipt imported before is skipped as "already imported" (exit 0), and
+    an old receipt never brings back a disc recorded lost or destroyed
+    (#666).
     """
     from lcsas.db.connection import locked_connection
-    from lcsas.db.locations import ensure_location
+    from lcsas.db.locations import (
+        UnknownLocationError,
+        list_locations,
+        resolve_location,
+    )
     from lcsas.db.schema import ensure_schema
     from lcsas.db.sessions import get_staged_iso
-    from lcsas.db.volume_copies import add_volume_copy
+    from lcsas.db.volume_copies import (
+        add_volume_copy,
+        get_copies_for_volume,
+        get_copy_at_location,
+        get_disc_retired_at,
+    )
     from lcsas.db.volume_events import add_event, get_events_for_volume
     from lcsas.db.volumes import get_volume_by_label, mark_closed, update_status
 
@@ -2846,19 +3369,23 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     if config is None:
         logger.error("--config is required for catalog.")
         return 1
+    allow_unhashed = bool(getattr(args, "allow_unhashed", False))
+    allow_other_location = bool(getattr(args, "allow_other_location", False))
+    absent = object()
 
-    rejected = 0
+    refused = 0
+    already = 0
+    imported = 0
     with locked_connection(
         _resolve_db_path(args, config), timeout=_resolve_lock_timeout(args)
     ) as conn:
         ensure_schema(conn)
 
-        imported = 0
         for receipt_file in args.receipt_files:
-            # Every malformed receipt is skipped with a warning and the import
-            # goes on (#522).  ValueError covers JSONDecodeError and the
-            # UnicodeDecodeError of a non-UTF-8 file (e.g. UTF-16 from a
-            # PowerShell `>` redirect).
+            # A receipt that cannot be imported is refused with a message
+            # and the import goes on (#522); the exit code says so (#669).
+            # ValueError covers JSONDecodeError and the UnicodeDecodeError of
+            # a non-UTF-8 file (e.g. UTF-16 from a PowerShell `>` redirect).
             try:
                 with open(receipt_file, encoding="utf-8") as f:
                     receipt = json.load(f)
@@ -2867,12 +3394,14 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     f"Failed to read receipt '{receipt_file}': {e} "
                     "(a receipt must be a UTF-8 JSON file), skipping."
                 )
+                refused += 1
                 continue
             if not isinstance(receipt, dict):
                 logger.warning(
                     f"Receipt '{receipt_file}' is not a JSON object "
                     f"(got {type(receipt).__name__}), skipping."
                 )
+                refused += 1
                 continue
 
             # Validate required receipt fields
@@ -2880,6 +3409,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             if missing:
                 logger.warning(f"Receipt '{receipt_file}' missing keys: "
                                f"{', '.join(missing)}, skipping.")
+                refused += 1
                 continue
             bad_fields = [
                 k for k in ("volume_label", "location")
@@ -2896,49 +3426,116 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                         raise ValueError(raw_size)
                 except (TypeError, ValueError):
                     bad_fields.append("iso_size_bytes")
+            receipt_hash = receipt.get("iso_sha256") or ""
+            if not isinstance(receipt_hash, str):
+                bad_fields.append("iso_sha256")
+            burn_date = receipt.get("burn_date") or ""
+            if not isinstance(burn_date, str):
+                bad_fields.append("burn_date")
+            # #669: verify_passed must be JSON true, false or null.  It used
+            # to go through bool(), so the string "false" counted as passed.
+            raw_verify = receipt.get("verify_passed", absent)
+            if raw_verify is not None and not isinstance(raw_verify, bool):
+                bad_fields.append("verify_passed")
             if bad_fields:
+                why = ""
+                if "verify_passed" in bad_fields:
+                    got = ("nothing" if raw_verify is absent
+                           else json.dumps(raw_verify))
+                    why = (" (verify_passed must be JSON true, false or "
+                           f"null; got {got})")
                 logger.warning(
                     f"Receipt '{receipt_file}' has invalid "
-                    f"{', '.join(bad_fields)}, skipping."
+                    f"{', '.join(bad_fields)}{why}, skipping."
                 )
+                refused += 1
                 continue
+            verify_passed = raw_verify is True
+            verify_failed = raw_verify is False
+            label: str = receipt["volume_label"]
+            location: str = receipt["location"]
+            name = Path(receipt_file).name
 
-            vol = get_volume_by_label(conn, receipt["volume_label"])
+            vol = get_volume_by_label(conn, label)
             if vol is None:
-                logger.warning(f"Volume '{receipt['volume_label']}' not found, skipping.")
+                logger.warning(f"Volume '{label}' not found, skipping.")
+                refused += 1
                 continue
 
-            # Issue #18: receipt-vs-prior-receipt hash check. If a previous
-            # BURN_RECEIPT_IMPORTED event for this volume recorded an
-            # iso_sha256, the new receipt's iso_sha256 must match. Mismatch
-            # means the receipt is for a different physical ISO (swapped /
-            # tampered / re-mastered) — reject without writing anything.
-            receipt_hash = receipt.get("iso_sha256") or ""
-            hash_mismatch = False
+            # #666: a receipt imported before changes nothing.  In particular
+            # it never brings back a disc recorded lost or destroyed since.
+            if _receipt_already_imported(
+                conn, vol.volume_id, location, burn_date, receipt_hash,
+            ):
+                copy = get_copy_at_location(conn, vol.volume_id, location)
+                if copy is not None and copy.status != "ACTIVE":
+                    logger.warning(
+                        f"Receipt '{receipt_file}': already imported.  The "
+                        f"disc of '{label}' at {location} has since been "
+                        f"recorded as {copy.status} (lost, destroyed or out "
+                        "of service); it stays so."
+                    )
+                else:
+                    logger.info(f"Receipt '{receipt_file}': already imported.")
+                already += 1
+                continue
+
+            # #669: the location must be a known one, as for `lcsas burn`;
+            # a mistyped name must not become a new location.
+            try:
+                resolve_location(conn, location)
+            except UnknownLocationError as exc:
+                known = [loc.name for loc in list_locations(conn)]
+                hint = (f" Did you mean: {', '.join(exc.suggestions)}?"
+                        if exc.suggestions else "")
+                logger.error(
+                    f"Receipt '{receipt_file}': unknown location "
+                    f"'{location}'.{hint} Known locations: "
+                    f"{', '.join(known) if known else '(none)'}.  If the "
+                    "disc really is kept there, register it with 'lcsas "
+                    f"location add {location}' and import the receipt "
+                    "again; skipping."
+                )
+                refused += 1
+                continue
+
+            # #670: STAGING, BURNING and BURNED all have no verified disc yet.
+            first_disc = vol.status in ("STAGING", "BURNING", "BURNED")
+
+            # #669: the first disc belongs where the volume was staged for.
+            # A VERIFIED volume taking a disc elsewhere is the multi-copy
+            # path and is not checked.  Older volumes may have no location.
+            if (
+                first_disc and vol.location and vol.location != location
+                and not allow_other_location
+            ):
+                logger.error(
+                    f"Receipt '{receipt_file}': '{label}' was staged for "
+                    f"location {vol.location}, but the receipt says "
+                    f"{location}; skipping.  If the disc really is kept at "
+                    f"{location}, import it again with --allow-other-location."
+                )
+                refused += 1
+                continue
+
             # #644: the receipt must name the ISO that was staged.  burn-iso
             # hashes whatever file it is given on the burning machine, so an
             # ISO damaged or swapped on its way there would otherwise burn,
             # pass its own verify, and import as VERIFIED.
             staged = get_staged_iso(conn, vol.volume_id)
+            hash_mismatch = False
+            unchecked = ""
             if staged is None:
-                logger.warning(
-                    f"Receipt '{receipt_file}': no ISO hash was recorded "
-                    f"when '{receipt['volume_label']}' was staged; the "
-                    "staged-ISO check was SKIPPED."
-                )
+                unchecked = f"no ISO hash was recorded when '{label}' was staged"
             elif not receipt_hash:
-                logger.warning(
-                    f"Receipt '{receipt_file}' carries no iso_sha256; the "
-                    "check against the ISO staged for "
-                    f"'{receipt['volume_label']}' was SKIPPED."
-                )
+                unchecked = "the receipt carries no iso_sha256"
             else:
                 staged_hash, staged_size = staged
                 if receipt_hash != staged_hash:
                     logger.error(
                         f"Receipt '{receipt_file}' iso_sha256 {receipt_hash} "
                         f"does not match the ISO staged for volume "
-                        f"'{receipt['volume_label']}' ({staged_hash}): the "
+                        f"'{label}' ({staged_hash}): the "
                         "disc was burned from a different or damaged copy "
                         "of the ISO; rejecting.  Copy the ISO again, check "
                         "it with sha256sum, and re-burn."
@@ -2951,15 +3548,18 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                     logger.error(
                         f"Receipt '{receipt_file}' iso_size_bytes "
                         f"{receipt_size} does not match the ISO staged for "
-                        f"volume '{receipt['volume_label']}' ({staged_size} "
-                        "bytes); rejecting."
+                        f"volume '{label}' ({staged_size} bytes); rejecting."
                     )
                     hash_mismatch = True
+            # Issue #18: receipt-vs-prior-receipt hash check. If a previous
+            # BURN_RECEIPT_IMPORTED event for this volume recorded an
+            # iso_sha256, the new receipt's iso_sha256 must match. Mismatch
+            # means the receipt is for a different physical ISO (swapped /
+            # tampered / re-mastered) — reject without writing anything.
             if receipt_hash and not hash_mismatch:
-                prior_events = get_events_for_volume(
+                for prior in get_events_for_volume(
                     conn, vol.volume_id, "BURN_RECEIPT_IMPORTED"
-                )
-                for prior in prior_events:
+                ):
                     try:
                         prior_detail = (
                             json.loads(prior.detail) if prior.detail else {}
@@ -2972,96 +3572,118 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                             f"Receipt '{receipt_file}' iso_sha256 "
                             f"{receipt_hash} does not match previously "
                             f"recorded hash {prior_hash} for volume "
-                            f"'{receipt['volume_label']}'; rejecting."
+                            f"'{label}'; rejecting."
                         )
                         hash_mismatch = True
                         break
             if hash_mismatch:
-                rejected += 1
+                refused += 1
                 continue
-
-            ensure_location(conn, receipt["location"], commit=False)
-
-            # Advance status if this is the first burn (STAGING); otherwise
-            # just record the disc (handles re-burns to additional locations).
-            # verify_passed is tri-state (#514): true, false (verify FAILED),
-            # null (not verified).  A receipt without the key predates the
-            # field: it keeps the old reading (status as failed, disc kept).
-            raw_verify = receipt.get("verify_passed", "missing")
-            if raw_verify == "missing":
-                logger.warning(
-                    f"Receipt '{receipt_file}' has no verify_passed field; "
-                    "treating the burn as unverified."
-                )
-            stated = raw_verify not in (None, "missing")
-            verify_passed = stated and bool(raw_verify)
-            verify_failed = stated and not bool(raw_verify)
-            if vol.status == "STAGING" and verify_failed:
-                # #483: a disc that failed verification leaves the volume
-                # STAGING, as burn_session does, so its packs stay in the
-                # unarchived pool.  The event records the attempt.
-                add_event(
-                    conn, vol.volume_id, "VERIFY_FAIL",
-                    location=receipt["location"],
-                    detail=f"Offline burn receipt: {Path(receipt_file).name}",
-                    commit=False,
-                )
-            elif vol.status == "STAGING":
-                update_status(conn, vol.volume_id, "BURNING", commit=False)
-                if verify_passed:
-                    update_status(conn, vol.volume_id, "VERIFIED", commit=False)
-                    mark_closed(conn, vol.volume_id, commit=False)
-                    add_event(
-                        conn, vol.volume_id, "VERIFY_PASS",
-                        location=receipt["location"],
-                        detail=f"Offline burn receipt: {Path(receipt_file).name}",
-                        commit=False,
+            if unchecked:
+                # #669: a volume becomes VERIFIED from a receipt only when
+                # the receipt proves its disc holds the staged ISO.
+                if first_disc and verify_passed and not allow_unhashed:
+                    logger.error(
+                        f"Receipt '{receipt_file}': {unchecked}, so the disc "
+                        f"cannot be matched to the ISO staged for '{label}'; "
+                        "skipping.  Check the disc against the staged ISO "
+                        "(sha256sum), then import the receipt again with "
+                        "--allow-unhashed."
                     )
-                else:
-                    update_status(conn, vol.volume_id, "BURNED", commit=False)
-                    if raw_verify == "missing":
-                        add_event(
-                            conn, vol.volume_id, "VERIFY_FAIL",
-                            location=receipt["location"],
-                            detail=f"Offline burn receipt: {Path(receipt_file).name}",
-                            commit=False,
-                        )
-            elif verify_failed:
-                add_event(
-                    conn, vol.volume_id, "VERIFY_FAIL_REBURN",
-                    location=receipt["location"],
-                    detail=f"Offline burn receipt: {Path(receipt_file).name}",
-                    commit=False,
+                    refused += 1
+                    continue
+                logger.warning(
+                    f"Receipt '{receipt_file}': {unchecked}; the check "
+                    f"against the ISO staged for '{label}' was SKIPPED."
                 )
 
+            # #666: never turn a disc recorded lost, destroyed or out of
+            # service back into an in-service one, unless this receipt is
+            # for a disc burned after that was recorded (a real re-burn).
+            old_copy = get_copy_at_location(conn, vol.volume_id, location)
+            if (
+                old_copy is not None and old_copy.status != "ACTIVE"
+                and not verify_failed
+            ):
+                retired = (get_disc_retired_at(conn, vol.volume_id, location)
+                           or old_copy.burn_date)
+                retired_ts = _receipt_timestamp(retired)
+                burn_ts = _receipt_timestamp(burn_date)
+                if retired_ts is None or burn_ts is None or burn_ts <= retired_ts:
+                    logger.warning(
+                        f"Receipt '{receipt_file}': the disc of '{label}' at "
+                        f"{location} was recorded as {old_copy.status} "
+                        f"({retired or 'date unknown'}), and this receipt's "
+                        f"burn date ({burn_date or 'none'}) is not later.  "
+                        f"It stays {old_copy.status}; skipping."
+                    )
+                    refused += 1
+                    continue
+
+            event_detail = f"Offline burn receipt: {name}"
             if verify_failed:
+                if first_disc and not get_copies_for_volume(conn, vol.volume_id):
+                    # #483: a disc that failed verification returns the
+                    # volume to STAGING, as burn_session does, so its packs
+                    # go back to the unarchived pool.  The event records the
+                    # attempt.
+                    if vol.status != "STAGING":
+                        update_status(conn, vol.volume_id, "STAGING",
+                                      commit=False)
+                    add_event(conn, vol.volume_id, "VERIFY_FAIL",
+                              location=location, detail=event_detail,
+                              commit=False)
+                else:
+                    add_event(conn, vol.volume_id, "VERIFY_FAIL_REBURN",
+                              location=location, detail=event_detail,
+                              commit=False)
                 logger.warning(
-                    f"Receipt '{receipt_file}': the disc for "
-                    f"'{receipt['volume_label']}' FAILED verification at "
-                    f"{receipt['location']}.  No disc was recorded; that "
-                    "location still needs this volume.  Re-burn it."
+                    f"Receipt '{receipt_file}': the disc for '{label}' "
+                    f"FAILED verification at {location}.  No disc was "
+                    "recorded; that location still needs this volume.  "
+                    + _restage_hint(location)
                 )
             else:
-                if raw_verify is None:
+                if verify_passed:
+                    if first_disc:
+                        if vol.status == "STAGING":
+                            update_status(conn, vol.volume_id, "BURNING",
+                                          commit=False)
+                        update_status(conn, vol.volume_id, "VERIFIED",
+                                      commit=False)
+                        mark_closed(conn, vol.volume_id, commit=False)
+                    # One VERIFY_PASS per passing disc, as the direct burn
+                    # writes: `lcsas status` reads the newest verify result
+                    # at each location (#671).
+                    add_event(conn, vol.volume_id, "VERIFY_PASS",
+                              location=location, detail=event_detail,
+                              commit=False)
+                else:
+                    if vol.status == "STAGING":
+                        update_status(conn, vol.volume_id, "BURNING",
+                                      commit=False)
+                    if vol.status in ("STAGING", "BURNING"):
+                        update_status(conn, vol.volume_id, "BURNED",
+                                      commit=False)
                     logger.warning(
-                        f"Receipt '{receipt_file}': '{receipt['volume_label']}' "
-                        f"was burned at {receipt['location']} without "
-                        "verification (burn-iso --no-verify).  Recorded, but "
-                        "not as VERIFIED: check it with `lcsas verify "
-                        f"{receipt['volume_label']} --disc`."
+                        f"Receipt '{receipt_file}': '{label}' was burned at "
+                        f"{location} without verification (burn-iso "
+                        "--no-verify).  Recorded, but not as VERIFIED: check "
+                        f"it with `lcsas verify {label} --disc`."
                     )
                 add_volume_copy(
                     conn,
                     volume_id=vol.volume_id,
-                    location=receipt["location"],
-                    burn_date=receipt.get("burn_date", ""),
+                    location=location,
+                    burn_date=burn_date,
                     iso_sha256=receipt_hash or None,
                     iso_size_bytes=receipt_size,
                     # #646: burn-iso read the disc back right after the
-                    # burn, as the direct burn path does, so the disc was
+                    # burn and compared its SHA-256 with the ISO (#664),
+                    # as the direct burn path does, so the disc was
                     # verified then.  --no-verify (null) leaves it NULL.
                     last_verified_at=(
-                        _receipt_verified_at(receipt.get("burn_date"))
+                        _receipt_verified_at(burn_date)
                         if verify_passed else None
                     ),
                     commit=False,
@@ -3069,12 +3691,13 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
             # Issue #18: persist receipt provenance (iso_sha256, session_id,
             # device, pack_ids) on the master catalog as a
-            # BURN_RECEIPT_IMPORTED audit event. Captures all four fields
-            # from the receipt JSON so later "which device burned this?"
-            # and "does the disc hash match the recorded one?" queries can
-            # be answered from the catalog alone.
+            # BURN_RECEIPT_IMPORTED audit event, so later "which device
+            # burned this?" and "does the disc hash match the recorded one?"
+            # queries can be answered from the catalog alone.  burn_date
+            # lets a later import see that the receipt was imported (#666).
             provenance = {
                 "iso_sha256": receipt_hash,
+                "burn_date": burn_date,
                 "session_id": receipt.get("session_id") or "",
                 "device": receipt.get("device") or "",
                 # pack_ids is emitted by the session-based burn path but NOT
@@ -3082,12 +3705,12 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
                 # docs/workflows/burn-iso-portable.md). Persist verbatim so
                 # whichever path produced the receipt is preserved.
                 "pack_ids": list(receipt.get("pack_ids") or []),
-                "receipt_file": Path(receipt_file).name,
-                "verify_passed": None if raw_verify == "missing" else raw_verify,
+                "receipt_file": name,
+                "verify_passed": raw_verify,
             }
             add_event(
                 conn, vol.volume_id, "BURN_RECEIPT_IMPORTED",
-                location=receipt["location"],
+                location=location,
                 detail=json.dumps(provenance),
                 commit=False,
             )
@@ -3095,8 +3718,13 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             imported += 1
 
     logger.info(f"Imported {imported} receipt(s).")
-    if rejected:
-        logger.error(f"Rejected {rejected} receipt(s): ISO hash or size mismatch.")
+    if already:
+        logger.info(f"Skipped {already} receipt(s) that were already imported.")
+    if refused:
+        logger.error(
+            f"Rejected {refused} receipt(s); see the messages above.  The "
+            "other receipts were imported."
+        )
         return 1
     return 0
 
@@ -3336,6 +3964,33 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
         for warning in result.warnings:
             logger.warning("  %s", warning)
 
+    # #678: a disc cannot record its own burn, so the newest burn
+    # session's volumes come back with no disc record.  Their discs were
+    # read, so the rebuild marked them BURNED; where each disc is kept
+    # and its verify must be entered again.
+    if result.needs_verify:
+        logger.warning(
+            "%d volume(s) were marked BURNED because their own disc was "
+            "read, but no disc records where they are kept or that they "
+            "were verified: %s",
+            len(result.needs_verify), ", ".join(result.needs_verify),
+        )
+        logger.warning(
+            "For each disc of them you hold, put it in the drive and run "
+            "(against the rebuilt catalog, --db %s):", output_db,
+        )
+        for label in result.needs_verify:
+            logger.warning(
+                "  lcsas verify %s --disc --location <where it is kept>",
+                label,
+            )
+        logger.warning(
+            "That records the disc at its location and marks the volume "
+            "VERIFIED. Until then, do not run 'lcsas session abort' on "
+            "their burn session: it deletes volumes that have no disc "
+            "record."
+        )
+
     if result.errors:
         logger.error("Rebuild completed with %d error(s):", len(result.errors))
         for err in result.errors:
@@ -3344,6 +3999,14 @@ def cmd_catalog_rebuild(args: argparse.Namespace) -> int:
 
     logger.info("Catalog rebuild complete: %s", output_db)
     return 0
+
+
+def _unknown_location_msg(exc: Any) -> str:
+    """Error for an unknown --location that this command will not create."""
+    msg = f"Unknown location '{exc.name}'"
+    if exc.suggestions:
+        msg += f" (did you mean: {', '.join(exc.suggestions)}?)"
+    return msg + ". Add it with 'lcsas location add <name>' first."
 
 
 def cmd_consolidate(args: argparse.Namespace) -> int:
@@ -3417,6 +4080,36 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             logger.error("--config is required for --execute.")
             return 1
 
+        # #677: only VERIFIED volumes can become CONSOLIDATING.  Refuse
+        # anything else now, before the prompt, not with an invalid-
+        # transition error after the owner typed "yes".
+        from lcsas.db.volumes import get_volume_by_id
+        not_ready = [get_volume_by_id(conn, vid) for vid in args.volume_ids]
+        not_ready = [v for v in not_ready if v.status != "VERIFIED"]
+        if not_ready:
+            for v in not_ready:
+                hint = {
+                    "BURNED": f"verify its disc first ('lcsas verify "
+                              f"{v.label} --disc')",
+                    "CONSOLIDATING": "it is already being consolidated: burn "
+                                     "that session and run 'consolidate "
+                                     "--deprecate', or 'lcsas session abort' "
+                                     "it",
+                }.get(v.status, "only VERIFIED volumes can be consolidated")
+                logger.error(f"Volume {v.label} is {v.status}: {hint}.")
+            logger.error("Nothing was staged.")
+            return 1
+
+        location = args.location or config.default_location
+        if args.location:
+            # A typo must not stage discs for a place that does not exist.
+            from lcsas.db.locations import UnknownLocationError, resolve_location
+            try:
+                resolve_location(conn, location)
+            except UnknownLocationError as exc:
+                logger.error(_unknown_location_msg(exc))
+                return 1
+
         # Confirmation prompt before executing irreversible staging
         logger.warning("")
         logger.warning(
@@ -3448,31 +4141,41 @@ def cmd_consolidate(args: argparse.Namespace) -> int:
             SubprocessDVDisasterRunner(tmpdir=config.staging_path),
         )
 
-        # Mark source volumes as CONSOLIDATING before staging (atomic marker)
-        merger.mark_sources_consolidating(args.volume_ids)
-        logger.info("Marked %d source volume(s) as CONSOLIDATING", len(args.volume_ids))
-
-        # Stage only the active packs from the consolidation plan
+        # Stage exactly the active packs from the consolidation plan
+        # (#677: stage() used to intersect them with the unarchived pool,
+        # which never holds packs of VERIFIED volumes).  The sources stay
+        # VERIFIED until staging succeeded, so a failed stage changes
+        # nothing.
         pack_shas = [p.sha256 for p in plan.active_packs]
         try:
             session = orch.stage(
                 media_type=media_type,
+                for_location=location,
                 pack_sha256s=pack_shas,
             )
-        except Exception:
-            # If staging fails, abort consolidation to revert source volumes to VERIFIED
-            merger.abort_consolidation(args.volume_ids)
-            logger.error("Staging failed. Reverted source volumes to VERIFIED.", exc_info=True)
-            raise
+        except (ValueError, OSError) as e:
+            logger.error("Staging failed: %s", e)
+            logger.error("The source volumes were not changed.")
+            return 1
 
-        logger.info(f"Staged {len(session.manifests)} volume(s).")
+        # Mark the sources CONSOLIDATING, tied to the new burn session:
+        # 'lcsas session abort' of it returns them to VERIFIED.
+        merger.mark_sources_consolidating(
+            args.volume_ids, session_id=session.session_id,
+        )
+        logger.info("Marked %d source volume(s) as CONSOLIDATING", len(args.volume_ids))
+
+        logger.info(f"Staged {len(session.manifests)} volume(s) for {location}.")
         logger.info(
             "Consolidation staged.  Next steps:\n"
             "  1. burn session %s\n"
             "  2. verify the new volumes\n"
-            "  3. then deprecate sources with: consolidate --deprecate %s",
+            "  3. then deprecate sources with: consolidate --deprecate %s\n"
+            "To cancel instead: lcsas session abort %s (the sources return "
+            "to VERIFIED)",
             session.session_id,
             " ".join(str(v) for v in args.volume_ids),
+            session.session_id,
         )
 
     return 0
@@ -3606,6 +4309,84 @@ def _check_disc_for_volume(
     return "FAIL"
 
 
+def _mark_verified(
+    conn: sqlite3.Connection,
+    label: str,
+    location: str | None,
+    detail: str,
+) -> int:
+    """``lcsas verify <label> --mark-verified``: the owner states that a
+    disc of the volume was checked elsewhere.
+
+    A volume with no ACTIVE disc on record also needs ``--location``:
+    VERIFIED with no disc anywhere would leave its packs looking archived
+    on nothing (#673).  The disc is then recorded there, with the staged
+    ISO's hash, and the volume is closed, as an imported receipt does.
+    ``last_verified_at`` stays NULL: nothing here read the disc.
+    """
+    from lcsas.db.locations import ensure_location
+    from lcsas.db.queries import get_lost_volume_ids, volume_display_status
+    from lcsas.db.sessions import get_staged_iso
+    from lcsas.db.volume_copies import add_volume_copy, get_copies_for_volume
+    from lcsas.db.volume_events import add_event
+    from lcsas.db.volumes import get_volume_by_label, mark_closed, update_status
+
+    vol = get_volume_by_label(conn, label)
+    if vol is None:
+        logger.error(f"Volume '{label}' not found.")
+        return 1
+    shown = volume_display_status(vol, get_lost_volume_ids(conn))
+    if shown not in ("BURNED", "STAGING"):
+        logger.error(
+            f"Cannot mark volume {vol.label} VERIFIED: status is {shown} "
+            f"(only BURNED or STAGING allowed)"
+        )
+        return 1
+
+    active = get_copies_for_volume(conn, vol.volume_id)
+    if not active and not location:
+        logger.error(
+            f"Volume {vol.label} has no disc recorded.  Give --location "
+            f"to say where its disc is kept, and that disc is recorded.  "
+            f"To check the disc itself, use 'lcsas burn-iso --verify-only' "
+            f"and import its receipt (docs/workflows/burn-iso-portable.md, "
+            f"\"Missing receipt\")."
+        )
+        return 1
+    if active and location and location not in {c.location for c in active}:
+        held = ", ".join(sorted(c.location for c in active))
+        logger.error(
+            f"Volume {vol.label} has discs at {held}, not at {location}.  "
+            f"--mark-verified records a disc only for a volume with none; "
+            f"record another disc by importing its burn receipt."
+        )
+        return 1
+
+    if vol.status == "STAGING":
+        update_status(conn, vol.volume_id, "BURNING", commit=False)
+    update_status(conn, vol.volume_id, "VERIFIED", commit=False)
+    logger.info(f"Volume {vol.label}: status {vol.status} → VERIFIED")
+    if not active and location:
+        ensure_location(conn, location, commit=False)
+        staged = get_staged_iso(conn, vol.volume_id)
+        add_volume_copy(
+            conn, vol.volume_id, location,
+            notes="Recorded by verify --mark-verified",
+            iso_sha256=staged[0] if staged else None,
+            iso_size_bytes=staged[1] if staged else None,
+            commit=False,
+        )
+        logger.info(f"Volume {vol.label}: disc recorded at {location}")
+    if vol.closed_at is None:
+        mark_closed(conn, vol.volume_id, commit=False)
+    add_event(
+        conn, vol.volume_id, "VERIFY_PASS",
+        location=location,
+        detail=detail or "Manual verification (remote)",
+    )
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     """Verify a volume's ISO image or burned disc.
 
@@ -3643,27 +4424,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
         # --- Manual marking (remote verification workflow) ---
         if args.mark_verified:
-            if vol.status == "BURNED":
-                update_status(conn, vol.volume_id, "VERIFIED")
-                logger.info(f"Volume {vol.label}: status BURNED → VERIFIED")
-            elif vol.status == "STAGING":
-                update_status(conn, vol.volume_id, "VERIFIED", force=True)
-                logger.info(
-                    f"Volume {vol.label}: status STAGING → VERIFIED (split-machine workflow)"
-                )
-            else:
-                from lcsas.db.queries import get_lost_volume_ids, volume_display_status
-                shown = volume_display_status(vol, get_lost_volume_ids(conn))
-                logger.error(
-                    f"Cannot mark volume {vol.label} VERIFIED: status is {shown} "
-                    f"(only BURNED or STAGING allowed)"
-                )
-                return 1
-            add_event(
-                conn, vol.volume_id, "VERIFY_PASS",
-                detail=args.detail or "Manual verification (remote)",
-            )
-            return 0
+            return _mark_verified(conn, vol.label, args.location, args.detail)
 
         if args.mark_failed:
             add_event(
@@ -3690,9 +4451,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
                 return 1
 
         passed = True
+        recorded_disc = False
 
         if args.disc:
+            from datetime import UTC, datetime
+
             from lcsas.db.volume_copies import (
+                add_volume_copy,
                 get_copies_for_volume,
                 touch_last_verified,
             )
@@ -3702,6 +4467,27 @@ def cmd_verify(args: argparse.Namespace) -> int:
             # say which one is in the drive, or the stamp would assert
             # freshness for a disc that was never read.
             stamp_location = args.location
+            # #678: --location names a place where no disc of this volume
+            # is recorded (a catalog rebuilt from discs has no record for
+            # the newest burn session).  A passing check records the disc
+            # there.  The location must already exist, so a typo cannot
+            # create a phantom one (#19).
+            record_location = False
+            if stamp_location is not None and conn.execute(
+                "SELECT 1 FROM volume_copies WHERE volume_id = ? "
+                "AND location = ?",
+                (vol.volume_id, stamp_location),
+            ).fetchone() is None:
+                from lcsas.db.locations import (
+                    UnknownLocationError,
+                    resolve_location,
+                )
+                try:
+                    resolve_location(conn, stamp_location)
+                except UnknownLocationError as exc:
+                    logger.error(_unknown_location_msg(exc))
+                    return 1
+                record_location = True
             if stamp_location is None:
                 active = get_copies_for_volume(conn, vol.volume_id)
                 if len(active) == 1:
@@ -3730,6 +4516,22 @@ def cmd_verify(args: argparse.Namespace) -> int:
                     logger.warning(
                         f"  No ACTIVE disc of {vol.label} recorded — "
                         f"last_verified_at not stamped"
+                    )
+                elif record_location:
+                    # Uncommitted: the add_event() below commits the
+                    # disc record atomically with the VERIFY_PASS event.
+                    add_volume_copy(
+                        conn, vol.volume_id, stamp_location,
+                        notes=(
+                            "recorded by 'lcsas verify --disc'; the burn "
+                            "date is the date it was recorded"
+                        ),
+                        last_verified_at=datetime.now(UTC).isoformat(),
+                        commit=False,
+                    )
+                    recorded_disc = True
+                    logger.info(
+                        f"  Recorded the disc of {vol.label} at {stamp_location}"
                     )
                 # Stamp uncommitted: the add_event() below commits it
                 # atomically with the VERIFY_PASS event.
@@ -3798,6 +4600,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
         if passed and vol.status == "BURNED":
             update_status(conn, vol.volume_id, "VERIFIED")
             logger.info(f"Volume {vol.label}: promoted BURNED → VERIFIED")
+        elif passed and recorded_disc and vol.status in ("STAGING", "BURNING"):
+            # #678: the disc was identified, read, and is now recorded —
+            # the same evidence a burn's own check gives.
+            update_status(conn, vol.volume_id, "VERIFIED", force=True)
+            logger.info(
+                f"Volume {vol.label}: promoted {vol.status} → VERIFIED"
+            )
 
         return 0 if passed else 1
 
@@ -5853,8 +6662,10 @@ def dispatch(args: argparse.Namespace) -> int:
             return cmd_key_verify(args)
         elif args.key_command == "card":
             return cmd_key_card(args)
+        elif args.key_command == "unsplit":
+            return cmd_key_unsplit(args)
         else:
-            logger.error("Usage: lcsas key {split,combine,verify,card}")
+            logger.error("Usage: lcsas key {split,unsplit,combine,verify,card}")
             return 1
     elif args.command == "estate":
         if args.estate_command == "card":
@@ -6238,30 +7049,37 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
             STATUS_DEPRECATED,
             STATUS_VERIFIED,
         )
-        from lcsas.db.connection import get_connection
-        from lcsas.db.queries import get_lost_volume_ids
+        from lcsas.db.connection import locked_connection
         from lcsas.db.schema import ensure_schema
-        from lcsas.db.volumes import list_volumes
 
-        conn = get_connection(db_path)
-        try:
+        # #684: ensure_schema may migrate the catalog, so it runs under
+        # the catalog lock like every other writer.
+        with locked_connection(
+            db_path, timeout=_resolve_lock_timeout(args)
+        ) as conn:
             ensure_schema(conn)
-            # Count volumes that were burned (burned and beyond), not
-            # in-progress STAGING/BURNING volumes an heir won't hold, nor
-            # DESTROYED ones that no longer exist, nor lost volumes (no
-            # disc left in service, Q33) whose discs the heir won't hold.
-            burned = {
+            # #684: count the volumes the heir can hold: burned (and
+            # beyond) with at least one ACTIVE disc.  Not in-progress
+            # STAGING/BURNING volumes, not DESTROYED ones, and not a
+            # volume whose every disc was destroyed or retired (a lost
+            # volume, Q33, or one superseded by consolidation).  Copies
+            # of one volume share its label, so this counts labels.
+            burned = (
                 STATUS_BURNED, STATUS_VERIFIED, STATUS_CONSOLIDATING,
                 STATUS_DEPRECATED,
-            }
-            lost_ids = get_lost_volume_ids(conn)
+            )
+            row = conn.execute(
+                "SELECT COUNT(*) FROM volumes v "
+                f"WHERE v.status IN ({', '.join('?' * len(burned))}) "
+                "AND EXISTS (SELECT 1 FROM volume_copies c "
+                "            WHERE c.volume_id = v.volume_id "
+                "              AND c.status = 'ACTIVE')",
+                burned,
+            ).fetchone()
             # None, not 0, before the first burn: a card printed then (or
             # from staged drill discs) leaves the fill-in blank instead of
             # telling the heir there are "0 disc(s)".
-            disc_count = sum(
-                1 for v in list_volumes(conn)
-                if v.status in burned and v.volume_id not in lost_ids
-            ) or None
+            disc_count = int(row[0]) or None
             # KEY-08 / #573: print the split actually performed, not the
             # config's K/N.
             from lcsas.db.key_escrow import recorded_splits_by_name
@@ -6269,8 +7087,6 @@ def cmd_estate_card(args: argparse.Namespace) -> int:
                 name: repo.mirror_path
                 for name, repo in config.repositories.items()
             })
-        finally:
-            conn.close()
 
     from lcsas.staging.metadata import split_view
 
@@ -6470,7 +7286,7 @@ def _check_split_repo_registered(
     stop before any share exists.  A catalog that exists but cannot be
     read only logs a warning: the split goes ahead without being recorded.
     """
-    from lcsas.db.repos import get_repo_by_name
+    from lcsas.db.repos import resolve_repo
     from lcsas.exceptions import CatalogError
 
     name = args.repo
@@ -6480,7 +7296,7 @@ def _check_split_repo_registered(
     try:
         conn = _open_existing_catalog(db_path)
         try:
-            repo = get_repo_by_name(conn, name)
+            repo = resolve_repo(conn, name, _config_mirror(config, name))
         finally:
             conn.close()
     except CatalogError:  # no file, or never initialised
@@ -6520,16 +7336,19 @@ def _record_split_by_name(
     threshold: int,
     shares: int,
     split_id: int,
+    mirror_path: Path | None = None,
 ) -> None:
     """Record a split under the catalog repo_id of the repository *name*.
 
-    Also drops a record that an earlier build left under the name (#571),
-    so one row stands for one repository.
+    *name* is resolved like every other ``--repo`` (#687), with
+    *mirror_path* (its configured mirror) first.  Also drops a record that
+    an earlier build left under the name (#571), so one row stands for one
+    repository.
     """
     from lcsas.db.key_escrow import clear_split, record_split
-    from lcsas.db.repos import get_repo_by_name
+    from lcsas.db.repos import resolve_repo
 
-    repo = get_repo_by_name(conn, name)
+    repo = resolve_repo(conn, name, mirror_path)
     if repo is None:
         raise ValueError(f"repository '{name}' is not registered in the catalog")
     record_split(conn, repo.repo_id, threshold, shares, split_id, commit=False)
@@ -6539,6 +7358,15 @@ def _record_split_by_name(
     if name_is_an_id is None:
         clear_split(conn, name, commit=False)
     conn.commit()
+
+
+def _existing_share_files(out_dir: Path, repo: str) -> list[Path]:
+    """Files in *out_dir* named like ``key split``'s output for *repo* (#683)."""
+    import glob
+
+    if not out_dir.is_dir():
+        return []
+    return sorted(out_dir.glob(f"{glob.escape(repo)}-share-*"))
 
 
 def cmd_key_split(args: argparse.Namespace) -> int:
@@ -6567,6 +7395,30 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         threshold = repo_k
     if shares is None:
         shares = repo_n
+    # #682: the same K/N rule the config loader applies, for -k/-n too.
+    from lcsas.config.settings import key_split_pair_error
+    pair_problem = key_split_pair_error(threshold, shares)
+    if pair_problem is not None:
+        logger.error("Could not split password: %s.", pair_problem)
+        return 1
+
+    # #683: never mix two splits in one folder.  A second split with a
+    # smaller N would leave the old higher-numbered cards beside the new
+    # ones, and they cannot combine with them.  Checked before the password
+    # is read, so nothing is written.
+    out_dir: Path = args.out if args.out is not None else Path(f"./keyshares-{args.repo}")
+    old_cards = _existing_share_files(out_dir, args.repo)
+    if old_cards:
+        logger.error(
+            "%s already holds share files for repository '%s' from an "
+            "earlier split:\n  %s\nNew cards must not sit beside them: cards "
+            "of two splits cannot be combined with each other. Move these "
+            "files into a dated subfolder (or destroy them, once every holder "
+            "has the new cards), or pass --out with an empty folder, then "
+            "split again. No shares were written.",
+            out_dir, args.repo, "\n  ".join(str(p) for p in old_cards),
+        )
+        return 1
 
     # Resolve the password source.
     if repo_pw_file is None:
@@ -6667,7 +7519,6 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         logger.error("Could not read share identifier: %s", e)
         return 1
 
-    out_dir: Path = args.out if args.out is not None else Path(f"./keyshares-{args.repo}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for i, mnemonic in enumerate(mnemonics, start=1):
@@ -6723,7 +7574,8 @@ def cmd_key_split(args: argparse.Namespace) -> int:
             ) as conn:
                 ensure_schema(conn)
                 _record_split_by_name(
-                    conn, args.repo, threshold, shares, split_id
+                    conn, args.repo, threshold, shares, split_id,
+                    _config_mirror(config, args.repo),
                 )
         except Exception as e:  # noqa: BLE001 - cards are written; don't fail the split
             logger.warning(
@@ -6757,6 +7609,99 @@ def cmd_key_split(args: argparse.Namespace) -> int:
         "SECURITY: the password was never printed. Store shares apart; any "
         f"{threshold} of {shares} reconstruct it, fewer reveal nothing.",
         file=sys.stderr,
+    )
+    return 0
+
+
+def cmd_key_unsplit(args: argparse.Namespace) -> int:
+    """Clear a repository's recorded password split (#681).
+
+    The record (KEY-08) is what burned discs derive their share-card
+    instructions from, and what the burn's drift check compares the config
+    against.  When a split is abandoned (the cards were never handed out,
+    or the owner went back to a single password), this is the command
+    that makes the catalog agree.  It asks first, and logs one audit line
+    naming what was cleared.
+    """
+    from lcsas.db.connection import locked_connection
+    from lcsas.db.key_escrow import clear_split, get_split_for_repo
+    from lcsas.db.repos import resolve_repo
+    from lcsas.db.schema import ensure_schema
+
+    config = _load_config_opt(args)
+    db_path = _resolve_db_path(args, config)
+    _open_existing_catalog(db_path).close()  # no catalog: say so, don't make one
+    with locked_connection(db_path, timeout=_resolve_lock_timeout(args)) as conn:
+        ensure_schema(conn)
+        try:
+            repo = resolve_repo(conn, args.repo, _config_mirror(config, args.repo))
+        except ValueError as exc:
+            logger.error("%s", exc)
+            return 1
+        if repo is None:
+            logger.error(
+                "Repository '%s' is not registered in the catalog at %s. "
+                "See `lcsas repo list`.", args.repo, db_path,
+            )
+            return 1
+        record = get_split_for_repo(conn, repo.repo_id)
+        if record is None:
+            logger.info(
+                "The catalog records no password split for repository '%s'. "
+                "Nothing to clear.", repo.name,
+            )
+            return 0
+
+        logger.warning(
+            "Repository '%s' has a recorded %d-of-%d split (split ID %05d, "
+            "on %s). Clearing it means burned discs will tell the heir the "
+            "password is NOT split. Its share cards are not touched.",
+            repo.name, record.threshold, record.shares, record.slip39_id,
+            record.split_at,
+        )
+        if not args.yes:
+            try:
+                answer = input(
+                    "Type 'yes' to clear the recorded split, or anything else "
+                    "to cancel: "
+                ).strip()
+            except EOFError:
+                logger.error(
+                    "No terminal available for confirmation (redirected "
+                    "input). Pass --yes to clear without asking."
+                )
+                return 1
+            if answer.lower() != "yes":
+                logger.info("Nothing cleared.")
+                return 0
+
+        # Under the repo_id, and under the name for a record an earlier
+        # build made (#571), as `repo remove` does.
+        clear_split(conn, repo.repo_id, commit=False)
+        if conn.execute(
+            "SELECT 1 FROM repositories WHERE repo_id = ? AND repo_id != ?",
+            (repo.name, repo.repo_id),
+        ).fetchone() is None:  # the name isn't another repository's id
+            clear_split(conn, repo.name, commit=False)
+        conn.commit()
+
+    from datetime import UTC, datetime
+    logger.warning(
+        "AUDIT %s key unsplit: cleared the recorded %d-of-%d split of "
+        "repository '%s' (id %s, split ID %05d, split on %s).",
+        datetime.now(UTC).isoformat(timespec="seconds"), record.threshold,
+        record.shares, repo.name, repo.repo_id, record.slip39_id,
+        record.split_at,
+    )
+    table = (
+        f"[repos.{args.repo}]"
+        if config is not None and args.repo in config.repositories
+        else f"the repository's [repos.<name>] table ('{repo.name}' in the catalog)"
+    )
+    print(
+        f"NEXT STEP: make sure key_split is false for this repository in "
+        f"lcsas.toml ({table}, else [defaults]), so the config and the "
+        f"catalog agree."
     )
     return 0
 
@@ -6996,7 +7941,20 @@ def cmd_session_abort(args: argparse.Namespace) -> int:
             if args.volume:
                 orch.abort_volume(args.volume)
             else:
-                orch.abort_session(args.ref)
+                from lcsas.consolidate.merger import (
+                    release_consolidation_sources,
+                )
+                from lcsas.db.sessions import resolve_session_id
+                session_id = resolve_session_id(conn, args.ref)
+                orch.abort_session(session_id)
+                # #677: a consolidation session's sources go back to
+                # VERIFIED; nothing is left to finish them.
+                released = release_consolidation_sources(conn, session_id)
+                if released:
+                    logger.info(
+                        "Returned %d consolidation source volume(s) to "
+                        "VERIFIED: %s", len(released), ", ".join(released),
+                    )
         except ValueError as e:
             logger.error("%s", e)
             return 1

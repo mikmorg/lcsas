@@ -40,9 +40,11 @@ key ID from the mirror's `keys/` directory.
 
 **Steps:**
 
-1. `lcsas repo add <name> <mirror_path>` — generate UUID, scan
-   `keys/` for the first key filename, INSERT into `repositories`.
-   (`cmd_repo_add` in `src/lcsas/cli/main.py`)
+1. `lcsas repo add <name> <mirror_path>` — refuse a name or mirror path
+   another repository already has (the error names that repository; the
+   schema has no UNIQUE index, so the command checks, #685), generate
+   UUID, scan `keys/` for the first key filename, INSERT into
+   `repositories`. (`cmd_repo_add` in `src/lcsas/cli/main.py`)
 2. `register_repo()` writes `repo_id`, `name`, absolute `mirror_path`,
    and `encryption_key_id`. (`register_repo` in `src/lcsas/db/repos.py`)
 3. The key ID is auto-detected from `mirror_path/keys/`.
@@ -66,7 +68,8 @@ log line `Registered repository '<name>' (id: <uuid>)`. Subsequent
   - `tests/unit/test_cli.py::TestRepoCommands::test_repo_add` —
     dispatch smoke test.
   - `tests/unit/test_cli_comprehensive.py::TestCmdRepoAddEdges::test_duplicate_repo_name_errors`
-    — duplicate names get distinct UUIDs.
+    and `tests/unit/test_repo_resolution_and_key_records.py` — a duplicate
+    name or mirror path is refused (#685).
   - `tests/unit/test_multi_tenant.py::test_repos_registered_independently`
     — five repositories registered directly.
 - Gaps:

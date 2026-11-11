@@ -111,14 +111,14 @@ class TestCmdInit:
 
 class TestCmdRepoAddEdges:
     def test_duplicate_repo_name_errors(self, tmp_path, capsys):
-        """Adding the same repo twice with same name; second should succeed
-        (generates new UUID)."""
+        """A second repository with the same name is refused (#685): it
+        would make every later ``--repo dup`` ambiguous."""
         db = tmp_path / "test.db"
         main(["init", "--db-path", str(db)])
         r1 = main(["--db", str(db), "repo", "add", "dup", "/p1"])
         r2 = main(["--db", str(db), "repo", "add", "dup", "/p2"])
         assert r1 == 0
-        assert r2 == 0
+        assert r2 == 1
 
 
 class TestCmdRepoListEdges:
@@ -368,6 +368,14 @@ def _fake_iso(path: Path, volid: str) -> Path:
     return path
 
 
+def _drive_holding(iso: Path, tmp_path: Path) -> str:
+    """A stand-in optical device: a file holding the burned image, which
+    burn-iso's read-back (#664) hashes like a real drive."""
+    drive = tmp_path / "drive.img"
+    drive.write_bytes(iso.read_bytes())
+    return str(drive)
+
+
 class TestCmdBurnIso:
     def test_burn_iso_missing_file(self, tmp_path, capsys):
         iso = tmp_path / "missing.iso"
@@ -390,7 +398,8 @@ class TestCmdBurnIso:
             patch("lcsas.iso.xorriso.SubprocessXorrisoRunner.read_disc_volume_id",
                   return_value=iso.parent.name),
         ):
-            result = main(["burn-iso", str(iso)])
+            result = main(["burn-iso", str(iso),
+                           "--device", _drive_holding(iso, tmp_path)])
 
         assert result == 0
         mock_burn.assert_called_once()
@@ -428,7 +437,8 @@ class TestCmdBurnIso:
                   return_value="LCSAS_TINY_0007"),
         ):
             rc = main(["burn-iso", str(iso), "--emit-receipt", str(out),
-                       "--location", "Home"])
+                       "--location", "Home",
+                       "--device", _drive_holding(iso, tmp_path)])
         assert rc == 0
         data = json.loads((out / "LCSAS_TINY_0007_Home.json").read_text())
         assert data["volume_label"] == "LCSAS_TINY_0007"
@@ -464,7 +474,8 @@ class TestCmdBurnIso:
         ):
             result = main(["burn-iso", str(iso),
                            "--emit-receipt", str(out_dir),
-                           "--location", "Offsite_Safe"])
+                           "--location", "Offsite_Safe",
+                           "--device", _drive_holding(iso, tmp_path)])
 
         assert result == 0
         receipt_path = out_dir / "ARCHIVE_TEST_0001_Offsite_Safe.json"
@@ -496,7 +507,8 @@ class TestCmdBurnIso:
             result = main(["burn-iso", str(iso),
                            "--emit-receipt", str(out_file),
                            "--label", "EXPLICIT_LABEL",
-                           "--location", "Home"])
+                           "--location", "Home",
+                           "--device", _drive_holding(iso, tmp_path)])
 
         assert result == 0
         data = json.loads(out_file.read_text())
@@ -606,6 +618,13 @@ class TestCmdLocation:
 # cmd_catalog_import
 # ===================================================================
 
+def _import_locations(conn) -> None:
+    """#669: a receipt must name a registered location."""
+    from lcsas.db.locations import ensure_location
+    for name in ("Home", "Offsite", "Vault", "Vault_A", "Vault_B"):
+        ensure_location(conn, name)
+
+
 class TestCmdCatalogImport:
     def test_import_receipts_from_json(self, tmp_path, capsys):
         cfg = _write_config(tmp_path)
@@ -613,6 +632,7 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_001", "uuid1", "TEST_TINY", 1000, "Home", "VERIFIED")
+        _import_locations(conn)
         conn.close()
 
         receipt = tmp_path / "receipt.json"
@@ -622,6 +642,7 @@ class TestCmdCatalogImport:
             "session_id": "s1",
             "location": "Offsite",
             "pack_count": 5,
+            "verify_passed": True,
         }))
 
         result = main(["--config", str(cfg), "catalog", "import-receipts",
@@ -635,6 +656,12 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_100", "u1", "TEST_TINY", 1000, "Home", "STAGING")
+        _import_locations(conn)
+        # #669: VERIFIED needs the receipt's hash to match the staged ISO's.
+        from lcsas.db.sessions import add_session_volume, create_session
+        create_session(conn, "TEST_TINY", "/staging", session_id="s100")
+        add_session_volume(conn, "s100", 1, "/staging/VOL_100.iso",
+                           iso_sha256="e" * 64, iso_size_bytes=2048)
         conn.close()
 
         receipt = tmp_path / "r.json"
@@ -643,6 +670,7 @@ class TestCmdCatalogImport:
             "location": "Home",
             "verify_passed": True,
             "burn_date": "2026-04-14T12:00:00+00:00",
+            "iso_sha256": "e" * 64,
         }))
 
         result = main(["--config", str(cfg), "catalog", "import-receipts",
@@ -667,6 +695,7 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_101", "u2", "TEST_TINY", 1000, "Home", "STAGING")
+        _import_locations(conn)
         conn.close()
 
         receipt = tmp_path / "r.json"
@@ -697,6 +726,7 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_514", "u514", "TEST_TINY", 1000, "Home", status)
+        _import_locations(conn)
         conn.close()
         r = tmp_path / "r.json"
         r.write_text(json.dumps({"volume_label": "VOL_514", **receipt}))
@@ -715,7 +745,7 @@ class TestCmdCatalogImport:
         """#514 / BURN-05: a disc that failed verification is not a copy,
         and (#483) the volume stays STAGING so its packs stay unarchived."""
         rc, vol, copies, events = self._import(
-            tmp_path, "STAGING", {"location": "Vault", "verify_passed": False})
+            tmp_path, "STAGING", {"location": "Home", "verify_passed": False})
         assert rc == 0
         assert vol.status == "STAGING"
         assert copies == []
@@ -749,6 +779,7 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_102", "u3", "TEST_TINY", 1000, "Home", "VERIFIED")
+        _import_locations(conn)
         conn.close()
 
         receipt = tmp_path / "r.json"
@@ -780,7 +811,8 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_PROV", "uuid-prov", "TEST_TINY", 1000,
-                      "Home", "STAGING")
+                      "Vault_A", "STAGING")
+        _import_locations(conn)
         conn.close()
 
         iso_hash = "a" * 64
@@ -800,8 +832,9 @@ class TestCmdCatalogImport:
             "pack_ids": pack_ids,
         }))
 
+        # No staged ISO hash on record here (#669).
         result = main(["--config", str(cfg), "catalog", "import-receipts",
-                       str(receipt)])
+                       "--allow-unhashed", str(receipt)])
         assert result == 0
 
         conn = get_connection(db)
@@ -835,7 +868,8 @@ class TestCmdCatalogImport:
         conn = get_connection(db)
         create_all(conn)
         create_volume(conn, "VOL_HASH", "uuid-hash", "TEST_TINY", 1000,
-                      "Home", "STAGING")
+                      "Vault_A", "STAGING")
+        _import_locations(conn)
         conn.close()
 
         good_hash = "b" * 64
@@ -852,8 +886,9 @@ class TestCmdCatalogImport:
             "verify_passed": True,
             "pack_ids": [],
         }))
+        # No staged ISO hash on record here (#669).
         rc1 = main(["--config", str(cfg), "catalog", "import-receipts",
-                    str(r1)])
+                    "--allow-unhashed", str(r1)])
         assert rc1 == 0
 
         # Second receipt: same volume, *different* iso_sha256 — must reject.
@@ -932,14 +967,17 @@ class TestCmdVerify:
         create_volume(conn, "VOL_MV", "u1", "BD25", 25e9, "Home", "BURNED")
         conn.close()
 
+        # #673: the volume has no disc recorded, so --location is needed.
         result = main(["--db", str(db), "verify", "VOL_MV",
-                        "--mark-verified", "--detail", "Verified on remote machine"])
+                        "--mark-verified", "--detail", "Verified on remote machine",
+                        "--location", "Home"])
         assert result == 0
 
         conn = get_connection(db)
         from lcsas.db.volumes import get_volume_by_label
         vol = get_volume_by_label(conn, "VOL_MV")
         assert vol.status == "VERIFIED"
+        assert vol.closed_at is not None
 
         from lcsas.db.volume_events import get_events_for_volume
         events = get_events_for_volume(conn, vol.volume_id, "VERIFY_PASS")

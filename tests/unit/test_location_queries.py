@@ -120,8 +120,12 @@ class TestLocationQueries:
         assert offsite["missing"] == 1
 
     def test_location_summary_empty(self, conn):
+        # #680: every registered location is listed, even with no disc.
         summary = get_location_summary(conn)
-        assert summary == []
+        assert summary == [
+            {"location": "Home_Shelf", "volumes": 0, "packs": 0, "missing": 0},
+            {"location": "Offsite_Safe", "volumes": 0, "packs": 0, "missing": 0},
+        ]
 
 
 def test_failed_burn_does_not_satisfy_location(tmp_path):
