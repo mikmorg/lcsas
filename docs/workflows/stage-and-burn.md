@@ -387,8 +387,19 @@ pack selection (selection is fixed at stage time).
 2. Internally: `_gather_packs_for_staging(for_location=<name>)` calls
    `get_unarchived_or_missing_at_location` which returns the union of
    `unarchived` and `archived-but-not-at-this-location` packs
-   (`BurnOrchestrator._gather_packs_for_staging`).
-3. Bin-pack, stage, ISO, ECC, burn — same as the normal pipeline.
+   (`BurnOrchestrator._gather_packs_for_staging`).  Packs already on a
+   never-burned (`STAGING`/`BURNING`) volume staged **for this same
+   location** are left out, so staging again before the receipts of a
+   split-machine burn are imported does not master the same data twice
+   (#642).  A volume whose disc failed verification (`VERIFY_FAIL`
+   event) does not hold its packs back; `lcsas session abort` or
+   `lcsas catalog reconcile --fix` releases the others.
+3. Bin-pack, stage, ISO, ECC, burn — same as the normal pipeline.  Each
+   new volume records `<name>` as its location (`volumes.location`, the
+   location it was staged for; the configured default when
+   `--for-location` is not given).  `lcsas status` shows the locations
+   of a volume's in-service discs, or `(for <name>)` while it is not
+   yet burned (#643).
 
 **Expected outcome:** New volumes containing only the packs that needed to
 land at the target location. Packs already on disc elsewhere become

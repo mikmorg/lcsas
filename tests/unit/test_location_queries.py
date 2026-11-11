@@ -160,3 +160,98 @@ def test_failed_burn_does_not_satisfy_location(tmp_path):
     assert get_packs_at_location(conn, "Offsite_Safe") == set()
     missing = get_unarchived_or_missing_at_location(conn, "Offsite_Safe")
     assert {p.sha256 for p in missing} == {p.sha256 for p in packs}
+
+
+# ---------------------------------------------------------------------------
+# #642: packs already staged FOR a location are not staged for it again
+# ---------------------------------------------------------------------------
+
+
+def _staged_volume(conn, label, packs, location, status="STAGING"):
+    vol = create_volume(conn, label, generate_uuid(), "TEST_TINY", 1_000_000,
+                        location=location, status=status)
+    bulk_link_packs(conn, vol.volume_id, [p.pack_id for p in packs])
+    return vol
+
+
+class TestStagedForLocation:
+    def test_packs_staged_for_the_location_are_left_out(self, conn):
+        p1 = register_pack(conn, "pack1", 100, "family")
+        p2 = register_pack(conn, "pack2", 200, "family")
+        _staged_volume(conn, "WAITING", [p1], "Offsite_Safe")
+        ids = {p.pack_id for p in
+               get_unarchived_or_missing_at_location(conn, "Offsite_Safe")}
+        assert ids == {p2.pack_id}
+
+    @pytest.mark.parametrize("status", ["STAGING", "BURNING"])
+    def test_staged_for_another_location_still_counts_as_missing(self, conn, status):
+        """Two collections hold the same data: Home_Shelf's staged volume
+        does not satisfy Offsite_Safe."""
+        p1 = register_pack(conn, "pack1", 100, "family")
+        _staged_volume(conn, "FOR_HOME", [p1], "Home_Shelf", status=status)
+        ids = {p.pack_id for p in
+               get_unarchived_or_missing_at_location(conn, "Offsite_Safe")}
+        assert ids == {p1.pack_id}
+
+    def test_a_failed_verify_releases_the_packs(self, conn):
+        from lcsas.db.volume_events import add_event
+
+        p1 = register_pack(conn, "pack1", 100, "family")
+        vol = _staged_volume(conn, "FAILED", [p1], "Offsite_Safe")
+        add_event(conn, vol.volume_id, "VERIFY_FAIL", location="Offsite_Safe")
+        ids = {p.pack_id for p in
+               get_unarchived_or_missing_at_location(conn, "Offsite_Safe")}
+        assert ids == {p1.pack_id}
+
+    def test_a_durable_volume_without_a_disc_there_still_counts_as_missing(self, conn):
+        """Only never-burned volumes are held back; a VERIFIED volume whose
+        volumes.location says Offsite_Safe but with no disc there is missing."""
+        p1 = register_pack(conn, "pack1", 100, "family")
+        vol = _staged_volume(conn, "DONE", [p1], "Offsite_Safe", status="VERIFIED")
+        add_volume_copy(conn, vol.volume_id, "Home_Shelf")
+        ids = {p.pack_id for p in
+               get_unarchived_or_missing_at_location(conn, "Offsite_Safe")}
+        assert ids == {p1.pack_id}
+
+
+def test_stage_for_location_records_it_and_does_not_restage(tmp_path):
+    """End to end through the orchestrator: stage --for-location X records X
+    on the volume; a second stage for X finds nothing; a stage for Y still
+    stages everything."""
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    from lcsas.burn.operator import NullOperatorPrompt
+    from lcsas.burn.orchestrator import BurnOrchestrator
+    from lcsas.db.volumes import list_volumes
+    from tests.unit.test_session_pipeline import _make_config, _seed_packs
+
+    config = _make_config(tmp_path, num_repos=1)
+    c = get_memory_connection()
+    create_all(c)
+    register_repo(c, "family", "Family",
+                  str(config.repositories["family"].mirror_path))
+    packs = _seed_packs(c, config, num_packs=3, pack_size=50)
+
+    xorriso = MagicMock()
+
+    def _fake_create_iso(source_dir, output_iso, volume_label, **kwargs):
+        Path(output_iso).write_bytes(b"\x00" * 1024)
+        return Path(output_iso)
+
+    xorriso.create_iso.side_effect = _fake_create_iso
+    orch = BurnOrchestrator(config, c, xorriso, MagicMock(),
+                            prompt=NullOperatorPrompt())
+
+    assert config.default_location != "Bank_Box"
+    orch.stage(for_location="Bank_Box")
+    (vol,) = list_volumes(c)
+    assert vol.location == "Bank_Box"
+
+    with pytest.raises(ValueError, match="No packs need staging"):
+        orch.stage(for_location="Bank_Box")
+
+    orch.stage(for_location="Home_Vault")
+    assert sorted(v.location for v in list_volumes(c)) == ["Bank_Box", "Home_Vault"]
+    assert len(packs) == 3
+    c.close()

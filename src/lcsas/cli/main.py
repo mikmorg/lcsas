@@ -1800,6 +1800,15 @@ def cmd_status(args: argparse.Namespace) -> int:
         stale_count = len(find_stale_copies(conn, args.older_than_days))
         summary = get_archive_status_summary(conn)
         volumes = list_volumes(conn)
+        # #643: show where each volume's discs are (its ACTIVE disc
+        # records), not volumes.location, which is only the location it
+        # was staged for.
+        disc_locations: dict[int, list[str]] = {}
+        for row in conn.execute(
+            "SELECT volume_id, location FROM volume_copies "
+            "WHERE status = 'ACTIVE' ORDER BY location"
+        ):
+            disc_locations.setdefault(row["volume_id"], []).append(row["location"])
         lost_ids = get_lost_volume_ids(conn)
         partial_sessions = list_sessions(conn, status_filter="PARTIAL")
         # FMA-08: packs that live on exactly one disc.  Packs in
@@ -1831,7 +1840,11 @@ def cmd_status(args: argparse.Namespace) -> int:
     logger.info(f"Volumes: {len(volumes)} total{lost_note}")
     for v in volumes:
         shown = volume_display_status(v, lost_ids)
-        logger.info(f"  {v.label:<25} {v.media_type:<10} {shown:<10} {v.location}")
+        where = ", ".join(disc_locations.get(v.volume_id, []))
+        if not where:
+            where = (f"(for {v.location})" if v.status in ("STAGING", "BURNING")
+                     else "(no disc in service)")
+        logger.info(f"  {v.label:<25} {v.media_type:<10} {shown:<10} {where}")
     if summary["staged"] > 0:
         logger.warning(
             "WARNING: %d pack(s) are staged on volumes that were never "

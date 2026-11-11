@@ -881,6 +881,15 @@ def get_unarchived_or_missing_at_location(
     """Return packs that either have no volume at all OR have no ACTIVE disc
     at the specified location. This is the full set needed to bring a
     location completely up to date.
+
+    Packs already on a never-burned (STAGING/BURNING) volume staged FOR
+    this location are left out (#642): their disc is on its way (an ISO
+    waiting to be burned, or burned elsewhere with its receipt not yet
+    imported), and staging them again would master a second disc of the
+    same data.  ``session abort`` or ``catalog reconcile --fix`` releases
+    them.  A volume whose disc failed verification (a VERIFY_FAIL event)
+    does not hold them back: as before, its packs are staged again
+    (BURN-05, #483).
     """
     rows = conn.execute(
         """SELECT p.* FROM packs p
@@ -892,8 +901,20 @@ def get_unarchived_or_missing_at_location(
                  WHERE vc.location = ?
                    AND vc.status = 'ACTIVE'
              )
+             AND p.pack_id NOT IN (
+                 SELECT DISTINCT vp.pack_id
+                 FROM volume_packs vp
+                 JOIN volumes v ON v.volume_id = vp.volume_id
+                 WHERE v.location = ?
+                   AND v.status IN ('STAGING', 'BURNING')
+                   AND NOT EXISTS (
+                       SELECT 1 FROM volume_events e
+                       WHERE e.volume_id = v.volume_id
+                         AND e.event_type = 'VERIFY_FAIL'
+                   )
+             )
            ORDER BY p.created_at""",
-        (location,),
+        (location, location),
     ).fetchall()
     return [_row_to_pack(r) for r in rows]
 

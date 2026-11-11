@@ -415,6 +415,7 @@ class BurnOrchestrator:
         iso_output: Path | None = None,
         session_id: str | None = None,
         burn_session_position: tuple[int, int] | None = None,
+        location: str | None = None,
     ) -> BurnManifest:
         """Build staging dir, register volume, inject metadata, optionally create ISO.
 
@@ -508,7 +509,11 @@ class BurnOrchestrator:
             uuid=vol_uuid,
             media_type=media_type.name,
             capacity_bytes=media_type.capacity_bytes,
-            location=self._config.default_location,
+            # #642/#643: the location the volume is staged FOR (stage
+            # --for-location), else the configured default.  It is the
+            # volume's intended first location; where its discs really
+            # are lives in volume_copies.
+            location=location or self._config.default_location,
             status="STAGING",
             commit=False,
         )
@@ -942,6 +947,7 @@ class BurnOrchestrator:
                 iso_output=iso_path,
                 session_id=session_id,
                 burn_session_position=(i + 1, len(volume_plans)),
+                location=for_location,
             )
 
             # Compute ISO hash + byte length and record them on the
