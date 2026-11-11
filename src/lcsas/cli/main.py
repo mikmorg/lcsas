@@ -2804,6 +2804,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
     from lcsas.db.connection import locked_connection
     from lcsas.db.locations import ensure_location
     from lcsas.db.schema import ensure_schema
+    from lcsas.db.sessions import get_staged_iso
     from lcsas.db.volume_copies import add_volume_copy
     from lcsas.db.volume_events import add_event, get_events_for_volume
     from lcsas.db.volumes import get_volume_by_label, mark_closed, update_status
@@ -2881,7 +2882,47 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
             # tampered / re-mastered) — reject without writing anything.
             receipt_hash = receipt.get("iso_sha256") or ""
             hash_mismatch = False
-            if receipt_hash:
+            # #644: the receipt must name the ISO that was staged.  burn-iso
+            # hashes whatever file it is given on the burning machine, so an
+            # ISO damaged or swapped on its way there would otherwise burn,
+            # pass its own verify, and import as VERIFIED.
+            staged = get_staged_iso(conn, vol.volume_id)
+            if staged is None:
+                logger.warning(
+                    f"Receipt '{receipt_file}': no ISO hash was recorded "
+                    f"when '{receipt['volume_label']}' was staged; the "
+                    "staged-ISO check was SKIPPED."
+                )
+            elif not receipt_hash:
+                logger.warning(
+                    f"Receipt '{receipt_file}' carries no iso_sha256; the "
+                    "check against the ISO staged for "
+                    f"'{receipt['volume_label']}' was SKIPPED."
+                )
+            else:
+                staged_hash, staged_size = staged
+                if receipt_hash != staged_hash:
+                    logger.error(
+                        f"Receipt '{receipt_file}' iso_sha256 {receipt_hash} "
+                        f"does not match the ISO staged for volume "
+                        f"'{receipt['volume_label']}' ({staged_hash}): the "
+                        "disc was burned from a different or damaged copy "
+                        "of the ISO; rejecting.  Copy the ISO again, check "
+                        "it with sha256sum, and re-burn."
+                    )
+                    hash_mismatch = True
+                elif (
+                    receipt_size is not None and staged_size is not None
+                    and receipt_size != staged_size
+                ):
+                    logger.error(
+                        f"Receipt '{receipt_file}' iso_size_bytes "
+                        f"{receipt_size} does not match the ISO staged for "
+                        f"volume '{receipt['volume_label']}' ({staged_size} "
+                        "bytes); rejecting."
+                    )
+                    hash_mismatch = True
+            if receipt_hash and not hash_mismatch:
                 prior_events = get_events_for_volume(
                     conn, vol.volume_id, "BURN_RECEIPT_IMPORTED"
                 )
@@ -3015,7 +3056,7 @@ def cmd_catalog_import(args: argparse.Namespace) -> int:
 
     logger.info(f"Imported {imported} receipt(s).")
     if rejected:
-        logger.error(f"Rejected {rejected} receipt(s) due to iso_sha256 mismatch.")
+        logger.error(f"Rejected {rejected} receipt(s): ISO hash or size mismatch.")
         return 1
     return 0
 

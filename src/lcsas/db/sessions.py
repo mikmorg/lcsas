@@ -231,3 +231,26 @@ def staged_iso_present(conn: sqlite3.Connection, volume_id: int) -> bool:
 
     path = get_staged_iso_path(conn, volume_id)
     return path is not None and Path(path).is_file()
+
+
+def get_staged_iso(
+    conn: sqlite3.Connection,
+    volume_id: int,
+) -> tuple[str, int | None] | None:
+    """Return ``(iso_sha256, iso_size_bytes)`` recorded when the volume's ISO
+    was mastered, from its most recent burn session, or None if no session
+    recorded a hash for it (#644)."""
+    row = conn.execute(
+        """SELECT sv.iso_sha256, sv.iso_size_bytes
+           FROM session_volumes sv
+           JOIN burn_sessions bs USING (session_id)
+           WHERE sv.volume_id = ?
+             AND sv.iso_sha256 IS NOT NULL AND sv.iso_sha256 != ''
+           ORDER BY bs.created_at DESC, sv.rowid DESC
+           LIMIT 1""",
+        (volume_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    size = row["iso_size_bytes"]
+    return str(row["iso_sha256"]), (int(size) if size is not None else None)
